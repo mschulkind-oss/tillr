@@ -531,7 +531,8 @@ func TestAStagingFailureBacksOffAndTheLoopKeepsTrying(t *testing.T) {
 			result.Stop, result.Detail, drain.StopQueueDrained)
 	}
 	if result.InfraFailures != 2 {
-		t.Fatalf("the loop counted %d infrastructure failure(s), want 2", result.InfraFailures)
+		t.Fatalf("the loop counted %d infrastructure failure(s), want 2 (dispatched=%d, landed=%d, detail=%q): %s",
+			result.InfraFailures, result.Dispatched, result.Landed, result.Detail, report.String())
 	}
 	if result.Dispatched != 1 || result.Landed != 1 || result.Rejected != 0 {
 		t.Fatalf("the recovered attempt dispatched %d, landed %d and rejected %d, want 1, 1 and 0: %s",

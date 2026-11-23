@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -110,5 +112,101 @@ func TestIdleStageFaultBacksOffAndReopensStarts(t *testing.T) {
 	held := strings.Index(log, "staging failure repeated unchanged")
 	if backoff < 0 || held <= backoff {
 		t.Fatalf("expected idle backoff followed by another staging attempt:\n%s", log)
+	}
+}
+
+type splitRefreshRecoveringStager struct {
+	settlingStartStager
+	loop     *Loop
+	failures int
+	calls    int
+}
+
+func (s *splitRefreshRecoveringStager) Stage(ctx context.Context, spec StageSpec) error {
+	s.calls++
+	if s.calls == 1 {
+		// Force startView to sync from SQLite while the claim is live, before
+		// cancelStaging retracts it. Under high load, this split refresh
+		// happens across startViewWatchBatch and leaves storeLanes holding the
+		// lane unless pending-history events trigger a lane lease refresh.
+		if v := s.loop.startView.Load(); v != nil {
+			for !v.snapshot().storeLanes[spec.LaneID] {
+				select {
+				case v.laneTargetChanged <- struct{}{}:
+				default:
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				runtime.Gosched()
+			}
+		}
+	}
+	if s.calls <= s.failures {
+		return fmt.Errorf("the brief could not be rendered (attempt %d)", s.calls)
+	}
+	return s.settlingStartStager.Stage(ctx, spec)
+}
+
+func TestStagingFailureAfterStartViewObservesClaimStillBacksOffAndRetries(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-b")
+	t.Setenv("TILLR_LOOP_STORE", "")
+	holdWALKeeper(t, f.storePath)
+	steps := &stageFaultSteps{started: make(chan run.Request, 1)}
+	stager := &splitRefreshRecoveringStager{
+		settlingStartStager: settlingStartStager{f.laneRoot},
+		failures:            2,
+	}
+	l := f.loop(t, steps, stager)
+	stager.loop = l
+	l.cfg.Lanes = []string{"lane-1"}
+	l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s' '{"index":{"documents":[]}}'`}
+	l.cfg.BackoffBase = 0
+	var report bytes.Buffer
+	l.cfg.Report = &report
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var res LoopResult
+	var err error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		res, err = l.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	select {
+	case req := <-steps.started:
+		if req.ItemID != "item-b" || req.LaneID != "lane-1" {
+			t.Fatalf("recovered worker = %s on %s, want item-b on lane-1", req.ItemID, req.LaneID)
+		}
+	case <-done:
+		t.Fatalf("loop stopped before recovered attempt dispatched (stop=%q, infra=%d, dispatched=%d, detail=%q, err=%v)\n%s",
+			res.Stop, res.InfraFailures, res.Dispatched, res.Detail, err, report.String())
+	}
+	cancel()
+	<-done
+	if err != nil {
+		t.Fatalf("loop failed: %v\n%s", err, report.String())
+	}
+	if res.InfraFailures != 2 {
+		t.Fatalf("the loop counted %d infrastructure failure(s), want 2 (dispatched=%d, detail=%q)\n%s",
+			res.InfraFailures, res.Dispatched, res.Detail, report.String())
+	}
+	if stager.calls != 3 || res.Dispatched != 1 {
+		t.Fatalf("recovered attempt calls=%d dispatched=%d, want 3 and 1\n%s",
+			stager.calls, res.Dispatched, report.String())
+	}
+	log := report.String()
+	for _, want := range []string{
+		"1 consecutive infrastructure failure(s) and nothing dispatched; waiting 0s before the next attempt",
+		"2 consecutive infrastructure failure(s) and nothing dispatched; waiting 0s before the next attempt",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("report missing %q:\n%s", want, log)
+		}
 	}
 }
