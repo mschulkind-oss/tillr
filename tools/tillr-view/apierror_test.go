@@ -42,6 +42,8 @@ var allErrorCodes = []string{
 	codeDesignDocUnreadable,
 	codeUnknownKind,
 	codeUnknownRoute,
+	codeUnknownTable,
+	codeRowNotFound,
 	codePlannerUnavailable,
 	codePlannerMismatch,
 }

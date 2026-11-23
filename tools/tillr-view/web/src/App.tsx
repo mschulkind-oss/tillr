@@ -4,6 +4,7 @@ import { DesignsPage } from "./components/Designers";
 import { LanePage } from "./components/LanePage";
 import { Home } from "./components/Home";
 import { RunsPage } from "./components/RunsPage";
+import { AdminPage } from "./components/AdminPage";
 import { ItemsView, PassesView } from "./components/ItemsPasses";
 import { ItemPage, RunPage } from "./components/ItemRunPages";
 import { PerformanceView, CheckView } from "./components/PerformanceView";
@@ -41,6 +42,7 @@ export function App() {
   const home = !hash || path === "#/", items = path === "#/items", passesOpen = path === "#/passes", questionsOpen = path === "#/questions";
   const designsOpen = path === "#/designs" || path.startsWith("#/design/");
   const runsOpen = path === "#/runs";
+  const adminOpen = path === "#/admin" || path.startsWith("#/admin/");
   const itemOpen = path.startsWith("#/item/"), runOpen = path.startsWith("#/run/");
   const kind = path.split("/")[1]; let id = path.split("/").slice(2).join("/");
   try { id = decodeURIComponent(id); } catch { /* The refusal retains the malformed id. */ }
@@ -68,6 +70,7 @@ export function App() {
   if (snapshot.error) screen = <main className="home"><RefusalState code={refusalCode(snapshot.error)} message={snapshot.error.message} onRetry={refresh} /></main>;
   else if (home) screen = <Home lanes={lanes.data?.data} lanesError={lanes.error} snapshot={snapshot.data?.data} waiting={waiting.data?.data} whySource={waiting.data?.whySource} designsWaiting={waiting.data?.designsWaiting} waitingError={waiting.error} passes={passes.data?.data} passesError={passes.error} />;
   else if (kind === "lane" && id) screen = <LanePage key={id} id={id} lanes={lanes.data?.data} error={lanes.error} live={live} paused={paused} />;
+  else if (adminOpen) screen = <AdminPage hash={hash} />;
   else if (runsOpen) screen = <RunsPage lanes={lanes.data?.data} lanesError={lanes.error} configured={snapshot.data?.data.drain_summary.session?.lanes} items={snapshot.data?.data.items} />;
   else if (designsOpen) screen = <DesignsPage data={designs.data?.data} error={designs.error} pending={designs.isPending} onRetry={() => void designs.refetch()} path={kind === "design" ? id : undefined} />;
   else if (items) screen = <ItemsView waiting={waiting.data?.data} whySource={waiting.data?.whySource} designsWaiting={waiting.data?.designsWaiting} snapshot={snapshot.data?.data} error={waiting.error ?? snapshot.error} writesEnabled={snapshot.data?.snapshot.writes_enabled === true} onMoved={() => Promise.all([waiting.refetch(), snapshot.refetch()])} />;

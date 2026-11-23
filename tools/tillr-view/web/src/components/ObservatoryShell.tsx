@@ -23,7 +23,7 @@ export function useScreenHash(): string {
   return hash;
 }
 
-const NAV = [["Home", "#/"], ["Items", "#/items"], ["Graph", "#/graph"], ["Passes", "#/passes"], ["Runs", "#/runs"], ["Performance", "#/performance"], ["Trunk", "#/trunk"], ["Questions", "#/questions"], ["Designs", "#/designs"]];
+const NAV = [["Home", "#/"], ["Items", "#/items"], ["Graph", "#/graph"], ["Passes", "#/passes"], ["Runs", "#/runs"], ["Performance", "#/performance"], ["Trunk", "#/trunk"], ["Questions", "#/questions"], ["Designs", "#/designs"], ["Admin", "#/admin"]];
 export function ObservatoryShell({ children, hash, snapshot, snapshotError, passes, passesError, live, paused, onPause, onRefresh }: {
   children: ReactNode; hash: string; snapshot?: ApiEnvelope<SnapshotData>; snapshotError: Error | null;
   passes?: PassRow[]; passesError?: Error | null; live: boolean; paused: boolean;
