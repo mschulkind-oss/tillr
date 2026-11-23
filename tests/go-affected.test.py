@@ -2636,6 +2636,48 @@ def test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim
         assert ev2["packages"][0]["cached"] is True, ev2
 
 
+def test_drain_subpackage_isolation(root_graph: dict) -> None:
+    subpkgs = ("workflow", "remotesync", "fixer", "heavyrun")
+    subpkg_ips = {f"github.com/mschulkind-oss/tillr-drain/{sub}" for sub in subpkgs}
+
+    # 1. Changing drain production or test files selects none of the four extracted subpackages.
+    for drain_path in ("tools/tillr-drain/drain/loop.go", "tools/tillr-drain/drain/loop_test.go"):
+        sel = go_affected.select_affected_packages(ROOT, [drain_path], graph=root_graph)
+        selected_ips = {item["import_path"] for item in sel["selected"]}
+        assert not (selected_ips & subpkg_ips), (drain_path, selected_ips & subpkg_ips)
+
+    # 2. Changing a *_test.go file in any extracted subpackage selects ONLY that subpackage.
+    subpkg_tests = {
+        "workflow": "tools/tillr-drain/workflow/workflow_test.go",
+        "remotesync": "tools/tillr-drain/remotesync/remote_sync_test.go",
+        "fixer": "tools/tillr-drain/fixer/fixer_test.go",
+        "heavyrun": "tools/tillr-drain/heavyrun/heavy_ack_test.go",
+    }
+    for sub, test_path in subpkg_tests.items():
+        sel = go_affected.select_affected_packages(ROOT, [test_path], graph=root_graph)
+        selected_ips = {item["import_path"] for item in sel["selected"]}
+        assert selected_ips == {f"github.com/mschulkind-oss/tillr-drain/{sub}"}, (sub, selected_ips)
+
+    # 3. Changing workflow.go selects workflow, drain, and root tillr-drain,
+    #    and does NOT select remotesync, fixer, heavyrun, or heavy.
+    sel = go_affected.select_affected_packages(
+        ROOT, ["tools/tillr-drain/workflow/workflow.go"], graph=root_graph
+    )
+    selected_ips = {item["import_path"] for item in sel["selected"]}
+    assert {
+        "github.com/mschulkind-oss/tillr-drain/workflow",
+        "github.com/mschulkind-oss/tillr-drain/drain",
+        "github.com/mschulkind-oss/tillr-drain",
+    } <= selected_ips, selected_ips
+    forbidden_ips = {
+        "github.com/mschulkind-oss/tillr-drain/remotesync",
+        "github.com/mschulkind-oss/tillr-drain/fixer",
+        "github.com/mschulkind-oss/tillr-drain/heavyrun",
+        "github.com/mschulkind-oss/tillr-drain/heavy",
+    }
+    assert not (selected_ips & forbidden_ips), (selected_ips & forbidden_ips)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", default=[], help="Run only named test case(s)")
@@ -2652,6 +2694,7 @@ def main(argv: list[str] | None = None) -> int:
         ("test_go_affected_slot_wait_order_and_trunk_repair_priority", test_go_affected_slot_wait_order_and_trunk_repair_priority),
         ("test_heavy_failures_replay", lambda: test_heavy_failures_replay(root_graph)),
         ("test_selection_rules", lambda: test_selection_rules(root_graph)),
+        ("test_drain_subpackage_isolation", lambda: test_drain_subpackage_isolation(root_graph)),
         ("test_candidate_gates_use_gate_class_and_leave_proof_slots_free", test_candidate_gates_use_gate_class_and_leave_proof_slots_free),
         ("test_edge_cache_invalidation", test_edge_cache_invalidation),
         ("test_edges_file_honest_and_env_read", test_edges_file_honest_and_env_read),

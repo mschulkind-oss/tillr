@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/fixer"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -664,7 +665,7 @@ func (l *Loop) judgeTrunkChecks(ctx context.Context, replay ReplayStep, candidat
 				}
 			}
 			if progress, err := readProgressCheckProof(dir, rev); err == nil {
-				for id := range progress.at {
+				for id := range progress.At {
 					if classifyCheck(checkresult.Observation{
 						Check:  id,
 						Commit: rev,
@@ -1126,14 +1127,7 @@ func intersectingRedPaths(redChecks []string, checkReads map[string][]string, ch
 }
 
 func readsCoverPath(reads []string, path string) bool {
-	path = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "./")
-	for _, r := range reads {
-		r = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(r)), "./")
-		if r == "." || r == "" || path == r || strings.HasPrefix(path, r+"/") {
-			return true
-		}
-	}
-	return false
+	return fixer.ReadsCoverPath(reads, path)
 }
 
 // promoteVerdictPassInherited rewrites <runDir>/gate.verdict.json (when present) from

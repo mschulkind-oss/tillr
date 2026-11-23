@@ -93,7 +93,7 @@ func TestAPlanApplicationReadsNoWholeLogUnderTheWriteLock(t *testing.T) {
 func TestEveryFoldReadsTheKindsItSelects(t *testing.T) {
 	fset := token.NewFileSet()
 	var files []*ast.File
-	for _, dir := range []string{".", "../faults", "../preserved", "../../tillr-run/run"} {
+	for _, dir := range []string{".", "../faults", "../preserved", "../workflow", "../remotesync", "../fixer", "../heavyrun", "../../tillr-run/run"} {
 		pkgs, err := parser.ParseDir(fset, dir, func(info fs.FileInfo) bool { return !strings.HasSuffix(info.Name(), "_test.go") }, 0)
 		if err != nil {
 			t.Fatal(err)

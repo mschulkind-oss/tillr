@@ -12,94 +12,28 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 func outputNameValid(name string) bool {
-	if name == "" || name == "." || name == ".." {
-		return false
-	}
-	for _, c := range name {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.') {
-			return false
-		}
-	}
-	return true
+	return workflow.OutputNameValid(name)
 }
 func outputTypeValid(typ string) bool {
-	return typ == "markdown" || typ == "json" || typ == "patch" || typ == "graph.proposal"
+	return workflow.OutputTypeValid(typ)
 }
 func sortedNames[V any](m map[string]V) []string {
-	names := make([]string, 0, len(m))
-	for name := range m {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return workflow.SortedNames(m)
 }
 
 func validateOutputWiring(w *Workflow) error {
-	stages := map[string]WorkflowStage{}
-	fed := map[string]map[string]WorkflowEdge{}
-	seen := map[string]bool{}
-	for _, s := range w.Stages {
-		stages[s.ID] = s
-		fed[s.ID] = map[string]WorkflowEdge{}
-		for _, name := range sortedNames(s.Outputs) {
-			if !outputNameValid(name) || !outputTypeValid(s.Outputs[name]) {
-				return fmt.Errorf("workflow-output: %s: invalid name or type for %q", s.ID, name)
-			}
-		}
-		for _, name := range sortedNames(s.Inputs) {
-			if !outputNameValid(name) || !outputTypeValid(s.Inputs[name]) {
-				return fmt.Errorf("workflow-input: %s: invalid name or type for %q", s.ID, name)
-			}
-		}
-	}
-	for _, e := range w.Edges {
-		producer, present := stages[e.From]
-		consumer, exists := stages[e.To]
-		if !present || !exists {
-			return fmt.Errorf("workflow-unknown-node: %s -> %s", e.From, e.To)
-		}
-		if e.FromOutput == "" && e.ToInput == "" {
-			continue
-		}
-		if e.FromOutput == "" || e.ToInput == "" {
-			return fmt.Errorf("workflow-input: edge %s -> %s must name both from_output and to_input", e.From, e.To)
-		}
-		typ, declared := producer.Outputs[e.FromOutput]
-		if !declared {
-			return fmt.Errorf("workflow-output: %s: does not declare %s", e.From, e.FromOutput)
-		}
-		inputType, declared := consumer.Inputs[e.ToInput]
-		if !declared || inputType != typ {
-			return fmt.Errorf("workflow-input: %s: %s undeclared or type differs from %s.%s", e.To, e.ToInput, e.From, e.FromOutput)
-		}
-		key := e.To + "\x00" + e.ToInput + "\x00" + e.From
-		if previous, exists := fed[e.To][e.ToInput]; exists {
-			if producer.CopiesOf == "" || producer.CopiesOf != stages[previous.From].CopiesOf || e.FromOutput != previous.FromOutput || seen[key] {
-				return fmt.Errorf("workflow-input: %s: input %s fed by two edges", e.To, e.ToInput)
-			}
-		}
-		seen[key] = true
-		fed[e.To][e.ToInput] = e
-	}
-	for _, s := range w.Stages {
-		for _, name := range sortedNames(s.Inputs) {
-			if _, exists := fed[s.ID][name]; !exists {
-				return fmt.Errorf("workflow-input: %s: input %s fed by no edge", s.ID, name)
-			}
-		}
-	}
-	return nil
+	return workflow.ValidateOutputWiring(w)
 }
 
-func (w *Workflow) hasNamedFiles() bool {
+func workflowHasNamedFiles(w *Workflow) bool {
 	for _, s := range w.Stages {
 		if len(s.Inputs) > 0 || len(s.Outputs) > 0 {
 			return true
@@ -108,16 +42,16 @@ func (w *Workflow) hasNamedFiles() bool {
 	return false
 }
 
-// proposalOnlyPredecessors reports whether stage index declares no explicit
+// workflowProposalOnlyPredecessors reports whether stage index declares no explicit
 // inputs, no graph.proposal replacement has occurred, and every incoming edge
 // comes from a read-only sibling stage whose only declared outputs are optional
 // graph.proposal files.
-func (w *Workflow) proposalOnlyPredecessors(index int) bool {
-	_, ok := w.proposalPredecessorIDs(index)
+func workflowProposalOnlyPredecessors(w *Workflow, index int) bool {
+	_, ok := workflowProposalPredecessorIDs(w, index)
 	return ok
 }
 
-func (w *Workflow) proposalPredecessorIDs(index int) ([]string, bool) {
+func workflowProposalPredecessorIDs(w *Workflow, index int) ([]string, bool) {
 	if w == nil || w.Revision != 0 || index < 0 || index >= len(w.Stages) {
 		return nil, false
 	}
@@ -166,7 +100,7 @@ func hasOnlyProposalOutputs(stage WorkflowStage) bool {
 }
 
 func (l *Loop) proposalPredecessorReport(ctx context.Context, d Decision) (string, string, error) {
-	preds, ok := d.Workflow.proposalPredecessorIDs(d.NodeIndex)
+	preds, ok := workflowProposalPredecessorIDs(d.Workflow, d.NodeIndex)
 	if !ok {
 		return "", "", nil
 	}
@@ -309,10 +243,7 @@ func nodeOutputsDir(root, runID string) string {
 
 // Input paths come from the accepted producer row, not a guessed run id: a
 // restarted producer may have a different run id from its original dispatch.
-type NodeInput struct {
-	Producer string `json:"producer"`
-	Path     string `json:"path"`
-}
+type NodeInput = workflow.NodeInput
 
 func (l *Loop) nodeInputPaths(ctx context.Context, d Decision) (map[string][]NodeInput, error) {
 	paths := map[string][]NodeInput{}

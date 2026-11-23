@@ -3,12 +3,8 @@ package drain
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"os/exec"
-	"path/filepath"
-	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/fixer"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -28,31 +24,9 @@ func (l *Loop) observeTrunkCoreWorktree(ctx context.Context) error {
 	if l.nonLanding {
 		return nil
 	}
-	root, err := filepath.Abs(l.cfg.Root)
-	if err != nil {
+	config, worktree, set, err := fixer.CheckCoreWorktreeConfig(ctx, l.cfg.Root)
+	if err != nil || !set {
 		return err
-	}
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "--work-tree="+root,
-		"config", "--local", "--no-includes", "--show-origin", "--null", "--get", "core.worktree")
-	out, err := cmd.Output()
-	if err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			if exit.ExitCode() == 1 && len(exit.Stderr) == 0 {
-				return nil // Key not set in the shared config.
-			}
-			return fmt.Errorf("git config in %s: %w: %s", root, err, strings.TrimSpace(string(exit.Stderr)))
-		}
-		return err
-	}
-	origin, value, ok := strings.Cut(string(out), "\x00")
-	config, file := strings.CutPrefix(origin, "file:")
-	worktree, terminated := strings.CutSuffix(value, "\x00")
-	if !ok || !file || config == "" || !terminated {
-		return fmt.Errorf("unexpected git config output for core.worktree in %s", root)
-	}
-	if !filepath.IsAbs(config) {
-		config = filepath.Join(root, config)
 	}
 	body, err := json.Marshal(map[string]string{"config_path": config, "worktree": worktree})
 	if err != nil {

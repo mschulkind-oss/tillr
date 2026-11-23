@@ -44,7 +44,7 @@ func TestHeavyAttributionReuseNeedsSameFailureAndFirstParentRange(t *testing.T) 
 	find := func(reuse bool) {
 		t.Helper()
 		progress.Reset()
-		red, fault, _, err := r.findFirstRed(ctx, run, check)
+		red, fault, _, err := r.FindFirstRed(ctx, run, check)
 		if err != nil || fault || red != culprit || strings.Contains(progress.String(), "reused first red commit") != reuse {
 			t.Fatalf("want first red %s, reuse=%t; got %s fault=%t err=%v\n%s", culprit, reuse, red, fault, err, &progress)
 		}

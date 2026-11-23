@@ -134,11 +134,13 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				return err
 			}}
 			runner.Progress = func(line string) { l.reportf("%s", line) }
-			runner.reuseRed = l.heavyReuseRed
+			runner.ReuseRed = l.heavyReuseRed
+			runner.WithWorktreeRegistryLock = withWorktreeRegistryLock
+			runner.UnlockRegisteredWorktree = unlockRegisteredWorktree
 			if l.gatePolicy.AutoRevert {
 				runner.Revert = l.revertLanding
 			}
-			out := heavyAttempt{pendingTip: requested}
+			out := HeavyAttempt{PendingTip: requested}
 			var err error
 			hold, busy, holdErr := acquireLoopLock(heavyCtx, l.cfg.Root)
 			if holdErr != nil {
@@ -148,7 +150,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			} else {
 				runner.Lock = hold
 				if l.beginHeavyProof() {
-					out, err = runner.run(heavyCtx, requested)
+					out, err = runner.RunAttempt(heavyCtx, requested)
 					hold.Close()
 					l.heavyMu.Lock()
 					l.heavyProofActive = false
@@ -163,8 +165,8 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			l.greenPushAtStart.Do(func() { l.afterGreen(context.WithoutCancel(heavyCtx), "start") })
 			if err != nil && heavyCtx.Err() == nil && !errors.Is(err, errRestartPending) {
 				l.reportf("loop: heavy runner fault: %v\n", err)
-				if out.pendingTip != "" {
-					if eventErr := l.recordHeavyFault(heavyCtx, out.pendingTip, err); eventErr != nil {
+				if out.PendingTip != "" {
+					if eventErr := l.recordHeavyFault(heavyCtx, out.PendingTip, err); eventErr != nil {
 						l.reportf("loop: recording heavy runner fault: %v\n", eventErr)
 					}
 				}
@@ -270,17 +272,6 @@ func (l *Loop) heavyCheckLogs(tip string, checks []HeavyCheck) map[string]string
 		}
 	}
 	return logs
-}
-
-// heavyBrief keeps a recorded detail readable in one criteria line: whitespace folded,
-// and a long output tail cut to its end, where a failure's reason usually is.
-func heavyBrief(detail string) string {
-	detail = strings.Join(strings.Fields(detail), " ")
-	const keep = 1500
-	if len(detail) > keep {
-		detail = "..." + detail[len(detail)-keep:]
-	}
-	return detail
 }
 
 // legacyLogTail is the part of a check's log a brief quotes: the last failing lines

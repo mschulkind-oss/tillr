@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/remotesync"
+	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
@@ -110,43 +112,7 @@ const (
 // and this is the one place staging, the planner, the escape check and a resume all read.
 // Every consumer goes through this function or `fenceText`; none of them repeats a rule.
 func fencePaths(allowed []string) []string {
-	seen := make(map[string]bool, len(allowed)*2)
-	out := make([]string, 0, len(allowed)*2)
-	add := func(p string) {
-		if p == "" || seen[p] {
-			return
-		}
-		seen[p] = true
-		out = append(out, p)
-	}
-	for _, p := range allowed {
-		add(p)
-	}
-	for _, p := range allowed {
-		// A fence spells a directory with or without its trailing slash and means the same
-		// path either way, so the rules below match on the path and not on the spelling.
-		named := strings.TrimSuffix(p, "/")
-		if module, ok := tillrModule(named); ok {
-			add("yolo-packs/tillr/files/local/share/tillr/" + module + "/")
-			if named != "tools/"+module {
-				add("tools/" + module + "/README.md")
-			}
-			add(tillrSkillPath)
-			add(tillrDocsTest)
-			if module == "tillr-loop" {
-				add("tools/tillr-loop/")
-				add("tools/tillr-drain/drain/tillr-loop.py")
-				add("yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/tillr-loop.py")
-			}
-		}
-		if named == "tools/fork-check.py" {
-			add(forkCheckTest)
-		}
-		if named == "tools/tillr-run/backends" || strings.HasPrefix(named, "tools/tillr-run/backends/") {
-			add(museBackendTest)
-		}
-	}
-	return out
+	return workflow.FencePaths(allowed)
 }
 
 // fenceText is the fence as staging writes it to the lane's FenceFile: the derived fence
@@ -178,16 +144,7 @@ func tillrModule(p string) (string, bool) {
 
 // ForkTarget is a checkout selected by the recorded delivery decision and the
 // patch ref the lander publishes.
-type ForkTarget struct {
-	// Checkout is the absolute path of the fork's own checkout.
-	Checkout string
-	// Ref is the branch the delivery moves: refs/heads/patch/<fork>.
-	Ref string
-	// Path is the repo-relative path the fence names.
-	Path string
-	// Fork is the fork's name.
-	Fork string
-}
+type ForkTarget = remotesync.ForkTarget
 
 // OutOfFence is the fixed half of the brief's fence section: the state outside the fence
 // that is never a run's to touch, whatever command it chose. It is stated in paths because a
@@ -440,7 +397,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		if isFork {
 			node.WriteScope = WorkflowScope{Paths: forkFence(fork, node.WriteScope.Paths)}
 		}
-		scope, err := node.scopePaths(itemAllowed)
+		scope, err := node.ScopePaths(itemAllowed)
 		if err != nil {
 			return err
 		}

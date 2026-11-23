@@ -2,67 +2,32 @@ package drain
 
 import (
 	"context"
-	"database/sql"
-	"errors"
-	"os/exec"
 	"sort"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/fixer"
 	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 // ReasonTrunkRewritten holds landings until the trunk contains its lost history again.
-const ReasonTrunkRewritten = "trunk-rewritten"
+const ReasonTrunkRewritten = fixer.ReasonTrunkRewritten
 const candidateGatedKind = "drain.gated"
-const observedTrunkRef = "refs/tillr/trunk-history/observed"
-const lostTrunkRef = "refs/tillr/trunk-history/lost"
-const trunkHistoryDDL = `
-CREATE TABLE IF NOT EXISTS trunk_history (
- id INTEGER PRIMARY KEY CHECK (id = 1),
- observed_tip TEXT NOT NULL,
- lost_tip TEXT NOT NULL DEFAULT ''
-);
-`
+const observedTrunkRef = fixer.ObservedTrunkRef
+const lostTrunkRef = fixer.LostTrunkRef
+const trunkHistoryDDL = fixer.TrunkHistoryDDL
 
-var errTrunkRewritten = errors.New("landing waits on restored trunk history")
+var errTrunkRewritten = fixer.ErrTrunkRewritten
 
-type trunkHistory struct{ Observed, Lost string }
-
-func (h trunkHistory) reason() string {
-	return ReasonTrunkRewritten + ": " + h.Lost + " -> " + h.Observed
-}
+type trunkHistory = fixer.TrunkHistory
 
 func readTrunkHistory(r *store.Reader) (trunkHistory, error) {
-	var h trunkHistory
-	var exists bool
-	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='trunk_history')`).Scan(&exists); err != nil {
-		return h, err
-	}
-	if !exists {
-		return h, nil
-	} // old read-only stores have not observed history yet
-	err := r.QueryRow(`SELECT observed_tip,lost_tip FROM trunk_history WHERE id=1`).Scan(&h.Observed, &h.Lost)
-	if err == sql.ErrNoRows {
-		return h, nil
-	}
-	return h, err
+	return fixer.ReadTrunkHistory(r)
 }
 
-// A negative ancestry answer is not a Git failure. Missing objects and other Git
-// errors refuse observation rather than fabricating a rewrite.
 func trunkAncestor(ctx context.Context, root, old, tip string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "merge-base", "--is-ancestor", old, tip)
-	cmd.Env = boundaryGitEnv()
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return true, nil
-	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
-		return false, nil
-	}
-	return false, Externalf("checking trunk ancestry %s -> %s: %v: %s", old, tip, err, strings.TrimSpace(string(out)))
+	ok, err := fixer.TrunkAncestor(ctx, root, old, tip)
+	return ok, wrapFixerError(err)
 }
 
 // Every pass persists observation before it considers candidates. Landing workers
@@ -194,7 +159,7 @@ func (l *Loop) observeTrunkLocked(ctx context.Context, expected string, known *r
 					return h, err
 				}
 				acceptedTip := h.Lost
-				if !absorb.proved() && known != nil {
+				if !absorb.Proved() && known != nil {
 					// The tip may have advanced since the replay released land.lock.
 					// Use its map only if it still covers the entire lost range.
 					covers := known.Pairs[h.Lost] != ""
@@ -214,7 +179,7 @@ func (l *Loop) observeTrunkLocked(ctx context.Context, expected string, known *r
 						}
 					}
 				}
-				if absorb.proved() {
+				if absorb.Proved() {
 					// Carry green to its replacement before clearing the lost-history hold.
 					green, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", GreenRef)
 					if err != nil {
@@ -287,7 +252,7 @@ func (l *Loop) observeTrunkLocked(ctx context.Context, expected string, known *r
 				return nil
 			}
 			if absorb != nil {
-				if err := absorb.record(tx, l.cfg.Now()); err != nil {
+				if err := absorb.Record(tx, l.cfg.Now()); err != nil {
 					return err
 				}
 			}
@@ -326,6 +291,6 @@ func (l *Loop) holdRewrite(ctx context.Context, c Candidate, h trunkHistory) err
 	if err != nil {
 		return err
 	}
-	l.reportf("loop: holding %s (%s); restore the trunk's history\n", c.ItemID, h.reason())
+	l.reportf("loop: holding %s (%s); restore the trunk's history\n", c.ItemID, h.Reason())
 	return errTrunkRewritten
 }

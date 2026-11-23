@@ -2,26 +2,19 @@ package drain
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/fixer"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-const (
-	trunkRepairFile       = "trunk-repair.json"
-	repairDeferredLeadIn  = "repair deferred to proof of "
-	trunkRewrittenMessage = "trunk was rewritten"
-)
+const trunkRepairFile = fixer.TrunkRepairFile
 
-type trunkRepairRecord struct {
-	Commit string `json:"commit"`
-	Reason string `json:"reason,omitempty"`
-}
+type trunkRepairRecord = fixer.TrunkRepairRecord
 
 // candidateRebaseConflict is an ordinary candidate whose pre-gate rebase onto a
 // repaired trunk conflicted. The rebase is already aborted and the lane is back on
@@ -44,116 +37,17 @@ func asCandidateRebaseConflict(err error) *candidateRebaseConflict {
 	return nil
 }
 
-// recordTrunkRepair records that the trunk was repaired at sha so candidates cut from
-// older bases are rebased onto the current trunk before their landing gate starts
-// (landing principle 3: gate what will be the tip, once). Never moves the recorded
-// repair backward along trunk ancestry.
 func recordTrunkRepair(ctx context.Context, root, sha, reason string) error {
-	if root == "" || sha == "" {
-		return nil
-	}
-	resolved, err := heavyGitOutput(ctx, root, "rev-parse", "--verify", sha+"^{commit}")
-	if err != nil {
-		return err
-	}
-	dir, err := heavyDirectory(ctx, root)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	if raw, err := os.ReadFile(filepath.Join(dir, trunkRepairFile)); err == nil {
-		var existing trunkRepairRecord
-		if json.Unmarshal(raw, &existing) == nil && existing.Commit != "" {
-			if existing.Commit == resolved {
-				return nil
-			}
-			if covered, err := trunkAncestor(ctx, root, resolved, existing.Commit); err == nil && covered {
-				return nil
-			}
-		}
-	}
-	return publishHeavyJSON(dir, trunkRepairFile, trunkRepairRecord{Commit: resolved, Reason: reason})
+	return wrapFixerError(fixer.RecordTrunkRepair(ctx, root, sha, reason))
 }
 
-// deferredRepairPrefixes extracts commit prefixes from heavy check details written by
-// retainRedRepairs ("repair deferred to proof of <sha>: <reason>"), ignoring rewrites.
 func deferredRepairPrefixes(detail string) []string {
-	var out []string
-	rest := detail
-	for {
-		_, after, ok := strings.Cut(rest, repairDeferredLeadIn)
-		if !ok {
-			return out
-		}
-		prefix, afterColon, hasColon := strings.Cut(after, ":")
-		prefix = strings.TrimSpace(prefix)
-		reason := strings.TrimSpace(afterColon)
-		if hasColon && prefix != "" && !strings.HasPrefix(reason, trunkRewrittenMessage) {
-			out = append(out, prefix)
-		}
-		rest = after
-	}
+	return fixer.DeferredRepairPrefixes(detail)
 }
 
-// recordedTrunkRepair returns the newest trunk repair commit recorded by the drain
-// that is an ancestor of mainSHA, or "" when none is recorded on mainSHA.
 func recordedTrunkRepair(ctx context.Context, root, mainSHA string) (string, error) {
-	if root == "" || mainSHA == "" {
-		return "", nil
-	}
-	dir, err := heavyDirectory(ctx, root)
-	if err != nil {
-		return "", err
-	}
-	var candidates []string
-	if raw, err := os.ReadFile(filepath.Join(dir, trunkRepairFile)); err == nil {
-		var rec trunkRepairRecord
-		if json.Unmarshal(raw, &rec) == nil && rec.Commit != "" {
-			candidates = append(candidates, rec.Commit)
-		}
-	}
-	if raw, err := os.ReadFile(filepath.Join(dir, "heavy.json")); err == nil {
-		var run HeavyRun
-		if json.Unmarshal(raw, &run) == nil {
-			for _, check := range run.Checks {
-				if check.RevertedBy != "" {
-					candidates = append(candidates, check.RevertedBy)
-				}
-				candidates = append(candidates, deferredRepairPrefixes(check.Detail)...)
-			}
-		}
-	}
-	newest := ""
-	for _, raw := range candidates {
-		resolved, err := heavyGitOutput(ctx, root, "rev-parse", "--verify", raw+"^{commit}")
-		if err != nil {
-			continue
-		}
-		onTrunk, err := trunkAncestor(ctx, root, resolved, mainSHA)
-		if err != nil {
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			continue
-		}
-		if !onTrunk {
-			continue
-		}
-		if newest == "" {
-			newest = resolved
-			continue
-		}
-		if resolved == newest {
-			continue
-		}
-		newer, err := trunkAncestor(ctx, root, newest, resolved)
-		if err == nil && newer {
-			newest = resolved
-		}
-	}
-	return newest, nil
+	sha, err := fixer.RecordedTrunkRepair(ctx, root, mainSHA)
+	return sha, wrapFixerError(err)
 }
 
 // preRebaseRepairedTrunk rebases a non-fixer candidate onto the current trunk before

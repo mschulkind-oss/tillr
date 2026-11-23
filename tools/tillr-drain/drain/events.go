@@ -45,8 +45,6 @@ const (
 	FixerAttachedKind = "drain.fixer-attached"
 	// HeavyFaultKind records an attempt that faulted before the tip had a verdict.
 	HeavyFaultKind = "drain.heavy-fault"
-	// HeavyProgressKind records started, per-step progress, and ended lifecycle transitions for a trunk heavy proof attempt.
-	HeavyProgressKind = "drain.heavy-progress"
 	// FastGateTimingKind records one measured ordinary fast-gate invocation.
 	FastGateTimingKind = "drain.fast-gate-timing"
 )
@@ -93,7 +91,7 @@ const (
 // one binary would therefore be refused at init, which is the honest answer — the two
 // spellings of one judgment would have to be reconciled first.
 func init() {
-	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind, HeavyProgressKind, FastGateTimingKind} {
+	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind, FastGateTimingKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}

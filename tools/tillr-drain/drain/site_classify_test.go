@@ -11,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/fixer"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr-drain/heavyrun"
+	"github.com/mschulkind-oss/tillr-drain/remotesync"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/checkresult"
@@ -31,8 +34,19 @@ func (s *processStepsWithStoreState) ItemState(ctx context.Context, itemID, runI
 func withClassifier(t *testing.T, fn func(checkresult.Observation) checkresult.Result) {
 	t.Helper()
 	prev := classifyCheck
+	prevRemote := remotesync.ClassifyCheck
+	prevFixer := fixer.ClassifyCheck
+	prevHeavyRun := heavyrun.ClassifyCheck
 	classifyCheck = fn
-	t.Cleanup(func() { classifyCheck = prev })
+	remotesync.ClassifyCheck = fn
+	fixer.ClassifyCheck = fn
+	heavyrun.ClassifyCheck = fn
+	t.Cleanup(func() {
+		classifyCheck = prev
+		remotesync.ClassifyCheck = prevRemote
+		fixer.ClassifyCheck = prevFixer
+		heavyrun.ClassifyCheck = prevHeavyRun
+	})
 }
 
 func writeVerdictRecord(t *testing.T, path string, payload map[string]any) {

@@ -373,10 +373,10 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 	if node != nil {
 		stage := *node
 		stage.WriteScope.Paths = scopeForLane(stage.WriteScope.Paths, row.LaneID)
-		if err := (&Workflow{Stages: []WorkflowStage{stage}}).checkScopes(nil); err != nil {
+		if err := (&Workflow{Stages: []WorkflowStage{stage}}).CheckScopes(nil); err != nil {
 			return nil, err
 		}
-		fence, err = node.scopePaths(recorded.AllowedPaths)
+		fence, err = node.ScopePaths(recorded.AllowedPaths)
 		if err != nil {
 			return nil, err
 		}

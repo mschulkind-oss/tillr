@@ -1249,7 +1249,7 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 		if spanErr := s.recordStep(candidate.RunID, span); spanErr != nil {
 			return 0, "", span, spanErr
 		}
-		return 0, "", span, Externalf("running %q in %s: %s: %s", argv[0], dir, notStarted.detail, stderr.String())
+		return 0, "", span, Externalf("running %q in %s: %s: %s", argv[0], dir, notStarted.Error(), stderr.String())
 	}
 	span := stepSpan(step, recordedArgv, cmd, started, stderr.String())
 	if observation.Step != "" {
@@ -1611,66 +1611,7 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 	return out, nil
 }
 
-// checkGroupGrace gives a check program time to end checks it owns in other sessions
-// after SIGTERM, and bounds the final wait for its own killed process group.
-const checkGroupGrace = 5 * time.Second
-
-// runCheckGroup runs a check program that works in one of the loop's scratch worktrees, in
-// a process group of its own, and ends that whole group before it returns, so the caller's
-// deferred cleanup never removes the worktree under a process still working in it.
-//
-// The program is a gate: it starts test binaries, and they start their own children. A
-// cancellation that reached only the program left those running — on 2026-11-17 a loop
-// stop deleted the rolling worktree under a `go test -parallel 48 ./...` that kept going
-// for two minutes. The program also owns checks in separate sessions: SIGTERM lets it
-// end those before WaitDelay escalates to SIGKILL. On any exit, kill what remains in
-// the program's own group before returning to the worktree cleanup.
 func runCheckGroup(cmd *exec.Cmd) error { return runCheckGroupStarted(cmd, nil) }
-
-// runCheckGroupStarted is runCheckGroup that tells started the command's pid once it
-// has started; a command that never starts calls nothing.
-func runCheckGroupStarted(cmd *exec.Cmd, started func(pid int)) error {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		return cmd.Process.Signal(syscall.SIGTERM)
-	}
-	// CommandContext starts this grace period on cancellation; only if the program
-	// has not exited does it kill the leader. The final group cleanup below reaches
-	// remaining pipe holders too.
-	cmd.WaitDelay = checkGroupGrace
-	err := startAndWait(cmd, started)
-	if cmd.Process != nil {
-		endProcessGroup(cmd.Process.Pid)
-	}
-	return err
-}
-
-// startAndWait is cmd.Run, telling started the pid between the start and the wait.
-func startAndWait(cmd *exec.Cmd, started func(pid int)) error {
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	if started != nil {
-		started(cmd.Process.Pid)
-	}
-	return cmd.Wait()
-}
-
-// endProcessGroup kills every process left in group pgid and waits, up to checkGroupGrace,
-// until none is left.
-func endProcessGroup(pgid int) {
-	if pgid <= 0 {
-		return
-	}
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
-	deadline := time.Now().Add(checkGroupGrace)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(-pgid, 0); err == syscall.ESRCH {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
 
 // detachedWorktree checks one revision out at dir, a detached worktree of the loop's
 // repository, and answers the cleanup that removes it. A step judges a worktree of s.Root

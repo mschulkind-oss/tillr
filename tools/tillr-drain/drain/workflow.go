@@ -1,464 +1,110 @@
 package drain
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// Workflow is a versioned, pre-approved sequence of agent and command runs.
-// Edges order stages and select outcomes; ready readers share one lane.
-type Workflow struct {
-	MaxParallel    int                         `json:"max_parallel,omitempty"`
-	Name           string                      `json:"name"`
-	Version        int                         `json:"version"`
-	Stages         []WorkflowStage             `json:"stages"`
-	Edges          []WorkflowEdge              `json:"edges"`
-	Exit           *WorkflowExit               `json:"exit,omitempty"`
-	SHA256         string                      `json:"sha256,omitempty"`
-	Sources        map[string]string           `json:"sources,omitempty"`
-	Args           map[string]WorkflowArgument `json:"args,omitempty"`
-	Inputs         map[string]string           `json:"inputs,omitempty"`
-	ExpansionDepth int                         `json:"expansion_depth,omitempty"`
-	Revision       int                         `json:"revision,omitempty"`
-	Groups         map[string]WorkflowGroup    `json:"groups,omitempty"`
-	Watch          *WorkflowWatch              `json:"watch,omitempty"`
+type Workflow = workflow.Workflow
+type WorkflowWatch = workflow.WorkflowWatch
+type WorkflowCycleAnchor = workflow.WorkflowCycleAnchor
+type WorkflowOscillationPair = workflow.WorkflowOscillationPair
+type WorkflowExit = workflow.WorkflowExit
+type WorkflowGroup = workflow.WorkflowGroup
+type WorkflowStage = workflow.WorkflowStage
+type WorkflowEdge = workflow.WorkflowEdge
+type WorkflowArgument = workflow.WorkflowArgument
+type WorkflowPort = workflow.WorkflowPort
+type WorkflowScope = workflow.WorkflowScope
+
+const (
+	// WorkflowRules lists the loader's refusal names; the command prints them in help.
+	WorkflowRules = workflow.WorkflowRules
+	// ReasonNodeScopeOutsideFence is the refusal reason when a stage's write_scope leaves its fence.
+	ReasonNodeScopeOutsideFence = workflow.ReasonNodeScopeOutsideFence
+	workflowCheckPathPrefix     = workflow.WorkflowCheckPathPrefix
+)
+
+// CheckWorkflows validates a file or directory without opening the item store.
+func CheckWorkflows(root, target string, out io.Writer) bool {
+	return workflow.CheckWorkflows(root, target, out)
 }
 
-// WorkflowWatch declares optional per-workflow cycle and oscillation bounds.
-type WorkflowWatch struct {
-	CycleAnchor      *WorkflowCycleAnchor      `json:"cycle_anchor,omitempty"`
-	OscillationPairs []WorkflowOscillationPair `json:"oscillation_pairs,omitempty"`
-}
-
-// WorkflowCycleAnchor bounds an expected return path between two stages.
-type WorkflowCycleAnchor struct {
-	From      string `json:"from"`
-	To        string `json:"to"`
-	MaxCycles int    `json:"max_cycles"`
-}
-
-// WorkflowOscillationPair bounds back-and-forth transitions between two stages.
-type WorkflowOscillationPair struct {
-	A         string `json:"a"`
-	B         string `json:"b"`
-	Threshold int    `json:"threshold,omitempty"`
-	Hint      string `json:"hint,omitempty"`
-}
-
-// WorkflowExit names the stages required to pass; omission requires every stage.
-type WorkflowExit struct {
-	EvaluatorSlot     string                  `json:"evaluator_slot,omitempty"`
-	RequiresNodes     []string                `json:"requires_nodes"`
-	RequiresCandidate string                  `json:"requires_candidate,omitempty"`
-	Outputs           map[string]WorkflowPort `json:"outputs,omitempty"`
-}
-
-// WorkflowGroup retains the interface of an expanded stage for later replacements.
-type WorkflowGroup struct {
-	Stage   WorkflowStage           `json:"stage"`
-	Outputs map[string]WorkflowPort `json:"outputs"`
-}
-
-type WorkflowStage struct {
-	// CopiesOf is expansion-owned provenance, persisted in graph snapshots but
-	// refused in tracked files. Only copies of one stage may share an input.
-	CopiesOf     string              `json:"copies_of,omitempty"`
-	MayReplace   map[string][]string `json:"may_replace,omitempty"`
-	ID           string              `json:"id"`
-	Parent       string              `json:"parent,omitempty"`
-	Args         map[string]any      `json:"args,omitempty"`
-	Repeat       string              `json:"repeat,omitempty"`
-	Prompt       string              `json:"prompt,omitempty"`
-	WriteScope   WorkflowScope       `json:"write_scope,omitempty"`
-	Workflow     string              `json:"workflow,omitempty"`
-	Kind         string              `json:"kind"`
-	Seat         string              `json:"seat"`
-	Access       string              `json:"access"`
-	CommandRef   string              `json:"command_ref,omitempty"`
-	Flags        map[string]any      `json:"flags,omitempty"`
-	Command      []string            `json:"resolved_argv,omitempty"`
-	TimeoutMS    int                 `json:"timeout_ms,omitempty"`
-	Inputs       map[string]string   `json:"inputs,omitempty"`
-	Outputs      map[string]string   `json:"outputs,omitempty"`
-	JudgeClasses []string            `json:"judge_classes,omitempty"`
-}
-type WorkflowEdge struct {
-	From        string `json:"from_node"`
-	To          string `json:"to_node"`
-	WhenOutcome string `json:"when_outcome,omitempty"`
-	FromOutput  string `json:"from_output,omitempty"`
-	ToInput     string `json:"to_input,omitempty"`
-	// Expanded edges out of a nested workflow require every inner exit node
-	// to pass, even though ordinary outcome branches are alternatives.
-	RequiresPassed []string `json:"requires_passed,omitempty"`
+func seatPolicyFor(policy *Policy) *workflow.SeatPolicy {
+	if policy == nil {
+		return nil
+	}
+	return &workflow.SeatPolicy{
+		Seats:           policy.Seats,
+		ReadOnlySeats:   policy.ReadOnlySeats,
+		SeatDeclaration: policy.seatDeclaration(),
+	}
 }
 
 func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
-	if findings := workflowFields(raw); len(findings) != 0 {
-		return nil, errors.Join(findings...)
-	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	d.UseNumber()
-	var w Workflow
-	if err := d.Decode(&w); err != nil {
-		rule := "workflow-json"
-		if strings.Contains(err.Error(), "unknown field") {
-			rule = "workflow-unknown-field"
-		}
-		return nil, fmt.Errorf("%s: %w", rule, err)
-	}
-	if err := d.Decode(new(any)); err != io.EOF {
-		return nil, fmt.Errorf("workflow-json: trailing content")
-	}
-	if !item.WorkflowRefValid(ref) || w.Name+"@v"+strconv.Itoa(w.Version) != ref {
-		return nil, fmt.Errorf("workflow-identity: name and version must match %s", ref)
-	}
-	if w.MaxParallel < 0 || w.MaxParallel > 8 {
-		return nil, fmt.Errorf("workflow-max-parallel: expected 1 through 8, or omitted")
-	}
-	if w.MaxParallel == 0 {
-		w.MaxParallel = 4
-	}
-	if w.Edges == nil {
-		return nil, fmt.Errorf("workflow-edges: edges must be a list")
-	}
-	if len(w.Stages) == 0 {
-		return nil, fmt.Errorf("workflow-empty-stages: %s", ref)
-	}
-	ids := map[string]bool{}
-	for i := range w.Stages {
-		s := &w.Stages[i]
-		if s.ID == "" || strings.ContainsAny(s.ID, "/\r\n\t") {
-			return nil, fmt.Errorf("workflow-stage-id: %q: id must be nonempty and contain no slash or control whitespace", s.ID)
-		}
-		if ids[s.ID] {
-			return nil, fmt.Errorf("workflow-duplicate-id: %s", s.ID)
-		}
-		ids[s.ID] = true
-		proposalCount := 0
-		for _, typ := range s.Outputs {
-			if typ == "graph.proposal" {
-				proposalCount++
-			}
-		}
-		if proposalCount > 1 {
-			return nil, fmt.Errorf("workflow-proposal: %s: at most one proposal output", s.ID)
-		}
-		for target, refs := range s.MayReplace {
-			if target == "" || len(refs) == 0 {
-				return nil, fmt.Errorf("workflow-proposal: %s: target and workflows required", s.ID)
-			}
-			for _, ref := range refs {
-				if !item.WorkflowRefValid(ref) {
-					return nil, fmt.Errorf("workflow-proposal: %s: invalid workflow %q", s.ID, ref)
-				}
-			}
-		}
-		if s.Kind != "agent" && s.Kind != "command" && s.Kind != "workflow" {
-			return nil, fmt.Errorf("workflow-kind: %s: expected agent, command or workflow", s.ID)
-		}
-		if s.Kind == "workflow" {
-			if !item.WorkflowRefValid(s.Workflow) {
-				return nil, fmt.Errorf("workflow-reference: %s: %q", s.ID, s.Workflow)
-			}
-			if s.Seat != "" || s.Access != "" || s.CommandRef != "" || s.Flags != nil || s.TimeoutMS != 0 || len(s.Command) != 0 {
-				return nil, fmt.Errorf("workflow-kind: %s: workflow stage cannot specify run fields", s.ID)
-			}
-			continue
-		}
-		if s.Args != nil {
-			return nil, fmt.Errorf("workflow-kind: %s: only workflow stages pass args", s.ID)
-		}
-		if s.Workflow != "" {
-			return nil, fmt.Errorf("workflow-kind: %s: only workflow stages name a workflow", s.ID)
-		}
-		if len(s.Command) != 0 {
-			return nil, fmt.Errorf("workflow-command: resolved_argv is internal, not workflow input")
-		}
-		if s.Kind == "command" && (s.CommandRef == "" || s.Seat != "") {
-			return nil, fmt.Errorf("workflow-kind: %s: command needs command_ref and no seat", s.ID)
-		}
-		if s.Kind == "agent" && (s.CommandRef != "" || s.Flags != nil) {
-			return nil, fmt.Errorf("workflow-command: agent cannot name command flags")
-		}
-		if s.TimeoutMS < 0 {
-			return nil, fmt.Errorf("workflow-timeout: %s", s.ID)
-		}
-		if s.Kind == "agent" && !item.ValidSeatName(s.Seat) {
-			return nil, fmt.Errorf("workflow-unknown-seat: %s: "+invalidPolicySeatName, s.ID, s.Seat, defaultSeatDeclaration)
-		}
-		if s.Access != "read_only" && s.Access != "write" {
-			return nil, fmt.Errorf("workflow-access: %s", s.ID)
-		}
-		if s.WriteScope.explicit && s.Access == "read_only" {
-			return nil, fmt.Errorf("workflow-write-scope-read-only: %s", s.ID)
-		}
-		if s.Access == "write" {
-			if _, err := s.scopePaths(nil); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if err := validateTemplateWiring(&w); err != nil {
-		return nil, err
-	}
-	hasNestedWorkflow := false
-	seats := map[string]bool{}
-	for _, s := range w.Stages {
-		if s.Kind == "workflow" {
-			hasNestedWorkflow = true
-		}
-		if s.Seat != "" {
-			seats[s.Seat] = true
-		}
-	}
-	if w.Watch != nil {
-		if ca := w.Watch.CycleAnchor; ca != nil {
-			if ca.From == "" || ca.To == "" {
-				return nil, fmt.Errorf("workflow-watch: watch.cycle_anchor: from and to must be non-empty")
-			}
-			if ca.From == ca.To {
-				return nil, fmt.Errorf("workflow-watch: watch.cycle_anchor: from and to must differ")
-			}
-			if ca.MaxCycles < 1 {
-				return nil, fmt.Errorf("workflow-watch: watch.cycle_anchor.max_cycles: must be >= 1")
-			}
-		}
-		for i := range w.Watch.OscillationPairs {
-			pair := &w.Watch.OscillationPairs[i]
-			if pair.A == "" || pair.B == "" {
-				return nil, fmt.Errorf("workflow-watch: watch.oscillation_pairs[%d]: a and b must be non-empty", i)
-			}
-			if pair.A == pair.B {
-				return nil, fmt.Errorf("workflow-watch: watch.oscillation_pairs[%d]: a and b must differ", i)
-			}
-			if pair.Threshold == 0 {
-				pair.Threshold = 4
-			}
-			if pair.Threshold < 2 {
-				return nil, fmt.Errorf("workflow-watch: watch.oscillation_pairs[%d].threshold: must be >= 2", i)
-			}
-		}
-		if !hasNestedWorkflow {
-			if err := validateWorkflowWatchRefs(&w, ids, seats); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if w.Exit != nil {
-		if w.Exit.RequiresCandidate != "" && w.Exit.RequiresCandidate != "commit_required" && w.Exit.RequiresCandidate != "commit_optional" && w.Exit.RequiresCandidate != "no_commit" {
-			return nil, fmt.Errorf("workflow-exit: exit: requires_candidate must be commit_required, commit_optional or no_commit")
-		}
-		if len(w.Exit.RequiresNodes) == 0 {
-			return nil, fmt.Errorf("workflow-exit: exit: requires_nodes must not be empty")
-		}
-		for _, id := range w.Exit.RequiresNodes {
-			if !ids[id] {
-				return nil, fmt.Errorf("workflow-exit: exit: unknown stage %q", id)
-			}
-		}
-	}
-	indegree := map[string]int{}
-	next := map[string][]string{}
-	for _, e := range w.Edges {
-		if e.WhenOutcome != "" && e.WhenOutcome != "pass" && e.WhenOutcome != "fail" {
-			return nil, fmt.Errorf("workflow-outcome: %s: %s", e.To, e.WhenOutcome)
-		}
-		if !ids[e.From] || !ids[e.To] {
-			return nil, fmt.Errorf("workflow-unknown-node: %s -> %s", e.From, e.To)
-		}
-		indegree[e.To]++
-		next[e.From] = append(next[e.From], e.To)
-	}
-	ordered := []WorkflowStage{}
-	taken := map[string]bool{}
-	for len(ordered) < len(w.Stages) {
-		found := false
-		for _, s := range w.Stages {
-			if !taken[s.ID] && indegree[s.ID] == 0 {
-				ordered = append(ordered, s)
-				taken[s.ID] = true
-				for _, id := range next[s.ID] {
-					indegree[id]--
-				}
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, fmt.Errorf("workflow-cycle: %s", ref)
-		}
-	}
-	w.Stages = ordered
-	for _, stage := range w.Stages {
-		for target := range stage.MayReplace {
-			if !ids[target] || !proposalLater(&w, stage.ID, target) {
-				return nil, fmt.Errorf("workflow-proposal: %s: %s is not a later stage", stage.ID, target)
-			}
-		}
-	}
-	if err := validateEvaluatorJudgeClasses(&w); err != nil {
-		return nil, err
-	}
-	if err := validateWorkflowExit(&w); err != nil {
-		return nil, err
-	}
-	return &w, nil
-}
-
-func validateWorkflowWatchRefs(w *Workflow, stageIDs, seats map[string]bool) error {
-	if w.Watch == nil {
-		return nil
-	}
-	allowedCA := make(map[string]bool, len(stageIDs)+len(seats))
-	for id := range stageIDs {
-		allowedCA[id] = true
-	}
-	for seat := range seats {
-		allowedCA[seat] = true
-	}
-	if ca := w.Watch.CycleAnchor; ca != nil {
-		if !allowedCA[ca.From] {
-			return fmt.Errorf("workflow-watch: watch.cycle_anchor.from: unknown stage %q", ca.From)
-		}
-		if !allowedCA[ca.To] {
-			return fmt.Errorf("workflow-watch: watch.cycle_anchor.to: unknown stage %q", ca.To)
-		}
-	}
-	for i, pair := range w.Watch.OscillationPairs {
-		if !allowedCA[pair.A] && pair.A != "design" {
-			return fmt.Errorf("workflow-watch: watch.oscillation_pairs[%d].a: unknown stage %q", i, pair.A)
-		}
-		if !allowedCA[pair.B] && pair.B != "design" {
-			return fmt.Errorf("workflow-watch: watch.oscillation_pairs[%d].b: unknown stage %q", i, pair.B)
-		}
-	}
-	return nil
-}
-
-func validateEvaluatorJudgeClasses(w *Workflow) error {
-	id := evaluatorSlot(w)
-	for _, stage := range w.Stages {
-		if stage.ID != id {
-			if stage.JudgeClasses != nil {
-				return fmt.Errorf("workflow-evaluator-judge-classes: stage=%s: judge_classes belongs only on the evaluator", stage.ID)
-			}
-			continue
-		}
-		if len(stage.JudgeClasses) == 0 {
-			return fmt.Errorf("workflow-evaluator-judge-classes: stage=%s: judge_classes must be a nonempty list", id)
-		}
-		seen := map[string]bool{}
-		for _, class := range stage.JudgeClasses {
-			if class != item.ClaimVerification && class != item.ClaimRedGateTriage && class != item.ClaimDirection {
-				return fmt.Errorf("workflow-evaluator-judge-classes: stage=%s: class %q is not allowed; expected verification-only, red-gate-triage or direction", id, class)
-			}
-			if seen[class] {
-				return fmt.Errorf("workflow-evaluator-judge-classes: stage=%s: duplicate class %q", id, class)
-			}
-			seen[class] = true
-		}
-	}
-	return nil
+	return workflow.DecodeWorkflow(raw, ref)
 }
 
 func loadWorkflow(root, ref string, policy *Policy) (*Workflow, error) {
-	return loadWorkflowWith(root, ref, policy, nil)
+	return workflow.LoadWorkflow(root, ref, seatPolicyFor(policy))
 }
 
-// loadWorkflowWith binds the workflow's top-level args from the item's own record, the
-// one source of them outside a containing stage. Validation is the same as for a stage's
-// args: a missing, unknown, mistyped or oversized argument refuses the load.
 func loadWorkflowWith(root, ref string, policy *Policy, args map[string]any) (*Workflow, error) {
-	if !item.WorkflowRefValid(ref) {
-		return nil, fmt.Errorf("workflow-reference: %q", ref)
-	}
-	path := filepath.Join(root, "config", "tillr", "workflows", ref+".json")
-	w, err := expandWorkflow(root, path, policy, map[string]bool{}, args, nil)
-	if err == nil {
-		err = validateOutputWiring(w)
-	}
-	return w, err
+	return workflow.LoadWorkflowWith(root, ref, seatPolicyFor(policy), args)
 }
 
-// scopePaths expands a node's explicit paths by the same rules as an item's fence.
-// When WriteScope.Paths is nil (inherited) and allowed is empty, it returns nil.
-func (s WorkflowStage) scopePaths(allowed []string) ([]string, error) {
-	if s.WriteScope.Paths == nil {
-		if len(allowed) == 0 {
-			return nil, nil
-		}
-		return fencePaths(allowed), nil
-	}
-	paths := append([]string(nil), s.WriteScope.Paths...)
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("workflow-write-scope-empty: %s", s.ID)
-	}
-	for i, p := range paths {
-		// A staged fence has one path per line; paths cannot inject entries
-		// or disappear under its whitespace-trimming parser.
-		if strings.TrimSpace(p) == "" || p != strings.TrimSpace(p) || strings.ContainsAny(p, "\r\n\x00") {
-			return nil, fmt.Errorf("workflow-write-scope: %s: expected nonempty single-line paths without surrounding whitespace", s.ID)
-		}
-		paths[i] = path.Clean(p)
-		if strings.HasSuffix(p, "/") {
-			paths[i] += "/"
-		}
-	}
-	return fencePaths(paths), nil
+func readWorkflow(root, p string, policy *Policy, stack map[string]bool) (*Workflow, error) {
+	return workflow.ReadWorkflow(root, p, seatPolicyFor(policy), stack)
 }
 
-const ReasonNodeScopeOutsideFence = "node-scope-outside-fence"
+func expandWorkflow(root, p string, policy *Policy, stack map[string]bool, args map[string]any, symbols map[string]bool) (*Workflow, error) {
+	return workflow.ExpandWorkflow(root, p, seatPolicyFor(policy), stack, args, symbols)
+}
 
-func (w *Workflow) checkScopes(allowed []string) error {
-	var fence []string
-	if len(allowed) > 0 {
-		fence = fencePaths(allowed)
-		for i := range fence {
-			fence[i] = path.Clean(fence[i])
-		}
-	}
-	for _, stage := range w.Stages {
-		if stage.Access != "write" {
-			continue
-		}
-		for _, raw := range stage.WriteScope.Paths {
-			for _, seg := range strings.Split(filepath.ToSlash(raw), "/") {
-				if seg == ".." {
-					return fmt.Errorf("%s: node %s: %s traverses parent directory", ReasonNodeScopeOutsideFence, stage.ID, raw)
-				}
-			}
-		}
-		scope, err := stage.scopePaths(allowed)
-		if err != nil {
-			return err
-		}
-		for _, p := range scope {
-			clean := path.Clean(p)
-			if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || (len(fence) > 0 && !insideFence(clean, fence)) {
-				return fmt.Errorf("%s: node %s: %s is outside the item's fence", ReasonNodeScopeOutsideFence, stage.ID, p)
-			}
-		}
-	}
-	return nil
+func bindWorkflow(root string, raw []byte, supplied map[string]any) ([]byte, error) {
+	return workflow.BindWorkflow(root, raw, supplied)
+}
+
+func scopeWithin(inner, outer []string) bool {
+	return workflow.ScopeWithin(inner, outer)
+}
+
+func inheritWorkflowScope(w *Workflow, scope WorkflowScope) error {
+	return workflow.InheritWorkflowScope(w, scope)
+}
+
+func scopeForLane(paths []string, lane string) []string {
+	return workflow.ScopeForLane(paths, lane)
+}
+
+func validateWorkflowWatchRefs(w *Workflow, stageIDs, seats map[string]bool) error {
+	return workflow.ValidateWorkflowWatchRefs(w, stageIDs, seats)
+}
+
+func validateEvaluatorJudgeClasses(w *Workflow) error {
+	return workflow.ValidateEvaluatorJudgeClasses(w)
+}
+
+func requiredWorkflowNodes(w *Workflow) []string {
+	return workflow.RequiredWorkflowNodes(w)
+}
+
+func workflowSize(w *Workflow) (nodes, depth, fanout int) {
+	return workflow.WorkflowSize(w)
 }
 
 const nodeAdvancedKind = "drain.node-advanced"
@@ -726,7 +372,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.From, next.To = "running", "running"
 	runID := workflowNodeRunID(next, next.NodeIndex)
 	if stage.Kind == "command" {
-		next.RunRequest = stage.commandRequest(d.ItemID, d.LaneID, runID)
+		next.RunRequest = commandRequest(stage, d.ItemID, d.LaneID, runID)
 	} else {
 		next.RunRequest = l.cfg.Policy.request(d.ItemID, d.LaneID, runID, l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: stage.Seat}))
 		next.RunRequest.TimeoutMS = stage.TimeoutMS

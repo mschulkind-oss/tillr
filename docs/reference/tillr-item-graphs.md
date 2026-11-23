@@ -13,8 +13,9 @@ covers:
   - tools/tillr-item/item/workflow_selection.go
   - tools/tillr-item/workflowmeta/read.go
   - tools/tillr-drain/drain/workflow.go
-  - tools/tillr-drain/drain/workflow_check.go
-  - tools/tillr-drain/drain/workflow_arguments.go
+  - tools/tillr-drain/workflow/workflow.go
+  - tools/tillr-drain/workflow/workflow_check.go
+  - tools/tillr-drain/workflow/workflow_arguments.go
   - tools/tillr-drain/drain/workflow_defaults.go
   - tools/tillr-drain/drain/workflow_exit.go
   - tools/tillr-drain/drain/workflow_exit_record.go
@@ -55,7 +56,7 @@ In this repository, [`.tillr.toml`](../../.tillr.toml) currently sets no `[workf
 | Tracked workflow definitions, command registry, and planner guidance | [`config/tillr/workflows/`](../../config/tillr/workflows/), [`config/tillr/commands.json`](../../config/tillr/commands.json), [`config/tillr/plan-guidance.md`](../../config/tillr/plan-guidance.md) |
 | Repository `[workflows.default]` settings reader | [`tools/tillr/settings/settings.go`](../../tools/tillr/settings/settings.go) (`WorkflowDefaults`) |
 | Workflow reference grammar, request defaults, and stored selection reader | [`tools/tillr-item/item/workflow.go`](../../tools/tillr-item/item/workflow.go), [`request.go`](../../tools/tillr-item/item/request.go), [`workflow_selection.go`](../../tools/tillr-item/item/workflow_selection.go), [`workflowmeta/read.go`](../../tools/tillr-item/workflowmeta/read.go) |
-| Loader, static expansion, argument binding, `workflow check` CLI, and gate check | [`tools/tillr-drain/drain/workflow.go`](../../tools/tillr-drain/drain/workflow.go), [`workflow_check.go`](../../tools/tillr-drain/drain/workflow_check.go), [`workflow_arguments.go`](../../tools/tillr-drain/drain/workflow_arguments.go), [`tools/gate/checks/workflows.py`](../../tools/gate/checks/workflows.py) |
+| Loader, static expansion, argument binding, `workflow check` CLI, and gate check | [`tools/tillr-drain/drain/workflow.go`](../../tools/tillr-drain/drain/workflow.go), [`workflow_check.go`](../../tools/tillr-drain/workflow/workflow_check.go), [`workflow_arguments.go`](../../tools/tillr-drain/workflow/workflow_arguments.go), [`tools/gate/checks/workflows.py`](../../tools/gate/checks/workflows.py) |
 | Selection, node advancement, quick-way bypass, proposals, outputs, commands, and parallel readers | [`workflow_defaults.go`](../../tools/tillr-drain/drain/workflow_defaults.go), [`workflow_order.go`](../../tools/tillr-drain/drain/workflow_order.go), [`graph_proposal.go`](../../tools/tillr-drain/drain/graph_proposal.go), [`node_outputs.go`](../../tools/tillr-drain/drain/node_outputs.go), [`command.go`](../../tools/tillr-drain/drain/command.go), [`parallel.go`](../../tools/tillr-drain/drain/parallel.go), [`build_readers.go`](../../tools/tillr-drain/drain/build_readers.go) |
 | Exit checks, `no_commit` receipts, `evaluator_slot` routing, failover, and reader reuse | [`workflow_exit.go`](../../tools/tillr-drain/drain/workflow_exit.go), [`workflow_exit_record.go`](../../tools/tillr-drain/drain/workflow_exit_record.go), [`workflow_evaluator.go`](../../tools/tillr-drain/drain/workflow_evaluator.go), [`workflow_failover.go`](../../tools/tillr-drain/drain/workflow_failover.go), [`worker_session.go`](../../tools/tillr-drain/drain/worker_session.go) |
 | Multi-commit squash message selection | [`tools/tillr-land/land/trunk.go`](../../tools/tillr-land/land/trunk.go) (`Squash`, `MessageCommit`) |
@@ -266,7 +267,7 @@ The loader (`workflow.go`, `workflow_check.go`), command registry (`command.go`)
 
 | Mechanism | Regression tests |
 | :--- | :--- |
-| Multi-node execution, commit chaining, scopes, and single squashed landing | [`workflow_loop_test.go`](../../tools/tillr-drain/drain/workflow_loop_test.go) (`TestWorkflowRunsTwoNodesAndLandsOnce`, `TestWorkflowNextAttemptCountsItemsNotNodes`), [`workflow_test.go`](../../tools/tillr-drain/drain/workflow_test.go), [`workflow_snapshot_test.go`](../../tools/tillr-drain/drain/workflow_snapshot_test.go) |
+| Multi-node execution, commit chaining, scopes, and single squashed landing | [`workflow_loop_test.go`](../../tools/tillr-drain/drain/workflow_loop_test.go) (`TestWorkflowRunsTwoNodesAndLandsOnce`, `TestWorkflowNextAttemptCountsItemsNotNodes`), [`workflow_test.go`](../../tools/tillr-drain/workflow/workflow_test.go), [`workflow_snapshot_test.go`](../../tools/tillr-drain/drain/workflow_snapshot_test.go) |
 | Schema rules, unknown fields, symbolic path checks, and gate check | [`workflow_check_test.go`](../../tools/tillr-drain/drain/workflow_check_test.go), [`tools/gate/checks/workflows.test.py`](../../tools/gate/checks/workflows.test.py) |
 | Static `"workflow"` composition, `args`, `repeat`, and uncapped depth | [`workflow_expansion_test.go`](../../tools/tillr-drain/drain/workflow_expansion_test.go) (`TestWorkflowExpansionDeepAndWide`), [`workflow_expansion_contract_test.go`](../../tools/tillr-drain/drain/workflow_expansion_contract_test.go), [`workflow_expansion_loop_test.go`](../../tools/tillr-drain/drain/workflow_expansion_loop_test.go) |
 | Seat workflow defaults and startup diagnostics | [`workflow_defaults_test.go`](../../tools/tillr-drain/drain/workflow_defaults_test.go), [`tools/tillr/settings/workflows_test.go`](../../tools/tillr/settings/workflows_test.go) |
@@ -274,7 +275,7 @@ The loader (`workflow.go`, `workflow_check.go`), command registry (`command.go`)
 | Worker session retention and reader reuse across workflow retries | [`worker_session_workflow_test.go`](../../tools/tillr-drain/drain/worker_session_workflow_test.go), [`workflow_restart_test.go`](../../tools/tillr-drain/drain/workflow_restart_test.go) |
 | Registered `command` nodes, flag validation, and `when_outcome: "fail"` | [`command_test.go`](../../tools/tillr-drain/drain/command_test.go), [`command_loop_test.go`](../../tools/tillr-drain/drain/command_loop_test.go) |
 | Parallel read-only groups, sibling isolation, resume, and build-roll restarts | [`parallel_test.go`](../../tools/tillr-drain/drain/parallel_test.go), [`parallel_continuation_test.go`](../../tools/tillr-drain/drain/parallel_continuation_test.go), [`workflow_build_recovery_test.go`](../../tools/tillr-drain/drain/workflow_build_recovery_test.go) |
-| `WorkflowExit`, `no_commit` `graph-exit.json`, and `evaluator_slot` / `verify-not-done` | [`workflow_exit_test.go`](../../tools/tillr-drain/drain/workflow_exit_test.go), [`workflow_exit_record_test.go`](../../tools/tillr-drain/drain/workflow_exit_record_test.go), [`workflow_evaluator_test.go`](../../tools/tillr-drain/drain/workflow_evaluator_test.go), [`planned_verify_route_test.go`](../../tools/tillr-drain/drain/planned_verify_route_test.go), [`verify_repeat_test.go`](../../tools/tillr-drain/drain/verify_repeat_test.go) |
+| `WorkflowExit`, `no_commit` `graph-exit.json`, and `evaluator_slot` / `verify-not-done` | [`workflow_exit_test.go`](../../tools/tillr-drain/drain/workflow_exit_test.go), [`workflow_exit_record_test.go`](../../tools/tillr-drain/drain/workflow_exit_record_test.go), [`workflow_evaluator_test.go`](../../tools/tillr-drain/drain/workflow_evaluator_test.go), [`planned_verify_route_test.go`](../../tools/tillr-drain/drain/planned_verify_route_test.go) |
 | Observatory `graph_attempts`, SHA-256 artifact checks, and lane node strips | [`tools/tillr-view/item_nodes_test.go`](../../tools/tillr-view/item_nodes_test.go), [`item_nodes_history_test.go`](../../tools/tillr-view/item_nodes_history_test.go), [`parallel_test.go`](../../tools/tillr-view/parallel_test.go) |
 
 ---

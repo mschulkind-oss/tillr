@@ -27,11 +27,11 @@ func driftFixture(t *testing.T, delivered bool) (refusalLoopFixture, *Loop, fork
 	}
 	runGit(t, f.root, "branch", "patch/pi", patch)
 	o := forkObservation{CheckID: driftID, Fork: "pi", Kind: "release", Ref: "refs/tags/v2.0.0", Commit: release, Delivery: "patch/pi"}
-	if err := os.MkdirAll(filepath.Dir(filepath.Join(f.root, o.pin())), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(f.root, o.Pin())), 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeForkFile(t, filepath.Join(f.root, o.pin()), original+"\nremote\n"+original+"\n")
-	runGit(t, f.root, "add", o.pin())
+	writeForkFile(t, filepath.Join(f.root, o.Pin()), original+"\nremote\n"+original+"\n")
+	runGit(t, f.root, "add", o.Pin())
 	runGit(t, f.root, "commit", "-qm", "stale fork pin")
 	return f, l, o, runGit(t, f.root, "rev-parse", "HEAD")
 }
@@ -122,7 +122,7 @@ func TestForkDriftRequestDeduplicatesAndContinuesInOrder(t *testing.T) {
 			t.Fatalf("delivery: %+v %v", d, err)
 		}
 		if !delivered {
-			partial, err := l.settlePartialDelivery(ctx, Candidate{ItemID: id, BaseRef: o.patchRef(), RunID: "run-rebase"}, o.Commit)
+			partial, err := l.settlePartialDelivery(ctx, Candidate{ItemID: id, BaseRef: o.PatchRef(), RunID: "run-rebase"}, o.Commit)
 			if err != nil || !partial {
 				t.Fatalf("partial = %v, %v", partial, err)
 			}
@@ -199,7 +199,7 @@ func TestForkDriftRequestCannotWaitForItself(t *testing.T) {
 		replays: map[string]ReplayOutcome{base: {Known: true, Red: []string{driftID}, forkConflicts: map[string]forkObservation{driftID: o}}},
 	}
 	c := Candidate{ItemID: id, BaseSHA: base}
-	gate := GateOutcome{Outcome: GateFailed, FailingChecks: []string{driftID}, forkConflicts: map[string]forkObservation{driftID: o}, CandidateChangedPaths: []string{o.pin()}}
+	gate := GateOutcome{Outcome: GateFailed, FailingChecks: []string{driftID}, forkConflicts: map[string]forkObservation{driftID: o}, CandidateChangedPaths: []string{o.Pin()}}
 	if result, held, err := l.settleGateFailure(ctx, &c, gate, &LoopResult{}); result != "" || held || err != nil {
 		t.Fatalf("the request's own red must refuse, not inherit or hold: %q %t %v", result, held, err)
 	}
@@ -218,7 +218,7 @@ func TestForkDriftRejectsAnOutdatedPinPiece(t *testing.T) {
 	if detail, err := l.checkForkRebasePiece(ctx, c); detail == "" || err != nil {
 		t.Fatalf("stale check = %q %v", detail, err)
 	}
-	writeForkFile(t, filepath.Join(lane, o.pin()), o.Commit+"\nremote\n"+o.Commit+"\n")
+	writeForkFile(t, filepath.Join(lane, o.Pin()), o.Commit+"\nremote\n"+o.Commit+"\n")
 	runGit(t, lane, "commit", "-qam", "record delivered release")
 	c.HeadSHA = runGit(t, lane, "rev-parse", "HEAD")
 	if detail, err := l.checkForkRebasePiece(ctx, c); detail != "" || err != nil {

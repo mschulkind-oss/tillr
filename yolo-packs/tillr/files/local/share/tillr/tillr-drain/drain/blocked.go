@@ -54,7 +54,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 				origin = c.RunID
 			}
 			report := "Original report from run `" + origin + "`:\n\n" + ownerReport(c) + "\nNEXT-ACTOR: owner\nRESULT: blocked\n"
-			d.RunRequest = (WorkflowStage{Command: []string{"sh", "-c", "printf '%s' \"$1\"", "owner-question", report}}).commandRequest(row.ItemID, lane, attemptRunID(row.ItemID, d.Attempt))
+			d.RunRequest = commandRequest(WorkflowStage{Command: []string{"sh", "-c", "printf '%s' \"$1\"", "owner-question", report}}, row.ItemID, lane, attemptRunID(row.ItemID, d.Attempt))
 		} else {
 			d.Reason = ReasonNoLane
 		}

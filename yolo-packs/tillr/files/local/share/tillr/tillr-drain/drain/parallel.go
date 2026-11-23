@@ -137,7 +137,7 @@ func (l *Loop) claimParallelWithShut(tx *store.Tx, d *Decision, byRun map[string
 			node.SelectSeat = true
 			id := attemptRunID(d.ItemID, d.Attempt) + "-n" + strconv.Itoa(i+1)
 			if stage.Kind == "command" {
-				node.RunRequest = stage.commandRequest(d.ItemID, d.LaneID, id)
+				node.RunRequest = commandRequest(stage, d.ItemID, d.LaneID, id)
 			} else {
 				name := l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: stage.Seat})
 				node.RunRequest = l.cfg.Policy.request(d.ItemID, d.LaneID, id, name)

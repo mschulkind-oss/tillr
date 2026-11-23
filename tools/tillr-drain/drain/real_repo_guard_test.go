@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr-drain/heavyrun"
 )
 
 // The suite's scratch lives under the real repository's working tree, so a fixture that
@@ -22,10 +24,10 @@ func installRealRepoGuard() {
 	wd, _ := os.Getwd()
 	guarded := realCommonDirs(wd, os.Getenv("YOLO_DURABLE_DIR"), os.Getenv("TMPDIR"))
 	if len(guarded) == 0 {
-		heavyCommonGuard = nil
+		heavyrun.CommonGuard = nil
 		return
 	}
-	heavyCommonGuard = func(common string) error {
+	heavyrun.CommonGuard = func(common string) error {
 		if guarded[sameDirKey(common)] {
 			return fmt.Errorf("test reached the real repository's common directory %s: give the fixture its own repository", common)
 		}

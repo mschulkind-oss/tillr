@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -40,59 +41,20 @@ func judgeWriterRun(c Candidate) string {
 }
 
 func evaluatorSlot(w *Workflow) string {
-	if w == nil || w.Exit == nil {
-		return ""
-	}
-	return w.Exit.EvaluatorSlot
+	return workflow.EvaluatorSlot(w)
 }
 func evaluatorNode(d Decision) bool {
 	return evaluatorSlot(d.Workflow) != "" && d.Workflow.Stages[d.NodeIndex].ID == evaluatorSlot(d.Workflow)
 }
 
 func validateEvaluator(w *Workflow) error {
-	id := evaluatorSlot(w)
-	if id == "" {
-		return nil
-	}
-	found := false
-	for _, node := range w.Stages {
-		if node.ID == id {
-			found = true
-			if node.Kind != "agent" || node.Access != "read_only" {
-				return fmt.Errorf("workflow-evaluator-access: exit: %s must be read-only", id)
-			}
-		}
-	}
-	if !found {
-		return fmt.Errorf("workflow-evaluator-access: exit: unknown evaluator %s", id)
-	}
-	required := false
-	for _, node := range requiredWorkflowNodes(w) {
-		required = required || node == id
-	}
-	if !required {
-		return fmt.Errorf("workflow-evaluator-required: exit: %s must be required", id)
-	}
-	for _, node := range w.Stages {
-		if node.Access == "write" && !proposalLater(w, node.ID, id) {
-			return fmt.Errorf("workflow-evaluator-order: exit: writer %s must precede %s", node.ID, id)
-		}
-	}
-	return nil
+	return workflow.ValidateEvaluator(w)
 }
 
 // Evaluator receipts keep their existing string-valued input format. Repeated
 // inputs list every accepted producer's file on its own line in copy order.
 func evaluatorInputFiles(inputs map[string][]NodeInput) map[string]string {
-	files := make(map[string]string, len(inputs))
-	for name, copies := range inputs {
-		paths := make([]string, 0, len(copies))
-		for _, input := range copies {
-			paths = append(paths, input.Path)
-		}
-		files[name] = strings.Join(paths, "\n")
-	}
-	return files
+	return workflow.EvaluatorInputFiles(inputs)
 }
 
 func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, error) {

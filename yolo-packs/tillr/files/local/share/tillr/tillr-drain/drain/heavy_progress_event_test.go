@@ -482,13 +482,13 @@ if __name__ == "__main__":
 	tip := heavyCommit(t, root, "sharded-go-live")
 
 	// Verify wholeStepCount() ignores "running" and counts only completed whole checks.
-	spCtx, sp := (HeavyRunner{Store: storePath}).startStoreProgress(context.Background(), tip)
+	spCtx, sp := (HeavyRunner{Store: storePath}).StartStoreProgress(context.Background(), tip)
 	heavyStoreStepProgress(spCtx, "go-tool/tools-tillr-drain-s-whole-suite-passes", "running")
-	if got := sp.wholeStepCount(); got != 0 {
+	if got := sp.WholeStepCount(); got != 0 {
 		t.Fatalf("wholeStepCount after running = %d, want 0", got)
 	}
 	heavyStoreWholeStepProgress(spCtx, "go-tool/tools-tillr-drain-s-whole-suite-passes", "pass")
-	if got := sp.wholeStepCount(); got != 1 {
+	if got := sp.WholeStepCount(); got != 1 {
 		t.Fatalf("wholeStepCount after whole pass = %d, want 1", got)
 	}
 	// Reset store for the live runner tests.
@@ -648,7 +648,7 @@ func TestHeavyProgressEventsSilentWhenUnitsDoNotAdvance(t *testing.T) {
 	if err := os.WriteFile(progressPath, []byte(`{"seq": true, "completed_units": 5}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ctx, sp := (HeavyRunner{Store: storePath}).startStoreProgress(context.Background(), "tip-hang")
+	ctx, sp := (HeavyRunner{Store: storePath}).StartStoreProgress(context.Background(), "tip-hang")
 	stop := startHeavyReplayProgressWatcher(ctx, progressPath, "go-tool/tools-tillr-drain-s-whole-suite-passes")
 	time.Sleep(80 * time.Millisecond)
 
@@ -670,7 +670,7 @@ func TestHeavyProgressEventsSilentWhenUnitsDoNotAdvance(t *testing.T) {
 		time.Sleep(60 * time.Millisecond)
 	}
 	stop()
-	sp.finish("green")
+	sp.Finish("green")
 
 	events := readHeavyProgressEvents(t, storePath)
 	want := []HeavyProgressFact{

@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const workflowFixture = `{"name":"scout-then-build","version":1,"stages":[{"id":"scout","kind":"agent","seat":"scout","access":"read_only"},{"id":"work","kind":"agent","seat":"build","access":"write"}],"edges":[{"from_node":"scout","to_node":"work"}]}`
+
 func TestWorkflowCheckRuleFixturesAndHolds(t *testing.T) {
 	rules := map[string]string{"cycle": "workflow-cycle", "recursive": "workflow-expansion-cycle", "missing": "workflow-missing-reference", "identity": "workflow-identity", "timer": "workflow-unknown-field", "schedule": "workflow-unknown-field", "undo": "workflow-unknown-field", "expression": "workflow-unknown-field", "outcome": "workflow-outcome", "empty-exit": "workflow-exit", "unknown-exit": "workflow-exit", "kind": "workflow-kind"}
 	for fixture, rule := range rules {

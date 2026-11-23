@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr-drain/remotesync"
 )
 
 // A refused worker is told what failed in its own words, at the top of the answer, on both
@@ -21,23 +23,10 @@ import (
 // block yields no cases, and the answer says so.
 
 // FailingCase is one failing case as the gate's triage block named it.
-type FailingCase struct {
-	Name      string `json:"name"`
-	Where     string `json:"where,omitempty"`
-	Assertion string `json:"assertion,omitempty"`
-	// Reproduce is the command that reproduces only this case: the packet's one-case
-	// command when it has one, else its one-file command.
-	Reproduce string `json:"reproduce,omitempty"`
-}
+type FailingCase = remotesync.FailingCase
 
 // FailingCheck is one check the gate's own report named as failed, with its cases.
-type FailingCheck struct {
-	ID    string        `json:"id"`
-	Label string        `json:"label,omitempty"`
-	Cases []FailingCase `json:"cases,omitempty"`
-	// Reproduce is the packet's command when it named no case.
-	Reproduce string `json:"reproduce,omitempty"`
-}
+type FailingCheck = remotesync.FailingCheck
 
 const (
 	failureHeading = "The gate's answer to your delivery:"

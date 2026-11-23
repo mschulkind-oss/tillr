@@ -138,6 +138,16 @@ func TestAllDefinedHoldReasonsAreClassified(t *testing.T) {
 			return true
 		})
 	}
+	for name, reason := range allExportedReasons(t) {
+		_, landing := landingHolds[reason]
+		_, general := generalHolds[reason]
+		if landing && general {
+			t.Errorf("%s (%s) is classified twice", reason, name)
+		}
+		if !landing && !general && !nonHolds[reason] {
+			t.Errorf("%s (%s) is an unclassified reason", reason, name)
+		}
+	}
 }
 
 func TestDefinitionReplacementInvalidatesPlannedDispatch(t *testing.T) {

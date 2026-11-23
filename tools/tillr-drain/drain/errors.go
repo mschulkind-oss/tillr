@@ -4,8 +4,21 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/mschulkind-oss/tillr-drain/fixer"
+	"github.com/mschulkind-oss/tillr-drain/heavyrun"
 	"github.com/mschulkind-oss/tillr/record"
 )
+
+func wrapFixerError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ce *fixer.CodeError
+	if errors.As(err, &ce) {
+		return &ExitError{Code: ce.Code, Msg: ce.Msg}
+	}
+	return err
+}
 
 // One constructor per exit code, so a face's exit is fixed where the error is made and
 // not reconstructed at main. The constructors live in this package rather than in main
@@ -95,6 +108,14 @@ func ExitCode(err error) int {
 	var e *ExitError
 	if errors.As(err, &e) {
 		return e.Code
+	}
+	var hce *heavyrun.CodeError
+	if errors.As(err, &hce) {
+		return hce.Code
+	}
+	var fce *fixer.CodeError
+	if errors.As(err, &fce) {
+		return fce.Code
 	}
 	return record.ExitInternal
 }

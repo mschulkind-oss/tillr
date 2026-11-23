@@ -148,21 +148,21 @@ func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle)
 }
 
 func obstacleProofPassed(p checkProof, checks []string, seen int64) bool {
-	if p.whole && p.provedAt.UnixMilli() <= seen {
+	if p.Whole && p.ProvedAt.UnixMilli() <= seen {
 		return false
 	}
 	needed := provableChecks(checks)
 	if len(needed) == 0 {
-		return p.whole && p.provedAt.UnixMilli() > seen
+		return p.Whole && p.ProvedAt.UnixMilli() > seen
 	}
 	for _, check := range needed {
-		if at, ok := p.at[check]; ok && at.UnixMilli() > seen {
+		if at, ok := p.At[check]; ok && at.UnixMilli() > seen {
 			continue
 		}
 		matched := false
 		if !strings.Contains(check, "/") {
 			prefix := check + "/"
-			for k, at := range p.at {
+			for k, at := range p.At {
 				if strings.HasPrefix(k, prefix) && at.UnixMilli() > seen {
 					matched = true
 					break
@@ -236,7 +236,7 @@ func (l *Loop) releaseTrunkObstacleHolds(ctx context.Context) error {
 				continue
 			}
 			if redCommit != "" {
-				ok, err := proofPastRed(ctx, l.cfg.Root, lost, redCommit, p.commit)
+				ok, err := proofPastRed(ctx, l.cfg.Root, lost, redCommit, p.Commit)
 				if err != nil {
 					return err
 				}
@@ -245,7 +245,7 @@ func (l *Loop) releaseTrunkObstacleHolds(ctx context.Context) error {
 				}
 			}
 			if green != "" {
-				ok, err := containsCommit(ctx, l.cfg.Root, p.commit, green)
+				ok, err := containsCommit(ctx, l.cfg.Root, p.Commit, green)
 				if err != nil {
 					return err
 				}
@@ -253,7 +253,7 @@ func (l *Loop) releaseTrunkObstacleHolds(ctx context.Context) error {
 					continue
 				}
 			}
-			ready = append(ready, release{hold: h, reason: p.describe(provableChecks(h.Checks))})
+			ready = append(ready, release{hold: h, reason: p.Describe(provableChecks(h.Checks))})
 			break
 		}
 	}

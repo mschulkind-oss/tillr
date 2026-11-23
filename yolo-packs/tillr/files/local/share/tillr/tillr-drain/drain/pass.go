@@ -828,7 +828,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		if commandStage(d) {
 			d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
 			previous := d.RunRequest
-			d.RunRequest = d.Workflow.Stages[d.NodeIndex].commandRequest(d.ItemID, d.LaneID, previous.RunID)
+			d.RunRequest = commandRequest(d.Workflow.Stages[d.NodeIndex], d.ItemID, d.LaneID, previous.RunID)
 			d.RunRequest.ReadOnlyGroup = previous.ReadOnlyGroup
 			d.RunRequest.WorkingDir = previous.WorkingDir
 			stampDecisionRequest(d, d.RunRequest)

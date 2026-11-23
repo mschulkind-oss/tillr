@@ -481,7 +481,7 @@ func TestProposalOnlyPredecessors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, want := range []bool{false, true, false} {
-		if got := planned.proposalOnlyPredecessors(i); got != want {
+		if got := workflowProposalOnlyPredecessors(planned, i); got != want {
 			t.Fatalf("planned-build stage %d (%s): proposalOnlyPredecessors=%v, want %v", i, planned.Stages[i].ID, got, want)
 		}
 	}
@@ -497,7 +497,7 @@ func TestProposalOnlyPredecessors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, stage := range splitPlanned.Stages {
-		if splitPlanned.proposalOnlyPredecessors(i) {
+		if workflowProposalOnlyPredecessors(splitPlanned, i) {
 			t.Fatalf("split planned-build stage %d (%s) unexpectedly matched proposalOnlyPredecessors", i, stage.ID)
 		}
 	}
@@ -505,13 +505,13 @@ func TestProposalOnlyPredecessors(t *testing.T) {
 	zeroRevSplit := *splitPlanned
 	zeroRevSplit.Revision = 0
 	for i, stage := range zeroRevSplit.Stages {
-		if (&zeroRevSplit).proposalOnlyPredecessors(i) {
+		if workflowProposalOnlyPredecessors(&zeroRevSplit, i) {
 			t.Fatalf("split planned-build with Revision=0 stage %d (%s) matched proposalOnlyPredecessors", i, stage.ID)
 		}
 	}
 	revBumpedNoSplit := *planned
 	revBumpedNoSplit.Revision = 1
-	if (&revBumpedNoSplit).proposalOnlyPredecessors(1) {
+	if workflowProposalOnlyPredecessors(&revBumpedNoSplit, 1) {
 		t.Fatal("planned-build with Revision>0 matched proposalOnlyPredecessors")
 	}
 
@@ -530,7 +530,7 @@ func TestProposalOnlyPredecessors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, stage := range splitScouted.Stages {
-		if splitScouted.proposalOnlyPredecessors(i) {
+		if workflowProposalOnlyPredecessors(splitScouted, i) {
 			t.Fatalf("split scouted-design stage %d (%s) unexpectedly matched proposalOnlyPredecessors", i, stage.ID)
 		}
 	}

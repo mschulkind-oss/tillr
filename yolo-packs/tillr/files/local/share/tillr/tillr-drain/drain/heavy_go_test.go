@@ -390,7 +390,7 @@ if __name__ == "__main__":
 	heavyCommit(t, root, "landed during proof")
 	groups := map[string][]HeavyCheck{tip: {timeoutCheck}}
 	replayed = nil
-	order, err := r.retainRedRepairs(context.Background(), &out.Runs[0], []string{tip}, groups)
+	order, err := r.RetainRedRepairs(context.Background(), &out.Runs[0], []string{tip}, groups)
 	if err != nil || !slices.Equal(order, []string{tip}) || len(replayed) != 0 {
 		t.Errorf("advanced trunk should keep the timeout repair without replay: %v / %v (replayed %v)", order, err, replayed)
 	}
