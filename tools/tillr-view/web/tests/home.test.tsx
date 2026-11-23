@@ -77,17 +77,17 @@ test("loop summary uses snapshot session and newest pass, not active runs or old
 });
 
 test.each([
-  [null, "not known"],
-  [{ ...drain.session, ended_at_ms: null }, "moving"],
-  [{ ...drain.session, ended_at_ms: null, next_pass_at_ms: now - 6000 }, "not known"],
-])("loop state follows recorded heartbeat and grace", (session, word) => {
-  const { container } = render(<LoopSummary drain={{ ...drain, active: true, session }} now={now} />);
+  [null, true, "not known"],
+  [{ ...drain.session, ended_at_ms: null }, true, "moving"],
+  [{ ...drain.session, ended_at_ms: null, next_pass_at_ms: now - 6000 }, false, "not known"],
+])("loop state follows the server's heartbeat verdict", (session, active, word) => {
+  const { container } = render(<LoopSummary drain={{ ...drain, active, session }} now={now} />);
   expect(container.querySelector(".loop-summary__state")?.textContent).toContain(word);
 });
 
 test.each([true, false])("old stop note is hidden only with a live session: %s", (live) => {
   const session = { ...drain.session, ended_at_ms: null, next_pass_at_ms: live ? now + 10000 : now - 6000 };
-  const { container } = render(<LoopSummary drain={{ ...drain, session, stop_note: "stale stop record — newer run exists" }} now={now} />);
+  const { container } = render(<LoopSummary drain={{ ...drain, active: live, session, stop_note: "stale stop record — newer run exists" }} now={now} />);
   expect(container.textContent?.includes("stale stop record")).toBe(!live);
   if (live) {
     expect(container.textContent).toContain(new Date(session.started_at_ms).toISOString());
