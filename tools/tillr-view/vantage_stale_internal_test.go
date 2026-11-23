@@ -123,11 +123,26 @@ func TestVantageCacheKeepsTheOldIndexAndReportsAFailedRebuild(t *testing.T) {
 	if err != nil || look.RefreshError != "running the index: uvx: not found" && look.RefreshError != "uvx: not found" {
 		t.Fatalf("failed rebuild report: %v %+v", err, look)
 	}
-	// A later rebuild that works clears it.
+	// The same documents are the same input and so the same failure: no rebuild starts
+	// again, however many requests come, and every answer keeps reporting the failure.
 	r.mu.Lock()
 	r.failure = nil
 	r.mu.Unlock()
-	waitFor(t, func() bool { return r.runs.Load() >= 3 })
+	for i := 0; i < 3; i++ {
+		if _, look, _ := r.c.get(context.Background()); !look.Stale || look.RefreshError == "" || look.Refreshing {
+			t.Fatalf("request %d after the failure: %+v", i, look)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if r.runs.Load() != 2 {
+		t.Fatalf("%d walks: a failed rebuild was started again for the same documents", r.runs.Load())
+	}
+	// A document changes: the next request starts a rebuild, and one that works clears it.
+	r.edit("tree-3", staleTestIndexNew)
+	if _, look, _ := r.c.get(context.Background()); !look.Refreshing {
+		t.Fatalf("a changed document did not start a rebuild: %+v", look)
+	}
+	waitFor(t, func() bool { return r.runs.Load() == 3 })
 	r.release <- struct{}{}
 	waitFor(t, func() bool {
 		raw, look, _ := r.c.get(context.Background())

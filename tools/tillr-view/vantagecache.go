@@ -67,6 +67,10 @@ type vantageCache struct {
 	// until a rebuild works.
 	builtAt    time.Time
 	refreshErr string
+	// failedFP is the fingerprint the last rebuild failed for. The same documents are the
+	// same input and so the same failure, so no rebuild starts for it again until a
+	// document changes (no timer, no retry count).
+	failedFP string
 }
 
 type vantageFlight struct {
@@ -165,12 +169,12 @@ func (c *vantageCache) lookup(ctx context.Context) ([]byte, vantageLookup, error
 	// one. A caller-named command is never reused (see above), so it never answers stale.
 	if c.raw != nil && !strings.HasPrefix(fp, "uncached:") {
 		raw := c.raw
-		if c.inflight == nil {
+		if c.inflight == nil && c.failedFP != fp {
 			c.inflight = &vantageFlight{fp: fp, started: c.now(), done: make(chan struct{})}
 			go c.fly(c.inflight)
 		}
 		look.Cache, look.AgeMS = "stale", age()
-		look.Stale, look.Refreshing, look.RefreshError = true, true, c.refreshErr
+		look.Stale, look.Refreshing, look.RefreshError = true, c.inflight != nil, c.refreshErr
 		c.mu.Unlock()
 		look.MS = msSince(c.now, start)
 		return raw, look, nil
@@ -212,9 +216,9 @@ func (c *vantageCache) fly(f *vantageFlight) {
 	f.raw, f.err = raw, err
 	c.mu.Lock()
 	if err == nil {
-		c.fp, c.raw, c.at, c.builtAt, c.refreshErr = f.fp, raw, c.now(), f.started, ""
+		c.fp, c.raw, c.at, c.builtAt, c.refreshErr, c.failedFP = f.fp, raw, c.now(), f.started, "", ""
 	} else {
-		c.refreshErr = err.Error()
+		c.refreshErr, c.failedFP = err.Error(), f.fp
 	}
 	if c.inflight == f {
 		c.inflight = nil
