@@ -61,6 +61,16 @@ QUALITY_TOOL_ENV = (
 )
 
 
+# Bound per-gate worker pools so vitest and Go-based bundlers (esbuild) do not
+# spawn full-machine parallelism beside concurrent gates.
+DEFAULT_QUALITY_WORKERS = 4
+
+
+def quality_worker_limit():
+    cpus = os.cpu_count() or 1
+    return str(max(1, min(DEFAULT_QUALITY_WORKERS, cpus)))
+
+
 def checked_quality_process(argv, **kwargs):
     # npm and mise can report unresolved tools with the same status as a
     # failing test. Inspect their specific diagnostics without hiding the log.
@@ -86,12 +96,40 @@ def checked_quality_process(argv, **kwargs):
 def run_quality(directory, command):
     with tempfile.TemporaryDirectory(prefix='fork-quality-home-', dir=directory) as home:
         env = {name: os.environ[name] for name in QUALITY_TOOL_ENV if name in os.environ}
-        env.update(HOME=home, NPM_CONFIG_GLOBALCONFIG=os.devnull)
+        workers = quality_worker_limit()
+        env.update(
+            HOME=home,
+            NPM_CONFIG_GLOBALCONFIG=os.devnull,
+            VITEST_MAX_WORKERS=workers,
+            GOMAXPROCS=workers,
+        )
         try:
             return checked_quality_process(['sh', '-c', command], env=env)
         except (OSError, RuntimeError) as error:
             print(f'fork-quality: unable to run {command!r}: {error}', file=sys.stderr)
             return 4
+
+
+def is_ancestor(worktree, ancestor, descendant):
+    result = subprocess.run(
+        ['git', 'merge-base', '--is-ancestor', '--end-of-options', ancestor, descendant],
+        cwd=worktree, capture_output=True, text=True, check=False,
+    )
+    if result.returncode in (0, 1):
+        return result.returncode == 0
+    raise RuntimeError(
+        f'fork-quality: cannot check ancestry of {ancestor} and {descendant}: {result.stderr.strip()}'
+    )
+
+
+def pi_quality_base(worktree, source, base, head):
+    # Incremental fork candidates build on the previous delivery tip: test only
+    # the packages this candidate changed, not unrelated packages touched by
+    # earlier fork commits or a stale upstream ref. On a rebase (divergent
+    # base), diff from the upstream merge base so upstream-only changes stay out.
+    if is_ancestor(worktree, base, head):
+        return base
+    return upstream_base(worktree, source, head)
 
 
 def upstream_base(worktree, source, head):
@@ -211,7 +249,7 @@ def main():
         call(['git', 'remote', 'add', 'upstream', upstream.stdout.strip()], candidate)
     build_passed = directory / 'fork-build-passed'
     build_cmd = f'({command}) && : > {shlex.quote(str(build_passed))}'
-    quality_base = upstream_base(args.worktree, source, args.head) if args.fork == 'pi' else args.base
+    quality_base = pi_quality_base(args.worktree, source, args.base, args.head) if args.fork == 'pi' else args.base
     quality = quality_command(args.fork, candidate, quality_base, args.head)
     print(f'fork-build: {args.head} with {pack.relative_to(root)}: {command}', flush=True)
     declaration_list = [{

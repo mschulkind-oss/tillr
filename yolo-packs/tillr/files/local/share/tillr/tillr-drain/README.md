@@ -3094,12 +3094,16 @@ The fork gate is [fork-gate.py](fork-gate.py), whose `fork-build` check runs thr
 `tillr-gate` on a clean copy of the exact candidate head with the pack's declared
 build command. When `fork-build` passes in that same clean clone, `fork-quality`
 runs after it from `FORK_QUALITY`. For `pi`, it runs `npx tsc --noEmit` at the root
-and `npm test` in each `packages/` directory changed from the candidate's upstream
-base. The base is the merge base of the candidate head and the upstream ref the
-pack follows, not the previous delivery tip. On a rebase this excludes packages
-changed only by upstream. Each package runs its own `scripts.test` (for example,
-`packages/tui` uses `node --test test/*.test.ts`); when no package is touched, only
-the root check runs. Quality commands use an isolated home and environment. A
+and `npm test` in each `packages/` directory changed by the candidate. When the
+candidate's base commit is an ancestor of its head (an incremental fork change),
+the diff runs from that base so unrelated packages touched only by earlier fork
+commits are not re-run. When the base is divergent (a rebase), the diff runs from
+the merge base of the candidate head and the upstream ref the pack follows,
+excluding packages changed only by upstream. Each package runs its own
+`scripts.test` (for example, `packages/tui` uses `node --test test/*.test.ts`);
+when no package is touched, only the root check runs. Quality commands use an
+isolated home and environment with `VITEST_MAX_WORKERS` and `GOMAXPROCS` bounded
+to avoid saturating the host beside concurrent gates. A
 missing test script or unavailable runner leaves the gate unable to judge. The
 log names the affected package and script for a runner error, and names the tool
 when mise cannot resolve a shim. An actual test failure refuses the candidate.
