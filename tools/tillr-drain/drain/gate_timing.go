@@ -30,6 +30,7 @@ type gateCheckMeasurement struct {
 	Execution string          `json:"execution,omitempty"`
 	WallMS    *int64          `json:"wall_ms,omitempty"`
 	GoBuild   json.RawMessage `json:"go_build,omitempty"`
+	SelfSuite json.RawMessage `json:"self_suite,omitempty"`
 }
 
 type fastGateTimingPayload struct {
@@ -156,6 +157,9 @@ func readGateTimingChecks(dir string) map[string]gateCheckMeasurement {
 			}
 			if len(prev.GoBuild) == 0 {
 				prev.GoBuild = m.GoBuild
+			}
+			if len(prev.SelfSuite) == 0 {
+				prev.SelfSuite = m.SelfSuite
 			}
 			checks[id] = prev
 		}

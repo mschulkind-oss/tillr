@@ -53,6 +53,7 @@ STRIPPED_OUTER_ENV = (
     "TILLR_GO_AFFECTED_EVIDENCE_OUT",
     "TILLR_GO_SHARDS_EVIDENCE_OUT",
     "TILLR_GO_BUILD_EVIDENCE_OUT",
+    "TILLR_SELF_SUITE_TIMING_OUT",
     "TILLR_SQLITE_TRACE",
     "GO_TEST_SHARDS_HOLDER",
     "GO_TEST_SHARDS_CLASS",
@@ -886,8 +887,24 @@ def _invocation_guard_main(lifeline_fd: int, command: list[str]) -> int:
 
     threading.Thread(target=watch_lifeline, daemon=True).start()
     child = subprocess.Popen(command)
+    code = 0
     try:
-        code = child.wait()
+        # As a Linux subreaper, wait on any child (-1) rather than child.pid
+        # alone so reparented grandchildren are reaped as they exit instead of
+        # accumulating thousands of zombie entries in /proc across long suites.
+        while True:
+            try:
+                wpid, status = os.waitpid(-1, 0)
+            except InterruptedError:
+                continue
+            except ChildProcessError:
+                polled = child.poll()
+                code = 0 if polled is None else polled
+                break
+            if wpid == child.pid:
+                code = os.waitstatus_to_exitcode(status)
+                child.returncode = code
+                break
     finally:
         cleanup_all()
     return 128 - code if code < 0 else code

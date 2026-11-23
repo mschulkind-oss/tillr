@@ -2113,7 +2113,8 @@ except OSError as error:
 '''
 
 
-def _start_process_sampler(denied: Exception, root: Path = Path("/proc")):
+def _start_process_sampler(denied: Exception, root: Path = Path("/proc"), *,
+                           _orig_iterdir=Path.iterdir, _orig_read_bytes=Path.read_bytes):
     """Read group members' thread runtime; retain a lower bound including reaped CPU.
 
     Runtime or membership change is progress even when the reported high-water
@@ -2140,16 +2141,40 @@ def _start_process_sampler(denied: Exception, root: Path = Path("/proc")):
             # runtime. A child reaped between phases cannot then be counted in
             # both its own runtime and its parent's child time.
             snapshots = []
-            for entry in root.iterdir():
-                if not entry.name.isdigit():
-                    continue
-                try:
-                    fields = stat(entry / "stat")
-                except (FileNotFoundError, ProcessLookupError):
-                    continue
-                if int(fields[2]) != group:
-                    continue
-                snapshots.append((entry, fields))
+            if Path.iterdir is _orig_iterdir and Path.read_bytes is _orig_read_bytes:
+                group_bytes = str(group).encode()
+                root_str = os.fspath(root)
+                with os.scandir(root_str) as entries:
+                    for dirent in entries:
+                        name = dirent.name
+                        if not name.isdigit():
+                            continue
+                        try:
+                            fd = os.open(f"{root_str}/{name}/stat", os.O_RDONLY)
+                            try:
+                                body = os.read(fd, 4096)
+                            finally:
+                                os.close(fd)
+                        except (FileNotFoundError, ProcessLookupError):
+                            continue
+                        end = body.rfind(b")")
+                        fields = body[end + 1:].split()
+                        if end < 0 or len(fields) < 20:
+                            raise OSError(f"malformed process stat: {root_str}/{name}/stat")
+                        if fields[2] != group_bytes:
+                            continue
+                        snapshots.append((root / name, fields))
+            else:
+                for entry in root.iterdir():
+                    if not entry.name.isdigit():
+                        continue
+                    try:
+                        fields = stat(entry / "stat")
+                    except (FileNotFoundError, ProcessLookupError):
+                        continue
+                    if int(fields[2]) != group:
+                        continue
+                    snapshots.append((entry, fields))
             for entry, fields in snapshots:
                 identity = (entry.name, fields[19])
                 ns = 0
@@ -2186,14 +2211,24 @@ def _start_process_sampler(denied: Exception, root: Path = Path("/proc")):
         previous = members
         high = max(high, total)
         return high
+    def check_available(_group):
+        try:
+            if not root.is_dir():
+                os.listdir(root)
+        except OSError as error:
+            raise OSError(f"{denied}; process accounting: {error}") from error
+        return 0
     sample.cpu_source = "process accounting"
     sample.cpu_changed = False
+    sample.check_available = check_available
     return sample, lambda: None
 
 
 def _run_cancellable(cwd: Path, argv: list[str], timeout: int,
                      env: dict[str, str] | None, drop: tuple[str, ...],
-                     cancel: Cancellation, split: bool) -> tuple[int, str, str, float]:
+                     cancel: Cancellation, split: bool, *,
+                     _orig_cpu_sampler=_start_cpu_sampler,
+                     _orig_popen=subprocess.Popen) -> tuple[int, str, str, float]:
     """The Popen half of run_command/run_split: a child this run can terminate.
 
     The command starts in its own session so cancellation reaches its whole process
@@ -2204,37 +2239,76 @@ def _run_cancellable(cwd: Path, argv: list[str], timeout: int,
     accounting is reported immediately, disables detection, and never guesses.
     """
     started = time.monotonic()
-    release_r, release_w = os.pipe()
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, "-c", _CPU_SHIM, str(release_r), *argv],
-            cwd=str(cwd), stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE if split else subprocess.STDOUT,
-            env=environ(env, drop), pass_fds=(release_r,), start_new_session=True,
-        )
-    except OSError:
-        os.close(release_w)
-        raise
-    finally:
-        os.close(release_r)
-    warning = ""
-    closer = lambda: None
-    sampler = None
-    fallback = False
-    try:
-        sampler, closer = _start_cpu_sampler(proc.pid)
-        previous_cpu = sampler(proc.pid)
-    except (OSError, ValueError, struct.error) as error:
-        closer()
-        sampler, closer = _start_process_sampler(error)
+    denied = None
+    if _start_cpu_sampler is _orig_cpu_sampler and subprocess.Popen is _orig_popen:
+        probed = getattr(_orig_cpu_sampler, "_probed_denied", False)
+        if probed is False:
+            number = {"x86_64": 298, "aarch64": 241}.get(platform.machine())
+            if sys.platform != "linux" or number is None:
+                probed = OSError("inherited kernel task clock is not supported here")
+            else:
+                attr = ctypes.create_string_buffer(struct.pack("=IIQQQQQIIQQ", 1, 72, 1, 0, 0, 0, 2, 0, 0, 0, 0))
+                libc = ctypes.CDLL(None, use_errno=True)
+                fd = libc.syscall(number, ctypes.byref(attr), 0, -1, -1, 8)
+                if fd < 0:
+                    err = ctypes.get_errno()
+                    probed = OSError(err, os.strerror(err))
+                else:
+                    os.close(fd)
+                    probed = None
+            _orig_cpu_sampler._probed_denied = probed
+        denied = probed
+    if denied is not None:
+        try:
+            proc = subprocess.Popen(
+                argv,
+                cwd=str(cwd), stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE if split else subprocess.STDOUT,
+                env=environ(env, drop), start_new_session=True,
+            )
+        except OSError as error:
+            rc = 127 if isinstance(error, FileNotFoundError) else 126
+            msg = f"{error}\n"
+            return (rc, "", msg, time.monotonic() - started) if split else (rc, msg, "", time.monotonic() - started)
+        sampler, closer = _start_process_sampler(denied)
         fallback = True
-    os.write(release_w, b"k")
-    os.close(release_w)
-    cancel.register(proc)
+        previous_cpu = 0
+        cancel.register(proc)
+    else:
+        release_r, release_w = os.pipe()
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _CPU_SHIM, str(release_r), *argv],
+                cwd=str(cwd), stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE if split else subprocess.STDOUT,
+                env=environ(env, drop), pass_fds=(release_r,), start_new_session=True,
+            )
+        except OSError:
+            os.close(release_w)
+            raise
+        finally:
+            os.close(release_r)
+        closer = lambda: None
+        sampler = None
+        fallback = False
+        previous_cpu = 0
+        try:
+            sampler, closer = _start_cpu_sampler(proc.pid)
+            previous_cpu = sampler(proc.pid)
+        except (OSError, ValueError, struct.error) as error:
+            closer()
+            sampler, closer = _start_process_sampler(error)
+            fallback = True
+        with contextlib.suppress(BrokenPipeError):
+            os.write(release_w, b"k")
+        os.close(release_w)
+        cancel.register(proc)
+    warning = ""
     cpu_source = getattr(sampler, "cpu_source", "kernel task-clock counter")
     try:
         if fallback:
-            previous_cpu = sampler(proc.pid)
+            probe = getattr(sampler, "check_available", sampler)
+            previous_cpu = probe(proc.pid)
         progress(f"{' '.join(argv)}: watchdog CPU source: {cpu_source}")
     except (OSError, ValueError, struct.error) as error:
         warning = f"watchdog unavailable: {error}\n"
@@ -5322,6 +5396,7 @@ class Check:
                  reusable: bool = True, go_module: str = ""):
         self.go_module = go_module
         self.go_build: list[dict] = []
+        self.self_suite: dict | None = None
         self.wall_ms: int | None = None
         self.reused_wall_ms: int | None = None
         self.kind = kind
@@ -8606,10 +8681,42 @@ def record_verdict(root: Path, check: Check, cache: VerdictCache,
 
 GO_SHARDS_EVIDENCE_ENV = "TILLR_GO_SHARDS_EVIDENCE_OUT"
 GO_AFFECTED_EVIDENCE_ENV = "TILLR_GO_AFFECTED_EVIDENCE_OUT"
+SELF_SUITE_TIMING_ENV = "TILLR_SELF_SUITE_TIMING_OUT"
+
+
+def run_self_suite_check(root: Path, check: Check, env: dict, drop: tuple,
+                         cancel: Cancellation | None) -> tuple[int, str, float]:
+    check.self_suite = None
+    path = None
+    drop = (*drop, GO_SHARDS_EVIDENCE_ENV, GO_AFFECTED_EVIDENCE_ENV)
+    try:
+        try:
+            fd, path = tempfile.mkstemp(prefix="gate-self-suite-")
+            os.close(fd)
+            env = {**env, SELF_SUITE_TIMING_ENV: path}
+        except OSError as error:
+            print(f"fork-check: cannot prepare self-suite timing: {error}", file=sys.stderr)
+            drop += (SELF_SUITE_TIMING_ENV,)
+        rc, output, elapsed = run_command(root, check.argv, check.timeout, env, drop, cancel)
+        if path is not None:
+            try:
+                data = Path(path).read_text()
+                if data:
+                    parsed = json.loads(data)
+                    if isinstance(parsed, dict):
+                        check.self_suite = parsed
+            except (OSError, ValueError) as error:
+                print(f"fork-check: cannot read self-suite timing: {error}", file=sys.stderr)
+        return rc, output, elapsed
+    finally:
+        if path is not None:
+            with contextlib.suppress(OSError):
+                Path(path).unlink(missing_ok=True)
 
 
 def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
                          cancel: Cancellation | None) -> tuple[int, str, float]:
+    drop = (*drop, SELF_SUITE_TIMING_ENV)
     if check.kind == "go-affected":
         path = None
         try:
@@ -8756,10 +8863,12 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
         for attempt in range(OUTSIDE_SIGNAL_RERUNS + 1):
             if collect_go:
                 check.rc, check.output, ran = run_landing_go_check(root, check, command_env, drop, cancel)
+            elif check.kind == "self-suite":
+                check.rc, check.output, ran = run_self_suite_check(root, check, command_env, drop, cancel)
             else:
                 check.rc, check.output, ran = run_command(
                     root, check.argv, check.timeout, command_env,
-                    (*drop, GO_SHARDS_EVIDENCE_ENV, GO_AFFECTED_EVIDENCE_ENV), cancel)
+                    (*drop, GO_SHARDS_EVIDENCE_ENV, GO_AFFECTED_EVIDENCE_ENV, SELF_SUITE_TIMING_ENV), cancel)
             seconds += ran
             signal_number = outside_signal(check.rc)
             if signal_number is None or (cancel is not None and cancel.cancelled):
@@ -9426,6 +9535,8 @@ def write_gate_spans(path: str, plan: "Plan", root: Path, started_ns: int,
             attributes["wall_ms"] = check.wall_ms
             if check.go_build:
                 attributes["go_build"] = check.go_build
+        if getattr(check, "self_suite", None):
+            attributes["self_suite"] = check.self_suite
         if check.cause:
             attributes["cause"] = check.cause
         if observation := getattr(check, "fork_conflict", None):

@@ -598,3 +598,54 @@ EOF
 		t.Fatalf("timing event should name the slowest check from the gate:python3 path: %+v", e)
 	}
 }
+
+func TestSelfSuitePerTestTimingsAreRecordedInGateTiming(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	c := Candidate{ItemID: "item-example", RunID: "run-self-suite", Worktree: root, deferGateJudgment: true}
+	dir := RunDir(root, c.RunID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s := ProcessSteps{Root: root, Store: gateTimingStore(t, root), GateProgram: executable(t, `
+set -eu
+cat > "$TILLR_FAST_VERDICT_OUT" <<'EOF'
+{"record_version":1,"kind":"gate.verdict","payload":{"result":"pass","checks":[]}}
+EOF
+cat > "$TILLR_GATE_SPANS_OUT" <<'EOF'
+{"plan_span":{"check_id":"plan"},"check_spans":[
+  {"check_id":"self-suite/the-gate-s-own-audit-suite-still-passes","status":"ok","start_ns":1700000001000000000,"end_ns":1700000032000000000,"attributes_json":"{\"execution\":\"ran\",\"wall_ms\":31000,\"self_suite\":{\"preamble_wall_ms\":420,\"shards\":[{\"name\":\"core-routing\",\"wall_ms\":18200}],\"tests\":[{\"name\":\"1. A fresh repository\",\"shard\":\"core-routing\",\"wall_ms\":1900}]}}"}
+]}
+EOF
+`)}
+	if outcome, err := s.Gate(ctx, c); err != nil || outcome.Outcome != GatePassed {
+		t.Fatalf("Gate = %+v, %v", outcome, err)
+	}
+	var attempt struct {
+		Checks map[string]gateCheckMeasurement `json:"checks"`
+	}
+	body, err := os.ReadFile(filepath.Join(dir, gateTimingFile))
+	if err != nil || json.Unmarshal(body, &attempt) != nil {
+		t.Fatalf("missing or invalid timing record: %s, %v", body, err)
+	}
+	got := attempt.Checks["self-suite/the-gate-s-own-audit-suite-still-passes"]
+	var suite struct {
+		PreambleWallMS int64 `json:"preamble_wall_ms"`
+		Shards         []struct {
+			Name   string `json:"name"`
+			WallMS int64  `json:"wall_ms"`
+		} `json:"shards"`
+		Tests []struct {
+			Name   string `json:"name"`
+			Shard  string `json:"shard"`
+			WallMS int64  `json:"wall_ms"`
+		} `json:"tests"`
+	}
+	if len(got.SelfSuite) == 0 || json.Unmarshal(got.SelfSuite, &suite) != nil {
+		t.Fatalf("missing self_suite per-test timing in gate.timing.jsonl: %s", body)
+	}
+	if suite.PreambleWallMS != 420 || len(suite.Shards) != 1 || suite.Shards[0].Name != "core-routing" ||
+		len(suite.Tests) != 1 || suite.Tests[0].Name != "1. A fresh repository" || suite.Tests[0].WallMS != 1900 {
+		t.Fatalf("unexpected self_suite payload: %+v", suite)
+	}
+}

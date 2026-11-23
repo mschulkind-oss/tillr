@@ -148,10 +148,15 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "fork-check.py"
 
+_SELF_SUITE_TIMING_OUT = os.environ.pop("TILLR_SELF_SUITE_TIMING_OUT", "")
+_PREAMBLE_STARTED_NS = time.monotonic_ns()
 _SELF_SUITE_SHARD = None
+_SELF_SUITE_SOURCE = None
 _SELF_SUITE_JOBS = None
-if sys.argv[1:2] == ["--self-suite-shard"] and len(sys.argv) == 3:
+if sys.argv[1:2] == ["--self-suite-shard"] and len(sys.argv) in (3, 5):
     _SELF_SUITE_SHARD = int(sys.argv[2])
+    if len(sys.argv) == 5 and sys.argv[3] == "--self-suite-source":
+        _SELF_SUITE_SOURCE = Path(sys.argv[4]).resolve()
 elif sys.argv[1:2] == ["--self-suite-jobs"] and len(sys.argv) == 3:
     _SELF_SUITE_JOBS = int(sys.argv[2])
 elif os.environ.get("FORK_CHECK_SELF_SUITE_JOBS"):
@@ -1140,38 +1145,166 @@ def _shard_boundary(_name: str, _weight: int = 10) -> None:
     """Marker separating independent top-level case groups for parallel shard runs."""
 
 
-def _collect_shards(path: Path) -> list[tuple[str, int, list[ast.stmt]]]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    shards: list[tuple[str, int, list[ast.stmt]]] = []
+_CASE_HEADING_RE = re.compile(r"^\s*#\s*(?:──\s*)?(\d+[a-z]?\.\s+\S.*?)(?:\s*─+)?\s*$")
+_ACTIVE_SHARD_NAME = ""
+_ACTIVE_CASE_NAME: str | None = None
+_ACTIVE_CASE_STARTED_NS = 0
+_RECORDED_SHARD_TESTS: list[dict] = []
+
+
+def _self_suite_end_case() -> None:
+    global _ACTIVE_CASE_NAME, _ACTIVE_CASE_STARTED_NS
+    if _ACTIVE_CASE_NAME is None:
+        return
+    elapsed_ms = max(0, (time.monotonic_ns() - _ACTIVE_CASE_STARTED_NS) // 1_000_000)
+    _RECORDED_SHARD_TESTS.append({
+        "name": _ACTIVE_CASE_NAME,
+        "shard": _ACTIVE_SHARD_NAME,
+        "wall_ms": int(elapsed_ms),
+    })
+    _ACTIVE_CASE_NAME = None
+    _ACTIVE_CASE_STARTED_NS = 0
+
+
+def _self_suite_begin_case(name: str) -> None:
+    global _ACTIVE_CASE_NAME, _ACTIVE_CASE_STARTED_NS
+    _self_suite_end_case()
+    _ACTIVE_CASE_NAME = name
+    _ACTIVE_CASE_STARTED_NS = time.monotonic_ns()
+
+
+def _write_timing_json_atomic(dest_str: str, payload: dict) -> None:
+    if not dest_str:
+        return
+    dest = Path(dest_str)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, dest)
+
+
+def _extract_case_label(source_lines: list[str], start_line: int, end_line: int,
+                        allow_unnumbered_block: bool = False) -> str | None:
+    lo = max(0, start_line - 1)
+    hi = max(0, min(len(source_lines), end_line - 1))
+    for idx in range(lo, hi):
+        match = _CASE_HEADING_RE.match(source_lines[idx])
+        if match:
+            return " ".join(match.group(1).split())
+    if not allow_unnumbered_block or hi <= lo:
+        return None
+    block_start = hi
+    while block_start > lo and source_lines[block_start - 1].lstrip().startswith("#"):
+        block_start -= 1
+    if block_start == hi:
+        return None
+    first = source_lines[block_start].lstrip().lstrip("#").strip()
+    return " ".join(first.split()) if first else None
+
+
+def _is_tempdir_with(stmt: ast.stmt) -> bool:
+    if not isinstance(stmt, ast.With) or not stmt.body:
+        return False
+    return any("TemporaryDirectory" in ast.unparse(item.context_expr) for item in stmt.items)
+
+
+def _instrument_case_stmts(stmts: list[ast.stmt], source_lines: list[str],
+                           start_line: int, depth: int = 0) -> list[ast.stmt]:
+    out: list[ast.stmt] = []
+    prev_line = start_line
+    for stmt in stmts:
+        is_top_with = depth == 0 and isinstance(stmt, ast.With) and bool(stmt.body)
+        has_first_child_heading = False
+        if is_top_with:
+            body_start = max((item.context_expr.end_lineno or stmt.lineno) for item in stmt.items) + 1
+            has_first_child_heading = (
+                _extract_case_label(source_lines, body_start, stmt.body[0].lineno) is not None
+            )
+        label = _extract_case_label(
+            source_lines, prev_line, stmt.lineno,
+            allow_unnumbered_block=(depth == 0 and _is_tempdir_with(stmt) and not has_first_child_heading),
+        )
+        if label is not None:
+            marker = ast.Expr(value=ast.Call(
+                func=ast.Name(id="_self_suite_begin_case", ctx=ast.Load()),
+                args=[ast.Constant(value=label)],
+                keywords=[],
+            ))
+            ast.copy_location(marker, stmt)
+            ast.fix_missing_locations(marker)
+            out.append(marker)
+        if is_top_with:
+            body_start = max((item.context_expr.end_lineno or stmt.lineno) for item in stmt.items) + 1
+            instrumented_body = _instrument_case_stmts(stmt.body, source_lines, body_start, depth + 1)
+            cloned = ast.With(
+                items=stmt.items,
+                body=instrumented_body,
+                type_comment=getattr(stmt, "type_comment", None),
+            )
+            ast.copy_location(cloned, stmt)
+            stmt = cloned
+        out.append(stmt)
+        prev_line = (stmt.end_lineno or stmt.lineno) + 1
+    return out
+
+
+def _collect_shards(path: Path) -> list[tuple[str, int, int, list[ast.stmt]]]:
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    shards: list[tuple[str, int, int, list[ast.stmt]]] = []
     cur_name = None
     cur_weight = 10
+    cur_start_line = 1
     cur_stmts: list[ast.stmt] = []
     for node in tree.body:
         if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
                 and isinstance(node.value.func, ast.Name)
                 and node.value.func.id == "_shard_boundary"):
             if cur_name is not None:
-                shards.append((cur_name, cur_weight, cur_stmts))
+                shards.append((cur_name, cur_weight, cur_start_line, cur_stmts))
             cur_name = ast.literal_eval(node.value.args[0])
             cur_weight = ast.literal_eval(node.value.args[1]) if len(node.value.args) > 1 else 10
+            cur_start_line = (node.end_lineno or node.lineno) + 1
             cur_stmts = []
         elif cur_name is not None:
             cur_stmts.append(node)
     if cur_name is not None:
-        shards.append((cur_name, cur_weight, cur_stmts))
+        shards.append((cur_name, cur_weight, cur_start_line, cur_stmts))
     return shards
 
 
 def _dispatch_shards() -> None:
-    path = Path(__file__).resolve()
+    global _ACTIVE_SHARD_NAME
+    path = _SELF_SUITE_SOURCE or Path(__file__).resolve()
+    source_lines = path.read_text(encoding="utf-8").splitlines()
     shards = _collect_shards(path)
     if _SELF_SUITE_SHARD is not None:
-        _name, _weight, stmts = shards[_SELF_SUITE_SHARD]
-        code = compile(ast.Module(body=stmts, type_ignores=[]), str(path), "exec")
-        exec(code, globals())
+        shard_name, _weight, start_line, stmts = shards[_SELF_SUITE_SHARD]
+        _ACTIVE_SHARD_NAME = shard_name
+        instrumented = _instrument_case_stmts(stmts, source_lines, start_line)
+        code = compile(ast.Module(body=instrumented, type_ignores=[]), str(path), "exec")
+        shard_started_ns = time.monotonic_ns()
+        _self_suite_begin_case(f"{shard_name}:setup")
+        try:
+            exec(code, globals())
+        finally:
+            _self_suite_end_case()
+            shard_wall_ms = int(max(0, (time.monotonic_ns() - shard_started_ns) // 1_000_000))
+            tests = [
+                t for t in _RECORDED_SHARD_TESTS
+                if not (t["name"] == f"{shard_name}:setup" and len(_RECORDED_SHARD_TESTS) > 1 and t["wall_ms"] == 0)
+            ]
+            if not tests:
+                tests = [{"name": shard_name, "shard": shard_name, "wall_ms": shard_wall_ms}]
+            _write_timing_json_atomic(_SELF_SUITE_TIMING_OUT, {
+                "shards": [{"name": shard_name, "wall_ms": shard_wall_ms}],
+                "tests": tests,
+            })
         sys.exit(0)
-    jobs = _SELF_SUITE_JOBS if _SELF_SUITE_JOBS is not None else min(8, os.cpu_count() or 1)
-    if jobs <= 1 or len(shards) <= 1:
+    preamble_wall_ms = int(max(0, (time.monotonic_ns() - _PREAMBLE_STARTED_NS) // 1_000_000))
+    default_jobs = min(len(shards), max(8, (os.cpu_count() or 16) // 2))
+    jobs = _SELF_SUITE_JOBS if _SELF_SUITE_JOBS is not None else default_jobs
+    if (jobs <= 1 and not _SELF_SUITE_TIMING_OUT) or len(shards) <= 1:
         return
     # Run the heaviest shards first so the critical path starts immediately.
     order = sorted(range(len(shards)), key=lambda i: (-shards[i][1], i))
@@ -1179,36 +1312,82 @@ def _dispatch_shards() -> None:
     active_lock = threading.Lock()
     stop = threading.Event()
     outputs: dict[int, tuple[int, str, str]] = {}
+    shard_spans: dict[int, tuple[int, int]] = {}
+    dispatch_started_ns = time.monotonic_ns()
+    scratch_parent = os.environ.get("TMPDIR") or os.environ.get("YOLO_DURABLE_DIR")
+    with tempfile.TemporaryDirectory(dir=scratch_parent, prefix="self-suite-timing-") as timing_dir:
+        timing_root = Path(timing_dir)
 
-    def run_one(index: int) -> tuple[int, int, str, str]:
-        if stop.is_set():
-            return index, 0, "", ""
-        proc = subprocess.Popen(
-            [sys.executable, str(path), "--self-suite-shard", str(index)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-        with active_lock:
+        def run_one(index: int) -> tuple[int, int, str, str]:
             if stop.is_set():
-                proc.terminate()
-            active.append(proc)
-        out, err = proc.communicate()
-        with active_lock:
-            if proc in active:
-                active.remove(proc)
-        return index, proc.returncode, out, err
+                return index, 0, "", ""
+            shard_out = timing_root / f"shard-{index}.json"
+            started_ns = time.monotonic_ns()
+            proc = subprocess.Popen(
+                [sys.executable, str(path), "--self-suite-shard", str(index)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                env={**os.environ, "TILLR_SELF_SUITE_TIMING_OUT": str(shard_out)},
+            )
+            with active_lock:
+                if stop.is_set():
+                    proc.terminate()
+                active.append(proc)
+            out, err = proc.communicate()
+            ended_ns = time.monotonic_ns()
+            shard_spans[index] = (
+                int(max(0, (started_ns - dispatch_started_ns) // 1_000_000)),
+                int(max(0, (ended_ns - started_ns) // 1_000_000)),
+            )
+            with active_lock:
+                if proc in active:
+                    active.remove(proc)
+            return index, proc.returncode, out, err
 
-    failed = None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(jobs, len(shards))) as pool:
-        futures = [pool.submit(run_one, idx) for idx in order]
-        for fut in concurrent.futures.as_completed(futures):
-            idx, rc, out, err = fut.result()
-            outputs[idx] = (rc, out, err)
-            if rc != 0 and failed is None:
-                failed = (idx, rc, out, err)
-                stop.set()
-                with active_lock:
-                    for proc in list(active):
-                        proc.terminate()
+        failed = None
+        workers = max(1, min(jobs, len(shards)))
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(run_one, idx) for idx in order]
+                for fut in concurrent.futures.as_completed(futures):
+                    idx, rc, out, err = fut.result()
+                    outputs[idx] = (rc, out, err)
+                    if rc != 0 and failed is None:
+                        failed = (idx, rc, out, err)
+                        stop.set()
+                        with active_lock:
+                            for proc in list(active):
+                                proc.terminate()
+        finally:
+            if _SELF_SUITE_TIMING_OUT:
+                merged_shards: list[dict] = []
+                merged_tests: list[dict] = [
+                    {"name": "preamble", "shard": "preamble", "wall_ms": preamble_wall_ms}
+                ]
+                for idx, (shard_name, _w, _l, _s) in enumerate(shards):
+                    shard_file = timing_root / f"shard-{idx}.json"
+                    span = shard_spans.get(idx)
+                    if shard_file.is_file():
+                        try:
+                            data = json.loads(shard_file.read_text(encoding="utf-8"))
+                        except (OSError, ValueError):
+                            data = {}
+                        shard_entry = (data.get("shards") or [{"name": shard_name}])[0]
+                        if span is not None:
+                            shard_entry["start_offset_ms"] = span[0]
+                            shard_entry.setdefault("wall_ms", span[1])
+                        merged_shards.append(shard_entry)
+                        merged_tests.extend(data.get("tests") or [])
+                    elif span is not None:
+                        merged_shards.append({
+                            "name": shard_name,
+                            "start_offset_ms": span[0],
+                            "wall_ms": span[1],
+                        })
+                _write_timing_json_atomic(_SELF_SUITE_TIMING_OUT, {
+                    "preamble_wall_ms": preamble_wall_ms,
+                    "shards": merged_shards,
+                    "tests": merged_tests,
+                })
     if failed is not None:
         _idx, rc, out, err = failed
         if out:
@@ -1228,6 +1407,118 @@ def _dispatch_shards() -> None:
     sys.stderr.flush()
     sys.exit(0)
 
+
+def test_self_suite_timing_handoff_and_recording():
+    gate = load_tool("fork_check_self_suite_timing")
+    scratch_parent = os.environ.get("TMPDIR") or os.environ.get("YOLO_DURABLE_DIR")
+    with tempfile.TemporaryDirectory(dir=scratch_parent) as directory:
+        root = Path(directory)
+        spans = root / "spans.json"
+        plan = gate.Plan()
+        plan.tier = gate.TIER_LANDING
+        plan.measure_landing = True
+        self_check = gate.Check(
+            "self-suite", "the gate's own audit suite still passes",
+            ["self-suite-stub"], "watch", 0,
+        )
+        other_check = gate.Check("waybar", "waybar", ["other-stub"], "watch", 0)
+        plan.checks = [self_check, other_check]
+        handoffs = []
+        key = gate.SELF_SUITE_TIMING_ENV
+
+        def run_command(_, argv, timeout, env, drop, cancel):
+            child_env = gate.environ(env, drop)
+            if argv[0] == "self-suite-stub":
+                assert key not in drop and key in child_env
+                target = Path(child_env[key])
+                assert target.read_text() == ""
+                handoffs.append(target)
+                target.write_text(json.dumps({
+                    "preamble_wall_ms": 120,
+                    "shards": [{"name": "core-routing", "wall_ms": 450}],
+                    "tests": [{"name": "1. A fresh repository", "shard": "core-routing", "wall_ms": 450}],
+                }))
+                return 0, "ok\n", 0.45
+            assert key not in env and key in drop and key not in child_env
+            return 0, "ok\n", 0.01
+
+        gate.run_command = run_command
+        for check in plan.checks:
+            gate.execute_check(check, root, None, measure_landing=True)
+        assert len(handoffs) == 1 and not handoffs[0].exists(), handoffs
+        gate.write_gate_spans(str(spans), plan, root, 1, "verified", "", "", [], 1, 1, 0.5)
+        body = json.loads(spans.read_text())
+        by_kind = {row["kind"]: json.loads(row["attributes_json"]) for row in body["check_spans"]}
+        assert by_kind["self-suite"]["self_suite"] == {
+            "preamble_wall_ms": 120,
+            "shards": [{"name": "core-routing", "wall_ms": 450}],
+            "tests": [{"name": "1. A fresh repository", "shard": "core-routing", "wall_ms": 450}],
+        }, by_kind["self-suite"]
+        assert "self_suite" not in by_kind["waybar"], by_kind["waybar"]
+
+        # Verify that running a shard subprocess with TILLR_SELF_SUITE_TIMING_OUT
+        # pops the variable from child environments and writes per-shard and per-test wall_ms.
+        fixture_suite = root / "synthetic-suite.py"
+        fixture_suite.write_text(
+            '_shard_boundary("synthetic-shard", 10)\n'
+            'with tempfile.TemporaryDirectory() as _d:\n'
+            '    # 1. Outer timing env is stripped before cases run\n'
+            '    assert "TILLR_SELF_SUITE_TIMING_OUT" not in os.environ\n'
+            '    # 2a. Second numbered case inside the with block\n'
+            '    assert Path(_d).is_dir()\n',
+            encoding="utf-8",
+        )
+        shard_out = root / "real-shard-timing.json"
+        proc = subprocess.run(
+            [
+                sys.executable, str(Path(__file__).resolve()),
+                "--self-suite-shard", "0", "--self-suite-source", str(fixture_suite),
+            ],
+            cwd=str(ROOT),
+            env={**os.environ, key: str(shard_out)},
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        recorded = json.loads(shard_out.read_text())
+        assert [s["name"] for s in recorded["shards"]] == ["synthetic-shard"], recorded
+        assert [t["name"] for t in recorded["tests"] if not t["name"].endswith(":setup")] == [
+            "1. Outer timing env is stripped before cases run",
+            "2a. Second numbered case inside the with block",
+        ], recorded["tests"]
+        for entry in [*recorded["shards"], *recorded["tests"]]:
+            assert isinstance(entry["wall_ms"], int) and not isinstance(entry["wall_ms"], bool), entry
+            assert str(entry["wall_ms"]).isdigit(), entry
+
+
+def test_denied_counter_avoids_proc_scan_before_first_sample():
+    gate = load_tool("fork_check_denied_fast_start")
+    scratch_parent = os.environ.get("TMPDIR") or os.environ.get("YOLO_DURABLE_DIR")
+    with tempfile.TemporaryDirectory(dir=scratch_parent) as directory:
+        base = Path(directory)
+        nonexec = base / "not-exec"
+        nonexec.write_text("#!/bin/sh\nexit 0\n")
+        with patch.object(gate._start_cpu_sampler, "_probed_denied",
+                          OSError(13, "Permission denied"), create=True):
+            with patch.object(gate.os, "scandir", side_effect=AssertionError("unexpected full /proc scan")):
+                rc, out, _ = gate.run_command(ROOT, [sys.executable, "-c", "print('fast-ok')"], 5)
+                assert rc == 0 and "fast-ok" in out, (rc, out)
+                rc_missing, _, _ = gate.run_command(ROOT, [str(base / "missing-bin")], 5)
+                assert rc_missing == 127, rc_missing
+                rc_nonexec, _, _ = gate.run_command(ROOT, [str(nonexec)], 5)
+                assert rc_nonexec == 126, rc_nonexec
+            warnings = []
+            real_sps = gate._start_process_sampler
+            with patch.object(gate, "_start_process_sampler",
+                              side_effect=lambda err: real_sps(err, base / "missing-proc")), \
+                 patch.object(gate, "progress", side_effect=warnings.append):
+                rc_unavail, _, _ = gate.run_command(ROOT, ["true"], 5)
+            assert rc_unavail == 0, (rc_unavail, warnings)
+            assert any("watchdog unavailable" in w and "process accounting" in w for w in warnings), warnings
+
+
+if _RUN_PREAMBLE_TESTS:
+    test_self_suite_timing_handoff_and_recording()
+    test_denied_counter_avoids_proc_scan_before_first_sample()
 
 _dispatch_shards()
 
@@ -1601,6 +1892,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 0, result.stdout + result.stderr
     assert calls(base, "uvx-calls") == [], calls(base, "uvx-calls")
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
+
+_shard_boundary("storybooks-and-packs", 30)
+
+with tempfile.TemporaryDirectory() as tmp:
+    base = Path(tmp)
+    repo, releases, heads = build_repo(base)
+    env = build_stubs(base)
+    assert run(repo, env).returncode == 0
 
     # 13. A change that can change what the roster storybook renders regenerates it
     #     into the durable directory, not the checkout; an unrelated change does not.
@@ -2006,9 +2305,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "run  matt-render" in result.stdout, result.stdout
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
 
-_shard_boundary("targeted-range", 15)
+_shard_boundary("targeted-range", 28)
 
-# A targeted committed range never inherits an audit's accumulated failures or
+# 21a. A targeted committed range never inherits an audit's accumulated failures or
 # unrelated upstream drift, and never records a repository-wide verified baseline.
 with tempfile.TemporaryDirectory() as tmp:
     base = Path(tmp)
@@ -2214,6 +2513,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert calls(base, "uvx-calls") == [] and calls(base, "yolo-calls") == [], result.stdout
     assert record(repo)["baseline"]["commit"] == sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
 
+_shard_boundary("session-search-quality", 24)
+
 # Building a changed session-search series is not enough: its source must also
 # typecheck and pass the tests that isolate discovery from the real Claude home.
 with tempfile.TemporaryDirectory() as tmp:
@@ -2409,11 +2710,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert record(repo)["runs"][-1]["outcome"] == "dirty", record(repo)["runs"][-1]
     sh(repo, "git", "checkout", "--quiet", "--", ".")
 
-# A SOURCE-ONLY fork's own source is checked too, and its steps install the toolchain they
+_shard_boundary("quarantine-and-dirty-race", 20)
+
+# 24a. A SOURCE-ONLY fork's own source is checked too, and its steps install the toolchain they
 # need. pi-subagents declares no `build` script (its pi entry point is TypeScript loaded
 # through jiti), so `candidate --build` installs nothing and a typecheck or unit suite
-_shard_boundary("quarantine-and-dirty-race", 16)
-
 # would run against no node_modules at all. That is the hole item 190 was filed for: a
 # broken build or a failing case in the fork this session's own `subagent` tool runs on
 # reached the owner and never the gate. The steps ask for `--deps`, and a failing one is red.
@@ -2710,6 +3011,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert int(headline_count.group(1)) == reported, result.stdout
     assert go_tool_steps <= reported, result.stdout
 
+_shard_boundary("advisory-yolo", 11)
+
 # 25. The installed yolo build is ADVISORY: it is reported, and it plans nothing. The
 #     five steps it decides -- the series check (it applies the series), the yolo config
 #     test (it shells `yolo check`), the meta-muse tests and the matt pack's render tests
@@ -2717,8 +3020,6 @@ with tempfile.TemporaryDirectory() as tmp:
 #     wrong twice over: the record is shared through the common Git directory, so a run on
 #     another machine (a jail, whose `yolo` is its own build) planned them on every run for
 #     a build nothing here had changed; and a rebuild at the same commit forced the same
-_shard_boundary("advisory-yolo", 11)
-
 #     replan. So the identity is still recorded and a different one is still reported, but
 #     those five steps run only when a path they watch changes. The identity compared is
 #     the build's COMMIT, so a same-commit rebuild never even reads as a change.
@@ -2940,6 +3241,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert record(repo)["baseline"]["commit"] == verified, record(repo)["baseline"]
     assert record(repo)["runs"][-1]["outcome"] == "failed", record(repo)["runs"][-1]
 
+_shard_boundary("per-branch-baselines", 18)
+
 # 26. The baseline is per branch, and planned from the newest verified commit this history
 #     contains. The record is shared through the common Git directory, so a single shared
 #     baseline was moved by whichever worktree ran last: `git diff baseline..HEAD` over a
@@ -2947,8 +3250,6 @@ with tempfile.TemporaryDirectory() as tmp:
 #     trees -- none at all when their content matches -- so `documents` and `scratch` were
 #     never planned while the headline read VERIFIED. Refusing that diff made the vacuous
 #     plan unplannable, but it also let one worktree's verified run stop another worktree's
-_shard_boundary("per-branch-baselines", 18)
-
 #     run. So each branch keeps its own entry, every entry is a candidate, and only one this
 #     history contains is ever diffed against: two worktrees cannot invalidate each other,
 #     and a candidate that never landed is skipped rather than refused.
@@ -3339,10 +3640,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert record(repo)["baseline"]["commit"] == verified, record(repo)["baseline"]
     assert record(repo)["runs"][-1]["outcome"] == "failed", record(repo)["runs"][-1]
 
+_shard_boundary("gate-code-and-suites", 26)
+
 # Board item 412: a change to the gate's own selection or reporting code plans the
 # self-suite and no fork check, while a change to the code that materializes or judges a
-_shard_boundary("gate-code-and-suites", 17)
-
 # series still forces every fork check. The two sets are pinned here, so a later edit
 # cannot quietly move a path from one to the other, and the demonstration runs a real
 # gate pass over a gate-only change while a fork's patch branch is behind its upstream.
@@ -3982,6 +4283,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert record(repo)["baseline"]["commit"] == verified, record(repo)["baseline"]
     assert record(repo)["runs"][-1]["outcome"] == "refused", record(repo)["runs"][-1]
 
+_shard_boundary("forensics-budget-and-loop", 22)
+
 # 31. tests/session-forensics.test.py is the only assertion on the hang-analysis CLI's own
 #     report -- judge passes, slow tool calls, telemetry gaps, a turn that never closed --
 #     and it landed with the tool while no step here named it, so the gate would never run
@@ -4271,6 +4574,8 @@ with tempfile.TemporaryDirectory() as tmp:
 print("fork-check tillr-loop: a tools/tillr-loop change plans the loop adapter's own suite "
       "and runs it, a failing case is a verdict, and a path outside that directory plans none")
 
+_shard_boundary("liveness-and-worktrees", 24)
+
 # 32. tools/session-liveness is the headless liveness harness: from a state a session can
 #     reach, does it return to idle within a bound, and does a later send-now start work? It
 #     landed with the fork fix it measures and nothing else executes it. A verdict is a
@@ -4278,8 +4583,6 @@ print("fork-check tillr-loop: a tools/tillr-loop change plans the loop adapter's
 #     checkout built from this tree's pi series, and the harness run against that checkout
 #     through PI_FORK. The shared `.forks/pi` is only a construction substrate -- the candidate
 #     is cloned from it by ref -- so a managed worktree without one refuses the run with the
-_shard_boundary("liveness-and-worktrees", 19)
-
 #     setup command, never runs either step, and never reads the harness's exit 127 as a
 #     pass. A failing spec is the verdict the harness exists to make, and exit 127 at run
 #     time is an inability to answer rather than a verdict.
@@ -5221,14 +5524,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert triage_path.exists(), "a green run must not erase the last packet"
     assert "the row lost column" in excerpt.read_text(), excerpt.read_text()
 
+_shard_boundary("pi-forks-and-scheduler", 39)
+
 # 45. The pi-forks driver's own suite. `tests/pi-forks.test.sh` pins `bin/pi-forks`, the
 #     driver every patch-series step above execs, and no `Check(...)` named it: the cases
 #     that pin the driver sat unexecuted, and the suite was itself broken on a clean tree --
 #     on a lane worktree it aborted under `set -e` after 80 passing cases, because the
 #     driver's linked-worktree refusal fired on the sourced call that reads the real
 #     manifest. The step is planned by a change to the driver, its manifest, the suite, a
-_shard_boundary("pi-forks-and-scheduler", 39)
-
 #     series directory or a pack's declaration, and by nothing else; it runs from the
 #     checkout, and a failing case is a verdict about the change rather than an inability
 #     to answer it.
@@ -5828,11 +6131,11 @@ with tempfile.TemporaryDirectory() as tmp:
     # The failing run advanced nothing, so the same change is still open.
     assert record(repo)["runs"][-1]["outcome"] == "failed", record(repo)["runs"][-1]
 
+_shard_boundary("concurrent-quality-and-hooks", 24)
+
 # 46b. A SEEDED FAILURE IN EACH QUALITY SCRIPT IS THE SAME VERDICT CONCURRENTLY AS
 #      SERIALLY. The split runs a fork's two quality scripts at the same time when their
 #      writes are disjoint, so the property that matters is that concurrency changes no
-_shard_boundary("concurrent-quality-and-hooks", 19)
-
 #      verdict: the same tree, judged at --jobs 1 and at --jobs 4, must blame the same
 #      check. Each script is seeded in turn, so neither can hide behind the other, and the
 #      sibling is asserted NOT blamed (board item 405).
@@ -6420,14 +6723,14 @@ with tempfile.TemporaryDirectory() as tmp:
     refuses_declaration({"entries": []}, "'declarations'")
 
 
+_shard_boundary("verdict-table-and-pins", 25)
+
 # 48. What a check's non-zero exit means is declared per kind, and EVERY kind is declared.
 #     The table was an allowlist with a string fallback, so a kind nobody had added answered
 #     "not a verdict" (exit 2) by default. An undeclared kind was one of those, and the red
 #     it reported -- the pack's copy of the board CLI missing the two files its source had
 #     just gained -- was printed `ERR` and exited 2 for a tree the gate had judged, so the
 #     landing queue had no check name and keyed the flake on `exit:2` (board item 284).
-_shard_boundary("verdict-table-and-pins", 15)
-
 #     Every kind the planner's own source names is classified; a verdict kind's failure is a
 #     verdict -- `FAIL`, exit 1 -- and a kind nobody declared fails closed rather than
 #     silently reaching no verdict.
@@ -6747,6 +7050,7 @@ print("fork-check upstream resolution: the bridge's ref is what a verdict record
       "probe answer is named rather than passed off as the launch's own")
 
 
+_shard_boundary("candidate-tree-preflight", 42)
 
 # 51. The gate only judges a candidate tree proven current against its series (board item
 #     194). A 216-second landing run reported two failing pi-subagents cases the series did
@@ -7099,6 +7403,8 @@ print("fork-check pin drift: a pinned fork never follows its upstream, and the d
       "files one idempotent bump item per drifted pin")
 
 
+_shard_boundary("fastfail-timing-and-cache", 13)
+
 # 52. A red gate kills the run (board item 337). Three properties, pinned here because
 #     the gate used to wait for every check after one of them had already decided the
 #     verdict:
@@ -7106,8 +7412,6 @@ print("fork-check pin drift: a pinned fork never follows its upstream, and the d
 #         starts, so a cheap red never pays for the suites;
 #       * a check that fails while a slow suite runs stops the pass, terminates the suite,
 #         and names every check that did not run -- it does not wait the slow one out;
-_shard_boundary("fastfail-timing-and-cache", 13)
-
 #       * a green plan runs exactly the checks it planned, once each.
 #     The slow check is a real child process, so termination is observed by its process
 #     disappearing and its "finished" marker never being written, not by a wall clock.
@@ -7812,11 +8116,11 @@ with tempfile.TemporaryDirectory() as tmp:
     lpt.attach_history(plan, TimelineRecord())
     assert unseen.history is None, unseen.history
 
+_shard_boundary("efficiency-and-tiers", 20)
+
 # ── 56. THE PASS'S OWN EFFICIENCY: class, floor, ratio and cause ────────────────
 # Board item 407, the gate-latency design's F-12. Every pass reports its change class,
 # its wall time, the S1 floor computed from that same run's per-check durations, the
-_shard_boundary("efficiency-and-tiers", 12)
-
 # efficiency ratio, and the cause of every fork-quality execution. The functions are
 # pinned directly, and a real docs-only fixture pass proves the line reaches the report
 # and the record rather than only existing in a helper.
@@ -8258,6 +8562,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # The kind is still executed by its prepare step: the cache removed the two readers,
     # not the kind.
     assert {check.kind for check in ran} == {"fork-quality"}
+
+_shard_boundary("landing-tiers-and-shards", 24)
 
 # 59. THE TIER FLAG AND THE OWED STATE (docs/design/landing-velocity-plan.md, S2). The
 #     tier is a CALLER REQUEST: no flag is the full gate, byte for byte in behavior, and
@@ -8729,7 +9035,7 @@ with tempfile.TemporaryDirectory() as tmp:
         red_res.stdout + red_res.stderr
     )
 
-_shard_boundary("watchdog-and-subsuites", 31)
+_shard_boundary("watchdog-and-subsuites", 24)
 
 # 66. Wrapper targets never kill progress; only complete silent samples stall.
 # The fake child supplies observations, not elapsed-time assertions.
@@ -8995,12 +9301,26 @@ with patch.object(watch, "_start_cpu_sampler", side_effect=OSError("counter deni
         rc, out, err, _ = watch._run_cancellable(ROOT, [sys.executable, "-c", nested_code, mode],
                                                 0, None, (), watch.Cancellation(), False)
         assert rc == 0 and f"nested {mode} passed" in out, (rc, out, err)
-    # Exercise the Go reader under the Python watchdog as the real gate does.
-    rc, out, err, _ = watch._run_cancellable(ROOT, ["go", "test", "-C", "tools/tillr-gate", "./...", "-run",
-        "^(TestProcessAccounting|TestDeniedCounter|TestNeitherCPUSource|TestCPUSource)"],
-        0, None, (), watch.Cancellation(), False)
-    assert rc == 0, (rc, out, err)
 print("wrapper watchdog: cadence parity, output/CPU progress, refused-counter fallback, retained children, nested Go/Python accounting, unavailable accounting, group kill and named stall handoff pass")
-# The runner exception is part of the legacy judge's permanent audit too.
+
+_shard_boundary("watchdog-go-reader", 45)
+# 66b. Exercise the Go reader under the Python watchdog as the real gate does.
+# Deterministic shared scratch under GOCACHE lets Go reuse cached results when
+# tools/tillr-gate is unchanged instead of re-running 100 Hz /proc loops on every gate.
+_watch_go_spec = importlib.util.spec_from_file_location("fork_check_watchdog_go", SCRIPT)
+_watch_go = importlib.util.module_from_spec(_watch_go_spec)
+_watch_go_spec.loader.exec_module(_watch_go)
+with patch.object(_watch_go, "_start_cpu_sampler", side_effect=OSError("counter denied")), \
+     patch.object(_watch_go, "progress"):
+    _go_scratch = Path(os.environ.get("GOCACHE") or (Path.home() / ".cache" / "go-build")) / "self-suite-go-scratch"
+    _go_scratch.mkdir(parents=True, exist_ok=True)
+    rc, out, err, _ = _watch_go._run_cancellable(ROOT, ["go", "test", "-C", "tools/tillr-gate", "-trimpath", "./...", "-run",
+        "^(TestProcessAccounting|TestDeniedCounter|TestNeitherCPUSource|TestCPUSource)"],
+        0, {"TMPDIR": str(_go_scratch), "YOLO_DURABLE_DIR": str(_go_scratch)}, (), _watch_go.Cancellation(), False)
+    assert rc == 0, (rc, out, err)
+
+_shard_boundary("runner-and-fast-tree-subsuites", 18)
+# 67. The runner exception is part of the legacy judge's permanent audit too.
 subprocess.run([sys.executable, str(ROOT / "tools/gate/runner-first.test.py")], check=True)
+# 68. Fast tree checks run before fork-check in the landing gate.
 subprocess.run([sys.executable, str(ROOT / "tests/fast-tree-in-done.test.py")], check=True)
