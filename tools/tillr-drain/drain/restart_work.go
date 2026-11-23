@@ -200,14 +200,15 @@ func (l *Loop) armRestartPending(gen uint64) (<-chan struct{}, bool) {
 	return l.restartPendingWait, false
 }
 
-// waitForRestartAnswer blocks until any pending non-deferred restart request
-// has been answered (replaced or answered without replacing) or deferred.
+// waitForRestartAnswer blocks until any pending restart request that is not
+// deferred by post-landing actions has been answered (replaced or answered
+// without replacing) or deferred by a post-landing action.
 func (l *Loop) waitForRestartAnswer(ctx context.Context) error {
 	for {
 		if l.restartReplaced.Load() {
 			return errRestartPending
 		}
-		if l.cfg.Restart == nil || l.restartDeferred() {
+		if l.cfg.Restart == nil || l.restartActionDeferred() {
 			return nil
 		}
 		gen, waitCh := l.restartWaitState()
@@ -275,7 +276,7 @@ func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
 			h.release()
 			return errRestartPending
 		}
-		if h.settling && h.loop.cfg.Restart != nil && !h.loop.restartDeferred() {
+		if h.settling && h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() {
 			if _, waitCh := h.loop.restartWaitState(); waitCh != nil {
 				// A restart became pending between waitForRestartAnswer and RLock.
 				// Release immediately so the restart is not starved, then wait.

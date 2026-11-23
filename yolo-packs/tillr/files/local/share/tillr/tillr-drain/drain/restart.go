@@ -92,13 +92,21 @@ func (l *Loop) adoptRestart(ctx context.Context) error {
 	return nil
 }
 
-// restartDeferred keeps the queue working while a tip proof or a post-landing
-// action still owns work that exec would drop. Use the same rule at worker handoff.
-func (l *Loop) restartDeferred() bool {
+func (l *Loop) restartProofActive() bool {
 	l.heavyMu.Lock()
 	proofActive := l.heavyProofActive
 	l.heavyMu.Unlock()
-	return proofActive || l.rollAction.busy() || l.piRollAction.busy() || l.extRollAction.busy() || l.pushAction.busy()
+	return proofActive
+}
+
+func (l *Loop) restartActionDeferred() bool {
+	return l.rollAction.busy() || l.piRollAction.busy() || l.extRollAction.busy() || l.pushAction.busy()
+}
+
+// restartDeferred keeps the queue working while a tip proof or a post-landing
+// action still owns work that exec would drop. Use the same rule at worker handoff.
+func (l *Loop) restartDeferred() bool {
+	return l.restartProofActive() || l.restartActionDeferred()
 }
 
 func (l *Loop) isRestartReplaced() bool {
@@ -128,7 +136,7 @@ func (l *Loop) gateRestartWith(ctx context.Context, result *LoopResult, stopChec
 	}
 	// Exec would discard the pending follow-up actions, even if the current
 	// command survived as an inherited child. Keep processing passes meanwhile.
-	if l.restartDeferred() {
+	if l.restartActionDeferred() {
 		l.clearRestartPending()
 		return false, "", nil
 	}
@@ -141,11 +149,21 @@ func (l *Loop) gateRestartWith(ctx context.Context, result *LoopResult, stopChec
 		return false, "", err
 	}
 	// Prevent new gates and landings from taking restartMechanical while this
-	// restart is pending, so already-held locks drain instead of starving exec.
+	// restart is pending (including while deferred only by an active trunk proof),
+	// so already-held locks and the active proof drain instead of starving exec.
 	l.markRestartPending()
+	if l.restartProofActive() {
+		return false, "", nil
+	}
 	// Do not queue an exclusive waiter behind another item's gate or landing.
 	// The request stays unanswered and a subsequent pass can take it.
 	if !l.restartMechanical.TryLock() {
+		return false, "", nil
+	}
+	// A proof may have started between the check above and TryLock. Keep the
+	// pending-restart barrier armed while deferred only by that proof.
+	if l.restartProofActive() && !l.restartActionDeferred() {
+		l.restartMechanical.Unlock()
 		return false, "", nil
 	}
 	defer l.clearRestartPending()

@@ -156,7 +156,7 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 	if stopped, err := l.stopRequested(ctx); err != nil || stopped {
 		return nil, false, err
 	}
-	if l.cfg.Restart != nil && !l.restartDeferred() {
+	if l.cfg.Restart != nil && !l.restartActionDeferred() {
 		if l.restartReplaced.Load() {
 			return nil, false, nil
 		}
