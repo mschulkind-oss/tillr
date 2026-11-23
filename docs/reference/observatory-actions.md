@@ -338,7 +338,7 @@ Every failed write returns `{snapshot, error: {code, message}}` (`apierror.go`,
   `tillr.idea:<store_path>` (warning visibly if `localStorage` throws), survives
   closing the form or a refused save, clears on confirm only if `localStorage`
   still holds the submitted draft (so another tab's newer edit is not erased),
-  and navigates to `#/item/<item_id>` on success.
+  and navigates to `/item/<item_id>` on success.
 - **Item page (`ItemRunPages.tsx`):** When `data.idea` is present, renders the
   verbatim `<pre className="idea-words">` block with `in the tree` or `not yet
   in the tree` beside `words_path`, followed by `Items from this idea`
