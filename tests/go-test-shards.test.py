@@ -29,6 +29,17 @@ def setUpModule():
     spec.loader.exec_module(shards)
 
 
+def _load_shards_from_commit(rev, module_name):
+    source = subprocess.check_output(
+        ['git', '-C', str(ROOT), 'show', f'{rev}:tools/go-test-shards.py'],
+        text=True,
+    )
+    module = types.ModuleType(module_name)
+    module.__file__ = f'{rev}:tools/go-test-shards.py'
+    exec(compile(source, module.__file__, 'exec'), module.__dict__)
+    return module
+
+
 class RunnerTests(unittest.TestCase):
     def setUp(self):
         parent = os.environ.get('TMPDIR') or os.environ.get('YOLO_DURABLE_DIR')
@@ -1693,7 +1704,7 @@ func TestSecond(t *testing.T) {
         releases = {}
 
         # Plant a stale (unlocked) wait ticket from a dead process to ensure it does not block anyone.
-        wait_dir = lock_dir / 'wait-queue'
+        wait_dir = shards.wait_queue_dir(lock_dir)
         wait_dir.mkdir(parents=True, exist_ok=True)
         stale_ticket = wait_dir / '00-00000000000000000001-0000000001-00000000000000000001-00000000-spg.wait'
         stale_ticket.write_text('')
@@ -2134,6 +2145,457 @@ func TestBeta(t *testing.T) {{ checkRepo(t) }}
             if e.get('Action') == 'pass' and e.get('Test')
         }
         self.assertEqual(passed, {'TestAlpha', 'TestBeta'})
+
+    def test_pre_a45355b197_and_unversioned_a45355b197_reproduce_mutual_yield_while_current_code_progresses(self):
+        self._enable_slot_limits()
+        pre_mod = _load_shards_from_commit('a45355b197~1', 'shards_pre_a45355b197')
+        unversioned_mod = _load_shards_from_commit('a45355b197', 'shards_at_a45355b197')
+
+        class _StopMutualYield(Exception):
+            pass
+
+        # 1. Reproduce the mutual yield: pre-a45355b197 proof waiter and unversioned a45355b197
+        #    gate waiter share lock_dir, hold each other's wait locks, and both stay stuck even
+        #    after slot-0 and proof-0 are released and free.
+        repro_dir = self.root / 'mutual-yield-repro'
+        released_evt = threading.Event()
+        stop_evt = threading.Event()
+        spin_lock = threading.Lock()
+        spins = {'old_proof': 0, 'new_gate': 0}
+        both_spun = threading.Event()
+        old_waiting = threading.Event()
+        old_acquired = threading.Event()
+        new_waiting = threading.Event()
+        new_acquired = threading.Event()
+        repro_errors = []
+        repro_threads = []
+
+        def make_sleep_hook(role, real_sleep):
+            def hooked_sleep(seconds):
+                if stop_evt.is_set():
+                    raise _StopMutualYield()
+                if released_evt.is_set():
+                    with spin_lock:
+                        spins[role] += 1
+                        if spins['old_proof'] >= 5 and spins['new_gate'] >= 5:
+                            both_spun.set()
+                real_sleep(min(seconds, 0.002))
+            return hooked_sleep
+
+        blockers = ExitStack()
+        with patch.object(pre_mod.time, 'sleep', side_effect=make_sleep_hook('old_proof', pre_mod.time.sleep)), \
+             patch.object(unversioned_mod.time, 'sleep', side_effect=make_sleep_hook('new_gate', unversioned_mod.time.sleep)):
+            try:
+                slot_blocker = ExitStack()
+                slot_blocker.enter_context(pre_mod.acquire_shard_slot(
+                    repro_dir, 1, slot_class='ordinary', proof_limit=1, gate_limit=1,
+                    holder='worker-slot-blocker',
+                ))
+                slot_blocker.enter_context(pre_mod.acquire_shard_slot(
+                    repro_dir, 1, slot_class='proof', proof_limit=1, gate_limit=1,
+                    holder='proof-slot-blocker',
+                ))
+                blockers.enter_context(unversioned_mod.acquire_shard_slot(
+                    repro_dir, 1, slot_class='gate', proof_limit=1, gate_limit=1,
+                    gate_reserved_limit=1, holder='gate:lane-4',
+                ))
+
+                def run_old_proof():
+                    try:
+                        with pre_mod.acquire_shard_slot(
+                            repro_dir, 1, notify=lambda _m: old_waiting.set(),
+                            slot_class='proof', proof_limit=1, gate_limit=1,
+                            holder='trunk-proof',
+                        ):
+                            old_acquired.set()
+                    except _StopMutualYield:
+                        pass
+                    except BaseException as exc:
+                        repro_errors.append(exc)
+                        old_waiting.set()
+                        raise
+
+                def run_new_gate():
+                    try:
+                        with unversioned_mod.acquire_shard_slot(
+                            repro_dir, 1, notify=lambda _m: new_waiting.set(),
+                            slot_class='gate', proof_limit=1, gate_limit=1,
+                            gate_reserved_limit=1, holder='gate:lane-4',
+                        ):
+                            new_acquired.set()
+                    except _StopMutualYield:
+                        pass
+                    except BaseException as exc:
+                        repro_errors.append(exc)
+                        new_waiting.set()
+                        raise
+
+                t_old = threading.Thread(target=run_old_proof)
+                t_new = threading.Thread(target=run_new_gate)
+                repro_threads.extend((t_old, t_new))
+                t_old.start()
+                t_new.start()
+
+                self.assertTrue(old_waiting.wait(30), 'pre-a45355b197 proof did not enter wait')
+                self.assertTrue(new_waiting.wait(30), 'a45355b197 gate did not enter wait')
+                self.assertTrue(pre_mod.gate_caller_waiting(repro_dir))
+                self.assertTrue(unversioned_mod.proof_caller_waiting(repro_dir))
+
+                # Free both slot-0 and proof-0; both waiters still yield to each other.
+                slot_blocker.close()
+                released_evt.set()
+                self.assertTrue(both_spun.wait(30), 'waiters did not spin after slots were freed')
+                self.assertFalse(old_acquired.is_set(), 'pre-a45355b197 proof should stay deadlocked on unversioned gate-waiting.lock')
+                self.assertFalse(new_acquired.is_set(), 'a45355b197 gate should stay deadlocked on unversioned proof-waiting.lock')
+                self.assertTrue(pre_mod.gate_caller_waiting(repro_dir))
+                self.assertTrue(unversioned_mod.proof_caller_waiting(repro_dir))
+
+                # Prove both physical slots are actually free while the two waiters deadlock.
+                free_slot_fd, free_slot_name = shards.try_lock_slot(repro_dir, 'slot', 1, 0)
+                try:
+                    self.assertEqual(free_slot_name, 'slot-0')
+                finally:
+                    shards._unlock_and_close(free_slot_fd)
+                free_proof_fd, free_proof_name = shards.try_lock_slot(repro_dir, 'proof', 1, 0)
+                try:
+                    self.assertEqual(free_proof_name, 'proof-0')
+                finally:
+                    shards._unlock_and_close(free_proof_fd)
+            finally:
+                stop_evt.set()
+                slot_blocker.close()
+                blockers.close()
+                for thread in repro_threads:
+                    thread.join(30)
+        if repro_errors:
+            raise repro_errors[0]
+
+        # 2. With current rules-versioned wait queues, pre-a45355b197 proof and current gate
+        #    share physical locks in lock_dir without ever yielding to each other's wait locks.
+        fixed_dir = self.root / 'mutual-yield-fixed'
+        fixed_errors = []
+        fixed_threads = []
+        old_fixed_waiting = threading.Event()
+        old_fixed_acquired = threading.Event()
+        old_fixed_release = threading.Event()
+        new_fixed_waiting = threading.Event()
+        new_fixed_acquired = threading.Event()
+        new_fixed_release = threading.Event()
+        ord_fixed_waiting = threading.Event()
+        ord_fixed_acquired = threading.Event()
+        ord_fixed_release = threading.Event()
+
+        fixed_blockers = ExitStack()
+        fixed_slot_blockers = ExitStack()
+        try:
+            # Fill both ordinary slots (slot-0, slot-1), proof-0, and gate-0.
+            for idx in range(2):
+                fixed_slot_blockers.enter_context(pre_mod.acquire_shard_slot(
+                    fixed_dir, 2, slot_class='ordinary', proof_limit=1, gate_limit=1,
+                    holder=f'worker-blocker-{idx}',
+                ))
+            fixed_slot_blockers.enter_context(pre_mod.acquire_shard_slot(
+                fixed_dir, 2, slot_class='proof', proof_limit=1, gate_limit=1,
+                holder='proof-blocker',
+            ))
+            fixed_blockers.enter_context(shards.acquire_shard_slot(
+                fixed_dir, 2, slot_class='gate', proof_limit=1, gate_limit=1,
+                gate_reserved_limit=1, holder='gate:lane-4',
+            ))
+
+            def run_old_proof_fixed():
+                try:
+                    with pre_mod.acquire_shard_slot(
+                        fixed_dir, 2, notify=lambda _m: old_fixed_waiting.set(),
+                        slot_class='proof', proof_limit=1, gate_limit=1,
+                        holder='trunk-proof',
+                    ):
+                        old_fixed_acquired.set()
+                        assert old_fixed_release.wait(60)
+                except BaseException as exc:
+                    fixed_errors.append(exc)
+                    old_fixed_waiting.set()
+                    old_fixed_acquired.set()
+                    raise
+
+            def run_new_gate_fixed():
+                try:
+                    with shards.acquire_shard_slot(
+                        fixed_dir, 2, notify=lambda _m: new_fixed_waiting.set(),
+                        slot_class='gate', proof_limit=1, gate_limit=1,
+                        gate_reserved_limit=1, holder='gate:lane-4',
+                    ):
+                        new_fixed_acquired.set()
+                        assert new_fixed_release.wait(60)
+                except BaseException as exc:
+                    fixed_errors.append(exc)
+                    new_fixed_waiting.set()
+                    new_fixed_acquired.set()
+                    raise
+
+            t_old = threading.Thread(target=run_old_proof_fixed)
+            t_new = threading.Thread(target=run_new_gate_fixed)
+            fixed_threads.extend((t_old, t_new))
+            t_old.start()
+            t_new.start()
+
+            self.assertTrue(old_fixed_waiting.wait(30))
+            self.assertTrue(new_fixed_waiting.wait(30))
+
+            # Wait-signaling namespaces are completely disjoint across rules versions.
+            self.assertTrue(pre_mod.proof_caller_waiting(fixed_dir))
+            self.assertFalse(shards.proof_caller_waiting(fixed_dir))
+            self.assertTrue(shards.gate_caller_waiting(fixed_dir))
+            self.assertFalse(pre_mod.gate_caller_waiting(fixed_dir))
+            self.assertNotEqual(shards.wait_rules_dir(fixed_dir), fixed_dir)
+
+            # Release slot-0, slot-1, and proof-0; both waiters progress immediately.
+            fixed_slot_blockers.close()
+            self.assertTrue(old_fixed_acquired.wait(30), 'pre-a45355b197 proof did not progress')
+            self.assertTrue(new_fixed_acquired.wait(30), 'current gate did not progress')
+
+            # Physical slot locks remain shared at fixed_dir across versions: when ordinary
+            # slots are full (held by pre_mod and shards), an ordinary caller must still wait.
+            extra_old_acquired = threading.Event()
+            extra_old_release = threading.Event()
+            holders_now = shards.read_slot_holders(fixed_dir)
+            held_ordinary = sum(1 for h in holders_now if h['slot'].startswith('slot-'))
+            if held_ordinary < 2:
+                def hold_remaining_ordinary():
+                    try:
+                        with pre_mod.acquire_shard_slot(
+                            fixed_dir, 2, slot_class='ordinary', proof_limit=1, gate_limit=1,
+                            holder='old-worker-fill',
+                        ):
+                            extra_old_acquired.set()
+                            assert extra_old_release.wait(60)
+                    except BaseException as exc:
+                        fixed_errors.append(exc)
+                        extra_old_acquired.set()
+                        raise
+
+                t_fill = threading.Thread(target=hold_remaining_ordinary)
+                fixed_threads.append(t_fill)
+                t_fill.start()
+                self.assertTrue(extra_old_acquired.wait(30))
+            else:
+                extra_old_release.set()
+
+            def run_ordinary_waiter():
+                try:
+                    with shards.acquire_shard_slot(
+                        fixed_dir, 2, notify=lambda _m: ord_fixed_waiting.set(),
+                        slot_class='ordinary', proof_limit=1, gate_limit=1,
+                        holder='current-worker',
+                    ):
+                        ord_fixed_acquired.set()
+                        assert ord_fixed_release.wait(60)
+                except BaseException as exc:
+                    fixed_errors.append(exc)
+                    ord_fixed_waiting.set()
+                    ord_fixed_acquired.set()
+                    raise
+
+            t_ord = threading.Thread(target=run_ordinary_waiter)
+            fixed_threads.append(t_ord)
+            t_ord.start()
+            self.assertTrue(ord_fixed_waiting.wait(30))
+            self.assertFalse(ord_fixed_acquired.is_set())
+
+            new_fixed_release.set()
+            old_fixed_release.set()
+            extra_old_release.set()
+            self.assertTrue(ord_fixed_acquired.wait(30))
+            ord_fixed_release.set()
+        finally:
+            fixed_slot_blockers.close()
+            fixed_blockers.close()
+            old_fixed_release.set()
+            new_fixed_release.set()
+            ord_fixed_release.set()
+            for thread in fixed_threads:
+                thread.join(30)
+        if fixed_errors:
+            raise fixed_errors[0]
+
+    def test_different_slot_rules_versions_never_yield_to_each_other(self):
+        self._enable_slot_limits()
+        other_spec = importlib.util.spec_from_file_location('shards_other_version', RUNNER)
+        other_mod = importlib.util.module_from_spec(other_spec)
+        other_spec.loader.exec_module(other_mod)
+        other_mod.ENFORCE_SLOT_LIMITS = True
+        other_mod.SLOT_RULES_VERSION = 'v999'
+
+        lock_dir = self.root / 'cross-version-isolation'
+        other_rules_dir = other_mod.wait_rules_dir(lock_dir)
+        other_rules_dir.mkdir(parents=True, exist_ok=True)
+        other_wait_lock = other_rules_dir / 'repair-waiting.lock'
+        other_queue_dir = other_mod.wait_queue_dir(lock_dir)
+        other_queue_dir.mkdir(parents=True, exist_ok=True)
+
+        # Simulate a higher-priority repair waiter running under rules version v999.
+        repair_wait_fd = os.open(other_wait_lock, os.O_CREAT | os.O_RDWR, 0o666)
+        ticket_fd, ticket_path, _, _ = other_mod._register_wait_ticket(other_queue_dir, 0, 'spg')
+        try:
+            fcntl.flock(repair_wait_fd, fcntl.LOCK_SH)
+            self.assertTrue(other_mod.repair_caller_waiting(lock_dir))
+            self.assertFalse(shards.repair_caller_waiting(lock_dir))
+
+            # Current-version ordinary caller must take a free slot immediately with zero yield.
+            notices = []
+            with patch.object(shards.time, 'sleep', side_effect=AssertionError('unexpected yield across rules versions')):
+                with shards.acquire_shard_slot(
+                    lock_dir, 1, notify=notices.append,
+                    slot_class='ordinary', proof_limit=0, gate_limit=0,
+                    holder='current-worker',
+                ):
+                    self.assertEqual(notices, [])
+        finally:
+            other_mod._release_wait_ticket(ticket_fd, ticket_path)
+            shards._unlock_and_close(repair_wait_fd)
+
+    def test_slot_rules_version_pins_yield_and_pool_rules(self):
+        self._enable_slot_limits()
+        # Immutable record of slot rules by version. Any change to priority order, pool
+        # eligibility, wait-lock signaling, or yield behavior must bump SLOT_RULES_VERSION
+        # rather than mutating an existing version's rules in place.
+        expected_v2 = {
+            'priority': (
+                shards.SLOT_CLASS_REPAIR,
+                shards.SLOT_CLASS_PROOF,
+                shards.SLOT_CLASS_GATE,
+                shards.SLOT_CLASS_ORDINARY,
+            ),
+            'pools': {
+                shards.SLOT_CLASS_REPAIR: ('s', 'p', 'g'),
+                shards.SLOT_CLASS_PROOF: ('s', 'p'),
+                shards.SLOT_CLASS_GATE: ('s', 'g'),
+                shards.SLOT_CLASS_ORDINARY: ('s',),
+            },
+            'wait_locks': {
+                shards.SLOT_CLASS_REPAIR: 'repair-waiting.lock',
+                shards.SLOT_CLASS_PROOF: 'proof-waiting.lock',
+                shards.SLOT_CLASS_GATE: 'gate-waiting.lock',
+                shards.SLOT_CLASS_ORDINARY: None,
+            },
+            'yields_to': {
+                shards.SLOT_CLASS_REPAIR: {
+                    's': (),
+                    'p': (),
+                    'g': (),
+                },
+                shards.SLOT_CLASS_PROOF: {
+                    's': (shards.SLOT_CLASS_REPAIR,),
+                    'p': (shards.SLOT_CLASS_REPAIR,),
+                },
+                shards.SLOT_CLASS_GATE: {
+                    's': (shards.SLOT_CLASS_REPAIR, shards.SLOT_CLASS_PROOF),
+                    'g': (shards.SLOT_CLASS_REPAIR,),
+                },
+                shards.SLOT_CLASS_ORDINARY: {
+                    's': (
+                        shards.SLOT_CLASS_REPAIR,
+                        shards.SLOT_CLASS_PROOF,
+                        shards.SLOT_CLASS_GATE,
+                    ),
+                },
+            },
+        }
+        self.assertEqual(
+            shards.SLOT_RULES_VERSION, 'v2',
+            'bump SLOT_RULES_VERSION and add its pinned rule entry when changing slot yield rules',
+        )
+        self.assertEqual(
+            shards.SLOT_RULES, expected_v2,
+            'SLOT_RULES changed without bumping SLOT_RULES_VERSION',
+        )
+        self.assertEqual(
+            shards._CLASS_PRIORITY,
+            {cls: idx for idx, cls in enumerate(shards.SLOT_RULES['priority'])},
+        )
+
+        lock_dir = self.root / 'rules-pin'
+        self.assertEqual(
+            shards.wait_rules_dir(lock_dir),
+            lock_dir / 'wait-rules' / shards.SLOT_RULES_VERSION,
+        )
+        self.assertEqual(
+            shards.wait_queue_dir(lock_dir),
+            lock_dir / 'wait-rules' / shards.SLOT_RULES_VERSION / 'wait-queue',
+        )
+
+        class _Yielded(Exception):
+            pass
+
+        def try_acquire_once(case_dir, caller_class, *, limit, proof_limit, gate_limit):
+            with patch.dict(os.environ, {shards.SLOT_CLASS_ENV: ''}), \
+                 patch.object(shards.time, 'sleep', side_effect=_Yielded):
+                try:
+                    with shards.acquire_shard_slot(
+                        case_dir, limit, slot_class=caller_class,
+                        proof_limit=proof_limit, gate_limit=gate_limit,
+                        holder=f'pin-{caller_class}',
+                    ):
+                        return True
+                except _Yielded:
+                    return False
+
+        # Verify live acquire_shard_slot pool eligibility matches SLOT_RULES['pools'].
+        for caller_class in shards.SLOT_CLASSES:
+            pools = shards.SLOT_RULES['pools'][caller_class]
+            for pool_char, proof_limit, gate_limit in (('p', 1, 0), ('g', 0, 1)):
+                case_dir = self.root / f'pin-pool-{caller_class}-{pool_char}'
+                case_dir.mkdir(parents=True, exist_ok=True)
+                slot0_fd, slot0_name = shards.try_lock_slot(case_dir, 'slot', 1, 0)
+                self.assertEqual(slot0_name, 'slot-0')
+                try:
+                    acquired = try_acquire_once(
+                        case_dir, caller_class,
+                        limit=1, proof_limit=proof_limit, gate_limit=gate_limit,
+                    )
+                    self.assertEqual(
+                        acquired, pool_char in pools,
+                        f'pool eligibility mismatch for class={caller_class} pool={pool_char}',
+                    )
+                finally:
+                    shards._unlock_and_close(slot0_fd)
+
+        # Verify live acquire_shard_slot yielding matches SLOT_RULES['yields_to'] for every
+        # (caller_class, waiting_class, pool_char) triple.
+        for caller_class in shards.SLOT_CLASSES:
+            for pool_char in shards.SLOT_RULES['pools'][caller_class]:
+                for waiting_class, wait_lock_name in shards.SLOT_RULES['wait_locks'].items():
+                    if not wait_lock_name:
+                        continue
+                    case_dir = self.root / f'pin-yield-{caller_class}-{pool_char}-{waiting_class}'
+                    rules_dir = shards.wait_rules_dir(case_dir)
+                    rules_dir.mkdir(parents=True, exist_ok=True)
+                    wait_fd = os.open(rules_dir / wait_lock_name, os.O_CREAT | os.O_RDWR, 0o666)
+                    slot0_fd = None
+                    try:
+                        fcntl.flock(wait_fd, fcntl.LOCK_SH)
+                        if pool_char == 's':
+                            proof_limit, gate_limit = 0, 0
+                        elif pool_char == 'p':
+                            slot0_fd, _ = shards.try_lock_slot(case_dir, 'slot', 1, 0)
+                            proof_limit, gate_limit = 1, 0
+                        else:
+                            slot0_fd, _ = shards.try_lock_slot(case_dir, 'slot', 1, 0)
+                            proof_limit, gate_limit = 0, 1
+                        acquired = try_acquire_once(
+                            case_dir, caller_class,
+                            limit=1, proof_limit=proof_limit, gate_limit=gate_limit,
+                        )
+                        expected_yield = (
+                            waiting_class in shards.SLOT_RULES['yields_to'][caller_class][pool_char]
+                        )
+                        self.assertEqual(
+                            not acquired, expected_yield,
+                            f'yield mismatch for caller={caller_class} pool={pool_char} waiter={waiting_class}',
+                        )
+                    finally:
+                        shards._unlock_and_close(slot0_fd)
+                        shards._unlock_and_close(wait_fd)
 
 
 if __name__ == '__main__':
