@@ -152,7 +152,14 @@ func runUnjudged(run storeRun) bool {
 // write is an event about an item that says what state the item is in, whatever kind item
 // chose to append.
 func readItemHistory(r *store.Reader, h *dispatchHistory) error {
-	rows, err := r.Query(`SELECT COALESCE(object_id, ''), payload FROM events WHERE object_type = 'item' ORDER BY seq`)
+	// The payload's `state` is read inside the store (json_extract), so a payload that says no
+	// state is never copied out, and one that is not valid JSON or whose state is not a string
+	// is skipped as the Go decode skipped it.
+	rows, err := r.Query(`SELECT item_id, state FROM (
+		SELECT COALESCE(object_id, '') AS item_id,
+		       CASE WHEN json_valid(payload) AND json_type(payload, '$.state') = 'text' THEN json_extract(payload, '$.state') END AS state
+		  FROM events WHERE object_type = 'item')
+		WHERE item_id != '' AND state IS NOT NULL AND state != ''`)
 	if err != nil {
 		if isMissingTable(err) {
 			return nil
@@ -161,21 +168,12 @@ func readItemHistory(r *store.Reader, h *dispatchHistory) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var itemID, payload string
-		if err := rows.Scan(&itemID, &payload); err != nil {
+		var itemID, state string
+		if err := rows.Scan(&itemID, &state); err != nil {
 			return err
 		}
-		if itemID == "" {
-			continue
-		}
-		var body struct {
-			State string `json:"state"`
-		}
-		if err := json.Unmarshal([]byte(payload), &body); err != nil || body.State == "" {
-			continue
-		}
 		h.known[itemID] = true
-		if body.State == stateInProgress {
+		if state == stateInProgress {
 			h.inProgress[itemID] = true
 		}
 	}
