@@ -65,6 +65,7 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 			return Incompatiblef("%v", err)
 		}
 		l.walKeeper, l.lastCheckpoint = keeper, at
+		l.restartPending, l.notRestarted, l.retryWait = false, 0, 0
 	}
 	if l.beforeSessionOpen != nil {
 		l.beforeSessionOpen(!l.sessionInitialized)

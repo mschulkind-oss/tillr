@@ -51,19 +51,62 @@ func (l *Loop) keepWALWhileRunning() {
 // the log growing, and this is how an operator hears about it.
 const LogReportBytes = 64 << 20
 
+// checkpointRetryDelay answers how long checkpointIfDue waits before retrying after
+// notRestarted consecutive log.not-restarted cycles: 0 after the first miss so the next
+// heartbeat tries again at once, and then exponential backoff (2s, 4s, 8s, 16s, 32s)
+// capped at CheckpointInterval while misses repeat.
+func checkpointRetryDelay(notRestarted int) time.Duration {
+	if notRestarted <= 1 {
+		return 0
+	}
+	delay := PassInterval
+	for i := 1; i < notRestarted; i++ {
+		if delay >= CheckpointInterval/2 {
+			return CheckpointInterval
+		}
+		delay *= 2
+	}
+	return min(delay, CheckpointInterval)
+}
+
+func (l *Loop) checkpointDueLocked(now time.Time) bool {
+	if l.walKeeper == nil {
+		return false
+	}
+	if !l.restartPending {
+		return now.Sub(l.lastCheckpoint) >= CheckpointInterval
+	}
+	return l.retryWait <= 0 || now.Sub(l.lastCheckpoint) >= l.retryWait
+}
+
+func (l *Loop) recordCheckpointLocked(now time.Time, c store.Checkpointed) {
+	l.lastCheckpoint, l.restartPending = now, !c.Restarted
+	switch {
+	case c.Restarted:
+		l.notRestarted, l.retryWait = 0, 0
+	case c.WriterBusy || c.PinBusy:
+		l.retryWait = 0
+	default:
+		l.notRestarted++
+		l.retryWait = checkpointRetryDelay(l.notRestarted)
+	}
+}
+
 // checkpointIfDue runs one checkpoint cycle when CheckpointInterval has passed since the
-// last one, or at once when the last one did not restart the log. It runs on the
+// last one, or when a retry is due after one that did not restart the log. It runs on the
 // heartbeat's goroutine, after the heartbeat, so the heartbeat never waits on a checkpoint's
 // flushes behind another goroutine; and it holds sessionMu only to read and record, never
 // across the checkpoint, so a pass refreshing the session does not wait on the disk either.
 //
-// A cycle is maintenance. One that did not restart the log, whose own write waited out
-// SQLite's busy timeout behind another writer, or whose pin's read did, is reported and
-// tried again at the next heartbeat; only an error that is none of these faults the loop.
+// A cycle is maintenance. One whose own write waited out SQLite's busy timeout behind
+// another writer, or whose pin's read did, is reported and tried again at the next
+// heartbeat; one that did not restart the log is reported, tried again at the next
+// heartbeat, and backed off up to CheckpointInterval while log.not-restarted repeats. Only
+// an error that is none of these faults the loop.
 func (l *Loop) checkpointIfDue(ctx context.Context) error {
 	l.sessionMu.Lock()
 	owner, now := l.walKeeper, l.cfg.Now()
-	due := owner != nil && (l.restartPending || now.Sub(l.lastCheckpoint) >= CheckpointInterval)
+	due := l.checkpointDueLocked(now)
 	l.sessionMu.Unlock()
 	if owner != nil && !l.reportedLockError && owner.LockError() != nil {
 		l.reportedLockError = true
@@ -86,7 +129,7 @@ func (l *Loop) checkpointIfDue(ctx context.Context) error {
 		return err
 	}
 	l.sessionMu.Lock()
-	l.lastCheckpoint, l.restartPending = now, !c.Restarted
+	l.recordCheckpointLocked(now, c)
 	l.sessionMu.Unlock()
 	l.reportCheckpoint(c)
 	return nil
@@ -126,6 +169,7 @@ func (l *Loop) closeWALKeeper() {
 	l.sessionMu.Lock()
 	owner := l.walKeeper
 	l.walKeeper, l.keepWAL = nil, false
+	l.restartPending, l.notRestarted, l.retryWait = false, 0, 0
 	l.sessionMu.Unlock()
 	if owner == nil {
 		return
