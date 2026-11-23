@@ -497,10 +497,10 @@ func readIntermittentFixer(r *store.Reader, fixerID string) (bool, []string, err
 	return fixer.ReadIntermittentFixer(r, fixerID)
 }
 
-// resolveKeptFixerWithoutCommit moves a proved trunk fixer whose run ended with no commit
-// (headSHA == baseSHA) immediately to StateResolvedElsewhere (resolves_via commit:<proof>).
-// It returns false when the fixer is not open or has no current proof.
-func (l *Loop) resolveKeptFixerWithoutCommit(ctx context.Context, fixerID string) (bool, error) {
+// resolveKeptProvedFixer moves an open trunk fixer that the loop has recorded as proved by
+// rerun immediately to StateResolvedElsewhere (resolves_via commit:<proof>) when its run
+// finishes. It returns false when the fixer is not open or has no current proof.
+func (l *Loop) resolveKeptProvedFixer(ctx context.Context, fixerID string) (bool, error) {
 	if !IsTrunkFixer(fixerID) || l.cfg.Store == "" {
 		return false, nil
 	}
@@ -531,7 +531,7 @@ func (l *Loop) resolveKeptFixerWithoutCommit(ctx context.Context, fixerID string
 		if err != nil || proof == nil || proof.Green == "" {
 			return err
 		}
-		reason := fmt.Sprintf("reran green on %s with no commit needed (%s)", shortSHA(proof.Green), strings.Join(proof.Checks, ", "))
+		reason := fmt.Sprintf("proved by rerun on %s (%s)", shortSHA(proof.Green), strings.Join(proof.Checks, ", "))
 		if _, err := item.SetStateWithReceipt(ctx, tx, fixerID, StateResolvedElsewhere, at, item.MoveReceipt{
 			Reason:      reason,
 			By:          Utility,

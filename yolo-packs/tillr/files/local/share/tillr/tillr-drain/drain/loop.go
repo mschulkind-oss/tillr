@@ -2515,6 +2515,14 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	l.mu.Lock()
 	l.infraStreak = 0
 	l.mu.Unlock()
+	if IsTrunkFixer(request.ItemID) {
+		if resolved, err := l.resolveKeptProvedFixer(ctx, request.ItemID); err != nil {
+			return laneOutcome{err: err}
+		} else if resolved {
+			l.forgetSegment(request.RunID)
+			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "resolved elsewhere: rerun passed")}
+		}
+	}
 	// A run that answers `blocked` is the model's own statement that the item cannot be
 	// done as written: a spec conflict, not a failing candidate. The item is blocked for a
 	// person to decide, its criteria are left as they were, and nothing is judged.
@@ -2576,13 +2584,6 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			}
 		}
 		if !written {
-			if IsTrunkFixer(request.ItemID) && l.headOf(ctx, lane) == l.settleBase(lane, mainSHA) {
-				if resolved, err := l.resolveKeptFixerWithoutCommit(ctx, request.ItemID); err != nil {
-					return laneOutcome{err: err}
-				} else if resolved {
-					return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "resolved elsewhere: rerun passed")}
-				}
-			}
 			l.reportf("loop: %s reported blocked: leaving it on the board to be decided\n", request.ItemID)
 			if decision.NodeBaseSHA == "" {
 				decision.NodeBaseSHA = l.settleBase(lane, mainSHA)
@@ -2677,23 +2678,8 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			}
 			// No session to continue: an inspection is a person's, and re-dispatching is
 			// not the loop's (design §4.2: not infrastructure, no failover).
-			if IsTrunkFixer(request.ItemID) && headSHA == baseSHA {
-				if resolved, err := l.resolveKeptFixerWithoutCommit(ctx, request.ItemID); err != nil {
-					return laneOutcome{err: err}
-				} else if resolved {
-					return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA, "resolved elsewhere: rerun passed")}
-				}
-			}
 			l.reportf("loop: %s was cut short and is left unjudged on %s\n", request.ItemID, lane)
 			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA)}
-		}
-		if IsTrunkFixer(request.ItemID) && headSHA == baseSHA {
-			if resolved, err := l.resolveKeptFixerWithoutCommit(ctx, request.ItemID); err != nil {
-				return laneOutcome{err: err}
-			} else if resolved {
-				l.forgetSegment(request.RunID)
-				return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA, "resolved elsewhere: rerun passed")}
-			}
 		}
 		// The model answered with no commit: `candidate-no-op`, a refusal rather than an
 		// infrastructure failure, and not a failover. Nobody judged the work, so the item

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -21,13 +20,28 @@ type fixerLandSteps struct {
 	storePath string
 	t         *testing.T
 	landedSHA string
+	gateCalls int
+	landCalls int
 }
 
 func (*fixerLandSteps) fixerCheck(context.Context, Candidate, string) (string, string) {
 	return "pass", ""
 }
 
+func (s *fixerLandSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, error) {
+	s.gateCalls++
+	out, err := s.recordingSteps.Gate(ctx, c)
+	if err != nil {
+		return out, err
+	}
+	if err := appendJudgment(ctx, s.storePath, GateVerdictKind, "run", c.RunID, map[string]string{"result": out.Outcome}, time.Now().UTC()); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 func (s *fixerLandSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	s.landCalls++
 	if c.HeadSHA != "" {
 		s.landedSHA = c.HeadSHA
 		runGit(s.t, s.root, "update-ref", "refs/heads/"+TrunkRef, c.HeadSHA)
@@ -198,7 +212,166 @@ func TestLiveFixerProvedByRerunStaysOpenAndReleasesWaiter(t *testing.T) {
 	}
 }
 
-func TestExitedLiveFixerSettlesMultiCommitAndLandsRetitledViaPass(t *testing.T) {
+func countStoreEvents(t *testing.T, storePath, kind, objectID string) int {
+	t.Helper()
+	s, err := store.OpenRead(context.Background(), storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var n int
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		if objectID == "" {
+			return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=?`, kind).Scan(&n)
+		}
+		return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=?`, kind, objectID).Scan(&n)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestProvedFixerClosesOnRunEndWithoutGateOrReplay(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("settle-with-commits", func(t *testing.T) {
+		f, l, fixer, _ := fixerRoutingFixture(t)
+		var report bytes.Buffer
+		l.cfg.Report = &report
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id IN ('item-declared', 'item-spare')`)
+			return err
+		})
+
+		runGit(t, f.root, "commit", "--allow-empty", "-qm", "unrelated change")
+		tip := runGit(t, f.root, "rev-parse", TrunkRef)
+		now := l.cfg.Now().UTC()
+		later := now.Add(time.Minute)
+		writeGreenProof(t, l, tip, later, []string{"go-tool/unit"})
+
+		// Worker run produced commits on lane-1, then exited before Loop.settle examined it.
+		runID := "run-" + fixer + "-a1"
+		worktree := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
+		writeForkFile(t, filepath.Join(f.laneRoot, "lane-1", "fence.txt"), "base.txt\n")
+		runGit(t, worktree, "checkout", "--detach", tip)
+		writeForkFile(t, filepath.Join(worktree, "base.txt"), "first flaky fix\n")
+		runGit(t, worktree, "add", "base.txt")
+		runGit(t, worktree, "commit", "-qm", "worker commit 1: stabilize setup")
+		writeForkFile(t, filepath.Join(worktree, "base.txt"), "second flaky fix\n")
+		runGit(t, worktree, "add", "base.txt")
+		runGit(t, worktree, "commit", "-qm", "worker commit 2: tighten assertion")
+
+		baseSteps := l.cfg.Steps.(*recordingSteps)
+		steps := &fixerLandSteps{recordingSteps: baseSteps, root: f.root, storePath: f.storePath, t: t}
+		l.cfg.Steps = steps
+
+		claimFixerLease(t, f, runID, fixer, "lane-1", "fixture", now)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			return appendEffect(tx, dispatchStartedKind, runID, pendingWork{
+				Decision: Decision{ItemID: fixer, LaneID: "lane-1", Seat: "build", RunRequest: &run.Request{RunID: runID, ItemID: fixer, LaneID: "lane-1", Backend: "fixture"}},
+				BaseSHA:  tip,
+			}, now)
+		})
+		recordFixerRunExit(t, f, runID, fixer, "lane-1", "fixture", now, later, 0, run.EndNormalExit, "fixture/test", 20, 0.02)
+
+		// Drive Loop.pass: pass-start resolveProvedFixers records FixerProvedKind while the
+		// run is unexamined, and ActionSettle closes the proved fixer as resolved-elsewhere
+		// without gating or landing its candidate.
+		l.cfg.Now = func() time.Time { return later.Add(time.Second) }
+		runPassAndDrain(t, ctx, l)
+
+		if got := fixerState(t, f, fixer); got != StateResolvedElsewhere {
+			t.Fatalf("proved fixer state = %s, want %s\nreport:\n%s", got, StateResolvedElsewhere, report.String())
+		}
+		if steps.gateCalls != 0 {
+			t.Fatalf("Gate was called %d time(s) for proved fixer, want 0", steps.gateCalls)
+		}
+		if steps.landCalls != 0 {
+			t.Fatalf("Land was called %d time(s) for proved fixer, want 0", steps.landCalls)
+		}
+		if n := countStoreEvents(t, f.storePath, GateVerdictKind, ""); n != 0 {
+			t.Fatalf("gate.verdict count = %d, want 0", n)
+		}
+		if n := countStoreEvents(t, f.storePath, candidateReadyKind, runID); n != 0 {
+			t.Fatalf("drain.candidate count = %d, want 0", n)
+		}
+		if n := countStoreEvents(t, f.storePath, examinationDoneKind, runID); n != 1 {
+			t.Fatalf("examinationDoneKind count = %d, want 1", n)
+		}
+		if gotTip := runGit(t, f.root, "rev-parse", TrunkRef); gotTip != tip {
+			t.Fatalf("trunk moved to %s, want %s", gotTip, tip)
+		}
+	})
+
+	t.Run("judge-after-candidate-prepared", func(t *testing.T) {
+		f, l, fixer, _ := fixerRoutingFixture(t)
+		var report bytes.Buffer
+		l.cfg.Report = &report
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id IN ('item-declared', 'item-spare')`)
+			return err
+		})
+
+		runGit(t, f.root, "commit", "--allow-empty", "-qm", "unrelated change")
+		tip := runGit(t, f.root, "rev-parse", TrunkRef)
+		now := l.cfg.Now().UTC()
+		later := now.Add(time.Minute)
+		writeGreenProof(t, l, tip, later, []string{"go-tool/unit"})
+
+		runID := "run-" + fixer + "-a1"
+		worktree := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
+		writeForkFile(t, filepath.Join(f.laneRoot, "lane-1", "fence.txt"), "base.txt\n")
+		runGit(t, worktree, "checkout", "--detach", tip)
+		writeForkFile(t, filepath.Join(worktree, "base.txt"), "fix commit\n")
+		runGit(t, worktree, "add", "base.txt")
+		runGit(t, worktree, "commit", "-qm", "worker commit")
+		candHead := runGit(t, worktree, "rev-parse", "HEAD")
+
+		baseSteps := l.cfg.Steps.(*recordingSteps)
+		steps := &fixerLandSteps{recordingSteps: baseSteps, root: f.root, storePath: f.storePath, t: t}
+		l.cfg.Steps = steps
+
+		req := &run.Request{RunID: runID, ItemID: fixer, LaneID: "lane-1", Backend: "fixture"}
+		claimFixerLease(t, f, runID, fixer, "lane-1", "fixture", now)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			if err := appendEffect(tx, dispatchStartedKind, runID, pendingWork{
+				Decision: Decision{ItemID: fixer, LaneID: "lane-1", Seat: "build", RunRequest: req},
+				BaseSHA:  tip,
+			}, now); err != nil {
+				return err
+			}
+			return appendEffect(tx, candidateReadyKind, runID, Candidate{
+				ItemID: fixer, LaneID: "lane-1", RunID: runID, Worktree: worktree,
+				BaseSHA: tip, HeadSHA: candHead, Request: req, Seat: "build",
+			}, later)
+		})
+		recordFixerRunExit(t, f, runID, fixer, "lane-1", "fixture", now, later, 0, run.EndNormalExit, "fixture/test", 20, 0.02)
+
+		l.cfg.Now = func() time.Time { return later.Add(time.Second) }
+		runPassAndDrain(t, ctx, l)
+
+		if got := fixerState(t, f, fixer); got != StateResolvedElsewhere {
+			t.Fatalf("proved fixer state = %s, want %s\nreport:\n%s", got, StateResolvedElsewhere, report.String())
+		}
+		if steps.gateCalls != 0 {
+			t.Fatalf("Gate was called %d time(s) for proved fixer, want 0", steps.gateCalls)
+		}
+		if steps.landCalls != 0 {
+			t.Fatalf("Land was called %d time(s) for proved fixer, want 0", steps.landCalls)
+		}
+		if n := countStoreEvents(t, f.storePath, GateVerdictKind, ""); n != 0 {
+			t.Fatalf("gate.verdict count = %d, want 0", n)
+		}
+		if n := countStoreEvents(t, f.storePath, examinationDoneKind, runID); n != 1 {
+			t.Fatalf("examinationDoneKind count = %d, want 1", n)
+		}
+		if gotTip := runGit(t, f.root, "rev-parse", TrunkRef); gotTip != tip {
+			t.Fatalf("trunk moved to %s, want %s", gotTip, tip)
+		}
+	})
+}
+
+func TestUnprovedFixerIsGatedAndLandedAsToday(t *testing.T) {
 	ctx := context.Background()
 	f, l, fixer, _ := fixerRoutingFixture(t)
 	var report bytes.Buffer
@@ -208,27 +381,21 @@ func TestExitedLiveFixerSettlesMultiCommitAndLandsRetitledViaPass(t *testing.T) 
 		return err
 	})
 
-	runGit(t, f.root, "commit", "--allow-empty", "-qm", "unrelated change")
 	tip := runGit(t, f.root, "rev-parse", TrunkRef)
 	now := l.cfg.Now().UTC()
 	later := now.Add(time.Minute)
-	writeGreenProof(t, l, tip, later, []string{"go-tool/unit"})
 
-	// Worker run ran and produced TWO commits on lane-1, then run.Apply marked it exited
-	// and released the lane BEFORE Loop.settle examined it (no candidateReadyKind yet!).
 	runID := "run-" + fixer + "-a1"
 	worktree := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
 	writeForkFile(t, filepath.Join(f.laneRoot, "lane-1", "fence.txt"), "base.txt\n")
 	runGit(t, worktree, "checkout", "--detach", tip)
-	writeForkFile(t, filepath.Join(worktree, "base.txt"), "first flaky fix\n")
+	writeForkFile(t, filepath.Join(worktree, "base.txt"), "real trunk fix\n")
 	runGit(t, worktree, "add", "base.txt")
-	runGit(t, worktree, "commit", "-qm", "worker commit 1: stabilize setup")
-	writeForkFile(t, filepath.Join(worktree, "base.txt"), "second flaky fix\n")
-	runGit(t, worktree, "add", "base.txt")
-	runGit(t, worktree, "commit", "-qm", "worker commit 2: tighten assertion")
+	runGit(t, worktree, "commit", "-qm", "fix: repair go-tool/unit")
 
 	baseSteps := l.cfg.Steps.(*recordingSteps)
-	l.cfg.Steps = &fixerLandSteps{recordingSteps: baseSteps, root: f.root, storePath: f.storePath, t: t}
+	steps := &fixerLandSteps{recordingSteps: baseSteps, root: f.root, storePath: f.storePath, t: t}
+	l.cfg.Steps = steps
 
 	claimFixerLease(t, f, runID, fixer, "lane-1", "fixture", now)
 	fixtureWrite(t, f, func(tx *store.Tx) error {
@@ -239,34 +406,23 @@ func TestExitedLiveFixerSettlesMultiCommitAndLandsRetitledViaPass(t *testing.T) 
 	})
 	recordFixerRunExit(t, f, runID, fixer, "lane-1", "fixture", now, later, 0, run.EndNormalExit, "fixture/test", 20, 0.02)
 
-	// Drive Loop.pass: pass-start resolveProvedFixers sees the unexamined drain.started
-	// and keeps the exited run open; ActionSettle examines the 2 commits and produces
-	// candidateReadyKind; next Loop.pass ActionJudge gates, retitles, and lands on TrunkRef.
 	l.cfg.Now = func() time.Time { return later.Add(time.Second) }
 	runPassAndDrain(t, ctx, l)
-	if got := fixerState(t, f, fixer); got == StateResolvedElsewhere {
-		t.Fatalf("exited fixer before Loop.settle was closed prematurely")
-	}
-	// Run pass again so ActionJudge runs on the prepared candidate (or if synchronous, it already landed).
 	for i := 0; i < 3 && fixerState(t, f, fixer) != StateLanded; i++ {
 		l.cfg.Now = func() time.Time { return later.Add(time.Duration(i+2) * time.Second) }
 		runPassAndDrain(t, ctx, l)
 	}
 	if got := fixerState(t, f, fixer); got != StateLanded {
-		t.Fatalf("expected intermittent fixer with commits to land, got %s\nreport:\n%s", got, report.String())
+		t.Fatalf("unproved fixer state = %s, want %s\nreport:\n%s", got, StateLanded, report.String())
 	}
-
-	msg := runGit(t, f.root, "log", "-1", "--format=%B", TrunkRef)
-	firstLine, body, _ := strings.Cut(strings.TrimSpace(msg), "\n")
-	if !strings.HasPrefix(firstLine, "fix: intermittent check") || !strings.Contains(firstLine, "go-tool/unit") {
-		t.Fatalf("unexpected landed intermittent fixer title: %q", firstLine)
+	if steps.gateCalls != 1 {
+		t.Fatalf("Gate was called %d time(s) for unproved fixer, want 1", steps.gateCalls)
 	}
-	if !strings.Contains(body, "worker commit 1: stabilize setup") || !strings.Contains(body, "worker commit 2: tighten assertion") {
-		t.Fatalf("multi-commit messages lost from body: %q", body)
+	if steps.landCalls != 1 {
+		t.Fatalf("Land was called %d time(s) for unproved fixer, want 1", steps.landCalls)
 	}
-	email := runGit(t, f.root, "log", "-1", "--format=%ae%n%ce", TrunkRef)
-	if strings.Contains(email, "tillr-drain@localhost") {
-		t.Fatalf("landed commit used hardcoded tillr-drain@localhost identity: %q", email)
+	if n := countStoreEvents(t, f.storePath, GateVerdictKind, runID); n != 1 {
+		t.Fatalf("gate.verdict count = %d, want 1", n)
 	}
 }
 
