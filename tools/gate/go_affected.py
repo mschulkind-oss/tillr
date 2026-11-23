@@ -128,7 +128,12 @@ def build_env() -> dict[str, str]:
     if "-trimpath" not in existing:
         existing.append("-trimpath")
     env["GOFLAGS"] = " ".join(existing)
-    return env
+    durable = env.get("YOLO_DURABLE_DIR") or env.get("TMPDIR")
+    return _bypass_git_shim_env(
+        env,
+        _shared_cache_dir(env),
+        Path(durable) / ".go-affected-scratch" if durable else None,
+    )
 
 
 def module_replace_dependents(root: Path, modules: list[str]) -> dict[str, set[str]]:
@@ -984,16 +989,163 @@ def acquire_invocation_scratch(durable: str | None, scratch_key: str):
             os.close(fd)
 
 
-def _write_private_gitconfig(scratch_dir: Path, git_values: list[tuple[str, str]]) -> Path:
+def _shared_cache_dir(env: dict[str, str] | None = None) -> Path:
+    source = os.environ if env is None else env
+    gocache = source.get("GOCACHE", "").strip()
+    if gocache and gocache != "off":
+        return Path(gocache).resolve()
+    if sys.platform == "darwin":
+        return (Path.home() / "Library" / "Caches" / "go-build").resolve()
+    xdg = source.get("XDG_CACHE_HOME", "").strip()
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return (base / "go-build").resolve()
+
+
+def _is_git_shim(path: Path) -> bool:
+    if path.parent.parts[-3:] == (".yolo", "bin", "block"):
+        return True
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(256)
+    except OSError:
+        return False
+    return head.startswith(b"#!") and (
+        b"_yg_tool=git" in head or b"# tillr-git-guard" in head
+    )
+
+
+def _is_tillr_git_guard(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(64).startswith(b"#!/bin/sh\n# tillr-git-guard")
+    except OSError:
+        return False
+
+
+def _resolve_real_git(path_value: str | None = None) -> tuple[Path | None, bool]:
+    raw_path = os.environ.get("PATH", "") if path_value is None else path_value
+    saw_shim = False
+    for entry in raw_path.split(os.pathsep):
+        if not entry:
+            continue
+        candidate = Path(entry) / "git"
+        if not (candidate.is_file() and os.access(candidate, os.X_OK)):
+            continue
+        if _is_git_shim(candidate):
+            saw_shim = True
+            continue
+        return candidate, saw_shim
+    if saw_shim:
+        for fallback in (Path("/bin/git"), Path("/usr/bin/git")):
+            if fallback.is_file() and os.access(fallback, os.X_OK) and not _is_git_shim(fallback):
+                return fallback, True
+    return None, saw_shim
+
+
+def _ensure_git_bin_dir(base_dir: Path, real_git: Path) -> Path:
+    digest = hashlib.sha256(str(real_git).encode("utf-8")).hexdigest()[:12]
+    bin_dir = base_dir / "go-test-git-bin" / digest
+    link = bin_dir / "git"
+    try:
+        if link.is_symlink() and os.readlink(link) == str(real_git):
+            return bin_dir
+    except OSError:
+        pass
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    tmp_link = bin_dir / f".git.{os.getpid()}.{threading.get_ident()}"
+    with contextlib.suppress(OSError):
+        tmp_link.unlink()
+    tmp_link.symlink_to(real_git)
+    try:
+        os.replace(tmp_link, link)
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp_link.unlink()
+        if not (link.is_symlink() and os.readlink(link) == str(real_git)):
+            raise
+    return bin_dir
+
+
+def _bypass_git_shim_env(
+    base_env: dict[str, str], *candidate_roots: Path | None
+) -> dict[str, str]:
+    env = dict(base_env)
+    path_val = env.get("PATH", "")
+    real_git, saw_shim = _resolve_real_git(path_val)
+    if not saw_shim:
+        return env
+    kept = [
+        entry
+        for entry in path_val.split(os.pathsep)
+        if not (entry and _is_tillr_git_guard(Path(entry) / "git"))
+    ]
+    cleaned_path = os.pathsep.join(kept)
+    real_after, still_shimmed = _resolve_real_git(cleaned_path)
+    if not still_shimmed and real_after is not None:
+        env["PATH"] = cleaned_path
+        return env
+    if real_git is not None:
+        for root_dir in candidate_roots:
+            if root_dir is None:
+                continue
+            try:
+                git_bin = _ensure_git_bin_dir(root_dir, real_git)
+                env["PATH"] = f"{git_bin}{os.pathsep}{cleaned_path}" if cleaned_path else str(git_bin)
+                return env
+            except OSError:
+                continue
+    env["PATH"] = cleaned_path
+    env["YOLO_BYPASS_SHIMS"] = "1"
+    return env
+
+
+def _global_git_config(env: dict[str, str] | None = None) -> list[tuple[str, str]]:
+    git_env = _bypass_git_shim_env(
+        os.environ if env is None else env,
+        _shared_cache_dir(env),
+    )
+    raw = subprocess.check_output(
+        ["git", "config", "--list", "--includes", "--show-scope", "--null"],
+        text=True,
+        env=git_env,
+    )
+    values: list[tuple[str, str]] = []
+    fields = raw.rstrip("\0").split("\0") if raw else []
+    for scope, entry in zip(fields[::2], fields[1::2]):
+        if scope != "global":
+            continue
+        key, separator, value = entry.partition("\n")
+        if key.lower() == "include.path" or key.lower().startswith("includeif."):
+            continue
+        values.append((key, value if separator else "true"))
+    return values
+
+
+def _write_private_gitconfig(
+    scratch_dir: Path,
+    git_values: list[tuple[str, str]],
+    *,
+    env: dict[str, str] | None = None,
+) -> Path:
     config = scratch_dir / "gitconfig"
     config.write_text("", encoding="utf-8")
+    git_env = _bypass_git_shim_env(
+        os.environ if env is None else env,
+        _shared_cache_dir(env),
+        scratch_dir,
+    )
     for key, value in git_values:
+        if key.lower() in ("maintenance.auto", "gc.auto"):
+            continue
         subprocess.run(
             ["git", "config", "--file", str(config), "--add", key, value],
             check=True,
             capture_output=True,
             text=True,
+            env=git_env,
         )
+    with config.open("a", encoding="utf-8") as handle:
+        handle.write("[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n")
     return config
 
 
@@ -1118,9 +1270,8 @@ def run_selected_tests(
         else None
     )
     git_values: list[tuple[str, str]] = []
-    if shards_mod is not None and hasattr(shards_mod, "global_git_config"):
-        with contextlib.suppress(OSError, subprocess.CalledProcessError):
-            git_values = shards_mod.global_git_config()
+    with contextlib.suppress(OSError, subprocess.CalledProcessError):
+        git_values = _global_git_config(base_env)
     durable = base_env.get("YOLO_DURABLE_DIR") or base_env.get("TMPDIR")
 
     # Group small non-edge packages by module; narrowed, edge, or large packages run with their own invocations.
@@ -1242,10 +1393,10 @@ def run_selected_tests(
 
         wait_ms = 0
         with acquire_invocation_scratch(durable, scratch_key) as (scratch_dir, out_dir):
-            env = dict(base_env)
+            env = _bypass_git_shim_env(base_env, scratch_dir)
             env["YOLO_DURABLE_DIR"] = str(scratch_dir)
             with contextlib.suppress(OSError, subprocess.CalledProcessError):
-                gitconfig = _write_private_gitconfig(scratch_dir, git_values)
+                gitconfig = _write_private_gitconfig(scratch_dir, git_values, env=env)
                 env["GIT_CONFIG_GLOBAL"] = str(gitconfig)
             if digest is not None:
                 env["TILLR_GATE_EDGE_INPUTS"] = digest

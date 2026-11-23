@@ -179,13 +179,116 @@ def assign(names, durations, count):
     return groups
 
 
-def global_git_config():
+def _is_git_shim(path):
+    if path.parent.parts[-3:] == ('.yolo', 'bin', 'block'):
+        return True
+    try:
+        with path.open('rb') as handle:
+            head = handle.read(256)
+    except OSError:
+        return False
+    return head.startswith(b'#!') and (
+        b'_yg_tool=git' in head or b'# tillr-git-guard' in head
+    )
+
+
+def _is_tillr_git_guard(path):
+    try:
+        with path.open('rb') as handle:
+            return handle.read(64).startswith(b'#!/bin/sh\n# tillr-git-guard')
+    except OSError:
+        return False
+
+
+def resolve_real_git(path_value=None):
+    """Find the real git executable behind block/git or tillr-git-guard shims."""
+    raw_path = os.environ.get('PATH', '') if path_value is None else path_value
+    saw_shim = False
+    for entry in raw_path.split(os.pathsep):
+        if not entry:
+            continue
+        candidate = Path(entry) / 'git'
+        if not (candidate.is_file() and os.access(candidate, os.X_OK)):
+            continue
+        if _is_git_shim(candidate):
+            saw_shim = True
+            continue
+        return candidate, saw_shim
+    if saw_shim:
+        for fallback in (Path('/bin/git'), Path('/usr/bin/git')):
+            if fallback.is_file() and os.access(fallback, os.X_OK) and not _is_git_shim(fallback):
+                return fallback, True
+    return None, saw_shim
+
+
+def _ensure_git_bin_dir(base_dir, real_git):
+    digest = hashlib.sha256(str(real_git).encode('utf-8')).hexdigest()[:12]
+    bin_dir = base_dir / 'go-test-git-bin' / digest
+    link = bin_dir / 'git'
+    try:
+        if link.is_symlink() and os.readlink(link) == str(real_git):
+            return bin_dir
+    except OSError:
+        pass
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    tmp_link = bin_dir / f'.git.{os.getpid()}.{threading.get_ident()}'
+    with contextlib.suppress(OSError):
+        tmp_link.unlink()
+    tmp_link.symlink_to(real_git)
+    try:
+        os.replace(tmp_link, link)
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp_link.unlink()
+        if not (link.is_symlink() and os.readlink(link) == str(real_git)):
+            raise
+    return bin_dir
+
+
+def _bypass_git_shim_env(base_env, *candidate_roots):
+    env = dict(base_env)
+    path_val = env.get('PATH', '')
+    real_git, saw_shim = resolve_real_git(path_val)
+    if not saw_shim:
+        return env
+    kept = [
+        entry for entry in path_val.split(os.pathsep)
+        if not (entry and _is_tillr_git_guard(Path(entry) / 'git'))
+    ]
+    cleaned_path = os.pathsep.join(kept)
+    real_after, still_shimmed = resolve_real_git(cleaned_path)
+    if not still_shimmed and real_after is not None:
+        env['PATH'] = cleaned_path
+        return env
+    if real_git is not None:
+        for root_dir in candidate_roots:
+            if root_dir is None:
+                continue
+            try:
+                git_bin = _ensure_git_bin_dir(Path(root_dir), real_git)
+                env['PATH'] = f'{git_bin}{os.pathsep}{cleaned_path}' if cleaned_path else str(git_bin)
+                return env
+            except OSError:
+                continue
+    env['PATH'] = cleaned_path
+    env['YOLO_BYPASS_SHIMS'] = '1'
+    return env
+
+
+def global_git_config(env=None):
     """Snapshot inherited global values, flattening includes so writes stay private."""
     # The all-scope reader treats a missing global file as empty, like Git normally
     # does, but still diagnoses malformed/unreadable files. Select only global values;
     # do not copy repository-local settings into unrelated fixture repositories.
+    base = os.environ if env is None else env
+    fallback = base.get('TMPDIR') or base.get('YOLO_DURABLE_DIR')
+    git_env = _bypass_git_shim_env(
+        base,
+        shared_cache_dir(),
+        Path(fallback).resolve() if fallback else None,
+    )
     raw = subprocess.check_output(['git', 'config', '--list', '--includes',
-                                   '--show-scope', '--null'], text=True)
+                                   '--show-scope', '--null'], text=True, env=git_env)
     values = []
     fields = raw.rstrip('\0').split('\0') if raw else []
     for scope, entry in zip(fields[::2], fields[1::2]):
@@ -203,15 +306,24 @@ def private_environment(label, scratch, git_values=None):
     config = scratch / 'gitconfig'
     try:
         scratch.mkdir(parents=True)
-        config.write_text('')
-        values = global_git_config() if git_values is None else git_values
+        env = _bypass_git_shim_env(
+            dict(os.environ, TMPDIR=str(scratch), YOLO_DURABLE_DIR=str(scratch),
+                 GIT_CONFIG_GLOBAL=str(config)),
+            shared_cache_dir(),
+            scratch,
+        )
+        config.write_text('', encoding='utf-8')
+        values = global_git_config(env=os.environ) if git_values is None else git_values
         for key, value in values:
+            if key.lower() in ('maintenance.auto', 'gc.auto'):
+                continue
             subprocess.run(['git', 'config', '--file', str(config), '--add', key, value],
-                           check=True, capture_output=True, text=True)
+                           check=True, capture_output=True, text=True, env=env)
+        with config.open('a', encoding='utf-8') as handle:
+            handle.write('[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n')
     except (OSError, subprocess.CalledProcessError) as exc:
         raise ShardError(f'{label} cannot prepare private git config: {exc}') from exc
-    return dict(os.environ, TMPDIR=str(scratch), YOLO_DURABLE_DIR=str(scratch),
-                GIT_CONFIG_GLOBAL=str(config))
+    return env
 
 
 def shared_cache_dir():

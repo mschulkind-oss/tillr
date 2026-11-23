@@ -2451,6 +2451,191 @@ def test_suite_gocache_and_runner_helpers() -> None:
         assert "FAIL bad_case" in joined and "boom-from-worker" in joined, joined
 
 
+def _find_non_shim_git() -> Path:
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        cand = Path(entry) / "git"
+        if not (cand.is_file() and os.access(cand, os.X_OK)):
+            continue
+        if cand.parent.parts[-3:] == (".yolo", "bin", "block"):
+            continue
+        try:
+            head = cand.read_bytes()[:256]
+        except OSError:
+            continue
+        if head.startswith(b"#!") and (b"_yg_tool=git" in head or b"# tillr-git-guard" in head):
+            continue
+        return cand
+    raise AssertionError("could not find real git binary on PATH")
+
+
+def test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim() -> None:
+    """Isolated scratch test runs bypass block/git and git-guard shims, disable maintenance.auto and gc.auto, and keep cache hits."""
+    real_git = _find_non_shim_git()
+    with tempfile.TemporaryDirectory(prefix="go-affected-gitshim-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+
+        # 1. Direct _write_private_gitconfig check: overrides inherited maintenance.auto / gc.auto while keeping owner keys.
+        direct_scratch = tmp_path / "direct-scratch"
+        direct_scratch.mkdir()
+        direct_cfg = go_affected._write_private_gitconfig(
+            direct_scratch,
+            [
+                ("user.name", "Inherited Owner"),
+                ("maintenance.auto", "true"),
+                ("gc.auto", "6700"),
+            ],
+        )
+        maint_vals = subprocess.check_output(
+            [str(real_git), "config", "--file", str(direct_cfg), "--get-all", "maintenance.auto"],
+            text=True,
+        ).splitlines()
+        gc_vals = subprocess.check_output(
+            [str(real_git), "config", "--file", str(direct_cfg), "--get-all", "gc.auto"],
+            text=True,
+        ).splitlines()
+        owner_val = subprocess.check_output(
+            [str(real_git), "config", "--file", str(direct_cfg), "--get", "user.name"],
+            text=True,
+        ).strip()
+        assert maint_vals == ["false"], maint_vals
+        assert gc_vals == ["0"], gc_vals
+        assert owner_val == "Inherited Owner", owner_val
+
+        # 2. End-to-end isolated scratch test run with block/git and tillr-git-guard ahead on PATH.
+        shim_hits = tmp_path / "shim-hits.log"
+        fake_block = tmp_path / ".yolo" / "bin" / "block"
+        fake_block.mkdir(parents=True)
+        fake_block_git = fake_block / "git"
+        fake_block_git.write_text(
+            "#!/bin/sh\n"
+            "# A guard: runs the real git unless an argument names this workspace's .yolo.\n"
+            'if [ -z "$YOLO_BYPASS_SHIMS" ]; then\n'
+            "  _yg_tool=git\n"
+            f'  printf "block-hit\\n" >> "{shim_hits}"\n'
+            "  exit 97\n"
+            "fi\n"
+            f'exec "{real_git}" "$@"\n',
+            encoding="utf-8",
+        )
+        fake_block_git.chmod(0o755)
+
+        fake_guard_dir = tmp_path / "git-guard"
+        fake_guard_dir.mkdir()
+        fake_guard_git = fake_guard_dir / "git"
+        fake_guard_git.write_text(
+            "#!/bin/sh\n"
+            "# tillr-git-guard\n"
+            f'printf "guard-hit\\n" >> "{shim_hits}"\n'
+            "exit 98\n",
+            encoding="utf-8",
+        )
+        fake_guard_git.chmod(0o755)
+
+        fallback_env = go_affected._bypass_git_shim_env(
+            {"PATH": os.pathsep.join([str(fake_guard_dir), str(fake_block)])},
+            Path("/proc/unwritable-git-bin"),
+        )
+        assert fallback_env["YOLO_BYPASS_SHIMS"] == "1", fallback_env
+        assert str(fake_guard_dir) not in fallback_env["PATH"].split(os.pathsep), fallback_env
+
+        inherited_cfg = tmp_path / "inherited.gitconfig"
+        inherited_text = (
+            "[user]\n"
+            "\tname = Inherited Owner\n"
+            "\temail = owner@example.invalid\n"
+            "[maintenance]\n"
+            "\tauto = true\n"
+            "[gc]\n"
+            "\tauto = 6700\n"
+        )
+        inherited_cfg.write_text(inherited_text, encoding="utf-8")
+
+        repo = tmp_path / "repo"
+        mod = repo / "tools" / "tillr-gitshim"
+        mod.mkdir(parents=True)
+        (repo / "tools" / "gate").mkdir(parents=True)
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}\n", encoding="utf-8")
+        shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
+        nonce = _fresh_nonce()
+        (mod / "go.mod").write_text("module github.com/mschulkind-oss/tillr-gitshim\n\ngo 1.22\n")
+        (mod / "gitshim_test.go").write_text(
+            "package main\n"
+            "import (\n"
+            '  "os/exec"\n'
+            '  "strings"\n'
+            '  "testing"\n'
+            ")\n"
+            "func TestGitShimBypassAndAutoMaintenanceOff(t *testing.T) {\n"
+            f'  if t.Name() == "{nonce}" {{ t.Fatal() }}\n'
+            '  resolved, err := exec.LookPath("git")\n'
+            "  if err != nil { t.Fatal(err) }\n"
+            f'  if resolved == "{fake_block_git}" || resolved == "{fake_guard_git}" {{\n'
+            '    t.Fatalf("git resolved to shell shim: %s", resolved)\n'
+            "  }\n"
+            "  dir := t.TempDir()\n"
+            '  if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {\n'
+            '    t.Fatalf("git init: %v: %s", err, out)\n'
+            "  }\n"
+            "  for _, check := range [][2]string{\n"
+            '    {"maintenance.auto", "false"},\n'
+            '    {"gc.auto", "0"},\n'
+            '    {"user.name", "Inherited Owner"},\n'
+            "  } {\n"
+            '    out, err := exec.Command("git", "-C", dir, "config", "--get-all", check[0]).CombinedOutput()\n'
+            '    if err != nil { t.Fatalf("git config %s: %v: %s", check[0], err, out) }\n'
+            "    got := strings.TrimSpace(string(out))\n"
+            '    if got != check[1] { t.Fatalf("%s = %q, want %q", check[0], got, check[1]) }\n'
+            "  }\n"
+            '  if out, err := exec.Command("git", "-C", dir, "commit", "--allow-empty", "-qm", "ok").CombinedOutput(); err != nil {\n'
+            '    t.Fatalf("git commit: %v: %s", err, out)\n'
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        lock_dir = tmp_path / "locks"
+        ev_file = tmp_path / "ev.json"
+        gocache = _shared_gocache()
+        _precompile_go_test(mod, gocache)
+
+        worker_path = os.pathsep.join([str(fake_guard_dir), str(fake_block), os.environ.get("PATH", "")])
+        gate_path = os.pathsep.join([str(fake_block), os.environ.get("PATH", "")])
+        env1 = {
+            **os.environ,
+            "PATH": worker_path,
+            "GIT_CONFIG_GLOBAL": str(inherited_cfg),
+            "YOLO_DURABLE_DIR": str(durable),
+            "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
+            "GO_TEST_SHARDS_CLASS": "ordinary",
+            "GOCACHE": str(gocache),
+        }
+        env1.pop("YOLO_BYPASS_SHIMS", None)
+        cmd = [
+            sys.executable,
+            str(ROOT / "tools" / "gate" / "go_affected.py"),
+            "--root", str(repo),
+            "--changed", "tools/tillr-gitshim/gitshim_test.go",
+            "--evidence-out", str(ev_file),
+        ]
+        res1 = subprocess.run(cmd, env=env1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        assert res1.returncode == 0, res1.stdout
+        assert not shim_hits.exists(), shim_hits.read_text(encoding="utf-8")
+        assert inherited_cfg.read_text(encoding="utf-8") == inherited_text
+        ev1 = json.loads(ev_file.read_text(encoding="utf-8"))
+        assert ev1["packages"][0]["cached"] is False, ev1
+
+        env2 = {**env1, "PATH": gate_path}
+        res2 = subprocess.run(cmd, env=env2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        assert res2.returncode == 0, res2.stdout
+        assert not shim_hits.exists(), shim_hits.read_text(encoding="utf-8")
+        ev2 = json.loads(ev_file.read_text(encoding="utf-8"))
+        assert ev2["packages"][0]["cached"] is True, ev2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", default=[], help="Run only named test case(s)")
@@ -2480,6 +2665,7 @@ def main(argv: list[str] | None = None) -> int:
         ("test_discover_modules", test_discover_modules),
         ("test_build_env_strips_outer_gate_vars", test_build_env_strips_outer_gate_vars),
         ("test_failure_refusal_names_packages_and_tests_far_above_tail", test_failure_refusal_names_packages_and_tests_far_above_tail),
+        ("test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim", test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim),
     ]
     if args.case:
         wanted = set(args.case)
