@@ -1634,15 +1634,27 @@ func endProcessGroup(pgid int) {
 // that read the trunk's own checkout would read a tree something else rewrote underneath
 // it.
 func (s *ProcessSteps) detachedWorktree(ctx context.Context, dir, rev string) (string, func(), error) {
+	return s.detachedWorktreeAt(ctx, rev, func() (string, error) {
+		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+			return "", Externalf("creating the worktree directory %s: %v", filepath.Dir(dir), err)
+		}
+		return dir, nil
+	})
+}
+
+func (s *ProcessSteps) detachedWorktreeAt(ctx context.Context, rev string, pickDir func() (string, error)) (string, func(), error) {
 	if s.Root == "" {
 		return "", func() {}, Usagef("the loop cannot check out %s: it was given no repository", shortSHA(rev))
 	}
+	var dir string
 	// A worktree a previous run left behind is removed rather than reused: a stale
 	// registration would refuse the add, and a reused directory is not provably the
 	// revision this run was asked to judge.
 	err := withWorktreeRegistryLock(ctx, s.Root, func() error {
-		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
-			return Externalf("creating the worktree directory %s: %v", filepath.Dir(dir), err)
+		var err error
+		dir, err = pickDir()
+		if err != nil {
+			return err
 		}
 		if _, _, _, err := unlockRegisteredWorktree(ctx, s.Root, "", dir); err != nil {
 			return Externalf("unlocking stale worktree %s: %v", dir, err)
@@ -1670,14 +1682,25 @@ func (s *ProcessSteps) detachedWorktree(ctx context.Context, dir, rev string) (s
 	return dir, cleanup, nil
 }
 
-// replayWorktree checks one revision out into a detached scratch worktree under the lane
-// root, and answers its path and the cleanup that removes it. It lives under the lane root
-// because that is the loop's own writable state, never the trunk's checkout.
+// replayWorktree checks one revision out into a unique detached scratch worktree under
+// the lane root's .replay directory, and answers its path and the cleanup that removes it.
+// Each replay gets its own directory so concurrent replays of the same commit never share
+// or remove each other's tree.
 func (s *ProcessSteps) replayWorktree(ctx context.Context, rev string) (string, func(), error) {
 	if s.LaneRoot == "" {
 		return "", func() {}, Usagef("the loop cannot replay %s: it was given no lane root", shortSHA(rev))
 	}
-	return s.detachedWorktree(ctx, filepath.Join(s.LaneRoot, ".replay", shortSHA(rev)), rev)
+	parent := filepath.Join(s.LaneRoot, ".replay")
+	return s.detachedWorktreeAt(ctx, rev, func() (string, error) {
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			return "", Externalf("creating the worktree directory %s: %v", parent, err)
+		}
+		dir, err := os.MkdirTemp(parent, shortSHA(rev)+"-")
+		if err != nil {
+			return "", Externalf("creating a replay worktree directory under %s: %v", parent, err)
+		}
+		return dir, nil
+	})
 }
 
 // fixerGate answers the full gate program a fixer runs, with its range since the last

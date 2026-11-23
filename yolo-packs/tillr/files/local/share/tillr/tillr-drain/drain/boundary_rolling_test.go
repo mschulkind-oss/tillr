@@ -160,6 +160,7 @@ func TestTheLoopsReplayAndDeskWorktreesNeverConvict(t *testing.T) {
 	for _, wt := range []Worktree{
 		{Path: "/lanes/.rolling/worktree", Head: "aaa"},
 		{Path: "/lanes/.replay/0123456789ab", Head: "aaa"},
+		{Path: "/lanes/.replay/0123456789ab-123456", Head: "aaa"},
 		desk,
 	} {
 		snap := func(refs map[string]string, worktrees ...Worktree) *Boundary {
@@ -371,12 +372,19 @@ signal.pause()
 	if body, err := os.ReadFile(cleaned); err != nil || string(body) != "True" {
 		t.Fatalf("checks were not ended before worktree cleanup: %q, %v", body, err)
 	}
-	worktree := filepath.Join(laneRoot, ".rolling", "worktree")
 	if replay {
-		worktree = filepath.Join(laneRoot, ".replay", shortSHA(tip))
-	}
-	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
-		t.Fatalf("the stopped rolling run left its worktree: %v", err)
+		entries, err := os.ReadDir(filepath.Join(laneRoot, ".replay"))
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("the stopped replay run left its worktree: %v", entries)
+		}
+	} else {
+		worktree := filepath.Join(laneRoot, ".rolling", "worktree")
+		if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+			t.Fatalf("the stopped rolling run left its worktree: %v", err)
+		}
 	}
 }
 
