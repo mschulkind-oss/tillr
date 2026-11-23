@@ -396,6 +396,10 @@ wasted work is not rising and the trunk stayed green, and hold when it is
 rising: file the cause instead of adding lanes. Never lower a count the owner
 set; report the waste and its cause. Change the count with
 `tillr drain scale --lanes <count>` on the running loop; no restart is needed.
+Then write the same count into the sampler's target file (`echo <count> > $R/lanes-target`):
+the loop's arguments keep the old count, so without it the lane report lists
+only the old lanes. On 2026-11-23 the report showed one lane for ten minutes
+after a step to four.
 Record each change and its evidence in the rulings file. The owner expects the
 limit to stop being needed, so do not build machinery for it.
 
