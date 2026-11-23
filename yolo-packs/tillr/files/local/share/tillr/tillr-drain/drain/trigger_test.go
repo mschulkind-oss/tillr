@@ -145,7 +145,7 @@ func (s *triggerSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 		s.requests <- req
 	}
 	s.started <- req.ItemID
-	if req.ItemID == "item-a" {
+	if s.release != nil {
 		select {
 		case <-s.release:
 		case <-ctx.Done():
