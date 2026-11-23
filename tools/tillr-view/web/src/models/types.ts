@@ -331,6 +331,8 @@ export interface DrainSummary {
     refreshed_at_ms: number;
     next_pass_at_ms: number;
     ended_at_ms: number | null;
+    /** Lane ids the loop was configured to run; absent from an older loop. */
+    lanes?: string[];
   } | null;
   session_note?: string;
   session_grace_ms?: number;
