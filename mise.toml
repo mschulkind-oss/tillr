@@ -25,7 +25,11 @@
 # does not use. 24.19.0 is the version the shared mise store already
 # holds, so both machines resolve it with no download; raising the pin means
 # `mise install node` on each machine before the gate can see it.
+# `air` live-reloads `just observatory-dev`'s API (`tools/tillr-view/.air.toml`, run by
+# `Procfile.dev`): it rebuilds and restarts the Go server when its sources change. Pinned at
+# the version the shared mise store already holds.
 [tools]
+air = "1.67.4"
 hivemind = "1.1.0"
 just = "1.58.0"
 node = "24.19.0"
