@@ -130,3 +130,38 @@ func TestItemHistoryOlderStore(t *testing.T) {
 		}
 	}
 }
+
+// The event log stores waiting_on two ways: an object {waiter, reason} on item
+// state writes, and a plain string seat name on item.conflict and
+// drain.dispatch-declined events. Both must read, and neither may fail the page.
+func TestItemHistoryReadsStringWaitingOn(t *testing.T) {
+	h := newServeHarness(t)
+	h.exec(`INSERT INTO events (ts,kind,object_type,object_id,payload) VALUES
+ (500,'item.add','item','item-seed-06','{"state":"in-queue"}'),
+ (1000,'item.conflict','item','item-seed-06','{"conflict_id":"c1","item_id":"item-seed-06","status":"awaiting","waiting_on":"design"}'),
+ (2000,'drain.dispatch-declined','item','item-seed-06','{"waiting_on":"owner"}'),
+ (3000,'item.update','item','item-seed-06','{"state":"blocked","waiting_on":"owner"}')`)
+	status, body, raw := h.get("/api/v1/items/item-seed-06")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, raw)
+	}
+	moves := body["data"].(map[string]any)["state_moves"].([]any)
+	if len(moves) != 2 || moves[1].(map[string]any)["to"] != "blocked" {
+		t.Fatalf("state_moves = %v", moves)
+	}
+}
+
+func TestItemHistoryReadsObjectWaitingOn(t *testing.T) {
+	h := newServeHarness(t)
+	h.exec(`INSERT INTO events (ts,kind,object_type,object_id,payload) VALUES
+ (500,'item.add','item','item-seed-06','{"state":"in-queue"}'),
+ (3000,'item.update','item','item-seed-06','{"state":"blocked","waiting_on":{"waiter":"owner","reason":"choose","source":"split"}}')`)
+	status, body, raw := h.get("/api/v1/items/item-seed-06")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, raw)
+	}
+	moves := body["data"].(map[string]any)["state_moves"].([]any)
+	if len(moves) != 2 || moves[1].(map[string]any)["reason"] != "choose" {
+		t.Fatalf("state_moves = %v", moves)
+	}
+}
