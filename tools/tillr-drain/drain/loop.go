@@ -663,16 +663,19 @@ type Loop struct {
 	sessionInitialized bool
 	lastLoopPassAt     time.Time
 	// keepWAL and walKeeper are the store's checkpoint owner, lastCheckpoint is the clock
-	// reading of its last checkpoint, and restartPending is whether that cycle left the log
-	// unrestarted, so the next heartbeat tries again (see openWALKeeper); sessionMu guards
-	// all four. missedRestarts, reportedLogBytes and reportedLockError are the heartbeat
-	// goroutine's own.
-	// beforeCheckpoint and checkpointed are test seams, run just before and just after
+	// reading of its last checkpoint, restartPending is whether that cycle left the log
+	// unrestarted, notRestarted counts consecutive log.not-restarted outcomes, and
+	// retryWait bounds how soon the next retry runs (0 for the next heartbeat, then backed
+	// off up to CheckpointInterval; see openWALKeeper); sessionMu guards all six.
+	// missedRestarts, reportedLogBytes and reportedLockError are the heartbeat goroutine's
+	// own. beforeCheckpoint and checkpointed are test seams, run just before and just after
 	// each heartbeat checkpoint.
 	keepWAL           bool
 	walKeeper         *store.CheckpointOwner
 	lastCheckpoint    time.Time
 	restartPending    bool
+	notRestarted      int
+	retryWait         time.Duration
 	missedRestarts    int
 	reportedLogBytes  int64
 	reportedLockError bool

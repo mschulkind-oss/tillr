@@ -91,6 +91,7 @@ func checkpointCycleLoop(t *testing.T, done chan struct{}, first func(), cycles 
 func TestAMissedRestartIsReportedAndRetriedAtTheNextHeartbeat(t *testing.T) {
 	done := make(chan struct{})
 	release := make(chan struct{})
+	released := make(chan struct{})
 	var answers []store.Checkpointed
 	var storePath string
 	var l *Loop
@@ -99,6 +100,7 @@ func TestAMissedRestartIsReportedAndRetriedAtTheNextHeartbeat(t *testing.T) {
 		func() {
 			started := make(chan struct{})
 			go func() {
+				defer close(released)
 				r, err := store.OpenRead(context.Background(), storePath)
 				if err != nil {
 					t.Error(err)
@@ -120,6 +122,7 @@ func TestAMissedRestartIsReportedAndRetriedAtTheNextHeartbeat(t *testing.T) {
 			answers = append(answers, c)
 			if len(answers) == 1 {
 				close(release)
+				<-released
 			}
 			if c.Restarted {
 				select {
@@ -217,5 +220,236 @@ func TestABusyPinIsReportedAsASkippedCycle(t *testing.T) {
 	}
 	if l.missedRestarts != 1 {
 		t.Errorf("a busy pin counted %d missed restarts, want 1", l.missedRestarts)
+	}
+}
+
+type recordedCheckpointCycle struct {
+	at         time.Time
+	checkpoint store.Checkpointed
+}
+
+func holdReadSnapshot(t *testing.T, storePath string) func() {
+	t.Helper()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		r, err := store.OpenRead(context.Background(), storePath)
+		if err != nil {
+			t.Error(err)
+			close(started)
+			return
+		}
+		defer r.Close()
+		r.ReadTx(context.Background(), func(rd *store.Reader) error {
+			var n int
+			err := rd.QueryRow(`SELECT count(*) FROM meta`).Scan(&n)
+			close(started)
+			<-release
+			return err
+		})
+	}()
+	<-started
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(release)
+			<-released
+		})
+	}
+}
+
+// When log.not-restarted persists across heartbeats, checkpointIfDue tries once at the next
+// heartbeat and then backs off exponentially (2s, 4s, 8s, 16s, 32s) up to CheckpointInterval
+// instead of checkpointing on every 1-second heartbeat tick; once a cycle restarts the log,
+// the backoff resets.
+func TestRepeatedNotRestartedCheckpointsBackOffUpToCheckpointInterval(t *testing.T) {
+	f := newRefusalLoopFixture(t)
+	base := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+	now := base
+
+	l := f.loop(t, &recordingSteps{}, &itemContentStager{})
+	l.cfg.Now = func() time.Time { return now }
+	l.keepWALWhileRunning()
+	defer l.closeWALKeeper()
+
+	ctx := context.Background()
+	if err := l.refreshSession(ctx, now.Add(PassInterval)); err != nil {
+		t.Fatal(err)
+	}
+
+	var cycles []recordedCheckpointCycle
+	var releaseFirst func()
+	defer func() {
+		if releaseFirst != nil {
+			releaseFirst()
+		}
+	}()
+	var firstOnce sync.Once
+	l.beforeCheckpoint = func() {
+		firstOnce.Do(func() {
+			releaseFirst = holdReadSnapshot(t, f.storePath)
+		})
+	}
+	l.checkpointed = func(c store.Checkpointed) {
+		cycles = append(cycles, recordedCheckpointCycle{at: now, checkpoint: c})
+	}
+
+	step := func(d time.Duration) {
+		t.Helper()
+		now = now.Add(d)
+		if err := l.checkpointIfDue(ctx); err != nil {
+			t.Fatalf("checkpointIfDue at +%s: %v", now.Sub(base), err)
+		}
+	}
+
+	// First scheduled checkpoint at +60s, then 185 consecutive 1-second heartbeat checks
+	// (+61s through +245s) while the reader snapshot pins the WAL.
+	step(CheckpointInterval)
+	for range 185 {
+		step(PassInterval)
+	}
+
+	// Release the reader and continue 1-second heartbeat checks through +303s (60s + 243s),
+	// when the next capped retry is due and restarts the log.
+	releaseFirst()
+	for range 58 {
+		step(PassInterval)
+	}
+
+	// After that restart at +303s, normal 60s CheckpointInterval resumes: ticks +304s..+362s
+	// do not checkpoint. Hold a new reader only when +363s's cycle starts so +363s misses
+	// once, then release it so the immediate next-heartbeat retry at +364s restarts the log.
+	var releaseSecond func()
+	defer func() {
+		if releaseSecond != nil {
+			releaseSecond()
+		}
+	}()
+	l.beforeCheckpoint = func() {
+		if now.Equal(base.Add(363 * time.Second)) {
+			releaseSecond = holdReadSnapshot(t, f.storePath)
+		}
+	}
+	for range 59 {
+		step(PassInterval)
+	}
+	// +363s triggers the scheduled checkpoint (misses once because releaseSecond is held).
+	step(PassInterval)
+	if releaseSecond != nil {
+		releaseSecond()
+	}
+	// +364s (+1s later) retries immediately because the earlier restart reset the backoff.
+	step(PassInterval)
+
+	// Expected cycle timestamps relative to the first checkpoint at +60s:
+	//   0s   (+60s):  initial scheduled checkpoint -> log.not-restarted
+	//   1s   (+61s):  immediate next-heartbeat retry -> log.not-restarted
+	//   3s   (+63s):  +2s backoff -> log.not-restarted
+	//   7s   (+67s):  +4s backoff -> log.not-restarted
+	//   15s  (+75s):  +8s backoff -> log.not-restarted
+	//   31s  (+91s):  +16s backoff -> log.not-restarted
+	//   63s  (+123s): +32s backoff -> log.not-restarted
+	//   123s (+183s): +60s capped backoff -> log.not-restarted
+	//   183s (+243s): +60s capped backoff -> log.not-restarted
+	//   243s (+303s): +60s capped backoff (reader released) -> log.restarted
+	//   303s (+363s): +60s normal CheckpointInterval -> log.not-restarted
+	//   304s (+364s): +1s immediate next-heartbeat retry (backoff reset) -> log.restarted
+	firstAt := base.Add(CheckpointInterval)
+	wantOffsets := []time.Duration{
+		0,
+		1 * time.Second,
+		3 * time.Second,
+		7 * time.Second,
+		15 * time.Second,
+		31 * time.Second,
+		63 * time.Second,
+		123 * time.Second,
+		183 * time.Second,
+		243 * time.Second,
+		303 * time.Second,
+		304 * time.Second,
+	}
+	wantRestarted := []bool{
+		false, false, false, false, false, false, false, false, false,
+		true,
+		false,
+		true,
+	}
+
+	if len(cycles) != len(wantOffsets) {
+		var offsets []time.Duration
+		for _, c := range cycles {
+			offsets = append(offsets, c.at.Sub(firstAt))
+		}
+		t.Fatalf("ran %d checkpoint cycles at offsets %v from first checkpoint, want %d cycles at %v",
+			len(cycles), offsets, len(wantOffsets), wantOffsets)
+	}
+	for i := range wantOffsets {
+		gotOffset := cycles[i].at.Sub(firstAt)
+		if gotOffset != wantOffsets[i] {
+			t.Errorf("cycle %d ran at +%s from first checkpoint, want +%s", i+1, gotOffset, wantOffsets[i])
+		}
+		if cycles[i].checkpoint.Restarted != wantRestarted[i] {
+			t.Errorf("cycle %d (+%s) Restarted = %v, want %v (%+v)",
+				i+1, gotOffset, cycles[i].checkpoint.Restarted, wantRestarted[i], cycles[i].checkpoint)
+		}
+	}
+}
+
+func TestCheckpointRetryDelay(t *testing.T) {
+	cases := []struct {
+		notRestarted int
+		want         time.Duration
+	}{
+		{0, 0},
+		{1, 0},
+		{2, 2 * time.Second},
+		{3, 4 * time.Second},
+		{4, 8 * time.Second},
+		{5, 16 * time.Second},
+		{6, 32 * time.Second},
+		{7, CheckpointInterval},
+		{34, CheckpointInterval},
+		{35, CheckpointInterval},
+		{64, CheckpointInterval},
+		{58694, CheckpointInterval},
+	}
+	for _, tc := range cases {
+		if got := checkpointRetryDelay(tc.notRestarted); got != tc.want {
+			t.Errorf("checkpointRetryDelay(%d) = %s, want %s", tc.notRestarted, got, tc.want)
+		}
+	}
+}
+
+func TestBusyCycleDuringBackoffRetriesAtNextHeartbeat(t *testing.T) {
+	base := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+	l := &Loop{walKeeper: &store.CheckpointOwner{}}
+
+	// Three consecutive log.not-restarted cycles reach a 4s backoff.
+	l.recordCheckpointLocked(base, store.Checkpointed{})
+	l.recordCheckpointLocked(base.Add(1*time.Second), store.Checkpointed{})
+	l.recordCheckpointLocked(base.Add(3*time.Second), store.Checkpointed{})
+	if l.retryWait != 4*time.Second {
+		t.Fatalf("retryWait after 3 misses = %s, want 4s", l.retryWait)
+	}
+	if l.checkpointDueLocked(base.Add(6 * time.Second)) {
+		t.Fatal("checkpoint became due after 3s during a 4s backoff")
+	}
+
+	// When the 4s retry hits WriterBusy or PinBusy, the next 1s heartbeat retries at once,
+	// without losing the consecutive log.not-restarted count if misses resume.
+	l.recordCheckpointLocked(base.Add(7*time.Second), store.Checkpointed{WriterBusy: true})
+	if !l.checkpointDueLocked(base.Add(8 * time.Second)) {
+		t.Fatal("WriterBusy cycle was not due at the next heartbeat")
+	}
+	l.recordCheckpointLocked(base.Add(8*time.Second), store.Checkpointed{PinBusy: true})
+	if !l.checkpointDueLocked(base.Add(9 * time.Second)) {
+		t.Fatal("PinBusy cycle was not due at the next heartbeat")
+	}
+	l.recordCheckpointLocked(base.Add(9*time.Second), store.Checkpointed{})
+	if l.retryWait != 8*time.Second {
+		t.Fatalf("retryWait after resumed log.not-restarted = %s, want 8s", l.retryWait)
 	}
 }
