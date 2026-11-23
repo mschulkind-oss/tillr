@@ -14,13 +14,14 @@ import (
 	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
+type heavyParentCtxKey struct{}
+
 // startHeavy is a trigger, not a gate on dispatch or a synchronous landing step.
 // The shared flock excludes replacement loops; this mutex coalesces local triggers.
+// A pending loop restart does not hold back a trunk proof: while candidate gates keep
+// the restart waiting, the new tip's proof still starts immediately.
 func (l *Loop) startHeavy(ctx context.Context, tip string) error {
-	if pending, err := l.buildRestartPending(ctx); pending || err != nil {
-		if err != nil {
-			return err
-		}
+	if l.isRestartReplaced() {
 		return errRestartPending
 	}
 	step, ok := l.cfg.Steps.(HeavyStep)
@@ -34,8 +35,16 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 		return nil
 	}
 	l.heavyRunning = true
+	// Detach from a per-examination context so finishing the landing's examination
+	// does not cancel the proof, while still stopping when the loop itself stops.
+	heavyCtx := ctx
+	if loopCtx := l.getLoopCtx(); loopCtx != nil {
+		heavyCtx = loopCtx
+	} else if parent, ok := ctx.Value(heavyParentCtxKey{}).(context.Context); ok && parent != nil {
+		heavyCtx = parent
+	}
 	// A heavy goroutine never owns its caller's mechanical-step place.
-	ctx = context.WithValue(ctx, restartMechanicalKey{}, nil)
+	heavyCtx = context.WithValue(heavyCtx, restartMechanicalKey{}, nil)
 	l.heavyWG.Add(1)
 	go func() {
 		defer l.heavyWG.Done()
@@ -50,12 +59,12 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			}, Report: func(run HeavyRun) {
 				l.reportf("loop: heavy run %s at %s; green base %s\n", run.Result, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
 				if run.Result == "green" {
-					l.afterGreen(context.WithoutCancel(ctx), run.TipSHA)
+					l.afterGreen(context.WithoutCancel(heavyCtx), run.TipSHA)
 				}
 				if len(run.ReusedChecks) > 0 {
 					l.reportf("loop: heavy %s reused checks=%s\n", shortSHA(run.TipSHA), strings.Join(run.ReusedChecks, ","))
 				}
-				landings, countErr := heavy.Landings(ctx, l.cfg.Root, l.cfg.Store, run.BaseSHA, run.TipSHA)
+				landings, countErr := heavy.Landings(heavyCtx, l.cfg.Root, l.cfg.Store, run.BaseSHA, run.TipSHA)
 				if countErr != nil {
 					l.reportf("loop: landings per heavy run=unavailable: %v\n", countErr)
 				} else {
@@ -126,13 +135,12 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			}}
 			runner.Progress = func(line string) { l.reportf("%s", line) }
 			runner.reuseRed = l.heavyReuseRed
-			runner.beforeTip = l.heavyTipAdmission
 			if l.gatePolicy.AutoRevert {
 				runner.Revert = l.revertLanding
 			}
 			out := heavyAttempt{pendingTip: requested}
 			var err error
-			hold, busy, holdErr := acquireLoopLock(ctx, l.cfg.Root)
+			hold, busy, holdErr := acquireLoopLock(heavyCtx, l.cfg.Root)
 			if holdErr != nil {
 				err = holdErr
 			} else if busy {
@@ -140,7 +148,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			} else {
 				runner.Lock = hold
 				if l.beginHeavyProof() {
-					out, err = runner.run(ctx, requested)
+					out, err = runner.run(heavyCtx, requested)
 					hold.Close()
 					l.heavyMu.Lock()
 					l.heavyProofActive = false
@@ -152,11 +160,11 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			}
 			// A loop's first heavy pass also offers the pointer to the remote, so a push that
 			// failed or never ran before a restart is not left until the next proof.
-			l.greenPushAtStart.Do(func() { l.afterGreen(context.WithoutCancel(ctx), "start") })
-			if err != nil && ctx.Err() == nil && !errors.Is(err, errRestartPending) {
+			l.greenPushAtStart.Do(func() { l.afterGreen(context.WithoutCancel(heavyCtx), "start") })
+			if err != nil && heavyCtx.Err() == nil && !errors.Is(err, errRestartPending) {
 				l.reportf("loop: heavy runner fault: %v\n", err)
 				if out.pendingTip != "" {
-					if eventErr := l.recordHeavyFault(ctx, out.pendingTip, err); eventErr != nil {
+					if eventErr := l.recordHeavyFault(heavyCtx, out.pendingTip, err); eventErr != nil {
 						l.reportf("loop: recording heavy runner fault: %v\n", eventErr)
 					}
 				}
@@ -174,7 +182,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			}
 			// A trigger arriving after the runner's final tip read still owes work. Do not
 			// drop it in the narrow interval between that read and releasing local ownership.
-			if ctx.Err() == nil && !out.Busy && err == nil && l.heavyWanted != requested && l.heavyWanted != attempted {
+			if heavyCtx.Err() == nil && !out.Busy && err == nil && l.heavyWanted != requested && l.heavyWanted != attempted {
 				l.heavyMu.Unlock()
 				continue
 			}
@@ -198,17 +206,6 @@ func (l *Loop) beginHeavyProof() bool {
 	l.heavyProofActive = true
 	l.heavyMu.Unlock()
 	return true
-}
-
-func (l *Loop) heavyTipAdmission(ctx context.Context) error {
-	if l.cfg.Restart == nil {
-		return nil
-	}
-	pending, err := l.restarter().Pending(ctx)
-	if err == nil && pending {
-		return errRestartPending
-	}
-	return err
 }
 
 func (l *Loop) heavyInFlight() bool {
