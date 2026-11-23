@@ -176,6 +176,10 @@ green; `alarms` lists standing alarms; each row has `item_id`, `state`,
    `.tillr/lanes/.replay/<base>` before calling such a row stuck. On
    2026-11-22 the operator searched the process list for the item id, found
    nothing, and filed two replaying candidates as abandoned.
+   A gate the operator ended by hand comes back held as "gate-harness-error".
+   Clear that fault so the finished candidate is gated again; `tillr drain
+   retry` supersedes the candidate and the item redoes its work. On 2026-11-22
+   the operator used retry on five ended gates and five items started over.
 3. **The trunk proof.** When the trunk is unproved for more than a few minutes,
    look at what the heavy runner is doing, not at the summary:
 
