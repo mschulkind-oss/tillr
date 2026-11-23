@@ -65,6 +65,7 @@ def test_build_env_strips_outer_gate_vars() -> None:
         "LAND_BATCH_LIMIT": "4",
         "TILLR_RUN_ID": "run-outer-1",
         "TILLR_GATE_SPANS_OUT": "/workspace/spans.json",
+        "TILLR_SELF_SUITE_TIMING_OUT": "/workspace/self-suite.json",
         "GO_TEST_SHARDS_HOLDER": "gate:run-outer-1",
         "GIT_DIR": "/workspace/.git",
         "GIT_WORK_TREE": "/workspace",
@@ -75,6 +76,52 @@ def test_build_env_strips_outer_gate_vars() -> None:
         assert key not in env, f"{key} leaked into build_env()"
     assert env["CGO_ENABLED"] == "0"
     assert "-trimpath" in env["GOFLAGS"].split()
+
+
+def test_subreaper_reaps_orphans_while_command_runs() -> None:
+    """Reparented grandchildren must be reaped while the guarded command is still running."""
+    if not sys.platform.startswith("linux") or not Path("/proc").is_dir():
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        code = """import os, sys, time
+from pathlib import Path
+
+r, w = os.pipe()
+mid = os.fork()
+if mid == 0:
+    os.close(r)
+    grand = os.fork()
+    if grand == 0:
+        os.close(w)
+        os._exit(0)
+    os.write(w, f"{grand}\\n".encode())
+    os.close(w)
+    os._exit(0)
+os.close(w)
+os.waitpid(mid, 0)
+grand_pid = int(os.read(r, 64).decode().strip())
+os.close(r)
+stat_path = Path(f"/proc/{grand_pid}/stat")
+for _ in range(100):
+    if not stat_path.exists():
+        print("reaped-while-running")
+        sys.exit(0)
+    raw = stat_path.read_text(encoding="utf-8", errors="replace")
+    state = raw[raw.rfind(")") + 2:].split()[0]
+    if state != "Z":
+        time.sleep(0.01)
+        continue
+    time.sleep(0.01)
+print(f"orphan {grand_pid} remained zombie while guarded child ran", file=sys.stderr)
+sys.exit(1)
+"""
+        rc, stdout = go_affected._run_guarded_command(
+            [sys.executable, "-c", code],
+            cwd=tmp_path,
+            env=go_affected.build_env(),
+        )
+        assert rc == 0 and "reaped-while-running" in stdout, (rc, stdout)
 
 
 def test_selection_rules(root_graph: dict) -> None:
@@ -2115,6 +2162,7 @@ def main() -> int:
     root_graph = go_affected.load_tillr_graph(ROOT)
     test_discover_modules()
     test_build_env_strips_outer_gate_vars()
+    test_subreaper_reaps_orphans_while_command_runs()
     test_selection_rules(root_graph)
     test_edges_file_honest_and_env_read()
     test_edge_cache_invalidation()
