@@ -228,6 +228,14 @@ func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFail
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "lanes could not read the store: %v", err)
 	}
+	// Run history is the lane page's table, so only the lane that page names carries it
+	// (`?history=<lane id>`); the home strip's list would pay for every lane's.
+	named := req.URL.Query().Get("history")
+	for i := range rows {
+		if rows[i].LaneID != named {
+			rows[i].History = nil
+		}
+	}
 	runs, err := readUsageRuns(r)
 	if err != nil {
 		return nil, unreadable(err)
