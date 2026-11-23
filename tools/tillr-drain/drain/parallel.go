@@ -637,10 +637,20 @@ func (l *Loop) settleParallelReader(ctx context.Context, work *pendingWork, node
 				e = l.markExamined(ctx, d)
 			}
 			return node, rec, log, "", laneOutcome{stop: stop, err: e}
-		case class == AttemptInfrastructure || !readableFooter(reportFooter(log)):
-			// No footer, or one naming no ending, is no answer: this reader alone runs
-			// again and its finished siblings are kept.
+		case class == AttemptInfrastructure:
 			updated, ok, e := l.holdFailedParallelNode(ctx, node, rec, log, result)
+			if e != nil {
+				return node, rec, log, "", laneOutcome{err: e}
+			}
+			if ok {
+				return updated, rec, log, "workflow-node-restart", laneOutcome{}
+			}
+			outcome = "fault"
+		case !readableFooter(reportFooter(log)):
+			// No footer, or one naming no ending, is no answer: this reader alone runs
+			// again and its finished siblings are kept, without counting a normal exit
+			// as an infrastructure failure.
+			updated, ok, e := l.restartUnreadParallelNode(node, rec)
 			if e != nil {
 				return node, rec, log, "", laneOutcome{err: e}
 			}

@@ -12,6 +12,9 @@ import (
 // Retry only the reader whose harness failed. Finished siblings keep both their
 // run identities and their checked outputs, and are not sent to a backend again.
 func (l *Loop) holdFailedParallelNode(ctx context.Context, node Decision, rec run.Record, log string, result *LoopResult) (Decision, bool, error) {
+	if classifyDecisionAttempt(node, rec, log) != AttemptInfrastructure {
+		return l.restartUnreadParallelNode(node, rec)
+	}
 	if err := l.recordBackendWindow(ctx, rec); err != nil {
 		return node, false, err
 	}
@@ -19,6 +22,10 @@ func (l *Loop) holdFailedParallelNode(ctx context.Context, node Decision, rec ru
 	if held, err := l.recordInfrastructureFailure(ctx, node, rec, log); held || err != nil {
 		return node, false, err
 	}
+	return l.restartUnreadParallelNode(node, rec)
+}
+
+func (l *Loop) restartUnreadParallelNode(node Decision, rec run.Record) (Decision, bool, error) {
 	policy := l.currentPolicy()
 	if policy == nil {
 		return node, false, Usagef("workflow seat %s has no backend route", node.Seat)

@@ -1,11 +1,13 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -48,6 +50,9 @@ func TestParallelReaderWithAnUnreadableFooterRunsAgainAlone(t *testing.T) {
 	}
 	if steps.started != 5 || steps.builders != 1 {
 		t.Fatalf("started=%d builders=%d", steps.started, steps.builders)
+	}
+	if result.InfraFailures != 0 || l.infraStreak != 0 {
+		t.Fatalf("unreadable footer on normal exit counted infrastructure failure: result=%d streak=%d", result.InfraFailures, l.infraStreak)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
 		var id, backend string
@@ -169,5 +174,101 @@ func TestAnUnreadReaderHoldsNamedAndItsRetryKeepsThePassedReaders(t *testing.T) 
 			t.Errorf("%d passed readers ran again", reran)
 		}
 		return err
+	})
+}
+
+func TestNormalExitWorkflowNodeWithoutFooterNotCountedAsInfrastructure(t *testing.T) {
+	t.Run("missing footer without recorded backend failure", func(t *testing.T) {
+		f, l, _ := workflowLoopFixture(t, "")
+		var reportBuf bytes.Buffer
+		l.cfg.Report = &reportBuf
+		base := runGit(t, f.root, "rev-parse", TrunkRef)
+		p := mustPlan(t, l)[0]
+		if ok, _, err := l.applyPlan(context.Background(), p, base, l.cfg.Now()); err != nil || !ok {
+			t.Fatalf("claim: %v %v", ok, err)
+		}
+		d := p.decision
+		runGit(t, l.laneTarget(d.LaneID), "reset", "--hard", base)
+		rec := run.Record{
+			RunID: d.RunRequest.RunID, ItemID: d.ItemID, LaneID: d.LaneID, Backend: "fixture",
+			State: run.StateExited, EndCause: run.EndNormalExit, ExitCode: code(0),
+			StartedAt: "2026-11-23T14:43:54Z", FinishedAt: "2026-11-23T15:06:19Z",
+		}
+		fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+
+		result := &LoopResult{}
+		handled, err := l.settleNode(context.Background(), d, rec, "Took the do-it-now path and committed.", base, result, false)
+		if err != nil || !handled {
+			t.Fatalf("settleNode = (%v, %v), want (true, nil)", handled, err)
+		}
+		if result.InfraFailures != 0 || l.infraStreak != 0 {
+			t.Fatalf("normal exit without footer counted infrastructure failure: result=%d streak=%d", result.InfraFailures, l.infraStreak)
+		}
+		if strings.Contains(reportBuf.String(), "failed in the infrastructure class") {
+			t.Fatalf("normal exit without footer logged infrastructure failure: %s", reportBuf.String())
+		}
+		fixtureRead(t, f, func(r *store.Reader) error {
+			var count int
+			if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=?`, infrastructureFailureKind, d.ItemID).Scan(&count); err != nil {
+				return err
+			}
+			if count != 0 {
+				t.Errorf("recorded %d infrastructure failure events, want 0", count)
+			}
+			return nil
+		})
+		restarted := pendingForTest(t, f, d.ItemID)
+		if !restarted.Decision.WorkflowRestart || restarted.Decision.InfrastructureFrom != rec.RunID {
+			t.Fatalf("restarted = %+v, want WorkflowRestart=true InfrastructureFrom=%s", restarted.Decision, rec.RunID)
+		}
+	})
+
+	t.Run("recorded backend transport error", func(t *testing.T) {
+		f, l, _ := workflowLoopFixture(t, "")
+		var reportBuf bytes.Buffer
+		l.cfg.Report = &reportBuf
+		base := runGit(t, f.root, "rev-parse", TrunkRef)
+		p := mustPlan(t, l)[0]
+		if ok, _, err := l.applyPlan(context.Background(), p, base, l.cfg.Now()); err != nil || !ok {
+			t.Fatalf("claim: %v %v", ok, err)
+		}
+		d := p.decision
+		runGit(t, l.laneTarget(d.LaneID), "reset", "--hard", base)
+		d.Seat = "design"
+		const errText = "503 Service Unavailable"
+		streamLog := filepath.Join(t.TempDir(), "run.log")
+		writeForkFile(t, streamLog, strings.Join([]string{
+			`{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","errorMessage":"` + errText + `","content":[]}]}`,
+			`{"type":"auto_retry_end","success":false,"attempt":3,"finalError":"` + errText + `"}`,
+		}, "\n")+"\n")
+		rec := run.Record{
+			RunID: d.RunRequest.RunID, ItemID: d.ItemID, LaneID: d.LaneID, Backend: "fixture",
+			State: run.StateExited, EndCause: run.EndNormalExit, ExitCode: code(0),
+			StartedAt: "2026-11-23T14:43:54Z", FinishedAt: "2026-11-23T15:06:19Z",
+			ArtifactRefs: []run.ArtifactRef{{Kind: "log", Ref: streamLog}},
+		}
+		fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+
+		result := &LoopResult{}
+		handled, err := l.settleNode(context.Background(), d, rec, "", base, result, false)
+		if err != nil || !handled {
+			t.Fatalf("settleNode = (%v, %v), want (true, nil)", handled, err)
+		}
+		if result.InfraFailures != 1 || l.infraStreak != 1 {
+			t.Fatalf("recorded backend transport error did not count infrastructure failure: result=%d streak=%d", result.InfraFailures, l.infraStreak)
+		}
+		if !strings.Contains(reportBuf.String(), "failed in the infrastructure class") {
+			t.Fatalf("recorded backend transport error did not log infrastructure failure: %s", reportBuf.String())
+		}
+		fixtureRead(t, f, func(r *store.Reader) error {
+			failure, err := readRecordedInfrastructureFailure(r, d.ItemID, "$.run_id", rec.RunID)
+			if err != nil {
+				return err
+			}
+			if !strings.Contains(failure.Words, errText) {
+				t.Errorf("recorded infrastructure failure words = %q, want %q", failure.Words, errText)
+			}
+			return nil
+		})
 	})
 }

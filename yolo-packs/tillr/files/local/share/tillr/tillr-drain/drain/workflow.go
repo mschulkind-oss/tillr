@@ -643,8 +643,11 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 			}
 			return true, l.markExamined(ctx, d)
 		}
-		if classifyDecisionAttempt(d, rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && !readableFooter(footer)) {
+		if classifyDecisionAttempt(d, rec, log) == AttemptInfrastructure {
 			return true, l.holdFailedWorkflowNode(ctx, d, base, rec, result)
+		}
+		if rec.State == run.StateExited && !readableFooter(footer) {
+			return true, l.restartUnreadWorkflowNode(ctx, d, base, rec)
 		}
 	}
 	if !l.nonLanding && effectiveAccess == "write" {
