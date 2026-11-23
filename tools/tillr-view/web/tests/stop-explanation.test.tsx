@@ -14,7 +14,7 @@ test.each(["queue-drained", "lanes-leased", "operator-stop", "host-boundary-viol
   const { container } = render(<><LoopBand drain={drain} now={now} /><LoopSummary drain={drain} now={now} /></>);
   for (const header of container.querySelectorAll(".loop-band, .loop-summary__state")) {
     expect(header.textContent).toContain("stopped since");
-    for (const value of [new Date(stop.at_ms).toISOString(), stop.item_id, stop.step, stop.sentence, stop.next]) expect(header.textContent).toContain(value);
+    for (const value of [new Date(stop.at_ms).toLocaleString(), stop.item_id, stop.step, stop.sentence, stop.next]) expect(header.textContent).toContain(value);
     expect(header.textContent).not.toMatch(/diagnose the recorded|inspect the recorded stop/);
   }
 });

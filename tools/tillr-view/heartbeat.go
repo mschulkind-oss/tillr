@@ -22,9 +22,23 @@ type loopSession struct {
 	RefreshedAtMS int64  `json:"refreshed_at_ms"`
 	NextPassAtMS  int64  `json:"next_pass_at_ms"`
 	EndedAtMS     *int64 `json:"ended_at_ms"`
+	// Lanes are the lane ids the loop was configured to run (its `--lanes` count plus
+	// the express lanes). A loop or store that predates the column sends none.
+	Lanes []string `json:"lanes,omitempty"`
 }
 
 func readLoopSession(r *store.Reader, now time.Time) (*loopSession, bool, string, error) {
+	session, active, note, err := readLoopSessionClocks(r, now)
+	if session != nil {
+		var raw sql.NullString
+		if r.QueryRow(`SELECT lanes FROM drain_sessions WHERE session_id = ?`, session.SessionID).Scan(&raw) == nil && raw.Valid {
+			_ = json.Unmarshal([]byte(raw.String), &session.Lanes)
+		}
+	}
+	return session, active, note, err
+}
+
+func readLoopSessionClocks(r *store.Reader, now time.Time) (*loopSession, bool, string, error) {
 	var session loopSession
 	var ended sql.NullInt64
 	var rawOwner []byte

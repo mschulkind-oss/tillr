@@ -90,8 +90,8 @@ test.each([true, false])("old stop note is hidden only with a live session: %s",
   const { container } = render(<LoopSummary drain={{ ...drain, active: live, session, stop_note: "stale stop record — newer run exists" }} now={now} />);
   expect(container.textContent?.includes("stale stop record")).toBe(!live);
   if (live) {
-    expect(container.textContent).toContain(new Date(session.started_at_ms).toISOString());
-    expect(container.textContent).toContain(new Date(session.refreshed_at_ms).toISOString());
+    expect(container.textContent).toContain(new Date(session.started_at_ms).toLocaleString());
+    expect(container.textContent).toContain(new Date(session.refreshed_at_ms).toLocaleString());
     expect(container.textContent).not.toContain("queue-drained");
   }
 });
