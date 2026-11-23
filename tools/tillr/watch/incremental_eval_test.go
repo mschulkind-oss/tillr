@@ -326,3 +326,95 @@ receiver = "foreground"
 		t.Fatalf("idle pass after new commit spawned git subprocesses: %v", gitCalls)
 	}
 }
+
+func TestMultiKindIncrementalPassBatchesTailQueryAndCachesCompositeGroupBy(t *testing.T) {
+	ctx := t.Context()
+	now := time.Unix(1700000000, 0)
+	s := watchStore(t)
+
+	var doc string
+	for i := 0; i < 8; i++ {
+		kind := fmt.Sprintf("watch-test.multi-%d", i)
+		register(t, kind)
+		doc += fmt.Sprintf(`[[rule]]
+id = "multi-%d"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = [%q]
+[rule.when]
+group_by = ["detail.item_id", "detail.step"]
+pattern = "count_in_window"
+threshold = 2
+window = "1h"
+[rule.guidance]
+summary = "{{subject}} hit {{count}}"
+check = ["check"]
+do = ["do"]
+[rule.delivery]
+receiver = "foreground"
+
+`, i, kind)
+	}
+	rules := watchRules(t, doc)
+	if _, err := (&Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}).EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	headAfterSeed := watchEventOfKind(t, s, "watch-test.multi-0", now.Add(-5*time.Minute), `{"detail":{"item_id":"item-1","step":"build"}}`)
+
+	var queries int
+	e := Evaluator{
+		Store: s,
+		Rules: rules,
+		Clock: func() time.Time { return now },
+		onEventQuery: func(string, int64, int) {
+			queries++
+		},
+	}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if queries != 8 {
+		t.Fatalf("cold pass queries = %d, want 8", queries)
+	}
+
+	// Appending one unrelated event must advance all 8 synced kinds in a single
+	// tail query instead of issuing 8 per-kind SQL queries on every commit.
+	watchEventOfKind(t, s, "watch-test.unrelated-tail", now, `{"note":"tick"}`)
+	queries = 0
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if queries != 1 {
+		t.Fatalf("unrelated commit executed %d event queries across 8 kinds (since %d), want 1 batched tail query", queries, headAfterSeed)
+	}
+
+	// Composite group_by rule still fires when threshold is reached incrementally,
+	// and Pending ignores already-seen open episodes while delivering new ones.
+	seenHead := watchEventOfKind(t, s, "watch-test.unrelated-tail", now.Add(time.Second), `{"note":"seen"}`)
+	if err := e.Shown(ctx, "operator-session", seenHead); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Seen(ctx, "operator-session", seenHead); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Second)
+	watchEventOfKind(t, s, "watch-test.multi-0", now, `{"detail":{"item_id":"item-1","step":"build"}}`)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	notices, err := e.Pending(ctx, "operator-session")
+	if err != nil || len(notices) != 1 || notices[0].Bundle.RuleID != "multi-0" {
+		t.Fatalf("pending notices = %+v, err = %v; want 1 multi-0 notice", notices, err)
+	}
+	if err := e.Shown(ctx, "operator-session", notices[0].Seq); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Seen(ctx, "operator-session", notices[0].Seq); err != nil {
+		t.Fatal(err)
+	}
+	if notices, err := e.Pending(ctx, "operator-session"); err != nil || len(notices) != 0 {
+		t.Fatalf("pending notices after Seen = %+v, err = %v; want none", notices, err)
+	}
+}

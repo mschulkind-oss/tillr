@@ -364,3 +364,221 @@ func TestHelperSplitWALCommit(t *testing.T) {
 	}
 	_ = shmFile.Close()
 }
+
+func readProcCPUTicks(t *testing.T, pid int) int64 {
+	t.Helper()
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		t.Fatalf("read /proc/%d/stat: %v", pid, err)
+	}
+	end := bytes.LastIndexByte(raw, ')')
+	if end < 0 || end+2 >= len(raw) {
+		t.Fatalf("malformed /proc/%d/stat: %q", pid, raw)
+	}
+	fields := strings.Fields(string(raw[end+2:]))
+	if len(fields) <= 12 {
+		t.Fatalf("short /proc/%d/stat fields: %v", pid, fields)
+	}
+	var utime, stime int64
+	if _, err := fmt.Sscanf(fields[11], "%d", &utime); err != nil {
+		t.Fatalf("parse utime %q: %v", fields[11], err)
+	}
+	if _, err := fmt.Sscanf(fields[12], "%d", &stime); err != nil {
+		t.Fatalf("parse stime %q: %v", fields[12], err)
+	}
+	return utime + stime
+}
+
+func TestWatchWaitIdleUnderStoreWritesAndDeliversAlert(t *testing.T) {
+	const rulesDir = "../../config/tillr/watch"
+	if err := event.Register("watch-bench.unrelated", "watch-test"); err != nil {
+		t.Fatal(err)
+	}
+	f := newTrunkProofFixture(t)
+	ctx := t.Context()
+
+	var initOut, initErr bytes.Buffer
+	if code := run(ctx, []string{"eval", "--once", "--store", f.s.Path(), "--rules", rulesDir, "--root", f.root}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+		t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
+	}
+
+	now := time.Now().UTC()
+	var seenHead int64
+	if err := f.s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE _pad (id INTEGER PRIMARY KEY, b BLOB)`); err != nil {
+			return err
+		}
+		for i := 0; i < 30; i++ {
+			if _, err := tx.Exec(`INSERT INTO _pad(b) VALUES (zeroblob(4000000))`); err != nil {
+				return err
+			}
+		}
+		for i := 0; i < 400; i++ {
+			aid := fmt.Sprintf("alrt-hist-%04d", i)
+			seq, err := tx.Append(event.Event{
+				Kind:       "watch.alert.opened",
+				ObjectType: "alert",
+				ObjectID:   &aid,
+				At:         now.Add(-time.Hour),
+				Payload:    []byte(`{"receiver":"foreground"}`),
+			})
+			if err != nil {
+				return err
+			}
+			if i >= 370 {
+				if _, err := tx.Exec(`INSERT INTO alert_episodes (
+					alert_id, rule_id, subject_key, episode_num, state, severity, condition_fingerprint,
+					opened_seq, opened_at, last_observed_seq, last_observed_at, bundle_json
+				) VALUES (?, 'retired-rule', ?, 1, 'open', 'warning', 'fp', ?, ?, ?, ?, '{}')`,
+					aid, fmt.Sprintf("subj-%04d", i), seq, now.Add(-time.Hour).UnixMilli(), seq, now.Add(-time.Hour).UnixMilli()); err != nil {
+					return err
+				}
+			}
+		}
+		sess := "sess-idle"
+		var err error
+		seenHead, err = tx.Append(event.Event{
+			Kind:       "drain.loop-pass",
+			ObjectType: "session",
+			ObjectID:   &sess,
+			At:         now,
+			Payload:    []byte(`{"session_id":"sess-idle","dispatched":0}`),
+		})
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO foreground_delivery(owner_handle, seen_seq, shown_seq) VALUES ('operator-session', ?, ?)
+			ON CONFLICT(owner_handle) DO UPDATE SET seen_seq=excluded.seen_seq, shown_seq=excluded.shown_seq`, seenHead, seenHead)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	storePath := f.s.Path()
+	if err := f.s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(ctx, storePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s = reopened
+	t.Cleanup(func() { f.s.Close() })
+
+	child := startCLIChild(t, "wait", "--store", f.s.Path(), "--rules", rulesDir, "--root", f.root, "--owner", "operator-session", "--seen-through", fmt.Sprint(seenHead))
+	eventually(t, func() bool {
+		var attached bool
+		if err := f.s.ReadTx(ctx, func(rd *store.Reader) error {
+			return rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM foreground_delivery WHERE owner_handle='operator-session' AND waiting_since IS NOT NULL)`).Scan(&attached)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return attached
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	startTicks := readProcCPUTicks(t, child.cmd.Process.Pid)
+	startWall := time.Now()
+	const commits = 90
+	const window = 3 * time.Second
+	for i := 0; i < commits; i++ {
+		runID := "run-idle"
+		if err := f.s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{
+				Kind:       "watch-bench.unrelated",
+				ObjectType: "run",
+				ObjectID:   &runID,
+				At:         time.Now().UTC(),
+				Payload:    []byte(`{"step":"heartbeat"}`),
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if sleep := time.Until(startWall.Add(time.Duration(i+1) * window / commits)); sleep > 0 {
+			time.Sleep(sleep)
+		}
+	}
+	wall := time.Since(startWall)
+	endTicks := readProcCPUTicks(t, child.cmd.Process.Pid)
+	select {
+	case err := <-child.done:
+		t.Fatalf("idle wait exited early: err=%v out=%q stderr=%q", err, &child.out, &child.stderr)
+	default:
+	}
+
+	const clkTck = 100.0
+	cpuSeconds := float64(endTicks-startTicks) / clkTck
+	coreFraction := cpuSeconds / wall.Seconds()
+	t.Logf("idle wait CPU: %.2f%% of one core (%.3fs CPU over %.2fs across %d store commits)",
+		coreFraction*100, cpuSeconds, wall.Seconds(), commits)
+	if coreFraction >= 0.05 {
+		t.Fatalf("idle wait used %.2f%% of one core (%.3fs CPU over %.2fs across %d store commits), want < 5%%",
+			coreFraction*100, cpuSeconds, wall.Seconds(), commits)
+	}
+
+	backend := "pi"
+	if err := f.s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{
+			Kind:       "drain.backend-outcome",
+			ObjectType: "backend",
+			ObjectID:   &backend,
+			At:         time.Now().UTC(),
+			Payload:    []byte(`{"backend":"pi","outcome_class":"quota","closes":true}`),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := child.wait(t); err != nil {
+		t.Fatalf("wait did not exit 0 on firing alert: err=%v out=%q stderr=%q", err, &child.out, &child.stderr)
+	}
+	if !strings.Contains(child.out.String(), "drain-backend-closed") || !strings.Contains(child.out.String(), "TILLR_WATCH_NOTICE 1 pending") {
+		t.Fatalf("wait did not deliver firing alert: out=%q stderr=%q", &child.out, &child.stderr)
+	}
+}
+
+func TestWatchWaitDeliversAlertCommittedBeforeTimeoutDuringWALBurst(t *testing.T) {
+	s, rules := fixture(t, false)
+	var initOut, initErr bytes.Buffer
+	if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+		t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
+	}
+	if err := event.Register("watch-bench.burst-unrelated", "watch-test"); err != nil && !strings.Contains(err.Error(), "already") {
+		t.Fatal(err)
+	}
+
+	ctx := t.Context()
+	type waitResult struct {
+		code        int
+		out, stderr string
+	}
+	done := make(chan waitResult, 1)
+	go func() {
+		var out, stderr bytes.Buffer
+		code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "120ms"}, &out, &stderr)
+		done <- waitResult{code: code, out: out.String(), stderr: stderr.String()}
+	}()
+	awaitAttached(t, s)
+
+	// Trigger a first WAL wake so the 150ms coalesce window is active, then
+	// commit a firing alert inside that window before the 120ms timeout expires.
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{Kind: "watch-bench.burst-unrelated", ObjectType: "item", At: time.Now().UTC(), Payload: []byte(`{}`)})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	fact(t, s, `{"item_id":"item-burst"}`)
+	fact(t, s, `{"item_id":"item-burst"}`)
+
+	select {
+	case r := <-done:
+		if r.code != 0 || !strings.Contains(r.out, "item-burst has 2 refusals") {
+			t.Fatalf("wait missed pre-deadline alert during WAL coalesce window: code=%d out=%q stderr=%q", r.code, r.out, r.stderr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait did not exit")
+	}
+}

@@ -30,11 +30,19 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
 	fileForeground := foregroundRules(e.Rules)
 	var notices []Notice
 	err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
-		rows, err := rd.Query(`SELECT v.seq,v.kind,a.alert_id,a.rule_id,a.bundle_json
-   FROM alert_episodes a JOIN events v ON v.seq=(
-      SELECT MAX(n.seq) FROM events n WHERE n.object_id=a.alert_id AND n.kind IN (?,?)
+		rows, err := rd.Query(`WITH latest_notice AS (
+      SELECT n.object_id AS alert_id, MAX(n.seq) AS seq
+      FROM events n
+      WHERE n.kind IN (?,?)
+        AND n.seq > COALESCE((SELECT seen_seq FROM foreground_delivery WHERE owner_handle=?),0)
+        AND n.object_id IS NOT NULL
+      GROUP BY n.object_id
    )
-   WHERE a.state='open' AND v.seq>COALESCE((SELECT seen_seq FROM foreground_delivery WHERE owner_handle=?),0)
+   SELECT v.seq,v.kind,a.alert_id,a.rule_id,a.bundle_json
+   FROM latest_notice m
+   JOIN alert_episodes a ON a.alert_id=m.alert_id
+   JOIN events v ON v.seq=m.seq
+   WHERE a.state='open'
    ORDER BY v.seq`, openedKind, reopenedKind, owner)
 		if err != nil {
 			return err

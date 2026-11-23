@@ -25,6 +25,7 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 	if err != nil {
 		return 1, err
 	}
+	wake.minWALInterval = 250 * time.Millisecond
 	defer wake.close()
 	// Record rule load baselines before advertising waiting_since so events
 	// appended as soon as attachment is visible are judged as post-load.
