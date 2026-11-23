@@ -161,7 +161,7 @@ Every non-2xx HTTP response from `tillr-view` writes `{error: {code, message}}` 
 
 ### `ItemDetailPane`
 
-`ItemDetailPane` (`web/src/components/ItemDetailPane.tsx`, mounted inside `ItemPage` on `#/item/<id>`) renders an item's stored definition and run list from `GET /api/v1/items/{id}`:
+`ItemDetailPane` (`web/src/components/ItemDetailPane.tsx`, mounted inside `ItemPage` on `/item/<id>`) renders an item's stored definition and run list from `GET /api/v1/items/{id}`:
 
 - **Header and metadata:** Item ID, `StateGlyph`, 1-based `place` (or `rank` fallback when terminal), `allowed_paths` fence (`none recorded` when empty), `waiting_on`, `resolves_via`, `close_reason` (`closed with no reason recorded` when `closed` has an empty reason), description (`no description recorded` when blank), and `body_ref` (`not recorded` when blank).
 - **Criteria:** Lists frozen `item_criteria` in ordinal order (`met`, `unmet`, or `~claimed` when `claimed_criteria` contains an unmet criterion ID), or states `No criteria recorded — this item can land without a criterion gate.`
@@ -209,7 +209,7 @@ Every non-2xx HTTP response from `tillr-view` writes `{error: {code, message}}` 
 
 ## Superseded layout and retained components
 
-The linked-page architecture in [observatory redesign](./observatory-redesign.md) replaced the original four-region viewport-locked layout (`ObservatoryHeaderBar` + `QueueRail` + `ItemPane` + `InspectPane`, plus `NowBand` and `FinishedBand`) with dedicated full-width hash pages (`#/`, `#/items`, `#/item/<id>`, `#/run/<id>`, `#/lane/<id>`, `#/passes`, `#/trunk`, `#/performance`, `#/graph`, `#/questions`, `#/designs`).
+The linked-page architecture in [observatory redesign](./observatory-redesign.md) replaced the original four-region viewport-locked layout (`ObservatoryHeaderBar` + `QueueRail` + `ItemPane` + `InspectPane`, plus `NowBand` and `FinishedBand`) with dedicated full-width pages routed by path (`/`, `/items`, `/item/<id>`, `/run/<id>`, `/lane/<id>`, `/passes`, `/trunk`, `/performance`, `/graph`, `/questions`, `/designs`; old `#/` links redirect to the path).
 
 At `11dec7eb2e0e196e3a9588c354616bea6f5cb1b1`, the components introduced for the original design split into two groups:
 
