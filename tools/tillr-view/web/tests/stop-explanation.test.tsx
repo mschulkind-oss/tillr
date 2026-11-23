@@ -26,7 +26,16 @@ test("a startup stop without a session is still labeled stopped", () => {
   expect(container.textContent).toContain("startup");
 });
 
-test.each([[session, "Loop alive"], [{ ...session, refreshed_at_ms: now - 2000 }, "Loop alive"], [{ ...session, refreshed_at_ms: now - 2001 }, "no loop is running"], [null, "no loop is running"]] as const)("header checks heartbeat age", (heartbeat, label) => {
-  const { container } = render(<LoopBand drain={{ ...snapshotData.drain_summary, session: heartbeat, heartbeat_interval_ms: 1000 }} now={now} />);
+test.each([[session, true, "Loop alive"], [{ ...session, refreshed_at_ms: now - 4000 }, true, "Loop alive"], [{ ...session, refreshed_at_ms: now - 2001 }, false, "no loop is running"], [null, false, "no loop is running"]] as const)("header follows the server's heartbeat verdict", (heartbeat, active, label) => {
+  const { container } = render(<LoopBand drain={{ ...snapshotData.drain_summary, active, session: heartbeat, heartbeat_interval_ms: 1000 }} now={now} />);
   expect(container.textContent).toContain(label);
+});
+
+test("a live heartbeat shows no stop facts, and a missing heartbeat does not claim a stop", () => {
+  const live = { ...snapshotData.drain_summary, active: true, session: { ...session, refreshed_at_ms: now - 4000 } };
+  const { container } = render(<><LoopBand drain={live} now={now} /><LoopSummary drain={live} now={now} /></>);
+  expect(container.textContent).not.toMatch(/NOT KNOWN|no loop is running|Stop explanation not recorded|stop explanation not recorded/i);
+  cleanup();
+  const quiet = render(<><LoopBand drain={{ ...live, active: false }} now={now} /><LoopSummary drain={{ ...live, active: false }} now={now} /></>);
+  expect(quiet.container.textContent).not.toMatch(/xplanation not recorded/);
 });

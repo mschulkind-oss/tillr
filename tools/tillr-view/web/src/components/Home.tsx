@@ -57,7 +57,7 @@ export function LoopSummary({ drain, passes, error, readError, snapshot, now = D
       <span>{alive ? "Loop alive: the recorded heartbeat is current." : "no loop is running"}</span>
       {stop ? <span>stopped since {new Date(stop.at_ms).toISOString()} · <EntityText value={stop.item_id || "no single item (loop-wide)"} snapshot={snapshot} passes={passes} /> · {stop.step} · {stop.sentence} Next: {stop.next}</span> : <>
         <span>{ended ? drain?.last_stop_reason || "stop reason not recorded" : alive ? "watch the next pass" : drain?.session_note || "No session recorded."}</span>
-        {!alive ? <span>Stop explanation not recorded. {ended ? STOP_GUIDANCE[drain?.last_stop_reason ?? ""] ?? "Owner updates the reader for this stop reason before restarting" : "Owner checks the loop session before restarting"}</span> : null}
+        {!alive && ended ? <span>Stop explanation not recorded. {STOP_GUIDANCE[drain?.last_stop_reason ?? ""] ?? "Owner updates the reader for this stop reason before restarting"}</span> : null}
       </>}
     </div>
     {repeated ? <p className="loop-summary__repeated" role="status">
