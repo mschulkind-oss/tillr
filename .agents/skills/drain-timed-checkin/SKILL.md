@@ -108,6 +108,17 @@ watcher, the lane sampler, the Observatory (the web view of the queue, on port
 4318), and one `tillr watch wait` watcher. A session relaunch kills them. Check
 for all of them first and start what is missing.
 
+When all six are gone at once, check whether the jail container itself
+restarted: `ps -o lstart -p 1` gives the container's start time, and the loop
+log's last line gives the time the old loop died. A container restart also ends
+every worker. Before starting the keeper, save each lane worktree's uncommitted
+diff under the night directory. On start, the loop keeps an orphaned run's work
+at `refs/tillr/preserved/<run>` and restarts that run ("earlier work exists at
+... (orphaned workflow restarted)" in its log). On 2026-11-23 a container
+restart at 13:43 ET ended a 72-minute run, and its 752 added lines came back
+this way. The new loop raises `drain-unrequested-start`; its cause is the
+container restart, recorded with both times.
+
 ```bash
 ps -eo pid,etimes,args | rg 'tillr-drain loop --root /workspace --gate|tillr-keep|loop-watch.py|ratchet/sample.py|tillr-view serve|tillr-watch wait' | rg -v 'rg '
 printf 'say ok' | pi --print --model github-copilot/gemini-4-carbon   # the designer backend answers
