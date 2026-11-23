@@ -6,7 +6,6 @@ import "./styles.css";
 import "./tokens.css";
 
 import { App } from "./App";
-import { migrateLegacyHash } from "./models/route";
 import { applyColorTheme, watchColorTheme } from "./models/theme";
 
 // No transport is configured here. The screen's liveness is `useObservatorySocket`'s
@@ -18,7 +17,6 @@ const client = new QueryClient({
 
 // The theme is applied here as well as before the first paint (index.html), because the
 // platform can change while the screen is open and a rendered document's tones follow it.
-migrateLegacyHash();
 applyColorTheme();
 watchColorTheme();
 
