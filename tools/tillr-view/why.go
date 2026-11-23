@@ -200,6 +200,51 @@ type whyCache struct {
 	raw   json.RawMessage
 }
 
+// documentIndexStatus is what /why says about the Vantage index its questions came from, so
+// the page can show that the answer used an index older than the documents.
+type documentIndexStatus struct {
+	// State is "current", "refreshing" (an older index was used while a rebuild runs, or
+	// after one failed) or "unavailable" (no index could be built).
+	State        string  `json:"state"`
+	AgeMS        float64 `json:"age_ms,omitempty"`
+	RefreshError string  `json:"refresh_error,omitempty"`
+	Message      string  `json:"message,omitempty"`
+}
+
+func indexStatus(look vantageLookup, err error) documentIndexStatus {
+	switch {
+	case err != nil:
+		return documentIndexStatus{State: "unavailable", Message: fmt.Sprintf("The document index could not be built: %v", err)}
+	case look.Stale:
+		msg := fmt.Sprintf("The document index is being refreshed; this answer uses one built %s ago.", ageWords(look.AgeMS))
+		if look.RefreshError != "" {
+			msg = fmt.Sprintf("The last document index rebuild failed (%s); this answer uses the index built %s ago.", look.RefreshError, ageWords(look.AgeMS))
+		}
+		return documentIndexStatus{State: "refreshing", AgeMS: look.AgeMS, RefreshError: look.RefreshError, Message: msg}
+	}
+	return documentIndexStatus{State: "current", AgeMS: look.AgeMS}
+}
+
+func ageWords(ms float64) string {
+	d := time.Duration(ms * float64(time.Millisecond)).Round(time.Second)
+	return d.String()
+}
+
+// withDocumentIndex adds the index's status to the planner's answer, keeping every planner
+// field and exact number as it came.
+func withDocumentIndex(raw json.RawMessage, status documentIndexStatus) (json.RawMessage, error) {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		return nil, err
+	}
+	document["document_index"] = encoded
+	return json.Marshal(document)
+}
+
 func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure) {
 	// The index is the server's cached walk. When it cannot be read the planner is asked
 	// without it and runs the index command itself, so a failure is the planner's own
@@ -209,6 +254,7 @@ func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure)
 	if ierr != nil {
 		index = nil
 	}
+	status := indexStatus(look, ierr)
 	// Without the server's index the planner's inputs are not known, so nothing is reused.
 	cacheable := index != nil
 	var head int64
@@ -229,7 +275,11 @@ func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure)
 	defer s.why.mu.Unlock()
 	if cacheable && s.why.valid && s.why.head == head && s.why.index == digest {
 		phase(r.Context(), "planner", map[string]any{"cache": "hit", "ms": 0, "bytes": len(s.why.raw)})
-		return whyPayloadData{raw: s.why.raw, head: whyHead(s.why.raw)}, nil
+		raw, err := withDocumentIndex(s.why.raw, status)
+		if err != nil {
+			return nil, failure(codeStoreUnreadable, "why index status: %v", err)
+		}
+		return whyPayloadData{raw: raw, head: whyHead(s.why.raw)}, nil
 	}
 	raw, _, err := askPlanner(r.Context(), s.plannerFlag, s.build, s.storePath, s.root, s.policyRef, s.offeredLanes, s.questionsCmd, index)
 	if err != nil {
@@ -252,6 +302,10 @@ func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure)
 		s.why.valid, s.why.head, s.why.index, s.why.raw = true, head, digest, raw
 	} else {
 		s.why.valid = false
+	}
+	raw, err = withDocumentIndex(raw, status)
+	if err != nil {
+		return nil, failure(codeStoreUnreadable, "why index status: %v", err)
 	}
 	return whyPayloadData{raw: raw, head: answer.Head}, nil
 }
