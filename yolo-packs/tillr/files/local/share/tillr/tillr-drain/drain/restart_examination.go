@@ -105,21 +105,26 @@ func (l *Loop) getLoopCtx() context.Context {
 }
 
 func (l *Loop) reclaimDetachedGateExaminations(ctx context.Context) error {
+	return l.reclaimDetachedGateExaminationsWith(ctx, false, nil)
+}
+
+func (l *Loop) reclaimDetachedGateExaminationsWith(ctx context.Context, stopChecked bool, scope *pollReaderScope) error {
 	if l.cfg.Store == "" {
 		return nil
 	}
-	if stopped, err := l.stopRequested(ctx); err != nil {
-		return err
-	} else if stopped {
+	if operatorStopped(ctx) {
 		return nil
 	}
-	rs, err := store.OpenRead(ctx, l.cfg.Store)
-	if err != nil {
-		return err
+	if !stopChecked {
+		if stopped, err := l.stopRequestedWith(ctx, scope); err != nil {
+			return err
+		} else if stopped {
+			return nil
+		}
 	}
 	leased := map[string]string{}
 	var works map[string]*pendingWork
-	err = rs.ReadTx(ctx, func(r *store.Reader) error {
+	err := l.withPollReader(ctx, scope, func(r *store.Reader) error {
 		rows, err := r.Query(`SELECT lane_id, run_id FROM lanes WHERE state=? AND leased_until IS NULL AND run_id IS NOT NULL`, run.LaneStateLeased)
 		if err != nil {
 			return err
@@ -146,7 +151,6 @@ func (l *Loop) reclaimDetachedGateExaminations(ctx context.Context) error {
 		works, err = readPending(r)
 		return err
 	})
-	rs.Close()
 	if err != nil || len(leased) == 0 {
 		return err
 	}
