@@ -382,6 +382,13 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 		c.BlockedCriteria = []string{"not stated in report"}
 	}
 	obstacle := parseObstacle(text)
+	if !IsGeneratedItem(d.ItemID) && obstacle.Problem == "" && obstacle.Kind == ObstacleDefinition {
+		if resolved, err := l.resolveDefinitionAlreadyFixed(ctx, d, obstacle); err != nil {
+			return err
+		} else if resolved {
+			return nil
+		}
+	}
 	if IsGeneratedItem(d.ItemID) {
 		// A generated item has no design block of its own to amend, so an obstacle that needs a
 		// ruling or a wider fence reaches the owner with the question the loop writes from

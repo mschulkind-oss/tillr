@@ -2573,6 +2573,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 				}
 			}
 			l.reportf("loop: %s reported blocked: leaving it on the board to be decided\n", request.ItemID)
+			if decision.NodeBaseSHA == "" {
+				decision.NodeBaseSHA = l.settleBase(lane, mainSHA)
+			}
 			if err := l.reportedBlock(ctx, decision, log); err != nil {
 				return laneOutcome{err: err}
 			}
