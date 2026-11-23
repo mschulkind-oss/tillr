@@ -441,6 +441,66 @@ class ForkQualityGateTests(unittest.TestCase):
         self.assertNotIn('/packages/pkg-b:', '\n'.join(lines))
         self.assertTrue((run_dir / 'fork-cache-source').exists())
 
+    def test_incremental_candidate_tests_only_packages_touched_by_candidate(self):
+        self.write_pack('pi', build_cmd='touch build.marker')
+        self.write_npx_stub(
+            'test -f "$(git rev-parse --show-toplevel)/build.marker"\n'
+            'echo "$PWD:$*" >> "$NPX_LOG"\n'
+            'case "$PWD" in */packages/pkg-b) echo "untouched pkg-b timed out" >&2; exit 1;; esac\n'
+        )
+        # Earlier fork commit delivered on patch/pi touched pkg-b (whose test would fail).
+        (self.fork / 'packages' / 'pkg-b' / 'index.ts').write_text('export const b = 2;\n')
+        self.git(self.fork, 'commit', '-qam', 'earlier delivered fork patch in pkg-b')
+        delivered = self.git(self.fork, 'rev-parse', 'HEAD')
+        self.git(self.fork, 'update-ref', 'refs/heads/patch/pi', delivered)
+        self.base = delivered
+
+        # New incremental candidate builds on delivered tip and touches only pkg-a.
+        (self.fork / 'packages' / 'pkg-a' / 'index.ts').write_text('export const a = 6;\n')
+        self.git(self.fork, 'commit', '-qam', 'incremental candidate change in pkg-a')
+        head = self.git(self.fork, 'rev-parse', 'HEAD')
+
+        res = self.run_fork_gate('pi', 'run-incremental-candidate', head)
+        run_dir = self.root / '.tillr' / 'loop' / 'run-incremental-candidate'
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr + self.quality_log(run_dir))
+        verdict = json.loads((run_dir / 'gate.verdict.json').read_text())['payload']
+        self.assertEqual(verdict['result'], 'pass')
+        self.assertEqual({c['check_id']: c['result'] for c in verdict['checks']},
+                         {'fork-build': 'pass', 'fork-quality': 'pass'})
+        lines = self.npx_log.read_text().splitlines()
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(lines[0].endswith(':tsc --noEmit'), lines)
+        self.assertTrue(lines[1].endswith('/packages/pkg-a:vitest --run --reporter=dot'), lines)
+        self.assertNotIn('/packages/pkg-b:', '\n'.join(lines))
+        self.assertTrue((run_dir / 'fork-cache-source').exists())
+
+    def test_quality_bounds_vitest_and_go_worker_parallelism(self):
+        expected = gate.quality_worker_limit()
+        self.assertGreaterEqual(int(expected), 1)
+        self.assertLessEqual(int(expected), gate.DEFAULT_QUALITY_WORKERS)
+        self.write_pack('pi', build_cmd='touch build.marker')
+        self.write_npx_stub(
+            f'test "${{VITEST_MAX_WORKERS:-}}" = "{expected}" || '
+            f'{{ echo "VITEST_MAX_WORKERS=${{VITEST_MAX_WORKERS:-}}" >&2; exit 1; }}\n'
+            f'test "${{GOMAXPROCS:-}}" = "{expected}" || '
+            f'{{ echo "GOMAXPROCS=${{GOMAXPROCS:-}}" >&2; exit 1; }}\n'
+            'echo "$PWD:$*" >> "$NPX_LOG"\n'
+        )
+        (self.fork / 'packages' / 'pkg-a' / 'index.ts').write_text('export const a = 7;\n')
+        self.git(self.fork, 'commit', '-qam', 'verify bounded quality worker env')
+        head = self.git(self.fork, 'rev-parse', 'HEAD')
+
+        res = self.run_fork_gate('pi', 'run-bounded-workers', head, extra_env={
+            'VITEST_MAX_WORKERS': '99',
+            'GOMAXPROCS': '99',
+        })
+        run_dir = self.root / '.tillr' / 'loop' / 'run-bounded-workers'
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr + self.quality_log(run_dir))
+        verdict = json.loads((run_dir / 'gate.verdict.json').read_text())['payload']
+        self.assertEqual(verdict['result'], 'pass')
+        lines = self.npx_log.read_text().splitlines()
+        self.assertEqual(len(lines), 2, lines)
+
     def write_mise_cargo_stub(self):
         caller_home = self.tmp / 'caller home'
         auth_file = caller_home / '.pi' / 'agent' / 'auth.json'
