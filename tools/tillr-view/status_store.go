@@ -12,6 +12,8 @@ import (
 // store rather than from a record stream (VIEW-2): the components are the rows the
 // write faces already maintain, not a second copy of them.
 type storeDomain struct {
+	// deadRuns reads the dead runs once for this snapshot; the lane and node readers share it.
+	deadRuns   func() (map[string]bool, error)
 	residue    *syncResidue
 	items      []storeItem
 	criteria   map[string][]storeCriterion
@@ -40,6 +42,7 @@ func readStoreDomain(r *store.Reader) (*storeDomain, error) {
 
 func readStoreDomainIn(r *store.Reader, loopDir string) (*storeDomain, error) {
 	d := &storeDomain{
+		deadRuns: deadRunsReader(r, loopDir),
 		criteria: map[string][]storeCriterion{},
 		edges:    map[string][]storeEdge{},
 		attempts: map[string][]storeAttempt{},
@@ -87,7 +90,7 @@ func readStoreDomainIn(r *store.Reader, loopDir string) (*storeDomain, error) {
 	if d.ticks, err = readDrainTicks(r); err != nil && !isMissingTable(err) {
 		return nil, err
 	}
-	if d.lanes, err = readLanesIn(r, loopDir); err != nil && !isMissingTable(err) {
+	if d.lanes, err = readLanesWith(r, d.deadRuns); err != nil && !isMissingTable(err) {
 		return nil, err
 	}
 	if d.allocations, err = readAllocations(r); err != nil && !isMissingTable(err) {
