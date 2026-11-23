@@ -446,3 +446,107 @@ func TestReclaimEndedItemLanesLeavesActiveItemWorkUntouched(t *testing.T) {
 		t.Fatalf("active item's uncommitted work was unexpectedly cleared: %q", status)
 	}
 }
+
+func TestReclaimEndedItemLanesSkipsPendingFoldAndTempSorts(t *testing.T) {
+	f, l, baseSteps := plannedFixture(t)
+	l.cfg.Policy.Seats["test-write"] = "fixture"
+	steps := &testWriteSteps{
+		workflowSteps: baseSteps,
+		proposal: pieceProposal([]map[string]any{
+			{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write failing test, leave uncommitted"},
+			{"id": "impl", "seat": "build", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "implement fix"},
+		}),
+	}
+	l.cfg.Steps = steps
+	l.cfg.Stage = &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md")}
+	ctx := context.Background()
+
+	for i := 0; i < 6 && steps.testWriteRun == ""; i++ {
+		var r LoopResult
+		if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
+			t.Fatalf("pass %d: stop=%q err=%v", i, stop, err)
+		}
+	}
+	var r LoopResult
+	for i := 0; i < 6 && (i == 0 || l.activeCount() > 0); i++ {
+		if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
+			t.Fatalf("settle %d: stop=%q err=%v", i, stop, err)
+		}
+	}
+
+	var recorded []recordedSQLQuery
+	endedLaneQueryHook = func(query string, args []any) {
+		recorded = append(recorded, recordedSQLQuery{query: query, args: args})
+	}
+	t.Cleanup(func() { endedLaneQueryHook = nil })
+
+	// 1. Idle lane belongs to active item-a (in-queue): must skip readPending.
+	before := pendingFolds.Load()
+	if err := l.reclaimEndedItemLanes(ctx); err != nil {
+		t.Fatalf("active idle lane reclaimEndedItemLanes: %v", err)
+	}
+	if folds := pendingFolds.Load() - before; folds != 0 {
+		t.Errorf("active idle lane folded pending history %d times, want 0", folds)
+	}
+
+	// 2. All on-disk lanes are leased: must skip readPending.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE lanes SET state = 'leased', run_id = 'busy-run' WHERE lane_id = 'lane-1'`)
+		return err
+	})
+	before = pendingFolds.Load()
+	if err := l.reclaimEndedItemLanes(ctx); err != nil {
+		t.Fatalf("leased lane reclaimEndedItemLanes: %v", err)
+	}
+	if folds := pendingFolds.Load() - before; folds != 0 {
+		t.Errorf("all-leased lanes folded pending history %d times, want 0", folds)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE lanes SET state = 'idle', run_id = NULL WHERE lane_id = 'lane-1'`)
+		return err
+	})
+
+	// 3. Positive control: item-a closes while lane-1 holds uncommitted work -> folds pending once and reclaims lane-1.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := item.Close(ctx, tx, "item-a", "superseded", "owner", l.cfg.Now())
+		return err
+	})
+	before = pendingFolds.Load()
+	if err := l.reclaimEndedItemLanes(ctx); err != nil {
+		t.Fatalf("ended item reclaimEndedItemLanes: %v", err)
+	}
+	if folds := pendingFolds.Load() - before; folds != 1 {
+		t.Errorf("ended item reclamation folded pending history %d times, want 1", folds)
+	}
+	if status := runGit(t, l.lanePath("lane-1"), "status", "--porcelain", "--untracked-files=all"); status != "" {
+		t.Fatalf("lane-1 still dirty after reclamation: %q", status)
+	}
+
+	// 4. Repeat pass while ended item's lane-1 sits idle and already clean: must skip readPending.
+	before = pendingFolds.Load()
+	if err := l.reclaimEndedItemLanes(ctx); err != nil {
+		t.Fatalf("repeat clean ended lane reclaimEndedItemLanes: %v", err)
+	}
+	if folds := pendingFolds.Load() - before; folds != 0 {
+		t.Errorf("already-clean ended lane folded pending history %d times on repeat pass, want 0", folds)
+	}
+
+	assertNoSQLiteTempSortOrEphemeral(t, f.storePath, recorded)
+}
+
+func TestEndedLaneOwnerOrderingMatchesChronologicalTieBreak(t *testing.T) {
+	earlierEvent := endedLaneOwner{runID: "run-1", itemID: "item-a", seq: 10}
+	sameSeqRunEarly := endedLaneOwner{runID: "run-1a", itemID: "item-b", seq: 10, fromRuns: true, finishedAt: 100, startedAt: 50}
+	sameSeqRunLate := endedLaneOwner{runID: "run-1b", itemID: "item-c", seq: 10, fromRuns: true, finishedAt: 100, startedAt: 60}
+	laterEvent := endedLaneOwner{runID: "run-2", itemID: "item-d", seq: 11}
+
+	if !sameSeqRunEarly.newerOrEqual(earlierEvent) || earlierEvent.newerOrEqual(sameSeqRunEarly) {
+		t.Fatal("runs row at equal event_seq must win over event row")
+	}
+	if !sameSeqRunLate.newerOrEqual(sameSeqRunEarly) || sameSeqRunEarly.newerOrEqual(sameSeqRunLate) {
+		t.Fatal("later startedAt at equal (seq, finishedAt) must win")
+	}
+	if !laterEvent.newerOrEqual(sameSeqRunLate) || sameSeqRunLate.newerOrEqual(laterEvent) {
+		t.Fatal("higher seq must win regardless of source")
+	}
+}

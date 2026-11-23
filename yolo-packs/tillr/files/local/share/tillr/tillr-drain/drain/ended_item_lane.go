@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"sort"
@@ -250,11 +251,89 @@ func (l *Loop) endedWorkRecorded(ctx context.Context, runID, ref string) (bool, 
 	return exists, err
 }
 
+var endedLaneQueryHook func(query string, args []any)
+
+func queryEndedLaneRows(r *store.Reader, query string, args ...any) (*sql.Rows, error) {
+	if endedLaneQueryHook != nil {
+		endedLaneQueryHook(query, args)
+	}
+	return r.Query(query, args...)
+}
+
+func queryEndedLaneRow(r *store.Reader, query string, args ...any) *sql.Row {
+	if endedLaneQueryHook != nil {
+		endedLaneQueryHook(query, args)
+	}
+	return r.QueryRow(query, args...)
+}
+
+type endedLaneOwner struct {
+	runID      string
+	itemID     string
+	seq        int64
+	fromRuns   bool
+	finishedAt int64
+	startedAt  int64
+}
+
+func (c endedLaneOwner) newerOrEqual(prev endedLaneOwner) bool {
+	if c.seq != prev.seq {
+		return c.seq > prev.seq
+	}
+	if c.fromRuns != prev.fromRuns {
+		return c.fromRuns
+	}
+	if !c.fromRuns {
+		return true
+	}
+	if c.finishedAt != prev.finishedAt {
+		return c.finishedAt > prev.finishedAt
+	}
+	if c.startedAt != prev.startedAt {
+		return c.startedAt > prev.startedAt
+	}
+	return c.runID >= prev.runID
+}
+
+type reclaimedCleanLane struct {
+	runID string
+	epoch int
+}
+
+type endedLaneHistory struct {
+	storePath   string
+	lastSeq     int64
+	eventOwners map[string]endedLaneOwner
+	cleanLanes  map[string]reclaimedCleanLane
+}
+
+type endedLaneEventPayload struct {
+	ParentRunID string `json:"parent_run_id"`
+	Decision    struct {
+		ItemID string `json:"item_id"`
+		LaneID string `json:"lane_id"`
+	} `json:"decision"`
+}
+
 type endedLaneCandidate struct {
 	lane      string
 	runID     string
 	itemID    string
 	itemState string
+}
+
+func (l *Loop) recordCleanEndedLane(lane, runID string, epochBefore int, restored bool) {
+	l.mu.Lock()
+	staging := l.stagingLanes[lane] > 0
+	epochNow := l.laneChanges[lane]
+	l.mu.Unlock()
+	if staging || (!restored && epochNow != epochBefore) {
+		return
+	}
+	if l.endedLanes.cleanLanes == nil {
+		l.endedLanes.cleanLanes = map[string]reclaimedCleanLane{}
+	}
+	l.endedLanes.cleanLanes[lane] = reclaimedCleanLane{runID: runID, epoch: epochNow}
 }
 
 // reclaimEndedItemLanes saves uncommitted work left in idle lanes whose most recent run
@@ -265,37 +344,59 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 	if l.nonLanding || l.cfg.Store == "" || l.cfg.LaneRoot == "" {
 		return nil
 	}
+	entries, err := os.ReadDir(l.cfg.LaneRoot)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var onDisk []string
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		lane := entry.Name()
+		if l.hasLaneCondition(lane, ReasonLaneChildren) {
+			continue
+		}
+		if _, err := os.Stat(l.laneTarget(lane)); err != nil {
+			continue
+		}
+		onDisk = append(onDisk, lane)
+	}
+	if len(onDisk) == 0 {
+		return nil
+	}
+	sort.Strings(onDisk)
+
+	l.endedLaneMu.Lock()
+	defer l.endedLaneMu.Unlock()
+
+	epochsBefore := make(map[string]int, len(onDisk))
+	l.mu.Lock()
+	filtered := onDisk[:0]
+	for _, lane := range onDisk {
+		if l.stagingLanes[lane] > 0 {
+			continue
+		}
+		epochsBefore[lane] = l.laneChanges[lane]
+		filtered = append(filtered, lane)
+	}
+	onDisk = filtered
+	l.mu.Unlock()
+	if len(onDisk) == 0 {
+		return nil
+	}
+
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return err
 	}
 	var candidates []endedLaneCandidate
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		declared, err := definition.ForReader(r)
-		if err != nil {
-			return err
-		}
-		states := map[string]string{}
-		rows, err := r.Query(`SELECT item_id, state FROM items`)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var id, state string
-			if err := rows.Scan(&id, &state); err != nil {
-				rows.Close()
-				return err
-			}
-			states[id] = state
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		rows.Close()
-
 		busy := map[string]bool{}
-		rows, err = r.Query(`SELECT lane_id FROM lanes WHERE state = 'leased'`)
+		rows, err := queryEndedLaneRows(r, `SELECT lane_id FROM lanes WHERE state = 'leased'`)
 		if err != nil {
 			return err
 		}
@@ -313,6 +414,167 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 		}
 		rows.Close()
 
+		idleLanes := make([]string, 0, len(onDisk))
+		for _, lane := range onDisk {
+			if !busy[lane] {
+				idleLanes = append(idleLanes, lane)
+			}
+		}
+		if len(idleLanes) == 0 {
+			return nil
+		}
+
+		head, err := r.EventHeadSeq()
+		if err != nil {
+			return err
+		}
+		since := l.endedLanes.lastSeq
+		var nextEventOwners map[string]endedLaneOwner
+		if l.endedLanes.storePath != l.cfg.Store || head < since || l.endedLanes.eventOwners == nil {
+			since = 0
+			nextEventOwners = map[string]endedLaneOwner{}
+			l.endedLanes.cleanLanes = nil
+		} else {
+			nextEventOwners = maps.Clone(l.endedLanes.eventOwners)
+		}
+		if head > since {
+			for _, kind := range []string{dispatchStartedKind, nodeAdvancedKind} {
+				rows, err = queryEndedLaneRows(r, `SELECT seq, object_id, payload FROM events WHERE kind = ? AND seq > ? AND object_type = 'run'`, kind, since)
+				if err != nil {
+					return err
+				}
+				for rows.Next() {
+					var seq int64
+					var runID string
+					var raw []byte
+					if err := rows.Scan(&seq, &runID, &raw); err != nil {
+						rows.Close()
+						return err
+					}
+					var p endedLaneEventPayload
+					if err := json.Unmarshal(raw, &p); err != nil {
+						continue
+					}
+					lane, itemID := p.Decision.LaneID, p.Decision.ItemID
+					if lane == "" || itemID == "" {
+						continue
+					}
+					if kind == nodeAdvancedKind && p.ParentRunID != "" {
+						runID = p.ParentRunID
+					}
+					cand := endedLaneOwner{runID: runID, itemID: itemID, seq: seq}
+					if prev, ok := nextEventOwners[lane]; !ok || cand.newerOrEqual(prev) {
+						nextEventOwners[lane] = cand
+					}
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return err
+				}
+				rows.Close()
+			}
+		}
+
+		owners := make(map[string]endedLaneOwner, len(idleLanes))
+		args := make([]any, len(idleLanes))
+		conds := make([]string, len(idleLanes))
+		for i, lane := range idleLanes {
+			args[i] = lane
+			conds[i] = "lane_id = ?"
+			if owner, ok := nextEventOwners[lane]; ok {
+				owners[lane] = owner
+			}
+		}
+		rows, err = queryEndedLaneRows(r, `SELECT run_id, COALESCE(item_id, ''), lane_id, event_seq, finished_at, started_at FROM runs WHERE `+strings.Join(conds, " OR "), args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var runID, itemID, lane string
+			var seq, finishedAt, startedAt int64
+			if err := rows.Scan(&runID, &itemID, &lane, &seq, &finishedAt, &startedAt); err != nil {
+				rows.Close()
+				return err
+			}
+			if lane == "" || itemID == "" || runID == "" {
+				continue
+			}
+			cand := endedLaneOwner{
+				runID:      runID,
+				itemID:     itemID,
+				seq:        seq,
+				fromRuns:   true,
+				finishedAt: finishedAt,
+				startedAt:  startedAt,
+			}
+			if prev, ok := owners[lane]; !ok || cand.newerOrEqual(prev) {
+				owners[lane] = cand
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+
+		l.endedLanes.storePath = l.cfg.Store
+		l.endedLanes.lastSeq = head
+		l.endedLanes.eventOwners = nextEventOwners
+
+		unchecked := make([]string, 0, len(idleLanes))
+		for _, lane := range idleLanes {
+			owner, ok := owners[lane]
+			if !ok {
+				continue
+			}
+			if clean, ok := l.endedLanes.cleanLanes[lane]; ok && clean.runID == owner.runID && clean.epoch == epochsBefore[lane] {
+				continue
+			}
+			unchecked = append(unchecked, lane)
+		}
+		if len(unchecked) == 0 {
+			return nil
+		}
+
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return err
+		}
+		states := make(map[string]string, len(unchecked))
+		existsByItem := make(map[string]bool, len(unchecked))
+		var endedIdle []endedLaneCandidate
+		for _, lane := range unchecked {
+			owner := owners[lane]
+			state, seen := states[owner.itemID]
+			exists := existsByItem[owner.itemID]
+			if !seen {
+				err := queryEndedLaneRow(r, `SELECT state FROM items WHERE item_id = ?`, owner.itemID).Scan(&state)
+				if err == sql.ErrNoRows {
+					exists = false
+				} else if err != nil {
+					return err
+				} else {
+					exists = true
+				}
+				states[owner.itemID], existsByItem[owner.itemID] = state, exists
+			}
+			if exists && !finishedState(declared.Parsed, state) {
+				continue
+			}
+			if !exists {
+				state = "removed"
+			}
+			endedIdle = append(endedIdle, endedLaneCandidate{
+				lane:      lane,
+				runID:     owner.runID,
+				itemID:    owner.itemID,
+				itemState: state,
+			})
+		}
+		if len(endedIdle) == 0 {
+			return nil
+		}
+
 		works, err := readPending(r)
 		if err != nil {
 			return err
@@ -322,92 +584,10 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 				busy[w.Decision.LaneID] = true
 			}
 		}
-
-		type laneOwner struct {
-			runID  string
-			itemID string
-			seq    int64
-		}
-		owners := map[string]laneOwner{}
-		rows, err = r.Query(`SELECT seq, kind, object_id, payload FROM events WHERE kind IN (?, ?) AND object_type = 'run' ORDER BY seq`, dispatchStartedKind, nodeAdvancedKind)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var seq int64
-			var kind, runID string
-			var raw []byte
-			if err := rows.Scan(&seq, &kind, &runID, &raw); err != nil {
-				rows.Close()
-				return err
+		for _, c := range endedIdle {
+			if !busy[c.lane] {
+				candidates = append(candidates, c)
 			}
-			var w pendingWork
-			if err := json.Unmarshal(raw, &w); err != nil {
-				continue
-			}
-			lane := w.Decision.LaneID
-			if lane == "" || w.Decision.ItemID == "" {
-				continue
-			}
-			if kind == nodeAdvancedKind && w.ParentRunID != "" {
-				runID = w.ParentRunID
-			}
-			owners[lane] = laneOwner{runID: runID, itemID: w.Decision.ItemID, seq: seq}
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		rows.Close()
-
-		rows, err = r.Query(`SELECT run_id, COALESCE(item_id, ''), lane_id, event_seq FROM runs ORDER BY event_seq, finished_at, started_at, run_id`)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var runID, itemID, lane string
-			var seq int64
-			if err := rows.Scan(&runID, &itemID, &lane, &seq); err != nil {
-				rows.Close()
-				return err
-			}
-			if lane == "" || itemID == "" || runID == "" {
-				continue
-			}
-			prev, ok := owners[lane]
-			if !ok || seq >= prev.seq {
-				owners[lane] = laneOwner{runID: runID, itemID: itemID, seq: seq}
-			}
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		rows.Close()
-
-		lanes := make([]string, 0, len(owners))
-		for lane := range owners {
-			lanes = append(lanes, lane)
-		}
-		sort.Strings(lanes)
-		for _, lane := range lanes {
-			if busy[lane] {
-				continue
-			}
-			owner := owners[lane]
-			state, exists := states[owner.itemID]
-			if exists && !finishedState(declared.Parsed, state) {
-				continue
-			}
-			if !exists {
-				state = "removed"
-			}
-			candidates = append(candidates, endedLaneCandidate{
-				lane:      lane,
-				runID:     owner.runID,
-				itemID:    owner.itemID,
-				itemState: state,
-			})
 		}
 		return nil
 	})
@@ -428,26 +608,26 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 			l.reportf("loop: lane %s holds uncommitted work from ended item %s (%s) that could not be saved: %v\n", c.lane, c.itemID, c.itemState, err)
 			continue
 		}
-		if !saved {
-			continue
-		}
-		if head, err := l.revParse(ctx, target, "HEAD"); err == nil && head != "" {
-			if err := l.pinLane(ctx, c.lane, c.runID, head); err != nil {
-				l.reportf("loop: lane %s head could not be pinned before restore: %v\n", c.lane, err)
+		if saved {
+			if head, err := l.revParse(ctx, target, "HEAD"); err == nil && head != "" {
+				if err := l.pinLane(ctx, c.lane, c.runID, head); err != nil {
+					l.reportf("loop: lane %s head could not be pinned before restore: %v\n", c.lane, err)
+					continue
+				}
+			}
+			if err := l.restoreForkDelivery(ctx, c.lane, c.runID); err != nil {
+				l.reportf("loop: lane %s fork checkout could not be restored after saving ended item %s: %v\n", c.lane, c.itemID, err)
 				continue
 			}
+			if err := l.resetLane(ctx, c.lane); err != nil {
+				l.reportf("loop: lane %s could not be restored after saving ended item %s: %v\n", c.lane, c.itemID, err)
+				continue
+			}
+			if l.hasLaneCondition(c.lane, ReasonLaneUncommittedWork) {
+				_ = l.restoreLane(ctx, c.lane)
+			}
 		}
-		if err := l.restoreForkDelivery(ctx, c.lane, c.runID); err != nil {
-			l.reportf("loop: lane %s fork checkout could not be restored after saving ended item %s: %v\n", c.lane, c.itemID, err)
-			continue
-		}
-		if err := l.resetLane(ctx, c.lane); err != nil {
-			l.reportf("loop: lane %s could not be restored after saving ended item %s: %v\n", c.lane, c.itemID, err)
-			continue
-		}
-		if l.hasLaneCondition(c.lane, ReasonLaneUncommittedWork) {
-			_ = l.restoreLane(ctx, c.lane)
-		}
+		l.recordCleanEndedLane(c.lane, c.runID, epochsBefore[c.lane], saved)
 	}
 	return nil
 }

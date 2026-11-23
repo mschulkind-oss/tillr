@@ -3,8 +3,11 @@ package drain
 import (
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -13,28 +16,119 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// Detect raw edits without refolding the event log. Include values rather
-// than lengths so an unlogged same-size replacement still invalidates the view.
+type sqlReader interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+type signatureDigest [4]uint64
+
+func (d *signatureDigest) add(sum [32]byte) {
+	d[0] += binary.LittleEndian.Uint64(sum[0:8])
+	d[1] += binary.LittleEndian.Uint64(sum[8:16])
+	d[2] += binary.LittleEndian.Uint64(sum[16:24])
+	d[3] += binary.LittleEndian.Uint64(sum[24:32])
+}
+
+func (d signatureDigest) sum(schema versionSchema) [32]byte {
+	var buf [33]byte
+	if schema.hasCriteria {
+		buf[0] |= 1
+	}
+	if schema.hasClaimClass {
+		buf[0] |= 2
+	}
+	if schema.hasEdges {
+		buf[0] |= 4
+	}
+	binary.LittleEndian.PutUint64(buf[1:9], d[0])
+	binary.LittleEndian.PutUint64(buf[9:17], d[1])
+	binary.LittleEndian.PutUint64(buf[17:25], d[2])
+	binary.LittleEndian.PutUint64(buf[25:33], d[3])
+	return sha256.Sum256(buf[:])
+}
+
+func hashSignatureRows(r sqlReader, acc *signatureDigest, tag byte, query string, colCount int) error {
+	rows, err := r.Query(query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	vals := make([]any, colCount)
+	ptrs := make([]any, colCount)
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	buf := make([]byte, 0, 1024)
+	for rows.Next() {
+		if err := rows.Scan(ptrs...); err != nil {
+			return err
+		}
+		buf = append(buf[:0], tag)
+		for _, v := range vals {
+			switch val := v.(type) {
+			case nil:
+				buf = append(buf, 0)
+			case int64:
+				buf = binary.LittleEndian.AppendUint64(append(buf, 1), uint64(val))
+			case float64:
+				buf = binary.LittleEndian.AppendUint64(append(buf, 2), math.Float64bits(val))
+			case bool:
+				var b byte
+				if val {
+					b = 1
+				}
+				buf = append(buf, 3, b)
+			case string:
+				buf = binary.LittleEndian.AppendUint64(append(buf, 4), uint64(len(val)))
+				buf = append(buf, val...)
+			case []byte:
+				buf = binary.LittleEndian.AppendUint64(append(buf, 5), uint64(len(val)))
+				buf = append(buf, val...)
+			default:
+				s := fmt.Sprint(val)
+				buf = binary.LittleEndian.AppendUint64(append(buf, 6), uint64(len(s)))
+				buf = append(buf, s...)
+			}
+		}
+		acc.add(sha256.Sum256(buf))
+	}
+	return rows.Err()
+}
+
+// Detect raw edits without refolding the event log or building sorted JSON
+// aggregates in SQLite's temp pager. Include values rather than lengths so an
+// unlogged same-size replacement still invalidates the view.
 func readStartItemsSignature(r *store.Reader, schema versionSchema) ([32]byte, error) {
+	return readStartItemsSignatureOn(r, schema)
+}
+
+func readStartItemsSignatureOn(r sqlReader, schema versionSchema) ([32]byte, error) {
 	fields := []string{"item_id", "updated_at", "state", "title", "rank", "body_ref", "design_doc"}
 	for _, col := range []string{"allowed_paths", "waiting_on", "seat", "express", "workflow", "workflow_args", "judge_mode", "prose", "store_declared"} {
 		if schema.itemColumns[col] {
 			fields = append(fields, col)
 		}
 	}
-	criteria := "NULL"
-	if schema.hasCriteria {
-		class := "NULL"
-		if schema.hasClaimClass {
-			class = "claim_class"
-		}
-		criteria = `(SELECT json_group_array(json_array(item_id, criterion_id, text, state, ` + class + `) ORDER BY item_id, criterion_id) FROM item_criteria)`
+	var acc signatureDigest
+	if err := hashSignatureRows(r, &acc, 'I', `SELECT `+strings.Join(fields, ", ")+` FROM items`, len(fields)); err != nil {
+		return [32]byte{}, err
 	}
-	var raw string
-	err := r.QueryRow(`SELECT json_array(
-		(SELECT json_group_array(json_array(` + strings.Join(fields, ",") + `) ORDER BY item_id) FROM items),
-		(SELECT json_group_array(json_array(item_id, blocked_by) ORDER BY item_id, blocked_by) FROM item_edges), ` + criteria + `)`).Scan(&raw)
-	return sha256.Sum256([]byte(raw)), err
+	if schema.hasEdges {
+		if err := hashSignatureRows(r, &acc, 'E', `SELECT item_id, blocked_by FROM item_edges`, 2); err != nil {
+			return [32]byte{}, err
+		}
+	}
+	if schema.hasCriteria {
+		cols := []string{"item_id", "criterion_id", "text", "state"}
+		if schema.hasClaimClass {
+			cols = append(cols, "claim_class")
+		}
+		if err := hashSignatureRows(r, &acc, 'C', `SELECT `+strings.Join(cols, ", ")+` FROM item_criteria`, len(cols)); err != nil {
+			return [32]byte{}, err
+		}
+	}
+	return acc.sum(schema), nil
 }
 
 func (d startStoreDelta) refreshItems(r *store.Reader, s *startSnapshot, at time.Time, touched map[string]bool) error {
