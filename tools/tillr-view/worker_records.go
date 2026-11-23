@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
+
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -30,12 +32,41 @@ type childrenView struct {
 }
 
 func readWorkerRecords(r *store.Reader, runID, itemID string) ([]progressClaim, map[string]childrenView, error) {
-	claims := []progressClaim{}
-	children := map[string]childrenView{}
 	rows, err := r.Query(`SELECT kind,payload FROM events WHERE kind IN ('run.progress','run.child-session','run.children-recorded','run.observation-error') AND (?='' OR object_id=?) AND (?='' OR json_extract(payload,'$.item_id')=?) ORDER BY seq`, runID, runID, itemID, itemID)
 	if err != nil {
 		return nil, nil, err
 	}
+	return scanWorkerRecords(rows)
+}
+
+// readWorkerRecordsForRuns reads the records of just these runs, through the events_by_object
+// index. A store holds a child-session event for every sample of every child ever run, so
+// reading the kind store-wide decodes a million rows.
+func readWorkerRecordsForRuns(r *store.Reader, runs map[string]bool) ([]progressClaim, map[string]childrenView, error) {
+	if len(runs) == 0 {
+		return []progressClaim{}, map[string]childrenView{}, nil
+	}
+	marks := make([]string, 0, len(runs))
+	args := make([]any, 0, len(runs))
+	for id := range runs {
+		marks = append(marks, "?")
+		args = append(args, id)
+	}
+	rows, err := r.Query(`SELECT kind,payload FROM events WHERE object_type='run' AND object_id IN (`+strings.Join(marks, ",")+`) AND kind IN ('run.progress','run.child-session','run.children-recorded','run.observation-error') ORDER BY seq`, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return scanWorkerRecords(rows)
+}
+
+func scanWorkerRecords(rows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+	Close() error
+}) ([]progressClaim, map[string]childrenView, error) {
+	claims := []progressClaim{}
+	children := map[string]childrenView{}
 	defer rows.Close()
 	for rows.Next() {
 		var kind string
@@ -90,7 +121,24 @@ func readWorkerRecords(r *store.Reader, runID, itemID string) ([]progressClaim, 
 }
 
 func enrichWorkerRecords(r *store.Reader, rows []laneRow) error {
-	claims, children, err := readWorkerRecords(r, "", "")
+	rowRuns := make([]map[string]bool, len(rows))
+	wanted := map[string]bool{}
+	for i := range rows {
+		row := &rows[i]
+		runs := map[string]bool{row.RunID: true}
+		for _, n := range row.Nodes {
+			if n.Attempt == row.Attempt {
+				runs[n.RunID] = true
+			}
+		}
+		rowRuns[i] = runs
+		for id := range runs {
+			if id != "" {
+				wanted[id] = true
+			}
+		}
+	}
+	claims, children, err := readWorkerRecordsForRuns(r, wanted)
 	if err != nil {
 		return err
 	}
@@ -98,12 +146,7 @@ func enrichWorkerRecords(r *store.Reader, rows []laneRow) error {
 		row := &rows[i]
 		row.Progress = []progressClaim{}
 		row.ChildSessions = map[string]childrenView{}
-		runs := map[string]bool{row.RunID: true}
-		for _, n := range row.Nodes {
-			if n.Attempt == row.Attempt {
-				runs[n.RunID] = true
-			}
-		}
+		runs := rowRuns[i]
 		for _, c := range claims {
 			if runs[c.RunID] {
 				row.Progress = append(row.Progress, c)
