@@ -623,26 +623,53 @@ func newStoreItemTerminal(rd *store.Reader) (itemTerminalChecker, error) {
 	if err != nil {
 		return itemTerminalChecker{}, nil
 	}
+	var hasEventSeq bool
+	if err := rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name = 'event_seq')`).Scan(&hasEventSeq); err != nil {
+		return itemTerminalChecker{}, err
+	}
 	d := rec.Parsed
-	cache := map[string]sql.NullString{}
+	type cachedItem struct {
+		state    sql.NullString
+		eventSeq int64
+	}
+	cache := map[string]cachedItem{}
+	load := func(itemID string) (cachedItem, error) {
+		if cached, ok := cache[itemID]; ok {
+			return cached, nil
+		}
+		var item cachedItem
+		var err error
+		if hasEventSeq {
+			err = rd.QueryRow(`SELECT state, COALESCE(event_seq, 0) FROM items WHERE item_id = ?`, itemID).Scan(&item.state, &item.eventSeq)
+		} else {
+			err = rd.QueryRow(`SELECT state FROM items WHERE item_id = ?`, itemID).Scan(&item.state)
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			cache[itemID] = cachedItem{}
+			return cachedItem{}, nil
+		}
+		if err != nil {
+			return cachedItem{}, err
+		}
+		cache[itemID] = item
+		return item, nil
+	}
 	return itemTerminalChecker{
 		ready:       true,
 		closedState: d.Closed,
 		stateOf: func(itemID string) (string, bool, error) {
-			if cached, ok := cache[itemID]; ok {
-				return cached.String, cached.Valid && cached.String != "", nil
-			}
-			var st sql.NullString
-			err := rd.QueryRow(`SELECT state FROM items WHERE item_id = ?`, itemID).Scan(&st)
-			if errors.Is(err, sql.ErrNoRows) {
-				cache[itemID] = sql.NullString{}
-				return "", false, nil
-			}
+			item, err := load(itemID)
 			if err != nil {
 				return "", false, err
 			}
-			cache[itemID] = st
-			return st.String, st.Valid && st.String != "", nil
+			return item.state.String, item.state.Valid && item.state.String != "", nil
+		},
+		seqOf: func(itemID string) int64 {
+			item, err := load(itemID)
+			if err != nil {
+				return 0
+			}
+			return item.eventSeq
 		},
 		isTerminal: func(state string) bool {
 			return state != "" && (state == d.Closed || slices.Contains(d.Finished, state))
@@ -770,6 +797,18 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 				}
 			} else {
 				newest = c.events[len(c.events)-1]
+				if isWindowedEventRule(r.When) {
+					cutoff := max(ep.last, lookup.terminalSeq(trackedID))
+					if newest.Seq <= cutoff {
+						if newest.Seq > ep.last {
+							*changes = append(*changes, func(tx *store.Tx) error {
+								_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
+								return err
+							})
+						}
+						continue
+					}
+				}
 				if newest.Seq > ep.last {
 					*changes = append(*changes, func(tx *store.Tx) error {
 						_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, newest.Seq, now.UnixMilli(), ep.id)

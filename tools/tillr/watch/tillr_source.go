@@ -135,6 +135,9 @@ func (s *TillrStoreSource) Project(ctx context.Context, names []string) (map[str
 					if f.value.waitingOn.Valid {
 						entry["item.waiting_on"] = f.value.waitingOn.String
 					}
+					if f.value.eventSeq > 0 {
+						entry["item.event_seq"] = f.value.eventSeq
+					}
 					itemMap[id] = entry
 				}
 				out["items"] = itemMap
@@ -214,7 +217,15 @@ func (s *TillrStoreSource) prepareRule(ctx context.Context, r Rule, g gitSnapsho
 }
 
 func loadAllItems(rd *store.Reader) (map[string]projectionFact[itemFacts], error) {
-	rows, err := rd.Query(`SELECT item_id, state, seat, waiting_on FROM items`)
+	var hasEventSeq bool
+	if err := rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name = 'event_seq')`).Scan(&hasEventSeq); err != nil {
+		return nil, err
+	}
+	query := `SELECT item_id, state, seat, waiting_on FROM items`
+	if hasEventSeq {
+		query = `SELECT item_id, state, seat, waiting_on, COALESCE(event_seq, 0) FROM items`
+	}
+	rows, err := rd.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -223,8 +234,14 @@ func loadAllItems(rd *store.Reader) (map[string]projectionFact[itemFacts], error
 	for rows.Next() {
 		var id string
 		var f itemFacts
-		if err := rows.Scan(&id, &f.state, &f.seat, &f.waitingOn); err != nil {
-			return nil, err
+		var scanErr error
+		if hasEventSeq {
+			scanErr = rows.Scan(&id, &f.state, &f.seat, &f.waitingOn, &f.eventSeq)
+		} else {
+			scanErr = rows.Scan(&id, &f.state, &f.seat, &f.waitingOn)
+		}
+		if scanErr != nil {
+			return nil, scanErr
 		}
 		out[id] = projectionFact[itemFacts]{value: f}
 	}
@@ -249,7 +266,10 @@ func loadAllWorkflows(rd *store.Reader) (map[string]projectionFact[sql.NullStrin
 	return out, rows.Err()
 }
 
-type itemFacts struct{ state, seat, waitingOn sql.NullString }
+type itemFacts struct {
+	state, seat, waitingOn sql.NullString
+	eventSeq               int64
+}
 
 // storeFacts live for one snapshot, including negative lookups. A rule never
 // sees different values for the same subject, even across event kinds.
