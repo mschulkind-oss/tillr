@@ -32,9 +32,19 @@ const STOP_GUIDANCE: Record<string, string> = {
 };
 
 /** Shares the header's recorded-session rule: running runs alone never prove loop liveness. */
-export function LoopSummary({ drain, passes, error, snapshot, now = Date.now() }: {
+export function LoopSummary({ drain, passes, error, readError, snapshot, now = Date.now() }: {
   drain?: DrainSummary; passes?: PassRow[]; error?: Error | null; snapshot?: SnapshotData; now?: number;
+  /** The snapshot read's failure. Without a snapshot there is no drain summary, and the
+   * absence of one is not a fact about the loop: it is drawn as the failure it is. */
+  readError?: Error | null;
 }) {
+  if (drain === undefined) {
+    return <section className="loop-summary" aria-label="Loop summary">
+      {readError
+        ? <div className="loop-summary__state" role="alert"><ClassState value="alarm" /><span>could not read the store: {readError.message}</span></div>
+        : <div className="loop-summary__state" role="status"><span>Reading the store…</span></div>}
+    </section>;
+  }
   const session = drain?.session;
   const ended = session != null && session.ended_at_ms !== null;
   const alive = loopAlive(drain, now);
