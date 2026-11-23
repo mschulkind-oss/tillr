@@ -377,6 +377,11 @@ def _wait_queue_dir(lock_dir):
     return lock_dir / 'wait-queue'
 
 
+def _monotonic_ns():
+    monotonic_ns = getattr(time, 'monotonic_ns', None)
+    return monotonic_ns() if monotonic_ns is not None else int(time.monotonic() * 1_000_000_000)
+
+
 def _wait_ticket_name(priority, arrival_ns, pid, tid, seq, pools):
     return f'{priority:02d}-{arrival_ns:020d}-{pid:010d}-{tid:020d}-{seq:08d}-{pools}.wait'
 
@@ -389,15 +394,15 @@ def _parse_wait_ticket(name):
         return None
     try:
         priority = int(parts[0])
+        arrival_ns = int(parts[1])
     except ValueError:
         return None
-    return priority, parts[5]
+    return priority, arrival_ns, parts[5]
 
 
 def _register_wait_ticket(wait_queue_dir, priority, pools):
     wait_queue_dir.mkdir(parents=True, exist_ok=True)
-    monotonic_ns = getattr(time, 'monotonic_ns', None)
-    arrival_ns = monotonic_ns() if monotonic_ns is not None else int(time.monotonic() * 1_000_000_000)
+    arrival_ns = _monotonic_ns()
     pid = os.getpid()
     tid = threading.get_ident()
     seq = next(_WAIT_TICKET_SEQ)
@@ -430,7 +435,7 @@ def _release_wait_ticket(ticket_fd, ticket_path):
     _unlock_and_close(ticket_fd)
 
 
-def _waiter_ahead(wait_queue_dir, pool_char, my_priority, my_ticket_name):
+def _waiter_ahead(wait_queue_dir, pool_char, my_priority, my_ticket_name, before_ns=None):
     """Return the priority of the first live waiter ahead of this caller for pool_char, or None."""
     try:
         names = sorted(os.listdir(wait_queue_dir))
@@ -442,9 +447,12 @@ def _waiter_ahead(wait_queue_dir, pool_char, my_priority, my_ticket_name):
             continue
         if my_ticket_name is not None and name >= my_ticket_name:
             break
-        priority, pools = parsed
-        if my_ticket_name is None and priority > my_priority:
-            break
+        priority, arrival_ns, pools = parsed
+        if my_ticket_name is None:
+            if priority > my_priority:
+                break
+            if priority == my_priority and before_ns is not None and arrival_ns >= before_ns:
+                break
         if pool_char not in pools:
             continue
         path = wait_queue_dir / name
@@ -675,6 +683,7 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
             ahead_s = _waiter_ahead(wait_queue_dir, 's', my_priority, ticket_name)
             yielding_s = repair_waiting or proof_waiting or gate_waiting or ahead_s is not None
             if not yielding_s:
+                attempt_ns = _monotonic_ns() if ticket_name is None else None
                 fd, slot_name = try_lock_slot(lock_dir, 'slot', limit, offset)
                 if fd is not None:
                     preempted_s = (
@@ -682,7 +691,8 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                         or (chosen_class in (SLOT_CLASS_ORDINARY, SLOT_CLASS_GATE)
                             and proof_caller_waiting(lock_dir))
                         or (chosen_class == SLOT_CLASS_ORDINARY and gate_caller_waiting(lock_dir))
-                        or _waiter_ahead(wait_queue_dir, 's', my_priority, ticket_name) is not None
+                        or _waiter_ahead(wait_queue_dir, 's', my_priority, ticket_name,
+                                         before_ns=attempt_ns) is not None
                     )
                     if preempted_s:
                         _unlock_and_close(fd)
@@ -701,11 +711,13 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                     and reserved_proof > 0):
                 ahead_p = _waiter_ahead(wait_queue_dir, 'p', my_priority, ticket_name)
                 if not (repair_waiting or ahead_p is not None):
+                    attempt_ns = _monotonic_ns() if ticket_name is None else None
                     fd, slot_name = try_lock_slot(lock_dir, 'proof', reserved_proof, offset)
                     if fd is not None:
                         preempted_p = (
                             (chosen_class != SLOT_CLASS_REPAIR and repair_caller_waiting(lock_dir))
-                            or _waiter_ahead(wait_queue_dir, 'p', my_priority, ticket_name) is not None
+                            or _waiter_ahead(wait_queue_dir, 'p', my_priority, ticket_name,
+                                             before_ns=attempt_ns) is not None
                         )
                         if preempted_p:
                             _unlock_and_close(fd)
@@ -716,9 +728,11 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
             if fd is None and reserved_gate > 0:
                 if chosen_class == SLOT_CLASS_REPAIR:
                     if _waiter_ahead(wait_queue_dir, 'g', my_priority, ticket_name) is None:
+                        attempt_ns = _monotonic_ns() if ticket_name is None else None
                         fd, slot_name = try_lock_slot(lock_dir, 'gate', reserved_gate, offset)
                         if (fd is not None
-                                and _waiter_ahead(wait_queue_dir, 'g', my_priority, ticket_name) is not None):
+                                and _waiter_ahead(wait_queue_dir, 'g', my_priority, ticket_name,
+                                                  before_ns=attempt_ns) is not None):
                             _unlock_and_close(fd)
                             fd = None
                             slot_name = None
@@ -732,10 +746,12 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                             gate_reserved_capped = True
                         else:
                             try:
+                                attempt_ns = _monotonic_ns() if ticket_name is None else None
                                 fd, slot_name = try_lock_slot(lock_dir, 'gate', reserved_gate, offset)
                                 if fd is not None and (
                                     repair_caller_waiting(lock_dir)
-                                    or _waiter_ahead(wait_queue_dir, 'g', my_priority, ticket_name) is not None
+                                    or _waiter_ahead(wait_queue_dir, 'g', my_priority, ticket_name,
+                                                     before_ns=attempt_ns) is not None
                                 ):
                                     _unlock_and_close(fd)
                                     fd = None
