@@ -504,3 +504,35 @@ func TestARetryAcknowledgesTheGatesWordOverTheWalls(t *testing.T) {
 		t.Fatalf("an unjudged-only walled run refused %q", retryAckUnjudged)
 	}
 }
+
+// The item history reads each payload's `state` inside the store: a live store holds ~10 MB
+// of item events, and decoding every one in Go cost half a second per lanes answer. What
+// counts as a state is unchanged: a string, non-empty, in a payload that is valid JSON.
+func TestItemHistoryReadsStatesFromPayloads(t *testing.T) {
+	h := newServeHarness(t)
+	for i, payload := range []string{
+		`{"state":"in-progress"}`,
+		`{"state":"open"}`,
+		`{"state":""}`,
+		`{"state":7}`,
+		`{"other":"x"}`,
+		`not json`,
+		`["state"]`,
+	} {
+		h.exec(`INSERT INTO events(kind,object_type,object_id,payload,ts) VALUES ('item.update','item',?,?,?)`, "hist-"+string(rune('a'+i)), payload, 2000+i)
+	}
+	db, err := store.OpenRead(context.Background(), h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	hist := &dispatchHistory{known: map[string]bool{}, inProgress: map[string]bool{}}
+	if err := db.ReadTx(context.Background(), func(r *store.Reader) error { return readItemHistory(r, hist) }); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string][2]bool{"hist-a": {true, true}, "hist-b": {true, false}, "hist-c": {false, false}, "hist-d": {false, false}, "hist-e": {false, false}, "hist-f": {false, false}, "hist-g": {false, false}} {
+		if hist.known[id] != want[0] || hist.inProgress[id] != want[1] {
+			t.Errorf("%s: known=%v inProgress=%v, want %v", id, hist.known[id], hist.inProgress[id], want)
+		}
+	}
+}
