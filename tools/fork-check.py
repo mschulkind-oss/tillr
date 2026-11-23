@@ -8179,6 +8179,74 @@ def external_inputs(plan: Plan) -> None:
           "the fork-quality steps through the node it runs under).")
 
 
+def _check_fork_name(check: Check) -> str | None:
+    """Return the single fork name a check judges, or None when it is not a per-fork check."""
+    argv = list(check.argv or ())
+    if "--fork" in argv:
+        idx = argv.index("--fork")
+        if idx + 1 < len(argv):
+            name = argv[idx + 1]
+            if re.fullmatch(r"[A-Za-z0-9._-]+", name) and name not in (".", ".."):
+                return name
+    pin_forks: list[str] = []
+    for watch in check.watches:
+        if watch.startswith("yolo-packs/fork-pins/"):
+            name = watch[len("yolo-packs/fork-pins/"):]
+            if "/" not in name and re.fullmatch(r"[A-Za-z0-9._-]+", name) and name not in (".", ".."):
+                pin_forks.append(name)
+    if len(pin_forks) == 1:
+        return pin_forks[0]
+    return None
+
+
+def _fork_pin_mismatch(root: Path, fork: str) -> tuple[str, str] | None:
+    """Return (pin_tip, branch_tip) when yolo-packs/fork-pins/<fork> disagrees with refs/heads/patch/<fork>."""
+    pin_path = root / "yolo-packs" / "fork-pins" / fork
+    try:
+        lines = pin_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    if len(lines) != 3 or not re.fullmatch(r"[0-9a-f]{40}", lines[0]):
+        return None
+    pin_tip = lines[0]
+    candidates = [Path(os.environ["PI_FORKS_ROOT"])] if os.environ.get("PI_FORKS_ROOT") else []
+    if root not in candidates:
+        candidates.append(root)
+    branch_tip = ""
+    for git_root in candidates:
+        res = subprocess.run(
+            ["git", "-C", str(git_root), "rev-parse", "--verify", "--quiet",
+             f"refs/heads/patch/{fork}^{{commit}}"],
+            capture_output=True, text=True,
+        )
+        if res.returncode == 0:
+            candidate = res.stdout.strip()
+            if re.fullmatch(r"[0-9a-f]{40}", candidate):
+                branch_tip = candidate
+                break
+    if not branch_tip or pin_tip == branch_tip:
+        return None
+    return pin_tip, branch_tip
+
+
+def only_pin_mismatches(root: Path, verdicts: list[Check],
+                        unanswered: list[Check]) -> list[tuple[str, str, str]]:
+    """Return sorted (fork, pin_tip, branch_tip) entries iff every failing check is for a fork with a pin mismatch."""
+    if not verdicts or unanswered:
+        return []
+    mismatches: dict[str, tuple[str, str]] = {}
+    for check in verdicts:
+        fork = _check_fork_name(check)
+        if not fork:
+            return []
+        if fork not in mismatches:
+            mismatch = _fork_pin_mismatch(root, fork)
+            if mismatch is None:
+                return []
+            mismatches[fork] = mismatch
+    return [(fork, pin_tip, branch_tip) for fork, (pin_tip, branch_tip) in sorted(mismatches.items())]
+
+
 def report(plan: Plan, record: Record, baseline: dict | None, head: str, changed: list[str],
            outcome: str, seconds: float, yolo_missing: bool, series_count: int,
            root: Path, since: str | None = None, excerpt: str | None = None,
@@ -8319,6 +8387,13 @@ def report(plan: Plan, record: Record, baseline: dict | None, head: str, changed
               f"was re-run")
         for check in verdicts:
             print(f"           {check.kind}: {check.label}")
+        pin_mismatches = only_pin_mismatches(root, verdicts, unanswered)
+        if pin_mismatches:
+            details = ", ".join(
+                f"yolo-packs/fork-pins/{fork} pins {pin_tip[:10]} while refs/heads/patch/{fork} is {branch_tip[:10]}"
+                for fork, pin_tip, branch_tip in pin_mismatches
+            )
+            print(f"fork-check: only failure is a fork pin mismatch -- {details}")
         if unanswered:
             print(f"fork-check: {len(unanswered)} further check(s) could not answer here "
                   f"and are not counted as red; each is named above as ERR or skip.")

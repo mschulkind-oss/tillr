@@ -357,13 +357,13 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 	for {
 		prepared, err := prepareLanding(ctx, s, t, decided, req, rebase)
 		if err != nil {
-			t.dropRecovery(prepared.plan)
+			prepared.dropRecovery(t)
 			return Landing{}, err
 		}
 		if prepared.stored != nil {
 			return *prepared.stored, nil
 		}
-		if changedAt != "" && prepared.plan != nil && prepared.plan.readings() == changedAt {
+		if plan := prepared.ownerPlan(); changedAt != "" && plan != nil && plan.readings() == changedAt {
 			failure := &InstallFailure{Err: errors.New("the install answered that the owner changed a touched path, and the next prediction read every touched path, its index entry and the branch as before")}
 			return t.settleOwner(ctx, s, prepared, req, &publication{}, decided, failure)
 		}
@@ -376,7 +376,7 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 		if err == errTrunkChanged {
 			cleanup := *t
 			cleanup.ctx = context.WithoutCancel(ctx)
-			cleanup.dropRecovery(prepared.plan)
+			prepared.dropRecovery(&cleanup)
 			changedAt = ""
 			if err := ctx.Err(); err != nil {
 				return Landing{}, err
@@ -403,8 +403,8 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 		if errors.Is(err, ErrOwnerChanged) {
 			landing = decided
 			changedAt = ""
-			if prepared.plan != nil {
-				changedAt = prepared.plan.readings()
+			if plan := prepared.ownerPlan(); plan != nil {
+				changedAt = plan.readings()
 			}
 			if err := ctx.Err(); err != nil {
 				return Landing{}, err
@@ -448,8 +448,8 @@ func (t *Trunk) settleOwner(ctx context.Context, s *store.Store, p preparedLandi
 	case errors.As(err, &failure):
 		// The owner's content was put back; the recovery copy stays and the fault names it.
 		ref := ""
-		if p.plan != nil {
-			ref = p.plan.RecoveryRef
+		if plan := p.ownerPlan(); plan != nil {
+			ref = plan.RecoveryRef
 		}
 		restored := "the owner's content was put back exactly"
 		if failure.Fault != "" {
@@ -461,7 +461,7 @@ func (t *Trunk) settleOwner(ctx context.Context, s *store.Store, p preparedLandi
 		}
 		return Landing{}, errors.Join(err, errors.New("fault recorded: "+fault))
 	default:
-		t.dropRecovery(p.plan)
+		p.dropRecovery(t)
 	}
 	if err == nil {
 		req.observation.note("receipt")
@@ -502,6 +502,7 @@ type preparedLanding struct {
 	// the row is written for that commit and the trunk is not moved again.
 	recovered bool
 	rebase    forkRebase
+	pin       forkPinUpdate
 	// plan is the prediction for the trunk's checkout, read before the write transaction.
 	plan *OwnerPlan
 	// stored is the receipt this run already recorded for this head at its marker: the
@@ -510,6 +511,18 @@ type preparedLanding struct {
 	// staleClaims are claims of landings whose move never happened, which the publication's
 	// first write clears (staleClaims).
 	staleClaims []landingClaim
+}
+
+func (p preparedLanding) ownerPlan() *OwnerPlan {
+	if p.plan != nil {
+		return p.plan
+	}
+	return p.pin.plan
+}
+
+func (p preparedLanding) dropRecovery(t *Trunk) {
+	t.dropRecovery(p.plan)
+	t.dropRecovery(p.pin.plan)
 }
 
 func hasTrunkRewrites(r rowQueryer) (bool, error) {
@@ -777,6 +790,21 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 			if err := t.prepareForkCache(req.BaseRef, cacheTip, p.rebase, p.recovered); err != nil {
 				return p, err
 			}
+			pin, err := t.prepareForkPin(req, cacheTip, p.rebase)
+			if err != nil {
+				return p, err
+			}
+			p.pin = pin
+			p.landing.Faults = append(p.landing.Faults, pin.plan.faults()...)
+			if held := pin.plan.Held(); len(held) > 0 {
+				if p.recovered {
+					t.dropRecovery(pin.plan)
+					return p, Externalf("fork delivery %s is already at %s, but trunk %s has uncommitted changes on %s",
+						req.BaseRef, cacheTip, pin.ref, strings.Join(held, ", "))
+				}
+				p.landing.Result, p.landing.Reason = ResultRefused, ReasonTrunkUncommitted
+				p.landing.ConflictPaths = held
+			}
 		}
 	}
 	if p.recovered {
@@ -911,6 +939,16 @@ func publishLanding(ctx context.Context, s *store.Store, t *Trunk, p preparedLan
 			if err := t.RefreshForkCache(req.BaseRef, cacheTip, p.rebase); err != nil {
 				return Landing{}, err
 			}
+			if p.pin.commit != "" {
+				pinInstall, err := t.MoveOwner(p.pin.plan, p.pin.ref, p.pin.commit, p.pin.trunkBefore)
+				if err != nil {
+					return Landing{}, err
+				}
+				pub.install = pinInstall
+				if p.history != nil {
+					p.history.observed = p.pin.commit
+				}
+			}
 		}
 	}
 	if p.history != nil {
@@ -951,6 +989,15 @@ func checkTips(t *Trunk, p preparedLanding, req LandingRequest) error {
 		}
 		if tip != p.observationTip {
 			return Externalf("observed trunk changed during landing preparation; no move made")
+		}
+	}
+	if p.pin.commit != "" {
+		pinTip, err := t.Head(p.pin.ref)
+		if err != nil {
+			return err
+		}
+		if pinTip != p.pin.trunkBefore {
+			return errTrunkChanged
 		}
 	}
 	return nil
