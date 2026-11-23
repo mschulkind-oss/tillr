@@ -67,9 +67,6 @@ func TestRestartAnswersWhileUnboundedWorkIsStillInflight(t *testing.T) {
 			if err := h.l.maybeRolling(ctx, tip, true, &LoopResult{}); !errors.Is(err, errRestartPending) {
 				t.Fatalf("rolling start=%v", err)
 			}
-			if err := h.l.startHeavy(ctx, tip); !errors.Is(err, errRestartPending) {
-				t.Fatalf("heavy start=%v", err)
-			}
 			if _, _, err := h.l.judgeCandidate(ctx, Candidate{}, &LoopResult{}); !errors.Is(err, errRestartPending) {
 				t.Fatalf("judge start=%v", err)
 			}

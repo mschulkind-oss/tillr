@@ -3318,6 +3318,7 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 // the completion is a wake trigger and measurement, not its durable outcome.
 func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingWork, at time.Time, passTiming *PassTiming, watched []string) {
 	runCtx, cancel := context.WithCancel(ctx)
+	runCtx = context.WithValue(runCtx, heavyParentCtxKey{}, ctx)
 	l.mu.Lock()
 	l.markStepActive(d.ItemID, d.RunRequest.RunID)
 	if l.activeCancels == nil {

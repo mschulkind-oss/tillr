@@ -898,6 +898,9 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		return faultResult(result, err)
 	}
 	ctx, cancelCause := context.WithCancelCause(ctx)
+	l.mu.Lock()
+	l.loopCtx = ctx
+	l.mu.Unlock()
 	cancel := func() { cancelCause(nil) }
 	l.setSessionStop(func() { cancelCause(errStopRequested) })
 	defer l.setSessionStop(nil)
