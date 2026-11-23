@@ -549,6 +549,10 @@ func newVerdict(plan PlanPayload) VerdictPayload {
 // binary that is not on the path -- is `error`, never `fail`: the candidate was not
 // judged, and reading that as a red would isolate a candidate for a missing tool.
 func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
+	return runCheckWithPriorFail(check, root, logDir, index, nil)
+}
+
+func runCheckWithPriorFail(check PlanCheck, root, logDir string, index int, priorFail *storedResult) VerdictCheck {
 	notStarted := classifyCheck(checkresult.Observation{
 		Check:        check.CheckID,
 		Source:       checkresult.CheckCommand,
@@ -566,8 +570,7 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 			return outcome
 		}
 	}
-	logPath := filepath.Join(logDir, logName(index, check.CheckID))
-	logFile, err := os.Create(logPath)
+	logFile, logPath, err := openCheckLog(logDir, index, check.CheckID, priorFail)
 	if err != nil {
 		return outcome
 	}
@@ -760,6 +763,30 @@ func checkEnv(check PlanCheck) []string {
 		env = append(env, name+"="+check.Env[name])
 	}
 	return env
+}
+
+// openCheckLog opens the file a check writes its output to. On a first run it is
+// logName(index, checkID); on a rerun after a recorded failure it takes the first
+// unused attempt suffix so the failing record's log_ref keeps its own output.
+func openCheckLog(logDir string, index int, checkID string, priorFail *storedResult) (*os.File, string, error) {
+	base := logName(index, checkID)
+	if priorFail == nil {
+		logPath := filepath.Join(logDir, base)
+		logFile, err := os.Create(logPath)
+		return logFile, logPath, err
+	}
+	stem := strings.TrimSuffix(base, ".log")
+	for attempt := 2; ; attempt++ {
+		logPath := filepath.Join(logDir, fmt.Sprintf("%s.attempt-%d.log", stem, attempt))
+		if priorFail.LogRef != "" && filepath.Clean(logPath) == filepath.Clean(priorFail.LogRef) {
+			continue
+		}
+		logFile, err := os.OpenFile(logPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		return logFile, logPath, err
+	}
 }
 
 // logName is one check's log file name: its plan index and its id, so the logs sort in
