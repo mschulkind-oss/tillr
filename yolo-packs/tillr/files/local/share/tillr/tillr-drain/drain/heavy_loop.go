@@ -201,7 +201,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 func (l *Loop) beginHeavyProof() bool {
 	l.restartMechanical.RLock()
 	defer l.restartMechanical.RUnlock()
-	if l.restartReplaced {
+	if l.restartReplaced.Load() {
 		return false
 	}
 	l.heavyMu.Lock()

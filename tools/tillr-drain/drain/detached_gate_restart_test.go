@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -461,9 +462,14 @@ PY
 		if err := writeForkSafe(exe, []byte("replacement-binary"), 0o755); err != nil {
 			t.Fatal(err)
 		}
+		execed := false
 		l.cfg.Restart = &RestartConfig{
 			Executable: exe,
 			Check:      func(context.Context, string) error { return nil },
+			Exec: func(string, []string, []string) error {
+				execed = true
+				return nil
+			},
 		}
 
 		_ = prepareReadyCandidate(t, f, l, "item-a")
@@ -483,12 +489,17 @@ PY
 		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 		defer cancel()
 
-		// Simulate an active settlement holding restartSettlements > 0 while a restart is pending.
+		// Hold one gate's settlement read lock, then make a restart pending.
 		settleCtx, releaseSettlement, err := l.lockRestartSettlement(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer releaseSettlement()
+		released := false
+		defer func() {
+			if !released {
+				releaseSettlement()
+			}
+		}()
 		if !l.restartDefersToSettlement() {
 			t.Fatalf("expected restartDefersToSettlement() to be true")
 		}
@@ -502,23 +513,53 @@ PY
 			RunRequest: &run.Request{RunID: cB.RunID, ItemID: cB.ItemID, LaneID: cB.LaneID},
 		}
 		claimed, ok, err := l.claimSettledCandidateJudge(settleCtx, dB, &PassTiming{})
-		if err != nil || !ok || claimed == nil {
-			t.Fatalf("claimSettledCandidateJudge refused sibling under active settlement + pending restart: claimed=%v ok=%v err=%v", claimed != nil, ok, err)
+		if err != nil || ok || claimed != nil {
+			t.Fatalf("claimSettledCandidateJudge admitted sibling while restart pending: claimed=%v ok=%v err=%v", claimed != nil, ok, err)
 		}
 
-		sibCtx, releaseSib, err := l.lockRestartSettlement(ctx)
-		if err != nil {
-			t.Fatalf("lockRestartSettlement refused sibling under active settlement + pending restart: %v", err)
+		waiting := make(chan struct{}, 1)
+		l.restartWaitObs = func() {
+			select {
+			case waiting <- struct{}{}:
+			default:
+			}
 		}
-		defer releaseSib()
+		sibDone := make(chan error, 1)
+		go func() {
+			_, releaseSib, err := l.lockRestartSettlement(ctx)
+			if err == nil {
+				releaseSib()
+			}
+			sibDone <- err
+		}()
 
-		var localB LoopResult
-		outB := l.runCandidateExamination(sibCtx, claimed, &localB, &PassTiming{})
-		if outB.err != nil || localB.Landed != 1 {
-			t.Fatalf("sibling runCandidateExamination failed under active settlement + pending restart: out=%+v local=%+v", outB, localB)
+		select {
+		case <-waiting:
+		case <-time.After(hangGuard):
+			t.Fatal("second gate did not wait for pending restart")
 		}
-		if got := itemStateOf(t, f.storePath, "item-b"); got != StateLanded {
-			t.Fatalf("item-b state = %q, want %q", got, StateLanded)
+		select {
+		case err := <-sibDone:
+			t.Fatalf("second gate returned before restart was answered: %v", err)
+		default:
+		}
+
+		// Releasing the first gate lets the restart replace the loop before the second gate takes a hold.
+		releaseSettlement()
+		released = true
+		if handled, stop, err := l.gateRestart(ctx, &LoopResult{}); !handled || stop != StopRestarted || err != nil || !execed {
+			t.Fatalf("gateRestart after first gate release = %v, %q, %v (execed=%v); want replaced", handled, stop, err, execed)
+		}
+		select {
+		case err := <-sibDone:
+			if !errors.Is(err, errRestartPending) {
+				t.Fatalf("second gate err = %v, want errRestartPending", err)
+			}
+		case <-time.After(hangGuard):
+			t.Fatal("second gate did not unblock after restart")
+		}
+		if got := itemStateOf(t, f.storePath, "item-b"); got == StateLanded {
+			t.Fatalf("item-b landed despite pending restart")
 		}
 	})
 }

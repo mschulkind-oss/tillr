@@ -162,6 +162,80 @@ func (l *Loop) restartDefersToSettlement() bool {
 	return l.restartSettlements.Load() > 0
 }
 
+func (l *Loop) markRestartPending() {
+	l.restartGateMu.Lock()
+	if l.restartPendingWait == nil {
+		l.restartPendingWait = make(chan struct{})
+	}
+	l.restartGateMu.Unlock()
+}
+
+func (l *Loop) clearRestartPending() {
+	l.restartGateMu.Lock()
+	ch := l.restartPendingWait
+	l.restartPendingWait = nil
+	l.restartAnswerGen++
+	l.restartGateMu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+func (l *Loop) restartWaitState() (uint64, <-chan struct{}) {
+	l.restartGateMu.Lock()
+	gen, ch := l.restartAnswerGen, l.restartPendingWait
+	l.restartGateMu.Unlock()
+	return gen, ch
+}
+
+func (l *Loop) armRestartPending(gen uint64) (<-chan struct{}, bool) {
+	l.restartGateMu.Lock()
+	defer l.restartGateMu.Unlock()
+	if l.restartAnswerGen != gen {
+		return nil, true
+	}
+	if l.restartPendingWait == nil {
+		l.restartPendingWait = make(chan struct{})
+	}
+	return l.restartPendingWait, false
+}
+
+// waitForRestartAnswer blocks until any pending non-deferred restart request
+// has been answered (replaced or answered without replacing) or deferred.
+func (l *Loop) waitForRestartAnswer(ctx context.Context) error {
+	for {
+		if l.restartReplaced.Load() {
+			return errRestartPending
+		}
+		if l.cfg.Restart == nil || l.restartDeferred() {
+			return nil
+		}
+		gen, waitCh := l.restartWaitState()
+		if waitCh == nil {
+			pending, err := l.restarterPendingWith(ctx, nil)
+			if err != nil {
+				return err
+			}
+			if !pending {
+				return nil
+			}
+			var retry bool
+			waitCh, retry = l.armRestartPending(gen)
+			if retry {
+				continue
+			}
+		}
+		if l.restartWaitObs != nil {
+			l.restartWaitObs()
+		}
+		select {
+		case <-waitCh:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 type runStartAdmissionKey struct{}
 type restartMechanicalKey struct{}
 type restartMechanicalHold struct {
@@ -175,6 +249,49 @@ func (h *restartMechanicalHold) acquire() {
 	h.held = true
 	if h.settling {
 		h.loop.restartSettlements.Add(1)
+	}
+}
+
+func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
+	for {
+		if h.settling {
+			if err := h.loop.waitForRestartAnswer(ctx); err != nil {
+				return err
+			}
+		} else {
+			if h.loop.restartReplaced.Load() {
+				return errRestartPending
+			}
+			if !h.loop.restartDefersToSettlement() {
+				if pending, err := h.loop.buildRestartPending(ctx); err != nil {
+					return err
+				} else if pending {
+					return errRestartPending
+				}
+			}
+		}
+		h.acquire()
+		if h.loop.restartReplaced.Load() {
+			h.release()
+			return errRestartPending
+		}
+		if h.settling && h.loop.cfg.Restart != nil && !h.loop.restartDeferred() {
+			if _, waitCh := h.loop.restartWaitState(); waitCh != nil {
+				// A restart became pending between waitForRestartAnswer and RLock.
+				// Release immediately so the restart is not starved, then wait.
+				h.release()
+				continue
+			}
+		} else if !h.settling && !h.loop.restartDefersToSettlement() {
+			if pending, err := h.loop.buildRestartPending(ctx); err != nil {
+				h.release()
+				return err
+			} else if pending {
+				h.release()
+				return errRestartPending
+			}
+		}
+		return nil
 	}
 }
 
@@ -194,9 +311,8 @@ func (l *Loop) lockRestartMechanical(ctx context.Context) (context.Context, func
 	return l.lockRestartStep(ctx, false)
 }
 
-// An already admitted gate can finish through landing, but a waiting roll need
-// not take on another settlement. While a settlement owns the read lock, other
-// work (including worker claims and staging) can still share it.
+// An already admitted gate can finish through landing, while a pending restart
+// stops new gates and landings from taking a new read hold until it is answered.
 func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func(), error) {
 	return l.lockRestartStep(ctx, true)
 }
@@ -204,51 +320,42 @@ func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func
 func (l *Loop) lockRestartStep(ctx context.Context, settling bool) (context.Context, func(), error) {
 	h, nested := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold)
 	if !nested {
-		h = &restartMechanicalHold{loop: l}
-		h.acquire()
-	} else if !settling || h.settling {
+		h = &restartMechanicalHold{loop: l, settling: settling}
+		if err := h.acquireContext(ctx); err != nil {
+			return ctx, func() {}, err
+		}
+		return context.WithValue(ctx, restartMechanicalKey{}, h), h.release, nil
+	}
+	if !settling || h.settling {
 		return ctx, func() {}, nil
 	}
-	var err error
-	if l.restartReplaced {
-		err = errRestartPending
-	} else if !l.restartDefersToSettlement() {
-		var pending bool
-		pending, err = l.buildRestartPending(ctx)
-		if pending && err == nil {
-			err = errRestartPending
-		}
+	if l.restartReplaced.Load() {
+		return ctx, func() {}, errRestartPending
 	}
-	if err != nil {
-		if !nested {
-			h.release()
-		}
-		return ctx, func() {}, err
-	}
-	if settling {
-		h.settling = true
-		l.restartSettlements.Add(1)
-	}
-	if nested {
-		return ctx, func() {
-			l.restartSettlements.Add(-1)
-			h.settling = false
-		}, nil
-	}
-	return context.WithValue(ctx, restartMechanicalKey{}, h), h.release, nil
+	h.settling = true
+	l.restartSettlements.Add(1)
+	return ctx, func() {
+		l.restartSettlements.Add(-1)
+		h.settling = false
+	}, nil
 }
 
 // restartWork releases the planning pass from a model session or whole-tree
 // check. Its result channel is buffered: an interrupted step can finish cleanup
 // independently, but its discarded result is never recorded as a work failure.
-func restartWork[T any](ctx context.Context, l *Loop, work func(context.Context) (T, error)) (T, error) {
+func restartWork[T any](ctx context.Context, l *Loop, work func(context.Context) (T, error)) (res T, err error) {
 	var zero T
 	if l.cfg.Restart == nil {
 		return work(ctx)
 	}
 	if held, ok := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold); ok {
 		held.release()
-		defer held.acquire()
+		defer func() {
+			if waitErr := held.acquireContext(ctx); waitErr != nil && err == nil {
+				res = zero
+				err = waitErr
+			}
+		}()
 	}
 	var scope pollReaderScope
 	defer scope.close()

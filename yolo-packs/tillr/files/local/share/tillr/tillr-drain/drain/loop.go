@@ -556,10 +556,13 @@ type Loop struct {
 	lastHeavyStatus             string // pass-owned status; cap zero still reports distance from green
 	restartMu                   sync.Mutex
 	flakySweepMu                sync.Mutex
-	restartReplaced             bool
+	restartReplaced             atomic.Bool
 	stopInheritedReaper         func()
 	restartMechanical           sync.RWMutex
-	restartSettlements          atomic.Int32 // admitted gate/landing holds currently blocking exec
+	restartGateMu               sync.Mutex
+	restartPendingWait          chan struct{} // non-nil while a non-deferred restart is pending; closed when answered or deferred
+	restartAnswerGen            uint64        // incremented whenever restartPendingWait is cleared
+	restartSettlements          atomic.Int32  // admitted gate/landing holds currently blocking exec
 	heavyMu                     sync.Mutex
 	fixerWaitMu                 sync.Mutex
 	forkRebaseMu                sync.Mutex
@@ -712,6 +715,7 @@ type Loop struct {
 	restartClock         func() heartbeatTicker
 	restartTickArriveObs func()
 	restartTickDoneObs   func(coalesced bool)
+	restartWaitObs       func()
 	restartPollMu        sync.Mutex
 	lastRestartPoll      time.Time
 	// Document inputs belong to the pass goroutine, never its asynchronous workers.

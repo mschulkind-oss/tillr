@@ -102,9 +102,7 @@ func (l *Loop) restartDeferred() bool {
 }
 
 func (l *Loop) isRestartReplaced() bool {
-	l.restartMu.Lock()
-	defer l.restartMu.Unlock()
-	return l.restartReplaced
+	return l.restartReplaced.Load()
 }
 
 // gateRestart is the first action of a pass and is also called by unbounded waits.
@@ -125,24 +123,32 @@ func (l *Loop) gateRestartWith(ctx context.Context, result *LoopResult, stopChec
 	}
 	l.restartMu.Lock()
 	defer l.restartMu.Unlock()
-	if l.restartReplaced {
+	if l.restartReplaced.Load() {
 		return true, StopRestarted, nil
 	}
 	// Exec would discard the pending follow-up actions, even if the current
 	// command survived as an inherited child. Keep processing passes meanwhile.
 	if l.restartDeferred() {
+		l.clearRestartPending()
 		return false, "", nil
 	}
 	rs := l.restarter()
 	pending, err := l.restarterPendingWith(ctx, scope)
 	if err != nil || !pending {
+		if err == nil {
+			l.clearRestartPending()
+		}
 		return false, "", err
 	}
+	// Prevent new gates and landings from taking restartMechanical while this
+	// restart is pending, so already-held locks drain instead of starving exec.
+	l.markRestartPending()
 	// Do not queue an exclusive waiter behind another item's gate or landing.
 	// The request stays unanswered and a subsequent pass can take it.
 	if !l.restartMechanical.TryLock() {
 		return false, "", nil
 	}
+	defer l.clearRestartPending()
 	defer l.restartMechanical.Unlock()
 	request, replace, err := rs.Settle(ctx)
 	if err != nil {
@@ -185,7 +191,7 @@ func (l *Loop) gateRestartWith(ctx context.Context, result *LoopResult, stopChec
 		}
 		return true, "", rs.Refuse(ctx, request, "exec: "+err.Error())
 	}
-	l.restartReplaced = true
+	l.restartReplaced.Store(true)
 	return true, StopRestarted, nil
 }
 
