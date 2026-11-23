@@ -62,13 +62,19 @@ type vantageCache struct {
 	raw      []byte
 	at       time.Time
 	inflight *vantageFlight
+	// builtAt is when the walk that made raw began: the index describes the documents as
+	// they were then, so that is its age. refreshErr is the last rebuild's failure, kept
+	// until a rebuild works.
+	builtAt    time.Time
+	refreshErr string
 }
 
 type vantageFlight struct {
-	fp   string
-	done chan struct{}
-	raw  []byte
-	err  error
+	started time.Time
+	fp      string
+	done    chan struct{}
+	raw     []byte
+	err     error
 }
 
 func newVantageCache(root string, command []string) *vantageCache {
@@ -82,6 +88,11 @@ type vantageLookup struct {
 	MS            float64 `json:"ms"`
 	FingerprintMS float64 `json:"fingerprint_ms"`
 	AgeMS         float64 `json:"age_ms,omitempty"`
+	// Stale says the index served is older than the documents: it was built before the last
+	// change, and a rebuild is running (Refreshing) or has just failed (RefreshError).
+	Stale        bool   `json:"stale,omitempty"`
+	Refreshing   bool   `json:"refreshing,omitempty"`
+	RefreshError string `json:"refresh_error,omitempty"`
 }
 
 // vantagePrefetchKey carries one request's index lookup, made before its read transaction
@@ -141,9 +152,25 @@ func (c *vantageCache) lookup(ctx context.Context) ([]byte, vantageLookup, error
 		fp = "uncached:" + strconv.FormatUint(c.runs.Add(1), 10)
 	}
 	c.mu.Lock()
+	age := func() float64 { return round1(float64(c.now().Sub(c.builtAt).Microseconds()) / 1000) }
 	if c.raw != nil && c.fp == fp && c.now().Sub(c.at) < c.maxAge {
 		raw := c.raw
-		look.Cache, look.AgeMS = "hit", round1(float64(c.now().Sub(c.at).Microseconds())/1000)
+		look.Cache, look.AgeMS = "hit", age()
+		c.mu.Unlock()
+		look.MS = msSince(c.now, start)
+		return raw, look, nil
+	}
+	// An index that is out of date is still the best answer there is: serve it at once and
+	// rebuild once in the background, so the next request after the rebuild uses the new
+	// one. A caller-named command is never reused (see above), so it never answers stale.
+	if c.raw != nil && !strings.HasPrefix(fp, "uncached:") {
+		raw := c.raw
+		if c.inflight == nil {
+			c.inflight = &vantageFlight{fp: fp, started: c.now(), done: make(chan struct{})}
+			go c.fly(c.inflight)
+		}
+		look.Cache, look.AgeMS = "stale", age()
+		look.Stale, look.Refreshing, look.RefreshError = true, true, c.refreshErr
 		c.mu.Unlock()
 		look.MS = msSince(c.now, start)
 		return raw, look, nil
@@ -152,7 +179,7 @@ func (c *vantageCache) lookup(ctx context.Context) ([]byte, vantageLookup, error
 	look.Cache = "shared"
 	if flight == nil || flight.fp != fp {
 		look.Cache = "miss"
-		flight = &vantageFlight{fp: fp, done: make(chan struct{})}
+		flight = &vantageFlight{fp: fp, started: c.now(), done: make(chan struct{})}
 		c.inflight = flight
 		go c.fly(flight)
 	}
@@ -185,7 +212,9 @@ func (c *vantageCache) fly(f *vantageFlight) {
 	f.raw, f.err = raw, err
 	c.mu.Lock()
 	if err == nil {
-		c.fp, c.raw, c.at = f.fp, raw, c.now()
+		c.fp, c.raw, c.at, c.builtAt, c.refreshErr = f.fp, raw, c.now(), f.started, ""
+	} else {
+		c.refreshErr = err.Error()
 	}
 	if c.inflight == f {
 		c.inflight = nil

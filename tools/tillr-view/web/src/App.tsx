@@ -1,3 +1,4 @@
+import { DocumentIndexNotice } from "./components/DocumentIndexNotice";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { DesignsPage } from "./components/Designers";
 import { LanePage } from "./components/LanePage";
@@ -76,5 +77,5 @@ export function App() {
   else if (trunk) screen = <TrunkView route={trunk} paused={paused} live={live} />;
   else if (questionsOpen) screen = <QuestionsView data={questions.data} error={questions.error} pending={questions.isPending} refreshing={questions.isFetching && !questions.isPending} onRetry={() => void questions.refetch()} onClose={() => { window.location.hash = ""; }} baseUrl={snapshot.data?.snapshot.vantage_base_url ?? ""} items={snapshot.data?.data.items ?? []} onSelectItem={item => { window.location.hash = `#/item/${encodeURIComponent(item)}`; }} />;
   else screen = <main className="home"><h1>Page unavailable</h1><p role="alert">This page is not built yet: {ENTITY_KINDS.includes(kind as EntityKind) && id ? <EntityLink kind={kind as EntityKind} id={id} /> : hash}.</p><a href="#/">Return to Home</a></main>;
-  return <ObservatoryShell hash={hash} snapshot={snapshot.data} snapshotError={snapshot.error} passes={passes.data?.data} passesError={passes.error} live={live} paused={paused} onPause={onPause} onRefresh={refresh}><RenderTimer id="screen">{screen}</RenderTimer></ObservatoryShell>;
+  return <ObservatoryShell hash={hash} snapshot={snapshot.data} snapshotError={snapshot.error} passes={passes.data?.data} passesError={passes.error} live={live} paused={paused} onPause={onPause} onRefresh={refresh}><RenderTimer id="screen">{(home || items || path === "#/graph") && <DocumentIndexNotice status={waiting.data?.documentIndex} />}{screen}</RenderTimer></ObservatoryShell>;
 }
