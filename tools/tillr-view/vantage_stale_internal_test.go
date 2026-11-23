@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -178,6 +177,28 @@ func TestWhyAnswerSaysWhenTheDocumentIndexIsStale(t *testing.T) {
 	if index["state"] != "refreshing" || index["age_ms"] != float64(45000) || index["message"] == "" {
 		t.Fatalf("a stale index: %v", index)
 	}
+	// The rebuild fails: nothing is refreshing now, and the answer says it failed.
+	r.mu.Lock()
+	r.failure = errors.New("uvx: not found")
+	r.mu.Unlock()
 	r.release <- struct{}{}
-	_ = os.Stderr
+	waitFor(t, func() bool {
+		_, body, _ := h.get("/api/v1/why")
+		data, _ := body["data"].(map[string]any)
+		status, _ := data["document_index"].(map[string]any)
+		return status["state"] == "failed"
+	})
+	_, body, _ = h.get("/api/v1/why")
+	index = body["data"].(map[string]any)["document_index"].(map[string]any)
+	if index["refresh_error"] != "uvx: not found" || index["age_ms"] == nil || index["message"] == "" {
+		t.Fatalf("a failed rebuild: %v", index)
+	}
+	// A changed document starts a rebuild: refreshing again, still carrying the last failure.
+	r.edit("tree-3", staleTestIndexNew)
+	_, body, _ = h.get("/api/v1/why")
+	index = body["data"].(map[string]any)["document_index"].(map[string]any)
+	if index["state"] != "refreshing" || index["refresh_error"] != "uvx: not found" {
+		t.Fatalf("a new rebuild after a failure: %v", index)
+	}
+	r.release <- struct{}{}
 }

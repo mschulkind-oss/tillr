@@ -203,8 +203,9 @@ type whyCache struct {
 // documentIndexStatus is what /why says about the Vantage index its questions came from, so
 // the page can show that the answer used an index older than the documents.
 type documentIndexStatus struct {
-	// State is "current", "refreshing" (an older index was used while a rebuild runs, or
-	// after one failed) or "unavailable" (no index could be built).
+	// State is "current", "refreshing" (an older index was used while a rebuild runs),
+	// "failed" (an older index was used and the last rebuild failed; none is running) or
+	// "unavailable" (no index could be built).
 	State        string  `json:"state"`
 	AgeMS        float64 `json:"age_ms,omitempty"`
 	RefreshError string  `json:"refresh_error,omitempty"`
@@ -215,10 +216,13 @@ func indexStatus(look vantageLookup, err error) documentIndexStatus {
 	switch {
 	case err != nil:
 		return documentIndexStatus{State: "unavailable", Message: fmt.Sprintf("The document index could not be built: %v", err)}
+	case look.Stale && !look.Refreshing && look.RefreshError != "":
+		return documentIndexStatus{State: "failed", AgeMS: look.AgeMS, RefreshError: look.RefreshError,
+			Message: fmt.Sprintf("The last document index rebuild failed (%s); this answer uses the index built %s ago. It is rebuilt when a document changes.", look.RefreshError, ageWords(look.AgeMS))}
 	case look.Stale:
 		msg := fmt.Sprintf("The document index is being refreshed; this answer uses one built %s ago.", ageWords(look.AgeMS))
 		if look.RefreshError != "" {
-			msg = fmt.Sprintf("The last document index rebuild failed (%s); this answer uses the index built %s ago.", look.RefreshError, ageWords(look.AgeMS))
+			msg = fmt.Sprintf("The document index is being refreshed after a failed rebuild (%s); this answer uses one built %s ago.", look.RefreshError, ageWords(look.AgeMS))
 		}
 		return documentIndexStatus{State: "refreshing", AgeMS: look.AgeMS, RefreshError: look.RefreshError, Message: msg}
 	}

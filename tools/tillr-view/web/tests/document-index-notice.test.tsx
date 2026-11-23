@@ -31,7 +31,7 @@ test("a stale document index is said plainly on Home, with its age", async () =>
 });
 
 test("a failed rebuild is shown, not hidden", async () => {
-  mount({ state: "refreshing", age_ms: 90000, refresh_error: "uvx: not found", message: "The last document index rebuild failed (uvx: not found); this answer uses the index built 1m30s ago." });
+  mount({ state: "failed", age_ms: 90000, refresh_error: "uvx: not found", message: "The last document index rebuild failed (uvx: not found); this answer uses the index built 1m30s ago." });
   expect((await screen.findByText(/rebuild failed/)).textContent).toContain("uvx: not found");
 });
 
@@ -40,4 +40,19 @@ test("a current index shows no notice", async () => {
   await screen.findByRole("navigation", { name: "Observatory" });
   await new Promise(resolve => setTimeout(resolve, 100));
   expect(container.querySelector(".document-index-notice")).toBeNull();
+});
+
+test("a failed rebuild is named as failed, not as refreshing", async () => {
+  mount({ state: "failed", age_ms: 90000, refresh_error: "uvx: not found", message: "The last document index rebuild failed (uvx: not found); this answer uses the index built 1m30s ago." });
+  const notice = await screen.findByRole("status");
+  expect(notice.className).toContain("notice--blocked");
+  expect(notice.textContent).toContain("rebuild failed");
+  expect(notice.textContent).not.toContain("being refreshed");
+});
+
+test("a refreshing index is not styled as a failure", async () => {
+  mount({ state: "refreshing", age_ms: 5000, refresh_error: "earlier failure", message: "The document index is being refreshed after a failed rebuild (earlier failure); this answer uses one built 5s ago." });
+  const notice = await screen.findByRole("status");
+  expect(notice.className).toContain("notice--accent");
+  expect(notice.className).not.toContain("notice--blocked");
 });
