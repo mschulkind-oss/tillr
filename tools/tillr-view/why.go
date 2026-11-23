@@ -257,7 +257,7 @@ func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure)
 	// The loop's last recorded pass answers when a loop is running and has recorded one
 	// (why_pass.go). The planner below is the fallback, and its answer says so.
 	fallback := ""
-	if raw, head, err := s.whyFromPass(r.Context(), time.Now().UTC()); err == nil {
+	if raw, head, err := s.whyFromPass(r.Context(), s.clock().UTC()); err == nil {
 		phase(r.Context(), "planner", map[string]any{"source": "pass", "ms": 0, "bytes": len(raw)})
 		return whyPayloadData{raw: raw, head: head}, nil
 	} else {

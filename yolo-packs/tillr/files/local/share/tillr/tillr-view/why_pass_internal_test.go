@@ -26,7 +26,9 @@ func whyPassHarness(t *testing.T, live bool) (*serveHarness, func() int) {
 		t.Fatal(err)
 	}
 	if live {
-		now := time.Now().UnixMilli()
+		at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+		h.setNow(at)
+		now := at.UnixMilli()
 		h.exec(`CREATE TABLE IF NOT EXISTS drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, refreshed_at INTEGER NOT NULL, next_pass_at INTEGER NOT NULL, ended_at INTEGER)`)
 		h.exec(fmt.Sprintf(`INSERT INTO drain_sessions VALUES ('live', 1, %d, %d, NULL)`, now, now+3600_000))
 	}

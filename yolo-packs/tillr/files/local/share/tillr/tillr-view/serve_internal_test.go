@@ -36,6 +36,7 @@ type serveHarness struct {
 	// that points an item at a design document without configuring an index gets
 	// `questions-unknown` rather than a question list this test invented.
 	questionsCmd []string
+	clock        *fakeClock
 	srv          *server
 	http         *httptest.Server
 }
@@ -222,12 +223,24 @@ func (h *serveHarness) start() {
 	if srv.problem != nil {
 		h.t.Fatalf("opening the serve face answered %s: %s", srv.problem.code, srv.problem.note)
 	}
+	h.clock = &fakeClock{}
+	srv.now = func() time.Time {
+		if at := h.clock.now(); !at.IsZero() {
+			return at
+		}
+		return time.Now()
+	}
 	h.srv = srv
 	h.http = httptest.NewServer(srv.routes())
 	h.t.Cleanup(func() {
 		h.http.Close()
 		srv.close()
 	})
+}
+
+// setNow pins the server's clock to at for subsequent HTTP requests.
+func (h *serveHarness) setNow(at time.Time) {
+	h.clock.set(at)
 }
 
 // get runs one route and answers its status and decoded body.

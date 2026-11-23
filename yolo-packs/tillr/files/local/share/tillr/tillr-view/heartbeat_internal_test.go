@@ -33,7 +33,9 @@ func TestSnapshotLiveSessionHidesHistoricalStop(t *testing.T) {
 	writeLoopResult(t, h.loopDir, "20261113T065219Z", "operator-stop", nil)
 	h.exec(`CREATE TABLE drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL,
 	 refreshed_at INTEGER NOT NULL, next_pass_at INTEGER NOT NULL, ended_at INTEGER)`)
-	now := time.Now().UnixMilli()
+	at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	h.setNow(at)
+	now := at.UnixMilli()
 	h.exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at)
 	 VALUES ('live', ?, ?, ?)`, now-30000, now, now+60000)
 	status, env, raw := h.get("/api/v1/snapshot")
@@ -73,7 +75,9 @@ func TestLoopLivenessUsesTheSessionDeadlineAndStop(t *testing.T) {
 	h.exec(`CREATE TABLE drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL,
 	 refreshed_at INTEGER NOT NULL, next_pass_at INTEGER NOT NULL, ended_at INTEGER)`)
 	h.exec(`DELETE FROM lanes; UPDATE runs SET state = 'finished'`)
-	now := time.Now().UnixMilli()
+	at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	h.setNow(at)
+	now := at.UnixMilli()
 	h.exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at) VALUES ('live', ?, ?, ?)`, now, now, now+60000)
 	check := func(want bool) {
 		t.Helper()
@@ -97,7 +101,9 @@ func TestSnapshotSessionCarriesTheConfiguredLanes(t *testing.T) {
 	h := newServeHarness(t)
 	h.exec(`CREATE TABLE drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL,
 	 refreshed_at INTEGER NOT NULL, next_pass_at INTEGER NOT NULL, ended_at INTEGER, lanes TEXT)`)
-	now := time.Now().UnixMilli()
+	at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	h.setNow(at)
+	now := at.UnixMilli()
 	h.exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, lanes)
 	 VALUES ('live', ?, ?, ?, '["lane-1","express-1"]')`, now, now, now+60000)
 	_, env, raw := h.get("/api/v1/snapshot")

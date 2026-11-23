@@ -236,7 +236,7 @@ func readWaitingAt(ctx context.Context, path string, questions vantage.QuestionS
 }
 
 func (s *server) waitingPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
-	now := time.Now().UTC()
+	now := s.clock().UTC()
 	if rawNow := req.URL.Query().Get("now"); rawNow != "" {
 		parsed, err := time.Parse(time.RFC3339, rawNow)
 		if err != nil {
