@@ -787,8 +787,6 @@ type itemView struct {
 	LatestDecision *dispatchView  `json:"latest_decision"`
 	LatestRun      *runSummary    `json:"latest_run"`
 	BlockedBy      []string       `json:"blocked_by"`
-	// Work is what the item has done beside the attempt number (item_progress.go).
-	Work itemProgress `json:"work"`
 }
 
 // snapshotData is the two-item drain view: every item projected, with its runs and the
@@ -989,10 +987,6 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 		}
 	}
 	enqueued := enqueuedCandidates(candidates, attempts)
-	progress, err := readItemProgress(r)
-	if err != nil {
-		return nil, unreadable(err)
-	}
 	lastDispatch := map[string]dispatchView{}
 	for _, d := range dispatchViews(dispatches) {
 		lastDispatch[d.ItemID] = d
@@ -1064,7 +1058,6 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 			Place:       places[it.ItemID],
 			UpdatedAtMS: it.UpdatedAtMS,
 			Projected:   projected,
-			Work:        progress[it.ItemID],
 		}
 		if costSeenItem {
 			view.CostUSD = &cost

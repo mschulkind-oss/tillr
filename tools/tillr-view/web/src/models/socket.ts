@@ -36,6 +36,11 @@ export const RECONNECT_STABLE_MS = 1_000;
  * apart, and the last frame in a burst is never lost — it is answered when the gap ends. */
 export const LANES_REFRESH_MIN_MS = 2_000;
 
+/** The query roots whose hooks poll on their own interval whether or not the socket is up
+ * (queries.ts: lanes, waiting, passes, designs, questions). The socket's connect-time
+ * refresh skips them. */
+const POLLED_ROOTS: ReadonlySet<string> = new Set(["lanes", "waiting", "passes", "designs", "questions"]);
+
 /** The reconnect delay after `attempt` consecutive failures, counted from zero. */
 export function reconnectDelay(attempt: number): number {
   return Math.min(RECONNECT_FIRST_MS * 2 ** attempt, RECONNECT_MAX_MS);
@@ -162,7 +167,10 @@ export function useObservatorySocket(
         // changed in between is in neither the cache nor a frame: one read on connect
         // closes that window, and it is the only unconditional one — unless the operator
         // has paused, in which case the screen they paused is the screen they keep.
-        if (!paused.current) void client.invalidateQueries();
+        // The reads that poll on their own clock (lanes, waiting, passes, designs,
+        // questions) are not re-read here: they were fetched with this page and refetch
+        // themselves, and re-reading the slow ones (/why) on connect only restarts them.
+        if (!paused.current) void client.invalidateQueries({ predicate: query => !POLLED_ROOTS.has(String(query.queryKey[0])) });
       };
       opened.onmessage = (event: MessageEvent) => {
         const frame = parseFrame(event.data);
@@ -173,10 +181,13 @@ export function useObservatorySocket(
         // The pause outranks the frame: the store may have moved, and the operator asked
         // to keep reading what they were reading.
         if (paused.current) return;
-        if (frame.changed.some(name => name === "snapshot" || name.startsWith("runlog:") || name.startsWith("runs:"))) {
+        // Only a frame that names a run's log or subtree is lane activity. A `snapshot` frame
+        // refetches the snapshot alone: /lanes and /why poll on their own, and invalidating
+        // an in-flight query cancels and restarts it, so a busy drain's frames would keep
+        // the 10 s and 28 s reads from ever finishing.
+        if (frame.changed.some(name => name.startsWith("runlog:") || name.startsWith("runs:"))) {
           refreshLanes();
         }
-        if (frame.changed.includes("snapshot")) void client.invalidateQueries({ queryKey: queryKeys.waiting() });
         for (const name of frame.changed) {
           const key = invalidationKey(name);
           if (key !== null) void client.invalidateQueries({ queryKey: key });

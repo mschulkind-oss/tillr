@@ -108,19 +108,30 @@ describe("the live channel invalidates the cache the panels already read", () =>
     // The one unconditional read: the screen was fetched over HTTP before this socket
     // existed, so the connect closes that window.
     expect(invalidate).toHaveBeenCalledTimes(1);
-    expect(invalidate).toHaveBeenLastCalledWith();
+    const connect = invalidate.mock.calls[0][0] as { predicate: (q: { queryKey: readonly unknown[] }) => boolean };
+    // ... but not the reads that poll on their own: /why and /lanes are the slow ones.
+    for (const root of ["lanes", "waiting", "passes", "designs", "questions"]) expect(connect.predicate({ queryKey: [root] })).toBe(false);
+    for (const root of ["snapshot", "items", "runs", "landings"]) expect(connect.predicate({ queryKey: [root] })).toBe(true);
 
     socket.deliver({
       type: "snapshot.invalidated",
       event_head_seq: 49,
       changed: ["items:item-seed-02", "runs:run-item-seed-02", "snapshot"],
     });
-    expect(invalidate).toHaveBeenCalledTimes(6);
+    expect(invalidate).toHaveBeenCalledTimes(5);
     expect(invalidate).toHaveBeenNthCalledWith(2, { queryKey: ["lanes"] });
-    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["waiting"] });
-    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["items", "item-seed-02"] });
-    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["runs", "run-item-seed-02"] });
-    expect(invalidate).toHaveBeenNthCalledWith(6, { queryKey: ["snapshot"] });
+    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["items", "item-seed-02"] });
+    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["runs", "run-item-seed-02"] });
+    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["snapshot"] });
+  });
+
+  test("a snapshot frame refetches the snapshot only, never /why or /lanes", () => {
+    const { invalidate } = renderProbe();
+    const socket = FakeSocket.opened[0];
+    socket.accept();
+    invalidate.mockClear();
+    socket.deliver({ type: "snapshot.invalidated", event_head_seq: 50, changed: ["snapshot"] });
+    expect(invalidate.mock.calls).toEqual([[{ queryKey: ["snapshot"] }]]);
   });
 
   test("log growth also refreshes the Home lane strip", () => {
@@ -157,7 +168,7 @@ describe("the live channel invalidates the cache the panels already read", () =>
       expect(lanes()).toBe(2);
       // A frame after the gap is answered at once again.
       clock = 5_100;
-      socket.deliver({ type: "snapshot.invalidated", event_head_seq: 51, changed: ["snapshot"] });
+      socket.deliver({ type: "snapshot.invalidated", event_head_seq: 51, changed: ["runs:run-1"] });
       expect(lanes()).toBe(3);
     } finally {
       vi.useRealTimers();
