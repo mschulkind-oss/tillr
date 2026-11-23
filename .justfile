@@ -609,6 +609,12 @@ observatory-perf *args:
 # PATH but the toolchain. No `npm run build` and no `observatory` tag: Vite serves the UI
 # from source, so embedded assets would be a stale snapshot of it.
 #
+# WHAT RELOADS: the UI through Vite, and the API through `air` (pinned in `mise.toml`, configured
+# in `tools/tillr-view/.air.toml`): a change to a Go source tillr-view is built from, including
+# commits landing on this checkout and the local modules it replaces, is rebuilt once per burst
+# and replaces the API on its port. A failed build prints its error here and leaves the old API
+# answering.
+#
 # ONE SUPERVISED TREE, NOT TWO BACKGROUND JOBS. The processes are declared in
 # `tools/tillr-view/Procfile.dev` and run under hivemind (pinned in `mise.toml`): a child that
 # dies takes the other with it, and SIGINT or SIGTERM tears down both process groups. A port

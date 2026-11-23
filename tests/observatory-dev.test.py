@@ -53,7 +53,8 @@ from shutil import which
 
 REPO = Path(__file__).resolve().parent.parent
 RECIPE = "observatory-dev"
-RECIPE_FILES = (".justfile", "tools/observatory/run.sh", "tools/tillr-view/Procfile.dev")
+RECIPE_FILES = (".justfile", "tools/observatory/run.sh", "tools/tillr-view/Procfile.dev",
+                "tools/tillr-view/.air.toml")
 
 failures: list[str] = []
 
@@ -111,6 +112,21 @@ def make_root(base: Path, name: str, *, dist: bool = True, modules: str | None =
     return root
 
 
+def air_stub() -> str:
+    """A stand-in for `air` that runs what the real one would run after a build: the config's
+    `full_bin` line. The Procfile's wiring to `.air.toml` and the config's serve command are
+    therefore the real files, and only the watching and rebuilding are not exercised here."""
+    return f"""#!/bin/sh
+cfg=""
+while [ $# -gt 0 ]; do
+    case "$1" in -c) cfg="$2"; shift 2 ;; *) shift ;; esac
+done
+line=$({real_tool("sed")} -n "s/^ *full_bin = '\\(.*\\)'$/\\1/p" "$cfg")
+[ -n "$line" ] || {{ echo "stub air: no full_bin in $cfg" >&2; exit 1; }}
+exec sh -c "$line"
+"""
+
+
 def make_path(base: Path, state: Path, *, go: bool = True, node: bool = True, git: bool = True,
               hivemind: bool = False, platform: str = "linux-x64-gnu", npm_fails: bool = False,
               slow_ui: bool = False) -> Path:
@@ -121,7 +137,7 @@ def make_path(base: Path, state: Path, *, go: bool = True, node: bool = True, gi
         (bindir / tool).symlink_to(real_tool(tool))
     if hivemind:
         (bindir / "hivemind").symlink_to(which("hivemind"))
-    stubs = {}
+    stubs = {"air": air_stub()}
     # The stubs name their own helpers by absolute path: the PATH under test is the recipe's.
     cat, chmod, basename = real_tool("cat"), real_tool("chmod"), real_tool("basename")
     if go:
@@ -343,6 +359,11 @@ def case_dev_hands_the_planner_and_a_strict_port_to_its_children(base: Path,
           and flag(ui, "--port") == str(port) and flag(ui, "--host") == "127.0.0.1", f"{ui}\n{err}")
     calls = (state / "go.calls").read_text() if (state / "go.calls").exists() else ""
     check("dev: the API is built without the embedded front end", "-tags" not in calls, calls)
+    config = (root / "tools/tillr-view/.air.toml").read_text()
+    check("dev: the API runs under air, which watches the replaced local modules and debounces",
+          "air -c" in (root / "tools/tillr-view/Procfile.dev").read_text()
+          and all(f'"../{m}"' in config for m in ("tillr", "tillr-drain", "tillr-item"))
+          and "delay = " in config and "stop_on_error = false" in config, config)
 
 
 def case_dev_waits_for_complete_ui_arguments(base: Path) -> None:
@@ -530,7 +551,7 @@ done
 exit 0
 """
 
-    for name, body in (("go", go), ("npm", npm)):
+    for name, body in (("go", go), ("npm", npm), ("air", air_stub())):
         path = bindir / name
         path.write_text(body)
         path.chmod(0o755)

@@ -15,10 +15,18 @@
 # Every value below comes from the recipe (tools/observatory/run.sh), which resolves the port scheme, the store and
 # the caller's passthrough flags once, so this file carries no addresses of its own.
 #
-# TILLR_VIEW_API_ARGS is the caller's passthrough as one whitespace-separated string, split
+# LIVE RELOAD: the API runs under `air` (pinned in `mise.toml`), configured in
+# `tools/tillr-view/.air.toml`, which also holds the serve command line that used to be this
+# line. air watches the Go this binary is built from (tools/tillr-view and the modules its
+# go.mod replaces), waits for a burst of changes to settle, rebuilds with run.sh's own
+# command, and replaces the API on the same port only when the build succeeds; a failed build
+# prints its error here and the old API keeps answering. air is a child of hivemind and
+# stops the API it started when it is signalled, so the one-tree guarantee above holds.
+#
+# TILLR_VIEW_API_ARGS (read by `.air.toml`) is the caller's passthrough as one whitespace-separated string, split
 # here. Every flag `tillr-view serve` takes is `--flag value` or `--flag=value`, so a value
 # carrying a space is the one case that has to be spelled `--flag=value`. The flags this
 # line supplies are all defaults: the passthrough comes last, and Go's flag package lets
 # the last occurrence win, which is what makes a caller's `--store` beat this one.
-api: exec "$TILLR_VIEW_BIN" serve --store "$TILLR_VIEW_STORE" --root "$TILLR_VIEW_ROOT" --addr "$TILLR_VIEW_ADDR" --tillr-drain "$TILLR_VIEW_DRAIN" --ui-at vite $TILLR_VIEW_API_ARGS
+api: cd "$TILLR_VIEW_SRC" && exec air -c .air.toml
 ui: exec npm --prefix "$TILLR_VIEW_WEB" run dev -- --config vite.config.ts --port "$TILLR_VIEW_PORT" --strictPort --host "$TILLR_VIEW_UI_HOST"

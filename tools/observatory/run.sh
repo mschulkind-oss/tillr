@@ -193,6 +193,7 @@ dist_current() {
 if [ "$mode" = dev ]; then
     need node "node is not on PATH, and the dev face serves its UI through Vite: install Node (the version in $root/mise.toml), or run \`just observatory\`, which needs no Node once its front end is built"
     need npm "npm is not on PATH, and the dev face installs and runs Vite with it: install Node with npm (the version in $root/mise.toml)"
+    need air "air is not on PATH, and it rebuilds and restarts the API when its Go changes: install it (pinned in $root/mise.toml) or run \`just observatory\`, which does not reload"
     need hivemind "hivemind is not on PATH, and it supervises the API and Vite together: install it (pinned in $root/mise.toml) or run \`just observatory\`, which is one process"
     ensure_modules
 elif ! has --web-dist; then
@@ -288,6 +289,7 @@ fi
 # tears down both process groups. Every value the Procfile reads comes from here.
 export TILLR_VIEW_BIN="$view"
 export TILLR_VIEW_DRAIN="$drain"
+export TILLR_VIEW_SRC="$view_src"
 export TILLR_VIEW_STORE="$root/.tillr/state.db"
 export TILLR_VIEW_ROOT="$root"
 export TILLR_VIEW_ADDR="$api"
