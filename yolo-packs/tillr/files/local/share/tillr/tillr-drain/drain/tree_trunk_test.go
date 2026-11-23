@@ -98,22 +98,21 @@ func TestAcquittedTreeItemReturnsOnlyAfterItsFixerLands(t *testing.T) {
 					legacyItemState(t, f.store, fixer, state)
 				}
 				git(t, f.root, "commit", "--allow-empty", "-m", "repaired trunk")
-				repaired := git(t, f.root, "rev-parse", "main")
 				steps.ProcessSteps.GateProgram = always(t, "green", 0)
 				second, err := runTrunkLoop(t, f, steps, io.Discard)
 				if err != nil {
 					t.Fatal(err)
 				}
 				if state == "landed" || state == "closed" {
-					if second.Dispatched != 1 || second.Landed != 1 {
+					if second.Dispatched != 0 || second.Candidates != 1 || second.Landed != 1 {
 						t.Fatalf("second=%+v", second)
 					}
 					if itemStateOf(t, f.store, "item_041") != "landed" {
 						t.Fatal("released item did not land")
 					}
 					calls := strings.Join(lines(t, f.count), "\n")
-					if !strings.Contains(calls, "--run run-item_041-a2") || !strings.Contains(calls, "--base "+repaired) {
-						t.Fatalf("release did not stage a fresh run from repaired trunk: %s", calls)
+					if strings.Contains(calls, "--run run-item_041-a2") {
+						t.Fatalf("release dispatched a new run instead of re-gating the kept candidate: %s", calls)
 					}
 				} else if second.Dispatched != 0 || itemStateOf(t, f.store, "item_041") != "blocked" {
 					t.Fatalf("open unproved fixer released the item: %+v", second)
@@ -161,7 +160,7 @@ func TestAcquittedAuthorizedRetryIsNotChargedOrStranded(t *testing.T) {
 	legacyItemState(t, f.store, drain.TrunkFixerID(base), "landed")
 	steps.GateProgram = always(t, "repaired", 0)
 	third, err := runTrunkLoop(t, f, steps, io.Discard)
-	if err != nil || third.Dispatched != 1 || third.Landed != 1 {
+	if err != nil || third.Dispatched != 0 || third.Candidates != 1 || third.Landed != 1 {
 		t.Fatalf("release=%+v err=%v", third, err)
 	}
 }
@@ -183,10 +182,11 @@ func TestAcquittedPredecessorDoesNotBecomeASecondFailure(t *testing.T) {
 	steps.ProcessSteps.GateProgram = always(t, "own-red", 1)
 	steps.replays = nil
 	second, err := runTrunkLoop(t, f, steps, io.Discard)
-	// The item's own red goes back to its worker, and the identical second red waits on its
-	// mover. The acquittal before it is not part of that repeat: the repeat's conflict names
-	// two of this pass's runs, never the acquitted one.
-	if err != nil || second.Dispatched != 2 || second.Rejected != 2 {
+	// The kept candidate is re-gated first and rejected on own-red, then the item's own
+	// red goes back to its worker, and the identical second red waits on its mover. The
+	// acquittal before it is not part of that repeat: the repeat's conflict names two of
+	// this pass's runs, never the acquitted one.
+	if err != nil || second.Dispatched != 2 || second.Rejected != 3 {
 		t.Fatalf("second=%+v err=%v", second, err)
 	}
 	acquitted := runsForItem(t, f.store, "item_041")[0].RunID

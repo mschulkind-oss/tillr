@@ -44,6 +44,9 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 		stop, landed, err = l.landCandidate(ctx, c, local, timing)
 	} else {
 		stop, landed, err = l.verify(ctx, &c, local, timing)
+		if err == nil && stop == "" && c.trunkAcquitted {
+			err = errTrunkAcquittedHeld
+		}
 	}
 	if terminal := asItemTerminal(err); terminal != nil {
 		// The item went terminal by another route during this examination.
