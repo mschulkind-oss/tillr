@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Permanent runner regression tests; parity lists and plans the real drain suite without running it."""
 from contextlib import ExitStack, contextmanager, redirect_stderr
+import fcntl
 import importlib.util
 import io
 import json
@@ -9,6 +10,7 @@ import re
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -447,7 +449,130 @@ func TestMain(m *testing.M) {
         with patch.dict(os.environ, clean_env, clear=True):
             self.assertEqual(shards.shared_cache_dir(), (home / '.cache' / 'go-build').resolve())
 
+    def _enable_slot_limits(self):
+        limit_patch = patch.object(shards, 'ENFORCE_SLOT_LIMITS', True)
+        limit_patch.start()
+        self.addCleanup(limit_patch.stop)
+
+    @staticmethod
+    def _runner_with_limits_cmd(*args):
+        bootstrap = (
+            'import importlib.util, sys; '
+            f'spec = importlib.util.spec_from_file_location("go_test_shards", {str(RUNNER)!r}); '
+            'mod = importlib.util.module_from_spec(spec); '
+            'spec.loader.exec_module(mod); '
+            'mod.ENFORCE_SLOT_LIMITS = True; '
+            f'sys.argv = [{str(RUNNER)!r}, *sys.argv[1:]]; '
+            'sys.exit(mod.main())'
+        )
+        return [sys.executable, '-c', bootstrap, *args]
+
+    def test_slot_limits_off_by_default_returns_immediately_without_locks_or_caps(self):
+        self.assertFalse(shards.ENFORCE_SLOT_LIMITS)
+
+        # Fresh lock_dir is never even created when limits are off.
+        untouched_dir = self.root / 'never-created-locks'
+        trace_dir = self.root / 'off-trace'
+        trace_dir.mkdir()
+        notices = []
+        with patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)}):
+            for slot_class in shards.SLOT_CLASSES:
+                with shards.acquire_shard_slot(
+                    untouched_dir, 1, notify=notices.append,
+                    slot_class=slot_class, proof_limit=1, gate_limit=1,
+                    max_slots=1, gate_reserved_limit=1,
+                    holder=f'holder-{slot_class}', label=f'imm-{slot_class}',
+                ):
+                    pass
+        self.assertEqual(notices, [])
+        self.assertFalse(untouched_dir.exists())
+
+        rows = [
+            json.loads(line)
+            for line in (trace_dir / 'slot-waits.jsonl').read_text().splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(rows), len(shards.SLOT_CLASSES))
+        for slot_class, row in zip(shards.SLOT_CLASSES, rows):
+            self.assertEqual(row['kind'], 'slot.wait')
+            self.assertEqual(row['waited_ms'], 0)
+            self.assertEqual(row['slot'], 'unlimited')
+            self.assertEqual(row['class'], slot_class)
+            self.assertIs(row['acquired'], True)
+            self.assertEqual(row['label'], f'imm-{slot_class}')
+
+        # Even when an older process holds every slot lock, waiting lock, wait ticket,
+        # and per-gate cap lock, every class acquires immediately and concurrently
+        # without blocking, writing wait tickets, holding waiting locks, or writing holders.
+        lock_dir = self.root / 'older-version-locks'
+        lock_dir.mkdir()
+        wait_queue_dir = lock_dir / 'wait-queue'
+        wait_queue_dir.mkdir()
+        cap_dir = shards._holder_cap_dir(lock_dir, 'gate:run-capped')
+        held_fds = []
+        try:
+            for name in ('slot-0.lock', 'proof-0.lock', 'gate-0.lock'):
+                fd = os.open(lock_dir / name, os.O_CREAT | os.O_RDWR, 0o666)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held_fds.append(fd)
+            for name in ('repair-waiting.lock', 'proof-waiting.lock', 'gate-waiting.lock'):
+                fd = os.open(lock_dir / name, os.O_CREAT | os.O_RDWR, 0o666)
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                held_fds.append(fd)
+            for name in ('total-0.lock', 'gate-reserved-0.lock'):
+                fd = os.open(cap_dir / name, os.O_CREAT | os.O_RDWR, 0o666)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held_fds.append(fd)
+            existing_ticket = wait_queue_dir / '00-00000000000000000001-0000000001-00000000000000000001-00000000-spg.wait'
+            ticket_fd = os.open(existing_ticket, os.O_CREAT | os.O_RDWR, 0o666)
+            fcntl.flock(ticket_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            held_fds.append(ticket_fd)
+
+            # 4 classes + 3 extra simultaneous gate calls for the same capped holder (7 total).
+            requests = [
+                ('ordinary', 'run-worker'),
+                ('proof', 'trunk-proof'),
+                ('repair', 'gate:run-revert-1'),
+                ('gate', 'gate:run-capped'),
+                ('gate', 'gate:run-capped'),
+                ('gate', 'gate:run-capped'),
+                ('gate', 'gate:run-capped'),
+            ]
+            barrier = threading.Barrier(len(requests))
+            errors = []
+            concurrent_notices = []
+
+            def acquire_and_sync(slot_class, holder_name):
+                try:
+                    with shards.acquire_shard_slot(
+                        lock_dir, 1, notify=concurrent_notices.append,
+                        slot_class=slot_class, proof_limit=1, gate_limit=1,
+                        max_slots=1, gate_reserved_limit=1, holder=holder_name,
+                    ):
+                        barrier.wait(timeout=10)
+                except BaseException as exc:
+                    errors.append(exc)
+                    barrier.abort()
+
+            threads = [
+                threading.Thread(target=acquire_and_sync, args=req)
+                for req in requests
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(15)
+                self.assertFalse(thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(concurrent_notices, [])
+            self.assertEqual(os.listdir(wait_queue_dir), [existing_ticket.name])
+            self.assertEqual(list(lock_dir.glob('*.holder.json')), [])
+        finally:
+            for fd in held_fds:
+                os.close(fd)
+
     def test_waiting_runners_announce_and_never_exceed_limit(self):
+        self._enable_slot_limits()
         # Deterministic: no sleeps decide the outcome. Holders release only after all
         # limit holders have entered and every surplus runner has announced that it is
         # waiting (or immediately on over-admission), so an over-admission would show as
@@ -490,6 +615,7 @@ func TestMain(m *testing.M) {
         self.assertTrue(all('waiting for a test slot' in n and str(lock_dir) in n for n in notices))
 
     def test_same_priority_waiter_after_lock_does_not_preempt_winner(self):
+        self._enable_slot_limits()
         lock_dir = self.root / 'post-lock-pool'
         wait_dir = shards._wait_queue_dir(lock_dir)
         priority = shards._CLASS_PRIORITY[shards.SLOT_CLASS_ORDINARY]
@@ -640,8 +766,8 @@ func hold(t *testing.T) {{
                 time.sleep(0.02)
 
         proc_a = subprocess.Popen(
-            ['python3', str(RUNNER), str(mod_a), '-k', str(first_count), '--durations', str(durations),
-             '--lock-dir', str(lock_dir)],
+            self._runner_with_limits_cmd(str(mod_a), '-k', str(first_count), '--durations', str(durations),
+                                         '--lock-dir', str(lock_dir)),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             wait_until(lambda: len(list(markers.glob('started_A_*'))) == first_count or proc_a.poll() is not None,
@@ -650,8 +776,8 @@ func hold(t *testing.T) {{
                 self.fail(f'first invocation exited early: {proc_a.stderr.read()}')
 
             proc_b = subprocess.Popen(
-                ['python3', str(RUNNER), str(mod_b), '-k', str(second_count), '--durations', str(durations),
-                 '--lock-dir', str(lock_dir)],
+                self._runner_with_limits_cmd(str(mod_b), '-k', str(second_count), '--durations', str(durations),
+                                             '--lock-dir', str(lock_dir)),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             try:
                 if limit >= 2:
@@ -684,6 +810,7 @@ func hold(t *testing.T) {{
         self.assertEqual(len(list(markers.glob('started_B_*'))), second_count)
 
     def test_slot_wait_spans_append_fail_open_to_trace_dir(self):
+        self._enable_slot_limits()
         lock_dir = self.root / 'trace-pool'
         trace_dir = self.root / 'trace-dir'
         trace_dir.mkdir()
@@ -802,6 +929,7 @@ func hold(t *testing.T) {{
                 pass
 
     def test_sibling_gate_gets_free_reserved_slots_and_proof_preempts_gate_and_ordinary(self):
+        self._enable_slot_limits()
         lock_dir = self.root / 'gate-pool'
         trace_dir = self.root / 'gate-trace'
         trace_dir.mkdir()
@@ -1013,6 +1141,7 @@ func hold(t *testing.T) {{
             env_ctx.stop()
 
     def test_gate_queue_wait_is_excluded_from_watchdog_and_cli_max_slots_caps_concurrency(self):
+        self._enable_slot_limits()
         # 1. Queue wait while all ordinary/proof/gate slots are held does not count toward
         #    run_shard's no-progress watchdog deadline.
         lock_dir = self.root / 'watchdog-locks'
@@ -1137,9 +1266,9 @@ func TestM3(t *testing.T) {{ holdBrief(t) }}
         durations = self.root / 'ms-durations.json'
         durations.write_text('{}')
         completed = subprocess.run(
-            ['python3', str(RUNNER), str(mod), '-k', '4', '--slot-class', 'gate',
-             '--max-slots', '2', '--durations', str(durations),
-             '--lock-dir', str(self.root / 'ms-locks')],
+            self._runner_with_limits_cmd(str(mod), '-k', '4', '--slot-class', 'gate',
+                                         '--max-slots', '2', '--durations', str(durations),
+                                         '--lock-dir', str(self.root / 'ms-locks')),
             capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
@@ -1296,6 +1425,7 @@ func TestSecond(t *testing.T) {
         self.assertFalse(progress_file.exists())
 
     def test_progress_writes_zero_snapshots_when_stalled_in_slot_wait_or_running_test(self):
+        self._enable_slot_limits()
         fake_now = [1000.0]
         clock_lock = threading.Lock()
 
@@ -1554,6 +1684,7 @@ func TestSecond(t *testing.T) {
         self.assertEqual(list(self.root.parent.glob('.go-progress-*')), [])
 
     def test_waiting_gates_served_in_arrival_order_without_starvation(self):
+        self._enable_slot_limits()
         lock_dir = self.root / 'fifo-gates'
         order = []
         order_lock = threading.Lock()
@@ -1640,6 +1771,7 @@ func TestSecond(t *testing.T) {
         self.assertEqual(order, [f'gate:run-item-{idx}' for idx in range(1, 6)])
 
     def test_revert_and_trunk_fixer_gates_served_before_waiting_ordinary_gates(self):
+        self._enable_slot_limits()
         lock_dir = self.root / 'repair-priority'
         order = []
         order_lock = threading.Lock()
@@ -1733,6 +1865,7 @@ func TestSecond(t *testing.T) {
         ])
 
     def test_proof_gets_reserved_slot_immediately_and_outranks_waiting_gates(self):
+        self._enable_slot_limits()
         lock_dir = self.root / 'proof-over-gate'
         trace_dir = self.root / 'proof-over-gate-trace'
         trace_dir.mkdir()

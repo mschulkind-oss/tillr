@@ -340,6 +340,7 @@ def test_base_replay_queues_behind_trunk_proof():
     )
     shards = importlib.util.module_from_spec(shards_spec)
     shards_spec.loader.exec_module(shards)
+    shards.ENFORCE_SLOT_LIMITS = True
 
     scratch_parent = os.environ.get("TMPDIR") or os.environ.get("YOLO_DURABLE_DIR")
     with tempfile.TemporaryDirectory(dir=scratch_parent) as directory:

@@ -241,6 +241,9 @@ _CLASS_PRIORITY = {
     SLOT_CLASS_ORDINARY: 3,
 }
 _WAIT_TICKET_SEQ = itertools.count()
+# Experiment: slot limits (machine-wide pool, wait queue, and per-gate caps) are off by default.
+# Set to True to re-enable slot limiting.
+ENFORCE_SLOT_LIMITS = False
 DEFAULT_GATE_MAX_SLOTS = 8
 DEFAULT_GATE_RESERVED_CAP = 4
 # One lock pays for one concurrent Go test, not an entire parallel batch.
@@ -602,7 +605,13 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                        gate_reserved_limit=None, holder=None, label=None):
     """Acquire one slot from a counted flock pool under lock_dir; wait without timeout.
 
-    Priority order is `repair > proof > gate > ordinary`, and waiters within the same
+    When ENFORCE_SLOT_LIMITS is False (the default), yields immediately for every class
+    without touching lock_dir, writing wait tickets or holder records, holding waiting
+    locks, or applying per-gate caps, and records a zero-wait slot.wait span when
+    TILLR_TRACE_DIR is set.
+
+    When ENFORCE_SLOT_LIMITS is True, priority order is `repair > proof > gate > ordinary`,
+    and waiters within the same
     priority class are served in the order their wait began (FIFO):
     - `ordinary` callers take only `slot-0..limit-1` and yield while any higher-priority
       caller or earlier ordinary waiter is ahead of them.
@@ -624,6 +633,13 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
         env_class = os.environ.get(SLOT_CLASS_ENV, '').strip()
         if env_class == SLOT_CLASS_REPAIR or is_trunk_repair_holder(holder_name):
             chosen_class = SLOT_CLASS_REPAIR
+    if not ENFORCE_SLOT_LIMITS:
+        record_slot_wait(
+            start_wall_ms=int(time.time() * 1000), waited_ms=0, slot='unlimited',
+            slot_class=chosen_class, holder_name=holder_name, label=label, acquired=True,
+        )
+        yield
+        return
     reserved_gate = (max(0, int(gate_limit)) if gate_limit is not None
                      else default_gate_shard_limit(limit))
     reserved_proof = (max(0, int(proof_limit)) if proof_limit is not None
