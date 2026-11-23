@@ -328,3 +328,188 @@ func TestPostLandingPiRollFailureAndSkipRaiseWhyCondition(t *testing.T) {
 		})
 	}
 }
+
+type syncHookSteps struct {
+	*recordingSteps
+	onSync func()
+}
+
+func (s *syncHookSteps) Sync(ctx context.Context) (SyncOutcome, error) {
+	if s.onSync != nil {
+		s.onSync()
+	}
+	return s.recordingSteps.Sync(ctx)
+}
+
+func TestLoopStartupAndPassPiBuildStaleAlarm(t *testing.T) {
+	ctx := context.Background()
+	const staleKey = "24c7e4f89e08"
+
+	f := newRefusalLoopFixtureWithLanes(t, 1)
+	if err := os.MkdirAll(filepath.Join(f.root, ".git", "info"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(f.root, ".git", "info", "exclude"), ".tillr/\n")
+
+	forkWork := t.TempDir()
+	runGit(t, forkWork, "init", "-q", "-b", "patch/pi")
+	writeForkFile(t, filepath.Join(forkWork, "pi.txt"), "pi fork v1.6.0\n")
+	runGit(t, forkWork, "add", "pi.txt")
+	runGit(t, forkWork, "commit", "-qm", "ours: pi fork tip")
+	wantedTip := runGit(t, forkWork, "rev-parse", "refs/heads/patch/pi")
+	wantedKey := wantedTip[:12]
+	if wantedKey == staleKey {
+		t.Fatalf("unexpected collision with staleKey %s", staleKey)
+	}
+	runGit(t, f.root, "fetch", "-q", "--no-tags", forkWork, "+refs/heads/patch/pi:refs/heads/patch/pi")
+
+	buildsDir := filepath.Join(t.TempDir(), "pi-builds")
+	writeVerifiedBuild := func(key string) string {
+		dir := filepath.Join(buildsDir, key)
+		bin := filepath.Join(dir, "home", ".local", "bin", "pi")
+		if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".verified"), []byte(key+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return bin
+	}
+	writeCurrentJSON := func(key, bin string) {
+		cur, err := json.Marshal(map[string]string{
+			"key": key,
+			"pi":  bin,
+			"dir": filepath.Join(buildsDir, key),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(buildsDir, "current.json"), cur, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staleBin := writeVerifiedBuild(staleKey)
+	writeCurrentJSON(staleKey, staleBin)
+	t.Setenv("TILLR_PI_BUILDS_DIR", buildsDir)
+
+	now := time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
+	readWhy := func() string {
+		var ans WhyAnswer
+		fixtureRead(t, f, func(r *store.Reader) error {
+			var err error
+			ans, err = WhyForItem(r, Pass{Now: now.Format(time.RFC3339), StorePath: f.storePath}, nil, nil, "")
+			return err
+		})
+		var buf bytes.Buffer
+		if err := alarms.Print(&buf, ans.Alarms); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+	countKind := func(kind string) int {
+		var n int
+		fixtureRead(t, f, func(r *store.Reader) error {
+			return r.QueryRow(`SELECT count(*) FROM events WHERE kind = ?`, kind).Scan(&n)
+		})
+		return n
+	}
+
+	var startupWhy string
+	steps := &syncHookSteps{
+		recordingSteps: &recordingSteps{},
+		onSync: func() {
+			if startupWhy == "" {
+				startupWhy = readWhy()
+			}
+		},
+	}
+
+	var log bytes.Buffer
+	l := f.loop(t, steps, &itemContentStager{})
+	l.cfg.Report = &log
+
+	res, err := l.Run(ctx)
+	if err != nil {
+		t.Fatalf("Loop.Run failed: %v", err)
+	}
+	if res.Stop != StopQueueDrained {
+		t.Fatalf("Loop.Run stop = %q (%s), want %q", res.Stop, res.Detail, StopQueueDrained)
+	}
+
+	// Verified at loop start (before runPasses) and after Loop.Run returns.
+	for _, want := range []string{alarms.PiBuildStale, staleKey, wantedKey} {
+		if !strings.Contains(startupWhy, want) {
+			t.Fatalf("why alarms during loop startup missing %q:\n%s", want, startupWhy)
+		}
+	}
+	whyOut := readWhy()
+	for _, want := range []string{alarms.PiBuildStale, staleKey, wantedKey} {
+		if !strings.Contains(whyOut, want) {
+			t.Fatalf("why alarms after loop start missing %q:\n%s", want, whyOut)
+		}
+	}
+	for _, want := range []string{"alarm started: ALARM pi-build-stale (pi)", staleKey, wantedKey} {
+		if !strings.Contains(log.String(), want) {
+			t.Fatalf("loop report missing %q:\n%s", want, log.String())
+		}
+	}
+	if got := countKind(alarms.PiBuildStaleKind); got != 1 {
+		t.Fatalf("%s count = %d, want 1", alarms.PiBuildStaleKind, got)
+	}
+
+	// Another pass while still unbuilt keeps the alarm standing without duplicating the event.
+	holdWALKeeper(t, f.storePath)
+	if _, err := l.pass(ctx, &res); err != nil {
+		t.Fatalf("second pass failed: %v", err)
+	}
+	if got := countKind(alarms.PiBuildStaleKind); got != 1 {
+		t.Fatalf("%s count after unchanged pass = %d, want 1", alarms.PiBuildStaleKind, got)
+	}
+
+	// Once a verified build for the patch/pi tip exists, the alarm clears on pass evaluation without a fork landing.
+	builtBin := writeVerifiedBuild(wantedKey)
+	writeCurrentJSON(wantedKey, builtBin)
+	if _, err := l.pass(ctx, &res); err != nil {
+		t.Fatalf("pass after verified build failed: %v", err)
+	}
+	if cleared := readWhy(); strings.Contains(cleared, alarms.PiBuildStale) {
+		t.Fatalf("expected pi-build-stale to clear when verified build exists, got:\n%s", cleared)
+	}
+	if !strings.Contains(log.String(), "alarm cleared: pi-build-stale:pi") {
+		t.Fatalf("expected loop report to record alarm cleared, got:\n%s", log.String())
+	}
+	if got := countKind(alarms.PiBuildCurrentKind); got != 1 {
+		t.Fatalf("%s count after clear = %d, want 1", alarms.PiBuildCurrentKind, got)
+	}
+
+	// Moving patch/pi to another unbuilt tip without a fork landing raises the alarm on the next pass,
+	// and starting a fresh loop after building that tip clears it at loop start.
+	writeForkFile(t, filepath.Join(forkWork, "pi.txt"), "pi fork v1.6.1\n")
+	runGit(t, forkWork, "add", "pi.txt")
+	runGit(t, forkWork, "commit", "-qm", "ours: second pi fork tip")
+	wantedTip2 := runGit(t, forkWork, "rev-parse", "refs/heads/patch/pi")
+	wantedKey2 := wantedTip2[:12]
+	if wantedKey2 == wantedKey || wantedKey2 == staleKey {
+		t.Fatalf("unexpected key collision %s", wantedKey2)
+	}
+	runGit(t, f.root, "fetch", "-q", "--no-tags", forkWork, "+refs/heads/patch/pi:refs/heads/patch/pi")
+
+	if _, err := l.pass(ctx, &res); err != nil {
+		t.Fatalf("pass after moving patch/pi failed: %v", err)
+	}
+	whyMoved := readWhy()
+	for _, want := range []string{alarms.PiBuildStale, wantedKey, wantedKey2} {
+		if !strings.Contains(whyMoved, want) {
+			t.Fatalf("why alarms after moving patch/pi missing %q:\n%s", want, whyMoved)
+		}
+	}
+
+	writeVerifiedBuild(wantedKey2)
+	l.reportAlarms(ctx, l.cfg.Now())
+	if cleared := readWhy(); strings.Contains(cleared, alarms.PiBuildStale) {
+		t.Fatalf("expected pi-build-stale to clear after building second tip, got:\n%s", cleared)
+	}
+}

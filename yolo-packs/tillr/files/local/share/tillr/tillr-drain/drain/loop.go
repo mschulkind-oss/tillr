@@ -985,6 +985,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
 		return faultResult(result, err)
 	}
+	l.checkPiBuild(ctx)
 	// The documents are synced before anything is planned: an item block committed since
 	// the last drain is work this drain should see, and the sync is the only way an item
 	// enters the store. A finding does not stop the loop — the documents without one were
