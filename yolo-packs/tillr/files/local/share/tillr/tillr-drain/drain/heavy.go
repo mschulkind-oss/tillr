@@ -479,6 +479,12 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 			}
 		}
 	}
+	for i := range run.Checks {
+		check := &run.Checks[i]
+		if check.RevertedBy == "" && check.RevertRefused != "" && check.FirstRedLanding != "" {
+			check.Detail = joinDetail(check.Detail, "automatic revert not possible: "+heavyBrief(check.RevertRefused))
+		}
+	}
 	return run, nil
 }
 
@@ -492,7 +498,11 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 		return run.TipSHA, false, nil // Keep the known failure without replaying it to name a culprit.
 	}
 	against = check.FirstRedLanding
-	if check.FirstRedLanding == "" {
+	if check.FirstRedLanding != "" {
+		reason := "first red landing was already set before attribution"
+		r.progressf("loop: heavy %s red from %s: %s; not reverting automatically, filing a fixer\n", check.CheckID, shortSHA(check.FirstRedLanding), reason)
+		check.Detail = joinDetail(check.Detail, "not reverted automatically: "+reason)
+	} else {
 		red, fault, reason, err := r.findFirstRed(ctx, run, *check)
 		switch {
 		case err != nil && ctx.Err() == nil && !cleanupLost(err):
@@ -532,15 +542,18 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 				if cleanupLost(err) {
 					return "", false, err
 				}
+				var reasons []string
 				if len(others) > 0 {
 					culprits := append([]string{red}, others...)
-					check.Detail = joinDetail(check.Detail, "multiple first-red commits for this test: "+strings.Join(culprits, ", "))
+					reasons = append(reasons, "multiple first-red commits for this test: "+strings.Join(culprits, ", "))
 				}
 				if err != nil {
-					check.Detail = joinDetail(check.Detail, "additional attribution gave no verdict: "+err.Error())
+					reasons = append(reasons, "additional attribution gave no verdict: "+heavyBrief(err.Error()))
 				}
-				if len(others) > 0 || err != nil {
-					check.Detail = joinDetail(check.Detail, "not reverting a single landing; fixer filed against the tip")
+				if len(reasons) > 0 {
+					reason := strings.Join(reasons, "; ")
+					r.progressf("loop: heavy %s red from %s: %s; not reverting a single landing, filing a fixer against the tip\n", check.CheckID, shortSHA(red), reason)
+					check.Detail = joinDetail(check.Detail, reason+"; not reverting a single landing; fixer filed against the tip")
 					return run.TipSHA, false, nil
 				}
 			}
@@ -575,6 +588,20 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 // fixer is filed.
 func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, byLanding map[string][]HeavyCheck, bisected map[string]bool, reverted map[string]string) ([]string, error) {
 	if r.Revert == nil {
+		for _, sha := range order {
+			for _, check := range byLanding[sha] {
+				if !bisected[check.CheckID] || check.FirstRedLanding == "" {
+					continue
+				}
+				reason := "automatic revert is disabled"
+				r.progressf("loop: heavy %s red from %s: %s; filing a fixer\n", check.CheckID, shortSHA(check.FirstRedLanding), reason)
+				for i := range run.Checks {
+					if run.Checks[i].CheckID == check.CheckID {
+						run.Checks[i].Detail = joinDetail(run.Checks[i].Detail, "not reverted automatically: "+reason)
+					}
+				}
+			}
+		}
 		return order, nil
 	}
 	remaining := []string{}
@@ -633,12 +660,21 @@ func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, 
 	return remaining, nil
 }
 
+func (r HeavyRunner) noteRevertRefused(check *HeavyCheck) {
+	if check.RevertedBy != "" || check.RevertRefused == "" || check.FirstRedLanding == "" {
+		return
+	}
+	reason := heavyBrief(check.RevertRefused)
+	r.progressf("loop: heavy %s red from %s: automatic revert not possible: %s; filing a fixer\n", check.CheckID, shortSHA(check.FirstRedLanding), reason)
+}
+
 // A failed inverse refutes the landing as the sole explanation for this red.
 // Discard the remembered result and search with fresh focused verdicts. Only a
 // different attribution can authorize another revert; otherwise repair the tip.
 func (r HeavyRunner) resolveRevert(ctx context.Context, run HeavyRun, check *HeavyCheck, landing string, out RevertOutcome) (string, error) {
 	check.RevertedBy, check.RevertRefused = out.Reverted, out.Refused
 	if !out.StillRed || out.stillRedCheck != "" && out.stillRedCheck != check.CheckID {
+		r.noteRevertRefused(check)
 		return landing, nil
 	}
 	discard := func(sha, reason string) error {
@@ -674,6 +710,7 @@ func (r HeavyRunner) resolveRevert(ctx context.Context, run HeavyRun, check *Hea
 			return run.TipSHA, discard(against, revised.Refused)
 		}
 		check.RevertedBy, check.RevertRefused = revised.Reverted, revised.Refused
+		r.noteRevertRefused(check)
 	}
 	return against, nil
 }
