@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PassRow, SnapshotData, WaitingRow } from "../models/types";
+import type { PassRow, SnapshotData, WaitingRow, WhySource } from "../models/types";
+import { DesignsWaiting, WhySourceLine } from "./WhyPass";
 import { URL_CHANGE_EVENT } from "../models/url";
 import { waitingIdentity, waitingOrder } from "../models/waiting";
 import { ClassState, EntityLink } from "./EntityLink";
@@ -110,7 +111,7 @@ function useRowKeys(ids: string[], focused: string | null, focus: (id: string) =
 }
 
 const CLASSES = ["alarm", "needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop"];
-export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onMoved }: { waiting?: WaitingRow[]; snapshot?: SnapshotData; error?: Error | null; writesEnabled?: boolean; onMoved?: () => Promise<unknown> }) {
+export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onMoved, whySource, designsWaiting }: { whySource?: WhySource; designsWaiting?: WaitingRow[]; waiting?: WaitingRow[]; snapshot?: SnapshotData; error?: Error | null; writesEnabled?: boolean; onMoved?: () => Promise<unknown> }) {
   const [moving, setMoving] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -178,6 +179,7 @@ export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onM
   return <main className="home ledger" data-testid="stable-list" ref={list.listRef}>
     <h1>Items</h1>
     {!writesEnabled ? <p>This server is read-only.</p> : null}
+    {preset !== "landed" && waiting ? <WhySourceLine source={whySource} /> : null}
     {moveError ? <p role="alert">Move refused: {moveError}</p> : null}
     {refreshError ? <p role="alert">{refreshError}</p> : null}
     <div className="ledger__filters">
@@ -215,6 +217,7 @@ export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onM
       })}</tbody>{orderedMoves && movable.length ? <tfoot><tr><td colSpan={9}
         onDragOver={event => { if (dragged.current && !moveLock.current) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
         onDrop={event => { event.preventDefault(); dropAt(movable[movable.length - 1].item_id, true); }}>Drop here to move below the last row</td></tr></tfoot> : null}</table>}
+    {preset !== "landed" ? <DesignsWaiting designs={designsWaiting} /> : null}
   </main>;
 }
 

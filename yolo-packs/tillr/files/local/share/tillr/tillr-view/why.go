@@ -129,10 +129,14 @@ func plannerWhyAt(ctx context.Context, program plannerProgram, self buildStamp, 
 		return nil, nil, err
 	}
 	defer s.Close()
+	scope, err := designRoadmapScope(root)
+	if err != nil {
+		return nil, nil, err
+	}
 	var designs []waitingRow
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		var err error
-		designs, err = waitingDesignWithoutItems(r)
+		designs, err = waitingDesignWithoutItems(r, scope)
 		return err
 	}); err != nil {
 		return nil, nil, err
@@ -250,6 +254,19 @@ func withDocumentIndex(raw json.RawMessage, status documentIndexStatus) (json.Ra
 }
 
 func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure) {
+	// The loop's last recorded pass answers when a loop is running and has recorded one
+	// (why_pass.go). The planner below is the fallback, and its answer says so.
+	fallback := ""
+	if raw, head, err := s.whyFromPass(r.Context(), time.Now().UTC()); err == nil {
+		phase(r.Context(), "planner", map[string]any{"source": "pass", "ms": 0, "bytes": len(raw)})
+		return whyPayloadData{raw: raw, head: head}, nil
+	} else {
+		var why passFallback
+		if !errors.As(err, &why) {
+			return nil, failure(codeStoreUnreadable, "why from the last pass: %v", err)
+		}
+		fallback = why.reason
+	}
 	// The index is the server's cached walk. When it cannot be read the planner is asked
 	// without it and runs the index command itself, so a failure is the planner's own
 	// answer (`questions-unknown`) exactly as before the cache existed.
@@ -280,6 +297,9 @@ func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure)
 	if cacheable && s.why.valid && s.why.head == head && s.why.index == digest {
 		phase(r.Context(), "planner", map[string]any{"cache": "hit", "ms": 0, "bytes": len(s.why.raw)})
 		raw, err := withDocumentIndex(s.why.raw, status)
+		if err == nil {
+			raw, err = withWhySource(raw, fallback)
+		}
 		if err != nil {
 			return nil, failure(codeStoreUnreadable, "why index status: %v", err)
 		}
@@ -308,6 +328,9 @@ func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure)
 		s.why.valid = false
 	}
 	raw, err = withDocumentIndex(raw, status)
+	if err == nil {
+		raw, err = withWhySource(raw, fallback)
+	}
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "why index status: %v", err)
 	}

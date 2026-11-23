@@ -379,7 +379,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/snapshot", arrival(s.get(s.snapshotPayload)))
 	mux.HandleFunc("POST /api/v1/items/{id}/place", s.placeHandler)
 	mux.HandleFunc("POST /api/v1/ideas", s.ideaHandler)
-	mux.HandleFunc("GET /api/v1/why", s.vantage.prefetch(s.getOutsideTx(s.whyPayload)))
+	// No index prefetch: a recorded pass needs none, and the planner fallback asks for it itself.
+	mux.HandleFunc("GET /api/v1/why", s.getOutsideTx(s.whyPayload))
 	mux.HandleFunc("GET /api/v1/waiting", s.vantage.prefetch(s.get(s.waitingPayload)))
 	mux.HandleFunc("GET /api/v1/passes", arrival(s.get(s.passesPayload)))
 	mux.HandleFunc("GET /api/v1/landings", s.get(s.landingsPayload))

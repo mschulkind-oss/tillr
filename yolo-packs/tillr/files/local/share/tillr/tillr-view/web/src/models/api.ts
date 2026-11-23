@@ -19,6 +19,7 @@ import type {
   PerformanceItem,
   CheckExecution,
   WaitingRow,
+  WhySource,
   DocumentIndexStatus,
   QuestionsData,
   RunData,
@@ -106,8 +107,8 @@ export const fetchLandings = (signal?: AbortSignal) => read<LandingsData>("/api/
 export const fetchLanding = (id: string, signal?: AbortSignal) => read<LandingRow>(`/api/v1/landings/${encodeURIComponent(id)}`, signal);
 
 export const fetchWaiting = async (signal?: AbortSignal) => {
-  const answer = await read<{ rows: WaitingRow[]; document_index?: DocumentIndexStatus }>("/api/v1/why", signal);
-  return { ...answer, data: answer.data.rows, documentIndex: answer.data.document_index };
+  const answer = await read<{ rows: WaitingRow[]; document_index?: DocumentIndexStatus; source?: WhySource; designs_waiting?: WaitingRow[] }>("/api/v1/why", signal);
+  return { ...answer, data: answer.data.rows, documentIndex: answer.data.document_index, whySource: answer.data.source, designsWaiting: answer.data.designs_waiting };
 };
 export const fetchPasses = (signal?: AbortSignal) => read<PassRow[]>("/api/v1/passes", signal);
 

@@ -1,7 +1,8 @@
 import { localTime } from "../models/board";
 import { LaneStrip } from "./LaneStrip";
 import { loopAlive } from "../models/loop";
-import type { DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow } from "../models/types";
+import type { DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow, WhySource } from "../models/types";
+import { DesignsWaiting, WhySourceLine } from "./WhyPass";
 import { ClassState, EntityLink, type EntityKind } from "./EntityLink";
 import { waitingActors, waitingIdentity, waitingOrder } from "../models/waiting";
 
@@ -104,7 +105,8 @@ export function EntityText({ value, snapshot, rows = [], passes = [] }: { value:
 }
 
 const CLASSES = ["alarm", "needs you", "needs a cause", "waits on work", "waits on the loop", "ready", "moving"];
-export function Home({ snapshot, waiting, waitingError, passes, passesError, lanes, lanesError, now }: {
+export function Home({ snapshot, waiting, waitingError, passes, passesError, lanes, lanesError, now, whySource, designsWaiting }: {
+  whySource?: WhySource; designsWaiting?: WaitingRow[];
   lanes?: LaneRow[]; lanesError?: Error | null; now?: number;
   snapshot?: SnapshotData; waiting?: WaitingRow[]; waitingError?: Error | null;
   passes?: PassRow[]; passesError?: Error | null;
@@ -121,6 +123,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
             unknown — never the drain "not moving". The loop's own state is the heartbeat in
             the header and the loop summary, and it does not depend on the planner. */}
         <h2>Not moving · {waiting ? `${notMoving} of ${rows.length} unlanded` : waitingError ? "unknown: the planner could not be asked" : "not yet read"} <a href="#/items">all → Items</a></h2>
+        {waiting ? <WhySourceLine source={whySource} /> : null}
         {waiting ? <p aria-label="Waiting summary">Owner-waiting {actors.owner} · next: drain {actors.drain} · design seat {actors.design} · operator {actors.operator}</p> : null}
         {waitingError ? <p role="alert">The planner could not be asked, so which items are waiting is unknown (the loop's own state is in the header, and does not depend on it): {waitingError.message}</p> : waiting === undefined ? <p role="status">Reading waiting rows…</p> : rows.length === 0 ? <p>No unlanded items in the waiting answer.</p> : classes.map(value => {
           const group = rows.filter(row => row.class === value).sort(waitingOrder);
@@ -137,6 +140,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
             {group.length > 8 ? <a href={`#/items?class=${encodeURIComponent(value)}`}>{group.length - 8} more {value}</a> : null}
           </section>;
         })}
+        <DesignsWaiting designs={designsWaiting} />
       </div>
       <aside>
         <LaneStrip lanes={lanes} error={lanesError} now={now} configured={snapshot?.drain_summary.session?.lanes} />
