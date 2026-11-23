@@ -27,6 +27,7 @@ func (l *Loop) reportAlarms(ctx context.Context, at time.Time) {
 	if ctx.Err() != nil {
 		return
 	}
+	l.checkPiBuild(ctx)
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	var active []alarms.Alarm
 	if err == nil {

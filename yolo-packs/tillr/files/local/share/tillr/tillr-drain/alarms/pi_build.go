@@ -59,7 +59,7 @@ ORDER BY seq DESC LIMIT 1`, PiBuildStaleKind, PiBuildCurrentKind).Scan(&at, &sta
 		Backend: "pi",
 		Since:   easternTime(time.UnixMilli(at)),
 		Cause:   cause,
-		Clears:  "a subsequent pi roll builds the wanted key",
+		Clears:  "a verified build exists for the wanted key",
 		Command: "fix the build error and run bin/pi-forks build-pi to build the wanted pi fork tip",
 	}}, nil
 }
