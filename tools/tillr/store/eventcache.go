@@ -53,6 +53,8 @@ type eventCache struct {
 	// that key selects, for events[:indexed].
 	index   map[string][]int
 	indexed int
+	// narrow is CacheSelectedEvents's per-key cache (narrowcache.go).
+	narrow map[string]*narrowEntry
 }
 
 var (
@@ -71,7 +73,7 @@ func CacheCommittedEvents() { eventCacheEnabled.Store(true) }
 // eventCacheFor answers the process's cache for the store at path, or nil when the cache
 // is off.
 func eventCacheFor(path string) *eventCache {
-	if !eventCacheEnabled.Load() {
+	if !eventCacheEnabled.Load() && !narrowCacheEnabled.Load() {
 		return nil
 	}
 	if abs, err := filepath.Abs(path); err == nil {
@@ -85,6 +87,9 @@ func eventCacheFor(path string) *eventCache {
 // cached prefix the transaction can see is used as is; only the rows after it are read.
 // committed says q is a read-only transaction, whose tail may extend the cache.
 func (c *eventCache) read(ctx context.Context, q queryer, since int64, committed bool) ([]event.Event, error) {
+	if !eventCacheEnabled.Load() {
+		return events(ctx, q, since)
+	}
 	return c.readSelected(ctx, q, since, committed, nil)
 }
 
@@ -92,6 +97,12 @@ func (c *eventCache) read(ctx context.Context, q queryer, since int64, committed
 // The cached part is taken from the index; the tail after it is read from SQLite, whole when
 // the read may extend the cache, and narrowed by sel otherwise.
 func (c *eventCache) readSelected(ctx context.Context, q queryer, since int64, committed bool, sel *EventSelection) ([]event.Event, error) {
+	if !eventCacheEnabled.Load() {
+		if sel == nil {
+			return events(ctx, q, since)
+		}
+		return c.readNarrow(ctx, q, since, committed, *sel)
+	}
 	c.mu.Lock()
 	cached := c.events
 	var positions [][]int
