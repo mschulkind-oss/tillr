@@ -2452,6 +2452,14 @@ sampling point for both. Recover the before measurement from proof and host reco
 available; otherwise collect a controlled baseline on the old revision. Until both observations
 exist, report the comparison as pending operator verification, not as a lane failure or a pass.
 
+**Amended 2026-11-22 by [`D-GR48`](#versioned-wait-queues-keep-a-slot-rules-change-from-deadlocking-running-waiters)
+(designer's decision from an operator request; not the owner's ruling, and the owner may overturn
+it):** the physical capacity locks (`slot-*`, `proof-*`, `gate-*`), live holder metadata
+(`*.holder.json`), and per-holder caps (`holder-caps/`) remain shared at `lock_dir` so this
+machine-wide test budget holds across every running process, while wait-signaling locks and
+`wait-queue/` are scoped by a pinned rules version inside `lock_dir` so processes straddling a
+slot-rules change never mutually yield.
+
 ### 6.9 Upstream drift is a probe, not a check
 
 Two of today's checks answer a question about a moving upstream: `series` and
@@ -3247,7 +3255,16 @@ below are therefore decided together (`D-GR43`, the designer's, subject to owner
      median of `< 1` second (`~5–8` seconds p99), a sibling non-Go gate waits **`0` seconds**
      for slots and a sibling Go gate acquires at least `2` slots immediately (`0` seconds) and
      additional freed slots within **`~1–10` seconds** — never waiting behind `trunk-proof` or a
-     whole `drain` suite.
+     whole `drain` suite. **Amended 2026-11-22 by
+     [`D-GR48`](#versioned-wait-queues-keep-a-slot-rules-change-from-deadlocking-running-waiters)
+     (designer's decision from an operator request; not the owner's ruling, and the owner may
+     overturn it):** commits `a42c74ee91` `[unlanded]`, `a45355b197` `[unlanded]` and `6a5a711e3b` `[unlanded]`
+     revised slot priority to `repair > proof > gate > ordinary` (with FIFO arrival order within
+     each class, `gate` taking `slot-*` then `gate-*` and never `proof-*` while yielding `slot-*`
+     to `repair`, `proof`, and earlier `gate` waiters, and post-verdict base replays running in
+     `ordinary`), and `D-GR48` scopes wait-signaling locks and `wait-queue/` under a pinned rules
+     version inside `lock_dir` while keeping physical `slot-*`, `proof-*`, and `gate-*` locks
+     shared at `lock_dir`.
 2. **Shard uncached `go-affected` packages with one warm compile, cache-preserving isolation,
    and LPT duration balance (amending `D-GR39` and `D-GR40`).**
    - **Warm compilation once, keep `go test` result caching on:** Before launching shards for a
@@ -3335,6 +3352,121 @@ tests or move those monitoring lines; nothing here assumes either.
 | Concurrent gates alone without splitting `drain` or isolating shards | Rejected. Stops sibling blocking, leaves every `drain` landing burning `~1,500` CPU-seconds over `2–5` minutes and starving test slots. |
 | Add `t.Parallel()` across existing `drain` tests instead of splitting packages | Rejected. `128` test files mutate process-wide `GIT_CONFIG_GLOBAL` via `t.Setenv` (which Go panics on alongside `t.Parallel()`), and intra-process parallelism bypasses the machine-wide `TESTS_PER_SLOT = 1` slot bound (`D-GR20`). |
 | Raise `fast-gate-run-slow` above `60` seconds or add a `60`-second kill/carry timeout on `go-affected` | Rejected. Raising the alert hides the exact signal `D-GR38` asked for; killing or carrying a progressing check violates `D-GR15`. |
+
+#### Versioned wait queues keep a slot-rules change from deadlocking running waiters
+
+What follows is the designer's decision of 2026-11-22 ([`D-GR48`](#decision-ledger)), written from
+the operator request of 2026-11-22 on the 134-waiter Go test-slot deadlock and to answer the build
+worker's conflict report against it. None of it — neither the request's framing, nor the priority
+order, nor the versioned-queue mechanism, nor the rejected alternatives — is the owner's ruling,
+and the owner may overturn any part of it. It amends [`D-GR20`](#decision-ledger) and
+[`D-GR43`](#decision-ledger).
+
+**What was measured on 2026-11-22 at 8:20 PM Eastern, and what is not established.** Twelve samples
+over `30` seconds of the Go test slot locks (`<GOCACHE>/go-test-shards-locks`, read from
+`/proc/locks`) each showed `1` of `16` ordinary slots, `1` of `6` proof slots, and `4` of `6` gate
+slots held, with `134` tickets in `wait-queue/` and nothing moving: `trunk-proof` for `d94ed8bb48` `[unlanded]`
+had made no progress for `90` minutes, five candidate gates sat at `50` to `125` minutes, and two
+base replays sat at `105` minutes.
+
+Reading [`tools/go-test-shards.py`](../../tools/go-test-shards.py) across `d94ed8bb48` `[unlanded]`
+and `a45355b197` `[unlanded]` alongside `/proc/locks` established the mechanism:
+
+1. **Incompatible yield orders sharing one unversioned queue.** After `a42c74ee91` `[unlanded]` and
+   through `d94ed8bb48` `[unlanded]`, class priority was `repair > gate > proof > ordinary`, and a
+   `proof`-class caller yielded both `slot-*` and `proof-*` while any process held a shared lock on
+   `gate-waiting.lock`. Commit `a45355b197` `[unlanded]` (`fix(gate): run candidate gates in gate
+   slot class behind trunk proof`) defaulted [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py)
+   to `SLOT_CLASS_GATE` and changed `tools/go-test-shards.py` to `repair > proof > gate > ordinary`,
+   restricting `gate` callers to `slot-*` and `gate-*` (never `proof-*`) and making `gate` callers
+   yield `slot-*` while any process held a shared lock on `proof-waiting.lock` (commit `6a5a711e3b` `[unlanded]`
+   then moved post-verdict base replays onto `ordinary`).
+2. **Mutual yield across running revisions.** Every process started before `a45355b197` `[unlanded]`
+   landed (`trunk-proof`, both base replays, and the gates in `lane-1`, `lane-2`, `lane-5`,
+   `express-1`, and `express-2`) ran the pre-`a45355b197` `[unlanded]` rules as class `proof` and
+   held shared locks on `proof-waiting.lock`. The one gate started after `a45355b197` `[unlanded]`
+   (`lane-4`, `pid 3710716`) ran the new rules as class `gate`, holding `4` `gate-*` slots (its
+   `DEFAULT_GATE_RESERVED_CAP = 4`) and `4` shared locks on the same unversioned
+   `gate-waiting.lock` while waiting for `slot-*`. Old `proof` callers yielded `slot-*` and
+   `proof-*` to `gate-waiting.lock`, while the new `gate` caller yielded `slot-*` to
+   `proof-waiting.lock` and could not touch `proof-*` or a fifth `gate-*` slot — leaving `20` slots
+   (`15` ordinary, `5` proof) empty whenever a new-rules `gate` caller was waiting.
+3. **Not established and out of scope.** How long `lane-4`'s gate needed on its `4` held `gate-*`
+   slots is not established, and nothing here claims a duration for it. Per the operator request,
+   this change is the durable cure so a slot-rules change never again shares a wait queue with the
+   rules it replaced; it does **not** forcibly unlock or terminate processes already running on the
+   machine.
+
+**Why the build worker reported a conflict at `ff3f38b0e3`, and how this answer resolves it.**
+Because `trunk-proof` was wedged during the incident, `refs/tillr/green` remained at `ff3f38b0e3`
+(`11` commits before `a45355b197` `[unlanded]`), so the build worker was staged on `ff3f38b0e3`
+where `tools/go-test-shards.py` still held Slice B's pre-`a42c74ee91` `[unlanded]`
+`gate > proof > ordinary` rules (no `repair` class and `gate` not yielding to `proof`). At
+`ff3f38b0e3`, running pre-`a45355b197` `[unlanded]` code beside the worktree's code produced no
+mutual yield (`c5`), and pinning the worktree's yield rules to a rules version (`c7`) would have
+pinned `gate > proof > ordinary` in contradiction of `main` where `a45355b197` `[unlanded]` had
+already landed. Recording `D-GR48` here reconciles this document with `main`'s
+`repair > proof > gate > ordinary` rules, and landing this commit onto `main` advances the returned
+build worker's base (`blockBaseAt` and `designAnswerLanded` in
+[`tools/tillr-drain/drain/lane_base.go`](../../tools/tillr-drain/drain/lane_base.go), `D-GR25`,
+[`D-JL32`](./tillr-judge-and-lifecycle.md#419-a-worker-returned-by-a-design-answer-starts-from-a-trunk-that-holds-the-answer-d-jl32))
+to the landed trunk commit at or after `a45355b197` `[unlanded]` and `6a5a711e3b` `[unlanded]`.
+
+**What `D-GR48` decides (designer's decision from the operator request; the owner may overturn it):**
+
+1. **Slot-class priority and pool eligibility (`repair > proof > gate > ordinary`, amending
+   `D-GR43`).** Within one rules version, `tools/go-test-shards.py` serves waiters in priority
+   order `repair > proof > gate > ordinary`, and in arrival order (FIFO) within the same priority
+   class:
+   - `repair` (automatic-revert and trunk-fixer gates) takes `slot-*`, `proof-*`, or `gate-*` ahead
+     of `proof`, `gate`, and `ordinary`, holding `repair-waiting.lock` in its rules-versioned queue
+     while waiting;
+   - `proof` (`trunk-proof`) takes `slot-*` then `proof-*`, yields to `repair` and earlier `proof`
+     waiters, and holds `proof-waiting.lock` in its rules-versioned queue while waiting;
+   - `gate` (candidate landing gates, including `go_affected.py` and landing-tier `gate-runner`,
+     capped per gate at `max_slots = 8` total and `gate_reserved_limit = 4` `gate-*` slots) takes
+     `slot-*` then `gate-*` (**never** `proof-*`), yields `slot-*` to `repair`, `proof`, and
+     earlier `gate` waiters, and holds `gate-waiting.lock` in its rules-versioned queue while
+     waiting;
+   - `ordinary` (lane workers and post-verdict base replays) takes `slot-*` only and yields to
+     `repair`, `proof`, `gate`, and earlier `ordinary` waiters.
+2. **Shared physical capacity locks at `lock_dir`, rules-versioned wait queues inside `lock_dir`
+   (amending `D-GR20` and `D-GR43`).** Physical slot locks (`slot-0..limit-1.lock`,
+   `proof-0..reserved_proof-1.lock`, `gate-0..reserved_gate-1.lock`), live holder metadata
+   (`*.holder.json`), and per-holder caps (`holder-caps/`) stay directly under `lock_dir`
+   (`<GOCACHE>/go-test-shards-locks` by default, or `GO_TEST_SHARDS_LOCK_DIR` / `--lock-dir`) so
+   total concurrent Go test binaries across the machine remain bounded by the core-derived pool
+   even when `green`-based lanes and `tip`-based proof or gates run different commits. All
+   wait-signaling locks (`repair-waiting.lock`, `proof-waiting.lock`, `gate-waiting.lock`) and FIFO
+   wait tickets (`wait-queue/`) are placed under a rules-versioned namespace inside `lock_dir`
+   (such as a rules-versioned subdirectory under `lock_dir`, following any exact path or naming the
+   request's criteria state). A caller inspects, acquires, and yields only to wait locks and wait
+   tickets in its own rules version's namespace — never reading or locking the unversioned root
+   `*-waiting.lock` / `wait-queue/` files or another rules version's namespace. Callers on
+   different rules versions therefore contend only on non-blocking physical slot `flock`s
+   (`LOCK_EX | LOCK_NB`) with zero cross-version yielding, while callers on the same rules version
+   keep exact priority preemption and FIFO ordering.
+3. **Yield rules pinned to the rules version (`c7`) and cross-version non-yield verified (`c5`).**
+   `tools/go-test-shards.py` binds its priority order, pool eligibility per class, and per-pool
+   yield rules to an explicit rules version (or versioned canonical rule specification), and
+   [`tests/go-test-shards.test.py`](../../tests/go-test-shards.test.py) pins the
+   `repair > proof > gate > ordinary` yield and pool rules to that rules version so changing
+   priority, pool access, or yielding without advancing the rules version fails
+   `tests/go-test-shards.test.py`. `tests/go-test-shards.test.py` also verifies deterministically
+   (using thread/event synchronization and no wall-clock elapsed-time comparison, per
+   [`tools/gate/checks/elapsed-time.py`](../../tools/gate/checks/elapsed-time.py) and `D-GR15`)
+   that running pre-`a45355b197` `[unlanded]` waiters (`d94ed8bb48` `[unlanded]` rules:
+   `repair > gate > proof > ordinary` on unversioned `lock_dir` wait locks and `wait-queue/`)
+   beside current-rules `gate` waiters on the same `lock_dir` produces no mutual yield (a case that
+   deadlocks against unversioned `a45355b197` `[unlanded]` and completes with versioned wait
+   queues) while respecting `lock_dir`'s shared `slot-*`, `proof-*`, and `gate-*` limits.
+
+| Alternative (evaluated by the designer; the owner may overturn) | Verdict |
+| :--- | :--- |
+| Split the entire `lock_dir` per rules version (for example `<GOCACHE>/go-test-shards-locks-v2`) so old and new runners use separate `slot-*`, `proof-*`, and `gate-*` files | Rejected. Allows old-version lane workers and new-version proof/gates to hold two full pools at once (`44` concurrent test binaries instead of `22` on 32 cores), violating `D-GR20`, and still deadlocks whenever callers pass an explicit `--lock-dir` or `GO_TEST_SHARDS_LOCK_DIR`. |
+| Keep unversioned `*-waiting.lock` and `wait-queue/` files shared across rules changes | Rejected. Caused the 2026-11-22 8:20 PM Eastern deadlock (`134` queued tickets, `20` empty slots for `90–125` minutes) whenever two active commits invert which class yields to which wait lock. |
+| Bump a version string once with no test pinning yield rules to the rules version | Rejected. A future edit to class priority, eligible pools, or yield predicates that forgets to bump the version silently reuses the prior version's queue and reintroduces cross-version mutual yield. |
+| Forcibly unlock or kill processes already waiting on host locks as part of this item | Rejected / out of scope. Explicitly excluded by the operator request (*"It does not free the processes already running"*) and by the repository's ban on pattern-based process termination. |
 
 #### A non-Go file in reads runs only the tests in each package that read it
 
@@ -4088,7 +4220,13 @@ own decisions, made to carry them out; each is the owner's to overturn by commen
 owner ruled on both on 2026-11-17, and that ruling is `D-GR15`. `D-GR16` is this design's own
 decision carrying `D-GR15` out, and is the owner's to overturn. `D-GR17` records the owner's
 2026-11-19 ruling on shard lifetime and tests that hang or fail under load, together with the
-2026-11-20 scope ruling for its build. `D-GR21` is the owner's ruling of 2026-11-21 on a check
+2026-11-20 scope ruling for its build. `D-GR20` is the designer's decision of 2026-11-20 on an
+operator request bounding machine-wide concurrent Go test binaries, and `D-GR48` is the designer's
+decision of 2026-11-22 on an operator request (answering a build worker's conflict report at
+`ff3f38b0e3`) recording the `repair > proof > gate > ordinary` slot-class order and scoping
+`tools/go-test-shards.py`'s wait-signaling locks and `wait-queue/` by a pinned rules version inside
+the shared `lock_dir`; neither `D-GR20` nor `D-GR48` is the owner's ruling, and the owner may
+overturn either. `D-GR21` is the owner's ruling of 2026-11-21 on a check
 with a pass and a fail on one fingerprint, recorded in two verbatim statements from that day;
 `D-GR22` is the operator's reading of the first statement together with this design's mechanism,
 neither of which is the owner's ruling (except the two points the owner's second statement ruled
@@ -4179,7 +4317,8 @@ and recorded timings; it amends `D-GR43` and is the owner's to overturn.
 | `D-GR16` | A check shows progress in a one-second sample when its output grew or its process group's CPU time rose; 60 consecutive samples with neither is a stall. The runner ends a stalled check's process group and records `stalled`, which is neither pass, fail nor over-budget, with what it observed. The drain keeps the candidate and re-gates it once, when fewer gates are in flight than at the stall or no other gate is; a second stall on the same candidate holds the item, naming the check. `gate-harness-error` stays for a check that could not start or crashed. Settled by the session's designer on 2026-11-17, on `D-GR15` and [landing principle 11](landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) (a re-run waits on a named change, never on time passing); the owner may overturn it. **Rejected:** a longer fixed timeout, which fails the same way at a higher load; re-gating on the next pass, which names no change. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`) |
 | `D-GR17` | **Owner ruling (2026-11-19) and scope answer (2026-11-20).** *"Rule of this repository: a test that fails or hangs under load is a broken test; do not add a timeout, a retry or a longer wait as the fix"*, and a test run started by a worker must not outlive the command that started it. `tools/go-test-shards.py` must tie every `go tool test2json` and compiled shard process group (`start_new_session=True`) to the invoking runner command's lifetime and keep the compiled binary directory valid until every shard exits; hanging or load-sensitive tests in `tools/tillr-drain` are fixed at their synchronization cause so multiple concurrent suite runs pass. The build scope covers `tools/tillr-drain/` (mirrored to `yolo-packs/tillr/` via `just pack-sync`, keeping `runTests` in `tools/tillr-drain/main_test.go` self-contained or paired with `tests/tillr-testmain_test.go`), `tools/go-test-shards.py`, and `tests/` (`tests/go-test-shards.test.py`, `tests/tillr-testmain_test.go`). **Rejected:** adding timeouts, retries, or longer sleeps to mask load hangs; leaving detached `test2json` sessions alive after `go-test-shards.py` exits or is killed. | 2026-11-19 / 2026-11-20, owner | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Queued |
 | `D-GR18` | **Owner ruling, 2026-11-20:** "for this repository, I want a personal filter that says the commits may only be one of the two identities, my personal or professional identity. But that is for this repository, not for Tiller." | 2026-11-20 | [Which identities this repository accepts](#which-identities-this-repository-accepts) | Not yet built |
-| `D-GR20` | **Designer's decision on the operator request; the owner may overturn it.** Bound aggregate test parallelism across runs. Lanes test the bound and exclusion of queue time; the proof operator measures before/after proof wall time and load with five active lanes. | 2026-11-20 | [Bound concurrent tests, not just shards](#bound-concurrent-tests-not-just-shards) | Not yet verified |
+| `D-GR20` | **Designer's decision on the operator request; the owner may overturn it.** Bound aggregate test parallelism across runs. Lanes test the bound and exclusion of queue time; the proof operator measures before/after proof wall time and load with five active lanes. **Amended 2026-11-22 by `D-GR48` (designer's decision from an operator request; the owner may overturn it):** physical `slot-*`, `proof-*`, and `gate-*` locks stay shared at `lock_dir` while wait-signaling locks and `wait-queue/` are scoped by a pinned rules version inside `lock_dir`. | 2026-11-20; amended 2026-11-22 | [Bound concurrent tests, not just shards](#bound-concurrent-tests-not-just-shards) | Built (`tools/go-test-shards.py`); operator proof comparison pending |
+| `D-GR48` | **Not the owner's ruling; the designer's decision, from an operator request of 2026-11-22, which the owner may overturn.** Answers a build worker's conflict report at `ff3f38b0e3` (`refs/tillr/green` during the incident, `11` commits before `a45355b197` `[unlanded]`) on the operator request for the 2026-11-22 8:20 PM ET Go test-slot deadlock (`1` of `16` ordinary, `1` of `6` proof, and `4` of `6` gate slots held across `12` `/proc/locks` samples over `30s`, `134` queued tickets, `trunk-proof` for `d94ed8bb48` `[unlanded]` stalled `90m`, five candidate gates `50–125m`, two base replays `105m`; how long `lane-4`'s gate needed on `4` slots is not established). Amends `D-GR20` and `D-GR43`: (1) record `main`'s post-`a45355b197` `[unlanded]` / `6a5a711e3b` `[unlanded]` slot-class order `repair > proof > gate > ordinary` with FIFO arrival order within each class (`a42c74ee91` `[unlanded]`), where `repair` takes `slot-*`, `proof-*`, or `gate-*` ahead of all others, `proof` takes `slot-*` then `proof-*` and yields to `repair` and earlier `proof` waiters, `gate` (capped per gate at `max_slots = 8` total and `gate_reserved_limit = 4` `gate-*`) takes `slot-*` then `gate-*` (**never** `proof-*`) and yields `slot-*` to `repair`, `proof`, and earlier `gate` waiters, and `ordinary` (lane workers and base replays) takes `slot-*` behind `repair`, `proof`, `gate`, and earlier `ordinary` waiters; (2) keep physical capacity locks (`slot-*.lock`, `proof-*.lock`, `gate-*.lock`), live holder metadata (`*.holder.json`), and `holder-caps/` shared at `lock_dir` (`D-GR20`), while scoping all wait-signaling locks (`repair-waiting.lock`, `proof-waiting.lock`, `gate-waiting.lock`) and FIFO wait tickets (`wait-queue/`) under a rules-versioned namespace inside `lock_dir` so processes on different rules versions never read or assert one another's wait locks or wait tickets (eliminating cross-version mutual yield without freeing already-running host processes); (3) bind priority, eligible pools, and yield rules in `tools/go-test-shards.py` to an explicit rules version pinned in `tests/go-test-shards.test.py` (`c7`), and verify deterministically with no elapsed-time assertion (`D-GR15`) that pre-`a45355b197` `[unlanded]` (`repair > gate > proof > ordinary`, unversioned `lock_dir` wait locks/queue) and current-rules `gate` waiters sharing one `lock_dir` progress with zero mutual yield (`c5`). Landing this record onto `main` also advances the returned worker's base (`lane_base.go`, `D-GR25`, [`D-JL32`](./tillr-judge-and-lifecycle.md#419-a-worker-returned-by-a-design-answer-starts-from-a-trunk-that-holds-the-answer-d-jl32)) to a trunk commit containing `a45355b197` `[unlanded]`. **Rejected:** splitting the entire `lock_dir` (`slot-*`/`proof-*`/`gate-*`) per rules version; sharing unversioned wait locks and `wait-queue/` across rules changes; leaving yield rules unpinned to the rules version in tests; forcibly unlocking or killing already-running host processes. | 2026-11-22 | [Versioned wait queues keep a slot-rules change from deadlocking running waiters](#versioned-wait-queues-keep-a-slot-rules-change-from-deadlocking-running-waiters) | — (not built) |
 | `D-GR19` | **Designer's decision on the operator request; the owner may overturn it.** Apply one tracked list of exact pairs to author and committer in both the standalone check and the live `commit-identity` gate. Preserve their ranges and refusal of repository identity overrides; do not change commit creation or tillr. | 2026-11-20 | [Which identities this repository accepts](#which-identities-this-repository-accepts) | Not yet built |
 | `D-GR21` | **Owner ruling (2026-11-21), verbatim (two statements):** *"The correct move for a flaky test is disable it, file an item to fix it, and don't let it block anything. It is not considered green, but it also doesn't let you block other things."* and *"And the principle here is you make the trunk green by disabling the flaky test. The test is not green because it's flaky, but the trunk is green because the test is no longer included.And yes, the item that is filed should be to re-enable it correctly, the test that was flaky."* It governs a check whose result store holds both a pass and a fail for one fingerprint, rules that disabling excludes the flaky check so the trunk is green while the check itself is not green and that the filed item is to re-enable the flaky check correctly, and replaces the `flaky` pass of `D-GR8`, the live re-run of [`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A, and the red verdict a filed operator request of 2026-11-20 asked for. | 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
 | `D-GR22` | **Not the owner's ruling (except the two points ruled directly in `D-GR21`'s second statement); the owner may overturn the rest.** The operator's reading of `D-GR21` (2026-11-21): the check is disabled and not run for a verdict, is reported as disabled and never as passed or green, refuses no landing, does not turn the trunk red (ruled directly in `D-GR21`), gets one deduplicated repair item with both times and both output locations, and is enabled again when the repair lands (filing the item to re-enable the flaky check correctly is ruled directly in `D-GR21`). The designer's mechanism for it (2026-11-21): a `disabled` result counted apart from passes; `log_ref` on each stored record; a marker per check id, so a new fingerprint does not re-arm an unrepaired check; the drain files `flaky-<check-id>` from the marker (`D-GR23`, replacing "from the verdict"), matching only an unfinished item, so a contradiction found after a landed repair files a new item with the new evidence; the repair's own candidate runs the check, and `tillr-gate enable` then removes the marker and sets the contradicting pair aside. Amended by `D-GR41` so live `disabled` emission turns on in slice 2d after the sweep (2b) and consumer handling (2c, 3a) land. **Rejected:** a red verdict (the filed request; replaced by `D-GR21`); a live re-run whose pass is green ([`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A; replaced by `D-GR21`); disabling by fingerprint alone; any retry, count or time window. | 2026-11-21; amended 2026-11-21 and 2026-11-22 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
