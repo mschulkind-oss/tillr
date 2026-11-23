@@ -40,8 +40,8 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 	target := l.laneTarget(lane)
 	head := l.headOf(ctx, lane)
 	candidate := Candidate{ItemID: req.ItemID, LaneID: lane, RunID: req.RunID, TickID: tick, Worktree: target, BaseRef: l.lanePatchRef(lane), BaseSHA: l.settleBase(lane, mainSHA), HeadSHA: head}
-	if IsTrunkFixer(req.ItemID) && head == candidate.BaseSHA {
-		if resolved, err := l.resolveKeptFixerWithoutCommit(ctx, req.ItemID); err != nil {
+	if IsTrunkFixer(req.ItemID) {
+		if resolved, err := l.resolveKeptProvedFixer(ctx, req.ItemID); err != nil {
 			return laneOutcome{err: err}, true
 		} else if resolved {
 			l.forgetSegment(req.RunID)

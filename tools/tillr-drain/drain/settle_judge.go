@@ -33,6 +33,17 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 			return released, err
 		},
 	}
+	if IsTrunkFixer(c.ItemID) {
+		if resolved, err := l.resolveKeptProvedFixer(ctx, c.ItemID); err != nil {
+			return laneOutcome{err: err}
+		} else if resolved {
+			stop := l.abandon(ctx, c.LaneID, c.RunID, c.HeadSHA, "resolved elsewhere: rerun passed")
+			if stop == "" {
+				err = l.markExamined(ctx, work.Decision)
+			}
+			return laneOutcome{stop: stop, err: err}
+		}
+	}
 	var stop string
 	var landed bool
 	var err error
