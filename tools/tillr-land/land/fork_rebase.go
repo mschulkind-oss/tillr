@@ -17,7 +17,7 @@ const patchPrefix = "refs/heads/patch/"
 
 // forkRebase carries only an already verified old -> new transition. A later
 // delivery can be the cache's target on recovery, but never the CAS base.
-type forkRebase struct{ old, new string }
+type forkRebase struct{ old, new, release string }
 
 func (r forkRebase) verified() bool { return r.old != "" }
 
@@ -113,7 +113,7 @@ func (t *Trunk) releaseRebase(req LandingRequest) (forkRebase, error) {
 	if strings.TrimSpace(merges) != "" {
 		return forkRebase{}, nil
 	}
-	return forkRebase{old: req.BaseSHA, new: req.HeadSHA}, nil
+	return forkRebase{old: req.BaseSHA, new: req.HeadSHA, release: release}, nil
 }
 
 // moveForkRebase installs the recovery marker and history pin in the same ref

@@ -9367,3 +9367,5 @@ _shard_boundary("runner-and-fast-tree-subsuites", 18)
 subprocess.run([sys.executable, str(ROOT / "tools/gate/runner-first.test.py")], check=True)
 # 68. Fast tree checks run before fork-check in the landing gate.
 subprocess.run([sys.executable, str(ROOT / "tests/fast-tree-in-done.test.py")], check=True)
+# 69. A gate refusal whose only failure is a fork pin mismatch says so.
+subprocess.run([sys.executable, str(ROOT / "tests/fork-pin-mismatch.test.py")], check=True)
