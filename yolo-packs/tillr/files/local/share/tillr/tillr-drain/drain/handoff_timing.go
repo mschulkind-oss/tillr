@@ -33,6 +33,23 @@ type examinationTimer struct {
 
 type examinationTimerKey struct{}
 
+type preHandoffKey struct{}
+
+type preHandoffState struct {
+	start  time.Time
+	phases []handoffSpan
+}
+
+func withPreHandoffSpans(ctx context.Context, start time.Time, phases []handoffSpan) context.Context {
+	if start.IsZero() && len(phases) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, preHandoffKey{}, preHandoffState{
+		start:  start,
+		phases: append([]handoffSpan(nil), phases...),
+	})
+}
+
 func timeHandoffPhase(ctx context.Context, phase string) func() {
 	timer, ok := ctx.Value(examinationTimerKey{}).(*examinationTimer)
 	if !ok {
@@ -67,6 +84,15 @@ func (l *Loop) recordHandoffTiming(d Decision, timing handoffTiming) {
 func (l *Loop) timeHandoff(ctx context.Context, d Decision, phase string) (context.Context, func()) {
 	t := &examinationTimer{}
 	start := time.Now()
+	if pre, ok := ctx.Value(preHandoffKey{}).(preHandoffState); ok {
+		if !pre.start.IsZero() {
+			start = pre.start
+		}
+		if len(pre.phases) > 0 {
+			t.phases = append(t.phases, pre.phases...)
+		}
+		ctx = context.WithValue(ctx, preHandoffKey{}, preHandoffState{})
+	}
 	ctx = context.WithValue(ctx, examinationTimerKey{}, t)
 	ctx = store.ObserveWrites(ctx, func(start, end time.Time) { t.add("store_write", start, end) })
 	return ctx, func() {

@@ -1630,7 +1630,9 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 	if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 		tick.BriefTemplate = &stager.Template
 	}
+	l.mu.Lock()
 	questions := l.questions
+	l.mu.Unlock()
 	if questions == nil {
 		// Standalone planner callers do not own a document refresh lifecycle.
 		questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
@@ -3428,15 +3430,23 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork, at time.Time, timing *PassTiming, watched []string) runCompletion {
 	local := &LoopResult{}
 	completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: timing}
+	lockStart := time.Now()
 	ctx, unlock, lockErr := l.lockRestartMechanical(ctx)
 	if lockErr != nil {
 		completion.outcome.err = lockErr
 		return completion
 	}
+	lockEnd := time.Now()
+	if pre, ok := ctx.Value(preHandoffKey{}).(preHandoffState); ok && !pre.start.IsZero() {
+		ctx = withPreHandoffSpans(ctx, pre.start, append(pre.phases, newHandoffSpan("restart_lock_wait", lockStart, lockEnd)))
+	} else {
+		ctx = withPreHandoffSpans(ctx, lockStart, []handoffSpan{newHandoffSpan("restart_lock_wait", lockStart, lockEnd)})
+	}
 	ctx, recordTiming := l.timeHandoff(ctx, work.Decision, "examination")
 	defer recordTiming()
 	defer unlock()
 	if work.NeedsStage {
+		endStage := timeHandoffPhase(ctx, "stage_pinned_candidate")
 		if err := l.stagePinnedCandidate(ctx, work); err != nil {
 			if refusal := asLaneRefusal(err); refusal != nil {
 				// The lane's own state refused the pinned candidate: the lane leaves
@@ -3450,17 +3460,28 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 			}
 			completion.outcome.err = err
 		}
+		endStage()
+	}
+	var survivingOut laneOutcome
+	var survivingHeld bool
+	if completion.outcome.err == nil && completion.laneRefusal == nil {
+		endProc := timeHandoffPhase(ctx, "check_surviving_processes")
+		survivingOut, survivingHeld = l.checkSurvivingRunProcesses(ctx, d.ItemID, d.LaneID, examinationRunIDs(work)...)
+		endProc()
 	}
 	if completion.outcome.err != nil || completion.laneRefusal != nil {
 		// The claimed lane remains pending so a replacement retries staging.
-	} else if out, held := l.checkSurvivingRunProcesses(ctx, d.ItemID, d.LaneID, examinationRunIDs(work)...); held {
-		completion.outcome = out
-		completion.laneRefusal = out.laneRefusal
+	} else if survivingHeld {
+		completion.outcome = survivingOut
+		completion.laneRefusal = survivingOut.laneRefusal
 	} else if d.Reason == ReasonItemAlreadyTerminal {
 		// The plan read the terminal state and the claim's version check rebound it;
 		// the settling write rereads it for the record.
+		endTerminal := timeHandoffPhase(ctx, "settle_terminal")
 		completion.outcome.err = l.settleTerminalItem(ctx, work, &itemTerminalError{ItemID: d.ItemID, Step: "plan"})
+		endTerminal()
 	} else if d.WorkflowRelease {
+		endRelease := timeHandoffPhase(ctx, "workflow_release")
 		owned, err := l.stagedNodeRun(work.Decision)
 		if err == nil && (owned != "" || work.Decision.NodeIndex > 0) {
 			// The run pin is the release's retained head. A crash after
@@ -3502,13 +3523,17 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 		if err == nil {
 			err = l.markExamined(ctx, work.Decision)
 		}
+		endRelease()
 		completion.outcome.err = err
 	} else if d.Action == ActionSettle && len(work.Decision.Parallel) > 0 {
+		endParallel := timeHandoffPhase(ctx, "settle_parallel")
 		completion.outcome = l.settleParallel(ctx, work, local, timing, watched)
+		endParallel()
 		if completion.outcome.err == nil && completion.outcome.stop == "" {
 			completion.outcome, completion.step = l.judgeSettledCandidate(ctx, d, local, timing)
 		}
 	} else if d.Action == ActionSettle {
+		endRead := timeHandoffPhase(ctx, "read_terminal_record")
 		s, err := store.OpenRead(ctx, l.cfg.Store)
 		var rec *run.Record
 		if err == nil {
@@ -3519,11 +3544,14 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 			})
 			s.Close()
 		}
+		endRead()
 		if err == nil && rec == nil {
 			err = fmt.Errorf("run %s lost its terminal record", d.RunRequest.RunID)
 		}
 		if err == nil {
+			endSpend := timeHandoffPhase(ctx, "record_settlement_spend")
 			err = l.recordSettlementSpend(ctx, timing.TickID, work.LoopID, *rec)
+			endSpend()
 		}
 		if err == nil {
 			l.countSettledSpend(local, *rec, work.LoopID)
@@ -3540,7 +3568,9 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 				if work.ResumeAfterRestart {
 					reason = "the previous loop lost its run face, but the staged session and worktree are intact"
 				}
+				endCont := timeHandoffPhase(ctx, "run_continuation")
 				resumed, resumedLog, stop, resumeErr := l.runContinuation(ctx, d.LaneID, *d.RunRequest, l.lanePath(d.LaneID), *rec, d.RunRequest.CorrelationID, at, local, watched, reason)
+				endCont()
 				if resumeErr != nil || stop != "" {
 					completion.outcome = laneOutcome{stop: stop, err: resumeErr}
 				} else if resumed.RunID == "" {
@@ -3550,16 +3580,22 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 				}
 			}
 			if completion.outcome.err == nil && completion.outcome.stop == "" {
+				endSpend := timeHandoffPhase(ctx, "record_settlement_spend")
 				completion.outcome.err = l.recordSettlementSpend(ctx, timing.TickID, work.LoopID, *rec)
+				endSpend()
 			}
 			if completion.outcome.err == nil && completion.outcome.stop == "" {
+				endSettle := timeHandoffPhase(ctx, "settle")
 				completion.outcome = l.settle(ctx, work.Decision, *rec, log, work.BaseSHA, d.RunRequest.CorrelationID, at, local, timing, watched, true)
+				endSettle()
 				if completion.outcome.laneRefusal != nil {
 					completion.laneRefusal = completion.outcome.laneRefusal
 				}
 			}
 			if terminal := asItemTerminal(completion.outcome.err); terminal != nil {
+				endTerminal := timeHandoffPhase(ctx, "settle_terminal")
 				completion.outcome = laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
+				endTerminal()
 			}
 		} else {
 			completion.outcome.err = err
@@ -3572,15 +3608,19 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 	}
 	completion.outcome = retainedOutcome(completion.outcome)
 	if completion.outcome.stop == "" && completion.outcome.err != nil {
+		endHold := timeHandoffPhase(ctx, "hold_examination_failure")
 		completion.outcome.err = l.holdExaminationFailure(ctx, d, work, completion.step, completion.outcome.err)
+		endHold()
 		completion.outcome = retainedOutcome(completion.outcome)
 	}
 	// A retained lane keeps its lease: releasing it would let the next staging clear the
 	// work that could not be preserved.
 	if completion.outcome.stop != stopLaneRetained {
+		endRel := timeHandoffPhase(ctx, "release_examination")
 		if err := l.releaseExamination(context.WithoutCancel(ctx), d); err != nil && completion.outcome.err == nil {
 			completion.outcome.err = err
 		}
+		endRel()
 	}
 	completion.detail = local.Detail
 	return completion

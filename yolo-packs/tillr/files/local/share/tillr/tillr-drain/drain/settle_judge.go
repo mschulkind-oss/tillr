@@ -39,7 +39,9 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 	if work.RepairHold != nil {
 		// Retry the retained repair, not another gate and land of the same
 		// original candidate. The original conflict remains the evidence.
+		endConflict := timeHandoffPhase(ctx, "conflict_fix")
 		stop, landed, err = l.conflictFix(ctx, c, work.RepairHold.Conflict, local, timing, work.RepairHold.TrunkSHA)
+		endConflict()
 	} else if work.DirtyHold != nil || work.Gated {
 		stop, landed, err = l.landCandidate(ctx, c, local, timing)
 	} else {
@@ -50,7 +52,10 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 	}
 	if terminal := asItemTerminal(err); terminal != nil {
 		// The item went terminal by another route during this examination.
-		return laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
+		endTerminal := timeHandoffPhase(ctx, "settle_terminal")
+		termErr := l.settleTerminalItem(ctx, work, terminal)
+		endTerminal()
+		return laneOutcome{err: termErr}
 	}
 	if errors.Is(err, errRestartPending) || (l.isRestartReplaced() && errors.Is(err, context.Canceled)) {
 		if !c.laneReleasedForReplay() {
@@ -78,20 +83,26 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 					reason = ReasonCandidateMismatch
 				}
 			}
+			endRelease := timeHandoffPhase(ctx, "release_candidate")
 			_, err = l.releaseCandidate(ctx, &copy, reason, true)
+			endRelease()
 		}
 	}
 	var pinErr *runPinError
 	if (err != nil || stop != "") && !errors.As(err, &pinErr) && !c.laneReleasedForReplay() {
-		if pinErr := l.pinCandidateHead(ctx, c); pinErr != nil {
+		endPin := timeHandoffPhase(ctx, "pin_candidate_head")
+		pinFail := l.pinCandidateHead(ctx, c)
+		endPin()
+		if pinFail != nil {
 			if err == nil {
-				return laneOutcome{err: pinErr}
+				return laneOutcome{err: pinFail}
 			}
 			// Keep the original error when the pin was a secondary failure.
-			l.reportf("loop: %v\n", pinErr)
+			l.reportf("loop: %v\n", pinFail)
 		}
 	}
 	if err == nil && stop == "" && !held {
+		endCleanup := timeHandoffPhase(ctx, "lane_cleanup")
 		if c.laneReleasedForReplay() {
 			if landed {
 				l.reportRefSweepFailure(l.prunePreservedWork(ctx))
@@ -105,6 +116,7 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 		if stop == "" && err == nil {
 			err = l.markExamined(ctx, work.Decision)
 		}
+		endCleanup()
 	}
 	return laneOutcome{stop: stop, err: err}
 }
@@ -114,7 +126,9 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 // on its own lane, unless a hold on the item or a waiting interactive request
 // for that lane needs the planner to interpose.
 func (l *Loop) judgeSettledCandidate(ctx context.Context, d Decision, local *LoopResult, timing *PassTiming) (laneOutcome, string) {
+	endClaim := timeHandoffPhase(ctx, "claim_settled_judge")
 	work, claimed, err := l.claimSettledCandidateJudge(ctx, d, timing)
+	endClaim()
 	if err != nil {
 		return laneOutcome{err: err}, ActionJudge
 	}
@@ -191,11 +205,12 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 		if err != nil {
 			return err
 		}
-		// Only plan the retained candidate unless we need lane offers to decide
-		// whether an interactive request should take priority. Do not run every
-		// queued item's readiness checks on the way to this gate.
+		// Only plan the retained candidate and any unfinished interactive
+		// requests that could wait for this lane. Never plan finished items or
+		// unrelated queued items on the way to this gate.
 		tick.examineItem = d.ItemID
 		byItem := make(map[string]itemRow)
+		var interactive map[string]bool
 		for _, row := range items {
 			if row.ItemID != d.ItemID && (row.Express || item.IsCommentItem(row.ItemID)) {
 				pending := folds.works[row.ItemID]
@@ -206,12 +221,21 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 				}
 				byItem[row.ItemID] = row
 				if !finishedState(declared.Parsed, row.State) || (pending != nil && !pending.Done) {
-					tick.examineItem = ""
+					if interactive == nil {
+						interactive = map[string]bool{d.ItemID: true}
+					}
+					interactive[row.ItemID] = true
 				}
 			}
 		}
-		questions := &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
+		if len(interactive) > 0 {
+			tick.examineItem = ""
+			tick.examineItems = interactive
+		}
+		questions := l.concurrentQuestions(ctx)
+		endPlan := timeHandoffPhase(ctx, "claim_judge_plan")
 		envs, err := planDefinition(r, tick, l.currentPolicy(), questions, declared.Parsed)
+		endPlan()
 		if err != nil {
 			return err
 		}

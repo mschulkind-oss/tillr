@@ -13,6 +13,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
@@ -391,6 +392,114 @@ func TestWaitingInteractiveRequestForLaneReturnsToPlannerBeforeGate(t *testing.T
 				desk, result, steps.gates.Load())
 		}
 		assertCandidateRecordedNotDone(t, f.storePath, "item-design")
+	})
+}
+
+func TestClaimSettledJudgeSkipsFinishedDesignDocsAndReusesSavedQuestions(t *testing.T) {
+	t.Run("skips-finished-items-design-docs", func(t *testing.T) {
+		f, l := passFixture(t, "item-a", "item-done")
+		steps := &countingJudgeSteps{storePath: f.storePath}
+		l.cfg.Steps = steps
+		l.cfg.Lanes = []string{"lane-1"}
+		l.cfg.Policy.Seats = map[string]string{"build": "fixture"}
+
+		const doneDoc = "docs/design/done.md"
+		if err := os.MkdirAll(filepath.Join(f.root, "docs/design"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeForkFile(t, filepath.Join(f.root, doneDoc), "# Done\n")
+		runGit(t, f.root, "add", doneDoc)
+		runGit(t, f.root, "commit", "-qm", "add done design doc")
+
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state = 'landed', design_doc = ? WHERE item_id = 'item-done'`, doneDoc)
+			return err
+		})
+		stageFinishedCandidateOnLane(t, f, l, "item-a", "lane-1")
+		// Queue an interactive express item so claimSettledCandidateJudge plans
+		// interactive items alongside item-a.
+		fileFixtureRequestWith(t, f, "Interactive request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/notes.md"}, false)
+
+		countFile := filepath.Join(t.TempDir(), "vantage-calls")
+		l.cfg.QuestionsCmd = []string{"sh", "-c", `echo x >> "$1"; printf '{"index":{"documents":[]}}'`, "_", countFile}
+
+		var result LoopResult
+		stop, err := l.pass(context.Background(), &result)
+		if err != nil || stop != "" {
+			t.Fatalf("pass: stop=%q err=%v", stop, err)
+		}
+		drainOwned(t, l, &result)
+
+		if raw, err := os.ReadFile(countFile); err == nil && len(raw) > 0 {
+			t.Fatalf("claimSettledCandidateJudge invoked QuestionsCmd %d time(s) for finished item design_doc", len(strings.Split(strings.TrimSpace(string(raw)), "\n")))
+		}
+
+		// A full planDefinition with examineItem="" must also skip finished items' design docs.
+		s := openFixture(t, f.storePath)
+		defer s.Close()
+		if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+			declared, err := definition.ForReader(r)
+			if err != nil {
+				return err
+			}
+			avail := []string{"lane-1"}
+			tick := Pass{Now: l.cfg.Now().UTC().Format(time.RFC3339Nano), AvailableLanes: &avail}
+			q := &VantageQuestions{Root: f.root, Command: l.cfg.QuestionsCmd}
+			_, err = planDefinition(r, tick, l.cfg.Policy, q, declared.Parsed)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if raw, err := os.ReadFile(countFile); err == nil && len(raw) > 0 {
+			t.Fatalf("planDefinition(all) invoked QuestionsCmd %d time(s) for finished item design_doc", len(strings.Split(strings.TrimSpace(string(raw)), "\n")))
+		}
+	})
+
+	t.Run("reuses-saved-questions-index", func(t *testing.T) {
+		f, l := passFixture(t, "item-a")
+		steps := &countingJudgeSteps{storePath: f.storePath}
+		l.cfg.Steps = steps
+		l.cfg.Lanes = []string{"lane-1"}
+		l.cfg.Policy.Seats = map[string]string{"build": "fixture"}
+
+		const activeDoc = "docs/design/active.md"
+		if err := os.MkdirAll(filepath.Join(f.root, "docs/design"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeForkFile(t, filepath.Join(f.root, activeDoc), "# Active\n")
+		runGit(t, f.root, "add", activeDoc)
+		runGit(t, f.root, "commit", "-qm", "add active design doc")
+
+		stageFinishedCandidateOnLane(t, f, l, "item-a", "lane-1")
+		expressID := fileFixtureRequestWith(t, f, "Interactive request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/notes.md"}, false)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET design_doc = ? WHERE item_id = ?`, activeDoc, expressID)
+			return err
+		})
+
+		countFile := filepath.Join(t.TempDir(), "vantage-calls")
+		l.cfg.QuestionsCmd = []string{"sh", "-c", `echo x >> "$1"; printf '{"index":{"documents":[{"path":"docs/design/active.md","questions":[]}]}}'`, "_", countFile}
+		l.syncedSHA = runGit(t, f.root, "rev-parse", TrunkRef)
+		l.resetPassQuestions(context.Background())
+		if _, err := l.questions.Document(activeDoc); err != nil {
+			t.Fatalf("warm questions: %v", err)
+		}
+
+		var result LoopResult
+		stop, err := l.pass(context.Background(), &result)
+		if err != nil || stop != "" {
+			t.Fatalf("pass: stop=%q err=%v", stop, err)
+		}
+		drainOwned(t, l, &result)
+
+		raw, err := os.ReadFile(countFile)
+		if err != nil {
+			t.Fatalf("read count file: %v", err)
+		}
+		calls := len(strings.Split(strings.TrimSpace(string(raw)), "\n"))
+		if calls != 1 {
+			t.Fatalf("QuestionsCmd invoked %d times, want 1 (reused saved index)", calls)
+		}
 	})
 }
 

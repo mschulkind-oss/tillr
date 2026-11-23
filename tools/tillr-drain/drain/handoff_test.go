@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -120,4 +122,150 @@ func TestIntermediateHandoffDoesNotWaitForSiblingLanding(t *testing.T) {
 	unlock()
 	locked = false
 	drainOwned(t, l, &result)
+}
+
+func readHandoffTimings(t *testing.T, root, runID string) []handoffTiming {
+	t.Helper()
+	f, err := os.Open(filepath.Join(RunDir(root, runID), handoffTimingFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var out []handoffTiming
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var entry handoffTiming
+		if err := dec.Decode(&entry); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func handoffCoveredMS(exam handoffTiming) int64 {
+	type interval struct{ start, end int64 }
+	intervals := make([]interval, 0, len(exam.Phases))
+	for _, p := range exam.Phases {
+		s := max(exam.StartMS, p.StartMS)
+		e := min(exam.EndMS, p.EndMS)
+		if s <= e {
+			intervals = append(intervals, interval{s, e})
+		}
+	}
+	sort.Slice(intervals, func(i, j int) bool {
+		if intervals[i].start != intervals[j].start {
+			return intervals[i].start < intervals[j].start
+		}
+		return intervals[i].end < intervals[j].end
+	})
+	var total int64
+	var curEnd int64
+	hasCur := false
+	for _, iv := range intervals {
+		if !hasCur || iv.start > curEnd {
+			total += iv.end - iv.start
+			curEnd = iv.end
+			hasCur = true
+		} else if iv.end > curEnd {
+			total += iv.end - curEnd
+			curEnd = iv.end
+		}
+	}
+	return total
+}
+
+func assertExaminationAccounting(t *testing.T, exam handoffTiming, wantPhases []string) {
+	t.Helper()
+	if exam.Phase != "examination" {
+		t.Fatalf("phase = %q, want examination", exam.Phase)
+	}
+	have := map[string]bool{}
+	for _, p := range exam.Phases {
+		have[p.Phase] = true
+	}
+	for _, want := range wantPhases {
+		if !have[want] {
+			t.Errorf("examination missing sub-phase %q; recorded phases: %+v", want, exam.Phases)
+		}
+	}
+	wall := exam.EndMS - exam.StartMS
+	if wall > 0 {
+		covered := handoffCoveredMS(exam)
+		if covered*10 < wall*9 {
+			t.Errorf("examination sub-phases covered %d/%d ms (%.1f%%), want >= 90%%; phases=%+v",
+				covered, wall, float64(covered)*100/float64(wall), exam.Phases)
+		}
+	}
+}
+
+func TestExaminationRecordsSubPhasesAndAccountsForWallTime(t *testing.T) {
+	t.Run("settle-through-gate-and-land", func(t *testing.T) {
+		f, l := passFixture(t, "item-a")
+		steps := &countingJudgeSteps{storePath: f.storePath}
+		l.cfg.Steps = steps
+		l.cfg.Lanes = []string{"lane-1"}
+		dispatched := stageFinishedCandidateOnLane(t, f, l, "item-a", "lane-1")
+
+		var result LoopResult
+		stop, err := l.pass(context.Background(), &result)
+		if err != nil || stop != "" {
+			t.Fatalf("pass: stop=%q err=%v", stop, err)
+		}
+		drainOwned(t, l, &result)
+
+		timings := readHandoffTimings(t, f.root, dispatched.RunRequest.RunID)
+		if len(timings) != 1 {
+			t.Fatalf("expected 1 examination timing, got %d: %+v", len(timings), timings)
+		}
+		assertExaminationAccounting(t, timings[0], []string{
+			"restart_lock_wait",
+			"check_surviving_processes",
+			"read_terminal_record",
+			"record_settlement_spend",
+			"settle",
+			"claim_settled_judge",
+			"claim_judge_plan",
+			"verify_pre_gate",
+			"candidate_gate",
+			"post_gate",
+			"pre_land",
+			"land",
+			"post_land",
+			"lane_cleanup",
+			"release_examination",
+		})
+	})
+
+	t.Run("settle-yields-to-waiting-express-request", func(t *testing.T) {
+		f, l := passFixture(t, "item-a")
+		steps := &countingJudgeSteps{storePath: f.storePath}
+		l.cfg.Steps = steps
+		l.cfg.Lanes = []string{"lane-1"}
+		l.cfg.Policy.Seats = map[string]string{"build": "fixture"}
+		dispatched := stageFinishedCandidateOnLane(t, f, l, "item-a", "lane-1")
+		fileFixtureRequestWith(t, f, "Interactive request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/notes.md"}, false)
+
+		var result LoopResult
+		stop, err := l.pass(context.Background(), &result)
+		if err != nil || stop != "" {
+			t.Fatalf("pass: stop=%q err=%v", stop, err)
+		}
+		drainOwned(t, l, &result)
+
+		timings := readHandoffTimings(t, f.root, dispatched.RunRequest.RunID)
+		if len(timings) != 1 {
+			t.Fatalf("expected 1 examination timing, got %d: %+v", len(timings), timings)
+		}
+		assertExaminationAccounting(t, timings[0], []string{
+			"restart_lock_wait",
+			"check_surviving_processes",
+			"read_terminal_record",
+			"record_settlement_spend",
+			"settle",
+			"claim_settled_judge",
+			"claim_judge_plan",
+			"release_examination",
+		})
+	})
 }

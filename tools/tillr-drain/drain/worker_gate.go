@@ -24,24 +24,31 @@ func (l *Loop) examineWorkerEnd(ctx context.Context, d Decision, watched []strin
 	l.examinations.Add(1)
 	l.mu.Unlock()
 	defer l.examinations.Done()
+	handoffStart := time.Now()
 	if stopped, err := l.stopRequested(ctx); stopped || err != nil {
 		completion.outcome.err = err
 		return
 	}
+	lockStart := time.Now()
 	ctx, unlock, err := l.lockRestartMechanical(ctx)
 	if err != nil {
 		completion.outcome.err = err
 		return
 	}
 	defer unlock()
+	lockEnd := time.Now()
 	at := l.cfg.Now().UTC()
+	planStart := time.Now()
 	p, err := l.planWorkerSettlement(ctx, d, at)
+	planEnd := time.Now()
 	if err != nil || p == nil {
 		completion.outcome.err = err
 		return
 	}
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
+	claimStart := time.Now()
 	claimed, work, err := l.applyPlanTrunk(ctx, *p, new(string), at, &timing.TickID)
+	claimEnd := time.Now()
 	if err != nil || !claimed {
 		completion.outcome.err = err
 		return
@@ -50,7 +57,12 @@ func (l *Loop) examineWorkerEnd(ctx context.Context, d Decision, watched []strin
 	req := *d.RunRequest
 	req.CorrelationID = timing.TickID
 	d.RunRequest = &req
-	examined := l.examineClaimed(ctx, d, work, at, timing, watched)
+	preSpans := []handoffSpan{
+		newHandoffSpan("restart_lock_wait", lockStart, lockEnd),
+		newHandoffSpan("plan_worker_settlement", planStart, planEnd),
+		newHandoffSpan("claim_worker_settlement", claimStart, claimEnd),
+	}
+	examined := l.examineClaimed(withPreHandoffSpans(ctx, handoffStart, preSpans), d, work, at, timing, watched)
 	timing.Applied = 1
 	timing.DecisionCounts = map[string]int{ActionSettle: 1}
 	timing.EndMS = l.cfg.Now().UnixMilli()
@@ -89,7 +101,7 @@ func (l *Loop) planWorkerSettlement(ctx context.Context, d Decision, at time.Tim
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}
-		questions := &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
+		questions := l.concurrentQuestions(ctx)
 		envs, err := planDefinition(r, tick, l.currentPolicy(), questions, declared.Parsed)
 		if err != nil {
 			return err

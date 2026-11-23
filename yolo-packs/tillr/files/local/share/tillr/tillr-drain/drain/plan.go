@@ -40,6 +40,10 @@ type Pass struct {
 	// every existing lane reservation and readiness dependency. It must not
 	// allocate free lanes to sibling plans that this command will not execute.
 	examineItem string
+	// examineItems narrows planning to an explicit set of items (for example,
+	// a freshly settled candidate plus active interactive requests that could
+	// contend for its lane) without scanning finished history or unrelated items.
+	examineItems map[string]bool
 	// pendingOnly plans unfinished attempts, including their resume and retry
 	// decisions, but leaves new attempts to the starter.
 	pendingOnly bool
@@ -272,7 +276,13 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 }
 
 func (t Pass) plansItem(id string, work *pendingWork) bool {
-	return (t.examineItem == "" || t.examineItem == id) && (!t.pendingOnly || (work != nil && !work.Done))
+	if t.examineItem != "" && t.examineItem != id {
+		return false
+	}
+	if len(t.examineItems) > 0 && !t.examineItems[id] {
+		return false
+	}
+	return !t.pendingOnly || (work != nil && !work.Done)
 }
 
 // planDetails supplies read faces with facts that are not part of the decisions.
@@ -403,6 +413,12 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	for _, item := range items {
 		states[item.ItemID] = item.State
 	}
+	plannedEdges := make(map[string][]string)
+	for id, blockers := range edges {
+		if tick.plansItem(id, works[id]) && !finishedState(def, states[id]) {
+			plannedEdges[id] = blockers
+		}
+	}
 	var green string
 	if def.Completes == "landing" && root != "" {
 		gatePolicy, _, e := ReadGatePolicy(root)
@@ -411,7 +427,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 		}
 		// The planner needs green to prove landed dependencies. The loop can
 		// reuse that observation to select fresh starts' bases.
-		if hasLandedBlocker(states, edges) {
+		if hasLandedBlocker(states, plannedEdges) {
 			if tick.startRefs != nil {
 				green, err = tick.startRefs.proved(context.Background(), root, gatePolicy.LaneBase)
 			} else {
@@ -428,7 +444,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 		if tick.startRefs != nil {
 			tip = tick.startRefs.tip
 		}
-		unproved, err = unprovedBlockers(context.Background(), r, root, green, tip, states, edges)
+		unproved, err = unprovedBlockers(context.Background(), r, root, green, tip, states, plannedEdges)
 		if err != nil {
 			return nil, err
 		}
@@ -1449,8 +1465,13 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// The design document is read before the tick's resources, and before the item's attempt
 	// history: an item whose design still asks something is not dispatchable whatever else
 	// is true, and answering `no-lane` would send an operator looking for a lane to solve a
-	// problem a ruling solves.
-	questions := p.questionState(item)
+	// problem a ruling solves. Skip the read for items already decided by an earlier hold
+	// (especially finished items, whose design documents never affect readiness).
+	var questions questionState
+	if !p.isBlocked(item, blockedBy) && !(p.lands() && p.unproved[item.ItemID] != "") && item.State == p.rules().Ready &&
+		!(hasPrerequisite(p.rules(), definition.PrerequisiteDesignQuestions) && !itemIsComment(item.ItemID) && p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)] != "") {
+		questions = p.questionState(item)
+	}
 	switch {
 	case p.isBlocked(item, blockedBy):
 		decision.Action, decision.Reason = ActionHold, ReasonBlocked
