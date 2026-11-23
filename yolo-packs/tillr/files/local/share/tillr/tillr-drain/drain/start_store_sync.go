@@ -205,6 +205,7 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 		known := false
 		if slices.Contains(pendingHistoryKinds, e.Kind) {
 			d.pending = append(d.pending, e)
+			d.lanes = true // pending transitions such as retractClaim update lanes without a run.release event
 			d.quota = true // pending endings can change whether a backend closes
 			known = true
 		}

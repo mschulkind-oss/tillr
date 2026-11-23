@@ -174,3 +174,41 @@ func TestStartViewSeedMatchesStore(t *testing.T) {
 		t.Fatal("reseed changed the previous snapshot")
 	}
 }
+
+func TestStartStoreSyncReleasesLaneOnCancelStaging(t *testing.T) {
+	f, l := passFixture(t, "item-a", "item-b")
+	ctx, at := context.Background(), l.cfg.Now()
+	p := mustPlan(t, l)[0]
+	ok, _, err := l.applyPlan(ctx, p, runGit(t, f.root, "rev-parse", TrunkRef), at)
+	if err != nil || !ok {
+		t.Fatalf("claim fixture: %v / %v", ok, err)
+	}
+	lane := p.decision.LaneID
+	tick := l.startViewPass()
+	var sync startStoreSync
+	t.Cleanup(sync.close)
+	refresh := func(previous startSnapshot) startSnapshot {
+		t.Helper()
+		next, err := sync.syncStore(ctx, f.storePath, at, l.currentPolicy(), previous, func(r *store.Reader, s *startSnapshot, touched map[string]bool) error {
+			return s.repairEntries(ctx, r, at, l.currentPolicy(), tick, &VantageQuestions{Root: f.root}, previous, touched)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return next
+	}
+	before := refresh(startSnapshot{})
+	if !before.occupied[lane] || !before.storeLanes[lane] {
+		t.Fatalf("claimed lane %s not occupied before cancelStaging: occupied=%v storeLanes=%v", lane, before.occupied, before.storeLanes)
+	}
+	if err := l.cancelStaging(ctx, p.decision); err != nil {
+		t.Fatalf("cancelStaging: %v", err)
+	}
+	after := refresh(before)
+	if after.occupied[lane] || after.storeLanes[lane] {
+		t.Fatalf("cancelStaging left lane %s occupied: occupied=%v storeLanes=%v freeLanes=%v", lane, after.occupied, after.storeLanes, after.freeLanes)
+	}
+	if start, ok := after.nextFreshStart(); !ok || start.decision.LaneID != lane {
+		t.Fatalf("nextFreshStart after cancelStaging = (%v, %+v), want fresh start on %s", ok, start.decision, lane)
+	}
+}
