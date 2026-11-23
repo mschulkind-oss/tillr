@@ -2912,7 +2912,11 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		return "", err
 	}
 	// Maintenance may have overlapped a worker or examination finishing.
-	if stop, err := l.drainCompletions(ctx, result); stop != "" || err != nil {
+	// Any completion drained here missed this pass's top-of-pass ref sweep and
+	// trunk/document sync, so the pass cannot stop as queue-drained without
+	// another pass to run that maintenance.
+	maintenanceDrained, stop, err := l.drainCompletionsCount(ctx, result)
+	if stop != "" || err != nil {
 		return stop, err
 	}
 	var commentChecks []plannedApplication
@@ -3016,7 +3020,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 			watched = append(watched, lane)
 		}
 	}
-	stale := false
+	stale := maintenanceDrained > 0
 	// A staging refusal that took its lane out of rotation re-plans the item in this same
 	// pass, so it is offered the next free lane; each re-plan removes a lane, so this is
 	// bounded by the lane count.
