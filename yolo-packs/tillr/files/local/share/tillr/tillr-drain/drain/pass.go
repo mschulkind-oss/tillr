@@ -1307,6 +1307,9 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 }
 
 func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *string, pendingOnly bool, commentChecks *[]plannedApplication) ([]plannedApplication, []LaneLease, error) {
+	if !l.nonLanding {
+		l.sweepDisabledMarkers(ctx)
+	}
 	if err := l.refreshQuotas(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -2759,6 +2762,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	}
 	if err := l.checkStopRequested(ctx); err != nil {
 		return "", err
+	}
+	if !l.nonLanding {
+		l.sweepDisabledMarkers(ctx)
 	}
 	if err := l.observeTrunkCoreWorktree(ctx); err != nil {
 		l.reportf("loop: could not record trunk core.worktree observation: %v\n", err)

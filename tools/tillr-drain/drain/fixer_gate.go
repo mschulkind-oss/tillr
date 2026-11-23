@@ -168,6 +168,7 @@ func (l *Loop) settleFixerGate(ctx context.Context, c *Candidate, gate *GateOutc
 			started := time.Now()
 			answer, output = step.fixerCheck(ctx, *c, id)
 			gate.DurationMS += time.Since(started).Milliseconds()
+			l.sweepDisabledMarkers(ctx)
 		}
 		if ctx.Err() != nil {
 			return false, ctx.Err()

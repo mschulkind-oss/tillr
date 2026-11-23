@@ -43,7 +43,11 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			l.heavyMu.Lock()
 			requested := l.heavyWanted
 			l.heavyMu.Unlock()
-			runner := HeavyRunner{Root: l.cfg.Root, Store: l.cfg.Store, Work: filepath.Join(l.cfg.LaneRoot, ".rolling", "worktree"), Trunk: TrunkRef, Judge: step.JudgeHeavy, Report: func(run HeavyRun) {
+			runner := HeavyRunner{Root: l.cfg.Root, Store: l.cfg.Store, Work: filepath.Join(l.cfg.LaneRoot, ".rolling", "worktree"), Trunk: TrunkRef, Judge: func(jctx context.Context, dir, only string) ([]HeavyCheck, error) {
+				checks, err := step.JudgeHeavy(jctx, dir, only)
+				l.sweepDisabledMarkers(jctx)
+				return checks, err
+			}, Report: func(run HeavyRun) {
 				l.reportf("loop: heavy run %s at %s; green base %s\n", run.Result, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
 				if run.Result == "green" {
 					l.afterGreen(context.WithoutCancel(ctx), run.TipSHA)

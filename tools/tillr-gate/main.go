@@ -381,7 +381,7 @@ func runFace(args []string) int {
 }
 
 func writeRunSummary(w io.Writer, verdict VerdictPayload) {
-	passed, remembered, unavailable, inherited, skipped, failed := 0, 0, 0, 0, 0, 0
+	passed, remembered, unavailable, inherited, skipped, disabled, failed := 0, 0, 0, 0, 0, 0, 0
 	for _, check := range verdict.Checks {
 		var mem checkresult.Result
 		if check.Memory != "" {
@@ -413,6 +413,9 @@ func writeRunSummary(w io.Writer, verdict VerdictPayload) {
 				passed++
 			case res.Outcome == checkresult.Unavailable && res.Detail == checkresult.DetailSkipped:
 				skipped++
+			case res.Outcome == checkresult.Disabled:
+				disabled++
+				writeDisabledSummaryLine(w, check)
 			default:
 				failed++
 			}
@@ -436,7 +439,35 @@ func writeRunSummary(w io.Writer, verdict VerdictPayload) {
 	if skipped > 0 {
 		summary += fmt.Sprintf(", %d skipped", skipped)
 	}
+	if disabled > 0 {
+		summary += fmt.Sprintf(", %d disabled", disabled)
+	}
 	fmt.Fprintf(w, "%s, %d failed\n", summary, failed)
+}
+
+func writeDisabledSummaryLine(w io.Writer, check VerdictCheck) {
+	if check.PassTime != "" || check.FailTime != "" {
+		passLoc := check.PassLogRef
+		if strings.TrimSpace(passLoc) == "" {
+			passLoc = "output location not recorded"
+		}
+		failLoc := check.FailLogRef
+		if strings.TrimSpace(failLoc) == "" {
+			failLoc = "output location not recorded"
+		}
+		line := fmt.Sprintf("%s: disabled; pass at %s (%s), fail at %s (%s)",
+			check.CheckID, check.PassTime, passLoc, check.FailTime, failLoc)
+		if check.RepairItem != "" {
+			line += fmt.Sprintf("; repair item %s", check.RepairItem)
+		}
+		fmt.Fprintln(w, line)
+		return
+	}
+	if check.RepairItem != "" {
+		fmt.Fprintf(w, "%s: disabled; repair item %s\n", check.CheckID, check.RepairItem)
+		return
+	}
+	fmt.Fprintf(w, "%s: disabled\n", check.CheckID)
 }
 
 // planFace is `tillr-gate plan`: a change and a registry in, a plan record out.
