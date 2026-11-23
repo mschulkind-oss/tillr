@@ -42,7 +42,7 @@ func (s *ProcessSteps) startRunFaceContext(ctx context.Context, cmd *exec.Cmd, r
 		// exec excluded until the child is either started or refused.
 		loop.restartMechanical.RLock()
 		defer loop.restartMechanical.RUnlock()
-		if loop.restartReplaced {
+		if loop.restartReplaced.Load() {
 			return errRestartPending
 		}
 		db, err := store.Open(ctx, s.Store, true)

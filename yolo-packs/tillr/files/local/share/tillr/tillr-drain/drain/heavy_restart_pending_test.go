@@ -13,9 +13,10 @@ import (
 
 type fixerLandingHeavySteps struct {
 	recordingSteps
-	root  string
-	t     *testing.T
-	judge func(context.Context, string, string) ([]HeavyCheck, error)
+	root   string
+	t      *testing.T
+	onLand func()
+	judge  func(context.Context, string, string) ([]HeavyCheck, error)
 }
 
 func (s *fixerLandingHeavySteps) Land(_ context.Context, c Candidate) (LandOutcome, error) {
@@ -23,6 +24,9 @@ func (s *fixerLandingHeavySteps) Land(_ context.Context, c Candidate) (LandOutco
 	runGit(s.t, s.root, "add", "repaired.txt")
 	runGit(s.t, s.root, "commit", "-qm", "land "+c.ItemID)
 	tip := runGit(s.t, s.root, "rev-parse", TrunkRef)
+	if s.onLand != nil {
+		s.onLand()
+	}
 	return LandOutcome{Result: LandLanded, TrunkAfter: tip}, nil
 }
 
@@ -65,6 +69,14 @@ func TestHeavyProofStartsAfterFixerLandsWhileCandidateGatesRunAndRestartPending(
 	steps := &fixerLandingHeavySteps{
 		root: h.f.root,
 		t:    t,
+		onLand: func() {
+			// File a restart while the fixer landing and candidate gate both already
+			// hold restartMechanical, before landCandidate triggers startHeavy.
+			h.request(t, 1)
+			if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
+				t.Errorf("gateRestart while candidate gate active = %v, %q, %v; want deferred", handled, stop, err)
+			}
+		},
 		judge: func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
 			sha := heavyGit(t, dir, "rev-parse", "HEAD")
 			proofOnce.Do(func() { entered <- sha })
@@ -89,10 +101,6 @@ func TestHeavyProofStartsAfterFixerLandsWhileCandidateGatesRunAndRestartPending(
 			releaseGate()
 		}
 	}()
-	h.request(t, 1)
-	if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
-		t.Fatalf("gateRestart while candidate gate active = %v, %q, %v; want deferred", handled, stop, err)
-	}
 
 	// Land the fixer through launchExamination (the real path whose per-examination
 	// context cancels as soon as examineClaimed returns).
@@ -147,13 +155,9 @@ func TestHeavyProofStartsAfterFixerLandsWhileCandidateGatesRunAndRestartPending(
 	// and a restart still pending, maybeRolling starts a proof for the next tip.
 	releaseGate()
 	releaseGate = nil
-	_, releaseMech, err := h.l.lockRestartMechanical(ctx)
-	if err != nil {
-		// Expected: lockRestartMechanical itself refuses new non-settling steps when restart is pending.
-		// Hold the read lock directly to represent an already-running non-settling examination.
-		h.l.restartMechanical.RLock()
-		releaseMech = func() { h.l.restartMechanical.RUnlock() }
-	}
+	// Hold the read lock directly to represent an already-running non-settling examination.
+	h.l.restartMechanical.RLock()
+	releaseMech := func() { h.l.restartMechanical.RUnlock() }
 	nextTip := heavyCommit(t, h.f.root, "after-fixer")
 	if err := h.l.maybeRolling(ctx, nextTip, false, &LoopResult{}); err != nil {
 		releaseMech()

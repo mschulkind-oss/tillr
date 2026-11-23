@@ -3431,7 +3431,15 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 	local := &LoopResult{}
 	completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: timing}
 	lockStart := time.Now()
-	ctx, unlock, lockErr := l.lockRestartMechanical(ctx)
+	var (
+		unlock  func()
+		lockErr error
+	)
+	if d.Action == ActionJudge {
+		ctx, unlock, lockErr = l.lockRestartSettlement(ctx)
+	} else {
+		ctx, unlock, lockErr = l.lockRestartMechanical(ctx)
+	}
 	if lockErr != nil {
 		completion.outcome.err = lockErr
 		return completion
