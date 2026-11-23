@@ -118,20 +118,21 @@ describe("the live channel invalidates the cache the panels already read", () =>
       event_head_seq: 49,
       changed: ["items:item-seed-02", "runs:run-item-seed-02", "snapshot"],
     });
-    expect(invalidate).toHaveBeenCalledTimes(5);
+    expect(invalidate).toHaveBeenCalledTimes(6);
     expect(invalidate).toHaveBeenNthCalledWith(2, { queryKey: ["lanes"] });
-    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["items", "item-seed-02"] });
-    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["runs", "run-item-seed-02"] });
-    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["snapshot"] });
+    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["waiting"] }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["items", "item-seed-02"] });
+    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["runs", "run-item-seed-02"] });
+    expect(invalidate).toHaveBeenNthCalledWith(6, { queryKey: ["snapshot"] });
   });
 
-  test("a snapshot frame refetches the snapshot only, never /why or /lanes", () => {
+  test("a snapshot frame refreshes the snapshot and /why without restarting a read in flight, never /lanes", () => {
     const { invalidate } = renderProbe();
     const socket = FakeSocket.opened[0];
     socket.accept();
     invalidate.mockClear();
     socket.deliver({ type: "snapshot.invalidated", event_head_seq: 50, changed: ["snapshot"] });
-    expect(invalidate.mock.calls).toEqual([[{ queryKey: ["snapshot"] }]]);
+    expect(invalidate.mock.calls).toEqual([[{ queryKey: ["waiting"] }, { cancelRefetch: false }], [{ queryKey: ["snapshot"] }]]);
   });
 
   test("log growth also refreshes the Home lane strip", () => {
