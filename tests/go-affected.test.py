@@ -1922,7 +1922,7 @@ def test_go_affected_slot_wait_order_and_trunk_repair_priority() -> None:
 
         lock_dir = tmp_path / "locks"
         lock_dir.mkdir()
-        wait_dir = lock_dir / "wait-queue"
+        wait_dir = shards.wait_queue_dir(lock_dir)
         order_file = tmp_path / "order.log"
         release_dir = tmp_path / "release"
         release_dir.mkdir()
