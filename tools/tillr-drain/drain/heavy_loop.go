@@ -143,6 +143,21 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			}}
 			runner.Progress = func(line string) { l.reportf("%s", line) }
 			runner.ReuseRed = l.heavyReuseRed
+			firstTip := true
+			runner.BeforeTip = func(bctx context.Context) error {
+				if firstTip {
+					firstTip = false
+					return nil
+				}
+				stop, err := l.restartStopsNextHeavyProof(bctx)
+				if err != nil {
+					return err
+				}
+				if stop {
+					return errRestartPending
+				}
+				return nil
+			}
 			runner.WithWorktreeRegistryLock = withWorktreeRegistryLock
 			runner.UnlockRegisteredWorktree = unlockRegisteredWorktree
 			if l.gatePolicy.AutoRevert {
@@ -157,7 +172,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				out.Busy = true
 			} else {
 				runner.Lock = hold
-				if l.beginHeavyProof() {
+				if l.beginHeavyProof(heavyCtx) {
 					out, err = runner.RunAttempt(heavyCtx, requested)
 					hold.Close()
 					l.heavyMu.Lock()
@@ -191,9 +206,16 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				l.heavyAttempted = attempted
 			}
 			// A trigger arriving after the runner's final tip read still owes work. Do not
-			// drop it in the narrow interval between that read and releasing local ownership.
+			// drop it in the narrow interval between that read and releasing local ownership,
+			// unless a pending restart is waiting for this proof to finish.
 			if heavyCtx.Err() == nil && !out.Busy && err == nil && l.heavyWanted != requested && l.heavyWanted != attempted {
 				l.heavyMu.Unlock()
+				if stop, stopErr := l.restartStopsNextHeavyProof(heavyCtx); stopErr == nil && stop {
+					l.heavyMu.Lock()
+					l.heavyRunning = false
+					l.heavyMu.Unlock()
+					return
+				}
 				continue
 			}
 			l.heavyRunning = false
@@ -204,9 +226,28 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 	return nil
 }
 
+func (l *Loop) restartStopsNextHeavyProof(ctx context.Context) (bool, error) {
+	if l.cfg.Restart == nil || l.restartActionDeferred() {
+		return false, nil
+	}
+	if l.restartReplaced.Load() {
+		return true, nil
+	}
+	return l.restarterPendingWith(ctx, nil)
+}
+
 // Admission and exec cannot cross: the writer checks heavyProofActive after
 // excluding this short reader, not after waiting for the running proof.
-func (l *Loop) beginHeavyProof() bool {
+func (l *Loop) beginHeavyProof(ctx context.Context) bool {
+	if stop, err := l.restartStopsNextHeavyProof(ctx); err != nil || stop {
+		if err != nil {
+			return false
+		}
+		if l.restartMechanical.TryLock() {
+			l.restartMechanical.Unlock()
+			return false
+		}
+	}
 	l.restartMechanical.RLock()
 	defer l.restartMechanical.RUnlock()
 	if l.restartReplaced.Load() {

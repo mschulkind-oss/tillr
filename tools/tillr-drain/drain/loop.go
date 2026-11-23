@@ -560,7 +560,7 @@ type Loop struct {
 	stopInheritedReaper         func()
 	restartMechanical           sync.RWMutex
 	restartGateMu               sync.Mutex
-	restartPendingWait          chan struct{} // non-nil while a non-deferred restart is pending; closed when answered or deferred
+	restartPendingWait          chan struct{} // non-nil while a restart not deferred by post-landing actions is pending; closed when answered or action-deferred
 	restartAnswerGen            uint64        // incremented whenever restartPendingWait is cleared
 	restartSettlements          atomic.Int32  // admitted gate/landing holds currently blocking exec
 	heavyMu                     sync.Mutex
