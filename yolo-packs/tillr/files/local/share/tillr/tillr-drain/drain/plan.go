@@ -802,7 +802,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		fault, faulted := faults[item.ItemID]
 		faultHeld := faulted && !p.finished(item.State) && holdEnabled(def, fault.Reason)
 		obsHold, held := p.obstacleHolds[item.ItemID]
-		if waiting && (work == nil || work.Done || faultHeld || (work.Candidate != nil && trunkAcquittedWait(wait))) {
+		if waiting && (work == nil || work.Done || faultHeld || (work.Candidate != nil && candidateHeldWait(wait))) {
 			decision = p.namedWaitDecision(item.ItemID, wait)
 		} else if faultHeld {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: fault.Reason, LaneID: fault.LaneID, From: "held"}
@@ -1306,6 +1306,8 @@ func namedWaitHold(def definition.Definition, hold obstacles.Hold, id string, wa
 			d.Reason, d.DeferredBy = ReasonTrunkBroken, dep
 		} else if IsDefectItem(dep) {
 			d.Reason, d.DeferredBy = ReasonToolingDefect, dep
+		} else if testFixHeldWait(wait) {
+			d.Reason, d.DeferredBy = ReasonBlocked, dep
 		}
 	}
 	identifyDecision(&d)

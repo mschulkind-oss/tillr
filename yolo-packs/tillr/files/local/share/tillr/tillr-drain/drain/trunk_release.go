@@ -36,8 +36,27 @@ func (l *Loop) releasableItemWait(ctx context.Context, r *store.Reader, id strin
 	defect := IsDefectItem(fixer) && strings.HasPrefix(waiting.Reason, RefusalToolingDefect+":")
 	if !trunk && !defect {
 		blocker, err := item.LandedBlocker(r, waiting)
-		if err != nil || blocker == "" {
+		if err != nil {
 			return "", err
+		}
+		if blocker == "" && testFixHeldWait(*waiting) {
+			var bState string
+			err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, fixer).Scan(&bState)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return "", err
+			}
+			if err == nil {
+				declared, derr := definition.ForReader(r)
+				if derr != nil {
+					return "", derr
+				}
+				if finishedState(declared.Parsed, bState) || closedState(declared.Parsed, bState) {
+					blocker = fixer
+				}
+			}
+		}
+		if blocker == "" {
+			return "", nil
 		}
 		if underlying == "not-started" {
 			return underlying, nil // Restore a draft without admitting it to dispatch.
@@ -212,7 +231,11 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 			}
 		}
 	}
+	type landedTestFix struct {
+		blockerID, sha string
+	}
 	var retired []missingCandidate
+	var landedFixes []landedTestFix
 	err = writeGatheredFrom(ctx, s, facts, func(ctx context.Context, tx *store.Tx) error {
 		var curWorks map[string]*pendingWork
 		if len(missing) > 0 {
@@ -231,6 +254,12 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 			if state == "" {
 				continue
 			}
+			if wait, _, werr := item.ReadWaitingOn(tx.Reader(), id); werr == nil && wait != nil && testFixHeldWait(*wait) {
+				if blockerID, berr := item.LandedBlocker(tx.Reader(), wait); berr == nil && blockerID != "" {
+					sha, _ := landedBlockerSHA(tx.Reader(), blockerID)
+					landedFixes = append(landedFixes, landedTestFix{blockerID: blockerID, sha: sha})
+				}
+			}
 			if m, ok := missing[id]; ok {
 				if w := curWorks[id]; w != nil && !w.Done && w.Decision.RunRequest != nil && w.Decision.RunRequest.RunID == m.runID {
 					if err := appendEffect(tx, examinationDoneKind, m.runID, struct{}{}, at); err != nil {
@@ -247,6 +276,19 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 	})
 	if err != nil {
 		return err
+	}
+	if l.cfg.Root != "" {
+		for _, tf := range landedFixes {
+			repaired := tf.sha
+			if repaired == "" {
+				repaired, _ = l.revParse(ctx, l.cfg.Root, TrunkRef)
+			}
+			if repaired != "" {
+				if recErr := recordTrunkRepair(ctx, l.cfg.Root, repaired, "test fix "+tf.blockerID+" landed"); recErr != nil {
+					l.reportf("loop: %s landed but could not record trunk repair at %s: %v\n", tf.blockerID, shortSHA(repaired), recErr)
+				}
+			}
+		}
 	}
 	for _, m := range retired {
 		l.reportf("loop: %s released from trunk hold, but kept candidate %s is gone; dispatching a new run\n", m.itemID, shortSHA(m.headSHA))

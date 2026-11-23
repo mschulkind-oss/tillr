@@ -1057,6 +1057,15 @@ func (l *Loop) settleTrunkAlreadyRed(ctx context.Context, candidate *Candidate, 
 		if evidence == "" {
 			evidence = "not checked"
 		}
+		if reading.RepairedAt == "" {
+			held, err := l.holdForOpenTestFix(ctx, candidate, gate, evidence)
+			if err != nil {
+				return "", false, err
+			}
+			if held {
+				return "", true, nil
+			}
+		}
 		l.reportf("loop: gate failed %s: recording a refusal, not a verdict (trunk evidence: %s)\n", candidate.ItemID, evidence)
 		return "", false, nil
 	}
