@@ -2721,3 +2721,13 @@ kbd {
 .idea-form textarea { display: block; box-sizing: border-box; width: 100%; margin: var(--s2) 0; font: inherit; }
 .idea-form fieldset { display: flex; flex-wrap: wrap; gap: var(--s3); margin: var(--s3) 0; }
 .idea-form button { margin-right: var(--s2); }
+
+/* The admin browser (components/AdminPage.tsx): wide tables scroll sideways, long cells wrap. */
+.admin-page .admin-note { color: var(--text-muted, inherit); }
+.admin-page .admin-scroll { overflow-x: auto; }
+.admin-page td, .admin-page th { vertical-align: top; text-align: left; }
+.admin-page td pre, .admin-page .admin-long pre { max-width: 60ch; max-height: 24em; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0; }
+.admin-page .admin-null { opacity: 0.6; font-style: italic; }
+.admin-page .admin-filters form { display: flex; flex-wrap: wrap; gap: var(--s2, 0.5rem); align-items: center; margin-bottom: var(--s2, 0.5rem); }
+.admin-page .admin-filters ul { display: flex; flex-wrap: wrap; gap: var(--s2, 0.5rem); list-style: none; padding: 0; }
+.admin-page .admin-narrow { text-decoration: none; opacity: 0.6; }

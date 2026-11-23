@@ -49,6 +49,8 @@ const (
 	codeDesignDocUnreadable  = "design-doc-unreadable"
 	codeUnknownKind          = "unknown-kind"
 	codeUnknownRoute         = "unknown-route"
+	codeUnknownTable         = "unknown-table"
+	codeRowNotFound          = "row-not-found"
 	// The planner (`tillr-drain why`) is a separate program. Not finding it, or finding one
 	// of another build, is neither a store condition nor a statement about the drain.
 	codePlannerUnavailable = "planner-unavailable"
@@ -103,6 +105,8 @@ var apiCodes = []apiCode{
 	{codeDesignDocUnreadable, http.StatusInternalServerError},
 	{codeUnknownKind, http.StatusBadRequest},
 	{codeUnknownRoute, http.StatusNotFound},
+	{codeUnknownTable, http.StatusNotFound},
+	{codeRowNotFound, http.StatusNotFound},
 	{codePlannerUnavailable, http.StatusServiceUnavailable},
 	{codePlannerMismatch, http.StatusServiceUnavailable},
 }

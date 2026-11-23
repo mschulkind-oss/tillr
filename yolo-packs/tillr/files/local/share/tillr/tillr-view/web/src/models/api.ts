@@ -222,3 +222,12 @@ export const fetchRunArtifact = (runId: string, kind: string, signal?: AbortSign
   );
 
 export type { ArtifactPayload };
+
+// The admin browser's reads (docs: tools/tillr-view/admin.go). The client names a table, a
+// sort and filter values by the same parameters the server validates against the schema; it
+// never sends SQL.
+export const fetchAdminTables = (signal?: AbortSignal) => read<import("./admin").AdminTablesData>("/api/v1/admin/tables", signal);
+export const fetchAdminTable = (table: string, query: string, signal?: AbortSignal) =>
+  read<import("./admin").AdminPage>(`/api/v1/admin/tables/${encodeURIComponent(table)}${query ? `?${query}` : ""}`, signal);
+export const fetchAdminRow = (table: string, rowid: string, signal?: AbortSignal) =>
+  read<import("./admin").AdminRow>(`/api/v1/admin/tables/${encodeURIComponent(table)}/rows/${encodeURIComponent(rowid)}`, signal);

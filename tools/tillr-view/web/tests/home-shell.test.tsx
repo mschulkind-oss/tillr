@@ -39,7 +39,8 @@ test("Home shell reads snapshot, passes and the planner's why rows; nav and paus
     while (walker.nextNode()) if (walker.currentNode.textContent?.includes(id)) expect(walker.currentNode.parentElement?.closest(".entity-link")).not.toBeNull();
   }
   expect(window.location.hash).toBe("#/");
-  expect(screen.getByRole("navigation", { name: "Observatory" }).querySelectorAll("a")).toHaveLength(9);
+  expect(screen.getByRole("navigation", { name: "Observatory" }).querySelectorAll("a")).toHaveLength(10);
+  expect(screen.getByRole("link", { name: "Admin" }).getAttribute("href")).toBe("#/admin");
   expect(screen.getByRole("link", {name:"Designs"}).getAttribute("href")).toBe("#/designs");
   fireEvent.click(screen.getByRole("button", { name: "Pause updates" }));
   expect(screen.getByRole("button", { name: "Resume updates" })).toBeTruthy();

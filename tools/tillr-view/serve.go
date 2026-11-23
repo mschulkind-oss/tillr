@@ -87,6 +87,8 @@ type server struct {
 	draining  bool
 	upgrading int
 	openMu    sync.Mutex
+	// admin caches the store's table shapes between schema changes (admin.go).
+	admin     adminCache
 	storePath string
 	store     *store.Store
 	schema    int
@@ -414,6 +416,11 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/runs/{id}/transcript", s.get(s.transcriptPayload))
 	mux.HandleFunc("GET /api/v1/runs/{id}/transcript/{seq}", s.get(s.transcriptEntryPayload))
 	mux.HandleFunc("GET /api/v1/runs/{id}/artifacts/{kind}", s.get(s.artifactPayload))
+	// The admin browser: a read-only, schema-validated view of the store's own tables
+	// (admin.go). It takes no SQL from the client.
+	mux.HandleFunc("GET /api/v1/admin/tables", s.get(s.adminTablesPayload))
+	mux.HandleFunc("GET /api/v1/admin/tables/{table}", s.get(s.adminTablePayload))
+	mux.HandleFunc("GET /api/v1/admin/tables/{table}/rows/{rowid}", s.get(s.adminRowPayload))
 	// The live channel: an upgrade, then an invalidation frame per change (design §4.2).
 	// It reads through the same read-only handle as the routes above, so watching costs
 	// the store nothing a refresh does not.
