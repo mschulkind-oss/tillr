@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,4 +148,140 @@ func TestJudgeBriefScopeAndRefusalHistory(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("adapter preflight: %v: %s", err, out)
 	}
+}
+
+type judgeBriefShapeSteps struct {
+	*judgeRouteSteps
+	judgeCalls   int
+	judgeResumed bool
+	briefJSON    string
+}
+
+func extractBriefJSONTemplate(t *testing.T, brief string) string {
+	t.Helper()
+	const fence = "```json\n"
+	start := strings.Index(brief, fence)
+	if start < 0 {
+		t.Fatalf("judge brief missing fenced json verdict example:\n%s", brief)
+	}
+	rest := brief[start+len(fence):]
+	end := strings.Index(rest, "\n```")
+	if end < 0 {
+		t.Fatalf("judge brief has unclosed json fence:\n%s", brief)
+	}
+	return rest[:end]
+}
+
+func (s *judgeBriefShapeSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	if req.Node != "judge" && !strings.HasSuffix(req.RunID, "-judge") && req.NodeID != "evaluate" && !strings.HasSuffix(req.NodeID, "/evaluate") {
+		return s.judgeRouteSteps.Run(ctx, req)
+	}
+	s.judgeCalls++
+	if req.Resume {
+		s.judgeResumed = true
+	}
+	briefBytes, err := os.ReadFile(filepath.Join(s.f.laneRoot, req.LaneID, BriefFile))
+	if err != nil {
+		return run.Record{}, "", err
+	}
+	brief := string(briefBytes)
+	for _, want := range []string{
+		`unknown keys such as "criteria" are rejected by the validator`,
+		`Do not include actor, judged_actor, criteria, or any other unlisted key; unknown fields and duplicate keys are rejected.`,
+	} {
+		if !strings.Contains(strings.Join(strings.Fields(brief), " "), want) {
+			s.t.Errorf("judge brief lacks %q", want)
+		}
+	}
+	// Fill only the placeholder values in the brief's own JSON template; keep every
+	// JSON field name verbatim so any brief/reader field mismatch fails immediately.
+	tmpl := extractBriefJSONTemplate(s.t, brief)
+	filled := strings.NewReplacer(
+		"<criterion_id>", "c1",
+		"<criterion_hash>", item.CriterionHash("the first criterion of item-a"),
+		"<claim_class>", item.ClaimVerification,
+		"<reason>", "verified against candidate diff",
+	).Replace(tmpl)
+	s.briefJSON = filled
+
+	// Let the base stub record the run, then overwrite eval.output with the
+	// verbatim brief-shaped JSON.
+	rec, log, err := s.judgeRouteSteps.Run(ctx, req)
+	if err != nil {
+		return rec, log, err
+	}
+	evalPath := filepath.Join(run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID), "eval.output")
+	writeForkFile(s.t, evalPath, filled)
+	return rec, log, nil
+}
+
+func TestJudgeBriefVerdictShapeAcceptedOnFirstTry(t *testing.T) {
+	f, l, baseSteps := judgeRouteFixture(t, "pass")
+	steps := &judgeBriefShapeSteps{judgeRouteSteps: baseSteps}
+	l.cfg.Steps = steps
+
+	result := &LoopResult{}
+	for i := 0; i < 10; i++ {
+		if _, err := l.pass(context.Background(), result); err != nil {
+			t.Fatal(err)
+		}
+		drainOwned(t, l, result)
+	}
+	if steps.judgeCalls != 1 {
+		t.Fatalf("judgeCalls = %d, want 1 (verdict should be read without a resumed judge session)", steps.judgeCalls)
+	}
+	if steps.judgeResumed {
+		t.Fatal("judge session was unexpectedly resumed")
+	}
+	if result.Rejected != 0 || len(result.RefusedSteps) != 0 {
+		t.Fatalf("unexpected refusals: %+v", result)
+	}
+	if steps.briefJSON == "" {
+		t.Fatal("judge never produced a verdict from the brief template")
+	}
+
+	// Verify the reader accepts the brief's shape directly and still rejects an
+	// unlisted "criteria" key.
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(steps.briefJSON), &obj); err != nil {
+		t.Fatalf("brief template did not produce valid JSON: %v\n%s", err, steps.briefJSON)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var state string
+		if err := r.QueryRow(`SELECT state FROM items WHERE item_id='item-a'`).Scan(&state); err != nil {
+			return err
+		}
+		if state != StateLanded {
+			t.Errorf("item state = %s, want %s", state, StateLanded)
+		}
+		binding, err := item.ReadEvaluatorBinding(r, "item-a")
+		if err != nil {
+			return err
+		}
+		opts := item.JudgeOptions{
+			EvaluatorBinding: binding,
+			ItemID:           "item-a",
+			Head:             obj["evaluated_head"].(string),
+			Tree:             obj["evaluated_tree"].(string),
+			Actor:            "run=judge-check;session=judge-session;route=reviewer",
+			JudgedActor:      "run=worker-check;session=worker-session",
+			At:               l.cfg.Now(),
+		}
+		checked, err := item.CheckJudge(context.Background(), r, []byte(steps.briefJSON), opts)
+		if err != nil {
+			t.Fatalf("CheckJudge rejected verdict in brief shape: %v\n%s", err, steps.briefJSON)
+		}
+		if checked.Outcome != "pass" || len(checked.Output.Verdicts) != 1 {
+			t.Fatalf("checked = %+v, want pass with 1 verdict", checked)
+		}
+		obj["criteria"] = obj["verdicts"]
+		withCriteria, err := json.Marshal(obj)
+		if err != nil {
+			return err
+		}
+		if _, err := item.CheckJudge(context.Background(), r, withCriteria, opts); err == nil || !strings.Contains(err.Error(), `unknown field "criteria"`) {
+			t.Fatalf("CheckJudge with extra criteria field = %v, want unknown field \"criteria\" refusal", err)
+		}
+		return nil
+	})
 }
