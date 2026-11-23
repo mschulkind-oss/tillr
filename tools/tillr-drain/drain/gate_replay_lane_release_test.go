@@ -142,30 +142,35 @@ func TestGateFailedReplayReleasesLaneToWaitingWork(t *testing.T) {
 				t.Fatalf("lane-1 during replay = (%q, %v), want idle/nil", laneState, laneRun)
 			}
 
-			// Planning now must hold item-a as run-live (not assign a duplicate lane)
+			// Planning now must hold item-a as gate-replay (not assign a duplicate lane)
 			// and immediately offer lane-1 to waiting item-b.
 			nextPlans := mustPlan(t, l)
 			byItem := map[string]Decision{}
 			for _, np := range nextPlans {
 				byItem[np.decision.ItemID] = np.decision
 			}
-			if da := byItem["item-a"]; da.Action != ActionHold || da.Reason != ReasonRunLive {
-				t.Fatalf("item-a plan during replay = %+v, want hold/%s", da, ReasonRunLive)
+			if da := byItem["item-a"]; da.Action != ActionHold || da.Reason != ReasonGateReplay {
+				t.Fatalf("item-a plan during replay = %+v, want hold/%s", da, ReasonGateReplay)
 			}
 			if db := byItem["item-b"]; db.Action != ActionDispatch || db.LaneID != "lane-1" {
 				t.Fatalf("item-b plan during replay = %+v, want dispatch on lane-1", db)
 			}
 
-			// Why must show item-a's lane released, never "candidate awaits pin verification and lane release".
+			// Why must show item-a in gate-replay with its lane released, never run-live,
+			// never run-awaits-recovery, and never "candidate awaits pin verification and lane release".
 			var why WhyAnswer
 			lanes := l.lanes()
 			fixtureRead(t, f, func(r *store.Reader) error {
 				var err error
-				why, err = Why(r, Pass{AvailableLanes: &lanes}, l.cfg.Policy, nil)
+				why, err = Why(r, Pass{AvailableLanes: &lanes, StorePath: f.storePath}, l.cfg.Policy, nil)
 				return err
 			})
 			for _, row := range why.Rows {
 				if row.ItemID == "item-a" {
+					if row.Reason != ReasonGateReplay || row.Position != "candidate" || row.Class != "moving" {
+						t.Fatalf("item-a why during replay = (reason=%q position=%q class=%q why=%q), want (%q, candidate, moving)",
+							row.Reason, row.Position, row.Class, row.Why, ReasonGateReplay)
+					}
 					if strings.Contains(row.Why, "candidate awaits pin verification and lane release") {
 						t.Fatalf("item-a why still reports kept lane: %s", row.Why)
 					}
@@ -337,4 +342,347 @@ func TestGateFailedReplayDoesNotBlockInPlaceRestart(t *testing.T) {
 		t.Fatalf("restart did not exec for %s: env=%v", req.ID, h.env)
 	}
 	close(steps.release)
+}
+
+// TestGateFailedReplayRecordsRefusalAndRedispatchesInSamePass pins c6:
+// a candidate whose gate fails after its lane was released before replay gets
+// its drain.refusal recorded and goes back to a worker in the same pass,
+// while leaving the sibling item on the released lane untouched and without
+// any timer.
+func TestGateFailedReplayRecordsRefusalAndRedispatchesInSamePass(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		repairedOnTip bool
+	}{
+		{name: "base-green", repairedOnTip: false},
+		{name: "repaired-at-tip", repairedOnTip: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, c := heldCandidateFixture(t)
+			l.cfg.Lanes = []string{"lane-1", "lane-2"}
+			if err := l.stageLanes(context.Background()); err != nil {
+				t.Fatalf("stageLanes: %v", err)
+			}
+			if tc.repairedOnTip {
+				writeForkFile(t, filepath.Join(f.root, "trunk.txt"), "repaired\n")
+				runGit(t, f.root, "add", "trunk.txt")
+				runGit(t, f.root, "commit", "-qm", "repair trunk")
+			}
+			tip := runGit(t, f.root, "rev-parse", TrunkRef)
+
+			redByRev := map[string][]string{}
+			if tc.repairedOnTip {
+				redByRev[c.BaseSHA] = []string{"unit"}
+				redByRev[tip] = nil
+			}
+			steps := &blockingReplayGateSteps{
+				gateOutcome: GateOutcome{
+					Outcome:       GateFailed,
+					FailingChecks: []string{"unit"},
+				},
+				entered:  make(chan string, 2),
+				release:  make(chan struct{}),
+				redByRev: redByRev,
+			}
+			l.cfg.Steps = steps
+
+			// Claim and launch examination for item-a on lane-1.
+			plans := mustPlan(t, l)
+			var planA plannedApplication
+			for _, cand := range plans {
+				if cand.decision.ItemID == "item-a" {
+					planA = cand
+					break
+				}
+			}
+			ok, work, err := l.applyPlan(context.Background(), planA, tip, l.cfg.Now())
+			if err != nil || !ok {
+				t.Fatalf("claim examination: %v / %v", ok, err)
+			}
+			l.launchExamination(context.Background(), planA.decision, work, l.cfg.Now(), &PassTiming{}, nil)
+
+			// Wait until replay has released lane-1 and entered base replay.
+			select {
+			case <-steps.entered:
+			case <-time.After(hangGuard):
+				t.Fatal("replay did not start")
+			}
+
+			// Assign released lane-1 to sibling item-b and commit work there while
+			// item-a's replay is still running.
+			nextPlans := mustPlan(t, l)
+			var planB plannedApplication
+			for _, np := range nextPlans {
+				if np.decision.ItemID == "item-b" {
+					planB = np
+					break
+				}
+			}
+			if planB.decision.Action != ActionDispatch || planB.decision.LaneID != "lane-1" {
+				t.Fatalf("item-b plan during replay = %+v, want dispatch on lane-1", planB.decision)
+			}
+			ok, _, err = l.applyPlan(context.Background(), planB, tip, l.cfg.Now())
+			if err != nil || !ok {
+				t.Fatalf("item-b claim lane-1: %v / %v", ok, err)
+			}
+			lane1Worktree := l.lanePath("lane-1")
+			writeForkFile(t, filepath.Join(lane1Worktree, "item-b.txt"), "sibling work\n")
+			runGit(t, lane1Worktree, "add", "item-b.txt")
+			runGit(t, lane1Worktree, "commit", "-qm", "item-b work")
+			itemBHead := runGit(t, lane1Worktree, "rev-parse", "HEAD")
+
+			// Let replay finish so item-a records drain.refusal and drain.run-examined.
+			close(steps.release)
+			select {
+			case done := <-l.completions:
+				if stop, err := l.takeCompletion(done, &LoopResult{}); err != nil || stop != "" {
+					t.Fatalf("item-a examination finished with error: stop=%q err=%v", stop, err)
+				}
+			case <-time.After(hangGuard):
+				t.Fatal("item-a examination did not finish")
+			}
+
+			// Verify drain.refusal (step=gate) and drain.run-examined were recorded.
+			var refusalCount int
+			var refusalStep, refusalDetail string
+			var examinedCount int
+			fixtureRead(t, f, func(r *store.Reader) error {
+				if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=?`, RefusalKind, c.RunID).Scan(&refusalCount); err != nil {
+					return err
+				}
+				if err := r.QueryRow(`SELECT json_extract(payload, '$.step'), json_extract(payload, '$.detail') FROM events WHERE kind=? AND object_id=? ORDER BY seq DESC LIMIT 1`, RefusalKind, c.RunID).Scan(&refusalStep, &refusalDetail); err != nil {
+					return err
+				}
+				return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=?`, examinationDoneKind, c.RunID).Scan(&examinedCount)
+			})
+			if refusalCount != 1 || refusalStep != RefusalGate {
+				t.Fatalf("refusal = (count=%d step=%q detail=%q), want count=1 step=%q",
+					refusalCount, refusalStep, refusalDetail, RefusalGate)
+			}
+			if tc.repairedOnTip && !strings.Contains(refusalDetail, "lane was released") {
+				t.Fatalf("repaired-at-tip refusal detail = %q, want lane-released note", refusalDetail)
+			}
+			if examinedCount != 1 {
+				t.Fatalf("drain.run-examined count = %d, want 1", examinedCount)
+			}
+
+			// One l.pass with lane-2 free must dispatch item-a back to a worker in that
+			// pass while leaving sibling item-b on lane-1 untouched.
+			res := &LoopResult{}
+			stop, err := l.pass(context.Background(), res)
+			if err != nil {
+				t.Fatalf("l.pass after refusal: %v", err)
+			}
+			if res.Dispatched != 1 {
+				t.Fatalf("l.pass Dispatched = %d (stop=%q res=%+v), want 1 (plans=%+v)", res.Dispatched, stop, res, mustPlan(t, l))
+			}
+			select {
+			case done := <-l.completions:
+				if stop, err := l.takeCompletion(done, res); err != nil || stop != "" {
+					t.Fatalf("dispatched retry worker finished with error: stop=%q err=%v", stop, err)
+				}
+			case <-time.After(hangGuard):
+				t.Fatal("dispatched retry worker did not finish")
+			}
+			if got := steps.ranOn("item-a"); len(got) != 1 || got[0] != "lane-2" {
+				t.Fatalf("item-a retry lanes = %v, want [lane-2]", got)
+			}
+			if w := pendingForTest(t, f, "item-a"); w == nil || w.Decision.Action != ActionDispatch || w.Decision.LaneID != "lane-2" || w.Decision.Attempt != 2 {
+				t.Fatalf("item-a pending after retry pass = %+v, want ActionDispatch on lane-2 attempt 2", w)
+			}
+
+			var lane1State string
+			var lane1Run *string
+			fixtureRead(t, f, func(r *store.Reader) error {
+				return r.QueryRow(`SELECT state, run_id FROM lanes WHERE lane_id=?`, "lane-1").Scan(&lane1State, &lane1Run)
+			})
+			if lane1State != run.LaneStateLeased || lane1Run == nil || *lane1Run != planB.decision.RunRequest.RunID {
+				t.Fatalf("lane-1 lease after item-a redispatch = (%q, %v), want leased to %s", lane1State, lane1Run, planB.decision.RunRequest.RunID)
+			}
+			if head := runGit(t, lane1Worktree, "rev-parse", "HEAD"); head != itemBHead {
+				t.Fatalf("lane-1 HEAD = %s, want sibling commit %s untouched", head, itemBHead)
+			}
+		})
+	}
+}
+
+// TestWhyNeverReportsRunLiveAfterFinalVerdictWithoutProcess pins c7 and the
+// asymmetric examiner observation/reaping bugs found in run-item-request-24525b7846-a1-n2
+// and run-item-request-f0d2ae83ac-a2-n1-cfix.
+func TestWhyNeverReportsRunLiveAfterFinalVerdictWithoutProcess(t *testing.T) {
+	t.Run("ended worker session with live examiner reports gate-replay", func(t *testing.T) {
+		f, l := passFixture(t, "item-a", "item-b")
+		l.cfg.Lanes = []string{"lane-1"}
+		l.sessionID = "ended-worker-session"
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			if _, err := tx.Exec(`UPDATE items SET allowed_paths='["candidate.txt"]'`); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, ended_at) VALUES (?, 10, 20, 30, ?)`,
+				l.sessionID, l.cfg.Now().UnixMilli())
+			return err
+		})
+		p0 := mustPlan(t, l)[0]
+		base := runGit(t, f.root, "rev-parse", TrunkRef)
+		ok, _, err := l.applyPlan(context.Background(), p0, base, l.cfg.Now())
+		if err != nil || !ok {
+			t.Fatalf("dispatch: %v/%v", ok, err)
+		}
+		path := l.lanePath(p0.decision.LaneID)
+		writeForkFile(t, filepath.Join(path, "candidate.txt"), "candidate\n")
+		runGit(t, path, "add", "candidate.txt")
+		runGit(t, path, "commit", "-qm", "candidate")
+		writeForkFile(t, filepath.Join(l.laneDirPath(p0.decision.LaneID), FenceFile), "candidate.txt\n")
+		c := Candidate{ItemID: "item-a", LaneID: p0.decision.LaneID, RunID: p0.decision.RunRequest.RunID, Worktree: path, BaseSHA: base, HeadSHA: runGit(t, path, "rev-parse", "HEAD")}
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			rec := run.Record{RunID: c.RunID, ItemID: c.ItemID, LaneID: c.LaneID, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339), ArtifactRefs: []run.ArtifactRef{}}
+			if err := applyTerminal(tx, rec); err != nil {
+				return err
+			}
+			return appendEffect(tx, candidateReadyKind, c.RunID, c, l.cfg.Now())
+		})
+
+		// Switch to a new active drain session to examine the candidate from the ended session.
+		l.sessionID = "active-examiner-session"
+		steps := &blockingReplayGateSteps{
+			gateOutcome: GateOutcome{
+				Outcome:       GateFailed,
+				FailingChecks: []string{"unit"},
+			},
+			entered: make(chan string, 2),
+			release: make(chan struct{}),
+		}
+		l.cfg.Steps = steps
+
+		plans := mustPlan(t, l)
+		var p plannedApplication
+		for _, cand := range plans {
+			if cand.decision.ItemID == "item-a" {
+				p = cand
+				break
+			}
+		}
+		ok, work, err := l.applyPlan(context.Background(), p, base, l.cfg.Now())
+		if err != nil || !ok {
+			t.Fatalf("claim examination: %v / %v", ok, err)
+		}
+		if work.LoopID != "ended-worker-session" {
+			t.Fatalf("work.LoopID = %q, want ended-worker-session", work.LoopID)
+		}
+
+		l.launchExamination(context.Background(), p.decision, work, l.cfg.Now(), &PassTiming{}, nil)
+		select {
+		case <-steps.entered:
+		case <-time.After(hangGuard):
+			t.Fatal("replay did not start")
+		}
+		defer func() {
+			close(steps.release)
+			select {
+			case done := <-l.completions:
+				delete(l.active, done.id)
+			case <-time.After(hangGuard):
+			}
+		}()
+
+		lanes := l.lanes()
+		var why WhyAnswer
+		fixtureRead(t, f, func(r *store.Reader) error {
+			var err error
+			why, err = Why(r, Pass{AvailableLanes: &lanes, StorePath: f.storePath}, l.cfg.Policy, nil)
+			return err
+		})
+		var rowA *WhyRow
+		for i := range why.Rows {
+			if why.Rows[i].ItemID == "item-a" {
+				rowA = &why.Rows[i]
+				break
+			}
+		}
+		if rowA == nil {
+			t.Fatalf("item-a missing from why rows: %+v", why.Rows)
+		}
+		if rowA.Reason != ReasonGateReplay || rowA.Position != "candidate" || rowA.Class != "moving" {
+			t.Fatalf("why with ended worker session + live examiner = (reason=%q pos=%q class=%q why=%q), want (%q, candidate, moving)",
+				rowA.Reason, rowA.Position, rowA.Class, rowA.Why, ReasonGateReplay)
+		}
+	})
+
+	t.Run("dead examiner on judged run reports gate-replay recovery and reaps cleanly", func(t *testing.T) {
+		f, l, c := heldCandidateFixture(t)
+		here, err := currentLoopOwner()
+		if err != nil {
+			t.Fatalf("currentLoopOwner: %v", err)
+		}
+		deadOwner := &LoopOwner{Domain: here.Domain, UID: here.UID, PID: 99999999, Start: "1"}
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			if err := appendEffect(tx, "gate.verdict", c.RunID, map[string]any{"outcome": "fail", "failing_checks": []string{"unit"}}, l.cfg.Now()); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ?`, run.LaneStateIdle, c.LaneID); err != nil {
+				return err
+			}
+			if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: true}, l.cfg.Now()); err != nil {
+				return err
+			}
+			if err := appendEffect(tx, examinationOwnerKind, c.RunID, deadOwner, l.cfg.Now()); err != nil {
+				return err
+			}
+			return appendEffect(tx, examinationClaimedKind, c.RunID, struct{}{}, l.cfg.Now())
+		})
+
+		lanes := l.lanes()
+		var why WhyAnswer
+		fixtureRead(t, f, func(r *store.Reader) error {
+			var err error
+			why, err = Why(r, Pass{AvailableLanes: &lanes, StorePath: f.storePath}, l.cfg.Policy, nil)
+			return err
+		})
+		var rowA *WhyRow
+		for i := range why.Rows {
+			if why.Rows[i].ItemID == "item-a" {
+				rowA = &why.Rows[i]
+				break
+			}
+		}
+		if rowA == nil {
+			t.Fatalf("item-a missing from why rows after dead examiner")
+		}
+		if rowA.Reason == ReasonRunLive || rowA.Position != "held" || rowA.Reason != ReasonGateReplay {
+			t.Fatalf("why with dead examiner = (reason=%q pos=%q class=%q why=%q), want held/%s and never %s",
+				rowA.Reason, rowA.Position, rowA.Class, rowA.Why, ReasonGateReplay, ReasonRunLive)
+		}
+
+		// Reaping dead loop runs must clear BOTH Examiner and Examining so the candidate
+		// returns to ActionJudge rather than staying stuck on examinationClaimedKind.
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			return l.reapDeadLoopRuns(context.Background(), tx, l.cfg.Now(), reapEvidence{
+				dead: map[LoopOwner]bool{*deadOwner: true},
+				live: map[string]bool{},
+			})
+		})
+		got := pendingForTest(t, f, "item-a")
+		if got == nil || got.Examiner != nil || got.Examining {
+			t.Fatalf("pending after reapDeadLoopRuns = %+v, want Examiner=nil and Examining=false", got)
+		}
+	})
+
+	t.Run("final verdict without examiner or worker process never reports run-live", func(t *testing.T) {
+		f, l, c := heldCandidateFixture(t)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			return appendEffect(tx, "gate.verdict", c.RunID, map[string]any{"outcome": "fail", "failing_checks": []string{"unit"}}, l.cfg.Now())
+		})
+		lanes := l.lanes()
+		var why WhyAnswer
+		fixtureRead(t, f, func(r *store.Reader) error {
+			var err error
+			why, err = Why(r, Pass{AvailableLanes: &lanes, StorePath: f.storePath}, l.cfg.Policy, nil)
+			return err
+		})
+		for _, row := range why.Rows {
+			if row.ItemID == "item-a" && row.Reason == ReasonRunLive {
+				t.Fatalf("item-a with final gate.verdict and no process reported run-live: %+v", row)
+			}
+		}
+	})
 }

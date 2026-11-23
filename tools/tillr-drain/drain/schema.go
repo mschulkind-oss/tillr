@@ -117,6 +117,9 @@ const (
 	// failed, so the code is wrong and a person picks it up with a task. The verdict was
 	// recorded; the item stays in the queue.
 	ReasonGateFailed = "gate-failed"
+	// ReasonGateReplay is a hold's reason: the candidate's gate failed, its lane was
+	// released to waiting work, and the loop's post-verdict trunk replay is running.
+	ReasonGateReplay = "gate-replay"
 	// ReasonLandRefused holds an item whose latest candidate passed the gate but
 	// was refused by the landing step. Its criteria remain unjudged.
 	ReasonLandRefused = "land-refused"

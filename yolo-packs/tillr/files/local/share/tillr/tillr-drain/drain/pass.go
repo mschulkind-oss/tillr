@@ -1012,7 +1012,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 	}
 	if work.Candidate != nil {
 		if work.LaneReleased && (work.Examining || work.Examiner != nil) {
-			d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonRunLive
+			d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonGateReplay
 			identifyDecision(&d)
 			return d, nil
 		}
@@ -2582,8 +2582,14 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 		}
 		return recordSecondFailure(tx, routed, at)
 	})
-	if err == nil && releasedLane {
-		l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, true, at)
+	if err == nil {
+		if releasedLane {
+			l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, true, at)
+		} else if v := l.startView.Load(); v != nil {
+			// The lane may have been released before replay; wake startView so the
+			// item's completed examination and refusal are observed without waiting.
+			v.notifyUpdate()
+		}
 	}
 	if err == nil && routed != nil && IsRemoteSyncItem(routed.itemID) {
 		l.escalateRemoteSyncPushState(ctx, routed.itemID, "operator", "repeated ending")
@@ -3141,7 +3147,7 @@ plans:
 				return l.waitForTrigger(ctx, leases, at, result)
 			}
 		}
-		if hold.RunRequest != nil && (hold.Reason == ReasonRunLive || hold.Reason == ReasonNoLane) {
+		if hold.RunRequest != nil && (hold.Reason == ReasonRunLive || hold.Reason == ReasonGateReplay || hold.Reason == ReasonNoLane) {
 			// A replacement has no local completion channel for surviving runs.
 			// Their durable claims are still work, not foreign leased lanes.
 			return l.waitForTrigger(ctx, leases, at, result)
