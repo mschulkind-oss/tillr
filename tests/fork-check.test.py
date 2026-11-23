@@ -9206,6 +9206,48 @@ with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as director
     assert total == 2_000_000_000, f"reaped child counted twice: {total}"
     assert sampler.cpu_changed, "disappearance did not count as progress"
 
+# Detached descendants started with setsid (such as go_affected.py's
+# --invocation-guard) leave the check's process group; process accounting must
+# follow ppid -> children across session boundaries without counting unrelated
+# processes.
+with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as directory:
+    proc_root = Path(directory)
+    def detached_member(pid, ppid, pgrp, start, ns):
+        task = proc_root / str(pid) / "task" / str(pid)
+        task.mkdir(parents=True, exist_ok=True)
+        fields = "S 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0".split()
+        fields[1], fields[2], fields[19] = str(ppid), str(pgrp), str(start)
+        (proc_root / str(pid) / "stat").write_text(f"{pid} (proc) " + " ".join(fields))
+        (task / "schedstat").write_text(f"{ns} 0 0")
+    detached_member(123, 1, 123, 1, 1000)   # idle check leader
+    detached_member(200, 123, 200, 2, 500)  # guard in a new session (pgrp 200 != 123)
+    detached_member(201, 200, 200, 3, 2000) # worker child under guard
+    detached_member(202, 201, 202, 4, 3000) # nested setsid grandchild
+    detached_member(999, 1, 999, 5, 900000) # unrelated process outside the tree
+    sampler, _ = watch._start_process_sampler(OSError("counter denied"), proc_root)
+    assert sampler(123) == 6500 and not sampler.cpu_changed
+    detached_member(999, 1, 999, 5, 999999999)
+    assert sampler(123) == 6500 and not sampler.cpu_changed, "unrelated process counted as progress"
+    detached_member(201, 200, 200, 3, 52000)
+    assert sampler(123) == 56500 and sampler.cpu_changed, "detached worker CPU missed"
+    detached_member(202, 201, 202, 4, 103000)
+    assert sampler(123) == 156500 and sampler.cpu_changed, "nested setsid grandchild CPU missed"
+
+# Mimic go_affected.py: the check leader blocks silently in wait() while a
+# child started with start_new_session=True runs a CPU-burning grandchild.
+guarded_code = '''import subprocess, sys
+worker = "import time\\nend = time.monotonic() + 1.0\\nwhile time.monotonic() < end: pass\\n"
+guard = "import subprocess, sys\\nsys.exit(subprocess.call([sys.executable, '-c', sys.argv[1]]))\\n"
+p = subprocess.Popen([sys.executable, "-c", guard, worker], start_new_session=True)
+sys.exit(p.wait())
+'''
+with patch.object(watch, "WATCHDOG_SAMPLE_INTERVAL", .01), \
+     patch.object(watch, "_start_cpu_sampler", side_effect=OSError("counter denied")), \
+     patch.object(watch, "progress"):
+    rc, out, err, _ = watch._run_cancellable(ROOT, [sys.executable, "-c", guarded_code],
+                                            0, None, (), watch.Cancellation(), False)
+    assert rc == 0, f"active guarded-session check judged stalled: rc={rc} out={out!r} err={err!r}"
+
 # Force the counter refused: read-only accounting must see progress even when
 # the command auto-reaps children between watchdog samples.
 for mode in ("silent", "cpu", "output", "children", "discarded", "neither"):

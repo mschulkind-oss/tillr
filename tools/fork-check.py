@@ -2140,9 +2140,15 @@ def _start_process_sampler(denied: Exception, root: Path = Path("/proc"), *,
             # Freeze every member's reaped-child time before reading any live
             # runtime. A child reaped between phases cannot then be counted in
             # both its own runtime and its parent's child time.
-            snapshots = []
-            if Path.iterdir is _orig_iterdir and Path.read_bytes is _orig_read_bytes:
-                group_bytes = str(group).encode()
+            # Follow descendants across session/process-group boundaries (e.g.
+            # subreaper guards started with setsid) so process accounting
+            # matches the inherited kernel task clock.
+            by_pid = {}
+            children_of = {}
+            queue = []
+            seen = set()
+            fast = Path.iterdir is _orig_iterdir and Path.read_bytes is _orig_read_bytes
+            if fast:
                 root_str = os.fspath(root)
                 with os.scandir(root_str) as entries:
                     for dirent in entries:
@@ -2161,20 +2167,38 @@ def _start_process_sampler(denied: Exception, root: Path = Path("/proc"), *,
                         fields = body[end + 1:].split()
                         if end < 0 or len(fields) < 20:
                             raise OSError(f"malformed process stat: {root_str}/{name}/stat")
-                        if fields[2] != group_bytes:
-                            continue
-                        snapshots.append((root / name, fields))
+                        pid_num = int(name)
+                        ppid = int(fields[1])
+                        pgrp = int(fields[2])
+                        by_pid[pid_num] = (name, fields)
+                        children_of.setdefault(ppid, []).append(pid_num)
+                        if pgrp == group or pid_num == group:
+                            seen.add(pid_num)
+                            queue.append(pid_num)
             else:
                 for entry in root.iterdir():
                     if not entry.name.isdigit():
                         continue
+                    pid_num = int(entry.name)
                     try:
                         fields = stat(entry / "stat")
                     except (FileNotFoundError, ProcessLookupError):
                         continue
-                    if int(fields[2]) != group:
-                        continue
-                    snapshots.append((entry, fields))
+                    ppid = int(fields[1])
+                    pgrp = int(fields[2])
+                    by_pid[pid_num] = (entry, fields)
+                    children_of.setdefault(ppid, []).append(pid_num)
+                    if pgrp == group or pid_num == group:
+                        seen.add(pid_num)
+                        queue.append(pid_num)
+            snapshots = []
+            for cur in queue:
+                ref, fields = by_pid[cur]
+                snapshots.append((root / ref if fast else ref, fields))
+                for child in children_of.get(cur, ()):
+                    if child not in seen:
+                        seen.add(child)
+                        queue.append(child)
             for entry, fields in snapshots:
                 identity = (entry.name, fields[19])
                 ns = 0
