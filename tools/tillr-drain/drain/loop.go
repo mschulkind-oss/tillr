@@ -696,6 +696,19 @@ type Loop struct {
 	sessionOptions []store.OpenOption
 	// keeperOpen lets tests shorten the checkpoint writer's SQLite lock wait.
 	keeperOpen func(context.Context, string) (*store.CheckpointOwner, error)
+
+	// pollReaderMu guards pollReaderEnabled and pollReader, the persistent
+	// read-only store handle shared by stop/restart polling during Run.
+	pollReaderMu         sync.RWMutex
+	pollReaderEnabled    bool
+	pollReader           *store.Store
+	pollOpenRead         func(context.Context, string, ...store.OpenOption) (*store.Store, error)
+	stopQueryObs         func()
+	restartClock         func() heartbeatTicker
+	restartTickArriveObs func()
+	restartTickDoneObs   func(coalesced bool)
+	restartPollMu        sync.Mutex
+	lastRestartPoll      time.Time
 	// Document inputs belong to the pass goroutine, never its asynchronous workers.
 	historyMu        sync.Mutex
 	nonLanding       bool
@@ -898,6 +911,8 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		}
 		return faultResult(result, err)
 	}
+	l.enablePollReader()
+	defer func() { l.disableAndClosePollReader() }()
 	ctx, cancelCause := context.WithCancelCause(ctx)
 	l.mu.Lock()
 	l.loopCtx = ctx

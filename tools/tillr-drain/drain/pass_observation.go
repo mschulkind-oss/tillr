@@ -134,6 +134,10 @@ func (l *Loop) signalSessionStop() {
 }
 
 func (l *Loop) stopRequested(ctx context.Context) (bool, error) {
+	return l.stopRequestedWith(ctx, nil)
+}
+
+func (l *Loop) stopRequestedWith(ctx context.Context, scope *pollReaderScope) (bool, error) {
 	l.mu.Lock()
 	id, initialized := l.sessionID, l.sessionInitialized
 	l.mu.Unlock()
@@ -143,13 +147,11 @@ func (l *Loop) stopRequested(ctx context.Context) (bool, error) {
 	if operatorStopped(ctx) {
 		return true, nil
 	}
-	s, err := store.OpenRead(ctx, l.cfg.Store)
-	if err != nil {
-		return false, err
+	if l.stopQueryObs != nil {
+		l.stopQueryObs()
 	}
-	defer s.Close()
 	flag := 0
-	err = s.ReadTx(ctx, func(r *store.Reader) error {
+	err := l.withPollReader(ctx, scope, func(r *store.Reader) error {
 		err := r.QueryRow(`SELECT COALESCE(stop_requested, 0) FROM drain_sessions WHERE session_id = ?`, id).Scan(&flag)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -163,10 +165,14 @@ func (l *Loop) stopRequested(ctx context.Context) (bool, error) {
 }
 
 func (l *Loop) checkStopRequested(ctx context.Context) error {
+	return l.checkStopRequestedWith(ctx, nil)
+}
+
+func (l *Loop) checkStopRequestedWith(ctx context.Context, scope *pollReaderScope) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	stopped, err := l.stopRequested(ctx)
+	stopped, err := l.stopRequestedWith(ctx, scope)
 	if err != nil {
 		return err
 	}

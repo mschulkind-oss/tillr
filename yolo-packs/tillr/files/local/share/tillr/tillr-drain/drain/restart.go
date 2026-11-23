@@ -111,9 +111,13 @@ func (l *Loop) isRestartReplaced() bool {
 // A refused or current-build request leaves their work running. Only accepted exec
 // relinquishes examination ownership, after bounded mechanical steps finish.
 func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (handled bool, stop string, err error) {
+	return l.gateRestartWith(ctx, result, false, nil)
+}
+
+func (l *Loop) gateRestartWith(ctx context.Context, result *LoopResult, stopChecked bool, scope *pollReaderScope) (handled bool, stop string, err error) {
 	defer func() {
 		if err == nil && stop == "" && !l.nonLanding && !l.isRestartReplaced() {
-			err = l.reclaimDetachedGateExaminations(ctx)
+			err = l.reclaimDetachedGateExaminationsWith(ctx, stopChecked, scope)
 		}
 	}()
 	if l.cfg.Restart == nil {
@@ -130,7 +134,7 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (handled boo
 		return false, "", nil
 	}
 	rs := l.restarter()
-	pending, err := rs.Pending(ctx)
+	pending, err := l.restarterPendingWith(ctx, scope)
 	if err != nil || !pending {
 		return false, "", err
 	}
@@ -162,8 +166,15 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (handled boo
 		if err := l.releaseRestartExaminations(ctx); err != nil {
 			return err
 		}
+		wasEnabled := l.disableAndClosePollReader()
 		l.endSession()
-		return execute(path, argv, env)
+		if err := execute(path, argv, env); err != nil {
+			if wasEnabled {
+				l.enablePollReader()
+			}
+			return err
+		}
+		return nil
 	}
 	if err := rs.Replace(ctx, request, l.cfg.Restart.Argv, execReplacement); err != nil {
 		if errors.Is(err, restart.ErrSuperseded) {

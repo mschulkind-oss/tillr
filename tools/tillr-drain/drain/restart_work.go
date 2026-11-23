@@ -6,16 +6,156 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavyrun"
+	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 var errRestartPending = heavyrun.ErrRestartPending
+
+const (
+	restartPollInterval = 50 * time.Millisecond
+	restartPollCoalesce = restartPollInterval / 2
+)
+
+type pollReaderScope struct {
+	reader *store.Store
+}
+
+func (s *pollReaderScope) close() {
+	if s != nil && s.reader != nil {
+		_ = s.reader.Close()
+		s.reader = nil
+	}
+}
+
+func (l *Loop) openPollStore(ctx context.Context) (*store.Store, error) {
+	if l.pollOpenRead != nil {
+		return l.pollOpenRead(ctx, l.cfg.Store)
+	}
+	return store.OpenRead(ctx, l.cfg.Store)
+}
+
+func (l *Loop) enablePollReader() {
+	l.pollReaderMu.Lock()
+	l.pollReaderEnabled = true
+	l.pollReaderMu.Unlock()
+}
+
+func (l *Loop) dropMatchingPollReader(target *store.Store) {
+	l.pollReaderMu.Lock()
+	var r *store.Store
+	if l.pollReader == target {
+		r = l.pollReader
+		l.pollReader = nil
+	}
+	l.pollReaderMu.Unlock()
+	if r != nil {
+		_ = r.Close()
+	}
+}
+
+func (l *Loop) disableAndClosePollReader() bool {
+	l.pollReaderMu.Lock()
+	wasEnabled := l.pollReaderEnabled
+	l.pollReaderEnabled = false
+	r := l.pollReader
+	l.pollReader = nil
+	l.pollReaderMu.Unlock()
+	if r != nil {
+		_ = r.Close()
+	}
+	return wasEnabled
+}
+
+func (l *Loop) withPollReader(ctx context.Context, scope *pollReaderScope, fn func(*store.Reader) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.pollReaderMu.RLock()
+	if l.pollReaderEnabled && l.pollReader != nil {
+		r := l.pollReader
+		err := r.ReadTx(ctx, fn)
+		l.pollReaderMu.RUnlock()
+		if err != nil && ctx.Err() == nil {
+			l.dropMatchingPollReader(r)
+		}
+		return err
+	}
+	enabled := l.pollReaderEnabled
+	l.pollReaderMu.RUnlock()
+
+	if enabled {
+		l.pollReaderMu.Lock()
+		if l.pollReaderEnabled && l.pollReader == nil {
+			r, err := l.openPollStore(ctx)
+			if err != nil {
+				l.pollReaderMu.Unlock()
+				return err
+			}
+			l.pollReader = r
+		}
+		l.pollReaderMu.Unlock()
+
+		l.pollReaderMu.RLock()
+		if l.pollReaderEnabled && l.pollReader != nil {
+			r := l.pollReader
+			err := r.ReadTx(ctx, fn)
+			l.pollReaderMu.RUnlock()
+			if err != nil && ctx.Err() == nil {
+				l.dropMatchingPollReader(r)
+			}
+			return err
+		}
+		l.pollReaderMu.RUnlock()
+	}
+
+	if scope != nil {
+		if scope.reader == nil {
+			r, err := l.openPollStore(ctx)
+			if err != nil {
+				return err
+			}
+			scope.reader = r
+		}
+		err := scope.reader.ReadTx(ctx, fn)
+		if err != nil && ctx.Err() == nil {
+			scope.close()
+		}
+		return err
+	}
+
+	s, err := l.openPollStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.ReadTx(ctx, fn)
+}
+
+func (l *Loop) restarterPendingWith(ctx context.Context, scope *pollReaderScope) (bool, error) {
+	pending := false
+	err := l.withPollReader(ctx, scope, func(r *store.Reader) error {
+		state, err := restart.ReadState(r, restart.RoleDrain)
+		pending = len(state.Pending) > 0
+		return err
+	})
+	return pending, err
+}
+
+func (l *Loop) newRestartTicker() heartbeatTicker {
+	if l.restartClock != nil {
+		return l.restartClock()
+	}
+	t := time.NewTicker(restartPollInterval)
+	return heartbeatTicker{C: t.C, Stop: t.Stop}
+}
 
 func (l *Loop) buildRestartPending(ctx context.Context) (bool, error) {
 	if l.cfg.Restart == nil || l.restartDeferred() || l.restartDefersToSettlement() {
 		return false, nil
 	}
-	return l.restarter().Pending(ctx)
+	return l.restarterPendingWith(ctx, nil)
 }
 
 func (l *Loop) restartDefersToSettlement() bool {
@@ -110,11 +250,13 @@ func restartWork[T any](ctx context.Context, l *Loop, work func(context.Context)
 		held.release()
 		defer held.acquire()
 	}
+	var scope pollReaderScope
+	defer scope.close()
 	settle := func() error {
-		if err := l.checkStopRequested(ctx); err != nil {
+		if err := l.checkStopRequestedWith(ctx, &scope); err != nil {
 			return err
 		}
-		_, stop, err := l.gateRestart(ctx, &LoopResult{})
+		_, stop, err := l.gateRestartWith(ctx, &LoopResult{}, true, &scope)
 		if err != nil {
 			return err
 		}
@@ -125,6 +267,48 @@ func restartWork[T any](ctx context.Context, l *Loop, work func(context.Context)
 			return context.Canceled
 		}
 		return nil
+	}
+	settleTick := func() (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if operatorStopped(ctx) {
+			l.signalSessionStop()
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			return false, errStopRequested
+		}
+		if l.isRestartReplaced() {
+			return false, errRestartPending
+		}
+		arrivedAt := time.Now()
+		if l.restartTickArriveObs != nil {
+			l.restartTickArriveObs()
+		}
+		l.restartPollMu.Lock()
+		defer l.restartPollMu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if operatorStopped(ctx) {
+			l.signalSessionStop()
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			return false, errStopRequested
+		}
+		if l.isRestartReplaced() {
+			return false, errRestartPending
+		}
+		if !l.lastRestartPoll.IsZero() && (!arrivedAt.After(l.lastRestartPoll) || time.Since(l.lastRestartPoll) < restartPollCoalesce) {
+			return true, nil
+		}
+		if err := settle(); err != nil {
+			return false, err
+		}
+		l.lastRestartPoll = time.Now()
+		return false, nil
 	}
 	// A request that is refused or already current answers without canceling a
 	// running step. Only successful replacement relinquishes its ownership.
@@ -143,7 +327,7 @@ func restartWork[T any](ctx context.Context, l *Loop, work func(context.Context)
 		return done
 	}
 	done := start()
-	ticker := time.NewTicker(50 * time.Millisecond)
+	ticker := l.newRestartTicker()
 	defer ticker.Stop()
 	for {
 		select {
@@ -161,8 +345,12 @@ func restartWork[T any](ctx context.Context, l *Loop, work func(context.Context)
 		case <-ctx.Done():
 			return zero, ctx.Err()
 		case <-ticker.C:
-			if err := settle(); err != nil {
+			coalesced, err := settleTick()
+			if err != nil {
 				return zero, err
+			}
+			if l.restartTickDoneObs != nil {
+				l.restartTickDoneObs(coalesced)
 			}
 		}
 	}
