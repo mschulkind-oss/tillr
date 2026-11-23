@@ -830,6 +830,13 @@ func superviseDetachedGate(args []string) int {
 		fmt.Fprintln(os.Stderr, "gate supervisor needs a spec path")
 		return 2
 	}
+	// Trap SIGINT/SIGTERM before publishing the supervisor face or starting
+	// the gate, and keep the handler installed through finishHeavyTree so an
+	// early or repeated SIGTERM (such as concurrent stopDetachedGate calls on
+	// loop shutdown) cannot kill the subreaper before its descendants are reaped.
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 	ready := os.NewFile(3, "gate ready pipe")
 	raw, err := os.ReadFile(args[0])
 	if err != nil {
@@ -937,6 +944,22 @@ func superviseDetachedGate(args []string) int {
 	}
 	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	select {
+	case <-sigCh:
+		_ = stdoutFile.Close()
+		_ = stderrFile.Close()
+		if stdinFile != nil {
+			_ = stdinFile.Close()
+		}
+		_ = finishHeavyTree()
+		done.Interrupted = true
+		done.FinishedAtMS = time.Now().UnixMilli()
+		done.StderrTail = readStderrTailFile(spec.StderrFile)
+		_ = writeJSONAtomic(spec.DoneFile, done)
+		return 0
+	default:
+	}
+
 	startedCh := make(chan int, 1)
 	stopReaping := reapWhileSupervising(startedCh)
 	startErr := child.Start()
@@ -960,8 +983,6 @@ func superviseDetachedGate(args []string) int {
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- child.Wait() }()
 
-	sigCh := make(chan os.Signal, 2)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	ticker := time.NewTicker(50 * time.Millisecond)
 
 waitLoop:
@@ -987,7 +1008,6 @@ waitLoop:
 		}
 	}
 	ticker.Stop()
-	signal.Stop(sigCh)
 	stopReaping()
 
 	_ = stdoutFile.Close()

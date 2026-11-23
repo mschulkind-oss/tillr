@@ -290,6 +290,89 @@ PY`)
 	}
 }
 
+// Repeated SIGTERMs (for example when both awaitDetachedGate and the caller's
+// stop path call stopDetachedGate concurrently on loop shutdown) must not kill
+// the gate supervisor with default SIGTERM disposition before finishHeavyTree
+// has killed and reaped its separate-session descendants.
+func TestDetachedGateSupervisorRepeatedSIGTERMReapsSeparateSessionDescendants(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	c := prepareReadyCandidate(t, f, l, "item-a")
+	work := scratchUnderDurable(t)
+	ready := filepath.Join(work, "ready")
+	pidsFile := filepath.Join(work, "pids")
+
+	gateProg := executable(t, `exec python3 - <<'PY'
+import os, pathlib, subprocess
+group = subprocess.Popen(
+    ['python3', '-c', '''
+import os, pathlib, subprocess
+leaf = subprocess.Popen(["sleep", "300"], start_new_session=True)
+pathlib.Path("`+pidsFile+`.part").write_text(f"{os.getpid()} {leaf.pid}\\n")
+os.replace("`+pidsFile+`.part", "`+pidsFile+`")
+pathlib.Path("`+ready+`").touch()
+leaf.wait()
+'''],
+    start_new_session=True,
+)
+group.wait()
+PY`)
+	steps := &ProcessSteps{
+		Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Now: l.cfg.Now,
+		GateProgram: gateProg,
+	}
+	handle, err := steps.startOrAttachDetachedGate(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { steps.stopDetachedGate(handle) })
+
+	waitForPath[error](t, ready, nil)
+	raw, err := os.ReadFile(pidsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pids []int
+	for _, field := range strings.Fields(string(raw)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pids = append(pids, pid)
+		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+		if !processAlive(pid) {
+			t.Fatalf("descendant %d not alive before stop", pid)
+		}
+	}
+
+	stopSpam := make(chan struct{})
+	spamDone := make(chan struct{})
+	go func() {
+		defer close(spamDone)
+		for {
+			select {
+			case <-stopSpam:
+				return
+			default:
+				if running, err := heavySupervisorRunning(handle.face.PID, handle.face.StartTicks); err != nil || !running {
+					return
+				}
+				_ = syscall.Kill(handle.face.PID, syscall.SIGTERM)
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}()
+
+	steps.stopDetachedGate(handle)
+	close(stopSpam)
+	<-spamDone
+
+	for _, pid := range pids {
+		if err := syscall.Kill(pid, 0); err == nil {
+			t.Fatalf("separate-session gate descendant %d survived repeated SIGTERM during stop", pid)
+		}
+	}
+}
+
 type blockingRollingSteps struct {
 	recordingSteps
 	started chan struct{}
