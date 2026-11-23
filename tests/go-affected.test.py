@@ -1887,6 +1887,13 @@ def test_go_affected_slot_wait_order_and_trunk_repair_priority() -> None:
         mod = repo / "tools" / "tillr-slotorder"
         mod.mkdir(parents=True)
         shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
+        copied_shards = repo / "tools" / "go-test-shards.py"
+        copied_text = copied_shards.read_text(encoding="utf-8")
+        assert "ENFORCE_SLOT_LIMITS = False" in copied_text
+        copied_shards.write_text(
+            copied_text.replace("ENFORCE_SLOT_LIMITS = False", "ENFORCE_SLOT_LIMITS = True", 1),
+            encoding="utf-8",
+        )
         (mod / "go.mod").write_text("module example.com/tillr-slotorder\n\ngo 1.23\n")
         (mod / "slotorder_test.go").write_text(
             'package slotorder\n'
@@ -2027,12 +2034,20 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
     in holder files, never take proof-* slots, and yield freed ordinary slots to waiting
     trunk proofs."""
     shards = load_module("go_test_shards_for_proof_slots", ROOT / "tools" / "go-test-shards.py")
+    shards.ENFORCE_SLOT_LIMITS = True
     with tempfile.TemporaryDirectory(dir=str(scratch_root())) as tmp:
         tmp_path = Path(tmp)
         repo = tmp_path / "repo"
         mod = repo / "tools" / "tillr-slotclass"
         mod.mkdir(parents=True)
         shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
+        copied_shards = repo / "tools" / "go-test-shards.py"
+        copied_text = copied_shards.read_text(encoding="utf-8")
+        assert "ENFORCE_SLOT_LIMITS = False" in copied_text
+        copied_shards.write_text(
+            copied_text.replace("ENFORCE_SLOT_LIMITS = False", "ENFORCE_SLOT_LIMITS = True", 1),
+            encoding="utf-8",
+        )
         (mod / "go.mod").write_text("module example.com/tillr-slotclass\n\ngo 1.23\n")
         (mod / "slotclass_test.go").write_text(
             'package slotclass\n'

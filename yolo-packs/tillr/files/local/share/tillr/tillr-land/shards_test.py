@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 RUNNER = Path(__file__).resolve().parents[1] / 'go-test-shards.py'
 spec = importlib.util.spec_from_file_location('shards', RUNNER)
@@ -19,6 +20,24 @@ spec.loader.exec_module(shards)
 
 
 class ShardLivenessTests(unittest.TestCase):
+    def _enable_slot_limits(self):
+        limit_patch = patch.object(shards, 'ENFORCE_SLOT_LIMITS', True)
+        limit_patch.start()
+        self.addCleanup(limit_patch.stop)
+
+    @staticmethod
+    def _runner_with_limits_cmd(*args):
+        bootstrap = (
+            'import importlib.util, sys; '
+            f'spec = importlib.util.spec_from_file_location("go_test_shards", {str(RUNNER)!r}); '
+            'mod = importlib.util.module_from_spec(spec); '
+            'spec.loader.exec_module(mod); '
+            'mod.ENFORCE_SLOT_LIMITS = True; '
+            f'sys.argv = [{str(RUNNER)!r}, *sys.argv[1:]]; '
+            'sys.exit(mod.main())'
+        )
+        return [sys.executable, '-c', bootstrap, *args]
+
     def test_stalled_test_is_named_and_process_group_is_killed(self):
         parent = os.environ.get('TMPDIR') or os.environ['YOLO_DURABLE_DIR']
         with tempfile.TemporaryDirectory(dir=parent) as temporary:
@@ -96,6 +115,7 @@ func TestHung(t *testing.T) { for { time.Sleep(time.Second) } }
                                 for e in records))
 
     def test_proof_caller_gets_reserved_slot_while_ordinary_share_is_held(self):
+        self._enable_slot_limits()
         parent = os.environ.get('TMPDIR') or os.environ['YOLO_DURABLE_DIR']
         with tempfile.TemporaryDirectory(dir=parent) as temporary:
             lock_dir = Path(temporary) / 'locks'
@@ -161,6 +181,7 @@ func TestHung(t *testing.T) { for { time.Sleep(time.Second) } }
             self.assertTrue(ordinary_acquired.is_set())
 
     def test_waiting_proof_caller_takes_freed_ordinary_slot_ahead_of_waiting_worker(self):
+        self._enable_slot_limits()
         parent = os.environ.get('TMPDIR') or os.environ['YOLO_DURABLE_DIR']
         with tempfile.TemporaryDirectory(dir=parent) as temporary:
             lock_dir = Path(temporary) / 'locks'
@@ -239,6 +260,7 @@ func TestHung(t *testing.T) { for { time.Sleep(time.Second) } }
                     thread.join(timeout=30)
 
     def test_cli_wait_names_holder_runs_and_proof_cli_runs_ahead_of_workers(self):
+        self._enable_slot_limits()
         parent = os.environ.get('TMPDIR') or os.environ['YOLO_DURABLE_DIR']
         with tempfile.TemporaryDirectory(dir=parent) as temporary:
             root = Path(temporary)
@@ -271,8 +293,8 @@ func TestHung(t *testing.T) { for { time.Sleep(time.Second) } }
 
             worker_env = dict(os.environ, TILLR_RUN_ID='run-waiter')
             worker_proc = subprocess.Popen(
-                [sys.executable, str(RUNNER), str(root), '-k', '1',
-                 '--durations', str(durations), '--lock-dir', str(lock_dir)],
+                self._runner_with_limits_cmd(str(root), '-k', '1',
+                                             '--durations', str(durations), '--lock-dir', str(lock_dir)),
                 env=worker_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
             try:
@@ -290,8 +312,8 @@ func TestHung(t *testing.T) { for { time.Sleep(time.Second) } }
                 )
                 proof_env.pop('TILLR_RUN_ID', None)
                 proof_res = subprocess.run(
-                    [sys.executable, str(RUNNER), str(root), '-k', '1', '--slot-class', 'proof',
-                     '--durations', str(durations), '--lock-dir', str(lock_dir)],
+                    self._runner_with_limits_cmd(str(root), '-k', '1', '--slot-class', 'proof',
+                                                 '--durations', str(durations), '--lock-dir', str(lock_dir)),
                     env=proof_env, capture_output=True, text=True, timeout=60,
                 )
                 self.assertEqual(proof_res.returncode, 0, proof_res.stdout + proof_res.stderr)
@@ -312,6 +334,7 @@ func TestHung(t *testing.T) { for { time.Sleep(time.Second) } }
                     thread.join(timeout=30)
 
     def test_sigkilled_holder_leaves_no_stale_slot_or_ghost_holder(self):
+        self._enable_slot_limits()
         parent = os.environ.get('TMPDIR') or os.environ['YOLO_DURABLE_DIR']
         with tempfile.TemporaryDirectory(dir=parent) as temporary:
             lock_dir = Path(temporary) / 'locks'
@@ -320,6 +343,7 @@ func TestHung(t *testing.T) { for { time.Sleep(time.Second) } }
                  'import importlib.util, pathlib, time\n'
                  f'spec = importlib.util.spec_from_file_location("shards", {str(RUNNER)!r})\n'
                  's = importlib.util.module_from_spec(spec); spec.loader.exec_module(s)\n'
+                 's.ENFORCE_SLOT_LIMITS = True\n'
                  f'with s.acquire_shard_slot(pathlib.Path({str(lock_dir)!r}), 1, holder="run-crashed"):\n'
                  '    print("held", flush=True)\n'
                  '    time.sleep(60)\n'],
