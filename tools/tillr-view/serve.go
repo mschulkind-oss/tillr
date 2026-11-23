@@ -123,6 +123,7 @@ type server struct {
 	// vantage is the one cached walk of Vantage's index every question-reading route and
 	// the planner share (vantagecache.go).
 	vantage *vantageCache
+	why     whyCache
 }
 
 // openWebAssets answers the front end to serve: an explicit `--web-dist` directory wins,
