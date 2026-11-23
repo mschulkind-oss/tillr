@@ -543,7 +543,7 @@ func (l *Loop) releaseIdleHeldCandidates(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if wait != nil && trunkAcquittedWait(*wait) {
+			if wait != nil && candidateHeldWait(*wait) {
 				trunkWaits[id] = true
 			}
 		}
