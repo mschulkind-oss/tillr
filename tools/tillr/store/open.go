@@ -353,7 +353,8 @@ func openRead(ctx context.Context, path, params string, options ...OpenOption) (
 	if err != nil {
 		return nil, fmt.Errorf("store: opening %s read-only: %w", path, err)
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(cfg.readConns)
+	db.SetMaxIdleConns(cfg.readConns)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, readOpenError(path, err)
