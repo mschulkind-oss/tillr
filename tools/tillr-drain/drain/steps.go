@@ -129,7 +129,20 @@ func candidateArgs(c Candidate, root string) []string {
 // repository. The log is read from the record's own artifact_refs: it is where the report
 // the attempt is classified from lives, and a log that is gone classifies as "no report"
 // rather than failing the run.
+func (*ProcessSteps) reportsWorkerProcessStart() {}
+
 func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	endPrep := timeHandoffPhase(ctx, "prepare_worker_process")
+	prepEnded := false
+	finishPrep := func() {
+		if !prepEnded {
+			prepEnded = true
+			endPrep()
+		}
+	}
+	defer func() {
+		finishPrep()
+	}()
 	if len(req.Command) > 0 && req.Backend != "command" && s.Root != "" {
 		resolved := resolveAdapterPath(s.Root, req.Command[0])
 		if resolved != req.Command[0] {
@@ -212,8 +225,14 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 		stderr.Close()
 		return run.Record{}, "", observeErr
 	}
+	finishPrep()
 	started := time.Now().UnixMilli()
+	endSpawn := timeHandoffPhase(ctx, "spawn_worker_process")
 	err = s.startRunFaceContext(ctx, cmd, req)
+	endSpawn()
+	if !errors.Is(err, errRestartPending) {
+		finishStartHandoff(ctx)
+	}
 	stdout.Close()
 	stderr.Close()
 	if cmd.Process != nil {

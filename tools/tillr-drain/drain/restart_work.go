@@ -470,9 +470,15 @@ func (l *Loop) runRestartable(ctx context.Context, req run.Request) (run.Record,
 	}
 	out, err := restartWork(ctx, l, func(child context.Context) (answer, error) {
 		if req.Resume {
-			if err := l.recordResumedBuild(child, req); err != nil {
+			endResume := timeHandoffPhase(child, "record_resumed_build")
+			err := l.recordResumedBuild(child, req)
+			endResume()
+			if err != nil {
 				return answer{}, err
 			}
+		}
+		if _, ok := l.cfg.Steps.(workerProcessStarter); !ok {
+			finishStartHandoff(child)
 		}
 		child = context.WithValue(child, runStartAdmissionKey{}, l)
 		rec, log, err := l.cfg.Steps.Run(child, req)

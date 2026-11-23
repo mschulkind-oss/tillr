@@ -271,23 +271,30 @@ type LaneStager struct {
 // without leaving a worktree behind, and a lane whose tree is somebody's unlanded work is
 // refused before the brief is written over the evidence.
 func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
+	endRead := timeHandoffPhase(ctx, "stage_read")
 	def, err := s.readDefinition(ctx)
 	if err != nil {
+		endRead()
 		return err
 	}
 	if def.Completes != "landing" {
+		endRead()
 		return s.stagePlain(ctx, spec, def)
 	}
 	if spec.BaseSHA == "" {
+		endRead()
 		return Usagef("staging %s needs a base sha: a run is staged from a sha pinned before launch, never from whatever the trunk says at launch time", spec.RunID)
 	}
 	if spec.KeptHeadSHA != "" && spec.KeptItemBaseSHA == "" {
+		endRead()
 		return Usagef("staging kept candidate %s needs its recorded item base", spec.KeptHeadSHA)
 	}
 	if err := checkRunID(spec.RunID); err != nil {
+		endRead()
 		return err
 	}
 	if spec.WorkingDir != WorktreeDir {
+		endRead()
 		return Usagef("the request's working_dir is %q, want %q: the lane layout the brief template fixes puts the run in <lane-dir>/%s, and a request naming another directory would run the adapter outside the worktree staging prepared",
 			spec.WorkingDir, WorktreeDir, WorktreeDir)
 	}
@@ -300,6 +307,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 
 	recorded, err := s.readItem(ctx, spec.ItemID)
 	if err != nil {
+		endRead()
 		return err
 	}
 	if spec.BlockConflict != nil {
@@ -321,14 +329,17 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	baseSHA := spec.BaseSHA
 	if isFork {
 		if err := s.ensureForkCheckout(ctx, spec, fork); err != nil {
+			endRead()
 			return err
 		}
 		if spec.KeptHeadSHA != "" {
 			if err := s.restageForkAtKeptHead(ctx, spec, fork); err != nil {
+				endRead()
 				return err
 			}
 		} else if !spec.Continue {
 			if err := s.refreshForkCheckout(ctx, fork); err != nil {
+				endRead()
 				return err
 			}
 		}
@@ -337,6 +348,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		// cut from the trunk below.
 		head, err := s.git(ctx, fork.Checkout, "rev-parse", "HEAD")
 		if err != nil {
+			endRead()
 			return err
 		}
 		baseSHA = strings.TrimSpace(head)
@@ -381,6 +393,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 					if os.IsNotExist(err) && spec.ItemBaseSHA != "" {
 						itemBaseSHA = spec.ItemBaseSHA
 					} else {
+						endRead()
 						return Externalf("reading the item's base: %v", err)
 					}
 				} else {
@@ -389,6 +402,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			}
 			head, err := s.git(ctx, target, "rev-parse", "HEAD")
 			if err != nil {
+				endRead()
 				return err
 			}
 			baseSHA = strings.TrimSpace(head)
@@ -399,13 +413,17 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		}
 		scope, err := node.ScopePaths(itemAllowed)
 		if err != nil {
+			endRead()
 			return err
 		}
 		recorded.AllowedPaths = scope
 	}
+	endRead()
+	endBrief := timeHandoffPhase(ctx, "stage_brief")
 	// The brief names the same absolute scratch directory `run exec` exports.
 	durableDir, err := filepath.Abs(run.DurableDir(laneDir, spec.RunID))
 	if err != nil {
+		endBrief()
 		return Internalf("resolving the run's scratch directory under %s: %v", laneDir, err)
 	}
 	values, err := briefValuesFor(recorded, spec, target, targetKind, baseSHA, durableDir, now().UTC())
@@ -581,11 +599,17 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if spec.RepeatedCall != nil {
 		brief += repeatedCallBrief(*spec.RepeatedCall)
 	}
+	endBrief()
 	if !spec.Continue {
-		if err := s.ensureWorktree(ctx, worktreeSpec, laneDir, worktree); err != nil {
+		endWT := timeHandoffPhase(ctx, "ensure_worktree")
+		err := s.ensureWorktree(ctx, worktreeSpec, laneDir, worktree)
+		endWT()
+		if err != nil {
 			return err
 		}
 	}
+	endWrite := timeHandoffPhase(ctx, "stage_write")
+	defer endWrite()
 	if spec.DesignContinuationHead != "" {
 		if _, err := s.git(ctx, worktree, "reset", "--hard", spec.DesignContinuationHead); err != nil {
 			return err
@@ -882,29 +906,105 @@ func (s *LaneStager) ensureWorktree(ctx context.Context, spec StageSpec, laneDir
 			return err
 		}
 	}
+	endRefuse := timeHandoffPhase(ctx, "refuse_unlanded_commit")
 	if err := s.refuseUnlandedCommit(ctx, spec, worktree); err != nil {
+		endRefuse()
 		return err
 	}
+	endRefuse()
 	// The branch is scoped by the lane root, so the holder of it is never a lane in another
 	// root — but it can be this lane's own directory moved aside, and `worktree add -B`
 	// answers that with a `fatal:` line that names no lane. The check runs before the
 	// clearing so a refusal leaves the lane's previous worktree alone; one held at this
-	// lane's own path is the registration `clearWorktree` is about to remove.
+	// lane's own path is the registration we can reuse in place without touching the
+	// worktree registry or taking land.lock.
 	branch := LaneBranch(s.LaneRoot, spec.LaneID)
-	holder, err := branchHolder(ctx, s.Root, branch, worktree)
+	endList := timeHandoffPhase(ctx, "list_worktrees")
+	worktrees, err := listWorktrees(ctx, s.Root)
+	endList()
 	if err != nil {
 		return err
 	}
-	if holder != "" {
-		return refuseBranchHeld(spec.LaneID, s.LaneRoot, branch, holder)
+	var existing *Worktree
+	for i := range worktrees {
+		wt := &worktrees[i]
+		if wt.Branch == "refs/heads/"+branch && !samePath(wt.Path, worktree) {
+			return refuseBranchHeld(spec.LaneID, s.LaneRoot, branch, wt.Path)
+		}
+		if samePath(wt.Path, worktree) && !wt.Prunable {
+			existing = wt
+		}
+	}
+	if existing != nil {
+		endReuse := timeHandoffPhase(ctx, "reuse_worktree")
+		reused := s.tryReuseWorktree(ctx, worktree, branch, spec.BaseSHA, *existing)
+		endReuse()
+		if reused {
+			return nil
+		}
 	}
 	return withWorktreeRegistryLock(ctx, s.Root, func() error {
+		endClear := timeHandoffPhase(ctx, "clear_worktree")
 		if err := s.clearWorktree(ctx, worktree); err != nil {
+			endClear()
 			return err
 		}
+		endClear()
+		endAdd := timeHandoffPhase(ctx, "worktree_add")
 		_, err := s.git(ctx, s.Root, "worktree", "add", "--force", "-B", branch, worktree, spec.BaseSHA)
+		endAdd()
 		return err
 	})
+}
+
+func worktreeInProgress(gitDir string) bool {
+	for _, name := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply"} {
+		if _, err := os.Stat(filepath.Join(gitDir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// tryReuseWorktree resets an already-registered lane worktree in place without
+// mutating .git/worktrees or acquiring land.lock. It returns false when the
+// directory is missing, not a linked worktree, or cannot be reset cleanly, so
+// the caller falls back to a full registry-locked recreate.
+func (s *LaneStager) tryReuseWorktree(ctx context.Context, worktree, branch, baseSHA string, existing Worktree) bool {
+	info, err := os.Stat(filepath.Join(worktree, ".git"))
+	if err != nil || info.IsDir() {
+		return false
+	}
+	gitDirOut, err := s.git(ctx, worktree, "rev-parse", "--path-format=absolute", "--git-dir")
+	if err != nil {
+		return false
+	}
+	gitDir := strings.TrimSpace(gitDirOut)
+	inProgress := worktreeInProgress(gitDir)
+	if !inProgress && existing.Branch == "refs/heads/"+branch && existing.Head == baseSHA {
+		status, err := s.git(ctx, worktree, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all")
+		if err == nil && strings.TrimSpace(status) == "" {
+			return true
+		}
+	}
+	if inProgress {
+		for _, sub := range [][]string{{"merge", "--abort"}, {"rebase", "--abort"}, {"cherry-pick", "--abort"}, {"revert", "--abort"}} {
+			_, _ = s.git(ctx, worktree, sub...)
+		}
+	}
+	if _, err := s.git(ctx, worktree, "clean", "-fd"); err != nil {
+		return false
+	}
+	if _, err := s.git(ctx, worktree, "checkout", "--force", "-B", branch, baseSHA); err != nil {
+		return false
+	}
+	if _, err := s.git(ctx, worktree, "reset", "--hard", baseSHA); err != nil {
+		return false
+	}
+	if _, err := s.git(ctx, worktree, "clean", "-fd"); err != nil {
+		return false
+	}
+	return true
 }
 
 // refuseUnlandedCommit refuses a lane that holds a commit neither the base nor trunk nor a

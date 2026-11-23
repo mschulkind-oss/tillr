@@ -2415,6 +2415,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if err := supersedeItemUnfinishedRunsInTx(ctx, tx, d.ItemID, d.Attempt, keep, "superseded by "+d.RunRequest.RunID, at); err != nil {
 				return err
 			}
+			claimAt := l.cfg.Now().UTC()
 			for _, node := range nodes {
 				if len(d.Parallel) > 0 {
 					rec, err := terminalRecord(tx.Reader(), node.RunRequest.RunID)
@@ -2426,14 +2427,14 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					}
 				}
 				stampDecisionRequest(node, node.RunRequest)
-				if _, err := run.ClaimLease(ctx, tx, *node.RunRequest, node.LaneID, at); err != nil {
+				if _, err := run.ClaimLease(ctx, tx, *node.RunRequest, node.LaneID, claimAt); err != nil {
 					return err
 				}
 				if err := startNode(tx, node); err != nil {
 					return err
 				}
 			}
-			if err := appendEffect(tx, dispatchStartedKind, d.RunRequest.RunID, work, at); err != nil {
+			if err := appendEffect(tx, dispatchStartedKind, d.RunRequest.RunID, work, claimAt); err != nil {
 				return err
 			}
 		case ActionSettle, ActionJudge:
@@ -2711,12 +2712,16 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 		var evaluatorHold *Candidate
 		var record run.Record
 		var log string
+		endSnap := timeHandoffPhase(runCtx, "snapshot_idle_siblings")
 		before, err := l.snapshotIdleSiblings(runCtx, l.lanePath(d.LaneID), watched, epochs)
+		endSnap()
 		if err != nil {
+			finishStartHandoff(runCtx)
 			err = fmt.Errorf("run boundary before: %w", err)
 		}
 		if err == nil {
 			if evaluatorNode(d) {
+				finishStartHandoff(runCtx)
 				c, candidateErr := l.evaluatorCandidate(runCtx, d)
 				err = candidateErr
 				if err == nil {
@@ -2731,6 +2736,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 					}
 				}
 			} else if len(d.Parallel) > 0 {
+				finishStartHandoff(runCtx)
 				err = l.runParallel(runCtx, d, &local, completion.timing, watched)
 				completion.result = &local
 			} else {
@@ -3339,14 +3345,17 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 		if work != nil {
 			d = work.Decision
 		}
+		startCtx, startHandoff := l.beginStartHandoff(ctx, d)
 		if v := l.startView.Load(); v != nil {
+			endNote := timeHandoffPhase(startCtx, "note_start_claimed")
 			v.noteStartClaimed(d, work)
+			endNote()
 		}
 		start := time.Now()
 		l.mu.Lock()
 		l.laneRefusedNow = false
 		l.mu.Unlock()
-		staged, refused, err := l.prepareClaimedStage(ctx, &d, &base, result)
+		staged, refused, err := l.prepareClaimedStage(startCtx, &d, &base, result)
 		if refused {
 			return false, false, err
 		}
@@ -3358,7 +3367,9 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 			return false, false, err
 		}
 		if len(staged) > 0 {
-			parallel, pErr := l.stageParallel(ctx, staged[0], base)
+			endParallel := timeHandoffPhase(startCtx, "stage_parallel")
+			parallel, pErr := l.stageParallel(startCtx, staged[0], base)
+			endParallel()
 			if pErr != nil {
 				if stoppedByOperator(ctx, pErr) || ctx.Err() != nil {
 					_ = l.cancelStaging(context.WithoutCancel(ctx), d)
@@ -3383,13 +3394,17 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 			}
 			return true, false, nil
 		}
-		if err := l.checkStopRequested(ctx); err != nil {
+		endStop := timeHandoffPhase(startCtx, "check_stop_requested")
+		stopErr := l.checkStopRequested(startCtx)
+		endStop()
+		if stopErr != nil {
 			if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
 				return false, false, cancelErr
 			}
-			return false, false, err
+			return false, false, stopErr
 		}
-		l.launchRun(ctx, staged[0], at, watch, result)
+		startHandoff.setDecision(staged[0])
+		l.launchRun(withStartHandoff(ctx, startHandoff), staged[0], at, watch, result)
 	case ActionSettle, ActionJudge:
 		if err := l.checkStopRequested(ctx); err != nil {
 			if releaseErr := l.releaseExamination(context.WithoutCancel(ctx), d); releaseErr != nil {

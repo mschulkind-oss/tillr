@@ -1710,6 +1710,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			return l.holdStageFailed(ctx, decision, step, stepErr)
 		}
+		endPrepare := timeHandoffPhase(ctx, "stage_prepare")
 		var endingCapability string
 		if request.Backend != "command" && len(request.Command) > 0 {
 			endingCapability = l.endingCapabilities[request.Command[0]]
@@ -2020,8 +2021,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				}
 			}
 		}
+		endPrepare()
+		endStageLane := timeHandoffPhase(ctx, "stage_lane")
 		observation, observeErr := pipelineStart(l.cfg.Root, spec.RunID, "stage")
 		if observeErr != nil {
+			endStageLane()
 			if holdErr := failStage("start stage pipeline", observeErr); holdErr != nil {
 				return nil, holdErr
 			}
@@ -2029,19 +2033,24 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		}
 		err := l.stageLane(ctx, spec)
 		if finishErr := pipelineFinish(l.cfg.Root, spec.RunID, observation); finishErr != nil && err == nil {
+			endStageLane()
 			if holdErr := failStage("finish stage pipeline", finishErr); holdErr != nil {
 				return nil, holdErr
 			}
 			continue
 		}
+		endStageLane()
 		if err == nil {
+			endRecordStaged := timeHandoffPhase(ctx, "record_staged_node")
 			if compactErr := l.compactDesigner(ctx, decision); compactErr != nil {
+				endRecordStaged()
 				if holdErr := failStage("compact designer", compactErr); holdErr != nil {
 					return nil, holdErr
 				}
 				continue
 			}
 			if restoreErr := l.restoreLane(ctx, decision.LaneID); restoreErr != nil {
+				endRecordStaged()
 				if holdErr := failStage("restore lane", restoreErr); holdErr != nil {
 					return nil, holdErr
 				}
@@ -2055,12 +2064,14 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				decision.NodeBaseSHA = l.baseInCheckout(ctx, decision.LaneID, decision.NodeBaseSHA)
 				decision.NodeStartRunID = decision.RunRequest.RunID
 				if recErr := l.recordStagedNode(ctx, decision); recErr != nil {
+					endRecordStaged()
 					if holdErr := failStage("record staged node", recErr); holdErr != nil {
 						return nil, holdErr
 					}
 					continue
 				}
 			}
+			endRecordStaged()
 			staged = append(staged, decision)
 			continue
 		}
