@@ -431,3 +431,37 @@ func TestLaneChangeOwesRebuildUntilSafetyInterval(t *testing.T) {
 		t.Fatal("the safety interval did not pay the owed rebuild")
 	}
 }
+
+func TestRetractClaimRefreshesLaneAvailability(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Lanes = []string{"lane-1"}
+	at := l.cfg.Now().UTC()
+	refresh := proposalFollower(t, l)
+	initial := refresh(at)
+	entry, ok := initial.nextFreshStart()
+	if !ok || entry.decision.ItemID != "item-a" || entry.decision.LaneID != "lane-1" {
+		t.Fatalf("initial proposal = (%+v, %v), want item-a on lane-1", entry.decision, ok)
+	}
+	applied, _, _, d, err := l.claimFastStart(t.Context(), newStartView(), initial, entry, at)
+	if err != nil || !applied {
+		t.Fatalf("claimFastStart = (%v, %v), want applied", applied, err)
+	}
+	claimed := refresh(at.Add(time.Second))
+	if !claimed.occupied["lane-1"] {
+		t.Fatalf("claimed snapshot did not mark lane-1 occupied: %+v", claimed.occupied)
+	}
+	if _, ok := claimed.nextFreshStart(); ok {
+		t.Fatal("claimed snapshot still proposed a fresh start")
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return retractClaim(tx, d, at.Add(2*time.Second), true)
+	})
+	retracted := refresh(at.Add(2 * time.Second))
+	if retracted.occupied["lane-1"] || retracted.storeRuns["lane-1"] != "" {
+		t.Fatalf("retractClaim left stale lane occupancy: occupied=%v storeRuns=%v", retracted.occupied, retracted.storeRuns)
+	}
+	reopened, ok := retracted.nextFreshStart()
+	if !ok || reopened.decision.ItemID != "item-a" || reopened.decision.LaneID != "lane-1" {
+		t.Fatalf("reopened proposal = (%+v, %v), want item-a on lane-1", reopened.decision, ok)
+	}
+}
