@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -136,5 +139,97 @@ func TestExamineLandsRealFixtureWithTheLoopsRecords(t *testing.T) {
 		} else if !reflect.DeepEqual(facts, baseline) {
 			t.Fatalf("recovery records %v != loop %v", facts, baseline)
 		}
+	}
+}
+
+type maintenanceOverlapSteps struct {
+	terminalSteps
+	t           *testing.T
+	f           refusalLoopFixture
+	markerReady chan struct{}
+	releaseLand chan struct{}
+	onSync      func()
+}
+
+func (s *maintenanceOverlapSteps) Land(_ context.Context, c Candidate) (LandOutcome, error) {
+	before := runGit(s.t, s.f.root, "rev-parse", TrunkRef)
+	runGit(s.t, s.f.root, "commit", "--allow-empty", "-qm", "landed "+c.RunID)
+	after := runGit(s.t, s.f.root, "rev-parse", TrunkRef)
+	runGit(s.t, s.f.root, "update-ref", "refs/tillr/landed/"+c.RunID, after)
+	close(s.markerReady)
+	<-s.releaseLand
+	fixtureWrite(s.t, s.f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO landings (landing_id,item_id,run_id,verdict_id,result,base_sha,head_sha,trunk_before,trunk_after) VALUES (?,?,?,'fixture-verdict','landed',?,?,?,?)`,
+			"landing-"+c.RunID, c.ItemID, c.RunID, c.BaseSHA, c.HeadSHA, before, after)
+		return err
+	})
+	return LandOutcome{Result: LandLanded}, nil
+}
+
+func (s *maintenanceOverlapSteps) ItemState(_ context.Context, itemID, state, _ string, _ ...item.WaitingOn) error {
+	fixtureWrite(s.t, s.f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state=?, updated_at=updated_at+1 WHERE item_id=?`, state, itemID)
+		return err
+	})
+	return nil
+}
+
+func (s *maintenanceOverlapSteps) Sync(ctx context.Context) (SyncOutcome, error) {
+	if s.onSync != nil {
+		s.onSync()
+	}
+	return s.terminalSteps.Sync(ctx)
+}
+
+func TestDrainedPassSweepsLandedMarkerCompletedDuringMaintenance(t *testing.T) {
+	ctx := context.Background()
+	p := newPendingTerminalFixture(t, true, "")
+	markerReady := make(chan struct{})
+	releaseLand := make(chan struct{})
+	var l *Loop
+	var once sync.Once
+	steps := &maintenanceOverlapSteps{
+		t:           t,
+		f:           p.f,
+		markerReady: markerReady,
+		releaseLand: releaseLand,
+		onSync: func() {
+			once.Do(func() {
+				// Release the landing after Pass 2's top-of-pass ref sweep has
+				// already run, then wait for the examination goroutine to queue
+				// its completion before Pass 2's post-maintenance drain.
+				close(releaseLand)
+				l.examinations.Wait()
+			})
+		},
+	}
+	l = p.replacement(t, steps)
+	l.syncedSHA = p.base
+	var result LoopResult
+	if stop, err := l.pass(ctx, &result); err != nil || stop != "" {
+		t.Fatalf("first pass: stop=%q err=%v", stop, err)
+	}
+	select {
+	case <-markerReady:
+	case <-time.After(hangGuard):
+		t.Fatal("examination did not reach landing")
+	}
+	stop := ""
+	for passes := 0; stop == ""; passes++ {
+		if passes > 5 {
+			t.Fatalf("loop did not drain after %d passes", passes)
+		}
+		var err error
+		stop, err = l.pass(ctx, &result)
+		if err != nil {
+			t.Fatalf("pass %d: %v", passes+2, err)
+		}
+	}
+	if stop != StopQueueDrained || result.Landed != 1 {
+		t.Fatalf("stop=%q landed=%d, want %q and 1", stop, result.Landed, StopQueueDrained)
+	}
+	marker := "refs/tillr/landed/" + p.runID
+	if refExists(t, p.f, marker) {
+		t.Fatalf("drained queue left an obsolete ref: %s", marker)
 	}
 }
