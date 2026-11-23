@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from unittest.mock import patch
 
@@ -1885,6 +1886,231 @@ def test_go_affected_slot_wait_order_and_trunk_repair_priority() -> None:
                     proc.wait()
 
 
+def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
+    """Candidate gates running go_affected.py use slot class 'gate', record class 'gate'
+    in holder files, never take proof-* slots, and yield freed ordinary slots to waiting
+    trunk proofs."""
+    shards = load_module("go_test_shards_for_proof_slots", ROOT / "tools" / "go-test-shards.py")
+    with tempfile.TemporaryDirectory(dir=str(scratch_root())) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        mod = repo / "tools" / "tillr-slotclass"
+        mod.mkdir(parents=True)
+        shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
+        (mod / "go.mod").write_text("module example.com/tillr-slotclass\n\ngo 1.23\n")
+        (mod / "slotclass_test.go").write_text(
+            'package slotclass\n'
+            'import (\n'
+            '  "os"\n'
+            '  "path/filepath"\n'
+            '  "testing"\n'
+            '  "time"\n'
+            ')\n'
+            'func TestHold(t *testing.T) {\n'
+            '  tag := os.Getenv("GATE_TAG")\n'
+            '  entered := filepath.Join(os.Getenv("ENTERED_DIR"), tag)\n'
+            '  if err := os.WriteFile(entered, []byte("in\\n"), 0o644); err != nil {\n'
+            '    t.Fatal(err)\n'
+            '  }\n'
+            '  rel := filepath.Join(os.Getenv("RELEASE_DIR"), tag)\n'
+            '  deadline := time.Now().Add(30 * time.Second)\n'
+            '  for time.Now().Before(deadline) {\n'
+            '    if _, err := os.Stat(rel); err == nil { return }\n'
+            '    time.Sleep(10 * time.Millisecond)\n'
+            '  }\n'
+            '  t.Fatalf("timed out waiting for release %s", rel)\n'
+            '}\n'
+        )
+
+        lock_dir = tmp_path / "locks"
+        lock_dir.mkdir()
+        entered_dir = tmp_path / "entered"
+        entered_dir.mkdir()
+        release_dir = tmp_path / "release"
+        release_dir.mkdir()
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        gocache = _shared_gocache()
+        _precompile_go_test(mod, gocache)
+        trace_dir = tmp_path / "trace"
+        trace_dir.mkdir()
+
+        # Run go_affected.py in real child processes with cpu_count patched to 4
+        # (1 ordinary slot-0, 1 gate slot gate-0, 1 proof slot proof-0) and
+        # GO_TEST_SHARDS_CLASS unset so the real candidate-gate default is exercised.
+        wrapper = (
+            "import importlib.util, os, sys; "
+            "os.cpu_count = lambda: 4; "
+            "spec = importlib.util.spec_from_file_location('go_affected', sys.argv[1]); "
+            "mod = importlib.util.module_from_spec(spec); "
+            "spec.loader.exec_module(mod); "
+            "sys.exit(mod.main(sys.argv[2:]))"
+        )
+        base_cmd = [
+            sys.executable,
+            "-c",
+            wrapper,
+            str(ROOT / "tools" / "gate" / "go_affected.py"),
+            "--root", str(repo),
+            "--changed", "tools/tillr-slotclass/slotclass_test.go",
+        ]
+
+        def start_gate(tag: str, holder: str) -> subprocess.Popen:
+            env = {
+                **os.environ,
+                "YOLO_DURABLE_DIR": str(durable),
+                "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
+                "GO_TEST_SHARDS_HOLDER": holder,
+                "GOCACHE": str(gocache),
+                "GATE_TAG": tag,
+                "ENTERED_DIR": str(entered_dir),
+                "RELEASE_DIR": str(release_dir),
+            }
+            env.pop("GO_TEST_SHARDS_CLASS", None)
+            return subprocess.Popen(
+                base_cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            )
+
+        def wait_file(path: Path, desc: str) -> None:
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                if path.is_file():
+                    return
+                time.sleep(0.02)
+            raise AssertionError(f"timed out waiting for {desc}: {path}")
+
+        procs: list[tuple[str, subprocess.Popen]] = []
+        proof1_release = threading.Event()
+        proof2_release = threading.Event()
+        threads: list[threading.Thread] = []
+        errors: list[BaseException] = []
+        try:
+            # 1. Two candidate gates occupy the single ordinary slot (slot-0) and gate-0.
+            for tag, holder in (("cand-1", "gate:run-cand-1"), ("cand-2", "gate:run-cand-2")):
+                proc = start_gate(tag, holder)
+                procs.append((tag, proc))
+                wait_file(entered_dir / tag, f"{tag} to enter TestHold")
+
+            holders = shards.read_slot_holders(lock_dir)
+            assert len(holders) == 2, f"expected 2 live holders, got {holders}"
+            for h in holders:
+                assert h.get("class") == shards.SLOT_CLASS_GATE, (
+                    f"candidate gate holder must record class 'gate', got {h}"
+                )
+                assert not str(h.get("slot", "")).startswith("proof-"), (
+                    f"candidate gate must not hold a proof-* slot, got {h}"
+                )
+            held_slots = {h["slot"] for h in holders}
+            assert held_slots == {"slot-0", "gate-0"}, f"expected slot-0 and gate-0 held, got {held_slots}"
+
+            # 2. A third candidate gate arrives and waits because slot-0 and gate-0 are full.
+            proc3 = start_gate("cand-3", "gate:run-cand-3")
+            procs.append(("cand-3", proc3))
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline and not shards.gate_caller_waiting(lock_dir):
+                time.sleep(0.02)
+            assert shards.gate_caller_waiting(lock_dir), "cand-3 did not enter gate wait"
+            assert not (entered_dir / "cand-3").is_file()
+
+            # 3. A trunk proof arrives later while candidate gates hold every ordinary slot
+            #    and still gets its reserved proof-0 slot immediately without waiting.
+            proof1_notices: list[str] = []
+            proof1_acquired = threading.Event()
+
+            def run_proof1() -> None:
+                try:
+                    with patch.dict(os.environ, {"TILLR_TRACE_DIR": str(trace_dir)}):
+                        with shards.acquire_shard_slot(
+                            lock_dir, 1, notify=proof1_notices.append,
+                            slot_class="proof", proof_limit=1, gate_limit=1,
+                            holder="trunk-proof", label="proof-imm",
+                        ):
+                            proof1_acquired.set()
+                            assert proof1_release.wait(30)
+                except BaseException as exc:
+                    errors.append(exc)
+                    proof1_acquired.set()
+
+            t1 = threading.Thread(target=run_proof1)
+            t1.start()
+            threads.append(t1)
+            assert proof1_acquired.wait(10), "trunk proof did not acquire reserved proof-0 slot"
+            assert proof1_notices == [], f"trunk proof waited when proof-0 should be free: {proof1_notices}"
+
+            # 4. A second trunk proof shard arrives after cand-3 is already waiting, waits on
+            #    proof-waiting.lock, and gets slot-0 ahead of cand-3 when cand-1 releases it.
+            proof2_waiting = threading.Event()
+            proof2_acquired = threading.Event()
+
+            def run_proof2() -> None:
+                try:
+                    with shards.acquire_shard_slot(
+                        lock_dir, 1, notify=lambda _m: proof2_waiting.set(),
+                        slot_class="proof", proof_limit=1, gate_limit=1,
+                        holder="trunk-proof", label="proof-wait",
+                    ):
+                        proof2_acquired.set()
+                        assert proof2_release.wait(30)
+                except BaseException as exc:
+                    errors.append(exc)
+                    proof2_waiting.set()
+                    proof2_acquired.set()
+
+            t2 = threading.Thread(target=run_proof2)
+            t2.start()
+            threads.append(t2)
+            assert proof2_waiting.wait(10), "proof2 did not enter wait"
+            assert shards.proof_caller_waiting(lock_dir)
+            assert not proof2_acquired.is_set()
+
+            # Release whichever candidate gate holds slot-0.
+            slot0_holder = next(h["run"] for h in holders if h["slot"] == "slot-0")
+            slot0_tag = "cand-1" if slot0_holder == "gate:run-cand-1" else "cand-2"
+            (release_dir / slot0_tag).write_text("go\n")
+
+            assert proof2_acquired.wait(15), "waiting trunk proof did not acquire freed slot-0"
+            assert not (entered_dir / "cand-3").is_file(), (
+                "waiting candidate gate acquired freed slot-0 ahead of waiting trunk proof"
+            )
+
+            # Release the proofs and remaining candidate gates so everything exits cleanly.
+            proof2_release.set()
+            proof1_release.set()
+            for tag in ("cand-1", "cand-2", "cand-3"):
+                (release_dir / tag).write_text("go\n")
+            wait_file(entered_dir / "cand-3", "cand-3 to run after proof finished")
+
+            for t in threads:
+                t.join(15)
+            if errors:
+                raise errors[0]
+
+            for tag, proc in procs:
+                out, _ = proc.communicate(timeout=30)
+                assert proc.returncode == 0, f"{tag} failed: {out}"
+
+            rows = [
+                json.loads(line)
+                for line in (trace_dir / "slot-waits.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            imm = next(r for r in rows if r.get("label") == "proof-imm")
+            assert imm["slot"] == "proof-0", imm
+            assert imm["waited_ms"] == 0, imm
+            assert imm["class"] == "proof", imm
+        finally:
+            proof1_release.set()
+            proof2_release.set()
+            for tag in ("cand-1", "cand-2", "cand-3"):
+                (release_dir / tag).write_text("go\n")
+            for t in threads:
+                t.join(10)
+            for _, proc in procs:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+
+
 def main() -> int:
     root_graph = go_affected.load_tillr_graph(ROOT)
     test_discover_modules()
@@ -1902,6 +2128,7 @@ def main() -> int:
     test_streams_progress_lines_before_run_ends()
     test_stalled_run_prints_nothing_without_test_events()
     test_go_affected_slot_wait_order_and_trunk_repair_priority()
+    test_candidate_gates_use_gate_class_and_leave_proof_slots_free()
     print("PASS: all go-affected tests passed")
     return 0
 
