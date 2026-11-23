@@ -673,12 +673,15 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					return nil, nil, readFailure(err)
 				}
 			}
-			if !settled && item.State == StateLanded {
-				finished, err := operatorFinishedLanding(r, item.ItemID)
-				if err != nil {
-					return nil, nil, readFailure(err)
+			if !settled && !work.BoundaryFailed {
+				endLive := closedState(def, item.State)
+				if !endLive && item.State == StateLanded {
+					endLive, err = operatorFinishedLanding(r, item.ItemID)
+					if err != nil {
+						return nil, nil, readFailure(err)
+					}
 				}
-				if finished && !work.BoundaryFailed {
+				if endLive {
 					// Do not resume a worker or offer another node while the drain
 					// is ending the superseded run.
 					decision = work.Decision
@@ -774,11 +777,21 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 						}
 					}
 					if len(leases) == 0 {
-						decision = work.Decision
-						decision.From = "running"
-						decision.Action, decision.Reason, decision.To = ActionSettle, "workflow-invalidated", "held"
-						decision.WorkflowRelease = true
-						identifyDecision(&decision)
+						keepEnding := false
+						if decision.Action == ActionHold && decision.Reason == ReasonItemAlreadyTerminal {
+							var unfinishedErr error
+							keepEnding, unfinishedErr = workHasUnfinishedRun(r, work)
+							if unfinishedErr != nil {
+								return nil, nil, readFailure(unfinishedErr)
+							}
+						}
+						if !keepEnding {
+							decision = work.Decision
+							decision.From = "running"
+							decision.Action, decision.Reason, decision.To = ActionSettle, "workflow-invalidated", "held"
+							decision.WorkflowRelease = true
+							identifyDecision(&decision)
+						}
 					} else if ownerNextNode && (decision.Action == ActionDispatch || decision.Action == ActionRetry) {
 						decision = work.Decision
 						decision.From, decision.To = "running", ""

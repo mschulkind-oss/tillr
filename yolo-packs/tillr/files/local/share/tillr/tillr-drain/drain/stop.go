@@ -459,7 +459,7 @@ func EndRuns(ctx context.Context, path string) ([]string, error) {
 }
 
 // A non-nil selection restricts the stop to the items the current plan found
-// explicitly finished. Check the disposition again under the start lock.
+// closed or explicitly finished. Check the disposition again under the start lock.
 func endRuns(ctx context.Context, path string, finishItems map[string]bool) ([]string, error) {
 	var skipped []string
 	err := withRunStartLock(ctx, path, func() error {
@@ -473,9 +473,10 @@ func endRuns(ctx context.Context, path string, finishItems map[string]bool) ([]s
 			return err
 		}
 		type candidate struct {
-			work    *pendingWork
-			rec     *run.Record
-			control string
+			work        *pendingWork
+			rec         *run.Record
+			control     string
+			closedState string
 		}
 		var candidates []candidate
 		if err := db.ReadTx(ctx, func(r *store.Reader) error {
@@ -487,16 +488,25 @@ func endRuns(ctx context.Context, path string, finishItems map[string]bool) ([]s
 				if work.Done || work.Decision.RunRequest == nil {
 					continue
 				}
+				var closedStateName string
 				if finishItems != nil {
 					if !finishItems[work.Decision.ItemID] {
 						continue
 					}
-					finished, err := operatorFinishedLanding(r, work.Decision.ItemID)
+					closed, state, err := itemClosedInStore(r, work.Decision.ItemID)
 					if err != nil {
 						return err
 					}
-					if !finished {
-						continue
+					if closed {
+						closedStateName = state
+					} else {
+						finished, err := operatorFinishedLanding(r, work.Decision.ItemID)
+						if err != nil {
+							return err
+						}
+						if !finished {
+							continue
+						}
 					}
 				}
 				for _, node := range parallelNodes(work.Decision) {
@@ -509,16 +519,22 @@ func endRuns(ctx context.Context, path string, finishItems map[string]bool) ([]s
 					}
 					copy := *work
 					copy.Decision = node
-					candidates = append(candidates, candidate{&copy, rec, work.Decision.RunRequest.RunID})
+					candidates = append(candidates, candidate{&copy, rec, work.Decision.RunRequest.RunID, closedStateName})
 				}
 			}
 			return nil
 		}); err != nil {
 			return err
 		}
+		type closedEndMeta struct {
+			itemID string
+			laneID string
+			state  string
+		}
 		var owners []*runFaceOwner
 		var ended []string
 		ending := map[string]bool{}
+		closedRuns := map[string]closedEndMeta{}
 		for _, c := range candidates {
 			work, id := c.work, c.work.Decision.RunRequest.RunID
 			faces, err := liveRunFaces(path, id, here)
@@ -558,6 +574,15 @@ func endRuns(ctx context.Context, path string, finishItems map[string]bool) ([]s
 				faces = workers
 			}
 			owners = append(owners, faces...)
+			if c.closedState != "" && len(faces) > 0 {
+				if _, seen := closedRuns[c.control]; !seen {
+					closedRuns[c.control] = closedEndMeta{
+						itemID: work.Decision.ItemID,
+						laneID: work.Decision.LaneID,
+						state:  c.closedState,
+					}
+				}
+			}
 			if !work.Orphaned && !ending[c.control] {
 				ended = append(ended, c.control)
 				ending[c.control] = true
@@ -584,6 +609,22 @@ func endRuns(ctx context.Context, path string, finishItems map[string]bool) ([]s
 					}
 					if err := appendEffect(tx, loopOrphanedKind, id, struct{}{}, at); err != nil {
 						return err
+					}
+					if meta, ok := closedRuns[id]; ok {
+						detail := fmt.Sprintf("ended live run %s because %s was closed", id, meta.itemID)
+						if meta.laneID != "" {
+							detail = fmt.Sprintf("ended live run %s on %s because %s was closed", id, meta.laneID, meta.itemID)
+						}
+						if err := appendEffect(tx, runEndedItemClosedKind, id, runEndedItemClosed{
+							ItemID:    meta.itemID,
+							RunID:     id,
+							LaneID:    meta.laneID,
+							ItemState: meta.state,
+							Reason:    "item-closed",
+							Detail:    detail,
+						}, at); err != nil {
+							return err
+						}
 					}
 				}
 				return nil
