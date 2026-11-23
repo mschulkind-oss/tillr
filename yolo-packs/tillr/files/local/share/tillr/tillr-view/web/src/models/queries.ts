@@ -110,8 +110,8 @@ function useRead<T>(
 }
 
 // Poll even with a live socket: finished step files and quiet ages are not store events.
-export const useLanesQuery = (enabled: boolean, paused = false, laneOpen = false) =>
-  useQuery({queryKey: queryKeys.lanes(), queryFn: ({signal}) => fetchLanes(signal), enabled,
+export const useLanesQuery = (enabled: boolean, paused = false, laneOpen = false, historyLane?: string) =>
+  useQuery({queryKey: historyLane ? [...queryKeys.lanes(), historyLane] : queryKeys.lanes(), queryFn: ({signal}) => fetchLanes(signal, historyLane), enabled,
     retry: false, refetchOnWindowFocus: false, refetchInterval: paused ? false : laneOpen ? 1000 : FALLBACK_POLL_MS});
 
 export const usePassesQuery = (enabled: boolean, paused = false) =>
@@ -283,7 +283,8 @@ export function useRefreshAll(): { refresh: () => void; refreshing: boolean } {
   const client = useQueryClient();
   return {
     refresh: () => {
-      void client.invalidateQueries();
+      // A refresh does not cancel a read already running: it is that refresh.
+      void client.invalidateQueries(undefined, { cancelRefetch: false });
     },
     refreshing: client.isFetching() > 0,
   };

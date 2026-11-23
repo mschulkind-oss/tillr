@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/ownercriteria"
-	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -475,6 +474,10 @@ func readLanes(r *store.Reader) ([]storeLane, error) {
 }
 
 func readLanesIn(r *store.Reader, loopDir string) ([]storeLane, error) {
+	return readLanesWith(r, deadRunsReader(r, loopDir))
+}
+
+func readLanesWith(r *store.Reader, deadRuns func() (map[string]bool, error)) ([]storeLane, error) {
 	rows, err := r.Query(`SELECT lane_id, state, COALESCE(run_id, ''), leased_until FROM lanes ORDER BY lane_id`)
 	if err != nil {
 		return nil, err
@@ -536,8 +539,7 @@ func readLanesIn(r *store.Reader, loopDir string) ([]storeLane, error) {
 		}
 	}
 	if hasLeased {
-		storePath := readerStorePath(r)
-		dead, err := presence.DeadRuns(r, storePath, defaultLoopDir(storePath, loopDir))
+		dead, err := deadRuns()
 		if err != nil && !isMissingTable(err) {
 			return nil, err
 		}

@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
+
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -30,12 +32,105 @@ type childrenView struct {
 }
 
 func readWorkerRecords(r *store.Reader, runID, itemID string) ([]progressClaim, map[string]childrenView, error) {
-	claims := []progressClaim{}
-	children := map[string]childrenView{}
+	if runID == "" && itemID != "" {
+		if claims, children, ok, err := readWorkerRecordsOfItem(r, itemID); ok || err != nil {
+			return claims, children, err
+		}
+	}
 	rows, err := r.Query(`SELECT kind,payload FROM events WHERE kind IN ('run.progress','run.child-session','run.children-recorded','run.observation-error') AND (?='' OR object_id=?) AND (?='' OR json_extract(payload,'$.item_id')=?) ORDER BY seq`, runID, runID, itemID, itemID)
 	if err != nil {
 		return nil, nil, err
 	}
+	return scanWorkerRecords(rows)
+}
+
+// readWorkerRecordsOfItem reads the records that name the item. Matching the item_id in every
+// worker record's payload decodes each of the million child-session events a live store holds,
+// three seconds for an Item page; so the child-session records come through events_by_object
+// for the runs the item has had, and the few other records are matched by payload as before.
+// A child-session event is written under its own run, whose item it names. ok is false when the store has no table to name the item's runs, and the
+// caller reads every record as before.
+func readWorkerRecordsOfItem(r *store.Reader, itemID string) ([]progressClaim, map[string]childrenView, bool, error) {
+	// Every place that ties a run to the item: the runs table, the drain's dispatches, the
+	// workflow's node runs, and the small records that name the item and sit on a run.
+	var marks []string
+	var args []any
+	seen := map[string]bool{}
+	for _, q := range []string{
+		`SELECT run_id FROM runs WHERE item_id = ?`,
+		`SELECT run_id FROM dispatches WHERE item_id = ?`,
+		`SELECT run_id FROM node_runs WHERE item_id = ?`,
+		`SELECT proposing_run FROM graph_revisions WHERE item_id = ?`,
+		`SELECT object_id FROM events WHERE kind = 'drain.started' AND json_extract(payload,'$.decision.item_id') = ?`,
+		`SELECT object_id FROM events WHERE kind IN ('run.progress','run.children-recorded','run.observation-error') AND json_extract(payload,'$.item_id') = ?`,
+	} {
+		runRows, err := r.Query(q, itemID)
+		if err != nil {
+			if isMissingTable(err) || isMissingColumn(err) {
+				if strings.Contains(q, "FROM events") {
+					return nil, nil, false, nil
+				}
+				continue
+			}
+			return nil, nil, false, err
+		}
+		for runRows.Next() {
+			var id *string
+			if err := runRows.Scan(&id); err != nil {
+				runRows.Close()
+				return nil, nil, false, err
+			}
+			if id != nil && *id != "" && !seen[*id] {
+				seen[*id] = true
+				marks = append(marks, "?")
+				args = append(args, *id)
+			}
+		}
+		err = runRows.Err()
+		runRows.Close()
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+	args = append(args, itemID, itemID)
+	rows, err := r.Query(`SELECT kind,payload FROM (SELECT seq,kind,payload FROM events WHERE object_id IN (`+strings.Join(append(marks, "''"), ",")+`) AND +kind = 'run.child-session' AND json_extract(payload,'$.item_id')=?
+ UNION ALL SELECT seq,kind,payload FROM events WHERE kind IN ('run.progress','run.children-recorded','run.observation-error') AND json_extract(payload,'$.item_id')=?)
+ ORDER BY seq`, args...)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	claims, children, err := scanWorkerRecords(rows)
+	return claims, children, true, err
+}
+
+// readWorkerRecordsForRuns reads the records of just these runs, through the events_by_object
+// index. A store holds a child-session event for every sample of every child ever run, so
+// reading the kind store-wide decodes a million rows.
+func readWorkerRecordsForRuns(r *store.Reader, runs map[string]bool) ([]progressClaim, map[string]childrenView, error) {
+	if len(runs) == 0 {
+		return []progressClaim{}, map[string]childrenView{}, nil
+	}
+	marks := make([]string, 0, len(runs))
+	args := make([]any, 0, len(runs))
+	for id := range runs {
+		marks = append(marks, "?")
+		args = append(args, id)
+	}
+	rows, err := r.Query(`SELECT kind,payload FROM events WHERE object_type='run' AND object_id IN (`+strings.Join(append(marks, "''"), ",")+`) AND +kind IN ('run.progress','run.child-session','run.children-recorded','run.observation-error') ORDER BY seq`, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return scanWorkerRecords(rows)
+}
+
+func scanWorkerRecords(rows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+	Close() error
+}) ([]progressClaim, map[string]childrenView, error) {
+	claims := []progressClaim{}
+	children := map[string]childrenView{}
 	defer rows.Close()
 	for rows.Next() {
 		var kind string
@@ -90,7 +185,24 @@ func readWorkerRecords(r *store.Reader, runID, itemID string) ([]progressClaim, 
 }
 
 func enrichWorkerRecords(r *store.Reader, rows []laneRow) error {
-	claims, children, err := readWorkerRecords(r, "", "")
+	rowRuns := make([]map[string]bool, len(rows))
+	wanted := map[string]bool{}
+	for i := range rows {
+		row := &rows[i]
+		runs := map[string]bool{row.RunID: true}
+		for _, n := range row.Nodes {
+			if n.Attempt == row.Attempt {
+				runs[n.RunID] = true
+			}
+		}
+		rowRuns[i] = runs
+		for id := range runs {
+			if id != "" {
+				wanted[id] = true
+			}
+		}
+	}
+	claims, children, err := readWorkerRecordsForRuns(r, wanted)
 	if err != nil {
 		return err
 	}
@@ -98,12 +210,7 @@ func enrichWorkerRecords(r *store.Reader, rows []laneRow) error {
 		row := &rows[i]
 		row.Progress = []progressClaim{}
 		row.ChildSessions = map[string]childrenView{}
-		runs := map[string]bool{row.RunID: true}
-		for _, n := range row.Nodes {
-			if n.Attempt == row.Attempt {
-				runs[n.RunID] = true
-			}
-		}
+		runs := rowRuns[i]
 		for _, c := range claims {
 			if runs[c.RunID] {
 				row.Progress = append(row.Progress, c)

@@ -509,14 +509,18 @@ func TestVantageCacheServesOneWalkPerFingerprint(t *testing.T) {
 	fpMu.Lock()
 	fp = "tree-2"
 	fpMu.Unlock()
-	if _, look, _ := c.get(context.Background()); look.Cache != "miss" || runs.Load() != 2 {
-		t.Fatalf("a changed tree answered %s after %d runs", look.Cache, runs.Load())
+	// (The old index answers at once and one rebuild runs: vantage_stale_internal_test.go.)
+	if _, look, _ := c.get(context.Background()); look.Cache != "stale" {
+		t.Fatalf("a changed tree answered %s", look.Cache)
 	}
-	// Past the age bound the same tree is walked again.
+	waitFor(t, func() bool { return runs.Load() == 2 })
+	waitFor(t, func() bool { _, look, _ := c.get(context.Background()); return look.Cache == "hit" })
+	// Past the age bound the same tree is walked again, while the old index answers.
 	clock.advance(11 * time.Minute)
-	if _, look, _ := c.get(context.Background()); look.Cache != "miss" || runs.Load() != 3 {
-		t.Fatalf("an old index answered %s after %d runs", look.Cache, runs.Load())
+	if _, look, _ := c.get(context.Background()); look.Cache != "stale" {
+		t.Fatalf("an old index answered %s", look.Cache)
 	}
+	waitFor(t, func() bool { return runs.Load() == 3 })
 	// The source answers the cached index's questions.
 	answer := readQuestions(c.source(context.Background()), "docs/a.md")
 	if answer.State != questionsOK && answer.State != designDocMissing {

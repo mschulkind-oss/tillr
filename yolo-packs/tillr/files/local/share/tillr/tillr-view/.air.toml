@@ -1,0 +1,37 @@
+# Live reload for the API half of `just observatory-dev` (the UI half is Vite's own).
+# `air` (github.com/air-verse/air, pinned in mise.toml) is what the Procfile's `api:` line
+# runs, under hivemind; run.sh resolves every value it reads and exports it (see
+# Procfile.dev), and nothing here carries an address or a path of its own.
+#
+# On a change to a watched Go source, air rebuilds; a build that succeeds replaces the
+# running API, and one that fails prints its error and leaves the old API answering
+# (stop_on_error = false). The build is run.sh's own: the same static `go build` run in the
+# checkout, whose Go-stamped revision comes from git, written over the file run.sh built.
+#
+# Air is started in tools/tillr-view, so every path below is relative to it.
+root = "."
+tmp_dir = ".air"
+
+[build]
+  # Same command and flags as run.sh's build(): CGO off, no embedded front end (no tags).
+  cmd = 'CGO_ENABLED=0 go build -o "$TILLR_VIEW_BIN.air" . && mv -f "$TILLR_VIEW_BIN.air" "$TILLR_VIEW_BIN"'
+  # Air runs this after a successful build, with the arguments the Procfile gave before. It
+  # is a shell line, so the values run.sh exported expand here.
+  full_bin = 'exec "$TILLR_VIEW_BIN" serve --store "$TILLR_VIEW_STORE" --root "$TILLR_VIEW_ROOT" --addr "$TILLR_VIEW_ADDR" --tillr-drain "$TILLR_VIEW_DRAIN" --ui-at vite $TILLR_VIEW_API_ARGS'
+  # The Go this binary is built from: itself and the modules go.mod replaces with local paths.
+  include_dir = [".", "../tillr", "../tillr-drain", "../tillr-item", "../tillr-land"]
+  include_ext = ["go", "mod", "sum"]
+  exclude_dir = ["web", ".air", "node_modules"]
+  exclude_regex = ["_test\\.go$"]
+  # Debounce: wait this long after the last change before building, so a cherry-pick of
+  # several commits is one rebuild.
+  delay = 1000
+  stop_on_error = false
+  send_interrupt = true
+  kill_delay = "2s"
+
+[log]
+  main_only = false
+
+[misc]
+  clean_on_exit = false

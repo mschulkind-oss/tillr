@@ -72,6 +72,8 @@ export interface LandingsData { rows: LandingRow[]; }
 export interface ApiEnvelope<T> {
   snapshot: ServerSnapshot;
   data: T;
+  /** Set by the waiting read only: what /why says about its document index. */
+  documentIndex?: DocumentIndexStatus;
 }
 
 export interface ApiErrorBody {
@@ -968,4 +970,13 @@ export interface DocData {
    * `design-doc-missing` (the tree does not hold the file). */
   questions_state: "questions-ok" | "questions-unknown" | "design-doc-missing";
   bytes: number;
+}
+
+/** What `GET /api/v1/why` says about the Vantage index its questions came from. "refreshing"
+ * means an index older than the documents was used while a rebuild runs, or after one failed. */
+export interface DocumentIndexStatus {
+  state: "current" | "refreshing" | "failed" | "unavailable";
+  age_ms?: number;
+  refresh_error?: string;
+  message?: string;
 }

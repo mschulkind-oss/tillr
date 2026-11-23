@@ -152,26 +152,22 @@ func runUnjudged(run storeRun) bool {
 // write is an event about an item that says what state the item is in, whatever kind item
 // chose to append.
 func readItemHistory(r *store.Reader, h *dispatchHistory) error {
-	rows, err := r.Query(`SELECT COALESCE(object_id, ''), payload FROM events WHERE object_type = 'item' ORDER BY seq`)
+	events, err := r.EventsSelected(0, store.EventSelection{ObjectTypes: []string{"item"}})
 	if err != nil {
 		if isMissingTable(err) {
 			return nil
 		}
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var itemID, payload string
-		if err := rows.Scan(&itemID, &payload); err != nil {
-			return err
-		}
-		if itemID == "" {
+	for _, e := range events {
+		if e.ObjectID == nil || *e.ObjectID == "" {
 			continue
 		}
+		itemID := *e.ObjectID
 		var body struct {
 			State string `json:"state"`
 		}
-		if err := json.Unmarshal([]byte(payload), &body); err != nil || body.State == "" {
+		if err := json.Unmarshal(e.Payload, &body); err != nil || body.State == "" {
 			continue
 		}
 		h.known[itemID] = true
@@ -179,7 +175,7 @@ func readItemHistory(r *store.Reader, h *dispatchHistory) error {
 			h.inProgress[itemID] = true
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // readRefusals answers each run's refusal step. The newest event for a run speaks.

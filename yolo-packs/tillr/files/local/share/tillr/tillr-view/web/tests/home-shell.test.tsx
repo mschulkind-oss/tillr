@@ -12,7 +12,8 @@ function mount(refused = false, lanes: LaneRow[] = []) {
   window.history.replaceState(null, "", "/#/");
   vi.stubGlobal("WebSocket", SilentSocket);
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
-    switch (String(input)) {
+    // Route on the path: the lanes route also takes `?history=<lane>`.
+    switch (new URL(String(input), "http://localhost").pathname) {
       case "/api/v1/lanes": return new Response(JSON.stringify(envelope(lanes)));
       case "/api/v1/snapshot": return new Response(JSON.stringify(envelope(snapshotData)));
       case "/api/v1/designs": return new Response(JSON.stringify(envelope({designs:[{path:"docs/design.md",last_designer:null}],arrivals:{within_lifetime:2,after_lifetime:1,no_session:1,unmeasured:0}})));

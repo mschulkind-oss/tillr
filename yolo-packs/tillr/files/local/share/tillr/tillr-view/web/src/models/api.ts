@@ -19,6 +19,7 @@ import type {
   PerformanceItem,
   CheckExecution,
   WaitingRow,
+  DocumentIndexStatus,
   QuestionsData,
   RunData,
   SnapshotData,
@@ -97,14 +98,16 @@ async function read<T>(path: string, signal?: AbortSignal): Promise<ApiEnvelope<
   return body as ApiEnvelope<T>;
 }
 
-export const fetchLanes = (signal?: AbortSignal) => read<LaneRow[]>("/api/v1/lanes", signal);
+// Run history is the lane page's table, so the list carries it only for the lane named.
+export const fetchLanes = (signal?: AbortSignal, historyLane?: string) =>
+  read<LaneRow[]>(historyLane ? `/api/v1/lanes?history=${encodeURIComponent(historyLane)}` : "/api/v1/lanes", signal);
 
 export const fetchLandings = (signal?: AbortSignal) => read<LandingsData>("/api/v1/landings", signal);
 export const fetchLanding = (id: string, signal?: AbortSignal) => read<LandingRow>(`/api/v1/landings/${encodeURIComponent(id)}`, signal);
 
 export const fetchWaiting = async (signal?: AbortSignal) => {
-  const answer = await read<{ rows: WaitingRow[] }>("/api/v1/why", signal);
-  return { ...answer, data: answer.data.rows };
+  const answer = await read<{ rows: WaitingRow[]; document_index?: DocumentIndexStatus }>("/api/v1/why", signal);
+  return { ...answer, data: answer.data.rows, documentIndex: answer.data.document_index };
 };
 export const fetchPasses = (signal?: AbortSignal) => read<PassRow[]>("/api/v1/passes", signal);
 
