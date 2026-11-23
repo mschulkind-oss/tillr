@@ -332,26 +332,37 @@ func TestWorkflowReleaseAfterItemClosedSavesUncommittedHandoff(t *testing.T) {
 	l.cfg.Stage = &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md")}
 	ctx := context.Background()
 
-	// Run plan (n1) and test-write (n2). Because commitFirst is true, n2 advances to n3
-	// via advanceNode while leaving failing_test.go uncommitted in lane-1.
-	for i := 0; i < 6 && steps.testWriteRun == ""; i++ {
-		var r LoopResult
-		if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
-			t.Fatalf("pass %d: stop=%q err=%v", i, stop, err)
+	// Run plan (n1) and test-write (n2). Pause live handoff so item-a can be closed
+	// immediately after n2 completes (before n2 is settled or n3 runs), forcing the
+	// workflow-release path to save the uncommitted handoff and clean lane-1.
+	l.pollOnly = true
+	var r LoopResult
+	for steps.testWriteRun == "" {
+		stop, err := l.pass(ctx, &r)
+		if err != nil || stop != "" {
+			t.Fatalf("advance to n2: stop=%q err=%v", stop, err)
+		}
+		if l.activeCount() > 0 {
+			c := <-l.completions
+			l.completions <- c
 		}
 	}
-	if steps.testWriteRun == "" {
-		t.Fatal("test-write did not run")
-	}
-	// Close item-a immediately after n2 completed (before n3 runs).
+	// Close item-a immediately after n2 completed (before n2 settles / n3 runs).
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := item.Close(ctx, tx, "item-a", "no longer needed", "owner", l.cfg.Now())
 		return err
 	})
-	var r LoopResult
-	for i := 0; i < 3; i++ {
-		if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
-			t.Fatalf("release pass %d: stop=%q err=%v", i, stop, err)
+	l.pollOnly = false
+	for {
+		stop, err := l.pass(ctx, &r)
+		if err != nil {
+			t.Fatalf("release pass: %v", err)
+		}
+		if stop == StopQueueDrained {
+			break
+		}
+		if stop != "" {
+			t.Fatalf("release pass: unexpected stop=%q", stop)
 		}
 	}
 	if err := l.pruneRunRefs(ctx); err != nil {
