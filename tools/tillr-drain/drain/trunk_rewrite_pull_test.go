@@ -110,7 +110,7 @@ func TestPullRebaseOfUnpushedLandingsIsAbsorbed(t *testing.T) {
 	if err != nil || !found || of.runID != "run-two.txt" {
 		t.Fatalf("landing by the new sha: %+v %v %v", of, found, err)
 	}
-	has, err := HeavyRunner{Store: f.storePath}.hasLandingRecord(context.Background(), newTwo)
+	has, err := HeavyRunner{Store: f.storePath}.HasLandingRecord(context.Background(), newTwo)
 	if err != nil || !has {
 		t.Fatalf("a red first commit has no landing record under its new sha: %v %v", has, err)
 	}

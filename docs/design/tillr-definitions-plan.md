@@ -1036,7 +1036,7 @@ Filing these units now would put work in the queue that rests on decisions the o
    the first node runs, plus a budget a definition may set that leads to a named next step for the
    owner, never a silent refusal. Since this was drafted, the workflow check and stage expansion
    already report graph size and refuse no graph for its depth or node count
-   ([workflow_check.go](../../tools/tillr-drain/drain/workflow_check.go)), while
+   ([workflow_check.go](../../tools/tillr-drain/workflow/workflow_check.go)), while
    [design-from-scouts@v1.json](../../config/tillr/workflows/design-from-scouts@v1.json) still bounds
    scout prompts at `most: 8` and no definition-supplied size budget is built yet (see
    [the separable-parts table](./tillr-separable-parts.md#7-the-second-round-tillrs-answer)).

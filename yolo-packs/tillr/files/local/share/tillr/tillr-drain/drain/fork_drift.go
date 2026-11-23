@@ -6,21 +6,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/remotesync"
 	"github.com/mschulkind-oss/tillr-item/item"
-	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 const (
-	forkDriftCheck      = "patch-branch-inv2"
+	forkDriftCheck      = remotesync.ForkDriftCheck
 	forkRebaseKind      = "drain.fork-rebase-request"
 	forkDriftNoticeKind = "drain.fork-drift-inherited"
-	forkRebasePrefix    = "rebase-fork-"
+	forkRebasePrefix    = remotesync.ForkRebasePrefix
 	forkRebaseCriterion = "rebase-release"
 )
 
@@ -32,95 +31,18 @@ func init() {
 	}
 }
 
-func isForkRebaseItem(id string) bool { return strings.HasPrefix(id, forkRebasePrefix) }
+func isForkRebaseItem(id string) bool { return remotesync.IsForkRebaseItem(id) }
 
-type forkObservation struct {
-	CheckID  string `json:"check_id,omitempty"`
-	Fork     string `json:"fork"`
-	Kind     string `json:"kind"`
-	Ref      string `json:"ref"`
-	Commit   string `json:"commit"`
-	Delivery string `json:"delivery"`
-}
+type forkObservation = remotesync.ForkObservation
 
-var forkNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
-var forkCommitPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
+var forkCommitPattern = remotesync.ForkCommitPattern
 
-func (o forkObservation) valid() bool {
-	return forkNamePattern.MatchString(o.Fork) && o.Fork != "." && o.Fork != ".." &&
-		forkCommitPattern.MatchString(o.Commit) && o.Ref != "" && filepath.IsLocal(o.Delivery) && o.Delivery != "." &&
-		(o.Kind == "release" || o.Kind == "head" || o.Kind == "pin" || o.Kind == "base")
-}
-
-func (o forkObservation) pin() string      { return "yolo-packs/fork-pins/" + o.Fork }
-func (o forkObservation) patchRef() string { return forkPatchPrefix + o.Fork }
-func (o forkObservation) requestable() bool {
-	return o.Kind == "release" && o.Delivery == "patch/"+o.Fork
-}
-func (o forkObservation) touches(paths []string) bool {
-	for _, path := range paths {
-		if path == o.pin() || (o.Delivery != "patch/"+o.Fork && readsCoverPath([]string{o.Delivery}, path)) {
-			return true
-		}
-	}
-	return false
-}
-
-// Read only the check's own observation. An INV-2 failure without this evidence is
-// not replayable as a drift verdict, including when an older checker wrote the span.
 func readForkConflicts(path string) (observations map[string]forkObservation, unfinished, unansweredFork bool) {
-	body, err := os.ReadFile(path)
-	var file gateSpansFile
-	if err != nil || json.Unmarshal(body, &file) != nil {
-		return nil, false, false
-	}
-	observations = map[string]forkObservation{}
-	for _, skip := range file.SkippedChecks {
-		unfinished = unfinished || (skip.Planned && skip.Owed)
-		unansweredFork = unansweredFork || (skip.Kind == forkDriftCheck && skip.Planned && skip.Owed)
-	}
-	for _, check := range file.CheckSpans {
-		res := classifyCheck(checkresult.Observation{
-			Check:  check.CheckID,
-			Source: checkresult.CheckSpan,
-			Word:   check.Status,
-		})
-		if res.Outcome == checkresult.Unknown {
-			switch res.Detail {
-			case checkresult.DetailNotRun:
-				unfinished = true
-			case checkresult.DetailError, checkresult.DetailStale:
-				unfinished = true
-				unansweredFork = unansweredFork || check.Kind == forkDriftCheck
-			}
-		}
-		if check.Kind != forkDriftCheck || res.Outcome != checkresult.Fail {
-			continue
-		}
-		var payload struct {
-			ForkConflict forkObservation `json:"fork_conflict"`
-		}
-		_ = json.Unmarshal([]byte(check.AttributesJSON), &payload)
-		payload.ForkConflict.CheckID = check.CheckID
-		observations[check.CheckID] = payload.ForkConflict
-	}
-	return observations, unfinished, unansweredFork
+	return remotesync.ReadForkConflicts(path)
 }
 
 func replayForkConflict(check, text string) (forkObservation, bool) {
-	const prefix = "fork-check replay target: "
-	var observed forkObservation
-	count := 0
-	for _, line := range strings.Split(text, "\n") {
-		if body, ok := strings.CutPrefix(line, prefix); ok {
-			if json.Unmarshal([]byte(body), &observed) != nil {
-				return forkObservation{}, false
-			}
-			count++
-		}
-	}
-	observed.CheckID = check
-	return observed, count == 1 && observed.valid()
+	return remotesync.ReplayForkConflict(check, text)
 }
 
 // settleGateFailure keeps INV-2 out of trunk blame. The upstream question is judged
@@ -149,7 +71,7 @@ func (l *Loop) settleGateFailure(ctx context.Context, c *Candidate, gate GateOut
 			regular = append(regular, check)
 			continue
 		}
-		if !observed.valid() {
+		if !observed.Valid() {
 			unknown = true
 			continue
 		}
@@ -176,7 +98,7 @@ func (l *Loop) settleGateFailure(ctx context.Context, c *Candidate, gate GateOut
 			continue
 		}
 		prior, ok := out.forkConflicts[check]
-		if !ok || !prior.valid() || observed.Fork != prior.Fork {
+		if !ok || !prior.Valid() || observed.Fork != prior.Fork {
 			unknown = true
 			continue
 		}
@@ -185,13 +107,13 @@ func (l *Loop) settleGateFailure(ctx context.Context, c *Candidate, gate GateOut
 			unknown = true
 			continue
 		}
-		if observed.requestable() {
+		if observed.Requestable() {
 			requests = append(requests, observed)
 		}
 		if len(paths) == 0 {
 			unknown = true
-		} else if observed.touches(paths) {
-			if observed.requestable() {
+		} else if observed.Touches(paths) {
+			if observed.Requestable() {
 				waits = append(waits, observed)
 			} else {
 				refused = true
@@ -285,7 +207,7 @@ func (l *Loop) markForkGateUnanswered(c Candidate) error {
 // The patch ref, not the stale pin, answers whether a fork part is required. A
 // release not yet known locally cannot be in the delivered tip's ancestry.
 func (l *Loop) forkRebaseDelivery(ctx context.Context, o forkObservation) (deliveryDecision, error) {
-	tip, err := l.revParse(ctx, l.cfg.Root, o.patchRef()+"^{commit}")
+	tip, err := l.revParse(ctx, l.cfg.Root, o.PatchRef()+"^{commit}")
 	if err != nil {
 		return deliveryDecision{}, err
 	}
@@ -302,12 +224,12 @@ func (l *Loop) forkRebaseDelivery(ctx context.Context, o forkObservation) (deliv
 }
 
 func (l *Loop) fileForkRebase(ctx context.Context, o forkObservation) (string, error) {
-	if !o.valid() || !o.requestable() {
+	if !o.Valid() || !o.Requestable() {
 		return "", nil
 	}
 	l.forkRebaseMu.Lock()
 	defer l.forkRebaseMu.Unlock()
-	pin, err := l.git(ctx, l.cfg.Root, "show", TrunkRef+":"+o.pin())
+	pin, err := l.git(ctx, l.cfg.Root, "show", TrunkRef+":"+o.Pin())
 	if err != nil {
 		// A candidate may propose creating a fork; the request must already have
 		// a tracked pin to repair on the trunk.
@@ -375,7 +297,7 @@ func (l *Loop) fileForkRebase(ctx context.Context, o forkObservation) (string, e
 			return err
 		}
 		id = open
-		repoWork := fmt.Sprintf("Set the three lines of %s to the current %s commit, the unchanged remote, and %s. Confirm the release commit is an ancestor of the delivered head before committing the one-file pin change. The ordinary gate must pass %s.", o.pin(), o.patchRef(), o.Commit, o.CheckID)
+		repoWork := fmt.Sprintf("Set the three lines of %s to the current %s commit, the unchanged remote, and %s. Confirm the release commit is an ancestor of the delivered head before committing the one-file pin change. The ordinary gate must pass %s.", o.Pin(), o.PatchRef(), o.Commit, o.CheckID)
 		text := fmt.Sprintf("Fork %s: %s conflicts with release %s (%s). ", o.Fork, o.CheckID, o.Ref, o.Commit)
 		if delivery.Kind == "both" {
 			text += fmt.Sprintf("Fork part: in the staged fork checkout, fetch %s from upstream if the object is absent and verify it resolves to %s. Run `git rebase --onto %s %s main` (the old base is the pin's third line). Resolve conflicts, keep the history linear, and report patches dropped because upstream already contains them. Leave the rebased head on main; never run bin/pi-forks export or rebase. Wait for the lander to deliver. Repository part: ", o.Ref, o.Commit, o.Commit, lines[2])
@@ -388,7 +310,7 @@ func (l *Loop) fileForkRebase(ctx context.Context, o forkObservation) (string, e
 			id = forkRebasePrefix + o.Fork + "-" + hexDigest(o.Ref)[:12]
 			payload, err := json.Marshal(map[string]any{
 				"item_id": id, "title": title, "state": StateInQueue,
-				"rank": TrunkFixerRank, "seat": TrunkFixerSeat, "allowed_paths": []string{o.pin()},
+				"rank": TrunkFixerRank, "seat": TrunkFixerSeat, "allowed_paths": []string{o.Pin()},
 				"criteria": []map[string]string{{"criterion_id": forkRebaseCriterion, "text": text, "state": "not-done", "claim_class": "verification-only"}},
 			})
 			if err != nil {
@@ -442,7 +364,7 @@ func (l *Loop) checkForkRebasePiece(ctx context.Context, c Candidate) (string, e
 	}
 	stale := fmt.Sprintf("this piece does not deliver the current rebase target for %s: %s (%s); re-read the request", target.Fork, target.Ref, target.Commit)
 	if c.BaseRef != "" {
-		if c.BaseRef != target.patchRef() {
+		if c.BaseRef != target.PatchRef() {
 			return stale, nil
 		}
 		if _, err := l.git(ctx, c.Worktree, "merge-base", "--is-ancestor", target.Commit, c.HeadSHA); err != nil {
@@ -450,18 +372,18 @@ func (l *Loop) checkForkRebasePiece(ctx context.Context, c Candidate) (string, e
 		}
 		return "", nil
 	}
-	tip, err := l.revParse(ctx, l.cfg.Root, target.patchRef()+"^{commit}")
+	tip, err := l.revParse(ctx, l.cfg.Root, target.PatchRef()+"^{commit}")
 	if err != nil {
 		return "", err
 	}
 	if _, err := l.git(ctx, l.cfg.Root, "merge-base", "--is-ancestor", target.Commit, tip); err != nil {
 		return stale, nil
 	}
-	before, err := l.git(ctx, c.Worktree, "show", c.BaseSHA+":"+target.pin())
+	before, err := l.git(ctx, c.Worktree, "show", c.BaseSHA+":"+target.Pin())
 	if err != nil {
 		return stale, nil
 	}
-	after, err := l.git(ctx, c.Worktree, "show", c.HeadSHA+":"+target.pin())
+	after, err := l.git(ctx, c.Worktree, "show", c.HeadSHA+":"+target.Pin())
 	if err != nil {
 		return stale, nil
 	}
@@ -474,7 +396,7 @@ func (l *Loop) checkForkRebasePiece(ctx context.Context, c Candidate) (string, e
 
 func (l *Loop) reportInheritedDrift(ctx context.Context, c Candidate) {
 	for _, o := range c.InheritedDrift {
-		if o.requestable() {
+		if o.Requestable() {
 			continue
 		}
 		key := o.Ref

@@ -418,7 +418,7 @@ func TestHeavyNoRevertReasonRecordedForEveryFixerPath(t *testing.T) {
 		})
 		runner.Progress = func(line string) { log.WriteString(line) }
 		runner.Revert = func(context.Context, string, string, []HeavyCheck, HeavyReplay) (RevertOutcome, error) {
-			return RevertOutcome{Refused: "check-b still failed after revert", StillRed: true, stillRedCheck: "check-b"}, nil
+			return RevertOutcome{Refused: "check-b still failed after revert", StillRed: true, StillRedCheck: "check-b"}, nil
 		}
 		runner.Fix = func(_ context.Context, sha string, checks []HeavyCheck) error {
 			for _, c := range checks {
@@ -467,7 +467,7 @@ func TestHeavyNoRevertReasonRecordedForEveryFixerPath(t *testing.T) {
 		runner.Progress = func(line string) { log.WriteString(line) }
 		runner.Revert = func(_ context.Context, _, landing string, _ []HeavyCheck, _ HeavyReplay) (RevertOutcome, error) {
 			if landing == tip {
-				return RevertOutcome{Refused: "unit still failed after reverting " + shortSHA(tip), StillRed: true, stillRedCheck: "unit"}, nil
+				return RevertOutcome{Refused: "unit still failed after reverting " + shortSHA(tip), StillRed: true, StillRedCheck: "unit"}, nil
 			}
 			return RevertOutcome{Refused: "revised revert conflict"}, nil
 		}

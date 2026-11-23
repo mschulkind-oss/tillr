@@ -53,7 +53,7 @@ func writeSupervisorMarker(t *testing.T, guard string, pid int, startTicks, chec
 	if err := os.MkdirAll(filepath.Dir(guard), 0755); err != nil {
 		t.Fatal(err)
 	}
-	body := (heavyCleanupMarker{PID: pid, StartTicks: startTicks, Checkout: checkout}).format()
+	body := (heavyCleanupMarker{PID: pid, StartTicks: startTicks, Checkout: checkout}).Format()
 	if err := os.WriteFile(guard, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestHeavyCleanupGuardRecoversDeadSupervisorAndHoldsLiveSupervisor(t *testin
 		stop()
 
 		guard := filepath.Join(root, ".git", "tillr-gate", heavyCleanupGuard)
-		writeSupervisorMarker(t, guard, proc.pid, proc.start, abandoned)
+		writeSupervisorMarker(t, guard, proc.PID, proc.Start, abandoned)
 		if err := os.WriteFile(guard+".start-error", []byte("stale start error"), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +121,7 @@ func TestHeavyCleanupGuardRecoversDeadSupervisorAndHoldsLiveSupervisor(t *testin
 		proc, stop := startHeldProcess(t)
 
 		guard := filepath.Join(root, ".git", "tillr-gate", heavyCleanupGuard)
-		writeSupervisorMarker(t, guard, proc.pid, proc.start, retained)
+		writeSupervisorMarker(t, guard, proc.PID, proc.Start, retained)
 
 		if _, err := runner.Run(context.Background()); !cleanupLost(err) {
 			t.Fatalf("live supervisor err=%v, want cleanupLost", err)
@@ -167,10 +167,10 @@ func TestHeavyCleanupGuardRecoversDeadSupervisorAndHoldsLiveSupervisor(t *testin
 		abandoned := filepath.Join(scratchUnderDurable(t), "reused-pid-worktree")
 		heavyGit(t, root, "worktree", "add", "--detach", abandoned, tip)
 		proc, _ := startHeldProcess(t)
-		otherStart := proc.start + "1"
+		otherStart := proc.Start + "1"
 
 		guard := filepath.Join(root, ".git", "tillr-gate", heavyReplayGuard)
-		writeSupervisorMarker(t, guard, proc.pid, otherStart, abandoned)
+		writeSupervisorMarker(t, guard, proc.PID, otherStart, abandoned)
 
 		if _, err := runner.Run(context.Background()); err != nil {
 			t.Fatalf("reused pid blocked proof: %v", err)
@@ -184,7 +184,7 @@ func TestHeavyCleanupGuardRecoversDeadSupervisorAndHoldsLiveSupervisor(t *testin
 		if _, err := os.Stat(abandoned); !os.IsNotExist(err) {
 			t.Fatalf("abandoned replay checkout remained: %v", err)
 		}
-		if current, err := readHeavyProcess(proc.pid); err != nil || current.start != proc.start || current.state == "Z" {
+		if current, err := readHeavyProcess(proc.PID); err != nil || current.Start != proc.Start || current.State == "Z" {
 			t.Fatalf("unrelated process sharing pid was disturbed: %+v / %v", current, err)
 		}
 		if green := heavyGit(t, root, "rev-parse", GreenRef); green != tip {
@@ -198,7 +198,7 @@ func TestHeavyCleanupGuardRecoversDeadSupervisorAndHoldsLiveSupervisor(t *testin
 		heavyGit(t, root, "worktree", "add", "--detach", retained, tip)
 		proc, stop := startHeldProcess(t)
 		guard := filepath.Join(root, ".git", "tillr-gate", heavyCleanupGuard)
-		writeSupervisorMarker(t, guard, proc.pid, proc.start, retained)
+		writeSupervisorMarker(t, guard, proc.PID, proc.Start, retained)
 
 		if _, release, err := rollingOwnership(context.Background(), root); err == nil {
 			release()
@@ -231,7 +231,7 @@ func TestHeavyCleanupGuardRecoversDeadSupervisorAndHoldsLiveSupervisor(t *testin
 		proc, stop := startHeldProcess(t)
 		stop()
 		guard := filepath.Join(root, ".git", "tillr-gate", heavyCleanupGuard)
-		writeSupervisorMarker(t, guard, proc.pid, proc.start, root)
+		writeSupervisorMarker(t, guard, proc.PID, proc.Start, root)
 
 		if _, err := runner.Run(context.Background()); !cleanupLost(err) {
 			t.Fatalf("err=%v, want cleanupLost", err)
@@ -258,7 +258,7 @@ func TestHeavyLoopRecoversCleanupGuardAfterSupervisorExits(t *testing.T) {
 	heavyGit(t, root, "worktree", "add", "--detach", abandoned, tip)
 	proc, stop := startHeldProcess(t)
 	guard := filepath.Join(root, ".git", "tillr-gate", heavyCleanupGuard)
-	writeSupervisorMarker(t, guard, proc.pid, proc.start, abandoned)
+	writeSupervisorMarker(t, guard, proc.PID, proc.Start, abandoned)
 
 	var log bytes.Buffer
 	steps := heavyTestSteps{judge: func(context.Context, string, string) ([]HeavyCheck, error) {

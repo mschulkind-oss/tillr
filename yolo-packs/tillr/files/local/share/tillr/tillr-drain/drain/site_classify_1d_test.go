@@ -369,7 +369,7 @@ func TestSiteD23D25D29HeavyRunnerAndJudgeTipUseClassifier(t *testing.T) {
 		return checkresult.Classify(o)
 	})
 
-	attempt, err := runner.run(ctx, tip)
+	attempt, err := runner.RunAttempt(ctx, tip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestSiteD23D25D29HeavyRunnerAndJudgeTipUseClassifier(t *testing.T) {
 		}
 		return checkresult.Classify(o)
 	})
-	greenAttempt, err := runnerPass.run(ctx, tip)
+	greenAttempt, err := runnerPass.RunAttempt(ctx, tip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,14 +513,14 @@ func TestSiteD26HeavyReplayAndOneLoggedUseClassifier(t *testing.T) {
 		return checkresult.Classify(o)
 	})
 
-	red, _, err := runner.oneLogged(ctx, tip, "one-chk")
+	red, _, err := runner.OneLogged(ctx, tip, "one-chk")
 	if err != nil || !red {
 		t.Fatalf("oneLogged = (%v, %v), want (true, nil)", red, err)
 	}
 	if rRed, ok := readHeavyReplay(dir, tip, "r-chk"); !ok || !rRed {
 		t.Fatalf("readHeavyReplay = (%v, %v), want (true, true)", rRed, ok)
 	}
-	if rRed, err := runner.replay(ctx, tip, "r-chk", "test"); err != nil || !rRed {
+	if rRed, err := runner.Replay(ctx, tip, "r-chk", "test"); err != nil || !rRed {
 		t.Fatalf("replay = (%v, %v), want (true, nil)", rRed, err)
 	}
 }
@@ -568,18 +568,18 @@ func TestSiteD27AndD28AttributionAndEarlyUseClassifier(t *testing.T) {
 		}
 		return checkresult.Classify(o)
 	})
-	first, fault, _, err := runner.findFirstRed(ctx, HeavyRun{BaseSHA: base, TipSHA: tip}, check)
+	first, fault, _, err := runner.FindFirstRed(ctx, HeavyRun{BaseSHA: base, TipSHA: tip}, check)
 	if err != nil || fault || first != tip {
 		t.Fatalf("findFirstRed = (%q, %v, %v), want (%q, false, nil)", first, fault, err, tip)
 	}
 
 	// D27: heavyEarly.offer enqueues when HeavyCheckWord returns Fail.
-	early := runner.startEarly(ctx, HeavyRun{BaseSHA: base, TipSHA: tip})
-	early.offer(HeavyCheck{CheckID: "attr-chk", Result: "pass", Detail: "boom", Reads: []string{"a.txt"}})
-	if err := early.wait(); err != nil {
+	early := runner.StartEarly(ctx, HeavyRun{BaseSHA: base, TipSHA: tip})
+	early.Offer(HeavyCheck{CheckID: "attr-chk", Result: "pass", Detail: "boom", Reads: []string{"a.txt"}})
+	if err := early.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := early.handled["attr-chk"]; !ok {
+	if _, ok := early.Handled["attr-chk"]; !ok {
 		t.Fatalf("heavyEarly.offer did not handle attr-chk when HeavyCheckWord returned Fail")
 	}
 
@@ -590,7 +590,7 @@ func TestSiteD27AndD28AttributionAndEarlyUseClassifier(t *testing.T) {
 		}
 		return checkresult.Classify(o)
 	})
-	if err := runner.forgetGreenAttributions(ctx, []HeavyCheck{{CheckID: "attr-chk", Result: "fail"}}); err != nil {
+	if err := runner.ForgetGreenAttributions(ctx, []HeavyCheck{{CheckID: "attr-chk", Result: "fail"}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := readHeavyAttributions(dir); len(got) != 0 {
@@ -676,13 +676,13 @@ func TestSiteD31D32D33ProofsAndReleaseUseClassifier(t *testing.T) {
 	if len(proofs) != 2 {
 		t.Fatalf("readCheckProofs len = %d, want 2", len(proofs))
 	}
-	if proofs[0].passed([]string{"chk-green"}, 0) {
+	if proofs[0].Passed([]string{"chk-green"}, 0) {
 		t.Fatalf("chk-green should not be proved when CachedRecord returned Fail")
 	}
-	if !proofs[1].passed([]string{"chk-prog"}, 0) {
+	if !proofs[1].Passed([]string{"chk-prog"}, 0) {
 		t.Fatalf("chk-prog should be proved when CachedRecord returned Pass")
 	}
-	if proofs[1].passed([]string{"chk-legacy"}, 0) {
+	if proofs[1].Passed([]string{"chk-legacy"}, 0) {
 		t.Fatalf("chk-legacy should not be proved when CachedRecord returned Fail")
 	}
 

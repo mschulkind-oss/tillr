@@ -922,7 +922,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				}
 			}
 			if loadErr == nil && w != nil {
-				if scopeErr := w.checkScopes(nil); scopeErr != nil {
+				if scopeErr := w.CheckScopes(nil); scopeErr != nil {
 					hold = scopeErr.Error()
 				}
 			}
@@ -978,7 +978,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					}
 					decision.RunRequest = &request
 					if routed.Command != nil {
-						decision.RunRequest = routed.Command.commandRequest(item.ItemID, decision.LaneID, request.RunID)
+						decision.RunRequest = commandRequest(*routed.Command, item.ItemID, decision.LaneID, request.RunID)
 					} else if w.Stages[resumeNode].TimeoutMS > 0 {
 						decision.RunRequest.TimeoutMS = w.Stages[resumeNode].TimeoutMS
 					}

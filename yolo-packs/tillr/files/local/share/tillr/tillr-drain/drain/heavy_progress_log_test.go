@@ -74,14 +74,3 @@ func TestHeavyReplayWithNoVerdictSaysWhy(t *testing.T) {
 		t.Fatalf("a replay with no verdict was retried:\n%s", log)
 	}
 }
-
-// A judge that runs checks one at a time reports each verdict as the check ends.
-func TestHeavyJudgeReportsEachCheckAsItEnds(t *testing.T) {
-	lines := []string{}
-	ctx := context.WithValue(context.Background(), heavyProgressReportKey{}, func(line string) { lines = append(lines, line) })
-	heavyProgressReport(ctx, "loop: heavy %s %s in %s\n", "unit", "fail", "3s")
-	if len(lines) != 1 || lines[0] != "loop: heavy unit fail in 3s\n" {
-		t.Fatalf("lines=%q", lines)
-	}
-	heavyProgressReport(context.Background(), "nothing %s", "here")
-}

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 )
@@ -67,8 +68,8 @@ type Policy struct {
 	Backends map[string]Backend  `json:"backends"`
 }
 
-const invalidPolicySeatName = "seat %q must start with a lowercase letter and contain only lowercase letters, digits and hyphens; %s"
-const defaultSeatDeclaration = "seats are declared in the backend policy file"
+const invalidPolicySeatName = workflow.InvalidPolicySeatName
+const defaultSeatDeclaration = workflow.DefaultSeatDeclaration
 
 func (p Policy) seatDeclaration() string {
 	if p.Ref != "" {

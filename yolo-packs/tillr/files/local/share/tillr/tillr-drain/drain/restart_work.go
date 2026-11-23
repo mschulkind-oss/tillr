@@ -5,10 +5,11 @@ import (
 	"errors"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/heavyrun"
 	"github.com/mschulkind-oss/tillr-run/run"
 )
 
-var errRestartPending = errors.New("loop replacement pending")
+var errRestartPending = heavyrun.ErrRestartPending
 
 func (l *Loop) buildRestartPending(ctx context.Context) (bool, error) {
 	if l.cfg.Restart == nil || l.restartDeferred() || l.restartDefersToSettlement() {

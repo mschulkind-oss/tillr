@@ -2,15 +2,13 @@ package drain
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/mschulkind-oss/tillr-drain/fixer"
 )
 
 // lockTrunkHistory follows the lander's land.lock protocol: the guard serializes
@@ -37,7 +35,7 @@ func (l *Loop) acquireTrunkHistory(ctx context.Context, wait bool) (func(), erro
 		}
 		guardErr := syscall.Flock(int(guard.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if guardErr == nil {
-			file, acquired, err := acquireHistoryLock(path)
+			file, acquired, err := fixer.AcquireHistoryLock(path)
 			guard.Close()
 			if err != nil {
 				return nil, Externalf("locking trunk history: %v", err)
@@ -47,7 +45,7 @@ func (l *Loop) acquireTrunkHistory(ctx context.Context, wait bool) (func(), erro
 			}
 		} else {
 			guard.Close()
-			if !lockContended(guardErr) {
+			if !fixer.LockContended(guardErr) {
 				return nil, Externalf("locking trunk history guard: %v", guardErr)
 			}
 		}
@@ -61,95 +59,13 @@ func (l *Loop) acquireTrunkHistory(ctx context.Context, wait bool) (func(), erro
 }
 
 func lockContended(err error) bool {
-	return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)
+	return fixer.LockContended(err)
 }
 
-// acquireHistoryLock runs only under the takeover guard, with no SQLite writer.
 func acquireHistoryLock(path string) (*os.File, bool, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, false, err
-	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		file.Close()
-		if !lockContended(err) {
-			return nil, false, err
-		}
-		if !historyHolderDead(path) {
-			return nil, false, nil
-		}
-		aside := fmt.Sprintf("%s.stale.%d.%d", path, os.Getpid(), time.Now().UnixNano())
-		if err := os.Rename(path, aside); err != nil {
-			return nil, false, err
-		}
-		file, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_EXCL, 0644)
-		if err != nil {
-			return nil, false, err
-		}
-		if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			file.Close()
-			return nil, false, err
-		}
-		if err := os.Remove(aside); err != nil {
-			file.Close()
-			return nil, false, err
-		}
-	}
-	mine, mineErr := file.Stat()
-	current, currentErr := os.Stat(path)
-	if mineErr != nil || currentErr != nil || !os.SameFile(mine, current) {
-		file.Close()
-		return nil, false, fmt.Errorf("history lock file changed during acquisition")
-	}
-	host, err := os.Hostname()
-	if err != nil {
-		file.Close()
-		return nil, false, err
-	}
-	record, err := json.Marshal(map[string]any{"kind": "tillr-drain-history", "pid": os.Getpid(), "host": host, "at": time.Now().UnixMilli()})
-	if err == nil {
-		err = file.Truncate(0)
-	}
-	if err == nil {
-		_, err = file.WriteAt(append(record, '\n'), 0)
-	}
-	if err != nil {
-		file.Close()
-		return nil, false, err
-	}
-	return file, true, nil
+	return fixer.AcquireHistoryLock(path)
 }
 
-// Only a provably dead local holder can be replaced. Match the lander's JSON
-// and legacy plain-PID records, including its treatment of zombies as dead.
 func historyHolderDead(path string) bool {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	var record struct {
-		PID  int    `json:"pid"`
-		Host string `json:"host"`
-	}
-	if err := json.Unmarshal(raw, &record); err != nil {
-		record.PID, _ = strconv.Atoi(strings.TrimSpace(string(raw)))
-	}
-	host, err := os.Hostname()
-	if err != nil || record.PID <= 0 || (record.Host != "" && record.Host != host) {
-		return false
-	}
-	err = syscall.Kill(record.PID, 0)
-	if errors.Is(err, syscall.ESRCH) {
-		return true
-	}
-	if err != nil {
-		return false
-	}
-	if raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", record.PID)); err == nil {
-		text := string(raw)
-		if end := strings.LastIndexByte(text, ')'); end >= 0 {
-			return strings.HasPrefix(strings.TrimSpace(text[end+1:]), "Z")
-		}
-	}
-	return false
+	return fixer.HistoryHolderDead(path)
 }

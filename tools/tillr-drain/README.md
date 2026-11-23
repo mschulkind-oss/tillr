@@ -1085,7 +1085,7 @@ it reaps (`waitid` with `WNOWAIT`), so it never takes the exit status of its own
 child, which is the command's verdict. Before this, one supervisor of a heavy gate run on
 2026-11-18 held 6,408 zombies, nearly all `git`.
 `TestASubreaperReapsTheOrphansItAdoptsAndLeavesItsOwnChild` in
-[`drain/heavy_reap_linux_test.go`](./drain/heavy_reap_linux_test.go) covers both halves.
+[`heavyrun/heavy_reap_linux_test.go`](./heavyrun/heavy_reap_linux_test.go) covers both halves.
 
 The runner judges every heavy tree declaration, reusing the gate's remembered results,
 and the legacy rolling checks that have not yet migrated to declarations. `--heavy-gate`

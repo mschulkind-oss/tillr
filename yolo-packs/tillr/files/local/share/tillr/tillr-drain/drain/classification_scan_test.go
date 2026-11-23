@@ -37,7 +37,7 @@ var slice1cDrainSites = []drainSiteRef{
 	{"drain/gate_stall.go", "gateStallContext"},
 	{"drain/pass.go", "foldPendingHistory"},
 	// D5
-	{"drain/fork_drift.go", "readForkConflicts"},
+	{"remotesync/fork_drift.go", "ReadForkConflicts"},
 	// D6
 	{"drain/fork_drift.go", "settleGateFailure"},
 	{"drain/fork_drift.go", "markForkGateUnanswered"},
@@ -47,7 +47,7 @@ var slice1cDrainSites = []drainSiteRef{
 	// D8
 	{"drain/fixer_gate.go", "fixerCheck"},
 	{"drain/fixer_gate.go", "settleFixerGate"},
-	{"drain/fixer_gate.go", "pendingFixerVerdict"},
+	{"fixer/fixer_gate.go", "PendingFixerVerdict"},
 	// D9
 	{"drain/events.go", "gateRefusalDetail"},
 	{"drain/plan.go", "readRunHistory"},
@@ -72,9 +72,9 @@ var slice1cDrainSites = []drainSiteRef{
 	// D16
 	{"drain/trunk.go", "openFixerFor"},
 	{"drain/trunk.go", "routeTrunkFixer"},
-	{"drain/fixer_wait.go", "fixerChecks"},
-	{"drain/fixer_gate.go", "fixerCheckOverlaps"},
-	{"drain/fork_check_triage.go", "forkCheckDeclID"},
+	{"fixer/fixer_wait.go", "FixerChecks"},
+	{"fixer/fixer_gate.go", "FixerCheckOverlaps"},
+	{"remotesync/fork_check_triage.go", "ForkCheckDeclID"},
 	// D34
 	{"drain/trunk.go", "openTrunkRedNotice"},
 	// Fast-gate timing check reader
@@ -95,7 +95,7 @@ var slice1dDrainSites = []drainSiteRef{
 	// D19
 	{"drain/gate_spans.go", "readRollingCoverage"},
 	{"drain/gate_spans.go", "readGateSpans"},
-	{"drain/fork_check_triage.go", "readFailingSpanMeta"},
+	{"remotesync/fork_check_triage.go", "ReadFailingSpanMeta"},
 	// D20
 	{"drain/heavy_steps.go", "JudgeHeavy"},
 	{"drain/heavy_steps.go", "decodeHeavyVerdict"},
@@ -105,43 +105,43 @@ var slice1dDrainSites = []drainSiteRef{
 	// D22
 	{"drain/heavy_go.go", "judgeHeavyGo"},
 	// D23
-	{"drain/heavy.go", "Run"},
-	{"drain/heavy.go", "run"},
-	{"drain/heavy.go", "judgeTip"},
+	{"heavyrun/heavy.go", "Run"},
+	{"heavyrun/heavy.go", "RunAttempt"},
+	{"heavyrun/heavy.go", "judgeTip"},
 	// D24
-	{"drain/heavy_progress.go", "loadHeavyProgress"},
-	{"drain/heavy_progress.go", "reuseHeavyCheck"},
-	{"drain/heavy_progress.go", "saveHeavyCheck"},
+	{"heavyrun/heavy_progress.go", "LoadHeavyProgress"},
+	{"heavyrun/heavy_progress.go", "ReuseHeavyCheck"},
+	{"heavyrun/heavy_progress.go", "SaveHeavyCheck"},
 	// D25
-	{"drain/heavy_attribution.go", "completedHeavyRed"},
+	{"heavyrun/heavy_attribution.go", "CompletedHeavyRed"},
 	// D26
-	{"drain/heavy.go", "oneLogged"},
-	{"drain/heavy.go", "replay"},
-	{"drain/heavy_progress.go", "readHeavyReplay"},
+	{"heavyrun/heavy.go", "OneLogged"},
+	{"heavyrun/heavy.go", "Replay"},
+	{"heavyrun/heavy_progress.go", "ReadHeavyReplay"},
 	// D27
-	{"drain/heavy.go", "searchFirstRed"},
-	{"drain/heavy.go", "attribute"},
-	{"drain/heavy_attribution.go", "findFirstRed"},
-	{"drain/heavy_early.go", "offer"},
-	{"drain/heavy_early.go", "recover"},
+	{"heavyrun/heavy.go", "SearchFirstRed"},
+	{"heavyrun/heavy.go", "attribute"},
+	{"heavyrun/heavy_attribution.go", "FindFirstRed"},
+	{"heavyrun/heavy_early.go", "Offer"},
+	{"heavyrun/heavy_early.go", "recover"},
 	// D28
-	{"drain/heavy_attribution.go", "retainRedRepairs"},
-	{"drain/heavy_attribution.go", "forgetGreenAttributions"},
+	{"heavyrun/heavy_attribution.go", "RetainRedRepairs"},
+	{"heavyrun/heavy_attribution.go", "ForgetGreenAttributions"},
 	// D29
-	{"drain/heavy.go", "revert"},
-	{"drain/heavy.go", "offerRevert"},
-	{"drain/heavy.go", "resolveRevert"},
+	{"heavyrun/heavy.go", "revert"},
+	{"heavyrun/heavy.go", "offerRevert"},
+	{"heavyrun/heavy.go", "resolveRevert"},
 	{"drain/heavy_revert.go", "revertLanding"},
 	// D30
 	{"drain/heavy_loop.go", "startHeavy"},
 	{"drain/heavy_loop.go", "heavyStatusLine"},
 	{"heavy/status.go", "ReadStatus"},
 	// D31
-	{"drain/fixer_resolve.go", "readGreenProof"},
-	{"drain/fixer_resolve.go", "readGreenProofFile"},
-	{"drain/fixer_resolve.go", "readCheckProofs"},
-	{"drain/fixer_resolve.go", "readProgressCheckProof"},
-	{"drain/fixer_resolve.go", "passed"},
+	{"fixer/fixer_resolve.go", "ReadGreenProof"},
+	{"fixer/fixer_resolve.go", "ReadGreenProofFile"},
+	{"fixer/fixer_resolve.go", "ReadCheckProofs"},
+	{"fixer/fixer_resolve.go", "ReadProgressCheckProof"},
+	{"fixer/fixer_resolve.go", "Passed"},
 	// D32
 	{"drain/fixer_resolve.go", "resolveProvedFixers"},
 	// D33
@@ -465,7 +465,7 @@ func TestClassificationScanDrainSites(t *testing.T) {
 	}
 
 	seen := map[drainSiteRef]bool{}
-	for _, pkgDir := range []string{"drain", "heavy"} {
+	for _, pkgDir := range []string{"drain", "heavy", "workflow", "remotesync", "fixer", "heavyrun"} {
 		rootDir := filepath.Join(moduleRoot, pkgDir)
 		err := filepath.WalkDir(rootDir, func(fullPath string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -577,4 +577,9 @@ func TestClassificationScanDrainPositiveControls(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDrainClassificationScan(t *testing.T) {
+	t.Run("sites", TestClassificationScanDrainSites)
+	t.Run("positive_controls", TestClassificationScanDrainPositiveControls)
 }

@@ -632,7 +632,7 @@ tree on 2026-11-19 **[ran]**, **[read]**, commands in [Evidence](#evidence).
 
 - **The ten units of the plan's next tranche:** outcome counts in the views, the detail panel,
   graph change as a definition's policy, the graph caps replaced (the caps themselves are already
-  dropped in [workflow_check.go](../../tools/tillr-drain/drain/workflow_check.go), which reports
+  dropped in [workflow_check.go](../../tools/tillr-drain/workflow/workflow_check.go), which reports
   graph size and refuses none), a state for an uncertain outside effect, time and tokens per step,
   an owner acknowledgment point, one waiting classifier, the `run-link-missing` test, and the
   `after-completion` hook with a retention rule beyond `keep`. No item exists for any of them: a

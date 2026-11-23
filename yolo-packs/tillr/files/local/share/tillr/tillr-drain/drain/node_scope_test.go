@@ -59,11 +59,11 @@ func TestNodeScopePreservesNamedOutputWiring(t *testing.T) {
 	if w.Stages[0].Outputs["findings"] != "json" || w.Stages[2].Inputs["evidence"] != "json" {
 		t.Fatalf("named output wiring lost: %+v", w.Stages)
 	}
-	scope, err := w.Stages[2].scopePaths(nil)
+	scope, err := w.Stages[2].ScopePaths(nil)
 	if err != nil || len(scope) != 1 || scope[0] != "tools/item-a/" {
 		t.Fatalf("writing scope lost: %v / %v", scope, err)
 	}
-	if err := w.checkScopes([]string{"tools/item-a/"}); err != nil {
+	if err := w.CheckScopes([]string{"tools/item-a/"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -124,10 +124,10 @@ func TestNodeScopeUsesItemExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.checkScopes([]string{"tools/tillr-drain/drain/"}); err != nil {
+	if err := w.CheckScopes([]string{"tools/tillr-drain/drain/"}); err != nil {
 		t.Fatal(err)
 	}
-	scope, err := w.Stages[1].scopePaths(nil)
+	scope, err := w.Stages[1].ScopePaths(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

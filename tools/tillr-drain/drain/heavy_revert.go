@@ -177,7 +177,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 			return refuse(joinDetail(gateRefused, reason))
 		}
 		if red {
-			out.StillRed, out.stillRedCheck = true, id
+			out.StillRed, out.StillRedCheck = true, id
 			return refuse(joinDetail(gateRefused, id+" still fails on the tip with "+shortSHA(landing)+" reverted, so the attribution did not explain the red"))
 		}
 	}
@@ -220,34 +220,6 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		l.reportf("loop: reverted %s, %s back with its author\n", shortSHA(landing), of.itemID)
 	}
 	return RevertOutcome{Reverted: after}, nil
-}
-
-// revertedBy answers the trunk commit that already reverted landing, or "" when none
-// has landed.
-func revertedBy(ctx context.Context, storePath, landing string) (string, error) {
-	if storePath == "" || landing == "" {
-		return "", nil
-	}
-	s, err := store.OpenRead(ctx, storePath)
-	if err != nil {
-		return "", err
-	}
-	defer s.Close()
-	var revertSHA string
-	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		shas, err := landingShas(r, landing)
-		if err != nil {
-			return err
-		}
-		in, args := heavy.InList(shas)
-		qargs := append([]any{RevertKind}, args...)
-		err = r.QueryRow(`SELECT COALESCE(json_extract(payload, '$.revert'), '') FROM events WHERE kind = ? AND object_type = 'landing' AND object_id IN `+in+` AND json_extract(payload, '$.result') = 'reverted' ORDER BY seq DESC LIMIT 1`, qargs...).Scan(&revertSHA)
-		if errors.Is(err, sql.ErrNoRows) || err != nil && strings.Contains(err.Error(), "no such table") {
-			return nil
-		}
-		return err
-	})
-	return revertSHA, err
 }
 
 // openFixerForLanding answers the unresolved trunk fixer for landing, or "" when none is open.
@@ -715,10 +687,6 @@ func (s *ProcessSteps) HeavySelector(id string) string {
 	}
 	return ""
 }
-
-// heavyUnownedKey marks a judge call made outside the heavy runner: its processes run in
-// their own group, reaped on return, rather than under the runner's supervisor.
-type heavyUnownedKey struct{}
 
 // JudgeRequired judges one heavy check in dir without the heavy runner's lock.
 func (s *ProcessSteps) JudgeRequired(ctx context.Context, dir, id, selector string) (HeavyCheck, error) {

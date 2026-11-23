@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -59,28 +60,10 @@ func workflowNodeRunID(d Decision, index int) string {
 	return id
 }
 
-func inGraphGroup(id, target string) bool { return id == target || strings.HasPrefix(id, target+"/") }
+func inGraphGroup(id, target string) bool { return workflow.InGraphGroup(id, target) }
 
 func proposalLater(w *Workflow, proposer, target string) bool {
-	if inGraphGroup(proposer, target) {
-		return false
-	}
-	seen := map[string]bool{proposer: true}
-	for changed := true; changed; {
-		changed = false
-		for _, e := range w.Edges {
-			if seen[e.From] && !seen[e.To] {
-				seen[e.To] = true
-				changed = true
-			}
-		}
-	}
-	for _, s := range w.Stages {
-		if inGraphGroup(s.ID, target) && seen[s.ID] {
-			return true
-		}
-	}
-	return false
+	return workflow.ProposalLater(w, proposer, target)
 }
 
 // replaceProposalGraph changes only the not-yet-started target subtree. Boundary
@@ -564,7 +547,7 @@ func (l *Loop) settleProposal(tx *store.Tx, d *Decision, artifacts []nodeArtifac
 				}
 				refuse(r, err)
 			} else {
-				if err := inner.checkScopes(nil); err != nil {
+				if err := inner.CheckScopes(nil); err != nil {
 					refuse("proposal-scope-outside-fence", err)
 				} else {
 					_, _, pinned, err := item.ReadWorkflowSelection(tx.Reader(), d.ItemID)

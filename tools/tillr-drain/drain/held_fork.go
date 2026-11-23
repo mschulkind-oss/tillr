@@ -2,24 +2,21 @@ package drain
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr-drain/remotesync"
 )
 
-const forkPatchPrefix = "refs/heads/patch/"
+const forkPatchPrefix = remotesync.ForkPatchPrefix
 
 // The base must be an ancestor of the head, so one ref keeps both objects
 // reachable. The ref name binds the run to the original delivery ref and base;
 // neither changes when the patch branch advances or the lane is reassigned.
 func candidatePinRef(c Candidate) string {
-	if c.BaseRef == "" {
-		return pinRef(c.RunID)
-	}
-	binding := c.RunID + "\x00" + c.BaseRef + "\x00" + c.BaseSHA
-	return fmt.Sprintf("refs/tillr/held-forks/%x", sha256.Sum256([]byte(binding)))
+	return remotesync.CandidatePinRef(c.RunID, c.BaseRef, c.BaseSHA, pinRef(c.RunID))
 }
 
 func (l *Loop) heldForkTarget(c Candidate, lane string) (ForkTarget, error) {
@@ -27,16 +24,11 @@ func (l *Loop) heldForkTarget(c Candidate, lane string) (ForkTarget, error) {
 }
 
 func forkTargetAtLane(root, ref, lane string) (ForkTarget, error) {
-	name, ok := strings.CutPrefix(ref, forkPatchPrefix)
-	if !ok || name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
-		return ForkTarget{}, Externalf("invalid fork delivery ref %q", ref)
+	t, err := remotesync.ForkTargetAtLane(root, ref, lane)
+	if err != nil {
+		return ForkTarget{}, Externalf("%v", err)
 	}
-	if lane == "" || lane == "." || lane == ".." || strings.ContainsAny(lane, "/\\") {
-		return ForkTarget{}, Externalf("invalid held fork lane %q", lane)
-	}
-	path := ".forks/lanes/" + lane + "/" + name
-	checkout, err := filepath.Abs(filepath.Join(root, filepath.FromSlash(path)))
-	return ForkTarget{Fork: name, Ref: ref, Path: path, Checkout: checkout}, err
+	return t, nil
 }
 
 func (l *Loop) pinHeldFork(ctx context.Context, c Candidate) error {
@@ -207,24 +199,11 @@ func (l *Loop) admitHeldFork(ctx context.Context, c Candidate) (exists bool, err
 	return true, nil
 }
 
-// Check ancestors before mkdir: a missing leaf can still sit below a symlink
-// into a sibling's checkout. No path in another lane is ours to initialize.
 func checkHeldStagePath(path string) error {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return err
+	if err := remotesync.CheckHeldStagePath(path); err != nil {
+		return Externalf("%v", err)
 	}
-	for path := abs; ; path = filepath.Dir(path) {
-		if _, err := os.Lstat(path); os.IsNotExist(err) {
-			continue
-		} else if err != nil {
-			return err
-		}
-		if real, err := filepath.EvalSymlinks(path); err != nil || real != path {
-			return Externalf("lane staging path %s aliases another path", abs)
-		}
-		return nil
-	}
+	return nil
 }
 
 func (l *Loop) materializeHeldFork(ctx context.Context, c Candidate, exists bool, inputs *heldForkInputs) error {
@@ -285,13 +264,7 @@ func (l *Loop) saveHeldLaneStage(ctx context.Context, c Candidate) (*heldLaneSta
 }
 
 func rebaseHeldPath(path, from, to string) string {
-	if path == from {
-		return to
-	}
-	if suffix, ok := strings.CutPrefix(path, from+string(filepath.Separator)); ok {
-		return filepath.Join(to, suffix)
-	}
-	return path
+	return remotesync.RebaseHeldPath(path, from, to)
 }
 
 func (l *Loop) stageHeldFork(ctx context.Context, work *pendingWork, c Candidate) error {
@@ -381,12 +354,5 @@ func (l *Loop) stageHeldFork(ctx context.Context, work *pendingWork, c Candidate
 }
 
 func rebindForkFence(body string, from, to ForkTarget) string {
-	lines := strings.Split(body, "\n")
-	for i, line := range lines {
-		entry := strings.TrimSpace(line)
-		if entry == from.Path || strings.HasPrefix(entry, from.Path+"/") {
-			lines[i] = strings.Replace(line, from.Path, to.Path, 1)
-		}
-	}
-	return strings.Join(lines, "\n")
+	return remotesync.RebindForkFence(body, from, to)
 }

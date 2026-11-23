@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"path/filepath"
 
+	"github.com/mschulkind-oss/tillr-drain/remotesync"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-const remoteSyncReplayKind = "drain.remote-sync-replay"
+const remoteSyncReplayKind = remotesync.RemoteSyncReplayKind
 
 // The exact replay tip, not merely the fetched base, proves the reset occurred.
 type remoteSyncReplay struct {
@@ -24,25 +25,20 @@ type remoteSyncReplay struct {
 
 func (l *Loop) writeRemoteSyncReplay(ctx context.Context, intent *remoteSyncReplay) error {
 	return l.writeRemoteSync(ctx, func(tx *store.Tx) error {
-		return appendEffectOn(tx, remoteSyncReplayKind, "trunk", TrunkRef, intent, l.cfg.Now().UTC())
+		return remotesync.WriteRemoteSyncReplay(tx, TrunkRef, Utility, intent, l.cfg.Now().UTC())
 	})
 }
 
 func (l *Loop) readRemoteSyncReplay(ctx context.Context) (*remoteSyncReplay, error) {
-	s, err := store.OpenRead(ctx, l.cfg.Store)
+	raw, err := remotesync.ReadRemoteSyncReplayJSON(ctx, l.cfg.Store, TrunkRef)
 	if err != nil {
 		return nil, err
 	}
-	defer s.Close()
 	var intent *remoteSyncReplay
-	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		var raw []byte
-		if err := r.QueryRow(`SELECT COALESCE((SELECT payload FROM events WHERE kind=? AND object_type='trunk' AND object_id=? ORDER BY seq DESC LIMIT 1), 'null')`, remoteSyncReplayKind, TrunkRef).Scan(&raw); err != nil {
-			return err
-		}
-		return json.Unmarshal(raw, &intent)
-	})
-	return intent, err
+	if err := json.Unmarshal(raw, &intent); err != nil {
+		return nil, err
+	}
+	return intent, nil
 }
 
 // A pass with no interrupted replay to recover does not need land.lock. A
@@ -110,5 +106,6 @@ func (l *Loop) completeRemoteSyncWithoutSteps(ctx context.Context, c Candidate) 
 }
 
 func (r *remoteSyncReplay) publication() healResult {
-	return healResult{replayed: len(r.Rewrite.Order), remoteTip: r.Stage.RemoteTip, base: r.Stage.MergeBase, newTip: r.Rewrite.Tip}
+	p := remotesync.PublicationFor(len(r.Rewrite.Order), r.Stage.RemoteTip, r.Stage.MergeBase, r.Rewrite.Tip)
+	return healResult{replayed: p.Replayed, remoteTip: p.RemoteTip, base: p.Base, newTip: p.NewTip}
 }

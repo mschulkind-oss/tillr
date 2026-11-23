@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	goTestPrefix  = "go-test:"
 	goTestAbsent  = "test not present at this commit"
 	goTestSkipped = "test or enclosing test skipped at this commit"
 )
@@ -231,39 +230,4 @@ func privateGoReplayGitConfig(ctx context.Context, dir, dest string) error {
 		}
 	}
 	return nil
-}
-
-// additionalGoCulprits searches for a later first-red while removing the earlier
-// culprits, newest inverse first. Inverses live only in the detached proof tree;
-// these outcomes must never enter the ordinary, commit-keyed replay cache.
-func (r HeavyRunner) additionalGoCulprits(ctx context.Context, run HeavyRun, check HeavyCheck, first string) ([]string, error) {
-	if first == run.TipSHA {
-		return nil, nil // The ordinary revert replay will check this inverse.
-	}
-	var other []string
-	removed := []string{first}
-	for {
-		replay := func(sha, why string) (bool, error) {
-			r.progressf("loop: heavy %s replaying at %s without %s (%s)\n", check.CheckID, shortSHA(sha), strings.Join(removed, ", "), why)
-			red, _, err := r.oneLogged(ctx, sha, check.CheckID, removed...)
-			return red, err
-		}
-		red, err := replay(run.TipSHA, "checking whether the known culprits explain the tip")
-		if err != nil || !red {
-			return other, err
-		}
-		base := removed[len(removed)-1]
-		if base == run.TipSHA {
-			return other, fmt.Errorf("test still red after removing %s", strings.Join(removed, ", "))
-		}
-		next, fault, reason, err := r.searchFirstRed(ctx, base, run.TipSHA, check.Reads, replay)
-		if err != nil {
-			return other, err
-		}
-		if fault {
-			return other, fmt.Errorf("cannot explain residual red after removing %s: %s", strings.Join(removed, ", "), reason)
-		}
-		other = append(other, next)
-		removed = append(removed, next)
-	}
 }

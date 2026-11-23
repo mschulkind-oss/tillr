@@ -1,155 +1,48 @@
 package drain
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/fixer"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// A `git pull` whose pull.rebase is true replays the commits main holds and the remote
-// lacks, and gives each a new sha. The store still names the old ones: landing rows, run
-// pins, lane bases. Nothing was lost, so the loop maps each old sha to the commit that
-// replaced it (trunk_rewrites) and goes on, rather than holding for an operator. It does
-// so only when it can prove every commit survived: each commit between the point the
-// two histories diverge and the lost tip must have a commit of the same patch on the new
-// trunk, matched by `git patch-id --stable`. A commit with no match stops the automatic
-// path, and the existing trunk-rewritten hold names it.
-
 // rewriteAbsorbedKind records the loop absorbing a rewrite.
-const rewriteAbsorbedKind = "drain.trunk-rewrite-absorbed"
-
-func init() {
-	if err := event.Register(rewriteAbsorbedKind, Utility); err != nil {
-		panic(err)
-	}
-}
-
-// rewriteStores names, per repository root, the store whose trunk_rewrites map
-// containsCommit consults. A loop registers its own on every observation. Ancestry is asked
-// from many places that have a root and no store, and the mapping is a fact about the
-// repository's history, so it is looked up by the root.
-var rewriteStores sync.Map
+const rewriteAbsorbedKind = fixer.RewriteAbsorbedKind
 
 func registerRewriteStore(root, storePath string) {
-	if root != "" && storePath != "" {
-		rewriteStores.Store(filepath.Clean(root), storePath)
-	}
+	fixer.RegisterRewriteStore(root, storePath)
 }
 
-// rewriteTranslate answers ancestor and tip as the trunk now spells them: each follows the
-// recorded rewrites to the commit that replaced it. Unchanged when no map is registered or
-// readable, so ancestry stays what git says.
 func rewriteTranslate(ctx context.Context, root, ancestor, tip string) (string, string) {
-	path, ok := rewriteStores.Load(filepath.Clean(root))
-	if !ok {
-		return ancestor, tip
-	}
-	s, err := store.OpenRead(ctx, path.(string))
-	if err != nil {
-		return ancestor, tip
-	}
-	defer s.Close()
-	a, t := ancestor, tip
-	_ = s.ReadTx(ctx, func(r *store.Reader) error {
-		if x, err := heavy.RewriteResolve(r, ancestor); err == nil {
-			a = x
-		}
-		if x, err := heavy.RewriteResolve(r, tip); err == nil {
-			t = x
-		}
-		return nil
-	})
-	return a, t
+	return fixer.RewriteTranslate(ctx, root, ancestor, tip)
 }
 
-// landingShas answers sha and every earlier sha a rewrite replaced with it, the shas a
-// landing row may name for one trunk commit.
 func landingShas(r *store.Reader, sha string) ([]string, error) {
-	return heavy.RewriteAliases(r, sha)
+	return fixer.LandingShas(r, sha)
 }
 
-// rewriteReason is h.reason() with the commits that had no match, when the drain tried to
-// map this rewrite and could not.
 func rewriteReason(q heavy.Querier, h trunkHistory) string {
-	reason := h.reason()
-	if h.Lost == "" {
-		return reason
-	}
-	if unmatched, err := heavy.RewriteUnmatched(q, h.Lost); err == nil && len(unmatched) > 0 {
-		reason += " (no match on the trunk for " + strings.Join(unmatched, ", ") + ")"
-	}
-	return reason
+	return fixer.RewriteReason(q, h)
 }
 
-// rewriteAbsorption is a rewrite the loop proved: old sha -> new sha for each replaced
-// commit, and the evidence. Or the commits it could not match.
-type rewriteAbsorption struct {
-	Lost, Tip     string
-	Pairs         map[string]string
-	Order         []string // old shas, oldest first
-	Unmatched     []string
-	Evidence      string
-	GreenOverride string // a repair must hold green strictly behind its gated commit
-}
+type rewriteAbsorption = fixer.RewriteAbsorption
 
-func (a *rewriteAbsorption) proved() bool { return a != nil && len(a.Unmatched) == 0 }
-
-// rawGit runs git in dir and answers its stdout.
 func rawGit(ctx context.Context, dir string, stdin []byte, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = boundaryGitEnv()
-	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
-	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", Externalf("git %s in %s: %v: %s", strings.Join(args, " "), dir, err, strings.TrimSpace(stderr.String()))
-	}
-	return string(out), nil
+	out, err := fixer.RawGit(ctx, dir, stdin, args...)
+	return out, wrapFixerError(err)
 }
 
-// patchIDs answers each commit of a range with its stable patch id. A commit with no
-// diff (a merge, an empty commit) has none, and maps to the empty string.
 func patchIDs(ctx context.Context, root, span string) ([]string, map[string]string, error) {
-	listed, err := rawGit(ctx, root, nil, "rev-list", "--reverse", span)
-	if err != nil {
-		return nil, nil, err
-	}
-	commits := strings.Fields(listed)
-	if len(commits) == 0 {
-		return nil, map[string]string{}, nil
-	}
-	patches, err := rawGit(ctx, root, nil, "log", "-p", "--reverse", "--format=%H", span)
-	if err != nil {
-		return nil, nil, err
-	}
-	ids, err := rawGit(ctx, root, []byte(patches), "patch-id", "--stable")
-	if err != nil {
-		return nil, nil, err
-	}
-	byCommit := map[string]string{}
-	sc := bufio.NewScanner(strings.NewReader(ids))
-	for sc.Scan() {
-		if f := strings.Fields(sc.Text()); len(f) == 2 {
-			byCommit[f[1]] = f[0]
-		}
-	}
-	return commits, byCommit, sc.Err()
+	commits, byCommit, err := fixer.PatchIDs(ctx, root, span)
+	return commits, byCommit, wrapFixerError(err)
 }
 
 // proveRewrite matches every commit between the point the lost history diverged from the
@@ -208,130 +101,23 @@ func (l *Loop) proveRewrite(ctx context.Context, lost, tip string) (*rewriteAbso
 	return a, nil
 }
 
-// recordRewrite writes the absorbed mapping, or the unmatched commits, in tx.
-func (a *rewriteAbsorption) record(tx *store.Tx, at time.Time) error {
-	if _, err := tx.Exec(`DELETE FROM trunk_rewrite_unmatched WHERE lost_tip = ?`, a.Lost); err != nil {
-		return err
-	}
-	if !a.proved() {
-		for _, sha := range a.Unmatched {
-			if _, err := tx.Exec(`INSERT OR REPLACE INTO trunk_rewrite_unmatched(sha, lost_tip) VALUES(?, ?)`, sha, a.Lost); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	stamp := at.Format(time.RFC3339)
-	mapped := 0
-	for _, old := range a.Order {
-		now := a.Pairs[old]
-		if now == "" || now == old {
-			continue
-		}
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO trunk_rewrites(old_sha, new_sha, recorded_at, evidence) VALUES(?, ?, ?, ?)`, old, now, stamp, a.Evidence); err != nil {
-			return err
-		}
-		mapped++
-	}
-	body, err := json.Marshal(map[string]any{"lost_tip": a.Lost, "tip": a.Tip, "commits": mapped, "evidence": a.Evidence})
-	if err != nil {
-		return err
-	}
-	_, err = tx.Append(event.Event{Kind: rewriteAbsorbedKind, ObjectType: "trunk", ObjectID: &a.Lost, Payload: body, At: at.UTC()})
-	return err
-}
-
-// singleCommitPatchID answers the stable patch id of one commit, or empty when the
-// commit has no diff (for instance, an empty commit or a merge commit).
 func singleCommitPatchID(ctx context.Context, root, sha string) (string, error) {
-	patch, err := rawGit(ctx, root, nil, "log", "-1", "--no-merges", "-p", "--format=%H", sha)
-	if err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(patch) == "" {
-		return "", nil
-	}
-	ids, err := rawGit(ctx, root, []byte(patch), "patch-id", "--stable")
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(ids, "\n") {
-		if f := strings.Fields(line); len(f) == 2 && f[1] == sha {
-			return f[0], nil
-		}
-	}
-	return "", nil
+	id, err := fixer.SingleCommitPatchID(ctx, root, sha)
+	return id, wrapFixerError(err)
 }
 
-// nonMergePatchIDs answers each non-merge commit of a range with its stable patch id.
 func nonMergePatchIDs(ctx context.Context, root, span string) ([]string, map[string]string, error) {
-	listed, err := rawGit(ctx, root, nil, "rev-list", "--no-merges", "--reverse", span)
-	if err != nil {
-		return nil, nil, err
-	}
-	commits := strings.Fields(listed)
-	if len(commits) == 0 {
-		return nil, map[string]string{}, nil
-	}
-	patches, err := rawGit(ctx, root, nil, "log", "--no-merges", "-p", "--reverse", "--format=%H", span)
-	if err != nil {
-		return nil, nil, err
-	}
-	ids, err := rawGit(ctx, root, []byte(patches), "patch-id", "--stable")
-	if err != nil {
-		return nil, nil, err
-	}
-	byCommit := map[string]string{}
-	sc := bufio.NewScanner(strings.NewReader(ids))
-	for sc.Scan() {
-		if f := strings.Fields(sc.Text()); len(f) == 2 {
-			byCommit[f[1]] = f[0]
-		}
-	}
-	return commits, byCommit, sc.Err()
+	commits, byCommit, err := fixer.NonMergePatchIDs(ctx, root, span)
+	return commits, byCommit, wrapFixerError(err)
 }
 
-// tryMergeBase returns the merge base of a and b, or ("", false, nil) when they share no
-// common ancestor (exit 1).
 func tryMergeBase(ctx context.Context, root, a, b string) (string, bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "merge-base", a, b)
-	cmd.Env = boundaryGitEnv()
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err == nil {
-		return strings.TrimSpace(string(out)), true, nil
-	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
-		return "", false, nil
-	}
-	return "", false, Externalf("git merge-base %s %s in %s: %v: %s", a, b, root, err, strings.TrimSpace(stderr.String()))
+	base, ok, err := fixer.TryMergeBase(ctx, root, a, b)
+	return base, ok, wrapFixerError(err)
 }
 
-// updateLandedMarkers moves any refs/tillr/landed/<run_id> pointing at an old sha in
-// mapped to its replacement sha.
 func updateLandedMarkers(ctx context.Context, root string, mapped map[string]string) error {
-	if len(mapped) == 0 {
-		return nil
-	}
-	out, err := rawGit(ctx, root, nil, "for-each-ref", "--format=%(refname) %(objectname)", "refs/tillr/landed")
-	if err != nil {
-		return err
-	}
-	for _, line := range strings.Split(out, "\n") {
-		f := strings.Fields(line)
-		if len(f) != 2 {
-			continue
-		}
-		ref, old := f[0], f[1]
-		if replacement, ok := mapped[old]; ok && replacement != "" && replacement != old {
-			if _, err := rawGit(ctx, root, nil, "update-ref", ref, replacement, old); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return wrapFixerError(fixer.UpdateLandedMarkers(ctx, root, mapped))
 }
 
 func (l *Loop) landingRewriteIsChecked(old, tip string) bool {

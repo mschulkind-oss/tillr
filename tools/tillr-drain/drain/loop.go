@@ -19,6 +19,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/spend"
+	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -1891,9 +1892,9 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			// Report-only workflows retain their original handoff. Once a graph
 			// declares named files, only explicit producer edges carry inputs,
 			// except when a proposal-only predecessor proposed no graph replacement.
-			if !decision.Workflow.hasNamedFiles() {
+			if !workflowHasNamedFiles(decision.Workflow) {
 				spec.PreviousReport = decision.PreviousReport
-			} else if decision.Workflow.proposalOnlyPredecessors(decision.NodeIndex) {
+			} else if workflowProposalOnlyPredecessors(decision.Workflow, decision.NodeIndex) {
 				reportPath, reportText, reportErr := l.proposalPredecessorReport(ctx, decision)
 				if reportErr != nil {
 					if holdErr := failStage("read predecessor report", reportErr); holdErr != nil {
@@ -3881,12 +3882,7 @@ func fenceEntries(body string) []string {
 // spell directories both ways). Nothing else is admitted: a path no entry covers is a path
 // the fence does not cover.
 func insideFence(path string, fence []string) bool {
-	for _, entry := range fence {
-		if path == entry || strings.HasPrefix(path, strings.TrimSuffix(entry, "/")+"/") {
-			return true
-		}
-	}
-	return false
+	return workflow.InsideFence(path, fence)
 }
 
 // abandon resets a lane after a dispatch that did not land. The lane goes back to the trunk

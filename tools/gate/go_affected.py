@@ -449,7 +449,10 @@ def select_affected_packages(
         if placed is None:
             floor_triggers.add(owner_mod)
         else:
-            changed_pkgs.add(placed)
+            # A *_test.go file is only compiled when testing its own package; it cannot
+            # affect reverse importers or sibling `builds` targets.
+            if not path.endswith("_test.go"):
+                changed_pkgs.add(placed)
             if pkg_info[placed]["has_tests"]:
                 mark(placed, "changed")
                 whole_pkg_selected.add(placed)

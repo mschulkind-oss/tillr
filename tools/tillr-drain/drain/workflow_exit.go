@@ -2,50 +2,20 @@ package drain
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 func workflowCandidatePolicy(w *Workflow) string {
-	if w.Exit == nil || w.Exit.RequiresCandidate == "" {
-		return "commit_required"
-	}
-	return w.Exit.RequiresCandidate
+	return workflow.WorkflowCandidatePolicy(w)
 }
 
-// Required producers must pass. Propagate reachability under that constraint to
-// reject required descendants whose only paths need one of those producers to fail.
 func validateWorkflowExit(w *Workflow) error {
-	if err := validateEvaluator(w); err != nil {
-		return err
-	}
-	required := map[string]bool{}
-	reachable := map[string]bool{}
-	for _, id := range requiredWorkflowNodes(w) {
-		required[id] = true
-	}
-	for _, stage := range w.Stages {
-		incoming, possible := false, false
-		for _, edge := range w.Edges {
-			if edge.To == stage.ID {
-				incoming = true
-				if reachable[edge.From] && (edge.WhenOutcome != "fail" || !required[edge.From]) {
-					possible = true
-				}
-			}
-		}
-		reachable[stage.ID] = !incoming || possible
-	}
-	for _, id := range requiredWorkflowNodes(w) {
-		if !reachable[id] {
-			return fmt.Errorf("workflow-exit: exit: required node %s is reachable only after another required node fails", id)
-		}
-	}
-	return nil
+	return workflow.ValidateWorkflowExit(w)
 }
 
 func workflowOutcomes(r *store.Reader, id string, attempt int) (map[string]string, error) {
@@ -67,12 +37,7 @@ func workflowOutcomes(r *store.Reader, id string, attempt int) (map[string]strin
 	return outcomes, nil
 }
 func workflowDone(w *Workflow, outcomes map[string]string) bool {
-	for _, id := range requiredWorkflowNodes(w) {
-		if outcomes[id] != "passed" {
-			return false
-		}
-	}
-	return true
+	return workflow.WorkflowDone(w, outcomes)
 }
 
 // Finish a graph only after its declared required nodes pass. A no-commit

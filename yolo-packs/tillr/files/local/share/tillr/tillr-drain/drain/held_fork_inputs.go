@@ -2,31 +2,17 @@ package drain
 
 import (
 	"context"
-	"crypto/sha256"
-	"fmt"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr-drain/remotesync"
 )
 
-// fork-gate copies these into the build checkout, which can also seed a
-// missing shared fork cache at delivery. Keep them independent of both lanes
-// and the cache, just like the candidate commit.
-type heldForkInputs struct {
-	Upstream string `json:"upstream,omitempty"`
-	Refs     string `json:"refs,omitempty"`
-}
+type heldForkInputs = remotesync.HeldForkInputs
 
-const heldForkRefFormat = "--format=%(refname) %(objectname)"
-
-func (s *heldForkInputs) prefix(c Candidate) string {
-	binding := candidatePinRef(c) + "\x00" + s.Upstream + "\x00" + s.Refs
-	return fmt.Sprintf("refs/tillr/held-fork-inputs/%x/", sha256.Sum256([]byte(binding)))
-}
+const heldForkRefFormat = remotesync.HeldForkRefFormat
 
 func forkRefLines(refs string) []string {
-	if refs == "" {
-		return nil
-	}
-	return strings.Split(refs, "\n")
+	return remotesync.ForkRefLines(refs)
 }
 
 func (l *Loop) forkSupportRefs(ctx context.Context, dir string) (string, error) {
@@ -58,7 +44,7 @@ func (l *Loop) saveHeldForkInputs(ctx context.Context, c Candidate) (*heldForkIn
 		return nil, err
 	}
 	s := &heldForkInputs{Upstream: url, Refs: refs}
-	prefix := s.prefix(c)
+	prefix := s.Prefix(candidatePinRef(c))
 	stored, err := l.git(ctx, l.cfg.Root, "for-each-ref", heldForkRefFormat, prefix)
 	if err != nil {
 		return nil, err
@@ -80,7 +66,7 @@ func (l *Loop) verifyHeldForkRefs(ctx context.Context, c Candidate, s *heldForkI
 	if s == nil {
 		return Externalf("saved fork gate inputs are missing")
 	}
-	prefix := s.prefix(c)
+	prefix := s.Prefix(candidatePinRef(c))
 	var expected []string
 	for _, line := range forkRefLines(s.Refs) {
 		name, _, ok := strings.Cut(line, " ")
@@ -137,7 +123,7 @@ func (l *Loop) restoreHeldForkRefs(ctx context.Context, c Candidate, path string
 			}
 			continue
 		}
-		args = append(args, s.prefix(c)+name+":"+name)
+		args = append(args, s.Prefix(candidatePinRef(c))+name+":"+name)
 	}
 	if _, err := l.git(ctx, path, args...); err != nil {
 		return err
