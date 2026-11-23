@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
@@ -184,6 +186,20 @@ type whyPayloadData struct {
 	head int64
 }
 
+// whyCache holds the planner's last successful answer and what it was made from. The
+// planner re-folds the store's whole event log on every run (about ten seconds on the live
+// store, measured 2026-11-22), so a repeat request against an unchanged store reuses it.
+// The key is the event head read before the planner ran and a hash of the index handed to
+// it: an event written while the planner ran leaves the key behind the answer, so the next
+// request asks again rather than serving an older one. A failed answer is never kept.
+type whyCache struct {
+	mu    sync.Mutex
+	valid bool
+	head  int64
+	index [sha256.Size]byte
+	raw   json.RawMessage
+}
+
 func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure) {
 	// The index is the server's cached walk. When it cannot be read the planner is asked
 	// without it and runs the index command itself, so a failure is the planner's own
@@ -192,6 +208,28 @@ func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure)
 	phase(r.Context(), "vantage", look)
 	if ierr != nil {
 		index = nil
+	}
+	// Without the server's index the planner's inputs are not known, so nothing is reused.
+	cacheable := index != nil
+	var head int64
+	var digest [sha256.Size]byte
+	if cacheable {
+		digest = sha256.Sum256(index)
+		if err := s.store.ReadTx(r.Context(), func(rd *store.Reader) error {
+			var err error
+			head, err = rd.EventHeadSeq()
+			return err
+		}); err != nil {
+			cacheable = false
+		}
+	}
+	// One planner run at a time: a request that arrives during a run waits for it and
+	// takes its answer instead of starting a second ten-second fold.
+	s.why.mu.Lock()
+	defer s.why.mu.Unlock()
+	if cacheable && s.why.valid && s.why.head == head && s.why.index == digest {
+		phase(r.Context(), "planner", map[string]any{"cache": "hit", "ms": 0, "bytes": len(s.why.raw)})
+		return whyPayloadData{raw: s.why.raw, head: whyHead(s.why.raw)}, nil
 	}
 	raw, _, err := askPlanner(r.Context(), s.plannerFlag, s.build, s.storePath, s.root, s.policyRef, s.offeredLanes, s.questionsCmd, index)
 	if err != nil {
@@ -210,5 +248,18 @@ func (s *server) whyPayload(_ *store.Reader, r *http.Request) (any, *apiFailure)
 	if err := json.Unmarshal(raw, &answer); err != nil {
 		return nil, failure(codeStoreUnreadable, "why cursor: %v", err)
 	}
+	if cacheable {
+		s.why.valid, s.why.head, s.why.index, s.why.raw = true, head, digest, raw
+	} else {
+		s.why.valid = false
+	}
 	return whyPayloadData{raw: raw, head: answer.Head}, nil
+}
+
+func whyHead(raw json.RawMessage) int64 {
+	var answer struct {
+		Head int64 `json:"event_head_seq"`
+	}
+	_ = json.Unmarshal(raw, &answer)
+	return answer.Head
 }
