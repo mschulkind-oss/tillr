@@ -286,32 +286,55 @@ func (s *startSnapshot) evaluateEntry(r *store.Reader, row itemRow, d Decision, 
 // nextStart only reads the published snapshot. Selection cannot do I/O,
 // consume a lane or change any entry that another reader may observe.
 func (s startSnapshot) nextStart() (startViewEntry, bool) {
-	return s.selectStart(false)
+	return s.selectStart(false, 0)
 }
 
 func (s startSnapshot) nextFreshStart() (startViewEntry, bool) {
-	return s.selectStart(true)
+	return s.selectStart(true, 0)
 }
 
-func (s startSnapshot) selectStart(freshOnly bool) (startViewEntry, bool) {
+func (s startSnapshot) nextFreshStartWithGates(gates int) (startViewEntry, bool) {
+	return s.selectStart(true, gates)
+}
+
+func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, bool) {
+	var claimed map[string]bool
 	for _, q := range s.items {
-		if freshOnly {
-			if work := s.pending.works[q.id]; work != nil && !work.Done {
-				continue // Retained attempts belong to the pass and its completion handoff.
-			}
+		var work *pendingWork
+		if s.pending != nil {
+			work = s.pending.works[q.id]
 		}
 		e := s.entries[q.id]
 		d := e.decision
+		if work != nil && !work.Done {
+			// A higher-placed pending item whose lane was released or left rotation
+			// needs a free lane from the pass; withhold its lane so a lower-placed
+			// fresh start cannot claim it first.
+			if d.LaneID == "" && (d.Action == ActionJudge || (freshOnly && isDispatch(d))) {
+				if work.GateStall == nil || work.GateStall.canRetry(gates) {
+					if lane := s.firstFreeLaneExcept(e.express, claimed); lane != "" {
+						if claimed == nil {
+							claimed = map[string]bool{}
+						}
+						claimed[lane] = true
+					}
+				}
+				continue
+			}
+			if freshOnly {
+				continue // Retained attempts belong to the pass and its completion handoff.
+			}
+		}
 		if !isDispatch(d) || d.RunRequest == nil {
 			continue
 		}
 		lane := d.LaneID // concrete lanes include desks and retained continuations
 		if lane == "" {
-			lane = s.firstFreeLane(e.express)
+			lane = s.firstFreeLaneExcept(e.express, claimed)
 			if lane == "" && (IsTrunkFixer(q.id) || IsRemoteSyncItem(q.id)) && !s.occupied["desk-trunk-fixer"] {
 				lane = "desk-trunk-fixer"
 			}
-		} else if owner := s.reservations[lane]; (owner != "" && owner != q.id) || (freshOnly && s.occupied[lane]) {
+		} else if owner := s.reservations[lane]; (owner != "" && owner != q.id) || (freshOnly && s.occupied[lane]) || claimed[lane] {
 			continue
 		}
 		if lane != "" {
@@ -327,15 +350,19 @@ func (s startSnapshot) selectStart(freshOnly bool) (startViewEntry, bool) {
 }
 
 func (s startSnapshot) firstFreeLane(express bool) string {
+	return s.firstFreeLaneExcept(express, nil)
+}
+
+func (s startSnapshot) firstFreeLaneExcept(express bool, claimed map[string]bool) string {
 	if express {
 		for _, lane := range s.freeLanes {
-			if isExpressLane(lane) && s.reservations[lane] == "" {
+			if isExpressLane(lane) && s.reservations[lane] == "" && !claimed[lane] {
 				return lane
 			}
 		}
 	}
 	for _, lane := range s.freeLanes {
-		if !isExpressLane(lane) && !strings.HasPrefix(lane, "desk-") && s.reservations[lane] == "" {
+		if !isExpressLane(lane) && !strings.HasPrefix(lane, "desk-") && s.reservations[lane] == "" && !claimed[lane] {
 			return lane
 		}
 	}
