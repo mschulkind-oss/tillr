@@ -70,6 +70,7 @@ type startSnapshot struct {
 	hasNodes                          bool
 	attempts, nodeCounts              map[string]int
 	requests, shut, quotaShut         map[string]bool
+	backendOutcomes                   *backendOutcomesState
 	infrastructureClosed              map[string]backendOutcome
 	deskOwners                        map[string]string
 	forks                             []plannedFork
@@ -345,6 +346,9 @@ func (s *startSnapshot) seed(r *store.Reader, at time.Time, policy *Policy) erro
 	if s.pending, err = readPendingHistoryState(r); err != nil {
 		return err
 	}
+	if s.backendOutcomes, err = seedBackendOutcomesState(r, s.lastEventSeq, s.pending.byRun); err != nil {
+		return err
+	}
 	if err := s.refreshRunFacts(r, true, true); err != nil {
 		return err
 	}
@@ -388,7 +392,7 @@ func (s *startSnapshot) seed(r *store.Reader, at time.Time, policy *Policy) erro
 	if err := s.refreshLaneFacts(r, at, true); err != nil {
 		return err
 	}
-	if err := s.refreshBackends(r, at, policy); err != nil {
+	if err := s.refreshBackendsWithOutcomes(r, at, policy, true); err != nil {
 		return err
 	}
 	return s.readExpiries(r, at)
@@ -412,7 +416,7 @@ func (s *startSnapshot) refreshRunFacts(r *store.Reader, history, priors bool) e
 		}
 	}
 	if priors {
-		if s.priors, err = readPriorRunsFrom(r, s.pending.byRun); err != nil {
+		if s.priors, err = readPriorRunsWithOutcomes(r, s.pending.byRun, s.backendOutcomes); err != nil {
 			return err
 		}
 	}
@@ -442,10 +446,46 @@ func (s *startSnapshot) refreshLaneFacts(r *store.Reader, at time.Time, leases b
 	return err
 }
 
+func (s *startSnapshot) advanceBackendOutcomes(r *store.Reader, checkEvents bool) (bool, error) {
+	var byRun map[string]*pendingWork
+	if s.pending != nil {
+		byRun = s.pending.byRun
+	}
+	next, changed, err := s.backendOutcomes.advance(r, checkEvents, byRun)
+	if err != nil {
+		return false, err
+	}
+	s.backendOutcomes = next
+	return changed, nil
+}
+
 func (s *startSnapshot) refreshBackends(r *store.Reader, at time.Time, policy *Policy) error {
-	var err error
-	if s.infrastructureClosed, err = readInfrastructureClosedFrom(r, s.pending.byRun); err != nil {
+	changed, err := s.advanceBackendOutcomes(r, true)
+	if err != nil {
 		return err
+	}
+	return s.refreshBackendsWithOutcomes(r, at, policy, changed || s.infrastructureClosed == nil)
+}
+
+func (s *startSnapshot) refreshBackendsWithOutcomes(r *store.Reader, at time.Time, policy *Policy, recomputeClosed bool) error {
+	var err error
+	if recomputeClosed || s.infrastructureClosed == nil {
+		if s.backendOutcomes == nil {
+			head, err := r.EventHeadSeq()
+			if err != nil {
+				return err
+			}
+			var byRun map[string]*pendingWork
+			if s.pending != nil {
+				byRun = s.pending.byRun
+			}
+			if s.backendOutcomes, err = seedBackendOutcomesState(r, head, byRun); err != nil {
+				return err
+			}
+		}
+		if s.infrastructureClosed, err = s.backendOutcomes.infrastructureClosed(r, s.infrastructureClosed); err != nil {
+			return err
+		}
 	}
 	if s.quotaShut, err = readQuotaOnlyShut(r, at, policy); err != nil {
 		return err

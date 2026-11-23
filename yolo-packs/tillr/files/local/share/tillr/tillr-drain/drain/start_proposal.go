@@ -97,7 +97,7 @@ func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Poli
 	classes, latest := indexPriorRuns(s.priors)
 	p := &planner{
 		definition: &s.def, commentHolds: commentHolds, documentRoot: questions.Root,
-		conflicts: s.conflicts, shut: s.shut, quotaShut: s.quotaShut, forks: s.forks,
+		conflicts: s.conflicts, shut: s.shut, quotaShut: s.quotaShut, infrastructureClosed: s.infrastructureClosed, forks: s.forks,
 		tick: tick, policy: policy, held: lanes, deskOwners: owners, itemStates: s.states, history: s.history,
 		priors: s.attemptPriors, retries: s.retries, classes: classes, latest: latest,
 		obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
