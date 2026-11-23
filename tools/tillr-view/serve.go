@@ -201,6 +201,9 @@ func serveFace(args []string) (record.Envelope, int) {
 		return record.Envelope{}, usagef("serve needs --store <path>")
 	}
 	ctx := context.Background()
+	// The snapshot folds the same few event kinds on every request; keep them between reads
+	// so each costs the events committed since (store.CacheSelectedEvents), not the log.
+	store.CacheSelectedEvents()
 	srv := newServer(ctx, *storePath, *loopDir, *laneRoot, resolveTraceBin(*root, *traceBin), *root, vantageBaseURL(*vantageURL), commandFields(*questionsCmd))
 	defer srv.close()
 	srv.policyRef = *policyRef
