@@ -251,7 +251,7 @@ function stubLiveFetch() {
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/#/item/item-queued");
+  window.history.replaceState(null, "", "/item/item-queued");
   stubLiveFetch();
   globalThis.WebSocket = SilentSocket as unknown as typeof WebSocket;
 });

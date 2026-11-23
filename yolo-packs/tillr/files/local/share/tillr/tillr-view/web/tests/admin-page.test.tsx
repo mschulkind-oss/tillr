@@ -24,11 +24,11 @@ const eventsPage: Page = {
 afterEach(cleanup);
 
 test("routes parse the index, a table with its query, and a row", () => {
-  expect(adminRoute("#/admin")).toEqual({ view: "index" });
-  const table = adminRoute("#/admin/events?f.kind=a&sort=kind");
+  expect(adminRoute("/admin")).toEqual({ view: "index" });
+  const table = adminRoute("/admin/events?f.kind=a&sort=kind");
   expect(table).toMatchObject({ view: "table", table: "events" });
-  expect(adminRoute("#/admin/events/12")).toEqual({ view: "row", table: "events", rowid: "12" });
-  expect(adminRoute("#/runs")).toBeNull();
+  expect(adminRoute("/admin/events/12")).toEqual({ view: "row", table: "events", rowid: "12" });
+  expect(adminRoute("/runs")).toBeNull();
 });
 
 test("the server query keeps only parameters the server knows, and reads the log newest first", () => {
@@ -40,21 +40,21 @@ test("the server query keeps only parameters the server knows, and reads the log
 });
 
 test("ids other pages know link to them; an event's object links by its recorded type", () => {
-  expect(cellLink("runs", "item_id", "item-a", {})).toBe("#/item/item-a");
-  expect(cellLink("runs", "run_id", "run-1", {})).toBe("#/run/run-1?tab=transcript");
-  expect(cellLink("events", "object_id", "run-77", { object_type: "run" })).toBe("#/run/run-77?tab=transcript");
+  expect(cellLink("runs", "item_id", "item-a", {})).toBe("/item/item-a");
+  expect(cellLink("runs", "run_id", "run-1", {})).toBe("/run/run-1?tab=transcript");
+  expect(cellLink("events", "object_id", "run-77", { object_type: "run" })).toBe("/run/run-77?tab=transcript");
   expect(cellLink("events", "object_id", "x", { object_type: "trunk" })).toBeNull();
   expect(cellLink("items", "title", "hello", {})).toBeNull();
 });
 
 test("a table page links rows, sorts by indexed columns only, and pages by cursor", () => {
   const { container } = render(<TablePage page={eventsPage} params={new URLSearchParams("order=desc")} />);
-  expect(screen.getByRole("link", { name: "Sort by kind" }).getAttribute("href")).toBe("#/admin/events?order=asc&sort=kind");
+  expect(screen.getByRole("link", { name: "Sort by kind" }).getAttribute("href")).toBe("/admin/events?order=asc&sort=kind");
   expect(screen.queryByRole("link", { name: "Sort by payload" })).toBeNull();
   const rows = container.querySelectorAll("tbody tr");
-  expect(within(rows[0] as HTMLElement).getByRole("link", { name: "9" }).getAttribute("href")).toBe("#/admin/events/9");
-  expect(within(rows[0] as HTMLElement).getByRole("link", { name: "run-77" }).getAttribute("href")).toBe("#/run/run-77?tab=transcript");
-  expect(screen.getByRole("button", { name: "Next page" }).getAttribute("href")).toBe("#/admin/events?order=desc&after=CURSOR");
+  expect(within(rows[0] as HTMLElement).getByRole("link", { name: "9" }).getAttribute("href")).toBe("/admin/events/9");
+  expect(within(rows[0] as HTMLElement).getByRole("link", { name: "run-77" }).getAttribute("href")).toBe("/run/run-77?tab=transcript");
+  expect(screen.getByRole("button", { name: "Next page" }).getAttribute("href")).toBe("/admin/events?order=desc&after=CURSOR");
 });
 
 test("JSON is pretty-printed behind an expand control, and a server-cut text says what was cut", () => {
@@ -99,18 +99,18 @@ beforeEach(() => {
   }) as typeof fetch;
 });
 afterEach(() => { globalThis.fetch = originalFetch; });
-const mount = (hash: string) => render(<QueryClientProvider client={new QueryClient()}><AdminPage hash={hash} /></QueryClientProvider>);
+const mount = (hash: string) => render(<QueryClientProvider client={new QueryClient()}><AdminPage route={hash} /></QueryClientProvider>);
 
 test("the index lists tables with counts, marking an estimate", async () => {
-  mount("#/admin");
+  mount("/admin");
   const link = await screen.findByRole("link", { name: "events" });
-  expect(link.getAttribute("href")).toBe("#/admin/events");
+  expect(link.getAttribute("href")).toBe("/admin/events");
   expect(link.closest("tr")!.textContent).toContain("~1,380,000");
   expect(screen.getByRole("link", { name: "items" }).closest("tr")!.textContent).toContain("12");
 });
 
 test("a table route asks the server for the filtered page and shows it", async () => {
-  mount("#/admin/events?f.kind=run.child-session&min.seq=5");
+  mount("/admin/events?f.kind=run.child-session&min.seq=5");
   await screen.findByRole("table", { name: "Rows of events" });
   expect(seen).toEqual(["/api/v1/admin/tables/events?f.kind=run.child-session&min.seq=5&order=desc"]);
   expect((screen.getByLabelText("Filter column") as HTMLSelectElement).options.length).toBe(5);
@@ -118,17 +118,17 @@ test("a table route asks the server for the filtered page and shows it", async (
 });
 
 test("a row shows every column, links its payload, and counts related rows with a cap", async () => {
-  mount("#/admin/events/9");
+  mount("/admin/events/9");
   await screen.findByRole("table", { name: "Row" });
   expect(within(screen.getByRole("table", { name: "Row" })).getAllByRole("row")).toHaveLength(5);
   const refs = screen.getByRole("region", { name: "Payload references" });
-  expect(within(refs).getByRole("link", { name: "run-77" }).getAttribute("href")).toBe("#/run/run-77?tab=transcript");
+  expect(within(refs).getByRole("link", { name: "run-77" }).getAttribute("href")).toBe("/run/run-77?tab=transcript");
   const related = screen.getByRole("region", { name: "Related rows" });
-  expect(within(related).getByRole("link", { name: "events" }).getAttribute("href")).toBe("#/admin/events?f.object_id=run-77");
+  expect(within(related).getByRole("link", { name: "events" }).getAttribute("href")).toBe("/admin/events?f.object_id=run-77");
   expect(related.textContent).toContain("1000+");
 });
 
 test("an unknown table is the server's refusal, shown", async () => {
-  mount("#/admin/nope");
+  mount("/admin/nope");
   await waitFor(() => expect(document.body.textContent).toContain("the store has no table"));
 });

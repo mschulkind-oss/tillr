@@ -31,9 +31,9 @@ test("hierarchy collapses, searching matches attributes, selection exposes every
  expect(view.getByText("1 matched span")).toBeTruthy();
  fireEvent.click(view.getByRole("button", { name: "Select bash" }));
  expect(view.getByRole("region", { name: "Span details" }).textContent).toContain("Time not covered by children");
- for (const kind of ["item", "run", "pass", "check", "landing"]) expect(view.container.querySelector(`a[href^="#/${kind}/${kind}-1"]`)).not.toBeNull();
- expect(view.container.querySelector('a[href^="#/check/check-1"]')?.getAttribute("href")).toContain("span=bash");
- expect(window.location.hash).toContain("span=bash");
+ for (const kind of ["item", "run", "pass", "check", "landing"]) expect(view.container.querySelector(`a[href^="/${kind}/${kind}-1"]`)).not.toBeNull();
+ expect(view.container.querySelector('a[href^="/check/check-1"]')?.getAttribute("href")).toContain("span=bash");
+ expect((window.location.pathname + window.location.search)).toContain("span=bash");
 });
 test("axis zooms and pans by mouse and keyboard and fit restores it", () => {
  const view = render(<SpanViewer spans={spans} />);
@@ -55,7 +55,7 @@ test("axis zooms and pans by mouse and keyboard and fit restores it", () => {
 });
 test("5000 spans render only the visible rows and a selected offscreen span scrolls into view", () => {
  const fixture = Array.from({ length: 5000 }, (_, i) => span(`span-${i}`, i, i + 1));
- window.history.replaceState(null, "", "/#/run/run-1?span=span-4999");
+ window.history.replaceState(null, "", "/run/run-1?span=span-4999");
  const view = render(<SpanViewer spans={fixture} />);
  expect(view.container.querySelectorAll('[data-span-id]').length).toBeLessThan(30);
  expect(view.container.querySelector('[data-span-id="span-4999"]')).not.toBeNull();
@@ -76,7 +76,7 @@ test("initial fit waits for the final timing face but does not override a reader
  expect(touched.getByRole("region", { name: "Span time axis" }).getAttribute("data-window")).toBe(axis);
 });
 test("a refresh cannot reset scroll, erase search, or expand a deliberately collapsed subtree", () => {
- window.history.replaceState(null, "", "/#/run/run-1?span=turn");
+ window.history.replaceState(null, "", "/run/run-1?span=turn");
  const fixture = [...spans, ...Array.from({length:100}, (_,i) => span(`s${i}`, i, i + 1))];
  const view = render(<SpanViewer spans={fixture} />);
  const viewport = view.getByRole("tree");
@@ -117,7 +117,7 @@ test("the actual timeline plus gate response shape has one plan and correct unco
  expect(combined.find(s => s.id === "source-plan")).toBeDefined();
  expect(analyzeSpans(combined).self.get("source-plan")).toBe(0);
  expect(combined.find(s => s.id === "source-check")?.parent).toBe("source-plan");
- window.history.replaceState(null,"",`/#/run/${runData.run.run_id}?span=${encodeURIComponent(runData.run.run_id + "/gate")}`);
+ window.history.replaceState(null,"",`/run/${runData.run.run_id}?span=${encodeURIComponent(runData.run.run_id + "/gate")}`);
  const view = render(<SpanViewer spans={combined} />);
  expect(view.getByRole("region",{name:"Span details"}).textContent).toContain("plan");
 });

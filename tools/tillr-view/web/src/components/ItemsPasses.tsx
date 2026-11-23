@@ -1,21 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PassRow, SnapshotData, WaitingRow, WhySource } from "../models/types";
 import { DesignsWaiting, WhySourceLine } from "./WhyPass";
-import { URL_CHANGE_EVENT } from "../models/url";
 import { waitingIdentity, waitingOrder } from "../models/waiting";
 import { ClassState, EntityLink } from "./EntityLink";
 import { EntityText, newestPasses, passCounts, passStamp } from "./Home";
-import { useScreenHash } from "./ObservatoryShell";
+import { currentRoute, navigate, useScreenRoute } from "../models/route";
 import { placeItem, type ItemPlacement } from "../models/api";
 
 function useListParams() {
-  const hash = useScreenHash();
-  const params = new URLSearchParams(hash.split("?")[1]);
+  const route = useScreenRoute();
+  const params = new URLSearchParams(route.split("?")[1]);
   const set = (key: string, value: string) => {
-    const next = new URLSearchParams(window.location.hash.split("?")[1]);
+    const next = new URLSearchParams(window.location.search);
     if (value) next.set(key, value); else next.delete(key);
-    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${hash.split("?")[0]}${next.size ? `?${next}` : ""}`);
-    window.dispatchEvent(new Event(URL_CHANGE_EVENT));
+    navigate(`${window.location.pathname}${next.size ? `?${next}` : ""}`, { replace: true });
   };
   return { params, set };
 }
@@ -95,7 +93,7 @@ function useRowKeys(ids: string[], focused: string | null, focus: (id: string) =
         event.preventDefault(); move(focused, event.key === "J" ? 1 : -1); return;
       }
       if (target instanceof HTMLElement && target.matches("button")) return;
-      if (event.key === "u") { event.preventDefault(); window.location.hash = "#/"; return; }
+      if (event.key === "u") { event.preventDefault(); navigate("/"); return; }
       if (!["j", "k", "Enter", "[", "]"].includes(event.key) || !ids.length) return;
       event.preventDefault();
       const at = ids.indexOf(focused ?? "");
@@ -103,7 +101,7 @@ function useRowKeys(ids: string[], focused: string | null, focus: (id: string) =
       const next = event.key === "Enter" ? Math.max(0, at) : at < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, at + delta));
       const id = ids[next];
       focus(id);
-      if (["Enter", "[", "]"].includes(event.key)) window.location.hash = href(id);
+      if (["Enter", "[", "]"].includes(event.key)) navigate(href(id));
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
@@ -165,7 +163,7 @@ export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onM
     catch (error) { setRefreshError(`Order saved, but refresh failed: ${error instanceof Error ? error.message : String(error)}`); }
     finally { moveLock.current = false; setMoving(null); }
   };
-  useRowKeys(list.visible.map(waitingIdentity), list.focused, list.focus, id => list.visible.find(row => waitingIdentity(row) === id)?.observation || list.visible.find(row => waitingIdentity(row) === id)?.document ? window.location.hash : `#/item/${encodeURIComponent(id)}`, (id, delta) => {
+  useRowKeys(list.visible.map(waitingIdentity), list.focused, list.focus, id => list.visible.find(row => waitingIdentity(row) === id)?.observation || list.visible.find(row => waitingIdentity(row) === id)?.document ? currentRoute() : `/item/${encodeURIComponent(id)}`, (id, delta) => {
     if (!orderedMoves || moveLock.current) return;
     const at = list.visible.findIndex(row => row.item_id === id);
     const anchor = at >= 0 ? list.visible[at + delta] : undefined;
@@ -270,7 +268,7 @@ export function PassesView({ passes, error, more = false, loadingOlder = false, 
   const allowed = new Set(filtered.map(pass => pass.dispatched_at_ms));
   const matchingGroups = groups.filter(group => allowed.has(group.pass.dispatched_at_ms));
   const list = useStableList(matchingGroups, group => passStamp(group.pass.dispatched_at_ms), `${range}|${item}|${action}|${session}|${showHolds}`);
-  useRowKeys(list.visible.map(group => passStamp(group.pass.dispatched_at_ms)), list.focused, list.focus, id => `#/pass/${id}`);
+  useRowKeys(list.visible.map(group => passStamp(group.pass.dispatched_at_ms)), list.focused, list.focus, id => `/pass/${id}`);
   const latest = ordered[0];
   return <main className="home ledger" data-testid="stable-list" ref={list.listRef}>
     <h1>Passes</h1>

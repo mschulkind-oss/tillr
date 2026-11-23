@@ -72,7 +72,7 @@ async function selectDispatched(container: HTMLElement) {
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/#/item/item-seed-02");
+  window.history.replaceState(null, "", "/item/item-seed-02");
   globalThis.WebSocket = SilentSocket as unknown as typeof WebSocket;
 });
 

@@ -1,4 +1,4 @@
-export function graphHref(id: string) { return `#/graph?item=${encodeURIComponent(id)}`; }
+export function graphHref(id: string) { return `/graph?item=${encodeURIComponent(id)}`; }
 
 export function DependencyLinks({ id, blockedBy, unblocks }: { id: string; blockedBy: string[]; unblocks?: string[] }) {
   const links = (ids: string[]) => ids.length ? ids.map(item => <span key={item}><a href={graphHref(item)}>{item}</a>{" "}</span>) : "nothing";

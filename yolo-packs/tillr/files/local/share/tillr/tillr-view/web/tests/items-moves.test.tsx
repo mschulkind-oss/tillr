@@ -8,7 +8,7 @@ const rows: WaitingRow[] = ["a", "hidden", "b", "c"].map((id, index) => ({
   where: "queue", why: "question", mover: "owner", since: "today", class_source: "rule",
 }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
-function route(filtered = false) { window.history.replaceState(null, "", `/#/items?state=unlanded${filtered ? "&class=needs+you" : ""}`); }
+function route(filtered = false) { window.history.replaceState(null, "", `/items?state=unlanded${filtered ? "&class=needs+you" : ""}`); }
 const order = () => [...document.querySelectorAll("tbody tr")].map(row => row.getAttribute("data-row-id"));
 const row = (id: string) => document.querySelector<HTMLElement>(`[data-row-id="${id}"]`)!;
 function deferred() {

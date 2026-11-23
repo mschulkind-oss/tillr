@@ -40,7 +40,7 @@ describe("run seat display and pre-change compatibility", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { unmount } = render(
       <QueryClientProvider client={client}>
-        <RunPage id={recordedRun.run.run_id} route={`#/run/${recordedRun.run.run_id}`} live={false} paused={false} />
+        <RunPage id={recordedRun.run.run_id} route={`/run/${recordedRun.run.run_id}`} live={false} paused={false} />
       </QueryClientProvider>,
     );
     await waitFor(() => expect(screen.getByText(/seat edit/)).toBeTruthy());
@@ -52,7 +52,7 @@ describe("run seat display and pre-change compatibility", () => {
     const preChangeClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={preChangeClient}>
-        <RunPage id={runData.run.run_id} route={`#/run/${runData.run.run_id}`} live={false} paused={false} />
+        <RunPage id={runData.run.run_id} route={`/run/${runData.run.run_id}`} live={false} paused={false} />
       </QueryClientProvider>,
     );
     await waitFor(() => expect(screen.getByText(/exit not recorded/)).toBeTruthy());

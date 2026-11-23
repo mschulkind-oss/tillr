@@ -24,9 +24,9 @@ test("rows link lane, item by title, and run; busy lanes come before idle", () =
   const rows = container.querySelectorAll("section[aria-label='Current lanes'] tbody tr");
   expect([...rows].map(r => r.getAttribute("data-state"))).toEqual(["running", "running", "idle"]);
   const first = within(rows[0] as HTMLElement);
-  expect(first.getByRole("link", { name: /express-1/ }).getAttribute("href")).toBe("#/lane/express-1");
-  expect(first.getByRole("link", { name: "Title of item-x" }).getAttribute("href")).toBe("#/item/item-x");
-  expect(first.getByRole("link", { name: /run-x/ }).getAttribute("href")).toBe("#/run/run-x?tab=transcript");
+  expect(first.getByRole("link", { name: /express-1/ }).getAttribute("href")).toBe("/lane/express-1");
+  expect(first.getByRole("link", { name: "Title of item-x" }).getAttribute("href")).toBe("/item/item-x");
+  expect(first.getByRole("link", { name: /run-x/ }).getAttribute("href")).toBe("/run/run-x?tab=transcript");
   expect(rows[0].textContent).toContain("~1m");
   expect(rows[1].textContent).toContain("judge · judge");
   expect(rows[2].textContent).toContain("idle");
@@ -44,14 +44,14 @@ test("finished runs are the newest twenty, linked", () => {
   expect(finishedRuns(items)).toHaveLength(20);
   const { container } = render(<RunsPage lanes={[]} items={items} now={0} />);
   const link = within(container.querySelector("section[aria-label='Recently finished runs']")!).getAllByRole("link", { name: /r24/ })[0];
-  expect(link.getAttribute("href")).toBe("#/run/r24?tab=transcript");
+  expect(link.getAttribute("href")).toBe("/run/r24?tab=transcript");
 });
 
 const originalFetch = globalThis.fetch, originalSocket = globalThis.WebSocket;
 class SilentSocket { close() {} }
 let lanesBody: () => Response;
 beforeEach(() => {
-  window.history.replaceState(null, "", "/#/runs");
+  window.history.replaceState(null, "", "/runs");
   globalThis.WebSocket = SilentSocket as unknown as typeof WebSocket;
   lanesBody = () => new Response(JSON.stringify(envelope(lanes)));
   globalThis.fetch = (async input => {
@@ -64,7 +64,7 @@ beforeEach(() => {
 afterEach(() => { globalThis.fetch = originalFetch; globalThis.WebSocket = originalSocket; });
 const mount = () => render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><App /></QueryClientProvider>);
 
-test("#/runs routes to the page, not the unbuilt fallback", async () => {
+test("/runs routes to the page, not the unbuilt fallback", async () => {
   const view = mount();
   await waitFor(() => expect(view.container.querySelector("[aria-label='Runs page']")).not.toBeNull());
   await screen.findByRole("link", { name: /express-1/ });

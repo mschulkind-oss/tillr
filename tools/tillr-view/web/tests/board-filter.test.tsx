@@ -105,7 +105,7 @@ function statButton(container: HTMLElement, label: string): HTMLElement {
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/#/item/item-queue");
+  window.history.replaceState(null, "", "/item/item-queue");
   stubFetch();
   globalThis.WebSocket = SilentSocket as unknown as typeof WebSocket;
 });
@@ -233,7 +233,7 @@ describe("narrowing the board", () => {
 
     await waitFor(() => expect(railTitles(container)).toHaveLength(3));
     expect(window.location.search).toBe("");
-    expect(window.location.hash).toBe("#/item/item-queue");
+    expect((window.location.pathname + window.location.search)).toBe("/item/item-queue");
     expect(container.querySelector(".filter-line")).toBeNull();
   });
 

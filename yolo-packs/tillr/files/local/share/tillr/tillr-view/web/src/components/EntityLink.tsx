@@ -9,7 +9,7 @@ export function EntityLink({ kind, id, title, state = "not known", children, ove
   kind: EntityKind; id: string; title?: string; state?: string; children?: ReactNode; overBudget?: boolean; query?: Record<string, string>;
 }) {
   return <a className="entity-link" data-entity-kind={kind} data-entity-id={id} data-over-budget={overBudget}
-    href={`#/${kind}/${encodeURIComponent(id)}${query ? `?${new URLSearchParams(query)}` : ""}`}>
+    href={`/${kind}/${encodeURIComponent(id)}${query ? `?${new URLSearchParams(query)}` : ""}`}>
     <StateGlyph state={state} /><code>{id}</code>{title ? <span>{title}</span> : null}{children}
   </a>;
 }

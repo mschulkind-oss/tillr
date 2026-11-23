@@ -30,7 +30,7 @@ function Row({ lane, title, now }: { lane: LaneRow; title?: string; now: number 
   const idle = lane.state === "idle";
   return <tr data-state={lane.state}>
     <td><EntityLink kind="lane" id={lane.lane_id} state={lane.state === "running" ? "moving" : "not known"} />{lane.lane_id.startsWith("express-") ? " express" : ""}</td>
-    <td>{idle ? "idle" : lane.item_id ? <><a href={`#/item/${encodeURIComponent(lane.item_id)}`}>{title || lane.item_id}</a></> : "item unrecorded"}</td>
+    <td>{idle ? "idle" : lane.item_id ? <><a href={`/item/${encodeURIComponent(lane.item_id)}`}>{title || lane.item_id}</a></> : "item unrecorded"}</td>
     <td>{idle ? "—" : where}</td>
     <td>{lane.state}</td>
     <td>{lane.state_since_ms === null ? "since —" : `~${age(now - lane.state_since_ms)}`}</td>
@@ -61,7 +61,7 @@ export function RunsPage({ lanes, lanesError, items, now: fixed, configured }: {
           <tbody>{finished.map(({ item, run }) => <tr key={run.run_id}>
             <td><EntityLink kind="run" id={run.run_id} query={runQuery} /></td>
             <td><EntityLink kind="lane" id={run.lane_id} /></td>
-            <td><a href={`#/item/${encodeURIComponent(item.item_id)}`}>{item.title || item.item_id}</a></td>
+            <td><a href={`/item/${encodeURIComponent(item.item_id)}`}>{item.title || item.item_id}</a></td>
             <td>{run.seat || "—"}</td>
             <td title={new Date(run.finished_at_ms).toLocaleString()}>{relativeTime(run.finished_at_ms, now)}</td>
             <td>{run.exit_code === null ? run.state : run.exit_code}</td>

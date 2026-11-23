@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { navigate } from "../models/route";
 import { useState, type FormEvent } from "react";
 import { fetchAdminRow, fetchAdminTable, fetchAdminTables } from "../models/api";
 import {
@@ -10,13 +11,13 @@ import { RefusalState, refusalCode } from "./RefusalState";
 const PREVIEW = 120;
 const read = { retry: false, refetchOnWindowFocus: false, staleTime: 30_000 } as const;
 
-/** The admin browser: every table of the store, read only (`#/admin`). */
-export function AdminPage({ hash }: { hash: string }) {
-  const route = adminRoute(hash);
+/** The admin browser: every table of the store, read only (`/admin`). */
+export function AdminPage({ route: location }: { route: string }) {
+  const route = adminRoute(location);
   return <main className="entity-page admin-page" aria-label="Admin page">
-    <h1><a href="#/admin">Admin</a>{route && route.view !== "index" ? <> / <a href={tableHref(route.table)}>{route.table}</a></> : null}{route?.view === "row" ? <> / row {route.rowid}</> : null}</h1>
+    <h1><a href="/admin">Admin</a>{route && route.view !== "index" ? <> / <a href={tableHref(route.table)}>{route.table}</a></> : null}{route?.view === "row" ? <> / row {route.rowid}</> : null}</h1>
     <p className="admin-note">A read-only view of the store's tables. Nothing here writes, and no SQL is sent.</p>
-    {route?.view === "table" ? <TableView key={hash} route={route} /> : route?.view === "row" ? <RowView key={hash} table={route.table} rowid={route.rowid} /> : <IndexView />}
+    {route?.view === "table" ? <TableView key={location} route={route} /> : route?.view === "row" ? <RowView key={location} table={route.table} rowid={route.rowid} /> : <IndexView />}
   </main>;
 }
 
@@ -56,7 +57,7 @@ export function Cell({ value }: { value: AdminValue }) {
 
 function FilterForm({ table, columns, params }: { table: string; columns: AdminColumn[]; params: URLSearchParams }) {
   const filters = activeFilters(params);
-  const go = (next: URLSearchParams) => { next.delete("after"); window.location.hash = tableHref(table, next); };
+  const go = (next: URLSearchParams) => { next.delete("after"); navigate(tableHref(table, next)); };
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);

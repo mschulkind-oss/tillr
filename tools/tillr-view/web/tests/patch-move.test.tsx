@@ -6,7 +6,7 @@ import type { WaitingRow } from "../src/models/types";
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
 
 test("publication observations offer acknowledgment, not item links or controls", () => {
-  window.history.replaceState(null, "", "/#/items");
+  window.history.replaceState(null, "", "/items");
   const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
   const command = "tillr drain acknowledge-patch-move --store /repo/.tillr/state.db --observation 123 --fork pi --by <owner>";
   const observation: WaitingRow = {
@@ -23,6 +23,6 @@ test("publication observations offer acknowledgment, not item links or controls"
   expect(within(row).queryAllByRole("link")).toHaveLength(0);
   fireEvent.focus(row); fireEvent.keyDown(row, { key: "J" });
   fireEvent.keyDown(row, { key: "Enter" });
-  expect(window.location.hash).toBe("#/items");
+  expect((window.location.pathname + window.location.search)).toBe("/items");
   expect(fetch).not.toHaveBeenCalled();
 });

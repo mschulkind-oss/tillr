@@ -12,7 +12,7 @@ const attempts: ItemGraphAttempt[] = [
 test("draws ordered stages, all runs, outputs and collapsed earlier attempts", () => {
  render(<ItemGraph attempts={attempts} />);
  const a=screen.getByRole("article", {name:"Node a"});
- expect(within(a).getByRole("link", {name:"a-run"}).getAttribute("href")).toContain("#/run/a-run");
+ expect(within(a).getByRole("link", {name:"a-run"}).getAttribute("href")).toContain("/run/a-run");
  expect(within(a).getByRole("link", {name:"retry"})).toBeTruthy();
  expect(within(a).getByText("report · text")).toBeTruthy();
  expect(within(a).getByText("hello").tagName).toBe("PRE");
@@ -40,7 +40,7 @@ test("shows an interrupted run and its restart under one attempt heading", () =>
  const { rerender } = render(<ItemGraph attempts={[resumed]} />);
  expect(screen.getByRole("heading", { name: "Nodes · attempt 2" })).toBeTruthy();
  const worker = within(screen.getByRole("article", { name: "Node worker" }));
- expect(worker.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual([`#/run/${first}`, `#/run/${restart}`]);
+ expect(worker.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual([`/run/${first}`, `/run/${restart}`]);
 
  rerender(<ItemGraph attempts={[later, resumed]} />);
  expect(screen.getByRole("heading", { name: "Nodes · attempt 4" })).toBeTruthy();

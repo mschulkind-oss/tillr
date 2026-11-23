@@ -23,10 +23,10 @@ export type AdminRoute =
   | { view: "table"; table: string; params: URLSearchParams }
   | { view: "row"; table: string; rowid: string };
 
-/** adminRoute reads `#/admin`, `#/admin/<table>?...` and `#/admin/<table>/<rowid>`. */
-export function adminRoute(hash: string): AdminRoute | null {
-  const [path, query] = hash.split("?");
-  if (path !== "#/admin" && !path.startsWith("#/admin/")) return null;
+/** adminRoute reads `/admin`, `/admin/<table>?...` and `/admin/<table>/<rowid>`. */
+export function adminRoute(route: string): AdminRoute | null {
+  const [path, query] = route.split("?");
+  if (path !== "/admin" && !path.startsWith("/admin/")) return null;
   const parts = path.split("/").slice(2).filter(Boolean).map(part => { try { return decodeURIComponent(part); } catch { return part; } });
   if (parts.length === 0) return { view: "index" };
   if (parts.length === 1) return { view: "table", table: parts[0], params: new URLSearchParams(query) };
@@ -35,9 +35,9 @@ export function adminRoute(hash: string): AdminRoute | null {
 
 export const tableHref = (table: string, params?: URLSearchParams | Record<string, string>): string => {
   const query = params ? new URLSearchParams(params).toString() : "";
-  return `#/admin/${encodeURIComponent(table)}${query ? `?${query}` : ""}`;
+  return `/admin/${encodeURIComponent(table)}${query ? `?${query}` : ""}`;
 };
-export const rowHref = (table: string, rowid: number | string): string => `#/admin/${encodeURIComponent(table)}/${encodeURIComponent(String(rowid))}`;
+export const rowHref = (table: string, rowid: number | string): string => `/admin/${encodeURIComponent(table)}/${encodeURIComponent(String(rowid))}`;
 
 /** The parameters the server understands, in the order a URL keeps them. The log is read
  * newest first unless the reader chose otherwise. */
@@ -63,9 +63,9 @@ export function activeFilters(params: URLSearchParams): { key: string; column: s
 
 const ENTITY_COLUMNS: Record<string, string> = { item_id: "item", run_id: "run", lane_id: "lane" };
 export const entityHref = (kind: string, id: string): string | null =>
-  kind === "item" ? `#/item/${encodeURIComponent(id)}` :
-  kind === "run" ? `#/run/${encodeURIComponent(id)}?tab=transcript` :
-  kind === "lane" ? `#/lane/${encodeURIComponent(id)}` : null;
+  kind === "item" ? `/item/${encodeURIComponent(id)}` :
+  kind === "run" ? `/run/${encodeURIComponent(id)}?tab=transcript` :
+  kind === "lane" ? `/lane/${encodeURIComponent(id)}` : null;
 
 /** Where a cell's value leads, if it is an id another page knows: an item, run or lane id
  * links to that page, and an event's object does by its recorded type. */

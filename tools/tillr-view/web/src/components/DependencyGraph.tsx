@@ -12,8 +12,8 @@ export function DependencyGraph({ items, waiting, selected, error }: { items?: I
   const knownSelection = !!selected && items.some(item => item.item_id === selected);
   const related = knownSelection ? relatedItems(items, selected!) : null;
   return <main className="entity-page"><h1>Dependency graph</h1>
-    <p>Dependencies run left to right. Select an item to highlight everything it needs and everything it unblocks. <a href="#/graph">Clear selection</a></p>
-    {selected ? <p>{knownSelection ? <>Selected: {selected} · <a href={`#/item/${encodeURIComponent(selected)}`}>Open item</a></> : <span role="alert">{selected} is not in this snapshot.</span>}</p> : null}
+    <p>Dependencies run left to right. Select an item to highlight everything it needs and everything it unblocks. <a href="/graph">Clear selection</a></p>
+    {selected ? <p>{knownSelection ? <>Selected: {selected} · <a href={`/item/${encodeURIComponent(selected)}`}>Open item</a></> : <span role="alert">{selected} is not in this snapshot.</span>}</p> : null}
     {!layout.nodes.length ? <p>No unlanded items.</p> : null}
     <div className="dependency-scroll" tabIndex={0} aria-label="Queue dependency graph">
       <div className="dependency-canvas" style={{width: layout.width, height: layout.height}}>
@@ -39,7 +39,7 @@ export function DependencyGraph({ items, waiting, selected, error }: { items?: I
           return <article className="dependency-node" key={item.item_id} data-item={item.item_id} data-class={value} data-cycle={node.cycle} data-selected={selected === item.item_id} data-dimmed={!!related && !related.has(item.item_id)} style={{left:node.x, top:node.y, width:node.width, height:node.height}}>
             <ClassState value={value} />{node.cycle ? <strong className="dependency-cycle">cycle</strong> : null}
             <a className="dependency-title" href={graphHref(item.item_id)} aria-label={`Select ${item.title}`}>{node.lines.map((line, index) => <span key={index}>{line}</span>)}</a>
-            {lane ? <a href={`#/lane/${encodeURIComponent(lane)}`}>{lane}</a> : null}
+            {lane ? <a href={`/lane/${encodeURIComponent(lane)}`}>{lane}</a> : null}
           </article>;
         })}
       </div>

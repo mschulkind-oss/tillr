@@ -2,9 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { analyzeSpans, barStyle, duration, windowOf, type TimeWindow, type ViewerSpan } from "../models/spans";
 import { EntityLink, type EntityKind } from "./EntityLink";
 import { EpistemicBadge } from "./EpistemicBadge";
-import { useScreenHash } from "./ObservatoryShell";
+import { navigate, useScreenRoute } from "../models/route";
 import { latency, rate } from "./Usage";
-import { URL_CHANGE_EVENT } from "../models/url";
 
 const HEIGHT = 420, ROW = 36;
 const time = (n: number | null) => n === null ? "not recorded" : `${n.toFixed(2)} ms`;
@@ -21,7 +20,7 @@ function namedEntities(attributes: Record<string, unknown>): { kind: EntityKind;
   visit(attributes); return [...found.values()];
 }
 export function SpanViewer({ spans, initialComplete = true, paused = false }: { spans: ViewerSpan[]; initialComplete?: boolean; paused?: boolean }) {
-  const hash = useScreenHash();
+  const hash = useScreenRoute();
   const selectedID = new URLSearchParams(hash.split("?")[1]).get("span");
   const selected = spans.find(s => s.id === selectedID || s.attributes.check_id === selectedID || (Array.isArray(s.attributes.aliases) && s.attributes.aliases.includes(selectedID)));
   const [clock, setClock] = useState(Date.now);
@@ -46,10 +45,9 @@ export function SpanViewer({ spans, initialComplete = true, paused = false }: { 
   const [collapsed, setCollapsed] = useState(new Set<string>());
   const query = new URLSearchParams(hash.split("?")[1]).get("q") ?? "";
   const setQuery = (value: string) => {
-    const params = new URLSearchParams(window.location.hash.split("?")[1]);
+    const params = new URLSearchParams(window.location.search);
     if (value) params.set("q", value); else params.delete("q");
-    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${window.location.hash.split("?")[0] || "#/run/unrecorded"}${params.size ? `?${params}` : ""}`);
-    window.dispatchEvent(new Event(URL_CHANGE_EVENT));
+    navigate(`${window.location.pathname}${params.size ? `?${params}` : ""}`, { replace: true });
   };
   const [scroll, setScroll] = useState(0);
   const viewport = useRef<HTMLDivElement>(null);
@@ -85,9 +83,8 @@ export function SpanViewer({ spans, initialComplete = true, paused = false }: { 
   const start = Math.min(Math.max(0, Math.floor(scroll / ROW) - 2), Math.max(0, rows.length - 1));
   const visible = rows.slice(start, start + Math.ceil(HEIGHT / ROW) + 4);
   const select = (id: string) => {
-    const params = new URLSearchParams(window.location.hash.split("?")[1]); params.set("span", id);
-    window.history.pushState(null, "", `${window.location.pathname}${window.location.search}${window.location.hash.split("?")[0] || "#/run/unrecorded"}?${params}`);
-    window.dispatchEvent(new Event(URL_CHANGE_EVENT));
+    const params = new URLSearchParams(window.location.search); params.set("span", id);
+    navigate(`${window.location.pathname}?${params}`);
   };
   const zoom = (factor: number) => { touched.current = true; setAxis(current => {
     if (!current) return current;

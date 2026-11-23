@@ -11,17 +11,17 @@ const rows: WaitingRow[] = [
   { place: 1, item_id: "item-a", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "yesterday", class_source: "rule" },
 ];
 const pass = (ms: number, reason = "blocked"): PassRow => ({ dispatched_at_ms: ms, decisions: [{ item_id: "item-a", place: 1, action: "hold", reason }] });
-function route(hash: string) { window.history.replaceState(null, "", `/${hash}`); }
+function route(hash: string) { window.history.replaceState(null, "", hash); }
 
 test.each(["items", "home"])("%s waiting table reports who changed the graph and node counts", (face) => {
-  route("#/items?state=unlanded");
+  route("/items?state=unlanded");
   const waiting = [{ ...rows[0], graph_changes: ["graph changed by open (plan-run): 4 → 5 nodes"] }];
   render(face === "items" ? <ItemsView waiting={waiting} snapshot={snapshotData} /> : <Home waiting={waiting} snapshot={snapshotData} />);
   expect(screen.getByText("graph changed by open (plan-run): 4 → 5 nodes")).toBeTruthy();
 });
 
 test("Pass filters say what they do and offer only recorded actions", () => {
-  route("#/passes?range=all");
+  route("/passes?range=all");
   render(<PassesView passes={[pass(1000), { dispatched_at_ms: 2000, decisions: [{ item_id: "item-b", place: 2, action: "dispatch", reason: "ready" }] }]} />);
   const actions = screen.getByLabelText("Action");
   expect(actions.tagName).toBe("SELECT");
@@ -33,24 +33,24 @@ test("Pass filters say what they do and offer only recorded actions", () => {
 });
 
 test("Items presets, class and reason persist in the URL on cold mount", () => {
-  route("#/items");
+  route("/items");
   const view = render(<ItemsView waiting={rows} snapshot={snapshotData} />);
   expect(screen.getAllByRole("row")).toHaveLength(2);
   fireEvent.click(screen.getByRole("button", { name: "all unlanded" }));
   fireEvent.change(screen.getByLabelText("Class"), { target: { value: "needs you" } });
   fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "question-open" } });
-  expect(new URLSearchParams(window.location.hash.split("?")[1]).get("state")).toBe("unlanded");
+  expect(new URLSearchParams((window.location.pathname + window.location.search).split("?")[1]).get("state")).toBe("unlanded");
   view.unmount();
   render(<ItemsView waiting={rows} snapshot={snapshotData} />);
   expect((screen.getByLabelText("Class") as HTMLSelectElement).value).toBe("needs you");
   expect((screen.getByLabelText("Reason") as HTMLSelectElement).value).toBe("question-open");
   expect(screen.getAllByRole("row")).toHaveLength(2);
   fireEvent.click(screen.getByRole("button", { name: "landed" }));
-  expect(window.location.hash).toContain("state=landed");
+  expect((window.location.pathname + window.location.search)).toContain("state=landed");
 });
 
 test("Items shows the live resumed worker and its lane with the planner's next mover", () => {
-  route("#/items?state=unlanded");
+  route("/items?state=unlanded");
   const wait = "a replacement loop does not take over the live run; drain waits for its recorded finish";
   const location = "run-a-a1 on lane-1";
   const worker = { ...rows[0], item_id: "item-live", position: "running", class: "moving", where: "lane", class_source: "planner",
@@ -63,15 +63,15 @@ test("Items shows the live resumed worker and its lane with the planner's next m
   const moverCell = row.getByRole("cell", { name: /^worker / });
   expect(moverCell.textContent).toBe(worker.mover);
   const mover = within(moverCell);
-  expect(mover.getByRole("link", { name: "run-a-a1" }).getAttribute("href")).toBe("#/run/run-a-a1");
-  expect(mover.getByRole("link", { name: "lane-1" }).getAttribute("href")).toBe("#/lane/lane-1");
+  expect(mover.getByRole("link", { name: "run-a-a1" }).getAttribute("href")).toBe("/run/run-a-a1");
+  expect(mover.getByRole("link", { name: "lane-1" }).getAttribute("href")).toBe("/lane/lane-1");
   expect(row.queryByText(/no-lane/)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "not moving" }));
   expect(screen.queryByRole("row", { name: /item-live/ })).toBeNull();
 });
 
 test("Items offers waits on the loop, not an unclassified hold", () => {
-  route("#/items?state=unlanded");
+  route("/items?state=unlanded");
   const held = { ...rows[0], class: "waits on the loop", why: "not yet planned", mover: "the next pass" };
   render(<ItemsView waiting={[held]} snapshot={snapshotData} />);
   const classes = screen.getByLabelText("Class");
@@ -83,7 +83,7 @@ test("Items offers waits on the loop, not an unclassified hold", () => {
 });
 
 test("Passes fold consecutive identical answers independent of decision order, not separated matches", () => {
-  route("#/passes?range=all");
+  route("/passes?range=all");
   const a = pass(4000), b = pass(3000), c = pass(2000, "ready"), d = pass(1000);
   render(<PassesView passes={[d, c, b, a]} />);
   const groups = screen.getAllByTestId("pass-group");
@@ -96,7 +96,8 @@ test("Passes fold consecutive identical answers independent of decision order, n
 });
 
 test.each(["items", "passes"])("%s keeps arrivals behind newer while scrolled and supports row keys", kind => {
-  route(`#/${kind}${kind === "passes" ? "?range=all" : "?state=unlanded"}`);
+  const start = `/${kind}${kind === "passes" ? "?range=all" : "?state=unlanded"}`;
+  route(start);
   const view = render(kind === "items" ? <ItemsView waiting={rows} snapshot={snapshotData} /> : <PassesView passes={[pass(2000), pass(1000, "ready")]} />);
   const list = screen.getByTestId("stable-list");
   fireEvent.scroll(list, { target: { scrollTop: 200 } });
@@ -110,27 +111,29 @@ test.each(["items", "passes"])("%s keeps arrivals behind newer while scrolled an
   const focused = list.querySelector('[data-focused="true"]')!;
   const href = within(focused as HTMLElement).getAllByRole("link")[0].getAttribute("href");
   fireEvent.keyDown(window, { key: "Enter" });
-  expect(window.location.hash).toBe(href);
-  route(`#/${kind}`);
-  fireEvent.keyDown(window, { key: "]" });
-  expect(window.location.hash).not.toBe(href);
-  fireEvent.keyDown(window, { key: "[" });
-  expect(window.location.hash).toBe(href);
-  fireEvent.keyDown(window, { key: "u" });
-  expect(window.location.hash).toBe("#/");
-  route(`#/${kind}`);
-  fireEvent.click(screen.getByRole("button", { name: "1 newer ↑" }));
+  expect((window.location.pathname + window.location.search)).toBe(href);
+  // A navigation re-renders at once and changes the list's scope, so the held arrival is
+  // accepted as it would be when the screen is left; walk again from the list.
+  route(start);
+  fireEvent(window, new Event("popstate"));
   expect(screen.queryByRole("button", { name: "1 newer ↑" })).toBeNull();
+  fireEvent.keyDown(window, { key: "]" });
+  const first = window.location.pathname + window.location.search;
+  expect(first).not.toBe(start);
+  route(start);
+  fireEvent(window, new Event("popstate"));
+  fireEvent.keyDown(window, { key: "u" });
+  expect((window.location.pathname + window.location.search)).toBe("/");
 });
 
 test("focused rows also hold arrivals, and typing does not navigate", () => {
-  route("#/items?state=unlanded");
+  route("/items?state=unlanded");
   const view = render(<ItemsView waiting={rows} snapshot={snapshotData} />);
   fireEvent.keyDown(window, { key: "j" });
   view.rerender(<ItemsView waiting={[{ ...rows[0], item_id: "item-new", place: 1 }, ...rows]} snapshot={snapshotData} />);
   expect(screen.getByRole("button", { name: "1 newer ↑" })).toBeTruthy();
   fireEvent.keyDown(screen.getByLabelText("Class"), { key: "u" });
-  expect(window.location.hash).toContain("#/items");
+  expect((window.location.pathname + window.location.search)).toContain("/items");
 });
 
 test("folding compares full answers, ignores decision order and keeps session boundaries", () => {
@@ -142,20 +145,20 @@ test("folding compares full answers, ignores decision order and keeps session bo
 });
 
 test("arrivals at the top appear immediately and landed uses the snapshot", () => {
-  route("#/items?state=unlanded");
+  route("/items?state=unlanded");
   const view = render(<ItemsView waiting={rows} snapshot={snapshotData} />);
   view.rerender(<ItemsView waiting={[...rows, { ...rows[0], item_id: "item-new" }]} snapshot={snapshotData} />);
   expect(screen.getByRole("link", { name: "item-new" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /newer/ })).toBeNull();
   cleanup();
-  route("#/items?state=landed");
+  route("/items?state=landed");
   render(<ItemsView waiting={rows} snapshot={{ ...snapshotData, items: [{ ...snapshotData.items[0], item_id: "item-landed", projected_state: { state: "landed", raw_state: "landed" } }] }} />);
   expect(screen.getByRole("link", { name: "item-landed" })).toBeTruthy();
   expect(screen.queryByRole("link", { name: "item-a" })).toBeNull();
 });
 
 test("the actual shell scrollport holds arrivals and acceptance resets it", () => {
-  route("#/items?state=unlanded");
+  route("/items?state=unlanded");
   const view = render(<div className="observatory-shell"><ItemsView waiting={rows} snapshot={snapshotData} /></div>);
   const shell = view.container.firstElementChild!;
   fireEvent.scroll(shell, { target: { scrollTop: 200 } });
@@ -166,7 +169,7 @@ test("the actual shell scrollport holds arrivals and acceptance resets it", () =
 });
 
 test("removal-only updates offer acceptance rather than retaining stale rows forever", () => {
-  route("#/items");
+  route("/items");
   const view = render(<ItemsView waiting={[rows[1]]} snapshot={snapshotData} />);
   fireEvent.keyDown(window, { key: "j" });
   expect(document.activeElement?.getAttribute("data-focused")).toBe("true");
@@ -176,7 +179,7 @@ test("removal-only updates offer acceptance rather than retaining stale rows for
 });
 
 test("all history explicitly offers older pages even when the loaded filters match nothing", () => {
-  route("#/passes?range=all&item=older-item");
+  route("/passes?range=all&item=older-item");
   let requested = false;
   render(<PassesView passes={[pass(1000)]} more onOlder={() => { requested = true; }} />);
   expect(screen.getByText(/filters search the loaded history/)).toBeTruthy();
@@ -194,7 +197,7 @@ test("read refusals are not empty lists", () => {
 
 
 test("filtered Items rows keep their true places with gaps", () => {
- route("#/items?state=unlanded");
+ route("/items?state=unlanded");
  const waiting = [
   { ...rows[0], item_id: "item-first", place: 1, class: "ready" },
   { ...rows[0], item_id: "item-hidden", place: 2, class: "needs you" },

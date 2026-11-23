@@ -559,7 +559,7 @@ for held items and lanes, `tillr view passes` for per-pass decisions and timings
 (`model_ms`, `tool_ms`, `tool_active_ms`, and unioned `slot_wait_ms` from
 `slot-waits.jsonl`) and chronological drain scheduling decisions (`schedule`), `tillr view trace`
 and `tillr view perf-log` for run spans and observatory latency logs, and `tillr view serve`
-for the read-only web observatory (where `#/run/<id>` renders the same wall-time split,
+for the read-only web observatory (where `/run/<id>` renders the same wall-time split,
 `slot_wait` spans, and interleaved time-order stream). Where an event was never recorded, the absence is the
 finding — never reconstruct history from memory.
 

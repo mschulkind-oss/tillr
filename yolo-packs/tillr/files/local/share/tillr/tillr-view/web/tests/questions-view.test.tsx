@@ -147,14 +147,14 @@ function renderApp() {
  * reader uses: no item has to be known first. */
 async function openQuestions(container: HTMLElement) {
   await waitFor(() => expect(container.textContent).toContain("Questions"));
-  const link = container.querySelector('nav[aria-label="Observatory"] a[href="#/questions"]');
+  const link = container.querySelector('nav[aria-label="Observatory"] a[href="/questions"]');
   if (!link) throw new Error("the shell carries no Questions link");
   fireEvent.click(link);
   await waitFor(() => expect(container.textContent).toContain("Questions waiting on you"));
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/#/item/item-seed-06");
+  window.history.replaceState(null, "", "/item/item-seed-06");
   globalThis.WebSocket = SilentSocket as unknown as typeof WebSocket;
 });
 
@@ -187,17 +187,17 @@ describe("the questions view is the board's one place for a ruling", () => {
 
   test("a pasted #/questions link opens the list rather than selecting an item", async () => {
     stubFetch("http://vantage.test:1234");
-    window.history.replaceState(null, "", "/#/questions");
+    window.history.replaceState(null, "", "/questions");
     const { container } = renderApp();
     await waitFor(() => expect(container.textContent).toContain("Questions waiting on you"));
     await waitFor(() => expect(container.textContent).toContain("OQ-1"));
     // The default "land on the queue's head" must not replace the pasted route.
-    expect(window.location.hash).toBe("#/questions");
+    expect((window.location.pathname + window.location.search)).toBe("/questions");
   });
 
   test("selecting an item leaves the list on that item's own route", async () => {
     stubFetch("http://vantage.test:1234");
-    window.history.replaceState(null, "", "/#/questions");
+    window.history.replaceState(null, "", "/questions");
     const { container } = renderApp();
     await waitFor(() => expect(container.textContent).toContain("OQ-1"));
     const title = Array.from(container.querySelectorAll("button.question-item__title")).find(
@@ -205,7 +205,7 @@ describe("the questions view is the board's one place for a ruling", () => {
     );
     if (!title) throw new Error("the list carries no item title to open");
     fireEvent.click(title as HTMLElement);
-    await waitFor(() => expect(window.location.hash).toBe("#/item/item-seed-06"));
+    await waitFor(() => expect((window.location.pathname + window.location.search)).toBe("/item/item-seed-06"));
     await waitFor(() => expect(container.textContent).not.toContain("Questions waiting on you"));
   });
 

@@ -10,7 +10,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(
 const item = (id: string, blocked_by: string[]): ItemView => ({...snapshotData.items[0], item_id:id, title:id, latest_run:null, blocked_by});
 
 test("graph route restores URL selection and reacts to navigation and live data", async () => {
-  window.history.replaceState(null, "", "/#/graph?item=b");
+  window.history.replaceState(null, "", "/graph?item=b");
   vi.stubGlobal("WebSocket", SilentSocket);
   let items = [item("a", []), item("b", ["a"]), item("c", ["b"]), item("unrelated", [])];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -26,7 +26,7 @@ test("graph route restores URL selection and reacts to navigation and live data"
   expect(screen.getByRole("link", {name:"Graph"}).getAttribute("aria-current")).toBe("page");
   expect(container.querySelector('[data-item="b"]')?.getAttribute("data-selected")).toBe("true");
   expect(container.querySelector('[data-item="unrelated"]')?.getAttribute("data-dimmed")).toBe("true");
-  window.history.replaceState(null, "", "/#/graph?item=a");
+  window.history.replaceState(null, "", "/graph?item=a");
   window.dispatchEvent(new Event("popstate"));
   await waitFor(() => expect(container.querySelector('[data-item="a"]')?.getAttribute("data-selected")).toBe("true"));
   items = [...items, item("new", ["c"])];
@@ -37,7 +37,7 @@ test("graph route restores URL selection and reacts to navigation and live data"
 });
 
 test("Item page waits-on and unblocks link into selected graph nodes", async () => {
-  window.history.replaceState(null, "", "/#/item/current");
+  window.history.replaceState(null, "", "/item/current");
   vi.stubGlobal("WebSocket", SilentSocket);
   const data: ItemData = {item:{item_id:"current",title:"Current",body_ref:"",design_doc:"",allowed_paths:[],projected_state:{state:"blocked",raw_state:"blocked"}}, blocked_by:["before"],unblocks:["after"],criteria:[],closed_blockers:[],verdicts:[],decisions:[],attempts:[],runs:[],owner_decisions:[],state_moves:[]};
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -49,8 +49,8 @@ test("Item page waits-on and unblocks link into selected graph nodes", async () 
   }));
   const client = new QueryClient({defaultOptions:{queries:{retry:false}}});
   render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
-  expect((await screen.findByRole("link", {name:"Waits on"})).getAttribute("href")).toBe("#/graph?item=current");
-  expect(screen.getByRole("link", {name:"before"}).getAttribute("href")).toBe("#/graph?item=before");
-  expect(screen.getByRole("link", {name:"after"}).getAttribute("href")).toBe("#/graph?item=after");
+  expect((await screen.findByRole("link", {name:"Waits on"})).getAttribute("href")).toBe("/graph?item=current");
+  expect(screen.getByRole("link", {name:"before"}).getAttribute("href")).toBe("/graph?item=before");
+  expect(screen.getByRole("link", {name:"after"}).getAttribute("href")).toBe("/graph?item=after");
   client.clear();
 });

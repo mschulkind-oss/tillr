@@ -109,7 +109,7 @@ function renderApp() {
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/#/item/item-seed-02");
+  window.history.replaceState(null, "", "/item/item-seed-02");
   snapshot = twoItemSnapshotData;
   snapshotReads = 0;
   FakeSocket.opened = [];
@@ -132,7 +132,7 @@ describe("a store write under a reader", () => {
     snapshot = { ...twoItemSnapshotData, items: [pickedUpAndBlocked(twoItemSnapshotData.items[1])] };
     act(() => socket.deliver({ type: "snapshot.invalidated", event_head_seq: 49, changed: ["snapshot"] }));
     await waitFor(() => expect(snapshotReads).toBeGreaterThan(readsBefore));
-    expect(window.location.hash).toBe("#/item/item-seed-02");
+    expect((window.location.pathname + window.location.search)).toBe("/item/item-seed-02");
     expect(container.querySelector(".detail__badges")?.textContent).toContain("run-item-seed-02");
     expect(container.querySelector(".detail__badges")?.textContent).not.toContain("run-brand-new");
   });
@@ -145,7 +145,7 @@ describe("a store write under a reader", () => {
     act(() => socket.deliver({ type: "snapshot.invalidated", event_head_seq: 50, changed: ["snapshot"] }));
     await waitFor(() => expect(snapshotReads).toBeGreaterThan(readsBefore));
     expect(container.querySelector(".detail__title")?.textContent).toBe("second seed");
-    expect(window.location.hash).toBe("#/item/item-seed-02");
+    expect((window.location.pathname + window.location.search)).toBe("/item/item-seed-02");
     expect(container.querySelector(".detail__badges")?.textContent).toContain("run-item-seed-02");
   });
 });

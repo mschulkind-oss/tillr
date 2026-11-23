@@ -35,7 +35,7 @@ test("landed blockers are edge check marks, roots are leftmost and running nodes
   expect(container.textContent).toContain("lane-6");
   expect(container.querySelector('[data-item="a"] [data-glyph="triangle"]')).toBeTruthy();
   expect(container.querySelector('[data-item="other"]')?.getAttribute("data-dimmed")).toBe("true");
-  expect(within(container).getByRole("link", {name:/Select Build b/}).getAttribute("href")).toBe("#/graph?item=b");
+  expect(within(container).getByRole("link", {name:/Select Build b/}).getAttribute("href")).toBe("/graph?item=b");
 });
 
 test("selection follows ancestors and descendants, but not siblings", () => {
@@ -66,9 +66,9 @@ test("self-dependencies travel above the opaque node instead of underneath its l
 
 test("both dependency headings and every item link carry a graph selection", () => {
   const {container} = render(<DependencyLinks id="current" blockedBy={["before/id"]} unblocks={["after"]} />);
-  expect(within(container).getByRole("link", {name:"Waits on"}).getAttribute("href")).toBe("#/graph?item=current");
-  expect(within(container).getByRole("link", {name:"Unblocks"}).getAttribute("href")).toBe("#/graph?item=current");
-  expect(within(container).getByRole("link", {name:"before/id"}).getAttribute("href")).toBe("#/graph?item=before%2Fid");
+  expect(within(container).getByRole("link", {name:"Waits on"}).getAttribute("href")).toBe("/graph?item=current");
+  expect(within(container).getByRole("link", {name:"Unblocks"}).getAttribute("href")).toBe("/graph?item=current");
+  expect(within(container).getByRole("link", {name:"before/id"}).getAttribute("href")).toBe("/graph?item=before%2Fid");
 });
 
 test("missing edges, classes and stale selections are explicit", () => {

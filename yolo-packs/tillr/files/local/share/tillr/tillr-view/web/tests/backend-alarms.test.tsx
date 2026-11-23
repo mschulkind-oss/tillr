@@ -9,7 +9,7 @@ afterEach(cleanup);
 
 test("the shared shell leads with the measured alarm before navigation and counts", () => {
   const alarm = { kind: "backend-closed", backend: "pi", since: "2026-11-21 03:00:00 EST", cause: "infrastructure failure: run down", items: ["item-a"], lanes: ["lane-1"], clears: "successful probe", command: "tillr drain probe-backend" };
-  const shell = (alarms = [alarm]) => <ObservatoryShell hash="#/items" snapshot={envelope({ ...snapshotData, alarms })} snapshotError={null} live paused={false} onPause={() => {}} onRefresh={() => {}}><main>queue rows</main></ObservatoryShell>;
+  const shell = (alarms = [alarm]) => <ObservatoryShell route="/items" snapshot={envelope({ ...snapshotData, alarms })} snapshotError={null} live paused={false} onPause={() => {}} onRefresh={() => {}}><main>queue rows</main></ObservatoryShell>;
   const { container, rerender } = render(shell());
   const banner = screen.getByRole("alert", { name: "Backend alarms" });
   expect(container.querySelector(".observatory-shell__sticky")?.firstElementChild).toBe(banner);

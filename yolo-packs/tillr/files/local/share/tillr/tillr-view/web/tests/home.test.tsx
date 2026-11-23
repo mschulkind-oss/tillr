@@ -23,7 +23,7 @@ afterEach(cleanup);
 test("one entity component links all eight kinds, including missing references", () => {
   expect(ENTITY_KINDS).toEqual(["item", "run", "pass", "lane", "check", "landing", "doc", "question"]);
   const { container } = render(<>{ENTITY_KINDS.map(kind => <EntityLink key={kind} kind={kind} id="missing / id" title="Title" />)}</>);
-  for (const kind of ENTITY_KINDS) expect(container.querySelector(`[data-entity-kind="${kind}"]`)?.getAttribute("href")).toBe(`#/${kind}/missing%20%2F%20id`);
+  for (const kind of ENTITY_KINDS) expect(container.querySelector(`[data-entity-kind="${kind}"]`)?.getAttribute("href")).toBe(`/${kind}/missing%20%2F%20id`);
   expect(container.querySelectorAll("svg")).toHaveLength(8);
 });
 
@@ -73,7 +73,7 @@ test("loop summary uses snapshot session and newest pass, not active runs or old
   expect(container.textContent).toContain("one dispatched");
   expect(container.textContent).not.toContain("nothing dispatchable");
   expect(container.textContent).toContain("1 dispatched · 0 held");
-  expect(screen.getByRole("link", { name: "session-a" }).getAttribute("href")).toBe("#/passes?session=session-a");
+  expect(screen.getByRole("link", { name: "session-a" }).getAttribute("href")).toBe("/passes?session=session-a");
 });
 
 test.each([

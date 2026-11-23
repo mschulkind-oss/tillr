@@ -131,7 +131,7 @@ function buttonWithText(container: HTMLElement, text: string): HTMLElement | und
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/#/item/item-queue");
+  window.history.replaceState(null, "", "/item/item-queue");
   FakeSocket.opened = [];
   stubFetch(() => archiveSnapshotData);
   globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;

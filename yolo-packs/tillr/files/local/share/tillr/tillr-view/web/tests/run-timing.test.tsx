@@ -200,7 +200,7 @@ describe("drain schedule ledger and time-order stream", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { rerender } = render(
       <QueryClientProvider client={client}>
-        <RunPage id={timedRun.run.run_id} route={`#/run/${timedRun.run.run_id}`} live={false} paused={false} />
+        <RunPage id={timedRun.run.run_id} route={`/run/${timedRun.run.run_id}`} live={false} paused={false} />
       </QueryClientProvider>,
     );
     await waitFor(() => expect(screen.getByRole("region", { name: "Where wall time went" })).toBeTruthy());
@@ -208,7 +208,7 @@ describe("drain schedule ledger and time-order stream", () => {
 
     rerender(
       <QueryClientProvider client={client}>
-        <RunPage id={timedRun.run.run_id} route={`#/run/${timedRun.run.run_id}?tab=time-order`} live={false} paused={false} />
+        <RunPage id={timedRun.run.run_id} route={`/run/${timedRun.run.run_id}?tab=time-order`} live={false} paused={false} />
       </QueryClientProvider>,
     );
     await waitFor(() => expect(screen.getByRole("region", { name: "Time order" })).toBeTruthy());
