@@ -209,7 +209,7 @@ Every non-2xx HTTP response from `tillr-view` writes `{error: {code, message}}` 
 
 ## Superseded layout and retained components
 
-The linked-page architecture in [observatory redesign](./observatory-redesign.md) replaced the original four-region viewport-locked layout (`ObservatoryHeaderBar` + `QueueRail` + `ItemPane` + `InspectPane`, plus `NowBand` and `FinishedBand`) with dedicated full-width pages routed by path (`/`, `/items`, `/item/<id>`, `/run/<id>`, `/lane/<id>`, `/passes`, `/trunk`, `/performance`, `/graph`, `/questions`, `/designs`; old `#/` links redirect to the path).
+The linked-page architecture in [observatory redesign](./observatory-redesign.md) replaced the original four-region viewport-locked layout (`ObservatoryHeaderBar` + `QueueRail` + `ItemPane` + `InspectPane`, plus `NowBand` and `FinishedBand`) with dedicated full-width pages routed by path (`/`, `/items`, `/item/<id>`, `/run/<id>`, `/lane/<id>`, `/passes`, `/trunk`, `/performance`, `/graph`, `/questions`, `/designs`).
 
 At `11dec7eb2e0e196e3a9588c354616bea6f5cb1b1`, the components introduced for the original design split into two groups:
 

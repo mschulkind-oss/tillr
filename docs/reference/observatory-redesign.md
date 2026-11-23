@@ -108,7 +108,6 @@ Navigation state lives entirely in the location's path and query (`src/models/ro
 | Single gate check | `/check/<id>` (`?span=`, `?run=`) | `CheckView` (`src/components/PerformanceView.tsx`) |
 | Single landing | `/landing/<id>` | `LandingPage` (`src/components/TrunkView.tsx`) |
 
-Legacy query-only URLs redirect cleanly in `App.tsx`: `/?item=<id>` redirects to `/item/<id>`, and `/item/<id>?run=<run>` replaces the history entry with `/run/<run>` while preserving `tab`, `artifact`, and `exchange` parameters.
 
 Two shared components turn entity names into links across every screen:
 
