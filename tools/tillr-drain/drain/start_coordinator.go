@@ -45,7 +45,7 @@ func (l *Loop) runFastStart(ctx context.Context, view *startView, result *LoopRe
 			}
 			continue
 		}
-		e, ok := snapshot.nextFreshStart()
+		e, ok := snapshot.nextFreshStartWithGates(l.gateCount())
 		if !ok {
 			rejected = snapshot
 			continue
@@ -173,7 +173,7 @@ func (l *Loop) startIdle(ctx context.Context, view *startView, holds []Decision)
 	if s == nil {
 		return false, holds, nil
 	}
-	if _, proposed := s.nextFreshStart(); proposed {
+	if _, proposed := s.nextFreshStartWithGates(l.gateCount()); proposed {
 		return false, holds, nil
 	}
 	r, err := store.OpenRead(ctx, l.cfg.Store)
