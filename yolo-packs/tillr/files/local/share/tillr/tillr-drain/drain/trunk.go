@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -79,6 +80,8 @@ const DefaultFixerGateProgram = "python3 tools/tillr-loop/tillr-loop fixer-gate"
 // DefaultReplayProgram re-runs a red gate's failing checks on the base, `{only}` being the
 // comma-separated check ids. It is handed no candidate flags: it judges a revision.
 const DefaultReplayProgram = "python3 tools/fork-check.py --replay --only {only}"
+
+const goAffectedCheckID = "go-affected/affected-tillr-go-test-packages-pass"
 
 // GateCodePaths is the gate's own code. A fixer's fence is the union of the suspect
 // change and the failing checks' watched paths, with these removed: a fixer that could
@@ -627,8 +630,9 @@ func (l *Loop) redOnTip(ctx context.Context, replay ReplayStep, candidate Candid
 	return out.Red, out.CheckLogs, out.Known, err
 }
 
-// judgeTrunkChecks uses only passes for the exact commit and exact check ID. Missing,
-// unreadable, or red records cannot replace a replay.
+// judgeTrunkChecks uses only passes for the exact commit and exact check ID, plus
+// green-<rev>.json whole-module coverage for go-affected/affected-tillr-go-test-packages-pass
+// (which runs only at landing tier). Missing, unreadable, or red records cannot replace a replay.
 func (l *Loop) judgeTrunkChecks(ctx context.Context, replay ReplayStep, candidate Candidate, rev string, checks []string, useProof bool) (ReplayOutcome, string, error) {
 	rest := checks
 	source := "replay"
@@ -636,6 +640,7 @@ func (l *Loop) judgeTrunkChecks(ctx context.Context, replay ReplayStep, candidat
 		if dir, err := heavyDirectory(ctx, l.cfg.Root); err == nil {
 			passed := map[string]bool{}
 			if green, err := readGreenProofFile(dir, rev); err == nil && !green.ProvedAt.IsZero() {
+				greenPassed := map[string]bool{}
 				for _, id := range green.Passed {
 					if classifyCheck(checkresult.Observation{
 						Check:  id,
@@ -644,7 +649,18 @@ func (l *Loop) judgeTrunkChecks(ctx context.Context, replay ReplayStep, candidat
 						Word:   string(checkresult.Pass),
 					}).Outcome == checkresult.Pass {
 						passed[id] = true
+						greenPassed[id] = true
 					}
+				}
+				if !passed[goAffectedCheckID] && slices.Contains(checks, goAffectedCheckID) &&
+					l.goAffectedCoveredByGreenProof(ctx, rev, candidate, greenPassed) &&
+					classifyCheck(checkresult.Observation{
+						Check:  goAffectedCheckID,
+						Commit: rev,
+						Source: checkresult.CachedRecord,
+						Word:   string(checkresult.Pass),
+					}).Outcome == checkresult.Pass {
+					passed[goAffectedCheckID] = true
 				}
 			}
 			if progress, err := readProgressCheckProof(dir, rev); err == nil {
@@ -684,6 +700,191 @@ func (l *Loop) judgeTrunkChecks(ctx context.Context, replay ReplayStep, candidat
 		return ReplayOutcome{}, source, err
 	}
 	return out, source, nil
+}
+
+// goAffectedCoveredByGreenProof answers whether green-<rev>.json's passed whole-module
+// suites cover go-affected/affected-tillr-go-test-packages-pass at rev: either every
+// tillr Go module present at rev passed its whole-suite check, or the candidate's
+// go-affected failure summary names the failing packages and every module owning one
+// passed its whole-suite check in green.Passed.
+func (l *Loop) goAffectedCoveredByGreenProof(ctx context.Context, rev string, candidate Candidate, greenPassed map[string]bool) bool {
+	if len(greenPassed) == 0 || l.cfg.Root == "" {
+		return false
+	}
+	mods := tillrGoModulesAtRev(ctx, l.cfg.Root, rev)
+	if len(mods) == 0 {
+		return false
+	}
+	allModulesGreen := true
+	for _, mod := range mods {
+		if !greenPassed[tillrModuleProofCheckID(mod)] {
+			allModulesGreen = false
+			break
+		}
+	}
+	if allModulesGreen {
+		return true
+	}
+	if candidate.RunID == "" {
+		return false
+	}
+	failingPkgs := readGoAffectedFailingPackages(l.cfg.Root, candidate.RunID)
+	if len(failingPkgs) == 0 {
+		return false
+	}
+	modPaths := make(map[string]string, len(mods))
+	for _, mod := range mods {
+		raw, err := heavyGitOutput(ctx, l.cfg.Root, "show", rev+":"+mod+"/go.mod")
+		if err != nil {
+			return false
+		}
+		mp := parseGoModPath(raw)
+		if mp == "" {
+			return false
+		}
+		modPaths[mod] = mp
+	}
+	for _, pkg := range failingPkgs {
+		owner := ""
+		ownerLen := -1
+		for _, mod := range mods {
+			if pkg == mod {
+				owner = mod
+				break
+			}
+			mp := modPaths[mod]
+			if (pkg == mp || strings.HasPrefix(pkg, mp+"/")) && len(mp) > ownerLen {
+				owner = mod
+				ownerLen = len(mp)
+			}
+		}
+		if owner == "" || !greenPassed[tillrModuleProofCheckID(owner)] {
+			return false
+		}
+	}
+	return true
+}
+
+func tillrModuleProofCheckID(mod string) string {
+	kind := "go-tool"
+	switch mod {
+	case "tools/tillr":
+		kind = "go-substrate"
+	case "tools/tillr-gate":
+		kind = "gate-runner"
+	}
+	return forkCheckDeclID(kind, mod+"'s whole suite passes", "")
+}
+
+func tillrGoModulesAtRev(ctx context.Context, root, rev string) []string {
+	out, err := heavyGitOutput(ctx, root, "ls-tree", "-r", "--name-only", "-z", rev, "--", "tools")
+	if err != nil || out == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	var mods []string
+	for _, entry := range strings.Split(out, "\x00") {
+		parts := strings.Split(entry, "/")
+		if len(parts) != 3 || parts[0] != "tools" || parts[2] != "go.mod" {
+			continue
+		}
+		if parts[1] != "tillr" && !strings.HasPrefix(parts[1], "tillr-") {
+			continue
+		}
+		mod := "tools/" + parts[1]
+		if !seen[mod] {
+			seen[mod] = true
+			mods = append(mods, mod)
+		}
+	}
+	sort.Strings(mods)
+	return mods
+}
+
+func readGoAffectedFailingPackages(root, runID string) []string {
+	runDir := RunDir(root, runID)
+	suffix := "-" + sanitizeLogComponent(goAffectedCheckID) + ".log"
+	if entries, err := os.ReadDir(filepath.Join(runDir, "logs")); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+				continue
+			}
+			if raw, err := os.ReadFile(filepath.Join(runDir, "logs", entry.Name())); err == nil {
+				if pkgs := parseGoAffectedFailingPackages(string(raw)); len(pkgs) > 0 {
+					return pkgs
+				}
+			}
+		}
+	}
+	if raw, err := os.ReadFile(filepath.Join(runDir, "gate.stdout")); err == nil {
+		if pkgs := parseGoAffectedFailingPackages(string(raw)); len(pkgs) > 0 {
+			return pkgs
+		}
+	}
+	return nil
+}
+
+func parseGoAffectedFailingPackages(text string) []string {
+	var last []string
+	var cur []string
+	itemPrefix := ""
+	inBlock := false
+	valid := false
+	flush := func() {
+		if inBlock && valid && len(cur) > 0 {
+			last = cur
+		}
+		cur = nil
+		itemPrefix = ""
+		inBlock = false
+		valid = false
+	}
+	for _, rawLine := range strings.Split(text, "\n") {
+		line := strings.TrimRight(rawLine, "\r")
+		switch line {
+		case "go-affected: failing packages and tests:":
+			flush()
+			inBlock = true
+			valid = true
+			itemPrefix = "  "
+			continue
+		case "       | go-affected: failing packages and tests:":
+			flush()
+			inBlock = true
+			valid = true
+			itemPrefix = "       |   "
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		if !strings.HasPrefix(line, itemPrefix) || len(line) <= len(itemPrefix) || line[len(itemPrefix)] == ' ' {
+			flush()
+			continue
+		}
+		pkg, _, hasColon := strings.Cut(line[len(itemPrefix):], ": ")
+		if !hasColon || pkg == "" || strings.ContainsAny(pkg, " \t") {
+			valid = false
+			continue
+		}
+		cur = append(cur, pkg)
+	}
+	flush()
+	return last
+}
+
+func parseGoModPath(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		line, _, _ = strings.Cut(line, "//")
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "module "); ok {
+			fields := strings.Fields(rest)
+			if len(fields) > 0 {
+				return strings.Trim(fields[0], `"`)
+			}
+		}
+	}
+	return ""
 }
 
 // laneBasedOnTrunk reports whether the lane's recorded base is the trunk's: false for a
