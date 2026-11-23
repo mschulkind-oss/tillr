@@ -5,7 +5,12 @@ package drain_test
 // "Replacing the loop and observatory in place").
 
 import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +21,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-drain/presence"
 )
 
 // rollHarness keeps a fixture worker in flight and records any TERM it receives, so
@@ -44,6 +50,7 @@ type rollScenario struct {
 	exe          string
 	out          string
 	cmd          *exec.Cmd
+	loopOwner    presence.Owner
 	pids         string
 	signal       string
 	lanes        int
@@ -118,8 +125,119 @@ func startConfiguredRoll(t *testing.T, lanes int, pauseKind string, configure fu
 	if err := s.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.cmd.Process.Kill() })
+	if here, err := presence.CurrentOwner(); err == nil {
+		if start, err := presence.ProcessStart(s.cmd.Process.Pid); err == nil && start != "" {
+			s.loopOwner = presence.Owner{PID: s.cmd.Process.Pid, Start: start, Domain: here.Domain, UID: here.UID}
+		}
+	}
+	t.Cleanup(func() { s.stop(t) })
 	return s
+}
+
+func storeRunOwners(storePath string, here *presence.Owner) ([]presence.Owner, error) {
+	resolved, err := presence.StoreIdentity(storePath)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	wantStore := "TILLR_LOOP_STORE=" + resolved
+	var owners []presence.Owner
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		env, err := presence.RunProcessEnvironment(filepath.Join("/proc", entry.Name()), here.UID)
+		if presence.ProcessGone(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		hasRun, hasStore := false, false
+		for _, kv := range bytes.Split(env, []byte{0}) {
+			s := string(kv)
+			hasRun = hasRun || (strings.HasPrefix(s, "TILLR_RUN_ID=") && len(s) > len("TILLR_RUN_ID="))
+			hasStore = hasStore || s == wantStore
+		}
+		if !hasRun || !hasStore {
+			continue
+		}
+		start, err := presence.ProcessStart(pid)
+		if presence.ProcessGone(err) || (err == nil && start == "") {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		owners = append(owners, presence.Owner{PID: pid, Start: start, Domain: here.Domain, UID: here.UID})
+	}
+	return owners, nil
+}
+
+func (s *rollScenario) stop(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer cancel()
+	here, err := presence.CurrentOwner()
+	if err != nil {
+		_ = s.cmd.Process.Kill()
+		_ = s.cmd.Wait()
+		t.Errorf("reading current owner to stop roll fixture: %v", err)
+		return
+	}
+	seen, _ := storeRunOwners(s.f.store, here)
+	if _, err := drain.Stop(ctx, drain.StopConfig{Store: s.f.store, EndRuns: true}); err != nil {
+		_ = s.cmd.Process.Kill()
+		_ = s.cmd.Wait()
+		t.Errorf("stopping roll fixture: %v", err)
+		return
+	}
+	if s.loopOwner.Start != "" {
+		if dead, err := presence.OwnerDead(&s.loopOwner, here); err == nil && !dead {
+			// A caller failed before the loop opened its session row in the store.
+			_ = s.cmd.Process.Signal(syscall.SIGTERM)
+			_ = s.cmd.Wait()
+			if _, err := drain.Stop(ctx, drain.StopConfig{Store: s.f.store, EndRuns: true}); err != nil {
+				t.Errorf("ending roll runs after early loop stop: %v", err)
+				return
+			}
+		} else {
+			_ = s.cmd.Wait()
+		}
+	} else {
+		_ = s.cmd.Wait()
+	}
+	for {
+		live, err := storeRunOwners(s.f.store, here)
+		if err != nil {
+			t.Errorf("checking live roll run processes: %v", err)
+			return
+		}
+		seen = append(seen, live...)
+		stillAlive := len(live) > 0
+		for i := 0; !stillAlive && i < len(seen); i++ {
+			dead, err := presence.OwnerDead(&seen[i], here)
+			if err != nil {
+				t.Errorf("checking roll run process %d: %v", seen[i].PID, err)
+				return
+			}
+			if !dead {
+				stillAlive = true
+			}
+		}
+		if !stillAlive {
+			return
+		}
+		if err := ctx.Err(); err != nil {
+			t.Errorf("timed out waiting for roll run processes to exit: %v", err)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func copyFile(t *testing.T, from, to string, extra []byte) {
@@ -294,4 +412,169 @@ func TestARestartThroughALauncherReachesTheLaunchersBuild(t *testing.T) {
 	if lines := buildLines(s.output(t)); len(lines) != 2 || lines[0] == lines[1] {
 		t.Fatalf("build lines = %v", lines)
 	}
+}
+
+func randomRollTestMarker(t *testing.T) string {
+	t.Helper()
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		t.Fatalf("generating roll test marker: %v", err)
+	}
+	return hex.EncodeToString(buf[:])
+}
+
+func procCmdline(pid int) string {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return "<gone>"
+	}
+	return strings.TrimSpace(strings.ReplaceAll(string(raw), "\x00", " "))
+}
+
+func procParentPID(t *testing.T, pid int) int {
+	t.Helper()
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		t.Fatalf("reading /proc/%d/stat: %v", pid, err)
+	}
+	end := bytes.LastIndexByte(raw, ')')
+	if end < 0 {
+		t.Fatalf("/proc/%d/stat malformed: %q", pid, raw)
+	}
+	fields := strings.Fields(string(raw[end+1:]))
+	if len(fields) < 2 {
+		t.Fatalf("/proc/%d/stat missing ppid: %q", pid, raw)
+	}
+	ppid, err := strconv.Atoi(fields[1])
+	if err != nil {
+		t.Fatalf("parsing ppid from /proc/%d/stat: %v", pid, err)
+	}
+	return ppid
+}
+
+func ownerAt(t *testing.T, here *presence.Owner, pid int) presence.Owner {
+	t.Helper()
+	start, err := presence.ProcessStart(pid)
+	if err != nil || start == "" {
+		t.Fatalf("process %d is not live (start=%q, err=%v)", pid, start, err)
+	}
+	return presence.Owner{PID: pid, Start: start, Domain: here.Domain, UID: here.UID}
+}
+
+func markedRollProcesses(t *testing.T, here *presence.Owner, marker string) ([]presence.Owner, []string) {
+	t.Helper()
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatalf("reading /proc: %v", err)
+	}
+	want := "TILLR_ROLL_TEST_MARKER=" + marker
+	var owners []presence.Owner
+	var desc []string
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		env, err := presence.RunProcessEnvironment(filepath.Join("/proc", entry.Name()), here.UID)
+		if presence.ProcessGone(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("reading /proc/%d/environ: %v", pid, err)
+		}
+		matched := false
+		for _, kv := range bytes.Split(env, []byte{0}) {
+			if string(kv) == want {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		start, err := presence.ProcessStart(pid)
+		if presence.ProcessGone(err) || (err == nil && start == "") {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("reading /proc/%d/stat: %v", pid, err)
+		}
+		owners = append(owners, presence.Owner{PID: pid, Start: start, Domain: here.Domain, UID: here.UID})
+		desc = append(desc, fmt.Sprintf("%d (%s)", pid, procCmdline(pid)))
+	}
+	return owners, desc
+}
+
+func cleanupLeakedMarkedProcesses(here *presence.Owner, owners []presence.Owner) {
+	for _, o := range owners {
+		if dead, err := presence.OwnerDead(&o, here); err == nil && !dead {
+			_ = syscall.Kill(o.PID, syscall.SIGKILL)
+		}
+	}
+}
+
+func assertNoMarkedProcessAliveAfter(t *testing.T, name string, fn func(t *testing.T)) {
+	t.Helper()
+	here, err := presence.CurrentOwner()
+	if err != nil {
+		t.Fatalf("current owner: %v", err)
+	}
+	marker := randomRollTestMarker(t)
+	ok := t.Run(name, func(t *testing.T) {
+		t.Setenv("TILLR_ROLL_TEST_MARKER", marker)
+		fn(t)
+	})
+	owners, desc := markedRollProcesses(t, here, marker)
+	if len(owners) > 0 {
+		cleanupLeakedMarkedProcesses(here, owners)
+		t.Fatalf("%s returned with %d started process(es) still alive:\n%s", name, len(desc), strings.Join(desc, "\n"))
+	}
+	if !ok {
+		t.Fatalf("%s failed", name)
+	}
+}
+
+func TestRollTestsEndEveryProcessTheyStartBeforeReturning(t *testing.T) {
+	here, err := presence.CurrentOwner()
+	if err != nil {
+		t.Fatalf("current owner: %v", err)
+	}
+
+	var recorded []presence.Owner
+	assertNoMarkedProcessAliveAfter(t, "roll_process_tree", func(t *testing.T) {
+		s := startRoll(t, 1, "")
+		s.inFlight(t, 1)
+		workerPID, err := strconv.Atoi(strings.Fields(lines(t, s.pids)[0])[0])
+		if err != nil {
+			t.Fatalf("parsing worker pid: %v", err)
+		}
+		stopAtGapPID := procParentPID(t, workerPID)
+		runFacePID := procParentPID(t, stopAtGapPID)
+		if cmd := procCmdline(stopAtGapPID); !strings.Contains(cmd, "stop-at-gap") {
+			t.Fatalf("worker parent %d cmdline = %q, want stop-at-gap", stopAtGapPID, cmd)
+		}
+		if cmd := procCmdline(workerPID); !strings.Contains(cmd, "/pi ") {
+			t.Fatalf("worker %d cmdline = %q, want stub pi", workerPID, cmd)
+		}
+		recorded = []presence.Owner{
+			ownerAt(t, here, s.cmd.Process.Pid),
+			ownerAt(t, here, runFacePID),
+			ownerAt(t, here, stopAtGapPID),
+			ownerAt(t, here, workerPID),
+		}
+	})
+	for _, o := range recorded {
+		dead, err := presence.OwnerDead(&o, here)
+		if err != nil {
+			t.Fatalf("checking recorded process %d: %v", o.PID, err)
+		}
+		if !dead {
+			_ = syscall.Kill(o.PID, syscall.SIGKILL)
+			t.Fatalf("recorded process %d (%s) still alive after test returned", o.PID, procCmdline(o.PID))
+		}
+	}
+
+	assertNoMarkedProcessAliveAfter(t, "restart_in_place", TestRestartReplacesTheLoopInPlaceWithoutSignalingARun)
+	assertNoMarkedProcessAliveAfter(t, "no_request", TestNoRequestMeansTheRunningBinaryNeverRestarts)
+	assertNoMarkedProcessAliveAfter(t, "launcher_restart", TestARestartThroughALauncherReachesTheLaunchersBuild)
 }
