@@ -120,6 +120,26 @@ type stateMoveView struct {
 	Actor    string `json:"actor"`
 }
 
+// storedWaitingOn reads waiting_on as the event log holds it: an object with a
+// reason on item state writes, or a plain seat name on item.conflict and
+// drain.dispatch-declined events. A seat name carries no reason.
+type storedWaitingOn struct{ Reason string }
+
+func (w *storedWaitingOn) UnmarshalJSON(b []byte) error {
+	var obj struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		var seat string
+		if json.Unmarshal(b, &seat) != nil {
+			return err
+		}
+		return nil
+	}
+	w.Reason = obj.Reason
+	return nil
+}
+
 func readStateMoves(r *store.Reader, itemID string) ([]stateMoveView, error) {
 	rows, err := r.Query(`SELECT seq, ts, kind, payload, COALESCE(actor, '') FROM events WHERE object_type = 'item' AND object_id = ? ORDER BY seq`, itemID)
 	if err != nil {
@@ -135,15 +155,13 @@ func readStateMoves(r *store.Reader, itemID string) ([]stateMoveView, error) {
 			return nil, err
 		}
 		var p struct {
-			State           string `json:"state"`
-			Action          string `json:"lifecycle_action"`
-			LifecycleReason string `json:"lifecycle_reason"`
-			LifecycleBy     string `json:"lifecycle_by"`
-			Reason          string `json:"reason"`
-			Actor           string `json:"actor"`
-			WaitingOn       *struct {
-				Reason string `json:"reason"`
-			} `json:"waiting_on"`
+			State           string          `json:"state"`
+			Action          string          `json:"lifecycle_action"`
+			LifecycleReason string          `json:"lifecycle_reason"`
+			LifecycleBy     string          `json:"lifecycle_by"`
+			Reason          string          `json:"reason"`
+			Actor           string          `json:"actor"`
+			WaitingOn       storedWaitingOn `json:"waiting_on"`
 		}
 		if err := json.Unmarshal([]byte(raw), &p); err != nil {
 			return nil, err
@@ -159,7 +177,7 @@ func readStateMoves(r *store.Reader, itemID string) ([]stateMoveView, error) {
 		if p.Actor != "" {
 			m.Actor = p.Actor
 		}
-		if p.WaitingOn != nil && m.Reason == "" {
+		if m.Reason == "" {
 			m.Reason = p.WaitingOn.Reason
 		}
 		if p.Action != "" {
