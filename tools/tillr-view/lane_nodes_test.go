@@ -1,11 +1,36 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
+
+// One lanes answer reads one store snapshot, so it asks which runs are dead once: the
+// answer replays the drain's whole event history, and the lane and node readers each
+// replayed it (about 0.6 s apiece on a live store).
+func TestLanesAskWhichRunsAreDeadOnce(t *testing.T) {
+	h := newServeHarness(t)
+	h.exec(`CREATE TABLE node_runs(item_id TEXT,attempt INTEGER,node_id TEXT,run_id TEXT,outcome TEXT); UPDATE runs SET item_id='item-seed-04' WHERE run_id='run-1'; INSERT INTO node_runs VALUES('item-seed-04',1,'a-build','run-2','running'),('item-seed-04',1,'b-build','run-3','running')`)
+	calls := 0
+	prev := deadRunsOf
+	deadRunsOf = func(r *store.Reader, storePath, loopDir string) (map[string]bool, error) {
+		calls++
+		return prev(r, storePath, loopDir)
+	}
+	t.Cleanup(func() { deadRunsOf = prev })
+	if _, err := readLaneRows(context.Background(), h.store, h.loopDir, h.laneRoot, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("the dead-run replay ran %d times for one lanes answer, want 1", calls)
+	}
+}
 
 func TestLaneWorkflowCountsAttemptsAndSpansAllRecordedNodes(t *testing.T) {
 	h := newServeHarness(t)

@@ -296,7 +296,7 @@ func assembleLanesCounted(r *store.Reader, storePath, loop, lanes string, now ti
 	for i := range rows {
 		rows[i].Work = progress[rows[i].ItemID]
 	}
-	if err := enrichLaneNodes(r, rows, loop, stats); err != nil {
+	if err := enrichLaneNodes(r, rows, loop, d.deadRuns, stats); err != nil {
 		return nil, err
 	}
 	if err := enrichWorkerRecords(r, rows); err != nil {

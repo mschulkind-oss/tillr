@@ -16,11 +16,35 @@ type laneNode struct {
 }
 
 // rowid preserves the order the drain recorded, not lexical node-id order.
+// deadRunsOf is presence.DeadRuns, a variable so a test can count the replays.
+var deadRunsOf = presence.DeadRuns
+
 func laneNodes(r *store.Reader, itemID string) ([]laneNode, error) {
 	return laneNodesIn(r, itemID, "")
 }
 
 func laneNodesIn(r *store.Reader, itemID, loopDir string) ([]laneNode, error) {
+	return laneNodesWith(r, itemID, deadRunsReader(r, loopDir))
+}
+
+// deadRunsReader answers the dead runs of one store snapshot, read once on first use: the
+// answer replays the drain's event history, and one lanes answer needs it from the lane
+// reader and from every row's node reader.
+func deadRunsReader(r *store.Reader, loopDir string) func() (map[string]bool, error) {
+	var dead map[string]bool
+	var err error
+	done := false
+	return func() (map[string]bool, error) {
+		if !done {
+			storePath := readerStorePath(r)
+			dead, err = deadRunsOf(r, storePath, defaultLoopDir(storePath, loopDir))
+			done = true
+		}
+		return dead, err
+	}
+}
+
+func laneNodesWith(r *store.Reader, itemID string, deadRuns func() (map[string]bool, error)) ([]laneNode, error) {
 	rows, err := r.Query(`SELECT node_id, run_id, attempt, outcome FROM node_runs WHERE item_id=? ORDER BY rowid`, itemID)
 	if err != nil {
 		if isMissingTable(err) {
@@ -51,8 +75,7 @@ func laneNodesIn(r *store.Reader, itemID, loopDir string) ([]laneNode, error) {
 		return nil, err
 	}
 	if hasRunning {
-		storePath := readerStorePath(r)
-		dead, err := presence.DeadRuns(r, storePath, defaultLoopDir(storePath, loopDir))
+		dead, err := deadRuns()
 		if err != nil && !isMissingTable(err) {
 			return nil, err
 		}
@@ -65,10 +88,10 @@ func laneNodesIn(r *store.Reader, itemID, loopDir string) ([]laneNode, error) {
 	return nodes, nil
 }
 
-func enrichLaneNodes(r *store.Reader, rows []laneRow, loop string, stats *laneReadStats) error {
+func enrichLaneNodes(r *store.Reader, rows []laneRow, loop string, deadRuns func() (map[string]bool, error), stats *laneReadStats) error {
 	for i := range rows {
 		row := &rows[i]
-		nodes, err := laneNodesIn(r, row.ItemID, loop)
+		nodes, err := laneNodesWith(r, row.ItemID, deadRuns)
 		if err != nil {
 			return err
 		}
