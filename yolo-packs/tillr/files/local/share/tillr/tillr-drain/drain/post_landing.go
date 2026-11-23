@@ -91,11 +91,15 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 		}
 	}
 	r := l.cfg.PostLanding.Roll
-	if r.Command == "" {
+	if candidate.BaseRef == piForkPatchRef {
+		if r.Command == "" {
+			l.recordSkippedPiRoll(ctx, tip, "no [roll] command configured")
+			return
+		}
+		l.submitPiRoll(ctx, r.Command, tip, true)
 		return
 	}
-	if candidate.BaseRef == piForkPatchRef {
-		l.submitPiRoll(ctx, r.Command, tip)
+	if r.Command == "" {
 		return
 	}
 	if isExtensionPatchBranch(candidate.BaseRef) {
@@ -146,7 +150,7 @@ func (l *Loop) rollChanged(ctx context.Context, r settings.Roll, changed, tip st
 		})
 	}
 	if matchesRollPaths(changed, piSeriesPaths) {
-		l.submitPiRoll(ctx, r.Command, tip)
+		l.submitPiRoll(ctx, r.Command, tip, false)
 	}
 	if matchesExtensionRollPaths(changed) {
 		l.submitExtensionRoll(ctx, r.Command, tip)
@@ -157,14 +161,6 @@ func (l *Loop) submitTipPush(ctx context.Context, p settings.Push, tip string) {
 	l.pushAction.submit(tip, func(tip string) {
 		_, err := l.pushTipOnce(ctx, p)
 		l.recordPush(ctx, settings.PushTip, tip, err)
-	})
-}
-
-func (l *Loop) submitPiRoll(ctx context.Context, command, tip string) {
-	l.piRollAction.submit(tip, func(tip string) {
-		_, err := actionCommand(ctx, l.cfg.Root, "sh", "-c", command+" --pi")
-		l.reportRollFailure(tip, "pi", err)
-		l.recordActionWhat(ctx, "roll", "pi", tip, err)
 	})
 }
 
