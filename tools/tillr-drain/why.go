@@ -153,9 +153,10 @@ func whyFace(args []string) int {
 				var report any = row
 				if *asJSON {
 					report = struct {
-						Alarms []alarms.Alarm `json:"alarms,omitempty"`
+						Alarms          []alarms.Alarm `json:"alarms,omitempty"`
+						LoopRestartLine string         `json:"loop_restart_line,omitempty"`
 						drain.WhyRow
-					}{answer.Alarms, row}
+					}{answer.Alarms, answer.LoopRestartLine, row}
 				}
 				if err := enc.Encode(report); err != nil {
 					return fail(drain.Externalf("writing why: %v", err))
@@ -171,6 +172,9 @@ func whyFace(args []string) int {
 					}
 					if answer.TrunkLine != "" {
 						fmt.Println(answer.TrunkLine)
+					}
+					if answer.LoopRestartLine != "" {
+						fmt.Println(answer.LoopRestartLine)
 					}
 				}
 				return record.ExitOK
@@ -206,6 +210,9 @@ func whyFace(args []string) int {
 		}
 		if err == nil && answer.TrunkLine != "" {
 			_, err = fmt.Fprintln(os.Stdout, answer.TrunkLine)
+		}
+		if err == nil && answer.LoopRestartLine != "" {
+			_, err = fmt.Fprintln(os.Stdout, answer.LoopRestartLine)
 		}
 		if err == nil {
 			_, err = io.Copy(os.Stdout, &costs)
