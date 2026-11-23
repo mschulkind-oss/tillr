@@ -199,10 +199,11 @@ func (s StreamState) String() string {
 }
 
 // OpenForWriting answers whether any process on this kernel, in any PID namespace,
-// holds path open for writing via F_SETLEASE(F_RDLCK).
+// holds path open for writing via F_SETLEASE(F_RDLCK). A path component that exceeds
+// NAME_MAX (ENAMETOOLONG) cannot exist on this filesystem, so it is absent like ENOENT.
 func OpenForWriting(path string) (StreamState, error) {
 	f, err := os.Open(path)
-	if os.IsNotExist(err) {
+	if os.IsNotExist(err) || errors.Is(err, syscall.ENAMETOOLONG) {
 		return StreamAbsent, nil
 	}
 	if err != nil {
