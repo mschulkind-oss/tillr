@@ -423,7 +423,7 @@ func (s *server) routes() http.Handler {
 	})
 	mux.Handle("GET /", s.webHandler())
 	return s.instrument(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method == http.MethodPost && strings.HasPrefix(req.URL.Path, "/api/v1/") && !s.writeEnabled {
+		if req.Method == http.MethodPost && strings.HasPrefix(req.URL.Path, "/api/v1/") && req.URL.Path != clientTimingPath && !s.writeEnabled {
 			s.writeFailure(w, codeReadOnly, "This server is read-only; restart tillr-view serve with --write to save ideas or move items.")
 			return
 		}
@@ -518,6 +518,10 @@ func (s *server) webHandler() http.Handler {
 	})
 }
 
+// statusClientClosed is the status the perf log records for a read its client abandoned
+// (nginx's 499). Nobody receives it; it keeps the abort out of the 5xx lines.
+const statusClientClosed = 499
+
 // payloadFunc answers one route's data. It runs inside a single read transaction, and its
 // answer is wrapped in the cursor that transaction was taken at.
 type payloadFunc func(r *store.Reader, req *http.Request) (any, *apiFailure)
@@ -574,6 +578,14 @@ func (s *server) serveRead(fn payloadFunc, outside bool) http.HandlerFunc {
 		// payload is the read transaction and everything the route assembled inside it,
 		// which for /why includes the planner it waited on (its own phase says how long).
 		phase(ctx, "payload_ms", msSince(time.Now, start))
+		// A client that went away is not a store fault. The browser cancels a read when a
+		// newer one replaces it, and the cancelled context then fails the read (queued for
+		// the one connection, or mid-query); answering that as store-unreadable logged 503s
+		// for reads nobody was waiting on. It is logged as the abort it is.
+		if ctx.Err() != nil {
+			w.WriteHeader(statusClientClosed)
+			return
+		}
 		encodeStart := time.Now()
 		defer func() { phase(ctx, "encode_ms", msSince(time.Now, encodeStart)) }()
 		if err != nil {
