@@ -543,11 +543,23 @@ func isSuppressiveResolutionReason(reason string) bool {
 	return reason == "manual" || strings.HasPrefix(reason, "item-")
 }
 
+func isWindowedEventRule(w When) bool {
+	return w.Window > 0 && w.Pattern != LagBehind && w.Pattern != DurationWithoutEvent
+}
+
 type itemTerminalChecker struct {
 	ready       bool
 	closedState string
 	stateOf     func(itemID string) (string, bool, error)
+	seqOf       func(itemID string) int64
 	isTerminal  func(state string) bool
+}
+
+func (c itemTerminalChecker) terminalSeq(itemID string) int64 {
+	if c.seqOf == nil {
+		return 0
+	}
+	return c.seqOf(itemID)
 }
 
 func (c itemTerminalChecker) reopenCause(state string, exists bool) (string, string) {
@@ -651,6 +663,16 @@ func newSourceItemTerminal(ctx context.Context, src ObservationSource) itemTermi
 		return itemTerminalChecker{}
 	}
 	itemStates := map[string]string{}
+	itemSeqs := map[string]int64{}
+	extractSeq := func(entry map[string]any) int64 {
+		if seq, ok := integer(entry["item.event_seq"]); ok && seq > 0 {
+			return seq
+		}
+		if seq, ok := integer(entry["event_seq"]); ok && seq > 0 {
+			return seq
+		}
+		return 0
+	}
 	switch items := rawItems.(type) {
 	case map[string]map[string]any:
 		for id, entry := range items {
@@ -658,6 +680,9 @@ func newSourceItemTerminal(ctx context.Context, src ObservationSource) itemTermi
 				itemStates[id] = s
 			} else if s, ok := entry["state"].(string); ok && s != "" {
 				itemStates[id] = s
+			}
+			if seq := extractSeq(entry); seq > 0 {
+				itemSeqs[id] = seq
 			}
 		}
 	case map[string]any:
@@ -672,6 +697,9 @@ func newSourceItemTerminal(ctx context.Context, src ObservationSource) itemTermi
 					itemStates[id] = s
 				} else if s, ok := entry["state"].(string); ok && s != "" {
 					itemStates[id] = s
+				}
+				if seq := extractSeq(entry); seq > 0 {
+					itemSeqs[id] = seq
 				}
 			}
 		}
@@ -699,6 +727,9 @@ func newSourceItemTerminal(ctx context.Context, src ObservationSource) itemTermi
 		stateOf: func(itemID string) (string, bool, error) {
 			s, ok := itemStates[itemID]
 			return s, ok, nil
+		},
+		seqOf: func(itemID string) int64 {
+			return itemSeqs[itemID]
 		},
 		isTerminal: func(state string) bool {
 			return state != "" && terminal[state]
@@ -824,6 +855,18 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 				}
 			} else {
 				newest = c.events[len(c.events)-1]
+				if isWindowedEventRule(r.When) {
+					cutoff := max(ep.last, lookup.terminalSeq(trackedID))
+					if newest.Seq <= cutoff {
+						if newest.Seq > ep.last {
+							memEp.lastObservedSeq = newest.Seq
+							memEp.lastObservedAt = now.UnixMilli()
+							memEp.observationCount++
+							memEp.conditionFingerprint = newest.fingerprint
+						}
+						continue
+					}
+				}
 				if newest.Seq > ep.last {
 					memEp.lastObservedSeq = newest.Seq
 					memEp.lastObservedAt = now.UnixMilli()

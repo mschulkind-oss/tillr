@@ -567,18 +567,326 @@ receiver = "foreground"
 			t.Fatalf("Source Pending while tracked = %+v (%v)", p, err)
 		}
 
-		// Missing item row reopens with tracked-item-closed ("missing").
+		// Missing item row on a windowed rule does not reopen until a new matching event is recorded.
 		delete(itemsProj, "item-1")
 		curNow = curNow.Add(time.Minute)
 		if _, err := e.EvaluateRules(ctx); err != nil {
 			t.Fatal(err)
 		}
+		if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
+			t.Fatalf("Source Pending after missing item without new event = %+v (%v), want empty", p, err)
+		}
+		curNow = curNow.Add(time.Minute)
+		src.append("gate.done", curNow, map[string]any{"check": "lint"})
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
 		p, err := e.Pending(ctx, "foreground")
 		if err != nil || len(p) != 1 || !strings.HasPrefix(p[0].Bundle.Guidance.Summary, "tracked fix item-1 closed and the condition persists: ") {
-			t.Fatalf("Source Pending after missing item = %+v (%v)", p, err)
+			t.Fatalf("Source Pending after post-close event = %+v (%v)", p, err)
 		}
 		if err := e.Track(ctx, "alrt-missing", "item-1", nil, nil); !errors.Is(err, ErrAlertNotFound) {
 			t.Fatalf("Source Track missing alert = %v, want ErrAlertNotFound", err)
+		}
+	})
+}
+
+func TestTrackWindowedRuleReopensOnlyAfterPostTerminalEvent(t *testing.T) {
+	register(t, "watch-test.fact")
+	ctx := context.Background()
+	now := time.Date(2026, 11, 22, 17, 16, 0, 0, time.UTC)
+
+	t.Run("windowed_predicate_and_count_wait_for_post_landing_event_while_present_state_reopens", func(t *testing.T) {
+		s := watchStore(t)
+		seedWatchItemsTable(t, s)
+		setWatchItemState(t, s, "fixer-revert", "in-queue")
+		setWatchItemState(t, s, "fixer-count", "in-queue")
+		setWatchItemState(t, s, "fixer-latch", "in-queue")
+		setWatchItemState(t, s, "fixer-stall", "in-queue")
+
+		doc := `[[rule]]
+id = "drain-revert-not-possible"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["watch-test.fact"]
+[rule.when]
+group_by = "landing"
+pattern = "predicate_match"
+match = 'event.result == "not-possible"'
+window = "1h"
+[rule.guidance]
+summary = "The drain could not revert landing {{subject}}."
+check = ["check revert"]
+do = ["fix trunk"]
+[rule.delivery]
+receiver = "foreground"
+
+[[rule]]
+id = "windowed-count"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["watch-test.fact"]
+[rule.when]
+group_by = "check"
+pattern = "count_in_window"
+match = 'event.slow == true'
+threshold = 1
+window = "1h"
+[rule.guidance]
+summary = "check {{subject}} was slow"
+check = ["check timing"]
+do = ["speed up"]
+[rule.delivery]
+receiver = "foreground"
+
+[[rule]]
+id = "present-state-latch"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["watch-test.fact"]
+[rule.when]
+group_by = "backend"
+pattern = "predicate_match"
+match = 'event.closed == true'
+clear_when = 'event.closed == false'
+[rule.guidance]
+summary = "backend {{subject}} is closed"
+check = ["check backend"]
+do = ["reopen backend"]
+[rule.delivery]
+receiver = "foreground"
+
+[[rule]]
+id = "present-state-stall"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["watch-test.fact"]
+[rule.when]
+group_by = "runner"
+pattern = "duration_without_event"
+after = 'event.phase == "started"'
+match = 'event.phase == "ended"'
+threshold_duration = "10m"
+window = "24h"
+[rule.guidance]
+summary = "runner {{subject}} stalled"
+check = ["check runner"]
+do = ["unstick runner"]
+[rule.delivery]
+receiver = "foreground"
+`
+		e := Evaluator{Store: s, Rules: watchRules(t, doc), Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		// Record original events inside the 1h window.
+		watchFact(t, s, now, `{"landing":"a42c74ee9196","result":"not-possible"}`)
+		watchFact(t, s, now, `{"check":"go-affected","slow":true}`)
+		watchFact(t, s, now, `{"backend":"pi","closed":true}`)
+		watchFact(t, s, now, `{"runner":"heavy","phase":"started"}`)
+		now = now.Add(15 * time.Minute)
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		initial, err := e.Pending(ctx, "foreground")
+		if err != nil || len(initial) != 4 {
+			t.Fatalf("initial Pending = %+v (%v), want 4 notices", initial, err)
+		}
+		through := initial[len(initial)-1].Seq
+		if err := e.Shown(ctx, "foreground", through); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Seen(ctx, "foreground", through); err != nil {
+			t.Fatal(err)
+		}
+
+		alerts := map[string]string{}
+		for _, n := range initial {
+			alerts[n.Bundle.RuleID] = n.AlertID
+		}
+		if err := e.Track(ctx, alerts["drain-revert-not-possible"], "fixer-revert", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Track(ctx, alerts["windowed-count"], "fixer-count", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Track(ctx, alerts["present-state-latch"], "fixer-latch", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Track(ctx, alerts["present-state-stall"], "fixer-stall", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+
+		// Land all tracked items 25 minutes after the original events (still inside the 1h window).
+		now = now.Add(10 * time.Minute)
+		setWatchItemState(t, s, "fixer-revert", "landed")
+		setWatchItemState(t, s, "fixer-count", "closed")
+		setWatchItemState(t, s, "fixer-latch", "landed")
+		setWatchItemState(t, s, "fixer-stall", "landed")
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		// Present-state rules (latch and duration_without_event) reopen immediately;
+		// windowed event rules (predicate_match with window, count_in_window) do NOT raise a notice.
+		afterLand, err := e.Pending(ctx, "foreground")
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotRules := map[string]Notice{}
+		for _, n := range afterLand {
+			gotRules[n.Bundle.RuleID] = n
+		}
+		if len(gotRules) != 2 || gotRules["present-state-latch"].AlertID == "" || gotRules["present-state-stall"].AlertID == "" {
+			t.Fatalf("after landing with original events in window, Pending rules = %+v, want only present-state-latch and present-state-stall", gotRules)
+		}
+		if _, bad := gotRules["drain-revert-not-possible"]; bad {
+			t.Fatalf("windowed predicate_match falsely reopened without a post-landing event: %+v", gotRules["drain-revert-not-possible"])
+		}
+		if _, bad := gotRules["windowed-count"]; bad {
+			t.Fatalf("windowed count_in_window falsely reopened without a post-landing event: %+v", gotRules["windowed-count"])
+		}
+
+		through = afterLand[len(afterLand)-1].Seq
+		if err := e.Shown(ctx, "foreground", through); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Seen(ctx, "foreground", through); err != nil {
+			t.Fatal(err)
+		}
+
+		// Record new matching events after the tracked items landed/closed -> notices ARE raised!
+		now = now.Add(5 * time.Minute)
+		watchFact(t, s, now, `{"landing":"a42c74ee9196","result":"not-possible"}`)
+		watchFact(t, s, now, `{"check":"go-affected","slow":true}`)
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		afterNewEvent, err := e.Pending(ctx, "foreground")
+		if err != nil || len(afterNewEvent) != 2 {
+			t.Fatalf("Pending after post-landing matching events = %+v (%v), want 2 notices", afterNewEvent, err)
+		}
+		byRule := map[string]Notice{}
+		for _, n := range afterNewEvent {
+			byRule[n.Bundle.RuleID] = n
+		}
+		if got := byRule["drain-revert-not-possible"].Bundle.Guidance.Summary; got != "tracked fix fixer-revert landed and the condition persists: The drain could not revert landing a42c74ee9196." {
+			t.Fatalf("revert reopened summary = %q", got)
+		}
+		if got := byRule["windowed-count"].Bundle.Guidance.Summary; got != "tracked fix fixer-count closed and the condition persists: check go-affected was slow" {
+			t.Fatalf("count reopened summary = %q", got)
+		}
+	})
+
+	t.Run("event_seq_ignores_pre_landing_unobserved_repeat_and_window_expiry_resolves_quietly", func(t *testing.T) {
+		s := watchStore(t)
+		watchSQL(t, s, `CREATE TABLE IF NOT EXISTS items(item_id TEXT PRIMARY KEY, state TEXT, seat TEXT, waiting_on TEXT, event_seq INTEGER NOT NULL DEFAULT 0)`)
+		watchSQL(t, s, `INSERT INTO items(item_id, state, event_seq) VALUES('fixer-seq', 'in-queue', 0), ('fixer-expire', 'in-queue', 0)`)
+
+		doc := `[[rule]]
+id = "drain-revert-not-possible"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["watch-test.fact"]
+[rule.when]
+group_by = "landing"
+pattern = "predicate_match"
+match = 'event.result == "not-possible"'
+window = "1h"
+[rule.guidance]
+summary = "The drain could not revert landing {{subject}}."
+check = ["check revert"]
+do = ["fix trunk"]
+[rule.delivery]
+receiver = "foreground"
+`
+		curNow := now
+		e := Evaluator{Store: s, Rules: watchRules(t, doc), Clock: func() time.Time { return curNow }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		watchFact(t, s, curNow, `{"landing":"land-seq","result":"not-possible"}`)
+		watchFact(t, s, curNow, `{"landing":"land-expire","result":"not-possible"}`)
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		initial, err := e.Pending(ctx, "foreground")
+		if err != nil || len(initial) != 2 {
+			t.Fatalf("initial Pending = %+v (%v), want 2", initial, err)
+		}
+		through := initial[len(initial)-1].Seq
+		_ = e.Shown(ctx, "foreground", through)
+		_ = e.Seen(ctx, "foreground", through)
+
+		bySub := map[string]string{}
+		for _, n := range initial {
+			bySub[n.Bundle.Subject] = n.AlertID
+		}
+		if err := e.Track(ctx, bySub["land-seq"], "fixer-seq", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Track(ctx, bySub["land-expire"], "fixer-expire", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+
+		// A repeat arrives for land-seq BEFORE fixer-seq lands, without an evaluation in between.
+		curNow = curNow.Add(10 * time.Minute)
+		watchFact(t, s, curNow, `{"landing":"land-seq","result":"not-possible"}`)
+		// Now fixer-seq and fixer-expire land at a later event_seq.
+		curNow = curNow.Add(5 * time.Minute)
+		watchFact(t, s, curNow, `{"unrelated":true}`)
+		var landSeq int64
+		lifecycleRead(t, s, `SELECT MAX(seq) FROM events`, &landSeq)
+		watchSQL(t, s, fmt.Sprintf(`UPDATE items SET state='landed', event_seq=%d WHERE item_id IN ('fixer-seq', 'fixer-expire')`, landSeq))
+
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
+			t.Fatalf("Pending after pre-landing repeat + landing = %+v (%v), want empty", p, err)
+		}
+		var obsCount int64
+		lifecycleRead(t, s, fmt.Sprintf(`SELECT observation_count FROM alert_episodes WHERE alert_id=%q`, bySub["land-seq"]), &obsCount)
+		if obsCount != 2 {
+			t.Fatalf("pre-landing repeat observation_count = %d, want 2", obsCount)
+		}
+
+		// Record a new matching event for land-seq AFTER landSeq -> reopens!
+		curNow = curNow.Add(5 * time.Minute)
+		watchFact(t, s, curNow, `{"landing":"land-seq","result":"not-possible"}`)
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		p, err := e.Pending(ctx, "foreground")
+		if err != nil || len(p) != 1 || p[0].AlertID != bySub["land-seq"] {
+			t.Fatalf("Pending after post-landing event = %+v (%v), want land-seq only", p, err)
+		}
+		if !strings.HasPrefix(p[0].Bundle.Guidance.Summary, "tracked fix fixer-seq landed and the condition persists: ") {
+			t.Fatalf("unexpected summary: %q", p[0].Bundle.Guidance.Summary)
+		}
+		_ = e.Shown(ctx, "foreground", p[0].Seq)
+		_ = e.Seen(ctx, "foreground", p[0].Seq)
+
+		// Advance past the 1h window with no new event for land-expire -> resolves quietly!
+		curNow = curNow.Add(2 * time.Hour)
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
+			t.Fatalf("Pending after window expiry = %+v (%v), want empty", p, err)
+		}
+		var state, reason string
+		lifecycleRead(t, s, fmt.Sprintf(`SELECT state, resolved_reason FROM alert_episodes WHERE alert_id=%q`, bySub["land-expire"]), &state, &reason)
+		if state != "resolved" || reason != "condition-cleared" {
+			t.Fatalf("land-expire after window expiry: state=%q reason=%q, want resolved/condition-cleared", state, reason)
 		}
 	})
 }

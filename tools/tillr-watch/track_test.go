@@ -156,16 +156,24 @@ func TestWatchTrackAndAckWithItemWaitEndToEnd(t *testing.T) {
 		}
 	}
 
-	// Now item-slice-d lands while the condition on go-affected is STILL true!
-	// Commit the state change + a store event to wake the WAL watcher.
+	// Now item-slice-d lands while the earlier go-affected events are still in the window.
+	// An unrelated event must NOT wake wait because no new matching event occurred after landing.
 	seedCLIItems(t, s, map[string]string{"item-slice-d": "landed"})
 	fact(t, s, `{"item_id":"unrelated-single"}`)
+	select {
+	case r := <-waitDone:
+		t.Fatalf("wait exited after tracked item landed with no new matching event: %+v", r)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// Recording a new matching event after item-slice-d landed wakes wait with the persistence notice.
+	fact(t, s, `{"item_id":"go-affected"}`)
 
 	var woke waitRes
 	select {
 	case woke = <-waitDone:
 	case <-time.After(3 * time.Second):
-		t.Fatal("wait did not wake when tracked item landed while condition persisted")
+		t.Fatal("wait did not wake when matching event occurred after tracked item landed")
 	}
 	if woke.code != 0 || woke.err != "" {
 		t.Fatalf("wake on landed fix: %+v", woke)
