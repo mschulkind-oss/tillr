@@ -236,8 +236,8 @@ SLOT_CLASS_REPAIR = 'repair'
 SLOT_CLASSES = (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF, SLOT_CLASS_GATE, SLOT_CLASS_REPAIR)
 _CLASS_PRIORITY = {
     SLOT_CLASS_REPAIR: 0,
-    SLOT_CLASS_GATE: 1,
-    SLOT_CLASS_PROOF: 2,
+    SLOT_CLASS_PROOF: 1,
+    SLOT_CLASS_GATE: 2,
     SLOT_CLASS_ORDINARY: 3,
 }
 _WAIT_TICKET_SEQ = itertools.count()
@@ -267,14 +267,14 @@ def default_shard_limit():
 
 
 def default_gate_shard_limit(ordinary_limit=None):
-    """Reserved slots only gate runs may take when ordinary and proof slots are full."""
+    """Reserved slots only gate and repair runs may take when ordinary slots are full."""
     limit = max(1, default_shard_limit() if ordinary_limit is None else ordinary_limit)
     spare = max(0, (os.cpu_count() or 1) - limit)
     return min(spare, 6, (limit + 1) // 2)
 
 
 def default_proof_shard_limit(ordinary_limit=None, gate_limit=None):
-    """Reserved slots proof and gate runs may take when ordinary slots are full."""
+    """Reserved slots only proof and repair runs may take when ordinary slots are full."""
     limit = max(1, default_shard_limit() if ordinary_limit is None else ordinary_limit)
     gate = (default_gate_shard_limit(limit) if gate_limit is None
             else max(0, gate_limit))
@@ -594,18 +594,19 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                        gate_reserved_limit=None, holder=None, label=None):
     """Acquire one slot from a counted flock pool under lock_dir; wait without timeout.
 
-    Priority order is `repair > gate > proof > ordinary`, and waiters within the same
+    Priority order is `repair > proof > gate > ordinary`, and waiters within the same
     priority class are served in the order their wait began (FIFO):
     - `ordinary` callers take only `slot-0..limit-1` and yield while any higher-priority
       caller or earlier ordinary waiter is ahead of them.
-    - `proof` callers try `slot-*` then `proof-0..`, yield to `repair`, `gate`, and earlier
-      `proof` waiters, and hold a shared lock on `proof-waiting.lock` while waiting.
     - `gate` callers cap their simultaneous slots per gate (`max_slots`, default 8) and their
       simultaneous reserved `gate-*` locks (`gate_reserved_limit`, default 4), try `slot-*`
-      then `proof-*` then `gate-*`, yield to `repair` and earlier `gate` waiters, and hold a
-      shared lock on `gate-waiting.lock` while waiting.
+      then `gate-*` (never `proof-*`), yield `slot-*` to `repair`, `proof`, and earlier `gate`
+      waiters, and hold a shared lock on `gate-waiting.lock` while waiting.
+    - `proof` callers try `slot-*` then `proof-0..`, yield to `repair` and earlier `proof`
+      waiters, and hold a shared lock on `proof-waiting.lock` while waiting.
     - `repair` callers (revert and trunk-fixer gates) take `slot-*`, `proof-*`, or `gate-*`
-      ahead of ordinary candidates, with FIFO order among simultaneous trunk repairs.
+      ahead of proof, gate, and ordinary callers, with FIFO order among simultaneous trunk
+      repairs.
     The wait is outside every deadline the runner applies, so it cannot fail the work.
     """
     limit = max(1, limit)
@@ -668,19 +669,19 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
 
         while fd is None:
             repair_waiting = (chosen_class != SLOT_CLASS_REPAIR and repair_caller_waiting(lock_dir))
-            gate_waiting = (chosen_class in (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF)
-                            and gate_caller_waiting(lock_dir))
-            proof_waiting = (chosen_class == SLOT_CLASS_ORDINARY and proof_caller_waiting(lock_dir))
+            proof_waiting = (chosen_class in (SLOT_CLASS_ORDINARY, SLOT_CLASS_GATE)
+                             and proof_caller_waiting(lock_dir))
+            gate_waiting = (chosen_class == SLOT_CLASS_ORDINARY and gate_caller_waiting(lock_dir))
             ahead_s = _waiter_ahead(wait_queue_dir, 's', my_priority, ticket_name)
-            yielding_s = repair_waiting or gate_waiting or proof_waiting or ahead_s is not None
+            yielding_s = repair_waiting or proof_waiting or gate_waiting or ahead_s is not None
             if not yielding_s:
                 fd, slot_name = try_lock_slot(lock_dir, 'slot', limit, offset)
                 if fd is not None:
                     preempted_s = (
                         (chosen_class != SLOT_CLASS_REPAIR and repair_caller_waiting(lock_dir))
-                        or (chosen_class in (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF)
-                            and gate_caller_waiting(lock_dir))
-                        or (chosen_class == SLOT_CLASS_ORDINARY and proof_caller_waiting(lock_dir))
+                        or (chosen_class in (SLOT_CLASS_ORDINARY, SLOT_CLASS_GATE)
+                            and proof_caller_waiting(lock_dir))
+                        or (chosen_class == SLOT_CLASS_ORDINARY and gate_caller_waiting(lock_dir))
                         or _waiter_ahead(wait_queue_dir, 's', my_priority, ticket_name) is not None
                     )
                     if preempted_s:
@@ -689,22 +690,21 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                         slot_name = None
                         repair_waiting = (chosen_class != SLOT_CLASS_REPAIR
                                           and repair_caller_waiting(lock_dir))
-                        gate_waiting = (chosen_class in (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF)
-                                        and gate_caller_waiting(lock_dir))
-                        proof_waiting = (chosen_class == SLOT_CLASS_ORDINARY
+                        proof_waiting = (chosen_class in (SLOT_CLASS_ORDINARY, SLOT_CLASS_GATE)
                                          and proof_caller_waiting(lock_dir))
+                        gate_waiting = (chosen_class == SLOT_CLASS_ORDINARY
+                                        and gate_caller_waiting(lock_dir))
                         ahead_s = _waiter_ahead(wait_queue_dir, 's', my_priority, ticket_name)
-                        yielding_s = repair_waiting or gate_waiting or proof_waiting or ahead_s is not None
+                        yielding_s = repair_waiting or proof_waiting or gate_waiting or ahead_s is not None
 
-            if (fd is None and chosen_class in (SLOT_CLASS_PROOF, SLOT_CLASS_GATE, SLOT_CLASS_REPAIR)
+            if (fd is None and chosen_class in (SLOT_CLASS_PROOF, SLOT_CLASS_REPAIR)
                     and reserved_proof > 0):
                 ahead_p = _waiter_ahead(wait_queue_dir, 'p', my_priority, ticket_name)
-                if not (repair_waiting or gate_waiting or ahead_p is not None):
+                if not (repair_waiting or ahead_p is not None):
                     fd, slot_name = try_lock_slot(lock_dir, 'proof', reserved_proof, offset)
                     if fd is not None:
                         preempted_p = (
                             (chosen_class != SLOT_CLASS_REPAIR and repair_caller_waiting(lock_dir))
-                            or (chosen_class == SLOT_CLASS_PROOF and gate_caller_waiting(lock_dir))
                             or _waiter_ahead(wait_queue_dir, 'p', my_priority, ticket_name) is not None
                         )
                         if preempted_p:
@@ -751,7 +751,7 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                 break
 
             desired_pools = 's'
-            if chosen_class in (SLOT_CLASS_PROOF, SLOT_CLASS_GATE, SLOT_CLASS_REPAIR) and reserved_proof > 0:
+            if chosen_class in (SLOT_CLASS_PROOF, SLOT_CLASS_REPAIR) and reserved_proof > 0:
                 desired_pools += 'p'
             if reserved_gate > 0 and (
                 chosen_class == SLOT_CLASS_REPAIR
@@ -802,7 +802,7 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                     )
                 elif chosen_class == SLOT_CLASS_GATE:
                     pool_desc = (
-                        f'all {limit} ordinary, {reserved_proof} proof, and eligible gate slots '
+                        f'all {limit} ordinary and eligible gate slots '
                         f'({min(effective_gate_reserved, reserved_gate)}/{reserved_gate} per-gate cap) '
                         f'in {lock_dir}'
                     )
@@ -810,13 +810,15 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                     pool_desc = f'all {limit} ordinary and {reserved_proof} proof slots in {lock_dir}'
                 else:
                     pool_desc = f'ordinary share ({limit} slots) in {lock_dir}'
-                if repair_waiting or ahead_s == _CLASS_PRIORITY[SLOT_CLASS_REPAIR]:
+                if repair_waiting or (ahead_s == _CLASS_PRIORITY[SLOT_CLASS_REPAIR]
+                                      and chosen_class != SLOT_CLASS_REPAIR):
                     why = 'yielding to a waiting trunk-repair run; '
-                elif gate_waiting or ahead_s == _CLASS_PRIORITY[SLOT_CLASS_GATE]:
-                    why = 'yielding to a waiting gate run; '
                 elif proof_waiting or (ahead_s == _CLASS_PRIORITY[SLOT_CLASS_PROOF]
-                                       and chosen_class == SLOT_CLASS_ORDINARY):
+                                       and chosen_class in (SLOT_CLASS_GATE, SLOT_CLASS_ORDINARY)):
                     why = 'yielding to a waiting proof run; '
+                elif gate_waiting or (ahead_s == _CLASS_PRIORITY[SLOT_CLASS_GATE]
+                                      and chosen_class == SLOT_CLASS_ORDINARY):
+                    why = 'yielding to a waiting gate run; '
                 elif ahead_s is not None:
                     why = 'waiting behind an earlier waiter; '
                 else:
@@ -1161,8 +1163,8 @@ def main():
     parser.add_argument('--lock-dir', type=Path, help='shared lock directory; defaults to $GO_TEST_SHARDS_LOCK_DIR, then <GOCACHE>/go-test-shards-locks')
     parser.add_argument('--slot-class', choices=SLOT_CLASSES, default=None,
                         help='slot pool class: repair (revert and trunk-fixer gates; preempts all others), '
-                             'gate (landing gates; preempts proof and ordinary), '
-                             'proof (trunk proof; preempts ordinary), or ordinary (default, or $GO_TEST_SHARDS_CLASS)')
+                             'proof (trunk proof; preempts gate and ordinary), '
+                             'gate (landing gates; preempts ordinary), or ordinary (default, or $GO_TEST_SHARDS_CLASS)')
     parser.add_argument('--max-slots', type=int, default=None, metavar='N',
                         help=f'maximum simultaneous slots held by this run (default {DEFAULT_GATE_MAX_SLOTS} for --slot-class gate; unlimited otherwise)')
     parser.add_argument('--holder', default=None,

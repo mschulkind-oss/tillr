@@ -1091,7 +1091,7 @@ def run_selected_tests(
 
     base_env = build_env()
     slot_class = (
-        shards_mod.resolve_slot_class(os.environ.get("GO_TEST_SHARDS_CLASS") or shards_mod.SLOT_CLASS_PROOF)
+        shards_mod.resolve_slot_class(os.environ.get("GO_TEST_SHARDS_CLASS") or shards_mod.SLOT_CLASS_GATE)
         if shards_mod is not None
         else None
     )

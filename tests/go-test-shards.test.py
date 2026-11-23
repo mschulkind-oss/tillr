@@ -735,7 +735,7 @@ func hold(t *testing.T) {{
             with shards.acquire_shard_slot(lock_dir, 1, holder='run-eisdir'):
                 pass
 
-    def test_sibling_gate_gets_free_reserved_slots_and_preempts_proof_and_ordinary(self):
+    def test_sibling_gate_gets_free_reserved_slots_and_proof_preempts_gate_and_ordinary(self):
         lock_dir = self.root / 'gate-pool'
         trace_dir = self.root / 'gate-trace'
         trace_dir.mkdir()
@@ -768,6 +768,7 @@ func hold(t *testing.T) {{
         gate2_release = None
         ord_wait_release = None
         prf_wait_release = None
+        prf2_wait_release = None
         env_ctx = patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)})
         cpu_ctx = patch.object(os, 'cpu_count', return_value=32)
         env_ctx.start()
@@ -866,53 +867,55 @@ func hold(t *testing.T) {{
                 self.assertTrue(evt.wait(30))
             self.assertEqual(gate2_imm_notices, [])
 
-            # 4. A 3rd shard of gate:run-2 waits on gate-waiting.lock and preempts the next freed
-            #    slot-* ahead of both waiting proof and waiting ordinary callers.
+            # 4. A 3rd shard of gate:run-2 waits on gate-waiting.lock; waiting proof callers
+            #    still get freed proof-* and slot-* slots ahead of both gate and ordinary.
             gate2_wait_started = threading.Event()
             gate2_wait_acquired = threading.Event()
             start_holder(
                 'gate', 'gate:run-2', gate2_wait_acquired, gate2_release,
-                label='gate2-preempt-slot', notify=lambda _m: gate2_wait_started.set(),
+                label='gate2-preempt-ordinary', notify=lambda _m: gate2_wait_started.set(),
             )
             self.assertTrue(gate2_wait_started.wait(30))
             self.assertTrue(shards.gate_caller_waiting(lock_dir))
             self.assertFalse(gate2_wait_acquired.is_set())
 
-            worker_releases[0].set()
-            threads[0].join(30)
-            self.assertTrue(gate2_wait_acquired.wait(30))
-            self.assertFalse(prf_wait_acquired.is_set())
-            self.assertFalse(ord_wait_acquired.is_set())
-
-            # 4b. A 4th shard of gate:run-2 also preempts a freed proof-* slot ahead of waiting
-            #     proof and ordinary callers.
-            gate2_proof_wait_started = threading.Event()
-            gate2_proof_wait_acquired = threading.Event()
-            start_holder(
-                'gate', 'gate:run-2', gate2_proof_wait_acquired, gate2_release,
-                label='gate2-preempt-proof', notify=lambda _m: gate2_proof_wait_started.set(),
-            )
-            self.assertTrue(gate2_proof_wait_started.wait(30))
-            self.assertTrue(shards.gate_caller_waiting(lock_dir))
             proof_releases[0].set()
             threads[12].join(30)
-            self.assertTrue(gate2_proof_wait_acquired.wait(30))
-            self.assertFalse(prf_wait_acquired.is_set())
+            self.assertTrue(prf_wait_acquired.wait(30))
+            self.assertFalse(gate2_wait_acquired.is_set())
             self.assertFalse(ord_wait_acquired.is_set())
 
-            # 5. Once no gate caller is waiting, the next freed slot-* goes to proof ahead of ordinary,
-            #    and the third freed slot-* goes to ordinary.
-            self.assertFalse(shards.gate_caller_waiting(lock_dir))
+            # 4b. A second proof waiter arriving after gate:run-2 is already waiting still
+            #     preempts the next freed slot-* ahead of gate:run-2 and ordinary.
+            prf2_wait_started = threading.Event()
+            prf2_wait_acquired = threading.Event()
+            prf2_wait_release = threading.Event()
+            start_holder(
+                'proof', 'trunk-proof-waiter-2', prf2_wait_acquired, prf2_wait_release,
+                label='proof2-preempt-gate', notify=lambda _m: prf2_wait_started.set(),
+            )
+            self.assertTrue(prf2_wait_started.wait(30))
+            self.assertTrue(shards.proof_caller_waiting(lock_dir))
+            worker_releases[0].set()
+            threads[0].join(30)
+            self.assertTrue(prf2_wait_acquired.wait(30))
+            self.assertFalse(gate2_wait_acquired.is_set())
+            self.assertFalse(ord_wait_acquired.is_set())
+
+            # 5. Once no proof caller is waiting, the next freed slot-* goes to gate ahead of
+            #    ordinary, and the third freed slot-* goes to ordinary.
+            self.assertFalse(shards.proof_caller_waiting(lock_dir))
             worker_releases[1].set()
             threads[1].join(30)
-            self.assertTrue(prf_wait_acquired.wait(30))
+            self.assertTrue(gate2_wait_acquired.wait(30))
             self.assertFalse(ord_wait_acquired.is_set())
-            prf_wait_release.set()
 
             worker_releases[2].set()
             threads[2].join(30)
             self.assertTrue(ord_wait_acquired.wait(30))
             ord_wait_release.set()
+            prf2_wait_release.set()
+            prf_wait_release.set()
 
             rows = [json.loads(line)
                     for line in (trace_dir / 'slot-waits.jsonl').read_text().splitlines()
@@ -923,19 +926,19 @@ func hold(t *testing.T) {{
                 self.assertEqual(imm_row['class'], 'gate')
                 self.assertEqual(imm_row['waited_ms'], 0)
                 self.assertTrue(imm_row['slot'].startswith('gate-'), imm_row)
-            preempt_row = by_label['gate2-preempt-slot']
+            proof2_row = by_label['proof2-preempt-gate']
+            self.assertEqual(proof2_row['class'], 'proof')
+            self.assertGreater(proof2_row['waited_ms'], 0)
+            self.assertTrue(proof2_row['slot'].startswith('slot-'), proof2_row)
+            preempt_row = by_label['gate2-preempt-ordinary']
             self.assertEqual(preempt_row['class'], 'gate')
             self.assertGreater(preempt_row['waited_ms'], 0)
             self.assertTrue(preempt_row['slot'].startswith('slot-'), preempt_row)
-            preempt_proof_row = by_label['gate2-preempt-proof']
-            self.assertEqual(preempt_proof_row['class'], 'gate')
-            self.assertGreater(preempt_proof_row['waited_ms'], 0)
-            self.assertTrue(preempt_proof_row['slot'].startswith('proof-'), preempt_proof_row)
             if errors:
                 raise errors[0]
         finally:
             for evt in (*worker_releases, *proof_releases, gate1_release, gate2_release,
-                        ord_wait_release, prf_wait_release):
+                        ord_wait_release, prf_wait_release, prf2_wait_release):
                 if evt is not None:
                     evt.set()
             for thread in threads:
@@ -1613,32 +1616,32 @@ func TestSecond(t *testing.T) {
                 holder='gate:run-initial',
             ))
 
-            # Ordinary candidates' gates begin waiting first, plus an ordinary lane worker on a fixer item.
-            ord1_w, ord1_a, ord1_r = start_waiter('gate:run-item-1', slot_class='proof')
-            self.assertTrue(ord1_w.wait(30))
-            ord2_w, ord2_a, ord2_r = start_waiter('gate:run-item-2', slot_class='proof')
-            self.assertTrue(ord2_w.wait(30))
-            gate_w, gate_a, gate_r = start_waiter('gate:run-item-3', slot_class='gate')
-            self.assertTrue(gate_w.wait(30))
+            # Candidate gates begin waiting first, plus a trunk proof and an ordinary lane worker.
+            cand1_w, cand1_a, cand1_r = start_waiter('gate:run-item-1', slot_class='gate')
+            self.assertTrue(cand1_w.wait(30))
+            cand2_w, cand2_a, cand2_r = start_waiter('gate:run-item-2', slot_class='gate')
+            self.assertTrue(cand2_w.wait(30))
+            proof_w, proof_a, proof_r = start_waiter('trunk-proof', slot_class='proof')
+            self.assertTrue(proof_w.wait(30))
             worker_w, worker_a, worker_r = start_waiter('run-fixer-main-deadbeef1234-a1-n1', slot_class='ordinary')
             self.assertTrue(worker_w.wait(30))
 
-            # Revert and trunk-fixer gates arrive AFTER the ordinary candidates are already waiting.
-            rev_w, rev_a, rev_r = start_waiter('gate:run-revert-dd17e3283fd1-d5f5f41a7e57', slot_class='proof')
+            # Revert and trunk-fixer gates arrive AFTER the candidate gates and trunk proof are waiting.
+            rev_w, rev_a, rev_r = start_waiter('gate:run-revert-dd17e3283fd1-d5f5f41a7e57', slot_class='gate')
             self.assertTrue(rev_w.wait(30))
             self.assertTrue(shards.repair_caller_waiting(lock_dir))
-            fix_w, fix_a, fix_r = start_waiter('gate:run-fixer-main-dd17e3283fd1-a1-n1', slot_class='proof')
+            fix_w, fix_a, fix_r = start_waiter('gate:run-fixer-main-dd17e3283fd1-a1-n1', slot_class='gate')
             self.assertTrue(fix_w.wait(30))
 
-            # Release the initial slot; revert goes first, then trunk fixer, then gate-runner,
-            # then ordinary candidates in arrival order, then the ordinary lane worker last.
+            # Release the initial slot; revert goes first, then trunk fixer, then trunk proof,
+            # then candidate gates in arrival order, then the ordinary lane worker last.
             blocker.close()
             expected = [
                 ('gate:run-revert-dd17e3283fd1-d5f5f41a7e57', rev_a, rev_r),
                 ('gate:run-fixer-main-dd17e3283fd1-a1-n1', fix_a, fix_r),
-                ('gate:run-item-3', gate_a, gate_r),
-                ('gate:run-item-1', ord1_a, ord1_r),
-                ('gate:run-item-2', ord2_a, ord2_r),
+                ('trunk-proof', proof_a, proof_r),
+                ('gate:run-item-1', cand1_a, cand1_r),
+                ('gate:run-item-2', cand2_a, cand2_r),
                 ('run-fixer-main-deadbeef1234-a1-n1', worker_a, worker_r),
             ]
             for idx, (name, acquired, release) in enumerate(expected):
@@ -1657,11 +1660,114 @@ func TestSecond(t *testing.T) {
         self.assertEqual(order, [
             'gate:run-revert-dd17e3283fd1-d5f5f41a7e57',
             'gate:run-fixer-main-dd17e3283fd1-a1-n1',
-            'gate:run-item-3',
+            'trunk-proof',
             'gate:run-item-1',
             'gate:run-item-2',
             'run-fixer-main-deadbeef1234-a1-n1',
         ])
+
+    def test_proof_gets_reserved_slot_immediately_and_outranks_waiting_gates(self):
+        lock_dir = self.root / 'proof-over-gate'
+        trace_dir = self.root / 'proof-over-gate-trace'
+        trace_dir.mkdir()
+        errors = []
+        threads = []
+
+        def start_holder(slot_class, holder_name, acquired_evt, release_evt, *, label=None,
+                         notify=None):
+            def body():
+                try:
+                    with shards.acquire_shard_slot(
+                        lock_dir, 2, notify=notify, slot_class=slot_class,
+                        proof_limit=1, gate_limit=1, holder=holder_name, label=label,
+                    ):
+                        acquired_evt.set()
+                        assert release_evt.wait(60)
+                except BaseException as exc:
+                    errors.append(exc)
+                    acquired_evt.set()
+                    raise
+
+            thread = threading.Thread(target=body)
+            thread.start()
+            threads.append(thread)
+            return thread
+
+        gate_releases = [threading.Event() for _ in range(3)]
+        gate_wait_release = threading.Event()
+        proof1_release = threading.Event()
+        proof2_release = threading.Event()
+        with patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)}):
+            try:
+                # 1. Candidate gates hold every ordinary slot (slot-0, slot-1) and the gate slot (gate-0).
+                gate_acquired = [threading.Event() for _ in range(3)]
+                for idx in range(3):
+                    start_holder('gate', f'gate:run-{idx + 1}', gate_acquired[idx], gate_releases[idx])
+                for evt in gate_acquired:
+                    self.assertTrue(evt.wait(30))
+
+                holders = shards.read_slot_holders(lock_dir)
+                self.assertEqual(len(holders), 3)
+                self.assertTrue(all(h['class'] == 'gate' for h in holders), holders)
+                self.assertFalse(any(h['slot'].startswith('proof-') for h in holders), holders)
+                self.assertEqual({h['slot'] for h in holders}, {'slot-0', 'slot-1', 'gate-0'})
+
+                # 2. A fourth candidate gate waits because ordinary and gate slots are full.
+                gate_wait_started = threading.Event()
+                gate_wait_acquired = threading.Event()
+                start_holder(
+                    'gate', 'gate:run-wait', gate_wait_acquired, gate_wait_release,
+                    label='gate-waiter', notify=lambda _m: gate_wait_started.set(),
+                )
+                self.assertTrue(gate_wait_started.wait(30))
+                self.assertTrue(shards.gate_caller_waiting(lock_dir))
+                self.assertFalse(gate_wait_acquired.is_set())
+
+                # 3. A proof suite arriving later immediately acquires proof-0 without waiting.
+                proof1_notices = []
+                proof1_acquired = threading.Event()
+                start_holder(
+                    'proof', 'trunk-proof', proof1_acquired, proof1_release,
+                    label='proof-imm', notify=proof1_notices.append,
+                )
+                self.assertTrue(proof1_acquired.wait(30))
+                self.assertEqual(proof1_notices, [])
+
+                # 4. A second proof shard waits after gate:run-wait is already waiting; releasing an
+                #    ordinary slot serves the waiting proof ahead of the waiting candidate gate.
+                proof2_wait_started = threading.Event()
+                proof2_acquired = threading.Event()
+                start_holder(
+                    'proof', 'trunk-proof', proof2_acquired, proof2_release,
+                    label='proof-waiter', notify=lambda _m: proof2_wait_started.set(),
+                )
+                self.assertTrue(proof2_wait_started.wait(30))
+                self.assertTrue(shards.proof_caller_waiting(lock_dir))
+
+                slot0_holder = next(h['run'] for h in holders if h['slot'] == 'slot-0')
+                slot0_idx = int(slot0_holder.rsplit('-', 1)[1]) - 1
+                gate_releases[slot0_idx].set()
+                threads[slot0_idx].join(30)
+
+                self.assertTrue(proof2_acquired.wait(30))
+                self.assertFalse(gate_wait_acquired.is_set())
+
+                proof2_release.set()
+                self.assertTrue(gate_wait_acquired.wait(30))
+            finally:
+                for evt in (*gate_releases, gate_wait_release, proof1_release, proof2_release):
+                    evt.set()
+                for thread in threads:
+                    thread.join(30)
+        if errors:
+            raise errors[0]
+        rows = [json.loads(line)
+                for line in (trace_dir / 'slot-waits.jsonl').read_text().splitlines()
+                if line.strip()]
+        by_label = {row['label']: row for row in rows if 'label' in row}
+        self.assertEqual(by_label['proof-imm']['slot'], 'proof-0')
+        self.assertEqual(by_label['proof-imm']['waited_ms'], 0)
+        self.assertEqual(by_label['proof-waiter']['slot'], 'slot-0')
 
 
 if __name__ == '__main__':
