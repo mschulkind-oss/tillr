@@ -2,7 +2,10 @@
 """Tests for tools/gate/go_affected.py, go-test-edges.json, and fork-check integration."""
 from __future__ import annotations
 
+import argparse
 import atexit
+from collections.abc import Callable
+import contextlib
 import fcntl
 import functools
 import importlib.util
@@ -12,12 +15,15 @@ from pathlib import Path
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import traceback
 from unittest.mock import patch
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -82,7 +88,7 @@ def test_subreaper_reaps_orphans_while_command_runs() -> None:
     """Reparented grandchildren must be reaped while the guarded command is still running."""
     if not sys.platform.startswith("linux") or not Path("/proc").is_dir():
         return
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(prefix="go-affected-subreaper-", dir=scratch_root()) as tmp:
         tmp_path = Path(tmp)
         code = """import os, sys, time
 from pathlib import Path
@@ -668,6 +674,7 @@ def test_edge_cache_invalidation() -> None:
         sib_main = repo / "tools" / "tillr-sib" / "main.go"
         sib_main.write_text('package main\nimport "fmt"\nfunc main() { fmt.Println("ok") }\n')
 
+        nonce = _fresh_nonce()
         (repo / "tools" / "tillr-consumer" / "go.mod").write_text(
             "module github.com/mschulkind-oss/tillr-consumer\n\ngo 1.22\n"
         )
@@ -681,6 +688,7 @@ def test_edge_cache_invalidation() -> None:
             '  "testing"\n'
             ')\n'
             'func TestEdgeInputs(t *testing.T) {\n'
+            f'  if t.Name() == "{nonce}" {{ t.Fatal() }}\n'
             '  _ = os.Getenv("TILLR_GATE_EDGE_INPUTS")\n'
             '}\n'
             'func TestBuildsEdge(t *testing.T) {\n'
@@ -708,11 +716,15 @@ def test_edge_cache_invalidation() -> None:
         }))
 
         ev_file = Path(tmp) / "evidence.json"
+        durable = Path(tmp) / "durable"
+        durable.mkdir()
         lock_dir = Path(tmp) / "locks"
+        gocache = _shared_gocache()
 
         def run_once(changed: list[str]) -> tuple[int, str, dict]:
             with patch.dict(os.environ, {
-                "GOCACHE": str(Path(tmp) / "gocache"),
+                "GOCACHE": str(gocache),
+                "YOLO_DURABLE_DIR": str(durable),
                 "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
             }):
                 sel = go_affected.select_affected_packages(repo, changed)
@@ -787,7 +799,12 @@ def test_failed_module_floor_fallback() -> None:
             and p["reason"] == "floor"
             for p in sel["selected"]
         ), sel
-        rc, out, _ev = go_affected.run_selected_tests(repo, sel)
+        with patch.dict(os.environ, {
+            "GOCACHE": str(_shared_gocache()),
+            "YOLO_DURABLE_DIR": str(Path(tmp) / "durable"),
+            "GO_TEST_SHARDS_LOCK_DIR": str(Path(tmp) / "locks"),
+        }):
+            rc, out, _ev = go_affected.run_selected_tests(repo, sel)
         assert rc != 0, f"expected nonzero rc on broken module, got 0:\n{out}"
 
 
@@ -832,9 +849,10 @@ def test_fork_check_integration(root_graph: dict) -> None:
         trunk_changed = subprocess.check_output(
             ["git", "ls-files"], cwd=ROOT, text=True
         ).splitlines()
+        series = fork_check.read_series(ROOT)
         for via_build_plan in (True, False):
             rolling = fork_check.build_plan(
-                ROOT, fork_check.read_series(ROOT), fork_check.Record(state),
+                ROOT, series, fork_check.Record(state),
                 trunk_changed, "--all", True, audit_upstreams=False,
                 tier=fork_check.TIER_ROLLING if via_build_plan else None,
             )
@@ -914,9 +932,10 @@ def test_fork_check_integration(root_graph: dict) -> None:
         (repo / "tools" / "tillr-watch" / "go.mod").write_text(
             "module github.com/mschulkind-oss/tillr-watch\n\ngo 1.22\n"
         )
+        nonce = _fresh_nonce()
         (repo / "tools" / "tillr-watch" / "main.go").write_text("package main\nfunc main() {}\n")
         (repo / "tools" / "tillr-watch" / "main_test.go").write_text(
-            'package main\n\nimport "testing"\n\nfunc TestWatch(t *testing.T) {}\n'
+            f'package main\n\nimport "testing"\n\nfunc TestWatch(t *testing.T) {{ if t.Name() == "{nonce}" {{ t.Fatal() }} }}\n'
         )
         git_env = {
             **os.environ,
@@ -932,64 +951,60 @@ def test_fork_check_integration(root_graph: dict) -> None:
         subprocess.run(["git", "add", "."], cwd=repo, env=git_env, check=True)
         subprocess.run(["git", "commit", "-qm", "change"], cwd=repo, env=git_env, check=True)
 
-        explain_full = subprocess.run(
+        p_full = subprocess.Popen(
             [sys.executable, "tools/fork-check.py", "--explain", "--since", "HEAD~1"],
-            cwd=repo,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            cwd=repo, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        assert explain_full.returncode == 0, explain_full.stderr
-        assert "would run  go-affected " not in explain_full.stdout, explain_full.stdout
-        assert "would not run          go-affected (affected tillr Go test packages pass)" in explain_full.stdout, (
-            explain_full.stdout
-        )
-        explain_rolling = subprocess.run(
+        p_rolling = subprocess.Popen(
             [sys.executable, "tools/fork-check.py", "--explain", "--all", "--tier", "rolling"],
-            cwd=repo,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            cwd=repo, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        assert explain_rolling.returncode == 0, explain_rolling.stderr
-        assert "would run  go-affected " not in explain_rolling.stdout, explain_rolling.stdout
-        assert "would skip" not in explain_rolling.stdout, explain_rolling.stdout
-        assert "would not run          go-affected (affected tillr Go test packages pass)" in explain_rolling.stdout, (
-            explain_rolling.stdout
-        )
-        assert "does not apply on the rolling tier because whole Go module suites run fresh" in explain_rolling.stdout, (
-            explain_rolling.stdout
-        )
-        explain_landing = subprocess.run(
+        p_landing = subprocess.Popen(
             [sys.executable, "tools/fork-check.py", "--explain", "--tier", "landing", "--since", "HEAD~1"],
-            cwd=repo,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            cwd=repo, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        assert explain_landing.returncode == 0, explain_landing.stderr
-        assert "would run  go-affected " in explain_landing.stdout, explain_landing.stdout
+        p_reg = subprocess.Popen(
+            [sys.executable, str(ROOT / "tools" / "fork-check.py"), "--registry-json"],
+            cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        full_out, full_err = p_full.communicate(timeout=120)
+        roll_out, roll_err = p_rolling.communicate(timeout=120)
+        land_out, land_err = p_landing.communicate(timeout=120)
+        reg_out, reg_err = p_reg.communicate(timeout=120)
+
+        assert p_full.returncode == 0, full_err
+        assert "would run  go-affected " not in full_out, full_out
+        assert "would not run          go-affected (affected tillr Go test packages pass)" in full_out, full_out
+
+        assert p_rolling.returncode == 0, roll_err
+        assert "would run  go-affected " not in roll_out, roll_out
+        assert "would skip" not in roll_out, roll_out
+        assert "would not run          go-affected (affected tillr Go test packages pass)" in roll_out, roll_out
+        assert "does not apply on the rolling tier because whole Go module suites run fresh" in roll_out, roll_out
+
+        assert p_landing.returncode == 0, land_err
+        assert "would run  go-affected " in land_out, land_out
         landing_repo = fork_check.build_plan(
             repo, [], fork_check.Record(state), ["tools/tillr-watch/main.go"], None, True,
             tier=fork_check.TIER_LANDING,
         )
         landing_ga = next(c for c in landing_repo.checks if c.kind == "go-affected")
+        landing_env = {
+            **os.environ,
+            "GOCACHE": str(_shared_gocache()),
+            "YOLO_DURABLE_DIR": str(Path(tmp) / "durable"),
+            "GO_TEST_SHARDS_LOCK_DIR": str(Path(tmp) / "locks"),
+            "GO_TEST_SHARDS_CLASS": "ordinary",
+        }
         rc, out, _ = fork_check.run_landing_go_check(
-            repo, landing_ga, dict(os.environ), landing_ga.drop, None
+            repo, landing_ga, landing_env, landing_ga.drop, None
         )
         assert rc == 0, out
         assert "go-affected: 1 package(s)" in out, out
 
     # registry-json exports go-affected cleanly.
-    reg_res = subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "fork-check.py"), "--registry-json"],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert reg_res.returncode == 0, reg_res.stderr
-    reg = json.loads(reg_res.stdout)
+    assert p_reg.returncode == 0, reg_err
+    reg = json.loads(reg_out)
     assert any(d["id"] == "go-affected/affected-tillr-go-test-packages-pass" for d in reg["declarations"]), (
         [d["id"] for d in reg["declarations"]]
     )
@@ -1179,6 +1194,7 @@ def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
         (repo / "tools" / "tillr-conc").mkdir(parents=True)
         (repo / "tools" / "gate").mkdir(parents=True)
         (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}\n")
+        nonce = _fresh_nonce()
         (repo / "tools" / "tillr-conc" / "go.mod").write_text(
             "module github.com/mschulkind-oss/tillr-conc\n\ngo 1.22\n"
         )
@@ -1192,6 +1208,7 @@ def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
             '  "time"\n'
             ')\n'
             'func TestScratchIsolation(t *testing.T) {\n'
+            f'  if t.Name() == "{nonce}" {{ t.Fatal() }}\n'
             '  rec := map[string]string{\n'
             '    "durable": os.Getenv("YOLO_DURABLE_DIR"),\n'
             '    "tmpdir": os.Getenv("TMPDIR"),\n'
@@ -1227,7 +1244,8 @@ def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
         shared_durable = tmp_path / "shared-durable"
         shared_durable.mkdir()
         lock_dir = tmp_path / "locks"
-        gocache = tmp_path / "gocache"
+        gocache = _shared_gocache()
+        _precompile_go_test(repo / "tools" / "tillr-conc", gocache)
         out1, out2 = tmp_path / "out1.json", tmp_path / "out2.json"
         ready1, ready2 = tmp_path / "ready1", tmp_path / "ready2"
 
@@ -1281,20 +1299,83 @@ def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
         assert ev2["packages"][0]["cached"] is True, ev2
 
 
+def _fresh_nonce() -> str:
+    return uuid.uuid4().hex
+
+
 @functools.lru_cache(maxsize=1)
-def _shared_gocache() -> Path:
-    """Per-process GOCACHE so stdlib is compiled once instead of cold-building on every test."""
+def _default_go_env_gocache() -> str:
+    try:
+        return subprocess.check_output(["go", "env", "GOCACHE"], text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+def _resolve_writable_gocache(raw: str | None = None) -> Path | None:
+    cand = raw.strip() if raw is not None else os.environ.get("GOCACHE", "").strip()
+    if not cand:
+        cand = _default_go_env_gocache()
+    if not cand or cand == "off":
+        return None
+    path = Path(cand)
+    if not path.exists():
+        with contextlib.suppress(OSError):
+            path.mkdir(parents=True, exist_ok=True)
+    if path.is_dir() and os.access(path, os.W_OK):
+        return path
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def _fallback_gocache_dir() -> Path:
+    owner_pid = os.getpid()
     tmp = tempfile.TemporaryDirectory(prefix="go-affected-gocache-", dir=scratch_root())
-    atexit.register(tmp.cleanup)
+    atexit.register(lambda: tmp.cleanup() if os.getpid() == owner_pid else None)
     return Path(tmp.name)
 
 
+_fallback_warmed = False
+
+
+def _shared_gocache(*, warm_fallback: bool = True) -> Path:
+    """Return a writable GOCACHE, reusing the configured cache or warming one scratch fallback."""
+    resolved = _resolve_writable_gocache()
+    if resolved is not None:
+        return resolved
+    fb = _fallback_gocache_dir()
+    global _fallback_warmed
+    if warm_fallback and not _fallback_warmed:
+        with tempfile.TemporaryDirectory(prefix="go-affected-warm-", dir=scratch_root()) as tmp:
+            pkg = Path(tmp)
+            (pkg / "go.mod").write_text("module example.com/warm\n\ngo 1.22\n")
+            (pkg / "warm_test.go").write_text(
+                'package warm\n'
+                'import (\n'
+                '  _ "encoding/json"\n'
+                '  _ "fmt"\n'
+                '  _ "os"\n'
+                '  _ "os/exec"\n'
+                '  _ "path/filepath"\n'
+                '  _ "strings"\n'
+                '  _ "syscall"\n'
+                '  "testing"\n'
+                '  _ "time"\n'
+                ')\n'
+                'func TestWarm(t *testing.T) {}\n'
+            )
+            _precompile_go_test(pkg, fb)
+        _fallback_warmed = True
+    return fb
+
+
 def _precompile_go_test(pkg_dir: Path, gocache: Path) -> None:
-    """Warm GOCACHE with the compiled test binary so startup deadlines measure execution, not cold stdlib builds."""
+    """Warm GOCACHE with the compiled test binary under go_affected.build_env() flags."""
+    env = go_affected.build_env()
+    env["GOCACHE"] = str(gocache)
     subprocess.run(
         ["go", "test", "-c", "-o", os.devnull, "."],
         cwd=pkg_dir,
-        env={**os.environ, "GOCACHE": str(gocache)},
+        env=env,
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -1375,6 +1456,7 @@ def test_no_leftover_processes_after_check_finishes() -> None:
         drain_durable.mkdir()
         with go_affected.acquire_invocation_scratch(str(drain_durable), "drain-reap-test") as (sdir, out_dir):
             env = go_affected.build_env()
+            env["GOCACHE"] = str(gocache)
             env["YOLO_DURABLE_DIR"] = str(sdir)
             env["TMPDIR"] = str(sdir)
             rc, stdout = go_affected._run_guarded_command(
@@ -1627,6 +1709,7 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
         pids_dir = tmp_path / "pids"
         pids_dir.mkdir()
 
+        nonce = _fresh_nonce()
         (repo / "tools" / "tillr-scoped" / "go.mod").write_text(
             f"module {pkg}\n\ngo 1.22\n"
         )
@@ -1640,6 +1723,7 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
             '  "testing"\n'
             ')\n'
             'func TestEdgeInputs(t *testing.T) {\n'
+            f'  if t.Name() == "{nonce}" {{ t.Fatal() }}\n'
             '  if os.Getenv("TILLR_GATE_EDGE_INPUTS") == "" {\n'
             '    t.Fatal("missing TILLR_GATE_EDGE_INPUTS")\n'
             '  }\n'
@@ -1696,7 +1780,8 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
         durable = tmp_path / "durable"
         durable.mkdir()
         lock_dir = tmp_path / "locks"
-        gocache = tmp_path / "gocache"
+        gocache = _shared_gocache()
+        _precompile_go_test(repo / "tools" / "tillr-scoped", gocache)
 
         def run_scoped(changed: list[str], extra_env: dict[str, str] | None = None) -> tuple[int, str, dict]:
             env_patch = {
@@ -1792,7 +1877,7 @@ def test_go_affected_slot_wait_order_and_trunk_repair_priority() -> None:
     """Real go_affected.py gates competing for a shared ordinary slot run in arrival order,
     with revert and trunk-fixer gates served ahead of waiting ordinary candidates."""
     shards = load_module("go_test_shards_for_affected", ROOT / "tools" / "go-test-shards.py")
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(prefix="go-affected-slotorder-", dir=scratch_root()) as tmp:
         tmp_path = Path(tmp)
         repo = tmp_path / "repo"
         mod = repo / "tools" / "tillr-slotorder"
@@ -2158,25 +2243,239 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
                     proc.wait()
 
 
-def main() -> int:
+def _run_cases(
+    cases: list[tuple[str, Callable[[], None]]],
+    *,
+    max_workers: int,
+    emit=print,
+) -> int:
+    if not cases:
+        return 0
+    if max_workers <= 1 or not hasattr(os, "fork"):
+        rc_all = 0
+        for name, fn in cases:
+            t0 = time.monotonic()
+            try:
+                fn()
+            except BaseException:
+                rc_all = 1
+                emit(f"FAIL {name} ({time.monotonic() - t0:.2f}s)\n{traceback.format_exc()}")
+            else:
+                emit(f"PASS {name} ({time.monotonic() - t0:.2f}s)")
+        return rc_all
+
+    with tempfile.TemporaryDirectory(prefix="go-affected-cases-", dir=scratch_root()) as log_root:
+        log_dir = Path(log_root)
+        active: dict[int, tuple[str, float, Path, int]] = {}
+        queue = list(enumerate(cases))
+        rc_all = 0
+
+        def terminate_children(signum: int, _frame) -> None:
+            for pid, (_n, _s, _lp, wfd) in list(active.items()):
+                with contextlib.suppress(OSError):
+                    os.close(wfd)
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, signal.SIGTERM)
+            for pid in list(active):
+                with contextlib.suppress(ChildProcessError, OSError):
+                    os.waitpid(pid, 0)
+            raise SystemExit(128 + signum)
+
+        prev_handlers = {
+            sig: signal.signal(sig, terminate_children)
+            for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+        }
+
+        def launch_next() -> None:
+            idx, (name, fn) = queue.pop(0)
+            log_path = log_dir / f"{idx:02d}-{name}.log"
+            child_r, child_w = os.pipe()
+            started = time.monotonic()
+            sys.stdout.flush()
+            sys.stderr.flush()
+            pid = os.fork()
+            if pid == 0:
+                try:
+                    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+                        signal.signal(sig, signal.SIG_DFL)
+                    os.close(child_w)
+                    for _n, _s, _lp, wfd in active.values():
+                        with contextlib.suppress(OSError):
+                            os.close(wfd)
+
+                    def watch_parent() -> None:
+                        with contextlib.suppress(OSError):
+                            while os.read(child_r, 64):
+                                pass
+                        os._exit(1)
+
+                    threading.Thread(target=watch_parent, daemon=True).start()
+                    fd = os.open(log_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o644)
+                    os.dup2(fd, 1)
+                    os.dup2(fd, 2)
+                    os.close(fd)
+                    fn()
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                    os._exit(0)
+                except SystemExit as exc:
+                    code = exc.code if isinstance(exc.code, int) else (1 if exc.code else 0)
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                    os._exit(code)
+                except BaseException:
+                    traceback.print_exc()
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                    os._exit(1)
+            os.close(child_r)
+            active[pid] = (name, started, log_path, child_w)
+
+        try:
+            while queue and len(active) < max_workers:
+                launch_next()
+            while active:
+                try:
+                    wpid, status = os.waitpid(-1, 0)
+                except InterruptedError:
+                    continue
+                entry = active.pop(wpid, None)
+                if entry is None:
+                    continue
+                name, started, log_path, child_w = entry
+                with contextlib.suppress(OSError):
+                    os.close(child_w)
+                elapsed = time.monotonic() - started
+                code = os.waitstatus_to_exitcode(status)
+                if code == 0:
+                    emit(f"PASS {name} ({elapsed:.2f}s)")
+                else:
+                    rc_all = 1
+                    body = ""
+                    with contextlib.suppress(OSError):
+                        body = log_path.read_text(encoding="utf-8", errors="replace")
+                    emit(f"FAIL {name} ({elapsed:.2f}s)\n{body}".rstrip())
+                while queue and len(active) < max_workers:
+                    launch_next()
+        finally:
+            for pid, (_n, _s, _lp, wfd) in list(active.items()):
+                with contextlib.suppress(OSError):
+                    os.close(wfd)
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, signal.SIGTERM)
+                with contextlib.suppress(ChildProcessError, OSError):
+                    os.waitpid(pid, 0)
+            for sig, handler in prev_handlers.items():
+                signal.signal(sig, handler)
+        return rc_all
+
+
+def test_suite_gocache_and_runner_helpers() -> None:
+    """Suite GOCACHE reuses writable cache, falls back under scratch_root, precompiles with build_env, and reports failures."""
+    with tempfile.TemporaryDirectory(prefix="go-affected-helper-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        writable_cache = tmp_path / "writable-gocache"
+        writable_cache.mkdir()
+        with patch.dict(os.environ, {"GOCACHE": str(writable_cache)}):
+            resolved = _shared_gocache()
+        assert resolved == writable_cache, f"expected writable GOCACHE reuse {writable_cache}, got {resolved}"
+
+        with patch.dict(os.environ, {"GOCACHE": "off"}):
+            fb_off = _shared_gocache(warm_fallback=False)
+        assert fb_off.is_dir() and fb_off.is_relative_to(scratch_root()), fb_off
+        with patch.dict(os.environ, {"GOCACHE": "/proc/unwritable-gocache"}):
+            fb_ro = _shared_gocache(warm_fallback=False)
+        assert fb_ro == fb_off, (fb_ro, fb_off)
+
+        pkg_dir = tmp_path / "probe"
+        pkg_dir.mkdir()
+        nonce = _fresh_nonce()
+        (pkg_dir / "go.mod").write_text("module example.com/precompile-probe\n\ngo 1.22\n")
+        (pkg_dir / "probe_test.go").write_text(
+            f'package probe\nimport "testing"\nfunc TestProbe(t *testing.T) {{ if t.Name() == "{nonce}" {{ t.Fatal() }} }}\n'
+        )
+        gocache = _shared_gocache()
+        _precompile_go_test(pkg_dir, gocache)
+        check_res = subprocess.run(
+            ["go", "test", "-x", "-c", "-o", os.devnull, "."],
+            cwd=pkg_dir,
+            env={**go_affected.build_env(), "GOCACHE": str(gocache)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=True,
+        )
+        compile_lines = [
+            ln for ln in check_res.stdout.splitlines()
+            if "/compile " in ln or ln.startswith("compile ")
+        ]
+        assert not compile_lines, (
+            "_precompile_go_test missed go_affected.build_env() cache:\n" + "\n".join(compile_lines[:10])
+        )
+
+        lines: list[str] = []
+
+        def ok_case() -> None:
+            return None
+
+        def bad_case() -> None:
+            raise AssertionError("boom-from-worker")
+
+        rc_fail = _run_cases(
+            [("ok_case", ok_case), ("bad_case", bad_case)],
+            max_workers=2,
+            emit=lines.append,
+        )
+        assert rc_fail == 1, (rc_fail, lines)
+        joined = "\n".join(lines)
+        assert "PASS ok_case" in joined, joined
+        assert "FAIL bad_case" in joined and "boom-from-worker" in joined, joined
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--case", action="append", default=[], help="Run only named test case(s)")
+    parser.add_argument("--jobs", type=int, default=0, help="Worker process count (default: auto)")
+    args = parser.parse_args(argv)
+
+    # Warm/resolve GOCACHE and load ROOT graph once before forking workers.
+    _shared_gocache()
     root_graph = go_affected.load_tillr_graph(ROOT)
-    test_discover_modules()
-    test_build_env_strips_outer_gate_vars()
-    test_subreaper_reaps_orphans_while_command_runs()
-    test_selection_rules(root_graph)
-    test_edges_file_honest_and_env_read()
-    test_edge_cache_invalidation()
-    test_scoped_read_tests_execution_cache_and_sharding()
-    test_failed_module_floor_fallback()
-    test_failure_refusal_names_packages_and_tests_far_above_tail()
-    test_fork_check_integration(root_graph)
-    test_heavy_failures_replay(root_graph)
-    test_concurrent_runs_do_not_share_scratch_and_preserve_cache()
-    test_no_leftover_processes_after_check_finishes()
-    test_streams_progress_lines_before_run_ends()
-    test_stalled_run_prints_nothing_without_test_events()
-    test_go_affected_slot_wait_order_and_trunk_repair_priority()
-    test_candidate_gates_use_gate_class_and_leave_proof_slots_free()
+    # Ordered longest-first so critical-path cases start immediately in the worker pool.
+    all_cases: list[tuple[str, Callable[[], None]]] = [
+        ("test_no_leftover_processes_after_check_finishes", test_no_leftover_processes_after_check_finishes),
+        ("test_fork_check_integration", lambda: test_fork_check_integration(root_graph)),
+        ("test_go_affected_slot_wait_order_and_trunk_repair_priority", test_go_affected_slot_wait_order_and_trunk_repair_priority),
+        ("test_heavy_failures_replay", lambda: test_heavy_failures_replay(root_graph)),
+        ("test_selection_rules", lambda: test_selection_rules(root_graph)),
+        ("test_candidate_gates_use_gate_class_and_leave_proof_slots_free", test_candidate_gates_use_gate_class_and_leave_proof_slots_free),
+        ("test_edge_cache_invalidation", test_edge_cache_invalidation),
+        ("test_edges_file_honest_and_env_read", test_edges_file_honest_and_env_read),
+        ("test_stalled_run_prints_nothing_without_test_events", test_stalled_run_prints_nothing_without_test_events),
+        ("test_scoped_read_tests_execution_cache_and_sharding", test_scoped_read_tests_execution_cache_and_sharding),
+        ("test_concurrent_runs_do_not_share_scratch_and_preserve_cache", test_concurrent_runs_do_not_share_scratch_and_preserve_cache),
+        ("test_streams_progress_lines_before_run_ends", test_streams_progress_lines_before_run_ends),
+        ("test_suite_gocache_and_runner_helpers", test_suite_gocache_and_runner_helpers),
+        ("test_failed_module_floor_fallback", test_failed_module_floor_fallback),
+        ("test_subreaper_reaps_orphans_while_command_runs", test_subreaper_reaps_orphans_while_command_runs),
+        ("test_discover_modules", test_discover_modules),
+        ("test_build_env_strips_outer_gate_vars", test_build_env_strips_outer_gate_vars),
+        ("test_failure_refusal_names_packages_and_tests_far_above_tail", test_failure_refusal_names_packages_and_tests_far_above_tail),
+    ]
+    if args.case:
+        wanted = set(args.case)
+        unknown = sorted(wanted - {name for name, _ in all_cases})
+        if unknown:
+            parser.error(f"unknown --case: {', '.join(unknown)}")
+        cases = [(name, fn) for name, fn in all_cases if name in wanted]
+    else:
+        cases = all_cases
+
+    default_jobs = max(4, min(8, (os.cpu_count() or 8) // 4))
+    workers = args.jobs if args.jobs > 0 else min(len(cases), default_jobs)
+    rc = _run_cases(cases, max_workers=workers, emit=lambda msg: print(msg, flush=True))
+    if rc != 0:
+        return rc
     print("PASS: all go-affected tests passed")
     return 0
 
