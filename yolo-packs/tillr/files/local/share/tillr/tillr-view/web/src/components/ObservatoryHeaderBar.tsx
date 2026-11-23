@@ -1,3 +1,4 @@
+import { localTime } from "../models/board";
 // The board's header: the store's identity, the counts an operator reads first, and the one
 // line saying what is moving this screen. Every number here comes from the snapshot's
 // envelope or its drain_summary; a value the server sent as null is printed as a named
@@ -105,8 +106,8 @@ export function LoopBand({ drain, now: suppliedNow }: { drain: SnapshotData["dra
   const label = alive ? "Loop alive" : "no loop is running";
   return <span className="loop-band" title={drain.session_note}>
     {label}{alive && session ? ` · next pass ${new Date(session.next_pass_at_ms).toLocaleTimeString()}` : null}
-    {stop ? <> · stopped since {new Date(stop.at_ms).toISOString()} · {stop.item_id || "no single item (loop-wide)"} · {stop.step} · {stop.sentence} Next: {stop.next}</> : !alive ? <> · {session?.ended_at_ms != null ? `Loop stopped since ${new Date(session.ended_at_ms).toISOString()}` : "Loop unobserved"} · stop explanation not recorded</> : null}
-    {repeated ? <> · <strong className="loop-band__repeated">{alive ? "stuck drain (restarted after repeated exits)" : "stuck drain"}: exited {repeated.count} times in a row</strong> ({repeated.reason}{repeated.detail ? `: ${repeated.detail}` : ""}, {new Date(repeated.first_at_ms).toISOString()}..{new Date(repeated.last_at_ms).toISOString()}) · Next: {repeated.next}</> : null}
+    {stop ? <> · stopped since {localTime(stop.at_ms)} · {stop.item_id || "no single item (loop-wide)"} · {stop.step} · {stop.sentence} Next: {stop.next}</> : !alive ? session?.ended_at_ms != null ? <> · Loop stopped since {localTime(session.ended_at_ms)} · stop explanation not recorded</> : <> · {session ? "no current heartbeat" : "Loop unobserved"}</> : null}
+    {repeated ? <> · <strong className="loop-band__repeated">{alive ? "stuck drain (restarted after repeated exits)" : "stuck drain"}: exited {repeated.count} times in a row</strong> ({repeated.reason}{repeated.detail ? `: ${repeated.detail}` : ""}, {localTime(repeated.first_at_ms)}..{localTime(repeated.last_at_ms)}) · Next: {repeated.next}</> : null}
   </span>;
 }
 

@@ -223,6 +223,12 @@ export function relativeTime(ms: number | null | undefined, now: number = Date.n
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** localTime is a recorded instant in the browser's own time zone, for the places that
+ * need an exact moment rather than an age. Never the raw UTC string. */
+export function localTime(ms: number): string {
+  return new Date(ms).toLocaleString();
+}
+
 /** money is a price the store reported, or the named absence of one. Never $0.0000. */
 export function money(amount: number | null | undefined): string {
   return amount === null || amount === undefined ? "not reported" : `$${amount.toFixed(4)}`;

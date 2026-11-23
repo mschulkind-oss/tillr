@@ -41,7 +41,7 @@ test("LoopBand and LoopSummary render stuck-drain notice when stopped after repe
   for (const text of [band, summary]) {
     expect(text).toContain("exited 5 times in a row");
     expect(text).toContain("fault: cannot read landing offer for run-1 while its processes survive");
-    expect(text).toContain("2026-11-19T20:15:00.000Z..2026-11-19T21:20:00.000Z");
+    expect(text).toContain(`${new Date(repeatedStop.first_at_ms).toLocaleString()}..${new Date(repeatedStop.last_at_ms).toLocaleString()}`);
     expect(text).toContain(repeatedStop.next);
   }
   expect(band).toContain("stuck drain");

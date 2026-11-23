@@ -92,3 +92,18 @@ func TestLoopLivenessUsesTheSessionDeadlineAndStop(t *testing.T) {
 	h.exec(`UPDATE drain_sessions SET next_pass_at = ?, ended_at = ?`, now+60000, now)
 	check(false)
 }
+
+func TestSnapshotSessionCarriesTheConfiguredLanes(t *testing.T) {
+	h := newServeHarness(t)
+	h.exec(`CREATE TABLE drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL,
+	 refreshed_at INTEGER NOT NULL, next_pass_at INTEGER NOT NULL, ended_at INTEGER, lanes TEXT)`)
+	now := time.Now().UnixMilli()
+	h.exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, lanes)
+	 VALUES ('live', ?, ?, ?, '["lane-1","express-1"]')`, now, now, now+60000)
+	_, env, raw := h.get("/api/v1/snapshot")
+	session := env["data"].(map[string]any)["drain_summary"].(map[string]any)["session"].(map[string]any)
+	lanes, _ := session["lanes"].([]any)
+	if len(lanes) != 2 || lanes[0] != "lane-1" || lanes[1] != "express-1" {
+		t.Fatalf("session lost the loop's configured lanes: %s", raw)
+	}
+}

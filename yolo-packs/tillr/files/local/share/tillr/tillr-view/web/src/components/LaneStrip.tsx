@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { collapseIdleLanes } from "../models/lanes";
 import type { LaneRow } from "../models/types";
 import { UsageSummary } from "./Usage";
 import { EntityLink } from "./EntityLink";
@@ -11,7 +13,16 @@ function age(ms: number): string {
   return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`;
 }
 
-export function LaneStrip({ lanes, error, now = Date.now() }: { lanes?: LaneRow[]; error?: Error | null; now?: number }) {
+/** The one line that stands for idle lanes outside the configured count. */
+export function MoreIdleLanes({ count, open, onToggle }: { count: number; open: boolean; onToggle: () => void }) {
+  if (count === 0) return null;
+  return <p className="lane-strip__more">{count} more idle lane{count === 1 ? "" : "s"} <button type="button" onClick={onToggle}>{open ? "(hide)" : "(show)"}</button></p>;
+}
+
+export function LaneStrip({ lanes, error, now = Date.now(), configured }: { lanes?: LaneRow[]; error?: Error | null; now?: number; configured?: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const { shown, hidden } = collapseIdleLanes(lanes ?? [], configured, now);
+  const drawn = expanded ? lanes ?? [] : shown;
   const ordinary = lanes?.filter(row => !row.lane_id.startsWith("express-") && !row.lane_id.startsWith("desk-")) ?? [];
   const express = lanes?.filter(row => row.lane_id.startsWith("express-")) ?? [];
   const count = (state: LaneRow["state"]) => ordinary.filter(row => row.state === state).length;
@@ -19,7 +30,7 @@ export function LaneStrip({ lanes, error, now = Date.now() }: { lanes?: LaneRow[
     <h2>Lanes</h2>
     {error ? <p role="alert">Lanes refused: {error.message}</p> : lanes === undefined ? <p role="status">Reading lanes…</p> : <>
       <p>{count("running")} of {ordinary.length} running{express.length ? `, ${express.filter(row => row.state === "running").length} of ${express.length} express` : ""} · {count("settling")} settling · {count("idle")} idle</p>
-      {lanes.length === 0 ? <p>No lanes recorded.</p> : <ul>{lanes.map(row => {
+      {lanes.length === 0 ? <p>No lanes recorded.</p> : <><ul>{drawn.map(row => {
         const quiet = row.state === "running" && row.log_grew_at_ms !== null && now - row.log_grew_at_ms >= LANE_QUIET_MS;
         const action = row.latest_action;
         return <li key={row.lane_id} data-state={row.state}>
@@ -40,7 +51,7 @@ export function LaneStrip({ lanes, error, now = Date.now() }: { lanes?: LaneRow[
           <UsageSummary usage={row.usage} />
           {row.note ? <small>{row.note}</small> : null}
         </li>;
-      })}</ul>}
+      })}</ul><MoreIdleLanes count={hidden.length} open={expanded} onToggle={() => setExpanded(!expanded)} /></>}
     </>}
   </section>;
 }
