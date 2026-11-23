@@ -44,6 +44,7 @@ type startSnapshot struct {
 	holds, reservations             map[string]string
 	readyAt, laneFreeAt             map[string]time.Time
 	freeLanes                       []string
+	pausedReserved                  []bool
 	tip, green                      string
 	unshared                        map[string]bool
 	rewriteHolds, rewriteOwnerHolds map[string]string

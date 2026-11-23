@@ -209,15 +209,24 @@ func (l *Loop) stageParallel(ctx context.Context, d Decision, base string) (Deci
 		if err != nil {
 			return d, err
 		}
-		var finished bool
+		var finished, paused bool
 		err = s.ReadTx(ctx, func(r *store.Reader) error {
 			rec, e := terminalRecord(r, node.RunRequest.RunID)
 			finished = rec != nil
+			paused = rec != nil && rec.State == run.StatePaused && rec.EndCause == run.EndRestart
 			return e
 		})
 		s.Close()
 		if err != nil {
 			return d, err
+		}
+		if paused {
+			req := *node.RunRequest
+			req.Resume = true
+			req.SessionTurn, req.ResumePrompt, req.FreshSession = false, "", false
+			node.RunRequest = &req
+			nodes[i] = node
+			continue
 		}
 		if finished {
 			continue

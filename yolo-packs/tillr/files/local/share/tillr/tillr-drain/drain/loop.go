@@ -2324,7 +2324,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			}
 		}
 	}
-	if record.State == run.StatePaused {
+	if record.State == run.StatePaused && !evaluatorNode(decision) {
 		// Pausing is not settlement: even an already committed tree belongs to
 		// the continuing session until it answers. Keep pending work running.
 		prepared = true
