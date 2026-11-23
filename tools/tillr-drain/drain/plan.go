@@ -991,7 +991,13 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			stampDecisionRequest(decision, &request)
 			decision.RunRequest = &request
 		}
-		if err := describeBackendHold(r, &decision, policy, at, p.shut); err != nil {
+		if decision.Action == ActionHold && decision.Reason == ReasonBackendWindow && policy != nil && p.infrastructureClosed == nil {
+			var err error
+			if p.infrastructureClosed, err = readInfrastructureClosedFrom(r, p.designHistory); err != nil {
+				return nil, nil, err
+			}
+		}
+		if err := describeBackendHoldWithClosed(r, &decision, policy, at, p.shut, p.infrastructureClosed); err != nil {
 			return nil, nil, err
 		}
 		if def.Completes != "landing" && decision.RunRequest != nil && decision.RunRequest.WorkingDir == WorktreeDir {
@@ -1049,19 +1055,20 @@ type planner struct {
 	shut     map[string]bool
 	// quotaShut leaves out backends closed by an infrastructure ending: a retry
 	// the owner authorized is the one dispatch that may go to one.
-	quotaShut      map[string]bool
-	conflicts      map[string]item.Conflict
-	inputs         map[string]*RunInputs
-	inputDecisions map[string]Decision
-	works          map[string]*pendingWork
-	designHistory  map[string]*pendingWork
-	tick           Pass
-	policy         *Policy
-	held           map[string]bool
-	deskOwners     map[string]string
-	itemStates     map[string]string
-	history        runHistory
-	priors         map[string][]priorRun
+	quotaShut            map[string]bool
+	infrastructureClosed map[string]backendOutcome
+	conflicts            map[string]item.Conflict
+	inputs               map[string]*RunInputs
+	inputDecisions       map[string]Decision
+	works                map[string]*pendingWork
+	designHistory        map[string]*pendingWork
+	tick                 Pass
+	policy               *Policy
+	held                 map[string]bool
+	deskOwners           map[string]string
+	itemStates           map[string]string
+	history              runHistory
+	priors               map[string][]priorRun
 	// retries is each item's latest operator authorization, keyed by item; classes is
 	// every prior run's attempt class, keyed by run id; latest is each item's latest
 	// terminal run id. Together they let decide answer "is this authorization's run one

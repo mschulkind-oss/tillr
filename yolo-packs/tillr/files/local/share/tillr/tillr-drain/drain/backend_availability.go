@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -34,6 +35,36 @@ func readInfrastructureClosedFrom(r *store.Reader, byRun map[string]*pendingWork
 	if err != nil {
 		return nil, err
 	}
+	probes, err := queryBackendProbes(r, 0)
+	if err != nil {
+		return nil, err
+	}
+	return resolveInfrastructureClosed(r, outcomes, probes, nil)
+}
+
+func (s *backendOutcomesState) infrastructureClosed(r *store.Reader, prev map[string]backendOutcome) (map[string]backendOutcome, error) {
+	return resolveInfrastructureClosed(r, s.entries, s.probes, prev)
+}
+
+func queryBackendProbes(r *store.Reader, afterSeq int64) (map[string]int64, error) {
+	rows, err := r.Query(`SELECT object_id,MAX(seq) FROM events WHERE kind=? AND seq>? AND json_extract(payload,'$.success')=1 GROUP BY object_id`, backendProbeKind, afterSeq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var backend string
+		var seq int64
+		if err := rows.Scan(&backend, &seq); err != nil {
+			return nil, err
+		}
+		out[backend] = seq
+	}
+	return out, rows.Err()
+}
+
+func resolveInfrastructureClosed(r *store.Reader, outcomes []backendOutcome, probes map[string]int64, prev map[string]backendOutcome) (map[string]backendOutcome, error) {
 	closed := map[string]backendOutcome{}
 	sequences := map[string]int64{}
 	for _, o := range outcomes {
@@ -47,26 +78,37 @@ func readInfrastructureClosedFrom(r *store.Reader, byRun map[string]*pendingWork
 		// The latest ending decides. A saved ending keeps its saved fact; an
 		// unsaved one was classified by the read above, which saves nothing.
 		sequences[name] = o.seq
-		if o.closes {
+		if o.closes && probes[name] <= o.seq {
 			closed[name] = o
 		}
 	}
-	probes, err := r.Query(`SELECT object_id,MAX(seq) FROM events WHERE kind=? AND json_extract(payload,'$.success')=1 GROUP BY object_id`, backendProbeKind)
-	if err != nil {
+	if err := populateClosedBackendRecords(r, closed, prev); err != nil {
 		return nil, err
 	}
-	defer probes.Close()
-	for probes.Next() {
-		var backend string
-		var seq int64
-		if err := probes.Scan(&backend, &seq); err != nil {
-			return nil, err
+	return closed, nil
+}
+
+func populateClosedBackendRecords(r *store.Reader, closed, prev map[string]backendOutcome) error {
+	for name, o := range closed {
+		if !o.saved {
+			continue
 		}
-		if seq > sequences[backend] {
-			delete(closed, backend)
+		if cached, ok := prev[name]; ok && cached.seq == o.seq && cached.rec.State != "" {
+			o.rec = cached.rec
+			closed[name] = o
+			continue
 		}
+		var raw string
+		if err := r.QueryRow(`SELECT payload FROM events WHERE seq=? AND kind=?`, o.seq, run.FinishKind).Scan(&raw); err != nil {
+			return err
+		}
+		backendOutcomeUnmarshals.Add(1)
+		if err := json.Unmarshal([]byte(raw), &o.rec); err != nil {
+			return err
+		}
+		closed[name] = o
 	}
-	return closed, probes.Err()
+	return nil
 }
 
 // ProbeBackend runs an operator-chosen smoke check, not a quota reading or a
@@ -114,12 +156,19 @@ func ProbeBackend(ctx context.Context, path, root, backend string, argv []string
 
 // Describe the recorded evidence for the backend the decision is waiting on.
 func describeBackendHold(r *store.Reader, d *Decision, policy *Policy, at time.Time, shut map[string]bool) error {
+	return describeBackendHoldWithClosed(r, d, policy, at, shut, nil)
+}
+
+func describeBackendHoldWithClosed(r *store.Reader, d *Decision, policy *Policy, at time.Time, shut map[string]bool, closed map[string]backendOutcome) error {
 	if d.Action != ActionHold || d.Reason != ReasonBackendWindow || policy == nil {
 		return nil
 	}
-	closed, err := readInfrastructureClosedFrom(r, nil)
-	if err != nil {
-		return err
+	if closed == nil {
+		var err error
+		closed, err = readInfrastructureClosedFrom(r, nil)
+		if err != nil {
+			return err
+		}
 	}
 	start := policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: d.Seat})
 	if d.RunRequest != nil {

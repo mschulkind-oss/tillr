@@ -78,7 +78,7 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 			}
 			return err
 		}
-		if fresh || prev.pending == nil || head < prev.lastEventSeq || dv < s.dataVersion || s.policy != policy {
+		if fresh || prev.pending == nil || prev.backendOutcomes == nil || head < prev.lastEventSeq || dv < s.dataVersion || s.policy != policy {
 			return reseed()
 		}
 		var delta startStoreDelta
@@ -111,7 +111,10 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 			if signature != s.itemsSignature {
 				return reseed()
 			}
-			delta.lanes, delta.quota = true, true
+			delta.lanes, delta.quota, delta.unsavedOutcomeInputs = true, true, true
+		}
+		if inspectExternal && next.backendOutcomes != nil && next.backendOutcomes.unsaved > 0 {
+			delta.unsavedOutcomeInputs = true
 		}
 		touched := map[string]bool{}
 		if err := delta.refreshItems(r, &next, at, touched); err != nil {
@@ -179,6 +182,7 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 
 type startStoreDelta struct {
 	place, history, priors, inputs, lanes, quota, rotation bool
+	backendEvents, unsavedOutcomeInputs                    bool
 	pending, faults                                        []event.Event
 	relevant, items                                        []event.Event
 }
@@ -205,8 +209,9 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 		known := false
 		if slices.Contains(pendingHistoryKinds, e.Kind) {
 			d.pending = append(d.pending, e)
-			d.lanes = true // pending transitions such as retractClaim update lanes without a run.release event
-			d.quota = true // pending endings can change whether a backend closes
+			d.lanes = true                // pending transitions such as retractClaim update lanes without a run.release event
+			d.quota = true                // pending endings can change whether a backend closes
+			d.unsavedOutcomeInputs = true // unsaved endings consult pendingHistory byRun
 			known = true
 		}
 		switch e.Kind {
@@ -218,6 +223,12 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 			loopOrphanedKind, staleBaseKind, repeatingCallKind, judgeRequestKind,
 			runSupersededKind, backendOutcomeKind, GateVerdictKind, RefusalKind, callOffered:
 			d.priors, d.quota, known = true, true, true
+		}
+		switch e.Kind {
+		case run.FinishKind, backendOutcomeKind, callOffered, backendProbeKind:
+			d.backendEvents = true
+		case run.ResumeKind, loopOrphanedKind, staleBaseKind:
+			d.unsavedOutcomeInputs = true
 		}
 		switch e.Kind {
 		case run.AllocateKind, run.FinishKind, run.ReleaseKind:
@@ -269,6 +280,17 @@ func (d startStoreDelta) apply(r *store.Reader, s *startSnapshot, at time.Time, 
 		}
 		s.faultsByItemReason, s.faults = private, faults.Resolve(private)
 	}
+	outcomesChanged := false
+	if d.backendEvents || (s.backendOutcomes != nil && s.backendOutcomes.unsaved > 0 && (d.unsavedOutcomeInputs || d.quota)) {
+		var err error
+		outcomesChanged, err = s.advanceBackendOutcomes(r, d.backendEvents)
+		if err != nil {
+			return err
+		}
+		if outcomesChanged {
+			d.priors = true
+		}
+	}
 	if d.history || d.priors {
 		if err := s.refreshRunFacts(r, d.history, d.priors); err != nil {
 			return err
@@ -301,8 +323,8 @@ func (d startStoreDelta) apply(r *store.Reader, s *startSnapshot, at time.Time, 
 			return err
 		}
 	}
-	if d.quota {
-		if err := s.refreshBackends(r, at, policy); err != nil {
+	if d.quota || outcomesChanged {
+		if err := s.refreshBackendsWithOutcomes(r, at, policy, outcomesChanged); err != nil {
 			return err
 		}
 	}

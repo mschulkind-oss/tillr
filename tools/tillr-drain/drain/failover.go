@@ -245,6 +245,10 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 }
 
 func readPriorRunsFrom(r *store.Reader, byRun map[string]*pendingWork) (map[string][]priorRun, error) {
+	return readPriorRunsWithOutcomes(r, byRun, nil)
+}
+
+func readPriorRunsWithOutcomes(r *store.Reader, byRun map[string]*pendingWork, cached *backendOutcomesState) (map[string][]priorRun, error) {
 	interrupted, restaged, err := readInterruptedRuns(r)
 	if err != nil {
 		return nil, err
@@ -255,9 +259,14 @@ func readPriorRunsFrom(r *store.Reader, byRun map[string]*pendingWork) (map[stri
 	}
 	// Once the loop observes an ending, routing and availability share that
 	// saved class; a report edit cannot move the item to a different retry rule.
-	outcomes, err := readBackendOutcomesFrom(r, byRun)
-	if err != nil {
-		return nil, err
+	var outcomes []backendOutcome
+	if cached != nil {
+		outcomes = cached.entries
+	} else {
+		outcomes, err = readBackendOutcomesFrom(r, byRun)
+		if err != nil {
+			return nil, err
+		}
 	}
 	type disposition struct {
 		class         AttemptClass
