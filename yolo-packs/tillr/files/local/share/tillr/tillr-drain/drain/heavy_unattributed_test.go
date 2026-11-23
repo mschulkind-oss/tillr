@@ -174,3 +174,124 @@ func TestHeavyUnattributedRedGivesTheHoldAMover(t *testing.T) {
 		t.Fatalf("status=%+v %v, want red rather than unknown", status, err)
 	}
 }
+
+// Through the loop and store: when a heavy proof records a gate fault with repair
+// deferred and the next proof fails the same check again, one fixer-main-* item is
+// filed naming that check and its log path in the item's words.
+func TestHeavyDeferredGateFaultFilesTrunkFixerInStore(t *testing.T) {
+	ctx := context.Background()
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	first := heavyCommit(t, root, "first")
+	s, err := store.InitFixture(ctx, filepath.Join(scratchUnderDurable(t), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const checkID = goTestPrefix + "tools/tillr-drain:example/drain:TestFlaky"
+	logDir := scratchUnderDurable(t)
+	logFirst := filepath.Join(logDir, "first.log")
+	logSecond := filepath.Join(logDir, "second.log")
+	if err := os.WriteFile(logFirst, []byte("--- FAIL: TestFlaky (0.01s)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logSecond, []byte("--- FAIL: TestFlaky (0.02s)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var second, third string
+	steps := heavyTestSteps{judge: func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
+		head, err := heavyRev(dir)
+		if err != nil {
+			return nil, err
+		}
+		if only != "" {
+			return []HeavyCheck{{CheckID: only, Result: "pass"}}, nil
+		}
+		switch head {
+		case first:
+			second = heavyCommit(t, root, "second")
+			return []HeavyCheck{{CheckID: checkID, Result: "fail", LogPath: logFirst, LogRef: logFirst}}, nil
+		case second:
+			third = heavyCommit(t, root, "third")
+			return []HeavyCheck{{CheckID: checkID, Result: "fail", LogPath: logSecond, LogRef: logSecond}}, nil
+		case third:
+			return []HeavyCheck{{CheckID: checkID, Result: "pass"}}, nil
+		default:
+			t.Fatalf("unexpected tip %s", head)
+			return nil, nil
+		}
+	}}
+	l := &Loop{
+		gatePolicy: GatePolicy{LandingStrategy: "after-merge"},
+		cfg:        LoopConfig{Root: root, Store: s.Path(), LaneRoot: scratchUnderDurable(t), Steps: steps, Now: time.Now, Report: io.Discard},
+	}
+	if err := l.startHeavy(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+	var count int
+	var id, text string
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		if err := r.QueryRow(`SELECT COUNT(*) FROM items WHERE item_id LIKE 'fixer-main-%'`).Scan(&count); err != nil {
+			return err
+		}
+		return r.QueryRow(`SELECT items.item_id, item_criteria.text FROM items JOIN item_criteria USING(item_id) WHERE items.item_id LIKE 'fixer-main-%' AND item_criteria.criterion_id = 'trunk-green'`).Scan(&id, &text)
+	}); err != nil {
+		t.Fatalf("reading filed fixer: %v", err)
+	}
+	if count != 1 || id != TrunkFixerID(second) {
+		t.Fatalf("fixers count=%d id=%q, want 1 item %q", count, id, TrunkFixerID(second))
+	}
+	if !strings.Contains(text, checkID) || !strings.Contains(text, logSecond) {
+		t.Fatalf("fixer %s criteria missing check or log: %q", id, text)
+	}
+}
+
+// Through the loop and store: a deferred gate fault followed by a passing proof files nothing.
+func TestHeavyDeferredGateFaultPassingNextProofFilesNoStoreFixer(t *testing.T) {
+	ctx := context.Background()
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	first := heavyCommit(t, root, "first")
+	s, err := store.InitFixture(ctx, filepath.Join(scratchUnderDurable(t), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const checkID = goTestPrefix + "tools/tillr-drain:example/drain:TestFlaky"
+	logFirst := filepath.Join(scratchUnderDurable(t), "first.log")
+	if err := os.WriteFile(logFirst, []byte("--- FAIL: TestFlaky (0.01s)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	steps := heavyTestSteps{judge: func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
+		head, err := heavyRev(dir)
+		if err != nil {
+			return nil, err
+		}
+		if only != "" {
+			return []HeavyCheck{{CheckID: only, Result: "pass"}}, nil
+		}
+		if head == first {
+			heavyCommit(t, root, "second")
+			return []HeavyCheck{{CheckID: checkID, Result: "fail", LogPath: logFirst, LogRef: logFirst}}, nil
+		}
+		return []HeavyCheck{{CheckID: checkID, Result: "pass"}}, nil
+	}}
+	l := &Loop{
+		gatePolicy: GatePolicy{LandingStrategy: "after-merge"},
+		cfg:        LoopConfig{Root: root, Store: s.Path(), LaneRoot: scratchUnderDurable(t), Steps: steps, Now: time.Now, Report: io.Discard},
+	}
+	if err := l.startHeavy(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+	var count int
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT COUNT(*) FROM items WHERE item_id LIKE 'fixer-main-%'`).Scan(&count)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("fixers count = %d, want 0", count)
+	}
+}

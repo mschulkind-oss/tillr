@@ -147,6 +147,10 @@ func (r HeavyRunner) RetainRedRepairs(ctx context.Context, run *HeavyRun, order 
 			paths = strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
 		}
 	}
+	var priorDeferred map[string]bool
+	if dir, derr := HeavyDirectory(ctx, r.Root); derr == nil {
+		priorDeferred = priorDeferredChecks(dir, run.TipSHA)
+	}
 	remaining := order[:0]
 	for _, sha := range order {
 		keep := groups[sha][:0]
@@ -155,6 +159,10 @@ func (r HeavyRunner) RetainRedRepairs(ctx context.Context, run *HeavyRun, order 
 			switch {
 			case !ancestor:
 				reason = "trunk was rewritten"
+			case priorDeferred[check.CheckID]:
+				// The previous proof already deferred this check's repair to the next
+				// proof; failing again means the deferral did not hold, so file the fixer.
+				r.progressf("loop: heavy %s at %s: prior proof deferred repair; filing a fixer instead of deferring to %s\n", check.CheckID, ShortSHA(run.TipSHA), ShortSHA(tip))
 			case len(paths) == 0 || check.GoTimedOut:
 				// The next whole proof can supersede a timeout without a focused replay.
 			case len(check.Reads) != 0:
@@ -202,6 +210,27 @@ func (r HeavyRunner) RetainRedRepairs(ctx context.Context, run *HeavyRun, order 
 		}
 	}
 	return remaining, nil
+}
+
+func priorDeferredChecks(dir, currentTip string) map[string]bool {
+	raw, err := os.ReadFile(filepath.Join(dir, "heavy.json"))
+	if err != nil {
+		return nil
+	}
+	var prior HeavyRun
+	if json.Unmarshal(raw, &prior) != nil || prior.TipSHA == currentTip {
+		return nil
+	}
+	deferred := map[string]bool{}
+	for _, check := range prior.Checks {
+		if ClassifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome != checkresult.Fail {
+			continue
+		}
+		if len(fixer.DeferredRepairPrefixes(check.Detail)) > 0 {
+			deferred[check.CheckID] = true
+		}
+	}
+	return deferred
 }
 
 func ReadHeavyAttributions(dir string) map[string]HeavyAttribution {
