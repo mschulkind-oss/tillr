@@ -460,7 +460,7 @@ func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (Ve
 			return outcome, nil
 		}
 	}
-	outcome = runCheck(check, root, logs, index)
+	outcome = runCheckWithPriorFail(check, root, logs, index, fail)
 	outcome.Fingerprint = key
 	state, err := memory.refreshBinding(root)
 	if err != nil {

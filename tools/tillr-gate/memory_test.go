@@ -537,3 +537,131 @@ func TestMemoryWholeTreeDirtyAndChangeCommandsNeverReuse(t *testing.T) {
 		t.Fatalf("executions: %q", executed)
 	}
 }
+
+func memoryRunInLogs(t *testing.T, root, tree, logs string, check PlanCheck) (VerdictCheck, error) {
+	t.Helper()
+	envelope, err := Run(memoryPlan(t, tree, check), root, logs)
+	var verdict VerdictPayload
+	if decodeErr := json.Unmarshal(envelope.Payload, &verdict); decodeErr != nil {
+		t.Fatalf("verdict: %v (run: %v)", decodeErr, err)
+	}
+	if len(verdict.Checks) != 1 {
+		t.Fatalf("checks: %+v", verdict)
+	}
+	return verdict.Checks[0], err
+}
+
+func TestMemoryRerunAfterFailKeepsFailingLogRef(t *testing.T) {
+	t.Run("fail-then-pass", func(t *testing.T) {
+		root, tree := memoryRepo(t)
+		logs := filepath.Join(t.TempDir(), "logs")
+		switchFile := filepath.Join(t.TempDir(), "pass")
+		check := PlanCheck{
+			CheckID: "go-test-shards-test",
+			Scope:   "tree",
+			Reads:   []string{"input/"},
+			Command: []string{
+				"sh", "-c",
+				"if [ -f '" + switchFile + "' ]; then echo 'Ran 40 tests in 37.514s OK'; exit 0; fi; echo 'FAIL: TestShardTimeout'; exit 1",
+			},
+		}
+		first, err := memoryRunInLogs(t, root, tree, logs, check)
+		if err == nil || first.Result != ResultFail {
+			t.Fatalf("first run: %+v %v", first, err)
+		}
+		if want := filepath.Join(logs, "00-go-test-shards-test.log"); first.LogRef != want {
+			t.Fatalf("first log_ref = %q, want %q", first.LogRef, want)
+		}
+		store := memoryStore(t, root)
+		passRec, failRec, err := store.read(first.Fingerprint)
+		if err != nil || passRec != nil || failRec == nil || failRec.LogRef != first.LogRef {
+			t.Fatalf("stored after fail: pass=%+v fail=%+v err=%v", passRec, failRec, err)
+		}
+
+		memoryWrite(t, switchFile, "pass")
+		second, err := memoryRunInLogs(t, root, tree, logs, check)
+		if err != nil || second.Result != ResultPass || second.Memory != "flaky" {
+			t.Fatalf("second run: %+v %v", second, err)
+		}
+		if second.LogRef == first.LogRef {
+			t.Fatalf("rerun reused failed run's log file %q", second.LogRef)
+		}
+		if want := filepath.Join(logs, "00-go-test-shards-test.attempt-2.log"); second.LogRef != want {
+			t.Fatalf("second log_ref = %q, want %q", second.LogRef, want)
+		}
+
+		passRec, failRec, err = store.read(first.Fingerprint)
+		if err != nil || passRec == nil || failRec == nil {
+			t.Fatalf("stored after rerun: pass=%+v fail=%+v err=%v", passRec, failRec, err)
+		}
+		if failRec.LogRef != first.LogRef || passRec.LogRef != second.LogRef || passRec.LogRef == failRec.LogRef {
+			t.Fatalf("stored log_refs: fail=%q pass=%q", failRec.LogRef, passRec.LogRef)
+		}
+		failBody, err := os.ReadFile(failRec.LogRef)
+		if err != nil || !strings.Contains(string(failBody), "FAIL: TestShardTimeout\n") || strings.Contains(string(failBody), "Ran 40 tests") {
+			t.Fatalf("fail log_ref %q = %q, err = %v", failRec.LogRef, failBody, err)
+		}
+		passBody, err := os.ReadFile(passRec.LogRef)
+		if err != nil || !strings.Contains(string(passBody), "Ran 40 tests in 37.514s OK\n") || strings.Contains(string(passBody), "FAIL: TestShardTimeout") {
+			t.Fatalf("pass log_ref %q = %q, err = %v", passRec.LogRef, passBody, err)
+		}
+	})
+
+	t.Run("fail-then-fail-then-pass", func(t *testing.T) {
+		root, tree := memoryRepo(t)
+		logs := filepath.Join(t.TempDir(), "logs")
+		countFile := filepath.Join(t.TempDir(), "count")
+		check := PlanCheck{
+			CheckID: "tree-check",
+			Scope:   "tree",
+			Reads:   []string{"input/"},
+			Command: []string{
+				"sh", "-c",
+				"n=0; [ -f '" + countFile + "' ] && n=$(cat '" + countFile + "'); n=$((n + 1)); printf '%s' \"$n\" > '" + countFile + "'; " +
+					"if [ \"$n\" -lt 3 ]; then echo \"fail-attempt-$n\"; exit 1; fi; echo \"pass-attempt-$n\"; exit 0",
+			},
+		}
+		r1, err := memoryRunInLogs(t, root, tree, logs, check)
+		if err == nil || r1.Result != ResultFail {
+			t.Fatalf("attempt 1: %+v %v", r1, err)
+		}
+		r2, err := memoryRunInLogs(t, root, tree, logs, check)
+		if err == nil || r2.Result != ResultFail {
+			t.Fatalf("attempt 2: %+v %v", r2, err)
+		}
+		r3, err := memoryRunInLogs(t, root, tree, logs, check)
+		if err != nil || r3.Result != ResultPass || r3.Memory != "flaky" {
+			t.Fatalf("attempt 3: %+v %v", r3, err)
+		}
+		if r1.LogRef == r2.LogRef || r2.LogRef == r3.LogRef || r1.LogRef == r3.LogRef {
+			t.Fatalf("attempts shared log_ref: %q, %q, %q", r1.LogRef, r2.LogRef, r3.LogRef)
+		}
+		store := memoryStore(t, root)
+		passRec, failRec, err := store.read(r1.Fingerprint)
+		if err != nil || passRec == nil || failRec == nil {
+			t.Fatalf("stored records: pass=%+v fail=%+v err=%v", passRec, failRec, err)
+		}
+		if failRec.LogRef != r2.LogRef || passRec.LogRef != r3.LogRef {
+			t.Fatalf("stored log_refs: fail=%q (want %q) pass=%q (want %q)", failRec.LogRef, r2.LogRef, passRec.LogRef, r3.LogRef)
+		}
+		for _, want := range []struct {
+			path    string
+			present string
+			absent  []string
+		}{
+			{r1.LogRef, "fail-attempt-1\n", []string{"fail-attempt-2", "pass-attempt-3"}},
+			{failRec.LogRef, "fail-attempt-2\n", []string{"fail-attempt-1", "pass-attempt-3"}},
+			{passRec.LogRef, "pass-attempt-3\n", []string{"fail-attempt-1", "fail-attempt-2"}},
+		} {
+			got, err := os.ReadFile(want.path)
+			if err != nil || !strings.Contains(string(got), want.present) {
+				t.Fatalf("log %q = %q, missing %q (err=%v)", want.path, got, want.present, err)
+			}
+			for _, bad := range want.absent {
+				if strings.Contains(string(got), bad) {
+					t.Fatalf("log %q = %q, unexpectedly contains %q", want.path, got, bad)
+				}
+			}
+		}
+	})
+}
