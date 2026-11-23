@@ -791,7 +791,8 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		return nil, nil, err
 	}
 	decisions := make([]record.Envelope, 0, len(items))
-	for _, item := range items {
+	var itemOrder map[string]int
+	for idx, item := range items {
 		work := works[item.ItemID]
 		if !tick.plansItem(item.ItemID, work) {
 			continue
@@ -893,6 +894,15 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					decision.WorkflowRestart = false
 				}
 				lane, ok := p.freeLane(item.Express)
+				if !ok && decision.Action == ActionJudge {
+					if itemOrder == nil {
+						itemOrder = make(map[string]int, len(items))
+						for i, row := range items {
+							itemOrder[row.ItemID] = i
+						}
+					}
+					lane, ok = p.freeLaneOverLaterReservation(item.Express, itemOrder, idx)
+				}
 				if !ok {
 					decision.Action, decision.Reason, decision.To = ActionHold, ReasonNoLane, ""
 				} else {
@@ -2111,6 +2121,42 @@ func (p *planner) freeLane(express ...bool) (string, bool) {
 		return lane, true
 	}
 	p.laneShort = true
+	return "", false
+}
+
+// freeLaneOverLaterReservation lets a waiting finished candidate take a free lane
+// whose worker-lane reservation belongs to an item placed after it in queue order,
+// when no unreserved eligible lane is free.
+func (p *planner) freeLaneOverLaterReservation(express bool, itemOrder map[string]int, before int) (string, bool) {
+	if p.captureStart != nil {
+		return "", true
+	}
+	takes := func(lane string) bool {
+		if p.assigned[lane] || p.held[lane] {
+			return false
+		}
+		owner := p.workerLanes[lane]
+		if owner == "" {
+			return true
+		}
+		pos, ok := itemOrder[owner]
+		return ok && pos > before
+	}
+	if express {
+		for _, lane := range *p.tick.AvailableLanes {
+			if isExpressLane(lane) && takes(lane) {
+				return lane, true
+			}
+		}
+	}
+	for _, lane := range *p.tick.AvailableLanes {
+		if strings.HasPrefix(lane, "desk-") || isExpressLane(lane) {
+			continue
+		}
+		if takes(lane) {
+			return lane, true
+		}
+	}
 	return "", false
 }
 

@@ -312,7 +312,8 @@ func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, b
 			claimed[lane] = true
 		}
 	}
-	for _, q := range s.items {
+	var itemOrder map[string]int
+	for idx, q := range s.items {
 		var work *pendingWork
 		if s.pending != nil {
 			work = s.pending.works[q.id]
@@ -325,7 +326,17 @@ func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, b
 			// fresh start cannot claim it first.
 			if d.LaneID == "" && (d.Action == ActionJudge || (freshOnly && isDispatch(d))) {
 				if work.GateStall == nil || work.GateStall.canRetry(gates) {
-					if lane := s.firstFreeLaneExcept(e.express, claimed); lane != "" {
+					lane := s.firstFreeLaneExcept(e.express, claimed)
+					if lane == "" && d.Action == ActionJudge {
+						if itemOrder == nil {
+							itemOrder = make(map[string]int, len(s.items))
+							for i, item := range s.items {
+								itemOrder[item.id] = i
+							}
+						}
+						lane = s.firstFreeLaneOverLaterReservation(e.express, claimed, itemOrder, idx)
+					}
+					if lane != "" {
 						if claimed == nil {
 							claimed = map[string]bool{}
 						}
@@ -376,6 +387,33 @@ func (s startSnapshot) firstFreeLaneExcept(express bool, claimed map[string]bool
 	}
 	for _, lane := range s.freeLanes {
 		if !isExpressLane(lane) && !strings.HasPrefix(lane, "desk-") && s.reservations[lane] == "" && !claimed[lane] {
+			return lane
+		}
+	}
+	return ""
+}
+
+func (s startSnapshot) firstFreeLaneOverLaterReservation(express bool, claimed map[string]bool, itemOrder map[string]int, before int) string {
+	takes := func(lane string) bool {
+		if claimed[lane] {
+			return false
+		}
+		owner := s.reservations[lane]
+		if owner == "" {
+			return true
+		}
+		pos, ok := itemOrder[owner]
+		return ok && pos > before
+	}
+	if express {
+		for _, lane := range s.freeLanes {
+			if isExpressLane(lane) && takes(lane) {
+				return lane
+			}
+		}
+	}
+	for _, lane := range s.freeLanes {
+		if !isExpressLane(lane) && !strings.HasPrefix(lane, "desk-") && takes(lane) {
 			return lane
 		}
 	}
