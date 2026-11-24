@@ -3,7 +3,6 @@ title: "Observatory truthfulness, provenance, and shared primitives"
 status: accepted
 stage: CURRENT
 verified: 2026-11-20
-verified_commit: 11dec7eb2e0e196e3a9588c354616bea6f5cb1b1
 covers:
   - tools/tillr-view/apierror.go
   - tools/tillr-view/counts.go
@@ -40,7 +39,7 @@ summary: "How `tillr-view` enforces explicit epistemic provenance, three-way sta
 
 # Observatory truthfulness, provenance, and shared primitives
 
-> **Delivered copy.** This is `docs/reference/observatory-design.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/observatory-design.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 `tillr-view` serves the read-only truthfulness layer and shared UI primitives
 that every observatory page and CLI summary builds on. Its job is to make sure a
@@ -49,15 +48,14 @@ derived clock, an unrecorded seam, a corrupt artifact, or a named absence —
 without conflating missing data with zero, encoding state by colour alone, or
 drifting between CLI and HTTP counts.
 
-**Status.** Verified on `2026-11-20` against `HEAD` at
-`11dec7eb2e0e196e3a9588c354616bea6f5cb1b1`. Every truthfulness primitive,
+**Status.** Verified 2026-11-20. Every truthfulness primitive,
 shared component, count helper, Vantage index reader, and WebSocket invalidation
 rule documented here is built and covered by automated Go and Vitest suites. The
 screens are the linked pages in [observatory redesign](observatory-redesign.md)
 (confirmed by the owner in [`OQ-PR5`](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md#OQ-PR5)),
 not a four-region viewport-locked board; the provenance contract and shared
 components documented here are live inside those pages. `UNMEASURED`: no timed operator session on the observatory has
-been recorded yet, so code and tests establish implementation behavior rather
+been recorded, so code and tests establish implementation behavior rather
 than measured operator-triage times.
 
 **Component map:**
@@ -72,9 +70,8 @@ than measured operator-triage times.
 | WebSocket invalidation stream, pause gate, and query-key hierarchy | `tools/tillr-view/servews.go`, `web/src/models/socket.ts`, `queries.ts`, `now.ts` |
 | Unmounted components of the four-region board | `web/src/components/ObservatoryHeaderBar.tsx`, `QueueRail.tsx`, `NowBand.tsx`, `FinishedBand.tsx`, `InspectPane.tsx`, `ItemWithoutRun.tsx` |
 
-**Reads with:** [observatory redesign](observatory-redesign.md) (the active
-linked-page observatory that replaced this design's four-region layout while
-keeping its provenance rules), [observatory actions](observatory-actions.md)
+**Reads with:** [observatory redesign](observatory-redesign.md) (the linked-page
+observatory, which serves the screens and keeps these provenance rules), [observatory actions](observatory-actions.md)
 (opt-in `--write` subprocess routes for queue placement and idea intake),
 [designer sessions](tillr-designer-sessions.md) (Vantage review-comment intake
 and warm designer sessions), [tillr item states](tillr-item-states.md) (the
@@ -122,7 +119,7 @@ Every read route and component in `tillr-view` enforces seven truthfulness invar
 4. **Unverified claims render as amber warnings, never quiet passes.** `ClaimAuditBanner.tsx` marks a claim `claim--verified` only when `status === "verified"` and `epistemic_state === "observed"`; any `unverified` claim or `unobserved_seam` state renders `claim--unverified`, `disproved` renders `claim--disproved`, and an empty `claim_checks` slice renders an explicit `absent` notice.
 5. **Artifact misses show every path searched.** When `GET /api/v1/runs/{id}/artifacts/{kind}` (`serveobs.go`) finds no file for `brief`, `fence`, `verdict`, `run-log`, `agent-result`, `events`, or `worktree`, `PayloadInspectorDrawer.tsx` lists `searched_paths` verbatim rather than showing an empty `<pre>`.
 6. **Live elapsed clocks tick only from recorded start times.** `liveElapsedText` and `leaseText` (`models/now.ts`) mark viewer-computed elapsed and lease countdown strings with `~` (or `expired` when `lease_expires_at <= nowMs`) and report `start not recorded` when `started_at` is null.
-7. **Remaining stage-projection gap (`stages` in `serve.go`):** `tillr-drain` records per-run `boundary.check` events in the event log, and `SpanViewer` on the redesigned Run page reads `pipeline_spans`, yet the legacy `stages()` builder on `GET /api/v1/runs/{id}` still emits the `boundary` stage row unconditionally as `epistemic_state: "unobserved_seam"` (`detail: "boundary ran inside drain.tick; no per-run record"`).
+7. **Remaining stage-projection gap (`stages` in `serve.go`):** `tillr-drain` records per-run `boundary.check` events in the event log, and `SpanViewer` on the redesigned Run page reads `pipeline_spans`, yet the `stages()` builder on `GET /api/v1/runs/{id}` still emits the `boundary` stage row unconditionally as `epistemic_state: "unobserved_seam"` (`"the loop's boundary check is a tick-level bracket, and no per-run record of it is written"`).
 
 ---
 
@@ -201,7 +198,7 @@ Every non-2xx HTTP response from `tillr-view` writes `{error: {code, message}}` 
   - `"landings"` — invalidates `queryKeys.landings` (`["landings"]`).
   - `"items:<id>"` — invalidates the `["items", id]` subtree (both item detail and document metadata).
   - `"runs:<id>"` — invalidates the `["runs", id]` subtree (run summary, timeline, gate, transcript, exchanges, and artifacts), plus throttled `["lanes"]`.
-  - `"runlog:<id>"` — invalidates `["runs", id]` with `exact: true`, refreshing the run's completeness and log state without refetching exchanges, timeline, or open artifacts four times a second while a log grows.
+  - `"runlog:<id>"` — invalidates `["runs", id]` with `exact: true`, refreshing the run's completeness and log state without refetching exchanges, timeline, or open artifacts each time a growing log changes.
   - Unrecognized resource prefixes are ignored (`socket.ts`) so newer servers do not break older tabs.
 - **Pause control (`paused` in `useObservatorySocket`):** Pausing keeps the WebSocket open (`pausedRef.current = true`), drops incoming invalidation frames, and suspends fallback polling (`queries.ts`). Resuming flips `paused` to `false` and invalidates the entire React Query cache (`client.invalidateQueries()`) to catch up in one pass ([`OQ-OBD1`](#why-its-this-way)).
 - **Reconnect and fallback:** When disconnected and unpaused, `queries.ts` enables HTTP polling (`FALLBACK_POLL_MS`), while `socket.ts` reconnects with exponential backoff that resets only after a connection stays open past the stability threshold.
@@ -212,7 +209,7 @@ Every non-2xx HTTP response from `tillr-view` writes `{error: {code, message}}` 
 
 The linked-page architecture in [observatory redesign](observatory-redesign.md) serves dedicated full-width pages routed by path, not a four-region viewport-locked layout (`ObservatoryHeaderBar` + `QueueRail` + `ItemPane` + `InspectPane`, plus `NowBand` and `FinishedBand`). The pages are `/`, `/items`, `/item/<id>`, `/run/<id>`, `/lane/<id>`, `/passes`, `/trunk`, `/performance`, `/graph`, `/questions` and `/designs`.
 
-At `11dec7eb2e0e196e3a9588c354616bea6f5cb1b1`, the components written for the four-region layout are in two groups:
+The components written for the four-region layout are in two groups:
 
 - **Mounted in the active `App.tsx` tree:** `ObservatoryShell.tsx` (top navigation, drain status, live/paused socket control), `ItemDetailPane.tsx` and `DocumentPane.tsx` (mounted inside `ItemPage`), `EpistemicBadge.tsx`, `StateGlyph.tsx`, and `RefusalState.tsx` (shared across pages), plus `ClaimAuditBanner.tsx`, `InterToolExchangeView.tsx`, and `PayloadInspectorDrawer.tsx` (mounted inside `RunPage` alongside `SpanViewer` and `TranscriptView`).
 - **Unmounted in `tools/tillr-view/web/src/components/` with unit tests:** `ObservatoryHeaderBar.tsx`, `QueueRail.tsx`, `NowBand.tsx`, `FinishedBand.tsx`, `InspectPane.tsx`, and `ItemWithoutRun.tsx` remain in the source tree and are exercised by component unit tests under `tools/tillr-view/web/tests/` (`loop-band.test.tsx`, `observatory.test.tsx`), though `App.tsx` does not mount them.
@@ -221,12 +218,13 @@ At `11dec7eb2e0e196e3a9588c354616bea6f5cb1b1`, the components written for the fo
 
 ## Current values
 
-Verified on `2026-11-20` at `11dec7eb2e0e196e3a9588c354616bea6f5cb1b1`. Behavioral explanations live in the sections above; literal bounds and tuning constants live here.
+Behavioral explanations live in the sections above; literal bounds and tuning constants live here.
 
 | Setting | Value | Defined in |
 | :--- | :--- | :--- |
 | Vantage question-index cache TTL | `vantageMaxAge = 10 * time.Minute` | `tools/tillr-view/vantagecache.go` |
-| Server WebSocket poll cadence | `wsPollInterval = 250 * time.Millisecond` | `tools/tillr-view/servews.go` |
+| Server WebSocket source reconcile cadence when no notification arrives | `wsFallbackPollInterval = 15 * time.Second` | `tools/tillr-view/servews.go` |
+| Server WebSocket source read cadence while the notification relay is disconnected | `wsDisconnectedPollInterval = 1 * time.Second` | `tools/tillr-view/servews.go` |
 | Server WebSocket frame write deadline | `wsWriteTimeout = 5 * time.Second` | `tools/tillr-view/servews.go` |
 | Server WebSocket read/write buffer sizes | `ReadBufferSize = 1024`, `WriteBufferSize = 1024` | `wsUpgrader` in `tools/tillr-view/servews.go` |
 | Server WebSocket close-reason byte cap | `120` bytes (under RFC 6455's 123-byte control-frame limit) | `closeWithReason` in `tools/tillr-view/servews.go` |
@@ -247,7 +245,7 @@ Each row preserves a decision (`D-OBS1`–`D-OBS13`) or settled question ([`OQ-O
 | D-OBS1 | Original four-region viewport-locked board layout (header, queue rail, item pane, evidence pane) *(superseded in layout by [observatory redesign](observatory-redesign.md))* | Superseded because squeezing queue lists, item metadata, and wide run timelines into fixed columns starved the waterfall and tables of horizontal space ([`OQ-OR2`](observatory-redesign.md#why-its-this-way)). |
 | D-OBS2 | `tillr-view` opens SQLite read-only (`store.OpenRead`) and never mutates the store directly *(narrowed on HTTP surface by `D-OA8` in [observatory actions](observatory-actions.md#why-its-this-way))* | Keeps a broken or experimental UI incapable of corrupting drain state; `--write` opts in only to two `tillr-item` subprocess routes (`place` and `idea`) while `tillr-view`'s own DB handle stays read-only. |
 | D-OBS3 | Attach explicit epistemic provenance (`EpistemicBadge`) to every stage, claim, exchange, and artifact | Prevents derived envelope clocks, unrecorded seams, lane-worktree copies, and unreadable JSON from masquerading as verified observations. |
-| D-OBS4 | Push resource-prefix invalidations over `/api/v1/ws` (with leaf `runlog:<id>` scoping) and refetch via standard HTTP `GET` routes | Avoids maintaining a second state-serialization model on the socket and keeps growing run logs from refetching exchanges and artifacts four times a second. |
+| D-OBS4 | Push resource-prefix invalidations over `/api/v1/ws` (with leaf `runlog:<id>` scoping) and refetch via standard HTTP `GET` routes | Avoids maintaining a second state-serialization model on the socket and keeps growing run logs from refetching exchanges and artifacts on every change. |
 | D-OBS5 | Return HTTP `200` with `epistemic_state: "unreadable"` for corrupt field/artifact payloads and typed kebab-case `{error: {code, message}}` for route refusals | Lets healthy sibling fields on an item or run still render while giving `RefusalState` a stable machine code for true route failures. |
 | D-OBS6 | Single-selection URL `#/item/<id>?run=<run_id>&tab=<tab>` *(superseded by per-entity hash URLs in `D-OR1` of [observatory redesign](observatory-redesign.md#why-its-this-way))* | Replaced by `#/item/<id>`, `#/run/<id>`, `#/lane/<id>`, `#/pass/<stamp>`, and `#/landing/<id>` so every entity has a first-class linkable URL. |
 | D-OBS7 | Encode every item state and waiting class three ways — colour, word, and symbol (`StateGlyph`) | Preserves legibility under colour-vision deficiency, monochrome copies, and dense table scans. |

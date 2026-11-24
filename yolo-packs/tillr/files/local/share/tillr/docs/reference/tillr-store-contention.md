@@ -3,15 +3,15 @@ title: "Store contention — the lander's write boundary and tracing a writer"
 status: accepted
 stage: CURRENT
 tags: [tillr, store, sqlite, reference]
-summary: "How tillr-land keeps Git work outside SQLite write transactions, how TILLR_SQLITE_TRACE=1 shows who waits for the store's writer and who holds it, and the one span the final landing write still holds."
+summary: "How tillr-land keeps Git work outside SQLite write transactions, how TILLR_SQLITE_TRACE=1 shows who waits for the store's writer and who holds it, and the one span the final landing write holds across Git."
 ---
 
 # Store contention — the lander's write boundary and tracing a writer
 
-> **Delivered copy.** This is `docs/reference/tillr-store-contention.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-store-contention.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-store-contention.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-store-contention.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 The store is one SQLite file with one writer at a time. This page says how long the lander
-holds that writer, how to see a writer and its waiters, and which span is still held across
+holds that writer, how to see a writer and its waiters, and which span is held across
 Git. The governing rules are the [landing principles](../design/landing-principles.md) and the
 [lander's lifecycle invariants](../../tillr-land/README.md#state-invariants).
 
@@ -27,10 +27,10 @@ trunk inputs produce an explicit error without a Move. A retry prepares again fr
 start. If this run's landing is already on the trunk, the retry records it and does not
 squash it a second time (see [the residual limitation](#the-residual-limitation)).
 
-Each Loop still performs full owner-aware initialization on its first successful session
-refresh. Only that Loop's later heartbeat/end opens omit redundant migration. New Loops
-and other create-open entry points retain registered schema and legacy-data migration.
-A failed heartbeat is still a fault, never false liveness.
+Each Loop performs full owner-aware initialization on its first successful session
+refresh. Only that Loop's later heartbeat and end opens omit the migration. New Loops
+and other create-open entry points run the registered schema and data migrations.
+A failed heartbeat is a fault, never false liveness.
 
 ## Observing remaining contention
 
@@ -128,12 +128,12 @@ What the trace cannot see:
 
 ## The residual limitation
 
-The final writer still spans trunk `rev-parse`, Move's worktree discovery, tip checks and
+The final writer spans trunk `rev-parse`, Move's worktree discovery, tip checks and
 `git merge --ff-only` (or `update-ref`), optional history-retention `update-ref` commands,
 and SQLite receipt/event commit. Hooks, storage or scheduling can make these operations
-exceed SQLite's unchanged five-second busy timeout. Releasing this exclusion requires a
+exceed SQLite's five-second busy timeout. Releasing this exclusion requires a
 new close/land serialization design. Git Move and SQLite
-receipt commit remain non-atomic: an error, a killed process, or an OS crash after Move can
+receipt commit are not atomic: an error, a killed process, or an OS crash after Move can
 leave a moved trunk without a receipt. The first failure is reported. The drain then retries
 the gated candidate, and that retry is idempotent rather than a second squash:
 

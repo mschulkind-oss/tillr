@@ -1,19 +1,15 @@
 # tillr-land — the only path the trunk moves through
 
 > [!WARNING]
-> **Known Gaps (verified 2026-11-14 at `04957a8a83`).** `tillr` has landed a live
-> candidate on an unattended tick, but three parts are unfinished:
-> 1. **The AutoQA handoff skill is not shipped** — `yolo-packs/tillr/skills/` holds
->    `tillr-operating` only, so the design's `tillr-autoqa` handoff has no skill to dispatch.
-> 2. **The observatory front end is not built** — `tillr view serve` answers 404 for the UI
->    until the front end under `tools/tillr-view/web` is built and embedded, which is a
->    separate Node step and not part of a Go build.
-> 3. **The `tillr` on `PATH` is the pack's rendered tree, not this working tree** — an edit
->    under `tools/tillr*` reaches the launcher only after the pack is mirrored and rendered,
->    so a session that must run its own change builds the working tree first.
->
-> **Do not wire `tillr` into another repository's gate while these stand.** The toolset
-> ships early so it can be reviewed, not so it can be depended on.
+> **Known gaps.** Two things about `tillr` are not what a first reading assumes:
+> 1. **The observatory front end is a separate build** — a `tillr-view` built by a plain
+>    `go build` answers 404 for the UI. The front end under `tools/tillr-view/web` is a
+>    Node build, embedded only under the `observatory` build tag (`just observatory` does
+>    both) or served from a directory named with `--web-dist`.
+> 2. **A `tillr` installed from the pack is not this working tree** — the pack under
+>    `yolo-packs/tillr` builds from its own mirrored copy of the source, which
+>    `just pack-sync` regenerates. To run an edit under `tools/tillr*`, build the working
+>    tree with `just tillr-build`.
 
 ## What this module owns
 
@@ -191,9 +187,9 @@ historical landing receipts. The drain removes an ordinary marker in settlement 
 that run has a durable
 `landed` row naming the marker's commit. A fork delivery marker stays until all pending
 examinations and leased lanes have finished: a sibling's boundary comparison needs the
-marker to recognize the patch branch's legitimate move. New landing events carry
-`base_ref` to distinguish the delivery; older receipts without that field are treated
-conservatively as fork deliveries when the published commit equals the candidate head.
+marker to recognize the patch branch's legitimate move. A landing event carries
+`base_ref` to distinguish the delivery; a receipt without that field is treated
+conservatively as a fork delivery when the published commit equals the candidate head.
 
 The drain removes all of a finished item's run pins, including earlier attempts and
 conflict repairs. Operator-owned held and recovery refs are never removed, even when
@@ -400,7 +396,6 @@ flight needs no intervention: the squash is recomputed onto the tip read under t
 verdict still binds the head's tree. A rewritten history is refused with `trunk-rewritten`.
 
 ## Test
-
 
 `go test ./...` in this directory builds the binary and drives the faces against scratch
 repositories. The land package's own suite pins the squash, the landing identity, the pin,

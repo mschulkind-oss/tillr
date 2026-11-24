@@ -7,7 +7,7 @@ summary: "The unfinished work on tillr, in the order it should be done and why: 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Reconciled:** 2026-11-24, against the tree and `uvx vantage-check index --roadmap docs/tillr/roadmap.md`.
 
@@ -53,17 +53,6 @@ First by rule 3: every other entry is built and verified by someone who starts f
    - **Outcome:** every suite passes on a clean machine and in continuous integration, with no
      dependence on the length of a directory path, on a program outside the tree, or on timing.
    - **Known failures:**
-     - Unix socket paths that exceed the kernel's limit when the scratch directory path is long:
-       the `TestWaitForTrigger*` tests, `TestRefreshSessionHeartbeatDoesNotWakeTrigger`,
-       `TestDrainNotifyAndNoNotifyParityUnderSteppedClock` and `TestItemRequestToLoopWakeLatency`
-       in [`trigger_notify_test.go`](../../tillr-drain/drain/trigger_notify_test.go).
-     - Two tests that need a fork build program the tree does not have:
-       `TestForkBuildDeliveryAndSuccessiveLaneBases` and
-       `TestPostLandingPiRollMovedBranchBuildsNewTipAndWorkerRecordsKey`. Entry 4 removes them
-       with the code they cover.
-     - [`definition_startup_test.go`](../../tillr-drain/drain/definition_startup_test.go)
-       puts a failing `git` stand-in on `PATH` before the shared drain binary is built, so the
-       build of that binary fails when this test runs first.
      - [`detached_gate_restart_test.go`](../../tillr-drain/drain/detached_gate_restart_test.go)
        races its gate fixture for a process-id file.
      - [`wake_test.go`](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-watch/wake_test.go) gives a wake three seconds

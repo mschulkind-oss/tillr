@@ -52,14 +52,14 @@ timeout <wall> claude -p --output-format stream-json --verbose \
 ```
 
 - **The brief travels on standard input**, so its size is not bounded by the argument list.
-- **`--strict-mcp-config` is always passed.** Measured: without it a run loads every
-  connector server the account and the jail know — about three times the prompt — and a
+- **`--strict-mcp-config` is always passed.** Without it a run loads every connector
+  server the account and its environment know, which multiplies the prompt, and a
   worker that holds mail, calendar and chat tools can act outside the repository. With it
   the run sees only the servers its row names with `--mcp-config`.
 - **`--dangerously-skip-permissions` is always passed, and `YOLO_NO_LAUNCH_FLAGS=1` is
-  exported.** A headless run cannot ask, so without the flag every write is refused. The
-  jail's launcher would add the same flag itself; switching the launcher's flags off and
-  passing it here keeps the argument list the same inside a jail and outside one.
+  exported.** A headless run cannot ask, so without the flag every write is refused. A
+  container's launcher may add the same flag itself; switching the launcher's flags off
+  and passing it here keeps the argument list the same with a launcher and without one.
 - **The lane markers** `BOARD_DRAIN_BRIEF`, `BOARD_DRAIN_RUN` and `BOARD_DRAIN_SESSION`
   are exported exactly as [`run-pi`](../pi/README.md) exports them, so a hook can tell a
   lane's worker from a person's session.
@@ -71,8 +71,7 @@ timeout <wall> claude -p --output-format stream-json --verbose \
   `account` unset preserves the ambient environment.
 - **The recording seam** is the same as `run-pi`'s: with a run id in the environment,
   `BASH_ENV`, `TILLR_TRACE_DIR` and `TILLR_REPO_ROOT` are exported, all fail-open. No
-  `GIT_TRACE2_*` variable is exported, and any the loop carries are unset (git trace2
-  recording was removed on 2026-11-17). The table is in
+  `GIT_TRACE2_*` variable is exported, and any the loop carries are unset. The table is in
   [the pi README](../pi/README.md#the-recording-seam).
 
 Refusals (exit 2, nothing started): the `backend` field names neither `claude` nor a seat
@@ -108,7 +107,7 @@ and refuse the `--`, as they refuse any argument they do not know.
 
 Capability: `call-suspends`, declared in [`ending-capability`](./ending-capability) and
 confirmed by the drain's probe of the installed `claude`; without the probe's answer the
-drain records `footer` and a run ends with the `RESULT:` footer as before. The design is
+drain records `footer` and a run ends with the `RESULT:` footer. The design is
 [section 7.1 of the landing-call design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md#71-the-mechanism-on-claude-code).
 
 A write node in a lane worktree, staged with that ending, ends with one tool call, as a pi
@@ -127,7 +126,7 @@ merged into the same generated settings, while `--setting-sources` remains up to
   returns in the same turn; `defer` for a valid call, after writing `landing-offer.json` in
   the shape pi writes; and `allow` when `landing-answer.json` names the call, so the server
   delivers the answer. A content refusal requires a new commit unless an operator
-  explicitly reopens the retained candidate. Historical report-only refusals are ignored.
+  explicitly reopens the retained candidate.
 - **`Stop`** nudges a plain-text stop once per distinct head, tree and last message.
 - **Delivery.** With `landing-answer.json` staged and `TILLR_SESSION_MODE=resume`, the
   adapter resumes with empty standard input when the session file's last mebibyte holds the
@@ -142,12 +141,10 @@ The runner sends SIGTERM, waits ten seconds, then kills any surviving process gr
 The continuation uses `--resume`, not a second `--session-id` creation, and its first
 message says the session was interrupted by a restart.
 
-**Owner-recorded measurement, 2026-11-16:** a Claude session was sent SIGTERM during
-`sleep 60`, exited 143, and the resumed session answered with the marker given
-before the signal. The accepted evidence is the owner's ruling in the
-[restart reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md#pausing-a-session).
-This lane did not re-run Claude or recover the original exact argv; the command
-shape below describes how to reproduce the ruling, not an invented raw transcript.
+The basis for the declared kind is in the
+[restart reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md#pausing-a-session): a
+session sent SIGTERM during `sleep 60` exits 143, and the resumed session answers with
+a marker it was given before the signal. This command shape reproduces it:
 
 ```sh
 claude -p --output-format stream-json --verbose --session-id "$UUID" \

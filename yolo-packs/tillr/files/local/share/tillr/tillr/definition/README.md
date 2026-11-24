@@ -2,8 +2,8 @@
 
 A **definition** is the data that turns tillr's core into one use: its item states,
 allowed state moves, dispatch conditions, completion rule, and optional hook program.
-The owner's word for this layer is **charter**
-([OQ-VO4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO4)), and the first one is
+The vocabulary's word for this layer is **charter**
+([OQ-VO4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO4)), and the embedded one is
 **git-landing** ([OQ-VO5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO5)); the code and
 its flags say "definition", as
 [the direction document](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-core-and-git-landing.md#the-words-this-document-uses)
@@ -14,7 +14,7 @@ The store utility records and reports it. Item state, apply, close, reopen, and
 sync read its lifecycle vocabulary; drain reads it for planning and hook startup
 validation.
 This package does not open a store, dispatch work, check a prerequisite, or run a
-program. The consumer column below includes both current and intended readers.
+program.
 
 ## Reading a file
 
@@ -47,9 +47,9 @@ writer replaces it. A nil reader uses the embedded default for a not-yet-created
 `HasState`, `IsFinished`, and `Allows` answer vocabulary membership and listed moves;
 a same-state write is not a move and need not have a listed self-transition.
 
-The declaration is one JSON record at key `store.definition` in the existing `meta`
-table. An absent row means the embedded Git-landing definition (`Default: true`);
-there is no new table or schema version. Reading a legacy store requires no migration.
+The declaration is one JSON record at key `store.definition` in the `meta`
+table. An absent row means the embedded Git-landing definition (`Default: true`),
+so a store with no declaration reads without a migration.
 An invalid declaration or metadata that disagrees with its content is an error,
 never a reason to use the default.
 
@@ -58,7 +58,7 @@ checks all current item states, replaces the declaration, and appends
 `store.definition.set` atomically. The event names `old_sha256` and `new_sha256`;
 the old hash names the embedded content when there was no declaration.
 `OccupiedStatesError` names every item and current state the replacement would
-drop. A store predating the item table has no items to check. No file, Git, or
+drop. A store with no item table has no items to check. No file, Git, or
 process work runs under SQLite's write lock. See the
 [store utility's usage and refusal behavior](https://github.com/mschulkind-oss/tillr/blob/main/tillr-store/README.md#the-stores-definition).
 
@@ -72,7 +72,7 @@ condition checked before dispatch. A **hook program** is one executable called f
 judgments the core cannot make. These terms come from
 [the build plan's vocabulary](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md#the-words-this-plan-uses).
 
-| Key | JSON type | Default | Meaning and intended reader |
+| Key | JSON type | Default | Meaning and reader |
 | :--- | :--- | :--- | :--- |
 | `definition` | String | Required | Nonblank name; store declaration and definition selection. |
 | `version` | Integer | Required | Must be 1; this package's format validator. |
@@ -109,7 +109,7 @@ wins over the definition. With a hook program, an unlisted step defaults to empt
 not the Git-landing step default; an empty gate, land, or verdict cannot judge a
 candidate, an empty replay cannot acquit it, an empty rolling does no rolling work,
 and an empty fixer gate leaves fixers on the ordinary gate. With no hook program,
-the existing command-line requirements and defaults remain unchanged.
+the drain's own command-line requirements and defaults apply.
 
 ### Describe
 
@@ -151,8 +151,7 @@ run's loop directory, not returned as mixed stdout logging.
 retained base reference when present; `--message-from` names the worker commit
 whose message is kept when present. These optional flags must still be advertised.
 Gate receives `TILLR_GATE_SPANS_OUT` and `TILLR_FAST_VERDICT_OUT`;
-land receives `TILLR_LAND_OBSERVE=1`. The drain keeps these existing artifact and
-observation conventions. The gate may also write failing-check details used for
+land receives `TILLR_LAND_OBSERVE=1`. The gate may also write failing-check details used for
 base replay. See [the drain reference](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md).
 
 ### Revision checks
@@ -169,19 +168,20 @@ worktree can name the owning repository.
 
 ### Completion and detail hooks
 
-These contracts are reserved for the
+The design is the
 [completion integration](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md#add-completion-through-the-definitions-hook-for-items-that-never-land).
-This change validates selected hooks at startup but does not yet call them.
+The drain calls `complete-item` for a definition whose `completes` is `hook`. It
+validates `after-completion` and `detail` at startup and does not call them.
 
 | Hook | Flags | Answer record and exit meaning |
 | :--- | :--- | :--- |
 | `complete-item` | `--item`, `--run`, `--store`, `--root` | Prints one JSON object with `state`, `reason`, and optional `resolves_via` pointer. It first records criterion verdicts in the store. Exit 0 requests the named finished state; 1 leaves the item unfinished; any other exit holds it as a hook fault. The core must validate the state and recorded verdicts before moving the item, with actor `definition:<name>`. |
-| `after-completion` | `--item`, `--store`, `--root` | No stdout record required. Exit 0 completes follow-up work; 1 is a negative answer; any other exit is a hook fault. It does not undo the already completed item. Invocation and negative-answer routing are future integration work. |
-| `detail` | `--body-ref`, `--root` | Prints one JSON record envelope of kind `item.detail`, with a definition-specific payload for the item's referenced details. Exit 0 supplies details; 1 means no detail is available; any other exit is a hook fault. Display rendering is future integration work. |
+| `after-completion` | `--item`, `--store`, `--root` | No stdout record required. Exit 0 completes follow-up work; 1 is a negative answer; any other exit is a hook fault. It does not undo the already completed item. |
+| `detail` | `--body-ref`, `--root` | Prints one JSON record envelope of kind `item.detail`, with a definition-specific payload for the item's referenced details. Exit 0 supplies details; 1 means no detail is available; any other exit is a hook fault. |
 
 ### Closed prerequisite vocabulary
 
-| Name | Condition the planner will check |
+| Name | Condition the planner checks |
 | :--- | :--- |
 | `fence` | The item names paths it is allowed to change, not an unrestricted repository root. |
 | `design-document` | The item's referenced design document exists. |
@@ -201,8 +201,9 @@ no brief template, and names no hook program.
 Its transitions preserve Git-landing's finished-item policy with one exception:
 `resolved-elsewhere` has no outgoing move, and `landed` has exactly one, back to
 `in-queue`. That move is how an automatically reverted landing's item returns to its
-worker (graph design [`OQ-GP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP1), ruled 2026-11-17): the full suite proved the landing broke
-the trunk, the drain reverted it, and the item's work is no longer on the trunk. Like
+worker (graph design [`OQ-GP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP1)):
+the full suite proved the landing broke the trunk, the drain reverted it, and the item's
+work is not on the trunk. Like
 any move out of a finished state it needs a reason and an actor. Close allows the three unfinished states
 to enter `closed`; reopen restores one of those three saved prior states. An unchanged
 state is not a move, so the file has no self-transitions. Command-specific requirements
@@ -211,5 +212,5 @@ the item utility in addition to the listed moves.
 
 Other definitions may list outgoing moves from selected finished states. The item
 utility requires a reason and actor and records them in the event when such a move
-is made. Legacy read-only states (`abandoned`, `deleted`, `in-progress`) are not
+is made. The frozen read-only states (`abandoned`, `deleted`, `in-progress`) are not
 writable vocabulary in the definition.
