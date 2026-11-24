@@ -1,13 +1,7 @@
 // Command tillr is the control surface over the tillr binaries: it resolves
 // `tillr <noun> ...` to `tillr-<noun> ...` on PATH and replaces itself with that binary,
-// so argv, stdio and the exit code reach the caller untouched (design §11).
-//
-// It holds no behavior of its own (D-UT7). It never parses, validates, defaults or
-// rewrites a noun's arguments, and it composes nothing: the binaries are the product and
-// this is the convenience that lets a caller type `tillr gate plan` instead of
-// `tillr-gate plan`. An unknown noun is refused here rather than forwarded
-// anywhere, so the wrapper cannot become a second interface to anything else
-// (design §12's shim rule).
+// so argv, stdio and the exit code reach the caller untouched (design §11), and hosts
+// the built-in `tillr notify serve` local wake-hint relay (D-SN5).
 package main
 
 import (
@@ -26,7 +20,7 @@ func main() {
 
 // nouns is the dispatch set, in the order the usage line prints it. A noun
 // has to be added here to be reachable; the wrapper never forwards unknown nouns.
-var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view", "watch"}
+var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view", "watch", "notify"}
 
 // dispatch is one invocation, resolved: the binary that answers it and the arguments it
 // is handed, unread.
@@ -46,6 +40,9 @@ func run(args []string) int {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		fmt.Printf("tillr: %s\nRun `tillr <noun> --help` for one noun's faces.\n", nounList())
 		return record.ExitOK
+	}
+	if len(args) > 0 && args[0] == "notify" {
+		return runNotify(args[1:], os.Stdout, os.Stderr)
 	}
 	d, err := resolve(args)
 	if err != nil {

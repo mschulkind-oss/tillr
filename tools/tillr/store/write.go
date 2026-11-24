@@ -19,6 +19,7 @@ type Tx struct {
 	ctx    context.Context
 	tx     *sql.Tx
 	events *eventCache
+	notify txNotifyState
 }
 
 type writeObserverKey struct{}
@@ -49,7 +50,18 @@ func (s *Store) WriteTx(ctx context.Context, fn func(*Tx) error) error {
 			operation = runtime.FuncForPC(pc).Name()
 		}
 	}
-	return s.writeTx(ctx, operation, fn)
+	var nstate txNotifyState
+	if err := s.writeTx(ctx, operation, func(tx *Tx) error {
+		if err := fn(tx); err != nil {
+			return err
+		}
+		nstate = tx.notify
+		return nil
+	}); err != nil {
+		return err
+	}
+	s.publishNotify(nstate)
+	return nil
 }
 
 // writeTx is WriteTx with the traced operation named by the caller, so a checkpoint
@@ -91,11 +103,23 @@ func (s *Store) writeTx(ctx context.Context, operation string, fn func(*Tx) erro
 // Append writes one event inside this transaction, through the substrate's append
 // primitive. An unregistered kind is refused, and the refusal takes the transaction's
 // rows with it.
-func (t *Tx) Append(e event.Event) (int64, error) { return event.Append(t.ctx, t.tx, e) }
+func (t *Tx) Append(e event.Event) (int64, error) {
+	seq, err := event.Append(t.ctx, t.tx, e)
+	if err != nil {
+		return 0, err
+	}
+	t.notify.appended = append(t.notify.appended, appendedEvent{ev: e, seq: seq})
+	return seq, nil
+}
 
 // Exec runs one statement inside this transaction.
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {
-	return t.tx.ExecContext(t.ctx, query, args...)
+	res, err := t.tx.ExecContext(t.ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	t.notify.mutated = true
+	return res, nil
 }
 
 // Query runs one query inside this transaction.
