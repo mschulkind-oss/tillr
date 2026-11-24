@@ -3,7 +3,6 @@ title: "Build-commit continuation — finishing uncommitted fenced work before s
 status: accepted
 stage: CURRENT
 verified: 2026-11-20
-verified_commit: bc8dda147
 covers:
   - tools/tillr-drain/drain/commit_continuation.go
   - tools/tillr-drain/drain/loop.go
@@ -16,7 +15,7 @@ summary: "How tillr-drain continues an eligible build run that exits normally wi
 
 # Build-commit continuation — finishing uncommitted fenced work before settlement
 
-**Status:** Verified 2026-11-20 against `bc8dda147`. UNMEASURED: verification
+**Status:** Verified 2026-11-20 against the tree. UNMEASURED: verification
 rests on the Go fixture suites; no live count of continued runs is recorded
 here.
 
@@ -239,8 +238,8 @@ outside the fence, and appending `ObstacleContract`
 > empty (`if record.Resumed && record.State != run.StatePaused && request.ResumePrompt == ""`).
 > `runContinuation` sets `record.Resumed = true` after every resumed segment so
 > wall-timeout continuations remain capped at one per `run_id`; gating a
-> non-empty `ResumePrompt` on `record.Resumed` would reintroduce the retired
-> one-continuation cap.
+> non-empty `ResumePrompt` on `record.Resumed` would cap build-commit
+> continuations at one as well.
 
 `runContinuation` verifies that the loop context is not cancelled, the staged
 brief exists on disk, and `ReadSessionID` returns a non-empty valid UUID (an
@@ -350,7 +349,7 @@ and [`pause.go`](../../tools/tillr-run/run/pause.go)):
 
 ## Current values
 
-Verified at `bc8dda147`. The prose above explains how these identifiers and
+Verified 2026-11-20. The prose above explains how these identifiers and
 files behave; this table is the single place their literal values are stated.
 
 | Value | Setting | Defined in |
@@ -374,7 +373,7 @@ normative behavior above might otherwise undo.
 
 | Decision | Why it stays |
 | :--- | :--- |
-| Continue immediately in `Loop.settle` on the same attempt *(designer's decision, 2026-11-17; open to owner overturn)* | Brief wording alone cannot force a worker to commit before ending; a deferred pause state would add scheduling states for an exited process; keeping the decision in `tillr-drain` settlement rather than `tillr-run` reuses the write-boundary bracket and spend accounting while keeping read-only, design, and comment runs out of build recovery. |
-| Bound continuations by identical-repeat work evidence, never a count *(owner ruling, 2026-11-17, audit finding F-09; aligned with `D-JL10` in [judge and lifecycle](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10))* | A fixed one-continuation cap discarded real multi-step progress when a worker needed one turn to finish edits and another to fix a failing test before committing; stopping only when a segment leaves paths and bytes unchanged prevents infinite loops without arbitrary cutoffs. |
+| Continue immediately in `Loop.settle` on the same attempt *(design decision, 2026-11-17; open to owner overturn)* | Brief wording alone cannot force a worker to commit before ending; a deferred pause state would add scheduling states for an exited process; keeping the decision in `tillr-drain` settlement rather than `tillr-run` reuses the write-boundary bracket and spend accounting while keeping read-only, design, and comment runs out of build recovery. |
+| Bound continuations by identical-repeat work evidence, never a count *(owner ruling, 2026-11-17; aligned with `D-JL10` in [judge and lifecycle](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10))* | A fixed cap of one continuation discards real multi-step progress when a worker needs one turn to finish edits and another to fix a failing test before committing; stopping only when a segment leaves paths and bytes unchanged prevents infinite loops without arbitrary cutoffs. |
 | Read durable `run.resume` claims (`continuationStarted`, `readPendingHistory`) in addition to `run.finish` | A continued process can be killed after claiming its lane lease and before writing `run.finish`, leaving the initial exit as the latest terminal record; folding `run.resume` keeps pending attempt state and refusal diagnostics accurate across crashes. |
 | Require a fenced path to continue, but list every uncommitted path on `no-op` refusal | Continuing for outside-fence-only edits would ask the worker to commit changes the fence check must reject, whereas omitting outside-fence paths from the `no-op` refusal detail would hide dirty worktree state from the returning worker and operator. |
