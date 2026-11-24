@@ -282,8 +282,8 @@ pack-sync *modules:
 #   PATH="$YOLO_DURABLE_DIR/bin:$PATH" tillr drain loop ...
 #
 # Run it against a SCRATCH store, never the launched binaries' store: a newer binary migrates a
-# store, and the launched binaries then refuse it. docs/design/tillr-distribution.md Section 9
-# states the rule and OQ-TD4 is the ruling that would remove the constraint.
+# store, and the launched binaries then refuse it. docs/reference/tillr-distribution.md,
+# "Running a tree the pack has not rendered", states the rule.
 #
 # Bootstrap, the one exception: when the deployed loop itself cannot prove the trunk (it
 # crashes, or predates the fix the heavy run needs), the pointer can never reach the fix
