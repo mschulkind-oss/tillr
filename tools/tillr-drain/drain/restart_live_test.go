@@ -5,6 +5,7 @@ package drain_test
 // "Replacing the loop and observatory in place").
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -350,12 +351,41 @@ func TestRestartRequestFiledOfflineIsAnsweredByTheNextLoop(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store)
 	waiter := exec.Command(drainBin(t), "restart", "--root", f.root, "--store", f.store, "--wait")
-	var out strings.Builder
-	waiter.Stdout = &out
+	stdout, err := waiter.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	waiter.Stderr = &stderr
 	if err := waiter.Start(); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(300 * time.Millisecond)
+	t.Cleanup(func() {
+		if waiter.Process != nil && waiter.ProcessState == nil {
+			_ = waiter.Process.Kill()
+			_ = waiter.Wait()
+		}
+	})
+	scanner := bufio.NewScanner(stdout)
+	if !scanner.Scan() {
+		waitErr := waiter.Wait()
+		t.Fatalf("restart --wait exited before recording a request: %v (scan: %v)\n%s", waitErr, scanner.Err(), stderr.String())
+	}
+	var out strings.Builder
+	out.WriteString(scanner.Text())
+	out.WriteByte('\n')
+	if !strings.Contains(out.String(), "restart-drain-") {
+		t.Fatalf("restart --wait first line = %q, want a restart-drain id", out.String())
+	}
+	// Drain the remaining stdout (the answer line) while the loop runs.
+	restDone := make(chan error, 1)
+	go func() {
+		for scanner.Scan() {
+			out.WriteString(scanner.Text())
+			out.WriteByte('\n')
+		}
+		restDone <- scanner.Err()
+	}()
 	policy := filepath.Join(scratch(t, "offline-policy"), "policy.json")
 	raw, _ := json.Marshal(f.policy)
 	writeFile(t, policy, string(raw))
@@ -363,8 +393,11 @@ func TestRestartRequestFiledOfflineIsAnsweredByTheNextLoop(t *testing.T) {
 	if raw, err := loop.CombinedOutput(); err != nil {
 		t.Fatalf("loop: %v: %s", err, raw)
 	}
+	if err := <-restDone; err != nil {
+		t.Fatalf("reading restart --wait output: %v", err)
+	}
 	if err := waiter.Wait(); err != nil {
-		t.Fatalf("restart --wait: %v\n%s", err, out.String())
+		t.Fatalf("restart --wait: %v\n%s\n%s", err, out.String(), stderr.String())
 	}
 	if !strings.Contains(out.String(), "restart-drain-") || !strings.Contains(out.String(), "already-current") {
 		t.Fatalf("restart --wait printed %q", out.String())
