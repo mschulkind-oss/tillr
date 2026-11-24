@@ -4,6 +4,7 @@ package drain
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -200,6 +201,11 @@ func readableFooter(footer string) bool {
 		return true
 	}
 	return false
+}
+
+// unreadFooterReason describes an unread RESULT footer for the restarted run's brief.
+func unreadFooterReason(footer string) string {
+	return fmt.Sprintf("report ended with unread %s %q (accepted: done, failed, blocked, trunk-broken)", ReportFooter, footer)
 }
 
 // priorRun is one terminal run the store holds for an item, as the planner reads it.

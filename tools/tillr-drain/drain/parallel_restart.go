@@ -28,6 +28,7 @@ func restartParallel(r *store.Reader, d Decision) (Decision, bool, error) {
 		req.RunID = markRunID(req.RunID, "restart")
 		node.RunRequest = &req
 		node.WorkflowRestart = true
+		node.UnreadFooter = ""
 		nodes[i] = node
 		restarted = true
 	}

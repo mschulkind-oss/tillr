@@ -130,6 +130,7 @@ type Decision struct {
 	DesignerReason    string         `json:"designer_reason,omitempty"`
 	NodeStartRunID    string         `json:"node_start_run_id,omitempty"`
 	WorkflowRestart   bool           `json:"workflow_restart,omitempty"`
+	UnreadFooter      string         `json:"unread_footer,omitempty"`
 	NodeInfraFailures int            `json:"node_infra_failures,omitempty"`
 	WorkflowRelease   bool           `json:"workflow_release,omitempty"`
 	FreshNodeStage    bool           `json:"fresh_node_stage,omitempty"`

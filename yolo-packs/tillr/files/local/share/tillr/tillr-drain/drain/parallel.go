@@ -236,7 +236,7 @@ func (l *Loop) stageParallel(ctx context.Context, d Decision, base string) (Deci
 		if err != nil {
 			return d, err
 		}
-		spec := StageSpec{Policy: l.currentPolicy(), Continue: true, Isolated: true, Node: &node.Workflow.Stages[node.NodeIndex], InputPaths: paths, LaneID: node.LaneID, ItemID: node.ItemID, RunID: node.RunRequest.RunID, Backend: node.RunRequest.Backend, BaseSHA: base, WorkingDir: node.RunRequest.WorkingDir, TimeoutMS: node.RunRequest.TimeoutMS}
+		spec := StageSpec{Policy: l.currentPolicy(), Continue: true, Isolated: true, Node: &node.Workflow.Stages[node.NodeIndex], InputPaths: paths, LaneID: node.LaneID, ItemID: node.ItemID, RunID: node.RunRequest.RunID, Backend: node.RunRequest.Backend, BaseSHA: base, WorkingDir: node.RunRequest.WorkingDir, TimeoutMS: node.RunRequest.TimeoutMS, UnreadFooter: node.UnreadFooter}
 		if err := l.stageInfrastructureSession(ctx, &node, &spec); err != nil {
 			return d, err
 		}
@@ -650,7 +650,7 @@ func (l *Loop) settleParallelReader(ctx context.Context, work *pendingWork, node
 			// No footer, or one naming no ending, is no answer: this reader alone runs
 			// again and its finished siblings are kept, without counting a normal exit
 			// as an infrastructure failure.
-			updated, ok, e := l.restartUnreadParallelNode(node, rec)
+			updated, ok, e := l.restartUnreadParallelNode(node, rec, reportFooter(log))
 			if e != nil {
 				return node, rec, log, "", laneOutcome{err: e}
 			}

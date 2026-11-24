@@ -212,6 +212,8 @@ type StageSpec struct {
 	// RepeatedCall is the repeating-call ending this dispatch answers
 	// (Decision.RepeatedCall). A non-nil value appends its note to the brief.
 	RepeatedCall *RepeatedCall
+	// UnreadFooter is the unread RESULT footer word that caused this step to restart.
+	UnreadFooter string
 	// TrunkRedNotice carries open trunk-fixer notices when staging a non-fixer run
 	// while the trunk is red (OQ-GP7), so the worker does not spend its run on a failure
 	// it did not cause.
@@ -507,6 +509,15 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	earlier, err := preservedFacts(ctx, s.Store, spec)
 	if err != nil {
 		return err
+	}
+	if spec.UnreadFooter != "" {
+		reason := unreadFooterReason(spec.UnreadFooter)
+		if !strings.Contains(earlier, reason) {
+			if earlier != "" {
+				earlier += "\n\n"
+			}
+			earlier += "The earlier run stopped: " + reason + "."
+		}
 	}
 	if spec.preservedConflict != nil {
 		earlier += spec.preservedConflict.brief()

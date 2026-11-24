@@ -3,6 +3,7 @@ package drain
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -62,6 +63,19 @@ func TestParallelReaderWithAnUnreadableFooterRunsAgainAlone(t *testing.T) {
 		}
 		return err
 	})
+	briefBytes, err := os.ReadFile(filepath.Join(RunDir(f.root, "run-item-a-a1-n2-restart"), BriefFile))
+	if err != nil {
+		t.Fatalf("read restarted reader brief: %v", err)
+	}
+	brief := string(briefBytes)
+	for _, want := range []string{`"finished"`, "done", "failed", "blocked", "trunk-broken"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("restarted parallel reader brief missing %q:\n%s", want, brief)
+		}
+	}
+	if strings.Contains(brief, "orphaned workflow restarted") {
+		t.Errorf("restarted parallel reader brief still says orphaned workflow restarted:\n%s", brief)
+	}
 }
 
 // legacyUnreadReader reproduces the store a loop built before footers were read through
@@ -270,5 +284,144 @@ func TestNormalExitWorkflowNodeWithoutFooterNotCountedAsInfrastructure(t *testin
 			}
 			return nil
 		})
+	})
+}
+
+func TestUnreadFooterRestartBriefQuotesWordAndAcceptedEndings(t *testing.T) {
+	runRestart := func(t *testing.T, writeNode, dirty, commit bool, rec run.Record, report string) string {
+		t.Helper()
+		f, l, _ := workflowLoopFixture(t, "")
+		ctx := context.Background()
+		base := runGit(t, f.root, "rev-parse", TrunkRef)
+		p := mustPlan(t, l)[0]
+		if ok, _, err := l.applyPlan(ctx, p, base, l.cfg.Now()); err != nil || !ok {
+			t.Fatalf("claim: %v %v", ok, err)
+		}
+		d := p.decision
+		if writeNode {
+			d.Workflow.Stages[0].Access = "write"
+		}
+		staged, err := l.stageDispatches(ctx, []Decision{d}, base, &LoopResult{})
+		if err != nil || len(staged) != 1 {
+			t.Fatalf("stage first run: len=%d err=%v", len(staged), err)
+		}
+		d = staged[0]
+		target := l.laneTarget(d.LaneID)
+		if dirty || commit {
+			writeForkFile(t, filepath.Join(target, "a.txt"), "earlier step work\n")
+		}
+		if commit {
+			runGit(t, target, "add", "a.txt")
+			runGit(t, target, "commit", "-qm", "earlier step commit")
+		}
+
+		rec.RunID = d.RunRequest.RunID
+		rec.ItemID = d.ItemID
+		rec.LaneID = d.LaneID
+		rec.Backend = "fixture"
+		fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+
+		result := &LoopResult{}
+		handled, err := l.settleNode(ctx, d, rec, report, base, result, false)
+		if err != nil || !handled {
+			t.Fatalf("settleNode = (%v, %v), want (true, nil)", handled, err)
+		}
+		restarted := pendingForTest(t, f, d.ItemID)
+		if !restarted.Decision.WorkflowRestart {
+			t.Fatalf("restarted = %+v, want WorkflowRestart=true", restarted.Decision)
+		}
+		stagedRestart, err := l.stageDispatches(ctx, []Decision{restarted.Decision}, base, &LoopResult{})
+		if err != nil || len(stagedRestart) != 1 {
+			t.Fatalf("stage restarted run: len=%d err=%v", len(stagedRestart), err)
+		}
+		briefBytes, err := os.ReadFile(filepath.Join(RunDir(f.root, stagedRestart[0].RunRequest.RunID), BriefFile))
+		if err != nil {
+			t.Fatalf("read restarted brief: %v", err)
+		}
+		return string(briefBytes)
+	}
+
+	t.Run("unread footer word on write step with committed work", func(t *testing.T) {
+		brief := runRestart(t, true, false, true, run.Record{
+			State: run.StateExited, EndCause: run.EndNormalExit, ExitCode: code(0),
+			StartedAt: "2026-11-23T23:03:00Z", FinishedAt: "2026-11-23T23:38:13Z",
+		}, "Did the work and committed.\nRESULT: ok\n")
+		for _, want := range []string{`"ok"`, "done", "failed", "blocked", "trunk-broken"} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("restarted brief missing %q:\n%s", want, brief)
+			}
+		}
+		if strings.Contains(brief, "orphaned workflow restarted") {
+			t.Errorf("restarted brief still contains orphaned workflow restarted:\n%s", brief)
+		}
+	})
+
+	t.Run("unread footer word on write step with dirty work", func(t *testing.T) {
+		brief := runRestart(t, true, true, false, run.Record{
+			State: run.StateExited, EndCause: run.EndNormalExit, ExitCode: code(0),
+			StartedAt: "2026-11-23T23:03:00Z", FinishedAt: "2026-11-23T23:38:13Z",
+		}, "Did the work.\nRESULT: ok\n")
+		for _, want := range []string{"Earlier work exists", `"ok"`, "done", "failed", "blocked", "trunk-broken"} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("restarted brief missing %q:\n%s", want, brief)
+			}
+		}
+		if strings.Contains(brief, "orphaned workflow restarted") || strings.Contains(brief, "workflow node answer unread") {
+			t.Errorf("restarted brief still contains generic reason:\n%s", brief)
+		}
+	})
+
+	t.Run("unread footer word on read-only step with no worktree changes", func(t *testing.T) {
+		brief := runRestart(t, false, false, false, run.Record{
+			State: run.StateExited, EndCause: run.EndNormalExit, ExitCode: code(0),
+			StartedAt: "2026-11-23T23:03:00Z", FinishedAt: "2026-11-23T23:38:13Z",
+		}, "Plan ready.\nRESULT: ok\n")
+		for _, want := range []string{`"ok"`, "done", "failed", "blocked", "trunk-broken"} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("restarted brief missing %q:\n%s", want, brief)
+			}
+		}
+		if strings.Contains(brief, "orphaned workflow restarted") {
+			t.Errorf("restarted brief still contains orphaned workflow restarted:\n%s", brief)
+		}
+	})
+
+	t.Run("infrastructure failure restart keeps present wording", func(t *testing.T) {
+		brief := runRestart(t, true, true, false, run.Record{
+			State: run.StateFailedToStart, EndCause: run.EndFailedToStart,
+			StartedAt: "2026-11-23T23:03:00Z", FinishedAt: "2026-11-23T23:03:05Z",
+		}, "")
+		if !strings.Contains(brief, "That run stopped: workflow infrastructure failure.") {
+			t.Errorf("infrastructure restart brief changed wording:\n%s", brief)
+		}
+		if strings.Contains(brief, "report ended with unread") {
+			t.Errorf("infrastructure restart brief unexpectedly mentions unread footer:\n%s", brief)
+		}
+	})
+
+	t.Run("signal interruption restart keeps present wording", func(t *testing.T) {
+		brief := runRestart(t, true, false, true, run.Record{
+			State: run.StateExited, EndCause: run.EndSignal, ExitCode: code(143),
+			StartedAt: "2026-11-23T23:03:00Z", FinishedAt: "2026-11-23T23:05:00Z",
+		}, "")
+		if !strings.Contains(brief, "That run stopped: orphaned workflow restarted.") {
+			t.Errorf("signal restart brief changed wording:\n%s", brief)
+		}
+		if strings.Contains(brief, "report ended with unread") {
+			t.Errorf("signal restart brief unexpectedly mentions unread footer:\n%s", brief)
+		}
+	})
+
+	t.Run("missing footer restart keeps present wording", func(t *testing.T) {
+		brief := runRestart(t, true, true, false, run.Record{
+			State: run.StateExited, EndCause: run.EndNormalExit, ExitCode: code(0),
+			StartedAt: "2026-11-23T23:03:00Z", FinishedAt: "2026-11-23T23:05:00Z",
+		}, "Finished without writing a footer.")
+		if !strings.Contains(brief, "That run stopped: workflow node answer unread.") {
+			t.Errorf("missing-footer restart brief changed wording:\n%s", brief)
+		}
+		if strings.Contains(brief, "report ended with unread") {
+			t.Errorf("missing-footer restart brief unexpectedly mentions unread footer:\n%s", brief)
+		}
 	})
 }
