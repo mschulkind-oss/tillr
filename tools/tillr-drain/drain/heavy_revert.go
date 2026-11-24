@@ -277,7 +277,7 @@ func (l *Loop) revertFromGateReplay(ctx context.Context, candidate Candidate, re
 		checks = append(checks, HeavyCheck{CheckID: id, LogPath: gate.CheckLogs[id]})
 	}
 	replayOne := func(ctx context.Context, sha, checkID string) (bool, error) {
-		out, err := replay.Replay(ctx, candidate, sha, []string{checkID})
+		out, err := l.runReplay(ctx, replay, candidate, sha, []string{checkID})
 		l.sweepDisabledMarkers(ctx)
 		if err != nil {
 			return false, err
