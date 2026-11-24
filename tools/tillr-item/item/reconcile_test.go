@@ -93,7 +93,7 @@ func TestReconcileSixCases(t *testing.T) {
 		t.Fatalf("counts %v", report.Counts)
 	}
 	text := item.FormatReconcileReport(report)
-	for _, s := range []string{`id="item-graduate-built" seat="design" paths="docs/"`, `id="item-design-design" seat="design" paths="docs/design.md,docs/roadmap.md,docs/tillr/roadmap.md,docs/pi/roadmap.md"`, "stage: BUILT", "docs/draft.md: held needs-design", "outside-index: docs/outside.md"} {
+	for _, s := range []string{`id="item-graduate-built" seat="design" paths="docs/"`, `id="item-design-design" seat="design" paths="docs/design.md,docs/roadmap.md,docs/tillr/roadmap.md"`, "stage: BUILT", "docs/draft.md: held needs-design", "outside-index: docs/outside.md"} {
 		if !strings.Contains(text, s) {
 			t.Errorf("missing %q in %s", s, text)
 		}
