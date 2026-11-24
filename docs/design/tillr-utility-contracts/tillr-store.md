@@ -2,16 +2,15 @@
 title: "Contract: tillr-store"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
 tags: [tillr, contract, store]
-summary: "What tillr-store provides and expects, read from the code at dab5a2da0e: eight faces that create, check, recover and inventory the store, three record kinds, and five exit codes. It owns no table. It expects the item, run, land and drain packages to register their tables and kinds when loaded, and it types their table, ref and file names in its inventory."
+summary: "What tillr-store provides and expects: eight faces that create, check, recover and inventory the store, three record kinds, and five exit codes. It owns no table. It expects the item, run, land and drain packages to register their tables and kinds when loaded, and it types their table, ref and file names in its inventory."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-store
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** The contract examples and their checks are not built: `fd -t d '^contract$' tools` finds nothing. The lists below describe what the code provides and reads. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
 **What it is.** One Go program at `tools/tillr-store`. It is the operator's hands on the store file. The store's own code is in [the library](./tillr.md); this program wraps it in faces.
 
@@ -76,9 +75,9 @@ The face names, which the library's recovery and checkpoint messages print as re
 | The same for the `run` package and `run.record` | [tillr-run](./tillr-run.md) | Go import, for no name | `main.go` |
 | The same for the `land` package | [tillr-land](./tillr-land.md) | Go import, for no name | `main.go` |
 | The same for the `drain` package and the packages it links | [tillr-drain](./tillr-drain.md) | Go import, for no name | `main.go` |
-| Table names, to describe them: fifteen are typed, of the item, run and land utilities | each owner | SQL (`count(*)` per table) | `inventory.go` |
+| Table names, to describe them: typed names of the item, run and land utilities' tables | each owner | SQL (`count(*)` per table) | `inventory.go` |
 | The ref groups `refs/tillr/runs` and `refs/tillr/preserved` | [tillr-drain](./tillr-drain.md) | `git for-each-ref` | `inventory.go` |
-| The run directory's file names, fourteen typed, and the lane directory | [tillr-drain](./tillr-drain.md), [tillr-run](./tillr-run.md), [tillr-trace](./tillr-trace.md) | files | `inventory.go` |
+| The run directory's file names, typed, and the lane directory | [tillr-drain](./tillr-drain.md), [tillr-run](./tillr-run.md), [tillr-trace](./tillr-trace.md) | files | `inventory.go` |
 | In its schema test: the drain's `loop` flags, and that the drain, view, run and item programs build | each of the four | subprocess | `init_schema_test.go` |
 
 Without the four imports, `init` would make a store with three tables, and every other utility's first read would fail.
@@ -93,9 +92,9 @@ Without the four imports, `init` would make a store with three tables, and every
 
 In `tools/tillr-store`, in its fast suite, in process.
 
-- **Exists today.** `TestTheReportPayloadCarriesExactlyTheContractKeys`, `TestCheckReportsEveryContractField`, `TestEveryFaceRefusesAnIncompatibleSchema`, `TestSeedRefusesALiveStore`, `TestEventsWritesTheSeqSoTheCursorAdvances`, `TestHelpIsTheFaceSurface`.
+- **Exists.** `TestTheReportPayloadCarriesExactlyTheContractKeys`, `TestCheckReportsEveryContractField`, `TestEveryFaceRefusesAnIncompatibleSchema`, `TestSeedRefusesALiveStore`, `TestEventsWritesTheSeqSoTheCursorAdvances`, `TestHelpIsTheFaceSurface`.
 - **To add.** One example per record kind and face, compared whole. The face and flag list as a file compared with `--help`. One example per exit code.
-- **"Init makes every table".** Today this is `TestInitSchemaMatchesEveryOwnerAndTheLoop`, which builds four other programs. In its place: each owner's contract lists its tables, and one in-process test compares `init`'s schema with the union of the lists. It needs no other program.
+- **"Init makes every table".** `TestInitSchemaMatchesEveryOwnerAndTheLoop` pins this by building four other programs. The contract replaces it: each owner's contract lists its tables, and one in-process test compares `init`'s schema with the union of the lists. It needs no other program.
 
 ## 5. Reach-ins to fix
 

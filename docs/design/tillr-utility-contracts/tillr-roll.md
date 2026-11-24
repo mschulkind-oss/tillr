@@ -2,16 +2,15 @@
 title: "Contract: tillr-roll"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
 tags: [tillr, contract, roll]
-summary: "What tillr-roll provides and expects, read from the code at dab5a2da0e: two Python scripts, the roller that builds and installs new binaries and the keeper that keeps the loop running. Other utilities read almost nothing from them. They expect four faces of the drain and the view, two printed lines matched character for character, one event kind read and one written with raw SQL, and the `landings` table."
+summary: "What tillr-roll provides and expects: two Python scripts, the roller that builds and installs new binaries and the keeper that keeps the loop running. Other utilities read almost nothing from them. They expect four faces of the drain and the view, two printed lines matched character for character, one event kind read and one written with raw SQL, and the `landings` table."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-roll
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** The contract examples and their checks are not built: `fd -t d '^contract$' tools` finds nothing. The lists below describe what the code provides and reads. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
 **What it is.** Two Python scripts at `tools/tillr-roll`:
 
@@ -88,7 +87,7 @@ The one printed thing the drain reads, the failing test's name, becomes a field 
 
 In `tests/tillr-roll.test.py` and `tests/tillr-keep.test.py`. Those two files move into `tools/tillr-roll` so that the utility's pins live in it; that is a move and no change of content.
 
-- **Exists today.** Both suites run without a real store, loop, gate or agent. They type an `events` table of six columns, a `landings` table of four, and a `drain.build-started` payload.
+- **Exists.** Both suites run without a real store, loop, gate or agent. They type an `events` table of six columns, a `landings` table of four, and a `drain.build-started` payload.
 - **What it provides.** One example of the failure event and one of the fallback file, made by `record_failure`; one of `roll.json`, made by the staging function. The drain's `alarms` and schema-roll tests read them.
 - **The write goes through the owner.** The roller stops inserting into `events`. It runs a face the drain provides that records a roll failure, so the kind's owner writes its own kind. The fallback file stays for a store that cannot be opened at all.
 - **What it expects.** The typed tables are replaced by a seed store the library, the drain and land produce from their builders. The schema line, the two-line restart answer and `stop`'s exit codes are read from the drain's examples of those faces, and the stand-in `tillr-drain` in the keeper's suite prints from them.

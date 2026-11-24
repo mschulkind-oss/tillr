@@ -2,24 +2,23 @@
 title: "Contract: tillr-drain"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
 tags: [tillr, contract, drain]
-summary: "What tillr-drain provides to the other tillr utilities and what it expects from them, read from the code at dab5a2da0e: twenty-one faces, sixteen library packages, the planner's answer, the hold reasons and their rules, thirty-one tables, about ninety event kinds and the run directory. It is the largest provider and the largest consumer, and the pair it forms with tillr-view is the first slice of the build."
+summary: "What tillr-drain provides to the other tillr utilities and what it expects from them: its faces, its reader packages, the planner's answer, the hold reasons and their rules, its tables, its event kinds and the run directory. It is the largest provider and the largest consumer, and the pair it forms with tillr-view is the first slice of the build."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-drain
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** The contract examples and their checks are not built: `fd -t d '^contract$' tools` finds nothing. The lists below describe what the code provides and reads. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
-**What it is.** The drain plans the queue and drives the other utilities through it. It is one Go module at `tools/tillr-drain` with a command package, the engine package `drain`, and sixteen smaller packages. The command package and `drain` are two **parts**: each has its own test suite, and one has broken the other's.
+**What it is.** The drain plans the queue and drives the other utilities through it. It is one Go module at `tools/tillr-drain` with a command package, the engine package `drain`, and a set of smaller packages. The command package and `drain` are two **parts**: each has its own test suite, and a change in one can break the other's.
 
 ## 1. What it provides
 
 ### 1.1 Faces
 
-`faceList` in `main.go` names twenty-one: `probe-backend`, `workflow`, `why`, `policy`, `plan`, `once`, `retry`, `clear-fault`, `accept-rewrite`, `acknowledge-patch-move`, `push`, `sweep-refs`, `acquit`, `examine`, `set-aside`, `boundary`, `resume`, `scale`, `stop`, `restart`, `loop`.
+`faceList` in `main.go` names them: `probe-backend`, `workflow`, `why`, `policy`, `plan`, `once`, `split`, `retry`, `clear-fault`, `accept-rewrite`, `acknowledge-patch-move`, `push`, `sweep-refs`, `acquit`, `examine`, `set-aside`, `boundary`, `resume`, `scale`, `stop`, `restart`, `loop`.
 
 Exit codes are the library's six. These faces are run or named by another utility:
 
@@ -54,13 +53,13 @@ Exit codes are the library's six. These faces are run or named by another utilit
 | `spend` | Recorded cost | view | `Read` |
 | `stop` | Why the loop stopped, as a sentence and a next step | view | `Explain Explanation` |
 | `redcap` | The gate policy; the red-cap hold type | land | `Hold` |
-| `drain` | The engine | the command package (68 names in production, 140 in tests); `tillr-store`, `tillr-watch` and nothing by name | see [§3](#3-contract-and-private) |
+| `drain` | The engine | the command package; `tillr-store` and `tillr-watch`, for no name | see [§3](#3-contract-and-private) |
 
 ### 1.3 Records and event kinds
 
 Records: `drain.decision` (written to `plan`'s output file), `drain.loop` (the loop result file), and the push outcome printed by `push --json`.
 
-Event kinds: the drain registers about ninety under the owner `drain`, found with `rg -o '"drain\.[a-z0-9.\-]+"' tools/tillr-drain -g '!*_test.go'`. Other utilities read these by name:
+Event kinds: the drain registers its kinds under the owner `drain`, found with `rg -o '"drain\.[a-z0-9.\-]+"' tools/tillr-drain -g '!*_test.go'`. Other utilities read these by name:
 
 | Kind | Read by | Fields they read |
 | :--- | :--- | :--- |
@@ -81,11 +80,11 @@ The drain also appends `gate.plan` and `gate.verdict` events, which wrap the gat
 
 ### 1.4 Tables
 
-The drain owns thirty-one ([the overview's list](../tillr-utility-contracts.md#23-who-owns-which-table)). Read from outside with the reader's own SQL:
+The drain's tables are in [the overview's list](../tillr-utility-contracts.md#23-who-owns-which-table). These are read from outside with the reader's own SQL:
 
 | Table | Read by |
 | :--- | :--- |
-| `dispatches` | view (twelve files), `tillr-trace` |
+| `dispatches` | view, `tillr-trace` |
 | `drain_passes`, `drain_pass_spend`, `drain_sessions`, `gate_spans`, `backend_windows` | view |
 | `node_runs`, `node_artifacts`, `node_reused`, `graph_revisions` | view; the library's judge migration |
 | `retries` | view, item |
@@ -94,7 +93,7 @@ The drain owns thirty-one ([the overview's list](../tillr-utility-contracts.md#2
 | `trunk_rewrites` | land, item |
 | `last_designers`, `comment_runs`, `comment_deliveries`, `comment_arrivals`, `comment_reply_states`, `comment_confirmation` | view |
 
-The other twelve have no reader outside the drain's module.
+The rest have no reader outside the drain's module.
 
 ### 1.5 Files, refs and environment
 
@@ -112,7 +111,7 @@ The other twelve have no reader outside the drain's module.
 
 ### 1.6 Names others match on
 
-- **Hold reasons.** 101 keys in `holdrules.Rules`, with six prefix forms such as `trunk-rewritten: `. `TestEveryReasonConstantHasAHoldRule` holds the list against the engine's constants.
+- **Hold reasons.** The keys of `holdrules.Rules`, with prefix forms such as `trunk-rewritten: `. `TestEveryReasonConstantHasAHoldRule` holds the list against the engine's constants.
 - **Classes.** `alarm`, `needs you`, `waits on work`, `needs a cause`, `ready`, `moving`, `waits on the loop`.
 - **Obstacle kinds.** `owner`, `trunk`, `tooling`, `seat`, `definition`; a hold's reason code is `obstacle-<kind>`.
 - **Alarm kinds.** `backend-closed`, `backend-window`, `judge-backend-unavailable`.
@@ -120,25 +119,25 @@ The other twelve have no reader outside the drain's module.
 - **Retry acknowledgments.** `gate-failed`, `unjudged`.
 - **Restart answers.** `restarted`, `refused`.
 
-Sentences others compare today, which become private: every mover's text after its owner, every `why` text after its reason code, the alarm line, the stop explanation's sentence and next step, and the `loop: …` report lines.
+Sentences other utilities compare, which the contract makes private: every mover's text after its owner, every `why` text after its reason code, the alarm line, the stop explanation's sentence and next step, and the `loop: …` report lines.
 
 ## 2. What it expects
 
 | Expectation | Provider | Through | Where it is read |
 | :--- | :--- | :--- | :--- |
 | The envelope, exit codes, store opener, registries, event log, definition, settings, Vantage index | [tillr](./tillr.md) | Go import | throughout |
-| 79 names of the `item` package: state changes, verdicts and judging, conflicts and waits, comments, sync, stored reads | [tillr-item](./tillr-item.md) | Go import | 72 files of `drain` |
+| Names of the `item` package: state changes, verdicts and judging, conflicts and waits, comments, sync, stored reads | [tillr-item](./tillr-item.md) | Go import | throughout `drain` |
 | `docshare`: `Attributes Fence ReadQueue Start` | [tillr-item](./tillr-item.md) | Go import | `deny_list.go`, `document_prerequisite.go` |
 | `tillr-item state`, its flags, exit codes and the `item.rejection` record's `rule` | [tillr-item](./tillr-item.md) | subprocess | `steps.go` |
 | `tillr-item sync --json`, the `item.sync` record, and that exit 1 means it ran | [tillr-item](./tillr-item.md) | subprocess | `sync.go` |
-| Rows of `items`, `item_criteria`, `item_edges`, `decisions`, `comment_taken`, `request_words`, `idea_intake`; and writes to `items`, `item_criteria`, `comment_intake`, `comment_intake_documents` | [tillr-item](./tillr-item.md) | SQL | more than thirty files |
-| 48 names of the `run` package: the request and record types, states, end causes, pause kinds, lane functions, directory helpers | [tillr-run](./tillr-run.md) | Go import | 72 files |
+| Rows of `items`, `item_criteria`, `item_edges`, `decisions`, `comment_taken`, `request_words`, `idea_intake`; and writes to `items`, `item_criteria`, `comment_intake`, `comment_intake_documents` | [tillr-item](./tillr-item.md) | SQL | throughout `drain` |
+| Names of the `run` package: the request and record types, states, end causes, pause kinds, lane functions, directory helpers | [tillr-run](./tillr-run.md) | Go import | throughout `drain` |
 | `tillr-run exec`, its arguments, and the `run.record` it prints | [tillr-run](./tillr-run.md) | subprocess | `steps.go` |
-| Rows of `runs`, `lanes`, `read_only_runs`, `quota_pauses`, read and written | [tillr-run](./tillr-run.md) | SQL | about twenty files |
+| Rows of `runs`, `lanes`, `read_only_runs`, `quota_pauses`, read and written | [tillr-run](./tillr-run.md) | SQL | throughout `drain` |
 | The report footer's result word; adapter exit codes 2 and 124; the adapter directory's file names | [tillr-run](./tillr-run.md) | files | `failover.go` |
-| `land`: `DecodeVerdict LandedRefPrefix OpenLock OpenTrunk PublishedRefPrefix RecordReplayLanding Trunk Verdict VerdictPass VerdictPassInherited` | [tillr-land](./tillr-land.md) | Go import | nine files |
+| `land`: `DecodeVerdict LandedRefPrefix OpenLock OpenTrunk PublishedRefPrefix RecordReplayLanding Trunk Verdict VerdictPass VerdictPassInherited` | [tillr-land](./tillr-land.md) | Go import | `drain` |
 | `land.landing` from the land step: `result reason conflict_paths trunk_after lock_observation red_cap`; exit 0 landed, 1 refused | [tillr-land](./tillr-land.md) | subprocess, through the adapter | `steps.go`, `loop.go` |
-| Rows of `landings`; the land lock file; the ref prefixes | [tillr-land](./tillr-land.md) | SQL, files | about fifteen files |
+| Rows of `landings`; the land lock file; the ref prefixes | [tillr-land](./tillr-land.md) | SQL, files | `drain` |
 | `gate.verdict` and `gate.plan` as files; `tillr-gate checks --heavy-tree`; exit 0, 1, 6 | [tillr-gate](./tillr-gate.md) | subprocess, files | `steps.go`, `heavy_steps.go` |
 | The check declarations under `tools/gate/checks` | the repository's gate scripts | files | `steps.go` |
 | The adapter's `describe` answer, its three step faces and `--check-argv` | [tillr-loop](./tillr-loop.md) | subprocess; an embedded copy | `hooks.go`, `adapter_build.go` |
@@ -150,8 +149,8 @@ Sentences others compare today, which become private: every mover's text after i
 
 - The `why --json` answer: the row and summary fields listed in [§1.1](#11-faces), with `reason`, `class`, `where`, `class_source` and the owner part of `mover` as names.
 - The name sets of [§1.6](#16-names-others-match-on).
-- The fourteen reader packages, by the names in [§1.2](#12-go-packages), and `redcap.Hold` until slice 8 moves it.
-- Of the `drain` package: the 68 names the command package uses in production. The 72 more its tests use are listed only if a test needs them after slice 3; the default is private.
+- The reader packages, by the names in [§1.2](#12-go-packages), and `redcap.Hold` until slice 8 moves it.
+- Of the `drain` package: the names the command package uses in production. The further names its tests use are listed only if a test needs them after slice 3; the default is private.
 - The faces and exit codes in [§1.1](#11-faces) that another utility runs.
 - The event kinds and fields in [§1.3](#13-records-and-event-kinds), and the tables in [§1.4](#14-tables) for the columns read today.
 - The places in [§1.5](#15-files-refs-and-environment).
@@ -160,7 +159,7 @@ Sentences others compare today, which become private: every mover's text after i
 
 - Every sentence. A mover is contract as "who" (`owner`, `operator`, `drain`, `design seat`) and private as "how".
 - Everything a face prints on standard error, including `loop: …` lines.
-- The other twelve tables, the other event kinds, and their payloads.
+- The other tables, the other event kinds, and their payloads.
 - The plain-text output of `why`.
 - Every exported name of `drain` and of the reader packages that is not listed.
 
@@ -169,7 +168,7 @@ Sentences others compare today, which become private: every mover's text after i
 All pins live in `tools/tillr-drain` and run in its fast suite, in process.
 
 - **The planner's answer.** For each example situation, the engine's `why` function is called on a fixture store and its JSON is compared with the example file. Examples cover each class, each obstacle kind, a conflict in each status, an owner-only criterion, a backend alarm, the empty queue, and a queue with every lane busy.
-- **Name sets.** One test per set compares the file with the constants. The hold-reason test already exists and gains the file.
+- **Name sets.** One test per set compares the file with the constants. The hold-reason test exists (`TestEveryReasonConstantHasAHoldRule`) and gains the file.
 - **Reader packages.** One file per package uses every listed name with the caller's types. Each reader is run on the example stores and its answer compared.
 - **Events.** One test compares the registered kinds with the list. Each kind another utility reads has a payload example made by the code that appends it.
 - **Faces.** `stop`, `restart --wait` and `loop --check` are called in process for each exit code another utility branches on.
