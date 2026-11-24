@@ -12,6 +12,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -369,6 +370,179 @@ func TestPendingRestartDeferredByTrunkProofStopsNewGatesAndSecondProof(t *testin
 		t.Fatalf("gateCalls after replacement = %d, want 0", got)
 	}
 
+	t.Setenv(restart.RequestEnv, req.ID)
+	t.Setenv(restart.FromEnv, "old-build")
+	if err := h.l.adoptRestart(ctx); err != nil {
+		t.Fatalf("adoptRestart: %v", err)
+	}
+	if ans := h.answer(t, req.ID); ans.Answer != restart.AnswerRestarted {
+		t.Fatalf("restart answer = %+v, want %q", ans, restart.AnswerRestarted)
+	}
+}
+
+// Reproduces the 2026-11-23 20:46 sequence: a drain restart request is pending
+// while a trunk proof runs with [push] what = "green" enabled, a newer unproved
+// tip is on trunk, and finished candidates are waiting. When the proof ends
+// green, the loop must restart before starting another trunk proof or any gate.
+func TestPendingRestartAfterGreenProofRestartsBeforeNextProofAndGates(t *testing.T) {
+	h := newRestartHarness(t, []byte("next build"), func(context.Context, string) error { return nil }, "item-a", "item-b")
+	h.l.gatePolicy.LandingStrategy = "after-merge"
+	h.l.gatePolicy.LaneBase = "green"
+
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer cancel()
+
+	// Configure a remote with [push] what = "green" and a gated pre-push hook
+	// so any green push started while the restart is pending stays active across
+	// the proof boundary and next pass, matching a live network push.
+	remote := filepath.Join(t.TempDir(), "upstream.git")
+	runGit(t, h.f.root, "init", "--bare", remote)
+	runGit(t, h.f.root, "remote", "add", "origin", remote)
+	runGit(t, h.f.root, "push", "-u", "origin", TrunkRef)
+	releasePush := filepath.Join(t.TempDir(), "release-push")
+	hook := filepath.Join(h.f.root, ".git", "hooks", "pre-push")
+	script := "#!/bin/sh\nwhile [ ! -f " + releasePush + " ]; do sleep 0.01; done\n"
+	if err := writeForkSafe(hook, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = writeForkSafe(releasePush, []byte("go\n"), 0o644)
+		waitAction(t, &h.l.pushAction)
+	}()
+	h.l.cfg.PostLanding.Push.What = settings.PushGreen
+
+	base := heavyGit(t, h.f.root, "rev-parse", TrunkRef)
+	heavyGit(t, h.f.root, "update-ref", GreenRef, base)
+	tip1 := heavyCommit(t, h.f.root, "tip-1")
+
+	c1 := prepareReadyCandidate(t, h.f, h.l, "item-a")
+	c2 := prepareReadyCandidate(t, h.f, h.l, "item-b")
+	here, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureWrite(t, h.f, func(tx *store.Tx) error {
+		for _, c := range []Candidate{c1, c2} {
+			if _, err := tx.Exec(`UPDATE lanes SET state=?, run_id=?, leased_until=NULL WHERE lane_id=?`, run.LaneStateLeased, c.RunID, c.LaneID); err != nil {
+				return err
+			}
+			if err := appendEffect(tx, examinationOwnerKind, c.RunID, here, h.l.cfg.Now()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	var (
+		provedMu   sync.Mutex
+		provedTips []string
+	)
+	enteredProof1 := make(chan string, 1)
+	releaseProof1 := make(chan struct{})
+	proof1Released := false
+	defer func() {
+		if !proof1Released {
+			close(releaseProof1)
+			h.l.heavyWG.Wait()
+		}
+	}()
+
+	steps := &gateCountingHeavySteps{
+		judge: func(jctx context.Context, dir, only string) ([]HeavyCheck, error) {
+			sha := heavyGit(t, dir, "rev-parse", "HEAD")
+			provedMu.Lock()
+			provedTips = append(provedTips, sha)
+			first := len(provedTips) == 1
+			provedMu.Unlock()
+			if first {
+				enteredProof1 <- sha
+				select {
+				case <-releaseProof1:
+				case <-jctx.Done():
+					return nil, jctx.Err()
+				}
+			}
+			return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
+		},
+	}
+	h.l.cfg.Steps = steps
+
+	// Start the first trunk proof and wait until it is active.
+	if err := h.l.startHeavy(ctx, tip1); err != nil {
+		t.Fatalf("startHeavy(tip1): %v", err)
+	}
+	select {
+	case got := <-enteredProof1:
+		if got != tip1 {
+			t.Fatalf("first proof started on %s, want %s", shortSHA(got), shortSHA(tip1))
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("first trunk proof did not start")
+	}
+
+	// File a drain restart request while proof 1 is active, and arm the barrier.
+	req := h.request(t, 1)[0]
+	if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
+		t.Fatalf("gateRestart while trunk proof active = %v, %q, %v; want deferred", handled, stop, err)
+	}
+
+	// One candidate is already waiting in launchExamination on the pending restart,
+	// while the second waits in the store for the next pass.
+	waiting := make(chan struct{}, 1)
+	h.l.restartWaitObs = func() {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
+	}
+	h.l.completions = make(chan runCompletion, 4)
+	d1 := Decision{
+		Action:     ActionJudge,
+		ItemID:     c1.ItemID,
+		LaneID:     c1.LaneID,
+		RunRequest: &run.Request{RunID: c1.RunID, ItemID: c1.ItemID, LaneID: c1.LaneID},
+	}
+	h.l.launchExamination(ctx, d1, &pendingWork{Decision: d1, Candidate: &c1, BaseSHA: c1.BaseSHA}, h.l.cfg.Now(), &PassTiming{}, nil)
+	awaitRestartTest(t, waiting, "finished candidate waiting on pending restart")
+
+	// Advance trunk to a newer unproved tip while proof 1 is still running.
+	tip2 := heavyCommit(t, h.f.root, "tip-2")
+
+	// End proof 1 green.
+	close(releaseProof1)
+	proof1Released = true
+	h.l.heavyWG.Wait()
+
+	if got := heavyGit(t, h.f.root, "rev-parse", GreenRef); got != tip1 {
+		t.Fatalf("refs/tillr/green = %s, want %s (newer unproved tip %s must not be proved before restart)", shortSHA(got), shortSHA(tip1), shortSHA(tip2))
+	}
+
+	// The next pass must restart instead of starting proof 2 or any candidate gate.
+	stop, err := h.l.pass(ctx, &LoopResult{})
+	if err != nil {
+		t.Fatalf("pass after proof 1 ended: %v", err)
+	}
+	if stop != StopRestarted {
+		t.Fatalf("pass stop after proof 1 ended = %q, want %q", stop, StopRestarted)
+	}
+	if len(h.execed) == 0 {
+		t.Fatal("replacement did not exec")
+	}
+
+	h.l.heavyWG.Wait()
+	h.l.examinations.Wait()
+
+	provedMu.Lock()
+	gotProved := append([]string(nil), provedTips...)
+	provedMu.Unlock()
+	if len(gotProved) != 1 || gotProved[0] != tip1 {
+		t.Fatalf("proved tips before restart = %v, want only [%s]", gotProved, shortSHA(tip1))
+	}
+	if got := steps.gateCalls.Load(); got != 0 {
+		t.Fatalf("gateCalls before restart = %d, want 0", got)
+	}
+
+	// The restarted loop answers the request "restarted".
 	t.Setenv(restart.RequestEnv, req.ID)
 	t.Setenv(restart.FromEnv, "old-build")
 	if err := h.l.adoptRestart(ctx); err != nil {
