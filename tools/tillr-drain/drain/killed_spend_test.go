@@ -3,6 +3,7 @@ package drain_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -33,12 +34,28 @@ while [ ! -f "$SPEND_STOP/release" ]; do sleep 0.01; done
 
 func waitForSpendRuns(t *testing.T, f loopFixture, n int) {
 	t.Helper()
-	deadline := time.Now().Add(hangGuard)
-	for len(runsForItem(t, f.store, "item_a")) < n && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if len(runsForItem(t, f.store, "item_a")) != n {
-		t.Fatal("worker did not record its end")
+	for {
+		if got := len(runsForItem(t, f.store, "item_a")); got >= n {
+			if got != n {
+				t.Fatalf("recorded %d runs, want %d", got, n)
+			}
+			return
+		}
+		if len(matchingPIDs(t, f.store)) == 0 {
+			// Re-check once after observing no live worker process in case the
+			// worker committed its terminal row and exited between the two reads.
+			if got := len(runsForItem(t, f.store, "item_a")); got == n {
+				return
+			} else if got > n {
+				t.Fatalf("recorded %d runs, want %d", got, n)
+			}
+			t.Fatal("worker did not record its end")
+		}
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("worker did not record its end before test cancellation: %v", t.Context().Err())
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
 }
 
@@ -135,4 +152,48 @@ func TestTwoExplicitEndsRemainInNextLoopSpend(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(markers, "release"), "finish")
 	waitForSpendRuns(t, f, 3)
+}
+
+func TestWaitForSpendRunsWaitsForDelayedWorkerEnd(t *testing.T) {
+	f, markers := spendStopFixture(t)
+	extractor := filepath.Join(filepath.Dir(f.policy.Backends["fixture"].Adapter), "extract-report")
+	writeFile(t, extractor, `#!/bin/sh
+echo extracting > "$SPEND_STOP/extracting"
+while [ ! -f "$SPEND_STOP/allow-record" ]; do sleep 0.01; done
+for a in "$@"; do [ "$prev" != --out ] || out=$a; prev=$a; log=$a; done
+cp "$log" "$out"
+`)
+	t.Cleanup(func() { writeFile(t, filepath.Join(markers, "allow-record"), "finish") })
+
+	cmd, out := startStopFixture(t, f, 1)
+	waitForFile(t, filepath.Join(markers, "run-item_a-a1.ready"), hangGuard)
+	stopFixture(t, f, cmd, out, true)
+	waitForFile(t, filepath.Join(markers, "extracting"), hangGuard)
+	if n := len(runsForItem(t, f.store, "item_a")); n != 0 {
+		t.Fatalf("worker recorded its end before release: %d", n)
+	}
+	const injectedDelay = 300 * time.Millisecond
+	type releaseResult struct {
+		at  time.Time
+		err error
+	}
+	released := make(chan releaseResult, 1)
+	go func() {
+		time.Sleep(injectedDelay)
+		at := time.Now()
+		err := os.WriteFile(filepath.Join(markers, "allow-record"), []byte("finish"), 0o600)
+		released <- releaseResult{at: at, err: err}
+	}()
+	waitForSpendRuns(t, f, 1)
+	res := <-released
+	if res.err != nil {
+		t.Fatalf("releasing delayed extractor: %v", res.err)
+	}
+	if time.Now().Before(res.at) {
+		t.Fatal("waitForSpendRuns returned before delayed worker end was released")
+	}
+	rec := storedSpendRun(t, f, "run-item_a-a1")
+	if rec.Usage == nil || rec.Usage.CostUSD == nil || *rec.Usage.CostUSD != .03 {
+		t.Fatalf("delayed explicit end lost spend: %+v", rec)
+	}
 }
