@@ -1,0 +1,36 @@
+# Repeated drain refusals across distinct items with no landing between them (D-TW76).
+#
+# threshold = 2 matches RepeatedRefusalThreshold in tools/tillr-drain/drain/refusal.go,
+# the source of the drain's cross-item repeated-refusal count.
+[[rule]]
+id = "drain-repeated-refusal"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.refusal", "land.landing"]
+
+[rule.when]
+group_by = "global"
+pattern = "consecutive_count"
+match = 'event.kind == "drain.refusal"'
+distinct_by = "item_id"
+reset = 'event.kind == "land.landing" and event.result == "landed"'
+clear_when = 'event.kind == "land.landing" and event.result == "landed"'
+# Matches drain.RepeatedRefusalThreshold (2) in tools/tillr-drain/drain/refusal.go.
+threshold = 2
+window = "24h"
+
+[rule.guidance]
+summary = "Drain refused {{count}} distinct items ({{distinct_values}}) with no landing between them; latest step {{event.step}} on {{event.item_id}} ({{event.object_id}})"
+check = [
+  "Inspect recent drain.refusal events for items {{distinct_values}} (latest detail: {{event.detail}}) to see whether a shared trunk regression, gate failure, or verifier failure is blocking unrelated items.",
+  "Inspect the candidate runs and gate verdicts for {{distinct_values}} (`tillr run show {{event.object_id}}`) before retrying queued items against the same condition.",
+]
+do = [
+  "Repair the shared trunk, gate, or workflow failure blocking {{distinct_values}}, or file and track a remediation item (`tillr watch track {{alert_id}} --item <item-id> --by <who>`).",
+  "Once a landing succeeds (`land.landing` with `result == \"landed\"`), verify this alert clears automatically.",
+]
+
+[rule.delivery]
+receiver = "foreground"
