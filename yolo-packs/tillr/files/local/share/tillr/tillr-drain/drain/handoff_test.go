@@ -353,7 +353,6 @@ func TestExaminationRecordsSubPhasesAndAccountsForWallTime(t *testing.T) {
 			t.Fatalf("expected 1 examination timing, got %d: %+v", len(timings), timings)
 		}
 		assertExaminationAccounting(t, timings[0], []string{
-			"restart_lock_wait",
 			"check_surviving_processes",
 			"read_terminal_record",
 			"record_settlement_spend",
@@ -392,7 +391,6 @@ func TestExaminationRecordsSubPhasesAndAccountsForWallTime(t *testing.T) {
 			t.Fatalf("expected 1 examination timing, got %d: %+v", len(timings), timings)
 		}
 		assertExaminationAccounting(t, timings[0], []string{
-			"restart_lock_wait",
 			"check_surviving_processes",
 			"read_terminal_record",
 			"record_settlement_spend",

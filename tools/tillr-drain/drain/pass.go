@@ -3445,29 +3445,8 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork, at time.Time, timing *PassTiming, watched []string) runCompletion {
 	local := &LoopResult{}
 	completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: timing}
-	lockStart := time.Now()
-	var (
-		unlock  func()
-		lockErr error
-	)
-	if d.Action == ActionJudge {
-		ctx, unlock, lockErr = l.lockRestartSettlement(ctx)
-	} else {
-		ctx, unlock, lockErr = l.lockRestartMechanical(ctx)
-	}
-	if lockErr != nil {
-		completion.outcome.err = lockErr
-		return completion
-	}
-	lockEnd := time.Now()
-	if pre, ok := ctx.Value(preHandoffKey{}).(preHandoffState); ok && !pre.start.IsZero() {
-		ctx = withPreHandoffSpans(ctx, pre.start, append(pre.phases, newHandoffSpan("restart_lock_wait", lockStart, lockEnd)))
-	} else {
-		ctx = withPreHandoffSpans(ctx, lockStart, []handoffSpan{newHandoffSpan("restart_lock_wait", lockStart, lockEnd)})
-	}
 	ctx, recordTiming := l.timeHandoff(ctx, work.Decision, "examination")
 	defer recordTiming()
-	defer unlock()
 	if work.NeedsStage {
 		endStage := timeHandoffPhase(ctx, "stage_pinned_candidate")
 		if err := l.stagePinnedCandidate(ctx, work); err != nil {
@@ -3638,7 +3617,7 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 	}
 	// A retained lane keeps its lease: releasing it would let the next staging clear the
 	// work that could not be preserved.
-	if completion.outcome.stop != stopLaneRetained {
+	if completion.outcome.stop != stopLaneRetained && !l.isRestartReplaced() {
 		endRel := timeHandoffPhase(ctx, "release_examination")
 		if err := l.releaseExamination(context.WithoutCancel(ctx), d); err != nil && completion.outcome.err == nil {
 			completion.outcome.err = err
