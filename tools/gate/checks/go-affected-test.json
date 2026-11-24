@@ -1,0 +1,34 @@
+{
+  "id": "go-affected-test",
+  "label": "Go test selection, edges and cache invalidation suite passes",
+  "command": [
+    "python3",
+    "tests/go-affected.test.py"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 300000,
+  "reads": [
+    "tests/go-affected.test.py",
+    "tools/gate/checks/go-affected-test.json",
+    "tools/gate/go-test-edges.json",
+    "tools/gate/go_affected.py",
+    "tools/tillr-drain/",
+    "tools/tillr-gate/",
+    "tools/tillr-item/",
+    "tools/tillr-land/",
+    "tools/tillr-run/",
+    "tools/tillr-store/",
+    "tools/tillr-view/",
+    "tools/tillr-watch/",
+    "tools/tillr/",
+    "tools/gate/checks/go-affected.json",
+    "tools/go-test-shards.py",
+    "tools/gate/change-gate.py"
+  ],
+  "tools": [
+    "python3",
+    "go",
+    "git"
+  ]
+}

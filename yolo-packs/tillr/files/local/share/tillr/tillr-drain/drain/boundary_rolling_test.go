@@ -299,7 +299,7 @@ func testStoppedScratchChecks(t *testing.T, replay, adapter bool) {
 	root, tip := committedRoot(t)
 	gate := scratchUnderDurable(t)
 	inside, pidFile := filepath.Join(gate, "inside"), filepath.Join(gate, "pid")
-	// Like fork-check, the program owns a check in a separate session. Only
+	// The program owns a check in a separate session. Only
 	// SIGTERM gives it a chance to clean that session before the worktree goes.
 	cleaned := filepath.Join(gate, "cleaned")
 	fixture := `import os, pathlib, signal, subprocess
@@ -320,13 +320,24 @@ signal.pause()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.MkdirAll(filepath.Join(root, "tools"), 0755); err != nil {
+		// The adapter replaces itself with the judge on PATH, so the stand-in judge is the
+		// fixture program, and the named check is a heavy whole-tree declaration at the tip.
+		bin := scratchUnderDurable(t)
+		raw, err := os.ReadFile(program)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(root, "tools", "fork-check.py"), []byte(fixture), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(bin, "tillr-gate"), raw, 0755); err != nil {
 			t.Fatal(err)
 		}
-		runGit(t, root, "add", "tools/fork-check.py")
+		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		if err := os.MkdirAll(filepath.Join(root, "tools", "gate", "checks"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "tools", "gate", "checks", "check.json"), []byte(`{"id": "check", "scope": "tree", "tier": "heavy"}`+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, root, "add", "tools/gate/checks/check.json")
 		runGit(t, root, "commit", "-m", "Add check fixture")
 		tip = runGit(t, root, "rev-parse", "HEAD")
 		program = path + " rolling --all"

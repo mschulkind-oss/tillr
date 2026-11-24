@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Judge the caller's change, then the remaining repository checks."""
+"""Judge the caller's change with the declared change checks and fast whole-tree checks."""
 import argparse
 import json
 import os
@@ -84,37 +84,6 @@ def warm_trimmed_go_cache():
                   file=sys.stderr)
 
 
-def preserve_fast_timing(path, first):
-    # The remaining judge owns the stall evidence at this path. Preserve its
-    # top-level checks, with the earlier declarations run as an observation.
-    try:
-        fast = json.loads(first)["payload"]
-        remaining = json.loads(Path(path).read_bytes())
-        result = remaining["payload"].get("result")
-        if (not isinstance(result, str) or result not in ("pass", "fail", "stalled")
-                or not isinstance(fast.get("wall_ms"), int)
-                or not isinstance(fast.get("checks"), list)):
-            return
-        verdict, = classify([{"source": "result-word", "word": result}])
-        if (verdict["outcome"], verdict["detail"]) != ("unknown", "stalled"):
-            return
-        remaining["payload"]["fast_timing"] = {key: fast[key] for key in ("wall_ms", "checks")}
-        # Never truncate a valid stall handoff if writing its timing fails.
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=Path(path).parent,
-                                         prefix=".fast-timing-", delete=False) as temporary:
-            target = Path(temporary.name)
-            try:
-                json.dump(remaining, temporary)
-                temporary.write("\n")
-                temporary.close()
-                target.replace(path)
-            finally:
-                target.unlink(missing_ok=True)
-    except (ClassificationError, OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-        # An observation failure must not replace the remaining judge's exit.
-        print(f"change-gate: could not preserve fast timings: {error}", file=sys.stderr)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
@@ -123,7 +92,7 @@ def main():
     parser.add_argument("--logs", required=True)
     args = parser.parse_args()
     try:
-        # The remaining program judges HEAD. Do not certify a different head with
+        # The tree checks judge the checkout. Do not certify a different head with
         # a correct change verdict and an unrelated tree verdict.
         actual = subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True)
         named = subprocess.run(["git", "rev-parse", args.head + "^{commit}"], check=True, capture_output=True, text=True)
@@ -152,18 +121,7 @@ def main():
             Path(path).write_bytes(checked.stdout)
         sys.stdout.buffer.write(checked.stdout)
         sys.stdout.buffer.flush()
-        if checked.returncode:
-            return checked.returncode
-        remaining = subprocess.run([sys.executable, "tools/fork-check.py",
-                                    "--since", args.base, "--tier", "landing"])
-        answer, = classify([{"check": "legacy-remainder", "commit": args.head,
-                             "source": "judging-program", "exit_code": remaining.returncode}])
-        # RunGate reads 4 as could-not-judge, distinct from an attributed stall.
-        if answer["outcome"] == "unknown" and answer["detail"] == "stalled":
-            if measure_landing and checked.stdout.strip():
-                preserve_fast_timing(path, checked.stdout)
-            return 6
-        return {"pass": 0, "fail": 1}.get(answer["outcome"], 4)
+        return checked.returncode
     except (ClassificationError, OSError, subprocess.CalledProcessError) as error:
         print(f"change-gate: could not judge: {error}", file=sys.stderr)
         return 4

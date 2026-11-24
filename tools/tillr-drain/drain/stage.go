@@ -68,8 +68,6 @@ const (
 	// tillrDocsTest is the suite that holds every module README to the Known Gaps callout
 	// and runs every face a document names against the binary.
 	tillrDocsTest = "tests/tillr-docs.test.py"
-	// forkCheckTest is the suite for `tools/fork-check.py`, the gate's own dispatcher.
-	forkCheckTest = "tests/fork-check.test.py"
 	// museBackendTest is the suite for the adapters under `tools/tillr-run/backends/`.
 	museBackendTest = "tests/tillr-muse-backend.test.py"
 )
@@ -105,8 +103,8 @@ const (
 //     program and its README and `test.py` sit beside it, so a fence naming
 //     `tools/tillr-loop/tillr-loop` barred a lane from the two files the change is judged by.
 //     The drain's embedded copy and its pack mirror also travel with an adapter change.
-//   - `forkCheckTest` for `tools/fork-check.py`, and `museBackendTest` for
-//     `tools/tillr-run/backends/`: each is the suite for exactly the path it is derived from.
+//   - `museBackendTest` for `tools/tillr-run/backends/`: the suite for exactly the path it
+//     is derived from.
 //
 // The fence is derived here rather than declared per item because forgetting it is silent,
 // and this is the one place staging, the planner, the escape check and a resume all read.

@@ -70,9 +70,9 @@ const (
 	RollingEvery         = 20 * time.Minute
 )
 
-// DefaultRollingProgram judges the rolling range since the watermark. The gate's
-// record is append-only, so its compatibility lock flags are ignored and omitted.
-const DefaultRollingProgram = "python3 tools/fork-check.py --tier rolling {since}"
+// DefaultRollingProgram is empty: the declared heavy checks are the after-merge proof,
+// and no separate rolling program runs unless the operator names one with --rolling.
+const DefaultRollingProgram = ""
 
 // DefaultFixerGateProgram judges a named check after the ordinary candidate gate passes.
 // The drain supplies the candidate flags and the proof's selector as --only.
@@ -80,7 +80,7 @@ const DefaultFixerGateProgram = "python3 tools/tillr-loop/tillr-loop fixer-gate"
 
 // DefaultReplayProgram re-runs a red gate's failing checks on the base, `{only}` being the
 // comma-separated check ids. It is handed no candidate flags: it judges a revision.
-const DefaultReplayProgram = "python3 tools/fork-check.py --replay --only {only}"
+const DefaultReplayProgram = "python3 tools/tillr-loop/tillr-loop replay --only {only}"
 
 const goAffectedCheckID = "go-affected/affected-tillr-go-test-packages-pass"
 
@@ -89,15 +89,11 @@ const goAffectedCheckID = "go-affected/affected-tillr-go-test-packages-pass"
 // edit the gate could make the red disappear by weakening the judge, which is the one
 // repair that must never be available to it. The entries are repo-relative prefixes.
 var GateCodePaths = []string{
-	"tools/fork-check.py",
-	"tests/fork-check.test.py",
 	"tools/tillr-gate/",
 	"tools/gate/",
 	"tools/tillr-loop/",
 	"tools/tillr-drain/drain/tillr-loop.py",
 	"tools/tillr-drain/drain/fixer_gate.go",
-	"tests/fast-tree-in-done.test.py",
-	"tools/preflight-declarations.json",
 	"tools/gate-timing-declarations.json",
 	"yolo-packs/tillr/files/local/share/tillr/tillr-gate/",
 	"yolo-packs/tillr/files/local/share/tillr/tillr-loop/",

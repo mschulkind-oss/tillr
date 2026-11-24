@@ -5,11 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -23,61 +21,13 @@ import (
 // imports the entire Python gate, which costs ~2.4s, and a dozen tests need the same
 // bytes. Measured 2026-11-11: 12 uncached exports were ~29s of a 27s suite (the rest
 // is the one-time `go build` in TestMain and milliseconds of real work).
-var (
-	registryOnce sync.Once
-	registryOut  []byte
-	registryErr  error
-)
-
-func generate(t *testing.T) string {
-	t.Helper()
-	registryOnce.Do(func() {
-		cmd := exec.Command("python3", filepath.Join("..", "..", "tools", "fork-check.py"), "--registry-json")
-		registryOut, registryErr = cmd.Output()
-	})
-	if registryErr != nil {
-		t.Fatalf("exporting the registry failed: %v", registryErr)
-	}
-	path := filepath.Join(t.TempDir(), "gate-registry.json")
-	if err := os.WriteFile(path, registryOut, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 func load(t *testing.T) *Registry {
 	t.Helper()
-	reg, err := LoadRegistry(generate(t))
+	reg, err := LoadRegistry(filepath.Join("..", "gate", "checks"))
 	if err != nil {
 		t.Fatalf("loading the registry failed: %v", err)
 	}
 	return reg
-}
-
-// The registry is generated from the gate that runs today, so a check the gate
-// plans and the registry does not declare is a check the new planner would silently
-// drop. The digest is what a verdict binds, so it must be a function of the file.
-//
-// This covers the command checks. The gate's own in-process checks have no command
-// to spell, and `TestTheRegistryNamesTheChecksItCannotCommand` holds those.
-func TestTheRegistryDeclaresEveryCommandCheckTheGatePlans(t *testing.T) {
-	reg := load(t)
-	if len(reg.Declarations) < 40 {
-		t.Fatalf("the registry declares %d checks; the gate plans more than that", len(reg.Declarations))
-	}
-	seen := map[string]bool{}
-	for _, d := range reg.Declarations {
-		if d.ID == "" || d.Kind == "" || d.Label == "" || len(d.Command) == 0 || d.TimeoutMS == 0 {
-			t.Errorf("declaration %+v is missing an id, a kind, a label, a command, or a timeout", d)
-		}
-		if seen[d.ID] {
-			t.Errorf("the registry declares %q twice", d.ID)
-		}
-		seen[d.ID] = true
-	}
-	if reg.Digest == "" {
-		t.Fatal("the registry has no digest")
-	}
 }
 
 // A declaration's id is what a verdict names a check by, so it must not move with a
@@ -108,31 +58,25 @@ func TestADeclarationIDCarriesNoCountAndNoAbsolutePath(t *testing.T) {
 	}
 }
 
-// The plan is the whole product of the no-store face, so a change under one Go tool
-// directory must select that directory's steps and nothing else's. This is the selection
-// claim the design's G2 rests on, asserted at the computed instance. The negative control
-// is the inverse change: a change under `tools/pi-profiler/` must select the profiler's
-// steps and not mq's, so a planner that selected everything would fail one of the two.
-//
-// The retired board tool and the retired merge queue are not one of the pair: they left
-// `GO_TOOL_DIRS` (the board replaced by tillr on 2026-11-10, the merge queue by
-// `tools/tillr-land` on 2026-11-13), so neither plans a build step at all.
+// A change under one Go tool directory must select that directory's suite and not an
+// unrelated one's. The negative control is the inverse change, so a planner that
+// selected everything would fail one of the two.
 func TestPlanSelectsTheGoToolSteps(t *testing.T) {
 	reg := load(t)
 	root := filepath.Join("..", "..")
 	lander := reg.Plan([]string{"tools/tillr-land/main.go"}, root)
-	if !hasCheck(lander, "go-tool/tools-tillr-land-s-whole-suite-passes") {
-		t.Fatalf("a tillr-land-only change did not select the lander's build step: %v", ids(lander))
+	if !hasCheck(lander, "go-test-tillr-land") {
+		t.Fatalf("a tillr-land-only change did not select the lander's suite: %v", ids(lander))
 	}
-	if hasCheck(lander, "go-tool/tools-pi-profiler-s-whole-suite-passes") {
-		t.Fatalf("a tillr-land-only change selected the pi-profiler build step: %v", ids(lander))
+	if hasCheck(lander, "go-test-tillr-cli") {
+		t.Fatalf("a tillr-land-only change selected the CLI's suite: %v", ids(lander))
 	}
-	profiler := reg.Plan([]string{"tools/pi-profiler/main.go"}, root)
-	if !hasCheck(profiler, "go-tool/tools-pi-profiler-s-whole-suite-passes") {
-		t.Fatalf("a pi-profiler-only change did not select the pi-profiler build step: %v", ids(profiler))
+	cli := reg.Plan([]string{"tools/tillr-cli/main.go"}, root)
+	if !hasCheck(cli, "go-test-tillr-cli") {
+		t.Fatalf("a tillr-cli-only change did not select the CLI's suite: %v", ids(cli))
 	}
-	if hasCheck(profiler, "go-tool/tools-tillr-land-s-whole-suite-passes") {
-		t.Fatalf("a pi-profiler-only change selected the mq build step: %v", ids(profiler))
+	if hasCheck(cli, "go-test-tillr-land") {
+		t.Fatalf("a tillr-cli-only change selected the lander's suite: %v", ids(cli))
 	}
 }
 
@@ -155,98 +99,6 @@ func TestDocumentsDeclarationDelegatesTheCallerRange(t *testing.T) {
 		return
 	}
 	t.Fatalf("no documents declaration in %v", ids(checks))
-}
-
-// A plan instance carries fields a command list cannot: the environment a suite needs, the
-// environment it must not inherit, the checkout it needs, its tier, and whether it runs
-// alone. A registry that dropped them would let a planner run a check that cannot answer.
-// The negative control is a declaration that declares none of them, so the test cannot pass
-// by finding the field on some other check.
-func TestPlanCarriesTheFieldsACommandListCannot(t *testing.T) {
-	reg := load(t)
-	root := filepath.Join("..", "..")
-	checks := reg.Plan([]string{
-		"tools/tillr-land/main.go",
-		"tools/session-liveness/run",
-		"tools/roster-storybook/render.mts",
-	}, root)
-	byID := map[string]Check{}
-	for _, check := range checks {
-		byID[check.ID] = check
-	}
-	// The environment-carrying check is the liveness harness, not the board suite: the
-	// board suite is planned only where `pi_sdk_env` resolves, so a machine without the
-	// Pi SDK would fail this test for a reason no change can clear. The harness is
-	// planned wherever `node` is, and carries `PI_FORK` the same way.
-	liveness, ok := byID["session-liveness/a-session-returns-to-idle-within-its-bound-and-a-later-send-now-starts-work"]
-	if !ok {
-		t.Fatalf("the liveness harness was not selected: %v", ids(checks))
-	}
-	if len(liveness.Env) == 0 {
-		t.Fatalf("the liveness harness's declaration carries no environment")
-	}
-	build, ok := byID["go-tool/tools-tillr-land-s-whole-suite-passes"]
-	if !ok {
-		t.Fatalf("the mq build step was not selected: %v", ids(checks))
-	}
-	if len(build.Drop) == 0 || build.Drop[0] != "LAND_BATCH_LIMIT" {
-		t.Fatalf("the board build step's drop list is %v", build.Drop)
-	}
-	if len(build.Env) != 0 {
-		t.Fatalf("the negative control failed: the board build step declares an environment %v", build.Env)
-	}
-	var fork *Check
-	for index := range checks {
-		if checks[index].Kind == "fork-construct" {
-			fork = &checks[index]
-		}
-	}
-	if fork == nil || len(fork.Needs) == 0 {
-		t.Fatalf("the fork-construct step carries no needs: %+v", fork)
-	}
-	storybook, ok := byID["storybook/roster"]
-	if !ok {
-		t.Fatalf("the roster storybook was not selected: %v", ids(checks))
-	}
-	if storybook.Tier != "rolling" || len(storybook.Writes) == 0 {
-		t.Fatalf("the roster storybook carries tier %q and writes %v", storybook.Tier, storybook.Writes)
-	}
-}
-
-// The legacy registry retains the in-process TypeScript size warning. The two
-// Markdown convention guards now have executable tree declarations, so they must
-// not also appear here.
-func TestTheRegistryNamesTheChecksItCannotCommand(t *testing.T) {
-	reg := load(t)
-	want := map[string]bool{"file-size": true}
-	got := map[string]bool{}
-	for _, c := range reg.InProcess {
-		if c.ID == "" || c.Kind == "" || c.Label == "" {
-			t.Errorf("in-process check %+v is missing an id, a kind, or a label", c)
-		}
-		got[c.Kind] = true
-	}
-	for kind := range want {
-		if !got[kind] {
-			t.Errorf("the registry does not name the in-process check %q", kind)
-		}
-	}
-	for kind := range got {
-		if !want[kind] {
-			t.Errorf("the registry names an in-process check %q that this test does not know about; "+
-				"if the gate gained one, add it here and say what it checks", kind)
-		}
-	}
-	// The negative control: a check that is selected by nothing and forced by nothing is a
-	// check that never runs, so the two document guards must declare the document pattern.
-	for _, c := range reg.InProcess {
-		if c.Kind == "file-size" {
-			continue
-		}
-		if len(c.Selects) == 0 || len(c.Watches) == 0 {
-			t.Errorf("in-process check %q declares no selection or no watches", c.ID)
-		}
-	}
 }
 
 // A check that watches nothing is selected by nothing, which is a check that never
@@ -380,100 +232,6 @@ func digestOf(t *testing.T, declarations []byte) string {
 	t.Helper()
 	sum := sha256.Sum256(declarations)
 	return hex.EncodeToString(sum[:])
-}
-
-// The digest is what a verdict binds, so it must cover every declaration a plan can owe --
-// including the checks the gate runs as its own code. Those have no command, so they are
-// named in `in_process` rather than in `declarations`, and a digest over the command
-// declarations alone would let an edit to one of their selections change what a verdict
-// owes without moving the digest.
-//
-// The negative control is the digest the export wrote before it covered `in_process`: the
-// edited file below loads, and the test is red.
-func TestTheRegistryDigestBindsTheInProcessChecks(t *testing.T) {
-	raw, err := os.ReadFile(generate(t))
-	if err != nil {
-		t.Fatalf("reading the exported registry failed: %v", err)
-	}
-	var file struct {
-		Digest       json.RawMessage `json:"digest"`
-		Declarations json.RawMessage `json:"declarations"`
-		InProcess    json.RawMessage `json:"in_process"`
-	}
-	if err := json.Unmarshal(raw, &file); err != nil {
-		t.Fatalf("decoding the exported registry failed: %v", err)
-	}
-	var inProcess []map[string]any
-	if err := json.Unmarshal(file.InProcess, &inProcess); err != nil {
-		t.Fatalf("decoding the in-process checks failed: %v", err)
-	}
-	if len(inProcess) == 0 {
-		t.Fatal("the export names no in-process check, so this test would pass for the wrong reason")
-	}
-	// A selection the gate does not have: the check now owes a change it never ran for.
-	inProcess[0]["selects"] = []any{map[string]any{"path": "tools/"}}
-	edited, err := json.Marshal(inProcess)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "gate-registry.json")
-	body := `{"digest":` + string(file.Digest) + `,"declarations":` + string(file.Declarations) +
-		`,"in_process":` + string(edited) + `}`
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadRegistry(path); err == nil {
-		t.Fatal("a registry whose in-process selection no longer hashes to its digest loaded")
-	}
-}
-
-// Two exports of one tree must produce one digest, or the digest binds nothing: a verdict
-// recorded against the first would name a registry the second export no longer produces.
-// The one value that moves per process is a per-run scratch base in an `env` entry, which
-// the export writes as `run-<pid>` the way it already writes a declared write path.
-//
-// The negative control is the export that normalised `writes` and not `env`: the two
-// digests differ and the test is red.
-func TestTheRegistryDigestIsReproducibleAcrossExports(t *testing.T) {
-	first, err := LoadRegistry(generate(t))
-	if err != nil {
-		t.Fatalf("loading the first export failed: %v", err)
-	}
-	second, err := LoadRegistry(generate(t))
-	if err != nil {
-		t.Fatalf("loading the second export failed: %v", err)
-	}
-	if first.Digest != second.Digest {
-		t.Fatalf("two exports of one tree carry digests %q and %q", first.Digest, second.Digest)
-	}
-}
-
-// A fork step watches its whole pack, because a pack's manifest can move every series in
-// it, but the gate selects it by the series that changed. A `selects` pattern that is a
-// bare pack root is the watch list exported as the selection: it plans the step for any
-// file in the pack, which the gate does not run.
-//
-// The negative control is `selects = watch_patterns(check.watches)`, which is what the
-// export wrote before it carried the gate's own selection: every fork step then declares
-// `yolo-packs/<pack>/` and the test is red.
-func TestAForkStepIsSelectedByItsSeriesAndNotItsPack(t *testing.T) {
-	reg := load(t)
-	forkSteps := 0
-	for _, d := range reg.Declarations {
-		if d.Kind != "fork-quality" {
-			continue
-		}
-		forkSteps++
-		for _, p := range d.Selects {
-			trimmed := strings.TrimSuffix(p.Path, "/")
-			if strings.HasPrefix(trimmed, "yolo-packs/") && strings.Count(trimmed, "/") == 1 {
-				t.Fatalf("declaration %q is selected by the pack root %q", d.ID, p.Path)
-			}
-		}
-	}
-	if forkSteps == 0 {
-		t.Fatal("the export declares no fork-quality step, so this test would pass for the wrong reason")
-	}
 }
 
 // The in-process checks are the one part of the plan the registry cannot spell as a

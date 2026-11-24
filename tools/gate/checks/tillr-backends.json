@@ -1,0 +1,21 @@
+{
+  "id": "tillr-backends",
+  "label": "the backend adapters produce one report shape and refuse a truncated stream",
+  "command": [
+    "python3",
+    "tests/tillr-muse-backend.test.py"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 300000,
+  "reads": [
+    "config/tillr/",
+    "tests/tillr-muse-backend.test.py",
+    "tools/gate/checks/tillr-backends.json",
+    "tools/tillr-run/backends/"
+  ],
+  "tools": [
+    "python3",
+    "git"
+  ]
+}

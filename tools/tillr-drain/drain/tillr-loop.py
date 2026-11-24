@@ -107,30 +107,9 @@ CANDIDATE_FIELDS = ("item", "lane", "run", "worktree", "base", "head")
 DEFAULT_GATE_PROGRAM = ("python3 tools/gate/change-gate.py --base {base} --head {head} "
                         "--runner {runner} --logs {logs}")
 
-# The registry file a gate run generates for itself when the caller names none, under the
-# run's own scratch directory so the digest `plan` verifies and the checks the verdict names
-# sit beside the change and plan records they belong to.
-REGISTRY_FILE = "registry.json"
-
-# The registry is a property of the tree, not of the change: `--registry-json` builds a
-# plan over every tracked path and exports each check's declaration, which costs ~1.3s and
-# is identical for every lane gated on the same tree. The key is the gate file's blob plus
-# the tracked path list, because the declarations name the paths that select them; the
-# cached file is read back rather than regenerated. `YOLO_DURABLE_DIR` is the durable
-# scratch the loop already has, never `/tmp`.
-REGISTRY_CACHE_SCRIPT = r'''
-set -eu
-command -v python3 >/dev/null 2>&1 || { echo "tillr-loop: python3 is missing" >&2; exit 4; }
-base="${YOLO_DURABLE_DIR:-$HOME/.cache}/registry-cache"
-mkdir -p "$base"
-key=$( { git rev-parse HEAD:tools/fork-check.py 2>/dev/null || echo untracked; \
-         git ls-files -z | sha256sum; } | sha256sum | cut -c1-16 )
-cache="$base/$key.json"
-if [ -f "$cache" ]; then cat "$cache"; exit 0; fi
-python3 tools/fork-check.py --registry-json > "$cache.$$" \
-  && mv "$cache.$$" "$cache" \
-  && cat "$cache"
-'''
+# The check registry a gate run plans from when the caller names none: the candidate's
+# own declarations, one JSON file per check.
+REGISTRY_DIR = "tools/gate/checks"
 
 # Where an operator who already exported a registry names it, so the drain's gate program
 # string does not have to carry a path that changes with the checkout.
@@ -161,9 +140,8 @@ class Step:
     # name the file the plan will read rather than a stream a log would have to be parsed
     # for.
     stdout: str | None = None
-    # The environment variables this step needs on top of the adapter's own. A step that
-    # reads a second checkout (the gate program reading `.forks/` under PI_FORKS_ROOT)
-    # is told where it is explicitly; nothing else is overridden.
+    # The environment variables this step needs on top of the adapter's own; nothing
+    # else is overridden.
     env: dict[str, str] | None = None
 
 
@@ -355,23 +333,8 @@ def compose_gate(ctx: Ctx, dry: bool) -> list[Step]:
         )
     ]
     if not registry:
-        # The registry is the tree's own export of its check declarations, so generating it
-        # is reading the gate's plan, not inventing one. It is written beside the run's
-        # records: one digest, one plan, one verdict, one directory. The tree's own copy is
-        # cached by the declarations it holds, so the second lane gated on this tree reads
-        # it back instead of rebuilding the same 65 declarations.
-        registry = str(Path(ctx.run_dir) / REGISTRY_FILE)
-        preparations.append(
-            Step(
-                [
-                    require_binary(None, "sh", dry),
-                    "-c",
-                    REGISTRY_CACHE_SCRIPT,
-                ],
-                ctx.root,
-                stdout=registry,
-            )
-        )
+        # The candidate's own declarations are the registry: one directory, one digest.
+        registry = str(Path(ctx.worktree) / REGISTRY_DIR)
     steps = preparations + [
         Step(
             [
@@ -403,10 +366,6 @@ def compose_gate(ctx: Ctx, dry: bool) -> list[Step]:
             ]
             + gate_program_args(ctx.gate_program),
             ctx.worktree,
-            # The gate program reads the candidate's packs from the worktree and any
-            # `.forks/` checkout from the repository it was told about: `.forks/` is
-            # gitignored and never present inside a linked worktree.
-            env={"PI_FORKS_ROOT": ctx.root},
         ),
     ]
     if not dry:
@@ -434,7 +393,7 @@ def compose_land(ctx: Ctx, dry: bool) -> list[Step]:
     There is no queue step: the gate's verdict is the only preparation, and the lander
     carries the item, the run, the base and the head rather than reading a candidate row
     back out of a store. `--base-ref` is the root's checked-out branch, which is the ref
-    the landing advances; a fork-series item names its patch branch instead.
+    the landing advances.
     """
     if not Path(ctx.verdict_record).exists():
         raise Refusal(
@@ -722,7 +681,7 @@ def parser_for(kind: str) -> argparse.ArgumentParser:
     if kind in ("gate", "self-check"):
         parser.add_argument("--registry", default=None,
                             help="the check registry tillr-gate plan reads (default: "
-                                 f"${REGISTRY_ENV}, else a registry exported into the run's scratch)")
+                                 f"${REGISTRY_ENV}, else the candidate's tools/gate/checks directory)")
         parser.add_argument("--gate-program", default=None,
                             help="the program `tillr-gate run --gate` runs (default: "
                                  f"{DEFAULT_GATE_PROGRAM})")
@@ -841,24 +800,50 @@ def describe() -> int:
 
 
 def revision_check(kind: str, args: argparse.Namespace) -> int:
-    """Run the drain's historical revision check in the supplied cwd and environment."""
-    if kind in ("replay", "fixer-gate"):
-        flags = ["--replay", "--only=" + args.only] if kind == "fixer-gate" else ["--replay", "--only", args.only]
-        if kind == "fixer-gate":
-            # Unlike historical replay, the named phase runs in a live candidate lane.
-            actual = subprocess.run(["git", "rev-parse", "HEAD"], cwd=args.worktree,
-                                    capture_output=True, text=True)
-            if actual.returncode or actual.stdout.strip() != args.head:
-                raise Refusal(EXIT_EXTERNAL, "named check could not judge: --head is not checked out")
-            os.chdir(args.worktree)
-            flags.append("--fixer")
-    else:
-        flags = ["--tier", "rolling", *(["--all"] if args.all else ["--since", args.since])]
+    """Judge the checked-out revision with declared whole-tree checks.
+
+    `rolling` judges every heavy declaration. `replay` and `fixer-gate` judge the one
+    declaration `--only` names. A change check compares two commits, so it has no
+    verdict on a single revision and is refused instead of being answered with a pass.
+    """
+    if kind == "fixer-gate":
+        # Unlike a replay on a past revision, the named check runs in a live candidate lane.
+        actual = subprocess.run(["git", "rev-parse", "HEAD"], cwd=args.worktree,
+                                capture_output=True, text=True)
+        if actual.returncode or actual.stdout.strip() != args.head:
+            raise Refusal(EXIT_EXTERNAL, "named check could not judge: --head is not checked out")
+        os.chdir(args.worktree)
+    scratch = os.environ.get("YOLO_DURABLE_DIR") or subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True, text=True).stdout.strip() or "."
+    logs = str(Path(scratch) / "tillr-loop-revision-logs" / str(os.getpid()))
+    runner = shutil.which("tillr-gate")
+    if not runner:
+        raise Refusal(EXIT_EXTERNAL, "cannot run revision check: tillr-gate is not on PATH")
+    argv = [runner, "checks", "--heavy-tree", "--base", "HEAD", "--head", "HEAD", "--worktree", ".",
+            "--checks", REGISTRY_DIR, "--logs", logs]
+    if kind != "rolling":
+        scope = tier = None
+        for path in sorted(Path(REGISTRY_DIR).glob("*.json")):
+            try:
+                declared = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if declared.get("id") == args.only:
+                scope, tier = declared.get("scope"), declared.get("tier")
+        if scope != "tree":
+            raise Refusal(EXIT_EXTERNAL, f"named check could not judge: {args.only} is not a "
+                                         "whole-tree declaration in " + REGISTRY_DIR)
+        if tier == "heavy":
+            argv += ["--only", args.only]
+        else:
+            argv = [sys.executable, "tools/gate/tree-check.py", "--only", args.only,
+                    "--base", "HEAD", "--head", "HEAD", "--runner", runner]
     try:
-        # Keep the PID the drain signals: fork-check owns the separate check sessions.
+        # Keep the PID the drain signals: the judge owns the separate check sessions.
         sys.stdout.flush()
         sys.stderr.flush()
-        os.execvp("python3", ["python3", "tools/fork-check.py", *flags])
+        os.execv(argv[0], argv)
     except OSError as err:
         raise Refusal(EXIT_EXTERNAL, f"cannot run revision check: {err}") from err
 

@@ -434,39 +434,6 @@ func TestSiteG10ShadowUsesShadowOrderAggregate(t *testing.T) {
 	}
 }
 
-func TestSiteG11DualRunUsesClassifier(t *testing.T) {
-	withClassifier(t, func(obs checkresult.Observation) checkresult.Result {
-		if obs.Word == VerdictPassInherited {
-			t.Fatalf("settlement %q must not be passed to classifyCheck", obs.Word)
-		}
-		if obs.Source == checkresult.JudgingProgram && obs.ExitCode != nil && *obs.ExitCode == 0 {
-			return checkresult.Result{Outcome: checkresult.Fail, Detail: checkresult.DetailFailed}
-		}
-		if obs.Source == checkresult.ResultWord && (obs.Word == "go-green" || obs.Word == "py-green") {
-			return checkresult.Result{Outcome: checkresult.Pass, Detail: checkresult.DetailPassed}
-		}
-		return checkresult.Classify(obs)
-	})
-
-	if got := pythonVerdict(0); got != VerdictFail {
-		t.Fatalf("pythonVerdict(0) ignored classifier: got %q, want %q", got, VerdictFail)
-	}
-
-	settledPath := filepath.Join(t.TempDir(), "settled.json")
-	writeVerdictFile(t, settledPath, VerdictPayload{VerdictID: "v-g11", Result: VerdictPassInherited})
-	if got := verdictResult(settledPath); got != VerdictPassInherited {
-		t.Fatalf("verdictResult altered settlement: got %q, want %q", got, VerdictPassInherited)
-	}
-
-	disagreements := compare(Comparison{
-		Go:     GateObservation{PlanKinds: []string{"k"}, Verdict: "go-green"},
-		Python: GateObservation{PlanKinds: []string{"k"}, Verdict: "py-green"},
-	})
-	if len(disagreements) != 0 {
-		t.Fatalf("compare ignored classifier equivalence: %+v", disagreements)
-	}
-}
-
 func TestSiteG12BudgetNotesUsesBudgetNoteClassifier(t *testing.T) {
 	var sawBudgetNote bool
 	withClassifier(t, func(obs checkresult.Observation) checkresult.Result {

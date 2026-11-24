@@ -649,46 +649,6 @@ sys.exit(rc)
                 # The clean checkout's own pass is remembered as before.
                 self.assertIn("remembered pass", self.check("documents", base).stderr)
 
-    def test_plan_union_preserves_the_old_fixture_kinds(self):
-        shutil.copy(ROOT / "tools/fork-check.py", self.repo / "tools/fork-check.py")
-        (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
-        self.commit()
-        result = subprocess.run(["python3", "tools/fork-check.py", "--explain", "--since", self.base],
-                                cwd=self.repo, env=self.env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        selection = next(line.removeprefix("fork-check: selection ") for line in result.stdout.splitlines()
-                         if line.startswith("fork-check: selection "))
-        remaining = {check["kind"] for check in json.loads(selection)["checks"]}
-        declarations = self.repo / "migrated-checks"
-        declarations.mkdir()
-        for kind in IDS:
-            shutil.copy(self.repo / "tools/gate/checks" / (kind + ".json"), declarations)
-        ran = self.runner_check("--base", self.base, "--head", "HEAD", "--checks", str(declarations))
-        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
-        migrated = {check["check_id"] for check in json.loads(ran.stdout)["payload"]["checks"]}
-        # Migrated change checks remain disjoint. The planner also schedules fast
-        # whole-tree declarations, so its execution inventory includes those kinds
-        # without reintroducing them as legacy implementations in the registry.
-        before = {"file-size", "commit-identity", "citations",
-                  "documents", "pipeline-evidence", "self-suite", "workflows", "elapsed-time"}
-        tree_ids = {"scratch", "design-citations", "pack-sync", "go-build", "format"}
-        self.assertEqual(migrated | remaining, before | tree_ids)
-        self.assertFalse((IDS - {"file-size"}) & remaining)
-        self.assertEqual(tree_ids & remaining, tree_ids)
-        exported = subprocess.run(["python3", "tools/fork-check.py", "--registry-json"],
-                                  cwd=self.repo, env=self.env, capture_output=True, text=True)
-        self.assertEqual(exported.returncode, 0, exported.stdout + exported.stderr)
-        legacy_registry = json.loads(exported.stdout)
-        legacy_ids = {check["id"] for check in legacy_registry["declarations"]}
-        legacy_ids.update(check["id"] for check in legacy_registry["in_process"])
-        declaration_ids = {json.loads(path.read_text())["id"]
-                           for path in (self.repo / "tools/gate/checks").glob("*.json")}
-        self.assertFalse(legacy_ids & declaration_ids, legacy_ids & declaration_ids)
-        for kind in tree_ids:
-            declaration = json.loads((self.repo / "tools/gate/checks" / (kind + ".json")).read_text())
-            self.assertEqual(declaration["scope"], "tree")
-            self.assertEqual(declaration["tier"], "fast")
-
     def test_added_cyclic_workflow_fails_real_check(self):
         result = subprocess.run(["python3", str(ROOT / "tools/gate/checks/workflows.test.py")],
                                 cwd=ROOT, env=self.env, capture_output=True, text=True)
@@ -697,7 +657,7 @@ sys.exit(rc)
 
     def stub_tree_commands(self):
         # Only the fixture commands change: the real scope/tier/id declarations
-        # determine the adapter's executed inventory, independently of the legacy gate.
+        # determine the adapter's executed inventory.
         for path in (self.repo / "tools/gate/checks").glob("*.json"):
             declaration = json.loads(path.read_text())
             if declaration["scope"] == "tree":
@@ -706,26 +666,25 @@ sys.exit(rc)
 
     def test_adapter_records_the_complete_fast_inventory_including_skips(self):
         self.stub_tree_commands()
-        (self.repo / "tools/fork-check.py").write_text('print("legacy inventory: file-size warning")\n')
-        base = self.commit()  # The gate stub is fixture infrastructure, not the candidate.
+        base = self.commit()  # The stubbed commands are fixture infrastructure, not the candidate.
         (self.repo / "README.md").write_text("# Changed\n")
         head = self.commit()
         result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", base,
                                  "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
                                 cwd=self.repo, env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        verdict, legacy = result.stdout.splitlines()
+        verdict, = result.stdout.splitlines()
         checks = json.loads(verdict)["payload"]["checks"]
-        expected = IDS | {"gate-budget", "scratch", "design-citations", "pack-sync", "go-build", "format"}
+        expected = IDS | {"gate-budget", "scratch", "design-citations", "pack-sync", "go-build", "format",
+                          "go-affected"}
         self.assertEqual({check["check_id"] for check in checks}, expected)
         self.assertEqual(len(checks), len(expected))
-        skipped = {"format", "gate-budget", "go-build", "workflows"}
+        skipped = {"format", "gate-budget", "go-affected", "go-build", "workflows"}
         self.assertEqual({check["check_id"]: check["result"] for check in checks}, {
             ident: "skipped: no changed path is read" if ident in skipped else "pass"
             for ident in expected
         })
         self.assertIn("skipped: no changed path is read:", result.stderr)
-        self.assertEqual(legacy, "legacy inventory: file-size warning")
 
     def test_real_format_declarations_execute_on_clean_tree(self):
         # Unlike the routing fixtures, use the actual declarations and tools. A
@@ -752,9 +711,8 @@ sys.exit(rc)
                 self.assertEqual([(check["check_id"], check["result"]) for check in checks],
                                  [(name, "pass")])
 
-    def test_loop_program_runs_change_runner_before_remaining_program(self):
+    def test_loop_program_prints_one_verdict_and_cannot_judge_without_the_renderer(self):
         self.stub_tree_commands()
-        (self.repo / "tools/fork-check.py").write_text('print("remaining program ran")\n')
         self.base = self.commit()
         (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
         head = self.commit()
@@ -762,9 +720,8 @@ sys.exit(rc)
                                  "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
                                 cwd=self.repo, env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        verdict, remaining = result.stdout.splitlines()
+        verdict, = result.stdout.splitlines()
         self.assertEqual(json.loads(verdict)["payload"]["base_sha"], self.base)
-        self.assertEqual(remaining, "remaining program ran")
         # The renderer is unavailable outright: it cannot check, and it cannot say which
         # version it is, so the pass the first run remembered cannot be confirmed either.
         self.env.update(RENDER_RC="3", RENDER_VERSION_RC="3")
@@ -772,19 +729,6 @@ sys.exit(rc)
                                  "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
                                 cwd=self.repo, env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 4)
-        self.assertNotIn("remaining program ran", result.stdout)
-
-    def test_remaining_program_runs_on_the_candidate_range_at_landing_tier(self):
-        self.stub_tree_commands()
-        (self.repo / "tools/fork-check.py").write_text('import json, sys\nprint(json.dumps(sys.argv[1:]))\n')
-        base = self.commit()
-        (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
-        head = self.commit()
-        result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", base,
-                                 "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
-                                cwd=self.repo, env=self.env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(json.loads(result.stdout.splitlines()[-1]), ["--since", base, "--tier", "landing"])
 
     def test_loop_program_keeps_the_verdict_of_a_slow_tree_check(self):
         # The loop's gate is where carrying a fast tree check is switched: until a heavy
@@ -833,10 +777,9 @@ sys.exit(rc)
         # The failed warm is tried again; the completed one is not repeated.
         self.assertEqual(log.read_text().split(), ["warm", "runner", "warm", "runner", "runner"])
 
-    def test_candidate_go_timing_assertion_is_refused_without_self_suite_and_declared_passes(self):
+    def test_candidate_go_timing_assertion_is_refused_and_declared_passes(self):
         self.stub_tree_commands()
         (self.repo / "tools/gate/checks/go-build.py").write_text("raise SystemExit(0)\n")
-        shutil.copy(ROOT / "tools/fork-check.py", self.repo / "tools/fork-check.py")
         base = self.commit()
 
         go_test = (
@@ -855,15 +798,6 @@ sys.exit(rc)
         (self.repo / "pkg/fairness_test.go").write_text(go_test)
         self.git("add", "pkg")
         red_head = self.commit()
-
-        explained = subprocess.run(
-            ["python3", "tools/fork-check.py", "--explain", "--since", base, "--tier", "landing"],
-            cwd=self.repo, env=self.env, capture_output=True, text=True,
-        )
-        self.assertEqual(explained.returncode, 0, explained.stdout + explained.stderr)
-        selection = next(line.removeprefix("fork-check: selection ") for line in explained.stdout.splitlines()
-                         if line.startswith("fork-check: selection "))
-        self.assertNotIn("self-suite", {c["kind"] for c in json.loads(selection)["checks"]})
 
         red_logs = self.repo / "logs-red"
         refused = subprocess.run(
@@ -895,15 +829,6 @@ sys.exit(rc)
         }) + "\n")
         self.git("add", "pkg", "tools/gate-timing-declarations.json")
         green_head = self.commit()
-
-        explained_decl = subprocess.run(
-            ["python3", "tools/fork-check.py", "--explain", "--since", base, "--tier", "landing"],
-            cwd=self.repo, env=self.env, capture_output=True, text=True,
-        )
-        self.assertEqual(explained_decl.returncode, 0, explained_decl.stdout + explained_decl.stderr)
-        selection_decl = next(line.removeprefix("fork-check: selection ") for line in explained_decl.stdout.splitlines()
-                              if line.startswith("fork-check: selection "))
-        self.assertNotIn("self-suite", {c["kind"] for c in json.loads(selection_decl)["checks"]})
 
         green_logs = self.repo / "logs-green"
         passed = subprocess.run(

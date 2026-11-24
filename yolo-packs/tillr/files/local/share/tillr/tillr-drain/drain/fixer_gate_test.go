@@ -109,8 +109,7 @@ func TestFixerGateJudgesOwnDiffThenNamedChecksAndLands(t *testing.T) {
 	t.Setenv("PATH", tmp+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TILLR_LOOP_REGISTRY", "")
 	const testPath = "tools/tillr-drain/repair_test.go"
-	const namedID = "go-tool/tools-tillr-drain-s-whole-suite-passes"
-	const upstreamID = "patch-branch-inv2"
+	const namedID = "fixture-suite"
 	const retiredID = "go-test:tools/tillr-drain:example.invalid/repair:TestVariants/failover=true"
 	const skippedID = "go-test:tools/tillr-drain:example.invalid/repair:TestVariants/skipped"
 	for _, tc := range []struct {
@@ -118,11 +117,9 @@ func TestFixerGateJudgesOwnDiffThenNamedChecksAndLands(t *testing.T) {
 		names              []string
 		lands              bool
 	}{
-		{"conflicting release", "repaired", "pass", []string{namedID}, true},
 		{"no name", "repaired", "pass", nil, true},
 		{"named failure", "still red", "fail", []string{namedID}, false},
 		{"named unavailable", "unavailable", "error", []string{namedID}, false},
-		{"old upstream name", "repaired", "pass", []string{upstreamID, namedID}, true},
 		{"removed subtest", "repaired", "pass", []string{retiredID, namedID}, true},
 		{"removed subtest with failure", "still red", "fail", []string{retiredID, namedID}, false},
 		{"skipped subtest", "repaired", "error", []string{skippedID}, false},
@@ -137,7 +134,7 @@ func TestFixerGateJudgesOwnDiffThenNamedChecksAndLands(t *testing.T) {
 				}
 				writeForkFile(t, path, text)
 			}
-			for _, name := range []string{"tools/fork-check.py", "tools/gate/change-gate.py", "tools/gate/classify.py"} {
+			for _, name := range []string{"tools/gate/change-gate.py", "tools/gate/classify.py"} {
 				raw, err := os.ReadFile(filepath.Join(repo, name))
 				if err != nil {
 					t.Fatal(err)
@@ -156,28 +153,21 @@ func TestVariants(t *testing.T) {
 `
 			}
 			write(testPath, test("repaired"))
-			write("tools/go-test-shards.py", `import os, sys
-from pathlib import Path
-if "unavailable" in Path("tools/tillr-drain/repair_test.go").read_text():
-    print("fixture: tool unavailable", file=sys.stderr)
-    sys.exit(127)
-os.chdir(sys.argv[1])
-os.execvp("go", ["go", "test", "-run", "^TestBroken$"])
-`)
+			// The named check is a heavy whole-tree declaration running one Go test. The
+			// unavailable case declares a tool no machine has, so the check cannot be judged.
+			suiteTools := `["sh","go"]`
+			if tc.name == "named unavailable" {
+				suiteTools = `["sh","go","fixture-tool-nobody-installs"]`
+			}
+			write("tools/gate/checks/fixture-suite.json", `{"id":"fixture-suite","label":"fixture suite","scope":"tree","tier":"heavy","timeout_ms":600000,"reads":["tools/tillr-drain/"],"tools":`+suiteTools+`,"command":["sh","-c","cd tools/tillr-drain && exec go test -run '^TestBroken$'"]}`)
 			write("tools/gate/checks/fixture-change.json", `{"id":"fixture-change","label":"fixture change","scope":"change","tier":"fast","budget_ms":2000,"reads":["tools/tillr-drain/"],"command":["sh","-c","! grep -q 'ordinary red' tools/tillr-drain/repair_test.go"]}`)
 			write("tools/gate/checks/fixture-fast.json", `{"id":"fixture-fast","label":"fixture fast","scope":"tree","tier":"fast","budget_ms":2000,"reads":["tools/tillr-drain/"],"command":["true"]}`)
 			// go_build_needed and tillr-gate both read go-build.json, so use a real declaration.
 			write("tools/gate/checks/go-build.json", `{"id":"go-build","label":"fixture build","scope":"tree","tier":"fast","budget_ms":2000,"reads":["unrelated/"],"command":["true"]}`)
-			if tc.name == "conflicting release" || tc.name == "old upstream name" {
-				makeFixerConflict(t, f.root)
-			}
 			runGit(t, f.root, "add", ".")
 			runGit(t, f.root, "commit", "-qm", "green fixture")
 			green := runGit(t, f.root, "rev-parse", "HEAD")
 			runGit(t, f.root, "update-ref", "refs/tillr/green", green)
-			if tc.name == "conflicting release" || tc.name == "old upstream name" {
-				write("yolo-packs/fixture/pack.json", `{"contributes":[{"source":"file:///fixture.git","patch_branch":"file:///downstream.git?ref=patch/fixture"}]}`)
-			}
 			removed := allIn([]string{retiredID}, tc.names)
 			redTest := test("broken on trunk")
 			if removed {
@@ -188,16 +178,9 @@ os.execvp("go", ["go", "test", "-run", "^TestBroken$"])
 			runGit(t, f.root, "add", ".")
 			runGit(t, f.root, "commit", "-qm", "break the rolling test after green")
 			base := runGit(t, f.root, "rev-parse", "HEAD")
-			if tc.name == "conflicting release" {
-				fork := exec.Command("python3", "tools/fork-check.py", "--replay", "--only="+upstreamID)
-				fork.Dir = f.root
-				if out, err := fork.CombinedOutput(); err == nil || !strings.Contains(string(out), "FAIL patch-branch-inv2") || !strings.Contains(string(out), "CONFLICT (content)") {
-					t.Fatalf("the real replay must see the conflicting release: %v\n%s", err, out)
-				}
-			}
-			red := exec.Command("python3", "tools/fork-check.py", "--replay", "--only="+namedID)
-			red.Dir = f.root
-			if out, err := red.CombinedOutput(); err == nil || !strings.Contains(string(out), "FAIL go-tool") || !strings.Contains(string(out), "TestBroken") {
+			red := exec.Command("go", "test", "-run", "^TestBroken$")
+			red.Dir = filepath.Join(f.root, "tools", "tillr-drain")
+			if out, err := red.CombinedOutput(); err == nil || !strings.Contains(string(out), "TestBroken") {
 				t.Fatalf("fixture must start with a red named test: %v\n%s", err, out)
 			}
 			id, err := l.fileTrunkFixer(ctx, base, tc.names, GateOutcome{SuspectPaths: []string{testPath}})
@@ -292,17 +275,11 @@ os.execvp("go", ["go", "test", "-run", "^TestBroken$"])
 			if ordinary < 0 || !strings.Contains(text, "fixture-fast") || (named >= 0) != (allIn([]string{namedID}, tc.names) && tc.name != "ordinary refuses first") || (named >= 0 && named < ordinary) {
 				t.Fatalf("ordinary checks must run before named checks:\n%s", text)
 			}
-			if tc.name == "conflicting release" && (strings.Contains(text, upstreamID) || !strings.Contains(text, "PASS go-tool")) {
-				t.Fatalf("gate bought the wrong checks:\n%s", text)
-			}
-			if tc.name == "named unavailable" && (!strings.Contains(text, "could not judge") || !strings.Contains(text, "tool unavailable")) {
+			if tc.name == "named unavailable" && !strings.Contains(text, "fixer named check "+namedID+": could not judge") {
 				t.Fatalf("missing unknown evidence:\n%s", text)
 			}
 			if tc.name == "skipped subtest" && !strings.Contains(text, skippedID+": could not judge\ntest or enclosing test skipped at this commit") {
 				t.Fatalf("skipped subtest must remain unjudged:\n%s", text)
-			}
-			if tc.name == "old upstream name" && !strings.Contains(text, upstreamID+": dropped (reads upstream)") {
-				t.Fatalf("missing dropped-name line:\n%s", text)
 			}
 			if removed {
 				for _, check := range verdict.Checks {
@@ -317,40 +294,7 @@ os.execvp("go", ["go", "test", "-run", "^TestBroken$"])
 			if tc.name == "named failure" && !strings.Contains(text, "TestBroken") {
 				t.Fatalf("missing named failure evidence:\n%s", text)
 			}
-			if tc.name == "conflicting release" && runGit(t, f.root, "rev-parse", "HEAD^{tree}") != runGit(t, lane, "rev-parse", "HEAD^{tree}") {
-				t.Fatal("landed a different tree")
-			}
 		})
-	}
-}
-
-func makeFixerConflict(t *testing.T, root string) {
-	t.Helper()
-	upstream := t.TempDir()
-	runGit(t, upstream, "init", "-q", "-b", "main")
-	writeForkFile(t, filepath.Join(upstream, "conflict"), "original\n")
-	runGit(t, upstream, "add", ".")
-	runGit(t, upstream, "commit", "-qm", "original")
-	runGit(t, upstream, "checkout", "-qb", "patch/fixture")
-	writeForkFile(t, filepath.Join(upstream, "conflict"), "downstream patch\n")
-	runGit(t, upstream, "commit", "-qam", "downstream patch")
-	runGit(t, upstream, "checkout", "-q", "main")
-	writeForkFile(t, filepath.Join(upstream, "conflict"), "new upstream release\n")
-	runGit(t, upstream, "commit", "-qam", "upstream release")
-	runGit(t, upstream, "tag", "v1.6.0")
-	// Keep the network out of the fixture but ask the same Git merge question.
-	path := filepath.Join(root, "bin", "pi-forks")
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatal(err)
-	}
-	writeForkFile(t, path, "#!/bin/sh\n[ \"$1 $2\" = 'patch-branch merge-check' ] || exit 2\n"+
-		"git -C '"+upstream+"' merge-tree --write-tree patch/fixture refs/tags/v1.6.0 && exit 0\n"+
-		"echo 'FAILED: main conflicts with refs/tags/v1.6.0 (INV-2)'\nexit 1\n")
-	if err := os.Chmod(path, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command(path, "patch-branch", "merge-check").CombinedOutput(); err == nil || !strings.Contains(string(out), "CONFLICT (content)") {
-		t.Fatalf("upstream fixture did not conflict: %v\n%s", err, out)
 	}
 }
 

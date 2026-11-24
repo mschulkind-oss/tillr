@@ -17,7 +17,8 @@ import tempfile
 import time
 
 
-# The modules the landing gate runs through tools/go-test-shards.py (fork-check's GO_SHARD_DIRS).
+# The modules whose declared suite (tools/gate/checks/go-test-*.json) runs through
+# tools/go-test-shards.py.
 SHARDED = ('tools/tillr-store', 'tools/tillr-item', 'tools/tillr-run', 'tools/tillr-gate',
            'tools/tillr-view', 'tools/tillr-land', 'tools/tillr-drain')
 # Installation records beside the bin directory.

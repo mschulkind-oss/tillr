@@ -1,0 +1,26 @@
+{
+  "id": "pack-sync-test",
+  "label": "the pack mirror and its documentation snapshot suite passes",
+  "command": [
+    "python3",
+    "tests/pack-sync.test.py"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 600000,
+  "reads": [
+    ".justfile",
+    "docs/",
+    "tests/pack-sync.test.py",
+    "tools/",
+    "tools/gate/checks/pack-sync-test.json",
+    "tools/pack-docs.py",
+    "tools/pack-mirror-links.py",
+    "yolo-packs/tillr/"
+  ],
+  "tools": [
+    "python3",
+    "git",
+    "just"
+  ]
+}

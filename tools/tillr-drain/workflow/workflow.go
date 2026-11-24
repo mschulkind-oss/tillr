@@ -27,7 +27,6 @@ const (
 
 	tillrSkillPath  = "yolo-packs/tillr/skills/tillr-operating/SKILL.md"
 	tillrDocsTest   = "tests/tillr-docs.test.py"
-	forkCheckTest   = "tests/fork-check.test.py"
 	museBackendTest = "tests/tillr-muse-backend.test.py"
 )
 
@@ -860,9 +859,6 @@ func FencePaths(allowed []string) []string {
 				add("tools/tillr-drain/drain/tillr-loop.py")
 				add("yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/tillr-loop.py")
 			}
-		}
-		if named == "tools/fork-check.py" {
-			add(forkCheckTest)
 		}
 		if named == "tools/tillr-run/backends" || strings.HasPrefix(named, "tools/tillr-run/backends/") {
 			add(museBackendTest)

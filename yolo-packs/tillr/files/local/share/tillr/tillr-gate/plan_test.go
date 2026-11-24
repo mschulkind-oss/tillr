@@ -380,7 +380,7 @@ func TestHelpIsTheFaceSurface(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("--help exited %d, want 0: %s", code, out)
 	}
-	for _, face := range []string{"change", "dualrun", "plan", "run", "shadow"} {
+	for _, face := range []string{"change", "plan", "run", "shadow"} {
 		if !strings.Contains(string(out), face) {
 			t.Errorf("--help does not name the face %q: %s", face, out)
 		}

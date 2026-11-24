@@ -1,0 +1,25 @@
+{
+  "id": "commit-identity-test",
+  "label": "the identity check and the pre-commit identity hook suites pass",
+  "command": [
+    "sh",
+    "-c",
+    "python3 tests/git-identity.test.py && python3 tests/pre-commit-identity.test.py"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 300000,
+  "reads": [
+    "bin/hooks-install",
+    "hooks/",
+    "tests/git-identity.test.py",
+    "tests/pre-commit-identity.test.py",
+    "tools/gate/",
+    "tools/gate/checks/commit-identity-test.json"
+  ],
+  "tools": [
+    "sh",
+    "python3",
+    "git"
+  ]
+}

@@ -1,4 +1,4 @@
-"""Whole-tree Markdown convention guards, migrated from fork-check."""
+"""Whole-tree Markdown convention guards."""
 import os
 from pathlib import Path
 import re

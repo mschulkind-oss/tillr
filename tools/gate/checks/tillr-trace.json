@@ -1,0 +1,19 @@
+{
+  "id": "tillr-trace",
+  "label": "the trace reader's cases pass",
+  "command": [
+    "python3",
+    "tools/tillr-trace/test.py"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 300000,
+  "reads": [
+    "tools/gate/checks/tillr-trace.json",
+    "tools/tillr-trace/"
+  ],
+  "tools": [
+    "python3",
+    "git"
+  ]
+}

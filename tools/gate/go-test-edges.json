@@ -23,7 +23,6 @@
       "github.com/mschulkind-oss/tillr-view"
     ],
     "reads": [
-      "bin/pi-forks",
       "config/tillr/backend-policy.bedrock.json",
       "config/tillr/backend-policy.claude-copilot.json",
       "config/tillr/backend-policy.claude.json",
@@ -36,7 +35,6 @@
       "config/tillr/gate-policy.json",
       "config/tillr/plan-guidance.md",
       "config/tillr/workflows/",
-      "tools/fork-check.py",
       "tools/gate/change-gate.py",
       "tools/gate/classify.py",
       "tools/go-test-shards.py",
@@ -48,47 +46,14 @@
       "tools/tillr-run/backends/",
       "yolo-packs/tillr/pack.json",
       "yolo-packs/tillr/programs/"
-    ],
-    "read_tests": {
-      "tools/fork-check.py": [
-        "TestTheComposedPipelineRunsEndToEndOnAFixture",
-        "TestFixerGateJudgesOwnDiffThenNamedChecksAndLands",
-        "TestJudgeAutomaticRevertDoesNotOptIntoFastTiming",
-        "TestGateTimingDoesNotRecordNestedGateSpans",
-        "TestGateTimingKeepsExecutedIronbarSkip",
-        "TestGateTimingInterruptedForkCheckCountsHungCheck",
-        "TestHeavyLegacyRestartPreservesPlannerSchedulerAndCompletedProof",
-        "TestHeavyLegacyRestartCarriesPassAcrossAnUnchangedTipAdvance",
-        "TestHeavyLegacyRestartReusesSuccessfulStallRetry",
-        "TestHeavyLegacyAttributionUsesTheRealReplaySelectorVocabulary",
-        "TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery",
-        "TestHeavyProgressEventsEmitLiveLegacyChecksDuringRun",
-        "TestHeavyProgressEventsEmitRunningForShardedGoChecksAndStallReplay"
-      ]
-    }
+    ]
   },
   "github.com/mschulkind-oss/tillr-gate": {
     "builds": [],
     "reads": [
-      "tests/pi-patch-series.test.sh",
-      "tools/fork-check.py",
       "tools/gate/checks/",
-      "tools/tillr-loop/tillr-loop",
-      "yolo-packs/fork-pins/"
-    ],
-    "read_tests": {
-      "tools/fork-check.py": [
-        "TestPlanCarriesTheFieldsACommandListCannot",
-        "TestTheRegistryDeclaresEveryCommandCheckTheGatePlans",
-        "TestADeclarationIDCarriesNoCountAndNoAbsolutePath",
-        "TestPlanSelectsTheGoToolSteps",
-        "TestTheRegistryNamesTheChecksItCannotCommand",
-        "TestEveryDeclarationIsSelectedBySomething",
-        "TestTheRegistryDigestBindsTheInProcessChecks",
-        "TestTheRegistryDigestIsReproducibleAcrossExports",
-        "TestAForkStepIsSelectedByItsSeriesAndNotItsPack"
-      ]
-    }
+      "tools/tillr-loop/tillr-loop"
+    ]
   },
   "github.com/mschulkind-oss/tillr-item": {
     "builds": [

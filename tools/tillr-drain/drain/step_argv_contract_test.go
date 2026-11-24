@@ -192,7 +192,13 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 	}
 	c := candidate(TrunkFixerID(fixtureBase), "run-fixer-named")
 	c.HeadSHA = runGit(t, worktree, "rev-parse", "HEAD")
-	writeForkFile(t, filepath.Join(worktree, "tools", "fork-check.py"), "import sys\nassert sys.argv[1:] == ['--replay', '--only=fixture/check', '--fixer']\n")
+	// The named check is a fast whole-tree declaration, so the adapter hands it to the
+	// tree's own tree-check program; the stand-in answers a pass.
+	if err := os.MkdirAll(filepath.Join(worktree, "tools", "gate", "checks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(worktree, "tools", "gate", "checks", "fixture.json"), `{"id": "fixture/check", "scope": "tree", "tier": "fast"}`+"\n")
+	writeForkFile(t, filepath.Join(worktree, "tools", "gate", "tree-check.py"), "import sys\nassert sys.argv[1:3] == ['--only', 'fixture/check']\n")
 	if answer, output := steps.fixerCheck(ctx, c, "fixture/check"); answer != "pass" {
 		t.Fatalf("named check %s: %s", answer, output)
 	}

@@ -319,8 +319,10 @@ func TestSub(t *testing.T) {
 import "testing"
 func TestUnrelatedFail(t *testing.T) { t.Fatal("unrelated package failure") }
 `)
-	wholeCheckLog := filepath.Join(t.TempDir(), "fork-check-called.txt")
-	writeReplayTestFile(t, filepath.Join(root, "tools", "fork-check.py"), `import sys
+	// The default replay program is the tree's loop adapter; the stand-in records the
+	// arguments it was handed.
+	wholeCheckLog := filepath.Join(t.TempDir(), "whole-check-called.txt")
+	writeReplayTestFile(t, filepath.Join(root, "tools", "tillr-loop", "tillr-loop"), `import sys
 with open(`+`"`+wholeCheckLog+`"`+`, "a") as f:
     f.write(" ".join(sys.argv[1:]) + "\n")
 sys.exit(0)
@@ -336,7 +338,7 @@ sys.exit(0)
 	}
 	const checkID = "go-tool/tools-sample-s-whole-suite-passes"
 
-	t.Run("named passing case from triage runs only that case and skips fork-check", func(t *testing.T) {
+	t.Run("named passing case from triage runs only that case and skips the whole check", func(t *testing.T) {
 		_ = os.Remove(wholeCheckLog)
 		logPath := filepath.Join(t.TempDir(), "00-gate.log")
 		writeReplayTestFile(t, logPath, `fork-check: triage -- 1 failed check(s), diagnosed from this run's own output and never re-run:
@@ -356,7 +358,7 @@ sys.exit(0)
 		}
 		if _, err := os.Stat(wholeCheckLog); !os.IsNotExist(err) {
 			raw, _ := os.ReadFile(wholeCheckLog)
-			t.Fatalf("whole-check fork-check.py unexpectedly ran: %q", string(raw))
+			t.Fatalf("the whole check unexpectedly ran: %q", string(raw))
 		}
 	})
 
@@ -380,7 +382,7 @@ sys.exit(0)
 		}
 		if _, err := os.Stat(wholeCheckLog); !os.IsNotExist(err) {
 			raw, _ := os.ReadFile(wholeCheckLog)
-			t.Fatalf("whole-check fork-check.py unexpectedly ran: %q", string(raw))
+			t.Fatalf("the whole check unexpectedly ran: %q", string(raw))
 		}
 	})
 
@@ -404,10 +406,10 @@ sys.exit(0)
 		}
 		raw, err := os.ReadFile(wholeCheckLog)
 		if err != nil {
-			t.Fatalf("expected whole-check fork-check.py fallback: %v", err)
+			t.Fatalf("expected the whole check fallback: %v", err)
 		}
-		if got := strings.TrimSpace(string(raw)); got != "--replay --only "+checkID {
-			t.Fatalf("fork-check.py args = %q, want %q", got, "--replay --only "+checkID)
+		if got := strings.TrimSpace(string(raw)); got != "replay --only "+checkID {
+			t.Fatalf("whole-check args = %q, want %q", got, "replay --only "+checkID)
 		}
 	})
 
@@ -432,10 +434,10 @@ sys.exit(0)
 		}
 		raw, err := os.ReadFile(wholeCheckLog)
 		if err != nil {
-			t.Fatalf("expected whole-check fork-check.py when wholeCheckReplay=true: %v", err)
+			t.Fatalf("expected the whole check when wholeCheckReplay=true: %v", err)
 		}
-		if got := strings.TrimSpace(string(raw)); got != "--replay --only "+checkID {
-			t.Fatalf("fork-check.py args = %q, want %q", got, "--replay --only "+checkID)
+		if got := strings.TrimSpace(string(raw)); got != "replay --only "+checkID {
+			t.Fatalf("whole-check args = %q, want %q", got, "replay --only "+checkID)
 		}
 	})
 
@@ -460,7 +462,7 @@ sys.exit(0)
 		}
 		if _, err := os.Stat(wholeCheckLog); !os.IsNotExist(err) {
 			raw, _ := os.ReadFile(wholeCheckLog)
-			t.Fatalf("whole-check fork-check.py unexpectedly ran: %q", string(raw))
+			t.Fatalf("the whole check unexpectedly ran: %q", string(raw))
 		}
 	})
 }

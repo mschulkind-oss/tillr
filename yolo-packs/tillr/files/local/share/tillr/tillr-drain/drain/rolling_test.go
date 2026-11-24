@@ -121,14 +121,11 @@ func TestRollingRecoversAnInitializingLockedDetachedWorktree(t *testing.T) {
 	}
 }
 
-// The gate record is append-only: callers must not pass an ignored lock flag. A
-// rolling run uses the rolling tier without pretending to wait for a record lock.
-func TestTheDefaultRollingProgramOmitsIgnoredLockTimeout(t *testing.T) {
-	if !strings.Contains(DefaultRollingProgram, "--tier rolling") {
-		t.Fatalf("the default rolling program is %q, want the rolling tier", DefaultRollingProgram)
-	}
-	if strings.Contains(DefaultRollingProgram, "--lock-timeout") {
-		t.Fatalf("the default rolling program passes an ignored flag: %q", DefaultRollingProgram)
+// The declared heavy checks are the after-merge proof, so no separate rolling program
+// runs unless an operator names one.
+func TestNoRollingProgramRunsByDefault(t *testing.T) {
+	if DefaultRollingProgram != "" {
+		t.Fatalf("the default rolling program is %q, want none", DefaultRollingProgram)
 	}
 }
 

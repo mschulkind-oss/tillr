@@ -1,0 +1,23 @@
+{
+  "id": "tillr-loop",
+  "label": "the loop adapter's faces translate, refuse and self-check",
+  "command": [
+    "python3",
+    "tools/tillr-loop/test.py"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 300000,
+  "reads": [
+    "tools/gate/",
+    "tools/gate/checks/tillr-loop.json",
+    "tools/tillr-gate/",
+    "tools/tillr-loop/",
+    "tools/tillr/"
+  ],
+  "tools": [
+    "python3",
+    "git",
+    "go"
+  ]
+}

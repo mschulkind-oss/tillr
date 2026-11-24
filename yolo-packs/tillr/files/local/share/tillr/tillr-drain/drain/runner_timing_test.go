@@ -123,7 +123,7 @@ END;`)
 }
 
 func TestRunnerChangePaths(t *testing.T) {
-	for _, path := range []string{"tools/tillr-gate/main.go", "tools/gate/checks/go-build.py", "tools/fork-check.py", "tests/fork-check.test.py", "yolo-packs/tillr/files/local/share/tillr/tillr-gate/main.go"} {
+	for _, path := range []string{"tools/tillr-gate/main.go", "tools/gate/checks/go-build.py", "tools/gate/done.py", ".justfile", "yolo-packs/tillr/files/local/share/tillr/tillr-gate/main.go"} {
 		if !runnerProofPaths(path + "\x00") {
 			t.Errorf("runner path not classified: %s", path)
 		}

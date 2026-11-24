@@ -4,10 +4,8 @@
 #
 # WHY. git runs hooks from ONE directory, shared by the main checkout and every linked
 # worktree (`git rev-parse --git-common-dir`/hooks). Nothing in the tree writes there, so
-# the hook git runs drifts from `hooks/` silently: on 2026-10-23 `.git/hooks/pre-push` was
-# the revision from one lane while the landed `hooks/pre-push` was another, so the guard
-# that ran on a push was not the guard in the tree — and the installer refused to correct
-# it, because the file existed. It corrects it now.
+# the hook git runs can drift from `hooks/` silently. This installer compares the two on
+# every run and corrects the installed copy.
 #
 # WHAT IT DOES, per executable file in `hooks/`:
 #
@@ -105,8 +103,8 @@ if [ -n "$main_worktree" ] && [ -d "$main_worktree" ]; then
   fi
 fi
 
-# The marker is `<name>`, matched literally: a hook named `pre-push` must not be claimed
-# by a `pre-push-extra` line.
+# The marker is `<name>`, matched literally: a hook named `pre-commit` must not be claimed
+# by a `pre-commit-extra` line.
 marked() { grep -qF -- "tillr-hook: $2" "$1" 2>/dev/null; }
 
 sources=()
@@ -199,7 +197,7 @@ if [ -n "$hooks_path" ]; then
   esac
   if [ "$(cd -- "$configured" 2>/dev/null && pwd -P)" != "$hooks_dir" ]; then
     warn "warning: core.hooksPath=$hooks_path replaces the repository's hooks directory"
-    warn "  git reads $configured/pre-push, not $hooks_dir/pre-push"
+    warn "  git reads $configured/pre-commit, not $hooks_dir/pre-commit"
     warn "  unset it, or copy these hooks there, or the guard never runs"
   fi
 fi

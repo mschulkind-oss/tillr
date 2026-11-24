@@ -1,0 +1,22 @@
+{
+  "id": "hooks-install",
+  "label": "the hook installer replaces a marked copy, reports drift and chains an unmarked hook",
+  "command": [
+    "sh",
+    "tests/hooks-install.test.sh"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 120000,
+  "reads": [
+    ".justfile",
+    "bin/hooks-install",
+    "hooks/",
+    "tests/hooks-install.test.sh",
+    "tools/gate/checks/hooks-install.json"
+  ],
+  "tools": [
+    "sh",
+    "git"
+  ]
+}

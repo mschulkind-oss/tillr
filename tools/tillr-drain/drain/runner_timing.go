@@ -6,10 +6,10 @@ import (
 )
 
 // runnerProofPaths recognizes changes whose judge must prove itself before merge.
-// Keep this set aligned with GATE_RUNNER_WATCHES and SELF_SUITE in fork-check.py.
+// The judge is the gate runner, the declared checks and the recipes that start them.
 func runnerProofPaths(paths string) bool {
 	for _, path := range strings.Split(paths, "\x00") {
-		if path == "tools/fork-check.py" || path == "tests/fork-check.test.py" || path == ".justfile" || path == "tools/preflight-declarations.json" || strings.HasPrefix(path, "tools/tillr-gate/") || strings.HasPrefix(path, "tools/gate/") || strings.HasPrefix(path, "yolo-packs/tillr/files/local/share/tillr/tillr-gate/") {
+		if path == ".justfile" || strings.HasPrefix(path, "tools/tillr-gate/") || strings.HasPrefix(path, "tools/gate/") || strings.HasPrefix(path, "yolo-packs/tillr/files/local/share/tillr/tillr-gate/") {
 			return true
 		}
 	}
