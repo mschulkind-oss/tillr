@@ -1,23 +1,19 @@
 # tillr-drain — the pass, and the loop that advances items
 
 > [!WARNING]
-> **Known Gaps (verified 2026-11-14 at `04957a8a83`).** `tillr` has landed a live
-> candidate on an unattended tick, but three parts are unfinished:
-> 1. **The AutoQA handoff skill is not shipped** — `yolo-packs/tillr/skills/` holds
->    `tillr-operating` only, so the design's `tillr-autoqa` handoff has no skill to dispatch.
-> 2. **The observatory front end is not built** — `tillr view serve` answers 404 for the UI
->    until the front end under `tools/tillr-view/web` is built and embedded, which is a
->    separate Node step and not part of a Go build.
-> 3. **The `tillr` on `PATH` is the pack's rendered tree, not this working tree** — an edit
->    under `tools/tillr*` reaches the launcher only after the pack is mirrored and rendered,
->    so a session that must run its own change builds the working tree first.
->
-> **Do not wire `tillr` into another repository's gate while these stand.** The toolset
-> ships early so it can be reviewed, not so it can be depended on.
+> **Known gaps.** Two things about `tillr` are not what a first reading assumes:
+> 1. **The observatory front end is a separate build** — a `tillr-view` built by a plain
+>    `go build` answers 404 for the UI. The front end under `tools/tillr-view/web` is a
+>    Node build, embedded only under the `observatory` build tag (`just observatory` does
+>    both) or served from a directory named with `--web-dist`.
+> 2. **A `tillr` installed from the pack is not this working tree** — the pack under
+>    `yolo-packs/tillr` builds from its own mirrored copy of the source, which
+>    `just pack-sync` regenerates. To run an edit under `tools/tillr*`, build the working
+>    tree with `just tillr-build`.
 
 ## What this module owns
 
-`tillr-drain` turns board state into per-item successor decisions. A **pass** visits
+`tillr-drain` turns store state into per-item successor decisions. A **pass** visits
 items in queue order and applies at most one transition per item; dispatched runs and
 candidate examinations proceed independently, without waiting for a batch to finish.
 `plan` computes one pass's positions and transitions and writes them to the file the caller named, and writes nothing else anywhere;
@@ -43,7 +39,7 @@ Pack launchers use a separate install: run `yolo host apply --assert` before req
 ## Opted-in judgment before the gate
 
 An item directive with `judge="agent"` asks for an independent, read-only review
-of its committed candidate. For older opt-ins with no evaluator slot, the drain
+of its committed candidate. For an opted-in item with no evaluator slot, the drain
 persists a fixed `review` evaluator before the worker starts. The policy must map
 the selected evaluator's seat. Items without an opt-in or an evaluator keep the
 mechanical retirement path and start no review run.
@@ -52,7 +48,7 @@ A workflow may set `exit.evaluator_slot` to the node that evaluates its candidat
 That node must be a read-only agent, required by the exit, after every writer,
 and declare a nonempty `judge_classes` list. The valid entries are `verification-only`,
 `red-gate-triage`, and `direction`; none may repeat. Both the shipped `verify` node
-and the compatibility `review` node list only `verification-only`. Intake checks
+and the fixed `review` node list only `verification-only`. Intake checks
 the stored selection and criterion class, not the workflow file on disk. An item
 that also opts into agent review still gets only the workflow's evaluator.
 The evaluator brief also carries its stage prompt and, for each preceding producer,
@@ -145,8 +141,7 @@ item once an earlier express item enters the queue ahead of it. Ordinary work ne
 an express lane, and no running work is stopped to make room.
 Eligibility comes from the stored item definition, not its workflow's first seat.
 Saved ideas use the `item-idea-` ID convention from
-[idea intake](../../docs/reference/observatory-actions.md#the-saved-idea-item);
-this allocation support does not implement the intake command itself.
+[idea intake](../../docs/reference/observatory-actions.md#the-saved-idea-item).
 
 Review-comment work stays at its document's
 [desk](../../docs/reference/tillr-designer-sessions.md#the-desk), a lane assigned to that
@@ -154,10 +149,9 @@ document, and is not express work even if its block names the attribute. Waiting
 output and the observatory lane strip count ordinary and express lanes separately;
 desks remain visible but count in neither pool.
 
-Display backlog: lane rows are retained for run history. Lowering `lanes.express`
-can leave previously registered express lanes in the displayed total; allocation
-still uses only the currently configured pool. Reconcile that retained history
-with the offered-capacity display without deleting rows referenced by past runs.
+Lane rows are retained for run history, so lowering `lanes.express` can leave
+registered express lanes in the displayed total. Allocation uses only the
+configured pool.
 
 ## Designer retirement
 
@@ -192,15 +186,13 @@ coordinator and joins staging before returning.
 An applied pass receives a store-counted **generation**, the ordinal defined by the
 [trigger and generation model](../../docs/reference/tillr-drain-successor.md#generations-timing-and-the-trigger-loop).
 An empty pass allocates none. Requests carry that generation as their correlation.
-Timing measurements live in `drain_passes`, with the existing `tick_id` column
-carrying the generation. For a coordinator start, `claim_ms` measures from the
+Timing measurements live in `drain_passes`, whose `tick_id` column
+carries the generation. For a coordinator start, `claim_ms` measures from the
 later of observed item readiness and lane availability to completion of the
 claim, before worktree staging. Reranking alone does not reset readiness.
 `claim_ms` stays null when the writer did not measure a claim and preserves a
 measured zero. `stage_ms` records staging
 separately and includes any asynchronous staging reported for that pass.
-On write-open, existing `drain_ticks` rows are copied without replacing new
-measurements or inventing missing values; new measurements never write that table.
 
 A change to the gate runner or its wrapper, or to the rolling program and its audit,
 proves its own suite before merging, regardless of `landing_strategy`. The
@@ -384,18 +376,9 @@ ledger, the planner writes neither `do-it-now` nor a proposal and ends with a
 design seat to update the document before any build.
 The verifier asks for `node:<id>` evidence for each covered criterion and a
 `not-done` reason beginning `uncovered:` for each uncovered one. The judge intake
-does not enforce the node locator; the verifier makes that judgment. After
-`verify-not-done` (for both document items and filed requests), the loop pins the
-candidate commit the verifier read and dispatches the build step (`work` on the
-`build` seat, inserting `work` before the evaluator when `plan` expanded `work`
-into pieces) on that candidate commit with the verifier's `not-done` findings word
-for word (resuming the builder's session when available on the original lane, or
-staging a fresh builder on that candidate commit on any available lane, including
-fork checkouts). The `plan` step runs again only when (a) a verifier `not-done`
-reason begins with `plan-wrong:` (any case) because the plan itself was wrong, or
-(b) the builder reports it cannot meet the findings within the plan
-(`RESULT: blocked` with `OBSTACLE: definition` and `EVIDENCE: plan-wrong: <reason>`,
-or a report line beginning `PLAN-WRONG:`), recorded as `plan-wrong` (see
+does not enforce the node locator; the verifier makes that judgment. A
+`verify-not-done` refusal returns to the build step, and to `plan` only when the plan
+itself was wrong (see
 [the verify return below](#a-refused-run-goes-back-to-its-worker)).
 Document-declared
 items do not select this workflow unless named on the block or in `[workflows.default]`,
@@ -478,9 +461,8 @@ request raises an obstacle for the design seat, its design-answer run updates th
 design document without adding an item block (or objects
 with `NEXT-ACTOR`), and returns the request to its workflow once the answer lands.
 
-`write_scope` is either `"inherit"` (also the default) or a nonempty list of
-path prefixes. Every writing node inside a containing stage inherits its scope
-unless it declares a narrower one. A scope outside its container is refused before any run. Settlement checks each writing node's own
+Every writing node inside a containing stage inherits that stage's
+[write scope](#node-write-scopes) unless it declares a narrower one. A scope outside its container is refused before any run. Settlement checks each writing node's own
 change against its resolved scope; it does not judge earlier nodes' changes
 against the last node's scope.
 
@@ -746,9 +728,7 @@ tillr drain policy --root <repository> --json
 
 Before a loop has recorded a policy, this face refuses explicitly. After the
 loop stops, it shows the last accepted policy; it does not claim the loop is
-still running. Deploy this pack change with `yolo host apply --assert`, then
-relaunch the jail; the new loop can subsequently accept policy edits without
-another restart.
+still running.
 
 ## State invariants
 
@@ -794,7 +774,7 @@ another restart.
   restart, fresh session or interruption of one node is `<id>-<count>-<kind>`, with the count
   padded to at least three digits and advancing past 999 without clamping or repeating words.
   A digest bounds the stem (preserving trailing `-judge` and `-cfix` tags) so every run id
-  stays strictly under 120 characters. Historical `-failover` ids remain readable.
+  stays strictly under 120 characters.
 - **Shares choose the backend for new work.** A shared seat can select a backend at
   admission. Neither shares nor item overrides send an infrastructure-failed run elsewhere.
 
@@ -834,13 +814,8 @@ Readings and reserves do not stop already-running work. A failed designer resume
 remains unsettled until its own backend is open, before staging its new session.
 
 To report an early provider-side reset, run `tillr drain probe-backend` for the
-same backend with a smoke check that exercises that route:
-
-```bash
-tillr drain probe-backend --store .tillr/store.sqlite3 --backend <name> -- <smoke-check-command> <args>
-```
-
-A success recorded after the refusal removes its active window so the next pass
+same backend with a smoke check that exercises that route
+([the probe](#recorded-backend-availability)). A success recorded after the refusal removes its active window so the next pass
 can dispatch or resume held work. A `drain.backend-quota-reopened` event links the
 refusal and the probe. Settling that refusal again does not undo the probe. A
 failed probe leaves the window in place; a new refusal closes the backend again.
@@ -933,11 +908,11 @@ seat and workflow routing. Closed, landed, and otherwise terminal items are neve
 counted as unshared or sent to triage. Neither is a generated item (`IsGeneratedItem`
 in [`drain/defect.go`](./drain/defect.go), the one list): a trunk fixer (`fixer-main-*`), a tooling-defect
 item (`defect-*`), a prose rewrite (`rewrite-*`), a revert's landing id
-(`revert-main-*`) or a gate-budget alarm an older build filed (`gate-budget-*`). The
+(`revert-main-*`) or a gate-budget item (`gate-budget-*`). The
 loop or sync generates it, its criteria are its whole brief, and it has no block of its
-own to be declared in. A generated item an older build parked on a triage conflict has
+own to be declared in. A generated item parked on a triage conflict has
 that conflict closed before the next plan and returns to its worker; a gate-budget
-alarm is closed instead, because a budget is a reported target and the loop files no
+item is closed instead, because a budget is a reported target and the loop files no
 item for it.
 
 A **store-declared item** is also exempt. The term is coined in
@@ -1033,7 +1008,7 @@ program starts in separate sessions; the handles prevent signaling a reused proc
 the kernel to confirm every descendant has exited before acknowledging cleanup, with
 no cancellation timeout on that acknowledgement. When a declaration check fails or a
 rolling program reports a failure on exit, recovery searches for the culprit and offers a
-revert in `worktree-replay` while the proof continues. Recovery handles one failure at a
+revert in a separate replay worktree while the proof continues. Recovery handles one failure at a
 time and files any fixers at the end of the run. Attribution stays on the commit the
 proof judged, even if trunk advances during the proof or a replay. Before filing, the
 runner samples the trunk once: a check whose declared inputs were touched by newer
@@ -1226,8 +1201,8 @@ excerpts when no case was parsed), and the per-check log paths kept with the run
 fixer runs the failing test directly instead of rerunning the whole suite. A blocked fixer reaches the owner only by a complete
 obstacle (see [A worker ends with its commit or a named obstacle](#a-worker-ends-with-its-commit-or-a-named-obstacle)):
 a `definition`, `owner` or `tooling` obstacle goes to the owner with a question the
-loop writes from it, because a generated item has no design block to amend. A legacy
-`NEXT-ACTOR: owner` line is still read. Any other blocked report is answered back to the
+loop writes from it, because a generated item has no design block to amend. A
+`NEXT-ACTOR: owner` line is read the same way. Any other blocked report is answered back to the
 fixer's own worker, whose brief states this rule; it never reaches the owner by default. `tillr drain why` shows such a
 hold with the loop's question as its reason and the owner as its mover (answer the conflict,
 or close the item); a generated item has no document, so its hold never says to name or
@@ -1241,7 +1216,7 @@ its patch-matched replacement after an accepted rebase), the proof was recorded 
 fixer's last red observation (its filing or a later attached tip), and every check the
 fixer names is among the proof's passed checks. The `trunk-broken` holds behind it are
 then gone on that plan, and an acquittal waiting on it is released once the selected lane
-base contains the proved commit. A proof from before this rule, which lists no checks,
+base contains the proved commit. A proof record that lists no checks
 resolves nothing. The tip run's own passes are proof too, check by check: the runner
 records when each check passed on the tip (`heavy-progress.json`), so a stale fixer, one whose named
 checks already pass on a tip containing its red commit, is resolved by those passes
@@ -1260,8 +1235,8 @@ With no pointer yet the report says there is no proved baseline to accuse a land
 does not claim that a nonexistent pointer was judged red.
 
 With `auto_revert` on, a red that the bisection pins on landing L is reverted before any
-fixer is filed (the owner's ruling
-[`OQ-GP1`](../../docs/design/tillr-graph-is-the-path.md#OQ-GP1) of the graph design). The runner builds
+fixer is filed
+([`OQ-GP1`](../../docs/design/tillr-graph-is-the-path.md#OQ-GP1) of the graph design). The runner builds
 the inverse of L on the tip in `<lane-root>/.revert/worktree`, gates it with the fast gate as
 item `revert-main-<sha12>`, replays the failing check on it, and lands it through `tillr-land`
 only when all three pass. L's item moves from `landed` back to `in-queue` with a reason, and
@@ -1291,7 +1266,7 @@ are cleared with an `item.verdicts-withdrawn` event naming the landing and the r
 (`tools/tillr-drain/drain/revert_withdraw.go`), so the item is as amendable and
 dispatchable as before it landed and a design answer that amends its block syncs. The
 rule is applied to the records before each document sync too, so an item a revert
-returned with its verdicts standing (a build before the withdrawal existed) is repaired
+returned with its verdicts standing is repaired
 at the next sync, which every loop start runs. The log reads
 `loop: withdrew the verdicts of reverted landings: item-x (1a2b3c4d5e6f)`.
 
@@ -1327,7 +1302,7 @@ Budgets are reported targets, never deadlines. The summary names each overrun's 
 and declared times without changing the verdict. The pass gate budget (`DefaultGateBudget`)
 bounds one gate run: a pass is compared by its longest run (`drain_passes.gate_max_ms`),
 with the sum of its runs (`gate_ms`) reported beside it as cost. An overrun is a log line
-and the board's `over_budget` flag; it files no item. A sampled stall is retried once on the
+and the observatory's `over_budget` flag; it files no item. A sampled stall is retried once on the
 same tip; a second stall is red and files a fixer. A loop stop ends check processes before
 removing their checkout. `tillr-view status --store <store> --root <repository>` reports
 the green commit and its recorded proof time, recorded landings since it, first-red
@@ -1335,7 +1310,7 @@ attribution, unavailable checks, and overruns. The loop log and both waiting vie
 the green commit's proof age. Proof times are stored by commit before the guarded
 pointer update; a cancelled or refused update leaves the previous green commit's time
 unchanged. With no green commit yet, the waiting view adds no proof row or reader fault.
-Older pointers without a recorded proof time explicitly say the age is unknown; the
+A pointer without a recorded proof time explicitly says the age is unknown; the
 commit's author date is never substituted. The shared report lives beside the result
 store in the Git common directory;
 the rolling watermark is neither read nor written on this path.
@@ -1434,9 +1409,9 @@ the candidate's diff.
 
 ## Nothing re-runs because an input changed
 
-The owner ruled on 2026-11-17 that nothing re-runs, is invalidated or is reset because a
-hash, a document, a policy, a build or the trunk changed without knowing what the change
-means. A pass no longer compares a held item's block (including the referenced body
+Nothing re-runs, is invalidated or is reset because a
+hash, a document, a policy, a build or the trunk changed. A pass does not compare a held
+item's block (including the referenced body
 section), workflow file, allowed paths, backend policy or running tillr build with the
 inputs recorded at its dispatch, so an edit to any of them does nothing to the item's
 work. A prose-only edit to an item's block re-dispatches nothing, and an edit to the
@@ -1444,21 +1419,16 @@ block or fence of an item whose workflow is in flight does not settle that workf
 (`TestAChangedInputReDispatchesNothing` and `TestADefinitionProseEditReadmitsNothing` in
 [`drain/readmit_test.go`](./drain/readmit_test.go),
 `TestAnInFlightWorkflowIsNotInvalidatedByABlockOrFenceEdit` in
-[`drain/worker_ruling_test.go`](./drain/worker_ruling_test.go)). This removes audit
-findings F-01 and F-07, as mapped in
-[the graph design's audit table](../../docs/design/tillr-graph-is-the-path.md#124-audit-findings).
+[`drain/worker_ruling_test.go`](./drain/worker_ruling_test.go)).
 
 An item moves on an event that names it: the operator's `tillr drain retry`, a design
 answer for the item, or the recovery of a killed run. The recorded inputs stay on each
 dispatch. They are the claim's check that the pass which planned a dispatch read the
-definition the claim applies, and they are evidence a reader can inspect. Neither
-`inputs-changed` nor `readmission-exhausted` is written any more. A recorded decision that
-carries one is history, and `tillr-view waiting --history` still reads it.
+definition the claim applies, and they are evidence a reader can inspect.
 
-A retry authorization that names a run which is no longer the item's latest run no
-longer speaks. Either the retry it authorized consumed it, or a newer run ended after it
-was written. The item then routes by its latest run, as it would with no authorization;
-the `retry-stale` hold is gone.
+A retry authorization that names a run other than the item's latest run does not
+speak. Either the retry it authorized consumed it, or a newer run ended after it
+was written. The item then routes by its latest run, as it would with no authorization.
 
 A loop stop or fault leaves in-flight runs alone. `tillr drain stop` waits for the
 supervisor to exit, not for those runs to finish. Their terminal records survive the
@@ -1471,8 +1441,7 @@ tillr drain stop --root <repository> --end-runs      # also end in-flight runs
 ```
 
 The explicit flag is the drain's only run-ending path. It sends SIGTERM to each run
-face, not a `tillr run pause` request: the flag was built before the pause command
-existed, and no item has changed it since; the face ends its adapter and writes
+face, not a `tillr run pause` request; the face ends its adapter and writes
 its terminal record. Ending a run this way starts the item over, not the session.
 The interruption is recorded before signaling. It is no attempt outcome: no retry or
 failover is spent, regardless of how often it happens. The next pass dispatches the item again on its interrupted backend.
@@ -1480,7 +1449,7 @@ failover is spent, regardless of how often it happens. The next pass dispatches 
 A stop acts on what this process domain (boot, PID namespace and user) can see and
 reports the rest on stderr, one `loop: stop left alone:` line each. A session from
 another domain whose heartbeat is more than five seconds past its recorded next pass
-belongs to a loop that died without ending it, such as one killed by a jail relaunch,
+belongs to a loop that died without ending it, such as one killed with its container,
 and is left alone. One whose heartbeat is current is a live loop this domain cannot
 signal: the stop exits non-zero naming it, after stopping the local loops and, with
 `--end-runs`, ending the local runs. A run owned by another domain is reported and left as it is. A run whose
@@ -1520,7 +1489,7 @@ boot, an ended latest drain session (including across in-place binary restarts),
 local processes (comparing the recorded process ID and start time within the same Linux
 boot, process namespace, and user identity, then verifying no worker carrying that run
 and store identity survives), and claims from another process domain of the same user,
-such as one a jail relaunch left behind. Because a new container has a fresh PID
+such as one a container restart left behind. Because a new container has a fresh PID
 namespace where recorded PIDs name nothing, foreign claims are judged from files on the
 shared mount: the loop is proven gone when its latest drain session has ended or when
 its presence file (`<store>.loops/*.present`, opened for writing before the session is
@@ -1541,7 +1510,7 @@ crash from `infrastructure`.
 
 ### A worker ends with its commit or a named obstacle
 
-The owner ruled on 2026-11-18 that a worker gets no sanctioned way to end without
+A worker has no sanctioned way to end without
 delivering (`D-JL11` in
 [the judge and lifecycle design](../../docs/design/tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11)).
 A single-worker build run has two endings: its commit, or `RESULT: blocked` with a line
@@ -1597,8 +1566,8 @@ paths; a completed candidate needs a clean worktree.
 
 ### A refused run goes back to its worker
 
-The owner ruled on 2026-11-17 that a worker run's failure is not counted and does not park
-its item (audit findings F-02, F-03 and F-09; the ruling is `D-JL10` in
+A worker run's failure is not counted and does not park
+its item (`D-JL10` in
 [the judge and lifecycle design](../../docs/design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)).
 When the gate refuses a candidate, a run ends with no commit, a candidate escapes its
 fence, a landing is refused, a squash conflicts, or a landed change is reverted after the
@@ -1658,8 +1627,8 @@ It compares cited file contents for a file-scoped finding and the judged tree
 otherwise; a new commit alone is not a repair. The hold names the repeated finding,
 not the number of refusals, and gives the `tillr drain retry` command. Settlement
 pins the candidate and releases the lane. An authorized retry restores the candidate
-and resets repeat detection without dropping the feedback. A drain upgrade releases
-old count-only holds. `clear-fault` does not release a repeated-finding hold.
+and resets repeat detection without dropping the feedback. `clear-fault` does not
+release a repeated-finding hold.
 
 For an opted-in ordinary item judge, `eval-failed` still holds a document item for
 the operator, whereas on a filed request an ordinary judge's `not-done` retains the
@@ -1668,8 +1637,8 @@ operator hold.
 
 The recorded decision's `worker_session_reason` explains the path: `resumed-worker` for
 that continuation, `cannot-resume` for an adapter without a positive resume declaration,
-`session-missing` when the lane's handle is missing or no longer matches, or `seat-changed`
-when the backend or model no longer matches. A retained lane occupied by another run or
+`session-missing` when the lane's handle is missing or does not match, or `seat-changed`
+when the backend or model does not match. A retained lane occupied by another run or
 removed from the offered set uses an offered lane and records `lane-unavailable`. A workflow
 whose producing node cannot resume restarts at its entry; `workflow-restarted` distinguishes a fresh graph from a continued node when
 the entry and producing seats happen to share the same backend. These fresh paths carry
@@ -1689,8 +1658,8 @@ durations, full hashes and temporary directories, and keeps messages and line nu
 When an ending's producer (the seat it ran for), cause and evidence equal those of any
 earlier ending of the same item, the item goes to the design seat with both runs' reports,
 gate verdicts and refusals, as a run that reports blocked does. Two endings that differ are
-never a repeat, however many there are, and a refusal recorded before evidence keys
-existed repeats nothing. An item with no design document still goes to the owner on a
+never a repeat, however many there are, and a refusal with no recorded evidence key
+repeats nothing. An item with no design document still goes to the owner on a
 repeat, because there is no document for the design seat to amend, and so does an item
 whose backend policy names no design seat (a design route there would stop the loop for
 every item). When that item is a [filed request](#filed-requests), the identical-repeat
@@ -1701,11 +1670,10 @@ owner decision) appears in subsequent briefs under `## Answered owner questions`
 `## Retry reasons`, with who recorded it and when
 ([`drain/retry_brief_test.go`](./drain/retry_brief_test.go)). The run named as repeated is the latest earlier match, so a repeat after the
 owner put the item back and authorized a retry raises its own conflict on the new pair;
-the older conflict no longer holds the item and is not a reason to skip. The rule is the pure
+the older conflict does not hold the item and is not a reason to skip. The rule is the pure
 function `repeatedEnding` in [`drain/returned.go`](./drain/returned.go), with table tests
 in [`drain/returned_test.go`](./drain/returned_test.go); the loop's side is in
-[`drain/worker_ruling_test.go`](./drain/worker_ruling_test.go), including the items the
-removed rules held being planned again at the next pass with no repair.
+[`drain/worker_ruling_test.go`](./drain/worker_ruling_test.go).
 
 A squash conflict returns to the candidate's session and branch when they remain available.
 On a moved trunk the loop stages a conflict-fix run at once with the conflicting paths and
@@ -1734,16 +1702,14 @@ onto the tip (`moveLaneOntoTip`) and resumes the session only when that replay i
 the staged base is then the tip. A squash conflict usually means the replay conflicts too, so
 the usual case restages the lane on the tip and starts a fresh fix run (decision reason
 `trunk-conflict`) whose brief carries the conflict markers; the worker's head stays pinned.
-It was chosen over resuming the session and recording a merge as the new base because the
-fence check stays a plain diff of the item's own change from a base that is an ancestor of
+Restaging keeps the
+fence check a plain diff of the item's own change from a base that is an ancestor of
 `HEAD`, and no merge commit or half-resolved merge reaches the fix run. A fork or workflow-node
 lane keeps its own base. Pinned by
 [`drain/conflict_base_test.go`](./drain/conflict_base_test.go). For a reverted landing, the gated candidate's snapshot records
 the landing run's session before its lane is released; a continuation uses the current trunk
-and receives the failing check's output. Older landings without a snapshot start fresh.
-Nothing counts these endings; the removed rule spent one fix run per candidate and then held
-the item as `conflict-exhausted`, a reason a pass now writes only as history, and an item it parked is
-returned at the next loop start. A conflict's evidence key (`conflictEndingKey` in
+and receives the failing check's output. A landing without a snapshot starts fresh.
+Nothing counts these endings. A conflict's evidence key (`conflictEndingKey` in
 [`drain/returned.go`](./drain/returned.go)) is its sorted conflicting paths and the digest
 of its normalized hunks, so the same conflict against another trunk sha repeats and a trunk
 that moved again inside the hunk does not. A workflow node's refusal keeps its node rule.
@@ -1778,7 +1744,6 @@ endings that arrived while none was running. A reader that finds an ending with
 no saved class (`plan`, `why` or the view, before the next save) classifies it
 from the record and the log as they are, and does not save it. Once a class is
 saved it wins over the report.
-This migration does not require an operator to certify an outcome or run a probe.
 
 An infrastructure failure holds the affected item as `backend-closed`, even if
 an alternate backend is open. The hold names the backend in `deferred_by`, with
@@ -1794,8 +1759,8 @@ with both runs' evidence. Reopening the backend does not clear this item hold.
 Once the cause is fixed, the operator clears it with `tillr drain clear-fault`.
 A successful explicit probe also clears an active refusal window for that backend;
 ordinary run outcomes and quota readings do not clear that window. No automatic
-probe or timer spends work on a closed backend. Legacy `max_failovers` policy keys
-are accepted but ignored; `run-infra-exhausted` is readable only as history.
+probe or timer spends work on a closed backend. A `max_failovers` policy key
+is accepted and ignored.
 
 An operator can exercise the repaired backend with a smoke-check command and
 record the result:
@@ -1830,7 +1795,7 @@ workflow continuation planner in the drain package.
 The owner-question regression set is `TestOwnerReportQuestionGateHoldAnswerAndRelease`
 (publication through dispatch), `TestOwnerWaitingEqualsCommittedIndex` (waiting rows
 before and after removal), and `TestOwnerQuestionMigrationPublishesOnceAndSkipsStagingReports`
-(legacy conflicts).
+(conversion of report conflicts).
 
 Answer sync indexes the trunk commit, not the checkout. A question counts as
 answered when the index marks it answered, or when it is absent from the
@@ -1845,7 +1810,7 @@ a restored entry with the ruling releases the item.
 An owner decision is a report's question together with at least two alternatives,
 not merely an actor line. Design briefs ask for a sentence ending in a question mark
 and bulleted or numbered alternatives under an Options heading. Explicitly lettered
-alternatives and legacy reports stating a ruling between two options are also recognized.
+alternatives and reports stating a ruling between two options are also recognized.
 A diagnostic question followed by a file list is not a decision. Generated ids use the OC prefix (owner conflict) and a run-derived number, so
 independent reports on one document base and compacted rulings do not share an
 anchor. The document retains the original report without interpreting or answering it. Its numbered `vantage: question` directive is read through the same
@@ -1864,19 +1829,19 @@ its question in the document it names. If no document exists, the report and wai
 view name the item and ask the operator to supply or triage its document; settlement
 never invents a document or a ruling.
 
-To convert existing owner decision reports once, run the loop with its normal root,
-store, policy, and step programs, adding the migration switch. Learn those inputs
-from `tillr drain loop --help`:
+To convert owner decision reports held as conflicts into document questions, run the
+loop with its normal root, store, policy, and step programs, adding the conversion
+switch. Learn those inputs from `tillr drain loop --help`:
 
 ```bash
 tillr drain loop --root . --migrate-owner-questions
 ```
 
-Migration runs only these conversions, not the rest of the queue. It replays each
+The switch runs only these conversions, not the rest of the queue. It replays each
 eligible report as a command run, claims an ordinary lane, and publishes through the
 same design settlement and gate. It prints each item and document written, or the
 reason a conflict was left unchanged. Reports without a question and alternatives,
-including stale-base reports, are not converted. Migration leaves the conflict open in status `question`, just like settling a report.
+including stale-base reports, are not converted. Conversion leaves the conflict open in status `question`, just like settling a report.
 The sync closes it as answered only after the owner’s ruling lands. A published question
 holds only the item it was published for. With unchanged reports and
 documents, a second conversion writes no new questions or conflict transitions. A
@@ -1886,22 +1851,21 @@ publication.
 Both `tillr drain why` and the waiting view count owner-waiting document questions
 as one class and name their document and question id. Other holds identify the next
 actor as the drain, the design seat, or the operator, with the action beside it. A
-legacy conflict awaiting conversion is the drain's work, not an owner question that
+report conflict awaiting conversion is the drain's work, not an owner question that
 the planning index cannot display.
 
 ### A design run that ends without answering
 
 A raised conflict gets one design-seat dispatch, and the claim marks the conflict
-`awaiting` that design run. The owner ruled on 2026-11-17 how every ending of that run
+`awaiting` that design run. Every ending of that run
 moves the conflict, and no ending is counted: there is no attempt cap, no comparison of
 what changed since the dispatch, and no timer. An item reaches the owner only through an
-objection that names the owner. The ruling is recorded in
+objection that names the owner. The rule is recorded in
 [the judge and lifecycle design, Section 4.3](../../docs/design/tillr-judge-and-lifecycle.md#43-how-a-design-runs-ending-moves-its-conflict-d-jl9).
 
 1. **A commit that passes the gate and lands is the answer**, whatever it changed: the
    item's block, its design document, or a sibling. The conflict is `answered` and the item
-   goes back to its worker. Before the ruling a commit that left the block unchanged was
-   called "did not amend" and handed to the owner without a gate. A commit that removes or
+   goes back to its worker. A commit that removes or
    renames the block leaves no item for a worker, so it goes back to the design seat,
    naming the commit.
 2. **A commit the gate refuses** returns to the same designer session with the failing
@@ -1942,13 +1906,10 @@ objection that names the owner. The ruling is recorded in
    decision in its document rather than presenting an owner with nowhere to answer.
    The conflict's text names both runs and the command that moves it:
    change what the design seat is given, then `tillr drain retry --item <id> --run <the
-   later run>`, or close the item. Before this rule a design run that named no actor was
-   dispatched again without end. The [design repeat tests](./drain/design_repeat_test.go)
+   later run>`, or close the item. The [design repeat tests](./drain/design_repeat_test.go)
    cover it.
 
-A change to the item's block, its design document or the trunk raises nothing. The rules
-that re-raised on such a change (one automatic attempt per input change, and the
-trunk-suspect re-raise after a proven trunk commit) were removed by the same ruling. A
+A change to the item's block, its design document or the trunk raises nothing. A
 design run's gate refusal that the trunk caused is the gate's to recognize; until it can
 (the trunk-already-red replay has no verdict for a change check, which compares two commits), such a refusal goes back
 to the design seat on each re-raise, and a run staged after the trunk is fixed passes.
@@ -1956,25 +1917,21 @@ to the design seat on each re-raise, and a run staged after the trunk is fixed p
 Each re-raise except an interrupted one, and each repeat, writes one
 `drain.design-unanswered` event naming the conflict, the run, its outcome, its base and
 failing checks, its `cause` and evidence `key`, and, on a repeat, `repeat` true with the
-earlier run in `repeat_of`. An owner hold the removed
-count wrote (its last such record names the design run the hold names) is raised again for
-the design seat once, recorded with `uncounted` true. A hold written before 2026-11-17 whose
-last line says the design run "did not amend" or "removed or renamed" its block is raised
-again too, naming the run's commit, recorded with `misread` true.
+earlier run in `repeat_of`.
 
 The owner's command for a conflict held on an objection is `tillr drain retry --item <id>
 --run <design run> --by <who> --why <reason>`, naming the design run the hold names. That
 design retry records a `drain.retry.design` event with who asked and why, adds both to the
 conflict's text, and writes no `retries` row, so the plan does not read it as a build retry.
-The design run it earns is settled by the rules above. A design run the conflict no longer
-names is refused, and the refusal names the current one; a conflict the loop is still
+The design run it earns is settled by the rules above. A design run the conflict does not
+name is refused, and the refusal names the current one; a conflict the loop is still
 settling, or has already raised, is refused as the loop's. The
 [design retry tests](./drain/design_retry_test.go) cover the re-raise and both refusals.
 Every `tillr drain retry` refusal names the exact command the face would accept, or says
 that none exists and who moves instead (`TestEveryRetryRefusalNamesTheAcceptedCommandOrTheMover`
 in [`drain/main_cli_test.go`](./drain/main_cli_test.go)). A triage conflict keeps its own rule, one triage run per
 request version. The [unanswered-design tests](./drain/design_unanswered_test.go) cover
-rules 2, 3 and 5 and the two migrations; the [objection tests](./drain/design_objection_test.go)
+rules 2, 3 and 5; the [objection tests](./drain/design_objection_test.go)
 cover rule 4 and the removed block; `TestADesignCommitThatLeavesTheBlockUnchangedIsGatedAsTheAnswer`
 in [`drain/design_quota_test.go`](./drain/design_quota_test.go) covers rule 1.
 
@@ -1983,7 +1940,7 @@ original item's id (the id without `rewrite-`), so an answer that retitles the b
 section is still that block. When the item's `body_ref` heading is missing on the run's
 base, because the run was staged before the heading was renamed, the settlement compares
 the block's own section between base and head. The
-[design answer tests](./drain/design_answer_test.go) cover both readings and the migration.
+[design answer tests](./drain/design_answer_test.go) cover both readings.
 
 An examination (the loop's settle or judge of a finished run) leases the run's lane with
 no expiry while it works, and releases that lease once it ends, on every path. When
@@ -2005,7 +1962,7 @@ when no examination in this loop holds the lane, its examiner is absent, dead or
 and its run face is gone. The reap prints one `loop: reclaimed lane ...` line for it.
 
 The same reap covers a paused run whose continuation face died while its owning loop is
-still live (or when an older `run.resume` event cleared the dispatch owner) and no
+still live (or when a `run.resume` event cleared the dispatch owner) and no
 `run.finish` was recorded. When the run's last `run.resume` or `run.finish` event is a
 resume, no examination in this loop holds the lane, and its run face is gone (in this
 process namespace or by its stream files in another), a pass's reap reclaims that lane
@@ -2186,9 +2143,7 @@ a request that was already waiting for the lock cannot bypass a hold a later pas
 recorded. This covers movement between the pass's observation and the landing transaction.
 
 The run bracket compares snapshots from before and after execution. It convicts a run
-on attribution, never on correlation in time. The owner ruled on 2026-11-17: "why do we
-convict anyone for removing worktrees? that sounds stupid? we should be free to act with
-normal tools without breaking the drain, goes along with ad hoc commits". So the owner and
+on attribution, never on correlation in time. The owner and
 other agents use ordinary Git on this repository while the drain runs, and none of it
 convicts a run or holds an item: commit, pull, branch, tag, stash, fetch, gc, `git
 worktree add` and `remove`, a fork export, or an operator's hand-written pin. Two snapshots
@@ -2231,17 +2186,11 @@ tillr drain acknowledge-patch-move --store .tillr/state.db --observation 123 --f
 
 The acknowledgment records the owner and UTC time without erasing the observation.
 It clears only that observation's fork: a later move or another run's observation
-still needs review. The patch branch publisher
-reads the same outstanding observations and refuses the affected branches, including
-refs named by `--skip-ref` or `--force-rewritten`; unaffected branches can publish.
-Its default store is the main repository's store, also when invoked from a worktree;
-`--store` selects an explicitly named store. A clone without that default store has no
-observations, but an existing unreadable store refuses publication. Historical
-boundary events written without `patch_moves` remain diagnostic records, not
-retroactively created publication holds.
+still needs review. A boundary event
+without `patch_moves` is a diagnostic record, not a publication hold.
 
 What this gives up is the stop of a worker whose only escape lies outside the lanes, such
-as a rogue ref or a stray worktree. That escape no longer holds its item, and the
+as a rogue ref or a stray worktree. That escape does not hold its item, and the
 observation names it for an operator. The separate deny-list check reads only what the
 worker committed. It does not turn an observation into a refusal, and it runs before the
 gate. A resumed segment is judged by the same run boundary rule.
@@ -2253,7 +2202,7 @@ retains the head with `gate-stall-rerun`, naming the check and how many gates we
 in flight. The next planning pass with fewer gates, or no other gate, gates that
 same candidate: no worker run, charged attempt or failing verdict. A second stall
 on the same head tree holds the item as `gate-stalled`, with both observations.
-`tillr drain clear-fault` appends `drain.item-fault.cleared` (`ClearItemFault`),
+`tillr drain clear-fault` appends `drain.item-fault-cleared` (`ClearItemFault`),
 which clears `work.GateStall` in `readPendingHistoryState` while keeping
 `work.Candidate` and `work.Done == false` and advances `gateJudgmentEpoch`
 ([`drain/events.go`](./drain/events.go)), so `plan` emits `ActionJudge` on the retained candidate and
@@ -2313,7 +2262,7 @@ answered for the build seat and the hold cleared in one transaction; a hold the
 whole-document sync wrote is cleared once a whole sync applies that item's block. Its
 mover is the correction of the block on the trunk, never a hand `clear-fault`.
 Three holds of this kind stand for per-item loop or staging faults, held on the one
-item they touch so the loop goes on. The owner ruled that the loop never stops on one
+item they touch so the loop goes on. The loop never stops on one
 item's condition. `stage-failed` holds an item whose run could not be staged on its
 lane or run directory (`ENAMETOOLONG`, `RunDir` or per-run staging preparation
 failures, or `stageParallel`), retracting its unlaunched claim, freeing the lane,
@@ -2509,7 +2458,7 @@ continues every other item and lane; if the item is already terminal, the lane i
 out of rotation with `lane-run-children-live` without touching the worktree. The store lease is released, but after any release or expiry
 reaping and before offering a configured lane, the loop checks processes carrying both
 `TILLR_RUN_ID` and `TILLR_LOOP_STORE` (the canonical store path) in their inherited
-environment. Successful release events also identify ended runs when a legacy allocation
+environment. Successful release events also identify ended runs when an allocation
 left no terminal run row. A paused run continued as the same attempt is not ended: its
 `run.resume` event is newer than its paused `runs` row and every release, so the
 continuation's own processes do not hold its lane, and `tillr view running` lists it as
@@ -2539,13 +2488,13 @@ can also have moved the item's conflict: a design-seat dispatch marks the confli
 The cancellation undoes that move in the same write, so the re-plan offers the item the
 next lane, as it does for an item with no conflict. A record whose move was left in
 place reads as an awaiting conflict (`conflict-design`) with no design run alive, or as a
-closed answer holding its item as `run-link-missing` or `retry-stale`. At
+closed answer holding its item as `run-link-missing`. At
 each pass the loop recognizes those records: the item's latest dispatch is examined
 (`drain.examined`), its run has no terminal record, and the conflict is still as the claim
 left it. It undoes the move, prints one `loop: <item> run <run> was claimed but never
 started` line, and the item is dispatched again with no operator command. The
 [unlaunched-claim tests](./drain/unlaunched_claim_test.go) cover the design run and the
-build re-offered in the same pass, and the recovery of the old records.
+build re-offered in the same pass, and the recovery of such records.
 
 A **lane copy** is our term for a lane commit that is kept somewhere else. Staging resets a
 lane copy rather than refusing the lane. Two things make a commit a lane copy. A run pin
@@ -2577,7 +2526,7 @@ Then:
    `git -C <lane root>/<lane>/worktree branch --show-current`.
 
 The next pass re-checks the lane, because its HEAD changed. No drain command runs these
-checks and the reset for you yet; one is queued work.
+checks and the reset for you.
 
 ## Where step programs come from
 
@@ -2880,18 +2829,6 @@ age of the lock is never read. A lock that a live process holds stays, and the
 `preserve-failed` detail names that PID. The holder must release that lock before
 clearing this fault.
 
-> [!WARNING]
-> **Landing remains blocked.** A dirty tracked ignore file can hide work from the
-> snapshot, then resetting that file changes the ignore rules and the subsequent
-> workflow cleanup deletes the hidden work. Cleanup must run after preservation
-> but before resetting the ignore rules, with a regression for that sequence.
-> The independent review reproduced this on 2026-11-17. The separate
-> [operator-stop regression](./drain/document_wait_test.go) also fails on base
-> `f4bbfaf26949fd3770110467a9f47bb6c01e4428` with `GOMAXPROCS=1`: queued SQLite
-> stderr can follow the final explanation and break the combined-output suffix
-> assertion. This run stopped under its out-of-scope-failure rule; neither blocker
-> is waived by passing reruns.
-
 The next attempt's brief and the design seat's conflict-answer brief say that
 earlier work exists, name the ref and summarize why the earlier run stopped.
 The run view and waiting view show the same evidence to the owner.
@@ -3027,7 +2964,8 @@ refused.
 
 ## Filing fork work
 
-File with `tillr item request`. Name one fork from the repository's fork list and describe the
+File with `tillr item request`. Name one fork from the repository's fork list (the
+repository-provided `bin/pi-forks.list` under the root, which the drain reads), describe the
 change in the words on standard input and supply `--title`. The ignored `--path`
 flag does not select a fork; do not name a lane checkout path.
 The `plan` step of `planned-build@v1` records the delivery as repository, fork, or
@@ -3086,8 +3024,9 @@ fork landings.
 ## The deny-list and the session
 
 Per-item path fences do not control which files a candidate can change. Before the gate,
-the drain checks the candidate's committed change against `config/tillr/deny-list.json`.
-A refusal returns the matched entry and its reason to the worker. The judge receives the
+the drain reads [`config/tillr/deny-list.json`](../../config/tillr/deny-list.json) from the
+committed trunk and checks the worker's pinned base-to-head change against it.
+A refusal returns the matched entry, the path or declaration, and its reason to the worker. The judge receives the
 changed paths and the diff and checks that the request accounts for the change.
 
 For trunk candidates, the drain checks the worker's original commit against the deny-list,
@@ -3190,7 +3129,7 @@ loop itself holds after a staging refusal are held before any lane is offered.
 
 The unfiltered text face also lists each landed item's recorded run cost and the
 sum per seat. It joins node seats and models to the run's backend and usage;
-legacy node seats use recorded seat dispatches where available, otherwise
+node rows without a seat use recorded seat dispatches where available, otherwise
 `unknown`. Runs outside a node use their recorded seat dispatch or the item's
 seat (default `build`). Missing run cost makes its item and seat sums `unknown`,
 not zero. Runs started after the landing are excluded when the landing event's
@@ -3211,7 +3150,8 @@ lanes and what holds each one: unfinished work, an active lease, or an item
 that took the lane earlier in the plan. Express retries can use express or
 ordinary lanes; ordinary retries can use only ordinary lanes. If the plan
 can start the retry, the report names the planned lane and says it is free.
-Legacy `OBSTACLE: fence` reports are missing outputs. Ordinary work needs no item path list. The drain reads the [common deny-list](../../config/tillr/deny-list.json) from committed trunk and checks the worker’s pinned base-to-head change before the gate. A match returns the entry, path or declaration, and reason to that worker. The judge reviews scope using the diff and changed paths. Independent node scopes and run-boundary evidence are not item path lists.
+Ordinary work needs no item path list: the [deny-list](#the-deny-list-and-the-session)
+checks the committed change before the gate.
 
 Closed and resolved-elsewhere items remain visible with no further work required.
 Landed items are omitted from the queue-wide report. `tillr drain why <item>`
@@ -3285,8 +3225,7 @@ segment may have committed before it died. It refuses a run the gate judged: con
 retry, which a person authorizes.
 
 A normal build exit with no commit and uncommitted work is continued in its own
-session, uncounted, for as long as each continuation changes that work (the owner's ruling
-of 2026-11-17, audit finding F-09). Each continuation preserves the worktree and asks the
+session, uncounted, for as long as each continuation changes that work. Each continuation preserves the worktree and asks the
 worker to finish verification and commit, using the same attempt and the existing resume
 bracket. A committed continuation is settled normally. A continuation that leaves the
 uncommitted paths and their content exactly as the previous one did is refused as `no-op`,
@@ -3319,8 +3258,8 @@ and lane restoration are separate operator actions, not performed by this test.
 - **A loop with no gate, land or verdict program** — it judges nothing itself, so it cannot
   start.
 - **A root it cannot write a record under** — the record is the answer, not the exit code.
-- **An unchanged re-dispatch nobody authorized** — automatic dispatch needs a recorded
-  input change and an unspent allowance; otherwise a retry is an operator's act.
+- **A re-dispatch of a held run nobody authorized** — a changed input re-dispatches
+  nothing; a retry of a held run is an operator's act (`tillr drain retry`).
 - **A resume with no session to continue, or of a judged run** — the first would pay for the
   whole transcript again while recording itself as a continuation, and the second spends a
   second attempt on work a verdict already answered.
@@ -3332,7 +3271,7 @@ and lane restoration are separate operator actions, not performed by this test.
 
 `go test ./...` in this directory builds the binary and drives each face against a scratch
 store and scratch lane roots; the drain package's own suite pins the decision rules. Pass
-`-timeout 60m`: the drain package takes 276 to 562 seconds on a loaded machine, and Go's
+`-timeout 60m`: the drain package can run for ten minutes or more on a loaded machine, and Go's
 default 10-minute per-package timeout would kill it with no failing test. The 60 minutes is
 a hang guard, not a budget. The gate and `tools/go-test-shards.py` already disable the
 timeout (`-timeout 0`).
@@ -3358,10 +3297,10 @@ that the `drain` package with child builds reruns while root stays `(cached)` an
 python3 tools/tillr-drain/cache_test.py  # from the repository root; uses YOLO_DURABLE_DIR
 ```
 
-Without `--run` every pass is the whole module's suite, nine times over, so that form is
-for a Go upgrade. The gate's `go-shard-helpers-test` check passes
-`--run TestTheComposedPipelineRunsEndToEndOnAFixture`, the case that builds all five
-siblings, which proves the same invalidation in about a minute.
+Without `--run` every pass is the whole module's suite, repeated for each sibling, so
+that form is for a Go upgrade. The gate's `go-shard-helpers-test` check passes
+`--run TestTheComposedPipelineRunsEndToEndOnAFixture`, the case that builds every
+sibling, which proves the same invalidation at a fraction of the cost.
 
 This check exercises Go's actual file-input handling, rather than assuming that it sees
 sibling builds. Keep it when upgrading Go. It shares the normal Go build cache and never
