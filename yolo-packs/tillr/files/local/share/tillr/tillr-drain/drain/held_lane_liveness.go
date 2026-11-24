@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -105,11 +106,29 @@ func (l *Loop) candidateResetBlocked(r *store.Reader, c Candidate, here *LoopOwn
 	}
 	var declared *definition.Record
 	itemEnded := map[string]bool{}
+	memberItemEnded := func(m member) (bool, error) {
+		itemID := m.itemID
+		if itemID == "" {
+			if w, ok := history[m.id]; ok {
+				itemID = w.Decision.ItemID
+			}
+		}
+		return itemEndedInStore(r, itemID, &declared, itemEnded)
+	}
 	for _, m := range members {
 		if live[m.id] {
 			return "lane has a live run " + m.id, nil
 		}
 		if !isTerminalRunState(m.state) {
+			if m.state == run.StatePaused {
+				ended, err := memberItemEnded(m)
+				if err != nil {
+					return "", err
+				}
+				if ended {
+					continue
+				}
+			}
 			return "lane has an unfinished run " + m.id, nil
 		}
 		open, err := resumeUnfinished(r, m.id)
@@ -117,13 +136,7 @@ func (l *Loop) candidateResetBlocked(r *store.Reader, c Candidate, here *LoopOwn
 			return "", err
 		}
 		if open {
-			itemID := m.itemID
-			if itemID == "" {
-				if w, ok := history[m.id]; ok {
-					itemID = w.Decision.ItemID
-				}
-			}
-			ended, err := itemEndedInStore(r, itemID, &declared, itemEnded)
+			ended, err := memberItemEnded(m)
 			if err != nil {
 				return "", err
 			}
