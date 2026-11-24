@@ -907,13 +907,18 @@ def test_fork_check_integration(root_graph: dict) -> None:
             (s.kind, s.label, s.planned) for s in rolling_no_go.skips
         ]
 
-        # Substrate change passes --drop-module tools/tillr to go-affected under landing tier.
-        sub = fork_check.build_plan(
-            ROOT, [], fork_check.Record(state), ["tools/tillr/event/event.go"], None, True,
-            tier=fork_check.TIER_LANDING,
-        )
-        ga = next(c for c in sub.checks if c.kind == "go-affected")
-        assert "--drop-module" in ga.argv and "tools/tillr" in ga.argv, ga.argv
+        # Landing tier plans go-affected without --drop-module when tools/tillr/* or tools/tillr-gate/* changes.
+        for changed_path in ("tools/tillr/event/event.go", "tools/tillr-gate/main.go"):
+            for via_build_plan in (True, False):
+                tiered_plan = fork_check.build_plan(
+                    ROOT, [], fork_check.Record(state), [changed_path], None, True,
+                    tier=fork_check.TIER_LANDING if via_build_plan else None,
+                )
+                if not via_build_plan:
+                    fork_check.apply_tier(tiered_plan, fork_check.TIER_LANDING)
+                ga = next(c for c in tiered_plan.checks if c.kind == "go-affected")
+                assert "--drop-module" not in ga.argv, (changed_path, via_build_plan, ga.argv)
+                assert not any(c.kind == "go-substrate" for c in tiered_plan.checks), tiered_plan.checks
 
         # Changing go_affected.py, go-test-edges.json, or tests/go-affected.test.py plans go-affected-suite.
         for trigger in (
@@ -1055,12 +1060,7 @@ def test_heavy_failures_replay(root_graph: dict) -> None:
     go_hits = 0
     for sha, expected_pkg in cases:
         changed = go_affected.git_changed_paths(ROOT, f"{sha}~1", sha)
-        drop: set[str] = set()
-        if any(p == "tools/tillr" or p.startswith("tools/tillr/") for p in changed):
-            drop.add("tools/tillr")
-        if any(p == "tools/tillr-gate" or p.startswith("tools/tillr-gate/") for p in changed):
-            drop.add("tools/tillr-gate")
-        sel = go_affected.select_affected_packages(ROOT, changed, drop_modules=drop, graph=root_graph)
+        sel = go_affected.select_affected_packages(ROOT, changed, graph=root_graph)
         selected_pkgs = {p["import_path"]: p["reason"] for p in sel["selected"]}
         if expected_pkg is not None:
             assert expected_pkg in selected_pkgs, (sha, expected_pkg, selected_pkgs)
@@ -2935,12 +2935,12 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
             spans = json.loads(spans_path.read_text(encoding="utf-8"))
             return spans, ran_markers
 
-        # 1. Pre-conflict gate runs every affected Go package across go-substrate, gate-runner, and go-affected.
+        # 1. Pre-conflict gate runs only the affected Go packages via go-affected (skipping untouched sibling tillr/extra).
         orig_run = "run-item-request-demo-a1-n2"
         _, ran_orig = run_landing_gate(orig_run, base_v1)
-        all_go_markers = {"tillr-core", "tillr-extra", "tillr-gate", "tillr-watch", "tillr-view"}
-        all_py_markers = {"py-change-gate", "py-runner-first"}
-        assert ran_orig == (all_go_markers | all_py_markers), ran_orig
+        affected_go_markers = {"tillr-core", "tillr-gate", "tillr-watch", "tillr-view"}
+        assert ran_orig == affected_go_markers, ran_orig
+        assert "tillr-extra" not in ran_orig, ran_orig
         verdicts_path = loop_dir / orig_run / "gate.go-packages.json"
         assert verdicts_path.is_file(), f"expected {verdicts_path} to be recorded"
 
@@ -2960,21 +2960,22 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
         subprocess.run(["git", "commit", "-qm", "cand-cfix-unrelated"], cwd=repo, env=git_env, check=True)
 
         spans_cfix, ran_cfix = run_landing_gate(f"{orig_run}-cfix", base_v2)
-        assert ran_cfix == all_py_markers, (
+        assert ran_cfix == set(), (
             f"expected zero Go packages to re-run on unrelated-file -cfix, got {ran_cfix}"
         )
         attrs_by_kind = {
             row["check_id"].split("/", 1)[0]: json.loads(row["attributes_json"])
             for row in spans_cfix["check_spans"]
         }
-        assert attrs_by_kind["go-substrate"]["go_build"][0]["execution"] == "reused", attrs_by_kind
-        assert attrs_by_kind["gate-runner"]["go_build"][0]["execution"] == "reused", attrs_by_kind
-        assert attrs_by_kind["gate-runner"]["go_build"][0]["mode"] == "cached-shards", attrs_by_kind
+        assert "go-substrate" not in attrs_by_kind, attrs_by_kind
+        assert "gate-runner" not in attrs_by_kind, attrs_by_kind
         ga_pkgs = {
             p["import_path"]: p
             for p in attrs_by_kind["go-affected"]["go_build"][0]["packages"]
         }
         assert set(ga_pkgs) == {
+            "github.com/mschulkind-oss/tillr/core",
+            "github.com/mschulkind-oss/tillr-gate",
             "github.com/mschulkind-oss/tillr-watch",
             "github.com/mschulkind-oss/tillr-view",
         }, ga_pkgs
@@ -2983,11 +2984,11 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
         # 3. Ordinary (non-cfix) run — even when the item slug contains "cfix" — never reuses -cfix verdicts.
         assert not go_affected.is_cfix_run_id("run-item-cfix-slug-a1-n1")
         _, ran_ordinary = run_landing_gate("run-item-cfix-slug-a1-n1", base_v2, item_id="item-cfix-slug")
-        assert ran_ordinary == (all_go_markers | all_py_markers), ran_ordinary
+        assert ran_ordinary == affected_go_markers, ran_ordinary
 
         # 4. Cross-item mismatch never reuses another item's verdicts.
         _, ran_wrong_item = run_landing_gate(f"{orig_run}-cfix", base_v2, item_id="item-request-other")
-        assert ran_wrong_item == (all_go_markers | all_py_markers), ran_wrong_item
+        assert ran_wrong_item == affected_go_markers, ran_wrong_item
 
         # 5. Selective invalidation: conflict repair modifies config/view.txt (declared edge of tillr-view)
         #    and tools/tillr/extra/extra.go (sibling package in tools/tillr not imported by core/gate/watch).
@@ -3000,7 +3001,7 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
         subprocess.run(["git", "commit", "-qm", "cand-cfix-partial"], cwd=repo, env=git_env, check=True)
 
         _, ran_partial = run_landing_gate(f"{orig_run}-cfix-restart", base_v2)
-        assert ran_partial == ({"tillr-extra", "tillr-view"} | all_py_markers), ran_partial
+        assert ran_partial == {"tillr-extra", "tillr-view"}, ran_partial
 
         # 6. Hashed boundRunIDBase -cfix run resolves pre-conflict run via brief.md's "Its first run was <orig>,".
         hashed_cfix = "run-item-request-demo-long-stem-0123456789abcdef-cfix"
@@ -3011,7 +3012,7 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
             encoding="utf-8",
         )
         _, ran_hashed = run_landing_gate(hashed_cfix, base_v2)
-        assert ran_hashed == ({"tillr-extra", "tillr-view"} | all_py_markers), ran_hashed
+        assert ran_hashed == {"tillr-extra", "tillr-view"}, ran_hashed
 
         # 7. Narrowed read_tests verdict does NOT satisfy a whole-package selection, while matching narrowed reuses.
         narrow_prior = {
