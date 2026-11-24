@@ -25,7 +25,7 @@ import time
 EXCLUDED_PACK_MIRROR_PREFIX = "yolo-packs/tillr/files/local/share/tillr/"
 SHARD_THRESHOLD = 100
 MIN_SHARDS = 6
-MAX_SHARDS = 12
+MAX_SHARDS = 2 * _cpu_count if (_cpu_count := os.cpu_count()) and _cpu_count > 0 else 12
 NARROWED_SHARD_DURATION_THRESHOLD = 25.0
 INVOCATION_GUARD_FLAG = "--invocation-guard"
 PR_SET_CHILD_SUBREAPER = 36
