@@ -886,6 +886,11 @@ func loopFace(args []string) int {
 		// Nowhere to write the record: the root is what names it.
 		return fail(drain.Usagef("loop needs --root <repository>"))
 	}
+	if !*check {
+		if err := drain.AuthorizeCheckoutRoot(*root); err != nil {
+			return fail(err)
+		}
+	}
 	// The loop folds the same selected event kinds many times a second, often inside a
 	// write transaction; with the narrow cache, each selected read is a tail read for its
 	// keys without holding the whole log (mostly unselected run.child-session worker

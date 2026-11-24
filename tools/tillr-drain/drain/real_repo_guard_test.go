@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
@@ -33,72 +31,6 @@ func installRealRepoGuard() {
 		}
 		return nil
 	}
-}
-
-// realCommonDirs finds every enclosing common git directory above starts — including an
-// outer repository enclosing a nested roll clone or its durable scratch — by reading the
-// filesystem, not by running git: some tests put a wrapper first on PATH that re-runs the
-// test binary on every git call, and a git call from here would recurse.
-func realCommonDirs(starts ...string) map[string]bool {
-	found := map[string]bool{}
-	for _, start := range starts {
-		if start == "" {
-			continue
-		}
-		abs, err := filepath.Abs(start)
-		if err != nil {
-			continue
-		}
-		candidates := []string{abs}
-		if resolved, err := filepath.EvalSymlinks(abs); err == nil && resolved != abs {
-			candidates = append(candidates, resolved)
-		}
-		for _, dir := range candidates {
-			for ; ; dir = filepath.Dir(dir) {
-				if common := gitCommonDirAt(dir); common != "" {
-					found[common] = true
-				}
-				if filepath.Dir(dir) == dir {
-					break
-				}
-			}
-		}
-	}
-	return found
-}
-
-func gitCommonDirAt(dir string) string {
-	dotGit := filepath.Join(dir, ".git")
-	info, err := os.Stat(dotGit)
-	if err != nil {
-		return ""
-	}
-	if info.IsDir() {
-		return sameDirKey(dotGit)
-	}
-	raw, err := os.ReadFile(dotGit)
-	if err != nil || !strings.HasPrefix(string(raw), "gitdir:") {
-		return ""
-	}
-	gitDir := strings.TrimSpace(strings.TrimPrefix(string(raw), "gitdir:"))
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(dir, gitDir)
-	}
-	if rel, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
-		common := strings.TrimSpace(string(rel))
-		if !filepath.IsAbs(common) {
-			common = filepath.Join(gitDir, common)
-		}
-		return sameDirKey(common)
-	}
-	return sameDirKey(gitDir)
-}
-
-func sameDirKey(p string) string {
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		p = resolved
-	}
-	return filepath.Clean(p)
 }
 
 // loopHeld takes root's loop lock for the test, as the loop does around a proof.

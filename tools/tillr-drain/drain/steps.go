@@ -1650,6 +1650,9 @@ func (s *ProcessSteps) detachedWorktreeAt(ctx context.Context, rev string, pickD
 	if s.Root == "" {
 		return "", func() {}, Usagef("the loop cannot check out %s: it was given no repository", shortSHA(rev))
 	}
+	if err := authorizeWorktreeRoot(s.Root); err != nil {
+		return "", func() {}, err
+	}
 	var dir string
 	// A worktree a previous run left behind is removed rather than reused: a stale
 	// registration would refuse the add, and a reused directory is not provably the

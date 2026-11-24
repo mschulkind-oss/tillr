@@ -870,6 +870,9 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 // disk before the caller is answered (recordResult), so a stop is readable after the process
 // that made it is gone.
 func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
+	if err := AuthorizeCheckoutRoot(l.cfg.Root); err != nil {
+		return faultResult(result, err)
+	}
 	l.mu.Lock()
 	l.loopCtx = ctx
 	l.mu.Unlock()
@@ -1166,6 +1169,9 @@ func (l *Loop) startDefinition(ctx context.Context) error {
 func (l *Loop) stageLandingLanes(ctx context.Context) error {
 	if l.nonLanding {
 		return nil
+	}
+	if err := authorizeWorktreeRoot(l.cfg.Root); err != nil {
+		return err
 	}
 	if err := l.stageLanes(ctx); err != nil {
 		return err
@@ -4232,6 +4238,9 @@ func (l *Loop) stageLanes(ctx context.Context) error {
 }
 
 func (l *Loop) stageLaneSet(ctx context.Context, lanes []string, startup bool) error {
+	if err := authorizeWorktreeRoot(l.cfg.Root); err != nil {
+		return err
+	}
 	var held []string
 	for _, lane := range lanes {
 		path := l.lanePath(lane)
@@ -4334,6 +4343,9 @@ func (l *Loop) resetLane(ctx context.Context, lane string) error {
 }
 
 func (l *Loop) resetLaneTo(ctx context.Context, lane, revision string) error {
+	if err := authorizeWorktreeRoot(l.cfg.Root); err != nil {
+		return err
+	}
 	if strings.HasPrefix(lane, "desk-") {
 		return withWorktreeRegistryLock(ctx, l.cfg.Root, func() error {
 			return l.resetLaneToRegistryLocked(ctx, lane, revision)

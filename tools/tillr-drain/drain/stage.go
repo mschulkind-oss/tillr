@@ -885,6 +885,9 @@ func (s *LaneStager) ensureForkCheckout(ctx context.Context, spec StageSpec, for
 // branch scoping leaves as this lane's own directory moved aside; that one is refused by
 // name rather than left to git's `fatal:` line (refuseBranchHeld).
 func (s *LaneStager) ensureWorktree(ctx context.Context, spec StageSpec, laneDir, worktree string) error {
+	if err := authorizeWorktreeRoot(s.Root); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(laneDir, 0o755); err != nil {
 		return Externalf("creating the lane directory %s: %v", laneDir, err)
 	}
@@ -1091,6 +1094,9 @@ func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, w
 // nobody landed — so what is left to delete is a registration, a clean tree, and files no
 // commit carries.
 func (s *LaneStager) clearWorktree(ctx context.Context, worktree string) error {
+	if err := authorizeWorktreeRoot(s.Root); err != nil {
+		return err
+	}
 	// A worktree that is not registered answers "not a working tree" and is removed below; a
 	// registered one that git refuses to remove has its directory removed here and its
 	// registration pruned after.
