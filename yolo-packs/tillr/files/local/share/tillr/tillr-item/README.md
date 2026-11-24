@@ -1,19 +1,15 @@
-# tillr-item — the board's items and the ledgers that hang off them
+# tillr-item — work items and the ledgers that hang off them
 
 > [!WARNING]
-> **Known Gaps (verified 2026-11-14 at `04957a8a83`).** `tillr` has landed a live
-> candidate on an unattended tick, but three parts are unfinished:
-> 1. **The AutoQA handoff skill is not shipped** — `yolo-packs/tillr/skills/` holds
->    `tillr-operating` only, so the design's `tillr-autoqa` handoff has no skill to dispatch.
-> 2. **The observatory front end is not built** — `tillr view serve` answers 404 for the UI
->    until the front end under `tools/tillr-view/web` is built and embedded, which is a
->    separate Node step and not part of a Go build.
-> 3. **The `tillr` on `PATH` is the pack's rendered tree, not this working tree** — an edit
->    under `tools/tillr*` reaches the launcher only after the pack is mirrored and rendered,
->    so a session that must run its own change builds the working tree first.
->
-> **Do not wire `tillr` into another repository's gate while these stand.** The toolset
-> ships early so it can be reviewed, not so it can be depended on.
+> **Known gaps.** Two things about `tillr` are not what a first reading assumes:
+> 1. **The observatory front end is a separate build** — a `tillr-view` built by a plain
+>    `go build` answers 404 for the UI. The front end under `tools/tillr-view/web` is a
+>    Node build, embedded only under the `observatory` build tag (`just observatory` does
+>    both) or served from a directory named with `--web-dist`.
+> 2. **A `tillr` installed from the pack is not this working tree** — the pack under
+>    `yolo-packs/tillr` builds from its own mirrored copy of the source, which
+>    `just pack-sync` regenerates. To run an edit under `tools/tillr*`, build the working
+>    tree with `just tillr-build`.
 
 ## What this module owns
 
@@ -91,10 +87,6 @@ Unchanged dependencies append no event. It refuses an unknown item
 a self-dependency (`edge-self`), and any addition that would form a cycle
 (`edge-cycle`), and prints the resulting `item.record` envelope. Run
 `tillr-item dep --help` for all flags.
-
-## Adding a path to an open item
-
-Item paths no longer restrict work. Filing still accepts `--path` for compatibility, but ignores its value and prints a notice.
 
 ## Saving an idea
 
@@ -191,10 +183,8 @@ only the store holds. Sync therefore never counts a store-declared item in
 
 `request` files one piece of work straight into the queue. The request's words, read
 from standard input, are its whole statement. The item runs an existing workflow,
-constrained only by the repository's global deny-list (`config/tillr/deny-paths.json`),
-lands through the normal gate, and never has a document block. The
-face's name, the `item-request-` id prefix and the four fixed criteria below were chosen
-by the implementer on 2026-11-18, and the owner may rename them. "Request" is the
+constrained only by the repository's global deny-list (`config/tillr/deny-list.json`),
+lands through the normal gate, and never has a document block. "Request" is the
 [vocabulary's word](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#51-the-work-and-its-statement)
 for an item that has no block.
 
@@ -203,7 +193,7 @@ printf '%s\n' 'Add two rows to yolo-packs/copilot-models/pack.toml: ...' |
   tillr-item request --store .tillr/state.db --root . --title "List two more Copilot models" --workflow single-worker@v1
 ```
 
-The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--blocked-by`, `--ordinary`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` is required; `--path` is deprecated and ignored with a notice (items no longer carry a list of allowed paths, per the owner's 2026-11-19 ruling). `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--blocked-by` (repeatable) names an existing item this request waits on and stores the dependency when the item is filed so it never looks ready. `--ordinary` files the request for the ordinary lanes only; by default a filed request is marked `express` when the item is written so it is eligible for the express lanes. `--to`, `--before` and `--after` place the item (last by default).
+The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--blocked-by`, `--ordinary`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` is required; `--path` is ignored with a notice, because an item carries no list of allowed paths. `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--blocked-by` (repeatable) names an existing item this request waits on and stores the dependency when the item is filed so it never looks ready. `--ordinary` files the request for the ordinary lanes only; by default a filed request is marked `express` when the item is written so it is eligible for the express lanes. `--to`, `--before` and `--after` place the item (last by default).
 
 The face reads the workflow file before the store's write transaction opens, so the
 transaction does no I/O but the store's own. It writes the item (with `express` set unless
@@ -261,7 +251,7 @@ those values, and the same `item.update` event carries them with `lifecycle_acti
 A subsequent finished-state entry replaces all three; omitted flags record empty values.
 Leaving a finished state records its reason and actor in the event without replacing
 that entry's stored evidence. Retrying the same state neither appends an event nor
-replaces the stored evidence. Old finished rows remain readable with no invented receipt.
+replaces the stored evidence. A finished row with no recorded receipt stays readable; none is invented.
 On Git-landing, `resolved-elsewhere` requires `--resolves-via` on `state` or
 `apply`; the reason and actor remain optional for entry. An ordinary move to
 `landed` requires completed criteria and current landing evidence, not these
@@ -288,8 +278,8 @@ criterion has an `item.verdict` event bound to the hash of its stored text. This
 check runs in the state move's own write transaction, so appending a criterion
 after earlier verdicts cannot finish unjudged work. Any recorded verdict counts;
 it need not be `done`. A verdict recorded before the item's latest withdrawal (below)
-does not count. The flag is opt-in: ordinary state moves keep their existing
-behavior. Hook completion always supplies it.
+does not count. The flag is opt-in: an ordinary state move does not run
+this check. Hook completion always supplies it.
 
 A state flag that cannot be stored on the requested move is refused as `flag-not-stored`,
 naming the flag, even if its value is explicitly empty. `--reason` is supported for
@@ -298,13 +288,14 @@ or leaving a finished state; `--resolves-via` only for entering a finished state
 `--waiter` only for the blocked role. A same-state finished retry accepts its entry
 flags but leaves the original evidence intact.
 
-Legacy `abandoned`, `deleted`, and `in-progress` rows stay readable but cannot be
-written as destinations. Sync treats finished and legacy frozen rows as finished
-for document-sharing counts; legacy `in-progress` rows still protect held work from
-being copied into a new version-suffixed item.
+The states `abandoned`, `deleted`, and `in-progress` are frozen: a row holding one
+stays readable, but no write may name one as a destination. Sync treats finished rows
+and `abandoned` or `deleted` rows as finished for document-sharing counts; an
+`in-progress` row still protects held work from being copied into a new
+version-suffixed item.
 
-The following rules describe Git-landing, including its established refusal names
-(`state-terminal` and the close/reopen guidance) for compatibility:
+The following rules describe Git-landing, including its refusal names
+(`state-terminal` and the close/reopen guidance):
 
 - **An item's state and its criteria's states are different writes.** An item's state says
   where the work stands; a criterion's state says what a judge found. One face moving both
@@ -316,8 +307,8 @@ The following rules describe Git-landing, including its established refusal name
   or when no return occurred. Entering `resolved-elsewhere` requires a pointer to
   another stored item (`item:<id>`), a commit (`commit:<sha>`) or a document
   (`doc:<path>`), otherwise `resolved-pointer-missing`; a current receipt instead
-  refuses it as `already-landed`. `show` prints the pointer. Existing finished
-  rows remain readable and new finished-item imports remain accepted.
+  refuses it as `already-landed`. `show` prints the pointer. Importing an
+  item that is already finished is accepted.
 - **Landed and resolved items stay finished.** Once an item is `landed` or
   `resolved-elsewhere`, raw `state` writes cannot move it elsewhere except that
   a reverted `landed` item may return to `in-queue` through `state` with `--reason`
@@ -328,7 +319,7 @@ The following rules describe Git-landing, including its established refusal name
   checked first and keep their names even when a record changes other fields too.
   Writing the same state or applying the same definition succeeds without changing
   the item or appending an event. Verdicts followed by the move to `landed` still
-  finish the item; the explicit close and reopen commands are unchanged. `rank`
+  finish the item. `rank`
   changes rank alone, preserving the finished
   item's state and definition; raw `apply` cannot change that rank. Sync
   reports a landed item's remaining document block as stale and a resolved item's
@@ -341,7 +332,7 @@ The following rules describe Git-landing, including its established refusal name
   `blocked`. The item stores `waiting_on` with `waiter` and `reason`, plus
   `underlying_state`, the state before the first blocked move. Updating a blocked
   item's waiter preserves that original state. Moving to `not-started` or `in-queue`
-  clears all three values. `show` prints the stored metadata; an older blocked row
+  clears all three values. `show` prints the stored metadata; a blocked row
   with none remains readable and says `waiter not recorded`. When an ordinary
   `item:<id>` blocker lands, the drain restores the waiting item's prior state on
   its next pass and records `item.wait-released`. No retry is required, even when
@@ -357,8 +348,8 @@ The following rules describe Git-landing, including its established refusal name
   item's waiter, reason, and underlying state. Its reason and actor are recorded in
   the update event. Raw `state` and `apply` writes cannot close or reopen an item;
   their refusals name the command to use. Sync may update a closed item's definition
-  but never reopens it or clears its blocked metadata. Old closed rows without a
-  saved prior state remain readable; reopening them refuses as `closed-from-missing`.
+  but never reopens it or clears its blocked metadata. A closed row without a
+  saved prior state remains readable; reopening it refuses as `closed-from-missing`.
   Both commands accept an optional `--now` clock, defaulting to the wall clock.
 - **A verdict is the only writer of a criterion's state.** No other face moves one, which
   is what makes a recorded judgment the answer to "why is this criterion where it is".
@@ -443,8 +434,8 @@ The following rules describe Git-landing, including its established refusal name
   Empty keys count after keyed items, in item id order. A writing sync fills those
   empty keys in that same order, one item update each in its own transaction;
   opening or migrating a store never does. New and newly unparked items with no
-  key are added after every key the store held when sync began. Existing records
-  still accept the legacy `rank` field through apply and fixture seeding; `apply`
+  key are added after every key the store held when sync began. A record
+  may carry the `rank` field through `apply`; `apply`
   also accepts `place` (ignoring it on write) and keeps an existing item's stored
   rank when `rank` is omitted, so a record read with `show` can be passed back to
   `apply` unchanged without moving in the queue.
@@ -637,11 +628,8 @@ Direct `verdict record` agent payloads require the same binding and full
 `evaluated_head` / `evaluated_tree`; the CLI confirms the pair against Git.
 The optional `--head`, `--workflow`, `--evaluator-node`, and `--graph-sha256` flags
 fill omitted payload fields but cannot contradict them. Human and mechanical
-verdicts keep their existing paths. Grant issuance and `--grant` are retired;
-new verdicts cannot cite `grant_id`. Historical grant and verdict events remain
-readable. The schema writer archives the old grant table before removing it.
-Back up the store and upgrade all tillr binaries together before a writable open;
-mixed-version writers are unsupported.
+verdicts need no binding. A verdict that cites `grant_id` is refused as
+`grant-retired`; stored `item.grant` events remain readable.
 
 `outcome` is `pass` only when every entry is `done`; otherwise write `fail`.
 The command prints `pass`, or the first applicable outcome in the order `defective`,
@@ -667,8 +655,7 @@ tillr item comments take --store .tillr/state.db --doc docs/design/example.md --
 Intake reads Vantage's public review interface and prints one generated item id, or nothing
 when no comment is pending. It writes the batch and its design-seat item in one transaction;
 that item's fence includes the document, its existing companion plan, and roadmaps linking
-to it. Generated ids end in a numeric batch counter, unlike the build items implementing
-this feature, and `sync` excludes them from its missing-definition count. A document with an
+to it. Generated ids end in a numeric batch counter, and `sync` excludes them from its missing-definition count. A document with an
 open batch does not get another one.
 
 The [designer-session reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-designer-sessions.md#the-words-this-design-uses)

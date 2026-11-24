@@ -1,19 +1,15 @@
 # tillr-run — one request to a terminal run record
 
 > [!WARNING]
-> **Known Gaps (verified 2026-11-14 at `04957a8a83`).** `tillr` has landed a live
-> candidate on an unattended tick, but three parts are unfinished:
-> 1. **The AutoQA handoff skill is not shipped** — `yolo-packs/tillr/skills/` holds
->    `tillr-operating` only, so the design's `tillr-autoqa` handoff has no skill to dispatch.
-> 2. **The observatory front end is not built** — `tillr view serve` answers 404 for the UI
->    until the front end under `tools/tillr-view/web` is built and embedded, which is a
->    separate Node step and not part of a Go build.
-> 3. **The `tillr` on `PATH` is the pack's rendered tree, not this working tree** — an edit
->    under `tools/tillr*` reaches the launcher only after the pack is mirrored and rendered,
->    so a session that must run its own change builds the working tree first.
->
-> **Do not wire `tillr` into another repository's gate while these stand.** The toolset
-> ships early so it can be reviewed, not so it can be depended on.
+> **Known gaps.** Two things about `tillr` are not what a first reading assumes:
+> 1. **The observatory front end is a separate build** — a `tillr-view` built by a plain
+>    `go build` answers 404 for the UI. The front end under `tools/tillr-view/web` is a
+>    Node build, embedded only under the `observatory` build tag (`just observatory` does
+>    both) or served from a directory named with `--web-dist`.
+> 2. **A `tillr` installed from the pack is not this working tree** — the pack under
+>    `yolo-packs/tillr` builds from its own mirrored copy of the source, which
+>    `just pack-sync` regenerates. To run an edit under `tools/tillr*`, build the working
+>    tree with `just tillr-build`.
 
 ## What this module owns
 
@@ -34,12 +30,12 @@ the shared adapter, brief, report, and policy contract is
   whatever the run's outcome, because a run with no record is a run nobody can judge.
 - **Run provenance is recorded from the request.** `run.record`, `run.allocate`, and
   `runs` carry `seat`, `workflow`, and `node` from `run.request` alongside `backend` and
-  `route`, and remain nullable/omitted on pre-change records.
+  `route`; each is omitted when the request does not carry it.
 - **A lane released is not a candidate retried.** Release reclaims the directory; the
   candidate's outcome is the store's.
 - **Spend is read from the backend's own report**, not reconstructed from a transcript, so
   the number answers to the thing that spent it. After an operator ends the face,
-  extraction still runs outside the canceled request, with its own existing time bound.
+  extraction still runs outside the canceled request, with its own time bound.
   Usage emitted before cancellation therefore remains measurable. A record with neither
   tokens nor cost says `spend_status: unreported` and carries a `spend_note` explaining why,
   except a registered command: backend `command` has no model, skips report extraction
@@ -182,7 +178,7 @@ resolves a verified series-keyed build from that directory privately for drain r
 falling back to the previous verified build in `current.json` and then to `pi` on
 `PATH` — and records `<path> (series <key>)` or `<real-path> (installed <version>)`.
 Nothing is placed on shared `PATH`, so foreground `pi` sessions stay on the installed
-binary until a host apply and relaunch.
+binary.
 
 When a landing on trunk touches the pi series' inputs (or lands on
 `refs/heads/patch/pi`), the drain invokes its `[roll]` command with `--pi` (`tillr-roll --pi`,
@@ -205,8 +201,8 @@ for how drain workers build, select, and hold extension sets.
 ## Ending a settled harness that lingers
 
 A top-level `agent_settled` stream event means the session has finished its work;
-`agent_end` alone does not. The executor requires a freshly extracted report from
-this execution whose final nonempty line is a recognized `RESULT:` footer. It then
+`agent_end` alone does not. The executor requires a fresh report, produced by
+this execution, whose final nonempty line is a recognized `RESULT:` footer. It then
 ends the harness's private process group after **five consecutive one-second
 samples** with no output or CPU activity. The interval and count are constants in
 [the run package](./run/settled.go), with injected sample instants in the tests.
@@ -227,18 +223,17 @@ children the harness has reaped. Missing or unreadable evidence does not authori
 termination. This is not a watchdog for unfinished work: an unsettled session or a
 report without a final footer can remain silent indefinitely.
 
-The run stays `exited`, retaining its observed signal exit code, with the new
+The run stays `exited`, retaining its observed signal exit code, with
 `end_cause: settled-idle`. Its `run.record`, `run.finish` event and `run status`
 include `settled_at` (when the executor observed settlement) and `harness_ended_at`
-(the terminating sample's instant). Ordinary exits keep their existing cause and
+(the terminating sample's instant). Ordinary exits keep their own cause and
 omit these fields; an immediate exit never arms the injected sampling clock. The
 [drain judges the answer](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#settled-harnesses), rather than
 retrying it as infrastructure failure.
 
-The five quiet seconds never come for a harness whose own timers keep running. On
-2026-11-18, three Pi workers settled with `RESULT: done` and a commit, and then sat
-for seven hours, because a leaked session hold kept every extension timer armed and
-woke Pi's main thread every two to three seconds. So the
+The five quiet seconds never come for a harness whose own timers keep running: a
+session hold that keeps an extension timer armed wakes Pi's main thread every few
+seconds. So the
 [Pi adapter's watcher](./backends/pi/README.md#ending-a-settled-session-pi-does-not-exit)
 also ends a settled session on Pi's own statement that nothing more is owed. It
 then appends a `tillr_harness_ended` event to the stream and exits 0. The executor
@@ -256,9 +251,7 @@ stays as the ending for other harnesses.
 Pi ends a session itself when the model keeps making one identical tool call. That is
 pi's own loop detection, which runs in foreground sessions too. In `--mode json` it
 first emits `{"type":"loop_detected","toolName":"read","args":{…},"streak":40}`, and
-then the run ends and the process exits 0 like any ended run. On 2026-11-19 two pi
-runs repeated one identical `read` 613 and 470 times in a row before anything stopped
-them.
+then the run ends and the process exits 0 like any ended run.
 
 When the executor sees that event, it records the run as `exited`, with its real exit
 code and `end_cause: repeating-call` rather than `normal-exit`. The record's
@@ -279,8 +272,7 @@ if pi later emits `action: "ended"` (or omits `action`), both `loop_recovery` an
 `repeating_call` are recorded.
 
 `TestALoopDetectedStreamEndsAsRepeatingCall` runs two fixtures through `run.Exec`. They
-are nine-call excerpts of those two runs, with the event appended, since those runs
-predate it.
+are nine-call excerpts of recorded runs, with the event appended.
 
 ## Pausing a live run
 
@@ -293,10 +285,10 @@ tillr-run exec --store STORE --lane-root LANES --input REQUEST --resume
 path in `TILLR_PAUSE_REQUEST`; adapters that cannot stop at a tool-call gap also
 receive SIGTERM, with ten seconds before a process-group kill. A gap adapter is
 allowed to finish until the requested straggler bound, then its process group is
-killed. A request with no `timeout_ms`, which is how the loop's build migration asks,
-has no bound: a gap adapter stops at its next gap or ends on its own, and nothing is
-killed (`TestAPauseWithNoBoundWaitsForTheGapOrTheRunsOwnEnd`). The first continuation message identifies an interrupted command and says
-it may be run again. `paused` is an attempt outcome, never a verdict or a retry.
+killed. A request with no `timeout_ms` has no bound: a gap adapter stops at its next gap
+or ends on its own, and nothing is killed
+(`TestAPauseWithNoBoundWaitsForTheGapOrTheRunsOwnEnd`). The first continuation message
+identifies an interrupted command and says it may be run again. `paused` is an attempt outcome, never a verdict or a retry.
 
 The adapter declares its kind beside its program in `pause-kind`, not in a backend
 policy. A missing or invalid declaration is refused before claiming the lane.
@@ -324,23 +316,16 @@ the preceding attempt's report. This applies to an immediately interrupted retry
 to extraction after a resumed segment; resume still parses its appended run log.
 The prior report remains available rather than being deleted to make a retry safe.
 
-Measured 2026-11-16 by the
-[interrupted-retry regression](./run/spend_retry_test.go): a first attempt reported
-1,500 tokens and $0.03. Before fresh extraction destinations, a retry interrupted
-before output inherited both values when its extractor failed to write a report.
-The regression requires the retry's returned record and stored row to have unknown
-usage while preserving the first attempt's measured usage. The real Pi extractor
-was also probed with an empty stream and exit code -1: it returned its documented
-incomplete-report exit 4 with `tokens: unknown` and `cost usd: unknown`. The leak
-was the shared report destination, not an empty stream reporting prior model usage.
+The [interrupted-retry regression](./run/spend_retry_test.go) requires a retry
+interrupted before output to record unknown usage, in both its returned record and its
+stored row, while the first attempt's measured usage is preserved.
 
-### Correcting old copied usage
+### Correcting copied usage
 
-The per-attempt report fix prevents new leaks; it does not repair old stored usage.
-**This repository's store needs the correction once after this change lands.** The
-2026-11-17 inventory found 49 old runs carrying an earlier run's exact tokens and
-cost, totaling $133.65; this is the recorded inventory, not a count enforced by the
-command. The operator, not a lane, applies the correction to the live store.
+A store can hold runs whose recorded usage is an earlier run's report: a shared report
+destination let a failed extraction answer with the preceding attempt's tokens and cost.
+Per-attempt destinations prevent that; they do not repair usage already stored. The
+operator, not a lane, applies the correction to a live store.
 
 First inspect the detector's JSON list. Each entry names a run, the earliest
 strictly earlier run with equal nonzero tokens and cost, and the matching values.
@@ -348,10 +333,9 @@ It excludes unknown or zero usage, equal start times, and the same run continued
 under its unchanged run id. Detection is read-only and writes no events.
 
 ```sh
-# From this repository's root, using the newly rendered launcher:
 tillr run copied-usage --store .tillr/state.db
 # After checking that the listed matches are copied reports:
-tillr run copied-usage --store .tillr/state.db --apply --reason 'Old attempts reused the preceding report before per-attempt extraction'
+tillr run copied-usage --store .tillr/state.db --apply --reason 'Attempts reused the preceding report'
 # Check again: after correction the list should be [].
 tillr run copied-usage --store .tillr/state.db
 ```
@@ -380,10 +364,10 @@ rolls back all marks and events. The transaction does no Git, artifact-file or
 process work. An empty batch changes no rows and appends no events. Running it
 again after correction is therefore harmless.
 
-The observatory, item totals and historical pass spend still count corrected runs
-as runs, but no longer count their copied measurements. Missing-usage counts rise,
+The observatory, item totals and pass spend count corrected runs
+as runs, but not their copied measurements. Missing-usage counts rise,
 and sums remain lower bounds, not a claim that the corrected runs spent zero.
-Historical pass snapshots retain their stored values; their displayed totals
+Stored pass snapshots retain their values; their displayed totals
 exclude pairs identified by the correction events.
 
 ## What it refuses

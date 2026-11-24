@@ -1,19 +1,15 @@
 # tillr-gate — the verdict about a candidate
 
 > [!WARNING]
-> **Known Gaps (verified 2026-11-14 at `04957a8a83`).** `tillr` has landed a live
-> candidate on an unattended tick, but three parts are unfinished:
-> 1. **The AutoQA handoff skill is not shipped** — `yolo-packs/tillr/skills/` holds
->    `tillr-operating` only, so the design's `tillr-autoqa` handoff has no skill to dispatch.
-> 2. **The observatory front end is not built** — `tillr view serve` answers 404 for the UI
->    until the front end under `tools/tillr-view/web` is built and embedded, which is a
->    separate Node step and not part of a Go build.
-> 3. **The `tillr` on `PATH` is the pack's rendered tree, not this working tree** — an edit
->    under `tools/tillr*` reaches the launcher only after the pack is mirrored and rendered,
->    so a session that must run its own change builds the working tree first.
->
-> **Do not wire `tillr` into another repository's gate while these stand.** The toolset
-> ships early so it can be reviewed, not so it can be depended on.
+> **Known gaps.** Two things about `tillr` are not what a first reading assumes:
+> 1. **The observatory front end is a separate build** — a `tillr-view` built by a plain
+>    `go build` answers 404 for the UI. The front end under `tools/tillr-view/web` is a
+>    Node build, embedded only under the `observatory` build tag (`just observatory` does
+>    both) or served from a directory named with `--web-dist`.
+> 2. **A `tillr` installed from the pack is not this working tree** — the pack under
+>    `yolo-packs/tillr` builds from its own mirrored copy of the source, which
+>    `just pack-sync` regenerates. To run an edit under `tools/tillr*`, build the working
+>    tree with `just tillr-build`.
 
 ## What this module owns
 
@@ -65,8 +61,8 @@ it never emits a partial plan. The directory's filenames and bytes determine its
 so the same directory content copied elsewhere produces the same plan identity.
 
 A change check receives the base and head as its final two command arguments. Such a
-check needs a change record carrying `head_sha`, produced by `tillr-gate change`; an
-older record without that field is refused rather than substituting a tree hash for a
+check needs a change record carrying `head_sha`, produced by `tillr-gate change`; a
+record without that field is refused rather than substituting a tree hash for a
 commit. A tree check is selected by its declared read paths (directory paths end in `/`),
 with omitted or empty `reads` selecting the whole tree. A heavy `timeout_ms` is a
 measured target, not a kill deadline. Generated declarations follow the same rule.
@@ -74,13 +70,13 @@ measured target, not a kill deadline. Generated declarations follow the same rul
 [The budget declaration](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/checks/gate-budget.json) runs arithmetic admission:
 fast budgets may total at most 9,000 milliseconds. Its
 [fixture test declaration](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/checks/gate-budget-test.json) reads only the check
-directory. The fast total is 8,600 milliseconds, including the admission check.
+directory. The admission check's own budget counts toward the total.
 Fast declarations may not name `timeout_ms`; `budget_ms` is their only target.
 
 Checks keep their own verdict past their target. `budget_ms`, duration and
 `over_budget_ms` record each overrun in the verdict, log and summary. The cap is
-only the admission sum, never a deadline. `--tree-overrun keep` remains compatible;
-`carry` is refused because stopping at a budget would discard a working judgment.
+only the admission sum, never a deadline. `--tree-overrun` accepts only `keep`;
+any other value is refused because stopping at a budget would discard a working judgment.
 
 The watchdog (the progress observer defined in
 [the gate reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate.md#budgets-and-the-stall-watchdog))
@@ -128,7 +124,7 @@ unreadable process directory or thread runtime, `watchdog unavailable` is printe
 immediately and detection is off; the check still runs. The source field is absent
 when no sample succeeded. A selected source becoming unreadable also disables
 detection rather than inferring a stall; a kernel counter decrease is likewise
-unavailable. Exit 4 remains a program that could not start or crashed.
+unavailable. Exit 4 is a program that could not start or crashed.
 
 The real gate adapter preserves exit 6 and the check observations. The first stall
 retains the candidate with `gate-stall-rerun`; the drain waits for fewer gates in
@@ -142,10 +138,10 @@ the shared Go build cache. The adapter warms it once per Go version before the f
 tier. The gate program wrapper and the remaining Python checks use the same
 stall rule: output grew or the selected source showed CPU progress in a one-second sample;
 sixty consecutive samples with neither end the group as `stalled`, exit 6.
-The compatibility flag `--gate-timeout` remains, with a 30-minute default, as a
+The `--gate-timeout` flag, 30 minutes by default, is a
 reporting target only. An overrun is recorded in the verdict and summary; the
-program keeps its own verdict. The Python per-kind timeout values likewise no
-longer kill checks; Go test commands disable Go's nested deadline with
+program keeps its own verdict. The Python per-kind timeout values likewise do
+not kill checks; Go test commands disable Go's nested deadline with
 `-timeout 0` so it cannot kill progress inside the watched group. A Python stall
 records its check name, last output line, group CPU time and silence duration, and the adapter carries its observations
 instead of mapping it to a harness error.
@@ -154,7 +150,7 @@ A rolling stall advances no watermark. The next rolling observation on the same
 range is compared with the preceding recorded run, across drain restarts. A second
 consecutive stall of the same check files one deduplicated trunk fixer naming that
 check; an intervening different range, check or non-stall does not qualify. The
-append-only gate record needs no lock wait, so callers omit its ignored lock flags.
+append-only gate record needs no lock wait.
 See [budgets and the stall watchdog](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate.md#budgets-and-the-stall-watchdog).
 
 The `documents` change check remembers a pass for each changed document in the
@@ -168,10 +164,7 @@ whose inputs differ on disk from the commit (a link target that is ignored or
 untracked but present, an edited tracked input, a config the commit lacks), and a
 failing run remembers nothing unless every error finding names a document it was
 given. The documents still to judge go to
-one `uvx vantage-check` run. On 2026-11-16 the four-document change from the drain
-fault took 1.9 to 2.0 seconds with nothing remembered, about the same as before,
-and 0.42 to 0.52 seconds with all four remembered, at one, two and ten concurrent
-runs. The inputs are listed in
+one `uvx vantage-check` run. The inputs are listed in
 [`change_common.py`](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/checks/change_common.py).
 
 ## Optional local refs
@@ -190,8 +183,8 @@ Before command execution or remembered-result lookup, a missing ref makes that c
 `git fetch origin` command that creates the local ref. The runner never fetches it.
 An unavailable check is neither passed nor failed, and a run with only passed,
 remembered and unavailable checks exits 0. The summary prints those three counts and
-failed checks separately. Bare path needs from older generated registries retain their
-existing missing-checkout error contract.
+failed checks separately. A need without the `ref:` prefix names a checkout path, and a
+missing one is an error rather than an unavailable check.
 
 Every matched ref's name and resolved commit enters the tree check's
 [fingerprint](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate.md#remembered-passes),
@@ -236,9 +229,9 @@ The [after-merge runner](https://github.com/mschulkind-oss/tillr/blob/main/tillr
 with `--heavy-tree` to select every heavy tree declaration, even when the supplied range
 is empty. Change and fast tree checks are excluded. `--only <check-id>` selects exactly
 one heavy declaration for attribution; a missing or non-heavy name refuses judgment.
-The existing fingerprint result memory still determines whether a selected check runs.
-An explicit `budget_ms` is the reported target; older heavy declarations without it use
-`timeout_ms` as their target. Neither target kills a working check. A termination signal
+The fingerprint result memory determines whether a selected check runs.
+An explicit `budget_ms` is the reported target; a heavy declaration without it uses
+`timeout_ms` as its target. Neither target kills a working check. A termination signal
 cancels and reaps each declaration's process group before this face returns. Successful
 completion also ends background children before the judged checkout can be removed;
 cleanup observes process exit rather than imposing a deadline on the check.

@@ -1,6 +1,6 @@
-# The Pi proof backend — `pi`
+# The pi backend — `pi`
 
-The proof that the adapter contract is not `muse`-shaped. Pi differs at both seams the
+The adapter for the pi coding agent. Pi differs from muse at both seams the
 contract leaves adapter-private: the brief arrives on stdin rather than through a
 prompt-file flag, and effort is Pi's own `--thinking` level rather than the muse's
 `--reasoning-effort`. Reference:
@@ -45,9 +45,10 @@ Pi prepends the redirected input to its first prompt. The brief's contents never
 in a command-line argument or an environment value: conflict evidence can exceed the
 operating system's argument-size limit.
 
-with `BOARD_DRAIN_BRIEF` (the brief's absolute path) and `BOARD_DRAIN_SESSION` exported
-to the harness. Those two names are the seam the retired monolith fed Pi through; that
-spelling lives and dies inside `run-pi`, and no policy, brief or `run.request` learns it.
+`run-pi` exports `BOARD_DRAIN_BRIEF` (the brief's absolute path), `BOARD_DRAIN_RUN` and
+`BOARD_DRAIN_SESSION` to the harness, so an extension can tell a lane's worker from a
+person's session. Those names are spelled only inside the adapters; no policy, brief or
+`run.request` learns them.
 
 Refusals (exit 2, nothing started): the `backend` field names neither this adapter nor a
 seat alias of it (`pi` or `pi-<role>`, as `pi-designer` runs this adapter on the design
@@ -61,9 +62,9 @@ Exit: the harness's own code, 124 from the wall, 2 from a refusal.
 
 [`pi-harness.sh`](./pi-harness.sh) selects the `pi` binary for `run-pi` and
 [`compact`](./compact) without placing anything on shared `PATH` (drain-only: foreground
-sessions stay on the installed `pi` until a host apply and relaunch):
+sessions stay on the installed `pi`):
 
-1. The verified build for the current `earendil-works/pi` series key (`<builds>/<key>/home/.local/bin/pi` when `<builds>/<key>/.verified` matches `<key>`).
+1. The verified build for the current pi series key (`<builds>/<key>/home/.local/bin/pi` when `<builds>/<key>/.verified` matches `<key>`).
 2. The previous verified build named in `<builds>/current.json`, when its `.verified` marker matches its key and its binary is executable.
 3. The installed `pi` on `PATH`.
 
@@ -76,38 +77,27 @@ than the container's launcher wrapper, it resolves `PI_CODING_AGENT_DIR` from
 the chosen binary so yolo-rendered extensions and `yolo-patched` packages (`pi-subagents`, `pi-background-tasks`) load cleanly and child
 subagents spawn the same binary. The adapter records `<path> (series <key>)` or
 `<real-path> (installed <version>)`, which `tillr-run` persists on `runs.harness`
-(`run.Record.Harness`). See
-drain-only rebuilt pi for
-series-keyed builds (`bin/pi-forks build-pi`) and post-landing roll behavior.
+(`run.Record.Harness`). The series-keyed builds are made by `tillr-roll --pi`, which
+runs a repository-provided program named `bin/pi-forks` that is not part of this tree; see
+[harness attribution and drain-only rebuilt pi](../../README.md#harness-attribution-and-drain-only-rebuilt-pi)
+for the post-landing roll.
 
 ### The level asked for is not always the level run
 
-`--thinking <level>` reaches `pi` and `pi` clamps it to the routed model's own
-`thinkingLevelMap` before any request is made: `clampThinkingLevel` (pi-ai) is applied by
-`ModelRuntime.resolveModel` when a virtual model routes to the physical one it names.
-The first live run asked for `medium` and every settled assistant message in its stream
-carries `"thinkingLevel":"high"` — four turns, each in its `message_end` and again in
-`agent_end`; only the `message_start` snapshots precede the level being attached. The
-`deepseek/deepseek-v4.1-flash-1017` row in the harness's own provider catalog
-(`pi-ai/dist/providers/data/openrouter.json`) maps `medium: null` — that family offers
-off, low, high and max — so `medium` clamps forward to `high`:
-
-```
-getSupportedThinkingLevels(row) -> off,low,high,max
-clampThinkingLevel(row, "medium") -> high
-```
-
-That is a measured fact about the harness and the model, not a defect here, so the
-adapter keeps passing its argument verbatim: the report's `effort:` is the level asked
-for, the stream's `thinkingLevel` is the level run, and on this family the two differ.
-An eval that compares routes by effort is comparing what was asked; the level a route
-actually ran at is only in the stream.
+`--thinking <level>` reaches `pi`, and `pi` clamps it to the levels the routed model
+offers before any request is made. A model family that offers off, low, high and max
+runs a request for `medium` at `high`. The adapter passes its argument verbatim: the
+report's `effort:` is the level asked for, and the stream's `thinkingLevel` is the level
+run. An eval that compares routes by effort is comparing what was asked; the level a
+route actually ran at is only in the stream.
 
 ## Trunk extension loading (drain workers only)
 
-Drain `pi` workers build and load a trunk agent directory inside the jail without
-`yolo host apply --assert` or a jail relaunch. Foreground sessions keep the deployed
-`~/.pi/agent` copies.
+Drain `pi` workers build and load a trunk agent directory without redeploying the
+installed one. Foreground sessions keep the deployed `~/.pi/agent` copies. The build
+reads paths that the repository the drain runs in provides and this tree does not hold:
+`yolo-packs/matt/` (a pack of extensions and patch series) and `bin/pi-forks.list` (the
+list of forks). A repository without them runs on the deployed agent directory.
 
 ### Content-keyed build (`build-agent-dir`)
 
@@ -177,9 +167,9 @@ exports, for `pi` and every child it starts:
 | `BASH_ENV` | `tools/tillr-trace/bash-shim.sh`, which appends one `proc.exec` line per shell command to `$TILLR_TRACE_DIR/proc-exec.jsonl` |
 | `TILLR_REPO_ROOT` | the repository root, so a shim row can name a repo-relative cwd |
 
-`run-pi` records no git commands. Git trace2 recording was removed on 2026-11-17 by the
-owner's ruling: the `GIT_TRACE2_EVENT` variable it set is inherited by every test suite the
-run starts, and one run recorded 918,054 git commands. `run-pi` unsets `GIT_TRACE2_EVENT`,
+`run-pi` records no git commands: a `GIT_TRACE2_EVENT` variable is inherited by every
+test suite the run starts, so its record grows with the tests and not with the worker's
+own commands. `run-pi` unsets `GIT_TRACE2_EVENT`,
 `GIT_TRACE2_PARENT_SID`, `GIT_TRACE2` and `GIT_TRACE2_PERF` so a run does not inherit them
 from the loop's environment either; `tools/tillr-run/backends_trace_env_test.go` pins that.
 
@@ -237,19 +227,18 @@ The extension keeps no count and no time limit of its own. The run's wall, if st
 set one, still bounds the whole process. `RESULT: failed`, and a blocked report whose
 obstacle is missing its kind or a field, are not endings it accepts. The nudge names what
 is missing. The extension and the drain read obstacles against the same case file,
-[`testdata/obstacle-cases.json`](./testdata/obstacle-cases.json). On 2026-11-18, Sol 6.2 at medium ended 19 of 61 drain runs with that
-footer and no blocker, after one to five read-only commands, and nothing answered them.
+[`testdata/obstacle-cases.json`](./testdata/obstacle-cases.json).
 
 A keep-going writer's session is also trimmed. `run-pi` starts pi with
 `--no-extensions --no-skills --no-context-files --no-prompt-templates`. It then loads back
 the subagent and background-task packages and every single-file extension in the agent's
 own `extensions/` directory except `steering-timer.ts`, because the provider, billing-tier,
 usage-ledger and quota extensions live there. It appends the worktree's `AGENTS.md` as the
-system prompt's project text. The worker no longer gets the house briefing, the memory
-package, session search, web tools, the todo list, code mode, steering tools or skills. On 2026-11-18 the first turn's prompt dropped from 23354 to
-9350 tokens on Luna. Judges and read-only runs are not trimmed.
+system prompt's project text. The worker does not get the installed briefing, the memory
+package, session search, web tools, the todo list, code mode, steering tools or skills,
+which shortens its first prompt. Judges and read-only runs are not trimmed.
 
-The claude, muse and agy adapters have no such hook yet. Each needs the same check at its
+The claude, muse and agy adapters have no such hook. Each needs the same check at its
 harness's last actionable boundary, with the same three settling endings. Claude Code's
 `Stop` hook can block a stop with a reason. The muse and agy CLIs would need either a
 comparable hook or an adapter loop that re-opens the session with the missing-goal
@@ -265,8 +254,7 @@ The watcher forwards JSON output unchanged and waits for the session header befo
 signaling: the fork emits that header after installing its SIGUSR1 handler, so a
 pause during startup is not lost to Node's debugger handler. Startup without a header
 is covered by the same straggler bound, not a separate timeout or build probe.
-Fork commit `a763610b` (`feat(agent): stop print workers safely on SIGUSR1`),
-delivered in this repository's `patch/pi`, defines the request: finish already-started
+The pi fork's SIGUSR1 handler defines the request: finish already-started
 calls and a streaming model response, save results, start no further tool or model
 request, flush output, and exit 0. Duplicate requests have the same effect as one.
 Session persistence stays enabled; the adapter does not pass `--no-session`.
@@ -277,12 +265,11 @@ any surviving process group, including tools. Continuing opens the same session 
 a restart notice; a gap stop does not claim an interruption, but a bound kill tells
 the session the command was interrupted by a restart and may be run again.
 
-An older pi without this fork change ignores the stop request: Node reserves SIGUSR1
+A pi without this fork change ignores the stop request: Node reserves SIGUSR1
 for its debugger, announces it on stderr, and continues. The runner then applies the
 same straggler bound and interruption notice. Even patched pi may announce the debugger
 in `stream.err`; that line is not a failure. The adapter does not probe the installed
-build or send a second kind of request. Publishing the patch branch and rebuilding
-pi on the host are separate from this adapter change.
+build or send a second kind of request.
 
 `TestPiPauseAtGapAndStraggler` runs the real adapter against stand-in harnesses, with
 no model or real pi: one honors SIGUSR1 after saving a tool result, and one ignores it
@@ -296,14 +283,12 @@ diagnostics verify that the JSON stream is forwarded unchanged.
 Pi's print mode exits once its agent settles and no extension holds the session
 open. Only one extension takes a hold. pi-background-tasks takes one for each
 `completionPolicy: "wake"` task, and it releases the hold when the completion's turn
-settles. On 2026-11-18 that release was missed for completions that the extension's
-`context` hook injected as a fallback into a model call already in progress. The
-journal records those as `fallback-injected` and `observed via fallback`, with no
-`enqueued`. Print mode then waited forever, and `session_shutdown` never ran, so
-every extension timer stayed armed. Three workers had committed, and their settled
-reports said `RESULT: done`, but they sat for seven hours. The fix belongs in that
-extension's patch series. Until it ships, and for any other way pi can fail to exit,
-the [`stop-at-gap`](./stop-at-gap) watcher ends the session on pi's own statements:
+settles. A missed release leaves print mode waiting forever, and `session_shutdown`
+never runs, so every extension timer stays armed. One way to miss it is a completion
+that the extension's `context` hook injects as a fallback into a model call already in
+progress; the journal records those as `fallback-injected` and `observed via fallback`,
+with no `enqueued`. For that, and for any other way pi can fail to exit, the
+[`stop-at-gap`](./stop-at-gap) watcher ends the session on pi's own statements:
 
 1. The stream carries a top-level `agent_settled`, and no `agent_start` follows it.
    keep-going acts at `agent_before_settle`, so a settle is already its verdict.
@@ -313,8 +298,7 @@ the [`stop-at-gap`](./stop-at-gap) watcher ends the session on pi's own statemen
    still owed. A wake is owed by a wake-policy task that has not ended. It is also owed
    by an ended one whose completion was neither observed by the session, nor stopped
    (`wake_requested` 0), nor failed to enqueue. A wake turn after a settle is ordinary
-   work: on 2026-11-18, 16 of about 760 footer-bearing settles were followed by one in
-   the same process. A journal that cannot answer never ends a session.
+   work. A journal that cannot answer never ends a session.
 
 Then the watcher sends pi its documented shutdown, SIGTERM. Pi disposes the runtime,
 emits `session_shutdown` and exits 143. The watcher forwards what pi flushed, appends
@@ -338,30 +322,6 @@ runner against a stand-in pi that settles with a footer and a leaked-hold journa
 then never exits. The settled-idle samples are withheld, so only this ending can end
 the run. `TestPiSettledOwedWorkReadsTheBackgroundTaskJournal` covers the journal
 shapes, and `TestPiSettledShutdownEscalates` covers the escalation with no clock.
-
-**Historical persistence measurement, 2026-11-16 (not the current pause kind):**
-Pi entered a bash tool call whose command was `sleep 60`;
-SIGTERM to the harness returned 143. Opening the same session returned 0 and answered
-`cedar-pause-6149`, the marker given before the signal, without that marker appearing
-in the continuation prompt. This measures the harness, not a model guarantee.
-The configured Bedrock Haiku model reached the tool; the earlier endpoint failure
-before a tool call measured nothing. Extensions, MCP, skills and context discovery
-were disabled to isolate the harness's persistence behavior.
-
-The command sequence, with a fresh UUID and writable session directory:
-
-```sh
-pi --offline --no-extensions --no-mcp --no-skills --no-context-files \
-    --no-prompt-templates --no-themes --print --mode json \
-    --model amazon-bedrock/global.anthropic.claude-haiku-5-5 --thinking low \
-    --tools bash --session-dir "$DIR" --session-id "$UUID" \
-    'Remember the exact marker cedar-pause-6149. First call bash with the command sleep 60. After that command ends answer only READY. Do not use any other tools.'
-# Once tool_execution_start names bash with command sleep 60:
-kill -TERM "$HARNESS_PID"
-# Re-run the same flags, directory and UUID with this prompt instead:
-# The command was interrupted by a restart. Do not run tools. What exact marker
-# did I give you before the interruption? Answer only that marker.
-```
 
 ## Declared capabilities
 
@@ -407,12 +367,12 @@ with that header yields `session: unknown` rather than a guess.
   footer on a call-suspends run.
 - **A session pi ended for a repeating call.** Pi emits `loop_detected` with `action:
   "recovered"` when it backs up, compacts, and resumes in-run, which is not an ending;
-  when it ends the session (`action: "ended"`, or no `action` field on an older pi), the
+  when it ends the session (`action: "ended"`, or no `action` field), the
   extractor exits 6, "ended by the harness", and the report header reads `result: ended
   by the harness: repeating-call` with `complete: no`. The report's last line names the
   call and its streak. This holds even after an earlier `RESULT:` footer, because the
   session did not end on that footer. [`testdata/extract-report-repeating.test.py`](./testdata/extract-report-repeating.test.py) covers both recovered and ended streams, plus the
-  two `repeating-call-*.jsonl` fixtures cut from the 2026-11-19 runs. The runner records
+  two `repeating-call-*.jsonl` fixtures cut from recorded runs. The runner records
   such a run's
   [end cause and loop recoveries](../../README.md#a-session-pi-ended-for-a-repeating-call).
 - **No model-resolution preflight is possible.** Pi has no cheap equivalent of
@@ -444,14 +404,13 @@ with that header yields `session: unknown` rather than a guess.
    is inside `fence.txt`; the verifier compares the candidate with the item and runs the
    checks it needs itself. A worker's account is not evidence. On Pi this step is the
    *only* boundary there is.
-7. **Land through the gate** (`just done`) after the attempt result is assigned.
+7. **Land through the gate** after the attempt result is assigned.
 
 ## The canary a live run owes
 
-The first real Pi run carries the same instructed write just outside the worktree. Here
-it is a measurement, not a proof: the README's claim is that nothing confines Pi, so the
-canary's outcome — denial or success — is recorded here as the measured statement of what
-this adapter's boundary is.
+A live run that measures the boundary carries one instructed write just outside the
+worktree. It is a measurement, not a proof: nothing confines Pi, so the canary's outcome,
+denial or success, states what this adapter's boundary is.
 
 ## What a live run needs
 
