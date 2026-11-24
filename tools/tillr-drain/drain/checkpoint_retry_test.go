@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -451,5 +453,156 @@ func TestBusyCycleDuringBackoffRetriesAtNextHeartbeat(t *testing.T) {
 	l.recordCheckpointLocked(base.Add(9*time.Second), store.Checkpointed{})
 	if l.retryWait != 8*time.Second {
 		t.Fatalf("retryWait after resumed log.not-restarted = %s, want 8s", l.retryWait)
+	}
+}
+
+// Each checkpoint cycle that ends log.not-restarted appends one registered
+// CheckpointNotRestartedKind event carrying log frames, log bytes and the count of
+// consecutive cycles without a restart; a cycle that restarts the log appends nothing new
+// and resets the consecutive-cycle count.
+func TestNotRestartedCheckpointAppendsRegisteredEvent(t *testing.T) {
+	kind, err := event.Lookup(CheckpointNotRestartedKind)
+	if err != nil {
+		t.Fatalf("event.Lookup(%q): %v", CheckpointNotRestartedKind, err)
+	}
+	if kind.Owner != Utility {
+		t.Fatalf("event kind %q owner = %q, want %q", CheckpointNotRestartedKind, kind.Owner, Utility)
+	}
+
+	f := newRefusalLoopFixture(t)
+	base := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
+	now := base
+
+	l := f.loop(t, &recordingSteps{}, &itemContentStager{})
+	l.cfg.Now = func() time.Time { return now }
+	l.keepWALWhileRunning()
+	defer l.closeWALKeeper()
+
+	ctx := context.Background()
+	if err := l.refreshSession(ctx, now.Add(PassInterval)); err != nil {
+		t.Fatal(err)
+	}
+
+	var cycles []store.Checkpointed
+	var releaseFirst func()
+	defer func() {
+		if releaseFirst != nil {
+			releaseFirst()
+		}
+	}()
+	var firstOnce sync.Once
+	l.beforeCheckpoint = func() {
+		firstOnce.Do(func() {
+			releaseFirst = holdReadSnapshot(t, f.storePath)
+		})
+	}
+	l.checkpointed = func(c store.Checkpointed) {
+		cycles = append(cycles, c)
+	}
+
+	step := func(d time.Duration) {
+		t.Helper()
+		now = now.Add(d)
+		if err := l.checkpointIfDue(ctx); err != nil {
+			t.Fatalf("checkpointIfDue at +%s: %v", now.Sub(base), err)
+		}
+	}
+
+	// Cycle 1 (+60s) and Cycle 2 (+61s): log.not-restarted while reader holds snapshot.
+	step(CheckpointInterval)
+	step(PassInterval)
+
+	// Release reader; Cycle 3 (+63s, after 2s backoff) restarts the log and appends nothing new.
+	releaseFirst()
+	step(2 * time.Second)
+
+	// Hold a fresh reader for Cycle 4 (+123s, normal interval): log.not-restarted with reset count 1.
+	var releaseSecond func()
+	defer func() {
+		if releaseSecond != nil {
+			releaseSecond()
+		}
+	}()
+	var secondOnce sync.Once
+	l.beforeCheckpoint = func() {
+		secondOnce.Do(func() {
+			releaseSecond = holdReadSnapshot(t, f.storePath)
+		})
+	}
+	step(CheckpointInterval)
+	releaseSecond()
+
+	if len(cycles) != 4 {
+		t.Fatalf("ran %d checkpoint cycles, want 4: %+v", len(cycles), cycles)
+	}
+	if cycles[0].Restarted || cycles[1].Restarted || !cycles[2].Restarted || cycles[3].Restarted {
+		t.Fatalf("unexpected Restarted outcomes: %+v", cycles)
+	}
+
+	type recordedEvent struct {
+		objectType string
+		objectID   string
+		ts         int64
+		fact       CheckpointNotRestartedFact
+	}
+	var got []recordedEvent
+	r, err := store.OpenRead(ctx, f.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.ReadTx(ctx, func(rd *store.Reader) error {
+		rows, err := rd.Query(`SELECT ts, COALESCE(object_type, ''), COALESCE(object_id, ''), payload FROM events WHERE kind = ? ORDER BY seq`, CheckpointNotRestartedKind)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ev recordedEvent
+			var raw string
+			if err := rows.Scan(&ev.ts, &ev.objectType, &ev.objectID, &raw); err != nil {
+				return err
+			}
+			if err := json.Unmarshal([]byte(raw), &ev.fact); err != nil {
+				return err
+			}
+			got = append(got, ev)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got) != 3 {
+		t.Fatalf("recorded %d %s events, want 3 (none for the restarted cycle): %+v", len(got), CheckpointNotRestartedKind, got)
+	}
+
+	wantCycles := []store.Checkpointed{cycles[0], cycles[1], cycles[3]}
+	wantConsecutive := []int{1, 2, 1}
+	wantTimes := []time.Time{
+		base.Add(CheckpointInterval),
+		base.Add(CheckpointInterval + PassInterval),
+		base.Add(2*CheckpointInterval + 3*time.Second),
+	}
+	for i := range got {
+		if got[i].objectType != "session" || got[i].objectID != l.sessionID {
+			t.Errorf("event %d object = (%q, %q), want (%q, %q)", i+1, got[i].objectType, got[i].objectID, "session", l.sessionID)
+		}
+		if got[i].ts != wantTimes[i].UnixMilli() {
+			t.Errorf("event %d ts = %d, want %d", i+1, got[i].ts, wantTimes[i].UnixMilli())
+		}
+		fact := got[i].fact
+		if fact.LogFrames != wantCycles[i].LogFrames || fact.LogFrames <= 0 {
+			t.Errorf("event %d log_frames = %d, want %d (> 0)", i+1, fact.LogFrames, wantCycles[i].LogFrames)
+		}
+		if fact.LogBytes != wantCycles[i].LogBytes || fact.LogBytes <= 0 {
+			t.Errorf("event %d log_bytes = %d, want %d (> 0)", i+1, fact.LogBytes, wantCycles[i].LogBytes)
+		}
+		if fact.ConsecutiveCycles != wantConsecutive[i] {
+			t.Errorf("event %d consecutive_cycles = %d, want %d", i+1, fact.ConsecutiveCycles, wantConsecutive[i])
+		}
+		if fact.SessionID != l.sessionID {
+			t.Errorf("event %d session_id = %q, want %q", i+1, fact.SessionID, l.sessionID)
+		}
 	}
 }
