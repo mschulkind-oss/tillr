@@ -2,16 +2,16 @@
 title: "Contract: tillr-land"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
+updated: 2026-11-24
 tags: [tillr, contract, land]
-summary: "What tillr-land provides and expects, read from the code at dab5a2da0e: two faces, the `land.landing` record, the `land` package, two live tables, three results and nine refusal reasons, six ref prefixes and the land lock. It expects the gate's verdict, the item utility's states, and two of the drain's tables, one of which it writes; and its module and the drain's require each other."
+summary: "What tillr-land provides and expects: two faces, the `land.landing` record, the `land` package, two live tables, three results and nine refusal reasons, six ref prefixes and the land lock. It expects the gate's verdict, the item utility's states, and two of the drain's tables, one of which it writes; and its module and the drain's require each other."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-land
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** What it provides and what it expects describe the code as it is. The split into contract and private, the pins and the reach-in fixes are proposed and not built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
 **What it is.** One Go program at `tools/tillr-land` with one package, `land`. It puts a judged candidate on the trunk as one commit, under a lock, and records the landing.
 
@@ -122,16 +122,16 @@ For `trunk-worktree-uncommitted`, `conflict_paths` holds the paths with uncommit
 
 In `tools/tillr-land`, in its fast suite.
 
-- **Exists today.** `TestTheRefusalReasonsAreTheRegisteredSet`, `TestTheOutcomesAreTheRecordedSet`, `TestTheLandingEventCarriesTheWholeLanding`, `TestPassLandsAJudgedHead`, `TestAVerdictThatDoesNotBindTheHeadsTreeIsRefused`, `TestDecodeVerdictAcceptsPassInherited`.
+- **Existing tests.** `TestTheRefusalReasonsAreTheRegisteredSet`, `TestTheOutcomesAreTheRecordedSet`, `TestTheLandingEventCarriesTheWholeLanding`, `TestPassLandsAJudgedHead`, `TestAVerdictThatDoesNotBindTheHeadsTreeIsRefused`, `TestDecodeVerdictAcceptsPassInherited`.
 - **Examples.** One `land.landing` per result and per reason, made by `Land` in process on a fixture repository, compared whole. The drain's unnamed decode structs and the view's literal are replaced by reading these.
 - **Name sets.** The two existing tests gain the files; the lock observation kinds get the same.
 - **Readers.** Each new reader runs on the example stores, and its answer is compared.
-- **Builders.** `land` publishes a builder that records a landing of each result through `Land`'s own write path. About 25 test files in other utilities type `landings` rows today and use it instead.
+- **Builders.** `land` publishes a builder that records a landing of each result through `Land`'s own write path. Test files in other utilities that type `landings` rows use it instead.
 - **Its expectation of the gate.** Land's tests read the gate's verdict examples. `fork_rebase_test.go` stops building the gate from source.
 
 ## 5. Reach-ins to fix
 
 Listed with their fixes in [the overview](../tillr-utility-contracts.md#10-reach-ins-today).
 
-- As provider: RI-29 (the drain implements the lock a second time), RI-30 (results and reasons typed again; unnamed decodes), RI-31 (ref prefixes typed as literals), RI-32 (`landings` read with raw SQL from about twenty files), RI-33 (the item utility reads `landing_claims` and `landings`), RI-39 (the view models two retired records), RI-51 (the roller reads `landings`).
+- As provider: RI-29 (the drain implements the lock a second time), RI-30 (results and reasons typed again; unnamed decodes), RI-31 (ref prefixes typed as literals), RI-32 (`landings` read with raw SQL from about twenty files), RI-33 (the item utility reads `landing_claims` and `landings`), RI-39 (the view models two records nothing writes), RI-51 (the roller reads `landings`).
 - As consumer: RI-27 (the module cycle with the drain), RI-28 (it reads and writes drain tables), RI-33 (it reads `items`), RI-34 (its own copy of the gate's verdict type), RI-35 (it recomputes the gate's registry digest).
