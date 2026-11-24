@@ -35,7 +35,7 @@ covers:
   - tools/tillr-view/web/src/models/queries.ts
   - tools/tillr-view/web/src/models/socket.ts
 tags: [tillr, observatory, view, provenance, truthfulness, reference]
-summary: "How `tillr-view` enforces explicit epistemic provenance, three-way state encoding, named-absence refusal and detail contracts, design-document metadata and Vantage links, CLI/HTTP count parity, and WebSocket cache invalidation across the observatory, plus what the linked-page redesign superseded."
+summary: "How `tillr-view` enforces explicit epistemic provenance, three-way state encoding, named-absence refusal and detail contracts, design-document metadata and Vantage links, CLI/HTTP count parity, and WebSocket cache invalidation across the observatory, plus which components of the four-region layout the linked pages mount."
 ---
 
 # Observatory truthfulness, provenance, and shared primitives
@@ -51,11 +51,10 @@ drifting between CLI and HTTP counts.
 `11dec7eb2e0e196e3a9588c354616bea6f5cb1b1`. Every truthfulness primitive,
 shared component, count helper, Vantage index reader, and WebSocket invalidation
 rule documented here is built and covered by automated Go and Vitest suites. The
-original four-region viewport-locked board layout was superseded by the
-linked-page architecture in [observatory redesign](./observatory-redesign.md)
+screens are the linked pages in [observatory redesign](./observatory-redesign.md)
 (confirmed by the owner in [`OQ-PR5`](../tillr/decision-provenance-review.md#OQ-PR5)),
-while its provenance contract and shared components remain live inside the
-linked pages. `UNMEASURED`: no timed operator session on the observatory has
+not a four-region viewport-locked board; the provenance contract and shared
+components documented here are live inside those pages. `UNMEASURED`: no timed operator session on the observatory has
 been recorded yet, so code and tests establish implementation behavior rather
 than measured operator-triage times.
 
@@ -69,7 +68,7 @@ than measured operator-triage times.
 | Item detail, worker claim markings, and run evidence inspection | `web/src/components/ItemDetailPane.tsx`, `ClaimAuditBanner.tsx`, `InterToolExchangeView.tsx`, `PayloadInspectorDrawer.tsx` |
 | Design-document frontmatter, Vantage question index cache, and Vantage links | `tools/tillr-view/frontmatter.go`, `questions.go`, `vantagecache.go`, `web/src/components/DocumentPane.tsx`, `web/src/models/document.ts` |
 | WebSocket invalidation stream, pause gate, and query-key hierarchy | `tools/tillr-view/servews.go`, `web/src/models/socket.ts`, `queries.ts`, `now.ts` |
-| Retained components from the superseded four-region board | `web/src/components/ObservatoryHeaderBar.tsx`, `QueueRail.tsx`, `NowBand.tsx`, `FinishedBand.tsx`, `InspectPane.tsx`, `ItemWithoutRun.tsx` |
+| Unmounted components of the four-region board | `web/src/components/ObservatoryHeaderBar.tsx`, `QueueRail.tsx`, `NowBand.tsx`, `FinishedBand.tsx`, `InspectPane.tsx`, `ItemWithoutRun.tsx` |
 
 **Reads with:** [observatory redesign](./observatory-redesign.md) (the active
 linked-page observatory that replaced this design's four-region layout while
@@ -90,7 +89,7 @@ observatory baseline).
 
 **Terms:**
 
-- **The board:** Without qualification in observatory and tillr documents, the observatory's queue surface served by `tillr-view serve` (originally the four-region screen of header, queue rail, item pane, and evidence pane; now the linked Home and Items pages in [observatory redesign](./observatory-redesign.md)). **Never the retired work board** (`tools/board-cli` and its session extensions), which was deleted in `3f02e3b916` and `afdc9a9571`; see board documents retirement.
+- **The board:** Without qualification in observatory and tillr documents, the observatory's queue surface served by `tillr-view serve` (the linked Home and Items pages in [observatory redesign](./observatory-redesign.md)).
 - **The wire:** The JSON shapes returned by `/api/v1/*` and emitted over `/api/v1/ws`, defined by the Go structs in `tools/tillr-view/serve.go`, `serveobs.go`, `servews.go`, and `apierror.go` and mirrored in `tools/tillr-view/web/src/models/types.ts`.
 - **Truthful absence:** A field the store or filesystem did not record, rendered as a named reason (`not recorded`, `absent`, `unobserved seam`, `no description recorded`) rather than hidden, collapsed into `"—"`, or turned into `0`.
 
@@ -207,14 +206,14 @@ Every non-2xx HTTP response from `tillr-view` writes `{error: {code, message}}` 
 
 ---
 
-## Superseded layout and retained components
+## Four-region layout components
 
-The linked-page architecture in [observatory redesign](./observatory-redesign.md) replaced the original four-region viewport-locked layout (`ObservatoryHeaderBar` + `QueueRail` + `ItemPane` + `InspectPane`, plus `NowBand` and `FinishedBand`) with dedicated full-width pages routed by path (`/`, `/items`, `/item/<id>`, `/run/<id>`, `/lane/<id>`, `/passes`, `/trunk`, `/performance`, `/graph`, `/questions`, `/designs`).
+The linked-page architecture in [observatory redesign](./observatory-redesign.md) serves dedicated full-width pages routed by path, not a four-region viewport-locked layout (`ObservatoryHeaderBar` + `QueueRail` + `ItemPane` + `InspectPane`, plus `NowBand` and `FinishedBand`). The pages are `/`, `/items`, `/item/<id>`, `/run/<id>`, `/lane/<id>`, `/passes`, `/trunk`, `/performance`, `/graph`, `/questions` and `/designs`.
 
-At `11dec7eb2e0e196e3a9588c354616bea6f5cb1b1`, the components introduced for the original design split into two groups:
+At `11dec7eb2e0e196e3a9588c354616bea6f5cb1b1`, the components written for the four-region layout are in two groups:
 
 - **Mounted in the active `App.tsx` tree:** `ObservatoryShell.tsx` (top navigation, drain status, live/paused socket control), `ItemDetailPane.tsx` and `DocumentPane.tsx` (mounted inside `ItemPage`), `EpistemicBadge.tsx`, `StateGlyph.tsx`, and `RefusalState.tsx` (shared across pages), plus `ClaimAuditBanner.tsx`, `InterToolExchangeView.tsx`, and `PayloadInspectorDrawer.tsx` (mounted inside `RunPage` alongside `SpanViewer` and `TranscriptView`).
-- **Retained unmounted in `tools/tillr-view/web/src/components/` with unit tests:** `ObservatoryHeaderBar.tsx`, `QueueRail.tsx`, `NowBand.tsx`, `FinishedBand.tsx`, `InspectPane.tsx`, and `ItemWithoutRun.tsx` remain in the source tree and are exercised by component unit tests under `tools/tillr-view/web/tests/` (`loop-band.test.tsx`, `observatory.test.tsx`), though `App.tsx` no longer mounts them.
+- **Unmounted in `tools/tillr-view/web/src/components/` with unit tests:** `ObservatoryHeaderBar.tsx`, `QueueRail.tsx`, `NowBand.tsx`, `FinishedBand.tsx`, `InspectPane.tsx`, and `ItemWithoutRun.tsx` remain in the source tree and are exercised by component unit tests under `tools/tillr-view/web/tests/` (`loop-band.test.tsx`, `observatory.test.tsx`), though `App.tsx` does not mount them.
 
 ---
 

@@ -47,13 +47,12 @@ ships this whole directory (`just pack-sync` mirrors it), and `run-pi` resolves 
 `../../../tillr-trace`: `~/.local/share/tillr/tillr-trace` from a pack install, the
 sibling directory from this checkout.
 
-There is no git recorder. The design's second emitter, git's `GIT_TRACE2_EVENT`, was removed
-on 2026-11-17 by the owner's ruling: every test suite a run starts inherits it, and one run
-recorded 918,054 git commands, 906 runs held about 82 GB, and the index built from them was
-32 GB. This tool does not read `git-trace2.jsonl` and produces no `git.trace2` row; a file
-left on disk by the old recorder is ignored. A run's `git_path` and `git_state` remain only
-because `tillr-view` reads them by name: the path is always null and the state is always
-`retired`.
+There is no git recorder. Git's `GIT_TRACE2_EVENT` is not set for a run, by the owner's
+ruling of 2026-11-17: every test suite a run starts inherits it, and measured, one run
+recorded 918,054 git commands, 906 runs held about 82 GB, and an index built from them was
+32 GB. This tool does not read `git-trace2.jsonl` and produces no `git.trace2` row; such a
+file on disk is ignored. A run's `git_path` and `git_state` exist only because `tillr-view`
+reads them by name: the path is always null and the state is always `retired`.
 
 The shim is fail-open
 ([§7.1](../../docs/design/session-recording.md#71-four-mechanical-fail-open-guarantees)):
@@ -67,16 +66,13 @@ exists but is empty: a writer that touched the path is not a run that ran nothin
 
 ## No index: every answer is read from the artifacts
 
-Until 2026-11-18 the drain loop ran `tillr-trace ingest` after each tick to keep a
-persistent SQLite index, `index.db` under the trace root, which every query read. That day
-the owner ruled that it was cached derived data and should go until a measured performance
-problem asks for a cache. Every table in it could be rebuilt from the store and the run
-artifacts, and its own design deleted a run's rows once that run's source files were gone,
-so it never kept anything the artifacts did not. The loop no longer runs an indexer,
-`ingest` is gone (an unknown command, exit 2), and nothing creates `index.db`. A file left
-by an older build is not read and can be deleted.
+There is no persistent index. A SQLite index of the trace would be cached derived data:
+every table in it can be rebuilt from the store and the run artifacts, so it keeps nothing
+the artifacts do not. The owner ruled on 2026-11-18 that no such cache exists until a
+measured performance problem asks for one. The loop runs no indexer, `ingest` is an unknown
+command (exit 2), and nothing creates or reads an `index.db`.
 
-Each command now reads only what it needs:
+Each command reads only what it needs:
 
 - **One run** (`audit <run-id>`, and `run <run-id>` for `tillr-view`) reads that run's log,
   `proc-exec.jsonl`, gate records and staged inputs.
@@ -224,8 +220,8 @@ What would fool the join, stated rather than hidden:
 
 ## What is not parsed yet
 
-`.tillr/loop/<run-id>/steps.jsonl`, `boundary.check`, `tick.stage`, `llm.retry` (the
-pi-fork hook), `claim.verdict` emission back into the shard files, `diff.patch.zst`, and
+`.tillr/loop/<run-id>/steps.jsonl`, `boundary.check`, `tick.stage`, `llm.retry` (a
+retry hook in `pi`), `claim.verdict` emission back into the shard files, `diff.patch.zst`, and
 `cas/sha256/` blobs. `tick.stage` is only as good as
 the manifest the emitters will write; until they land, `tick` shows what the store's
 `dispatches` and the trace rows carry.
