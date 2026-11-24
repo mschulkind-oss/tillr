@@ -339,7 +339,8 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 		}
 		if pe := PublishHeavy(dir, run); pe != nil {
 			stopRunning()
-			storeProgress.Finish(heavyEndedOutcome(ctx, run.Result, pe))
+			endedOutcome := heavyEndedOutcome(ctx, run.Result, pe)
+			storeProgress.Finish(endedOutcome, heavyEndedFailingChecks(endedOutcome, run.Checks)...)
 			return out, pe
 		}
 		stopRunning()
@@ -350,7 +351,8 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 		if r.Report != nil {
 			r.Report(run)
 		}
-		storeProgress.Finish(heavyEndedOutcome(ctx, run.Result, e))
+		endedOutcome := heavyEndedOutcome(ctx, run.Result, e)
+		storeProgress.Finish(endedOutcome, heavyEndedFailingChecks(endedOutcome, run.Checks)...)
 		if e != nil {
 			return out, e
 		}
@@ -364,6 +366,28 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 		// Landings while the lock is held owe one run, on the newest tip, not a run per landing.
 		out.PendingTip = newest
 	}
+}
+
+func heavyEndedFailingChecks(endedOutcome string, checks []HeavyCheck) []string {
+	if endedOutcome != "red" {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(checks))
+	var failing []string
+	for _, check := range checks {
+		if check.CheckID == "" {
+			continue
+		}
+		if ClassifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome != checkresult.Fail {
+			continue
+		}
+		if _, ok := seen[check.CheckID]; ok {
+			continue
+		}
+		seen[check.CheckID] = struct{}{}
+		failing = append(failing, check.CheckID)
+	}
+	return failing
 }
 func (r HeavyRunner) inTree(ctx context.Context, tip string, fn func(string) error) error {
 	if err := os.MkdirAll(filepath.Dir(r.Work), 0755); err != nil {

@@ -178,6 +178,7 @@ type ruleDefinitionDigestInput struct {
 	Reset             string      `json:"reset"`
 	ClearWhen         string      `json:"clear_when"`
 	After             string      `json:"after"`
+	ReopenWhen        string      `json:"reopen_when"`
 }
 
 func normalizeStrings(s []string) []string {
@@ -222,6 +223,7 @@ func definitionHash(r Rule) string {
 		Reset:             exprSource(r.When.Reset),
 		ClearWhen:         exprSource(r.When.ClearWhen),
 		After:             exprSource(r.When.After),
+		ReopenWhen:        exprSource(r.When.ReopenWhen),
 	}
 	raw, err := json.Marshal(in)
 	if err != nil {
@@ -289,7 +291,8 @@ func newEvalCache(sourceKey any) *evalCache {
 }
 
 func windowStartMillis(w When, now time.Time) int64 {
-	if w.Pattern == PredicateMatch && w.ClearWhen != nil && w.Window == 0 {
+	if (w.Pattern == PredicateMatch && w.ClearWhen != nil && w.Window == 0) ||
+		(w.Pattern == LagBehind && w.ReopenWhen != nil) {
 		return math.MinInt64
 	}
 	return now.Add(-w.Window).UnixMilli()
@@ -334,7 +337,9 @@ func ruleEqual(a, b Rule) bool {
 		exprEqual(a.When.Match, b.When.Match) &&
 		exprEqual(a.When.Reset, b.When.Reset) &&
 		exprEqual(a.When.ClearWhen, b.When.ClearWhen) &&
-		exprEqual(a.When.After, b.When.After)
+		exprEqual(a.When.After, b.When.After) &&
+		exprEqual(a.When.ReopenWhen, b.When.ReopenWhen) &&
+		a.Guidance.ReopenSummary == b.Guidance.ReopenSummary
 }
 
 func (c *evalCache) kindGens(kinds []string) []uint64 {

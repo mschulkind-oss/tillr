@@ -23,7 +23,7 @@ func validRef(ref string) bool {
 }
 
 func loadLag(k keys, w When, refs map[string]bool) When {
-	k.only("group_by", "pattern", "leader", "follower", "threshold_commits", "threshold_duration", "mode")
+	k.only("group_by", "pattern", "leader", "follower", "threshold_commits", "threshold_duration", "mode", "reopen_when")
 	if len(w.GroupByList) >= 2 || w.GroupBy != "global" {
 		k.reject("group_by", "lag_behind requires global")
 	}
@@ -61,6 +61,7 @@ func loadLag(k keys, w When, refs map[string]bool) When {
 			k.reject("mode", "expected any or all")
 		}
 	}
+	w.ReopenWhen = k.expression("reopen_when", false)
 	return w
 }
 
@@ -68,7 +69,7 @@ func checkProjectionOperands(k keys, r Rule, refs map[string]bool) {
 	for _, expr := range []struct {
 		key string
 		exp *Expression
-	}{{"match", r.When.Match}, {"reset", r.When.Reset}, {"clear_when", r.When.ClearWhen}, {"after", r.When.After}} {
+	}{{"match", r.When.Match}, {"reset", r.When.Reset}, {"clear_when", r.When.ClearWhen}, {"after", r.When.After}, {"reopen_when", r.When.ReopenWhen}} {
 		if expr.exp == nil {
 			continue
 		}

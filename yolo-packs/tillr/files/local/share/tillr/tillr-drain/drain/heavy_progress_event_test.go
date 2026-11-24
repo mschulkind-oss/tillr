@@ -189,7 +189,7 @@ func TestHeavyProgressEventsEmitStartedProgressAndEnded(t *testing.T) {
 	if first := redEvents[0].Fact; first != (HeavyProgressFact{TipSHA: tipRed, Phase: "started"}) {
 		t.Fatalf("red first = %+v", first)
 	}
-	if last := redEvents[len(redEvents)-1].Fact; last != (HeavyProgressFact{TipSHA: tipRed, Phase: "ended", Outcome: "red"}) {
+	if last := redEvents[len(redEvents)-1].Fact; last != (HeavyProgressFact{TipSHA: tipRed, Phase: "ended", Outcome: "red", FailingChecks: "unit"}) {
 		t.Fatalf("red last = %+v", last)
 	}
 	replayProgress := 0
@@ -924,6 +924,65 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 			}
 		}
 	})
+}
+
+func TestHeavyProgressEventsEndedFailingChecks(t *testing.T) {
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	tip := heavyCommit(t, root, "multi-red")
+
+	storePath := newHeavyProgressStore(t)
+	runner := heavyFixture(t, root, func(_ context.Context, _ string, only string) ([]HeavyCheck, error) {
+		if only != "" {
+			return []HeavyCheck{{CheckID: only, Result: "fail"}}, nil
+		}
+		return []HeavyCheck{
+			{CheckID: "unit", Result: "fail"},
+			{CheckID: "lint", Result: "pass"},
+			{CheckID: "", Result: "fail"},
+			{CheckID: "vet", Result: "fail"},
+			{CheckID: "unit", Result: "fail"},
+		}, nil
+	})
+	runner.Store = storePath
+	out, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(out.Runs) != 1 || out.Runs[0].Result != "red" {
+		t.Fatalf("Run result = %+v", out.Runs)
+	}
+	events := readHeavyProgressEvents(t, storePath)
+	if len(events) == 0 {
+		t.Fatal("expected heavy progress events")
+	}
+	last := events[len(events)-1].Fact
+	wantLast := HeavyProgressFact{TipSHA: tip, Phase: "ended", Outcome: "red", FailingChecks: "unit, vet"}
+	if last != wantLast {
+		t.Fatalf("ended fact = %+v, want %+v", last, wantLast)
+	}
+
+	// Non-red outcomes (and red with no failing checks) omit FailingChecks.
+	for _, tc := range []struct {
+		outcome string
+		checks  []string
+	}{
+		{outcome: "green", checks: []string{"unit"}},
+		{outcome: "fault", checks: []string{"unit"}},
+		{outcome: "cancelled", checks: []string{"unit"}},
+		{outcome: "red", checks: nil},
+	} {
+		s := newHeavyProgressStore(t)
+		_, sp := (HeavyRunner{Store: s}).StartStoreProgress(context.Background(), "tip-"+tc.outcome)
+		sp.Finish(tc.outcome, tc.checks...)
+		got := readHeavyProgressEvents(t, s)
+		if len(got) != 2 {
+			t.Fatalf("%s events = %+v, want 2", tc.outcome, got)
+		}
+		if got[1].Fact.FailingChecks != "" {
+			t.Fatalf("%s FailingChecks = %q, want empty", tc.outcome, got[1].Fact.FailingChecks)
+		}
+	}
 }
 
 func jsonString(s string) string {

@@ -295,6 +295,16 @@ func (m *memoryState) activeLocked(ruleID string) map[string]episode {
 	out := map[string]episode{}
 	for _, ep := range m.episodes {
 		if ep.ruleID == ruleID && ep.state != "resolved" {
+			ackedWatermark := ep.lastObservedSeq
+			if ep.ackedSeq.Valid {
+				ackedWatermark = ep.ackedSeq.Int64
+			} else {
+				for _, ev := range m.events {
+					if ev.objectID == ep.alertID && (ev.kind == acknowledgedKind || ev.kind == trackedKind) && ev.seq > ackedWatermark {
+						ackedWatermark = ev.seq
+					}
+				}
+			}
 			out[ep.subjectKey] = episode{
 				id:                   ep.alertID,
 				state:                ep.state,
@@ -309,6 +319,7 @@ func (m *memoryState) activeLocked(ruleID string) map[string]episode {
 				ackedSeq:             ep.ackedSeq,
 				ackedFingerprint:     ep.ackedFingerprint,
 				ackedLagPair:         ep.ackedLagPair,
+				ackedWatermark:       ackedWatermark,
 				hasAckCols:           true,
 			}
 		}
@@ -815,6 +826,16 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			memEp := m.findAlertLocked(ep.id)
 			if itemExists && !lookup.isTerminal(itemState) {
 				if firing && firstClear == len(c.clears) {
+					if ep.state == "acknowledged" && r.When.Pattern == LagBehind && r.When.ReopenWhen != nil &&
+						c.lag != nil && c.lag.reopenEvent != nil &&
+						c.lag.reopenEvent.Seq > max(ep.ackedWatermark, loadedSeq) {
+						pair := c.lag.leaderOID + ":" + c.lag.followerOID
+						nextSeq := max(ep.last, max(startHead, c.lag.reopenEvent.Seq))
+						if err := m.reopenLagWhenLocked(memEp, r, key, c, pair, nextSeq, trackedID, now); err != nil {
+							return err
+						}
+						continue
+					}
 					if r.When.Pattern == LagBehind {
 						pair := c.lag.leaderOID + ":" + c.lag.followerOID
 						if !ep.trackedLagPair.Valid {
@@ -971,6 +992,15 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 		var currentLagPair string
 		if r.When.Pattern == LagBehind {
 			currentLagPair = c.lag.leaderOID + ":" + c.lag.followerOID
+			if ep.state == "acknowledged" && r.When.Pattern == LagBehind && r.When.ReopenWhen != nil &&
+				c.lag != nil && c.lag.reopenEvent != nil &&
+				c.lag.reopenEvent.Seq > max(ep.ackedWatermark, loadedSeq) {
+				nextSeq := max(ep.last, max(startHead, c.lag.reopenEvent.Seq))
+				if err := m.reopenLagWhenLocked(memEp, r, key, c, currentLagPair, nextSeq, "", now); err != nil {
+					return err
+				}
+				continue
+			}
 			if !memEp.trackedLagPair.Valid {
 				memEp.trackedLagPair = sql.NullString{String: currentLagPair, Valid: true}
 			} else if memEp.trackedLagPair.String != currentLagPair {
@@ -1012,6 +1042,37 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 		}
 	}
 	return nil
+}
+
+func (m *memoryState) reopenLagWhenLocked(memEp *memEpisode, r Rule, key string, c *condition, lagPair string, nextSeq int64, trackedID string, now time.Time) error {
+	bundle, err := makeLagReopenBundle(r, key, memEp.alertID, c, "")
+	if err != nil {
+		return err
+	}
+	memEp.state = "open"
+	memEp.trackingItemID = sql.NullString{}
+	memEp.trackedLagPair = sql.NullString{String: lagPair, Valid: true}
+	memEp.silenceUntilMS = sql.NullInt64{}
+	memEp.silenceOnFingerprint = sql.NullString{}
+	memEp.ackedBy = sql.NullString{}
+	memEp.ackedNote = sql.NullString{}
+	memEp.ackedAt = sql.NullInt64{}
+	memEp.ackedSeq = sql.NullInt64{}
+	memEp.ackedFingerprint = sql.NullString{}
+	memEp.ackedLagPair = sql.NullString{}
+	memEp.lastObservedSeq = nextSeq
+	memEp.lastObservedAt = now.UnixMilli()
+	memEp.observationCount++
+	memEp.bundleJSON = string(bundle)
+	body := map[string]any{
+		"alert_id": memEp.alertID, "rule_id": r.ID, "subject_key": key,
+		"severity": r.Severity, "receiver": r.Delivery.Receiver,
+		"cause": "reopen-when",
+	}
+	if trackedID != "" {
+		body["item_id"] = trackedID
+	}
+	return m.appendEventLocked(reopenedKind, memEp.alertID, now, body)
 }
 
 func (m *memoryState) resolveTerminalRemaining(ruleByID map[string]*Rule, reconciled map[string]bool, startHead int64, now time.Time, lookup itemTerminalChecker) error {

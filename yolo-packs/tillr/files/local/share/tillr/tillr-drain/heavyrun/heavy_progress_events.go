@@ -25,10 +25,11 @@ func init() {
 
 // HeavyProgressFact is the payload of a HeavyProgressKind event.
 type HeavyProgressFact struct {
-	TipSHA  string `json:"tip_sha"`
-	Phase   string `json:"phase"`
-	CheckID string `json:"check_id,omitempty"`
-	Outcome string `json:"outcome,omitempty"`
+	TipSHA        string `json:"tip_sha"`
+	Phase         string `json:"phase"`
+	CheckID       string `json:"check_id,omitempty"`
+	Outcome       string `json:"outcome,omitempty"`
+	FailingChecks string `json:"failing_checks,omitempty"`
 }
 
 type heavyStoreProgressKey struct{}
@@ -89,7 +90,7 @@ func (p *heavyStoreProgress) WholeStepCount() int {
 	return p.wholeSteps
 }
 
-func (p *heavyStoreProgress) Finish(outcome string) {
+func (p *heavyStoreProgress) Finish(outcome string, failingChecks ...string) {
 	if p == nil {
 		return
 	}
@@ -105,10 +106,15 @@ func (p *heavyStoreProgress) Finish(outcome string) {
 		writeCtx, cancel = context.WithTimeout(context.WithoutCancel(writeCtx), 5*time.Second)
 		defer cancel()
 	}
+	var joinedFailing string
+	if outcome == "red" && len(failingChecks) > 0 {
+		joinedFailing = strings.Join(failingChecks, ", ")
+	}
 	p.writeLocked(writeCtx, HeavyProgressFact{
-		TipSHA:  p.tipSHA,
-		Phase:   "ended",
-		Outcome: outcome,
+		TipSHA:        p.tipSHA,
+		Phase:         "ended",
+		Outcome:       outcome,
+		FailingChecks: joinedFailing,
 	})
 }
 

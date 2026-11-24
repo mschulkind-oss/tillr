@@ -26,9 +26,11 @@ var ErrAlertNotFound = errors.New("not found")
 
 type episodeAction struct {
 	state, fingerprint string
+	lastObservedSeq    int64
 	ackedBy            sql.NullString
 	ackedNote          sql.NullString
 	trackingItemID     sql.NullString
+	trackedLagPair     sql.NullString
 	hasTrackingCol     bool
 	hasLagPairCol      bool
 	hasAckCols         bool
@@ -85,12 +87,7 @@ func ensureTrackingColumns(tx *store.Tx, a episodeAction) error {
 			return err
 		}
 	}
-	if !a.hasLagPairCol {
-		if _, err := tx.Exec(`ALTER TABLE alert_episodes ADD COLUMN tracked_lag_pair TEXT`); err != nil {
-			return err
-		}
-	}
-	return nil
+	return ensureAckColumns(tx, a)
 }
 
 func ensureAckColumns(tx *store.Tx, a episodeAction) error {
@@ -169,7 +166,7 @@ func (e Evaluator) NeedsTrackingMigration(ctx context.Context, id, itemID string
 		if err := validateStoreOpenItem(rd, a, id, itemID); err != nil {
 			return err
 		}
-		need = !a.hasTrackingCol
+		need = !a.hasTrackingCol || !a.hasLagPairCol || !a.hasAckCols
 		return nil
 	})
 	return need, err
@@ -199,7 +196,11 @@ func (e Evaluator) Ack(ctx context.Context, id, by string, note *string) error {
 				ep.ackedNote = sql.NullString{}
 			}
 			ep.ackedAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
-			ep.ackedSeq = sql.NullInt64{Int64: ep.lastObservedSeq, Valid: true}
+			ackedSeq := ep.lastObservedSeq
+			if ep.trackedLagPair.Valid && ep.trackedLagPair.String != "" {
+				ackedSeq = max(ackedSeq, e.mem.lastSourceSeq)
+			}
+			ep.ackedSeq = sql.NullInt64{Int64: ackedSeq, Valid: true}
 			ep.ackedFingerprint = sql.NullString{String: ep.conditionFingerprint, Valid: true}
 			ep.ackedLagPair = ep.trackedLagPair
 			return nil
@@ -215,9 +216,17 @@ func (e Evaluator) Ack(ctx context.Context, id, by string, note *string) error {
 		if err := ensureAckColumns(tx, a); err != nil {
 			return err
 		}
+		ackedSeq := a.lastObservedSeq
+		if a.trackedLagPair.Valid && a.trackedLagPair.String != "" {
+			headSeq, err := tx.Reader().EventHeadSeq()
+			if err != nil {
+				return err
+			}
+			ackedSeq = max(ackedSeq, headSeq)
+		}
 		a.payload["by"], a.payload["note"] = by, note
-		_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',acked_by=?,acked_note=?,acked_at=?,acked_seq=last_observed_seq,acked_fingerprint=condition_fingerprint,acked_lag_pair=tracked_lag_pair WHERE alert_id=?`,
-			by, note, now.UnixMilli(), id)
+		_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',acked_by=?,acked_note=?,acked_at=?,acked_seq=?,acked_fingerprint=condition_fingerprint,acked_lag_pair=tracked_lag_pair WHERE alert_id=?`,
+			by, note, now.UnixMilli(), ackedSeq, id)
 		return err
 	})
 }
@@ -248,7 +257,7 @@ func (e Evaluator) Track(ctx context.Context, id, itemID string, by, note *strin
 			a.payload["note"] = note
 			ep.state = "acknowledged"
 			ep.trackingItemID = sql.NullString{String: itemID, Valid: true}
-			ep.ackedSeq = sql.NullInt64{}
+			ep.ackedSeq = sql.NullInt64{Int64: max(ep.lastObservedSeq, e.mem.lastSourceSeq), Valid: true}
 			ep.ackedFingerprint = sql.NullString{}
 			ep.ackedLagPair = sql.NullString{}
 			ep.silenceUntilMS = sql.NullInt64{}
@@ -283,25 +292,26 @@ func (e Evaluator) Track(ctx context.Context, id, itemID string, by, note *strin
 		if err := ensureTrackingColumns(tx, a); err != nil {
 			return err
 		}
+		headSeq, err := tx.Reader().EventHeadSeq()
+		if err != nil {
+			return err
+		}
+		ackedSeq := max(a.lastObservedSeq, headSeq)
 		a.payload["item_id"] = itemID
 		a.payload["by"] = by
 		a.payload["note"] = note
-		clearAckWatermarks := ""
-		if a.hasAckCols {
-			clearAckWatermarks = ",acked_seq=NULL,acked_fingerprint=NULL,acked_lag_pair=NULL"
-		}
 		if by != nil {
-			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,acked_by=?,acked_note=?,acked_at=?,silence_until_ms=NULL,silence_on_fingerprint=NULL`+clearAckWatermarks+` WHERE alert_id=?`,
-				itemID, *by, note, now.UnixMilli(), id)
+			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,acked_by=?,acked_note=?,acked_at=?,silence_until_ms=NULL,silence_on_fingerprint=NULL,acked_seq=?,acked_fingerprint=NULL,acked_lag_pair=NULL WHERE alert_id=?`,
+				itemID, *by, note, now.UnixMilli(), ackedSeq, id)
 			return err
 		}
 		if note != nil {
-			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,acked_note=?,silence_until_ms=NULL,silence_on_fingerprint=NULL`+clearAckWatermarks+` WHERE alert_id=?`,
-				itemID, *note, id)
+			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,acked_note=?,silence_until_ms=NULL,silence_on_fingerprint=NULL,acked_seq=?,acked_fingerprint=NULL,acked_lag_pair=NULL WHERE alert_id=?`,
+				itemID, *note, ackedSeq, id)
 			return err
 		}
-		_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,silence_until_ms=NULL,silence_on_fingerprint=NULL`+clearAckWatermarks+` WHERE alert_id=?`,
-			itemID, id)
+		_, err = tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,silence_until_ms=NULL,silence_on_fingerprint=NULL,acked_seq=?,acked_fingerprint=NULL,acked_lag_pair=NULL WHERE alert_id=?`,
+			itemID, ackedSeq, id)
 		return err
 	})
 }
@@ -498,13 +508,19 @@ func readEpisodeAction(rd *store.Reader, id string) (episodeAction, error) {
 	a.hasLagPairCol = hasLagPair
 	a.hasAckCols = hasAckedSeq && hasAckedFP && hasAckedLag
 	var rule, subject, severity string
+	cols := "state,condition_fingerprint,last_observed_seq,acked_by,acked_note"
+	dest := []any{&a.state, &a.fingerprint, &a.lastObservedSeq, &a.ackedBy, &a.ackedNote}
 	if hasTracking {
-		err = rd.QueryRow(`SELECT state,condition_fingerprint,acked_by,acked_note,tracking_item_id,rule_id,subject_key,severity FROM alert_episodes WHERE alert_id=?`, id).
-			Scan(&a.state, &a.fingerprint, &a.ackedBy, &a.ackedNote, &a.trackingItemID, &rule, &subject, &severity)
-	} else {
-		err = rd.QueryRow(`SELECT state,condition_fingerprint,acked_by,acked_note,rule_id,subject_key,severity FROM alert_episodes WHERE alert_id=?`, id).
-			Scan(&a.state, &a.fingerprint, &a.ackedBy, &a.ackedNote, &rule, &subject, &severity)
+		cols += ",tracking_item_id"
+		dest = append(dest, &a.trackingItemID)
 	}
+	if hasLagPair {
+		cols += ",tracked_lag_pair"
+		dest = append(dest, &a.trackedLagPair)
+	}
+	cols += ",rule_id,subject_key,severity"
+	dest = append(dest, &rule, &subject, &severity)
+	err = rd.QueryRow("SELECT "+cols+" FROM alert_episodes WHERE alert_id=?", id).Scan(dest...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, fmt.Errorf("alert %s %w", id, ErrAlertNotFound)
 	}
