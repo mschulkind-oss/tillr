@@ -26,6 +26,7 @@ type startStoreSync struct {
 	quotaChecked, lastFull time.Time
 	itemsSignature         [32]byte
 	laneRebuildOwed        bool
+	onReadTx               func(open bool)
 }
 
 func (s *startStoreSync) close() {
@@ -35,11 +36,11 @@ func (s *startStoreSync) close() {
 	}
 }
 
-func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, rebuild func(*store.Reader, *startSnapshot, map[string]bool) error) (startSnapshot, error) {
+func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, rebuild func(*store.Reader, *startSnapshot, map[string]bool) (func() error, error)) (startSnapshot, error) {
 	return s.syncStoreWithRefresh(ctx, path, at, policy, prev, false, nil, rebuild)
 }
 
-func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, inspectExternal bool, prepare func(*store.Store) error, rebuild func(*store.Reader, *startSnapshot, map[string]bool) error) (startSnapshot, error) {
+func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, inspectExternal bool, prepare func(*store.Store) error, rebuild func(*store.Reader, *startSnapshot, map[string]bool) (func() error, error)) (startSnapshot, error) {
 	fresh := s.reader == nil
 	if fresh {
 		var err error
@@ -58,7 +59,11 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 	next := prev
 	quotaChecked, lastFull := s.quotaChecked, s.lastFull
 	signature, owed := s.itemsSignature, s.laneRebuildOwed
+	var finishRebuild func() error
 	err := s.reader.ReadTx(ctx, func(r *store.Reader) error {
+		if s.onReadTx != nil {
+			s.onReadTx(true)
+		}
 		if err := r.QueryRow(`PRAGMA data_version`).Scan(&dv); err != nil {
 			return err
 		}
@@ -74,7 +79,7 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 			quotaChecked, lastFull, owed = at, at, false
 			signature, err = readStartItemsSignature(r, next.versionSchema)
 			if err == nil && rebuild != nil {
-				err = rebuild(r, &next, nil)
+				finishRebuild, err = rebuild(r, &next, nil)
 			}
 			return err
 		}
@@ -165,13 +170,20 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 			lastFull, owed, touched = at, false, nil
 		}
 		if rebuild != nil && (inspectExternal || full || lanesChanged || len(touched) > 0) {
-			return rebuild(r, &next, touched)
+			finishRebuild, err = rebuild(r, &next, touched)
+			return err
 		}
 		if rebuild != nil {
 			next.occupied = prev.occupied
 		}
 		return nil
 	})
+	if s.onReadTx != nil {
+		s.onReadTx(false)
+	}
+	if err == nil && finishRebuild != nil {
+		err = finishRebuild()
+	}
 	if err != nil {
 		// A new read transaction on a re-opened connection must reseed. Leave
 		// both the published snapshot and its cursor untouched on failure.

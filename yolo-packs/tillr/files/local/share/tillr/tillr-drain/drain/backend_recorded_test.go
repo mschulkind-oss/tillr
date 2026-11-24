@@ -274,8 +274,8 @@ func TestStartViewRefreshBackendsAvoidsRescanningHistoricalFinishes(t *testing.T
 	var previous startSnapshot
 	refresh := func() startSnapshot {
 		t.Helper()
-		next, err := sync.syncStore(ctx, tick.StorePath, at, l.currentPolicy(), previous, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
-			return next.repairEntries(ctx, r, at, l.currentPolicy(), tick, questions, previous, touched)
+		next, err := sync.syncStore(ctx, tick.StorePath, at, l.currentPolicy(), previous, func(r *store.Reader, next *startSnapshot, touched map[string]bool) (func() error, error) {
+			return next.prepareRepair(ctx, r, at, l.currentPolicy(), tick, questions, previous, touched)
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -310,8 +310,8 @@ func TestStartViewRefreshBackendsAvoidsRescanningHistoricalFinishes(t *testing.T
 	assertRefreshCost := func(label string, wantScans, wantUnmarshals int64) startSnapshot {
 		t.Helper()
 		readsBefore, unmarshalsBefore := backendOutcomesReads.Load(), backendOutcomeUnmarshals.Load()
-		next, err := sync.syncStore(ctx, tick.StorePath, at, l.currentPolicy(), previous, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
-			return next.repairEntries(ctx, r, at, l.currentPolicy(), tick, questions, previous, touched)
+		next, err := sync.syncStore(ctx, tick.StorePath, at, l.currentPolicy(), previous, func(r *store.Reader, next *startSnapshot, touched map[string]bool) (func() error, error) {
+			return next.prepareRepair(ctx, r, at, l.currentPolicy(), tick, questions, previous, touched)
 		})
 		if err != nil {
 			t.Fatalf("%s: %v", label, err)

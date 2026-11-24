@@ -94,23 +94,32 @@ func (s *startRefresh) read(ctx context.Context, at time.Time, policy *Policy, t
 		return nil
 	}
 	tick.Now = at.Format(time.RFC3339Nano)
-	next, err := s.store.syncStoreWithRefresh(ctx, tick.StorePath, at, policy, prev, inspect, prepare, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
+	next, err := s.store.syncStoreWithRefresh(ctx, tick.StorePath, at, policy, prev, inspect, prepare, func(r *store.Reader, next *startSnapshot, touched map[string]bool) (func() error, error) {
 		if designDocsChanged(documents, next.itemsByID) {
 			// A concurrent filing changed the input to the indexer. Leave the
 			// published proposals alone until the watcher's next ordinary wake.
-			return errors.New("design document references changed during start-view refresh")
+			return nil, errors.New("design document references changed during start-view refresh")
 		}
-		if prev.pending == nil || next.definitionSHA != prev.definitionSHA {
-			var err error
-			bases, err = refreshTrunk(ctx, root, next.def)
-			if err != nil {
-				return err
-			}
-		}
-		if docsChanged || bases.tip != prev.tip || bases.green != prev.green {
+		needTrunk := prev.pending == nil || next.definitionSHA != prev.definitionSHA
+		if docsChanged || (!needTrunk && (bases.tip != prev.tip || bases.green != prev.green)) {
 			touched = nil
 		}
-		return next.repairEntriesAt(ctx, r, at, policy, tick, docs.questions, prev, touched, &bases)
+		if err := next.stageRepairInputs(r, at, policy, tick, docs.questions.Root, prev, touched, &bases, needTrunk); err != nil {
+			return nil, err
+		}
+		return func() error {
+			if needTrunk {
+				var err error
+				bases, err = refreshTrunk(ctx, root, next.def)
+				if err != nil {
+					return err
+				}
+				if bases.tip != prev.tip || bases.green != prev.green {
+					touched = nil
+				}
+			}
+			return next.repairEntriesAt(ctx, nil, at, policy, tick, docs.questions, prev, touched, &bases)
+		}, nil
 	})
 	if err == nil {
 		s.docs = docs

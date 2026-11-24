@@ -830,7 +830,74 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 	return pendingDecisionExcept(r, work, at, inputs, template, policy, shut, gates, "", "", false)
 }
 
+type pendingStoreDecision struct {
+	decision         Decision
+	sentinelInputs   *RunInputs
+	reachedRepair    bool
+	reachedCandidate bool
+}
+
+func pendingDecisionStoreOnly(r *store.Reader, work *pendingWork, at time.Time, policy *Policy, shut map[string]bool, gates int, exceptLane, exceptRunID string, waiting bool) (pendingStoreDecision, error) {
+	var out pendingStoreDecision
+	out.sentinelInputs = &RunInputs{}
+	copyWork := *work
+	copyWork.RepairHold, copyWork.RedCapHold, copyWork.DirtyHold = nil, nil, nil
+	var err error
+	out.decision, err = pendingDecisionInternal(r, &copyWork, at, out.sentinelInputs, nil, policy, shut, gates, exceptLane, exceptRunID, waiting, &out.reachedRepair, &out.reachedCandidate)
+	return out, err
+}
+
+func finishPendingDecision(pre pendingStoreDecision, work *pendingWork, at time.Time, inputs *RunInputs, template *string) (Decision, error) {
+	d := pre.decision
+	if d.Inputs == pre.sentinelInputs {
+		d.Inputs = inputs
+	}
+	if pre.reachedRepair && work.RepairHold != nil {
+		unchanged, err := work.RepairHold.unchanged(inputs, template)
+		if err != nil {
+			return Decision{}, err
+		}
+		if unchanged {
+			hold := work.Decision
+			hold.From, hold.To, hold.Action, hold.Reason = "held", "", ActionHold, ReasonRepairStagingFailed
+			identifyDecision(&hold)
+			return hold, nil
+		}
+	}
+	if pre.reachedCandidate {
+		if work.RedCapHold != nil {
+			cap, err := work.RedCapHold.current(context.Background(), nil, at)
+			if err != nil {
+				return Decision{}, err
+			}
+			if cap != nil {
+				hold := work.Decision
+				hold.From, hold.To, hold.Action, hold.Reason, hold.DeferredBy = "candidate", "", ActionHold, cap.Reason(), cap.FixerItem
+				identifyDecision(&hold)
+				return hold, nil
+			}
+		}
+		if work.DirtyHold != nil {
+			paths, err := work.DirtyHold.paths(context.Background())
+			if err != nil {
+				return Decision{}, err
+			}
+			if len(paths) > 0 {
+				hold := work.Decision
+				hold.From, hold.To, hold.Action, hold.Reason = "candidate", "", ActionHold, dirtyReason(paths)
+				identifyDecision(&hold)
+				return hold, nil
+			}
+		}
+	}
+	return d, nil
+}
+
 func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int, exceptLane, exceptRunID string, waiting bool) (Decision, error) {
+	return pendingDecisionInternal(r, work, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID, waiting, nil, nil)
+}
+
+func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int, exceptLane, exceptRunID string, waiting bool, reachedRepair, reachedCandidate *bool) (Decision, error) {
 	d := work.Decision
 	d.From, d.To = "running", ""
 	d.Action, d.Reason = ActionHold, ReasonRunLive
@@ -847,7 +914,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			if changed {
 				copy := *work
 				copy.Decision, copy.Ready, copy.Orphaned = restarted, true, false
-				return pendingDecisionExcept(r, &copy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID, waiting)
+				return pendingDecisionInternal(r, &copy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID, waiting, reachedRepair, reachedCandidate)
 			}
 		}
 	}
@@ -871,7 +938,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			d.RunRequest = &request
 			d.WorkflowRestart = true
 			workCopy.Decision, workCopy.Ready, workCopy.Orphaned = d, true, false
-			return pendingDecisionExcept(r, &workCopy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID, waiting)
+			return pendingDecisionInternal(r, &workCopy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID, waiting, reachedRepair, reachedCandidate)
 		}
 	}
 	if work.Ready {
@@ -1031,6 +1098,9 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		identifyDecision(&d)
 		return d, nil
 	}
+	if reachedRepair != nil {
+		*reachedRepair = true
+	}
 	if work.RepairHold != nil {
 		unchanged, err := work.RepairHold.unchanged(inputs, template)
 		if err != nil {
@@ -1113,6 +1183,9 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonGateStallRerun
 		identifyDecision(&d)
 		return d, nil
+	}
+	if reachedCandidate != nil {
+		*reachedCandidate = true
 	}
 	if work.RedCapHold != nil {
 		cap, err := work.RedCapHold.current(context.Background(), r, at)

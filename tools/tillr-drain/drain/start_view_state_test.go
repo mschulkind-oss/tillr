@@ -189,8 +189,8 @@ func TestStartStoreSyncReleasesLaneOnCancelStaging(t *testing.T) {
 	t.Cleanup(sync.close)
 	refresh := func(previous startSnapshot) startSnapshot {
 		t.Helper()
-		next, err := sync.syncStore(ctx, f.storePath, at, l.currentPolicy(), previous, func(r *store.Reader, s *startSnapshot, touched map[string]bool) error {
-			return s.repairEntries(ctx, r, at, l.currentPolicy(), tick, &VantageQuestions{Root: f.root}, previous, touched)
+		next, err := sync.syncStore(ctx, f.storePath, at, l.currentPolicy(), previous, func(r *store.Reader, s *startSnapshot, touched map[string]bool) (func() error, error) {
+			return s.prepareRepair(ctx, r, at, l.currentPolicy(), tick, &VantageQuestions{Root: f.root}, previous, touched)
 		})
 		if err != nil {
 			t.Fatal(err)

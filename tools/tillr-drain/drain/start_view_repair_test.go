@@ -294,8 +294,8 @@ func proposalFollower(t *testing.T, l *Loop) func(time.Time) startSnapshot {
 	questions := &VantageQuestions{Root: l.cfg.Root}
 	return func(at time.Time) startSnapshot {
 		t.Helper()
-		next, err := follower.syncStore(ctx, l.cfg.Store, at, policy, previous, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
-			return next.repairEntries(ctx, r, at, policy, tick, questions, previous, touched)
+		next, err := follower.syncStore(ctx, l.cfg.Store, at, policy, previous, func(r *store.Reader, next *startSnapshot, touched map[string]bool) (func() error, error) {
+			return next.prepareRepair(ctx, r, at, policy, tick, questions, previous, touched)
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -374,14 +374,14 @@ func TestNextStartDoesNotWaitOnASyncInItsRead(t *testing.T) {
 		if change == 0 {
 			return seed, nil
 		}
-		return follower.syncStoreWithRefresh(ctx, f.storePath, at, policy, view.snapshot(), true, nil, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
+		return follower.syncStoreWithRefresh(ctx, f.storePath, at, policy, view.snapshot(), true, nil, func(r *store.Reader, next *startSnapshot, touched map[string]bool) (func() error, error) {
 			close(insideRead)
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil, ctx.Err()
 			case <-release:
 			}
-			return next.repairEntries(ctx, r, at, policy, tick, &VantageQuestions{Root: f.root}, seed, touched)
+			return next.prepareRepair(ctx, r, at, policy, tick, &VantageQuestions{Root: f.root}, seed, touched)
 		})
 	})
 	defer stop()

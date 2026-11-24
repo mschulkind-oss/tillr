@@ -51,6 +51,12 @@ func loadDefaultWorkflow(root, seat, ref string, policy *Policy) (*Workflow, err
 	return w, nil
 }
 
+type storedWorkflowSelection struct {
+	selected string
+	source   string
+	graph    string
+}
+
 func selectWorkflow(r *store.Reader, root string, row itemRow, defaults map[string]string, policy *Policy) (*Workflow, string, string, error) {
 	// Generated repairs and rebase requests already specify their work and delivery.
 	if IsGeneratedRepair(row.ItemID) || isForkRebaseItem(row.ItemID) {
@@ -60,6 +66,15 @@ func selectWorkflow(r *store.Reader, root string, row itemRow, defaults map[stri
 	if err != nil {
 		return nil, "", "", err
 	}
+	return selectWorkflowFromStored(storedWorkflowSelection{selected: selected, source: source, graph: graph}, root, row, defaults, policy)
+}
+
+func selectWorkflowFromStored(stored storedWorkflowSelection, root string, row itemRow, defaults map[string]string, policy *Policy) (*Workflow, string, string, error) {
+	if IsGeneratedRepair(row.ItemID) || isForkRebaseItem(row.ItemID) {
+		return nil, singleWorkerWorkflow, "repair", nil
+	}
+	selected, source, graph := stored.selected, stored.source, stored.graph
+	var err error
 	if source != "" {
 		if graph == "" {
 			return nil, selected, source, nil

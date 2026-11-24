@@ -668,40 +668,11 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	}
 
 	if !in.Partial {
-		states := make(map[string]string, len(held))
-		for id, st := range held {
-			states[id] = st.state
-		}
-		fed, missing := docshare.SharingWithFinished(in.Documents, states, finished)
+		fed, unsharedIDs, oldest := unsharedOpenFromDocs(in.Documents, held, finished)
 		report.DocumentFed = fed
-		unshared := make(map[string]bool, len(missing))
-		for _, id := range missing {
-			unshared[id] = true
-		}
-
-		// The counters read the store as it is: sync never moves an item's state, so a block's
-		// item is `landed` after this run exactly when it was before it.
-		ids := make([]string, 0, len(held))
-		for id := range held {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		var oldest int64
-		oldestSet := false
-		for _, id := range ids {
-			st := held[id]
-			if !unshared[id] || ProseRewriteOriginal(id) != "" || st.storeDeclared {
-				continue
-			}
-			report.UnsharedOpenIDs = append(report.UnsharedOpenIDs, id)
-			if !oldestSet || st.updatedAt < oldest {
-				oldest, oldestSet = st.updatedAt, true
-			}
-		}
-		report.UnsharedOpen = len(report.UnsharedOpenIDs)
-		if oldestSet {
-			report.UnsharedOpenOldest = time.UnixMilli(oldest).UTC().Format(time.RFC3339Nano)
-		}
+		report.UnsharedOpenIDs = unsharedIDs
+		report.UnsharedOpen = len(unsharedIDs)
+		report.UnsharedOpenOldest = oldest
 		// Only Git-landing promises to remove a landed item's block. Another use may
 		// declare that spelling as an unfinished state with ordinary document updates.
 		staleLanding := func(state string) bool {
@@ -955,6 +926,89 @@ func readStoredStates(r *store.Reader) (map[string]storedState, error) {
 		return nil, Internalf("reading the stored items: %v", err)
 	}
 	return held, nil
+}
+
+// SyncStoreState retains the stored item states and definition read inside a ReadTx so
+// document sharing and prose checks can run after the read transaction closes.
+type SyncStoreState struct {
+	def  definition.Definition
+	held map[string]storedState
+}
+
+// ReadSyncStoreState reads the stored item states and definition from r without touching
+// the filesystem or starting subprocesses.
+func ReadSyncStoreState(r *store.Reader) (SyncStoreState, error) {
+	d, err := itemDefinition(r)
+	if err != nil {
+		return SyncStoreState{}, err
+	}
+	held := map[string]storedState{}
+	if r != nil {
+		var exists bool
+		if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'items')`).Scan(&exists); err != nil {
+			return SyncStoreState{}, Internalf("checking the stored item schema: %v", err)
+		}
+		if exists {
+			if held, err = readStoredStates(r); err != nil {
+				return SyncStoreState{}, err
+			}
+		}
+	}
+	return SyncStoreState{def: d, held: held}, nil
+}
+
+// CheckDocumentSharing evaluates DocumentFed, UnsharedOpenIDs, and ProseRewriteFindings
+// against a pre-read SyncStoreState without opening or holding a store transaction.
+func CheckDocumentSharing(s SyncStoreState, root string, docs []SyncDocument) (bool, []string, map[string][]SyncNote, error) {
+	if _, err := designStageRoles(root); err != nil {
+		return false, nil, nil, err
+	}
+	var report SyncReport
+	for _, doc := range docs {
+		found, findings := parseItemBlocksScoped(doc.Path, doc.Content, nil)
+		for i := range found {
+			report.Warnings = append(report.Warnings, proseWarnings(found[i])...)
+		}
+		report.Findings = append(report.Findings, findings...)
+	}
+	finished := func(state string) bool { return s.def.IsFinished(state) || frozenStates[state] }
+	fed, unsharedIDs, _ := unsharedOpenFromDocs(docs, s.held, finished)
+	return fed, unsharedIDs, ProseRewriteFindings(report), nil
+}
+
+func unsharedOpenFromDocs(docs []SyncDocument, held map[string]storedState, finished func(string) bool) (bool, []string, string) {
+	states := make(map[string]string, len(held))
+	for id, st := range held {
+		states[id] = st.state
+	}
+	fed, missing := docshare.SharingWithFinished(docs, states, finished)
+	unshared := make(map[string]bool, len(missing))
+	for _, id := range missing {
+		unshared[id] = true
+	}
+	ids := make([]string, 0, len(held))
+	for id := range held {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	unsharedIDs := []string{}
+	var oldest int64
+	oldestSet := false
+	for _, id := range ids {
+		st := held[id]
+		if !unshared[id] || ProseRewriteOriginal(id) != "" || st.storeDeclared {
+			continue
+		}
+		unsharedIDs = append(unsharedIDs, id)
+		if !oldestSet || st.updatedAt < oldest {
+			oldest, oldestSet = st.updatedAt, true
+		}
+	}
+	oldestText := ""
+	if oldestSet {
+		oldestText = time.UnixMilli(oldest).UTC().Format(time.RFC3339Nano)
+	}
+	return fed, unsharedIDs, oldestText
 }
 
 // definitionDiff names the first field of the item's definition where the block and the

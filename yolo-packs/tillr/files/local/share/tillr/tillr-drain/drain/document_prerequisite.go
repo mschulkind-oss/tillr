@@ -76,34 +76,69 @@ func documentPrerequisites(r *store.Reader, root string) (map[string]bool, map[s
 	return missing, rewrites, owners, nil
 }
 
+func documentPrerequisitesFromInputs(root string, syncState item.SyncStoreState, intakes map[string]ideaIntakeResult, itemStates map[string]string) (map[string]bool, map[string]string, map[string]string, error) {
+	missing := map[string]bool{}
+	rewrites := map[string]string{}
+	owners := map[string]string{}
+	if root == "" {
+		return missing, rewrites, owners, nil
+	}
+	docs, err := docshare.ReadQueue(root)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	fed, unsharedOpenIDs, proseFindings, err := item.CheckDocumentSharing(syncState, root, docs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if fed {
+		for _, id := range unsharedOpenIDs {
+			if IsGeneratedItem(id) {
+				continue
+			}
+			res := intakes[id]
+			if res.err != nil {
+				return nil, nil, nil, res.err
+			}
+			if res.intake == nil {
+				missing[id] = true
+			}
+		}
+	}
+	for id, notes := range proseFindings {
+		rewrite := "rewrite-" + id
+		state, exists := itemStates[rewrite]
+		if !exists {
+			continue
+		}
+		if state != StateLanded {
+			rewrites[id] = rewrite
+			for _, note := range notes {
+				if strings.HasPrefix(note.Message, "criteria-count:") {
+					owners[rewrite] = ReasonProseCriteriaCount + ": the original has more than eight criteria; preserving them cannot pass the guide. The owner must reconcile the original criteria before a rewrite can run."
+				}
+			}
+		}
+	}
+	return missing, rewrites, owners, nil
+}
+
 // requestVersion reads only the request's three fields, never its execution state.
 // The criteria order is stable; neither a rank edit nor a disposition grants a run.
 func requestVersion(r *store.Reader, id string) (string, string, error) {
-	var title, ref string
-	if err := r.QueryRow(`SELECT title, COALESCE(body_ref,'') FROM items WHERE item_id=?`, id).Scan(&title, &ref); err != nil {
-		return "", "", err
-	}
-	rows, err := r.Query(`SELECT criterion_id, text FROM item_criteria WHERE item_id=? ORDER BY criterion_id`, id)
+	fields, err := readStoredBlockFields(r, id)
 	if err != nil {
 		return "", "", err
 	}
-	defer rows.Close()
-	criteria := [][2]string{}
-	for rows.Next() {
-		var c [2]string
-		if err := rows.Scan(&c[0], &c[1]); err != nil {
-			return "", "", err
-		}
-		criteria = append(criteria, c)
-	}
-	if err := rows.Err(); err != nil {
-		return "", "", err
-	}
-	raw, err := json.Marshal([]any{title, ref, criteria})
+	return requestVersionFromStored(fields)
+}
+
+func requestVersionFromStored(fields storedBlockFields) (string, string, error) {
+	raw, err := json.Marshal([]any{fields.title, fields.bodyRef, fields.criteria})
 	if err != nil {
 		return "", "", err
 	}
-	return fmt.Sprintf("%x", sha256.Sum256(raw)), ref, nil
+	return fmt.Sprintf("%x", sha256.Sum256(raw)), fields.bodyRef, nil
 }
 
 func triageDocument(ref string) string {
@@ -116,7 +151,19 @@ func triageDocument(ref string) string {
 }
 
 func (p *planner) triageDecision(r *store.Reader, row itemRow) (Decision, error) {
-	version, ref, err := requestVersion(r, row.ItemID)
+	var (
+		version, ref string
+		err          error
+	)
+	if p.preRead != nil {
+		fields, ok := p.preRead.blockFields[row.ItemID]
+		if !ok {
+			return Decision{}, sql.ErrNoRows
+		}
+		version, ref, err = requestVersionFromStored(fields)
+	} else {
+		version, ref, err = requestVersion(r, row.ItemID)
+	}
 	if err != nil {
 		return Decision{}, err
 	}
@@ -124,7 +171,14 @@ func (p *planner) triageDecision(r *store.Reader, row itemRow) (Decision, error)
 	// Look through history, not just the latest conflict: changing A to B and back
 	// to A must not spend a second run for the same request version.
 	var raw []byte
-	err = r.QueryRow(`SELECT payload FROM events WHERE kind='item.conflict' AND json_extract(payload,'$.item_id')=? AND json_extract(payload,'$.triage_version')=? ORDER BY seq DESC LIMIT 1`, row.ItemID, version).Scan(&raw)
+	if p.preRead != nil {
+		var ok bool
+		if raw, ok = p.preRead.triageConflicts[triageConflictKey{itemID: row.ItemID, version: version}]; !ok {
+			err = sql.ErrNoRows
+		}
+	} else {
+		err = r.QueryRow(`SELECT payload FROM events WHERE kind='item.conflict' AND json_extract(payload,'$.item_id')=? AND json_extract(payload,'$.triage_version')=? ORDER BY seq DESC LIMIT 1`, row.ItemID, version).Scan(&raw)
+	}
 	if err == nil {
 		if err = json.Unmarshal(raw, &c); err != nil {
 			return Decision{}, err

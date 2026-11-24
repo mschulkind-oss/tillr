@@ -109,16 +109,54 @@ func hasLandedBlocker(states map[string]string, edges map[string][]string) bool 
 	return false
 }
 
-// A nonempty tip adds planner diagnostics. Claim and release checks only need
-// to know whether the dependency is absent from the selected base.
-func unprovedBlockers(ctx context.Context, r *store.Reader, root, green, tip string, states map[string]string, edges map[string][]string) (map[string]string, error) {
-	waits := map[string]string{}
-	if green == "" {
-		return waits, nil
-	}
+type landedBlockerCommit struct {
+	sha string
+	ref string
+}
+
+func readLandedBlockerCommits(r *store.Reader, states map[string]string, edges map[string][]string) (map[string]landedBlockerCommit, error) {
 	var exists bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='landings')`).Scan(&exists); err != nil {
 		return nil, err
+	}
+	commits := map[string]landedBlockerCommit{}
+	for id, blockers := range edges {
+		if IsTrunkFixer(id) {
+			continue
+		}
+		for _, blocker := range blockers {
+			if states[blocker] != StateLanded {
+				continue
+			}
+			if _, seen := commits[blocker]; seen {
+				continue
+			}
+			var sha, ref string
+			if exists {
+				err := r.QueryRow(`SELECT l.trunk_after, COALESCE(json_extract(e.payload, '$.base_ref'), '')
+					FROM landings l LEFT JOIN events e ON e.seq=l.event_seq AND e.kind='land.landing'
+					WHERE l.item_id=? AND l.result='landed' ORDER BY l.event_seq DESC LIMIT 1`, blocker).Scan(&sha, &ref)
+				if err != nil && err != sql.ErrNoRows {
+					return nil, err
+				}
+			}
+			if sha != "" {
+				if resolved, err := heavy.RewriteResolve(r, sha); err != nil {
+					return nil, err
+				} else if resolved != "" {
+					sha = resolved
+				}
+			}
+			commits[blocker] = landedBlockerCommit{sha: sha, ref: ref}
+		}
+	}
+	return commits, nil
+}
+
+func unprovedBlockersFromCommits(ctx context.Context, root, green, tip string, states map[string]string, edges map[string][]string, commits map[string]landedBlockerCommit) (map[string]string, error) {
+	waits := map[string]string{}
+	if green == "" {
+		return waits, nil
 	}
 	reasons := map[string]string{}
 	for id, blockers := range edges {
@@ -132,29 +170,16 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green, tip str
 			reason, seen := reasons[blocker]
 			if !seen {
 				reason = ReasonTrunkUnproved
-				var sha, ref string
-				if exists {
-					err := r.QueryRow(`SELECT l.trunk_after, COALESCE(json_extract(e.payload, '$.base_ref'), '')
-						FROM landings l LEFT JOIN events e ON e.seq=l.event_seq AND e.kind='land.landing'
-						WHERE l.item_id=? AND l.result='landed' ORDER BY l.event_seq DESC LIMIT 1`, blocker).Scan(&sha, &ref)
-					if err != nil && err != sql.ErrNoRows {
-						return nil, err
-					}
-				}
-				if sha != "" {
-					if resolved, err := heavy.RewriteResolve(r, sha); err != nil {
-						return nil, err
-					} else if resolved != "" {
-						sha = resolved
-					}
+				landing := commits[blocker]
+				if landing.sha != "" {
 					// A fork landing delivers an already judged commit to its patch
 					// branch, not to main. Its recorded trunk_after must be retained
 					// by that delivery branch; main's green pointer cannot contain it.
 					target := green
-					if strings.HasPrefix(ref, "refs/heads/patch/") {
-						target = ref
+					if strings.HasPrefix(landing.ref, "refs/heads/patch/") {
+						target = landing.ref
 					}
-					ok, err := containsCommit(ctx, root, sha, target)
+					ok, err := containsCommit(ctx, root, landing.sha, target)
 					if err != nil {
 						return nil, err
 					}
@@ -163,13 +188,13 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green, tip str
 					} else if tip != "" && target == green {
 						onTrunk := false
 						if tip != green {
-							onTrunk, err = containsCommit(ctx, root, sha, tip)
+							onTrunk, err = containsCommit(ctx, root, landing.sha, tip)
 							if err != nil {
 								return nil, err
 							}
 						}
 						if !onTrunk {
-							reason = fmt.Sprintf("%s: %s at %s", ReasonBlockerLandingNotOnTrunk, blocker, sha)
+							reason = fmt.Sprintf("%s: %s at %s", ReasonBlockerLandingNotOnTrunk, blocker, landing.sha)
 						}
 					}
 				}
@@ -182,6 +207,19 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green, tip str
 		}
 	}
 	return waits, nil
+}
+
+// A nonempty tip adds planner diagnostics. Claim and release checks only need
+// to know whether the dependency is absent from the selected base.
+func unprovedBlockers(ctx context.Context, r *store.Reader, root, green, tip string, states map[string]string, edges map[string][]string) (map[string]string, error) {
+	if green == "" {
+		return map[string]string{}, nil
+	}
+	commits, err := readLandedBlockerCommits(r, states, edges)
+	if err != nil {
+		return nil, err
+	}
+	return unprovedBlockersFromCommits(ctx, root, green, tip, states, edges, commits)
 }
 
 // blockSource is a cache of document blobs read from commits, keyed by
