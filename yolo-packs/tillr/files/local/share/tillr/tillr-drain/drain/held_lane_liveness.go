@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -73,15 +74,15 @@ func (l *Loop) candidateResetBlocked(r *store.Reader, c Candidate, here *LoopOwn
 			}
 		}
 	}
-	rows, err := r.Query(`SELECT run_id,state FROM runs WHERE lane_id=? UNION SELECT run_id,'exited' FROM read_only_runs WHERE lane_id=?`, c.LaneID, c.LaneID)
+	rows, err := r.Query(`SELECT run_id,COALESCE(item_id,''),state FROM runs WHERE lane_id=? UNION SELECT run_id,item_id,'exited' FROM read_only_runs WHERE lane_id=?`, c.LaneID, c.LaneID)
 	if err != nil {
 		return "", err
 	}
-	type member struct{ id, state string }
+	type member struct{ id, itemID, state string }
 	var members []member
 	for rows.Next() {
 		var m member
-		if err := rows.Scan(&m.id, &m.state); err != nil {
+		if err := rows.Scan(&m.id, &m.itemID, &m.state); err != nil {
 			rows.Close()
 			return "", err
 		}
@@ -96,12 +97,14 @@ func (l *Loop) candidateResetBlocked(r *store.Reader, c Candidate, here *LoopOwn
 	// lane after this workflow was assigned to another. Check their run rows too.
 	for id := range membersOfAttempt {
 		var m = member{id: id}
-		if err := r.QueryRow(`SELECT state FROM runs WHERE run_id=?`, id).Scan(&m.state); err == nil {
+		if err := r.QueryRow(`SELECT COALESCE(item_id,''),state FROM runs WHERE run_id=?`, id).Scan(&m.itemID, &m.state); err == nil {
 			members = append(members, m)
 		} else if err != sql.ErrNoRows {
 			return "", err
 		}
 	}
+	var declared *definition.Record
+	itemEnded := map[string]bool{}
 	for _, m := range members {
 		if live[m.id] {
 			return "lane has a live run " + m.id, nil
@@ -114,8 +117,49 @@ func (l *Loop) candidateResetBlocked(r *store.Reader, c Candidate, here *LoopOwn
 			return "", err
 		}
 		if open {
+			itemID := m.itemID
+			if itemID == "" {
+				if w, ok := history[m.id]; ok {
+					itemID = w.Decision.ItemID
+				}
+			}
+			ended, err := itemEndedInStore(r, itemID, &declared, itemEnded)
+			if err != nil {
+				return "", err
+			}
+			if ended {
+				continue
+			}
 			return "lane has an unfinished resume " + m.id, nil
 		}
 	}
 	return "", nil
+}
+
+func itemEndedInStore(r *store.Reader, itemID string, declared **definition.Record, cache map[string]bool) (bool, error) {
+	if itemID == "" {
+		return false, nil
+	}
+	if ended, seen := cache[itemID]; seen {
+		return ended, nil
+	}
+	if *declared == nil {
+		rec, err := definition.ForReader(r)
+		if err != nil {
+			return false, err
+		}
+		*declared = &rec
+	}
+	var state string
+	err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, itemID).Scan(&state)
+	if err == sql.ErrNoRows {
+		cache[itemID] = false
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	ended := state == StateLanded || finishedState((*declared).Parsed, state) || closedState((*declared).Parsed, state)
+	cache[itemID] = ended
+	return ended, nil
 }

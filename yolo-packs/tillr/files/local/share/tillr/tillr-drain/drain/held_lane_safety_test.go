@@ -406,3 +406,103 @@ func TestHeldCandidateKeepsLaneWhenForeignRunStreamIsOpenForWriting(t *testing.T
 		t.Fatal(err)
 	}
 }
+
+// Reproduces the 2026-11-23 lane-2 hold: a historical run on the lane recorded a
+// run.resume event after its run.finish and never wrote a second run.finish, and its
+// item later landed or closed. That leftover record must not keep the lane, while an
+// unfinished resume for an item that has not landed or closed still keeps it.
+func TestHeldCandidateIgnoresUnfinishedResumeOfEndedItem(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		itemState string
+		wantKept  bool
+	}{
+		{name: "landed", itemState: StateLanded, wantKept: false},
+		{name: "closed", itemState: "closed", wantKept: false},
+		{name: "resolved-elsewhere", itemState: StateResolvedElsewhere, wantKept: false},
+		{name: "active-in-queue", itemState: "in-queue", wantKept: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, c := heldCandidateFixture(t)
+			oldItemID := "item-old-" + tc.name
+			oldRunID := "run-" + oldItemID + "-a7"
+			finishedAt := l.cfg.Now().Add(-time.Hour)
+			resumedAt := finishedAt.Add(time.Minute)
+
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				if _, err := tx.Exec(`INSERT INTO items(item_id,title,state,updated_at,seat) VALUES(?,?,?,?,?)`, oldItemID, oldItemID, tc.itemState, 0, ""); err != nil {
+					return err
+				}
+				exitCode := 0
+				rec := run.Record{
+					RunID:        oldRunID,
+					ItemID:       oldItemID,
+					LaneID:       c.LaneID,
+					Backend:      "fixture",
+					State:        run.StateExited,
+					ExitCode:     &exitCode,
+					EndCause:     "normal-exit",
+					StartedAt:    finishedAt.Add(-5 * time.Minute).Format(time.RFC3339),
+					FinishedAt:   finishedAt.Format(time.RFC3339),
+					ArtifactRefs: []run.ArtifactRef{},
+				}
+				if err := applyTerminal(tx, rec); err != nil {
+					return err
+				}
+				return appendEffect(tx, run.ResumeKind, oldRunID, map[string]any{
+					"run_id":     oldRunID,
+					"item_id":    oldItemID,
+					"lane_id":    c.LaneID,
+					"backend":    "fixture",
+					"session_id": "80a9eb94-0eb3-4c5b-8d09-17480030cdd0",
+					"resumed_at": resumedAt.UTC().Format(time.RFC3339Nano),
+				}, resumedAt)
+			})
+
+			w := &pendingWork{Decision: mustPlan(t, l)[0].decision, Candidate: &c}
+			if err := l.holdItemFault(context.Background(), c, StopGateHarnessError, "gate failed"); err != nil {
+				t.Fatal(err)
+			}
+			released, err := l.releaseHeldCandidate(context.Background(), w, "gate-failed")
+			if err != nil {
+				t.Fatalf("releaseHeldCandidate: %v", err)
+			}
+			if released == tc.wantKept {
+				t.Fatalf("released=%v, want %v", released, !tc.wantKept)
+			}
+
+			s := openFixture(t, f.storePath)
+			defer s.Close()
+			if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+				states, err := PendingLaneStates(r)
+				if err != nil {
+					return err
+				}
+				got := states[c.ItemID]
+				if tc.wantKept {
+					wantReason := "lane has an unfinished resume " + oldRunID
+					if got.Status != "kept" || got.Reason != wantReason {
+						t.Fatalf("lane state = %+v, want kept with reason %q", got, wantReason)
+					}
+					return nil
+				}
+				if got.Status != "released" {
+					t.Fatalf("lane state = %+v, want released", got)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			if tc.wantKept {
+				if got := runGit(t, c.Worktree, "rev-parse", "HEAD"); got != c.HeadSHA {
+					t.Fatalf("kept lane changed to %s, want %s", got, c.HeadSHA)
+				}
+				return
+			}
+			if got := mustPlan(t, l)[1].decision; got.Action != ActionDispatch || got.LaneID != c.LaneID {
+				t.Fatalf("released lane not offered to waiting item: %+v", got)
+			}
+		})
+	}
+}
