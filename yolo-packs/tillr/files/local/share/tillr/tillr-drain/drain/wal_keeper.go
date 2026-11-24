@@ -2,10 +2,32 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
+
+// CheckpointNotRestartedKind records a checkpoint cycle that ended
+// log.not-restarted (neither restarted nor skipped for WriterBusy/PinBusy).
+// A checkpoint that restarts the log appends nothing new and resets the loop's
+// consecutive-cycle count.
+const CheckpointNotRestartedKind = "drain.checkpoint-not-restarted"
+
+func init() {
+	if err := event.Register(CheckpointNotRestartedKind, Utility); err != nil {
+		panic(err)
+	}
+}
+
+// CheckpointNotRestartedFact is the payload of a CheckpointNotRestartedKind event.
+type CheckpointNotRestartedFact struct {
+	LogFrames         int    `json:"log_frames"`
+	LogBytes          int64  `json:"log_bytes"`
+	ConsecutiveCycles int    `json:"consecutive_cycles"`
+	SessionID         string `json:"session_id,omitempty"`
+}
 
 // CheckpointInterval is how often a running Loop's heartbeat checkpoints the store. While
 // the Loop runs it is the store's only checkpointer, so this bounds how far the write-ahead
@@ -79,16 +101,19 @@ func (l *Loop) checkpointDueLocked(now time.Time) bool {
 	return l.retryWait <= 0 || now.Sub(l.lastCheckpoint) >= l.retryWait
 }
 
-func (l *Loop) recordCheckpointLocked(now time.Time, c store.Checkpointed) {
+func (l *Loop) recordCheckpointLocked(now time.Time, c store.Checkpointed) int {
 	l.lastCheckpoint, l.restartPending = now, !c.Restarted
 	switch {
 	case c.Restarted:
 		l.notRestarted, l.retryWait = 0, 0
+		return 0
 	case c.WriterBusy || c.PinBusy:
 		l.retryWait = 0
+		return 0
 	default:
 		l.notRestarted++
 		l.retryWait = checkpointRetryDelay(l.notRestarted)
+		return l.notRestarted
 	}
 }
 
@@ -129,10 +154,61 @@ func (l *Loop) checkpointIfDue(ctx context.Context) error {
 		return err
 	}
 	l.sessionMu.Lock()
-	l.recordCheckpointLocked(now, c)
+	consecutive := l.recordCheckpointLocked(now, c)
 	l.sessionMu.Unlock()
+	if consecutive > 0 {
+		l.recordCheckpointNotRestarted(ctx, c, consecutive, now.UTC())
+	}
 	l.reportCheckpoint(c)
 	return nil
+}
+
+// recordCheckpointNotRestarted appends one CheckpointNotRestartedKind event for a
+// checkpoint cycle that ended log.not-restarted. A failed write is logged and never
+// faults the loop.
+func (l *Loop) recordCheckpointNotRestarted(ctx context.Context, c store.Checkpointed, consecutive int, at time.Time) {
+	l.mu.Lock()
+	id := l.sessionID
+	initialized := l.sessionInitialized
+	l.mu.Unlock()
+	if id == "" {
+		id = "loop"
+	}
+	body, err := json.Marshal(CheckpointNotRestartedFact{
+		LogFrames:         c.LogFrames,
+		LogBytes:          c.LogBytes,
+		ConsecutiveCycles: consecutive,
+		SessionID:         id,
+	})
+	if err != nil {
+		if ctx.Err() == nil {
+			l.reportf("loop: the missed checkpoint restart was not recorded: %v\n", err)
+		}
+		return
+	}
+	s, err := store.Open(ctx, l.cfg.Store, !initialized, l.sessionOptions...)
+	if err != nil {
+		if ctx.Err() == nil {
+			l.reportf("loop: the missed checkpoint restart was not recorded: %v\n", err)
+		}
+		return
+	}
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{
+			Kind:       CheckpointNotRestartedKind,
+			ObjectType: "session",
+			ObjectID:   &id,
+			Payload:    body,
+			At:         at,
+		})
+		return err
+	})
+	if closeErr := s.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil && ctx.Err() == nil {
+		l.reportf("loop: the missed checkpoint restart was not recorded: %v\n", err)
+	}
 }
 
 // reportCheckpoint says what an operator needs to hear about one cycle: a skipped cycle, the
