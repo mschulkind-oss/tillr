@@ -9,8 +9,7 @@ tags:
   - intake
   - latency
   - vantage
-  - matt-craft
-summary: "Defines the provisional design document state — capturing the owner's verbatim prompt, bounded project context, and initial open questions on trunk within two to three minutes with zero upfront research — splits provisional capture from the later worked design pass, surfaces provisional status in tillr's queue views, and asks the owner who writes provisional docs and how matt-craft's design-doc skill codifies them."
+summary: "Defines the provisional design document state — capturing the owner's verbatim prompt, bounded project context, and initial open questions on trunk within two to three minutes with zero upfront research — splits provisional capture from the later worked design pass, surfaces provisional status in tillr's queue views, and asks the owner who writes provisional docs and whether the design-doc skill codifies them."
 next: "The owner rules on OQ-PD1 through OQ-PD4; follow-up worked design pass and implementation wait on those rulings."
 depends-on:
   - tillr-idea-pipeline.md
@@ -51,7 +50,7 @@ And:
 
 > "if we know that an item will be attached to a design doc, we need to get it to that state as soon as possible, even if we're not ready to do the follow-up work immediately."
 
-*(In the dictated transcript, "Tiller" is `tillr` and "matcraft" is the owner's `matt-craft` skill pack configured in `config/yolo-jail/config.toml`, which owns the `design-doc` skill. This document is written in the provisional form it specifies.)*
+*(In the dictated transcript, "Tiller" is `tillr` and "matcraft" is the skill pack that owns the `design-doc` skill, which is maintained outside this repository. This document is written in the provisional form it specifies.)*
 
 ---
 
@@ -62,7 +61,7 @@ A **provisional design document** is a valid Vantage planning file at its final 
 | Contract aspect | Rule |
 | :--- | :--- |
 | **Must contain** | 1. **Verbatim owner prompt:** an opening `## Owner prompt` section quoting the owner's dated words word-for-word.<br>2. **Bounded project context:** 2–5 sibling document or code links already in hand and a concise statement of the problem — **zero new tree-wide scouting**.<br>3. **Initial open questions (`OQ-*`):** the choices the prompt immediately raises, formatted with Vantage question directives, concrete options, and a leaning. |
-| **Must not claim** | No settled rulings or `D-*` Decision Ledger rows; no `stage: DECIDED` or `stage: BUILT`; no unverified assertions about unread code; no file-by-file build plan or companion `-plan.md` seed; and an explicit temporary waiver of `design-doc`'s *Completeness / The holes, by name* floor until promoted. |
+| **Must not claim** | No settled rulings or `D-*` Decision Ledger rows; no `stage: DECIDED` or `stage: BUILT`; no unverified assertions about unread code; no file-by-file build plan or companion `-plan.md`; and an explicit temporary waiver of `design-doc`'s *Completeness / The holes, by name* floor until promoted. |
 | **How status marks it** | Frontmatter sets `status: draft` and `stage: DESIGN` under today's [`.vantage.toml`](../../.vantage.toml) vocabulary (or `stage: PROVISIONAL` if [OQ-PD2](#OQ-PD2) adds an eighth word). Immediately under `# Title`, the prose status line begins `**Status:** YYYY-MM-DD — PROVISIONAL (at \`<sha>\`). ...` so both humans and [`frontmatter.go`](../../tools/tillr-view/frontmatter.go) detect it unambiguously without breaking `uvx vantage-check`. |
 | **Promotion without losing the original words** | The follow-up worked `design` pass edits the **same file** in place: it runs bounded scouts ([designer scouts](./tillr-designer-scouts.md)), walks *The holes, by name*, expands body sections, refines `OQ-*` items, flips `status` to `in-review`, and removes `PROVISIONAL` from `**Status:**`. The opening verbatim **`## Owner prompt` block is permanently exempt from `design-doc` compaction** — it stays verbatim through deliberation and `DECIDED`, disappearing only when a built design graduates to `docs/reference/` (`system-doc`). |
 
@@ -97,7 +96,7 @@ Today `DesignDocumentRule` in [`stage.go`](../../tools/tillr-drain/drain/stage.g
 
 ---
 
-## Attaching Step 1 to the item, queue visibility, and `matt-craft`
+## Attaching Step 1 to the item, queue visibility, and the `design-doc` skill
 
 ### Step 1 before and separate from Step 2
 
@@ -114,9 +113,9 @@ Today [`plan.go`](../../tools/tillr-drain/drain/plan.go) (`ReasonDesignDocMissin
 - **`provisional`** — `docs/design/<topic>.md` is live on `main` and readable in Vantage, worked design pass still owed (`ReasonDesignProvisional` holds any dependent build);
 - **`question-open` (worked `DESIGN`)** — worked design pass finished; waiting on the owner's rulings.
 
-### What would change in `matt-craft`'s `design-doc` skill
+### What would change in the `design-doc` skill
 
-`design-doc` lives in the external `matt-craft` pack mounted by `config/yolo-jail/config.toml`, outside this repository's fence. Making provisional capture official there would add three rules ([OQ-PD4](#OQ-PD4)):
+The `design-doc` skill is maintained outside this repository. Making provisional capture official there would add three rules ([OQ-PD4](#OQ-PD4)):
 
 1. **A fifth operation, *Provisional capture*:** alongside *drafting*, *review iteration*, *compacting*, and *auditing*, codify the immediate no-research capture pass and waive *Completeness / The holes, by name* while `PROVISIONAL` holds (requiring that floor upon promotion).
 2. **Provisional status & stage convention:** specify the `**Status:** YYYY-MM-DD — PROVISIONAL ...` header line (and `stage: PROVISIONAL` if [OQ-PD2](#OQ-PD2) widens the seven-word stage table).
@@ -126,7 +125,7 @@ Today [`plan.go`](../../tools/tillr-drain/drain/plan.go) (`ReasonDesignDocMissin
 
 ## What this provisional document does not claim
 
-- **No codebase-wide inventory or companion `-plan.md` seed** — deferred to the worked design pass once [OQ-PD1](#OQ-PD1)–[OQ-PD4](#OQ-PD4) are ruled.
+- **No codebase-wide inventory or companion `-plan.md`** — deferred to the worked design pass once [OQ-PD1](#OQ-PD1)–[OQ-PD4](#OQ-PD4) are ruled.
 - **No change to non-design build requests** — ordinary code fixes keep `single-worker@v1` or `planned-build@v1` ([intake paths](./tillr-intake-paths.md)).
 
 ---
@@ -157,9 +156,9 @@ Today [`plan.go`](../../tools/tillr-drain/drain/plan.go) (`ReasonDesignDocMissin
    - **B — Add `PROVISIONAL = "open"` to `[planning.stages]` in `.vantage.toml` (and `vantage-docs`).** Makes `stage: PROVISIONAL` first-class in Vantage badges and indexes across every repo that adopts it.
    - **C — Reuse `stage: SKETCH` with `**Status:** ... PROVISIONAL`.** Uses an existing word, though `SKETCH` currently signals "nobody should act on it" and hides urgency.
 
-   <!-- vantage: question id=OQ-PD2 leaning="B if matt-craft adopts provisional docs officially (else A locally first) — stage answers 'what does this doc owe someone?', and 'owes a worked design pass' is distinct from both SKETCH and worked DESIGN." -->
+   <!-- vantage: question id=OQ-PD2 leaning="B if the design-doc skill adopts provisional docs officially (else A locally first) — stage answers 'what does this doc owe someone?', and 'owes a worked design pass' is distinct from both SKETCH and worked DESIGN." -->
 
-   _Leaning:_ B if matt-craft adopts provisional docs officially (else A locally first) — stage answers 'what does this doc owe someone?', and 'owes a worked design pass' is distinct from both SKETCH and worked DESIGN.
+   _Leaning:_ B if the design-doc skill adopts provisional docs officially (else A locally first) — stage answers 'what does this doc owe someone?', and 'owes a worked design pass' is distinct from both SKETCH and worked DESIGN.
 
    **Answer:**
 
@@ -180,12 +179,12 @@ Today [`plan.go`](../../tools/tillr-drain/drain/plan.go) (`ReasonDesignDocMissin
 
    > _(empty — fill in when decided)_
 
-4. 💬 **OQ-PD4: Should `matt-craft`'s `design-doc` skill adopt provisional capture as an official operation?**
+4. 💬 **OQ-PD4: Should the `design-doc` skill adopt provisional capture as an official operation?**
 
-   `design-doc` in `matt-craft` (`config/yolo-jail/config.toml`) currently requires *Completeness / The holes, by name* on every drafted design doc and compacts deliberation history aggressively.
+   The `design-doc` skill currently requires *Completeness / The holes, by name* on every drafted design doc and compacts deliberation history aggressively.
 
-   - **A — Add *Provisional capture* to `matt-craft`'s `design-doc` skill (and `vantage-docs` if `stage: PROVISIONAL` is chosen).** Officially waives completeness while `PROVISIONAL`, standardizes the header marker across all repos, and exempts `## Owner prompt` from compaction.
-   - **B — Keep provisional docs as a `tillr`-local convention in `tillr-designs` only.** Leaves `matt-craft` untouched and scopes the waiver to `tillr` drain intake.
+   - **A — Add *Provisional capture* to the `design-doc` skill (and `vantage-docs` if `stage: PROVISIONAL` is chosen).** Officially waives completeness while `PROVISIONAL`, standardizes the header marker across all repos, and exempts `## Owner prompt` from compaction.
+   - **B — Keep provisional docs as a `tillr`-local convention in `tillr-designs` only.** Leaves the `design-doc` skill untouched and scopes the waiver to `tillr` drain intake.
 
    <!-- vantage: question id=OQ-PD4 leaning="A — the gap between dumping a raw design thought and having a clean, marked doc in the right shape happens in interactive non-tillr repos too, and preserving the verbatim owner prompt helps every design doc." -->
 

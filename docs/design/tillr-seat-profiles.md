@@ -13,7 +13,7 @@ vantage:
 
 **Status:** Proposed design — 2026-11-19.
 **Needs your ruling:** [`OQ-DSP1`](#open-questions), [`OQ-DSP2`](#open-questions), [`OQ-DSP3`](#open-questions).
-**Reads with:** [`tillr-live-drain-config.md`](./tillr-live-drain-config.md) (live runtime configuration table, precedence ladder, and pass-boundary reload that this design slots into), [`tillr-claude-backend.md`](./tillr-claude-backend.md) (`run-claude` adapter and subscription quota windows), [`tillr-convergence.md`](./tillr-convergence.md) (audit whose [`OQ-TC2`](./tillr-convergence.md#decision-ledger) stopgap framing this design revises), `seat-profiles.md` (pi's interactive sub-agent picker sets, distinct from drain seat profiles). No implementation plan is seeded yet.
+**Reads with:** [`tillr-live-drain-config.md`](./tillr-live-drain-config.md) (live runtime configuration table, precedence ladder, and pass-boundary reload that this design slots into), [`tillr-claude-backend.md`](./tillr-claude-backend.md) (`run-claude` adapter and subscription quota windows), [`tillr-convergence.md`](./tillr-convergence.md) (audit whose [`OQ-TC2`](./tillr-convergence.md#decision-ledger) stopgap framing this design revises). No implementation plan exists yet.
 
 ---
 
@@ -37,9 +37,9 @@ A **seat profile** *(coined here)* is a named, complete **backend policy** for `
 
 Three boundaries separate a drain seat profile from adjacent concepts in this repository:
 
-- **Not a pi session seat set (`seat-profiles.md`).** Pi's `yolo-packs/seat-profiles` pack defines interactive picker sets (`META`, `OR`, `CODEX`, `BEDROCK`) inside one `pi` session to route child sub-agents (`coordinator`, `planner`, `worker`, `scout`). Those sets live inside a single harness and never govern `tillr-drain` dispatch or switch seats between `run-pi` and `run-claude`.
-- **Not a yolo host profile (`config.toml`, `personal.toml`, `work.toml`).** Yolo profiles configure interactive agent defaults on a host or jail and require `yolo host apply --assert` plus jail relaunch to change. Switching a drain seat profile changes only what `tillr-drain` dispatches on subsequent passes; it never rewrites `~/.pi/agent/settings.json` or `~/.claude/` on the host.
-- **Never a partial overlay.** Following the completeness rule established for pi sets in `seat-profiles.md`, every seat profile maps every seat declared by the repository. Switching profiles replaces the entire routing table at once, so no unmentioned seat can silently keep running the previous profile's provider or model.
+- **Not a pi session model set.** Pi's own subagent configuration defines interactive model sets inside one `pi` session to route child sub-agents. Those sets live inside a single harness and never govern `tillr-drain` dispatch or switch seats between `run-pi` and `run-claude`.
+- **Not a host agent profile.** A host's agent profile configures the defaults of interactive sessions, and changing it needs those sessions relaunched. Switching a drain seat profile changes only what `tillr-drain` dispatches on subsequent passes; it never rewrites `~/.pi/agent/settings.json` or `~/.claude/` on the host.
+- **Never a partial overlay.** Every seat profile maps every seat declared by the repository. Switching profiles replaces the entire routing table at once, so no unmentioned seat can silently keep running the previous profile's provider or model.
 
 ---
 
@@ -231,17 +231,17 @@ Two owner choices inside `claude-sub` are surfaced for ruling before `hold` is e
 
 ## 8. Relation to the Per-Machine Backend-Policy Stopgap
 
-In [`tillr-convergence.md`](./tillr-convergence.md) [§3.5](./tillr-convergence.md#35-a-seat-names-its-harness-and-the-harness-names-the-model), designer-settled [`OQ-TC2`](./tillr-convergence.md#decision-ledger) treated the five `config/tillr/backend-policy*.json` files as a temporary per-machine-group stopgap toward a single tracked `seat -> harness` map in which tillr's files would name **no model IDs at all**, delegating model choice to each harness's host-level yolo profile once a harness profile could answer for the `design` seat.
+In [`tillr-convergence.md`](./tillr-convergence.md) [§3.5](./tillr-convergence.md#35-a-seat-names-its-harness-and-the-harness-names-the-model), designer-settled [`OQ-TC2`](./tillr-convergence.md#decision-ledger) treats the five `config/tillr/backend-policy*.json` files as a temporary per-machine-group stopgap toward a single tracked `seat -> harness` map in which tillr's files would name **no model IDs at all**, delegating model choice to each harness's host-level profile once a harness profile could answer for the `design` seat.
 
 The owner's 2026-11-19 requirement revises that target while preserving both underlying engineering invariants from [`tillr-convergence.md`](./tillr-convergence.md) ([`D-DSP9`](#decision-ledger)):
 
-1. **Why a single model-free `seat -> harness` map is no longer the target.** A host's yolo profile picks one default model for an interactive user session; an unattended drain routes ten seats across **three distinct model tiers within the same harness** (`gemini-4-carbon` / `gemini-4-hydrogen` / `gemini-3.8-flash` inside `run-pi`, or `fable` / `sonnet` / `haiku` inside `run-claude`) and switches **both harness and model tiering together as one named unit** on the same machine (`copilot-gemini` today, `claude-sub` later) without rewriting host repository or restarting jails. Named `(harness + model-tier)` bundles are therefore a permanent operator and owner control, not a stopgap waiting to disappear.
+1. **Why a single model-free `seat -> harness` map is not the target.** A host's agent profile picks one default model for an interactive user session; an unattended drain routes ten seats across **three distinct model tiers within the same harness** (`gemini-4-carbon` / `gemini-4-hydrogen` / `gemini-3.8-flash` inside `run-pi`, or `fable` / `sonnet` / `haiku` inside `run-claude`) and switches **both harness and model tiering together as one named unit** on the same machine (`copilot-gemini` today, `claude-sub` later) without rewriting host configuration or relaunching sessions. Named `(harness + model-tier)` bundles are therefore a permanent operator and owner control, not a stopgap waiting to disappear.
 2. **What [`OQ-TC2`](./tillr-convergence.md#decision-ledger) got right — and how this design enforces it cleanly.**
    - *No model IDs in code:* `tools/tillr*` binaries and adapter scripts still name zero model IDs; every model route lives in data under `config/tillr/profiles/`.
    - *No duplicated seat definitions ([`tillr-convergence.md` §2.1](./tillr-convergence.md#21-a-derived-copy-is-checked-instead-of-derived)):* Extracting `config/tillr/seats.json` ([§3.1](#31-one-canonical-seat-catalog-configtillrseatsjson)) eliminates the five-way copy-paste of `read_only_seats` and `seat_purposes` immediately.
-   - *Machine-local selection stays out of tracked files:* Just as `tag-work` and `tag-personal` define named yolo profiles in Git while each machine's untracked `overrides.toml` selects which one runs, `config/tillr/profiles/` defines named drain seat profiles in Git while each machine's untracked `.tillr/state.db` (`drain_runtime_config['seat_profile']`) selects which profile that machine's drain runs. A work host running AWS Bedrock and a personal host running Copilot Gemini never clobber each other's active selection through `git pull`.
+   - *Machine-local selection stays out of tracked files:* `config/tillr/profiles/` defines named drain seat profiles in Git while each machine's untracked `.tillr/state.db` (`drain_runtime_config['seat_profile']`) selects which profile that machine's drain runs. A work host running AWS Bedrock and a personal host running Copilot Gemini never clobber each other's active selection through `git pull`.
 
-Disposition of the four remaining `config/tillr/backend-policy*.json` files alongside `copilot-gemini` and `claude-sub` is raised in [`OQ-DSP3`](#open-questions). Once [`OQ-DSP3`](#open-questions) is ruled and implemented, [`OQ-TC2`](./tillr-convergence.md#decision-ledger) in [`tillr-convergence.md`](./tillr-convergence.md) will be marked superseded by [`D-DSP9`](#decision-ledger).
+Disposition of the four remaining `config/tillr/backend-policy*.json` files alongside `copilot-gemini` and `claude-sub` is raised in [`OQ-DSP3`](#open-questions). Once [`OQ-DSP3`](#open-questions) is ruled and implemented, [`OQ-TC2`](./tillr-convergence.md#decision-ledger) in [`tillr-convergence.md`](./tillr-convergence.md) will name [`D-DSP9`](#decision-ledger) as the decision that replaces it.
 
 ---
 
@@ -264,7 +264,7 @@ Disposition of the four remaining `config/tillr/backend-policy*.json` files alon
 
 2. 💬 **OQ-DSP2: When the Claude subscription profile reaches its quota reserve, should the drain pause or spill over to Copilot Gemini?**
 
-   Earlier Claude configurations listed a second provider on every seat because switching files used to require restarting the drain. Once switching profiles is a single live command, hitting the 5-hour or 7-day subscription reserve while running the Claude profile forces a choice between strict provider boundaries and unattended spillover. Automatic spillover keeps items landing without waiting for you, whereas pausing keeps spend strictly inside the subscription you selected and keeps the profile usable on machines without Copilot credentials.
+   A policy file lists a second provider on every seat when switching files requires restarting the drain. Once switching profiles is a single live command, hitting the 5-hour or 7-day subscription reserve while running the Claude profile forces a choice between strict provider boundaries and unattended spillover. Automatic spillover keeps items landing without waiting for you, whereas pausing keeps spend strictly inside the subscription you selected and keeps the profile usable on machines without Copilot credentials.
 
    **A — Pause cleanly on subscription reserve (pure Claude profile).** Every seat names only `claude -p` models; when quota closes, runs pause and wait for the window to reopen unless you switch profiles with one command.
 
@@ -277,19 +277,19 @@ Disposition of the four remaining `config/tillr/backend-policy*.json` files alon
    **Answer:**
    > _(empty — fill in when decided)_
 
-3. 💬 **OQ-DSP3: Which of the older provider files should carry forward as named profiles alongside `copilot-gemini` and `claude-sub`?**
+3. 💬 **OQ-DSP3: Which of the other provider files should carry forward as named profiles alongside `copilot-gemini` and `claude-sub`?**
 
-   `config/tillr/` currently tracks five provider files: Copilot Gemini, an older Opus-everywhere Claude file with Bedrock fallbacks, a Claude-designer plus Bedrock-worker split, pure AWS Bedrock for work machines, and an older personal OpenRouter DeepSeek file. When migrating into named profiles, retiring unused setups keeps `tillr drain profile` short and clear, while dropping a setup still used on a work or personal host would force recreating it later.
+   `config/tillr/` currently tracks five provider files: Copilot Gemini, an Opus-everywhere Claude file with Bedrock fallbacks, a Claude-designer plus Bedrock-worker split, pure AWS Bedrock for work machines, and a personal OpenRouter DeepSeek file. When these become named profiles, dropping unused setups keeps `tillr drain profile` short and clear, while dropping a setup still used on a work or personal host would force recreating it later.
 
-   **A — Carry forward `bedrock` and `openrouter` alongside `copilot-gemini` and held `claude-sub` (four profiles total), retiring the Opus-everywhere Claude draft and the mixed Bedrock split.** Keeps one profile per distinct provider setup across work and personal machines.
+   **A — Carry forward `bedrock` and `openrouter` alongside `copilot-gemini` and held `claude-sub` (four profiles total), dropping the Opus-everywhere Claude draft and the mixed Bedrock split.** Keeps one profile per distinct provider setup across work and personal machines.
 
-   **B — Carry forward all four remaining files as named profiles alongside `copilot-gemini` and held `claude-sub` (six profiles total).** Preserves every historical setup verbatim at the cost of clutter in the profile list.
+   **B — Carry forward all four remaining files as named profiles alongside `copilot-gemini` and held `claude-sub` (six profiles total).** Preserves every existing setup verbatim at the cost of clutter in the profile list.
 
-   **C — Keep only `copilot-gemini`, held `claude-sub`, and `bedrock` (three profiles total), retiring OpenRouter, mixed Bedrock, and the Opus-everywhere Claude draft.** Smallest list if OpenRouter is no longer used as a personal fallback.
+   **C — Keep only `copilot-gemini`, held `claude-sub`, and `bedrock` (three profiles total), dropping OpenRouter, mixed Bedrock, and the Opus-everywhere Claude draft.** Smallest list if OpenRouter is not used as a personal fallback.
 
    <!-- vantage: question id=OQ-DSP3 leaning="A — Carry forward bedrock and openrouter alongside copilot-gemini and held claude-sub" -->
 
-   _Leaning:_ **A**, because `bedrock` remains the work-host AWS profile, `openrouter` preserves the non-Copilot personal floor, and `claude-sub` directly supersedes the earlier Opus-everywhere Claude subscription draft.
+   _Leaning:_ **A**, because `bedrock` remains the work-host AWS profile, `openrouter` preserves the non-Copilot personal floor, and `claude-sub` replaces the Opus-everywhere Claude subscription draft.
 
    **Answer:**
    > _(empty — fill in when decided)_

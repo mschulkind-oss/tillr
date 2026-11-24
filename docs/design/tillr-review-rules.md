@@ -2,14 +2,14 @@
 title: "Review rules: which rulebooks apply, which projects get landing review, and when plans and designs are checked"
 status: in-review
 stage: DESIGN
-updated: 2026-11-20
+updated: 2026-11-24
 tags:
   - tillr
   - review
   - judge
   - compliance
   - design
-summary: "Decided, not built: add companion-plan, evergreen-reference and repository pack checkers. One compliance run can check several rulebooks, built into tillr or supplied by its repository. Limit landing review to the pi fork, pi extensions and tillr; review plans once at dispatch readiness and audit design facts and ledger conflicts on the review seat."
+summary: "Decided, not built: add companion-plan, evergreen-reference and repository pack checkers. One compliance run can check several rulebooks, built into tillr or supplied by its repository. Limit landing review to tillr and its pi backend and extensions; review plans once at dispatch readiness and audit design facts and ledger conflicts on the review seat."
 next: "Decide where the companion-plan rulebook belongs; the checker itself is decided."
 depends-on:
   - tillr-diff-review.md
@@ -18,11 +18,11 @@ depends-on:
 
 # Review rules: which rulebooks apply, which projects get landing review, and when plans and designs are checked
 
-**Status:** 2026-11-20. The owner answered the four review questions in Vantage. The routing and checks specified here are not built. Commit mix measured on 2026-11-19 at `9a3b977af` over the 1,227 non-retirement commits since 2026-11-10.
+**Status:** Decided, not built. The owner's four rulings of 2026-11-20 are rows of the [ledger](#decision-ledger); the routing and checks specified here are not built. The commit mix is a measurement of 2026-11-19 over 1,227 commits.
 
-> **In short.** Two post-gate readers are already designed — [the compliance officer](./tillr-design-document-check.md) for written rules on the cheapest model, and [the landing review](./tillr-diff-review.md) for substantive diff and criterion review on the `review` seat. The earlier designs drew one line (`docs/` versus everything else) and specified only one compliance policy. File type determines which rulebooks apply; project scope determines whether a final merge needs landing review. Two separate checks protect the handoffs to people and workers: audit design facts before the owner reads, and review a companion plan against its accepted design before dispatch.
+> **In short.** Two post-gate readers are already designed — [the compliance officer](./tillr-design-document-check.md) for written rules on the cheapest model, and [the landing review](./tillr-diff-review.md) for substantive diff and criterion review on the `review` seat. Those two designs draw one line (`docs/` versus everything else) and specify only one compliance policy. File type determines which rulebooks apply; project scope determines whether a final merge needs landing review. Two separate checks protect the handoffs to people and workers: audit design facts before the owner reads, and review a companion plan against its accepted design before dispatch.
 
-**Why it matters.** Since 2026-11-10 (`git log --since=2026-11-10 HEAD` at `9a3b977af`, excluding 36 mechanical marker retirements), 519 of 1,227 commits touched only `docs/**/*.md` and 708 touched paths outside `docs/`. Inside those two buckets sit companion implementation plans that humans never read, evergreen system references that neither reader checks, and 54 non-`docs/` commits that touched no program or test source ([Section 1](#1-why-one-boundary-is-not-enough)).
+**Why it matters.** In a nine-day sample measured on 2026-11-19 (excluding 36 mechanical commits that remove a landed document block), 519 of 1,227 commits touched only `docs/**/*.md` and 708 touched paths outside `docs/`. Inside those two buckets sit companion implementation plans that humans never read, evergreen system references that neither reader checks, and 54 non-`docs/` commits that touched no program or test source ([Section 1](#1-why-one-boundary-is-not-enough)).
 
 **The shape.** One tracked routing table maps each changed file's artifact class to zero or more registered compliance policies (file-scoped, at both early cuts and final merges); project scope, document type and plan readiness select the substantive checks ([Section 3](#3-the-routing-matrix-by-kind-of-change)).
 
@@ -32,25 +32,25 @@ depends-on:
 
 **Needs your ruling:** [Who owns the companion-plan rulebook?](#OQ-RJ5)
 
-**Reads with:** [the landing review](./tillr-diff-review.md) (the substantive `review`-seat check on code landings), [the compliance officer](./tillr-design-document-check.md) (the `compliance`-seat policy checker), [the queue mirrors designs](./tillr-queue-mirrors-designs.md) (companion `<topic>-plan.md` files that drive worker dispatch), and [designer sessions](../reference/tillr-designer-sessions.md) (how the owner's Vantage comments return to a document's designer). No implementation plan is seeded while the rulebook ownership question is open.
+**Reads with:** [the landing review](./tillr-diff-review.md) (the substantive `review`-seat check on code landings), [the compliance officer](./tillr-design-document-check.md) (the `compliance`-seat policy checker), [the queue mirrors designs](./tillr-queue-mirrors-designs.md) (companion `<topic>-plan.md` files that drive worker dispatch), and [designer sessions](../reference/tillr-designer-sessions.md) (how the owner's Vantage comments return to a document's designer). No implementation plan exists while the rulebook ownership question is open.
 
 ---
 
 ## 1. Why one boundary is not enough
 
-Before the project-scope ruling of 2026-11-20, four owner rulings of 2026-11-18 and 2026-11-19 set the baseline across [the landing review](./tillr-diff-review.md#decision-ledger) and [the compliance officer](./tillr-design-document-check.md#decision-ledger):
+Four owner rulings of 2026-11-18 and 2026-11-19 set the baseline across [the landing review](./tillr-diff-review.md#decision-ledger) and [the compliance officer](./tillr-design-document-check.md#decision-ledger):
 
 1. **Every code landing gets a fresh landing review after the gate** (`D-DR1`), on the named `review` seat set to the `build` backend for now ([OQ-DR1](./tillr-diff-review.md#OQ-DR1)).
 2. **Documents-only landings get no landing review** (`D-DR2`).
 3. **One general compliance officer runs on the cheapest model at both commit points** — a designer's early cut and an item's final merge — checking whole files and their diffs against written policies (`D-DP1`, [OQ-DP3](./tillr-design-document-check.md#OQ-DP3), [OQ-DP4](./tillr-design-document-check.md#OQ-DP4)).
 4. **A repeated identical objection stops and waits for the owner** with no dismissal mechanism built now ([OQ-DR2](./tillr-diff-review.md#OQ-DR2)).
 
-Those earlier designs partitioned the repository with one path rule (`docs/**/*.md` versus everything else) and specified only one compliance policy (`design-document-style`). Measured across `git log --since=2026-11-10 HEAD` at `9a3b977af` (1,263 commits total; 1,227 after excluding the 36 `chore: retire landed document block` commits), the actual commit mix has eight distinct kinds of change:
+Those designs partition the repository with one path rule (`docs/**/*.md` versus everything else) and specify only one compliance policy (`design-document-style`). Measured on 2026-11-19 over nine days of commits (1,263 in total; 1,227 after excluding 36 mechanical commits that remove a landed document block), the commit mix has eight distinct kinds of change:
 
-| Kind of change in `9a3b977af` since 2026-11-10 | Commits touching it | Pure commits (only this kind) | What runs under the two existing designs |
+| Kind of change | Commits touching it | Pure commits (only this kind) | What runs under the two designs |
 | :--- | ---: | ---: | :--- |
 | Program and test source (`tools/`, `tests/`, `bin/`, pack code mirror) | 654 | 501 | Landing review; no compliance policy |
-| Configuration, recipes, and pack manifests/patches (`config/`, `tag-*/`, `host-*/`, `yolo-packs/`) | 162 | 44 | Landing review; no compliance policy |
+| Configuration, recipes, and pack manifests | 162 | 44 | Landing review; no compliance policy |
 | Agent instructions, skills, and briefings (`AGENTS.md`, `.agents/skills/`, pack skills/briefings) | 41 | 3 | Landing review; no compliance policy |
 | Module and pack `README.md` files outside `docs/` | 219 | 5 | Landing review; no compliance policy |
 | Live-proposal design documents (`docs/design/<topic>.md`, open/ready/built stages) | 266 | 199 | `design-document-style` compliance; no landing review |
@@ -62,8 +62,8 @@ Four concrete seams appear in that table:
 
 - **Companion implementation plans (`docs/design/<topic>-plan.md`) get the wrong compliance check and zero substantive review.** Under [the queue mirrors designs](./tillr-queue-mirrors-designs.md#decision-ledger) ([OQ-QM1](./tillr-queue-mirrors-designs.md#OQ-QM1)), humans never read `<topic>-plan.md`, and `tillr item sync` dispatches workers straight from its `DECIDED` tasks, fences, and criteria. Yet `<topic>-plan.md` sits under `docs/` with `stage: SKETCH` or `DECIDED`: `D-DR7` exempts its commits from landing review as "documents-only", while `D-DP10` matches its live-proposal `stage` and holds an agent-only plan to `design-doc` (walkthrough human questions, no per-file tasks) instead of `implementation-plan`.
 - **Written rulebooks outside design documents have no compliance policy.** System references (`system-doc`), companion plans (`implementation-plan` and `tillr-prose-style`), and repository configs/packs (`AGENTS.md`) already have explicit written rules that authors load, yet [the compliance officer](./tillr-design-document-check.md#10-what-this-does-not-cover) specifies only `design-document-style`.
-- **Fifty-four non-`docs/` commits touched no program or test source.** Forty-four changed only configuration or pack manifests/patches, five changed only module `README.md`s, three changed only skills/instructions, and two combined those. Landing review's `missing-test` category assumes software behavior changes carry automated tests, whereas the house rules (`yolo-packs/matt/briefing/prose.md`) exempt pure configuration and documentation changes from mandatory new tests.
-- **Design documents get style checking and human reading, with no check of their factual claims about the tree.** On 2026-11-18, the 43-design roadmap triage and [the decision-provenance review](../tillr/decision-provenance-review.md) found stale tree claims (such as calling built substrate unbuilt) and unflagged collisions across sibling Decision Ledgers — the exact things `vantage-check` and the compliance officer cannot see because neither opens the codebase.
+- **Fifty-four non-`docs/` commits touched no program or test source.** Forty-four changed only configuration or pack manifests, five changed only module `README.md`s, three changed only skills/instructions, and two combined those. Landing review's `missing-test` category assumes software behavior changes carry automated tests, whereas a pure configuration or documentation change has no behavior for a new test to exercise.
+- **Design documents get style checking and human reading, with no check of their factual claims about the tree.** [The decision-provenance review](../tillr/decision-provenance-review.md) and a reading of 43 designs against the tree on 2026-11-18 found stale tree claims (such as calling built substrate unbuilt) and unflagged collisions across sibling Decision Ledgers — the exact things `vantage-check` and the compliance officer cannot see because neither opens the codebase.
 
 ## 2. The words
 
@@ -81,15 +81,15 @@ Node, seat, ending, objection, chain, evidence key, and identical repeat keep th
 Two orthogonal questions govern every candidate after the mechanical gate passes:
 
 - **P1. Compliance (`compliance` seat, cheapest model) follows written file rules.** Whenever an artifact class has a written rulebook whose violations can be quoted line-and-rule from the file, its diff, and the rulebook alone — with no tree search — a compliance policy checks it at both commit points (early cut and final merge).
-- **P2. Landing review follows project scope, not file type.** At final merge, a change to the pi fork, pi extensions or tillr triggers one landing review. Everything else skips landing review. Independently, the `review` seat checks a companion plan once when it becomes ready for dispatch and audits the facts and ledger claims of live designs.
+- **P2. Landing review follows project scope, not file type.** At final merge, a change to tillr and its pi backend, extensions included ([`tools/tillr-run/backends/pi/`](../../tools/tillr-run/backends/pi/README.md)) triggers one landing review. Everything else skips landing review. Independently, the `review` seat checks a companion plan once when it becomes ready for dispatch and audits the facts and ledger claims of live designs.
 
 ### 3.1 Proposed map across this repository's artifact classes
 
 | Artifact class | Path / frontmatter match | Mechanical gate (runs first) | Compliance policy (`compliance` seat, both commit points) | Substantive review (`review` seat; project scope applies to every landing) | Human reader in normal flow |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Program and test code** | `tools/**`, `tests/**`, `bin/**`, pack code mirror | Unit, integration, pack-sync, identity checks | None ([Section 4.2](#42-what-stays-out-of-compliance-policies)) | Landing review only for in-scope projects | None before merge |
-| **Agent instructions, skills, and briefings** | `AGENTS.md`, `CLAUDE.md`, `.agents/skills/**`, `yolo-packs/*/skills/**`, `yolo-packs/*/briefing/**` | `vantage-check` where Markdown, `yolo pack lint`, `fork-check` | `repo-pack-and-scope-rules` when under `yolo-packs/` or root instructions ([OQ-RJ1](#OQ-RJ1)) | Landing review only for in-scope projects | None before merge |
-| **Configuration, recipes, and pack manifests/patches** | `config/**`, `tag-*/**`, `host-*/**`, `rcrc`, `justfile`, `.tillr.toml`, `.vantage.toml`, `yolo-packs/*/pack.*`, `yolo-packs/*/patches/**` | `rcm` tests, `yolo pack lint`, `fork-build` | `repo-pack-and-scope-rules` ([OQ-RJ1](#OQ-RJ1)) | Landing review only for in-scope projects | None before merge |
+| **Agent instructions, skills, and briefings** | `AGENTS.md`, `CLAUDE.md`, `.agents/skills/**`, `yolo-packs/*/skills/**`, `yolo-packs/*/briefing/**` | `vantage-check` where Markdown, `documents`, `citations`, `scratch` | `repo-pack-and-scope-rules` when under `yolo-packs/` or root instructions ([OQ-RJ1](#OQ-RJ1)) | Landing review only for in-scope projects | None before merge |
+| **Configuration, recipes, and pack manifests** | `config/**`, `.justfile`, `.tillr.toml`, `.vantage.toml`, `yolo-packs/*/pack.*` | `workflows`, `pack-sync`, `format` | `repo-pack-and-scope-rules` ([OQ-RJ1](#OQ-RJ1)) | Landing review only for in-scope projects | None before merge |
 | **Module and pack `README.md`s** | `**/README.md` outside `docs/` | `vantage-check`, `documents` / `citations` / `scratch` | None beyond `vantage-check` | Landing review only for in-scope projects, even if only the README changes | Optional |
 | **Companion implementation plans** | `docs/design/*-plan.md` | `vantage-check`, `design-citations`, `tillr item sync` grammar check | `implementation-plan-style` (`D-RJ1`, [OQ-RJ1](#OQ-RJ1)); excluded from `design-document-style` | Review once against the accepted design on promotion to `DECIDED` ([OQ-RJ3](#OQ-RJ3)) | **None** ([OQ-QM1](./tillr-queue-mirrors-designs.md#OQ-QM1)) |
 | **Live-proposal design documents** | `docs/**/*.md` excluding `*-plan.md` and `**/roadmap.md`, with `stage` in `open`, `ready`, or `built` | `vantage-check`, `design-citations`, `citations`, `scratch` | `design-document-style` (settled in [the compliance officer](./tillr-design-document-check.md)) | Fact-and-ledger audit before owner review; no design critique ([OQ-RJ4](#OQ-RJ4)) | **Owner in Vantage** |
@@ -99,11 +99,11 @@ Two orthogonal questions govern every candidate after the mechanical gate passes
 
 ### 3.2 How mixed commits compose
 
-One commit frequently touches more than one artifact class — since 2026-11-10, 154 commits touched both code and a design document, and 214 touched code alongside a module `README.md`. Three deterministic rules compose the table (`D-RJ2`):
+One commit frequently touches more than one artifact class — in the same sample, 154 commits touched both code and a design document, and 214 touched code alongside a module `README.md`. Three deterministic rules compose the table (`D-RJ2`):
 
 1. **First specific match per file.** A path matches at most one artifact class in precedence order (`*-plan.md` and `**/roadmap.md` before general `docs/**/*.md`), so a companion plan never falls through into `design-document-style`.
-2. **Collect the matched rulebooks.** If a candidate changes tillr Go code, `config/yolo-jail/config.toml`, and a live `docs/design/foo.md`, one compliance reviewer run can check both the pack rules and the design-document rules. A second rulebook does not require a second job.
-3. **At most one landing review on the whole candidate, parallel with compliance.** In the example, the tillr change triggers one landing review on the whole diff; the design change also gets its narrow audit. A candidate wholly outside the three projects skips landing review. When triggered, landing review runs at the same time as the compliance officer (`D-DP9`). The merge proceeds only when every triggered reader passes.
+2. **Collect the matched rulebooks.** If a candidate changes tillr Go code, `yolo-packs/tillr/pack.json`, and a live `docs/design/foo.md`, one compliance reviewer run can check both the pack rules and the design-document rules. A second rulebook does not require a second job.
+3. **At most one landing review on the whole candidate, parallel with compliance.** In the example, the tillr change triggers one landing review on the whole diff; the design change also gets its narrow audit. A candidate wholly out of scope skips landing review. When triggered, landing review runs at the same time as the compliance officer (`D-DP9`). The merge proceeds only when every triggered reader passes.
 
 ```mermaid
 flowchart LR
@@ -129,36 +129,32 @@ flowchart LR
 | `design-document-style` *(existing)* | `docs/**/*.md` with live-proposal `stage`, **excluding** `docs/design/*-plan.md` and `**/roadmap.md` (`D-RJ1`) | `design-doc` + `vantage-docs` skills | Bare-label options, decision codes inside an `OQ-*` story, missing header slots, track-changes prose | Item's designer ([OQ-DP5](./tillr-design-document-check.md#OQ-DP5) for build items) |
 | `implementation-plan-style` *(new)* | `docs/design/*-plan.md` | `implementation-plan` + `tillr-prose-style` skills + [Section 7.2 of queue-mirrors-designs](./tillr-queue-mirrors-designs.md#72-canonical--tasks-grammar-in-topic-planmd) | Human-facing `OQ-*` directives placed in an agent-only plan, prose checklists outside `## Tasks`, undefined internal abbreviations, full function bodies pasted as tasks | Session that wrote the plan (`plan` or `design` seat) |
 | `reference-document-style` *(new)* | `docs/reference/**/*.md` and `docs/**/*.md` with `stage: CURRENT` (excluding `**/roadmap.md`) | `system-doc` + `vantage-docs` skills | Perishable bare line-number citations (`foo.go:142`), missing verification stamps, leftover `## Open Questions` or `## Decision Ledger` scaffolding from before graduation | Session that last wrote the file |
-| `repo-pack-and-scope-rules` *(new)* | `config/yolo-jail/**`, `tag-*/config/yolo-jail/**`, `host-*/**`, `yolo-packs/**`, `AGENTS.md` | `AGENTS.md` (the repository agent guide) | `[active_provider]` placed in tracked `work.toml`, `profiles` or `use_profiles` in workspace config, edits to host-config-synced `yolo-packs/matt/briefing/prose.md` or `yolo-packs/matt/skills/` | Session that last wrote the file |
+| `repo-pack-and-scope-rules` *(new)* | `yolo-packs/**`, `AGENTS.md` | `AGENTS.md` (the repository agent guide) | A change that breaks a written rule of the agent guide which no gate check enforces | Session that last wrote the file |
 
-[OQ-RJ1](#OQ-RJ1) adds **all three** new checkers. Rulebooks can be built into tillr or owned by the repository tillr runs in. The pack and scope rulebook belongs to the consuming repository, so its policy stays there when tillr becomes a separate project. The companion-plan rulebook’s home is open ([OQ-RJ5](#OQ-RJ5)), not whether plans are checked.
-
-**Owner on rulebook coverage and ownership, Vantage, 2026-11-20** (`95e55eec`, root text `0a7ada9743096047`):
-
-> Yes, I want to add checkers for all of these things. And ideally, these compliance officers can check multiple things at a time. So we're not like multiplying the number of jobs that run everywhere by some crazy amount. But this now also shows me that we need to be able to split what are built in rulebooks for compliance officers built into Tiller and ones in the personal repository because most of these like are. Some of these split because like my implementation plans are my implementation plans. So I guess we need and maybe not everybody. I mean, I guess you're going to need to have an implementation plan. Maybe they're not my implementation plan. Maybe they're actually getting it taken over by Tiller. I don't know. Better example is my repository packs are mine. I may have rules for those, but those are mine. So that policy needs to live. with the.files repo, not the Tiller project. We will be eventually splitting Tiller off to its own thing.
+[OQ-RJ1](#OQ-RJ1) adds **all three** new checkers. Rulebooks can be built into tillr or owned by the repository tillr runs in. The pack and scope rulebook belongs to the repository tillr runs in, so its policy is supplied by that repository and is not built into tillr. The companion-plan rulebook’s home is open ([OQ-RJ5](#OQ-RJ5)), not whether plans are checked. The owner ruled both points in Vantage on 2026-11-20 (`95e55eec`): add checkers for all three, let one compliance run check several rulebooks so the number of jobs does not multiply, and keep a repository's own pack rules with that repository.
 
 ### 4.2 What stays out of compliance policies
 
 Two temptations fail `D-DP7` and belong elsewhere:
 
-- **Program-code style and architecture policies (`prose.md`'s testing and modularity rules, Go idioms).** Telling whether a helper is dead, whether a boundary validates untrusted input, or whether a test exercises real behavior requires reading callers and tests across the tree. A compliance officer given only the changed file and a prose rulebook either hallucinates context or nitpicks variable names — which [the landing review's brief](./tillr-diff-review.md#6-the-brief) explicitly forbids (*"Do not object to style, naming or formatting"*). Mechanical code style stays in linters inside the gate; behavioral defects stay in landing review.
-- **Rules already enforced 100% by a gate program.** Unlanded commit SHAs (`citations`), durable-scratch citations (`scratch`), broken links and directives (`vantage-check`), git author identity (`git-identity.test.py`), and pack symlinks (`yolo pack lint`) already fail in seconds at zero token cost before any agent runs.
+- **Program-code style and architecture policies (testing and modularity rules, Go idioms).** Telling whether a helper is dead, whether a boundary validates untrusted input, or whether a test exercises real behavior requires reading callers and tests across the tree. A compliance officer given only the changed file and a prose rulebook either hallucinates context or nitpicks variable names — which [the landing review's brief](./tillr-diff-review.md#6-the-brief) explicitly forbids (*"Do not object to style, naming or formatting"*). Mechanical code style stays in linters inside the gate; behavioral defects stay in landing review.
+- **Rules already enforced 100% by a gate program.** Unlanded commit SHAs (`citations`), durable-scratch citations (`scratch`), broken links and directives (`vantage-check`), git author identity (`commit-identity`), and a drifted pack mirror (`pack-sync`) already fail in seconds at zero token cost before any agent runs.
 
 ## 5. Substantive review outside program source
 
 ### 5.1 Config-only, pack-only, skill, and README-only commits
 
-[OQ-RJ2](#OQ-RJ2) replaces the old `docs/` boundary with a project boundary: the pi fork, the pi extensions and tillr are in scope for landing review. Everything else is out of scope and skips it. A README-only change to tillr gets landing review; an ordinary repository config edit does not. Both still go through the mechanical gate and any matching compliance checks. For in-scope changes, the designer’s `D-RJ3` limits `missing-test` to behavior changes or tests an item criterion requires.
+[OQ-RJ2](#OQ-RJ2) replaces the `docs/` boundary with a project boundary: tillr and its pi backend, extensions included ([`tools/tillr-run/backends/pi/`](../../tools/tillr-run/backends/pi/README.md)) are in scope for landing review. Everything else in the repository tillr runs in is out of scope and skips it. A README-only change to tillr gets landing review; an ordinary repository config edit does not. Both still go through the mechanical gate and any matching compliance checks. For in-scope changes, the designer’s `D-RJ3` limits `missing-test` to behavior changes or tests an item criterion requires.
 
 **Owner, Vantage, 2026-11-20** (`e98a12bb`, root text `79130d13ebafd1db`):
 
-> We can have an in-scope and an out-of-scope. Let's keep the PyFork stuff and PyExtensions in scope. Tiller is in scope. Everything else is out of scope. Out-of-scope stuff can skip whatever landing review. In general, I would be comfortable with having an agent just ad hoc run five tool commands and edit of my configs when I ask. I want to have something as close to that as possible with Tiller just remembering the queue here. And I think what that means is that we basically skip all landing review.
+> Tiller is in scope. Everything else is out of scope. Out-of-scope stuff can skip whatever landing review. In general, I would be comfortable with having an agent just ad hoc run five tool commands and edit of my configs when I ask. I want to have something as close to that as possible with Tiller just remembering the queue here. And I think what that means is that we basically skip all landing review.
 
 ### 5.2 Companion implementation plans (`docs/design/<topic>-plan.md`)
 
 Companion plans sit at the sharpest seam in the current architecture:
 
-- When a designer seeds `<topic>-plan.md` at `stage: SKETCH`, `tillr item sync` ignores its tasks (`D-QM7` in [the queue mirrors designs](./tillr-queue-mirrors-designs.md#41-how-one-design-item-relates-to-the-work-in-its-companion-plan)). Nothing executes from a `SKETCH` plan, so substantive review at `SKETCH` would pay to check rough notes.
+- When a designer creates `<topic>-plan.md` at `stage: SKETCH`, `tillr item sync` ignores its tasks (`D-QM7` in [the queue mirrors designs](./tillr-queue-mirrors-designs.md#41-how-one-design-item-relates-to-the-work-in-its-companion-plan)). Nothing executes from a `SKETCH` plan, so substantive review at `SKETCH` would pay to check rough notes.
 - When the `plan` seat promotes `<topic>-plan.md` to `stage: DECIDED` after reading the accepted parent `<topic>.md` and the tree at a stamped commit, `tillr item sync` immediately turns its `## Tasks` into runnable work items — and by [OQ-QM1](./tillr-queue-mirrors-designs.md#OQ-QM1), **no human ever reads `<topic>-plan.md`**.
 - Under `D-DR7` today, promoting `<topic>-plan.md` to `DECIDED` is a documents-only commit under `docs/` and lands with **no substantive review at all**. A task that drops a requirement of `<topic>.md`, sets a fence narrower than the files to edit, or writes a weak `verification-only` criterion is discovered only after workers run — or never, if the weak criterion passes each worker's own landing review!
 
@@ -166,11 +162,11 @@ Companion plans sit at the sharpest seam in the current architecture:
 
 ## 6. Do design documents want a review agent?
 
-The owner asked whether design review agents are wanted, or whether the design process already covers that. Answering honestly requires separating what the existing process catches from what actually slipped past it this month.
+The owner asked whether design review agents are wanted, or whether the design process already covers that. Answering requires separating what the design process catches from what slips past it.
 
-### 6.1 What the design process already covers
+### 6.1 What the design process covers
 
-Unlike code commits — where the worker writes on a faster build model and merges without human eyes — a live-proposal design document (`docs/design/<topic>.md`) already passes through five layers across its life:
+Unlike code commits — where the worker writes on a faster build model and merges without human eyes — a live-proposal design document (`docs/design/<topic>.md`) passes through five layers across its life:
 
 | Layer in the design process | Seat / actor | What it catches | What it cannot catch |
 | :--- | :--- | :--- | :--- |
@@ -180,11 +176,11 @@ Unlike code commits — where the worker writes on a faster build model and merg
 | **4. Owner review in Vantage + warm designer session** ([designer sessions](../reference/tillr-designer-sessions.md)) | **The owner**, routing comments back to the document's warm designer session | Wrong product direction, rejected trade-offs, over-engineering, unaccepted `D-*` rows | Factual claims about the codebase that look plausible on the page — checking them forces the owner to audit the tree or trust the prose |
 | **5. Planner tree read** (`plan` seat writing `<topic>-plan.md`) | `plan` (after design acceptance) | Claims in an *accepted* design that fail when mapped onto concrete files (`definition` obstacle returns to `design`) | Runs **after** the owner already spent review cycles ruling on a design built on false premises |
 
-### 6.2 What still reached the owner unchecked
+### 6.2 What reaches the owner unchecked
 
-Two repository audits on 2026-11-18 measured what got past layers 1–3 into `docs/design/` before the owner read it:
+Two readings of `docs/design/` against the tree on 2026-11-18 measured what gets past layers 1–3 before the owner reads it:
 
-- **Stale or false claims about what is already built in the tree.** In the 43-design roadmap triage, multiple `DESIGN` documents misstated the tree they proposed to change — including [the landing review](./tillr-diff-review.md) itself, whose status originally said "none of it is built" when `tools/tillr-drain/drain/judge.go` and `planned-build@v1` already existed, and sibling designs whose `Built` column or status lagged landed code.
+- **Stale or false claims about what is already built in the tree.** Of 43 designs read, several `DESIGN` documents misstated the tree they proposed to change — a status saying "none of it is built" when `tools/tillr-drain/drain/judge.go` and `planned-build@v1` existed, and a `Built` column or status that lagged landed code.
 - **Unflagged collisions with settled rulings in sibling Decision Ledgers, and unattributed designer choices.** [The decision-provenance review](../tillr/decision-provenance-review.md#13-the-counts-and-how-far-to-trust-them) found over twenty high-significance designer decisions across `docs/design/` presented as settled foundation or colliding with rulings elsewhere (for example, [OQ-JL1](./tillr-judge-and-lifecycle.md#OQ-JL1)'s mechanical-by-default row versus the owner's diff-review requirement).
 
 ### 6.3 Why the audit checks facts rather than design choices
@@ -207,7 +203,7 @@ Of the three approaches considered, [OQ-RJ4](#OQ-RJ4) selects **B**. The reviewe
 
 Every reader in [Section 3](#3-the-routing-matrix-by-kind-of-change) reuses the mechanics already settled in [the landing review](./tillr-diff-review.md#5-the-three-outcomes) and [the compliance officer](./tillr-design-document-check.md#5-the-outcomes):
 
-- **Trigger and position.** Classification runs deterministically in the loop immediately after a gate run ends `pass`, at both commit points (a cut's early landing and an item's final merge). Matched compliance policies apply at either point, as does the fact-and-ledger audit for a live design. Landing review runs only at final merge and only for the three in-scope projects. The plan review runs on the promotion that makes the plan ready to dispatch.
+- **Trigger and position.** Classification runs deterministically in the loop immediately after a gate run ends `pass`, at both commit points (a cut's early landing and an item's final merge). Matched compliance policies apply at either point, as does the fact-and-ledger audit for a live design. Landing review runs only at final merge and only for an in-scope change. The plan review runs on the promotion that makes the plan ready to dispatch.
 - **Degenerate inputs.** An empty diff is refused before review as today; an automatic revert triggers neither reader; a file matching no compliance policy and `No` for substantive review (for example, a standalone README for an out-of-scope project) can land immediately after the green gate.
 - **Parallel execution and one writer.** The compliance officer and any triggered `review`-seat checks are all read-only against the same gated candidate head, so they start together (`D-DP9`). If any reader mutates the worktree, its changes are stripped and its verdict discarded. Only the loop writes review events to the store.
 - **Objections and identical repeats.** If both compliance and substantive review object on the same candidate, the loop delivers their objections together in one returned turn when the same session repairs both, or stages the designer repair before the worker return when [OQ-DP5](./tillr-design-document-check.md#OQ-DP5) assigns document repair to a designer (`D-RJ4`). Any identical repeat — same compliance key `(policy, heading, file, place)` or same landing-review key `(unmet criteria, finding category + path)` — follows the owner's 2026-11-19 ruling ([OQ-DR2](./tillr-diff-review.md#OQ-DR2)): **no dismissal runs; the item stops under "needs you" with the objection and the writer's reason shown.**
@@ -228,15 +224,15 @@ Every reader in [Section 3](#3-the-routing-matrix-by-kind-of-change) reuses the 
 - **What mechanical checks run inside the gate,** or acquitting pre-existing trunk failures.
 - **Changing the `review` seat away from the `build` backend** ([OQ-DR1](./tillr-diff-review.md#OQ-DR1) settled Hydrogen / `pi-build` until live counts justify moving it) or **changing the `compliance` seat away from the cheapest model** ([OQ-DP4](./tillr-design-document-check.md#OQ-DP4)).
 - **Settling a repeated disagreement automatically** — held across all readers by [OQ-DR2](./tillr-diff-review.md#OQ-DR2) and [OQ-DR3](./tillr-diff-review.md#OQ-DR3).
-- **Editing the external `design-doc`, `implementation-plan`, `system-doc`, or `vantage-docs` skills themselves.** Those live outside this repository (or in the owner's host configuration) and are loaded as-is at dispatch (`D-DP5`).
-- **Manual commits made outside tillr** by the human or an interactive lane (governed for interactive agents by `yolo-packs/matt/briefing/work-rules.md`).
+- **Editing the external `design-doc`, `implementation-plan`, `system-doc`, or `vantage-docs` skills themselves.** Those are maintained outside this repository and are loaded as-is at dispatch (`D-DP5`).
+- **Manual commits made outside tillr** by the human or an interactive lane.
 
 ## 10. Amendments owed
 
 These are follow-up amendments to the related designs, not changes already made:
 
 - **[The compliance officer](./tillr-design-document-check.md):** exclude companion plans from `design-document-style`, register all three new checks, and allow one run to check multiple built-in or repository-owned rulebooks. Align [its repeated-objection rule](./tillr-design-document-check.md#53-when-the-officer-and-the-repairer-disagree) with [OQ-DR2](./tillr-diff-review.md#OQ-DR2).
-- **[The landing review](./tillr-diff-review.md):** replace the documents-only exemption with the three-project scope in [OQ-RJ2](#OQ-RJ2).
+- **[The landing review](./tillr-diff-review.md):** replace the documents-only exemption with the project scope in [OQ-RJ2](#OQ-RJ2).
 - **[The queue mirrors designs](./tillr-queue-mirrors-designs.md):** add plan-style compliance and the single review against the accepted design on promotion to `DECIDED`.
 - **[Early design landing](./tillr-early-design-landing.md):** include the fact-and-ledger audit, distinct from style compliance, before the owner reads a live design.
 - **`docs/tillr/roadmap.md` and `docs/tillr/design-status.md`:** reflect the four answers and the remaining rulebook ownership question.
@@ -259,16 +255,16 @@ This design inherits the owner's settled rulings in [the landing review](./tillr
 | :--- | :--- | :--- | :--- | :--- |
 | `D-RJ1` | **Designer's decision; the owner may overturn this.** Exclude companion implementation plans (`docs/design/*-plan.md`) from `design-document-style` so agent-only plans are never judged against `design-doc`'s human-question and header rules. **Evidence:** [OQ-QM1](./tillr-queue-mirrors-designs.md#OQ-QM1) makes companion plans agent-only task specs governed by `implementation-plan`, which forbids human `OQ-*` scaffolding there. **Rejected:** holding every `SKETCH`/`DECIDED` file under `docs/design/` to `design-document-style`. | 2026-11-19, designer | [Section 4.1](#41-policies-that-fit-the-contract) | — |
 | `D-RJ2` | **Designer's decision; the owner may overturn this.** Classify each changed file by most-specific path/frontmatter rule; after a passed gate, run compliance in parallel with at most one landing review on the whole candidate when in scope. Under [OQ-RJ1](#OQ-RJ1), one compliance run can cover multiple policies. Merge only when all triggered readers pass. **Evidence:** composes `D-DR7`, `D-DP3`, and `D-DP9` with zero extra latency on clean mixed commits. **Rejected:** per-workflow opt-ins; sequential compliance-then-review execution. | 2026-11-19, designer | [Section 3.2](#32-how-mixed-commits-compose) | — |
-| `D-RJ3` | **Designer's decision; the owner may overturn this.** Whenever landing review runs on configuration, pack, or documentation paths, `missing-test` applies only to program behavior changes or when an item criterion requires a test. **Evidence:** `yolo-packs/matt/briefing/prose.md` explicitly exempts configuration and documentation edits from mandatory new automated tests; 44 commits since 2026-11-10 touched only config or packs. **Rejected:** forcing workers to write tautological config-parsing tests to appease `missing-test`. | 2026-11-19, designer | [Section 5.1](#51-config-only-pack-only-skill-and-readme-only-commits) | — |
+| `D-RJ3` | **Designer's decision; the owner may overturn this.** Whenever landing review runs on configuration, pack, or documentation paths, `missing-test` applies only to program behavior changes or when an item criterion requires a test. **Evidence:** a configuration or documentation edit has no behavior for a new automated test to exercise; 44 commits in the measured sample touched only config or packs. **Rejected:** forcing workers to write tautological config-parsing tests to appease `missing-test`. | 2026-11-19, designer | [Section 5.1](#51-config-only-pack-only-skill-and-readme-only-commits) | — |
 | `D-RJ4` | **Designer's decision; the owner may overturn this.** Join simultaneous compliance and substantive objections into one returned turn when the same session repairs both, and inherit [OQ-DR2](./tillr-diff-review.md#OQ-DR2) across every reader here (stop and wait for the owner on an identical repeat, with no dismissal built now). **Evidence:** avoids spending two worker turns and two gate runs on one candidate's first round of feedback while honoring the owner's 2026-11-19 ruling. **Rejected:** separate serial return turns for the same writer; building a reader-specific dismissal override. | 2026-11-19, designer | [Section 7](#7-ordering-concurrency-and-failure-behavior) | — |
 | OQ-RJ1 | Add all three checkers: companion plans, evergreen references, and repository pack and scope rules. One compliance run can check several rulebooks. Rulebooks are built into tillr or owned by the repository it runs in; the consuming repository owns its pack rules. | 2026-11-20, owner | [Compliance policies](#4-extending-the-compliance-officers-policies), Vantage `95e55eec` | — |
-| OQ-RJ2 | Landing review covers the pi fork, pi extensions and tillr. Everything else skips landing review. | 2026-11-20, owner | [Project scope](#51-config-only-pack-only-skill-and-readme-only-commits), Vantage `e98a12bb` | — |
+| OQ-RJ2 | Landing review covers tillr and its pi backend, extensions included. Everything else skips landing review. | 2026-11-20, owner | [Project scope](#51-config-only-pack-only-skill-and-readme-only-commits), Vantage `e98a12bb` | — |
 | OQ-RJ3 | Selected A: review the companion plan once against the accepted design when the plan becomes ready to dispatch. | 2026-11-20, owner selection | [Companion plans](#52-companion-implementation-plans-docsdesigntopic-planmd), Vantage `1e7a35ec` | — |
 | OQ-RJ4 | Selected B: add a narrow fact-and-ledger audit on the `review` seat, not a second opinion on the design. | 2026-11-20, owner selection | [Design audit](#63-why-the-audit-checks-facts-rather-than-design-choices), Vantage `d0f72e0b` | — |
 
 ## Open Questions
 
-1. 💬 **OQ-RJ5: Who owns the companion-plan rulebook when tillr moves into its own repository?**
+1. 💬 **OQ-RJ5: Does the companion-plan rulebook ship with tillr, or belong to the repository tillr runs in?**
 
    Companion plans will be checked either way. What remains open is whether their rules go with tillr or stay with the repository whose plans they describe.
 

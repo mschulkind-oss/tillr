@@ -2,7 +2,7 @@
 title: "What a designer reads, checks, and measures itself, and what goes to cheaper scouts"
 status: in-review
 stage: DESIGN
-updated: 2026-11-20
+updated: 2026-11-24
 tags:
   - tillr
   - drain
@@ -11,7 +11,7 @@ tags:
   - subagents
   - planning
   - seats
-summary: "Audits all 2026-11-18 and 2026-11-19 design, scout, and plan runs in the tillr store (145 design runs / $345.16 in Eastern time up to filing; 178 runs / $394.56 in UTC; 8,653 parent tool calls, 1 subagent scout call, and 1 workflow scout proposal), compares scouted-design@v1 and run-pi against the paired-design skill and the 2026-10-22 restricted-design-agent rulings, defines what a designer does directly versus what goes to Tier-1 scouts across reading, searching, checking, measuring, and drafting, proposes asymmetric tool limits that stop 40-turn frontier shell crawls without handcuffing small tasks, and answers the same question for the plan seat alongside item-request-05ac7dd8a0."
+summary: "Audits all 2026-11-18 and 2026-11-19 design, scout, and plan runs in the tillr store (145 design runs / $345.16 in Eastern time up to filing; 178 runs / $394.56 in UTC; 8,653 parent tool calls, 1 subagent scout call, and 1 workflow scout proposal), compares scouted-design@v1 and run-pi against the paired-design skill and the owner's 2026-10-22 rulings on what a designer does itself, defines what a designer does directly versus what goes to Tier-1 scouts across reading, searching, checking, measuring, and drafting, proposes asymmetric tool limits that stop 40-turn frontier shell crawls without handcuffing small tasks, and answers the same question for the plan seat alongside item-request-05ac7dd8a0."
 next: "The owner rules on OQ-RD1, OQ-RD2, and OQ-RD3 and reviews D-RD1 through D-RD5; nothing is built."
 depends-on:
   - tillr-planning-node-model-tiering.md
@@ -26,7 +26,7 @@ vantage:
 
 # Designers draft, read named files, and check their own page; broad search, test runs, and store measurements go to cheap scouts
 
-**Status:** 2026-11-20. Proposal; nothing here is built. Repository behavior verified at `28bebdf35`; run-record audit measured across all 2026-11-18 and 2026-11-19 runs ([Section 1](#1-what-the-2026-11-18-and-2026-11-19-run-records-show)).
+**Status:** Proposal; nothing here is built. Run-record audit measured across all 2026-11-18 and 2026-11-19 runs ([Section 1](#1-what-the-2026-11-18-and-2026-11-19-run-records-show)).
 
 > **In short.** Drain designers currently launch with unrestricted shell and search tools plus broken subagent defaults, so across 178 runs ($394.56) they delegated to scouts twice while executing 4,548 shell commands and 3,787 file reads at frontier-model cache prices. A designer should hold one warm session that reads named files, writes Markdown, and runs single-file document checks directly, while delegating broad search, test suites, and store/log measurement scripts to tier-pinned cheap scouts enforced by asymmetric tool bounds rather than total read lockout.
 
@@ -40,7 +40,7 @@ vantage:
 
 **Needs your ruling:** [OQ-RD1](#OQ-RD1), [OQ-RD2](#OQ-RD2), and [OQ-RD3](#OQ-RD3) (five engineering choices, `D-RD1` through `D-RD5`, await review in the [Decision Ledger](#decision-ledger)).
 
-**Reads with:** the restricted design agent (the 2026-10-22 rulings retiring `writer` and `verifier` and keeping read-only scouts), [planning and model tiering](./tillr-planning-node-model-tiering.md) (orientation cost and piece fan-out), [named drain seat profiles](./tillr-seat-profiles.md) and interactive seat profiles (model sets and child bounds), [designer sessions](../reference/tillr-designer-sessions.md#the-desk) (warm document desks), and [the compliance officer](./tillr-design-document-check.md) (post-gate style enforcement). No companion plan is seeded while [OQ-RD1](#OQ-RD1)–[OQ-RD3](#OQ-RD3) are open.
+**Reads with:** [planning and model tiering](./tillr-planning-node-model-tiering.md) (orientation cost and piece fan-out), [named drain seat profiles](./tillr-seat-profiles.md) (model sets and child bounds), [designer sessions](../reference/tillr-designer-sessions.md#the-desk) (warm document desks), and [the compliance officer](./tillr-design-document-check.md) (post-gate style enforcement). No companion plan exists while [OQ-RD1](#OQ-RD1)–[OQ-RD3](#OQ-RD3) are open.
 
 ---
 
@@ -91,7 +91,7 @@ Classifying the **4,548 parent `bash` calls** on `design` by command intent show
 
 1. **Unrolled child-session spend in `state.db` and `run.record.json`.** [`extract-report`](../../tools/tillr-run/backends/pi/extract-report) sums only top-level parent `turn_end` events into `runs.usage_tokens` and `runs.usage_cost_usd`. Child subagent spend ($0.7025 on `8126862ae5`, $0.9714 on `b92ccc0180`, and any child spend on `05ac7dd8a0`) is omitted from SQLite totals and had to be read from `tool_execution_end.result.details.totalCost` in parent `.log` files and `pi-subagents` status receipts.
 2. **Tool breakdowns on 3 unlogged `design` runs and 16 unlogged `plan` runs.** Timed-out or terminated runs without a surviving lane `.log` stream could not contribute in-process Pi tool counts (`read`, `edit`, `write`, `codemode`, `subagent`), because [`bash-shim.sh`](../../tools/tillr-trace/bash-shim.sh) (`proc-exec.jsonl`) traces only `bash` subprocesses.
-3. **Per-tool histograms inside historical child sessions.** `run.child-session` events record container-local session paths inside `/home/agent/` rather than shared `/workspace/.tillr/` artifacts; `0 of 3` child JSONL transcripts from `8126862ae5` remain mounted in this container, leaving only aggregate child turn/tool/cost receipts in the parent log.
+3. **Per-tool histograms inside past child sessions.** `run.child-session` events record container-local session paths inside `/home/agent/` rather than shared `/workspace/.tillr/` artifacts; `0 of 3` child JSONL transcripts from `8126862ae5` remain mounted in this container, leaving only aggregate child turn/tool/cost receipts in the parent log.
 4. **Actual provider billing versus list-price estimates.** `runs.usage_cost_usd` reflects Pi's client-side token-rate estimator across mixed Bedrock (`claude-fable-5-2`) and Copilot (`gemini-4-carbon`) runs; Copilot bills premium requests rather than list-price dollars, and 4 timed-out `design` runs recorded `NULL`/`$0.00` despite partial execution.
 5. **Matched document-quality counterfactuals.** With `n = 1` workflow-scouted item and `n = 1` subagent-scouted item in the pre-filing window, the observational logs prove adoption failure and cache-cost ratios but cannot measure prose or decision quality deltas on matched prompts without controlled A/B runs.
 
@@ -99,17 +99,17 @@ Classifying the **4,548 parent `bash` calls** on `design` by command intent show
 
 ## 2. Today's drain workflow compared with `paired-design`
 
-Comparing [`scouted-design@v1.json`](../../config/tillr/workflows/scouted-design@v1.json) and [`run-pi`](../../tools/tillr-run/backends/pi/run-pi) against the interactive `paired-design` skill, the `designer.md` agent profile, and the restricted design agent exposes four concrete divergences.
+Comparing [`scouted-design@v1.json`](../../config/tillr/workflows/scouted-design@v1.json) and [`run-pi`](../../tools/tillr-run/backends/pi/run-pi) against the interactive `paired-design` skill and the owner's 2026-10-22 rulings exposes four concrete divergences.
 
-Crucially, the restricted design agent already ran the extreme experiment and recorded the owner's **2026-10-22 rulings**: originally, `designer.md` withheld `write`, `edit`, and `bash` so the designer delegated prose to a cheaper `writer` and checks to an LLM `verifier`. Live sessions proved that delegating prose and verification burned turns in coordination loops and flattened authorial judgment; on 2026-10-22 the owner **retired `writer` and `verifier`, restored direct Markdown `read`, `write`, and `edit` to the designer, and kept subagent delegation strictly for read-only scouts** (`scout`, `researcher`, `evidence-auditor`).
+The owner's **2026-10-22 rulings** settle the extreme case: a designer that delegates prose to a cheaper writer and checks to an LLM verifier burns turns in coordination loops and flattens authorial judgment. The designer therefore has direct Markdown `read`, `write`, and `edit`, and **subagent delegation is strictly for read-only scouts** (`scout`, `researcher`, `evidence-auditor`).
 
-| Dimension | Interactive `paired-design` + 2026-10-22 rulings in restricted-design-agent.md | Drain today: [`scouted-design@v1.json`](../../config/tillr/workflows/scouted-design@v1.json) + [`run-pi`](../../tools/tillr-run/backends/pi/run-pi) | Consequence measured on 2026-11-18..19 |
+| Dimension | Interactive `paired-design` + the 2026-10-22 rulings | Drain today: [`scouted-design@v1.json`](../../config/tillr/workflows/scouted-design@v1.json) + [`run-pi`](../../tools/tillr-run/backends/pi/run-pi) | Consequence measured on 2026-11-18..19 |
 | :--- | :--- | :--- | :--- |
 | **Session continuity** | **One warm frontier session** holds framing, trade-offs, scout questions, and drafting end-to-end. | **Two cold frontier sessions** (`open` then `write`) separated by a drain pass, with `open`'s report dropped whenever `open` proposes no scouts (`(*Workflow).hasNamedFiles()`). | 8 of 9 UTC `open` runs wasted their entire reading pass; `write` started cold. |
 | **When scouts are dispatched** | **On demand mid-thought:** designer reads 2–4 named docs, spots exact codebase or data unknowns, and dispatches parallel scouts in-session. | **Forced upfront (`open`) or unprompted in `write`:** `open` must pre-commit a static scout DAG before drafting begins. | Designers skipped upfront DAGs 89% of the time; the 1 `write/join` run still made 139 read/bash calls as follow-up questions arose. |
-| **Parent tool surface** | Direct `read`, `write`, `edit` on Markdown + `subagent`; **no ambient `grep`/`find`/`codemode` or open-ended shell crawling** (Section 6.6). | [`run-pi`](../../tools/tillr-run/backends/pi/run-pi) passes **no `--tools` flag** and **no `designer.md` profile**, exposing unrestricted `bash`, `grep`, `find`, `ls`, `codemode`, and `background_task`. | Zero friction on local `bash`/`read` led to 4,548 `bash` calls, 3,787 `read` calls, and 99.4% non-use of `subagent`. |
+| **Parent tool surface** | Direct `read`, `write`, `edit` on Markdown + `subagent`; **no ambient `grep`/`find`/`codemode` or open-ended shell crawling**. | [`run-pi`](../../tools/tillr-run/backends/pi/run-pi) passes **no `--tools` flag** and no designer agent profile, exposing unrestricted `bash`, `grep`, `find`, `ls`, `codemode`, and `background_task`. | Zero friction on local `bash`/`read` led to 4,548 `bash` calls, 3,787 `read` calls, and 99.4% non-use of `subagent`. |
 | **Authoring skills loaded** | Loads `design-doc` and `vantage-docs` in system context. | [`run-pi`](../../tools/tillr-run/backends/pi/run-pi) passes `--no-skills`, hiding `design-doc`, `vantage-docs`, and `tillr-designs` unless the designer hunts for them on disk. | Designers miss house style rules that [the compliance officer](./tillr-design-document-check.md) checks at commit time. |
-| **Scout model routing** | Cheap read-only scout tier (interactive seat profiles). | Inherits interactive `subagents.defaultModel` (`gemini-4-hydrogen`) and 14-model `modelScope.allow`. | Unpinned `scout` children ran on Tier-2 `Hydrogen 4` instead of Tier-1 `Flash 3.8`. |
+| **Scout model routing** | Cheap read-only scout tier. | Inherits interactive `subagents.defaultModel` (`gemini-4-hydrogen`) and 14-model `modelScope.allow`. | Unpinned `scout` children ran on Tier-2 `Hydrogen 4` instead of Tier-1 `Flash 3.8`. |
 | **Coverage of `design` spend** | Governs all design sessions. | Applies only to `scouted-design@v1` items; **159 of 178 UTC runs ($352.51)** were single-run `conflict-design` or standalone design dispatches. | Fixing `scouted-design@v1` alone leaves 89% of `design` spend untouched unless `run-pi` and `conflict-design` share the same scout posture. |
 
 ---
@@ -119,7 +119,7 @@ Crucially, the restricted design agent already ran the extreme experiment and re
 Four principles govern where frontier tokens earn their price and where they waste it:
 
 - **P1 — Protect the frontier prompt cache from bulk intermediate text.** Every kilobyte of raw `rg` hits, Go test logs, or SQLite schema trial-and-error read into a `design` session is re-billed on every subsequent drafting turn. Cheap scouts absorb search noise in disposable contexts and return compact, cited tables.
-- **P2 — Never delegate synthesis, prose, or open-question framing.** Per the owner's 2026-10-22 ruling (restricted-design-agent.md), the designer writes and edits its own Markdown directly.
+- **P2 — Never delegate synthesis, prose, or open-question framing.** Per the owner's 2026-10-22 ruling, the designer writes and edits its own Markdown directly.
 - **P3 — Keep a zero-delegation fast path for named files and single-file checks.** Spawning a subagent adds 30–90 seconds of wall time plus prompt-marshaling turns. Reading a file the brief already names or running `uvx vantage-check` on the file just written is cheaper and more accurate in-session than through a scout.
 - **P4 — Scouts return verifiable locators, never bare assertions.** Every scout brief requires exact repo-relative paths, heading or symbol names, commands run, and sample counts so the designer can spot-read any load-bearing claim directly.
 
@@ -190,7 +190,7 @@ Across 2026-11-18 and 2026-11-19, `plan` spent **$184.75** in UTC ($199.54 in ET
 
 | Planning context | Model tier | What it does itself | What goes to Tier-1 `scout` subagents | Enforcement rule |
 | :--- | :--- | :--- | :--- | :--- |
-| **1. Mid-tier companion-plan writer (`docs/design/*-plan.md`) or builder first-turn orientation** *(the primary path if upfront `plan` is retired)* | **Tier 2** (`gemini-4-hydrogen` / `gpt-6.1-terra` / `claude-sonnet-5-5`) | **Reads target packages directly (`read`, targeted `rg`), verifies symbols/traps, runs targeted package tests, and writes `-plan.md` or code.** | **Parallel 3+-package surveys only:** repo-wide caller censuses or cross-module test inventories when an accepted design spans 3 or more packages. | **Instructions + Tier-1/Tier-2 `modelScope` ceiling (`D-RD1`); no parent `read`/`bash` cap.** On Tier 2, the price gap to Tier 1 is narrow (~2–3x vs 15–30x on Tier 3) and exact line-level code mapping *is* the deliverable; capping `read` or `bash` here would cause delegation handcuffing for negligible savings. |
+| **1. Mid-tier companion-plan writer (`docs/design/*-plan.md`) or builder first-turn orientation** *(the primary path if upfront `plan` is removed)* | **Tier 2** (`gemini-4-hydrogen` / `gpt-6.1-terra` / `claude-sonnet-5-5`) | **Reads target packages directly (`read`, targeted `rg`), verifies symbols/traps, runs targeted package tests, and writes `-plan.md` or code.** | **Parallel 3+-package surveys only:** repo-wide caller censuses or cross-module test inventories when an accepted design spans 3 or more packages. | **Instructions + Tier-1/Tier-2 `modelScope` ceiling (`D-RD1`); no parent `read`/`bash` cap.** On Tier 2, the price gap to Tier 1 is narrow (~2–3x vs 15–30x on Tier 3) and exact line-level code mapping *is* the deliverable; capping `read` or `bash` here would cause delegation handcuffing for negligible savings. |
 | **2. Retained or opt-in upfront `plan` node in [`planned-build@v1.json`](../../config/tillr/workflows/planned-build@v1.json)** *(if kept as explicit opt-in or by owner ruling)* | **Tier 3** (`gemini-4-carbon` / `gpt-6.2-sol`) | **Reads the item, governing design doc, and <=10 module boundary files; chooses piece seams, seat tags, and `allowed_paths`; writes `graph.proposal` or handoff report.** | **All broad file discovery, caller enumeration, and test-surface mapping** via 1 parallel Tier-1 `scout` batch (`allowedAgents: ["scout"]`). | **Same mechanical bounds as `design` ([OQ-RD2](#OQ-RD2)):** strip `codemode` (which burned 1,782 calls across 83 runs), `grep`, `find`, and `ls`; cap parent search `bash` at **10 calls**; pin `scout` to Tier 1. |
 
 Whether `plan` follows this tier-matched split (Option A), enforces scout caps even on Tier-2 companion planners (Option B), or leaves planning tools unrestricted (Option C) is put to the owner in [OQ-RD3](#OQ-RD3).
@@ -201,7 +201,7 @@ Whether `plan` follows this tier-matched split (Option A), enforces scout caps e
 
 | Alternative | Verdict |
 | :--- | :--- |
-| **Restore the pre-2026-10-22 `designer.md` lockout (no `write`, `edit`, or `read`; delegate prose to `writer` and checks to `verifier`)** | **Rejected.** Overturns the owner's 2026-10-22 ruling in restricted-design-agent.md after live runs proved that delegating prose and verification caused heavy turn churn and loss of design coherence. |
+| **Lock the designer out of `write`, `edit`, and `read`, delegating prose to a writer agent and checks to a verifier agent** | **Rejected.** Overturns the owner's 2026-10-22 ruling: delegating prose and verification causes heavy turn churn and loss of design coherence. |
 | **Keep [`scouted-design@v1.json`](../../config/tillr/workflows/scouted-design@v1.json)'s `open` node and force `open` to always spawn 2–4 workflow `scout` nodes** | **Rejected.** Adds ~120 s of pass-handoff latency per stage, forces pre-read decomposition before the designer knows what questions matter, and still leaves `write/join` cold when follow-up questions arise mid-draft (as seen on `8008c05e5c`'s 139 follow-up calls). |
 | **Allow `design` to spawn Tier-2 `worker`/`delegate` writers or nested scouts-of-scouts** | **Rejected.** Violates single-writer ownership in the lane worktree and blurs design with implementation; `pi-subagents` already caps child depth, and `design` outputs are Markdown decisions rather than multi-package code edits. |
 | **Hard-cap total `design` turns instead of bounding exploratory search tools** | **Rejected.** Violates the owner's standing rule against arbitrary retry/turn kill counts ([the graph design Section 7](./tillr-graph-is-the-path.md#7-what-stops-repetition)) and would kill legitimate long design documents mid-write rather than steering search work to cheap scouts. |
@@ -213,7 +213,7 @@ Whether `plan` follows this tier-matched split (Option A), enforces scout caps e
 - **Changing which frontier or cheap model each profile assigns to `design`, `plan`, or `scout`** — governed by [named drain seat profiles](./tillr-seat-profiles.md) and `config/tillr/backend-policy*.json`.
 - **Post-commit style compliance or substantive review of design documents** — governed by [the compliance officer](./tillr-design-document-check.md) and [diff review before landing](./tillr-diff-review.md).
 - **Retiring or keeping [`planned-build@v1.json`](../../config/tillr/workflows/planned-build@v1.json) itself, or changing `tillr item request` flags** — owned by sibling request `item-request-05ac7dd8a0`; [Section 5](#5-how-this-fits-the-plan-step-and-seat-selection-design-and-the-rule-for-the-plan-seat) specifies how scout and tool rules plug into whichever option the owner chooses there.
-- **Interactive `/design` sessions outside `tillr-drain`** — interactive paired design already runs inside one warm session under `paired-design`, though `D-RD2` and `designer.md` alignment keep interactive and drain tool surfaces consistent.
+- **Interactive `/design` sessions outside `tillr-drain`** — interactive paired design already runs inside one warm session under `paired-design`; `D-RD2` keeps the interactive and drain tool surfaces consistent.
 
 ---
 
@@ -228,7 +228,6 @@ Once the owner rules on [OQ-RD1](#OQ-RD1)–[OQ-RD3](#OQ-RD3) and reviews `D-RD1
 
 **Amendments owed to other files when built:**
 
-- **`yolo-packs/matt/files/pi/agent/agents/designer.md` and restricted-design-agent.md:** reconcile `designer.md`'s stale tool header (`read` only, no `write`/`edit`) with the owner's 2026-10-22 ruling and [OQ-RD2](#OQ-RD2)'s drain tool surface.
 - **[Planning and model tiering](./tillr-planning-node-model-tiering.md):** link [OQ-PT8](./tillr-planning-node-model-tiering.md#OQ-PT8) and [Section 5](./tillr-planning-node-model-tiering.md#5-the-planning-stage-as-built) to [Section 5.2](#52-answering-the-same-question-for-the-plan-seat-oq-rd3) once [OQ-RD3](#OQ-RD3) is ruled.
 - **`docs/tillr/roadmap.md` and `docs/tillr/design-status.md`:** route this document and [OQ-RD1](#OQ-RD1)–[OQ-RD3](#OQ-RD3) once an item fenced to `docs/tillr/` updates the roadmap index.
 
@@ -248,7 +247,7 @@ Once the owner rules on [OQ-RD1](#OQ-RD1)–[OQ-RD3](#OQ-RD3) and reviews `D-RD1
 
 ## Decision Ledger
 
-This design inherits the owner's 2026-10-22 rulings in the restricted design agent (retiring `writer` and `verifier`, giving the designer direct Markdown `read`/`write`/`edit`, and keeping read-only scouts) and retired question SP6 in interactive seat profiles (Tier-1 `Luna` is read-only and never writes). Rows `D-RD1` through `D-RD5` below are engineering decisions marked as the designer's under [`OQ-PR21`](../tillr/decision-provenance-review.md#decision-ledger); the owner may overturn any of them, and nothing is built until he answers [OQ-RD1](#OQ-RD1), [OQ-RD2](#OQ-RD2), and [OQ-RD3](#OQ-RD3).
+This design inherits the owner's 2026-10-22 rulings (the designer has direct Markdown `read`/`write`/`edit`, and delegation is for read-only scouts) and the rule that the Tier-1 scout model is read-only and never writes. Rows `D-RD1` through `D-RD5` below are engineering decisions marked as the designer's under [`OQ-PR21`](../tillr/decision-provenance-review.md#decision-ledger); the owner may overturn any of them, and nothing is built until he answers [OQ-RD1](#OQ-RD1), [OQ-RD2](#OQ-RD2), and [OQ-RD3](#OQ-RD3).
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
