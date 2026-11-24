@@ -8,18 +8,32 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/mschulkind-oss/tillr/notify"
 	"github.com/mschulkind-oss/tillr/store"
+)
+
+const (
+	defaultFallbackPoll      = 15 * time.Second
+	initialReconnectBackoff  = 100 * time.Millisecond
+	maxReconnectBackoff      = time.Second
+	defaultMinNotifyInterval = 250 * time.Millisecond
 )
 
 var (
 	errRollback     = errors.New("rollback")
 	onWaitForWriter atomic.Pointer[func()]
+
+	onFallbackTicker atomic.Pointer[func(time.Duration)]
+	disableAutoRelay atomic.Bool
 )
 
 type walCommit struct {
@@ -111,9 +125,320 @@ type wakeReason int
 
 const (
 	walWake wakeReason = iota
+	notifyWake
 	timerWake
 	deadlineWake
 )
+
+type notifyWakeOptions struct {
+	fallbackPoll      time.Duration
+	noNotify          bool
+	ticks             <-chan time.Time
+	minNotifyInterval time.Duration
+}
+
+type notifyWakeSource struct {
+	storePath         string
+	autoStart         bool
+	ticks             <-chan time.Time
+	stopTicker        func()
+	wakes             chan struct{}
+	minNotifyInterval time.Duration
+	lastNotifyWake    time.Time
+	deadlineExpired   bool
+	flushedDeadline   bool
+
+	subCancel context.CancelFunc
+	readDone  chan struct{}
+
+	relayParentCtx context.Context
+	relayMu        sync.Mutex
+	relayActive    bool
+	relayCancel    context.CancelFunc
+	relayDone      chan struct{}
+}
+
+func watchNotify(ctx context.Context, storePath string, opts notifyWakeOptions) (*notifyWakeSource, error) {
+	fallback := opts.fallbackPoll
+	if fallback <= 0 {
+		fallback = defaultFallbackPoll
+	}
+	ticks := opts.ticks
+	var stopTicker func()
+	if ticks == nil {
+		if hook := onFallbackTicker.Load(); hook != nil {
+			(*hook)(fallback)
+		}
+		ticker := time.NewTicker(fallback)
+		ticks = ticker.C
+		stopTicker = ticker.Stop
+	}
+
+	s := &notifyWakeSource{
+		storePath:         storePath,
+		autoStart:         !opts.noNotify && !disableAutoRelay.Load(),
+		ticks:             ticks,
+		stopTicker:        stopTicker,
+		wakes:             make(chan struct{}, 1),
+		minNotifyInterval: opts.minNotifyInterval,
+		relayParentCtx:    context.WithoutCancel(ctx),
+	}
+	if opts.noNotify {
+		return s, nil
+	}
+
+	subCtx, subCancel := context.WithCancel(ctx)
+	s.subCancel = subCancel
+	s.readDone = make(chan struct{})
+
+	connectCtx, cancelConnect := context.WithTimeout(subCtx, time.Second)
+	initialSub, _ := s.connect(connectCtx)
+	cancelConnect()
+
+	go s.readLoop(subCtx, initialSub)
+	return s, nil
+}
+
+func isRelayAbsent(err error) bool {
+	return errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, syscall.ENOENT) ||
+		errors.Is(err, syscall.ECONNREFUSED)
+}
+
+func (s *notifyWakeSource) connect(ctx context.Context) (*notify.Subscription, error) {
+	sub, err := notify.Subscribe(ctx, s.storePath)
+	if err == nil {
+		return sub, nil
+	}
+	if !s.autoStart || !isRelayAbsent(err) {
+		return nil, err
+	}
+	if err := s.ensureRelay(ctx); err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for {
+		sub, err = notify.Subscribe(ctx, s.storePath)
+		if err == nil || !isRelayAbsent(err) || time.Now().After(deadline) {
+			return sub, err
+		}
+		timer := time.NewTimer(5 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *notifyWakeSource) ensureRelay(ctx context.Context) error {
+	s.relayMu.Lock()
+	if s.relayActive {
+		s.relayMu.Unlock()
+		return nil
+	}
+	relayCtx, relayCancel := context.WithCancel(s.relayParentCtx)
+	ready := make(chan string, 1)
+	done := make(chan struct{})
+	s.relayActive = true
+	s.relayCancel = relayCancel
+	s.relayDone = done
+	s.relayMu.Unlock()
+
+	go func() {
+		defer close(done)
+		_ = notify.Serve(relayCtx, notify.ServeConfig{
+			StorePath: s.storePath,
+			IdleExit:  notify.DefaultIdleExit,
+			Ready:     ready,
+		})
+		s.relayMu.Lock()
+		if s.relayDone == done {
+			s.relayActive = false
+		}
+		s.relayMu.Unlock()
+	}()
+
+	select {
+	case <-ready:
+		return nil
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func jitteredBackoff(base time.Duration) time.Duration {
+	half := base / 2
+	if half <= 0 {
+		return base
+	}
+	return half + rand.N(base-half+1)
+}
+
+func (s *notifyWakeSource) signalWake() {
+	select {
+	case s.wakes <- struct{}{}:
+	default:
+	}
+}
+
+func (s *notifyWakeSource) readLoop(ctx context.Context, sub *notify.Subscription) {
+	defer close(s.readDone)
+	defer func() {
+		if sub != nil {
+			_ = sub.Close()
+		}
+	}()
+
+	backoff := initialReconnectBackoff
+	for {
+		if sub == nil {
+			waitDur := jitteredBackoff(backoff)
+			if backoff < maxReconnectBackoff {
+				backoff = min(backoff*2, maxReconnectBackoff)
+			}
+			timer := time.NewTimer(waitDur)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			connectCtx, cancel := context.WithTimeout(ctx, time.Second)
+			nextSub, err := s.connect(connectCtx)
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				continue
+			}
+			sub = nextSub
+			backoff = initialReconnectBackoff
+			// Immediately evaluate on reconnect so transitions committed while
+			// disconnected do not wait for the 15-second fallback timer.
+			s.signalWake()
+		}
+
+		_, err := sub.Next(ctx)
+		if err != nil {
+			_ = sub.Close()
+			sub = nil
+			if ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+		s.signalWake()
+	}
+}
+
+func (s *notifyWakeSource) beginPass() {
+	select {
+	case <-s.wakes:
+	default:
+	}
+}
+
+func (s *notifyWakeSource) next(ctx context.Context, deadline <-chan time.Time) (wakeReason, error) {
+	if ctx.Err() != nil {
+		return notifyWake, ctx.Err()
+	}
+	if s.deadlineExpired {
+		return deadlineWake, nil
+	}
+	select {
+	case <-deadline:
+		s.deadlineExpired = true
+		if !s.flushedDeadline {
+			select {
+			case <-s.wakes:
+				s.flushedDeadline = true
+				s.lastNotifyWake = time.Now()
+				return notifyWake, nil
+			default:
+			}
+		}
+		return deadlineWake, nil
+	default:
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return notifyWake, ctx.Err()
+		case <-deadline:
+			s.deadlineExpired = true
+			if !s.flushedDeadline {
+				select {
+				case <-s.wakes:
+					s.flushedDeadline = true
+					s.lastNotifyWake = time.Now()
+					return notifyWake, nil
+				default:
+				}
+			}
+			return deadlineWake, nil
+		case <-s.ticks:
+			return timerWake, nil
+		case <-s.wakes:
+			if s.minNotifyInterval > 0 && !s.lastNotifyWake.IsZero() {
+				if rem := time.Until(s.lastNotifyWake.Add(s.minNotifyInterval)); rem > 0 {
+					timer := time.NewTimer(rem)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return notifyWake, ctx.Err()
+					case <-deadline:
+						timer.Stop()
+						s.deadlineExpired = true
+						if !s.flushedDeadline {
+							s.flushedDeadline = true
+							s.lastNotifyWake = time.Now()
+							return notifyWake, nil
+						}
+						return deadlineWake, nil
+					case <-s.ticks:
+						timer.Stop()
+						return timerWake, nil
+					case <-timer.C:
+						select {
+						case <-s.wakes:
+						default:
+						}
+					}
+				}
+			}
+			s.lastNotifyWake = time.Now()
+			return notifyWake, nil
+		}
+	}
+}
+
+func (s *notifyWakeSource) close() {
+	if s.subCancel != nil {
+		s.subCancel()
+	}
+	if s.readDone != nil {
+		<-s.readDone
+	}
+	s.relayMu.Lock()
+	relayCancel := s.relayCancel
+	relayDone := s.relayDone
+	s.relayMu.Unlock()
+	if relayCancel != nil {
+		relayCancel()
+	}
+	if relayDone != nil {
+		<-relayDone
+	}
+	if s.stopTicker != nil {
+		s.stopTicker()
+	}
+}
 
 func (s *wakeSource) next(ctx context.Context, deadline <-chan time.Time) (wakeReason, error) {
 	if ctx.Err() != nil {

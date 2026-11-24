@@ -23,7 +23,7 @@ const help = `Usage:
   tillr watch eval --once --store PATH --rules DIR [--root DIR]
   tillr watch status --store PATH --rules DIR [--root DIR] [--json]
   tillr watch daemon --store PATH --rules DIR [--root DIR]
-  tillr watch wait --store PATH --rules DIR [--root DIR] [--owner ID] [--timeout DUR | --follow] [--seen-through SEQ]
+  tillr watch wait --store PATH --rules DIR [--root DIR] [--owner ID] [--timeout DUR | --follow] [--fallback-poll DUR] [--no-notify] [--seen-through SEQ]
   tillr watch seen --store PATH --through SEQ [--owner ID]
   tillr watch ack ID --store PATH --by ACTOR [--note TEXT] [--item ITEM_ID]
   tillr watch track ID --store PATH --item ITEM_ID [--by ACTOR] [--note TEXT] [--item ITEM_ID]
@@ -55,7 +55,8 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	return runWithTicks(ctx, args, out, stderr, nil)
 }
 
-// ticks overrides the fallback clock in tests; production uses a 60-second ticker.
+// ticks overrides the fallback clock in tests; wait uses a 15-second fallback
+// ticker and daemon uses a 60-second ticker.
 func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, ticks <-chan time.Time) int {
 	fail := func(err error) int { fmt.Fprintln(stderr, "tillr watch:", err); return 1 }
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
@@ -81,9 +82,9 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 	f.SetOutput(io.Discard)
 	path := f.String("store", "", "path to the tillr state database")
 	var dir, owner, root string
-	var timeout time.Duration
+	var timeout, fallbackPoll time.Duration
 	var cursor int64
-	var once, follow, asJSON bool
+	var once, follow, noNotify, asJSON bool
 	switch face {
 	case "eval", "wait", "status", "daemon":
 		f.StringVar(&dir, "rules", "", "directory of TOML rules")
@@ -101,6 +102,8 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 		f.StringVar(&owner, "owner", "foreground", "delivery owner")
 		f.DurationVar(&timeout, "timeout", 0, "time to wait for a notice")
 		f.BoolVar(&follow, "follow", false, "remain attached after notices")
+		f.DurationVar(&fallbackPoll, "fallback-poll", defaultFallbackPoll, "fallback poll interval")
+		f.BoolVar(&noNotify, "no-notify", false, "disable notification socket subscription")
 		f.Int64Var(&cursor, "seen-through", -1, "confirm a previously shown cursor before evaluation")
 	case "seen":
 		f.StringVar(&owner, "owner", "foreground", "delivery owner")
@@ -126,6 +129,9 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 	}
 	if set["timeout"] && timeout <= 0 {
 		return fail(fmt.Errorf("timeout must be positive"))
+	}
+	if set["fallback-poll"] && fallbackPoll <= 0 {
+		return fail(fmt.Errorf("fallback-poll must be positive"))
 	}
 	if set["owner"] && owner == "" {
 		return fail(fmt.Errorf("owner must not be empty"))
@@ -196,7 +202,7 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 			return fail(err)
 		}
 	case "wait":
-		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, root: root, timeout: timeout, follow: follow, ticks: ticks}, out, stderr)
+		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, root: root, timeout: timeout, fallbackPoll: fallbackPoll, follow: follow, noNotify: noNotify, ticks: ticks}, out, stderr)
 		if err != nil {
 			return fail(err)
 		}

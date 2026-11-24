@@ -16,16 +16,22 @@ import (
 type waitOptions struct {
 	owner, storePath, rulesPath, root string
 	timeout                           time.Duration
+	fallbackPoll                      time.Duration
 	follow                            bool
+	noNotify                          bool
 	ticks                             <-chan time.Time
 }
 
 func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr io.Writer) (code int, resultErr error) {
-	wake, err := watchStore(e.Store, opts.ticks)
+	wake, err := watchNotify(ctx, e.Store.Path(), notifyWakeOptions{
+		fallbackPoll:      opts.fallbackPoll,
+		noNotify:          opts.noNotify,
+		ticks:             opts.ticks,
+		minNotifyInterval: defaultMinNotifyInterval,
+	})
 	if err != nil {
 		return 1, err
 	}
-	wake.minWALInterval = 250 * time.Millisecond
 	defer wake.close()
 	// Record rule load baselines before advertising waiting_since so events
 	// appended as soon as attachment is visible are judged as post-load.
@@ -55,9 +61,7 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 	tick := false
 	var diagnostics ruleDiagnostics
 	for {
-		if err := wake.beginPass(ctx); err != nil {
-			return 1, err
-		}
+		wake.beginPass()
 		results, err := e.EvaluateRules(ctx)
 		if err != nil {
 			return 1, err
@@ -156,6 +160,12 @@ func (o waitOptions) rearm(through int64) string {
 	}
 	if o.follow {
 		cmd += " --follow"
+	}
+	if o.fallbackPoll > 0 && o.fallbackPoll != defaultFallbackPoll {
+		cmd += " --fallback-poll " + o.fallbackPoll.String()
+	}
+	if o.noNotify {
+		cmd += " --no-notify"
 	}
 	if through > 0 {
 		cmd += " --seen-through " + strconv.FormatInt(through, 10)

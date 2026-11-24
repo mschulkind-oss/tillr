@@ -16,41 +16,214 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/notify"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// TestWatchWaitWakesWhenWALPrecedesIndexPublish reproduces the SQLite WAL commit
-// split deterministically on both direct and symlinked store paths: SQLite writes
-// committed frames to -wal (firing fsnotify) before publishing the new WAL-index
-// header in -shm under WAL_WRITE_LOCK without touching -wal again.
-func TestWatchWaitWakesWhenWALPrecedesIndexPublish(t *testing.T) {
-	for _, name := range []string{"direct", "symlink"} {
-		t.Run(name, func(t *testing.T) {
-			walPrecedesIndexPublish(t, name == "symlink")
+func startExternalRelay(t *testing.T, storePath string) (cancel context.CancelFunc, waitStop func()) {
+	t.Helper()
+	relayCtx, cancel := context.WithCancel(t.Context())
+	ready := make(chan string, 1)
+	var serveErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveErr = notify.Serve(relayCtx, notify.ServeConfig{
+			StorePath: storePath,
+			IdleExit:  notify.DefaultIdleExit,
+			Ready:     ready,
 		})
+	}()
+	select {
+	case sockPath := <-ready:
+		t.Cleanup(func() {
+			cancel()
+			<-done
+			_ = os.Remove(notify.LockPath(sockPath))
+		})
+	case <-done:
+		cancel()
+		t.Fatalf("notify.Serve(%s): %v", storePath, serveErr)
+	}
+	return cancel, func() {
+		cancel()
+		<-done
+		if serveErr != nil {
+			t.Fatalf("notify.Serve stop: %v", serveErr)
+		}
 	}
 }
 
-func walPrecedesIndexPublish(t *testing.T, useSymlink bool) {
+func appendRawRefusalWithoutNotify(t *testing.T, storePath, itemID string) {
 	t.Helper()
-	s, rules := fixture(t, false)
-	storeArg := "./state.db"
-	if useSymlink {
-		t.Chdir(t.TempDir())
-		storeArg = "./linked.db"
-		if err := os.Symlink(s.Path(), storeArg); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		t.Chdir(filepath.Dir(s.Path()))
+	rawDB, err := sql.Open("sqlite", storePath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer rawDB.Close()
+	payload := fmt.Sprintf(`{"item_id":%q}`, itemID)
+	if _, err := rawDB.ExecContext(t.Context(), `INSERT INTO events (ts, kind, payload) VALUES (?, 'drain.refusal', ?)`, time.Now().UTC().UnixMilli(), payload); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
+	for _, name := range []string{"direct", "symlink"} {
+		t.Run("relayed-frame/"+name, func(t *testing.T) {
+			t.Setenv("XDG_RUNTIME_DIR", "")
+			s, rules := fixture(t, false)
+			startExternalRelay(t, s.Path())
+
+			storeArg := "./state.db"
+			if name == "symlink" {
+				t.Chdir(t.TempDir())
+				storeArg = "./linked.db"
+				if err := os.Symlink(s.Path(), storeArg); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				t.Chdir(filepath.Dir(s.Path()))
+			}
+
+			var initOut, initErr bytes.Buffer
+			if code := run(t.Context(), []string{"eval", "--once", "--store", storeArg, "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+				t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
+			}
+			fact(t, s, `{"item_id":"item-a"}`)
+
+			ctx, cancel := context.WithCancel(t.Context())
+			type waitResult struct {
+				code        int
+				out, stderr string
+			}
+			var result waitResult
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				var out, stderr bytes.Buffer
+				code := runWithTicks(ctx, []string{"wait", "--store", storeArg, "--rules", rules}, &out, &stderr, make(chan time.Time))
+				result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
+			}()
+			defer func() {
+				cancel()
+				<-done
+			}()
+			awaitAttached(t, s)
+
+			// Commit the second refusal directly to SQLite without publishing a
+			// notification: wait must stay asleep rather than scanning -wal.
+			appendRawRefusalWithoutNotify(t, s.Path(), "item-a")
+			select {
+			case <-done:
+				t.Fatalf("wait woke on raw WAL write without relayed frame: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+			case <-time.After(60 * time.Millisecond):
+			}
+
+			// Relaying a wake hint (including resync) wakes wait to evaluate rules.
+			topic := notify.TopicQueueChanged
+			if name == "symlink" {
+				topic = notify.TopicResync
+			}
+			if err := notify.PublishContext(t.Context(), s.Path(), notify.Frame{Topic: topic}); err != nil {
+				t.Fatal(err)
+			}
+
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("wait did not wake on relayed frame")
+			}
+			if result.code != 0 || result.stderr != "" || !strings.Contains(result.out, "item-a has 2 refusals") {
+				t.Fatalf("wait output after relayed frame: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+			}
+		})
+	}
+
+	t.Run("15s-fallback-default-and-tick", func(t *testing.T) {
+		t.Setenv("XDG_RUNTIME_DIR", "")
+		s, rules := fixture(t, false)
+		var initOut, initErr bytes.Buffer
+		if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+			t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
+		}
+
+		// Verify default wait wires a 15-second fallback ticker.
+		recorded := make(chan time.Duration, 1)
+		hook := func(d time.Duration) {
+			select {
+			case recorded <- d:
+			default:
+			}
+		}
+		onFallbackTicker.Store(&hook)
+		t.Cleanup(func() { onFallbackTicker.Store(nil) })
+
+		var timeoutOut, timeoutErr bytes.Buffer
+		if code := run(t.Context(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify", "--timeout", "25ms"}, &timeoutOut, &timeoutErr); code != 2 || timeoutErr.Len() != 0 {
+			t.Fatalf("default fallback wait: code=%d out=%q err=%q", code, &timeoutOut, &timeoutErr)
+		}
+		select {
+		case got := <-recorded:
+			if got != 15*time.Second {
+				t.Fatalf("default fallback interval = %v, want 15s", got)
+			}
+		default:
+			t.Fatal("wait did not initialize fallback ticker")
+		}
+		onFallbackTicker.Store(nil)
+
+		// Verify fallback tick evaluates rules when no relayed frame arrives.
+		fact(t, s, `{"item_id":"item-fallback"}`)
+		ctx, cancel := context.WithCancel(t.Context())
+		ticks := make(chan time.Time)
+		type waitResult struct {
+			code        int
+			out, stderr string
+		}
+		var result waitResult
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			var out, stderr bytes.Buffer
+			code := runWithTicks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks)
+			result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
+		awaitAttached(t, s)
+
+		appendRawRefusalWithoutNotify(t, s.Path(), "item-fallback")
+		select {
+		case <-done:
+			t.Fatalf("wait woke before fallback tick: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+		case <-time.After(40 * time.Millisecond):
+		}
+
+		ticks <- time.Now()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("wait did not evaluate on fallback tick")
+		}
+		if result.code != 0 || result.stderr != "" || !strings.Contains(result.out, "item-fallback has 2 refusals") {
+			t.Fatalf("fallback evaluation: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+		}
+	})
+}
+
+func TestWatchWaitReconnectsAndEvaluatesImmediatelyAfterRelayKill(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	disableAutoRelay.Store(true)
+	t.Cleanup(func() { disableAutoRelay.Store(false) })
+
+	s, rules := fixture(t, false)
 	var initOut, initErr bytes.Buffer
-	if code := run(t.Context(), []string{"eval", "--once", "--store", storeArg, "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+	if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
 		t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
 	}
-	fact(t, s, `{"item_id":"item-a"}`)
-
-	entered := installWaitForWriterHook(t)
+	_, stopFirstRelay := startExternalRelay(t, s.Path())
 
 	ctx, cancel := context.WithCancel(t.Context())
 	type waitResult struct {
@@ -62,7 +235,7 @@ func walPrecedesIndexPublish(t *testing.T, useSymlink bool) {
 	go func() {
 		defer close(done)
 		var out, stderr bytes.Buffer
-		code := runWithTicks(ctx, []string{"wait", "--store", storeArg, "--rules", rules}, &out, &stderr, make(chan time.Time))
+		code := runWithTicks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules}, &out, &stderr, make(chan time.Time))
 		result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
 	}()
 	defer func() {
@@ -71,23 +244,200 @@ func walPrecedesIndexPublish(t *testing.T, useSymlink bool) {
 	}()
 	awaitAttached(t, s)
 
-	helper := startSplitWALHelper(t, ctx, s.Path())
-	select {
-	case <-entered:
-	case <-done:
-		t.Fatalf("wait exited before synchronizing with unpublished WAL writer: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
-	case <-ctx.Done():
-		t.Fatalf("wait did not synchronize with the unpublished WAL writer: %v", ctx.Err())
+	// Kill the relay and commit firing events while the socket is absent so
+	// post-commit publish drops every wake hint.
+	stopFirstRelay()
+	if _, ok := notify.ActiveSocketPath(s.Path()); ok {
+		t.Fatal("relay socket remained active after relay shutdown")
 	}
-	helper.publishAndUnlock(t)
+	fact(t, s, `{"item_id":"item-reconnect"}`)
+	fact(t, s, `{"item_id":"item-reconnect"}`)
+
+	// Restart the relay; wait must reconnect with backoff and immediately run
+	// its evaluation pass without waiting on the 15-second fallback clock.
+	startExternalRelay(t, s.Path())
 
 	select {
 	case <-done:
-	case <-ctx.Done():
-		t.Fatalf("wait did not exit: %v", ctx.Err())
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait did not reconnect and evaluate missed commits")
 	}
-	if result.code != 0 || result.stderr != "" || !strings.Contains(result.out, "item-a has 2 refusals") {
-		t.Fatalf("wait missed split WAL commit: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	if result.code != 0 || result.stderr != "" || !strings.Contains(result.out, "item-reconnect has 2 refusals") {
+		t.Fatalf("reconnect evaluation: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	}
+}
+
+func TestWatchWaitAlertParityWithRelayAbsent(t *testing.T) {
+	type parityRun struct {
+		alertLines []string
+		episodes   []string
+	}
+	extractAlertLines := func(chunks []string) []string {
+		var alerts []string
+		seen := make(map[string]bool)
+		for _, chunk := range chunks {
+			for _, line := range strings.Split(chunk, "\n") {
+				if strings.HasPrefix(line, "[alert ") {
+					// Normalize random alert IDs (`[alert alrt-... rule subj, sev] summary`)
+					// to `[alert rule subj, sev] summary` for deterministic parity comparison.
+					rest := strings.TrimPrefix(line, "[alert ")
+					if sp := strings.IndexByte(rest, ' '); sp >= 0 {
+						normalized := "[alert " + rest[sp+1:]
+						if !seen[normalized] {
+							seen[normalized] = true
+							alerts = append(alerts, normalized)
+						}
+					}
+				}
+			}
+		}
+		return alerts
+	}
+	readEpisodes := func(t *testing.T, s *store.Store) []string {
+		t.Helper()
+		var rowsOut []string
+		err := s.ReadTx(t.Context(), func(rd *store.Reader) error {
+			rows, err := rd.Query(`SELECT rule_id, subject_key, episode_num, state, severity, observation_count FROM alert_episodes ORDER BY rule_id, subject_key, episode_num`)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var ruleID, subject, state, sev string
+				var epNum, obs int
+				if err := rows.Scan(&ruleID, &subject, &epNum, &state, &sev, &obs); err != nil {
+					return err
+				}
+				rowsOut = append(rowsOut, fmt.Sprintf("%s|%s|%d|%s|%s|%d", ruleID, subject, epNum, state, sev, obs))
+			}
+			return rows.Err()
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rowsOut
+	}
+
+	runScenario := func(t *testing.T, mode string) parityRun {
+		t.Helper()
+		t.Setenv("XDG_RUNTIME_DIR", "")
+		s, rules := fixture(t, false)
+		var initOut, initErr bytes.Buffer
+		if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+			t.Fatalf("init eval (%s): code=%d out=%q err=%q", mode, code, &initOut, &initErr)
+		}
+
+		args := []string{"wait", "--store", s.Path(), "--rules", rules, "--follow"}
+		var ticks chan time.Time
+		switch mode {
+		case "with-relay":
+			startExternalRelay(t, s.Path())
+			ticks = make(chan time.Time)
+		case "relay-absent-no-notify":
+			args = append(args, "--no-notify", "--fallback-poll", "25ms")
+		case "relay-absent-dial-enoent":
+			disableAutoRelay.Store(true)
+			t.Cleanup(func() { disableAutoRelay.Store(false) })
+			args = append(args, "--fallback-poll", "25ms")
+		default:
+			t.Fatalf("unknown mode %s", mode)
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		output := make(outputChunks, 16)
+		var stderr bytes.Buffer
+		done := make(chan int, 1)
+		go func() {
+			if ticks != nil {
+				done <- runWithTicks(ctx, args, output, &stderr, ticks)
+			} else {
+				done <- run(ctx, args, output, &stderr)
+			}
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
+		awaitAttached(t, s)
+
+		if mode != "with-relay" {
+			if _, ok := notify.ActiveSocketPath(s.Path()); ok {
+				t.Fatalf("%s: expected relay socket to be absent", mode)
+			}
+		} else {
+			if _, ok := notify.ActiveSocketPath(s.Path()); !ok {
+				t.Fatalf("%s: expected relay socket to be active", mode)
+			}
+		}
+
+		var collected []string
+		// Wave 1: item-alpha fires (2 refusals); item-noise stays below threshold (1 refusal).
+		fact(t, s, `{"item_id":"item-noise"}`)
+		fact(t, s, `{"item_id":"item-alpha"}`)
+		fact(t, s, `{"item_id":"item-alpha"}`)
+		collected = append(collected, awaitChunk(t, output))
+
+		// Wave 2: item-beta fires (2 refusals).
+		fact(t, s, `{"item_id":"item-beta"}`)
+		fact(t, s, `{"item_id":"item-beta"}`)
+		for {
+			chunk := awaitChunk(t, output)
+			collected = append(collected, chunk)
+			if strings.Contains(chunk, "item-beta has 2 refusals") {
+				break
+			}
+		}
+
+		if mode != "with-relay" {
+			if _, ok := notify.ActiveSocketPath(s.Path()); ok {
+				t.Fatalf("%s: relay socket appeared unexpectedly", mode)
+			}
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("%s: unexpected stderr %q", mode, stderr.String())
+		}
+
+		return parityRun{
+			alertLines: extractAlertLines(collected),
+			episodes:   readEpisodes(t, s),
+		}
+	}
+
+	withRelay := runScenario(t, "with-relay")
+	absentNoNotify := runScenario(t, "relay-absent-no-notify")
+	absentENOENT := runScenario(t, "relay-absent-dial-enoent")
+
+	if len(withRelay.alertLines) != 2 {
+		t.Fatalf("expected 2 alerts with relay, got %v", withRelay.alertLines)
+	}
+	for label, got := range map[string]parityRun{
+		"relay-absent-no-notify":   absentNoNotify,
+		"relay-absent-dial-enoent": absentENOENT,
+	} {
+		if strings.Join(got.alertLines, "\n") != strings.Join(withRelay.alertLines, "\n") {
+			t.Fatalf("%s alerts = %v, want %v", label, got.alertLines, withRelay.alertLines)
+		}
+		if strings.Join(got.episodes, "\n") != strings.Join(withRelay.episodes, "\n") {
+			t.Fatalf("%s episodes = %v, want %v", label, got.episodes, withRelay.episodes)
+		}
+	}
+}
+
+func TestWatchWaitFlagValidationAndRearm(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	s, rules := fixture(t, false)
+	for _, bad := range []string{"0s", "-5s"} {
+		var out, stderr bytes.Buffer
+		code := run(t.Context(), []string{"wait", "--store", s.Path(), "--rules", rules, "--fallback-poll", bad}, &out, &stderr)
+		if code != 1 || !strings.Contains(stderr.String(), "fallback-poll must be positive") {
+			t.Fatalf("--fallback-poll %s: code=%d out=%q stderr=%q", bad, code, &out, &stderr)
+		}
+	}
+
+	var out, stderr bytes.Buffer
+	code := run(t.Context(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify", "--fallback-poll", "5s", "--timeout", "20ms"}, &out, &stderr)
+	if code != 2 || stderr.Len() != 0 || !strings.Contains(out.String(), "--fallback-poll 5s") || !strings.Contains(out.String(), "--no-notify") {
+		t.Fatalf("re-arm flags: code=%d out=%q stderr=%q", code, &out, &stderr)
 	}
 }
 
