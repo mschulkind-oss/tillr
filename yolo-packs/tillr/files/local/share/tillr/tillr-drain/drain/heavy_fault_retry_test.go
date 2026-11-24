@@ -107,6 +107,109 @@ func TestHeavyStatusLineNamesFailingChecks(t *testing.T) {
 	}
 }
 
+func TestHeavyStatusLineShowsRunningProofInsteadOfPriorFault(t *testing.T) {
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	tip := heavyCommit(t, root, "one")
+	s, err := store.InitFixture(context.Background(), filepath.Join(scratchUnderDurable(t), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const faultDetail = "cleanup not acknowledged; checkout retained; independently recover descendants named by .git/tillr-gate/heavy.cleanup-pending before clearing that guard"
+	var calls atomic.Int32
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	cancelledEntered := make(chan struct{})
+	steps := heavyTestSteps{judge: func(ctx context.Context, _ string, _ string) ([]HeavyCheck, error) {
+		switch calls.Add(1) {
+		case 1:
+			return []HeavyCheck{{CheckID: "legacy-runner", Result: "error"}}, errors.New(faultDetail)
+		case 2:
+			close(cancelledEntered)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		default:
+			close(entered)
+			<-release
+			return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
+		}
+	}}
+	var log strings.Builder
+	l := &Loop{gatePolicy: GatePolicy{LandingStrategy: "after-merge"}, cfg: LoopConfig{Root: root, Store: s.Path(), LaneRoot: scratchUnderDurable(t), Steps: steps, Now: time.Now, Report: &log}}
+
+	// Attempt 1 faults and records heavy=unknown with the cleanup fault text.
+	if err := l.startHeavy(context.Background(), tip); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+
+	// Attempt 2 starts via maybeRolling (which first sees heavy=unknown before starting
+	// the retry) and is cancelled mid-proof; while running it reports heavy=running,
+	// and cancelling it must not resurrect Attempt 1's cleared fault text.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	if err := l.maybeRolling(cancelCtx, tip, false, &LoopResult{}); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if !strings.Contains(log.String(), "heavy=unknown") {
+		cancel()
+		l.heavyWG.Wait()
+		t.Fatalf("expected heavy=unknown before retry started, got %q", log.String())
+	}
+	<-cancelledEntered
+	log.Reset()
+	l.lastHeavyStatus = ""
+	if err := l.maybeRolling(cancelCtx, tip, false, &LoopResult{}); err != nil {
+		cancel()
+		l.heavyWG.Wait()
+		t.Fatal(err)
+	}
+	if got := log.String(); !strings.Contains(got, "heavy=running") || strings.Contains(got, "heavy=unknown") {
+		cancel()
+		l.heavyWG.Wait()
+		t.Fatalf("loop status while proof running = %q, want heavy=running without heavy=unknown", got)
+	}
+	cancel()
+	l.heavyWG.Wait()
+	afterCancel, err := ReadHeavyStatus(context.Background(), root, s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(afterCancel.Detail, "cleanup not acknowledged") || afterCancel.Result == "unknown" {
+		t.Fatalf("cancelled retry resurrected earlier fault: %+v", afterCancel)
+	}
+
+	// Attempt 3 runs to completion; while running maybeRolling logs heavy=running, and once
+	// finished the trunk is green with no fault detail.
+	if err := l.startHeavy(context.Background(), tip); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	log.Reset()
+	l.lastHeavyStatus = ""
+	if err := l.maybeRolling(context.Background(), tip, false, &LoopResult{}); err != nil {
+		close(release)
+		l.heavyWG.Wait()
+		t.Fatal(err)
+	}
+	if got := log.String(); !strings.Contains(got, "heavy=running") || strings.Contains(got, "heavy=unknown") {
+		close(release)
+		l.heavyWG.Wait()
+		t.Fatalf("loop status while proof running = %q, want heavy=running", got)
+	}
+	close(release)
+	l.heavyWG.Wait()
+	finalStatus, err := ReadHeavyStatus(context.Background(), root, s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalStatus.Result != "green" || finalStatus.Detail != "" || finalStatus.GreenCommit != tip {
+		t.Fatalf("final status = %+v, want green on %s with empty detail", finalStatus, tip)
+	}
+}
+
 type syncFaultSteps struct {
 	heavyTestSteps
 }

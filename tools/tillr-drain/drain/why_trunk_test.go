@@ -1,14 +1,18 @@
 package drain_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-drain/heavyrun"
 )
 
 // trunkRepo is a repository on main with two commits whose green pointer is the first,
@@ -117,5 +121,92 @@ func TestWhyPrintsNoTrunkLineWhenTrunkIsProved(t *testing.T) {
 	code, out := invoke(t, "why", "--store", fixture(t), "--root", root, "--now", trunkNow)
 	if code != 0 || len(trunkLines(out)) != 0 {
 		t.Fatalf("proved trunk printed a line: %d\n%s", code, out)
+	}
+}
+
+func TestWhyTrunkShowsRunningProofInsteadOfPriorFault(t *testing.T) {
+	root, _, tip := trunkRepo(t)
+	storePath := fixture(t)
+	ctx := context.Background()
+	lock, busy, err := heavyrun.AcquireLoopLock(ctx, root)
+	if err != nil || busy {
+		t.Fatalf("AcquireLoopLock: busy=%v err=%v", busy, err)
+	}
+	defer lock.Close()
+
+	const faultDetail = "cleanup not acknowledged; checkout retained; independently recover descendants named by .git/tillr-gate/heavy.cleanup-pending before clearing that guard"
+	var calls atomic.Int32
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	runner := heavyrun.HeavyRunner{
+		Root:  root,
+		Work:  filepath.Join(scratch(t, "rolling"), "worktree"),
+		Trunk: "refs/heads/main",
+		Store: storePath,
+		Lock:  lock,
+		Judge: func(context.Context, string, string) ([]heavyrun.HeavyCheck, error) {
+			if calls.Add(1) == 1 {
+				return []heavyrun.HeavyCheck{{CheckID: "legacy-runner", Result: "error"}}, errors.New(faultDetail)
+			}
+			close(entered)
+			<-release
+			return []heavyrun.HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
+		},
+	}
+
+	if _, err := runner.Run(ctx); err == nil {
+		t.Fatal("first proof unexpectedly succeeded")
+	}
+	code, out := invoke(t, "why", "--store", storePath, "--root", root, "--now", trunkNow)
+	if code != 0 || !strings.Contains(string(out), "cleanup not acknowledged") {
+		t.Fatalf("expected fault before retry: %d\n%s", code, out)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := runner.Run(ctx)
+		done <- runErr
+	}()
+	<-entered
+
+	code, out = invoke(t, "why", "--store", storePath, "--root", root, "--now", trunkNow)
+	lines := trunkLines(out)
+	if code != 0 || len(lines) != 1 {
+		close(release)
+		<-done
+		t.Fatalf("why while proof running: %d %q\n%s", code, lines, out)
+	}
+	if strings.Contains(lines[0], "cleanup not acknowledged") || strings.Contains(lines[0], "heavy=unknown") {
+		close(release)
+		<-done
+		t.Fatalf("line kept earlier fault while proof running: %q", lines[0])
+	}
+	wantRunning := "failing: none (heavy=running: proving " + tip[:12] + ")"
+	if !strings.Contains(lines[0], wantRunning) {
+		close(release)
+		<-done
+		t.Fatalf("line %q lacks %q", lines[0], wantRunning)
+	}
+
+	code, out = invoke(t, "why", "--store", storePath, "--root", root, "--now", trunkNow, "--json")
+	var answer drain.WhyAnswer
+	if code != 0 || json.Unmarshal(out, &answer) != nil || answer.Trunk == nil {
+		close(release)
+		<-done
+		t.Fatalf("why --json while proof running: %d %s", code, out)
+	}
+	if answer.Trunk.Result != "running" || strings.Contains(answer.Trunk.Detail, "cleanup not acknowledged") {
+		close(release)
+		<-done
+		t.Fatalf("json trunk=%+v", answer.Trunk)
+	}
+
+	close(release)
+	if runErr := <-done; runErr != nil {
+		t.Fatalf("second proof failed: %v", runErr)
+	}
+	code, out = invoke(t, "why", "--store", storePath, "--root", root, "--now", trunkNow)
+	if code != 0 || len(trunkLines(out)) != 0 {
+		t.Fatalf("proved trunk printed a line after proof finished: %d\n%s", code, out)
 	}
 }
