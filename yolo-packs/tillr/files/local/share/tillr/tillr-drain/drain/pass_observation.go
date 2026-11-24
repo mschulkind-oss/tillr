@@ -238,6 +238,7 @@ func (l *Loop) beat(ctx context.Context, next time.Time) error {
 // A failed heartbeat cancels that work and returns a fault, never false liveness; a
 // busy store is not a failed heartbeat (beat).
 func (l *Loop) keepSessionAlive(ctx context.Context, cancel context.CancelFunc) func() error {
+	l.primeProcessCPU()
 	stop := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -254,6 +255,7 @@ func (l *Loop) keepSessionAlive(ctx context.Context, cancel context.CancelFunc) 
 			case <-ticker.C:
 				err := l.beat(ctx, l.cfg.Now().Add(PassInterval))
 				if err == nil {
+					l.recordProcessCPUIfDue(ctx)
 					err = l.checkpointIfDue(ctx)
 				}
 				if err != nil {
