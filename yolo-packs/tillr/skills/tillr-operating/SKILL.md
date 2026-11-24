@@ -132,7 +132,7 @@ was not given. With `--end-runs`, a worker whose run face has died is ended too.
 
 A caller that needs a finite
 drain instead of a waiting service should learn the exit option from `loop --help`.
-The former stay option is removed; waiting no longer needs an option.
+Waiting needs no option.
 
 ## Foreground alert delivery
 
@@ -356,10 +356,9 @@ on standard input and supply `--title`. The ignored `--path` flag does not selec
 fork; do not name a lane checkout path. Planning records the delivery target. For
 mixed delivery, the fork lands before the repository part starts. Staging materializes
 the dispatched lane's checkout from the delivered patch tip. The worker commits there
-only, never runs `bin/pi-forks export`, and never edits the shared cache. The fork gate's `fork-build` check builds a clean copy of that exact head with the pack
-command, and `fork-quality` runs after a passing `fork-build` in the same clean clone
-for forks in `FORK_QUALITY`; only then does the lander move `refs/heads/patch/pi` to the
-built head, write its landed marker, and refresh the shared cache's `main`. Items for the same fork are serialized.
+only and never edits the shared cache. The fork gate builds a clean copy of that exact
+head, and only then does the lander move the fork's patch branch to the built head, write
+its landed marker, and refresh the shared cache's `main`. Items for the same fork are serialized.
 An unsuccessful fork run's pins and preserved edits live inside its lane fork checkout.
 Before releasing that checkout, the drain saves the work, clears any rebase, and restores
 `main` to the delivered tip. Do not reset the checkout yourself to recover a run's edits.
@@ -417,8 +416,7 @@ the mechanism and names the permanent cache regression check. A worker runs test
 the landing gate (`just done`); the gate owns its landing lock.
 
 The gate runs a whole suite through the repository's runner, on the modules the
-gate runs through it; a worker uses it only when no selection covers a change. The measured module list is in the
-[verification report](../../../../docs/pi/tillr-go-shards-2026-11-17.md).
+gate runs through it; a worker uses it only when no selection covers a change.
 The runner always executes tests fresh; Go's test result cache does not apply.
 It builds each package's test binary once and runs up to six independent test
 processes per package, balancing recorded durations. Tests without a duration are
@@ -483,7 +481,7 @@ fixer when automatic revert is not possible. Legacy rolling watermarks remain on
 `before-merge` compatibility path.
 
 While a trunk check is red and a fixer is open, non-fixer items still dispatch with a
-trunk-state notice in their brief and no landing cap (`red_cap` is retired per
+trunk-state notice in their brief and no landing cap (per
 [`OQ-GP7`](../../../../docs/design/tillr-graph-is-the-path.md#OQ-GP7)). When a candidate
 fails only checks already red on its base and the trunk tip, the loop compares its changed
 paths against each red check's declared `reads`: if they do not intersect, the verdict
@@ -584,8 +582,7 @@ Acknowledging a patch move clears the hold, not the publication check. A fork re
 can replace the remote tip only when it matches this clone's last-published OID and
 successful landings for that fork connect it to the exact outgoing OID. The host
 publisher uses an explicit lease on the observed remote tip. A direct push checks the
-same proof, but refuses even a verified rewrite: run `bin/patch-branches-publish --remote
-<remote>` instead so the publisher can record the confirmed result, then retry the push.
+same proof, but refuses even a verified rewrite.
 A force flag or explicit refspec does not waive proof. If the remote tip or receipts do
 not match, inspect both before proceeding; leave the remote tip alone.
 

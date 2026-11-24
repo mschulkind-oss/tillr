@@ -25,8 +25,7 @@ needs from tillr now:
 
 ## What is settled and built today
 
-Checked against the tree on 2026-11-19 (`303ad3fcf`), the early prototype gaps (two-item static
-seed, unbuilt event emitters, single-purpose Git landing) have been overtaken:
+What a reviewer can rely on:
 
 1. **Core and charter split (`definition.json`).** All eighteen items of
    [`docs/design/tillr-definitions-plan.md`](../../../docs/design/tillr-definitions-plan.md)
@@ -65,9 +64,9 @@ seed, unbuilt event emitters, single-purpose Git landing) have been overtaken:
    under a red check.
 5. **Still moving or unbuilt.** Four small consumer items remain unfiled (`P2` explicit-store
    recipe, `P3` stock plain-command adapter, `P4` contract change feed, `P6` standalone dead-run
-   probe), raw `tillr item state` terminal-evidence guards are queued, and two items from the
-   2026-11-19 latency report remain open (`deferJudge` two-pass settlement and `SQLITE_BUSY`
-   lock-timeout retry/fault handling). Companion `<topic>-plan.md` files, mandatory code diff
+   probe), raw `tillr item state` terminal-evidence guards are queued, and two latency items
+   remain open (`deferJudge` two-pass settlement and `SQLITE_BUSY` lock-timeout retry/fault
+   handling). Companion `<topic>-plan.md` files, mandatory code diff
    review, the compliance officer, whole-life item graphs, and log-per-item storage are proposed
    only — do not assume them.
 

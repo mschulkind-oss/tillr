@@ -44,16 +44,12 @@ snapshot refreshed by `just pack-docs`. When a design copy and a module `README.
 design copy opens with a banner naming its source file and commit, links undelivered files to
 GitHub, and neutralizes `<!-- tillr: ... -->` directives so copies are never read as queue items.
 
-## What tillr does today — and what changed recently
-
-Checked against the tree on 2026-11-19 (`303ad3fcf`), the early gaps from tillr's initial
-handoff are gone:
+## What tillr does today
 
 - **Store initialization, events, views, and tracing are built.** `tillr store init` creates all
   module tables up front. The binaries emit structured events (`item.*`, `run.*`, `drain.*`,
-  `call.*`, `land.*`) readable through `tillr store events` and `tillr view events`. Static seed
-  files are retired; items enter via `tillr item sync` or `tillr item apply`, and `tillr item place`
-  reorders them. `tillr view` serves CLI inspection (`status`, `waiting`, `passes`, `lanes`,
+  `call.*`, `land.*`) readable through `tillr store events` and `tillr view events`. Items enter
+  via `tillr item sync` or `tillr item apply`, and `tillr item place` reorders them. `tillr view` serves CLI inspection (`status`, `waiting`, `passes`, `lanes`,
   `running`, `events`, `trace`, `perf-log`) and the embedded web observatory (`tillr view serve`),
   and `tillr-trace` records the commands a run executes.
 - **Filing work with `tillr item request`.** Work that needs no design-document block is filed
@@ -76,23 +72,23 @@ handoff are gone:
   on, a red heavy check bisects the culprit landing, gates and lands its inverse
   (`revert-main-<sha12>`), withdraws the item's verdicts, moves the item back to `in-queue`, and
   returns the failure output to the author's work (filing a deduplicated trunk fixer if revert is
-  not possible). Under owner ruling [`OQ-GP7`](../../../../docs/design/tillr-graph-is-the-path.md#OQ-GP7), a red trunk check no longer caps or freezes
+  not possible). Under owner ruling [`OQ-GP7`](../../../../docs/design/tillr-graph-is-the-path.md#OQ-GP7), a red trunk check does not cap or freeze
   unrelated work: non-fixer runs still start with a trunk-state notice, a candidate whose changed
   paths do not intersect any red check's declared `reads` promotes to `pass-inherited` and lands,
   and one whose paths intersect a red check's `reads` is acquitted without charge as
   `trunk-already-red` (`trunk-broken` in waiting views) behind the open fixer.
 - **Reserved lanes for interactive requests.** Repository settings (`[lanes] express` in
-  `.tillr.toml`, set to two in the owner's repository in `35526a762`) reserve `express-1`,
+  `.tillr.toml`, set to two in the owner's repository) reserve `express-1`,
   `express-2` outside the ordinary worker pool for saved ideas, CLI requests (unless marked
   ordinary), and express blocks so interactive requests do not queue behind long background work.
 - **Loop detection and recovery.** When `pi` ends a runaway worker for repeating the same tool
-  call (`repeating-call`, `38f97995f`), the drain preserves uncommitted work, never resumes the
+  call (`repeating-call`), the drain preserves uncommitted work, never resumes the
   looping session, and may start a fresh session on the same backend naming the repeated call.
   If the fresh session repeats or pi already recovered in-run, the item holds as `repeating-call`. The runner also terminates settled harnesses that linger idle (`settled-idle`),
   reclaims orphan runs left by dead loops or container restarts, returns gate, fence, and land
   refusals to the worker session uncounted (`returned-with-evidence`) until an identical repeat
   escalates to design, migrates pause-capable live workers onto a rolled build at their next turn
-  gap, and stops passes, gates, and proofs promptly on `tillr drain stop` (`c768a5be8`).
+  gap, and stops passes, gates, and proofs promptly on `tillr drain stop`.
 - **Copilot, Bedrock, and Claude backends.** Seat policies map each seat (`plan`, `scout`, `edit`,
   `build`, `test-write`, `test-run`, `verify`, `docs`, `design`, `review`) across preferred
   backends, fallback chains, escalation lists, and quota shares, reloading live without a restart.
@@ -108,18 +104,6 @@ handoff are gone:
   fields and suspends). If the gate, lander, or revert rejects the candidate, the drain reopens
   the session without a new prompt and delivers the refusal as that tool call's result; when
   `parked-tool-calls` is absent, workers fall back to `RESULT:` footers.
-- **Quick-change latency measured on 2026-11-19.** On 2026-11-19 (`d833451fe`), the report at
-  `docs/tillr/latency/2026-11-19-quick-request-latency.md` measured four small live requests:
-  active worker tool work took **11.2 s to 39.7 s** on three `single-worker@v1` items (and 803.2 s
-  across three nodes on one `planned-build@v1` item), while end-to-end wall time was **10m 34s to
-  27m 40s** (and **2h 36m 21s** when `tillr-land` hit `SQLITE_BUSY` and fault-held the item).
-  Same-day landings eliminated the 50–100 s `O(items * events)` planning stall (`871e6aee9`,
-  `54b12c393`), cached Go module identities and parallelized fast-tree gate checks (`d309a68af`),
-  split `.tillr.toml` roll tests out of the 8-binary doc rebuild (`291b3feb2`), exempted
-  read-only workflow nodes like `plan` from `keep-going.ts`'s commit guard (`26d52a579`), and
-  refreshed `mainSHA` for untouched dispatches after mid-pass landings (`64e540bdf`). Still open
-  are two-pass `settle`-to-`judge` deferral (`deferJudge=true`) and `SQLITE_BUSY` lock-timeout
-  retry/fault handling between `tillr-drain` and `tillr-land`.
 
 ## Reading order
 
@@ -194,7 +178,7 @@ sync or snapshot, and nothing reads them back.
 
 1. Write your comments or requests as a tracked document in your own repository and tell the
    owner where it is; the owner relays it. tillr records each round as received in
-   `docs/design/tillr-product-qa-requests.md` (with earlier rounds preserved in Git history).
+   `docs/design/tillr-product-qa-requests.md`.
 2. Number each entry and record the behavior you ran or read, the snapshot commit from
    `docs/snapshot.json` (plus binary build if newer), and the date. Try the `recorded-verdict`
    example and cover what your pipeline needs from store events and views, cross-repository
