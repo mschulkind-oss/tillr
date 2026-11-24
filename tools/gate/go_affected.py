@@ -53,6 +53,8 @@ STRIPPED_OUTER_ENV = (
     "TILLR_GO_AFFECTED_EVIDENCE_OUT",
     "TILLR_GO_SHARDS_EVIDENCE_OUT",
     "TILLR_GO_BUILD_EVIDENCE_OUT",
+    "TILLR_GO_VERDICTS_IN",
+    "TILLR_GO_VERDICTS_OUT",
     "TILLR_SELF_SUITE_TIMING_OUT",
     "TILLR_SQLITE_TRACE",
     "GO_TEST_SHARDS_HOLDER",
@@ -287,6 +289,394 @@ def compute_edge_digest(
             hasher.update(b"<unreadable>")
         hasher.update(b"\0")
     return hasher.hexdigest()
+
+
+GO_PACKAGE_VERDICTS_FILE = "gate.go-packages.json"
+GO_VERDICTS_IN_ENV = "TILLR_GO_VERDICTS_IN"
+GO_VERDICTS_OUT_ENV = "TILLR_GO_VERDICTS_OUT"
+_RUN_ID_MARKER_RE = re.compile(r"(?:-([0-9]{3,12}))?-(failover|restart|fresh|interrupted)$")
+_BRIEF_FIRST_RUN_RE = re.compile(r"\bIts first run was ([^\s,]+)")
+_BRIEF_ITEM_RE = re.compile(r"^\s*-\s*\*\*Item:\*\*\s*(\S+)", re.MULTILINE)
+
+
+def split_run_id_markers(run_id: str) -> str:
+    """Strip trailing continuation markers (-restart/-fresh/-interrupted/-failover) from run_id."""
+    cur = run_id
+    while True:
+        m = _RUN_ID_MARKER_RE.search(cur)
+        if m is None:
+            return cur
+        cur = cur[: len(cur) - len(m.group(0))]
+
+
+def is_cfix_run_id(run_id: str) -> bool:
+    """Return True iff run_id denotes a conflict-repair (-cfix) run."""
+    return split_run_id_markers(run_id).endswith("-cfix")
+
+
+def read_run_item_id(run_dir: Path) -> str | None:
+    """Read item_id from gate.face.json, run.record.json, or brief.md when present."""
+    for fname in ("gate.face.json", "run.record.json"):
+        p = run_dir / fname
+        if p.is_file():
+            with contextlib.suppress(OSError, ValueError):
+                obj = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(obj, dict):
+                    item_id = obj.get("item_id")
+                    if not isinstance(item_id, str) or not item_id.strip():
+                        payload = obj.get("payload")
+                        if isinstance(payload, dict):
+                            item_id = payload.get("item_id")
+                    if isinstance(item_id, str) and item_id.strip():
+                        return item_id.strip()
+    brief = run_dir / "brief.md"
+    if brief.is_file():
+        with contextlib.suppress(OSError):
+            m = _BRIEF_ITEM_RE.search(brief.read_text(encoding="utf-8", errors="replace"))
+            if m:
+                return m.group(1).strip()
+    return None
+
+
+def resolve_cfix_prior_run_dirs(run_dir: Path) -> list[Path]:
+    """Return pre-conflict run directories for the same item when run_dir is a -cfix run."""
+    run_dir = run_dir.resolve()
+    run_id = run_dir.name
+    if not is_cfix_run_id(run_id):
+        return []
+    loop_dir = run_dir.parent
+    expected_item = read_run_item_id(run_dir)
+    queue: list[Path] = [run_dir]
+    visited: set[str] = {run_id}
+    prior_dirs: list[Path] = []
+    while queue:
+        cur = queue.pop(0)
+        stem = split_run_id_markers(cur.name)
+        candidates: list[str] = []
+        if cur.name != stem:
+            candidates.append(stem)
+        if stem.endswith("-cfix"):
+            pred = stem[: -len("-cfix")]
+            candidates.append(pred)
+            pred_stem = split_run_id_markers(pred)
+            if pred_stem != pred:
+                candidates.append(pred_stem)
+        brief = cur / "brief.md"
+        if brief.is_file():
+            with contextlib.suppress(OSError):
+                m = _BRIEF_FIRST_RUN_RE.search(brief.read_text(encoding="utf-8", errors="replace"))
+                if m:
+                    candidates.append(m.group(1).strip())
+        for cand_id in candidates:
+            if not cand_id or cand_id in visited:
+                continue
+            visited.add(cand_id)
+            cand_dir = loop_dir / cand_id
+            if not cand_dir.is_dir():
+                continue
+            cand_item = read_run_item_id(cand_dir)
+            if expected_item and cand_item and cand_item != expected_item:
+                continue
+            prior_dirs.append(cand_dir)
+            if is_cfix_run_id(cand_id):
+                queue.append(cand_dir)
+    return prior_dirs
+
+
+def merge_package_verdicts_into(target: dict, source: dict) -> bool:
+    """Merge passing package verdict entries from source into target; return True if any added."""
+    src_pkgs = source.get("packages") if isinstance(source, dict) else None
+    if not isinstance(src_pkgs, dict):
+        return False
+    dst_pkgs = target.setdefault("packages", {})
+    added = False
+    for ip, rec in src_pkgs.items():
+        if not isinstance(ip, str) or not isinstance(rec, dict):
+            continue
+        dst = dst_pkgs.setdefault(ip, {"whole_digests": [], "narrowed": {}})
+        whole_list = dst.setdefault("whole_digests", [])
+        for d in rec.get("whole_digests") or ():
+            if isinstance(d, str) and d:
+                added = True
+                if d not in whole_list:
+                    whole_list.append(d)
+        single = rec.get("whole_digest")
+        if isinstance(single, str) and single:
+            added = True
+            if single not in whole_list:
+                whole_list.append(single)
+        narrow_src = rec.get("narrowed")
+        if isinstance(narrow_src, dict):
+            narrow_dst = dst.setdefault("narrowed", {})
+            for k, nrec in narrow_src.items():
+                if not isinstance(nrec, dict):
+                    continue
+                ntests = nrec.get("tests")
+                ndig = nrec.get("digest")
+                if isinstance(ntests, list) and isinstance(ndig, str) and ndig:
+                    added = True
+                    narrow_dst[k] = {"tests": list(ntests), "digest": ndig}
+    return added
+
+
+def load_package_verdicts_file(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    with contextlib.suppress(OSError, ValueError):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and isinstance(raw.get("packages"), dict):
+            merged: dict = {"schema": 1, "packages": {}}
+            merge_package_verdicts_into(merged, raw)
+            return merged
+    return None
+
+
+def load_prior_cfix_verdicts(run_dir: Path) -> dict | None:
+    prior_dirs = resolve_cfix_prior_run_dirs(run_dir)
+    if not prior_dirs:
+        return None
+    merged: dict = {"schema": 1, "packages": {}}
+    any_found = False
+    for cand_dir in prior_dirs:
+        loaded = load_package_verdicts_file(cand_dir / GO_PACKAGE_VERDICTS_FILE)
+        if loaded and merge_package_verdicts_into(merged, loaded):
+            any_found = True
+    return merged if any_found else None
+
+
+def save_package_verdicts_atomic(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=".go-packages-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp_name, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
+
+
+def compute_package_verdict_digest(
+    root: Path,
+    import_path: str,
+    graph: dict,
+    edges: dict[str, dict],
+    *,
+    active_tests: list[str] | None = None,
+    cache: dict | None = None,
+) -> str | None:
+    """Compute SHA-256 over a Go test package's files, transitive in-repo Go dependencies,
+    enclosing go.mod/go.sum files, Go toolchain version, and declared builds/reads edges.
+    Returns None if any module or input cannot be resolved cleanly.
+    """
+    root = root.resolve()
+    pkg_info = graph["pkg_info"]
+    test_deps = graph["test_deps"]
+    dir_to_pkg = graph["dir_to_pkg"]
+    failed_modules = graph["failed_modules"]
+    if import_path == "./..." or import_path not in pkg_info:
+        return None
+    info = pkg_info[import_path]
+    if info["module"] in failed_modules:
+        return None
+    dep_closure = {import_path} | set(test_deps.get(import_path, ()))
+    in_repo_deps = sorted(d for d in dep_closure if d in pkg_info)
+    for dep in in_repo_deps:
+        if pkg_info[dep]["module"] in failed_modules:
+            return None
+
+    if cache is None:
+        cache = {}
+    dir_hashes: dict[tuple[str, bool], str | None] = cache.setdefault("dir_hashes", {})
+    mod_hashes: dict[str, str | None] = cache.setdefault("mod_hashes", {})
+    if "go_version" not in cache:
+        try:
+            ver_proc = subprocess.run(
+                ["go", "env", "GOVERSION"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                env=build_env(),
+                timeout=15,
+            )
+            cache["go_version"] = ver_proc.stdout.strip() if ver_proc.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            cache["go_version"] = ""
+
+    def pkg_dir_digest(dir_rel: str, include_test_go: bool) -> str | None:
+        key = (dir_rel, include_test_go)
+        if key in dir_hashes:
+            return dir_hashes[key]
+        base_dir = root / dir_rel
+        if not base_dir.is_dir():
+            dir_hashes[key] = None
+            return None
+        h = hashlib.sha256()
+        for dirpath, dirnames, filenames in os.walk(base_dir, topdown=True):
+            rel_dir = Path(dirpath).relative_to(root).as_posix()
+            kept_dirs: list[str] = []
+            for dname in sorted(dirnames):
+                if dname in {".git", "node_modules", "__pycache__"}:
+                    continue
+                sub_rel = f"{rel_dir}/{dname}" if rel_dir != "." else dname
+                if sub_rel != dir_rel and sub_rel in dir_to_pkg:
+                    continue
+                if sub_rel == EXCLUDED_PACK_MIRROR_PREFIX.rstrip("/") or sub_rel.startswith(
+                    EXCLUDED_PACK_MIRROR_PREFIX
+                ):
+                    continue
+                kept_dirs.append(dname)
+            dirnames[:] = kept_dirs
+            for fn in sorted(filenames):
+                if not include_test_go and fn.endswith("_test.go"):
+                    continue
+                fpath = Path(dirpath) / fn
+                frel = fpath.relative_to(root).as_posix()
+                try:
+                    raw = fpath.read_bytes()
+                except OSError:
+                    dir_hashes[key] = None
+                    return None
+                h.update(frel.encode("utf-8") + b"\0" + str(len(raw)).encode("ascii") + b"\0")
+                h.update(raw)
+                h.update(b"\0")
+        res_hex = h.hexdigest()
+        dir_hashes[key] = res_hex
+        return res_hex
+
+    def mod_files_digest(mod: str) -> str | None:
+        if mod in mod_hashes:
+            return mod_hashes[mod]
+        h = hashlib.sha256()
+        for fn in ("go.mod", "go.sum"):
+            rel = f"{mod}/{fn}"
+            fpath = root / rel
+            h.update(rel.encode("utf-8") + b"\0")
+            if fpath.exists():
+                try:
+                    raw = fpath.read_bytes()
+                except OSError:
+                    mod_hashes[mod] = None
+                    return None
+                h.update(b"present\0" + str(len(raw)).encode("ascii") + b"\0")
+                h.update(raw)
+            else:
+                h.update(b"absent")
+            h.update(b"\0")
+        res_hex = h.hexdigest()
+        mod_hashes[mod] = res_hex
+        return res_hex
+
+    scope_tag = (
+        "whole"
+        if active_tests is None
+        else "tests:" + ",".join(sorted(dict.fromkeys(active_tests)))
+    )
+    hasher = hashlib.sha256()
+    hasher.update(
+        f"v1\0pkg={import_path}\0goversion={cache['go_version']}\0scope={scope_tag}\n".encode(
+            "utf-8"
+        )
+    )
+    for dep in in_repo_deps:
+        include_tests = dep == import_path
+        dd = pkg_dir_digest(pkg_info[dep]["dir_rel"], include_tests)
+        if dd is None:
+            return None
+        hasher.update(f"dep:{dep}:{int(include_tests)}:{dd}\n".encode("utf-8"))
+    for mod in sorted({pkg_info[dep]["module"] for dep in in_repo_deps}):
+        md = mod_files_digest(mod)
+        if md is None:
+            return None
+        hasher.update(f"mod:{mod}:{md}\n".encode("utf-8"))
+    if import_path in edges:
+        edge = edges[import_path]
+        for btarget in edge.get("builds", ()):
+            if btarget not in pkg_info or pkg_info[btarget]["module"] in failed_modules:
+                return None
+        edge_spec = json.dumps(edge, sort_keys=True, separators=(",", ":"))
+        edge_dig = compute_edge_digest(root, edge, pkg_info, active_tests=active_tests)
+        hasher.update(f"edge:{edge_spec}:{edge_dig}\n".encode("utf-8"))
+    return hasher.hexdigest()
+
+
+def package_verdict_reusable(
+    root: Path,
+    import_path: str,
+    graph: dict,
+    edges: dict[str, dict],
+    prior_verdicts: dict | None,
+    *,
+    selected_tests: list[str] | None = None,
+    cache: dict | None = None,
+) -> bool:
+    """Return True if prior_verdicts carries a passing verdict for import_path whose
+    transitive input + edge digest matches the current tree.
+    """
+    if not prior_verdicts:
+        return False
+    pkgs = prior_verdicts.get("packages")
+    if not isinstance(pkgs, dict):
+        return False
+    entry = pkgs.get(import_path)
+    if not isinstance(entry, dict):
+        return False
+    whole_digests = entry.get("whole_digests") or []
+    if whole_digests:
+        whole_cur = compute_package_verdict_digest(
+            root, import_path, graph, edges, active_tests=None, cache=cache
+        )
+        if whole_cur is not None and whole_cur in whole_digests:
+            return True
+    if selected_tests is not None:
+        req_set = set(selected_tests)
+        narrowed_map = entry.get("narrowed") or {}
+        if isinstance(narrowed_map, dict):
+            for rec in narrowed_map.values():
+                if not isinstance(rec, dict):
+                    continue
+                rec_tests = rec.get("tests")
+                rec_digest = rec.get("digest")
+                if not isinstance(rec_tests, list) or not isinstance(rec_digest, str):
+                    continue
+                if req_set <= set(rec_tests):
+                    cur = compute_package_verdict_digest(
+                        root, import_path, graph, edges, active_tests=rec_tests, cache=cache
+                    )
+                    if cur is not None and cur == rec_digest:
+                        return True
+    return False
+
+
+def record_package_verdict(
+    root: Path,
+    import_path: str,
+    graph: dict,
+    edges: dict[str, dict],
+    verdicts_store: dict,
+    *,
+    selected_tests: list[str] | None = None,
+    cache: dict | None = None,
+) -> bool:
+    """Record a passing package verdict into verdicts_store; return True if recorded."""
+    digest = compute_package_verdict_digest(
+        root, import_path, graph, edges, active_tests=selected_tests, cache=cache
+    )
+    if digest is None:
+        return False
+    pkgs = verdicts_store.setdefault("packages", {})
+    entry = pkgs.setdefault(import_path, {"whole_digests": [], "narrowed": {}})
+    if selected_tests is None:
+        whole_list = entry.setdefault("whole_digests", [])
+        if digest not in whole_list:
+            whole_list.append(digest)
+    else:
+        ordered = sorted(dict.fromkeys(selected_tests))
+        key = "\0".join(ordered)
+        entry.setdefault("narrowed", {})[key] = {"tests": ordered, "digest": digest}
+    return True
 
 
 def load_tillr_graph(root: Path, modules: list[str] | None = None) -> dict:
@@ -1205,7 +1595,9 @@ def _run_guarded_command(
     return rc, "".join(chunks)
 
 
-def _format_evidence_package(item: dict, *, elapsed_ms: int = 0, cached: bool = False) -> dict:
+def _format_evidence_package(
+    item: dict, *, elapsed_ms: int = 0, cached: bool = False, reused: bool = False
+) -> dict:
     rec = {
         "import_path": item["import_path"],
         "module": item["module"],
@@ -1213,6 +1605,8 @@ def _format_evidence_package(item: dict, *, elapsed_ms: int = 0, cached: bool = 
         "elapsed_ms": elapsed_ms,
         "cached": cached,
     }
+    if reused:
+        rec["reused"] = True
     if item.get("selected_tests") is not None:
         rec["tests"] = list(item["selected_tests"])
     return rec
@@ -1224,6 +1618,9 @@ def run_selected_tests(
     *,
     ev_path: str = "",
     progress_stream=None,
+    graph: dict | None = None,
+    verdicts_in: str = "",
+    verdicts_out: str = "",
 ) -> tuple[int, str, dict]:
     root = root.resolve()
     selected = selection["selected"]
@@ -1235,12 +1632,37 @@ def run_selected_tests(
     }
     write_evidence_atomic(ev_path, initial_evidence)
     if not selected:
+        if verdicts_out:
+            save_package_verdicts_atomic(Path(verdicts_out), {"schema": 1, "packages": {}})
         return 0, "go-affected: no affected tillr Go test packages\n", initial_evidence
 
     shards_mod = _load_shards_module(root)
     durations = _load_durations(root)
     edges = load_edges(root)
-    fallback_graph: dict | None = None
+    fallback_graph: dict | None = graph
+    if (verdicts_in or verdicts_out) and fallback_graph is None:
+        fallback_graph = load_tillr_graph(root)
+    prior_verdicts = load_package_verdicts_file(Path(verdicts_in)) if verdicts_in else None
+    digest_cache: dict = {}
+    reused_ips: set[str] = set()
+    active_selected: list[dict] = []
+    for item in selected:
+        if (
+            prior_verdicts is not None
+            and fallback_graph is not None
+            and package_verdict_reusable(
+                root,
+                item["import_path"],
+                fallback_graph,
+                edges,
+                prior_verdicts,
+                selected_tests=item.get("selected_tests"),
+                cache=digest_cache,
+            )
+        ):
+            reused_ips.add(item["import_path"])
+        else:
+            active_selected.append(item)
 
     def invocation_digest(item: dict, active_tests: list[str] | None) -> str | None:
         if not item.get("has_edge"):
@@ -1281,7 +1703,7 @@ def run_selected_tests(
     # Each invocation is (module, items, digest, run_regex_or_None, scratch_key).
     invocations: list[tuple[str, list[dict], str | None, str | None, str]] = []
     by_mod: dict[str, list[dict]] = {}
-    for item in selected:
+    for item in active_selected:
         tests = scan_package_tests(root, item)
         has_edge_test = "TestEdgeInputs" in tests
         narrowed = item.get("selected_tests")
@@ -1426,29 +1848,35 @@ def run_selected_tests(
         parsed, readable = parse_go_test_json(stdout)
         return rc, readable, wait_ms, parsed
 
-    with ThreadPoolExecutor(max_workers=min(16, len(invocations))) as pool:
-        for inv, (rc, readable_out, wait_ms, parsed) in zip(invocations, pool.map(run_one, invocations)):
-            mod, items, _digest, _run_pattern, _scratch_key = inv
-            if wait_ms > max_slot_wait_ms:
-                max_slot_wait_ms = wait_ms
-            inv_recorded_failure = False
-            for pkg_name, rec in parsed.items():
-                pkg_shards.setdefault(pkg_name, []).append(rec)
-                failed_tests = rec.get("failed_tests") or []
-                if rec.get("passed") is False or failed_tests:
-                    record_failed_pkg(pkg_name, failed_tests)
-                    inv_recorded_failure = True
-            if rc != 0:
-                rc_all = rc
-                outputs.append(readable_out)
-                if not inv_recorded_failure:
-                    for item in items:
-                        pkg_label = mod if item["import_path"] == "./..." else item["import_path"]
-                        record_failed_pkg(pkg_label, [])
+    if invocations:
+        with ThreadPoolExecutor(max_workers=min(16, len(invocations))) as pool:
+            for inv, (rc, readable_out, wait_ms, parsed) in zip(invocations, pool.map(run_one, invocations)):
+                mod, items, _digest, _run_pattern, _scratch_key = inv
+                if wait_ms > max_slot_wait_ms:
+                    max_slot_wait_ms = wait_ms
+                inv_recorded_failure = False
+                for pkg_name, rec in parsed.items():
+                    pkg_shards.setdefault(pkg_name, []).append(rec)
+                    failed_tests = rec.get("failed_tests") or []
+                    if rec.get("passed") is False or failed_tests:
+                        record_failed_pkg(pkg_name, failed_tests)
+                        inv_recorded_failure = True
+                if rc != 0:
+                    rc_all = rc
+                    outputs.append(readable_out)
+                    if not inv_recorded_failure:
+                        for item in items:
+                            pkg_label = mod if item["import_path"] == "./..." else item["import_path"]
+                            record_failed_pkg(pkg_label, [])
 
     packages_evidence: list[dict] = []
     for item in selected:
         ip = item["import_path"]
+        if ip in reused_ips:
+            packages_evidence.append(
+                _format_evidence_package(item, elapsed_ms=0, cached=True, reused=True)
+            )
+            continue
         shards_list = pkg_shards.get(ip, [])
         packages_evidence.append(
             _format_evidence_package(
@@ -1458,6 +1886,29 @@ def run_selected_tests(
             )
         )
 
+    if verdicts_out and fallback_graph is not None:
+        out_verdicts: dict = {"schema": 1, "packages": {}}
+        for item in selected:
+            ip = item["import_path"]
+            if ip == "./..." or ip in failed_pkgs_set:
+                continue
+            if ip not in reused_ips:
+                shards_list = pkg_shards.get(ip, [])
+                if not shards_list or not all(
+                    s.get("passed") is True and not s.get("failed_tests") for s in shards_list
+                ):
+                    continue
+            record_package_verdict(
+                root,
+                ip,
+                fallback_graph,
+                edges,
+                out_verdicts,
+                selected_tests=item.get("selected_tests"),
+                cache=digest_cache,
+            )
+        save_package_verdicts_atomic(Path(verdicts_out), out_verdicts)
+
     evidence = {
         "mode": "go-affected",
         "selection_ms": selection["selection_ms"],
@@ -1465,9 +1916,10 @@ def run_selected_tests(
         "packages": packages_evidence,
     }
     write_evidence_atomic(ev_path, evidence)
+    reused_note = f", {len(reused_ips)} reused" if reused_ips else ""
     summary = (
         f"go-affected: {len(selected)} package(s) "
-        f"({sum(1 for p in packages_evidence if p['cached'])} cached, "
+        f"({sum(1 for p in packages_evidence if p['cached'])} cached{reused_note}, "
         f"selection {selection['selection_ms']}ms, slot_wait {max_slot_wait_ms}ms)\n"
     )
     failure_summary = (
@@ -1498,6 +1950,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--drop-module", action="append", default=[], help="Module to drop from selection")
     parser.add_argument("--select-only", action="store_true", help="Print selection JSON and exit 0")
     parser.add_argument("--evidence-out", help="Write evidence JSON to this path")
+    parser.add_argument("--verdicts-in", help="Read prior passing package verdicts JSON from this path")
+    parser.add_argument("--verdicts-out", help="Write passing package verdicts JSON to this path")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -1508,7 +1962,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         parser.error("either --base or --changed is required")
 
-    selection = select_affected_packages(root, changed, drop_modules=set(args.drop_module))
+    verdicts_in = args.verdicts_in or os.environ.get(GO_VERDICTS_IN_ENV, "")
+    verdicts_out = args.verdicts_out or os.environ.get(GO_VERDICTS_OUT_ENV, "")
+    graph = load_tillr_graph(root) if (verdicts_in or verdicts_out) and not args.select_only else None
+    selection = select_affected_packages(
+        root, changed, drop_modules=set(args.drop_module), graph=graph
+    )
     if args.select_only:
         printable = {
             **selection,
@@ -1521,7 +1980,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     ev_path = args.evidence_out or os.environ.get("TILLR_GO_AFFECTED_EVIDENCE_OUT", "")
-    rc, output, _evidence = run_selected_tests(root, selection, ev_path=ev_path)
+    rc, output, _evidence = run_selected_tests(
+        root,
+        selection,
+        ev_path=ev_path,
+        graph=graph,
+        verdicts_in=verdicts_in,
+        verdicts_out=verdicts_out,
+    )
     sys.stdout.write(output)
     sys.stdout.flush()
     return rc

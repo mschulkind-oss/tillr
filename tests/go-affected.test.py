@@ -71,6 +71,8 @@ def test_build_env_strips_outer_gate_vars() -> None:
         "LAND_BATCH_LIMIT": "4",
         "TILLR_RUN_ID": "run-outer-1",
         "TILLR_GATE_SPANS_OUT": "/workspace/spans.json",
+        "TILLR_GO_VERDICTS_IN": "/workspace/verdicts-in.json",
+        "TILLR_GO_VERDICTS_OUT": "/workspace/verdicts-out.json",
         "TILLR_SELF_SUITE_TIMING_OUT": "/workspace/self-suite.json",
         "GO_TEST_SHARDS_HOLDER": "gate:run-outer-1",
         "GIT_DIR": "/workspace/.git",
@@ -2678,6 +2680,307 @@ def test_drain_subpackage_isolation(root_graph: dict) -> None:
     assert not (selected_ips & forbidden_ips), (selected_ips & forbidden_ips)
 
 
+def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
+    """Conflict-repair (-cfix) regates reuse passing per-package verdicts from the item's
+    pre-conflict gate across go-substrate, gate-runner, and go-affected when package
+    transitive inputs and declared edge digests are unchanged, and re-run only packages
+    whose inputs changed during conflict repair.
+    """
+    with tempfile.TemporaryDirectory(dir=scratch_root(), prefix="ga-cfix-") as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        loop_dir = tmp_path / "loop"
+        durable = tmp_path / "durable"
+        lock_dir = tmp_path / "locks"
+        loop_dir.mkdir()
+        durable.mkdir()
+
+        for mod_rel in (
+            "tools/tillr/core",
+            "tools/tillr/extra",
+            "tools/tillr-gate",
+            "tools/tillr-watch",
+            "tools/tillr-view",
+            "tools/gate",
+            "config",
+        ):
+            (repo / mod_rel).mkdir(parents=True, exist_ok=True)
+
+        shutil.copy2(ROOT / "tools" / "fork-check.py", repo / "tools" / "fork-check.py")
+        shutil.copy2(ROOT / "tools" / "gate" / "classify.py", repo / "tools" / "gate" / "classify.py")
+        shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", repo / "tools" / "gate" / "go_affected.py")
+        shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
+        (repo / "tools" / "go-test-durations.json").write_text("{}\n", encoding="utf-8")
+
+        for py_test, marker in (
+            ("tools/gate/change-gate.test.py", "py-change-gate"),
+            ("tools/gate/runner-first.test.py", "py-runner-first"),
+        ):
+            (repo / py_test).write_text(
+                "import os, pathlib\n"
+                'd = os.environ.get("CFIX_EXEC_LOG_DIR", "")\n'
+                "if d:\n"
+                f'    (pathlib.Path(d) / "{marker}").write_text("ran\\n")\n',
+                encoding="utf-8",
+            )
+
+        (repo / "config" / "view.txt").write_text("v1\n", encoding="utf-8")
+        (repo / "notes.txt").write_text("base-line\n", encoding="utf-8")
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text(
+            json.dumps(
+                {
+                    "github.com/mschulkind-oss/tillr-view": {
+                        "builds": ["github.com/mschulkind-oss/tillr-watch"],
+                        "reads": ["config/view.txt"],
+                    }
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        (repo / "tools" / "tillr" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr\n\ngo 1.22\n", encoding="utf-8"
+        )
+        (repo / "tools" / "tillr" / "core" / "core.go").write_text(
+            "package core\n\nfunc Value() int { return 1 }\n", encoding="utf-8"
+        )
+        (repo / "tools" / "tillr" / "extra" / "extra.go").write_text(
+            "package extra\n\nfunc Extra() int { return 10 }\n", encoding="utf-8"
+        )
+        (repo / "tools" / "tillr-gate" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-gate\n\ngo 1.22\n\n"
+            "require github.com/mschulkind-oss/tillr v0.0.0\n"
+            "replace github.com/mschulkind-oss/tillr => ../tillr\n",
+            encoding="utf-8",
+        )
+        (repo / "tools" / "tillr-gate" / "gate.go").write_text(
+            'package gate\n\nimport "github.com/mschulkind-oss/tillr/core"\n\n'
+            "func GateVal() int { return core.Value() }\n",
+            encoding="utf-8",
+        )
+        (repo / "tools" / "tillr-watch" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-watch\n\ngo 1.22\n\n"
+            "require github.com/mschulkind-oss/tillr v0.0.0\n"
+            "replace github.com/mschulkind-oss/tillr => ../tillr\n",
+            encoding="utf-8",
+        )
+        (repo / "tools" / "tillr-watch" / "main.go").write_text(
+            "package main\n\n"
+            'import "github.com/mschulkind-oss/tillr/core"\n\n'
+            "func WatchVal() int { return core.Value() }\n"
+            "func main() {}\n",
+            encoding="utf-8",
+        )
+        (repo / "tools" / "tillr-view" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-view\n\ngo 1.22\n", encoding="utf-8"
+        )
+        (repo / "tools" / "tillr-view" / "view.go").write_text(
+            "package view\n\nfunc ViewVal() int { return 7 }\n", encoding="utf-8"
+        )
+
+        def write_logging_test(rel_path: str, pkg_name: str, marker: str, fn_name: str) -> None:
+            (repo / rel_path).write_text(
+                f"package {pkg_name}\n\n"
+                "import (\n"
+                '\t"os"\n'
+                '\t"path/filepath"\n'
+                '\t"testing"\n'
+                ")\n\n"
+                f"func {fn_name}(t *testing.T) {{\n"
+                '\tif dir := os.Getenv("CFIX_EXEC_LOG_DIR"); dir != "" {\n'
+                f'\t\t_ = os.WriteFile(filepath.Join(dir, "{marker}"), []byte("ran\\n"), 0o644)\n'
+                "\t}\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+        write_logging_test("tools/tillr/core/core_test.go", "core", "tillr-core", "TestCore")
+        write_logging_test("tools/tillr/extra/extra_test.go", "extra", "tillr-extra", "TestExtra")
+        write_logging_test("tools/tillr-gate/gate_test.go", "gate", "tillr-gate", "TestGate")
+        write_logging_test("tools/tillr-watch/main_test.go", "main", "tillr-watch", "TestWatch")
+        write_logging_test("tools/tillr-view/view_test.go", "view", "tillr-view", "TestView")
+
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Fixture",
+            "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "Fixture",
+            "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        }
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, env=git_env, check=True)
+        subprocess.run(["git", "add", "."], cwd=repo, env=git_env, check=True)
+        subprocess.run(["git", "commit", "-qm", "base-v1"], cwd=repo, env=git_env, check=True)
+        base_v1 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+        # Candidate pre-conflict commit modifies tillr/core/core.go and notes.txt.
+        subprocess.run(["git", "checkout", "-qb", "cand"], cwd=repo, env=git_env, check=True)
+        (repo / "tools" / "tillr" / "core" / "core.go").write_text(
+            "package core\n\nfunc Value() int { return 2 }\n", encoding="utf-8"
+        )
+        (repo / "notes.txt").write_text("candidate-notes\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo, env=git_env, check=True)
+        subprocess.run(["git", "commit", "-qm", "cand-v1"], cwd=repo, env=git_env, check=True)
+
+        gocache = _shared_gocache()
+        step_counter = 0
+
+        def run_landing_gate(run_id: str, since_sha: str, item_id: str = "item-request-demo") -> tuple[dict, set[str]]:
+            nonlocal step_counter
+            step_counter += 1
+            exec_dir = tmp_path / f"exec-{step_counter}"
+            exec_dir.mkdir()
+            run_dir = loop_dir / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "run.record.json").write_text(
+                json.dumps({"payload": {"run_id": run_id, "item_id": item_id}}) + "\n",
+                encoding="utf-8",
+            )
+            spans_path = run_dir / "gate.spans.json"
+            fast_path = run_dir / "gate.fast.verdict.json"
+            env = {
+                **os.environ,
+                "YOLO_DURABLE_DIR": str(durable),
+                "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
+                "GOCACHE": str(gocache),
+                "CFIX_EXEC_LOG_DIR": str(exec_dir),
+                "TILLR_GATE_SPANS_OUT": str(spans_path),
+                "TILLR_FAST_VERDICT_OUT": str(fast_path),
+                "TILLR_ORDINARY_GATE_TIMING": "1",
+            }
+            res = subprocess.run(
+                [sys.executable, "tools/fork-check.py", "--tier", "landing", "--since", since_sha],
+                cwd=repo,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=120,
+            )
+            assert res.returncode == 0, f"run_id={run_id} rc={res.returncode}\n{res.stdout}"
+            ran_markers = {p.name for p in exec_dir.iterdir()}
+            spans = json.loads(spans_path.read_text(encoding="utf-8"))
+            return spans, ran_markers
+
+        # 1. Pre-conflict gate runs every affected Go package across go-substrate, gate-runner, and go-affected.
+        orig_run = "run-item-request-demo-a1-n2"
+        _, ran_orig = run_landing_gate(orig_run, base_v1)
+        all_go_markers = {"tillr-core", "tillr-extra", "tillr-gate", "tillr-watch", "tillr-view"}
+        all_py_markers = {"py-change-gate", "py-runner-first"}
+        assert ran_orig == (all_go_markers | all_py_markers), ran_orig
+        verdicts_path = loop_dir / orig_run / "gate.go-packages.json"
+        assert verdicts_path.is_file(), f"expected {verdicts_path} to be recorded"
+
+        # 2. Trunk advances on notes.txt; conflict repair resolves ONLY notes.txt (no Go or edge file changed).
+        subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, env=git_env, check=True)
+        (repo / "notes.txt").write_text("trunk-notes\n", encoding="utf-8")
+        subprocess.run(["git", "add", "notes.txt"], cwd=repo, env=git_env, check=True)
+        subprocess.run(["git", "commit", "-qm", "trunk-notes"], cwd=repo, env=git_env, check=True)
+        base_v2 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+        subprocess.run(["git", "checkout", "-qb", "cand-cfix", base_v2], cwd=repo, env=git_env, check=True)
+        (repo / "tools" / "tillr" / "core" / "core.go").write_text(
+            "package core\n\nfunc Value() int { return 2 }\n", encoding="utf-8"
+        )
+        (repo / "notes.txt").write_text("resolved-trunk-and-candidate-notes\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo, env=git_env, check=True)
+        subprocess.run(["git", "commit", "-qm", "cand-cfix-unrelated"], cwd=repo, env=git_env, check=True)
+
+        spans_cfix, ran_cfix = run_landing_gate(f"{orig_run}-cfix", base_v2)
+        assert ran_cfix == all_py_markers, (
+            f"expected zero Go packages to re-run on unrelated-file -cfix, got {ran_cfix}"
+        )
+        attrs_by_kind = {
+            row["check_id"].split("/", 1)[0]: json.loads(row["attributes_json"])
+            for row in spans_cfix["check_spans"]
+        }
+        assert attrs_by_kind["go-substrate"]["go_build"][0]["execution"] == "reused", attrs_by_kind
+        assert attrs_by_kind["gate-runner"]["go_build"][0]["execution"] == "reused", attrs_by_kind
+        ga_pkgs = {
+            p["import_path"]: p
+            for p in attrs_by_kind["go-affected"]["go_build"][0]["packages"]
+        }
+        assert set(ga_pkgs) == {
+            "github.com/mschulkind-oss/tillr-watch",
+            "github.com/mschulkind-oss/tillr-view",
+        }, ga_pkgs
+        assert all(p.get("reused") is True and p["elapsed_ms"] == 0 for p in ga_pkgs.values()), ga_pkgs
+
+        # 3. Ordinary (non-cfix) run — even when the item slug contains "cfix" — never reuses -cfix verdicts.
+        assert not go_affected.is_cfix_run_id("run-item-cfix-slug-a1-n1")
+        _, ran_ordinary = run_landing_gate("run-item-cfix-slug-a1-n1", base_v2, item_id="item-cfix-slug")
+        assert ran_ordinary == (all_go_markers | all_py_markers), ran_ordinary
+
+        # 4. Cross-item mismatch never reuses another item's verdicts.
+        _, ran_wrong_item = run_landing_gate(f"{orig_run}-cfix", base_v2, item_id="item-request-other")
+        assert ran_wrong_item == (all_go_markers | all_py_markers), ran_wrong_item
+
+        # 5. Selective invalidation: conflict repair modifies config/view.txt (declared edge of tillr-view)
+        #    and tools/tillr/extra/extra.go (sibling package in tools/tillr not imported by core/gate/watch).
+        #    Only tillr-extra and tillr-view re-run; tillr-core, tillr-gate, and tillr-watch stay reused!
+        (repo / "config" / "view.txt").write_text("v2-from-conflict-fix\n", encoding="utf-8")
+        (repo / "tools" / "tillr" / "extra" / "extra.go").write_text(
+            "package extra\n\nfunc Extra() int { return 20 }\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=repo, env=git_env, check=True)
+        subprocess.run(["git", "commit", "-qm", "cand-cfix-partial"], cwd=repo, env=git_env, check=True)
+
+        _, ran_partial = run_landing_gate(f"{orig_run}-cfix-restart", base_v2)
+        assert ran_partial == ({"tillr-extra", "tillr-view"} | all_py_markers), ran_partial
+
+        # 6. Hashed boundRunIDBase -cfix run resolves pre-conflict run via brief.md's "Its first run was <orig>,".
+        hashed_cfix = "run-item-request-demo-long-stem-0123456789abcdef-cfix"
+        hashed_dir = loop_dir / hashed_cfix
+        hashed_dir.mkdir(parents=True, exist_ok=True)
+        (hashed_dir / "brief.md").write_text(
+            f"# Conflict Fix\n- **Item:** item-request-demo\nIts first run was {orig_run}, which passed.\n",
+            encoding="utf-8",
+        )
+        _, ran_hashed = run_landing_gate(hashed_cfix, base_v2)
+        assert ran_hashed == ({"tillr-extra", "tillr-view"} | all_py_markers), ran_hashed
+
+        # 7. Narrowed read_tests verdict does NOT satisfy a whole-package selection, while matching narrowed reuses.
+        narrow_prior = {
+            "packages": {
+                "github.com/mschulkind-oss/tillr-view": {
+                    "whole_digests": [],
+                    "narrowed": {},
+                }
+            }
+        }
+        repo_graph = go_affected.load_tillr_graph(repo)
+        repo_edges = go_affected.load_edges(repo)
+        narrow_digest = go_affected.compute_package_verdict_digest(
+            repo,
+            "github.com/mschulkind-oss/tillr-view",
+            repo_graph,
+            repo_edges,
+            active_tests=["TestView"],
+        )
+        assert narrow_digest is not None
+        narrow_prior["packages"]["github.com/mschulkind-oss/tillr-view"]["narrowed"]["TestView"] = {
+            "tests": ["TestView"],
+            "digest": narrow_digest,
+        }
+        assert go_affected.package_verdict_reusable(
+            repo,
+            "github.com/mschulkind-oss/tillr-view",
+            repo_graph,
+            repo_edges,
+            narrow_prior,
+            selected_tests=["TestView"],
+        )
+        assert not go_affected.package_verdict_reusable(
+            repo,
+            "github.com/mschulkind-oss/tillr-view",
+            repo_graph,
+            repo_edges,
+            narrow_prior,
+            selected_tests=None,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", default=[], help="Run only named test case(s)")
@@ -2690,6 +2993,7 @@ def main(argv: list[str] | None = None) -> int:
     # Ordered longest-first so critical-path cases start immediately in the worker pool.
     all_cases: list[tuple[str, Callable[[], None]]] = [
         ("test_no_leftover_processes_after_check_finishes", test_no_leftover_processes_after_check_finishes),
+        ("test_cfix_regate_reuses_unchanged_package_verdicts", test_cfix_regate_reuses_unchanged_package_verdicts),
         ("test_fork_check_integration", lambda: test_fork_check_integration(root_graph)),
         ("test_go_affected_slot_wait_order_and_trunk_repair_priority", test_go_affected_slot_wait_order_and_trunk_repair_priority),
         ("test_heavy_failures_replay", lambda: test_heavy_failures_replay(root_graph)),
