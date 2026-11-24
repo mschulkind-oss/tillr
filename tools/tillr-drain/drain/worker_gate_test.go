@@ -176,11 +176,22 @@ func TestRestartLockWaitDuringConcurrentSlowStageAndRestartCheck(t *testing.T) {
 	h.l.cfg.Now = time.Now
 
 	stageEntered := make(chan struct{})
-	const slowStageDuration = 200 * time.Millisecond
-	h.l.cfg.Stage = stagerFunc(func(_ context.Context, spec StageSpec) error {
+	releaseStage := make(chan struct{})
+	stageExited := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSlowStage := func() {
+		releaseOnce.Do(func() { close(releaseStage) })
+	}
+	defer releaseSlowStage()
+	h.l.cfg.Stage = stagerFunc(func(stageCtx context.Context, spec StageSpec) error {
 		if spec.ItemID == "item-a" {
+			defer close(stageExited)
 			close(stageEntered)
-			time.Sleep(slowStageDuration)
+			select {
+			case <-releaseStage:
+			case <-stageCtx.Done():
+				return stageCtx.Err()
+			}
 		}
 		return nil
 	})
@@ -225,7 +236,7 @@ func TestRestartLockWaitDuringConcurrentSlowStageAndRestartCheck(t *testing.T) {
 	}
 	fixtureWrite(t, h.f, func(tx *store.Tx) error { return applyTerminal(tx, recB) })
 
-	// Claim item-a on lane-1 and start its 200ms slow stage.
+	// Claim item-a on lane-1 and start its slow stage, blocked on releaseStage.
 	v, s, e := claimFixture(t, h.l)
 	ok, workA, _, dA, err := h.l.claimFastStart(ctx, v, s, e, h.l.cfg.Now().UTC())
 	if !ok || err != nil || dA.ItemID != "item-a" {
@@ -246,26 +257,37 @@ func TestRestartLockWaitDuringConcurrentSlowStageAndRestartCheck(t *testing.T) {
 
 	// File a non-replacing restart (rolling build check) while lane-1 is staging.
 	req := h.request(t, 1)[0]
-	restartStart := time.Now()
-	restartAnswered := make(chan time.Duration, 1)
+	type restartResult struct {
+		handled bool
+		stop    string
+		err     error
+	}
+	restartChecked := make(chan restartResult, 1)
 	go func() {
-		for ctx.Err() == nil {
-			handled, _, err := h.l.gateRestart(ctx, &LoopResult{})
-			if err != nil || handled {
-				restartAnswered <- time.Since(restartStart)
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
+		handled, stop, err := h.l.gateRestart(ctx, &LoopResult{})
+		restartChecked <- restartResult{handled: handled, stop: stop, err: err}
 	}()
-	var restartWait time.Duration
+	var checked restartResult
 	select {
-	case restartWait = <-restartAnswered:
+	case checked = <-restartChecked:
 	case <-time.After(hangGuard):
-		t.Fatal("restart check was not answered")
+		t.Fatal("restart check blocked behind slow stage")
+	}
+	if checked.err != nil || !checked.handled || checked.stop != "" {
+		t.Fatalf("gateRestart during slow stage = handled=%v stop=%q err=%v; want handled=true stop=\"\"", checked.handled, checked.stop, checked.err)
 	}
 	if got := h.answer(t, req.ID).Answer; got != restart.AnswerAlreadyCurrent {
 		t.Fatalf("restart answer = %q, want %q", got, restart.AnswerAlreadyCurrent)
+	}
+	select {
+	case <-stageExited:
+		t.Fatal("slow stage exited before restart check was answered")
+	default:
+	}
+	select {
+	case err := <-stageDone:
+		t.Fatalf("stageAndLaunchClaimed finished before release: err=%v", err)
+	default:
 	}
 
 	// Examine finished item-b on lane-2 while item-a's slow stage is still running.
@@ -274,8 +296,14 @@ func TestRestartLockWaitDuringConcurrentSlowStageAndRestartCheck(t *testing.T) {
 	if completion.outcome.err != nil {
 		t.Fatalf("examineWorkerEnd err = %v", completion.outcome.err)
 	}
-	if err := <-stageDone; err != nil {
-		t.Fatalf("stageAndLaunchClaimed err = %v", err)
+	releaseSlowStage()
+	select {
+	case err := <-stageDone:
+		if err != nil {
+			t.Fatalf("stageAndLaunchClaimed err = %v", err)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("slow stage did not finish after release")
 	}
 	select {
 	case c := <-h.l.completions:
@@ -297,22 +325,15 @@ func TestRestartLockWaitDuringConcurrentSlowStageAndRestartCheck(t *testing.T) {
 	if exam == nil {
 		t.Fatalf("missing examination timing for %s: %+v", dB.RunRequest.RunID, timings)
 	}
-	var lockWaitMS int64 = -1
+	var sawRestartLockWait bool
 	for _, p := range exam.Phases {
 		if p.Phase == "restart_lock_wait" {
-			lockWaitMS = p.EndMS - p.StartMS
+			sawRestartLockWait = true
 			break
 		}
 	}
-	if lockWaitMS < 0 {
+	if !sawRestartLockWait {
 		t.Fatalf("missing restart_lock_wait span in %+v", exam.Phases)
-	}
-	t.Logf("restart_answer_wait=%dms restart_lock_wait=%dms", restartWait.Milliseconds(), lockWaitMS)
-	if restartWait >= slowStageDuration/2 {
-		t.Fatalf("restart check waited %v behind slow stage", restartWait)
-	}
-	if lockWaitMS >= 50 {
-		t.Fatalf("restart_lock_wait = %dms, want < 50ms", lockWaitMS)
 	}
 }
 
