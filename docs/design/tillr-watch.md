@@ -10,7 +10,7 @@ summary: "Standing rules, kept as data, that read the tillr store and open one a
 next: "Build agent watches, the subscribe stream, the outcome record and the five designed rules in Sections 5.14 to 5.18; the owner reviews the designer decisions in the ledger."
 related:
   - ./landing-principles.md
-  - ./run-wall-ruling.md
+  - ../reference/run-wall-ruling.md
   - ./failure-diagnosed-not-waited-out.md
   - ./tillr-judge-and-lifecycle.md
   - ./tillr-state-machines.md
@@ -133,7 +133,7 @@ remains possible and still deserves attention ([D-TW2](#D-TW2)).
 A rule may observe and tell. It may not stop a run, fail an item, remove a lane from rotation or
 impose a limit. Four rulings elsewhere say the same thing from their own side:
 
-- [Whether a run wall exists at all](./run-wall-ruling.md#1-should-the-wall-exist-at-all).
+- [Whether a run wall exists at all](../reference/run-wall-ruling.md#no-default-wall).
 - [Failure is diagnosed, not waited out](./failure-diagnosed-not-waited-out.md#31-the-four-tests),
   and its [restatement of admission](./failure-diagnosed-not-waited-out.md#34-admission-restated).
 - [Only verdicts charge](./landing-principles.md#5-only-verdicts-charge) and

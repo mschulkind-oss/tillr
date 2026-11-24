@@ -27,7 +27,7 @@ runs the local Unix-socket relay that passes wake hints between programs sharing
 it requires `--store` and exits once no connection has remained for its idle period.
 
 The design that splits this surface into `--help`, this README and the composition
-skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
+skill is [`docs/reference/tillr-distribution.md`](../../docs/reference/tillr-distribution.md).
 
 ## State invariants
 

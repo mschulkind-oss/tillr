@@ -30,15 +30,15 @@ import (
 // TimeoutSeconds is optional: omitted or 0 means the run has no wall, and it is stamped
 // into the request as timeout_ms, which is what the run's lease expires on. A wall is a
 // budget and not a fault detector — the retired 1800s default killed runs that had already
-// committed (design D-RW1, docs/design/run-wall-ruling.md) — so no backend is required to
+// committed (design D-RW1, docs/reference/run-wall-ruling.md) — so no backend is required to
 // carry one. A negative value is refused, because a wall cannot run backwards.
 //
 // A positive value is passed to the adapter as `--timeout <seconds>` as well as into the
 // request's own bound, so the runner's bound and the harness's cannot silently diverge.
 //
 // HarnessArgs are arguments for the harness itself, not for the adapter: which tools exist,
-// which servers it sees, what standing text it gets (docs/design/tillr-claude-backend.md
-// §3, D-CB2). They are appended after a `--` separator and the adapter hands them over
+// which servers it sees, what standing text it gets (docs/reference/tillr-claude-backend.md,
+// "Controlling what a seat may use", D-CB2). They are appended after a `--` separator and the adapter hands them over
 // unchanged, so the policy holds the data while the spelling stays the harness's own, and
 // tillr does not invent one permission vocabulary for several harnesses. An adapter that
 // takes no harness arguments refuses the separator as it refuses any argument it does not

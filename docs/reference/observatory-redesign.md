@@ -46,7 +46,7 @@ price, and never presents a missing or derived clock as a recorded fact.
 intake and the `--write` routes), [tillr item states](./tillr-item-states.md) (projected item
 states), [observatory truthfulness and shared primitives](./observatory-design.md) (the provenance
 rules and shared components), and
-[the observatory recording contract](../design/tillr-observatory.md) (what the store must record
+[the recording contract](./observatory-design.md#recording-contract-and-read-model) (what the store must record
 for these reads).
 
 ---

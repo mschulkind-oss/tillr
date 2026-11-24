@@ -20,7 +20,7 @@ trunk, and no state is carried across the landing except the `landings` row it w
 the head it pins when nothing lands.
 
 The design that splits this surface into `--help`, this README and the composition skill is
-[`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
+[`docs/reference/tillr-distribution.md`](../../docs/reference/tillr-distribution.md).
 
 ## The red cap
 
@@ -71,7 +71,7 @@ since green with both bounds disabled.
   change keeps its message unchanged, while a multi-commit change uses the first commit's
   subject and lists the remaining commits' subjects in the body. The commit
   names no queue item: there is no `Tillr-Item:` trailer (ruling `D-RS3` in
-  [`queue-persistence-ruling.md`](../../docs/design/queue-persistence-ruling.md#3-landing-receipts-without-commit-trailers)), and
+  [queue persistence](../../docs/reference/tillr-queue-persistence.md#landing-receipts-without-commit-trailers)), and
   `Trunk.Move` fast-forwards the trunk onto it. The landed tree is the tree the verdict
   judged unless the trunk moved, and the row records both so a reader can tell.
   The drain routes gated remote-sync repairs around the ordinary squash. It

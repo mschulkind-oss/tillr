@@ -475,7 +475,7 @@ func printRecord(env record.Envelope) int {
 const faceList = "exec, pause, request, lanes, status, release, mark-copied-usage or copied-usage"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
-// surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer
+// surface (docs/reference/tillr-distribution.md, "Documentation split"), so a help request is an answer
 // and not a usage error: fail turns it into exit 0 and prints nothing.
 var errHelp = errors.New("help requested")
 

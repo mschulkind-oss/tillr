@@ -271,8 +271,8 @@ func TestMissingBinaryIsAnExternalFailure(t *testing.T) {
 	}
 }
 
-// TestHelpNamesTheNouns pins the wrapper's own surface (docs/design/tillr-distribution.md
-// Section 3 makes `<bin> --help` layer 1): `tillr --help` names the
+// TestHelpNamesTheNouns pins the wrapper's own surface (docs/reference/tillr-distribution.md,
+// "Documentation split", makes `<bin> --help` layer 1): `tillr --help` names the
 // dispatchable nouns and exits 0, and starts none of them. The wrapper still answers nothing that
 // comes after a noun -- TestWrapperReadsNothingAfterTheNoun is the other half of that rule.
 func TestHelpNamesTheNouns(t *testing.T) {

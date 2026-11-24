@@ -7,7 +7,7 @@ related:
   - ../reference/tillr-restart.md
   - ./tillr-vocabulary.md
   - ./tillr-graph-is-the-path.md
-  - ./tillr-claude-backend.md
+  - ../reference/tillr-claude-backend.md
   - ./tillr-live-drain-config-plan.md
 ---
 

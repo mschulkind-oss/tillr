@@ -12,7 +12,7 @@ summary: "A seat profile is a named, complete backend policy for the drain, trac
 next: "The owner rules OQ-DSP1 through OQ-DSP3. The claude-sub profile stays held until the Claude backend is proven and the owner asks to switch."
 depends-on:
   - ./tillr-live-drain-config.md
-  - ./tillr-claude-backend.md
+  - ../reference/tillr-claude-backend.md
 vantage:
   status-chip: true
 ---
@@ -33,7 +33,7 @@ vantage:
 
 **Needs your ruling:** [OQ-DSP1](#OQ-DSP1), [OQ-DSP2](#OQ-DSP2), [OQ-DSP3](#OQ-DSP3).
 
-**Reads with:** [tillr-live-drain-config.md](./tillr-live-drain-config.md) (the runtime configuration table, its precedence and the reload at a pass boundary, which this design uses), [tillr-claude-backend.md](./tillr-claude-backend.md) (the `run-claude` adapter and the subscription's quota windows), and [tillr-convergence.md](./tillr-convergence.md) (whose [OQ-TC2](./tillr-convergence.md#OQ-TC2) this design revises). No implementation plan exists.
+**Reads with:** [tillr-live-drain-config.md](./tillr-live-drain-config.md) (the runtime configuration table, its precedence and the reload at a pass boundary, which this design uses), [tillr-claude-backend.md](../reference/tillr-claude-backend.md) (the `run-claude` adapter and the subscription's quota windows), and [tillr-convergence.md](./tillr-convergence.md) (whose [OQ-TC2](./tillr-convergence.md#OQ-TC2) this design revises). No implementation plan exists.
 
 ## 1. Context and Goal
 
@@ -199,7 +199,7 @@ The policy snapshot (`PolicyState`, `.tillr/loop/backend-policy.json`) gains `pr
 
 ### 7.2 `claude-sub` — Claude Subscription Profile (Defined and Held; NOT Selected)
 
-`config/tillr/profiles/claude-sub.json` puts the strongest model of the Claude subscription on `design` alone and spreads every other seat across the two cheaper ones. [`config/tillr/backend-policy.claude.json`](../../config/tillr/backend-policy.claude.json), by contrast, runs every seat but `design` on one model. Every row runs the adapter `tools/tillr-run/backends/claude/run-claude`, which [the Claude backend design](./tillr-claude-backend.md) describes. The profile carries:
+`config/tillr/profiles/claude-sub.json` puts the strongest model of the Claude subscription on `design` alone and spreads every other seat across the two cheaper ones. [`config/tillr/backend-policy.claude.json`](../../config/tillr/backend-policy.claude.json), by contrast, runs every seat but `design` on one model. Every row runs the adapter `tools/tillr-run/backends/claude/run-claude`, which [the Claude backend reference](../reference/tillr-claude-backend.md) describes. The profile carries:
 
 ```json
 "hold": {

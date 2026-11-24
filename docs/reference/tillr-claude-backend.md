@@ -1,55 +1,64 @@
 ---
-title: "A claude backend for tillr: a seat can run on the Claude subscription and waits when its window is spent"
+title: "The Claude Code backend: headless runs on a subscription, and waiting when its window is spent"
 status: accepted
-stage: BUILT
-updated: 2026-11-24
+stage: CURRENT
+verified: 2026-11-24
+covers:
+  - tools/tillr-run/backends/claude/
+  - tools/tillr-run/run/request.go
+  - tools/tillr-drain/drain/backend_availability.go
+  - config/tillr/backend-policy.claude.json
+  - config/tillr/backend-policy.mixed.json
 tags:
   - tillr
   - backend
-  - design
-summary: "The run-claude adapter lets the backend policy put any seat on the Claude Code command line run headless (claude -p), which is the only way to spend a Claude subscription from a drain. The design states what a headless run loads by default, what the adapter always passes, how a backend row carries harness arguments for tools, servers and prompt text, and how a subscription quota command with an optional owner reserve closes a backend to new dispatches."
-next: "harness_args for the pi adapter is unbuilt and waits for a pi seat that needs it."
-depends-on:
-  - ../reference/tillr-muse-backend.md
-  - tillr-convergence.md
+  - reference
+summary: "The run-claude adapter lets the backend policy put any seat on the Claude Code command line run headless (claude -p), which is the only way to spend a Claude subscription from a drain. This reference states what a headless run loads by default, what the adapter always passes, how a backend row carries harness arguments for tools, servers and prompt text, and how a subscription quota command with an optional owner reserve closes a backend to new dispatches."
 vantage:
   status-chip: true
 ---
 
-# A claude backend for tillr: a seat can run on the Claude subscription and waits when its window is spent
+# The Claude Code backend: headless runs on a subscription, and waiting when its window is spent
 
-**Status:** Built, except `harness_args` for the pi adapter
-(`tools/tillr-run/backends/pi/run-pi` refuses an argument it does not know). MEASURED: the
-adapter's defaults in [section 1](#1-what-was-measured), a dispatch and landing in a scratch
+**Status:** Verified 2026-11-24 against the tree. MEASURED: the adapter's defaults
+([What a headless run loads](#what-a-headless-run-loads)), a dispatch and landing in a scratch
 clone ([Scratch drain measurements](#scratch-drain-measurements)), and the quota command
 against a live subscription
 ([Direct readings and the owner's reserve](#direct-readings-and-the-owners-reserve)).
-[`config/tillr/backend-policy.claude.json`](../../config/tillr/backend-policy.claude.json)
-and [`config/tillr/backend-policy.mixed.json`](../../config/tillr/backend-policy.mixed.json)
-route seats to the Claude adapter. Neither sets `quota` or `reserve`; opting a row in is
-the owner's configuration choice.
 
-> **In short.** A backend is an adapter program plus a row in the backend policy
-> ([the backend adapter reference](../reference/tillr-muse-backend.md#adapter-contract-and-write-boundary)).
-> This design is the adapter for Claude Code run headless, plus two things a policy row
-> carries for it: extra arguments for the harness, and a quota command whose reading closes
-> the backend to new work before the subscription refuses.
+A **backend** is an adapter program plus a row in the backend policy
+([the backend adapter reference](./tillr-muse-backend.md#adapter-contract-and-write-boundary)).
+This backend is the adapter for Claude Code run headless, plus two things a policy row
+carries for it: extra arguments for the harness, and a quota command whose reading closes
+the backend to new work before the subscription refuses. A Claude subscription cannot be
+spent through pi; the headless Claude Code command line is the only way to spend it from a
+drain. The subscription is spent in windows, so the drain knows when a window is shut and
+waits for it.
 
-**Why it matters.** A Claude subscription cannot be spent through pi; the headless Claude
-Code command line is the only way to spend it from a drain. The subscription is spent in
-windows, so the drain has to know when a window is shut and wait for it.
+| Component | Lives in |
+| :--- | :--- |
+| Run adapter, report extractor, fixtures | [`tools/tillr-run/backends/claude/`](../../tools/tillr-run/backends/claude/) (`run-claude`, `extract-report`) |
+| Delivery call server and hooks | `tools/tillr-run/backends/claude/landing` |
+| Subscription quota command | `tools/tillr-run/backends/claude/quota` |
+| Harness arguments on a run request | `tools/tillr-run/run` (`harness_args`) |
+| Quota admission and the waiting view | [the drain's reference](../../tools/tillr-drain/README.md#backend-quota-admission) |
+| Policies that route seats here | [`config/tillr/backend-policy.claude.json`](../../config/tillr/backend-policy.claude.json), [`config/tillr/backend-policy.mixed.json`](../../config/tillr/backend-policy.mixed.json) |
 
-**Needs your ruling:** nothing.
+Neither policy file sets `quota` or `reserve`; opting a row in is the owner's configuration
+choice.
 
-**Reads with:** [the backend adapter reference](../reference/tillr-muse-backend.md) (what a
-backend is and the report shape), [the convergence design](./tillr-convergence.md) (where
-models are named), [the judge and lifecycle design](./tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27)
+**Not built:** `harness_args` for the pi adapter. `tools/tillr-run/backends/pi/run-pi` refuses
+an argument it does not know, as every adapter does.
+
+**Reads with:** [the backend adapter reference](./tillr-muse-backend.md) (what a
+backend is and the report shape), [the convergence design](../design/tillr-convergence.md) (where
+models are named), [the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27)
 (why a refused run waits on its own backend), and
 [the adapter's README](../../tools/tillr-run/backends/claude/README.md).
 
 ---
 
-## 1. What was measured
+## What a headless run loads
 
 Each row is one headless run of Claude Code 2.1.325, model alias `haiku`, effort `low`, brief
 on standard input, output as a stream of JSON lines (`--output-format stream-json --verbose`).
@@ -59,7 +68,7 @@ on standard input, output as a stream of JSON lines (`--output-format stream-jso
 | Built-in tools removed (`--tools ""`), nothing else | 20 connector servers from the account and the environment, all their tools, 0 skills | 92,263 |
 | Connector servers off (`--strict-mcp-config`) | 26 built-in tools, 0 servers, 53 skills | 29,084 |
 
-Five facts the design rests on:
+Five facts the adapter rests on:
 
 1. **Removing built-in tools does not remove connector tools.** Only `--strict-mcp-config` does,
    and it cuts the prompt by about two thirds.
@@ -104,7 +113,7 @@ window with its fraction and reset, `complete: yes` and `result: done`. With a `
 lines, `complete: no` and `result: missing`, and the drain classes the run as an
 infrastructure ending.
 
-## 2. The adapter
+## The adapter
 
 The [Claude adapter directory](../../tools/tillr-run/backends/claude/) holds the run adapter,
 extractor, fixtures, and a separate subscription quota command. Its directory is named
@@ -142,13 +151,13 @@ cache write added together); without a `result` line they are the `assistant` li
 once per message id. Cost is `total_cost_usd`, and it is an estimate at list prices: a subscription
 is not billed per run. The session id is the `result` line's, or the `init` line's.
 
-## 3. Controlling what a seat may use
+## Controlling what a seat may use
 
 A Claude seat is controlled the way a pi seat is: which tools exist, which are refused, what
 custom tools it gets, which skills, what standing text. Pi takes all of that from the machine's
 pi profile. Claude Code takes it from arguments, so the policy row carries them.
 
-**Decision: a backend row carries `harness_args`, a list of strings staging appends to the
+**A backend row carries `harness_args`, a list of strings staging appends to the
 adapter's argument list after a `--` separator, and the adapter hands them to the harness
 unchanged.** The policy holds data and the adapter holds spelling: tillr does not invent one
 permission vocabulary for four harnesses.
@@ -171,11 +180,11 @@ arguments refuses them, as every adapter refuses an argument it does not know.
 worktree carries the repository's own instruction files, and Claude Code reads them as pi reads its
 own; nothing is copied into a second place.
 
-## 4. When the window is spent
+## When the window is spent
 
 A run the subscription refuses exits nonzero and writes no `RESULT:` footer. **The run waits
 for its own backend's window, and no other backend is tried**
-([`D-JL24` and `D-JL26`](./tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27)).
+([`D-JL24` and `D-JL26`](../design/tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27)).
 A seat names one backend, and moving a seat to another backend is a policy edit by a person.
 
 - **A run that did work continues in place.** For a single-worker item whose refusing run
@@ -248,21 +257,12 @@ answers fraction 0 with a null reset, and the command preserves the null. A miss
 expired token is an explicit error; the credential's owner signs in or refreshes through
 Claude Code before a later probe succeeds.
 
-## 5. What done looks like
+## Why it's this way
 
-- `tillr drain loop --policy config/tillr/backend-policy.claude.json` dispatches a build item to
-  `claude`, and the drain log's spend line names that backend.
-- A design item dispatches to `claude-designer`.
-- With the subscription refusing, the item waits on its own backend and resumes when the
-  window reopens.
-- A row's `harness_args` appear after `--` in the recorded `run.request`.
-
-## Decision Ledger
-
-| ID | Decision | Why |
+| ID | Ruling | Why |
 | :--- | :--- | :--- |
 | `D-CB1` | The adapter always passes `--strict-mcp-config` | Measured: connector servers triple the prompt and let a worker act outside the repository |
 | `D-CB2` | A backend row carries `harness_args`, passed unchanged after `--` | The policy holds data and the adapter holds spelling; one permission vocabulary across harnesses is not designed |
-| `D-CB3` | Superseded by [`D-JL24`](./tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27): a seat names one backend and nothing walks a list | A failure is fixed, not routed around |
-| `D-CB4` | Superseded by [`D-JL26`](./tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27): a run the subscription refuses waits for that backend's own window | Quota exhaustion is not an exception to `D-JL24` |
+| `D-CB3` | A seat names one backend and nothing walks a list; [`D-JL24`](../design/tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27) owns the rule | A failure is fixed, not routed around |
+| `D-CB4` | A run the subscription refuses waits for that backend's own window; [`D-JL26`](../design/tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27) owns the rule | Quota exhaustion is not an exception to `D-JL24` |
 | `D-CB5` | Cost on this backend is recorded as the harness's estimate | The harness reports list-price dollars; a subscription is not billed per run |

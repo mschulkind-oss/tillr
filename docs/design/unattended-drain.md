@@ -7,7 +7,7 @@ summary: "Eight structural gaps stop the drain from running a night alone. Each 
 next: "Write the implementation plan; first in the build order are the revert that cannot be outrun and fault injection."
 depends-on:
   - landing-principles.md
-  - trunk-fixer-gate.md
+  - ../reference/gate.md
   - tillr-watch.md
 vantage:
   status-chip: true
@@ -42,7 +42,7 @@ minutes, not the seconds every other change gets. Lanes stop being a fixed count
 the owner's to overturn.
 
 **Reads with:** [`landing-principles.md`](./landing-principles.md) (the settled rulings these rules
-extend), [`trunk-fixer-gate.md`](./trunk-fixer-gate.md) (the fixer's gate),
+extend), [the gate reference](../reference/gate.md#the-trunk-fixers-gate) (the fixer's gate),
 [`tillr-watch.md`](./tillr-watch.md) (the alerting design rule 8 needs),
 [an oversized item lands in parts](./tillr-item-split.md) (items that do not finish).
 
@@ -177,7 +177,7 @@ and no other.
    [principle 3](./landing-principles.md#3-gate-what-will-be-the-tip-once) treats any candidate.
    A moved trunk is never a reason to abandon a revert.
 2. **A revert that conflicts files a fixer**, because a later landing built on the red one. The
-   fixer is gated as [`trunk-fixer-gate.md`](./trunk-fixer-gate.md) decides.
+   fixer is gated as [the gate reference](../reference/gate.md#the-trunk-fixers-gate) states.
 3. **Every finished red verdict produces a repair**, whatever lands after it.
 4. **A log line that says a fixer was filed names the item**; when no item was created, the reason
    is written instead.
@@ -194,7 +194,7 @@ reports, and its report becomes work.
 
 | Outside input | What the check does instead of refusing |
 | :--- | :--- |
-| An upstream release moved | Files one rebase item per fork and release, as `D-FG3` in [`trunk-fixer-gate.md`](./trunk-fixer-gate.md#decision-ledger) decides |
+| An upstream release moved | Files one rebase item per fork and release, as `D-FG3` in [the gate reference](../reference/gate.md#upstream-drift) decides |
 | A test needs a live credential | Runs without credentials; a test that then fails is recorded as needing one |
 | An upstream test fails at upstream's own tag | Recorded against upstream, with the tag; it does not judge the patches |
 | A wall-clock limit inside a suite the repository does not own | As the row above |

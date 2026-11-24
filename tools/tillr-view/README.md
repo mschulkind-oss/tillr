@@ -19,7 +19,7 @@ keeps its own store handle read-only, so reads remain safe while writers run.
 With `serve --write`, it also delegates item placement and idea saving to the item command.
 
 The design that splits this surface into `--help`, this README and the composition
-skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
+skill is [`docs/reference/tillr-distribution.md`](../../docs/reference/tillr-distribution.md).
 
 ## Opt-in item placement
 

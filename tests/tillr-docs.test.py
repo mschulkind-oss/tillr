@@ -2,7 +2,7 @@
 """The documentation contract: every face a document names is a face the binary answers.
 
 WHY THIS EXISTS. `--help` is the one home of a flag
-(docs/design/tillr-distribution.md Section 3). A module `README.md` and the `tillr-operating`
+(docs/reference/tillr-distribution.md, "Documentation split"). A module `README.md` and the `tillr-operating`
 skill say what a module owns, which faces compose, and when a face refuses; they never
 restate a flag, because a copied flag list is the page that disagrees with the binary a month
 later. That split only holds if the documents are checked against the binaries, so this suite
@@ -422,8 +422,8 @@ def case_faces_answer_help(directory):
 # Only an already-executed historical record may keep a disabling invocation.
 # Scripts, recipes, and skills are instructions and can never be exempted.
 ROLLING_HISTORY = {
-    "docs/design/tillr-claude-backend.md":
-        "Records the 2026-11-16 scratch drain measurement with rolling checks off.",
+    "docs/reference/tillr-claude-backend.md":
+        "Records the scratch drain measurement with rolling checks off.",
 }
 
 

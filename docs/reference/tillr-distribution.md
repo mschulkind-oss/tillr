@@ -1,28 +1,38 @@
 ---
-status: in-review
-stage: BUILT
-next: "Nothing owed. The schema-compatibility policy of Section 9 is undecided and is written only if two versions must share one store."
+title: "Distribution: one source-built pack with eight PATH binaries"
+status: accepted
+stage: CURRENT
+verified: 2026-11-24
+covers:
+  - yolo-packs/tillr/pack.json
+  - yolo-packs/tillr/skills/
+  - tests/pack-sync.test.py
+  - tests/tillr-docs.test.py
+tags: [tillr, pack, distribution, documentation, reference]
+summary: "tillr is distributed through one pack in a source-plus-launcher pattern: the module source is mirrored into the pack, eight program entries on PATH each build and cache one binary from that source, and documentation is split into three layers where --help alone owns flags."
 ---
 
-# Ship `tillr` as one source-built pack with eight `PATH` binaries
+# Distribution: one source-built pack with eight `PATH` binaries
 
-**Status:** Built. [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json) ships the source tree, the eight launchers and two skills. UNMEASURED here: the checks that hold it true are [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) (the mirror and the launchers) and [`tests/tillr-docs.test.py`](../../tests/tillr-docs.test.py) (the documentation split).
+**Status:** Verified 2026-11-24 against the tree. UNMEASURED here: the checks that hold it true are [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) (the mirror and the launchers) and [`tests/tillr-docs.test.py`](../../tests/tillr-docs.test.py) (the documentation split).
 
-> **In short.** `tillr` is distributed through one pack in a source-plus-launcher pattern: the module source is mirrored into the pack, eight `program` entries on `PATH` each build and cache one binary from that source, and documentation is split into three layers where `--help` alone owns flags.
+`tillr` is distributed through one pack, [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json), in a **source-plus-launcher** pattern: the module source is mirrored into the pack, eight `program` entries on `PATH` each build and cache one binary from that source, and documentation is split into three layers where `--help` alone owns flags.
 
-**The shape.** One `files` tree (`~/.local/share/tillr/`), eight `program` launchers on `PATH` (`tillr` plus the seven `tillr-<noun>` binaries) backed by a digest-keyed build cache (`~/.cache/tillr/bin/`), a `README.md` per module for standalone judgment, and the pack's skills for how the binaries compose.
+| Component | Lives in |
+| :--- | :--- |
+| Pack declaration: eight `program` launchers, one `files` tree, the skills | [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json) |
+| Module source and its mirror | [`tools/`](../../tools), copied by `just pack-sync` to `yolo-packs/tillr/files/` |
+| Mirror and launcher check | [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) |
+| Documentation split check | [`tests/tillr-docs.test.py`](../../tests/tillr-docs.test.py) |
+| Loop composition skill | [`tillr-operating`](../../yolo-packs/tillr/skills/tillr-operating/SKILL.md) |
 
 **Cost.** The module source exists twice: under [`tools/`](../../tools) and, mirrored by `just pack-sync`, under [`yolo-packs/`](../../yolo-packs). Eight `program` entries put eight launchers in `~/.local/bin/`.
 
-**Start at [§1](#1-one-pack-eight-programs-and-what-path-sees)** — the eight-binary `PATH` contract drives the launcher and the documentation split.
-
-**Needs your ruling:** None. The four questions are settled by what is built ([Open Questions](#open-questions)).
-
 ---
 
-## 1. One pack, eight programs, and what `PATH` sees
+## One pack, eight programs, and what `PATH` sees
 
-**Verdict:** One pack at `yolo-packs/tillr` named `tillr`, declaring **eight `program` contributions** (the umbrella dispatcher `tillr` plus the seven standalone `tillr-<noun>` binaries), **one `files` contribution**, and **one `skills` contribution**. Rejected: a single `tillr` launcher with internal subcommands.
+One pack at `yolo-packs/tillr` named `tillr` declares **eight `program` contributions** (the umbrella dispatcher `tillr` plus the seven standalone `tillr-<noun>` binaries), **one `files` contribution**, and **one `skills` contribution**.
 
 | Module directory | Binary on `PATH` |
 | :--- | :--- |
@@ -46,9 +56,9 @@ Three constraints force eight `program` declarations rather than a single `tillr
 
 ---
 
-## 2. Build and delivery
+## Build and delivery
 
-**Verdict:** The **source-plus-launcher** pattern: the pack delivers source as `files`, and each `program` is a launcher that builds and caches its binary. Rejected: `program` with `build`/`produces`.
+The pack delivers source as `files`, and each `program` is a launcher that builds and caches its binary.
 
 - **Source delivery (`files`):** `just pack-sync` copies the module directories named in `MODULES` of [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) into the pack's `files/local/share/tillr/<module>/`, which `yolo` renders to `~/.local/share/tillr/<module>/`. That test guards the copy against drift. [`tools/tillr`](../../tools/tillr) is part of the tree because the binary modules resolve the shared library through relative `replace` paths in `go.mod`.
 - **Launcher mechanics (`program`):** The eight launchers are one body that differs in two assignments: the binary's name and its module (`tillr` builds from `tillr-cli`; `tillr-<noun>` builds from the module of the same name). The launcher never changes its own working directory (`go build` runs in a subshell) and ends with `exec`, so a store named relative to the caller's directory resolves in the caller's repository.
@@ -64,7 +74,7 @@ Three constraints force eight `program` declarations rather than a single `tillr
 
 ---
 
-## 3. Documentation split and the honesty rule
+## Documentation split and the honesty rule
 
 Every fact about `tillr` has one home across three layers:
 
@@ -72,7 +82,7 @@ Every fact about `tillr` has one home across three layers:
 | :--- | :--- | :--- | :--- |
 | **1. CLI surface** | `<bin> --help`, `<bin> <face> --help` | Nouns, faces, flags, defaults, argument shapes, exit codes | Multi-binary workflow prose |
 | **2. Component judgment** | One `README.md` per module under [`tools/`](../../tools) (shipped to `~/.local/share/tillr/<mod>/`) | What the module owns, state invariants, standalone invocation for external callers, refusal conditions, **Known Gaps** | Flag tables, copied `--help` blocks, full loop orchestration |
-| **3. Loop composition** | The pack skill [`tillr-operating`](../../yolo-packs/tillr/skills/tillr-operating/SKILL.md) | How the eight binaries compose across the seven-step loop ([§4](#4-the-composition-skill-headings-and-commands)) and the operator's stop conditions | Per-flag reference tables or internal Go package layout |
+| **3. Loop composition** | The pack skill [`tillr-operating`](../../yolo-packs/tillr/skills/tillr-operating/SKILL.md) | How the eight binaries compose across the seven-step loop ([the composition skill](#the-composition-skill-headings-and-commands)) and the operator's stop conditions | Per-flag reference tables or internal Go package layout |
 
 ### The rule that prevents disagreement (One-Home Rule + Mechanical Gate)
 
@@ -82,11 +92,11 @@ Every fact about `tillr` has one home across three layers:
 ### How a reader knows which is current — and what is unfinished
 
 - **The binary on `PATH` wins on surface syntax** because the launcher compiles it from the current source digest.
-- **Every module `README.md` opens with a stamped Known Gaps callout** naming the date and commit it was verified at and the gaps a caller will meet. The same test fails a README without it.
+- **Every module `README.md` opens with a Known gaps callout** listing the gaps a caller will meet. The same test fails a README without it.
 
 ---
 
-## 4. The composition skill: headings and commands
+## The composition skill: headings and commands
 
 The `tillr-operating` skill's loop body has seven sections, in order (`plan → stage → run → judge → land → verify → audit`), each pairing one step with one binary noun:
 
@@ -104,9 +114,9 @@ The skill names one command per step and which exit code means what; every flag 
 
 ---
 
-## 5. The AutoQA handoff through the pack
+## The AutoQA handoff through the pack
 
-The pack ships no AutoQA skill and no briefing. [The AutoQA design](./tillr-autoqa.md) supersedes a handoff skill in this pack (`D-AQ1` and `D-AQ7` there): the tillr pack ships its own skills only, and AutoQA ships in a pack of its own.
+The pack ships no AutoQA skill and no briefing. [The AutoQA design](../design/tillr-autoqa.md) rules it (`D-AQ1` and `D-AQ7` there): the tillr pack ships its own skills only, and AutoQA ships in a pack of its own.
 
 Two rules stand:
 
@@ -115,26 +125,26 @@ Two rules stand:
 
 ---
 
-## 6. Machine scoping
+## Machine scoping
 
 The pack ships identical source, launchers and skills on every machine, and carries no provider or account configuration, so `yolo-packs/tillr` is machine-agnostic. Which workspaces load it is the operator's `yolo` configuration.
 
 ---
 
-## 8. What makes this fail — and what prevents each
+## What makes this fail, and what prevents each
 
-| Failure mode | What in this design prevents it |
+| Failure mode | What prevents it |
 | :--- | :--- |
-| **Docs drifting from `--help`** | Flags are banned from `README` and skill files ([§3](#3-documentation-split-and-the-honesty-rule)); the documentation test checks every documented `tillr* <face>` call against live `--help` output and rejects flag tables. |
-| **Launcher breaks without a Go toolchain** | The warm path uses only file tests and no `go` call; a cold cache without `go` exits `1` naming the missing digest and toolchain ([§2](#2-build-and-delivery)), and the launcher never runs at jail startup. |
+| **Docs drifting from `--help`** | Flags are banned from `README` and skill files ([the documentation split](#documentation-split-and-the-honesty-rule)); the documentation test checks every documented `tillr* <face>` call against live `--help` output and rejects flag tables. |
+| **Launcher breaks without a Go toolchain** | The warm path uses only file tests and no `go` call; a cold cache without `go` exits `1` naming the missing digest and toolchain ([Build and delivery](#build-and-delivery)), and the launcher never runs at jail startup. |
 | **The pack runs `tillr` in a repository that did not ask for it** | No `briefing` and no configuration overlay runs `tillr`; the pack only puts the binaries and skills in reach. |
-| **An edit to one module leaves another module's binary stale** | The fast-path check and the digest both walk the whole source tree ([§2](#2-build-and-delivery)), so any source change invalidates all eight cached binaries on their next call. |
+| **An edit to one module leaves another module's binary stale** | The fast-path check and the digest both walk the whole source tree ([Build and delivery](#build-and-delivery)), so any source change invalidates all eight cached binaries on their next call. |
 
 ---
 
-## 9. The agent's `tillr` must not wait for a launch
+## Running a tree the pack has not rendered
 
-**Requirement (owner, 2026-11-13).** An agent working in this repository can build `tillr` from [`tools/tillr*`](../../tools) and run it against a store **without the owner relaunching anything**.
+**Requirement.** An agent working in this repository can build `tillr` from [`tools/tillr*`](../../tools) and run it against a store **without the owner relaunching anything**.
 
 **What the launcher does not give.** The launcher's source root is the pack's **rendered** tree, written by `yolo` at launch. `just pack-sync` rewrites only the repository's `yolo-packs/tillr/files/` copy, and a host render is what puts that copy in the launch's home. A change to `tools/tillr*` therefore reaches the binaries on `PATH` only after the pack is mirrored and rendered, and a loop that is running keeps the binary it loaded.
 
@@ -151,26 +161,11 @@ PATH="$YOLO_DURABLE_DIR/bin:$PATH" tillr drain loop ...
 
 **A schema-compatibility policy is not decided.** It is needed only if two versions must share one store: the schema version would become a floor plus named capabilities, and a binary would refuse only what it cannot read. It trades a loud refusal for a quiet semantic mismatch, so it is the last thing to rule on.
 
-## Open Questions
+## Why it's this way
 
-All four are settled by what is built.
-
-1. ✅ **OQ-TD1: Does `yolo-packs/tillr` sit in user-scope configuration for every workspace, or stay opt-in per workspace?**
-
-   **Answer:**
-   > User scope: the pack is meant to be listed for every workspace.
-
-2. ✅ **OQ-TD2: Does the AutoQA handoff live in its own skill or inside the main skill?**
-
-   **Answer:**
-   > Neither. `D-AQ1` and `D-AQ7` in [the AutoQA design](./tillr-autoqa.md) settle it: the tillr pack ships no AutoQA skill ([§5](#5-the-autoqa-handoff-through-the-pack)).
-
-3. ✅ **OQ-TD3: On a cold or invalidated cache, does the launcher compile only the invoked binary or all eight?**
-
-   **Answer:**
-   > Only the invoked binary, once per source digest ([§2](#2-build-and-delivery)).
-
-4. ✅ **OQ-TD4: Does the pack ship the digest-caching source launcher, or a launch-time build?**
-
-   **Answer:**
-   > The digest-caching launcher ([§2](#2-build-and-delivery)). What it leaves open, running a tree the pack has not rendered, is [§9](#9-the-agents-tillr-must-not-wait-for-a-launch).
+| ID | Ruling | Why |
+| :--- | :--- | :--- |
+| `OQ-TD1` | The pack sits in user-scope configuration, listed for every workspace | The pack carries no provider or account configuration, and nothing in it runs `tillr` unasked |
+| `OQ-TD2` | The AutoQA handoff lives in no skill of this pack | `D-AQ1` and `D-AQ7` in [the AutoQA design](../design/tillr-autoqa.md): AutoQA ships in a pack of its own ([the handoff](#the-autoqa-handoff-through-the-pack)) |
+| `OQ-TD3` | On a cold or invalidated cache the launcher compiles only the invoked binary, once per source digest | A caller pays for the binary it runs ([Build and delivery](#build-and-delivery)) |
+| `OQ-TD4` | The pack ships the digest-caching source launcher, never a launch-time build | A machine without Go still launches cleanly; a single `tillr` launcher with internal subcommands and a `program` with `build`/`produces` are both refused |

@@ -88,7 +88,7 @@ func (s Squash) Conflicted() bool { return len(s.Conflicts) > 0 }
 // with explicit GIT_AUTHOR_* and GIT_COMMITTER_* from LandingIdentity() and the candidate's
 // message: a one-commit range keeps its message unchanged, while a multi-commit range takes
 // the first commit's message and lists the remaining commits' subjects in the body. A commit
-// never names a queue item (ruling D-RS3 in docs/design/queue-persistence-ruling.md),
+// never names a queue item (ruling D-RS3 in docs/reference/tillr-queue-persistence.md),
 // because the item is private store state and the shared receipt is the item block's absence
 // from its document. The author date is the first commit's, so the change keeps the date it
 // was authored; the committer date is the landing's clock. Squash takes no item id, so it

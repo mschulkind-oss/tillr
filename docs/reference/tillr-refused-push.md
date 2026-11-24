@@ -1,55 +1,61 @@
 ---
 title: "Refused autopushes: rebasing unpublished landings onto a moved remote"
 status: accepted
-stage: BUILT
-updated: 2026-11-24
-tags: [tillr, drain, landing, push, design]
+stage: CURRENT
+verified: 2026-11-24
+covers:
+  - tools/tillr-drain/drain/push_refused.go
+  - tools/tillr-drain/drain/push_state.go
+  - tools/tillr-drain/drain/trunk_rewrite.go
+  - tools/tillr-drain/drain/trunk_history.go
+  - tools/tillr-drain/remotesync/
+  - tools/tillr-land/land/trunk.go
+  - tools/tillr-view/push_waiting.go
+  - tools/tillr-view/push_summary.go
+tags: [tillr, drain, landing, push, reference]
 summary: "What tillr-drain does when an automatic push does not complete: it separates a non-fast-forward refusal from a server decline, a held patch move and a transport failure; detects a remote force-push through a per-clone published pointer; replays unpublished local commits linearly onto a forward remote advance under land.lock; proves a conflict-repaired tip before publishing it; repairs a rebase conflict through a fenced item; and shows every hold with a mover that can act. Tillr stamps the configured git identity on the commits it makes and judges no other commit by identity (OQ-RP4)."
-next: "The owner reviews the designer's decisions D-RP1 to D-RP9; the built behavior is a candidate to graduate into the tillr-drain reference."
-depends-on:
-  - landing-principles.md
-  - ../reference/tillr-restart.md
 vantage:
   status-chip: true
 ---
 
-# When the remote has moved, the drain rebases unpublished commits onto it and proves the new tip instead of retrying a push that cannot fast-forward
+# Refused autopushes: the drain rebases unpublished commits onto a moved remote and proves the new tip
 
-**Status:** Built. Each mechanism below names the function that carries it; `rg -n 'CheckIdentities|accept-identity|CarryIdentityAcceptances' tools -g '*.go'` returns nothing, so the trunk identity check that [OQ-RP4](#OQ-RP4) removes is gone. The nine `D-RP` decisions are the designer's and await the owner's review.
+**Status:** Verified 2026-11-24 against the tree. Each mechanism below names the function that carries it; `rg -n 'CheckIdentities|accept-identity|CarryIdentityAcceptances' tools -g '*.go'` returns nothing, so tillr holds no trunk identity check ([OQ-RP4](#OQ-RP4)). The nine `D-RP` decisions are the designer's; the owner may overturn any of them.
 
-> **In short.** When an automatic push fails, the drain reads `git push --porcelain` and fetches the target ref to tell a moved remote from a server decline, a held patch move or a transport failure. For a moved remote it replays the unpublished local commits linearly onto the fetched tip under `land.lock`, resets the main checkout with `git reset --keep`, and remaps recorded landing commits. A textual conflict goes to a fenced repair item. Every hold is shown with its real mover and the count of unpublished commits.
+When an automatic push fails, the drain reads `git push --porcelain` and fetches the target ref to tell a moved remote from a server decline, a held patch move or a transport failure. For a moved remote it replays the unpublished local commits linearly onto the fetched tip under `land.lock`, resets the main checkout with `git reset --keep`, and remaps recorded landing commits. A textual conflict goes to a fenced repair item. Every hold is shown with its real mover and the count of unpublished commits. Without this, a commit pushed from another clone strands every later automatic push behind the same non-fast-forward rejection.
 
-**Why it matters.** A commit pushed from another clone would otherwise strand every later automatic push behind the same non-fast-forward rejection, while the waiting list claimed the next green advance would clear it.
-
-**The shape.** A two-step push classifier ([Section 3](#3-telling-a-refused-push-apart-from-a-failed-one)), a linear replay onto the fetched remote ([Section 4](#4-rebasing-unpublished-commits-onto-the-moved-remote)), proof before a repaired tip is published ([Section 5](#5-proving-the-rebased-trunk-before-pushing)), fenced conflict repair ([Section 6](#6-when-rebasing-onto-the-remote-conflicts)), and truthful push states ([Section 7](#7-showing-the-state-and-its-mover-while-it-lasts)).
+| Component | Lives in |
+| :--- | :--- |
+| Push classifier, published-pointer guard, linear replay | `tools/tillr-drain/drain` (`classifyPushFailure`, `guardPublished`, `healRefusedPush`) |
+| Push state recording and the published pointer | `tools/tillr-drain/drain` (`recordPushState`, `advancePublished`) |
+| Conflict repair item and its tree check | `tools/tillr-drain/remotesync` (`RemoteSyncItemID`, `ValidateRemoteSyncTree`) |
+| Trunk rewrite map and green-pointer carry | `tools/tillr-drain/drain` (`observeTrunk`) |
+| Landing identity | `tools/tillr-land/land` (`Trunk.LandingIdentity`, `Trunk.Squash`) |
+| Waiting rows and the header summary | `tools/tillr-view` (`pushRow`, `readPushSummary`) |
 
 **Cost.** One per-clone ref per remote branch, one fetch per due push, and one repair run per textual conflict. The trunk stays linear with no merge commits and the remote is never forced.
 
-**Start at** [Section 3](#3-telling-a-refused-push-apart-from-a-failed-one), or the [Decision Ledger](#decision-ledger).
-
-**Needs your ruling:** None.
-
-**Reads with:** [Landing principles](./landing-principles.md), [Restarting tillr in place](../reference/tillr-restart.md), [the gate reference](../reference/gate.md), [the item graph is the whole path](./tillr-graph-is-the-path.md), and [one vocabulary for tillr](./tillr-vocabulary.md).
+**Reads with:** [Landing principles](../design/landing-principles.md), [Restarting tillr in place](./tillr-restart.md), [the gate reference](./gate.md), [the item graph is the whole path](../design/tillr-graph-is-the-path.md), and [one vocabulary for tillr](../design/tillr-vocabulary.md).
 
 ---
 
 ## 1. What the landing principles require of a push
 
-Automatic push is configured by `[push]` in [`.tillr.toml`](../../.tillr.toml): `what` is `"none"`, `"green"` (publish the green pointer when the heavy runner advances it; this repository's setting, [`D-RT10`](../reference/tillr-restart.md#pushing-what-the-proof-has-passed)) or `"tip"` (publish the trunk tip after each landing). One background worker with a single replaceable pending slot runs every push.
+Automatic push is configured by `[push]` in [`.tillr.toml`](../../.tillr.toml): `what` is `"none"`, `"green"` (publish the green pointer when the heavy runner advances it; this repository's setting, [`D-RT10`](./tillr-restart.md#pushing-what-the-proof-has-passed)) or `"tip"` (publish the trunk tip after each landing). One background worker with a single replaceable pending slot runs every push.
 
 | Principle | What it rules here |
 | :--- | :--- |
-| [§1](./landing-principles.md#1-a-refusal-must-be-a-verdict) and [§14](./landing-principles.md#14-convict-a-run-on-what-it-did-not-on-what-happened-while-it-ran) | The remote moves outside every local run. It never convicts a run or fails a landed item. |
-| [§2](./landing-principles.md#2-re-application-preserves-the-change-not-the-patch) and [§3](./landing-principles.md#3-gate-what-will-be-the-tip-once) | Each unpublished commit is replayed by a three-way tree merge, the old-to-new commit map is recorded, and the rebased tip is proved once rather than commit by commit. |
-| [§4](./landing-principles.md#4-every-outcome-is-state-changing) and [§11](./landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) | Retrying a push against a diverged remote repeats the same refusal on unchanged inputs. The drain classifies the failure and changes state. |
-| [§7](./landing-principles.md#7-a-surface-that-hides-parked-work-is-a-false-report) and [§13](./landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act) | Unpublished proven commits are parked work. The waiting list and the Observatory header show their count, their start time and a mover that can act. |
-| [§9](./landing-principles.md#9-fix-the-machinery-never-hand-carry-the-work) and [§10](./landing-principles.md#10-supersession-is-a-verdict-not-a-stall) | A forward remote advance integrates with no hand work; a conflict goes to a repair item; a local commit whose change the remote already holds is superseded, not stalled. |
+| [§1](../design/landing-principles.md#1-a-refusal-must-be-a-verdict) and [§14](../design/landing-principles.md#14-convict-a-run-on-what-it-did-not-on-what-happened-while-it-ran) | The remote moves outside every local run. It never convicts a run or fails a landed item. |
+| [§2](../design/landing-principles.md#2-re-application-preserves-the-change-not-the-patch) and [§3](../design/landing-principles.md#3-gate-what-will-be-the-tip-once) | Each unpublished commit is replayed by a three-way tree merge, the old-to-new commit map is recorded, and the rebased tip is proved once rather than commit by commit. |
+| [§4](../design/landing-principles.md#4-every-outcome-is-state-changing) and [§11](../design/landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) | Retrying a push against a diverged remote repeats the same refusal on unchanged inputs. The drain classifies the failure and changes state. |
+| [§7](../design/landing-principles.md#7-a-surface-that-hides-parked-work-is-a-false-report) and [§13](../design/landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act) | Unpublished proven commits are parked work. The waiting list and the Observatory header show their count, their start time and a mover that can act. |
+| [§9](../design/landing-principles.md#9-fix-the-machinery-never-hand-carry-the-work) and [§10](../design/landing-principles.md#10-supersession-is-a-verdict-not-a-stall) | A forward remote advance integrates with no hand work; a conflict goes to a repair item; a local commit whose change the remote already holds is superseded, not stalled. |
 
 ---
 
 ## 2. Words and state ownership
 
-Existing terms follow [`tillr-vocabulary.md`](./tillr-vocabulary.md). Six are specific to this design. $T$ is the local trunk tip, $R$ the fetched remote tip, $R_{\text{prev}}$ the published pointer, $B$ their merge base.
+Existing terms follow [`tillr-vocabulary.md`](../design/tillr-vocabulary.md). Six are specific to this reference. $T$ is the local trunk tip, $R$ the fetched remote tip, $R_{\text{prev}}$ the published pointer, $B$ their merge base.
 
 | Term | Meaning | What it is not |
 | :--- | :--- | :--- |
@@ -123,7 +129,7 @@ The unpublished commits $C_1, \dots, C_n$ in $R..T$ are replayed onto $R$ as sin
    - otherwise `git commit-tree` writes the replacement, keeping the original message, author and author date, with the landing identity as committer.
 2. **Pin** the published pointer at $R$.
 3. **Reset.** Confirm the main checkout is on the trunk and the trunk still equals $T$, then `git reset --keep -q <T'>`. A refusal records `remote-sync-worktree-dirty`.
-4. **Remap.** `observeTrunk` ([`trunk_rewrite.go`](../../tools/tillr-drain/drain/trunk_rewrite.go)) records $T \to T'$. A patch-identical replay is matched by `git patch-id --stable` and carries the green pointer. When the replay changed a commit's diff (conflict repair, shifted context, supersession), the drain passes the pairs it constructed instead, because patch identity no longer matches ([Principle 2](./landing-principles.md#2-re-application-preserves-the-change-not-the-patch)). If the fetched range touched a roll path, the roll command runs (`rollAfterRemoteSync`).
+4. **Remap.** `observeTrunk` ([`trunk_rewrite.go`](../../tools/tillr-drain/drain/trunk_rewrite.go)) records $T \to T'$. A patch-identical replay is matched by `git patch-id --stable` and carries the green pointer. When the replay changed a commit's diff (conflict repair, shifted context, supersession), the drain passes the pairs it constructed instead, because patch identity no longer matches ([Principle 2](../design/landing-principles.md#2-re-application-preserves-the-change-not-the-patch)). If the fetched range touched a roll path, the roll command runs (`rollAfterRemoteSync`).
 
 ### 4.3 Tillr checks identity only on the commits it makes
 
@@ -221,7 +227,7 @@ When a repair item closes without landing, no push happened, so the drain writes
 
 ---
 
-## Decision Ledger
+## Why it's this way
 
 ### Settled by the owner
 
@@ -232,7 +238,7 @@ When a repair item closes without landing, no push happened, so the drain writes
 | <a id="OQ-RP3"></a>[OQ-RP3](#OQ-RP3) | Superseded by [OQ-RP4](#OQ-RP4): it exempted fetched commits from an identity check that tillr does not have. | 2026-11-20 | [Section 4.3](#43-tillr-checks-identity-only-on-the-commits-it-makes) | — |
 | <a id="OQ-RP4"></a>[OQ-RP4](#OQ-RP4) | Tillr makes the commits it produces follow the identity git config states, and enforces nothing else about identities. | 2026-11-20 | [Section 4.3](#43-tillr-checks-identity-only-on-the-commits-it-makes) | Yes |
 
-### The designer's decisions, awaiting the owner's review
+### The designer's decisions
 
 Marked under [OQ-PR21](../tillr/decision-provenance-review.md#OQ-PR21); the owner may overturn any of them.
 
@@ -247,9 +253,3 @@ Marked under [OQ-PR21](../tillr/decision-provenance-review.md#OQ-PR21); the owne
 | `D-RP7` | Before every due push, fetch the target ref and stop as `remote-rewritten` when it does not contain the published pointer. Rejected: checking only after a refusal, which never sees a backward rewind; `--force-with-lease`. | 2026-11-21 | [Section 3.3](#33-the-same-fetch-guards-every-due-push) | Yes |
 | `D-RP8` | Read a hold from the fact that makes it true, never from the newest push event. | 2026-11-21 | [Section 7.3](#73-holds-are-read-from-facts-not-from-the-newest-push-event) | Yes |
 | `D-RP9` | Record `remote-sync-cleared` when a conflict hold ends because its repair item closed without landing. Rejected: recording `push-ok` when no push happened. | 2026-11-21 | [Section 7.3](#73-holds-are-read-from-facts-not-from-the-newest-push-event) | Yes |
-
----
-
-## Open Questions
-
-None.

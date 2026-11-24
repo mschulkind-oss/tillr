@@ -1,5 +1,5 @@
 {
-  "about": "The work machine's mixed policy: the design seat runs on the Claude subscription (the claude adapter, on the subscription's strongest model); the build, review and scout seats run on pi through Bedrock exactly as backend-policy.bedrock.json has them. It is the owner's split of 2026-11-15: designers on the subscription, workhorses on pi, every backend in use at once. Why and how: docs/design/tillr-claude-backend.md. Like the other per-machine files it is the stopgap docs/design/tillr-convergence.md OQ-TC2 records.",
+  "about": "The work machine's mixed policy: the design seat runs on the Claude subscription (the claude adapter, on the subscription's strongest model); the build, review and scout seats run on pi through Bedrock exactly as backend-policy.bedrock.json has them. It is the owner's split of 2026-11-15: designers on the subscription, workhorses on pi, every backend in use at once. Why and how: docs/reference/tillr-claude-backend.md. Like the other per-machine files it is the stopgap docs/design/tillr-convergence.md OQ-TC2 records.",
   "default_backend": "pi",
   "seats": {
     "design": "claude-designer",

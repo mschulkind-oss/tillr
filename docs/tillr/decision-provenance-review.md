@@ -268,7 +268,7 @@ every tillr program ([OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2)).
     A run has no time limit unless one is set, a run that has committed is judged on its
     commit before any set limit is looked at, and a run stopped at a set limit before
     committing is resumed. An agent wrote those rules
-    ([run wall ruling](../design/run-wall-ruling.md)). No dated quotation of yours rules on a
+    ([run wall ruling](../reference/run-wall-ruling.md)). No dated quotation of yours rules on a
     default limit or on how many times a stopped run resumes.
 
     - **A — No limit, and a stopped run always resumes.** A long run finishes. A run that is
@@ -354,7 +354,7 @@ All are an agent's. Rows covered by a question in [Section 2](#2-questions-for-t
 | `D-PT1`, `D-PT2`, `D-PT4` | [Planning and model tiering](../design/tillr-planning-node-model-tiering.md) | Each kind of work is a seat and the list is open; a plan lists its pieces; the planner is the first step of a planned build |
 | `D-IG2`, `D-IG3`, `D-IG7` | [Item graphs](../reference/tillr-item-graphs.md) | The outside sees one item; a step is fixed once recorded; a step writes only inside the item's allowed paths |
 | `D-MM1`, `D-MM2` | [Muse backend](../reference/tillr-muse-backend.md) | A backend's contract is where it may write, held by a sandbox and a snapshot; a worktree run commits its own work |
-| `D-CB1`, `D-CB5` | [Claude backend](../design/tillr-claude-backend.md) | The backend program is started with only tillr's own tool servers; its cost is recorded as its own estimate |
+| `D-CB1`, `D-CB5` | [Claude backend](../reference/tillr-claude-backend.md) | The backend program is started with only tillr's own tool servers; its cost is recorded as its own estimate |
 | `D-IP5` | [Idea pipeline](../design/tillr-idea-pipeline.md) | Scouting and designing one idea are steps of one item; pending answers travel by `tillr item answer` |
 | `D-TC4` | [Convergence](../design/tillr-convergence.md) | One command says why each item is not moving |
 | [OQ-CR1](../design/criterion-repair.md#decision-ledger) | [Criterion repair](../design/criterion-repair.md) | A repair replaces the whole pass condition with a new record and never edits it |

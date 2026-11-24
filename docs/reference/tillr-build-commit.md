@@ -43,7 +43,7 @@ and [preserved uncommitted work](../../tools/tillr-drain/README.md#earlier-uncom
 and [child environment](../../tools/tillr-run/README.md#child-environment)),
 [judge and lifecycle](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)
 (`D-JL10` uncounted worker endings and `ObstacleContract`),
-[the run wall ruling](../design/run-wall-ruling.md#decision-ledger) (`D-RW3`
+[the run wall ruling](./run-wall-ruling.md#why-its-this-way) (`D-RW3`
 same-attempt wall continuation), and
 [tillr item states](./tillr-item-states.md) (`in-queue` disposition and frozen
 criteria).

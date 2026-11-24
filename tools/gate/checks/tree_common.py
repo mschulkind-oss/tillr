@@ -17,7 +17,7 @@ SCRATCH_EXCEPTIONS = (
     # `just tillr-build`'s documented output directory: the section states where a source
     # build of the tillr programs lands, which is a location by design rather than evidence
     # of a past claim. The marker is that line's own text.
-    ("docs/design/tillr-distribution.md", "$YOLO_DURABLE_DIR/bin"),
+    ("docs/reference/tillr-distribution.md", "$YOLO_DURABLE_DIR/bin"),
     # The observatory recipe's build directory: tools/observatory/run.sh builds the two
     # programs into that directory by design, and the README says where, so a reader can
     # find the binaries. It is a location, not an artifact that proved a past claim. The
