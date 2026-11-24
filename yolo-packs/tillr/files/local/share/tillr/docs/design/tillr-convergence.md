@@ -22,7 +22,7 @@ vantage:
 
 # Why tillr keeps hitting walls: three causes, one target
 
-> **Delivered copy.** This is `docs/design/tillr-convergence.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-convergence.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-convergence.md` from this repository at commit `3b6faafdae` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-convergence.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-15. Measured against `main` at `35a3dc9f1`, on a machine with no `.tillr/`
 directory. Reconciled against the tree at `dcb76fe41` on 2026-11-18 and at `85ca09644` on
