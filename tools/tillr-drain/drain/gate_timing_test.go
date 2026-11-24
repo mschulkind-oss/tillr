@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -647,5 +650,286 @@ EOF
 	if suite.PreambleWallMS != 420 || len(suite.Shards) != 1 || suite.Shards[0].Name != "core-routing" ||
 		len(suite.Tests) != 1 || suite.Tests[0].Name != "1. A fresh repository" || suite.Tests[0].WallMS != 1900 {
 		t.Fatalf("unexpected self_suite payload: %+v", suite)
+	}
+}
+
+func TestGateTimingCountsUnfinishedCheckWithoutFinishRecord(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	c := Candidate{ItemID: "fixer-main-example", RunID: "run-fixer-main-example-a1", Worktree: root, deferGateJudgment: true}
+	dir := RunDir(root, c.RunID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	const hungID = "go-test-shards-suite/sharded-go-test-runner-regression-suite-passes"
+	s := ProcessSteps{Root: root, Store: gateTimingStore(t, root), Now: time.Now, GateProgram: executable(t, `
+set -eu
+cat > "$TILLR_FAST_VERDICT_OUT" <<'EOF'
+{"record_version":1,"kind":"gate.verdict","payload":{"result":"pass","checks":[
+  {"check_id":"pack-sync","result":"pass","execution":"ran","wall_ms":12}
+]}}
+EOF
+python3 - <<'PY'
+import json, os, time
+from pathlib import Path
+
+checks_out = Path(os.environ["TILLR_GATE_SPANS_OUT"]).with_name("gate.checks.jsonl")
+now_ms = time.time_ns() // 1_000_000
+lines = [
+    {"check_id": "file-size/warn", "started_at_ms": now_ms},
+    {"check_id": "file-size/warn", "started_at_ms": now_ms, "finished_at_ms": now_ms + 5},
+    {"check_id": "`+hungID+`", "started_at_ms": now_ms},
+]
+checks_out.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+time.sleep(0.05)
+PY
+exit 4
+`)}
+	if outcome, err := s.Gate(ctx, c); err == nil && outcome.Outcome == GatePassed {
+		t.Fatalf("expected non-passing gate outcome, got %+v", outcome)
+	}
+
+	type checkRecord struct {
+		CheckID      string `json:"check_id"`
+		StartedAtMS  int64  `json:"started_at_ms"`
+		FinishedAtMS *int64 `json:"finished_at_ms"`
+	}
+	rawChecks, err := os.ReadFile(filepath.Join(dir, GateChecksFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hungRecords []checkRecord
+	for _, line := range bytes.Split(bytes.TrimSpace(rawChecks), []byte("\n")) {
+		var rec checkRecord
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatal(err)
+		}
+		if rec.CheckID == hungID {
+			hungRecords = append(hungRecords, rec)
+		}
+	}
+	if len(hungRecords) != 1 || hungRecords[0].StartedAtMS <= 0 || hungRecords[0].FinishedAtMS != nil {
+		t.Fatalf("expected longest check to have start record and no finish record, got %+v", hungRecords)
+	}
+
+	rawSteps, err := os.ReadFile(filepath.Join(dir, StepsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gateStep StepSpan
+	if err := json.Unmarshal(bytes.TrimSpace(rawSteps), &gateStep); err != nil {
+		t.Fatal(err)
+	}
+	wantHungMS := gateStep.FinishedAtMS - hungRecords[0].StartedAtMS
+
+	var attempt struct {
+		Checks map[string]gateCheckMeasurement `json:"checks"`
+	}
+	body, err := os.ReadFile(filepath.Join(dir, gateTimingFile))
+	if err != nil || json.Unmarshal(bytes.TrimSpace(body), &attempt) != nil {
+		t.Fatalf("missing or invalid timing record: %s, %v", body, err)
+	}
+	for _, want := range []struct {
+		id string
+		ms int64
+	}{
+		{"pack-sync", 12},
+		{"file-size/warn", 5},
+		{hungID, wantHungMS},
+	} {
+		got := attempt.Checks[want.id]
+		if got.Execution != "ran" || got.WallMS == nil || *got.WallMS != want.ms {
+			t.Fatalf("%s: got %+v, want exec=ran wall_ms=%d (record=%s)", want.id, got, want.ms, body)
+		}
+	}
+
+	events := readTimingEvents(t, s.Store)
+	if len(events) != 1 {
+		t.Fatalf("want 1 timing event, got %+v", events)
+	}
+	if e := events[0]; e.ExitCode != 4 || e.SlowestCheck != hungID || e.SlowestCheckMS == nil || *e.SlowestCheckMS != wantHungMS {
+		t.Fatalf("timing event should name unfinished check with elapsed time %d: %+v", wantHungMS, e)
+	}
+
+	// A fresh gate attempt on the same run must clear the earlier unfinished check log.
+	s.GateProgram = executable(t, `
+set -eu
+cat > "$TILLR_FAST_VERDICT_OUT" <<'EOF'
+{"record_version":1,"kind":"gate.verdict","payload":{"result":"pass","checks":[
+  {"check_id":"pack-sync","result":"pass","execution":"ran","wall_ms":8}
+]}}
+EOF
+`)
+	if outcome, err := s.Gate(ctx, c); err != nil || outcome.Outcome != GatePassed {
+		t.Fatalf("second Gate = %+v, %v", outcome, err)
+	}
+	events = readTimingEvents(t, s.Store)
+	if len(events) != 2 {
+		t.Fatalf("want 2 timing events after retry, got %+v", events)
+	}
+	if e := events[1]; e.SlowestCheck != "pack-sync" || e.SlowestCheckMS == nil || *e.SlowestCheckMS != 8 {
+		t.Fatalf("stale unfinished check leaked into fresh attempt: %+v", e)
+	}
+}
+
+func TestGateTimingInterruptedForkCheckCountsHungCheck(t *testing.T) {
+	_, judge := repositoryFile(t, "tools/fork-check.py")
+	_, transportPath := repositoryFile(t, "tools/gate/classify.py")
+	root, _ := heavyRepo(t)
+	body, err := os.ReadFile(judge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, err := os.ReadFile(transportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "tools", "gate"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "tests"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(root, "tools", "fork-check.py"), string(body))
+	writeForkFile(t, filepath.Join(root, "tools", "gate", "classify.py"), string(transport))
+	writeForkFile(t, filepath.Join(root, "tests", "go-test-shards.test.py"), "pass\n")
+	base := heavyCommit(t, root, "seed shard suite")
+
+	readyPath := filepath.Join(t.TempDir(), "check-started")
+	pidPath := filepath.Join(t.TempDir(), "fork-check.pid")
+	writeForkFile(t, filepath.Join(root, "tests", "go-test-shards.test.py"),
+		"from pathlib import Path\nimport time\nPath("+strconv.Quote(readyPath)+").write_text('started')\ntime.sleep(60)\n")
+	head := heavyCommit(t, root, "hang shard suite")
+
+	t.Setenv("FIXTURE_HUNG_BASE", base)
+	t.Setenv("FIXTURE_FORK_CHECK_PID", pidPath)
+	c := Candidate{ItemID: "fixer-main-hung", RunID: "run-fixer-main-hung-a1", Worktree: root, BaseSHA: base, HeadSHA: head, deferGateJudgment: true}
+	dir := RunDir(root, c.RunID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s := ProcessSteps{Root: root, Store: gateTimingStore(t, root), Now: time.Now, GateProgram: executable(t, `
+set -eu
+cat > "$TILLR_FAST_VERDICT_OUT" <<'EOF'
+{"record_version":1,"kind":"gate.verdict","payload":{"result":"pass","checks":[
+  {"check_id":"pack-sync","result":"pass","execution":"ran","wall_ms":10}
+]}}
+EOF
+python3 - <<'PY' || exit 4
+import os, subprocess, sys
+from pathlib import Path
+
+proc = subprocess.Popen([sys.executable, "tools/fork-check.py", "--tier", "landing",
+                         "--since", os.environ["FIXTURE_HUNG_BASE"], "--jobs", "2"])
+Path(os.environ["FIXTURE_FORK_CHECK_PID"]).write_text(str(proc.pid))
+sys.exit(0 if proc.wait() == 0 else 4)
+PY
+`)}
+
+	const hungID = "go-test-shards-suite/sharded-go-test-runner-regression-suite-passes"
+	const fileSizeID = "file-size/warn-when-a-tracked-ts-file-exceeds-2-000-lines"
+	type checkRecord struct {
+		CheckID      string `json:"check_id"`
+		StartedAtMS  int64  `json:"started_at_ms"`
+		FinishedAtMS *int64 `json:"finished_at_ms"`
+	}
+	parseCheckRecords := func(raw []byte) (map[string][]checkRecord, error) {
+		byID := map[string][]checkRecord{}
+		for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+			if len(bytes.TrimSpace(line)) == 0 {
+				continue
+			}
+			var rec checkRecord
+			if err := json.Unmarshal(line, &rec); err != nil {
+				return nil, err
+			}
+			byID[rec.CheckID] = append(byID[rec.CheckID], rec)
+		}
+		return byID, nil
+	}
+
+	stopDone := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(10 * time.Second)
+		var hungStartMS int64
+		maxFinishedMS := int64(10) // pack-sync wall_ms in gate.fast.verdict.json
+		for {
+			_, readyErr := os.Stat(readyPath)
+			rawChecks, checksErr := os.ReadFile(filepath.Join(dir, GateChecksFile))
+			if readyErr == nil && checksErr == nil {
+				if byID, err := parseCheckRecords(rawChecks); err == nil {
+					hung := byID[hungID]
+					fs := byID[fileSizeID]
+					if len(hung) == 1 && hung[0].StartedAtMS > 0 && len(fs) >= 2 && fs[len(fs)-1].FinishedAtMS != nil {
+						hungStartMS = hung[0].StartedAtMS
+						if fsMS := *fs[len(fs)-1].FinishedAtMS - fs[0].StartedAtMS; fsMS > maxFinishedMS {
+							maxFinishedMS = fsMS
+						}
+						break
+					}
+				}
+			}
+			if time.Now().After(deadline) {
+				stopDone <- os.ErrDeadlineExceeded
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		rawPID, readErr := os.ReadFile(pidPath)
+		if readErr != nil {
+			stopDone <- readErr
+			return
+		}
+		pid, parseErr := strconv.Atoi(strings.TrimSpace(string(rawPID)))
+		if parseErr != nil {
+			stopDone <- parseErr
+			return
+		}
+		targetStop := time.UnixMilli(hungStartMS + maxFinishedMS + 25)
+		if wait := time.Until(targetStop); wait > 0 {
+			time.Sleep(wait)
+		}
+		stopDone <- syscall.Kill(pid, syscall.SIGTERM)
+	}()
+
+	if outcome, err := s.Gate(context.Background(), c); err == nil && outcome.Outcome == GatePassed {
+		t.Fatalf("interrupted gate should not pass: %+v", outcome)
+	}
+	if killErr := <-stopDone; killErr != nil {
+		t.Fatalf("stopping hung fork-check: %v", killErr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, GateSpansFile)); !os.IsNotExist(err) {
+		t.Fatalf("interrupted fork-check should not publish %s: %v", GateSpansFile, err)
+	}
+
+	rawChecks, err := os.ReadFile(filepath.Join(dir, GateChecksFile))
+	if err != nil {
+		t.Fatalf("missing gate.checks.jsonl: %v", err)
+	}
+	byID, err := parseCheckRecords(rawChecks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hungRecords := byID[hungID]
+	if len(hungRecords) != 1 || hungRecords[0].StartedAtMS <= 0 || hungRecords[0].FinishedAtMS != nil {
+		t.Fatalf("expected %s to have start record and no finish record, got %+v (raw=%s)", hungID, hungRecords, rawChecks)
+	}
+
+	rawSteps, err := os.ReadFile(filepath.Join(dir, StepsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gateStep StepSpan
+	if err := json.Unmarshal(bytes.TrimSpace(rawSteps), &gateStep); err != nil {
+		t.Fatal(err)
+	}
+	wantHungMS := gateStep.FinishedAtMS - hungRecords[0].StartedAtMS
+
+	events := readTimingEvents(t, s.Store)
+	if len(events) != 1 {
+		t.Fatalf("want 1 timing event, got %+v", events)
+	}
+	if e := events[0]; e.SlowestCheck != hungID || e.SlowestCheckMS == nil || *e.SlowestCheckMS != wantHungMS {
+		t.Fatalf("expected slowest_check=%s slowest_check_ms=%d, got %+v", hungID, wantHungMS, e)
 	}
 }

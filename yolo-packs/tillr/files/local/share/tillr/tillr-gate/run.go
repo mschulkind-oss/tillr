@@ -620,6 +620,7 @@ func runCheckWithPriorFail(check PlanCheck, root, logDir string, index int, prio
 	}
 	if check.measureLanding {
 		outcome.Execution = executionRan
+		appendCheckTiming(logDir, check.CheckID, started.UnixMilli(), nil)
 	}
 	waitErr, state := watchCommand(cmd, logFile, sources)
 	if cleanupErr := endCheckGroup(cmd.Process.Pid); cleanupErr != nil {
@@ -659,6 +660,20 @@ func runCheckWithPriorFail(check PlanCheck, root, logDir string, index int, prio
 		SilentSamples: state.SilentSamples,
 	})
 	outcome.Result = verdictWord(classified)
+	if check.measureLanding {
+		var waitSignaled bool
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) {
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+				waitSignaled = true
+			}
+		}
+		watchdogStalled := classified.Outcome == checkresult.Unknown && classified.Detail == checkresult.DetailStalled
+		if !processErr && (!waitSignaled || watchdogStalled) {
+			fin := max(started.UnixMilli(), ended.UnixMilli())
+			appendCheckTiming(logDir, check.CheckID, started.UnixMilli(), &fin)
+		}
+	}
 	if classified.Outcome == checkresult.Unknown && classified.Detail == checkresult.DetailStalled {
 		fmt.Fprintln(logFile, stallNote(outcome))
 	} else if processErr {
@@ -763,6 +778,32 @@ func checkEnv(check PlanCheck) []string {
 		env = append(env, name+"="+check.Env[name])
 	}
 	return env
+}
+
+var checkTimingMu sync.Mutex
+
+func appendCheckTiming(logDir, checkID string, startedAtMS int64, finishedAtMS *int64) {
+	if logDir == "" || checkID == "" || startedAtMS <= 0 {
+		return
+	}
+	payload := struct {
+		CheckID      string `json:"check_id"`
+		StartedAtMS  int64  `json:"started_at_ms"`
+		FinishedAtMS *int64 `json:"finished_at_ms,omitempty"`
+	}{CheckID: checkID, StartedAtMS: startedAtMS, FinishedAtMS: finishedAtMS}
+	line, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	line = append(line, '\n')
+	checkTimingMu.Lock()
+	defer checkTimingMu.Unlock()
+	f, err := os.OpenFile(filepath.Join(logDir, "gate.checks.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(line)
 }
 
 // openCheckLog opens the file a check writes its output to. On a first run it is
