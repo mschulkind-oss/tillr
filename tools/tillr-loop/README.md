@@ -142,8 +142,7 @@ A candidate's terminal outcome reaches the board through a fourth step this dire
 --state landed --now T` (`--item-bin`, default `tillr-item`). A landed candidate's
 item becomes `landed`; a failed attempt leaves the item's state and criteria alone.
 The next pass holds it under the refusal step's reason. See
-[board-item-state-model.md](../../docs/design/board-item-state-model.md)
-[Section 2](../../docs/design/board-item-state-model.md#2-classification-of-every-status-the-board-can-show).
+[the item-states reference](../../docs/reference/tillr-item-states.md).
 It is bookkeeping rather than judgment, which is why it is a
 sibling of `run exec` and not a fourth adapter face: the verdict retires criteria, and this
 says where the item's work stands.

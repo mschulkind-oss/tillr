@@ -23,10 +23,6 @@ Tillr separates its stored disposition from the view's reading of current activi
 A stopped attempt is not evidence that someone is still working. An acceptance
 criterion's judgment is separate again: moving the item does not rewrite that judgment.
 
-**Reads with:** [the original state-model ruling](../design/board-item-state-model.md),
-retained because source comments cite its sections. Its board-command names and
-migration counts are historical; this page describes tillr, not those proposals.
-
 ## Stored disposition and displayed activity
 
 The writable vocabulary is owned by `writableStates` in

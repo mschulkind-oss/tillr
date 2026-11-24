@@ -34,7 +34,7 @@ depends-on:
 
 **Needs your ruling:** [OQ-LS5](#OQ-LS5) — how should the landing judge weigh a bypass after reading its reason?
 
-**Reads with:** [the decision provenance review](../tillr/decision-provenance-review.md) ([OQ-PR21](../tillr/decision-provenance-review.md#OQ-PR21) and [OQ-PR22](../tillr/decision-provenance-review.md#OQ-PR22) on owner rulings versus engineering detail), [the vocabulary](./tillr-vocabulary.md) ([OQ-VO5](./tillr-vocabulary.md#OQ-VO5) and [OQ-VO6](./tillr-vocabulary.md#OQ-VO6) on the `git-landing` charter and green proof), [session recording](./session-recording.md) (the `BASH_ENV` trace seam and the no-derived-index ruling), and [the 2026-11-19 unproved-trunk incident](../tillr/unproved-trunk-2026-11-19.md). No implementation plan is seeded yet.
+**Reads with:** [the decision provenance review](../tillr/decision-provenance-review.md) ([OQ-PR21](../tillr/decision-provenance-review.md#OQ-PR21) and [OQ-PR22](../tillr/decision-provenance-review.md#OQ-PR22) on owner rulings versus engineering detail), [the vocabulary](./tillr-vocabulary.md) ([OQ-VO5](./tillr-vocabulary.md#OQ-VO5) and [OQ-VO6](./tillr-vocabulary.md#OQ-VO6) on the `git-landing` charter and green proof), [session recording](./session-recording.md) (the `BASH_ENV` trace seam and the no-derived-index ruling), and the 2026-11-19 unproved-trunk incident. No implementation plan is seeded yet.
 
 ---
 

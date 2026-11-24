@@ -349,7 +349,6 @@ func TestStagingClearsAStaleWorktreeRegistration(t *testing.T) {
 // roots is two lanes: the branch a lane commits onto is scoped by its lane root, and the
 // second root's stage succeeds instead of dying on
 // `fatal: cannot force update the branch 'tillr/lane-1' used by worktree at ...`
-// (docs/design/tillr-drain-acceptance-2026-11-13.md Section 4.6).
 //
 // The two roots are the shape the acceptance run measured: one outside the repository (the
 // fixture's own lane root) and one inside it (`<repo>/canary/lanes`).

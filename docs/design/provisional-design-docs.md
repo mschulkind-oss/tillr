@@ -37,7 +37,7 @@ vantage:
 
 **Needs your ruling:** [OQ-PD1](#OQ-PD1), [OQ-PD2](#OQ-PD2), [OQ-PD3](#OQ-PD3), and [OQ-PD4](#OQ-PD4).
 
-**Reads with:** [the idea pipeline](./tillr-idea-pipeline.md) and [intake paths](./tillr-intake-paths.md) (how ideas and requests enter the store), [early design landing](./tillr-early-design-landing.md) (landing `docs/` cuts ahead of an item), [designer scouts](./tillr-designer-scouts.md) (why two-node `scouted-design@v1` stalls cold), and [quick-request latency](../tillr/latency/2026-11-19-quick-request-latency.md) (measured single-worker vs gate wall times).
+**Reads with:** [the idea pipeline](./tillr-idea-pipeline.md) and [intake paths](./tillr-intake-paths.md) (how ideas and requests enter the store), [early design landing](./tillr-early-design-landing.md) (landing `docs/` cuts ahead of an item), [designer scouts](./tillr-designer-scouts.md) (why two-node `scouted-design@v1` stalls cold), and quick-request latency (measured single-worker vs gate wall times).
 
 ---
 
@@ -75,7 +75,7 @@ A **provisional design document** is a valid Vantage planning file at its final 
 Between ~14:50 and 15:05 ET on 2026-11-20, the owner dictated four design ideas: state machines, agent alerting, briefing-change validation, and provisional design docs. Three entered `.tillr/state.db` at `20:01:38Z` (15:01:38 ET) on `express: true` under [`scouted-design@v1.json`](../../config/tillr/workflows/scouted-design@v1.json), and the fourth entered at `20:06:20Z` on `express: false`.
 
 - **18 minutes after store intake (~25–30 minutes after dictation), `0 of 4` existed in `docs/design/`.** The first two express items spent **229 s ($0.44)** and **285 s ($0.51)** in [`scouted-design@v1.json`](../../config/tillr/workflows/scouted-design@v1.json)'s read-only `open` stage before any writer started; this item had just started `open`; the non-express item had `0` runs.
-- **Writing itself takes under 40 seconds.** In [the 2026-11-19 latency audit](../tillr/latency/2026-11-19-quick-request-latency.md), active single-worker generation of a Markdown design change took **31.6 s–39.7 s**, whereas two-stage workflow handoffs plus non-doc gate checks stretched wall time to **10m 34s–27m 40s**. Docs-only checks ([`documents.py`](../../tools/gate/checks/documents.py) / `uvx vantage-check`) finish in seconds ([landing velocity](./landing-velocity.md)).
+- **Writing itself takes under 40 seconds.** In the 2026-11-19 latency audit, active single-worker generation of a Markdown design change took **31.6 s–39.7 s**, whereas two-stage workflow handoffs plus non-doc gate checks stretched wall time to **10m 34s–27m 40s**. Docs-only checks ([`documents.py`](../../tools/gate/checks/documents.py) / `uvx vantage-check`) finish in seconds ([landing velocity](./landing-velocity.md)).
 
 ### The capture instruction and target latency
 

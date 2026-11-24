@@ -28,7 +28,7 @@ trunk at `687b1a2c97`.
 **Why it matters.** The owner asked for ten lanes by morning. The drain ended the night on two,
 with a red trunk, having spent 49 of its 53 landings repairing itself. It is the second night in
 three that a red trunk went unrepaired
-([the 2026-11-19 record](../tillr/unproved-trunk-2026-11-19.md)).
+(the 2026-11-19 record).
 
 **The shape.** Eight rules, each with one enforcing mechanism, and one scenario suite that holds
 a named scenario for every incident. A drain build runs the live queue only after that suite
@@ -45,7 +45,7 @@ are yours to overturn.
 **Reads with:** [`landing-principles.md`](./landing-principles.md) (the settled rulings these
 rules extend), [`trunk-fixer-gate.md`](./trunk-fixer-gate.md) (the fixer's gate, built this
 morning), [`tillr-watch.md`](./tillr-watch.md) (the alerting design rule 8 needs),
-[`nonconverging-items.md`](../tillr/nonconverging-items.md) (items that do not finish). No
+[an oversized item lands in parts](./tillr-item-split.md) (items that do not finish). No
 implementation plan is seeded yet.
 
 ---
@@ -59,7 +59,6 @@ It does not cover:
 
 - the evening before, which the owner was present for;
 - the design of the alerting utility, which [`tillr-watch.md`](./tillr-watch.md) owns;
-- the refused-push repair's content, which [`refused-push-slices.md`](../tillr/refused-push-slices.md) owns;
 - file-by-file build steps, which belong to an implementation plan.
 
 ## 2. Terms
@@ -182,7 +181,7 @@ Upstream released `pi` v1.6.0. The fix is one item: replay our patches onto it.
 | N-35 | 10:15 AM | A worker that stopped correctly for a red trunk was held as a fence escape | The loop judged its uncommitted work before reading the reason it stopped | queued |
 | N-36 | 4:14 to 9:14 AM | The fixer-gate design landed and its build was not filed for five hours | Filing a build from a landed design is a hand step | open |
 | N-37 | since 2026-11-20 | Fourteen open questions, five of them the alerting design's, reached no roadmap and no report | Nothing fails when a question is unrouted | open |
-| N-38 | all night | The refused-push repair ran 16 attempts and the rebase 13 | One item too large to verify; see [`nonconverging-items.md`](../tillr/nonconverging-items.md) | split into 22 slices, `793e165b84` |
+| N-38 | all night | The refused-push repair ran 16 attempts and the rebase 13 | One item too large to verify; see [an oversized item lands in parts](./tillr-item-split.md) | split into 22 slices, `793e165b84` |
 
 #### Evidence for N-42
 
@@ -475,7 +474,7 @@ revisited after the unattended night of [Section 8](#8-what-done-looks-like).
 | N-35 | 7 | structure | A stop for a red trunk holds on that check and releases on green |
 | N-36 | 7 | structure | A landed design's ready decisions are queued |
 | N-37 | 7 | structure | The finishing check fails on an unrouted question |
-| N-38 | 7 | signal | [`nonconverging-items.md`](../tillr/nonconverging-items.md); rule 8 raises the alert |
+| N-38 | 7 | signal | [an oversized item lands in parts](./tillr-item-split.md); rule 8 raises the alert |
 | N-39 | 2, 7 | accepted for now | None for the stop itself ([OQ-UD3](#OQ-UD3)); the scenarios of rules 2 and 7 run with no operator present |
 | N-40 | 8 | signal | A closed backend raises an alert to the foreground agent |
 | N-41 | 8 | procedure | None. This is the one row that rests on conduct, and the "same class twice" alert is its backstop |
