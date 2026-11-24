@@ -794,6 +794,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			continue
 		}
 		firing := r.Enabled && c.fires(r.When)
+		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.last })
 		if exists && ep.trackingItem.Valid && ep.trackingItem.String != "" {
 			if !lookup.ready {
 				continue
@@ -805,99 +806,94 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			}
 			memEp := m.findAlertLocked(ep.id)
 			if itemExists && !lookup.isTerminal(itemState) {
-				if !firing {
-					if r.When.Pattern == LagBehind && (!ep.trackedLagPair.Valid || ep.trackedLagPair.String != "") {
-						memEp.trackedLagPair = sql.NullString{String: "", Valid: true}
-					}
-					continue
-				}
-				if r.When.Pattern == LagBehind {
-					pair := c.lag.leaderOID + ":" + c.lag.followerOID
-					if !ep.trackedLagPair.Valid {
-						memEp.trackedLagPair = sql.NullString{String: pair, Valid: true}
-					} else if ep.trackedLagPair.String != pair {
-						memEp.trackedLagPair = sql.NullString{String: pair, Valid: true}
-						memEp.lastObservedSeq = max(ep.last, startHead)
-						memEp.lastObservedAt = now.UnixMilli()
-						memEp.observationCount++
-					}
-				} else {
-					newest := c.events[len(c.events)-1]
-					if newest.Seq > ep.last {
-						memEp.lastObservedSeq = newest.Seq
-						memEp.lastObservedAt = now.UnixMilli()
-						memEp.observationCount++
-						memEp.conditionFingerprint = newest.fingerprint
-					}
-				}
-				continue
-			}
-			if !firing {
-				firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.last })
-				seq := startHead
-				if firstClear < len(c.clears) {
-					seq = c.clears[firstClear]
-				}
-				if err := m.resolveEpisodeLocked(memEp, r.ID, key, r.Severity, r.Delivery.Receiver, seq, now, "condition-cleared"); err != nil {
-					return err
-				}
-				continue
-			}
-			newest := observation{Seq: startHead}
-			var nextLagPair sql.NullString
-			if r.When.Pattern == LagBehind {
-				pair := c.lag.leaderOID + ":" + c.lag.followerOID
-				nextLagPair = sql.NullString{String: pair, Valid: true}
-				if ep.trackedLagPair.Valid && ep.trackedLagPair.String != pair {
-					memEp.lastObservedSeq = max(ep.last, startHead)
-					memEp.lastObservedAt = now.UnixMilli()
-					memEp.observationCount++
-				}
-			} else {
-				newest = c.events[len(c.events)-1]
-				if isWindowedEventRule(r.When) {
-					cutoff := max(ep.last, lookup.terminalSeq(trackedID))
-					if newest.Seq <= cutoff {
+				if firing && firstClear == len(c.clears) {
+					if r.When.Pattern == LagBehind {
+						pair := c.lag.leaderOID + ":" + c.lag.followerOID
+						if !ep.trackedLagPair.Valid {
+							memEp.trackedLagPair = sql.NullString{String: pair, Valid: true}
+						} else if ep.trackedLagPair.String != pair {
+							memEp.trackedLagPair = sql.NullString{String: pair, Valid: true}
+							memEp.lastObservedSeq = max(ep.last, startHead)
+							memEp.lastObservedAt = now.UnixMilli()
+							memEp.observationCount++
+						}
+					} else {
+						newest := c.events[len(c.events)-1]
 						if newest.Seq > ep.last {
 							memEp.lastObservedSeq = newest.Seq
 							memEp.lastObservedAt = now.UnixMilli()
 							memEp.observationCount++
 							memEp.conditionFingerprint = newest.fingerprint
 						}
-						continue
+					}
+					continue
+				}
+			} else {
+				if !firing {
+					seq := startHead
+					if firstClear < len(c.clears) {
+						seq = c.clears[firstClear]
+					}
+					if err := m.resolveEpisodeLocked(memEp, r.ID, key, r.Severity, r.Delivery.Receiver, seq, now, "condition-cleared"); err != nil {
+						return err
+					}
+					continue
+				}
+				newest := observation{Seq: startHead}
+				var nextLagPair sql.NullString
+				if r.When.Pattern == LagBehind {
+					pair := c.lag.leaderOID + ":" + c.lag.followerOID
+					nextLagPair = sql.NullString{String: pair, Valid: true}
+					if ep.trackedLagPair.Valid && ep.trackedLagPair.String != pair {
+						memEp.lastObservedSeq = max(ep.last, startHead)
+						memEp.lastObservedAt = now.UnixMilli()
+						memEp.observationCount++
+					}
+				} else {
+					newest = c.events[len(c.events)-1]
+					if isWindowedEventRule(r.When) {
+						cutoff := max(ep.last, lookup.terminalSeq(trackedID))
+						if newest.Seq <= cutoff {
+							if newest.Seq > ep.last {
+								memEp.lastObservedSeq = newest.Seq
+								memEp.lastObservedAt = now.UnixMilli()
+								memEp.observationCount++
+								memEp.conditionFingerprint = newest.fingerprint
+							}
+							continue
+						}
+					}
+					if newest.Seq > ep.last {
+						memEp.lastObservedSeq = newest.Seq
+						memEp.lastObservedAt = now.UnixMilli()
+						memEp.observationCount++
 					}
 				}
-				if newest.Seq > ep.last {
-					memEp.lastObservedSeq = newest.Seq
-					memEp.lastObservedAt = now.UnixMilli()
-					memEp.observationCount++
+				cause, recordedState := lookup.reopenCause(itemState, itemExists)
+				bundle, err := makeBundleWithPrefix(r, key, ep.id, c, trackedPersistPrefix(trackedID, recordedState))
+				if err != nil {
+					return err
 				}
+				memEp.state = "open"
+				memEp.trackingItemID = sql.NullString{}
+				memEp.trackedLagPair = nextLagPair
+				memEp.silenceUntilMS = sql.NullInt64{}
+				memEp.silenceOnFingerprint = sql.NullString{}
+				memEp.ackedBy = sql.NullString{}
+				memEp.ackedNote = sql.NullString{}
+				memEp.ackedAt = sql.NullInt64{}
+				memEp.conditionFingerprint = newest.fingerprint
+				memEp.bundleJSON = string(bundle)
+				if err := m.appendEventLocked(reopenedKind, ep.id, now, map[string]any{
+					"alert_id": ep.id, "rule_id": r.ID, "subject_key": key,
+					"severity": r.Severity, "receiver": r.Delivery.Receiver,
+					"cause": cause, "item_id": trackedID, "item_state": recordedState,
+				}); err != nil {
+					return err
+				}
+				continue
 			}
-			cause, recordedState := lookup.reopenCause(itemState, itemExists)
-			bundle, err := makeBundleWithPrefix(r, key, ep.id, c, trackedPersistPrefix(trackedID, recordedState))
-			if err != nil {
-				return err
-			}
-			memEp.state = "open"
-			memEp.trackingItemID = sql.NullString{}
-			memEp.trackedLagPair = nextLagPair
-			memEp.silenceUntilMS = sql.NullInt64{}
-			memEp.silenceOnFingerprint = sql.NullString{}
-			memEp.ackedBy = sql.NullString{}
-			memEp.ackedNote = sql.NullString{}
-			memEp.ackedAt = sql.NullInt64{}
-			memEp.conditionFingerprint = newest.fingerprint
-			memEp.bundleJSON = string(bundle)
-			if err := m.appendEventLocked(reopenedKind, ep.id, now, map[string]any{
-				"alert_id": ep.id, "rule_id": r.ID, "subject_key": key,
-				"severity": r.Severity, "receiver": r.Delivery.Receiver,
-				"cause": cause, "item_id": trackedID, "item_state": recordedState,
-			}); err != nil {
-				return err
-			}
-			continue
 		}
-		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.last })
 		if exists && (!firing || firstClear < len(c.clears)) {
 			seq := startHead
 			if firstClear < len(c.clears) {

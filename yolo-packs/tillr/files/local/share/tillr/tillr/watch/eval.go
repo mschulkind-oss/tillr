@@ -907,6 +907,7 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 			continue
 		}
 		firing := r.Enabled && c.fires(r.When)
+		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.last })
 		if exists && ep.trackingItem.Valid && ep.trackingItem.String != "" {
 			if !lookup.ready {
 				continue
@@ -917,91 +918,83 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 				continue
 			}
 			if itemExists && !lookup.isTerminal(itemState) {
-				if !firing {
-					if r.When.Pattern == LagBehind && (!ep.trackedLagPair.Valid || ep.trackedLagPair.String != "") {
-						*changes = append(*changes, func(tx *store.Tx) error {
-							_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair='' WHERE alert_id=?`, ep.id)
-							return err
-						})
-					}
-					continue
-				}
-				if r.When.Pattern == LagBehind {
-					pair := c.lag.leaderOID + ":" + c.lag.followerOID
-					if !ep.trackedLagPair.Valid {
-						*changes = append(*changes, func(tx *store.Tx) error {
-							_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair=? WHERE alert_id=?`, pair, ep.id)
-							return err
-						})
-					} else if ep.trackedLagPair.String != pair {
-						nextSeq := max(ep.last, startHead)
-						*changes = append(*changes, func(tx *store.Tx) error {
-							_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair=?,last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, pair, nextSeq, now.UnixMilli(), ep.id)
-							return err
-						})
-					}
-				} else {
-					newest := c.events[len(c.events)-1]
-					if newest.Seq > ep.last {
-						*changes = append(*changes, func(tx *store.Tx) error {
-							_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
-							return err
-						})
-					}
-				}
-				continue
-			}
-			if !firing {
-				firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.last })
-				seq := startHead
-				if firstClear < len(c.clears) {
-					seq = c.clears[firstClear]
-				}
-				if err := changes.resolve(r, key, ep.id, ep.trackingItem, seq, now); err != nil {
-					return err
-				}
-				continue
-			}
-			newest := observation{Seq: startHead}
-			var lagPair any
-			if r.When.Pattern == LagBehind {
-				pair := c.lag.leaderOID + ":" + c.lag.followerOID
-				lagPair = pair
-				if ep.trackedLagPair.Valid && ep.trackedLagPair.String != pair {
-					nextSeq := max(ep.last, startHead)
-					*changes = append(*changes, func(tx *store.Tx) error {
-						_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, nextSeq, now.UnixMilli(), ep.id)
-						return err
-					})
-				}
-			} else {
-				newest = c.events[len(c.events)-1]
-				if isWindowedEventRule(r.When) {
-					cutoff := max(ep.last, lookup.terminalSeq(trackedID))
-					if newest.Seq <= cutoff {
+				if firing && firstClear == len(c.clears) {
+					if r.When.Pattern == LagBehind {
+						pair := c.lag.leaderOID + ":" + c.lag.followerOID
+						if !ep.trackedLagPair.Valid {
+							*changes = append(*changes, func(tx *store.Tx) error {
+								_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair=? WHERE alert_id=?`, pair, ep.id)
+								return err
+							})
+						} else if ep.trackedLagPair.String != pair {
+							nextSeq := max(ep.last, startHead)
+							*changes = append(*changes, func(tx *store.Tx) error {
+								_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair=?,last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, pair, nextSeq, now.UnixMilli(), ep.id)
+								return err
+							})
+						}
+					} else {
+						newest := c.events[len(c.events)-1]
 						if newest.Seq > ep.last {
 							*changes = append(*changes, func(tx *store.Tx) error {
 								_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
 								return err
 							})
 						}
-						continue
+					}
+					continue
+				}
+			} else {
+				if !firing {
+					seq := startHead
+					if firstClear < len(c.clears) {
+						seq = c.clears[firstClear]
+					}
+					if err := changes.resolve(r, key, ep.id, ep.trackingItem, seq, now); err != nil {
+						return err
+					}
+					continue
+				}
+				newest := observation{Seq: startHead}
+				var lagPair any
+				if r.When.Pattern == LagBehind {
+					pair := c.lag.leaderOID + ":" + c.lag.followerOID
+					lagPair = pair
+					if ep.trackedLagPair.Valid && ep.trackedLagPair.String != pair {
+						nextSeq := max(ep.last, startHead)
+						*changes = append(*changes, func(tx *store.Tx) error {
+							_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, nextSeq, now.UnixMilli(), ep.id)
+							return err
+						})
+					}
+				} else {
+					newest = c.events[len(c.events)-1]
+					if isWindowedEventRule(r.When) {
+						cutoff := max(ep.last, lookup.terminalSeq(trackedID))
+						if newest.Seq <= cutoff {
+							if newest.Seq > ep.last {
+								*changes = append(*changes, func(tx *store.Tx) error {
+									_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
+									return err
+								})
+							}
+							continue
+						}
+					}
+					if newest.Seq > ep.last {
+						*changes = append(*changes, func(tx *store.Tx) error {
+							_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, newest.Seq, now.UnixMilli(), ep.id)
+							return err
+						})
 					}
 				}
-				if newest.Seq > ep.last {
-					*changes = append(*changes, func(tx *store.Tx) error {
-						_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, newest.Seq, now.UnixMilli(), ep.id)
-						return err
-					})
+				cause, recordedState := lookup.reopenCause(itemState, itemExists)
+				if err := changes.reopenTracked(r, key, ep.id, c, newest.fingerprint, lagPair, cause, trackedID, recordedState, now); err != nil {
+					return err
 				}
+				continue
 			}
-			cause, recordedState := lookup.reopenCause(itemState, itemExists)
-			if err := changes.reopenTracked(r, key, ep.id, c, newest.fingerprint, lagPair, cause, trackedID, recordedState, now); err != nil {
-				return err
-			}
-			continue
 		}
-		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.last })
 		if exists && (!firing || firstClear < len(c.clears)) {
 			seq := startHead
 			if firstClear < len(c.clears) {
