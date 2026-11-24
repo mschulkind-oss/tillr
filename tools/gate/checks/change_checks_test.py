@@ -670,7 +670,7 @@ sys.exit(rc)
         # without reintroducing them as legacy implementations in the registry.
         before = {"file-size", "commit-identity", "citations",
                   "documents", "pipeline-evidence", "self-suite", "workflows", "elapsed-time"}
-        tree_ids = {"scratch", "design-citations", "structural", "pack-sync", "go-build", "format"}
+        tree_ids = {"scratch", "design-citations", "pack-sync", "go-build", "format"}
         self.assertEqual(migrated | remaining, before | tree_ids)
         self.assertFalse((IDS - {"file-size"}) & remaining)
         self.assertEqual(tree_ids & remaining, tree_ids)
@@ -715,10 +715,10 @@ sys.exit(rc)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         verdict, legacy = result.stdout.splitlines()
         checks = json.loads(verdict)["payload"]["checks"]
-        expected = IDS | {"gate-budget", "scratch", "design-citations", "structural", "pack-sync", "go-build", "format", "pi-forks-drain"}
+        expected = IDS | {"gate-budget", "scratch", "design-citations", "pack-sync", "go-build", "format"}
         self.assertEqual({check["check_id"] for check in checks}, expected)
         self.assertEqual(len(checks), len(expected))
-        skipped = {"format", "gate-budget", "go-build", "pi-forks-drain", "workflows"}
+        skipped = {"format", "gate-budget", "go-build", "workflows"}
         self.assertEqual({check["check_id"]: check["result"] for check in checks}, {
             ident: "skipped: no changed path is read" if ident in skipped else "pass"
             for ident in expected

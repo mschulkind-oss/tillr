@@ -17,9 +17,6 @@ HERE = Path(__file__).parent
 spec = importlib.util.spec_from_file_location("go_build", HERE / "go-build.py")
 go_build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(go_build)
-pi_forks_drain_spec = importlib.util.spec_from_file_location("pi_forks_drain", HERE / "pi-forks-drain.py")
-pi_forks_drain = importlib.util.module_from_spec(pi_forks_drain_spec)
-pi_forks_drain_spec.loader.exec_module(pi_forks_drain)
 
 
 def missing_go_reads(reads, root):
@@ -122,13 +119,11 @@ class TreeChecks(unittest.TestCase):
             self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
             self.assertIn("could not judge", result.stderr)
 
-    def test_eleven_fast_checks_fit_and_extra_declaration_fails(self):
+    def test_ten_fast_checks_fit_and_extra_declaration_fails(self):
         declarations = [json.loads(path.read_text()) for path in HERE.glob("*.json")]
         fast = [check for check in declarations if check["tier"] == "fast"]
-        structural = next(check for check in declarations if check["id"] == "structural")
-        self.assertFalse(structural["remember"], "Git refs are not tree-memory inputs")
-        # The budget check itself is admission, not one of the eleven admitted checks.
-        self.assertEqual(len([check for check in fast if check["id"] != "gate-budget"]), 11)
+        # The budget check itself is admission, not one of the ten admitted checks.
+        self.assertEqual(len([check for check in fast if check["id"] != "gate-budget"]), 10)
         result = subprocess.run(["python3", str(HERE / "gate-budget.py")], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for check in declarations:
@@ -614,43 +609,6 @@ class TreeChecks(unittest.TestCase):
         self.assertTrue(all(bound for _, bound in first.values()))
         self.assertEqual(gowork_calls, [])
         self.assertLessEqual(len(status_calls), 2)
-
-    def test_pi_forks_drain_trims_paths_for_shared_go_cache(self):
-        self.track("bin/pi-forks", "#!/bin/sh\n")
-        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c",
-                        "user.email=fixture@example.invalid", "commit", "-qm", "base"], check=True)
-        base = subprocess.check_output(["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
-        self.track("bin/pi-forks", "#!/bin/sh\necho changed\n")
-        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c",
-                        "user.email=fixture@example.invalid", "commit", "-qm", "head"], check=True)
-        head = subprocess.check_output(["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
-        drain_dir = self.root / "tools/tillr-drain"
-        drain_dir.mkdir(parents=True)
-        (drain_dir / "go.mod").write_text("module fixture/drain\n")
-        real_run = subprocess.run
-        recorded = []
-        def fake_run(args, **kwargs):
-            if args and args[0] == "go":
-                recorded.append((args, kwargs.get("cwd"), kwargs.get("env", {})))
-                return subprocess.CompletedProcess(args, 0)
-            return real_run(args, **kwargs)
-        old_cwd = Path.cwd()
-        os.chdir(self.root)
-        try:
-            with patch.dict(os.environ, {"GOFLAGS": "-mod=mod", "LAND_BATCH_LIMIT": "3"}), \
-                    patch.object(pi_forks_drain.subprocess, "run", side_effect=fake_run):
-                expected_cache = os.environ.get("GOCACHE")
-                self.assertEqual(pi_forks_drain.main(base, head), 0)
-        finally:
-            os.chdir(old_cwd)
-        self.assertEqual(len(recorded), 1)
-        args, cwd, env = recorded[0]
-        self.assertEqual(args, ["go", "test", "-count=1", "./drain", "-run", "^TestForkBuildDeliveryAndSuccessiveLaneBases$"])
-        self.assertEqual(cwd, drain_dir)
-        self.assertEqual(env["CGO_ENABLED"], "0")
-        self.assertEqual(env["GOFLAGS"].split(), ["-mod=mod", "-trimpath"])
-        self.assertNotIn("LAND_BATCH_LIMIT", env)
-        self.assertEqual(env.get("GOCACHE"), expected_cache)
 
     def test_go_build_handles_library_missing_main_and_healthy_main(self):
         for name, source, expected in [("library", "package library\nfunc F() {}\n", 0),
