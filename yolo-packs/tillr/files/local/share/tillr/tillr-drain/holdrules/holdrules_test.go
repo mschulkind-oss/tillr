@@ -25,3 +25,10 @@ func TestRunLinkMissingDetailResolvesToItsRule(t *testing.T) {
 		t.Fatalf("the detailed reason resolves to %+v, want the run-link-missing rule", got)
 	}
 }
+
+func TestIceboxDetailResolvesToItsRule(t *testing.T) {
+	got := For(`icebox: "AutoQA" in docs/tillr/roadmap.md`)
+	if got != Rules["icebox"] {
+		t.Fatalf("the detailed reason resolves to %+v, want the icebox rule", got)
+	}
+}
