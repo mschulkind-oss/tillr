@@ -2,7 +2,7 @@
 title: "Repairing a frozen criterion — the freeze protects the bar and traps a wrong one"
 status: accepted
 stage: DECIDED
-next: "Every open question is ruled (OQ-CR2, OQ-CR3, OQ-CR5 and OQ-CR6 on 2026-11-17, and OQ-CR7 on 2026-11-20 naming the design seat; OQ-CR4 settled by a designer on 2026-11-18 and OQ-CR1 carried without an owner ruling remain open to the owner's overturn). No questions remain open; plan and build the criterion supersession record, its judge and item-page display, and routing a defective close to the design seat — nothing of criterion supersession is built."
+next: "Plan and build the criterion supersession record, its judge and item-page display, and the route that sends a defective close to the design seat. No question is open."
 depends-on:
   - tillr-judge-and-lifecycle.md
 tags: [tillr, criterion, judge, design]
@@ -17,7 +17,7 @@ vantage:
 
 > **In short.** The freeze is right and the repair path is missing. A criterion's text cannot change once a verdict has been recorded against it, so one that is wrong when written, or true and then stale, is permanent, and the only exit tillr has, a `defective` verdict, closes the item to fix its bar. The repair is one more append-only record beside the item's verdicts: a supersession that keeps the replaced text and the reason in front of the judge.
 
-**Why it matters.** A correct decision cannot reach a wrong criterion. In the system tillr replaced, an item was decided against its own criterion's text and then waited on a ruling that, when it came, could change nothing in the words the judge applied ([§3](#3-the-defect-measured)).
+**Why it matters.** A correct decision cannot reach a wrong criterion. An item decided against its own criterion's text waits on a ruling that, when it comes, can change nothing in the words the judge applies ([§3](#3-the-defect-measured)).
 
 **The shape.** One append-only record on the item, one clause in the store's refusal of edits to frozen text, and one section in what the judge is shown. No new store and no new verdict value.
 
@@ -29,12 +29,11 @@ vantage:
 
 **Reads with:** [the judge and lifecycle design](./tillr-judge-and-lifecycle.md) (the verdicts, the judge step and the close and reopen commands this builds on), and [planning and model tiering](./tillr-planning-node-model-tiering.md), whose rule that a planner never edits what it is held to matches [OQ-CR7](#OQ-CR7)'s ruling that the design seat supersedes a frozen criterion.
 
-**Words.** [The vocabulary](./tillr-vocabulary.md#5-the-words) defines item, criterion, criterion verdict and judge. Four more are used here:
+**Words.** [The vocabulary](./tillr-vocabulary.md#5-the-words) defines item, criterion, criterion verdict and judge. Three more are used here:
 
 - **Freeze**: the store's refusal to change a criterion's text once a criterion verdict has been recorded against it.
-- **Criterion supersession** *(coined in this document, 2026-10-21)*: a record that replaces a frozen criterion's whole text and names the text it replaced and why. It is not an edit, and it is not the vocabulary's *supersession*, which is the lander's finding that a change is already on the trunk.
+- **Criterion supersession** *(coined in this document)*: a record that replaces a frozen criterion's whole text and names the text it replaced and why. It is not an edit, and it is not the vocabulary's *supersession*, which is the lander's finding that a change is already on the trunk.
 - **Design seat**: the role that answers a question about an item's definition — editing the item's block or its design document before a verdict, and superseding a frozen criterion after one ([OQ-CR7](#OQ-CR7)). It is neither the worker that builds the item nor the judge.
-- **The whale**: the coordinating session of the board that tillr replaced. It was deleted with the board on 2026-11-11 and nothing in tillr holds that role.
 
 ## 1. The invariant the freeze protects
 
@@ -65,13 +64,13 @@ So a criterion that carries a `done` or `defective` verdict has no repair path. 
 
 ## 3. The defect, measured
 
-**In tillr, not yet after a verdict.** No tillr record shows a frozen criterion that needed repair. The nearest observation is before the freeze: in the pass of 2026-11-17 a build run blocked on a criterion that named a path upstream no longer had, and the design seat rewrote it on its own authority ([planning and model tiering](./tillr-planning-node-model-tiering.md#OQ-PT3) records it). The case below is therefore measured in the predecessor and anticipated in tillr.
+**In tillr, not yet after a verdict.** No tillr record shows a frozen criterion that needed repair. The nearest observation is before the freeze: in the pass of 2026-11-17 a build run blocked on a criterion that named a path upstream no longer had, and the design seat rewrote it on its own authority ([planning and model tiering](./tillr-planning-node-model-tiering.md#OQ-PT3) records it).
 
-**In the system tillr replaced, three filings of 2026-10-21.** They are quoted from the filings' own text; that system's journal held no verdict event for any of the three when it was read.
+**After a verdict, the defect takes three shapes.**
 
-- **A correct decision could not reach the text.** A criterion required that a provider entry and its `or-200k` profile be deleted. The landed change, `f57809b7`, deliberately kept the profile. The item waited on the owner, and rightly, but a ruling of "keep it" would still have left the criterion ordering a deletion, so the judge would have kept returning not-done against a decision already made. Nothing was wrong with the item, the work or the judge.
-- **A premise expired.** An item was filed at 00:20 from a trunk where one check really was red, and the check was fixed at 00:51 by `8260c429`. The criterion asked for evidence about the red: output quoted before and after, the cause named. That evidence described a state of the world that no longer existed, so the item became unworkable without becoming wrong. Its closing note names the pattern six times: an item filed from a measurement stops being true when the tree moves.
-- **A criterion that could never be judged.** A criterion named an artifact a cleanup had deleted. The item was parked, resumed and parked again 35 times.
+- **A correct decision cannot reach the text.** A criterion requires that something be deleted, and the landed change deliberately keeps it. The item waits on the owner, and rightly, but a ruling of "keep it" still leaves the criterion ordering a deletion, so the judge keeps returning not-done against a decision already made. Nothing is wrong with the item, the work or the judge.
+- **A premise expires.** An item is filed from a trunk where one check really is red, and the check is fixed before the item is worked. The criterion asks for evidence about the red: output quoted before and after, the cause named. That evidence describes a state of the world that no longer exists, so the item becomes unworkable without becoming wrong. An item filed from a measurement stops being true when the tree moves.
+- **A criterion that can never be judged.** A criterion names an artifact a cleanup has deleted, so no attempt can satisfy it and the item is held and resumed without end.
 
 ## 4. Why `defective` is not the repair
 
@@ -105,7 +104,7 @@ A judge that finds a criterion cannot be satisfied says so with the finding it a
 
 ### 5.2 An expired premise is reported with the verdicts the judge already has
 
-The judge step gets no separate check of a criterion's premise ([OQ-CR4](#OQ-CR4), a designer's decision). A judge that finds the premise gone already has two ways to say so: `blocked`, waiting on the design seat, with its reason, when the criterion can be corrected; and `defective`, when no work could satisfy it. Before any verdict the worker says it first, with a `definition` obstacle. What a structural check would add is small: it can tell that a file or a check a criterion names was deleted, and it cannot tell that a measurement the criterion quotes no longer holds, which is the case that was measured.
+The judge step gets no separate check of a criterion's premise ([OQ-CR4](#OQ-CR4), a designer's decision). A judge that finds the premise gone already has two ways to say so: `blocked`, waiting on the design seat, with its reason, when the criterion can be corrected; and `defective`, when no work could satisfy it. Before any verdict the worker says it first, with a `definition` obstacle. What a structural check would add is small: it can tell that a file or a check a criterion names was deleted, and it cannot tell that a measurement the criterion quotes no longer holds, which is the expired-premise case of [§3](#3-the-defect-measured).
 
 ## 6. What must not change
 
@@ -127,9 +126,9 @@ None. [OQ-CR7](#OQ-CR7) was ruled by the owner on 2026-11-20 and compacted into 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | OQ-CR1 | A repair supersedes the whole criterion with a new frozen record that names the text it replaced and why. It never retracts a clause and never edits the frozen text. Settled in [board utilities](./board-utilities.md#53-item-alone) (`D-UT16`), which is not recorded as an owner ruling; tillr's refusal of an edit to frozen text was built with it | 2026-11-16 (no owner ruling recorded) | [§5](#5-the-shape-any-repair-has-to-have) | — |
-| OQ-CR2 | The whale supersedes a criterion itself, with a required reason, and the replaced text goes in the judge's packet and on the board. Visibility, not a narrower permission, is the guard against the whale lowering a bar it wants retired, because an owner-only repair is the owner-only-resume shape the pile already forbids. **The actor this ruling names no longer exists; [OQ-CR7](#OQ-CR7) gives the act to the design seat. The rest stands** | 2026-11-17, owner | [§5](#5-the-shape-any-repair-has-to-have), items 2 to 4 | — |
+| OQ-CR2 | An agent supersedes a criterion, with a required reason, and the replaced text goes in the judge's packet and on the item's page. Visibility, not a narrower permission, is the guard against an agent lowering a bar it wants retired, because an owner-only repair parks the item until one person acts. [OQ-CR7](#OQ-CR7) names the design seat as that agent | 2026-11-17, owner | [§5](#5-the-shape-any-repair-has-to-have), items 2 to 4 | — |
 | OQ-CR3 | The judge sees both texts, the reason, and which replaced which, and its prompt says *replaced*, not *added*. The prior text is the only thing that makes a weakening visible to the judge | 2026-11-17, owner | [§5](#5-the-shape-any-repair-has-to-have), item 4 | — |
-| OQ-CR4 | **Designer's decision, 2026-11-18; not ruled by the owner; the owner may overturn it.** The judge step gets no separate check of a criterion's premise. A judge reports an expired premise with the `blocked` or `defective` verdict it already has, and a worker with a `definition` obstacle. **Rejected:** a structural check that the things a criterion names still exist, which catches only a deleted file or check and has nothing in the tillr judge to reuse; and a new "premise moved" note and state, which is what `blocked` with a waiter already is. Evidence: both judge outcomes are built and routed, and the one case measured was a quoted measurement that stopped holding, which a structural check cannot see | 2026-11-18, designer | [§5.2](#52-an-expired-premise-is-reported-with-the-verdicts-the-judge-already-has) | ✅ |
+| OQ-CR4 | **Designer's decision, 2026-11-18; not ruled by the owner; the owner may overturn it.** The judge step gets no separate check of a criterion's premise. A judge reports an expired premise with the `blocked` or `defective` verdict it already has, and a worker with a `definition` obstacle. **Rejected:** a structural check that the things a criterion names still exist, which catches only a deleted file or check and has nothing in the tillr judge to reuse; and a new "premise moved" note and state, which is what `blocked` with a waiter already is. Evidence: both judge outcomes are built and routed, and the expired-premise case of [§3](#3-the-defect-measured) is a quoted measurement that stops holding, which a structural check cannot see | 2026-11-18, designer | [§5.2](#52-an-expired-premise-is-reported-with-the-verdicts-the-judge-already-has) | ✅ |
 | OQ-CR5 | An unsatisfiable criterion stays a judge finding (`defective`), with no new verdict value, and the repair is to reopen the item and then supersede the criterion. The owner's condition is that this sequence is legal and cheap. Reopen and the judge's `defective` close are built; the supersession record is not | 2026-11-17, owner | [§5.1](#51-an-unsatisfiable-criterion-is-reopened-then-superseded) | Partly: no supersession record |
 | OQ-CR6 | A supersession refuses a verdict in flight: the mismatch between the judged text and the current text rejects it and the item is judged again against the current text, because a verdict names the world it judged | 2026-11-17, owner | [§5](#5-the-shape-any-repair-has-to-have), item 6 | — |
 | OQ-CR7 | **Owner ruling:** The design seat replaces a criterion's text after a verdict has frozen it: when a judge finds a criterion `defective`, the loop sends the item to the design seat, which reopens it and writes the replacement and its reason, returning the item to the queue with both texts and the reason shown on its page and to the judge without asking the owner. Ruled on 2026-11-20 as a review comment: "A — the design seat: it already rewrites a criterion before a verdict, it is neither the worker nor the judge, and your ruling of 2026-11-17 chose visibility over a narrower permission." | 2026-11-20, owner | [§5](#5-the-shape-any-repair-has-to-have), item 2; [§5.1](#51-an-unsatisfiable-criterion-is-reopened-then-superseded) | — |
