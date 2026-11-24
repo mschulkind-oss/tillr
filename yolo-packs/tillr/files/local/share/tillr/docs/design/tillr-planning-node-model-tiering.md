@@ -18,7 +18,7 @@ depends-on:
 
 # Plan first, then spend each model where it is enough
 
-> **Delivered copy.** This is `docs/design/tillr-planning-node-model-tiering.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-planning-node-model-tiering.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-planning-node-model-tiering.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-planning-node-model-tiering.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Partly built. The plan seat, the seats in every backend policy, the piece list, the `planned-build@v1` workflow, its verify node, the seat list in the worker's brief, delivery classification and the cost report are built ([Section 5](#5-the-planning-stage-as-built)). A size rule, per-piece command checks and the `delivery` obstacle are not ([Section 5.7](#57-what-nothing-selects-and-what-is-not-built)). The [Decision Ledger](#decision-ledger) holds designer's decisions the owner has not reviewed, each labeled as one.
 

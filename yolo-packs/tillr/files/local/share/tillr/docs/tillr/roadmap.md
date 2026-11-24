@@ -7,7 +7,7 @@ summary: "The unfinished work on tillr, in the order it should be done and why: 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Reconciled:** 2026-11-24, against the tree and `uvx vantage-check index --roadmap docs/tillr/roadmap.md`.
 
@@ -15,7 +15,6 @@ This page holds unfinished work and its order. Each linked design owns its own s
 and questions; work with no design has its only home here, with its outcome, reason and
 dependencies written under the entry. What is built is described by the references under
 [`docs/reference/`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/) and by each module's README, and what changed is in Git history.
-The [repository roadmap](https://github.com/mschulkind-oss/tillr/blob/main/docs/roadmap.md) points here.
 
 Three words recur. A **seat** is a role in an item's workflow (design, build, review), which the
 backend policy maps to a model. The **drain** is the loop that plans, runs, gates and lands queued
@@ -57,6 +56,11 @@ First by rule 3: every other entry is built and verified by someone who starts f
        races its gate fixture for a process-id file.
      - [`wake_test.go`](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-watch/wake_test.go) gives a wake three seconds
        (`time.After(3 * time.Second)`), which a loaded machine exceeds.
+     - `TestLandingRollWithFailedStoreMigrationAlarmsAndKeepsOldBuild` in
+       [`restart_lost_worker_test.go`](../../tillr-drain/drain/restart_lost_worker_test.go)
+       failed once on 2026-11-24 with `database is locked (5) (SQLITE_BUSY)` in its
+       `store_event` case while other suites ran beside it, and passed four times run alone
+       (`go test ./drain -run TestLandingRollWithFailedStoreMigration -count=4`).
    - **Depends on:** nothing.
 
 ## 2. A core that carries only its own code
@@ -110,14 +114,31 @@ longer exists. Both are removed, and the first needs a seam to move behind.
      heavy-check code and the fork removal deletes more of it.
 
 6. **Give the pi run adapter a compatibility mode.** The adapter
-   ([`tools/tillr-run/backends/pi/`](../../tillr-run/backends/pi/)) is written for a pi that
+   ([`tools/tillr-run/backends/pi/`](../../tillr-run/backends/pi/)) requires a pi that
    can leave a tool call unanswered and answer it when the session is opened again (a *parked*
-   tool call), and that prints its feature names for `pi --features`. Stock pi does neither.
-   The drain's `probePiEndingCapability` already asks for the features and falls back to the
-   report footer, without saying so to the person who started it.
-   - **Outcome:** the adapter probes `pi --features`; where a required feature is missing it
-     refuses with a message that names the feature; and a compatibility mode, chosen
-     deliberately, runs without those features and states what is reduced.
+   tool call). It asks `pi --features` and
+   [refuses](../../tillr-run/backends/pi/README.md#required-pi-features) a pi that does
+   not list `parked-tool-calls`. Upstream pi does not list it; the fork
+   [mschulkind-oss/tillr-pi](https://github.com/mschulkind-oss/tillr-pi) does, and carries only
+   what the adapter requires. The drain's `probePiEndingCapability` asks the same question and
+   chooses the report footer for a pi without the feature, a choice the adapter's refusal now
+   makes unreachable.
+   - **Outcome:** a compatibility mode, chosen deliberately, runs a pi without the feature on
+     the report footer and states what is reduced; the refusal stays the default.
+   - **Shrink the fork:** every behavior tillr can provide itself leaves the fork, and what
+     remains is offered upstream. Three things the adapter uses are in neither upstream pi nor
+     the fork, and each needs one of: a named required feature, a replacement inside tillr, or
+     a place in the fork.
+     - The stop signal: [pausing](../../tillr-run/backends/pi/README.md#pausing-and-continuing)
+       sends SIGUSR1 and expects pi to stop at the next gap. A pi without that handler ignores
+       it and is killed at the straggler bound. The candidate replacement is tillr stopping the
+       worker at a tool-result boundary and reopening the session.
+     - The sub-agent extension: the adapter relies on `PI_SUBAGENTS_TEMP_ROOT`, the
+       `pi-subagents-v1` marker and `sessionFile` in `status.json`.
+     - The background-task extension: [`land.ts`](../../tillr-run/backends/pi/land.ts)
+       reads the journal named by `PI_BACKGROUND_TASK_JOURNAL`.
+   - **Unverified:** whether upstream pi's `turn_end` event carries the usage fields
+     [`extract-report`](../../tillr-run/backends/pi/extract-report) reads.
    - **Also:** [`build-agent-dir`](../../tillr-run/backends/pi/build-agent-dir), which
      builds the directory pi loads its extensions from, reads three things this repository does
      not have: `yolo-packs/matt/pack.json`, the extensions under `yolo-packs/matt/files/extensions`,
@@ -161,11 +182,11 @@ Third by rule 2: each of these is a place where a red check costs more than the 
     on the trunk, built in shadow first. It has no design document; the gate it would change is
     described in [the gate reference](../reference/gate.md).
 
-13. [A failure is diagnosed, not waited out](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/failure-diagnosed-not-waited-out.md): a
+13. [A failure is diagnosed, not waited out](../design/tillr-judge-and-lifecycle.md#424-diagnosing-a-repeated-failure-the-unbuilt-mechanism): a
     failure is fingerprinted from its own text, and a deterministic one blocks its items on one
     diagnosis ticket. After landing velocity because it reads that tier's results.
 
-14. [The trunk fixer's gate](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/trunk-fixer-gate.md): the fixer gets the gate any candidate
+14. [The trunk fixer's gate](../reference/gate.md#the-trunk-fixers-gate): the fixer gets the gate any candidate
     gets plus the checks it names. Its fork-release reporting leaves with entry 4.
 
 ## 4. A drain that runs unattended
@@ -182,10 +203,10 @@ person who did not need to be asked.
     whole module suite, not after.
 
 17. [One evidence registry, and no whole-suite runs in lanes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md)
-    ([plan sketch](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail-plan.md)): the gate, the
+    ([build sketch](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#9-build-phases-sketch)): the gate, the
     trunk proof and a worker's brief trust one recorded result instead of running a check again.
 
-18. [Refused pushes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md): when the remote branch has moved, replay
+18. [Refused pushes](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-refused-push.md): when the remote branch has moved, replay
     unpublished commits onto it instead of holding every later publication.
 
 19. [Shared-path serialization](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-shared-path-serialization.md): two items that
@@ -292,10 +313,10 @@ Seventh because it lowers the cost of every run and stops nothing when it is mis
 
 47. [Seat profiles and one-command switching](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-seat-profiles.md) and
     [live changes to drain capacity](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md)
-    ([plan sketch](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config-plan.md)): named policies an operator
+    ([build sketch](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#8-build-phases-sketch)): named policies an operator
     switches while the drain runs.
 
-48. [The `claude` run adapter](../design/tillr-claude-backend.md) and
+48. [The `claude` run adapter](../reference/tillr-claude-backend.md) and
     [the landing call](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md): the adapter's call-suspending ending
     is the landing call's next build step.
 
@@ -333,12 +354,11 @@ Last because it changes how tillr is delivered and nothing about what it does.
     holds, so the pack's source copy can go. Related to entry 1, which decides the first build.
 
 57. [What tillr changes for a consuming pipeline](../design/tillr-separable-parts.md) and
-    [the definitions build plan](../design/tillr-definitions-plan.md): four small pieces of work
-    and the plan's next tranche are unfiled.
+    [the unbuilt units of the core and charter split](../design/tillr-core-and-git-landing.md#85-the-unbuilt-units):
+    four small pieces of work and ten units are not queued.
 
-58. Graduate two built designs into references:
-    [the utilities](../design/board-utilities.md) and
-    [the observatory server](../design/tillr-observatory.md).
+58. Graduate a built design into a reference:
+    [the utilities](../design/board-utilities.md).
 
 59. [Who made the decisions recorded in the designs](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md): the owner
     keeps, overturns or reopens the decisions a designer made. It is last in build order because

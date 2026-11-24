@@ -15,7 +15,7 @@ next: "The owner rules OQ-SH4 on how tillr builds from Git. The source launcher 
 
 # Self-Hosted Tillr Building, Watchable in the Observatory
 
-> **Delivered copy.** This is `docs/design/tillr-selfhosted-build.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-selfhosted-build.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-selfhosted-build.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-selfhosted-build.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-24. Partly built; [§2](#2-what-is-built-and-what-is-left) says which parts, each checked against the tree on that date. Other workspaces' tillr follows every landing ([OQ-SH2](#OQ-SH2)) and is to be delivered from what Git holds (`D-SH6`); how that is built is open in [OQ-SH4](#OQ-SH4).
 
@@ -31,7 +31,7 @@ next: "The owner rules OQ-SH4 on how tillr builds from Git. The source launcher 
 
 **Needs your ruling:** [OQ-SH4](#OQ-SH4).
 
-**Reads with:** [tillr-restart.md](../reference/tillr-restart.md) (owns restarting and the roll command that turns the trunk into running binaries), [tillr-distribution.md](tillr-distribution.md) (the launcher this implements, [§2](tillr-distribution.md#2-build-and-delivery)), [tillr-convergence.md](tillr-convergence.md) (its decision `D-TC5` on copies a pipeline derives), and [observatory-redesign.md](../reference/observatory-redesign.md) (the observatory reference, which this design does not sequence).
+**Reads with:** [tillr-restart.md](../reference/tillr-restart.md) (owns restarting and the roll command that turns the trunk into running binaries), [tillr-distribution.md](../reference/tillr-distribution.md) (the launcher this implements, [Build and delivery](../reference/tillr-distribution.md#build-and-delivery)), [tillr-convergence.md](tillr-convergence.md) (its decision `D-TC5` on copies a pipeline derives), and [observatory-redesign.md](../reference/observatory-redesign.md) (the observatory reference, which this design does not sequence).
 
 **Words.** A **pack** is a directory under `yolo-packs/` that yolo renders into an agent's home; the tillr pack is what puts `tillr` on `PATH` in a workspace ([its README](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/README.md)). The **pack's copy** is the copy of tillr's source the pack ships, which the code and the recipes call the mirror. A **launcher** is the small program on `PATH` that builds a tillr binary on first use and then runs it. The **main checkout** is the repository's main worktree, as opposed to a lane's linked worktree. [The vocabulary](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#5-the-words) defines fence, gate and lane.
 

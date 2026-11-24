@@ -1,13 +1,13 @@
 {
   "format": "tillr-pack-docs-1",
-  "commit": "0275c51d52c332de4403c859922d5b385ffa13c5",
+  "commit": "08df4766568bb44ffdf15fb27494fea639425ec7",
   "date": "2026-11-24",
   "index": "docs/tillr/design-status.md",
   "jail_root": "~/.local/share/tillr",
   "documents": [
     {
       "source": "docs/tillr/design-status.md",
-      "blob": "d141b4e0fdf6590e0c6d3031e7068bcd3db8eda0",
+      "blob": "b180ead7066d61f295a63425c7602c6f6440170e",
       "delivered": "docs/tillr/design-status.md"
     },
     {
@@ -16,59 +16,9 @@
       "delivered": "tillr-loop/README.md"
     },
     {
-      "source": "docs/design/tillr-core-and-git-landing.md",
-      "blob": "ae4db85e9c78eb7651aa716e0f2f28b86d0ca2c5",
-      "delivered": "docs/design/tillr-core-and-git-landing.md"
-    },
-    {
-      "source": "docs/design/tillr-definitions-plan.md",
-      "blob": "83d3f16e0e5ad2398d5c11544ea47a2dbd277af3",
-      "delivered": "docs/design/tillr-definitions-plan.md"
-    },
-    {
-      "source": "docs/design/tillr-product-qa-requests.md",
-      "blob": "efa50651e067aa3bcccdd3bdb899d3ed4767b9e9",
-      "delivered": "docs/design/tillr-product-qa-requests.md"
-    },
-    {
-      "source": "docs/design/tillr-intake-paths.md",
-      "blob": "4cf9ce193f569b99eff83fc23d6f47dedee0907e",
-      "delivered": "docs/design/tillr-intake-paths.md"
-    },
-    {
-      "source": "docs/design/tillr-separable-parts.md",
-      "blob": "a815f5b8288bf98ab1f74928e5625707318b88c9",
-      "delivered": "docs/design/tillr-separable-parts.md"
-    },
-    {
-      "source": "docs/tillr/roadmap.md",
-      "blob": "1dfbaf88491ddded44d528f245770bec4d2de13d",
-      "delivered": "docs/tillr/roadmap.md"
-    },
-    {
-      "source": "docs/design/board-utilities.md",
-      "blob": "b978bbf558be21c30531dac97c86d29967ab466c",
-      "delivered": "docs/design/board-utilities.md"
-    },
-    {
-      "source": "docs/reference/tillr-item-states.md",
-      "blob": "cd5b7869625433b2ecfce24f0262d6c1ab0a32b6",
-      "delivered": "docs/reference/tillr-item-states.md"
-    },
-    {
-      "source": "docs/design/queue-persistence-ruling.md",
-      "blob": "d6561125aee6c42b4a8b31bfa5ca07b60275ebdb",
-      "delivered": "docs/design/queue-persistence-ruling.md"
-    },
-    {
-      "source": "docs/reference/tillr-queue-persistence.md",
-      "blob": "0f2ca24043ce3d3befe957cf3d141b3f79776c19",
-      "delivered": "docs/reference/tillr-queue-persistence.md"
-    },
-    {
-      "source": "docs/design/tillr-convergence.md",
-      "blob": "26ae182c7e08aa06fc313013e936be1707311cd1",
-      "delivered": "docs/design/tillr-convergence.md"
+      "source": "docs/reference/gate.md",
+      "blob": "b4b8d49094d2f9156c02411095be6144c560e970",
+      "delivered": "docs/reference/gate.md"
     },
     {
       "source": "docs/reference/tillr-item-graphs.md",
@@ -76,13 +26,98 @@
       "delivered": "docs/reference/tillr-item-graphs.md"
     },
     {
-      "source": "docs/design/tillr-planning-node-model-tiering.md",
-      "blob": "e710b8e273e71b0d3295090974241589daf7fcd4",
-      "delivered": "docs/design/tillr-planning-node-model-tiering.md"
+      "source": "docs/reference/tillr-item-states.md",
+      "blob": "cd5b7869625433b2ecfce24f0262d6c1ab0a32b6",
+      "delivered": "docs/reference/tillr-item-states.md"
+    },
+    {
+      "source": "docs/reference/tillr-queue-persistence.md",
+      "blob": "a4a293e7366c0b1230e2dc3975f226f5cc2591e1",
+      "delivered": "docs/reference/tillr-queue-persistence.md"
+    },
+    {
+      "source": "docs/reference/tillr-drain-successor.md",
+      "blob": "afe5d327b98c1395ed380bd3ea0d383898eda04a",
+      "delivered": "docs/reference/tillr-drain-successor.md"
+    },
+    {
+      "source": "docs/reference/run-wall-ruling.md",
+      "blob": "2f221b20fc648e3c85076b4e22afe6cefc14c301",
+      "delivered": "docs/reference/run-wall-ruling.md"
+    },
+    {
+      "source": "docs/reference/tillr-restart.md",
+      "blob": "ca15e98cc704cfb7386f5e6f328ddf28757e878e",
+      "delivered": "docs/reference/tillr-restart.md"
+    },
+    {
+      "source": "docs/reference/tillr-store-contention.md",
+      "blob": "840c5d26e6303c96fdbda45228abf503fade253a",
+      "delivered": "docs/reference/tillr-store-contention.md"
+    },
+    {
+      "source": "docs/reference/tillr-designer-sessions.md",
+      "blob": "cfa30478b36cbd16aa935cbea3c595dc167d64de",
+      "delivered": "docs/reference/tillr-designer-sessions.md"
+    },
+    {
+      "source": "docs/reference/tillr-claude-backend.md",
+      "blob": "29b490c027ede047924adc1867e21aa80c56117b",
+      "delivered": "docs/reference/tillr-claude-backend.md"
+    },
+    {
+      "source": "docs/reference/tillr-muse-backend.md",
+      "blob": "d29428bf580cd322991a9c5ed0d922bc41e75703",
+      "delivered": "docs/reference/tillr-muse-backend.md"
+    },
+    {
+      "source": "docs/reference/tillr-distribution.md",
+      "blob": "4fff823d9eb3c27b9c8f75cbac05e2a414a1bba1",
+      "delivered": "docs/reference/tillr-distribution.md"
+    },
+    {
+      "source": "docs/reference/observatory-design.md",
+      "blob": "58c0c450b8ea759794c8a23fd89117935902c458",
+      "delivered": "docs/reference/observatory-design.md"
+    },
+    {
+      "source": "docs/reference/observatory-redesign.md",
+      "blob": "e481d9df2cc976b09364a4eb48b1bbebd612398d",
+      "delivered": "docs/reference/observatory-redesign.md"
+    },
+    {
+      "source": "docs/reference/observatory-actions.md",
+      "blob": "7b456ab59efe00790fee6a7027efc92f1d97ad4d",
+      "delivered": "docs/reference/observatory-actions.md"
+    },
+    {
+      "source": "docs/design/tillr-core-and-git-landing.md",
+      "blob": "81b9fa7cdb4a43fe33954460cc63c78a6dc20e4b",
+      "delivered": "docs/design/tillr-core-and-git-landing.md"
+    },
+    {
+      "source": "docs/design/tillr-separable-parts.md",
+      "blob": "9fb746b1ed50c8245b2bc7db47a57a51e307f0a4",
+      "delivered": "docs/design/tillr-separable-parts.md"
+    },
+    {
+      "source": "docs/design/board-utilities.md",
+      "blob": "6548fab35d7aa42e72bcee600151ba74aafd8391",
+      "delivered": "docs/design/board-utilities.md"
+    },
+    {
+      "source": "docs/design/landing-principles.md",
+      "blob": "b2982c1339ebeb265aacbc93974806dc5f6ba4fb",
+      "delivered": "docs/design/landing-principles.md"
+    },
+    {
+      "source": "docs/design/tillr-convergence.md",
+      "blob": "aa0d86f020e1e8f19f0cda936b3dab54cb42ddc4",
+      "delivered": "docs/design/tillr-convergence.md"
     },
     {
       "source": "docs/design/tillr-judge-and-lifecycle.md",
-      "blob": "438a8408d850c8db9d6e0aa7dee2a5e5bd0b7521",
+      "blob": "5e926d9c3b758d4c67571107c2d807ab6bc83ada",
       "delivered": "docs/design/tillr-judge-and-lifecycle.md"
     },
     {
@@ -91,64 +126,24 @@
       "delivered": "docs/design/criterion-repair.md"
     },
     {
+      "source": "docs/design/tillr-intake-paths.md",
+      "blob": "4cf9ce193f569b99eff83fc23d6f47dedee0907e",
+      "delivered": "docs/design/tillr-intake-paths.md"
+    },
+    {
       "source": "docs/design/tillr-idea-pipeline.md",
       "blob": "61a5251f212eaeb6fc007b6509e41136566bef1f",
       "delivered": "docs/design/tillr-idea-pipeline.md"
     },
     {
-      "source": "docs/reference/tillr-designer-sessions.md",
-      "blob": "cfa30478b36cbd16aa935cbea3c595dc167d64de",
-      "delivered": "docs/reference/tillr-designer-sessions.md"
+      "source": "docs/design/tillr-planning-node-model-tiering.md",
+      "blob": "e710b8e273e71b0d3295090974241589daf7fcd4",
+      "delivered": "docs/design/tillr-planning-node-model-tiering.md"
     },
     {
-      "source": "docs/design/run-wall-ruling.md",
-      "blob": "875342b97025168510db4b73c0690c937388124c",
-      "delivered": "docs/design/run-wall-ruling.md"
-    },
-    {
-      "source": "docs/reference/tillr-restart.md",
-      "blob": "611e0fbf2eeeef590813cd1ea3d555e9f67c4f14",
-      "delivered": "docs/reference/tillr-restart.md"
-    },
-    {
-      "source": "docs/reference/tillr-drain-successor.md",
-      "blob": "afe5d327b98c1395ed380bd3ea0d383898eda04a",
-      "delivered": "docs/reference/tillr-drain-successor.md"
-    },
-    {
-      "source": "docs/reference/gate.md",
-      "blob": "41c087df77737ce4aa81bda8a38b8a5737989c74",
-      "delivered": "docs/reference/gate.md"
-    },
-    {
-      "source": "docs/design/landing-principles.md",
-      "blob": "21455c2d45ae164c0fbf725a0fdd01f7669d47ba",
-      "delivered": "docs/design/landing-principles.md"
-    },
-    {
-      "source": "docs/reference/tillr-store-contention.md",
-      "blob": "840c5d26e6303c96fdbda45228abf503fade253a",
-      "delivered": "docs/reference/tillr-store-contention.md"
-    },
-    {
-      "source": "docs/design/tillr-observatory.md",
-      "blob": "8501475e164b902150ed4c713af84195b996168b",
-      "delivered": "docs/design/tillr-observatory.md"
-    },
-    {
-      "source": "docs/reference/observatory-design.md",
-      "blob": "7e1ee9ea0d5f147e1635386bafa488a73fd1429c",
-      "delivered": "docs/reference/observatory-design.md"
-    },
-    {
-      "source": "docs/reference/observatory-redesign.md",
-      "blob": "38a3f2d8b85f5832aab3349f5e2a19961674b924",
-      "delivered": "docs/reference/observatory-redesign.md"
-    },
-    {
-      "source": "docs/reference/observatory-actions.md",
-      "blob": "8a17adebbd426993ca03a1ee20c5ca0e22f4d69c",
-      "delivered": "docs/reference/observatory-actions.md"
+      "source": "docs/design/tillr-selfhosted-build.md",
+      "blob": "9b1d6807c60e606db290637bd659931529d93e87",
+      "delivered": "docs/design/tillr-selfhosted-build.md"
     },
     {
       "source": "docs/design/session-recording.md",
@@ -156,34 +151,19 @@
       "delivered": "docs/design/session-recording.md"
     },
     {
-      "source": "docs/design/tillr-distribution.md",
-      "blob": "555db79f019fb383ff458921060ea250c159f283",
-      "delivered": "docs/design/tillr-distribution.md"
-    },
-    {
-      "source": "docs/design/tillr-selfhosted-build.md",
-      "blob": "3493abe90e445247dc0441cdd414f820f612294c",
-      "delivered": "docs/design/tillr-selfhosted-build.md"
-    },
-    {
-      "source": "docs/design/tillr-claude-backend.md",
-      "blob": "4c3929c9684c6bbd5e9481d6c6f9f5ad6b2ac2dd",
-      "delivered": "docs/design/tillr-claude-backend.md"
-    },
-    {
-      "source": "docs/reference/tillr-muse-backend.md",
-      "blob": "d37a29629f19084c5ce9d695a1c211cf0166df2c",
-      "delivered": "docs/reference/tillr-muse-backend.md"
-    },
-    {
       "source": "docs/design/tillr-goal-monitor.md",
-      "blob": "096d891254dcd49678845c82867d65f7083b02d0",
+      "blob": "2c92b807e53e76f66b566b71010e24c9f38949cc",
       "delivered": "docs/design/tillr-goal-monitor.md"
     },
     {
       "source": "docs/design/tillr-autoqa.md",
-      "blob": "25551face8270e7f1613516d53232ab637e075cf",
+      "blob": "a0d7ce3288890b5a9f3910468be4ca36254d617e",
       "delivered": "docs/design/tillr-autoqa.md"
+    },
+    {
+      "source": "docs/tillr/roadmap.md",
+      "blob": "35d91f8af94e7e635146a0cc6b1675d833bfbdd5",
+      "delivered": "docs/tillr/roadmap.md"
     }
   ],
   "in_module_mirror": [

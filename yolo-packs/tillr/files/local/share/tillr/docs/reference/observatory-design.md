@@ -34,12 +34,12 @@ covers:
   - tools/tillr-view/web/src/models/queries.ts
   - tools/tillr-view/web/src/models/socket.ts
 tags: [tillr, observatory, view, provenance, truthfulness, reference]
-summary: "How `tillr-view` enforces explicit epistemic provenance, three-way state encoding, named-absence refusal and detail contracts, design-document metadata and Vantage links, CLI/HTTP count parity, and WebSocket cache invalidation across the observatory, plus which components of the four-region layout the linked pages mount."
+summary: "What a drain records so a read-only server can show every item, stage and hand-off, and how `tillr-view` enforces explicit epistemic provenance, three-way state encoding, named-absence refusal and detail contracts, design-document metadata and Vantage links, CLI/HTTP count parity, and WebSocket cache invalidation across the observatory, plus which components of the four-region layout the linked pages mount."
 ---
 
 # Observatory truthfulness, provenance, and shared primitives
 
-> **Delivered copy.** This is `docs/reference/observatory-design.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/observatory-design.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 `tillr-view` serves the read-only truthfulness layer and shared UI primitives
 that every observatory page and CLI summary builds on. Its job is to make sure a
@@ -76,7 +76,7 @@ observatory, which serves the screens and keeps these provenance rules), [observ
 [designer sessions](tillr-designer-sessions.md) (Vantage review-comment intake
 and warm designer sessions), [tillr item states](tillr-item-states.md) (the
 projected item state machine and criterion rules),
-[the observatory recording contract](../design/tillr-observatory.md) (the store
+[the recording contract](#recording-contract-and-read-model) (the store
 and trace envelopes these reads consume), and
 [the decision provenance review](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md)
 ([`OQ-PR5`](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md#OQ-PR5) confirming the
@@ -120,6 +120,110 @@ Every read route and component in `tillr-view` enforces seven truthfulness invar
 5. **Artifact misses show every path searched.** When `GET /api/v1/runs/{id}/artifacts/{kind}` (`serveobs.go`) finds no file for `brief`, `fence`, `verdict`, `run-log`, `agent-result`, `events`, or `worktree`, `PayloadInspectorDrawer.tsx` lists `searched_paths` verbatim rather than showing an empty `<pre>`.
 6. **Live elapsed clocks tick only from recorded start times.** `liveElapsedText` and `leaseText` (`models/now.ts`) mark viewer-computed elapsed and lease countdown strings with `~` (or `expired` when `lease_expires_at <= nowMs`) and report `start not recorded` when `started_at` is null.
 7. **Remaining stage-projection gap (`stages` in `serve.go`):** `tillr-drain` records per-run `boundary.check` events in the event log, and `SpanViewer` on the redesigned Run page reads `pipeline_spans`, yet the `stages()` builder on `GET /api/v1/runs/{id}` still emits the `boundary` stage row unconditionally as `epistemic_state: "unobserved_seam"` (`"the loop's boundary check is a tick-level bracket, and no per-run record of it is written"`).
+
+---
+
+## Recording contract and read model
+
+The **introspection contract** *(coined here)* is the closed set of operator questions below and
+the records that answer each. It is a contract over the store and the run artifacts, not a screen
+layout and not a dashboard on top of logs: a recording that does not exist is shown as a gap,
+never as a clean pass. An **inter-tool exchange** *(coined here)* is one hand-off between two
+programs in a drain pass, either supervisor to utility (the drain calling the runner, the gate or
+the lander) or harness to tool inside a run (a model turn calling a tool, a shell starting a
+subprocess). The **snapshot cursor** *(coined here)* is the schema version, event head and
+generation time returned on every response, naming the store transaction a view was derived from.
+
+### Six operator questions
+
+Every page and payload answers one of six questions.
+
+| # | Question | Answered from |
+| :--- | :--- | :--- |
+| Q1 | What is it doing right now? | Store tables for items, lanes, runs and candidates; the running run's log; the run's step spans. |
+| Q2 | What did it do? | Dispatch decisions, runs, candidates, landing attempts and events in the store; the per-run gate, landing and verdict records. |
+| Q3 | What tools did it touch, and what went between them? | The saved run request, the per-run records and step spans (supervisor to utility); the run log's model turns and tool calls and the shell's subprocess rows (harness to tool). |
+| Q4 | Why did it stop, or why is this item held? | Dispatch actions and reasons, run exits, landing results, the gate verdict and the loop's stop record. |
+| Q5 | What did it cost? | Token counts by kind and wall time per turn, run and item. The HTTP face shows no price. |
+| Q6 | What changed, and is the agent's claim true? | The candidate's base, head and tree; `gated_tree` against `landed_tree`; the claim checks `tillr-trace` computes from the run's artifacts. |
+
+### What is recorded and what is not
+
+| Seam | Recorded |
+| :--- | :--- |
+| Item state, criteria and verdicts | Yes, in the store. |
+| Pass decisions (dispatch or hold, with reason) | Yes, as `dispatches` rows. |
+| Staging inputs (brief, fence, base) | Yes, copied per run under `.tillr/loop/<run-id>/`, so a reused lane never overwrites an earlier run's inputs. |
+| Supervisor steps (boundary, fence, gate, land, verdict) | Yes, one span per step in the run's `steps.jsonl`, with clocks, exit code and a stderr tail. |
+| Model turns and token usage | Yes, from the run log. |
+| Model tool calls | Arguments and results yes. The clock is derived when the harness stamps none. |
+| Subprocesses inside a shell tool call | Yes when the run's adapter exports the `BASH_ENV` shim; the shim is fail-open, so a run without it has a gap, not a failure. |
+| Git operations inside a run | No. Git trace2 recording is deliberately off: its variables are inherited by every test suite a run starts and record hundreds of thousands of calls per run. |
+
+A run is recorded as running before its adapter starts, and step spans are written as steps
+begin, so "what is it doing" has an answer before the run ends.
+
+### Three read sources, nothing cached
+
+`tillr-view serve` is a pure reader. It combines:
+
+1. **The store**, queried per request inside one read transaction. The tables are small, and a
+   second materialized copy would drift for no latency gain.
+2. **Per-run records** under `.tillr/loop/<run-id>/` and the saved run request. These are small
+   and immutable once written.
+3. **Run trace artifacts**, read on demand through `tillr-trace`. There is no persistent trace
+   index: derived data is not cached until a performance problem is shown, and every answer is
+   recomputed from the artifacts a question needs
+   ([no index](../../tillr-trace/README.md#no-index-every-answer-is-read-from-the-artifacts)).
+
+A page never shows a raw machinery string as an item's status. One server-side projector,
+`ProjectItemState`, maps every item to the states of
+[the item-states reference](tillr-item-states.md). Run, candidate, gate and landing state render
+inside the item's attempt history, never as a competing item state.
+
+### Reading beside a writing drain
+
+A drain writes the store while the operator reads it.
+
+- **Read-only connection.** `tillr-view serve` opens the store through `store.OpenRead`
+  ([`open.go`](../../tillr/store/open.go)), which carries `mode=ro` and a busy timeout. It
+  never changes the journal mode or repairs the database. The
+  `every_route_answers_a_read_only_store` case in
+  [`serve_internal_test.go`](../../tillr-view/serve_internal_test.go) holds it to that. A
+  WAL reader needs readable `-wal` and `-shm` files or permission to create them; a bare database
+  in an unwritable directory is not promised to open.
+- **Readers do not block writers.** Every writable open selects and verifies WAL (SQLite's
+  write-ahead log); `OpenRead` keeps the mode it finds
+  ([`crash_test.go`](../../tillr/store/crash_test.go)). A WAL read transaction does not
+  block a commit, and an uncommitted transaction from a killed writer stays invisible.
+- **A hot rollback journal is a refusal, not a repair.** A store in rollback mode that holds an
+  interrupted write needs a writable connection to recover. The API answers 503
+  `store-unreadable`, names the uncommitted transaction, and points the operator to
+  `tillr-store recover --store <path>`. Never delete a journal by hand.
+- **Retry after repair.** A failed open is retried on each GET, serialized across simultaneous
+  requests. Once an open succeeds the server keeps that handle, so a repaired store is reached
+  without a restart.
+- **One snapshot per request.** Each handler runs its queries in a single read transaction whose
+  first query reads the event head. Every later query in that request sees the store at that
+  event head.
+
+### Slice labels in code comments
+
+Comments in `tools/tillr-view` and `tools/tillr-drain` name the observatory's parts by these
+labels.
+
+| Label | What it delivers | Built |
+| :--- | :--- | :--- |
+| `OBS-1` | Per-run copies of staging inputs, recorded pass decisions, and step spans with stderr tails. | Yes |
+| `OBS-2` | The read-only HTTP API in `tillr-view serve`. | Yes |
+| `OBS-3` | The React front end over a normalized query cache: every component reads through query hooks keyed by entity id, so manual refresh, fallback polling and WebSocket invalidation all invalidate the same keys. | Yes |
+| `OBS-4` | Subprocess recording inside a run's shell. | The `BASH_ENV` shim is wired in the `pi` adapter; git trace2 is deliberately not recorded. |
+| `OBS-5` | WebSocket invalidation at `/api/v1/ws`. | Yes |
+
+Front-end checks are path-scoped: a change that does not touch `tools/tillr-view/web/` pays
+nothing for them, and [`observatory-dev.test.py`](https://github.com/mschulkind-oss/tillr/blob/main/tests/observatory-dev.test.py) concerns
+only the launch recipe's own files. The built front end is embedded in the Go binary, so one
+process serves a drain's view and Node is needed only for development (`just observatory-dev`).
 
 ---
 
@@ -255,6 +359,9 @@ Each row preserves a decision (`D-OBS1`–`D-OBS13`) or settled question ([`OQ-O
 | D-OBS11 | Loopback-only `Origin` check on `/api/v1/ws` (`wsOriginAllowed`) | Blocks cross-origin browser pages from subscribing to local file paths, prompts, and run events while allowing `localhost` Vite dev proxying. |
 | D-OBS12 | Render worker criterion claims as `~claimed · derived (worker report, not a verdict)` until the judge records a verdict | Stops a worker's self-reported completion from looking like a verified gate/judge pass while a run is live or blocked. |
 | D-OBS13 | Cache `uvx vantage-check index --format json` in `vantageCache` with single-flight prefetch and explicit `questions-unknown` fallback | Keeps `/api/v1/snapshot` and `/api/v1/items/{id}/doc` fast without re-spawning Python on every request or fabricating `0 open questions` when `uvx` fails. |
+| OQ-OBS1 | The server and its web tree live inside `tools/tillr-view/` as `tillr-view serve`, not in a separate utility | One process serves a drain's view, and the read faces and the pages share one projector and one count helper. |
+| OQ-OBS2 | Recording (`OBS-1`) comes before the pages that read it | A page over evidence nobody recorded can only draw gaps or invent data. |
+| OQ-OBS3 | No persistent trace index; `tillr-view` asks `tillr-trace` per request *(owner ruling)* | Keeps one parser and one claim verifier, and a cached copy of derived data drifts before any performance problem is shown. |
 | OQ-OBD1 | Client-side `Pause` keeps `/api/v1/ws` open, drops incoming invalidations while paused, and invalidates all queries on resume *(owner ruling, 2026-11-13)* | Lets an operator freeze a moving screen to read or copy evidence without touching the running drain or losing catch-up on resume. |
 | OQ-OBD2 | Replace in-app design-document Markdown rendering with `DocumentPane` frontmatter metadata, question count, and an `Open in Vantage` link *(owner ruling, 2026-11-13)* | Vantage is already the review and comment tool; rendering a second un-commentable copy in the observatory duplicated Markdown parsing for no workflow gain. |
 | OQ-OBD3 | Compute queue counts in one Go helper (`boardCountsOf` in `counts.go`) shared by `/api/v1/snapshot` and `tillr-view status --store` *(owner ruling, 2026-11-13)* | Eliminates off-by-one and `closed`-blocker discrepancies between terminal status checks and browser headers. |

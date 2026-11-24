@@ -193,8 +193,8 @@ func TestRetryHelpNamesTheDesignRunForm(t *testing.T) {
 	}
 }
 
-// TestHelpIsTheFaceSurface pins the layer-1 surface (docs/design/tillr-distribution.md
-// Section 3): `--help` names the faces and a face's `--help` names that face's flags, both
+// TestHelpIsTheFaceSurface pins the layer-1 surface (docs/reference/tillr-distribution.md,
+// "Documentation split"): `--help` names the faces and a face's `--help` names that face's flags, both
 // on stdout and both exit 0.
 func TestHelpIsTheFaceSurface(t *testing.T) {
 	code, out := invoke(t, "--help")
@@ -335,7 +335,7 @@ func TestPlanRefusesAMalformedTick(t *testing.T) {
 
 // A backend whose timeout_seconds is negative refuses the plan by name instead of emitting
 // a request run would refuse at claim. Zero is not refused: it is an unbounded run whose
-// lane lease carries no expiry (design D-RW1, docs/design/run-wall-ruling.md).
+// lane lease carries no expiry (design D-RW1, docs/reference/run-wall-ruling.md).
 func TestPlanRefusesAPolicyWhoseBackendHasANegativeTimeout(t *testing.T) {
 	storePath := fixture(t, itemRecord("item_042", "in-queue"))
 	policyPath := policyDoc(t, map[string]any{

@@ -34,7 +34,7 @@ type dispatch struct {
 // never stands in for a child's outcome.
 func run(args []string) int {
 	// The wrapper's own surface, and the only thing it answers itself: the nouns it can
-	// dispatch to (docs/design/tillr-distribution.md Section 3 makes `<bin> --help` a
+	// dispatch to (docs/reference/tillr-distribution.md, "Documentation split" makes `<bin> --help` a
 	// layer-1 surface for all eight binaries). Everything after a noun is still handed
 	// over untouched, which is what keeps this from becoming a second interface.
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {

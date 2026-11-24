@@ -372,8 +372,8 @@ func TestPlanIsReproducible(t *testing.T) {
 	}
 }
 
-// TestHelpIsTheFaceSurface pins the layer-1 surface (docs/design/tillr-distribution.md
-// Section 3): `--help` names the faces and a face's `--help` names that face's flags, both
+// TestHelpIsTheFaceSurface pins the layer-1 surface (docs/reference/tillr-distribution.md,
+// "Documentation split"): `--help` names the faces and a face's `--help` names that face's flags, both
 // on stdout and both exit 0.
 func TestHelpIsTheFaceSurface(t *testing.T) {
 	code, out := run(t, "--help")

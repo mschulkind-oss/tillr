@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The Claude Code dialect: `claude -p --output-format stream-json --verbose`, one JSON
-object per line (docs/design/tillr-claude-backend.md §1 and §2).
+object per line (docs/reference/tillr-claude-backend.md, "What a headless run
+loads" and "The adapter").
 
 The stream opens with `system` lines (`subtype: init` carries the session id and the
 model), then `assistant` lines whose `message.content` holds `text`, `thinking` and

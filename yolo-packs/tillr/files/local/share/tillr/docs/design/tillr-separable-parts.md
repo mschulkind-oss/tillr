@@ -1,5 +1,5 @@
 ---
-title: "What tillr will change for Product QA, what it promises, and what it will not change"
+title: "What tillr promises a consumer, what it changes for one, and what it will not change"
 status: in-review
 stage: DESIGN
 updated: 2026-11-24
@@ -8,27 +8,24 @@ tags:
   - design
   - store
   - boundaries
-  - product-qa
-summary: "What tillr promises a program other than its own loop: the stable surface of commands and records, what is internal, how a breaking change is announced, and the fate of each request the Product QA pipeline made of tillr."
+summary: "What tillr promises a program other than its own loop: the stable surface of commands and records, what is internal, how a breaking change is announced, and the state of each request an example consumer, a bug-finding pipeline that lands nothing, makes of tillr."
 next: "The owner reviews the designer's decisions D-FQ1 to D-FQ5. P2, P3, P4 and P6 are not built. OQ-FQ7 and OQ-FQ8 stay blocked until a consumer needs them."
 depends-on:
   - tillr-core-and-git-landing.md
-  - tillr-product-qa-requests.md
-  - tillr-definitions-plan.md
   - ../reference/tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
   - tillr-idea-pipeline.md
 ---
 
-# What tillr will change for Product QA, and what it will not
+# What tillr promises a consumer, and what it will not change
 
-> **Delivered copy.** This is `docs/design/tillr-separable-parts.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-separable-parts.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-24. The store, items, verdicts and leased runs work outside Git, and a store
+**Status:** The store, items, verdicts and leased runs work outside Git, and a store
 that never lands runs end to end (the worked example under
 [`tools/tillr/examples/recorded-verdict/`](../../tillr/examples/recorded-verdict/)). Four
-small pieces of work ([Section 3](#3-proposed-work)) and the build plan's next tranche are not
-built. Five decisions here are the designer's and await the owner's review
+small pieces of work ([Section 3](#3-proposed-work)) and
+[the unbuilt units](tillr-core-and-git-landing.md#85-the-unbuilt-units) are not built. Five decisions here are the designer's and await the owner's review
 ([the ledger](#decision-ledger)). The commands behind the behavior claims are in
 [Evidence](#evidence).
 
@@ -37,14 +34,14 @@ built. Five decisions here are the designer's and await the owner's review
 > packages or SQL, and tillr announces every change to that surface.
 
 **Why it matters.** A consumer builds against what this document promises. A promise that is stale
-costs it a wrong build; [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now) is the
+costs it a wrong build; [Section 2](#2-the-contract-between-tillr-and-a-consumer) is the
 part it relies on.
 
 **Cost.** tillr keeps a stable surface of commands and records for a second project, and announces
 every change to it.
 
-**Start at [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now)**, the contract, then
-[Section 7](#7-the-second-round-tillrs-answer) for the fate of each request.
+**Start at [Section 2](#2-the-contract-between-tillr-and-a-consumer)**, the contract, then
+[Section 7](#7-a-consumers-requests-and-the-state-of-each) for the fate of each request.
 
 **Needs your ruling:** None. [OQ-FQ7](#OQ-FQ7) and [OQ-FQ8](#OQ-FQ8) are blocked, each on something
 named in it.
@@ -53,23 +50,19 @@ named in it.
 [the ledger](#decision-ledger).
 
 **Reads with:** [tillr-core-and-git-landing.md](tillr-core-and-git-landing.md) (the direction
-this sits under), [tillr-definitions-plan.md](tillr-definitions-plan.md) (the build plan and its
-next tranche), [tillr-product-qa-requests.md](tillr-product-qa-requests.md) (the consumer's
-requests, as received), [tillr-item-graphs.md](../reference/tillr-item-graphs.md) (graphs inside
+this sits under, and its unbuilt units), [tillr-item-graphs.md](../reference/tillr-item-graphs.md) (graphs inside
 one item), [tillr-judge-and-lifecycle.md](tillr-judge-and-lifecycle.md) (item states),
 [tillr-idea-pipeline.md](tillr-idea-pipeline.md) (item kinds and child items),
 [board-utilities.md](board-utilities.md) (the process-and-record seam),
 [the vocabulary](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md) (which keeps this contract's lane names as aliases).
 
-<a id="for-the-autoqa-projects-agent"></a>
-
-## For the Product QA project's agent
+## For a consumer's agent
 
 Read, in this order:
 
 1. [The tillr design index](../tillr/design-status.md), which the tillr pack ships.
-2. [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now): what you may rely on.
-3. [Section 7](#7-the-second-round-tillrs-answer): each request and its state.
+2. [Section 2](#2-the-contract-between-tillr-and-a-consumer): what you may rely on.
+3. [Section 7](#7-a-consumers-requests-and-the-state-of-each): each request and its state.
 4. The worked example under `examples/recorded-verdict/` in the core library: a store that lands
    nothing, run from an empty directory.
 
@@ -84,8 +77,8 @@ and the first use **`git-landing`**; the code and the flag `--definition` keep t
 
 ## The words this document uses
 
-- **Product QA:** a bug-finding pipeline that is a separate project and runs tillr stores of its
-  own. It is the consumer whose requests this document answers.
+- **Product QA:** the example consumer this document uses: a bug-finding pipeline that runs tillr
+  stores of its own and lands nothing.
 - **AutoQA:** not Product QA. [tillr-autoqa.md](tillr-autoqa.md) is tillr's own design for a
   standalone exploratory-testing tool, aimed first at tillr itself.
 - **Consumer:** a program other than tillr's own loop that uses tillr's commands on a store.
@@ -143,7 +136,7 @@ directory that is not relative to the lane, so each caller writes the same stub.
 - **Not promised:** resuming a plain command.
 
 **A5. The contract is published, and each change to it is recorded.** Not built (P4). The contract
-is [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now) of this document; there is no
+is [Section 2](#2-the-contract-between-tillr-and-a-consumer) of this document; there is no
 changelog (`fd -i changelog tools docs` finds nothing).
 
 - **Promised:** the contract in a tracked reference, a test that every face and record kind it
@@ -189,15 +182,13 @@ core, so several of these open up in a consumer's own definition. The reasons ar
 | C3 | A running step that rewrites the graph freely | Bounded replacement only, no model-written wiring (`D-IG2`, `D-IG3`, `D-IG5`, `D-IG9`) | Keeps its graph in its dispatcher, or one tillr item per finding | Narrowed to insertion downstream and appending; not built |
 | C4 | An uncertain outside effect as a state inside a graph | No node changes anything outside its worktree | Keeps its send step and its uncertain state. Outside a graph, `blocked` with a waiter works | Open; not built |
 | C5 | Deadlines and clocks in the plan | No timers | Orders and times work in its dispatcher | Withdrawn |
-| C6 | A Go library as the connection | Processes and records | Calls the commands in [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now) | Withdrawn |
+| C6 | A Go library as the connection | Processes and records | Calls the commands in [Section 2](#2-the-contract-between-tillr-and-a-consumer) | Withdrawn |
 | C7 | Completion by "an artifact recorded and judged" | A landing completes an item; another definition completes on its hook's recorded verdict | Declares `completes: "hook"` in its definition file | Built |
 | C8 | A second loop and keeper beside the first, in one root | The keeper finds a loop by its working directory and locks per root (`find_loop` in [tillr-keep](../../tillr-roll/tillr-keep)) | Runs a loop with its own store and root | Withdrawn |
 
 ---
 
-<a id="2-the-contract-between-tillr-and-autoqa-for-now"></a>
-
-## 2. The contract between tillr and Product QA, for now
+## 2. The contract between tillr and a consumer
 
 ### 2.1 The stable surface
 
@@ -208,7 +199,7 @@ A consumer may rely on these. A change to any of them is announced as
   `tillr <noun> <face>`.
 - **Faces a consumer may call:**
   - `tillr-store init`, `check`, `events`;
-  - `tillr-item apply`, `list`, `show`, `state`, `close`, `reopen`, `verdict`, `grant`, `decision`,
+  - `tillr-item apply`, `list`, `show`, `state`, `close`, `reopen`, `verdict`, `judge`, `decision`,
     `mail`;
   - `tillr-run exec`, `status`, `lanes`, `release`;
   - `tillr-view status`, `events`, `waiting`, `passes`, `lanes`, `running`;
@@ -265,13 +256,12 @@ There is no mechanism yet. Proposed, as [A5](#11-now-or-queued-at-once):
 ### 2.4 How requests and answers travel
 
 - **A consumer's requests** are written by its agent with the owner, one numbered request per
-  entry, each with the behavior it checked. The owner relays them. The latest round is recorded as
-  received in [tillr-product-qa-requests.md](tillr-product-qa-requests.md), and each later round
-  replaces it there.
+  entry, each with the behavior it checked. The owner relays them, and
+  [Section 7](#7-a-consumers-requests-and-the-state-of-each) holds each with its state.
 - **tillr's answers** are this document: [Section 1](#1-what-tillr-will-change) and
-  [Section 7](#7-the-second-round-tillrs-answer) for each request's fate,
-  [the build plan](tillr-definitions-plan.md) for what is next,
-  [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now) for the contract, and the
+  [Section 7](#7-a-consumers-requests-and-the-state-of-each) for each request's fate,
+  [the unbuilt units](tillr-core-and-git-landing.md#85-the-unbuilt-units) for what is next,
+  [Section 2](#2-the-contract-between-tillr-and-a-consumer) for the contract, and the
   [Open Questions](#open-questions) and [the ledger](#decision-ledger) for what waits on the owner.
 - **tillr's designs** reach a consumer's agent through
   [the design index](../tillr/design-status.md), which the tillr pack ships.
@@ -300,7 +290,7 @@ Four pieces of work, none built and none needing a ruling ([`D-FQ1`](#decision-l
 
 **P4. Publish tillr's consumer contract and record each change to it.** *(A5.)*
 
-- A tracked reference holds [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now), and
+- A tracked reference holds [Section 2](#2-the-contract-between-tillr-and-a-consumer), and
   this document links to it instead of carrying it.
 - A test fails when a face it names does not answer `--help`, or a record kind it names is not a
   constant in the code.
@@ -321,7 +311,7 @@ interrupted-run code in [orphan.go](../../tillr-drain/drain/orphan.go), so it go
 [tillr-autoqa.md](tillr-autoqa.md), tillr's own design for exploratory testing of tillr, is
 parked and differs from the code in these places. The code and
 [the item-graph reference](../reference/tillr-item-graphs.md) are right in each. None of this
-concerns Product QA, which files into stores of its own.
+concerns a consumer that files into stores of its own.
 
 1. It describes read faces failing on a fresh store, and a bootstrap that works around it. They do
    not fail (A1).
@@ -336,9 +326,10 @@ concerns Product QA, which files into stores of its own.
 
 ---
 
-## 5. The requests, restated
+## 5. Thirteen general requests, and where each went
 
-The first round asked for thirteen things. Each is listed with where it went.
+Before the numbered lists of [Section 7](#7-a-consumers-requests-and-the-state-of-each), the
+consumer asked for thirteen things in general terms. Each is listed with where it went.
 
 | # | Request | Where it went |
 | :--- | :--- | :--- |
@@ -409,35 +400,111 @@ the stores separate.
 
 ---
 
-## 7. The second round: tillr's answer
+## 7. A consumer's requests and the state of each
 
-The second round's requests are recorded as received in
-[tillr-product-qa-requests.md](tillr-product-qa-requests.md). tillr answers by building
-([OQ-FQ1](#decision-ledger)), so this section maps each request to its state. Nothing is declined
-([`D-FQ5`](#decision-ledger)): a tension between Git landing and another use puts the choice in the
-definition, so the answer is the extension point. "Next tranche" is the unbuilt list in
-[the build plan](tillr-definitions-plan.md).
+tillr answers a consumer's requests by building ([OQ-FQ1](#decision-ledger)), so this section maps
+each request to what the tree does. Nothing is declined ([`D-FQ5`](#decision-ledger)): a tension
+between Git landing and another use puts the choice in the definition, so the answer is the
+extension point. "Next unit" is the unbuilt list in
+[the direction document](tillr-core-and-git-landing.md#85-the-unbuilt-units).
 
-### 7.1 The fourteen requests
+### 7.1 The use the requests come from
 
-| Request | State |
+The requests below come from one example consumer, a bug-finding pipeline called Product QA here.
+It keeps a queue of its own on tillr's core and has two kinds of item:
+
+- A **finding**: one failure reported by an automated test run. It ends with a verdict.
+- A **bug**: one defect, which one or more findings point at. A person approves it and reports
+  it.
+
+Neither kind ever makes a commit. Its steps are commands (replay a failure, judge it again) and
+read-only agent runs, in a plain directory.
+
+**The shapes the consumer wants**, each of which is what the core has:
+
+- Vocabulary as a data file plus one hook program.
+- A generic lifecycle in the core, with each charter naming its finished states.
+- Processes and records as the only interface. It does not ask for a Go library.
+
+**The extension points, one case each:**
+
+| Extension point | What the consumer fills it with |
 | :--- | :--- |
-| R2-1 Every table created at `store init` | Built |
-| R2-2 A store declared not to land | Built, and shown end to end by the worked example |
-| R2-3 Finished states keep their reasons, and leaving one is an event | Built |
-| R2-4 The raw `state` and `apply` paths closed | Built for moves out of a finished state. A raw write of `landed` with an open criterion is the terminal-state block's ([A2](#11-now-or-queued-at-once)) |
-| R2-5 Command steps, with the item id passed to the adapter | Built |
-| R2-6 Runs, verdict reasons, decisions, close and reopen on the item page | Built |
-| R2-7 A detail panel resolved from `body_ref` by a hook | Half built: the `detail` hook is in the hook contract; no page draws it. Next tranche |
-| R2-8 Outcomes per kind, countable | Half built: finished states per definition. Counts in the views are next tranche |
-| R2-9 A core that does not preclude a definition's graph changes | Not built. Next tranche |
-| R2-10 No fixed graph size limits | Not built. Next tranche |
-| R2-11 No clock whose only consequence is a kill | Partly built: default run walls are removed (`D-RW1`; `timeout_ms: 0` holds a lease with no expiry, in `tools/tillr-run/run/lease.go`) and the gate's kill ceiling is a stall watchdog (`D-GR15`, `tools/tillr-gate/watchdog.go`). `LeaseGraceMS` (300 s) remains for runs with an explicit `timeout_ms`, with no plan to remove it |
-| R2-12 An uncertain outward effect as a state that blocks a retry | Not built. Next tranche |
-| R2-13 Time and tokens per step attempt, with their source | Not built. Next tranche |
-| R2-14 An owner acknowledgment point | Not built. Next tranche; `tillr view events --since` with a cursor meanwhile |
+| Intake | Its own importer calls `tillr item apply`, one item per finding, with an opaque `body_ref` |
+| What a node is | A command, a read-only agent run, or a person |
+| Where a node runs | A plain directory: no worktree, no Git |
+| What completes an item | A recorded verdict, answered by the `complete-item` hook |
+| Lifecycle | Finished states of its own, and leaving one only by a recorded move |
+| Prerequisites | An item with an open question for the owner is held |
+| Outcome vocabulary | Its verdicts and closure reasons, each countable |
+| The judge | An actor other than the one whose work is judged |
+| The views' vocabulary | The item's evidence on its page, resolved from `body_ref` |
 
-### 7.2 The stable-surface corrections
+**What it withdrew:** a Go library, deadlines inside tillr's plan, a second loop in one root, a
+running step that rewrites its graph freely, and an owner acknowledgment point (it keeps its own
+cursor).
+
+### 7.2 Graph change
+
+**Owner ruling, 2026-11-17.** Whether an item may be reopened, and how a graph may change while
+it runs, are each charter's policy. The core must not preclude them. A charter declares its valid
+state moves, including whether, and from which finished states, an item may leave.
+
+Two changes the core must allow a charter to permit:
+
+- A running step inserts a node directly downstream of itself, with the same output shape and
+  its data passed through. A step never replaces itself.
+- Nodes are appended to a graph whose every node has finished. The next scheduling pass
+  dispatches them.
+
+What the core keeps whatever a charter says: one writer applies each change atomically with its
+event, nothing that has started changes or becomes unstarted, and every change passes the check
+that the outputs promised to the rest of the graph are still promised.
+
+The consumer needs tracked workflows only, which it can name in advance. It needs child
+items from a step, branching on a typed outcome, and reopening as appended steps fed the earlier
+result.
+
+### 7.3 The first list
+
+"Today" is what the tree does, checked against the code named in the row.
+
+| Request | Case | Today |
+| :--- | :--- | :--- |
+| R2-1. Every table created at `store init` | A reader runs before any drain has | Built |
+| R2-2. A store declared not to land | A finding never makes a commit | Built: the store records its charter, and a store whose charter is not `git-landing` skips Git, item sync and landing. [The worked example](../../tillr/examples/recorded-verdict/) runs it |
+| R2-3. Finished states keep a reason, an actor and a pointer, and leaving one is an event | A repeat points at its original; new evidence reopens it | Built: leaving a finished state without a reason is refused as `transition-reason-missing`, and a pointer to an unknown item as `pointer-unknown` |
+| R2-4. Raw writes into and out of finished states closed | Nothing rewrites what already ran | Built for moves out (`state-terminal`, `transition-not-allowed`). Whether a move into a finished state with an open criterion is refused was not re-checked |
+| R2-5. Command steps in workflows, with the item id passed | Replay and re-judge are commands | Built: a stage's kind is `agent`, `command` or `workflow`, and a run's environment carries `TILLR_ITEM_ID` |
+| R2-6. Runs, verdicts, decisions and state moves on the item page | One person's audit of one item | Built, except that a move between unfinished states shows no actor or reason ([R3-2](#74-further-requests)) |
+| R2-7. A detail panel the charter supplies, resolved from `body_ref` | The item carries one opaque reference; the detail lives in the consumer's store | Partly: the `detail` hook is in the contract, and no page calls it (`rg -n '"detail"' tools/tillr-view tools/tillr-drain -g '*.go'` finds only unrelated fields) |
+| R2-8. Outcomes per kind, countable | How many findings a run left inconclusive | Partly: `tillr item list --state` counts each state; the item page shows a charter's finished state as not started ([R3-3](#74-further-requests)) |
+| R2-9. A core that does not preclude a charter's graph changes | [Section 7.2](#72-graph-change) | Not built as a charter's policy |
+| R2-10. No fixed size limit on a graph | A run whose every finding needs a chain of steps | Built: `tillr drain workflow check` reports a graph's size and does not refuse it. A list argument must still declare a bound (`workflow-argument-most`) |
+| R2-11. No clock whose only consequence is a kill | An agent works until it is done; a stall detector decides liveness | Open: a lane's lease still expires at the run's timeout plus a fixed grace (`LeaseGraceMS` in `tools/tillr-run/run/lease.go`). A run with timeout 0 has no expiry |
+| R2-12. An uncertain outward effect as a state that blocks a retry | A report whose send lost its session | Not built. An item `blocked` with waiter `owner` and a reason is the available substitute |
+| R2-13. Time and tokens per step attempt, with their source | The audit of one item | Partly: a command run's record says `spend_status: not-applicable` ([R3-5](#74-further-requests)) |
+| R2-14. An owner acknowledgment point | "New since you last looked" | Withdrawn |
+
+### 7.4 Further requests
+
+Raised after the consumer ran a charter of its own on the built core. Priority assumes
+a person works the queue by hand, so a request that serves only unattended operation is low.
+
+| Request | Priority | Case | Today |
+| :--- | :--- | :--- | :--- |
+| R3-1. Two item kinds in one charter: per-kind states and moves, or a kind field the moves key on | High | Findings and bugs in one store, joined by edges. With one lifecycle a finding can move into a bug's state; with two stores a bug cannot point at its finding | Not built: the charter reader refuses any key it does not know, and an item's `kind` field is refused as `unknown-field` |
+| R3-2. A reason and an actor stored on a move between unfinished states that the charter marks as a decision | High | A person's decisions to report, approve or hold a bug are what an audit reads | Not built: `--reason` or `--by` on such a move is refused as `flag-not-stored` (`tools/tillr-item/item/finished_receipt.go`) |
+| R3-3. A charter's finished states shown as finished | Medium | How many findings are confirmed | Not built: `ProjectItemState` in `tools/tillr-view/serveread.go` knows only the landing charter's states, so any other finished state reads as `not_started` |
+| R3-4. `item show` drops the finished-state reason and pointer once the item leaves that state | Medium | A fixed bug that recurs | Not re-checked |
+| R3-5. Not-applicable spend kept apart from unreported spend | Medium | A spend audit of a run made only of commands | Not built: `SpendTotals.add` in `tools/tillr-drain/drain/spend.go` counts every run with no usage as unreported |
+| R3-6. `tillr drain workflow check <file>` finds the command registry when given one file | Medium | Checking workflow files before a run | Not re-checked |
+| R3-7. `tillr view waiting` runs when the planner and the server come from the same launcher build | High | "What needs me" | Built: `checkPlannerBuild` in `tools/tillr-view/siblings.go` accepts two programs whose launcher digests agree, pinned by the case "launcher digests agree" |
+| R3-8. A hook's refusal told apart from its crash | Medium | A hook is a program that can fail, and many runtimes exit 1 on an uncaught error | Open: `complete-item` exit 1 means "leave the item unfinished", and only other exits are a hook fault ([the hook table](../../tillr/definition/README.md)) |
+| R3-9. No agent backend policy required for a graph of command nodes only | Low | A loop that runs no agent | Not re-checked |
+| R3-10. An item's open questions shown by `item show` and on the item page | Low | A finding held on a question for the owner | Not re-checked |
+
+### 7.5 The stable-surface corrections
 
 | Correction | State |
 | :--- | :--- |
@@ -445,11 +512,11 @@ definition, so the answer is the extension point. "Next tranche" is the unbuilt 
 | No face lists items | Built: `tillr item list` |
 | `item apply` drops an unknown field | Built; the `producer.system` rule is in the contract |
 | `run exec` overwrites a scratch-directory variable, undocumented | Documented in the contract |
-| The waiting class disagrees between the command and the served answer | Not built. Next tranche |
-| A run requested but not started by the drain is held `run-link-missing` | Not built. Next tranche |
+| The waiting class disagrees between the command and the served answer | Not built. Next unit |
+| A run requested but not started by the drain is held `run-link-missing` | Not built. Next unit |
 | An agent step's brief has sections shaped for Git | Built: plain-directory staging for a definition that does not land |
 
-### 7.3 Their four questions
+### 7.6 Four questions, answered
 
 1. **A person as a step.** Two shapes. A hold that names the owner between items is built:
    `blocked` with waiter `owner`, the `question-open` hold and `conflict-owner`. A node whose result
@@ -468,6 +535,25 @@ definition, so the answer is the extension point. "Next tranche" is the unbuilt 
    the lane. The drain's runs take the second rule (`D-RW1`).
 4. **The item page for an item with no workflow.** Such an item is drawn as one node from its run,
    and the page lists every run, whether or not it made a landing candidate.
+
+### 7.7 Questions the requests leave open
+
+None of these is ruled, and none is filed as an open question in a design document yet.
+
+1. **Two kinds.** For R3-1, per-kind lifecycles in one charter, or two stores with a pointer that
+   crosses them?
+2. **A person's moves.** For R3-2, do the reason and actor go on the move, or does a decision
+   record name the move it authorizes?
+3. **A declared bound on a list argument.** Is `workflow-argument-most` a size cap of the kind
+   R2-10 refuses? This consumer accepts a declared bound only if exceeding it leads to a
+   named next step and not a refusal.
+4. **Hook exit 1.** Is a refusal meant to be an exit code at all (R3-8)?
+5. **`producer.system`.** `tillr item apply` refuses a record whose producer system is not
+   `tillr`, so a consumer's records claim tillr wrote them. Is `producer.utility` where a consumer
+   names itself?
+6. **A person as a step.** A stage of a person's own kind is refused (`workflow-kind`), so a
+   person's decision is a `blocked` hold with waiter `owner` followed by a state move. Is a node
+   whose result is that person's recorded answer wanted?
 
 ---
 
@@ -523,7 +609,7 @@ Two questions, both blocked. Neither asks anything of the owner until what it wa
    <!-- vantage: question id=OQ-FQ7 blocked-on="the owner taking the AutoQA design out of the Icebox" -->
 
    Waits on a consumer that needs tillr, and not its own dispatcher, to file the children. There is
-   none: Product QA files them itself, and tillr's own [AutoQA](tillr-autoqa.md), which has the
+   none: the example consumer files them itself, and tillr's own [AutoQA](tillr-autoqa.md), which has the
    same need, is parked. When one appears, the question belongs to
    [the idea pipeline](tillr-idea-pipeline.md), whose ruling on child items it would amend.
 
@@ -534,8 +620,7 @@ Two questions, both blocked. Neither asks anything of the owner until what it wa
 8. 🔒 **OQ-FQ8: How does a bug that tillr's own AutoQA confirms get into tillr's queue?**
 
    tillr's own AutoQA design files the bugs it confirms into the store of the system it tests,
-   which for tillr is tillr's own queue. It is not a Product QA question: Product QA files only into
-   stores of its own.
+   which for tillr is tillr's own queue. It is not a consumer's question: a consumer files only into stores of its own.
 
    - **A — As a document block** that AutoQA writes and sync imports.
    - **B — Through `tillr item apply`, with a store setting** that exempts such items from needing
@@ -561,7 +646,7 @@ Three kinds of row, kept apart on purpose.
 
 | ID | Ruling | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| OQ-FQ1 | tillr answers a consumer's requests by building as much as possible for it to try, not by a written proposal and a further round of talk. | 2026-11-17 | [Section 7](#7-the-second-round-tillrs-answer) | ✅ |
+| OQ-FQ1 | tillr answers a consumer's requests by building as much as possible for it to try, not by a written proposal and a further round of talk. | 2026-11-17 | [Section 7](#7-a-consumers-requests-and-the-state-of-each) | ✅ |
 
 ### The designer's decisions, awaiting the owner's review
 
@@ -569,18 +654,18 @@ None is the owner's ruling, and the owner may overturn any of them.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| OQ-FQ3 | "Are P1 to P4 filed now, and P6 after?" Closed by the designer's `D-FQ1`. | 2026-11-18 | [Section 3](#3-proposed-work) | — |
+| OQ-FQ3 | "Are P1 to P4 queued now, and P6 after?" Closed by the designer's `D-FQ1`. | 2026-11-18 | [Section 3](#3-proposed-work) | — |
 | `D-FQ1` | P2, P3, P4 and P6 need no ruling and are ready to build, P6 last. **Evidence:** each of the first three is hours of work, and nothing they waited on remains. **Rejected:** holding them for the owner, who decides direction and leaves item filing to the engineer. | 2026-11-18 | [Section 3](#3-proposed-work) | — |
 | OQ-FQ6 | "Should the raw state face stop moving items out of a finished state before the rest of the terminal-state block lands?" Closed by the designer's `D-FQ2`. | 2026-11-17 | [Section 1.1](#11-now-or-queued-at-once) | ✅ |
 | `D-FQ2` | The move out of a finished state is closed ahead of the rest, and on the `apply` face too. **Evidence:** it is the move that puts finished work back in the queue, and it waited on nothing. **Rejected:** leaving it behind two other lifecycle items; and an operator-only flag for writing `landed`, an authorization rule no design has. | 2026-11-17 | [Section 1.1](#11-now-or-queued-at-once) | ✅ |
 | `D-FQ3` | Three adjustments were proposed to the criteria of command nodes (the registry is read from under the drain's `--root`), node outputs (each accepted output is also an event, and a read face prints them) and the exit condition (the end state and its receipt are named, and a read face prints the receipt). Whether what is built carries them is checked by whoever builds P4, and a missing one is follow-up work with the same criterion. | 2026-11-18 | [Section 1.2](#12-on-the-existing-design-path) | — |
 | `D-FQ4` | The face stays `tillr item apply`. **Evidence:** it adds or updates, and records which as the event. **Rejected:** `item add`, which misnames an update. | 2026-11-18 | [Section 2.1](#21-the-stable-surface) | ✅ |
-| `D-FQ5` | Every one of the fourteen second-round requests is accepted, and none is declined. **Evidence:** the owner's decision rule, that a tension between Git landing and another use puts the choice in the definition. | 2026-11-17 | [Section 7.1](#71-the-fourteen-requests) | — |
+| `D-FQ5` | Every one of the fourteen requests of the first list is accepted, and none is declined. **Evidence:** the owner's decision rule, that a tension between Git landing and another use puts the choice in the definition. | 2026-11-17 | [Section 7.3](#73-the-first-list) | — |
 
 ### Closed without a decision
 
 | ID | What happened | Date | Now lives in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | OQ-FQ2 | "Should a finished item record how it ended, in words its kind defines?" Superseded: lifecycle is the definition's, so each definition names its own finished states, and the worked example ends items as confirmed, rejected, inconclusive, repeat or tooling fault. Counting them in the views is not built. | 2026-11-18 | [The direction](tillr-core-and-git-landing.md) | ✅ |
-| OQ-FQ4 | "Are tillr's commands and records the only supported connection for another program?" Nothing left to decide: the request for a Go library was withdrawn, and commands and records are the seam [board-utilities.md](board-utilities.md) sets. | 2026-11-17 | [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now) | ✅ |
+| OQ-FQ4 | "Are tillr's commands and records the only supported connection for another program?" Nothing left to decide: the request for a Go library was withdrawn, and commands and records are the seam [board-utilities.md](board-utilities.md) sets. | 2026-11-17 | [Section 2](#2-the-contract-between-tillr-and-a-consumer) | ✅ |
 | OQ-FQ5 | "Does tillr hold a design round on an artifact recorded and judged as a second way an item completes?" Superseded: a definition may complete its items on a hook's recorded verdict, with no landing. Anything wider is not asked until a second definition shows a case the hook cannot express. | 2026-11-18 | [Section 1.3](#13-what-tillr-will-not-change) | ✅ |

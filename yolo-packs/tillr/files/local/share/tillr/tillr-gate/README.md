@@ -19,7 +19,7 @@ no store and no other utility's binary, which is what lets an external reviewer 
 on their own.
 
 The design that splits this surface into `--help`, this README and the composition
-skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md).
+skill is [`docs/reference/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-distribution.md).
 
 ## State invariants
 

@@ -11,7 +11,7 @@ Start with [docs/tillr/design-status.md](docs/tillr/design-status.md).
 - `tools/tillr*` — the Go modules (one per program or library); `tools/tillr` holds shared packages.
 - `tools/gate` — the declared checks `tillr-gate` runs (`tools/gate/checks/*.json`); `just done` is the full local gate.
 - `tools/observatory`, `tools/tillr-view` — the web view (`just observatory`).
-- `config/tillr`, `.tillr.toml` — policy and per-repository inputs.
+- `config/tillr`, [`.tillr.toml`](.tillr.toml) — policy and per-repository inputs.
 - `docs/design`, `docs/reference`, `docs/tillr` — designs, references, and [the roadmap](./docs/tillr/roadmap.md).
 - `yolo-packs/tillr` — the yolo pack that ships the binaries and a docs snapshot.
 - `.agents/skills`, `hooks`, `tests` — agent skills, git hooks, repository-level tests.

@@ -26,7 +26,7 @@ summary: "How tillr numbers and moves items in the queue (`tillr-item place` and
 
 # Observatory actions — queue placement, idea intake, and browser writes
 
-> **Delivered copy.** This is `docs/reference/observatory-actions.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/observatory-actions.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-24 against the tree. UNMEASURED: no use of the
 page's writes on a live queue is recorded here; verification rests on reading
@@ -50,7 +50,7 @@ commands. The HTTP server keeps its own store handle read-only and runs
 **Reads with:** [the tillr observatory reference](observatory-redesign.md)
 (the pages and the read-only server contract),
 [tillr item states](tillr-item-states.md) (the projected states),
-[the queue persistence ruling](../design/queue-persistence-ruling.md) and
+[queue persistence](tillr-queue-persistence.md) and
 [queue persistence](tillr-queue-persistence.md) (document-backed item blocks
 and private store state), [the idea pipeline](../design/tillr-idea-pipeline.md)
 (lineage and downstream shaping), and

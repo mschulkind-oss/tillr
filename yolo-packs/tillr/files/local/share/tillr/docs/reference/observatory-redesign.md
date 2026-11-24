@@ -18,7 +18,7 @@ summary: "How the tillr observatory answers operator questions across linked ent
 
 # Tillr observatory — linked entity pages, read faces, and truthfulness contract
 
-> **Delivered copy.** This is `docs/reference/observatory-redesign.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-redesign.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/observatory-redesign.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-redesign.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-24 against the tree for the route table, the navigation links, the
 CLI face list, the HTTP route list, the waiting classes and the
@@ -48,7 +48,7 @@ price, and never presents a missing or derived clock as a recorded fact.
 intake and the `--write` routes), [tillr item states](tillr-item-states.md) (projected item
 states), [observatory truthfulness and shared primitives](observatory-design.md) (the provenance
 rules and shared components), and
-[the observatory recording contract](../design/tillr-observatory.md) (what the store must record
+[the recording contract](observatory-design.md#recording-contract-and-read-model) (what the store must record
 for these reads).
 
 ---

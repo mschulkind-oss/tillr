@@ -449,8 +449,8 @@ func TestTheItemBinaryCreatesItsOwnTables(t *testing.T) {
 	}
 }
 
-// TestHelpIsTheFaceSurface pins the layer-1 surface (docs/design/tillr-distribution.md
-// Section 3): `--help` names the faces, a leaf face's `--help` names its flags, and a noun
+// TestHelpIsTheFaceSurface pins the layer-1 surface (docs/reference/tillr-distribution.md,
+// "Documentation split"): `--help` names the faces, a leaf face's `--help` names its flags, and a noun
 // whose faces are verbs names the verbs. A face that does not exist stays a usage error.
 func TestHelpIsTheFaceSurface(t *testing.T) {
 	code, out := run(t, "--help")
