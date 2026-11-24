@@ -59,7 +59,7 @@ raise SystemExit(subprocess.run([{installed!r}, *sys.argv[1:]], input=raw).retur
 
     def test_legacy_precedence_and_changed_evidence_are_sent(self):
         gate = runpy.run_path(str(ROOT / "tools/fork-check.py"))
-        check = gate["Check"]("waybar", "one", [], "", 1)
+        check = gate["Check"]("ironbar", "one", [], "", 1)
         check.rc = 77
         status = gate["check_status"]
         self.assertEqual(status(check), "skip")
@@ -91,21 +91,21 @@ raise SystemExit(subprocess.run([{installed!r}, *sys.argv[1:]], input=raw).retur
         declaration = gate["Quarantine"]("quality", target.name, {"timing"}, "fixture/item",
                                          gate["file_blob_id"](target), "declared timing case")
         def make_plan():
-            waybar = gate["Check"]("waybar", "waybar", ["check-waybar"], "", 1)
-            waybar.rc = 77
+            ironbar = gate["Check"]("ironbar", "ironbar", ["check-ironbar"], "", 1)
+            ironbar.rc = 77
             quality = gate["Check"]("fork-quality", "quality", ["check-quality"], "", 1)
             quality.rc = 1
             quality.fingerprint_dir = str(self.root)
             quality.output = "ℹ fail 1\n✖ failing tests:\n\ntest at case.ts:1:1\n✖ timing (2ms)\n"
             plan = gate["Plan"]()
-            # Settlement reports Waybar first, not in the plan's check order.
-            plan.checks = [quality, waybar]
-            return plan, quality, waybar
+            # Settlement reports Ironbar first, not in the plan's check order.
+            plan.checks = [quality, ironbar]
+            return plan, quality, ironbar
 
         settle = gate["settle_check_skips"]
         with patch.dict(settle.__globals__, {"QUARANTINED_FORK_QUALITY": [declaration]}):
-            plan, quality, waybar = make_plan()
-            self.assertEqual(gate["check_status"](waybar), "skip")
+            plan, quality, ironbar = make_plan()
+            self.assertEqual(gate["check_status"](ironbar), "skip")
             self.assertEqual(gate["check_status"](quality), "QUARANTINED")
             seen = self.observations()
             self.assertEqual([batch[0]["exit_code"] for batch in seen], [77, 1])
@@ -114,10 +114,10 @@ raise SystemExit(subprocess.run([{installed!r}, *sys.argv[1:]], input=raw).retur
             settle(plan)
             evidence = gate["evidence_records"]
             with patch.dict(evidence.__globals__, {"repo_ident": lambda _: "fixture"}):
-                records = evidence(self.root, {}, [quality, waybar])[:2]
+                records = evidence(self.root, {}, [quality, ironbar])[:2]
             self.assertEqual(self.observations(), seen)  # Reuse progress's answers.
             self.assertEqual(plan.checks, [])
-            self.assertEqual([skip.kind for skip in plan.skips], ["waybar", "fork-quality"])
+            self.assertEqual([skip.kind for skip in plan.skips], ["ironbar", "fork-quality"])
             self.assertIs(plan.skips[1].quarantine, declaration)
             self.assertEqual(plan.skips[1].why, declaration.reason)
             self.assertEqual([entry["outcome"] for entry in records], ["skipped", "skipped"])
@@ -128,28 +128,28 @@ raise SystemExit(subprocess.run([{installed!r}, *sys.argv[1:]], input=raw).retur
                 if answer[0]["outcome"] == "unavailable":
                     return [{"outcome": "fail", "detail": "failed"}]
                 return answer
-            plan, quality, waybar = make_plan()
+            plan, quality, ironbar = make_plan()
             with patch.object(transport, "classify", side_effect=keep), \
                  patch.dict(evidence.__globals__, {"repo_ident": lambda _: "fixture"}):
                 settle(plan)
                 records = evidence(self.root, {}, plan.checks)[:2]
-            self.assertEqual(plan.checks, [quality, waybar])
+            self.assertEqual(plan.checks, [quality, ironbar])
             self.assertEqual(plan.skips, [])
             self.assertEqual([entry["outcome"] for entry in records], ["failed", "failed"])
             self.assertNotIn("quarantine", records[0]["detail"])
 
             # A bookkeeping status has priority in progress but did not mask a
             # sentinel in the separate pre-aggregation removal pass.
-            plan, quality, waybar = make_plan()
+            plan, quality, ironbar = make_plan()
             plan.measure_landing = True
-            waybar.wall_ms, quality.wall_ms = 5, 8
-            waybar.not_run_reason = "cancelled"
+            ironbar.wall_ms, quality.wall_ms = 5, 8
+            ironbar.not_run_reason = "cancelled"
             quality.cached = True
-            self.assertEqual(gate["check_status"](waybar), "not-run")
+            self.assertEqual(gate["check_status"](ironbar), "not-run")
             self.assertEqual(gate["check_status"](quality), "CACHED")
             settle(plan)
             self.assertEqual(plan.checks, [])
-            self.assertEqual([skip.executed_check for skip in plan.skips], [waybar, quality])
+            self.assertEqual([skip.executed_check for skip in plan.skips], [ironbar, quality])
 
     def test_fast_tree_execution_classifies_raw_exit_before_rendering(self):
         gate = runpy.run_path(str(ROOT / "tools/fork-check.py"))
@@ -492,7 +492,7 @@ raise SystemExit(subprocess.run([{installed!r}, *sys.argv[1:]], input=raw).retur
 
         for kind, mutator in (
             ("rank-order", lambda check: (setattr(check, "rc", 124), setattr(check, "output", "timed out"))),
-            ("waybar", lambda check: setattr(check, "rc", 77)),
+            ("ironbar", lambda check: setattr(check, "rc", 77)),
             ("rank-order", lambda check: (setattr(check, "rc", 0), setattr(check, "was_cancelled", True))),
             ("rank-order", lambda check: setattr(check, "rc", gate["CHECK_STALLED_RC"])),
         ):

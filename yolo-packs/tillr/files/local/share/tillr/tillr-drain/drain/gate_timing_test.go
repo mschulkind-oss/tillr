@@ -449,7 +449,7 @@ PY
 	}
 }
 
-func TestGateTimingKeepsExecutedWaybarSkip(t *testing.T) {
+func TestGateTimingKeepsExecutedIronbarSkip(t *testing.T) {
 	_, judge := repositoryFile(t, "tools/fork-check.py")
 	_, transportPath := repositoryFile(t, "tools/gate/classify.py")
 	root, _ := heavyRepo(t)
@@ -470,30 +470,29 @@ func TestGateTimingKeepsExecutedWaybarSkip(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "tests"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeForkFile(t, filepath.Join(root, "tests", "waybar-ai-modules.test.sh"), "printf executed > waybar-marker\nexit 77\n")
-	writeForkFile(t, filepath.Join(root, "tests", "test_waybar_cpu.py"), "import unittest\nclass TestCPU(unittest.TestCase):\n    def test_pass(self): pass\n")
-	head := heavyCommit(t, root, "select Waybar")
-	t.Setenv("FIXTURE_WAYBAR_BASE", base)
-	c := Candidate{ItemID: "item-example", RunID: "run-waybar", Worktree: root, BaseSHA: base, HeadSHA: head, deferGateJudgment: true}
+	writeForkFile(t, filepath.Join(root, "tests", "ironbar-modules.test.sh"), "printf executed > ironbar-marker\nexit 77\n")
+	head := heavyCommit(t, root, "select Ironbar")
+	t.Setenv("FIXTURE_IRONBAR_BASE", base)
+	c := Candidate{ItemID: "item-example", RunID: "run-ironbar", Worktree: root, BaseSHA: base, HeadSHA: head, deferGateJudgment: true}
 	dir := RunDir(root, c.RunID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	s := ProcessSteps{Root: root, GateProgram: executable(t, `exec python3 tools/fork-check.py --tier landing --since "$FIXTURE_WAYBAR_BASE" --jobs 1`)}
+	s := ProcessSteps{Root: root, GateProgram: executable(t, `exec python3 tools/fork-check.py --tier landing --since "$FIXTURE_IRONBAR_BASE" --jobs 1`)}
 	if outcome, err := s.Gate(context.Background(), c); err != nil || outcome.Outcome != GatePassed {
 		steps, _ := os.ReadFile(filepath.Join(dir, StepsFile))
 		t.Fatalf("Gate = %+v, %v; steps: %s", outcome, err, steps)
 	}
-	if marker, err := os.ReadFile(filepath.Join(root, "waybar-marker")); err != nil || string(marker) != "executed" {
-		t.Fatalf("Waybar skip script didn't run: %q, %v", marker, err)
+	if marker, err := os.ReadFile(filepath.Join(root, "ironbar-marker")); err != nil || string(marker) != "executed" {
+		t.Fatalf("Ironbar skip script didn't run: %q, %v", marker, err)
 	}
 	var spans gateSpansFile
 	body, err = os.ReadFile(filepath.Join(dir, GateSpansFile))
 	if err != nil || json.Unmarshal(body, &spans) != nil {
 		t.Fatalf("missing gate spans: %s, %v", body, err)
 	}
-	const id = "waybar/waybar-module-configuration"
-	const skipID = "waybar/waybar-sh-tests-waybar-ai-modules-test-sh"
+	const id = "ironbar/ironbar-module-configuration"
+	const skipID = "ironbar/ironbar-sh-tests-ironbar-modules-test-sh"
 	var skipped bool
 	for _, skip := range spans.SkippedChecks {
 		skipped = skipped || skip.CheckID == skipID
