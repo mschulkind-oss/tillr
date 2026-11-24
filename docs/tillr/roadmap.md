@@ -55,6 +55,11 @@ First by rule 3: every other entry is built and verified by someone who starts f
        races its gate fixture for a process-id file.
      - [`wake_test.go`](../../tools/tillr-watch/wake_test.go) gives a wake three seconds
        (`time.After(3 * time.Second)`), which a loaded machine exceeds.
+     - `TestLandingRollWithFailedStoreMigrationAlarmsAndKeepsOldBuild` in
+       [`restart_lost_worker_test.go`](../../tools/tillr-drain/drain/restart_lost_worker_test.go)
+       failed once on 2026-11-24 with `database is locked (5) (SQLITE_BUSY)` in its
+       `store_event` case while other suites ran beside it, and passed four times run alone
+       (`go test ./drain -run TestLandingRollWithFailedStoreMigration -count=4`).
    - **Depends on:** nothing.
 
 ## 2. A core that carries only its own code
@@ -108,14 +113,31 @@ longer exists. Both are removed, and the first needs a seam to move behind.
      heavy-check code and the fork removal deletes more of it.
 
 6. **Give the pi run adapter a compatibility mode.** The adapter
-   ([`tools/tillr-run/backends/pi/`](../../tools/tillr-run/backends/pi/)) is written for a pi that
+   ([`tools/tillr-run/backends/pi/`](../../tools/tillr-run/backends/pi/)) requires a pi that
    can leave a tool call unanswered and answer it when the session is opened again (a *parked*
-   tool call), and that prints its feature names for `pi --features`. Stock pi does neither.
-   The drain's `probePiEndingCapability` already asks for the features and falls back to the
-   report footer, without saying so to the person who started it.
-   - **Outcome:** the adapter probes `pi --features`; where a required feature is missing it
-     refuses with a message that names the feature; and a compatibility mode, chosen
-     deliberately, runs without those features and states what is reduced.
+   tool call). It asks `pi --features` and
+   [refuses](../../tools/tillr-run/backends/pi/README.md#required-pi-features) a pi that does
+   not list `parked-tool-calls`. Upstream pi does not list it; the fork
+   [mschulkind-oss/tillr-pi](https://github.com/mschulkind-oss/tillr-pi) does, and carries only
+   what the adapter requires. The drain's `probePiEndingCapability` asks the same question and
+   chooses the report footer for a pi without the feature, a choice the adapter's refusal now
+   makes unreachable.
+   - **Outcome:** a compatibility mode, chosen deliberately, runs a pi without the feature on
+     the report footer and states what is reduced; the refusal stays the default.
+   - **Shrink the fork:** every behavior tillr can provide itself leaves the fork, and what
+     remains is offered upstream. Three things the adapter uses are in neither upstream pi nor
+     the fork, and each needs one of: a named required feature, a replacement inside tillr, or
+     a place in the fork.
+     - The stop signal: [pausing](../../tools/tillr-run/backends/pi/README.md#pausing-and-continuing)
+       sends SIGUSR1 and expects pi to stop at the next gap. A pi without that handler ignores
+       it and is killed at the straggler bound. The candidate replacement is tillr stopping the
+       worker at a tool-result boundary and reopening the session.
+     - The sub-agent extension: the adapter relies on `PI_SUBAGENTS_TEMP_ROOT`, the
+       `pi-subagents-v1` marker and `sessionFile` in `status.json`.
+     - The background-task extension: [`land.ts`](../../tools/tillr-run/backends/pi/land.ts)
+       reads the journal named by `PI_BACKGROUND_TASK_JOURNAL`.
+   - **Unverified:** whether upstream pi's `turn_end` event carries the usage fields
+     [`extract-report`](../../tools/tillr-run/backends/pi/extract-report) reads.
    - **Also:** [`build-agent-dir`](../../tools/tillr-run/backends/pi/build-agent-dir), which
      builds the directory pi loads its extensions from, reads three things this repository does
      not have: `yolo-packs/matt/pack.json`, the extensions under `yolo-packs/matt/files/extensions`,

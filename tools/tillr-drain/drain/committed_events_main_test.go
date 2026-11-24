@@ -15,6 +15,9 @@ func TestMain(m *testing.M) {
 }
 
 func runDrainTests(m *testing.M) int {
+	// The stand-in `pi` programs these cases write do not answer `pi --features`, so the
+	// features they stand for are stated to the adapter instead of probed.
+	os.Setenv("TILLR_PI_FEATURES", "parked-tool-calls")
 	store.CacheSelectedEvents()
 	defer runTestCleanups()
 	return m.Run()

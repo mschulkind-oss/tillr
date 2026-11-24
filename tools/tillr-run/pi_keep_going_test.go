@@ -236,6 +236,7 @@ func TestThePiAdapterLoadsKeepGoingOnlyForALaneWorktreeWriter(t *testing.T) {
 				"STUB_RECORD="+record,
 				"TILLR_GOAL_BASE=stale-parent-value",
 				"TILLR_READ_ONLY_GROUP="+tc.readOnly,
+				"TILLR_PI_FEATURES=parked-tool-calls",
 				"PI_CODING_AGENT_DIR="+agentDir,
 			)
 			if out, err := cmd.CombinedOutput(); err != nil {

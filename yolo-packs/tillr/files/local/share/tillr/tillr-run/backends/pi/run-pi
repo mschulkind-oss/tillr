@@ -70,6 +70,7 @@ require_opt --effort "$effort" "the thinking level comes from the backend policy
 preflight_brief "$brief"
 pi_apply_yolo_session_home
 pi_resolve_harness
+pi_require_features
 target=$(resolve_target "$target")
 
 err=$(lane_path "$brief" stream.err)

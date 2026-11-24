@@ -54,9 +54,44 @@ Refusals (exit 2, nothing started): the `backend` field names neither this adapt
 seat alias of it (`pi` or `pi-<role>`, as `pi-designer` runs this adapter on the design
 seat's model); no model; no effort; the brief is missing, empty, unfilled or missing one of
 the template's ten sections; the target is not the directory the adapter runs in; neither a
-verified `pi-builds` binary nor `pi` on `PATH` is available.
+verified `pi-builds` binary nor `pi` on `PATH` is available; the resolved pi lacks a
+[required feature](#required-pi-features).
 
 Exit: the harness's own code, 124 from the wall, 2 from a refusal.
+
+### Required pi features
+
+A *feature* is a name pi prints for `pi --features`, a JSON list of strings. The adapter
+never assumes which build of pi it was given: once it has resolved the binary it runs
+`pi --features` and refuses, before any model request, when a name it requires is absent.
+
+| Feature | What it is | Why the adapter requires it |
+| --- | --- | --- |
+| `parked-tool-calls` | A tool may answer `park: true`; pi then prints a `{"type":"parked"}` event and exits 0 with the call unanswered, and opening the session again with no prompt replays that call. | The [`land`](./land.ts) and [`obstacle`](./obstacle.ts) tools end a worker's turn this way. |
+
+Upstream pi ([earendil-works/pi](https://github.com/earendil-works/pi)) does not have
+`parked-tool-calls`. [mschulkind-oss/tillr-pi](https://github.com/mschulkind-oss/tillr-pi)
+does: it is a fork of upstream pi that carries only the changes this adapter requires, with
+the intent of offering them upstream. The adapter checks the feature name, not the fork, so
+any pi that lists the name runs.
+
+The refusal names the binary, the missing feature and what the probe answered:
+
+```text
+run-pi: refused: the pi at /usr/bin/pi lacks the feature 'parked-tool-calls', which this
+adapter requires: `pi --features` lists 'nothing'. ...
+```
+
+A pi that does not know the flag, prints something other than a JSON list, or does not
+answer within `TILLR_PI_PROBE_SECONDS` (20 by default) is read as listing nothing. The
+probe runs with `PI_OFFLINE=1` and `PI_TELEMETRY=0` and an empty standard input.
+
+`TILLR_PI_FEATURES`, when set, is a space-separated list of feature names that the adapter
+takes as stated and does not probe. It exists for tests whose stand-in `pi` is a short
+shell script; setting it for a real run only moves the failure to the first parked call.
+[`pi_features_test.go`](../../pi_features_test.go) covers the refusals, the accepted
+probe and the stated list. Running without the feature is a
+[roadmap entry](../../../../docs/tillr/roadmap.md), not built.
 
 ### Resolving rebuilt pi privately
 
@@ -251,10 +286,10 @@ When the runner writes `TILLR_PAUSE_REQUEST`, the adapter's
 [`stop-at-gap`](./stop-at-gap) watcher sends **SIGUSR1 to the pi process itself**,
 never its process group or a tool child, even when an explicit wall uses `timeout`.
 The watcher forwards JSON output unchanged and waits for the session header before
-signaling: the fork emits that header after installing its SIGUSR1 handler, so a
-pause during startup is not lost to Node's debugger handler. Startup without a header
+signaling: a pi that handles the stop signal emits that header after installing its
+SIGUSR1 handler, so a pause during startup is not lost to Node's debugger handler. Startup without a header
 is covered by the same straggler bound, not a separate timeout or build probe.
-The pi fork's SIGUSR1 handler defines the request: finish already-started
+The handler defines the request: finish already-started
 calls and a streaming model response, save results, start no further tool or model
 request, flush output, and exit 0. Duplicate requests have the same effect as one.
 Session persistence stays enabled; the adapter does not pass `--no-session`.
@@ -265,9 +300,10 @@ any surviving process group, including tools. Continuing opens the same session 
 a restart notice; a gap stop does not claim an interruption, but a bound kill tells
 the session the command was interrupted by a restart and may be run again.
 
-A pi without this fork change ignores the stop request: Node reserves SIGUSR1
+Neither upstream pi nor [mschulkind-oss/tillr-pi](#required-pi-features) has this
+handler, and it is not a required feature. A pi without it ignores the stop request: Node reserves SIGUSR1
 for its debugger, announces it on stderr, and continues. The runner then applies the
-same straggler bound and interruption notice. Even patched pi may announce the debugger
+same straggler bound and interruption notice. Even a pi with the handler may announce the debugger
 in `stream.err`; that line is not a failure. The adapter does not probe the installed
 build or send a second kind of request.
 

@@ -198,7 +198,7 @@ test('run-pi keeps footer argv and opens an answer session without stdin', (t) =
   put('pi', '#!/bin/sh\nprintf "%s\\n" "$@"\nprintf "STDIN:"\ncat\n', { mode: 0o700 });
   const run = () => {
     const r = spawnSync(join(adapter, 'run-pi'), ['--backend', 'pi', '--effort', 'low', '--model', 'model', '--brief', 'brief.md', '--session-id', 'id'], {
-      cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PI_CODING_AGENT_DIR: dir,
+      cwd: dir, encoding: 'utf8', env: { ...process.env, TILLR_PI_FEATURES: 'parked-tool-calls', PATH: `${dir}:${process.env.PATH}`, PI_CODING_AGENT_DIR: dir,
         YOLO_DURABLE_DIR: dir, TILLR_SESSION_MODE: 'resume', TILLR_PAUSE_REQUEST: '', TILLR_READ_ONLY_GROUP: '', TILLR_RESUME_PROMPT_FILE: '' },
     });
     assert.equal(r.status, 0, r.stderr || String(r.error ?? ''));
@@ -234,7 +234,7 @@ function answerLaunchFixture(t) {
     rmSync(join(dir, 'launches'), { force: true });
     if (entries !== null) put('session.jsonl', [JSON.stringify({ type: 'session', id: 's' }), ...entries.map(JSON.stringify)].join('\n') + '\n');
     return spawnSync(join(adapter, 'run-pi'), ['--backend', 'pi', '--effort', 'low', '--model', 'model', '--brief', 'brief.md', '--session-id', 'id'], {
-      cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PI_CODING_AGENT_DIR: dir, YOLO_DURABLE_DIR: dir,
+      cwd: dir, encoding: 'utf8', env: { ...process.env, TILLR_PI_FEATURES: 'parked-tool-calls', PATH: `${dir}:${process.env.PATH}`, PI_CODING_AGENT_DIR: dir, YOLO_DURABLE_DIR: dir,
         TILLR_SESSION_MODE: 'resume', TILLR_PAUSE_REQUEST: '', TILLR_READ_ONLY_GROUP: '', TILLR_RESUME_PROMPT_FILE: '', FAIL_MODE: mode },
     });
   };

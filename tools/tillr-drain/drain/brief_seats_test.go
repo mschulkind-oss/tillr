@@ -109,7 +109,7 @@ func TestBriefPolicySeatsAndPiIsolation(t *testing.T) {
 		argsPath, envPath := filepath.Join(base, "args"), filepath.Join(base, "env")
 		cmd := exec.Command(adapter, "--backend", "pi", "--model", "fixture-model", "--effort", "medium")
 		cmd.Dir = target
-		cmd.Env = []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "HOME=" + base, "CAPTURE_ARGS=" + argsPath, "CAPTURE_ENV=" + envPath, "TILLR_CHILD_SESSIONS_ROOT=" + filepath.Join(base, "children"), "TILLR_CHILD_SESSIONS_MARKER=" + filepath.Join(base, "marker")}
+		cmd.Env = []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "HOME=" + base, "CAPTURE_ARGS=" + argsPath, "CAPTURE_ENV=" + envPath, "TILLR_CHILD_SESSIONS_ROOT=" + filepath.Join(base, "children"), "TILLR_CHILD_SESSIONS_MARKER=" + filepath.Join(base, "marker"), "TILLR_PI_FEATURES=parked-tool-calls"}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			stderr, _ := os.ReadFile(filepath.Join(lane, "stream.err"))
 			t.Fatalf("adapter: %v %s %s", err, out, stderr)
