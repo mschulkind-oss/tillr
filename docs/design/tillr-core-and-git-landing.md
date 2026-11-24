@@ -549,12 +549,12 @@ rewritten here.
    design's ledger amends it: the caps go. Replacing the four criteria is
    [item 4 of the build plan's next tranche](./tillr-definitions-plan.md#3-the-next-tranche-in-prose),
    which is unfiled.
-6. **`D-GR13` in [gate-rework.md](./gate-rework.md#decision-ledger)** stops a fast check still
-   running at its ceiling and answers "could not judge", which holds the item until an operator
-   clears it; and the lane lease in
+6. **The gate's fast-check ceiling** stopped a fast check still running at its ceiling and
+   answered "could not judge", which held the item until an operator cleared it (the ceiling is
+   gone: [`D-GR15`](../reference/gate.md#why-its-this-way)); and the lane lease in
    [board-utilities.md §5.6](./board-utilities.md#56-run-alone) lets a reaper free a lane 300
    seconds past a run's wall. Both are clocks whose consequence is a kill or a failure, against the
-   owner's direct principle. Both are still in the tree on 2026-11-18 (`LeaseGraceMS` in
+   owner's direct principle. Both were in the tree on 2026-11-18 (`LeaseGraceMS` in
    [lease.go](../../tools/tillr-run/run/lease.go), and the gate's "could not judge" exit), and
    removing them is not part of this document or of the build plan.
 

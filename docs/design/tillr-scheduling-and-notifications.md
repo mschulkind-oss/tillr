@@ -17,7 +17,7 @@ depends-on:
   - tillr-graph-is-the-path.md
   - landing-principles.md
   - tillr-judge-and-lifecycle.md
-  - gate-rework.md
+  - ../reference/gate.md
 vantage:
   status-chip: true
 ---
@@ -50,7 +50,7 @@ Only those quoted words are the owner's ruling ([`R-SN1`](#decision-ledger)). Ev
 
 ### 1.2 Non-goals (what this design does not touch)
 
-- **The gate's own execution time.** How fast individual checks inside `tillr-gate` run stays in [`gate-rework.md`](./gate-rework.md).
+- **The gate's own execution time.** How fast individual checks inside `tillr-gate` run stays in [the gate reference](../reference/gate.md).
 - **The heavy trunk proof's own execution time.** How long the full suite takes per commit on `main` (5 to 16 minutes on 2026-11-23) and whether [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json) cuts bases from `"green"` or `"tip"` are out of scope here.
 - **Model, seat, and backend policy.** Seat routing, fallback chains, and quota windows remain governed by policy files and [`tillr-judge-and-lifecycle.md`](./tillr-judge-and-lifecycle.md).
 - **Bringing lanes back.** Numbered pool slots (`lane-1`, `express-1`) have no place in this architecture; where shipped tables or flags still carry `lane` in a column or flag name, they are legacy aliases only ([`tillr-vocabulary.md`](./tillr-vocabulary.md) `D-VO9`).
@@ -270,7 +270,7 @@ No table row, ref, or directory has two concurrent writers. Optimistic compare-a
 ### 5.5 Step 4 — Starting and running a gate (`gate`)
 
 - **Who runs it:** `tillr-drain`'s gate coordinator spawning detached `tillr-gate` (`<git-common-dir>/tillr-gate/detached/...` so running checks survive `tillr-drain` `syscall.Exec`), woken by `candidate.ready` or the 15-second scan finding an unsuperseded `drain.candidate` with no `gate.verdict` for `(run_id, base_sha, head_tree)`. Gate runs do not count against `running_agents` ([`tillr-vocabulary.md` Section 3.5](./tillr-vocabulary.md#35-what-limits-how-many-agents-run-at-once)); test parallelism is bounded by the machine-wide sharded slot pool ([`tools/go-test-shards.py`](../../tools/go-test-shards.py)).
-- **What it reads:** `drain.candidate` (`item_id`, `run_id`, `base_sha`, `head_sha`, `head_tree`, `worktree`), item state (aborting if closed/superseded), red-trunk check `reads` ([`OQ-GP7`](./tillr-graph-is-the-path.md#decision-ledger) in [`tillr-graph-is-the-path.md`](./tillr-graph-is-the-path.md) for `pass-inherited` vs `trunk-already-red`), and `disabled/*.json` check markers (`D-GR21` in [`gate-rework.md`](./gate-rework.md#decision-ledger)). By [`landing-principles.md` Section 3](./landing-principles.md#3-gate-what-will-be-the-tip-once), the gate evaluates `base_sha..head_sha` **once** and never restarts because `main` moved while it ran.
+- **What it reads:** `drain.candidate` (`item_id`, `run_id`, `base_sha`, `head_sha`, `head_tree`, `worktree`), item state (aborting if closed/superseded), red-trunk check `reads` ([`OQ-GP7`](./tillr-graph-is-the-path.md#decision-ledger) in [`tillr-graph-is-the-path.md`](./tillr-graph-is-the-path.md) for `pass-inherited` vs `trunk-already-red`), and `disabled/*.json` check markers (`D-GR21` in [the gate reference](../reference/gate.md#why-its-this-way)). By [`landing-principles.md` Section 3](./landing-principles.md#3-gate-what-will-be-the-tip-once), the gate evaluates `base_sha..head_sha` **once** and never restarts because `main` moved while it ran.
 - **Its one writer:** **`tillr-gate` is the sole writer of `verdict.json`** in that run's detached gate directory (atomically renamed into place, followed by a `gate.finished` wake hint); the gate coordinator for `(item_id, run_id, head_tree)` is the **sole writer of `gate.verdict` (`GateVerdictKind`) and `drain.candidate-gated` (`candidateGatedKind`)** in SQLite `events` via CAS. On `pass` or `pass-inherited`, it publishes `gate.passed`; on `fail` (or `trunk-already-red`), it records the return resume node (or trunk wait) in the same `WriteTx` and publishes `queue.changed`.
 - **When it fails:**
   - *Check assertion failure (`result = "fail"`):* returns evidence uncounted to the author's session (`returned-with-evidence`), escalating to `design` only if normalized failure evidence repeats (`D-JL10`).

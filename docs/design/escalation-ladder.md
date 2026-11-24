@@ -24,7 +24,7 @@ The criterion this proposal answers:
 
 It is a design document: it states a proposed architecture and the open questions only the owner can settle. No companion implementation plan exists for this four-rung design; `tillr` routes worker obstacles and conflicts through the mechanisms in [judge and lifecycle](tillr-judge-and-lifecycle.md) and [planning node and model tiering](tillr-planning-node-model-tiering.md).
 
-Conflict routing is one rung-to-rung motion on an escalation ladder. The ladder generalises the same rule upward: at every rung, the forbidden move is resolving a higher-kind question by a lower-kind action. Other documents cite this ladder — [landing principle 6](landing-principles.md#6-a-budget-escalates-it-does-not-loop) cites its four rungs and `exceptions` ledger, and [gate-rework.md](gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) cites [§5.2](#52-the-fence-what-a-lane-may-not-edit)'s fence principle — while the four-rung dispatch and `exceptions` ledger themselves are unbuilt proposals.
+Conflict routing is one rung-to-rung motion on an escalation ladder. The ladder generalises the same rule upward: at every rung, the forbidden move is resolving a higher-kind question by a lower-kind action. Other documents cite this ladder — [landing principle 6](landing-principles.md#6-a-budget-escalates-it-does-not-loop) cites its four rungs and `exceptions` ledger — while the four-rung dispatch and `exceptions` ledger themselves are unbuilt proposals.
 
 ### 1.1 The motivating case
 

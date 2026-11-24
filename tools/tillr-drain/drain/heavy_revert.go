@@ -18,7 +18,7 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// The owner ruled on 2026-11-17 (graph design OQ-GP1, overturning gate rework D-GR6)
+// The owner ruled on 2026-11-17 (graph design OQ-GP1; D-GR6 in docs/reference/gate.md)
 // that tillr reverts a landing by itself when the full suite proves it broke the trunk.
 // The heavy runner offers each landing its bisection named to revertLanding before any
 // fixer is filed. The revert lands only when it applies cleanly on the tip, the fast gate

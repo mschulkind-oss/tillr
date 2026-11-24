@@ -28,7 +28,7 @@ The design that splits this surface into `--help`, this README and the compositi
 
 ## The red cap
 
-The [gate policy](../../docs/design/gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer)
+The [gate policy](../../docs/reference/gate.md#after-merge-proof-and-the-green-pointer)
 bounds the unproved trunk range under `after-merge`. With the landing lock held,
 landing refuses as `red-cap` when either enabled bound is reached: recorded
 landings since `refs/tillr/green`, or minutes since that commit's committer time,

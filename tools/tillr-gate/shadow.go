@@ -3,8 +3,8 @@ package main
 // shadow.go is the shadow face: a candidate's landing tier run and measured beside the
 // gate that decides, and recorded without anything landing.
 //
-// The plan already carries a tier per check (design `landing-velocity.md` §4.3), and the
-// tier is what the flip in §10 turns on: the landing tier is the proof a batch must carry
+// The plan already carries a tier per check, and the tier says when the check is owed:
+// the landing tier is the proof a batch must carry
 // on the tree the trunk will publish, and the rolling tier is the proof that follows on a
 // clock. Until something runs the split, that field is a declaration no measurement has
 // ever been compared against. This face is the measurement: it runs the plan's landing

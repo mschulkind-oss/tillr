@@ -521,7 +521,7 @@ but [tillr-autoqa.md](./tillr-autoqa.md) is exploratory testing of tillr itself.
 
 - **Read** at snapshot `bdc40d858b50a430a2f598e2dadd71f174c3d09f` (2026-11-16): the index, the
   direction and separable-parts documents whole, [item graphs](../reference/tillr-item-graphs.md), [run-wall-ruling.md](./run-wall-ruling.md) and
-  [gate-rework.md](./gate-rework.md) in part; and the graph-runtime
+  the gate design (since replaced by [the gate reference](../reference/gate.md)) in part; and the graph-runtime
   design of another graph runtime, in this repository.
 - **Ran** 2026-11-16, 23:46 to 23:58 America/New_York, the installed binaries (build digest
   `33a5752220ab`), one logged command at a time, on two stores of our own in a plain directory,
@@ -692,8 +692,9 @@ R2-6 are the smallest tranche that lets a findings queue run for real; please ta
     leads to a named next step; a short timeout that fails on a loaded machine is a defect.
     *Checked:* tillr largely agrees: `D-RW1` removed the default run wall ("A total-run wall is a
     budget, not a fault detector"), and `D-RW2` and `D-RW3` gate or resume a walled run. Left: B5's
-    lease to the wall plus 300 seconds, and `D-GR13`'s "could not judge" for a fast check at its
-    9,000 ms ceiling, which the owner has not ruled. Our trial's walls were ours (`--timeout 600`).
+    lease to the wall plus 300 seconds, and the gate's "could not judge" for a fast check at its
+    9,000 ms ceiling, which the owner had not ruled (removed since:
+    [`D-GR15`](../reference/gate.md#why-its-this-way)). Our trial's walls were ours (`--timeout 600`).
 12. **R2-12. An uncertain outward effect as a state that blocks a retry** (C4). *Case:* a report
     send that lost its session. *Checked:* `blocked` with waiter `owner` and a reason works.
 13. **R2-13. Time and tokens per step attempt, with their source.** *Case:* the owner's audit of
@@ -766,7 +767,7 @@ item, cost per step) are carried in above. This file supersedes it; git history 
    description as text: the graph-runtime design in Section 1, and seven cells of the two tables
    in Section 3. Each cell keeps the section name the link pointed at.
 4. Three names of tillr's documents in Section 1, the item-graphs design, the run-wall ruling and
-   the gate rework, are now links to them, because the checker requires a named file beside this
+   the gate design, are now links to them, because the checker requires a named file beside this
    one to be a link.
 5. This note at the top and this list at the end were added, and the frontmatter was updated to
    record the reply as received and answered.

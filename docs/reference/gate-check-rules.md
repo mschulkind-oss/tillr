@@ -116,7 +116,7 @@ that says which check, on what evidence, and which item repairs it. Setting a ch
 never a verdict that it passes.
 
 The one mechanism that does this is the **disabled check**, defined in
-[the gate design](../design/gate-rework.md#a-contradicted-check-is-disabled): a check whose
+[the gate design](./gate.md#a-contradicted-check-is-disabled): a check whose
 result store holds both a pass and a fail for the same fingerprint of its declared inputs.
 
 - **It is narrow.** A marker names one check and one episode: the fingerprint, and the time
