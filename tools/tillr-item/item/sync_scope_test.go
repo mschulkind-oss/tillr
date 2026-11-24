@@ -12,8 +12,8 @@ import (
 
 func TestPartialSyncParkingAndSourcePreviewMatchesWrite(t *testing.T) {
 	s := fromFixture(t, "", strings.Repeat("a", 62))
-	runSync(t, s, "", doc("docs/park.md", fromBlock("item-park", "")))
-	exec(t, s, `UPDATE items SET rank='' WHERE item_id IN ('item-source','item-park')`)
+	runSync(t, s, "", doc("docs/roadmap.md", "## Icebox\n[Park](park.md)\n"), doc("docs/park.md", fromBlock("item-park", "")))
+	exec(t, s, `UPDATE items SET rank='' WHERE item_id='item-source'`)
 	in := item.SyncInput{Partial: true, Roadmaps: []string{"docs/roadmap.md"}, At: syncAt, Documents: []item.SyncDocument{
 		doc("docs/roadmap.md", "## Active\n[Source](source.md)\n## Icebox 🧊\n[Park](park.md)\n"),
 		doc("docs/source.md", fromBlock("item-source", "")+fromBlock("item-child", "item-source")),
@@ -34,8 +34,12 @@ func TestPartialSyncParkingAndSourcePreviewMatchesWrite(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(written.Findings) != 0 || !reflect.DeepEqual(preview.Placed, written.Placed) {
-		t.Fatalf("preview %v, written %v, findings %v", preview.Placed, written.Placed, written.Findings)
+	wantSkipped := []item.SyncSkippedBlock{{File: "docs/park.md", ItemID: "item-park"}}
+	if len(written.Findings) != 0 || !reflect.DeepEqual(preview.Placed, written.Placed) || !reflect.DeepEqual(preview.SkippedBlocks, wantSkipped) || !reflect.DeepEqual(written.SkippedBlocks, wantSkipped) || written.SkippedCount != 1 {
+		t.Fatalf("preview %+v, written %+v", preview, written)
+	}
+	if column(t, s, `SELECT rank FROM items WHERE item_id='item-park'`) != "" {
+		t.Fatal("scoped sync keyed a skipped parked item")
 	}
 	if column(t, s, `SELECT rank FROM items WHERE item_id='item-next'`) != strings.Repeat("a", 62) {
 		t.Fatal("placement changed unread rank")
@@ -60,15 +64,22 @@ func TestPartialSyncParkingSkipsMissingKeysAndPreservesUnreadItems(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	parkingLists(t, report, "item-build-thing", "")
-	if len(report.Findings) != 0 || column(t, s, `SELECT state||'|'||rank FROM items WHERE item_id='item-build-thing'`) != "not-started|" {
-		t.Fatalf("parking failed: %+v", report)
+	parkingLists(t, report, "", "")
+	wantSkipped := []item.SyncSkippedBlock{{File: "docs/work.md", ItemID: "item-build-thing"}}
+	if len(report.Findings) != 0 || report.SkippedCount != 1 || !reflect.DeepEqual(report.SkippedBlocks, wantSkipped) {
+		t.Fatalf("scoped skip failed: %+v", report)
 	}
-	if count(t, s, `SELECT count(*) FROM events`) != before+1 {
-		t.Fatal("partial parking must append exactly one item.update")
+	if column(t, s, `SELECT state||'|'||rank FROM items WHERE item_id='item-build-thing'`) != "in-queue|" || count(t, s, `SELECT count(*) FROM events`) != before {
+		t.Fatal("scoped sync touched a skipped parked item")
 	}
 	if column(t, s, `SELECT title||'|'||state||'|'||rank FROM items WHERE item_id='item-unread'`) != "Unread|in-queue|" {
-		t.Fatal("partial parking changed an unread item")
+		t.Fatal("scoped sync changed an unread item")
+	}
+	// A whole sync (Roadmaps empty) still parks Icebox items as not-started.
+	whole := runSync(t, s, "", docs...)
+	parkingLists(t, whole, "item-build-thing", "")
+	if column(t, s, `SELECT state||'|'||rank FROM items WHERE item_id='item-build-thing'`) != "not-started|" {
+		t.Fatalf("whole sync parking failed: %+v", whole)
 	}
 }
 
@@ -80,6 +91,9 @@ func TestPartialSyncPreviewAndWriteUseTheSameRankAllocation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := fromFixture(t, "a", tc.next)
 			content := fromBlock("item-first", "item-source") + fromBlock("item-second", "item-source")
+			if tc.includeHeld {
+				content = "[Seed](seed.md)\n" + content
+			}
 			docs := []item.SyncDocument{doc("docs/roadmap.md", content)}
 			if tc.includeHeld {
 				docs = append(docs, doc("docs/seed.md", fromBlock("item-source", "")+fromBlock("item-next", "")))

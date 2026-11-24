@@ -9,13 +9,23 @@ import (
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/docshare"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// ReadRoadmapDocuments opens only the named roadmaps and their direct tracked
-// Markdown links. It validates every selection before a caller opens a writer.
+// ReadRoadmapDocuments resolves explicit --roadmap flags or <root>/.tillr.toml's
+// [sync] roadmaps setting, validates every selected roadmap and its direct tracked
+// Markdown links before a caller opens a writer, and reads all tracked regular
+// docs/**/*.md files when scoped so out-of-scope blocks can be reported as skipped.
 // Paths are repository-relative; explicit roadmaps need not be named roadmap.md.
 func ReadRoadmapDocuments(root string, roadmaps []string) ([]SyncDocument, []string, error) {
+	if len(roadmaps) == 0 && root != "" {
+		cfg, err := settings.Read(root)
+		if err != nil {
+			return nil, nil, Usagef("%s", err)
+		}
+		roadmaps = cfg.Sync.Roadmaps
+	}
 	if len(roadmaps) == 0 {
 		docs, err := ReadSyncDocuments(root)
 		return docs, nil, err
@@ -47,51 +57,62 @@ func ReadRoadmapDocuments(root string, roadmaps []string) ([]SyncDocument, []str
 			seen[p] = true
 		}
 	}
-	docs := []SyncDocument{}
-	read := map[string]bool{}
-	open := func(p string, required bool) error {
-		if read[p] {
-			return nil
-		}
-		if err := checkSyncFile(root, p); err != nil {
-			if errors.Is(err, os.ErrNotExist) && !required {
-				return nil
-			}
-			return Usagef("scoped document %q must be a regular tracked file without symlink traversal: %v", p, err)
-		}
+	readByPath := map[string][]byte{}
+	selectedDocs := make([]SyncDocument, 0, len(selected))
+	for _, p := range selected {
 		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(p)))
 		if err != nil {
-			return Externalf("reading %s: %v", p, err)
+			return nil, nil, Externalf("reading %s: %v", p, err)
 		}
-		read[p] = true
-		docs = append(docs, SyncDocument{Path: p, Content: content})
-		return nil
+		readByPath[p] = content
+		selectedDocs = append(selectedDocs, SyncDocument{Path: p, Content: content})
 	}
-	for _, p := range selected {
-		if err := open(p, true); err != nil {
-			return nil, nil, err
-		}
-	}
-	// Copy the selected slice before appending links: never follow a linked document.
-	for _, doc := range append([]SyncDocument(nil), docs...) {
-		var readErr error
+	checkedLinks := map[string]bool{}
+	for _, doc := range selectedDocs {
+		var linkErr error
 		roadmapLines(doc, func(_ int, text string, _ bool) {
-			if readErr != nil {
+			if linkErr != nil {
 				return
 			}
 			for _, m := range linkTarget.FindAllStringSubmatch(text, -1) {
 				p := roadmapLink(doc.Path, m[1])
-				if tracked[p] {
-					if err := open(p, false); err != nil {
-						readErr = err
-						return
-					}
+				if !tracked[p] || seen[p] || checkedLinks[p] {
+					continue
+				}
+				checkedLinks[p] = true
+				if err := checkSyncFile(root, p); err != nil && !errors.Is(err, os.ErrNotExist) {
+					linkErr = Usagef("scoped document %q must be a regular tracked file without symlink traversal: %v", p, err)
+					return
 				}
 			}
 		})
-		if readErr != nil {
-			return nil, nil, readErr
+		if linkErr != nil {
+			return nil, nil, linkErr
 		}
+	}
+	docs := make([]SyncDocument, 0, len(paths))
+	for _, p := range paths {
+		if content, ok := readByPath[p]; ok {
+			docs = append(docs, SyncDocument{Path: p, Content: content})
+			continue
+		}
+		if err := checkSyncFile(root, p); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if _, isUsage := RejectionOf(err); isUsage {
+				continue
+			}
+			return nil, nil, Externalf("statting %s: %v", p, err)
+		}
+		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(p)))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, Externalf("reading %s: %v", p, err)
+		}
+		docs = append(docs, SyncDocument{Path: p, Content: content})
 	}
 	return docs, selected, nil
 }
@@ -180,6 +201,9 @@ func protectUnreadRanks(r *store.Reader, allowed map[string]bool) (func(*store.R
 // Partial reports deliberately encode null, not zero, for observations that
 // require every document. Keep integer fields for whole-sync Go consumers.
 func (report SyncReport) MarshalJSON() ([]byte, error) {
+	if report.SkippedBlocks == nil {
+		report.SkippedBlocks = []SyncSkippedBlock{}
+	}
 	type alias SyncReport
 	if !report.Partial {
 		return json.Marshal(alias(report))
