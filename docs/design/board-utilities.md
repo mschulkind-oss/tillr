@@ -1,16 +1,15 @@
 ---
-title: "Board utilities: seven utilities over one shared substrate"
-date: 2026-11-06
+title: "tillr utilities: seven utilities over one shared substrate"
 status: accepted
 stage: BUILT
-next: "None. The seven `tools/tillr-*` binaries implement this contract."
-tags: [board, tillr, utilities, gate, testability, landing-velocity, naming, boundary]
+next: "None."
+tags: [tillr, utilities, gate, testability, landing-velocity, naming, boundary]
 summary: "Seven utilities over one shared substrate — store, item, land, drain, run, gate, view — each its own binary, versioned together as one release set, and each required to run alone against a fixture store or a record, because the module and state boundaries buy per-module gate selection, contained blast radius, and a testable surface, and the separate binaries let a project take only the utilities it wants."
 ---
 
-# Board utilities: seven utilities over one shared substrate
+# tillr utilities: seven utilities over one shared substrate
 
-**Status:** Accepted, 2026-11-06. The seven `tools/tillr-*` binaries implement this contract.
+**Status:** Accepted. The seven binaries exist under `tools/tillr-store`, `tools/tillr-item`, `tools/tillr-land`, `tools/tillr-drain`, `tools/tillr-run`, `tools/tillr-gate` and `tools/tillr-view`, with the shared substrate in `tools/tillr` and the wrapper in `tools/tillr-cli`. UNMEASURED: the per-module time budgets of [§9](#9-testability-and-testing-speed) are the acceptance bar and no measurement of them is recorded here. Utilities outside the seven (`tillr-watch`, `tillr-loop`, `tillr-roll`, `tillr-trace`) are described in [tillr-utility-contracts.md](./tillr-utility-contracts.md), not here.
 
 **In short**
 
@@ -27,10 +26,6 @@ summary: "Seven utilities over one shared substrate — store, item, land, drain
 **Start at:** [§3](#3-why-not-more-the-split-curve) for the split curve and the four-question test that produces seven; [§5](#5-independent-use-the-boundary-made-concrete) for the proof that each boundary is independently usable; [§10](#10-landing-velocity-the-per-module-gate) for the velocity argument.
 
 **Reads with:** [tillr-utility-contracts.md](./tillr-utility-contracts.md) (the utilities' contracts), [landing-principles.md](./landing-principles.md) (the landing rulings `land` implements), and [the judge and lifecycle design](./tillr-judge-and-lifecycle.md) (who may record a verdict).
-
-This document designs seven single-purpose utilities over one shared SQLite
-substrate. It names the boundaries, the contracts that hold them, and the
-decisions that have been ruled. It does not list per-file edits.
 
 Terms of art, defined once:
 
@@ -59,13 +54,13 @@ Terms of art, defined once:
 
 ## 1. The goals, as a set
 
-The design serves five goals. Each has a recognition test — an
-observation that would tell us the goal was met.
+The design serves five goals. Each has a recognition test: an
+observation that shows the goal is met.
 
 | Goal | Statement | Recognition test |
 |---|---|---|
 | G1 Testability | Each responsibility can be tested with its neighbors, the clock, and the process table replaced by inputs. | A landing test runs without spawning a real drain or waiting real seconds. |
-| G2 Landing velocity | A typical change gates in tens of seconds, not tens of minutes. The owner's "big one." | A one-module change selects one module's suite plus the conformance suite ([§10](#10-landing-velocity-the-per-module-gate)). |
+| G2 Landing velocity | A typical change gates in tens of seconds, not tens of minutes. | A one-module change selects one module's suite plus the conformance suite ([§10](#10-landing-velocity-the-per-module-gate)). |
 | G3 Testing speed | The fast suite for any one module fits in a developer's edit loop. | Per-module budgets in [§9](#9-testability-and-testing-speed) hold on a loaded machine. |
 | G4 Blast radius | A change breaks, at most, the state its module owns. This is the price G2 charges: velocity comes from *not* running the other suites, which is only safe if the boundaries are real. | A red suite names the module whose state is wrong. |
 | G5 Composability | Agents combine utilities through records, the way shell tools combine through pipes. | A new report is a new reader of existing records, not a new command in an existing writer; and each utility also does useful work alone ([§5](#5-independent-use-the-boundary-made-concrete)). |
@@ -79,14 +74,14 @@ suite can be selected alone is already suspect.
 
 ## 2. The seam analysis
 
-The survey: what responsibilities exist, and what state each writes.
+The responsibilities, and the state each writes.
 
 | # | Responsibility | Writes | Read by |
 |---|---|---|---|
 | R1 | Store (schema, migrations, event log) | The database itself | Everything |
 | R2 | Items (the work records) | Item state | Drain, view, land |
-| R3 | Landing queue | Candidate state and eligibility | Landing pass, view |
-| R4 | Landing pass | Landing attempts, the trunk ref | Queue, view |
+| R3 | Landing eligibility | Whether a judged head may land | Landing pass, view |
+| R4 | Landing pass | Landing records, the trunk ref | View, drain |
 | R5 | Drain (dispatch and supervision loop) | Dispatch decisions, run launches | View |
 | R6 | Gate (plan and run checks) | Gate plans and verdicts | Landing pass |
 | R7 | Lanes and runs | Lane and run state | Drain, view |
@@ -110,22 +105,20 @@ Three seams announce themselves:
   takes a change description and a worktree, so the gate boundary exists by
   the nature of the job.
 - **R3 and R4 are one lifecycle.** There is one landing implementation and
-  one writer for candidate state.
+  one writer for landing state.
 
 Equally, candidate seams fail on inspection, and [§3](#3-why-not-more-the-split-curve) makes the
-failure precise: R3 and R4 are one lifecycle with two writers if split (the pass must
-write "landed / isolated" back into candidate state the queue owns), R9's
+failure precise: R3 and R4 are one lifecycle with two writers if split (the pass
+would write its result back into state the eligibility check owns), R9's
 decision and mail records are item-adjacent rather than a lifecycle of their
 own, and questions are not stored state at all, so there is no question seam
 to draw.
 
 ## 3. Why not more: the split curve
 
-The owner's question: *what's the downside of more? The more splits we have,
-the faster our tests, and better isolated our changes are.* That intuition is
-right up to a point, and then it inverts. This section states the curve
-honestly, because the count in [§4](#4-the-proposed-suite-seven-utilities) is an output of it, not a target
-anyone picked.
+More splits make tests faster and changes better isolated up to a point, and
+then the effect inverts. The count in [§4](#4-the-proposed-suite-seven-utilities)
+is an output of this curve, not a target.
 
 ### 3.1 What more splits buy
 
@@ -167,7 +160,7 @@ a module that owns its state can be broken only through its records.
   additional boundary adds coverage pressure to the tier that runs least
   often.
 - **"One writer per state" gets harder to enforce.** Fine splits tempt two
-  utilities to write two halves of one lifecycle — exactly the R3/R4 defect
+  utilities to write two halves of one lifecycle — the R3/R4 defect
   the merge in [§4](#4-the-proposed-suite-seven-utilities) avoids. Each such pair reintroduces cross-module
   atomicity questions the substrate was meant to settle ([§13](#13-what-this-costs-and-what-it-forecloses)).
 - **A utility too small becomes a pass-through** — a database table with a
@@ -201,7 +194,7 @@ Applied to the contested cases:
 
 | Candidate split | Own state? | Carry? | Test alone? | Select alone? | Verdict |
 |---|---|---|---|---|---|
-| Landing queue apart from landing pass | No — the pass writes landed/isolated back into candidate state | Yes | Barely — each needs the other's fixtures | No — lifecycle changes land on both | **One utility** (`land`) |
+| Landing eligibility apart from landing pass | No — the pass writes the landing result the eligibility check reads | Yes | Barely — each needs the other's fixtures | No — lifecycle changes land on both | **One utility** (`land`) |
 | Decisions/questions apart from items | Decisions and mail are item-adjacent records; questions own no stored state at all — they live in design documents | Decisions yes; questions are read from the document an item points at, not carried as stored records | Decisions yes; questions n/a | Decisions unclear; questions n/a | **Decisions and mail fold into `item`; questions are not stored state**, so there is no eighth utility to consider for them |
 | Gate planner inside the lander | Yes, but it would grade its own homework: the selector must select itself | Yes | Yes | No | **Keep `gate` separate** |
 | Config as a utility | No — loaded, never written | No — pass-through | n/a | n/a | **Substrate library**, administered through `store` |
@@ -226,7 +219,7 @@ separate binary, `tillr-<noun>`, and the canonical command form is
 |---|---|---|
 | `store` | Schema, migrations, the event log, store administration | R1, the administrative face of R10 |
 | `item` | Item state; decision and mail records; each item's `design_doc` reference | R2, R9 |
-| `land` | Candidate state and eligibility, landing attempts, the trunk ref | R3 + R4 |
+| `land` | Landing records and the trunk ref | R3 + R4 |
 | `drain` | Dispatch decisions and the supervision loop | R5 |
 | `run` | Lane and run state | R7 |
 | `gate` | Gate plans and verdicts; the check registry | R6 |
@@ -234,12 +227,12 @@ separate binary, `tillr-<noun>`, and the canonical command form is
 
 Notes on the three judgment calls:
 
-- **`land` is one loop with one writer.** The queue owns candidate state and
-  eligibility; the pass owns attempts and the trunk ref; and the pass must
-  record "landed / isolated" against the candidate. Split, that is two
+- **`land` is one transaction with one writer.** Deciding that a judged head
+  may land and moving the trunk are one lifecycle. Split, that is two
   writers on one lifecycle and a cross-boundary transaction on the system's
-  most safety-critical path. Merged, it is a state machine inside one
-  module, with one implementation and one writer for candidate state.
+  most safety-critical path. Merged, it is one landing transaction inside one
+  module: a landing names the item and the run it is for, and there is no
+  queue between the gate and the trunk.
 - **`item` carries decisions and mail; it does not carry questions.**
   Decisions attach to items and mail is how their records are delivered, not
   a state of its own, so both fold into `item`. Questions are different in
@@ -286,7 +279,7 @@ independence are required, and they are not the same:
 A third, stronger property — *independent adoptability*, a utility being
 useful to a project that does not run this system at all — is the reason the
 binaries are separate ([§11](#11-seven-binaries-versioned-together)):
-someone must be able to take three of these into their own project and
+a project can take three of these and
 leave the other four behind. That requires every binary to install and run
 alone ([§5.11](#511-where-the-burden-of-proof-sits)); it does not require each
 utility's records to become generic, and `gate` has the
@@ -297,8 +290,7 @@ contract it needs only on evidence ([§6.3](#63-the-model-hybrid-without-ceremon
 
 ### 5.1 The common contract
 
-Every record carries a common envelope. Field and table names below are the
-logical contract, designed for the boundary.
+Every record carries a common envelope (`Envelope` in `tools/tillr/record`).
 
 | Envelope field | Meaning |
 |---|---|
@@ -338,10 +330,10 @@ The logical table ownership the subsections below refer to:
 |---|---|---|
 | `store` | `meta`, `schema_migrations`; administers `events` | All, for verification only |
 | `item` | `items` (including each item's `design_doc` reference), `item_criteria`, `item_edges`, `decisions`, `mail_deliveries` | Its own tables, `meta`; the design document an item points at, when surfacing its open questions |
-| `land` | `candidates`, `landing_attempts`; external write: the trunk git ref | `items` (as records), its own tables, `events` |
+| `land` | `landings`; external write: the trunk git ref. It also declares `candidates` and `landing_attempts`, which nothing writes and only readers open | `items` (as records), its own tables, `events` |
 | `drain` | `dispatches` | `items`, `lanes`, `runs`, its own table, `events` |
 | `run` | `lanes`, `runs`; external writes: processes and worktrees under a caller-named lane root | Its own tables, `meta` |
-| `gate` | Nothing in no-store mode; `gate_plans`, `gate_verdicts` only when a store is named | The check registry (config), the candidate/change record |
+| `gate` | Nothing: its plans and verdicts are records on stdout or in files | The check registry, the change record |
 | `view` | Nothing | Any table or record stream, read-only |
 
 There is no `questions` table. Open questions live in design documents, and
@@ -377,10 +369,9 @@ older than this binary supports without migration.
 (`kind: fixture.seed`, payload `records: [...]`) and refuses (exit 2) any
 store not marked as a fixture.
 
-**Scenario:** every other utility's test suite starts here — a throwaway
-store built from seed records in milliseconds, with no live store at risk.
-It is equally the forensic entry point: `check` and `events` against a
-*copied* production store answer "what schema is this and what happened in
+**Scenario:** every other utility's test suite starts here, with a throwaway
+store built from seed records and no live store at risk. `check` and `events`
+against a copied store answer "what schema is this and what happened in
 it" while every writer is stopped.
 
 ### 5.3 `item` alone
@@ -492,51 +483,52 @@ can also rehearse a brief: apply it to a fixture store and read back the
 stored record to confirm the criteria and edges say what the author meant,
 before anything is dispatched.
 
-One follow-up is noted here rather than left open: if reading questions
-from documents proves awkward in practice, the remedy is a Vantage feature
-request to make that integration easier — `vantage-check`'s linter is the
-existing tool in that world — not a stored copy of the questions.
+If reading questions from documents proves awkward, the remedy is a change
+to Vantage, not a stored copy of the questions.
 
 ### 5.4 `land` alone
 
-**Does alone:** evaluates candidate eligibility and performs (or refuses)
-the landing transaction, driven by records rather than by live counter-parties.
+**Does alone:** lands one judged head onto the trunk, or refuses, driven by
+records rather than by live counter-parties.
 
 ```
-tillr land enqueue --store $FIXTURE/store.sqlite3 --repo $FIXTURE/repo --input candidate-record.json
-tillr land check   --store $FIXTURE/store.sqlite3 --repo $FIXTURE/repo --candidate cand_007 --input verdict-record.json
-tillr land pass    --store $FIXTURE/store.sqlite3 --repo $FIXTURE/repo --candidate cand_007 --input verdict-record.json
+tillr land pass --store $FIXTURE/store.sqlite3 --repo $FIXTURE/repo --item item_042 --run run_019 --base <base-sha> --head <head-sha> --verdict verdict-record.json
+tillr land one  --store $FIXTURE/store.sqlite3 --repo $FIXTURE/repo --branch <branch> --gate <gate-program>
 ```
 
-The input `land.candidate` payload: `candidate_id`, `item_id`, `base_ref`,
-`base_sha`, `head_sha`, `tree_sha`, `state`, `enqueued_at`. The crucial
-input to `check` and `pass` is a `gate.verdict` **record** ([§5.7](#57-gate-alone)) —
-a file, not a running gate. `land` verifies the verdict binds the same
-`tree_sha` and `base_sha` as the candidate; a verdict that binds any other
-tree is a refusal, never a re-plan. A trunk that has moved since `base_sha`
-is carried, not refused, per
+`pass` is the landing transaction with nothing in front of it. Its crucial
+input is a `gate.verdict` **record** ([§5.7](#57-gate-alone)): a file, not a
+running gate. `land` verifies that the verdict binds the candidate's
+`base_sha` and the tree of its `head_sha`; a verdict that binds any other
+tree is a refusal (`verdict-mismatch`), never a re-plan. A trunk that has
+moved since `base_sha` is carried, not refused, per
 [`landing-principles.md`](landing-principles.md) [Section 3](landing-principles.md#3-gate-what-will-be-the-tip-once):
-`pass` re-applies the gated candidate onto the trunk's current tip and
-lands a clean re-application by one compare-and-swap naming that tip, with
-no second gate, while a re-application that conflicts isolates the
-candidate — its repair is a new candidate, gated fresh, because the tree a
-repair produces is a tree no verdict has seen. Both faces emit a
-`land.attempt` record: `attempt_id`, `candidate_id`, `verdict_id`, `result`
-(`landed` / `isolated` / `refused`), `reason` (registered string, e.g.
-`carry-conflict`, `verdict-mismatch`, `verdict-failed`), `trunk_before`,
-`trunk_after`, and, where the candidate was carried, the carried
-`tree_sha` beside the gated one the verdict names. `check` is the same
-evaluation with the ref move suppressed (`result` reports what `pass`
-would do, carry included); `pass` on a refusal exits 1 and moves nothing.
+`pass` three-way merges `base_sha..head_sha` onto the trunk's current tip under
+the land lock and lands a clean result as one commit, with no second gate. A
+merge that conflicts lands nothing; its repair is a new candidate, gated
+fresh, because the tree a repair produces is a tree no verdict has seen.
 
-**Requires:** a store, a git repository, and a verdict record. It does not
-require the drain, a live gate process, or a live system of any kind — that
+Both faces emit a `land.landing` record, which is also the event appended in
+the same write as the `landings` row: `landing_id`, `item_id`, `run_id`,
+`verdict_id`, `result` (`landed` / `squash-conflict` / `refused`), `reason`
+(a registered string such as `verdict-mismatch`, `verdict-failed` or
+`trunk-rewritten`), `base_sha`, `head_sha`, `trunk_before`, `trunk_after`,
+`gated_tree`, `landed_tree` and `conflict_paths`. `gated_tree` differing from
+`landed_tree` is the normal outcome of a carried landing. A refusal exits 1
+and moves nothing.
+
+`one` is the face for a person: it gates the named branch with the gate
+program it is handed and lands it through the same transaction.
+
+There is no candidate queue and no dry-run face: `rg -n 'case "' tools/tillr-land/main.go`
+shows `pass` and `one` only.
+
+**Requires:** a store, a git repository, and a verdict record (or, for `one`,
+a gate program). It does not require the drain or a live gate process, which
 is what makes hand-landing ([§5.10](#510-landing-a-candidate-by-hand-without-the-drain)) possible.
 
-**Scenario:** incident recovery. A candidate was isolated at 03:00 and
-nobody knows why: replay `land check` against a restored fixture store and
-the recorded verdict, and read the refusal reason, without starting the
-drain or touching the live trunk.
+**Scenario:** landing by hand with the drain stopped, and reading why a
+landing was refused from the `land.landing` record alone.
 
 ### 5.5 `drain` alone
 
@@ -575,9 +567,8 @@ of launching anything.
 (and which, in a fixture, were seeded as records — [§5.2](#52-store-alone)). It does not
 require `run` to launch anything, a real clock, or a supervision loop.
 
-**Scenario:** "why won't this item dispatch?" — the single most common
-drain question — becomes one command against a seeded fixture: `drain plan`
-and read the `reason`. The same face is a capacity simulator: vary
+**Scenario:** "why won't this item dispatch?" becomes one command against a
+seeded fixture: `drain plan` and read the `reason`. The same face is a capacity simulator: vary
 `available_lanes` and `max_dispatches` and diff the decision records. A
 drain that can only answer by being left running against the live store
 fails question 3 of [§3.4](#34-the-four-question-test); the `plan`/`once` faces are therefore part
@@ -667,40 +658,35 @@ lane can be identified and released without starting the drain.
 ### 5.7 `gate` alone
 
 **Does alone:** turns a change description into a plan, and a plan plus a
-worktree into a verdict. This is the most independent utility in the suite:
-in its primary mode it needs no store at all.
+worktree into a verdict. It needs no store.
 
 ```
-tillr gate plan --input change-record.json --output plan-record.json
+tillr gate plan --registry <checks> --input change-record.json --output plan-record.json
 tillr gate run  --input plan-record.json --worktree $FIXTURE/worktree --output verdict-record.json
 ```
 
 `plan` consumes a `gate.change`: `base_sha`, `tree_sha`, `changed_paths`,
-and the `subject` (typically a candidate). It emits a `gate.plan`:
+and the `subject`. It emits a `gate.plan`:
 `plan_id`, `base_sha`, `tree_sha`, `registry_digest` (the digest of the
 check registry that produced the plan), and `checks` — each
 `{check_id, command (argv array), timeout_ms, reads, writes, depends_on}`.
-The `reads`/`writes` declarations are what let a runner serialize checks
+The `reads`/`writes` declarations let a runner serialize checks
 that would collide over one directory. `run` executes a plan in the named
 worktree and emits a `gate.verdict`: `verdict_id`, `plan_id`,
 `registry_digest`, `base_sha`, `tree_sha`, `result`
 (`pass` / `fail` / `error`), and per-check `checks` entries
 `{check_id, result, duration_ms, log_ref}`. Exit 0 on `pass`, 1 on `fail`
-(a completed negative verdict), 4 on `error` (a check could not be run —
-never to be read as a failure of the candidate). Where a store is named,
-plans and verdicts are also recorded in `gate_plans` / `gate_verdicts`;
-where none is named, the records on stdout/files are the whole output.
+(a completed negative verdict), 4 on `error` (a check could not be run,
+never to be read as a failure of the candidate). The records on stdout or in
+files are the whole output.
 
-**Requires:** a check registry (substrate config) and, for `run`, a
-worktree. No store, no candidate queue, no lander.
+**Requires:** a check registry and, for `run`, a worktree. No store and no
+lander.
 
 **Scenario:** preflight. An agent or developer runs `gate plan` and `gate
-run` against a worktree before a candidate exists, and learns in under a
-minute whether the change will gate — in any repository whose checks are
-registered, whether or not the rest of this system is installed. This is
-the one utility with a present claim to independent adoptability beyond
-the system, because its primary mode needs no store
-([§2](#2-the-seam-analysis)).
+run` against a worktree before a candidate exists and learns whether the
+change will gate, in any repository whose checks are registered, whether or
+not the rest of this system is installed.
 
 ### 5.8 `view` alone
 
@@ -717,8 +703,7 @@ tillr view events --store $FIXTURE/store.sqlite3 --since 1200
 (`schema_version` and `event_head_seq`, so two reports can be compared for
 whether they describe the same moment), and the assembled subject — the
 item record, the open questions read from the design document the item
-points at ([§5.3](#53-item-alone)), its candidates with their latest
-`land.attempt`, the latest `gate.verdict` per candidate, and its runs.
+points at ([§5.3](#53-item-alone)), its landings, and its runs.
 Every component is copied from records other utilities emitted or from the
 design document itself; `view` computes presentation, never new state.
 Human-readable rendering is the same record through a format flag, not a
@@ -729,15 +714,14 @@ second data path. Exit 1 when the subject does not exist in the snapshot,
 and it writes nothing anywhere — it is safe to point at the live store
 while writers run, against a consistent snapshot.
 
-**Scenario:** postmortem and owner reporting with the system stopped: copy
-the store, run `view status` and `view events` over the copy, and the full
-history of an item — dispatched, run, gated, isolated, and why — is
-reconstructable without starting any writer. The `--records` mode makes the
+**Scenario:** reporting with the system stopped: copy
+the store, run `view status` and `view events` over the copy, and the
+history of an item is readable without starting any writer. The `--records` mode makes the
 same report available to a recipient who was sent records but has no store.
 
 ### 5.9 The composed pipeline
 
-In normal operation an agent (or the drain as orchestrator) composes the
+In normal operation the drain composes the
 seven by carrying records between faces and letting each writer append its
 events. No utility calls another in-process; the store and the record
 stream are the only couplings.
@@ -747,47 +731,44 @@ stream are the only couplings.
 | 1 | `item apply` | `item.record` (state `ready`) | Stored item; `item.*` events |
 | 2 | `drain plan` / `once` | `drain.tick`; item/lane/run state | `drain.decision` carrying a `run.request` |
 | 3 | `run exec` | `run.request` | `run.record` with `artifact_refs` including `tree_sha` |
-| 4 | `land enqueue` | `land.candidate` built from the run's artifacts | Candidate in `candidates`; `land.*` events |
-| 5 | `gate plan` | `gate.change` for the candidate tree | `gate.plan` |
-| 6 | `gate run` | `gate.plan`; candidate worktree | `gate.verdict` |
-| 7 | `land pass` | Candidate; `gate.verdict` record | `land.attempt`; trunk ref moved iff the attempt lands |
-| 8 | `view status` | Store snapshot or the records from steps 1–7 | `view.status` |
+| 4 | `gate plan` | `gate.change` for the run's tree | `gate.plan` |
+| 5 | `gate run` | `gate.plan`; the run's worktree | `gate.verdict` |
+| 6 | `land pass` | The item, run, base and head; the `gate.verdict` record | `land.landing`; trunk ref moved iff the landing lands |
+| 7 | `view status` | Store snapshot or the records from steps 1–6 | `view.status` |
 
-Every record in the table carries the pipeline's `correlation_id`, so step
-8 can reassemble the run from the record stream alone. Note what the table
-proves structurally: each step's input is a record a fixture can supply and
-each step's output is a record a fixture can assert on. That is why the
+The envelope's `correlation_id` lets step
+7 reassemble one pipeline run from the record stream alone. Each step's input is a record a fixture can supply and
+each step's output is a record a fixture can assert on, which is why the
 fast suites in [§9](#9-testability-and-testing-speed) can replace neighbors with files.
 
 ### 5.10 Landing a candidate by hand, without the drain
 
-The sharpest form of the owner's test: an agent has a finished candidate
-and wants it landed now, with the drain stopped and no supervision loop
-involved. Four faces, four separate invocations, each runnable alone:
+An agent has a finished candidate
+and wants it landed with the drain stopped. Four faces, four separate
+invocations, each runnable alone:
 
 ```
 # 1. Plan the gate for this candidate tree (no store needed).
-tillr gate plan --input candidate-change.json --output plan.json
+tillr gate plan --registry <checks> --input candidate-change.json --output plan.json
 
 # 2. Run the plan in the candidate worktree. Exit 0 = pass, 1 = fail, 4 = could not run.
 tillr gate run  --input plan.json --worktree <candidate-worktree> --output verdict.json
 
 # 3. Land, presenting the verdict as a record. Refusals exit 1 with a reason and move nothing.
-tillr land pass --store <store> --repo <repo> --candidate cand_007 --input verdict.json
+tillr land pass --store <store> --repo <repo> --item item_042 --run run_019 --base <base-sha> --head <head-sha> --verdict verdict.json
 
 # 4. Confirm from a read-only snapshot.
 tillr view status --store <store> --item item_042
 ```
 
 The safety properties live in the records, not in the operator's care: the
-verdict binds `plan_id`, `registry_digest`, `base_sha`, and `tree_sha`, and
-`land pass` refuses a verdict that does not match the candidate, and
+verdict binds `plan_id`, `registry_digest`, `base_sha`, and `tree_sha`,
+`land pass` refuses a verdict that does not match the candidate, and it
 carries the candidate onto a trunk that has moved since `base_sha`
-([§5.4](#54-land-alone)). Substituting `land check` for step 3 gives
-the same evaluation as a dry run. If any step required a running drain, a
-live gate process, or an in-process call into another utility, this
-walkthrough would be impossible — and the boundary it crosses would be a
-code seam to redraw under [§3.4](#34-the-four-question-test), not a seam to defend.
+([§5.4](#54-land-alone)). If any step required a running drain, a
+live gate process, or an in-process call into another utility, the boundary
+it crosses would be a code seam to redraw under
+[§3.4](#34-the-four-question-test).
 
 ### 5.11 Where the burden of proof sits
 
@@ -801,94 +782,57 @@ cannot meet that condition has a seam that goes back through
 
 ## 6. The naming model: one prefix, independent names, or a hybrid
 
-The naming *shape* is long names with no letter prefix. How the system name
-combines with the utility nouns is the hybrid of
-[§6.3](#63-the-model-hybrid-without-ceremony), with no ladder of earned
-names and no ceremony. This section states the shape, compares the three
-models, and states the model.
-
 ### 6.1 What is settled: long names, no letter prefix
 
-A one-letter prefix scheme (`bstore`, `bland`) is rejected:
-
-- A bare letter carries no meaning. Everything in the suite is part of the
-  system; a prefix that says "part of the system" says nothing.
-- Names are read aloud in design discussion and dictated in prompts; a name
-  that cannot be said cannot be briefed.
-- A bare letter is not the Unix convention anyway. The convention is a *word*
-  prefix where a prefix is used at all: `git-commit`, `git-merge`,
-  `git-remote-https`.
-The decisive point is the owner's: **most or all of these
-utilities will be invoked by agents, not by humans at a prompt.** A
-utility's name is read in a tool call, a log line, an error message, a gate
-plan, and a doc — never typed under time pressure by someone saving
-keystrokes. That flips the usual Unix brevity argument: the cost of a long
-name (typing) barely exists, and the benefit (a log line that explains
-itself to the agent reading it) is paid on every invocation. Under the
-model in [§6.3](#63-the-model-hybrid-without-ceremony), every utility's name
-says what state it owns or what loop it runs — `store`, `item`, `land`,
-`drain`, `run`, `gate`, `view` — because a name that survives the
-four-question test should say what its utility owns. Whimsical per-tool
-brands would have to argue against this paragraph, not merely be available.
+A one-letter prefix scheme is rejected. A bare letter carries no meaning,
+cannot be said aloud in a brief, and is not the Unix convention, which is a
+word prefix (`git-commit`). The deciding fact is that these utilities are
+invoked by agents: a name is read in a tool call, a log line, an error
+message, a gate plan and a document, and is rarely typed. The cost of a long
+name barely exists and the benefit, a log line that explains itself, is paid
+on every invocation. Every utility's name says what state it owns or what
+loop it runs: `store`, `item`, `land`, `drain`, `run`, `gate`, `view`.
 
 ### 6.2 The three models
 
 | | One prefix | Independent names | Hybrid |
 |---|---|---|---|
-| **Shape** | `tillr-store`, `tillr-item`, … / `tillr store`, … | Each utility has its own unrelated name | `tillr <noun>` canonical over `tillr-<noun>` binaries; the bare noun correct in context |
-| **What a name tells an agent reading a log** | The job *and* the family, every time | The job only — if the names stay descriptive; nothing, if they turn brand-like | The job always; the family wherever the canonical form is used, and in every record regardless |
-| **Independent use ([§5](#5-independent-use-the-boundary-made-concrete))** | Possible but disguised: a prefixed name advertises a dependence the design just removed | Advertised honestly: the name claims no more coupling than exists | Advertised by the separate binaries themselves; the wrapper form adds family without hiding the binary |
-| **Learning and discovery** | One name to learn; the family lists itself under one prefix | Seven names, seven doc sets; the family relationship is invisible without a map | One system name, seven descriptive nouns, one dispatch list (`tillr` with no noun) |
-| **PATH collisions** | None of consequence | Real: bare `gate`, `run`, `view` are generic words other tools also want | Avoided: on-PATH names are `tillr` and `tillr-<noun>`; bare nouns are speech and in-context reference, not PATH entries |
-| **Packaging and versioning** | One distribution, one version | Tends toward seven packages and seven version lines — and therefore toward skew that nothing polices | Seven binaries released together as one version set ([§11](#11-seven-binaries-versioned-together)): separately installable, versioned as one |
-| **Cost of renaming the system later** | Every name changes at once | Only the umbrella changes; utility names stand | The umbrella and the binary prefixes change; the utility nouns — the identities in records, modules, and docs — stand |
-| **Failure mode** | The prefix becomes empty ceremony repeated in every log line | Seven brands to remember, and an agent holding a `gate` verdict cannot tell whose `land` should consume it | Two ways to refer to a utility (canonical and bare); contained by using the canonical form in docs, records, and commands, and the bare noun only where context already supplies the family |
+| **Shape** | `tillr-store`, `tillr-item`, … | Each utility has its own unrelated name | `tillr <noun>` canonical over `tillr-<noun>` binaries; the bare noun correct in context |
+| **What a name tells an agent reading a log** | The job and the family, every time | The job only | The job always; the family wherever the canonical form is used, and in every record regardless |
+| **PATH collisions** | None of consequence | Real: bare `gate`, `run`, `view` are generic words other tools also want | Avoided: on-PATH names are `tillr` and `tillr-<noun>` |
+| **Packaging and versioning** | One distribution, one version | Tends toward seven version lines and skew nothing polices | Seven binaries released together as one version set ([§11](#11-seven-binaries-versioned-together)) |
+| **Cost of renaming the system** | Every name changes at once | Only the umbrella changes | The umbrella and the binary prefixes change; the utility nouns stand |
+| **Failure mode** | The prefix becomes empty ceremony in every log line | An agent holding a `gate` verdict cannot tell whose `land` should consume it | Two ways to refer to a utility, contained by the rule in [§6.3](#63-the-model-hybrid-without-ceremony) |
 
-Two facts discipline the choice. First, the agent-invocation fact cuts
-*both* ways: it makes long names cheap, but it also means a name's audience
-is a reader mid-task with limited context — family visibility in the name
-is one way to give that reader provenance, and the record envelope's
-`producer` field ([§5.1](#51-the-common-contract)) is another, which works under any model.
-Provenance therefore does not *require* a prefix; it requires that one of
-the two mechanisms be reliable, and the record mechanism is already
-mandatory. Second, independent *runnability* is required of all seven and
-delivered by the separate binaries ([§5](#5-independent-use-the-boundary-made-concrete),
-[§11](#11-seven-binaries-versioned-together)); independent *brand
-names* would add nothing to that. A name is a publishing commitment, and
-publishing seven brands on spec repeats, in naming form, the over-splitting
-error [§3](#3-why-not-more-the-split-curve) warns against in code.
+Provenance does not require a prefix: the record envelope's `producer` field
+([§5.1](#51-the-common-contract)) carries it under any model. Independent
+runnability is delivered by the separate binaries, so independent brand names
+would add nothing to it.
 
 ### 6.3 The model: hybrid, without ceremony
 
 **The canonical form is `tillr <noun>`; the bare noun is correct in
-context.** That is the whole model. As with Git — it is called
-`git rebase`, and everyone understands "rebase" in a Git context — the
-standard form names the system, and context does the rest.
+context**, as `git rebase` is called "rebase" in a Git context.
 
-- Each utility's **identity** is its descriptive noun — in module names,
-  record kinds, gate step names, docs, and the `producer.utility` field.
-  That identity is independent: it does not change if the system is renamed,
-  and it is what [§5](#5-independent-use-the-boundary-made-concrete)'s standalone faces answer to conceptually.
+- Each utility's **identity** is its descriptive noun: in module names,
+  record kinds, gate step names, documents, and the `producer.utility` field.
+  It does not change if the system is renamed.
 - The **distribution** is a release train of seven binaries,
   `tillr-store` through `tillr-view`, versioned together as one set
   ([§11](#11-seven-binaries-versioned-together)). The thin `tillr`
   wrapper dispatches `tillr <noun> ...` to `tillr-<noun>`; each binary also
   runs its faces directly.
-- The family relationship is carried by the `tillr` name, the docs, and
-  `producer.system` in every record — documented and recorded, rather than
-  re-encoded in every reference.
+- The family relationship is carried by the `tillr` name, the documents, and
+  `producer.system` in every record.
 
-A utility that later earns a fully standalone name of its own is a
-publishing decision to make then, on whatever evidence exists then; this
-design specifies no ladder for earning one. The honest cost of the hybrid
-is its failure mode from the table — two forms of reference — contained by
-one rule: docs, records, and commands use the canonical form, and the bare
-noun is for speech and in-context reference only.
+Documents, records and commands use the canonical form; the bare noun is for
+speech and in-context reference only. A fully standalone name for one utility
+is a publishing decision made on evidence when it arises; no ladder for
+earning one is specified.
 
 ### 6.4 The name is `tillr`
 
-The system name is **`tillr`**. A tiller is what steers the boat, which is
-loosely what this system is for the work it runs — the steering gear.
+The system name is **`tillr`**: a tiller is what steers the boat.
 
 ## 7. Where the name appears
 
@@ -921,9 +865,9 @@ The record and table shapes on this substrate are designed for the boundary
   the exit-code convention. The conformance suite holds all four and is
   **always selected** — it is the one suite no change may skip, because it
   is the empirical content of the claim in [§1](#1-the-goals-as-a-set) that selection is safe.
-  The standalone invocations of [§5](#5-independent-use-the-boundary-made-concrete) are conformance cases, not
-  merely documentation: each is run against a fixture store with the other
-  utilities' binaries absent.
+  The suite lives in `tools/tillr/conformance`. The standalone invocations of
+  [§5](#5-independent-use-the-boundary-made-concrete) are driven by each
+  utility's own suite against a fixture store.
 - **Substrate changes are the one legitimately wide blast radius.** A schema
   or record change selects every module's suite, takes migration through
   `store`, and is scheduled as such — rarely, deliberately, and never
@@ -931,28 +875,23 @@ The record and table shapes on this substrate are designed for the boundary
 
 ## 9. Testability and testing speed
 
-A split by itself does not make a suite cheap: a suite dragged across a
-boundary intact arrives exactly as heavy ([§3.2](#32-what-more-splits-do-not-buy)).
-What ownership buys is two reductions. **First, fewer
-tests.** Where no module can say which entry point owns a
-behavior, the same behavior is covered from several entry points, each
-test standing up enough of the program to reach it. Once one writer owns
-the state, there is one test in the owning module. **Second,
-cheaper tests.** A test inside a boundary takes its neighbors, the
-clock, and process-spawning as inputs — fixture stores, input records, an
-injected clock — instead of reaching for the real ones, so it stops paying
-to stand up the whole program. A test that needs a landed candidate
-consumes a "landed" record; it does not run a landing. The standalone faces
-in [§5](#5-independent-use-the-boundary-made-concrete) are exactly the surfaces those tests drive: `drain plan`
-with an injected `now` replaces a test that sleeps; `land check` against a
-verdict file replaces a test that runs a gate; `run exec` with a stub
-command replaces a test that launches an agent.
+Ownership buys two reductions ([§3.2](#32-what-more-splits-do-not-buy)).
+**Fewer tests:** once one writer owns a piece of state, a behavior is covered
+by one test in the owning module instead of once per entry point. **Cheaper
+tests:** a test inside a boundary takes its neighbors, the clock and
+process-spawning as inputs (fixture stores, input records, an injected
+clock) instead of standing up the whole program. A test that needs a landed
+candidate consumes a `land.landing` record; it does not run a landing. The
+standalone faces in [§5](#5-independent-use-the-boundary-made-concrete) are
+the surfaces those tests drive: `drain plan` with an injected `now` replaces
+a test that sleeps, `land pass` against a verdict file replaces a test that
+runs a gate, and `run exec` with a stub command replaces a test that
+launches an agent.
 
-The limits stay honest: the worst case still pays a heavy
-module's own suite, and a substrate change still selects everything.
+The worst case still pays a heavy module's own suite, and a substrate change
+still selects everything.
 
-Budgets, per utility — and these budgets stand as the acceptance bar, not
-as opening bids:
+Budgets, per utility. They are the acceptance bar:
 
 | Tier | Budget | Selected |
 |---|---|---|
@@ -987,117 +926,67 @@ knows why.
 
 ### 10.1 Parallel gating of non-overlapping candidates
 
-Could two candidates that touch disjoint files be gated at the same time
-and then landed one after another, instead of gating serially or batching
-them into one combined candidate? For the *final* verdict, no — and after
-the per-module gate, it would buy little. The reasoning, in two halves:
+Two candidates that touch disjoint files are not gated in parallel for
+their final verdicts.
 
-**Can they? Not as landable verdicts.** This design binds every verdict
-to the exact tree it examined: `gate.verdict` carries `base_sha` and
-`tree_sha`, and `land pass` refuses a verdict whose tree is not the
-candidate's ([§5.4](#54-land-alone),
-[§5.10](#510-landing-a-candidate-by-hand-without-the-drain)). Gate two
-candidates in parallel against the same trunk and the first one lands: the
-trunk moves, so the second verdict binds a stale base and a tree that is
-not the tree landing would produce. Carrying ([§5.4](#54-land-alone)) lands
-that second candidate by re-applying it — which is exactly why parallel
-final gating stays refused: carrying prices one ungated re-application
-under a serial gate, and parallel gating would multiply ungated
-combinations, each landing on a verdict about a tree that never existed.
-Only the first of a parallel batch ever holds a verdict about the tree
-that lands. Disjoint files do not repair this, because textual
-disjointness is decidable from `changed_paths` but *semantic* independence
-is not: one candidate changes a function's signature in one file, the other
-adds a caller in a file the first never touches, each passes alone against
-the old trunk, and the combination does not compile. When the
-non-overlap decision is wrong in that way, the failure mode is a broken
-trunk admitted by two green gates — the exact outcome a final gate exists
-to prevent. The only sound parallel form is *speculative* gating: gate
-the second candidate against a predicted trunk made of the first candidate
-applied, the third against the first two applied, and so on. That is
-real machinery — predicted trees, and an invalidation cascade that
-discards every downstream speculative verdict when an earlier candidate
-fails or is isolated — built on top of the landing utility. This design does not
-adopt it. The pass gates and lands candidates one after another under
-one land lock; the serial landing transaction itself — a ref move — is
-cheap, and is not the bottleneck. The gate's wall time is.
+**Parallel final verdicts are not landable.** Every verdict binds the exact
+tree it examined, and `land pass` refuses a verdict whose tree is not the
+candidate's ([§5.4](#54-land-alone)). Gate two candidates in parallel against
+one trunk and the first one lands: the trunk moves, and the second verdict is
+about a tree that is not the tree landing would produce. Carrying prices one
+ungated re-application under a serial gate; parallel gating would multiply
+ungated combinations. Disjoint files do not repair this, because textual
+disjointness is decidable from `changed_paths` and semantic independence is
+not: one candidate changes a function's signature, the other adds a caller in
+a file the first never touches, each passes alone, and the combination does
+not compile. The only sound parallel form is speculative gating, where each
+candidate is gated against a predicted trunk made of the candidates ahead of
+it and every downstream verdict is discarded when an earlier candidate fails.
+This design does not adopt it.
 
-**Would it matter? The per-module gate removes the pressure first.** The
-queue's wait is queue depth times the serial gate wall, and per-module
-selection shortens that wall for the typical change. Parallel final gating
-is a remedy for a queue that per-module selection already drains at an
-acceptable rate. The CPU facts point the same way, though the conclusion
-does not need them: the gate is `go test`, CPU-bound rather than I/O-bound,
-and its wall stretches under contention. Whether one gate saturates every
-core on a given machine is unmeasured; on a machine it does saturate, two
-concurrent full gates make both slower, buy no throughput, and spend
-timeout budget. What parallelism *is* safe, this design already has:
-preflight. `gate plan` and `gate run` in a lane, before a candidate exists
-([§5.7](#57-gate-alone)), produce advisory verdicts that claim nothing landable, so any
-number of lanes may run them concurrently and failures are found before
-enqueue — the overlap the queue cannot safely use, spent where it cannot
-admit a broken trunk.
+**The per-module gate removes the pressure first.** The queue's wait is queue
+depth times the serial gate wall, and per-module selection shortens that wall
+for the typical change. The gate is `go test`, which is CPU-bound, so on a
+machine one gate saturates, two concurrent full gates buy no throughput.
+Whether one gate saturates every core is unmeasured. The parallelism that is
+safe is preflight: `gate plan` and `gate run` in a lane before a candidate
+exists ([§5.7](#57-gate-alone)) produce advisory verdicts that claim nothing
+landable, so any number of lanes may run them concurrently.
 
-This is settled for this design: **final gating stays serial, one
-candidate, one verdict bound; parallelism lives in preflight.** It reopens
-only on measurements — queue wait
-(rather than gate wall) shown to be the routine bottleneck at real queue
-depths, *and* a single selected gate shown to leave cores idle. Both are
-measurable from gate timings, queue depth at enqueue and landing, and CPU
-utilization during one gate. If both come back positive, speculative
-gating is a new design to price on its own, not a tweak to this one.
+**Final gating stays serial, one candidate, one verdict bound; parallelism
+lives in preflight.** This reopens only on two measurements together: queue
+wait, not gate wall, shown to be the routine bottleneck at real queue depths,
+and a single selected gate shown to leave cores idle.
 
 ## 11. Seven binaries, versioned together
 
-**Seven separate binaries, versioned together.** Each utility is its own
-binary — `tillr-store`, `tillr-item`, `tillr-land`, `tillr-drain`,
-`tillr-run`, `tillr-gate`, `tillr-view` — with its own entry point, its own
-docs, and its own package, released together as one version set sharing a
-single version. A thin `tillr` wrapper provides a single control surface
-in the Git style, dispatching `tillr gate ...` to `tillr-gate ...` as
-`git` dispatches to `git-rebase`. The wrapper is a convenience; the
-binaries are the product.
+Each utility is its own binary (`tillr-store`, `tillr-item`, `tillr-land`,
+`tillr-drain`, `tillr-run`, `tillr-gate`, `tillr-view`) with its own entry
+point, documents and module, released together as one version set sharing a
+single version. A thin `tillr` wrapper (`tools/tillr-cli`) dispatches
+`tillr gate ...` to `tillr-gate ...` as `git` dispatches to `git-rebase`. The
+wrapper is a convenience; the binaries are the product.
 
-The reason is **adoption**, not composability. The utilities must be able
-to be relied on individually: if there are seven, somebody must be able to
-take three of them into their own project and leave the other four behind.
-A multicall binary — one executable behaving as several utilities
-depending on how it is invoked — satisfies "each face does useful work
-alone" operationally, but it still ships all seven faces to anyone who
-wants one, and it enforces the boundaries only by package structure and
-import rules. Separate binaries make the reliance real: what a project
-installs is exactly what it uses, and a boundary a neighboring utility is
-not present to reach across cannot be reached across.
+The reason is **adoption**. A project can take three of the seven and leave
+the other four behind. A multicall binary would ship all seven faces to
+anyone who wants one and enforce the boundaries only by package structure.
+With separate binaries, what a project installs is what it uses, and a
+boundary a neighboring utility is not present to reach across cannot be
+reached across. The binaries are built one per module, so the module boundary
+(per-module gate selection, blast radius, test surface) and the binary
+boundary coincide.
 
-The module boundary still does its own work underneath: per-module gate
-selection (G2), blast radius (G4), and the per-module test surface (G3)
-come from strict modules, and the binaries are built one per module so the
-two boundaries coincide. The naming model is independent of this choice
-and already fits it ([§6](#6-the-naming-model-one-prefix-independent-names-or-a-hybrid)):
-`tillr <noun>` is canonical whether typed through the wrapper or read in a
-log, the bare noun is correct in context, and `tillr-<noun>` is the binary
-that answers.
+The costs:
 
-The honest costs, and they are the price of the adoption property:
-
-- **Version skew is now possible.** Seven installed artifacts can drift to
-  seven versions in a way one binary never could. The release train and
-  the conformance suite therefore carry more weight: the seven are
-  versioned and released as one set, records carry
-  `producer.version` ([§5.1](#51-the-common-contract)), and consumers
-  refuse unsupported record and schema versions rather than guessing
-  (exit 3). Skew becomes a detected, refused condition instead of silent
-  corruption — but detecting and refusing is work one binary did not owe.
-- **Seven artifacts to build and publish** — seven build targets, seven
-  packages, seven sets of docs, and a release that is not done until the
-  whole set is. The set discipline is what keeps "seven binaries" from
-  decaying into "seven products on seven schedules."
-- **The wrapper must be kept honest.** A wrapper that only dispatches is a
-  convenience; a wrapper that grows behavior of its own — composing faces,
-  holding state, acquiring flags no binary has — becomes a monolith
-  with the utilities as its subroutines. Its entire job is to find
-  `tillr-<noun>` and hand over argv, stdin, stdout, and the exit code,
-  untouched.
+- **Version skew is possible.** The seven are versioned and released as one
+  set, records carry `producer.version` ([§5.1](#51-the-common-contract)),
+  and consumers refuse unsupported record and schema versions (exit 3)
+  instead of guessing.
+- **Seven artifacts to build and publish**, and a release that is not done
+  until the whole set is.
+- **The wrapper must stay a dispatcher.** Its job is to find `tillr-<noun>`
+  and hand over argv, stdin, stdout and the exit code untouched. The one
+  built-in it hosts is `tillr notify serve`, a local wake-hint relay.
 
 ## 12. One writer at every instant
 
@@ -1131,36 +1020,21 @@ no other utility's binary present.
   ([§11](#11-seven-binaries-versioned-together)) are the entire
   defense; if they are allowed to rot, G2 becomes a way to land breakage
   faster.
-- **Standalone faces are product surface.** `drain plan`, `land check`,
-  fixture seeding, and no-store gate mode ([§5](#5-independent-use-the-boundary-made-concrete)) must be maintained,
+- **Standalone faces are product surface.** `drain plan`,
+  fixture seeding, and the store-free gate ([§5](#5-independent-use-the-boundary-made-concrete)) must be maintained,
   documented, and kept honest against the live paths they mirror. A dry-run
   face that drifts from the real decision logic is worse than none: it
   produces confident wrong answers. The conformance suite must drive both
   from the same code path wherever the face claims equivalence.
-- **Under the hybrid naming model, two reference forms.** `tillr gate` is
-  canonical; bare `gate` is correct in context; `tillr-gate` is the binary
-  ([§6.3](#63-the-model-hybrid-without-ceremony)). Docs, records, and
-  commands must hold to the canonical form so a reader out of context is
-  never left guessing whose `gate` a log line means — a small permanent
-  discipline, and the price of the model's simplicity.
-- **Seven binaries can skew, and must be released as one set
-  ([§11](#11-seven-binaries-versioned-together)).** Separate artifacts
-  make version skew possible where one binary made it impossible, so the
-  release train and the conformance suite carry that weight permanently:
-  seven artifacts built, versioned, published, and refused loudly
-  (exit 3) when their record or schema versions do not match. The return
-  is the other side of the same coin — a project installs only the
-  utilities it relies on, and a fixed `tillr-drain` can ship in the next
-  version set without its adopters taking a new `tillr-land` they never
-  installed. And the `tillr` wrapper must stay a dispatcher; a wrapper
-  that grows behavior becomes a monolith.
+- **Two reference forms** under the hybrid naming model
+  ([§6.3](#63-the-model-hybrid-without-ceremony)), and **seven binaries that
+  can skew** ([§11](#11-seven-binaries-versioned-together)).
 
 ### 13.1 What a second consumer would reuse, and what it would not
 
-Would a second system with a similar-looking loop — generate work,
-prioritize it, fan it out to agents, and generate more work from the
-results — need any seam here to move so that it could reuse these chunks?
-No. The two candidate changes both fail the four-question test
+A second system with a similar loop (generate work, prioritize it, fan it
+out to agents, generate more work from the results) needs no seam here to
+move. The two candidate changes both fail the four-question test
 ([§3.4](#34-the-four-question-test)) inside this system, and the reusable part is
 already the part this design keeps separate on its own merits: the
 substrate, the record contract, and the pattern of drawing utilities at
@@ -1206,25 +1080,13 @@ What transfers, and what is specific to this system by design:
 | `run` | The lane and process lifecycle shape: an argv array, a lane, a timeout, artifacts back, and a run's failure as data rather than the utility's. | The record as named here — its subject is an item and its headline artifact is a candidate tree. |
 | `item`, `drain`, `land`, `view` | The pattern, and — where a second system's work genuinely is items, dispatch, landing, or reporting over the same records — the binaries themselves, taken individually ([§11](#11-seven-binaries-versioned-together)). | The content specific to this system: frozen criteria, `blocked_by` edges, and `design_doc` references; the dispatch reasons and policy; the candidate lifecycle and the trunk transaction, which have no analogue outside landing code; and `view`'s assembled subject, which is an item of this system. |
 
-So the expectation to hold is this: a second system is a *second set of
-utilities* over the substrate mechanisms and this pattern — and because
-the seven ship as separate binaries
-([§11](#11-seven-binaries-versioned-together)), it can also simply
-take the three it wants and leave the four it does not, installing
-`tillr-gate` where its work is checking trees without taking the rest of
-the suite. Separate binaries strengthen the reuse answer; they do not
-change its structure. Needing new tables, new payloads, new event kinds,
-or new utilities in that system — including a producer that owns its
-generation state there — is the design working as intended, not evidence
-against it. What would reopen this subsection is narrower and harder:
-building that system and finding that the substrate libraries themselves
-cannot be used without forking them — that the envelope, the append
-primitive, or fixture seeding cannot express its records without this
-system's concepts leaking into the shared code. A seam forced in the substrate is
-a reason to redraw one here; a seam drawn in a second system, on its own
-state, is not. Until that evidence exists, generality for a consumer
-described in one paragraph is a cost this design declines to pay
-([§3.5](#35-the-conclusion)).
+A second system is a second set of utilities over the substrate mechanisms
+and this pattern, and it can take individual binaries and leave the rest.
+Needing new tables, payloads, event kinds or utilities in that system is the
+design working as intended. What would reopen this subsection is finding that
+the substrate libraries themselves (the envelope, the append primitive,
+fixture seeding) cannot express a second system's records without forking
+them ([§3.5](#35-the-conclusion)).
 
 ## 14. Decision ledger
 
@@ -1235,12 +1097,12 @@ described in one paragraph is a cost this design declines to pay
 |---|---|---|
 | D-UT1 | The system is a set of utilities over one shared SQLite substrate, partitioned by writer. | G1–G5; [§2](#2-the-seam-analysis) |
 | D-UT2 | Seven utilities: store, item, land, drain, run, gate, view. The count is an output of the state seams via the four-question test, not a target. | [§3.4](#34-the-four-question-test) |
-| D-UT3 | Landing queue and landing pass are one utility with one writer for candidate state, in a single implementation. | [§2](#2-the-seam-analysis), [§3.4](#34-the-four-question-test) |
+| D-UT3 | Landing eligibility and the landing pass are one utility with one writer for landing state, in a single implementation. | [§2](#2-the-seam-analysis), [§3.4](#34-the-four-question-test) |
 | D-UT4 | Decisions and mail fold into `item`. Questions are not stored state: they live in design documents, in Vantage's world; an item carries a `design_doc` reference and its open questions are read from that document when surfaced, never stored or mirrored. There is therefore no eighth utility to consider for questions. | [§3.4](#34-the-four-question-test), [§4](#4-the-proposed-suite-seven-utilities), [§5.3](#53-item-alone) |
 | D-UT5 | The gate planner remains a separate utility; the selector must select itself and must not live inside the lander it examines. | [§4](#4-the-proposed-suite-seven-utilities) |
 | D-UT6 | Utility identities are long descriptive nouns naming the state owned or loop run, with no letter prefix. Agents, not humans, are the callers. How identities become command names is the naming model, D-UT12. | [§6.1](#61-what-is-settled-long-names-no-letter-prefix) |
 | D-UT7 | Seven separate binaries — `tillr-store` through `tillr-view` — each its own entry point, docs, and package, released together as one version set. A thin `tillr` wrapper dispatches to them, Git-style, as a convenience control surface; the binaries are the product, so a project can take three and leave four. Version skew is policed by the release train and the conformance suite; the wrapper holds no behavior of its own. | [§11](#11-seven-binaries-versioned-together) |
-| D-UT8 | The boundary contract — record format, schema package, event-kind registry, exit codes — is held by an always-selected conformance suite; substrate changes select every suite. | [§5.1](#51-the-common-contract), [§8](#8-the-shared-substrate), [§10](#10-landing-velocity-the-per-module-gate) |
+| D-UT8 | The boundary contract — record format, schema package, event-kind registry, exit codes — is held by an always-selected conformance suite (`tools/tillr/conformance`); substrate changes select every suite. | [§5.1](#51-the-common-contract), [§8](#8-the-shared-substrate), [§10](#10-landing-velocity-the-per-module-gate) |
 | D-UT9 | Writes never dual-run: at every instant exactly one code path writes each slice of state. The `tillr` wrapper only dispatches. | [§12](#12-one-writer-at-every-instant) |
 | D-UT10 | The system name is `tillr` wherever a name is user-visible: the wrapper, the binaries, the store and config paths, and `producer.system` in every record. | [§7](#7-where-the-name-appears) |
 | D-UT11 | Independent use is an acceptance condition for every utility, in its strongest form: each utility's own binary, installed alone, runs its standalone faces ([§5](#5-independent-use-the-boundary-made-concrete)) green against a fixture store and/or records, with no other utility's binary present. A utility that fails is redrawn under [§3.4](#34-the-four-question-test). | [§5](#5-independent-use-the-boundary-made-concrete), [§5.11](#511-where-the-burden-of-proof-sits) |
@@ -1251,13 +1113,13 @@ described in one paragraph is a cost this design declines to pay
 | D-UT16 | Criterion state moves only on an `item.verdict` naming the frozen criterion text's hash, and frozen criterion text cannot be rewritten through `item apply` (append only). Stored `item_criteria.claim_class` defaults to `verification-only` and can only harden. A mechanical verdict from a landed attempt retires only `verification-only`; an agent-issued verdict counts only from an independent actor that is the selected workflow's evaluator, for a stored class its `judge_classes` lists, never `owner-only`; a human alone judges `owner-only`. Verdict classes must match the stored class. The actor table and named refusals are in the governing section. (Designer's decision, 2026-11-12; the owner may overturn it.) | [§5.3](#53-item-alone) |
 | D-UT17 | A lane lease is set by `run exec` at claim for the run's `timeout_ms` plus a 300,000 ms grace, on the store host's clock; `timeout_ms: 0` is an unbounded run whose lease carries `leased_until = NULL` and which no clock reaps (`D-RW1` of [`run-wall-ruling.md`](./run-wall-ruling.md)); the terminal record releases it, `drain once` reaps an expired lease before planning, and `run release` is the standalone release face. A correction retry keeps the item's lane and worktree under a new lease. (Designer's decision, 2026-11-12; the owner may overturn it.) | [§5.5](#55-drain-alone), [§5.6](#56-run-alone); [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md#steering-continuation-and-session-modes) |
 | D-UT19 | A run names its item: `run.record` carries `item_id`, copied from the request and materialized on the `runs` row, so every run is traceable to the work it was dispatched for. (Owner ruling, 2026-11-12.) | [§5.6](#56-run-alone), [§5.5](#55-drain-alone) |
-| D-UT18 | A gated candidate whose trunk moved is carried: `land pass` re-applies it onto the current tip and lands a clean re-application with no second gate; a conflicting re-application isolates the candidate. (Owner ruling stands, recorded 2026-11-12.) | [§5.4](#54-land-alone), [§5.10](#510-landing-a-candidate-by-hand-without-the-drain); [`landing-principles.md`](landing-principles.md) [Section 3](landing-principles.md#3-gate-what-will-be-the-tip-once) |
+| D-UT18 | A gated candidate whose trunk moved is carried: `land pass` re-applies it onto the current tip and lands a clean re-application with no second gate; a conflicting re-application lands nothing and records `squash-conflict`. (Owner ruling, 2026-11-12.) | [§5.4](#54-land-alone), [§5.10](#510-landing-a-candidate-by-hand-without-the-drain); [`landing-principles.md`](landing-principles.md) [Section 3](landing-principles.md#3-gate-what-will-be-the-tip-once) |
 | OQ-UT1 | One shared SQLite database, partitioned by writer. Nothing yet pays for several, and the record contract does not foreclose them later. (Owner ruling, 2026-11-06.) | [§8](#8-the-shared-substrate) |
-| OQ-UT2 | The design fixes one landing implementation and one writer for candidate state. (Owner ruling, 2026-11-06.) | [§2](#2-the-seam-analysis) |
+| OQ-UT2 | The design fixes one landing implementation and one writer for landing state. (Owner ruling, 2026-11-06.) | [§2](#2-the-seam-analysis) |
 | OQ-UT3 | Gate selection is per module: one selection mechanism, built once. (Owner ruling, 2026-11-06.) | [§10](#10-landing-velocity-the-per-module-gate) |
 | OQ-UT4 | Seven separate binaries, versioned together as one release set, with a thin `tillr` wrapper as convenience control surface. The grounds are adoption: each utility can be relied on and taken individually. (Owner ruling, 2026-11-06.) | [§11](#11-seven-binaries-versioned-together), [§5.11](#511-where-the-burden-of-proof-sits) |
 | OQ-UT5 | The system name is `tillr`. (Owner ruling, 2026-11-06.) | [§6.4](#64-the-name-is-tillr), [§7](#7-where-the-name-appears) |
-| OQ-UT6 | Questions are not stored state. Open questions live in design documents, in Vantage's world; an item points at its design document and reads its open questions from there — one copy, so nothing drifts. Decisions and mail fold into `item`; there is no eighth utility to consider for questions. If reading questions from documents proves awkward, the follow-up is a Vantage feature request, with `vantage-check`'s linter the existing tool. (Owner ruling, 2026-11-06.) | [§4](#4-the-proposed-suite-seven-utilities), [§5.3](#53-item-alone) |
+| OQ-UT6 | Questions are not stored state. Open questions live in design documents, in Vantage's world; an item points at its design document and reads its open questions from there — one copy, so nothing drifts. Decisions and mail fold into `item`; there is no eighth utility to consider for questions. If reading questions from documents proves awkward, the follow-up is a change to Vantage. (Owner ruling, 2026-11-06.) | [§4](#4-the-proposed-suite-seven-utilities), [§5.3](#53-item-alone) |
 | OQ-UT7 | The per-module budgets stand as the acceptance bar. (Owner ruling, 2026-11-06.) | [§9](#9-testability-and-testing-speed), [§10](#10-landing-velocity-the-per-module-gate) |
 | OQ-UT8 | Hybrid, without ceremony: the canonical form is `tillr <noun>` and the bare noun is correct in context. Utility nouns are independent identities; a later standalone name is a publishing decision made then, not a ladder specified now. (Owner ruling, 2026-11-06.) | [§6.3](#63-the-model-hybrid-without-ceremony) |
 | OQ-UT9 | The record and table shapes are designed for the boundary. (Owner ruling, 2026-11-06.) | [§5.1](#51-the-common-contract), [§8](#8-the-shared-substrate) |

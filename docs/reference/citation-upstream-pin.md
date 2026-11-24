@@ -3,7 +3,7 @@ title: Commit citations and upstream pins
 status: accepted
 stage: CURRENT
 verified: 2026-11-24
-verified_commit: ed085c74c4e77df9d79e66d0009b7a609445fe71
+verified_commit: d7bac6da6be33aeadfbd36b30c504a61d65fe9be
 covers:
   - tools/gate/checks/change_common.py
   - tools/gate/checks/citations.py
@@ -15,7 +15,7 @@ tags: [gate, citations, upstream, reference]
 # Commit citations and upstream pins
 
 **Status:** Source-verified 2026-11-24 against
-`ed085c74c4e77df9d79e66d0009b7a609445fe71`.
+`d7bac6da6be33aeadfbd36b30c504a61d65fe9be`.
 
 A document citing a repository commit as evidence must name history the reader
 can reach from the checked head. An upstream pin instead identifies a dependency's

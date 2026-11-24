@@ -4,21 +4,21 @@ status: in-review
 stage: DESIGN
 updated: 2026-11-21
 tags: [tillr, contract, run]
-summary: "What tillr-run provides and expects, read from the code at dab5a2da0e. It has two parts: the Go program and `run` package, which give the drain the run record, lanes, run states and end causes; and the adapter scripts, which give the Go part the report, the pause kind and the ending capability. The drain writes three of its four tables, and the report footer has three parsers with three grammars."
+summary: "What tillr-run provides and expects, read from the code. It has two parts: the Go program and `run` package, which give the drain the run record, lanes, run states and end causes; and the adapter scripts, which give the Go part the report, the pause kind and the ending capability. The drain writes three of its four tables, and the report footer has three parsers with three grammars."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-run
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** The surface in sections 1 and 2 describes the code as it is. The contract examples, name-set files and builders of section 4 are not built: `fd -t d '^contract$' tools` finds nothing. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
 **What it is.** The runner starts one agent in a lane and records what it did. It lives at `tools/tillr-run` and has two **parts**, each with its own tests in its own language:
 
 - **The Go part**: the program `tillr-run` and the package `run`.
 - **The adapters**: the scripts under `backends/`, one directory per agent harness, and the shared `report.py`. An **adapter** is the script that starts one harness and turns its output into the one report shape.
 
-The Go part runs the adapters and reads the files they write, so the adapters are a provider to it. This pair has broken twice ([the overview's failures](../tillr-utility-contracts.md#3-the-failures-this-answers)).
+The Go part runs the adapters and reads the files they write, so the adapters are a provider to it.
 
 ## 1. What it provides
 
@@ -130,7 +130,7 @@ It imports no other utility's package and runs no other tillr program.
 - `exec`, `status`, `release` and `lanes` with the flags and exits above; `run.record`'s fields; `run.request`'s fields.
 - The seven name sets of [§1.6](#16-names-others-match-on).
 - The 48 package names, and three to add so that the drain stops writing run tables: a claim for a read-only group, a settle for a read-only run, and a quota-pause write.
-- `runs` and `lanes` for the columns read today. `read_only_runs` and `quota_pauses` become private once those three functions exist.
+- `runs` and `lanes` for the columns other utilities read. `read_only_runs` and `quota_pauses` become private once those three functions exist.
 - `run.finish`, `run.allocate`, `run.resume` and `run.progress` with the fields listed.
 - The whole of [§1.7](#17-the-adapters-surface), as names: the header keys, the four footer words, the obstacle kinds and fields, the two sets of exit codes.
 - The lane and scratch file names of [§1.5](#15-files-and-environment), and the environment names.
@@ -146,13 +146,13 @@ It imports no other utility's package and runs no other tillr program.
 
 Each part pins its own side, in its own fast suite.
 
-- **Exists today.** `TestTheRunUtilityRegistersItsOwnContract`, `TestExecAnswersTheRunsExitCodeAndStillRecordsIt`, `TestExecKeepsTheReservedCodesForTheFacesOwnFailures`, `TestStatusReportsAMissingRunAsANegativeDecision`, `TestTerminalEndCauses`, `TestShippedEndingCapabilities`, `TestExecRequestEnvironment`.
-- **The adapters' examples.** The adapter part's Python suite renders one report per situation: each footer word, no footer, a harness that ended the run, a refused quota window, a commit offer, an obstacle offer. It writes each as a file with the extractor's exit code beside it. These are contract examples: the Python suite fails if `report.py` no longer produces them.
-- **The Go part reads them.** `run`'s tests read those files and no longer start Python to learn the shape. `TestFinalReportFromCommitOffer` compares the two header values and the footer word, by name, against the commit-offer example.
-- **One footer rule.** The footer words and the header keys are a name-set file in the adapter part. `report.py`, `run/settled.go` and the drain each compare against it; the drain's loose reading (the last `RESULT:` anywhere, bold allowed) either becomes the rule for all three or goes.
-- **Name sets.** One test per set of [§1.6](#16-names-others-match-on) compares the file with the constants.
-- **The record.** One `run.record` example per state and end cause, made by `exec` on the `command` backend, in process.
-- **Builders.** `run` publishes builders that make a lane, a run in each state, and a finished run with its events, through `Apply` and `ClaimLease`. The view, the item utility and `tillr-trace` use them in place of typed `INSERT` lines.
+- **Exists.** `TestTheRunUtilityRegistersItsOwnContract`, `TestExecAnswersTheRunsExitCodeAndStillRecordsIt`, `TestExecKeepsTheReservedCodesForTheFacesOwnFailures`, `TestStatusReportsAMissingRunAsANegativeDecision`, `TestTerminalEndCauses`, `TestShippedEndingCapabilities`, `TestExecRequestEnvironment`.
+- **The adapters' examples (to add).** The adapter part's Python suite renders one report per situation: each footer word, no footer, a harness that ended the run, a refused quota window, a commit offer, an obstacle offer. It writes each as a file with the extractor's exit code beside it. These are contract examples: the Python suite fails if `report.py` no longer produces them.
+- **The Go part reads them (to add).** `run`'s tests read those files and do not start Python to learn the shape. `TestFinalReportFromCommitOffer` compares the two header values and the footer word, by name, against the commit-offer example.
+- **One footer rule (to add).** The footer words and the header keys are a name-set file in the adapter part. `report.py`, `run/settled.go` and the drain each compare against it; the drain's loose reading (the last `RESULT:` anywhere, bold allowed) either becomes the rule for all three or goes.
+- **Name sets (to add).** One test per set of [§1.6](#16-names-others-match-on) compares the file with the constants.
+- **The record (to add).** One `run.record` example per state and end cause, made by `exec` on the `command` backend, in process.
+- **Builders (to add).** `run` publishes builders that make a lane, a run in each state, and a finished run with its events, through `Apply` and `ClaimLease`. The view, the item utility and `tillr-trace` use them in place of typed `INSERT` lines.
 
 ## 5. Reach-ins to fix
 
