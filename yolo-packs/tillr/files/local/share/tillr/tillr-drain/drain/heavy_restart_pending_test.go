@@ -828,3 +828,337 @@ PY
 		t.Fatalf("restart answer = %+v, want %q", ans, restart.AnswerRestarted)
 	}
 }
+
+// Reproduces the 2026-11-24 12:15 collision: a drain restart is pending and a
+// post-landing roll or push action is busy when a trunk proof ends green, with
+// a newer unproved tip on trunk. The runner must wait for the busy action to
+// finish and take the restart instead of starting the next tip's proof.
+func TestPendingRestartWaitsForBusyPostLandingActionBeforeNextProof(t *testing.T) {
+	cases := []struct {
+		name   string
+		action func(*Loop) *landingAction
+	}{
+		{name: "roll", action: func(l *Loop) *landingAction { return &l.rollAction }},
+		{name: "push", action: func(l *Loop) *landingAction { return &l.pushAction }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHarness(t, []byte("next build"), func(context.Context, string) error { return nil }, "item-a")
+			h.l.gatePolicy.LandingStrategy = "after-merge"
+			h.l.gatePolicy.LaneBase = "green"
+
+			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+			defer cancel()
+
+			remote := filepath.Join(t.TempDir(), "upstream.git")
+			runGit(t, h.f.root, "init", "--bare", remote)
+			runGit(t, h.f.root, "remote", "add", "origin", remote)
+			runGit(t, h.f.root, "push", "-u", "origin", TrunkRef)
+			h.l.cfg.PostLanding.Push.What = settings.PushGreen
+
+			base := heavyGit(t, h.f.root, "rev-parse", TrunkRef)
+			heavyGit(t, h.f.root, "update-ref", GreenRef, base)
+			tip1 := heavyCommit(t, h.f.root, "tip-1")
+
+			greenReported := make(chan struct{})
+			landingsReported := make(chan struct{})
+			var greenOnce, landingsOnce sync.Once
+			origOut := h.l.cfg.Report
+			h.l.cfg.Report = writerFunc(func(p []byte) (int, error) {
+				s := string(p)
+				if strings.Contains(s, "loop: heavy run green at "+shortSHA(tip1)) {
+					greenOnce.Do(func() { close(greenReported) })
+				}
+				if strings.Contains(s, "loop: heavy "+shortSHA(tip1)+" landings per heavy run=") {
+					landingsOnce.Do(func() { close(landingsReported) })
+				}
+				if origOut != nil {
+					return origOut.Write(p)
+				}
+				return len(p), nil
+			})
+
+			var (
+				provedMu   sync.Mutex
+				provedTips []string
+			)
+			enteredProof1 := make(chan string, 1)
+			enteredProof2 := make(chan string, 1)
+			releaseProof1 := make(chan struct{})
+			proof1Released := false
+			defer func() {
+				if !proof1Released {
+					close(releaseProof1)
+					h.l.heavyWG.Wait()
+				}
+			}()
+
+			steps := &gateCountingHeavySteps{
+				judge: func(jctx context.Context, dir, only string) ([]HeavyCheck, error) {
+					sha := heavyGit(t, dir, "rev-parse", "HEAD")
+					provedMu.Lock()
+					provedTips = append(provedTips, sha)
+					n := len(provedTips)
+					provedMu.Unlock()
+					if n == 1 {
+						enteredProof1 <- sha
+						select {
+						case <-releaseProof1:
+						case <-jctx.Done():
+							return nil, jctx.Err()
+						}
+					} else if n == 2 {
+						select {
+						case enteredProof2 <- sha:
+						default:
+						}
+					}
+					return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
+				},
+			}
+			h.l.cfg.Steps = steps
+
+			if err := h.l.startHeavy(ctx, tip1); err != nil {
+				t.Fatalf("startHeavy(tip1): %v", err)
+			}
+			select {
+			case got := <-enteredProof1:
+				if got != tip1 {
+					t.Fatalf("first proof started on %s, want %s", shortSHA(got), shortSHA(tip1))
+				}
+			case <-time.After(hangGuard):
+				t.Fatal("first trunk proof did not start")
+			}
+
+			// File a pending drain restart while proof 1 is active.
+			req := h.request(t, 1)[0]
+
+			// Advance trunk to a newer unproved tip while proof 1 is still running.
+			tip2 := heavyCommit(t, h.f.root, "tip-2")
+
+			// Hold the post-landing action busy across the instant proof 1 ends green.
+			action := tc.action(h.l)
+			actionStarted := make(chan struct{})
+			var actionStartedOnce sync.Once
+			releaseAction := make(chan struct{})
+			actionReleased := false
+			defer func() {
+				if !actionReleased {
+					close(releaseAction)
+					waitAction(t, action)
+				}
+			}()
+			action.submit(tip2, func(string) {
+				actionStartedOnce.Do(func() { close(actionStarted) })
+				<-releaseAction
+			})
+			select {
+			case <-actionStarted:
+			case <-time.After(hangGuard):
+				t.Fatalf("busy %s action did not start", tc.name)
+			}
+
+			// End proof 1 green while the post-landing action is still busy.
+			close(releaseProof1)
+			proof1Released = true
+			select {
+			case <-greenReported:
+			case <-time.After(hangGuard):
+				t.Fatal("proof 1 green report was not reached")
+			}
+
+			heavyDone := make(chan struct{})
+			go func() {
+				h.l.heavyWG.Wait()
+				close(heavyDone)
+			}()
+
+			// While the post-landing action is still busy, the runner must wait on it
+			// rather than advancing past the green report or starting proof 2 on tip2.
+			select {
+			case got := <-enteredProof2:
+				close(releaseAction)
+				actionReleased = true
+				waitAction(t, action)
+				<-heavyDone
+				t.Fatalf("next proof started on %s while %s action was busy and restart was pending", shortSHA(got), tc.name)
+			case <-landingsReported:
+				// Report did not wait for the busy action; wait briefly for tip2 to confirm the collision.
+				select {
+				case got := <-enteredProof2:
+					close(releaseAction)
+					actionReleased = true
+					waitAction(t, action)
+					<-heavyDone
+					t.Fatalf("next proof started on %s while %s action was busy and restart was pending", shortSHA(got), tc.name)
+				case <-time.After(5 * time.Second):
+					close(releaseAction)
+					actionReleased = true
+					waitAction(t, action)
+					<-heavyDone
+					t.Fatalf("green report did not wait for busy %s action while restart was pending", tc.name)
+				}
+			case <-time.After(200 * time.Millisecond):
+			}
+
+			// Finish the busy post-landing action; the runner should now stop before tip2.
+			close(releaseAction)
+			actionReleased = true
+			waitAction(t, action)
+			select {
+			case <-heavyDone:
+			case <-time.After(hangGuard):
+				t.Fatal("heavy runner did not exit after busy action finished")
+			}
+
+			if got := heavyGit(t, h.f.root, "rev-parse", GreenRef); got != tip1 {
+				t.Fatalf("refs/tillr/green = %s, want %s (tip2 %s must not be proved before restart)", shortSHA(got), shortSHA(tip1), shortSHA(tip2))
+			}
+
+			provedMu.Lock()
+			gotProved := append([]string(nil), provedTips...)
+			provedMu.Unlock()
+			if len(gotProved) != 1 || gotProved[0] != tip1 {
+				t.Fatalf("proved tips before restart = %v, want only [%s]", gotProved, shortSHA(tip1))
+			}
+
+			// The next pass must take the pending restart.
+			stop, err := h.l.pass(ctx, &LoopResult{})
+			if err != nil {
+				t.Fatalf("pass after proof 1 and %s action ended: %v", tc.name, err)
+			}
+			if stop != StopRestarted {
+				t.Fatalf("pass stop = %q, want %q", stop, StopRestarted)
+			}
+			if len(h.execed) == 0 {
+				t.Fatal("replacement did not exec")
+			}
+
+			t.Setenv(restart.RequestEnv, req.ID)
+			t.Setenv(restart.FromEnv, "old-build")
+			if err := h.l.adoptRestart(ctx); err != nil {
+				t.Fatalf("adoptRestart: %v", err)
+			}
+			if ans := h.answer(t, req.ID); ans.Answer != restart.AnswerRestarted {
+				t.Fatalf("restart answer = %+v, want %q", ans, restart.AnswerRestarted)
+			}
+		})
+	}
+}
+
+// With no restart pending, a busy post-landing roll or push action does not delay
+// starting the next tip's proof when the current proof ends green.
+func TestNoPendingRestartStartsNextProofWhilePostLandingActionBusy(t *testing.T) {
+	cases := []struct {
+		name   string
+		action func(*Loop) *landingAction
+	}{
+		{name: "roll", action: func(l *Loop) *landingAction { return &l.rollAction }},
+		{name: "push", action: func(l *Loop) *landingAction { return &l.pushAction }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHarness(t, []byte("next build"), func(context.Context, string) error { return nil }, "item-a")
+			h.l.gatePolicy.LandingStrategy = "after-merge"
+			h.l.gatePolicy.LaneBase = "green"
+
+			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+			defer cancel()
+
+			base := heavyGit(t, h.f.root, "rev-parse", TrunkRef)
+			heavyGit(t, h.f.root, "update-ref", GreenRef, base)
+			tip1 := heavyCommit(t, h.f.root, "tip-1")
+
+			var (
+				provedMu   sync.Mutex
+				provedTips []string
+			)
+			enteredProof1 := make(chan string, 1)
+			releaseProof1 := make(chan struct{})
+			proof1Released := false
+			defer func() {
+				if !proof1Released {
+					close(releaseProof1)
+					h.l.heavyWG.Wait()
+				}
+			}()
+
+			steps := &gateCountingHeavySteps{
+				judge: func(jctx context.Context, dir, only string) ([]HeavyCheck, error) {
+					sha := heavyGit(t, dir, "rev-parse", "HEAD")
+					provedMu.Lock()
+					provedTips = append(provedTips, sha)
+					n := len(provedTips)
+					provedMu.Unlock()
+					if n == 1 {
+						enteredProof1 <- sha
+						select {
+						case <-releaseProof1:
+						case <-jctx.Done():
+							return nil, jctx.Err()
+						}
+					}
+					return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
+				},
+			}
+			h.l.cfg.Steps = steps
+
+			if err := h.l.startHeavy(ctx, tip1); err != nil {
+				t.Fatalf("startHeavy(tip1): %v", err)
+			}
+			select {
+			case got := <-enteredProof1:
+				if got != tip1 {
+					t.Fatalf("first proof started on %s, want %s", shortSHA(got), shortSHA(tip1))
+				}
+			case <-time.After(hangGuard):
+				t.Fatal("first trunk proof did not start")
+			}
+
+			// Advance trunk to tip2 and hold the post-landing action busy with NO restart pending.
+			tip2 := heavyCommit(t, h.f.root, "tip-2")
+			action := tc.action(h.l)
+			actionStarted := make(chan struct{})
+			releaseAction := make(chan struct{})
+			defer func() {
+				close(releaseAction)
+				waitAction(t, action)
+			}()
+			action.submit(tip2, func(string) {
+				close(actionStarted)
+				<-releaseAction
+			})
+			select {
+			case <-actionStarted:
+			case <-time.After(hangGuard):
+				t.Fatalf("busy %s action did not start", tc.name)
+			}
+
+			// End proof 1 green. Proof 2 on tip2 must start and complete without waiting
+			// for the busy post-landing action.
+			close(releaseProof1)
+			proof1Released = true
+
+			heavyDone := make(chan struct{})
+			go func() {
+				h.l.heavyWG.Wait()
+				close(heavyDone)
+			}()
+			select {
+			case <-heavyDone:
+			case <-time.After(hangGuard):
+				t.Fatalf("next proof blocked on busy %s action with no restart pending", tc.name)
+			}
+
+			if got := heavyGit(t, h.f.root, "rev-parse", GreenRef); got != tip2 {
+				t.Fatalf("refs/tillr/green = %s, want %s", shortSHA(got), shortSHA(tip2))
+			}
+			provedMu.Lock()
+			gotProved := append([]string(nil), provedTips...)
+			provedMu.Unlock()
+			if len(gotProved) != 2 || gotProved[0] != tip1 || gotProved[1] != tip2 {
+				t.Fatalf("proved tips = %v, want [%s %s]", gotProved, shortSHA(tip1), shortSHA(tip2))
+			}
+		})
+	}
+}
