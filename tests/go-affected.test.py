@@ -3143,6 +3143,88 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
         )
 
 
+def test_max_shards_scales_with_cpu_count() -> None:
+    """MAX_SHARDS is 2 * os.cpu_count() (12 when undetermined) and shard sizing scales past 12 up to MAX_SHARDS."""
+    go_affected_path = ROOT / "tools" / "gate" / "go_affected.py"
+    host_cpus = os.cpu_count()
+    expected_host = 2 * host_cpus if host_cpus and host_cpus > 0 else 12
+    assert go_affected.MAX_SHARDS == expected_host, (go_affected.MAX_SHARDS, host_cpus)
+
+    loaded_by_cpus: dict[int, object] = {}
+    for cpus in (1, 4, 8, 16, 32):
+        with patch.object(os, "cpu_count", return_value=cpus):
+            mod = load_module(f"go_affected_cpus_{cpus}", go_affected_path)
+        assert mod.MAX_SHARDS == 2 * cpus, (cpus, mod.MAX_SHARDS)
+        loaded_by_cpus[cpus] = mod
+
+    for missing in (None, 0, -1):
+        with patch.object(os, "cpu_count", return_value=missing):
+            mod = load_module(f"go_affected_missing_{missing}", go_affected_path)
+        assert mod.MAX_SHARDS == 12, (missing, mod.MAX_SHARDS)
+
+    pkg = "example.com/tx/sharded"
+    with tempfile.TemporaryDirectory(prefix="go-affected-max-shards-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        pkg_dir = repo / "tools" / "tillr-x" / "sharded"
+        pkg_dir.mkdir(parents=True)
+        (repo / "tools" / "tillr-x" / "go.mod").write_text("module example.com/tx\n\ngo 1.22\n")
+        durable = tmp_path / "durable"
+        durable.mkdir()
+
+        def count_invocations(mod, total_tests: int, selected_tests: list[str] | None) -> int:
+            lines = ['package sharded\nimport "testing"']
+            lines.extend(f"func TestCase{i:04d}(t *testing.T) {{}}" for i in range(total_tests))
+            (pkg_dir / "sharded_test.go").write_text("\n".join(lines) + "\n")
+            seen_cmds: list[list[str]] = []
+            seen_lock = threading.Lock()
+
+            def fake_guarded(cmd, **_kwargs):
+                with seen_lock:
+                    seen_cmds.append(list(cmd))
+                return 0, json.dumps({"Action": "pass", "Package": pkg}) + "\n"
+
+            sel = {
+                "selection_ms": 1,
+                "modules": ["tools/tillr-x"],
+                "floor_modules": [],
+                "selected": [
+                    {
+                        "import_path": pkg,
+                        "module": "tools/tillr-x",
+                        "dir_rel": "tools/tillr-x/sharded",
+                        "test_files": ["sharded_test.go"],
+                        "reason": "edge" if selected_tests is not None else "changed",
+                        "selected_tests": selected_tests,
+                        "has_edge": False,
+                        "edge_digest": None,
+                    }
+                ],
+            }
+            with (
+                patch.dict(os.environ, {"YOLO_DURABLE_DIR": str(durable)}),
+                patch.object(mod, "_run_guarded_command", side_effect=fake_guarded),
+            ):
+                rc, out, _ev = mod.run_selected_tests(repo, sel, progress_stream=False)
+            assert rc == 0, out
+            return len(seen_cmds)
+
+        # Unnarrowed >= SHARD_THRESHOLD: 2,500 tests -> 2,500 // 125 = 20 uncapped shards.
+        # On 8 processors (MAX_SHARDS = 16), scales past 12 and caps at 16; on 16 processors
+        # (MAX_SHARDS = 32), runs all 20 shards and caps 5,000 tests (40 uncapped) at 32.
+        assert count_invocations(loaded_by_cpus[8], 2500, None) == 16
+        assert count_invocations(loaded_by_cpus[16], 2500, None) == 20
+        assert count_invocations(loaded_by_cpus[16], 5000, None) == 32
+
+        # Narrowed selected_tests: 20 reader tests * 25.0s = 500.0s -> 20 uncapped duration shards.
+        narrowed = [f"TestCase{i:04d}" for i in range(20)]
+        (repo / "tools" / "go-test-durations.json").write_text(
+            json.dumps({pkg: {name: 25.0 for name in narrowed}})
+        )
+        assert count_invocations(loaded_by_cpus[8], 30, narrowed) == 16
+        assert count_invocations(loaded_by_cpus[16], 30, narrowed) == 20
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", default=[], help="Run only named test case(s)")
@@ -3175,6 +3257,7 @@ def main(argv: list[str] | None = None) -> int:
         ("test_build_env_strips_outer_gate_vars", test_build_env_strips_outer_gate_vars),
         ("test_failure_refusal_names_packages_and_tests_far_above_tail", test_failure_refusal_names_packages_and_tests_far_above_tail),
         ("test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim", test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim),
+        ("test_max_shards_scales_with_cpu_count", test_max_shards_scales_with_cpu_count),
     ]
     if args.case:
         wanted = set(args.case)
