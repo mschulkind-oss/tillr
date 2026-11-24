@@ -8,22 +8,13 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SITES = {
     "tools/gate/tree-check.py": ("main",),
-    "tools/gate/change-gate.py": ("main", "warm_trimmed_go_cache", "preserve_fast_timing"),
+    "tools/gate/change-gate.py": ("main", "warm_trimmed_go_cache"),
     "tools/gate/checks/change_common.py": ("stored_result", "judge_document_set"),
     "tools/gate/checks/go-build.py": ("main",),
-    "tools/fork-check.py": (
-        "classified_skip",
-        "settle_check_skips",
-        "check_status",
-        "verdict_of",
-        "write_gate_spans",
-        "run_replay",
-    ),
 }
 UNMOVED_PYTHON = ()
 GO_SITES = {
     "tools/tillr-gate/checks.go": ("checksFace",),
-    "tools/tillr-gate/dualrun.go": ("pythonVerdict", "verdictResult", "compare"),
     "tools/tillr-gate/gate.go": ("gateResult", "runGateProgram", "RunGate"),
     "tools/tillr-gate/main.go": ("runFace", "writeRunSummary"),
     "tools/tillr-gate/memory.go": ("read", "publish", "annotateMemory", "run"),

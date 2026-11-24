@@ -1,0 +1,25 @@
+{
+  "id": "tillr-roll",
+  "label": "the repository roll and keeper suites pass",
+  "command": [
+    "sh",
+    "-c",
+    "python3 tests/tillr-roll.test.py && python3 tests/tillr-keep.test.py"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 120000,
+  "reads": [
+    ".justfile",
+    ".tillr.toml",
+    "tests/tillr-keep.test.py",
+    "tests/tillr-roll.test.py",
+    "tools/gate/checks/tillr-roll.json",
+    "tools/tillr-roll/"
+  ],
+  "tools": [
+    "sh",
+    "python3",
+    "git"
+  ]
+}

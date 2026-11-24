@@ -1,6 +1,6 @@
 # tillr agent guide
 
-## Landing a lane: shared forks, verified candidates
+## Landing a lane: verified candidates
 
 Before changing landing, the gate, the queue or the repair path, check the change against
 [`docs/design/landing-principles.md`](./docs/design/landing-principles.md) — the library of durable
@@ -9,10 +9,7 @@ what is *not* enforced yet, so a proposal can be tested against what is settled 
 what is convenient. The rule the set keeps proving: a mechanism whose cost rises with trunk
 activity is pointed the wrong way.
 
-`.forks/` is one gitignored directory at the repo root, shared by every checkout and absent
-from a lane's worktree — and the gate reads it for objects and refs, so a fork-series lane must
-not run beside a landing lane whose `just done` replays `.forks/<name>`'s series. Two landing
-paths exist, and their verification rules are distinct rather than contradictory:
+Two landing paths exist, and their verification rules are distinct rather than contradictory:
 
 - **Automated squash lander ([`tools/tillr-land`](./tools/tillr-land/)):** `Land`
   ([`tools/tillr-land/land/landing.go`](./tools/tillr-land/land/landing.go)) checks that the
@@ -29,16 +26,14 @@ paths exist, and their verification rules are distinct rather than contradictory
   no `landings` row binding a verdict to the tree. That manual and agent cherry-pick path is what
   the `git patch-id --stable` and byte-identical-blob comparison governs: verify the candidate
   **before** the cherry-pick and then compare the landed artifact to that verified candidate by
-  `git patch-id --stable` or byte-identical blobs — never by asserting the two are equal. The
-  evidence is in `docs/pi/operating-lessons-2026-10-17.md`.
+  `git patch-id --stable` or byte-identical blobs — never by asserting the two are equal.
 - **Authorship follows the landing, not the lane:** a manual or agent cherry-pick (outside
   `tools/tillr-land`) is followed by the same author normalization — re-author the landed commit
   to the identity the repository's git config states, keeping the candidate's author date with
   `GIT_AUTHOR_DATE` — so no lane-branch identity reaches the trunk. READ that identity
   (`git config user.name`, `git config user.email`); never type one, for any reason. An
-  environment with no identity configured is a setup fault to fix, not an address to invent —
-  `matt@mschulkind.com` was typed into the 2026-10-28 hand landings that way, and reached 21
-  commits, fourteen of them published. The automated squash lander already does this:
+  environment with no identity configured is a setup fault to fix, not an address to invent.
+  The automated squash lander already does this:
   [`tools/tillr-land`](./tools/tillr-land/) (`Trunk.LandingIdentity` and `Trunk.Squash` in
   [`tools/tillr-land/land/trunk.go`](./tools/tillr-land/land/trunk.go)) reads `user.name` and
   `user.email` from non-lane-writable config scopes, refuses to land without them or when a
@@ -65,8 +60,8 @@ repo beside the doc if it must be kept. These are the two spellings:
 $YOLO_DURABLE_DIR/...      .yolo/durable/...
 ```
 
-`just done` fails a tracked Markdown file that cites one in prose or inline code
-([`tools/fork-check.py`](./tools/fork-check.py)); a command in a fenced block is a
+`just done` fails a tracked Markdown file that cites one in prose or inline code (the
+[`scratch` check](./tools/gate/checks/scratch.json)); a command in a fenced block is a
 specimen, not a citation, and is not read. A documented *location* — a tool's
 intended output directory, a configured `PI_SUBAGENTS_WORKTREE_DIR` value — is the
 one exception, each named in the gate's allowlist with the reason it stays.
@@ -82,9 +77,8 @@ it. The tree's pre-existing citations are a measured backlog, so the guard judge
 lines only.
 
 **A citation into the tree is an anchor or a quoted line, never a bare line number.**
-A number rots the moment anything above it moves — on 2026-10-17 one relocation made 68
-citations stale across six documents, and commit `cf485b95` swept them onto heading and
-question anchors. Keep a number only as a *historical anchor*, with the commit it was read
+A number rots the moment anything above it moves: one relocation can make every citation
+below it stale. Keep a number only as a *historical anchor*, with the commit it was read
 at named beside it (`Line numbers read at 2f0ec38f`), because renumbering the past
 falsifies the record. A **negative claim carries its command and its scope**: `rg 'x'
 <where>` returning nothing is evidence; "x is not in the tree" is not.
@@ -92,9 +86,7 @@ falsifies the record. A **negative claim carries its command and its scope**: `r
 **Name the file; a directory check skips what is hidden.** `uvx vantage-check <dir>` skips
 every entry whose name starts with `.` as it walks (`src/core/discover.ts`, `walk()`), so a
 green there says nothing about a document under a hidden subdirectory — name the file, and
-keep a positive control at the real repo-relative path. The failures behind all three rules
-are recorded in
-`docs/pi/operating-lessons-2026-10-17.md`.
+keep a positive control at the real repo-relative path.
 
 **A letter-suffixed section is referenced by a labelled link, never a section sign.** Measured on
 `vantage-check` 0.10.0 against a document holding both `## 4.` and `## 4a.`: a section sign before

@@ -177,9 +177,14 @@ class RollTest(unittest.TestCase):
             self.assertEqual(sharded[0][3:7], ('-k', '6', '--timeout', '0'))
 
     def test_sharded_modules_match_the_gate(self):
-        text = (ROOT / 'tools/fork-check.py').read_text()
-        body = text.split('GO_SHARD_DIRS = (', 1)[1].split(')', 1)[0]
-        self.assertEqual(tuple(re.findall(r'"([^"]+)"', body)), roll.SHARDED)
+        # The gate's declared Go suites say which modules run through the shard runner.
+        sharded = set()
+        for path in (ROOT / 'tools/gate/checks').glob('go-test-*.json'):
+            command = ' '.join(json.loads(path.read_text())['command'])
+            module = re.search(r'go-test-shards\.py (tools/[\w-]+) -k', command)
+            if module:
+                sharded.add(module.group(1))
+        self.assertEqual(sharded, set(roll.SHARDED))
 
     def test_requests_during_a_roll_yield_one_further_roll_of_the_newest_tip(self):
         with tempfile.TemporaryDirectory() as work:

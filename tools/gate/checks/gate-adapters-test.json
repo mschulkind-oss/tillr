@@ -1,0 +1,24 @@
+{
+  "id": "gate-adapters-test",
+  "label": "the gate adapters classify, order and hand off as declared",
+  "command": [
+    "sh",
+    "-c",
+    "python3 tools/gate/change-gate.test.py && python3 tools/gate/classification-scan.test.py && python3 tools/gate/done.test.py"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 900000,
+  "reads": [
+    "tools/gate/",
+    "tools/gate/checks/gate-adapters-test.json",
+    "tools/tillr-gate/",
+    "tools/tillr/"
+  ],
+  "tools": [
+    "sh",
+    "python3",
+    "go",
+    "git"
+  ]
+}

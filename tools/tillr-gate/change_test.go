@@ -64,7 +64,7 @@ func changePaths(t *testing.T, root, base, head string) []string {
 // function of the commit range, and a case that asserted them into the payload would pin a
 // shape `plan` does not read.
 func TestTheChangeFaceDerivesTheCandidatesRecord(t *testing.T) {
-	root, base := dualRunRepo(t)
+	root, base := fixtureRepo(t)
 	head := changeRepoGit(t, root, "rev-parse", "HEAD")
 	out := filepath.Join(scratch(t, "change-face"), "gate.change.json")
 	code, raw := run(t, "change",
@@ -131,7 +131,7 @@ func TestTheChangeFaceDerivesTheCandidatesRecord(t *testing.T) {
 // The last block is the control: the same argv with the head that does exist writes the
 // file, so the two refusals are the revisions rather than the invocation.
 func TestTheChangeFaceRefusesARequestItCannotDerive(t *testing.T) {
-	root, base := dualRunRepo(t)
+	root, base := fixtureRepo(t)
 	head := changeRepoGit(t, root, "rev-parse", "HEAD")
 	dir := scratch(t, "change-refusals")
 
@@ -191,11 +191,11 @@ func TestTheLoopWritesTheChangeRecordTheFaceWrites(t *testing.T) {
 	if _, err := os.Stat(loopAdapter); err != nil {
 		t.Skipf("the loop's adapter is not beside this package: %v", err)
 	}
-	root, base := dualRunRepo(t)
+	root, base := fixtureRepo(t)
 	head := changeRepoGit(t, root, "rev-parse", "HEAD")
 	now := "2026-11-13T00:00:00Z"
 	work := scratch(t, "loop-change-work")
-	registry := dualRunRegistry(t, nil, nil)
+	registry := builtRegistry(t, nil, nil)
 
 	cmd := exec.Command(python, loopAdapter, "gate",
 		"--item", "item-1", "--lane", "lane-1", "--run", "run-1",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for tools/gate/go_affected.py, go-test-edges.json, and fork-check integration."""
+"""Tests for tools/gate/go_affected.py, go-test-edges.json, and the go-affected check declaration."""
 from __future__ import annotations
 
 import argparse
@@ -37,7 +37,44 @@ def load_module(name: str, path: Path):
 
 
 go_affected = load_module("go_affected", ROOT / "tools" / "gate" / "go_affected.py")
-fork_check = load_module("fork_check", ROOT / "tools" / "fork-check.py")
+
+# How many trailing output lines a failure report keeps when it shows only the end of a
+# check's log.
+EXCERPT_LINES = 60
+
+GO_FAIL_LINE = re.compile(r"^\s*--- FAIL: (?P<name>\S+) \(")
+GO_LOCATION_LINE = re.compile(r"^\s+(?P<file>[\w./-]+_test\.go):(?P<line>\d+): ")
+GO_PACKAGE_FAIL_LINE = re.compile(r"^FAIL\t(?P<package>\S+)")
+
+
+def go_failure_cases(output: str) -> list[dict]:
+    """Return the failing Go tests a readable `go test` log names, in the order it names them.
+
+    Each case carries the test's name, the first `_test.go` file and line reported for it,
+    and the package whose `FAIL` line closes the block the test appears in.
+    """
+    cases: list[dict] = []
+    open_cases: list[dict] = []
+    current: dict | None = None
+    for line in output.splitlines():
+        failed = GO_FAIL_LINE.match(line)
+        if failed:
+            current = {"name": failed.group("name"), "file": "", "line": 0, "package": ""}
+            cases.append(current)
+            open_cases.append(current)
+            continue
+        located = GO_LOCATION_LINE.match(line)
+        if located and current is not None and not current["file"]:
+            current["file"] = located.group("file")
+            current["line"] = int(located.group("line"))
+            continue
+        closed = GO_PACKAGE_FAIL_LINE.match(line)
+        if closed:
+            for case in open_cases:
+                case["package"] = closed.group("package")
+            open_cases = []
+            current = None
+    return cases
 
 
 def scratch_root() -> Path:
@@ -231,7 +268,6 @@ def test_selection_rules(root_graph: dict) -> None:
             "github.com/mschulkind-oss/tillr-drain",
             "github.com/mschulkind-oss/tillr-drain/drain",
         }),
-        ("bin/pi-forks", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("tools/gate/change-gate.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("tools/gate/classify.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("tools/tillr-loop/drain-argv.json", {"github.com/mschulkind-oss/tillr-drain/drain"}),
@@ -244,8 +280,8 @@ def test_selection_rules(root_graph: dict) -> None:
             "github.com/mschulkind-oss/tillr-drain/drain",
             "github.com/mschulkind-oss/tillr-watch",
         }),
-        ("tests/pi-patch-series.test.sh", {"github.com/mschulkind-oss/tillr-gate"}),
-        ("yolo-packs/fork-pins/pin.json", {"github.com/mschulkind-oss/tillr-gate"}),
+        ("tools/gate/checks/go-build.py", {"github.com/mschulkind-oss/tillr-gate"}),
+        ("tools/pack-mirror-links.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
     ]:
         sel = go_affected.select_affected_packages(ROOT, [changed_path], graph=root_graph)
         pkgs = {item["import_path"] for item in sel["selected"]}
@@ -253,68 +289,78 @@ def test_selection_rules(root_graph: dict) -> None:
         for item in sel["selected"]:
             assert item["selected_tests"] is None, f"unscoped read {changed_path} narrowed {item}"
 
-    # 10. Scoped read_tests on tools/fork-check.py (alone or with tests/fork-check.test.py)
-    # selects only the reading packages and narrows each to its reader tests.
-    expected_fc_pkgs = {
-        "github.com/mschulkind-oss/tillr-drain/drain",
-        "github.com/mschulkind-oss/tillr-gate",
-    }
-    for fc_changed in (
-        ["tools/fork-check.py"],
-        ["tools/fork-check.py", "tests/fork-check.test.py"],
+    # 10. Scoped read_tests on one read path select only the reading packages and narrow
+    # each to its reader tests, whether the path changes alone or beside an unrelated file.
+    scoped_read = "tools/gate/change-gate.py"
+    drain_pkg = "github.com/mschulkind-oss/tillr-drain/drain"
+    gate_pkg = "github.com/mschulkind-oss/tillr-gate"
+    drain_readers = go_affected.scan_package_tests(ROOT, {
+        "import_path": drain_pkg, "module": "tools/tillr-drain", "dir_rel": "tools/tillr-drain/drain",
+    })[:13]
+    gate_readers = go_affected.scan_package_tests(ROOT, {
+        "import_path": gate_pkg, "module": "tools/tillr-gate", "dir_rel": "tools/tillr-gate",
+    })[:9]
+    drain_readers = [t for t in drain_readers if t != "TestEdgeInputs"]
+    gate_readers = [t for t in gate_readers if t != "TestEdgeInputs"]
+    assert drain_readers and gate_readers, (drain_readers, gate_readers)
+    scoped_edges = json.loads(json.dumps(go_affected.load_edges(ROOT)))
+    for ip in list(scoped_edges):
+        scoped_edges[ip]["reads"] = [r for r in scoped_edges[ip].get("reads", []) if r != scoped_read]
+    scoped_edges[drain_pkg]["reads"].append(scoped_read)
+    scoped_edges[drain_pkg]["read_tests"] = {scoped_read: drain_readers}
+    scoped_edges[gate_pkg]["reads"].append(scoped_read)
+    scoped_edges[gate_pkg]["read_tests"] = {scoped_read: gate_readers}
+    expected_scoped_pkgs = {drain_pkg, gate_pkg}
+    for scoped_changed in (
+        [scoped_read],
+        [scoped_read, "README.md"],
     ):
-        sel = go_affected.select_affected_packages(ROOT, fc_changed, graph=root_graph)
+        sel = go_affected.select_affected_packages(
+            ROOT, scoped_changed, edges=scoped_edges, graph=root_graph
+        )
         by_pkg = {item["import_path"]: item for item in sel["selected"]}
-        assert set(by_pkg) == expected_fc_pkgs, (fc_changed, set(by_pkg))
-        for ip in expected_fc_pkgs:
+        assert set(by_pkg) == expected_scoped_pkgs, (scoped_changed, set(by_pkg))
+        for ip in expected_scoped_pkgs:
             assert by_pkg[ip]["reason"] == "edge", by_pkg[ip]
-            assert isinstance(by_pkg[ip]["selected_tests"], list) and by_pkg[ip]["selected_tests"], by_pkg[ip]
             assert "TestEdgeInputs" not in by_pkg[ip]["selected_tests"], by_pkg[ip]
-        assert "TestTheComposedPipelineRunsEndToEndOnAFixture" in by_pkg[
-            "github.com/mschulkind-oss/tillr-drain/drain"
-        ]["selected_tests"], by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]
-        assert len(by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"]) == 13, (
-            by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]
-        )
-        assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, (
-            by_pkg["github.com/mschulkind-oss/tillr-gate"]
-        )
+        assert by_pkg[drain_pkg]["selected_tests"] == drain_readers, by_pkg[drain_pkg]
+        assert by_pkg[gate_pkg]["selected_tests"] == gate_readers, by_pkg[gate_pkg]
 
-    # 11. Pairing tools/fork-check.py with a Go package edit, a builds-edge edit, an unscoped
+    # 11. Pairing the scoped read path with a Go package edit, a builds-edge edit, an unscoped
     # reads edit, or a module floor trigger widens affected packages back to whole-package
     # execution (selected_tests=None) while unaffected reading packages stay narrowed.
     sel_go = go_affected.select_affected_packages(
-        ROOT, ["tools/fork-check.py", "tools/tillr-drain/drain/loop.go"], graph=root_graph
+        ROOT, [scoped_read, "tools/tillr-drain/drain/loop.go"], edges=scoped_edges, graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_go["selected"]}
-    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["reason"] == "changed", by_pkg
-    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"] is None, by_pkg
+    assert by_pkg[drain_pkg]["reason"] == "changed", by_pkg
+    assert by_pkg[drain_pkg]["selected_tests"] is None, by_pkg
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["reason"] == "import", by_pkg
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
-    assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, by_pkg
+    assert by_pkg[gate_pkg]["selected_tests"] == gate_readers, by_pkg
 
     sel_builds = go_affected.select_affected_packages(
-        ROOT, ["tools/fork-check.py", "tools/tillr-cli/main.go"], graph=root_graph
+        ROOT, [scoped_read, "tools/tillr-cli/main.go"], edges=scoped_edges, graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_builds["selected"]}
     assert "github.com/mschulkind-oss/tillr-drain" not in by_pkg, by_pkg
-    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"] is None, by_pkg
-    assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, by_pkg
+    assert by_pkg[drain_pkg]["selected_tests"] is None, by_pkg
+    assert by_pkg[gate_pkg]["selected_tests"] == gate_readers, by_pkg
 
     sel_unscoped = go_affected.select_affected_packages(
-        ROOT, ["tools/fork-check.py", "config/tillr/backend-policy.json"], graph=root_graph
+        ROOT, [scoped_read, "config/tillr/backend-policy.json"], edges=scoped_edges, graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_unscoped["selected"]}
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
-    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"] is None, by_pkg
-    assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, by_pkg
+    assert by_pkg[drain_pkg]["selected_tests"] is None, by_pkg
+    assert by_pkg[gate_pkg]["selected_tests"] == gate_readers, by_pkg
 
     sel_floor = go_affected.select_affected_packages(
-        ROOT, ["tools/fork-check.py", "tools/tillr-drain/go.mod"], graph=root_graph
+        ROOT, [scoped_read, "tools/tillr-drain/go.mod"], edges=scoped_edges, graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_floor["selected"]}
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
-    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"] is None, by_pkg
+    assert by_pkg[drain_pkg]["selected_tests"] is None, by_pkg
 
     # 12. Alert rule changes under config/tillr/watch/ (alone or with tools/tillr-watch/)
     # select tillr-watch and no tillr-drain package, while every config/tillr/ path read by
@@ -365,162 +411,6 @@ def test_selection_rules(root_graph: dict) -> None:
         sel_drain_cfg = go_affected.select_affected_packages(ROOT, [drain_read_path], graph=root_graph)
         pkgs = {item["import_path"] for item in sel_drain_cfg["selected"]}
         assert "github.com/mschulkind-oss/tillr-drain/drain" in pkgs, f"{drain_read_path}: {pkgs}"
-
-
-def _strip_go_comments(src: str) -> str:
-    out: list[str] = []
-    i, n = 0, len(src)
-    while i < n:
-        c = src[i]
-        if c == "/" and i + 1 < n and src[i + 1] == "/":
-            j = src.find("\n", i + 2)
-            if j < 0:
-                break
-            out.append("\n")
-            i = j + 1
-        elif c == "/" and i + 1 < n and src[i + 1] == "*":
-            j = src.find("*/", i + 2)
-            if j < 0:
-                break
-            out.append(" " * (j + 2 - i))
-            i = j + 2
-        elif c == "`":
-            j = src.find("`", i + 1)
-            if j < 0:
-                out.append(src[i:])
-                break
-            out.append(src[i:j + 1])
-            i = j + 1
-        elif c in ('"', "'"):
-            quote = c
-            j = i + 1
-            while j < n:
-                if src[j] == "\\":
-                    j += 2
-                    continue
-                if src[j] == quote:
-                    j += 1
-                    break
-                j += 1
-            out.append(src[i:j])
-            i = j
-        else:
-            out.append(c)
-            i += 1
-    return "".join(out)
-
-
-def _parse_go_funcs(src: str) -> dict[str, str]:
-    clean = _strip_go_comments(src)
-    funcs: dict[str, str] = {}
-    for m in re.finditer(r"^func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(", clean, re.MULTILINE):
-        name = m.group(1)
-        brace = clean.find("{", m.end())
-        if brace < 0:
-            continue
-        depth = 0
-        i = brace
-        n = len(clean)
-        while i < n:
-            c = clean[i]
-            if c == "`":
-                j = clean.find("`", i + 1)
-                i = n if j < 0 else j + 1
-                continue
-            if c in ('"', "'"):
-                q = c
-                i += 1
-                while i < n:
-                    if clean[i] == "\\":
-                        i += 2
-                        continue
-                    if clean[i] == q:
-                        i += 1
-                        break
-                    i += 1
-                continue
-            if c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    funcs[name] = funcs.get(name, "") + "\n" + clean[brace:i + 1]
-                    break
-            i += 1
-    return funcs
-
-
-def _scan_fork_check_reader_tests(root: Path, modules: list[str]) -> dict[str, list[str]]:
-    """Return {pkg_import: [Test* names]} for every Go test reading/executing checkout tools/fork-check.py."""
-    readers_by_pkg: dict[str, list[str]] = {}
-    for mod in modules:
-        mod_name = mod.split("/", 1)[1]
-        mod_root = root / mod
-        by_pkg: dict[str, list[Path]] = {}
-        for tf in sorted(mod_root.rglob("*_test.go")):
-            rel = tf.parent.relative_to(mod_root).as_posix()
-            pkg = (
-                f"github.com/mschulkind-oss/{mod_name}"
-                if rel == "."
-                else f"github.com/mschulkind-oss/{mod_name}/{rel}"
-            )
-            by_pkg.setdefault(pkg, []).append(tf)
-        for pkg, files in sorted(by_pkg.items()):
-            funcs: dict[str, str] = {}
-            top_tests: list[str] = []
-            for tf in files:
-                raw = tf.read_text(encoding="utf-8")
-                for tname in go_affected.TOP_LEVEL_TEST_RE.findall(raw):
-                    if tname not in top_tests:
-                        top_tests.append(tname)
-                for fname, fbody in _parse_go_funcs(raw).items():
-                    funcs[fname] = funcs.get(fname, "") + "\n" + fbody
-
-            direct: set[str] = set()
-            clones_repo: set[str] = set()
-            execs_fc: set[str] = set()
-            for fn, fb in funcs.items():
-                if "repoRoot(" in fb and '"clone"' in fb:
-                    clones_repo.add(fn)
-                if (
-                    '"tools/fork-check.py"' in fb
-                    and ("exec.Command" in fb or '"--gate-arg"' in fb)
-                    and "writeForkFile" not in fb
-                    and "os.WriteFile" not in fb
-                ):
-                    execs_fc.add(fn)
-                if "fork-check.py" not in fb:
-                    continue
-                if (
-                    re.search(r'repositoryFile\([^)]*"tools/fork-check\.py"', fb)
-                    or re.search(r'filepath\.Join\([^)]*"\.\."[^)]*"fork-check\.py"', fb)
-                    or (
-                        ("repositoryFile(" in fb or "repoRoot(" in fb)
-                        and "os.ReadFile(" in fb
-                        and '"tools/fork-check.py"' in fb
-                    )
-                    or re.search(r'(?:os\.ReadFile|exec\.Command)\([^;\n]*"\.\./[^"\n]*fork-check\.py"', fb)
-                ):
-                    direct.add(fn)
-
-            def callers_of(seed: set[str]) -> set[str]:
-                reach = set(seed)
-                progressed = True
-                while progressed:
-                    progressed = False
-                    for fn, fb in funcs.items():
-                        if fn in reach:
-                            continue
-                        if any(re.search(rf"\b{re.escape(cal)}\s*\(", fb) for cal in reach):
-                            reach.add(fn)
-                            progressed = True
-                return reach
-
-            readers = callers_of(direct) | (callers_of(clones_repo) & callers_of(execs_fc))
-            found = [t for t in top_tests if t in readers]
-            if found:
-                readers_by_pkg[pkg] = found
-    return readers_by_pkg
 
 
 def test_edges_file_honest_and_env_read() -> None:
@@ -618,31 +508,6 @@ def test_edges_file_honest_and_env_read() -> None:
             assert not missing_tests, (
                 f"{pkg_import}: read_tests[{rule!r}] names tests absent from package: {missing_tests}"
             )
-
-    # Every Go test across all tillr modules that reads or executes the checkout's
-    # tools/fork-check.py must be covered by reads and read_tests["tools/fork-check.py"].
-    actual_fc_readers = _scan_fork_check_reader_tests(ROOT, modules)
-    assert set(actual_fc_readers) == {
-        "github.com/mschulkind-oss/tillr-drain/drain",
-        "github.com/mschulkind-oss/tillr-gate",
-    }, actual_fc_readers
-    for pkg_import, actual_tests in actual_fc_readers.items():
-        assert pkg_import in edges, f"{pkg_import} missing from go-test-edges.json"
-        assert "tools/fork-check.py" in edges[pkg_import].get("reads", []), (
-            f"{pkg_import}: tools/fork-check.py missing from reads"
-        )
-        declared_rt = edges[pkg_import].get("read_tests", {}).get("tools/fork-check.py")
-        assert declared_rt is not None, (
-            f"{pkg_import}: tools/fork-check.py missing from read_tests"
-        )
-        missing_readers = set(actual_tests) - set(declared_rt)
-        extra_readers = set(declared_rt) - set(actual_tests)
-        assert not missing_readers, (
-            f"{pkg_import}: read_tests['tools/fork-check.py'] missing reader tests {sorted(missing_readers)}"
-        )
-        assert not extra_readers, (
-            f"{pkg_import}: read_tests['tools/fork-check.py'] lists non-reader tests {sorted(extra_readers)}"
-        )
 
     # load_edges refuses invalid read_tests declarations.
     with tempfile.TemporaryDirectory(prefix="go-affected-edges-val-", dir=scratch_root()) as tmp:
@@ -755,7 +620,7 @@ def test_edge_cache_invalidation() -> None:
         assert ev["packages"][0]["cached"] is False, ev
         written_ev = json.loads(ev_file.read_text(encoding="utf-8"))
         assert written_ev == ev, written_ev
-        cases = fork_check.failure_cases(out)
+        cases = go_failure_cases(out)
         assert any(
             c["name"] == "TestBuildsEdge"
             and c["file"] == "consumer_test.go"
@@ -775,7 +640,7 @@ def test_edge_cache_invalidation() -> None:
         rc, out, ev = run_once(["config/watch/rule.txt"])
         assert rc != 0, ev
         assert ev["packages"][0]["cached"] is False, ev
-        cases = fork_check.failure_cases(out)
+        cases = go_failure_cases(out)
         assert any(
             c["name"] == "TestReadsEdge"
             and c["file"] == "consumer_test.go"
@@ -814,205 +679,83 @@ def test_failed_module_floor_fallback() -> None:
         assert rc != 0, f"expected nonzero rc on broken module, got 0:\n{out}"
 
 
-def test_fork_check_integration(root_graph: dict) -> None:
-    assert "go-affected" in fork_check.CHECK_KIND_GROUP
-    assert fork_check.CHECK_TIER["go-affected"] == fork_check.TIER_LANDING
-    assert "go-affected" in fork_check.CHECK_COST_ESTIMATE
-    assert "go-affected-suite" in fork_check.CHECK_KIND_GROUP
-    assert fork_check.CHECK_TIER["go-affected-suite"] == fork_check.TIER_LANDING
+def test_check_declarations_cover_selection_inputs() -> None:
+    """The go-affected declaration runs go_affected.py over a change and reads every selection input."""
+    checks_dir = ROOT / "tools" / "gate" / "checks"
+    decl = json.loads((checks_dir / "go-affected.json").read_text(encoding="utf-8"))
+    assert decl["id"] == "go-affected", decl["id"]
+    assert decl["scope"] == "change", decl["scope"]
+    assert decl["tier"] == "heavy", decl["tier"]
+    assert {"python3", "go", "git"} <= set(decl["tools"]), decl["tools"]
+    command = decl["command"]
+    assert command[:2] == ["sh", "-c"], command
+    assert "python3 tools/gate/go_affected.py " in command[2], command
+    assert '--base "$1"' in command[2] and '--head "$2"' in command[2], command
+    assert "--drop-module" not in command[2], command
 
-    # Non-Go read edges for tillr-gate and tillr-drain/drain select those packages.
-    gate_sel = go_affected.select_affected_packages(ROOT, ["tools/fork-check.py"], graph=root_graph)
-    assert any(p["import_path"] == "github.com/mschulkind-oss/tillr-gate" for p in gate_sel["selected"]), gate_sel
-    checks_sel = go_affected.select_affected_packages(ROOT, ["tools/gate/checks/go-build.py"], graph=root_graph)
-    assert any(p["import_path"] == "github.com/mschulkind-oss/tillr-gate" for p in checks_sel["selected"]), checks_sel
-    mirror_sel = go_affected.select_affected_packages(ROOT, ["tools/pack-mirror-links.py"], graph=root_graph)
-    assert any(p["import_path"] == "github.com/mschulkind-oss/tillr-drain/drain" for p in mirror_sel["selected"]), mirror_sel
+    reads = decl["reads"]
+    assert reads == sorted(set(reads)), "go-affected.json reads must be sorted and unique"
+    for rule in reads:
+        if rule.endswith("/"):
+            assert (ROOT / rule.rstrip("/")).is_dir(), f"go-affected.json reads {rule!r} missing on disk"
+        else:
+            assert (ROOT / rule).is_file(), f"go-affected.json reads {rule!r} missing on disk"
 
-    with tempfile.TemporaryDirectory(prefix="fc-go-affected-", dir=scratch_root()) as tmp:
-        state = Path(tmp) / "state.json"
-        # build_plan(tier=None) keeps go-affected without --drop-module so replay/preflight/registry see it.
-        full = fork_check.build_plan(
-            ROOT, [], fork_check.Record(state), ["tools/tillr-drain/drain/loop.go"], None, True
+    def covered(path: str, rules: list[str]) -> bool:
+        return any(go_affected.path_matches_read(path, rule) for rule in rules)
+
+    # Everything selection consults: the selector, its edges file, the declaration itself,
+    # every tillr Go module, and every non-Go path a Go test package declares it reads.
+    edges = go_affected.load_edges(ROOT)
+    modules = go_affected.discover_tillr_modules(ROOT)
+    selection_inputs = [
+        "tools/gate/go_affected.py",
+        "tools/gate/go-test-edges.json",
+        "tools/gate/checks/go-affected.json",
+        *(f"{mod}/go.mod" for mod in modules),
+        *(f"{mod}/synthetic_trigger_test.go" for mod in modules),
+        *(rule for entry in edges.values() for rule in entry.get("reads", [])),
+    ]
+    for path in selection_inputs:
+        assert covered(path, reads), f"go-affected.json reads do not cover {path}"
+    for outside in (
+        "README.md",
+        "tools/dotmod/main_test.go",
+        "yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/gate_timing_test.go",
+    ):
+        assert not covered(outside, reads), f"go-affected.json reads cover {outside}"
+
+    # The suite's own declaration is a tree check that reads the selector, the edges file,
+    # this suite, and every tillr Go module the edges file describes.
+    suite_decl = json.loads((checks_dir / "go-affected-test.json").read_text(encoding="utf-8"))
+    assert suite_decl["scope"] == "tree" and suite_decl["tier"] == "heavy", suite_decl
+    assert suite_decl["command"] == ["python3", "tests/go-affected.test.py"], suite_decl["command"]
+    described_mods = [
+        mod for mod in modules
+        if any(
+            k == f"github.com/mschulkind-oss/{Path(mod).name}"
+            or k.startswith(f"github.com/mschulkind-oss/{Path(mod).name}/")
+            for k in edges
         )
-        assert any(c.kind == "go-affected" for c in full.checks), [c.kind for c in full.checks]
-        sub_full = fork_check.build_plan(
-            ROOT, [], fork_check.Record(state), ["tools/tillr/event/event.go"], None, True
-        )
-        ga_full = next(c for c in sub_full.checks if c.kind == "go-affected")
-        assert "--drop-module" not in ga_full.argv, ga_full.argv
+    ]
+    assert "tools/tillr-drain" in described_mods, described_mods
+    for path in (
+        "tools/gate/go_affected.py",
+        "tools/gate/go-test-edges.json",
+        "tests/go-affected.test.py",
+        "tools/tillr-drain/drain/gate_timing_test.go",
+        "tools/tillr-drain/workflow/workflow_test.go",
+        *(f"{mod}/synthetic_edge_trigger_test.go" for mod in described_mods),
+    ):
+        assert covered(path, suite_decl["reads"]), f"go-affected-test.json reads do not cover {path}"
+    for outside in ("README.md", "tools/dotmod/main_test.go", "tests/tillr-testmain_test.go"):
+        assert not covered(outside, suite_decl["reads"]), f"go-affected-test.json reads cover {outside}"
 
-        # Landing tier keeps go-affected.
-        landing = fork_check.build_plan(
-            ROOT, [], fork_check.Record(state), ["tools/tillr-drain/drain/loop.go"], None, True,
-            tier=fork_check.TIER_LANDING,
-        )
-        assert any(c.kind == "go-affected" for c in landing.checks), [c.kind for c in landing.checks]
-
-        # Rolling tier (trunk proof) drops go-affected and states plainly that it does not
-        # apply there without stamping a check_id into skipped_checks (which runHeavyLegacy
-        # turns into unavailable), while leaving fork patch-branch entries untouched.
-        trunk_changed = subprocess.check_output(
-            ["git", "ls-files"], cwd=ROOT, text=True
-        ).splitlines()
-        series = fork_check.read_series(ROOT)
-        for via_build_plan in (True, False):
-            rolling = fork_check.build_plan(
-                ROOT, series, fork_check.Record(state),
-                trunk_changed, "--all", True, audit_upstreams=False,
-                tier=fork_check.TIER_ROLLING if via_build_plan else None,
-            )
-            if not via_build_plan:
-                fork_check.apply_tier(rolling, fork_check.TIER_ROLLING)
-            assert not any(c.kind == "go-affected" for c in rolling.checks), [c.kind for c in rolling.checks]
-            rolling_spans_path = Path(tmp) / f"rolling-spans-{via_build_plan}.json"
-            fork_check.write_gate_spans(
-                str(rolling_spans_path), rolling, ROOT, 1, "PASS",
-                "0" * 40, "1" * 40, trunk_changed, 1, 1, 0.1,
-            )
-            rolling_spans = json.loads(rolling_spans_path.read_text(encoding="utf-8"))
-            heavy_unavailable = [
-                skip["check_id"] for skip in rolling_spans["skipped_checks"]
-                if not skip["owed"] and skip["check_id"]
-            ]
-            assert "go-affected/affected-tillr-go-test-packages-pass" not in heavy_unavailable, (
-                heavy_unavailable
-            )
-            assert any(cid.startswith("patch-branch-inv2/") for cid in heavy_unavailable), heavy_unavailable
-            assert any(cid.startswith("patch-branch-inv3/") for cid in heavy_unavailable), heavy_unavailable
-            go_affected_skips = [
-                skip for skip in rolling_spans["skipped_checks"]
-                if "go-affected" in skip["label"]
-            ]
-            assert len(go_affected_skips) == 1, rolling_spans["skipped_checks"]
-            assert go_affected_skips[0]["check_id"] == "", go_affected_skips[0]
-            assert go_affected_skips[0]["planned"] is False and go_affected_skips[0]["owed"] is False, (
-                go_affected_skips[0]
-            )
-            assert "does not apply" in go_affected_skips[0]["reason"], go_affected_skips[0]
-            assert "whole Go module suites" in go_affected_skips[0]["reason"], go_affected_skips[0]
-
-        # Even if `go` is absent on the host, the rolling tier still records go-affected as
-        # not applicable rather than unavailable.
-        orig_which = fork_check.shutil.which
-        try:
-            fork_check.shutil.which = lambda name: None if name == "go" else orig_which(name)
-            rolling_no_go = fork_check.build_plan(
-                ROOT, [], fork_check.Record(state), ["tools/tillr-drain/drain/loop.go"],
-                "--all", True, audit_upstreams=False, tier=fork_check.TIER_ROLLING,
-            )
-        finally:
-            fork_check.shutil.which = orig_which
-        assert not any(s.kind == "go-affected" for s in rolling_no_go.skips), [
-            (s.kind, s.label, s.planned) for s in rolling_no_go.skips
-        ]
-
-        # Landing tier plans go-affected without --drop-module when tools/tillr/* or tools/tillr-gate/* changes.
-        for changed_path in ("tools/tillr/event/event.go", "tools/tillr-gate/main.go"):
-            for via_build_plan in (True, False):
-                tiered_plan = fork_check.build_plan(
-                    ROOT, [], fork_check.Record(state), [changed_path], None, True,
-                    tier=fork_check.TIER_LANDING if via_build_plan else None,
-                )
-                if not via_build_plan:
-                    fork_check.apply_tier(tiered_plan, fork_check.TIER_LANDING)
-                ga = next(c for c in tiered_plan.checks if c.kind == "go-affected")
-                assert "--drop-module" not in ga.argv, (changed_path, via_build_plan, ga.argv)
-                assert not any(c.kind == "go-substrate" for c in tiered_plan.checks), tiered_plan.checks
-
-        # Changing go_affected.py, go-test-edges.json, tests/go-affected.test.py, or a _test.go file
-        # inside a tillr Go module described by go-test-edges.json plans go-affected-suite.
-        edges_keys = set(json.loads((ROOT / "tools" / "gate" / "go-test-edges.json").read_text(encoding="utf-8")))
-        all_tillr_mods = ["tools/tillr"] + [
-            f"tools/{p.parent.name}" for p in sorted((ROOT / "tools").glob("tillr-*/go.mod"))
-        ]
-        described_mods: list[str] = []
-        undescribed_mods: list[str] = []
-        for mod in all_tillr_mods:
-            mod_import = f"github.com/mschulkind-oss/{Path(mod).name}"
-            if any(k == mod_import or k.startswith(mod_import + "/") for k in edges_keys):
-                described_mods.append(mod)
-            else:
-                undescribed_mods.append(mod)
-        assert "tools/tillr-drain" in described_mods, described_mods
-
-        positive_triggers = [
-            "tools/gate/go_affected.py",
-            "tools/gate/go-test-edges.json",
-            "tests/go-affected.test.py",
-            "tools/tillr-drain/drain/gate_timing_test.go",
-            "tools/tillr-drain/workflow/workflow_test.go",
-            *(f"{mod}/synthetic_edge_trigger_test.go" for mod in described_mods),
-        ]
-        for trigger in positive_triggers:
-            for base_ref in (None, "HEAD"):
-                suite_plan = fork_check.build_plan(
-                    ROOT, [], fork_check.Record(state), [trigger], None, True,
-                    base=base_ref, tier=fork_check.TIER_LANDING,
-                )
-                suite_checks = [c for c in suite_plan.checks if c.kind == "go-affected-suite"]
-                assert len(suite_checks) == 1, (trigger, base_ref, [c.kind for c in suite_plan.checks])
-                assert fork_check.selection_paths(
-                    suite_checks[0], [trigger, "tools/tillr-drain/drain/loop.go"]
-                ) == [trigger], (trigger, base_ref, suite_checks[0])
-
-        negative_triggers = [
-            "tools/tillr-drain/drain/loop.go",
-            "tools/tillr-drain/go.mod",
-            "tools/dotmod/main_test.go",
-            "tests/tillr-testmain_test.go",
-            "yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/gate_timing_test.go",
-            "README.md",
-            *(f"{mod}/synthetic_non_edge_test.go" for mod in undescribed_mods),
-        ]
-        for non_trigger in negative_triggers:
-            for tier_val, base_ref in ((None, None), (fork_check.TIER_LANDING, None), (fork_check.TIER_LANDING, "HEAD")):
-                suite_plan = fork_check.build_plan(
-                    ROOT, [], fork_check.Record(state), [non_trigger], None, True,
-                    base=base_ref, tier=tier_val,
-                )
-                assert not any(c.kind == "go-affected-suite" for c in suite_plan.checks), (
-                    non_trigger, tier_val, base_ref, [c.kind for c in suite_plan.checks]
-                )
-                assert any(
-                    s.label.startswith("go-affected-suite") and not s.planned for s in suite_plan.skips
-                ), (non_trigger, tier_val, base_ref, suite_plan.skips)
-
-        # Controlled synthetic fixture: go-test-edges.json describes tillr-watch/sub (covering the
-        # whole tillr-watch module) and does not describe tillr-cli.
-        edge_fixture = Path(tmp) / "edge-suite-repo"
-        (edge_fixture / "tools" / "tillr-watch").mkdir(parents=True)
-        (edge_fixture / "tools" / "tillr-cli").mkdir(parents=True)
-        (edge_fixture / "tools" / "gate").mkdir(parents=True)
-        (edge_fixture / "tools" / "tillr-watch" / "go.mod").write_text(
-            "module github.com/mschulkind-oss/tillr-watch\n\ngo 1.22\n"
-        )
-        (edge_fixture / "tools" / "tillr-cli" / "go.mod").write_text(
-            "module github.com/mschulkind-oss/tillr-cli\n\ngo 1.22\n"
-        )
-        (edge_fixture / "tools" / "gate" / "go-test-edges.json").write_text(
-            json.dumps({"github.com/mschulkind-oss/tillr-watch/sub": {"reads": ["README.md"]}}) + "\n"
-        )
-        for path, should_plan in (
-            ("tools/tillr-watch/main_test.go", True),
-            ("tools/tillr-watch/other/pkg_test.go", True),
-            ("tools/tillr-watch/main.go", False),
-            ("tools/tillr-cli/main_test.go", False),
-        ):
-            fix_plan = fork_check.build_plan(
-                edge_fixture, [], fork_check.Record(state), [path], None, True,
-                base="HEAD", tier=fork_check.TIER_LANDING,
-            )
-            assert any(c.kind == "go-affected-suite" for c in fix_plan.checks) is should_plan, (
-                path, should_plan, [c.kind for c in fix_plan.checks]
-            )
-
-        # run_gate(--explain) with tier=None skips go-affected, whereas --tier landing plans it.
-        repo = Path(tmp) / "explain-repo"
+    # The declared command, given a base and a head, tests the one package the change affects.
+    with tempfile.TemporaryDirectory(prefix="go-affected-decl-", dir=scratch_root()) as tmp:
+        repo = Path(tmp) / "repo"
         (repo / "tools" / "tillr-watch").mkdir(parents=True)
         (repo / "tools" / "gate").mkdir(parents=True)
-        shutil.copy2(ROOT / "tools" / "fork-check.py", repo / "tools" / "fork-check.py")
-        shutil.copy2(ROOT / "tools" / "gate" / "classify.py", repo / "tools" / "gate" / "classify.py")
         shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", repo / "tools" / "gate" / "go_affected.py")
         (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}\n")
         (repo / "tools" / "tillr-watch" / "go.mod").write_text(
@@ -1037,83 +780,23 @@ def test_fork_check_integration(root_graph: dict) -> None:
         subprocess.run(["git", "add", "."], cwd=repo, env=git_env, check=True)
         subprocess.run(["git", "commit", "-qm", "change"], cwd=repo, env=git_env, check=True)
 
-        p_full = subprocess.Popen(
-            [sys.executable, "tools/fork-check.py", "--explain", "--since", "HEAD~1"],
-            cwd=repo, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        res = subprocess.run(
+            [*command, "HEAD~1", "HEAD"],
+            cwd=repo,
+            env={
+                **os.environ,
+                "GOCACHE": str(_shared_gocache()),
+                "YOLO_DURABLE_DIR": str(Path(tmp) / "durable"),
+                "GO_TEST_SHARDS_LOCK_DIR": str(Path(tmp) / "locks"),
+                "GO_TEST_SHARDS_CLASS": "ordinary",
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=300,
         )
-        p_rolling = subprocess.Popen(
-            [sys.executable, "tools/fork-check.py", "--explain", "--all", "--tier", "rolling"],
-            cwd=repo, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        p_landing = subprocess.Popen(
-            [sys.executable, "tools/fork-check.py", "--explain", "--tier", "landing", "--since", "HEAD~1"],
-            cwd=repo, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        p_reg = subprocess.Popen(
-            [sys.executable, str(ROOT / "tools" / "fork-check.py"), "--registry-json"],
-            cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        full_out, full_err = p_full.communicate(timeout=120)
-        roll_out, roll_err = p_rolling.communicate(timeout=120)
-        land_out, land_err = p_landing.communicate(timeout=120)
-        reg_out, reg_err = p_reg.communicate(timeout=120)
-
-        assert p_full.returncode == 0, full_err
-        assert "would run  go-affected " not in full_out, full_out
-        assert "would not run          go-affected (affected tillr Go test packages pass)" in full_out, full_out
-
-        assert p_rolling.returncode == 0, roll_err
-        assert "would run  go-affected " not in roll_out, roll_out
-        assert "would skip" not in roll_out, roll_out
-        assert "would not run          go-affected (affected tillr Go test packages pass)" in roll_out, roll_out
-        assert "does not apply on the rolling tier because whole Go module suites run fresh" in roll_out, roll_out
-
-        assert p_landing.returncode == 0, land_err
-        assert "would run  go-affected " in land_out, land_out
-        landing_repo = fork_check.build_plan(
-            repo, [], fork_check.Record(state), ["tools/tillr-watch/main.go"], None, True,
-            tier=fork_check.TIER_LANDING,
-        )
-        landing_ga = next(c for c in landing_repo.checks if c.kind == "go-affected")
-        landing_env = {
-            **os.environ,
-            "GOCACHE": str(_shared_gocache()),
-            "YOLO_DURABLE_DIR": str(Path(tmp) / "durable"),
-            "GO_TEST_SHARDS_LOCK_DIR": str(Path(tmp) / "locks"),
-            "GO_TEST_SHARDS_CLASS": "ordinary",
-        }
-        rc, out, _ = fork_check.run_landing_go_check(
-            repo, landing_ga, landing_env, landing_ga.drop, None
-        )
-        assert rc == 0, out
-        assert "go-affected: 1 package(s)" in out, out
-
-    # registry-json exports go-affected and go-affected-suite cleanly, with _test.go selection parity.
-    assert p_reg.returncode == 0, reg_err
-    reg = json.loads(reg_out)
-    assert any(d["id"] == "go-affected/affected-tillr-go-test-packages-pass" for d in reg["declarations"]), (
-        [d["id"] for d in reg["declarations"]]
-    )
-    suite_decl = next(d for d in reg["declarations"] if d["kind"] == "go-affected-suite")
-    assert any(fork_check.pattern_selects(p, "tools/tillr-drain/drain/gate_timing_test.go", ROOT)
-               for p in suite_decl["selects"]), suite_decl["selects"]
-    assert any(fork_check.pattern_selects(p, "tools/gate/go-test-edges.json", ROOT)
-               for p in suite_decl["selects"]), suite_decl["selects"]
-    assert not any(fork_check.pattern_selects(p, "tools/tillr-drain/drain/loop.go", ROOT)
-                   for p in suite_decl["selects"]), suite_decl["selects"]
-    assert not any(fork_check.pattern_selects(p, "tools/dotmod/main_test.go", ROOT)
-                   for p in suite_decl["selects"]), suite_decl["selects"]
-
-    # run_replay matches go-affected/affected-tillr-go-test-packages-pass when a tillr Go file changed.
-    replay_plan = fork_check.build_plan(
-        ROOT, [], fork_check.Record(scratch_root() / "nonexistent-replay-state.json"),
-        ["tools/tillr-watch/main.go"], None, True,
-    )
-    matched = [
-        c for c in replay_plan.checks
-        if fork_check.declaration_id(c.kind, c.label, ROOT) == "go-affected/affected-tillr-go-test-packages-pass"
-    ]
-    assert len(matched) == 1, [c.kind for c in replay_plan.checks]
+        assert res.returncode == 0, res.stdout
+        assert "go-affected: 1 package(s)" in res.stdout, res.stdout
 
 
 def test_heavy_failures_replay(root_graph: dict) -> None:
@@ -1153,7 +836,7 @@ def test_heavy_failures_replay(root_graph: dict) -> None:
 
 
 def test_failure_refusal_names_packages_and_tests_far_above_tail() -> None:
-    """Failures far above the 60-line tail still name every failing package and test in the gate refusal."""
+    """Failures far above the 60-line tail still name every failing package and test in the tail summary."""
     pkg_main = "github.com/mschulkind-oss/tillr-drain"
     pkg_drain = "github.com/mschulkind-oss/tillr-drain/drain"
     pkg_broken = "github.com/mschulkind-oss/tillr-broken"
@@ -1235,13 +918,13 @@ def test_failure_refusal_names_packages_and_tests_far_above_tail() -> None:
     ])
     full_output = "go-affected: 3 package(s) (0 cached, selection 10ms, slot_wait 0ms)\n" + readable + summary
     all_lines = full_output.splitlines()
-    assert len(all_lines) > fork_check.EXCERPT_LINES * 3, len(all_lines)
+    assert len(all_lines) > EXCERPT_LINES * 3, len(all_lines)
     # Confirm the actual --- FAIL: lines are far above the tail.
     early_idx = next(i for i, ln in enumerate(all_lines) if "TestEarlyMainFailure" in ln)
-    assert len(all_lines) - early_idx > fork_check.EXCERPT_LINES * 2, (early_idx, len(all_lines))
+    assert len(all_lines) - early_idx > EXCERPT_LINES * 2, (early_idx, len(all_lines))
 
     # Even the 60-line tail excerpt carries the failing packages and tests summary.
-    tail_excerpt = "\n".join(all_lines[-fork_check.EXCERPT_LINES:])
+    tail_excerpt = "\n".join(all_lines[-EXCERPT_LINES:])
     for needle in (
         "go-affected: failing packages and tests:",
         f"  {pkg_main}: TestEarlyMainFailure, TestEdgeInputs",
@@ -1250,30 +933,15 @@ def test_failure_refusal_names_packages_and_tests_far_above_tail() -> None:
     ):
         assert needle in tail_excerpt, (needle, tail_excerpt)
 
-    # Gate refusal (triage_packet + triage_lines) names every failing package and test.
-    check = fork_check.Check(
-        "go-affected",
-        "affected tillr Go test packages pass",
-        [sys.executable, "tools/gate/go_affected.py", "--changed", "tools/tillr-drain/drain/loop.go"],
-        "tillr Go module changed",
-        600,
-    )
-    check.rc = 1
-    check.output = full_output
-    packet = fork_check.triage_packet(check, ROOT)
-    triage_text = "\n".join(fork_check.triage_lines(packet))
-    assert "no case named in the output" not in triage_text, triage_text
-
-    # Every failing package and test appears in the refusal, including duplicate test names across packages.
+    # The readable log still names every failing test with the file and line it failed at.
+    located = {(c["name"], c["file"], c["line"]) for c in go_failure_cases(full_output)}
     for expected in (
-        f"case: TestEarlyMainFailure -- {pkg_main} (hook_test.go:42)",
-        f"case: TestEdgeInputs -- {pkg_main} (edge_inputs_test.go:10)",
-        f"case: TestEarlyDrainFailure -- {pkg_drain} (fixer_test.go:99)",
-        f"case: TestEdgeInputs -- {pkg_drain} (edge_inputs_test.go:10)",
-        f"case: TestSubParent/leaf -- {pkg_drain} (sub_test.go:15)",
-        f"case: (package failed) -- {pkg_broken}",
+        ("TestEarlyMainFailure", "hook_test.go", 42),
+        ("TestEdgeInputs", "edge_inputs_test.go", 10),
+        ("TestEarlyDrainFailure", "fixer_test.go", 99),
+        ("TestSubParent/leaf", "sub_test.go", 15),
     ):
-        assert expected in triage_text, (expected, triage_text)
+        assert expected in located, (expected, located)
 
 
 def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
@@ -1792,7 +1460,7 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
         sib_main = repo / "tools" / "tillr-sib" / "main.go"
         sib_main.write_text('package main\nfunc main() {}\n')
 
-        planner_file = repo / "tools" / "fork-check.py"
+        planner_file = repo / "tools" / "planner.py"
         planner_file.write_text("PLANNER_V = 'v1'\n")
         config_file = repo / "config" / "app.txt"
         config_file.write_text("cfg-ok\n")
@@ -1825,13 +1493,13 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
             '}\n'
             'func TestReadsPlannerA(t *testing.T) {\n'
             '  recordPID(t, "A")\n'
-            '  raw, err := os.ReadFile("../../tools/fork-check.py")\n'
+            '  raw, err := os.ReadFile("../../tools/planner.py")\n'
             '  if err != nil { t.Fatal(err) }\n'
             '  if !strings.Contains(string(raw), "PLANNER_V") { t.Fatalf("bad planner: %q", raw) }\n'
             '}\n'
             'func TestReadsPlannerB(t *testing.T) {\n'
             '  recordPID(t, "B")\n'
-            '  raw, err := os.ReadFile("../../tools/fork-check.py")\n'
+            '  raw, err := os.ReadFile("../../tools/planner.py")\n'
             '  if err != nil { t.Fatal(err) }\n'
             '  if strings.Contains(string(raw), "BROKEN_B") { t.Fatalf("planner broke B: %q", raw) }\n'
             '}\n'
@@ -1851,9 +1519,9 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
         edges_data = {
             pkg: {
                 "builds": [sib_pkg],
-                "reads": ["config/app.txt", "tools/fork-check.py"],
+                "reads": ["config/app.txt", "tools/planner.py"],
                 "read_tests": {
-                    "tools/fork-check.py": ["TestReadsPlannerA", "TestReadsPlannerB"],
+                    "tools/planner.py": ["TestReadsPlannerA", "TestReadsPlannerB"],
                 },
             }
         }
@@ -1889,7 +1557,7 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
 
         # 1. Scoped change runs only TestReadsPlannerA + TestReadsPlannerB (+ TestEdgeInputs),
         # splits into 2 LPT shard processes, and records "tests" in evidence.
-        rc, out, ev = run_scoped(["tools/fork-check.py", "tests/fork-check.test.py"])
+        rc, out, ev = run_scoped(["tools/planner.py", "tests/planner.test.py"])
         assert rc == 0, out
         assert (pids_dir / "A").is_file() and (pids_dir / "B").is_file()
         assert not (pids_dir / "CFG").exists() and not (pids_dir / "UNREL").exists()
@@ -1907,21 +1575,21 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
         # without re-executing either test binary.
         (pids_dir / "A").unlink()
         (pids_dir / "B").unlink()
-        rc, out, ev = run_scoped(["tools/fork-check.py"])
+        rc, out, ev = run_scoped(["tools/planner.py"])
         assert rc == 0, out
         assert ev["packages"][0]["cached"] is True, ev
         assert not (pids_dir / "A").exists() and not (pids_dir / "B").exists()
         assert ev["packages"][0]["tests"] == ["TestReadsPlannerA", "TestReadsPlannerB"], ev
 
-        # 3. Editing tools/fork-check.py invalidates the digest and catches TestReadsPlannerB's failure.
+        # 3. Editing tools/planner.py invalidates the digest and catches TestReadsPlannerB's failure.
         planner_file.write_text("PLANNER_V = 'v2'\nBROKEN_B = True\n")
-        rc, out, ev = run_scoped(["tools/fork-check.py"])
+        rc, out, ev = run_scoped(["tools/planner.py"])
         assert rc != 0, out
         assert ev["packages"][0]["cached"] is False, ev
         assert "TestReadsPlannerB" in out, out
 
         # 4. Per-invocation active_tests digest scoping: non-reader shard digests ignore
-        # tools/fork-check.py edits while still tracking builds and unscoped reads.
+        # tools/planner.py edits while still tracking builds and unscoped reads.
         graph = go_affected.load_tillr_graph(repo)
         edge_entry = edges_data[pkg]
         d_unrel_before = go_affected.compute_edge_digest(
@@ -1955,7 +1623,7 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
 
         # 5. Pairing with an unscoped reads change widens back to whole-package (5-field evidence).
         rc, out, ev = run_scoped(
-            ["tools/fork-check.py", "config/app.txt"],
+            ["tools/planner.py", "config/app.txt"],
             {"ALLOW_UNRELATED": "1", "SCOPED_PIDS_DIR": str(pids_dir)},
         )
         assert rc == 0, out
@@ -2841,9 +2509,8 @@ def test_drain_subpackage_isolation(root_graph: dict) -> None:
 
 def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
     """Conflict-repair (-cfix) regates reuse passing per-package verdicts from the item's
-    pre-conflict gate across go-substrate, gate-runner, and go-affected when package
-    transitive inputs and declared edge digests are unchanged, and re-run only packages
-    whose inputs changed during conflict repair.
+    pre-conflict go-affected run when package transitive inputs and declared edge digests
+    are unchanged, and re-run only packages whose inputs changed during conflict repair.
     """
     with tempfile.TemporaryDirectory(dir=scratch_root(), prefix="ga-cfix-") as tmp:
         tmp_path = Path(tmp)
@@ -2865,23 +2532,9 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
         ):
             (repo / mod_rel).mkdir(parents=True, exist_ok=True)
 
-        shutil.copy2(ROOT / "tools" / "fork-check.py", repo / "tools" / "fork-check.py")
-        shutil.copy2(ROOT / "tools" / "gate" / "classify.py", repo / "tools" / "gate" / "classify.py")
         shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", repo / "tools" / "gate" / "go_affected.py")
         shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
         (repo / "tools" / "go-test-durations.json").write_text("{}\n", encoding="utf-8")
-
-        for py_test, marker in (
-            ("tools/gate/change-gate.test.py", "py-change-gate"),
-            ("tools/gate/runner-first.test.py", "py-runner-first"),
-        ):
-            (repo / py_test).write_text(
-                "import os, pathlib\n"
-                'd = os.environ.get("CFIX_EXEC_LOG_DIR", "")\n'
-                "if d:\n"
-                f'    (pathlib.Path(d) / "{marker}").write_text("ran\\n")\n',
-                encoding="utf-8",
-            )
 
         (repo / "config" / "view.txt").write_text("v1\n", encoding="utf-8")
         (repo / "notes.txt").write_text("base-line\n", encoding="utf-8")
@@ -2986,6 +2639,11 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
         step_counter = 0
 
         def run_landing_gate(run_id: str, since_sha: str, item_id: str = "item-request-demo") -> tuple[dict, set[str]]:
+            """Run go_affected.py for one run directory the way a gate run does.
+
+            The run's passing verdicts are written to its own directory, and a -cfix run is
+            handed the verdicts its pre-conflict runs recorded for the same item.
+            """
             nonlocal step_counter
             step_counter += 1
             exec_dir = tmp_path / f"exec-{step_counter}"
@@ -2996,8 +2654,23 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
                 json.dumps({"payload": {"run_id": run_id, "item_id": item_id}}) + "\n",
                 encoding="utf-8",
             )
-            spans_path = run_dir / "gate.spans.json"
-            fast_path = run_dir / "gate.fast.verdict.json"
+            evidence_path = run_dir / "go-affected.evidence.json"
+            verdicts_out = tmp_path / f"verdicts-out-{step_counter}.json"
+            argv = [
+                sys.executable, "tools/gate/go_affected.py",
+                "--base", since_sha, "--head", "HEAD",
+                "--evidence-out", str(evidence_path),
+                "--verdicts-out", str(verdicts_out),
+            ]
+            prior = (
+                go_affected.load_prior_cfix_verdicts(run_dir)
+                if go_affected.is_cfix_run_id(run_id)
+                else None
+            )
+            if prior and prior.get("packages"):
+                verdicts_in = tmp_path / f"verdicts-in-{step_counter}.json"
+                go_affected.save_package_verdicts_atomic(verdicts_in, prior)
+                argv += ["--verdicts-in", str(verdicts_in)]
             env = {
                 **os.environ,
                 "TILLR_RUN_ID": "",
@@ -3005,12 +2678,11 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
                 "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
                 "GOCACHE": str(gocache),
                 "CFIX_EXEC_LOG_DIR": str(exec_dir),
-                "TILLR_GATE_SPANS_OUT": str(spans_path),
-                "TILLR_FAST_VERDICT_OUT": str(fast_path),
-                "TILLR_ORDINARY_GATE_TIMING": "1",
             }
+            for name in (go_affected.GO_VERDICTS_IN_ENV, go_affected.GO_VERDICTS_OUT_ENV):
+                env.pop(name, None)
             res = subprocess.run(
-                [sys.executable, "tools/fork-check.py", "--tier", "landing", "--since", since_sha],
+                argv,
                 cwd=repo,
                 env=env,
                 stdout=subprocess.PIPE,
@@ -3020,8 +2692,14 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
             )
             assert res.returncode == 0, f"run_id={run_id} rc={res.returncode}\n{res.stdout}"
             ran_markers = {p.name for p in exec_dir.iterdir()}
-            spans = json.loads(spans_path.read_text(encoding="utf-8"))
-            return spans, ran_markers
+            recorded = go_affected.load_package_verdicts_file(verdicts_out)
+            if recorded is not None:
+                go_affected.save_package_verdicts_atomic(
+                    run_dir / go_affected.GO_PACKAGE_VERDICTS_FILE,
+                    {**recorded, "item_id": item_id, "run_id": run_id},
+                )
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            return evidence, ran_markers
 
         # 1. Pre-conflict gate runs only the affected Go packages via go-affected (skipping untouched sibling tillr/extra).
         orig_run = "run-item-request-demo-a1-n2"
@@ -3047,20 +2725,11 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
         subprocess.run(["git", "add", "."], cwd=repo, env=git_env, check=True)
         subprocess.run(["git", "commit", "-qm", "cand-cfix-unrelated"], cwd=repo, env=git_env, check=True)
 
-        spans_cfix, ran_cfix = run_landing_gate(f"{orig_run}-cfix", base_v2)
+        evidence_cfix, ran_cfix = run_landing_gate(f"{orig_run}-cfix", base_v2)
         assert ran_cfix == set(), (
             f"expected zero Go packages to re-run on unrelated-file -cfix, got {ran_cfix}"
         )
-        attrs_by_kind = {
-            row["check_id"].split("/", 1)[0]: json.loads(row["attributes_json"])
-            for row in spans_cfix["check_spans"]
-        }
-        assert "go-substrate" not in attrs_by_kind, attrs_by_kind
-        assert "gate-runner" not in attrs_by_kind, attrs_by_kind
-        ga_pkgs = {
-            p["import_path"]: p
-            for p in attrs_by_kind["go-affected"]["go_build"][0]["packages"]
-        }
+        ga_pkgs = {p["import_path"]: p for p in evidence_cfix["packages"]}
         assert set(ga_pkgs) == {
             "github.com/mschulkind-oss/tillr/core",
             "github.com/mschulkind-oss/tillr-gate",
@@ -3460,7 +3129,7 @@ def main(argv: list[str] | None = None) -> int:
         ("test_no_leftover_processes_after_check_finishes", test_no_leftover_processes_after_check_finishes),
         ("test_cfix_regate_reuses_unchanged_package_verdicts", test_cfix_regate_reuses_unchanged_package_verdicts),
         ("test_gotmpdir_inside_slot_scratch_and_cleaned_on_signal", test_gotmpdir_inside_slot_scratch_and_cleaned_on_signal),
-        ("test_fork_check_integration", lambda: test_fork_check_integration(root_graph)),
+        ("test_check_declarations_cover_selection_inputs", test_check_declarations_cover_selection_inputs),
         ("test_go_affected_slot_wait_order_and_trunk_repair_priority", test_go_affected_slot_wait_order_and_trunk_repair_priority),
         ("test_heavy_failures_replay", lambda: test_heavy_failures_replay(root_graph)),
         ("test_selection_rules", lambda: test_selection_rules(root_graph)),

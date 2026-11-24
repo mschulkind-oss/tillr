@@ -1,0 +1,21 @@
+{
+  "id": "observatory-web",
+  "label": "the observatory's types compile and its web suite passes",
+  "command": [
+    "sh",
+    "-c",
+    "cd tools/tillr-view/web && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npm run typecheck && npm run test"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 900000,
+  "reads": [
+    "tools/gate/checks/observatory-web.json",
+    "tools/tillr-view/web/"
+  ],
+  "tools": [
+    "sh",
+    "npm",
+    "node"
+  ]
+}

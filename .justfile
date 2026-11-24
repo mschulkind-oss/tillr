@@ -31,17 +31,25 @@ lint-ci:
     @just format --check
     @just lint
 
-# Run every Go module's tests; arguments go to `go test`.
+# Run every Go module's tests; arguments go to `go test`. With no arguments the drain
+# runs in parallel shards, because its whole suite exceeds `go test`'s ten-minute limit.
 [positional-arguments]
 test *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    for mod in tools/*/go.mod; do (cd "$(dirname "$mod")" && go test ./... "$@"); done
+    for mod in tools/*/go.mod; do
+        dir="$(dirname "$mod")"
+        if [ "$#" -eq 0 ] && [ "$dir" = "tools/tillr-drain" ]; then
+            python3 tools/go-test-shards.py "$dir" -k 6
+        else
+            (cd "$dir" && go test ./... "$@")
+        fi
+    done
 
 # Python is excluded: adopting its formatter would rewrite 84 files at once.
 # shell, TypeScript, and Lua are excluded because they have no pinned formatter.
 # Adding a language means pinning its formatter in mise.toml and landing the reformat
-# as its own commit. Only tracked source is ours; vendor and fork trees are not.
+# as its own commit. Only tracked source is ours; vendor trees are not.
 # Format Go with gofmt; --check lists changes without writing and exits 1 on drift.
 [positional-arguments]
 format *args:
@@ -240,22 +248,8 @@ format *args:
             clean |= formatted_clean
             save_clean(cache_file, clean, (groups.keys() - dirty_digests) | formatted_clean)
 
-# =============================================================================
-# PI FORKS
-# =============================================================================
-# Our patches to pi and its extensions deploy as PATCH SERIES (directories of
-# `git format-patch --base` files) under yolo-packs/; yolo applies each to its
-# upstream and builds it. .forks/<name> (gitignored, rcm-excluded) is a working
-# copy materialized from a series. The set is bin/pi-forks.list. Everything here
-# works in a jail: no gh, no push, https only.
-#
-# The loop: forks_setup --lane <lane> --fork <name>; commit on main in
-# .forks/lanes/<lane>/<name>; forks_export --lane <lane> --fork <name>; forks_check;
-# yolo pack lint <pack>; commit. .forks/<name> itself is the shared cache: read it, do
-# not edit it (docs/pi/forks.md#a-lane-gets-its-own-checkout).
-
-# Install this repository's git hooks (hooks/*) into the shared hooks directory, so the
-# patch-branch pre-push guard runs from the main checkout and every linked worktree.
+# Install this repository's git hooks (hooks/*) into the shared hooks directory, so they
+# run from the main checkout and every linked worktree.
 # A copy git already runs is replaced when it carries this repository's marker, and a
 # hook without the marker is left alone -- kept as <name>.local, which our hook runs
 # first -- so every run reports installed, replaced, left alone or drifted (see
@@ -449,39 +443,16 @@ observatory-perf *args:
 observatory-dev port="4318" *args:
     @exec bash "{{justfile_directory()}}/tools/observatory/run.sh" dev "{{port}}" {{args}}
 
-# End of task: check every change since the last successfully verified commit,
-# including earlier tasks and sessions. Advance that approved point only when all
-# selected checks pass; failures and missing verdicts keep the pending work open.
-# Always runs the fast offline series-shape check and probes upstream drift, then
-# routes changed inputs to relevant document, render, Waybar, and fork checks.
-#
-# Commit watched inputs first. --explain prints the plan; --all forces every series;
-# --jobs N runs at most N independent checks at a time (default: the core count).
-# --since <base> is an explicit range diagnostic, NOT completion approval: it never
-# advances the approved point. Records live in the common Git directory, shared by
-# worktrees, and the approved point is kept per branch: a verified run advances only the
-# branch it ran on, and plans from the newest verified commit its history contains. A
-# small change is quick once all earlier pending work is verified.
-# This program also imports every fast whole-tree declaration from tools/gate/checks/,
-# using tillr-gate checks over the same last-verified..HEAD range as the remaining suites.
-# The drain and measured faster tillr modules use go-test-shards; drain stays rolling,
-# and this complete gate includes that tier.
+# End of task: judge the committed tree with every declared check
+# (tools/gate/checks/, one JSON file each), using tillr-gate built from this checkout.
+# First the change checks and the fast whole-tree checks over BASE..HEAD, then the
+# heavy whole-tree checks (the Go suites and the script suites) on HEAD. BASE is
+# refs/tillr/green, else the upstream branch, else HEAD's first parent. Commit first:
+# the checks judge HEAD. --since <base> names the range; --fast runs the first pass
+# only; --only <id> runs one heavy check. It writes no verdict record and moves no ref.
 done *args:
-    @python3 tools/fork-check.py {{args}}
+    @python3 tools/gate/done.py {{args}}
 
 # Whole-module execution; prefer targeted `go test -run` while editing.
 go-test-shards module="tools/tillr-drain" *args:
     @python3 tools/go-test-shards.py {{module}} {{args}}
-
-# Run every check this change plans under the gate's own conditions -- HOME and
-# XDG_STATE_HOME scrubbed, BOARD_STORE_STRICT, this process's uid, one check at a time --
-# and report every failure in one pass. A diagnostic, not a verdict: it writes no record,
-# advances no verified baseline and takes no lock, so it runs beside a real gate. Read its
-# findings BEFORE attempting a fix; `--cells`, `--only`, `--report PATH` and `--json`
-# narrow it, and a check that cannot pass a cell declares it in
-# tools/preflight-declarations.json with the reason and the repair it waits on. There is
-# no cell that adds CPU load: the burner cell was deleted on 2026-10-31, and
-# tests/fork-check.test.py fails the gate if a check asserts elapsed time or starts load.
-preflight *args:
-    @python3 tools/fork-check.py --preflight {{args}}
-

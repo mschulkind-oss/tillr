@@ -34,7 +34,6 @@ var faces = map[string]func([]string) int{
 	"checks":   checksFace,
 	"change":   changeFace,
 	"classify": classifyFace,
-	"dualrun":  dualRunFace,
 	"enable":   enableFace,
 	"plan":     planFace,
 	"run":      runFace,
@@ -62,7 +61,7 @@ func run(args []string) int {
 
 // faceNames lists the faces in a fixed order, so the usage line is stable.
 func faceNames() string {
-	return "change, checks, classify, dualrun, enable, plan, run, shadow"
+	return "change, checks, classify, enable, plan, run, shadow"
 }
 
 // parseFlags parses one face's flags and reports whether it has already answered the
@@ -156,103 +155,6 @@ func shadowFace(args []string) int {
 	return record.ExitOK
 }
 
-// dualRunFace is `tillr-gate dualrun`: a registry and a set of candidates in, a report out.
-//
-// It is the dual-run harness rather than a gate face: it judges nothing itself, and its
-// report is a comparison of what this gate and the Python gate planned and judged. A
-// disagreement in it is a finding about the two gates and does not change the exit code --
-// the harness answers 0 when it produced its report.
-func dualRunFace(args []string) int {
-	flags := flag.NewFlagSet("dualrun", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	registryPath := flags.String("registry", "", "the check registry to plan against (required)")
-	reportPath := flags.String("report", "", "where to write the comparison report (required)")
-	root := flags.String("root", "", "the checkout both gates plan against (default: the working directory)")
-	self := flags.String("self", "", "the tillr-gate binary the harness drives (default: this executable)")
-	pythonPath := flags.String("python", "", "the Python gate, tools/fork-check.py (default: <root>/tools/fork-check.py)")
-	pythonExe := flags.String("python-exe", "python3", "the interpreter the Python gate runs under")
-	work := flags.String("work", "", "where the change, plan and verdict files are written (required)")
-	timeout := flags.Duration("timeout", 30*time.Minute, "how long one gate invocation may take")
-	var candidates stringList
-	flags.Var(&candidates, "candidate", "name=base, naming a change base..HEAD to run both gates over (repeatable)")
-	if code, answered := parseFlags(flags, args); answered {
-		return code
-	}
-	if *registryPath == "" || *reportPath == "" || *work == "" {
-		fmt.Fprintln(os.Stderr, "tillr-gate dualrun: --registry, --report and --work are required")
-		return record.ExitUsage
-	}
-	if len(candidates) == 0 {
-		fmt.Fprintln(os.Stderr, "tillr-gate dualrun: name at least one --candidate name=base")
-		return record.ExitUsage
-	}
-	parsed := make([]Candidate, 0, len(candidates))
-	for _, value := range candidates {
-		name, base, ok := strings.Cut(value, "=")
-		if !ok || name == "" || base == "" {
-			fmt.Fprintf(os.Stderr, "tillr-gate dualrun: %q is not name=base\n", value)
-			return record.ExitUsage
-		}
-		parsed = append(parsed, Candidate{Name: name, Base: base})
-	}
-	checkout := *root
-	if checkout == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "tillr-gate dualrun: %v\n", err)
-			return record.ExitInternal
-		}
-		checkout = cwd
-	}
-	if absolute, err := filepath.Abs(checkout); err == nil {
-		checkout = absolute
-	}
-	selfPath := *self
-	if selfPath == "" {
-		this, err := os.Executable()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "tillr-gate dualrun: %v\n", internalf("resolving this executable: %v", err))
-			return record.ExitInternal
-		}
-		selfPath = this
-	}
-	python := *pythonPath
-	if python == "" {
-		python = filepath.Join(checkout, "tools", "fork-check.py")
-	}
-	report, err := DualRun(DualRunConfig{
-		Root:       checkout,
-		Self:       selfPath,
-		Python:     python,
-		PythonExe:  *pythonExe,
-		Registry:   *registryPath,
-		Work:       *work,
-		Candidates: parsed,
-		Timeout:    *timeout,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "tillr-gate dualrun: %v\n", err)
-		return exitCode(err)
-	}
-	body, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "tillr-gate dualrun: %v\n", internalf("encoding the report: %v", err))
-		return record.ExitInternal
-	}
-	if err := os.WriteFile(*reportPath, append(body, '\n'), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "tillr-gate dualrun: %v\n", internalf("writing %s: %v", *reportPath, err))
-		return record.ExitInternal
-	}
-	for _, comparison := range report.Candidates {
-		fmt.Printf("tillr-gate dualrun: %-20s %-8s go=%s/%d python=%s/%d plan=%s\n",
-			comparison.Candidate.Name, comparison.Agreement,
-			comparison.Go.Verdict, comparison.Go.VerdictExit,
-			comparison.Python.Verdict, comparison.Python.VerdictExit,
-			kindsSpelling(comparison))
-	}
-	return record.ExitOK
-}
-
 // stringList collects a flag given more than once, in the order it was given.
 type stringList []string
 
@@ -261,19 +163,6 @@ func (list *stringList) String() string { return strings.Join(*list, ",") }
 func (list *stringList) Set(value string) error {
 	*list = append(*list, value)
 	return nil
-}
-
-// kindsSpelling is the plan line's comparison key in one word: whether the two kind sets
-// matched, and the disagreement kinds when they did not.
-func kindsSpelling(comparison Comparison) string {
-	if len(comparison.Disagreements) == 0 {
-		return "agree"
-	}
-	kinds := make([]string, 0, len(comparison.Disagreements))
-	for _, disagreement := range comparison.Disagreements {
-		kinds = append(kinds, disagreement.Kind)
-	}
-	return strings.Join(sortedUnique(kinds), ",")
 }
 
 // runFace is `tillr-gate run`: a plan and a worktree in, a verdict record out.

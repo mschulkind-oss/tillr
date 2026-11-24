@@ -35,7 +35,7 @@ class ChangeGateCompatibilityTest(unittest.TestCase):
                         help_text = b"Usage of checks:\n  -fast-tree\n"
                         if supported:
                             help_text += b"  -scope-to-change\n    skip unrelated checks\n"
-                        # Even with a similar flag listed, an old runner must get the legacy call.
+                        # Even with a similar flag listed, an old runner must get the unscoped call.
                         else:
                             help_text += b"  -scope-to-change-later\n"
                         return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=help_text)
@@ -43,8 +43,7 @@ class ChangeGateCompatibilityTest(unittest.TestCase):
                         self.assertEqual("--scope-to-change" in args, supported)
                         self.assertFalse(kwargs["env"]["TILLR_FAST_TREE_TIMING"])
                         return subprocess.CompletedProcess(args, 0, stdout=b"")
-                    self.assertEqual(args[1:], ["tools/fork-check.py", "--since", "base", "--tier", "landing"])
-                    return subprocess.CompletedProcess(args, 0)
+                    raise AssertionError("no program runs after the declared checks: " + repr(args))
 
                 argv = [str(PROGRAM), "--base", "base", "--head", "head", "--runner",
                         "runner", "--logs", "logs"]
@@ -63,15 +62,9 @@ class ChangeGateCompatibilityTest(unittest.TestCase):
 
 class ChangeGateStallTest(unittest.TestCase):
     def test_stall_record_and_exit_survive_the_real_adapter(self):
-        self.run_stall_case(False)
+        self.run_stall_case()
 
-    def test_remaining_gate_stall_survives_the_real_adapter(self):
-        self.run_stall_case(True)
-
-    def test_direct_wrapper_keeps_only_the_stall_handoff(self):
-        self.run_stall_case(True, measure=False)
-
-    def run_stall_case(self, remaining, measure=True):
+    def run_stall_case(self, measure=True):
         with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as directory:
             output = Path(directory) / "fast.json"
             harness = r'''
@@ -87,27 +80,13 @@ def invoke(args, **kwargs):
  if args[0]=='git':return subprocess.CompletedProcess(args,0,stdout='head\n')
  if args==['stub-checks','checks','--help']:return subprocess.CompletedProcess(args,0,stdout=b'')
  if args[0]=='stub-checks':return subprocess.CompletedProcess(args,6,stdout=record)
- raise AssertionError('remaining gate must not run after a stall: '+repr(args))
+ raise AssertionError('nothing runs after the declared checks: '+repr(args))
 sys.argv=['change-gate','--base','base','--head','head','--runner','stub-checks','--logs','logs']
 with patch.object(module,'warm_trimmed_go_cache'),patch.object(module.subprocess,'run',side_effect=invoke):
  code=module.main()
  assert commands[-1][0]=='stub-checks'
  sys.exit(code)
 '''
-            if remaining:
-                successful = {"payload": {"wall_ms": 2, "checks": [
-                    {"check_id": "inner", "result": "pass", "execution": "reused", "wall_ms": 0}]}}
-                successful_bytes = (json.dumps(successful) + "\n").encode()
-                harness = harness.replace("if args[0]=='stub-checks':return subprocess.CompletedProcess(args,6,stdout=record)",
-                    "if args[0]=='stub-checks':\n"
-                    f"  assert kwargs['env']['TILLR_FAST_TREE_TIMING']=={('1' if measure else '')!r}\n"
-                    "  assert not (set(kwargs['env']) & set(module.GATE_HANDOFFS) - {'TILLR_FAST_TREE_TIMING'})\n"
-                    f"  return subprocess.CompletedProcess(args,0,stdout={successful_bytes!r})\n"
-                    " if args[0]==sys.executable:\n  assert '--lock-timeout' not in args\n"
-                    "  with open(os.environ['TILLR_FAST_VERDICT_OUT'],'rb') as first:\n"
-                    f"   assert first.read()=={successful_bytes!r}\n"
-                    "  open(os.environ['TILLR_FAST_VERDICT_OUT'],'wb').write(record)\n  return subprocess.CompletedProcess(args,6)")
-                harness = harness.replace("assert commands[-1][0]=='stub-checks'", "assert commands[-1][0]==sys.executable")
             result = subprocess.run(["python3", "-c", harness, str(PROGRAM)],
                                     env=dict(os.environ, TILLR_FAST_VERDICT_OUT=str(output),
                                              TILLR_GATE_SPANS_OUT=str(output.with_name("spans.json")),
@@ -115,33 +94,12 @@ with patch.object(module,'warm_trimmed_go_cache'),patch.object(module.subprocess
                                     capture_output=True)
             self.assertEqual(result.returncode, 6, result.stderr)
             payload = json.loads(output.read_bytes())["payload"]
-            if remaining:
-                self.assertEqual(result.stdout, successful_bytes)
-                if measure:
-                    self.assertEqual(payload["fast_timing"], successful["payload"])
-                else:
-                    self.assertNotIn("fast_timing", payload)
-            else:
-                self.assertEqual(result.stdout, output.read_bytes())
+            self.assertEqual(result.stdout, output.read_bytes())
             self.assertEqual(payload["result"], "stalled")
             self.assertEqual(payload["checks"], [{
                 "check_id": "blocked", "result": "stalled", "duration_ms": 60000,
                 "silent_samples": 60, "cpu_time_ms": 12, "last_output_line": "last",
             }])
-
-    def test_failed_timing_replacement_leaves_stall_bytes_intact(self):
-        adapter = runpy.run_path(str(PROGRAM))
-        with tempfile.TemporaryDirectory(dir=os.environ["YOLO_DURABLE_DIR"]) as directory:
-            output = Path(directory) / "fast.json"
-            stalled = b'{"payload":{"result":"stalled","checks":[]}}\n'
-            output.write_bytes(stalled)
-            with patch.object(Path, "replace", side_effect=OSError("fixture cannot replace")), \
-                 patch("sys.stderr") as stderr:
-                adapter["preserve_fast_timing"](output, b'{"payload":{"wall_ms":0,"checks":[]}}')
-            stderr.write.assert_any_call("change-gate: could not preserve fast timings: fixture cannot replace")
-            self.assertEqual(output.read_bytes(), stalled)
-            self.assertEqual(list(Path(directory).iterdir()), [output])
-
 
 class DeclarationClassificationTest(unittest.TestCase):
     def setUp(self):
@@ -242,41 +200,6 @@ class DeclarationClassificationTest(unittest.TestCase):
                 with self.assertRaisesRegex(classify.ClassificationError, "tillr-gate classify"):
                     classify.classify(observations)
 
-    def test_remainder_classification_does_not_change_fast_verdict_bytes(self):
-        adapter = runpy.run_path(str(PROGRAM))["main"]
-        verdict = b' {"payload": {"checks": []}}\n\n'
-        verdict_path = self.root / "verdict"
-        runner = self.executable(self.root / "runner", "import sys\n"
-                                 "if '--help' in sys.argv: print('  --scope-to-change')\n"
-                                 f"else: sys.stdout.buffer.write({verdict!r})\n")
-        # Run the real classifier, then substitute an answer distinct from the raw exit.
-        # This is a test-boundary patch, not a tillr-gate stand-in or a copy of its rules.
-        import classify
-        def answer(observations):
-            self.assertEqual(observations, [
-                {"check": "legacy-remainder", "commit": "head", "source": "judging-program", "exit_code": 1}])
-            self.assertEqual(classify.classify(observations)[0]["outcome"], "fail")
-            return [{"outcome": "unknown", "detail": "error"}]
-
-        run = subprocess.run
-        def produce(cmd, **kwargs):
-            if cmd[0] == "git":
-                out = b"" if cmd[1] == "diff" else "head\n"
-                return subprocess.CompletedProcess(cmd, 0, stdout=out)
-            if cmd[0] == sys.executable:
-                return subprocess.CompletedProcess(cmd, 1)
-            return run(cmd, **kwargs)
-
-        with tempfile.TemporaryFile() as out, patch.object(sys, "stdout", wraps=sys.stdout, buffer=out), \
-             patch.object(sys, "argv", [str(PROGRAM), "--base", "base", "--head", "head",
-                                        "--runner", str(runner), "--logs", "logs"]), \
-             patch.dict(os.environ, TILLR_FAST_VERDICT_OUT=str(verdict_path)), \
-             patch.dict(adapter.__globals__, {"classify": answer}), patch.object(subprocess, "run", side_effect=produce):
-            self.assertEqual(adapter(), 4)
-            out.seek(0)
-            self.assertEqual(out.read(), verdict)
-        self.assertEqual(verdict_path.read_bytes(), verdict)
-
     def test_warm_stamp_uses_classified_outcome(self):
         import classify
         warm = runpy.run_path(str(PROGRAM))["warm_trimmed_go_cache"]
@@ -375,33 +298,9 @@ class DeclarationClassificationTest(unittest.TestCase):
             self.assertIsNotNone(common.stored_result(self.root, "mod", "pass"))
         self.assertEqual(seen, [{"check": "go-build", "source": "cached-record", "word": "pass"}])
 
-    def test_preserve_fast_timing_uses_classified_stall_outcome(self):
-        import classify
-        adapter = runpy.run_path(str(PROGRAM))
-        preserve = adapter["preserve_fast_timing"]
-        first = b'{"payload":{"wall_ms":4,"checks":[{"check_id":"inner","result":"pass"}]}}'
-        output = self.root / "fast.json"
-        initial = b'{"payload":{"result":"stalled","checks":[]}}\n'
-        output.write_bytes(initial)
-        seen = []
-        def reject(observations):
-            seen.extend(observations)
-            self.assertEqual(classify.classify(observations)[0]["detail"], "stalled")
-            return [{"outcome": "unknown", "detail": "error"}]
-
-        with patch.dict(preserve.__globals__, {"classify": reject}):
-            preserve(output, first)
-        self.assertEqual(seen, [{"source": "result-word", "word": "stalled"}])
-        self.assertEqual(output.read_bytes(), initial)
-        preserve(output, first)
-        self.assertEqual(json.loads(output.read_bytes())["payload"]["fast_timing"]["wall_ms"], 4)
-
-
 def load_tests(loader, tests, pattern):
-    # The gate's existing self-suite invokes this file. Keep the adapter and
-    # source-scan regressions in that same selected check without widening its reads.
-    for name, case in (("adapter-classify.test.py", "AdapterClassificationTest"),
-                       ("classification-scan.test.py", "ClassificationScanTest")):
+    # Keep the source-scan regressions in the same selected check as the adapter's.
+    for name, case in (("classification-scan.test.py", "ClassificationScanTest"),):
         module = runpy.run_path(str(PROGRAM.with_name(name)))
         tests.addTests(loader.loadTestsFromTestCase(module[case]))
     return tests

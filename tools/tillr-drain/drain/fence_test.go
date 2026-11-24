@@ -62,15 +62,6 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 			why: "a sub-path does not cover the module's README, which the documentation suite holds",
 		},
 		{
-			name:    "the gate's own dispatcher",
-			allowed: []string{"tools/fork-check.py"},
-			want: []string{
-				"tools/fork-check.py",
-				"tests/fork-check.test.py",
-			},
-			why: "fork-check is not a tillr module, so it derives its suite and no module companions",
-		},
-		{
 			name:    "the run adapters",
 			allowed: []string{"tools/tillr-run/backends/"},
 			want: []string{

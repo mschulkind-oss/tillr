@@ -66,7 +66,14 @@ func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
 					t.Fatalf("gate: %+v / %v", out, err)
 				}
 			case "fixer-gate":
-				writeForkFile(t, filepath.Join(worktree, "tools", "fork-check.py"), "print('named check ran')\n")
+				// The named check is a fast whole-tree declaration, so the adapter hands it to
+				// the tree's own tree-check program; the stand-in answers a pass.
+				if err := os.MkdirAll(filepath.Join(worktree, "tools", "gate", "checks"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeForkFile(t, filepath.Join(worktree, "tools", "gate", "checks", "fixture.json"),
+					`{"id": "`+values["--only"]+`", "scope": "tree", "tier": "fast"}`+"\n")
+				writeForkFile(t, filepath.Join(worktree, "tools", "gate", "tree-check.py"), "print('named check ran')\n")
 				if answer, output := steps.fixerCheck(context.Background(), c, values["--only"]); answer != "pass" {
 					t.Fatalf("named check %s: %s", answer, output)
 				}

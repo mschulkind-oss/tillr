@@ -60,7 +60,11 @@ func TestStandardStepsKeepTheirBuildAfterAnAdapterLanding(t *testing.T) {
 		}
 		if program == steps.FixerGateProgram {
 			extra = append(extra, "--only", "fixture/check")
-			writeForkFile(t, filepath.Join(root, "tools", "fork-check.py"), "print('named check ran')\n")
+			if err := os.MkdirAll(filepath.Join(root, "tools", "gate", "checks"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", "fixture.json"), `{"id": "fixture/check", "scope": "tree", "tier": "fast"}`+"\n")
+			writeForkFile(t, filepath.Join(root, "tools", "gate", "tree-check.py"), "print('named check ran')\n")
 		}
 		code, _, span, err := steps.program(context.Background(), "fixture", root, program, c, extra...)
 		if err != nil || code != 0 {

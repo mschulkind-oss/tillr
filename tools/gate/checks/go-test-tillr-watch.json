@@ -1,0 +1,29 @@
+{
+  "id": "go-test-tillr-watch",
+  "label": "tools/tillr-watch's whole Go suite passes",
+  "command": [
+    "sh",
+    "-c",
+    "TILLR_GATE_EDGE_INPUTS=\"$(python3 tools/go-test-shards.py --edge-digest github.com/mschulkind-oss/tillr-watch)\" && export TILLR_GATE_EDGE_INPUTS && cd tools/tillr-watch && CGO_ENABLED=0 GOFLAGS=-trimpath go test -parallel 1 -timeout 0 ./..."
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 3600000,
+  "reads": [
+    "tools/gate/checks/go-test-tillr-watch.json",
+    "tools/gate/go-test-edges.json",
+    "tools/go-test-shards.py",
+    "tools/tillr-drain/",
+    "tools/tillr-item/",
+    "tools/tillr-land/",
+    "tools/tillr-run/",
+    "tools/tillr-watch/",
+    "tools/tillr/"
+  ],
+  "tools": [
+    "sh",
+    "go",
+    "git",
+    "python3"
+  ]
+}

@@ -36,14 +36,13 @@ func TestTrunkFixerIDNamesTwelveHexCharacters(t *testing.T) {
 // judge, which is the one repair that must never be available.
 func TestGateCodePathsAreNeverInAFixerFence(t *testing.T) {
 	for _, path := range []string{
-		"tools/fork-check.py",
-		"tests/fork-check.test.py",
+		"tools/gate/done.py",
+		"tools/gate/checks/go-build.json",
 		"tools/tillr-gate/run.go",
 		"tools/tillr-loop/tillr-loop",
 		"tools/tillr-drain/drain/tillr-loop.py",
 		"tools/tillr-drain/drain/fixer_gate.go",
 		"yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/fixer_gate.go",
-		"tools/preflight-declarations.json",
 	} {
 		if !GateCode(path) {
 			t.Fatalf("%q is not recognised as the gate's own code", path)
@@ -53,14 +52,14 @@ func TestGateCodePathsAreNeverInAFixerFence(t *testing.T) {
 		t.Fatal("the drain's own code is read as the gate's")
 	}
 	fence := TrunkFixerFence(
-		[]string{"tools/fork-check.py", "tools/tillr-drain/drain/loop.go", "src/app.go"},
-		[]string{"tests/fork-check.test.py", "src/app.go", "src/lib.go"},
+		[]string{"tools/gate/done.py", "tools/tillr-drain/drain/loop.go", "src/app.go"},
+		[]string{"tools/gate/checks/go-build.json", "src/app.go", "src/lib.go"},
 	)
 	want := []string{"src/app.go", "src/lib.go", "tools/tillr-drain/drain/loop.go"}
 	if !reflect.DeepEqual(fence, want) {
 		t.Fatalf("the fence is %v, want %v (union, deduplicated, gate code removed, sorted)", fence, want)
 	}
-	if len(TrunkFixerFence([]string{"tools/fork-check.py"}, []string{"tests/fork-check.test.py"})) != 0 {
+	if len(TrunkFixerFence([]string{"tools/gate/done.py"}, []string{"tools/gate/checks/go-build.json"})) != 0 {
 		t.Fatal("a fence naming only gate code survived the subtraction")
 	}
 }

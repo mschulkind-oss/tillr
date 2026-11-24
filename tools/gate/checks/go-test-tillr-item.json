@@ -1,0 +1,27 @@
+{
+  "id": "go-test-tillr-item",
+  "label": "tools/tillr-item's whole Go suite passes",
+  "command": [
+    "sh",
+    "-c",
+    "CGO_ENABLED=0 python3 tools/go-test-shards.py tools/tillr-item -k 6 --cache --slot-class proof --timeout 0"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 3600000,
+  "reads": [
+    "tools/gate/checks/go-test-tillr-item.json",
+    "tools/gate/go-test-edges.json",
+    "tools/gate/go_affected.py",
+    "tools/go-test-durations.json",
+    "tools/go-test-shards.py",
+    "tools/tillr-item/",
+    "tools/tillr/"
+  ],
+  "tools": [
+    "sh",
+    "go",
+    "git",
+    "python3"
+  ]
+}

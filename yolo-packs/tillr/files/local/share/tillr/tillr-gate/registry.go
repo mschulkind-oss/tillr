@@ -272,7 +272,7 @@ func LoadRegistry(path string) (*Registry, error) {
 	sum := sha256.Sum256(hashed)
 	if digest := hex.EncodeToString(sum[:]); digest != file.Digest {
 		return nil, fmt.Errorf("the check registry %s carries digest %q but its declarations and "+
-			"in-process checks hash to %q; regenerate it with `python3 tools/fork-check.py --registry-json`",
+			"in-process checks hash to %q; regenerate the file from its declarations",
 			path, file.Digest, digest)
 	}
 	reg := &Registry{Digest: file.Digest}

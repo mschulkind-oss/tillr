@@ -122,7 +122,7 @@ func TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		name := "declaration"
 		if legacy {
-			name = "legacy"
+			name = "rolling program"
 		}
 		t.Run(name, func(t *testing.T) { testHeavyKilledOwner(t, legacy) })
 	}
@@ -136,24 +136,10 @@ func testHeavyKilledOwner(t *testing.T, legacy bool) {
 	if legacy {
 		writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", "unit.json"), `{"id":"unit","label":"unit","scope":"tree","tier":"fast","budget_ms":1,"command":["true"]}`)
 		heavyCommit(t, root, "legacy ready")
-		source, err := filepath.Abs(filepath.Join("..", "..", "fork-check.py"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		driver := filepath.Join(work, "legacy.py")
-		writeForkFile(t, driver, `import ast,contextlib,ctypes,json,os,pathlib,platform,signal,struct,subprocess,sys,threading,time
-from pathlib import Path
-source=sys.argv[1]
-module=ast.parse(Path(source).read_text())
-names={'environ','Cancellation','_kill_process_group','_run_cancellable','_start_cpu_sampler','_start_process_sampler','progress'}
-constants={'REUSE_ENV','GATE_ENV_DROP','_CPU_SHIM','WATCHDOG_SAMPLE_INTERVAL','WATCHDOG_SILENT_SAMPLES','CHECK_STALLED_RC'}
-nodes=[node for node in module.body if (isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name in names) or (isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id in constants for target in node.targets))]
-exec(compile(ast.Module(body=nodes,type_ignores=[]),source,'exec'),globals())
-rc,out,err,_=_run_cancellable(Path.cwd(),['sh','-c','sleep 1000 & echo $! > '+sys.argv[2]+'.part; mv '+sys.argv[2]+'.part '+sys.argv[2]+'; wait'],1000,None,(),Cancellation(),False)
-print(f'legacy driver returned rc={rc} out={out!r} err={err!r}',file=sys.stderr,flush=True)
-sys.exit(1)
-`)
-		legacyProgram = "python3 " + driver + " " + source + " " + child
+		// A rolling program that starts a child in the background and waits on it.
+		driver := filepath.Join(work, "rolling.sh")
+		writeForkFile(t, driver, "sleep 1000 &\necho $! > \"$1.part\"\nmv \"$1.part\" \"$1\"\nwait\n")
+		legacyProgram = "sh " + driver + " " + child
 	}
 	self, err := os.Executable()
 	if err != nil {

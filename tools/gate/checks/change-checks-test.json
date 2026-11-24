@@ -5,7 +5,7 @@
   "scope": "tree",
   "tier": "heavy",
   "timeout_ms": 300000,
-  "reads": ["tools/gate/", "tools/tillr-gate/", "tools/tillr/", "tools/tillr-loop/", "tools/fork-check.py", "tests/git-identity.test.py"],
+  "reads": ["tools/gate/", "tools/tillr-gate/", "tools/tillr/", "tools/tillr-loop/", "tests/git-identity.test.py"],
   "tools": ["python3", "go", "git"],
   "remember": false
 }

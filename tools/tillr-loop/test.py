@@ -49,6 +49,12 @@ log() { printf '%s\n' "$*" >> "$STUB_LOG"; }
 log "$@"
 case "$1" in
   plan) exit "${STUB_PLAN:-0}" ;;
+  checks)
+    log "checks-cwd: $(pwd)"
+    log "spans-out: ${TILLR_GATE_SPANS_OUT:-}"
+    printf 'revision stdout\n'
+    printf 'revision stderr\n' >&2
+    exit "${STUB_REVISION:-0}" ;;
   run)
     program=""
     args=""
@@ -59,7 +65,6 @@ case "$1" in
         *) shift ;;
       esac
     done
-    log "env PI_FORKS_ROOT=${PI_FORKS_ROOT:-<unset>}"
     if [ -n "${STUB_EXEC_GATE:-}" ] && [ -n "$program" ]; then
       # shellcheck disable=SC2086
       $program $args
@@ -90,17 +95,12 @@ exit 0
 """,
 }
 
-# The python stand-in plays both python roles the gate's argv names: the registry export the
-# adapter runs itself, and the gate program `tillr-gate run --gate` runs. It is written only
-# by the cases that are about those two argv, so a case that expects no export to run has no
-# stand-in for one.
+# The python stand-in plays the gate program `tillr-gate run --gate` runs. It is written
+# only by the cases that are about that argv.
 PYTHON_STUB = """#!/bin/sh
 log() { printf '%s\n' "$*" >> "$STUB_LOG"; }
 log "python3-argv: $*"
 log "python3-cwd: $(pwd)"
-case "$*" in
-  *--registry-json*) printf '{"declarations": [], "in_process": []}\n' ;;
-esac
 exit 0
 """
 
@@ -201,11 +201,7 @@ class Fixture:
         env["PATH"] = f"{self.bin}:{os.environ['PATH']}"
         env["STUB_LOG"] = str(self.log)
         env["STUB_ITEM_SHOW"] = str(self.item_show)
-        # The registry export caches by the gate file's blob plus the tracked path list, and
-        # a fixture's `tools/fork-check.py` is untracked, so every fixture shares one key --
-        # and the cache outlives the temporary directory it was built in. A case that then
-        # asserts the export RAN would read a cached file instead and a tree without a gate
-        # would pass. The cache is per-fixture scratch, so it is born cold for each case.
+        # Scratch the adapter writes (revision-check logs) stays inside the fixture.
         env["YOLO_DURABLE_DIR"] = str(self.tmp / "durable")
         env.update({key: str(value) for key, value in extra.items()})
         return env
@@ -266,11 +262,9 @@ def test_gate_names_the_gate_program_and_its_argv(tmp):
     """The gate's judgment is `tillr-gate run --gate <program>`, and the argv is exact.
 
     The adapter hands the program's own words on as `--gate` plus one `--gate-arg` each,
-    and the default program is this tree's gate scoped to the candidate's base. That
-    scoping is the whole reason a candidate can be judged at all: without `--since`
-    `tools/fork-check.py` picks its own baseline and advances the shared fork-check state
-    before the candidate has landed, and an absolute path would judge the checkout the
-    loop runs from instead of the candidate's worktree.
+    and the default program is this tree's gate scoped to the candidate's base. The
+    program path is relative: an absolute path would judge the checkout the loop runs
+    from instead of the candidate's worktree.
 
     Negative control: the stub only hands the program on when the case asks it to
     (`STUB_EXEC_GATE`), and a stub that answered the exit itself while never invoking the
@@ -292,11 +286,9 @@ def test_gate_names_the_gate_program_and_its_argv(tmp):
         + " --gate-arg --logs --gate-arg " + str(fixture.run_dir / "change-logs")
     )
     assert want in runs[-1], runs[-1]
-    assert "env PI_FORKS_ROOT=" + str(fixture.repo) in fixture.calls(), fixture.calls()
     # What `tillr-gate run` is handed: the program is relative, so the face's own
-    # `cmd.Dir = <worktree>` resolves it inside the tree being judged, the range is the
-    # candidate's base, `--tier landing` keeps the pre-publish checks, and `--lock-timeout`
-    # waits for the record lock rather than failing the drain on a concurrent gate.
+    # `cmd.Dir = <worktree>` resolves it inside the tree being judged, and the range is
+    # the candidate's base.
     programs = [c for c in fixture.calls() if c.startswith("python3-argv: ")]
     assert programs == [
         "python3-argv: tools/gate/change-gate.py --base " + fixture.base
@@ -306,45 +298,26 @@ def test_gate_names_the_gate_program_and_its_argv(tmp):
     assert "python3-cwd: " + str(fixture.repo) in fixture.calls(), fixture.calls()
 
 
-def test_gate_exports_the_registry_when_none_is_named(tmp):
-    """No `--registry` is not no gate: the adapter exports the tree's own first.
+def test_gate_plans_against_the_candidates_declarations_when_no_registry_is_named(tmp):
+    """No `--registry` is not no gate: the plan reads the candidate's own declarations.
 
-    The plan verifies the registry's SHA-256 digest and the verdict names the digest it
-    planned against, so the registry is an input the gate run owns, not a constant the
-    adapter may invent. It is exported from the tree's own `tools/fork-check.py` into the
-    run's scratch, and the plan reads it from there.
+    The declarations directory in the candidate's worktree is the registry, so a lane
+    that adds or changes a check is judged by it. Nothing is exported or generated.
 
-    Negative control: a tree with no `tools/fork-check.py` cannot export one, and that run
-    is exit 4 with no verdict rather than a pass (the second half of this case).
+    Negative control: a named registry is handed on unchanged.
     """
-    # The negative control first: the fixture repository carries no tools/fork-check.py.
-    broken = Fixture(Path(tmp) / "no-gate")
-    result = broken.run_adapter("gate")
-    assert result.returncode == GATE_COULD_NOT_JUDGE, (result.returncode, result.stderr)
-    assert "could not prepare the judgment" in result.stderr, result.stderr
-    assert not [c for c in broken.calls() if c.startswith("run ")], broken.calls()
-
-    fixture = Fixture(Path(tmp) / "with-gate")
-    fixture.write_stub("python3", PYTHON_STUB)
-    script = fixture.repo / "tools" / "fork-check.py"
-    script.parent.mkdir(parents=True)
-    script.write_text("")
+    fixture = Fixture(tmp)
     result = fixture.run_adapter("gate")
     assert result.returncode == GATE_PASS, (result.returncode, result.stderr)
-    exported = str(fixture.run_dir / "registry.json")
-    # The path is RELATIVE: the export runs with its working directory at the root, and a
-    # relative `tools/fork-check.py` resolves inside the tree the root names rather than at
-    # an absolute path that would survive the checkout moving.
-    invoked = "python3-argv: tools/fork-check.py --registry-json"
-    assert [c for c in fixture.calls() if c == invoked], fixture.calls()
-    assert "python3-cwd: " + str(fixture.repo) in fixture.calls(), fixture.calls()
-    # The file the plan reads is the export's own stdout, not a stream someone parsed.
-    assert json.loads(Path(exported).read_text()) == {"declarations": [], "in_process": []}
     plans = [call for call in fixture.calls() if call.startswith("plan ")]
-    assert plans and "--registry " + exported in plans[-1], plans
-    # The export is a preparation, not a judgment: it runs before the plan and its own
-    # exit would leave as exit 4 rather than as a verdict about the candidate.
-    assert fixture.calls().index(invoked) < fixture.calls().index(plans[-1])
+    want = "--registry " + str(fixture.repo / "tools" / "gate" / "checks")
+    assert plans and want in plans[-1], plans
+    fixture.log.write_text("")
+    named = str(fixture.tmp / "registry.json")
+    result = fixture.run_adapter("gate", ["--registry", named])
+    assert result.returncode == GATE_PASS, (result.returncode, result.stderr)
+    plans = [call for call in fixture.calls() if call.startswith("plan ")]
+    assert plans and "--registry " + named in plans[-1] and want not in plans[-1], plans
 
 
 def test_gate_derives_the_change_with_the_gate_binary(tmp):
@@ -471,36 +444,67 @@ def test_describe_answers_the_hook_contract(tmp):
     assert result.returncode == 2, result
 
 
-def test_revision_hooks_forward_defaults_and_exit_status(tmp):
+def declare(fixture, check_id, scope, tier):
+    """Write one check declaration into the fixture's tree (untracked, so HEAD is unmoved)."""
+    directory = fixture.repo / "tools" / "gate" / "checks"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / (check_id + ".json")).write_text(json.dumps(
+        {"id": check_id, "scope": scope, "tier": tier}))
+
+
+def test_revision_hooks_run_declared_tree_checks_and_keep_exit_status(tmp):
+    """`rolling` and `replay` judge the checked-out revision with declared whole-tree checks.
+
+    The exit status and both output streams are the judge's own, because the adapter
+    replaces itself with it. A heavy declaration is named to `tillr-gate checks
+    --heavy-tree --only`; a fast one goes to the tree's `tools/gate/tree-check.py`.
+
+    Negative controls: a change-scope declaration and an undeclared id are refused with
+    exit 4 and run nothing, since neither has a verdict on a single revision.
+    """
     fixture = Fixture(tmp)
-    stub = fixture.bin / "python3"
-    stub.write_text(PYTHON_STUB.replace("exit 0", '''
-log "fork-root: $PI_FORKS_ROOT"
-log "spans-out: $TILLR_GATE_SPANS_OUT"
-printf 'revision stdout\\n'
-printf 'revision stderr\\n' >&2
-exit "${STUB_REVISION:-0}"
-'''))
-    stub.chmod(0o755)
-    for name, flags, prefix in (
-        ("replay", ["--only", "test:one,test:two"], ["--replay"]),
-        ("rolling", ["--all"], ["--tier", "rolling"]),
-        ("rolling", ["--since", fixture.base], ["--tier", "rolling"]),
+    declare(fixture, "heavy-one", "tree", "heavy")
+    declare(fixture, "fast-one", "tree", "fast")
+    declare(fixture, "change-one", "change", "fast")
+    tree_check = fixture.repo / "tools" / "gate" / "tree-check.py"
+    tree_check.write_text("import os, sys\n"
+                          "open(os.environ['STUB_LOG'], 'a').write('tree-check ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+                          "sys.exit(int(os.environ.get('STUB_REVISION', '0')))\n")
+    gate_stub = str(fixture.bin / "tillr-gate")
+    logs = str(fixture.tmp / "durable" / "tillr-loop-revision-logs")
+    heavy = "checks --heavy-tree --base HEAD --head HEAD --worktree . --checks tools/gate/checks --logs " + logs
+    for name, flags, suffix in (
+        ("replay", ["--only", "heavy-one"], " --only heavy-one"),
+        ("rolling", ["--all"], ""),
+        ("rolling", ["--since", fixture.base], ""),
     ):
         for code in (0, 1, 2, 4, 6):
             fixture.log.write_text("")
-            env = fixture.env(STUB_REVISION=code, PI_FORKS_ROOT=str(fixture.repo),
-                              TILLR_GATE_SPANS_OUT=str(fixture.tmp / "spans.jsonl"))
+            env = fixture.env(STUB_REVISION=code, TILLR_GATE_SPANS_OUT=str(fixture.tmp / "spans.jsonl"))
             result = subprocess.run([sys.executable, str(ADAPTER), name, *flags],
                                     cwd=fixture.repo, env=env, capture_output=True, text=True)
             assert result.returncode == code, (name, flags, result.returncode, result.stderr)
             assert result.stdout == "revision stdout\n" and result.stderr == "revision stderr\n", result
-            assert fixture.calls() == [
-                "python3-argv: " + " ".join(["tools/fork-check.py", *prefix, *flags]),
-                "python3-cwd: " + str(fixture.repo),
-                "fork-root: " + str(fixture.repo),
-                "spans-out: " + str(fixture.tmp / "spans.jsonl"),
-            ], fixture.calls()
+            calls = fixture.calls()
+            assert calls[0].startswith(heavy + "/") and calls[0].endswith(suffix or calls[0][-1]), calls
+            assert (" --only " in calls[0]) == bool(suffix), calls
+            assert calls[1:] == ["checks-cwd: " + str(fixture.repo),
+                                 "spans-out: " + str(fixture.tmp / "spans.jsonl")], calls
+    for code in (0, 1, 6):
+        fixture.log.write_text("")
+        result = subprocess.run([sys.executable, str(ADAPTER), "replay", "--only", "fast-one"],
+                                cwd=fixture.repo, env=fixture.env(STUB_REVISION=code),
+                                capture_output=True, text=True)
+        assert result.returncode == code, (result.returncode, result.stderr)
+        assert fixture.calls() == ["tree-check --only fast-one --base HEAD --head HEAD --runner "
+                                   + gate_stub], fixture.calls()
+    for refused in ("change-one", "absent"):
+        fixture.log.write_text("")
+        result = subprocess.run([sys.executable, str(ADAPTER), "replay", "--only", refused],
+                                cwd=fixture.repo, env=fixture.env(), capture_output=True, text=True)
+        assert result.returncode == GATE_COULD_NOT_JUDGE, (refused, result.returncode, result.stderr)
+        assert "is not a whole-tree declaration" in result.stderr, result.stderr
+        assert fixture.calls() == [], fixture.calls()
     for name, flags in (("replay", []), ("replay", ["--only", "x", "--replay"]),
                         ("rolling", []), ("rolling", ["--all", "--since", fixture.base]),
                         ("rolling", ["--tier", "rolling", "--all"])):
@@ -541,6 +545,11 @@ def test_every_argv_the_drain_sends_is_accepted(tmp):
     store = fixture.tmp / "state.db"
     env = fixture.env(TILLR_LOOP_REGISTRY=fixture.tmp / "registry.json")
     for case in cases:
+        if case["face"] == "fixer-gate":
+            declare(fixture, "fixture", "tree", "heavy")
+            only = case["args"][case["args"].index("--only") + 1]
+            (fixture.repo / "tools/gate/checks/fixture.json").write_text(json.dumps(
+                {"id": only, "scope": "tree", "tier": "heavy"}))
         args = [word.replace("<worktree>", str(fixture.repo)).replace("<store>", str(store))
                 .replace("<root>", str(fixture.repo)).replace("<head>", fixture.head)
                 for word in case["args"]]
@@ -551,9 +560,9 @@ def test_every_argv_the_drain_sends_is_accepted(tmp):
         result = subprocess.run([sys.executable, str(ADAPTER), case["face"], *args],
                                 cwd=str(fixture.repo), env=env, capture_output=True, text=True)
         assert result.returncode == 0, (case["case"], result.returncode, result.stderr)
-        calls = [call for call in fixture.calls() if not call.startswith("env ")]
+        calls = [call for call in fixture.calls() if not call.startswith("spans-out: ")]
         last = calls[-1] if calls else ""
-        want = {"gate": "run ", "fixer-gate": "python3-cwd: ",
+        want = {"gate": "run ", "fixer-gate": "checks-cwd: ",
                 "land": "pass ", "verdict": "verdict record "}[case["face"]]
         assert last.startswith(want), (case["case"], calls)
         # Every flag the drain added after the candidate's own reaches the lander unchanged.
@@ -585,12 +594,13 @@ def test_fixer_runs_only_the_named_selector_on_candidate_head(tmp):
     fixture = Fixture(tmp)
     fixture.write_stub("python3", PYTHON_STUB)
     git(fixture.repo, "checkout", "tillr/lane-1")
-    result = fixture.run_adapter("fixer-gate", ["--only", "test:one label"])
+    declare(fixture, "heavy-one", "tree", "heavy")
+    result = fixture.run_adapter("fixer-gate", ["--only", "heavy-one"])
     assert result.returncode == GATE_PASS, (result.returncode, result.stderr)
-    assert fixture.calls() == [
-        "python3-argv: tools/fork-check.py --replay --only=test:one label --fixer",
-        "python3-cwd: " + str(fixture.repo),
-    ], fixture.calls()
+    calls = fixture.calls()
+    assert calls[0].startswith("checks --heavy-tree --base HEAD --head HEAD") \
+        and calls[0].endswith(" --only heavy-one"), calls
+    assert calls[1] == "checks-cwd: " + str(fixture.repo), calls
     for obsolete in (["--all"], ["--since", fixture.base]):
         for face in ("gate", "fixer-gate"):
             result = fixture.run_adapter(face, obsolete)
@@ -801,7 +811,6 @@ def test_self_check_names_argv_without_running_it(tmp):
     assert "--gate-arg --base --gate-arg " + fixture.base in out, out
     assert "--gate-arg --head --gate-arg " + fixture.head in out, out
     assert "--logs " + str(fixture.run_dir / "logs") in out, out
-    assert "PI_FORKS_ROOT=" + str(fixture.repo) in out, out
     assert "tillr-land pass" in out, out
     assert "tillr-item verdict record" in out, out
     assert "head=" + fixture.head in out, out
@@ -811,26 +820,16 @@ def test_self_check_names_argv_without_running_it(tmp):
     assert "tillr drain loop --root" in out, out
 
 
-def test_self_check_shows_the_generated_registry(tmp):
-    """A self-check with no registry names the export it would run and where it lands.
-
-    The self-check exists so an operator sees a night's argv before spending a night on it;
-    the generated registry is part of that argv, so it is printed as the redirect it is.
-    """
+def test_self_check_shows_the_declarations_directory(tmp):
+    """A self-check with no registry prints the declarations directory the plan would read."""
     fixture = Fixture(tmp)
     fixture.gate_verdict()
     result = fixture.run_adapter("self-check")
     assert result.returncode == 0, (result.returncode, result.stderr)
     assert fixture.calls() == [], fixture.calls()
     out = result.stdout
-    exported = str(fixture.run_dir / "registry.json")
-    # The banner the adapter prints, and the export as the redirect it is: the step is
-    # `sh -c <script> > <run>/registry.json`, so the shell command and its `--registry-json`
-    # are visible, and so is the file the redirect creates.
     assert "tillr-loop self-check: one tick's three judgments" in out, out
-    assert "--registry-json" in out, out
-    assert " > " + shlex.quote(exported) in out, out
-    assert "--registry " + exported in out, out
+    assert "--registry " + str(fixture.repo / "tools" / "gate" / "checks") in out, out
 
 
 def test_no_root_refuses(tmp):
@@ -913,13 +912,13 @@ def main():
         cases = [
             test_gate_exit_mapping,
             test_gate_names_the_gate_program_and_its_argv,
-            test_gate_exports_the_registry_when_none_is_named,
+            test_gate_plans_against_the_candidates_declarations_when_no_registry_is_named,
             test_gate_derives_the_change_with_the_gate_binary,
             test_land_exit_mapping,
             test_land_forwards_message_source,
             test_land_forwards_the_observed_trunk,
             test_describe_answers_the_hook_contract,
-            test_revision_hooks_forward_defaults_and_exit_status,
+            test_revision_hooks_run_declared_tree_checks_and_keep_exit_status,
             test_hook_dispatch_matches_drain_flag_cases,
             test_every_argv_the_drain_sends_is_accepted,
             test_check_argv_parses_without_reading_or_judging,
@@ -935,7 +934,7 @@ def main():
             test_failing_verdict_is_a_usage_error,
             test_missing_judge_is_not_a_failure,
             test_self_check_names_argv_without_running_it,
-            test_self_check_shows_the_generated_registry,
+            test_self_check_shows_the_declarations_directory,
             test_no_root_refuses,
             test_the_three_faces_agree_on_the_run_directory_from_any_cwd,
         ]

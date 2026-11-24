@@ -14,7 +14,6 @@ import (
 
 var movedRunnerSites = map[string][]string{
 	"tools/tillr-gate/checks.go":                        {"checksFace"},
-	"tools/tillr-gate/dualrun.go":                       {"pythonVerdict", "verdictResult", "compare"},
 	"tools/tillr-gate/gate.go":                          {"gateResult", "runGateProgram", "RunGate"},
 	"tools/tillr-gate/main.go":                          {"runFace", "writeRunSummary"},
 	"tools/tillr-gate/memory.go":                        {"read", "publish", "annotateMemory", "run"},
