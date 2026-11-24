@@ -153,7 +153,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	}
 	answer.Definition = declared.Name
 	def := declared.Parsed
-	works, err := readPending(r)
+	works, designHistory, err := readPendingHistory(r)
 	if err != nil {
 		return answer, err
 	}
@@ -232,7 +232,12 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	offered = *tick.AvailableLanes
 	answer.Lanes = offered
 	answer.Draining = drainingLanes(works, configured)
-	details := planDetails{maskedWorkers: make(map[string]Decision)}
+	details := planDetails{
+		maskedWorkers: make(map[string]Decision),
+		works:         works,
+		designHistory: designHistory,
+		conflicts:     conflicts,
+	}
 	envs, err := planWithDetails(r, tick, policy, questions, def, &details)
 	if err != nil {
 		return answer, err
@@ -285,14 +290,8 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			places[it.ItemID] = len(places) + 1
 		}
 	}
-	itemFaults, err := ReadItemFaults(r)
-	if err != nil {
-		return answer, readFailure(err)
-	}
-	obstacleHolds, _, err := ReadObstacleHolds(r)
-	if err != nil {
-		return answer, readFailure(err)
-	}
+	itemFaults := details.faults
+	obstacleHolds := details.obstacleHolds
 	landedItems, err := obstacles.LandedItems(r)
 	if err != nil {
 		return answer, readFailure(err)

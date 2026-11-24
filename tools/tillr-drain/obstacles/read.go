@@ -359,6 +359,9 @@ func Read(r *store.Reader) (map[string]Hold, map[string]string, error) {
 				}
 			}
 		case "run.allocate":
+			if len(active) == 0 && len(released) == 0 {
+				continue
+			}
 			var p struct {
 				ItemID string `json:"item_id"`
 				RunID  string `json:"run_id"`
@@ -373,6 +376,9 @@ func Read(r *store.Reader) (map[string]Hold, map[string]string, error) {
 				delete(released, p.ItemID)
 			}
 		case "drain.started":
+			if len(active) == 0 && len(released) == 0 {
+				continue
+			}
 			var p struct {
 				Decision struct {
 					ItemID     string `json:"item_id"`
