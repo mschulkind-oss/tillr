@@ -2,19 +2,19 @@
 title: "Why tillr keeps hitting walls: three causes, one target"
 status: accepted
 stage: DECIDED
-updated: 2026-11-18
+updated: 2026-11-19
 tags:
   - tillr
   - drain
   - queue
   - observability
   - design
-summary: "Reads three days of tillr history as three structural causes rather than many defects — derived copies that are checked instead of derived, failures that become holds only a person can clear, and decisions that are recorded but not shown — and sets one target: a cold machine rebuilds the queue from documents, drains it, and shows every stopped item with the act that moves it."
-next: "Build the two D-TC3 units at the end of Section 4, written with no item directive until the owner rules on how documents declare work: the cause statement, then the stop on two unrelated items. The other three remainders wait on a design decision or an open question named in the Decision Ledger."
+summary: "Reads three days of tillr history as three structural causes rather than many defects — derived copies that are checked instead of derived, failures that become holds only a person can clear, and decisions that are recorded but not shown — and sets one target: a cold machine rebuilds the queue from documents, drains it, and shows every stopped item with the act that moves it. Document sync, seed retirement, waiting/why visibility and hold classes are built; input-change re-admission was superseded by D-JL10; post-run cause statements, the two-unrelated-items stop, removed-block retirement, derived-copy regeneration and profile-owned model ids remain unbuilt."
+next: "Build the two D-TC3 units at the end of Section 4 (written without hidden item comments; on 2026-11-18 the owner ruled OQ-QM1 in tillr-queue-mirrors-designs.md to put tasks in companion <topic>-plan.md files, unbuilt): the cause statement, then the stop on two unrelated items. Reconcile the unruled removed-block retirement rule in D-TC2 against triage-no-block and the companion-plan rollout; D-TC5 waits on OQ-SH2, and OQ-TC2 waits on harness profiles and OQ-PT7/OQ-PT8."
 depends-on:
   - queue-persistence-ruling.md
   - landing-principles.md
-  - tillr-drain-successor.md
+  - ../reference/tillr-drain-successor.md
   - momentum-principle.md
 vantage:
   status-chip: true
@@ -22,22 +22,37 @@ vantage:
 
 # Why tillr keeps hitting walls: three causes, one target
 
-> **Delivered copy.** This is `docs/design/tillr-convergence.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-convergence.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-convergence.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-convergence.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-15. Measured against `main` at `35a3dc9f1`, on a machine with no `.tillr/`
-directory. Reconciled against the tree at `dcb76fe41` on 2026-11-18. These are built: the block
-reader and the trailer deletion (`D-TC1`), sync as the only intake (`D-TC2`, apart from one
-rule), the seed's retirement ([`OQ-TC1`](#decision-ledger), `item-seed-retire`), the "why is it not moving" face
-(`D-TC4`), and hold classes and movers (`D-TC3`, in part). Re-admission on a changed input
-([`OQ-TC3`](#decision-ledger)) was built and then removed: the owner's ruling of 2026-11-17
+directory. Reconciled against the tree at `dcb76fe41` on 2026-11-18 and at `85ca09644` on
+2026-11-19. These are built: the block
+reader and the trailer deletion (`D-TC1`), sync as document intake (`D-TC2`, apart from
+removed-block retirement; store-declared CLI filings `idea`, `doc-triage` and `request` also exist,
+and on 2026-11-18 the owner ruled [`OQ-QM1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md#OQ-QM1) in
+[`tillr-queue-mirrors-designs.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md) to replace hidden item comments
+with mirrored roadmaps and companion `<topic>-plan.md` files once built), the seed's retirement
+([`OQ-TC1`](#OQ-TC1), `item-seed-retire`), the "why is it not moving" face (`D-TC4`), and hold
+classes and movers (`D-TC3`, in part; `tools/tillr-drain/drain/returned.go` also returns a worker
+run's refusal with normalized check-log digests and escalates an identical repeat under `D-JL10`,
+and `tools/tillr-drain/drain/defect.go` files tooling-defect items from worker `tooling` obstacles).
+Re-admission on a changed input
+([`OQ-TC3`](#OQ-TC3)) was built and then removed: the owner's ruling of 2026-11-17
 (`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger))
-supersedes it, and `f8774bd63` took the code out. Four remainders are not built. Two are ready to build. Two wait on something else:
-removed-block retirement waits on a design decision this document still owes, and both the
-pipeline's regeneration of derived copies and moving model ids out of the policy files wait on
-other documents' open questions. The [Decision Ledger](#decision-ledger) names what each one
-waits on. The three open
-questions were settled on 2026-11-15 by the session's designer on recorded principle, at the
-owner's request; the owner may overturn any of them.
+supersedes it, and `f8774bd63` took the code out (`TestAChangedInputReDispatchesNothing` in
+`tools/tillr-drain/drain/readmit_test.go`). Four remainders are not built. Two are drafted at the
+end of [Section 4](#4-what-i-would-build-in-order) (post-run hold cause statements and the
+two-unrelated-items stop). Two wait on something else: removed-block retirement (`D-TC2`) waits on
+an unruled design decision between retiring an item whose block was removed and routing unshared
+open items to `triage-no-block` (and on the unbuilt companion-plan rollout of
+[`tillr-queue-mirrors-designs.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md)), while regenerating derived
+copies (`D-TC5`) and moving model ids out of the policy files ([`OQ-TC2`](#OQ-TC2)) wait on other
+documents' open questions. The [Decision Ledger](#decision-ledger) names what each one waits on. Its
+three former open questions ([`OQ-TC1`](#OQ-TC1) to [`OQ-TC3`](#OQ-TC3)) were initially settled on
+2026-11-15 by the session's designer on recorded principle, at the owner's request:
+[`OQ-TC1`](#OQ-TC1) is built, [`OQ-TC2`](#OQ-TC2) remains a designer's decision in the stopgap
+state, and [`OQ-TC3`](#OQ-TC3) was superseded by the owner in `D-JL10`; `D-TC1` to `D-TC5` are also
+designer's decisions that the owner may overturn.
 
 > **In short.** The walls are not complexity. Almost every fix of the last three days repairs one of
 > three structural causes, and each cause has a principle already written down in this tree that
@@ -51,16 +66,29 @@ queue's definition (four ownership models in about 38 hours).
 **The shape.** One invariant to build toward — *delete `.tillr/`, sync, drain* — and three rules
 that make it hold: derive every copy, give every hold a mover, show every decision.
 
-**Cost.** The seed file, its count pin, the commit trailer and the hand-run mirror go away. A held
-item may run again without a person asking for it, which is a change in who authorizes spend.
+**Cost.** The seed file, its count pin, the commit trailer and the hand-run mirror go away. Under
+the initial [`OQ-TC3`](#OQ-TC3) proposal, a held item could run again on a changed input without a
+person asking for it (superseded on 2026-11-17 by `D-JL10` in
+[`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md#decision-ledger), which returns a
+worker refusal to the worker rather than re-dispatching on input-hash changes).
 
 **Start at [Section 2](#2-the-three-causes)** — the causes. The target and the order fall out of it.
 
-**Needs your ruling:** None.
+**Needs your ruling:** No open `OQ-*` directive in this document. Removed-block retirement vs.
+`triage-no-block` (`D-TC2`) remains an unruled design decision owed here (alongside the unbuilt
+companion-plan rollout of [`tillr-queue-mirrors-designs.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md)),
+`D-TC5` waits on [`OQ-SH2`](tillr-selfhosted-build.md#OQ-SH2), and the agent-authored decisions in
+the [Decision Ledger](#decision-ledger) remain open to the owner's review and overturn (tracked in
+[`decision-provenance-review.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md):
+[`OQ-PR6`](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md#OQ-PR6),
+[`OQ-PR8`](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md#OQ-PR8),
+[`OQ-PR10`](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md#OQ-PR10)).
 
 **Reads with:** [`queue-persistence-ruling.md`](queue-persistence-ruling.md) (the ruling whose last
-two commits this design executes first), [`landing-principles.md`](landing-principles.md) (the
-principles named here as unenforced), [`tillr-drain-successor.md`](tillr-drain-successor.md) (the
+two commits this design executes first), [`tillr-queue-mirrors-designs.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md)
+(the 2026-11-18 ruling on [`OQ-QM1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md#OQ-QM1) retiring hidden item
+comments in favor of companion `<topic>-plan.md` files once built), [`landing-principles.md`](landing-principles.md) (the
+principles named here as unenforced), [`tillr-drain-successor.md`](../reference/tillr-drain-successor.md) (the
 loop model the hold classes project onto), [`tillr-claude-backend.md`](tillr-claude-backend.md)
 (the harness a seat may name in [Section 3.5](#35-a-seat-names-its-harness-and-the-harness-names-the-model)), and
 [`failure-diagnosed-not-waited-out.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/failure-diagnosed-not-waited-out.md) (the mechanism
@@ -169,7 +197,7 @@ Three rules make it hold. Each is stated as behavior; mechanism is the implement
   neither landed nor such a restatement (four pi-fork items that cannot be staged yet, three whose
   criteria the ruling says are wrong) become prose entries on
   [`docs/pi/roadmap.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/roadmap.md), which keeps their text without a second intake.
-  ([OQ-TC1](#decision-ledger).)
+  ([OQ-TC1](#OQ-TC1).)
 
 The first proof is this machine: sync on a store that does not exist yields the six items of
 [Section 1](#1-what-a-cold-machine-finds-today), four dispatchable.
@@ -202,7 +230,7 @@ build, the backend policy, and the base commit.
   owner runs `tillr drain retry`: a budget escalates to a person, it does not loop
   ([landing principle 6](landing-principles.md#6-a-budget-escalates-it-does-not-loop)), and a re-queue happens only against a recorded
   basis (`D-JL6` in [`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md)).
-  ([OQ-TC3](#decision-ledger).) **Superseded** by the owner's ruling of 2026-11-17 (`D-JL10` in
+  ([OQ-TC3](#OQ-TC3).) **Superseded** by the owner's ruling of 2026-11-17 (`D-JL10` in
   [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)): nothing re-runs
   because an input changed, and a worker run's ending is never counted. The re-admission was
   removed at `f8774bd63`.
@@ -219,9 +247,9 @@ build, the backend policy, and the base commit.
 - **Visibility ships with the behavior.** A change that adds a hold or a stop adds its row to these
   faces in the same commit.
 
-The board timeline already has two item blocks in
-[`observatory-design.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-design.md); they are the drawn form of the second bullet and
-stay as written.
+The board timeline had two item blocks in the graduated observatory design
+([`docs/reference/observatory-design.md`](../reference/observatory-design.md)); they were the drawn form of the second bullet and
+stayed as written until landed and superseded by [observatory redesign](../reference/observatory-redesign.md).
 
 ### 3.4 A derived copy is produced by the pipeline
 
@@ -247,9 +275,10 @@ backend adapter that runs a seat's work — pi, or the `claude -p` backend of
 - **The model comes from the harness's own profile on the machine.** Tillr's tree names no model
   id; a machine changes models by changing its profile, as pi's model and provider are already
   derived from the selected profile.
-- **The per-machine-group policy files are the stopgap.** `backend-policy.json` and
-  `backend-policy.bedrock.json` stay until a harness profile can answer for the design seat, then
-  the model ids leave them. ([OQ-TC2](#decision-ledger).)
+- **The per-machine-group policy files are the stopgap.** The `config/tillr/backend-policy*.json`
+  files (`backend-policy.json`, `backend-policy.bedrock.json`, `backend-policy.claude.json`,
+  `backend-policy.mixed.json` and `backend-policy.copilot.json`) stay until a harness profile can
+  answer for the design seat, then the model ids leave them. ([OQ-TC2](#OQ-TC2).)
 
 ## 4. What I would build, in order
 
@@ -281,7 +310,7 @@ Two attempts at this work built the retirement and neither produced a candidate 
 gate, for reasons this section did not state. Both replaced this section with a "Built" note.
 The loop refuses that before the gate, as a worker editing its own item block, and it writes the
 retirement itself once the change has landed. Removing the block also orphaned the dependency
-that `item-oa-move-to-top` in [`observatory-actions.md`](observatory-actions.md) declares on
+that `item-oa-move-to-top` in [`observatory-actions.md`](../reference/observatory-actions.md#moving-an-item) declares on
 this item, which is why document sync then failed. Criterion c6 states the boundary.
 
 The second attempt also stopped on test fallout from deleting the seed, and criterion c7 names
@@ -293,8 +322,8 @@ One failure a worker meets in a lane is not this item's and is not a reason to s
 `go test . -run '^TestPlanHoldsAnItemBlockedByAnUnlandedItem$'` in `tools/tillr-drain` fails its
 `blocker landed` case with `hold / trunk-unproved`. The test plans against the checkout it runs
 in, a lane shares the main checkout's proved-trunk pointer, and the gate's clean checkout has
-none, so the gate does not see it. Its repair is criterion c8 of `item-ig-parallel-readers` in
-[`tillr-item-graphs.md`](tillr-item-graphs.md). A worker that sees exactly that one case fail
+none, so the gate does not see it. Its repair landed with parallel readers in
+[item graphs](../reference/tillr-item-graphs.md#parallel-read-only-nodes). A worker that sees exactly that one case fail
 reports it and carries on; any other failure in the drain suite is a real finding. The same
 measurement ran `python3 tests/fork-check.test.py` to exit 0 on that commit, so a failure there
 belongs to the candidate. That test keeps its gate records under the shared git directory by
@@ -363,8 +392,11 @@ When a run fails after it starts, the loop holds its item for one of six reasons
 says which reason, but not what went wrong or what would have to change for a second run to
 succeed. So a person who reads a held item must open the run's log to find the stage that
 failed and the error it printed. The loop already records the run's inputs when it dispatches
-the run: the item's block, its allowed paths, the backend policy and the tillr build. Re-admission
-compares those inputs, but the hold does not point at them. [Section 3.2](#32-every-hold-names-a-mover-that-can-act)
+the run: the item's block, its allowed paths, the backend policy and the tillr build
+(`RunInputs` in `tools/tillr-drain/drain/readmit.go`; input-change re-admission itself was
+removed under `D-JL10`, while `tools/tillr-drain/drain/returned.go` returns a worker refusal
+with normalized check-log digests). The hold row itself still does not point at those inputs or
+carry a normalized cause statement. [Section 3.2](#32-every-hold-names-a-mover-that-can-act)
 asks that each post-run hold carry a **cause statement**, made of three parts: the stage that
 failed, the error in a normalized form that two runs can share, and the run's recorded inputs.
 The waiting face then shows that statement beside the mover, so the reader sees what to change.
@@ -376,8 +408,10 @@ The waiting face then shows that statement beside the mover, so the reader sees 
 - Give the next unit a normalized error it can compare across items.
 
 **Not yet filed.** On the owner's ruling of 2026-11-18, no document gains a new item
-directive while the owner reviews how documents declare work. This unit is written to become
-an item however that ruling lands. It waits on nothing.
+directive; on the same day the owner ruled [`OQ-QM1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md#OQ-QM1) in
+[`tillr-queue-mirrors-designs.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md) to put build tasks in companion
+`<topic>-plan.md` files (not yet built). This unit stays written without a directive to become a
+task once that reader lands (or via `tillr item request`). It waits on nothing.
 
 - **c1:** Each of the six post-run holds named in
   [Section 2.2](#22-a-failure-becomes-a-hold-only-a-person-can-clear) records a cause statement
@@ -428,9 +462,13 @@ says why, and files one defect item. It does not hold the items one by one.
 - Resume dispatch once that defect item lands, with no command to run.
 
 **Not yet filed.** On the owner's ruling of 2026-11-18, no document gains a new item
-directive while the owner reviews how documents declare work. This unit is written to become
-an item however that ruling lands. It waits on the cause statement unit above, whose
-normalized error it compares.
+directive; on the same day the owner ruled [`OQ-QM1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md#OQ-QM1) in
+[`tillr-queue-mirrors-designs.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md) to put build tasks in companion
+`<topic>-plan.md` files (not yet built). This unit stays written without a directive to become a
+task once that reader lands (or via `tillr item request`). It waits on the cause statement unit
+above, whose normalized error it compares (note: `c5` below was drafted before `D-JL10` removed
+input-change re-admission in favor of acquitted repair holds such as `ReasonToolingDefect` in
+`tools/tillr-drain/drain/defect.go`).
 
 - **c1:** When two post-run holds carry the same stage and normalized error, and their items'
   allowed paths share no path, the loop dispatches no new run. Runs already in flight finish.
@@ -474,8 +512,9 @@ normalized error it compares.
   root-cause fixes and they hold.
 - No ruling on the twelve questions in the four designs under review. Steps 1 to 6 depend on none
   of them.
-- No retry budget or cooldown. The one count is the single re-admission of
-  [Section 3.2](#32-every-hold-names-a-mover-that-can-act), after which a person decides.
+- No retry budget or cooldown. The one count proposed here was the single re-admission of
+  [Section 3.2](#32-every-hold-names-a-mover-that-can-act), after which a person decides
+  (superseded by `D-JL10`, which counts no endings and removes input-change re-admission).
 - No committed queue snapshot and no rank in a document.
 
 ## 6. Risks
@@ -483,18 +522,18 @@ normalized error it compares.
 | Risk | Mitigation |
 | :--- | :--- |
 | The 45 seed rows include one that never landed | Before a row is deleted, its criteria are checked against `main`; a row that does not pass becomes an item block instead |
-| A re-admitted item loops on a change that does not matter | The cause statement names which input changed, and an item that fails again after one re-admission stays held until the owner runs `tillr drain retry` |
+| A re-admitted item loops on a change that does not matter | The cause statement names which input changed, and an item that fails again after one re-admission stays held until the owner runs `tillr drain retry` (superseded when `D-JL10` removed input-change re-admission at `f8774bd63`) |
 | The first drain on new models fails for reasons that are not the items' | It runs supervised on one lane, and a machinery failure stops it under the two-item rule |
 
 ## Decision Ledger
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| `D-TC1` | A directive counts only when its opening `<!--` starts a line outside a fenced block. **Rejected:** skipping fences alone, which reads about forty inline mentions as malformed blocks. | 2026-11-15 | [Section 1](#1-what-a-cold-machine-finds-today) | ✅ (`tools/tillr-item/item/sync.go`; the suite syncs this repository's tracked documents and asserts zero findings) |
-| `D-TC2` | Sync is the only intake, is idempotent, never rewrites rank, runs or `landed`, and treats a changed block as a changed item. A block may name a `seat` (amended 2026-11-15, [ruling Section 1](queue-persistence-ruling.md#1-shared-item-block-shape)), which is part of the definition a changed block changes. **Rejected:** a `-v2` clone as the way to revise a judged item. | 2026-11-15 | [Section 3.1](#31-the-queue-is-read-from-documents-and-from-nothing-else) | Partial. Built: `tillr-item sync`, which the loop runs at start and after each trunk change, is the only intake now that `item-seed-retire` has landed. It is idempotent, never moves state, rank or runs, and updates a changed definition through an `item.update` event; once a criterion carries a state, the row is left alone and reported `definition-frozen`. **Not built, and not filed:** a removed block retiring its item. The landed `item-sync-hold-unshared-items` handles that same case another way: an open item with no block (`UnsharedOpenIDs` in `tools/tillr-item/item/sync.go`) goes to triage on the design seat (`triageDecision` in `tools/tillr-drain/drain/plan.go`) and is not retired. Which of the two rules stands is a design decision this document owes, so no item is filed for it |
-| `D-TC3` | Every hold carries one of three classes and a mover; a post-run hold records a cause statement with its inputs. **Rejected:** a retry door per hold reason. | 2026-11-15 | [Section 3.2](#32-every-hold-names-a-mover-that-can-act) | Partial. Built: the classes and movers, in the definitions every hold reason is entered in (`tools/tillr-drain/drain/definition.go`) and the waiting face that shows them (`tools/tillr-view/waiting.go`). Not built: the cause statement and the two-unrelated-items rule, written as the last two units of [Section 4](#4-what-i-would-build-in-order) |
+| `D-TC1` | A directive counts only when its opening `<!--` starts a line outside a fenced block. **Rejected:** skipping fences alone, which reads about forty inline mentions as malformed blocks. | 2026-11-15 | [Section 1](#1-what-a-cold-machine-finds-today) | ✅ (`tools/tillr-item/item/sync.go`, `TestSyncIgnoresInlineMentionsAndFencedDirectives`; slated for retirement once the companion-plan reader of [`OQ-QM1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md#OQ-QM1) in [`tillr-queue-mirrors-designs.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md) is built) |
+| `D-TC2` | Sync is the only intake, is idempotent, never rewrites rank, runs or `landed`, and treats a changed block as a changed item. A block may name a `seat` (amended 2026-11-15, [ruling Section 1](queue-persistence-ruling.md#1-shared-item-block-shape)), which is part of the definition a changed block changes. **Rejected:** a `-v2` clone as the way to revise a judged item. | 2026-11-15 | [Section 3.1](#31-the-queue-is-read-from-documents-and-from-nothing-else) | Partial. Built: `tillr-item sync`, which the loop runs at start and after each trunk change, is the only document-block intake now that `item-seed-retire` has landed (`tillr-item` also accepts store-declared CLI filings `idea`, `doc-triage` and `request`, and [`OQ-QM1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md#OQ-QM1) in [`tillr-queue-mirrors-designs.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md) replaces hidden item comments with mirrored roadmaps and companion `<topic>-plan.md` files once built). Sync is idempotent, never moves state, rank or runs, and updates a changed definition through an `item.update` event; once a criterion carries a state, the row is left alone and reported `definition-frozen`. **Not built, and not filed:** a removed block retiring its item. The landed `item-sync-hold-unshared-items` handles that same case another way: an open item with no block (`UnsharedOpenIDs` in `tools/tillr-item/item/sync.go`) goes to triage on the design seat (`triageDecision` in `tools/tillr-drain/drain/document_prerequisite.go`, called from `tools/tillr-drain/drain/plan.go`) and is not retired. Which of the two rules stands is a design decision this document owes, so no item is filed for it |
+| `D-TC3` | Every hold carries one of three classes and a mover; a post-run hold records a cause statement with its inputs. **Rejected:** a retry door per hold reason. | 2026-11-15 | [Section 3.2](#32-every-hold-names-a-mover-that-can-act) | Partial. Built: the classes and movers, in the definitions every hold reason is entered in (`tools/tillr-drain/drain/definition.go`, `TestAllDefinedHoldReasonsAreClassified`) and the waiting face that shows them (`tools/tillr-view/waiting.go`, `TestWaitingEveryDrainReasonHasARule`); worker refusals also return with normalized check-log digests (`tools/tillr-drain/drain/returned.go`) and worker `tooling` obstacles file defect items (`tools/tillr-drain/drain/defect.go`). Not built: the post-run hold cause statement and the two-unrelated-items rule, written as the last two units of [Section 4](#4-what-i-would-build-in-order) |
 | `D-TC4` | One read face answers why each unlanded item is not moving, text first; a new hold or stop ships its row in the same commit. **Rejected:** fixing the board one field at a time. | 2026-11-15 | [Section 3.3](#33-every-decision-is-shown-where-the-owner-looks) | ✅ (`tools/tillr-view/waiting.go` and `tools/tillr-view/why.go`) |
-| `D-TC5` | The pipeline regenerates derived copies between commit and gate; tests assert structure and never a count. **Rejected:** asking the worker to regenerate, and a pre-commit hook, which fixes the human path only. | 2026-11-15 | [Section 3.4](#34-a-derived-copy-is-produced-by-the-pipeline) | — Not filed. It waits on [OQ-SH2](tillr-selfhosted-build.md#OQ-SH2) in [the self-hosted build design](tillr-selfhosted-build.md), which [Section 3.4](#34-a-derived-copy-is-produced-by-the-pipeline) leaves there. That question decides what becomes of the pack mirror and its check. Until it is ruled, the module list keeps its two homes: `MODULES` in `tests/pack-sync.test.py` and the module list in `tools/fork-check.py` |
-| OQ-TC1 | Delete `config/tillr/seed-items.json` and the `seed` face of `tillr-item`; sync is the only intake. The seven rows that are neither landed nor a restated open question become prose entries on [`docs/pi/roadmap.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/roadmap.md), and the row-count pin goes. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principle is the owner's standing goal that state lives in documents, and [`queue-persistence-ruling.md`](queue-persistence-ruling.md)'s ruling that documents are the only intake. The owner may overturn it. **Rejected:** pruning the file and keeping it; teaching sync to ignore the seed's state. | 2026-11-15 | [Section 3.1](#31-the-queue-is-read-from-documents-and-from-nothing-else) | ✅ (`item-seed-retire`) |
-| OQ-TC2 | Tillr's tracked policy names seats and, for each seat, the harness that fills it; the model id comes from that harness's own profile on the machine, so tillr's tree names no model. The per-machine-group policy files stay as the stopgap until a harness profile can answer for the design seat. Unlike a pure "seat only" policy, which harness fills a seat stays a tillr choice, because the owner asked on 2026-11-15 to choose which seats run on the Claude subscription. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "Pi's model and provider are DERIVED from the selected profile" and the backend policy's rule that no model id is copied into `tools/tillr*`. The owner may overturn it. **Rejected:** per-group policy files as the target; an untracked per-machine file. | 2026-11-15 | [Section 3.5](#35-a-seat-names-its-harness-and-the-harness-names-the-model) | Partial (the stopgap: `config/tillr/backend-policy.json` and `config/tillr/backend-policy.bedrock.json`, each still naming model ids). Not filed: the model ids stay until a harness profile can answer for the design seat, and [the planning-node model tiering design](tillr-planning-node-model-tiering.md), whose questions [`OQ-PT1`](tillr-planning-node-model-tiering.md#OQ-PT1) to [`OQ-PT8`](tillr-planning-node-model-tiering.md#OQ-PT8) are open, proposes keeping model ids in the policy rows |
-| OQ-TC3 | A held item is dispatched again by itself when an input it failed on has changed (its item block, its allowed paths, the backend policy, or the tillr build); unchanged inputs never re-run; an item that fails again after one such re-admission stays held until the owner runs `tillr drain retry`. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are [landing principle 6](landing-principles.md#6-a-budget-escalates-it-does-not-loop) (a budget escalates, it does not loop) and `D-JL6` in [`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md) (re-queue only against a recorded basis). The owner may overturn it. **Rejected:** always waiting for the owner; re-admitting only on an edit to the item's own block. **Superseded by the owner's ruling of 2026-11-17** (`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)): nothing re-runs because an input's hash changed, and no ending is counted. | 2026-11-15 | [Section 3.2](#32-every-hold-names-a-mover-that-can-act) | Built at `72dc84e4a4`, removed at `f8774bd63`; `tools/tillr-drain/drain/readmit.go` now only records a run's inputs |
+| `D-TC5` | The pipeline regenerates derived copies between commit and gate; tests assert structure and never a count. **Rejected:** asking the worker to regenerate, and a pre-commit hook, which fixes the human path only. | 2026-11-15 | [Section 3.4](#34-a-derived-copy-is-produced-by-the-pipeline) | — Not filed. It waits on [OQ-SH2](tillr-selfhosted-build.md#OQ-SH2) in [the self-hosted build design](tillr-selfhosted-build.md), which [Section 3.4](#34-a-derived-copy-is-produced-by-the-pipeline) leaves there. That question decides what becomes of the pack mirror and its check. Until it is ruled, the module list keeps multiple homes (`MODULES` in `tests/pack-sync.test.py`, `MIRRORED_MODULES` in `tools/pack-docs.py`, `MODULES` in `tests/tillr-docs.test.py` and `tests/tillr-build.test.py`, and the watch list in `tools/fork-check.py`) |
+| OQ-TC1 | Delete `config/tillr/seed-items.json` and the `seed` face of `tillr-item`; sync is the only intake. The seven rows that are neither landed nor a restated open question become prose entries on [`docs/pi/roadmap.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/roadmap.md), and the row-count pin goes. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principle is the owner's standing goal that state lives in documents, and [`queue-persistence-ruling.md`](queue-persistence-ruling.md)'s ruling that documents are the only intake. The owner may overturn it. **Rejected:** pruning the file and keeping it; teaching sync to ignore the seed's state. | 2026-11-15 | [Section 3.1](#31-the-queue-is-read-from-documents-and-from-nothing-else) | ✅ (`item-seed-retire`; `config/tillr/seed-items.json` is deleted and `tillr-item seed` refuses in `tools/tillr-item/main.go`) |
+| OQ-TC2 | Tillr's tracked policy names seats and, for each seat, the harness that fills it; the model id comes from that harness's own profile on the machine, so tillr's tree names no model. The per-machine-group policy files stay as the stopgap until a harness profile can answer for the design seat. Unlike a pure "seat only" policy, which harness fills a seat stays a tillr choice, because the owner asked on 2026-11-15 to choose which seats run on the Claude subscription. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "Pi's model and provider are DERIVED from the selected profile" and the backend policy's rule that no model id is copied into `tools/tillr*`. The owner may overturn it. **Rejected:** per-group policy files as the target; an untracked per-machine file. | 2026-11-15 | [Section 3.5](#35-a-seat-names-its-harness-and-the-harness-names-the-model) | Partial (the stopgap: the five `config/tillr/backend-policy*.json` files — `backend-policy.json`, `backend-policy.bedrock.json`, `backend-policy.claude.json`, `backend-policy.mixed.json` and `backend-policy.copilot.json` — each still naming model ids). Not filed: the model ids stay until a harness profile can answer for the design seat, and [the planning-node model tiering design](tillr-planning-node-model-tiering.md), where [`OQ-PT1`](tillr-planning-node-model-tiering.md#OQ-PT1) to [`OQ-PT6`](tillr-planning-node-model-tiering.md#OQ-PT6) are ruled or closed in its ledger and only [`OQ-PT7`](tillr-planning-node-model-tiering.md#OQ-PT7) and [`OQ-PT8`](tillr-planning-node-model-tiering.md#OQ-PT8) remain open (blocked on landed planned items), maps seats to backend rows that still carry model ids |
+| OQ-TC3 | A held item is dispatched again by itself when an input it failed on has changed (its item block, its allowed paths, the backend policy, or the tillr build); unchanged inputs never re-run; an item that fails again after one such re-admission stays held until the owner runs `tillr drain retry`. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are [landing principle 6](landing-principles.md#6-a-budget-escalates-it-does-not-loop) (a budget escalates, it does not loop) and `D-JL6` in [`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md) (re-queue only against a recorded basis). The owner may overturn it. **Rejected:** always waiting for the owner; re-admitting only on an edit to the item's own block. **Superseded by the owner's ruling of 2026-11-17** (`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)): nothing re-runs because an input's hash changed, and no ending is counted. | 2026-11-15 | [Section 3.2](#32-every-hold-names-a-mover-that-can-act) | Built at `72dc84e4a4`, removed at `f8774bd63`; `tools/tillr-drain/drain/readmit.go` now only records a run's inputs (`TestAChangedInputReDispatchesNothing` in `tools/tillr-drain/drain/readmit_test.go`) |

@@ -2,7 +2,7 @@
 title: "Plan first, then spend each model where it is enough"
 status: in-review
 stage: DESIGN
-updated: 2026-11-18
+updated: 2026-11-20
 tags:
   - tillr
   - graphs
@@ -10,20 +10,20 @@ tags:
   - cost
   - models
   - design
-summary: "A build item can be planned first: a planning node cuts it into pieces, each piece names a seat, the backend policy puts each seat on a model, and a verify node checks the joined result against the item's criteria before the gate. The owner ruled on 2026-11-18 that implementation runs on Terra and scouting on Luna, and the planning stage was built that day. No item uses it yet, so what planning costs and saves is still unmeasured; the run history of 2026-11-17 says the larger savings are in failed runs and in context written to the cache twice."
-next: "Choose ten build items and name the planned-build workflow on each, a roadmap edit the design seat makes, so that the cost report prints the planned-item median OQ-PT8 waits on. The runs whose cost is recorded as unknown are priced first, or that median has nothing to stand beside."
+summary: "A build item can be planned first: a planning node cuts it into pieces, each piece names a seat, the backend policy puts each seat on a model, and a verify node checks the joined result against the item's criteria before the gate. The owner ruled on 2026-11-18 that implementation runs on Terra and scouting on Luna, and the planning stage was built that day. Filed build requests default to planned-build@v1 (`5a5c459de`), and one planned build item has landed on the Copilot policy; document-declared build items still name none, so the ten-item planned median OQ-PT8 waits on is still unmeasured, while the run history of 2026-11-17 says the larger savings are in failed runs and in context written to the cache twice."
+next: "Run nine more build items through planned-build@v1 (choosing document-declared build items on the roadmap or running queued build requests) so that the cost report prints the ten-item planned median OQ-PT8 waits on alongside the last-20 build median."
 depends-on:
-  - tillr-item-graphs.md
+  - ../reference/tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
 ---
 
 # Plan first, then spend each model where it is enough
 
-> **Delivered copy.** This is `docs/design/tillr-planning-node-model-tiering.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-planning-node-model-tiering.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-planning-node-model-tiering.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-planning-node-model-tiering.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-18. Partly built: the plan seat, the ten seats in every backend policy, the piece list, the `planned-build@v1` workflow, its verify node, the seat list in the worker's brief and the cost report all landed that day ([Section 5](#5-the-planning-stage-as-built)). No item selects the workflow, and the size rule and per-piece command checks of [Section 6](#6-what-planning-costs-and-what-would-choose-it) are not built. The [Decision Ledger](#decision-ledger) holds designer's decisions the owner has not reviewed, each labeled as one; the stage stays open until he has. The measurements of [Section 1](#1-what-the-run-history-says) are dated 2026-11-17 and were read against the tree at `424cc9db0`.
+**Status:** 2026-11-19. Partly built: the plan seat, the ten seats in every backend policy, the piece list, the `planned-build@v1` workflow, its verify node, the seat list in the worker's brief and the cost report all landed on 2026-11-18 ([Section 5](#5-the-planning-stage-as-built)). No document-declared item selects the workflow and `.tillr.toml` sets no default workflow, while `tillr item request` defaults `build` filings to `planned-build@v1` (`5a5c459de`): one planned request has landed (without a piece split) and one queued request has split into pieces, on the Copilot policy rather than Bedrock ([Section 5.7](#57-what-nothing-selects-and-what-is-not-built)). The size rule and per-piece command checks of [Section 6](#6-what-planning-costs-and-what-would-choose-it) are not built. The [Decision Ledger](#decision-ledger) holds designer's decisions the owner has not reviewed, each labeled as one; the stage stays open until he has. The measurements of [Section 1](#1-what-the-run-history-says) are dated 2026-11-17 and were read against the tree at `424cc9db0`.
 
-> **In short.** What an item costs depends more on how its failures are caught than on which model runs it. So a large item is planned first and cut into pieces, each piece goes to the cheapest model that is enough for its kind of work, and one stronger model checks the joined result before the gate. The machinery exists and has not run on a real item, so whether it pays is a measurement still to take.
+> **In short.** What an item costs depends more on how its failures are caught than on which model runs it. So a large item is planned first and cut into pieces, each piece goes to the cheapest model that is enough for its kind of work, and one stronger model checks the joined result before the gate. Only one build request has landed through the workflow (without a piece split), so whether planning pays across ten planned builds is a measurement still to take.
 
 **Why it matters.** In the history read on 2026-11-17, 41% of spend went to runs that landed, and the median landed item ran three times (measured). The owner asked on 2026-11-18 for work to be split by kind across seats and for cheaper models wherever they can do the work.
 
@@ -33,12 +33,12 @@ depends-on:
 
 **Start at** [Section 5](#5-the-planning-stage-as-built), what is built and what nothing selects yet.
 
-**Needs your ruling:** None today. Two questions are blocked until planned items have run: [OQ-PT7](#OQ-PT7) and [OQ-PT8](#OQ-PT8).
+**Needs your ruling:** None today. Two questions remain blocked until planned items with splits have landed: [OQ-PT7](#OQ-PT7) (until a planned item with a split has landed and storage's [`OQ-TS1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-storage.md#OQ-TS1) is answered) and [OQ-PT8](#OQ-PT8) (until ten planned items have landed).
 
 **Reads with:**
 
-- [`tillr-item-graphs.md`](tillr-item-graphs.md): workflows, nodes, proposals and fences.
-- [`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md): what a worker may end with, which is how a planner reports a wrong criterion or a narrow fence.
+- [`tillr-item-graphs.md`](../reference/tillr-item-graphs.md): workflows, nodes, proposals and fences.
+- [`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md): what a worker may end with, which is how a planner reports a wrong criterion.
 - [`tillr-graph-is-the-path.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md): the rule against counts, and seats declared in the policy.
 - [`seat-profiles.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/seat-profiles.md): the October rulings on Bedrock models.
 - [`model-benchmarks-from-drain-records.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/model-benchmarks-from-drain-records.md): replaying recorded tasks, the other way to compare models.
@@ -174,7 +174,7 @@ All of this assumes a cheaper model needs the same turns. Nothing in this reposi
 
 | Unmeasured | Why | Consequence |
 | :--- | :--- | :--- |
-| Terra's and Luna's failure rate and turn count on this repository's work | No run had used either when this was measured. Terra has run since ([Section 7](#7-how-the-owner-learns-whether-it-pays)), with no cost figure that can be summed; Luna has not run | Every saving from a cheaper model is still an estimate |
+| Terra's and Luna's failure rate and turn count on this repository's work | No run had used either when this was measured on 2026-11-17. Both have run since ([Section 7](#7-how-the-owner-learns-whether-it-pays)), without a comparison against Sol on equivalent work | Every saving from a cheaper model is still an estimate |
 | What child sessions spend | A run's recorded cost leaves it out: one log sums to its recorded $7.61 and its sub-agent results carry no usage | Spend is understated by an unknown amount |
 | The exact test wait | Background-task waits are capped and partly hidden | The 33% test wall share is a lower bound |
 | Why runs write their context to the cache twice | Inferred from totals here; investigated since in [the cache rewrites finding](https://github.com/mschulkind-oss/tillr/blob/main/docs/research/pi-cache-rewrites.md) | [Section 1.6](#16-what-the-history-means-three-levers-ranked), lever 2 |
@@ -201,25 +201,25 @@ The design follows from this order. A planning node is worth having mainly becau
 
 ## 2. Principles
 
-- **P1. Each kind of work goes to the cheapest model that is enough for it.** This is the owner's rule, and the planner reads it in its brief from [`plan-guidance.md`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/plan-guidance.md): "Use cheap models for well-specified implementation and mechanical work", "Have a mid model verify the work", "Keep the expensive model for root cause, design and risky core changes."
+- **P1. Each kind of work goes to the cheapest model that is enough for it.** This is the owner's rule, and the planner reads it in its brief from [`plan-guidance.md`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/plan-guidance.md): "Use cheap models for well-specified implementation and mechanical work", "Have a mid model verify the work", "Keep the expensive model for root cause, design and risky core changes." (Under `D-PT8` in [Section 5.4](#54-when-the-planner-cannot-plan), the third paragraph of [`plan-guidance.md`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/plan-guidance.md) — *"Send `pack-sync` to an `edit` piece"* — is overruled for `build-pieces@v1` agent pieces: `fencePaths` automatically adds `yolo-packs/tillr/` to every `tools/tillr*` writer's `write_scope` and [`brief-template.md`](../../tillr-run/backends/brief-template.md) requires each `tools/tillr*` writer to run `just pack-sync` in its own commit, so `plan` must never emit a standalone `pack-sync` writing piece.)
 - **P2. Kinds of work name seats, and models live only in the policy.** An item, a workflow and a plan name seats, never a model, so a provider change is one policy edit ([D-CB3](tillr-claude-backend.md), and the owner's habit of switching providers often).
-- **P3. One item outside.** Planning changes only the inside of an item. The queue, the fence, the gate and the landing still see one item ([`D-IG2`](tillr-item-graphs.md#21-intra-item-execution-graphs-vs-inter-item-lineage)).
+- **P3. One item outside.** Planning changes only the inside of an item. The queue, the gate and the landing still see one item ([`D-IG2`](../reference/tillr-item-graphs.md#why-its-this-way)).
 - **P4. A split pays for its seams.** Each extra node pays a first turn and a partial re-orientation ([Section 1.3](#13-orientation-the-price-of-starting-a-new-node)). A split is made only where it pays more than that.
 - **P5. Failures come first.** Failed and repeated runs are the largest lever in the history ([Section 1.6](#16-what-the-history-means-three-levers-ranked)), so planning is judged first by whether a stop loses one node instead of a whole run.
-- **P6. A planner never edits what it is held to.** It names criteria by id and paths inside the fence. It never rewrites a criterion's text and never widens the fence; when one of them is wrong it says so and the design seat acts ([Section 5.4](#54-when-the-planner-cannot-plan)).
+- **P6. A planner never edits what it is held to.** It names criteria by id. It never rewrites a criterion's text; when a criterion is wrong it says so and the design seat acts ([Section 5.4](#54-when-the-planner-cannot-plan)).
 - **P7. Nothing counts attempts.** No node has a retry budget, no item has a number of plans it may use up, and no time limit fails work ([rule R1 of the graph design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#1-the-direction-and-the-rules)). A node that cannot do its piece names who acts next.
 
 ---
 
 ## 3. The words
 
-[Item graphs](tillr-item-graphs.md#the-words) defines workflow, stage, graph, node, node run and child session, and this document uses them unchanged.
+[Item graphs](../reference/tillr-item-graphs.md#the-words) defines workflow, stage, graph, node, node run and child session, and this document uses them unchanged.
 
 | Term | Meaning | What it is not |
 | :--- | :--- | :--- |
 | **Seat** | The name of a role a node asks for, such as `build` or `verify`. The backend policy in force maps each seat to a backend, and a backend names its harness, model and effort. Any well-formed name the policy maps is a seat | Not a model, and not a fixed list in code |
 | **Read-only seat** | A seat the policy lists as one whose nodes may not write. A workflow that gives such a seat a writing node is refused when it loads | Not a promise about the model, only about what the node may do |
-| **Piece** | One node's share of a planned item, as the planner proposes it: an id, a seat, whether it writes, a prompt, the outputs it leaves, and for a writer the paths it may change inside the item's fence. The word is the built workflow's | Not an item, and it has no place in the queue. Not a trunk commit: the item still lands as one |
+| **Piece** | One node's share of a planned item, as the planner proposes it: an id, a seat, whether it writes, a prompt, and the outputs it leaves. The word is the built workflow's | Not an item, and it has no place in the queue. Not a trunk commit: the item still lands as one |
 | **Kind of work** *(coined here)* | What a node is for, named by what can tell whether it was done right: plan, design ruling, implement, settled edit, run a check, verify | Not a model and not a size. Each kind maps to one seat ([Section 4](#4-kinds-of-work)) |
 | **Seam cost** *(coined here)* | What a new node pays before its first useful edit: its first turn and the orientation it repeats | Not the node's work |
 | **Mid model** | The owner's guidance names three levels. On the work machine today they are Luna 6 and Terra 6.1 (cheap), Sol 6.2 (mid) and Fable 5.2 (expensive) | Not fixed: the policy file decides, and other machines' policies name other models |
@@ -234,7 +234,7 @@ Each kind is defined by what the work needs and what can tell whether it is righ
 | :--- | :--- | :--- | :--- | :--- |
 | **Plan** | Judgment over the whole item; reads the tree; writes the piece list | The loader's refusals, then the verify node | `plan` | Sol 6.2 |
 | **Design ruling** | Judgment that no test can check; writes prose that changes what gets built | The owner, or a judge | `design` | Fable 5.2 |
-| **Conflict repair** | A fix to an item's own definition: widen its paths, reorder it, fix a stale path | The next build run and the documentation checks | `design` | Fable 5.2 |
+| **Conflict repair** | A fix to an item's own definition: correct a criterion that contradicts the tree | The next build run and the documentation checks | `design` | Fable 5.2 |
 | **Implement** | Code against criteria | The gate; in a planned item, the verify node first | `build` | Terra 6.1 |
 | **Settled edit** | Apply an edit the plan already decided | The same | `edit` | Terra 6.1 |
 | **Write tests** | Tests written from the criteria | The same | `test-write` | Terra 6.1 |
@@ -277,15 +277,14 @@ verify  (seat verify, read-only)   checks the joined result against the item's c
 
 ### 5.2 What a piece is, and what refuses one
 
-A proposal holds at most 12 pieces. Each has exactly an id, a seat, an access (`read_only` or `write`), a prompt, optional named outputs, and for a writer a non-empty list of paths inside the item's fence.
+A proposal holds at most 12 pieces. Each has exactly an id, a seat, an access (`read_only` or `write`), a prompt and optional named outputs. A writing piece needs no list of allowed paths.
 
 | The proposal | Recorded as |
 | :--- | :--- |
 | names a seat the policy in force does not map | `proposal-seat-unmapped` |
 | gives a read-only seat a writing piece | `proposal-read-only-seat-writes` |
-| names a path outside the item's fence | `proposal-scope-outside-fence` |
 
-Writers run one at a time, in the plan's order. Read-only pieces that are ready together run together. A later piece reads an earlier one's named outputs from the piece that produced them.
+Writers run one at a time, in the plan's order. Read-only pieces that are ready together run together. A later piece reads an earlier one's named outputs from the piece that produced them. Every writing piece (`access: "write"`) must own real source or documentation edits — running `just pack-sync` in its own commit whenever it changes `tools/tillr*` — and `plan` must never propose a standalone `pack-sync` (`piece-pack-sync`) or verification-only `access: "write"` piece, overriding the stale *"Send `pack-sync` to an `edit` piece"* instruction in [`plan-guidance.md`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/plan-guidance.md) (`D-PT8`, [Section 5.4](#54-when-the-planner-cannot-plan)).
 
 ### 5.3 The verify node
 
@@ -301,10 +300,44 @@ The verify node runs after the pieces and before the gate. It reads the criteria
 
 A planner that cannot cut a piece without a design decision proposes nothing and ends its report with an obstacle naming the owner and its one question. The design seat receives it as a conflict, answers from the documents, or passes the question to the owner in a document.
 
-A wrong criterion and a fence that is too narrow take the same route. A worker's report may name a `definition` obstacle (the item's words are wrong or contradict the tree) or a `fence` obstacle (the change needs paths outside the fence), and either raises a design-seat conflict: the design seat amends the item or widens its paths. That is [what a worker may end with](tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11), and in a workflow of several nodes every blocked report takes the design-seat route. Who may change a frozen criterion is ruled in [criterion repair](criterion-repair.md#decision-ledger).
+A worker reports `definition` when the item's words are wrong or contradict the tree. Needing a file not predicted by the planner is not an obstacle. That is [what a worker may end with](tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11), and in a workflow of several nodes every blocked report takes the design-seat route. Who may change a frozen criterion is ruled in [criterion repair](criterion-repair.md#decision-ledger).
 
 > [!NOTE]
-> The planner's prompt names only the owner obstacle today. Naming the `definition` and `fence` kinds there too is a prompt edit with no decision in it, and it is not made yet.
+> The planner's prompt names only the owner obstacle today. Naming the `definition` kind there too is a prompt edit with no decision in it, and it is not made yet.
+
+**Why a piece fence did not work (`D-PT8`; former behavior).** When `plan` splits a filed request
+into `build-pieces@v1` pieces, staging narrows each piece's `fence.txt` to that piece's
+`write_scope` while still appending the request's full saved words — including all item-level
+criteria — to the piece's brief. On 2026-11-20, on the sharded-runner hang repair whose item fence
+already covered `tools/tillr-drain/`, `tools/go-test-shards.py`, and `tests/` ([`D-GR17`](gate-rework.md#decision-ledger)),
+a piece narrowed to `tools/tillr-drain/` read the runner-lifetime criterion in those saved words
+and raised `OBSTACLE: fence` for `tools/go-test-shards.py` and `tests/go-test-shards.test.py`.
+
+On 2026-11-19 the owner asked, "didn't we already rule that this is basically impossible and wasteful?" and answered the operator's proposal, "yes, file that." Under the operator request (which the owner may overturn), the piece retry and the item-fence hold are both superseded. Assign a writer a result, not a path list. All writers follow the [same deny-list](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#51-the-work-and-its-statement); verification still checks each piece's result. A coupled diagnosis can stay with one writer.
+
+`plan` never appends a trailing verification-only or
+`pack-sync`-only `access: "write"` piece after writing pieces have already made the edits and synced
+`yolo-packs/tillr/` — overriding the stale *"Send `pack-sync` to an `edit` piece"* line in
+[`config/tillr/plan-guidance.md`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/plan-guidance.md), because
+[`brief-template.md`](../../tillr-run/backends/brief-template.md) requires each `tools/tillr*`
+writer to commit `just pack-sync` alongside its edit
+([`D-JL13`](tillr-judge-and-lifecycle.md#46-a-held-item-never-occupies-a-lane-d-jl13),
+[`D-JL14`](tillr-judge-and-lifecycle.md#47-offered-commits-own-candidate-lanes-unlaunched-claims-and-named-hold-movers-d-jl14),
+[`D-JL16`](tillr-judge-and-lifecycle.md#49-keeping-a-live-trunk-fixers-work-when-a-rerun-passes-d-jl16),
+[`D-JL18`](tillr-judge-and-lifecycle.md#411-instant-start-decisions-from-a-background-maintained-queue-view-d-jl18),
+[Section 5.9](#59-deciding-fork-versus-repository-delivery-at-plan-time)),
+because such a piece either starts on its own workflow branch with nothing left to commit for
+[`keep-going.ts`](../../tillr-run/backends/pi/keep-going.ts) and falsely raises
+`OBSTACLE: definition` or `OBSTACLE: tooling`, or — like a trailing documentation-only
+`piece-docs` writer narrowed away from the implementation package (`D-JL16`) — is resumed as the
+last writer (`judgeWriterRun`) on a `verify-not-done` or `holdJudge` return that needs repairs
+under `tools/tillr*`. When `plan` splits a code-and-docs request, leave a writer responsible for repairing the joined candidate.
+
+**Restart reporting (operator request, 2026-11-20).** At 3:12 PM ET, `tillr drain why --lanes 10` reported `no-lane` for workers still running on `express-1` and `lane-3`. Their last events, `run.finish paused/restart` and `run.resume` at 19:27 UTC (2:27 PM ET), preceded the three later restarts. The workers continued; no later takeover was recorded. The operator saw the same lane-reporting error on `lane-8` and `lane-5`.
+
+**Designer’s decision; the owner may overturn it.** Show the live worker’s run ID and leased lane. The worker records its finish; the drain acts on that result. A live process and a lease prove neither attachment by a later loop nor a decision by that loop not to attach. Attribute a takeover or a decision not to take over only to a loop whose actions are evidenced. Reserve `no-lane` for a run actually waiting for a lane.
+
+**Designer’s decision; the owner may overturn it.** In this plan, `work/piece-reproduce` and `work/piece-report` each run `just pack-sync` and commit the generated copies with their own test or source changes. The piece instruction not to edit the mirror forbids hand edits, not regeneration. On 2026-11-21, the mirror writer ran `just pack-sync` on its staged candidate; `git status --short` returned no changes because the drain source and test already matched their pack copies. That satisfied the mirror requirement on that candidate, not the behavioral check or proof of landing. Omit `work/piece-mirror` on replanning rather than require an empty commit. Have the read-only verifier check both mirror equality and restart reporting on the joined candidate it receives. This leaves the report writer responsible for explaining who acts next, not for changing how runs survive a restart.
 
 ### 5.5 A worker that still works alone
 
@@ -318,28 +351,49 @@ The worker's brief lists every seat the policy in force maps, one line each with
 - the median cost of the last twenty landed build items;
 - once ten items have landed through `planned-build@v1`, the same median for those items.
 
-A run with no recorded cost makes every sum it belongs to print `unknown`, never zero. Read on 2026-11-18, the build and design seat sums and the build median all print `unknown`, because older landed items include runs with no cost. The comparison this report exists for therefore has no baseline number yet.
+A run with no recorded cost makes every sum it belongs to print `unknown`, never zero. Read on 2026-11-18, the build and design seat sums and the build median all printed `unknown`, because older landed items included runs with no cost. Read on 2026-11-19 after twenty priced build items had landed, the build and design all-time seat sums still print `unknown`, while `plan` prints `$0.58`, `scout` `$1.29`, `verify` `$0.17`, and the last-20 landed build median prints `$2.91`; with one landed `planned-build@v1` item, the ten-item planned median is not yet printed.
 
 ### 5.7 What nothing selects, and what is not built
 
-| Thing | State on 2026-11-18 | Evidence |
+| Thing | State on 2026-11-19 | Evidence |
 | :--- | :--- | :--- |
-| An item that runs through `planned-build@v1` | None. Every stored item runs as one worker | `rg 'planned-build' docs/tillr/roadmap.md` finds only the blocks that built it |
-| A default workflow for the build seat | The settings table that would hold it is built and empty | `rg workflows .tillr.toml` finds nothing |
+| An item that runs through `planned-build@v1` | No document-declared item names it (`rg -n --hidden 'workflow="planned-build@v1"' docs config/tillr` finds only the historical example in [`roadmap.md`](../tillr/roadmap.md)). `tillr item request` defaults `build` filings to `planned-build@v1` ([`request.go`](../../tillr-item/item/request.go), `5a5c459de`): read from the store on 2026-11-19, six filed build requests carry `planned-build@v1`, five have selected it, one (`item-request-6c27d14b15`, commit `90f68aa7b`) has landed on the Copilot policy without a piece split, and one (`item-request-e1016f3a23`) has split `work` into two pieces via `build-pieces@v1`. Document triage (`doc-triage@v1`, `bf59b5be1`) and scouted design (`scouted-design@v1`) also run multi-node workflows | Store `workflow_selections`, `graph_revisions` and `landings`, read 2026-11-19; [`request.go`](../../tillr-item/item/request.go) |
+| A default workflow for the build seat | The settings table that would hold it in `.tillr.toml` is built and empty (only `tillr item request` sets a filing default for CLI requests) | `rg workflows .tillr.toml` finds nothing |
 | A rule that plans only large items | Not built ([Section 6.2](#62-a-size-rule-tested-on-the-history)) | The settings reader accepts a workflows table with the one key `default` |
 | A command that checks each piece the moment it finishes | Not built. The registry of commands a node may run holds one entry, the pack sync | [`commands.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/commands.json) |
 | A size, a file count or an interface sketch on a piece | Not built; a piece has the fields of [Section 5.2](#52-what-a-piece-is-and-what-refuses-one) and no others | The drain's README |
-| A Luna run of any kind | None: no item selects a workflow with a scout or check-running node | `rg -l gpt-6-luna` over the loop's run records finds none |
+| A Luna run of any kind | Luna has run on `scout` in `doc-triage@v1` (47 `node_runs` rows across 44 priced runs totaling $1.12 on `item-doc-triage-2026-11-18-tillr-roadmap-designs`, read 2026-11-19); no run has used `test-run`, and no `planned-build@v1` piece has run on Luna | Store `node_runs` and `runs`, read 2026-11-19 |
 
 ### 5.8 One writer for each piece of state
 
 | State | Its one writer |
 | :--- | :--- |
-| The item, its criteria, fence and place in the queue | The item utility, from the documents. Planning writes none of it |
+| The item, its criteria and place in the queue | The item utility, from the documents or from a store-declared CLI filing (`doc-triage`, `request`). Planning writes none of it |
 | The proposal | The planning node's run, as an output the drain checks and records |
-| The graph and its revisions | The drain, in the one transaction that applies or refuses a proposal ([`D-IG3`](tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)) |
+| The graph and its revisions | The drain, in the one transaction that applies or refuses a proposal ([`D-IG3`](../reference/tillr-item-graphs.md#proposals-and-graph-revisions)) |
 | A piece's commits | That piece's node run, in the item's worktree, one writer at a time |
 | A node's seat, model, outcome and usage | The drain, when the node starts and settles |
+
+### 5.9 Deciding fork versus repository delivery at plan time
+
+On 2026-11-19, after a request to change the `pi` fork was filed with repository paths (`yolo-packs/pi-fork/`, `docs/pi/`) as its fence, the owner ruled (`D-PT9`): *"There should not be a way to mis-file an item such that it leads to bad downstream work. That should be decided later in the process."* Until this change lands, only a fence entry of the form `.forks/lanes/<lane>/<fork>/` makes staging give the lane a fork checkout, tell the worker not to deliver, run the fork gate (`fork-build` and `fork-quality`), and have the lander move `patch/<fork>`; filed with repository paths instead, a worker following the interactive fork workflow would run [`bin/pi-forks`](https://github.com/mschulkind-oss/tillr/blob/main/bin/pi-forks) `export` itself and move the shared delivery branch with no gate while the drain landed only repository files, and the filer also had to know a lane name to write that fence entry.
+
+The filed operator request specifies how to apply that ruling (`D-PT9`; the owner may overturn these implementation choices):
+
+1. **File new work from its words.** The operator request retains `--path` only for compatibility: ignore it with a notice. Never infer fork delivery from a legacy list. For pending fork work the owner said on 2026-11-20, "let's just like go edit the items. That seems easy, right?" Before resuming the queue, the operator lists unfinished items (`tillr item list --store .tillr/state.db`), reads their saved requests or source documents to identify fork work, and edits each pending fork item to name its explicit fork target. This is not an automatic migration of path lists.
+2. **Planning decides the delivery target and piece order.** At the `plan` step of `planned-build@v1` — or, for a single-worker item, in a short read-only first step with the same job — tillr decides from the item's words and the tree whether the change is delivered through repository files, one named fork from the forks [`bin/pi-forks`](https://github.com/mschulkind-oss/tillr/blob/main/bin/pi-forks) ([`bin/pi-forks.list`](https://github.com/mschulkind-oss/tillr/blob/main/bin/pi-forks.list)) knows, or both as two ordered pieces (the fork piece first, then the repository files that depend on it). The drain stages each piece accordingly, giving every fork piece an isolated fork checkout starting from the fork head, non-delivery worker instructions, fork gating (`fork-build` and `fork-quality`), and lander-owned `patch/<fork>` advancement before any dependent repository piece dispatches or lands.
+3. **Mid-run `delivery` obstacle restaging without an operator.** A worker that discovers mid-run that its change belongs to a fork it was not staged for ends with `OBSTACLE: delivery` naming `FORK` across both [`tools/tillr-drain/drain/obstacle.go`](../../tillr-drain/drain/obstacle.go) and the shared worker ending contract in [`tools/tillr-run/backends/`](../../tillr-run/backends/) (`brief-template.md`, `pi/keep-going.ts`, `pi/obstacle.ts`, and `pi/testdata/obstacle-cases.json`; [`D-JL15`](tillr-judge-and-lifecycle.md#48-planning-time-fork-delivery-the-delivery-obstacle-and-patch-branch-refusal-d-jl15)); the drain restages the same item as a fork piece and continues it rather than blocking for the operator.
+4. **Workers can never move a delivery branch.** Alongside the sibling guard making [`bin/pi-forks`](https://github.com/mschulkind-oss/tillr/blob/main/bin/pi-forks) `export` and `rebase` refuse when `TILLR_RUN_ID` is set (`f7bf6eba8`), the drain checks every candidate before the gate and refuses any run (or attempt) that moved a `refs/heads/patch/<fork>` branch (excluding lander-marked deliveries), with [`docs/pi/forks.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/forks.md), [`tools/tillr-item/README.md`](../../tillr-item/README.md), [`tools/tillr-drain/README.md`](../../tillr-drain/README.md), [`yolo-packs/tillr/skills/tillr-operating/SKILL.md`](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/skills/tillr-operating/SKILL.md), [`tests/tillr-docs.test.py`](https://github.com/mschulkind-oss/tillr/blob/main/tests/tillr-docs.test.py), and [`config/tillr/plan-guidance.md`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/plan-guidance.md) updated where they describe filing and piece guidance, and `yolo-packs/tillr/` mirrored via `just pack-sync`.
+
+*(Answering the 2026-11-20 `tooling` and `definition` conflicts on this request: first, three `build-pieces@v1` writing pieces committed the change and `just pack-sync` on their workflow branch (`66a89dff3`, `14fc24165`, and `f4f12fe37` [unlanded]) before a trailing `work/piece-pack-sync` `access: "write"` piece raised `OBSTACLE: tooling` against [`keep-going.ts`](../../tillr-run/backends/pi/keep-going.ts); second, after `d4f3c1aa5` answered that conflict, the returned `plan` node again followed the stale "Send `pack-sync` to an `edit` piece" line in [`config/tillr/plan-guidance.md`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/plan-guidance.md), five writing pieces (`813f72d58`, `1d5c7804e`, `e8fd57086`, `b2857a65a`, and `31cc7b4b0` [unlanded]) already mirrored `tools/tillr*` into `yolo-packs/tillr/` in their own commits, and a sixth `work/piece-pack-sync` (`access: "write"`, `write_scope: ["yolo-packs/tillr/"]`) piece started on `31cc7b4b0` [unlanded] with a clean working tree, had no non-empty commit to satisfy `keep-going.ts`, and raised `OBSTACLE: definition`. None of those branch commits is on the trunk (`9e64c59bf`), so all four requirements of `D-PT9` stand in full; on the returned `planned-build@v1` run, `plan` must ignore `plan-guidance.md`'s standalone `pack-sync` instruction — either proposing no split (`write_scope: "inherit"`, whose `plan` report now carries directly into `work`'s brief after `11dec7eb2`) or ensuring every `access: "write"` piece owns real source or documentation edits with `just pack-sync` included where `tools/tillr*` changes and **no** standalone `pack-sync` piece per `D-PT8`, while also retiring that stale line in `config/tillr/plan-guidance.md` inside `config/tillr/`.)*
+
+**Filing piece before the split (designer's decision, 2026-11-20; the owner may overturn it).** The filing worker starts from its staged repository base. It changes intake and its tests in `tools/tillr-item/`, runs `just pack-sync`, and commits the generated `yolo-packs/tillr/files/local/share/tillr/tillr-item/` changes with the source and tests. “Do not edit documentation or mirrors in this piece” excludes hand edits, not that required generated output. The filing documentation remains assigned separately; there is no mirror-only follow-up.
+
+The operator's instruction to continue partial work applies to the piece that owns it. On 2026-11-20, `git show --stat 969e84a84` showed only `tools/tillr-drain/drain/delivery.go`, its test, and their pack copies [unlanded]. That work belonged to the drain delivery piece, not the filing piece.
+
+**Validation-only retry (operator split, 2026-11-21; the owner may overturn it).** For `item-request-ed0e11d000`, verify and offer the existing validator, its test and its generated mirror. The validator checks a decision already made: `repo` names no fork; `fork` and `both` require one known fork; `both` returns the fork first and the repository second. Returning two targets in order does not stage or land either piece. If staged at trunk, use the validation candidate `099595afe` [unlanded]; if the lane already contains it, verify it there rather than reimplementing it.
+
+`item-request-3b892e528e` owns planner and single-worker classification, staging from the recorded target, and continuing the repository piece after the fork lands. Drop the stale delivery-obstacle node from the validation plan. Automatic restaging remains part of the delivery contract, but its implementation must follow durable target and continuation support; rewriting `items.allowed_paths` is not a substitute. Neither obstacle handling nor pre-gate branch checks are acceptance criteria for the validator.
 
 ---
 
@@ -385,15 +439,15 @@ A proposal is capped at 12 pieces. The estimate above put each added node's seam
 
 ## 7. How the owner learns whether it pays
 
-1. **Price the runs with no recorded cost.** Until the build median prints a number, a planned median has nothing to stand beside.
-2. **Run ten build items through `planned-build@v1`.** Each is chosen by naming the workflow on the item; choosing them is the next step this document owes. The 16%-against-41% split of [Section 6.2](#62-a-size-rule-tested-on-the-history) says where to look: items with five or more criteria, or paths in three or more modules.
+1. **Keep the build baseline priced (and price older runs if all-time seat sums are wanted).** Once twenty priced build items have landed, the last-20 build median prints a dollar figure (`$2.91` on 2026-11-19); older unpriced runs still keep the all-time `build` and `design` seat sums at `unknown`.
+2. **Land ten build items through `planned-build@v1`.** One filed build request has landed so far (`item-request-6c27d14b15`, without a piece split), and `tillr item request` defaults `build` filings to `planned-build@v1`; choosing document-declared build items still takes naming the workflow on each item. The 16%-against-41% split of [Section 6.2](#62-a-size-rule-tested-on-the-history) says where to look: items with five or more criteria, or paths in three or more modules.
 3. **Read the two medians** that `tillr drain why` then prints, and the per-seat sums beside them.
 4. **Ask [OQ-PT8](#OQ-PT8).**
 
-What exists before then, read on 2026-11-18:
+What exists before then, read on 2026-11-19:
 
-- **Terra has built real work.** 46 run requests name the Terra model, all dated 2026-11-18, across 25 items; 16 of those items have landed, five of them items of the planning stage itself, which edit the drain. Those run records carry no cost figure that could be summed, so Terra's dollar cost and turn count here are still unmeasured. This is not a failure rate, and it is not offered as one.
-- **Luna has not run at all.**
+- **Terra has built real work.** On 2026-11-18, 46 run requests named the Terra model across 25 items and 16 of those items had landed (five of them items of the planning stage itself, which edit the drain), before run records carried summed dollar figures; read from the store on 2026-11-19, 63 runs across 35 items name Terra (62 priced, totaling $151.99, and 1 without recorded cost). Turn counts and failure rates against Sol on equivalent work are still unmeasured.
+- **Luna has run on scouting, not in a planned build.** Read from the store on 2026-11-19, 47 `node_runs` rows on the `scout` seat name `gpt-6-luna` in `item-doc-triage-2026-11-18-tillr-roadmap-designs` (`doc-triage@v1`), with 44 priced runs totaling $1.12. No run has used the `test-run` seat, and no `planned-build@v1` item has run a piece on Luna.
 - **A second way to compare models exists on paper:** replaying recorded tasks for several models side by side, in [the model benchmarks design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/model-benchmarks-from-drain-records.md). The cost report compares what landed items cost in production; a replay compares models on the identical task. Neither replaces the other.
 
 One figure is computed inside tillr: the cost medians above. The owner's ruling of 2026-11-15 puts comparisons between backends in a separate project of his, computed from the run records ([the seat-share item](../tillr/roadmap.md#add-backend-shares-to-distribute-seat-work)); that still holds for every rate other than these medians (`D-PT5` in the [Decision Ledger](#decision-ledger)).
@@ -428,7 +482,7 @@ The lessons:
 | **A cheap model only behind a command that checks it the moment it finishes**, with each piece carrying its own registered check | **Not adopted.** The owner's rule puts cheap models on well-specified work and has a mid model verify; the build seat is Terra with no per-piece command. A per-piece command check could still be added on top of the verify node, and it is not proposed until planned items show what the verifier misses |
 | **A ladder of models for each seat**, climbed one rung per failed check, with two rungs per piece and one re-plan per item | **Withdrawn.** Each of those is a count, and the owner ruled counts out. A stronger model is reached when a worker's tested attempt shows the task exceeds its model |
 | **A trial of Terra on five named items before it builds anything else** | **Overtaken.** The owner put Terra on the build seat on 2026-11-18. The five items had already landed on Sol |
-| **One session that switches model mid-run** | **Rejected.** A new model has none of the old one's cache, so a switch writes the whole context again: about $0.24 at a median 97k context on Sol, and about $1.94 on Fable at the one-hour rate. A node is one invocation on one route ([`D-IG12`](tillr-item-graphs.md#34-several-nodes-or-one-node-with-child-sessions)) |
+| **One session that switches model mid-run** | **Rejected.** A new model has none of the old one's cache, so a switch writes the whole context again: about $0.24 at a median 97k context on Sol, and about $1.94 on Fable at the one-hour rate. A node is one invocation on one route ([`D-IG12`](../reference/tillr-item-graphs.md#why-its-this-way)) |
 | **Many tiny nodes** | **Rejected as a goal; the cap is 12 pieces.** Each node pays a seam, and every handoff loses context |
 | **Cheaper sub-agents inside one worker** | **Adopted beside planning, not in place of it.** The worker's brief encourages it ([Section 5.5](#55-a-worker-that-still-works-alone)). tillr cannot fence, check or count a sub-agent apart, which is what a piece is for |
 | **Planning on the expensive model** | **Rejected.** Fable's median orientation, $2.12, is more than most build items cost in total |
@@ -438,12 +492,12 @@ The lessons:
 
 ## 10. What this design does not do
 
-- It does not split one item into several items, and does not change the queue, the fence, the gate or the landing (P3).
-- It does not let any node edit criteria or widen the fence (P6).
+- It does not split one item into several items, and does not change the queue, the gate or the landing (P3).
+- It does not let any node edit criteria (P6).
 - It does not count attempts, plans or fixes, and it sets no spending limit (P7; [the graph design's ruling that there is no spend target](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#decision-ledger)).
-- It does not turn planning on for any item. That is [OQ-PT8](#OQ-PT8).
+- It does not turn planning on by default in `.tillr.toml` or on document-declared items (`tillr item request` defaults CLI `build` requests to `planned-build@v1`). Defaulting or sizing all build items is [OQ-PT8](#OQ-PT8).
 - It does not route design rulings below the design seat.
-- It does not run writing pieces in parallel ([`OQ-IG3`](tillr-item-graphs.md#71-decision-ledger)).
+- It does not run writing pieces in parallel ([`OQ-IG3`](../reference/tillr-item-graphs.md#why-its-this-way)).
 - It does not touch the pi sub-agent seat profiles. They govern child sessions, and this design governs nodes.
 
 ---
@@ -452,12 +506,12 @@ The lessons:
 
 | Risk | What limits it |
 | :--- | :--- |
-| Terra takes many more turns than Sol, so its real price ratio is near 1 | Nothing yet: the run records carry no cost that can be summed ([Section 7](#7-how-the-owner-learns-whether-it-pays)). The cost report shows it once runs are priced |
+| Terra takes many more turns than Sol, so its real price ratio is near 1 | No side-by-side comparison exists yet ([Section 7](#7-how-the-owner-learns-whether-it-pays)); the cost report compares medians once ten planned items have landed |
 | A cheap piece is wrong in a way the verifier misses | The gate still runs, and automatic revert is on for a landing that turns the trunk red. A command check per piece is the unbuilt remedy ([Section 9](#9-alternatives-considered)) |
 | A cheap model's change breaks the loop's own code | The same: the module's suite, the gate and automatic revert, as for any model ([`OQ-PT5`](#OQ-PT5) in the Decision Ledger) |
 | The planner splits along the wrong seams, so pieces fight | The verify node returns the item to the planner with the uncovered criteria named; the same finding twice goes to the design seat |
-| Planning costs more than it saves on most items | It is on for no item until ten have been measured ([OQ-PT8](#OQ-PT8)) |
-| The before-and-after comparison is made against `unknown` | Step 1 of [Section 7](#7-how-the-owner-learns-whether-it-pays) |
+| Planning costs more than it saves on most items | It is not the `.tillr.toml` default for document-declared items until ten planned items have been measured ([OQ-PT8](#OQ-PT8)) |
+| The before-and-after comparison is made against `unknown` | Step 1 of [Section 7](#7-how-the-owner-learns-whether-it-pays) (the last-20 build median prints `$2.91` on 2026-11-19; all-time `build` and `design` seat sums remain `unknown`) |
 
 ---
 
@@ -468,9 +522,9 @@ The lessons:
 | [`OQ-SP5`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/seat-profiles.md#decision-ledger): on Bedrock only Sol and Luna were worth encoding | 2026-10-20 | **Overtaken for the work machine's seats** by the owner's instruction of 2026-11-18, which put Terra on implementation ([`OQ-PT1`](#OQ-PT1) in the Decision Ledger) |
 | [`OQ-SP6`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/seat-profiles.md#decision-ledger), the Luna-worker verdict: "replace, do not keep" | 2026-10-20 | **Holds.** Luna fills only read-only seats |
 | [`OQ-CP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/coordinator-pyramid.md#decision-ledger): the planner row is Sol at high | 2026-10-21 | That ruling is about pi's sub-agent profiles. tillr's `plan` seat runs Sol 6.2 at medium, the effort every backend row in the work policy states |
-| [`D-IG3`](tillr-item-graphs.md#71-decision-ledger), [`D-IG4`](tillr-item-graphs.md#71-decision-ledger), [`D-IG12`](tillr-item-graphs.md#71-decision-ledger) and [`OQ-IG3`](tillr-item-graphs.md#71-decision-ledger) | 2026-11-15 | **Hold.** Planning is a proposal; nothing loops; writers run one at a time |
+| [`D-IG3`](../reference/tillr-item-graphs.md#why-its-this-way), [`D-IG4`](../reference/tillr-item-graphs.md#why-its-this-way), [`D-IG12`](../reference/tillr-item-graphs.md#why-its-this-way) and [`OQ-IG3`](../reference/tillr-item-graphs.md#why-its-this-way) | 2026-11-15 | **Hold.** Planning is a proposal; nothing loops; writers run one at a time |
 | No attempt counts, retry budgets or exhausted states ([rule R1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#1-the-direction-and-the-rules)); seats are declared in the policy, with no rungs ([`D-GP6`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#decision-ledger)) | 2026-11-17 | **Hold**, and withdraw this design's ladders and caps |
-| A worker ends with its commit or a named obstacle ([`D-JL11`](tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11)) | 2026-11-18 | **Holds**, and is how a planner reports a wrong criterion or a narrow fence |
+| A worker ends with its commit or a named obstacle ([`D-JL11`](tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11)) | 2026-11-18 | **Holds** for a wrong criterion; the `fence` kind is retired |
 | Comparisons between backends are computed in the owner's own project | 2026-11-15 | **Holds**, except the cost medians of [Section 5.6](#56-the-cost-report) |
 | The observatory shows usage, never a price | 2026-11-15 | **Holds** for the observatory. The cost report is the drain's own text output |
 | The one-hour cache retention (`c5f4a82f7`) | 2026-11 | Unchanged here |
@@ -486,7 +540,7 @@ Three kinds of row, and each says which it is. An **owner ruling** quotes or cit
 | OQ-PT1 | **Owner ruling.** Cheaper models do build work: Terra implements, Luna scouts, and Sol 6.2 is used "where appropriate". Recorded in commit `09760605f` as "The owner's instruction of 2026-11-18: use cheaper models, Terra for implementation and Luna for scouts", and in the roadmap as his ask to "split different types of work into different seats as we see fit". The question's three options are all overtaken: none of them was "Terra writes the code with a mid model verifying", which is what he ordered | 2026-11-18 | [Section 4](#4-kinds-of-work) | ✅ the work policy |
 | OQ-PT2 | **Closed as stale.** A five-item Terra trial before a ramp cannot be run: Terra became the build seat for seat-tagged work in `09760605f` and for every ordinary item in `0b21890da`, both on 2026-11-18, and the five named items had landed on Sol | 2026-11-18 | [Section 7](#7-how-the-owner-learns-whether-it-pays) | — nothing to build |
 | OQ-PT3 | **Closed: ruled elsewhere and built.** A planner that finds a criterion it cannot meet reports it and the design seat acts; it never rewrites the criterion. This is the `definition` obstacle of [`D-JL11`](tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11), which records the owner's ruling of 2026-11-18 that a worker ends with its commit or a named obstacle. Who may change a criterion is the owner's ruling [`OQ-CR2`](criterion-repair.md#decision-ledger) of 2026-11-17 | 2026-11-18 | [Section 5.4](#54-when-the-planner-cannot-plan) | ✅ the route; the planner's prompt does not name the kind yet |
-| OQ-PT4 | **Closed: ruled elsewhere and built.** A planner that needs a path outside the fence reports it and the design seat widens the item's paths or splits it; the planner never widens the fence. This is the `fence` obstacle of the same ruling, and a proposal naming such a path is refused | 2026-11-18 | [Section 5.4](#54-when-the-planner-cannot-plan) | ✅ the route and the refusal; the prompt as above |
+| OQ-PT4 | **Superseded.** Operator request (the owner may overturn it): a planner need not predict paths; a needed path absent from an old list neither invalidates the proposal nor calls for a design answer. | 2026-11-19 | [Section 5.4](#54-when-the-planner-cannot-plan) | Replacement requested |
 | OQ-PT5 | **Designer's decision; the owner may overturn this.** A cheaper model may change the loop's own code, with no special rule for it. **Evidence:** the owner's instruction put Terra on implementation without an exception; every ordinary item has run on Terra since `0b21890da`, and 16 Terra-built items have landed, among them five that edit the drain; automatic revert, which the owner approved, has been on since `a00e8a600`. **Rejected:** starting loop-code work on the stronger model until records justify otherwise, which has no mechanism built, and by this design's own count would keep most of the queue off the cheaper model | 2026-11-18 | [Section 11](#11-risks) | ✅ nothing to build |
 | OQ-PT6 | **Owner ruling.** No item has a number of plans it may use. The owner's standing rule is "No attempt counts, retry budgets or 'exhausted' states" ([rule R1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#1-the-direction-and-the-rules), 2026-11-17), and the roadmap block that filed the planning stage says of it "There are no rungs, no re-plan caps and no time limits that fail work." A failed verify returns the item to the planner uncounted, and the same finding twice goes to the design seat | 2026-11-17 | [Section 5.3](#53-the-verify-node) | ✅ |
 | D-PT1 | **Designer's decision, amended to the tree.** Each kind of work is a seat. The seat list is open: any name the policy maps, as [`D-GP6`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#decision-ledger) says and as the owner asked ("a few more seat names to slot into"). Ten seats are declared; the `fix`, `prose` and `mechanical` seats first proposed were not built | 2026-11-16, amended 2026-11-18 | [Section 4](#4-kinds-of-work) | ✅ |
@@ -496,6 +550,8 @@ Three kinds of row, and each says which it is. An **owner ruling** quotes or cit
 | D-PT5 | **Designer's decision; the owner may overturn this.** tillr records each node's seat, model and cost, and comparisons between backends stay in the owner's project. One exception was built on 2026-11-18 by the design seat that cut the planning stage, with no owner ruling recorded for it: `tillr drain why` computes cost medians, in dollars | 2026-11-16, amended 2026-11-18 | [Section 5.6](#56-the-cost-report) | ✅ |
 | D-PT6 | **Withdrawn.** "One re-plan, as the next attempt" is a count. A re-plan is the verify node's return to the planner | 2026-11-16, withdrawn 2026-11-18 | [Section 5.3](#53-the-verify-node) | — |
 | D-PT7 | **Superseded.** A fix does not continue a session under a 150k-token bound; a refused run goes back to its worker's own session with no bound ([how a worker run's ending moves its item](tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)) | 2026-11-16, superseded 2026-11-18 | [Section 4](#4-kinds-of-work) | ✅ elsewhere |
+| D-PT8 | **Designer's decision; the owner may overturn this.** When a filed request's criteria share one coupled repair and verification run across a module, its test runner, and `tests/` (such as `tools/tillr-drain/`, `tools/go-test-shards.py`, and `tests/` in [`D-GR17`](gate-rework.md#decision-ledger), or across `tools/tillr-item/`, `tools/tillr-run/`, `tools/tillr-drain/`, `config/tillr/`, `docs/pi/`, and `tests/` in `D-PT9`), `plan` in `planned-build@v1` may leave `work` unsplit (`write_scope: "inherit"`, carrying `plan`'s report into `work`'s brief since `11dec7eb2`). If `plan` splits the work, each writing piece owns real source or documentation edits. A piece touching `tools/tillr*` runs `just pack-sync` and includes the matching mirror in its own commit. A piece prompt forbidding mirror edits does not defer regeneration to a later writer. For the restart report, a clean `just pack-sync` on the joined candidate needs no mirror commit. Verify separately that `why` identifies the continuing run on its own lane and distinguishes a recorded takeover decision from the absence of one. The piece retry and item-fence hold formerly specified here are superseded by the operator request (the owner may overturn it). Each writer satisfies its own prompt's slice. Plan for the final writer to repair the joined candidate after `verify-not-done` or `holdJudge` (`judgeWriterRun`); leave verification-only steps to `read_only` seats rather than a trailing no-op or `pack-sync`-only `write` piece — explicitly overriding the stale *"Send `pack-sync` to an `edit` piece"* line in [`config/tillr/plan-guidance.md`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/plan-guidance.md) ([Section 2](#2-principles), [Section 5.2](#52-what-a-piece-is-and-what-refuses-one), [Section 5.4](#54-when-the-planner-cannot-plan), [Section 5.9](#59-deciding-fork-versus-repository-delivery-at-plan-time), [`D-JL13`](tillr-judge-and-lifecycle.md#46-a-held-item-never-occupies-a-lane-d-jl13), [`D-JL14`](tillr-judge-and-lifecycle.md#47-offered-commits-own-candidate-lanes-unlaunched-claims-and-named-hold-movers-d-jl14), [`D-JL16`](tillr-judge-and-lifecycle.md#49-keeping-a-live-trunk-fixers-work-when-a-rerun-passes-d-jl16), [`D-JL18`](tillr-judge-and-lifecycle.md#411-instant-start-decisions-from-a-background-maintained-queue-view-d-jl18)). **Rejected:** splitting coupled cross-module work into narrower pieces whose briefs carry item-wide criteria against a single piece's `write_scope`; following `plan-guidance.md` to append a standalone `pack-sync` (`piece-pack-sync`), verification-only, or trailing docs-only (`piece-docs`) `access: "write"` piece narrowed away from `tools/tillr*` implementation paths | 2026-11-20 | [Section 2](#2-principles), [Section 5.2](#52-what-a-piece-is-and-what-refuses-one), [Section 5.4](#54-when-the-planner-cannot-plan) | Guidance recorded |
+| D-PT9 | **Owner, 2026-11-19:** *"There should not be a way to mis-file an item such that it leads to bad downstream work. That should be decided later in the process."* **Operator request and designer's implementation decisions; the owner may overturn them.** The operator's 2026-11-21 split supersedes the earlier piece plan: `item-request-ed0e11d000` is decision validation, test and mirror only. Omit its stale obstacle node. `item-request-3b892e528e` owns classification, staging and ordered mixed delivery; obstacle restaging depends on that work. Delivery contract: (1) filing takes words; ignore `--path` with notice. The operator edits pending fork items to name their target before resumption, rather than inferring it from old lists; (2) `plan` in `planned-build@v1` — and, on a single-worker item, a short read-only first step with the same job — decides from the words and tree whether delivery is repository files, one named fork known to [`bin/pi-forks`](https://github.com/mschulkind-oss/tillr/blob/main/bin/pi-forks), or both in fork-then-repository order, and the drain stages, gates, and lands each piece accordingly; (3) a worker discovering mid-run that its change belongs to an unstaged fork ends with `OBSTACLE: delivery` (`FORK`) across both `tools/tillr-drain` and `tools/tillr-run/backends/` (`keep-going.ts`, `obstacle.ts`, `obstacle-cases.json`, `brief-template.md`), and the drain restages and continues the item as a fork piece without blocking for the operator ([`D-JL15`](tillr-judge-and-lifecycle.md#48-planning-time-fork-delivery-the-delivery-obstacle-and-patch-branch-refusal-d-jl15)); and (4) any candidate whose run (or attempt) moved a `patch/<fork>` branch is refused before the gate alongside `bin/pi-forks` refusing `export` and `rebase` under `TILLR_RUN_ID` (`f7bf6eba8`). **Rejected:** requiring `.forks/lanes/<lane>/<fork>/` fence entries from filers to trigger fork staging; omitting the single-worker first classification step or `keep-going.ts` `delivery` obstacle parity; allowing a drain worker to deliver or advance `patch/<fork>` itself; blocking for the operator when a worker reports `OBSTACLE: delivery`; scheduling a standalone `pack-sync` `access: "write"` piece (`piece-pack-sync`) after writing pieces that already run `just pack-sync` | 2026-11-19 | [Section 5.9](#59-deciding-fork-versus-repository-delivery-at-plan-time) | Queued |
 
 ---
 
@@ -508,20 +564,20 @@ Three kinds of row, and each says which it is. An **owner ruling** quotes or cit
    - **A — The item's page only**, as built. Nothing extra lands with the item.
    - **B — Committed too.** A short plan document rides in the item's one commit.
 
-   <!-- vantage: question id=OQ-PT7 blocked-on="first-planned-item-landed, ./tillr-storage.md#OQ-TS1" leaning="The item's page only (A): a plan records how one attempt went, and the documents hold what must be built." -->
+   <!-- vantage: question id=OQ-PT7 blocked-on="first-planned-item-with-pieces-landed, ./tillr-storage.md#OQ-TS1" leaning="The item's page only (A): a plan records how one attempt went, and the documents hold what must be built." -->
 
    _Leaning:_ The item's page only (A): a plan records how one attempt went, and the documents hold what must be built.
 
-   Blocked until a planned item has landed, so there is a plan to look at, and until [the storage design's first question](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-storage.md#OQ-TS1) says where an item's record lives.
+   Blocked until a planned item that actually split into pieces has landed, so there is a landed plan to look at (`item-request-6c27d14b15` landed without a split, while `item-request-e1016f3a23` split into two pieces and has not landed yet), and until [the storage design's first question](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-storage.md#OQ-TS1) says where an item's record lives.
 
    **Answer:**
    > _(empty — fill in when decided)_
 
 2. 🔒 **OQ-PT8: Should every build item be planned first, or only the ones that ask for it?**
 
-   An author files a build item with five criteria across two Go modules. The loop gives it to one Terra worker, as it does every build item. A second way is built and unused: a Sol planner hands pieces to cheaper workers, and a Sol verifier checks the result. No item has run that way, so its cost is unknown.
+   An author files a document-declared build item with five criteria across two Go modules. The loop gives it to one Terra worker, because `.tillr.toml` sets no default workflow. A second way is built: a planner hands pieces to cheaper workers, and a verifier checks the result (`tillr item request` already defaults CLI `build` requests to `planned-build@v1`, and one has landed without a piece split). Fewer than ten planned items have landed, so the planned-workflow median cost is still unknown.
 
-   - **A — Only when the author asks**, by naming the workflow on the item. Nothing to build. Large items nobody marked keep losing whole runs.
+   - **A — Only when the author asks**, by naming the workflow on the item (with CLI `build` requests defaulting to it unless overridden). Nothing to build. Large document-declared items nobody marked keep losing whole runs.
    - **B — Every build item.** One settings line. Small items pay for a planner and a verifier that cost more than they do.
    - **C — Only large items.** Needs a rule built. The drafted one picked 56 of 85 past items, which held 81% of spend.
 
@@ -529,7 +585,7 @@ Three kinds of row, and each says which it is. An **owner ruling** quotes or cit
 
    _Leaning:_ Only when the author asks (A) until the figures exist; then C if planning is cheaper only on large items, B if it is cheaper overall.
 
-   Blocked until ten items have landed through the planned workflow. `tillr drain why` then prints their median cost beside the ordinary build median ([Section 7](#7-how-the-owner-learns-whether-it-pays)).
+   Blocked until ten items have landed through the planned workflow (one has landed on 2026-11-19). `tillr drain why` then prints their median cost beside the ordinary build median ([Section 7](#7-how-the-owner-learns-whether-it-pays)).
 
    **Answer:**
    > _(empty — fill in when decided)_

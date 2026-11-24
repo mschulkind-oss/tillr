@@ -2,19 +2,21 @@
 title: "Landing principles — the durable rulings, and what enforces each"
 status: accepted
 stage: CURRENT
-verified: 2026-11-15
+verified: 2026-11-23
 covers:
   - docs/design/escalation-ladder.md
+  - docs/design/gate-rework.md
+  - docs/design/tillr-judge-and-lifecycle.md
   - docs/pi/candidate-triage-2026-10-28.md
   - docs/pi/landing-replay-ruling-2026-11-02.md
   - docs/pi/stranded-candidates-2026-11-02.md
 tags: [board, landing, principles, rulings, library]
-summary: "Fourteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-17, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
+summary: "Seventeen principles distilled from the landing rulings of 2026-10-28 to 2026-11-21, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. Principles 5 and 6's per-attempt budgets are superseded by the 2026-11-17 owner ruling D-JL10 (worker endings are never counted; identical repeats diagnose at design). A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
 ---
 
 # Landing principles
 
-> **Delivered copy.** This is `docs/design/landing-principles.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-principles.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/landing-principles.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-principles.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 This is the library, not another ruling. Each entry is one durable principle, the measurement that
 produced it, the ruling that owns the detail, the column that matters — **what enforces it today** —
@@ -43,7 +45,7 @@ A scope line therefore takes one of three shapes:
   `tillr-loop`, and says nothing about the lander.
 - **a named program** — the entry binds that program and no other, and the line says which.
 
-"Meets it" and "does not" are measurements of the tree, read in the source on 2026-11-15, not
+"Meets it" and "does not" are measurements of the tree, read in the source on 2026-11-19, not
 intentions; where the lander does not meet an entry, the line names the gap that remains.
 
 ---
@@ -150,8 +152,9 @@ about the candidate rather than the machinery. Both outcomes are pinned in
 [`main_test.go`](../../tillr-land/main_test.go)
 (`TestAMovedTrunkSquashesTheChangeOntoTheNewTip` and `TestASquashConflictIsRecordedAndPinsTheHead`)
 and [`trunk_test.go`](../../tillr-land/land/trunk_test.go)
-(`TestSquashWritesOneCommitWithTheItemTrailerAndTheDeployedIdentity` and
-`TestSquashOnAConflictNamesTheConflictAndNoCommit`).
+(`TestSquashWritesOneCommitWithNoItemTrailerAndTheDeployedIdentity` and
+`TestSquashOnAConflictNamesTheConflictAndNoCommit`), consistent with
+[`tools/tillr-land/README.md`](../../tillr-land/README.md#state-invariants) (landed commits carry no `Tillr-Item:` trailer).
 
 [`board-utilities.md`](board-utilities.md) [§5.4](board-utilities.md#54-land-alone) states that
 contract for `land`.
@@ -188,33 +191,64 @@ to — `tillr-drain` and `tillr-loop` — and says nothing about the lander.
 
 ## 5. Only verdicts charge
 
-A repair attempt is charged only when a tree the gate actually judged was refused, and only per
-distinct cause. Parks, provider failures, no-candidate lanes and machinery faults charge nothing.
+> **Superseded on 2026-11-17 as a counted budget (`D-JL10`).** The owner ruled in
+> [`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)
+> (`D-JL10` in its [decision ledger](tillr-judge-and-lifecycle.md#decision-ledger)) that a worker's
+> ending is never counted and rejected numeric repair thresholds. The durable negative rule —
+> parks, provider failures, no-candidate lanes and machinery faults never consume an item's standing
+> — holds automatically because no count exists.
+
+*Original 2026-10-28 / 2026-11-02 statement:* a repair attempt was to be charged only when a tree
+the gate actually judged was refused, and only per distinct cause. Parks, provider failures,
+no-candidate lanes and machinery faults charged nothing.
 
 *Measured 2026-11-02:* ten candidates sat with "spent" budgets and **not one had a judged repair
 tree**. Four of them had three no-candidate lanes each — their budget was spent entirely on provider
 failures. The counter read 2/2 and the work had never once been seen by the gate.
 
-*Enforced by:* nothing yet. Item 418 is where the charge event is redefined; until it lands, the
-recomputation is a recorded hand operation.
+*Enforced by:* [`tillr-drain`](../../tillr-drain/), under `D-JL10` rather than a charge
+counter (board-era item 418 is absent from [`docs/tillr/roadmap.md`](../tillr/roadmap.md)). A
+refused run, a run with no commit, a fence escape, a refused landing, and a squash conflict return
+to the worker with their evidence every time and uncounted
+([`tools/tillr-drain/README.md`](../../tillr-drain/README.md#a-refused-run-goes-back-to-its-worker);
+`TestAFailedCandidateGoesBackToItsWorkerUntilItRepeats` in
+[`tools/tillr-drain/loop_test.go`](../../tillr-drain/drain/loop_test.go)), while an infrastructure
+failure closes that backend and walks to the next open backend (`backend-closed` when none is open;
+[`tools/tillr-drain/README.md`](../../tillr-drain/README.md#recorded-backend-availability)).
 
-*Scope:* **not lander-scoped.** The attempt ledger and the repair budget it charges live on the
-dispatch side's runs, not the lander's; the lander writes `landings` and charges no repair
-budget.
+*Scope:* **not lander-scoped.** Worker-run settlement lives on the dispatch side (`tillr-drain`),
+not the lander's; the lander writes `landings` and keeps no attempt counter.
 
 ## 6. A budget escalates, it does not loop
 
-K attempts is a budget per **distinct cause**, not per lifetime. A candidate that exhausts it flows
-up the escalation ladder — the repair lane, then a contingency, then a recorded exception with an
-expiry — and the last rung is an explicit "on hold", never a silent stall. Policy is the owner's;
-the mechanism below the policy is not.
+> **Superseded on 2026-11-17 as a counted budget (`D-JL9`, `D-JL10`).** The owner ruled in
+> [`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)
+> (`D-JL9` and `D-JL10` in its [decision ledger](tillr-judge-and-lifecycle.md#decision-ledger))
+> that neither worker runs nor design runs have numeric attempt thresholds. Escalation without
+> silent stalls stays, triggered by an **identical repeat** or an explicit **named obstacle**, not
+> by `K` attempts.
 
-*Enforced by:* [the escalation ladder](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/escalation-ladder.md)'s four rungs and its `exceptions`
-ledger. No standing authority below the owner may grant an exception.
+*Original 2026-10-28 statement:* `K` attempts was a budget per **distinct cause**, not per lifetime.
+A candidate that exhausted it was to flow up [the escalation ladder](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/escalation-ladder.md) — the
+repair lane, then a contingency, then a recorded exception with an expiry — with the last rung an
+explicit "on hold", never a silent stall. Policy is the owner's; the mechanism below the policy is
+not.
 
-*Scope:* **not lander-scoped.** The ladder and its ledger are dispatch-side. The lander ends a lost
-compare-and-swap as an external failure with no rung; whether that becomes one is the dispatch side's
-to decide.
+*Enforced by:* [`tillr-drain`](../../tillr-drain/) in the uncounted shape of `D-JL9`,
+`D-JL10`, and `D-JL11` ([`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md#4-a-failed-attempt-is-never-a-verdict-and-never-a-count)),
+not by [the escalation ladder](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/escalation-ladder.md)'s four-rung `plan-owner` dispatch or
+`exceptions` ledger, which are unbuilt. A refused worker run returns to its worker until an ending
+repeats an earlier ending of the same producer, cause and normalized evidence (`repeatedEnding` in
+[`tools/tillr-drain/drain/returned.go`](../../tillr-drain/drain/returned.go)), or until the
+worker reports a named obstacle; either routes to the `design` seat, and reaches the owner only on a
+design run's `NEXT-ACTOR: owner` objection or a repeated non-gate design ending (`designRepeatOf` in
+[`tools/tillr-drain/drain/design_repeat.go`](../../tillr-drain/drain/design_repeat.go);
+`TestBlockedReportRoutesOnceToDesignThenOwner` in
+[`tools/tillr-drain/blocked_route_test.go`](../../tillr-drain/drain/blocked_route_test.go)). No
+standing authority below the owner may grant an exception or answer an owner question.
+
+*Scope:* **not lander-scoped.** Conflict and repeat routing are dispatch-side (`tillr-drain`). The
+lander records `squash-conflict` or a refusal with no rung; how that routes is the dispatch side's.
 
 ## 7. A surface that hides parked work is a false report
 
@@ -225,7 +259,21 @@ pass must be visible as held, with the reason — on the same surface used to ju
 Twelve of fifteen queue entries were parked there, reading as work that had been refused, when in
 fact nothing had judged most of them. One had been there four days.
 
-*Enforced by:* nothing. The heading is the defect.
+*Enforced by:* [`tools/tillr-view`](../../tillr-view/) and
+[`tools/tillr-drain/holdrules`](../../tillr-drain/holdrules/holdrules.go). The board surface
+that carried `splitRejectedLandings` is retired. Today `tillr-view waiting` (and `GET /api/v1/why`
+plus `waiting --history` / `GET /api/v1/waiting`; see
+[`tools/tillr-view/README.md`](../../tillr-view/README.md#why-each-unlanded-item-is-not-moving))
+reports why each unlanded item is not moving, classifying every held row and naming its next actor
+and required action. Every exported drain hold reason is required to have a display rule in
+[`holdrules.go`](../../tillr-drain/holdrules/holdrules.go) (`TestEveryReasonConstantHasAHoldRule`
+in [`tools/tillr-drain/drain/hold_rules_test.go`](../../tillr-drain/drain/hold_rules_test.go)),
+`TestWaitingEveryDrainReasonHasARule` in
+[`tools/tillr-view/waiting_internal_test.go`](../../tillr-view/waiting_internal_test.go) verifies
+every rule renders with a class, reason and mover, and
+`TestWaitingSummarySeparatesDocumentAnswersFromOtherNextActors` in
+[`tools/tillr-view/owner_waiting_test.go`](../../tillr-view/owner_waiting_test.go) pins the
+separation of owner document questions from drain, design-seat and operator actions.
 
 *Scope:* **not lander-scoped.** It binds the dispatch side's queue surface — `tillr view` and the
 drain's dispatch table — not the lander, which keeps no candidate queue of its own.
@@ -305,11 +353,11 @@ it does after a landing. The item is never held as `land-refused`. The case is p
 
 *Scope:* **the landing transaction and the drain.** [`tools/tillr-land`](../../tillr-land/)
 does not stall a superseded candidate: there is no candidate queue to wait in, and the finding is a
-recorded refusal rather than a commit. `tillr-drain` exits the item on that refusal. What is not
-enforced yet: the `resolved-elsewhere` move records no pointer to the commit that carries the
-change, because `tillr-item state` takes none today. The lander's `patch-at-head` and `patch-rewind`
-refusals are about `refs/heads/patch/*` delivery branches, not about an ordinary change the trunk
-already holds.
+recorded refusal rather than a commit. `tillr-drain` exits the item on that refusal, recording
+`ResolvesVia: "commit:" + c.HeadSHA` (`resolveElsewhere` in
+[`terminal_item.go`](../../tillr-drain/drain/terminal_item.go)). The lander's `patch-at-head`
+and `patch-rewind` refusals are about `refs/heads/patch/*` delivery branches, not about an ordinary
+change the trunk already holds.
 
 ## 11. A failure is diagnosed, not waited out
 
@@ -348,10 +396,10 @@ design seat's own endings are compared the same way: a design ending that repeat
 from both records (`designRepeatOf` in `tools/tillr-drain/drain/design_repeat.go`). The same ruling removed re-admission on a changed input hash, so a "named
 change" in the sense above is now an event that names the item: an operator's retry, a design answer,
 or the recovery of a killed run. What is not enforced: the fleet trip, the tier-0 probes and the
-fingerprint store of the design below; the one infrastructure failover with its
-`run-infra-exhausted` hold, which is still a budget
-([`item-backend-open-is-a-fact`](../tillr/roadmap.md#route-an-infrastructure-failure-to-the-next-open-backend));
-and the infrastructure backoff on elapsed time. The surviving specification is
+fingerprint store of the design below; and the infrastructure backoff on elapsed time (the one-hop
+infrastructure failover and its `run-infra-exhausted` hold were replaced by recorded backend
+availability and `backend-closed` in
+[`tools/tillr-drain/README.md`](../../tillr-drain/README.md#recorded-backend-availability)). The surviving specification is
 [the cooldown-removal design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/failure-diagnosed-not-waited-out.md), which carries the whole
 mechanism: a fingerprint over the failing stage and the normalized error, an inputs hash recorded
 with every failure, an admission rule keyed on a named change rather than a clock, a fleet trip at
@@ -443,13 +491,20 @@ gate refusal, and two of them over a committed design answer the settlement had 
   [`design_retry.go`](../../tillr-drain/drain/design_retry.go), commit `c95791410`; pinned
   in [`design_retry_test.go`](../../tillr-drain/drain/design_retry_test.go) and by
   `TestEveryRetryRefusalNamesTheAcceptedCommandOrTheMover` in
-  [`main_test.go`](../../tillr-drain/main_test.go)).
+  [`main_cli_test.go`](../../tillr-drain/drain/main_cli_test.go)).
 
 What is not enforced yet: the gate's trunk-already-red replay cannot judge a fast-gate check id
 such as `documents`, so it never acquits a refusal the trunk caused. A design run refused for the
 trunk's sake goes back to the design seat each time until the trunk is fixed; the trunk-suspect
 re-raise (commit `41790b724`) that worked around this from the drain side was removed by the
-owner's ruling of 2026-11-17, and the gap is the gate's to close.
+owner's ruling of 2026-11-17, and the gap is the gate's to close. On the drain side (measured
+2026-11-19 and queued under
+[`D-JL14`](tillr-judge-and-lifecycle.md#47-offered-commits-own-candidate-lanes-unlaunched-claims-and-named-hold-movers-d-jl14)),
+[`unlaunched_claim.go`](../../tillr-drain/drain/unlaunched_claim.go) undoes only conflict
+moves today while `cancelStaging` marks an unlaunched workflow-node claim examined, leaving the
+item held as bare `run-link-missing`, and ten rules in
+[`holdrules.go`](../../tillr-drain/holdrules/holdrules.go) still carry `"cause not recorded"`
+as their mover.
 
 *Scope:* **not lander-scoped.** The dispatch side holds candidates in repair states and items out of
 dispatch — `tillr-drain` and `tillr-loop` — and the lander keeps no held state of its own, so it
@@ -479,13 +534,164 @@ run's bracket into what it convicts and what it only observes. It convicts a wri
 watched, idle sibling lane worktree, and the run's own lane worktree going away. It observes a
 rogue ref inside tillr's namespaces, any other worktree's registration, and a main-checkout
 branch switch. The observations go on the run's `boundary.check` event, and the check stays
-clean. The fence check still convicts a candidate whose committed change leaves its fence. The
+clean. The [common deny-list](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#51-the-work-and-its-statement) refuses a candidate whose committed change touches protected paths or item declarations. The
 gate still judges what lands. `TestOrdinaryGitUseDuringARunNeverConvictsIt` pins the ruling.
 *Not enforced:* a worker whose only escape lies outside the lanes is no longer stopped. A rogue
 ref or a stray worktree is named for an operator, and nothing acts on it.
 
 *Scope:* **not lander-scoped.** The bracket is the dispatch side's, in `tillr-drain`. The lander
 holds landings on trunk movement through its own checks, and it never convicts a run.
+
+## 15. Land the smallest functional change
+
+A change lands as the smallest functional change possible, as a human engineer would land it. Part
+of a design or a request may land by itself, and that is the healthier outcome, not a compromise:
+a small change is easier to review and to test, and the work moves faster. The owner ruled on
+2026-11-21, verbatim, with his spelling kept: "part of desgins can absoutely land. this is
+generally MORE healthy. Remember, we're trying to mirror humans here. Humans desire to land the
+smallest functional change possible to make reviewing, testing, velocity, all this stuff easier,
+and it will also make it easier for us."
+
+Two consequences follow from his words. A change is not held back because a named case of its
+request is still unmet: the case follows as its own change. And "functional" is the limit on
+"smallest": what lands works alone and leaves the trunk no worse than it was.
+
+*Measured 2026-11-21:* one item's verifier refused it twelve times in two and a half hours, each
+time on a different case, while its candidate grew from 34 to 64 files, and nothing landed. Across
+the 1,049 landings the store records, the median landing changes 2 files and adds 75 lines. Of 95
+landed `planned-build@v1` items, the 19 above the 95th percentile in size averaged 3.3 verifier
+refusals and the other 76 averaged 1.1. The figures and how they were read are in
+[the split design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-item-split.md#2-the-case-measured).
+
+*Enforced by:* nothing. [The split design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-item-split.md) is the only mechanism that
+applies it: it lets the accepted part of an oversized item land while the rest follows, and its
+[build order](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-item-split.md#14-the-build-in-slices-that-each-land-alone) is itself written
+as slices that each land alone. That design is decided and unbuilt:
+`rg -n -i 'carve|donor|parent_item|child_item' tools/tillr-item tools/tillr-drain tools/tillr-land`
+found nothing on 2026-11-21. *Not enforced:* nothing reads the size of a request, a plan or a
+candidate, and the planner's guidance says nothing about it
+(`rg -n -i 'split|size|independent|large|small' config/tillr/plan-guidance.md` found nothing on
+2026-11-21). A verifier still refuses a whole candidate for one unmet case. Until the split design
+is built, this entry is a stated intent that binds whoever files a request, writes a design or
+plans a build.
+
+*Scope:* **not lander-scoped.** It binds where the size of a change is chosen: filing, the design
+seat, the planner and the verifier, which run under `tillr-drain` and `tillr-loop`. The lander
+lands one squashed commit per item whatever its size, so it cannot break this principle and is not
+bound by it.
+
+## 16. What the operator can settle is settled inside tillr
+
+A problem the operating agent could solve without the owner does not go to the operating agent. It
+goes to a similarly responsible agent, process or item inside tillr, which is given the evidence
+the operating agent would have had to go and read. The owner ruled on 2026-11-21, verbatim: "I
+guess a working principle should be that if you ever feel that you as the whale could solve some
+problem, and it wouldn't need to be escalated to me, then that problem should escalate to... a
+similarly responsible agent, process, ticket, whatever, within Tiller, rather than popping up to
+you." ("The whale" is his name for the operating agent, the foreground session that watches the
+drain and acts as operator.)
+
+Two consequences follow from his words. The operator is not a mover for any hold: a hold that only
+the operator can end waits for a check-in, and by [Section 13](#13-a-held-state-names-a-mover-that-can-still-act)
+that is a mover that cannot act when the session is gone. And the test for reaching the owner is
+whether the decision is his, never whether a seat inside tillr failed or took long.
+
+*Measured 2026-11-21:* from 12:00 AM to 10:58 PM ET the store records 29 items closed and 5 set to
+landed by the operator, 29 holds addressed to the operator on 21 items, 32 paths added to items by
+the operator, and 2 design retries the operator requested. Four of the 34 carry words of the
+owner's about that item; the other 30 were settled without him. One of the five hand finishes was wrong: an
+item was set to landed as a duplicate of work that did not deliver it. The command, the event
+kinds read and how the closes were sorted are in
+[the design that applies this principle](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/operator-decisions-inside-tillr.md#2-the-day-measured).
+
+*Enforced by:* nothing. [The design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/operator-decisions-inside-tillr.md) names, for each of seven
+kinds of hand action, the seat or process inside tillr that takes it, and none of it is built. Two
+parts exist already: the drain releases a wait when its blocker lands, and it releases a trunk
+obstacle when the named checks are green. *Not enforced:* `tooling` and `seat` obstacles on a filed
+request still name the operator as mover (`rg -n 'Mover = "operator"' tools/tillr-drain/obstacles/read.go`
+found three assignments on 2026-11-21), no fault reason declares what ends it, and an item is
+closed or set to landed on a reason typed by hand. Until the design is built, this entry is a
+stated intent that binds the operator: each hand action of this kind is a missing rule to file.
+
+*Scope:* **not lander-scoped.** It binds the dispatch side, `tillr-drain` and `tillr-loop`, where
+holds, faults and the queue's order live. The lander holds no item and asks no one, so it cannot
+break this principle and is not bound by it.
+
+## 17. Disable a flaky check, file its repair, and count it neither green nor blocking
+
+A check that both passes and fails on the same declared inputs is flaky. The response is to disable
+that check, file an item to re-enable that named check correctly, and keep it from blocking any
+unrelated candidate or holding the trunk red. The owner ruled on 2026-11-21 in two messages,
+verbatim, with his spelling kept: "The correct move for a flaky test is disable it, file an item to
+fix it, and don't let it block anything. It is not considered green, but it also doesn't let you
+block other things." and "And the principle here is you make the trunk green by disabling the flaky
+test. The test is not green because it's flaky, but the trunk is green because the test is no longer
+included.And yes, the item that is filed should be to re-enable it correctly, the test that was
+flaky."
+
+Two consequences follow from his words. First, a disabled check is excluded from the program's
+pass, remembered, and fail counts and is listed apart as `disabled`: the candidate or trunk is green
+because the contradicted check is no longer included, while the check itself remains not green until
+its repair item lands. Second, the filed item is not a generic flake report: it names the disabled
+check and asks to fix it at its cause and re-enable it correctly, with its work done only when the
+check is back in the gate program and no longer both passes and fails on the same inputs.
+
+*Measured 2026-11-21:* before `D-GR21` in
+[the gate-rework design](gate-rework.md#a-contradicted-check-is-disabled), three incompatible
+behaviors competed across the gate: crediting a contradicted check as a `flaky` pass, re-running it
+live on unrelated candidates so an intermittent failure still refused landings or filed trunk fixers,
+and treating the contradiction itself as red. When `disabled` was first attempted by teaching check
+consumers one at a time, the kept candidate grew to 111 files and 10,088 added lines and was refused
+eleven times by its verifier because separate Go and Python sites still credited a contradicted
+check green, turned `disabled` into `error`, or dropped its repair item on a cancelled or errored
+step ([the classification inventory](gate-rework.md#every-place-a-check-result-is-classified)).
+
+*Enforced by:* **partly.** Every moved Go and Python classification site routes through one
+five-outcome classifier in [`tools/tillr/checkresult/classify.go`](../../tillr/checkresult/classify.go)
+(`Classify`, `Aggregate`, `Disabled`, `DisabledMarker`, landed through `f4f3748f69` and
+`d5f5f41a7e`), guarded by `TestClassificationScanGoSites` in
+[`tools/tillr-gate/classification_scan_test.go`](../../tillr-gate/classification_scan_test.go),
+`TestClassificationScanDrainSites` in
+[`tools/tillr-drain/drain/classification_scan_test.go`](../../tillr-drain/drain/classification_scan_test.go),
+and [`tools/gate/classification-scan.test.py`](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/classification-scan.test.py).
+`Aggregate` leaves `disabled` out of both failing and unknown outcomes, so a run whose remaining
+checks pass answers `pass`. Store-backed `tillr-gate classify` and `tillr-gate enable`
+([`tools/tillr-gate/classify.go`](../../tillr-gate/classify.go),
+[`tools/tillr-gate/enable.go`](../../tillr-gate/enable.go)) persist
+`disabled/<sha256(check_id)>.json` with both timestamps and retained log copies on an
+exact-fingerprint contradiction, keep returning `disabled` until `enable` records the episode
+cleared, and honor `--prove-disabled` for the repair candidate's proof. In
+[`tools/tillr-gate/main.go`](../../tillr-gate/main.go), `writeRunSummary` leaves `disabled`
+checks out of `passed`, `remembered`, and `failed`, counts `disabled` apart, and lists each disabled
+check with its episode evidence and repair item
+(`TestDisabledCheckExcludedFromPassAndFailCountsAndListedAsDisabled` in
+[`disabled_summary_test.go`](../../tillr-gate/disabled_summary_test.go)). On the dispatch
+side, `sweepDisabledMarkers` in
+[`tools/tillr-drain/drain/flaky_repair.go`](../../tillr-drain/drain/flaky_repair.go) sweeps
+`disabled/*.json` at pass start and when every gate, replay, rolling, and heavy step returns
+(detaching cancellation so errored and cancelled steps still file), files `flaky-<check-id>` (and
+`-2`, `-3`, … for later episodes) titled ``re-enable check `<id>` correctly`` as a generated repair
+item needing no document block, and invokes `tillr-gate enable` once the repair item lands
+(`TestDisabledMarkerSweepFilesReEnableItemTitleAndWords`,
+`TestDisabledMarkerSweepDeduplicatesWhileOpenAndEnablesAfterLand`, and
+`TestDisabledMarkerSweepFilesOnCancelledAndErroredSteps` in
+[`flaky_repair_test.go`](../../tillr-drain/drain/flaky_repair_test.go)). *Not enforced:* live
+`tillr-gate run` and `tillr-gate checks` still set `outcome.Memory = "flaky"` in `annotateMemory`
+([`tools/tillr-gate/memory.go`](../../tillr-gate/memory.go)) and execute the contradicted
+check instead of short-circuiting on `disabled/*.json`, the Python store-backed checks do not yet
+call store-backed `tillr-gate classify`, and the drain does not yet pass `--prove-disabled` when
+gating a `flaky-<check-id>` candidate (`rg -n 'prove-disabled' tools/tillr-drain` returned nothing
+on 2026-11-23) or re-classify cached proof/replay records and historical `DISABLED` statuses (slices
+`2c`, `2d`, `3a`, and `3b` in
+[the classifier build order](gate-rework.md#classify-every-check-result-in-one-place)).
+
+*Scope:* **not lander-scoped.** It binds the gate and dispatch side — `tillr-gate`, `tillr-drain`,
+and `tillr-loop` — which classify check outcomes, print verdict summaries, sweep disabled markers,
+file `flaky-<check-id>` repair items, and run `tillr-gate enable`.
+[`tools/tillr-land`](../../tillr-land/) reads only the top-level `gate.verdict` result
+(`pass`, `pass-inherited`, `fail`, `error` in
+[`verdict.go`](../../tillr-land/land/verdict.go)) and neither inspects per-check `disabled`
+entries nor keeps check state.
 
 ---
 

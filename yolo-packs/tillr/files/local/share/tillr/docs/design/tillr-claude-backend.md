@@ -2,15 +2,15 @@
 title: "A claude backend for tillr: a seat can run on the Claude subscription and falls back when its window is spent"
 status: accepted
 stage: DESIGN
-updated: 2026-11-17
+updated: 2026-11-19
 tags:
   - tillr
   - backend
   - design
-summary: "Adds a fourth adapter, run-claude, so the backend policy can put any seat on the Claude Code command line run headless (claude -p), which is the only way to spend the Claude subscription from a drain. Measures what a headless run loads by default, fixes what the adapter always passes, gives a backend row a list of harness arguments for tools, servers and prompt text, and lets a seat name an ordered list of backends so a spent subscription window falls back to the next one."
-next: "The owner opts the subscription rows into quota admission, applies the tillr pack, and records a real-store loop run. Existing policy rows without quota keep refusal-based holds."
+summary: "Adds a fourth adapter, run-claude, so the backend policy can put any seat on the Claude Code command line run headless (claude -p), which is the only way to spend the Claude subscription from a drain. Measures what a headless run loads by default, fixes what the adapter always passes, gives a backend row a list of harness arguments for tools, servers and prompt text, lets a seat name an ordered list of backends so a spent subscription window falls back to the next one, and adds direct subscription quota readings with an optional owner reserve."
+next: "If wanted, the owner opts the subscription rows in config/tillr/backend-policy.claude.json and config/tillr/backend-policy.mixed.json into quota admission (quota and reserve) and applies the tillr pack; existing policy rows without quota keep refusal-based holds. Pi-adapter harness_args (Section 6 step 3) remains deferred until a pi seat needs it."
 depends-on:
-  - tillr-muse-backend.md
+  - ../reference/tillr-muse-backend.md
   - tillr-convergence.md
 vantage:
   status-chip: true
@@ -18,24 +18,35 @@ vantage:
 
 # A claude backend for tillr: a seat can run on the Claude subscription and falls back when its window is spent
 
-> **Delivered copy.** This is `docs/design/tillr-claude-backend.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-claude-backend.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-16. The adapter and Claude-first policy dispatched and landed
-`item-scratch-claude-build` in a lane-owned scratch clone, not on the real trunk or store:
-run `run-item-scratch-claude-build-a1`, model alias `opus` (report model `claude-opus-5-5`),
-202,563 tokens, estimated $0.293586. The subscription allowed the run. The gate command
-needed correction; restarting the loop landed the existing candidate without another model
-run. A second pass refused `item-scratch-claude-fallback` with a simulated-spent window,
-then the same item completed and landed on real pi in that pass. [The scratch measurements](#scratch-drain-measurements)
-record both runs; [a fresh-store preview defect](#a-fresh-store-cannot-preview-document-intake)
-is filed outside this item's repair paths.
-UNMEASURED: no loop on the real trunk and store has dispatched to this backend; that remains
-the owner's step. A genuinely spent window has not refused a run in these measurements.
-The owner kept the running drain's Bedrock-only policy on pi; only a loop explicitly naming
-the Claude-first policy reaches this backend.
+**Status:** 2026-11-19. Built except [Section 6](#6-build-order) step 3 (`harness_args` for
+the pi adapter, deferred until a pi seat needs it). On 2026-11-16, the adapter and
+Claude-first policy dispatched and landed `item-scratch-claude-build` in a lane-owned
+scratch clone: run `run-item-scratch-claude-build-a1`, model alias `opus` (report model
+`claude-opus-5-5`), 202,563 tokens, estimated $0.293586. The subscription allowed the run;
+the gate command needed correction, and restarting the loop landed the existing candidate
+without another model run. A second scratch pass refused `item-scratch-claude-fallback`
+with a simulated-spent window, then completed and landed the same item on real pi
+([Scratch drain measurements](#scratch-drain-measurements); the
+[fresh-store preview defect](#a-fresh-store-cannot-preview-document-intake) found during
+setup was fixed that day in `af168297a`). Also on 2026-11-16, a real-store loop running
+[`config/tillr/backend-policy.mixed.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.mixed.json)
+dispatched thirteen conflict-design runs to `claude-designer` (`07:55:43` to `08:22:52`
+UTC), each refused with exit 1 after the real weekly subscription limit had been reached
+([the roadmap's conflict-design routing entry](../tillr/roadmap.md#route-design-work-past-a-design-seat-that-is-out-of-quota);
+fixed in `c448c053a`). Both
+[`config/tillr/backend-policy.claude.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.claude.json)
+and [`config/tillr/backend-policy.mixed.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.mixed.json)
+route seats to the Claude adapter (`config/tillr/backend-policy.bedrock.json`,
+`config/tillr/backend-policy.copilot.json`, and `config/tillr/backend-policy.json` stay on
+pi). Direct quota admission (`tools/tillr-run/backends/claude/quota`, `quota`, and
+`reserve`, built in `123aeab1b`) and in-place continuation of quota-interrupted single-worker
+runs (`ef55e9d99`) are built, while the tracked `config/tillr/backend-policy*.json` files
+do not yet configure `quota` or `reserve`.
 
 > **In short.** A backend is already an adapter program plus a row in the backend policy
-> ([the muse backend design](tillr-muse-backend.md#1-what-a-backend-is)). This adds the adapter
+> ([the backend adapter reference](../reference/tillr-muse-backend.md#adapter-contract-and-write-boundary)). This adds the adapter
 > for Claude Code run headless, and two small things the policy lacked: a row can carry extra
 > arguments for its harness, and a seat can name more than one backend in order, so a seat on the
 > subscription moves to the next backend by itself when the subscription refuses.
@@ -47,7 +58,7 @@ is useless unless the fall-back is automatic.
 
 **Needs your ruling:** nothing.
 
-**Reads with:** [the muse backend design](tillr-muse-backend.md) (what a backend is, the report
+**Reads with:** [the backend adapter reference](../reference/tillr-muse-backend.md) (what a backend is, the report
 shape, failover), [the convergence design](tillr-convergence.md) (where models are named), and
 the adapters' own READMEs under `tools/tillr-run/backends/`.
 
@@ -92,7 +103,9 @@ The build item asked for a Python program with one exact output line. Its commit
 failed before implementation and passed afterward. The scratch gate checked that test
 through the real gate adapter, and the real lander recorded the landing. This was not the
 repository's full landing gate: rolling checks, base replay, and trace indexing were
-disabled, and no `just done` was run.
+disabled, and no `just done` was run. (The loop has had no trace indexing step since
+2026-11-18, so the `--trace-bin ''` below is how that step was disabled then; today's loop
+refuses the flag, and the command runs without it.)
 
 With `ROOT` naming the scratch clone, `STORE` its new store, and `SCRATCH` the experiment's
 directory, the loop command was:
@@ -234,7 +247,7 @@ the machine's pi profile. Claude Code takes it from arguments, so the policy row
 argument list after a `--` separator, and the adapter hands them to the harness unchanged.** The
 policy's rule that it holds data and the adapter holds spelling is kept: tillr does not invent one
 permission vocabulary for four harnesses, which
-[the runtime design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#1-purpose-and-scope) names as a hole it does not fill.
+[the retired runtime design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime-retirement.md#what-happened-to-each-section) names as a hole it does not fill.
 
 | Wanted | Harness argument |
 | :--- | :--- |
@@ -264,9 +277,17 @@ own counterpart. A seat that names one backend behaves as it does today, and an 
 walks `preference` as it does today.
 
 A run the subscription refuses exits nonzero and writes no `RESULT:` footer. The drain
-classes that as a failure of the machinery and walks the seat's fallback list. A run
-cut off mid-work is re-run from the start on the next backend in the same worktree;
-quota admission does not stop or migrate already-running sessions.
+classes that as a failure of the machinery and walks the seat's fallback list. For a
+single-worker item whose refusing run changed its head or left uncommitted paths, the loop
+now continues under the same run id and attempt in the same lane and worktree (`ef55e9d99`;
+[`tools/tillr-drain/README.md`](../../tillr-drain/README.md#backend-quota-admission)),
+handing the next open backend a fresh session naming the quota interruption, transcript,
+report when present, and uncommitted paths (or waiting in `quota_pauses` if no backend is
+open); a first-message refusal with no work keeps the fresh-dispatch failover, and workflow
+nodes, parallel readers, and conflict-design runs keep their refusal handling (`c448c053a`
+routes conflict-design runs around shut quota windows and releases quota-refused conflicts
+to `raised`). Quota readings and reserves do not stop already-running sessions; only a
+recorded quota refusal pauses sibling live runs on that backend.
 
 ### Direct readings and the owner's reserve
 
@@ -343,14 +364,21 @@ must sign in or refresh through Claude Code before a later probe succeeds.
 
 ## 6. Build order
 
-1. **By hand, now:** the adapter, its extractor, fixtures reduced by hand to the line shapes in
-   [section 1](#1-what-was-measured) with no account data in them, the README, `harness_args`,
-   seat lists, and the Bedrock machine's policy rows. Tests: the adapter's refusals, the extractor
-   on a complete and a cut-off stream, the staged argument list, and the seat walk.
-2. **Quota admission:** the direct reading command and reserve described in
-   [section 4](#4-falling-back-when-the-window-is-spent), tested with fixture dispatches
-   and measured against the subscription API. Real-store activation remains the owner's step.
-3. **Queue item, later:** `harness_args` for the pi adapter, when a pi seat needs it.
+1. **Built (`6f9c6a971`, `7be541c71`):** the adapter, its extractor, fixtures reduced by hand to
+   the line shapes in [section 1](#1-what-was-measured) with no account data in them, the README,
+   `harness_args`, seat lists, and the Claude-first and mixed policy files
+   ([`config/tillr/backend-policy.claude.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.claude.json),
+   [`config/tillr/backend-policy.mixed.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.mixed.json)).
+   Tests: the adapter's refusals, the extractor on a complete and a cut-off stream, the staged
+   argument list, and the seat walk.
+2. **Quota admission — built (`d1bde2b17`, `c448c053a`, `123aeab1b`, `ef55e9d99`):** backend
+   refusal windows, conflict-design routing past shut windows, the direct reading command and
+   reserve described in [section 4](#4-falling-back-when-the-window-is-spent) (tested with fixture
+   dispatches and measured against the subscription API), and in-place continuation of
+   quota-interrupted single-worker runs. None of `config/tillr/backend-policy*.json` sets `quota`
+   or `reserve` yet; opting the subscription rows in remains optional configuration for the owner.
+3. **Queue item, later (unbuilt):** `harness_args` for the pi adapter, when a pi seat needs it
+   (`tools/tillr-run/backends/pi/run-pi` still refuses `--` and unknown arguments).
 
 ## 7. Finding from scratch setup
 
@@ -375,9 +403,11 @@ tillr-item sync --root "$ROOT" --store "$STORE" --dry-run
 ```
 
 A writing `sync` initialized the tables and allowed the preview afterward; that was an
-operational setup step, not a fix. Repair the empty-store read behavior with a regression
-test that fails first. This finding is outside the Claude adapter's repair paths and does
-not invalidate either dispatch-and-landing measurement.
+operational setup step, not a fix. Fixed on 2026-11-16 (`af168297a` in
+`tools/tillr-item/item/sync.go` and `tools/tillr-item/sync_test.go`), and `tillr-store init`
+now creates every utility's schema at initialization (`b0c26afac`). This finding was outside
+the Claude adapter's repair paths and did not invalidate either dispatch-and-landing
+measurement.
 
 
 ## Decision Ledger
@@ -386,6 +416,6 @@ not invalidate either dispatch-and-landing measurement.
 | :--- | :--- | :--- |
 | `D-CB1` | The adapter always passes `--strict-mcp-config` | Measured: connector servers triple the prompt and let a worker act outside the repository |
 | `D-CB2` | A backend row carries `harness_args`, passed unchanged after `--` | The policy holds data and the adapter holds spelling; one permission vocabulary across harnesses is not designed |
-| `D-CB3` | A seat may name an ordered list of backends and a failover walks that list | A design item must fall back to a design backend, not to the build backend |
-| `D-CB4` | A refused subscription is a machinery failure, so it fails over in the same pass | It is what the drain's existing classes already say about a run that wrote no report |
+| `D-CB3` | A seat may name an ordered list of backends and a failover walks that list | A design item must fall back to a design backend, not to the build backend  **Superseded 2026-11-20** by [`D-JL24`](tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27), a designer's decision from the owner's quoted words of that day (the owner may overturn it): a seat names one backend and nothing walks a list. The code is still on the trunk until that row's build items land. |
+| `D-CB4` | A refused subscription is a machinery failure, so it fails over in the same pass | It is what the drain's existing classes already say about a run that wrote no report  **Superseded 2026-11-20** by [`D-JL26`](tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27), a designer's decision (the owner may overturn it): a run the subscription refuses waits for that backend's own window and no other backend is tried. Still built as written here until that row's build items land. |
 | `D-CB5` | Cost on this backend is recorded as the harness's estimate | The harness reports list-price dollars; a subscription is not billed per run |

@@ -7,7 +7,7 @@ summary: "What comes next for tillr and why in that order: the rulings only the 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Last reconciled: 2026-11-15**, late, against the tree, the store and `vantage-check index`.
 The repository roadmap's [Tillr section](https://github.com/mschulkind-oss/tillr/blob/main/docs/roadmap.md#tillr) points here. This page owns the order
@@ -27,22 +27,68 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-The questions below are left for the owner on this page: 27 by `vantage-check index` on
-2026-11-18, 22 of them the provenance review's. Each has options and a recorded leaning.
+The questions below are left for the owner on this page: 34 by `vantage-check index --roadmap docs/tillr/roadmap.md` on
+2026-11-20, 11 of them the provenance review's (after the owner ruled [`OQ-PR21`](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md#OQ-PR21)
+and [`OQ-PR22`](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md#OQ-PR22) on 2026-11-19 and nine more on
+2026-11-20) and 23 across the eight designs of 2026-11-19 and 2026-11-20 placed in entries 2 to 9
+below. That placement and order are the designer's, made on 2026-11-20 at the owner's instruction
+not to wait for him, and are his to reorder. Each question has options and a recorded leaning.
 Twenty-three others that stood here were settled on 2026-11-15 and 2026-11-16 by the session's
 designer, at the owner's request, and each is the owner's to overturn. Not every one of them says
 so in its design: [the provenance review](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md#3-corrections-that-need-no-ruling)
 lists the rows that claimed a ruling nobody recorded.
 
 [The queue mirrors the roadmap's outstanding designs](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md),
-written on 2026-11-18 to the owner's words of that evening, comes ahead of the list below: it
-reopens how work written in a document reaches the queue, which the owner never ruled, and none
-of it is built until he has.
+written on 2026-11-18 to the owner's words of that evening, was updated the same day to his ruling
+on [`OQ-QM1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md#OQ-QM1): build steps, fences and pass
+conditions live in the companion implementation plan (`<topic>-plan.md`) that humans never read,
+keeping the design document clean and retiring hidden item comments. No open question remains in
+it; its designer's decisions await his review in
+[its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md#decision-ledger), and none of it is built.
 
 [A review before every code landing](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-diff-review.md), written on 2026-11-18 to
 the owner's words of that evening, asks which model reviews an item's commits before they land
 and who settles a repeated disagreement. No agent has ever read a change before tillr landed it,
 and none of the design is built until he answers the first.
+
+[One compliance officer checks what an item is about to commit](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-design-document-check.md),
+written on 2026-11-18 to the owner's words of that evening, is a cheap agent that holds an item's
+commit to written policies, never to logic, in addition to that review; design-document style is
+its first policy. The owner ruled four of its questions that evening: it runs at a designer's
+early commit and at the item's final merge, a change lands only after it passes, the whole
+document is checked, and the name is his. It asks one more: who repairs an old design document
+that a build worker's item touched. It sits here because it shares the review's return route,
+and none of it is built.
+
+[Live drain capacity and allocation changes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md) (with
+[its companion plan seed](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config-plan.md)), written on 2026-11-19 to the
+owner's request of that day, left this list on 2026-11-20 once the owner ruled its four questions:
+[`OQ-LD1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD1) on 2026-11-19 (graceful lane lowering by
+default plus opt-in `--pause`), [`OQ-LD3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD3) on
+2026-11-20 (baseline concurrency caps in `backend-policy.json` with live overrides in
+`.tillr/state.db`), [`OQ-LD4`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD4) on 2026-11-20
+(interactive lane-scaling and cap controls in the observatory alongside the CLI), and
+[`OQ-LD2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD2) on 2026-11-20 (deferring multi-backend
+setups and cap spillover to the [Icebox](#icebox)). Six designer's decisions remain marked in
+[its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#7-decision-ledger), and none of it is built.
+
+[Refused autopushes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md), written on 2026-11-20, left this list the
+same day once the owner ruled its three questions:
+[`OQ-RP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md#OQ-RP1) (rebase unpublished local commits onto the
+moved remote, reset the main checkout, and remap landing SHAs rather than writing a merge commit),
+[`OQ-RP2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md#OQ-RP2) (dispatch a fenced repair worker on conflict
+with ordinary obstacle escalation and no owner step in the routine case), and
+[`OQ-RP3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md#OQ-RP3) (trust commit identities already reachable from
+the configured upstream branch), which the later
+[`OQ-RP4`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md#OQ-RP4) replaces: tillr stamps the configured git
+identity on the commits it makes and judges no other commit by identity, so the trunk identity
+check is removed. The owner's words, ruled on 2026-11-20: *"we need to make sure that the Tiller
+machinery and sub-agents are producing commits that follow the identity that the author wants,
+which is what's configured in the Git config, or if we have settings to change this in our Tiller
+config, whatever that is. Apart from that ... The Tiller itself should not be enforcing anything
+about identities."* Six designer's decisions remain marked in
+[its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md#decision-ledger), none of it is built, and it is
+placed in [entry 3](#3-roll-onto-new-code-without-ending-runs).
 
 Five more left this list on 2026-11-18, none by the owner's ruling, and each is his to overturn.
 Two are a designer's decisions: [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4), that the judge
@@ -59,16 +105,147 @@ AutoQA leaves the [Icebox](#icebox).
    owner keeps, overturns or reopens the decisions he did not make. First because every other
    design on this page is built on some of them.
 
-2. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): whether the copy of tillr that other
-   workspaces run follows every landing or is refreshed only when it is published. Next because
-   it is a cost on every landing but stops nothing.
+2. [Preventative shell shims and run boundaries for tillr lane workers](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-lane-shims.md)
+   ([`OQ-LS1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-lane-shims.md#OQ-LS1),
+   [`OQ-LS2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-lane-shims.md#OQ-LS2),
+   [`OQ-LS3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-lane-shims.md#OQ-LS3),
+   [`OQ-LS4`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-lane-shims.md#OQ-LS4)): placed ahead of the velocity, review and
+   profile designs by rule 2 (and the owner's to reorder) because on 2026-11-20 lane workers
+   killed outside test shards (holding the after-merge proof red for eight hours), moved
+   `refs/tillr/green` four times from a mis-rooted test, and saturated shared cores with unsharded
+   module suites and `just tillr-build`, blocking preventative worker boundaries in
+   [entry 2](#2-keep-the-loop-running).
 
-3. [Criterion repair](../design/criterion-repair.md), one question,
-   [`OQ-CR7`](../design/criterion-repair.md#OQ-CR7): who may replace a criterion's text once a
-   verdict has frozen it. The owner's ruling of 2026-11-17 gave that act to a role that was
-   deleted with the board. The rest of that day's four rulings stands: a replacement carries a
-   required reason, the judge sees both texts, an unsatisfiable criterion is repaired by reopen
-   then supersede, and a supersession refuses a verdict in flight. None of it is built.
+3. [Who chooses an item's seat, what the plan step is for, and how builders fan out](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-plan-step-and-seat-selection.md)
+   ([`OQ-PSS3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-plan-step-and-seat-selection.md#OQ-PSS3), after the owner ruled
+   [`OQ-PSS1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-plan-step-and-seat-selection.md#OQ-PSS1),
+   [`OQ-PSS2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-plan-step-and-seat-selection.md#OQ-PSS2) and subagent tier control
+   on 2026-11-20): placed ahead of the following designs by the designer (and the owner's to reorder)
+   because settling its one remaining question on higher-tier builder subagent calls finishes the
+   unbuilt design that replaces the upfront plan step and failed-verify restart that cost the most
+   rework on the night of 2026-11-19, blocking builder fan-out tier enforcement in
+   [Planning and model tiering](../design/tillr-planning-node-model-tiering.md) and
+   [entry 4](#4-choose-where-each-seat-runs).
+
+4. [Evidence registry and whole-suite lane guardrail](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md)
+   (with [its companion plan seed](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail-plan.md);
+   [`OQ-ER1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER1),
+   [`OQ-ER2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER2),
+   [`OQ-ER3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3)): next because lane
+   workers still wait up to 43 minutes re-running whole module suites or overload the host with
+   unpooled `go test ./...` while the gate and trunk proof keep separate pass caches, blocking
+   cross-stage check reuse and mechanical whole-suite prevention in
+   [entry 2](#2-keep-the-loop-running).
+
+5. [Review and compliance routing by artifact class](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-review-rules.md)
+   ([`OQ-RJ1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-review-rules.md#OQ-RJ1),
+   [`OQ-RJ2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-review-rules.md#OQ-RJ2),
+   [`OQ-RJ3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-review-rules.md#OQ-RJ3),
+   [`OQ-RJ4`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-review-rules.md#OQ-RJ4)): next because it settles which changed
+   files trigger the unbuilt [landing review](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-diff-review.md) and
+   [compliance officer](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-design-document-check.md) above so
+   [companion implementation plans](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md) are neither checked
+   against the wrong style rules nor dispatched unreviewed.
+
+6. [What a designer reads itself and what goes to scouts](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md)
+   ([`OQ-RD1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md#OQ-RD1),
+   [`OQ-RD2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md#OQ-RD2),
+   [`OQ-RD3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md#OQ-RD3)): next because frontier `design` and
+   `plan` sessions searched the tree directly instead of through cheap scouts, blocking
+   single-session design and scout bounds in
+   [Planning and model tiering](../design/tillr-planning-node-model-tiering.md),
+   [entry 4](#4-choose-where-each-seat-runs) and [entry 8](#8-design-work-that-keeps-its-context)
+   without stopping the running loop.
+
+7. [Drain seat profiles and one-command switching](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-seat-profiles.md)
+   ([`OQ-DSP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-seat-profiles.md#OQ-DSP1),
+   [`OQ-DSP2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-seat-profiles.md#OQ-DSP2),
+   [`OQ-DSP3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-seat-profiles.md#OQ-DSP3)): after the six above because workloads
+   stay on Copilot Gemini while `claude-sub` is held on proving the Claude backend, blocking
+   named profile selection in
+   [live drain capacity and allocation changes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md) and
+   [entry 4](#4-choose-where-each-seat-runs).
+
+8. [Self-hosted tillr building](../design/tillr-selfhosted-build.md)
+   ([`OQ-SH4`](../design/tillr-selfhosted-build.md#OQ-SH4), after the owner ruled
+   [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2) on 2026-11-20 to follow every landing
+   and directed reading from Git like `pi-fork`): how `yolo` builds and delivers tillr from Git so
+   the pack's source copy and `just pack-sync` can be removed, and whether `/workspace` keeps its
+   local `PATH` launcher. Next because the pack copy is a cost on every landing that stops nothing,
+   and none of Git delivery or the source launcher is built.
+
+9. [Every fallback in the drain, the run adapters and the gate](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-fallback-inventory.md)
+   ([`OQ-FB1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-fallback-inventory.md#OQ-FB1),
+   [`OQ-FB2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-fallback-inventory.md#OQ-FB2),
+   [`OQ-FB3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-fallback-inventory.md#OQ-FB3),
+   [`OQ-FB4`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-fallback-inventory.md#OQ-FB4),
+   [`OQ-FB5`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-fallback-inventory.md#OQ-FB5),
+   [`OQ-FB6`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-fallback-inventory.md#OQ-FB6),
+   [`OQ-FB7`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-fallback-inventory.md#OQ-FB7),
+   [`OQ-FB8`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-fallback-inventory.md#OQ-FB8)): filed after the owner's ruling of
+   2026-11-20 that a fallback needs his acceptance. The inventory holds 168 paths; 39 of them are
+   kept only if he accepts the justification each question states, and none of the 107 removals is
+   built. It stops nothing today, so it follows the eight above.
+
+[An oversized item lands in parts](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-item-split.md) left this list on 2026-11-21, the
+day it was written, once the owner ruled [`OQ-SP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-item-split.md#OQ-SP1): part of
+a change may land while a named case of the request is still unmet, and the case follows as its own
+part. The design was written to his words of that day, after one item's verifier refused it twelve
+times in an afternoon while its candidate grew from 34 to 64 files and nothing landed. Its next
+action is its build, as
+[twelve slices that each land alone](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-item-split.md#14-the-build-in-slices-that-each-land-alone).
+Its thirteen designer's decisions await his review in
+[its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-item-split.md#decision-ledger), and none of it is built.
+
+11. [Every tillr utility has a written contract](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-utility-contracts.md)
+    ([`OQ-UC1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-utility-contracts.md#OQ-UC1)): written on 2026-11-21 to the owner's
+    words of that day, after three landings in two days broke a neighbor utility's test suite and
+    were found only by the full check on the trunk. It adds one question to the count above: whether
+    a Go package may be part of a utility's contract, or only records, exit codes and files may.
+    Placed last by the designer (and the owner's to reorder) because it stops nothing that runs
+    today; its answer decides how five utilities stop linking each other's code, and the first five
+    slices of the build do not wait on it. Its fifteen designer's decisions await his review in
+    [its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-utility-contracts.md#decision-ledger), and none of it is built.
+
+12. [A request that is hard to deliver as written is amended once](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-request-amendment.md)
+    ([`OQ-RA1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-request-amendment.md#OQ-RA1)): written on 2026-11-21 to the owner's
+    words of that day, after workers were stopped 80 times by a request's wording and three
+    requests were closed and refiled by hand after 6, 8 and 14 verifier refusals. The design seat
+    writes an amendment beside the saved words, which never change, and a worker that meets a flaw
+    finishes the rest and lists what it left. It adds one question to the count above: whether
+    every new request is read for known flaws before its first worker starts. Placed last by the
+    designer (and the owner's to reorder) because it stops nothing that runs today, and the first
+    eight slices of the build do not wait on it. Its twelve designer's decisions await his review
+    in [its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-request-amendment.md#decision-ledger), and none of it is built.
+
+13. [Any agent can wait on structured conditions and wake on deduplicated episodes without tillr](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/general-agent-watch.md)
+    ([`OQ-GW1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/general-agent-watch.md#OQ-GW1),
+    [`OQ-GW2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/general-agent-watch.md#OQ-GW2),
+    [`OQ-GW3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/general-agent-watch.md#OQ-GW3)): written on 2026-11-22 to the owner's
+    words of 2026-11-21 asking, at lower priority, that `tillr-watch` be usable by any agent for
+    any purpose with or without the rest of tillr. It separates an observation-source seam and a
+    standalone SQLite watch state file from `.tillr/state.db` so rules and one-command watches read
+    appended JSONL files, plain-text logs, Git refs or local processes while existing tillr rules
+    keep their meaning. It adds three questions to the count above: the standalone command and pack
+    boundary, whether a rule may poll a probe command, and whether tillr mode moves episodes to a
+    sidecar watch file. Placed last at the owner's instruction that it is lower priority than the
+    drain's own work, and the first seven slices do not wait on those rulings. Its twelve
+    designer's decisions await his review in
+    [its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/general-agent-watch.md#decision-ledger), and none of it is built.
+
+[Owner review comments](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-review-comments.md#7-decision-ledger) left this list on
+2026-11-20. The owner answered all four questions; the fast track is not built.
+
+[Criterion repair](../design/criterion-repair.md) left this list on 2026-11-20 once the owner ruled
+[`OQ-CR7`](../design/criterion-repair.md#OQ-CR7): the design seat replaces a frozen criterion's
+text (when a judge closes an item as `defective`, the loop sends it to the design seat to reopen and
+write the replacement and its reason), joining his four rulings of 2026-11-17 (a replacement
+carries a required reason, the judge sees both texts, an unsatisfiable criterion is repaired by
+reopen then supersede, and a supersession refuses a verdict in flight). One designer's decision
+([`OQ-CR4`](../design/criterion-repair.md#OQ-CR4)) and one unattributed settlement
+([`OQ-CR1`](../design/criterion-repair.md#OQ-CR1)) remain marked in
+[its ledger](../design/criterion-repair.md#decision-ledger), and none of criterion supersession is
+built.
 
 [What a lane's agent is told](../design/agent-context-delivery.md#decision-ledger) left this list:
 its two tillr questions are closed as above, and the one it keeps, a startup profile for pi, is
@@ -130,7 +307,18 @@ owner ruled on 2026-11-18 that Terra implements and Luna scouts, and the plannin
 [filed below](#filed-2026-11-18-plan-first-then-spend-each-model-where-it-is-enough) landed that
 day; no item runs through it yet. Nothing in it needs the owner today: its questions wait until
 planned items have run and their cost can be read, and its ledger holds designer's decisions he has
-not reviewed. Two faults in the run record that the design found are
+not reviewed. Two follow-up designs from the 2026-11-18 and 2026-11-19 run audit wait on his
+rulings above before changing how items enter and run:
+[who chooses an item's seat and what the plan step is for](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-plan-step-and-seat-selection.md)
+([`OQ-PSS3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-plan-step-and-seat-selection.md#OQ-PSS3), after the owner ruled
+[`OQ-PSS1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-plan-step-and-seat-selection.md#OQ-PSS1) and
+[`OQ-PSS2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-plan-step-and-seat-selection.md#OQ-PSS2) on 2026-11-20), because a
+failed verify restarting at the plan step cost the most rework on 2026-11-19, and
+[what a designer reads itself and what goes to scouts](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md)
+([`OQ-RD1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md#OQ-RD1) to
+[`OQ-RD3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md#OQ-RD3)), because frontier `design` and `plan` runs
+searched the tree directly instead of using cheap scouts. Two faults in the run record that the
+design found are
 [filed below](#filed-2026-11-17-the-run-records-spend-corrected-before-it-is-compared).
 
 [Replaying the drain's recorded tasks against several models](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/model-benchmarks-from-drain-records.md)
@@ -148,32 +336,116 @@ design. Eleven have landed and three are queued, as
 lists. AutoQA's one design-seat item is not admitted to the queue while that design is in the
 [Icebox](#icebox).
 
-[Queue persistence](../design/tillr-queue-persistence.md) is decided and waits on no ruling: every
-question it carried is a row of its ledger, and on 2026-11-16 it was cut into
-[eight build items](../design/tillr-queue-persistence.md#12-build-order) that live in the design.
-The first gives each newly synced item its place in roadmap order, which is the owner's ruling of
-2026-11-16, and waits on nothing. Much of the design was already built under other items, and
-[its eleventh section](../design/tillr-queue-persistence.md#11-what-the-tree-already-holds)
-measures which part. Nothing that retires or caps the run record is among the eight; an inventory
-of that record is, because the owner ruled that the record is shaped only after it can be seen.
+It returned to this list on 2026-11-20 with one question, counted after the 34 above:
+[`OQ-JL5`](../design/tillr-judge-and-lifecycle.md#OQ-JL5) asks whether a worker's `seat` obstacle still moves an item to a
+stronger model by itself. It was raised by [the section that removes automatic failover](../design/tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27),
+which records the owner's words of that evening ("I hate fallbacks... We need deliberate choices,
+not fallbacks", and of a judge that cannot run, "you raise a giant alarm and we fix it") and four
+designer's decisions made from them, which are his to overturn: a failed run holds on its own
+backend with its cause and no other model is tried (`D-JL24`); a backend or judge that cannot run
+is an alarm shown first on every face (`D-JL25`); a run refused for quota waits for its own window
+(`D-JL26`); and the lane release for judge waits is dropped (`D-JL27`). None is built. The section
+lists the code and tests each reaches and the five build items to file, and no item is filed yet.
+The removal does not wait on the question.
 
-Two designs left this list on 2026-11-15. [Item graphs](../design/tillr-item-graphs.md) is
-decided and waits on no ruling: one commit per item, all of refinement built, read-only nodes in
+[Queue persistence](../reference/tillr-queue-persistence.md) is decided, built, and graduated into
+a system reference: every question it carried is a row of
+[its ledger](../reference/tillr-queue-persistence.md#why-its-this-way), and on 2026-11-16 it was cut
+into eight build items that have all landed. The first gives each newly synced item its place in
+roadmap order, which is the owner's ruling of 2026-11-16, and nothing that retires or caps the run
+record is among the eight; [an inventory of that record](../reference/tillr-queue-persistence.md#epoch-record-and-store-inventory-tillr-store-inventory)
+is, because the owner ruled that the record is shaped only after it can be seen.
+
+[Why the drain could not run one night alone](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/unattended-drain.md), written on
+2026-11-21 at the owner's direct order after the night of that date, records 42 incidents, reduces
+them to eight structural gaps and gives each a rule. The owner ruled its four questions the same
+day: drain changes wait for the drain's own suite ([`OQ-UD1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/unattended-drain.md#OQ-UD1)),
+the number he sets limits workers and not worktrees ([`OQ-UD2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/unattended-drain.md#OQ-UD2)),
+a subscription stop is accepted for now ([`OQ-UD3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/unattended-drain.md#OQ-UD3)), and
+the fence question is withdrawn because he retired the fence on 2026-11-19
+([`OQ-UD4`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/unattended-drain.md#OQ-UD4)). Nothing waits on him here; its designer's
+decisions await his review in [its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/unattended-drain.md#14-decision-ledger), and
+none of it is built.
+
+[What the operator settled without the owner is settled inside tillr](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/operator-decisions-inside-tillr.md),
+written on 2026-11-21 to the owner's words of that day, sorts what the operator did by hand without
+him into seven kinds and names who inside tillr takes each: the drain, the design seat or a filed
+defect item. It asks three questions: whether a tillr program may repair its own stuck state when
+it starts ([`OQ-OD1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/operator-decisions-inside-tillr.md#OQ-OD1)), what tillr does when
+no work he ordered remains ([`OQ-OD2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/operator-decisions-inside-tillr.md#OQ-OD2)), and
+which seat takes the judgments the operator made
+([`OQ-OD3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/operator-decisions-inside-tillr.md#OQ-OD3)). Ten of its thirteen slices wait
+on none of them. It sits here because it fills in the seventh rule of the unattended-drain design
+above, and none of it is built.
+
+[A design with no open questions moves straight to planning, and owner review comments end in open questions or planning](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-design-to-planning-transition.md),
+written on 2026-11-22 to the owner's words of that day after two of six lanes sat idle behind
+hand-filed slices and zero-question review holds, turns the seventh kind above into an automatic
+transition: a zero-question design stamps `DECIDED`, dispatches its `plan` run, and files its
+slices on landing, while review comments on `desk-<doc>` settle into either open questions naming
+who is asked or an immediate move to planning. It asks what happens to in-flight slice runs when a
+review comment arrives ([`OQ-DT1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-design-to-planning-transition.md#OQ-DT1)) and how
+rollout treats the existing zero-question backlog
+([`OQ-DT2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-design-to-planning-transition.md#OQ-DT2)). Its first five slices wait on
+neither, and none of it is built.
+
+[Alert triage happens in a seat inside tillr, and only what it cannot settle reaches the operating session](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-alert-triage-seat.md),
+written on 2026-11-22 to the owner's words of 2026-11-21, was updated on 2026-11-23 to his rulings
+on [`OQ-AT1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-alert-triage-seat.md#OQ-AT1),
+[`OQ-AT2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-alert-triage-seat.md#OQ-AT2), and
+[`OQ-AT3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-alert-triage-seat.md#OQ-AT3): `tillr-drain` dispatches a dedicated
+read-only `triage` seat on the cheap `scout` tier with conservative escalation options, benign
+false-fires settle only by filing or linking a `fix-rule` item rather than an `expected` note, and
+loop-liveness rules route explicitly to `operator-session` with no timer promotion. No open
+question remains in it; its eleven designer's decisions sit in
+[its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-alert-triage-seat.md#decision-ledger) for the owner to overturn, and
+its seven ordinary build slices (`item-request-100ea9b269` through `item-request-12ef582a85`) are
+queued behind the alert-workflow slices below.
+
+[Every alert gets an investigation and one recorded outcome, and silences bind a rule, variable, item, and bound](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-watch-alert-workflow.md),
+written on 2026-11-22 and updated on 2026-11-23 after fourteen episodes accumulated in
+`acknowledged`, records the owner's rulings of that morning alongside
+[`OQ-AW1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-watch-alert-workflow.md#OQ-AW1),
+[`OQ-AW2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-watch-alert-workflow.md#OQ-AW2), and
+[`OQ-AW3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-watch-alert-workflow.md#OQ-AW3): acknowledging an alert covers one
+observed instance only, continuing suppression is a `watch_silences` record scoped by rule and
+variable binding (with zero-variable `global` rules using the same path) that names an open item
+and carries `--until` or `--until-change` and lifts automatically when that item finishes or the
+bound expires, and both `condition-cleared` and `item-finished`/`item-closed` auto-resolutions stay
+unsettled until investigated and settled. No open question remains in it; its thirteen designer's
+decisions sit in [its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-watch-alert-workflow.md#decision-ledger) for the
+owner to overturn, and its eight ordinary build slices (plus shared Observatory tail slice
+`item-request-12ef582a85`) are queued starting with single-instance `ack`
+(`item-request-d4e06efb9b` through `item-request-37c66283c7`).
+
+Two designs left this list on 2026-11-15. [Item graphs](../reference/tillr-item-graphs.md) is
+decided, built, and graduated into a system reference: one commit per item, all of refinement built, read-only nodes in
 parallel, and lanes outside the cap for work the owner is waiting on. On 2026-11-16 it was cut
-into [fifteen build items](../design/tillr-item-graphs.md#9-build-order) that live in the design,
+into fifteen build items that have all landed,
 in the owner's words: an item is slotted into a workflow, a node is one invocation of a harness
 or one command, and a sub-agent a node starts is a child session and never a node. The first
-block runs one item through a workflow of two nodes, a scout that only reads and then a builder,
-to one landed commit, and waits on nothing. Nothing of the design was built before the cut
-except the lander's squash, and
-[its eighth section](../design/tillr-item-graphs.md#8-what-the-tree-already-holds) measures that.
-[The observatory redesign](../design/observatory-redesign.md) is decided: the pages show
+block ran one item through a workflow of two nodes, a scout that only reads and then a builder,
+to one landed commit. Nothing of the design was built before the cut
+except the lander's squash ([why it's this way](../reference/tillr-item-graphs.md#why-its-this-way)).
+[The observatory redesign](../reference/observatory-redesign.md#usage-without-dollar-prices) is decided and built: the pages show
 what a run used and never a price.
 
 ## 2. Keep the loop running
 
 Second by rule 2. [Make Vantage's intended invocation the default](#route-vantage-index-reads-through-uvx-by-default)
-comes first in recovery because an unavailable question reader holds otherwise actionable work.
+comes first in recovery because an unavailable question reader holds otherwise actionable work;
+[preventative shell shims and run boundaries for tillr lane workers](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-lane-shims.md)
+([`OQ-LS1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-lane-shims.md#OQ-LS1) to
+[`OQ-LS4`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-lane-shims.md#OQ-LS4)) blocks stopping worker cross-lane kills, shared
+`refs/tillr/` mutations, and unsharded Go suite runs before they execute rather than halting the
+loop or failing the trunk proof after the fact;
+[evidence registry and whole-suite lane guardrail](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md)
+([`OQ-ER1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER1) to
+[`OQ-ER3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3)) blocks sharing check
+passes across the gate and trunk proof and stopping lane workers from burning shard slots on whole
+module suites;
+the [review comments design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-review-comments.md#7-decision-ledger) proposes
+replacing that subprocess reader with a native question parser; no owner question blocks it.
 [The overnight velocity evaluation](https://github.com/mschulkind-oss/tillr/blob/main/docs/research/tillr-drain-velocity.md)
 puts identifying the store's live writer ahead of changing concurrency, because a lock-acquisition
 fault stops progress regardless of lane admission. It is evidence and a recommended investigation,
@@ -185,7 +457,9 @@ on this page, in this order:
 
 - [Other people and other agents change the repository while the drain runs](#filed-2026-11-15-other-people-and-other-agents-change-the-repository-while-the-drain-runs).
   First because an operator's uncommitted edit is what caused the stops, and the owner's ruling of
-  2026-10-23 already says such an edit is a wait and never a failure.
+  2026-10-23 already says such an edit is a wait and never a failure; manual `git pull --rebase`
+  absorption landed on 2026-11-20 (`aed03075b`), while automatic remote rebase on a refused
+  autopush is placed in [entry 3](#3-roll-onto-new-code-without-ending-runs).
 - [One item's trouble holds that item, and recovery is a command](#filed-2026-11-15-one-items-trouble-holds-that-item-and-recovery-is-a-command).
   Second because every recovery that night was done by hand and two of them caused the next stop.
 - [Anyone can ask why an item is not running](#filed-2026-11-15-anyone-can-ask-why-an-item-is-not-running)
@@ -219,11 +493,17 @@ invocation mistake does not hide the real reasons items are held.
 
 ## 3. Roll onto new code without ending runs
 
-[Rolling tillr onto new code](../design/tillr-restart.md) is built: all nine blocks of its build
+[Rolling tillr onto new code](../reference/tillr-restart.md) is built: all nine blocks of its build
 order had landed by 2026-11-18, among them the pause, the restart request, the roll and push
 after a landing, and this repository's settings file. It stays third as the record of why it
 came first: every restart on 2026-11-15 was a kill, so a fix to tillr itself cost the runs in
 flight, and [entry 4](#4-choose-where-each-seat-runs) reuses its stop-and-continue step.
+[Refused autopushes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md), decided on 2026-11-20
+([`OQ-RP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md#OQ-RP1) to
+[`OQ-RP4`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md#OQ-RP4)) and unbuilt, sits here after
+[entry 2](#2-keep-the-loop-running) and ahead of [entry 4](#4-choose-where-each-seat-runs)
+because a push from another machine strands every later green publication behind a false wait
+without stopping local runs.
 
 ## 4. Choose where each seat runs
 
@@ -231,11 +511,24 @@ flight, and [entry 4](#4-choose-where-each-seat-runs) reuses its stop-and-contin
 mixed policy puts designers on the subscription and builders on pi. What is left is filed
 [on this page](#filed-2026-11-15-choose-where-each-seat-runs-by-quota-and-move-work-when-a-backend-runs-out):
 re-reading the policy without a restart, reading quota directly with a reserve, splitting a seat
-by share or at random for bake-offs, and moving a run when its backend runs out. Fourth because
-it saves money on every design run but stops nothing when it is missing.
+by share or at random for bake-offs, and moving a run when its backend runs out (that last part
+is withdrawn on 2026-11-20 by [`D-JL26`](../design/tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27), a designer's decision from the owner's words
+of that day: a run waits for its own backend's window, and a person changes the policy);
+[drain seat profiles and one-command switching](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-seat-profiles.md)
+([`OQ-DSP1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-seat-profiles.md#OQ-DSP1) to
+[`OQ-DSP3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-seat-profiles.md#OQ-DSP3)) blocks named live-switchable profiles and
+the held `claude-sub` profile until the Claude backend is proven. Fourth because it saves money
+on every design run but stops nothing when it is missing.
 
 Also filed here: [a planning stage that fans implementation out by seat](#add-a-planning-stage-that-fans-implementation-out-by-seat),
-which the owner asked to be high priority on 2026-11-18 and which sets the queue's order for model savings.
+which the owner asked to be high priority on 2026-11-18 and which sets the queue's order for
+model savings; [who chooses an item's seat and what the plan step is for](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-plan-step-and-seat-selection.md)
+([`OQ-PSS3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-plan-step-and-seat-selection.md#OQ-PSS3)) blocks replacing that
+upfront plan step and failed-verify restart after they cost the most rework on 2026-11-19, and
+[what a designer reads itself and what goes to scouts](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md)
+([`OQ-RD1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md#OQ-RD1) to
+[`OQ-RD3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md#OQ-RD3)) blocks cheap-scout routing on `design` and
+`plan` runs.
 
 ## 5. The ten-second gate
 
@@ -250,24 +543,29 @@ because every lane waits on that revert.
 
 ## 6. The observatory answers the owner's questions
 
-[The observatory redesign](../design/observatory-redesign.md) is built: all ten slices had landed
+[The observatory redesign](../reference/observatory-redesign.md) graduated to a system reference: all ten slices had landed
 by 2026-11-18, including the lane strip, lane page, dependency graph and usage figures, and so
-had [the observatory's first two writes](../design/observatory-actions.md). Sixth, and not
+had [the observatory's first two writes](../reference/observatory-actions.md). Sixth, and not
 higher, because [entry 2](#2-keep-the-loop-running) fixes what the screens would only report.
 Also filed here: [a stopped loop says what stopped it](#filed-2026-11-15-the-observatory-speaks-to-its-reader-not-to-its-builders).
 
 ## 7. The drain's own model
 
-[Replace the drain tick with a converge function](../design/tillr-drain-successor.md) is built:
-all five of its steps had landed by 2026-11-18, the last retiring the tick's names. The design is
-still titled "successor function"; the owner's name for it is converge, and the document has not
-been renamed.
+[Replace the drain tick with a converge function](../reference/tillr-drain-successor.md) graduated to a system reference:
+all five of its steps had landed by 2026-11-18, the last retiring the tick's names. The reference is
+titled "Drain Pass and Successor Reference"; the owner's name for the step is converge.
 
 ## 8. Design work that keeps its context
 
 Three pieces, filed on this page: [a design conversation keeps its designer](#filed-2026-11-15-a-design-conversation-keeps-its-designer),
 [an item not written to the prose guide is rewritten before anyone builds it](#filed-2026-11-15-an-item-that-was-not-written-to-the-prose-guide-is-rewritten-before-anyone-builds-it),
-and [a design on the roadmap always has an item in the queue](#filed-2026-11-15-a-design-on-the-roadmap-always-has-an-item-in-the-queue).
+and [a design on the roadmap always has an item in the queue](#filed-2026-11-15-a-design-on-the-roadmap-always-has-an-item-in-the-queue);
+the [review comments design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-review-comments.md#7-decision-ledger) now specifies
+how the fast track at `desk-<doc>` shares express capacity without requiring Vantage, and
+[what a designer reads itself and what goes to scouts](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md)
+([`OQ-RD1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md#OQ-RD1) to
+[`OQ-RD3`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-designer-scouts.md#OQ-RD3)) blocks starting design work directly in one
+warm writing session.
 Eighth because each makes the queue cheaper to feed and easier to read, and none of them is
 needed to keep it running.
 
@@ -284,13 +582,9 @@ a time as each is cut into build items.
 Each predates the round above. They are behind it because a ruling that is already open does not
 get cheaper by being opened again.
 
-- [Reshaping the board backlog](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-board-reshape.md): both its questions were ruled
-  on 2026-11-12. It owes the first triage list its sixth section describes. The earlier version
-  of this page said a question was still open; that was stale.
-- [Tillr today](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-today.md) and [the observatory design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-design.md)
-  are fully ruled. The first owes a reconciliation against the runs the loop has since made; the
-  second is superseded screen by screen as [entry 6](#6-the-observatory-answers-the-owners-questions)
-  lands.
+- [Observatory truthfulness and primitives](../reference/observatory-design.md) is built and graduated
+  to a system reference; its earlier four-region layout was superseded screen by screen as
+  [entry 6](#6-the-observatory-answers-the-owners-questions) landed.
 - [The evidence tool](https://github.com/mschulkind-oss/tillr/blob/main/tools/pipeline-evidence/) still carries a reader for the deleted
   merge queue. Replacing it with a reader of the tillr store's landings is owed
   ([the retirement design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/mq-retirement.md#9-open-questions)), and so is deleting
@@ -303,17 +597,21 @@ get cheaper by being opened again.
 
 Wanted, not now, by the owner's call. Picking one up means giving it a place above.
 
+- **Fetch pending design comments from Vantage**, deferred 2026-11-20. The proposed server
+  poller, its per-document quiet window, and tracked `[comments.vantage]` intake settings are
+  outside the [review comments design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-review-comments.md#OQ-RC4).
+
 - **Prices on the observatory**, iceboxed 2026-11-15. The owner wants to see what work cost in
   dollars and ruled that the pricing cannot be computed accurately enough yet, so
-  the pages show usage only (section 6.6 of the observatory redesign). Picking it up
+  the pages show usage only ([usage without dollar prices](../reference/observatory-redesign.md#usage-without-dollar-prices)). Picking it up
   means settling how a price is derived per backend, including a subscription that is not billed
   per run, cached tokens, and models whose price changes.
 
-- **The Muse backend** ([design](../design/tillr-muse-backend.md#1-what-a-backend-is)), iceboxed
+- **The Muse backend** ([reference](../reference/tillr-muse-backend.md#adapter-contract-and-write-boundary)), iceboxed
   2026-11-15: the owner is not subscribing to a Meta plan. The adapter stays in the tree and
   [`config/tillr/backend-policy.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.json) keeps it out of
-  every fail-over. Picking it up means subscribing, naming `muse` in a policy again, and cutting
-  its second stage from the design.
+  every fail-over. Picking it up means subscribing, naming `muse` in a policy again, and running
+  its live sandbox canary.
 
 - **AutoQA, tillr's exploratory testing of itself** ([design](../design/tillr-autoqa.md)), iceboxed
   2026-11-17. The owner: "ice box this autoqa on the roadmap for now. I don't want to design this
@@ -331,6 +629,20 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
   [`OQ-GM2`](../design/tillr-goal-monitor.md#OQ-GM2), are left unanswered. Picking it up means a
   use for a scheduled check-in, ruling those two, and filing the slices, starting with
   [scheduled tasks](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#12-open-questions), its substrate.
+
+- **Multi-backend setups and cap spillover** ([live drain capacity and allocation changes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md), [`OQ-LD2`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD2)),
+  iceboxed 2026-11-20. The owner: "Icebox, a small design for what to do... for how to do
+  multi-backend setups like this. I'm not ready for this. I will manually switch them right now
+  and restart. But I do want to do this eventually, but put something in the Icebox and throw it
+  in there." Multi-backend cap spillover is out of scope for
+  [live drain capacity and allocation changes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md), and the
+  owner switches backends manually for now. Picking it up means writing a small design for
+  multi-backend seat setups — including whether work waits on a capped preferred backend or spills
+  over to a fallback backend — and ruling it before building. Until then a seat runs on one
+  backend and nothing moves work to another by itself
+  ([`D-JL24` and `D-JL26`](../design/tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27), designer's decisions of 2026-11-20 from the owner's words
+  "We need deliberate choices, not fallbacks"); that design is where an alternative the owner
+  enables would be specified.
 
 ## What this page does not cover
 
@@ -1200,10 +1512,9 @@ any commit: steps 1 and 5 create them.
 
 ## Filed 2026-11-15: the observatory redesign's remaining slices
 
-These are slices 3 to 10 of [the observatory redesign](../design/observatory-redesign.md#10-build-order),
-filed here because that document still carries one open question. Each block's criteria are the
-slice's own row in that table; the design is the reference for every screen, token and route a
-criterion names.
+These were slices 3 to 10 of the observatory redesign, which landed by 2026-11-18 and graduated into
+[the observatory reference](../reference/observatory-redesign.md); they were filed here while the
+design still carried an open question.
 
 ### The observatory has a new shell, its visual tokens, one link component and Home
 
@@ -1300,6 +1611,56 @@ missing rather than report that the change failed verification.
   A publisher that refused a branch differing from the record would refuse every push made
   between a lane's export and that lane's landing, because the branch moves at export and the
   record reaches the trunk only when the lane lands.
+- **Initial pins (designer's decision, 2026-11-20; the owner may overturn it):** Keep the
+  delivery commits selected in the thirteenth run. That run could fetch the older advertised
+  todo-list commit but got `upload-pack: not our ref` for the repaired one. The older commit
+  does not build; fetching it proves connectivity, not that the required input is available.
+  Use these exact inputs and the pack locator:
+
+  ```text
+  git@github.com:mschulkind-oss/tillr
+  patch/pi                   24c7e4f89e08740a99271379314b8eba67321a31
+  patch/pi-manage-todo-list  6e1b6bdd1a2a480dcb98d213b9dd9953a87bfe41
+  patch/pi-subagents         6daa160be67be20ca344c0414b3f79a9585b6df6
+  ```
+
+  The lane must not push, substitute an older tip, or change the locator.
+- **Publication history (2026-11-20):**
+  On 2026-11-20 the nineteenth run repeated the fifteenth and seventeenth runs' check:
+  `git fetch --no-tags <locator> <object-id>` in a separate empty bare repository for each
+  of the three rows above. All three fetches returned `upload-pack: not our ref` (Git exit
+  128). On the same date the twenty-first and twenty-third runs each found that `patch/pi`
+  and `patch/pi-subagents` fetched successfully (Git exit 0), but `patch/pi-manage-todo-list`
+  returned `upload-pack: not our ref` (Git exit 128) for its pinned object above. The
+  twenty-third run stopped before the build or gate: the missing input means `could not judge`
+  (gate exit 4), not a failed build. This is a host publication task, not a request to choose
+  another pin. The twenty-fifth, twenty-seventh and twenty-ninth runs received no host fetch
+  results. The twenty-ninth run cited the earlier Git exit 128, not a fresh fetch. The
+  thirty-first, thirty-third and thirty-fifth runs asked for host verification.
+
+  **Build without publication proof (designer's answer to the forty-seventh run, 2026-11-21;
+  the owner may overturn it):** The forty-seventh run had no host results and stopped before
+  implementation. This replaces the earlier build hold: implement c1–c4 with the pins above
+  and test export, cache hits, fetches and refusals against local fixtures. No host results
+  are needed to dispatch that work. Fixture success proves the check's behavior, not that the
+  live remote serves the pins. Their availability is unknown. If a real check needs a pin and
+  its fetch fails, it must name the commit and remote and return `could not judge` (exit 4);
+  do not turn a fixture result into a passing verdict for that delivery.
+
+  **Host publication proof:** Only the host operator verifies publication, separately from
+  implementation. No lane should publish or repeat the host checks below.
+
+  In the host repository checkout, run `git merge-base --is-ancestor <object-id> refs/heads/<branch>`
+  for each row above (`<branch>` includes `patch/`). If any check exits nonzero, stop and report
+  the branch and ancestry check's exit status; do not rewind it or repin the delivery. If all
+  three pass, fetch each exact ID from the locator into its own new empty bare repository.
+  If a pin is unavailable, follow [the host publication step](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/patch-branches/published.md#5-the-host-step)
+  and repeat the fetches in new empty repositories. The publisher sends branch tips, not
+  individual pins. Report the locator and one row per pin:
+  `branch | object ID | ancestry exit | empty-repository fetch exit`. Record the actual Git
+  statuses; write `not run` for a skipped fetch, never `0`. Claim publication only when all
+  three rows show `0` for both checks. Neither a successful push, an advertised tip nor a
+  local cache substitutes for those results.
 - **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
   tests run the scenario files under [their cases directory](https://github.com/mschulkind-oss/tillr/blob/main/tests/pi-forks/), so those
   files, [their shared library](https://github.com/mschulkind-oss/tillr/blob/main/tests/pi-forks/lib.sh),
@@ -1342,16 +1703,11 @@ missing rather than report that the change failed verification.
   stale-only caches produce the same answer. Check that a cache hit triggers no refresh and
   that a fetch refusal names the missing commit and remote and returns `could not judge`.
 
-<!-- inert copy of a tillr directive: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,bin/pi-forks.list,tests/pi-forks.test.sh,tests/pi-forks/,tests/pi-patch-series.test.sh,tools/tillr-gate/needs_test.go,tools/tillr-gate/README.md,yolo-packs/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** Each fork a pack delivers from a patch branch records, in the tree, the commit that branch must be at, and exporting a series updates that record in the same change. The record is the input a check reads; publishing a branch is not changed.
-- **c2:** A check that needs a fork reads that commit and no local branch: with every local `patch/*` branch deleted, the check gives the same answer.
-- **c3:** The commit is fetched into a cache directory when the cache lacks it and is never refreshed otherwise, so a cache holding older or newer commits changes no answer; a test runs the check against a cache that is empty, one that is current and one that holds only stale commits.
-- **c4:** A machine that cannot fetch the commit is told which commit and which remote it lacks, and the check answers `could not judge`, not `failed`.
 
 ## Filed 2026-11-15: the documents are part of the world the loop converges on
 
-[The drain's successor design](../design/tillr-drain-successor.md#21-the-function-and-its-inputs)
+[The drain's successor reference](../reference/tillr-drain-successor.md#the-successor-function-and-derived-positions)
 makes each pass a function of durable facts. Two facts are still read once, when the loop starts:
 the item blocks in the documents, and the open questions. A block committed while the loop runs is
 not seen until someone runs the sync by hand, which happened five times on 2026-11-15.
@@ -1747,7 +2103,7 @@ Built: this landed in commit `d1bde2b171`.
 **Ruling, 2026-11-16 (answers the first run's fence conflict):** the first run stopped because
 `tests/tillr-muse-backend.test.py` pins the report header's exact key list and that suite was
 outside the item's paths. The suite is now inside them, with
-[`tillr-muse-backend.md`](../design/tillr-muse-backend.md#4-output-capture-and-verification),
+[`tillr-muse-backend.md`](../reference/tillr-muse-backend.md#report-extraction-and-attempt-classification),
 which describes the header. The report keeps one shape for every backend: the four window facts
 are four new header keys — `rate limit kind`, `fraction`, `status`, `reset` — added once to the
 shared key list in `tools/tillr-run/backends/report.py`, after `cost usd` and before `complete`,
@@ -1859,9 +2215,9 @@ finding therefore goes into the store, and the face reads it there:
 
 Principle (owner's ruling of 2026-10-23, in [agent work control](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/agent-work-control.md#the-owners-direct-lane-owner-ruled-2026-10-23)): a
 direct edit is the owner's hand, it takes no lock, collisions heal at the landing and not at the
-edit, and a dirty tree is a wait and not a failure. The owner also asked, in
-[the autonomous landing design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autonomous-landing.md#5-outside-movement-is-routine), that other agents merging,
-pulling or moving the remote have no large effect on the queue.
+edit, and a dirty tree is a wait and not a failure. The owner also asked, in the retired
+autonomous-landing design (now carried by [the landing principles](../design/landing-principles.md#3-gate-what-will-be-the-tip-once)),
+that other agents merging, pulling or moving the remote have no large effect on the queue.
 
 tillr does not honor that yet. On 2026-11-15 an operator's uncommitted edit in the main checkout
 was read as a worker escaping its lane. The loop stopped, seven runs in flight were killed, and
@@ -2006,13 +2362,13 @@ pastes it into a session. The owner wants comments left in Vantage to go straigh
 session that last worked on that document's item, and wants that session kept ready for a few
 minutes and then compacted, so it can still be resumed later.
 
-[A comment on a design goes to the session that last worked on it](../design/tillr-designer-sessions.md)
-is the design. It measured the turn on 2026-11-16: a session resumed inside its cache's lifetime
+[A comment on a design goes to the session that last worked on it](../reference/tillr-designer-sessions.md)
+graduated from the design. It measured the turn on 2026-11-16: a session resumed inside its cache's lifetime
 answers a comment for $0.42 where a new session costs $0.84, and one resumed after it costs more
 than a new session. So a session is kept as a file and never as a process, is warm for the cache
 lifetime the machine uses (an hour here, not five minutes), and is compacted only when a comment
-next needs it. The six items that build it are in that document's
-[build order](../design/tillr-designer-sessions.md#build-order); the first delivers one comment to
+next needs it. All six build items landed by 2026-11-18
+([the graduated reference](../reference/tillr-designer-sessions.md)); the first delivered one comment to
 one resumed session end to end.
 
 ### Send review comments on a design to the session that last worked on it
@@ -2394,7 +2750,7 @@ route to the next backend; it does not need a continuation handoff.
 
 **Agent Details**
 
-- **Ref:** [The restart design](../design/tillr-restart.md) for stopping a session;
+- **Ref:** [The restart reference](../reference/tillr-restart.md) for stopping a session;
   [the quota probe item](#add-direct-quota-checks-with-a-reserve) for backend windows;
   the numbered criteria below for the continuation contract.
 - **Where:** `tools/tillr-drain/`, `tools/tillr-run/`, `tools/tillr-view/` (the waiting face),
@@ -2484,7 +2840,7 @@ its failing test first, and the whole item is still one commit.
    continues its own session with `Resume` set and no fresh-session field, and a message saying
    the backend's quota reopened. When the answer is another backend, point 4 applies. The row is
    deleted in the transaction that claims the continuation. [The restart
-   design](../design/tillr-restart.md#pausing-a-session) calls a paused run that nobody resumes
+   reference](../reference/tillr-restart.md#pausing-a-session) calls a paused run that nobody resumes
    within one pass a fault; a run with such a row is the exception, and the view shows it as
    waiting with its reopening time, not as a fault. A loop with only such runs waits for the
    earliest reopening time or a new item, and does not exit.
@@ -2510,7 +2866,7 @@ and streams tillr already keeps, so no statistics are built here (owner's ruling
 
 ## Filed 2026-11-15: work the owner is waiting on never queues behind long work
 
-Principle (owner, 2026-11-15, [item graphs](../design/tillr-item-graphs.md#71-decision-ledger)): a
+Principle (owner, 2026-11-15, [item graphs](../reference/tillr-item-graphs.md#why-its-this-way)): a
 lane belongs to one item while it is worked, and the queue must not suffer priority inversion.
 When every lane is busy with long low-priority runs and something the owner is waiting on
 arrives, such as review comments on a design, it starts at once.
@@ -2534,10 +2890,10 @@ designer's session.
 
 **Agent Details:**
 
-- **Ref:** [Item-graph decision ledger](../design/tillr-item-graphs.md#71-decision-ledger),
-  [saved-idea actions](../design/observatory-actions.md#53-the-item-that-is-created), and the
-  designer-session rules for [the desk](../design/tillr-designer-sessions.md#the-desk) and
-  [keeping sessions warm](../design/tillr-designer-sessions.md#the-keep-warm-rule).
+- **Ref:** [Item-graph decisions](../reference/tillr-item-graphs.md#why-its-this-way),
+  [saved-idea actions](../reference/observatory-actions.md#the-saved-idea-item), and the
+  designer-session rules for [the desk](../reference/tillr-designer-sessions.md#the-desk) and
+  [keeping sessions warm](../reference/tillr-designer-sessions.md#the-keep-warm-rule).
 - **Where:** [Settings reader](../../tillr/settings/),
   [item reader](../../tillr-item/item/sync.go),
   [drain planner](../../tillr-drain/drain/plan.go),
@@ -2563,7 +2919,7 @@ the ID, creating it otherwise"), so the turn starts cold while the record says `
 move was never asked for, and it is withdrawn. Three points settle it:
 
 1. **Review-comment work stays at its document's desk.** A desk, defined in
-   [the designer sessions design](../design/tillr-designer-sessions.md#the-desk), is the lane that
+   [the designer sessions reference](../reference/tillr-designer-sessions.md#the-desk), is the lane that
    belongs to one design document. It is already outside the lane cap, a comment run already starts
    without waiting for a numbered lane, and at most `comments.max_running` of them run at once.
    That is the behavior this item's principle asks for, and the session is found again because the
@@ -2603,7 +2959,7 @@ item does not cause. Four points settle it, and c5 below is added.
   because the window is narrow.
 - **This item repairs the race, as c5.** The file is inside this item's paths, the repair is a few
   lines, and the candidate cannot be verified honestly while the test can fail by chance. The
-  [designer sessions design](../design/tillr-designer-sessions.md#the-keep-warm-rule) ends a session
+  [designer sessions reference](../reference/tillr-designer-sessions.md#the-keep-warm-rule) ends a session
   "when its document is deleted", and deleted means deleted from the trunk. So the loop treats a document
   as deleted only when it is absent from the trunk commit the pass has just read and also absent
   from the main checkout. A file that a landing is rewriting is in the trunk commit before and
@@ -2670,23 +3026,23 @@ owner's words of 2026-11-16:
 Both touch things that are not settled. The queue's order lives only in the store today, so a
 drag would be lost when the queue is rebuilt from the documents, and the owner ruled on
 2026-11-16 that a sync sets a place only for an item it imports for the first time
-([the queue persistence design](../design/tillr-queue-persistence.md#91-decision-ledger)), so a
+([the queue persistence reference](../reference/tillr-queue-persistence.md#why-its-this-way)), so a
 drag survives every sync but not a rebuild from nothing. An idea typed into a page has to be
 saved somewhere the tree keeps. Vantage is no model for that: the owner stated on 2026-11-16 that
 it never writes to the repository, so the observatory would be the first page that does
 ([the idea pipeline's ledger](../design/tillr-idea-pipeline.md#61-settled-decisions)). [The idea pipeline](../design/tillr-idea-pipeline.md)
 already describes the flow from a sentence to a landed change, and
-[item graphs](../design/tillr-item-graphs.md) describes the designer that fleshes an idea out. So
+[item graphs](../reference/tillr-item-graphs.md) describes the designer that fleshes an idea out. So
 the first step is a short design that joins them, not a build.
 
-That design is [the observatory's first two actions](../design/observatory-actions.md), and it
+That design graduated into [the observatory actions reference](../reference/observatory-actions.md), and it
 leaves no question for the owner. The order becomes one list: the owner sees a place, the stored
 key is hidden, and a drag writes one item. An idea's words are saved as a text file before
 anything else happens, and the design seat's landing carries them into the tree with the titled
 items that came from them. The server runs the item tool for both and never writes the store or
-the tree itself. Its eight build blocks live in
-[the design's build order](../design/observatory-actions.md#10-build-order); the first, a
-move-to-top control that works from the Items page, waits on nothing.
+the tree itself. Its eight build blocks landed by 2026-11-18
+([the graduated reference](../reference/observatory-actions.md)); the first, a
+move-to-top control that works from the Items page, waited on nothing.
 
 ### Design the observatory's first two actions: reorder by dragging, and add an idea
 
@@ -2732,7 +3088,6 @@ dispatched it and its worker stopped after 34 seconds, reporting that the sectio
 does not exist. The block below is that section, restored with the same id, paths and criteria
 the queue already holds.
 
-<!-- inert copy of a tillr directive: item id="item-agent-default-bmad-superpowers-skills" paths="yolo-packs/,config/yolo-jail/,tag-personal/config/yolo-jail/,tag-work/config/yolo-jail/,tests/,docs/" blocked_by="" prose="2" -->
 
 **Ruling, 2026-11-17 (answers the first run's conflict):** the first run stopped because this
 document held no section under the heading above and no text about either skill. That was true
@@ -2755,21 +3110,30 @@ skill at a version its authors have moved on from. The Superpowers directory, `s
 at `22f0b463e7a5e579904dd6211a520321035526f7`, is where c2 says it is and does not change. If
 either project moves its skill again, that is the unavailable source c5 already covers: the
 launch must fail visibly, and the repair is a one-line change to the directory named in the pack.
-Whether to name a fixed commit for either source is the builder's choice, within what the pack
-format offers; neither answer changes a criterion.
 
-- **c1:** The default selected packs expose BMAD Advanced Elicitation and Superpowers Brainstorming to their supported agents without a separate per-project installation.
-- **c2:** BMAD is sourced through the Git URL https://github.com/bmad-code-org/BMAD-METHOD.git, selecting skills/core-tools/bmad-advanced-elicitation; Superpowers is sourced through https://github.com/obra/superpowers.git, selecting skills/brainstorming. Neither skill is vendored as a manually maintained local copy.
-- **c3:** Each selected skill keeps the supporting assets, scripts, and relative references it needs; unrelated upstream frameworks and startup hooks are not imported automatically.
-- **c4:** The existing house brainstorming skill remains unchanged and discoverable. Superpowers receives a distinct discoverable name if the source names collide; no silent replacement or ambiguous duplicate selection is accepted.
-- **c5:** Permanent pack-composition/render tests verify both default discoveries, supporting resources, and collision handling. Every edited pack passes yolo pack lint, and an unavailable Git source produces a visible failure rather than omitting a skill silently.
+**Owner ruling, 2026-11-20:** “Add two such entries to the packs list in config/yolo-jail/config.toml (fence widened to it): BMAD's bmad-advanced-elicitation and Superpowers' brainstorming, the second under a namespace so it does not collide with the house brainstorming skill. Pin each ref to a commit.”
+
+The fifth run tested yolo 0.17.1, which rejected top-level `only`. Use the 0.18.0 form in
+`yolo config-ref` under “Direct user TOML scoped imports” instead. Edit the shared file,
+not a host installation. In each Git entry set `git` to the corresponding c2 URL and `ref`
+to a full commit SHA. Use `subdir = "skills"` for both. For BMAD, set
+`skills = { dir = "core-tools", only = ["bmad-advanced-elicitation"] }` and `bare = true`;
+for Superpowers, set `skills = { dir = ".", only = ["brainstorming"] }` and
+`namespace = "superpowers"`. The selectors name skills, not paths. Import each selected
+directory with its resources, not the upstream pack's hooks or other skills.
+
+**Designer ruling, 2026-11-20 (owner may overturn):** The two imports deliver skill discovery, not a working installation of either framework. The eighth run's scratch-home `yolo pack explain` showed both selections and `yolo check --no-build` reported 37 passes and no failures. The two limitations it found are upstream prerequisites, not yolo refusals:
+
+- At the BMAD pin above, elicitation calls the project's `_bmad/scripts/resolve_customization.py` and `_bmad/scripts/resolve_config.py`. In an empty project the first call failed with “No such file or directory (os error 2)”. Document that running elicitation requires BMAD's project setup; do not run setup or install the `bmad` skill as part of this import.
+- At the Superpowers pin above, brainstorming ends by invoking `superpowers:writing-plans`. Document that this handoff is unavailable unless writing-plans is separately provided. Do not register it, substitute a house skill, or change the upstream instructions. A dependency readable in the Git checkout is not a registered skill.
+
 
 **Agent details:**
 
 - **Ref:** Owner request, 2026-11-16: add these two skills to the default pack-loaded set, using Git URLs.
 - **Sources:** [BMAD Advanced Elicitation](https://github.com/bmad-code-org/BMAD-METHOD/tree/main/skills/core-tools/bmad-advanced-elicitation), [Superpowers Brainstorming](https://github.com/obra/superpowers/tree/main/skills/brainstorming).
-- **Where:** Inspect the default pack list and existing skill contributions in `config/yolo-jail/`, scoped configuration under `tag-personal/` and `tag-work/`, and `yolo-packs/`. Preserve host-config-synced prose and skills under `yolo-packs/matt/`; do not edit deployed home directories.
-- **Verify:** Resolve the supported Git locator syntax, test the default composition for supported agent renders, validate all auxiliary references, and lint each changed pack. Name the actual render and binary tested; in-jail lint is not proof of host rendering.
+- **Where:** The shared `config/yolo-jail/config.toml` applies on every host at its next launch. Leave the house skill, machine-specific configuration and deployed home directories unchanged.
+- **Verify:** Before committing the configuration, run `yolo pack explain` for each pinned import and `yolo check` against the candidate user layer in a scratch home. Confirm the selected names and resources; files merely staged or a selection not yet verified are not proof of discovery. Report which commands ran, their output, and the binary and render tested. These checks supplement c5, not replace it. If either import cannot deliver its skill, report the exact refusal for the yolo request document rather than importing the whole repository.
 
 ## Filed 2026-11-16: defects the first observed drain pass turned up
 
@@ -3107,9 +3471,10 @@ to ad hoc land stuff. and if the drain needs to land, didn't we decide autostash
 like you pulled some remote change when work was going on, which I will also do without warning
 sometimes." They did decide it. The old board design ruled on 2026-10-31 that the landing
 stashes the owner's uncommitted work, moves the trunk and re-applies the work, as `git pull
---autostash` does (decision D33 in `docs/design/board-state-machine.md`, section 9, built as
-task P10 in `docs/design/board-state-machine-plan.md`). The move to tillr dropped it with the
-old board tool (`docs/design/tillr-seed-triage.md`, row 592), and nothing replaced it.
+--autostash` does (decision D33, built as task P10 in
+[`docs/design/board-state-machine-plan.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-state-machine-plan.md#p10--the-compare-and-swap-autostashes-the-checkout-independent-needs-no-other-task)).
+The move to tillr dropped it with the old board tool (`docs/design/tillr-seed-triage.md`, row 592),
+and nothing replaced it.
 
 **Build this item with the steps below. Read this section first; it is the ruling of
 2026-11-18, amended the same day to answer the latest build's conflict.** Everything in this block after this
@@ -3524,7 +3889,7 @@ the three were already ruled above and the third was not a failure.
 
 **Agent details:**
 
-- **Ref:** `docs/design/board-state-machine.md` section 9 (D33, "the comparison-and-swap autostashes"); `docs/design/board-state-machine-plan.md` P10 (fences: never drop the stash on a failed apply, never stash during the gate); `docs/design/landing-principles.md`; the boundary table in `tools/tillr-drain/README.md`.
+- **Ref:** [`docs/design/board-state-machine-plan.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-state-machine-plan.md#p10--the-compare-and-swap-autostashes-the-checkout-independent-needs-no-other-task) P10 (D33, "the comparison-and-swap autostashes"; fences: never drop the stash on a failed apply, never stash during the gate); `docs/design/landing-principles.md`; the boundary table in `tools/tillr-drain/README.md`.
 - **Where:** `Trunk.Move` and `Trunk.UncommittedPaths` in `tools/tillr-land/land/trunk.go`; `finishLanding` in `tools/tillr-land/land/landing.go`, which calls `Trunk.Move` inside the write transaction; the ignored ref prefixes in `tools/tillr-drain/drain/boundary.go`; the dirty refusal in `tools/tillr-land/`; `tools/tillr-drain/drain/dirty_hold.go`; `trunk-path-dirty` in `tools/tillr-drain/holdrules/holdrules.go` and in `tools/tillr-view/waiting.go`; the drain README section "Owner edits and waiting landings"; `yolo-packs/tillr/skills/tillr-operating/`.
 - **Plan for the builder (2026-11-18, second version; superseded the same day by the build order at the head of this block, and kept as the description of what the patch at the end of this block holds; a builder does not carry it out):** every step below was made by the design seat in a scratch copy on `d4eecbea3` and the result is in the evidence line for this amendment, so a step that fails for the builder is a mistake in carrying it out, not an open design question. Do the steps in order and run the named tests after each. Run every `go test` with `-timeout 120s` or longer, never shorter; a landing test in this module takes about one second and the slowest takes nine. Run a whole module only as `python3 tools/go-test-shards.py tools/<module> -k 6` with no `--shard-timeout` and no `--timeout`, in the background if the harness limits a command's time: the three modules take several minutes together. `python3 tests/tillr-docs.test.py` takes 60 seconds, so give it at least 300.
   1. **Start from the last build.** In the lane worktree run `git diff bf86efa42 refs/tillr/preserved/run-item-land-across-owner-edits-a23 -- tools docs yolo-packs/tillr/skills | git apply`. The ref is in the main repository and is readable from the lane. The patch applies without offsets that matter on `d4eecbea3`; if the base has moved and it does not apply, use `git apply --3way` and resolve. Do not take `yolo-packs/tillr/files/` from the ref. This build already holds the hold rules change, the view test with the `operator;` prefix, the lock record and the reclaim of a dead lander's lock, so none of those is written again.
@@ -5253,7 +5618,7 @@ says to skip items with a workflow.
 
 **Agent details:**
 
-- **Ref:** `item-seed-retire` in [the convergence design](../design/tillr-convergence.md#retire-the-seed-file-and-its-command) and `item-oa-move-to-top` in [the observatory actions design](../design/observatory-actions.md) rework how a rank is written, and both are queued. This item is small and should land first, so the ranking method is safe for every item until they land; both wait for it.
+- **Ref:** `item-seed-retire` in [the convergence design](../design/tillr-convergence.md#retire-the-seed-file-and-its-command) and `item-oa-move-to-top` in [the observatory actions reference](../reference/observatory-actions.md#moving-an-item) rework how a rank is written, and both are queued. This item is small and should land first, so the ranking method is safe for every item until they land; both wait for it.
 - **Where:** `storedItem` in `tools/tillr-item/item/seed.go`, whose `SELECT` lists the columns it reads and omits `workflow`; `planSeed`, which builds the re-rank payload from that stored item (`rerank := held`) and so writes whatever `storedItem` left empty; `sameDefinition` in the same file, which compares only definition fields and is not the cause. The itemPayload type, and the apply path that writes it, carry the workflow field.
 - **Evidence:** 2026-11-17, on a throwaway store: an item with `workflow` `scout-then-build@v1` came back with an empty workflow after a rank-only `tillr item seed`.
 - **Evidence:** 2026-11-17, `rg -n 'workflow' tools/tillr-item/item/seed.go` finds nothing, and `storedItem` there reads `item_id, title, body_ref, state, design_doc, allowed_paths, rank, seat, prose` from `items`, so `planSeed` re-applies an item with no workflow. `Workflow` is a field of the payload in `tools/tillr-item/item/apply.go`, which the apply path writes.
@@ -5285,7 +5650,7 @@ adapter needs but the binary does not print should be refused as a build mismatc
 
 **Agent details:**
 
-- **Ref:** the verdict row of the exit-code table in `tools/tillr-loop/README.md`, which says a non-zero verdict stops the loop because a landed candidate whose item was not retired is landed work the board cannot see; that rule stands, and this item removes the skew that tripped it. `item-land-then-roll-and-push` in [the restart design](../design/tillr-restart.md) rebuilds binaries after a landing, but its roll runs after the landing's verdict, so it does not close this gap by itself.
+- **Ref:** the verdict row of the exit-code table in `tools/tillr-loop/README.md`, which says a non-zero verdict stops the loop because a landed candidate whose item was not retired is landed work the board cannot see; that rule stands, and this item removes the skew that tripped it. Post-landing roll in [the restart reference](../reference/tillr-restart.md#post-landing-roll-and-push) rebuilds binaries after a landing, but its roll runs after the landing's verdict, so it does not close this gap by itself.
 - **Where:** `compose_verdict` in `tools/tillr-loop/tillr-loop`; the `tillr-build` recipe in `.justfile`, which builds the binaries the loop runs; `Verdict` in `tools/tillr-drain/drain/steps.go`.
 - **Evidence:** 2026-11-17, the loop log: every start from about 09:52Z ended with `the verdict program answered exit 4 for item-jl-criterion-claim-class (pass): tillr-loop verdict: criterion c1 has no valid stored claim_class`, with the loop's build line naming `6221148e51e1`. `go version -m` on the installed `tillr-item` showed `vcs.revision=6221148e5`, and its `show` printed criteria with `criterion_id`, `text` and `state` only.
 - **Evidence:** 2026-11-17, after `just tillr-build` at `bb6e286b5` and a relaunch at 09:59:35Z, the loop's first writable open added the column, `tillr item show` printed `claim_class` `verification-only` for every criterion of `item-gate-red-cap` and `item-def-item-lifecycle`, and the loop logged `landed item-jl-criterion-claim-class` with every criterion `done`.
@@ -5373,6 +5738,11 @@ Two follow-ups from the night of 2026-11-17. A commit that no person or lander w
 trunk with nothing in the way, and the heavy proof loses minutes of work whenever the loop restarts.
 
 ### Hold landings when a trunk commit has a foreign author
+
+**Superseded by [OQ-RP4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md#OQ-RP4).** This is the historical
+build record, not work to replay. Tillr stamps its own trunk landings and no longer checks
+other trunk commits or carries identity acceptances across rewrites. The repository's own
+identity gate remains separate.
 
 On 2026-11-17 at 08:08 -0500, commit `6f2d9d938` [unlanded] reached `main` as `fork-check test
 <test@example.invalid>` with the message `initial`. A test fixture had run its `git add -A` and
@@ -5486,9 +5856,9 @@ repair work that identifies the affected commit range rather than ending the run
 **Agent Details:**
 
 - **Ref:** [Landing principles](../design/landing-principles.md), including the rule that a mechanism whose cost rises with trunk activity points the wrong way.
-- **Where:** `HeavyRunner.Run` and `firstRed` in [heavy.go](../../tillr-drain/drain/heavy.go) implement the search over recorded landings. `startHeavy`, `heavyAttempted`, and `heavyStatusLine` are in [heavy_loop.go](../../tillr-drain/drain/heavy_loop.go). `HeavyStatus` in [status.go](../../tillr-drain/heavy/status.go) carries `GreenCommit` but no proof time. The waiting view lives in `tools/tillr-view/`.
+- **Where:** `HeavyRunner.Run` and `firstRed` in [heavy.go](../../tillr-drain/heavyrun/heavy.go) implement the search over recorded landings. `startHeavy`, `heavyAttempted`, and `heavyStatusLine` are in [heavy_loop.go](../../tillr-drain/drain/heavy_loop.go). `HeavyStatus` in [status.go](../../tillr-drain/heavy/status.go) carries `GreenCommit` but no proof time. The waiting view lives in `tools/tillr-view/`.
 - **Verify:** For c1, restart between two checks; assert the first runs once and the log identifies reused checks. For c2, assert proof starts on the first tick after restart without a new landing, and say in the run report whether the test passed before any code change. For c3, assert both the log and waiting view include the green commit and proof age. For c4, cover both an already-failing base and a passing last landing; assert the filed fixer's text names both ends of the range.
-- **Existing coverage:** [heavy_attribution_test.go](../../tillr-drain/drain/heavy_attribution_test.go) covers finding the first failing landing. Do not restore the first draft's removed criterion for that behavior; c4 addresses the cases where the search cannot attribute the failure.
+- **Existing coverage:** [heavy_attribution_test.go](../../tillr-drain/heavyrun/heavy_attribution_test.go) covers finding the first failing landing. Do not restore the first draft's removed criterion for that behavior; c4 addresses the cases where the search cannot attribute the failure.
 - **Do not edit this item block.** The loop refuses a candidate whose worker changed its own item block, and it refused the second attempt on 2026-11-17 for exactly that: the earlier wording of c2 asked the item to record a finding, and the worker wrote it here. Findings go in the run report. Other documentation the change needs, such as the [drain README](../../tillr-drain/README.md), is still in scope.
 - **Already held:** `maybeRolling` in [trunk.go](../../tillr-drain/drain/trunk.go) calls `startHeavy` with the trunk tip on every tick under the `after-merge` landing strategy, and `startHeavy` skips only a tip the loop has already attempted or a proof still running. A new loop has attempted nothing, so its first tick starts the proof. Read at `8b22572cc`; the second and third attempts each wrote a first-tick test that passed without a code change.
 - **Earlier attempts:** Seven runs built or inspected this and none landed. Three on 2026-11-17 built most of it. The third attempt's work is kept in the main repository at `refs/tillr/preserved/run-item-heavy-restart-keeps-proof-and-names-red-landing-a3`. Its independent review found the defects that the criteria above now state: retry passes on the single gate program were saved but never read back, a cancelled proof overwrote the previous green commit's proof time, a range with several landings blamed an earlier landing without checking the last one, and the waiting view showed a fault row in a repository with no green commit. Two later runs, on 2026-11-17 and 2026-11-18, read that work, changed nothing and reported failure without naming a blocker. Two more on 2026-11-18 stopped at the first step of **Start procedure** as it then read, which **Design answer, 2026-11-18** below corrects. The earlier wording said to start from the kept work and gave no way to do it. **Start procedure** below is the ruling: it is the way, and a run that inspects the kept work and stops has not attempted the item.
@@ -5619,7 +5989,7 @@ An open question (an OQ) is a numbered entry in a design document that carries a
 
 The measured gap on 2026-11-17 is large. `tillr drain why` listed six items held `conflict-owner` and two held `question-open`. Reading the six conflicts also shows that the channel is mostly the wrong one. Five were not questions at all: the lane had been staged from a base older than the trunk, the design seat found the answer already on the trunk, and it reported "needs the owner" because restaging is a ref change no run may make. Only the BMAD and Superpowers skills item put a real choice to the owner, between three delivery routes. A document question suits that one, and a staging fault should never reach the owner, so this item writes a question only when the report offers the owner a decision, and the report is otherwise left to the existing repair path.
 
-This item builds on one prerequisite, which has since landed, and on other landed work. The prerequisite is `item-qp-one-question-reader`, filed in [the queue persistence design](../design/tillr-queue-persistence.md), which makes the loop, the view and `tillr item show` read open questions through one reader in the shared library under `tools/tillr/`. That item was not landed when this block was filed: on 2026-11-17 a worker staged for this item found the reader still inside the loop's module and `tillr item show` still using its older hand-written parser, which skips numbered entries. A numbered question written by this item would then hold the item in the loop while `tillr item show` reported no open questions. So this item was dispatched only after the prerequisite landed, which it did in commit `c6614acf3`. This item relies on that reader and does not add a second or move the existing one. It does extend that reader in place, so its paths include `tools/tillr/`: the reader as this item found it keeps each document's questions and drops the index's `ledgerIds`, and the answer sync needs them to tell a ruled question from a deleted one. `item-view-no-unclassified` is landed. It gave every held item a class and a next mover, and this item scopes itself to what is left: the summary still counts holds by reason, and a `conflict-owner` row names "the owner" with no place to answer. `item-jl-owner-criterion-hold` holds an item that owes an owner-only criterion verdict, which is a separate case from a question, and it keeps its own reason. `item-comments-design-items-at-the-desk` is about where a design session runs and is unrelated beyond sharing the document. The design on queue persistence already rules that questions are document state and never item rows (`D-UT4`), and this item applies that ruling to the one path that still breaks it.
+This item builds on one prerequisite, which has since landed, and on other landed work. The prerequisite is `item-qp-one-question-reader`, filed in [queue persistence](../reference/tillr-queue-persistence.md#open-questions-and-vantage-read-through), which makes the loop, the view and `tillr item show` read open questions through one reader in the shared library under `tools/tillr/`. That item was not landed when this block was filed: on 2026-11-17 a worker staged for this item found the reader still inside the loop's module and `tillr item show` still using its older hand-written parser, which skips numbered entries. A numbered question written by this item would then hold the item in the loop while `tillr item show` reported no open questions. So this item was dispatched only after the prerequisite landed, which it did in commit `c6614acf3`. This item relies on that reader and does not add a second or move the existing one. It does extend that reader in place, so its paths include `tools/tillr/`: the reader as this item found it keeps each document's questions and drops the index's `ledgerIds`, and the answer sync needs them to tell a ruled question from a deleted one. `item-view-no-unclassified` is landed. It gave every held item a class and a next mover, and this item scopes itself to what is left: the summary still counts holds by reason, and a `conflict-owner` row names "the owner" with no place to answer. `item-jl-owner-criterion-hold` holds an item that owes an owner-only criterion verdict, which is a separate case from a question, and it keeps its own reason. `item-comments-design-items-at-the-desk` is about where a design session runs and is unrelated beyond sharing the document. The design on queue persistence already rules that questions are document state and never item rows (`D-UT4`), and this item applies that ruling to the one path that still breaks it.
 
 The work is four items, split by the design seat on 2026-11-18 after builds kept stopping on it as one. This block is the first of them. It lands the work those builds saved, which already publishes the question, holds the item, releases it on a landed answer, handles the item with no document, counts owner-waiting work and migrates the recorded conflicts, and it adds the rule that a published question holds only its own item. The three blocks below it then change one thing each: the answer sync reads the committed tree, a deleted question becomes an operator repair, and a test proves that the owner-waiting rows equal the planning index. Each lands as its own commit and names the item it waits on.
 
@@ -5627,7 +5997,7 @@ The work is four items, split by the design seat on 2026-11-18 after builds kept
 
 **Agent details:**
 
-- **Ref:** `tools/tillr-drain/README.md`, the sections on conflicts and on triage, whose text says a report "becomes an owner `item.conflict`" and "remains visible under `conflict-owner`"; `docs/design/tillr-queue-persistence.md`, `D-UT4` and the sections on the `question-open` hold and the Vantage index.
+- **Ref:** `tools/tillr-drain/README.md`, the sections on conflicts and on triage, whose text says a report "becomes an owner `item.conflict`" and "remains visible under `conflict-owner`"; [`docs/reference/tillr-queue-persistence.md`](../reference/tillr-queue-persistence.md#open-questions-and-vantage-read-through), `D-UT4` and the section on the `question-open` hold and the Vantage index.
 - **Where:** `conflictDecision` and `ReasonConflictOwner` in `tools/tillr-drain/drain/blocked.go`; the settle step that answers a design-seat conflict by amending the item's block, in the same file; `whyPresentation` in `tools/tillr-drain/drain/why.go` and the `conflict-owner` row in `tools/tillr-view/waiting.go`; the question reader, which is in `tools/tillr-drain/vantage/` until `item-qp-one-question-reader` lands and is the package `vantage` in the shared library under `tools/tillr/` afterwards, where `parseVantageIndex` in `tools/tillr/vantage/vantage.go` is the one place that reads an index document and is where the ledger ids are added; the conflict record in `tools/tillr-item/item/conflict.go`; `yolo-packs/tillr/` copies, regenerated with `just pack-sync`.
 - **The dated evidence below was written before the split** and numbers the criteria as this block then had them, one to seven. The old first, fourth, fifth and sixth are this item's first, third, fifth and fourth. The old second is this item's second together with `item-owner-answer-from-committed-tree` and `item-owner-question-removed-hold`, and the old third and seventh are `item-owner-waiting-equals-index`. Where that evidence says the item holds a deleted question `question-removed` or reads the ledger ids, the ruling stands and the later item builds it.
 - **How a conflict reaches the owner today, read 2026-11-17:** a worker's blocked report raises a conflict waiting on the design seat; a design run reads it and, when it cannot amend the block, reports back, and the conflict moves to status `owner` with the design run's report appended as evidence. The design seat's own answer lands in the item's block. `tillr item --help` lists `decision`, `mail` and `comments`, and none of them answers a conflict. `rg -n '"answered"' tools --glob '!*_test.go'` finds the answered status set only by the design-seat settle, never by an owner action.
@@ -5735,7 +6105,7 @@ The item above publishes an owner's question into a document and closes the conf
 
 **Agent details:**
 
-- **Ref:** the section "Owner decisions in documents" in `tools/tillr-drain/README.md`; `docs/design/tillr-queue-persistence.md`, `D-UT4` and the sections on the `question-open` hold and the Vantage index.
+- **Ref:** the section "Owner decisions in documents" in `tools/tillr-drain/README.md`; [`docs/reference/tillr-queue-persistence.md`](../reference/tillr-queue-persistence.md#open-questions-and-vantage-read-through), `D-UT4` and the section on the `question-open` hold and the Vantage index.
 - **Where:** `settleOwnerAnswers` in `tools/tillr-drain/drain/owner_answer.go`, which `refreshDocuments` in `loop.go` calls with the trunk commit; `VantageQuestions`, with its `Root`, `Command` and `Context`, and `LedgerIDs` on `DocumentQuestions`, in `tools/tillr/vantage/vantage.go`; the tests and the helper `ownerIndexCommand` in `tools/tillr-drain/drain/owner_question_test.go`; `yolo-packs/tillr/` copies, regenerated with `just pack-sync`.
 - **The prerequisite is checked before any edit.** `rg -n 'func \(l \*Loop\) settleOwnerAnswers' tools/tillr-drain/drain/owner_answer.go` and `rg -n 'LedgerIDs' tools/tillr/vantage/vantage.go` each print a line once `item-owner-conflict-is-a-document-question` has landed. If either prints nothing, the lane was staged from a base without it. That is a staging fault for the loop to repair by restaging, and it is not a question for the design seat or the owner.
 - **Measured 2026-11-18, how the index reports an answer (`vantage-check` 0.12.0).** In a copy of the tree, filling in the `**Answer:**` text of [`OQ-CL1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/cost-levers/qa.md#OQ-CL1) left its state `open`. Changing its title marker from 💬 to ✅ made `uvx vantage-check index --format json` report the state `answered`. The tool's source reads the state from that marker only: ✅ is settled, 🔒 is blocked, and anything else is open. A document's `ledgerIds` are the first-cell ids of the table rows under a heading that reads `Decision Ledger`. On the same date 31 of 472 documents had a non-empty `ledgerIds`, and `docs/design/approver-agent.md` listed ten ids there with no entry in `questions`. So a test's answered question carries ✅ in its title, and its compacted ruling is a row `| <id> | ... |` under a `## Decision Ledger` heading with the numbered entry removed.
@@ -5804,7 +6174,7 @@ The point of the three items above is that waiting on the owner has one form and
 
 **Agent details:**
 
-- **Ref:** the section "Owner decisions in documents" in `tools/tillr-drain/README.md` and the waiting section of `tools/tillr-view/README.md`; `docs/design/tillr-queue-persistence.md`, `D-UT4`, which rules that questions are document state and never item rows.
+- **Ref:** the section "Owner decisions in documents" in `tools/tillr-drain/README.md` and the waiting section of `tools/tillr-view/README.md`; [`docs/reference/tillr-queue-persistence.md`](../reference/tillr-queue-persistence.md#open-questions-and-vantage-read-through), `D-UT4`, which rules that questions are document state and never item rows.
 - **Where:** `Why` and its `Summary` in `tools/tillr-drain/drain/why.go`; `decorateOwnerQuestionWaiting`, `assembleWaiting` and `printWaiting` in `tools/tillr-view/waiting.go`; `waitingConflict` in `tools/tillr-view/waiting_conflict.go`; `WithoutQuestions` in `tools/tillr/vantage/vantage.go`; `TestWaitingSummarySeparatesDocumentAnswersFromOtherNextActors` in `tools/tillr-view/owner_waiting_test.go`; the tests and `ownerTreeIndexCommand` in `tools/tillr-drain/drain/owner_question_test.go`; `yolo-packs/tillr/` copies, regenerated with `just pack-sync`.
 - **The prerequisite is checked before any edit.** `rg -n 'QuestionRemovedHead' tools/tillr-item/item/conflict.go` prints a line once `item-owner-question-removed-hold` has landed. If it prints nothing, the lane was staged from a base without it. That is a staging fault for the loop to repair by restaging, and it is not a question for the design seat or the owner.
 - **Settled by the design seat on 2026-11-18, and the owner's to overturn.** None of this is an open question for a worker.
@@ -5837,7 +6207,7 @@ When the gate refuses a worker's candidate, or the worker ends without committin
 
 **Agent details:**
 
-- **Ref:** [Section 4.4 of the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10); the section "A refused run goes back to its worker" in `tools/tillr-drain/README.md`; [the board state machine, section 7](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-state-machine.md#7-suspend-and-resume).
+- **Ref:** [Section 4.4 of the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10); the section "A refused run goes back to its worker" in `tools/tillr-drain/README.md`; [the landing call design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md).
 - **Where:** `returnedEnding` and the `returned-with-evidence` dispatch in `decide` in `tools/tillr-drain/drain/plan.go`; `returnedBrief` and `repeatedEnding` in `tools/tillr-drain/drain/returned.go`; the refusal paths of `settle` and `verify` and the continuation `resumeAfterWall` in `tools/tillr-drain/drain/loop.go`, where `abandon` resets the lane today; `yolo-packs/tillr/` copies, regenerated with `just pack-sync`.
 - **Evidence:** on 2026-11-17, `tillr drain why` held `rewrite-item-design-refusal-resumes-session` as `gate-failed` because the fast check `documents` refused a dead anchor in its commit. Under the ruling that run's own session is the one that knows which anchor it wrote.
 
@@ -8398,7 +8768,7 @@ index 000000000..f4c252119
 
 ## Filed 2026-11-18: plan first, then spend each model where it is enough
 
-The owner asked on 2026-11-18 for a planning stage that fans an implementation out into many nodes and spends as little on models as it can: "split different types of work into different seats as we see fit", create "a few more seat names to slot into", fit Terra and Luna in wherever they can do the work, and encourage implementers who work alone to use cheaper sub-agents. This is the first slice of [the planning node and model tiering proposal](../design/tillr-planning-node-model-tiering.md), narrowed by the owner's later rulings, and it sits on [the item graphs design](../design/tillr-item-graphs.md) and the direction in [the graph-is-the-path design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md). It is entry 4's [choice of where each seat runs](#4-choose-where-each-seat-runs) applied to a finer grain of work.
+The owner asked on 2026-11-18 for a planning stage that fans an implementation out into many nodes and spends as little on models as it can: "split different types of work into different seats as we see fit", create "a few more seat names to slot into", fit Terra and Luna in wherever they can do the work, and encourage implementers who work alone to use cheaper sub-agents. This is the first slice of [the planning node and model tiering proposal](../design/tillr-planning-node-model-tiering.md), narrowed by the owner's later rulings, and it sits on [item graphs](../reference/tillr-item-graphs.md) and the direction in [the graph-is-the-path design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md). It is entry 4's [choice of where each seat runs](#4-choose-where-each-seat-runs) applied to a finer grain of work.
 
 ### Add a planning stage that fans implementation out by seat
 
@@ -8418,7 +8788,7 @@ The work is seven items, split by the design seat on 2026-11-18 after four build
 **Agent details:**
 
 - **This item is small on purpose.** It changes five Go files and one README in `tools/tillr-item/`, and the pack mirror that `just pack-sync` writes. Four of the five Go files come from a saved patch that applies with one command. It changes nothing in `tools/tillr-drain/`, `config/tillr/` or any other module, though the directive's paths still list them from before the split. The policy keys, the six new seats and the planner's check are the next two items and are not this item's work. A report that lists them as missing describes other items.
-- **Ref:** [the item graphs design](../design/tillr-item-graphs.md), decisions `D-IG3` and `D-IG12` and the block "Add a planning node's proposal to replace a later node"; [the graph-is-the-path design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md), `D-GP6` (seats are declared in the backend policy, with no rungs) and [`OQ-GP5`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP5) (tillr watches every sub-agent and starts scouts and writers itself); [the planning and tiering proposal](../design/tillr-planning-node-model-tiering.md), sections 1 (what the run history says), 4 (kinds of work) and 5 (the planning node). The proposal's two rungs, one fix per rung and one re-plan are ruled out, and its items named `item-pt-*` are not dispatchable. Take its history and its kinds of work and none of its caps. These references serve all seven items, and this item needs none of them to be read.
+- **Ref:** [item graphs](../reference/tillr-item-graphs.md#proposals-and-graph-revisions), decisions `D-IG3` and `D-IG12`; [the graph-is-the-path design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md), `D-GP6` (seats are declared in the backend policy, with no rungs) and [`OQ-GP5`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP5) (tillr watches every sub-agent and starts scouts and writers itself); [the planning and tiering proposal](../design/tillr-planning-node-model-tiering.md), sections 1 (what the run history says), 4 (kinds of work) and 5 (the planning node). The proposal's two rungs, one fix per rung and one re-plan are ruled out, and its items named `item-pt-*` are not dispatchable. Take its history and its kinds of work and none of its caps. These references serve all seven items, and this item needs none of them to be read.
 - **Why the work is split, settled by the design seat on 2026-11-18.** Builds kept stopping on this block. It first held eight criteria across four modules, and three builds left the same four changed files behind. The design seat cut it to two criteria and named the tests the first step rewrites. The next build, on the last backend the build seat escalates to, applied the saved patch, ran `go test ./item -run 'Seat|Sync'` in `tools/tillr-item`, saw the one failure the block had told it to expect, and reported that the task exceeds it, listing the test rewrite, the planner, the workflow loader and the policies as missing. Its record shows four commands in 36 seconds. So the block is cut again, to the part that build had nearly finished. The design seat then made this item's whole change in a lane on 2026-11-18 at `81b180351`: the patch, the one test rewrite in step 2 and nothing else. `python3 tools/go-test-shards.py tools/tillr-item -k 6` passed 688 tests, and the same command for `tools/tillr-drain` passed 1996 with the drain untouched. The change was then discarded, because the design seat's commit is this document.
 - **Where a seat is checked, settled by the design seat on 2026-11-18:** at plan time, against the policy in force, and not at sync. Sync and apply keep only the shape check in c1. Three facts in the tree decide it. Which policy is in force is the drain's `--policy` flag and it reloads while the loop runs, so sync cannot know it, and the four tracked policies do not have to agree. The policy type lives in `tools/tillr-drain`, which imports `tools/tillr-item`, so a check in sync would mean a second policy reader below the first. Apply replays recorded events, so a check there against today's policy file would refuse history when a seat is later renamed.
 - **What holds between this item and the next.** Sync and apply accept a well-formed seat the code does not know, and the planner still refuses it with its existing message, through `item.KnownSeat` in `checkSeats` in `tools/tillr-drain/drain/plan.go`. That is a correct state: no item in the tree names a seat outside the four, and a refusal at plan time is where the next item leaves the check.
@@ -8506,7 +8876,7 @@ A planning node can already propose replacing a later node that has not started,
 - **Ref:** the references and the out-of-scope list in [the first item of this split](#add-a-planning-stage-that-fans-implementation-out-by-seat), and the starting seats in [the item that declares them](#add-the-starting-seats-to-every-backend-policy), which this item waits on. By then a seat is a policy name, `Policy` carries `Ref`, the policy file's path, and the policy has `read_only_seats`.
 - **What a planning node can already do:** per the item graphs design, a read-only node may propose replacing one later node that has not started with a tracked workflow and bounded arguments, applied in one transaction, with the old definition kept in `graph_revisions`. The bounded form is a list of scout prompts, a subset of the fence, or a registered command id. Check that built behavior in `tools/tillr-drain/drain/graph_proposal_test.go` and `workflow_expansion_test.go`. The gaps are an argument that is a list of pieces each carrying a seat, a scope and named outputs, and a template that expands to several writing nodes. `workflow="..."` in the directive is the existing way to slot an item into a workflow.
 - **First use is deferred, settled by the design seat on 2026-11-18.** A worker reported that the roadmap and `config/tillr/` name no item to run through the workflow: `rg -n --hidden 'workflow="planned-build@v1"' docs config/tillr` returned nothing. That is right and it stays so. This item adds `config/tillr/workflows/planned-build@v1.json` and proves it with fixture tests, and it puts `workflow="planned-build@v1"` on no item's directive and changes no default. Which item runs through the workflow first is a later roadmap edit that the design seat or the owner makes after the split has landed, and a default for build items is a later settings change.
-- **Writing pieces do not run in parallel, settled by the design seat on 2026-11-18.** An earlier criterion had the drain run writing pieces with disjoint scopes at the same time. That contradicted [`OQ-IG3`](../design/tillr-item-graphs.md#71-decision-ledger), which settles that read-only nodes of one item run together and writing nodes run one at a time on the item's single worktree, and the tiering proposal's own list of what it does not do says the same. The tree agrees: `claimParallel` in `tools/tillr-drain/drain/parallel.go` returns at once for a node whose access is not `read_only`, under the comment "A writer always keeps the lane to itself". `nextWorkflowNode` in `workflow_order.go` already picks the first ready node in stage order, so writing pieces expanded in plan order run in plan order with no added edges. Running writers together would overturn that decision, which the owner may overturn and this item does not.
+- **Writing pieces do not run in parallel, settled by the design seat on 2026-11-18.** An earlier criterion had the drain run writing pieces with disjoint scopes at the same time. That contradicted [`OQ-IG3`](../reference/tillr-item-graphs.md#why-its-this-way), which settles that read-only nodes of one item run together and writing nodes run one at a time on the item's single worktree, and the tiering proposal's own list of what it does not do says the same. The tree agrees: `claimParallel` in `tools/tillr-drain/drain/parallel.go` returns at once for a node whose access is not `read_only`, under the comment "A writer always keeps the lane to itself". `nextWorkflowNode` in `workflow_order.go` already picks the first ready node in stage order, so writing pieces expanded in plan order run in plan order with no added edges. Running writers together would overturn that decision, which the owner may overturn and this item does not.
 - **How the pieces reach the graph, settled by the design seat on 2026-11-18.** The bounded-argument code takes three types today, `paths`, `strings` and `command`, and `bindWorkflow` in `workflow_arguments.go` refuses a `repeat` on anything except a `strings` argument and a read-only stage, with the message `workflow-repeat`. This item adds one type, `pieces`, and nothing else to the format. A `pieces` value is a list of at most `most` objects, and each object has exactly these keys: `id`, which follows the rule for an output name; `seat`; `access`, which is `read_only` or `write`; `write_scope`, a list of paths that is required for `write` and refused for `read_only`; `prompt`, a string; and `outputs`, an optional map from output name to type. An unknown key is refused. A stage whose `repeat` names a `pieces` argument becomes one copy per piece, in list order, through the code that already makes the copies for a `strings` argument, and each copy takes its seat, access, write scope, prompt and outputs from its piece. The tracked template is `config/tillr/workflows/build-pieces@v1.json`: one stage that repeats over `pieces` with `most` 12, and an exit that requires it with `commit_required`. `planned-build@v1` has three stages: `plan`, read-only on the `plan` seat, with a `graph.proposal` output and `may_replace` naming `work` and `build-pieces@v1`; `work`, a writing node on the `build` seat, which is what runs when the planner proposes nothing; and `verify`, read-only on the `verify` seat, named as the exit's `evaluator_slot`. The verify node is therefore the evaluator the drain already wires, and this item gives it no prompt of its own. The next item does.
 - **Where each refusal is made.** `settleProposal` in `graph_proposal.go` records a refused proposal with a rule and a detail in `graph_revisions`, and already has `proposal-scope-outside-fence`. Add two rules beside it: `proposal-seat-unmapped` for a piece whose seat the policy in force does not map, with the policy file's path in the detail, and `proposal-read-only-seat-writes` for a `write` piece on a seat the policy lists under `read_only_seats`.
 - **Build order, each step a stop only if it fails.** Do the steps in order in one run, and make the commit once, at step 3.
@@ -8531,7 +8901,7 @@ Once a plan can cut a build into pieces, nothing yet checks that the pieces toge
 **Agent details:**
 
 - **Ref:** the references and the out-of-scope list in [the first item of this split](#add-a-planning-stage-that-fans-implementation-out-by-seat), and the workflow as [the item before this one](#add-a-piece-list-argument-and-the-planned-build-workflow) leaves it: `verify` is already the stage the exit of `planned-build@v1` names as its `evaluator_slot`.
-- **What the verify node is, settled by the design seat on 2026-11-18.** A worker reported that this block described machinery the tree does not have, and it was right. The block said the evaluator "is given the criteria, the diff and the outputs" and that a failing file takes a route back to the planner. Read at `d5696e5c5`: `planned-build@v1` wires no output to `verify`, and `nodeInputPaths` in `node_outputs.go` skips an edge with no `to_input`. The verify node's brief is written by `stageJudge` in `judge.go` and never passes through `workflowNodeBrief`, so a stage prompt does not reach it. A `not-done` finding is recorded by `settleJudgeFailure` as `eval-failed`, which `retryHoldReason` in `plan.go` answers as a hold and `returnedReasons` in `returned.go` does not list, so nothing dispatches a new plan. The criteria stand as written. The four paragraphs below say how each part is built, and none of them adds a second judge step, a second brief writer or a second reader of `eval.output`: [the evaluator block of the item graphs design](../design/tillr-item-graphs.md#route-a-workflows-evaluator-node-through-the-judges-intake) settles that there is one of each.
+- **What the verify node is, settled by the design seat on 2026-11-18.** A worker reported that this block described machinery the tree does not have, and it was right. The block said the evaluator "is given the criteria, the diff and the outputs" and that a failing file takes a route back to the planner. Read at `d5696e5c5`: `planned-build@v1` wires no output to `verify`, and `nodeInputPaths` in `node_outputs.go` skips an edge with no `to_input`. The verify node's brief is written by `stageJudge` in `judge.go` and never passes through `workflowNodeBrief`, so a stage prompt does not reach it. A `not-done` finding is recorded by `settleJudgeFailure` as `eval-failed`, which `retryHoldReason` in `plan.go` answers as a hold and `returnedReasons` in `returned.go` does not list, so nothing dispatches a new plan. The criteria stand as written. The four paragraphs below say how each part is built, and none of them adds a second judge step, a second brief writer or a second reader of `eval.output`: [the workflow evaluator contract](../reference/tillr-item-graphs.md#workflow-evaluator) settles that there is one of each.
 - **How the prompt and the pieces reach the verifier.** `evaluatorCandidate` in `workflow_evaluator.go` holds the decision, so it holds the graph as the planner left it. Add one string field to `Candidate`, `EvaluatorTask`, and the same field to `JudgeReceipt` under the JSON name `evaluator_task`, copied where `judgeCandidate` copies `EvaluatorInputs` into the receipt. `evaluatorCandidate` fills it with the evaluator stage's `prompt`, then one line for each node it appends to `Producers`, in that order: the node's id, seat and access, its prompt, and its output directory, which is `nodeOutputsDir` of the node's run. `stageJudge` appends the field to the brief it already writes, after the `Input` lines and only when the field is not empty, so the brief of an item judged without a workflow is unchanged. No edge, input or output is added to `planned-build@v1`. The joined diff is the `candidate.diff` the brief already names.
 - **Where the verifier names the piece.** The verdict file keeps its format, and `tools/tillr-item/` is not changed. `CheckJudge` accepts any evidence entry that is one token with no space, so for a `done` entry the verifier puts `node:<id>` in `evidence`, with the id of the piece that satisfies the criterion. A criterion no piece covers gets `not-done` with a reason that starts `uncovered:`. The stage's prompt in `planned-build@v1.json` states both. The drain does not check that an entry carries a `node:` locator. The check is the verifier's own judgment, as the criterion says.
 - **How a `not-done` finding goes back to the planner.** [`D-JL10`](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10) sends a refused candidate back with its evidence every time, and a verifier's `not-done` is a statement about the candidate of the same kind as a gate refusal. So when the judge step was entered through a workflow's evaluator node, which is when `Candidate.Evaluator` is set, `settleJudgeFailure` records a `not-done` outcome under a new refusal step, `verify-not-done`, in place of `eval-failed`. An item judged without a workflow keeps the `eval-failed` hold, and `blocked` and `defective` keep their routes. The new step is added to `returnedCauses` and `returnedReasons` in `returned.go` and gets its own sentence in `returnedBrief`. The refusal's detail is one line for each `not-done` entry of the verdict file, `<criterion id>: <reason>`, in criterion order. Its `evidence` field is `endingKey` of the step and the sorted ids of those criteria, so that the same criteria found uncovered a second time is an identical repeat and goes to the design seat as any repeat does. The refusal carries no `worker_session`. With none, the planner does not continue a retained node, and the next dispatch starts the item's workflow at its first stage on a fresh run. In `planned-build@v1` that stage is `plan`. `Stage` already appends `returnedBrief` to that run's brief, so the planner reads the named criteria under "Your previous attempt". The brief's "Facts carried" section is filled from the template in `tools/tillr-run/`, which is outside this item's paths and is not changed. `planned-build@v1` is the only tracked workflow with an `evaluator_slot`, and no item runs through it yet, so no queued item changes route.
@@ -8690,7 +9060,7 @@ other items.
 
 **Agent Details:**
 
-- **Ref:** [the landing-call design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md): [Section 6.1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md#61-the-form-chosen-and-the-two-rejected) to [Section 6.5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md#65-the-fork-patches), and [Filing fork work](../../tillr-drain/README.md#filing-fork-work). The same shape as [the safe-stop item](../design/tillr-restart.md).
+- **Ref:** [the landing-call design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md): [Section 6.1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md#61-the-form-chosen-and-the-two-rejected) to [Section 6.5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md#65-the-fork-patches), and [Filing fork work](../../tillr-drain/README.md#filing-fork-work). The same shape as [the safe-stop patch](../reference/tillr-restart.md#pausing-a-session).
 - **Where:** `.forks/lanes/lane-1/pi/` is the fence spelling that staging reads. Staging rewrites it to the dispatched lane's checkout and starts that checkout at the delivered patch tip. Commit linearly on the fork's `main`. The replay already exists in the fork: `getPendingToolCalls` and `runAgentPendingToolCalls` in `packages/agent/src/agent-loop.ts`, `Agent.completePendingToolCalls` in `packages/agent/src/agent.ts`, from the fork commit titled "stop print workers safely on SIGUSR1". The park belongs where a tool result can already end a batch without a follow-up request; the no-prompt open is in `packages/coding-agent/src/modes/print-mode.ts` and its argument parsing; the flag is in the command line.
 - **What the 2026-11-18 experiment saw, and c5 is for.** With the default extension set loaded, an extension appended a message to the session as it opened, between the unanswered call and the replayed result, and the Bedrock request failed with "The number of toolResult blocks ... exceeds the number of toolUse blocks of previous turn". A worker loads no discovery extensions, so it is not expected there; the order is still a precondition.
 - **A resume still needs a prompt today:** print mode took a prompt and added it after the replayed result; that is what c2 and c3 replace.
@@ -8800,17 +9170,21 @@ shows a fault.
   - Assert that a gate, a judge and a fence refusal are each delivered as the call's result.
   - Assert the stated outcome of every failure case in the design.
 
-<!-- inert copy of a tillr directive: item id="item-landing-call-delivery-tests" paths="tools/tillr-drain/,tools/tillr-run/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A gate refusal, a judge refusal and a fence refusal each reach the session as the result of the open call, with the evidence of [Section 3.3](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md#33-what-can-come-back), and the session receives no user message. A test with a stand-in harness asserts for each that the delivery form recorded is `tool-result` and that the reopened run's prompt was empty.
-- **c2:** Each failure case of [Section 6.3](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md#63-failure-cases) has a test that asserts its stated outcome, and each test's name says which row it is.
 
 **Agent Details:**
 
 - **Ref:** [the first item of this split](#add-the-land-tool-and-its-brief-ending-to-pi-workers), and [the transcript check item](#add-a-transcript-check-before-a-pi-session-opens-with-no-prompt), which this item waits on. This item has not been built.
 - **The delivery test.** In `tools/tillr-drain/drain/landing_call_test.go`, beside `TestReturnedLandingAnswerStaging`, which already settles a first run that offers, refuses it at the gate and plans the session's next turn. The new test goes one step further for each of the three refusals: its stand-in harness for the second turn records whether its stdin was empty, writes `tool-result` to `landing-delivery` and appends to the session file a `land` tool result that carries the staged answer, in the shape `TestLandingResultPersisted` accepts. The test then settles that run and asserts one `call.delivered` event with form `tool-result`. The removed test is in `git show HEAD:tools/tillr-drain/drain/landing_call_test.go` for the fixture calls it used.
 - **The table.** Eleven rows. Rows that an existing test already asserts need only a test of the row's name that calls the same helper or a comment naming the row above the existing test: the replay with an answer file and the park with only an offer file (`land.test.mjs`), the exit bound (`parked-exit.test.py`), two answers for one call (the store's refusal, in `landing_call_test.go`) and the missing call (the transcript check item's tests). Write the others in the module that owns the behaviour: the tool's in `land.test.mjs`, the drain's in `landing_call_test.go`.
+- **The reopening row.** Ruled by the design seat on 2026-11-19, in answer to the obstacle of the run before this one: the design's words "logged as an exception against the node, uncounted" name the record the drain already writes for the reopened run, and this item adds no event kind and no node record. A run is one turn of its node, and a node has no record apart from its runs. The row has two tests:
+  - In `land.test.mjs`, the tool parks again when its run's directory holds the offer file and no answer file. The existing test already asserts this, so it needs only the row's name.
+  - In `landing_call_test.go`, a later run of the same session leaves an offer file with a call id that an earlier run's `call.offered` already holds, and no answer exists. `TestLandingCallReplayDistinguishesOpenSettledAndDuplicate` builds that state. Settling the later run must do all of this: return no error and no stop; write to the loop's report (`l.cfg.Report`, set to a buffer) one line that holds the later run's id and the words `repeated a landing call already recorded`; append no event whose object type is `call`, so the call still has one `call.offered` and stays open; run no gate step; and raise no conflict for the item. The report line is the log. The last three are what "uncounted" means here.
+  - The code at the base already does each of these (`settle` in `tools/tillr-drain/drain/loop.go`, where the intake is `landingOfferDuplicate`). A test that shows otherwise shows a fault, and the fix is inside this item's paths.
 - **What does stop this build:** a row whose stated outcome the code does not produce and whose fix lies outside `tools/tillr-drain/` and `tools/tillr-run/`. Name the row and paste the test's output.
+- **The fence stands.** Ruled by the design seat on 2026-11-19, in answer to a run that stopped on a `fence` obstacle naming a branch under `refs/heads/pi-subagents/`. The change needs no ref, and this item's paths are not widened. That branch was not part of the change: the run started a sub-agent without `worktree: false`, so its harness made an isolated worktree and a branch for it, and removed both afterwards. A ref the harness made and removed is no reason to stop, and it is not a `fence` obstacle, which is for a path the change itself must include.
+  - Make every edit in the lane worktree. Either write the change in the run's own session, or pass `worktree: false` and the lane worktree as `cwd` to each sub-agent that writes, one writer at a time.
+  - That run's worker did write a patch, which the run did not apply: 11 files under `tools/tillr-drain/drain/` and `tools/tillr-run/backends/pi/`, +594 −47, and `git apply --check` accepted it on `a08cec2a1` on 2026-11-19. If the file `task-0-worker.patch` is still in that run's scratch under the lane's durable directory, read it as a draft. It is unreviewed, it changes production code in six drain files, and this item changes production code only where a test shows a fault, so keep a production change only with the failing test that requires it.
 - **Verify:** as [the first item](#add-the-land-tool-and-its-brief-ending-to-pi-workers) states it.
 
 ### Move pi workers to the land tool when pi supports it
@@ -8824,11 +9198,7 @@ installed pi does not print it, and every worker keeps the footer.
   - Choose the form by what the installed pi says it supports.
   - Record the answer and the binary's path at each start of the loop.
 
-<!-- inert copy of a tillr directive: item id="item-landing-call-pi-switch-on" paths="tools/tillr-drain/,docs/" blocked_by="item-landing-call-delivery-tests" prose="2" -->
 
-- **c1:** The pi adapter's effective ending capability is `call-suspends` only when the installed binary prints `parked-tool-calls` from the features flag, and `footer` otherwise. A test of the loop asserts both with stand-in binaries, including one that rejects the flag.
-- **c2:** The loop starts `pi` with the features flag only when its policy names a backend whose adapter is the pi adapter, and records the answer with the binary's path as a `drain.pi-features` event. A loop whose policy names no such backend starts no `pi`. A test asserts each.
-- **c3:** A probe whose process outlives its bound, or leaves a child holding its output, does not hold the loop's start. A test asserts it with a stand-in that sleeps.
 
 **Agent Details:**
 
@@ -8854,11 +9224,7 @@ that call's result.
   - Route a tool-call obstacle exactly as the same obstacle in a footer.
   - Return the reply to the worker as the call's result.
 
-<!-- inert copy of a tillr directive: item id="item-landing-call-obstacle-tool" paths="tools/tillr-run/backends/,tools/tillr-drain/,docs/" blocked_by="item-landing-call-pi-switch-on" prose="2" -->
 
-- **c1:** `obstacle` accepts each of the six kinds (`definition`, `fence`, `trunk`, `tooling`, `seat`, `owner`) with that kind's required fields and rejects a call missing one, without ending the run. A test asserts each kind and one rejection.
-- **c2:** An obstacle call is recorded and routed exactly as the same obstacle in a footer is today. A test runs one shared case file of obstacles through both forms and asserts equal routing.
-- **c3:** The reply to an obstacle reaches the session as the call's result. A test asserts it for a design answer and for a `trunk` claim the base replay did not reproduce.
 
 **Agent Details:**
 
