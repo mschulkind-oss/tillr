@@ -4,6 +4,8 @@ package drain
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // StopRestarted is reachable only through a test replacement that returns. Real exec
@@ -51,18 +54,70 @@ func (l *Loop) restarter() *restart.Restarter {
 		Candidate: restart.LauncherCandidate(rc.Executable), Now: l.cfg.Now}
 }
 
+func (l *Loop) publishDrainBuild(ctx context.Context) error {
+	fact := restart.BuildFact{
+		Role: restart.RoleDrain, Revision: l.build.Revision, Time: l.build.Time,
+		Modified: l.build.Modified, Digest: l.build.Digest, Executable: l.build.Executable,
+		PID: os.Getpid(), At: l.cfg.Now().UTC(),
+		RestartRequest: os.Getenv(restart.RequestEnv),
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		if fact.RestartRequest == "" {
+			r := tx.Reader()
+			var kind string
+			var payload []byte
+			err := r.QueryRow(
+				`SELECT kind, payload FROM events WHERE kind = ? OR (kind = ? AND json_extract(payload, '$.role') = ?) ORDER BY seq DESC LIMIT 1`,
+				StopRequestedKind, restart.BuildKind, restart.RoleDrain,
+			).Scan(&kind, &payload)
+			switch {
+			case err == nil && kind == StopRequestedKind:
+				var stop struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal(payload, &stop); err != nil {
+					return err
+				}
+				if stop.ID != "" {
+					fact.StopRequest = stop.ID
+				} else {
+					fact.StopRequest = "stop-drain"
+				}
+			case err == nil:
+				// Prior drain build-started with no intervening stop request.
+			case errors.Is(err, sql.ErrNoRows):
+				var stopRequested int
+				sErr := r.QueryRow(
+					`SELECT COALESCE(stop_requested, 0) FROM drain_sessions ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+				).Scan(&stopRequested)
+				switch {
+				case errors.Is(sErr, sql.ErrNoRows):
+					fact.Initial = true
+				case sErr != nil:
+					return sErr
+				case stopRequested > 0:
+					fact.StopRequest = "drain_sessions"
+				}
+			default:
+				return err
+			}
+		}
+		return restart.PublishBuildTx(tx, fact)
+	})
+}
+
 // adoptRestart publishes the live build and answers only the request carried across exec.
 // It does not pause, resume or record a starting build for any run.
 func (l *Loop) adoptRestart(ctx context.Context) error {
 	if l.cfg.Restart == nil {
 		return nil
 	}
-	if err := restart.PublishBuild(ctx, l.cfg.Store, restart.BuildFact{
-		Role: restart.RoleDrain, Revision: l.build.Revision, Time: l.build.Time,
-		Modified: l.build.Modified, Digest: l.build.Digest, Executable: l.build.Executable,
-		PID: os.Getpid(), At: l.cfg.Now().UTC(),
-		RestartRequest: os.Getenv(restart.RequestEnv),
-	}); err != nil {
+	if err := l.publishDrainBuild(ctx); err != nil {
 		return err
 	}
 	if err := alarms.ClearStoreRollFallback(l.cfg.Store); err != nil {

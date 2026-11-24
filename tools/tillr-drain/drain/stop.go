@@ -3,6 +3,7 @@ package drain
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,8 +16,25 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
+
+// StopRequestedKind records that drain.Stop flagged at least one live local loop session.
+const StopRequestedKind = "drain.stop-requested"
+
+func init() {
+	if err := event.Register(StopRequestedKind, Utility); err != nil {
+		panic(err)
+	}
+}
+
+type stopRequested struct {
+	ID         string    `json:"id"`
+	SessionIDs []string  `json:"session_ids"`
+	EndRuns    bool      `json:"end_runs"`
+	At         time.Time `json:"at"`
+}
 
 // startRunFace serializes startup with the interruption record. EndRuns can
 // discover an already started face from its inherited process environment even
@@ -355,8 +373,43 @@ func stop(ctx context.Context, cfg StopConfig, report *StopReport) error {
 			flag = 2
 		}
 		if err := db.WriteTx(ctx, func(tx *store.Tx) error {
+			var stoppedIDs []string
 			for _, s := range sessions {
-				if _, err := tx.Exec(`UPDATE drain_sessions SET stop_requested = MAX(COALESCE(stop_requested,0), ?) WHERE session_id = ? AND ended_at IS NULL`, flag, s.id); err != nil {
+				res, err := tx.Exec(`UPDATE drain_sessions SET stop_requested = MAX(COALESCE(stop_requested,0), ?) WHERE session_id = ? AND ended_at IS NULL`, flag, s.id)
+				if err != nil {
+					return err
+				}
+				affected, err := res.RowsAffected()
+				if err != nil {
+					return err
+				}
+				if affected > 0 {
+					stoppedIDs = append(stoppedIDs, s.id)
+				}
+			}
+			if len(stoppedIDs) > 0 {
+				var suffix [4]byte
+				if _, err := rand.Read(suffix[:]); err != nil {
+					return fmt.Errorf("minting a stop id: %v", err)
+				}
+				utcAt := at.UTC()
+				id := fmt.Sprintf("stop-drain-%d-%x", utcAt.UnixMilli(), suffix)
+				body, err := json.Marshal(stopRequested{
+					ID:         id,
+					SessionIDs: stoppedIDs,
+					EndRuns:    endRuns,
+					At:         utcAt,
+				})
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Append(event.Event{
+					Kind:       StopRequestedKind,
+					ObjectType: "session",
+					ObjectID:   &id,
+					Payload:    body,
+					At:         utcAt,
+				}); err != nil {
 					return err
 				}
 			}

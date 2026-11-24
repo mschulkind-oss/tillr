@@ -9,6 +9,7 @@ covers:
   - tools/tillr/settings/settings.go
   - tools/tillr-drain/restart/restart.go
   - tools/tillr-drain/drain/restart.go
+  - tools/tillr-drain/drain/stop.go
   - tools/tillr-drain/drain/schema_roll.go
   - tools/tillr-drain/alarms/store_roll.go
   - tools/tillr/store/open.go
@@ -61,7 +62,7 @@ binary rolls and green-pointer or trunk-tip pushes.
 
 | Component | Lives in |
 | :--- | :--- |
-| Durable restart request, answer, build-started events, digest comparison, and launcher resolution | [`tools/tillr-drain/restart/restart.go`](../../tools/tillr-drain/restart/restart.go) (`File`, `ReadState`, `ReadAnswers`, `AwaitAnswer`, `Restarter`, `PublishBuild`, `ReadBuild`, `LauncherCandidate`, `FileDigest`) |
+| Durable restart request, answer, build-started events, digest comparison, and launcher resolution | [`tools/tillr-drain/restart/restart.go`](../../tools/tillr-drain/restart/restart.go) (`File`, `ReadState`, `ReadAnswers`, `AwaitAnswer`, `Restarter`, `PublishBuild`, `PublishBuildTx`, `ReadBuild`, `LauncherCandidate`, `FileDigest`) |
 | Drain loop restart gate, mechanical lock, examination handoff, `syscall.Exec`, and inherited-child reaping | [`tools/tillr-drain/drain/restart.go`](../../tools/tillr-drain/drain/restart.go) (`adoptRestart`, `gateRestart`, `inheritedChildren`, `reapInherited`), [`restart_work.go`](../../tools/tillr-drain/drain/restart_work.go) (`lockRestartMechanical`, `lockRestartSettlement`, `restartDefersToSettlement`, `restartWork`), [`restart_examination.go`](../../tools/tillr-drain/drain/restart_examination.go) (`releaseRestartExaminations`, `reclaimDetachedGateExaminations`), [`restart_judge.go`](../../tools/tillr-drain/drain/restart_judge.go), [`restart_rolling.go`](../../tools/tillr-drain/drain/restart_rolling.go), [`loop.go`](../../tools/tillr-drain/drain/loop.go) (`verify`), [`settle_judge.go`](../../tools/tillr-drain/drain/settle_judge.go) (`claimSettledCandidateJudge`, `runCandidateExamination`), [`tools/tillr-drain/main.go`](../../tools/tillr-drain/main.go) (`restartFace`, `loopFace --check`) |
 | Detached run and landing-gate sessions, file-backed streams, session pause, `SIGUSR1` gap stop, and continuation | [`tools/tillr-drain/drain/steps.go`](../../tools/tillr-drain/drain/steps.go) (`ProcessSteps.Run`, `ProcessSteps.Gate`), [`tools/tillr-run/run/pause.go`](../../tools/tillr-run/run/pause.go) (`ReadPauseKind`, `RequestPause`, `prepareContinuationSession`), [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go), [`tools/tillr-run/backends/pi/stop-at-gap`](../../tools/tillr-run/backends/pi/stop-at-gap) |
 | Post-restart build migration for workers and parallel read-only groups | [`tools/tillr-drain/drain/build_restart.go`](../../tools/tillr-drain/drain/build_restart.go) (`migrateBuildRuns`), [`build_readers.go`](../../tools/tillr-drain/drain/build_readers.go) (`claimBuildReaders`), [`parallel_restart.go`](../../tools/tillr-drain/drain/parallel_restart.go) (`restartParallel`) |
@@ -91,12 +92,16 @@ dedicated SQLite tables:
   order alongside the older ones; `Restarter.Settle` answers every older request
   with `"superseded"` (`detail` naming the winning request ID) before acting on
   the newest.
-- **`drain.build-started`** (`BuildKind`, written by `PublishBuild` and read by
-  `ReadBuild`): records `BuildFact` (`role`, `revision`, `time`, `modified`,
-  `digest`, `executable`, `pid`, `at`) whenever a loop or observatory server
-  starts or completes a restart. For a drain that replaces its running program
-  to fulfill a restart request, `restart_request` holds the request ID. Other
-  starts omit that field.
+- **`drain.build-started`** (`BuildKind`, written by `PublishBuild` and
+  `PublishBuildTx` and read by `ReadBuild`): records `BuildFact` (`role`,
+  `revision`, `time`, `modified`, `digest`, `executable`, `pid`, `at`) whenever
+  a loop or observatory server starts or completes a restart. For a drain that
+  replaces its running program to fulfill a restart request, `restart_request`
+  holds the request ID; for a drain starting after `tillr-drain stop` (which
+  appends `drain.stop-requested` when flagging live local sessions),
+  `stop_request` holds that stop ID (or `"drain_sessions"` for a pre-event
+  session stop); for the first drain start in a store with no prior drain build
+  or session, `initial` is `true`. Other starts omit those fields.
 
 ### Resolving and comparing the candidate binary
 

@@ -589,10 +589,14 @@ type BuildFact struct {
 	At         time.Time `json:"at"`
 	// RestartRequest is the ID carried across an in-place drain restart.
 	RestartRequest string `json:"restart_request,omitempty"`
+	// StopRequest is the ID of the stop request that ended the preceding drain loop.
+	StopRequest string `json:"stop_request,omitempty"`
+	// Initial is true on the first drain start in a store with no prior drain build or session.
+	Initial bool `json:"initial,omitempty"`
 }
 
-// PublishBuild records the running build of one role.
-func PublishBuild(ctx context.Context, storePath string, fact BuildFact) error {
+// PublishBuildTx records the running build of one role inside an open write transaction.
+func PublishBuildTx(tx *store.Tx, fact BuildFact) error {
 	if fact.At.IsZero() {
 		fact.At = time.Now().UTC()
 	}
@@ -600,15 +604,23 @@ func PublishBuild(ctx context.Context, storePath string, fact BuildFact) error {
 	if err != nil {
 		return err
 	}
+	id := fmt.Sprintf("%s-%d", fact.Role, fact.PID)
+	_, err = tx.Append(event.Event{Kind: BuildKind, ObjectType: "build", ObjectID: &id, Payload: body, At: fact.At})
+	return err
+}
+
+// PublishBuild records the running build of one role.
+func PublishBuild(ctx context.Context, storePath string, fact BuildFact) error {
+	if fact.At.IsZero() {
+		fact.At = time.Now().UTC()
+	}
 	s, err := store.Open(ctx, storePath, true)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	id := fmt.Sprintf("%s-%d", fact.Role, fact.PID)
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Append(event.Event{Kind: BuildKind, ObjectType: "build", ObjectID: &id, Payload: body, At: fact.At})
-		return err
+		return PublishBuildTx(tx, fact)
 	})
 }
 
