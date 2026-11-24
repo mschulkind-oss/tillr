@@ -111,7 +111,7 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 			if signature != s.itemsSignature {
 				return reseed()
 			}
-			delta.lanes, delta.quota, delta.unsavedOutcomeInputs = true, true, true
+			delta.lanes, delta.quota, delta.unsavedOutcomeInputs, delta.unlogged = true, true, true, true
 		}
 		if inspectExternal && next.backendOutcomes != nil && next.backendOutcomes.unsaved > 0 {
 			delta.unsavedOutcomeInputs = true
@@ -152,7 +152,10 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 		}
 		lanesChanged := delta.rotation || !maps.Equal(prev.storeLanes, next.storeLanes) ||
 			!maps.Equal(prev.deskOwners, next.deskOwners) || !reflect.DeepEqual(prev.forks, next.forks) ||
-			((delta.lanes || len(delta.pending) > 0) && !maps.Equal(prev.heldLanes(), next.heldLanes()))
+			((delta.lanes || len(delta.pending) > 0 || len(delta.reopened) > 0) && !maps.Equal(prev.heldLanes(), next.heldLanes()))
+		for _, id := range delta.reopened {
+			touched[id] = true
+		}
 		// Publish occupancy now; amortize the queue-wide repair of cached
 		// lane-sensitive holds over the safety interval.
 		full := !maps.Equal(prev.shut, next.shut) || !maps.Equal(prev.quotaShut, next.quotaShut) ||
@@ -182,9 +185,10 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 
 type startStoreDelta struct {
 	place, history, priors, inputs, lanes, quota, rotation bool
-	backendEvents, unsavedOutcomeInputs                    bool
+	backendEvents, unsavedOutcomeInputs, unlogged          bool
 	pending, faults                                        []event.Event
 	relevant, items                                        []event.Event
+	reopened                                               []string
 }
 
 func isPlaceOnlyEvent(e event.Event) bool {
@@ -263,9 +267,11 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 	return true
 }
 
-func (d startStoreDelta) apply(r *store.Reader, s *startSnapshot, at time.Time, policy *Policy) error {
+func (d *startStoreDelta) apply(r *store.Reader, s *startSnapshot, at time.Time, policy *Policy) error {
+	pendingCloned := false
 	if len(d.pending) > 0 {
 		s.pending = clonePendingHistoryState(s.pending)
+		pendingCloned = true
 		if err := foldPendingHistory(nil, 0, s.pending, d.pending); err != nil {
 			return err
 		}
@@ -318,7 +324,14 @@ func (d startStoreDelta) apply(r *store.Reader, s *startSnapshot, at time.Time, 
 			return err
 		}
 	}
-	if d.lanes || len(d.pending) > 0 {
+	if len(d.pending) > 0 || d.history || d.priors || d.unlogged || len(d.faults) > 0 || len(d.items) > 0 {
+		var err error
+		s.pending, d.reopened, err = reopenPausedJudgeUnreadableSnapshot(r, s.pending, pendingCloned)
+		if err != nil {
+			return err
+		}
+	}
+	if d.lanes || len(d.pending) > 0 || len(d.reopened) > 0 {
 		if err := s.refreshLaneFacts(r, at, d.lanes); err != nil {
 			return err
 		}

@@ -475,7 +475,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	// A terminal run released its lease, but its candidate still occupies the
 	// worktree until settlement and judgment have accounted for it.
 	for _, work := range works {
-		if !work.Done && !work.LaneReleased {
+		if !work.Done && !work.LaneReleased && !work.LaneBusyByOther {
 			lanes[work.Decision.LaneID] = true
 			deskOwners[work.Decision.LaneID] = work.Decision.ItemID
 		}
@@ -673,6 +673,13 @@ func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges ma
 		ownLeases, err := activeLeases(r, p.at, []string{work.Decision.LaneID})
 		if err != nil {
 			return nil, err
+		}
+		if work.LaneBusyByOther || (work.ReopenedPausedJudge && len(ownLeases) > 0) {
+			p.pausedBlocked[row.ItemID] = true
+			if p.captureStart == nil {
+				p.laneShort = true
+			}
+			continue
 		}
 		if len(ownLeases) > 0 {
 			continue

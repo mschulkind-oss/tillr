@@ -234,7 +234,10 @@ func (l *Loop) reconcileStartLanes(ctx context.Context, rotation []string, at ti
 				}
 				if before.pending != nil && rotation == nil {
 					folded = clonePendingHistoryState(before.pending)
-					return foldPendingHistory(r, before.lastEventSeq, folded, nil)
+					if err := foldPendingHistory(r, before.lastEventSeq, folded, nil); err != nil {
+						return err
+					}
+					return reopenPausedJudgeUnreadable(r, folded)
 				}
 				return nil
 			}); err != nil {

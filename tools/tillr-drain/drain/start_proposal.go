@@ -77,7 +77,7 @@ func shadowRotation(r *store.Reader, tick *Pass) (map[string]laneRefusal, error)
 func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, rows []itemRow, inputs map[string]*RunInputs, unproved map[string]string) (*planner, error) {
 	lanes, owners := s.heldLanes(), maps.Clone(s.deskOwners)
 	for _, work := range s.pending.works {
-		if !work.Done && !work.LaneReleased {
+		if !work.Done && !work.LaneReleased && !work.LaneBusyByOther {
 			owners[work.Decision.LaneID] = work.Decision.ItemID
 		}
 	}
@@ -235,7 +235,7 @@ func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at
 func (s startSnapshot) heldLanes() map[string]bool {
 	lanes := maps.Clone(s.storeLanes)
 	for _, work := range s.pending.works {
-		if !work.Done && !work.LaneReleased {
+		if !work.Done && !work.LaneReleased && !work.LaneBusyByOther {
 			lanes[work.Decision.LaneID] = true
 		}
 	}

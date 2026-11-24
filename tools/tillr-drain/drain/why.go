@@ -554,7 +554,9 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			if pauseErr != nil {
 				return answer, pauseErr
 			}
-			if paused && len(ownLeases) == 0 && !tick.OutLanes[d.LaneID] && !documentDesk(d.LaneID) {
+			if paused && (works[it.ItemID].LaneBusyByOther || (works[it.ItemID].ReopenedPausedJudge && len(ownLeases) > 0)) {
+				row.WaitingOn = append(row.WaitingOn, d.LaneID)
+			} else if paused && len(ownLeases) == 0 && !tick.OutLanes[d.LaneID] && !documentDesk(d.LaneID) {
 				for _, lane := range offered {
 					if lane == d.LaneID {
 						continue

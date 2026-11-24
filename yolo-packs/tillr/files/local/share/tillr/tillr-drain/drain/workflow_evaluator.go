@@ -135,15 +135,27 @@ func (l *Loop) settleEvaluator(ctx context.Context, d Decision, rec run.Record, 
 	}
 	var outcome string
 	var refused bool
+	var nonQuotaPaused bool
 	e = db.ReadTx(ctx, func(r *store.Reader) error {
 		if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id=?`, d.RunRequest.RunID).Scan(&outcome); err != nil {
 			return err
 		}
-		return r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='run' AND object_id=? AND json_extract(payload,'$.step')=?)`, RefusalKind, d.RunRequest.RunID, RefusalVerifyNotDone).Scan(&refused)
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='run' AND object_id=? AND json_extract(payload,'$.step')=?)`, RefusalKind, d.RunRequest.RunID, RefusalVerifyNotDone).Scan(&refused); err != nil {
+			return err
+		}
+		var pauseErr error
+		_, nonQuotaPaused, pauseErr = pausedRunNonQuota(r, d.RunRequest.RunID)
+		return pauseErr
 	})
 	db.Close()
 	if e != nil {
 		return true, e
+	}
+	if outcome == "evaluated-fail" && nonQuotaPaused && !refused {
+		if err := l.nodeOutcome(ctx, d, "running"); err != nil {
+			return true, err
+		}
+		outcome = "running"
 	}
 	// A checked refusal is durable before cleanup and examination. Replaying it
 	// must not recheck the lane after cleanup has started.
@@ -168,6 +180,17 @@ func (l *Loop) settleEvaluator(ctx context.Context, d Decision, rec run.Record, 
 	}
 	if err := l.nodeOutcome(ctx, d, "passed"); err != nil {
 		return true, err
+	}
+	if rec.State == run.StatePaused {
+		if err := l.readStore(ctx, func(r *store.Reader) error {
+			fresh, readErr := terminalRecord(r, d.RunRequest.RunID)
+			if readErr == nil && fresh != nil {
+				rec = *fresh
+			}
+			return readErr
+		}); err != nil {
+			return true, err
+		}
 	}
 	next, err := l.nextWorkflowNode(ctx, d)
 	if err != nil {

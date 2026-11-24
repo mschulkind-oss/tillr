@@ -2439,6 +2439,18 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			prepared = nodeErr == nil
 			return laneOutcome{err: nodeErr}
 		}
+		if nodeErr == nil && evaluatorNode(decision) && record.State == run.StatePaused {
+			if readErr := l.readStore(ctx, func(r *store.Reader) error {
+				fresh, err := terminalRecord(r, request.RunID)
+				if err == nil && fresh != nil {
+					record = *fresh
+					log = logTail(record.ArtifactRefs)
+				}
+				return err
+			}); readErr != nil {
+				return laneOutcome{err: readErr}
+			}
+		}
 	}
 	// An interrupted run is evidence about the supervisor, not the item. It is
 	// neither judged nor charged to any attempt budget, even if it left a commit.
