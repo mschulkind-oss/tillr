@@ -38,7 +38,7 @@ vantage:
 
 # Drain Pass and Successor Reference
 
-> **Delivered copy.** This is `docs/reference/tillr-drain-successor.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-drain-successor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-drain-successor.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-drain-successor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Current reference, verified 2026-11-20 against `1552b7c90c8fdfd6cfac469dd8e476536c974d6e`. UNMEASURED: Go test suites verify replay-invariant identities, zero-write empty passes, non-blocking sibling dispatch, and trigger wakeups; live-night lane-idle reduction against the retired batch-tick loop is not measured in this document.
 

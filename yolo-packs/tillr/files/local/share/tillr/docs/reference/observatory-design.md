@@ -40,7 +40,7 @@ summary: "How `tillr-view` enforces explicit epistemic provenance, three-way sta
 
 # Observatory truthfulness, provenance, and shared primitives
 
-> **Delivered copy.** This is `docs/reference/observatory-design.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/observatory-design.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 `tillr-view` serves the read-only truthfulness layer and shared UI primitives
 that every observatory page and CLI summary builds on. Its job is to make sure a

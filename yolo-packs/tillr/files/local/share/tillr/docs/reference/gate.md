@@ -22,7 +22,7 @@ summary: "How the gate works: one JSON declaration per check, a fast tier that j
 
 # The gate
 
-> **Delivered copy.** This is `docs/reference/gate.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/gate.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Source-verified 2026-11-24 against `c9ccb4a18bad26d6f599374cee8686c86fec8710`.
 UNMEASURED: this reference was written by reading the code, not by observing a gate run.

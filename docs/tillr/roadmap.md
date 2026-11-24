@@ -51,17 +51,6 @@ First by rule 3: every other entry is built and verified by someone who starts f
    - **Outcome:** every suite passes on a clean machine and in continuous integration, with no
      dependence on the length of a directory path, on a program outside the tree, or on timing.
    - **Known failures:**
-     - Unix socket paths that exceed the kernel's limit when the scratch directory path is long:
-       the `TestWaitForTrigger*` tests, `TestRefreshSessionHeartbeatDoesNotWakeTrigger`,
-       `TestDrainNotifyAndNoNotifyParityUnderSteppedClock` and `TestItemRequestToLoopWakeLatency`
-       in [`trigger_notify_test.go`](../../tools/tillr-drain/drain/trigger_notify_test.go).
-     - Two tests that need a fork build program the tree does not have:
-       `TestForkBuildDeliveryAndSuccessiveLaneBases` and
-       `TestPostLandingPiRollMovedBranchBuildsNewTipAndWorkerRecordsKey`. Entry 4 removes them
-       with the code they cover.
-     - [`definition_startup_test.go`](../../tools/tillr-drain/drain/definition_startup_test.go)
-       puts a failing `git` stand-in on `PATH` before the shared drain binary is built, so the
-       build of that binary fails when this test runs first.
      - [`detached_gate_restart_test.go`](../../tools/tillr-drain/drain/detached_gate_restart_test.go)
        races its gate fixture for a process-id file.
      - [`wake_test.go`](../../tools/tillr-watch/wake_test.go) gives a wake three seconds

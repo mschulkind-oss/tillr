@@ -44,7 +44,7 @@ var siblingMu sync.Mutex
 func drive(t *testing.T, path string, args ...string) (int, []byte) {
 	t.Helper()
 	cmd := exec.Command(path, args...)
-	// The gate program (tools/fork-check.py) reaches tillr-gate by name, so the binaries
+	// A program a face runs reaches tillr-gate by name, so the binaries
 	// this case just built go first on PATH. Otherwise it runs whatever launcher the
 	// host delivered, which can predate the source under test and refuse its flags.
 	cmd.Env = append(os.Environ(), "BOARD_DB=", "XDG_STATE_HOME="+scratch(t, "state"),
@@ -208,26 +208,14 @@ func newRepoFixture(t *testing.T) repoFixture {
 	return repoFixture{dir: dir, worktree: worktree, baseSHA: base, headSHA: head, treeSHA: tree}
 }
 
-// registry exports the check registry from the candidate worktree and answers its path.
-//
-// The declarations are the gate's own: `--registry-json` derives them from the tree, so the
-// plan this case builds names the real declaration set -- including the in-process checks a
-// hand-written registry cannot name -- rather than one trivial check the fixture invented.
+// registry answers the candidate's own check declarations: the directory the gate plans
+// from, one JSON file per check.
 func (repo repoFixture) registry(t *testing.T) string {
 	t.Helper()
-	cmd := exec.Command("python3", "tools/fork-check.py", "--registry-json")
-	cmd.Dir = repo.worktree
-	cmd.Env = gitEnv()
-	out, err := cmd.Output()
-	if err != nil {
-		stderr := ""
-		if exit, ok := err.(*exec.ExitError); ok {
-			stderr = string(exit.Stderr)
-		}
-		t.Fatalf("exporting the check registry from %s failed: %v\n%s", repo.worktree, err, stderr)
+	path := filepath.Join(repo.worktree, "tools", "gate", "checks")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the candidate carries no check declarations: %v", err)
 	}
-	path := filepath.Join(scratch(t, "registry"), "registry.json")
-	writeFile(t, path, string(out))
 	return path
 }
 
@@ -338,107 +326,22 @@ func TestTheComposedPipelineRunsEndToEndOnAFixture(t *testing.T) {
 		t.Fatalf("the run's worktree holds %d entries, want none: the echo provider writes nothing", len(entries))
 	}
 
-	// Steps 5 and 6: gate plan from the real registry, then gate run in the candidate
-	// worktree. The plan is the gate's own declaration set, exported by the gate, so it
-	// owes the in-process checks a hand-written registry cannot name; the run then hands
-	// the plan to the real gate program, which is what executes those checks over the
-	// committed range.
+	// Steps 5 and 6: gate plan from the candidate's own declarations, then gate run in the
+	// candidate worktree. The judgment is a fixture program that passes: this case proves
+	// that the plan, the verdict and the landing bind one another, and the repository's
+	// declared checks have their own suites.
 	changePath := filepath.Join(scratch(t, "records"), "change.json")
-	writeFile(t, changePath, envelope("gate.change", "change_001", map[string]any{
-		"base_sha":      repo.baseSHA,
-		"tree_sha":      repo.treeSHA,
-		"changed_paths": []string{"candidate.txt"},
-		"subject":       "cand_007",
-	}))
+	driveOK(t, sibling(t, "gate"), "change", "--item", "item_042", "--lane", requests[0].Payload.LaneID,
+		"--run", requests[0].Payload.RunID, "--worktree", repo.worktree,
+		"--base", repo.baseSHA, "--head", repo.headSHA, "--now", now, "--output", changePath)
 	planPath := filepath.Join(scratch(t, "records"), "gate-plan.json")
 	driveOK(t, sibling(t, "gate"), "plan", "--registry", repo.registry(t), "--input", changePath,
 		"--output", planPath, "--root", repo.worktree)
 
-	// The plan owes the gate's in-process check: the registry is the real one, so the plan
-	// names a check no command can run, and the gate run below is what executes it.
-	planRaw, err := os.ReadFile(planPath)
-	if err != nil {
-		t.Fatalf("reading the plan record failed: %v", err)
-	}
-	var planRecord struct {
-		Payload struct {
-			InProcess []struct {
-				Kind string `json:"kind"`
-			} `json:"in_process"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(planRaw, &planRecord); err != nil {
-		t.Fatalf("decoding the plan record failed: %v\n%s", err, planRaw)
-	}
-	owed := false
-	for _, check := range planRecord.Payload.InProcess {
-		if check.Kind == "file-size" {
-			owed = true
-		}
-	}
-	if !owed {
-		t.Fatalf("the plan owes no in-process check, want the real registry's file-size: %s", planRaw)
-	}
-
 	verdictPath := filepath.Join(scratch(t, "records"), "gate-verdict.json")
-	spansPath := filepath.Join(scratch(t, "records"), "gate-spans.json")
 	driveOK(t, sibling(t, "gate"), "run", "--input", planPath, "--worktree", repo.worktree,
 		"--output", verdictPath, "--logs", filepath.Join(scratch(t, "gate-logs"), "logs"),
-		"--gate", "python3",
-		"--gate-arg", "tools/fork-check.py",
-		"--gate-arg", "--since",
-		"--gate-arg", repo.baseSHA,
-		"--gate-arg", "--no-wait",
-		"--gate-arg", "--spans-out",
-		"--gate-arg", spansPath)
-
-	// The gate's own per-check spans, through the real gate and the real face: a plan span
-	// and one span per executed check at nanosecond precision. This is the file the drain's
-	// `gate_spans` table is written from, so a run whose spans file lost its shape is a
-	// measurement the board cannot draw -- and the in-process `file-size` guard above is
-	// exactly the check whose evidence `seconds` rounds to 0.0s.
-	spansRaw, err := os.ReadFile(spansPath)
-	if err != nil {
-		t.Fatalf("the gate wrote no spans file at %s: %v", spansPath, err)
-	}
-	var spans struct {
-		PlanSpan struct {
-			CheckID string `json:"check_id"`
-			StartNS int64  `json:"start_ns"`
-			EndNS   int64  `json:"end_ns"`
-		} `json:"plan_span"`
-		CheckSpans []struct {
-			CheckID string `json:"check_id"`
-			StartNS int64  `json:"start_ns"`
-			EndNS   int64  `json:"end_ns"`
-			Waited  string `json:"waited_ms_json"`
-		} `json:"check_spans"`
-		Skipped []json.RawMessage `json:"skipped_checks"`
-	}
-	if err := json.Unmarshal(spansRaw, &spans); err != nil {
-		t.Fatalf("the gate's spans file is not JSON: %v\n%s", err, spansRaw)
-	}
-	if spans.PlanSpan.CheckID != "plan" {
-		t.Fatalf("the plan span's check id is %q, want plan: %s", spans.PlanSpan.CheckID, spansRaw)
-	}
-	if spans.PlanSpan.StartNS <= 0 || spans.PlanSpan.EndNS <= spans.PlanSpan.StartNS {
-		t.Fatalf("the plan span's bounds are %d..%d, want a positive start and a later end",
-			spans.PlanSpan.StartNS, spans.PlanSpan.EndNS)
-	}
-	if len(spans.CheckSpans) == 0 {
-		t.Fatalf("the gate recorded no executed check span: %s", spansRaw)
-	}
-	for _, span := range spans.CheckSpans {
-		if span.CheckID == "" || span.StartNS <= 0 || span.EndNS < span.StartNS {
-			t.Fatalf("a check span is not addressable: %+v", span)
-		}
-		if span.Waited == "" {
-			t.Fatalf("the check span %s carries no waited measurement: %+v", span.CheckID, span)
-		}
-	}
-	if len(spans.Skipped) == 0 {
-		t.Fatalf("the gate recorded no skipped step, want the steps it did not ask: %s", spansRaw)
-	}
+		"--gate", "true")
 
 	// Step 7: land pass, which squashes the judged head onto the trunk because the verdict
 	// binds the tree. There is no queue step: the landing takes the item, the run, the base

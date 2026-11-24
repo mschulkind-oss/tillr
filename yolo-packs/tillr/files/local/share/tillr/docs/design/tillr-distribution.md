@@ -6,7 +6,7 @@ next: "None open: OQ-TD1 to OQ-TD4 are settled by what is built."
 
 # Ship `tillr` as one source-built pack with eight `PATH` binaries and a two-skill contract
 
-> **Delivered copy.** This is `docs/design/tillr-distribution.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-distribution.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** built. [`yolo-packs/tillr`](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/pack.json) ships the source tree and the eight launchers.
 

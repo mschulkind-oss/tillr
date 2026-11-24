@@ -15,7 +15,7 @@ next: "Build the two units of Section 8, written with no item directive until th
 
 # The Idea Pipeline: From Owner Sentence to Landed Commit
 
-> **Delivered copy.** This is `docs/design/tillr-idea-pipeline.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-idea-pipeline.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-idea-pipeline.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-idea-pipeline.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Partly built. [Section 5](#5-what-is-built-and-what-is-not) names each part's state, and
 [Section 8](#8-remaining-work) writes out the two units that remain.

@@ -630,7 +630,6 @@
     "TestFixerRangeIncludesEveryCommitEvenRevertedPaths": 0.27,
     "TestForeignTrunkCommitDoesNotHoldGatedCandidate": 1.86,
     "TestForkBuildCommandContracts": 12.94,
-    "TestForkBuildDeliveryAndSuccessiveLaneBases": 10.5,
     "TestForkCheckoutFreshStagingAfterLandedRebase": 3.79,
     "TestForkCheckoutFreshStagingDoesNotWriteThroughCacheAlias": 0.27,
     "TestForkCheckoutFreshStagingFastForwardsWithoutRunPin": 0.24,

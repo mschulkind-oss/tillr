@@ -1,6 +1,6 @@
 {
   "format": "tillr-pack-docs-1",
-  "commit": "bf99bb8059cac831cc12fe7ef9e11482f49539e9",
+  "commit": "e613f54fde80dd12d07ee2b82309427875e2831e",
   "date": "2026-11-24",
   "index": "docs/tillr/design-status.md",
   "jail_root": "~/.local/share/tillr",
@@ -42,7 +42,7 @@
     },
     {
       "source": "docs/tillr/roadmap.md",
-      "blob": "03b33914ca4eec7c792e99ec4e9cc2b0642c53f7",
+      "blob": "879d35ce6d29fc9f97a826cb567e05d5b1be5125",
       "delivered": "docs/tillr/roadmap.md"
     },
     {
