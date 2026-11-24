@@ -1,11 +1,11 @@
 # =============================================================================
 # TILLR BUILD SYSTEM
 # =============================================================================
-# Modern build system for repository management
+# Recipes for building, testing and operating tillr; see README.md
 
 # Default command - show help
 default:
-    @just help
+    @just --list
 
 # Python is excluded: adopting its formatter would rewrite 84 files at once.
 # shell, TypeScript, and Lua are excluded because they have no pinned formatter.
@@ -209,122 +209,6 @@ format *args:
             clean |= formatted_clean
             save_clean(cache_file, clean, (groups.keys() - dirty_digests) | formatted_clean)
 
-# Create portable nvim config archive
-nvim_dist:
-    #!/usr/bin/env bash
-    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    FILENAME="matt-nvim-config-${TIMESTAMP}.tar.bz2"
-    tar -cjf "$FILENAME" --transform 's,^config/nvim,.config/nvim,' config/nvim
-    echo "✓ Created $FILENAME"
-    # Create/update symlink to latest
-    ln -sf "$FILENAME" matt-nvim-config.tar.bz2
-    echo "🔗 Updated symlink: matt-nvim-config.tar.bz2 -> $FILENAME"
-    echo "📦 Extract with: tar -xjf matt-nvim-config.tar.bz2"
-    # Clean up old versions (keep only the most recent)
-    ls -t matt-nvim-config-*.tar.bz2 2>/dev/null | tail -n +2 | xargs -r rm -f
-    echo "🧹 Cleaned up old archives (kept only the most recent)"
-
-# Create nvim config archive with exclusions
-nvim_dist_clean:
-    #!/usr/bin/env bash
-    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    FILENAME="matt-nvim-config-${TIMESTAMP}.tar.bz2"
-    tar -cjf "$FILENAME" --transform 's,^config/nvim,.config/nvim,' --exclude='config/nvim/.git' --exclude='config/nvim/tmp' --exclude='config/nvim/*.log' config/nvim
-    echo "✓ Created clean $FILENAME"
-    # Create/update symlink to latest
-    ln -sf "$FILENAME" matt-nvim-config.tar.bz2
-    echo "🔗 Updated symlink: matt-nvim-config.tar.bz2 -> $FILENAME"
-    echo "📦 Extract with: tar -xjf matt-nvim-config.tar.bz2"
-    # Clean up old versions (keep only the most recent)
-    ls -t matt-nvim-config-*.tar.bz2 2>/dev/null | tail -n +2 | xargs -r rm -f
-    echo "🧹 Cleaned up old archives (kept only the most recent)"
-
-# Show archive contents (latest file)
-nvim_dist_list:
-    #!/usr/bin/env bash
-    LATEST_FILE=$(ls -t matt-nvim-config-*.tar.bz2 2>/dev/null | head -n1)
-    if [ -n "$LATEST_FILE" ]; then
-        tar -tjf "$LATEST_FILE"
-    else
-        echo "✗ No nvim config archives found"
-    fi
-
-# Extract and test the archive (latest file)
-nvim_dist_test:
-    #!/usr/bin/env bash
-    LATEST_FILE=$(ls -t matt-nvim-config-*.tar.bz2 2>/dev/null | head -n1)
-    if [ -n "$LATEST_FILE" ]; then
-        mkdir -p /tmp/nvim-test
-        tar -xjf "$LATEST_FILE" -C /tmp/nvim-test
-        echo "✓ Archive $LATEST_FILE extracted to /tmp/nvim-test"
-        echo "📁 Contents:"
-        ls -la /tmp/nvim-test/.config/nvim/
-    else
-        echo "✗ No nvim config archives found"
-    fi
-
-# Clean up test directory
-nvim_dist_cleanup:
-    rm -rf /tmp/nvim-test
-    @echo "🧹 Cleaned up test directory"
-
-# Release nvim config to public repo
-nvim_release:
-    #!/usr/bin/env bash
-    set -e
-    
-    # Check if .nvim-config-public exists
-    if [ ! -d ".nvim-config-public" ]; then
-        echo "✗ Error: .nvim-config-public directory not found"
-        echo "Please clone your public nvim config repo:"
-        echo "  git clone <your-repo-url> .nvim-config-public"
-        exit 1
-    fi
-    
-    # Check if it's a git repository
-    if [ ! -d ".nvim-config-public/.git" ]; then
-        echo "✗ Error: .nvim-config-public is not a git repository"
-        echo "Please clone your public nvim config repo:"
-        echo "  git clone <your-repo-url> .nvim-config-public"
-        exit 1
-    fi
-    
-    echo "✓ Found .nvim-config-public git repository"
-    
-    # Clean the target directory (remove everything except .git)
-    echo "🧹 Cleaning target directory..."
-    cd .nvim-config-public
-    find . -not -path './.git*' -not -name '.' -not -name '..' -exec rm -rf {} + 2>/dev/null || true
-    cd ..
-    
-    # Copy nvim config with proper structure for $HOME/.config/nvim
-    echo "📦 Copying nvim config..."
-    cp -r config/nvim/* .nvim-config-public/
-    
-    echo "✓ Nvim config copied to .nvim-config-public"
-    echo ""
-    echo "Next steps:"
-    echo "  1. cd .nvim-config-public"
-    echo "  2. git add ."
-    echo "  3. git commit -m 'Update nvim config'"
-    echo "  4. git push"
-    echo ""
-    echo "Users can then install with:"
-    echo "  git clone <your-repo-url> $HOME/.config/nvim"
-
-# Build Docker image for testing
-nvim_docker_build:
-    #!/usr/bin/env bash
-    docker buildx build -t nvim-config-test -f .docker/Dockerfile .
-
-# Build and run Neovim in Docker
-nvim_docker_test:
-    #!/usr/bin/env bash
-    set -e
-    just nvim_docker_build
-    docker run --rm -it nvim-config-test nvim
-
-
 # =============================================================================
 # PI FORKS
 # =============================================================================
@@ -339,41 +223,6 @@ nvim_docker_test:
 # yolo pack lint <pack>; commit. .forks/<name> itself is the shared cache: read it, do
 # not edit it (docs/pi/forks.md#a-lane-gets-its-own-checkout).
 
-# Status of every fork checkout against its series
-forks:
-    @bin/pi-forks status
-
-# Materialize each checkout from its series (--fork <name>; --lane <lane> for a lane's own
-# copy; --force to replace a divergent main)
-forks_setup *args:
-    @bin/pi-forks setup {{args}}
-
-# Write each checkout's main back as the delivery: the series, or a patch-branch fork's
-# patch/<name> moved to the lane tip (--fork <name>)
-forks_export *args:
-    @bin/pi-forks export {{args}}
-
-# Fail when a series is unreadable or does not replay to its checkout's main
-forks_check *args:
-    @bin/pi-forks check {{args}}
-
-# One command for upstream drift: rebase a series onto the upstream a launch would
-# build, re-export it at the new base, and verify the replay. A conflict is aborted
-# and the exact git commands to resolve it by hand are printed.
-forks_rebase *args:
-    @bin/pi-forks rebase {{args}}
-
-# The launch's series verdict, run per PACK. Never on the workspace root: that form
-# stages the whole tree, so a broken symlink under .forks/ fails every pack.
-forks_series_check *args:
-    @bin/pi-forks series-check {{args}}
-
-# Fail when a series' patch branch is not on the remote, or is not that series: the
-# published tip's tree against the series' replay tree at the same base, and the patch
-# ids of each. Read-only; asks the remote, so it needs network and a read credential.
-forks_published *args:
-    @bin/pi-forks patch-branch published {{args}}
-
 # Install this repository's git hooks (hooks/*) into the shared hooks directory, so the
 # patch-branch pre-push guard runs from the main checkout and every linked worktree.
 # A copy git already runs is replaced when it carries this repository's marker, and a
@@ -382,48 +231,6 @@ forks_published *args:
 # hooks/README.md and bin/hooks-install).
 hooks-install *args:
     @bin/hooks-install {{args}}
-
-# The patch branch's checks, for a timer, read-only and offline: how many releases behind
-# the upstream a launch would build each series is, and whether the patch branch still
-# merges it.
-# Exits non-zero on a stale series or a merge conflict; `just done` runs both invariants
-# itself, so this recipe is the shout a timer makes.
-patch-branch-check *args:
-    #!/usr/bin/env bash
-    rc=0
-    bin/pi-forks patch-branch lag {{args}} || rc=$?
-    bin/pi-forks patch-branch merge-check {{args}} || rc=$?
-    exit "$rc"
-
-# What each checkout's main changes over its series' base
-forks_diff *args:
-    @bin/pi-forks diff {{args}}
-
-# Local development build: npm ci when node_modules is missing, then the checkout's build -- hydrating upstream's catalog pin and building offline when the checkout carries one
-forks_build *args:
-    @bin/pi-forks build {{args}}
-
-# Run the forked pi straight from its checkout (the patched-pi testing loop)
-forks_run *args:
-    @bin/pi-forks run {{args}}
-
-# Build the self-profiler's static Go binary for its launcher
-# (tools/pi-profiler/pi-profiler-go): gitignored, built on demand, never deployed.
-profiler-build:
-    cd tools/pi-profiler && CGO_ENABLED=0 go build -o ./pi-profiler-go ./cmd/pi-profiler
-
-# Drive pi's queued-message states headlessly (tools/queued-message-states);
-# needs the .forks/pi checkout and its installed dependencies.
-queued-message-states *args:
-    @bash tools/queued-message-states/run {{args}}
-
-# Measure pi's session liveness headlessly (tools/session-liveness): expected GREEN. The stuck
-# compaction, the unresolved idle wait and the wedged send-now were fixed by patch 0149; the abort
-# of a compaction or branch summary with no run is bounded, and abandoning it clears its
-# registration instead of only releasing the wait. The open-run spec pins the unbounded contract on
-# purpose. Needs the .forks/pi checkout.
-session-liveness *args:
-    @bash tools/session-liveness/run {{args}}
 
 # Mirror the tillr pack's copy of every `tools/tillr*` module into
 # yolo-packs/tillr/files/local/share/tillr/<module>. The copy is committed because the
@@ -559,20 +366,6 @@ pack-docs:
     @python3 tools/pack-docs.py sync
     @python3 tests/pack-sync.test.py --fresh
 
-# Render and screenshot the pi-subagents Background work roster at many widths and
-# content mixes (tools/roster-storybook); writes $YOLO_DURABLE_DIR/roster-storybook.
-roster_storybook *args:
-    @bash tools/roster-storybook/run.sh {{args}}
-
-# Render the pi-archimedes footer status line at several widths and assert the WHALE
-# badge is visible (tools/footer-storybook); writes $YOLO_DURABLE_DIR/footer-storybook.
-footer_storybook *args:
-    @bash tools/footer-storybook/run.sh {{args}}
-
-# Live-reload dev server for the roster storybook: `just dev [port]` (default 5173).
-dev *args:
-    @bash tools/roster-storybook/dev.sh {{args}}
-
 # Serve the drain observatory for THIS checkout on http://127.0.0.1:<port> (`just observatory
 # 5000`; the default is 4318), from one process with the front end embedded. It builds
 # tillr-view and the tillr-drain it asks for Waiting from this tree (static, so a host and a
@@ -660,104 +453,4 @@ go-test-shards module="tools/tillr-drain" *args:
 # tests/fork-check.test.py fails the gate if a check asserts elapsed time or starts load.
 preflight *args:
     @python3 tools/fork-check.py --preflight {{args}}
-
-# Put every patch branch this repository requires on the remote: one per series in
-# bin/pi-forks.list, plus every branch a pack manifest names. A patch branch is the
-# delivery only once the remote has it, and nothing else here pushes one: bin/pi-forks
-# never pushes, and hooks/pre-push runs this same publish step first on every push it
-# inspects, so an ordinary push is what keeps origin current. Needs push credentials, so
-# run it on the host; `bin/pi-forks patch-branch published` is what proves, read-only,
-# that a published branch replays to its series.
-forks_publish *args:
-    @bin/patch-branches-publish {{args}}
-
-# Deploy any patched Arch package fork this checkout carries: `pkg-deploy sway`,
-# `pkg-deploy ironbar`, `pkg-deploy ai-usagebar`. One command covers both build
-# kinds (chroot + the signed `patched-local` repo, and AUR recipe + makepkg); an
-# unchanged run is read-only. The ai-usagebar deploy regenerates its patch
-# against the current AUR recipe and checks the delta before it builds. It is
-# unrelated to the pi patch series
-# (`bin/pi-forks`), which yolo builds and ships.
-pkg-deploy *args:
-    @python3 tools/arch-deploy.py {{args}}
-
-# Test deployment orchestration, the shared repo strategy and Sway inputs
-# without sudo or host changes.
-sway-check:
-    python3 -m pytest tests/test_sway_fork.py tests/test_sway_deploy.py tests/test_repo_forks.py
-    sh tests/sway-floating-modifier.test.sh
-    sh tests/sway-focus-tab.test.sh
-    sh tests/sway-workspace-numbers.test.sh
-    sh tests/media-toggle.test.sh
-    sh tests/media-toggle-setup.test.sh
-    sh tests/tv-volume.test.sh
-
-# The ai-usagebar package patch is generated from the local delta, never
-# hand-edited: it embeds that delta in the AUR recipe, carries the revision,
-# pins the manifest at the recipe version, and dry-runs the delta against the
-# upstream tag the recipe names. `--check` reports that drift without writing.
-ai-usagebar-fork-patch *args:
-    @python3 tools/ai-usagebar-fork-patch.py {{args}}
-
-# Test the ai-usagebar fork inputs, its deployment orchestration, and the Ironbar
-# modules that consume them, without sudo or a package build.
-ai-usagebar-check:
-    @if python3 -c "import pytest" 2>/dev/null; then python3 -m pytest tests/test_ai_usagebar_fork.py tests/test_ai_usagebar_deploy.py; else uvx pytest tests/test_ai_usagebar_fork.py tests/test_ai_usagebar_deploy.py; fi
-    @sh -c 'sh tests/ironbar-modules.test.sh; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 77 ]'
-
-# The ironbar package patch is generated from the local delta, never hand-edited:
-# it embeds that delta in Arch's recipe and carries the revision.
-ironbar-fork-patch *args:
-    @python3 tools/ironbar-fork-patch.py {{args}}
-
-# Test the ironbar fork inputs, shared repo strategy, and Ironbar bar config,
-# without sudo or a package build.
-ironbar-check:
-    @if python3 -c "import pytest" 2>/dev/null; then python3 -m pytest tests/test_ironbar_fork.py tests/test_repo_forks.py; else uvx pytest tests/test_ironbar_fork.py tests/test_repo_forks.py; fi
-    @sh -c 'sh tests/ironbar-modules.test.sh; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 77 ]'
-
-# Provision and verify the Google TV control on this host (docs/media-toggle.md).
-# Needs adb (android-tools); it never installs a package, and never starts a
-# daemon - the runtime is just bin/media-toggle over adb.
-media-toggle-setup *args:
-    rcup -v bin/media-toggle bin/media-toggle-setup config/sway/config
-    ~/.bin/media-toggle-setup {{args}}
-
-# Show help
-help:
-    @echo "Available commands:"
-    @echo "  nvim_dist        - Create timestamped nvim config archive (matt-nvim-config-<timestamp>.tar.bz2)"
-    @echo "  nvim_dist_clean  - Create timestamped archive excluding temp files"
-    @echo "  nvim_dist_list   - List contents of latest archive"
-    @echo "  nvim_dist_test   - Extract and test the latest archive"
-    @echo "  nvim_dist_cleanup- Clean up test directory"
-    @echo "  nvim_release     - Release nvim config to .nvim-config-public repo"
-    @echo "  nvim_docker_build      - Build Docker image for testing"
-    @echo "  nvim_docker_test       - Build and run nvim in Docker container"
-    @echo "  forks            - Status of every pi fork checkout against its patch series"
-    @echo "  forks_setup      - Materialize .forks/<name> from its series (--force saves a divergent main)"
-    @echo "  forks_export     - Write a checkout's main back as the delivery (series or patch branch)"
-    @echo "  forks_check      - Fail when a series is unreadable or does not replay to main"
-    @echo "  forks_rebase     - Rebase a series onto the followed upstream, re-export, verify"
-    @echo "  forks_series_check - The launch's series verdict, per pack (never the workspace root)"
-    @echo "  forks_publish    - Push every required patch branch to the remote (needs credentials; host)"
-    @echo "  forks_published  - Fail when a series' published branch is missing or is not that series"
-    @echo "  patch-branch-check - Patch branch: releases behind and the launch's merge question (read-only)"
-    @echo "  hooks-install    - Install this repository's git hooks into the shared hooks directory"
-    @echo "  forks_diff       - What each checkout's main changes over its series' base"
-    @echo "  forks_build      - npm ci + the checkout's build for each checkout (local dev build)"
-    @echo "  forks_run        - Run the forked pi from its checkout (testing loop)"
-    @echo "  done             - Check since last verified commit; --explain for plan, --all for every series"
-    @echo "  pkg-deploy       - Build/install a patched Arch package fork (pkg-deploy <name>)"
-    @echo "  sway-check       - Test Sway inputs and deployment without host changes"
-    @echo "  ai-usagebar-fork-patch - Regenerate the package patch from the local delta"
-    @echo "  ai-usagebar-check  - Test ai-usagebar fork inputs, deploy logic, Ironbar modules"
-    @echo "  ironbar-fork-patch - Regenerate the ironbar package patch from the local delta"
-    @echo "  ironbar-check      - Test ironbar fork inputs, shared repo strategy, bar config"
-    @echo "  profiler-build   - Build the self-profiler binary (tools/pi-profiler/pi-profiler-go)"
-    @echo "  queued-message-states - Drive pi's queued-message states headlessly (tools/queued-message-states)"
-    @echo "  session-liveness - Measure pi's session liveness headlessly; expected GREEN (tools/session-liveness)"
-    @echo "  help             - Show this help"
-    @echo ""
-    @echo "Note: Archives are automatically cleaned up (keeps only the most recent version)"
 
