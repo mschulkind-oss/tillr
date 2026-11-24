@@ -51,14 +51,52 @@ func actionFixture(t *testing.T) (*Loop, func(...string) string, func(string) st
 	return l, git, commit
 }
 
-func waitAction(t *testing.T, condition func() bool) {
+// waitAction waits until every given post-landing action has finished running,
+// ending when each action's completion channel closes or the test's context ends.
+// It imposes no wall-clock deadline of its own.
+func waitAction(t testing.TB, actions ...*landingAction) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !condition() {
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for post-landing action")
+	ctx := t.Context()
+	for {
+		waited := false
+		for _, a := range actions {
+			done := a.idle()
+			if done == nil {
+				continue
+			}
+			waited = true
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatalf("post-landing action did not finish before test context ended: %v", ctx.Err())
+			}
 		}
-		time.Sleep(10 * time.Millisecond)
+		if !waited {
+			return
+		}
+	}
+}
+
+// waitActionCondition waits until condition holds while action is running,
+// failing if action finishes or the test's context ends first.
+func waitActionCondition(t testing.TB, action *landingAction, condition func() bool) {
+	t.Helper()
+	ctx := t.Context()
+	done := action.idle()
+	for !condition() {
+		if done == nil {
+			t.Fatal("post-landing action is not running and awaited condition does not hold")
+		}
+		select {
+		case <-done:
+			if condition() {
+				return
+			}
+			t.Fatal("post-landing action finished before awaited condition held")
+		case <-ctx.Done():
+			t.Fatalf("awaited condition did not hold before test context ended: %v", ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
@@ -72,14 +110,14 @@ func TestPostLandingRoll(t *testing.T) {
 	}
 	l.afterLanding(ctx, commit("tools/tillr-one/first"))
 	runs := filepath.Join(l.cfg.Root, "runs")
-	waitAction(t, func() bool { b, _ := os.ReadFile(runs); return string(b) == "run\n" })
+	waitActionCondition(t, &l.rollAction, func() bool { b, _ := os.ReadFile(runs); return string(b) == "run\n" })
 	for _, name := range []string{"second", "third", "fourth"} {
 		l.afterLanding(ctx, commit("tools/tillr-one/"+name))
 	}
 	if err := os.WriteFile(filepath.Join(l.cfg.Root, "release"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.rollAction.busy() })
+	waitAction(t, &l.rollAction)
 	if b, err := os.ReadFile(runs); err != nil || string(b) != "run\nrun\n" {
 		t.Fatalf("runs = %q, %v", b, err)
 	}
@@ -125,7 +163,7 @@ func TestPostLandingFailureAndDisabledDefaults(t *testing.T) {
 	l.cfg.PostLanding.Roll = settings.Roll{Paths: []string{"src"}, Command: `echo discard; seq 1 20; exit 7`}
 	tip := commit("src/change")
 	l.afterLanding(ctx, tip)
-	waitAction(t, func() bool { return !l.rollAction.busy() })
+	waitAction(t, &l.rollAction)
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +186,7 @@ func TestPostLandingPushDoesNotBlockRestartAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	release := make(chan struct{})
-	defer func() { close(release); waitAction(t, func() bool { return !l.pushAction.busy() }) }()
+	defer func() { close(release); waitAction(t, &l.pushAction) }()
 	l.pushAction.submit("tip", func(string) { <-release })
 	_, unlock, err := l.lockRestartMechanical(ctx)
 	if err != nil {
@@ -176,7 +214,7 @@ func TestPostLandingPush(t *testing.T) {
 	l.cfg.PostLanding.Push.What = settings.PushTip
 	failed := commit("failed")
 	l.afterLanding(ctx, failed)
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		t.Fatal(err)
@@ -203,14 +241,14 @@ func TestPostLandingPush(t *testing.T) {
 		b, _ := os.ReadFile(filepath.Join(l.cfg.Root, "pushes"))
 		return strings.Count(string(b), "hook\n")
 	}
-	waitAction(t, func() bool { return pushes() == 2 })
+	waitActionCondition(t, &l.pushAction, func() bool { return pushes() == 2 })
 	var tip string
 	for _, name := range []string{"arrival-a", "arrival-b", "arrival-c"} {
 		tip = commit(name)
 		l.afterLanding(ctx, tip)
 	}
 	touch("release")
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	if pushes() != 3 || git("--git-dir="+remote, "rev-parse", "refs/heads/published") != tip {
 		t.Fatal("pending landings were not covered by exactly one follow-up push")
 	}
@@ -227,7 +265,7 @@ func TestPostLandingPush(t *testing.T) {
 	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "conflicts")
 	diverged = git("rev-parse", "HEAD")
 	l.afterLanding(ctx, diverged)
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	if git("rev-parse", "HEAD") != diverged || git("--git-dir="+remote, "rev-parse", "refs/heads/published") != tip {
 		t.Fatal("rejected push moved either trunk")
 	}
@@ -286,7 +324,7 @@ func TestPostLandingPushGreen(t *testing.T) {
 	// The pointer advances to the first commit while the tip is one commit past it.
 	git("update-ref", GreenRef, proved)
 	l.afterGreen(ctx, proved)
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	if remoteTip() != proved {
 		t.Fatalf("remote = %s, want the proved commit %s (tip %s)", remoteTip(), proved, unproved)
 	}
@@ -300,7 +338,7 @@ func TestPostLandingPushGreen(t *testing.T) {
 	// Already on the remote: the condition "remote is behind green" is false, so no push.
 	before := pushes()
 	l.afterGreen(ctx, proved)
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	if pushes() != before {
 		t.Fatal("pushed a green commit the remote already holds")
 	}
@@ -312,7 +350,7 @@ func TestPostLandingPushGreen(t *testing.T) {
 		t.Fatal(err)
 	}
 	l.afterGreen(ctx, second)
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	if d, _ := lastPushDetail(t, l, second); !strings.Contains(d, "fixture rejected push") || remoteTip() != proved {
 		t.Fatalf("refusal detail = %q, remote %s", d, remoteTip())
 	}
@@ -325,7 +363,7 @@ func TestPostLandingPushGreen(t *testing.T) {
 	third := commit("third")
 	git("update-ref", GreenRef, third)
 	l.afterGreen(ctx, third)
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	if remoteTip() != third {
 		t.Fatalf("retry did not publish the new green: remote %s want %s", remoteTip(), third)
 	}
@@ -352,7 +390,7 @@ func TestPostLandingPushGreenNeverForces(t *testing.T) {
 	git("update-ref", GreenRef, green)
 	l.cfg.PostLanding.Push.What = settings.PushGreen
 	l.afterGreen(context.Background(), green)
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	if got := git("--git-dir="+remote, "rev-parse", "refs/heads/"+TrunkRef); got != ahead {
 		t.Fatalf("remote moved to %s", got)
 	}
@@ -374,7 +412,7 @@ func TestAfterGreenNeedsGreenMode(t *testing.T) {
 	}
 	l.cfg.PostLanding.Push.What = settings.PushGreen
 	l.afterGreen(context.Background(), git("rev-parse", "HEAD"))
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	if d, ok := lastPushDetail(t, l, git("rev-parse", "HEAD")); ok && d != "" {
 		t.Fatalf("no pointer must not be a failure: %q", d)
 	}
@@ -423,21 +461,21 @@ func TestPostLandingPiSeriesRoll(t *testing.T) {
 	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-patch", RunID: "run-pi-patch", BaseRef: "refs/heads/patch/pi"}); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.piRollAction.busy() })
+	waitAction(t, &l.piRollAction)
 
 	// Trunk landing touching yolo-packs/pi-fork/ triggers --pi roll.
 	nextTip = commit("yolo-packs/pi-fork/pack.json")
 	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-pack", RunID: "run-pi-pack"}); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.piRollAction.busy() })
+	waitAction(t, &l.piRollAction)
 
 	// Trunk landing touching bin/pi-forks.list triggers --pi and --pi-extensions rolls.
 	nextTip = commit("bin/pi-forks.list")
 	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-list", RunID: "run-pi-list"}); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.piRollAction.busy() && !l.extRollAction.busy() })
+	waitAction(t, &l.piRollAction, &l.extRollAction)
 
 	runsFile := filepath.Join(l.cfg.Root, "runs")
 	b, err := os.ReadFile(runsFile)
@@ -480,7 +518,7 @@ func TestPostLandingPiSeriesRoll(t *testing.T) {
 	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-both", RunID: "run-both"}); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.rollAction.busy() && !l.piRollAction.busy() })
+	waitAction(t, &l.rollAction, &l.piRollAction)
 }
 
 func TestPostLandingPiRollFailurePreservesWorkingPiAndRecordsAction(t *testing.T) {
@@ -508,7 +546,7 @@ func TestPostLandingPiRollFailurePreservesWorkingPiAndRecordsAction(t *testing.T
 	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-fail", RunID: "run-pi-fail", BaseRef: "refs/heads/patch/pi"}); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.piRollAction.busy() })
+	waitAction(t, &l.piRollAction)
 
 	// Working pi is preserved on failure.
 	if b, err := os.ReadFile(workingPi); err != nil || string(b) != "working-v1" {
@@ -537,7 +575,7 @@ func TestPostLandingPiRollFailurePreservesWorkingPiAndRecordsAction(t *testing.T
 	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-ok", RunID: "run-pi-ok", BaseRef: "refs/heads/patch/pi"}); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.piRollAction.busy() })
+	waitAction(t, &l.piRollAction)
 	if b, err := os.ReadFile(workingPi); err != nil || string(b) != "working-v2\n" {
 		t.Fatalf("working pi = %q, %v; want working-v2", string(b), err)
 	}
@@ -573,7 +611,7 @@ func TestPostLandingPiRollCoalesces(t *testing.T) {
 		t.Fatal(err)
 	}
 	runs := filepath.Join(l.cfg.Root, "runs")
-	waitAction(t, func() bool { b, _ := os.ReadFile(runs); return string(b) == "--no-request --pi\n" })
+	waitActionCondition(t, &l.piRollAction, func() bool { b, _ := os.ReadFile(runs); return string(b) == "--no-request --pi\n" })
 	for _, id := range []string{"2", "3", "4"} {
 		tip = strings.Repeat(id, 40)
 		if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-" + id, RunID: "run-" + id, BaseRef: "refs/heads/patch/pi"}); err != nil {
@@ -583,7 +621,7 @@ func TestPostLandingPiRollCoalesces(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(l.cfg.Root, "release"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.piRollAction.busy() })
+	waitAction(t, &l.piRollAction)
 	if b, err := os.ReadFile(runs); err != nil || string(b) != "--no-request --pi\n--no-request --pi\n" {
 		t.Fatalf("runs = %q, %v", b, err)
 	}
@@ -625,7 +663,7 @@ exit 1
 	tip := commit("tools/tillr-drain/change.go")
 	t.Setenv("TILLR_SQLITE_TRACE", "1")
 	l.afterLanding(ctx, tip)
-	waitAction(t, func() bool { return !l.rollAction.busy() })
+	waitAction(t, &l.rollAction)
 	t.Setenv("TILLR_SQLITE_TRACE", "")
 
 	s, err := store.OpenRead(ctx, l.cfg.Store)
@@ -656,4 +694,73 @@ exit 1
 			}
 		}
 	}
+}
+
+type ctxRecordingTB struct {
+	recordingTB
+	ctx context.Context
+}
+
+func (c *ctxRecordingTB) Context() context.Context { return c.ctx }
+
+func TestWaitActionEndsOnCompletionOrContext(t *testing.T) {
+	t.Run("completion and cascading action", func(t *testing.T) {
+		var first, second landingAction
+		releaseFirst := make(chan struct{})
+		releaseSecond := make(chan struct{})
+		secondStarted := make(chan struct{})
+
+		first.submit("one", func(string) {
+			<-releaseFirst
+			second.submit("two", func(string) {
+				close(secondStarted)
+				<-releaseSecond
+			})
+		})
+
+		waited := make(chan struct{})
+		go func() {
+			defer close(waited)
+			// Pass second before first to verify cascading actions wait in any order.
+			waitAction(t, &second, &first)
+		}()
+
+		close(releaseFirst)
+		<-secondStarted
+		select {
+		case <-waited:
+			t.Fatal("waitAction returned before cascaded action finished")
+		default:
+		}
+
+		close(releaseSecond)
+		<-waited
+		if first.busy() || second.busy() {
+			t.Fatal("actions still busy after waitAction returned")
+		}
+	})
+
+	t.Run("test context cancellation", func(t *testing.T) {
+		var action landingAction
+		release := make(chan struct{})
+		defer func() {
+			close(release)
+			waitAction(t, &action)
+		}()
+		action.submit("stuck", func(string) { <-release })
+
+		ctx, cancel := context.WithCancel(t.Context())
+		rec := &ctxRecordingTB{ctx: ctx}
+		finished := make(chan struct{})
+		go func() {
+			defer close(finished)
+			waitAction(rec, &action)
+		}()
+
+		cancel()
+		<-finished
+		if !strings.Contains(rec.message, context.Canceled.Error()) {
+			t.Fatalf("failure = %q, want context canceled", rec.message)
+		}
+	})
 }

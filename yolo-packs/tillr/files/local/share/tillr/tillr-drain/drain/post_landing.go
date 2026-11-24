@@ -37,12 +37,21 @@ type landingAction struct {
 	mu      sync.Mutex
 	running bool
 	pending string
+	done    chan struct{}
 }
 
 func (a *landingAction) busy() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.running
+}
+
+// idle returns a channel closed when the running worker drains its pending
+// landing, or nil if no worker is running.
+func (a *landingAction) idle() <-chan struct{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.done
 }
 
 func (a *landingAction) submit(landing string, run func(string)) {
@@ -53,14 +62,29 @@ func (a *landingAction) submit(landing string, run func(string)) {
 		return
 	}
 	a.running = true
+	done := make(chan struct{})
+	a.done = done
 	go func(tip string) {
+		finished := false
+		defer func() {
+			if !finished {
+				a.mu.Lock()
+				a.running = false
+				a.done = nil
+				a.mu.Unlock()
+				close(done)
+			}
+		}()
 		for {
 			run(tip)
 			a.mu.Lock()
 			tip, a.pending = a.pending, ""
 			if tip == "" {
 				a.running = false
+				a.done = nil
+				finished = true
 				a.mu.Unlock()
+				close(done)
 				return
 			}
 			a.mu.Unlock()

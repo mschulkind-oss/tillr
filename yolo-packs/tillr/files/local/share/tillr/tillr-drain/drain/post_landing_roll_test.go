@@ -61,7 +61,7 @@ else:
     raise AssertionError('standalone roll skipped its verification')
 PY`}
 	l.afterLanding(ctx, commit("tools/tillr-drain/change"))
-	waitAction(t, func() bool { return !l.rollAction.busy() })
+	waitAction(t, &l.rollAction)
 	if _, err := os.Stat(filepath.Join(l.cfg.Root, "bin", "tillr-drain")); err != nil {
 		t.Fatalf("roll did not install: %v\n%s", err, l.cfg.Report)
 	}

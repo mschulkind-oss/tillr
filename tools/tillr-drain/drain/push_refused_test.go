@@ -137,7 +137,7 @@ func TestRefusedPushConflictRepairsAndPublishes(t *testing.T) {
 			before := runGit(t, root, "rev-parse", "HEAD")
 			green := runGit(t, root, "rev-parse", GreenRef)
 			p.l.triggerPushNow(ctx)
-			waitAction(t, func() bool { return !p.l.pushAction.busy() })
+			waitAction(t, &p.l.pushAction)
 			id := RemoteSyncItemID(remoteTip)
 			if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindConflict || !strings.Contains(fmt.Sprint(ev["detail"]), "mover: "+id) {
 				t.Fatalf("refusal did not file repair work: %+v", ev)
@@ -169,7 +169,7 @@ func TestRefusedPushConflictRepairsAndPublishes(t *testing.T) {
 			if err != nil || !landed || tip == "" || result.Landed != 1 {
 				t.Fatalf("repair landing = %q, %v, %v; landed %d", tip, landed, err, result.Landed)
 			}
-			waitAction(t, func() bool { return !p.l.pushAction.busy() })
+			waitAction(t, &p.l.pushAction)
 			if mode == settings.PushGreen {
 				if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindProving || ev["rebased_tip"] != tip {
 					t.Fatalf("repair did not wait for proof: %+v", ev)
@@ -185,7 +185,7 @@ func TestRefusedPushConflictRepairsAndPublishes(t *testing.T) {
 					t.Fatal(err)
 				}
 				p.l.heavyWG.Wait()
-				waitAction(t, func() bool { return !p.l.pushAction.busy() })
+				waitAction(t, &p.l.pushAction)
 				if got := runGit(t, root, "rev-parse", GreenRef); got != tip {
 					t.Fatalf("proof advanced green to %s, want %s", got, tip)
 				}
@@ -253,7 +253,7 @@ func TestOrdinaryPushFailureDoesNotRebase(t *testing.T) {
 	runGit(t, p.f.root, "remote", "set-url", "origin", filepath.Join(filepath.Dir(p.remote), "missing.git"))
 	green := runGit(t, p.f.root, "rev-parse", GreenRef)
 	p.l.afterGreen(context.Background(), green)
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	if err := pushTrunk(context.Background(), p.f.root, settings.Push{}); err == nil {
 		t.Fatal("push to a missing remote succeeded")
 	} else if _, ok := err.(*refusedPushError); ok {
@@ -274,7 +274,7 @@ func TestRefusedGreenPushHealsThroughTheAction(t *testing.T) {
 	remoteTip := p.remoteCommit(t, "remote.txt", "remote\n")
 	green := runGit(t, p.f.root, "rev-parse", GreenRef)
 	p.l.afterGreen(context.Background(), green)
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	if runGit(t, p.f.root, "merge-base", remoteTip, "HEAD") != remoteTip {
 		t.Fatal("the trunk was not rebased onto the remote")
 	}

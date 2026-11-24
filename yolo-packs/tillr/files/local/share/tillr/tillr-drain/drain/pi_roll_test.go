@@ -154,7 +154,7 @@ symlinkSync("../share/pi-fork/node_modules/.bin/pi", join(home, ".local/bin/pi")
 	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-move", RunID: "run-pi-move", BaseRef: piForkPatchRef}); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.piRollAction.busy() })
+	waitAction(t, &l.piRollAction)
 
 	if !hasVerifiedPiBuild(buildsDir, key2) {
 		t.Fatalf("expected verified build for moved tip %s under %s; report:\n%s", key2, buildsDir, l.reported())
@@ -294,7 +294,7 @@ func TestPostLandingPiRollFailureAndSkipRaiseWhyCondition(t *testing.T) {
 			if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-" + tc.name, RunID: "run-pi-" + tc.name, BaseRef: piForkPatchRef}); err != nil {
 				t.Fatal(err)
 			}
-			waitAction(t, func() bool { return !l.piRollAction.busy() })
+			waitAction(t, &l.piRollAction)
 
 			report := l.reported()
 			for _, want := range []string{tc.wantReason, staleKey, wantedKey} {
@@ -320,7 +320,7 @@ func TestPostLandingPiRollFailureAndSkipRaiseWhyCondition(t *testing.T) {
 			if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-clear", RunID: "run-pi-clear", BaseRef: piForkPatchRef}); err != nil {
 				t.Fatal(err)
 			}
-			waitAction(t, func() bool { return !l.piRollAction.busy() })
+			waitAction(t, &l.piRollAction)
 
 			if cleared := readWhyAlarms(t, l.cfg.Store); strings.Contains(cleared, alarms.PiBuildStale) {
 				t.Fatalf("expected pi-build-stale to clear after successful build, got:\n%s", cleared)

@@ -144,7 +144,7 @@ func TestPostLandingRollFailureIsInTheLoopReport(t *testing.T) {
 	l.cfg.PostLanding.Roll = settings.Roll{Paths: []string{"src"}, Command: `echo "tillr-roll: refusing a dirty checkout"; exit 3`}
 	tip := commit("src/change")
 	l.afterLanding(context.Background(), tip)
-	waitAction(t, func() bool { return !l.rollAction.busy() })
+	waitAction(t, &l.rollAction)
 	if got := log.String(); !strings.Contains(got, "post-landing roll at "+shortSHA(tip)+" failed") || !strings.Contains(got, "refusing a dirty checkout") {
 		t.Fatalf("report=%q", got)
 	}
