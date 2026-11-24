@@ -30,18 +30,56 @@ class RunnerFirst(unittest.TestCase):
         for path in ("tools/tillr-gate/main.go", "tools/gate/change-gate.py",
                      "yolo-packs/tillr/files/local/share/tillr/tillr-gate/main.go"):
             with self.subTest(path=path):
-                for tier in (None, gate.TIER_LANDING):
-                    plan = self.plan([path], tier)
+                full_plan = self.plan([path], None)
+                self.assertIn("gate-runner", [c.kind for c in full_plan.checks])
+                self.assertFalse(any(s.owed and s.kind == "gate-runner" for s in full_plan.skips))
+                full_runner = next(c for c in full_plan.checks if c.kind == "gate-runner")
+                self.assertEqual(full_runner.label, "tools/tillr-gate's whole suite passes")
+                self.assertEqual(full_runner.go_module, "tools/tillr-gate")
+
+                landing_plan = self.plan([path], gate.TIER_LANDING)
+                untiered_then_landing = self.plan([path], None)
+                gate.apply_tier(untiered_then_landing, gate.TIER_LANDING)
+                for plan in (landing_plan, untiered_then_landing):
                     self.assertIn("gate-runner", [c.kind for c in plan.checks])
                     self.assertFalse(any(s.owed and s.kind == "gate-runner" for s in plan.skips))
-        self.assertNotIn("gate-runner", [c.kind for c in self.plan(["docs/example.md"], gate.TIER_LANDING).checks])
+                    runner_check = next(c for c in plan.checks if c.kind == "gate-runner")
+                    self.assertEqual(runner_check.label, "gate runner Python suites pass")
+                    self.assertEqual(
+                        gate.declaration_id(runner_check.kind, runner_check.label, ROOT),
+                        "gate-runner/gate-runner-python-suites-pass",
+                    )
+                    self.assertEqual(
+                        runner_check.argv,
+                        ["sh", "-c", "python3 tools/gate/change-gate.test.py && python3 tools/gate/runner-first.test.py"],
+                    )
+                    self.assertEqual(runner_check.go_module, "")
+                    self.assertEqual(runner_check.watches, gate.GATE_RUNNER_WATCHES)
+                    if path == "tools/tillr-gate/main.go":
+                        ga = next(c for c in plan.checks if c.kind == "go-affected")
+                        self.assertNotIn("--drop-module", ga.argv)
+
+        for non_runner in ("docs/example.md", "tools/tillr/event/event.go", "tools/go-test-shards.py"):
+            plan = self.plan([non_runner], gate.TIER_LANDING)
+            self.assertNotIn("gate-runner", [c.kind for c in plan.checks], non_runner)
+            self.assertFalse(any(s.owed and s.kind == "gate-runner" for s in plan.skips), non_runner)
         self.assertIn("self-suite", [c.kind for c in self.plan(["tools/fork-check.py"], gate.TIER_LANDING).checks])
 
     def test_missing_go_blocks_instead_of_deferring(self):
         original = gate.shutil.which
         with mock.patch.object(gate.shutil, "which", side_effect=lambda name: None if name == "go" else original(name)):
             plan = self.plan(["tools/tillr-gate/main.go"], gate.TIER_LANDING)
-        self.assertTrue(any(s.kind == "gate-runner" and s.planned and not s.owed for s in plan.skips))
+            untiered = self.plan(["tools/tillr-gate/main.go"], None)
+            gate.apply_tier(untiered, gate.TIER_LANDING)
+        for candidate in (plan, untiered):
+            self.assertIn("gate-runner", [c.kind for c in candidate.checks])
+            self.assertTrue(any(s.kind == "go-affected" and s.planned and not s.owed for s in candidate.skips))
+            planned, required = gate.plan_kinds(candidate)
+            self.assertNotIn("go-affected", planned)
+            self.assertIn("go-affected", required)
+        with mock.patch.object(gate.shutil, "which", side_effect=lambda name: None if name == "python3" else original(name)):
+            no_py = self.plan(["tools/tillr-gate/main.go"], gate.TIER_LANDING)
+        self.assertTrue(any(s.kind == "gate-runner" and s.planned and not s.owed for s in no_py.skips))
 
     def test_runner_and_ordinary_candidates_merge_only_after_selected_suites(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:

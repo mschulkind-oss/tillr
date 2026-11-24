@@ -370,25 +370,57 @@ def test_gate_runner_uses_gate_slot_class_in_landing_and_proof_in_rolling():
         base = Path(directory)
         changed = ["tools/tillr-gate/main.go", "tools/tillr-drain/main.go"]
 
-        # Landing-tier gate-runner uses --slot-class gate; go-tool is owed to rolling.
+        # Landing-tier gate-runner runs only the Python runner suites (omitting go-test-shards.py)
+        # while go-affected covers affected Go packages without --drop-module, whether planned via
+        # build_plan(tier=TIER_LANDING) or apply_tier(untiered, TIER_LANDING).
         landing = gate.build_plan(
             ROOT, [], gate.Record(base / "landing-state.json"),
             changed, None, True, tier=gate.TIER_LANDING,
         )
-        landing_runner = next(c for c in landing.checks if c.kind == "gate-runner")
-        assert "--slot-class gate" in landing_runner.argv[-1], landing_runner.argv
-        assert "--slot-class proof" not in landing_runner.argv[-1], landing_runner.argv
-
-        #Untiered + apply_tier(TIER_LANDING) also keeps --slot-class gate.
         untiered = gate.build_plan(
             ROOT, [], gate.Record(base / "untiered-state.json"), changed, None, True,
         )
         gate.apply_tier(untiered, gate.TIER_LANDING)
-        untiered_runner = next(c for c in untiered.checks if c.kind == "gate-runner")
-        assert "--slot-class gate" in untiered_runner.argv[-1], untiered_runner.argv
+        for plan in (landing, untiered):
+            runner = next(c for c in plan.checks if c.kind == "gate-runner")
+            assert runner.label == "gate runner Python suites pass", runner.label
+            assert runner.go_module == "", runner.go_module
+            assert runner.watches == gate.GATE_RUNNER_WATCHES, runner.watches
+            assert "go-test-shards.py" not in runner.argv[-1], runner.argv
+            assert runner.argv == [
+                "sh", "-c",
+                "python3 tools/gate/change-gate.test.py && python3 tools/gate/runner-first.test.py",
+            ], runner.argv
+            ga = next(c for c in plan.checks if c.kind == "go-affected")
+            assert "--drop-module" not in ga.argv, ga.argv
 
-        # Rolling proof runs both gate-runner and go-tool under --slot-class proof,
-        # whether tier=TIER_ROLLING is passed to build_plan or applied afterward.
+        # tools/tillr/-only or tools/go-test-shards.py-only edits do not plan or owe gate-runner
+        # at TIER_LANDING, while tier=None and TIER_ROLLING still plan whole-module gate-runner.
+        for non_runner_path in ("tools/tillr/event/event.go", "tools/go-test-shards.py"):
+            for via_build_plan in (True, False):
+                nr_plan = gate.build_plan(
+                    ROOT, [], gate.Record(base / f"nr-{via_build_plan}.json"),
+                    [non_runner_path], None, True,
+                    tier=gate.TIER_LANDING if via_build_plan else None,
+                )
+                if not via_build_plan:
+                    gate.apply_tier(nr_plan, gate.TIER_LANDING)
+                assert not any(c.kind == "gate-runner" for c in nr_plan.checks), (non_runner_path, nr_plan.checks)
+                assert not any(s.kind == "gate-runner" or (s.owed and "gate-runner" in s.label) for s in nr_plan.skips), (
+                    non_runner_path, nr_plan.skips
+                )
+            for non_landing_tier in (None, gate.TIER_ROLLING):
+                whole = gate.build_plan(
+                    ROOT, [], gate.Record(base / f"whole-{non_landing_tier}.json"),
+                    [non_runner_path], None, True, tier=non_landing_tier,
+                )
+                whole_runner = next(c for c in whole.checks if c.kind == "gate-runner")
+                assert gate.declaration_id(whole_runner.kind, whole_runner.label, ROOT) == (
+                    "gate-runner/tools-tillr-gate-s-whole-suite-passes"
+                ), whole_runner.label
+                assert "--slot-class proof" in whole_runner.argv[-1], whole_runner.argv
+
+        # Rolling proof and untiered plans run both gate-runner and go-tool under --slot-class proof.
         for via_build_plan in (True, False):
             rolling = gate.build_plan(
                 ROOT, [], gate.Record(base / f"rolling-{via_build_plan}.json"),
@@ -3896,7 +3928,7 @@ with tempfile.TemporaryDirectory() as tmp:
     }, shard_suites
     gate_suite = next(check for check in shard_planned.checks if check.kind == 'gate-runner')
     assert '&& cd ../..' not in gate_suite.argv[-1], gate_suite.argv
-    assert '--slot-class gate' in gate_suite.argv[-1], gate_suite.argv
+    assert '--slot-class proof' in gate_suite.argv[-1], gate_suite.argv
     assert set(module.GATE_RUNNER_WATCHES) <= set(gate_suite.watches), gate_suite.watches
     assert 'python3 tools/gate/runner-first.test.py' in gate_suite.argv[-1], gate_suite.argv
     assert module.CHECK_COST_ESTIMATE["go-substrate"] == max(
@@ -3925,11 +3957,11 @@ with tempfile.TemporaryDirectory() as tmp:
     original_path = os.environ["PATH"]
     os.environ["PATH"] = f"{go_stub}:{original_path}"
     try:
-        # The substrate owns the store, migration path, and event-kind oracle: its
-        # behavior proof must run before landing. The drain is the negative control;
-        # its build lands, but its expensive behavior suite remains owed to rolling.
+        # Both whole-module suites (go-substrate and go-tool) are owed to the rolling
+        # tier at TIER_LANDING (where go-affected runs affected packages) and run at
+        # TIER_ROLLING and tier=None with their stable check IDs preserved.
         for directory, expected_suite_kind, suite_tier in (
-            ("tools/tillr", "go-substrate", module.TIER_LANDING),
+            ("tools/tillr", "go-substrate", module.TIER_ROLLING),
             ("tools/tillr-drain", "go-tool", module.TIER_ROLLING),
         ):
             changed = [f"{directory}/main.go"]
@@ -3962,8 +3994,8 @@ with tempfile.TemporaryDirectory() as tmp:
                                   and ("go-test-shards.py" in check.argv[-1]
                                        or "go test" in check.argv[-1])]
                     assert len(drain_runs) == 1 and "go-test-shards.py" in drain_runs[0], drain_runs
-                assert any(skip.owed and skip.kind == "go-tool" for skip in plan.skips) == (
-                    directory == "tools/tillr-drain" and tier == module.TIER_LANDING
+                assert any(skip.owed and skip.kind == expected_suite_kind for skip in plan.skips) == (
+                    tier == module.TIER_LANDING
                 ), (directory, tier, plan.skips)
 
         # 28a. Each directory's change plans that directory's two steps, in order, and
@@ -3978,9 +4010,7 @@ with tempfile.TemporaryDirectory() as tmp:
             # The suite step is the WHOLE suite: `-short` would skip the
             # integration cases, which is the blind spot item 570 closed. The build is
             # the other step's job, so this command does not repeat it.
-            command = module.go_tool_command(
-                directory, slot_class="gate" if directory == "tools/tillr-gate" else "proof"
-            )
+            command = module.go_tool_command(directory, slot_class="proof")
             if directory == "tools/tillr-gate":
                 command += (("" if directory in module.GO_SHARD_DIRS else " && cd ../..")
                             + " && python3 tools/gate/change-gate.test.py"
@@ -4102,9 +4132,17 @@ with tempfile.TemporaryDirectory() as tmp:
         )
         module.apply_tier(substrate, module.TIER_LANDING)
         planned, required = module.plan_kinds(substrate)
-        assert "go-substrate" not in planned and "go-substrate" in required, (planned, required)
-        assert any(skip.kind == "go-substrate" and skip.planned and not skip.owed
+        assert "go-substrate" not in planned and "go-substrate" not in required, (planned, required)
+        assert any(skip.kind == "go-substrate" and not skip.planned and skip.owed
                    for skip in substrate.skips), substrate.skips
+        root_substrate = module.build_plan(
+            ROOT, [], module.Record(base / "names-state.json"), ["tools/tillr/store/store.go"], None, True,
+            tier=module.TIER_LANDING,
+        )
+        planned_root, required_root = module.plan_kinds(root_substrate)
+        assert "go-affected" not in planned_root and "go-affected" in required_root, (planned_root, required_root)
+        assert any(skip.kind == "go-affected" and skip.planned and not skip.owed
+                   for skip in root_substrate.skips), root_substrate.skips
     finally:
         module.shutil.which = original_which
 
@@ -6983,7 +7021,8 @@ assert verdict.check_tier("a-kind-nobody-declared") == verdict.TIER_LANDING, (
     "an unnamed kind must default to the landing tier, the safe side"
 )
 assert verdict.check_tier("unregistered-fixture") == verdict.TIER_LANDING, verdict.check_tier("unregistered-fixture")
-assert verdict.check_tier("go-substrate") == verdict.TIER_LANDING, verdict.check_tier("go-substrate")
+assert verdict.check_tier("go-substrate") == verdict.TIER_ROLLING, verdict.check_tier("go-substrate")
+assert verdict.check_tier("go-affected") == verdict.TIER_LANDING, verdict.check_tier("go-affected")
 assert verdict.check_tier("go-tool") == verdict.TIER_ROLLING, verdict.check_tier("go-tool")
 print(f"fork-check tier table: {len(tiered)} kind(s) declared, "
       f"{sum(1 for tier in tiered.values() if tier == verdict.TIER_ROLLING)} rolling; "
@@ -8684,7 +8723,8 @@ with tempfile.TemporaryDirectory() as tmp:
     def tier_plan():
         plan = module.Plan()
         plan.checks = [
-            module.Check("go-substrate", "a build", ["true"], "why", 1),
+            module.Check("tillr-docs", "a landing suite", ["true"], "why", 1),
+            module.Check("go-substrate", "substrate suite", ["true"], "why", 1),
             module.Check("go-tool", "a suite", ["true"], "why", 1),
             module.Check("file-size", "the shape", ["true"], "why", 1),
         ]
@@ -8695,22 +8735,22 @@ with tempfile.TemporaryDirectory() as tmp:
     full = tier_plan()
     module.apply_tier(full, None)
     assert full.tier is None, full.tier
-    assert [check.kind for check in full.checks] == ["go-substrate", "go-tool", "file-size"], \
+    assert [check.kind for check in full.checks] == ["tillr-docs", "go-substrate", "go-tool", "file-size"], \
         [check.kind for check in full.checks]
     assert not any(skip.owed for skip in full.skips), full.skips
 
     landing = tier_plan()
     module.apply_tier(landing, module.TIER_LANDING)
-    assert [check.kind for check in landing.checks] == ["go-substrate", "file-size"], \
+    assert [check.kind for check in landing.checks] == ["tillr-docs", "file-size"], \
         [check.kind for check in landing.checks]
     owed = [skip for skip in landing.skips if skip.owed]
-    assert [skip.kind for skip in owed] == ["go-tool"], \
+    assert [skip.kind for skip in owed] == ["go-substrate", "go-tool"], \
         [(skip.kind, skip.owed) for skip in landing.skips]
     # Owed is not `planned`: a landing must not read deferred proof as unverified, and the
     # plan-coverage contract's `required` set must not name it.
-    assert owed[0].planned is False, owed[0].planned
+    assert all(s.planned is False for s in owed), owed
     planned, required = module.plan_kinds(landing)
-    assert "go-tool" not in required, required
+    assert "go-substrate" not in required and "go-tool" not in required, required
     # The go-tool step nothing selected stays not-planned, not owed.
     assert not any(skip.owed for skip in landing.skips
                    if skip.label == "go-tool (tools/tillr-land)"), landing.skips
@@ -8718,12 +8758,16 @@ with tempfile.TemporaryDirectory() as tmp:
     # A rolling kind the diff selected that this machine could not answer is owed too: the
     # landing tier defers it whatever the machine's answer would have been.
     unanswered = tier_plan()
-    unanswered.checks = [check for check in unanswered.checks if check.kind != "go-tool"]
-    unanswered.skips = [module.Skip("go-tool (tools/tillr-land)", "go is unavailable here",
-                                    planned=True, kind="go-tool")]
+    unanswered.checks = [check for check in unanswered.checks if check.kind not in ("go-substrate", "go-tool")]
+    unanswered.skips = [
+        module.Skip("go-substrate (tools/tillr)", "go is unavailable here",
+                    planned=True, kind="go-substrate"),
+        module.Skip("go-tool (tools/tillr-land)", "go is unavailable here",
+                    planned=True, kind="go-tool"),
+    ]
     module.apply_tier(unanswered, module.TIER_LANDING)
-    assert [skip.owed for skip in unanswered.skips] == [True], unanswered.skips
-    assert unanswered.skips[0].planned is False, unanswered.skips[0].planned
+    assert [skip.owed for skip in unanswered.skips] == [True, True], unanswered.skips
+    assert all(skip.planned is False for skip in unanswered.skips), unanswered.skips
 
     # The rolling tier is the after-merge proof: it judges the landing kinds the range
     # selected as well as its own, because the pointer it moves says every check guarding
@@ -8738,9 +8782,9 @@ with tempfile.TemporaryDirectory() as tmp:
     fast_tree.fast_tree = True
     rolling.checks.append(fast_tree)
     module.apply_tier(rolling, module.TIER_ROLLING)
-    assert [check.kind for check in rolling.checks] == ["go-substrate", "go-tool", "file-size",
-                                                        "scratch"], \
-        [check.kind for check in rolling.checks]
+    assert [check.kind for check in rolling.checks] == [
+        "tillr-docs", "go-substrate", "go-tool", "file-size", "scratch"
+    ], [check.kind for check in rolling.checks]
     assert not any(skip.owed for skip in rolling.skips), rolling.skips
     # The go-tool step nothing selected stays not-planned; the upstream reader is named as
     # the landing tier's business, and nothing else is.
@@ -8761,17 +8805,17 @@ with tempfile.TemporaryDirectory() as tmp:
     # Declared reads further constrain a lane verdict, not the rolling proof. Fork
     # steps can declare tracked selection paths separately from their checkout watches.
     for changed, expected in ((["README.md"], ["file-size"]),
-                              (["tools/tillr/main.go"], ["go-substrate", "file-size"]),
+                              (["docs/tillr/main.md"], ["tillr-docs", "file-size"]),
                               (["yolo-packs/fork-pins/pi"], ["file-size", "forks-check"])):
         scoped = tier_plan()
-        scoped.checks[0].watches = ("tools/tillr/",)
+        scoped.checks[0].watches = ("docs/tillr/",)
         scoped.checks.append(module.Check("forks-check", "fork replay", ["true"], "why", 1,
                                          watches=(".forks/pi/",),
                                          selected_by=("yolo-packs/fork-pins/pi",)))
         module.apply_tier(scoped, module.TIER_LANDING, changed=changed)
         assert [check.kind for check in scoped.checks] == expected, scoped.checks
         skipped = [skip for skip in scoped.skips if skip.why == "skipped: no changed path is read"]
-        assert {skip.kind for skip in skipped} == {"go-substrate", "forks-check"} - set(expected), skipped
+        assert {skip.kind for skip in skipped} == {"tillr-docs", "forks-check"} - set(expected), skipped
 
     # 59b. The plan line names the tier, the owed kinds, and the landing-wall model. The
     #      model is `s1_floor` over the landing-tier checks, so a full run prices what the
@@ -8787,9 +8831,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert full_fields["owed"] == "-", full_fields
     landing_fields = plan_line(landing)
     assert landing_fields["tier"] == "landing", landing_fields
-    assert landing_fields["owed"] == "go-tool", landing_fields
+    assert landing_fields["owed"] == "go-substrate,go-tool", landing_fields
     assert "go-tool" not in landing_fields["checks"].split(","), landing_fields
-    assert "go-substrate" in landing_fields["checks"].split(","), landing_fields
+    assert "go-substrate" not in landing_fields["checks"].split(","), landing_fields
+    assert "tillr-docs" in landing_fields["checks"].split(","), landing_fields
     # The model is over the landing subset, so it is at most the run's own cost.
     assert float(landing_fields["landing"]) <= float(landing_fields["seconds"]) + 0.1, \
         landing_fields
@@ -8805,7 +8850,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     assert all("owed" not in skip for skip in selection(full)["skips"]), selection(full)["skips"]
     owed_entries = [skip for skip in selection(landing)["skips"] if skip.get("owed")]
-    assert [skip["kind"] for skip in owed_entries] == ["go-tool"], \
+    assert [skip["kind"] for skip in owed_entries] == ["go-substrate", "go-tool"], \
         selection(landing)["skips"]
 
     # 59d. End to end on a Go tool directory's diff: the landing tier would run the build
@@ -9061,6 +9106,7 @@ with tempfile.TemporaryDirectory() as tmp:
         )
         matched = [c for c in planned.checks if c.kind == "go-test-shards-suite"]
         assert len(matched) == 1, (trigger, [(c.kind, c.label) for c in planned.checks])
+        assert not any(c.kind == "gate-runner" for c in planned.checks), (trigger, planned.checks)
         assert matched[0].argv == [sys.executable, "tests/go-test-shards.test.py"], matched[0].argv
         assert set(matched[0].watches) == {
             "tools/go-test-shards.py",

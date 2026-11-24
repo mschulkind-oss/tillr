@@ -1733,6 +1733,10 @@ GATE_RUNNER_WATCHES = (
     "tools/tillr-gate/", "tools/gate/",
     "yolo-packs/tillr/files/local/share/tillr/tillr-gate/",
 )
+GATE_RUNNER_PYTHON_LABEL = "gate runner Python suites pass"
+GATE_RUNNER_PYTHON_COMMAND = (
+    "python3 tools/gate/change-gate.test.py && python3 tools/gate/runner-first.test.py"
+)
 RUNNER_PROOF_KINDS = {"gate-runner", "self-suite"}
 # Whole-suite wall seconds measured 2026-11-17 with the standard shared Go build
 # cache; test-result caching disabled. From the repository root:
@@ -5213,11 +5217,11 @@ CHECK_TIER = {
     # The integrity set: properties of the tree, sub-second to seconds, and unconditional
     # today. Rule 1 and rule 3.
     "file-size": TIER_LANDING,
-    # The trunk must always compile. A non-compiling trunk breaks every lane's next rebase
-    # and the next gate itself, so the build and the test-compile are pre-publish, always
-    # (invariant I2). The substrate suite also lands: its store, migration, and event-kind
-    # conformance failures break the machinery other work stands on (rule 1).
-    "go-substrate": TIER_LANDING,
+    # The trunk must always compile (invariant I2, enforced by whole-tree `go-build`).
+    # Affected Go packages across every tillr module run at `TIER_LANDING` through
+    # `go-affected` with Go's test cache enabled; the whole-module substrate suite runs
+    # at `TIER_ROLLING` and `tier=None` (`D-GR50`).
+    "go-substrate": TIER_ROLLING,
     # The drain suite exceeds 30s alone and with three concurrent suites (measurements
     # beside GO_TOOL_DIRS). It rolls under section 4.3 rule 3, not a retired tool's cost.
     "go-tool": TIER_ROLLING,
@@ -5749,11 +5753,13 @@ class Skip:
 
     def __init__(self, label: str, why: str, planned: bool = False,
                  quarantine: "Quarantine | None" = None, kind: str = "",
-                 owed: bool = False, read_disjoint: bool = False):
+                 owed: bool = False, read_disjoint: bool = False,
+                 selected_by: tuple[str, ...] | None = None):
         self.label = label
         self.why = why
         self.planned = planned
         self.read_disjoint = read_disjoint
+        self.selected_by = selected_by
         # The step is deferred to the other tier, not unanswerable here. See the class
         # docstring: this is the state a landing's plan-coverage contract reads as debt.
         self.owed = owed
@@ -5841,9 +5847,10 @@ class Plan:
         """A step the selected change gave no reason to run, or which does not apply."""
         self.skips.append(Skip(label, why, kind=kind, read_disjoint=read_disjoint))
 
-    def unavailable(self, label: str, why: str, kind: str = "") -> None:
+    def unavailable(self, label: str, why: str, kind: str = "", *,
+                    selected_by: tuple[str, ...] | None = None) -> None:
         """A step the change gave a reason to run that this machine could not answer."""
-        self.skips.append(Skip(label, why, planned=True, kind=kind))
+        self.skips.append(Skip(label, why, planned=True, kind=kind, selected_by=selected_by))
 
     def quarantine(self, label: str, why: str, declared: "Quarantine", kind: str = "") -> None:
         """A step that ran and failed on a case a recorded quarantine suppresses."""
@@ -6685,11 +6692,12 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
     out as "the landing tier's business" for five green advances while it was red at every
     one of them. The one exception is a landing step whose verdict reads the upstream a
     launch would build rather than the tree (`reads_upstream`): it is not a property of the
-    trunk commit, so it stays the landing tier's business and is named as such. Go behavior
-    suites outside GO_LANDING_SUITE_DIRS are rolling kinds, planned for every `GO_TOOL_DIRS`
-    entry the range touches -- the same watch-based selection the full gate uses,
-    which is the design's
-    "per touched module" rule (section 4.2), not an unconditional run of every module.
+    trunk commit, so it stays the landing tier's business and is named as such. Whole-module
+    Go behavior suites (`go-substrate` and `go-tool`) are rolling kinds (`D-GR50`), planned
+    for every `GO_TOOL_DIRS` entry the range touches -- the same watch-based selection the
+    full gate uses, which is the design's "per touched module" rule (section 4.2), not an
+    unconditional run of every module -- while `go-affected` covers affected Go packages at
+    the landing tier and `gate-runner` narrows to the Python runner suites at `TIER_LANDING`.
 
     Gate code is landing-tier (`self-suite`), so a gate-code diff under `landing` still
     plans the audit suite, and under `rolling` the proof judges it again on the trunk: gate
@@ -6698,8 +6706,8 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
     plan.tier = tier
     if tier is None:
         return
-    if tier == TIER_LANDING and changed is not None:
-        changed_set = set(changed)
+    changed_set = set(changed) if (tier == TIER_LANDING and changed is not None) else None
+    if changed_set is not None:
         # Give checks omitted by the earlier selector the same read-skip reason.
         for skip in plan.skips:
             if skip.read_disjoint:
@@ -6720,8 +6728,38 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
                              "the heavy tree declaration go-test-shards-test judges this suite",
                              kind=check.kind, read_disjoint=False)
             continue
+        if tier == TIER_LANDING and check.kind == "gate-runner":
+            if check.selected_by is not None:
+                runner_selected = tuple(
+                    path for path in check.selected_by
+                    if (changed_set is None or path in changed_set)
+                    and watched_path(path, set(GATE_RUNNER_WATCHES))
+                )
+            elif changed is not None:
+                runner_selected = tuple(
+                    path for path in changed if watched_path(path, set(GATE_RUNNER_WATCHES))
+                )
+            else:
+                runner_selected = None
+            if runner_selected == ():
+                plan.not_planned(
+                    "gate-runner (tools/tillr-gate)",
+                    CHANGE_READ_SKIP if changed is not None else "no gate-runner Python input changed",
+                    read_disjoint=changed is not None,
+                )
+            elif shutil.which("python3"):
+                check.label = GATE_RUNNER_PYTHON_LABEL
+                check.argv = ["sh", "-c", GATE_RUNNER_PYTHON_COMMAND]
+                check.watches = GATE_RUNNER_WATCHES
+                check.selected_by = runner_selected
+                check.go_module = ""
+                kept.append(check)
+            else:
+                plan.unavailable("gate-runner (tools/tillr-gate)", "python3 is unavailable here",
+                                 kind="gate-runner", selected_by=runner_selected)
+            continue
         if check_tier(check.kind) == tier:
-            if (tier == TIER_LANDING and changed is not None and check.watches
+            if (tier == TIER_LANDING and changed_set is not None and check.watches
                     and not changed_set.intersection(check.selected_by or ())
                     and not any(watch_matches(path, watch) for path in changed for watch in check.watches)):
                 plan.not_planned(check.label, CHANGE_READ_SKIP, kind=check.kind)
@@ -6733,11 +6771,6 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
                       f"({check.kind} is a rolling kind)", kind=check.kind)
         elif not reads_upstream(check):
             # The proof judges the landing kinds too: see the docstring.
-            if tier == TIER_ROLLING and check.kind == "gate-runner" and check.go_module in GO_SHARD_DIRS:
-                check.argv = [
-                    part.replace("--slot-class gate", "--slot-class proof")
-                    for part in check.argv
-                ]
             kept.append(check)
         else:
             plan.not_planned(check.label,
@@ -6746,21 +6779,12 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
                              f"a landing kind)",
                              kind=check.kind, read_disjoint=False)
     plan.checks = kept
-    if tier == TIER_LANDING:
-        has_substrate = any(c.kind == "go-substrate" for c in plan.checks)
-        has_gate_runner = any(c.kind == "gate-runner" for c in plan.checks)
-        if has_substrate or has_gate_runner:
-            for c in plan.checks:
-                if c.kind == "go-affected":
-                    if has_substrate and "tools/tillr" not in c.argv:
-                        c.argv.extend(["--drop-module", "tools/tillr"])
-                    if has_gate_runner and "tools/tillr-gate" not in c.argv:
-                        c.argv.extend(["--drop-module", "tools/tillr-gate"])
     # A skip the diff selected for a kind this tier does not plan is the same news as a
     # check it would have run: under `landing` it is owed. Under `rolling` every kind is
     # planned, so a selected skip stays the planned skip it is: a check the proof could not
     # answer here is unavailable, never quietly someone else's. A skip nothing selected
     # stays not-planned.
+    kept_skips: list[Skip] = []
     for skip in plan.skips:
         if skip.kind == "go-affected" and tier != TIER_LANDING:
             skip.kind = ""
@@ -6769,14 +6793,52 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
             skip.owed = False
             skip.read_disjoint = False
             skip.why = "does not apply on the rolling tier because whole Go module suites run fresh"
+            kept_skips.append(skip)
+            continue
+        if tier == TIER_LANDING and skip.kind == "gate-runner" and skip.planned:
+            if skip.selected_by is not None:
+                runner_selected = tuple(
+                    path for path in skip.selected_by
+                    if (changed_set is None or path in changed_set)
+                    and watched_path(path, set(GATE_RUNNER_WATCHES))
+                )
+            elif changed is not None:
+                runner_selected = tuple(
+                    path for path in changed if watched_path(path, set(GATE_RUNNER_WATCHES))
+                )
+            else:
+                runner_selected = None
+            if runner_selected == ():
+                skip.kind = ""
+                skip.planned = False
+                skip.owed = False
+                skip.read_disjoint = changed is not None
+                skip.why = CHANGE_READ_SKIP if changed is not None else "no gate-runner Python input changed"
+                kept_skips.append(skip)
+            elif runner_selected is not None and shutil.which("python3"):
+                plan.checks.append(
+                    Check("gate-runner", GATE_RUNNER_PYTHON_LABEL,
+                          ["sh", "-c", GATE_RUNNER_PYTHON_COMMAND],
+                          "the gate runner or its suite inputs changed", GO_TOOL_TIMEOUT,
+                          watches=GATE_RUNNER_WATCHES, selected_by=runner_selected,
+                          cost=GO_TOOL_COST_ESTIMATE["tools/tillr-gate"],
+                          drop=("LAND_BATCH_LIMIT",))
+                )
+            else:
+                if runner_selected is not None:
+                    skip.why = "python3 is unavailable here"
+                kept_skips.append(skip)
             continue
         if (not skip.planned or not skip.kind or check_tier(skip.kind) == tier
                 or tier == TIER_ROLLING):
+            kept_skips.append(skip)
             continue
         skip.planned = False
         skip.owed = True
         skip.why = (f"the landing tier defers it to the rolling tier "
                     f"({skip.kind} is a rolling kind)")
+        kept_skips.append(skip)
+    plan.skips = kept_skips
 
 
 def build_plan(
@@ -7203,21 +7265,20 @@ def build_plan(
                          "no work-class render test or layer changed")
 
     # Build and test compilation moved to the whole-tree go-build declaration.
-    # This planner still selects the full behavior suite of each changed module.
+    # This planner selects the full behavior suite of each changed module; `apply_tier`
+    # narrows `gate-runner` to the Python runner suites at `TIER_LANDING` (`D-GR50`).
     for directory in GO_TOOL_DIRS:
         runner = directory == "tools/tillr-gate"
         suite_kind = ("gate-runner" if runner else
                       "go-substrate" if directory in GO_LANDING_SUITE_DIRS else "go-tool")
-        slot_class = "gate" if (runner and tier != TIER_ROLLING) else "proof"
         watches = go_tool_watches(directory, root)
         go_tool = [path for path in changed if watched_path(path, set(watches))]
-        if go_tool and shutil.which("go"):
+        if go_tool and shutil.which("go") and (not runner or shutil.which("python3")):
             plan.checks.append(
                 Check(suite_kind, f"{directory}'s whole suite passes",
-                      ["sh", "-c", go_tool_command(directory, slot_class=slot_class) + (
+                      ["sh", "-c", go_tool_command(directory, slot_class="proof") + (
                           (("" if directory in GO_SHARD_DIRS else " && cd ../..")
-                           + " && python3 tools/gate/change-gate.test.py"
-                           " && python3 tools/gate/runner-first.test.py") if runner else "")],
+                           + f" && {GATE_RUNNER_PYTHON_COMMAND}") if runner else "")],
                       ("the gate runner or its suite inputs changed" if runner else
                        f"a suite input for {directory}/ changed"), GO_TOOL_TIMEOUT,
                       watches=watches, selected_by=tuple(go_tool),
@@ -7225,7 +7286,9 @@ def build_plan(
                       drop=("LAND_BATCH_LIMIT",))
             )
         elif go_tool:
-            plan.unavailable(f"{suite_kind} ({directory})", "go is unavailable here", kind=suite_kind)
+            missing_tool = "go" if not shutil.which("go") else "python3"
+            plan.unavailable(f"{suite_kind} ({directory})", f"{missing_tool} is unavailable here",
+                             kind=suite_kind, selected_by=tuple(go_tool))
         else:
             plan.not_planned(f"{suite_kind} ({directory})", f"no path under {directory}/ changed")
 
