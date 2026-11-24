@@ -2,18 +2,18 @@
 title: "Contract: tillr-cli"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
+updated: 2026-11-24
 tags: [tillr, contract, cli]
-summary: "What tillr-cli provides and expects, read from the code at dab5a2da0e: the one command `tillr <noun>`, eight nouns, and three exit codes of its own. It expects one program per noun on the path, and the list of nouns is typed in four places that do not agree."
+summary: "What tillr-cli provides and expects: the one command `tillr <noun>`, eight nouns it hands to another program, one it answers itself, and three exit codes of its own. It expects one program per dispatched noun on the path, and the list of programs is typed in four places that do not agree."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-cli
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** Nothing here is built: `tools/tillr-cli` has no `contract/` directory. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it. The surface below was checked against `tools/tillr-cli` on 2026-11-24.
 
-**What it is.** One Go program at `tools/tillr-cli`, installed as `tillr`. It finds the program `tillr-<noun>` on the path and replaces itself with it, passing every argument after the noun untouched.
+**What it is.** One Go program at `tools/tillr-cli`, installed as `tillr`. It finds the program `tillr-<noun>` on the path and replaces itself with it, passing every argument after the noun untouched. Its [README](../../../tools/tillr-cli/README.md) describes the same dispatch for a person running it.
 
 ## 1. What it provides
 
@@ -22,6 +22,7 @@ depends-on:
 | Command | What it does | Exit |
 | :--- | :--- | :--- |
 | `tillr <noun> …` | Runs `tillr-<noun> …`; reads nothing after the noun | the child's |
+| `tillr notify serve` | Runs the local wake-hint relay inside this program; no other program is started | its own |
 | `tillr --help`, `tillr -h` (alone) | Prints the nouns | 0 |
 | `tillr` with no noun, or a word that is no noun | Prints the nouns on standard error | 2 |
 | a noun whose program is not on the path, or cannot be started | Prints which program is missing | 4 |
@@ -41,7 +42,7 @@ It reads `PATH` and passes its whole environment to the child.
 
 ### 1.5 Names others match on
 
-**The nouns**, in order: `store`, `item`, `land`, `drain`, `run`, `gate`, `view`, `watch`. The three scripts (`tillr-loop`, `tillr-trace`, `tillr-roll`) are not nouns and are reached by their own names.
+**The nouns**, in order: `store`, `item`, `land`, `drain`, `run`, `gate`, `view`, `watch`, `notify`. The first eight are dispatched to a program of that name; `notify` is answered by this program. The three scripts (`tillr-loop`, `tillr-trace`, `tillr-roll`) are not nouns and are reached by their own names.
 
 ## 2. What it expects
 
@@ -56,12 +57,13 @@ It reads `PATH` and passes its whole environment to the child.
 | A program named `tillr-view` | [tillr-view](./tillr-view.md) | subprocess | `main.go` |
 | A program named `tillr-watch` | [tillr-watch](./tillr-watch.md) | subprocess | `main.go` |
 | The exit codes 0, 2, 4 and 5 | [tillr](./tillr.md) | Go import | `main.go` |
+| The wake-hint relay of the library's `notify` package | [tillr](./tillr.md) | Go import | `notify.go` |
 
-It reads no output of any child: after a successful start it is no longer running.
+It reads no output of any child: after a successful start it is not running.
 
 ## 3. Contract and private
 
-**Contract:** the eight nouns; that arguments, standard input, standard output and the exit code pass through unchanged; exit 2 for a missing or unknown noun; exit 4 for a program that is not on the path.
+**Contract:** the eight dispatched nouns; that arguments, standard input, standard output and the exit code pass through unchanged; exit 2 for a missing or unknown noun; exit 4 for a program that is not on the path.
 
 **Private:** the usage and refusal sentences.
 

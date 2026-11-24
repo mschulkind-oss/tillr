@@ -2,18 +2,18 @@
 title: "Contract: tillr-loop"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
+updated: 2026-11-24
 tags: [tillr, contract, loop, adapter]
-summary: "What tillr-loop provides and expects, read from the code at dab5a2da0e: one Python script with eight faces, five exit codes, and the `describe` answer the drain checks at start. Its provided side is already held by a generated file of real argument lists. Its expected side is not: it types the flags of the gate, land and item programs and tests against stand-ins that accept anything."
+summary: "What tillr-loop provides and expects: one Python script with eight faces, five exit codes, and the `describe` answer the drain checks at start. Its provided side is already held by a generated file of real argument lists. Its expected side is not: it types the flags of the gate, land and item programs and tests against stand-ins that accept anything."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-loop
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** Nothing here is built: `tools/tillr-loop` has no `contract/` directory. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it. The faces, flags, exit codes and test names below were checked against `tools/tillr-loop` on 2026-11-24.
 
-**What it is.** One Python script at `tools/tillr-loop/tillr-loop`. The drain's loop has three steps it hands to a program: judge a candidate, land it, record its verdicts. This script is that program for this repository. It turns each step into calls of `tillr-gate`, `tillr-land` and `tillr-item`. The drain holds a byte-for-byte copy and runs the copy.
+**What it is.** One Python script at `tools/tillr-loop/tillr-loop`. The drain's loop has three steps it hands to a program: judge a candidate, land it, record its verdicts. This script is that program for this repository. It turns each step into calls of `tillr-gate`, `tillr-land` and `tillr-item`. The drain holds a byte-for-byte copy and runs the copy. Its [README](../../../tools/tillr-loop/README.md) documents the same faces and exit codes for an operator.
 
 ## 1. What it provides
 
@@ -21,10 +21,10 @@ depends-on:
 
 | Face | What it does | Flags the drain passes |
 | :--- | :--- | :--- |
-| `gate` | `tillr-gate change`, then `tillr-gate plan` over the candidate's `tools/gate/checks` declarations, then `tillr-gate run` | the candidate flags `--item --lane --run --worktree --base --head --root` |
-| `land` | one `tillr-land pass` | the candidate flags, and `--observed-trunk --base-ref --message-from` |
-| `verdict` | `tillr-item show`, then one `tillr-item verdict record` per verification-only criterion | the candidate flags and `--verdict` |
-| `fixer-gate` | replaces itself with the judge of one named whole-tree declaration, in a fixer's candidate worktree | the candidate flags and `--only` |
+| `gate` | `tillr-gate change`, then `tillr-gate plan` over the candidate's `tools/gate/checks` declarations, then `tillr-gate run` | the candidate flags `--item --lane --run --worktree --base --head --root --store --work-dir --now`, and `--tillr-gate --tillr-land --tillr-item --registry --gate-program` |
+| `land` | one `tillr-land pass` | the candidate flags, the three program flags, and `--observed-trunk --base-ref --message-from` |
+| `verdict` | `tillr-item show`, then one `tillr-item verdict record` per verification-only criterion | the candidate flags, the three program flags and `--verdict` |
+| `fixer-gate` | replaces itself with the judge of one named whole-tree declaration, in a fixer's candidate worktree | the candidate flags, the three program flags and `--only` |
 | `replay`, `rolling` | replace themselves with `tillr-gate checks --heavy-tree` (or `tools/gate/tree-check.py --only` for a fast declaration) on the checked-out revision | `--only`; `--all` or `--since` |
 | `describe` | prints `{"hooks": {<face>: [<flags>]}}` | none |
 | `self-check` | prints the commands it would run, and runs nothing | none |
@@ -93,7 +93,7 @@ In `tools/tillr-loop/test.py`, which runs in seconds.
 - **To add, for what it expects.** The same in the other direction. The gate, land and the item utility each publish their face and flag lists as files, and a test here checks every argument list this script composes against them. A flag renamed in `tillr-land` then fails land's own contract test first, and this one second, and never a drain run.
 - **Stand-ins fed by examples.** The shell stand-ins stay, because the suite must not build Go programs. What they print comes from the providers' example files: the item utility's `show` example, the gate's verdict examples.
 - **The verdict record.** One example of the record this script writes, checked against the item utility's `verdict record` input entry.
-- **Names.** The claim classes and the stall code are read from the providers' name-set files and no longer typed.
+- **Names.** The claim classes and the stall code are read from the providers' name-set files, not typed here.
 
 ## 5. Reach-ins to fix
 
