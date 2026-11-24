@@ -732,6 +732,22 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 						row.Why += ": " + waiting.Reason
 					}
 					row.Mover = "remove the dependency or reopen the closed item (" + depID + ")"
+					if testFixHeldWait(*waiting) {
+						if cmd := testFixClosedRetryCommand(r, it.ItemID, work); cmd != "" {
+							row.Mover = cmd
+						}
+					}
+				} else if depID, ok := strings.CutPrefix(waiting.Waiter, "item:"); ok && testFixHeldWait(*waiting) && finishedState(def, states[depID]) && states[depID] != StateLanded {
+					row.Class = "needs you"
+					row.Why = depID + " finished without landing (" + states[depID] + ")"
+					if strings.TrimSpace(waiting.Reason) != "" {
+						row.Why += ": " + waiting.Reason
+					}
+					if cmd := testFixClosedRetryCommand(r, it.ItemID, work); cmd != "" {
+						row.Mover = cmd
+					} else {
+						row.Mover = "remove the dependency or reopen the closed item (" + depID + ")"
+					}
 				} else if len(closedBlockers) > 0 {
 					row.Why += "; " + strings.Join(closedBlockers, ", ") + " closed without landing"
 				}
@@ -1604,6 +1620,28 @@ func acceptedConflictRetryCommand(r *store.Reader, itemID string, c item.Conflic
 	cmd, err := acceptedBuildRetryCommand(r, itemID, c.RunID)
 	if err != nil {
 		return retryCommand(itemID, c.RunID, "")
+	}
+	return cmd
+}
+
+// testFixClosedRetryCommand returns the exact `tillr drain retry` invocation that
+// releases a test-fix-open hold after its named fix item closed without landing.
+func testFixClosedRetryCommand(r *store.Reader, itemID string, work *pendingWork) string {
+	var runID string
+	_ = r.QueryRow(
+		`SELECT run_id FROM runs WHERE item_id = ? AND state IN (?, ?, ?)
+		  ORDER BY started_at DESC, event_seq DESC, rowid DESC LIMIT 1`,
+		itemID, run.StateExited, run.StateFailedToStart, run.StateTimedOut,
+	).Scan(&runID)
+	if runID == "" && work != nil && work.Decision.RunRequest != nil {
+		runID = work.Decision.RunRequest.RunID
+	}
+	if runID == "" {
+		return ""
+	}
+	cmd, err := acceptedBuildRetryCommand(r, itemID, runID)
+	if err != nil {
+		return retryCommand(itemID, runID, "")
 	}
 	return cmd
 }
