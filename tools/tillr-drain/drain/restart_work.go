@@ -257,6 +257,21 @@ func (h *restartMechanicalHold) acquire() {
 	}
 }
 
+func (h *restartMechanicalHold) acquireGateStart(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if h.loop.restartReplaced.Load() {
+		return errRestartPending
+	}
+	h.acquire()
+	if h.loop.restartReplaced.Load() {
+		h.release()
+		return errRestartPending
+	}
+	return nil
+}
+
 func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
 	for {
 		allowDuringProof := h.allowDuringProof.Load()
@@ -314,13 +329,23 @@ func (h *restartMechanicalHold) release() {
 // Mechanical gate and landing steps finish before exec. A model session nested
 // inside one temporarily gives up this place; its lifetime never bounds restart.
 func (l *Loop) lockRestartMechanical(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, false, false)
+	return l.lockRestartStep(ctx, false, false, false)
 }
 
 // An already admitted gate can finish through landing, while a pending restart
-// stops new gates and landings from taking a new read hold until it is answered.
+// stops new non-detached gates and landings from taking a new read hold until
+// it is answered.
 func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, true, false)
+	return l.lockRestartStep(ctx, true, false, false)
+}
+
+// lockRestartGateStart acquires a brief settlement hold to prepare a candidate
+// and start or attach its detached gate without waiting for a pending restart.
+// Once the gate is running, restartWork releases the hold so the pending
+// restart can replace the loop while the gate runs; re-acquiring the hold after
+// the gate finishes follows the settlement wait rules.
+func (l *Loop) lockRestartGateStart(ctx context.Context) (context.Context, func(), error) {
+	return l.lockRestartStep(ctx, true, false, true)
 }
 
 // lockRestartLanding acquires a settlement hold that may still proceed while a
@@ -328,15 +353,21 @@ func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func
 // has already passed lands without waiting for the proof to end. Once the proof
 // ends, the pending restart still blocks new holds before the next proof or gate.
 func (l *Loop) lockRestartLanding(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, true, true)
+	return l.lockRestartStep(ctx, true, true, false)
 }
 
-func (l *Loop) lockRestartStep(ctx context.Context, settling, allowDuringProof bool) (context.Context, func(), error) {
+func (l *Loop) lockRestartStep(ctx context.Context, settling, allowDuringProof, allowPendingStart bool) (context.Context, func(), error) {
 	h, nested := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold)
 	if !nested {
 		h = &restartMechanicalHold{loop: l, settling: settling}
 		h.allowDuringProof.Store(allowDuringProof)
-		if err := h.acquireContext(ctx); err != nil {
+		var err error
+		if allowPendingStart {
+			err = h.acquireGateStart(ctx)
+		} else {
+			err = h.acquireContext(ctx)
+		}
+		if err != nil {
 			return ctx, func() {}, err
 		}
 		return context.WithValue(ctx, restartMechanicalKey{}, h), h.release, nil

@@ -513,8 +513,8 @@ PY
 			RunRequest: &run.Request{RunID: cB.RunID, ItemID: cB.ItemID, LaneID: cB.LaneID},
 		}
 		claimed, ok, err := l.claimSettledCandidateJudge(settleCtx, dB, &PassTiming{})
-		if err != nil || ok || claimed != nil {
-			t.Fatalf("claimSettledCandidateJudge admitted sibling while restart pending: claimed=%v ok=%v err=%v", claimed != nil, ok, err)
+		if err != nil || !ok || claimed == nil {
+			t.Fatalf("claimSettledCandidateJudge refused sibling detached gate while restart pending: claimed=%v ok=%v err=%v", claimed != nil, ok, err)
 		}
 
 		waiting := make(chan struct{}, 1)
@@ -1075,5 +1075,163 @@ PY
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestReadyCandidateGateStartsWhileRestartPendingAndLoopReplacesWhileGateRuns(t *testing.T) {
+	t.Setenv("TILLR_LOOP_STORE", "")
+	f := newRefusalLoopFixtureWithLanes(t, 2, "item-a")
+	holdWALKeeper(t, f.storePath)
+
+	work := scratchUnderDurable(t)
+	enteredGate := filepath.Join(work, "entered-gate")
+	releaseGate := filepath.Join(work, "release-gate")
+	counterFile := filepath.Join(work, "gate-count")
+	gateProg := executable(t, fmt.Sprintf(`exec python3 - "$@" <<'PY'
+import os, pathlib, time
+counter = pathlib.Path(%q)
+n = int(counter.read_text().strip()) if counter.exists() else 0
+counter.write_text(f"{n + 1}\n")
+pathlib.Path(%q).write_text(str(os.getpid()) + "\n")
+rel = pathlib.Path(%q)
+while not rel.exists():
+    time.sleep(0.02)
+PY
+`, counterFile, enteredGate, releaseGate))
+
+	steps := detachedGateTestSteps(t, f, time.Now, gateProg)
+	l := configureDetachedGateLoop(t, f, steps)
+	exe := filepath.Join(work, "tillr-drain-next")
+	if err := writeForkSafe(exe, []byte("replacement-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	execCh := make(chan string, 1)
+	l.cfg.Restart = &RestartConfig{
+		Executable: exe,
+		Check:      func(context.Context, string) error { return nil },
+		Exec: func(path string, argv, env []string) error {
+			select {
+			case execCh <- path:
+			default:
+			}
+			return nil
+		},
+	}
+
+	c := prepareReadyCandidate(t, f, l, "item-a")
+	here, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE lanes SET state=?, run_id=?, leased_until=NULL WHERE lane_id=?`, run.LaneStateLeased, c.RunID, c.LaneID); err != nil {
+			return err
+		}
+		return appendEffect(tx, examinationOwnerKind, c.RunID, here, l.cfg.Now())
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer func() {
+		cancel()
+		_ = os.WriteFile(releaseGate, []byte("cleanup\n"), 0o644)
+		l.examinations.Wait()
+	}()
+
+	// File a pending restart request and arm the barrier before the candidate's gate starts.
+	req, err := restart.File(ctx, f.storePath, restart.RoleDrain, l.cfg.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.markRestartPending()
+
+	// Both claimSettledCandidateJudge and launchExamination must admit the ready candidate
+	// so its detached gate starts without waiting for the pending restart to be answered.
+	d := Decision{
+		Action:     ActionJudge,
+		ItemID:     c.ItemID,
+		LaneID:     c.LaneID,
+		RunRequest: &run.Request{RunID: c.RunID, ItemID: c.ItemID, LaneID: c.LaneID},
+	}
+	claimed, ok, err := l.claimSettledCandidateJudge(ctx, d, &PassTiming{})
+	if err != nil || !ok || claimed == nil {
+		t.Fatalf("claimSettledCandidateJudge while restart pending = (%v, %v, %v); want admitted", claimed != nil, ok, err)
+	}
+
+	l.completions = make(chan runCompletion, 2)
+	l.launchExamination(ctx, d, claimed, l.cfg.Now(), &PassTiming{}, nil)
+
+	// Criterion 5: the ready candidate's gate starts without waiting for the restart to be answered.
+	waitForPath[error](t, enteredGate, nil)
+
+	// Criterion 6: the pending restart is still answered — the loop replaces itself while that gate runs.
+	select {
+	case got := <-execCh:
+		if got != exe {
+			t.Fatalf("exec path = %q, want %q", got, exe)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("loop did not replace itself while the detached gate was running")
+	}
+
+	// The detached gate must still be alive after replacement.
+	rawPID, err := os.ReadFile(enteredGate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatePID, err := strconv.Atoi(strings.TrimSpace(string(rawPID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !processAlive(gatePID) {
+		t.Fatalf("detached gate pid %d died during replacement", gatePID)
+	}
+
+	select {
+	case comp := <-l.completions:
+		if !errors.Is(comp.outcome.err, errRestartPending) || comp.outcome.stop != stopLaneRetained {
+			t.Fatalf("completion after replacement = %+v, want stopLaneRetained + errRestartPending", comp.outcome)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("examination did not complete after replacement")
+	}
+	l.examinations.Wait()
+
+	// Release the gate and verify the successor loop adopts the restart, reclaims the gate,
+	// and lands item-a without running the gate a second time.
+	if err := os.WriteFile(releaseGate, []byte("go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(restart.RequestEnv, req.ID)
+	t.Setenv(restart.FromEnv, "old-build")
+	steps2 := detachedGateTestSteps(t, f, time.Now, gateProg)
+	l2 := configureDetachedGateLoop(t, f, steps2)
+	l2.cfg.Restart = &RestartConfig{
+		Executable: exe,
+		Check:      func(context.Context, string) error { return nil },
+	}
+	if err := l2.adoptRestart(ctx); err != nil {
+		t.Fatalf("adoptRestart: %v", err)
+	}
+	ans, err := restart.AwaitAnswer(ctx, f.storePath, req.ID, time.Millisecond)
+	if err != nil {
+		t.Fatalf("restart answer lookup: %v", err)
+	}
+	if ans.Answer != restart.AnswerRestarted {
+		t.Fatalf("restart answer = %+v, want %q", ans, restart.AnswerRestarted)
+	}
+
+	res2, err2 := l2.Run(ctx)
+	if err2 != nil {
+		t.Fatalf("successor Run: %v (result=%+v)", err2, res2)
+	}
+	if res2.Landed != 1 {
+		t.Fatalf("successor Landed = %d, want 1", res2.Landed)
+	}
+	if got := readCounterFile(t, counterFile); got != 1 {
+		t.Fatalf("gate invocation count = %d, want 1", got)
+	}
+	if got := itemStateOf(t, f.storePath, "item-a"); got != StateLanded {
+		t.Fatalf("item-a state = %q, want %q", got, StateLanded)
 	}
 }

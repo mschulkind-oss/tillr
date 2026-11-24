@@ -3401,6 +3401,8 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		var unlock func()
 		if isProc && procSteps.hasPassedDetachedGate(candidate) {
 			ctx, unlock, err = l.lockRestartLanding(ctx)
+		} else if isProc {
+			ctx, unlock, err = l.lockRestartGateStart(ctx)
 		} else {
 			ctx, unlock, err = l.lockRestartSettlement(ctx)
 		}
@@ -3427,6 +3429,8 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		var unlock func()
 		if isProc && procSteps.hasPassedDetachedGate(candidate) {
 			ctx, unlock, err = l.lockRestartLanding(ctx)
+		} else if isProc {
+			ctx, unlock, err = l.lockRestartGateStart(ctx)
 		} else {
 			ctx, unlock, err = l.lockRestartSettlement(ctx)
 		}

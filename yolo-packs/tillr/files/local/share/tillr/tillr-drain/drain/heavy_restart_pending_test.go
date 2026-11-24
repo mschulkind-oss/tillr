@@ -557,11 +557,12 @@ func TestPendingRestartAfterGreenProofRestartsBeforeNextProofAndGates(t *testing
 }
 
 // TestPassedCandidateLandsWhileRestartWaitsOnTrunkProof reproduces the 2026-11-23
-// 22:58 sequence: while a loop restart is pending and waiting on an active trunk
-// proof, a candidate whose detached gate passes (and one already gated) finishes
-// judging and lands immediately without waiting for the proof to end, a candidate
-// needing a new gate still waits, and once the proof ends the pending restart
-// replaces the loop before any next proof or new gate starts.
+// 22:58 and 2026-11-24 01:54 sequences: while a loop restart is pending and
+// waiting on an active trunk proof, a candidate whose detached gate passes (and
+// one already gated) finishes judging and lands immediately without waiting for
+// the proof to end, a ready candidate needing a new detached gate starts its
+// gate without waiting for the restart, and once the proof ends the pending
+// restart still replaces the loop while that gate runs, before any next proof.
 func TestPassedCandidateLandsWhileRestartWaitsOnTrunkProof(t *testing.T) {
 	t.Setenv("TILLR_LOOP_STORE", "")
 	f := newRefusalLoopFixtureWithLanes(t, 3, "item-a", "item-b", "item-c")
@@ -582,6 +583,8 @@ func TestPassedCandidateLandsWhileRestartWaitsOnTrunkProof(t *testing.T) {
 	work := scratchUnderDurable(t)
 	enteredGateA := filepath.Join(work, "entered-gate-a")
 	releaseGateA := filepath.Join(work, "release-gate-a")
+	enteredGateB := filepath.Join(work, "entered-gate-b")
+	releaseGateB := filepath.Join(work, "release-gate-b")
 	gateLog := filepath.Join(work, "gate-log")
 	enteredProof1 := filepath.Join(work, "entered-proof-1")
 	releaseProof1 := filepath.Join(work, "release-proof-1")
@@ -598,8 +601,13 @@ if item == "item-a":
     rel = pathlib.Path(%q)
     while not rel.exists():
         time.sleep(0.02)
+elif item == "item-b":
+    pathlib.Path(%q).write_text(str(os.getpid()) + "\n")
+    rel = pathlib.Path(%q)
+    while not rel.exists():
+        time.sleep(0.02)
 PY
-`, gateLog, enteredGateA, releaseGateA))
+`, gateLog, enteredGateA, releaseGateA, enteredGateB, releaseGateB))
 
 	heavyGateBin := executable(t, fmt.Sprintf(`exec python3 - "$@" <<'PY'
 import json, os, pathlib, sys, time
@@ -662,6 +670,7 @@ PY
 	defer func() {
 		cancel()
 		_ = os.WriteFile(releaseGateA, []byte("cleanup\n"), 0o644)
+		_ = os.WriteFile(releaseGateB, []byte("cleanup\n"), 0o644)
 		_ = os.WriteFile(releaseProof1, []byte("cleanup\n"), 0o644)
 		l.heavyWG.Wait()
 		l.examinations.Wait()
@@ -694,14 +703,7 @@ PY
 		t.Fatalf("gateRestart while trunk proof active = %v, %q, %v; want deferred", handled, stop, err)
 	}
 
-	// 4. item-b (needing a new gate) must block on the pending restart without starting a gate.
-	waitingB := make(chan struct{}, 1)
-	l.restartWaitObs = func() {
-		select {
-		case waitingB <- struct{}{}:
-		default:
-		}
-	}
+	// 4. item-b (needing a new detached gate) starts its gate immediately while proof 1 is active and restart is pending.
 	dB := Decision{
 		Action:     ActionJudge,
 		ItemID:     cB.ItemID,
@@ -709,7 +711,7 @@ PY
 		RunRequest: &run.Request{RunID: cB.RunID, ItemID: cB.ItemID, LaneID: cB.LaneID},
 	}
 	l.launchExamination(ctx, dB, &pendingWork{Decision: dB, Candidate: &cB, BaseSHA: cB.BaseSHA}, l.cfg.Now(), &PassTiming{}, nil)
-	awaitRestartTest(t, waitingB, "item-b waiting on pending restart")
+	waitForPath[error](t, enteredGateB, nil)
 
 	// 5. Release item-a's detached gate (exit 0 / pass) while proof 1 is still active.
 	// It must finish judging and land without waiting for proof 1 to end.
@@ -766,7 +768,8 @@ PY
 		t.Fatalf("item-c state = %q, want %q", got, StateLanded)
 	}
 
-	// 7. End proof 1. The pending restart must happen before any next proof or new gate starts.
+	// 7. End proof 1. The pending restart must replace the loop while item-b's detached gate
+	// is still running, before any next proof starts.
 	if err := os.WriteFile(releaseProof1, []byte("go\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -786,20 +789,20 @@ PY
 	select {
 	case compB = <-l.completions:
 	case <-time.After(hangGuard):
-		t.Fatal("waiting item-b examination did not unblock after replacement")
+		t.Fatal("item-b examination did not unblock after replacement")
 	}
 	l.examinations.Wait()
-	if compB.itemID != cB.ItemID || !errors.Is(compB.outcome.err, errRestartPending) {
-		t.Fatalf("item-b completion = %+v, want errRestartPending", compB)
+	if compB.itemID != cB.ItemID || !errors.Is(compB.outcome.err, errRestartPending) || compB.outcome.stop != stopLaneRetained {
+		t.Fatalf("item-b completion = %+v, want stopLaneRetained + errRestartPending", compB)
 	}
 
-	// Only item-a ran the gate; item-b never started a gate.
+	// Both item-a and item-b started their detached gates.
 	gateRaw, err := os.ReadFile(gateLog)
 	if err != nil {
 		t.Fatalf("read gate log: %v", err)
 	}
-	if got := strings.Fields(string(gateRaw)); len(got) != 1 || got[0] != "item-a" {
-		t.Fatalf("gate invocations = %v, want only [item-a]", got)
+	if got := strings.Fields(string(gateRaw)); len(got) != 2 || got[0] != "item-a" || got[1] != "item-b" {
+		t.Fatalf("gate invocations = %v, want [item-a item-b]", got)
 	}
 
 	// Only tip1 was proved before the restart.
