@@ -7,7 +7,7 @@ One executable answers the definition's hook program contract (see
 Revision hooks run the drain's default repository checks. The embedded definition
 leaves hooks unset; explicit step programs keep their existing behavior.
 
-  tools/tillr-loop/tillr-loop gate    [--registry <check-registry.json>] [--since <sha> | --all] <candidate flags>
+  tools/tillr-loop/tillr-loop gate    [--registry <check-directory>] <candidate flags>
   tools/tillr-loop/tillr-loop land    [--observed-trunk <sha>] [--base-ref <ref>] [--message-from <sha>] <candidate flags>
   tools/tillr-loop/tillr-loop verdict --verdict pass <candidate flags>
   tools/tillr-loop/tillr-loop fixer-gate --only <check> <candidate flags>

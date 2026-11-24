@@ -38,7 +38,7 @@ vantage:
 
 # Drain Pass and Successor Reference
 
-> **Delivered copy.** This is `docs/reference/tillr-drain-successor.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-drain-successor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-drain-successor.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-drain-successor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Current reference, verified 2026-11-20 against `1552b7c90c8fdfd6cfac469dd8e476536c974d6e`. UNMEASURED: Go test suites verify replay-invariant identities, zero-write empty passes, non-blocking sibling dispatch, and trigger wakeups; live-night lane-idle reduction against the retired batch-tick loop is not measured in this document.
 
@@ -155,7 +155,7 @@ Before planning items, `passPlansGeneration` acquires `withRunStartLock` and rea
 
 Holds divide into three operational categories:
 
-1. **Pass-resource deferrals (`Position = "queued"`):** `no-lane`, `fork-held` (`DeferredBy` naming the item holding `.forks/lanes/<lane>/<fork>/` via `liveForks` across both live leases and unfinished `pendingWork`), `waits on a desk`, and `waits on the document's desk`. Ordinary repository items never block each other on path overlap at dispatch; only fork items sharing `refs/heads/patch/<fork>` serialize before landing. In `heldDetail` (`loop.go`), `no-lane` and `fork-held` report in a separate `deferred item(s)` summary group.
+1. **Pass-resource deferrals (`Position = "queued"`):** `no-lane`, `fork-held` (`DeferredBy` naming the item holding the lane's fork checkout via `liveForks` across both live leases and unfinished `pendingWork`), `waits on a desk`, and `waits on the document's desk`. Ordinary repository items never block each other on path overlap at dispatch; only fork items sharing `refs/heads/patch/<fork>` serialize before landing. In `heldDetail` (`loop.go`), `no-lane` and `fork-held` report in a separate `deferred item(s)` summary group.
 2. **Item holds (`Position = "held"`):** Facts about the item, its blockers, open questions, backend/quota windows, or unretried run endings. Every exported `Reason` constant maps to a waiting class and mover in `holdrules.Rules` (`tools/tillr-drain/holdrules/holdrules.go`); retired historical reasons (`capacity`, `inputs-changed`, `readmission-exhausted`, `retry-stale`, `conflict-exhausted`, `run-infra-exhausted`) stay in `holdrules.Rules` solely so historical `dispatches` rows still render.
 3. **Faults:** `NewLoop` (`loop.go`) and `passPlansGeneration` (`pass.go`) treat a missing usable backend policy (`ReasonNoPolicy`) as a startup/pass error (`StopFault`) rather than holding items (`ReasonNoPolicy` appears only in standalone `Plan` calls without a policy). Per-item invariant faults (`decision-collision`, `settle-failed`, `workflow-invalid`) record in `drain_item_faults` and hold only the affected item as `item-fault: …` until cleared with `tillr-drain clear-fault`.
 

@@ -74,7 +74,7 @@ measured target, not a kill deadline. Generated declarations follow the same rul
 [The budget declaration](../../tools/gate/checks/gate-budget.json) runs arithmetic admission:
 fast budgets may total at most 9,000 milliseconds. Its
 [fixture test declaration](../../tools/gate/checks/gate-budget-test.json) reads only the check
-directory. The fast total is 8,950 milliseconds, including the admission check.
+directory. The fast total is 8,600 milliseconds, including the admission check.
 Fast declarations may not name `timeout_ms`; `budget_ms` is their only target.
 
 Checks keep their own verdict past their target. `budget_ms`, duration and
@@ -214,23 +214,21 @@ not a rejection; an unavailable judgment outranks a rejection elsewhere in the s
 tillr-gate checks --base <lane-base> --head <candidate-head> --logs <run>/change-logs
 ```
 
-The repository’s change declarations cover commit identity, the frozen seed, commit
-citations, rendering changed Markdown, and refusing newly added TypeScript files over
-3,000 lines. Existing TypeScript size warnings remain in the older tree program. The
-[loop’s default judge](../gate/change-gate.py) runs the change declarations and fast tree
-checks first, then the remaining tree program; it stops if any check fails or cannot judge.
+The repository’s change declarations cover commit identity, commit citations, rendering
+changed Markdown, elapsed-time waits in tests, the fast-budget total, and refusing newly
+added TypeScript files over 3,000 lines. The [loop’s default judge](../gate/change-gate.py)
+runs the change declarations and the fast tree checks, and nothing else; it exits with the
+runner's verdict.
 
 For a lane candidate, the judge passes `--scope-to-change` to `checks` if the installed
 binary advertises it. Checks with declared reads run only when a changed path matches
 one of those reads; `.` declares the whole tree. Checks without declared reads always
 run and are named in the output. The verdict records disjoint checks as
-`skipped: no changed path is read`, not as passes. The remaining tree program applies
-the same rule in its landing tier. Older binaries keep the unscoped fast checks until
-upgraded, and trunk proof never opts in to this scoping.
+`skipped: no changed path is read`, not as passes. A binary that does not advertise the
+flag runs the unscoped fast checks, and trunk proof never opts in to this scoping.
 
-The fast tree checks cover Markdown conventions, series structure, the pack mirror, and
-parallel Go builds. Structural proof is not remembered because it also reads Git refs
-outside the judged tree.
+The fast tree checks cover Markdown conventions (formatting, scratch citations and design
+citations), the pack mirror, and parallel Go builds.
 
 ## Judging heavy declarations
 

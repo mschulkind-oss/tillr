@@ -18,7 +18,7 @@ vantage:
 
 # A claude backend for tillr: a seat can run on the Claude subscription and falls back when its window is spent
 
-> **Delivered copy.** This is `docs/design/tillr-claude-backend.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-claude-backend.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-19. Built except [Section 6](#6-build-order) step 3 (`harness_args` for
 the pi adapter, deferred until a pi seat needs it). On 2026-11-16, the adapter and
@@ -34,7 +34,7 @@ setup was fixed that day in `af168297a`). Also on 2026-11-16, a real-store loop 
 [`config/tillr/backend-policy.mixed.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.mixed.json)
 dispatched thirteen conflict-design runs to `claude-designer` (`07:55:43` to `08:22:52`
 UTC), each refused with exit 1 after the real weekly subscription limit had been reached
-([the roadmap's conflict-design routing entry](../tillr/roadmap.md#route-design-work-past-a-design-seat-that-is-out-of-quota);
+(the conflict-design routing defect,
 fixed in `c448c053a`). Both
 [`config/tillr/backend-policy.claude.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.claude.json)
 and [`config/tillr/backend-policy.mixed.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.mixed.json)
