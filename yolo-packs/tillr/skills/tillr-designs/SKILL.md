@@ -111,14 +111,13 @@ The paths below are under `~/.local/share/tillr/`.
 
 1. `docs/tillr/design-status.md` ("Read this first") and `docs/tillr/roadmap.md`: what tillr
    does today, what is built, queued, proposed, and iceboxed, and how statuses are verified.
-2. `docs/design/tillr-definitions-plan.md` and `tillr/examples/recorded-verdict/README.md`: all
-   eighteen built items of the first charter tranche, plus the worked non-Git example you can run
-   from an empty directory.
-3. `docs/design/tillr-separable-parts.md`: first "For the Product QA project's agent", then
-   Section 7 (each second-round request's fate and the item that built it), Section 2 (the stable
-   command-and-record contract vs internal surfaces), and Section 1.3 (what stays charter-scoped).
-   `docs/design/tillr-product-qa-requests.md` holds Product QA's second-round reply as received.
-4. `docs/design/tillr-core-and-git-landing.md`, Sections 1, 4, 5, 6 and 8, alongside
+2. `tillr/examples/recorded-verdict/README.md`: the worked non-Git example you can run from an
+   empty directory.
+3. `docs/design/tillr-separable-parts.md`: first "For a consumer's agent", then Section 2 (the
+   stable command-and-record contract vs internal surfaces), Section 7 (each request a consumer
+   made and what the tree does for it), and Section 1.3 (what stays charter-scoped).
+4. `docs/design/tillr-core-and-git-landing.md`, Sections 1, 4, 5, 6 and 8 (Section 8.5 lists the
+   unbuilt units), alongside
    `tillr/definition/README.md`: the core-and-charter split and the exact `definition.json` and
    `complete-item` hook contract.
 5. Optional background on how work enters `git-landing`: `docs/design/tillr-intake-paths.md`.
@@ -129,7 +128,7 @@ Trust `docs/tillr/design-status.md` and `docs/tillr/roadmap.md` over an individu
 header line, and check `~/.local/share/tillr/<module>/README.md` or `<binary> --help` for
 landings newer than `docs/snapshot.json`:
 
-- **Built:** All eight CLI binaries, the 18-item `tillr-definitions-plan.md` tranche (custom
+- **Built:** All eight CLI binaries, the first build of the core and charter split (custom
   `definition.json` lifecycles, `complete-item` hooks, and `examples/recorded-verdict`), item
   graphs, `planned-build@v1` and seat tiering, queue persistence and ordering, designer desks and
   comment intake, rolling restarts, the converge planner, fast gate + `after-merge` heavy proof +
@@ -177,8 +176,8 @@ Do not edit the delivered copies under `~/.local/share/tillr/`. They are overwri
 sync or snapshot, and nothing reads them back.
 
 1. Write your comments or requests as a tracked document in your own repository and tell the
-   owner where it is; the owner relays it. tillr records each round as received in
-   `docs/design/tillr-product-qa-requests.md`.
+   owner where it is; the owner relays it. tillr answers in Section 7 of
+   `docs/design/tillr-separable-parts.md`.
 2. Number each entry and record the behavior you ran or read, the snapshot commit from
    `docs/snapshot.json` (plus binary build if newer), and the date. Try the `recorded-verdict`
    example and cover what your pipeline needs from store events and views, cross-repository

@@ -260,7 +260,7 @@ retry, a design answer, or the recovery of a killed run. Infrastructure failures
 [recorded backend availability](../../tools/tillr-drain/README.md#recorded-backend-availability).
 
 *Not enforced:* the failure fingerprint store, the fleet trip and the drain's own probes specified
-in [the cooldown-removal design](./failure-diagnosed-not-waited-out.md).
+in [the cooldown-removal design](./tillr-judge-and-lifecycle.md#424-diagnosing-a-repeated-failure-the-unbuilt-mechanism).
 
 *Scope:* **not lander-scoped.** The lander dispatches no lanes and keeps no retry state.
 

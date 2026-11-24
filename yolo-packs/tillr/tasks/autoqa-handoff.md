@@ -27,9 +27,9 @@ needs from tillr now:
 
 What a reviewer can rely on:
 
-1. **Core and charter split (`definition.json`).** All eighteen items of
-   [`docs/design/tillr-definitions-plan.md`](../../../docs/design/tillr-definitions-plan.md)
-   have landed. `tillr store init` creates every module's tables up front and binds the store's
+1. **Core and charter split (`definition.json`).** The first build of
+   [`docs/design/tillr-core-and-git-landing.md`](../../../docs/design/tillr-core-and-git-landing.md#82-what-is-built-and-what-is-not)
+   is in the tree. `tillr store init` creates every module's tables up front and binds the store's
    charter (`git-landing` by default, or a custom `definition.json` declaring states,
    transitions, `completes: "hook"`, and a `complete-item` hook program; documented in
    [`tools/tillr/definition/README.md`](../../../tools/tillr/definition/README.md)). A worked

@@ -181,7 +181,7 @@ Third by rule 2: each of these is a place where a red check costs more than the 
     on the trunk, built in shadow first. It has no design document; the gate it would change is
     described in [the gate reference](../reference/gate.md).
 
-13. [A failure is diagnosed, not waited out](../design/failure-diagnosed-not-waited-out.md): a
+13. [A failure is diagnosed, not waited out](../design/tillr-judge-and-lifecycle.md#424-diagnosing-a-repeated-failure-the-unbuilt-mechanism): a
     failure is fingerprinted from its own text, and a deterministic one blocks its items on one
     diagnosis ticket. After landing velocity because it reads that tier's results.
 
@@ -202,7 +202,7 @@ person who did not need to be asked.
     whole module suite, not after.
 
 17. [One evidence registry, and no whole-suite runs in lanes](../design/tillr-evidence-registry-and-suite-guardrail.md)
-    ([plan sketch](../design/tillr-evidence-registry-and-suite-guardrail-plan.md)): the gate, the
+    ([build sketch](../design/tillr-evidence-registry-and-suite-guardrail.md#9-build-phases-sketch)): the gate, the
     trunk proof and a worker's brief trust one recorded result instead of running a check again.
 
 18. [Refused pushes](../reference/tillr-refused-push.md): when the remote branch has moved, replay
@@ -312,7 +312,7 @@ Seventh because it lowers the cost of every run and stops nothing when it is mis
 
 47. [Seat profiles and one-command switching](../design/tillr-seat-profiles.md) and
     [live changes to drain capacity](../design/tillr-live-drain-config.md)
-    ([plan sketch](../design/tillr-live-drain-config-plan.md)): named policies an operator
+    ([build sketch](../design/tillr-live-drain-config.md#8-build-phases-sketch)): named policies an operator
     switches while the drain runs.
 
 48. [The `claude` run adapter](../reference/tillr-claude-backend.md) and
@@ -353,8 +353,8 @@ Last because it changes how tillr is delivered and nothing about what it does.
     holds, so the pack's source copy can go. Related to entry 1, which decides the first build.
 
 57. [What tillr changes for a consuming pipeline](../design/tillr-separable-parts.md) and
-    [the definitions build plan](../design/tillr-definitions-plan.md): four small pieces of work
-    and the plan's next tranche are unfiled.
+    [the unbuilt units of the core and charter split](../design/tillr-core-and-git-landing.md#85-the-unbuilt-units):
+    four small pieces of work and ten units are not queued.
 
 58. Graduate a built design into a reference:
     [the utilities](../design/board-utilities.md).

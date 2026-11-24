@@ -11,7 +11,6 @@ next: "Build agent watches, the subscribe stream, the outcome record and the fiv
 related:
   - ./landing-principles.md
   - ../reference/run-wall-ruling.md
-  - ./failure-diagnosed-not-waited-out.md
   - ./tillr-judge-and-lifecycle.md
   - ./tillr-state-machines.md
   - ./tillr-goal-monitor.md
@@ -134,8 +133,8 @@ A rule may observe and tell. It may not stop a run, fail an item, remove a lane 
 impose a limit. Four rulings elsewhere say the same thing from their own side:
 
 - [Whether a run wall exists at all](../reference/run-wall-ruling.md#no-default-wall).
-- [Failure is diagnosed, not waited out](./failure-diagnosed-not-waited-out.md#31-the-four-tests),
-  and its [restatement of admission](./failure-diagnosed-not-waited-out.md#34-admission-restated).
+- [Failure is diagnosed, not waited out](./tillr-judge-and-lifecycle.md#the-four-tests),
+  and its [restatement of admission](./tillr-judge-and-lifecycle.md#admission-after-a-failure).
 - [Only verdicts charge](./landing-principles.md#5-only-verdicts-charge) and
   [a budget escalates, it does not loop](./landing-principles.md#6-a-budget-escalates-it-does-not-loop).
 - [How a worker run's ending moves its item](./tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10).

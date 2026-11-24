@@ -313,7 +313,7 @@ A claim is not a running successor. An interrupted node restarts on the same bac
 The drain never moves a run, a node or an item to another backend because something failed. A seat runs on one backend the policy names, and changing it is a person's edit.
 
 1. **An infrastructure ending holds the item on its own backend** as `backend-closed`, stating the run, the backend, the exit code or end cause, and the harness's last error words. It closes the backend ([recorded backend availability](../../tools/tillr-drain/README.md#recorded-backend-availability)).
-2. **The operator is the mover.** A successful `tillr-drain probe-backend`, or a later run on that backend ending outside the infrastructure class, reopens it. A restart, a policy edit or elapsed time reopens nothing ([failure-diagnosed-not-waited-out.md](./failure-diagnosed-not-waited-out.md)).
+2. **The operator is the mover.** A successful `tillr-drain probe-backend`, or a later run on that backend ending outside the infrastructure class, reopens it. A restart, a policy edit or elapsed time reopens nothing ([Section 4.24](#424-diagnosing-a-repeated-failure-the-unbuilt-mechanism)).
 3. **When the backend reopens, the same node runs again on it.**
 4. **An identical infrastructure ending of the same item holds for the operator** with both runs' records: the fault is that item's run, not the backend.
 5. **The policy.** A seat names one backend; there is no `preference` key, and a seat listing several backends without shares is refused. Shares ([the drain README](../../tools/tillr-drain/README.md#seat-backend-shares-and-selection)) are a written choice of where a new item starts.
@@ -412,6 +412,103 @@ A **later green proof** is a proof on a commit that descends from the fixer's re
 - **Later green proof:** commits have landed between red and green, so a fixer whose worker has finished and whose candidate waits to gate is marked `resolved-elsewhere` and is never gated or landed. Its candidate is preserved under `refs/tillr/preserved/<run_id>` and its lane is reset before the examination is recorded.
 - **Same-commit rerun, or a fixer still running a worker:** [Section 4.9](#49-keeping-a-live-trunk-fixers-work-when-a-rerun-passes-d-jl16) applies unchanged.
 
+### 4.24 Diagnosing a Repeated Failure: the Unbuilt Mechanism
+
+[Landing principle 11](./landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) rules that
+nothing re-runs until a named change has happened, or a clearing condition stated by the failure
+itself has been verified. Its *Enforced by* paragraph is the statement of record for what the drain
+does. The worker-run path is built as [Section 4.4](#44-how-a-worker-runs-ending-moves-its-item-d-jl10):
+a refusal goes back to the worker with its evidence, and only an identical repeat goes to the
+design seat. This section holds the rest of the mechanism, none of which is built
+(`rg -n 'inputs_hash|InputsHash|inputsHash|fleetTrip|FleetTrip' tools -g '*.go'` returns
+nothing): the fingerprint store, the fleet trip, the drain's own probes and the diagnosis
+ticket. [Roadmap entry 13](../tillr/roadmap.md) sequences it.
+
+Two terms are coined here. The **fingerprint** is a hash over the failing stage and the
+normalized error lines, with timestamps, run ids, ports and paths containing uuids stripped, so
+two runs whose errors differ only in when they happened share one. The **inputs hash** is a hash
+over the lane model string, the provider, the names (never values) of relevant environment keys,
+the item's brief revision, the base tip and the gate's identity.
+
+#### The four tests
+
+On every failed run the drain records the failing stage, the child's final error lines quoted
+from its log, the exit code, the duration, whether a candidate was produced, the inputs hash and
+the fingerprint. Then, in order:
+
+| # | Test | Question | If yes |
+| :--- | :--- | :--- | :--- |
+| T1 | Literal cause | Does the quoted error name a precondition of running at all (model resolution, authentication, a missing binary, a permission, a full disk)? | Machinery fault: diagnosis. The item is charged nothing |
+| T2 | Repetition | Has this fingerprint occurred on this item with no change to the inputs hash since? | Deterministic by observation: diagnosis |
+| T3 | Fleet recurrence | Has this fingerprint occurred on three or more distinct items in the current drain run? | Common cause: one fleet diagnosis, and admission of further lanes under the same inputs hash is suspended until the ticket clears |
+| T4 | Verdict | Did the lane produce work that a gate or judge assessed and refused? | A verdict about the work: the existing path for a judged refusal |
+
+- **T1 is a table of quoted strings, not an inference.** A row is added only by quoting a real
+  child log and naming the component that emitted it.
+- **T2 and T3 make determinism a measurement.** No classifier labels a failure transient or
+  deterministic in advance.
+- **A first failure that passes no test is unknown, and is not re-run as a test.** It goes back to
+  its own session with its evidence, as Section 4.4 states. On the worker-run path a changed inputs
+  hash on its own re-runs nothing.
+
+#### Admission after a failure
+
+An item whose last run failed is admissible only if one of these holds:
+
+- a named change has happened since that failure, in a field its diagnosis ticket named as the
+  clearing condition;
+- the failure itself stated a clearing condition the loop can check (a `Retry-After` value, a
+  quota reset time the provider quoted, a lock held by a named live holder), and the check found
+  it clear. The wait lasts as long as the source stated. A stated duration with nothing to check
+  is treated as unstated. If the same fingerprint returns after a verified-clear condition, the
+  failure is diagnosed and not waited out again. The quota skip is this rule, and it is built.
+
+Every other failed item is held, visibly, blocked by its fingerprint's ticket. The stored condition
+of a hold is a ticket reference, never a timestamp. An item found held by a stored timestamp is
+converted once: its last failed run is fingerprinted from the stored log and it is set blocked by
+that fingerprint's ticket.
+
+#### Diagnosis
+
+Diagnosis produces a cause, not a fix, in three tiers, cheapest first:
+
+1. **The drain's own probes, no agent.** Before a lane is admitted under an inputs hash the drain
+   has not seen succeed, and whenever T3 trips, the drain checks once per inputs hash that the lane
+   model string resolves, that the provider credential is present in the child's environment, and
+   that the tools a lane calls exist. A failed probe is a complete diagnosis.
+2. **One diagnosis run per fingerprint,** never per item, on the design seat, with its cost
+   reported per failure. It may reproduce the failure and may not land a fix. It never runs under
+   the inputs hash it is diagnosing.
+3. **[The escalation ladder](./escalation-ladder.md),** when the run cannot conclude or the remedy
+   is a policy decision. A diagnosis that fails with the fingerprint it was sent to diagnose
+   escalates at once; there is no second diagnosis run.
+
+A diagnosis is complete when the fingerprint's ticket records the cause in one claim, the quoted
+evidence, which inputs-hash fields the cause implicates, a checkable clearing condition ("wait a
+while" is not one), and the item, configuration change or owner decision that would produce it.
+When the clearing condition verifies, the ticket closes and every item blocked by it becomes
+admissible. If no tier can run, the ticket stays open and the drain's output names the
+fingerprint, the items held and "undiagnosed".
+
+**Measured basis.** Under a stored 30-minute hold, 55 items were held behind one lane model string
+that could not resolve; 383 of 1,083 child logs carried the same error line, and a re-admitted
+item died 8 seconds after launch.
+
+**Decisions.** All are the designer's except the first, which is the owner's `D-JL10`:
+
+- No automatic retry as a test; a worker run's failure is never counted.
+- Retry, retry budget, cooldown and expiring bench are one mechanism and are all removed. A
+  durable hold is kept; its clock is not. **Rejected:** a cooldown kept "only for transient
+  failures", because nothing can know in advance that a failure is transient.
+- Determinism is established by observation (T1 to T3), never classified in advance.
+- The loop dispatches the diagnosis itself, on the design seat.
+- A wait exists only where the loop can check that the condition has cleared.
+- Destinations are existing machinery: the deduplicated ticket of
+  [principle 9](./landing-principles.md#9-fix-the-machinery-never-hand-carry-the-work) keyed by
+  fingerprint, and the ladder of
+  [principle 6](./landing-principles.md#6-a-budget-escalates-it-does-not-loop). No ticket kind,
+  failure vocabulary or escalation path is added.
+
 ---
 
 ## 5. Core Boundary for External AutoQA (`D-JL7`)
@@ -456,6 +553,7 @@ The Built column of the [decision ledger](#decision-ledger) is the record. What 
 - An obstacle naming another item that must land first, which is not a kind.
 - The two automatic-wipe gaps of [Section 4.20](#420-leftover-work-in-a-lane-is-an-alert-never-an-automatic-sweeper-d-jl33).
 - The two unclosed causes of [Section 4.19](#419-a-worker-returned-by-a-design-answer-starts-from-a-trunk-that-holds-the-answer-d-jl32).
+- The failure fingerprint, the fleet trip, the drain's probes and the diagnosis ticket ([Section 4.24](#424-diagnosing-a-repeated-failure-the-unbuilt-mechanism)).
 - A worker's ending as one tool call on every adapter ([the landing call](./tillr-landing-call.md)); where an adapter has none, the report footer is the contract.
 
 A workflow's evaluator node is specified in [tillr-item-graphs.md](../reference/tillr-item-graphs.md#workflow-evaluator) and hands its file to the intake of [Section 2.1](#21-topology-relative-to-gate-and-land-d-jl1).

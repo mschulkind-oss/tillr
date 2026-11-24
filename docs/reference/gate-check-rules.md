@@ -12,8 +12,11 @@ covers:
   - tools/tillr-drain/drain/gate_stall.go
   - tools/gate/checks/elapsed-time.py
   - tools/gate-timing-declarations.json
+  - tools/gate/checks/change_common.py
+  - tools/gate/checks/citations.py
+  - tools/gate/checks/citations.json
 tags: [gate, checks, flake, timing, quarantine, reference]
-summary: "Three standing rules for the gate's checks, each with the code that enforces it today: a failed check is diagnosed from its one run and never re-run to see whether it passes; a check asserts counts, orders and equalities over what the product recorded and never an elapsed duration; and a check set aside from the verdict is narrow, carries the item that repairs it, applies only to the inputs it was recorded against, and is counted apart from passes."
+summary: "Three standing rules for the gate's checks, each with the code that enforces it today: a failed check is diagnosed from its one run and never re-run to see whether it passes; a check asserts counts, orders and equalities over what the product recorded and never an elapsed duration; and a check set aside from the verdict is narrow, carries the item that repairs it, applies only to the inputs it was recorded against, and is counted apart from passes. A fourth rule covers documents: a commit cited as evidence is reachable from the head, is an upstream pin, or is marked unlanded."
 ---
 
 # Gate check rules
@@ -142,6 +145,46 @@ check reported with the word `QUARANTINED` as `unavailable`, never as a pass.
 
 A check whose result depends on what runs beside it is repaired at its cause, not isolated.
 
+## A cited commit is reachable, or marked
+
+The `citations` check holds a fourth rule, for documents instead of test code: a commit a
+document cites as evidence must be history the reader can reach from the checked head. An
+**upstream pin** is a cited commit reachable from a ref that carries a dependency's history; it
+need not be an ancestor of this repository's head. **Unlanded** means a repository change the
+checked head does not contain; the line marker `[unlanded]` makes that visible to a reader.
+
+`unreachable_citations` in `tools/gate/checks/change_common.py` judges the lines a change adds
+to tracked Markdown between a caller-supplied base and head. It reads the committed document,
+never a dirty working copy, and takes fence membership from the whole document. For each
+lowercase hexadecimal token on an added line:
+
+1. A line inside a fenced block, and a line carrying `[unlanded]`, is exempt. The marker exempts
+   the whole line.
+2. A token already present anywhere in the document's base version is exempt, so reflowing
+   prose makes no new claim.
+3. A token that does not resolve locally to a commit is not judged. A dependency's commit and a
+   hexadecimal identifier look alike, and failing to resolve is not evidence of an unlanded
+   commit.
+4. A resolved commit passes when it is an ancestor of the head, or when a ref that contains it
+   is an upstream ref (`reachable_from_upstream`): a branch under `patch/`, local,
+   published or remote-tracking; a tracking ref of the remote named `upstream`; or any tag.
+5. Anything else is reported with the document, line and token, and the report asks for
+   `[unlanded]` when the citation is intended.
+
+The check judges added lines only. It does not certify citations already in the tree, and an
+unresolved token that passes is no proof the commit exists elsewhere. It never fetches and does
+not validate who owns a remote or whether a tag is signed. A lane branch, local or published
+under the origin remote, is not an upstream ref.
+
+> [!WARNING]
+> Do not rename a lane ref to obtain the upstream exemption. Mark the line `[unlanded]`.
+
+To run it alone: `python3 tools/gate/checks/citations.py BASE HEAD`. It exits 0 with no finding,
+1 with findings and 4 when it cannot judge, such as a missing revision or a base that is not an
+ancestor of the head. `test_citations_markers_fences_and_upstream_pins` in
+`tools/gate/checks/change_checks_test.py` holds the lane-only, marker, fence and upstream cases;
+it does not exercise every accepted ref prefix.
+
 ## What enforces each rule today
 
 | Rule | Enforced by |
@@ -154,6 +197,7 @@ A check whose result depends on what runs beside it is repaired at its cause, no
 | A deadline's bound is far past expectation; a missing observable is recorded in the product | Not enforced by code. These are review rules |
 | A check is disabled only on a contradicted fingerprint, per episode | `Classify` and `classifyContradiction` in `tools/tillr/checkresult/classify.go`; the marker is written by `tools/tillr-gate/enable.go` |
 | A disabled check names its repair item | `sweepDisabledMarkers` in `tools/tillr-drain/drain/flaky_repair.go` |
+| A commit cited on an added Markdown line is reachable, an upstream pin, or marked `[unlanded]` | `unreachable_citations` in `tools/gate/checks/change_common.py`, declared by `tools/gate/checks/citations.json` |
 | A disabled check is reported and counted apart from passes | `writeRunSummary` in `tools/tillr-gate`, held by `TestDisabledCheckExcludedFromPassAndFailCountsAndListedAsDisabled` |
 | A set-aside of single named cases is narrow, ticketed and bound to file content | Not enforced by code |
 
