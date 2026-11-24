@@ -473,7 +473,9 @@ interrupted, or a claim staging cancelled, does not count as that run.
 
 [Opt-in sync rewrites](../tillr-item/README.md#automatic-prose-rewrites) run on the build
 seat. Queue planning places trunk fixers first, then rewrites, then ordinary items, keeping
-rank order within each group. The original waits with `awaits-rewrite` until the rewrite
+rank order within each group. When every offered lane is occupied, a trunk fixer or a
+remote-sync item is dispatched to `desk-trunk-fixer`, a lane only those items use, one at a
+time (`lane == "desk-trunk-fixer"` in [`drain/start_proposal.go`](./drain/start_proposal.go)). The original waits with `awaits-rewrite` until the rewrite
 lands or its block passes the prose check. When the original has more than eight criteria,
 its rewrite waits on the owner with `prose-criteria-count`.
 
