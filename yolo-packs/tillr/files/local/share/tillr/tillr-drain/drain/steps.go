@@ -496,7 +496,7 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 
 	env := append(s.forkRootEnv(), "PYTHONDONTWRITEBYTECODE=1")
 	if s.Root != "" {
-		for _, name := range []string{GateSpansFile, GateFastVerdictFile} {
+		for _, name := range []string{GateSpansFile, GateFastVerdictFile, GateChecksFile, filepath.Join("change-logs", GateChecksFile)} {
 			if err := os.Remove(filepath.Join(RunDir(s.Root, candidate.RunID), name)); err != nil && !os.IsNotExist(err) {
 				return detachedGateHandle{}, Externalf("clearing preceding gate measurements: %v", err)
 			}

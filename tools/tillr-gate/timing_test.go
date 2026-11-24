@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -90,5 +91,35 @@ func TestGoBuildEvidenceIsPrivateToTheCheckInvocation(t *testing.T) {
 	}
 	if paths, err := filepath.Glob(filepath.Join(logs, "go-build-evidence-*")); err != nil || len(paths) != 0 {
 		t.Fatalf("private sidecars must be cleaned up: %v (%v)", paths, err)
+	}
+}
+
+func TestCheckTimingRecordsStartWithoutFinishOnSignal(t *testing.T) {
+	root, logs := t.TempDir(), t.TempDir()
+	runCheck(PlanCheck{CheckID: "finished-check", measureLanding: true, Command: []string{"true"}}, root, logs, 0)
+	runCheck(PlanCheck{CheckID: "signaled-check", measureLanding: true, Command: []string{"sh", "-c", "kill -TERM $$"}}, root, logs, 1)
+
+	raw, err := os.ReadFile(filepath.Join(logs, "gate.checks.jsonl"))
+	if err != nil {
+		t.Fatalf("missing gate.checks.jsonl: %v", err)
+	}
+	type record struct {
+		CheckID      string `json:"check_id"`
+		StartedAtMS  int64  `json:"started_at_ms"`
+		FinishedAtMS *int64 `json:"finished_at_ms"`
+	}
+	byID := map[string][]record{}
+	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+		var rec record
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatal(err)
+		}
+		byID[rec.CheckID] = append(byID[rec.CheckID], rec)
+	}
+	if recs := byID["finished-check"]; len(recs) != 2 || recs[0].FinishedAtMS != nil || recs[1].FinishedAtMS == nil {
+		t.Fatalf("finished-check should have start and finish records, got %+v", recs)
+	}
+	if recs := byID["signaled-check"]; len(recs) != 1 || recs[0].StartedAtMS <= 0 || recs[0].FinishedAtMS != nil {
+		t.Fatalf("signaled-check should have start record and no finish record, got %+v", recs)
 	}
 }

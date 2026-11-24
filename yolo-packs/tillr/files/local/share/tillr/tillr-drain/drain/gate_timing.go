@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -54,7 +55,7 @@ func (s *ProcessSteps) recordGateTiming(ctx context.Context, c Candidate, span S
 		WallMS      *int64                          `json:"wall_ms,omitempty"`
 		ExitCode    int                             `json:"exit_code"`
 		Checks      map[string]gateCheckMeasurement `json:"checks"`
-	}{RunID: c.RunID, ExecutionID: rand.Text(), ExitCode: *span.ExitCode, Checks: readGateTimingChecks(dir)}
+	}{RunID: c.RunID, ExecutionID: rand.Text(), ExitCode: *span.ExitCode, Checks: readGateTimingChecks(dir, span)}
 	if ms := span.FinishedAtMS - span.StartedAtMS; ms >= 0 {
 		observation.WallMS = &ms
 	}
@@ -140,7 +141,24 @@ func medianFastGateTiming(tx *store.Tx, wallMS int64) (*int64, error) {
 
 // Only the two phase handoffs are evidence here. The outer verdict judges the
 // wrapper, not an individual check, and may be deferred or later rewritten.
-func readGateTimingChecks(dir string) map[string]gateCheckMeasurement {
+func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateCheckMeasurement {
+	var gateSpan StepSpan
+	if len(gateSpans) > 0 {
+		gateSpan = gateSpans[0]
+	}
+	unfinishedWallMS := func(startedAtMS int64) *int64 {
+		if startedAtMS <= 0 || gateSpan.FinishedAtMS <= 0 || gateSpan.FinishedAtMS < gateSpan.StartedAtMS {
+			return nil
+		}
+		if gateSpan.StartedAtMS > 0 && startedAtMS < gateSpan.StartedAtMS {
+			return nil
+		}
+		ms := gateSpan.FinishedAtMS - startedAtMS
+		if ms < 0 {
+			ms = 0
+		}
+		return &ms
+	}
 	checks := map[string]gateCheckMeasurement{}
 	add := func(id string, m gateCheckMeasurement) {
 		if id == "" || id == "plan" || strings.HasPrefix(id, "gate:") {
@@ -212,7 +230,12 @@ func readGateTimingChecks(dir string) map[string]gateCheckMeasurement {
 								ms := *c.DurationMS
 								m.WallMS = &ms
 							}
+						case c.StartUnixNano > 0 && c.EndUnixNano <= 0:
+							m.Execution = gateExecutionRan
 						}
+					}
+					if m.Execution == gateExecutionRan && m.WallMS == nil && c.StartUnixNano > 0 && c.EndUnixNano <= 0 {
+						m.WallMS = unfinishedWallMS(c.StartUnixNano / int64(time.Millisecond))
 					}
 					add(c.ID, m)
 				}
@@ -220,62 +243,118 @@ func readGateTimingChecks(dir string) map[string]gateCheckMeasurement {
 		}
 	}
 	var spans gateSpansFile
-	body, err := os.ReadFile(filepath.Join(dir, GateSpansFile))
-	if err != nil || json.Unmarshal(body, &spans) != nil {
-		return checks
+	if body, err := os.ReadFile(filepath.Join(dir, GateSpansFile)); err == nil && json.Unmarshal(body, &spans) == nil {
+		for _, span := range spans.CheckSpans {
+			attrs := struct {
+				gateCheckMeasurement
+				Cached bool `json:"cached"`
+			}{}
+			var hasWallMS bool
+			if span.AttributesJSON != "" {
+				if json.Unmarshal([]byte(span.AttributesJSON), &attrs) != nil {
+					continue
+				}
+				var raw map[string]json.RawMessage
+				if json.Unmarshal([]byte(span.AttributesJSON), &raw) == nil {
+					_, hasWallMS = raw["wall_ms"]
+				}
+			}
+			if attrs.Execution == "" {
+				res := classifyCheck(checkresult.Observation{
+					Check:  span.CheckID,
+					Source: checkresult.CheckSpan,
+					Word:   span.Status,
+				})
+				switch {
+				case attrs.Cached || (res.Outcome == checkresult.Pass && res.Detail == checkresult.DetailCached):
+					attrs.Execution = gateExecutionReused
+				case res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailNotRun:
+					attrs.Execution = gateExecutionNotRun
+				case span.StartNS > 0:
+					attrs.Execution = gateExecutionRan
+				}
+			}
+			// Only fall back to span timestamps when wall_ms was not emitted at all
+			// (for example, an older candidate or direct fork-check run) and the
+			// span actually advanced past its start; an unfinished span can have its
+			// end copied from its start, which is not a measured zero.
+			if attrs.WallMS == nil && !hasWallMS && attrs.Execution == gateExecutionRan && span.StartNS > 0 {
+				if span.EndNS > span.StartNS {
+					ms := (span.EndNS - span.StartNS) / int64(time.Millisecond)
+					attrs.WallMS = &ms
+				} else if span.EndNS <= 0 {
+					attrs.WallMS = unfinishedWallMS(span.StartNS / int64(time.Millisecond))
+				}
+			}
+			add(span.CheckID, attrs.gateCheckMeasurement)
+		}
+		for _, id := range spans.ReusedChecks {
+			add(id, gateCheckMeasurement{Execution: "reused", WallMS: spans.ReusedWallMS[id]})
+		}
+		for _, id := range spans.NotRunChecks {
+			add(id, gateCheckMeasurement{Execution: "not-run"})
+		}
+		for _, skip := range spans.SkippedChecks {
+			if ran := skip.ExecutedCheck; ran != nil {
+				add(ran.CheckID, ran.gateCheckMeasurement)
+			} else {
+				add(skip.CheckID, gateCheckMeasurement{Execution: "not-run"})
+			}
+		}
 	}
-	for _, span := range spans.CheckSpans {
-		attrs := struct {
-			gateCheckMeasurement
-			Cached bool `json:"cached"`
-		}{}
-		var hasWallMS bool
-		if span.AttributesJSON != "" {
-			if json.Unmarshal([]byte(span.AttributesJSON), &attrs) != nil {
+
+	type checkTimingLine struct {
+		CheckID      string `json:"check_id"`
+		StartedAtMS  int64  `json:"started_at_ms"`
+		FinishedAtMS *int64 `json:"finished_at_ms"`
+	}
+	for _, rel := range []string{filepath.Join("change-logs", GateChecksFile), GateChecksFile} {
+		raw, err := os.ReadFile(filepath.Join(dir, rel))
+		if err != nil {
+			continue
+		}
+		type partialCheck struct {
+			startedAtMS  int64
+			finishedAtMS *int64
+		}
+		var order []string
+		byID := map[string]partialCheck{}
+		for _, line := range bytes.Split(raw, []byte("\n")) {
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
 				continue
 			}
-			var raw map[string]json.RawMessage
-			if json.Unmarshal([]byte(span.AttributesJSON), &raw) == nil {
-				_, hasWallMS = raw["wall_ms"]
+			var entry checkTimingLine
+			if json.Unmarshal(line, &entry) != nil || entry.CheckID == "" {
+				continue
 			}
-		}
-		if attrs.Execution == "" {
-			res := classifyCheck(checkresult.Observation{
-				Check:  span.CheckID,
-				Source: checkresult.CheckSpan,
-				Word:   span.Status,
-			})
-			switch {
-			case attrs.Cached || (res.Outcome == checkresult.Pass && res.Detail == checkresult.DetailCached):
-				attrs.Execution = gateExecutionReused
-			case res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailNotRun:
-				attrs.Execution = gateExecutionNotRun
-			case span.StartNS > 0:
-				attrs.Execution = gateExecutionRan
+			p, seen := byID[entry.CheckID]
+			if !seen {
+				order = append(order, entry.CheckID)
 			}
+			if entry.StartedAtMS > 0 && (p.startedAtMS == 0 || entry.StartedAtMS < p.startedAtMS) {
+				p.startedAtMS = entry.StartedAtMS
+			}
+			if entry.FinishedAtMS != nil && (p.finishedAtMS == nil || *entry.FinishedAtMS >= *p.finishedAtMS) {
+				fin := *entry.FinishedAtMS
+				p.finishedAtMS = &fin
+			}
+			byID[entry.CheckID] = p
 		}
-		// Only fall back to span timestamps when wall_ms was not emitted at all
-		// (for example, an older candidate or direct fork-check run) and the
-		// span actually advanced past its start; an unfinished span can have its
-		// end copied from its start, which is not a measured zero.
-		if attrs.WallMS == nil && !hasWallMS && attrs.Execution == gateExecutionRan &&
-			span.StartNS > 0 && span.EndNS > span.StartNS {
-			ms := (span.EndNS - span.StartNS) / int64(time.Millisecond)
-			attrs.WallMS = &ms
-		}
-		add(span.CheckID, attrs.gateCheckMeasurement)
-	}
-	for _, id := range spans.ReusedChecks {
-		add(id, gateCheckMeasurement{Execution: "reused", WallMS: spans.ReusedWallMS[id]})
-	}
-	for _, id := range spans.NotRunChecks {
-		add(id, gateCheckMeasurement{Execution: "not-run"})
-	}
-	for _, skip := range spans.SkippedChecks {
-		if ran := skip.ExecutedCheck; ran != nil {
-			add(ran.CheckID, ran.gateCheckMeasurement)
-		} else {
-			add(skip.CheckID, gateCheckMeasurement{Execution: "not-run"})
+		for _, id := range order {
+			p := byID[id]
+			if p.startedAtMS <= 0 {
+				continue
+			}
+			var wallMS *int64
+			if p.finishedAtMS != nil {
+				if ms := *p.finishedAtMS - p.startedAtMS; ms >= 0 {
+					wallMS = &ms
+				}
+			} else {
+				wallMS = unfinishedWallMS(p.startedAtMS)
+			}
+			add(id, gateCheckMeasurement{Execution: gateExecutionRan, WallMS: wallMS})
 		}
 	}
 	return checks

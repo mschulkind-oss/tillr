@@ -5842,6 +5842,7 @@ class Plan:
         # being handed it separately.
         self.tier: str | None = None
         self.measure_landing = False
+        self.checks_out = ""
 
     def not_planned(self, label: str, why: str, kind: str = "", *, read_disjoint: bool = True) -> None:
         """A step the selected change gave no reason to run, or which does not apply."""
@@ -6268,6 +6269,12 @@ def run_plan_checks(plan: Plan, root: Path, diff_base: str | None,
     # dict another thread is mutating raises rather than reading stale. The beat is a
     # diagnostic, so it takes a copy under the lock and never holds it while printing.
     active_lock = threading.Lock()
+    checks_out = getattr(plan, "checks_out", "")
+    checks_out_lock = threading.Lock()
+    if checks_out:
+        for one in checks:
+            one._checks_out = checks_out
+            one._checks_out_lock = checks_out_lock
     reported = 0
     cancellation = Cancellation()
 
@@ -9229,6 +9236,23 @@ def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
                 Path(path).unlink(missing_ok=True)
 
 
+def append_check_timing(path: str, lock: threading.Lock | None, check_id: str,
+                        started_at_ms: int, finished_at_ms: int | None = None) -> None:
+    if not path or not check_id or started_at_ms <= 0:
+        return
+    payload: dict[str, object] = {"check_id": check_id, "started_at_ms": started_at_ms}
+    if finished_at_ms is not None:
+        payload["finished_at_ms"] = finished_at_ms
+    line = json.dumps(payload, separators=(",", ":")) + "\n"
+    guard = lock if lock is not None else contextlib.nullcontext()
+    with guard, contextlib.suppress(OSError):
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.flush()
+
+
 def execute_attempt(root: Path, check: Check, diff_base: str,
                     env: dict[str, str] | None = None,
                     drop: tuple[str, ...] = (),
@@ -9285,6 +9309,12 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
         if cached_verdict(root, check, cache, runtime, env, drop, cancel):
             check.seconds = round(check.seconds + preflight_seconds, 2)
             return
+    checks_out = getattr(check, "_checks_out", "")
+    checks_out_lock = getattr(check, "_checks_out_lock", None)
+    check_timing_id = declaration_id(check.kind, check.label, root) if checks_out else ""
+    started_at_ms = time.time_ns() // 1_000_000 if check_timing_id else 0
+    if check_timing_id:
+        append_check_timing(checks_out, checks_out_lock, check_timing_id, started_at_ms)
     if check.kind == "file-size":
         pass_started = time.monotonic()
         warnings = typescript_size_findings(root)
@@ -9349,6 +9379,9 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
     if cancel is not None and cancel.cancelled:
         check.was_cancelled = True
         check.rc = 0
+    elif check_timing_id and not check.preflight_refused and outside_signal(check.rc) is None:
+        finished_at_ms = max(started_at_ms, time.time_ns() // 1_000_000)
+        append_check_timing(checks_out, checks_out_lock, check_timing_id, started_at_ms, finished_at_ms)
     check.seconds = round(seconds + preflight_seconds, 2)
     # A green fork-quality run is a verdict about the tree it tested, so it is recorded
     # for the next pass at the same tree, command and runtime. A red one is never cached.
@@ -10132,6 +10165,8 @@ def run_gate(argv: list[str]) -> int:
     head, tree, dirty = gate.head, gate.tree, gate.dirty
     series, changed, diff_base, since = gate.series, gate.changed, gate.diff_base, gate.since
     plan = gate.plan
+    if options.measure_landing:
+        plan.checks_out = str(Path(spans_out).with_name("gate.checks.jsonl"))
     if options.tier is None:
         kept_checks: list[Check] = []
         for check in plan.checks:

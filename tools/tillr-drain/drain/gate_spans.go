@@ -19,6 +19,7 @@ import (
 // and one not-run row per skip would make the table mostly silence.
 const GateSpansFile = "gate.spans.json"
 const GateFastVerdictFile = "gate.fast.verdict.json"
+const GateChecksFile = "gate.checks.jsonl"
 
 // GateSpanDDL is drain's third table: one row per executed gate span, keyed by the
 // verdict it belongs to.
