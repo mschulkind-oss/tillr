@@ -389,6 +389,16 @@ use this to find the issues and fix them").
 - A rule can only read a registered event or a projection. When the fault is
   only a line in the loop's log, file the item that makes the drain write an
   event for it, and block the rule item on that.
+- **Check a rule can be written before filing it as a rule item.** The loader
+  accepts six patterns (`predicate_match`, `count_in_window`,
+  `consecutive_count`, `alternating_pair`, `lag_behind`,
+  `duration_without_event`), and the projections are `items`, `charter` and
+  `git_refs`. Read the event's payload and name the pattern in the words. When
+  no recorded event or projection carries the fact (process state, worktrees,
+  CPU of a gate's tests), file the alert to the design seat as "decide what
+  recorded fact the alert reads"; do not file a one-file rule item. On
+  2026-11-24 eight rule items filed without this check each cost a planning
+  run and a design-seat answer, ten definition obstacles in one hour.
 - An alert that has never fired is unproven. Say so when reporting on it.
 - **Every alert is triaged and acted on** (owner, 2026-11-22: "ALL alerts get
   triaged and acted on. noisy alerts get tweaked or disabled not ignored.").
