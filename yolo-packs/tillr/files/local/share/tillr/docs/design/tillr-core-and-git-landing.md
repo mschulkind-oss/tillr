@@ -17,7 +17,7 @@ depends-on:
 
 # tillr is a core of queues and graphs, and landing in Git is one charter on top of it
 
-> **Delivered copy.** This is `docs/design/tillr-core-and-git-landing.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-core-and-git-landing.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-core-and-git-landing.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-core-and-git-landing.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-19. The direction is the owner's, in his words ([Section 1](#1-the-direction-in-the-owners-words)).
 He said to build on 2026-11-17, and the first tranche of [the build plan](tillr-definitions-plan.md)
@@ -51,9 +51,8 @@ measurement it started from.
 **Needs your ruling:** None in this document. The two names it left open, for the kind of layer and
 for the Git-landing instance, were asked in the vocabulary and ruled by the owner on 2026-11-18:
 the layer is a **charter** ([OQ-VO4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO4)) and the first use is
-**`git-landing`** ([OQ-VO5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO5)). This document was written before those
-rulings, so its body still says "definition" where he now says charter; shipped code says
-"definition" too and is not renamed.
+**`git-landing`** ([OQ-VO5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO5)). This document's body says
+"definition" where he says charter; shipped code says "definition" too.
 
 **Awaits your review:** the designer's decisions `D-CG1` to `D-CG5` in
 [the ledger](#decision-ledger).
@@ -176,7 +175,7 @@ directly is below the list.
 2. **On reopening:** "Reopening or not, when everything is done, I suppose should be a policy
    determination for whatever your use case is. Like, we will define valid state transitions for
    an item and reopening might be valid for some and not valid for others."
-3. **On the other differences** between Guild's graph runtime and tillr's item graphs: "they should
+3. **On the other differences** between another graph runtime and tillr's item graphs: "they should
    be all policy things that should be possible if you want them from core. Core should not
    preclude them."
 4. **On fixed graph size limits** (`D-IG4`, at most 100 nodes and a depth of 8): "This 100 steps, I
@@ -234,7 +233,7 @@ Start to finish, one line each, with the tool and file that owns the step **[rea
 8. **Block retirement.** The loop commits the removal of the item's own block before the gate
    ([retire.go](../../tillr-drain/drain/retire.go)).
 9. **Gate.** The gate program `tillr-loop gate` runs [change-gate.py](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/change-gate.py):
-   fast tree checks through `tillr-gate checks`, then the landing tier of `tools/fork-check.py`,
+   fast tree checks through `tillr-gate checks`, then the landing tier's remaining checks,
    within the budget and strategy of [gate-policy.json](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/gate-policy.json). A red
    check is replayed on the base before the candidate is blamed (`Replay` in
    [steps.go](../../tillr-drain/drain/steps.go)).
@@ -296,7 +295,7 @@ sources **[ran]**:
 | `tools/tillr-drain` | 1758 | `loop.go` 375, `trunk.go` 193, `stage.go` 159, `boundary.go` 141, `steps.go` 135 |
 | `tools/tillr-land` | 656 | `landing.go` 250, `trunk.go` 245 |
 | `tools/tillr-view` (Go) | 434 | `serve.go` 82, `serveread.go` 64, `landings.go` 38 |
-| `tools/tillr-gate` | 399 | `main.go` 95, `dualrun.go` 76, `change.go` 62 |
+| `tools/tillr-gate` | 399 | `main.go` 95, `change.go` 62 |
 | `tools/gate` | 202 | this repository's checks |
 | `tools/tillr-loop` | 160 | the one adapter file |
 | `tools/tillr-item` | 112 | `sync.go` 35, `apply.go` 21 |
@@ -369,7 +368,7 @@ already injects the three judgments, so the drain "owns the order and the stoppi
 never a step's judgment", as its header says.
 
 What it does not cover: intake, the fence, staging a worktree, the candidate rule, the boundary
-bracket, block retirement, the replay and rolling programs (which default to `fork-check.py`), trunk
+bracket, block retirement, the replay and rolling programs, trunk
 observation, conflicts, the item's end states, the hold vocabulary, and the views. Those are Go in
 the drain, the item face and the view. By the step count of Section 2, it covers three of seventeen
 steps, and those three are the densest by line **[inferred]**.
@@ -552,12 +551,12 @@ rewritten here.
    design's ledger amends it: the caps go. Replacing the four criteria is
    [item 4 of the build plan's next tranche](tillr-definitions-plan.md#3-the-next-tranche-in-prose),
    which is unfiled.
-6. **`D-GR13` in [gate-rework.md](gate-rework.md#decision-ledger)** stops a fast check still
-   running at its ceiling and answers "could not judge", which holds the item until an operator
-   clears it; and the lane lease in
+6. **The gate's fast-check ceiling** stopped a fast check still running at its ceiling and
+   answered "could not judge", which held the item until an operator cleared it (the ceiling is
+   gone: [`D-GR15`](../reference/gate.md#why-its-this-way)); and the lane lease in
    [board-utilities.md §5.6](board-utilities.md#56-run-alone) lets a reaper free a lane 300
    seconds past a run's wall. Both are clocks whose consequence is a kill or a failure, against the
-   owner's direct principle. Both are still in the tree on 2026-11-18 (`LeaseGraceMS` in
+   owner's direct principle. Both were in the tree on 2026-11-18 (`LeaseGraceMS` in
    [lease.go](../../tillr-run/run/lease.go), and the gate's "could not judge" exit), and
    removing them is not part of this document or of the build plan.
 
@@ -658,7 +657,6 @@ rg 'CREATE TABLE' per utility                                           land: ca
                                                                         drain: dispatches, node_runs, rolling_state,
                                                                         rolling_runs, trunk_history, gate_spans, …
 rg -n -A40 'def loop_command' tools/tillr-roll/tillr-keep               names tillr-loop gate, land, verdict
-rg 'Default(Replay|Rolling|FixerGate)Program' tools/tillr-drain/drain   fork-check.py, fork-check.py, tillr-loop gate
 wc -l tools/tillr-loop/tillr-loop                                       769
 ```
 

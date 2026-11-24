@@ -39,8 +39,7 @@ First by rule 3: every other entry is built and verified by someone who starts f
 1. **Establish the first proved commit of a fresh clone.** The README's build command,
    `just tillr-build`, builds from `refs/tillr/green`, the newest commit the full suite has passed
    on. A fresh clone has no such ref, so the documented build fails until the reader sets
-   `TILLR_BUILD_UNPROVED`. The tree also holds no task-runner file for the `just` commands the
-   README names (`fd -HI -i '^justfile$' .` returns nothing).
+   `TILLR_BUILD_UNPROVED`.
    - **Outcome:** a reader who clones the repository and follows the README gets a built tillr
      and a way to run its suites, with no ref created by hand.
    - **Depends on:** [the decision on how the first proved commit is established](#open-decisions-that-block-entries).
@@ -167,8 +166,9 @@ Third by rule 2: each of these is a place where a red check costs more than the 
 11. [Gate test capacity](../design/gate-test-capacity.md): how many test processes run at once
     and which class of work gets the processors first. Behind its four open questions.
 
-12. [Landing velocity](../design/landing-velocity.md): a landing tier that runs before the trunk
-    moves and a rolling tier that runs on the trunk. Decided; built in shadow first.
+12. Landing velocity: a landing tier that runs before the trunk moves and a rolling tier that runs
+    on the trunk, built in shadow first. It has no design document; the gate it would change is
+    described in [the gate reference](../reference/gate.md).
 
 13. [A failure is diagnosed, not waited out](../design/failure-diagnosed-not-waited-out.md): a
     failure is fingerprinted from its own text, and a deterministic one blocks its items on one

@@ -1,22 +1,21 @@
 ---
-title: SQLite contention recovery
-status: implemented, pending independent review
+title: "Store contention — the lander's write boundary and tracing a writer"
+status: accepted
+stage: CURRENT
+tags: [tillr, store, sqlite, reference]
+summary: "How tillr-land keeps Git work outside SQLite write transactions, how TILLR_SQLITE_TRACE=1 shows who waits for the store's writer and who holds it, and the one span the final landing write still holds."
 ---
 
-# SQLite contention recovery
+# Store contention — the lander's write boundary and tracing a writer
 
-> **Delivered copy.** This is `docs/recovery/sqlite-contention/README.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/recovery/sqlite-contention/README.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-store-contention.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-store-contention.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-This recovery shortens a known SQLite writer span without changing the owner's
-close/land ordering or pretending a heartbeat was persisted. It does **not** identify
-the overnight writer or establish that every remaining source of contention is cured.
+The store is one SQLite file with one writer at a time. This page says how long the lander
+holds that writer, how to see a writer and its waiters, and which span is still held across
+Git. The governing rules are the [landing principles](../design/landing-principles.md) and the
+[lander's lifecycle invariants](../../tillr-land/README.md#state-invariants).
 
-Read [research](https://github.com/mschulkind-oss/tillr/blob/main/docs/recovery/sqlite-contention/research.md), [approved plan](https://github.com/mschulkind-oss/tillr/blob/main/docs/recovery/sqlite-contention/plan.md), [task record](https://github.com/mschulkind-oss/tillr/blob/main/docs/recovery/sqlite-contention/tasks.md), and
-[QA](https://github.com/mschulkind-oss/tillr/blob/main/docs/recovery/sqlite-contention/qa.md) in that order. The governing constraints remain the
-[landing principles](../../design/landing-principles.md) and the
-[lander's lifecycle invariants](../../../tillr-land/README.md#state-invariants).
-
-## Implemented boundary
+## The lander's write boundary
 
 Under the repository's `land.lock`, the lander reads a short database snapshot, then
 prepares ancestry, squash, worktree clashes, range preservation and head retention with
@@ -26,7 +25,7 @@ final Move and writes the receipt. Close can win during preparation; after final
 starts, it waits for the receipt and refuses an already-landed item. Changed history or
 trunk inputs produce an explicit error without a Move. A retry prepares again from the
 start. If this run's landing is already on the trunk, the retry records it and does not
-squash it a second time (see the residual below).
+squash it a second time (see [the residual limitation](#the-residual-limitation)).
 
 Each Loop still performs full owner-aware initialization on its first successful session
 refresh. Only that Loop's later heartbeat/end opens omit redundant migration. New Loops
@@ -54,7 +53,7 @@ Line kinds, all on the process's stderr:
 - An open records `sidecar.begin` and `sidecar.end` around its *sidecar*, the read-only
   connection every writable handle holds so its close is never the store's last (a term
   defined in
-  [tillr-store's Durability and checkpoints](../../../tillr-store/README.md#durability-and-checkpoints)).
+  [tillr-store's Durability and checkpoints](../../tillr-store/README.md#durability-and-checkpoints)).
   `sidecar.unavailable` means the handle has none, so its close may checkpoint and delete
   the log like any SQLite connection's last close when it is the store's last, and its close runs
   no cycle (`reason=no-sidecar`).
@@ -127,13 +126,13 @@ What the trace cannot see:
 - Stack samples can show frames of a span that already finished, do not record that
   `migrate` ran inside `open`, and have no measured pause cost.
 
-## Exact residual limitation
+## The residual limitation
 
 The final writer still spans trunk `rev-parse`, Move's worktree discovery, tip checks and
 `git merge --ff-only` (or `update-ref`), optional history-retention `update-ref` commands,
 and SQLite receipt/event commit. Hooks, storage or scheduling can make these operations
 exceed SQLite's unchanged five-second busy timeout. Releasing this exclusion requires a
-new close/land serialization design; it is not part of this repair. Git Move and SQLite
+new close/land serialization design. Git Move and SQLite
 receipt commit remain non-atomic: an error, a killed process, or an OS crash after Move can
 leave a moved trunk without a receipt. The first failure is reported. The drain then retries
 the gated candidate, and that retry is idempotent rather than a second squash:
@@ -159,11 +158,7 @@ the gated candidate, and that retry is idempotent rather than a second squash:
   and nothing moves. A store with no `trunk_history` row does not detect it.
 
 The lander's
-[state invariants](../../../tillr-land/README.md#state-invariants) state the same
+[state invariants](../../tillr-land/README.md#state-invariants) state the same
 rule, and its
-[known cases](../../../tillr-land/README.md#known-cases-the-marker-does-not-settle)
+[known cases](../../tillr-land/README.md#known-cases-the-marker-does-not-settle)
 name where the marker's answer is not the trunk's current content.
-
-Pack delivery requires `just pack-sync`, `yolo pack lint yolo-packs/tillr`, then the
-human's `yolo host apply --assert` and relaunch. This recovery does not perform deployment
-or touch the live database, processes, lanes or refs.

@@ -38,14 +38,14 @@ related:
   - ./observatory-redesign.md
   - ../design/tillr-selfhosted-build.md
   - ../design/tillr-refused-push.md
-  - ../design/gate-rework.md
+  - ./gate.md
 tags: [tillr, drain, view, run, restart, settings, reference]
 summary: "How tillr replaces `tillr-drain loop` and `tillr-view serve` in place through durable restart requests, pauses and continues agent sessions without burning attempts, migrates active runs onto new builds, reads `.tillr.toml`, and rolls and pushes after landings."
 ---
 
 # Restarting tillr in place, pausing sessions, and post-landing roll and push
 
-> **Delivered copy.** This is `docs/reference/tillr-restart.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-restart.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-20 against `9160c9c48f70286c203076abdc0c3a0d1d89ae48`.
 UNMEASURED: verification rests on the Go and Python process-fixture suites; no
@@ -182,8 +182,8 @@ in-process state transitions from mid-step interruption:
    Long-running model sessions, whole-tree checks, and detached landing-gate
    waits wrapped in `restartWork` release their mechanical read lock while
    running in a goroutine and poll `gateRestart` every `50ms`. Under
-   [`D-GR43`](../design/gate-rework.md#decision-ledger) and
-   [`D-GR17`](../design/gate-rework.md#decision-ledger), `ProcessSteps.Gate`
+   [`D-GR43`](gate.md#why-its-this-way) and
+   [`D-GR17`](gate.md#why-its-this-way), `ProcessSteps.Gate`
    ([`steps.go`](../../tillr-drain/drain/steps.go)) runs the gate program
    in a detached, guarded child session (`--tillr-gate-supervisor`) that writes
    durable live-face (`gate.face.json`) and completion (`gate.done.json`)
@@ -407,12 +407,11 @@ When `[roll] command` is non-empty, `afterLandingCandidate` checks the candidate
    raise the `store-roll-blocked` alarm.
 2. **Pi fork roll (`piRollAction`):** When `candidate.BaseRef` is
    `refs/heads/patch/pi` (`piForkPatchRef`) or a trunk landing touches
-   `yolo-packs/pi-fork/` or `bin/pi-forks.list` (`piSeriesPaths`),
+   the pi series' inputs (`piSeriesPaths`),
    `submitPiRoll` runs `sh -c "<roll.command> --pi"`.
 3. **Pi extension roll (`extRollAction`):** When `candidate.BaseRef` is a
    non-`pi` `refs/heads/patch/<fork>` branch (`isExtensionPatchBranch`) or a
-   trunk landing touches extension inputs under `yolo-packs/matt/` or
-   `bin/pi-forks.list` (`matchesExtensionRollPaths` in
+   trunk landing touches extension inputs (`matchesExtensionRollPaths` in
    [`extension_roll.go`](../../tillr-drain/drain/extension_roll.go)),
    `submitExtensionRoll` runs `sh -c "<roll.command> --pi-extensions"`.
 
@@ -434,8 +433,8 @@ configured upstream via `git for-each-ref`) and runs `git push --porcelain --
 - **`what = "tip"`:** Every trunk landing (`candidate.BaseRef == ""`) submits
   `pushTrunk` (`refs/heads/main:<ref>`).
 - **Pre-push hook and patch branches:** `git push` runs the repository's normal
-  hooks (`bin/patch-branches-publish`), which publish local `patch/*` fork
-  branches at their current tips even when `main` pushes an older `green` SHA.
+  hooks. A `pre-push` hook that publishes local `patch/*` fork branches
+  publishes them at their current tips even when `main` pushes an older `green` SHA.
 - **Failure visibility:** A failed or timed-out push logs
   `loop: push of <what> <sha> failed (...; the loop goes on)`, records a
   non-empty `detail` on `drain.post-landing-action` (`action = "push"`),
@@ -613,7 +612,7 @@ lightweight supervisor holding `<root>/.tillr/keeper.lock`:
   `ProcessSteps.Gate` (`--tillr-gate-supervisor`) installs
   `PR_SET_CHILD_SUBREAPER` and monitors `(ownerPID, ownerStartTicks)` so a loop
   crash or explicit stop reaps the entire gate and separate-session shard tree
-  ([`D-GR17`](../design/gate-rework.md#decision-ledger)), while `syscall.Exec` leaves
+  ([`D-GR17`](gate.md#why-its-this-way)), while `syscall.Exec` leaves
   `(ownerPID, ownerStartTicks)` intact so the supervisor keeps running across an
   in-place loop upgrade.
 - **`stop-at-gap` signals only the `pi` PID, only after the session header.**
@@ -637,8 +636,8 @@ lightweight supervisor holding `<root>/.tillr/keeper.lock`:
   pass `--force`. Recovery uses a linear replay, as described in
   [`docs/design/tillr-refused-push.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md).
 - **Patch-branch publication is not gated on `refs/tillr/green`:** When
-  `push.what = "green"` pushes `main`, the `pre-push` hook still runs
-  `bin/patch-branches-publish` at local `patch/*` branch tips; narrowing patch
+  `push.what = "green"` pushes `main`, a repository's `pre-push` hook that publishes
+  `patch/*` branches still publishes them at their local tips; narrowing patch
   publication to proven commits remains an unmade owner choice.
 
 ---

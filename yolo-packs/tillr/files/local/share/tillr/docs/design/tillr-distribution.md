@@ -1,16 +1,16 @@
 ---
 status: in-review
 stage: DESIGN
-next: "Rule OQ-TD1, OQ-TD2, OQ-TD3 and OQ-TD4 — pack layout, machine config, and whether the pack ships the source launcher that would let an agent build and run tillr without a relaunch (§9)"
+next: "None open: OQ-TD1 to OQ-TD4 are settled by what is built."
 ---
 
 # Ship `tillr` as one source-built pack with eight `PATH` binaries and a two-skill contract
 
-> **Delivered copy.** This is `docs/design/tillr-distribution.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-distribution.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-12, when the pack was unbuilt; it is built as of 2026-11-16 ([`yolo-packs/tillr`](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/pack.json) ships the source tree and the eight launchers). Then, the nine Go modules under [`tools/`](https://github.com/mschulkind-oss/tillr/blob/main/tools) work and have landed a live candidate on an unattended tick. Evidence verified at `32aed3dc31`.
+**Status:** built. [`yolo-packs/tillr`](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/pack.json) ships the source tree and the eight launchers.
 
-> **In short.** Distribute `tillr` through a single pack (`yolo-packs/tillr`) following the `../../yolo-packs/merge-queue/pack.json` source-plus-launcher pattern: nine Go modules synced as source, eight `program` entries on `PATH`, a three-tier documentation split where `--help` alone owns flags, and an official pack skill that hands the unfinished toolset to AutoQA for design review.
+> **In short.** Distribute `tillr` through a single pack (`yolo-packs/tillr`) in a source-plus-launcher pattern: nine Go modules synced as source, eight `program` entries on `PATH`, a three-tier documentation split where `--help` alone owns flags, and an official pack skill that hands the unfinished toolset to AutoQA for design review.
 
 **Why it matters.** The eight binaries already work together, but until they ship through a pack with self-documenting boundaries and an explicit known-gaps banner, neither daily agentic development nor an external AutoQA agent can invoke or critique them through standard workspace tooling.
 
@@ -35,7 +35,7 @@ Measured `--help` / no-arg first-line output across the nine modules in [`tools/
 | [`tools/tillr`](../../tillr) | *(none — library)* | Record, store, event, and conformance library imported by the eight binaries |
 | [`tools/tillr-cli`](../../tillr-cli) | `tillr` | `tillr: a noun is required; name one of: store, item, land, drain, run, gate, view` |
 | [`tools/tillr-drain`](../../tillr-drain) | `tillr-drain` | `a face is required: plan, once, boundary or loop` |
-| [`tools/tillr-gate`](../../tillr-gate) | `tillr-gate` | `tillr-gate: name a face: dualrun, plan, run` |
+| [`tools/tillr-gate`](../../tillr-gate) | `tillr-gate` | `tillr-gate: name a face: change, checks, classify, enable, plan, run, shadow` |
 | [`tools/tillr-item`](../../tillr-item) | `tillr-item` | `tillr-item: a face is required: apply, seed, show, decision, mail, grant or verdict` |
 | [`tools/tillr-land`](../../tillr-land) | `tillr-land` | `tillr-land: a face is required: enqueue, check, pass` |
 | [`tools/tillr-run`](../../tillr-run) | `tillr-run` | `tillr-run: a face is required: exec, lanes, status or release` |
@@ -50,7 +50,7 @@ states the recovery contract, and the binary's `--help` owns the current face li
 Three constraints force eight `program` declarations rather than a single `tillr` entry:
 
 1. **The dispatcher enforces sibling presence on `PATH`.** Measured behavior of [`tools/tillr-cli`](../../tillr-cli): it refuses to run unless all seven `tillr-<noun>` binaries are on `PATH` (`"tillr-drain is not on PATH; the seven binaries install together"`).
-2. **`yolo` owns `~/.local/bin` by declaration.** As recorded in `../../yolo-packs/merge-queue/pack.json`, `yolo` refuses a `files` contribution into `~/.local/bin`; every executable on `PATH` must be a `program` contribution (`via: "pack"`).
+2. **`yolo` owns `~/.local/bin` by declaration.** `yolo` refuses a `files` contribution into `~/.local/bin`; every executable on `PATH` must be a `program` contribution (`via: "pack"`).
 3. **Standalone composition requires direct binary names.** An external agent (such as AutoQA) picks individual tools apart (`tillr-gate`, `tillr-view`, `tillr-item`) without routing through the full drain loop.
 
 **What an operator's `PATH` sees:** eight executables in `~/.local/bin/`: `tillr`, `tillr-drain`, `tillr-gate`, `tillr-item`, `tillr-land`, `tillr-run`, `tillr-store`, and `tillr-view`.
@@ -59,7 +59,7 @@ Three constraints force eight `program` declarations rather than a single `tillr
 
 ## 2. Build and delivery
 
-**Verdict:** Use the **source-plus-launcher** pattern from `../../yolo-packs/merge-queue/pack.json` and `../../yolo-packs/merge-queue/programs/mq/mq`. Reject `program` with `build`/`produces`.
+**Verdict:** Use the **source-plus-launcher** pattern: the pack delivers source as `files`, and each `program` is a launcher that builds and caches its binary. Reject `program` with `build`/`produces`.
 
 - **Source delivery (`files`):** `just pack-sync` copies all nine module directories ([`tools/tillr`](../../tillr) through [`tools/tillr-view`](../../tillr-view)) into the pack's `files/local/share/tillr/<module>/`, which `yolo` renders to `~/.local/share/tillr/<module>/`. Guarded against drift by [`../../tests/pack-sync.test.py`](https://github.com/mschulkind-oss/tillr/blob/main/tests/pack-sync.test.py). Including [`tools/tillr`](../../tillr) is mandatory because the eight binary modules resolve the shared library via relative `replace` paths in `go.mod`.
 - **Launcher mechanics (`program`):** All eight `program` contributions invoke the same launcher logic, dispatching on `${0##*/}` (`tillr` maps to module `tillr-cli`; `tillr-<noun>` maps to module `tillr-<noun>`). The launcher never changes its own working directory (`go build` runs in a subshell `(cd "$root/$mod" && ...)`) and ends with `exec "$bin" "$@"`, so repository-relative `.tillr` state discovery works from the caller's directory.
@@ -165,7 +165,7 @@ A live unattended tick has landed a real candidate through these eight binaries,
 
 All eight binaries are on your `PATH`, and their source + per-module `README` files are installed at `~/.local/share/tillr/`:
 - Umbrella dispatcher: `tillr --help` (`store`, `item`, `land`, `drain`, `run`, `gate`, `view`)
-- Gate execution & comparison: `tillr-gate --help` (`dualrun`, `plan`, `run`) and `~/.local/share/tillr/tillr-gate/README.md`
+- Gate planning & execution: `tillr-gate --help` (`change`, `checks`, `classify`, `enable`, `plan`, `run`, `shadow`) and `~/.local/share/tillr/tillr-gate/README.md`
 - Lane execution & lifecycle: `tillr-run --help` (`exec`, `lanes`, `status`, `release`) and `~/.local/share/tillr/tillr-run/README.md`
 - Item verdicts & grants: `tillr-item --help` (`apply`, `seed`, `show`, `decision`, `mail`, `grant`, `verdict`) and `~/.local/share/tillr/tillr-item/README.md`
 - Store & read views: `tillr-store --help` (`init`, `seed`, `check`, `events`) and `tillr-view --help` (`status`, `events`)
@@ -174,7 +174,7 @@ All eight binaries are on your `PATH`, and their source + per-module `README` fi
 ## What to Return
 
 Inspect `--help` and the `README` files above, then return structured design comments answering:
-1. **Standalone invocation:** Can AutoQA drive `tillr-gate` (`plan`, `run`, `dualrun`) and `tillr-run` (`exec`, `status`, `release`) independently without running `tillr-drain`? Which required flags or state preconditions couple them to the drain loop today?
+1. **Standalone invocation:** Can AutoQA drive `tillr-gate` (`change`, `plan`, `run`) and `tillr-run` (`exec`, `status`, `release`) independently without running `tillr-drain`? Which required flags or state preconditions couple them to the drain loop today?
 2. **Verdict & decision payloads:** What input/output schema does AutoQA need from `tillr-item verdict` and `tillr-item decision` to post a QA pass/fail or request human review?
 3. **Missing event emitters:** Before the `tools/tillr` recording emitters are built, which exact events, fields, and correlation IDs must `tillr-gate`, `tillr-run`, and `tillr-land` emit so AutoQA can reconstruct a run from `tillr-view events`?
 4. **Refusal & exit contracts:** Where do the current binaries lack machine-readable output or distinct exit codes that an unattended QA harness requires?
@@ -184,24 +184,7 @@ Inspect `--help` and the `README` files above, then return structured design com
 
 ## 6. Machine scoping
 
-- **Which `packs` lists gain the entry:** Add `"yolo-packs/tillr"` to the shared `packs` array in `config/yolo-jail/config.toml` immediately after `"yolo-packs/matt-agentwork"` (and before `"yolo-packs/seat-profiles"`), so every machine on both `tag-personal` (two machines) and `tag-work` (two machines) receives the pack (see [OQ-TD1](#open-questions)). Because array keys in `config.d/*.toml` replace rather than append, if `tag-personal/config/yolo-jail/config.d/personal.toml` or `tag-work/config/yolo-jail/config.d/work.toml` redeclares `packs`, restate `"yolo-packs/tillr"` there too.
-- **What a work machine gets that a personal one does not:** From `yolo-packs/tillr` itself, **nothing differs** — the pack ships identical Go source, launchers, and skills everywhere, and carries zero provider or account configuration. The difference comes entirely from the host's rcm tag layer: a `tag-work` machine layers `tag-work/config/yolo-jail/config.d/work.toml` (`bedrock` and `aws-auth` packs, AWS Bedrock profiles, and no `agy` pack), whereas a `tag-personal` machine layers `tag-personal/config/yolo-jail/config.d/personal.toml` (personal provider packs including `agy` and `codex`). Because `tillr` delegates model execution to the workspace's active agent environment rather than naming a provider or `agy`, `yolo-packs/tillr` is tag-agnostic.
-
----
-
-## 7. Order of work and first three actions
-
-Each step is independently landable and leaves `yolo pack lint` green:
-
-1. **Step 1 (`ESTIMATE`: 1h) — Pack manifest, digest launcher, and source sync.** Create `yolo-packs/tillr` with its manifest and shared launcher script, wire `just pack-sync` and [`../../tests/pack-sync.test.py`](https://github.com/mschulkind-oss/tillr/blob/main/tests/pack-sync.test.py) to sync the nine [`tools/`](https://github.com/mschulkind-oss/tillr/blob/main/tools) modules into `yolo-packs/tillr/files/local/share/tillr/`, and pass `yolo pack lint yolo-packs/tillr`.
-2. **Step 2 (`ESTIMATE`: 1h) — Module `README`s and `--help` conformance test.** Add a concise `README` with the Known Gaps banner to each of the nine [`tools/`](https://github.com/mschulkind-oss/tillr/blob/main/tools) modules, re-run `just pack-sync`, and land the test checking documented `<noun> <face>` commands against live `--help`.
-3. **Step 3 (`ESTIMATE`: 45m) — Composition skill (`tillr`) and AutoQA handoff skill (`tillr-autoqa`).** Add both skills under `yolo-packs/tillr/skills/` and verify with `yolo pack lint yolo-packs/tillr`.
-4. **Step 4 (`ESTIMATE`: 30m) — Machine selection and AutoQA dispatch.** Add `"yolo-packs/tillr"` to `config/yolo-jail/config.toml`, have the human run `yolo host apply --assert` on the host and relaunch the jail, and dispatch AutoQA against `tillr-autoqa`.
-
-**First three actions:**
-1. Author the `yolo-packs/tillr` manifest declaring the `.local/share/tillr` `files` tree, the eight `program` entries (`tillr` and `tillr-{drain,gate,item,land,run,store,view}`), and `{"kind": "skills"}`.
-2. Write the digest-caching launcher script that hashes `$root/$mod` plus `$root/tillr` and preserves the caller's working directory across `exec`.
-3. Extend `just pack-sync` and [`../../tests/pack-sync.test.py`](https://github.com/mschulkind-oss/tillr/blob/main/tests/pack-sync.test.py) to mirror all nine `tools/tillr*` directories and run `yolo pack lint yolo-packs/tillr`.
+The pack ships identical Go source, launchers, and skills on every machine, and carries zero provider or account configuration. `tillr` delegates model execution to the workspace's active agent environment rather than naming a provider, so `yolo-packs/tillr` is machine-agnostic; which workspaces load it is the operator's `yolo` configuration.
 
 ---
 
@@ -276,14 +259,14 @@ from a tree the process never loaded.
 
 1. ✅ **OQ-TD1: Should `yolo-packs/tillr` sit in user-scope configuration for every workspace now, or stay opt-in per workspace?**
 
-   An operator opens a second repository or an AutoQA workspace and runs `tillr view status`. Today `config/yolo-jail/config.toml` includes `yolo-packs/matt-agentwork` globally while `../../yolo-packs/merge-queue` is selected per workspace. We must choose whether every workspace gets the eight `tillr` binaries on `PATH` by default.
+   An operator opens a second repository or an AutoQA workspace and runs `tillr view status`. We must choose whether every workspace gets the eight `tillr` binaries on `PATH` by default.
 
-   - **Option A — User-scope in `config/yolo-jail/config.toml`:** Every workspace gets the binaries and skills immediately; uninitialized repos remain unaffected because commands refuse without `.tillr/`.
+   - **Option A — User-scope configuration:** Every workspace gets the binaries and skills immediately; uninitialized repos remain unaffected because commands refuse without `.tillr/`.
    - **Option B — Workspace opt-in only:** Only repos whose workspace config lists `yolo-packs/tillr` get the binaries; running AutoQA elsewhere requires editing that repo's config first.
 
-   _Settled:_ option A, by what was built: `config/yolo-jail/config.toml` lists `yolo-packs/tillr` at user scope.
+   _Settled:_ option A: the pack is meant to be listed at user scope.
 
-   _Leaning:_ Option A — add `yolo-packs/tillr` to user-scope `config/yolo-jail/config.toml` so operators and AutoQA have the binaries and skills in every workspace, guarded by explicit `.tillr/` initialization.
+   _Leaning:_ Option A — list `yolo-packs/tillr` at user scope so operators and AutoQA have the binaries and skills in every workspace, guarded by explicit `.tillr/` initialization.
 
    **Answer:**
    > _(empty — fill in when decided)_
@@ -295,7 +278,7 @@ from a tree the process never loaded.
    - **Option A — Separate `tillr-autoqa` skill in the same pack:** Ordinary loop sessions loading `tillr` never pay tokens for the one-off QA review prompt, and retiring the handoff deletes one directory.
    - **Option B — Trailing section inside the `tillr` skill:** One file to maintain, but every agent loading `tillr` reads the AutoQA review prompt on every session.
 
-   _Settled:_ superseded by `D-AQ1` and `D-AQ7` in [the AutoQA design](tillr-autoqa.md); the pack ships one skill.
+   _Settled:_ by `D-AQ1` and `D-AQ7` in [the AutoQA design](tillr-autoqa.md); the pack ships one skill.
 
    _Leaning:_ Option A — ship `tillr-autoqa` as a separate skill inside `yolo-packs/tillr` so the design-review prompt stays out of daily operator turns and deletes cleanly once comments land.
 
@@ -309,9 +292,9 @@ from a tree the process never loaded.
    - **Option A — Lazy per-binary build:** Each launcher builds only its own module (~1–2s per binary called, `ESTIMATE`), leaving uncalled binaries until needed.
    - **Option B — Batch build all eight on any miss:** First call after a source change pays ~6–8s (`ESTIMATE`) once and warms all eight binaries together.
 
-   _Settled:_ option A, by what was built: the pack launcher builds one binary per source digest (commit `3004ceffe`).
+   _Settled:_ option A: the pack launcher builds one binary per source digest.
 
-   _Leaning:_ Option A — build lazily per invoked binary, matching `../../yolo-packs/merge-queue/programs/mq/mq` and keeping single-command inspection fast after edits.
+   _Leaning:_ Option A — build lazily per invoked binary, keeping single-command inspection fast after edits.
 
    **Answer:**
    > _(empty — fill in when decided)_
@@ -331,7 +314,7 @@ from a tree the process never loaded.
      work.** No delivery change; the live store stays the launched binaries' alone, and an agent that
      wants a new feature in the live store waits for a launch.
 
-   _Settled:_ option A, by what was built: the digest-caching launcher shipped in commit `3004ceffe`.
+   _Settled:_ option A: the pack ships the digest-caching launcher.
 
    _Leaning:_ **A.** The launcher is already designed; the only reason it is not what ships is that
    the launch-time build landed first.

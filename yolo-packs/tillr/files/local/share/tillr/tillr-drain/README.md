@@ -204,7 +204,7 @@ measurements or inventing missing values; new measurements never write that tabl
 
 A change to the gate runner or its wrapper, or to the rolling program and its audit,
 proves its own suite before merging, regardless of `landing_strategy`. The
-[runner-change rule](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer)
+[runner-change rule](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate.md#after-merge-proof-and-the-green-pointer)
 keeps that entire landing out of the ordinary time distribution: `gate_ms`,
 `land_ms`, and `gate_count` measure ordinary candidates only. `runner_gate_ms` and
 `runner_land_ms` record the exceptional gate and landing times, and
@@ -227,7 +227,7 @@ drain-0-0.json  -> no applied generation
 
 The repository's `lane_base` gate setting defaults to `green`. A new dispatch
 records and stages the commit at `refs/tillr/green`, the
-[green pointer](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer)
+[green pointer](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate.md#after-merge-proof-and-the-green-pointer)
 that names the last proved trunk commit. With `tip`, it records and stages the
 current trunk tip instead. A trunk-fixer item always starts from the tip: its
 failure is not in the older proved commit.
@@ -1009,7 +1009,7 @@ lands without retiring the original block, so the original can be built afterwar
 ## After-merge heavy runs
 
 With `landing_strategy` set to `after-merge`, each landing and loop startup trigger
-one [heavy runner](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer).
+one [heavy runner](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate.md#after-merge-proof-and-the-green-pointer).
 It judges a detached checkout of the trunk tip, independently of dispatch. Workers
 run at a lower CPU priority than the proof, which keeps the drain's priority;
 this adjustment adds no time limit and stops no process. Landings

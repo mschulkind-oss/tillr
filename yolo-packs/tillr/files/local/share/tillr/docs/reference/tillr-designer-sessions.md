@@ -31,7 +31,7 @@ related:
 
 # Designer Sessions and Review Comments
 
-> **Delivered copy.** This is `docs/reference/tillr-designer-sessions.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-designer-sessions.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-designer-sessions.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-designer-sessions.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Current reference · Verified 2026-11-20 against `47047cacf11667b20746f01591f5204866f995f3`. UNMEASURED: the owner's live two-comment run on a tracked design document and any comparison beyond one paired comment of whether a resumed session answers better than a cold one.
 

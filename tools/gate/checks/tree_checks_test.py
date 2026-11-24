@@ -58,8 +58,8 @@ class TreeChecks(unittest.TestCase):
         self.assertIn("guide.md:2", tree_common.scratch_citations(self.root)[0])
         self.track("guide.md", "```sh\ncat .yolo/durable/report.md\n```\n")
         self.assertEqual(tree_common.scratch_citations(self.root), [])
-        location = "Artifacts land under $YOLO_DURABLE_DIR/footer-storybook by design.\n"
-        self.track("tools/footer-storybook/README.md", location)
+        location = "build into `$YOLO_DURABLE_DIR/bin` and prepend it to PATH.\n"
+        self.track("docs/design/tillr-distribution.md", location)
         self.assertEqual(tree_common.scratch_citations(self.root), [])
         self.track("guide.md", location)
         self.assertTrue(tree_common.scratch_citations(self.root))

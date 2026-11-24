@@ -18,14 +18,13 @@ depends-on:
   - tillr-judge-and-lifecycle.md
   - board-utilities.md
   - tillr-distribution.md
-supersedes: autoqa-tillr-seams.md
 vantage:
   status-chip: true
 ---
 
 # Standalone AutoQA on the Tillr Contracts
 
-> **Delivered copy.** This is `docs/design/tillr-autoqa.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-autoqa.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-autoqa.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-autoqa.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-18. **Iceboxed by the owner** on 2026-11-17: "ice box this autoqa on the roadmap for now. I don't want to design this yet." It is parked on [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), neither abandoned nor accepted, and nothing below is being built. No AutoQA code exists (`rg -i autoqa tools --glob '*.go'` on 2026-11-18 finds only the code and tests that retire the old store vocabulary). The owner has ruled on nothing in this document: every row of its [ledger](#decision-ledger) is a designer's decision and says so.
 
@@ -36,7 +35,7 @@ vantage:
 - **Self-licking queue noise:** Explorer agents refilling the queue endlessly with trivial flag permutations or touching a live repository while `tillr-drain` holds `TakeBoundary`.
 - **False-positive flooding:** Treating *"an agent said it found a bug"* as a bug, filing duplicate crashes from concurrent lanes, or burning expensive build lanes on hallucinated expectations.
 
-**The shape.** A standalone `autoqa` CLI and optional pack (`yolo-packs/autoqa`) with zero reverse dependencies from `tools/tillr*`; dual-store isolation (AutoQA's private `tillr` store + `autoqa.db` dedup/precision ledger vs the SUT's untouched work board); a two-workflow funnel (`qa-probe@v1` for cheap fan-out + mechanical replay, promoting unique hits into `qa-confirm@v1` for minimization + triage by the W2 `evaluator_slot` judge); surface-saturation refill hysteresis; and a closed-loop precision circuit breaker.
+**The shape.** A standalone `autoqa` CLI and optional pack (`yolo-packs/autoqa`) with zero reverse dependencies from `tools/tillr*`; dual-store isolation (AutoQA's private `tillr` store + `autoqa.db` dedup/precision ledger vs the SUT's untouched `tillr` store); a two-workflow funnel (`qa-probe@v1` for cheap fan-out + mechanical replay, promoting unique hits into `qa-confirm@v1` for minimization + triage by the W2 `evaluator_slot` judge); surface-saturation refill hysteresis; and a closed-loop precision circuit breaker.
 
 **Cost.** A second tillr store and a second tool to keep working, and the cleanup of what AutoQA left inside tillr ([§5](#5-disposition-of-existing-autoqa-artifacts)). It adds no state, no graph primitive and no judge rule to tillr itself.
 
@@ -60,7 +59,7 @@ Read on 2026-11-14 at `6851b49015`; the last row was read again on 2026-11-18.
 | :--- | :--- | :--- |
 | **Standalone queue, runner, and read UI** | `tools/tillr-{store,item,run,drain,gate,land,view}` ([board-utilities.md](board-utilities.md) [§5](board-utilities.md#5-independent-use-the-boundary-made-concrete)) | **Built.** Every binary takes explicit `--store` / `--lane-root` / record inputs with zero global board coupling; AutoQA can drive its own private `tillr` instance directly over `PATH`. |
 | **Standalone seams (`D-AQA2`–`D-AQA4`)** | [events.go](../../tillr-drain/drain/events.go) (`2050271d4a`); [tools/tillr-run/main.go](../../tillr-run/main.go) & [change.go](../../tillr-gate/change.go) (`defecac1de`) | **Built.** `ProcessSteps` publishes `boundary.check`, `gate.plan`, and `gate.verdict`; `tillr-run exec` propagates child exit codes while reserving `2/3/4/5`; `tillr-gate change` and `tillr-run request` exist as CLI faces. |
-| **Fresh-store DDL registration** | [tools/tillr-store/main.go](../../tillr-store/main.go) ([autoqa-tillr-seams.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md) [§1.3](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md#13-the-real-coupling-the-stores-schema-is-a-function-of-who-opened-it)) | **Built (`item-def-tables-at-init`).** `tillr-store init` now creates the full schema matching every owner and the loop (`tools/tillr-store/init_schema_test.go`), so read-only faces (`view waiting`, `view status`, `drain why`, `run lanes`) exit `0` on a freshly initialized store without waiting for each owning utility to open it for writing. |
+| **Fresh-store DDL registration** | [tools/tillr-store/main.go](../../tillr-store/main.go) | **Built (`item-def-tables-at-init`).** `tillr-store init` now creates the full schema matching every owner and the loop (`tools/tillr-store/init_schema_test.go`), so read-only faces (`view waiting`, `view status`, `drain why`, `run lanes`) exit `0` on a freshly initialized store without waiting for each owning utility to open it for writing. |
 | **Pre-approved workflows & `evaluator_slot`** | [tillr-item-graphs.md](../reference/tillr-item-graphs.md), [tillr-judge-and-lifecycle.md](tillr-judge-and-lifecycle.md) | **Built upstream (`stage: CURRENT` / `BUILT`).** W1/W2 contracts supply `no_commit` read-only agent nodes, `command` nodes, typed run artifacts, and grant-backed `evaluator_slot` judging. |
 | **AutoQA runner, idea refill, or bug dedup** | *(none across `tools/`, `yolo-packs/`, `config/`)* | **Absent.** Every `autoqa` match in the tree is prose, a doc comment, or the code and tests that refuse the retired store vocabulary. |
 
@@ -89,7 +88,7 @@ AutoQA obeys a strict one-way dependency rule (`D-AQ1`): **AutoQA knows how to i
 ```text
 yolo-packs/autoqa/                 (optional pack — never bundled into yolo-packs/tillr)
   pack.json                        (declares program `autoqa` + skill `autoqa-operating`)
-  programs/autoqa/run              (digest-cached Go source launcher, same pattern as mq/tillr)
+  programs/autoqa/run              (digest-cached Go source launcher, same pattern as tillr)   
 tools/autoqa/                      (own go.mod — ZERO `replace` links into ../tillr*)
   cmd/autoqa/                      (faces: init, seed, campaign, refill, dedup, export, status)
   workflows/                       (qa-probe@v1.json, qa-confirm@v1.json)
@@ -98,7 +97,7 @@ tools/autoqa/                      (own go.mod — ZERO `replace` links into ../
 ```
 
 - **Lives by itself ([OQ-AQ1](#decision-ledger)):** `tools/autoqa/go.mod` has no `replace` edge into `tools/tillr*`. Every interaction with `tillr` crosses documented CLI faces (`tillr-store`, `tillr-item`, `tillr-drain`, `tillr-run`, `tillr-view`) and versioned JSON envelopes. Extracting `tools/autoqa/` + `yolo-packs/autoqa/` into a standalone git repository at any point is a zero-code-change `git subtree split`.
-- **Gated by itself:** When incubating in this repository, [tools/fork-check.py](https://github.com/mschulkind-oss/tillr/blob/main/tools/fork-check.py) plans `Check("autoqa", ...)` watching only `tools/autoqa/**` and `yolo-packs/autoqa/**`, while `PACK_SYNC_WATCHES` and `TILLR_DOCS_WATCHES` ignore both directories. Inside `tools/autoqa/`, `tillr-gate plan` + `tillr-gate run` over `tools/autoqa/registry.json` gates AutoQA's own changes (`go test ./...`, workflow validation, and `yolo pack lint yolo-packs/autoqa`) with no store required ([OQ-AQA2](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md#OQ-AQA2) settled: `tillr-gate` stays store-free).
+- **Gated by itself:** When incubating in this repository, the repository gate plans one `autoqa` check watching only `tools/autoqa/**` and `yolo-packs/autoqa/**`, while the pack-sync and tillr-docs checks ignore both directories. Inside `tools/autoqa/`, `tillr-gate plan` + `tillr-gate run` over `tools/autoqa/registry.json` gates AutoQA's own changes (`go test ./...`, workflow validation, and `yolo pack lint yolo-packs/autoqa`) with no store required (`tillr-gate` stays store-free).
 - **No core changes:** AutoQA adds **zero** item states, DAG node kinds, or judge exceptions to `tillr`.
 
 ### 2.2 Two Stores and Sandboxed SUT Snapshots
@@ -220,7 +219,6 @@ Every accidental AutoQA artifact in this repository gets a ruling (`D-AQ7`). The
 | The tillr pack's description in [pack.json](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/pack.json) | **Keep the pack; delete the AutoQA text.** | No: the description still ends "and the AutoQA design-review handoff". |
 | The unbuilt `tillr-autoqa` skill of [tillr-distribution.md](tillr-distribution.md) [§5](tillr-distribution.md#5-the-autoqa-handoff-through-the-pack) | **Supersede.** The tillr pack ships only its operating skill; AutoQA ships in a pack of its own. | Partly: [OQ-TD2](tillr-distribution.md#open-questions) is marked settled there and not yet compacted. |
 | Known Gap #1 in the eight module READMEs | **Delete it** under one shared stamp, so that [tests/tillr-docs.test.py](https://github.com/mschulkind-oss/tillr/blob/main/tests/tillr-docs.test.py) still passes, and regenerate the pack copy. | No: `rg -c 'AutoQA handoff skill is not shipped' tools/*/README.md` answers 1 for each of the eight. |
-| The seam document and its `D-AQA1` | **Supersede the document; retire `D-AQA1`.** | Yes: [autoqa-tillr-seams.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md) is superseded by this document. |
 | The standalone seams `D-AQA2` to `D-AQA4` (loop-emitted gate events, exit-code propagation, `gate change` and `run request`) | **Keep in tillr.** They are general-purpose. | Yes: built before this design. |
 | The store's `autoqa` actor kind, `qa-verification` claim class and `autoqa` decider | **Retire from what can be written**, keeping old rows readable. | Yes: new writes are refused with the rule `actor-retired`. |
 
@@ -253,7 +251,7 @@ now governs the judge in both stores.
 | `D-AQ4` | Govern queue refill by low/high watermarks (`2 * lanes` / `6 * lanes`), tuple dedup, explorer caps (`<= 50%` batch share, `generation <= 2`), per-surface saturation cooldown (`15` clean probes until SUT paths move), and explicit campaign ceilings. Reason: Prevents cheap explorer agents from turning the test-idea queue into an unbounded self-licking token sink ([OQ-AQ3](#decision-ledger)). | 2026-11-14, designer | [§3.2](#32-seeding-explorer-proposals-and-refill-throttling) | — |
 | `D-AQ5` | Require four gates for a confirmed bug — regression-polarity `repro.sh`, `3/3` hermetic replay, two-stage signature/locus deduplication (`sig_v1` + post-minimization tombstone check), and an independent grant-backed `triage_judge` ruling — routing spec contradictions to `mail send`. Reason: Rejects prose-only claims, flaky failures, valid exit-`1/2/3` refusals, and duplicate multi-lane hits before any item reaches the SUT board. | 2026-11-14, designer | [§4.1](#41-four-gates-before-a-finding-is-a-confirmed-bug) | — |
 | `D-AQ6` | Track rolling SUT board precision $P_{\text{board}}$ in `autoqa.db` and enforce a three-rung throttle (`>= 0.80` normal; `0.60..0.80` or `2` FPs pause explorer refill + force `not-started`; `< 0.60` or `3` FPs halt exports and campaign). Reason: Protects expensive SUT build lanes and human attention from miscalibrated prompts without manual babysitting ([OQ-AQ2](#OQ-AQ2)). | 2026-11-14, designer | [§4.3](#43-precision-accounting-and-the-throttling-ladder) | — |
-| `D-AQ7` | Delete [autoqa-handoff.md](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/tasks/autoqa-handoff.md), the unbuilt `tillr-autoqa` skill ([OQ-TD2](tillr-distribution.md#open-questions)), and README Known Gap #1; supersede [autoqa-tillr-seams.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md) while keeping `D-AQA2`–`D-AQA4` in `tillr` core; retire `ActorAutoQA` / `qa-verification` / `DecidedByAutoQA`; and close `item-decided-by-autoqa`. Reason: Disposes of every accidental AutoQA artifact in `tillr` while preserving the general standalone CLI contracts already built at `6851b49015`. | 2026-11-14, designer | [§5.1](#51-artifact-disposition-ledger) | Partly: see [§5.1](#51-artifact-disposition-ledger) |
+| `D-AQ7` | Delete [autoqa-handoff.md](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/tasks/autoqa-handoff.md), the unbuilt `tillr-autoqa` skill ([OQ-TD2](tillr-distribution.md#open-questions)), and README Known Gap #1; keep `D-AQA2`–`D-AQA4` in `tillr` core; retire `ActorAutoQA` / `qa-verification` / `DecidedByAutoQA`; and close `item-decided-by-autoqa`. Reason: Disposes of every accidental AutoQA artifact in `tillr` while preserving the general standalone CLI contracts already built at `6851b49015`. | 2026-11-14, designer | [§5.1](#51-artifact-disposition-ledger) | Partly: see [§5.1](#51-artifact-disposition-ledger) |
 | OQ-AQ1 | **Designer's decision, 2026-11-15; not ruled by the owner; the owner may overturn it.** AutoQA starts in this repository, in its own tool and pack directories with no shared Go module, and is split out once dogfooding settles. **Rejected:** a separate repository from the first commit. The reason given: the owner builds tools for one user but shaped so they could be shared, and tillr itself was incubated here the same way. | 2026-11-15, designer | [§2.1](#21-own-code-own-pack-own-gate-zero-reverse-dependencies) | — |
 | OQ-AQ3 | **Designer's decision, 2026-11-15; not ruled by the owner; the owner may overturn it.** A campaign is a bounded pass by default: it stops at its probe count, its time limit, or when the surfaces are saturated. Running continuously is an option a repository turns on. **Rejected:** a daemon that wakes on every trunk move by default. The reason given: every tillr option that spends or publishes unasked is off by default ([the restart reference](../reference/tillr-restart.md#the-settings-file)). | 2026-11-15, designer | [§3.2](#32-seeding-explorer-proposals-and-refill-throttling) | — |
 
@@ -280,8 +278,7 @@ now governs the judge in both stores.
 
 Three tracked documents owed updates. Read on 2026-11-18:
 
-1. **[autoqa-tillr-seams.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md):** made. It is superseded by this document and records `D-AQA1` as retired.
-2. **[tillr-distribution.md](tillr-distribution.md):** partly made. [OQ-TD2](tillr-distribution.md#open-questions) is marked settled as superseded by `D-AQ1` and `D-AQ7`, and is not yet compacted into that document's ledger.
+2. **[tillr-distribution.md](tillr-distribution.md):** partly made. [OQ-TD2](tillr-distribution.md#open-questions) is marked settled by `D-AQ1` and `D-AQ7`, and is not yet compacted into that document's ledger.
 3. **The eight `tools/tillr-*/README.md` banners:** owed. Known Gap #1 is removed under one shared stamp, with the pack copy regenerated, as part of Slice 1 ([§5.2](#52-dogfood-rollout-against-tillr)).
 
 ## Queue item

@@ -2,21 +2,17 @@
 title: "tillr designs: what is built, what is queued, and what is only proposed"
 status: accepted
 stage: CURRENT
-updated: 2026-11-18
 tags: [tillr, index, status, design]
-summary: "The one page to read first about tillr: every design and reference document, what each covers, its status as of 2026-11-16 measured against the code and the queue rather than the document's own status line, and what tillr will build from it next. It also declares which documents the tillr pack delivers to other workspaces."
+summary: "The one page to read first about tillr: every design and reference document, what each covers, its status measured against the code and the queue rather than the document's own status line, and what tillr will build from it next. It also declares which documents the tillr pack delivers to other workspaces."
 ---
 
 # tillr designs: what is built, what is queued, and what is only proposed
 
-> **Delivered copy.** This is `docs/tillr/design-status.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/design-status.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/design-status.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/design-status.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-16. Every status below was checked against the tree at `424cc9db0` and the
-queue on this checkout's store that evening, not copied from the documents' own status lines;
-[a list of the lines that were wrong](#status-lines-that-are-stale) is at the end. The tree moves
-several times an hour while the drain runs, so read a queued item's state as of this date.
-The rows for the eleven designs reconciled on 2026-11-18 were checked again against the tree
-at `dcb76fe41` and the store's status face that day, and their status cells carry that date.
+Every status below is read from the code and the queue, not from a document's own status
+line. The tree moves several times an hour while the drain runs, so a queued item's state is
+the store's to report: `tillr drain status` and `tillr view` answer for the present moment.
 
 ## Read this first
 
@@ -53,8 +49,6 @@ was not delivered points at the repository on GitHub.
   Queued is a promise in order, not a date: the drain works the queue in its own order.
 - **Proposed, awaiting the owner:** the design waits on the owner's rulings, named by question id.
   Nothing in it is promised until those are ruled.
-- **Superseded / historical:** kept as a record; listed in
-  [the second table](#superseded-and-historical-records) and not delivered with the pack.
 
 **Reading order for an agent from another project,** such as the Product QA pipeline's (a
 product bug-finding pipeline, which is not [AutoQA](../design/tillr-autoqa.md), tillr's own
@@ -104,7 +98,7 @@ programs, and each also runs alone with an explicit `--store`. The keeper, `tool
 restarts the drain loop when it exits; it has no README. The `tillr-operating` skill, delivered
 with the pack as a skill, says how the eight programs compose across the loop's seven steps.
 
-| Piece | What it does | Status (2026-11-16) | Pack |
+| Piece | What it does | Status | Pack |
 | :--- | :--- | :--- | :--- |
 | [tillr-store](../../tillr-store/README.md) | Creates, migrates and checks the SQLite store every other program writes. The shared library is `tools/tillr`. | Built | shipped |
 | [tillr-item](../../tillr-item/README.md) | Items, their states, criteria, verdicts and decisions; `sync` reads item blocks from tracked Markdown under `docs/`. | Built | shipped |
@@ -124,7 +118,7 @@ under it, then the proposal addressed to that reader, then the
 roadmap, then from the foundation outward. "Next" lists queued item ids in the order their dependencies
 allow, first the ones that wait on nothing.
 
-| Document | Covers | Status (2026-11-16) | What tillr builds next | Pack |
+| Document | Covers | Status | What tillr builds next | Pack |
 | :--- | :--- | :--- | :--- | :--- |
 | [The core and the `git-landing` charter](../design/tillr-core-and-git-landing.md) | The owner's direction: tillr as general machinery of queues and graphs whose nodes are agents and commands, with landing changes in a Git repository as one small, separate definition on top; where the Git-landing assumption is wired in today, the shapes for that one definition, the extension points a second use would fill, the owner's words as Product QA reported them, and the working choices the build rests on. | The owner's stated direction. He said build on 2026-11-17, and the first tranche is built (2026-11-18). No question is open in it; five designer's decisions the build rests on await his review in its ledger, and its naming question, moved to the vocabulary, the owner ruled there on 2026-11-18 as the `git-landing` charter ([OQ-VO4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO4), [OQ-VO5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO5)) | Nothing of its own; the unfiled next tranche of [the build plan](../design/tillr-definitions-plan.md) | shipped |
 | [The build plan for definitions](../design/tillr-definitions-plan.md) | Eighteen items, all landed: the foundations Product QA asked for, the definition file and the store that records it, the item lifecycle and the planner read from it, the hook program contract, a store that does not land, and a worked example that lands nothing; plus the next tranche in prose. | All eighteen items landed by 2026-11-18 | The ten units of its next tranche, which are unfiled | shipped |
@@ -153,10 +147,10 @@ allow, first the ones that wait on nothing.
 | [Restart](../reference/tillr-restart.md) | Reference for durable restart requests, in-place `syscall.Exec` replacement of `tillr-drain loop` and `tillr-view serve`, session pause and continuation, `.tillr.toml` settings, and post-landing roll and push. | Current reference | Nothing | shipped |
 | [Live drain capacity and allocations](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md) | Changing ordinary and express lane counts, backend policy selection, and per-backend / per-seat / per-work concurrency caps on a running drain without restarting it, with graceful slot retirement, store persistence across restarts, and a survey of every startup setting; paired with [its plan seed](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config-plan.md). | Proposed, awaiting the owner (2026-11-19): [OQ-LD1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD1), [OQ-LD2](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD2), [OQ-LD3](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD3) and [OQ-LD4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD4); six designer's decisions await his review in [its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#7-decision-ledger); nothing built | Completing [its plan seed](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config-plan.md) into build slices once [OQ-LD1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD1) to [OQ-LD4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-live-drain-config.md#OQ-LD4) settle | not shipped |
 | [Drain successor](../reference/tillr-drain-successor.md) | Reference for the pure per-item successor pass, derived positions, clock-free identities, generation timing, and trigger loop. | Current reference | Nothing | shipped |
-| [Gate rework](../design/gate-rework.md) | A ten-second landing gate that remembers only what it can recompute. | Built 2026-11-18 except one decision: every slice landed, and the red cap, lane base and runner-pays-first landed from the roadmap; the drift probe of D-GR12 is not built | Written in the document as one unit with no item directive, pending the owner's ruling on intake: the drift probe, after `item-gate-pinned-fork-inputs` | shipped |
+| [Gate](../reference/gate.md) | Reference for check declarations, fast and heavy tiers, remembered passes, result classification, the local and landing gates, the after-merge proof and the green pointer; its companion is [gate check rules](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate-check-rules.md). | Current reference | Nothing | shipped |
 | [Evidence registry and suite guardrail](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md) | One input-bound evidence registry shared across the gate, trunk proof and worker briefs so runs rely on established results instead of re-deriving them, plus a two-seam guardrail stopping lane workers from running whole module suites; paired with [its plan seed](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail-plan.md). | Proposed, awaiting the owner (2026-11-20): [OQ-ER1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER1), [OQ-ER2](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER2) and [OQ-ER3](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3); eight designer's decisions await his review in [its ledger](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#decision-ledger); nothing built | Completing [its plan seed](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail-plan.md) into build slices once [OQ-ER1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER1) to [OQ-ER3](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) settle | not shipped |
 | [Landing principles](../design/landing-principles.md) | The durable landing rulings, the measurement behind each and what enforces it. | Current reference | Nothing | shipped |
-| [SQLite contention recovery](../recovery/sqlite-contention/README.md) | Why the store's writer stalled the loop, and the fixes. | Built, pending independent review: shorter writer spans, no fsync under the writer, writer tracing, checkpoint ownership | The review | shipped |
+| [Store contention](../reference/tillr-store-contention.md) | Reference for the lander's write boundary, `TILLR_SQLITE_TRACE=1` writer tracing, and the span the final landing write still holds across Git. | Current reference | Nothing | shipped |
 | [Observatory contract](../design/tillr-observatory.md) | What the drain must record so a read-only web page can show every item, stage and call. | Built: `tillr-view serve` with its Go API and React front end | Superseded in its screens by the redesign below | shipped |
 | [Observatory truthfulness and primitives](../reference/observatory-design.md) | Reference for epistemic provenance badges, three-way state glyphs, structured refusals, design-document metadata and Vantage links, CLI/HTTP count parity, and WebSocket invalidation (companion plan retired on graduation). | Current reference | Nothing | shipped |
 | [Observatory redesign](../reference/observatory-redesign.md) | Reference for the linked-page observatory, CLI/HTTP read faces, waiting classes, span waterfall, and usage display without dollar prices. | Current reference | Nothing | shipped |
@@ -168,83 +162,6 @@ allow, first the ones that wait on nothing.
 | [Muse backend](../reference/tillr-muse-backend.md) | Reference for the shared backend adapter contract, staged ten-section brief, nineteen-key report header, write-boundary snapshots, seat failover, and the dormant Meta Muse adapter. | Current reference (Muse iceboxed; live sandbox canary unrun) | Nothing while Muse is in [the Icebox](roadmap.md#icebox) | shipped |
 | [Goal monitor](../design/tillr-goal-monitor.md) | A goal as a recurring item whose criteria are a property of the system, checked on a schedule. | Iceboxed by the owner on 2026-11-17, nothing built; [OQ-GM1](../design/tillr-goal-monitor.md#OQ-GM1) and [OQ-GM2](../design/tillr-goal-monitor.md#OQ-GM2) are left unanswered | Nothing while it is in [the Icebox](roadmap.md#icebox) | shipped |
 | [AutoQA](../design/tillr-autoqa.md) | Exploratory testing of tillr with its own store, cheap probes and a judge that confirms bugs. | Iceboxed by the owner on 2026-11-17; no AutoQA code exists, and [OQ-AQ2](../design/tillr-autoqa.md#OQ-AQ2) is blocked until the design is picked up | Nothing while it is in [the Icebox](roadmap.md#icebox): `item-design-autoqa-slices` is not admitted to the queue | shipped |
-| [Agent context delivery](../design/agent-context-delivery.md) | Which channel each kind of instruction reaches an agent through. | Proposed, a sketch whose body describes the deleted board drain. Its two tillr questions are closed in [its ledger](../design/agent-context-delivery.md#decision-ledger); [OQ-AC3](../design/agent-context-delivery.md#OQ-AC3) is the pi roadmap's | Nothing | shipped |
-| [Judge in tillr](../design/work-control-judge-in-tillr.md) | Ruling to move the session work-control judge into tillr and retire the shadow approver. | Ruled 2026-11-12; nothing built | Not filed; the judge's build lives in judge and lifecycle | shipped |
-
-## Superseded and historical records
-
-Kept for their evidence. None is delivered with the pack; each link goes to the repository.
-
-| Document | What it was | Status | Pack |
-| :--- | :--- | :--- | :--- |
-| [AutoQA seams](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md) | AutoQA's four seam questions against the binaries of 2026-11-13. | Superseded by AutoQA and separable parts | not shipped |
-| [Next steps](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-next-steps.md) | The dispatch wave of 2026-11-10. | Historical | not shipped |
-| [Day 2](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-day2.md) | The plan of 2026-11-12 for the first unattended loop. | Historical: the loop runs unattended | not shipped |
-| [Loop readiness](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-loop-readiness.md) | What blocked an overnight burn on 2026-11-12. | Historical | not shipped |
-| [Chunking plan](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-chunking-plan.md) | The 2026-11-12 cut of remaining work into lanes. | Historical: replaced by item blocks | not shipped |
-| Seed triage | The first seed of 56 board items. | Historical: the seed file is frozen and the queue lives in documents | not shipped |
-| [Coverage 2026-11-13](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-coverage-2026-11-13.md) | A walk of fifteen designs for owed work. | Historical record | not shipped |
-| [Drain acceptance 2026-11-13](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-drain-acceptance-2026-11-13.md) | The first unattended two-lane run, measured. | Historical record | not shipped |
-| [Observatory QA 2026-11-13](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-qa-2026-11-13.md) | Findings against the first observatory. | Historical record | not shipped |
-| Queue inventory 2026-11-13 | Every candidate piece of work, surveyed. | Historical record | not shipped |
-| Board utilities plan | The implementation plan for the seven programs. | Graduated: built | not shipped |
-| Board utilities lanes | That plan cut into lanes. | Graduated | not shipped |
-| Board documents retirement | Retiring the old board's documents. | Done | not shipped |
-| Board names | Naming the machine; chose tillr. | Historical | not shipped |
-| LAND-3 inventory | mq against tillr-land, before one lander was chosen. | Deprecated | not shipped |
-| mq retirement | Deleting the merge queue and rebuilding inside tillr. | Historical: mq is gone | not shipped |
-| [Run wall evidence](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/run-wall-evidence.md) | The measurement behind the run wall ruling. | Historical record | not shipped |
-| [Gate dual-run evidence](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-dual-run-evidence.md) | The Go gate against the Python gate on three candidates. | Historical record | not shipped |
-| Landing system | The two landers before tillr-land. | Superseded by landing principles | not shipped |
-| Landing runbook | Draining the old board by hand. | Superseded by the tillr-land README | not shipped |
-| Drain velocity research | One overnight ten-lane drain, observed. | Research record | not shipped |
-
-## What is changing right now
-
-Landed on 2026-11-15 and 2026-11-16, read from `git log --oneline -60 -- tools docs/design`.
-Documents written before these may describe the older behavior.
-
-- **Store locking.** Shorter SQLite writer spans, no disk flush while holding the writer, writer
-  tracing, and short-lived programs no longer checkpoint or delete the log (`31ba65672`,
-  `64bee8457`, `f26fc6926`, `27f04df2d`, `91425b408`).
-- **The gate.** Fast tree checks migrated to declaration files with enforced budgets, a slow check
-  slows the gate instead of faulting the item, and `go-build` builds with `-trimpath`
-  (`b1a2cd37e`, `71e782f64`, `f950d5381`, `511407810`).
-- **Landing.** The lander no longer lands a change the trunk already carries, and the drain
-  settles a run whose item already landed without judging it (`89b305539`, `98280ec09`).
-- **Stopping and pausing.** Stopping the loop leaves runs alone unless `drain stop --end-runs`
-  is given, and worker sessions pause and continue without a retry (`55c02cbd0`, `637458006`).
-- **Workflows and settings.** Sequential agent workflows on one lane, workflow progress across
-  restarts, repository settings read at startup, backend policy reloaded between passes
-  (`b657ed406`, `6ee7e1d04`, `d327cf079`, `59211351a`).
-- **Observatory.** Home shows every lane, and `just observatory` serves this checkout's own build
-  (`a8841462f`, `4b13fd339`).
-- **Design comments.** Hand-driven delivery of review comments to a design session (`895409b38`).
-
-## Status lines that are stale
-
-Found on 2026-11-16 by comparing each document's own status with the tree and the queue.
-
-- [Gate rework](../design/gate-rework.md) said "Nothing built"; six of nine slices have landed.
-  Fixed in its status line.
-- [Restart](../reference/tillr-restart.md) said "Nothing built"; three of seven blocks have landed.
-  Fixed in its status line before graduation.
-- [Distribution](../design/tillr-distribution.md) said "Pack unbuilt"; the pack is built. Fixed
-  in its status line.
-- [Item graphs](../reference/tillr-item-graphs.md) said nothing of the runtime is built; three blocks
-  have landed. Fixed in its status line before graduation.
-- [Self-hosted build](../design/tillr-selfhosted-build.md) said "Nothing built"; the restart, the
-  front-end rebuild and the Vantage-index step are built. Fixed in its status line on 2026-11-18.
-- [The observatory contract](../design/tillr-observatory.md) says it is a draft whose next step is
-  to rule four questions; no questions remain and the server is built. Not fixed: frontmatter.
-- [Board utilities](../design/board-utilities.md) still names writing the implementation plan as
-  its next step; the plan graduated and the programs are built. Not fixed: frontmatter.
-- [AutoQA seams](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/autoqa-tillr-seams.md) is superseded and its frontmatter says all four
-  questions were ruled, but Vantage still counts them open. Not fixed: that is its Open Questions
-  section.
-- The `tillr-operating` skill's Known Gaps callout (verified 2026-11-12) says the event emitters
-  are unbuilt; [separable parts](../design/tillr-separable-parts.md) measured them recording on
-  2026-11-16. Not fixed: the callout is checked by `tests/tillr-docs.test.py` and spans lines.
 
 ## How this page is kept
 

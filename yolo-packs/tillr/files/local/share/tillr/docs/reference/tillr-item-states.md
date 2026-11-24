@@ -15,19 +15,15 @@ tags: [tillr, item, state, reference]
 
 # Tillr item states and frozen criteria
 
-> **Delivered copy.** This is `docs/reference/tillr-item-states.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-item-states.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-item-states.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-item-states.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** Source-verified 2026-11-16 against `087b4385b9208bf49b20d09fefe9564ea8618e96`.
-UNMEASURED: this reference does not claim observation of a live drain or board.
+**Status:** Source-verified 2026-11-16 against the code named in `covers`.
+UNMEASURED: this reference does not claim observation of a live drain or view.
 
 An item records the work requested, not the life of one attempt at that work.
 Tillr separates its stored disposition from the view's reading of current activity.
 A stopped attempt is not evidence that someone is still working. An acceptance
 criterion's judgment is separate again: moving the item does not rewrite that judgment.
-
-**Reads with:** [the original state-model ruling](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-item-state-model.md),
-retained because source comments cite its sections. Its board-command names and
-migration counts are historical; this page describes tillr, not those proposals.
 
 ## Stored disposition and displayed activity
 
@@ -139,6 +135,5 @@ and other editable fields are not frozen by this comparison.
 | Closed display vocabulary | [view tests](../../tillr-view/serve_internal_test.go), `TestProjectItemStateNeverInventsAnEighthState` |
 
 Re-verification starts with a diff from `verified_commit` over `covers`, then checks
-these writers and the ordered projection. This document does not certify the
-historical migration of abandoned or deleted rows, archive behavior, or a
+these writers and the ordered projection. This document does not certify archive behavior or a
 compile-time prohibition on views reading raw state strings.

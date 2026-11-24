@@ -50,7 +50,7 @@ type HeavyCheck struct {
 	GoTimedOut bool `json:"go_timed_out,omitempty"`
 	// RevertedBy is the trunk commit that reverted FirstRedLanding automatically, and
 	// RevertRefused is why the automatic revert ended "not possible" so a fixer was filed
-	// instead (gate rework Section 6.8, graph design OQ-GP1). Both are empty when the
+	// instead (docs/reference/gate.md#a-red-proof, graph design OQ-GP1). Both are empty when the
 	// revert was not attempted.
 	RevertedBy    string `json:"reverted_by,omitempty"`
 	RevertRefused string `json:"revert_refused,omitempty"`

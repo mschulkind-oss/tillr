@@ -14,8 +14,6 @@ SCRATCH = re.compile(r"\.yolo/durable|YOLO_DURABLE_DIR")
 
 
 SCRATCH_EXCEPTIONS = (
-    # A tool's intended output directory (the storybook's `just` recipe names it).
-    ("tools/footer-storybook/README.md", "$YOLO_DURABLE_DIR/footer-storybook"),
     # `just tillr-build`'s documented output directory: the section states where a source
     # build of the tillr programs lands, which is a location by design rather than evidence
     # of a past claim. The marker is that line's own text.
