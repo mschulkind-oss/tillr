@@ -7,7 +7,6 @@ verified_commit: 412259f25ae143948671832e310e7cd34ee03f5c
 covers:
   - config/tillr/workflows/
   - config/tillr/commands.json
-  - config/tillr/plan-guidance.md
   - tools/tillr/settings/settings.go
   - tools/tillr-item/item/workflow.go
   - tools/tillr-item/item/workflow_selection.go

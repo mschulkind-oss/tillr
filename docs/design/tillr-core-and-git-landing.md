@@ -355,7 +355,7 @@ where it is: **nothing**, **small**, or **a design round**.
   dropped when it settles, and `tillr-drain sweep-refs` sweeps refs on request. The event log is
   append-only, and each run's record directory and log are kept. Per-run scratch is never deleted,
   which is where the disk goes ([the vocabulary, Section 3.1](./tillr-vocabulary.md#31-where-the-disk-goes)).
-  [Bounded agent storage](./bounded-agent-storage.md) designed reclaiming for the board that tillr
+  Bounded agent storage designed reclaiming for the board that tillr
   replaced, and is unbuilt.
 
 ### 3.3 How close `tillr-loop` already is to the one file
@@ -520,7 +520,7 @@ rewritten here.
 | C2 Reopening a finished item | Terminal `landed` and `resolved-elsewhere` ([lifecycle §3.2](./tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)) | Yes | The definition's, by the owner's direction. Stays true inside Git landing. Core protection: a move out of a finished state is an event, never silent | Real: the owner, as reported, rules it a definition's policy |
 | C3 Steps reshaping the graph | Bounded replacement only; no model-written wiring (`D-IG3`, `D-IG5`, `D-IG9`) | Partly | Which reshaping operations exist is the definition's. That each is applied by one writer, atomically with its event, and never to a node that has started, is a protection every use needs: without it the record lies. The owner's direction of 2026-11-17 is wider than the old ruling: anything not started may be changed | Real, narrowed to the four rules all three designs share: one writer applies each change atomically with its event, no node replaces itself, nothing started changes, and every change passes the downstream-shape check. Free rewriting is withdrawn |
 | C4 An uncertain outside effect as a state | No node changes anything outside its worktree ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be)) | Yes | The worktree rule is Git landing's. Core protection: an effect a definition declares is recorded before and after, so a retry can see it | Real: a report send that lost its session |
-| C5 Clocks and deadlines in the plan | No timers ([the retired agent runtime design, section 6](./agent-runtime-retirement.md#what-happened-to-each-section)) | Partly | A deadline as an ordering input of dispatch policy is a tension and the definition's. The planner staying a function of the store, replayable, is a protection | Withdrawn: the time box is the fuzzer run's own |
+| C5 Clocks and deadlines in the plan | No timers (the retired agent runtime design, section 6) | Partly | A deadline as an ordering input of dispatch policy is a tension and the definition's. The planner staying a function of the store, replayable, is a protection | Withdrawn: the time box is the fuzzer run's own |
 | C6 A Go library as the connection | Processes and records ([board-utilities.md §5.9](./board-utilities.md#59-the-composed-pipeline)) | No | A protection: it is how a definition injects anything without linking the core | Withdrawn: processes and records are enough |
 | C7 Completion that is not a landing | One item, one atomic change (`D-IG2`) | Yes | The completion rule is the definition's; Git landing's is a landing. Core protection: an item completes once, on a recorded receipt | Real: completion on a recorded, judged verdict |
 | C8 A second loop in one root | None; how the keeper finds a loop | No | Not a tension. One writer per store and at-most-once launch of a run are protections; a second use runs its own store and root | Withdrawn: it runs its own store and root |
@@ -541,7 +541,7 @@ rewritten here.
 3. **[The design index, Read this first](../tillr/design-status.md#read-this-first)** describes
    tillr as a loop that "puts one commit per item on the trunk with the **lander**". That is true of
    the code today; this direction describes it as the core plus one definition.
-4. **[the retired agent runtime design, section 6](./agent-runtime-retirement.md#what-happened-to-each-section)** warns against workflow-engine
+4. **the retired agent runtime design, section 6** warns against workflow-engine
    creep, and the owner describes the core as "queues and DAGs that have agents and other commands".
    Read together, the warnings are about features (cycles, timers, model-written wiring), not about
    generality **[inferred]**.

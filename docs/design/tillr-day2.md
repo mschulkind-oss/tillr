@@ -184,11 +184,11 @@ an untakeable snapshot is a stop, never a pass.
 ### 3.1. What the Triage Found
 
 The deleted board's archive at `docs/archive/board-2026-11-12/board-content.json`
-([committed verbatim](../archive/board-2026-11-12/README.md)) holds `623` items, **`56`** of them open
+(committed verbatim) holds `623` items, **`56`** of them open
 (`35` `not-started`, `14` `in-progress`, `7` `blocked`). Day 1 measured how many named paths
 that were all gone and concluded `49` open items targeted live areas. That measurement counted
 a **path that still exists** as a working premise, and the triage's premise-by-premise audit
-([`tillr-seed-triage.md`](./tillr-seed-triage.md)) shows why that was wrong:
+(`tillr-seed-triage.md`) shows why that was wrong:
 
 | Disposition | Count | What forced it |
 |---|---:|---|
@@ -329,7 +329,7 @@ To build and run `LOOP-1` over the migrated queue in a single day, five items fr
 | **`SUB-2`** (Structured `env_refs` secret/env channel in `tillr-run`) | **Defer** | `run-pi` and `run-agy` take route, worktree, and brief paths on argv and read ambient jail credentials. Building an env-broker today adds `75m` to `tools/tillr-run` + all adapter scripts without changing a single Day-2 run. | `run.request.env_refs` stays empty (`[]`); adapters cannot receive per-item secret overrides until `SUB-2` is built. |
 | **`MM-2`** (`muse` live canary & `run-muse` recovery) | **Drop / Freeze** | Meta subscription lapsed on `2026-11-12`; every `muse` model fails with `does not exist or you lack access`. | `tools/tillr-run/backends/muse/run-muse` stays dormant in the tree (`extract-report` remains shared/tested). Failover depth is strictly `1` (`pi` → `agy`). |
 | **Standalone E1 Supervised Drain CLI/UI** (`tillr-today` sequencing) | **Drop intermediate ceremony** | Superseded by the owner's instruction to go straight to the unattended loop burning through the migrated queue. | No interactive step-by-step confirmation prompt between phases; safety relies entirely on `PIPE-REAL` (1-item canary), a short canary run of `tillr drain loop`, `BOUNDARY-1`, and the infrastructure backoff (the tick budget and the 3-failure circuit breaker are gone — [the momentum principle](momentum-principle.md)). |
-| **Bulk Import of `567` Closed/Completed/Abandoned Board Items** (`tillr-board-reshape`) | **Drop** | `docs/archive/board-2026-11-12/board-content.json` is [committed verbatim](../archive/board-2026-11-12/README.md). Importing `567` historical items into `tillr-store` provides zero runnable work and would require inventing retroactive criteria. | `tillr view` displays only the `30–42` migrated active items; historical lookups query `docs/archive/board-2026-11-12/board-content.json` via `jq`. |
+| **Bulk Import of `567` Closed/Completed/Abandoned Board Items** (`tillr-board-reshape`) | **Drop** | `docs/archive/board-2026-11-12/board-content.json` is committed verbatim. Importing `567` historical items into `tillr-store` provides zero runnable work and would require inventing retroactive criteria. | `tillr view` displays only the `30–42` migrated active items; historical lookups query `docs/archive/board-2026-11-12/board-content.json` via `jq`. |
 | **Automated Self-Healing / Re-Run of `candidate-gate-fail` or `reapply-conflict`** | **Defer** | Automatically spawning a repair turn inside the unattended loop violates the `no-retry-budget` rule and risks burning ticks on a flawed item specification. | Failed candidates are saved to `refs/tillr/failed/<run_id>` or `refs/tillr/conflict/<run_id>`, the item is marked `blocked`, and the loop moves on to the next `ready` item. |
 
 ---

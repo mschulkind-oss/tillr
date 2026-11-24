@@ -34,7 +34,7 @@ the dispatch side's subject, in
 | Quarantine declarations and their application | `tools/fork-check.py` (`Quarantine`, `QUARANTINED_FORK_QUALITY`, `applied_quarantine`) |
 
 **Reads with:** [Preflight, explained](../preflight-explained.md) (the argument for the timing
-rule, in plain words) and [the fork workflow](../pi/forks.md) (the checks that build and test
+rule, in plain words) and the fork workflow (the checks that build and test
 the patched forks).
 
 ---

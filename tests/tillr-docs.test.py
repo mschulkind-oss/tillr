@@ -812,17 +812,6 @@ def case_cache_safe_working_loop_documented():
     ok("worker brief and operating skill use targeted tests and cache-safe full verification")
 
 
-def case_fork_filing_documented():
-    for path in (ROOT / "AGENTS.md", ROOT / "docs/pi/forks.md",
-                 ROOT / "tools/tillr-drain/README.md", SKILL):
-        text = " ".join(text_of(path).split())
-        for required in ("tillr item request", "standard input", "--title", "--path",
-                         "lane checkout path", "bin/pi-forks export", "lander", "fork-build"):
-            if required not in text:
-                fail(f"{path.relative_to(ROOT)} omits fork filing guidance: {required}")
-    ok("fork filing names the accepted request form and lander-owned delivery")
-
-
 def case_run_environment_documented():
     path = ROOT / "tools/tillr-run/README.md"
     text = text_of(path)
@@ -889,13 +878,6 @@ def case_seed_retirement_documented():
                     "tools/gate/checks/seed-freeze.py"):
         if (ROOT / retired).exists():
             fail(f"retired seed intake remains: {retired}")
-    roadmap = text_of(ROOT / "docs/pi/roadmap.md")
-    for item in ("item-seed-01", "item-seed-03", "item-seed-05", "item-output-cap-gate-wireid",
-                 "item-or-routing", "item-seat-bounds-wiring", "item-pi-ui-latency-campaign"):
-        if item not in roadmap:
-            fail(f"roadmap lost retired seed work: {item}")
-        if re.search(r'<!-- tillr: item\b[^>]*\bid="' + re.escape(item) + '"', roadmap, re.S):
-            fail(f"retired seed work became dispatchable instead of prose: {item}")
     for path in (ROOT / "tools/tillr-view/web/README.md",
                  SKILL):
         text = text_of(path)
@@ -906,7 +888,7 @@ def case_seed_retirement_documented():
         fail("queue rail must show places in one list")
     if (ROOT / "tools/tillr-view/web/tests/queue-unranked.test.tsx").exists():
         fail("retired unranked block test remains")
-    ok("seed intake is retired; seven unfinished rows survive as prose and places have a writer")
+    ok("seed intake is retired and places have a writer")
 
 
 def case_workflow_judge_documented():
@@ -985,7 +967,6 @@ def main():
         case_run_environment_documented()
         case_worker_refusal_session_documented()
         case_cache_safe_working_loop_documented()
-        case_fork_filing_documented()
         case_document_fed_prerequisite_documented()
         case_designer_session_selection_documented()
         case_comment_intake_documented()

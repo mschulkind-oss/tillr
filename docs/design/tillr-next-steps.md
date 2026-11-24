@@ -23,7 +23,7 @@ No suite was run for this ruling; "landed" claims are the brief's, checked again
 **Terms.** A *lane* is one dispatchable unit of work: one worker, one landing. A *fence* is
 the exact set of paths a lane may touch; two lanes run in parallel only if their fences are
 disjoint file by file, and lanes in one module directory are serial even then
-([`board-utilities-lanes.md`](board-utilities-lanes.md) [§1](#1-the-next-wave-named), [§3](#3-the-design-decisions-still-open)). *Records mode* means a face
+(`board-utilities-lanes.md` [§1](#1-the-next-wave-named), [§3](#3-the-design-decisions-still-open)). *Records mode* means a face
 works from record files with no store; *store mode* means it reads domain rows from a store.
 **ITEM-PKG** is coined here: a small lane defined in [Section 1](#1-the-next-wave-named).
 
@@ -31,12 +31,12 @@ works from record files with no store; *store mode* means it reads domain rows f
 
 Dispatch in this order. Group A lands first (both are small); Group B starts the same day on
 disjoint fences; Group C starts when its named precondition lands. Landing order follows
-unblocking count, per [`board-utilities-lanes.md`](board-utilities-lanes.md) [[§3](#3-the-design-decisions-still-open).1](board-utilities-lanes.md#31-the-substrate-tools-tillr): GATE-4,
+unblocking count, per `board-utilities-lanes.md` [section 3](#3-the-design-decisions-still-open).1: GATE-4,
 ITEM-PKG, then GATE-3 and LAND-1/2 in either order, RUN-2, ITEM-2+3, DRAIN-1, VIEW-2R.
 
 | Lane | Fence (exact) | Precondition | Not dispatchable if |
 | :--- | :--- | :--- | :--- |
-| **A1 GATE-4** — add every tillr module to `GO_TOOL_DIRS` | [`tools/fork-check.py`](../../tools/fork-check.py), the `GO_TOOL_DIRS` tuple only | The uncommitted `tools/board-cli` removal in the same file lands first | That removal is still unlanded — one lane holds the file at a time ([[§3](#3-the-design-decisions-still-open).2](board-utilities-lanes.md#32-the-other-shared-files) of the lanes doc) |
+| **A1 GATE-4** — add every tillr module to `GO_TOOL_DIRS` | [`tools/fork-check.py`](../../tools/fork-check.py), the `GO_TOOL_DIRS` tuple only | The uncommitted `tools/board-cli` removal in the same file lands first | That removal is still unlanded — one lane holds the file at a time ([section 3](#3-the-design-decisions-still-open).2 of the lanes doc) |
 | **A2 ITEM-PKG** — move item's DDL and record→row mapping from `package main` into an importable package, mirroring [`tools/tillr-run/run/schema.go`](../../tools/tillr-run/run/schema.go) (`RunDDL`, `init`) | `tools/tillr-item/**` | ITEM-1 landed (yes) | `tools/tillr-item/decision.go` exists — ITEM-2 is already in the fence (its brief's own precondition) |
 | **B1 LAND-1/2 (merged)** — `land enqueue`, `check`, `pass` against a hand-written `gate.verdict` fixture ([`board-utilities.md`](board-utilities.md) [§5.4](board-utilities.md#54-land-alone)) | `tools/tillr-land/**` (new) | SUB-1 landed (yes); verdict shape taken from [§5.7](board-utilities.md#57-gate-alone)'s field list under Assumption A-VERDICT below | The owner rules that `pass` may only be built against a gate-produced verdict — that reinstates the LAND-2-after-GATE-3 edge this ruling removes |
 | **B2 GATE-3** — `tillr-gate run`: a `gate.plan` plus a worktree into a tree-bound `gate.verdict`, no-store mode only ([§5.7](board-utilities.md#57-gate-alone)) | `tools/tillr-gate/**` | GATE-2 landed (yes); Assumption A-INPROCESS below | The owner requires Python-gate parity (in-process checks executed) in this lane — see [Section 3](#3-the-design-decisions-still-open) |
@@ -45,7 +45,7 @@ ITEM-PKG, then GATE-3 and LAND-1/2 in either order, RUN-2, ITEM-2+3, DRAIN-1, VI
 | **C2 DRAIN-1** — `drain plan` only: `drain.tick` in, `drain.decision` records out, nothing written ([§5.5](board-utilities.md#55-drain-alone)), without the `question-open` reason in this slice | `tools/tillr-drain/**` (new) | ITEM-PKG landed (drain's store needs item's DDL and materializer registered in its own process — [`tools/tillr/store/fixture.go`](../../tools/tillr/store/fixture.go), `materializerFor`); ITEM-1 and RUN-1 landed (yes) | ITEM-PKG has not landed: [`tools/tillr-item/schema.go`](../../tools/tillr-item/item/schema.go) is `package main`, and a main package cannot be imported, so drain cannot register `ItemDDL` today |
 | **C3 VIEW-2R** — VIEW-2's records-mode half: full `view.status` assembly from a records file ([§5.8](board-utilities.md#58-view-alone)) | `tools/tillr-view/**` | LAND-1/2's brief has fixed the `land.attempt` payload spelling | It is scoped to store mode, which needs per-owner domain readers that do not exist yet |
 
-**Is the lanes doc's [[§2](#2-the-critical-path).2](board-utilities-lanes.md#22-the-waves-after) Wave 3 still right?** In membership, mostly; in order, no. Three
+**Is the lanes doc's [section 2](#2-the-critical-path).2 Wave 3 still right?** In membership, mostly; in order, no. Three
 changes, each forced by what has landed:
 
 - **DRAIN-1 belongs in this wave, not Wave 4.** Its table entry depends only on ITEM-1 and
@@ -62,7 +62,7 @@ changes, each forced by what has landed:
   readers — one label was covering two waves, the defect [§5.2](board-utilities.md#52-store-alone) of the lanes doc names.
 - **LAND-1 absorbs LAND-2.** See [Section 2](#2-the-critical-path).
 
-GATE-4 is absent from [[§2](#2-the-critical-path).2](board-utilities-lanes.md#22-the-waves-after)'s Wave 3 because [[§2](#2-the-critical-path).1](board-utilities-lanes.md#21-running-now) queued it "the moment GATE-1 lands." It
+GATE-4 is absent from [section 2](#2-the-critical-path).2's Wave 3 because [section 2](#2-the-critical-path).1 queued it "the moment GATE-1 lands." It
 never landed. [`tools/fork-check.py`](../../tools/fork-check.py) today reads
 `GO_TOOL_DIRS = ("tools/pi-profiler", "tools/mq")`, and `rg tillr tools/fork-check.py`
 returns only comments — so as far as I could determine, no landed tillr module
@@ -107,16 +107,16 @@ assumption stops the lane, it does not get worked around inside the fence.
 | # | Question needing a ruling | Blocks | Assumption that lets it dispatch now |
 | :--- | :--- | :--- | :--- |
 | Q1 | [`tools/tillr-gate/registry.go`](../../tools/tillr-gate/registry.go) `(*Registry).Plan` iterates `Declarations` only; `InProcess` checks (the Python gate's own-code checks) never enter a `gate.plan`. Who executes them in `gate run` — a Go port, a shell-out, or nobody? | GATE-3 as a Python-gate replacement; GATE-5 | **A-INPROCESS:** a plan that owes an in-process check produces verdict `error`, exit 4 — never `pass`. A verdict that silently omitted checks would assert a transition that did not happen. Invalidated if the owner wants any real candidate landed on a GATE-3 verdict before parity exists; that makes Q1 a hard pre-ruling. |
-| Q2 | [§5.7](board-utilities.md#57-gate-alone) lists the `gate.verdict` fields in prose; no Go type for it exists anywhere in the tree (`rg Verdict tools/tillr-gate/` finds only comments). Who fixes the exact payload spellings? | LAND-1/2 and GATE-3 agreeing | **A-VERDICT:** [§5.7](board-utilities.md#57-gate-alone)'s list verbatim — `verdict_id`, `plan_id`, `registry_digest`, `base_sha`, `tree_sha`, `result`, per-check `{check_id, result, duration_ms, log_ref}` — nested under the envelope's `payload`. LAND-1/2's fixture is the specimen; GATE-3's conformance case must match it. Invalidated by any GATE-3 need for a field [§5.7](board-utilities.md#57-gate-alone) does not name; that is a design amendment, per the lanes doc's [`OQ-L5`](board-utilities-lanes.md#8-open-questions). |
+| Q2 | [§5.7](board-utilities.md#57-gate-alone) lists the `gate.verdict` fields in prose; no Go type for it exists anywhere in the tree (`rg Verdict tools/tillr-gate/` finds only comments). Who fixes the exact payload spellings? | LAND-1/2 and GATE-3 agreeing | **A-VERDICT:** [§5.7](board-utilities.md#57-gate-alone)'s list verbatim — `verdict_id`, `plan_id`, `registry_digest`, `base_sha`, `tree_sha`, `result`, per-check `{check_id, result, duration_ms, log_ref}` — nested under the envelope's `payload`. LAND-1/2's fixture is the specimen; GATE-3's conformance case must match it. Invalidated by any GATE-3 need for a field [§5.7](board-utilities.md#57-gate-alone) does not name; that is a design amendment, per the lanes doc's retired question L5. |
 | Q3 | [§5.5](board-utilities.md#55-drain-alone) derives `question-open` "through the same surface as `item show`" — but that surface (ITEM-3's document parser) does not exist and its home is unruled: item's importable package, the substrate, or a copy in drain? | DRAIN-1's full [§5.5](board-utilities.md#55-drain-alone) face | **A-NOQ:** DRAIN-1 v1 never emits `question-open`; the parser lands once, inside ITEM-PKG's importable item package, with ITEM-2+3, and drain imports it in a follow-up slice. Invalidated if dispatch-correctness requires question gating in the first drain proof — then ITEM-2+3 joins the critical path ahead of DRAIN-1. |
 | Q4 | Lease semantics: [`tools/tillr-run/run/schema.go`](../../tools/tillr-run/run/schema.go) ships `leased_until` always `NULL` ("Leases are RUN-2's face"). What sets a lease, for how long, and what face releases a stale lane? | RUN-2's release slice; DRAIN-2 later | **Ruled** in [`board-utilities.md`](board-utilities.md) [§5.5](board-utilities.md#55-drain-alone) and [§5.6](board-utilities.md#56-run-alone) ([Section 14](board-utilities.md#14-decision-ledger), D-UT17): `run exec` sets the lease at claim for `timeout_ms` plus grace on the store host's clock, the terminal record releases it, `drain once` reaps the expired, and `run release` is the standalone release face. RUN-2 v1 stays read-only until the LEASE chunk of [`tillr-chunking-plan.md`](tillr-chunking-plan.md) [Section 3](tillr-chunking-plan.md#3-the-chunks) builds it. |
-| Q5 | Table owners for `breakages*` and `flake_overrides` (the lanes doc's [`OQ-L1`](board-utilities-lanes.md#8-open-questions)), and whether gate ever gets a store-named mode at all ([§5.7](board-utilities.md#57-gate-alone)'s `gate_plans`/`gate_verdicts`) | SUB-3 only | No lane in this wave introduces successor tables for either, and B2/B1 are fenced to no-store mode. Q5 stays open without blocking anything dispatched here. |
-| Q6 | The registry is a property of the machine (wave-3 finding in [`board-utilities-plan.md`](board-utilities-plan.md)): may a verdict produced on one machine be consumed by `land` on another? | Real (non-fixture) use of LAND-1/2 | Verdicts are consumed on the machine that produced them until ruled otherwise. Invalidated by any cross-machine landing workflow; fixture work is unaffected either way. |
+| Q5 | Table owners for `breakages*` and `flake_overrides` (the lanes doc's retired question L1), and whether gate ever gets a store-named mode at all ([§5.7](board-utilities.md#57-gate-alone)'s `gate_plans`/`gate_verdicts`) | SUB-3 only | No lane in this wave introduces successor tables for either, and B2/B1 are fenced to no-store mode. Q5 stays open without blocking anything dispatched here. |
+| Q6 | The registry is a property of the machine (wave-3 finding in `board-utilities-plan.md`): may a verdict produced on one machine be consumed by `land` on another? | Real (non-fixture) use of LAND-1/2 | Verdicts are consumed on the machine that produced them until ruled otherwise. Invalidated by any cross-machine landing workflow; fixture work is unaffected either way. |
 
 Two things that look open and are not: live mail transport for ITEM-2 is already settled by
 its brief (`delivery` is `intent` in every mode, no network import), and the `tools/mq`
 route for LAND-3 was ruled the implementer's choice in the design's decision ledger
-([`OQ-UT2`](board-utilities-lanes.md#8-open-questions)). Neither needs the owner again.
+(retired question UT2). Neither needs the owner again.
 
 ## 4. What to delete or stop
 
@@ -136,7 +136,7 @@ route for LAND-3 was ruled the implementer's choice in the design's decision led
   also parks half of Q5 at no cost.
 - **Defer WRAP-1 off every path.** No brief, test, or caller invokes `tillr <noun>` today;
   everything calls `tillr-<noun>` directly. The wrapper earns its lane at the first
-  retirement or the first external caller, whichever comes first, and [`OQ-L3`](board-utilities-lanes.md#8-open-questions) (its module
+  retirement or the first external caller, whichever comes first, and retired question L3 (its module
   home and shim mapping) can wait with it.
 - **Stop scheduling RET-\* as a six-lane queue.** Retirement's per-landing safety was "the
   monolith still builds and tests" ([§4](#4-what-to-delete-or-stop) of the lanes doc), and the gate no longer checks
@@ -161,7 +161,7 @@ every payload field, every exit code, the registered `reason` strings. What thos
 do *not* fix is enumerated in [Section 3](#3-the-design-decisions-still-open) as rulings
 and assumptions, which is design-seat work a spec lane cannot do in the owner's place.
 So: each Group B/C lane's lead writes its brief in the ITEM-2 style as its first task,
-during the window while Group A lands. That keeps the spec-during-code-waves rule ([[§2](#2-the-critical-path).1](board-utilities-lanes.md#21-running-now)
+during the window while Group A lands. That keeps the spec-during-code-waves rule ([section 2](#2-the-critical-path).1
 of the lanes doc) without spending a dispatch slot on it.
 
 Spec work *is* still owed in exactly two places, and both are correctly deferred because
@@ -176,7 +176,7 @@ when LAND-1/2 and DRAIN-1 respectively have landed, and not before.
 
 Whether any step outside `GO_TOOL_DIRS` — a `just` recipe, a pack build — compiles the
 tillr modules today; I searched [`tools/fork-check.py`](../../tools/fork-check.py)
-only. GATE-4's brief must close this (the lanes doc's [`OQ-L4`](board-utilities-lanes.md#8-open-questions)) before claiming coverage.
+only. GATE-4's brief must close this (the lanes doc's retired question L4) before claiming coverage.
 I also did not verify that ITEM-PKG is behavior-preserving as a pure move; if item's
 `main` and its schema are more entangled than run's were, A2 grows — but it stays inside
 one fence either way, so no other lane's dispatch depends on the answer.

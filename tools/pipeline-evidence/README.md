@@ -2,7 +2,7 @@
 
 The board, a lander and the gate each record evidence in one versioned shape, so
 one report can read whatever a repository happens to have installed. The format's prose
-is [`docs/pi/pipeline-evidence.md`](../../docs/pi/pipeline-evidence.md); this directory
+is `docs/pi/pipeline-evidence.md`; this directory
 holds the machine-readable contract, the readers and the report.
 
 | File | What it is |

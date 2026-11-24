@@ -10,7 +10,7 @@ summary: "Seven utilities over one shared substrate — store, item, land, drain
 
 # Board utilities: seven utilities over one shared substrate
 
-**Status:** Accepted, 2026-11-06. Companion to `docs/design/board-sanity-recovery.md` and `docs/design/board-names.md`. **Read the "today" below as the tree the contract was written against (2026-11-06):** the board CLI it decomposes was deleted on 2026-11-11 (`3f02e3b916`, `afdc9a9571`), so every present-tense sentence about `tools/board-cli` is history. The contract itself is live: the seven `tools/tillr-*` binaries implement it, and [the document retirement](./board-docs-retirement.md) records which of its companion documents were absorbed or superseded.
+**Status:** Accepted, 2026-11-06. Companion to `docs/design/board-sanity-recovery.md` and `docs/design/board-names.md`. **Read the "today" below as the tree the contract was written against (2026-11-06):** the board CLI it decomposes was deleted on 2026-11-11 (`3f02e3b916`, `afdc9a9571`), so every present-tense sentence about `tools/board-cli` is history. The contract itself is live: the seven `tools/tillr-*` binaries implement it, and the document retirement records which of its companion documents were absorbed or superseded.
 
 **In short**
 

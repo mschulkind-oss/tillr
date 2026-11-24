@@ -18,9 +18,9 @@ summary: "A due time and a recurrence are two nullable integer columns on the it
 returns only unrelated `next_due_at` steering-timer and `log-checkpoint.not-due` store matches).
 Deferred until picked up: [`docs/tillr/roadmap.md`](../tillr/roadmap.md) lists this design as the
 unbuilt substrate of [the goal monitor](tillr-goal-monitor.md) (iceboxed on 2026-11-17), and
-[`docs/pi/roadmap.md`](../pi/roadmap.md) lists the weekly fork roll-forward ([§7](#7-the-first-user-the-weekly-evergreen-roll-forward))
+`docs/pi/roadmap.md` lists the weekly fork roll-forward ([§7](#7-the-first-user-the-weekly-evergreen-roll-forward))
 as designed and unbuilt. This document originated on 2026-11-02 as a design for board item 243 from
-[section 22 of the retired agent runtime design](./agent-runtime-retirement.md#what-happened-to-each-section),
+section 22 of the retired agent runtime design,
 grounded against `tools/board-cli/internal/board/` at `8ccf3b6f0` [unlanded]. `tools/board-cli` was
 deleted on 2026-11-11 (`afdc9a9571`) and replaced by Tillr (`tools/tillr`, `tools/tillr-item`,
 `tools/tillr-drain`, `tools/tillr-view`); the symbol and schema grounding below keeps its 2026-11-02
@@ -46,36 +46,36 @@ key, the queue's ordering term.
 
 ## 1. What this settles, and what it inherits
 
-[retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section) is complete and
+retired section 22 is complete and
 self-consistent, and none of it is built:
 `rg -n --glob '!docs/**' --glob '!yolo-packs/**' 'due_at|recur_interval_ms|not-due|schedule\.rearm' tools config tests`
 returns only unrelated `next_due_at` steering-timer and `log-checkpoint.not-due` store matches. So
 the work here is not invention. Three things were added on 2026-11-02 when reconciling
-[retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section) against the then-live
+retired section 22 against the then-live
 board CLI (each seam has since moved to Tillr; see [§14](#14-where-the-code-lives-by-symbol)).
 
-1. **[retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section)'s open questions
+1. **retired section 22's open questions
    are answered where the code answers them.** Q-ST1 (can an item judged done be judged again?) and
    Q-ST2 (is there one completion write to hook?) are both settled by reading the store, and Q-ST5
    (how a hold is stored) is settled too.
-   [retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section) gated V2 on Q-ST1;
+   retired section 22 gated V2 on Q-ST1;
    that gate is now open.
 
 2. **One gap
-   [retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section) does not name is
+   retired section 22 does not name is
    closed.** Re-arming in place moves an item from `completed` back to `not-started`, and the item
    machine declares no such edge.
-   [retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section)'s "reset in place" is
+   retired section 22's "reset in place" is
    not expressible today; [§5.3](#53-re-arming-in-place-and-the-transition-the-machine-is-missing)
    adds the edge.
 
 3. **The refusal path is decided.**
-   [retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section) says admission
+   retired section 22 says admission
    returns a `not-due` decision. It does not say what the drain does with a refusal, and the drain's
    existing answer — append a `drain.blocked` event and count the item as blocked — is wrong for a
    not-due item. [§3.4](#34-what-a-not-due-item-does-to-ordering-and-to-counts) decides that.
 
-Everything else was [retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section)'s,
+Everything else was retired section 22's,
 and that section was deleted with its document on 2026-11-21. This document is now the only
 statement of the design, so the two rules it used to cite without restating are restated here.
 
@@ -130,7 +130,7 @@ than adding a verb:
 | `board item show`, `item list` | `dueAt`, `recurIntervalMs` in the JSON body | Rendered as a relative hint in the human view |
 
 The CLI parses human durations into milliseconds at write time; the store only ever sees an integer.
-That is [retired section 22.3](./agent-runtime-retirement.md#what-happened-to-each-section)'s rule and it is what
+That is retired section 22.3's rule and it is what
 keeps the store free of a duration parser.
 
 **Who may write them.** Only the `owner` and `whale` seats (in Tillr's `decided_by` vocabulary,
@@ -177,7 +177,7 @@ stays out of every "not ready" count that means *waiting on something a human mu
 ([§3.4](#34-what-a-not-due-item-does-to-ordering-and-to-counts)).
 
 **The gate is in `admitItem`, not in `readyItems`' `WHERE` clause.** This is the one place
-[retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section)'s phrasing ("candidate
+retired section 22's phrasing ("candidate
 selection does not change shape") needs sharpening. Filtering in SQL would be cheaper and would be
 wrong: an item excluded from the candidate set is invisible to `drain why` and to the view, so a
 scheduled item would vanish from the board until it came due — the opposite of "never forgotten".
@@ -186,7 +186,7 @@ untouched, and the gate reads the value off the `readyItem` struct with no extra
 
 ### 3.3 Why a readiness rule and not a status
 
-[retired section 22.2](./agent-runtime-retirement.md#what-happened-to-each-section) rules this and the
+retired section 22.2 rules this and the
 ruling holds against the code. The stored status set is a closed `CHECK` (`not-started`,
 `in-progress`, `blocked`, `completed`, `abandoned`, `needs-resize`), and a `scheduled` value would
 be a stored fact that time invalidates with no writer — the row would say `scheduled` forever until
@@ -205,7 +205,7 @@ the loop reaches it; the loop continues to the next candidate, so a not-due item
 not delay rank `b`. It consumes no lane and blocks nothing.
 
 **Counts: it is a waiting state, not a blocked state.** This is the decision
-[retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section) leaves open, and the
+retired section 22 leaves open, and the
 drain's existing refusal path gets it wrong by default. Today a refusal at admission appends a
 `drain.blocked` event, adds a row to `report.Blocked`, and increments a per-reason count. For a
 not-due item all three are false claims: nothing is blocked, nothing must move, and the event would
@@ -273,7 +273,7 @@ after completion — is deferred, not refused ([§9](#9-staging-v1-v2-and-the-cr
 ### 5.2 Why three missed weeks are one run
 
 The no-queue property is a property of the **storage**, not of the arithmetic, and this is the one
-place [retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section)'s phrasing invites
+place retired section 22's phrasing invites
 a wrong reading. The schedule has exactly one slot of memory: the single `due_at` value. There is
 nowhere for three missed weeks to accumulate. An item whose due time passed three weeks ago is
 simply overdue, once; the drain admits it once; and when it completes, the next due time is computed
@@ -311,22 +311,22 @@ machine's hyphenated vocabulary (`verdict-done`, `time-bound-repeat`, `resize-sp
 vocabularies are separate and both spellings are needed.
 
 **The hook point is one function.**
-[retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section)'s Q-ST2 asked whether
+retired section 22's Q-ST2 asked whether
 both completion paths funnel through one write. They do: the landing path (`retireRunAndItem` →
 `RecordVerdict`) and the judged path (`board verdict record` → `RecordVerdict`) both reach the same
 `UPDATE items SET verdict = ?, status = ?` in `RecordVerdict`. The re-arm attaches there, after the
 status write, inside the same transaction. That answers Q-ST2 and it is why V2 is cheaper than
-[retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section) feared.
+retired section 22 feared.
 
 **Q-ST1 is answered: an item judged done can be judged again.** The verdicts table has a non-unique
 index on `item_id` and no uniqueness constraint, so a second verdict row is structurally allowed;
 `RecordVerdict`'s only identity check is the criterion hash, which re-arm does not change; and
 `not-started → completed` is a declared edge. So a second cycle is judged independently, with fresh
 verdict rows, and the frozen-criterion gate behaves as it does for any item.
-[retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section) gated V2 on this; the
+retired section 22 gated V2 on this; the
 gate is open.
 
-**The trap [retired section 22](./agent-runtime-retirement.md#what-happened-to-each-section) names,
+**The trap retired section 22 names,
 kept.** A recurring item whose correct outcome is "nothing to do" produces no candidate, and a
 no-candidate lane success loops back to rework unless the judge records done. Tying re-arm to the
 judged completion closes that, *provided the item's criterion is written so a no-op is judgeable as
@@ -411,7 +411,7 @@ forgotten" reduces to: a stored timestamp with no expiry, read by a poll loop th
 ## 7. The first user: the weekly evergreen roll-forward
 
 The roll-forward is the work of advancing each fork's patch series onto the newest upstream release
-([section 21 of the retired agent runtime design](./agent-runtime-retirement.md#what-happened-to-each-section)).
+(section 21 of the retired agent runtime design).
 It is manual today — plain-git rebase, since the pack-level rebase command is gone — driven by a
 workspace-scoped skill, per fork, by hand.
 
@@ -431,13 +431,13 @@ first drain run after each seven-day boundary, at its rank, with no one remember
 the work itself changes: the brief is read fresh at each dispatch, so editing it updates every
 future cycle.
 
-**Two triggers exist for this work, and only one of them is this design's.** [section 21.5 of the
-the retired agent runtime design](./agent-runtime-retirement.md#what-happened-to-each-section) files a
+**Two triggers exist for this work, and only one of them is this design's.** section 21.5 of the
+the retired agent runtime design files a
 roll-forward item when a fork's base drifts past 50 commits or any new release appears, evaluated
 wherever the resolver runs. This design's item comes due every seven days regardless. Both are
 unbuilt (for hex-pinned forks, [`tools/fork-check.py`](../../tools/fork-check.py) `--pin-drift`
 exists separately as a manual detector whose `--file` path still shells out to the retired `board`
-CLI; [`docs/pi/fork-pin-drift.md`](../pi/fork-pin-drift.md)). [OQ-ST1](#12-open-questions) settled on
+CLI; `docs/pi/fork-pin-drift.md`). [OQ-ST1](#12-open-questions) settled on
 keeping both triggers with the calendar item as the floor — drift files early, the weekly item
 guarantees one is never forgotten, and the weekly item does not duplicate an open drift item (a
 2026-11-16 designer decision, open to the owner's overturn); this document specifies the calendar
@@ -487,7 +487,7 @@ naturally per-fork inside it. Split later if one item's roll-forward proves too 
 
 The migration pattern is the rehearsed one: a schema version probed at open, nullable columns added
 in place, table rebuilds reserved for constraint widenings. Adding a nullable integer column is the
-cheap kind, which is why [retired section 22.8](./agent-runtime-retirement.md#what-happened-to-each-section) could say "nothing needs to land now"
+cheap kind, which is why retired section 22.8 could say "nothing needs to land now"
 without the schema work growing in the meantime.
 
 > **Current tree state (2026-11-19):** The `SchemaVersion` 11 → 12 numbers above were the deleted

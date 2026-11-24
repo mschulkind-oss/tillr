@@ -77,7 +77,7 @@ the chosen binary so yolo-rendered extensions and `yolo-patched` packages (`pi-s
 subagents spawn the same binary. The adapter records `<path> (series <key>)` or
 `<real-path> (installed <version>)`, which `tillr-run` persists on `runs.harness`
 (`run.Record.Harness`). See
-[drain-only rebuilt pi](../../../../docs/pi/forks.md#drain-only-rebuilt-pi) for
+drain-only rebuilt pi for
 series-keyed builds (`bin/pi-forks build-pi`) and post-landing roll behavior.
 
 ### The level asked for is not always the level run

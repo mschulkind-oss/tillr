@@ -40,7 +40,7 @@ summary: "How `tillr-view` enforces explicit epistemic provenance, three-way sta
 
 # Observatory truthfulness, provenance, and shared primitives
 
-> **Delivered copy.** This is `docs/reference/observatory-design.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/observatory-design.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 `tillr-view` serves the read-only truthfulness layer and shared UI primitives
 that every observatory page and CLI summary builds on. Its job is to make sure a
@@ -92,7 +92,7 @@ observatory baseline).
 
 **Terms:**
 
-- **The board:** Without qualification in observatory and tillr documents, the observatory's queue surface served by `tillr-view serve` (originally the four-region screen of header, queue rail, item pane, and evidence pane; now the linked Home and Items pages in [observatory redesign](observatory-redesign.md)). **Never the retired work board** (`tools/board-cli` and its session extensions), which was deleted in `3f02e3b916` and `afdc9a9571`; see [board documents retirement](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-docs-retirement.md).
+- **The board:** Without qualification in observatory and tillr documents, the observatory's queue surface served by `tillr-view serve` (originally the four-region screen of header, queue rail, item pane, and evidence pane; now the linked Home and Items pages in [observatory redesign](observatory-redesign.md)). **Never the retired work board** (`tools/board-cli` and its session extensions), which was deleted in `3f02e3b916` and `afdc9a9571`; see board documents retirement.
 - **The wire:** The JSON shapes returned by `/api/v1/*` and emitted over `/api/v1/ws`, defined by the Go structs in `tools/tillr-view/serve.go`, `serveobs.go`, `servews.go`, and `apierror.go` and mirrored in `tools/tillr-view/web/src/models/types.ts`.
 - **Truthful absence:** A field the store or filesystem did not record, rendered as a named reason (`not recorded`, `absent`, `unobserved seam`, `no description recorded`) rather than hidden, collapsed into `"—"`, or turned into `0`.
 

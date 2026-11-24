@@ -13,7 +13,7 @@ vantage:
 
 **Status:** Proposed design — 2026-11-19.
 **Needs your ruling:** [`OQ-DSP1`](#open-questions), [`OQ-DSP2`](#open-questions), [`OQ-DSP3`](#open-questions).
-**Reads with:** [`tillr-live-drain-config.md`](./tillr-live-drain-config.md) (live runtime configuration table, precedence ladder, and pass-boundary reload that this design slots into), [`tillr-claude-backend.md`](./tillr-claude-backend.md) (`run-claude` adapter and subscription quota windows), [`tillr-convergence.md`](./tillr-convergence.md) (audit whose [`OQ-TC2`](./tillr-convergence.md#decision-ledger) stopgap framing this design revises), [`seat-profiles.md`](./seat-profiles.md) (pi's interactive sub-agent picker sets, distinct from drain seat profiles). No implementation plan is seeded yet.
+**Reads with:** [`tillr-live-drain-config.md`](./tillr-live-drain-config.md) (live runtime configuration table, precedence ladder, and pass-boundary reload that this design slots into), [`tillr-claude-backend.md`](./tillr-claude-backend.md) (`run-claude` adapter and subscription quota windows), [`tillr-convergence.md`](./tillr-convergence.md) (audit whose [`OQ-TC2`](./tillr-convergence.md#decision-ledger) stopgap framing this design revises), `seat-profiles.md` (pi's interactive sub-agent picker sets, distinct from drain seat profiles). No implementation plan is seeded yet.
 
 ---
 
@@ -37,9 +37,9 @@ A **seat profile** *(coined here)* is a named, complete **backend policy** for `
 
 Three boundaries separate a drain seat profile from adjacent concepts in this repository:
 
-- **Not a pi session seat set ([`seat-profiles.md`](./seat-profiles.md)).** Pi's `yolo-packs/seat-profiles` pack defines interactive picker sets (`META`, `OR`, `CODEX`, `BEDROCK`) inside one `pi` session to route child sub-agents (`coordinator`, `planner`, `worker`, `scout`). Those sets live inside a single harness and never govern `tillr-drain` dispatch or switch seats between `run-pi` and `run-claude`.
+- **Not a pi session seat set (`seat-profiles.md`).** Pi's `yolo-packs/seat-profiles` pack defines interactive picker sets (`META`, `OR`, `CODEX`, `BEDROCK`) inside one `pi` session to route child sub-agents (`coordinator`, `planner`, `worker`, `scout`). Those sets live inside a single harness and never govern `tillr-drain` dispatch or switch seats between `run-pi` and `run-claude`.
 - **Not a yolo host profile (`config.toml`, `personal.toml`, `work.toml`).** Yolo profiles configure interactive agent defaults on a host or jail and require `yolo host apply --assert` plus jail relaunch to change. Switching a drain seat profile changes only what `tillr-drain` dispatches on subsequent passes; it never rewrites `~/.pi/agent/settings.json` or `~/.claude/` on the host.
-- **Never a partial overlay.** Following the completeness rule established for pi sets in [`seat-profiles.md`](./seat-profiles.md#terms), every seat profile maps every seat declared by the repository. Switching profiles replaces the entire routing table at once, so no unmentioned seat can silently keep running the previous profile's provider or model.
+- **Never a partial overlay.** Following the completeness rule established for pi sets in `seat-profiles.md`, every seat profile maps every seat declared by the repository. Switching profiles replaces the entire routing table at once, so no unmentioned seat can silently keep running the previous profile's provider or model.
 
 ---
 

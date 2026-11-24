@@ -18,7 +18,7 @@ vantage:
 
 # A claude backend for tillr: a seat can run on the Claude subscription and falls back when its window is spent
 
-> **Delivered copy.** This is `docs/design/tillr-claude-backend.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-claude-backend.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-19. Built except [Section 6](#6-build-order) step 3 (`harness_args` for
 the pi adapter, deferred until a pi seat needs it). On 2026-11-16, the adapter and
@@ -247,7 +247,7 @@ the machine's pi profile. Claude Code takes it from arguments, so the policy row
 argument list after a `--` separator, and the adapter hands them to the harness unchanged.** The
 policy's rule that it holds data and the adapter holds spelling is kept: tillr does not invent one
 permission vocabulary for four harnesses, which
-[the retired runtime design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime-retirement.md#what-happened-to-each-section) names as a hole it does not fill.
+the retired runtime design names as a hole it does not fill.
 
 | Wanted | Harness argument |
 | :--- | :--- |

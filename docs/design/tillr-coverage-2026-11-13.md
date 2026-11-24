@@ -15,7 +15,7 @@ next: "Splice the twelve payloads in the durable scratch directory into config/t
 # The coverage claim
 
 > **History note, 2026-11-21.** This is a dated record. It names `docs/design/agent-runtime.md` as that file stood when the record was written; the file
-> was deleted on 2026-11-21, and [the retirement record](./agent-runtime-retirement.md) says what became of it.
+> was deleted on 2026-11-21, and the retirement record says what became of it.
 
 **What this is.** The owner's goal state is that *all work we know of that has been talked
 about, planned or is still valid is described by an item in the tillr queue*. This document is
@@ -41,8 +41,8 @@ from the tree became a ruling, and the two that did are `item-ruling-approver-jo
 against `git log` and `git merge-base --is-ancestor` for commits (every commit below is an
 ancestor of `HEAD`), and against the two later documents that re-measured the same ground:
 [`tillr-drain-acceptance-2026-11-13.md`](./tillr-drain-acceptance-2026-11-13.md) and
-[`tillr-seed-triage.md`](./tillr-seed-triage.md). A prior pass
-([`queue-inventory-2026-11-13.md`](./queue-inventory-2026-11-13.md)) screened 14 sources for new
+`tillr-seed-triage.md`. A prior pass
+(`queue-inventory-2026-11-13.md`) screened 14 sources for new
 items; this pass walks the documents themselves, so it reads the *claims* rather than the
 frontmatter, and it disagrees with that pass in one place (section 7).
 
@@ -61,12 +61,12 @@ frontmatter, and it disagrees with that pass in one place (section 7).
 | 7 | [`tillr-next-steps.md`](./tillr-next-steps.md) | fully, 181 lines | 10 |
 | 8 | `tillr-today.md` (retired) | fully, 545 lines | 12 |
 | 9 | `tillr-board-reshape.md` (retired) | fully, 426 lines | 7 |
-| 10 | [`tillr-seed-triage.md`](./tillr-seed-triage.md) | fully, 240 lines | 6 |
+| 10 | `tillr-seed-triage.md` | fully, 240 lines | 6 |
 | 11 | [`tillr-drain-acceptance-2026-11-13.md`](./tillr-drain-acceptance-2026-11-13.md) | fully, 167 lines | 12 |
 | 12 | [`work-control-judge-in-tillr.md`](./work-control-judge-in-tillr.md) | fully, 378 lines | 7 |
 | 13 | [`autoqa-tillr-seams.md`](./autoqa-tillr-seams.md) | fully, 465 lines | 10 |
-| 14 | [`queue-inventory-2026-11-13.md`](./queue-inventory-2026-11-13.md) | fully, 195 lines | 5 |
-| 15 | [`pi-pile-recovery-2026-11-13.md`](./pi-pile-recovery-2026-11-13.md) | fully, 252 lines | 4 |
+| 14 | `queue-inventory-2026-11-13.md` | fully, 195 lines | 5 |
+| 15 | `pi-pile-recovery-2026-11-13.md` | fully, 252 lines | 4 |
 | | **total** | 5,220 lines, fifteen documents | **147** |
 
 Also read as authority, not as sources: [`landing-principles.md`](./landing-principles.md)
@@ -93,7 +93,7 @@ that ends it.
 | `LAND-3B`: one lander named by the landing document | covered | `item-land-3b` |
 | `LOOP-1` (section 2.8): the tick state machine, serial landing, stopping conditions | deleted | `tillr drain loop` is built: `tools/tillr-drain/drain/loop.go`, `looprecord.go`, and the `queue-drained`/operator stop constants |
 | section 3.4: the item schema has no `allowed_paths`, so a disjoint planner cannot read one | deleted | the field shipped: all 29 seed items carry `allowed_paths` and `stage.go`'s `briefValues` refuses an item without one |
-| section 3.4: no provenance field on an item | deleted | resolved as designed — provenance is words in the `body_ref` target plus [`tillr-seed-triage.md`](./tillr-seed-triage.md)'s concordance |
+| section 3.4: no provenance field on an item | deleted | resolved as designed — provenance is words in the `body_ref` target plus `tillr-seed-triage.md`'s concordance |
 | section 3.4: no way to express a question hold or a program hold | deleted | `state: blocked` carries both, which is how the eight question rows and the two determination rows are seeded |
 | `D-D2-5`: the 15-ready / 30-total seed floor | deleted | superseded by section 3.2's own measurement (the archive yields five) and by the producer question)'s ruling that the chunks and observatory rows become the producer |
 | section 4.3: `.tillr/STOP`, `operator-stop`, and the capped infrastructure backoff | deleted | built in `drain/loop.go`'s stop constants and backoff |
@@ -183,7 +183,7 @@ that ends it.
 | `D-MM9`: the boundary snapshot checked in the loop | deleted | `checkBoundary`/`fenceViolation` in `drain/loop.go`; a non-empty diff stops the tick |
 | `D-MM11` (renumbered `D-MM12` on 2026-11-18): a lane-worktree run commits, a main-checkout run never does | deleted | the candidate is the lane's HEAD: `tools/tillr-drain/drain/steps.go`, `attempt.go` |
 | section 1: the boundary canary is owed by the first live run | deleted | the canary rides the first live run of whichever backend answers; with `muse` dormant and `pi` live, the snapshot half is exercised by `pi` and the muse half returns with the switch (`backend-policy.json`'s `about`) |
-| section 8: [the retired agent runtime design](./agent-runtime-retirement.md) owes the process-and-records amendment | item | `item-agent-runtime-backend` |
+| section 8: the retired agent runtime design owes the process-and-records amendment | item | `item-agent-runtime-backend` |
 | section 8: `SUB-2`'s newly named trigger | deleted | same deferral as its chunking-plan row |
 
 ### 2.7 [`tillr-next-steps.md`](./tillr-next-steps.md) — 10
@@ -223,14 +223,14 @@ that ends it.
 | Claim | Disposition | Where it lands |
 | :--- | :--- | :--- |
 | section 1: criterion text is not frozen against edits | deleted | built (see `tillr-today.md` Task 1) |
-| section 5.3: a concordance, one line per triaged archived item | deleted | [`tillr-seed-triage.md`](./tillr-seed-triage.md) carries it — 56 rows, one disposition each |
+| section 5.3: a concordance, one line per triaged archived item | deleted | `tillr-seed-triage.md` carries it — 56 rows, one disposition each |
 | section 4/section 6: the four blocked questions route to their own documents | deleted | dropped as `not-an-item` in the triage, under `D-UT4`: questions are document state, and each names its document |
 | section 6: preserve the content dump in the repository | deleted | `docs/archive/board-2026-11-12/board-content.json`, committed whole under the verbatim-preservation ruling |
 | section 6: check the 5 questions whose text did not match verbatim | deleted | resolved as designed — the triage's archive reading records the drift, and `D-UT4` makes the document the copy that matters |
 | section 6: transcribe the 2 answered questions into a tracked record | deleted | the preserved dump is that record: the questions, their answers and dates are in `board-content.json`'s `questions` array, which is what that ruling committed |
-| The two board-reshape questions, whose ledger rows carry no built column | deleted | both are rulings; the second's approval is [`tillr-seed-triage.md`](./tillr-seed-triage.md) itself |
+| The two board-reshape questions, whose ledger rows carry no built column | deleted | both are rulings; the second's approval is `tillr-seed-triage.md` itself |
 
-### 2.10 [`tillr-seed-triage.md`](./tillr-seed-triage.md) — 6
+### 2.10 `tillr-seed-triage.md` — 6
 
 | Claim | Disposition | Where it lands |
 | :--- | :--- | :--- |
@@ -285,7 +285,7 @@ that ends it.
 | Finding 5: no verdict actor kind for an automated reviewer | deleted | `ActorAutoQA` |
 | Finding 6: `decided_by` has no `autoqa` value | item | `item-decided-by-autoqa` |
 
-### 2.14 [`queue-inventory-2026-11-13.md`](./queue-inventory-2026-11-13.md) — 5
+### 2.14 `queue-inventory-2026-11-13.md` — 5
 
 | Claim | Disposition | Where it lands |
 | :--- | :--- | :--- |
@@ -295,7 +295,7 @@ that ends it.
 | "It did not seed the store" | deleted | a launch step, not a lane: the seed file is the source of truth and the live store takes it at the next relaunch |
 | "It did not rank anything" | deleted | the ranking is recorded in the seed's `rank` fields, and this pass does not re-rank |
 
-### 2.15 [`pi-pile-recovery-2026-11-13.md`](./pi-pile-recovery-2026-11-13.md) — 4
+### 2.15 `pi-pile-recovery-2026-11-13.md` — 4
 
 | Claim | Disposition | Where it lands |
 | :--- | :--- | :--- |
@@ -352,7 +352,7 @@ rather than arithmetic slack:
 documents: `item-drain-question-hold` is [`tillr-chunking-plan.md`](./tillr-chunking-plan.md)'s `DRAIN-Q` and
 `tillr-today.md`'s Task 4, `item-pipe-real-registry` is that plan's `PIPE-REAL` and that day's
 Task 5, and `item-fork-lane-fence` is [`tillr-loop-readiness.md`](./tillr-loop-readiness.md) section 3 and
-[`queue-inventory-2026-11-13.md`](./queue-inventory-2026-11-13.md)'s fence finding. An item is authored once and cited twice.
+`queue-inventory-2026-11-13.md`'s fence finding. An item is authored once and cited twice.
 - **21 covered claims map onto 17 distinct seed items**, because three items absorb more than one
 claim: `item-drain-2a` (route attribution in [`tillr-day2.md`](./tillr-day2.md), again in the chunking plan's
 `DRAIN-2A` row, and again in the acceptance document's section 5), `item-land-3b` (`LAND-3I` and
@@ -387,7 +387,7 @@ by any of the following, and the owner should read the list as what the 100% exc
   document's item count is wrong by one.
 - **A "deleted" that names a ruling which has since been reversed.** Several deletions rest on
   `D-D2-6`, `D-D2-7` or [`landing-principles.md`](./landing-principles.md) section 3. Reversing any of those resurrects its row.
-- **The one disagreement with the earlier pass.** [`queue-inventory-2026-11-13.md`](./queue-inventory-2026-11-13.md) counts the
+- **The one disagreement with the earlier pass.** `queue-inventory-2026-11-13.md` counts the
   acceptance run's defect 4.6 as built (`clearWorktree`). It is not: `clearWorktree` clears one
   lane root's registration and prunes only registrations whose directories are gone, while the
   branch a lane commits onto is still `tillr/<lane>` in the repository — so a stale lane in a
@@ -421,7 +421,7 @@ queue currently cannot name.
 ## 7. What this pass did not do
 
 - It did not re-open the 623-item archive. Two documents have already triaged it in full
-  ([`tillr-seed-triage.md`](./tillr-seed-triage.md), [`pi-pile-recovery-2026-11-13.md`](./pi-pile-recovery-2026-11-13.md)) and this pass reads their
+  (`tillr-seed-triage.md`, `pi-pile-recovery-2026-11-13.md`) and this pass reads their
   conclusions and re-measures only the rows they left open.
 - It did not edit the seed, any other document, or any code. The payloads sit outside the
   repository for another pass to splice and rank.

@@ -39,7 +39,7 @@ vantage:
 **Reads with:** [`docs/design/session-recording.md`](./session-recording.md), [`docs/design/tillr-day2.md`](./tillr-day2.md), [`docs/design/tillr-loop-readiness.md`](./tillr-loop-readiness.md), [`docs/design/board-item-state-model.md`](./board-item-state-model.md), [`docs/design/board-utilities.md`](./board-utilities.md), [`docs/design/landing-principles.md`](./landing-principles.md), and [`tools/tillr-trace/README.md`](../../tools/tillr-trace/README.md).
 
 **Terms.**
-- **The board** — the observatory's queue screen this document designs: the header, the queue rail, the item pane and the evidence pane. Never the retired work board, deleted 2026-11-11; see [observatory-design.md](../reference/observatory-design.md#terms-and-non-purposes) and [the document retirement](./board-docs-retirement.md).
+- **The board** — the observatory's queue screen this document designs: the header, the queue rail, the item pane and the evidence pane. Never the retired work board, deleted 2026-11-11; see [observatory-design.md](../reference/observatory-design.md#terms-and-non-purposes) and the document retirement.
 - **Introspection contract** *(coined here)* — the closed set of operator questions (`what is it doing now`, `what did it do`, `what went between tools`, `why did it stop`, `what did it cost`, `what changed and is the claim true`) and the exact store columns, record envelopes, and epistemic badges that answer each.
 - **Inter-tool exchange** *(coined here)* — one causal hand-off between two distinct programs in a drain tick, either at **Layer A** (supervisor-to-utility: `tillr-drain` -> `tillr-run`, `tillr-loop` -> `tillr-gate` / `fork-check.py` / `tillr-land` / `tillr-item`) or **Layer B** (harness-to-tool inside a run: `pi` -> `tool.call` -> `bash` subprocess `proc.exec` -> `git.trace2`).
 - **Epistemic badge** *(coined here)* — the four-state provenance marker (`OBSERVED`, `DERIVED CLOCK`, `UNOBSERVED SEAM`, `UNREADABLE`) attached to every timeline span, tool exchange, and verification claim so partial data never renders as a clean pass.
@@ -249,7 +249,7 @@ The brief asks us to choose between Server-Sent Events (SSE) and WebSockets for 
 **Decision: WebSockets (`GET /api/v1/ws`) is the live transport; v1 uses manual refresh (`[Refresh Snapshot]`) over the exact same normalized cache keys.**
 
 Why WebSockets over SSE:
-1. **Owner alignment and Vite precedent:** The owner explicitly asked to *"use something like React and models and whatever so that we can eventually hook up WebSockets without too much difficulty"*, and this repository's existing Vite tool ([`tools/roster-storybook/vite.config.mjs`](../../tools/roster-storybook/vite.config.mjs)) already pushes live updates over a WebSocket channel (`server.ws.send`).
+1. **Owner alignment and Vite precedent:** The owner explicitly asked to *"use something like React and models and whatever so that we can eventually hook up WebSockets without too much difficulty"*, and this repository's existing Vite tool (`tools/roster-storybook/vite.config.mjs`) already pushes live updates over a WebSocket channel (`server.ws.send`).
 2. **Scoped stream subscriptions without reconnecting:** Watching a board-level summary needs low-frequency invalidations (`event_head_seq` advances on SQLite commits), whereas drilling into a live `running` run needs high-frequency line deltas from `<lane-dir>/<run-id>.log`. With a single WebSocket connection, clicking into `run-item-seed-02-20261112T200000Z` sends `{"type": "subscribe.run", "run_id": "..."}` over the open socket without tearing down and re-opening HTTP streams.
 3. **Zero-rewrite transition from v1 (refresh) to `OBS-5` (live WebSockets):**
    - In **v1 (`OBS-2` + `OBS-3`)**, the UI renders a header bar showing `Snapshot seq #48 · Read 12s ago` and a **`[Refresh Snapshot]`** button (`r` keyboard shortcut) that calls TanStack Query's `queryClient.invalidateQueries()` (plus an optional `Poll every 2s while drain active` toggle).
@@ -270,7 +270,7 @@ Why WebSockets over SSE:
 ### 5.1 Evaluating late-2026 options: Vite 7 + React 19 vs. Svelte 5 vs. Solid
 
 Clarifying the owner's question (*"I don't know if React is not the thing anymore. Maybe Vite has its own thing"*):
-- **Vite does not have its own UI component framework.** Vite (`^7.0.0`, already installed in this repository at [`tools/roster-storybook/package.json`](../../tools/roster-storybook/package.json)) is the build tool, module bundler, and Hot Module Replacement (HMR) dev server. It pairs with a UI library (React, Svelte, Solid, or Vue).
+- **Vite does not have its own UI component framework.** Vite (`^7.0.0`, already installed in this repository at `tools/roster-storybook/package.json`) is the build tool, module bundler, and Hot Module Replacement (HMR) dev server. It pairs with a UI library (React, Svelte, Solid, or Vue).
 
 | Stack Option | Strengths for Tillr Observatory | Weaknesses / Risks |
 |---|---|---|
@@ -563,16 +563,16 @@ tools/tillr-view/
       components/         # Header, DrainCohortRail, StagePipelineStrip, ExchangeGraphTable, etc.
 ```
 
-- **Does it ship in a `yolo-pack` or `rcm`?** **No.** Per [`AGENTS.md`](../../AGENTS.md) and [`rcrc`](../../rcrc) (`EXCLUDES="... tools ..."`), `tools/` is repository-scoped tooling, not host home configuration. Nothing under `tools/tillr-view/` is linked by `rcup` or rendered by `yolo host apply --assert`.
+- **Does it ship in a `yolo-pack` or `rcm`?** **No.** Per [`AGENTS.md`](../../AGENTS.md) and `rcrc` (`EXCLUDES="... tools ..."`), `tools/` is repository-scoped tooling, not host home configuration. Nothing under `tools/tillr-view/` is linked by `rcup` or rendered by `yolo host apply --assert`.
 
 ### 7.2 Running in a `podman-self` jail vs. on the host
 
-Per [`config/yolo-jail/config.toml`](../../config/yolo-jail/config.toml) and the jail environment rules:
+Per `config/yolo-jail/config.toml` and the jail environment rules:
 - `MEASURED`: the tracked jail config carries neither key, and this jail's own port forwarding is a launch setting (`forward_host_ports: [8080]`) rather than a key in that file. In `yolo`, `forward_host_ports` forwards connections **from inside the jail out to a service on the host** (`localhost:8080` in jail -> host `8080`), whereas publishing a port **from inside the jail to the host's browser** requires `"ports": ["<host>:<jail>"]` in the jail's config.
 - Because `/workspace` inside `podman-self` is a **live bind mount** of `/home/user/code/tillr` on the host, there are two clean ways to run the observatory:
   1. **Host-direct (works immediately with zero jail restart):** Run `just observatory` in any host terminal in `~/code/tillr` while `tillr-drain` runs either in the jail or on the host. Both processes read the exact same live `.tillr/state.db` and `.tillr/loop/` files on the host filesystem.
   2. **In-jail server:** Add `"ports": ["4318:4318", "5173:5173"]` to the jail's config (applied on the host via `yolo config apply` and a jail relaunch) so `just observatory` or `just observatory-dev` run inside the jail answers on `http://localhost:4318` / `http://localhost:5173` in the host browser.
-- **`.justfile` recipes** (following [`tools/roster-storybook/dev.sh`](../../tools/roster-storybook/dev.sh) at `.justfile` `dev`):
+- **`.justfile` recipes** (following `tools/roster-storybook/dev.sh` at `.justfile` `dev`):
   - `just observatory *args`: builds/runs `tillr-view serve` on port `4318` serving the UI and API.
   - `just observatory-dev *args`: starts Vite on the port you name and `tillr-view serve` one port above it, with HMR live-reload for frontend code. The two processes are declared in [`tools/tillr-view/Procfile.dev`](../../tools/tillr-view/Procfile.dev) and run under `hivemind` (`mise.toml` pins it), so they are one supervised tree: a dead child stops the other, and an interrupt tears down both process groups. That is the property the recipe lacked while it backgrounded the API and then `exec`'d Vite — the `EXIT` trap was discarded by the `exec`, so an API could outlive its UI, keep the port, and answer the next run with a board it cached at its own startup (2026-11-15). The recipe now also refuses an API port that is already answering, before it builds anything.
 

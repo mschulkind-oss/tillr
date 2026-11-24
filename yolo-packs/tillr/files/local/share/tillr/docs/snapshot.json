@@ -1,13 +1,13 @@
 {
   "format": "tillr-pack-docs-1",
-  "commit": "4b6fdf35e87fb8c381bf5592a83a452a51ee7809",
+  "commit": "d0941c1a47340050c0c87154babbfa08616ebc7e",
   "date": "2026-11-24",
   "index": "docs/tillr/design-status.md",
   "jail_root": "~/.local/share/tillr",
   "documents": [
     {
       "source": "docs/tillr/design-status.md",
-      "blob": "3142cb935c42f72d81d2146bcb6db4c549ae8fa2",
+      "blob": "d30e648313fc01a166d0be5937a2eb413f879afb",
       "delivered": "docs/tillr/design-status.md"
     },
     {
@@ -17,12 +17,12 @@
     },
     {
       "source": "docs/design/tillr-core-and-git-landing.md",
-      "blob": "b2588f8bc5da6f2c81fc8a92e805072b92314ba9",
+      "blob": "4035f4c3fb4ae10d95b5e0c33c1d2e4cb451aa34",
       "delivered": "docs/design/tillr-core-and-git-landing.md"
     },
     {
       "source": "docs/design/tillr-definitions-plan.md",
-      "blob": "a7b1c60c876202b38cbc6d2e1de77079bdd1d4fc",
+      "blob": "f248cc9ef6f7ee83eb8fa1fecfae8eb2b035012b",
       "delivered": "docs/design/tillr-definitions-plan.md"
     },
     {
@@ -37,17 +37,17 @@
     },
     {
       "source": "docs/design/tillr-separable-parts.md",
-      "blob": "0cc04e6d7d2cb451e4c7c4ae7d274a3255af612c",
+      "blob": "8978f65ab024344c3b320b8cd2bb350d12c43aa8",
       "delivered": "docs/design/tillr-separable-parts.md"
     },
     {
       "source": "docs/tillr/roadmap.md",
-      "blob": "905ccf56b4d1fdfd7f0587e314255fe08e22a504",
+      "blob": "797bef30ba8d944499b693711f3cc9f7df63ad30",
       "delivered": "docs/tillr/roadmap.md"
     },
     {
       "source": "docs/design/board-utilities.md",
-      "blob": "4b5a4a810607a37bce8338eb74dea4dc34b23e88",
+      "blob": "0765657792f0c5afd25df9a2ce7121e037645c85",
       "delivered": "docs/design/board-utilities.md"
     },
     {
@@ -57,32 +57,32 @@
     },
     {
       "source": "docs/design/queue-persistence-ruling.md",
-      "blob": "97733ce4bd56a9454ad97b0725918c64121a16c0",
+      "blob": "64fb2a5023b00a8a14f802e142c86668f4acfdd9",
       "delivered": "docs/design/queue-persistence-ruling.md"
     },
     {
       "source": "docs/reference/tillr-queue-persistence.md",
-      "blob": "c255fd683b432699d1f6fa731f827209242d7894",
+      "blob": "2c49e2b00ac1fd1563477075f8a1810fb6fc0222",
       "delivered": "docs/reference/tillr-queue-persistence.md"
     },
     {
       "source": "docs/design/tillr-convergence.md",
-      "blob": "5b227d06ae9518d125579c66fd8b9560ce9ae673",
+      "blob": "68738db1d202c14025ee743852fdbdf71ca30a75",
       "delivered": "docs/design/tillr-convergence.md"
     },
     {
       "source": "docs/reference/tillr-item-graphs.md",
-      "blob": "954b60b06074a66d3b3c949d35aa54781bbbbfb5",
+      "blob": "0e78b4ce2cd3a3c1653ebccc4bc704a2cc1e7642",
       "delivered": "docs/reference/tillr-item-graphs.md"
     },
     {
       "source": "docs/design/tillr-planning-node-model-tiering.md",
-      "blob": "f195e3a4c74eb445866f73630e83c5cbb89c6039",
+      "blob": "d105dbf216e5842ab3c68b6607d62842b835be03",
       "delivered": "docs/design/tillr-planning-node-model-tiering.md"
     },
     {
       "source": "docs/design/tillr-judge-and-lifecycle.md",
-      "blob": "3a9ed7b1cdff84eb137c022378151335bd957ee0",
+      "blob": "08555120ef5f1cd7238909175cded0ed9536e863",
       "delivered": "docs/design/tillr-judge-and-lifecycle.md"
     },
     {
@@ -117,12 +117,12 @@
     },
     {
       "source": "docs/design/gate-rework.md",
-      "blob": "8044c0a3d44494b0ca757b043357352372806d46",
+      "blob": "8e676f8f8fcdafcc8497bfd9f8e31a7c75101200",
       "delivered": "docs/design/gate-rework.md"
     },
     {
       "source": "docs/design/landing-principles.md",
-      "blob": "f897e90158885ee9475f54325aa43e1e2470e47e",
+      "blob": "d7f2cc1088c1d6ebbe9323d0fcbf2854848495aa",
       "delivered": "docs/design/landing-principles.md"
     },
     {
@@ -132,12 +132,12 @@
     },
     {
       "source": "docs/design/tillr-observatory.md",
-      "blob": "bb0b6611424fa2a6a03c2cee5c2dd5dec9d6555e",
+      "blob": "1fdf7ff396431878c47d9bf85287faeb80981f64",
       "delivered": "docs/design/tillr-observatory.md"
     },
     {
       "source": "docs/reference/observatory-design.md",
-      "blob": "a507ab3743517800b8df2144944ae3feef2a2de3",
+      "blob": "4eabe9fe376be0a78115927f3cb8d233b457ceff",
       "delivered": "docs/reference/observatory-design.md"
     },
     {
@@ -152,32 +152,32 @@
     },
     {
       "source": "docs/design/session-recording.md",
-      "blob": "3613213bf2756dccb113efd0e51f8957e7ea2160",
+      "blob": "248d4e01b4d80228b28ac0a93d4ec8a35ae85d91",
       "delivered": "docs/design/session-recording.md"
     },
     {
       "source": "docs/design/tillr-distribution.md",
-      "blob": "34dcb18a90d1ca8f859004af4d9d281b9baafde2",
+      "blob": "19f2dd72ecabf610cb837d7056de3086066a6e80",
       "delivered": "docs/design/tillr-distribution.md"
     },
     {
       "source": "docs/design/tillr-selfhosted-build.md",
-      "blob": "ee96006829ec9c11b2b30009c66036cde885ed37",
+      "blob": "7a92296782658b2477a20e1627e2479afec2d42e",
       "delivered": "docs/design/tillr-selfhosted-build.md"
     },
     {
       "source": "docs/design/tillr-claude-backend.md",
-      "blob": "9a6919c8feaf0cef7895385085a7949caa9b7548",
+      "blob": "3401a5bb03bd07d7c5718f2bf87ef83ebc13d41d",
       "delivered": "docs/design/tillr-claude-backend.md"
     },
     {
       "source": "docs/reference/tillr-muse-backend.md",
-      "blob": "2791c2cce34ab3ce749a38bfd52beb131f66d0d1",
+      "blob": "a3f12b1622a9a3b9ba97b62ff322b73f81fc273c",
       "delivered": "docs/reference/tillr-muse-backend.md"
     },
     {
       "source": "docs/design/tillr-goal-monitor.md",
-      "blob": "2c0f4dfc541762bb5edb65d11dbba1f10ce215a1",
+      "blob": "091713d067d4fadd11ea7231410223e616f3aaee",
       "delivered": "docs/design/tillr-goal-monitor.md"
     },
     {
@@ -192,7 +192,7 @@
     },
     {
       "source": "docs/design/work-control-judge-in-tillr.md",
-      "blob": "cbfd0b3dccf4a9fea6bef41e4c70f37d5eb49ec7",
+      "blob": "daba870fbeba36dd5a45cbb846d568b4d51359e9",
       "delivered": "docs/design/work-control-judge-in-tillr.md"
     }
   ],

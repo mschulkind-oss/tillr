@@ -7,7 +7,6 @@ verified_commit: 412259f25ae143948671832e310e7cd34ee03f5c
 covers:
   - config/tillr/workflows/
   - config/tillr/commands.json
-  - config/tillr/plan-guidance.md
   - tools/tillr/settings/settings.go
   - tools/tillr-item/item/workflow.go
   - tools/tillr-item/item/workflow_selection.go
@@ -43,7 +42,7 @@ summary: "How tillr expands versioned JSON workflows into finite, cycle-free ite
 
 # Item graphs — tracked workflows, node runs, and bounded refinement
 
-> **Delivered copy.** This is `docs/reference/tillr-item-graphs.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-item-graphs.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-item-graphs.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-item-graphs.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-20 against `412259f25ae143948671832e310e7cd34ee03f5c`.
 

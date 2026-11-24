@@ -23,7 +23,7 @@ history, which need not be an ancestor of this repository's head. The citation
 check distinguishes these cases through the local refs that contain the commit,
 not through guesses about what the prose meant.
 
-**Upstream pin**, as defined in [the original fix record](../pi/citation-upstream-pin-2026-11-02.md#2-the-rule),
+**Upstream pin**, as defined in the original fix record,
 means a cited commit reachable from a ref carrying upstream history. For this
 check, that means membership in the explicit ref allowlist below, not proof of
 who authored the commit. **Unlanded** means a repository change not contained in
@@ -114,7 +114,7 @@ tags, and the test does not exercise every allowed prefix.
 | Upstream classification | The containing-ref prefixes above | `UPSTREAM_REF` |
 | Gate declaration | Caller-owned base/head change check | [citation declaration](../../tools/gate/checks/citations.json) |
 
-The [fix record](../pi/citation-upstream-pin-2026-11-02.md) describes the original
+The fix record describes the original
 implementation in [the old fork checker](../../tools/fork-check.py). The rule has
 moved to the change-check entry point and shared module named above. The record
 retains its original measurements and location as history; it is not the current

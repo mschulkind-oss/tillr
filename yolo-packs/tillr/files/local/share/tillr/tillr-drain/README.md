@@ -2246,7 +2246,7 @@ tillr drain acknowledge-patch-move --store .tillr/state.db --observation 123 --f
 
 The acknowledgment records the owner and UTC time without erasing the observation.
 It clears only that observation's fork: a later move or another run's observation
-still needs review. [The patch branch publisher](https://github.com/mschulkind-oss/tillr/blob/main/bin/patch-branches-publish)
+still needs review. The patch branch publisher
 reads the same outstanding observations and refuses the affected branches, including
 refs named by `--skip-ref` or `--force-rewritten`; unaffected branches can publish.
 Its default store is the main repository's store, also when invoked from a worktree;

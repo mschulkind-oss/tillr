@@ -11,8 +11,8 @@ summary: "Split the landing gate in two. A landing tier runs on every batch befo
 # Landing velocity: the trunk moves on the cheap proof, the suites follow on a clock
 
 **Status:** 2026-11-05. Nothing built. Gate timings are the owner's 2026-11-05 pass, the
-records in [`../pi/gate-scope-histogram-2026-11-04.md`](../pi/gate-scope-histogram-2026-11-04.md)
-and [`../pi/gate-long-tail-2026-11-04.md`](../pi/gate-long-tail-2026-11-04.md), and one new read
+records in `../pi/gate-scope-histogram-2026-11-04.md`
+and `../pi/gate-long-tail-2026-11-04.md`, and one new read
 of the gate's own timing timeline taken for this design and stated where it is used.
 
 **2026-11-05, after this design was written:** item 570 wired the board-cli integration
@@ -54,7 +54,7 @@ and [§6](#6-cadence-watermark-and-the-halt-rule).
 
 **Ruled:** [D-LV-1](#decision-ledger), [D-LV-2](#decision-ledger), [D-LV-3](#decision-ledger) — A, A, A; the questions and their options are compacted there.
 
-**Reads with:** [`landing-velocity-plan.md`](landing-velocity-plan.md) (the implementation
+**Reads with:** `landing-velocity-plan.md` (the implementation
 plan, completed against the tree on 2026-11-05),
 [`landing-principles.md`](landing-principles.md) (the rulings this design is checked
 against, principle by principle, in [§5](#5-invariants-that-may-not-bend)).
@@ -120,7 +120,7 @@ Where the time goes, all measured:
 | One selective batch gate, board class | 8–12 min (575s selected, 958s unskipped, one hand gate over two commits) | Owner's 2026-11-05 pass |
 | `go-tool` share of observed check time | 57.3%; top three checks 76.5% | 2026-11-02 → 11-04 histogram |
 | Board module `go-tool` median | 303.5s (Nov 2–4), then 219.7s over 45 steps on 2026-11-05, max 545.6s | Histogram; this design's read of the same timing timeline, 2026-11-05 |
-| Docs-only gate | 1.4s | [`../pi/gate-efficiency-2026-11-02.md`](../pi/gate-efficiency-2026-11-02.md) |
+| Docs-only gate | 1.4s | `../pi/gate-efficiency-2026-11-02.md` |
 | Gate efficiency ratio (wall ÷ floor) | 1.00–1.15 at peak concurrency 11 of 12 | Histogram and efficiency records |
 | Carried (reused) verdicts | 1 in the histogram window | Histogram |
 | Isolations by cause | `conflict` 50.0%, `unverified` 30.3%, `content` 19.7% | Histogram |

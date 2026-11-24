@@ -3,7 +3,7 @@
 A headless harness for pi session *liveness*: from a state a session can reach, does it return to
 idle within a bound, and does a later send-now actually start work?
 
-It is the sibling of [`tools/queued-message-states`](../queued-message-states/README.md), which
+It is the sibling of `tools/queued-message-states`, which
 measures which queued-message states are reachable and what each one does. This directory asks the
 next question — whether a state can hold the session open forever — and it is **expected to be
 green**.
@@ -85,6 +85,6 @@ race (`settleWithin`, `bounded`, `waitFor`, or `nextTurn(ms)`).
 - **A run-level stall diagnostic's shape.** No such diagnostic exists by design — the turn-stall
   watchdog was removed (fork patch `0154`) — so the open-run spec asserts `stallDiagnostic()` stays
   `undefined`. A reintroduced run notice would own the wording. A **tool-call** notice does exist
-  (`tool_call_stall`, see [`docs/pi/tool-call-bounds.md`](../../docs/pi/tool-call-bounds.md)), and
+  (`tool_call_stall`, see `docs/pi/tool-call-bounds.md`), and
   it reports a call rather than a run: no spec here holds a tool call open past its threshold, so
   none of them observes it.

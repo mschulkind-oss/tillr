@@ -30,7 +30,7 @@ paths exist, and their verification rules are distinct rather than contradictory
   the `git patch-id --stable` and byte-identical-blob comparison governs: verify the candidate
   **before** the cherry-pick and then compare the landed artifact to that verified candidate by
   `git patch-id --stable` or byte-identical blobs — never by asserting the two are equal. The
-  evidence is in [`docs/pi/operating-lessons-2026-10-17.md`](./docs/pi/operating-lessons-2026-10-17.md).
+  evidence is in `docs/pi/operating-lessons-2026-10-17.md`.
 - **Authorship follows the landing, not the lane:** a manual or agent cherry-pick (outside
   `tools/tillr-land`) is followed by the same author normalization — re-author the landed commit
   to the identity the repository's git config states, keeping the candidate's author date with
@@ -94,7 +94,7 @@ every entry whose name starts with `.` as it walks (`src/core/discover.ts`, `wal
 green there says nothing about a document under a hidden subdirectory — name the file, and
 keep a positive control at the real repo-relative path. The failures behind all three rules
 are recorded in
-[`docs/pi/operating-lessons-2026-10-17.md`](./docs/pi/operating-lessons-2026-10-17.md).
+`docs/pi/operating-lessons-2026-10-17.md`.
 
 **A letter-suffixed section is referenced by a labelled link, never a section sign.** Measured on
 `vantage-check` 0.10.0 against a document holding both `## 4.` and `## 4a.`: a section sign before

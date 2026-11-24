@@ -45,7 +45,7 @@ summary: "How tillr replaces `tillr-drain loop` and `tillr-view serve` in place 
 
 # Restarting tillr in place, pausing sessions, and post-landing roll and push
 
-> **Delivered copy.** This is `docs/reference/tillr-restart.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-restart.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-20 against `9160c9c48f70286c203076abdc0c3a0d1d89ae48`.
 UNMEASURED: verification rests on the Go and Python process-fixture suites; no

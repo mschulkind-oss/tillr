@@ -180,22 +180,22 @@ Kept for their evidence. None is delivered with the pack; each link goes to the 
 | [Day 2](../design/tillr-day2.md) | The plan of 2026-11-12 for the first unattended loop. | Historical: the loop runs unattended | not shipped |
 | [Loop readiness](../design/tillr-loop-readiness.md) | What blocked an overnight burn on 2026-11-12. | Historical | not shipped |
 | [Chunking plan](../design/tillr-chunking-plan.md) | The 2026-11-12 cut of remaining work into lanes. | Historical: replaced by item blocks | not shipped |
-| [Seed triage](../design/tillr-seed-triage.md) | The first seed of 56 board items. | Historical: the seed file is frozen and the queue lives in documents | not shipped |
+| Seed triage | The first seed of 56 board items. | Historical: the seed file is frozen and the queue lives in documents | not shipped |
 | [Coverage 2026-11-13](../design/tillr-coverage-2026-11-13.md) | A walk of fifteen designs for owed work. | Historical record | not shipped |
 | [Drain acceptance 2026-11-13](../design/tillr-drain-acceptance-2026-11-13.md) | The first unattended two-lane run, measured. | Historical record | not shipped |
 | [Observatory QA 2026-11-13](../design/observatory-qa-2026-11-13.md) | Findings against the first observatory. | Historical record | not shipped |
-| [Queue inventory 2026-11-13](../design/queue-inventory-2026-11-13.md) | Every candidate piece of work, surveyed. | Historical record | not shipped |
-| [Board utilities plan](../design/board-utilities-plan.md) | The implementation plan for the seven programs. | Graduated: built | not shipped |
-| [Board utilities lanes](../design/board-utilities-lanes.md) | That plan cut into lanes. | Graduated | not shipped |
-| [Board documents retirement](../design/board-docs-retirement.md) | Retiring the old board's documents. | Done | not shipped |
-| [Board names](../design/board-names.md) | Naming the machine; chose tillr. | Historical | not shipped |
-| [LAND-3 inventory](../design/land-3i-inventory.md) | mq against tillr-land, before one lander was chosen. | Deprecated | not shipped |
-| [mq retirement](../design/mq-retirement.md) | Deleting the merge queue and rebuilding inside tillr. | Historical: mq is gone | not shipped |
+| Queue inventory 2026-11-13 | Every candidate piece of work, surveyed. | Historical record | not shipped |
+| Board utilities plan | The implementation plan for the seven programs. | Graduated: built | not shipped |
+| Board utilities lanes | That plan cut into lanes. | Graduated | not shipped |
+| Board documents retirement | Retiring the old board's documents. | Done | not shipped |
+| Board names | Naming the machine; chose tillr. | Historical | not shipped |
+| LAND-3 inventory | mq against tillr-land, before one lander was chosen. | Deprecated | not shipped |
+| mq retirement | Deleting the merge queue and rebuilding inside tillr. | Historical: mq is gone | not shipped |
 | [Run wall evidence](../design/run-wall-evidence.md) | The measurement behind the run wall ruling. | Historical record | not shipped |
 | [Gate dual-run evidence](../design/gate-dual-run-evidence.md) | The Go gate against the Python gate on three candidates. | Historical record | not shipped |
-| [Landing system](../reference/landing-system.md) | The two landers before tillr-land. | Superseded by landing principles | not shipped |
-| [Landing runbook](../reference/landing-runbook.md) | Draining the old board by hand. | Superseded by the tillr-land README | not shipped |
-| [Drain velocity research](../research/tillr-drain-velocity.md) | One overnight ten-lane drain, observed. | Research record | not shipped |
+| Landing system | The two landers before tillr-land. | Superseded by landing principles | not shipped |
+| Landing runbook | Draining the old board by hand. | Superseded by the tillr-land README | not shipped |
+| Drain velocity research | One overnight ten-lane drain, observed. | Research record | not shipped |
 
 ## What is changing right now
 

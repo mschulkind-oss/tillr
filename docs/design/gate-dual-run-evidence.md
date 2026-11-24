@@ -3,7 +3,7 @@ title: "Gate dual-run evidence — the Go gate and the Python gate on the same c
 status: draft
 stage: CURRENT
 updated: 2026-11-11
-depends-on: [board-utilities.md, board-utilities-lanes.md, tillr-next-steps.md]
+depends-on: [board-utilities.md, tillr-next-steps.md]
 tags: [gate, tillr, evidence, dual-run, parity]
 summary: "Three real candidates run through both gates. The two gates planned the same command checks on all three, and disagreed on exactly one thing: the Python gate runs `file-size` as its own code, the Go plan carries it as in-process, and `tillr-gate run` refuses the whole plan (verdict `error`, exit 4) rather than omit it. Every Go verdict in this evidence is therefore `error` while the Python gate verified the same candidates at exit 0. The Go gate's planning agrees; its judging is unmeasured because it never executed a check."
 ---

@@ -22,7 +22,7 @@ summary: "The four owner states an item is in, the six stored dispositions and t
 > projects it through `ProjectItemState` in `tools/tillr-view/serveread.go`. The `board item ...`
 > and `board --archived` spellings below are the retired program's names for the model's
 > operations, kept so the ruling reads as it was argued; the live faces are `tillr item ...`.
-> [The document retirement](./board-docs-retirement.md) records why this document survives while
+> The document retirement records why this document survives while
 > its neighbours were superseded.
 
 ## 1. The owner's model

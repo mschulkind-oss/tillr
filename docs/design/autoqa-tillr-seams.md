@@ -143,7 +143,7 @@ Four constraints AutoQA will hit, each with its source:
 
 1. **`criterion_hash` is not a free field.** `RecordVerdict` recomputes `sha256(frozen criterion text)` and refuses a mismatch, so a QA verdict has to read the criterion from the store and hash it. `item.CriterionHash` is the only writer of that spelling.
 2. **`evidence` may not be empty**, for any actor kind. A QA verdict that judges a gate verdict must name the file it read.
-3. **`claim_class` is a closed set of four**: `verification-only`, `red-gate-triage`, `direction`, `owner-only` ([`tools/tillr-item/item/grant.go`](../../tools/tillr-item/item/grant.go)). A malformed one is a usage error with no record:
+3. **`claim_class` is a closed set of four**: `verification-only`, `red-gate-triage`, `direction`, `owner-only` (`tools/tillr-item/item/grant.go`). A malformed one is a usage error with no record:
    ```console
    $ tillr-item verdict record --store ./state.db --input ./v.json --now 2026-11-13T00:00:00Z
    tillr-item: "nonsense" is not a claim class: want one of verification-only, red-gate-triage, direction, owner-only
@@ -419,7 +419,7 @@ stand. The question blocks below preserve the original deliberation, not live ru
 
   A QA harness judging a landed candidate is an agent judging work it did not do, which is exactly what `actor_kind: "agent"` describes, except that `agent` requires a `grant_id` naming the claim classes it may sign off, and no grantor exists for a QA harness. Recording as `mechanical` is legal today and makes every QA verdict indistinguishable from the pipeline retiring its own work. Recording as `agent` needs a grant that nothing issues.
 
-  - **A — Add `actor_kind: "autoqa"` plus a `qa-verification` claim class, with no grant required and `judged_actor` mandatory.** Every QA verdict becomes visible as a QA verdict in `tillr-view`, at the cost of a fifth actor in a three-actor vocabulary that [the retired agent runtime design](./agent-runtime-retirement.md) treats as settled.
+  - **A — Add `actor_kind: "autoqa"` plus a `qa-verification` claim class, with no grant required and `judged_actor` mandatory.** Every QA verdict becomes visible as a QA verdict in `tillr-view`, at the cost of a fifth actor in a three-actor vocabulary that the retired agent runtime design treats as settled.
   - **B — Record every QA verdict as `mechanical` and carry the harness's identity in `reason` and `evidence`.** No vocabulary change and no migration; the cost is that "a machine checked the machine" and "the pipeline retired its own work" look the same in every read view and every query.
 
   <!-- vantage: question id=OQ-AQA1 leaning="A — add an autoqa actor kind and a qa-verification claim class, because a mechanical verdict today already means the pipeline retiring its own landed work, and folding an independent reviewer into that name makes QA unrecoverable from the read model." -->
