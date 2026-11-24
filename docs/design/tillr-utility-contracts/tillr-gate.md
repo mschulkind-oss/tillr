@@ -2,16 +2,16 @@
 title: "Contract: tillr-gate"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
+updated: 2026-11-24
 tags: [tillr, contract, gate]
-summary: "What tillr-gate provides and expects, read from the code at dab5a2da0e: seven faces, four record kinds, seven exit codes with the stall code 6, and the remembered-results directory. Its record types are in a `main` package nobody can import, so five utilities each hold a copy. It expects the check declarations and the registry from the repository's gate scripts."
+summary: "What tillr-gate provides and expects: seven faces, four record kinds, seven exit codes with the stall code 6, and the remembered-results directory. Its record types are in a `main` package nobody can import, so five utilities each hold a copy. It expects the check declarations and the registry from the repository's gate scripts."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-gate
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** What it provides and what it expects describe the code as it is. The split into contract and private, the pins and the reach-in fixes are proposed and not built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
 **What it is.** One Go program at `tools/tillr-gate`. It derives what a candidate changed, plans which checks that change needs, runs them, and writes a verdict. It opens no store.
 
@@ -110,7 +110,7 @@ It reads no store, imports no other utility, and runs no other tillr program.
 
 In `tools/tillr-gate`, in its fast suite.
 
-- **Exists today.** `TestThePlanFaceIsConformant`, `TestTheRunFaceIsConformant`, `TestTheGateProgramsExitIsTheVerdict`, `TestRunRecordsAFailedCheckAsAVerdict`, `TestRunExitsFourForACheckThatCannotStart`, `TestTheChangeFaceDerivesTheCandidatesRecord`.
+- **Existing tests.** `TestThePlanFaceIsConformant`, `TestTheRunFaceIsConformant`, `TestTheGateProgramsExitIsTheVerdict`, `TestRunRecordsAFailedCheckAsAVerdict`, `TestRunExitsFourForACheckThatCannotStart`, `TestTheChangeFaceDerivesTheCandidatesRecord`.
 - **Examples.** One `gate.change`, one `gate.plan`, and one `gate.verdict` per result: pass, fail, error, stalled, pass-inherited, and one with an unavailable check. Each is made by the face in process over a fixture registry whose checks are `true` and `false`, and compared whole with the file. Land's hand-built verdict and the trace's hand-typed plan are replaced by these.
 - **Exit codes.** A name-set file with the seven codes, compared with the constants. The drain, the adapter and the two gate scripts compare against it.
 - **What it accepts.** A test loads every real declaration under `tools/gate/checks` and the registry example. This one reads outside the module by design: the declarations are its input, and a declaration it refuses must fail here before a drain meets it.
@@ -120,5 +120,5 @@ In `tools/tillr-gate`, in its fast suite.
 
 Listed with their fixes in [the overview](../tillr-utility-contracts.md#10-reach-ins-today).
 
-- As provider: RI-34 (five copies of its record types), RI-35 (land recomputes the registry digest and reads its files), RI-36 (the stall code typed in five places), RI-37 (two registrations of two kinds), RI-39 (the view models retired land records beside the gate's), RI-46 (its kinds cannot be linked by `tillr-watch`), RI-47 (the adapter types its flags).
+- As provider: RI-34 (five copies of its record types), RI-35 (land recomputes the registry digest and reads its files), RI-36 (the stall code typed in five places), RI-37 (two registrations of two kinds), RI-39 (the view models two land records nothing writes beside the gate's), RI-46 (its kinds cannot be linked by `tillr-watch`), RI-47 (the adapter types its flags).
 - As consumer: RI-38 (a directory named for the gate that holds the drain's files; two environment names with no owner stated).

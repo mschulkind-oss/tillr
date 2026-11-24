@@ -2,16 +2,16 @@
 title: "Contract: tillr-trace"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
+updated: 2026-11-24
 tags: [tillr, contract, trace]
-summary: "What tillr-trace provides and expects, read from the code at dab5a2da0e: a Python script with five subcommands, of which `run` prints the one JSON document the view reads, and a shell shim that writes one line per command an agent runs. It expects two tables of the runner and the drain, the run directory, and the gate's records, and it turns every SQL error into an empty answer."
+summary: "What tillr-trace provides and expects: a Python script with five subcommands, of which `run` prints the one JSON document the view reads, and a shell shim that writes one line per command an agent runs. It expects two tables of the runner and the drain, the run directory, and the gate's records, and it turns every SQL error into an empty answer."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-trace
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** What it provides and what it expects describe the code as it is. The split into contract and private, the pins and the reach-in fixes are proposed and not built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
 **What it is.** A Python script at `tools/tillr-trace` that reads one run's logs and records into a timeline and checks what the run claimed against what was observed, and a shell file, `bash-shim.sh`, that records each command an agent's shell runs. It writes no file of its own and keeps its rows in memory.
 
@@ -80,7 +80,7 @@ Two columns of the run row, `git_path` and `git_state`, are kept only because a 
 
 In `tools/tillr-trace/test.py`.
 
-- **Exists today.** The suite runs the real script and the real shim, and asserts that no file is written.
+- **Existing tests.** The suite runs the real script and the real shim, and asserts that no file is written.
 - **Examples.** The `run` document for three situations, written as files by the suite: a full run from the checked-in canary log, a run with no log, an unknown run. The view's `trace_test.go` reads these and stops running the script.
 - **The shim's line.** One example line made by running the shim, compared for its field names. The view's second parser of `proc-exec.jsonl` goes; it reads the document.
 - **Its expectations.** The hand-typed DDL for six tables in `test.py` is replaced by a seed file the runner and the drain produce from their builders: a small store holding one finished run and one dispatch. The gate inputs are the gate's plan and verdict examples.
