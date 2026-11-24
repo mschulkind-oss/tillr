@@ -35,28 +35,12 @@ func (l *Loop) releasableItemWait(ctx context.Context, r *store.Reader, id strin
 	// the base staging will select (defect.go).
 	defect := IsDefectItem(fixer) && strings.HasPrefix(waiting.Reason, RefusalToolingDefect+":")
 	if !trunk && !defect {
+		// A test-fix-open hold only auto-releases when its fix item lands: if the fix
+		// item closed without landing, the candidate's gate-failed run is unanswered, so
+		// it stays held for the operator retry command rather than faulting SetState.
 		blocker, err := item.LandedBlocker(r, waiting)
-		if err != nil {
+		if err != nil || blocker == "" {
 			return "", err
-		}
-		if blocker == "" && testFixHeldWait(*waiting) {
-			var bState string
-			err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, fixer).Scan(&bState)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return "", err
-			}
-			if err == nil {
-				declared, derr := definition.ForReader(r)
-				if derr != nil {
-					return "", derr
-				}
-				if finishedState(declared.Parsed, bState) || closedState(declared.Parsed, bState) {
-					blocker = fixer
-				}
-			}
-		}
-		if blocker == "" {
-			return "", nil
 		}
 		if underlying == "not-started" {
 			return underlying, nil // Restore a draft without admitting it to dispatch.

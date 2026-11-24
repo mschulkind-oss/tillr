@@ -553,3 +553,168 @@ func TestItemFixesTest(t *testing.T) {
 		})
 	}
 }
+
+// TestClosingTestFixItemWithoutLandingHoldsCandidateAndKeepsLoopRunning reproduces
+// the 2026-11-23 sequence: a candidate's gate fails on a single test with an open fix
+// item so the candidate is held as test-fix-open; the fix item is closed without
+// landing; the next loop pass does not end with stop=fault, keeps the candidate held
+// naming its cause and the operator retry command, and continues dispatching other
+// items.
+func TestClosingTestFixItemWithoutLandingHoldsCandidateAndKeepsLoopRunning(t *testing.T) {
+	ctx := context.Background()
+	f, l, _ := workflowLoopFixture(t, "")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed'`)
+		return err
+	})
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "update-ref", GreenRef, base)
+
+	candID := fileFixtureRequestWith(t, f, "Implement feature change.\n", "build", item.SingleWorkerWorkflow, []string{"cand.txt"}, true)
+	fixerID := fileFixtureRequestWith(t, f,
+		"TestOneAppliedPassSharesItsGenerationAcrossRequests fails under load in trigger_test.go; fix the race at its cause.\n",
+		"build", item.SingleWorkerWorkflow, []string{"fixer.txt"}, true)
+	otherID := fileFixtureRequestWith(t, f, "Independent ready item.\n", "build", item.SingleWorkerWorkflow, []string{"other.txt"}, true)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET title=? WHERE item_id=?`,
+			"Make the one-pass-one-generation drain test pass under load, at its cause", fixerID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE items SET rank='a' WHERE item_id=?`, candID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE items SET rank='b' WHERE item_id=?`, fixerID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE items SET rank='c' WHERE item_id=?`, otherID)
+		return err
+	})
+
+	logDir := t.TempDir()
+	failLog := writeGateLog(t, logDir, "drain-unit.log",
+		"=== RUN   TestOneAppliedPassSharesItsGenerationAcrossRequests\n"+
+			"    trigger_test.go:101: one pass allocated multiple generations\n"+
+			"--- FAIL: TestOneAppliedPassSharesItsGenerationAcrossRequests (0.04s)\n"+
+			"FAIL\n")
+
+	var candRunID string
+	steps := &testFixSteps{
+		obstacleRequestSteps: obstacleRequestSteps{
+			t: t, f: f,
+			report: func(req run.Request) (string, *landingOffer) {
+				return wrapExtractedReport(req.RunID, "RESULT: done\n"), nil
+			},
+		},
+		replays: map[string]ReplayOutcome{
+			base: {Rev: base, Red: nil, Known: true},
+		},
+	}
+	steps.gateFn = func(c Candidate) (GateOutcome, error) {
+		if c.ItemID == candID {
+			candRunID = c.RunID
+			if err := appendJudgment(ctx, f.storePath, GateVerdictKind, "run", c.RunID, map[string]string{"result": GateFailed}, l.cfg.Now().UTC()); err != nil {
+				return GateOutcome{}, err
+			}
+			return GateOutcome{
+				Outcome:       GateFailed,
+				FailingChecks: []string{"go-tool/tools-tillr-drain"},
+				CheckLogs:     map[string]string{"go-tool/tools-tillr-drain": failLog},
+			}, nil
+		}
+		return GateOutcome{Outcome: GatePassed}, nil
+	}
+	l.cfg.Steps = steps
+
+	// Pass 1: candID runs, gates, fails on the test fixerID fixes, and is held as
+	// test-fix-open behind fixerID, releasing the single lane.
+	res1 := &LoopResult{}
+	if stop, err := l.pass(ctx, res1); err != nil || stop == StopFault {
+		t.Fatalf("pass 1 = (%q, %v), want no fault", stop, err)
+	}
+	drainOwned(t, l, res1)
+
+	if candRunID == "" {
+		t.Fatal("expected candID to reach gate in pass 1")
+	}
+	if got := fixerState(t, f, candID); got != StateBlocked {
+		t.Fatalf("after pass 1: candidate state = %s, want %s", got, StateBlocked)
+	}
+	var wait *item.WaitingOn
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var err error
+		wait, _, err = item.ReadWaitingOn(r, candID)
+		return err
+	})
+	if wait == nil || wait.Waiter != "item:"+fixerID || !strings.HasPrefix(wait.Reason, TestFixWaitPrefix) {
+		t.Fatalf("after pass 1: waiting_on = %+v, want Waiter=item:%s with prefix %q", wait, fixerID, TestFixWaitPrefix)
+	}
+
+	// Operator closes fixerID without landing.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id=?`, fixerID)
+		return err
+	})
+
+	// Pass 2: the loop must not fault; candID stays held naming its cause and the
+	// retry command, and otherID is dispatched and lands.
+	res2 := &LoopResult{}
+	stop2, err2 := l.pass(ctx, res2)
+	if err2 != nil || stop2 == StopFault {
+		t.Fatalf("pass 2 after closing fixer = (%q, %v), want loop to continue without fault", stop2, err2)
+	}
+	drainOwned(t, l, res2)
+
+	if got := fixerState(t, f, otherID); got != StateLanded {
+		t.Fatalf("after pass 2: otherID state = %s, want %s (other items must still dispatch)", got, StateLanded)
+	}
+	if got := fixerState(t, f, candID); got != StateBlocked {
+		t.Fatalf("after pass 2: candID state = %s, want %s", got, StateBlocked)
+	}
+	candRuns := 0
+	for _, rid := range steps.runIDs {
+		if strings.Contains(rid, candID) {
+			candRuns++
+		}
+	}
+	if candRuns != 1 {
+		t.Fatalf("candID worker runs = %d, want 1", candRuns)
+	}
+
+	wantCmd := retryCommand(candID, candRunID, RetryAckGateFailed)
+	fixtureRead(t, f, func(r *store.Reader) error {
+		answer, err := Why(r, Pass{}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		var found *WhyRow
+		for i := range answer.Rows {
+			if answer.Rows[i].ItemID == candID {
+				found = &answer.Rows[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatalf("Why() returned no row for %s", candID)
+		}
+		if found.State != StateBlocked || found.Decision.Action != ActionHold || found.Reason != ReasonBlocked || found.Class != "needs you" {
+			t.Fatalf("held row = %+v, want blocked/hold/needs you", found)
+		}
+		if !strings.Contains(found.Why, fixerID) || !strings.Contains(found.Why, "closed without landing") || !strings.Contains(found.Why, TestFixWaitPrefix) {
+			t.Fatalf("held row Why = %q, want fixer %s, 'closed without landing', and %q", found.Why, fixerID, TestFixWaitPrefix)
+		}
+		if !strings.HasPrefix(found.Mover, "operator; ") || !strings.Contains(found.Mover, wantCmd) {
+			t.Fatalf("held row Mover = %q, want operator mover naming %q", found.Mover, wantCmd)
+		}
+		if answer.Summary.OperatorNext != 1 {
+			t.Fatalf("Summary.OperatorNext = %d, want 1", answer.Summary.OperatorNext)
+		}
+		return nil
+	})
+
+	// Pass 3: with only the held item left, the loop still does not end with stop=fault.
+	res3 := &LoopResult{}
+	stop3, err3 := l.pass(ctx, res3)
+	if err3 != nil || stop3 == StopFault {
+		t.Fatalf("pass 3 with only held item = (%q, %v), want no fault", stop3, err3)
+	}
+}
