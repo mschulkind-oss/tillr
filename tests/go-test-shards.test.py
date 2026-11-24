@@ -2597,6 +2597,353 @@ func TestBeta(t *testing.T) {{ checkRepo(t) }}
                         shards._unlock_and_close(slot0_fd)
                         shards._unlock_and_close(wait_fd)
 
+    def _run_shards_cli(self, args, *, env=None, cwd=None):
+        merged_env = os.environ.copy()
+        if env is not None:
+            merged_env.update(env)
+        merged_env.setdefault('GOCACHE', str(self.root / 'gocache'))
+        merged_env.setdefault('GO_TEST_SHARDS_LOCK_DIR', str(self.root / 'default-locks'))
+        return subprocess.run(
+            [sys.executable, str(ROOT / 'tools' / 'go-test-shards.py'), *args],
+            cwd=cwd or self.root,
+            env=merged_env,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_cached_sub_threshold_runs_single_group_and_hits_across_worktrees(self):
+        repo = self.root / 'wt-repo'
+        repo.mkdir()
+        subprocess.run(['git', 'init', '-q'], cwd=repo, check=True)
+        subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=repo, check=True)
+        subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=repo, check=True)
+        mod = repo / 'mod'
+        (mod / 'sub').mkdir(parents=True)
+        (mod / 'lib').mkdir(parents=True)
+        (mod / 'go.mod').write_text('module example.com/wtmod\n\ngo 1.22\n')
+        (mod / 'lib' / 'lib.go').write_text('package lib\nfunc Val() int { return 1 }\n')
+        (mod / 'sub' / 'sub_test.go').write_text(
+            'package sub\n'
+            'import (\n'
+            '    "os"\n'
+            '    "testing"\n'
+            ')\n'
+            'func TestAlpha(t *testing.T) {}\n'
+            'func Example() {\n'
+            '    // Output:\n'
+            '}\n'
+            'func TestMain(m *testing.M) { os.Exit(m.Run()) }\n'
+        )
+        subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+        subprocess.run(['git', 'commit', '-q', '-m', 'init'], cwd=repo, check=True)
+        wt2 = self.root / 'wt-two'
+        subprocess.run(['git', 'worktree', 'add', '-q', str(wt2), 'HEAD'], cwd=repo, check=True)
+
+        gocache = self.root / 'wt-gocache'
+        durable = self.root / 'wt-durable'
+        ev1 = self.root / 'ev1.json'
+        ev2 = self.root / 'ev2.json'
+        ev3 = self.root / 'ev3.json'
+        events_file = self.root / 'events.jsonl'
+        progress_file = self.root / 'progress.json'
+        durations_file = self.root / 'durations.json'
+        durations_file.write_text('{}\n')
+
+        clean_env = {
+            'GOCACHE': str(gocache),
+            'YOLO_DURABLE_DIR': str(durable),
+            'TILLR_RUN_ID': '',
+        }
+
+        # Run 1 in worktree 1: miss (1 group, no go test -c)
+        res1 = self._run_shards_cli([
+            str(mod), '-k', '6', '--cache', '--durations', str(durations_file),
+            '--events', str(events_file), '--progress-file', str(progress_file),
+            '--progress-interval', '0.01', '--record', str(durations_file),
+        ], env={**clean_env, 'TILLR_GO_SHARDS_EVIDENCE_OUT': str(ev1)})
+        self.assertEqual(res1.returncode, 0, res1.stdout + res1.stderr)
+        data1 = json.loads(ev1.read_text())
+        self.assertEqual(data1['mode'], 'cached-shards')
+        by_ip1 = {p['import_path']: p['test_cache'] for p in data1['packages']}
+        self.assertEqual(by_ip1, {
+            'example.com/wtmod/lib': 'not-applicable',
+            'example.com/wtmod/sub': 'miss',
+        })
+        recorded = json.loads(durations_file.read_text())
+        self.assertIn('TestAlpha', recorded.get('example.com/wtmod/sub', {}))
+        self.assertTrue(events_file.read_text().strip())
+        if progress_file.exists():
+            prog = json.loads(progress_file.read_text())
+            self.assertGreaterEqual(prog['completed_packages'], 1)
+            self.assertGreaterEqual(prog['completed_shards'], 1)
+
+        # Run 2 in worktree 2: cross-worktree cache hit under -trimpath!
+        # Overwrite durations with sentinel to verify --record does not overwrite from (cached) groups.
+        durations_file.write_text('{"example.com/wtmod/sub": {"TestAlpha": 9.99}}\n')
+        res2 = self._run_shards_cli([
+            str(wt2 / 'mod'), '-k', '6', '--cache', '--durations', str(durations_file),
+            '--record', str(durations_file),
+        ], env={**clean_env, 'TILLR_GO_SHARDS_EVIDENCE_OUT': str(ev2)})
+        self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
+        data2 = json.loads(ev2.read_text())
+        by_ip2 = {p['import_path']: p['test_cache'] for p in data2['packages']}
+        self.assertEqual(by_ip2['example.com/wtmod/sub'], 'hit')
+        self.assertEqual(json.loads(durations_file.read_text())['example.com/wtmod/sub']['TestAlpha'], 9.99)
+
+        # Run 3 without --cache: default uncached mode still bypasses Go's test cache.
+        res3 = self._run_shards_cli([
+            str(mod), '-k', '2', '--durations', str(durations_file),
+        ], env={**clean_env, 'TILLR_GO_SHARDS_EVIDENCE_OUT': str(ev3)})
+        self.assertEqual(res3.returncode, 0, res3.stdout + res3.stderr)
+        data3 = json.loads(ev3.read_text())
+        self.assertIsInstance(data3, list)
+        by_ip3 = {p['import_path']: p['test_cache'] for p in data3}
+        self.assertEqual(by_ip3['example.com/wtmod/sub'], 'bypassed')
+
+    def test_cached_large_package_shards_with_formula_and_hits_on_repeat(self):
+        mod = self.root / 'largemod'
+        mod.mkdir()
+        (mod / 'go.mod').write_text('module example.com/largemod\n\ngo 1.22\n')
+        lines = ['package largemod', 'import "testing"']
+        for i in range(105):
+            lines.append(f'func TestCase{i:03d}(t *testing.T) {{}}')
+        (mod / 'large_test.go').write_text('\n'.join(lines) + '\n')
+
+        gocache = self.root / 'large-gocache'
+        durable = self.root / 'large-durable'
+        ev1 = self.root / 'large-ev1.json'
+        ev2 = self.root / 'large-ev2.json'
+        clean_env = {
+            'GOCACHE': str(gocache),
+            'YOLO_DURABLE_DIR': str(durable),
+            'TILLR_RUN_ID': '',
+        }
+
+        # Spy on shard count by checking scratch keys / invocations via run()
+        seen_keys = []
+        orig_run_group = shards.run_cached_group
+
+        def spy_group(package, cwd, names, index, scratch_key, *args, **kwargs):
+            seen_keys.append((index, scratch_key, len(names)))
+            return orig_run_group(package, cwd, names, index, scratch_key, *args, **kwargs)
+
+        with patch.object(shards, 'run_cached_group', side_effect=spy_group), \
+             patch.dict(os.environ, clean_env):
+            shards.run(mod, 3, {}, self.root / 's1', '0', cache=True, evidence_out=ev1)
+            self.assertEqual(len(seen_keys), 3)
+            self.assertEqual(json.loads(ev1.read_text())['packages'][0]['test_cache'], 'miss')
+
+            seen_keys.clear()
+            shards.run(mod, 3, {}, self.root / 's2', '0', cache=True, evidence_out=ev2)
+            self.assertEqual(len(seen_keys), 3)
+            self.assertEqual(json.loads(ev2.read_text())['packages'][0]['test_cache'], 'hit')
+
+    def test_cached_edge_digest_invalidation_and_cli_edge_digest(self):
+        repo = self.root / 'edge-repo'
+        (repo / 'tools' / 'gate').mkdir(parents=True)
+        (repo / 'tools' / 'tillr-helper').mkdir(parents=True)
+        (repo / 'tools' / 'tillr-app').mkdir(parents=True)
+        (repo / 'data').mkdir(parents=True)
+
+        (repo / 'tools' / 'tillr-helper' / 'go.mod').write_text(
+            'module github.com/mschulkind-oss/tillr-helper\n\ngo 1.22\n'
+        )
+        (repo / 'tools' / 'tillr-helper' / 'main.go').write_text(
+            'package main\nfunc main() {}\n'
+        )
+        (repo / 'tools' / 'tillr-app' / 'go.mod').write_text(
+            'module github.com/mschulkind-oss/tillr-app\n\ngo 1.22\n'
+        )
+        (repo / 'tools' / 'tillr-app' / 'app_test.go').write_text(
+            'package app\n'
+            'import (\n'
+            '    "os"\n'
+            '    "testing"\n'
+            ')\n'
+            'func TestEdgeInputs(t *testing.T) { _ = os.Getenv("TILLR_GATE_EDGE_INPUTS") }\n'
+            'func TestApp(t *testing.T) { _ = os.Getenv("TILLR_GATE_EDGE_INPUTS") }\n'
+        )
+        (repo / 'data' / 'input.txt').write_text('v1\n')
+        (repo / 'tools' / 'gate' / 'go-test-edges.json').write_text(json.dumps({
+            'github.com/mschulkind-oss/tillr-app': {
+                'builds': ['github.com/mschulkind-oss/tillr-helper'],
+                'reads': ['data/input.txt'],
+            },
+        }))
+
+        # CLI --edge-digest
+        d1 = self._run_shards_cli(['--edge-digest', 'github.com/mschulkind-oss/tillr-app'], cwd=repo)
+        self.assertEqual(d1.returncode, 0, d1.stderr)
+        self.assertRegex(d1.stdout.strip(), r'^[0-9a-f]{64}$')
+        d_missing = self._run_shards_cli(['--edge-digest', 'github.com/mschulkind-oss/unknown'], cwd=repo)
+        self.assertEqual(d_missing.returncode, 0, d_missing.stderr)
+        self.assertEqual(d_missing.stdout, '')
+
+        gocache = self.root / 'edge-gocache'
+        durable = self.root / 'edge-durable'
+        clean_env = {'GOCACHE': str(gocache), 'YOLO_DURABLE_DIR': str(durable), 'TILLR_RUN_ID': ''}
+        ev1 = self.root / 'e-ev1.json'
+        ev2 = self.root / 'e-ev2.json'
+        ev3 = self.root / 'e-ev3.json'
+        ev4 = self.root / 'e-ev4.json'
+
+        self.assertEqual(self._run_shards_cli(
+            [str(repo / 'tools' / 'tillr-app'), '--cache'],
+            env={**clean_env, 'TILLR_GO_SHARDS_EVIDENCE_OUT': str(ev1)},
+        ).returncode, 0)
+        self.assertEqual(json.loads(ev1.read_text())['packages'][0]['test_cache'], 'miss')
+
+        self.assertEqual(self._run_shards_cli(
+            [str(repo / 'tools' / 'tillr-app'), '--cache'],
+            env={**clean_env, 'TILLR_GO_SHARDS_EVIDENCE_OUT': str(ev2)},
+        ).returncode, 0)
+        self.assertEqual(json.loads(ev2.read_text())['packages'][0]['test_cache'], 'hit')
+
+        # Changing declared reads invalidates cache
+        (repo / 'data' / 'input.txt').write_text('v2\n')
+        self.assertEqual(self._run_shards_cli(
+            [str(repo / 'tools' / 'tillr-app'), '--cache'],
+            env={**clean_env, 'TILLR_GO_SHARDS_EVIDENCE_OUT': str(ev3)},
+        ).returncode, 0)
+        self.assertEqual(json.loads(ev3.read_text())['packages'][0]['test_cache'], 'miss')
+
+        # Changing declared builds invalidates cache
+        (repo / 'tools' / 'tillr-helper' / 'main.go').write_text('package main\nfunc main() { _ = 1 }\n')
+        self.assertEqual(self._run_shards_cli(
+            [str(repo / 'tools' / 'tillr-app'), '--cache'],
+            env={**clean_env, 'TILLR_GO_SHARDS_EVIDENCE_OUT': str(ev4)},
+        ).returncode, 0)
+        self.assertEqual(json.loads(ev4.read_text())['packages'][0]['test_cache'], 'miss')
+
+    def test_cached_failure_formatting_and_run_id_refusal(self):
+        mod = self.root / 'failmod'
+        mod.mkdir()
+        (mod / 'go.mod').write_text('module example.com/failmod\n\ngo 1.22\n')
+        (mod / 'fail_test.go').write_text(
+            'package failmod\nimport "testing"\n'
+            'func TestBoom(t *testing.T) { t.Fatal("kaboom") }\n'
+        )
+        res = self._run_shards_cli(
+            [str(mod), '--cache'],
+            env={'GOCACHE': str(self.root / 'fail-gocache'), 'YOLO_DURABLE_DIR': str(self.root / 'fail-durable'), 'TILLR_RUN_ID': ''},
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn('example.com/failmod shard 0 failed (exit 1): TestBoom', res.stderr)
+        self.assertIn('kaboom', res.stderr)
+
+        # TILLR_RUN_ID refusal on repo module and .forks/, while allowing $TMPDIR fixture
+        fake_repo = self.root / 'fake-repo'
+        (fake_repo / 'pkg').mkdir(parents=True)
+        (fake_repo / 'pkg' / 'go.mod').write_text('module example.com/repom\n\ngo 1.22\n')
+        (fake_repo / 'pkg' / 'p_test.go').write_text('package pkg\nimport "testing"\nfunc TestOk(t *testing.T) {}\n')
+        refused_repo = self._run_shards_cli(
+            [str(fake_repo / 'pkg'), '--cache'],
+            env={'TILLR_RUN_ID': 'run-worker-1', 'TILLR_REPO_ROOT': str(fake_repo)},
+        )
+        self.assertNotEqual(refused_repo.returncode, 0)
+        self.assertIn('refused', refused_repo.stderr)
+
+        forks_mod = self.root / '.forks' / 'lanes' / 'lane-1' / 'tillr'
+        forks_mod.mkdir(parents=True)
+        refused_forks = self._run_shards_cli(
+            [str(forks_mod), '--cache'],
+            env={'TILLR_RUN_ID': 'run-worker-1'},
+        )
+        self.assertNotEqual(refused_forks.returncode, 0)
+        self.assertIn('.forks/', refused_forks.stderr)
+
+        # Private fixture under $YOLO_DURABLE_DIR / $TMPDIR is allowed even with TILLR_RUN_ID set
+        allowed = self._run_shards_cli(
+            [str(fake_repo / 'pkg'), '--cache'],
+            env={
+                'TILLR_RUN_ID': 'run-worker-1',
+                'TILLR_REPO_ROOT': str(ROOT),
+                'YOLO_DURABLE_DIR': str(self.root),
+                'GOCACHE': str(self.root / 'allow-gocache'),
+            },
+        )
+        self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
+
+    def test_cached_cross_tool_go_affected_hits_go_test_shards(self):
+        go_affected_spec = importlib.util.spec_from_file_location(
+            'go_affected_cross_test', ROOT / 'tools/gate/go_affected.py'
+        )
+        go_affected = importlib.util.module_from_spec(go_affected_spec)
+        go_affected_spec.loader.exec_module(go_affected)
+
+        repo = self.root / 'cross-repo'
+        (repo / 'tools' / 'gate').mkdir(parents=True)
+        (repo / 'tools' / 'go-test-shards.py').write_text(RUNNER.read_text())
+        (repo / 'data').mkdir(parents=True)
+        (repo / 'data' / 'edge.txt').write_text('v1\n')
+
+        small_mod = repo / 'tools' / 'tillr-small'
+        small_mod.mkdir()
+        (small_mod / 'go.mod').write_text('module github.com/mschulkind-oss/tillr-small\n\ngo 1.22\n')
+        (small_mod / 'small_test.go').write_text(
+            'package small\n'
+            'import (\n'
+            '    "os"\n'
+            '    "testing"\n'
+            ')\n'
+            'func TestEdgeInputs(t *testing.T) { _ = os.Getenv("TILLR_GATE_EDGE_INPUTS") }\n'
+            'func TestSmallA(t *testing.T) {}\n'
+            'func TestSmallB(t *testing.T) {}\n'
+        )
+
+        large_mod = repo / 'tools' / 'tillr-large'
+        large_mod.mkdir()
+        (large_mod / 'go.mod').write_text('module github.com/mschulkind-oss/tillr-large\n\ngo 1.22\n')
+        large_lines = [
+            'package large',
+            'import (',
+            '    "os"',
+            '    "testing"',
+            ')',
+            'func TestEdgeInputs(t *testing.T) { _ = os.Getenv("TILLR_GATE_EDGE_INPUTS") }',
+        ]
+        for i in range(105):
+            large_lines.append(f'func TestLarge{i:03d}(t *testing.T) {{}}')
+        (large_mod / 'large_test.go').write_text('\n'.join(large_lines) + '\n')
+
+        (repo / 'tools' / 'gate' / 'go-test-edges.json').write_text(json.dumps({
+            'github.com/mschulkind-oss/tillr-small': {
+                'reads': ['data/edge.txt'],
+            },
+            'github.com/mschulkind-oss/tillr-large': {
+                'reads': ['data/edge.txt'],
+            },
+        }))
+
+        gocache = self.root / 'cross-gocache'
+        durable = self.root / 'cross-durable'
+        lock_dir = self.root / 'cross-locks'
+        clean_env = {
+            'GOCACHE': str(gocache),
+            'YOLO_DURABLE_DIR': str(durable),
+            'GO_TEST_SHARDS_LOCK_DIR': str(lock_dir),
+            'TILLR_RUN_ID': '',
+        }
+
+        with patch.dict(os.environ, clean_env):
+            sel = go_affected.select_affected_packages(
+                repo,
+                ['tools/tillr-small/small_test.go', 'tools/tillr-large/large_test.go'],
+            )
+            rc, out, ev_gate = go_affected.run_selected_tests(repo, sel, progress_stream=False)
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(len(ev_gate['packages']), 2)
+
+            ev_small = self.root / 'cross-ev-small.json'
+            shards.run(small_mod, 6, {}, self.root / 'cs-small', '0', cache=True, evidence_out=ev_small)
+            small_payload = json.loads(ev_small.read_text())
+            self.assertEqual(small_payload['packages'][0]['test_cache'], 'hit')
+
+            ev_large = self.root / 'cross-ev-large.json'
+            shards.run(large_mod, 6, {}, self.root / 'cs-large', '0', cache=True, evidence_out=ev_large)
+            large_payload = json.loads(ev_large.read_text())
+            self.assertEqual(large_payload['packages'][0]['test_cache'], 'hit')
+
 
 if __name__ == '__main__':
     unittest.main()

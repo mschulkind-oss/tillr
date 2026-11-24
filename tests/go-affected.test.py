@@ -2452,6 +2452,77 @@ def test_suite_gocache_and_runner_helpers() -> None:
         assert "PASS ok_case" in joined, joined
         assert "FAIL bad_case" in joined and "boom-from-worker" in joined, joined
 
+        # scan_package_tests matches Test*, Example*, Fuzz* (excluding TestMain and lowercase suffixes).
+        scan_dir = tmp_path / "scanpkg"
+        scan_dir.mkdir()
+        (scan_dir / "scan_test.go").write_text(
+            "package scanpkg\n"
+            'import "testing"\n'
+            "func TestOne(t *testing.T) {}\n"
+            "func Testhelper(t *testing.T) {}\n"
+            "func TestMain(m *testing.M) {}\n"
+            "func Example() {}\n"
+            "func ExampleFoo() {}\n"
+            "func FuzzBar(f *testing.F) {}\n"
+        )
+        scanned = go_affected.scan_package_tests(
+            tmp_path,
+            {"import_path": "example.com/scanpkg", "dir_rel": "scanpkg", "test_files": ["scan_test.go"]},
+        )
+        assert scanned == ["TestOne", "Example", "ExampleFoo", "FuzzBar"], scanned
+
+        # Non-edge < 100-test packages use per-package scratch_key = import_path (not module:<mod>).
+        seen_scratch_keys: list[str] = []
+        orig_acquire = go_affected.acquire_invocation_scratch
+
+        @contextlib.contextmanager
+        def spy_acquire(durable, key):
+            seen_scratch_keys.append(key)
+            with orig_acquire(durable, key) as pair:
+                yield pair
+
+        fake_root = tmp_path / "perpkg-root"
+        (fake_root / "tools" / "tillr-x" / "a").mkdir(parents=True)
+        (fake_root / "tools" / "tillr-x" / "b").mkdir(parents=True)
+        (fake_root / "tools" / "tillr-x" / "go.mod").write_text("module example.com/tx\n\ngo 1.22\n")
+        (fake_root / "tools" / "tillr-x" / "a" / "a_test.go").write_text(
+            'package a\nimport "testing"\nfunc TestA(t *testing.T) {}\n'
+        )
+        (fake_root / "tools" / "tillr-x" / "b" / "b_test.go").write_text(
+            'package b\nimport "testing"\nfunc TestB(t *testing.T) {}\n'
+        )
+        sel = {
+            "selection_ms": 1,
+            "modules": ["tools/tillr-x"],
+            "floor_modules": [],
+            "selected": [
+                {
+                    "import_path": "example.com/tx/a",
+                    "module": "tools/tillr-x",
+                    "dir_rel": "tools/tillr-x/a",
+                    "test_files": ["a_test.go"],
+                    "reason": "changed",
+                    "selected_tests": None,
+                    "has_edge": False,
+                    "edge_digest": None,
+                },
+                {
+                    "import_path": "example.com/tx/b",
+                    "module": "tools/tillr-x",
+                    "dir_rel": "tools/tillr-x/b",
+                    "test_files": ["b_test.go"],
+                    "reason": "changed",
+                    "selected_tests": None,
+                    "has_edge": False,
+                    "edge_digest": None,
+                },
+            ],
+        }
+        with patch.object(go_affected, "acquire_invocation_scratch", side_effect=spy_acquire):
+            rc_sel, out_sel, _ = go_affected.run_selected_tests(fake_root, sel, progress_stream=False)
+        assert rc_sel == 0, out_sel
+        assert sorted(seen_scratch_keys) == ["example.com/tx/a", "example.com/tx/b"], seen_scratch_keys
+
 
 def _find_non_shim_git() -> Path:
     for entry in os.environ.get("PATH", "").split(os.pathsep):
@@ -2841,6 +2912,7 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
             fast_path = run_dir / "gate.fast.verdict.json"
             env = {
                 **os.environ,
+                "TILLR_RUN_ID": "",
                 "YOLO_DURABLE_DIR": str(durable),
                 "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
                 "GOCACHE": str(gocache),
@@ -2897,6 +2969,7 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
         }
         assert attrs_by_kind["go-substrate"]["go_build"][0]["execution"] == "reused", attrs_by_kind
         assert attrs_by_kind["gate-runner"]["go_build"][0]["execution"] == "reused", attrs_by_kind
+        assert attrs_by_kind["gate-runner"]["go_build"][0]["mode"] == "cached-shards", attrs_by_kind
         ga_pkgs = {
             p["import_path"]: p
             for p in attrs_by_kind["go-affected"]["go_build"][0]["packages"]

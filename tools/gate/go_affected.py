@@ -32,7 +32,7 @@ PR_SET_CHILD_SUBREAPER = 36
 _live_guards: dict[int, int] = {}
 _live_guards_lock = threading.Lock()
 TOP_LEVEL_TEST_RE = re.compile(
-    r"^func\s+(Test(?:[^a-z]\w*)?)\s*\(\s*\w+\s+\*testing\.T\b",
+    r"^func\s+((?:Test(?:[^a-z\W]\w*)?(?=\s*\(\s*\w+\s+\*testing\.T\b)|Fuzz(?:[^a-z\W]\w*)?(?=\s*\(\s*\w+\s+\*testing\.F\b)|Example(?:[^a-z\W]\w*)?(?=\s*\(\s*\))))",
     re.MULTILINE,
 )
 
@@ -1026,7 +1026,7 @@ def scan_package_tests(root: Path, item: dict) -> list[str]:
         except OSError:
             continue
         for name in TOP_LEVEL_TEST_RE.findall(source):
-            if name not in seen_set:
+            if name and name != "TestMain" and name not in seen_set:
                 seen_set.add(name)
                 seen.append(name)
     return seen
@@ -1775,7 +1775,7 @@ def run_selected_tests(
                     pattern,
                     f"{item['import_path']}#shard-{shard_idx}",
                 ))
-        elif item["has_edge"]:
+        elif item["import_path"] != "./...":
             invocations.append((item["module"], [item], item["edge_digest"], None, item["import_path"]))
         else:
             by_mod.setdefault(item["module"], []).append(item)

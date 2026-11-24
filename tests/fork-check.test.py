@@ -187,11 +187,15 @@ def test_landing_go_measurements():
                        go_module="tools/tillr-gate"),
             gate.Check("gate-runner", "partial runner", ["partial"], "watch", 0,
                        go_module="tools/tillr-gate"),
+            gate.Check("gate-runner", "cached runner", ["cached", "--cache"], "watch", 0,
+                       go_module="tools/tillr-gate"),
+            gate.Check("gate-runner", "cached fallback", ["cached-fallback", "--cache"], "watch", 0,
+                       go_module="tools/tillr-gate"),
             gate.Check("waybar", "waybar", ["reused"], "watch", 0),
             gate.Check("go-substrate", "unstarted", ["unused"], "watch", 0,
                        go_module="tools/tillr"),
         ]
-        suite, runner, partial, reused, unstarted = plan.checks
+        suite, runner, partial, cached, cached_fallback, reused, unstarted = plan.checks
         handoffs = []
         calls = []
         key = "TILLR_GO_SHARDS_EVIDENCE_OUT"
@@ -200,9 +204,9 @@ def test_landing_go_measurements():
             calls.append(argv[0])
             child_env = gate.environ(env, drop)
             assert "TILLR_GATE_SPANS_OUT" not in child_env
-            if argv[0] in {"shards", "partial", "legacy"}:
+            if argv[0] in {"shards", "partial", "cached", "cached-fallback", "legacy"}:
                 assert child_env["GO_TEST_SHARDS_HOLDER"] == "gate:fixture-run"
-            if argv[0] in {"shards", "partial"}:
+            if argv[0] in {"shards", "partial", "cached", "cached-fallback"}:
                 assert key not in drop
                 target = Path(env[key])
                 assert target.read_text() == "" and target not in handoffs
@@ -212,6 +216,18 @@ def test_landing_go_measurements():
                         {"import_path": "example/partial", "test_cache": "not-started"},
                     ]}))
                     return 1, "go list failed", 0.021
+                if argv[0] == "cached":
+                    target.write_text(json.dumps({"mode": "cached-shards", "packages": [
+                        {"import_path": "example/hit", "test_cache": "hit"},
+                        {"import_path": "example/miss", "test_cache": "miss"},
+                        {"import_path": "example/lib", "test_cache": "not-applicable"},
+                    ]}))
+                    return 0, "ok\texample/hit\t(cached)\n", 0.015
+                if argv[0] == "cached-fallback":
+                    target.write_text(json.dumps([
+                        {"import_path": "example/fallback", "test_cache": "hit"},
+                    ]))
+                    return 0, "", 0.012
                 target.write_text(json.dumps([
                     {"import_path": "example/runner", "test_cache": "not-applicable"},
                 ]))
@@ -226,20 +242,21 @@ def test_landing_go_measurements():
 
         gate.run_command = run_command
         ticks = iter((1_000_000, 5_000_000, 10_000_000, 23_000_000,
-                      30_000_000, 51_000_000, 60_000_000, 82_000_000))
+                      30_000_000, 51_000_000, 60_000_000, 82_000_000,
+                      90_000_000, 105_000_000, 110_000_000, 122_000_000))
         gate.time = types.SimpleNamespace(monotonic_ns=lambda: next(ticks), time_ns=lambda: 100)
         plan.checks = [reused]
         gate.apply_reuse(plan, ["waybar"])
-        plan.checks = [suite, runner, partial, unstarted]
+        plan.checks = [suite, runner, partial, cached, cached_fallback, unstarted]
         with patch.dict(os.environ, {"TILLR_GATE_SPANS_OUT": str(root / "fixture-run" / "spans.json"),
                                      "TILLR_RUN_ID": "", "GO_TEST_SHARDS_HOLDER": ""}):
-            for check in (suite, runner, partial):
+            for check in (suite, runner, partial, cached, cached_fallback):
                 gate.execute_check(check, root, None, measure_landing=plan.measure_landing)
             legacy = gate.Check("gate-runner", "legacy", ["legacy"], "watch", 0,
                                 go_module="tools/tillr-gate")
             gate.execute_attempt(root, legacy, "HEAD")
         assert not legacy.go_build
-        assert calls == ["go-test", "shards", "partial", "legacy"], calls
+        assert calls == ["go-test", "shards", "partial", "cached", "cached-fallback", "legacy"], calls
         assert all(not path.exists() for path in handoffs), handoffs
 
         gate.write_gate_spans(str(spans), plan, root, 1, "failed", "", "", [], 1, 1, 0.05)
@@ -248,23 +265,80 @@ def test_landing_go_measurements():
         reused_id = gate.declaration_id(reused.kind, reused.label, root)
         assert body["reused_checks"] == [reused_id] and body["reused_wall_ms"] == {reused_id: 4}
         statuses = [span["status"] for span in body["check_spans"]]
-        assert statuses == ["ok", "FAIL", "FAIL"], statuses
-        native, sharded, incomplete = [json.loads(row["attributes_json"]) for row in body["check_spans"]]
-        assert [(row["execution"], row["wall_ms"]) for row in (native, sharded, incomplete)] == [
-            ("ran", 13), ("ran", 21), ("ran", 22),
+        assert statuses == ["ok", "FAIL", "FAIL", "ok", "ok"], statuses
+        native, sharded, incomplete, cached_span, fallback_span = [
+            json.loads(row["attributes_json"]) for row in body["check_spans"]
         ]
+        assert [(row["execution"], row["wall_ms"])
+                for row in (native, sharded, incomplete, cached_span, fallback_span)] == [
+            ("ran", 13), ("ran", 21), ("ran", 22), ("ran", 15), ("ran", 12),
+        ]
+        assert native["go_build"][0]["mode"] == "go-test", native
         assert native["go_build"][0]["packages"] == [
             {"import_path": "example/json", "test_cache": "miss"},
             {"import_path": "example/library", "test_cache": "not-applicable"},
             {"import_path": "example/native", "test_cache": "hit"},
         ], native
+        assert sharded["go_build"][0]["mode"] == "compiled-shards", sharded
         assert sharded["go_build"][0]["packages"] == [
             {"import_path": "example/runner", "test_cache": "not-applicable"},
         ], sharded
+        assert incomplete["go_build"][0]["mode"] == "compiled-shards", incomplete
         assert incomplete["go_build"][0]["discovery"] == "partial", incomplete
         assert incomplete["go_build"][0]["packages"] == [
             {"import_path": "example/partial", "test_cache": "not-started"},
         ], incomplete
+        assert cached_span["go_build"][0]["mode"] == "cached-shards", cached_span
+        assert "discovery" not in cached_span["go_build"][0], cached_span
+        assert cached_span["go_build"][0]["packages"] == [
+            {"import_path": "example/hit", "test_cache": "hit"},
+            {"import_path": "example/miss", "test_cache": "miss"},
+            {"import_path": "example/lib", "test_cache": "not-applicable"},
+        ], cached_span
+        assert fallback_span["go_build"][0]["mode"] == "cached-shards", fallback_span
+        assert fallback_span["go_build"][0]["packages"] == [
+            {"import_path": "example/fallback", "test_cache": "hit"},
+        ], fallback_span
+
+
+def test_cached_shards_go_tool_command_hits_go_test_cache():
+    if shutil.which("go") is None:
+        return
+    gate = load_tool("fork_check_cached_shards_e2e")
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        mod_dir = root / "tools" / "tillr-store"
+        mod_dir.mkdir(parents=True)
+        (mod_dir / "go.mod").write_text("module example.com/fixture\n\ngo 1.23\n")
+        (mod_dir / "lib.go").write_text("package fixture\nfunc One() int { return 1 }\n")
+        (mod_dir / "lib_test.go").write_text(
+            'package fixture\nimport "testing"\nfunc TestOne(t *testing.T) { if One() != 1 { t.Fatal(1) } }\n'
+        )
+        (root / "tools" / "gate").mkdir(parents=True)
+        shutil.copy2(ROOT / "tools" / "go-test-shards.py", root / "tools" / "go-test-shards.py")
+        shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", root / "tools" / "gate" / "go_affected.py")
+        (root / "tools" / "go-test-durations.json").write_text("{}\n")
+        durable = root / "durable"
+        gocache = root / "gocache"
+        env = {**os.environ, "YOLO_DURABLE_DIR": str(durable), "GOCACHE": str(gocache), "TILLR_RUN_ID": ""}
+        cmd = gate.go_tool_command("tools/tillr-store")
+        first = gate.Check("gate-runner", "tools/tillr-store's whole suite passes",
+                           ["sh", "-c", cmd], "watch", 300, go_module="tools/tillr-store")
+        rc1, out1, _ = gate.run_landing_go_check(root, first, env, (), None)
+        assert rc1 == 0, out1
+        assert first.go_build[0]["mode"] == "cached-shards", first.go_build
+        assert first.go_build[0]["packages"] == [
+            {"import_path": "example.com/fixture", "test_cache": "miss"},
+        ], first.go_build
+
+        second = gate.Check("gate-runner", "tools/tillr-store's whole suite passes",
+                            ["sh", "-c", cmd], "watch", 300, go_module="tools/tillr-store")
+        rc2, out2, _ = gate.run_landing_go_check(root, second, env, (), None)
+        assert rc2 == 0, out2
+        assert second.go_build[0]["mode"] == "cached-shards", second.go_build
+        assert second.go_build[0]["packages"] == [
+            {"import_path": "example.com/fixture", "test_cache": "hit"},
+        ], second.go_build
 
 
 def test_landing_measurements_require_change_gate_handoff():
@@ -446,6 +520,7 @@ def test_base_replay_queues_behind_trunk_proof():
 
 if _RUN_PREAMBLE_TESTS:
     test_landing_go_measurements()
+    test_cached_shards_go_tool_command_hits_go_test_cache()
     test_landing_measurements_require_change_gate_handoff()
     test_gate_runner_uses_gate_slot_class_in_landing_and_proof_in_rolling()
     test_base_replay_queues_behind_trunk_proof()
@@ -924,6 +999,7 @@ def build_stubs(base: Path):
     python = stubs / "python3"
     python.write_text(
         '#!/bin/sh\nif [ "$1" = "tools/go-test-shards.py" ]; then\n'
+        '  if [ "$2" = "--edge-digest" ]; then exit 0; fi\n'
         '  exec go test -count=1 ./...\nfi\n'
         f'exec {shlex.quote(sys.executable)} "$@"\n'
     )
@@ -3790,20 +3866,34 @@ with tempfile.TemporaryDirectory() as tmp:
     assert set(module.GO_LANDING_SUITE_DIRS) <= set(tool_dirs), module.GO_LANDING_SUITE_DIRS
     assert set(module.GO_TOOL_COST_ESTIMATE) == set(tool_dirs), module.GO_TOOL_COST_ESTIMATE
     assert all(cost > 0 for cost in module.GO_TOOL_COST_ESTIMATE.values())
+    assert module.GO_TOOL_PARALLEL == 1, module.GO_TOOL_PARALLEL
+    assert {"tools/gate/go-test-edges.json", "tools/gate/go_affected.py"} <= set(module.GO_SHARD_INPUTS)
     assert "tools/tillr-drain" in module.GO_SHARD_DIRS
     for directory in module.GO_SHARD_DIRS:
         command = module.go_tool_command(directory)
         assert ("tools/go-test-shards.py" in command and "-k 6" in command
-                and "--slot-class proof" in command), command
-        assert set(module.GO_SHARD_INPUTS) <= set(module.go_tool_watches(directory, repo))
+                and "--cache" in command and "--slot-class proof" in command), command
+        watches = module.go_tool_watches(directory, repo)
+        assert set(module.GO_SHARD_INPUTS) <= set(watches)
+        assert len(watches) == len(set(watches)), watches
     for directory in set(tool_dirs) - set(module.GO_SHARD_DIRS):
         command = module.go_tool_command(directory)
-        assert "go test -parallel" in command and "-count=1" not in command, command
+        assert ("GOFLAGS=-trimpath" in command
+                and " go test -parallel 1 -timeout 0 ./..." in command
+                and "-count=1" not in command), command
+        if directory == "tools/tillr-watch":
+            assert "--edge-digest github.com/mschulkind-oss/tillr-watch" in command, command
+            assert "TILLR_GATE_EDGE_INPUTS=" in command, command
+            watches = module.go_tool_watches(directory, repo)
+            assert {"tools/gate/go-test-edges.json", "tools/go-test-shards.py"} <= set(watches), watches
+            assert len(watches) == len(set(watches)), watches
     shard_planned = module.build_plan(
         repo, [], module.Record(base / "shard-plan-state.json"),
         ["tools/go-test-shards.py"], None, True)
     shard_suites = {check.label for check in shard_planned.checks if check.kind in GO_KINDS}
-    assert shard_suites == {f"{directory}'s whole suite passes" for directory in module.GO_SHARD_DIRS}, shard_suites
+    assert shard_suites == {
+        f"{directory}'s whole suite passes" for directory in (*module.GO_SHARD_DIRS, "tools/tillr-watch")
+    }, shard_suites
     gate_suite = next(check for check in shard_planned.checks if check.kind == 'gate-runner')
     assert '&& cd ../..' not in gate_suite.argv[-1], gate_suite.argv
     assert '--slot-class gate' in gate_suite.argv[-1], gate_suite.argv
