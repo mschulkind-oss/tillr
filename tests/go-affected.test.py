@@ -920,17 +920,92 @@ def test_fork_check_integration(root_graph: dict) -> None:
                 assert "--drop-module" not in ga.argv, (changed_path, via_build_plan, ga.argv)
                 assert not any(c.kind == "go-substrate" for c in tiered_plan.checks), tiered_plan.checks
 
-        # Changing go_affected.py, go-test-edges.json, or tests/go-affected.test.py plans go-affected-suite.
-        for trigger in (
+        # Changing go_affected.py, go-test-edges.json, tests/go-affected.test.py, or a _test.go file
+        # inside a tillr Go module described by go-test-edges.json plans go-affected-suite.
+        edges_keys = set(json.loads((ROOT / "tools" / "gate" / "go-test-edges.json").read_text(encoding="utf-8")))
+        all_tillr_mods = ["tools/tillr"] + [
+            f"tools/{p.parent.name}" for p in sorted((ROOT / "tools").glob("tillr-*/go.mod"))
+        ]
+        described_mods: list[str] = []
+        undescribed_mods: list[str] = []
+        for mod in all_tillr_mods:
+            mod_import = f"github.com/mschulkind-oss/{Path(mod).name}"
+            if any(k == mod_import or k.startswith(mod_import + "/") for k in edges_keys):
+                described_mods.append(mod)
+            else:
+                undescribed_mods.append(mod)
+        assert "tools/tillr-drain" in described_mods, described_mods
+
+        positive_triggers = [
             "tools/gate/go_affected.py",
             "tools/gate/go-test-edges.json",
             "tests/go-affected.test.py",
+            "tools/tillr-drain/drain/gate_timing_test.go",
+            "tools/tillr-drain/workflow/workflow_test.go",
+            *(f"{mod}/synthetic_edge_trigger_test.go" for mod in described_mods),
+        ]
+        for trigger in positive_triggers:
+            for base_ref in (None, "HEAD"):
+                suite_plan = fork_check.build_plan(
+                    ROOT, [], fork_check.Record(state), [trigger], None, True,
+                    base=base_ref, tier=fork_check.TIER_LANDING,
+                )
+                suite_checks = [c for c in suite_plan.checks if c.kind == "go-affected-suite"]
+                assert len(suite_checks) == 1, (trigger, base_ref, [c.kind for c in suite_plan.checks])
+                assert fork_check.selection_paths(
+                    suite_checks[0], [trigger, "tools/tillr-drain/drain/loop.go"]
+                ) == [trigger], (trigger, base_ref, suite_checks[0])
+
+        negative_triggers = [
+            "tools/tillr-drain/drain/loop.go",
+            "tools/tillr-drain/go.mod",
+            "tools/dotmod/main_test.go",
+            "tests/tillr-testmain_test.go",
+            "yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/gate_timing_test.go",
+            "README.md",
+            *(f"{mod}/synthetic_non_edge_test.go" for mod in undescribed_mods),
+        ]
+        for non_trigger in negative_triggers:
+            for tier_val, base_ref in ((None, None), (fork_check.TIER_LANDING, None), (fork_check.TIER_LANDING, "HEAD")):
+                suite_plan = fork_check.build_plan(
+                    ROOT, [], fork_check.Record(state), [non_trigger], None, True,
+                    base=base_ref, tier=tier_val,
+                )
+                assert not any(c.kind == "go-affected-suite" for c in suite_plan.checks), (
+                    non_trigger, tier_val, base_ref, [c.kind for c in suite_plan.checks]
+                )
+                assert any(
+                    s.label.startswith("go-affected-suite") and not s.planned for s in suite_plan.skips
+                ), (non_trigger, tier_val, base_ref, suite_plan.skips)
+
+        # Controlled synthetic fixture: go-test-edges.json describes tillr-watch/sub (covering the
+        # whole tillr-watch module) and does not describe tillr-cli.
+        edge_fixture = Path(tmp) / "edge-suite-repo"
+        (edge_fixture / "tools" / "tillr-watch").mkdir(parents=True)
+        (edge_fixture / "tools" / "tillr-cli").mkdir(parents=True)
+        (edge_fixture / "tools" / "gate").mkdir(parents=True)
+        (edge_fixture / "tools" / "tillr-watch" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-watch\n\ngo 1.22\n"
+        )
+        (edge_fixture / "tools" / "tillr-cli" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-cli\n\ngo 1.22\n"
+        )
+        (edge_fixture / "tools" / "gate" / "go-test-edges.json").write_text(
+            json.dumps({"github.com/mschulkind-oss/tillr-watch/sub": {"reads": ["README.md"]}}) + "\n"
+        )
+        for path, should_plan in (
+            ("tools/tillr-watch/main_test.go", True),
+            ("tools/tillr-watch/other/pkg_test.go", True),
+            ("tools/tillr-watch/main.go", False),
+            ("tools/tillr-cli/main_test.go", False),
         ):
-            suite_plan = fork_check.build_plan(
-                ROOT, [], fork_check.Record(state), [trigger], None, True,
-                tier=fork_check.TIER_LANDING,
+            fix_plan = fork_check.build_plan(
+                edge_fixture, [], fork_check.Record(state), [path], None, True,
+                base="HEAD", tier=fork_check.TIER_LANDING,
             )
-            assert any(c.kind == "go-affected-suite" for c in suite_plan.checks), trigger
+            assert any(c.kind == "go-affected-suite" for c in fix_plan.checks) is should_plan, (
+                path, should_plan, [c.kind for c in fix_plan.checks]
+            )
 
         # run_gate(--explain) with tier=None skips go-affected, whereas --tier landing plans it.
         repo = Path(tmp) / "explain-repo"
@@ -1013,12 +1088,21 @@ def test_fork_check_integration(root_graph: dict) -> None:
         assert rc == 0, out
         assert "go-affected: 1 package(s)" in out, out
 
-    # registry-json exports go-affected cleanly.
+    # registry-json exports go-affected and go-affected-suite cleanly, with _test.go selection parity.
     assert p_reg.returncode == 0, reg_err
     reg = json.loads(reg_out)
     assert any(d["id"] == "go-affected/affected-tillr-go-test-packages-pass" for d in reg["declarations"]), (
         [d["id"] for d in reg["declarations"]]
     )
+    suite_decl = next(d for d in reg["declarations"] if d["kind"] == "go-affected-suite")
+    assert any(fork_check.pattern_selects(p, "tools/tillr-drain/drain/gate_timing_test.go", ROOT)
+               for p in suite_decl["selects"]), suite_decl["selects"]
+    assert any(fork_check.pattern_selects(p, "tools/gate/go-test-edges.json", ROOT)
+               for p in suite_decl["selects"]), suite_decl["selects"]
+    assert not any(fork_check.pattern_selects(p, "tools/tillr-drain/drain/loop.go", ROOT)
+                   for p in suite_decl["selects"]), suite_decl["selects"]
+    assert not any(fork_check.pattern_selects(p, "tools/dotmod/main_test.go", ROOT)
+                   for p in suite_decl["selects"]), suite_decl["selects"]
 
     # run_replay matches go-affected/affected-tillr-go-test-packages-pass when a tillr Go file changed.
     replay_plan = fork_check.build_plan(
