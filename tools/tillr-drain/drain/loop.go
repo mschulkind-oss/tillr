@@ -4392,7 +4392,18 @@ func (l *Loop) git(ctx context.Context, dir string, args ...string) (string, err
 				return "", err
 			}
 		}
-		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+		var cmd *exec.Cmd
+		if isGitUpdateRef(args) {
+			// A ref write holds a .lock file that SIGKILL from exec.CommandContext
+			// would leave stale on disk for the next loop. Refuse to start once ctx
+			// is canceled, and let an already-started update-ref finish cleanly.
+			if err := ctx.Err(); err != nil {
+				return "", Externalf("git %s in %s: %v", strings.Join(args, " "), dir, err)
+			}
+			cmd = exec.Command("git", append([]string{"-C", dir}, args...)...)
+		} else {
+			cmd = exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+		}
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
@@ -4401,6 +4412,21 @@ func (l *Loop) git(ctx context.Context, dir string, args ...string) (string, err
 		}
 		return string(out), nil
 	})
+}
+
+func isGitUpdateRef(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-c" || arg == "-C" || arg == "--git-dir" || arg == "--work-tree" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return arg == "update-ref"
+	}
+	return false
 }
 
 // countPtr answers a pointer to a copy of n, for Pass's pointer fields.
