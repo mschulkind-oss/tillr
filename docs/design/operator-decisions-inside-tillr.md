@@ -17,7 +17,7 @@ vantage:
 
 # What the operator settled without the owner is settled inside tillr
 
-**Status:** 2026-11-21. Nothing in this document is built. The measurements in [§2](#2-the-day-measured) were read from the store's events on 2026-11-21 at 10:58 PM ET, with the trunk at `f4bf1c3054`. The owner's statement quoted in [§1](#1-the-ruling) is the only ruling written here; every other decision is the designer's and is marked so in the [Decision Ledger](#decision-ledger).
+**Status:** Nothing in this document is built. The measurements in [§2](#2-the-day-measured) were read from the store's events on 2026-11-21 at 10:58 PM ET. The owner's statement quoted in [§1](#1-the-ruling) is the only ruling written here; every other decision is the designer's and is marked so in the [Decision Ledger](#decision-ledger).
 
 > **In short.** Every decision the operator took by hand on 2026-11-21 has one of three natural takers inside tillr: the drain, when a recorded fact decides it; the design seat, when an item's words or shape must be judged; and a filed defect item, when tillr itself is wrong. The operator keeps none of them, and the owner keeps only what changes what he asked for.
 
@@ -37,7 +37,6 @@ vantage:
 
 **Words.** [The vocabulary](./tillr-vocabulary.md#5-the-words) defines item, criterion, candidate, lane, seat and verdict. [The unattended-drain design](./unattended-drain.md#2-terms) defines drain, hold, mover, fixer and operator. These are used here:
 
-- **The whale**: the owner's name for the operator, the foreground agent session that watches the drain and acts for him.
 - **Hand action** *(coined here)*: a change to the store or the working tree that the operator makes with a command, as opposed to one a tillr program makes while it runs.
 - **Obstacle**: one of the five named reasons a worker may end without a commit: `definition`, `trunk`, `tooling`, `seat` and `owner` ([the drain's reference](../../tools/tillr-drain/README.md#a-worker-ends-with-its-commit-or-a-named-obstacle)).
 - **Fault**: a recorded failure of tillr's own machinery that holds one item ([the drain's reference](../../tools/tillr-drain/README.md#faults-that-hold-one-item)).
@@ -50,7 +49,7 @@ vantage:
 
 The owner said on 2026-11-21, verbatim:
 
-> "I guess a working principle should be that if you ever feel that you as the whale could solve some problem, and it wouldn't need to be escalated to me, then that problem should escalate to... a similarly responsible agent, process, ticket, whatever, within Tiller, rather than popping up to you."
+> "I guess a working principle should be that if you ever feel that you as [the operator] could solve some problem, and it wouldn't need to be escalated to me, then that problem should escalate to... a similarly responsible agent, process, ticket, whatever, within Tiller, rather than popping up to you."
 
 What I take as ruled, because the words state it:
 
