@@ -2,9 +2,12 @@
 
 A **definition** is the data that turns tillr's core into one use: its item states,
 allowed state moves, dispatch conditions, completion rule, and optional hook program.
-The term and the name **git-landing** are placeholders coined in
-[the direction document](../../../docs/design/tillr-core-and-git-landing.md#the-words-this-document-uses);
-the owner has not chosen the final names.
+The owner's word for this layer is **charter**
+([OQ-VO4](../../../docs/design/tillr-vocabulary.md#OQ-VO4)), and the first one is
+**git-landing** ([OQ-VO5](../../../docs/design/tillr-vocabulary.md#OQ-VO5)); the code and
+its flags say "definition", as
+[the direction document](../../../docs/design/tillr-core-and-git-landing.md#the-words-this-document-uses)
+does.
 
 This package reads and validates that data and answers an open store's declaration.
 The store utility records and reports it. Item state, apply, close, reopen, and
@@ -20,7 +23,7 @@ uses the same reader. Both return a validated `Definition` or an error, never a
 partial definition. `Definition.Validate()` checks an already constructed value;
 it does not apply defaults. `GitLanding()` reads the embedded
 [landing.json](./landing.json) afresh, so mutating one result cannot change later reads.
-The sole Go spelling of the placeholder name is `GitLandingName`.
+The sole Go spelling of that name is `GitLandingName`.
 
 The reader rejects unknown keys, including keys inside transitions and hooks;
 key spelling is case-sensitive, and duplicate object keys are refused rather than

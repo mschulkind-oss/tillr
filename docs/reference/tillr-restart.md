@@ -405,12 +405,11 @@ When `[roll] command` is non-empty, `afterLandingCandidate` checks the candidate
    raise the `store-roll-blocked` alarm.
 2. **Pi fork roll (`piRollAction`):** When `candidate.BaseRef` is
    `refs/heads/patch/pi` (`piForkPatchRef`) or a trunk landing touches
-   `yolo-packs/pi-fork/` or `bin/pi-forks.list` (`piSeriesPaths`),
+   the pi series' inputs (`piSeriesPaths`),
    `submitPiRoll` runs `sh -c "<roll.command> --pi"`.
 3. **Pi extension roll (`extRollAction`):** When `candidate.BaseRef` is a
    non-`pi` `refs/heads/patch/<fork>` branch (`isExtensionPatchBranch`) or a
-   trunk landing touches extension inputs under `yolo-packs/matt/` or
-   `bin/pi-forks.list` (`matchesExtensionRollPaths` in
+   trunk landing touches extension inputs (`matchesExtensionRollPaths` in
    [`extension_roll.go`](../../tools/tillr-drain/drain/extension_roll.go)),
    `submitExtensionRoll` runs `sh -c "<roll.command> --pi-extensions"`.
 

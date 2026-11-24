@@ -33,7 +33,7 @@ vantage:
 - **Self-licking queue noise:** Explorer agents refilling the queue endlessly with trivial flag permutations or touching a live repository while `tillr-drain` holds `TakeBoundary`.
 - **False-positive flooding:** Treating *"an agent said it found a bug"* as a bug, filing duplicate crashes from concurrent lanes, or burning expensive build lanes on hallucinated expectations.
 
-**The shape.** A standalone `autoqa` CLI and optional pack (`yolo-packs/autoqa`) with zero reverse dependencies from `tools/tillr*`; dual-store isolation (AutoQA's private `tillr` store + `autoqa.db` dedup/precision ledger vs the SUT's untouched work board); a two-workflow funnel (`qa-probe@v1` for cheap fan-out + mechanical replay, promoting unique hits into `qa-confirm@v1` for minimization + triage by the W2 `evaluator_slot` judge); surface-saturation refill hysteresis; and a closed-loop precision circuit breaker.
+**The shape.** A standalone `autoqa` CLI and optional pack (`yolo-packs/autoqa`) with zero reverse dependencies from `tools/tillr*`; dual-store isolation (AutoQA's private `tillr` store + `autoqa.db` dedup/precision ledger vs the SUT's untouched `tillr` store); a two-workflow funnel (`qa-probe@v1` for cheap fan-out + mechanical replay, promoting unique hits into `qa-confirm@v1` for minimization + triage by the W2 `evaluator_slot` judge); surface-saturation refill hysteresis; and a closed-loop precision circuit breaker.
 
 **Cost.** A second tillr store and a second tool to keep working, and the cleanup of what AutoQA left inside tillr ([§5](#5-disposition-of-existing-autoqa-artifacts)). It adds no state, no graph primitive and no judge rule to tillr itself.
 
@@ -86,7 +86,7 @@ AutoQA obeys a strict one-way dependency rule (`D-AQ1`): **AutoQA knows how to i
 ```text
 yolo-packs/autoqa/                 (optional pack — never bundled into yolo-packs/tillr)
   pack.json                        (declares program `autoqa` + skill `autoqa-operating`)
-  programs/autoqa/run              (digest-cached Go source launcher, same pattern as mq/tillr)
+  programs/autoqa/run              (digest-cached Go source launcher, same pattern as tillr)   
 tools/autoqa/                      (own go.mod — ZERO `replace` links into ../tillr*)
   cmd/autoqa/                      (faces: init, seed, campaign, refill, dedup, export, status)
   workflows/                       (qa-probe@v1.json, qa-confirm@v1.json)
@@ -95,7 +95,7 @@ tools/autoqa/                      (own go.mod — ZERO `replace` links into ../
 ```
 
 - **Lives by itself ([OQ-AQ1](#decision-ledger)):** `tools/autoqa/go.mod` has no `replace` edge into `tools/tillr*`. Every interaction with `tillr` crosses documented CLI faces (`tillr-store`, `tillr-item`, `tillr-drain`, `tillr-run`, `tillr-view`) and versioned JSON envelopes. Extracting `tools/autoqa/` + `yolo-packs/autoqa/` into a standalone git repository at any point is a zero-code-change `git subtree split`.
-- **Gated by itself:** When incubating in this repository, [tools/fork-check.py](../../tools/fork-check.py) plans `Check("autoqa", ...)` watching only `tools/autoqa/**` and `yolo-packs/autoqa/**`, while `PACK_SYNC_WATCHES` and `TILLR_DOCS_WATCHES` ignore both directories. Inside `tools/autoqa/`, `tillr-gate plan` + `tillr-gate run` over `tools/autoqa/registry.json` gates AutoQA's own changes (`go test ./...`, workflow validation, and `yolo pack lint yolo-packs/autoqa`) with no store required (`tillr-gate` stays store-free).
+- **Gated by itself:** When incubating in this repository, the repository gate plans one `autoqa` check watching only `tools/autoqa/**` and `yolo-packs/autoqa/**`, while the pack-sync and tillr-docs checks ignore both directories. Inside `tools/autoqa/`, `tillr-gate plan` + `tillr-gate run` over `tools/autoqa/registry.json` gates AutoQA's own changes (`go test ./...`, workflow validation, and `yolo pack lint yolo-packs/autoqa`) with no store required (`tillr-gate` stays store-free).
 - **No core changes:** AutoQA adds **zero** item states, DAG node kinds, or judge exceptions to `tillr`.
 
 ### 2.2 Two Stores and Sandboxed SUT Snapshots
@@ -276,7 +276,7 @@ now governs the judge in both stores.
 
 Three tracked documents owed updates. Read on 2026-11-18:
 
-2. **[tillr-distribution.md](./tillr-distribution.md):** partly made. [OQ-TD2](./tillr-distribution.md#open-questions) is marked settled as superseded by `D-AQ1` and `D-AQ7`, and is not yet compacted into that document's ledger.
+2. **[tillr-distribution.md](./tillr-distribution.md):** partly made. [OQ-TD2](./tillr-distribution.md#open-questions) is marked settled by `D-AQ1` and `D-AQ7`, and is not yet compacted into that document's ledger.
 3. **The eight `tools/tillr-*/README.md` banners:** owed. Known Gap #1 is removed under one shared stamp, with the pack copy regenerated, as part of Slice 1 ([§5.2](#52-dogfood-rollout-against-tillr)).
 
 ## Queue item

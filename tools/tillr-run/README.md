@@ -184,9 +184,9 @@ falling back to the previous verified build in `current.json` and then to `pi` o
 Nothing is placed on shared `PATH`, so foreground `pi` sessions stay on the installed
 binary until a host apply and relaunch.
 
-When a landing on trunk touches `yolo-packs/pi-fork/` or `bin/pi-forks.list` (or lands on
+When a landing on trunk touches the pi series' inputs (or lands on
 `refs/heads/patch/pi`), the drain invokes its `[roll]` command with `--pi` (`tillr-roll --pi`,
-which runs `bin/pi-forks build-pi`). Runs already in flight finish on the `pi` they
+which rebuilds `pi`). Runs already in flight finish on the `pi` they
 started with, later runs pick up the new verified build, and a failed build discards its
 staging directory without removing any working build or `current.json`, recording a
 post-landing `roll` (`pi`) failure without stopping the loop.

@@ -33,13 +33,13 @@ tools/tillr-loop/tillr-loop self-check \
 ## Revision checks and the fixer gate
 
 `fixer-gate` takes the candidate flags and `--only <check>`. After the ordinary gate
-accepts a trunk fixer's diff, the drain calls this face for each named legacy check.
+accepts a trunk fixer's diff, the drain calls this face for each named check.
 It verifies that the candidate head is checked out and runs the named replay there,
 without auditing upstreams or using a range since the last proved commit. An omitted
 upstream reader returns exit 77 with a reason, distinct from pass or failure.
 
-`replay` runs `python3 tools/fork-check.py --replay --only <check>`; `rolling` runs
-`python3 tools/fork-check.py --tier rolling` with either `--all` or `--since <sha>`.
+`replay` runs the gate program's replay of the named check; `rolling` runs its rolling
+tier with either `--all` or `--since <sha>`.
 These are the programs the drain defaults to in flag mode. Both hooks retain the
 caller's working directory and environment, including `PI_FORKS_ROOT` and
 `TILLR_GATE_SPANS_OUT`, and return the check program's exit status without translating
@@ -133,7 +133,7 @@ That mode is separate from `self-check`, which composes and displays real invoca
 
 | Face | Real invocation | What it derives |
 |---|---|---|
-| `gate` | `tillr-gate change --item I --lane L --run U --worktree W --base B --head H --now T --output <run>/gate.change.json`, then `sh -c <registry export> > <run>/registry.json` when no registry is named, then `tillr-gate plan --registry R --input gate.change.json --output gate.plan.json --root <worktree>`, then `PI_FORKS_ROOT=<root> tillr-gate run --input gate.plan.json --worktree <worktree> --output gate.verdict.json --logs <run>/logs --gate python3 --gate-arg tools/gate/change-gate.py --gate-arg --base --gate-arg <base> --gate-arg --head --gate-arg <head> --gate-arg --runner --gate-arg tillr-gate --gate-arg --logs --gate-arg <run>/change-logs` (`--gate-program P` replaces the program's words) | the candidate's argv for `tillr-gate change`, which derives the `gate.change` record itself: base, `head^{tree}` and `git diff --name-only base...head`, all read in the candidate worktree. Which checks the change owes stays `plan`'s decision. The export runs `python3 tools/fork-check.py --registry-json` with the root as its working directory, so its path is relative for the same reason the gate program's is. |
+| `gate` | `tillr-gate change --item I --lane L --run U --worktree W --base B --head H --now T --output <run>/gate.change.json`, then `sh -c <registry export> > <run>/registry.json` when no registry is named, then `tillr-gate plan --registry R --input gate.change.json --output gate.plan.json --root <worktree>`, then `PI_FORKS_ROOT=<root> tillr-gate run --input gate.plan.json --worktree <worktree> --output gate.verdict.json --logs <run>/logs --gate python3 --gate-arg tools/gate/change-gate.py --gate-arg --base --gate-arg <base> --gate-arg --head --gate-arg <head> --gate-arg --runner --gate-arg tillr-gate --gate-arg --logs --gate-arg <run>/change-logs` (`--gate-program P` replaces the program's words) | the candidate's argv for `tillr-gate change`, which derives the `gate.change` record itself: base, `head^{tree}` and `git diff --name-only base...head`, all read in the candidate worktree. Which checks the change owes stays `plan`'s decision. The export runs with the root as its working directory, so its path is relative for the same reason the gate program's is. |
 | `land` | `tillr-land pass --store S --repo R --item I --run U --base B --head H --verdict <run>/gate.verdict.json --base-ref <branch> --now T --run-dir <run> [--message-from M] [--observed-trunk O]` | `--observed-trunk` is the loop's last observed trunk tip, passed through unchanged: the lander refuses with `trunk-rewritten` under the land lock if the trunk no longer contains it, and records it. `--repo` = root, `--store` = `<root>/.tillr/state.db`, `--base-ref` = the branch the root is checked out on. There is no queue record and no derived candidate id: the gate's verdict is the only input, and the candidate's own four fields name the landing. |
 | `verdict` | `tillr-item show --store S --item <id> --root R` to read the frozen criteria, then one `tillr-item verdict record --store S --input <record> --now T` per criterion | one `item.verdict` per criterion: the store's frozen text hashed, `done` on `--verdict pass` after a landing, `actor_kind: mechanical`, and the gate verdict, run and head as its evidence |
 
@@ -179,7 +179,7 @@ not a verdict about the candidate.
 | `gate` | `tillr-gate run`: 0 pass, 1 fail, 6 stalled, 2/3/4/5 no verdict | 0, 1, 4, or 6 | 0 → `pass`; 1 → `fail`; 6 → `stalled` (retained as `gate-stall-rerun`, or second stall `gate-stalled`); 4 → `error`, retained as `gate-no-verdict` and gated again on the next pass |
 | `land` | `tillr-land pass`: 0 landed, 1 not landed, 2/3/4/5 no attempt | 0, 1, or 4 | 0 → `landed`; 1 → `refused` (isolated/declined candidate, a completed negative answer); 4 → step failure, halt |
 | `verdict` | `tillr-item verdict record`: 0 recorded, non-zero refused | 0, or the refused code | 0 → recorded; non-zero → step failure, halt (a landed candidate whose item was not retired is landed work the board cannot see) |
-| item state | `tillr-item state`: 0 moved or already there, 1 refused, 2/3/5 no answer | the code itself | 0 → the board moved; non-zero → step failure, halt (a landed candidate whose item is still queued is the board disagreeing with the trunk) |
+| item state | `tillr-item state`: 0 moved or already there, 1 refused, 2/3/5 no answer | the code itself | 0 → the item moved; non-zero → step failure, halt (a landed candidate whose item is still queued is the store disagreeing with the trunk) |
 
 The gate's `plan` step is a preparation, not a judgment: a failure there means no verdict
 exists, so it also leaves as 4. The land face has no preparation at all -- the gate's verdict
@@ -195,7 +195,7 @@ becomes `true`.
 - **No root** — no `--root` and a working directory that is not a checkout.
 - **A registry that cannot be exported** (gate) — a gate with no registry would pass
   everything, so with none named (`--registry`, else `$TILLR_LOOP_REGISTRY`) the adapter
-  exports one from the tree's own `tools/fork-check.py`. A tree where that cannot run is exit
+  exports one from the tree's own gate program. A tree where that cannot run is exit
   4: no verdict, never a pass, and the drain gates the same candidate again.
 - **No gate verdict** (land) — a landing against no verdict record.
 - **Detached root** (land) — no branch to land onto, and `--base-ref` was not named.

@@ -171,8 +171,7 @@ retains paths matching `insideFence`:
 - **Ordinary lane worktrees:** An ordinary worktree shares its resolved
   `--git-common-dir` with the loop's root (`sharesRepository` is `true`), so
   `fencePrefix` is empty and paths from Git are already repository-relative.
-- **Fork checkouts:** A fork lane checkout sits under the repository root (for
-  example under `.forks/lanes/<lane>/<fork>/`) with its own separate Git
+- **Fork checkouts:** A fork lane checkout sits under the repository root with its own separate Git
   repository (`sharesRepository` is `false`). `fencePrefix` returns that
   checkout's slash-normalized relative prefix so `insideFence` compares against
   the repository-relative fence prefix staging wrote. If either repository's

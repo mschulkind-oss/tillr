@@ -20,8 +20,8 @@
 `tillr-item` writes and reads work items, and the three ledgers that attach to them:
 decisions, mail deliveries, and criterion verdicts. `sync` materializes the item
 blocks of the repository's tracked documents — the only intake from documents.
-The retired `seed` command refuses with a pointer to `tillr item sync`. A fence entry
-under `.forks/lanes/<lane>/<fork>/` names a checkout staging materializes for the
+The `seed` command refuses with a pointer to `tillr item sync`. A fence entry
+that names a lane's fork checkout names a checkout staging materializes for the
 assigned lane, so `sync` does not warn that it is missing even on a fresh repository.
 Other absent paths still receive the ordinary `path-missing` warning.
 
@@ -112,7 +112,7 @@ Configure the repository's `.tillr.toml` before saving:
 ```toml
 [intake]
 dir = "docs/ideas"
-paths = ["docs/design/", "docs/tillr/roadmap.md", "docs/pi/roadmap.md", "docs/roadmap.md"]
+paths = ["docs/design/", "docs/tillr/roadmap.md", "docs/roadmap.md"]
 ```
 
 The command preserves valid UTF-8 words of 1 byte through 256 KiB, not only
@@ -435,7 +435,7 @@ The following rules describe Git-landing, including its established refusal name
   for documents outside the selected set. `--dry-run` works with either scope.
 
   ```bash
-  tillr item sync --store .tillr/state.db --root . --roadmap docs/tillr/roadmap.md --roadmap docs/pi/roadmap.md
+  tillr item sync --store .tillr/state.db --root . --roadmap docs/tillr/roadmap.md --roadmap docs/roadmap.md
   ```
 
 - **Read faces show places, not stored keys.** A [place](../../docs/reference/observatory-actions.md#queue-order-and-places)

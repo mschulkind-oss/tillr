@@ -143,7 +143,7 @@ Two things in that table are easy to get wrong:
 | **Harness build** | pi and its extensions are patched and built at launch. The event records a hash of the tillr build, `tillr_build`, and no binary | A replay runs today's build |
 | **Model version** | The id is recorded and the model behind it is the provider's. The coding runs on the shortlist used Sol 6.1. The work policy has since moved on: on 2026-11-18 it builds on Terra 6.1 and reviews on Sol 6.2. Sol 6.1 is still selectable | The original's model may stop being served |
 | **Memory and past sessions** | pi's memory notes and its session search are outside the repository | Left as they are, they hold the original run itself ([Section 3.5](#35-kept-from-seeing-the-original)) |
-| **Fork checkouts** | `.forks/` is ignored by Git, shared by every checkout and absent from a lane's worktree; the gate reads it | No commit pins it, so a task that touches a fork series cannot be replayed faithfully |
+| **Fork checkouts** | The fork checkout directory is ignored by Git, shared by every checkout and absent from a lane's worktree | No commit pins it, so a task that touches a fork series cannot be replayed faithfully |
 | **Store contents** | The events are append-only, so the queue at any moment could be rebuilt in principle; no tool does it | The eleven briefs read here take the item from the tree, so none needs the store |
 | **Worktree leftovers and caches** | Untracked files a lane's earlier run left, and the shared Go build and module caches, are not recorded | They change wall time, and could change a result that depends on a stray file |
 | **Network** | `uvx` fetches its tool at run time, and a run may search the web | The checker's version, and anything public, can differ |
