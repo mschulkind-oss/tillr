@@ -28,8 +28,8 @@ func (l *Loop) planStillActive(p plannedApplication) bool {
 	d := p.decision
 	// A parallel group can replace its primary run before its shared boundary
 	// closes. Its item remains active even though the current pending ID changed.
-	return l.activeItems[d.ItemID] != "" || l.active[p.parentRunID] ||
-		((d.Action == ActionSettle || d.Action == ActionJudge) && l.active[d.RunRequest.RunID])
+	return l.activeItems[d.ItemID] != "" || l.examiningItems[d.ItemID] > 0 || l.active[p.parentRunID] || l.examiningRuns[p.parentRunID] ||
+		((d.Action == ActionSettle || d.Action == ActionJudge) && d.RunRequest != nil && (l.active[d.RunRequest.RunID] || l.examiningRuns[d.RunRequest.RunID]))
 }
 
 // The pass may stop consuming notifications before shutdown joins examinations.

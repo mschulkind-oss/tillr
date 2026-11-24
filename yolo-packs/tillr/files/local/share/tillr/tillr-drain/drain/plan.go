@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
@@ -271,7 +272,13 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 	return planDefinition(r, tick, policy, questions, d.Parsed)
 }
 
+// planDefinitionCalls is an optional test hook counting planDefinition invocations.
+var planDefinitionCalls atomic.Pointer[atomic.Int64]
+
 func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, def definition.Definition) ([]record.Envelope, error) {
+	if counter := planDefinitionCalls.Load(); counter != nil {
+		counter.Add(1)
+	}
 	return planWithDetails(r, tick, policy, questions, def, nil)
 }
 

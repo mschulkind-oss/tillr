@@ -2,12 +2,25 @@ package drain
 
 import (
 	"context"
-	"encoding/json"
+	"database/sql"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
+
+type settlementClaim struct {
+	decision   Decision
+	work       *pendingWork
+	tickID     string
+	claimed    bool
+	lockStart  time.Time
+	lockEnd    time.Time
+	claimStart time.Time
+	claimEnd   time.Time
+}
 
 // examineWorkerEnd consumes the same terminal record the pass would settle,
 // after the worker boundary has closed. Keep the run active until the handoff
@@ -29,40 +42,21 @@ func (l *Loop) examineWorkerEnd(ctx context.Context, d Decision, watched []strin
 		completion.outcome.err = err
 		return
 	}
+	if d.RunRequest == nil {
+		return
+	}
 	at := l.cfg.Now().UTC()
-	planStart := time.Now()
-	p, err := l.planWorkerSettlement(ctx, d, at)
-	planEnd := time.Now()
-	if err != nil || p == nil {
+	claim, err := l.claimWorkerSettlement(ctx, d.ItemID, d.RunRequest.RunID, at)
+	if err != nil || !claim.claimed {
 		completion.outcome.err = err
 		return
 	}
-	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
-	lockStart := time.Now()
-	claimCtx, unlock, err := l.lockRestartMechanical(ctx)
-	lockEnd := time.Now()
-	if err != nil {
-		completion.outcome.err = err
-		return
-	}
-	claimStart := time.Now()
-	claimed, work, err := l.applyPlanTrunk(claimCtx, *p, new(string), at, &timing.TickID)
-	unlock()
-	claimEnd := time.Now()
-	if err != nil || !claimed {
-		completion.outcome.err = err
-		return
-	}
-	d = p.decision
-	req := *d.RunRequest
-	req.CorrelationID = timing.TickID
-	d.RunRequest = &req
+	timing := &PassTiming{TickID: claim.tickID, AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
 	preSpans := []handoffSpan{
-		newHandoffSpan("plan_worker_settlement", planStart, planEnd),
-		newHandoffSpan("restart_lock_wait", lockStart, lockEnd),
-		newHandoffSpan("claim_worker_settlement", claimStart, claimEnd),
+		newHandoffSpan("restart_lock_wait", claim.lockStart, claim.lockEnd),
+		newHandoffSpan("claim_worker_settlement", claim.claimStart, claim.claimEnd),
 	}
-	examined := l.examineClaimed(withPreHandoffSpans(ctx, handoffStart, preSpans), d, work, at, timing, watched)
+	examined := l.examineClaimed(withPreHandoffSpans(ctx, handoffStart, preSpans), claim.decision, claim.work, at, timing, watched)
 	timing.Applied = 1
 	timing.DecisionCounts = map[string]int{ActionSettle: 1}
 	timing.EndMS = l.cfg.Now().UnixMilli()
@@ -73,86 +67,276 @@ func (l *Loop) examineWorkerEnd(ctx context.Context, d Decision, watched []strin
 	*completion = examined
 }
 
-func (l *Loop) planWorkerSettlement(ctx context.Context, d Decision, at time.Time) (*plannedApplication, error) {
-	s, err := store.OpenRead(ctx, l.cfg.Store)
+// claimWorkerSettlement claims exclusive examination ownership of (itemID, runID)
+// by a direct per-item compare-and-set in one WriteTx, without calling planDefinition.
+// It applies uniformly to commit, no-commit, parallel, evaluator, and conflict-fix nodes.
+func (l *Loop) claimWorkerSettlement(ctx context.Context, itemID, runID string, at time.Time) (settlementClaim, error) {
+	var out settlementClaim
+	if itemID == "" || runID == "" {
+		return out, nil
+	}
+	if stopped, err := l.stopRequested(ctx); stopped || err != nil {
+		return out, err
+	}
+	out.lockStart = time.Now()
+	claimCtx, unlock, err := l.lockRestartMechanical(ctx)
+	out.lockEnd = time.Now()
 	if err != nil {
-		return nil, err
+		return out, err
+	}
+	s, err := store.Open(claimCtx, l.cfg.Store, true)
+	if err != nil {
+		unlock()
+		return out, err
 	}
 	defer s.Close()
-	var plan *plannedApplication
-	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		canFinish, err := l.workerMayFinishGraph(r, d)
-		if err != nil || !canFinish {
+
+	out.claimStart = time.Now()
+	err = s.WriteTx(claimCtx, func(tx *store.Tx) error {
+		r := tx.Reader()
+		works, byRun, err := readPendingHistory(r)
+		if err != nil {
 			return err
 		}
+		work := works[itemID]
+		if !isWorkSettleEligible(work, runID) {
+			return nil
+		}
+		d := work.Decision
 		available, err := availableRotationLanes(r, []string{d.LaneID})
 		if err != nil || len(available) == 0 {
 			return err
+		}
+		leases, err := activeLeases(r, at, []string{d.LaneID})
+		if err != nil || len(leases) > 0 {
+			return err
+		}
+		if len(work.resumes) != 0 {
+			for _, node := range parallelNodes(d) {
+				if node.RunRequest == nil {
+					continue
+				}
+				live, err := liveContinuation(r, work.resumes[node.RunRequest.RunID], node, at)
+				if err != nil {
+					return err
+				}
+				if live {
+					return nil
+				}
+			}
+		}
+		if paused, err := pausedPendingWork(r, work); err != nil || paused {
+			return err
+		}
+		var rec *run.Record
+		if len(d.Parallel) > 0 {
+			finished, err := parallelTerminal(r, d)
+			if err != nil || !finished {
+				return err
+			}
+		} else {
+			rec, err = terminalRecord(r, runID)
+			if err != nil || rec == nil || rec.State == run.StatePaused {
+				return err
+			}
+		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if _, faulted := faults[itemID]; faulted {
+			return nil
 		}
 		declared, err := definition.ForReader(r)
 		if err != nil {
 			return readFailure(err)
 		}
-		tick := Pass{
-			examineItem: d.ItemID, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available,
-			Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults,
-			GatesInFlight: l.gateCount(), Build: &l.build,
+		var itemState string
+		if err := r.QueryRow(`SELECT state FROM items WHERE item_id = ?`, itemID).Scan(&itemState); err != nil {
+			if err == sql.ErrNoRows {
+				return nil
+			}
+			return readFailure(err)
 		}
-		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
-			tick.BriefTemplate = &stager.Template
+		if itemState != declared.Parsed.Ready {
+			return nil
 		}
-		questions := l.concurrentQuestions(ctx)
-		envs, err := planDefinition(r, tick, l.currentPolicy(), questions, declared.Parsed)
+		if held, err := l.settlementHeldByBackendOrWait(r, d, rec, byRun, at); err != nil || held {
+			return err
+		}
+
+		d.From = "running"
+		d.To = "candidate"
+		d.Action = ActionSettle
+		d.Reason = ActionSettle
+		identifyDecision(&d)
+
+		gen, err := allocateGeneration(tx)
 		if err != nil {
 			return err
 		}
-		for _, env := range envs {
-			var next Decision
-			if err := json.Unmarshal(env.Payload, &next); err != nil {
-				return err
-			}
-			if next.Action != ActionSettle || next.WorkflowRelease || next.ItemID != d.ItemID || next.LaneID != d.LaneID || next.RunRequest == nil || next.RunRequest.RunID != d.RunRequest.RunID {
-				continue
-			}
-			folds, err := readVersionFolds(r)
-			if err != nil {
-				return err
-			}
-			work := folds.works[d.ItemID]
-			if work == nil || work.LaneReleased || work.Decision.LaneID != d.LaneID {
-				return nil
-			}
-			version, err := inputVersionFrom(r, next, folds)
-			if err != nil {
-				return err
-			}
-			plan = &plannedApplication{decision: next, version: version, definitionSHA: declared.SHA256, definition: &declared.Parsed}
-			break
+		d.PassID = gen
+		reqCopy := *d.RunRequest
+		reqCopy.CorrelationID = gen
+		d.RunRequest = &reqCopy
+
+		copyWork := *work
+		claimedWork := &copyWork
+		owner, err := currentLoopOwner()
+		if err != nil {
+			return err
 		}
+		if d.Workflow != nil {
+			claimedWork.Owner, claimedWork.Examining = owner, true
+			if err := appendEffect(tx, examinationClaimedKind, d.RunRequest.RunID, owner, at); err != nil {
+				return err
+			}
+		} else {
+			claimedWork.Examiner = owner
+			if err := appendEffect(tx, examinationOwnerKind, d.RunRequest.RunID, owner, at); err != nil {
+				return err
+			}
+		}
+		// Settlement must retain the candidate's worktree too. A terminal record
+		// released the run's lease, so reclaim it before inspecting or gating it.
+		if _, err := tx.Exec(`INSERT INTO lanes(lane_id,state,run_id,leased_until) VALUES(?,?,?,NULL) ON CONFLICT(lane_id) DO UPDATE SET state=excluded.state,run_id=excluded.run_id,leased_until=NULL`, d.LaneID, run.LaneStateLeased, d.RunRequest.RunID); err != nil {
+			return err
+		}
+		if err := recordPassDecision(tx, d, at); err != nil {
+			return err
+		}
+		out.decision = d
+		out.work = claimedWork
+		out.tickID = gen
+		out.claimed = true
 		return nil
 	})
-	return plan, err
+	unlock()
+	out.claimEnd = time.Now()
+	if err != nil {
+		out.claimed = false
+		return out, err
+	}
+	return out, nil
 }
 
-// Intermediate nodes keep the existing completion path. Only take the inline
-// examination if accepting this worker (or reader group) could finish its graph.
-// Settlement itself still validates its actual outcome, outputs and candidate.
-func (l *Loop) workerMayFinishGraph(r *store.Reader, d Decision) (bool, error) {
+// shouldExamineInline guards launchRun's inline fallback when the standalone
+// examine coordinator is not running (e.g. single-pass unit tests calling
+// l.pass directly). In live Loop.Run execution the examine coordinator handles
+// every node kind outside the pass without this filter.
+func (l *Loop) shouldExamineInline(ctx context.Context, d Decision) bool {
 	if d.Workflow == nil {
-		return true, nil
+		return true
 	}
 	if quick, err := planTookQuickWay(l.cfg.Root, d); quick || err != nil {
-		return quick, err
+		return quick
 	}
 	if workflowCandidatePolicy(d.Workflow) == "no_commit" {
+		return false
+	}
+	var done bool
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		outcomes, err := workflowOutcomes(r, d.ItemID, d.Attempt)
+		if err != nil {
+			return err
+		}
+		for _, node := range parallelNodes(d) {
+			outcomes[d.Workflow.Stages[node.NodeIndex].ID] = "passed"
+		}
+		done = workflowDone(d.Workflow, outcomes)
+		return nil
+	}); err != nil {
+		return false
+	}
+	return done
+}
+
+func isWorkSettleEligible(work *pendingWork, runID string) bool {
+	if work == nil || work.Done || work.Ready || work.Candidate != nil {
+		return false
+	}
+	if work.BoundaryFailed || work.RepairHold != nil || work.Orphaned || work.ResumeAfterRestart {
+		return false
+	}
+	if work.LaneReleased || work.LaneBusyByOther || work.ReopenedPausedJudge {
+		return false
+	}
+	if work.Examining || work.Examiner != nil {
+		return false
+	}
+	if work.Decision.RunRequest == nil || work.Decision.LaneID == "" {
+		return false
+	}
+	if runID != "" && work.Decision.RunRequest.RunID != runID {
+		return false
+	}
+	return true
+}
+
+func (l *Loop) settlementHeldByBackendOrWait(r *store.Reader, d Decision, rec *run.Record, byRun map[string]*pendingWork, at time.Time) (bool, error) {
+	if rec == nil {
 		return false, nil
 	}
-	outcomes, err := workflowOutcomes(r, d.ItemID, d.Attempt)
+	policy := l.currentPolicy()
+	var shut map[string]bool
+	loadShut := func() (map[string]bool, error) {
+		if shut != nil {
+			return shut, nil
+		}
+		var err error
+		shut, err = readQuotaShutBackendsFrom(r, at, policy, byRun)
+		return shut, err
+	}
+	if evaluatorNode(d) && (rec.State == run.StateFailedToStart || judgeQuotaRefusal(*rec)) {
+		if policy != nil && !policyHasBackend(policy, d.RunRequest.Backend) {
+			return true, nil
+		}
+		s, err := loadShut()
+		if err != nil {
+			return false, err
+		}
+		if s[d.RunRequest.Backend] {
+			return true, nil
+		}
+	}
+	if quotaSingleRun(d) {
+		backend, err := quotaPauseBackend(r, rec.RunID)
+		if err != nil {
+			return false, err
+		}
+		_, _, _, refused := refusedWindow(*rec)
+		if backend != "" && (rec.State == run.StatePaused || refused) {
+			if policy == nil {
+				return true, nil
+			}
+			s, err := loadShut()
+			if err != nil {
+				return false, err
+			}
+			if s[backend] {
+				return true, nil
+			}
+		}
+	}
+	failed, err := failedDesignerResume(d, *rec)
 	if err != nil {
 		return false, err
 	}
-	for _, node := range parallelNodes(d) {
-		outcomes[d.Workflow.Stages[node.NodeIndex].ID] = "passed"
+	if failed {
+		wait, _, err := item.ReadWaitingOn(r, d.ItemID)
+		if err != nil {
+			return false, err
+		}
+		if wait != nil {
+			return true, nil
+		}
+		s, err := loadShut()
+		if err != nil {
+			return false, err
+		}
+		if s[d.RunRequest.Backend] {
+			return true, nil
+		}
 	}
-	return workflowDone(d.Workflow, outcomes), nil
+	return false, nil
 }

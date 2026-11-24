@@ -116,6 +116,7 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 				// Reconnected after a disconnect: immediately run the fallback
 				// poll query so events committed during the gap do not wait 15 s.
 				signalWake(tn.wake)
+				l.signalExamineWake()
 			}
 			connectedOnce = true
 		}
@@ -131,6 +132,9 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 				l.notifyFrameObs(frame)
 			}
 			signalWake(tn.wake)
+			if frame.Topic == notify.TopicRunExited || frame.Topic == notify.TopicResync {
+				l.signalExamineWake()
+			}
 		}
 	}
 }
@@ -309,7 +313,7 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 		before := l.dispatched(result)
 		stop, err := l.finishRunStep(ctx, c, result)
 		l.mu.Lock()
-		advanced := result.Dispatched != before || l.activeItems[c.itemID] == ""
+		advanced := result.Dispatched != before || (l.activeItems[c.itemID] == "" && l.examiningItems[c.itemID] == 0)
 		l.mu.Unlock()
 		if stop != "" || err != nil || advanced {
 			return true, stop, err

@@ -1519,6 +1519,10 @@ type runCompletion struct {
 	// laneRefusal is a pinned candidate's staging refused by its assigned lane's own
 	// state; the pass takes that lane out of rotation (lane_rotation.go).
 	laneRefusal *LaneRefusalError
+	// fromExamineCoordinator marks completions produced by the standalone
+	// outside-pass examine coordinator so takeCompletion does not clear
+	// launchRun's active worker maps.
+	fromExamineCoordinator bool
 }
 
 // passPlans takes one read of the world. Application takes one write transaction per
@@ -2824,6 +2828,8 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 	runCtx, cancel := context.WithCancel(ctx)
 	l.mu.Lock()
 	l.markStepActive(d.ItemID, id)
+	l.ensureExamineStateLocked()
+	l.activeBrackets[id] = true
 	if l.activeCancels == nil {
 		l.activeCancels = map[string]context.CancelFunc{}
 	}
@@ -2837,6 +2843,14 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 	handoff := !l.nonLanding && !l.pollOnly && l.ownerMigrationItem == ""
 	go func() {
 		defer cancel()
+		bracketCleared := false
+		clearBracket := func() {
+			if !bracketCleared {
+				bracketCleared = true
+				l.clearBracketActive(id)
+			}
+		}
+		defer clearBracket()
 		start := time.Now()
 		completion := runCompletion{id: id, itemID: d.ItemID, step: "run", timing: &PassTiming{TickID: d.RunRequest.CorrelationID, AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}}
 		local := LoopResult{}
@@ -2893,6 +2907,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 			completion.step = local.StopStep
 		}
 		completion.timing.DispatchMS = time.Since(start).Milliseconds()
+		clearBracket()
 		answered := record.State == run.StateExited && ClassifyAttempt(record, log) == AttemptAnswered
 		parallelReady := len(d.Parallel) > 0
 		if parallelReady && err == nil {
@@ -2904,7 +2919,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 				return nil
 			})
 		}
-		if handoff && err == nil && completion.outcome.stop == "" && (parallelReady || answered) {
+		if !l.isExamineCoordinatorActive() && handoff && err == nil && completion.outcome.stop == "" && (parallelReady || answered) && l.shouldExamineInline(runCtx, d) {
 			l.examineWorkerEnd(runCtx, d, watched, &completion)
 		}
 		l.sendCompletion(ctx, completion)
@@ -2913,14 +2928,17 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 
 func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, error) {
 	l.mu.Lock()
-	delete(l.activeCancels, c.id)
-	stopped := l.stoppedRuns != nil && l.stoppedRuns[c.id]
-	if stopped {
-		delete(l.stoppedRuns, c.id)
-	}
-	delete(l.active, c.id)
-	if l.activeItems[c.itemID] == c.id {
-		delete(l.activeItems, c.itemID)
+	stopped := false
+	if !c.fromExamineCoordinator {
+		delete(l.activeCancels, c.id)
+		stopped = l.stoppedRuns != nil && l.stoppedRuns[c.id]
+		if stopped {
+			delete(l.stoppedRuns, c.id)
+		}
+		delete(l.active, c.id)
+		if l.activeItems[c.itemID] == c.id {
+			delete(l.activeItems, c.itemID)
+		}
 	}
 	l.mu.Unlock()
 	if c.dispatchTiming != nil {
@@ -2930,6 +2948,8 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 			return "", err
 		}
 		c.timing = c.dispatchTiming
+	} else if c.fromExamineCoordinator && c.timing != nil && c.timing.TickID != "" {
+		l.countGeneration(result, c.timing.TickID)
 	}
 	if stopped || errors.Is(c.outcome.err, errRestartPending) {
 		return "", nil
@@ -3559,6 +3579,9 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 	runCtx = context.WithValue(runCtx, heavyParentCtxKey{}, ctx)
 	l.mu.Lock()
 	l.markStepActive(d.ItemID, d.RunRequest.RunID)
+	l.ensureExamineStateLocked()
+	l.examiningRuns[d.RunRequest.RunID] = true
+	l.examiningItems[d.ItemID]++
 	if l.activeCancels == nil {
 		l.activeCancels = map[string]context.CancelFunc{}
 	}
@@ -3569,6 +3592,16 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 	go func() {
 		defer cancel()
 		defer l.examinations.Done()
+		defer func() {
+			l.mu.Lock()
+			delete(l.examiningRuns, d.RunRequest.RunID)
+			if n := l.examiningItems[d.ItemID]; n <= 1 {
+				delete(l.examiningItems, d.ItemID)
+			} else {
+				l.examiningItems[d.ItemID] = n - 1
+			}
+			l.mu.Unlock()
+		}()
 		l.sendCompletion(ctx, l.examineClaimed(runCtx, d, work, at, &timing, watched))
 	}()
 }
