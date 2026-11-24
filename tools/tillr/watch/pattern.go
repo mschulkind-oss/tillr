@@ -276,6 +276,7 @@ type evalCache struct {
 	rules                map[string]*ruleCacheEntry
 	git                  gitCache
 	hasAlertTrackingCols bool
+	hasAlertAckCols      bool
 	hasItemsEventSeq     bool
 }
 
