@@ -154,7 +154,6 @@ func TestWorkerEndStartsGateWithoutPassOrSiblingLanding(t *testing.T) {
 	}
 	assertExaminationAccounting(t, *exam, []string{
 		"restart_lock_wait",
-		"plan_worker_settlement",
 		"claim_worker_settlement",
 		"settle",
 		"claim_settled_judge",
@@ -327,19 +326,13 @@ func TestPendingRestartAnsweredDuringSlowExamination(t *testing.T) {
 
 	dispatched := stageFinishedCandidateOnLane(t, h.f, h.l, "item-a", "lane-1")
 	at := time.Now().UTC()
-	p, err := h.l.planWorkerSettlement(ctx, dispatched, at)
-	if err != nil || p == nil {
-		t.Fatalf("planWorkerSettlement: p=%v err=%v", p, err)
+	claim, err := h.l.claimWorkerSettlement(ctx, dispatched.ItemID, dispatched.RunRequest.RunID, at)
+	if err != nil || !claim.claimed {
+		t.Fatalf("claimWorkerSettlement: claimed=%v err=%v", claim.claimed, err)
 	}
-	timing := &PassTiming{AtMS: at.UnixMilli()}
-	claimed, work, err := h.l.applyPlanTrunk(ctx, *p, new(string), at, &timing.TickID)
-	if err != nil || !claimed {
-		t.Fatalf("applyPlanTrunk: claimed=%v err=%v", claimed, err)
-	}
-	d := p.decision
-	reqCopy := *d.RunRequest
-	reqCopy.CorrelationID = timing.TickID
-	d.RunRequest = &reqCopy
+	timing := &PassTiming{TickID: claim.tickID, AtMS: at.UnixMilli()}
+	d := claim.decision
+	work := claim.work
 
 	examEntered := make(chan struct{})
 	releaseExam := make(chan struct{})

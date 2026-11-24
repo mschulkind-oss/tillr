@@ -711,14 +711,20 @@ type Loop struct {
 	beforeSessionOpen func(create bool)
 	// waitingDetail retains all holds, not just the five printed examples, so a
 	// changed reason outside the summary still reports a changed queue.
-	waitingDetail    string
-	nextCommentPoll  time.Time
-	hasAnswers       bool
-	pollOnly         bool // test seam: suppress accelerators, retain store polling
-	triggerNotify    *triggerNotify
-	triggerTimer     func(time.Duration) (<-chan time.Time, func())
-	notifyStartRelay func(context.Context, string, time.Duration) error
-	notifyFrameObs   func(notify.Frame)
+	waitingDetail            string
+	nextCommentPoll          time.Time
+	hasAnswers               bool
+	pollOnly                 bool // test seam: suppress accelerators, retain store polling
+	triggerNotify            *triggerNotify
+	triggerTimer             func(time.Duration) (<-chan time.Time, func())
+	notifyStartRelay         func(context.Context, string, time.Duration) error
+	notifyFrameObs           func(notify.Frame)
+	examineWake              chan struct{}
+	examineCoordinatorActive bool
+	activeBrackets           map[string]bool
+	examiningRuns            map[string]bool
+	examiningItems           map[string]int
+	examineTimer             func(time.Duration) (<-chan time.Time, func())
 	// heartbeatClock is a test seam: when set, the heartbeat waits on the ticker it
 	// returns instead of a wall-clock one, so a test decides when each tick happens.
 	heartbeatClock func() heartbeatTicker
@@ -754,13 +760,19 @@ type Loop struct {
 func (l *Loop) isActive(runID string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.active[runID]
+	return l.active[runID] || l.examiningRuns[runID]
 }
 
 func (l *Loop) activeCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.active)
+	n := len(l.active)
+	for id := range l.examiningRuns {
+		if !l.active[id] {
+			n++
+		}
+	}
+	return n
 }
 
 func (l *Loop) dispatched(result *LoopResult) int {
@@ -862,7 +874,25 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if _, err := currentLoopOwner(); err != nil {
 		return nil, err
 	}
-	l := &Loop{gatePolicy: gatePolicy, cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, activeCancels: map[string]context.CancelFunc{}, stoppedRuns: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, max(1, len(cfg.Lanes))), laneChanges: map[string]int{}, staleBaseChecked: map[string]bool{}}
+	l := &Loop{
+		gatePolicy:       gatePolicy,
+		cfg:              cfg,
+		gateBudget:       budget,
+		build:            ReadBuildStamp(),
+		held:             map[string]heldItem{},
+		active:           map[string]bool{},
+		activeCancels:    map[string]context.CancelFunc{},
+		stoppedRuns:      map[string]bool{},
+		laneConditions:   map[string]*laneCondition{},
+		infraLines:       map[string]string{},
+		completions:      make(chan runCompletion, max(4, len(cfg.Lanes)*2)),
+		laneChanges:      map[string]int{},
+		staleBaseChecked: map[string]bool{},
+		examineWake:      make(chan struct{}, 1),
+		activeBrackets:   map[string]bool{},
+		examiningRuns:    map[string]bool{},
+		examiningItems:   map[string]int{},
+	}
 	if cfg.PolicyRef != "" {
 		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
 		if err != nil {
@@ -1077,13 +1107,18 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	defer l.startView.Store(nil)
 	defer l.watchStartView(ctx, view, startViewRefreshInterval)()
 	defer l.startTriggerNotify(ctx)()
+	stopExamine := func() {}
+	if !l.pollOnly && l.ownerMigrationItem == "" {
+		stopExamine = l.startExamineCoordinator(ctx, &result)
+	}
 	stopStarts := func() {}
 	if !l.pollOnly {
 		stopStarts = l.startBackgroundCoordinator(ctx, view, &result)
 	}
 	err = l.runPasses(ctx, &result, !l.pollOnly, view)
-	// Join staging before copying the result or ending operator-requested runs.
+	// Join staging and examination coordinator before copying the result or ending operator-requested runs.
 	stopStarts()
+	stopExamine()
 	if err != nil {
 		return faultResult(result, err)
 	}
@@ -1144,7 +1179,7 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 			l.mu.Unlock()
 			continue
 		}
-		backOff := result.Dispatched == dispatched && l.infraStreak > 0 && len(l.active) == 0
+		backOff := result.Dispatched == dispatched && l.infraStreak > 0 && len(l.active) == 0 && len(l.examiningRuns) == 0
 		l.stageFaults = nil
 		l.stageBackoff = backOff
 		l.mu.Unlock()
@@ -2209,6 +2244,8 @@ func (l *Loop) runLane(ctx context.Context, decision Decision, mainSHA, tick str
 	l.mu.Unlock()
 	l.reportf("loop: tick %d dispatch %s -> %s on %s\n",
 		tickNumber, request.ItemID, request.Backend, lane)
+	l.markBracketActive(request.RunID)
+	defer l.clearBracketActive(request.RunID)
 	_, _, err = l.runRestartable(ctx, request)
 	if err != nil {
 		return laneOutcome{err: err}
@@ -2863,7 +2900,10 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 				return laneOutcome{err: err}
 			}
 		}
-		if err := appendJudgment(ctx, l.cfg.Store, candidateReadyKind, "run", request.RunID, candidate, at); err != nil {
+		if err := appendJudgmentThen(ctx, l.cfg.Store, candidateReadyKind, "run", request.RunID, candidate, at, func(tx *store.Tx) error {
+			tx.Notify(notify.TopicAgentSlotFreed, candidate.ItemID, candidate.RunID)
+			return nil
+		}); err != nil {
 			return laneOutcome{err: err}
 		}
 		prepared = true
