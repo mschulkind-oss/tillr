@@ -260,6 +260,15 @@ green; `alarms` lists standing alarms; each row has `item_id`, `state`,
      mistake to stop repeating.
    - **One step running a long time:** check that its processes are using CPU
      before doing anything. A working step is left alone.
+   - **A gate running far longer than the others:** find its Go test binary
+     (a `*.test` process under the gate's `go_affected.py`) and read its CPU
+     ticks from `/proc/<pid>/stat` twice, ten seconds apart. No ticks means a
+     deadlocked test, and a gate runs tests with `-timeout 0`, so nothing ends
+     it. Send `kill -QUIT` to that test binary only: it prints every goroutine
+     stack into the gate's log and the gate ends as a failed gate. File the
+     test's repair with the blocked line in the words. While a loop restart is
+     pending, one such gate keeps every other gate and landing waiting; on
+     2026-11-23 one ran 32 minutes before a check-in found it.
    - **Finished elsewhere:** when an item's fix has already landed from another
      item or a trunk fixer, close it with the landed commit named.
 6. **Keep the lanes fed.** When no item is waiting only for a lane, the queue is
