@@ -175,10 +175,10 @@ class TreeChecks(unittest.TestCase):
                         for replacement in json.loads(parsed)["Replace"]
                         if not replacement["New"].get("Version")}
         self.assertTrue(replacements)
-        watched = {directory + "/", *replacements}
+        watched = {directory + "/", *replacements, "tools/gate/go-test-edges.json", "tools/go-test-shards.py"}
         record = planner.Record(self.root / "plan.json")
         for prefix in sorted(watched | {"tools/pi-profiler/"}):
-            changed = prefix + "main.go"
+            changed = prefix + "main.go" if prefix.endswith("/") else prefix
             with self.subTest(changed=changed):
                 plan = planner.build_plan(repo, [], record, [changed], None, True)
                 planner.apply_tier(plan, planner.TIER_ROLLING)

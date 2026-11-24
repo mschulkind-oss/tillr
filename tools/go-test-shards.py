@@ -6,6 +6,7 @@ import contextlib
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import importlib.util
 import itertools
 import json
 import math
@@ -24,6 +25,79 @@ DEFAULT_DURATIONS = Path(__file__).with_name('go-test-durations.json')
 DEFAULT_SHARD_TIMEOUT = 480.0
 PROGRESS_OUT_ENV = 'TILLR_GO_SHARDS_PROGRESS_OUT'
 DEFAULT_PROGRESS_INTERVAL = 60.0
+SHARD_THRESHOLD = 100
+MAX_SHARDS = 12
+_GO_AFFECTED_MOD = None
+
+
+def _load_go_affected():
+    global _GO_AFFECTED_MOD
+    if _GO_AFFECTED_MOD is not None:
+        return _GO_AFFECTED_MOD
+    path = Path(__file__).resolve().parent / 'gate' / 'go_affected.py'
+    spec = importlib.util.spec_from_file_location('go_affected', path)
+    if spec is None or spec.loader is None:
+        raise ShardError(f'cannot load go_affected from {path}')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _GO_AFFECTED_MOD = mod
+    return mod
+
+
+def _locate_repo_root(start_path, *, fallback_to_script=False, stop_at_temp_roots=False):
+    start = Path(start_path).resolve()
+    temp_roots = set()
+    if stop_at_temp_roots:
+        for var in ('TMPDIR', 'YOLO_DURABLE_DIR'):
+            val = os.environ.get(var, '').strip()
+            if val:
+                temp_roots.add(Path(val).resolve())
+    for candidate in (start, *start.parents):
+        if stop_at_temp_roots and candidate in temp_roots:
+            break
+        if (candidate / 'tools' / 'gate' / 'go-test-edges.json').is_file() or (candidate / '.git').exists():
+            return candidate
+    if fallback_to_script:
+        return Path(__file__).resolve().parents[1]
+    return None
+
+
+def _check_cached_worker_refusal(module):
+    run_id = os.environ.get('TILLR_RUN_ID', '').strip()
+    if not run_id:
+        return
+    abs_module = Path(os.path.abspath(module))
+    resolved_module = Path(module).resolve()
+    if '.forks' in abs_module.parts or '.forks' in resolved_module.parts:
+        raise ShardError(f'--cache is refused inside .forks/ when TILLR_RUN_ID is set: {module}')
+    repo_roots = {Path(__file__).resolve().parents[1]}
+    env_repo = os.environ.get('TILLR_REPO_ROOT', '').strip()
+    if env_repo:
+        repo_roots.add(Path(env_repo).resolve())
+    try:
+        top = subprocess.check_output(
+            ['git', '-C', str(Path(__file__).resolve().parent), 'rev-parse', '--show-toplevel'],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        if top:
+            repo_roots.add(Path(top).resolve())
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    temp_roots = [
+        Path(val).resolve()
+        for val in (os.environ.get('TMPDIR', '').strip(), os.environ.get('YOLO_DURABLE_DIR', '').strip())
+        if val
+    ]
+    matching_repos = [r for r in repo_roots if resolved_module.is_relative_to(r)]
+    if not matching_repos:
+        return
+    deepest_repo = max(matching_repos, key=lambda p: len(p.parts))
+    matching_temps = [t for t in temp_roots if resolved_module.is_relative_to(t)]
+    if matching_temps:
+        deepest_temp = max(matching_temps, key=lambda p: len(p.parts))
+        if deepest_temp != deepest_repo and deepest_temp.is_relative_to(deepest_repo):
+            return
+    raise ShardError(f'--cache is refused on repository module {module} when TILLR_RUN_ID is set')
 
 
 # A shard runs under a guard process: the guard is the session and group leader, starts the
@@ -1250,10 +1324,420 @@ def load_durations(path):
     return record
 
 
+def _write_evidence_safe(evidence_out, payload):
+    if not evidence_out:
+        return
+    try:
+        Path(evidence_out).write_text(json.dumps(payload))
+    except OSError as error:
+        print(f'go-test-shards: cannot write package evidence: {error}', file=sys.stderr)
+
+
+def _classify_group_cache(events):
+    pkg_outputs = [
+        e.get('Output', '')
+        for e in events
+        if not e.get('Test') and e.get('Action') == 'output' and isinstance(e.get('Output'), str)
+    ]
+    pkg_terminal = [
+        e.get('Action')
+        for e in events
+        if not e.get('Test') and e.get('Action') in ('pass', 'fail', 'skip')
+    ]
+    if any('(cached)' in chunk for chunk in pkg_outputs):
+        return 'hit'
+    if any(
+        re.search(r'^(?:ok|FAIL|\?)\s', chunk, re.MULTILINE) or '[no tests to run]' in chunk
+        for chunk in pkg_outputs
+    ) or bool(pkg_terminal):
+        return 'miss'
+    return 'unknown'
+
+
+def run_cached_group(package, cwd, names, index, scratch_key, durable, timeout,
+                     base_env, git_values, *, explicit_scratch=False, edge_digest=None,
+                     run_pattern=None, wall_timeout=DEFAULT_SHARD_TIMEOUT, lock_dir=None,
+                     shard_limit=None, slot_class=None, proof_limit=None, gate_limit=None,
+                     max_slots=None, gate_reserved_limit=None, holder=None, progress=None):
+    label = f'{package} shard {index}'
+    go_affected = _load_go_affected()
+    effective_lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
+    effective_limit = shard_limit if shard_limit is not None else default_shard_limit()
+    command = ['go', 'test', '-json', '-timeout', timeout, '-parallel', str(TESTS_PER_SLOT)]
+    if run_pattern is not None:
+        command.extend(['-run', run_pattern])
+    command.append(package)
+
+    try:
+        with acquire_shard_slot(
+            effective_lock_dir, effective_limit,
+            lambda message: print(f'go-test-shards: {label} {message}', file=sys.stderr, flush=True),
+            slot_class=slot_class, proof_limit=proof_limit,
+            gate_limit=gate_limit, max_slots=max_slots,
+            gate_reserved_limit=gate_reserved_limit, holder=holder,
+            label=label,
+        ), \
+                go_affected.acquire_invocation_scratch(durable, scratch_key) as (scratch_dir, _pool_dir):
+            try:
+                env = go_affected._bypass_git_shim_env(base_env, scratch_dir)
+                env['YOLO_DURABLE_DIR'] = str(scratch_dir)
+                if explicit_scratch:
+                    env['TMPDIR'] = str(scratch_dir)
+                gitconfig = go_affected._write_private_gitconfig(scratch_dir, git_values, env=env)
+                env['GIT_CONFIG_GLOBAL'] = str(gitconfig)
+                if edge_digest is not None:
+                    env['TILLR_GATE_EDGE_INPUTS'] = edge_digest
+                else:
+                    env.pop('TILLR_GATE_EDGE_INPUTS', None)
+            except (OSError, subprocess.CalledProcessError) as exc:
+                raise ShardError(f'{label} cannot prepare private git config: {exc}') from exc
+
+            with tempfile.NamedTemporaryFile(dir=scratch_dir) as out, \
+                    tempfile.NamedTemporaryFile(dir=scratch_dir) as err, \
+                    open(out.name, 'rb') as reader, open(err.name, 'rb') as error_reader, \
+                    contextlib.ExitStack() as cleanup:
+                lifeline_read, lifeline_write = os.pipe()
+                try:
+                    process = subprocess.Popen(
+                        [sys.executable, str(Path(__file__).resolve()), GUARD_FLAG,
+                         str(lifeline_read), '--', *command],
+                        cwd=cwd, env=env, stdout=out, stderr=err, start_new_session=True,
+                        pass_fds=(lifeline_read,))
+                except BaseException:
+                    os.close(lifeline_write)
+                    raise
+                finally:
+                    os.close(lifeline_read)
+                with _live_lock:
+                    _live_groups.add(process.pid)
+
+                def end_group():
+                    kill_group(process.pid)
+                    os.close(lifeline_write)
+                    with _live_lock:
+                        _live_groups.discard(process.pid)
+                    process.wait()
+
+                cleanup.callback(end_group)
+                deadline = time.monotonic() + wall_timeout
+                pending = b''
+                seen_progress = set()
+                seen_completed = set()
+                assigned = set(names)
+                timed_out = False
+                while True:
+                    size = os.fstat(out.fileno()).st_size
+                    lines = (pending + reader.read(max(0, size - reader.tell()))).split(b'\n')
+                    pending = lines.pop()
+                    for line in lines:
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            continue
+                        key = (event.get('Test'), event.get('Action'))
+                        if ((key[0] in assigned or (not assigned and key[0]))
+                                and key[1] in ('run', 'pass', 'skip', 'fail')
+                                and key not in seen_progress):
+                            seen_progress.add(key)
+                            deadline = time.monotonic() + wall_timeout
+                        if (key[0] and '/' not in key[0]
+                                and key[1] in ('pass', 'skip', 'fail')
+                                and key[0] not in seen_completed):
+                            seen_completed.add(key[0])
+                            if progress is not None:
+                                progress.record_test(f'{package} {key[0]} {key[1]}')
+                    if progress is not None:
+                        progress.maybe_publish()
+                    if process.poll() is not None:
+                        break
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        kill_group(process.pid)
+                        process.wait()
+                        timed_out = True
+                        break
+                    wait_timeout = min(1.0, remaining)
+                    if progress is not None:
+                        wait_timeout = min(wait_timeout, progress.interval)
+                    try:
+                        process.wait(timeout=max(0.0, wait_timeout))
+                    except subprocess.TimeoutExpired:
+                        pass
+                reader.seek(0)
+                stdout = reader.read(os.fstat(out.fileno()).st_size).decode('utf-8', errors='replace')
+                stderr = error_reader.read(os.fstat(err.fileno()).st_size).decode('utf-8', errors='replace')
+    except OSError as exc:
+        raise ShardError(f'{label} cannot start: {exc}') from exc
+
+    events = []
+    for line in stdout.splitlines():
+        try:
+            events.append(json.loads(line))
+        except ValueError as exc:
+            if not timed_out:
+                raise ShardError(f'{label} invalid test report: {exc}', events) from exc
+            break
+    if timed_out:
+        active = set()
+        for event in events:
+            name = event.get('Test')
+            if name and event.get('Action') == 'run':
+                active.add(name)
+            elif name and event.get('Action') in ('pass', 'skip', 'fail'):
+                active.discard(name)
+        pending_names = set(names) - {
+            e.get('Test') for e in events if e.get('Action') in ('pass', 'skip', 'fail')
+        }
+        detail = ', '.join(sorted(active)) or 'none reported'
+        remaining = ', '.join(sorted(pending_names)) or 'none'
+        raise ShardError(
+            f'{label} timed out after {wall_timeout:g}s without top-level test progress; '
+            f'running: {detail}; not completed: {remaining}\n{stderr}',
+            events,
+            timed_out=True,
+        )
+    if process.returncode or any(e.get('Action') == 'fail' for e in events):
+        raw_failed = list(dict.fromkeys(
+            e['Test'] for e in events if e.get('Action') == 'fail' and e.get('Test')
+        ))
+        failed_tests = [
+            name for name in raw_failed
+            if not any(other != name and other.startswith(name + '/') for other in raw_failed)
+        ]
+        output = ''.join(e.get('Output', '') for e in events)
+        if raw_failed and not re.search(r'^panic: test timed out after ', output, re.MULTILINE):
+            def belongs_to_failure(test_name):
+                if not test_name:
+                    return True
+                return any(
+                    test_name == failed or test_name.startswith(failed + '/') or failed.startswith(test_name + '/')
+                    for failed in raw_failed
+                )
+            output = ''.join(e.get('Output', '') for e in events if belongs_to_failure(e.get('Test')))
+        headline = f'{label} failed (exit {process.returncode})'
+        if failed_tests:
+            headline += f": {', '.join(failed_tests)}"
+        detail = f'{output}{stderr}'.rstrip('\n')
+        raise ShardError(f'{headline}\n{detail}' if detail else headline, events)
+
+    pkg_done = any(
+        not e.get('Test') and e.get('Action') in ('pass', 'skip')
+        for e in events
+    )
+    if not pkg_done:
+        completed = {e.get('Test') for e in events if e.get('Action') in ('pass', 'skip')}
+        missing = set(names) - completed
+        if missing:
+            raise ShardError(f'{label} missing completion: {", ".join(sorted(missing))}', events)
+    return events, _classify_group_cache(events)
+
+
+def _run_cached(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT,
+                lock_dir=None, slot_class=None, proof_limit=None, gate_limit=None,
+                max_slots=None, gate_reserved_limit=None, holder=None, evidence_out=None,
+                progress_file=None, progress_interval=DEFAULT_PROGRESS_INTERVAL,
+                explicit_scratch=False, durable_dir=None, uncached_events=None):
+    _check_cached_worker_refusal(module)
+    if progress_file is not None and (not math.isfinite(progress_interval) or progress_interval <= 0):
+        raise ValueError('progress interval must be a positive finite number of seconds')
+    progress = (_ProgressTracker(progress_file, progress_interval)
+                if progress_file is not None else None)
+    go_affected = _load_go_affected()
+    raw_env_snap = dict(os.environ)
+    base_env = go_affected.build_env()
+    discovery_error = None
+    try:
+        stream = subprocess.check_output(['go', 'list', '-json', './...'], cwd=module, env=base_env, text=True)
+    except subprocess.CalledProcessError as error:
+        if not evidence_out:
+            raise
+        discovery_error = error
+        stream = error.output or ''
+    packages = []
+    decoder = json.JSONDecoder()
+    while stream.strip():
+        try:
+            package, end = decoder.raw_decode(stream.lstrip())
+        except ValueError:
+            if discovery_error is None:
+                raise
+            break
+        packages.append(package)
+        stream = stream.lstrip()[end:]
+
+    initial_inventory = [
+        {'import_path': p['ImportPath'], 'test_cache': (
+            'not-started' if (discovery_error or p.get('TestGoFiles') or p.get('XTestGoFiles'))
+            else 'not-applicable')}
+        for p in packages if isinstance(p, dict) and p.get('ImportPath')
+    ]
+    if evidence_out:
+        if discovery_error:
+            _write_evidence_safe(evidence_out, {'discovery': 'partial', 'packages': initial_inventory})
+        else:
+            _write_evidence_safe(evidence_out, {'mode': 'cached-shards', 'packages': initial_inventory})
+    if discovery_error is not None:
+        raise discovery_error
+
+    git_values = go_affected._global_git_config(env=raw_env_snap)
+    lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
+    shard_limit = default_shard_limit()
+    resolved_class = resolve_slot_class(slot_class)
+    resolved_holder = resolve_holder_run(holder, resolved_class)
+    durable = (
+        str(durable_dir) if durable_dir is not None
+        else (raw_env_snap.get('YOLO_DURABLE_DIR') or raw_env_snap.get('TMPDIR') or str(scratch))
+    )
+
+    repo_root = _locate_repo_root(module, fallback_to_script=False, stop_at_temp_roots=True)
+    edges = go_affected.load_edges(repo_root) if repo_root is not None else {}
+    tested_ips = {
+        p['ImportPath'] for p in packages
+        if isinstance(p, dict) and p.get('ImportPath') and (p.get('TestGoFiles') or p.get('XTestGoFiles'))
+    }
+    needs_graph = any(edges.get(ip, {}).get('builds') for ip in tested_ips)
+    pkg_info = go_affected.load_tillr_graph(repo_root)['pkg_info'] if (needs_graph and repo_root is not None) else {}
+    resolved_builds_cache = {}
+
+    def digest_for(import_path, active_tests):
+        edge = edges.get(import_path)
+        if edge is None or repo_root is None:
+            return None
+        if import_path not in resolved_builds_cache:
+            resolved_builds_cache[import_path] = go_affected._resolve_edge_builds(repo_root, edge, pkg_info)
+        return go_affected.compute_edge_digest(
+            repo_root, edge, pkg_info,
+            active_tests=active_tests,
+            resolved_builds=resolved_builds_cache[import_path],
+        )
+
+    jobs = []
+    planned_groups = {}
+    group_results = {}
+    for package in packages:
+        if not package.get('TestGoFiles') and not package.get('XTestGoFiles'):
+            continue
+        ip = package['ImportPath']
+        test_files = sorted(set((package.get('TestGoFiles') or []) + (package.get('XTestGoFiles') or [])))
+        names = go_affected.scan_package_tests(
+            Path(package['Dir']),
+            {'import_path': ip, 'dir_rel': '.', 'test_files': test_files},
+        )
+        if progress is not None:
+            progress.record_package(f'discovered {ip}')
+
+        if len(names) < SHARD_THRESHOLD or count <= 1:
+            planned_groups[ip] = 1
+            run_pattern = '^$' if not names else None
+            jobs.append((
+                ip, module, names, 0, ip, durable, timeout, base_env, git_values,
+                explicit_scratch, digest_for(ip, None), run_pattern,
+                shard_timeout, lock_dir, shard_limit, resolved_class,
+                proof_limit, gate_limit, max_slots, gate_reserved_limit,
+                resolved_holder, progress,
+            ))
+        else:
+            has_edge_test = 'TestEdgeInputs' in names
+            non_edge = [t for t in names if t != 'TestEdgeInputs']
+            shard_count = min(MAX_SHARDS, max(count, len(non_edge) // 125))
+            buckets = assign(non_edge, durations.get(ip, {}), shard_count)
+            pkg_jobs = []
+            for shard_idx, bucket in enumerate(buckets):
+                if not bucket:
+                    continue
+                shard_names = list(bucket)
+                if has_edge_test:
+                    shard_names.append('TestEdgeInputs')
+                pattern = '^(' + '|'.join(re.escape(n) for n in shard_names) + ')$'
+                pkg_jobs.append((
+                    ip, module, shard_names, shard_idx, f'{ip}#shard-{shard_idx}',
+                    durable, timeout, base_env, git_values,
+                    explicit_scratch, digest_for(ip, bucket), pattern,
+                    shard_timeout, lock_dir, shard_limit, resolved_class,
+                    proof_limit, gate_limit, max_slots, gate_reserved_limit,
+                    resolved_holder, progress,
+                ))
+            planned_groups[ip] = len(pkg_jobs)
+            jobs.extend(pkg_jobs)
+
+    events = []
+    shard_errors = []
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as pool:
+            futures = {}
+            for job_index, job in enumerate(jobs):
+                (ip, mod_dir, names, shard_idx, scratch_key, dur, to, benv, gv,
+                 exp_scr, edigest, rpat, sto, ldir, slim, rcls, plim, glim, mslots,
+                 gres, rhold, prog) = job
+                fut = pool.submit(
+                    run_cached_group,
+                    ip, mod_dir, names, shard_idx, scratch_key, dur, to, benv, gv,
+                    explicit_scratch=exp_scr, edge_digest=edigest, run_pattern=rpat,
+                    wall_timeout=sto, lock_dir=ldir, shard_limit=slim,
+                    slot_class=rcls, proof_limit=plim, gate_limit=glim,
+                    max_slots=mslots, gate_reserved_limit=gres, holder=rhold,
+                    progress=prog,
+                )
+                futures[fut] = (job_index, ip, shard_idx)
+            for future in as_completed(futures):
+                job_index, ip, shard_idx = futures[future]
+                try:
+                    group_events, group_cache = future.result()
+                except ShardError as exc:
+                    events.extend(exc.events)
+                    group_results.setdefault(ip, []).append(_classify_group_cache(exc.events))
+                    shard_errors.append((job_index, str(exc)))
+                    if progress is not None and not exc.timed_out:
+                        progress.record_shard(f'{ip} shard {shard_idx}')
+                else:
+                    events.extend(group_events)
+                    if uncached_events is not None and group_cache != 'hit':
+                        uncached_events.extend(group_events)
+                    group_results.setdefault(ip, []).append(group_cache)
+                    if progress is not None:
+                        progress.record_shard(f'{ip} shard {shard_idx}')
+    finally:
+        if evidence_out:
+            final_packages = []
+            for entry in initial_inventory:
+                ip = entry['import_path']
+                if entry['test_cache'] == 'not-applicable':
+                    final_packages.append(entry)
+                    continue
+                statuses = group_results.get(ip, [])
+                expected = planned_groups.get(ip, 0)
+                if expected == 0 or len(statuses) < expected:
+                    status = 'not-started'
+                elif any(s == 'unknown' for s in statuses):
+                    status = 'unknown'
+                elif all(s == 'hit' for s in statuses):
+                    status = 'hit'
+                else:
+                    status = 'miss'
+                final_packages.append({'import_path': ip, 'test_cache': status})
+            _write_evidence_safe(evidence_out, {'mode': 'cached-shards', 'packages': final_packages})
+
+    if shard_errors:
+        shard_errors.sort(key=lambda item: item[0])
+        raise ShardError('\ngo-test-shards: '.join(text for _, text in shard_errors), events)
+    return events
+
+
 def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT,
         lock_dir=None, slot_class=None, proof_limit=None, gate_limit=None,
         max_slots=None, gate_reserved_limit=None, holder=None, evidence_out=None,
-        progress_file=None, progress_interval=DEFAULT_PROGRESS_INTERVAL):
+        progress_file=None, progress_interval=DEFAULT_PROGRESS_INTERVAL,
+        cache=False, explicit_scratch=False, durable_dir=None, uncached_events=None):
+    if cache:
+        return _run_cached(
+            module, count, durations, scratch, timeout,
+            shard_timeout=shard_timeout, lock_dir=lock_dir, slot_class=slot_class,
+            proof_limit=proof_limit, gate_limit=gate_limit, max_slots=max_slots,
+            gate_reserved_limit=gate_reserved_limit, holder=holder,
+            evidence_out=evidence_out, progress_file=progress_file,
+            progress_interval=progress_interval, explicit_scratch=explicit_scratch,
+            durable_dir=durable_dir, uncached_events=uncached_events,
+        )
     if progress_file is not None and (not math.isfinite(progress_interval) or progress_interval <= 0):
         raise ValueError('progress interval must be a positive finite number of seconds')
     progress = (_ProgressTracker(progress_file, progress_interval)
@@ -1358,8 +1842,12 @@ def main():
                'Waiting messages report live holders by run. Use the same shared pool '
                'for all runs; direct go test does not participate.',
     )
-    parser.add_argument('module', type=Path)
+    parser.add_argument('module', type=Path, nargs='?')
     parser.add_argument('-k', '--shards', type=int, default=6)
+    parser.add_argument('--cache', action='store_true',
+                        help='reuse Go test result cache with edge digests and skip sharding below 100 tests')
+    parser.add_argument('--edge-digest', metavar='IMPORT_PATH', default=None,
+                        help='print the current TILLR_GATE_EDGE_INPUTS digest for IMPORT_PATH and exit 0')
     parser.add_argument('--durations', type=Path, default=DEFAULT_DURATIONS)
     parser.add_argument('--record', type=Path, help='write measured top-level durations after success')
     parser.add_argument('--events', type=Path, help='write Go test JSON events, including failed shards')
@@ -1381,6 +1869,23 @@ def main():
     parser.add_argument('--progress-interval', type=float, default=DEFAULT_PROGRESS_INTERVAL, metavar='SECONDS',
                         help=f'minimum seconds between completion progress snapshots (default {DEFAULT_PROGRESS_INTERVAL:g})')
     args = parser.parse_args()
+    if args.edge_digest is not None:
+        go_affected = _load_go_affected()
+        repo_root = _locate_repo_root(Path.cwd(), fallback_to_script=True)
+        edges = go_affected.load_edges(repo_root)
+        edge = edges.get(args.edge_digest)
+        if edge is not None:
+            if edge.get('builds'):
+                graph = go_affected.load_tillr_graph(repo_root)
+                resolved = go_affected._resolve_edge_builds(repo_root, edge, graph['pkg_info'])
+            else:
+                resolved = ([], [])
+            print(go_affected.compute_edge_digest(
+                repo_root, edge, {}, active_tests=None, resolved_builds=resolved,
+            ))
+        return 0
+    if args.module is None:
+        parser.error('the following arguments are required: module')
     if args.shards < 1:
         parser.error('shards must be positive')
     if args.max_slots is not None and args.max_slots < 1:
@@ -1419,11 +1924,19 @@ def main():
                 options['progress_file'] = progress_file
             if progress_file is not None or args.progress_interval != DEFAULT_PROGRESS_INTERVAL:
                 options['progress_interval'] = args.progress_interval
+            uncached_events = [] if args.cache else None
+            if args.cache:
+                options['cache'] = True
+                options['uncached_events'] = uncached_events
+                if args.scratch is not None:
+                    options['explicit_scratch'] = True
+                    options['durable_dir'] = args.scratch.resolve()
             events = run(args.module.resolve(), args.shards, durations, Path(temporary), args.timeout, **options)
         if args.events:
             args.events.write_text(''.join(json.dumps(e) + '\n' for e in events))
         if args.record:
-            for event in events:
+            record_source = uncached_events if args.cache else events
+            for event in record_source:
                 name = event.get('Test', '')
                 if name and '/' not in name and event.get('Action') in ('pass', 'skip'):
                     durations.setdefault(event['Package'], {})[name] = event.get('Elapsed', 0)

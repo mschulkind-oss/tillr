@@ -415,6 +415,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("module")
 parser.add_argument("-k", type=int, default=6)
+parser.add_argument("--cache", action="store_true")
 parser.add_argument("--slot-class", default="default")
 parser.add_argument("--timeout", type=int, default=0)
 parser.add_argument("--events", type=Path, default=None)

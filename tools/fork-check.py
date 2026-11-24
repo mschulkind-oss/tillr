@@ -1757,7 +1757,7 @@ GO_TOOL_COST_ESTIMATE = {
 # The suite's tests are I/O-bound subprocess cases, so the default GOMAXPROCS cap
 # leaves the suite waiting: measured 2026-10-24 at 12 parallel 24s, 32 parallel 17s, and
 # 48 parallel 13s for the same cases. 48 is the oversubscription that fits the budget.
-GO_TOOL_PARALLEL = 48
+GO_TOOL_PARALLEL = 1
 # The check's target is measured, never a deadline. Disable Go's nested default
 # deadline too: a working suite must not be killed inside the watched group.
 # The inherited task-clock watchdog is the suite's liveness observer.
@@ -1772,7 +1772,12 @@ GO_TEST_TIMEOUT = "0"
 GO_SHARD_DIRS = ("tools/tillr-store", "tools/tillr-item", "tools/tillr-run",
                  "tools/tillr-gate", "tools/tillr-view", "tools/tillr-land",
                  "tools/tillr-drain")
-GO_SHARD_INPUTS = ("tools/go-test-shards.py", "tools/go-test-durations.json")
+GO_SHARD_INPUTS = (
+    "tools/go-test-shards.py",
+    "tools/go-test-durations.json",
+    "tools/gate/go-test-edges.json",
+    "tools/gate/go_affected.py",
+)
 
 
 def go_module_dependencies(directory: str, root: Path) -> tuple[str, ...]:
@@ -1813,15 +1818,29 @@ def go_tool_watches(directory: str, root: Path) -> tuple[str, ...]:
     change to that dependency selects (suite section 28g2)."""
     watches = GATE_RUNNER_WATCHES if directory == "tools/tillr-gate" else (directory + "/",)
     watches += tuple(dep for dep in go_module_dependencies(directory, root) if dep not in watches)
-    return watches + (GO_SHARD_INPUTS if directory in GO_SHARD_DIRS else ())
+    extra: tuple[str, ...] = ()
+    if directory in GO_SHARD_DIRS:
+        extra = GO_SHARD_INPUTS
+    elif directory == "tools/tillr-watch":
+        extra = ("tools/gate/go-test-edges.json", "tools/go-test-shards.py")
+    return watches + tuple(item for item in extra if item not in watches)
 
 
 def go_tool_command(directory: str, slot_class: str = "proof") -> str:
-    """Complete suite: shards run fresh; native commands retain Go result caching."""
+    """Complete suite: sharded and native commands retain Go result caching with edge digests."""
     if directory in GO_SHARD_DIRS:
         return (f"CGO_ENABLED=0 python3 tools/go-test-shards.py {shlex.quote(directory)} "
-                f"-k 6 --slot-class {slot_class} --timeout {GO_TEST_TIMEOUT}")
-    return (f"cd {directory} && CGO_ENABLED=0 go test -parallel {GO_TOOL_PARALLEL} "
+                f"-k 6 --cache --slot-class {slot_class} --timeout {GO_TEST_TIMEOUT}")
+    if directory == "tools/tillr-watch":
+        return (
+            'TILLR_GATE_EDGE_INPUTS="$(python3 tools/go-test-shards.py --edge-digest '
+            'github.com/mschulkind-oss/tillr-watch)" '
+            '&& export TILLR_GATE_EDGE_INPUTS '
+            f'&& cd {directory} '
+            f'&& CGO_ENABLED=0 GOFLAGS=-trimpath go test -parallel {GO_TOOL_PARALLEL} '
+            f'-timeout {GO_TEST_TIMEOUT} ./...'
+        )
+    return (f"cd {directory} && CGO_ENABLED=0 GOFLAGS=-trimpath go test -parallel {GO_TOOL_PARALLEL} "
             f"-timeout {GO_TEST_TIMEOUT} ./...")
 
 
@@ -9008,6 +9027,7 @@ def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
 
     drop += (GO_AFFECTED_EVIDENCE_ENV, GO_VERDICTS_IN_ENV, GO_VERDICTS_OUT_ENV)
     sharded = check.kind == "gate-runner" and check.go_module in GO_SHARD_DIRS
+    sharded_mode = "cached-shards" if "--cache" in " ".join(check.argv) else "compiled-shards"
     test_pkgs: list[str] = []
     reused_pkgs: list[str] = []
     remaining_pkgs: list[str] = []
@@ -9048,7 +9068,7 @@ def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
                         "module": check.go_module,
                         "execution": "reused",
                         "selector": "./...",
-                        "mode": "compiled-shards" if sharded else "go-test",
+                        "mode": sharded_mode if sharded else "go-test",
                         "packages": [{"import_path": p, "test_cache": "reused"} for p in reused_pkgs],
                     })
                 return rc, output, elapsed
@@ -9080,7 +9100,7 @@ def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
             run_argv = [
                 "sh",
                 "-c",
-                f"cd {shlex.quote(check.go_module)} && CGO_ENABLED=0 go test "
+                f"cd {shlex.quote(check.go_module)} && CGO_ENABLED=0 GOFLAGS=-trimpath go test "
                 f"-parallel {GO_TOOL_PARALLEL} -timeout {GO_TEST_TIMEOUT} {pkg_args}",
             ]
         rc, output, elapsed = run_command(
@@ -9101,7 +9121,7 @@ def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
         return rc, output, elapsed
 
     observation = {"module": check.go_module, "execution": "ran", "selector": "./...",
-                   "mode": "compiled-shards" if sharded else "go-test"}
+                   "mode": sharded_mode if sharded else "go-test"}
     path = None
     try:
         if sharded and measure_landing:
@@ -9129,7 +9149,11 @@ def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
                         if isinstance(inventory, list):
                             observation["packages"] = inventory
                         elif isinstance(inventory, dict) and isinstance(inventory.get("packages"), list):
-                            observation.update(discovery=inventory.get("discovery"), packages=inventory["packages"])
+                            if inventory.get("mode"):
+                                observation["mode"] = inventory["mode"]
+                            if inventory.get("discovery") is not None:
+                                observation["discovery"] = inventory["discovery"]
+                            observation["packages"] = inventory["packages"]
                 except (OSError, ValueError) as error:
                     print(f"fork-check: cannot read Go shard package evidence: {error}", file=sys.stderr)
             elif not sharded:
