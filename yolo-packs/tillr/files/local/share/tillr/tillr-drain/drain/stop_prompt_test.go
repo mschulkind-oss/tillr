@@ -552,9 +552,12 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 
 	requestSessionStop(t, f.storePath, 1)
 	clock.advance(PassInterval)
-	clock.ticks <- clock.Now()
-
-	out := <-done
+	var out runOutcome
+	select {
+	case clock.ticks <- clock.Now():
+		out = <-done
+	case out = <-done:
+	}
 	if out.err != nil || out.result.Stop != StopOperatorStop {
 		t.Fatalf("stopped heavy loop answered %+v / %v, want operator-stop\n%s", out.result, out.err, report.String())
 	}
