@@ -506,3 +506,96 @@ func TestHeldCandidateIgnoresUnfinishedResumeOfEndedItem(t *testing.T) {
 		})
 	}
 }
+
+// Reproduces the 2026-11-24 lane-4 hold: a paused run left on a lane whose item
+// later closed (or landed, or otherwise ended) must not stop a failed candidate
+// from releasing its lane, while a paused run of an open item or a non-paused
+// unfinished run still keeps it.
+func TestHeldCandidateIgnoresPausedRunOfEndedItem(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		itemState string
+		runState  string
+		wantKept  bool
+	}{
+		{name: "closed", itemState: "closed", runState: run.StatePaused, wantKept: false},
+		{name: "landed", itemState: StateLanded, runState: run.StatePaused, wantKept: false},
+		{name: "resolved-elsewhere", itemState: StateResolvedElsewhere, runState: run.StatePaused, wantKept: false},
+		{name: "active-in-queue", itemState: "in-queue", runState: run.StatePaused, wantKept: true},
+		{name: "running-closed", itemState: "closed", runState: "running", wantKept: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, c := heldCandidateFixture(t)
+			oldItemID := "item-old-" + tc.name
+			oldRunID := "run-" + oldItemID + "-a3-n2"
+			finishedAt := l.cfg.Now().Add(-time.Hour)
+
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				if _, err := tx.Exec(`INSERT INTO items(item_id,title,state,updated_at,seat) VALUES(?,?,?,?,?)`, oldItemID, oldItemID, tc.itemState, 0, ""); err != nil {
+					return err
+				}
+				if tc.runState == run.StatePaused {
+					rec := run.Record{
+						RunID:        oldRunID,
+						ItemID:       oldItemID,
+						LaneID:       c.LaneID,
+						Backend:      "fixture",
+						State:        run.StatePaused,
+						EndCause:     run.EndRestart,
+						StartedAt:    finishedAt.Add(-5 * time.Minute).Format(time.RFC3339),
+						FinishedAt:   finishedAt.Format(time.RFC3339),
+						ArtifactRefs: []run.ArtifactRef{},
+					}
+					return applyTerminal(tx, rec)
+				}
+				_, err := tx.Exec(`INSERT INTO runs(run_id,item_id,lane_id,backend,state,started_at,finished_at,artifact_refs,event_seq) VALUES(?,?,?,'fixture',?,1,0,'[]',0)`, oldRunID, oldItemID, c.LaneID, tc.runState)
+				return err
+			})
+
+			w := &pendingWork{Decision: mustPlan(t, l)[0].decision, Candidate: &c}
+			if err := l.holdItemFault(context.Background(), c, StopGateHarnessError, "gate failed"); err != nil {
+				t.Fatal(err)
+			}
+			released, err := l.releaseHeldCandidate(context.Background(), w, "gate-failed")
+			if err != nil {
+				t.Fatalf("releaseHeldCandidate: %v", err)
+			}
+			if released == tc.wantKept {
+				t.Fatalf("released=%v, want %v", released, !tc.wantKept)
+			}
+
+			s := openFixture(t, f.storePath)
+			defer s.Close()
+			if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+				states, err := PendingLaneStates(r)
+				if err != nil {
+					return err
+				}
+				got := states[c.ItemID]
+				if tc.wantKept {
+					wantReason := "lane has an unfinished run " + oldRunID
+					if got.Status != "kept" || got.Reason != wantReason {
+						t.Fatalf("lane state = %+v, want kept with reason %q", got, wantReason)
+					}
+					return nil
+				}
+				if got.Status != "released" {
+					t.Fatalf("lane state = %+v, want released", got)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			if tc.wantKept {
+				if got := runGit(t, c.Worktree, "rev-parse", "HEAD"); got != c.HeadSHA {
+					t.Fatalf("kept lane changed to %s, want %s", got, c.HeadSHA)
+				}
+				return
+			}
+			if got := mustPlan(t, l)[1].decision; got.Action != ActionDispatch || got.LaneID != c.LaneID {
+				t.Fatalf("released lane not offered to waiting item: %+v", got)
+			}
+		})
+	}
+}
