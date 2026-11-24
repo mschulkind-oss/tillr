@@ -3,17 +3,25 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/notify"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -22,15 +30,26 @@ import (
 // routes it already reads, so a pushed invalidation and the manual refresh are the same
 // request against the same cache keys (design §3.2, §5.2).
 //
-// The socket only watches. It reads the store through the handle the HTTP routes use,
-// which store.OpenRead made read-only, so no path from here can write the store it
-// describes (design §3.3).
+// The socket only watches. It subscribes to the local wake-hint relay (`tillr notify serve`)
+// and reads the store through the handle the HTTP routes use, which store.OpenRead made
+// read-only, so no path from here can write the store it describes (design §3.3).
 
 const (
-	// wsPollInterval is how often one socket reads its sources. Design §4.2 names 250ms:
-	// fast enough that a running drain reads as live, slow enough that an idle screen
-	// costs four queries a second.
-	wsPollInterval = 250 * time.Millisecond
+	// wsFallbackPollInterval is how often a subscribed socket reconciles its sources
+	// when no notification frame arrives (docs/design/tillr-scheduling-and-notifications.md
+	// Section 4.3, D-SN6: 15s steady-state fallback, retiring the 250ms poll).
+	wsFallbackPollInterval = 15 * time.Second
+	// wsDisconnectedPollInterval is how often a socket reads its sources while
+	// disconnected from the local notification relay (Section 4.3: 1s while disconnected).
+	wsDisconnectedPollInterval = 1 * time.Second
+	// wsReconnectInitial and wsReconnectMax bound the jittered reconnect backoff when a
+	// subscriber's relay connection closes or cannot be established (Section 4.2: 100ms
+	// initial, 2x up to 1s cap).
+	wsReconnectInitial = 100 * time.Millisecond
+	wsReconnectMax     = 1 * time.Second
+	// wsSpawnWaitTimeout bounds how long on-demand relay auto-start waits for a newly
+	// spawned `tillr notify serve` process to bind <sock>.
+	wsSpawnWaitTimeout = 2 * time.Second
 	// wsWriteTimeout bounds one frame's write, so a client that stopped reading cannot
 	// pin this connection's goroutine for the life of the process.
 	wsWriteTimeout = 5 * time.Second
@@ -43,8 +62,8 @@ const (
 //
 // `runlog:<id>` is the one exception to the subtree spelling, and it exists because a log
 // that grew is the one change that repeats: a run writing its log would otherwise refetch
-// its exchanges (a stat per record), its timeline and every artifact it has open, four
-// times a second for the length of the run. What a log line actually changes is the run's
+// its exchanges (a stat per record), its timeline and every artifact it has open
+// repeatedly for the length of the run. What a log line actually changes is the run's
 // own payload — its completeness and log state — so the frame names that leaf instead.
 const (
 	resourceSnapshot     = "snapshot"
@@ -134,16 +153,41 @@ func wsOriginAllowed(req *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+type wsTicker interface {
+	Chan() <-chan time.Time
+	Reset(time.Duration)
+	Stop()
+}
+
+type realWSTicker struct{ *time.Ticker }
+
+func (t realWSTicker) Chan() <-chan time.Time { return t.C }
+
+func (s *server) makeWSTicker(d time.Duration) wsTicker {
+	if s.newWSTicker != nil {
+		return s.newWSTicker(d)
+	}
+	return realWSTicker{time.NewTicker(d)}
+}
+
 // streamInvalidations is one socket's life. A reader goroutine notices the client going
 // away — a close frame, a pong, a dead connection — because a write-only loop cannot
-// tell a client that left from one that is simply quiet. The poll pushes a frame per
-// change; a store that cannot answer closes the socket with the reason and leaves the
-// client to reconnect, so a locked or vanished store degrades the screen to its fallback
-// re-read, announced in the header, rather than taking the server down with it.
+// tell a client that left from one that is simply quiet. While subscribed to the local
+// notification relay, the loop wakes on relayed frames and reconciles every 15 seconds
+// (reverting to 1 second only while disconnected from the relay socket). A store that
+// cannot answer closes the socket with the reason and leaves the client to reconnect, so
+// a locked or vanished store degrades the screen to its fallback re-read, announced in
+// the header, rather than taking the server down with it.
 func (s *server) streamInvalidations(ctx context.Context, conn *websocket.Conn, detector *changeDetector) {
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer conn.Close()
+
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		defer cancel()
 		for {
 			// Nothing a client sends is read for its content: this face has no command,
@@ -153,36 +197,320 @@ func (s *server) streamInvalidations(ctx context.Context, conn *websocket.Conn, 
 			}
 		}
 	}()
-	ticker := time.NewTicker(detector.interval)
+
+	var subscribed atomic.Bool
+	wake := make(chan struct{}, 1)
+	stateChanged := make(chan struct{}, 1)
+	if !s.noNotify {
+		subCtx, subCancel := context.WithTimeout(ctx, wsSpawnWaitTimeout)
+		initialSub, _ := s.subscribeNotify(subCtx)
+		subCancel()
+		if ctx.Err() != nil {
+			if initialSub != nil {
+				_ = initialSub.Close()
+			}
+			return
+		}
+		if initialSub != nil {
+			subscribed.Store(true)
+			s.wsSubscribed.Add(1)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.runNotifySubscriber(ctx, initialSub, &subscribed, wake, stateChanged)
+		}()
+	}
+
+	activeInterval := s.wsInterval(subscribed.Load())
+	ticker := s.makeWSTicker(activeInterval)
 	defer ticker.Stop()
 	window := newWSWindow(s.perf, time.Now)
 	defer window.close("client gone")
+
+	pollNow := true
 	for {
-		pollStart := time.Now()
-		frame, changed, err := detector.poll(ctx)
-		window.poll(msSince(time.Now, pollStart))
-		if err != nil {
-			if ctx.Err() != nil {
+		if pollNow {
+			if !s.pollAndSend(ctx, conn, detector, window) {
 				return
 			}
-			fmt.Fprintf(os.Stderr, "tillr-view: /api/v1/ws: %v\n", err)
-			closeWithReason(conn, err.Error())
-			window.close("store unreadable: " + err.Error())
-			return
 		}
-		if changed {
-			if err := writeFrame(conn, frame); err != nil {
-				window.close("write failed")
-				return
-			}
-			window.frame(frame.Changed)
+		if want := s.wsInterval(subscribed.Load()); want != activeInterval {
+			activeInterval = want
+			ticker.Reset(activeInterval)
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-wake:
+			pollNow = true
+		case <-ticker.Chan():
+			pollNow = true
+		case <-stateChanged:
+			pollNow = false
 		}
 	}
+}
+
+func (s *server) pollAndSend(ctx context.Context, conn *websocket.Conn, detector *changeDetector, window *wsWindow) bool {
+	pollStart := time.Now()
+	frame, changed, err := detector.poll(ctx)
+	window.poll(msSince(time.Now, pollStart))
+	s.wsPolls.Add(1)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false
+		}
+		fmt.Fprintf(os.Stderr, "tillr-view: /api/v1/ws: %v\n", err)
+		closeWithReason(conn, err.Error())
+		window.close("store unreadable: " + err.Error())
+		return false
+	}
+	if changed {
+		if err := writeFrame(conn, frame); err != nil {
+			window.close("write failed")
+			return false
+		}
+		window.frame(frame.Changed)
+	}
+	return true
+}
+
+func notifySignal(ch chan<- struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func (s *server) runNotifySubscriber(ctx context.Context, initialSub *notify.Subscription, subscribed *atomic.Bool, wake, stateChanged chan<- struct{}) {
+	sub := initialSub
+	counted := sub != nil
+	defer func() {
+		if sub != nil {
+			_ = sub.Close()
+		}
+		if counted {
+			subscribed.Store(false)
+			s.wsSubscribed.Add(-1)
+		}
+	}()
+
+	backoff := s.effectiveReconnectInitial()
+	maxBackoff := s.effectiveReconnectMax()
+	for {
+		if sub != nil {
+			for {
+				if _, err := sub.Next(ctx); err != nil {
+					_ = sub.Close()
+					sub = nil
+					break
+				}
+				notifySignal(wake)
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			if counted {
+				counted = false
+				subscribed.Store(false)
+				s.wsSubscribed.Add(-1)
+				notifySignal(stateChanged)
+			}
+			backoff = s.effectiveReconnectInitial()
+		}
+
+		timer := time.NewTimer(jitterReconnect(backoff, maxBackoff))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		subCtx, subCancel := context.WithTimeout(ctx, wsSpawnWaitTimeout)
+		nextSub, err := s.subscribeNotify(subCtx)
+		subCancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+		sub = nextSub
+		backoff = s.effectiveReconnectInitial()
+		counted = true
+		subscribed.Store(true)
+		s.wsSubscribed.Add(1)
+		notifySignal(stateChanged)
+		// Reconcile immediately on reconnect so changes committed during the
+		// disconnect window do not wait for the 15-second fallback (Section 4.2).
+		notifySignal(wake)
+	}
+}
+
+func jitterReconnect(base, maxDelay time.Duration) time.Duration {
+	if base > maxDelay {
+		base = maxDelay
+	}
+	if base <= 0 {
+		return wsReconnectInitial
+	}
+	quarter := int64(base) / 4
+	if quarter <= 0 {
+		return base
+	}
+	return time.Duration(int64(base) - quarter + rand.Int64N(quarter+1))
+}
+
+func (s *server) effectiveFallbackPoll() time.Duration {
+	if s.fallbackPoll > 0 {
+		return s.fallbackPoll
+	}
+	return wsFallbackPollInterval
+}
+
+func (s *server) effectiveDisconnectedPoll() time.Duration {
+	if s.disconnectedPoll > 0 {
+		return s.disconnectedPoll
+	}
+	return wsDisconnectedPollInterval
+}
+
+func (s *server) effectiveReconnectInitial() time.Duration {
+	if s.reconnectInitial > 0 {
+		return s.reconnectInitial
+	}
+	return wsReconnectInitial
+}
+
+func (s *server) effectiveReconnectMax() time.Duration {
+	if s.reconnectMax > 0 {
+		return s.reconnectMax
+	}
+	return wsReconnectMax
+}
+
+func (s *server) effectiveNotifyIdleExit() time.Duration {
+	if s.notifyIdleExit > 0 {
+		return s.notifyIdleExit
+	}
+	return notify.DefaultIdleExit
+}
+
+func (s *server) wsInterval(subscribed bool) time.Duration {
+	if s.noNotify || subscribed {
+		return s.effectiveFallbackPoll()
+	}
+	return s.effectiveDisconnectedPoll()
+}
+
+func isRelayUnavailable(err error) bool {
+	return errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, syscall.ENOENT) ||
+		errors.Is(err, syscall.ECONNREFUSED)
+}
+
+func (s *server) subscribeNotify(ctx context.Context) (*notify.Subscription, error) {
+	sub, err := notify.Subscribe(ctx, s.storePath)
+	if err == nil || !s.autoSpawnNotify || !isRelayUnavailable(err) || ctx.Err() != nil {
+		return sub, err
+	}
+
+	s.notifySpawnMu.Lock()
+	defer s.notifySpawnMu.Unlock()
+
+	if sub, err = notify.Subscribe(ctx, s.storePath); err == nil {
+		return sub, nil
+	}
+	if !isRelayUnavailable(err) || ctx.Err() != nil {
+		return nil, err
+	}
+
+	program, resolveErr := resolveTillrCLI(s.tillrFlag)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
+	sockPath, pathErr := notify.SocketPath(s.storePath)
+	if pathErr != nil {
+		return nil, pathErr
+	}
+	if mkErr := os.MkdirAll(filepath.Dir(sockPath), 0o700); mkErr != nil {
+		return nil, mkErr
+	}
+	lockFile, openErr := os.OpenFile(notify.LockPath(sockPath), os.O_CREATE|os.O_RDWR, 0o600)
+	if openErr != nil {
+		return nil, openErr
+	}
+	flockErr := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if flockErr == nil {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		_ = lockFile.Close()
+		if spawnErr := s.startDetachedRelay(program); spawnErr != nil {
+			return nil, spawnErr
+		}
+	} else {
+		_ = lockFile.Close()
+		if !errors.Is(flockErr, syscall.EWOULDBLOCK) && !errors.Is(flockErr, syscall.EAGAIN) {
+			return nil, flockErr
+		}
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, wsSpawnWaitTimeout)
+	defer cancel()
+	for {
+		if sub, err = notify.Subscribe(waitCtx, s.storePath); err == nil {
+			return sub, nil
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, err
+		case <-timer.C:
+		}
+	}
+}
+
+func resolveTillrCLI(explicit string) (string, error) {
+	if explicit != "" {
+		path, err := filepath.Abs(explicit)
+		if err == nil {
+			err = executableFile(path)
+		}
+		return path, err
+	}
+	exe, _ := os.Executable()
+	for _, path := range siblingCandidates(exe, "tillr") {
+		if executableFile(path) == nil {
+			return path, nil
+		}
+	}
+	return exec.LookPath("tillr")
+}
+
+func (s *server) startDetachedRelay(program string) error {
+	storeArg := s.storePath
+	if abs, err := filepath.Abs(storeArg); err == nil {
+		storeArg = abs
+	}
+	cmd := exec.Command(program, "notify", "serve", "--store", storeArg, "--idle-exit", s.effectiveNotifyIdleExit().String())
+	cmd.Dir = "/"
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() {
+		_ = cmd.Wait()
+	}()
+	return nil
 }
 
 func writeFrame(conn *websocket.Conn, frame invalidationFrame) error {
@@ -207,8 +535,7 @@ func closeWithReason(conn *websocket.Conn, reason string) {
 // changeDetector is the poll behind one socket. It holds the cursors the client's cache
 // was last known to match, and answers the resources that moved past them.
 type changeDetector struct {
-	srv      *server
-	interval time.Duration
+	srv *server
 	// dataVersion is sqlite's PRAGMA data_version on this connection: it changes when
 	// another connection commits, which is the one signal a read-only reader has for
 	// "the store moved" that does not depend on what moved.
@@ -221,7 +548,7 @@ type changeDetector struct {
 }
 
 func newChangeDetector(srv *server) *changeDetector {
-	return &changeDetector{srv: srv, interval: wsPollInterval, logSizes: map[string]int64{}}
+	return &changeDetector{srv: srv, logSizes: map[string]int64{}}
 }
 
 // prime records the cursors the client's own read is about to match, so every change after
@@ -387,9 +714,9 @@ func sortedUnique(names []string) []string {
 }
 
 // wsWindowEvery is how often one socket's activity becomes a `ws` line in the performance
-// log. A socket polls four times a second, so a line per poll — or per frame, which a running
-// lane's growing log sends up to four times a second — would be most of the log; a window
-// says how many frames went out and what they named, which is what the client paid for.
+// log. A socket wakes on relayed notifications and reconciles on its fallback interval, so
+// a line per wake or per frame during a burst would flood the log; a window says how many
+// frames went out and what they named, which is what the client paid for.
 const wsWindowEvery = 10 * time.Second
 
 // wsWindow accumulates one socket's polls and frames between log lines.
