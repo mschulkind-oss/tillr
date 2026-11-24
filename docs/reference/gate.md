@@ -3,7 +3,6 @@ title: "The gate — declared checks, judged before the merge and proved after i
 status: accepted
 stage: CURRENT
 verified: 2026-11-24
-verified_commit: c9ccb4a18bad26d6f599374cee8686c86fec8710
 covers:
   - tools/gate/
   - tools/tillr-gate/
@@ -25,7 +24,7 @@ summary: "How the gate works: one JSON declaration per check, a fast tier that j
 
 # The gate
 
-**Status:** Source-verified 2026-11-24 against `c9ccb4a18bad26d6f599374cee8686c86fec8710`.
+**Status:** Source-verified 2026-11-24.
 UNMEASURED: this reference was written by reading the code, not by observing a gate run.
 
 **The gate** decides whether a change may land and whether the trunk is sound. A **check** is
@@ -444,7 +443,7 @@ with `tillr-gate` on `PATH`. To run one heavy check: `just done --only <id>`.
 
 ## Current values
 
-Verified at `c9ccb4a18bad`. The prose above explains what each is for.
+The prose above explains what each is for.
 
 | Value | Setting | Defined in |
 | :--- | :--- | :--- |

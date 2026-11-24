@@ -6,7 +6,7 @@ description: Compose the eight `tillr*` binaries across the seven-step loop — 
 # Operating the tillr loop
 
 > [!NOTE]
-> **Operating boundaries (verified 2026-11-19 at `303ad3fcf`).**
+> **Operating boundaries (verified 2026-11-19).**
 > 1. **Pack launchers vs live source:** the `tillr*` binaries on `PATH` run the rendered pack copy under `~/.local/share/tillr/<module>/`, whereas this repository's daemon runs from `just tillr-build`. Edits under `tools/tillr*` reach pack launchers only after `just pack-sync` and `yolo host apply --assert`.
 > 2. **Supported seam:** external callers compose `tillr` through processes, exit codes, explicit `--store` paths, and versioned JSON records (`record_version: 1`). Go packages, SQLite tables, and `.tillr/loop` layout are internal and move continuously.
 
