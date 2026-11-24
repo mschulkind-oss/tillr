@@ -1,9 +1,12 @@
 package drain
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -584,13 +587,17 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 }
 
 type stopMidPassStager struct {
-	t         *testing.T
-	storePath string
+	t          *testing.T
+	storePath  string
+	beforeStop func()
 }
 
 func (s stopMidPassStager) Stage(_ context.Context, _ StageSpec) error {
 	// Request stop mid-pass while staging the dispatch, before Run launches,
 	// without advancing the heartbeat ticker.
+	if s.beforeStop != nil {
+		s.beforeStop()
+	}
 	requestSessionStop(s.t, s.storePath, 1)
 	return nil
 }
@@ -629,6 +636,142 @@ func TestStopMidPassBetweenStepsEndsBeforeLaunchingNextStep(t *testing.T) {
 	}
 
 	// Next loop releases the unlaunched claim and dispatches the item cleanly.
+	runCtx, cancelNext := context.WithCancel(context.Background())
+	defer cancelNext()
+	nextCfg := l.cfg
+	nextCfg.Stage = &itemContentStager{}
+	nextSteps := &startupHeldSteps{cancel: cancelNext}
+	nextCfg.Steps = nextSteps
+	next, err := NewLoop(nextCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := next.Run(runCtx)
+	if err != nil || resumed.Stop != StopOperatorStop || resumed.Dispatched != 1 || !nextSteps.ran("item-a") {
+		t.Fatalf("next loop after mid-pass stop answered %+v / %v, want Dispatched=1 for item-a", resumed, err)
+	}
+}
+
+// Reproduces the ref-lock failure when a mid-pass stop cancels the loop's context
+// while observeTrunk's `git update-ref refs/tillr/trunk-history/observed` is holding
+// the ref lock: killing `git update-ref` mid-lock leaves observed.lock stale on disk,
+// so the next loop's observeTrunk fails with a lockfile error.
+func TestStopMidPassWhileUpdateRefHoldsLockLeavesNextLoopClean(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	tip := runGit(t, f.root, "rev-parse", TrunkRef)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := scratchUnderDurable(t)
+	once := filepath.Join(bin, "once")
+	inFIFO := filepath.Join(bin, "update-ref.in")
+	outFIFO := filepath.Join(bin, "update-ref.out")
+	if err := syscall.Mkfifo(inFIFO, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(outFIFO, 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "-C" ] && [ "$2" = %q ] && [ "$3" = "update-ref" ] && [ "$4" = %q ] && [ ! -f %q ]; then
+	: > %q
+	exec %q -C "$2" update-ref --stdin < %q > %q
+fi
+exec %q "$@"
+`, f.root, observedTrunkRef, once, once, realGit, inFIFO, outFIFO, realGit)
+	if err := writeForkSafe(filepath.Join(bin, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	prepared := make(chan struct{})
+	driverDone := make(chan error, 1)
+	go func() {
+		in, err := os.OpenFile(inFIFO, os.O_WRONLY, 0)
+		if err != nil {
+			driverDone <- err
+			return
+		}
+		out, err := os.OpenFile(outFIFO, os.O_RDONLY, 0)
+		if err != nil {
+			_ = in.Close()
+			driverDone <- err
+			return
+		}
+		defer out.Close()
+		if _, err := fmt.Fprintf(in, "start\nupdate %s %s\nprepare\n", observedTrunkRef, tip); err != nil {
+			_ = in.Close()
+			driverDone <- err
+			return
+		}
+		sc := bufio.NewScanner(out)
+		gotPrepare := false
+		for sc.Scan() {
+			if strings.TrimSpace(sc.Text()) == "prepare: ok" {
+				gotPrepare = true
+				break
+			}
+		}
+		if !gotPrepare {
+			_ = in.Close()
+			driverDone <- fmt.Errorf("git update-ref --stdin exited before prepare: ok (%v)", sc.Err())
+			return
+		}
+		close(prepared)
+		l.mu.Lock()
+		loopCtx := l.loopCtx
+		l.mu.Unlock()
+		if loopCtx != nil {
+			<-loopCtx.Done()
+		}
+		if _, err := fmt.Fprintln(in, "commit"); err != nil {
+			_ = in.Close()
+			driverDone <- fmt.Errorf("commit after stop: %w", err)
+			return
+		}
+		_ = in.Close()
+		gotCommit := false
+		for sc.Scan() {
+			if strings.TrimSpace(sc.Text()) == "commit: ok" {
+				gotCommit = true
+			}
+		}
+		if sc.Err() != nil {
+			driverDone <- sc.Err()
+			return
+		}
+		if !gotCommit {
+			driverDone <- fmt.Errorf("git update-ref --stdin exited before commit: ok")
+			return
+		}
+		driverDone <- nil
+	}()
+
+	clock := &manualClock{now: l.cfg.Now(), ticks: make(chan time.Time)}
+	steps := &failIfRunSteps{}
+	l.cfg.Now = clock.Now
+	l.heartbeatClock = clock.heartbeat
+	l.cfg.Steps = steps
+	l.cfg.Stage = stopMidPassStager{
+		t:         t,
+		storePath: f.storePath,
+		beforeStop: func() {
+			<-prepared
+		},
+	}
+
+	res, err := l.Run(context.Background())
+	if err != nil || res.Stop != StopOperatorStop {
+		t.Fatalf("mid-pass stop answered %+v / %v, want operator-stop", res, err)
+	}
+	if err := <-driverDone; err != nil {
+		t.Fatalf("update-ref driver: %v", err)
+	}
+	if steps.ran {
+		t.Fatal("mid-pass stop still launched Steps.Run after stop_requested was set")
+	}
+
 	runCtx, cancelNext := context.WithCancel(context.Background())
 	defer cancelNext()
 	nextCfg := l.cfg
