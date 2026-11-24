@@ -473,7 +473,92 @@ func (l *Loop) allowsNoChangeDecision(d Decision) bool {
 		}
 		stage = &d.Workflow.Stages[d.NodeIndex]
 	}
-	return allowsSingleWorkerNoChange(d.Workflow, stage, d.SelectedWorkflow, d.ItemID, l.laneForkTarget(d.LaneID) != "", d.BlockConflict, nil, d.DeskDocument)
+	isFork := l.laneForkTarget(d.LaneID) != ""
+	return allowsSingleWorkerNoChange(d.Workflow, stage, d.SelectedWorkflow, d.ItemID, isFork, d.BlockConflict, nil, d.DeskDocument) ||
+		allowsPlanNoChange(d.Workflow, stage, d.ItemID, isFork, d.BlockConflict, nil, d.DeskDocument)
+}
+
+func (l *Loop) settleNoChangeNode(ctx context.Context, d Decision, rec run.Record, base string, finding landingOfferFinding) error {
+	stage := d.Workflow.Stages[d.NodeIndex]
+	record := noChangeRecord{
+		ItemID:      d.ItemID,
+		Attempt:     d.Attempt,
+		NodeID:      stage.ID,
+		RunID:       rec.RunID,
+		BaseSHA:     base,
+		Cause:       strings.TrimSpace(finding.Cause),
+		Evidence:    strings.TrimSpace(finding.Evidence),
+		WhyNoChange: strings.TrimSpace(finding.WhyNoChange),
+	}
+	scratchDir := run.DurableDir(l.laneDirPath(d.LaneID), rec.RunID)
+	if err := writeLandingArtifact(scratchDir, noChangeFile, record); err != nil {
+		return err
+	}
+	runDir := RunDir(l.cfg.Root, rec.RunID)
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		return err
+	}
+	if err := writeLandingArtifact(runDir, noChangeFile, record); err != nil {
+		return err
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		seen, err := judgmentSeen(tx, noChangeKind, "run", rec.RunID)
+		if err != nil {
+			return err
+		}
+		if seen == 0 {
+			if err := appendEffect(tx, noChangeKind, rec.RunID, map[string]any{
+				"item_id":  record.ItemID,
+				"attempt":  record.Attempt,
+				"node_id":  record.NodeID,
+				"run_id":   record.RunID,
+				"base_sha": record.BaseSHA,
+				"finding": landingOfferFinding{
+					Cause:       record.Cause,
+					Evidence:    record.Evidence,
+					WhyNoChange: record.WhyNoChange,
+				},
+			}, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`UPDATE node_runs SET outcome='passed' WHERE run_id=?`, rec.RunID); err != nil {
+			return err
+		}
+		if stage.ID == "plan" {
+			for i, st := range d.Workflow.Stages {
+				if st.ID == "work" {
+					if _, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES(?,?,?,?, 'skipped') ON CONFLICT(item_id,attempt,node_id) DO NOTHING`, d.ItemID, d.Attempt, st.ID, attemptRunID(d.ItemID, d.Attempt)+"-n"+strconv.Itoa(i+1)); err != nil {
+						return err
+					}
+					break
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func checkNoChangePlanOutputs(root string, d Decision) ([]nodeArtifact, error) {
+	stage := d.Workflow.Stages[d.NodeIndex]
+	if _, hasDelivery := stage.Outputs[deliveryOutput]; hasDelivery && classificationNode(stage) {
+		w := *d.Workflow
+		w.Stages = append([]WorkflowStage(nil), d.Workflow.Stages...)
+		outputs := map[string]string{}
+		for name, typ := range stage.Outputs {
+			if name != deliveryOutput {
+				outputs[name] = typ
+			}
+		}
+		w.Stages[d.NodeIndex].Outputs = outputs
+		d.Workflow = &w
+	}
+	return checkNodeOutputs(root, d)
 }
 
 func planAllowsQuickWay(stage WorkflowStage) bool {
@@ -624,6 +709,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		return true, l.markExamined(ctx, d)
 	}
 	footer := reportFooter(log)
+	var offeredFinding *landingOfferFinding
 	if offered {
 		if obs, isObstacle, obsErr := l.offeredObstacle(ctx, rec.RunID); obsErr != nil {
 			return true, obsErr
@@ -631,10 +717,11 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 			offered = false
 			footer = "blocked"
 			log = formatObstacleReport(obs)
-		} else if _, isNoChange, ncErr := l.offeredNoChange(ctx, rec.RunID); ncErr != nil {
+		} else if nc, isNoChange, ncErr := l.offeredNoChange(ctx, rec.RunID); ncErr != nil {
 			return true, ncErr
 		} else if isNoChange {
 			footer = "no_change"
+			offeredFinding = &nc
 		} else {
 			footer = "done"
 		}
@@ -786,6 +873,80 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		return true, l.markExamined(ctx, d)
 	}
 	if noChangeAllowed {
+		if allowsPlanNoChange(d.Workflow, &stage, d.ItemID, l.laneForkTarget(d.LaneID) != "", d.BlockConflict, nil, d.DeskDocument) {
+			if !l.nonLanding && (head != base || head != nodeBase || strings.TrimSpace(dirty) != "") {
+				if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
+					return true, err
+				}
+				detail := fmt.Sprintf("node %s reported no_change without a clean worktree at base", stage.ID)
+				c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: detail}
+				if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
+					return true, err
+				}
+				if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, detail); stop != "" {
+					return true, retainedAfter(d.LaneID, stop)
+				}
+				return true, l.markExamined(ctx, d)
+			}
+			var finding landingOfferFinding
+			var findingErr string
+			if offeredFinding != nil {
+				finding = *offeredFinding
+			} else {
+				finding, findingErr = parseNoChangeFinding(log)
+			}
+			if findingErr == "" && quickWay {
+				findingErr = fmt.Sprintf("no_change-conflict: %s cannot both record quick way and report no_change", stage.ID)
+			}
+			if findingErr == "" {
+				artifacts, outErr := checkNoChangePlanOutputs(l.cfg.Root, d)
+				if outErr != nil {
+					findingErr = outErr.Error()
+				} else {
+					for _, a := range artifacts {
+						if a.Type == "graph.proposal" {
+							findingErr = fmt.Sprintf("no_change-conflict: %s cannot both propose a graph replacement and report no_change", stage.ID)
+							break
+						}
+					}
+				}
+			}
+			if findingErr != "" {
+				if err := l.nodeOutcome(ctx, d, "failed"); err != nil {
+					return true, err
+				}
+				c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: findingErr}
+				if err := l.refuse(ctx, c, result, RefusalNodeOutput); err != nil {
+					return true, err
+				}
+				if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, findingErr); stop != "" {
+					return true, retainedAfter(d.LaneID, stop)
+				}
+				return true, l.markExamined(ctx, d)
+			}
+			if err := l.settleNoChangeNode(ctx, d, rec, base, finding); err != nil {
+				return true, err
+			}
+			report := []byte(log)
+			for _, ref := range rec.ArtifactRefs {
+				if ref.Kind == "report" {
+					report, err = os.ReadFile(ref.Ref)
+					if err != nil {
+						return true, err
+					}
+					break
+				}
+			}
+			dir := RunDir(l.cfg.Root, rec.RunID)
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return true, err
+			}
+			path := filepath.Join(dir, "node-report.md")
+			if err := os.WriteFile(path, report, 0644); err != nil {
+				return true, err
+			}
+			return true, l.advanceNode(ctx, d, base, path)
+		}
 		if err := l.nodeOutcome(ctx, d, "passed"); err != nil {
 			return true, err
 		}

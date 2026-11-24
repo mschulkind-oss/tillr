@@ -24,7 +24,9 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 	brief += "\n## Workflow node\n\nRun only node " + spec.Node.ID + " on the " + spec.Node.Seat + " seat; access: " + spec.Node.Access + ".\n"
 	if landing && spec.AllowsNoChange {
 		brief += noChangeMarkerLine + "\n"
-		if spec.EndingCapability == run.EndingCallSuspends {
+		if spec.Node.Access == "read_only" {
+			brief += "If reproductions establish that the repository needs no change, leave the target clean at base, write neither do-it-now nor a proposal, and end your report with CAUSE:, EVIDENCE:, WHY_NO_CHANGE:, and RESULT: no_change.\n"
+		} else if spec.EndingCapability == run.EndingCallSuspends {
 			brief += "If reproductions establish that the repository needs no change, leave the worktree clean at base and call `no_change` with `cause`, `evidence`, and `why_no_change`.\n"
 		} else {
 			brief += "If reproductions establish that the repository needs no change, leave the worktree clean at base and end your report with CAUSE:, EVIDENCE:, WHY_NO_CHANGE:, and RESULT: no_change.\n"

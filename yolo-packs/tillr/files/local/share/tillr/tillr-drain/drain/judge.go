@@ -773,6 +773,9 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 			}
 		}
 		c.verifyFeedback = l.checkedVerifyFeedback(ctx, c, options.Tree, verdicts)
+		if c.NoChange != nil && c.NoChange.NodeID == "plan" {
+			c.VerifyReplan = true
+		}
 		for _, v := range findings {
 			// The verifier's words go to the builder as written. Only a reason that begins
 			// plan-wrong: sends the item back to the plan step.
@@ -1134,8 +1137,13 @@ Never change the worker's candidate.
 		brief += "\n## Evaluator task\n\n" + receipt.EvaluatorTask + "\n"
 	}
 	if c.NoChange != nil {
-		brief += fmt.Sprintf("\n## No-change finding\n\nRun `%s` reported `no_change` at `evaluated_head=%s`:\n- Cause: %s\n- Evidence: %s\n- Why no change: %s\n\nIndependently reproduce and check this claim at `evaluated_head` (%s) against the item's words and every criterion. Do not cite worker reports or `no-change.json` as evidence.\n",
-			c.NoChange.RunID, c.BaseSHA, c.NoChange.Cause, c.NoChange.Evidence, c.NoChange.WhyNoChange, c.BaseSHA)
+		if c.NoChange.NodeID != "" {
+			brief += fmt.Sprintf("\n## No-change finding\n\nNode `node:%s` (run `%s`) reported `no_change` at `evaluated_head=%s`:\n- Cause: %s\n- Evidence: %s\n- Why no change: %s\n\nIndependently reproduce and check this claim at `evaluated_head` (%s) against the item's words and every criterion. Do not cite worker reports or `no-change.json` as evidence. Mark criteria `done` (citing `node:%s` and your own reproduction evidence) only when no repository change is needed, `blocked` waiting on `owner` if leaving the trunk unchanged is an unruled owner-only choice, or `not-done` if work is still owed.\n",
+				c.NoChange.NodeID, c.NoChange.RunID, c.BaseSHA, c.NoChange.Cause, c.NoChange.Evidence, c.NoChange.WhyNoChange, c.BaseSHA, c.NoChange.NodeID)
+		} else {
+			brief += fmt.Sprintf("\n## No-change finding\n\nRun `%s` reported `no_change` at `evaluated_head=%s`:\n- Cause: %s\n- Evidence: %s\n- Why no change: %s\n\nIndependently reproduce and check this claim at `evaluated_head` (%s) against the item's words and every criterion. Do not cite worker reports or `no-change.json` as evidence.\n",
+				c.NoChange.RunID, c.BaseSHA, c.NoChange.Cause, c.NoChange.Evidence, c.NoChange.WhyNoChange, c.BaseSHA)
+		}
 	}
 	brief += fmt.Sprintf("\nEvaluator: run=%s; backend=%s; route=%s\n", receipt.Request.RunID, receipt.Request.Backend, receipt.Request.Route())
 	if l.cfg.Store != "" {

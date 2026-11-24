@@ -241,4 +241,240 @@ func TestSingleWorkerNoChangeRefusesDirtyOrIncompleteAndLeavesPlannedBuildUnchan
 		allowsSingleWorkerNoChange(pb, workStage, "planned-build@v1", "item-a", false, nil, nil, "") {
 		t.Fatal("planned-build@v1 must not enable single-worker no_change")
 	}
+	if !allowsPlanNoChange(pb, planStage, "item-a", false, nil, nil, "") {
+		t.Fatal("planned-build@v1 plan stage must allow no_change")
+	}
+	if allowsPlanNoChange(pb, workStage, "item-a", false, nil, nil, "") {
+		t.Fatal("planned-build@v1 work stage must not enable plan no_change")
+	}
+}
+
+type plannedPlanNoChangeSteps struct {
+	*workflowSteps
+	writeProposal bool
+	plans         int
+	works         int
+	verifies      int
+	lands         int
+	planBrief     string
+	verifyBrief   string
+}
+
+func (s *plannedPlanNoChangeSteps) Gate(context.Context, Candidate) (GateOutcome, error) {
+	s.t.Fatal("gate must not run on no_change")
+	return GateOutcome{}, nil
+}
+
+func (s *plannedPlanNoChangeSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	s.lands++
+	return s.workflowSteps.Land(ctx, c)
+}
+
+func (s *plannedPlanNoChangeSteps) Run(_ context.Context, req run.Request) (run.Record, string, error) {
+	s.runs = append(s.runs, req)
+	laneDir := filepath.Join(s.f.laneRoot, req.LaneID)
+	target := filepath.Join(laneDir, WorktreeDir)
+	briefBytes, err := os.ReadFile(filepath.Join(laneDir, BriefFile))
+	if err != nil {
+		return run.Record{}, "", err
+	}
+	brief := string(briefBytes)
+
+	switch req.NodeID {
+	case "plan":
+		s.plans++
+		s.planBrief = brief
+		if s.writeProposal {
+			outDir := nodeOutputsDir(s.f.root, req.RunID)
+			if err := os.MkdirAll(outDir, 0o755); err != nil {
+				return run.Record{}, "", err
+			}
+			writeForkFile(s.t, filepath.Join(outDir, "proposal"), `{"target":"work","workflow":"build-pieces@v1","args":{"pieces":[{"id":"p1","seat":"build","access":"write","prompt":"do it","write_scope":["tools/item-a/"]}]}}`)
+		}
+		report := "CAUSE: issue already fixed on trunk\nEVIDENCE: ran go test ./..., exit 0\nWHY_NO_CHANGE: trunk already has the fix\nRESULT: no_change\n"
+		return s.exitedRecord(req, report), report, nil
+
+	case "work":
+		s.works++
+		s.t.Fatal("work must be skipped when plan ends RESULT: no_change")
+		return s.exitedRecord(req, "RESULT: done\n"), "RESULT: done\n", nil
+
+	case "verify":
+		s.verifies++
+		s.verifyBrief = brief
+		head := runGit(s.t, target, "rev-parse", "HEAD")
+		tree := runGit(s.t, target, "rev-parse", head+"^{tree}")
+		var verdicts []item.JudgeEntry
+		fixtureRead(s.t, s.f, func(r *store.Reader) error {
+			rows, err := r.Query(`SELECT criterion_id,text,claim_class FROM item_criteria WHERE item_id=? ORDER BY criterion_id`, req.ItemID)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id, text, class string
+				if err := rows.Scan(&id, &text, &class); err != nil {
+					return err
+				}
+				verdicts = append(verdicts, item.JudgeEntry{
+					CriterionID:   id,
+					CriterionHash: item.CriterionHash(text),
+					Verdict:       item.VerdictDone,
+					ClaimClass:    class,
+					Reason:        "independently reproduced on base; no repository change needed",
+					Evidence:      []string{"node:plan", "cmd:go-test-check"},
+				})
+			}
+			return rows.Err()
+		})
+		raw, err := json.Marshal(item.JudgeOutput{
+			EvaluatedHead: head,
+			EvaluatedTree: tree,
+			Outcome:       "pass",
+			Verdicts:      verdicts,
+		})
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		outPath := filepath.Join(run.DurableDir(laneDir, req.RunID), "eval.output")
+		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+			return run.Record{}, "", err
+		}
+		if err := os.WriteFile(outPath, raw, 0o644); err != nil {
+			return run.Record{}, "", err
+		}
+		return s.exitedRecord(req, "RESULT: done\n"), "RESULT: done\n", nil
+	}
+	return s.exitedRecord(req, "RESULT: done\n"), "RESULT: done\n", nil
+}
+
+func (s *plannedPlanNoChangeSteps) exitedRecord(req run.Request, report string) run.Record {
+	code := 0
+	var refs []run.ArtifactRef
+	if report != "" {
+		laneDir := filepath.Join(s.f.laneRoot, req.LaneID)
+		path := filepath.Join(run.DurableDir(laneDir, req.RunID), "report.md")
+		writeForkFile(s.t, path, report)
+		refs = append(refs, run.ArtifactRef{Kind: "report", Ref: path})
+	}
+	rec := run.Record{
+		RunID:        req.RunID,
+		ItemID:       req.ItemID,
+		LaneID:       req.LaneID,
+		Backend:      req.Backend,
+		State:        run.StateExited,
+		ExitCode:     &code,
+		StartedAt:    "2026-11-15T00:00:00Z",
+		FinishedAt:   "2026-11-15T00:00:00Z",
+		ArtifactRefs: refs,
+	}
+	st, err := store.Open(context.Background(), s.f.storePath, true)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.WriteTx(context.Background(), func(tx *store.Tx) error { return applyTerminal(tx, rec) }); err != nil {
+		s.t.Fatal(err)
+	}
+	return rec
+}
+
+func setupPlannedBuildWithForkCatalog(t *testing.T) (refusalLoopFixture, *Loop, *workflowSteps, string) {
+	t.Helper()
+	f, l, base := plannedFixture(t)
+	if err := os.MkdirAll(filepath.Join(f.root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(f.root, "bin/pi-forks.list"), "pi-fork https://example.com/pi-fork.git\n")
+	runGit(t, f.root, "add", "bin/pi-forks.list")
+	runGit(t, f.root, "commit", "-m", "add fork catalog")
+	return f, l, base, "item-a"
+}
+
+func itemStateInStore(t *testing.T, f refusalLoopFixture, id string) string {
+	t.Helper()
+	var state string
+	fixtureRead(t, f, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT state FROM items WHERE item_id=?`, id).Scan(&state)
+	})
+	return state
+}
+
+func TestPlannedBuildPlanNoChangeClosesWithoutDeliveryOutput(t *testing.T) {
+	f, l, base, id := setupPlannedBuildWithForkCatalog(t)
+	steps := &plannedPlanNoChangeSteps{workflowSteps: base}
+	l.cfg.Steps = steps
+	trunkBefore := runGit(t, f.root, "rev-parse", TrunkRef)
+
+	result := &LoopResult{}
+	for i := 0; i < 20 && itemStateInStore(t, f, id) == "in-queue"; i++ {
+		graphPass(t, l, result)
+	}
+
+	if trunkAfter := runGit(t, f.root, "rev-parse", TrunkRef); trunkAfter != trunkBefore {
+		t.Fatalf("trunk moved on no_change: %s -> %s", trunkBefore, trunkAfter)
+	}
+	if steps.plans != 1 || steps.works != 0 || steps.verifies != 1 || steps.lands != 0 {
+		t.Fatalf("unexpected counts: plans=%d works=%d verifies=%d lands=%d result=%+v", steps.plans, steps.works, steps.verifies, steps.lands, result)
+	}
+	if !strings.Contains(steps.planBrief, noChangeMarkerLine) {
+		t.Fatalf("plan brief missing no_change marker:\n%s", steps.planBrief)
+	}
+	if !strings.Contains(steps.planBrief, "Classify delivery") {
+		t.Fatalf("plan brief did not require plan.delivery from bin/pi-forks.list:\n%s", steps.planBrief)
+	}
+	if !strings.Contains(steps.verifyBrief, "## No-change finding") || !strings.Contains(steps.verifyBrief, "node:plan") || !strings.Contains(steps.verifyBrief, "issue already fixed on trunk") {
+		t.Fatalf("verify brief missing no_change finding:\n%s", steps.verifyBrief)
+	}
+
+	var shown struct {
+		State       string        `json:"state"`
+		CloseReason string        `json:"close_reason"`
+		ClosedBy    string        `json:"closed_by"`
+		Finding     *item.Finding `json:"finding"`
+	}
+	var holds, nodeOutputRefusals int
+	fixtureRead(t, f, func(r *store.Reader) error {
+		env, err := item.Show(r, id, f.root)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(env.Payload, &shown); err != nil {
+			return err
+		}
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=?`, obstacles.HeldKind, id).Scan(&holds); err != nil {
+			return err
+		}
+		return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND json_extract(payload,'$.step')=?`, RefusalKind, RefusalNodeOutput).Scan(&nodeOutputRefusals)
+	})
+	if shown.State != "closed" || shown.CloseReason != "no_change: trunk already has the fix" || shown.ClosedBy == "" || shown.ClosedBy == "operator" {
+		t.Fatalf("unexpected closed item: %+v", shown)
+	}
+	if shown.Finding == nil || shown.Finding.Cause != "issue already fixed on trunk" || shown.Finding.Evidence != "ran go test ./..., exit 0" || shown.Finding.WhyNoChange != "trunk already has the fix" || shown.Finding.EvaluatedHead != trunkBefore || shown.Finding.WorkerRun == "" || shown.Finding.JudgeRun == "" {
+		t.Fatalf("unexpected finding: %+v", shown.Finding)
+	}
+	if holds != 0 || nodeOutputRefusals != 0 {
+		t.Fatalf("holds=%d nodeOutputRefusals=%d, want 0 and 0", holds, nodeOutputRefusals)
+	}
+}
+
+func TestPlannedBuildPlanNoChangeRefusesProposalConflict(t *testing.T) {
+	f, l, base, id := setupPlannedBuildWithForkCatalog(t)
+	steps := &plannedPlanNoChangeSteps{workflowSteps: base, writeProposal: true}
+	l.cfg.Steps = steps
+
+	result := &LoopResult{}
+	graphPass(t, l, result)
+	graphPass(t, l, result)
+
+	var detail string
+	fixtureRead(t, f, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT COALESCE(json_extract(payload,'$.detail'),'') FROM events WHERE kind=? AND json_extract(payload,'$.step')=? ORDER BY seq DESC LIMIT 1`, RefusalKind, RefusalNodeOutput).Scan(&detail)
+	})
+	if !strings.Contains(detail, "no_change-conflict") {
+		t.Fatalf("refusal detail = %q, want no_change-conflict", detail)
+	}
+	if got := itemStateInStore(t, f, id); got != "in-queue" {
+		t.Fatalf("item state = %q, want in-queue", got)
+	}
 }

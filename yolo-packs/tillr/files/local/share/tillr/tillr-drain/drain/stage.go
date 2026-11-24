@@ -216,7 +216,7 @@ type StageSpec struct {
 	// while the trunk is red (OQ-GP7), so the worker does not spend its run on a failure
 	// it did not cause.
 	TrunkRedNotice string
-	// AllowsNoChange is true only on a single-worker@v1 work run.
+	// AllowsNoChange is true on a single-worker@v1 work run or a planned-build@v1 plan run.
 	AllowsNoChange bool
 }
 
@@ -231,6 +231,16 @@ func allowsSingleWorkerNoChange(w *Workflow, stage *WorkflowStage, selected, ite
 		return false
 	}
 	return stage.ID == "work" && (stage.Kind == "" || stage.Kind == "agent") && stage.Access == "write"
+}
+
+func allowsPlanNoChange(w *Workflow, stage *WorkflowStage, itemID string, isFork bool, blockConflict *item.Conflict, conflict *ConflictBrief, deskDocument string) bool {
+	if isFork || blockConflict != nil || conflict != nil || deskDocument != "" || item.IsCommentItem(itemID) || IsGeneratedRepair(itemID) || isForkRebaseItem(itemID) {
+		return false
+	}
+	if w == nil || w.Name != "planned-build" || w.Version != 1 || w.Revision != 0 || stage == nil {
+		return false
+	}
+	return stage.ID == "plan" && (stage.Kind == "" || stage.Kind == "agent") && stage.Seat == "plan" && stage.Access == "read_only"
 }
 
 // ConflictBrief is the conflict a conflict-fix run is asked to resolve: the paths git
