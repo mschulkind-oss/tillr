@@ -85,3 +85,5 @@
 
 # a tillr store lives in the tree; it is state, not content
 .tillr/
+# Built by `go build` in the module directory; never content.
+/tools/tillr-gate/tillr-gate

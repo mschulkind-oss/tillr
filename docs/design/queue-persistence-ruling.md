@@ -14,7 +14,6 @@ next: "Surface unshared_open and stale_doc_blocks in tillr-view status; the trai
 depends-on:
   - ../reference/tillr-queue-persistence.md
   - momentum-principle.md
-  - ../pi/pile-roadmap-boundary.md
 vantage:
   status-chip: true
 ---

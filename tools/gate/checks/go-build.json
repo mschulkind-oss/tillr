@@ -9,7 +9,6 @@
   "tier": "fast",
   "budget_ms": 2700,
   "reads": [
-    "tools/pi-profiler/",
     "tools/tillr/",
     "tools/tillr-store/",
     "tools/tillr-item/",
