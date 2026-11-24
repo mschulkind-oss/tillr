@@ -31,6 +31,8 @@ const (
 	// BoundaryCheckKind is one closed boundary bracket: what it covered and whether
 	// anything moved outside its targets.
 	BoundaryCheckKind = "boundary.check"
+	// GateStartedKind records that the drain started a candidate's gate.
+	GateStartedKind = "gate.started"
 	// GatePlanKind is the plan the gate computed for a candidate.
 	GatePlanKind = "gate.plan"
 	// GateVerdictKind is the verdict the gate answered for it.
@@ -95,7 +97,7 @@ const (
 // one binary would therefore be refused at init, which is the honest answer — the two
 // spellings of one judgment would have to be reconciled first.
 func init() {
-	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, TrunkFailureLinkedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind, FastGateTimingKind} {
+	for _, kind := range []string{BoundaryCheckKind, GateStartedKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, TrunkFailureLinkedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind, FastGateTimingKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -445,6 +447,56 @@ func (l *Loop) recordItemRefusal(ctx context.Context, itemID, reason, detail str
 type gateJudgmentRecordError struct{ error }
 
 func (e *gateJudgmentRecordError) Unwrap() error { return e.error }
+
+// gateStartedPayload is the `gate.started` payload: the candidate identity a reader needs
+// to see which gate is running and since when (the event's timestamp).
+type gateStartedPayload struct {
+	ItemID  string `json:"item_id"`
+	RunID   string `json:"run_id"`
+	LaneID  string `json:"lane_id"`
+	BaseSHA string `json:"base_sha"`
+}
+
+// recordGateStarted appends one `gate.started` event when the drain starts a candidate's
+// gate. It appends once per gate start (not deduplicated across separate starts of the same
+// run), while attaching to an already-running detached gate does not call it.
+func (s *ProcessSteps) recordGateStarted(ctx context.Context, candidate Candidate) (err error) {
+	defer func() {
+		if err != nil {
+			err = &gateJudgmentRecordError{err}
+		}
+	}()
+	if s.Store == "" || candidate.RunID == "" {
+		return nil
+	}
+	at := time.Now().UTC()
+	if s.Now != nil {
+		at = s.Now().UTC()
+	}
+	body, err := json.Marshal(gateStartedPayload{
+		ItemID:  candidate.ItemID,
+		RunID:   candidate.RunID,
+		LaneID:  candidate.LaneID,
+		BaseSHA: candidate.BaseSHA,
+	})
+	if err != nil {
+		return Internalf("encoding the %s payload: %v", GateStartedKind, err)
+	}
+	st, err := store.Open(ctx, s.Store, true)
+	if err != nil {
+		return Incompatiblef("%v", err)
+	}
+	defer st.Close()
+	id := candidate.RunID
+	return st.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Append(event.Event{
+			Kind: GateStartedKind, ObjectType: "run", ObjectID: &id, Payload: body, At: at,
+		}); err != nil {
+			return Internalf("appending the %s event: %v", GateStartedKind, err)
+		}
+		return nil
+	})
+}
 
 // recordGateJudgment appends the gate step's plan and verdict events, in that order: the plan
 // the gate computed and then the verdict it answered, each carrying its own record's fields

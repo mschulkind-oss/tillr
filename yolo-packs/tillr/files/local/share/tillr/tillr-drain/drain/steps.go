@@ -617,11 +617,19 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 	face, ok := readDetachedGateFace(gateDir)
 	if !ok {
 		if d, doneOK := readDetachedGateDone(gateDir); doneOK {
+			if err := s.recordGateStarted(ctx, candidate); err != nil {
+				return detachedGateHandle{}, err
+			}
 			return detachedGateHandle{dir: gateDir, preDone: &d}, nil
 		}
 		return detachedGateHandle{}, Externalf("gate supervisor exited before publishing live face for %s", candidate.RunID)
 	}
-	return detachedGateHandle{dir: gateDir, face: face}, nil
+	handle := detachedGateHandle{dir: gateDir, face: face}
+	if err := s.recordGateStarted(ctx, candidate); err != nil {
+		s.stopDetachedGate(handle)
+		return detachedGateHandle{}, err
+	}
+	return handle, nil
 }
 
 func (s *ProcessSteps) awaitDetachedGate(waitCtx context.Context, loop *Loop, handle detachedGateHandle) (detachedGateDone, error) {
