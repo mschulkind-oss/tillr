@@ -23,6 +23,17 @@ const candidateReleaseStartedKind = "drain.candidate-release-started"
 const candidateAssignedKind = "drain.candidate-assigned"
 const candidateStagedKind = "drain.candidate-staged"
 
+// laneKeptKind records a lane kept for a finished candidate instead of released:
+// its object is the lane, and its payload is laneKept.
+const laneKeptKind = "drain.lane-kept"
+
+type laneKept struct {
+	LaneID string `json:"lane_id"`
+	ItemID string `json:"item_id"`
+	RunID  string `json:"run_id"`
+	Reason string `json:"reason"`
+}
+
 type candidateLane struct {
 	Candidate Candidate      `json:"candidate"`
 	Released  bool           `json:"released"`
@@ -42,7 +53,7 @@ type heldLaneStage struct {
 }
 
 func init() {
-	for _, kind := range []string{candidateReleaseStartedKind, candidateLaneKind, candidateAssignedKind, candidateStagedKind} {
+	for _, kind := range []string{candidateReleaseStartedKind, candidateLaneKind, candidateAssignedKind, candidateStagedKind, laneKeptKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -141,8 +152,8 @@ func (l *Loop) claimCandidateRelease(ctx context.Context, work *pendingWork, rea
 			}
 		}
 		// Preserve the examination's freshly prepared candidate, while taking
-		// interrupted-release state from the current durable reservation.
-		work.ReleasePending, work.HeldFence, work.HeldStage = current.ReleasePending, current.HeldFence, current.HeldStage
+		// interrupted-release and keep state from the current durable reservation.
+		work.ReleasePending, work.HeldFence, work.HeldStage, work.LaneKeepReason = current.ReleasePending, current.HeldFence, current.HeldStage, current.LaneKeepReason
 		claimed = true
 		return nil
 	})
@@ -461,8 +472,19 @@ func (l *Loop) releaseCandidateMode(ctx context.Context, work *pendingWork, reas
 						released, kept = false, "lane reset failed: "+resetErr.Error()
 					}
 				}
+				now := l.cfg.Now().UTC()
 				if released || kept != work.LaneKeepReason || fence != work.HeldFence {
-					if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: released, Reason: kept, Fence: fence, Stage: stage}, l.cfg.Now().UTC()); err != nil {
+					if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: released, Reason: kept, Fence: fence, Stage: stage}, now); err != nil {
+						return err
+					}
+				}
+				if !released && kept != work.LaneKeepReason {
+					if err := appendEffectOn(tx, laneKeptKind, "lane", c.LaneID, laneKept{
+						LaneID: c.LaneID,
+						ItemID: c.ItemID,
+						RunID:  c.RunID,
+						Reason: kept,
+					}, now); err != nil {
 						return err
 					}
 				}
