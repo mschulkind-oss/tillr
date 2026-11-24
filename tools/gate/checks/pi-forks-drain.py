@@ -18,15 +18,31 @@ TEST_NEEDS = {
 }
 
 
+def go_env():
+    env = dict(os.environ, CGO_ENABLED="0")
+    env.pop("LAND_BATCH_LIMIT", None)
+    # Match go-build and workflows so lane worktrees and child `go build` calls inside
+    # TestForkBuildDeliveryAndSuccessiveLaneBases share trimmed GOCACHE entries instead
+    # of cold-compiling ./drain per worktree path.
+    flags = env.get("GOFLAGS", "").split()
+    if "-trimpath" not in flags:
+        flags.append("-trimpath")
+    env["GOFLAGS"] = " ".join(flags)
+    return env
+
+
 def main(base, head):
     validate(base, head)
     root = Path.cwd()
     changed = set(git(root, "diff", "--name-only", "--no-renames", base, head).splitlines())
+    env = None
     for test, needs in TEST_NEEDS.items():
         if changed.isdisjoint(needs):
             continue
+        if env is None:
+            env = go_env()
         result = subprocess.run(["go", "test", "-count=1", "./drain", "-run", f"^{test}$"],
-                                cwd=root / "tools/tillr-drain", env={**os.environ, "CGO_ENABLED": "0"})
+                                cwd=root / "tools/tillr-drain", env=env)
         if result.returncode:
             return 1 if result.returncode == 1 else 4
     return 0

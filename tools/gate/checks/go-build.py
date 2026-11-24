@@ -12,7 +12,7 @@ import sys
 import tempfile
 from threading import Lock
 import time
-from change_common import git, tree_entries, tracked_changes, result_store, stored_result, store_result
+from change_common import git, tree_entries, result_store, stored_result, store_result
 from classify import classify
 
 GO_TOOL_DIRS = (
@@ -20,6 +20,11 @@ GO_TOOL_DIRS = (
     "tools/tillr-run", "tools/tillr-gate", "tools/tillr-view", "tools/tillr-land",
     "tools/tillr-drain", "tools/tillr-cli", "tools/tillr-watch",
 )
+
+_GO_ENV_CACHE = {}
+_GOMOD_CACHE = {}
+_MODULE_DEPS = {}
+_CACHE_LOCK = Lock()
 
 
 def build_env():
@@ -85,14 +90,13 @@ def build_module(module, scratch, evidence=None, publish=None):
                 publish(evidence)
         if listed.returncode:
             return listed.returncode, listed.stdout + listed.stderr
-        if any(marker == "M" for marker, _, _ in rows):
-            built = subprocess.run(["go", "build", "-o", output, "./..."], cwd=module,
-                                   env=env, text=True, capture_output=True)
-            if built.returncode:
-                return built.returncode, built.stdout + built.stderr
         # -run filters cases, not TestMain: several tools' TestMain builds another
         # binary even when no case runs. -exec compiles/links every test package but
         # replaces execution with true, so this check never runs test setup.
+        # Run `go test -exec true ./...` before `go build` so non-test packages and
+        # merged internal-test packages compile concurrently in one `go` graph; linking
+        # main packages afterward reuses those GOCACHE entries while still catching a
+        # `package main` missing `func main`.
         if evidence is not None:
             for package in evidence["packages"]:
                 package["test_cache"] = "unknown"
@@ -104,7 +108,15 @@ def build_module(module, scratch, evidence=None, publish=None):
             cache = test_cache_evidence(compiled.stdout)
             for package in evidence["packages"]:
                 package["test_cache"] = cache.get(package["import_path"], "unknown")
-        return compiled.returncode, compiled.stdout + compiled.stderr
+        if compiled.returncode:
+            return compiled.returncode, compiled.stdout + compiled.stderr
+        if any(marker == "M" for marker, _, _ in rows):
+            mains = [package for marker, _, package in rows if marker == "M" and package] or ["./..."]
+            built = subprocess.run(["go", "build", "-o", output, *mains], cwd=module,
+                                   env=env, text=True, capture_output=True)
+            if built.returncode:
+                return built.returncode, built.stdout + built.stderr
+        return 0, compiled.stdout + compiled.stderr
 
 
 def write_evidence(path, modules):
@@ -121,6 +133,106 @@ def write_evidence(path, modules):
         print(f"go-build: could not record package evidence: {error}", file=sys.stderr)
 
 
+def _go_metadata(root, env):
+    work_chain = tuple((d / "go.work").is_file() for d in (root, *root.parents))
+    cache_key = (str(root), tuple(sorted(env.items())), work_chain)
+    with _CACHE_LOCK:
+        cached = _GO_ENV_CACHE.get(cache_key)
+    if cached is not None:
+        return copy.deepcopy(cached[0]), cached[1]
+    asked = subprocess.run(["go", "env", "-json"], cwd=root, env=env, capture_output=True, text=True)
+    version = subprocess.run(["go", "version"], cwd=root, env=env, capture_output=True, text=True)
+    if asked.returncode or version.returncode:
+        raise ValueError("could not read Go's effective environment/version: " + asked.stderr + version.stderr)
+    settings = json.loads(asked.stdout)
+    for name in ("GOMOD", "GOTMPDIR", "GOCACHE", "GOMODCACHE", "GOPATH", "GOENV", "GOROOT", "GOTOOLDIR", "GOGCCFLAGS"):
+        settings.pop(name, None)
+    with _CACHE_LOCK:
+        _GO_ENV_CACHE[cache_key] = (copy.deepcopy(settings), version.stdout)
+    return settings, version.stdout
+
+
+def _local_replaces(module, env):
+    try:
+        raw = (module / "go.mod").read_bytes()
+    except OSError:
+        return None
+    with _CACHE_LOCK:
+        cached = _GOMOD_CACHE.get(raw)
+    if cached is not None:
+        return cached
+    parsed = subprocess.run(["go", "mod", "edit", "-json"], cwd=module, env=env,
+                            capture_output=True, text=True)
+    if parsed.returncode:
+        return None  # build_module reports invalid module syntax as a failed check
+    replacements = json.loads(parsed.stdout).get("Replace") or []
+    rel_paths = tuple(r["New"]["Path"] for r in replacements if not r["New"].get("Version"))
+    with _CACHE_LOCK:
+        _GOMOD_CACHE[raw] = rel_paths
+    return rel_paths
+
+
+def _dirty_paths(root, watch_paths):
+    if not watch_paths:
+        return set()
+    status = git(root, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all",
+                 "--", *sorted(watch_paths))
+    return {entry[3:] for entry in status.split("\0") if len(entry) > 3}
+
+
+def dependency_waves(modules):
+    """Group modules into topological waves by local replace edges (cycles share a wave)."""
+    if len(modules) <= 1:
+        return [list(modules)] if modules else []
+    by_resolved = {m.resolve(): m for m in modules}
+    with _CACHE_LOCK:
+        deps = {m: [by_resolved[target] for target in _MODULE_DEPS.get(m.resolve(), ())
+                    if target in by_resolved and target != m.resolve()]
+                for m in modules}
+    index = {}
+    lowlink = {}
+    on_stack = set()
+    stack = []
+    sccs = []
+    counter = 0
+
+    def strongconnect(node):
+        nonlocal counter
+        index[node] = lowlink[node] = counter
+        counter += 1
+        stack.append(node)
+        on_stack.add(node)
+        for dep in deps[node]:
+            if dep not in index:
+                strongconnect(dep)
+                lowlink[node] = min(lowlink[node], lowlink[dep])
+            elif dep in on_stack:
+                lowlink[node] = min(lowlink[node], index[dep])
+        if lowlink[node] == index[node]:
+            comp = []
+            while True:
+                member = stack.pop()
+                on_stack.remove(member)
+                comp.append(member)
+                if member == node:
+                    break
+            sccs.append(comp)
+
+    for module in modules:
+        if module not in index:
+            strongconnect(module)
+    scc_of = {member: idx for idx, comp in enumerate(sccs) for member in comp}
+    scc_level = {}
+    for idx, comp in enumerate(sccs):
+        scc_level[idx] = max(
+            (scc_level[scc_of[dep]] + 1 for member in comp for dep in deps[member] if scc_of[dep] != idx),
+            default=0,
+        )
+    level_of = {m: scc_level[scc_of[m]] for m in modules}
+    max_level = max(level_of.values(), default=0)
+    return [[m for m in modules if level_of[m] == level] for level in range(max_level + 1)]
+
+
 def module_keys(root, modules):
     """Keys over module trees and local replacements, including embed assets and tests.
 
@@ -128,18 +240,14 @@ def module_keys(root, modules):
     workspace includes every inventoried module conservatively. Inputs outside the
     Git tree, symlinks and dirty inputs are explicitly not remembered.
     """
+    if not modules:
+        return {}
     entries = tree_entries(root)
-    code = {p: entries.get(p, ("", "", "absent"))[2] for p in
-            ("tools/gate/checks/go-build.py", "tools/gate/checks/change_common.py",
-             "tools/gate/checks/roadmap_sections.py", "tools/gate/classify.py")}
+    code_paths = ("tools/gate/checks/go-build.py", "tools/gate/checks/change_common.py",
+                  "tools/gate/checks/roadmap_sections.py", "tools/gate/classify.py")
+    code = {p: entries.get(p, ("", "", "absent"))[2] for p in code_paths}
     env = build_env()
-    asked = subprocess.run(["go", "env", "-json"], env=env, capture_output=True, text=True)
-    version = subprocess.run(["go", "version"], env=env, capture_output=True, text=True)
-    if asked.returncode or version.returncode:
-        raise ValueError("could not read Go's effective environment/version: " + asked.stderr + version.stderr)
-    settings = json.loads(asked.stdout)
-    for name in ("GOMOD", "GOTMPDIR", "GOCACHE", "GOMODCACHE", "GOPATH", "GOENV", "GOROOT", "GOTOOLDIR", "GOGCCFLAGS"):
-        settings.pop(name, None)
+    settings, version_stdout = _go_metadata(root, env)
     workspace = settings.get("GOWORK")
     outside_workspace = False
     if workspace and workspace != "off":
@@ -147,45 +255,90 @@ def module_keys(root, modules):
             settings["GOWORK"] = Path(workspace).resolve().relative_to(root).as_posix()
         except ValueError:
             outside_workspace = True
-    def inputs(module):
+    file_flags = any(flag in settings.get("GOFLAGS", "") for flag in
+                     ("-overlay", "-modfile", "-toolexec", "-pkgdir", "-asmflags", "-gcflags",
+                      "-ldflags", "-gccgoflags", "-compiler", "-C"))
+
+    def parse_one(module):
+        resolved = module.resolve()
+        rel_paths = _local_replaces(module, env)
+        if rel_paths is None:
+            return module, None
+        dep_roots = tuple((module / rel).resolve() for rel in rel_paths)
+        with _CACHE_LOCK:
+            _MODULE_DEPS[resolved] = dep_roots
         # Auto-discovery starts at the build directory, not the repository root.
-        # A nested go.work can introduce inputs outside the declared module trees.
-        work = subprocess.run(["go", "env", "GOWORK"], cwd=module, env=env,
-                              capture_output=True, text=True)
-        if work.returncode or work.stdout.strip() not in ("", "off"):
-            return module, "", False
-        parsed = subprocess.run(["go", "mod", "edit", "-json"], cwd=module, env=env,
-                                capture_output=True, text=True)
-        if parsed.returncode:
-            return module, "", False  # build_module reports invalid module syntax as a failed check
-        replacements = json.loads(parsed.stdout).get("Replace") or []
-        roots = [module.resolve()]
-        roots.extend((module / replacement["New"]["Path"]).resolve() for replacement in replacements
-                     if not replacement["New"].get("Version"))
+        # When GOWORK is empty at root, a nested go.work inside root activates workspace mode.
+        if not workspace and any((d / "go.work").is_file() for d in (resolved, *resolved.parents)
+                                 if d != root and d.is_relative_to(root)):
+            return module, None
+        roots = [resolved, *dep_roots]
         if workspace and workspace != "off":
             roots.extend(m.resolve() for m in modules)
         if any(not p.is_relative_to(root) for p in roots):
-            return module, "", False
-        prefixes = [p.relative_to(root).as_posix() for p in roots]
-        selected = {p: e for p, e in entries.items()
-                    if any(p == prefix or p.startswith(prefix + "/") for prefix in prefixes)
-                    or p in code or p in ("go.work", "go.work.sum")}
-        file_flags = any(flag in settings.get("GOFLAGS", "") for flag in
-                         ("-overlay", "-modfile", "-toolexec", "-pkgdir", "-asmflags", "-gcflags",
-                          "-ldflags", "-gccgoflags", "-compiler", "-C"))
+            return module, None
+        own_prefix = resolved.relative_to(root).as_posix()
+        dep_prefixes = sorted({p.relative_to(root).as_posix() for p in roots[1:]} - {own_prefix})
+        return module, (own_prefix, dep_prefixes)
+
+    with ThreadPoolExecutor(max_workers=len(modules)) as pool:
+        parsed_modules = dict(pool.map(parse_one, modules))
+
+    watch_paths = set(code_paths) | {"go.work", "go.work.sum"}
+    for info in parsed_modules.values():
+        if info is not None:
+            own_prefix, dep_prefixes = info
+            watch_paths.add(own_prefix)
+            watch_paths.update(dep_prefixes)
+    dirty = _dirty_paths(root, [p for p in watch_paths if p in entries or (root / p).exists()])
+
+    def matches_dirty(path, own_prefix, dep_prefixes):
+        if path in code or path in ("go.work", "go.work.sum"):
+            return True
+        if path == own_prefix or path.startswith(own_prefix + "/"):
+            return True
+        if workspace and workspace != "off":
+            return any(path == prefix or path.startswith(prefix + "/") for prefix in dep_prefixes)
+        return any(
+            path == prefix or (
+                path.startswith(prefix + "/")
+                and (not path.endswith("_test.go") or os.path.islink(root / path))
+            )
+            for prefix in dep_prefixes
+        )
+
+    def matches_entry(path, entry, own_prefix, dep_prefixes):
+        if path in code or path in ("go.work", "go.work.sum"):
+            return True
+        if path == own_prefix or path.startswith(own_prefix + "/"):
+            return True
+        if workspace and workspace != "off":
+            return any(path == prefix or path.startswith(prefix + "/") for prefix in dep_prefixes)
+        # Exclude directory tree objects (whose git tree sha changes on *_test.go edits)
+        # and non-symlink *_test.go blobs in replaced dependencies; keep every non-test
+        # blob and every symlink so downstream modules rebuild iff an importable input moved.
+        if entry[1] == "tree" or (entry[0] != "120000" and path.endswith("_test.go")):
+            return False
+        return any(path.startswith(prefix + "/") for prefix in dep_prefixes)
+
+    out = {}
+    for module in modules:
+        info = parsed_modules[module]
+        if info is None:
+            out[module] = ("", False)
+            continue
+        own_prefix, dep_prefixes = info
+        all_prefixes = [own_prefix, *dep_prefixes]
+        selected = {p: e for p, e in entries.items() if matches_entry(p, e, own_prefix, dep_prefixes)}
         bound = not outside_workspace and not (workspace and workspace != "off") and not file_flags
         bound = bound and all(e[0] != "120000" for e in selected.values())
-        bound = bound and all(prefix + "/go.mod" in entries for prefix in prefixes)
-        bound = bound and not tracked_changes(root, set(selected))
-        # Untracked source/assets can change a build too. Do not carry their pass.
-        status = git(root, "status", "--porcelain", "--untracked-files=all", "--", *prefixes)
-        bound = bound and not status
-        identity = {"format": "go-build-module-1", "module": module.as_posix(),
-                    "inputs": selected, "code": code, "go": version.stdout, "env": settings}
+        bound = bound and all(prefix + "/go.mod" in entries for prefix in all_prefixes)
+        bound = bound and not any(matches_dirty(p, own_prefix, dep_prefixes) for p in dirty)
+        identity = {"format": "go-build-module-2", "module": module.as_posix(),
+                    "inputs": selected, "code": code, "go": version_stdout, "env": settings}
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-        return module, key, bound
-    with ThreadPoolExecutor(max_workers=len(modules)) as pool:
-        return {module: (key, bound) for module, key, bound in pool.map(inputs, modules)}
+        out[module] = (key, bound)
+    return out
 
 
 def main(memory_store=None):
@@ -232,8 +385,12 @@ def main(memory_store=None):
             else:
                 code, output = build_module(module, scratch)
             return code, output, False, int((time.monotonic() - started) * 1000)
-        with ThreadPoolExecutor(max_workers=len(modules)) as pool:
-            results = list(pool.map(judge, modules))
+        results_by_module = {}
+        with ThreadPoolExecutor(max_workers=max(1, len(modules))) as pool:
+            for wave in dependency_waves(modules):
+                for module, module_result in zip(wave, pool.map(judge, wave)):
+                    results_by_module[module] = module_result
+        results = [results_by_module[module] for module in modules]
         observations = [{"check": "go-build", "source": "go-module-build", "exit_code": code}
                         for code, _, remembered, _ in results if not remembered]
         outcomes = [answer["outcome"] for answer in classify(observations)] if observations else []
@@ -251,7 +408,7 @@ def main(memory_store=None):
                 continue
             key, bound = keys.get(module, ("", False))
             if not remembered and bound and fresh.get(module) == (key, True):
-                store_result(store, key, outcome, duration, tree, "go-build-module-1", check_id="go-build")
+                store_result(store, key, outcome, duration, tree, "go-build-module-2", check_id="go-build")
             print(f"go-build: {module}: {'remembered pass' if remembered else 'FAILED' if outcome == 'fail' else 'built and test files compiled'}")
             if outcome == "fail":
                 failed = True
