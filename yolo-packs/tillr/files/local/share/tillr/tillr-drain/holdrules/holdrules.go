@@ -103,6 +103,7 @@ var Rules = map[string]Rule{
 	"run-live":                     {"waits on work", "lane", "the run from the earlier loop to finish; `tillr drain stop --end-runs` ends it"},
 	"prose-criteria-count":         {"needs you", "queue", "the owner; reconcile the original criteria"},
 	"awaits-rewrite":               {"waits on work", "queue", "the prose rewrite to land"},
+	"icebox":                       {"needs you", "queue", "move the design out of the roadmap Icebox, or close the item"},
 	"fork-held":                    {"waits on work", "queue", "the fork lane landing the shared patch branch; the next pass"},
 	"failover":                     {"ready", "queue", "the next pass"},
 	"seat-degraded":                {"ready", "queue", "the next pass"},
@@ -171,7 +172,7 @@ func For(reason string) Rule {
 	if strings.HasPrefix(reason, "workflow-invalid: ") {
 		return Rules["workflow-invalid"]
 	}
-	for _, named := range []string{"node-failed", "run-link-missing", "node-answer-unread", "node-scope-outside-fence", "boundary-scope-escape", "prose-criteria-count", "backend-missing"} {
+	for _, named := range []string{"node-failed", "run-link-missing", "node-answer-unread", "node-scope-outside-fence", "boundary-scope-escape", "prose-criteria-count", "backend-missing", "icebox"} {
 		if strings.HasPrefix(reason, named+": ") {
 			return Rules[named]
 		}

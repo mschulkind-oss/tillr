@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr/definition"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/vantage"
 )
@@ -269,6 +270,14 @@ func collectDocStats(root string, items map[string]itemRow) map[string]fileStatS
 		}
 	}
 	if root != "" {
+		cfgPath := filepath.Join(root, ".tillr.toml")
+		stats[cfgPath] = statFile(cfgPath)
+		if cfg, err := settings.Read(root); err == nil {
+			for _, rel := range cfg.Sync.Roadmaps {
+				full := plannerDocumentKey(root, rel)
+				stats[full] = statFile(full)
+			}
+		}
 		_ = filepath.WalkDir(filepath.Join(root, "docs"), func(path string, entry fs.DirEntry, err error) error {
 			if err == nil && !entry.IsDir() && strings.HasSuffix(path, ".md") {
 				if _, ok := stats[path]; !ok {

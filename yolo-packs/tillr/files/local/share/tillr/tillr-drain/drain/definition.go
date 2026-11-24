@@ -19,6 +19,7 @@ const (
 	ReasonNodeOutputMissing  = "node-output-missing"
 	ReasonAwaitsRewrite      = "awaits-rewrite"
 	ReasonProseCriteriaCount = "prose-criteria-count"
+	ReasonIcebox             = "icebox"
 )
 
 // landingHolds is the single classification of holds that belong to Git landing,
@@ -86,6 +87,7 @@ var generalHolds = map[string]string{
 	ReasonPiExtensionsBuildFailed: "",
 	ReasonObstacleOwner:           "", ReasonObstacleTooling: "",
 	ReasonObstacleSeat: "", ReasonObstacleDefinition: "",
+	ReasonIcebox: "",
 }
 
 func hasPrerequisite(d definition.Definition, name string) bool {

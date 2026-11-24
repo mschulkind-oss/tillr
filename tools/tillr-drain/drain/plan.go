@@ -806,6 +806,17 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 	if err != nil {
 		return nil, nil, err
 	}
+	iceboxDocs, err := readIceboxDesignDocs(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	var iceboxSchema versionSchema
+	if len(iceboxDocs) > 0 {
+		iceboxSchema, err = readVersionSchema(r)
+		if err != nil {
+			return nil, nil, readFailure(err)
+		}
+	}
 	decisions := make([]record.Envelope, 0, len(items))
 	var itemOrder map[string]int
 	for idx, item := range items {
@@ -1029,6 +1040,11 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			identifyDecision(&decision)
 		} else if rewriteHolds[item.ItemID] != "" && !p.finished(item.State) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonAwaitsRewrite, DeferredBy: rewriteHolds[item.ItemID], From: "held", Attempt: p.nextAttempt(item.ItemID)}
+			identifyDecision(&decision)
+		} else if iceboxReason, iceboxErr := checkIceboxHold(r, item, root, def.Ready, holdEnabled(def, ReasonIcebox), iceboxDocs, iceboxSchema); iceboxErr != nil {
+			return nil, nil, readFailure(iceboxErr)
+		} else if iceboxReason != "" {
+			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: iceboxReason, From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
 		} else if unshared[item.ItemID] {
 			decision, err = p.triageDecision(r, item)
