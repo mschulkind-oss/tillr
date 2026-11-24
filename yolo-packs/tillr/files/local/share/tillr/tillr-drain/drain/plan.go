@@ -71,6 +71,7 @@ type Pass struct {
 	// BriefTemplate is the loop's actual staging input, not a stored tick field.
 	// A standalone plan with no stager compares the retained template instead.
 	BriefTemplate *string `json:"-"`
+	Root          string  `json:"-"`
 	StorePath     string  `json:"-"`
 	// runFaces is a fixed process observation supplied by the live loop.
 	// The planner does not consult the process table, even with StorePath set.

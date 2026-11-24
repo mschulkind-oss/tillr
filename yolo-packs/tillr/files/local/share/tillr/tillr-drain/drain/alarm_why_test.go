@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-drain/heavyrun"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -159,6 +161,35 @@ func TestWhyStaleLoopBuildDistinguishesNormalWaitFromStarvation(t *testing.T) {
 
 	const alarm = "ALARM stale-loop-build"
 	var owner json.RawMessage = json.RawMessage(ownerRaw)
+	livePID, liveTicks, err := heavyrun.HeavySupervisorIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeGateFace := func(runID, itemID, laneID string, startedAt time.Time) {
+		t.Helper()
+		dir := drain.RunDir(s.f.root, runID)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(map[string]any{
+			"pid":           livePID,
+			"start_ticks":   liveTicks,
+			"run_id":        runID,
+			"item_id":       itemID,
+			"lane_id":       laneID,
+			"started_at_ms": startedAt.UnixMilli(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, drain.GateFaceFile), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removeGateFace := func(runID string) {
+		t.Helper()
+		_ = os.Remove(filepath.Join(drain.RunDir(s.f.root, runID), drain.GateFaceFile))
+	}
 
 	// 1. Candidate gate already running when the new build was installed -> status line, no alarm.
 	seedItem("item-pre")
@@ -173,6 +204,7 @@ func TestWhyStaleLoopBuildDistinguishesNormalWaitFromStarvation(t *testing.T) {
 	}
 	appendEvent("drain.started", "run", "run-pre", gateAt, gatePayload)
 	appendEvent("drain.examination.owner", "run", "run-pre", gateAt, owner)
+	writeGateFace("run-pre", "item-pre", "lane-1", gateAt)
 
 	setBuildTime(gateAt.Add(time.Second))
 	out := why()
@@ -213,6 +245,7 @@ func TestWhyStaleLoopBuildDistinguishesNormalWaitFromStarvation(t *testing.T) {
 	}
 	appendEvent("drain.started", "run", "run-post", postGateAt, postGatePayload)
 	appendEvent("drain.examination-claimed", "run", "run-post", postGateAt, owner)
+	writeGateFace("run-post", "item-post", "lane-2", postGateAt)
 
 	setBuildTime(gateAt.Add(2 * time.Second))
 	out = why()
@@ -221,6 +254,8 @@ func TestWhyStaleLoopBuildDistinguishesNormalWaitFromStarvation(t *testing.T) {
 	}
 
 	// Finish both candidate gates so only the trunk proof cases remain.
+	removeGateFace("run-pre")
+	removeGateFace("run-post")
 	appendEvent("drain.examined", "run", "run-pre", postGateAt.Add(time.Second), map[string]any{})
 	appendEvent("drain.examined", "run", "run-post", postGateAt.Add(time.Second), map[string]any{})
 
@@ -238,6 +273,80 @@ func TestWhyStaleLoopBuildDistinguishesNormalWaitFromStarvation(t *testing.T) {
 	if !strings.Contains(out, "loop restart: waiting for trunk proof at abcdef123456") {
 		t.Fatalf("why did not show waiting status line naming the trunk proof:\n%s", out)
 	}
+
+	// 4b. Pre-install trunk proof running + finished candidates whose gates have not started
+	// (examination claimed/owned after install, no live gate face) -> waiting status line, no alarm.
+	seedItem("item-unstarted-a")
+	seedItem("item-unstarted-b")
+	unstartedAt := proofAt.Add(2 * time.Second)
+	appendEvent("drain.started", "run", "run-unstarted-a", unstartedAt, map[string]any{
+		"decision": map[string]any{
+			"item_id":     "item-unstarted-a",
+			"lane_id":     "lane-2",
+			"run_request": map[string]any{"run_id": "run-unstarted-a", "item_id": "item-unstarted-a", "lane_id": "lane-2"},
+		},
+		"base_sha": "base",
+	})
+	appendEvent("drain.examination.owner", "run", "run-unstarted-a", unstartedAt, owner)
+	appendEvent("drain.started", "run", "run-unstarted-b", unstartedAt, map[string]any{
+		"decision": map[string]any{
+			"item_id":     "item-unstarted-b",
+			"lane_id":     "express-1",
+			"run_request": map[string]any{"run_id": "run-unstarted-b", "item_id": "item-unstarted-b", "lane_id": "express-1"},
+		},
+		"base_sha": "base",
+	})
+	appendEvent("drain.examination-claimed", "run", "run-unstarted-b", unstartedAt, owner)
+
+	out = why()
+	if strings.Contains(out, alarm) {
+		t.Fatalf("why alarmed for candidates whose gates have not started while waiting behind a pre-install proof:\n%s", out)
+	}
+	if !strings.Contains(out, "loop restart: waiting for trunk proof at abcdef123456") {
+		t.Fatalf("why did not show waiting status line for pre-install proof with unstarted candidates:\n%s", out)
+	}
+	ans = drain.WhyAnswer{}
+	if err := json.Unmarshal([]byte(why("--json")), &ans); err != nil {
+		t.Fatalf("decode why --json: %v", err)
+	}
+	if len(ans.Alarms) != 0 || !strings.Contains(ans.LoopRestartLine, "trunk proof at abcdef123456") {
+		t.Fatalf("json why for pre-install proof + unstarted candidates: alarms=%+v restart=%q", ans.Alarms, ans.LoopRestartLine)
+	}
+
+	// 4c. Once one of those candidates actually starts a gate after the install and it is still running,
+	// stale-loop-build alarms and names that gate (and not the other unstarted candidate).
+	writeGateFace("run-unstarted-a", "item-unstarted-a", "lane-2", unstartedAt)
+	out = why()
+	if strings.Count(out, alarm) != 1 || !strings.Contains(out, "gate item-unstarted-a on lane-2 (run-unstarted-a)") {
+		t.Fatalf("why did not alarm naming the post-install running gate:\n%s", out)
+	}
+	ans = drain.WhyAnswer{}
+	if err := json.Unmarshal([]byte(why("--json")), &ans); err != nil {
+		t.Fatalf("decode why --json: %v", err)
+	}
+	if len(ans.Alarms) != 1 || !strings.Contains(ans.Alarms[0].Cause, "gate item-unstarted-a on lane-2 (run-unstarted-a)") || strings.Contains(ans.Alarms[0].Cause, "item-unstarted-b") {
+		t.Fatalf("json why alarm cause for post-install running gate: alarms=%+v", ans.Alarms)
+	}
+
+	// Once that gate writes gate.done.json, it is no longer running and no longer named as starving.
+	doneRaw, err := json.Marshal(map[string]any{"run_id": "run-unstarted-a", "exit_code": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(drain.RunDir(s.f.root, "run-unstarted-a"), drain.GateDoneFile), doneRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out = why()
+	if strings.Contains(out, alarm) {
+		t.Fatalf("why alarmed after gate wrote gate.done.json:\n%s", out)
+	}
+	if !strings.Contains(out, "loop restart: waiting for trunk proof at abcdef123456") {
+		t.Fatalf("why did not return to waiting status line after gate wrote gate.done.json:\n%s", out)
+	}
+	removeGateFace("run-unstarted-a")
+	_ = os.Remove(filepath.Join(drain.RunDir(s.f.root, "run-unstarted-a"), drain.GateDoneFile))
+	appendEvent("drain.examined", "run", "run-unstarted-a", unstartedAt.Add(time.Second), map[string]any{})
+	appendEvent("drain.examined", "run", "run-unstarted-b", unstartedAt.Add(time.Second), map[string]any{})
 
 	// 5. Trunk proof started after the new build was installed -> stale-loop-build alarm naming it.
 	setBuildTime(proofAt.Add(-time.Second))
