@@ -3247,7 +3247,11 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			}
 		}
 		var unlock func()
-		ctx, unlock, err = l.lockRestartSettlement(ctx)
+		if isProc && procSteps.hasPassedDetachedGate(candidate) {
+			ctx, unlock, err = l.lockRestartLanding(ctx)
+		} else {
+			ctx, unlock, err = l.lockRestartSettlement(ctx)
+		}
 		if err != nil {
 			return "", false, err
 		}
@@ -3269,7 +3273,11 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, err
 		}
 		var unlock func()
-		ctx, unlock, err = l.lockRestartSettlement(ctx)
+		if isProc && procSteps.hasPassedDetachedGate(candidate) {
+			ctx, unlock, err = l.lockRestartLanding(ctx)
+		} else {
+			ctx, unlock, err = l.lockRestartSettlement(ctx)
+		}
 		if err != nil {
 			return "", false, err
 		}
@@ -3307,7 +3315,13 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			err = startErr
 		} else {
 			done, waitErr := restartWork(ctx, l, func(waitCtx context.Context) (detachedGateDone, error) {
-				return procSteps.awaitDetachedGate(waitCtx, l, handle)
+				d, err := procSteps.awaitDetachedGate(waitCtx, l, handle)
+				if err == nil && detachedGatePassed(candidate, d) {
+					if held, ok := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold); ok {
+						held.allowDuringProof.Store(true)
+					}
+				}
+				return d, err
 			})
 			l.mu.Lock()
 			stalledGateCount = l.gatesInFlight
@@ -3523,7 +3537,7 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		}
 	}
 	defer finishPreLand()
-	ctx, unlock, lockErr := l.lockRestartSettlement(ctx)
+	ctx, unlock, lockErr := l.lockRestartLanding(ctx)
 	if lockErr != nil {
 		return "", false, lockErr
 	}
