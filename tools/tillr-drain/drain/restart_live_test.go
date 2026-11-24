@@ -231,6 +231,9 @@ func (s *rollScenario) stop(t *testing.T) {
 			}
 		}
 		if !stillAlive {
+			if err := stopStoreNotifyRelays(ctx, s.f.store, here); err != nil {
+				t.Errorf("stopping roll notify relays: %v", err)
+			}
 			return
 		}
 		if err := ctx.Err(); err != nil {
@@ -239,6 +242,65 @@ func (s *rollScenario) stop(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func stopStoreNotifyRelays(ctx context.Context, storePath string, here *presence.Owner) error {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return err
+	}
+	var relays []presence.Owner
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
+		if err != nil {
+			continue
+		}
+		args := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+		hasNotify, hasServe, hasStore := false, false, false
+		for i, arg := range args {
+			if arg == "notify" {
+				hasNotify = true
+			}
+			if arg == "serve" {
+				hasServe = true
+			}
+			if arg == "--store" && i+1 < len(args) && args[i+1] == storePath {
+				hasStore = true
+			}
+		}
+		if !hasNotify || !hasServe || !hasStore {
+			continue
+		}
+		start, err := presence.ProcessStart(pid)
+		if presence.ProcessGone(err) || (err == nil && start == "") {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		relays = append(relays, presence.Owner{PID: pid, Start: start, Domain: here.Domain, UID: here.UID})
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+	}
+	for _, o := range relays {
+		for {
+			dead, err := presence.OwnerDead(&o, here)
+			if err != nil {
+				return err
+			}
+			if dead {
+				break
+			}
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("timed out waiting for notify relay %d to exit: %w", o.PID, err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	return nil
 }
 
 func copyFile(t *testing.T, from, to string, extra []byte) {
@@ -412,7 +474,7 @@ func TestNoRequestMeansTheRunningBinaryNeverRestarts(t *testing.T) {
 	before := buildLines(s.output(t))
 	image, _ := os.Readlink("/proc/" + strconv.Itoa(s.cmd.Process.Pid) + "/exe")
 	s.replaceBinary(t)
-	time.Sleep(120 * drain.DefaultStorePollInterval)
+	time.Sleep(5 * time.Second)
 	if after := buildLines(s.output(t)); len(after) != 1 || after[0] != before[0] {
 		t.Fatalf("build lines changed with no request: %v -> %v", before, after)
 	}

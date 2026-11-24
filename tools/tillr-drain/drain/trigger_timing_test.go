@@ -7,8 +7,11 @@ import (
 
 func TestStorePollIntervalDefaultAndOverride(t *testing.T) {
 	_, l := passFixture(t)
-	if l.cfg.StorePollInterval != 100*time.Millisecond {
-		t.Fatalf("default store poll interval = %s, want 100ms", l.cfg.StorePollInterval)
+	if l.cfg.StorePollInterval != DefaultFallbackPollInterval {
+		t.Fatalf("default store poll interval = %s, want %s", l.cfg.StorePollInterval, DefaultFallbackPollInterval)
+	}
+	if DefaultFallbackPollInterval != 15*time.Second {
+		t.Fatalf("DefaultFallbackPollInterval = %s, want 15s", DefaultFallbackPollInterval)
 	}
 	cfg := l.cfg
 	cfg.StorePollInterval = time.Millisecond

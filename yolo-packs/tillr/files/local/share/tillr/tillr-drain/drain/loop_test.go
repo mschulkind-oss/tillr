@@ -2023,18 +2023,28 @@ func waitForFile(t *testing.T, path string, timeout time.Duration) {
 	}
 }
 
-// matchingPIDs answers the processes whose command line names the store, which is the run
-// face's argv and nothing else's once the loop is gone.
+// matchingPIDs answers the run-face processes whose command line names the store,
+// excluding the detached `tillr notify serve` relay that outlives loop stop until
+// its idle-exit timeout (D-SN5).
 func matchingPIDs(t *testing.T, storePath string) []string {
 	t.Helper()
-	out, err := exec.Command("pgrep", "-f", storePath).Output()
+	out, err := exec.Command("pgrep", "-fa", storePath).Output()
 	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
 			return nil
 		}
 		t.Fatalf("pgrep failed: %v", err)
 	}
-	return strings.Fields(string(out))
+	var pids []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" || strings.Contains(line, "notify serve") {
+			continue
+		}
+		if fields := strings.Fields(line); len(fields) > 0 {
+			pids = append(pids, fields[0])
+		}
+	}
+	return pids
 }
 
 // terminalRun is one row of the runs table as the stop case reads it.
