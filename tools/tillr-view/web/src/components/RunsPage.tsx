@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { relativeTime } from "../models/board";
 import { useNow } from "../models/clock";
-import { collapseIdleLanes } from "../models/lanes";
+import { collapseIdleLanes, DRAINING_LANE_NOTE, formatLaneRowSummary, groupLanes } from "../models/lanes";
 import type { ItemView, LaneRow, RunSummary } from "../models/types";
 import { EntityLink } from "./EntityLink";
 import { MoreIdleLanes } from "./LaneStrip";
@@ -23,19 +23,26 @@ export function finishedRuns(items: ItemView[] | undefined, limit = FINISHED_LIM
     .sort((a, b) => b.run.finished_at_ms - a.run.finished_at_ms).slice(0, limit);
 }
 const runQuery = { tab: "transcript" };
-function Row({ lane, title, now }: { lane: LaneRow; title?: string; now: number }) {
+function Row({ lane, title, now, draining = false }: { lane: LaneRow; title?: string; now: number; draining?: boolean }) {
   const node = lane.nodes?.find(n => n.attempt === lane.attempt && n.state === "running");
   const seat = node?.seat || lane.seat;
   const where = [node?.node_id, seat].filter(Boolean).join(" · ") || (lane.seat_source === "none" ? "no seat asked" : "seat unrecorded");
   const idle = lane.state === "idle";
+  const heldItem = lane.held_item_id;
+  const note = draining || lane.group === "draining" ? (lane.group_note || DRAINING_LANE_NOTE) : null;
   return <tr data-state={lane.state}>
     <td><EntityLink kind="lane" id={lane.lane_id} state={lane.state === "running" ? "moving" : "not known"} />{lane.lane_id.startsWith("express-") ? " express" : ""}</td>
-    <td>{idle ? "idle" : lane.item_id ? <><a href={`/item/${encodeURIComponent(lane.item_id)}`}>{title || lane.item_id}</a></> : "item unrecorded"}</td>
-    <td>{idle ? "—" : where}</td>
-    <td>{lane.state}</td>
+    <td>{idle && !heldItem ? "idle" : (heldItem || lane.item_id) ? <><a href={`/item/${encodeURIComponent(heldItem || lane.item_id)}`}>{title || heldItem || lane.item_id}</a></> : "item unrecorded"}</td>
+    <td>{idle && !heldItem ? "—" : where}</td>
+    <td>{lane.state}{note ? ` · ${note}` : ""}</td>
     <td>{lane.state_since_ms === null ? "since —" : `~${age(now - lane.state_since_ms)}`}</td>
     <td>{lane.run_id ? <>{idle ? "last: " : ""}<EntityLink kind="run" id={lane.run_id} query={runQuery} /></> : "—"}</td>
   </tr>;
+}
+
+function LanesTable({ rows, titles, now, draining = false }: { rows: LaneRow[]; titles: Map<string, string>; now: number; draining?: boolean }) {
+  return <table><thead><tr><th>Lane</th><th>Item</th><th>Seat / node</th><th>State</th><th>In state</th><th>Run</th></tr></thead>
+    <tbody>{rows.map(lane => <Row key={lane.lane_id} lane={lane} title={titles.get(lane.held_item_id || lane.item_id)} now={now} draining={draining} />)}</tbody></table>;
 }
 
 export function RunsPage({ lanes, lanesError, items, now: fixed, configured }: { lanes?: LaneRow[]; lanesError?: Error | null; items?: ItemView[]; now?: number; configured?: string[] }) {
@@ -44,15 +51,38 @@ export function RunsPage({ lanes, lanesError, items, now: fixed, configured }: {
   const now = fixed ?? ticking;
   const titles = new Map((items ?? []).map(item => [item.item_id, item.title]));
   const finished = finishedRuns(items);
+  const groups = lanes ? groupLanes(lanes, configured) : null;
+  const headerSummary = lanes ? formatLaneRowSummary(lanes, configured) : null;
   const { shown, hidden } = collapseIdleLanes(lanes ?? [], configured, now);
   return <main className="entity-page" aria-label="Runs page">
     <h1>Runs</h1>
     <section className="lane-strip" aria-label="Current lanes">
       <h2>Lanes</h2>
-      {lanesError ? <p role="alert">could not read the store: {lanesError.message}</p> : lanes === undefined ? <p role="status">Reading lanes…</p> : lanes.length === 0 ? <p>No lanes recorded.</p> :
-        <table><thead><tr><th>Lane</th><th>Item</th><th>Seat / node</th><th>State</th><th>In state</th><th>Run</th></tr></thead>
-          <tbody>{sortLanes(expanded ? lanes : shown).map(lane => <Row key={lane.lane_id} lane={lane} title={titles.get(lane.item_id)} now={now} />)}</tbody></table>}
-      {lanes && lanes.length > 0 ? <MoreIdleLanes count={hidden.length} open={expanded} onToggle={() => setExpanded(!expanded)} /> : null}
+      {lanesError ? <p role="alert">could not read the store: {lanesError.message}</p> : lanes === undefined ? <p role="status">Reading lanes…</p> : lanes.length === 0 ? <p>No lanes recorded.</p> : groups ? <>
+        {headerSummary ? <p>{headerSummary}</p> : null}
+        <div className="lane-strip__group" data-lane-group="configured">
+          <h3>Configured lanes ({groups.configured.length})</h3>
+          {groups.configured.length ? <LanesTable rows={sortLanes(groups.configured)} titles={titles} now={now} /> : <p className="lane-strip__empty">None configured.</p>}
+        </div>
+        <div className="lane-strip__group" data-lane-group="draining">
+          <h3>Draining lanes ({groups.draining.length}) · {DRAINING_LANE_NOTE}</h3>
+          {groups.draining.length ? <LanesTable rows={sortLanes(groups.draining)} titles={titles} now={now} draining /> : <p className="lane-strip__empty">None finishing old work.</p>}
+        </div>
+        {groups.desks.length ? <div className="lane-strip__group" data-lane-group="desk">
+          <h3>Document desks ({groups.desks.length})</h3>
+          <LanesTable rows={sortLanes(groups.desks)} titles={titles} now={now} />
+        </div> : null}
+        <div className="lane-strip__group" data-lane-group="idle">
+          <h3>Idle lanes holding nothing ({groups.idle.length})</h3>
+          {groups.idle.length ? <>
+            <MoreIdleLanes count={groups.idle.length} open={expanded} onToggle={() => setExpanded(!expanded)} />
+            {expanded ? <LanesTable rows={groups.idle} titles={titles} now={now} /> : null}
+          </> : <p className="lane-strip__empty">None.</p>}
+        </div>
+      </> : <>
+        <LanesTable rows={sortLanes(expanded ? lanes : shown)} titles={titles} now={now} />
+        <MoreIdleLanes count={hidden.length} open={expanded} onToggle={() => setExpanded(!expanded)} />
+      </>}
     </section>
     <section aria-label="Recently finished runs">
       <h2>Recently finished</h2>

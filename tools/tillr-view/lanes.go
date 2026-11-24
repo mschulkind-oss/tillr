@@ -12,11 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
+	"github.com/mschulkind-oss/tillr-drain/lanestate"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -33,6 +35,11 @@ type laneRow struct {
 	History       []laneHistoryRun        `json:"history"`
 	Usage         usageSum                `json:"usage"`
 	LaneID        string                  `json:"lane_id"`
+	Group         string                  `json:"group,omitempty"`
+	GroupNote     string                  `json:"group_note,omitempty"`
+	HeldItemID    string                  `json:"held_item_id,omitempty"`
+	HeldRunID     string                  `json:"held_run_id,omitempty"`
+	HeldReason    string                  `json:"held_reason,omitempty"`
 	State         string                  `json:"state"`
 	StateSinceMS  *int64                  `json:"state_since_ms"`
 	RunID         string                  `json:"run_id"`
@@ -116,9 +123,143 @@ func lanesFace(args []string) (record.Envelope, int) {
 	return record.Envelope{}, record.ExitOK
 }
 
-// laneCapacityLine counts ordinary and reserved express lanes independently;
-// document desks remain visible but belong to neither pool.
+const (
+	laneGroupConfigured = "configured"
+	laneGroupDraining   = "draining"
+	laneGroupIdle       = "idle"
+	laneGroupDesk       = "desk"
+	drainingLaneNote    = "finishing old work, gets no new work"
+)
+
+func isDocumentDeskLane(laneID string) bool {
+	return strings.HasPrefix(laneID, "desk-") && laneID != "desk-trunk-fixer"
+}
+
+func classifyLaneGroup(laneID, workState string, configuredSet map[string]bool, held map[string]lanestate.HeldLane) (string, string) {
+	if len(configuredSet) == 0 {
+		return "", ""
+	}
+	_, hasHeld := held[laneID]
+	busy := hasHeld || workState != "idle"
+	if configuredSet[laneID] {
+		return laneGroupConfigured, ""
+	}
+	if isDocumentDeskLane(laneID) {
+		if busy {
+			return laneGroupDesk, ""
+		}
+		return laneGroupIdle, ""
+	}
+	if busy {
+		return laneGroupDraining, drainingLaneNote
+	}
+	return laneGroupIdle, ""
+}
+
+func naturalLaneLess(a, b string) bool {
+	pa, na, oka := splitNumericLane(a)
+	pb, nb, okb := splitNumericLane(b)
+	if oka && okb && pa == pb {
+		return na < nb
+	}
+	return a < b
+}
+
+func splitNumericLane(id string) (string, int, bool) {
+	i := strings.LastIndexByte(id, '-')
+	if i < 0 || i == len(id)-1 {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(id[i+1:])
+	if err != nil {
+		return "", 0, false
+	}
+	return id[:i+1], n, true
+}
+
+func ensureConfiguredStoreLanes(lanes []storeLane, configured []string, held map[string]lanestate.HeldLane) []storeLane {
+	if len(configured) == 0 {
+		return lanes
+	}
+	seen := make(map[string]bool, len(lanes))
+	out := make([]storeLane, 0, len(lanes)+len(configured))
+	for _, l := range lanes {
+		seen[l.LaneID] = true
+		out = append(out, l)
+	}
+	for _, id := range configured {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, storeLane{LaneID: id, State: "idle"})
+		}
+	}
+	for id := range held {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, storeLane{LaneID: id, State: "idle"})
+		}
+	}
+	return out
+}
+
+func laneGroupOrder(group string) int {
+	switch group {
+	case laneGroupConfigured:
+		return 0
+	case laneGroupDraining:
+		return 1
+	case laneGroupDesk:
+		return 2
+	case laneGroupIdle:
+		return 3
+	default:
+		return 4
+	}
+}
+
+// laneCapacityLine states configured versus busy lanes when the session records
+// configured lanes, and otherwise counts ordinary and express lanes independently.
 func laneCapacityLine(rows []laneRow) string {
+	hasGroup := false
+	for _, row := range rows {
+		if row.Group != "" {
+			hasGroup = true
+			break
+		}
+	}
+	if hasGroup {
+		confTotal, confOrdinary, confExpress, confBusy := 0, 0, 0, 0
+		draining, idle := 0, 0
+		for _, row := range rows {
+			switch row.Group {
+			case laneGroupConfigured:
+				confTotal++
+				if strings.HasPrefix(row.LaneID, "express-") {
+					confExpress++
+				} else if !strings.HasPrefix(row.LaneID, "desk-") {
+					confOrdinary++
+				}
+				if row.State != "idle" || row.HeldItemID != "" {
+					confBusy++
+				}
+			case laneGroupDraining:
+				draining++
+			case laneGroupIdle:
+				idle++
+			}
+		}
+		confLabel := fmt.Sprintf("%d configured", confTotal)
+		if confOrdinary > 0 && confExpress > 0 {
+			confLabel = fmt.Sprintf("%d configured (%d ordinary, %d express)", confTotal, confOrdinary, confExpress)
+		}
+		busyTotal := confBusy + draining
+		busyLabel := fmt.Sprintf("%d busy (%d of %d configured, 0 draining)", busyTotal, confBusy, confTotal)
+		if draining > 0 {
+			busyLabel = fmt.Sprintf("%d busy (%d of %d configured + %d draining old work)", busyTotal, confBusy, confTotal, draining)
+		}
+		return fmt.Sprintf("%s, %s · %d idle holding nothing", confLabel, busyLabel, idle)
+	}
+
 	ordinary, running, express, expressRunning := 0, 0, 0, 0
 	for _, row := range rows {
 		if strings.HasPrefix(row.LaneID, "desk-") {
@@ -161,42 +302,100 @@ func laneWorkState(lane storeLane, run storeRun) string {
 	return "running"
 }
 
+func printLaneRow(w io.Writer, row laneRow) error {
+	since := "—"
+	if row.StateSinceMS != nil {
+		since = time.UnixMilli(*row.StateSinceMS).UTC().Format(time.RFC3339Nano)
+	}
+	action := row.LatestAction.Text
+	at := "—"
+	if row.LatestAction.AtMS != nil {
+		at = time.UnixMilli(*row.LatestAction.AtMS).UTC().Format(time.RFC3339Nano)
+	}
+	step := "—"
+	if row.LastStepAtMS != nil {
+		step = row.LastStep + " @ " + time.UnixMilli(*row.LastStepAtMS).UTC().Format(time.RFC3339Nano)
+	}
+	if _, err := fmt.Fprintf(w, "%s · %s since %s · %s · %s · %s · attempt %d · %s · %s · last finished %s · %s (%s, %s) @ %s\n", row.LaneID, row.State, since, row.ItemID, row.Seat, row.Backend, row.Attempt, row.RunID, row.Outcome, step, action, row.LatestAction.Kind, row.LatestAction.Clock, at); err != nil {
+		return err
+	}
+	if row.GroupNote != "" {
+		if _, err := fmt.Fprintf(w, "  %s\n", row.GroupNote); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "  %s\n", row.Work.Text()); err != nil {
+		return err
+	}
+	if h := row.Hold; h != nil {
+		if _, err := fmt.Fprintf(w, "  held since %s: %s: %s. Mover: %s\n", time.UnixMilli(h.AtMS).UTC().Format(time.RFC3339), h.Reason, h.Detail, h.Mover); err != nil {
+			return err
+		}
+	}
+	if c := row.Condition; c != nil {
+		if _, err := fmt.Fprintf(w, "  out of rotation since %s: %s: %s. Remedy: %s\n", time.UnixMilli(c.AtMS).UTC().Format(time.RFC3339), c.Reason, c.Detail, c.Remedy); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func printLanes(w io.Writer, rows []laneRow) error {
 	if _, err := fmt.Fprintln(w, laneCapacityLine(rows)); err != nil {
 		return err
 	}
+	hasGroup := false
 	for _, row := range rows {
-		since := "—"
-		if row.StateSinceMS != nil {
-			since = time.UnixMilli(*row.StateSinceMS).UTC().Format(time.RFC3339Nano)
-		}
-		action := row.LatestAction.Text
-		at := "—"
-		if row.LatestAction.AtMS != nil {
-			at = time.UnixMilli(*row.LatestAction.AtMS).UTC().Format(time.RFC3339Nano)
-		}
-		step := "—"
-		if row.LastStepAtMS != nil {
-			step = row.LastStep + " @ " + time.UnixMilli(*row.LastStepAtMS).UTC().Format(time.RFC3339Nano)
-		}
-		if _, err := fmt.Fprintf(w, "%s · %s since %s · %s · %s · %s · attempt %d · %s · %s · last finished %s · %s (%s, %s) @ %s\n", row.LaneID, row.State, since, row.ItemID, row.Seat, row.Backend, row.Attempt, row.RunID, row.Outcome, step, action, row.LatestAction.Kind, row.LatestAction.Clock, at); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(w, "  %s\n", row.Work.Text()); err != nil {
-			return err
-		}
-		if h := row.Hold; h != nil {
-			if _, err := fmt.Fprintf(w, "  held since %s: %s: %s. Mover: %s\n", time.UnixMilli(h.AtMS).UTC().Format(time.RFC3339), h.Reason, h.Detail, h.Mover); err != nil {
-				return err
-			}
-		}
-		if c := row.Condition; c != nil {
-			if _, err := fmt.Fprintf(w, "  out of rotation since %s: %s: %s. Remedy: %s\n", time.UnixMilli(c.AtMS).UTC().Format(time.RFC3339), c.Reason, c.Detail, c.Remedy); err != nil {
-				return err
-			}
+		if row.Group != "" {
+			hasGroup = true
+			break
 		}
 	}
-	return nil
+	if !hasGroup {
+		for _, row := range rows {
+			if err := printLaneRow(w, row); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	var configured, draining, desks []laneRow
+	idleCount := 0
+	for _, row := range rows {
+		switch row.Group {
+		case laneGroupConfigured:
+			configured = append(configured, row)
+		case laneGroupDraining:
+			draining = append(draining, row)
+		case laneGroupDesk:
+			desks = append(desks, row)
+		default:
+			idleCount++
+		}
+	}
+	if _, err := fmt.Fprintf(w, "Configured lanes (%d):\n", len(configured)); err != nil {
+		return err
+	}
+	for _, row := range configured {
+		if err := printLaneRow(w, row); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "Draining lanes (%d) — %s:\n", len(draining), drainingLaneNote); err != nil {
+		return err
+	}
+	for _, row := range draining {
+		if err := printLaneRow(w, row); err != nil {
+			return err
+		}
+	}
+	for _, row := range desks {
+		if err := printLaneRow(w, row); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(w, "Idle lanes holding nothing: %d folded\n", idleCount)
+	return err
 }
 
 func readLaneRows(ctx context.Context, path, loop, lanes string, now time.Time) ([]laneRow, error) {
@@ -235,8 +434,15 @@ func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFail
 	if s.perf != nil {
 		perfNow = s.perf.now
 	}
-	answer, fail := s.lanesShare.get(req.Context(), r, "history="+named, nil, func() shareBuild {
-		base, fail := s.lanesStoreShare.get(req.Context(), r, "store", nil, func() shareBuild {
+	_, sessionLanesKey := readConfiguredSessionLanes(r)
+	shareKey := "history=" + named
+	storeKey := "store"
+	if sessionLanesKey != "" {
+		shareKey += "\x00" + sessionLanesKey
+		storeKey += "\x00" + sessionLanesKey
+	}
+	answer, fail := s.lanesShare.get(req.Context(), r, shareKey, nil, func() shareBuild {
+		base, fail := s.lanesStoreShare.get(req.Context(), r, storeKey, nil, func() shareBuild {
 			rows, fail := s.lanesStoreBuild(r)
 			if fail != nil {
 				return shareBuild{failure: fail}
@@ -373,6 +579,12 @@ func assembleLanesStore(r *store.Reader, storePath, loop string) ([]laneRow, err
 	if err != nil {
 		return nil, err
 	}
+	configured, _ := readConfiguredSessionLanes(r)
+	heldByLane, err := readHeldByLane(r)
+	if err != nil {
+		return nil, err
+	}
+	d.lanes = ensureConfiguredStoreLanes(d.lanes, configured, heldByLane)
 	verdicts, err := readGateVerdicts(r)
 	if err != nil {
 		return nil, err
@@ -396,6 +608,7 @@ func assembleLanesStore(r *store.Reader, storePath, loop string) ([]laneRow, err
 		}
 	}
 	rows := buildLaneStoreRows(d, verdicts, seats)
+	applyLaneGroups(rows, configured, heldByLane)
 	progress, err := readItemProgress(r)
 	if err != nil {
 		return nil, err
@@ -468,6 +681,46 @@ func assembleLanesStore(r *store.Reader, storePath, loop string) ([]laneRow, err
 		}
 	}
 	return rows, nil
+}
+
+func applyLaneGroups(rows []laneRow, configured []string, held map[string]lanestate.HeldLane) {
+	configuredOrder := make(map[string]int, len(configured))
+	configuredSet := make(map[string]bool, len(configured))
+	for idx, id := range configured {
+		if id == "" || configuredSet[id] {
+			continue
+		}
+		configuredSet[id] = true
+		configuredOrder[id] = idx
+	}
+	for i := range rows {
+		row := &rows[i]
+		if h, ok := held[row.LaneID]; ok {
+			row.HeldItemID = h.ItemID
+			row.HeldRunID = h.RunID
+			row.HeldReason = h.Reason
+			if row.ItemID == "" {
+				row.ItemID = h.ItemID
+			}
+			if row.RunID == "" {
+				row.RunID = h.RunID
+			}
+		}
+		row.Group, row.GroupNote = classifyLaneGroup(row.LaneID, row.State, configuredSet, held)
+	}
+	if len(configuredSet) == 0 {
+		return
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		gi, gj := laneGroupOrder(rows[i].Group), laneGroupOrder(rows[j].Group)
+		if gi != gj {
+			return gi < gj
+		}
+		if rows[i].Group == laneGroupConfigured {
+			return configuredOrder[rows[i].LaneID] < configuredOrder[rows[j].LaneID]
+		}
+		return naturalLaneLess(rows[i].LaneID, rows[j].LaneID)
+	})
 }
 
 // dispatchSeats answers the seat each run's dispatch recorded. A store whose dispatches

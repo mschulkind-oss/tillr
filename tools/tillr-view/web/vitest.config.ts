@@ -5,6 +5,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "jsdom",
+    minWorkers: 1,
+    maxWorkers: 6,
     css: { include: /tokens\.css/ },
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
   },

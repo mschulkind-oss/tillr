@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,5 +177,130 @@ func TestLaneWorkStatePausedRun(t *testing.T) {
 		if got := laneWorkState(lane, paused); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+func TestLanesGroupsConfiguredDrainingAndIdleHistorical(t *testing.T) {
+	h := newServeHarness(t)
+	at := time.Date(2026, 11, 23, 5, 35, 0, 0, time.UTC)
+	h.setNow(at)
+	now := at.UnixMilli()
+	h.exec(`DELETE FROM lanes`)
+	h.exec(`CREATE TABLE drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL,
+		refreshed_at INTEGER NOT NULL, next_pass_at INTEGER NOT NULL, ended_at INTEGER, lanes TEXT)`)
+	h.exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, lanes)
+		VALUES ('live', ?, ?, ?, '["lane-1"]')`, now-30000, now, now+60000)
+
+	// 1 configured lane (lane-1, running), 2 draining lanes (lane-2 running + lane-3 idle lease
+	// still holding an unreleased pending reservation from an earlier session), and 20 idle
+	// historical lanes (lane-4..lane-23) holding nothing.
+	h.exec(`INSERT INTO lanes(lane_id, state, run_id, leased_until) VALUES ('lane-1', 'leased', 'run-conf-1', NULL)`)
+	h.exec(`INSERT INTO events(ts, kind, object_type, object_id, payload) VALUES (?, 'run.allocate', 'run', 'run-conf-1', '{"run_id":"run-conf-1","item_id":"item-conf-1","lane_id":"lane-1","backend":"pi","started_at":"2026-11-23T05:34:00Z"}')`, now-60000)
+
+	h.exec(`INSERT INTO lanes(lane_id, state, run_id, leased_until) VALUES ('lane-2', 'leased', 'run-drain-2', NULL)`)
+	h.exec(`INSERT INTO events(ts, kind, object_type, object_id, payload) VALUES (?, 'run.allocate', 'run', 'run-drain-2', '{"run_id":"run-drain-2","item_id":"item-drain-2","lane_id":"lane-2","backend":"pi","started_at":"2026-11-23T05:20:00Z"}')`, now-900000)
+	h.exec(`INSERT INTO events(ts, kind, object_type, object_id, payload) VALUES (?, 'drain.started', 'run', 'run-drain-2', '{"decision":{"item_id":"item-drain-2","lane_id":"lane-2","run_request":{"run_id":"run-drain-2","backend":"pi"}}}')`, now-900000)
+
+	h.exec(`INSERT INTO lanes(lane_id, state, run_id, leased_until) VALUES ('lane-3', 'idle', '', NULL)`)
+	h.exec(`INSERT INTO runs(run_id, item_id, lane_id, backend, state, exit_code, started_at, finished_at) VALUES ('run-drain-3', 'item-drain-3', 'lane-3', 'pi', 'exited', 0, ?, ?)`, now-800000, now-700000)
+	h.exec(`INSERT INTO events(ts, kind, object_type, object_id, payload) VALUES (?, 'drain.started', 'run', 'run-drain-3', '{"decision":{"item_id":"item-drain-3","lane_id":"lane-3","run_request":{"run_id":"run-drain-3","backend":"pi"}}}')`, now-800000)
+	h.exec(`INSERT INTO events(ts, kind, object_type, object_id, payload) VALUES (?, 'drain.candidate-lane', 'run', 'run-drain-3', '{"candidate":{"item_id":"item-drain-3","run_id":"run-drain-3","lane_id":"lane-3"},"released":false,"reason":"candidate pin cannot be read back"}')`, now-690000)
+
+	for i := 4; i <= 23; i++ {
+		laneID := fmt.Sprintf("lane-%d", i)
+		runID := fmt.Sprintf("run-hist-%d", i)
+		itemID := fmt.Sprintf("item-hist-%d", i)
+		h.exec(`INSERT INTO lanes(lane_id, state, run_id, leased_until) VALUES (?, 'idle', '', NULL)`, laneID)
+		h.exec(`INSERT INTO runs(run_id, item_id, lane_id, backend, state, exit_code, started_at, finished_at) VALUES (?, ?, ?, 'pi', 'exited', 0, ?, ?)`, runID, itemID, laneID, now-3600_000, now-3500_000)
+		// One completed reservation must not read as draining.
+		if i == 4 {
+			h.exec(`INSERT INTO events(ts, kind, object_type, object_id, payload) VALUES (?, 'drain.started', 'run', ?, ?)`,
+				now-3600_000, runID, fmt.Sprintf(`{"decision":{"item_id":%q,"lane_id":%q,"run_request":{"run_id":%q,"backend":"pi"}}}`, itemID, laneID, runID))
+			h.exec(`INSERT INTO events(ts, kind, object_type, object_id, payload) VALUES (?, 'drain.examined', 'run', ?, '{}')`, now-3400_000, runID)
+		}
+	}
+
+	status, _, raw := h.get("/api/v1/lanes")
+	if status != 200 {
+		t.Fatalf("/api/v1/lanes: %d %s", status, raw)
+	}
+	var got struct {
+		Data []laneRow `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Data) != 23 {
+		t.Fatalf("len(data) = %d, want 23", len(got.Data))
+	}
+	counts := map[string]int{}
+	for _, row := range got.Data {
+		counts[row.Group]++
+	}
+	if counts["configured"] != 1 || counts["draining"] != 2 || counts["idle"] != 20 {
+		t.Fatalf("group counts = %+v, want 1 configured, 2 draining, 20 idle", counts)
+	}
+	if got.Data[0].LaneID != "lane-1" || got.Data[0].Group != "configured" {
+		t.Fatalf("first row = %+v, want configured lane-1", got.Data[0])
+	}
+	if got.Data[1].LaneID != "lane-2" || got.Data[1].Group != "draining" || got.Data[1].GroupNote != "finishing old work, gets no new work" {
+		t.Fatalf("second row = %+v, want draining lane-2 with note", got.Data[1])
+	}
+	if got.Data[2].LaneID != "lane-3" || got.Data[2].Group != "draining" || got.Data[2].GroupNote != "finishing old work, gets no new work" || got.Data[2].HeldItemID != "item-drain-3" || !strings.Contains(got.Data[2].HeldReason, "cannot be read back") {
+		t.Fatalf("third row = %+v, want draining lane-3 holding item-drain-3", got.Data[2])
+	}
+
+	if header := laneCapacityLine(got.Data); header != "1 configured, 3 busy (1 of 1 configured + 2 draining old work) · 20 idle holding nothing" {
+		t.Fatalf("header = %q", header)
+	}
+	var cli bytes.Buffer
+	if err := printLanes(&cli, got.Data); err != nil {
+		t.Fatal(err)
+	}
+	out := cli.String()
+	for _, want := range []string{
+		"1 configured, 3 busy (1 of 1 configured + 2 draining old work) · 20 idle holding nothing",
+		"Configured lanes (1):",
+		"Draining lanes (2) — finishing old work, gets no new work:",
+		"Idle lanes holding nothing: 20 folded",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("CLI output missing %q:\n%s", want, out)
+		}
+	}
+
+	status, snapEnv, snapRaw := h.get("/api/v1/snapshot")
+	if status != 200 {
+		t.Fatalf("/api/v1/snapshot: %d %s", status, snapRaw)
+	}
+	snapLanes := snapEnv["data"].(map[string]any)["lanes"].([]any)
+	if len(snapLanes) != 23 {
+		t.Fatalf("snapshot lanes = %d, want 23", len(snapLanes))
+	}
+	snapCounts := map[string]int{}
+	for _, item := range snapLanes {
+		l := item.(map[string]any)
+		g, _ := l["group"].(string)
+		snapCounts[g]++
+	}
+	if snapCounts["configured"] != 1 || snapCounts["draining"] != 2 || snapCounts["idle"] != 20 {
+		t.Fatalf("snapshot group counts = %+v, want 1 configured, 2 draining, 20 idle", snapCounts)
+	}
+
+	// Scaling the session to 1 ordinary and 1 express lane updates /api/v1/lanes without
+	// needing a new event, and synthesizes express-1 before its first lease.
+	h.exec(`UPDATE drain_sessions SET lanes = '["lane-1","express-1"]' WHERE session_id = 'live'`)
+	status, _, raw = h.get("/api/v1/lanes")
+	var scaled struct {
+		Data []laneRow `json:"data"`
+	}
+	if status != 200 || json.Unmarshal(raw, &scaled) != nil {
+		t.Fatalf("scaled /api/v1/lanes: %d %s", status, raw)
+	}
+	if len(scaled.Data) != 24 || scaled.Data[0].LaneID != "lane-1" || scaled.Data[1].LaneID != "express-1" || scaled.Data[1].Group != "configured" || scaled.Data[1].State != "idle" {
+		t.Fatalf("scaled configured rows = %+v", scaled.Data[:3])
+	}
+	if header := laneCapacityLine(scaled.Data); header != "2 configured (1 ordinary, 1 express), 3 busy (1 of 2 configured + 2 draining old work) · 20 idle holding nothing" {
+		t.Fatalf("scaled header = %q", header)
 	}
 }

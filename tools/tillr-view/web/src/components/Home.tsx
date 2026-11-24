@@ -1,4 +1,5 @@
 import { localTime } from "../models/board";
+import { formatSnapshotLaneSummary } from "../models/lanes";
 import { LaneStrip } from "./LaneStrip";
 import { loopAlive } from "../models/loop";
 import type { DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow, WhySource } from "../models/types";
@@ -54,6 +55,7 @@ export function LoopSummary({ drain, passes, error, readError, snapshot, now = D
   const repeated = drain?.repeated_stop;
   const state = stop || ended ? "stopped" : alive ? "moving" : "not known";
   const latest = newestPasses(passes ?? [])[0];
+  const laneSummary = snapshot?.lanes ? formatSnapshotLaneSummary(snapshot.lanes, session?.lanes) : null;
   return <section className="loop-summary" aria-label="Loop summary">
     <div className="loop-summary__state"><ClassState value={state} />
       <span>{alive ? "Loop alive: the recorded heartbeat is current." : "no loop is running"}</span>
@@ -74,6 +76,7 @@ export function LoopSummary({ drain, passes, error, readError, snapshot, now = D
       <p>last pass <EntityLink kind="pass" id={passStamp(latest.dispatched_at_ms)} /> → {passCounts(latest)}</p>
     </> : <p>{passes ? "No pass recorded." : "Reading passes…"}</p>}
     {session ? <p>started {localTime(session.started_at_ms)} · last heartbeat {localTime(session.refreshed_at_ms)}</p> : null}
+    {laneSummary ? <p className="loop-summary__lanes">lanes: {laneSummary}</p> : null}
     <p>session {session ? <a className="session-link" href={`/passes?session=${encodeURIComponent(session.session_id)}`}><code>{session.session_id}</code></a> : "not recorded"}</p>
   </section>;
 }

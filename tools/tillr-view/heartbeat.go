@@ -38,6 +38,22 @@ func readLoopSession(r *store.Reader, now time.Time) (*loopSession, bool, string
 	return session, active, note, err
 }
 
+// readConfiguredSessionLanes reads the newest session's configured lane list and a
+// cache fingerprint that does not move on 1s heartbeat clock refreshes.
+func readConfiguredSessionLanes(r *store.Reader) ([]string, string) {
+	var sessionID string
+	var raw sql.NullString
+	err := r.QueryRow(`SELECT session_id, lanes FROM drain_sessions ORDER BY started_at DESC, rowid DESC LIMIT 1`).Scan(&sessionID, &raw)
+	if err != nil || !raw.Valid {
+		return nil, ""
+	}
+	var lanes []string
+	if json.Unmarshal([]byte(raw.String), &lanes) != nil || len(lanes) == 0 {
+		return nil, ""
+	}
+	return lanes, sessionID + ":" + raw.String
+}
+
 func readLoopSessionClocks(r *store.Reader, now time.Time) (*loopSession, bool, string, error) {
 	var session loopSession
 	var ended sql.NullInt64

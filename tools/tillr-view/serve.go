@@ -789,6 +789,9 @@ const gateTrendLimit = 20
 // laneView preserves the lease state and separately reports active/settling work.
 type laneView struct {
 	WorkState     string `json:"work_state"`
+	Group         string `json:"group,omitempty"`
+	GroupNote     string `json:"group_note,omitempty"`
+	HeldItemID    string `json:"held_item_id,omitempty"`
 	LaneID        string `json:"lane_id"`
 	State         string `json:"state"`
 	RunID         string `json:"run_id"`
@@ -1004,7 +1007,11 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 	if err != nil {
 		return nil, unreadable(err)
 	}
-	key := fmt.Sprintf("active=%t note=%q", active, sessionNote)
+	var sessionLanes []string
+	if session != nil {
+		sessionLanes = session.Lanes
+	}
+	key := fmt.Sprintf("active=%t note=%q lanes=%s", active, sessionNote, strings.Join(sessionLanes, ","))
 	answer, fail := s.snapshotShare.get(req.Context(), r, key, func() string { return loopResultsStamp(s.obs.loopDir) }, func() shareBuild {
 		built, fail := s.snapshotBuild(r, req, session, active, sessionNote)
 		if fail != nil {
@@ -1130,11 +1137,46 @@ func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loop
 	for _, run := range runs {
 		runsByID[run.RunID] = run
 	}
+	var configured []string
+	if session != nil {
+		configured = session.Lanes
+	}
+	heldByLane, err := readHeldByLane(r)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	laneRows = ensureConfiguredStoreLanes(laneRows, configured, heldByLane)
+	configuredSet := make(map[string]bool, len(configured))
+	configuredOrder := make(map[string]int, len(configured))
+	for idx, id := range configured {
+		if id != "" && !configuredSet[id] {
+			configuredSet[id] = true
+			configuredOrder[id] = idx
+		}
+	}
 	out.Lanes = make([]laneView, 0, len(laneRows))
 	for _, l := range laneRows {
+		ws := laneWorkState(l, runsByID[l.RunID])
+		group, groupNote := classifyLaneGroup(l.LaneID, ws, configuredSet, heldByLane)
+		heldItem := ""
+		if h, ok := heldByLane[l.LaneID]; ok {
+			heldItem = h.ItemID
+		}
 		out.Lanes = append(out.Lanes, laneView{
 			LaneID: l.LaneID, State: l.State, RunID: l.RunID, LeasedUntilMS: l.LeasedUntilMS,
-			WorkState: laneWorkState(l, runsByID[l.RunID]),
+			WorkState: ws, Group: group, GroupNote: groupNote, HeldItemID: heldItem,
+		})
+	}
+	if len(configuredSet) > 0 {
+		sort.SliceStable(out.Lanes, func(i, j int) bool {
+			gi, gj := laneGroupOrder(out.Lanes[i].Group), laneGroupOrder(out.Lanes[j].Group)
+			if gi != gj {
+				return gi < gj
+			}
+			if out.Lanes[i].Group == laneGroupConfigured {
+				return configuredOrder[out.Lanes[i].LaneID] < configuredOrder[out.Lanes[j].LaneID]
+			}
+			return naturalLaneLess(out.Lanes[i].LaneID, out.Lanes[j].LaneID)
 		})
 	}
 	runsByItem := map[string][]storeRun{}
