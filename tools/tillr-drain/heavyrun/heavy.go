@@ -3,6 +3,7 @@ package heavyrun
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -123,6 +125,43 @@ func HeavyDirectory(ctx context.Context, root string) (string, error) {
 func PublishHeavy(dir string, run HeavyRun) error {
 	return PublishHeavyJSON(dir, "heavy.json", run)
 }
+
+func startRunningHeavy(dir, base, tip string, started time.Time) (func(), error) {
+	if err := PublishHeavyJSON(dir, heavy.RunningFile, heavy.HeavyRunning{BaseSHA: base, TipSHA: tip, StartedAt: started.UTC()}); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(filepath.Join(dir, heavy.RunningLockFile), os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		_ = os.Remove(filepath.Join(dir, heavy.RunningFile))
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		lock.Close()
+		_ = os.Remove(filepath.Join(dir, heavy.RunningFile))
+		return nil, err
+	}
+	clearPriorUnknownHeavy(dir)
+	return sync.OnceFunc(func() {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		_ = lock.Close()
+		_ = os.Remove(filepath.Join(dir, heavy.RunningFile))
+	}), nil
+}
+
+func clearPriorUnknownHeavy(dir string) {
+	path := filepath.Join(dir, "heavy.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var run HeavyRun
+	if json.Unmarshal(raw, &run) != nil {
+		return
+	}
+	if run.Result == "unknown" {
+		_ = os.Remove(path)
+	}
+}
 func (r HeavyRunner) Run(ctx context.Context) (HeavyOutcome, error) {
 	out, err := r.RunAttempt(ctx, "")
 	return out.HeavyOutcome, err
@@ -180,6 +219,12 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 		ctx = context.WithValue(ctx, HeavyProgressReportKey{}, r.Progress)
 	}
 	ctx = context.WithValue(ctx, HeavyOwnershipKey{}, HeavyOwnership{Lock: lock, Owner: owner, Guard: filepath.Join(dir, HeavyCleanupGuard)})
+	var activeStop func()
+	defer func() {
+		if activeStop != nil {
+			activeStop()
+		}
+	}()
 	for {
 		if err = ctx.Err(); err != nil {
 			return out, err
@@ -245,10 +290,16 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 			return out, err
 		}
 		started := r.Now()
+		stopRunning, e := startRunningHeavy(dir, base, tip, started)
+		if e != nil {
+			return out, e
+		}
+		activeStop = stopRunning
 		attemptCtx, storeProgress := r.StartStoreProgress(ctx, tip)
 		run, e = r.judgeTip(context.WithValue(attemptCtx, HeavyProgressKey{}, progress), run)
 		run.ReusedChecks = progress.reused
 		if ctx.Err() != nil {
+			stopRunning()
 			storeProgress.Finish("cancelled")
 			return out, ctx.Err()
 		}
@@ -279,9 +330,11 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 			run.Detail = e.Error()
 		}
 		if pe := PublishHeavy(dir, run); pe != nil {
+			stopRunning()
 			storeProgress.Finish(heavyEndedOutcome(ctx, run.Result, pe))
 			return out, pe
 		}
+		stopRunning()
 		out.Runs = append(out.Runs, run)
 		if e == nil && run.Result != "unknown" {
 			out.PendingTip = ""

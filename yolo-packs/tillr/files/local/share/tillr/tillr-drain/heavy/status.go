@@ -11,11 +11,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
 // GreenRef is the single proof pointer. No rolling_state row is consulted.
-const GreenRef = "refs/tillr/green"
+const (
+	GreenRef        = "refs/tillr/green"
+	RunningLockFile = "heavy-running.lock"
+	RunningFile     = "heavy-running.json"
+)
 
 var classifyCheck = checkresult.Classify
 
@@ -67,6 +72,14 @@ type HeavyRun struct {
 	Result       string       `json:"result"`
 	Checks       []HeavyCheck `json:"checks"`
 	Detail       string       `json:"detail,omitempty"`
+}
+
+// HeavyRunning is <git-common-dir>/tillr-gate/heavy-running.json while a proof
+// attempt holds an exclusive flock on RunningLockFile.
+type HeavyRunning struct {
+	BaseSHA   string    `json:"base_sha,omitempty"`
+	TipSHA    string    `json:"tip_sha"`
+	StartedAt time.Time `json:"started_at"`
 }
 type HeavyOutcome struct {
 	Busy bool       `json:"busy,omitempty"`
@@ -230,34 +243,85 @@ func ReadStatus(ctx context.Context, root, storePath string) (HeavyStatus, error
 			return status, err
 		}
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "heavy.json"))
-	if os.IsNotExist(err) {
-		return status, nil
-	}
+	rewriteDetail := status.Detail
+	running, active, err := readRunning(dir)
 	if err != nil {
 		return status, err
 	}
-	var run HeavyRun
-	if err = json.Unmarshal(raw, &run); err != nil {
+	raw, err := os.ReadFile(filepath.Join(dir, "heavy.json"))
+	if err != nil && !os.IsNotExist(err) {
 		return status, err
 	}
-	status.Result = run.Result
-	if run.Detail != "" {
-		status.Detail = run.Detail
+	if err == nil {
+		var run HeavyRun
+		if err = json.Unmarshal(raw, &run); err != nil {
+			return status, err
+		}
+		status.Result = run.Result
+		if run.Detail != "" {
+			status.Detail = run.Detail
+		}
+		for _, check := range run.Checks {
+			classified := classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result})
+			if classified.Outcome == checkresult.Fail {
+				status.FailingChecks = append(status.FailingChecks, check)
+			}
+			if classified.Outcome == checkresult.Unavailable {
+				status.UnavailableChecks = append(status.UnavailableChecks, check)
+			}
+			if check.OverBudgetMS > 0 {
+				status.Overruns = append(status.Overruns, check)
+			}
+		}
 	}
-	for _, check := range run.Checks {
-		classified := classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result})
-		if classified.Outcome == checkresult.Fail {
-			status.FailingChecks = append(status.FailingChecks, check)
-		}
-		if classified.Outcome == checkresult.Unavailable {
-			status.UnavailableChecks = append(status.UnavailableChecks, check)
-		}
-		if check.OverBudgetMS > 0 {
-			status.Overruns = append(status.Overruns, check)
-		}
+	if active {
+		status.Result = "running"
+		status.Detail = runningDetail(running, rewriteDetail)
 	}
 	return status, nil
+}
+
+func readRunning(dir string) (HeavyRunning, bool, error) {
+	lock, err := os.Open(filepath.Join(dir, RunningLockFile))
+	if os.IsNotExist(err) {
+		return HeavyRunning{}, false, nil
+	}
+	if err != nil {
+		return HeavyRunning{}, false, err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err == nil {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		return HeavyRunning{}, false, nil
+	} else if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+		return HeavyRunning{}, false, err
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, RunningFile))
+	if os.IsNotExist(err) {
+		return HeavyRunning{}, false, nil
+	}
+	if err != nil {
+		return HeavyRunning{}, false, err
+	}
+	var running HeavyRunning
+	if err := json.Unmarshal(raw, &running); err != nil {
+		return HeavyRunning{}, false, err
+	}
+	return running, true, nil
+}
+
+func runningDetail(running HeavyRunning, rewriteDetail string) string {
+	if rewriteDetail != "" {
+		return rewriteDetail
+	}
+	tip := running.TipSHA
+	if len(tip) > 12 {
+		tip = tip[:12]
+	}
+	if tip == "" {
+		return ""
+	}
+	return "proving " + tip
 }
 
 // rewriteLine is the one-line note of the latest absorbed rewrite, or "" when none.
