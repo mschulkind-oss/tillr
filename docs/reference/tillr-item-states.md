@@ -15,8 +15,8 @@ tags: [tillr, item, state, reference]
 
 # Tillr item states and frozen criteria
 
-**Status:** Source-verified 2026-11-16 against `087b4385b9208bf49b20d09fefe9564ea8618e96`.
-UNMEASURED: this reference does not claim observation of a live drain or board.
+**Status:** Source-verified 2026-11-16 against the code named in `covers`.
+UNMEASURED: this reference does not claim observation of a live drain or view.
 
 An item records the work requested, not the life of one attempt at that work.
 Tillr separates its stored disposition from the view's reading of current activity.
@@ -133,6 +133,5 @@ and other editable fields are not frozen by this comparison.
 | Closed display vocabulary | [view tests](../../tools/tillr-view/serve_internal_test.go), `TestProjectItemStateNeverInventsAnEighthState` |
 
 Re-verification starts with a diff from `verified_commit` over `covers`, then checks
-these writers and the ordered projection. This document does not certify the
-historical migration of abandoned or deleted rows, archive behavior, or a
+these writers and the ordered projection. This document does not certify archive behavior or a
 compile-time prohibition on views reading raw state strings.
