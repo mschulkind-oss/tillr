@@ -1,0 +1,31 @@
+# On 2026-11-23 item-request-f47a9d41f7 reached its 26th attempt with no alert
+# because drain-repeated-step-dispatches only counts five starts of one step
+# within 10 minutes, missing attempts spread over hours. Read registered
+# run.allocate events (and land.landing to clear on landing), grouped by
+# item_id, and warn when an item starts its fifth (or later) attempt from the
+# attempt ordinal in run_id.
+[[rule]]
+id = "drain-item-fifth-attempt"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["run.allocate", "land.landing"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'event.kind == "run.allocate" and event.run_id matches "^run-.+-a([5-9]|[1-9][0-9]+)(-n[0-9]+(-g[0-9]+-[0-9a-f]{8})?)?(-[0-9a-f]{16})?(-([0-9]{3,12}-)?(failover|restart|fresh|interrupted))?(-(judge|cfix))?$"'
+clear_when = 'event.kind == "land.landing" and event.result == "landed"'
+
+[rule.guidance]
+summary = "Item {{subject}} reached at least its fifth attempt ({{event.run_id}} on {{event.lane_id}})."
+check = [
+  "Run tillr drain why {{subject}} --store <path> and inspect the run records, refusals, obstacles, and gate verdicts for {{subject}} (and .tillr/loop/run-* logs for prior attempts) to read why each previous attempt ended."
+]
+do = [
+  "Establish the recurring cause across the previous attempts of {{subject}} (such as a missing capability, conflicting request words, or an unaddressed failure) and fix, amend, split, or answer it instead of letting further attempts repeat the same ending."
+]
+
+[rule.delivery]
+receiver = "foreground"

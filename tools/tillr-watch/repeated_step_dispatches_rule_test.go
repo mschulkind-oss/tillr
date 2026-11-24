@@ -167,10 +167,17 @@ func TestDrainRepeatedStepDispatchesRule(t *testing.T) {
 	if _, err := allEval.Evaluate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for i := 1; i <= 5; i++ {
-		at := now.Add(-time.Duration(5-i) * time.Minute)
+	stepRuns := []string{
+		"run-item-all-a1-n3",
+		"run-item-all-a1-n3-failover",
+		"run-item-all-a1-n3-002-failover",
+		"run-item-all-a1-n3-003-failover",
+		"run-item-all-a1-n3-004-failover",
+	}
+	for i, runID := range stepRuns {
+		at := now.Add(-time.Duration(len(stepRuns)-1-i) * time.Minute)
 		body, err := json.Marshal(map[string]any{
-			"run_id":     fmt.Sprintf("run-item-all-a%d-n3", i),
+			"run_id":     runID,
 			"item_id":    "item-all",
 			"backend":    "pi-verify",
 			"seat":       "verify",
