@@ -673,7 +673,7 @@
     "TestGateTimingDoesNotRecordNestedGateSpans": 1.19,
     "TestGateTimingEventMedianUsesLastTwentyObservations": 0.12,
     "TestGateTimingEventRequiresAppendedMeasuredLine": 0.03,
-    "TestGateTimingKeepsExecutedWaybarSkip": 2.66,
+    "TestGateTimingKeepsExecutedIronbarSkip": 2.66,
     "TestGateTimingKeepsFreshAttemptsBeforeJudgment": 0.36,
     "TestGateTimingReadsFastChecksPreservedUnderAStall": 0.0,
     "TestGateTimingSingleGatePython3PathNamesSlowestCheck": 0.13,

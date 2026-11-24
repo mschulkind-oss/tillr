@@ -925,12 +925,12 @@ TS_SIZE_WARN_LINES = 2000
 META_MUSE_TIMEOUT = 600
 YOLO_CONFIG_TIMEOUT = 600
 
-# tests/waybar-ai-modules.test.sh exits 77 when every case it could answer passed
+# tests/ironbar-modules.test.sh exits 77 when every case it could answer passed
 # and the case that reads the *installed* `ai-usagebar`'s vendor list could not run
 # (77 is the automake convention for "cannot answer here"). The gate names that as a
 # skip, with the reason from the script's own `skip` line; 124 (timeout) and 127
 # (missing command) are the other sentinels this file reads.
-WAYBAR_SKIP_RC = 77
+IRONBAR_SKIP_RC = 77
 
 # The sentence `yolo pack series check` prints when the pack's patch-branch record is
 # not on this machine. The record is written on the host and never reaches a jail, so
@@ -948,10 +948,11 @@ SERIES_UNRESOLVED = "the patch branch is not yet resolved on this machine"
 # evidence that nothing broke.
 SERIES_BENIGN_HEADER = re.compile(r"^extension \S+: \d+ patch(?:es)? in ")
 
-WAYBAR_WATCHES = (
-    "config/waybar/", "config/ai-usagebar/config.toml",
-    "host-laptop/config/ai-usagebar/config.toml",
-    "tests/waybar-ai-modules.test.sh", "tests/test_waybar_cpu.py",
+IRONBAR_WATCHES = (
+    "config/ironbar/", "config/systemd/user/ironbar.service",
+    "config/systemd/user/ironbar.service.d/", "config/ai-usagebar/config.toml",
+    "host-laptop/config/ai-usagebar/config.toml", "ironbar-fork/local-delta.patch",
+    "tests/ironbar-modules.test.sh",
 )
 
 # Directories that never hold a document this gate checks: a fork checkout, a
@@ -5110,7 +5111,7 @@ CHECK_KIND_GROUP = {
     # the hang-analysis report, a landing's contract, a tool that no
     # longer builds, or a guard whose finding is real no longer holds.
     "file-size": KIND_VERDICT,
-    "waybar": KIND_VERDICT,
+    "ironbar": KIND_VERDICT,
     "storybook": KIND_VERDICT,
     "rank-order": KIND_VERDICT,
     "session-forensics": KIND_VERDICT,
@@ -5253,7 +5254,7 @@ CHECK_TIER = {
     # worth the attribution it costs (rule 3). Two are borderline and the plan records the
     # call: `rank-order` (20s) lands under rule 3, and F2 is
     # the mechanism that moves one, with evidence.
-    "waybar": TIER_LANDING,
+    "ironbar": TIER_LANDING,
     "rank-order": TIER_LANDING,
     "session-forensics": TIER_LANDING,
     "session-budget": TIER_LANDING,
@@ -5356,7 +5357,7 @@ CHEAP_CHECK_SECONDS = 10.0
 HEAVY_JOBS_DEFAULT = 6
 CHECK_COST_ESTIMATE = {
     "file-size": 0.0,
-    "waybar": 4.0,
+    "ironbar": 4.0,
     "storybook": 20.0,
     "rank-order": 20.0,
     "session-forensics": 15.0,
@@ -6395,8 +6396,8 @@ def typescript_size_findings(root: Path) -> list[str]:
             for path, lines in tracked_typescript_lines(root) if lines > TS_SIZE_WARN_LINES]
 
 
-def waybar_skip_reason(check: Check) -> str:
-    """Why a Waybar check ran without one of its cases, in the terms the report prints.
+def ironbar_skip_reason(check: Check) -> str:
+    """Why an Ironbar check ran without one of its cases, in the terms the report prints.
 
     One case compares the repository's vendor config against the vendor list of the
     `ai-usagebar` installed on this machine, so a machine without that binary cannot
@@ -6879,17 +6880,14 @@ def build_plan(
     plan.node_moved = node_moved(record, node) if audit_node else None
     plan_integrity(plan)
 
-    if any(watched_path(path, set(WAYBAR_WATCHES)) for path in changed):
-        for argv, label in (
-            (["sh", "tests/waybar-ai-modules.test.sh"], "Waybar module configuration"),
-            ([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p",
-              "test_waybar_cpu.py"], "Waybar CPU appearance and reserved width"),
-        ):
-            plan.checks.append(Check("waybar", label, argv, "a Waybar input changed",
-                                     60, watches=WAYBAR_WATCHES))
+    if any(watched_path(path, set(IRONBAR_WATCHES)) for path in changed):
+        plan.checks.append(Check("ironbar", "Ironbar module configuration",
+                                 ["sh", "tests/ironbar-modules.test.sh"],
+                                 "an Ironbar input changed", 60, watches=IRONBAR_WATCHES))
     else:
-        plan.not_planned("waybar (module configuration, CPU appearance)",
-                         "no Waybar input changed")
+        plan.not_planned("ironbar (module configuration)",
+                         "no Ironbar or ai-usagebar configuration file changed",
+                         kind="ironbar")
 
     for name, inputs, artifact, why, skip, sources in STORYBOOKS:
         matched = [path for path in changed if any(pattern.match(path) for pattern in inputs)]
@@ -8037,7 +8035,7 @@ def fork_quality_skip(check: Check) -> tuple[str, str] | None:
 def sentinel_skip(check: Check) -> tuple[str, str] | None:
     """The label and reason from a matching sentinel or quarantine declaration, if any.
 
-    Waybar exits 77 for a case this machine cannot answer (the installed `ai-usagebar`
+    Ironbar exits 77 for a case this machine cannot answer (the installed `ai-usagebar`
     is absent). This collects the protocol evidence; the installed face judges it.
 
     A series check is NOT here: a series whose patch-branch stamp is the host's is
@@ -8046,8 +8044,8 @@ def sentinel_skip(check: Check) -> tuple[str, str] | None:
     """
     if check.kind == "fork-quality":
         return fork_quality_skip(check)
-    if check.kind == "waybar" and check.rc == WAYBAR_SKIP_RC:
-        return (f"waybar ({' '.join(check.argv)})", waybar_skip_reason(check))
+    if check.kind == "ironbar" and check.rc == IRONBAR_SKIP_RC:
+        return (f"ironbar ({' '.join(check.argv)})", ironbar_skip_reason(check))
     return None
 
 
@@ -8178,7 +8176,7 @@ def classified_skip(check: Check) -> tuple[tuple[str, str], Quarantine | None] |
         facts["sentinel_skip"] = True
     result = legacy_result(check, facts)
     if result["outcome"] == "unavailable":
-        if result["detail"] == "skipped" and check.kind == "waybar":
+        if result["detail"] == "skipped" and check.kind == "ironbar":
             return evidence, None
         if result["detail"] == "quarantined" and (quarantine := applied_quarantine(check)) is not None:
             return evidence, quarantine
@@ -8187,7 +8185,7 @@ def classified_skip(check: Check) -> tuple[tuple[str, str], Quarantine | None] |
 
 def settle_check_skips(plan: Plan) -> None:
     """Remove classified skips before aggregation, preserving report order."""
-    for kind in ("waybar", "fork-quality"):
+    for kind in ("ironbar", "fork-quality"):
         for check in [one for one in plan.checks if one.kind == kind]:
             skip = classified_skip(check)
             if skip is None:

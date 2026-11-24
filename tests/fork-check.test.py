@@ -191,7 +191,7 @@ def test_landing_go_measurements():
                        go_module="tools/tillr-gate"),
             gate.Check("gate-runner", "cached fallback", ["cached-fallback", "--cache"], "watch", 0,
                        go_module="tools/tillr-gate"),
-            gate.Check("waybar", "waybar", ["reused"], "watch", 0),
+            gate.Check("ironbar", "ironbar", ["reused"], "watch", 0),
             gate.Check("go-substrate", "unstarted", ["unused"], "watch", 0,
                        go_module="tools/tillr"),
         ]
@@ -246,7 +246,7 @@ def test_landing_go_measurements():
                       90_000_000, 105_000_000, 110_000_000, 122_000_000))
         gate.time = types.SimpleNamespace(monotonic_ns=lambda: next(ticks), time_ns=lambda: 100)
         plan.checks = [reused]
-        gate.apply_reuse(plan, ["waybar"])
+        gate.apply_reuse(plan, ["ironbar"])
         plan.checks = [suite, runner, partial, cached, cached_fallback, unstarted]
         with patch.dict(os.environ, {"TILLR_GATE_SPANS_OUT": str(root / "fixture-run" / "spans.json"),
                                      "TILLR_RUN_ID": "", "GO_TEST_SHARDS_HOLDER": ""}):
@@ -1162,11 +1162,10 @@ if _RUN_PREAMBLE_TESTS:
         print("fork-check fixture output: both concurrent gates can finish before capture is read")
 
 
-def waybar_fixture(repo):
-    (repo / "config/waybar").mkdir(parents=True, exist_ok=True)
-    (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho ok fixture\n")
-    (repo / "tests/test_waybar_cpu.py").write_text(
-        "import unittest\nclass Fixture(unittest.TestCase):\n def test_cpu(self): pass\n")
+def ironbar_fixture(repo):
+    (repo / "config/ironbar").mkdir(parents=True, exist_ok=True)
+    (repo / "config/ironbar/config.toml").write_text('position = "top"\n')
+    (repo / "tests/ironbar-modules.test.sh").write_text("#!/bin/sh\necho ok fixture\n")
 
 
 def calls(base: Path, name: str):
@@ -1530,7 +1529,7 @@ def test_self_suite_timing_handoff_and_recording():
             "self-suite", "the gate's own audit suite still passes",
             ["self-suite-stub"], "watch", 0,
         )
-        other_check = gate.Check("waybar", "waybar", ["other-stub"], "watch", 0)
+        other_check = gate.Check("ironbar", "ironbar", ["other-stub"], "watch", 0)
         plan.checks = [self_check, other_check]
         handoffs = []
         key = gate.SELF_SUITE_TIMING_ENV
@@ -1563,7 +1562,7 @@ def test_self_suite_timing_handoff_and_recording():
             "shards": [{"name": "core-routing", "wall_ms": 450}],
             "tests": [{"name": "1. A fresh repository", "shard": "core-routing", "wall_ms": 450}],
         }, by_kind["self-suite"]
-        assert "self_suite" not in by_kind["waybar"], by_kind["waybar"]
+        assert "self_suite" not in by_kind["ironbar"], by_kind["ironbar"]
 
         # Verify that running a shard subprocess with TILLR_SELF_SUITE_TIMING_OUT
         # pops the variable from child environments and writes per-shard and per-test wall_ms.
@@ -2422,17 +2421,12 @@ with tempfile.TemporaryDirectory() as tmp:
     base = Path(tmp)
     repo, releases, heads = build_repo(base)
     env = build_stubs(base)
-    (repo / "config" / "waybar").mkdir(parents=True)
-    (repo / "config" / "waybar" / "config").write_text('{"cpu": {"format": "{usage}%"}}\n')
-    (repo / "tests" / "waybar-ai-modules.test.sh").write_text(
-        f'#!/bin/sh\nprintf "ai\\n" >> "{base}/waybar-calls"\n'
+    (repo / "config" / "ironbar").mkdir(parents=True)
+    (repo / "config" / "ironbar" / "config.toml").write_text('position = "top"\n')
+    (repo / "tests" / "ironbar-modules.test.sh").write_text(
+        f'#!/bin/sh\nprintf "ai\\n" >> "{base}/ironbar-calls"\n'
     )
-    (repo / "tests" / "test_waybar_cpu.py").write_text(
-        f'from pathlib import Path\nimport unittest\n'
-        f'class CpuTest(unittest.TestCase):\n'
-        f'    def test_cpu(self):\n        Path("{base}/waybar-cpu-ran").touch()\n'
-    )
-    commit(repo, "Waybar-only change")
+    commit(repo, "Ironbar-only change")
     result = run(repo, env, "--since", "HEAD^")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "TARGETED" in result.stdout, result.stdout
@@ -2440,13 +2434,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "fork-check: VERIFIED" not in result.stdout, result.stdout
     assert calls(base, "yolo-calls") == [], calls(base, "yolo-calls")
     assert calls(base, "pi-forks-calls") == [], calls(base, "pi-forks-calls")
-    assert calls(base, "waybar-calls") == ["ai"], calls(base, "waybar-calls")
-    assert (base / "waybar-cpu-ran").exists()
+    assert calls(base, "ironbar-calls") == ["ai"], calls(base, "ironbar-calls")
     assert "baseline" not in record(repo), record(repo)
     assert record(repo)["targets"] == {}, record(repo)
     assert record(repo)["runs"][-1]["scope"] == "targeted", record(repo)
 
-    # No unrelated network probes: a missing upstream must not affect Waybar.
+    # No unrelated network probes: a missing upstream must not affect Ironbar.
     sh(heads, "git", "tag", "v9.0.0")
     shutil.rmtree(releases)
     result = run(repo, env, "--since", "HEAD^", "--explain")
@@ -2464,11 +2457,11 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # A dirty input that the targeted check reads still requires commit first, and a
     # targeted run refuses on the same channel as an audit: 2, not a red.
-    (repo / "config" / "waybar" / "config").write_text("dirty\n")
+    (repo / "config" / "ironbar" / "config.toml").write_text("dirty\n")
     result = run(repo, env, "--since", "HEAD^")
     assert result.returncode == 2, result.stdout + result.stderr
     assert "REFUSED" in result.stdout, result.stdout
-    sh(repo, "git", "checkout", "--", "config/waybar/config")
+    sh(repo, "git", "checkout", "--", "config/ironbar/config.toml")
 
     # --all wins over the recipe's default --since and still asks about drift.
     clear(base, "yolo-calls")
@@ -2488,7 +2481,7 @@ with tempfile.TemporaryDirectory() as tmp:
                      "candidate --fork pi-subagents", "candidate --fork pi-subagents --build"):
         assert expected in calls(base, "pi-forks-calls"), calls(base, "pi-forks-calls")
 
-# A Waybar case that needs a tool this machine does not have is a named skip, never a
+# An Ironbar case that needs a tool this machine does not have is a named skip, never a
 # failure: the script ran everything else, says which case it left undecided, and exits
 # 77, and the report carries that reason instead of failing a case no change can clear.
 # A failing run of the same script still fails, so the skip is not a blanket excuse.
@@ -2496,47 +2489,41 @@ with tempfile.TemporaryDirectory() as tmp:
     base = Path(tmp)
     repo, _, _ = build_repo(base)
     env = build_stubs(base)
-    (repo / "config" / "waybar").mkdir(parents=True)
-    (repo / "config" / "waybar" / "config").write_text('{"cpu": {"format": "{usage}%"}}\n')
-    script = repo / "tests" / "waybar-ai-modules.test.sh"
+    (repo / "config" / "ironbar").mkdir(parents=True)
+    (repo / "config" / "ironbar" / "config.toml").write_text('position = "top"\n')
+    script = repo / "tests" / "ironbar-modules.test.sh"
     script.write_text(
         '#!/bin/sh\n'
         'echo "skip the Meta vendor matches the installed binary: ai-usagebar is not here"\n'
         'echo "1 case(s) had no verdict here (exit 77)" >&2\n'
         'exit 77\n'
     )
-    (repo / "tests" / "test_waybar_cpu.py").write_text(
-        f'from pathlib import Path\nimport unittest\n'
-        f'class CpuTest(unittest.TestCase):\n'
-        f'    def test_cpu(self):\n        Path("{base}/waybar-cpu-ran").touch()\n'
-    )
-    commit(repo, "Waybar-only change")
+    commit(repo, "Ironbar-only change")
     result = run(repo, env, "--since", "HEAD^")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "DIAGNOSTIC PASSED" in result.stdout, result.stdout
     assert "FAIL" not in result.stdout, result.stdout
-    assert (base / "waybar-cpu-ran").exists(), "The CPU check must still run"
-    assert "skip             waybar (sh tests/waybar-ai-modules.test.sh)" in result.stdout, result.stdout
+    assert "skip             ironbar (sh tests/ironbar-modules.test.sh)" in result.stdout, result.stdout
     assert ("because: the Meta vendor matches the installed binary: "
             "ai-usagebar is not here") in result.stdout, result.stdout
     assert record(repo)["runs"][-1]["outcome"] == "verified", record(repo)["runs"][-1]
-    assert not any(c["kind"] == "waybar" and c["rc"] != 0 for c in record(repo)["runs"][-1]["checks"]), \
+    assert not any(c["kind"] == "ironbar" and c["rc"] != 0 for c in record(repo)["runs"][-1]["checks"]), \
         record(repo)["runs"][-1]["checks"]
     # The progress stream names the same outcome the report does, as it completes:
     # a check the report calls a skip streams as a skip rather than as a failure.
-    assert "fork-check: skip waybar -- Waybar module configuration" in result.stderr, result.stderr
-    assert "FAIL waybar" not in result.stderr, result.stderr
+    assert "fork-check: skip ironbar -- Ironbar module configuration" in result.stderr, result.stderr
+    assert "FAIL ironbar" not in result.stderr, result.stderr
 
     # The same script exiting 1 is a verdict about the change, not a skip.
-    (repo / "config" / "waybar" / "config").write_text('{"cpu": {"format": "broken"}}\n')
+    (repo / "config" / "ironbar" / "config.toml").write_text('position = "broken"\n')
     script.write_text('#!/bin/sh\necho "FAIL a case" >&2\nexit 1\n')
-    commit(repo, "break a Waybar case")
+    commit(repo, "break an Ironbar case")
     result = run(repo, env, "--since", "HEAD^")
     assert result.returncode == 1, result.stdout + result.stderr
     assert "FAILED" in result.stdout, result.stdout
-    assert "waybar: Waybar module configuration" in result.stdout, result.stdout
+    assert "ironbar: Ironbar module configuration" in result.stdout, result.stdout
     # The ordinary failure is unchanged on both surfaces.
-    assert "fork-check: FAIL waybar -- Waybar module configuration" in result.stderr, result.stderr
+    assert "fork-check: FAIL ironbar -- Ironbar module configuration" in result.stderr, result.stderr
 
 # A successful targeted run cannot erase a failed full audit or its baseline.
 with tempfile.TemporaryDirectory() as tmp:
@@ -2546,9 +2533,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert run(repo, env).returncode == 0
     baseline = record(repo)["baseline"]
     targets = record(repo)["targets"]
-    waybar_fixture(repo)
-    (repo / "config/waybar/config").write_text("broken\n")
-    (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho FAIL fixture\nexit 1\n")
+    ironbar_fixture(repo)
+    (repo / "config/ironbar/config.toml").write_text("broken\n")
+    (repo / "tests/ironbar-modules.test.sh").write_text("#!/bin/sh\necho FAIL fixture\nexit 1\n")
     commit(repo, "break documentation")
     (base / "uvx-out").write_text("missing link\n")
     (base / "uvx-rc").write_text("1\n")
@@ -2574,7 +2561,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert record(repo)["last_audit"]["outcome"] == "failed", record(repo)
     result = run(repo, env, "--since", "HEAD~2")
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "run  waybar" in result.stdout, result.stdout
+    assert "run  ironbar" in result.stdout, result.stdout
 
 # The real recipe must inherit the approved point, not silently narrow to HEAD^.
 # Run its actual default arguments in a fixture with failure from an earlier task.
@@ -2590,9 +2577,9 @@ with tempfile.TemporaryDirectory() as tmp:
 
     assert run(repo, env).returncode == 0
     approved = record(repo)["baseline"]
-    waybar_fixture(repo)
-    (repo / "config/waybar/config").write_text("broken\n")
-    (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho FAIL fixture\nexit 1\n")
+    ironbar_fixture(repo)
+    (repo / "config/ironbar/config.toml").write_text("broken\n")
+    (repo / "tests/ironbar-modules.test.sh").write_text("#!/bin/sh\necho FAIL fixture\nexit 1\n")
     commit(repo, "earlier task leaves a failed document check")
     (base / "uvx-out").write_text("missing link\n")
     (base / "uvx-rc").write_text("1\n")
@@ -2602,12 +2589,12 @@ with tempfile.TemporaryDirectory() as tmp:
     clear(base, "uvx-calls")
     result = run(repo, env, *default_args)
     assert result.returncode == 1, "A later commit must not hide the earlier failure:\n" + result.stdout
-    assert "run  waybar" in result.stdout, "Default completion must check earlier unapproved documents"
+    assert "run  ironbar" in result.stdout, "Default completion must check earlier unapproved documents"
     assert record(repo)["baseline"] == approved, record(repo)
 
     # Once all pending checks pass, the approved point rolls forward to HEAD.
     clear(base, "uvx-rc", "uvx-out")
-    (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho ok fixture\n")
+    (repo / "tests/ironbar-modules.test.sh").write_text("#!/bin/sh\necho ok fixture\n")
     commit(repo, "repair the pending failure")
     result = run(repo, env, *default_args)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -5436,8 +5423,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # A document finding is the case that needed this: the entry said "documents ... exited
     # 1", and the checker's own report -- the line that names the missing target -- existed
     # only on the terminal.
-    waybar_fixture(repo)
-    (repo / "tests/waybar-ai-modules.test.sh").write_text(
+    ironbar_fixture(repo)
+    (repo / "tests/ironbar-modules.test.sh").write_text(
         '#!/bin/sh\n'
         f'if [ -f "{base}/uvx-rc" ]; then cat "{base}/uvx-out"; exit 1; fi\n'
         'exit 0\n')
@@ -5451,7 +5438,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 1, result.stdout + result.stderr
     assert excerpt.exists(), "a failing run writes the excerpt beside the record"
     text = excerpt.read_text()
-    assert "command: sh tests/waybar-ai-modules.test.sh" in text, text
+    assert "command: sh tests/ironbar-modules.test.sh" in text, text
     assert "exit code: 1" in text, text
     assert "link/missing-target" in text, text
     # The report names the file, so the terminal says where to look without a paste.
@@ -5483,7 +5470,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "earlier line(s) dropped" in text, text
     # Rewritten, not appended: the file describes the most recent failing run, and its
     # header names that run because older entries carry the same path.
-    assert text.count("=== waybar") == 1, text
+    assert text.count("=== ironbar") == 1, text
     assert "link/missing-target" not in text, text
 
     # A green run afterwards leaves the last failure's excerpt alone: fixing the document
@@ -6578,7 +6565,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert plan_fields["base"] == verified_before, (plan_fields, verified_before)
     # The doc change reaches the documents step, and the plan names it: a landing reads
     # this pair rather than reconstructing the selection from the tree.
-    assert "waybar" not in plan_fields["checks"].split(","), plan_fields
+    assert "ironbar" not in plan_fields["checks"].split(","), plan_fields
     assert set(plan_fields["required"].split(",")) <= set(plan_fields["checks"].split(",")), plan_fields
     ran, notrun, priced = int(plan_fields["ran"]), int(plan_fields["notrun"]), int(plan_fields["priced"])
     seconds, full, saved = (float(plan_fields[key]) for key in ("seconds", "full", "saved"))
@@ -6612,7 +6599,7 @@ with tempfile.TemporaryDirectory() as tmp:
                              {"label": "another fast recorded step", "seconds": 0.02}]}],
     }))
     floor_plan = module.Plan()
-    slow = module.Check("waybar", "a document was checked", [], "a document changed", 0)
+    slow = module.Check("ironbar", "a document was checked", [], "a document changed", 0)
     slow.seconds = 0.1
     floor_plan.checks = [slow]
     printed = io.StringIO()
@@ -6631,7 +6618,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # skip, because nothing about it was unanswerable.
     reuse_plan = module.Plan()
     reuse_plan.checks = [
-        module.Check("waybar", "a document was checked", [], "a document changed", 0,
+        module.Check("ironbar", "a document was checked", [], "a document changed", 0,
                      watches=("docs/",)),
         module.Check("go-tool", "tools/tillr-land builds", [], "a path under tools/tillr-land/ changed", 0,
                      watches=("tools/tillr-land/",)),
@@ -6639,8 +6626,8 @@ with tempfile.TemporaryDirectory() as tmp:
         module.Check("series", "pack matt: 1 series", [], "the series changed", 0,
                      watches=("yolo-packs/matt/",), reusable=False),
     ]
-    module.apply_reuse(reuse_plan, ["waybar", "file-size", "series"])
-    assert [check.kind for check in reuse_plan.reused] == ["waybar"], reuse_plan.reused
+    module.apply_reuse(reuse_plan, ["ironbar", "file-size", "series"])
+    assert [check.kind for check in reuse_plan.reused] == ["ironbar"], reuse_plan.reused
     assert [check.kind for check in reuse_plan.checks] == ["go-tool", "file-size", "series"], \
         reuse_plan.checks
     # The integrity set is never reused: it is a property of the tree, and the tree is what
@@ -6664,22 +6651,22 @@ with tempfile.TemporaryDirectory() as tmp:
     with contextlib.redirect_stdout(printed):
         module.print_plan(module.Record(floor_state), reuse_plan, "base", "head")
     reuse_fields = dict(field.split("=", 1) for field in printed.getvalue().split()[2:])
-    assert reuse_fields["reused"] == "waybar", printed.getvalue()
-    assert "waybar" not in reuse_fields["checks"].split(","), printed.getvalue()
+    assert reuse_fields["reused"] == "ironbar", printed.getvalue()
+    assert "ironbar" not in reuse_fields["checks"].split(","), printed.getvalue()
     # The selection line carries the reused check with the watches that licensed it, so a
     # reader of the record can see what the run did not buy and why.
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed):
         module.print_selection(reuse_plan, ["docs/reuse.md"])
     reuse_selection = json.loads(printed.getvalue()[len(module.SELECTION_PREFIX):])
-    assert [one["kind"] for one in reuse_selection["reused"]] == ["waybar"], \
+    assert [one["kind"] for one in reuse_selection["reused"]] == ["ironbar"], \
         reuse_selection["reused"]
     assert reuse_selection["reused"][0]["watches"] == ["docs/"], reuse_selection["reused"]
     # A reuse list belongs to the gate invocation that was handed it, never to a check: a
     # check that spawns another gate (the self-suite does) must not hand its own reuse down,
     # or the inner gate would skip checks the outer one was told to skip.
-    assert "FORK_CHECK_REUSE" not in module.environ({"FORK_CHECK_REUSE": "waybar"}), \
-        module.environ({"FORK_CHECK_REUSE": "waybar"})
+    assert "FORK_CHECK_REUSE" not in module.environ({"FORK_CHECK_REUSE": "ironbar"}), \
+        module.environ({"FORK_CHECK_REUSE": "ironbar"})
     # The gate is the one boundary every check's environment passes through. A repository
     # selection inherited by the gate (6f2d9d938: a fixture's `git commit -m initial` landed
     # on the real main) must not reach any check, whoever added it.
@@ -6699,7 +6686,7 @@ with tempfile.TemporaryDirectory() as tmp:
                          [line for line in forced.stdout.splitlines() if line.strip()][-1].split()[2:])
     assert forced_fields["base"] == forced_base, forced_fields
     assert forced_fields["head"] == forced_head, forced_fields
-    assert "waybar" not in forced_fields["checks"].split(","), forced_fields
+    assert "ironbar" not in forced_fields["checks"].split(","), forced_fields
     # A base this history does not contain is refused rather than planned from, because a
     # plan about a tree this history lacks cannot be this batch's answer.
     unresolved = run(repo, {**env, "FORK_CHECK_PLAN_BASE": "0" * 40})
@@ -6713,8 +6700,8 @@ with tempfile.TemporaryDirectory() as tmp:
     #     by contract and both survive the tail. A check selected by a watched path records
     #     that path; a check in the fixed integrity set records that it is unconditional;
     #     a step that did not run records the reason it did not.
-    waybar_fixture(repo)
-    (repo / "config/waybar/config").write_text("changed\n")
+    ironbar_fixture(repo)
+    (repo / "config/ironbar/config.toml").write_text("changed\n")
     commit(repo, "docs: a document for the selection line")
     result = run(repo, env)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -6723,8 +6710,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert lines[-2].startswith(module.SELECTION_PREFIX), lines[-3:]
     selection = json.loads(lines[-2][len(module.SELECTION_PREFIX):])
     by_kind = {one["kind"]: one for one in selection["checks"]}
-    documents = by_kind["waybar"]
-    assert "config/waybar/config" in documents["selected_by"], documents
+    documents = by_kind["ironbar"]
+    assert "config/ironbar/config.toml" in documents["selected_by"], documents
     assert documents["unconditional"] is False, documents
     assert documents["why"], documents
     assert documents["watches"], documents
@@ -6738,8 +6725,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # to read the gate's source and guess.
     entry = record(repo)["runs"][-1]
     recorded = {one["kind"]: one for one in entry["checks"]}
-    assert "config/waybar/config" in recorded["waybar"]["selected_by"], recorded["waybar"]
-    assert recorded["waybar"]["why"], recorded["waybar"]
+    assert "config/ironbar/config.toml" in recorded["ironbar"]["selected_by"], recorded["ironbar"]
+    assert recorded["ironbar"]["why"], recorded["ironbar"]
     assert recorded["file-size"]["unconditional"] is True, recorded["file-size"]
     assert recorded["file-size"]["selected_by"] == [], recorded["file-size"]
     assert entry["skips"], entry
@@ -6757,7 +6744,7 @@ with tempfile.TemporaryDirectory() as tmp:
     explained_selection = json.loads(explain_lines[-1][len(module.SELECTION_PREFIX):])
     assert {one["kind"] for one in explained_selection["checks"]} == set(by_kind), \
         explained_selection["checks"]
-    explained_documents = {one["kind"]: one for one in explained_selection["checks"]}["waybar"]
+    explained_documents = {one["kind"]: one for one in explained_selection["checks"]}["ironbar"]
     assert explained_documents["selected_by"] == documents["selected_by"], explained_documents
 
     # ── the hostile-matrix preflight ────────────────────────────────────────────
@@ -8082,11 +8069,11 @@ with tempfile.TemporaryDirectory() as tmp:
     measured = [
         ("file-size", "every series' shape, and the packs that declare them", 0.85, ()),
         ("file-size", "no tracked .ts file over 2,000 lines", 0.10, ()),
-        ("waybar", "a fixed convention guard", 0.22, ()),
-        ("waybar", "3 changed Markdown file(s)", 5.07, ()),
-        ("waybar", "no tracked Markdown cites a scratch path as evidence", 0.58, ()),
+        ("ironbar", "a fixed convention guard", 0.22, ()),
+        ("ironbar", "3 changed Markdown file(s)", 5.07, ()),
+        ("ironbar", "no tracked Markdown cites a scratch path as evidence", 0.58, ()),
         ("file-size", "a synthetic document convention check", 0.45, ()),
-        ("waybar", "a second convention guard", 0.18, ()),
+        ("ironbar", "a second convention guard", 0.18, ()),
         ("pi-forks", "bin/pi-forks: the driver's own cases", 174.19, ()),
         ("hooks-install", "bin/hooks-install: a marked copy is replaced and drift reported", 3.16, ()),
         ("series", "pack matt: 7 series", 0.02, ()),
@@ -9038,25 +9025,25 @@ with tempfile.TemporaryDirectory() as tmp:
 #      checks no path selects: on 2026-11-18 attribution of the tillr-view suite at a
 #      verified green pointer answered "no planned check matches --only" (exit 2), the
 #      runner read that as "error, not a verdict", and the red got no fixer. A
-#      path-selected check (Waybar's) replayed on a verified commit must run and answer.
+#      path-selected check (Ironbar's) replayed on a verified commit must run and answer.
 with tempfile.TemporaryDirectory() as tmp:
     base = Path(tmp)
     repo, _, _ = build_repo(base)
     env = build_stubs(base)
-    waybar_fixture(repo)
-    commit(repo, "waybar inputs")
+    ironbar_fixture(repo)
+    commit(repo, "ironbar inputs")
     verified = run(repo, env)
     assert verified.returncode == 0, verified.stdout + verified.stderr
-    replay = run(repo, env, "--replay", "--only", "waybar")
+    replay = run(repo, env, "--replay", "--only", "ironbar")
     assert replay.returncode == 0, replay.stdout + replay.stderr
-    assert "PASS waybar" in replay.stdout, replay.stdout
+    assert "PASS ironbar" in replay.stdout, replay.stdout
     # The same check red on a verified commit is a red, not "could not answer": a
     # replay that cannot see the check would acquit or misattribute by omission.
-    (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho FAIL fixture\nexit 1\n")
-    commit(repo, "break the waybar test")
-    red_replay = run(repo, env, "--replay", "--only", "waybar")
+    (repo / "tests/ironbar-modules.test.sh").write_text("#!/bin/sh\necho FAIL fixture\nexit 1\n")
+    commit(repo, "break the ironbar test")
+    red_replay = run(repo, env, "--replay", "--only", "ironbar")
     assert red_replay.returncode == 1, red_replay.stdout + red_replay.stderr
-    assert "FAIL waybar" in red_replay.stdout, red_replay.stdout
+    assert "FAIL ironbar" in red_replay.stdout, red_replay.stdout
 
 # 60b. THE SHARD RUNNER'S OWN REGRESSION SUITE LANDS WHEN THE RUNNER OR ITS SUITE CHANGES.
 #      At 7:13 AM ET on 2026-11-22 a commit touching only `tests/go-test-shards.test.py`

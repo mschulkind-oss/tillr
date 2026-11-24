@@ -699,21 +699,22 @@ sway-check:
 ai-usagebar-fork-patch *args:
     @python3 tools/ai-usagebar-fork-patch.py {{args}}
 
-# Test the ai-usagebar fork inputs, its deployment orchestration, and the waybar
+# Test the ai-usagebar fork inputs, its deployment orchestration, and the Ironbar
 # modules that consume them, without sudo or a package build.
 ai-usagebar-check:
-    python3 -m pytest tests/test_ai_usagebar_fork.py tests/test_ai_usagebar_deploy.py
-    sh tests/waybar-ai-modules.test.sh
+    @if python3 -c "import pytest" 2>/dev/null; then python3 -m pytest tests/test_ai_usagebar_fork.py tests/test_ai_usagebar_deploy.py; else uvx pytest tests/test_ai_usagebar_fork.py tests/test_ai_usagebar_deploy.py; fi
+    @sh -c 'sh tests/ironbar-modules.test.sh; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 77 ]'
 
 # The ironbar package patch is generated from the local delta, never hand-edited:
 # it embeds that delta in Arch's recipe and carries the revision.
 ironbar-fork-patch *args:
     @python3 tools/ironbar-fork-patch.py {{args}}
 
-# Test the ironbar fork inputs and the shared repo strategy, without sudo or a
-# package build.
+# Test the ironbar fork inputs, shared repo strategy, and Ironbar bar config,
+# without sudo or a package build.
 ironbar-check:
-    python3 -m pytest tests/test_ironbar_fork.py tests/test_repo_forks.py
+    @if python3 -c "import pytest" 2>/dev/null; then python3 -m pytest tests/test_ironbar_fork.py tests/test_repo_forks.py; else uvx pytest tests/test_ironbar_fork.py tests/test_repo_forks.py; fi
+    @sh -c 'sh tests/ironbar-modules.test.sh; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 77 ]'
 
 # Provision and verify the Google TV control on this host (docs/media-toggle.md).
 # Needs adb (android-tools); it never installs a package, and never starts a
@@ -750,9 +751,9 @@ help:
     @echo "  pkg-deploy       - Build/install a patched Arch package fork (pkg-deploy <name>)"
     @echo "  sway-check       - Test Sway inputs and deployment without host changes"
     @echo "  ai-usagebar-fork-patch - Regenerate the package patch from the local delta"
-    @echo "  ai-usagebar-check  - Test ai-usagebar fork inputs, deploy logic, waybar modules"
+    @echo "  ai-usagebar-check  - Test ai-usagebar fork inputs, deploy logic, Ironbar modules"
     @echo "  ironbar-fork-patch - Regenerate the ironbar package patch from the local delta"
-    @echo "  ironbar-check      - Test ironbar fork inputs and the shared repo strategy"
+    @echo "  ironbar-check      - Test ironbar fork inputs, shared repo strategy, bar config"
     @echo "  profiler-build   - Build the self-profiler binary (tools/pi-profiler/pi-profiler-go)"
     @echo "  queued-message-states - Drive pi's queued-message states headlessly (tools/queued-message-states)"
     @echo "  session-liveness - Measure pi's session liveness headlessly; expected GREEN (tools/session-liveness)"
