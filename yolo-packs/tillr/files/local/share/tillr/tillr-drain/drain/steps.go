@@ -1574,8 +1574,8 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 	// A grouped exit 1 says only that SOME check failed. Judge each id so a
 	// candidate's own red cannot hide behind a different red already on its base.
 	for _, check := range checks {
-		if isDefault && check == goAffectedCheckID {
-			handled, red, known, output, replayErr := s.replayGoAffected(ctx, dir, candidate, rev, check)
+		if isDefault && !candidate.wholeCheckReplay && isReplayGoCheck(check) {
+			handled, red, known, output, replayErr := s.replayGoCheck(ctx, dir, candidate, rev, check)
 			if replayErr != nil {
 				return ReplayOutcome{Rev: rev, Known: false}, replayErr
 			}
