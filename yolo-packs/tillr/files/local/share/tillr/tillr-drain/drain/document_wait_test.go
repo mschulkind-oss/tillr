@@ -94,7 +94,7 @@ func TestWaitingDefaultStopsCleanlyOnOperatorSignals(t *testing.T) {
 			case err := <-done:
 				finished = true
 				t.Fatalf("default loop exited during idle polling: %v: %s%s", err, stdout.String(), stderr.String())
-			case <-time.After(3 * drain.DefaultStorePollInterval):
+			case <-time.After(300 * time.Millisecond):
 			}
 			if err := cmd.Process.Signal(signal); err != nil {
 				t.Fatal(err)
@@ -116,6 +116,19 @@ func TestLoopHelpNamesExitWhenDrained(t *testing.T) {
 	code, out := invoke(t, "loop", "--help")
 	if code != 0 || !strings.Contains(string(out), "-exit-when-drained") || strings.Contains(string(out), "-stay") {
 		t.Fatalf("loop --help does not expose only the exit opt-out: exit %d: %s", code, out)
+	}
+}
+
+func TestLoopHelpExposesFallbackPollAndNoNotify(t *testing.T) {
+	code, out := invoke(t, "loop", "--help")
+	text := string(out)
+	if code != 0 {
+		t.Fatalf("loop --help exit %d: %s", code, text)
+	}
+	for _, want := range []string{"-fallback-poll", "15s", "-no-notify"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("loop --help missing %q:\n%s", want, text)
+		}
 	}
 }
 

@@ -209,6 +209,9 @@ func replayToStop(t *testing.T, advance time.Duration, pollOnly bool) []string {
 	f, l := passFixture(t, "item-a", "item-b")
 	l.cfg.Lanes = []string{"lane-1"}
 	l.pollOnly = pollOnly
+	if pollOnly {
+		l.cfg.StorePollInterval = time.Millisecond
+	}
 	// Each item's run commits nothing, goes back to its worker once, and its identical
 	// second ending waits on the owner (the owner's ruling of 2026-11-17): two starts each.
 	steps := &triggerSteps{started: make(chan string, 4), release: make(chan struct{}), store: f.storePath}

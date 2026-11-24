@@ -18,9 +18,13 @@ type txNotifyState struct {
 	appended []appendedEvent
 	explicit []notify.Frame
 	mutated  bool
+	suppress bool
 }
 
 func (n txNotifyState) hasWork() bool {
+	if n.suppress {
+		return false
+	}
 	return len(n.appended) > 0 || len(n.explicit) > 0 || n.mutated
 }
 
@@ -90,6 +94,13 @@ func (t *Tx) Notify(topic string, ids ...string) {
 		f.RunID = ids[1]
 	}
 	t.notify.explicit = append(t.notify.explicit, f)
+}
+
+// SuppressNotify disables post-commit wake-hint publishing for this transaction.
+// Use it for pure liveness bookkeeping (such as drain_sessions heartbeats) that
+// must not wake idle subscribers.
+func (t *Tx) SuppressNotify() {
+	t.notify.suppress = true
 }
 
 // NotifyFrame queues f on this transaction, to be published only if and after

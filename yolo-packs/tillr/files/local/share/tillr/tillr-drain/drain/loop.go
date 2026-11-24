@@ -23,6 +23,7 @@ import (
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
+	"github.com/mschulkind-oss/tillr/notify"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
@@ -400,9 +401,19 @@ type LoopConfig struct {
 	// DefaultBackoffBase. It is a wait, never a stop: the ruling's answer to a repeated
 	// fault is to report it and try again, because the pile still holds work.
 	BackoffBase time.Duration
-	// StorePollInterval bounds the wait before noticing a new store fact. Zero
-	// selects DefaultStorePollInterval; it never bounds the amount of work.
+	// StorePollInterval bounds the fallback wait before reconciling the store
+	// when no notification arrives. Zero selects DefaultFallbackPollInterval
+	// (15 s); it never bounds the amount of work.
 	StorePollInterval time.Duration
+	// NoNotify disables local relay subscription and auto-start, relying on
+	// StorePollInterval fallback polling only (--no-notify, D-SN6, D-SN7).
+	NoNotify bool
+	// NotifyBin overrides the `tillr` binary invoked when auto-starting
+	// `tillr notify serve`. Empty resolves a sibling `tillr` or PATH.
+	NotifyBin string
+	// NotifyIdleExit overrides the --idle-exit duration passed when
+	// auto-starting `tillr notify serve`. Zero selects notify.DefaultIdleExit.
+	NotifyIdleExit time.Duration
 	// GateBudget is the bound on the gate's own wall time for one tick. 0 is
 	// DefaultGateBudget, which is the one place the budget is stated; this field exists so a
 	// test can measure the overrun path with a bound it can cross, and a face that never sets
@@ -692,10 +703,14 @@ type Loop struct {
 	beforeSessionOpen func(create bool)
 	// waitingDetail retains all holds, not just the five printed examples, so a
 	// changed reason outside the summary still reports a changed queue.
-	waitingDetail   string
-	nextCommentPoll time.Time
-	hasAnswers      bool
-	pollOnly        bool // test seam: suppress accelerators, retain store polling
+	waitingDetail    string
+	nextCommentPoll  time.Time
+	hasAnswers       bool
+	pollOnly         bool // test seam: suppress accelerators, retain store polling
+	triggerNotify    *triggerNotify
+	triggerTimer     func(time.Duration) (<-chan time.Time, func())
+	notifyStartRelay func(context.Context, string, time.Duration) error
+	notifyFrameObs   func(notify.Frame)
 	// heartbeatClock is a test seam: when set, the heartbeat waits on the ticker it
 	// returns instead of a wall-clock one, so a test decides when each tick happens.
 	heartbeatClock func() heartbeatTicker
@@ -787,7 +802,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		return nil, Usagef("the loop needs a non-negative store poll interval")
 	}
 	if cfg.StorePollInterval == 0 {
-		cfg.StorePollInterval = DefaultStorePollInterval
+		cfg.StorePollInterval = DefaultFallbackPollInterval
 	}
 	if cfg.GateBudget < 0 {
 		return nil, Usagef("the loop needs a non-negative gate budget: it bounds the gate's own wall time, not a run's")
@@ -1039,6 +1054,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	l.startView.Store(view)
 	defer l.startView.Store(nil)
 	defer l.watchStartView(ctx, view, startViewRefreshInterval)()
+	defer l.startTriggerNotify(ctx)()
 	stopStarts := func() {}
 	if !l.pollOnly {
 		stopStarts = l.startBackgroundCoordinator(ctx, view, &result)

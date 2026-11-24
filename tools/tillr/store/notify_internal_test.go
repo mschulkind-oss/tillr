@@ -176,3 +176,10 @@ func TestFramesForEventMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestSuppressNotifySkipsWork(t *testing.T) {
+	n := txNotifyState{mutated: true, suppress: true}
+	if n.hasWork() {
+		t.Fatal("suppressed txNotifyState reported work")
+	}
+}
