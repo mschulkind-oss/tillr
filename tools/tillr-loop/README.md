@@ -18,11 +18,11 @@ where the loop starts):
 
 With that declaration, the drain selects all six steps without step flags and checks
 `describe` before the first pass. An explicit step flag still wins. Without hooks,
-`--gate`, `--land`, and `--verdict` must name programs, as the keeper's command does:
+`--gate`, `--land`, and `--verdict` must name programs:
 
 ```sh
-tillr drain loop --root /workspace --lanes 1 \
-  --gate    "tools/tillr-loop/tillr-loop gate --root /workspace" \
+tillr drain loop --root <repo> --lanes 1 \
+  --gate    "tools/tillr-loop/tillr-loop gate --root <repo>" \
   --land    "tools/tillr-loop/tillr-loop land" \
   --verdict "tools/tillr-loop/tillr-loop verdict"
 
@@ -65,8 +65,8 @@ are its after-merge proof.
 
 When a configured command names this repository's standard adapter under the loop's
 `--root`, the drain runs its own compiled-in copy, not the live working-tree file. This
-applies to gate, fixer gate, land and verdict, including the keeper's `python3` commands
-and direct script commands. Startup prints one line per step identifying the build's
+applies to gate, fixer gate, land and verdict, whether the command runs the adapter
+through `python3` or directly as a script. Startup prints one line per step identifying the build's
 embedded adapter or an unchanged caller-configured program. Other scripts run exactly
 as configured; naming a different adapter path does not select the embedded copy.
 Definition hooks also run the exact declared executable, not the build's embedded
@@ -86,15 +86,15 @@ just pack-sync
 ```
 
 Both the drain suite and this adapter's suite refuse drift between source and copy.
-The green-commit build recipe compiles the committed copy from the same revision as its
-Go programs; it does not regenerate from the current checkout.
+`just tillr-build` compiles the committed copy from the same revision as its Go
+programs; it does not regenerate from the current checkout.
 
 The drain supplies its build stamp through `TILLR_LOOP_ADAPTER_BUILD`. If `tillr-item
 show` omits a criterion's `claim_class` field, verdict refuses with exit 4, says the
 `tillr-item` build is older than the adapter, and names both builds. Revisions identify
 builds when available; otherwise paths and SHA-256 digests identify them. A pack launcher
 is named as that launcher, without executing it to discover its cached binary. A present
-but unknown class still receives the existing invalid-stored-class refusal.
+but unknown class is refused with exit 4 as an invalid stored class.
 
 ## No budget: the pile is the only throttle
 
@@ -112,26 +112,25 @@ Use `--exit-when-drained` only when the caller wants the loop to exit with
 The default wait prints the held count and at most five items with their reasons,
 then stays quiet until something changes.
 
-Between those stops sits the case that actually happens — **the machinery is broken and the
-work is fine**. A staging step that cannot render a brief, an adapter that refuses before
+Between those stops sits one more case: **the machinery is broken and the work is
+fine**. A staging step that cannot render a brief, an adapter that refuses before
 running: the loop reports the failure, waits, and tries the same plan again, because the
 pile still holds the item and the fault is not the item's. The wait doubles from
 `--backoff-base` (default 1s) up to 5 minutes and resets as soon as a candidate is worked.
-It is deliberately conditional: it applies only to a tick that **dispatched nothing** and
+It is conditional: it applies only to a pass that **dispatched nothing** and
 failed in the infrastructure class, so it never rations work the loop could be doing. An
 operator stop interrupts it rather than sitting out the wait.
 
 What the loop does instead of a budget is **measure**. Every run's record carries the tokens
 and cost its backend's extractor reported (`tools/tillr-run/backends`), the loop prints one
 line per run and a total at the end, and a run whose report carried no number is named
-rather than counted as free. Measurement is introspection — what a night cost — and it is a
-different thing from refusing to spend it.
+rather than counted as free. Measurement reports what the work cost; it never refuses to spend it.
 
 A red gate, a refused fence, or a landing that did not take records a run-level
 `drain.refusal`, not an `item.verdict`. Criteria are unchanged and unjudged text stays
 editable. An ordinary refused landing is held as `land-refused`, while a squash conflict
-keeps its existing conflict-fix run and `conflict-exhausted` hold. Earlier `not-done`
-criteria remain unchanged. See [the landing refusal contract](../../docs/design/tillr-judge-and-lifecycle.md#prevent-a-failed-landing-from-freezing-the-items-criteria).
+gets a conflict-fix run and, when that is exhausted, the `conflict-exhausted` hold.
+Recorded `not-done` criteria remain unchanged. See [the landing refusal contract](../../docs/design/tillr-judge-and-lifecycle.md#prevent-a-failed-landing-from-freezing-the-items-criteria).
 
 The loop appends the candidate to whatever program string it is given — one flag per
 field, `--item --lane --run --worktree --base --head --root` — and then the flags each
@@ -150,9 +149,9 @@ That mode is separate from `self-check`, which composes and displays real invoca
 |---|---|---|
 | `gate` | `tillr-gate change --item I --lane L --run U --worktree W --base B --head H --now T --output <run>/gate.change.json`, then `tillr-gate plan --registry R --input gate.change.json --output gate.plan.json --root <worktree>`, then `tillr-gate run --input gate.plan.json --worktree <worktree> --output gate.verdict.json --logs <run>/logs --gate python3 --gate-arg tools/gate/change-gate.py --gate-arg --base --gate-arg <base> --gate-arg --head --gate-arg <head> --gate-arg --runner --gate-arg tillr-gate --gate-arg --logs --gate-arg <run>/change-logs` (`--gate-program P` replaces the program's words) | the candidate's argv for `tillr-gate change`, which derives the `gate.change` record itself: base, `head^{tree}` and `git diff --name-only base...head`, all read in the candidate worktree. Which checks the change owes stays `plan`'s decision. The registry `R` is `--registry`, else `$TILLR_LOOP_REGISTRY`, else the candidate worktree's `tools/gate/checks` directory, so a lane that adds or changes a declaration is judged by it. |
 | `land` | `tillr-land pass --store S --repo R --item I --run U --base B --head H --verdict <run>/gate.verdict.json --base-ref <branch> --now T --run-dir <run> [--message-from M] [--observed-trunk O]` | `--observed-trunk` is the loop's last observed trunk tip, passed through unchanged: the lander refuses with `trunk-rewritten` under the land lock if the trunk no longer contains it, and records it. `--repo` = root, `--store` = `<root>/.tillr/state.db`, `--base-ref` = the branch the root is checked out on. There is no queue record and no derived candidate id: the gate's verdict is the only input, and the candidate's own four fields name the landing. |
-| `verdict` | `tillr-item show --store S --item <id> --root R` to read the frozen criteria, then one `tillr-item verdict record --store S --input <record> --now T` per criterion | one `item.verdict` per criterion: the store's frozen text hashed, `done` on `--verdict pass` after a landing, `actor_kind: mechanical`, and the gate verdict, run and head as its evidence |
+| `verdict` | `tillr-item show --store S --item <id> --root R` to read the frozen criteria, then one `tillr-item verdict record --store S --input <record> --now T` per criterion | one `item.verdict` per criterion whose stored `claim_class` is `verification-only`: the store's frozen text hashed, `done` on `--verdict pass` after a landing, `actor_kind: mechanical`, and the gate verdict, run and head as its evidence. A criterion of any other class is left for a non-mechanical verdict. |
 
-A candidate's terminal outcome reaches the board through a fourth step this directory does
+A candidate's terminal outcome reaches the store through a fourth step this directory does
 **not** supply: after the verdict, the loop runs `tillr-item state --store S --item <id>
 --state landed --now T` (`--item-bin`, default `tillr-item`). A landed candidate's
 item becomes `landed`; a failed attempt leaves the item's state and criteria alone.
@@ -176,15 +175,15 @@ other records.
 
 `--root` defaults to the checkout the adapter runs in (`git rev-parse --show-toplevel`),
 `--store` to `<root>/.tillr/state.db`, `--work-dir` to `<root>/.tillr/loop`, `--now` to the
-wall clock. The per-tick records land in `<work-dir>/<run>/`, which is the loop's scratch,
+wall clock. The per-run records land in `<work-dir>/<run>/`, which is the loop's scratch,
 never the candidate worktree: a file there would be untracked work the candidate's own
 `git add` could commit.
 
 ## Exit codes
 
 The loop's contract is the whole job, so each adapter translates rather than passing a
-code through. `tillr-gate run` already answers 0/1/4 and `tillr land pass` already answers
-0/1, but both answer 2/3/5 for a plan, store or invocation they could not use, and that is
+code through. `tillr-gate run` answers 0/1/4/6 and `tillr-land pass` answers
+0/1, but both also answer 2/3/5 for a plan, store or invocation they could not use, and that is
 not a verdict about the candidate.
 
 | Adapter | Underlying | Adapter answers | The loop does |
@@ -220,12 +219,12 @@ becomes `true`.
 
 ## The self-check
 
-`tillr-loop self-check` composes one tick and prints it without running anything: the
+`tillr-loop self-check` composes one candidate's steps and prints them without running anything: the
 candidate it was given, then for each of the three faces the program string the loop would
 be handed and the argv that face would pass, with the working directory, then the
 `tillr drain loop` command that wires the three together. A face that would refuse prints
 `REFUSED (exit N): <reason>` instead of its argv and the self-check exits 4, so an operator
-sees the refusal before spending a night on ticks rather than after one.
+sees the refusal before starting the loop.
 
 ## A trunk fixer's gate
 

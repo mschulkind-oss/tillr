@@ -1,9 +1,8 @@
-# The Agy Flash proof backend — `agy`
+# The agy backend — `agy`
 
-The proof that the contract survives a harness whose **effort is part of the model id**
-and whose stream is **one envelope, not a JSONL stream**. Those are the two properties a
-policy schema and a stream-shaped extractor are most likely to have baked in by accident.
-Reference:
+The adapter for a harness whose **effort is part of the model id** and whose stream is
+**one envelope, not a JSONL stream**. Those are the two properties a policy schema and a
+stream-shaped extractor are most likely to assume by accident. Reference:
 [`docs/reference/tillr-muse-backend.md`](../../../../docs/reference/tillr-muse-backend.md).
 
 | File | What it is |
@@ -40,7 +39,8 @@ Exit: the harness's own code, 124 from the wall, 2 from a refusal.
 ## Pausing and continuing
 
 Pause kind: `cannot-resume`, declared in [`pause-kind`](./pause-kind).
-SIGTERM resume behavior is unmeasured as of 2026-11-16. The runner sends SIGTERM,
+Nothing establishes that an interrupted session can be continued after SIGTERM, so
+the adapter declares that it cannot. The runner sends SIGTERM,
 waits ten seconds, then kills any surviving process group. Continuing starts a
 fresh session in the same lane and worktree as the same attempt. Its first prompt
 names the earlier transcript, report when present, and worktree with uncommitted
@@ -53,19 +53,16 @@ changes, followed by the original brief. No retry is spent.
 - **write confinement: NOTHING beyond the boundary snapshot.** The harness has a
   `--sandbox` flag, but nothing in this tree has measured whether a writing seat still
   builds under it, so this adapter does not claim it and does not pass it. The canary
-  below is the measurement that would settle it; until then the snapshot is the boundary.
+  below is the measurement that would settle it; the snapshot is the boundary.
 - **structured report:** `--json-schema` exists and is unused, for the reason above: the
   footer is a brief convention that every harness in this tree carries.
 - **usage:** the envelope's `usage` (input, output, thinking, cache-read tokens), an
   estimate and never a control input.
 
-## The two measured traps this adapter handles for you
+## The three harness traps this adapter handles for you
 
-Both are from `yolo-packs/matt-agentwork/skills/paired-design/SKILL.md`, where they cost
-a seat a whole run each:
-
-- **`YOLO_NO_LAUNCH_FLAGS=1`.** In a jail, `agy` is a launcher that injects the pack's own
-  `--model` ahead of your arguments. Two `--model` flags fail the parse before anything
+- **`YOLO_NO_LAUNCH_FLAGS=1`.** In a container whose `agy` is a launcher, the launcher
+  injects its own `--model` ahead of your arguments. Two `--model` flags fail the parse before anything
   runs, so a model chosen without this variable is a model that was not chosen.
 - **`--dangerously-skip-permissions`.** Headless cannot prompt, so without it every tool
   call is auto-denied while the envelope still reports success, `response` comes back
@@ -107,14 +104,14 @@ a seat a whole run each:
    the diff is claimed or explained; and the brief's verification commands are re-run by
    the driver, never read off the report. On this adapter that step is the only boundary
    there is.
-7. **Land through the gate** (`just done`) after the attempt result is assigned.
+7. **Land through the gate** after the attempt result is assigned.
 
 ## The canary a live run owes
 
-The first real Agy Flash run carries the instructed write just outside the worktree, and
-records whether it landed. That answer decides whether `--sandbox` can be adopted for a
-writing seat — and until it is recorded here, the claim stays "the snapshot is the
-boundary".
+A live run that measures confinement carries one instructed write just outside the
+worktree, and records whether it landed. That answer decides whether `--sandbox` can be
+adopted for a writing seat. No such answer is recorded, so the claim is "the snapshot is
+the boundary".
 
 ## What a live run needs
 

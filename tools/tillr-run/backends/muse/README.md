@@ -30,7 +30,7 @@ timeout <wall> muse exec --json --prompt-file ../brief.md --workspace <target> \
 and opens no provider connection, so the whole pipeline can be exercised for the cost of
 a process start. The model half of that argv is the one thing the knob changes: `muse
 exec` refuses `--model` and `--reasoning-effort` under the echo provider (`--model
-requires --provider meta or local`, Muse Code 1.4.18, measured 2026-11-12), so the
+requires --provider meta or local`), so the
 adapter passes the provider knob and withholds the pair. The driver's argv is the same
 in both forms — the model and the effort are always supplied — and the preflight's model
 resolution still runs under echo.
@@ -41,7 +41,7 @@ the brief is missing, empty, unfilled or missing one of the template's ten secti
 target is not the directory the adapter runs in; the harness is not on `PATH`; the model id
 does not resolve through
 `muse model-profile show <id> --effort <tier>` — a check only as good as that resolver,
-which exits 0 for any string and echoes it back (measured 2026-11-12), so a wrong id
+which exits 0 for any string and echoes it back, so a wrong id
 reaches the harness and is caught there as `does not exist or you lack access`.
 
 Exit: the harness's own code, 124 from the wall, 2 from a refusal.
@@ -49,8 +49,8 @@ Exit: the harness's own code, 124 from the wall, 2 from a refusal.
 ## Pausing and continuing
 
 Pause kind: `cannot-resume`, declared in [`pause-kind`](./pause-kind).
-SIGTERM resume behavior is unmeasured as of 2026-11-16; a session id flag alone does
-not establish that an interrupted session can be continued. The runner sends
+A session id flag alone does not establish that an interrupted session can be
+continued after SIGTERM, so the adapter declares that it cannot. The runner sends
 SIGTERM, waits ten seconds, then kills any surviving process group. Continuing
 starts a fresh session in the same lane and worktree as the same attempt. Its
 first prompt names the earlier transcript, report when present, and worktree
@@ -67,7 +67,7 @@ with uncommitted changes, followed by the original brief. No retry is spent.
   `--disable-sandbox` or `--yolo` and always roots `--workspace` at the named target, and
   the committed test asserts both from the argv the adapter actually execs. The
   confinement is the vendor's, so a CLI change could widen its roots silently — which is
-  why the first live run carries the canary below.
+  why a live run carries the canary below.
 - **structured report:** available (`--output-schema`, Meta provider only) and not used:
   the `RESULT:` footer is a brief convention that works for every harness in this tree.
 - **usage:** whatever the stream's `run.usage` carries, recorded as an estimate and never
@@ -78,8 +78,7 @@ with uncommitted changes, followed by the original brief. No retry is spent.
 - **A wrong model id** reports as `does not exist or you lack access` in `stream.err` and
   a nonzero exit. The preflight catches it before the run.
 - **A write refused by the permission profile** leaves the process running to its wall
-  with nothing written and an unremarkable exit — the seat's own measured variant of the
-  false-green report. The signature is `tool policy denied` in the stream; the answer is
+  with nothing written and an unremarkable exit. The signature is `tool policy denied` in the stream; the answer is
   a profile that still writes inside the workspace, never a longer timeout.
 - **The echo provider** ends with no `RESULT:` footer. That is the correct shape for the
   rehearsal, and the extractor refuses it with exit 4.
@@ -103,16 +102,16 @@ with uncommitted changes, followed by the original brief. No retry is spent.
    is inside `fence.txt`; every path the report claims is in the diff and every path in
    the diff is claimed or explained; and the brief's verification commands are re-run by
    the driver, never read off the report.
-7. **Land through the gate** (`just done`) after the attempt result is assigned. The
+7. **Land through the gate** after the attempt result is assigned. The
    report's green is advisory; the gate judges the tree.
 
 ## The canary a live run owes
 
-The first real Ember run carries the [adapter write-boundary](../../../../docs/reference/tillr-muse-backend.md#adapter-contract-and-write-boundary) canary: the brief instructs one write just
+A live run that measures confinement carries the [adapter write-boundary](../../../../docs/reference/tillr-muse-backend.md#adapter-contract-and-write-boundary) canary: the brief instructs one write just
 outside the worktree, and the run counts as proven only when the stream records the
 denial and `boundary.before`/`boundary.after` show the write never landed. If the canary
-write succeeds under the profile a writing seat needs, the profile is wrong and the
-adapter does not land until a narrower one passes.
+write succeeds under the profile a writing seat needs, the profile is wrong and a
+narrower one is needed.
 
 ## What a live run needs
 

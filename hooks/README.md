@@ -23,7 +23,7 @@ Every executable here carries a `tillr-hook: <name>` line, and that line is the
 ownership test: a marked copy is ours to replace, and a copy without it belongs to
 somebody else — it is neither overwritten nor discarded, but moved to `<name>.local`,
 which this repository's hook of that name runs first, with the same arguments and stdin
-git gave it. So a host's own gate (an attribution check, say) keeps running in
+git gave it. So a hook the machine already had (an attribution check, say) keeps running in
 front of ours, and the installer reports `left alone <name> (no tillr-hook marker;
 kept as <name>.local and chained)`. An existing `<name>.local` with different content is a
 conflict: the installer refuses rather than clobber either hook. A hook here without its
@@ -39,8 +39,8 @@ says so.
 The [pre-commit hook](./pre-commit) refuses an ordinary commit on `main` when its
 actual author or committer differs from the configured global Git name and email.
 Repository-local and worktree-local identity overrides are refused, just as they are
-by the lander. Existing host checks run first through the preserved local hook.
-Install this copy on the host with `just hooks-install` after landing this change.
+by the lander. A hook that was already installed runs first, through the preserved
+`pre-commit.local`. Install the hook with `just hooks-install`.
 
 This hook cannot cover detached commits, commits on other branches, merges or fetched
 history that skips this hook, direct ref updates, or commits created with Git's

@@ -3,10 +3,12 @@
 `tillr-trace` turns artifacts a run already left on disk into four answers: what one
 tick did in order, what one run was asked / ran / changed / cost, what each lane and
 route spent, and every case where a lane's report claims more than the record shows.
+A **tick** here is one unattended planning round of the loop, named by the `tick_id` a
+run's `manifest.json` carries.
 
-Design: [Session Recording](../../docs/design/session-recording.md) [Section 3.2](../../docs/design/session-recording.md#32-concrete-directory-layout) (layout),
-[Section 4.2](../../docs/design/session-recording.md#42-the-five-part-hierarchical-trace_key) (`trace_key`), [Section 4.3](../../docs/design/session-recording.md#43-obsevent-jsonl-schema) (`obs.event`), [Section 6.3](../../docs/design/session-recording.md#63-single-source-of-truth-which-store-is-authoritative-for-which-fact) (store authority), [Section 8.3](../../docs/design/session-recording.md#83-mechanical-claim-verification-tillr-trace-verify-claims) (claim
-verification), [Section 10.1](../../docs/design/session-recording.md#101-scope-and-files-touched-estimate-34-hours-430-loc) step 3 (this scope).
+The design is [Session Recording](../../docs/design/session-recording.md): its layout,
+`trace_key`, `obs.event` schema, store authority and claim verification sections describe
+what this tool reads.
 
 ## What is authoritative, and what this is
 
@@ -26,12 +28,11 @@ no index, cache or other file is created anywhere:
 
 Two directories hold one run's artifacts, and both are read:
 
-- `<trace-root>/runs/<run-id>/` — the recorder directory of
-  [design §3.2](../../docs/design/session-recording.md#32-concrete-directory-layout);
+- `<trace-root>/runs/<run-id>/` — the recorder directory;
 - `<root>/.tillr/loop/<run-id>/` — the drain's per-run record directory, which is where
-  `run-pi`'s emitters write (`proc-exec.jsonl`), where staging keeps
-  the run's own `brief.md` / `fence.txt` / `base_sha`, and where the gate leaves
-  `gate.plan.json` and `gate.verdict.json`.
+  the run adapters' emitters write (`proc-exec.jsonl`), where staging keeps the run's own
+  `brief.md` / `fence.txt` / `base_sha`, and where the gate leaves `gate.plan.json` and
+  `gate.verdict.json`.
 
 The loop directory is read first, and each artifact is taken from the first directory
 that has it. `--store` is what names it: `.tillr/loop` is the store file's sibling, so a
@@ -39,38 +40,36 @@ store at `<root>/.tillr/state.db` means `<root>/.tillr/loop`.
 
 ## The emitters
 
-[`bash-shim.sh`](./bash-shim.sh) is the `BASH_ENV` half of
-[design §2.2](../../docs/design/session-recording.md#22-architectural-ruling-collector-commandgit-shim-and-in-process-hook-no-network-proxy):
-`run-pi` names it in `BASH_ENV`, so every non-interactive `bash` a run spawns sources it
-and appends one line per shell command to `$TILLR_TRACE_DIR/proc-exec.jsonl`. The pack
-ships this whole directory (`just pack-sync` mirrors it), and `run-pi` resolves it as
-`../../../tillr-trace`: `~/.local/share/tillr/tillr-trace` from a pack install, the
-sibling directory from this checkout.
+[`bash-shim.sh`](./bash-shim.sh) is the shell-command recorder. The `run-pi` and
+`run-claude` adapters under `tools/tillr-run/backends/` name it in `BASH_ENV`, so every
+non-interactive `bash` a run spawns sources it and appends one line per shell command to
+`$TILLR_TRACE_DIR/proc-exec.jsonl`. The adapters resolve this directory as
+`../../../tillr-trace` from their own: the sibling directory in a checkout, and
+`~/.local/share/tillr/tillr-trace` from a pack install (`just pack-sync` mirrors this
+directory into the pack).
 
-There is no git recorder. Git's `GIT_TRACE2_EVENT` is not set for a run, by the owner's
-ruling of 2026-11-17: every test suite a run starts inherits it, and measured, one run
-recorded 918,054 git commands, 906 runs held about 82 GB, and an index built from them was
-32 GB. This tool does not read `git-trace2.jsonl` and produces no `git.trace2` row; such a
-file on disk is ignored. A run's `git_path` and `git_state` exist only because `tillr-view`
-reads them by name: the path is always null and the state is always `retired`.
+There is no git recorder. The adapters unset `GIT_TRACE2_EVENT` for a run, because every
+test suite a run starts would inherit it and record each of its own git commands. This
+tool does not read `git-trace2.jsonl` and produces no `git.trace2` row; such a file on
+disk is ignored. A run's `git_path` and `git_state` exist only because `tillr-view` reads
+them by name: the path is always null and the state is always `retired`.
 
-The shim is fail-open
-([§7.1](../../docs/design/session-recording.md#71-four-mechanical-fail-open-guarantees)):
-the shim uses shell builtins only (no `date`, no `jq`, no fork per command, which is how
-the ≤ 1.5 ms budget is held), saves `$?` as the trap's first instruction and returns it
-from the EXIT trap, caps each line's command text at 512 bytes, and swallows every write
-failure. A shell with no `TILLR_TRACE_DIR`, or a directory it cannot write, records
-nothing and behaves exactly as it would without the shim. A run's `proc_state` is computed from what is on disk, so a run recorded this way reads `ok` and
-one without the emitter still reads `missing` — and so does one whose `proc-exec.jsonl`
-exists but is empty: a writer that touched the path is not a run that ran nothing.
+The shim is fail-open. It uses shell builtins only (no `date`, no `jq`, no fork per
+command), saves `$?` as the trap's first instruction and returns it from the EXIT trap,
+caps each line's command text at 512 bytes, and swallows every write failure. A shell
+with no `TILLR_TRACE_DIR`, or a directory it cannot write, records nothing and behaves
+exactly as it would without the shim. A run's `proc_state` is computed from what is on
+disk, so a recorded run reads `ok` and one without the emitter reads `missing` — and so
+does one whose `proc-exec.jsonl` exists but is empty: a writer that touched the path is
+not a run that ran nothing.
 
 ## No index: every answer is read from the artifacts
 
 There is no persistent index. A SQLite index of the trace would be cached derived data:
 every table in it can be rebuilt from the store and the run artifacts, so it keeps nothing
-the artifacts do not. The owner ruled on 2026-11-18 that no such cache exists until a
-measured performance problem asks for one. The loop runs no indexer, `ingest` is an unknown
-command (exit 2), and nothing creates or reads an `index.db`.
+the artifacts do not. The rule is that no such cache exists until a measured performance
+problem asks for one. The loop runs no indexer, `ingest` is an unknown command (exit 2),
+and nothing creates or reads an `index.db`.
 
 Each command reads only what it needs:
 
@@ -78,22 +77,15 @@ Each command reads only what it needs:
   `proc-exec.jsonl`, gate records and staged inputs.
 - **One tick** (`tick`) reads the runs whose manifest names that tick.
 - **Aggregates** (`cost`, `discrepancies`) read the **100 most recent runs** by the store's
-  start time, which is a bounded default, not the whole corpus. `--runs N` reads N of them,
-  and `--runs 0` reads every run. `cost` reads only the `turn_end` lines of each log.
+  start time (`DEFAULT_RUNS`), which is a bounded default, not the whole corpus. `--runs N`
+  reads N of them, and `--runs 0` reads every run. `cost` reads only the `turn_end` lines of
+  each log.
 
-Measured on 2026-11-18 against this repository's corpus (1,204 runs; 6.4 GB of logs and
-2.2 GB of `proc-exec.jsonl`):
-
-| Command | Wall time |
-| --- | --- |
-| `audit` of the largest run (152 MB `proc-exec.jsonl`, 268,000 rows) | 9.6 s |
-| `run` of the same run, as JSON (191 MB of output) | 9.5 s |
-| `audit` of a mid-size run (21 MB `proc-exec.jsonl`) | 1.6 s |
-| `cost` (default 100 runs) | 1.8 s |
-| `cost --runs 0` | 19.7 s |
-| `discrepancies` (default 100 runs) | 21.6 s |
-| `discrepancies --runs 0` | 2 min 31 s |
-| `tick --last` | 0.13 s |
+The bound exists because an aggregate parses every artifact it covers on every call.
+Measured on a corpus of about 1,200 runs (6.4 GB of logs, 2.2 GB of `proc-exec.jsonl`),
+`cost` takes about 2 seconds over 100 runs and 20 seconds over every run, `discrepancies`
+about 20 seconds over 100 runs and two and a half minutes over every run, and an `audit`
+of a run with 268,000 `proc.exec` rows about 10 seconds.
 
 When a row and a source file disagree, the source file is right, and every command prints
 the artifact path each answer was read from. Cite that path, not the row.
@@ -102,36 +94,35 @@ A source that cannot be parsed does not abort a command: the parser that raised 
 that source `corrupt` with the exception named, drops that source's partial rows, and the
 run reads `unreadable` in the audit, while every other run is still read. A tool event
 whose `args`, `result` or `structuredContent` is text instead of an object keeps its row
-and loses only the field it could not read (2,091 of 5,316 measured tool results carried
-`structuredContent` as text on 2026-11-17).
+and loses only the field it could not read.
 
 The parser reads a JSONL source one line at a time, so peak memory is the rows it keeps,
-not the size of the largest file: a 32 MiB log peaked at 322 KiB while parsing.
+not the size of the largest file.
 
-The store is never written, opened read-write, or migrated: `Store` in [`tillr_trace.py`](./tillr_trace.py)
-creates its connection with `file:...?mode=ro` and a `PRAGMA query_only` lock behind it,
-and the test suite runs the CLI against a `chmod 555` store copy and asserts a write on
-that connection raises.
+The store is never written, opened read-write, or migrated: `Store` in
+[`tillr_trace.py`](./tillr_trace.py) creates its connection with `file:...?mode=ro` and a
+`PRAGMA query_only` lock behind it, and the test suite runs the CLI against a read-only
+store copy and asserts a write on that connection raises.
 
 ## The commands
 
 | Command | Answers |
 | --- | --- |
-| `tillr-trace tick <id\|--last>` | acceptance Q4: one unattended tick, in order — every `obs.event` carrying that `tick_id`, plus `tick.decision` rows lifted from the store's `dispatches`. An empty tick says so; it is not reported as a verified quiet one. |
-| `tillr-trace audit <run-id>` | acceptance Q2: the run's lane/item/store state, its preserved `brief.md`/`fence.txt`/`base_sha` locations, its model turns with tokens and cost, the calls it made with exit codes, and every claim verdict. |
+| `tillr-trace tick <id\|--last>` | one unattended tick, in order — every `obs.event` carrying that `tick_id`, plus `tick.decision` rows lifted from the store's `dispatches`. An empty tick says so; it is not reported as a verified quiet one. |
+| `tillr-trace audit <run-id>` | the run's lane/item/store state, its preserved `brief.md`/`fence.txt`/`base_sha` locations, its model turns with tokens and cost, the calls it made with exit codes, and every claim verdict. |
 | `tillr-trace run <run-id>` | the same run as one JSON document — `run` (its stream states and artifact paths), `events` (every row with its payload) and `claims` — which is what `tillr-view` reads. An unknown run answers `"run": null`. |
-| `tillr-trace cost [--runs N]` | acceptance Q1: per lane, per route, per model — runs, retries, LLM wall time, tokens in / cache-read / out / reasoning, US dollars — over the N most recent runs (default 100; 0 reads every run). |
-| `tillr-trace discrepancies [--since T] [--all] [--runs N]` | acceptance Q7: every claim the record does not support, over the N most recent runs (default 100; 0 reads every run). `--all` adds `unverified` rows. `--since` keeps the claims of runs that finished at or after `T`; a claim's time is its run's finish time, not the time it was read. |
+| `tillr-trace cost [--runs N]` | per lane, per route, per model — runs, retries, LLM wall time, tokens in / cache-read / out / reasoning, US dollars — over the N most recent runs. |
+| `tillr-trace discrepancies [--since T] [--all] [--runs N]` | every claim the record does not support, over the N most recent runs. `--all` adds `unverified` rows. `--since` keeps the claims of runs that finished at or after `T`; a claim's time is its run's finish time, not the time it was read. |
 
-Common flags: `--trace-root`, the recorder directory whose `runs/<run-id>/` is read
+Common inputs: `--trace-root`, the recorder directory whose `runs/<run-id>/` is read
 (default `$TILLR_TRACE_ROOT`, or `$XDG_STATE_HOME/tillr-trace/v1`); `--store` (default
 `.tillr/state.db`); and `--loop-dir` (default: the store's sibling `loop`). The trace root
 is only read: a root that does not exist is a root with no runs in it.
 
-## The real log shape this parser was written against
+## The log shape the parser reads
 
-Measured on `pi --mode json` output from a live canary run (2026-11-12), and pinned by
-[`testdata/canary-run.log`](./testdata/canary-run.log):
+The parser reads `pi --mode json` output, and
+[`testdata/canary-run.log`](./testdata/canary-run.log) pins the shape:
 
 - one `session` line: `id` (the session id), `cwd` (the worktree), `version`;
 - one `turn_end` per model turn, whose `message` carries `provider`, `model`,
@@ -144,7 +135,7 @@ Measured on `pi --mode json` output from a live canary run (2026-11-12), and pin
   `bash`), `result.structuredContent` (including `exit_code` for `bash`), `isError`
   and `durationMs`.
 
-Two shape facts the parser depends on, both measured:
+Two shape facts the parser depends on:
 
 1. **`tool_execution_*` events carry no timestamp.** The only clocks in the stream are
    `session.timestamp`, `request_start.timestamp` and `turn_end.message.timestamp`. A
@@ -157,7 +148,7 @@ Two shape facts the parser depends on, both measured:
    `message_start`/`message_update` carry partial usage; only `turn_end` is complete,
    so the parser reads `turn_end` alone and never double counts.
 
-## The post-edit temporal join ([Section 8.3](../../docs/design/session-recording.md#83-mechanical-claim-verification-tillr-trace-verify-claims))
+## The post-edit temporal join
 
 A test suite attests code only if it ran **after** the last edit to what it tests. For
 each module the run edited (from `tool.call` rows of `edit`/`write`, mapped to a module
@@ -180,7 +171,7 @@ claim gets when the record cannot answer it — no `proc-exec.jsonl` at all, no 
 candidate shas, a log that would not parse. Absent evidence is never promoted to proof
 or to disproof.
 
-What would fool the join, stated rather than hidden:
+What would fool the join:
 
 - **An edit made only through a shell command** (`sed -i`, `cat > f`, a heredoc). The
   shim records argv and cwd, not a path list, so `proc.exec` cannot say which file was
@@ -191,45 +182,37 @@ What would fool the join, stated rather than hidden:
   `go test ./...` from the repository root) is attributed to the directory it ran in,
   so per-module claims read it as "no suite ran for this module".
 - **A test command that is not one of the recognized forms.** It is invisible as a
-  suite and the module reads as owed-but-untested, i.e. the tool errs toward
+  suite and the module reads as owed-but-untested, so the tool errs toward
   `disproved` — never toward a false pass.
 - **Clock skew between one process and another** within a turn: `tool.call` times are
   derived (above), so an edit and a test in the same second can order either way. The
   comparison is `>`, not `>=`, so a row that ties is not counted as "after".
 - **A row written by the run itself.** `proc-exec.jsonl` is an ordinary file, and the
   shell a run controls can append a well-formed `proc.exec` row for a suite that never
-  ran; `verify-claims` reads rows as written. A `claim.verdict` is therefore evidence
-  about an *honest* lane's prose, never about a hostile one's, and no nonce would change
-  that — the environment a nonce would have to be kept from is the one the run has.
+  ran; the join reads rows as written. A claim verdict is therefore evidence
+  about an *honest* lane's prose, never about a hostile one's.
 - **A commit that squashes a later edit into an earlier sha.** The join reads tools and
   commands, never git objects, so nothing here substitutes for the gate.
 
-## What this deliberately will not show
+## What this does not show
 
-- **No prompt or tool-result content.** Excerpts are capped at 200 characters and
-  scrubbed of anything shaped like a credential (`Bearer …`, `sk-…`, `ghp_…`, `AKIA…`,
-  `--token/--api-key/--password/--secret`). Only `bash` command previews are kept;
-  `read`/`write` bodies, assistant text, and `bash` output are stored as paths, sizes
-  and digests, never as text.
-- **No third-party conversation or browser DOM dumps** ([Section 5.1](../../docs/design/session-recording.md#51-what-is-excluded-and-how-it-is-enforced-at-two-mechanical-gates) rule 4): those tool names
-  produce a row with timing and byte count only.
+- **No prompt or tool-result content.** A `tool.call` row keeps the tool name, the target
+  path, a `bash` command preview, the error flag, the exit code and the result's byte
+  count. Excerpts are capped at 200 characters and scrubbed of anything shaped like a
+  credential (`Bearer …`, `sk-…`, `ghp_…`, `AKIA…`,
+  `--token/--api-key/--password/--secret`).
 - **No full process environment, no `.env` values.** `proc-exec.jsonl` is the shim's
   own record and is read as written; this tool adds no environment capture of its own.
-- **No cross-workspace federation** (`--all-workspaces` is Slice 3) and **no interactive
-  `~/.pi/agent/sessions/` indexing** (Slice 2): only the run artifacts named above.
+- **No cross-workspace view and no interactive sessions.** Only the run artifacts named
+  above are read.
+- **No `steps.jsonl`, boundary, retry or patch records.** `.tillr/loop/<run-id>/steps.jsonl`
+  is not parsed, and `tick` shows only what the store's `dispatches` and the trace rows
+  carry.
 
-## What is not parsed yet
-
-`.tillr/loop/<run-id>/steps.jsonl`, `boundary.check`, `tick.stage`, `llm.retry` (a
-retry hook in `pi`), `claim.verdict` emission back into the shard files, `diff.patch.zst`, and
-`cas/sha256/` blobs. `tick.stage` is only as good as
-the manifest the emitters will write; until they land, `tick` shows what the store's
-`dispatches` and the trace rows carry.
-
-One row kind is **not** in the design's twelve: `unreadable`. It records an artifact
-this tool could not read (missing log, unreadable store, corrupt `proc-exec.jsonl`),
-because the alternative — an empty result — reads as "nothing happened" and that is the
-one answer a recorder must never give by accident.
+One row kind is this tool's own: `unreadable`. It records an artifact that could not be
+read (missing log, unreadable store, corrupt `proc-exec.jsonl`), because the alternative —
+an empty result — reads as "nothing happened", and that is the one answer a recorder must
+never give by accident.
 
 ## Tests
 
@@ -237,10 +220,11 @@ one answer a recorder must never give by accident.
 python3 tools/tillr-trace/test.py     # prints each case and exits 0
 ```
 
-The measured fixture is [`testdata/canary-run.log`](./testdata/canary-run.log): a real `pi --mode json` stream
-trimmed to its `session`, `turn_end`, `tool_execution_start` and `tool_execution_end`
-lines (`message_start`/`message_update`/`agent_end` dropped). The token, cost and
-tool-call totals it carries are the live run's — 7 turns, 36196 input / 1917 output /
-216192 cache-read / 438 reasoning tokens, `$0.004746410`, 6 tool calls — and the test
-asserts against those measured numbers, not against a re-estimate. Fixture directories
-are created in the session's durable scratch directory, never in the system temporary one.
+The fixture [`testdata/canary-run.log`](./testdata/canary-run.log) is a `pi --mode json`
+stream recorded from a live run and trimmed to its `session`, `turn_end`,
+`tool_execution_start` and `tool_execution_end` lines (`message_start`, `message_update`
+and `agent_end` are dropped). The token, cost and tool-call totals it carries are that
+run's — 7 turns, 36196 input / 1917 output / 216192 cache-read / 438 reasoning tokens,
+`$0.004746410`, 6 tool calls — and the test asserts against those recorded numbers. Fixture
+directories are created in the session's durable scratch directory, never in the system
+temporary one.
