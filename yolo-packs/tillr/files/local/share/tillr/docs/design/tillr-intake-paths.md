@@ -19,7 +19,7 @@ depends-on:
 
 # Work reaches tillr through several doors, and every door ends in the same shape
 
-> **Delivered copy.** This is `docs/design/tillr-intake-paths.md` from this repository at commit `282386b687` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-intake-paths.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-intake-paths.md` from this repository at commit `4f503801bb` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-intake-paths.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** a proposal. Each door below is built as its own rule; the shared contract this document proposes, one declared output shape that every door's steps must end in, is not built.
 
