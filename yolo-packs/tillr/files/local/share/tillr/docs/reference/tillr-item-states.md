@@ -15,7 +15,7 @@ tags: [tillr, item, state, reference]
 
 # Tillr item states and frozen criteria
 
-> **Delivered copy.** This is `docs/reference/tillr-item-states.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-item-states.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-item-states.md` from this repository at commit `3b6faafdae` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-item-states.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Source-verified 2026-11-16 against `087b4385b9208bf49b20d09fefe9564ea8618e96`.
 UNMEASURED: this reference does not claim observation of a live drain or board.

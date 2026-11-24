@@ -19,7 +19,7 @@ depends-on:
 
 # Work reaches tillr through several doors, and every door ends in the same shape
 
-> **Delivered copy.** This is `docs/design/tillr-intake-paths.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-intake-paths.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-intake-paths.md` from this repository at commit `3b6faafdae` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-intake-paths.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-17; updated against the tree on 2026-11-19. A proposal written from the owner's statements; the general cross-door intake graph is not built as its own item, while the individual prose-rewrite, idea-save, no-block triage and command-line request paths have landed separately (`tools/tillr-item/item/prose.go`, `prose_rewrite.go`, `sync.go`, `idea.go`, `request.go`, `tools/tillr-drain/drain/plan.go`, `document_prerequisite.go`, `prose_rewrite.go`, `idea.go`, `request.go`).
 
