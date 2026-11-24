@@ -281,7 +281,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			}
 			replacementRequest = &req
 			receipt = nil
-		} else if evalMissing && rec != nil && rec.State == run.StatePaused && rec.EndCause == run.EndRestart && !quotaRefusal {
+		} else if evalMissing && rec != nil && rec.State == run.StatePaused && (rec.EndCause == run.EndRestart || rec.EndCause == "") && !quotaRefusal {
 			if c.Evaluator == nil {
 				open, err := l.recordedBackendOpen(ctx, receipt.Request.Backend)
 				if err != nil {

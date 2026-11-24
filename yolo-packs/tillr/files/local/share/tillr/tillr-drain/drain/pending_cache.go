@@ -108,6 +108,18 @@ func readPendingHistoryStateCached(r *store.Reader) (*pendingHistoryState, error
 }
 
 func loadPendingHistoryStateCached(r *store.Reader, readOnly bool) (*pendingHistoryState, error) {
+	base, err := loadFoldedPendingHistoryStateCached(r, readOnly)
+	if err != nil {
+		return nil, err
+	}
+	state, _, err := reopenPausedJudgeUnreadableSnapshot(r, base, false)
+	if err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+func loadFoldedPendingHistoryStateCached(r *store.Reader, readOnly bool) (*pendingHistoryState, error) {
 	path, err := readerStorePath(r)
 	if err != nil {
 		return nil, err

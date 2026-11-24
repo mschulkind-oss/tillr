@@ -90,6 +90,11 @@ type pendingWork struct {
 
 	ResumeAfterRestart   bool      `json:"-"`
 	DesignQuotaBackend   string    `json:"-"`
+	ReopenedPausedJudge  bool      `json:"-"`
+	LaneBusyByOther      bool      `json:"-"`
+	ReopenedHeadSHA      string    `json:"-"`
+	ReopenedBaseSHA      string    `json:"-"`
+	ReopenedWriterRunID  string    `json:"-"`
 	examinationStartedAt time.Time `json:"-"`
 }
 
@@ -744,6 +749,9 @@ func pausedPendingWork(r *store.Reader, work *pendingWork) (bool, error) {
 	if work == nil || work.Done {
 		return false, nil
 	}
+	if work.ReopenedPausedJudge {
+		return true, nil
+	}
 	if work.Candidate != nil {
 		if work.Candidate.Judge != nil && work.Candidate.Judge.Request.RunID != "" {
 			if ok, err := nonQuotaPausedRun(r, work.Candidate.Judge.Request.RunID); err != nil || ok {
@@ -1211,7 +1219,9 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		}
 	}
 	if d.Action != ActionHold {
-		if !work.LaneReleased {
+		if work.LaneBusyByOther {
+			d.Action, d.Reason, d.To = ActionHold, ReasonNoLane, ""
+		} else if !work.LaneReleased {
 			leases, err := activeLeasesExcept(r, at, []string{d.LaneID}, exceptLane, exceptRunID)
 			if err != nil {
 				return Decision{}, err
@@ -2470,9 +2480,9 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if len(leases) > 0 {
 				return nil
 			}
-			if work.LaneReleased {
+			if work.LaneReleased || work.ReopenedPausedJudge {
 				for _, other := range works {
-					if other != work && !other.Done && !other.LaneReleased && other.Decision.LaneID == d.LaneID {
+					if other != work && !other.Done && !other.LaneReleased && !other.LaneBusyByOther && other.Decision.LaneID == d.LaneID {
 						return nil
 					}
 				}
@@ -2482,10 +2492,20 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			}
 			// Only this target is mutated; keep the read snapshot pristine for
 			// another gathered attempt after a rollback.
+			reopened := work.ReopenedPausedJudge
 			copy := *work
 			work = &copy
 			if err := l.assignPinnedCandidate(tx, work, &d, at); err != nil {
 				return err
+			}
+			if reopened {
+				reopenKind := dispatchStartedKind
+				if d.Workflow != nil && d.NodeIndex > 0 {
+					reopenKind = nodeAdvancedKind
+				}
+				if err := appendEffect(tx, reopenKind, d.RunRequest.RunID, *work, at); err != nil {
+					return err
+				}
 			}
 			owner, err := currentLoopOwner()
 			if err != nil {
@@ -3481,6 +3501,18 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 				}
 				completion.laneRefusal = refusal
 				err = l.releaseRefusedAssignment(ctx, work)
+			}
+			completion.outcome.err = err
+		}
+		endStage()
+	} else if work.ReopenedPausedJudge && !d.WorkflowRelease && d.Reason != ReasonItemAlreadyTerminal {
+		endStage := timeHandoffPhase(ctx, "restore_reopened_paused_lane")
+		if err := l.restoreReopenedPausedLane(ctx, work, d); err != nil {
+			if refusal := asLaneRefusal(err); refusal != nil {
+				if d.RunRequest != nil {
+					refusal.ExcludedRunID = d.RunRequest.RunID
+				}
+				completion.laneRefusal = refusal
 			}
 			completion.outcome.err = err
 		}

@@ -39,6 +39,9 @@ func (s startSnapshot) snapshotForClaim(r *store.Reader) (startClaimSnapshot, er
 	if err := foldPendingHistory(r, seq, pending, nil); err != nil {
 		return startClaimSnapshot{}, err
 	}
+	if err := reopenPausedJudgeUnreadable(r, pending); err != nil {
+		return startClaimSnapshot{}, err
+	}
 	if err := faults.Fold(r, seq, byReason, nil); err != nil {
 		return startClaimSnapshot{}, err
 	}
