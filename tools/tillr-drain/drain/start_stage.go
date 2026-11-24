@@ -22,18 +22,18 @@ func (l *Loop) stageAndLaunchClaimed(ctx context.Context, d Decision, base strin
 
 	launched, refused := false, false
 	start := time.Now()
-	endLock := timeHandoffPhase(ctx, "restart_lock_wait")
-	mechCtx, unlock, lockErr := l.lockRestartMechanical(ctx)
-	endLock()
-	mechCtx = withStartHandoff(mechCtx, startHandoffFrom(ctx))
-	if unlock != nil {
-		defer unlock()
-	}
 	defer func() {
 		stageMS := time.Since(start).Milliseconds()
 		if !launched {
 			if !refused {
-				if retractErr := l.cancelStaging(context.WithoutCancel(ctx), d); retractErr != nil {
+				l.restartMechanical.RLock()
+				replaced := l.isRestartReplaced()
+				var retractErr error
+				if !replaced {
+					retractErr = l.cancelStaging(context.WithoutCancel(ctx), d)
+				}
+				l.restartMechanical.RUnlock()
+				if retractErr != nil {
 					err = errors.Join(err, fmt.Errorf("cancel staging: %w", retractErr))
 				}
 			}
@@ -44,7 +44,7 @@ func (l *Loop) stageAndLaunchClaimed(ctx context.Context, d Decision, base strin
 			}
 			l.mu.Unlock()
 		}
-		if d.PassID != "" {
+		if d.PassID != "" && !l.isRestartReplaced() {
 			timing := &PassTiming{TickID: d.PassID, StageMS: stageMS}
 			if timingErr := recordAccumulatedPassTiming(context.WithoutCancel(ctx), l.cfg.Store, timing); timingErr != nil {
 				l.reportf("loop: staging timing for %s unavailable: %v\n", d.ItemID, timingErr)
@@ -52,39 +52,41 @@ func (l *Loop) stageAndLaunchClaimed(ctx context.Context, d Decision, base strin
 		}
 	}()
 
-	if lockErr != nil {
-		return lockErr
-	}
-	endStop1 := timeHandoffPhase(mechCtx, "check_stop_requested")
-	stopErr := l.checkStopRequested(mechCtx)
+	endStop1 := timeHandoffPhase(ctx, "check_stop_requested")
+	stopErr := l.checkStopRequested(ctx)
 	endStop1()
 	if stopErr != nil {
 		return stopErr
 	}
-	staged, refused, err := l.prepareClaimedStage(mechCtx, &d, &base, result)
+	staged, refused, err := l.prepareClaimedStage(ctx, &d, &base, result)
 	if err != nil || len(staged) == 0 {
 		return err
 	}
-	endParallel := timeHandoffPhase(mechCtx, "stage_parallel")
-	ready, err := l.stageParallel(mechCtx, staged[0], base)
+	endParallel := timeHandoffPhase(ctx, "stage_parallel")
+	ready, err := l.stageParallel(ctx, staged[0], base)
 	endParallel()
 	if err != nil {
-		return l.holdStageFailed(mechCtx, d, "stage parallel", err)
+		if l.isRestartReplaced() {
+			return errRestartPending
+		}
+		return l.holdStageFailed(ctx, d, "stage parallel", err)
 	}
-	endWatch := timeHandoffPhase(mechCtx, "watch_claimed_siblings")
-	watch, err := l.watchClaimedSiblings(mechCtx, d.LaneID)
+	endWatch := timeHandoffPhase(ctx, "watch_claimed_siblings")
+	watch, err := l.watchClaimedSiblings(ctx, d.LaneID)
 	endWatch()
 	if err != nil {
 		return err
 	}
-	endStop2 := timeHandoffPhase(mechCtx, "check_stop_requested")
-	stopErr = l.checkStopRequested(mechCtx)
+	endStop2 := timeHandoffPhase(ctx, "check_stop_requested")
+	stopErr = l.checkStopRequested(ctx)
 	endStop2()
 	if stopErr != nil {
 		return stopErr
 	}
+	if l.isRestartReplaced() {
+		return errRestartPending
+	}
 	startHandoffFrom(ctx).setDecision(ready)
-	// The worker gets its own lifetime, not the staging lock's context.
 	l.launchRun(ctx, ready, at, watch, result)
 	launched = true
 	return nil

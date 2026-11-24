@@ -29,14 +29,6 @@ func (l *Loop) examineWorkerEnd(ctx context.Context, d Decision, watched []strin
 		completion.outcome.err = err
 		return
 	}
-	lockStart := time.Now()
-	ctx, unlock, err := l.lockRestartMechanical(ctx)
-	if err != nil {
-		completion.outcome.err = err
-		return
-	}
-	defer unlock()
-	lockEnd := time.Now()
 	at := l.cfg.Now().UTC()
 	planStart := time.Now()
 	p, err := l.planWorkerSettlement(ctx, d, at)
@@ -46,8 +38,16 @@ func (l *Loop) examineWorkerEnd(ctx context.Context, d Decision, watched []strin
 		return
 	}
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
+	lockStart := time.Now()
+	claimCtx, unlock, err := l.lockRestartMechanical(ctx)
+	lockEnd := time.Now()
+	if err != nil {
+		completion.outcome.err = err
+		return
+	}
 	claimStart := time.Now()
-	claimed, work, err := l.applyPlanTrunk(ctx, *p, new(string), at, &timing.TickID)
+	claimed, work, err := l.applyPlanTrunk(claimCtx, *p, new(string), at, &timing.TickID)
+	unlock()
 	claimEnd := time.Now()
 	if err != nil || !claimed {
 		completion.outcome.err = err
@@ -58,8 +58,8 @@ func (l *Loop) examineWorkerEnd(ctx context.Context, d Decision, watched []strin
 	req.CorrelationID = timing.TickID
 	d.RunRequest = &req
 	preSpans := []handoffSpan{
-		newHandoffSpan("restart_lock_wait", lockStart, lockEnd),
 		newHandoffSpan("plan_worker_settlement", planStart, planEnd),
+		newHandoffSpan("restart_lock_wait", lockStart, lockEnd),
 		newHandoffSpan("claim_worker_settlement", claimStart, claimEnd),
 	}
 	examined := l.examineClaimed(withPreHandoffSpans(ctx, handoffStart, preSpans), d, work, at, timing, watched)

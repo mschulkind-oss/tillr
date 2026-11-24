@@ -2,11 +2,14 @@ package drain
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -112,6 +115,110 @@ func TestStageClaimedFailureReleasesLaneAndPreservesSiblingBoundary(t *testing.T
 			case <-ctx.Done():
 				t.Fatal("second staged run did not launch")
 			}
+		})
+	}
+}
+
+func TestPendingRestartAnsweredDuringSlowStagePreservesStagedRun(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		replacement []byte
+		wantStop    string
+		wantAnswer  string
+	}{
+		{name: "without-replacing", replacement: nil, wantStop: "", wantAnswer: restart.AnswerAlreadyCurrent},
+		{name: "with-replacement", replacement: []byte("next build"), wantStop: StopRestarted, wantAnswer: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+			defer cancel()
+			h := newRestartHarness(t, tc.replacement, func(context.Context, string) error { return nil }, "item-a")
+			h.l.cfg.Lanes = []string{"lane-1"}
+			steps := &recordingSteps{}
+			h.l.cfg.Steps = steps
+			stageEntered := make(chan struct{})
+			releaseStage := make(chan struct{})
+			h.l.cfg.Stage = stagerFunc(func(_ context.Context, _ StageSpec) error {
+				close(stageEntered)
+				<-releaseStage
+				return nil
+			})
+			holdWALKeeper(t, h.f.storePath)
+
+			v, s, e := claimFixture(t, h.l)
+			ok, work, _, d, err := h.l.claimFastStart(ctx, v, s, e, h.l.cfg.Now())
+			if err != nil || !ok || work == nil {
+				t.Fatalf("claimFastStart: ok=%v work=%+v err=%v", ok, work, err)
+			}
+			v.noteStartClaimed(d, work)
+
+			var result LoopResult
+			stageDone := make(chan error, 1)
+			go func() {
+				stageDone <- h.l.stageAndLaunchClaimed(ctx, d, work.BaseSHA, h.l.cfg.Now(), &result)
+			}()
+
+			select {
+			case <-stageEntered:
+			case <-time.After(hangGuard):
+				t.Fatal("slow stage did not start")
+			}
+
+			req := h.request(t, 1)[0]
+			handled, stop, err := h.l.gateRestart(ctx, &LoopResult{})
+			if err != nil || !handled || stop != tc.wantStop {
+				close(releaseStage)
+				<-stageDone
+				t.Fatalf("gateRestart during slow stage = handled=%v stop=%q err=%v; want handled=true stop=%q", handled, stop, err, tc.wantStop)
+			}
+			if tc.wantAnswer != "" {
+				if got := h.answer(t, req.ID).Answer; got != tc.wantAnswer {
+					close(releaseStage)
+					<-stageDone
+					t.Fatalf("restart answer = %q, want %q", got, tc.wantAnswer)
+				}
+			} else if len(h.execed) == 0 {
+				close(releaseStage)
+				<-stageDone
+				t.Fatalf("replacement did not exec: %v", h.execed)
+			}
+
+			close(releaseStage)
+			var stageErr error
+			select {
+			case stageErr = <-stageDone:
+			case <-time.After(hangGuard):
+				t.Fatal("slow stage did not finish after release")
+			}
+
+			if tc.wantStop == "" {
+				if stageErr != nil {
+					t.Fatalf("stageAndLaunchClaimed err = %v, want nil", stageErr)
+				}
+				select {
+				case completion := <-h.l.completions:
+					if completion.id != d.RunRequest.RunID || completion.outcome.err != nil || completion.outcome.stop != "" || !steps.ran(d.ItemID) {
+						t.Fatalf("staged run did not complete: id=%s stop=%q err=%v ran=%v", completion.id, completion.outcome.stop, completion.outcome.err, steps.ran(d.ItemID))
+					}
+				case <-time.After(hangGuard):
+					t.Fatal("staged run did not launch after non-replacing restart")
+				}
+				return
+			}
+
+			if !errors.Is(stageErr, errRestartPending) {
+				t.Fatalf("stageAndLaunchClaimed after replacement err = %v, want errRestartPending", stageErr)
+			}
+			fixtureRead(t, h.f, func(r *store.Reader) error {
+				var dispatches int
+				if err := r.QueryRow(`SELECT COUNT(*) FROM dispatches WHERE item_id=? AND run_id=?`, d.ItemID, d.RunRequest.RunID).Scan(&dispatches); err != nil {
+					return err
+				}
+				if dispatches != 1 {
+					t.Errorf("dispatches for %s/%s = %d, want 1 (claim must not be retracted on replacement)", d.ItemID, d.RunRequest.RunID, dispatches)
+				}
+				return nil
+			})
 		})
 	}
 }
