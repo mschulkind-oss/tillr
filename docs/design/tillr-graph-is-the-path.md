@@ -395,7 +395,7 @@ The rule table is the landing definition's, not the core's. The core owns the gr
 - **This repository's function** is the table above, tracked and versioned beside the templates.
 - **Another definition** supplies a program in the hook form [the core and the landing definition](./tillr-core-and-git-landing.md#5-the-extension-points) already chose: the core gives it the graph and the facts and reads back a transformation, which the store checks like any other. The program may be written in any language.
 - **Purity of a foreign program** cannot be enforced. It is tested: the definition check evaluates each of its fixtures twice and refuses a program whose two answers differ.
-- **What the core does not preclude**, by the owner ruling recorded in [the graph-change request](./tillr-product-qa-requests.md#3-graph-change): a node inserted directly downstream of a running one, and nodes appended to a finished graph. Both are transformations of the fog.
+- **What the core does not preclude**, by the owner ruling recorded in [the graph-change ruling](./tillr-separable-parts.md#72-graph-change): a node inserted directly downstream of a running one, and nodes appended to a finished graph. Both are transformations of the fog.
 
 ### 5.7 Relation to the successor function
 

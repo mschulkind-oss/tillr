@@ -57,7 +57,7 @@ intake), [`tillr-queue-mirrors-designs.md`](tillr-queue-mirrors-designs.md)
 rules enforce), [`tillr-drain-successor.md`](../reference/tillr-drain-successor.md) (the
 loop model the hold classes project onto), [`tillr-claude-backend.md`](../reference/tillr-claude-backend.md)
 (the harness a seat may name in [Section 3.5](#35-a-seat-names-its-harness-and-the-harness-names-the-model)), and
-[`failure-diagnosed-not-waited-out.md`](failure-diagnosed-not-waited-out.md) (the mechanism
+[the failure-diagnosis section](tillr-judge-and-lifecycle.md#424-diagnosing-a-repeated-failure-the-unbuilt-mechanism) (the mechanism
 [Section 3.2](#32-every-hold-names-a-mover-that-can-act) reuses).
 
 ---

@@ -9,7 +9,6 @@ depends-on:
   - landing-principles.md
   - operator-decisions-inside-tillr.md
   - tillr-alert-triage-seat.md
-  - failure-diagnosed-not-waited-out.md
   - tillr-judge-and-lifecycle.md
   - tillr-watch.md
 vantage:
@@ -26,7 +25,7 @@ vantage:
 
 **Cost.** One minimal model turn per closing event, and one per change of the backend's inputs while it is closed. No worktree, no lane, and no tokens in normal operation.
 
-**Reads with:** [what the operator settled without the owner is settled inside tillr](./operator-decisions-inside-tillr.md), [the alert triage seat](./tillr-alert-triage-seat.md), [a failure is diagnosed, not waited out](./failure-diagnosed-not-waited-out.md), [the judge and lifecycle design](./tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27) and [the watch design](./tillr-watch.md).
+**Reads with:** [what the operator settled without the owner is settled inside tillr](./operator-decisions-inside-tillr.md), [the alert triage seat](./tillr-alert-triage-seat.md), [a failure is diagnosed, not waited out](./tillr-judge-and-lifecycle.md#424-diagnosing-a-repeated-failure-the-unbuilt-mechanism), [the judge and lifecycle design](./tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27) and [the watch design](./tillr-watch.md).
 
 **Words.** [The vocabulary](./tillr-vocabulary.md#5-the-words) defines item, lane, seat and verdict. **The operating session** is the foreground agent session that watches the drain. Three terms are used with exact meanings here:
 

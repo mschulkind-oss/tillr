@@ -15,7 +15,6 @@ summary: "One table of 152 paths in the tillr drain, its run adapters, the gate 
 next: "The owner rules OQ-FB1 to OQ-FB8. Then the remove rulings of Section 4 are filed as build items, the restart and harness rows first."
 depends-on:
   - ./tillr-judge-and-lifecycle.md
-  - ./failure-diagnosed-not-waited-out.md
   - ./landing-principles.md
 ---
 
@@ -35,7 +34,7 @@ depends-on:
 
 **Needs your ruling:** [OQ-FB1](#OQ-FB1), [OQ-FB2](#OQ-FB2), [OQ-FB3](#OQ-FB3), [OQ-FB4](#OQ-FB4), [OQ-FB5](#OQ-FB5), [OQ-FB6](#OQ-FB6), [OQ-FB7](#OQ-FB7), [OQ-FB8](#OQ-FB8).
 
-**Reads with:** [the judge and lifecycle design](./tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27) (it decides model failover as `D-JL24` to `D-JL27` and asks about escalation; this document links those rows and does not repeat them), [a failure is diagnosed, not waited out](./failure-diagnosed-not-waited-out.md) (the rule that nothing re-runs without evidence), and [the landing principles](./landing-principles.md#11-a-failure-is-diagnosed-not-waited-out).
+**Reads with:** [the judge and lifecycle design](./tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27) (it decides model failover as `D-JL24` to `D-JL27` and asks about escalation; this document links those rows and does not repeat them), [a failure is diagnosed, not waited out](./tillr-judge-and-lifecycle.md#424-diagnosing-a-repeated-failure-the-unbuilt-mechanism) (the rule that nothing re-runs without evidence), and [the landing principles](./landing-principles.md#11-a-failure-is-diagnosed-not-waited-out).
 
 ---
 

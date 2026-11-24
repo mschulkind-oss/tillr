@@ -70,7 +70,7 @@ item and satisfies a dependent's `blocked_by`
 edge; this does not inherently forbid leaving it. A **prerequisite** is a named
 condition checked before dispatch. A **hook program** is one executable called for
 judgments the core cannot make. These terms come from
-[the build plan's vocabulary](../../../docs/design/tillr-definitions-plan.md#the-words-this-plan-uses).
+[the direction document's vocabulary](../../../docs/design/tillr-core-and-git-landing.md#the-words-this-document-uses).
 
 | Key | JSON type | Default | Meaning and reader |
 | :--- | :--- | :--- | :--- |
@@ -169,7 +169,7 @@ worktree can name the owning repository.
 ### Completion and detail hooks
 
 The design is the
-[completion integration](../../../docs/design/tillr-definitions-plan.md#add-completion-through-the-definitions-hook-for-items-that-never-land).
+[completion integration](../../../docs/design/tillr-core-and-git-landing.md#84-completion-through-the-definitions-hook-for-items-that-never-land).
 The drain calls `complete-item` for a definition whose `completes` is `hook`. It
 validates `after-completion` and `detail` at startup and does not call them.
 
