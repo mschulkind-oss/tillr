@@ -33,7 +33,7 @@ Measured `--help` / no-arg first-line output across the nine modules in [`tools/
 | [`tools/tillr`](../../tools/tillr) | *(none — library)* | Record, store, event, and conformance library imported by the eight binaries |
 | [`tools/tillr-cli`](../../tools/tillr-cli) | `tillr` | `tillr: a noun is required; name one of: store, item, land, drain, run, gate, view` |
 | [`tools/tillr-drain`](../../tools/tillr-drain) | `tillr-drain` | `a face is required: plan, once, boundary or loop` |
-| [`tools/tillr-gate`](../../tools/tillr-gate) | `tillr-gate` | `tillr-gate: name a face: dualrun, plan, run` |
+| [`tools/tillr-gate`](../../tools/tillr-gate) | `tillr-gate` | `tillr-gate: name a face: change, checks, classify, enable, plan, run, shadow` |
 | [`tools/tillr-item`](../../tools/tillr-item) | `tillr-item` | `tillr-item: a face is required: apply, seed, show, decision, mail, grant or verdict` |
 | [`tools/tillr-land`](../../tools/tillr-land) | `tillr-land` | `tillr-land: a face is required: enqueue, check, pass` |
 | [`tools/tillr-run`](../../tools/tillr-run) | `tillr-run` | `tillr-run: a face is required: exec, lanes, status or release` |
@@ -163,7 +163,7 @@ A live unattended tick has landed a real candidate through these eight binaries,
 
 All eight binaries are on your `PATH`, and their source + per-module `README` files are installed at `~/.local/share/tillr/`:
 - Umbrella dispatcher: `tillr --help` (`store`, `item`, `land`, `drain`, `run`, `gate`, `view`)
-- Gate execution & comparison: `tillr-gate --help` (`dualrun`, `plan`, `run`) and `~/.local/share/tillr/tillr-gate/README.md`
+- Gate planning & execution: `tillr-gate --help` (`change`, `checks`, `classify`, `enable`, `plan`, `run`, `shadow`) and `~/.local/share/tillr/tillr-gate/README.md`
 - Lane execution & lifecycle: `tillr-run --help` (`exec`, `lanes`, `status`, `release`) and `~/.local/share/tillr/tillr-run/README.md`
 - Item verdicts & grants: `tillr-item --help` (`apply`, `seed`, `show`, `decision`, `mail`, `grant`, `verdict`) and `~/.local/share/tillr/tillr-item/README.md`
 - Store & read views: `tillr-store --help` (`init`, `seed`, `check`, `events`) and `tillr-view --help` (`status`, `events`)
@@ -172,7 +172,7 @@ All eight binaries are on your `PATH`, and their source + per-module `README` fi
 ## What to Return
 
 Inspect `--help` and the `README` files above, then return structured design comments answering:
-1. **Standalone invocation:** Can AutoQA drive `tillr-gate` (`plan`, `run`, `dualrun`) and `tillr-run` (`exec`, `status`, `release`) independently without running `tillr-drain`? Which required flags or state preconditions couple them to the drain loop today?
+1. **Standalone invocation:** Can AutoQA drive `tillr-gate` (`change`, `plan`, `run`) and `tillr-run` (`exec`, `status`, `release`) independently without running `tillr-drain`? Which required flags or state preconditions couple them to the drain loop today?
 2. **Verdict & decision payloads:** What input/output schema does AutoQA need from `tillr-item verdict` and `tillr-item decision` to post a QA pass/fail or request human review?
 3. **Missing event emitters:** Before the `tools/tillr` recording emitters are built, which exact events, fields, and correlation IDs must `tillr-gate`, `tillr-run`, and `tillr-land` emit so AutoQA can reconstruct a run from `tillr-view events`?
 4. **Refusal & exit contracts:** Where do the current binaries lack machine-readable output or distinct exit codes that an unattended QA harness requires?

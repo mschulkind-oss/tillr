@@ -452,7 +452,7 @@ func replay(ctx context.Context, tx *store.Tx, key string) (record.Envelope, boo
 // judge has already been shown":
 //
 //   - state: criterion state moves only on an item.verdict (board-utilities.md §5.3;
-//     work-control-judge-in-tillr.md "Retirement in the end state", D-UT16), so an edit
+//     D-UT16), so an edit
 //     that presents a different state is refused by name rather than overwriting it. A
 //     record that states no state is asking for the text alone, and the stored state
 //     stands.

@@ -14,7 +14,7 @@ import (
 // SetState moves one item's own state, and nothing else about it: not a criterion's state
 // (that moves only on an item.verdict — board-utilities.md §5.3), not a criterion's frozen
 // text, not the edges, not the fence. It is the writer of the item-state half of
-// board-item-state-model.md §2: a landed candidate moves its item to `landed`, and a
+// docs/reference/tillr-item-states.md: a landed candidate moves its item to `landed`, and a
 // candidate that failed the gate leaves its item where it was — `in-queue` — because a
 // non-landing run does not move the item's disposition. `in-progress` is a frozen legacy
 // state: no transition writes it, and a legacy row moves out of it through this face.

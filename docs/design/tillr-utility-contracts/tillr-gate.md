@@ -4,7 +4,7 @@ status: in-review
 stage: DESIGN
 updated: 2026-11-21
 tags: [tillr, contract, gate]
-summary: "What tillr-gate provides and expects, read from the code at dab5a2da0e: six faces, four record kinds, seven exit codes with the stall code 6, and the remembered-results directory. Its record types are in a `main` package nobody can import, so five utilities each hold a copy. It expects the check declarations and the registry from the repository's gate scripts."
+summary: "What tillr-gate provides and expects, read from the code at dab5a2da0e: seven faces, four record kinds, seven exit codes with the stall code 6, and the remembered-results directory. Its record types are in a `main` package nobody can import, so five utilities each hold a copy. It expects the check declarations and the registry from the repository's gate scripts."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
@@ -26,7 +26,8 @@ depends-on:
 | `run` | `--input --worktree --output --logs --gate --gate-arg --gate-timeout --tree-overrun` | `gate.verdict`, written before it exits | `tillr-loop` |
 | `checks` | `--base --head --worktree --checks --logs`, one of `--fast-tree` or `--heavy-tree`, and `--scope-to-change --only --tree-overrun` | `gate.verdict` on standard output | the drain (heavy tree), the repository's gate scripts (fast tree) |
 | `shadow` | `--input --worktree --output --logs` | `gate.shadow` | nobody in the tree |
-| `dualrun` | `--registry --report --work --candidate` | a comparison report | people |
+| `classify` | `--aggregate --repo --store --prove-disabled`, with a JSON array of check observations on standard input | the classifications on standard output, in order | `tillr-loop`, the repository's gate scripts |
+| `enable` | `--check --episode --worktree --store` | the result store's entry for the named check | people |
 
 | Exit | Meaning |
 | :--- | :--- |
@@ -99,7 +100,7 @@ It reads no store, imports no other utility, and runs no other tillr program.
 
 **Private:**
 
-- The other check fields of the plan and the verdict; `gate.shadow`; `dualrun`'s report.
+- The other check fields of the plan and the verdict; `gate.shadow`.
 - Everything `run` prints on standard error: the summary line, the `unavailable` and `remembered pass` lines.
 - The watchdog, the budgets' arithmetic, the Go environment memory.
 

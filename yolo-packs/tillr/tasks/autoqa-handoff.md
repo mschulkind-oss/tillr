@@ -51,7 +51,7 @@ What a reviewer can rely on:
    `tillr store events` and `tillr view events`. `tillr view` provides `status`, `waiting`,
    `passes`, `lanes`, `running`, `trace`, `perf-log`, and the embedded web observatory
    (`tillr view serve`). `tillr-gate` provides no-store `change`, `plan`, and `shadow` faces
-   alongside `checks`, `run`, and `dualrun`. `tillr-trace` records the commands a run executes.
+   alongside `checks`, `run`, `classify`, and `enable`. `tillr-trace` records the commands a run executes.
 4. **Intake, workflows, worker endings, backends, and trunk proof.** Store-declared requests
    (`tillr item request`) and reserved `express` lanes run alongside `tillr item sync` and
    `tillr item apply`. Build work runs `planned-build@v1` (`plan`, `work`, and `verify`, whose

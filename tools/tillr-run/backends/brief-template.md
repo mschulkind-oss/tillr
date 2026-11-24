@@ -125,13 +125,12 @@ printf '%s\n' c1 >> "$TILLR_PROGRESS_FILE"
 
 Do not run a whole module suite in a lane. The landing gate runs every suite your change
 selects, once, with priority on the test slots, and a failure there comes back to this run
-naming the test. On 2026-11-20 a two-line trunk fix spent 43 of its 47 minutes of worker
-time waiting for slots to run whole suites the gate then ran again. When a failure is
+naming the test. A whole suite run in a lane waits for the same slots and is then run
+again by the gate. When a failure is
 handed to you (a red check, a gate log, a triage packet), it already names the failing
 test: run that test, not the suite it came from.
 
-The sharded runner is how the gate runs a suite, on the modules listed in the repository's
-verification report `docs/pi/tillr-go-shards-2026-11-17.md`. Each shard is an independent
+The sharded runner is how the gate runs a suite. Each shard is an independent
 test process with its own scratch and git global configuration, and tests run fresh,
 without Go's test result cache. Use it yourself only when a change is so broad that no
 selection covers it:

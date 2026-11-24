@@ -14,7 +14,7 @@ import (
 // (answerLandingRefusal) and a Claude worker's resumed turn opens with it (returnedBrief).
 // Both read the same recorded fields, EndingCheck.Failing, so there is one composition.
 //
-// The source is the report the gate already wrote for this run: tools/fork-check.py prints
+// The source is the report the gate already wrote for this run: the judging program prints
 // its triage packet into the gate's whole log (`triage <check>: <label>`, then one `case:`
 // line per failing case with its `assertion:`, `reproduce (one file):` and `one case:`
 // lines), and tools/tillr-gate keeps that log beside the run's evidence. The shared

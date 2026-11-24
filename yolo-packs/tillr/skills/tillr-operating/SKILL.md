@@ -492,8 +492,7 @@ closed, or a proof at or past the red commit passes the named checks — the nex
 the waiter and starts a fresh run from the repaired trunk without an authorized retry. A check green on the base, or a failure of the candidate's own, keeps the
 ordinary refusal.
 
-The verdict about the candidate. `tillr-gate dualrun` runs two gates and compares them,
-which is the evidence a disputed verdict is settled with.
+The verdict about the candidate.
 
 ## 5. Land — squash the passing candidate onto the trunk
 `tillr land pass`

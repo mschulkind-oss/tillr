@@ -128,8 +128,8 @@ advertised for other consumers, but the drain assigns them no flags or calls.
 Exit 0 means a valid description; any other exit, malformed record, missing selected
 hook, or missing flag refuses loop startup with exit 2. Missing-hook and missing-flag
 diagnostics name the hook. Describe does not judge a candidate or mutate the store.
-Definition hooks need not implement the legacy `--help` / `--check-argv` negotiation;
-explicit CLI step programs still use that existing preflight.
+Definition hooks need not implement the `--help` / `--check-argv` negotiation;
+explicit command-line step programs use that startup check.
 
 ### Candidate steps
 
@@ -143,14 +143,14 @@ run's loop directory, not returned as mixed stdout logging.
 | Hook | Flags passed | Answer record and exit meaning |
 | :--- | :--- | :--- |
 | `gate` | Candidate flags | No stdout record required. The gate writes its `gate.verdict` artifact and measured check spans. Exit 0 passes, 1 fails, 2 refuses arguments (configuration fault), 6 is a stalled gate, and any other exit could not judge. |
-| `land` | Candidate flags; optional `--observed-trunk`, `--base-ref`, `--message-from` | Prints a `land.landing` envelope with payload `result`, `reason`, `trunk_after`, and optional `conflict_paths`, `lock_observation`, `red_cap`. Exit 0 lands; 1 refuses or conflicts (the record distinguishes them); 2 refuses arguments; other exits fail the step. An empty stdout retains the legacy exit-only answer. |
+| `land` | Candidate flags; optional `--observed-trunk`, `--base-ref`, `--message-from` | Prints a `land.landing` envelope with payload `result`, `reason`, `trunk_after`, and optional `conflict_paths`, `lock_observation`, `red_cap`. Exit 0 lands; 1 refuses or conflicts (the record distinguishes them); 2 refuses arguments; other exits fail the step. An empty stdout is read as an exit-only answer. |
 | `verdict` | Candidate flags; `--store`, `--verdict` (`pass` or `fail`) | Records criterion verdicts in the named store; stdout is not consumed. Exit 0 records the requested verdict, 2 refuses arguments, any other exit fails the step. |
-| `fixer-gate` | Candidate flags; either `--all` or `--since` with the last proved commit | Same artifacts and exit meanings as `gate`; the full untiered gate for a trunk fixer. |
+| `fixer-gate` | Candidate flags; `--only` with one check named in the trunk fixer's criterion | No stdout record consumed. Runs once per named check in the candidate's worktree, after `gate` has accepted the change. Exit 0 means that check passes, 1 means it fails, 77 means the program dropped the check (neither a pass nor a failure), and any other exit could not judge. |
 
 `--observed-trunk` is the loop's last observed trunk tip; `--base-ref` names a
 retained base reference when present; `--message-from` names the worker commit
 whose message is kept when present. These optional flags must still be advertised.
-Gate and fixer-gate receive `TILLR_GATE_SPANS_OUT` and `TILLR_FAST_VERDICT_OUT`;
+Gate receives `TILLR_GATE_SPANS_OUT` and `TILLR_FAST_VERDICT_OUT`;
 land receives `TILLR_LAND_OBSERVE=1`. The drain keeps these existing artifact and
 observation conventions. The gate may also write failing-check details used for
 base replay. See [the drain reference](../../tillr-drain/README.md).
@@ -163,9 +163,9 @@ base replay. See [the drain reference](../../tillr-drain/README.md).
 | `rolling` | Either `--all` on the first run or `--since` with the proved watermark | No stdout record consumed. Runs in a detached worktree at the trunk tip and writes check spans to `TILLR_GATE_SPANS_OUT`. Exit 0 proves green; 1 proves red only if spans name failing checks; 6 reports stalled checks; all other exits are unknown. Unknown advances no watermark and files no fixer. |
 
 For definition hooks the hook name selects the operation: replay receives only
-`--only`, not the legacy adapter's `--replay`; rolling receives the range flags,
-not the legacy adapter's `--tier rolling`. Revision checks and fixer gates retain
-`PI_FORKS_ROOT`, naming the owning repository even from a detached worktree.
+`--only`, and rolling receives only its range flag. Revision checks and fixer gates run
+with `PI_FORKS_ROOT` set to the repository the loop runs in, so a program in a detached
+worktree can name the owning repository.
 
 ### Completion and detail hooks
 

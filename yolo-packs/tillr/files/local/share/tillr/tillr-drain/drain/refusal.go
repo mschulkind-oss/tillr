@@ -52,7 +52,7 @@ const (
 // RepeatedRefusalThreshold items: every candidate the drain produced was refused, which
 // is a fact about the loop's judging — a fence that admits nothing, a gate that fails
 // everything — and not N unlucky items. It is a report, not a stop: the design's stop
-// set is closed (docs/design/tillr-day2.md §4.3) and a refusal is a verdict about the
+// set is closed and a refusal is a verdict about the
 // candidate's code, so the loop keeps running. What it must not do is let a run that has
 // never landed look like a run that is merely unlucky.
 type RepeatedRefusal struct {

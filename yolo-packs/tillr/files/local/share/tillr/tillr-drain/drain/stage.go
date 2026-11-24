@@ -1158,8 +1158,7 @@ func (s *LaneStager) clearWorktree(ctx context.Context, worktree string) error {
 // The branch is scoped by the lane root and not by the lane alone, because every lane root
 // of a repository shares that repository's refs: `canary/lanes` and `.tillr/lanes` both
 // staging `lane-1` are two lanes, and a branch named only for the lane makes the second one
-// fail on `fatal: cannot force update the branch 'tillr/lane-1' used by worktree at ...`
-// (docs/design/tillr-drain-acceptance-2026-11-13.md Section 4.6).
+// fail on `fatal: cannot force update the branch 'tillr/lane-1' used by worktree at ...`.
 func LaneBranch(laneRoot, lane string) string {
 	return "tillr/" + laneRootScope(laneRoot) + "/" + lane
 }

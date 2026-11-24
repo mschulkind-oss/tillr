@@ -17,7 +17,7 @@ import (
 )
 
 // Linux child adoption makes this process the parent of abandoned descendants,
-// even when fork-check starts checks in separate sessions. The kernel preserves
+// even when the judging program starts checks in separate sessions. The kernel preserves
 // that ownership while the original drain process is gone.
 func PrepareHeavyTree() error {
 	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {

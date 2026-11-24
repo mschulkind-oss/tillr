@@ -5,7 +5,8 @@ answers judgments the core cannot make, following the
 [hook program contract](../tillr/definition/README.md#hook-program-contract).
 It answers `describe`, `gate`, `land`, `verdict`, `fixer-gate`, `replay`, and `rolling`.
 It judges nothing itself: candidate steps derive the records the real utilities need
-and translate their exit codes; revision checks run the repository's existing checks.
+and translate their exit codes; revision checks run the repository's declared whole-tree
+checks.
 
 The embedded Git-landing definition keeps `hooks` unset. A store can opt in by setting
 its definition's `hooks` to the following object (the path is relative to the repository
@@ -17,8 +18,7 @@ where the loop starts):
 
 With that declaration, the drain selects all six steps without step flags and checks
 `describe` before the first pass. An explicit step flag still wins. Without hooks,
-`--gate`, `--land`, and `--verdict` must name programs as before; the keeper's existing
-command is unchanged.
+`--gate`, `--land`, and `--verdict` must name programs, as the keeper's command does:
 
 ```sh
 tillr drain loop --root /workspace --lanes 1 \
@@ -34,17 +34,32 @@ tools/tillr-loop/tillr-loop self-check \
 
 `fixer-gate` takes the candidate flags and `--only <check>`. After the ordinary gate
 accepts a trunk fixer's diff, the drain calls this face for each named check.
-It verifies that the candidate head is checked out and runs the named replay there,
-without auditing upstreams or using a range since the last proved commit. An omitted
-upstream reader returns exit 77 with a reason, distinct from pass or failure.
+It verifies that the candidate head is checked out (exit 4 when it is not) and runs the
+named check in the candidate's worktree.
 
-`replay` runs the gate program's replay of the named check; `rolling` runs its rolling
-tier with either `--all` or `--since <sha>`.
-These are the programs the drain defaults to in flag mode. Both hooks retain the
-caller's working directory and environment, including `PI_FORKS_ROOT` and
-`TILLR_GATE_SPANS_OUT`, and return the check program's exit status without translating
-an unknown result into a judgment. The hook name selects the operation, so callers
-do not pass `--replay` or `--tier` to these faces.
+`replay --only <check>` and `rolling (--all | --since <sha>)` judge the revision checked
+out in the caller's working directory. All three faces run declarations from
+`tools/gate/checks` (`revision_check` in the adapter):
+
+| Face | What runs |
+|---|---|
+| `rolling` | every heavy whole-tree declaration: `tillr-gate checks --heavy-tree --base HEAD --head HEAD --worktree . --checks tools/gate/checks --logs <logs>` |
+| `replay`, `fixer-gate`, naming a heavy declaration | the same command with `--only <check>` |
+| `replay`, `fixer-gate`, naming a fast whole-tree declaration | `python3 tools/gate/tree-check.py --only <check> --base HEAD --head HEAD --runner <tillr-gate>` |
+
+A name that is not a whole-tree declaration is refused with exit 4 and runs nothing: a
+change check compares two commits, so it has no verdict on a single revision. A missing
+`tillr-gate` on PATH is exit 4 too.
+
+Each face replaces itself with the judge, so the judge keeps the caller's working
+directory, environment (including `TILLR_GATE_SPANS_OUT`) and process id, and its exit
+status reaches the caller untranslated: an unknown result is never turned into a
+judgment. The hook name selects the operation; the only selector is `--only`.
+
+In flag mode the drain defaults `--replay` to `python3 tools/tillr-loop/tillr-loop replay
+--only {only}` and `--fixer-gate` to `python3 tools/tillr-loop/tillr-loop fixer-gate`. It
+runs no rolling program unless `--rolling` names one, because the declared heavy checks
+are its after-merge proof.
 
 ## Step programs belong to the running build
 
@@ -93,7 +108,7 @@ around (`host-boundary-violation`, `gate-harness-error`). If work should not be 
 it does not go in the pile; if it is in the pile, the loop's job is to finish it.
 
 Use `--exit-when-drained` only when the caller wants the loop to exit with
-`queue-drained` and code 0 instead of waiting. The former `--stay` flag is removed.
+`queue-drained` and code 0 instead of waiting.
 The default wait prints the held count and at most five items with their reasons,
 then stays quiet until something changes.
 
@@ -133,7 +148,7 @@ That mode is separate from `self-check`, which composes and displays real invoca
 
 | Face | Real invocation | What it derives |
 |---|---|---|
-| `gate` | `tillr-gate change --item I --lane L --run U --worktree W --base B --head H --now T --output <run>/gate.change.json`, then `sh -c <registry export> > <run>/registry.json` when no registry is named, then `tillr-gate plan --registry R --input gate.change.json --output gate.plan.json --root <worktree>`, then `PI_FORKS_ROOT=<root> tillr-gate run --input gate.plan.json --worktree <worktree> --output gate.verdict.json --logs <run>/logs --gate python3 --gate-arg tools/gate/change-gate.py --gate-arg --base --gate-arg <base> --gate-arg --head --gate-arg <head> --gate-arg --runner --gate-arg tillr-gate --gate-arg --logs --gate-arg <run>/change-logs` (`--gate-program P` replaces the program's words) | the candidate's argv for `tillr-gate change`, which derives the `gate.change` record itself: base, `head^{tree}` and `git diff --name-only base...head`, all read in the candidate worktree. Which checks the change owes stays `plan`'s decision. The export runs with the root as its working directory, so its path is relative for the same reason the gate program's is. |
+| `gate` | `tillr-gate change --item I --lane L --run U --worktree W --base B --head H --now T --output <run>/gate.change.json`, then `tillr-gate plan --registry R --input gate.change.json --output gate.plan.json --root <worktree>`, then `tillr-gate run --input gate.plan.json --worktree <worktree> --output gate.verdict.json --logs <run>/logs --gate python3 --gate-arg tools/gate/change-gate.py --gate-arg --base --gate-arg <base> --gate-arg --head --gate-arg <head> --gate-arg --runner --gate-arg tillr-gate --gate-arg --logs --gate-arg <run>/change-logs` (`--gate-program P` replaces the program's words) | the candidate's argv for `tillr-gate change`, which derives the `gate.change` record itself: base, `head^{tree}` and `git diff --name-only base...head`, all read in the candidate worktree. Which checks the change owes stays `plan`'s decision. The registry `R` is `--registry`, else `$TILLR_LOOP_REGISTRY`, else the candidate worktree's `tools/gate/checks` directory, so a lane that adds or changes a declaration is judged by it. |
 | `land` | `tillr-land pass --store S --repo R --item I --run U --base B --head H --verdict <run>/gate.verdict.json --base-ref <branch> --now T --run-dir <run> [--message-from M] [--observed-trunk O]` | `--observed-trunk` is the loop's last observed trunk tip, passed through unchanged: the lander refuses with `trunk-rewritten` under the land lock if the trunk no longer contains it, and records it. `--repo` = root, `--store` = `<root>/.tillr/state.db`, `--base-ref` = the branch the root is checked out on. There is no queue record and no derived candidate id: the gate's verdict is the only input, and the candidate's own four fields name the landing. |
 | `verdict` | `tillr-item show --store S --item <id> --root R` to read the frozen criteria, then one `tillr-item verdict record --store S --input <record> --now T` per criterion | one `item.verdict` per criterion: the store's frozen text hashed, `done` on `--verdict pass` after a landing, `actor_kind: mechanical`, and the gate verdict, run and head as its evidence |
 
@@ -147,19 +162,17 @@ It is bookkeeping rather than judgment, which is why it is a
 sibling of `run exec` and not a fourth adapter face: the verdict retires criteria, and this
 says where the item's work stands.
 
-The default judgment is the [two-program judge](../gate/change-gate.py), run by
-`tillr-gate run --gate`. It runs `tillr-gate checks` with the candidate’s base and head,
-then the remaining repository checks. The change declarations never read a remembered
-baseline; the base must be an ancestor of the head. A rejection stops the judge, and an
-unavailable check answers “could not judge,” not “candidate rejected.”
+The default judgment is [`tools/gate/change-gate.py`](../gate/change-gate.py), run by
+`tillr-gate run --gate`. It runs `tillr-gate checks --fast-tree` once with the candidate's
+base and head: the declared change checks and the fast whole-tree checks, scoped to the
+change when the runner supports `--scope-to-change`. The base must be an ancestor of the
+head, and the head must be the commit checked out in the worktree; otherwise the judge
+answers exit 4. An unavailable check answers "could not judge," not "candidate rejected."
 
 `tillr-gate` keeps the outer plan and verdict record because `tillr-land pass` binds that
 record to the candidate tree. The programs are spelled **relative** so they resolve inside
-the candidate worktree. The remaining repository checks still use the candidate’s range,
-run the landing tier, and wait for the record-save lock rather than failing on the first
-concurrent gate. Change-check logs live beside the run’s other records.
-`--root` names the repository the registry is exported from and the one `PI_FORKS_ROOT`
-names; pass the main checkout there when a check needs the shared fork checkouts.
+the candidate worktree. Change-check logs live in `<run>/change-logs`, beside the run's
+other records.
 
 `--root` defaults to the checkout the adapter runs in (`git rev-parse --show-toplevel`),
 `--store` to `<root>/.tillr/state.db`, `--work-dir` to `<root>/.tillr/loop`, `--now` to the
@@ -193,10 +206,12 @@ failed, and a wrapper that turned a broken judge into a pass is how a loop's gat
 becomes `true`.
 
 - **No root** — no `--root` and a working directory that is not a checkout.
-- **A registry that cannot be exported** (gate) — a gate with no registry would pass
-  everything, so with none named (`--registry`, else `$TILLR_LOOP_REGISTRY`) the adapter
-  exports one from the tree's own gate program. A tree where that cannot run is exit
-  4: no verdict, never a pass, and the drain gates the same candidate again.
+- **A plan that cannot be made** (gate) — a gate with no registry would pass everything,
+  so with none named (`--registry`, else `$TILLR_LOOP_REGISTRY`) the plan reads the
+  candidate's own `tools/gate/checks` declarations. A `tillr-gate change` or `plan` that
+  fails is exit 4: no verdict, never a pass, and the drain gates the same candidate again.
+- **A revision check that cannot judge** (fixer-gate, replay) — a head that is not checked
+  out, or a name that is not a whole-tree declaration: exit 4.
 - **No gate verdict** (land) — a landing against no verdict record.
 - **Detached root** (land) — no branch to land onto, and `--base-ref` was not named.
 - **No criteria** (verdict) — an item whose store holds no criterion retires nothing.
@@ -215,9 +230,10 @@ sees the refusal before spending a night on ticks rather than after one.
 ## A trunk fixer's gate
 
 The drain uses `--gate` for a trunk fixer just as for any candidate. Only after that gate
-accepts the change does it run the checks named in the fixer's stored criterion. It drops
-upstream readers with a log line, returns a named failure to the worker, and holds a
-candidate whose named check could not judge. With no names, the ordinary gate is enough.
+accepts the change does it run the checks named in the fixer's stored criterion. It
+returns a named failure to the worker and holds a candidate whose named check could not
+judge. A fixer-gate program that exits 77 has dropped the named check, which the drain
+reads as neither a pass nor a failure. With no names, the ordinary gate is enough.
 The drain records the combined judgment before it hands the verdict to the lander.
 
 ## Test
@@ -225,14 +241,14 @@ The drain records the combined judgment before it hands the verdict to the lande
 `python3 tools/tillr-loop/test.py` runs the three adapters against stub stand-ins for the
 real programs (a temp directory on PATH, one per face, each answering a chosen exit code
 and logging its argv). It pins the gate and land and verdict mappings above, a missing
-judge as exit 4, a registry that cannot be exported as exit 4, the candidate argv the gate
+judge as exit 4, a change that cannot be derived as exit 4, the candidate argv the gate
 hands `tillr-gate change` and that the adapter writes no change record of its own, the exact
-argv the gate hands
-`tillr-gate run` (the `--gate`/`--gate-arg` program, its `--since` range, `--logs` and
-`PI_FORKS_ROOT`) and the program's own argv as the stand-in gate executes it, the `--registry`
-the plan reads after an export, and that the self-check names the composed argv — including
-the derived verdict path, the generated registry and the candidate head — while invoking no
-stub at all. No test runs a real gate, a real store or a model.
+argv the gate hands `tillr-gate run` (the `--gate`/`--gate-arg` program and `--logs`) and
+the program's own argv as the stand-in gate executes it, the `--registry` the plan reads
+(the candidate's declarations directory when none is named), the commands the revision
+checks run, and that the self-check names the composed argv — including the derived
+verdict path, the registry and the candidate head — while invoking no stub at all. No test
+runs a real gate, a real store or a model.
 
 [drain-argv.json](./drain-argv.json) is every argument list `tillr drain loop` sends these faces, one per
 optional branch: the ordinary gate, the fixer's named check, the land step with each of its
@@ -245,6 +261,8 @@ flag added to the drain fails the drain's suite until this adapter accepts it an
 regenerated, and a flag this adapter stops accepting fails this suite.
 
 It runs every case and reports all failures before exiting non-zero, so one stale assertion
-cannot hide the rest. The gate runs it too, as the `tillr-loop` check: a change to this
-directory plans the suite at the landing tier, so a case that no longer describes the adapter
-fails the change that broke it instead of waiting for someone to run it by hand.
+cannot hide the rest. The gate runs it too, as the `tillr-loop` check
+([`tools/gate/checks/tillr-loop.json`](../gate/checks/tillr-loop.json)): a heavy whole-tree
+declaration whose reads include this directory, so `just done` and the drain's after-merge
+proof run it, and a case that stops describing the adapter is caught without anyone
+running the suite by hand.

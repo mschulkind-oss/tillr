@@ -18,7 +18,7 @@ func state(t *testing.T, db, id, want, now string) (int, []byte) {
 	return run(t, args...)
 }
 
-// The state face is the writer of board-item-state-model.md §2's item states: a landed
+// The state face is the writer of the item states of docs/reference/tillr-item-states.md: a landed
 // candidate moves its item to `landed`, and the move touches nothing else on the item.
 //
 // The criterion is seeded already judged, because that is what a landed candidate's item

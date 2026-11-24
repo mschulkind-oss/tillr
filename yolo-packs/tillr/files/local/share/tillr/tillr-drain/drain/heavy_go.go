@@ -34,7 +34,7 @@ func goSuiteProofID(id string) string {
 	if !ok || !goToolModule.MatchString(module) {
 		return ""
 	}
-	// Match fork-check.py's declaration_id for the go-tool suite label.
+	// Match the judging program's declaration id for the go-tool suite label.
 	slug := strings.Join(strings.FieldsFunc(module, func(r rune) bool { return r == '/' || r == '-' }), "-")
 	return "go-tool/" + slug + "-s-whole-suite-passes"
 }

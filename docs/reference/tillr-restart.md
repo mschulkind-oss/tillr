@@ -431,8 +431,8 @@ configured upstream via `git for-each-ref`) and runs `git push --porcelain --
 - **`what = "tip"`:** Every trunk landing (`candidate.BaseRef == ""`) submits
   `pushTrunk` (`refs/heads/main:<ref>`).
 - **Pre-push hook and patch branches:** `git push` runs the repository's normal
-  hooks (`bin/patch-branches-publish`), which publish local `patch/*` fork
-  branches at their current tips even when `main` pushes an older `green` SHA.
+  hooks. A `pre-push` hook that publishes local `patch/*` fork branches
+  publishes them at their current tips even when `main` pushes an older `green` SHA.
 - **Failure visibility:** A failed or timed-out push logs
   `loop: push of <what> <sha> failed (...; the loop goes on)`, records a
   non-empty `detail` on `drain.post-landing-action` (`action = "push"`),
@@ -634,8 +634,8 @@ lightweight supervisor holding `<root>/.tillr/keeper.lock`:
   pass `--force`. Recovery uses a linear replay, as described in
   [`docs/design/tillr-refused-push.md`](../design/tillr-refused-push.md).
 - **Patch-branch publication is not gated on `refs/tillr/green`:** When
-  `push.what = "green"` pushes `main`, the `pre-push` hook still runs
-  `bin/patch-branches-publish` at local `patch/*` branch tips; narrowing patch
+  `push.what = "green"` pushes `main`, a repository's `pre-push` hook that publishes
+  `patch/*` branches still publishes them at their local tips; narrowing patch
   publication to proven commits remains an unmade owner choice.
 
 ---
