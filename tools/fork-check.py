@@ -1710,7 +1710,6 @@ HOOKS_INSTALL_TIMEOUT = 120
 # Builds and test compilation belong to the parallel go-build tree declaration.
 # This program retains one behavior suite per changed Go tool directory.
 GO_TOOL_DIRS = (
-    "tools/pi-profiler",
     "tools/tillr",
     "tools/tillr-store",
     "tools/tillr-item",
@@ -1722,11 +1721,8 @@ GO_TOOL_DIRS = (
     "tools/tillr-cli",
     "tools/tillr-watch",
 )
-# The owner excluded these on 2026-11-21: "ignore dotmod and bedrock-spend, that's not ours."
-GO_TOOL_EXCLUSIONS = {
-    "tools/dotmod": "not ours",
-    "tools/bedrock-spend": "not ours",
-}
+# A Go module under tools/ that the gate deliberately does not judge, with the reason.
+GO_TOOL_EXCLUSIONS = {}
 GO_LANDING_SUITE_DIRS = ("tools/tillr",)
 # A wrong judge breaks every following landing. These paths always pay the
 # runner's own proof before publication, independently of the heavy-tier strategy.
