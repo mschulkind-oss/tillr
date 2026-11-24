@@ -348,6 +348,14 @@ Use `tillr item request` with the words on standard input and `--title`.
   that commit only what this part needs". Move items that waited on the closed
   one with `tillr item dep --add` and `--remove`. Closing an item ends its
   current run, so do it knowingly.
+- **Before closing an item, check what waits behind it.** Run `tillr drain why`
+  and look for rows whose `why` or dependency names the item, including a
+  candidate the drain holds as `test-fix-open` behind a test's fix item. Refile
+  first, move each dependency with `tillr item dep --add` and `--remove`, and
+  close last. On 2026-11-23 the operator closed a fix item that a gate-failed
+  candidate was held behind; the loop exited on a fault twice, two running
+  gates ended, and the loop stayed up only after the `tillr drain retry`
+  command its exit message named.
 - **Do not write a request that a build worker cannot satisfy alone.** Do not
   tell it to edit a design document or mark a design slice built; that is the
   design seat's. Do not make a criterion of stating a cause the worker cannot
