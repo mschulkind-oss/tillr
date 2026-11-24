@@ -59,6 +59,10 @@ First by rule 3: every other entry is built and verified by someone who starts f
        failed once on 2026-11-24 with `database is locked (5) (SQLITE_BUSY)` in its
        `store_event` case while other suites ran beside it, and passed four times run alone
        (`go test ./drain -run TestLandingRollWithFailedStoreMigration -count=4`).
+     - `test_stalled_test_is_named_and_process_group_is_killed` in
+       [`shards_test.py`](../../tools/tillr-land/shards_test.py) gives its stand-in test binary
+       one second (`wall_timeout=1`) to start and print. It failed once on 2026-11-24 inside a
+       full `just done` and passed three times run alone.
    - **Depends on:** nothing.
 
 ## 2. A core that carries only its own code
