@@ -76,16 +76,16 @@ A finished finding means its investigation ended, not that every criterion passe
 The [consumer contract](../../../../docs/design/tillr-separable-parts.md#21-the-stable-surface)
 promises the `tillr` dispatcher spelling and the `store init`, `item apply`,
 `item show`, `item verdict`, and `drain loop` faces used here on your own store and
-root. `item list` and its `--state` filter work in this example, but that older
-contract's explicit face list does not yet include them. Definition selection with
+root. `item list` and its `--state` filter work in this example, but that
+contract's explicit face list does not include them. Definition selection with
 `--definition` and hook completion are documented in the
-[definition package](../../definition/README.md); they are the new integration
+[definition package](../../definition/README.md); they are the integration
 exercised here, not an expanded stability promise from this example. Python helpers
 and example output files are example internals, not consumer contracts.
 
-This example does not yet show real reproduction or model-backed investigation,
+This example does not show real reproduction or model-backed investigation,
 `repeat-of` evidence, a `tooling-fault` result, reopening, blocked-input handling,
 retries after a hook failure, parallel execution, the detail hook, custom views,
-or retention cleanup. The loop runs no trace indexer (it has had none since
-2026-11-18), so no external tracing program is needed. All store, run, lane and evidence files stay in the copied directory;
-there is nothing to deploy or land from this run.
+or retention cleanup. No external tracing program is needed. All store, run, lane and
+evidence files stay in the copied directory; there is nothing to deploy or land from
+this run.

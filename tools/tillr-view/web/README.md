@@ -3,7 +3,7 @@
 A browser for the loop's items, runs, passes and landings, read-only by default.
 With `tillr-view serve --write`, eligible Items-page rows offer “Move to top”;
 the server delegates placement to the item command, as described in the
-[write-route reference](../README.md#opt-in-item-placement). The current page layout follows the [observatory reference](../../../docs/reference/observatory-redesign.md#entities-and-urls),
+[write-route reference](../README.md#opt-in-item-placement). The page layout follows the [observatory reference](../../../docs/reference/observatory-redesign.md#entities-and-urls),
 and its provenance badges, state glyphs, refusals, document pane, and invalidation rules follow
 [observatory truthfulness and shared primitives](../../../docs/reference/observatory-design.md).
 It reads the `/api/v1/*` routes and posts placement only when writes are enabled;
@@ -18,9 +18,9 @@ the browser never writes the store directly.
 - In this directory, `npm ci`, `npm run typecheck`, `npm test`, and `npm run build`
   install, check, test, and build the browser.
 
-Pack delivery is a derived copy: run `just pack-sync` after editing this tree.
-On the host, deploy the pack with `yolo host apply --assert`, then relaunch any
-running jail. A browser build alone does not update a running server's embedded assets.
+The pack under `yolo-packs/tillr` carries a generated copy of this tree: run
+`just pack-sync` after editing it. A browser build alone does not update a running
+server's embedded assets; restart `just observatory` to serve the new build.
 
 ## Item and run pages
 
@@ -29,20 +29,16 @@ run and timeline. Consecutive decisions with identical action and reason fold in
 one row, with the pass count and earliest timestamp. That row links to the item's
 pass ledger. Runs and landing attempts link to their own pages.
 
-`#/run/<id>` opens one run and combines three existing read faces on one time axis:
+`#/run/<id>` opens one run and combines three read faces on one time axis:
 
 - The run route's staging, execution, boundary, fence, gate, landing and verdict records.
 - The timeline route's recorded model turns, tool calls and other observations.
 - The gate route's plan and check spans, including skipped checks with their reasons.
 
-Legacy query-only item links redirect to the item page. Legacy item links carrying
-`run` redirect, by replacing the history entry, to the run page and retain their tab
-and artifact parameters. The old three-pane board is not a selectable layout.
-
-The run page also opens the existing transcript, exchanges, claims and artifact
+The run page also opens the transcript, exchanges, claims and artifact
 readers. Selected exchanges load even when the exchanges tab is not open; an unknown
 exchange is named as missing. Transcript pagination still reads bounded pages, not
-the entire log. Turn and tool details link to the run's transcript, but the existing
+the entire log. Turn and tool details link to the run's transcript, but the
 timeline route supplies no transcript entry identifier, so the viewer does not guess
 one from the observation ID. Check links carry the selected run and span to highlight
 that execution.
@@ -104,15 +100,14 @@ is the route, and the item page pins its latest-run summary when it first loads.
 
 | Location | Responsibility |
 | :--- | :--- |
-| [App](src/App.tsx) | Page routing, legacy redirects, shell and pause |
-| [ItemRunPages](src/components/ItemRunPages.tsx) | Existing read faces and entity pages |
+| [App](src/App.tsx) | Page routing, shell and pause |
+| [ItemRunPages](src/components/ItemRunPages.tsx) | Read faces and entity pages |
 | [SpanViewer](src/components/SpanViewer.tsx) | Nested, searchable, virtualized time axis and details |
 | [Span models](src/models/spans.ts) | Source composition and interval calculations |
 | [API](src/models/api.ts) and [queries](src/models/queries.ts) | Typed reads and shared refresh keys |
 | [Span tests](tests/span-viewer.test.tsx) | Missing clocks, nested rows, interval union, selection, controls and 5,000 rows |
-| [Page tests](tests/app-selection.test.tsx) | Cold links, redirects, folding and existing routes |
+| [Page tests](tests/app-selection.test.tsx) | Cold links, folding and routes |
 
-The retained queue components are tested in isolation with the
+The queue components are tested in isolation with the
 [queue test composition](tests/queue-harness.tsx); that composition is not shipped as
-an application route. The three replaced timing components are removed, and their
-clock/provenance tests run against the unified viewer.
+an application route.
