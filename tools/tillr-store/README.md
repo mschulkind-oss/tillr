@@ -284,7 +284,7 @@ These are the flushes left inside a lock, and who can be queued behind each one:
 - **A handle's close: no flush.**
 
 With `TILLR_SQLITE_TRACE=1`, each of these is its own span or phase. The line format is in
-[Observing remaining contention](../../docs/recovery/sqlite-contention/README.md#observing-remaining-contention).
+[Observing remaining contention](../../docs/reference/tillr-store-contention.md#observing-remaining-contention).
 
 ### Backing up or copying the store
 

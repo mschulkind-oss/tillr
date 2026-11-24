@@ -5044,7 +5044,6 @@ this amendment may edit only this block. Its shape is for that item to design. T
 design already states is "keeping work out from under the store's locks", so the open of a store
 whose schema is current should not take the write lock at all.
 **Rejected:** raising the busy timeout, which
-[the contention repair plan](../recovery/sqlite-contention/plan.md#constraints) refused and which
 lengthens the wait without shortening the queue; retrying a busy open in the loop or in the test,
 which hides the number the test exists to show; widening this item's paths to the store, which
 turns a measurement into a change to the one file every program shares; lowering the lane count
