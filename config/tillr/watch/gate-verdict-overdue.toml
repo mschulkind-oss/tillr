@@ -1,0 +1,40 @@
+# On 2026-11-23 from 04:13 to 05:47 ET, trunk fixer fixer-main-1293971a3597's
+# landing gate ran about 88 minutes because one test hung, and no alert fired;
+# the operator found it by reading the process list at a check-in.
+#
+# Measured on 2026-11-23 at 05:50 ET over 824 gate.verdict.json files written
+# under .tillr/loop/ in the previous three days (sum of check duration_ms per
+# verdict): median 56 s, 90th percentile 375 s, 95th percentile 1,144 s, and
+# 99th percentile 3,650 s. The six longest gates (4,903 to 8,206 s) all ended
+# fail or stalled.
+#
+# Alert when a gate.started event has no gate.verdict for the same run
+# (object_id) after 3,650 s; no automatic remedy is attached.
+[[rule]]
+id = "gate-verdict-overdue"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["gate.started", "gate.verdict"]
+
+[rule.when]
+group_by = "object_id"
+pattern = "duration_without_event"
+after = 'event.kind == "gate.started"'
+match = 'event.kind == "gate.verdict"'
+threshold_duration = "3650s"
+window = "24h"
+
+[rule.guidance]
+summary = "Landing gate for {{subject}} ({{event.item_id}} on {{event.lane_id}}) has run for {{elapsed}} with no gate.verdict."
+check = [
+  "Inspect .tillr/loop/{{subject}}/ (steps.jsonl, gate.stderr, gate.plan.json, and logs/) and live gate or check subprocesses to see which check is still running or hung.",
+  "Run tillr drain why to inspect the candidate item and lane state for {{subject}}.",
+]
+do = [
+  "Establish why the gate for {{subject}} has produced no gate.verdict past the 3,650 s 99th-percentile duration and address the hung check or blocker; this alert attaches no automatic remedy.",
+]
+
+[rule.delivery]
+receiver = "foreground"
