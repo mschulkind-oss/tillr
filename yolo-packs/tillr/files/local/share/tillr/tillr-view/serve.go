@@ -130,7 +130,7 @@ type server struct {
 	why     whyCache
 	// The shared answers (shared.go): one build per store change for the routes whose answer
 	// costs a second or more, and the push summary's git reads beside the snapshot's.
-	snapshotShare, lanesShare, passesShare, pushShare sharedAnswers
+	snapshotShare, lanesShare, lanesStoreShare, passesShare, pushShare sharedAnswers
 	// Notification wake-hint subscription and fallback reconciliation (servews.go; D-SN5, D-SN6).
 	fallbackPoll     time.Duration
 	disconnectedPoll time.Duration
@@ -600,12 +600,16 @@ func (s *server) getOutsideTx(fn payloadFunc) http.HandlerFunc { return s.serveR
 func (s *server) serveRead(fn payloadFunc, outside bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		ctx := req.Context()
+		perfNow := time.Now
+		if s.perf != nil {
+			perfNow = s.perf.now
+		}
 		var (
 			data   any
 			cursor serverSnapshot
 			fail   *apiFailure
 		)
-		start := time.Now()
+		start := perfNow()
 		err := s.store.ReadTx(ctx, func(r *store.Reader) error {
 			head, err := r.EventHeadSeq()
 			if err != nil {
@@ -636,7 +640,7 @@ func (s *server) serveRead(fn payloadFunc, outside bool) http.HandlerFunc {
 		}
 		// payload is the read transaction and everything the route assembled inside it,
 		// which for /why includes the planner it waited on (its own phase says how long).
-		phase(ctx, "payload_ms", msSince(time.Now, start))
+		phase(ctx, "payload_ms", msSince(perfNow, start))
 		// A client that went away is not a store fault. The browser cancels a read when a
 		// newer one replaces it, and the cancelled context then fails the read (queued for
 		// the one connection, or mid-query); answering that as store-unreadable logged 503s
@@ -645,8 +649,8 @@ func (s *server) serveRead(fn payloadFunc, outside bool) http.HandlerFunc {
 			w.WriteHeader(statusClientClosed)
 			return
 		}
-		encodeStart := time.Now()
-		defer func() { phase(ctx, "encode_ms", msSince(time.Now, encodeStart)) }()
+		encodeStart := perfNow()
+		defer func() { phase(ctx, "encode_ms", msSince(perfNow, encodeStart)) }()
 		if err != nil {
 			f := failure(codeStoreUnreadable, "the store could not be read: %v", err)
 			f.Snapshot = cursor
@@ -967,16 +971,22 @@ func liveRuns(lanes []storeLane, known []storeRun, allocations map[string]alloca
 }
 
 // snapshotShared is what the snapshot's build keeps between requests: the board as of one
-// store stamp, and the clock-independent alarms the quota alarms are added to.
+// store stamp, pre-cleaned JSON for the large invariant slices so polls do not re-strip or
+// re-encode them, and the clock-independent alarms the quota alarms are added to.
 type snapshotShared struct {
-	data   snapshotData
-	alarms *alarms.Stored
+	data       snapshotData
+	alarms     *alarms.Stored
+	counts     json.RawMessage
+	lanes      json.RawMessage
+	items      json.RawMessage
+	recentRuns json.RawMessage
 }
 
 // snapshotPayload is the initial screen load: the whole board as one moment. The board is
 // built once per store change and shared (shared.go); what depends on the request or on the
-// clock is added to a copy of it for each request: the sources (a stat), the quota alarms
-// (the clock and the policy file) and the push summary (git refs, shared apart).
+// clock is added to a copy of it for each request: the sources (a stat), the live session
+// clocks, the quota alarms (the clock and the policy file) and the push summary (git refs,
+// shared apart).
 func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	now := s.clock().UTC()
 	if req != nil {
@@ -1006,13 +1016,15 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 		return nil, fail
 	}
 	built := answer.(*snapshotShared)
-	out := built.data
-	out.Sources = s.sources()
+	drain := built.data.Drain
+	drain.Session = session
+	sources := s.sources()
 	policy, err := alarms.ReadPolicy(s.root, s.policyRef)
 	if err != nil {
 		return nil, unreadable(err)
 	}
-	if out.Alarms, err = built.alarms.At(r, now, policy); err != nil {
+	activeAlarms, err := built.alarms.At(r, now, policy)
+	if err != nil {
 		return nil, unreadable(err)
 	}
 	pushed, fail := s.pushShare.get(req.Context(), r, "push", nil, func() shareBuild {
@@ -1025,8 +1037,38 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 	if fail != nil {
 		return nil, fail
 	}
-	out.Push = pushed.(*pushSummary)
-	return out, nil
+	pushVal := pushed.(*pushSummary)
+	cleanDrain, err := marshalClean(drain)
+	if err != nil {
+		return nil, failure(codeStoreUnreadable, "encoding snapshot drain summary: %v", err)
+	}
+	cleanSources, err := marshalClean(sources)
+	if err != nil {
+		return nil, failure(codeStoreUnreadable, "encoding snapshot sources: %v", err)
+	}
+	wire := map[string]any{
+		"counts":        built.counts,
+		"drain_summary": cleanDrain,
+		"items":         built.items,
+		"lanes":         built.lanes,
+		"recent_runs":   built.recentRuns,
+		"sources":       cleanSources,
+	}
+	if len(activeAlarms) > 0 {
+		cleanAlarms, err := marshalClean(activeAlarms)
+		if err != nil {
+			return nil, failure(codeStoreUnreadable, "encoding snapshot alarms: %v", err)
+		}
+		wire["alarms"] = cleanAlarms
+	}
+	if pushVal != nil {
+		cleanPush, err := marshalClean(pushVal)
+		if err != nil {
+			return nil, failure(codeStoreUnreadable, "encoding snapshot push: %v", err)
+		}
+		wire["push"] = cleanPush
+	}
+	return precleaned{wire}, nil
 }
 
 func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loopSession, active bool, sessionNote string) (*snapshotShared, *apiFailure) {
@@ -1284,7 +1326,30 @@ func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loop
 	for _, run := range runs[start:] {
 		out.RecentRuns = append(out.RecentRuns, summarizeRun(run))
 	}
-	return &snapshotShared{data: out, alarms: stored}, nil
+	countsRaw, err := marshalClean(out.Counts)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	lanesRaw, err := marshalClean(out.Lanes)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	itemsRaw, err := marshalClean(out.Items)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	recentRaw, err := marshalClean(out.RecentRuns)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	return &snapshotShared{
+		data:       out,
+		alarms:     stored,
+		counts:     countsRaw,
+		lanes:      lanesRaw,
+		items:      itemsRaw,
+		recentRuns: recentRaw,
+	}, nil
 }
 
 // unreadable answers a store read that failed for a reason other than a missing subject:

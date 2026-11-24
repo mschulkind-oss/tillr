@@ -14,9 +14,38 @@ var currencyAmount = regexp.MustCompile(`[$€£¥]\s*` + priceNumber + `(?:\s*(
 var namedDollarAmount = regexp.MustCompile(`(?i)(?:\bUSD\s*` + priceNumber + `|` + priceNumber + `\s*(?:USD|(?:US )?dollars)\b|\b(?:[a-z]+[ _])*cost[ _]usd\s*:\s*` + priceNumber + `)`)
 var embeddedPrice = regexp.MustCompile(`(?i)"[^"\n]*cost[^"\n]*"\s*:\s*(?:[0-9.eE+\-]+|null)`)
 
+// precleaned wraps a Data value whose fields have already passed through withoutPrices.
+type precleaned struct {
+	raw any
+}
+
+func marshalClean(body any) (json.RawMessage, error) {
+	clean, err := withoutPrices(body)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(clean)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
+}
+
 // The HTTP face intentionally excludes pricing, including in trace attributes and
 // artifact/transcript strings. Stored records and the trace CLI remain unchanged.
 func withoutPrices(body any) (any, error) {
+	if p, ok := body.(precleaned); ok {
+		return p.raw, nil
+	}
+	if resp, ok := body.(apiResponse); ok {
+		if p, ok := resp.Data.(precleaned); ok {
+			snap, err := withoutPrices(resp.Snapshot)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"snapshot": snap, "data": p.raw}, nil
+		}
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err

@@ -220,33 +220,65 @@ func readLaneRows(ctx context.Context, path, loop, lanes string, now time.Time) 
 	return rows, err
 }
 
-// lanesPayload answers the lane strip and the lane page. The rows are built once per store
-// change and shared (shared.go), keyed by the lane whose run history the request names
-// (`?history=<lane id>`) and by every lane log and record file the build read. The one
-// clock-derived field, "log grew N ago", is recomputed per request on a copy of the rows.
+type lanesShared struct {
+	rows  []laneRow
+	clean []json.RawMessage
+}
+
+// lanesPayload answers the lane strip and the lane page. Store-derived rows are built once
+// per store change in lanesStoreShare; lanesShare overlays the memoized lane log and pipeline
+// files and pre-cleans each row's JSON, and the clock-derived "log grew N ago" sentence is
+// refreshed per request only for rows whose action is liveness.
 func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	named := req.URL.Query().Get("history")
+	perfNow := time.Now
+	if s.perf != nil {
+		perfNow = s.perf.now
+	}
 	answer, fail := s.lanesShare.get(req.Context(), r, "history="+named, nil, func() shareBuild {
-		stats := &laneReadStats{}
-		start := time.Now()
-		rows, fail := s.lanesBuild(r, req, named, stats)
-		phase(req.Context(), "lane_logs", map[string]any{"ms": msSince(time.Now, start), "files": stats.files, "bytes": stats.bytes})
+		base, fail := s.lanesStoreShare.get(req.Context(), r, "store", nil, func() shareBuild {
+			rows, fail := s.lanesStoreBuild(r)
+			if fail != nil {
+				return shareBuild{failure: fail}
+			}
+			return shareBuild{value: rows}
+		})
 		if fail != nil {
 			return shareBuild{failure: fail}
 		}
-		return shareBuild{value: rows, deps: stats.deps}
+		stats := &laneReadStats{}
+		start := perfNow()
+		built, fail := s.lanesBuild(base.([]laneRow), named, stats)
+		phase(req.Context(), "lane_logs", map[string]any{"ms": msSince(perfNow, start), "files": stats.files, "bytes": stats.bytes})
+		if fail != nil {
+			return shareBuild{failure: fail}
+		}
+		return shareBuild{value: built, deps: stats.deps}
 	})
 	if fail != nil {
 		return nil, fail
 	}
-	shared := answer.([]laneRow)
+	shared := answer.(*lanesShared)
 	now := s.clock()
-	rows := make([]laneRow, len(shared))
-	copy(rows, shared)
-	for i := range rows {
-		rows[i].LatestAction = withLogAge(rows[i].LatestAction, rows[i].RunID, rows[i].LogGrewAtMS, now)
+	clean := shared.clean
+	copied := false
+	for i := range shared.rows {
+		updated := withLogAge(shared.rows[i].LatestAction, shared.rows[i].RunID, shared.rows[i].LogGrewAtMS, now)
+		if updated != shared.rows[i].LatestAction {
+			if !copied {
+				clean = append([]json.RawMessage(nil), shared.clean...)
+				copied = true
+			}
+			row := shared.rows[i]
+			row.LatestAction = updated
+			raw, err := marshalClean(row)
+			if err != nil {
+				return nil, failure(codeStoreUnreadable, "encoding lane %s: %v", row.LaneID, err)
+			}
+			clean[i] = raw
+		}
 	}
-	return rows, nil
+	return precleaned{clean}, nil
 }
 
 // withLogAge is the age sentence buildLaneRowsCounted writes for a lane whose stream log is
@@ -258,17 +290,10 @@ func withLogAge(action laneAction, runID string, grew *int64, now time.Time) lan
 	return action
 }
 
-func (s *server) lanesBuild(r *store.Reader, req *http.Request, named string, stats *laneReadStats) ([]laneRow, *apiFailure) {
-	rows, err := assembleLanesCounted(r, s.storePath, s.obs.loopDir, s.obs.laneRoot, s.clock(), stats)
+func (s *server) lanesStoreBuild(r *store.Reader) ([]laneRow, *apiFailure) {
+	rows, err := assembleLanesStore(r, s.storePath, s.obs.loopDir)
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "lanes could not read the store: %v", err)
-	}
-	// Run history is the lane page's table, so only the lane that page names carries it;
-	// the home strip's list would pay for every lane's.
-	for i := range rows {
-		if rows[i].LaneID != named {
-			rows[i].History = nil
-		}
 	}
 	runs, err := readUsageRuns(r)
 	if err != nil {
@@ -287,6 +312,28 @@ func (s *server) lanesBuild(r *store.Reader, req *http.Request, named string, st
 		}
 	}
 	return rows, nil
+}
+
+func (s *server) lanesBuild(base []laneRow, named string, stats *laneReadStats) (*lanesShared, *apiFailure) {
+	rows := make([]laneRow, len(base))
+	copy(rows, base)
+	// Run history is the lane page's table, so only the lane that page names carries it;
+	// the home strip's list would pay for every lane's.
+	for i := range rows {
+		if rows[i].LaneID != named {
+			rows[i].History = nil
+		}
+	}
+	applyLaneFiles(rows, s.obs.loopDir, s.obs.laneRoot, s.clock(), stats)
+	clean := make([]json.RawMessage, len(rows))
+	for i := range rows {
+		raw, err := marshalClean(rows[i])
+		if err != nil {
+			return nil, failure(codeStoreUnreadable, "encoding lane %s: %v", rows[i].LaneID, err)
+		}
+		clean[i] = raw
+	}
+	return &lanesShared{rows: rows, clean: clean}, nil
 }
 
 // laneReadStats is what one lanes answer read from the lane directories: the performance
@@ -313,6 +360,15 @@ func (s *laneReadStats) add(n int) {
 }
 
 func assembleLanesCounted(r *store.Reader, storePath, loop, lanes string, now time.Time, stats *laneReadStats) ([]laneRow, error) {
+	rows, err := assembleLanesStore(r, storePath, loop)
+	if err != nil {
+		return nil, err
+	}
+	applyLaneFiles(rows, loop, lanes, now, stats)
+	return rows, nil
+}
+
+func assembleLanesStore(r *store.Reader, storePath, loop string) ([]laneRow, error) {
 	d, err := readStoreDomainIn(r, loop)
 	if err != nil {
 		return nil, err
@@ -339,7 +395,7 @@ func assembleLanesCounted(r *store.Reader, storePath, loop, lanes string, now ti
 			return nil, err
 		}
 	}
-	rows := buildLaneRowsCounted(d, verdicts, seats, loop, lanes, now, stats)
+	rows := buildLaneStoreRows(d, verdicts, seats)
 	progress, err := readItemProgress(r)
 	if err != nil {
 		return nil, err
@@ -347,10 +403,10 @@ func assembleLanesCounted(r *store.Reader, storePath, loop, lanes string, now ti
 	for i := range rows {
 		rows[i].Work = progress[rows[i].ItemID]
 	}
-	if err := enrichLaneNodes(r, rows, loop, d.deadRuns, stats); err != nil {
+	if err := enrichLaneNodeRows(r, rows, d.deadRuns); err != nil {
 		return nil, err
 	}
-	if err := enrichWorkerRecords(r, rows, stats); err != nil {
+	if err := enrichWorkerStoreRecords(r, rows); err != nil {
 		return nil, err
 	}
 	// The seat a run was dispatched for is on its decision row (tillr-drain's
@@ -443,6 +499,12 @@ func buildLaneRows(d *storeDomain, verdicts map[string]gateVerdict, seats map[st
 }
 
 func buildLaneRowsCounted(d *storeDomain, verdicts map[string]gateVerdict, seats map[string]string, loop, lanes string, now time.Time, stats *laneReadStats) []laneRow {
+	rows := buildLaneStoreRows(d, verdicts, seats)
+	applyLaneRowFiles(rows, loop, lanes, now, stats)
+	return rows
+}
+
+func buildLaneStoreRows(d *storeDomain, verdicts map[string]gateVerdict, seats map[string]string) []laneRow {
 	rows := []laneRow{}
 	runs := map[string]storeRun{}
 	for id, a := range d.allocations {
@@ -530,26 +592,39 @@ func buildLaneRowsCounted(d *storeDomain, verdicts map[string]gateVerdict, seats
 			}
 		}
 		row.StateSinceMS = clockPointer(since, since > 0)
-		if row.RunID != "" {
-			row.Pipeline, row.PipelineNote = readLanePipeline(filepath.Join(loop, row.RunID, "pipeline.jsonl"), stats)
-			var note string
-			row.LatestAction, note, row.LogGrewAtMS = readLaneActionCounted(runLogPath(lanes, lane.LaneID, row.RunID), row.Backend, stats)
-			if note != "" {
-				if row.Note != "" {
-					row.Note += "; "
-				}
-				row.Note += note
-			}
-			if row.State == "settling" {
-				row.LastStep, row.LastStepAtMS = lastFinishedLaneStepCounted(filepath.Join(loop, row.RunID, "steps.jsonl"), stats)
-			}
-			if row.LatestAction.Kind == "liveness" && row.LogGrewAtMS != nil {
-				row.LatestAction.Text = "log grew " + laneAge(now.UnixMilli()-*row.LogGrewAtMS) + " ago"
-			}
-		}
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+func applyLaneFiles(rows []laneRow, loop, lanes string, now time.Time, stats *laneReadStats) {
+	applyLaneRowFiles(rows, loop, lanes, now, stats)
+	applyLaneNodePipelines(rows, loop, stats)
+	applyChildTranscriptFiles(rows, stats)
+}
+
+func applyLaneRowFiles(rows []laneRow, loop, lanes string, now time.Time, stats *laneReadStats) {
+	for i := range rows {
+		row := &rows[i]
+		if row.RunID == "" {
+			continue
+		}
+		row.Pipeline, row.PipelineNote = readLanePipeline(filepath.Join(loop, row.RunID, "pipeline.jsonl"), stats)
+		var note string
+		row.LatestAction, note, row.LogGrewAtMS = readLaneActionCounted(runLogPath(lanes, row.LaneID, row.RunID), row.Backend, stats)
+		if note != "" {
+			if row.Note != "" {
+				row.Note += "; "
+			}
+			row.Note += note
+		}
+		if row.State == "settling" {
+			row.LastStep, row.LastStepAtMS = lastFinishedLaneStepCounted(filepath.Join(loop, row.RunID, "steps.jsonl"), stats)
+		}
+		if row.LatestAction.Kind == "liveness" && row.LogGrewAtMS != nil {
+			row.LatestAction.Text = "log grew " + laneAge(now.UnixMilli()-*row.LogGrewAtMS) + " ago"
+		}
+	}
 }
 
 func laneAge(ms int64) string {

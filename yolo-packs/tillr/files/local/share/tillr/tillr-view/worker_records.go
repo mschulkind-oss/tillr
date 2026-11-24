@@ -190,6 +190,14 @@ func scanWorkerRecords(rows interface {
 }
 
 func enrichWorkerRecords(r *store.Reader, rows []laneRow, stats *laneReadStats) error {
+	if err := enrichWorkerStoreRecords(r, rows); err != nil {
+		return err
+	}
+	applyChildTranscriptFiles(rows, stats)
+	return nil
+}
+
+func enrichWorkerStoreRecords(r *store.Reader, rows []laneRow) error {
 	rowRuns := make([]map[string]bool, len(rows))
 	wanted := map[string]bool{}
 	for i := range rows {
@@ -211,26 +219,6 @@ func enrichWorkerRecords(r *store.Reader, rows []laneRow, stats *laneReadStats) 
 	if err != nil {
 		return err
 	}
-	for id, group := range children {
-		updated := false
-		for j := range group.Sessions {
-			s := &group.Sessions[j]
-			if s.EndedAt == nil && s.Turns == nil && s.Transcript != "" {
-				facts := liveChildTranscriptFacts(s.Transcript, stats)
-				if facts.started != nil && s.StartedAt == nil {
-					s.StartedAt = facts.started
-					updated = true
-				}
-				if facts.turns != nil {
-					s.Turns = facts.turns
-					updated = true
-				}
-			}
-		}
-		if updated {
-			children[id] = group
-		}
-	}
 	for i := range rows {
 		row := &rows[i]
 		row.Progress = []progressClaim{}
@@ -248,6 +236,62 @@ func enrichWorkerRecords(r *store.Reader, rows []laneRow, stats *laneReadStats) 
 		}
 	}
 	return nil
+}
+
+func applyChildTranscriptFiles(rows []laneRow, stats *laneReadStats) {
+	resolved := map[string]childrenView{}
+	for i := range rows {
+		row := &rows[i]
+		var cloned map[string]childrenView
+		for id, group := range row.ChildSessions {
+			if prev, ok := resolved[id]; ok {
+				if cloned == nil {
+					cloned = make(map[string]childrenView, len(row.ChildSessions))
+					for k, v := range row.ChildSessions {
+						cloned[k] = v
+					}
+				}
+				cloned[id] = prev
+				continue
+			}
+			var sessions []childSessionView
+			for j := range group.Sessions {
+				s := group.Sessions[j]
+				if s.EndedAt == nil && s.Turns == nil && s.Transcript != "" {
+					facts := liveChildTranscriptFacts(s.Transcript, stats)
+					changed := false
+					if facts.started != nil && s.StartedAt == nil {
+						s.StartedAt = facts.started
+						changed = true
+					}
+					if facts.turns != nil {
+						s.Turns = facts.turns
+						changed = true
+					}
+					if changed {
+						if sessions == nil {
+							sessions = append([]childSessionView(nil), group.Sessions...)
+						}
+						sessions[j] = s
+					}
+				}
+			}
+			if sessions != nil {
+				updated := childrenView{Recorded: group.Recorded, Sessions: sessions}
+				resolved[id] = updated
+				if cloned == nil {
+					cloned = make(map[string]childrenView, len(row.ChildSessions))
+					for k, v := range row.ChildSessions {
+						cloned[k] = v
+					}
+				}
+				cloned[id] = updated
+			}
+		}
+		if cloned != nil {
+			row.ChildSessions = cloned
+		}
+	}
 }
 
 type childTranscriptFacts struct {
