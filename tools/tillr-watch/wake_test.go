@@ -53,38 +53,41 @@ func walPrecedesIndexPublish(t *testing.T, useSymlink bool) {
 	entered := installWaitForWriterHook(t)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	type waitResult struct {
 		code        int
 		out, stderr string
 	}
-	done := make(chan waitResult, 1)
+	var result waitResult
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		var out, stderr bytes.Buffer
-		code := run(ctx, []string{"wait", "--store", storeArg, "--rules", rules, "--timeout", "400ms"}, &out, &stderr)
-		done <- waitResult{code: code, out: out.String(), stderr: stderr.String()}
+		code := runWithTicks(ctx, []string{"wait", "--store", storeArg, "--rules", rules}, &out, &stderr, make(chan time.Time))
+		result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
+	}()
+	defer func() {
+		cancel()
+		<-done
 	}()
 	awaitAttached(t, s)
 
 	helper := startSplitWALHelper(t, ctx, s.Path())
-	waitedForWriter := false
 	select {
 	case <-entered:
-		waitedForWriter = true
-	case <-time.After(100 * time.Millisecond):
+	case <-done:
+		t.Fatalf("wait exited before synchronizing with unpublished WAL writer: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	case <-ctx.Done():
+		t.Fatalf("wait did not synchronize with the unpublished WAL writer: %v", ctx.Err())
 	}
 	helper.publishAndUnlock(t)
 
 	select {
-	case r := <-done:
-		if r.code != 0 || r.stderr != "" || !strings.Contains(r.out, "item-a has 2 refusals") {
-			t.Fatalf("wait missed split WAL commit: code=%d out=%q stderr=%q", r.code, r.out, r.stderr)
-		}
-		if !waitedForWriter {
-			t.Fatal("wait did not synchronize with the unpublished WAL writer")
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("wait did not exit")
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("wait did not exit: %v", ctx.Err())
+	}
+	if result.code != 0 || result.stderr != "" || !strings.Contains(result.out, "item-a has 2 refusals") {
+		t.Fatalf("wait missed split WAL commit: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
 	}
 }
 
