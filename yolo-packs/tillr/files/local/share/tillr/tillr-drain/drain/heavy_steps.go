@@ -183,7 +183,9 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		cmd.Stderr = &stderr
 		var stdout strings.Builder
 		cmd.Stdout = &stdout
+		stopLogWatch := startHeavyCheckLogProgressWatcher(ctx, logs, only, s.heavyLogSampleInterval)
 		runErr := runOwnedHeavy(ctx, cmd, "declaration")
+		stopLogWatch()
 		if cleanupLost(runErr) {
 			return nil, runErr
 		}
@@ -307,9 +309,14 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	}
 	stopWatch := startHeavyLegacyProgressWatcher(ctx, legacyProgressPath, legacyTipSHA, legacyNonce)
 	stopReplayWatch := startHeavyReplayProgressWatcher(ctx, replayProgressPath, only)
+	stopLogWatch := func() {}
+	if only != "" && logPath != "" {
+		stopLogWatch = startHeavyLogFileProgressWatcher(ctx, logPath, only, s.heavyLogSampleInterval)
+	}
 	runErr := runOwnedHeavy(ctx, cmd, "legacy")
 	stopWatch()
 	stopReplayWatch()
+	stopLogWatch()
 	if replayProgressPath != "" {
 		_ = os.Remove(replayProgressPath)
 	}

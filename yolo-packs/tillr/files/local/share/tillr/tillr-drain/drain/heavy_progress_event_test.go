@@ -689,6 +689,243 @@ func TestHeavyProgressEventsSilentWhenUnitsDoNotAdvance(t *testing.T) {
 	}
 }
 
+func TestHeavyProgressEventsWatchDeclarationCheckLogGrowth(t *testing.T) {
+	t.Run("growing-log", func(t *testing.T) {
+		root, base := heavyRepo(t)
+		heavyGit(t, root, "update-ref", GreenRef, base)
+		storePath := newHeavyProgressStore(t)
+		work := scratchUnderDurable(t)
+
+		checkID := "go-test-shards-test"
+		if err := os.MkdirAll(filepath.Join(root, "tools", "gate", "checks"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", checkID+".json"),
+			`{"id":"`+checkID+`","scope":"tree","tier":"heavy","reads":["value"],"command":["true"]}`)
+		tip := heavyCommit(t, root, "decl-grow")
+
+		startedFile := filepath.Join(work, "started")
+		growFile := filepath.Join(work, "grow")
+		releaseFile := filepath.Join(work, "release")
+
+		fakeGate := executable(t, `
+logs=""
+only=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--logs) logs="$2"; shift 2 ;;
+		--only) only="$2"; shift 2 ;;
+		*) shift ;;
+	esac
+done
+mkdir -p "$logs"
+log="$logs/00-${only}.log"
+printf 'watchdog CPU source: kernel task-clock counter\n' > "$log"
+touch `+startedFile+`
+while [ ! -e `+growFile+` ]; do sleep 0.01; done
+while [ ! -e `+releaseFile+` ]; do
+	printf '.' >> "$log"
+	sleep 0.02
+done
+printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"pass","duration_ms":50}]}}\n' "$only"
+`)
+
+		steps := &ProcessSteps{
+			Root:                   root,
+			LaneRoot:               work,
+			HeavyGateBin:           fakeGate,
+			heavyLogSampleInterval: 20 * time.Millisecond,
+		}
+		runner := heavyFixture(t, root, steps.JudgeHeavy)
+		runner.Store = storePath
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := runner.Run(context.Background())
+			done <- err
+		}()
+		defer func() {
+			_ = os.WriteFile(growFile, nil, 0o644)
+			_ = os.WriteFile(releaseFile, nil, 0o644)
+		}()
+
+		deadline := time.After(10 * time.Second)
+		for {
+			if _, err := os.Stat(startedFile); err == nil {
+				break
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("heavy exited early waiting for %s: %v", startedFile, err)
+			case <-deadline:
+				t.Fatalf("timed out waiting for %s", startedFile)
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+
+		// Initial log creation/header alone must not emit a running progress event.
+		time.Sleep(80 * time.Millisecond)
+		for _, ev := range readHeavyProgressEvents(t, storePath) {
+			if ev.Fact.Phase == "progress" {
+				t.Fatalf("saw unexpected progress event before log grew: %+v", ev.Fact)
+			}
+		}
+
+		// Grow the log and wait for a live running progress event before completion.
+		if err := os.WriteFile(growFile, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		deadline = time.After(10 * time.Second)
+		for {
+			events := readHeavyProgressEvents(t, storePath)
+			sawRunning := false
+			for _, ev := range events {
+				if ev.Fact.Phase == "ended" {
+					t.Fatalf("saw premature ended before check was released: %+v", events)
+				}
+				if ev.Fact == (HeavyProgressFact{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "running"}) {
+					sawRunning = true
+				}
+			}
+			if sawRunning {
+				break
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("heavy exited before release: %v", err)
+			case <-deadline:
+				t.Fatalf("timed out waiting for live log-growth progress event; events=%+v", readHeavyProgressEvents(t, storePath))
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+
+		if err := os.WriteFile(releaseFile, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		events := readHeavyProgressEvents(t, storePath)
+		if len(events) < 4 {
+			t.Fatalf("events = %+v, want started, >=1 running progress, pass progress, ended", events)
+		}
+		if want := (HeavyProgressFact{TipSHA: tip, Phase: "started"}); events[0].Fact != want {
+			t.Fatalf("event[0] = %+v, want %+v", events[0].Fact, want)
+		}
+		runningFact := HeavyProgressFact{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "running"}
+		for i := 1; i < len(events)-2; i++ {
+			if events[i].Fact != runningFact {
+				t.Fatalf("event[%d] = %+v, want %+v", i, events[i].Fact, runningFact)
+			}
+		}
+		if want := (HeavyProgressFact{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "pass"}); events[len(events)-2].Fact != want {
+			t.Fatalf("completion event = %+v, want %+v", events[len(events)-2].Fact, want)
+		}
+		if want := (HeavyProgressFact{TipSHA: tip, Phase: "ended", Outcome: "green"}); events[len(events)-1].Fact != want {
+			t.Fatalf("final event = %+v, want %+v", events[len(events)-1].Fact, want)
+		}
+	})
+
+	t.Run("silent-log", func(t *testing.T) {
+		root, base := heavyRepo(t)
+		heavyGit(t, root, "update-ref", GreenRef, base)
+		storePath := newHeavyProgressStore(t)
+		work := scratchUnderDurable(t)
+
+		checkID := "silent-check"
+		if err := os.MkdirAll(filepath.Join(root, "tools", "gate", "checks"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", checkID+".json"),
+			`{"id":"`+checkID+`","scope":"tree","tier":"heavy","reads":["value"],"command":["true"]}`)
+		tip := heavyCommit(t, root, "decl-silent")
+
+		startedFile := filepath.Join(work, "started")
+		releaseFile := filepath.Join(work, "release")
+
+		fakeGate := executable(t, `
+logs=""
+only=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--logs) logs="$2"; shift 2 ;;
+		--only) only="$2"; shift 2 ;;
+		*) shift ;;
+	esac
+done
+mkdir -p "$logs"
+log="$logs/00-${only}.log"
+printf 'watchdog CPU source: kernel task-clock counter\n' > "$log"
+touch `+startedFile+`
+while [ ! -e `+releaseFile+` ]; do sleep 0.01; done
+printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"pass","duration_ms":50}]}}\n' "$only"
+`)
+
+		steps := &ProcessSteps{
+			Root:                   root,
+			LaneRoot:               work,
+			HeavyGateBin:           fakeGate,
+			heavyLogSampleInterval: 20 * time.Millisecond,
+		}
+		runner := heavyFixture(t, root, steps.JudgeHeavy)
+		runner.Store = storePath
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := runner.Run(context.Background())
+			done <- err
+		}()
+		defer func() {
+			_ = os.WriteFile(releaseFile, nil, 0o644)
+		}()
+
+		deadline := time.After(10 * time.Second)
+		for {
+			if _, err := os.Stat(startedFile); err == nil {
+				break
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("heavy exited early: %v", err)
+			case <-deadline:
+				t.Fatal("timed out waiting for startedFile")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+
+		// Wait across several sample intervals while log size stays flat.
+		time.Sleep(100 * time.Millisecond)
+		for _, ev := range readHeavyProgressEvents(t, storePath) {
+			if ev.Fact.Phase == "progress" {
+				t.Fatalf("silent log emitted progress event: %+v", ev.Fact)
+			}
+		}
+
+		if err := os.WriteFile(releaseFile, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		events := readHeavyProgressEvents(t, storePath)
+		want := []HeavyProgressFact{
+			{TipSHA: tip, Phase: "started"},
+			{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "pass"},
+			{TipSHA: tip, Phase: "ended", Outcome: "green"},
+		}
+		if len(events) != len(want) {
+			t.Fatalf("events = %+v, want %+v", events, want)
+		}
+		for i := range want {
+			if events[i].Fact != want[i] {
+				t.Fatalf("event[%d] = %+v, want %+v", i, events[i].Fact, want[i])
+			}
+		}
+	})
+}
+
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)

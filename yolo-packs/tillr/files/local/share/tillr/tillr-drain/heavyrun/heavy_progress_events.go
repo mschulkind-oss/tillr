@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -160,6 +162,144 @@ func HeavyStoreStepProgress(ctx context.Context, checkID, outcome string) {
 func HasHeavyStoreProgress(ctx context.Context) bool {
 	p, _ := ctx.Value(heavyStoreProgressKey{}).(*heavyStoreProgress)
 	return p != nil && p.runner.Store != ""
+}
+
+// HeavyLogSampleInterval matches tillr-gate's watchdog sampling cadence.
+const HeavyLogSampleInterval = time.Second
+
+func heavyCheckLogMatches(name, checkID string) bool {
+	safe := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '.', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, checkID)
+	stem := "00-" + safe
+	if name == stem+".log" {
+		return true
+	}
+	return strings.HasPrefix(name, stem+".attempt-") && strings.HasSuffix(name, ".log")
+}
+
+func readHeavyCheckLogSizes(logDir, checkID string) map[string]int64 {
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		return nil
+	}
+	sizes := make(map[string]int64, 1)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !heavyCheckLogMatches(name, checkID) {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(logDir, name))
+		if err != nil || info.IsDir() {
+			continue
+		}
+		sizes[name] = info.Size()
+	}
+	return sizes
+}
+
+type heavyLogProgressTracker struct {
+	ctx       context.Context
+	checkID   string
+	readSizes func() map[string]int64
+	seen      map[string]int64
+}
+
+func newHeavyLogProgressTracker(ctx context.Context, checkID string, readSizes func() map[string]int64) *heavyLogProgressTracker {
+	return &heavyLogProgressTracker{
+		ctx:       ctx,
+		checkID:   checkID,
+		readSizes: readSizes,
+		seen:      map[string]int64{},
+	}
+}
+
+func (t *heavyLogProgressTracker) sample() bool {
+	grew := false
+	for name, size := range t.readSizes() {
+		if size == 0 {
+			delete(t.seen, name)
+			continue
+		}
+		prev, ok := t.seen[name]
+		if !ok {
+			t.seen[name] = size
+			continue
+		}
+		if size > prev {
+			t.seen[name] = size
+			grew = true
+		} else if size < prev {
+			t.seen[name] = size
+		}
+	}
+	if grew {
+		HeavyStoreStepProgress(t.ctx, t.checkID, "running")
+	}
+	return grew
+}
+
+// StartHeavyCheckLogProgressWatcher samples a running declaration proof check's
+// log file in logDir and records drain.heavy-progress (phase="progress",
+// outcome="running") whenever the file grows between two samples.
+func StartHeavyCheckLogProgressWatcher(ctx context.Context, logDir, checkID string, interval time.Duration) func() {
+	if logDir == "" || checkID == "" || !HasHeavyStoreProgress(ctx) {
+		return func() {}
+	}
+	return startHeavySizeProgressWatcher(ctx, checkID, interval, func() map[string]int64 {
+		return readHeavyCheckLogSizes(logDir, checkID)
+	})
+}
+
+// StartHeavyLogFileProgressWatcher samples a single proof check's log file and
+// records drain.heavy-progress (phase="progress", outcome="running") whenever
+// the file grows between two samples.
+func StartHeavyLogFileProgressWatcher(ctx context.Context, logPath, checkID string, interval time.Duration) func() {
+	if logPath == "" || checkID == "" || !HasHeavyStoreProgress(ctx) {
+		return func() {}
+	}
+	return startHeavySizeProgressWatcher(ctx, checkID, interval, func() map[string]int64 {
+		info, err := os.Stat(logPath)
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		return map[string]int64{logPath: info.Size()}
+	})
+}
+
+func startHeavySizeProgressWatcher(ctx context.Context, checkID string, interval time.Duration, readSizes func() map[string]int64) func() {
+	if interval <= 0 {
+		interval = HeavyLogSampleInterval
+	}
+	tracker := newHeavyLogProgressTracker(ctx, checkID, readSizes)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				tracker.sample()
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
 }
 
 func heavyEndedOutcome(ctx context.Context, result string, err error) string {
