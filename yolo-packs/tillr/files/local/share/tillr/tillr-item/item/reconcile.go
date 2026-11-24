@@ -241,7 +241,7 @@ func Reconcile(ctx context.Context, r *store.Reader, in ReconcileInput) (Reconci
 			if carried {
 				result.Reason = "carried"
 			} else {
-				result.Block = reconcileProposal("item-design-"+slug, p+",docs/roadmap.md,docs/tillr/roadmap.md,docs/pi/roadmap.md", false)
+				result.Block = reconcileProposal("item-design-"+slug, p+",docs/roadmap.md,docs/tillr/roadmap.md", false)
 			}
 		default:
 			result.Case = "held"
