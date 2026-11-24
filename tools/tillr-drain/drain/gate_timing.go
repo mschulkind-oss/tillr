@@ -275,7 +275,7 @@ func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateChec
 				}
 			}
 			// Only fall back to span timestamps when wall_ms was not emitted at all
-			// (for example, an older candidate or direct fork-check run) and the
+			// (for example, a judging program that reports no wall time) and the
 			// span actually advanced past its start; an unfinished span can have its
 			// end copied from its start, which is not a measured zero.
 			if attrs.WallMS == nil && !hasWallMS && attrs.Execution == gateExecutionRan && span.StartNS > 0 {

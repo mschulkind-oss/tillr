@@ -181,7 +181,7 @@ func runFace(args []string) int {
 	worktree := flags.String("worktree", "", "the worktree to run the plan in (required)")
 	outputPath := flags.String("output", "", "where to write the gate.verdict record (default: stdout)")
 	logDir := flags.String("logs", "", "where to write each check's log (default: <verdict_id>.logs beside the output)")
-	gateProgram := flags.String("gate", "", "a gate program to run instead of the plan's checks, e.g. tools/fork-check.py")
+	gateProgram := flags.String("gate", "", "a gate program to run instead of the plan's checks, e.g. tools/gate/change-gate.py")
 	gateTimeout := flags.Duration("gate-timeout", 30*time.Minute, "reporting target for the --gate program; only sampled stalls kill it (0 disables target reporting)")
 	var gateArgs stringList
 	flags.Var(&gateArgs, "gate-arg", "an argument to pass to the --gate program, in order (repeatable)")

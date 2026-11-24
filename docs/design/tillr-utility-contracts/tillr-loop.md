@@ -21,11 +21,11 @@ depends-on:
 
 | Face | What it does | Flags the drain passes |
 | :--- | :--- | :--- |
-| `gate` | `tillr-gate change`, then the registry, then `tillr-gate plan`, then `tillr-gate run` | the candidate flags `--item --lane --run --worktree --base --head --root` |
+| `gate` | `tillr-gate change`, then `tillr-gate plan` over the candidate's `tools/gate/checks` declarations, then `tillr-gate run` | the candidate flags `--item --lane --run --worktree --base --head --root` |
 | `land` | one `tillr-land pass` | the candidate flags, and `--observed-trunk --base-ref --message-from` |
 | `verdict` | `tillr-item show`, then one `tillr-item verdict record` per verification-only criterion | the candidate flags and `--verdict` |
-| `fixer-gate` | replaces itself with the repository's check replay, for a fixer's candidate | the candidate flags and `--only` |
-| `replay`, `rolling` | replace themselves with the repository's check script | `--only`; none |
+| `fixer-gate` | replaces itself with the judge of one named whole-tree declaration, in a fixer's candidate worktree | the candidate flags and `--only` |
+| `replay`, `rolling` | replace themselves with `tillr-gate checks --heavy-tree` (or `tools/gate/tree-check.py --only` for a fast declaration) on the checked-out revision | `--only`; `--all` or `--since` |
 | `describe` | prints `{"hooks": {<face>: [<flags>]}}` | none |
 | `self-check` | prints the commands it would run, and runs nothing | none |
 
@@ -51,10 +51,9 @@ None.
 
 | Place | Read by |
 | :--- | :--- |
-| `<root>/.tillr/loop/<run>/`: `gate.change.json`, `gate.plan.json`, `gate.verdict.json`, `registry.json`, `logs/`, `change-logs/`. The gate writes the first three where this script tells it to | land, drain, view, `tillr-trace` |
+| `<root>/.tillr/loop/<run>/`: `gate.change.json`, `gate.plan.json`, `gate.verdict.json`, `logs/`, `change-logs/`. The gate writes the first three where this script tells it to | land, drain, view, `tillr-trace` |
 | [`drain-argv.json`](../../../tools/tillr-loop/drain-argv.json): every argument list the drain sends | its own suite; written by a drain test |
 | `tools/tillr-drain/drain/tillr-loop.py`, the copy, written by `sync-adapter.py` | drain |
-| `PI_FORKS_ROOT`, set for the gate step | the repository's check script |
 
 ### 1.5 Names others match on
 
@@ -74,7 +73,7 @@ None.
 | `verdict record` with `--store --input --now`, accepting the record of [§1.2](#12-records) | [tillr-item](./tillr-item.md) | subprocess | the `verdict` face |
 | The four claim classes; the verdict `done`; the actor kind `mechanical`; that a criterion's hash is the SHA-256 of its text | [tillr-item](./tillr-item.md) | copies | the `verdict` face |
 | The argument lists of `drain-argv.json`, and `TILLR_LOOP_ADAPTER_BUILD` | [tillr-drain](./tillr-drain.md) | subprocess, environment | every face |
-| The registry export, the check replay and the change gate | the repository's gate scripts, outside tillr | subprocess | `gate`, `fixer-gate`, `replay`, `rolling` |
+| The change gate (`tools/gate/change-gate.py`) and the fast tree check (`tools/gate/tree-check.py`) | the repository's gate scripts, outside tillr | subprocess | `gate`, `fixer-gate`, `replay`, `rolling` |
 
 It reads no store.
 
@@ -82,7 +81,7 @@ It reads no store.
 
 **Contract:** the six hook faces with the flags `describe` prints; `--check-argv`; the five exit codes; the run directory's three record file names; the `item.verdict` record it writes.
 
-**Private:** `self-check`'s text; every refusal sentence; the registry cache; how it finds the three programs.
+**Private:** `self-check`'s text; every refusal sentence; how it finds the three programs.
 
 **The copy is a generated file.** It has one writer, the sync script, and two tests already fail when it differs. It stays, because a Go program cannot embed a file from another module.
 

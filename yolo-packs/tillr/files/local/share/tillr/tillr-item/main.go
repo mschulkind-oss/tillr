@@ -364,7 +364,7 @@ func showFace(args []string) (record.Envelope, int) {
 }
 
 // stateFace moves one item's own state and echoes the item as stored. It is the writer of
-// board-item-state-model.md §2's item states, as distinct from the criterion states the
+// the item states of docs/reference/tillr-item-states.md, as distinct from the criterion states the
 // verdict face moves: an item's state says where its work stands, a criterion's says what a
 // judge found, and one face writing both would make a criterion's freeze depend on a
 // caller's care.

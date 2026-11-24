@@ -562,9 +562,7 @@ answers `done`. An agent node whose footer is missing, or names no ending
 (`done`, `failed`, `blocked`), gave no answer the loop can read: that node
 waits for its own backend to reopen before it runs again. Its finished siblings are kept.
 
-Before 2026-11-18 the loop read `**RESULT: done**` as `done**`, recorded that
-reader `blocked` with no cause, and abandoned its set, so the planner could
-only say `run-link-missing`. That record now holds as
+A node record that ended `blocked` with no cause and an abandoned set holds as
 `node-answer-unread: <node>`, read from the run's own report. Its mover is a
 retry of the item's latest finished run; a build retry naming any other run
 is refused with the accepted command, since the plan would ignore it. A retry
@@ -764,7 +762,7 @@ another restart.
   hold, or a trunk move. It prints the held count and the first five items with their
   reasons once, then stays quiet until something changes. SIGINT or SIGTERM stops it
   with exit code 0 and a final operator-stop line. `--exit-when-drained` opts into
-  stopping with `queue-drained` and exit code 0; the former `--stay` flag is removed.
+  stopping with `queue-drained` and exit code 0.
 - **The loop drains the queue the documents declare.** Before deciding anything at a
   new trunk commit, `loop` runs `tillr-item sync` (the `--item-bin` binary) against its
   `--root` and `--store`. The result's `synced_sha` and a report line name that commit.
@@ -1030,11 +1028,11 @@ order. The lock is released before checks or judges run, so heavy judging and la
 remain concurrent.
 
 Supervision requires Linux child adoption and stable kernel process handles. Adoption
-makes the supervisor the parent of abandoned grandchildren, including legacy commands
-in separate sessions; the handles prevent signaling a reused process ID. It waits for
+makes the supervisor the parent of abandoned grandchildren, including checks a judging
+program starts in separate sessions; the handles prevent signaling a reused process ID. It waits for
 the kernel to confirm every descendant has exited before acknowledging cleanup, with
-no cancellation timeout on that acknowledgement. When a declaration check fails or the
-legacy program reports a failure on exit, recovery searches for the culprit and offers a
+no cancellation timeout on that acknowledgement. When a declaration check fails or a
+rolling program reports a failure on exit, recovery searches for the culprit and offers a
 revert in `worktree-replay` while the proof continues. Recovery handles one failure at a
 time and files any fixers at the end of the run. Attribution stays on the commit the
 proof judged, even if trunk advances during the proof or a replay. Before filing, the
@@ -1080,45 +1078,42 @@ tip again. The loop still honors an operator stop during a proof.
 Because the supervisor adopts every orphan its command leaves, it also reaps them as
 they exit, on each `SIGCHLD`, rather than only after the command ends. It looks before
 it reaps (`waitid` with `WNOWAIT`), so it never takes the exit status of its own direct
-child, which is the command's verdict. Before this, one supervisor of a heavy gate run on
-2026-11-18 held 6,408 zombies, nearly all `git`.
+child, which is the command's verdict.
 `TestASubreaperReapsTheOrphansItAdoptsAndLeavesItsOwnChild` in
 [`heavyrun/heavy_reap_linux_test.go`](./heavyrun/heavy_reap_linux_test.go) covers both halves.
 
-The runner judges every heavy tree declaration, reusing the gate's remembered results,
-and the rolling checks that are not declarations. `--heavy-gate` names the declaration
-judge; `--rolling` names the rolling program. An explicitly empty `--rolling` disables
-the rolling program's coverage, not the declaration checks. Missing programs or missing
-verdict evidence are reported as faults, never silently passed.
+The runner judges every heavy whole-tree declaration in
+[`tools/gate/checks/`](../gate/checks/), reusing the gate's remembered results.
+`--heavy-gate` names the declaration judge (default `tillr-gate`). `--rolling` names an
+optional rolling program whose checks the runner judges as well; it is empty by default
+(`DefaultRollingProgram` in [`drain/trunk.go`](./drain/trunk.go)), so the declarations
+are the whole proof. Missing programs or missing verdict evidence are reported as faults,
+never silently passed.
 
-The rolling program judges the landing-tier checks as well as its own, so the green
-pointer means every check that guards the trunk passed at that commit. A landing gate's
-verdict covers only the checks its own diff selected, and a commit an operator made
-directly carries none. A check the rolling program reports as unavailable makes no claim
-and does not hold the pointer.
+The green pointer means every heavy declaration, and every check of a named rolling
+program, passed at that commit. A landing gate's verdict covers only the checks its own
+diff selected, and a commit an operator made directly carries none. A check a rolling
+program reports as unavailable makes no claim and does not hold the pointer.
 
-A fork-quality step that refuses because its candidate checkout is not the series' tree
-(`STALE`) judged nothing, so it holds the run at unknown rather than passing it.
+A rolling program's check that reports `STALE` judged nothing, so it holds the run at
+unknown rather than passing it.
 
 The proof compares its commit to the green pointer. It starts declaration checks whose
 reads match changed files or contain them under a directory read ending in `/`, in name
-order. If a changed path matches a legacy watch, the legacy program runs next, before
-the remaining declarations in name order. Otherwise the legacy program runs last.
-Without a green pointer or any affected check, all declarations run in name order,
-then the legacy program. This changes only the order, not the checks selected or the
-order inside the legacy program.
+order, then the remaining declarations in name order. Without a green pointer or any
+affected check, all declarations run in name order. A named rolling program runs last,
+or between the two groups when a changed path matches one of its watches. This changes
+only the order, not the checks selected or the order inside the rolling program.
 
 Completed passing checks are saved with the exact trunk tip under the heavy runner's
 lock, before the next check starts. A replacement loop starts proof at its first tick,
 even without a new landing, and logs `reused checks=` for passes it retains. A different
 tip can retain a pass only when the check's inputs are unchanged. Failed, unavailable,
 and interrupted checks do not count as passes.
-Declarations are judged individually. The default Python legacy gate keeps its own
-planner and scheduler; an embedded observer saves each completed pass atomically.
-A stalled check's successful retry is also saved before the next retry starts, and
-both declaration checks and the default legacy gate read those passes after restart.
-Custom legacy programs keep their batch/spans contract and must supply their own
-incremental persistence if they need reuse inside an interrupted batch.
+Declarations are judged individually. A stalled check's successful retry is also saved
+before the next retry starts, and declaration checks read those passes after restart.
+A rolling program keeps its batch/spans contract and must supply its own incremental
+persistence if it needs reuse inside an interrupted batch.
 
 A run with no failing or unjudged check advances `refs/tillr/green` with a guarded Git
 update: the value read before judging must still be the current value, and it must be
@@ -1139,8 +1134,9 @@ never forced), so the remote never receives a commit the proof has not passed. L
 nothing in this mode. A failed push logs its outcome kind,
 shows in `tillr view waiting`, holds nothing, and is retried at the next green advance (and once
 at loop start) because "remote is behind green" is recomputed each time. `what = "tip"` pushes
-the trunk tip after each landing instead; `"none"` pushes nothing. The pre-push hook runs, and
-it publishes fork patch branches at their local tips whatever the pushed commit is; see
+the trunk tip after each landing instead; `"none"` pushes nothing. The repository's `pre-push` hook
+runs as for any push, and one that publishes fork patch branches publishes them at their local
+tips whatever the pushed commit is; see
 [Pushing what the proof has passed](../../docs/reference/tillr-restart.md#pushing-what-the-proof-has-passed).
 
 A push the remote refuses because it has moved (porcelain status `[rejected]` with `fetch first`,
@@ -1193,9 +1189,8 @@ trunk counts when available. `remote-rewritten` gives the fetched `remote_tip` a
 baseline as `previous_remote_tip`. The waiting view still reads `detail`.
 
 A failing check holds the pointer and is run alone at the pointer and by bisection on
-recorded landings in the range. Legacy span IDs retain their kind and label so replay
-uses the old program's selector vocabulary rather than confusing its stable report ID
-with a selector. When the range cannot identify a single culprit (the base is red,
+recorded landings in the range. A rolling program's span IDs retain their kind and label,
+so a replay hands the program its own selector rather than its stable report ID. When the range cannot identify a single culprit (the base is red,
 there are no recorded landings, or the last landing is green), a fixer names both full
 commit IDs of the observed range and says attribution is unavailable, including the
 check's needs and tools. The last recorded landing is checked before narrowing the
@@ -1203,8 +1198,8 @@ search, so an earlier red landing is not blamed when the last one passed. Otherw
 red landing receives a fixer: an item that repairs the broken trunk, containing every
 check attributed to it. Its path hints combine the checks' declared sources and tests
 with the paths touched by every commit since the last green through the current tip, even
-paths later reverted. Legacy checks obtain their read paths from the gate's declaration
-export, not their recorded output writes. The hints exclude the gate's own code. The
+paths later reverted. A rolling program's checks take their read paths from the reads and
+watches its spans declare, not from their recorded output writes. The hints exclude the gate's own code. The
 fixer follows the same deny-list as any other worker.
 
 A red that names no landing still gets a mover. When the check is red at the pointer, when
@@ -1212,7 +1207,8 @@ there is no pointer, or when attribution itself answers no verdict, the runner f
 fixer against the tip. Its brief says why no landing is named, in the runner's words, with
 the judge's recorded output. The run stays `red` and the pointer holds; such a red is never
 `unknown`, and the fixer is filed against the tip. Attribution replays the check with
-the replay program (`--replay`), which plans over every tracked path. A stopped loop is not an
+the replay program (`--replay`), which judges the one named check on the whole tree at
+that revision. A stopped loop is not an
 attribution failure: it files nothing, and the next run judges again.
 
 A later red tip for the same check attaches to an unresolved fixer rather than filing a
@@ -1221,7 +1217,7 @@ names, because its id carries the earlier red commit. The attachment records the
 clearing an existing owner hold. Both filing and attachment snapshot each failing check's
 output and triage packet under `<lane-root>/.fixers/` and record the paths in a
 `drain.fixer-logs` event, whether the red check came from an after-merge declaration or
-legacy proof, a before-merge rolling run, a candidate gate acquittal, or a `trunk` obstacle
+rolling-program proof, a before-merge rolling run, a candidate gate acquittal, or a `trunk` obstacle
 replay. When `LaneStager` stages a trunk fixer, it copies each recorded check log (along
 with any whole-log `.log` sibling of a `.triage.log`) into
 `<root>/.tillr/loop/<run-id>/fixer.logs/` and populates `## Facts carried` with the failing
@@ -1247,8 +1243,7 @@ fixer names is among the proof's passed checks. The `trunk-broken` holds behind 
 then gone on that plan, and an acquittal waiting on it is released once the selected lane
 base contains the proved commit. A proof from before this rule, which lists no checks,
 resolves nothing. The tip run's own passes are proof too, check by check: the runner
-and the legacy program's adapter record when each check passed on the tip
-(`heavy-progress.json`, `heavy-legacy-progress.json`), so a stale fixer, one whose named
+records when each check passed on the tip (`heavy-progress.json`), so a stale fixer, one whose named
 checks already pass on a tip containing its red commit, is resolved by those passes
 while the rest of the run is still going or is red for another check. A fixer that names
 a check both by its kind (`tillr-docs`, the replay's selector) and by a labelled id of that
@@ -1301,7 +1296,7 @@ at the next sync, which every loop start runs. The log reads
 `loop: withdrew the verdicts of reverted landings: item-x (1a2b3c4d5e6f)`.
 
 A heavy run logs as it goes, not only when it ends. Each declaration check's verdict is a
-line as the check ends (`loop: heavy <check> <result> in <time>`), and the legacy program
+line as the check ends (`loop: heavy <check> <result> in <time>`), and a rolling program
 gives one line with its failing checks. A failing check starts the culprit search with
 `loop: heavy <check> failed at tip <sha>; searching for the first red landing since green
 <sha>`, and each replay is two lines: where and why it replays (the green base, the last
@@ -1312,7 +1307,7 @@ search skips over a failing parent, the runner searches the full first-parent pr
 A replay with no verdict is not retried: the search ends there, says so, and files the
 fixer against the tip.
 
-The legacy program's whole output (stdout and stderr) is also written to a file under
+A rolling program's whole output (stdout and stderr) is also written to a file under
 the proof's log directory for the commit, `<lane root>/.rolling/logs/<commit>/legacy-proof.log`
 for the proof and `legacy-replay-<check>.log` for a replay of one check. When a check
 fails, the log line ends `; output: <file>` and a trunk fixer's brief names the file and
@@ -1347,16 +1342,20 @@ the rolling watermark is neither read nor written on this path.
 
 ## Rolling trunk audits on the before-merge path
 
-The following cadence remains only on the `before-merge` compatibility path.
-With no watermark (the tip last judged green by the rolling checks), the default rolling
-run audits every tracked path at the trunk tip with every applicable rolling-tier check,
-regardless of the repository gate's remembered baseline.
-The rolling tier is the group of slower checks deferred from individual landings;
-a matching cached verdict may answer a check without executing it again.
-Later runs select checks over the range since the watermark. Every rolling run also
-runs the gate's fast whole-tree declarations, even when the range selects no slower suite.
-The landing gate, `just done` (over the last verified commit through HEAD), and rolling
-(over its watermark through the judged tip) share those declarations and the same
+A rolling run happens only with `landing_strategy` `before-merge` and a rolling program
+named by `--rolling` or by the definition's `rolling` hook. With none named, which is the
+default, the loop asks for no run and writes no rolling state (`RollingConfigured` in
+[`drain/steps.go`](./drain/steps.go)). A named program is due every eight landings, every
+twenty minutes, and once before the queue drains.
+
+The run judges a detached worktree of the trunk tip. With no watermark (the tip a rolling
+run last judged green) the program's `{since}` is `--all`; later runs hand it
+`--since <watermark>`. The program writes its check spans to the file
+`TILLR_GATE_SPANS_OUT` names. The repository's own rolling program,
+`python3 tools/tillr-loop/tillr-loop rolling {since}`, judges every heavy whole-tree
+declaration at that revision with `tillr-gate checks --heavy-tree`, whichever range flag
+it is handed; a matching remembered result may answer a check without executing it again.
+The landing gate, `just done` and that program share one set of declarations and one
 `tillr-gate checks` runner. The directory
 [`tools/gate/checks/`](../gate/checks/) owns the set; there is no separate allowlist.
 
@@ -1365,8 +1364,8 @@ A green run advances the watermark, but that alone does not claim full coverage:
 by `run_id`, retains the fresh execution count (`ran`), reused verdict count (`cached`),
 and every skipped check's identity and reason (`skipped_checks`). Skips include
 checks assigned to the other tier as well as unchanged or unavailable checks.
-`spans_state` says whether the program supplied readable evidence; older runs have
-no coverage row, and absent or unreadable evidence is not an empty audit.
+`spans_state` says whether the program supplied readable evidence; a run with
+no coverage row, or with absent or unreadable evidence, is not an empty audit.
 The loop's rolling line prints separate ran, cached, and skipped counts, or explicitly
 says counts are unavailable when the program supplies no readable evidence.
 Red or unknown runs do not advance the watermark. A red tree check, like a red slower
@@ -1375,13 +1374,13 @@ whole-tree read becomes the tracked file set at the red commit, excluding the ga
 code; it never grants an unrestricted root edit permission.
 
 While a trunk check is red and a fixer is open, every non-fixer item may still start and
-run (the blanket `trunk-broken` hold on dispatch is removed per [`OQ-GP7`](../../docs/design/tillr-graph-is-the-path.md#OQ-GP7)); a non-fixer run
+run (there is no blanket `trunk-broken` hold on dispatch, per [`OQ-GP7`](../../docs/design/tillr-graph-is-the-path.md#OQ-GP7)); a non-fixer run
 staged while a fixer is open carries a trunk-state notice in its brief naming the red
 checks and open fixer so the worker does not spend its run on a failure it did not cause.
 A trunk fixer runs the same gate as any candidate, over its own diff onto the tip.
 After that gate accepts the diff, the named checks in its stored criterion must pass on
-its tree, even if they are normally deferred to proof. The gate log records any upstream
-reader dropped from those names. A named failure returns to the worker; a check that
+its tree, even if they are normally deferred to proof. A named check the fixer-gate
+program drops (exit 77) is neither a pass nor a failure. A named failure returns to the worker; a check that
 could not judge holds the candidate on the tooling-defect path.
 
 Only landing waits, based on path intersection:
@@ -1404,7 +1403,7 @@ authorized retry; acquitted runs do not consume the failure walk. A fixer closed
 landing releases nothing until a proof passes its checks (see
 [After-merge heavy runs](#after-merge-heavy-runs)). A check green on the base, or a
 candidate with an additional failure of its own, keeps the ordinary refusal. There is no
-landing cap (`red_cap` is removed per [`OQ-GP7`](../../docs/design/tillr-graph-is-the-path.md#OQ-GP7)).
+landing cap (a `red_cap` policy key is ignored, per [`OQ-GP7`](../../docs/design/tillr-graph-is-the-path.md#OQ-GP7)).
 
 A fixer can inherit only failures it does not name. A refusal containing even one named
 failure returns whole to its worker. If an intersecting, unnamed failure would make the
@@ -1412,7 +1411,7 @@ fixer wait on itself or form a cycle of fixers, the check is attached to this fi
 the refusal goes back to its worker instead. The next gate must judge the new name too.
 
 The red base is only half the question when the trunk has moved past it. Work is always
-built against the latest trunk (the owner's ruling of 2026-11-18), so the failing checks
+built against the latest trunk, so the failing checks
 are also judged on the current trunk tip. At the base and at the tip, the loop skips a
 replay only when the after-merge proof or its progress record lists a pass for that exact
 check and commit. A missing or red record still requires replay. The refusal line names
@@ -1421,8 +1420,7 @@ on the tip, the trunk is already repaired there: no fixer is filed, the loop reb
 worker's commits onto the tip and records the tip as the lane's base, and the ordinary
 refusal goes back to the worker saying the trunk is repaired at the tip. A tip the replay
 could not judge confirms nothing. A fork-series candidate, whose base is the fork's own
-HEAD, is judged on that base alone. The rule exists because a run cut nine hours before
-it was judged once filed a fixer for a check the trunk had long since repaired.
+HEAD, is judged on that base alone.
 
 With `landing_strategy` `after-merge`, a confirmed red is then aimed the way the proof aims
 one, unless an open fixer already names every failing check (the red attaches to it): the
@@ -1499,8 +1497,8 @@ candidate examinations release their leases and examiner ownership on exit so th
 resumes the candidate or trunk proof (reusing heavy checks already completed). Candidate
 gate steps and unowned heavy checks run under a subreaper supervisor so descendants placed
 in separate process groups or sessions are terminated and reaped on cancellation rather
-than holding inherited pipes open. The rolling tier's program and the trunk-already-red
-replay's run in a process group of their own: cancellation first sends SIGTERM to the
+than holding inherited pipes open. A rolling program and the trunk-already-red
+replay's program run in a process group of their own: cancellation first sends SIGTERM to the
 program so it can end checks it started in separate sessions, allows
 five seconds for that cleanup before escalating to SIGKILL, and kills what remains in the
 program's own group before removing the scratch worktree. A rolling or replay program that
@@ -1952,7 +1950,7 @@ A change to the item's block, its design document or the trunk raises nothing. T
 that re-raised on such a change (one automatic attempt per input change, and the
 trunk-suspect re-raise after a proven trunk commit) were removed by the same ruling. A
 design run's gate refusal that the trunk caused is the gate's to recognize; until it can
-(the trunk-already-red replay cannot replay fast-gate check ids), such a refusal goes back
+(the trunk-already-red replay has no verdict for a change check, which compares two commits), such a refusal goes back
 to the design seat on each re-raise, and a run staged after the trunk is fixed passes.
 
 Each re-raise except an interrupted one, and each repeat, writes one
@@ -2259,8 +2257,7 @@ on the same head tree holds the item as `gate-stalled`, with both observations.
 which clears `work.GateStall` in `readPendingHistoryState` while keeping
 `work.Candidate` and `work.Done == false` and advances `gateJudgmentEpoch`
 ([`drain/events.go`](./drain/events.go)), so `plan` emits `ActionJudge` on the retained candidate and
-re-gates the exact same head tree. When a trunk fix (such as `4d5d9b2280` on
-2026-11-22) resolves a stall in a script the gate reads from the lane's worktree,
+re-gates the exact same head tree. When a trunk fix resolves a stall in a script the gate reads from the lane's worktree,
 re-gating the same tree cannot pick up that fix; instead, supersede the held run
 with `tillr drain retry --item <id> --run <run> --by <who> --why <reason> --acknowledge gate-failed`
 so the candidate is rebuilt on the current trunk. Its retained evidence and
@@ -2287,9 +2284,7 @@ the same program, arguments and installed binary will answer the same words on e
 so the loop holds the item as `gate-harness-error` after the first answer, with the gate's
 first error lines as the reason, and releases the lane as it does for any held candidate.
 There is no attempt count or time limit: one such answer is enough. The operator fixes the
-gate and clears the fault, or runs `tillr drain retry` naming the held run. Observed
-2026-11-19/20: a candidate was gated every eight seconds for ten hours on
-`flag provided but not defined: -scope-to-change`.
+gate and clears the fault, or runs `tillr drain retry` naming the held run.
 
 Which `tillr-gate` judges a candidate: always the **installed** one, built from the trunk,
 never the candidate's own build, because a candidate that built its own judge would certify
@@ -2399,15 +2394,9 @@ that is still broken is held again rather than run from stale store content.
 Clearing a fault re-examines the same recorded candidate, so it cannot help when the
 candidate itself is what fails: a retained retirement candidate whose tree pins a stale fork
 commit answers `gate-harness-error` again, a candidate record that names a checkout no
-lane has re-raises `candidate-record-mismatch` at once (both on 2026-11-18), and a
+lane has re-raises `candidate-record-mismatch` at once, and a
 `gate-stalled` candidate whose stall was fixed on the trunk after dispatch re-gates the
-same tree and stalls again (2026-11-22, after `4d5d9b2280`). On 2026-11-22 a recorded
-`tillr drain retry --acknowledge gate-failed` was accepted by `AuthorizeRetry` (because
-`runJudged` saw the stalled `gate.verdict` event), but was not acted on: `ReasonGateStalled`
-was absent from `supersededByRetry` in [`drain/retry_supersede.go`](./drain/retry_supersede.go),
-so `supersedeRetriedCandidates` skipped the run and `plan` kept routing to the active fault
-hold (or, after `clear-fault`, to the retained `work.Candidate` where `work != nil && !work.Done`)
-before consulting `retryFor`. The release for those is an operator's retry naming the held run,
+same tree and stalls again. The release for those is an operator's retry naming the held run,
 `tillr drain retry --item <id> --run <run> --by <who> --why <reason>` (with
 `--acknowledge gate-failed` when a `gate.verdict` was recorded, including `gate-stalled`).
 Before each plan, a candidate held by `gate-harness-error`, `gate-stalled`,
@@ -2503,9 +2492,8 @@ runs that never started, so the next dispatch reuses the number. An attempt numb
 therefore not a count of failed builds. It reads one higher than the number of retries
 only after a worker has started in each earlier attempt.
 
-On 2026-11-20 an item filed at 05:31 UTC showed "attempt 8" before its first worker,
-because seven claims refused by lane staging left `running` node rows behind; the cancel
-now deletes them. For a count of work done, read `tillr view lanes` and the item entry in
+A claim refused by lane staging leaves no `running` node row behind: the cancel deletes
+it. For a count of work done, read `tillr view lanes` and the item entry in
 the snapshot (`work`): the runs that started a worker, the attempts that reached a
 verify-seat worker, and the verify refusals (`drain.refusal` with step `verify-not-done`).
 
@@ -2549,9 +2537,9 @@ started, so it has no terminal record, and the next dispatch reuses its run id. 
 can also have moved the item's conflict: a design-seat dispatch marks the conflict
 `awaiting` that design run, and a build dispatched against an answer closes the answer.
 The cancellation undoes that move in the same write, so the re-plan offers the item the
-next lane, as it does for an item with no conflict. Before 2026-11-17 the move was left in
-place. An awaiting conflict then read `conflict-design` with no design run alive, and a
-closed answer held its item as `run-link-missing` or `retry-stale` for an operator. At
+next lane, as it does for an item with no conflict. A record whose move was left in
+place reads as an awaiting conflict (`conflict-design`) with no design run alive, or as a
+closed answer holding its item as `run-link-missing` or `retry-stale`. At
 each pass the loop recognizes those records: the item's latest dispatch is examined
 (`drain.examined`), its run has no terminal record, and the conflict is still as the claim
 left it. It undoes the move, prints one `loop: <item> run <run> was claimed but never
@@ -2711,10 +2699,8 @@ Clearing the hold claims any free offered lane. `drain.candidate-assigned`
 records that claim before staging the pinned commit there; `drain.candidate-staged`
 records completed staging. The assignment ends the earlier release, so a replay reads the
 newly assigned lane as occupied. That is how a second hold on that lane
-releases and resets it, like the first hold did on the original lane. Before 2026-11-17,
-a replay kept the earlier `released` flag. A second hold then freed the lease without the
-reset, and the pin moved on to another lane. That left a copy of the candidate on every
-lane it passed through. Restart recovery finishes incomplete staging, including
+releases and resets it, like the first hold did on the original lane, so the candidate
+leaves no copy on a lane it passed through. Restart recovery finishes incomplete staging, including
 a checkout materialized before its event. The candidate's head, base, run identity,
 original fence, and any passing verdict survive lane reuse. This starts no new worker
 and spends no new model attempt. A retained passing verdict retries landing, not gating.
@@ -2818,12 +2804,9 @@ lane and dispatches again without judging it, even when it left a commit. That c
 is kept under the pin but never gated; this is the cost of an end that spends no
 attempt.
 
-Measured 2026-11-16 with the
-[repair-staging regression](./drain/conflict_hold_test.go): before containment, a staging
-error propagated through examination completion to the loop's deferred cancellation,
-interrupting two active siblings. The stored candidate lacked a completed-examination
-event, so a replacement loop selected the same candidate for judgment again. The
-regression now requires both siblings to land, two unchanged restarts to stage nothing,
+A staging error is contained to its own item: it does not reach the loop's deferred
+cancellation or interrupt active siblings. The
+[repair-staging regression](./drain/conflict_hold_test.go) requires both siblings to land, two unchanged restarts to stage nothing,
 and a corrected policy input to recover the original repair. The original failure event
 and candidate commit remain available. The
 [interrupted-recovery regression](./drain/conflict_recovery_restart_test.go) also stops the
@@ -2876,8 +2859,8 @@ a checkout keeps that state and the next rebase there would refuse.
 Preservation finishes before reset, including a workflow restart and a conflict
 repair; Git runs outside SQLite write transactions. An ordinary lane reset then
 removes the nonignored untracked files the preservation saved, so a released lane
-is clean for its next run; before 2026-11-17 it left them in place, and a pinned
-candidate staged onto such a lane was refused (`lane-holds-uncommitted-work`, see
+is clean for its next run and a pinned candidate can be staged onto it (a lane that
+holds such files is refused as `lane-holds-uncommitted-work`, see
 "Lanes that staging refuses"). The removal runs before the reset, under the ignore
 rules the snapshot read, so a file the run's own ignore edit hid stays in place
 rather than being deleted unsaved. Ignored files always stay. A workflow restart
@@ -2886,13 +2869,12 @@ saves nonignored untracked files before its cleanup.
 Both snapshots are written from temporary indexes, never the lane's own index. The
 working snapshot reads HEAD and adds the working copy. The staged snapshot copies the
 lane's index first, so a lock on that index cannot block it. An unmerged entry in the
-copy (a conflict the worker resolved in the working copy and never added, lane-14 on
-2026-11-18) is taken from the working copy, and the record names it under `unmerged`
+copy (a conflict the worker resolved in the working copy and never added) is taken from the working copy, and the record names it under `unmerged`
 and in its summary. An index that cannot be read keeps only the working snapshot, and
 the summary says why. A stale `index.lock` is a lock no process holds open, in a lane no
 process has as its working directory, read from `/proc`. Git holds the lock open until it
 renames it, so such a lock has no writer left. That happens when a killed git leaves the
-lock behind (lane-18 on 2026-11-18). Preservation and every lane reset remove a stale
+lock behind. Preservation and every lane reset remove a stale
 lock first and record a `drain.stale-index-lock-removed` event (`index_lock.go`). The
 age of the lock is never read. A lock that a live process holds stays, and the
 `preserve-failed` detail names that PID. The holder must release that lock before
@@ -3018,18 +3000,6 @@ A changed ref or other Git error is not proof of absence. A failed sweep warns t
 loop without stopping it; an explicit `sweep-refs` still returns the error. Run
 this against the repository's own store; run ids must not be reused across stores
 sharing the repository.
-
-On 2026-11-21, a read-only query of the drain's `events` table found
-`drain.work-pruned` (sequence 1354434, 22:47:47 UTC) for the same preserved ref
-that `drain.loop-ended` (sequence 1354475, 22:51:33 UTC) reported missing at Git
-transaction prepare. The prune receipt follows the tillr-watch landing and item
-update and precedes release of that landing's examination, matching the former
-post-landing `prunePreservedWork` hook. The examination's `drain.started` event
-(sequence 1354363) names the same loop session that later faulted. That loop's
-examiner could delete without `land.lock` while a pass was sweeping. Reviewing
-`update-ref -d` call sites under `tools/tillr-land` found no deleter of preserved
-refs there, and two `SweepRefs` calls were already serialized. The events identify
-the competing cleanup path but do not timestamp the sweep's Git sample or unlink.
 
 Only the operator removes a held or recovery ref, after deciding it is no longer
 needed:
@@ -3209,9 +3179,7 @@ sequence at which the planner read the store.
 
 `--lanes` takes either a comma-separated list of lane ids or a count. A count is
 the loop's own `--lanes` spelling and offers the loop's lanes: `lane-1` to
-`lane-N` and the express lanes the repository's settings configure. Before
-2026-11-19 a count was read as one lane with that name, so `--lanes 16` reported
-every schedulable item after the first as `no-lane` behind a lane called `16`.
+`lane-N` and the express lanes the repository's settings configure.
 
 The planner gives a free ordinary lane to every item that can start. A lane a
 returned worker's session or a design continuation sits on is reserved for that

@@ -16,84 +16,10 @@ SCRATCH = re.compile(r"\.yolo/durable|YOLO_DURABLE_DIR")
 SCRATCH_EXCEPTIONS = (
     # A tool's intended output directory (the storybook's `just` recipe names it).
     ("tools/footer-storybook/README.md", "$YOLO_DURABLE_DIR/footer-storybook"),
-    # pi-profiler's documented output directory: the `-o` default and the two prose lines
-    # that say where an artifact lands (never `/tmp`). The three citing lines read
-    # differently, so each keeps its own marker -- its own line's text -- and the
-    # exception cannot grow to cover a different line in that file.
-    ("tools/pi-profiler/README.md", "$YOLO_DURABLE_DIR/pi-profiler/<stamp>-<pid>"),
-    ("tools/pi-profiler/README.md", "Artifacts go to `-o`, or under `$YOLO_DURABLE_DIR`"),
-    ("tools/pi-profiler/README.md", "Artifacts default to a stamped directory under `$YOLO_DURABLE_DIR`"),
-    # The configured PI_SUBAGENTS_WORKTREE_DIR value, at its own reference and in the
-    # shipped pi rule that repeats it (so the edit has one home).
-    ("docs/research/agent-worktree-lifecycle.md", "/workspace/.yolo/durable/worktrees/pi-subagents"),
-    ("docs/pi/agent-work-control.md", "PI_SUBAGENTS_WORKTREE_DIR=$YOLO_DURABLE_DIR/worktrees"),
-    ("yolo-packs/matt/briefing/work-rules.md", "PI_SUBAGENTS_WORKTREE_DIR=$YOLO_DURABLE_DIR/worktrees"),
     # `just tillr-build`'s documented output directory: the section states where a source
     # build of the tillr programs lands, which is a location by design rather than evidence
     # of a past claim. The marker is that line's own text.
     ("docs/design/tillr-distribution.md", "$YOLO_DURABLE_DIR/bin"),
-    # The evidence-location rule: it names where an agent PUTS evidence, not what proved a
-    # past claim. Its marker is that line's own text, so the exception cannot grow to cover
-    # a different line in the file.
-    ("yolo-packs/matt/briefing/work-rules.md", "put cited artifacts in the repository or under `$YOLO_DURABLE_DIR`"),
-    ("docs/pi/system-prompts.md", 'git worktree add --lock "$YOLO_DURABLE_DIR/worktrees/<task>"'),
-    # The coordinator spill directory its reference documents (that file is a separate
-    # lane's work, so this gate must not refuse it).
-    ("docs/reference/work-control.md", "$YOLO_DURABLE_DIR/work-control/bash-output"),
-    # The owner-answer journal's directory, documented the same way in the same file as a
-    # designed location (one per whale session, read by the owner), not evidence of a past
-    # claim.
-    ("docs/reference/work-control.md", "$YOLO_DURABLE_DIR/journals"),
-    # The scratch-clone directory a fork rebase is made in: the skill names where to
-    # clone by design (never `/tmp`), so this is a location, not evidence of a past
-    # claim. The skill is repo-owned at `.pi/skills/`, and this gate's exceptions live
-    # with the gate. Each marker is
-    # the text of one line, not the bare token, so the exception can never grow to
-    # cover a different line in that file that cites scratch.
-    (".agents/skills/fork-series-evergreen/SKILL.md", "Fresh scratch clone under `$YOLO_DURABLE_DIR`"),
-    (".agents/skills/fork-series-evergreen/SKILL.md", "$YOLO_DURABLE_DIR/rebase-"),
-    # The same skill's lane-checkout line: it names where a lane puts its own clone and
-    # where a `patches/` directory goes by design, so it is a location too. It cites
-    # scratch on a line of its own, which is why the two markers above do not cover it.
-    (".agents/skills/fork-series-evergreen/SKILL.md",
-     "under `$YOLO_DURABLE_DIR`, and leave any `patches/` directory to `export`"),
-    # The land-queue suite's scratch base: the doc tells a lane running beside others to
-    # give the suite its own, because `tests/land-queue.test.sh` derives the base from
-    # `${YOLO_DURABLE_DIR:-$PWD/.land-queue-tests}`. That names the variable to set, not
-    # an artifact that proved a past claim, so the prose keeps it. The marker is the
-    # phrase as that sentence wraps in the document, not the whole sentence: the
-    # document is wrapped, and a marker that spans the wrap matches no line at all.
-    ("docs/pi/landing-queue.md", "`YOLO_DURABLE_DIR` when lanes run beside each other"),
-    # Where a Go test's scratch lives by design -- the harness convention that every
-    # suite under tools/ follows -- and the reference's directory table, whose worktree
-    # row names the helper that returns that directory. Each is a location a reader is
-    # being told about, never an artifact that proved a past claim, and each marker is
-    # that line's own text so the exception cannot grow to cover a neighbouring line.
-    ("docs/design/board-state-machine-plan.md",
-     "Test scratch lives under `$YOLO_DURABLE_DIR` via `scratch(t, prefix)`"),
-    ("docs/reference/landing-system.md",
-     "| Lane worktrees | `durableWorktreesDir()`, under `$YOLO_DURABLE_DIR` |"),
-    # The operator's own binary: the hand-drain card and the runbook each pin the path of
-    # the board built from the trunk, because a stale binary refuses the store rather than
-    # misreporting. That is where the command a reader types lives, not an artifact that
-    # proved a past claim, and each marker is its own line's text so the exception cannot
-    # grow to cover a neighbouring line.
-    ("docs/design/hand-drain-tactics-2026-10-31.md",
-     "Every `board` below means `/workspace/.yolo/durable/bin/board`"),
-    ("docs/reference/landing-runbook.md",
-     "`/workspace/.yolo/durable/bin/board`. A stale binary does not misreport: it refuses"),
-    # The tillr lane plan and implementation plan name where a lane's scratch and a
-    # fixture's store go by design (never `/tmp`), and the plan's digest finding quotes
-    # the environment value that made a digest irreproducible. Each is a location or a
-    # quoted value a reader is being told about, never an artifact that proved a past
-    # claim, and each marker is that line's own text so the exception cannot grow to
-    # cover a neighbouring line.
-    ("docs/design/board-utilities-lanes.md",
-     "`$YOLO_DURABLE_DIR`, never `/tmp`, and the report names the scratch paths it used"),
-    ("docs/design/board-utilities-plan.md",
-     "`$YOLO_DURABLE_DIR`, `storeFixture(t, prefix)` returns"),
-    ("docs/design/board-utilities-plan.md",
-     "`land-queue`'s `YOLO_DURABLE_DIR` differs per process"),
     # The observatory recipe's build directory: tools/observatory/run.sh builds the two
     # programs into that directory by design, and the README says where, so a reader can
     # find the binaries. It is a location, not an artifact that proved a past claim. The

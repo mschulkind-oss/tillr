@@ -13,7 +13,7 @@ import (
 )
 
 // GateSpansFile is the gate's per-check span file inside a run's record directory. It is
-// written by `tools/fork-check.py --spans-out` and read by `recordGateJudgment`, which
+// written by the judging program at the path TILLR_GATE_SPANS_OUT names and read by `recordGateJudgment`, which
 // inserts the executed spans into the `gate_spans` table in the same transaction that
 // records the verdict. `skipped_checks` stays in the file: a landed gate skips ~22 steps,
 // and one not-run row per skip would make the table mostly silence.
@@ -361,7 +361,7 @@ func readRemainingGateSpans(path string) (gateSpansFile, string) {
 }
 
 // Fast entries retain their own ids and measurements beside, never in place of,
-// the remaining fork-check spans. The attributes preserve watchdog evidence.
+// the judging program's remaining spans. The attributes preserve watchdog evidence.
 func readFastGateSpans(path string) ([]gateSpan, string) {
 	body, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {

@@ -43,7 +43,7 @@ type HeavyCheck struct {
 	// output was kept.
 	LogPath string `json:"log_path,omitempty"`
 	// LogRef is the per-check triage or output log recorded by tillr-gate or extracted
-	// from fork-check for this check.
+	// from the judging program's output for this check.
 	LogRef string `json:"log_ref,omitempty"`
 	Stalls int    `json:"stalls,omitempty"`
 	// GoTimedOut prevents replay of a test that timed out or deadlocked, or its suite.

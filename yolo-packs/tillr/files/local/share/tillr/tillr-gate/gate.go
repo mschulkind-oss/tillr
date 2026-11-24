@@ -16,8 +16,8 @@ import (
 // GateProgram is the gate a caller names for the run face to execute: one command, and
 // its reporting target. Progress, not elapsed time, decides whether it may run on.
 //
-// There is one gate implementation, `tools/fork-check.py`, and this face does not own the
-// checks: it runs that program once and maps its exit onto the frozen verdict contract.
+// This face does not own the checks: it runs the judging program the caller names once
+// and maps its exit onto the frozen verdict contract.
 // The program is named by the caller rather than hardcoded, so a test can substitute
 // `/bin/true` and a fixture can name a scripted refusal.
 type GateProgram struct {
@@ -281,8 +281,8 @@ const (
 	triageLineLen = 400
 )
 
-// gatePrefixes are the spellings `tools/fork-check.py` uses to name an outcome of its own:
-// `fork-check:` opens every status line, and a failing check is diagnosed on a
+// gatePrefixes are the spellings a judging program uses to name an outcome of its own:
+// `fork-check:` opens a status line, and a failing check is diagnosed on a
 // `triage <check>: <label>` line. `tillr-gate checks:` is the declaration checks' face,
 // which `tools/gate/change-gate.py` runs first: its lines name a check that could not
 // judge or ran past its budget. A program that uses none is still triaged -- by its

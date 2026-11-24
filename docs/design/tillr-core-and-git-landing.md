@@ -293,7 +293,7 @@ sources **[ran]**:
 | `tools/tillr-drain` | 1758 | `loop.go` 375, `trunk.go` 193, `stage.go` 159, `boundary.go` 141, `steps.go` 135 |
 | `tools/tillr-land` | 656 | `landing.go` 250, `trunk.go` 245 |
 | `tools/tillr-view` (Go) | 434 | `serve.go` 82, `serveread.go` 64, `landings.go` 38 |
-| `tools/tillr-gate` | 399 | `main.go` 95, `dualrun.go` 76, `change.go` 62 |
+| `tools/tillr-gate` | 399 | `main.go` 95, `change.go` 62 |
 | `tools/gate` | 202 | this repository's checks |
 | `tools/tillr-loop` | 160 | the one adapter file |
 | `tools/tillr-item` | 112 | `sync.go` 35, `apply.go` 21 |
