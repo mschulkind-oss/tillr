@@ -859,7 +859,7 @@ func loopFace(args []string) int {
 	exitWhenDrained := fs.Bool("exit-when-drained", false, "exit with queue-drained when nothing is dispatchable and no run is in flight; the loop is a daemon by default")
 	root := fs.String("root", "", "the repository the loop stages lanes from and lands onto")
 	path := fs.String("store", "", "the store to reap and plan from (default <root>/.tillr/state.db)")
-	laneCount := fs.Int("lanes", 2, "ordinary lane cap (reserved express lanes are configured separately)")
+	laneCount := fs.Int("lanes", 2, "ordinary lane count on a fresh start (replaces any saved scale target when set explicitly; reserved express lanes are configured separately)")
 	laneRoot := fs.String("lane-root", "", "where the lanes' worktrees live (default <root>/.tillr/lanes)")
 	backoffBase := fs.Duration("backoff-base", drain.DefaultBackoffBase, "the wait before the next attempt after the first consecutive infrastructure failure; each further one doubles it, up to 5m. It is a wait and not a stop: the loop reports the failure and keeps trying, because the pile still holds work")
 	fallbackPoll := fs.Duration("fallback-poll", drain.DefaultFallbackPollInterval, "fallback store reconciliation poll interval when no relayed notification arrives (D-SN6)")
@@ -903,6 +903,9 @@ func loopFace(args []string) int {
 			return fail(err)
 		}
 		return failLoopStartup(*root, time.Now(), err)
+	}
+	if *laneCount < 0 {
+		return failStartup(drain.Usagef("loop needs --lanes N (N >= 0)"))
 	}
 	// A missing store must not mask invalid repository settings, including
 	// when --check is run before the first loop startup.
@@ -971,12 +974,17 @@ func loopFace(args []string) int {
 	explicitSteps := map[string]bool{}
 	fs.Visit(func(set *flag.Flag) { explicitSteps[set.Name] = true })
 	steps.ConfigureHooks(hooks, explicitSteps)
+	var explicitLanes *int
+	if explicitSteps["lanes"] {
+		n := *laneCount
+		explicitLanes = &n
+	}
 	stager := &drain.LaneStager{
 		Root: *root, LaneRoot: *laneRoot, Store: *path, Template: *briefTemplate, Now: at,
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
-		Lanes: append(laneIDs(*laneCount), expressLaneIDs(repositorySettings.Lanes.Express)...), LiveScale: true, BackoffBase: *backoffBase, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
+		Lanes: append(laneIDs(*laneCount), expressLaneIDs(repositorySettings.Lanes.Express)...), LiveScale: true, ExplicitLanes: explicitLanes, BackoffBase: *backoffBase, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,
@@ -1120,8 +1128,8 @@ func expressLaneIDs(n int64) []string {
 // laneIDs answers the lane ids a loop with n lanes offers: lane-1 .. lane-n, in that order,
 // because the tick's lane preference is the caller's list order.
 func laneIDs(n int) []string {
-	if n < 1 {
-		n = 1
+	if n <= 0 {
+		return []string{}
 	}
 	lanes := make([]string, 0, n)
 	for i := 1; i <= n; i++ {

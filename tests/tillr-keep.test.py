@@ -285,6 +285,61 @@ class KeeperTests(unittest.TestCase):
                     lambda child: True, wait, clock=lambda: 0)
         self.assertEqual(launched, [1])
 
+    def test_saved_scale_target_survives_crash_relaunch_and_unflagged_restart(self):
+        import sqlite3
+        from datetime import datetime, timedelta, timezone
+
+        self.assertEqual(
+            keeper.strip_lanes(["--policy", "p.json", "--lanes", "1", "--rolling", "", "--lanes=2", "-lanes", "3"]),
+            ["--policy", "p.json", "--rolling", ""],
+        )
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
+            root = Path(directory)
+            db_path = root / ".tillr/state.db"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            session_start = datetime(2026, 11, 23, 4, 0, 0, tzinfo=timezone.utc)
+            before = (session_start - timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+            after = (session_start + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    "CREATE TABLE drain_runtime_config ("
+                    "key TEXT PRIMARY KEY, value_json TEXT NOT NULL, source TEXT NOT NULL, "
+                    "updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "INSERT INTO drain_runtime_config VALUES ('ordinary_lanes', '6', 'operator', ?, 'matt')",
+                    (before,),
+                )
+            extra = ["--policy", "config/custom.json", "--lanes", "1"]
+            # First launch and any retry before drain_runtime_config is seeded in this session keep --lanes 1.
+            self.assertEqual(keeper.launch_extra_for_attempt(root, extra, session_start, adopted=False, launches=0), extra)
+            self.assertEqual(keeper.launch_extra_for_attempt(root, extra, session_start, adopted=False, launches=1), extra)
+            # Once seeded and later live-scaled to 4 during this session, crash relaunch omits --lanes.
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    "UPDATE drain_runtime_config SET value_json='4', updated_at=? WHERE key='ordinary_lanes'",
+                    (after,),
+                )
+            self.assertEqual(
+                keeper.launch_extra_for_attempt(root, extra, session_start, adopted=False, launches=1),
+                ["--policy", "config/custom.json"],
+            )
+            self.assertEqual(
+                keeper.launch_extra_for_attempt(root, extra, session_start, adopted=True, launches=0),
+                ["--policy", "config/custom.json"],
+            )
+            # Unflagged --restart preserves saved 4 instead of re-passing boot-time --lanes 1.
+            keeper.write_recorded_launch(root, "config/custom.json", "1")
+            args, policy, lanes = keeper.resolve_restart_args(root, [], None)
+            self.assertEqual(policy, "config/custom.json")
+            self.assertEqual(lanes, "4")
+            self.assertEqual(args, ["--policy", "config/custom.json"])
+            # Explicit --lanes 2 on --restart still wins.
+            args2, policy2, lanes2 = keeper.resolve_restart_args(root, ["--lanes", "2"], None)
+            self.assertEqual(policy2, "config/custom.json")
+            self.assertEqual(lanes2, "2")
+            self.assertIn("--lanes", args2)
+
     def test_stop_absent_is_noop_and_help_does_not_start(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
             result = subprocess.run([sys.executable, str(KEEPER), "--root", directory, "--stop"],

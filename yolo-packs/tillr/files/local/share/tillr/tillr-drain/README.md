@@ -2777,8 +2777,11 @@ not a count of worker processes.
 
 Run `tillr drain scale --root . --lanes 3` to set the ordinary lane count. The
 running loop applies the saved target on its next pass without signaling workers.
-The target is stored per checkout and overrides the startup `--lanes` count on
-subsequent launches. Reserved express lanes are unchanged.
+The target is stored per checkout and used on unflagged starts and in-place
+restarts; passing an explicit `--lanes` flag on a fresh start replaces the saved
+target, and the loop's startup line states the effective ordinary lane count and
+where it came from (`--lanes` flag, saved target, or default). Reserved express
+lanes are unchanged.
 
 Lowering the target stops fresh dispatch to lanes outside the new rotation;
 `--lanes 0` takes all ordinary lanes out of rotation. Those lanes keep serving

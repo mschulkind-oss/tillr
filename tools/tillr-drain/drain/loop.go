@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
+	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-drain/spend"
 	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -374,8 +375,12 @@ type Steps interface {
 // spends.
 type LoopConfig struct {
 	// LiveScale lets an operator override the startup ordinary lane pool in the store.
-	LiveScale   bool
-	PostLanding settings.Settings
+	LiveScale bool
+	// ExplicitLanes is the --lanes count explicitly passed on the CLI, or nil when omitted.
+	// On a fresh LiveScale start (TILLR_RESTART_REQUEST unset), it replaces any saved
+	// ordinary_lanes target in drain_runtime_config rather than being overridden by it.
+	ExplicitLanes *int
+	PostLanding   settings.Settings
 	// CandidateSizeLimits comes from repository settings; nil uses the built-in defaults.
 	CandidateSizeLimits *settings.CandidateSizeLimits
 	// MigrateOwnerQuestions converts only existing owner decisions, through ordinary
@@ -789,7 +794,13 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if cfg.LaneRoot == "" {
 		return nil, Usagef("the loop needs --lane-root <dir>: where the lanes' worktrees live")
 	}
-	if len(cfg.Lanes) == 0 {
+	if cfg.ExplicitLanes != nil && *cfg.ExplicitLanes < 0 {
+		return nil, Usagef("the loop needs --lanes N (N >= 0)")
+	}
+	if cfg.LiveScale && cfg.Lanes == nil {
+		cfg.Lanes = []string{}
+	}
+	if !cfg.LiveScale && len(cfg.Lanes) == 0 {
 		return nil, Usagef("the loop needs at least one lane: a tick with no lane dispatches nothing")
 	}
 	if cfg.BackoffBase < 0 {
@@ -848,7 +859,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if _, err := currentLoopOwner(); err != nil {
 		return nil, err
 	}
-	l := &Loop{gatePolicy: gatePolicy, cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, activeCancels: map[string]context.CancelFunc{}, stoppedRuns: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}, staleBaseChecked: map[string]bool{}}
+	l := &Loop{gatePolicy: gatePolicy, cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, activeCancels: map[string]context.CancelFunc{}, stoppedRuns: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, max(1, len(cfg.Lanes))), laneChanges: map[string]int{}, staleBaseChecked: map[string]bool{}}
 	if cfg.PolicyRef != "" {
 		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
 		if err != nil {
@@ -915,6 +926,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// A schema roll is acknowledged only after migration and installation.
 	// Adopt before starting any new child, so inherited-child collection cannot
 	// steal a status from this image's subprocess waiters.
+	inPlaceRestart := os.Getenv(restart.RequestEnv) != ""
 	if err := l.adoptRestart(ctx); err != nil {
 		return faultResult(result, err)
 	}
@@ -993,6 +1005,13 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// on a store it could not open is a stop an operator needs the record of, and a file
 	// written only on the clean path would answer "why did it stop" for everything except
 	// the stops that matter most.
+	if err := l.resolveStartupLaneCount(ctx, inPlaceRestart); err != nil {
+		if stoppedByOperator(ctx, err) {
+			result.Stop, result.Detail = StopOperatorStop, "the loop was asked to stop"
+			return result, nil
+		}
+		return faultResult(result, err)
+	}
 	// Cost is observation only. An unavailable measurement is explicit, but
 	// cannot withhold work that the planner would otherwise dispatch.
 	if window, err := spend.Read(ctx, l.cfg.Store, l.cfg.Now()); err != nil {

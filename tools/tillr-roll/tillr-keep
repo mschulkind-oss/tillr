@@ -9,6 +9,7 @@ loop only when its arguments are the loop face for this checkout: argv is parsed
 searched for a substring, so a `tillr-drain why` or `plan` beside the loop is not adopted.
 """
 import argparse
+from datetime import datetime, timezone
 import fcntl
 import json
 import os
@@ -16,6 +17,7 @@ from pathlib import Path
 import re
 import shlex
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -87,6 +89,66 @@ def extract_policy_and_lanes(args):
         else:
             index += 1
     return policy, lanes
+
+
+def strip_lanes(args):
+    """Return loop arguments with any --lanes / -lanes option removed."""
+    cleaned = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in ("--lanes", "-lanes") and index + 1 < len(args):
+            index += 2
+        elif arg.startswith(("--lanes=", "-lanes=")):
+            index += 1
+        else:
+            cleaned.append(arg)
+            index += 1
+    return cleaned
+
+
+def read_saved_ordinary_lanes(root):
+    """Read (lanes_str, updated_at) from .tillr/state.db without creating or mutating it."""
+    db_path = root / ".tillr/state.db"
+    if not db_path.is_file():
+        return None, None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0)
+    except sqlite3.Error:
+        return None, None
+    try:
+        row = conn.execute(
+            "SELECT value_json, updated_at FROM drain_runtime_config WHERE key='ordinary_lanes'"
+        ).fetchone()
+    except sqlite3.Error:
+        return None, None
+    finally:
+        conn.close()
+    if row is None:
+        return None, None
+    value_raw, updated_raw = row
+    try:
+        lanes_val = str(int(json.loads(value_raw)))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None, None
+    updated_at = None
+    if isinstance(updated_raw, str) and updated_raw:
+        try:
+            updated_at = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
+        except ValueError:
+            updated_at = None
+    return lanes_val, updated_at
+
+
+def launch_extra_for_attempt(root, extra, session_start, adopted, launches):
+    """Return loop extra args for launch; drop boot --lanes once runtime config was seeded in this session."""
+    if adopted:
+        return strip_lanes(extra)
+    if launches > 0:
+        saved_lanes, updated_at = read_saved_ordinary_lanes(root)
+        if saved_lanes is not None and updated_at is not None and updated_at >= session_start:
+            return strip_lanes(extra)
+    return list(extra)
 
 
 def find_loop(root):
@@ -190,7 +252,7 @@ def write_recorded_launch(root, policy, lanes):
 
 
 def resolve_restart_args(root, extra, loop_pid):
-    """Determine policy and lanes from the running loop or recorded launch, plus extra."""
+    """Determine policy and lanes from the running loop, runtime config, or recorded launch, plus extra."""
     extra_policy, extra_lanes = extract_policy_and_lanes(extra)
     running_policy, running_lanes = (None, None)
     if loop_pid is not None:
@@ -198,12 +260,18 @@ def resolve_restart_args(root, extra, loop_pid):
         if rest is not None and rest[:1] == ["loop"]:
             running_policy, running_lanes = extract_policy_and_lanes(rest[1:])
     rec_policy, rec_lanes = read_recorded_launch(root)
+    saved_lanes, _ = read_saved_ordinary_lanes(root)
     policy = extra_policy if extra_policy is not None else (running_policy if running_policy is not None else rec_policy)
-    lanes = extra_lanes if extra_lanes is not None else (running_lanes if running_lanes is not None else rec_lanes)
+    if extra_lanes is not None:
+        lanes = extra_lanes
+    elif saved_lanes is not None:
+        lanes = saved_lanes
+    else:
+        lanes = running_lanes if running_lanes is not None else rec_lanes
     args = list(extra)
     if policy is not None and extra_policy is None:
         args.extend(["--policy", policy])
-    if lanes is not None and extra_lanes is None:
+    if lanes is not None and extra_lanes is None and saved_lanes is None:
         args.extend(["--lanes", str(lanes)])
     return args, policy, lanes
 
@@ -379,22 +447,33 @@ def main():
             if extra_policy is not None or extra_lanes is not None:
                 write_recorded_launch(root, extra_policy, extra_lanes)
 
+            session_start = datetime.now(timezone.utc)
+            adopted = False
+            launches = 0
+
             def launch():
+                nonlocal launches
                 # A separate session keeps terminal Ctrl-C and --stop away from the
                 # loop. Never terminate, authorize a retry, or write to its store here.
-                child = subprocess.Popen(loop_command(root, extra), cwd=root,
+                attempt_extra = launch_extra_for_attempt(root, extra, session_start, adopted, launches)
+                launches += 1
+                child = subprocess.Popen(loop_command(root, attempt_extra), cwd=root,
                                          stdin=subprocess.DEVNULL, start_new_session=True)
                 print(f"keeper: started loop {child.pid}", flush=True)
                 return child
 
             def find_and_record():
+                nonlocal adopted
                 pid = find_loop(root)
                 if pid is not None:
+                    adopted = True
                     rest = loop_argv(pid)
-                    if rest is not None and rest[:1] == ["loop"]:
+                    if rest[:1] == ["loop"] if rest is not None else False:
                         p, l = extract_policy_and_lanes(rest[1:])
-                        if p is not None or l is not None:
-                            write_recorded_launch(root, p, l)
+                        saved_lanes, _ = read_saved_ordinary_lanes(root)
+                        effective_lanes = saved_lanes if saved_lanes is not None else l
+                        if p is not None or effective_lanes is not None:
+                            write_recorded_launch(root, p, effective_lanes)
                 return pid
 
             keep(stop, find_and_record, launch,
