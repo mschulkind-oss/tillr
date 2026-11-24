@@ -171,11 +171,27 @@ func (s *restartWhileSettlingSteps) Run(ctx context.Context, req run.Request) (r
 
 func TestPendingRestartLetsWorkerStartWhileSettlementDrains(t *testing.T) {
 	for _, phase := range []string{"gate", "land"} {
-		t.Run(phase, func(t *testing.T) { testWorkerStartWhileRestartWaits(t, phase) })
+		t.Run(phase, func(t *testing.T) { testWorkerStartWhileRestartWaits(t, phase, nil) })
 	}
 }
 
-func testWorkerStartWhileRestartWaits(t *testing.T, phase string) {
+func TestPendingRestartWaitsForDelayedReplacementAfterGate(t *testing.T) {
+	delayed := false
+	testWorkerStartWhileRestartWaits(t, "gate", func(ctx context.Context) {
+		delayed = true
+		timer := time.NewTimer(200 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+		}
+	})
+	if !delayed {
+		t.Fatal("injected replacement delay did not run")
+	}
+}
+
+func testWorkerStartWhileRestartWaits(t *testing.T, phase string, delayReplacement func(context.Context)) {
 	t.Helper()
 	t.Setenv("TILLR_LOOP_STORE", "")
 	f := newRefusalLoopFixtureWithLanes(t, 2, "item-a")
@@ -199,7 +215,13 @@ func testWorkerStartWhileRestartWaits(t *testing.T, phase string) {
 	if err := writeForkSafe(exe, []byte("replacement"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	l.cfg.Restart = &RestartConfig{Executable: exe, Check: func(context.Context, string) error { return nil },
+	l.cfg.Restart = &RestartConfig{Executable: exe,
+		Check: func(ctx context.Context, _ string) error {
+			if delayReplacement != nil {
+				delayReplacement(ctx)
+			}
+			return nil
+		},
 		Exec: func(string, []string, []string) error {
 			select {
 			case <-steps.landed:
@@ -238,11 +260,7 @@ func testWorkerStartWhileRestartWaits(t *testing.T, phase string) {
 	fileStartWhileSettling(t, l, time.Now())
 	waitSettlingStart(t, steps.settlingStartSteps, "lane-2")
 	close(steps.release)
-	select {
-	case <-done:
-	case <-time.After(15 * time.Second):
-		t.Fatalf("loop did not replace itself after %s finished", phase)
-	}
+	<-done
 	if loopErr != nil || result.Stop != StopRestarted {
 		t.Fatalf("loop stopped without replacing: %+v, %v", result, loopErr)
 	}
