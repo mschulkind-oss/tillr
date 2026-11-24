@@ -341,8 +341,8 @@ request, the designer specifies the following build; the owner may overturn thes
 For each commit in the existing range, check the author and committer separately against one
 tracked list of exactly two `(name, email)` pairs:
 
-- Personal: `Matthew Schulkind <owner@example.invalid>`.
-- Professional: `Matthew Schulkind <owner@work.example.invalid>`.
+- The personal pair and the professional pair, as listed in
+  [the tracked identity list](../../tools/gate/allowed-commit-identities.json).
 
 The name comes from `gitconfig`; the addresses come from the
 personal and work configs.

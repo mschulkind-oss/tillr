@@ -15,8 +15,9 @@ ROOT = Path(__file__).resolve().parents[3]
 SCRATCH = Path(os.environ.get("YOLO_DURABLE_DIR", ROOT / "tools/gate/.scratch"))
 SCRATCH.mkdir(parents=True, exist_ok=True)
 IDS = {"commit-identity", "citations", "documents", "file-size", "workflows", "elapsed-time"}
-PERSONAL = ("Matthew Schulkind", "owner@example.invalid")
-PROFESSIONAL = ("Matthew Schulkind", "owner@work.example.invalid")
+# The two allowed identities are read from the tracked list, never typed here.
+PERSONAL, PROFESSIONAL = (tuple(pair) for pair in json.loads(
+    (ROOT / "tools/gate/allowed-commit-identities.json").read_text()))
 UNRELATED = ("Fixture", "fixture@example.invalid")
 
 
