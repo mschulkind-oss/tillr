@@ -171,10 +171,18 @@ func retainedReaders(r *store.Reader, id string, prev int, w *Workflow) (int, []
 	if err != nil {
 		return 0, nil, err
 	}
+	first, kept := retainedReadersFromOutcomes(outcomes, prev, w)
+	return first, kept, nil
+}
+
+func retainedReadersFromOutcomes(outcomes map[string]string, prev int, w *Workflow) (int, []string) {
+	if prev < 1 {
+		return 0, nil
+	}
 	kept, first := []string{}, -1
 	for i, stage := range w.Stages {
 		if stage.Access != "read_only" && outcomes[stage.ID] != "" {
-			return 0, nil, nil
+			return 0, nil
 		}
 		if stage.Access == "read_only" && outcomes[stage.ID] == "passed" {
 			kept = append(kept, stage.ID)
@@ -183,9 +191,9 @@ func retainedReaders(r *store.Reader, id string, prev int, w *Workflow) (int, []
 		}
 	}
 	if len(kept) == 0 || first < 0 {
-		return 0, nil, nil
+		return 0, nil
 	}
-	return first, kept, nil
+	return first, kept
 }
 
 // carryRetainedReaders records a retry's kept nodes against the new attempt at claim, each

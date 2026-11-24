@@ -49,6 +49,43 @@ func readIdeaIntake(r *store.Reader, id string) (*ideaIntake, error) {
 	return v, nil
 }
 
+type ideaIntakeResult struct {
+	intake *ideaIntake
+	err    error
+}
+
+func readAllIdeaIntakes(r *store.Reader) (map[string]ideaIntakeResult, error) {
+	var exists int
+	if err := r.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='idea_intake'`).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists == 0 {
+		return nil, nil
+	}
+	rows, err := r.Query(`SELECT item_id,words_path,words_hash,words_size,intake_path FROM idea_intake`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ideaIntakeResult{}
+	for rows.Next() {
+		var id string
+		v := &ideaIntake{}
+		if err := rows.Scan(&id, &v.path, &v.hash, &v.size, &v.intake); err != nil {
+			return nil, err
+		}
+		if !filepath.IsLocal(v.path) || filepath.ToSlash(filepath.Clean(v.path)) != v.path {
+			out[id] = ideaIntakeResult{err: fmt.Errorf("invalid idea words path for %s: %q", id, v.path)}
+			continue
+		}
+		out[id] = ideaIntakeResult{intake: v}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func ideaIntakeFor(ctx context.Context, path, id string) (*ideaIntake, error) {
 	s, err := store.OpenRead(ctx, path)
 	if err != nil {

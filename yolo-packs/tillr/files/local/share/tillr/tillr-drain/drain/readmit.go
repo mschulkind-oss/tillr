@@ -51,29 +51,48 @@ func itemBlockHash(f blockFields, body string) (string, error) {
 	return inputHash([]any{f.Title, f.BodyRef, f.DesignDoc, f.Seat, f.Workflow, f.Criteria, body})
 }
 
-func currentRunInputs(ctx context.Context, r *store.Reader, row itemRow, policy *Policy, root string, build BuildStamp) (*RunInputs, error) {
-	var title, bodyRef string
-	if err := r.QueryRow(`SELECT title, COALESCE(body_ref,'') FROM items WHERE item_id = ?`, row.ItemID).Scan(&title, &bodyRef); err != nil {
-		return nil, err
+type storedBlockFields struct {
+	title    string
+	bodyRef  string
+	criteria [][2]string
+}
+
+func readStoredBlockFields(r *store.Reader, id string) (storedBlockFields, error) {
+	var f storedBlockFields
+	if err := r.QueryRow(`SELECT title, COALESCE(body_ref,'') FROM items WHERE item_id = ?`, id).Scan(&f.title, &f.bodyRef); err != nil {
+		return storedBlockFields{}, err
 	}
-	rows, err := r.Query(`SELECT criterion_id, text FROM item_criteria WHERE item_id = ? ORDER BY criterion_id`, row.ItemID)
+	rows, err := r.Query(`SELECT criterion_id, text FROM item_criteria WHERE item_id = ? ORDER BY criterion_id`, id)
 	if err != nil {
-		return nil, err
+		return storedBlockFields{}, err
 	}
-	criteria := [][2]string{}
+	f.criteria = [][2]string{}
 	for rows.Next() {
 		var c [2]string
 		if err := rows.Scan(&c[0], &c[1]); err != nil {
 			rows.Close()
-			return nil, err
+			return storedBlockFields{}, err
 		}
-		criteria = append(criteria, c)
+		f.criteria = append(f.criteria, c)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
+		return storedBlockFields{}, err
+	}
+	return f, nil
+}
+
+func currentRunInputs(ctx context.Context, r *store.Reader, row itemRow, policy *Policy, root string, build BuildStamp) (*RunInputs, error) {
+	fields, err := readStoredBlockFields(r, row.ItemID)
+	if err != nil {
 		return nil, err
 	}
+	return currentRunInputsFromStored(ctx, row, fields, policy, root, build)
+}
+
+func currentRunInputsFromStored(ctx context.Context, row itemRow, fields storedBlockFields, policy *Policy, root string, build BuildStamp) (*RunInputs, error) {
+	title, bodyRef, criteria := fields.title, fields.bodyRef, fields.criteria
 	// Both reads are files, so inside a gathered write they are answered from what was
 	// read before it (writeGathered).
 	body, err := gather(ctx, "definition body "+bodyRef+" of "+row.ItemID+" in "+root, func(context.Context) (string, error) {

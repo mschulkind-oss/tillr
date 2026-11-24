@@ -160,6 +160,10 @@ func describeBackendHold(r *store.Reader, d *Decision, policy *Policy, at time.T
 }
 
 func describeBackendHoldWithClosed(r *store.Reader, d *Decision, policy *Policy, at time.Time, shut map[string]bool, closed map[string]backendOutcome) error {
+	return describeBackendHoldWithPreRead(r, nil, d, policy, at, shut, closed)
+}
+
+func describeBackendHoldWithPreRead(r *store.Reader, pre *startRepairInputs, d *Decision, policy *Policy, at time.Time, shut map[string]bool, closed map[string]backendOutcome) error {
 	if d.Action != ActionHold || d.Reason != ReasonBackendWindow || policy == nil {
 		return nil
 	}
@@ -181,11 +185,17 @@ func describeBackendHoldWithClosed(r *store.Reader, d *Decision, policy *Policy,
 			if node.RunRequest == nil || !shut[node.RunRequest.Backend] && closed[node.RunRequest.Backend].seq == 0 {
 				continue
 			}
-			rec, err := terminalRecord(r, node.RunRequest.RunID)
-			if err != nil {
-				return err
+			var hasTerminal bool
+			if pre != nil {
+				hasTerminal = pre.parallelTerminals[node.RunRequest.RunID]
+			} else {
+				rec, err := terminalRecord(r, node.RunRequest.RunID)
+				if err != nil {
+					return err
+				}
+				hasTerminal = rec != nil
 			}
-			if rec == nil {
+			if !hasTerminal {
 				start, d.Seat = node.RunRequest.Backend, node.Seat
 				break
 			}
@@ -194,24 +204,30 @@ func describeBackendHoldWithClosed(r *store.Reader, d *Decision, policy *Policy,
 	d.DeferredBy = start
 	if outcome, ok := closed[start]; ok {
 		d.Reason = ReasonBackendClosed
-		failure, err := readRecordedInfrastructureFailure(r, outcome.rec.ItemID, "$.run_id", outcome.rec.RunID)
-		if err != nil {
-			return err
-		}
-		d.BackendHoldCause = failure.Detail
-		if d.BackendHoldCause == "" {
-			err := r.QueryRow(`SELECT COALESCE(json_extract(payload,'$.cause'),'') FROM events
- WHERE kind=? AND object_id=? AND json_extract(payload,'$.terminal_seq')=?`, backendOutcomeKind, start, outcome.seq).Scan(&d.BackendHoldCause)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if pre != nil {
+			d.BackendHoldCause = pre.closedBackendCauses[start]
+		} else {
+			failure, err := readRecordedInfrastructureFailure(r, outcome.rec.ItemID, "$.run_id", outcome.rec.RunID)
+			if err != nil {
 				return err
 			}
+			d.BackendHoldCause = failure.Detail
 			if d.BackendHoldCause == "" {
-				d.BackendHoldCause = infrastructureDetail(outcome.rec, logTail(outcome.rec.ArtifactRefs))
+				err := r.QueryRow(`SELECT COALESCE(json_extract(payload,'$.cause'),'') FROM events
+ WHERE kind=? AND object_id=? AND json_extract(payload,'$.terminal_seq')=?`, backendOutcomeKind, start, outcome.seq).Scan(&d.BackendHoldCause)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
 			}
+		}
+		if d.BackendHoldCause == "" {
+			d.BackendHoldCause = infrastructureDetail(outcome.rec, logTail(outcome.rec.ArtifactRefs))
 		}
 		d.BackendHoldMover = "operator: repair the backend and record a successful tillr-drain probe-backend"
 	} else if start != "" {
-		if err := describeQuotaHold(r, d, policy, at); err != nil {
+		if pre != nil {
+			pre.describeQuotaHold(d, policy, at)
+		} else if err := describeQuotaHold(r, d, policy, at); err != nil {
 			return err
 		}
 	}
@@ -241,6 +257,11 @@ func describeQuotaHold(r *store.Reader, d *Decision, policy *Policy, at time.Tim
 	if err != nil {
 		return err
 	}
+	describeQuotaHoldFromStatuses(d, b, name, statuses, at)
+	return nil
+}
+
+func describeQuotaHoldFromStatuses(d *Decision, b Backend, name string, statuses []QuotaStatus, at time.Time) {
 	d.BackendHoldCause = "no quota reading recorded"
 	d.BackendHoldMover = "quota probe: record a fresh, successful reading that admits the backend"
 	for _, q := range statuses {
@@ -269,5 +290,4 @@ func describeQuotaHold(r *store.Reader, d *Decision, policy *Policy, at time.Tim
 		}
 		break
 	}
-	return nil
 }

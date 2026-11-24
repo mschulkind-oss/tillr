@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
@@ -38,8 +39,8 @@ func (l *Loop) startViewPass() Pass {
 
 func readProposedStarts(ctx context.Context, path string, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, previous startSnapshot) (startSnapshot, error) {
 	tick.Now = at.Format(time.RFC3339Nano)
-	return readStartSnapshotWith(ctx, path, at, policy, func(r *store.Reader, s *startSnapshot) error {
-		return s.rebuildEntries(ctx, r, at, policy, tick, questions, previous)
+	return readStartSnapshotWith(ctx, path, at, policy, func(r *store.Reader, s *startSnapshot) (func() error, error) {
+		return s.prepareRepair(ctx, r, at, policy, tick, questions, previous, nil)
 	})
 }
 
@@ -90,12 +91,22 @@ func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Poli
 			commentHolds[plannerDocumentKey(questions.Root, row.DesignDoc)] = row.ItemID
 		}
 	}
-	obstacleHolds, releasedObstacles, err := ReadObstacleHolds(r)
-	if err != nil {
-		return nil, err
+	var (
+		obstacleHolds     map[string]obstacles.Hold
+		releasedObstacles map[string]string
+		err               error
+	)
+	if s.preparedRepair != nil {
+		obstacleHolds, releasedObstacles = s.preparedRepair.obstacleHolds, s.preparedRepair.releasedObstacles
+	} else {
+		obstacleHolds, releasedObstacles, err = ReadObstacleHolds(r)
+		if err != nil {
+			return nil, err
+		}
 	}
 	classes, latest := indexPriorRuns(s.priors)
 	p := &planner{
+		preRead:    s.preparedRepair,
 		definition: &s.def, commentHolds: commentHolds, documentRoot: questions.Root,
 		conflicts: s.conflicts, shut: s.shut, quotaShut: s.quotaShut, infrastructureClosed: s.infrastructureClosed, forks: s.forks,
 		tick: tick, policy: policy, held: lanes, deskOwners: owners, itemStates: s.states, history: s.history,
@@ -113,16 +124,45 @@ func (s *startSnapshot) rebuildEntries(ctx context.Context, r *store.Reader, at 
 	return s.repairEntries(ctx, r, at, policy, tick, questions, previous, nil)
 }
 
+func (s *startSnapshot) stageRepairInputs(r *store.Reader, at time.Time, policy *Policy, tick Pass, root string, previous startSnapshot, touched map[string]bool, bases *startBases, mayWiden bool) error {
+	in, err := s.readRepairInputs(r, at, policy, tick, root, previous, touched, bases, mayWiden)
+	if err != nil {
+		return err
+	}
+	s.preparedRepair = &in
+	return nil
+}
+
+func (s *startSnapshot) prepareRepair(ctx context.Context, r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, previous startSnapshot, touched map[string]bool) (func() error, error) {
+	if err := s.stageRepairInputs(r, at, policy, tick, questions.Root, previous, touched, nil, basesMayWiden(s.def, questions.Root, nil)); err != nil {
+		return nil, err
+	}
+	return func() error {
+		return s.repairEntriesAt(ctx, nil, at, policy, tick, questions, previous, touched, nil)
+	}, nil
+}
+
+func basesMayWiden(def definition.Definition, root string, bases *startBases) bool {
+	return def.Completes == "landing" && root != "" && bases == nil
+}
+
 func (s *startSnapshot) repairEntries(ctx context.Context, r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, previous startSnapshot, touched map[string]bool) error {
 	return s.repairEntriesAt(ctx, r, at, policy, tick, questions, previous, touched, nil)
 }
 
 func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, previous startSnapshot, touched map[string]bool, bases *startBases) error {
-	if _, err := shadowRotation(r, &tick); err != nil {
-		return err
+	in := s.preparedRepair
+	defer func() { s.preparedRepair = nil }()
+	if in == nil {
+		read, err := s.readRepairInputs(r, at, policy, tick, questions.Root, previous, touched, bases, basesMayWiden(s.def, questions.Root, bases))
+		if err != nil {
+			return err
+		}
+		in = &read
+		s.preparedRepair = in
 	}
-	s.updateFreeLanes(tick, previous, at)
-	if touched != nil && len(touched) == 0 {
+	tick = in.tick
+	if in.noop || (touched != nil && len(touched) == 0) {
 		return nil
 	}
 	root := questions.Root
@@ -145,7 +185,7 @@ func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at
 		s.tip, s.green = bases.tip, bases.green
 		if (docInputsChanged || s.tip != previous.tip) && hasPrerequisite(s.def, definition.PrerequisiteDesignDocument) {
 			var err error
-			unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisites(r, root)
+			unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisitesFromInputs(root, in.docSync, in.ideaIntakes, s.states)
 			if err != nil {
 				return err
 			}
@@ -163,7 +203,7 @@ func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at
 			edges[id] = s.edges[id]
 		}
 	}
-	unproved, err := unprovedBlockers(ctx, r, root, s.green, s.tip, s.states, edges)
+	unproved, err := unprovedBlockersFromCommits(ctx, root, s.green, s.tip, s.states, edges, in.blockerCommits)
 	if err != nil {
 		return err
 	}
@@ -184,24 +224,21 @@ func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at
 			continue
 		}
 		if doc := deskDocument(row, tick.Comments); doc != "" {
-			row.Designer, err = readDesigner(r, doc)
-			if err != nil {
-				return err
-			}
+			row.Designer = in.designers[doc]
 		}
 		if row.State == s.def.Ready && !unshared[row.ItemID] {
-			inputs[row.ItemID], err = currentRunInputs(ctx, r, row, policy, root, *tick.Build)
+			inputs[row.ItemID], err = currentRunInputsFromStored(ctx, row, in.blockFields[row.ItemID], policy, root, *tick.Build)
 			if err != nil {
 				return err
 			}
 		}
 		repair = append(repair, row)
 	}
-	p, err := s.buildPlanner(r, at, policy, tick, questions, rows, inputs, unproved)
+	p, err := s.buildPlanner(nil, at, policy, tick, questions, rows, inputs, unproved)
 	if err != nil {
 		return err
 	}
-	pausedReserved, err := p.reserveDrainingWork(r, rows, s.edges)
+	pausedReserved, err := p.reserveDrainingWork(nil, rows, s.edges)
 	if err != nil {
 		return err
 	}
@@ -217,9 +254,9 @@ func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at
 		}
 	}
 	p.captureStart = func(row itemRow, d Decision) error {
-		return s.evaluateEntry(r, row, d, at, previous)
+		return s.evaluateEntry(nil, row, d, at, previous)
 	}
-	_, _, err = p.planItems(r, repair, s.edges, s.faults, s.pending.works, inputs, s.retries, rewriteOwnerHolds, rewriteHolds, unshared, s.hasNodes, buildHash, policy, s.shut, tick, root, s.def, at)
+	_, _, err = p.planItems(nil, repair, s.edges, s.faults, s.pending.works, inputs, s.retries, rewriteOwnerHolds, rewriteHolds, unshared, s.hasNodes, buildHash, policy, s.shut, tick, root, s.def, at)
 	if err != nil {
 		return err
 	}
@@ -266,7 +303,16 @@ func (s *startSnapshot) evaluateEntry(r *store.Reader, row itemRow, d Decision, 
 	e := startViewEntry{decision: d, versionLane: d.LaneID, express: row.Express}
 	dispatch := isDispatch(d) && d.RunRequest != nil
 	if dispatch || (d.Action == ActionHold && persistentHold(d)) {
-		version, err := inputVersionFrom(r, d, versionFolds{works: s.pending.works, faults: s.faults, contentVersions: s.contentVersions})
+		folds := versionFolds{works: s.pending.works, faults: s.faults, contentVersions: s.contentVersions}
+		var (
+			version string
+			err     error
+		)
+		if s.preparedRepair != nil {
+			version, err = s.preparedRepair.inputVersion(d, folds)
+		} else {
+			version, err = inputVersionFrom(r, d, folds)
+		}
 		if err != nil {
 			return err
 		}

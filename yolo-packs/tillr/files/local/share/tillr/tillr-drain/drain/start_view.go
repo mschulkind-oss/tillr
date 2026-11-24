@@ -76,6 +76,7 @@ type startSnapshot struct {
 	deskOwners                        map[string]string
 	forks                             []plannedFork
 	nextLeaseExpiry, nextWindowExpiry int64 // Unix milliseconds, zero when none.
+	preparedRepair                    *startRepairInputs
 }
 
 // noteLaneWrite invalidates sibling observations of an authorized lane writer.
@@ -292,22 +293,28 @@ func readStartSnapshot(ctx context.Context, path string, at time.Time, policy *P
 	return readStartSnapshotWith(ctx, path, at, policy, nil)
 }
 
-func readStartSnapshotWith(ctx context.Context, path string, at time.Time, policy *Policy, rebuild func(*store.Reader, *startSnapshot) error) (startSnapshot, error) {
+func readStartSnapshotWith(ctx context.Context, path string, at time.Time, policy *Policy, rebuild func(*store.Reader, *startSnapshot) (func() error, error)) (startSnapshot, error) {
 	s, err := store.OpenRead(ctx, path)
 	if err != nil {
 		return startSnapshot{}, err
 	}
 	defer s.Close()
 	var next startSnapshot
+	var finish func() error
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		if err := next.seed(r, at, policy); err != nil {
 			return err
 		}
 		if rebuild != nil {
-			return rebuild(r, &next)
+			var rebuildErr error
+			finish, rebuildErr = rebuild(r, &next)
+			return rebuildErr
 		}
 		return nil
 	})
+	if err == nil && finish != nil {
+		err = finish()
+	}
 	if err != nil {
 		return startSnapshot{}, err
 	}
