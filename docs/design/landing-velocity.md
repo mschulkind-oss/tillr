@@ -4,25 +4,15 @@ status: accepted
 stage: DESIGN
 verified: 2026-11-05
 next: "Build the landing tier in shadow, then flip (§10); all three questions are ruled in the Decision ledger"
-tags: [board, landing, gate, velocity]
+tags: [landing, gate, velocity]
 summary: "Split the landing gate in two. A landing tier runs on every batch before the trunk moves: the integrity set, a full build and test-compile of every touched module, every cheap diff-scoped check, and the gate's own audit suite whenever gate code is in the batch. A rolling tier runs the behavior suites on the trunk itself, every 10 landings or 20 minutes, whichever first, and advances a verified watermark; landing refuses when the watermark lags more than 20 landings or 60 minutes. At batch 5 the landing tier is priced at 35–50 seconds against today's 8–12 minutes, which is over 100 landings per hour on a serial merge with no parallel gates. Parallel gate runs and larger batches are rejected as first builds, on measurements named in the body."
 ---
 
 # Landing velocity: the trunk moves on the cheap proof, the suites follow on a clock
 
-**Status:** 2026-11-05. Nothing built. Gate timings are the owner's 2026-11-05 pass, the
-records in `../pi/gate-scope-histogram-2026-11-04.md`
-and `../pi/gate-long-tail-2026-11-04.md`, and one new read
-of the gate's own timing timeline taken for this design and stated where it is used.
-
-**2026-11-05, after this design was written:** item 570 wired the board-cli integration
-subset into the routine `go-tool` step and deleted the quarantine that had deferred it. The
-statements below that call that subset "today's quarantined skip" or date its expiry to
-2026-12-05 are the state the design was written against; the subset now runs on every
-landing that touches `tools/board-cli/`. The argument they support is unchanged — deferral
-without a named runner, a cadence and a bound is a blind spot — but the precedent is now
-historical rather than live, and the rolling tier no longer inherits a declaration to
-retire.
+**Status:** All three questions are ruled in the [Decision ledger](#decision-ledger), which
+records what is built. [The gate design](gate-rework.md) amends this two-tier design. Gate timings are measurements of 2026-11-02 to 2026-11-05 on
+a 12-core machine, stated where they are used.
 
 > **In short.** The gate is one proof doing two jobs: "this tree is safe to stand on" and
 > "this tree's behavior suites pass." Only the first job has to finish before the trunk
@@ -54,8 +44,7 @@ and [§6](#6-cadence-watermark-and-the-halt-rule).
 
 **Ruled:** [D-LV-1](#decision-ledger), [D-LV-2](#decision-ledger), [D-LV-3](#decision-ledger) — A, A, A; the questions and their options are compacted there.
 
-**Reads with:** `landing-velocity-plan.md` (the implementation
-plan, completed against the tree on 2026-11-05),
+**Reads with:** [`gate-rework.md`](gate-rework.md) (the gate design that amends this one) and
 [`landing-principles.md`](landing-principles.md) (the rulings this design is checked
 against, principle by principle, in [§5](#5-invariants-that-may-not-bend)).
 
@@ -72,12 +61,12 @@ next is believed ([§10](#10-sequencing-shadow-first-then-flip) has the full seq
 2. **Stand up the rolling runner and the watermark** while the full gate still decides
    every landing, so the runner's cadence and cost are measured before anything
    depends on it.
-3. **Flip the board pass to the landing tier**, restore the batch bound from 2 to the
+3. **Flip the landing pass to the landing tier**, restore the batch bound from 2 to the
    code's declared 5, and let the lag cap be the only thing that can slow landing down
    again.
 
-What this buys, at the prices in [§3](#3-the-arithmetic-at-12-cores): a board-class
-batch gates in an estimated 35–50 seconds instead of 8–12 minutes, so a serial merge
+What this buys, at the prices in [§3](#3-the-arithmetic-at-12-cores): a batch in the
+dominant class gates in an estimated 35–50 seconds instead of 8–12 minutes, so a serial merge
 at batch 5 has a wall-clock capacity above 350 landings per hour, and above 100 per
 hour even if the estimate is wrong by a factor of three. No parallel gate runs, no
 larger batches, and no new hardware are needed to reach the owner's 100 per hour.
@@ -99,12 +88,12 @@ Two honest limits, stated now rather than discovered later:
 
 ## 2. What exists today, measured
 
-The gate is one command, `just done`, stated in [`../../.justfile`](../../.justfile)
-and run by [`../../tools/fork-check.py`](../../tools/fork-check.py). It is already
+The gate is one command, `just done`, stated in [`../../.justfile`](../../.justfile).
+It is already
 selective: a step runs only when a changed path matches what it watches, plus a fixed
 integrity set (`structural`, `file-size`, `commit-identity`) on every run. Over
 2026-11-02 to 2026-11-04, 371 of 371 planned gates were scoped and none was full, so
-selection is spent as a lever — the histogram record says so in as many words. The
+selection is spent as a lever. The
 landing pass in
 [`../../tools/tillr-drain/drain/`](../../tools/tillr-drain/drain/)
 batches candidates (declared bound 5 in code, capped to 2 by the drain recipe in
@@ -117,10 +106,10 @@ Where the time goes, all measured:
 
 | Fact | Number | Source |
 | :--- | :--- | :--- |
-| One selective batch gate, board class | 8–12 min (575s selected, 958s unskipped, one hand gate over two commits) | Owner's 2026-11-05 pass |
+| One selective batch gate, dominant class | 8–12 min (575s selected, 958s unskipped, one hand gate over two commits) | Owner's 2026-11-05 pass |
 | `go-tool` share of observed check time | 57.3%; top three checks 76.5% | 2026-11-02 → 11-04 histogram |
-| Board module `go-tool` median | 303.5s (Nov 2–4), then 219.7s over 45 steps on 2026-11-05, max 545.6s | Histogram; this design's read of the same timing timeline, 2026-11-05 |
-| Docs-only gate | 1.4s | `../pi/gate-efficiency-2026-11-02.md` |
+| Largest Go module, `go-tool` median | 303.5s (Nov 2–4), then 219.7s over 45 steps on 2026-11-05, max 545.6s | Histogram; the gate's timing timeline, 2026-11-05 |
+| Docs-only gate | 1.4s | Measured 2026-11-02 |
 | Gate efficiency ratio (wall ÷ floor) | 1.00–1.15 at peak concurrency 11 of 12 | Histogram and efficiency records |
 | Carried (reused) verdicts | 1 in the histogram window | Histogram |
 | Isolations by cause | `conflict` 50.0%, `unverified` 30.3%, `content` 19.7% | Histogram |
@@ -128,13 +117,13 @@ Where the time goes, all measured:
 Three readings of that table drive everything below:
 
 - **Gate cost is per change class, not per candidate.** A docs batch already lands at
-  thousands per hour of capacity. The bottleneck class is the board's own module:
+  thousands per hour of capacity. The bottleneck class is the largest Go module:
   across large gates the single largest check is a median 67% of the gate's time,
   and in this class that check is the combined build-and-suite step. Any honest
   design is class-aware or it is optimizing the classes that are already free.
 - **Inside one gate there is nothing left to parallelize.** A wall-to-floor ratio of
-  1.00 means the run already costs its longest necessary chain. Item 504's
-  parallelization of the suite's serial cases bought a real improvement (median
+  1.00 means the run already costs its longest necessary chain.
+  Parallelizing the suite's serial cases bought a real improvement (median
   303.5s → 219.7s) and still missed its own pre-stated 150s acceptance at today's
   load. Suite-speed work remains worth doing, but one more increment of it does not
   close a tenfold gap.
@@ -144,14 +133,10 @@ Three readings of that table drive everything below:
   and [§9](#9-alternatives-each-with-a-verdict) prices what that build would buy on a
   box whose load already exceeds its cores.
 
-One precedent matters most. When this design was written the gate had a deferred tier, in
-degenerate form: the board suite's slow integration subset ran only on a full audit, which
-the landing path never requests, and a red case in it landed unseen (item 554, recorded in
-the gate's own quarantine declaration, which then expired 2026-12-05 for exactly that
-reason). Item 570 has since wired that subset into the routine step, so the precedent is
-historical; the lesson is not. Deferral without a named runner, a cadence, and a bound is
-not a tier; it is a blind spot. This design's rolling tier is that same deferral with all
-three named — or it should not be built.
+One rule follows from how deferral fails. A slow subset that runs only on a full audit, which
+the landing path never requests, lets a red case land unseen. Deferral without a named runner,
+a cadence, and a bound is not a tier; it is a blind spot. This design's rolling tier is
+deferral with all three named — or it should not be built.
 
 ## 3. The arithmetic at 12 cores
 
@@ -160,7 +145,7 @@ about 100 per hour so the queue stays near-empty and absorbs bursts. On a serial
 merge, capacity is batch size ÷ gate wall time, so the per-batch wall budget for
 100 per hour is:
 
-| Batch | Wall budget per batch for 100/hour | Today, board class (≈600s) | Landing tier (est. 35–50s) |
+| Batch | Wall budget per batch for 100/hour | Today, dominant class (≈600s) | Landing tier (est. 35–50s) |
 | :--- | ---: | ---: | ---: |
 | 1 | 36s | 6/hour | 72–103/hour |
 | 2 (committed cap) | 72s | 12/hour | 144–206/hour |
@@ -168,8 +153,8 @@ merge, capacity is batch size ÷ gate wall time, so the per-batch wall budget fo
 | 10 | 360s | 60/hour before bisect costs | 720+/hour |
 
 The landing-tier column is an estimate built from measured parts, and it is marked as
-one wherever it is used: the cheap phase's longest member measured 15.9s
-(`pipeline-evidence`), the integrity set is under a second each, and a warm-cache
+one wherever it is used: the cheap phase's longest member measured 15.9s,
+the integrity set is under a second each, and a warm-cache
 build plus test-compile of one Go module is the only unmeasured term, priced here at
 15–30 seconds under load. [§10](#10-sequencing-shadow-first-then-flip) measures it in
 shadow before anything lands on it, and
@@ -188,16 +173,15 @@ Why the other shapes do not get there first, in arithmetic rather than taste:
   class union, so batch 10 looks cheap until it is red. Content reds were 52 of 736
   batched candidates in the histogram window, about 7% per candidate, so a batch of
   10 contains a content red with probability near one half — and bisecting it costs
-  roughly five more full gates. The 25-way overnight failure of 2026-10-29 is why
-  the bound is 5 in code today. Batch size is an amortization knob, not a
+  roughly five more full gates. Batch size is an amortization knob, not a
   tenfold lever.
 - **A tiered gate is the only shape that removes work from the serial path instead
   of rearranging it.** The suite still runs — minutes later, on the trunk, over a
   range — but it no longer stands between a candidate and the compare-and-swap.
 
-The rolling tier's own cost, stated plainly: one range run is roughly the board
+The rolling tier's own cost, stated plainly: one range run is roughly the largest
 suite's short subset (median 219.7s today) plus its integration subset (about 160s,
-measured 2026-10-24 and recorded in the gate's quarantine declaration) plus whatever
+measured 2026-10-24) plus whatever
 other heavy kinds the range's watches select — call it 6–10 minutes of wall per run,
 at most three runs an hour at the cadence in
 [§6](#6-cadence-watermark-and-the-halt-rule). That is up to half an hour of suite
@@ -208,8 +192,8 @@ path any candidate waits on.
 
 ### The substrate Go suites gate at the landing tier
 
-Built: `tools/tillr/` gates at the landing tier under its own check kind and `tools/tillr-drain/`
-stays rolling, with per-module measured costs in place of the retired estimate.
+`tools/tillr/` gates at the landing tier under its own check kind and `tools/tillr-drain/`
+stays rolling, with per-module measured costs.
 
 Four terms, defined here and used nowhere else in the tree yet:
 
@@ -237,8 +221,8 @@ Four terms, defined here and used nowhere else in the tree yet:
 | :--- | :--- |
 | The integrity set: `structural`, `file-size`, `commit-identity` | Already unconditional today; properties of the tree, sub-second to seconds |
 | Build and test-compile of every touched Go module (`go build`, plus a vet or no-test run that compiles the test files) | The trunk must always compile. A non-compiling trunk breaks every lane's next rebase and the next gate itself |
-| Series and fork invariant steps when a series is in the diff | A patch series that does not apply breaks the next host launch the moment it lands, on every host that selects the pack |
-| Every diff-scoped check whose declared cost estimate is at most 30s: `documents`, `citations`, `design-citations`, `scratch`, `board-pack`, `board-launcher-cache`, `pipeline-evidence`, the render and config checks, and their peers | Deferring them saves under half a minute and loses per-candidate attribution. Cheap proof stays at the scene of the change |
+| Series and fork invariant steps when a fork series is in the diff | A series that does not apply breaks the next launch the moment it lands |
+| Every diff-scoped check whose declared cost estimate is at most 30s: `documents`, `citations`, `design-citations`, `scratch`, and their peers | Deferring them saves under half a minute and loses per-candidate attribution. Cheap proof stays at the scene of the change |
 | The plan-coverage contract (plan base at or behind batch base; every required kind either run or recorded as owed to the rolling tier) | The meta-invariant that makes selection honest today; it now also names the debt |
 | `self-suite`, the gate's own audit suite — **only when gate code is in the batch, and then the batch is of one** | Gate code defines what every later landing is judged by. A broken selector landed on deferred proof would be judged by itself. [§5](#5-invariants-that-may-not-bend) states this as an invariant |
 
@@ -251,8 +235,8 @@ failure that step exists to refuse.
 | Member | Why it can wait one window |
 | :--- | :--- |
 | Go behavior suites: the `-short` subsets split out of today's combined `go-tool` step, per touched module | A behavior red is repaired by revert with no data loss. This is the 220–320s term leaving the serial path |
-| The Go integration subset (a quarantined skip when this design was written; on every landing since item 570) | It ran on no landing at all when this design was written. A cadence with a named runner is strictly more proof than a landing gate that runs it once per batch, and the cadence replaces the quarantine's 2026-12-05 expiry rather than a slower landing gate |
-| Heavy diff-scoped suites above the 30s line: `work-control`, `work-board`, `board-runs`, `lane-control`, `land-queue`, `pi-inspector`, the session suites, storybook | Same revert argument, at 20–100s each |
+| The Go integration subset | A cadence with a named runner is strictly more proof than a landing gate that runs it once per batch |
+| Heavy diff-scoped suites above the 30s line | Same revert argument, at 20–100s each |
 | Fork-quality steps (the forks' own upstream suites) | The fork build itself stays in the landing tier with the other series invariants, so a launch can always construct what landed; an upstream suite red is behavior risk inside the window, repaired by revert like any other |
 
 One selection rule spans both tiers: the rolling tier is planned from the watermark,
@@ -356,7 +340,7 @@ process to die quietly. The two numbers are chosen against the two costs:
 **Lag cap: landing refuses when the watermark is more than 20 landings or more than
 60 minutes behind the tip.** Two cadence windows, not one, so a single slow or red
 rolling run does not stop the queue, and a dead runner stops it within the hour
-instead of never. This cap is the design's answer to item 554: deferral here is a
+instead of never. This cap is the design's answer to unbounded deferral: deferral here is a
 declared, expiring state, and expiry refuses landing rather than renewing silently.
 
 **When the rolling tier is red and the next batch wants to land**, the rule is:
@@ -446,7 +430,7 @@ rather than leaving it as fine print.
 | :--- | :--- | :--- |
 | Parallel gate runs, serial merge | An estimated 1.3–1.6× on a saturated box, after splitting the land lock and the gate record lock and building a global CPU admission budget | **Rejected as the first build.** Build it only if falsifier F3 fires — if the measured landing tier is still above budget, parallelism is how the remaining constant is attacked |
 | Larger batches (10–20) with bisect | Up to 60/hour before bisect costs at today's gate | **Rejected.** Half of all batches of 10 would be red on content alone at the measured 7% per-candidate rate, and latency to first landing worsens. The bound returns to 5, no higher |
-| Suite-speed work alone (shard, parallelize, cache harder) | Item 504's measured precedent: about 1.4× on the dominant step | **Rejected as the landing answer; kept as rolling-tier cost work.** Every second it shaves still shortens a rolling run and an attribution bisect |
+| Suite-speed work alone (shard, parallelize, cache harder) | Measured: about 1.4× on the dominant step | **Rejected as the landing answer; kept as rolling-tier cost work.** Every second it shaves still shortens a rolling run and an attribution bisect |
 | Test-level selection inside the monolith package (run only tests naming the changed files, per batch) | Could in principle keep behavior proof pre-landing | **Rejected for v1.** No sound file-to-test map exists for a single-package suite whose cases cross files freely; an unsound map is a quieter version of the same deferral, without the watermark that makes deferral honest. If a sound selection ever exists, the selected subset joins the landing tier and the escape rate should fall — the tier table is where it would land |
 | A second machine or remote CI for gates | Real extra CPU | **Out of scope here.** It changes the local-first trust model every other landing ruling assumes, and the owner's arithmetic is stated for this machine. Nothing in the tier design forbids the rolling runner from living elsewhere later |
 | Keep today's gate, accept the queue | No build | **Rejected by arithmetic.** At the committed batch cap the dominant class lands about 12 per hour against 20 arriving; the queue is the product, in the wrong direction |
@@ -454,7 +438,7 @@ rather than leaving it as fine print.
 ## 10. Sequencing: shadow first, then flip
 
 No step below is believed until the step before it is measured. This is the design's
-sequence; the build order inside each step belongs to the plan the seed becomes.
+sequence; the build order inside each step belongs to the implementation plan.
 
 1. **Tier table and the Go split, in shadow.** Declare every kind's tier; split the
    combined Go step into build and suite kinds. The landing pass records what the
@@ -467,17 +451,16 @@ sequence; the build order inside each step belongs to the plan the seed becomes.
    gains the watermark and lag. Exit measurement: rolling runs keep the lag at zero
    (they have no excuse not to) at a heavy-job cap that does not measurably slow the
    lanes.
-3. **The flip.** The board pass requests the landing tier; the batch bound returns
+3. **The flip.** The landing pass requests the landing tier; the batch bound returns
    from the recipe's 2 to the declared 5; the lag cap starts refusing. Tier selection
-   is the caller's request, never the shared gate command's new default — the merge
-   queue reads the same command and keeps the full gate until it grows a watermark of
-   its own ([§12](#12-what-this-does-not-license)).
+   is the caller's request, never the gate command's new default
+   ([§12](#12-what-this-does-not-license)).
 4. **Attribution and auto-revert.** Bisect-on-red and the lander-composed revert,
    switched on only after the flip has produced its first real escapes to practice
    on by ticket. Until this step, an escape files a ticket and a person is the mover
    — named, per I6, rather than automated on a guess.
 
-Rollback at any step after the flip is one configuration change: the board pass stops
+Rollback at any step after the flip is one configuration change: the landing pass stops
 requesting the landing tier and every batch is full-gated again, exactly as today.
 The watermark and runner can stay running; they are harmless when nothing depends on
 them, and their records are the evidence for whatever is decided next.
@@ -490,9 +473,9 @@ single number, stated first.
 
 | ID | Measurement | Threshold | Consequence |
 | :--- | :--- | :--- | :--- |
-| F1 | Escapes per 100 landings, rolling 7 days | **Above 5** — or any single escape in a landing-tier kind | The kill switch: the board pass returns to the full gate the same day, by configuration, and this design needs a fresh ruling before any retry. 5 is the number that reverts to serial-and-slow |
+| F1 | Escapes per 100 landings, rolling 7 days | **Above 5** — or any single escape in a landing-tier kind | The kill switch: the landing pass returns to the full gate the same day, by configuration, and this design needs a fresh ruling before any retry. 5 is the number that reverts to serial-and-slow |
 | F2 | Escapes per 100 landings in one rolling kind | Above 2 | That kind moves to the landing tier (a one-line table edit) and the count restarts. The design survives; the placement did not |
-| F3 | Landing-tier wall, board class, p95 in shadow or after flip | Above 180s at batch 5 (below 100/hour) | The estimate was wrong where it mattered. Parallel gates become the next build; if they cannot recover the budget either, the 100/hour target is not reachable on this box and the owner re-rules the target, not the proofs |
+| F3 | Landing-tier wall, dominant class, p95 in shadow or after flip | Above 180s at batch 5 (below 100/hour) | The estimate was wrong where it mattered. Parallel gates become the next build; if they cannot recover the budget either, the 100/hour target is not reachable on this box and the owner re-rules the target, not the proofs |
 | F4 | Watermark lag during drain hours, p95 | Above 10 landings or 20 minutes sustained over a week | The box cannot afford lanes plus the rolling tier at this cadence. Halve arrivals' pressure (fewer lanes) or move the runner; do not stretch the cadence, which only renames the blind spot |
 | F5 | Combined judged-red rate (landing reds + escapes) against the 19.7% content-isolation baseline | Falls materially while landings rise | Speed was bought by judging less, somewhere undeclared. Audit the tier table against the gate's selection records before anything else ships |
 | F6 | Attribution cost per escape | Median above 4 bisect runs, or a second revert-per-month needing a person | N is too large. Halve it once; a repeat is F1 evidence, not a second halving |
@@ -504,16 +487,14 @@ the pass and gate records, not from this document's say-so.
 
 ## 12. What this does not license
 
-- **The merge queue does not tier.** It shares the gate command, so the tier is a
-  caller request with a full-gate default. It inherits tiering only when the landing
-  consolidation gives it the watermark machinery, per the scope lines in
-  [`landing-principles.md`](landing-principles.md).
+- **The tier is not the gate command's default.** The tier is a caller request with a
+  full-gate default, so a caller with no watermark machinery keeps the full gate.
 - **No check is deleted.** Every kind that runs today runs in one tier or the other;
   the integration subset gains a regular runner on the trunk. A kind leaving both tiers
   is a different proposal with its own ruling.
-- **The refusal pathologies are not fixed here.** A measured 0 landings in 50 minutes
-  under a claiming batch is the refusal and re-eligibility machinery's own defect
-  class, owned by the principles and items already filed against it. Tiering makes
+- **The refusal pathologies are not fixed here.** A landing pass that refuses in a loop
+  is the refusal and re-eligibility machinery's own defect
+  class, owned by [the landing principles](landing-principles.md). Tiering makes
   each cycle cheaper; it does not make a looping cycle terminate.
 - **The batch recipe cap is not raised before the flip.** At today's gate, cap 5
   buys 30/hour at worse latency; the interim state is not worth its own churn.

@@ -2,8 +2,8 @@
 title: Commit citations and upstream pins
 status: accepted
 stage: CURRENT
-verified: 2026-11-16
-verified_commit: 087b4385b9208bf49b20d09fefe9564ea8618e96
+verified: 2026-11-24
+verified_commit: ed085c74c4e77df9d79e66d0009b7a609445fe71
 covers:
   - tools/gate/checks/change_common.py
   - tools/gate/checks/citations.py
@@ -14,8 +14,8 @@ tags: [gate, citations, upstream, reference]
 
 # Commit citations and upstream pins
 
-**Status:** Source-verified 2026-11-16 against
-`087b4385b9208bf49b20d09fefe9564ea8618e96`.
+**Status:** Source-verified 2026-11-24 against
+`ed085c74c4e77df9d79e66d0009b7a609445fe71`.
 
 A document citing a repository commit as evidence must name history the reader
 can reach from the checked head. An upstream pin instead identifies a dependency's
@@ -23,8 +23,7 @@ history, which need not be an ancestor of this repository's head. The citation
 check distinguishes these cases through the local refs that contain the commit,
 not through guesses about what the prose meant.
 
-**Upstream pin**, as defined in the original fix record,
-means a cited commit reachable from a ref carrying upstream history. For this
+**Upstream pin** means a cited commit reachable from a ref carrying upstream history. For this
 check, that means membership in the explicit ref allowlist below, not proof of
 who authored the commit. **Unlanded** means a repository change not contained in
 the checked head; marking it explicitly makes that limitation visible to readers.
@@ -44,7 +43,8 @@ python3 tools/gate/checks/citations.py BASE HEAD
 ```
 
 The runner selects changed Markdown still present at the named head, excluding
-paths under `.forks`, `node_modules`, or `.yolo`. It reads the committed document,
+paths with a component named in the exclusion list in `run` (dependency and scratch
+directories such as `node_modules`). It reads the committed document,
 not a dirty working copy. Added-line discovery uses a zero-context diff without
 rename detection. Fence membership is read from the whole committed document so
 a newly added line inside an existing fence is not misclassified.
@@ -55,7 +55,7 @@ For each eligible line, the check considers lowercase hexadecimal tokens matchin
 1. Lines inside a fenced block and lines carrying `[unlanded]` are exempt.
    A marker exempts the entire line, not just the closest token.
 2. A token already present anywhere in that document's base version is exempt.
-   Reflowing historical prose does not make that same token a new claim.
+   Reflowing existing prose does not make that same token a new claim.
 3. Tokens that cannot resolve locally to a commit are not judged. A dependency
    SHA and a hexadecimal identifier can look alike; failure to resolve is not
    evidence of an unlanded repository commit.
@@ -64,8 +64,8 @@ For each eligible line, the check considers lowercase hexadecimal tokens matchin
 5. Otherwise, the check reports the document, line, token and failed readings,
    and asks for `[unlanded]` when the citation is intentional.
 
-This is a change-only check, not certification that every historical citation is
-valid. Passing an unresolved token is also not proof that the cited upstream
+This is a change-only check, not certification that every citation already in the
+tree is valid. Passing an unresolved token is also not proof that the cited upstream
 commit exists somewhere else.
 
 ## Allowed containing refs
@@ -75,9 +75,9 @@ commit, then matches the returned names against `UPSTREAM_REF`.
 
 | Accepted prefix | Meaning |
 | :--- | :--- |
-| `refs/heads/patch/` | Local delivery branches carrying upstream history |
-| `refs/published/patch/` | Recorded published delivery branches |
-| `refs/remotes/<remote>/patch/` | Remote-tracking delivery branches |
+| `refs/heads/patch/` | Local branches under `patch/` |
+| `refs/published/patch/` | Refs under `published/patch/` |
+| `refs/remotes/<remote>/patch/` | Remote-tracking branches under `patch/`, on any remote |
 | `refs/remotes/upstream/` | Tracking refs of the explicitly named upstream remote |
 | `refs/tags/` | Tags, including release pins |
 
@@ -88,7 +88,7 @@ these prefixes does not qualify until the allowlist changes.
 
 A local lane branch alone does not qualify. Neither does an ordinary
 remote-tracking lane branch under origin: publishing unfinished work does not
-make it upstream. When such a commit is intentional historical evidence, mark
+make it upstream. When such a commit is cited on purpose, mark
 the citation line `[unlanded]`; do not relabel a lane ref to obtain an exemption.
 
 ## Failure and verification
@@ -105,7 +105,7 @@ commits and an upstream-tracking ref. Re-verification should inspect the regex
 as well as that test: its acceptance of all tags is broader than only release
 tags, and the test does not exercise every allowed prefix.
 
-## Current values and historical location
+## Current values
 
 | Value | At the verification stamp | Owner |
 | :--- | :--- | :--- |
@@ -113,9 +113,3 @@ tags, and the test does not exercise every allowed prefix.
 | Explicit exemption | `[unlanded]` anywhere on the line | `UNLANDED_MARKER` |
 | Upstream classification | The containing-ref prefixes above | `UPSTREAM_REF` |
 | Gate declaration | Caller-owned base/head change check | [citation declaration](../../tools/gate/checks/citations.json) |
-
-The fix record describes the original
-implementation in [the old fork checker](../../tools/fork-check.py). The rule has
-moved to the change-check entry point and shared module named above. The record
-retains its original measurements and location as history; it is not the current
-execution guide.

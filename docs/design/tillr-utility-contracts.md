@@ -466,7 +466,7 @@ For the two pairs inside one utility: the report's bytes would be an example wri
 - It does not remove a heavy suite or reduce what the gate selects today. A suite that stops finding anything can be retired by a later decision with its own evidence.
 - It does not write a reference of every flag. A flag is listed only where another utility passes it.
 - It does not give tillr a versioned interface for readers outside this repository. [Tillr as separable parts](./tillr-separable-parts.md) owns that, and nothing here freezes a shape for them.
-- It does not cover the repository's gate scripts (`tools/fork-check.py`, `tools/gate/`) or `bin/pi-forks`. Where a utility expects something from one of them, its file names the script as the provider, and the pin is left to that script's own design.
+- It does not cover the repository's gate scripts (`tools/gate/`) or the fork-target program a fork-series landing runs. Where a utility expects something from one of them, its file names the script as the provider, and the pin is left to that script's own design.
 - It does not merge or split a utility, and it does not decide whether the thirteen are the right thirteen.
 - It does not rule on the pack copy under `yolo-packs/tillr/`. A `contract/` directory is part of a utility's tree and is copied with it.
 

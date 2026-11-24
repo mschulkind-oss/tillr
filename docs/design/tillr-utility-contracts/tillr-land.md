@@ -96,7 +96,7 @@ For `trunk-worktree-uncommitted`, `conflict_paths` holds the paths with uncommit
 | `trunk_history` (`observed_tip`, `lost_tip`), read and written; `trunk_rewrites` (`old_sha`, `new_sha`), read | [tillr-drain](./tillr-drain.md) | SQL | `land/trunk_history.go`, `land/landing.go` |
 | The type `redcap.Hold`, for one payload field | [tillr-drain](./tillr-drain.md) | Go import | `land/landing.go` |
 | The run directory `.tillr/loop/<run>/` | [tillr-drain](./tillr-drain.md) | files | `land/fork_rebase.go` |
-| `bin/pi-forks patch-branch target`: one tab-separated line of four fields | the repository's fork tool, outside tillr | subprocess | `land/fork_rebase.go` |
+| The fork-target command a fork-series landing runs: one tab-separated line of four fields | a program the repository supplies, outside tillr | subprocess | `land/fork_rebase.go` |
 | `user.name` and `user.email` in Git config, not overridden locally | the machine | Git | `land/trunk.go` |
 
 ## 3. Contract and private

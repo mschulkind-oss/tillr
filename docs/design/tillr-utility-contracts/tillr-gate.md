@@ -79,7 +79,7 @@ None.
 | :--- | :--- | :--- | :--- |
 | The envelope, the exit codes, the kind registry | [tillr](./tillr.md) | Go import | throughout |
 | The check declarations: each direct `*.json` under `tools/gate/checks`, with the keys `id label command scope tier budget_ms timeout_ms reads tools needs remember writes exclusive` and no others | the repository's gate scripts, outside tillr | files | `checkfiles.go` |
-| The registry: `digest declarations in_process`, with the digest being the hash of the two arrays | `tools/fork-check.py --registry-json`, outside tillr | files | `registry.go` |
+| The registry: `digest declarations in_process`, with the digest being the hash of the two arrays | the repository's gate scripts, outside tillr | files | `registry.go` |
 | The `--gate` program: its exit code, and the fast verdict it writes to the path in `TILLR_FAST_VERDICT_OUT` | the caller's program; in the drain's loop, `tools/gate/change-gate.py` | subprocess, files | `gate.go` |
 | `TILLR_HEAVY_LOCK_FD`, an open lock handle | [tillr-drain](./tillr-drain.md) | environment | `checkgroup.go` |
 | An inherited `TILLR_FAST_VERDICT_OUT` | [tillr-drain](./tillr-drain.md) | environment | `gate.go` |
