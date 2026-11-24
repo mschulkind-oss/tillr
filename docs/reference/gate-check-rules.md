@@ -1,25 +1,30 @@
 ---
-title: "Gate check rules — a red is read once, a check asserts what was recorded, a quarantine is named and counted"
+title: "Gate check rules — a red is read once, a check asserts what was recorded, a set-aside check is named and counted"
 status: accepted
 stage: CURRENT
-verified: 2026-11-21
-verified_commit: e167325c21f77151e9eeab22df542b3837e0f631
+verified: 2026-11-24
+verified_commit: ed085c74c4e77df9d79e66d0009b7a609445fe71
 covers:
-  - tools/fork-check.py
+  - tools/tillr-gate/run.go
+  - tools/tillr-gate/gate.go
+  - tools/tillr-gate/enable.go
+  - tools/tillr/checkresult/classify.go
+  - tools/tillr-drain/drain/flaky_repair.go
+  - tools/tillr-drain/drain/gate_stall.go
   - tools/gate/checks/elapsed-time.py
   - tools/gate-timing-declarations.json
-  - tests/fork-check.test.py
 tags: [gate, checks, flake, timing, quarantine, reference]
-summary: "Three standing rules for the gate's checks, each with the code that enforces it today: a failed check is diagnosed from its one run and never re-run to see whether it passes; a check asserts counts, orders and equalities over what the product recorded and never an elapsed duration; and a quarantined case is narrow, carries the item that repairs it, applies only to the file content it was declared against, and is counted apart from passes."
+summary: "Three standing rules for the gate's checks, each with the code that enforces it today: a failed check is diagnosed from its one run and never re-run to see whether it passes; a check asserts counts, orders and equalities over what the product recorded and never an elapsed duration; and a check set aside from the verdict is narrow, carries the item that repairs it, applies only to the inputs it was recorded against, and is counted apart from passes."
 ---
 
 # Gate check rules
 
-**Status:** Source-verified 2026-11-21 against `e167325c21f77151e9eeab22df542b3837e0f631`.
+**Status:** Source-verified 2026-11-24 against `ed085c74c4e77df9d79e66d0009b7a609445fe71`.
 UNMEASURED: this reference was written by reading the code, not by observing a gate run.
 
-**The gate** is the program that decides whether a change may land: `tools/fork-check.py`,
-together with the per-change checks under `tools/gate/checks/`. A **check** is one step the
+**The gate** is the program that decides whether a change may land: `tillr-gate`
+([`tools/tillr-gate`](../../tools/tillr-gate/README.md)), running the checks declared one file
+each under `tools/gate/checks/`, together with the Go test suites. A **check** is one step the
 gate runs, such as a test suite, a build or a guard over the tree. A check is **red** when it
 ran and failed, which is a verdict about the change. This page holds the rules for what a
 check may assert and for what a red means. How a red candidate travels back to its worker is
@@ -28,10 +33,10 @@ the dispatch side's subject, in
 
 | Component | Lives in |
 | :--- | :--- |
-| Running a check once, and the triage packet | `tools/fork-check.py` (`execute_attempt`, `triage_packet`) |
-| The timing rule and its scan | `tools/fork-check.py` (`GATE_TIMING_RULE`), `tools/gate/checks/elapsed-time.py` |
+| Running a check once, and the log its verdict names | `tools/tillr-gate/run.go` (`runPlanChecks`, `runCheck`, `VerdictCheck.LogRef`), `tools/tillr-gate/gate.go` (`RunGate`, `writeTriage`) |
+| The timing rule and its scan | `tools/gate/checks/elapsed-time.py`, declared in `tools/gate/checks/elapsed-time.json` |
 | Recorded exceptions to the timing rule | `tools/gate-timing-declarations.json` |
-| Quarantine declarations and their application | `tools/fork-check.py` (`Quarantine`, `QUARANTINED_FORK_QUALITY`, `applied_quarantine`) |
+| Disabling a contradicted check, and re-enabling it | `tools/tillr/checkresult/classify.go` (`Classify`), `tools/tillr-gate/enable.go`, `tools/tillr-drain/drain/flaky_repair.go` |
 
 ---
 
@@ -39,10 +44,11 @@ the dispatch side's subject, in
 
 **There is no automatic retry of a red gate.** A person who gets a red does not blindly run
 it again; they read the failure and decide whose failure it is. The gate does the same. A
-failed check costs exactly one run of that check, and what the gate produces from it is a
-**triage packet**: a machine-readable record, read out of that run's own output, of the
-failing case's name and file, the assertion text, the paths the assertion names, the commits
-that touched those paths, and the one-file command that reproduces the failure.
+failed check costs exactly one run of that check. The verdict record names, for each check,
+the file that holds that run's own output (`log_ref`), so a red is read from the run that
+produced it. When the gate is one named program, `tillr-gate` also writes a bounded **triage**
+*(the code's name for the file)*: the program's own status lines and the tail of its output,
+headed by what ran, where, how it ended and where the whole output is.
 
 A re-run that passes says only that something differed between two runs. It cannot say what,
 so it turns one unexplained red into an equally unexplained pass.
@@ -67,9 +73,12 @@ often as needed to find the cause. That is diagnosis, not a verdict, and it does
 gate or the whole suite.
 
 > [!NOTE]
-> **A check that was killed from outside was not judged.** When a check's process is ended by
-> a signal the gate did not send, the gate runs it again a small fixed number of times and
-> then reports that nothing was judged. That is not a re-run of a red: a killed process
+> **A check that did not answer was not judged.** A check whose process was killed by a signal,
+> or could not be started, is recorded as `error`: nothing was judged, and the candidate is
+> neither passed nor failed. A check that stops making progress is ended by the gate's watchdog
+> and recorded as `stalled` (exit 6), which is also not a verdict. The drain gates that same
+> head once more after the first stall, with fewer gates in flight, and holds the item as
+> `gate-stalled` on the second. That is not a re-run of a red: a process that did not answer
 > produced no verdict to re-test.
 
 ## A check asserts what was recorded, never elapsed time
@@ -100,68 +109,59 @@ kind, a reason and its repair. A hit with no declaration fails the gate, and so 
 declaration that no longer matches a hit, because a declaration that outlives its defect only
 silences the scan.
 
-## A quarantined case is narrow, ticketed and counted
+## A check set aside from the verdict is narrow, ticketed and counted
 
-A **quarantine** is a declaration, committed in the gate's own source, that named failing
-cases of one test file stop making their check red while they stay in place. It is not a
-verdict that the cases pass.
+A check may stop counting toward the verdict while it stays in the tree only under a record
+that says which check, on what evidence, and which item repairs it. Setting a check aside is
+never a verdict that it passes.
 
-- **It applies only when the declared cases are the run's only failures.** Any other failing
-  case in that check, a case of the same name in another file, or a failure count that
-  disagrees with the list of failing names keeps the check red.
-- **No item, no quarantine.** A declaration names the queue item that repairs the case. A
-  declaration whose item is blank suppresses nothing: the check stays red and the reason is
-  printed beside it. The gate checks that an item is named; it cannot check from a checkout
-  that the item is still open.
-- **It applies only to the content it was declared against.** A declaration records the git
-  blob id of the test file it names: the identifier git derives from the file's bytes, which
-  `git hash-object <file>` prints. The gate computes that id for the file in the fork's
-  candidate checkout, the clean checkout under `.forks/candidate/` that the check ran in.
-  While the two ids match, the declaration applies. When they differ, or the file cannot be
-  read, it suppresses nothing: a changed file is a new subject that the declaration's
-  evidence does not cover, so the check stays red and the reason is printed beside it with
-  both ids. A declaration has no expiry date, and the gate reads no clock to decide whether
-  one applies. What ends a quarantine is its item's work: the patch that repairs the case
-  changes the file, and the declaration is then deleted.
-- **No count refuses a declaration.** The gate holds no limit on how many declarations exist,
-  per repository or per check. What keeps quarantines from accumulating unseen is the item
-  each one names and the report line below.
-- **A classification says why the case fails, and "could not answer" is not one.** A
-  declaration is classified `upstream` (the failure reproduces on the unpatched upstream),
-  `flaky` (a proven flake) or `unknown`. A quarantined case ran and failed. A check that could
-  not run at all, because a tool or checkout is missing, is reported separately as one that
-  could not answer, and is never a quarantine.
-- **A quarantined case is named and counted in every gate report, apart from passes.** The
-  report prints the check, the cases, the item, the declared blob id, the classification and
-  the reason, and its summary counts quarantined cases separately and says that a quarantined case is not a passing one. The
-  run's evidence record carries the same block.
+The one mechanism that does this is the **disabled check**, defined in
+[the gate design](../design/gate-rework.md#a-contradicted-check-is-disabled): a check whose
+result store holds both a pass and a fail for the same fingerprint of its declared inputs.
 
-The gate's run-alone slot was removed on 2026-11-21. A check whose result depends on what
-runs beside it is repaired at its cause, not isolated. The `pi-subagents` quarantine
-declaration was also removed; there are no live quarantine declarations.
+- **It is narrow.** A marker names one check and one episode: the fingerprint, and the time
+  and the copied output of both the pass and the fail. A check with no such contradiction is
+  judged by its raw result.
+- **It carries the item that repairs it.** The drain files one repair item per disabled
+  check, whose work is to fix the check at its cause and re-enable it, without a retry, a
+  sleep or a skip. `tillr-gate enable` clears the episode once that item has landed.
+- **It applies only to the inputs it was recorded against.** The marker is bound to its
+  episode. A contradiction that matches an episode already resolved does not disable the
+  check again.
+- **It is named and counted in every gate report, apart from passes.** A disabled check's
+  result is `disabled`, never `pass`. The run summary counts passed, remembered, unavailable,
+  disabled and failed checks separately.
+- **"Could not answer" is not a classification of failure.** A check that could not run at
+  all, because a tool or a declared machine resource is missing, is reported as `unavailable`
+  or `error`, and is never a disabled check.
+
+**Setting aside single named cases of a test file** (a quarantine of cases rather than of a
+whole check) is not enforced by code: no declaration format for it exists. The rule for one,
+if one is added, is the list above, with the declaration bound to the test file's git blob id
+(`git hash-object <file>`) so that it lapses when the file changes. The classifier reads a
+check reported with the word `QUARANTINED` as `unavailable`, never as a pass.
+
+A check whose result depends on what runs beside it is repaired at its cause, not isolated.
 
 ## What enforces each rule today
 
 | Rule | Enforced by |
 | :--- | :--- |
-| A failed check is run once and read from its own output | `execute_attempt` and `triage_packet` in `tools/fork-check.py` |
+| A failed check is run once and read from its own output | `runPlanChecks` and `runCheck` in `tools/tillr-gate/run.go` run each planned check once and record its `log_ref`; `RunGate` and `writeTriage` in `tools/tillr-gate/gate.go` do the same for a named gate program |
+| A check that did not answer is not judged, and a stall is gated once more | `gateResult` in `tools/tillr-gate/gate.go`, the watchdog in `tools/tillr-gate/watchdog.go`, and `tools/tillr-drain/drain/gate_stall.go` |
 | A red candidate goes back to its worker with the failure named, with no wait and no count | `tools/tillr-drain`, described under [landing principle 11](../design/landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) |
-| No check asserts elapsed time | `tools/gate/checks/elapsed-time.py` for the test files a change adds or edits, and the scan in `tests/fork-check.test.py` that reads `GATE_TIMING_RULE` and the whole check corpus |
-| An existing timing assertion is declared with its reason and repair | The same two scans, against `tools/gate-timing-declarations.json` |
-| A deadline's bound is far past expectation; a missing observable is recorded in the product | Nothing. These are review rules |
-| A quarantine applies only to its declared cases as the run's only failures | `applied_quarantine` and `failing_tests` in `tools/fork-check.py` |
-| A quarantine names its item | `Quarantine.lapse` in `tools/fork-check.py` |
-| A quarantine applies only while its file has the declared blob id | `Quarantine.lapse` and `file_blob_id` in `tools/fork-check.py` |
-| A quarantined case is reported and counted apart from passes | `check_status` and the report in `tools/fork-check.py` |
+| No check asserts elapsed time | `tools/gate/checks/elapsed-time.py`, for the test files a change adds or edits. A scan of the whole test corpus is not enforced by code |
+| An existing timing assertion is declared with its reason and repair | The same check, against `tools/gate-timing-declarations.json`; a declaration that no longer matches a hit fails it |
+| A deadline's bound is far past expectation; a missing observable is recorded in the product | Not enforced by code. These are review rules |
+| A check is disabled only on a contradicted fingerprint, per episode | `Classify` and `classifyContradiction` in `tools/tillr/checkresult/classify.go`; the marker is written by `tools/tillr-gate/enable.go` |
+| A disabled check names its repair item | `sweepDisabledMarkers` in `tools/tillr-drain/drain/flaky_repair.go` |
+| A disabled check is reported and counted apart from passes | `writeRunSummary` in `tools/tillr-gate`, held by `TestDisabledCheckExcludedFromPassAndFailCountsAndListedAsDisabled` |
+| A set-aside of single named cases is narrow, ticketed and bound to file content | Not enforced by code |
 
 ## Current values
-
-Verified at `e167325c21f77151e9eeab22df542b3837e0f631`, except the quarantine row. On
-2026-11-21, `rg 'QUARANTINED_FORK_QUALITY: tuple' tools/fork-check.py` showed the
-quarantine declarations tuple is empty.
 
 | Value | Setting | Defined in |
 | :--- | :--- | :--- |
 | Kinds a timing declaration may carry | `liveness`, `backlog` | `tools/gate/checks/elapsed-time.py` (`parse_timing_declarations`) |
-| Runs given to a check ended by an outside signal | `OUTSIDE_SIGNAL_RERUNS` | `tools/fork-check.py` |
-| Live quarantine declarations | none | `tools/fork-check.py` (`QUARANTINED_FORK_QUALITY`) |
+| Result words that are not a verdict on the candidate | `error`, `stalled`, `unavailable`, `disabled`, `over-budget` | `tools/tillr-gate/run.go` |
+| Prefix of a filed repair item for a disabled check | `flaky-` | `tools/tillr-drain/drain/flaky_repair.go` (`FlakyRepairPrefix`) |
