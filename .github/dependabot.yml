@@ -1,0 +1,50 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /tools/tillr-cli
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /tools/tillr-drain
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /tools/tillr-gate
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /tools/tillr-item
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /tools/tillr-land
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /tools/tillr-run
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /tools/tillr-store
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /tools/tillr-view
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /tools/tillr-watch
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /tools/tillr
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /tools/tillr-view/web
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

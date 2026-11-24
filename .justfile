@@ -7,6 +7,37 @@
 default:
     @just --list
 
+# The standard recipe set. `check` is what to run while working; `check-ci` is what CI
+# runs and never rewrites a file. `done` (below) is the full local gate.
+check: format lint test
+
+check-ci: lint-ci test
+
+# Fetch every Go module's dependencies and the observatory front end's packages.
+setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for mod in tools/*/go.mod; do (cd "$(dirname "$mod")" && go mod download); done
+    (cd tools/tillr-view/web && npm ci)
+
+# Vet every Go module.
+lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for mod in tools/*/go.mod; do (cd "$(dirname "$mod")" && go vet ./...); done
+
+# The same, after refusing unformatted Go instead of rewriting it.
+lint-ci:
+    @just format --check
+    @just lint
+
+# Run every Go module's tests; arguments go to `go test`.
+[positional-arguments]
+test *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for mod in tools/*/go.mod; do (cd "$(dirname "$mod")" && go test ./... "$@"); done
+
 # Python is excluded: adopting its formatter would rewrite 84 files at once.
 # shell, TypeScript, and Lua are excluded because they have no pinned formatter.
 # Adding a language means pinning its formatter in mise.toml and landing the reformat
