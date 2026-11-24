@@ -1,0 +1,47 @@
+# Measured on 2026-11-24 from .tillr/state.db with:
+#   python3 -c "import sqlite3; c = sqlite3.connect('file:.tillr/state.db?mode=ro&readonly_shm=1', uri=True); print(c.execute(\"SELECT json_extract(payload,'$.result'), COUNT(*), COUNT(DISTINCT json_extract(payload,'$.tree_sha')) FROM events WHERE kind='gate.verdict' GROUP BY 1 ORDER BY 2 DESC\").fetchall()); print(c.execute(\"SELECT datetime(ts/1000,'unixepoch','localtime'), object_id, substr(json_extract(payload,'$.tree_sha'),1,12) FROM events WHERE kind='gate.verdict' AND json_extract(payload,'$.result')='stalled' ORDER BY seq\").fetchall())"
+# Recorded gate.verdict history (2026-11-15 through 2026-11-24, 1,850 verdicts):
+#   1,615 pass (1,608 trees), 203 fail (202 trees), 19 stalled across 11 distinct
+#   tree_sha values, and 13 error (11 trees).
+#   - Healthy baseline: 0 stalled verdicts outside 2026-11-22 08:26:46..2026-11-23
+#     03:02:07 ET across 195+ non-incident hours, including the 8h 27m gap
+#     09:06:39..17:33:55 ET on 2026-11-22 and 27h+ after 03:02:07 ET on 2026-11-23.
+#   - Single-candidate bound: one hanging candidate records at most 2 stalled
+#     gate.verdict events (initial gate plus one automatic gate-stall-rerun before
+#     drain-item-fault holds that item).
+#   - Multi-candidate stall bursts: 10 stalls across 2 trees in 39.9m
+#     (2026-11-22 08:26:46..09:06:39 ET, 3rd at +21.1m); 3 stalls across 3 distinct
+#     trees in 69.1m (2026-11-22 17:33:55..18:42:59 ET: cdd89c77e9, eee6c3a261,
+#     48e632c45b); and 6 stalls across 6 distinct trees in 3h 43.8m (2026-11-22
+#     23:18:18..2026-11-23 03:02:07 ET, 3rd at +45.6m, plus 2h 36.9m to
+#     fixer-main-18f649ca0940 and 4d77b4e91c).
+# Warn at threshold = 3 stalled verdicts in window = "4h" drain-wide, with no
+# clear_when so passing or failing gates on other candidates in between do not
+# reset the drain-wide count, and resolve well inside the 8h 27m inter-incident
+# gap; no automatic remedy is attached.
+[[rule]]
+id = "gate-drain-stalls"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["gate.verdict"]
+
+[rule.when]
+group_by = "global"
+pattern = "count_in_window"
+match = 'event.result == "stalled"'
+threshold = 3
+window = "4h"
+
+[rule.guidance]
+summary = "{{count}} landing gates were judged stalled in the last 4 hours across the drain (latest: {{event.object_id}} on tree {{event.tree_sha}})."
+check = [
+  "Inspect gate.stderr and the stalled check observations in gate.verdict.json under .tillr/loop/ for {{event.object_id}} and the other recent stalled gate runs, and run tillr drain why to see which check went silent."
+]
+do = [
+  "Diagnose the shared gate check or runner fault causing stalls across candidates before clearing held runs; this alert attaches no automatic remedy."
+]
+
+[rule.delivery]
+receiver = "foreground"

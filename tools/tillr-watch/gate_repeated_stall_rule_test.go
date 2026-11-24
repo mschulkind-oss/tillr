@@ -131,7 +131,8 @@ func TestGateRepeatedStallRule(t *testing.T) {
 	}
 
 	// Evaluating all command-eligible rules in config/tillr/watch on three stalled
-	// gate.verdict events for one tree_sha opens only gate-repeated-stall.
+	// gate.verdict events for one tree_sha opens per-tree gate-repeated-stall and
+	// drain-wide gate-drain-stalls, and nothing else.
 	allStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "all-rules.db"), true)
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +172,11 @@ func TestGateRepeatedStallRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(allNotices) != 1 || allNotices[0].Bundle.RuleID != ruleID || allNotices[0].Bundle.Subject != treeC {
-		t.Fatalf("want only %s for %s across config/tillr/watch, got %+v", ruleID, treeC, allNotices)
+	gotByRule := map[string]string{}
+	for _, n := range allNotices {
+		gotByRule[n.Bundle.RuleID] = n.Bundle.Subject
+	}
+	if len(allNotices) != 2 || gotByRule[ruleID] != treeC || gotByRule["gate-drain-stalls"] != "global" {
+		t.Fatalf("want %s (%s) and gate-drain-stalls (global) across config/tillr/watch, got %+v", ruleID, treeC, allNotices)
 	}
 }
