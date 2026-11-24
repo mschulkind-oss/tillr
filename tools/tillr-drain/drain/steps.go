@@ -442,6 +442,27 @@ func (s *ProcessSteps) hasDetachedGate(candidate Candidate) (live bool, done boo
 	return hasDetachedGateInDir(s.gateRunDir(candidate), candidate, true)
 }
 
+func detachedGatePassed(candidate Candidate, done detachedGateDone) bool {
+	if done.NotStarted || done.Interrupted || done.ExitCode < 0 || done.ExitCode == record.ExitUsage {
+		return false
+	}
+	code := done.ExitCode
+	return classifyCheck(checkresult.Observation{
+		Commit:   candidate.HeadSHA,
+		Worktree: candidate.Worktree,
+		Source:   checkresult.JudgingProgram,
+		ExitCode: &code,
+	}).Outcome == checkresult.Pass
+}
+
+func (s *ProcessSteps) hasPassedDetachedGate(candidate Candidate) bool {
+	d, ok := readDetachedGateDone(s.gateRunDir(candidate))
+	if !ok || d.RunID != candidate.RunID || d.BaseSHA != candidate.BaseSHA || d.HeadSHA != candidate.HeadSHA {
+		return false
+	}
+	return detachedGatePassed(candidate, d)
+}
+
 func writeJSONAtomic(path string, v any) error {
 	body, err := json.Marshal(v)
 	if err != nil {

@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavyrun"
@@ -202,13 +203,15 @@ func (l *Loop) armRestartPending(gen uint64) (<-chan struct{}, bool) {
 
 // waitForRestartAnswer blocks until any pending restart request that is not
 // deferred by post-landing actions has been answered (replaced or answered
-// without replacing) or deferred by a post-landing action.
-func (l *Loop) waitForRestartAnswer(ctx context.Context) error {
+// without replacing) or deferred by a post-landing action. When allowDuringProof
+// is true, an active trunk proof also lets the caller (an already-passed
+// candidate landing) proceed without waiting for the proof to end.
+func (l *Loop) waitForRestartAnswer(ctx context.Context, allowDuringProof bool) error {
 	for {
 		if l.restartReplaced.Load() {
 			return errRestartPending
 		}
-		if l.cfg.Restart == nil || l.restartActionDeferred() {
+		if l.cfg.Restart == nil || l.restartActionDeferred() || (allowDuringProof && l.restartProofActive()) {
 			return nil
 		}
 		gen, waitCh := l.restartWaitState()
@@ -240,9 +243,10 @@ func (l *Loop) waitForRestartAnswer(ctx context.Context) error {
 type runStartAdmissionKey struct{}
 type restartMechanicalKey struct{}
 type restartMechanicalHold struct {
-	loop     *Loop
-	held     bool
-	settling bool
+	loop             *Loop
+	held             bool
+	settling         bool
+	allowDuringProof atomic.Bool
 }
 
 func (h *restartMechanicalHold) acquire() {
@@ -255,8 +259,9 @@ func (h *restartMechanicalHold) acquire() {
 
 func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
 	for {
+		allowDuringProof := h.allowDuringProof.Load()
 		if h.settling {
-			if err := h.loop.waitForRestartAnswer(ctx); err != nil {
+			if err := h.loop.waitForRestartAnswer(ctx, allowDuringProof); err != nil {
 				return err
 			}
 		} else {
@@ -276,7 +281,7 @@ func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
 			h.release()
 			return errRestartPending
 		}
-		if h.settling && h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() {
+		if h.settling && h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() && !(h.allowDuringProof.Load() && h.loop.restartProofActive()) {
 			if _, waitCh := h.loop.restartWaitState(); waitCh != nil {
 				// A restart became pending between waitForRestartAnswer and RLock.
 				// Release immediately so the restart is not starved, then wait.
@@ -309,19 +314,28 @@ func (h *restartMechanicalHold) release() {
 // Mechanical gate and landing steps finish before exec. A model session nested
 // inside one temporarily gives up this place; its lifetime never bounds restart.
 func (l *Loop) lockRestartMechanical(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, false)
+	return l.lockRestartStep(ctx, false, false)
 }
 
 // An already admitted gate can finish through landing, while a pending restart
 // stops new gates and landings from taking a new read hold until it is answered.
 func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, true)
+	return l.lockRestartStep(ctx, true, false)
 }
 
-func (l *Loop) lockRestartStep(ctx context.Context, settling bool) (context.Context, func(), error) {
+// lockRestartLanding acquires a settlement hold that may still proceed while a
+// pending restart is waiting on an active trunk proof, so a candidate whose gate
+// has already passed lands without waiting for the proof to end. Once the proof
+// ends, the pending restart still blocks new holds before the next proof or gate.
+func (l *Loop) lockRestartLanding(ctx context.Context) (context.Context, func(), error) {
+	return l.lockRestartStep(ctx, true, true)
+}
+
+func (l *Loop) lockRestartStep(ctx context.Context, settling, allowDuringProof bool) (context.Context, func(), error) {
 	h, nested := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold)
 	if !nested {
 		h = &restartMechanicalHold{loop: l, settling: settling}
+		h.allowDuringProof.Store(allowDuringProof)
 		if err := h.acquireContext(ctx); err != nil {
 			return ctx, func() {}, err
 		}
@@ -333,11 +347,16 @@ func (l *Loop) lockRestartStep(ctx context.Context, settling bool) (context.Cont
 	if l.restartReplaced.Load() {
 		return ctx, func() {}, errRestartPending
 	}
+	prevAllow := h.allowDuringProof.Load()
 	h.settling = true
+	if allowDuringProof {
+		h.allowDuringProof.Store(true)
+	}
 	l.restartSettlements.Add(1)
 	return ctx, func() {
 		l.restartSettlements.Add(-1)
 		h.settling = false
+		h.allowDuringProof.Store(prevAllow)
 	}, nil
 }
 
