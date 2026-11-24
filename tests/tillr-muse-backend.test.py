@@ -1295,4 +1295,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # The stand-in `pi` programs these cases write do not answer `pi --features`, so the
+    # features they stand for are stated to the adapter instead of probed.
+    os.environ["TILLR_PI_FEATURES"] = "parked-tool-calls"
     main()

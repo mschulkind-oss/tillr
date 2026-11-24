@@ -236,6 +236,44 @@ pi_resolve_harness() {
     fi
 }
 
+# The features of pi that tillr's adapter cannot run without. `parked-tool-calls`: the
+# `land` and `obstacle` tools answer `park: true`, pi prints a `{"type":"parked"}` event
+# and exits 0 without settling, and a promptless `--session` resume replays the call.
+PI_REQUIRED_FEATURES="parked-tool-calls"
+
+# pi_require_features refuses a run on a pi that lacks a required feature. It asks the
+# resolved binary itself, `pi --features` (a JSON array of names), so no fork is assumed:
+# any pi that lists the feature runs. `TILLR_PI_FEATURES`, a space-separated list, states
+# the features instead and skips the probe, for a caller that has already established them.
+pi_require_features() {
+    if [ "${TILLR_PI_FEATURES+set}" = set ]; then
+        _pi_have=$TILLR_PI_FEATURES
+        _pi_source="TILLR_PI_FEATURES states"
+    else
+        _pi_probe=$(PI_OFFLINE=1 PI_TELEMETRY=0 timeout "${TILLR_PI_PROBE_SECONDS:-20}" \
+            "$PI_HARNESS_BIN" --features </dev/null 2>/dev/null || true)
+        _pi_have=$(printf '%s' "$_pi_probe" | python3 -c '
+import json, sys
+try:
+    names = json.loads(sys.stdin.read())
+except ValueError:
+    names = []
+if isinstance(names, list):
+    print(" ".join(name for name in names if isinstance(name, str)))
+' 2>/dev/null || true)
+        _pi_source="\`pi --features\` lists"
+    fi
+    for _pi_need in $PI_REQUIRED_FEATURES; do
+        case " $_pi_have " in
+            *" $_pi_need "*) ;;
+            *)
+                refuse "the pi at $PI_HARNESS_BIN lacks the feature '$_pi_need', which this adapter requires: $_pi_source '${_pi_have:-nothing}'. Upstream pi does not have it yet; the fork mschulkind-oss/tillr-pi does. Install a pi whose \`pi --features\` output names '$_pi_need'."
+                ;;
+        esac
+    done
+    unset _pi_have _pi_probe _pi_source _pi_need
+}
+
 pi_prepare_harness_env() {
     if [ "${PI_HARNESS_REBUILT:-0}" = 1 ]; then
         pi_apply_yolo_session_home

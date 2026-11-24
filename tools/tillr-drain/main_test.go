@@ -56,6 +56,9 @@ func TestMain(m *testing.M) {
 
 // runTests returns before TestMain exits, so cleanup also runs after setup or test failure.
 func runTests(m *testing.M) int {
+	// The stand-in `pi` programs these cases write do not answer `pi --features`, so the
+	// features they stand for are stated to the adapter instead of probed.
+	os.Setenv("TILLR_PI_FEATURES", "parked-tool-calls")
 	if os.Getenv("RUN_OUTPUT_HELPER") == "1" {
 		return m.Run()
 	}
