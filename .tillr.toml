@@ -2,12 +2,11 @@
 rewrite = true
 
 [lanes]
-# Lanes reserved for interactively sourced items (the owner asked on 2026-11-18 for capacity reserved for them;
-# on 2026-11-22 the owner restarted the drain with one ordinary and one express lane).
+# Reserves lanes for express items.
 express = 1
 
 [candidate_size]
-# Advisory thresholds recorded beside each verifier refusal; neither blocks landing.
+# Sets advisory thresholds recorded beside each verifier refusal; neither blocks landing.
 file_limit = 27
 added_line_limit = 1200
 
@@ -17,11 +16,9 @@ command = "just tillr-roll --no-request"
 pause_timeout_seconds = 120
 
 [push]
-# Publish only what the proof has passed: the green pointer, when it advances.
-# "tip" pushes the trunk tip after each landing instead; "none" pushes nothing.
+# Pushes the proved green commit at loop startup and when the pointer advances.
 what = "green"
 
 [sync]
-# The drain imports from the tillr roadmap only (owner, 2026-11-22: "I specificaly said tillr only").
-# Left unset, the sync reads every docs/**/roadmap.md in the repository.
+# Scopes item sync to the listed roadmaps and their direct tracked Markdown links.
 roadmaps = ["docs/tillr/roadmap.md"]
