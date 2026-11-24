@@ -2,7 +2,6 @@
 title: "Design ruling: no default run wall, and a committed candidate is judged before wall status"
 status: accepted
 stage: CURRENT
-updated: 2026-11-15
 tags:
   - tillr
   - drain
@@ -10,116 +9,122 @@ tags:
   - timeout
   - state-machine
   - design-ruling
-summary: "No backend sets a run wall by default. A lease may be unbounded (timeout_ms == 0 -> leased_until NULL), settle sends any run that produced a commit to candidate and the gate regardless of wall status, and an uncommitted walled run is resumed in settle before the lane is reset."
-depends-on:
-  - ./momentum-principle.md
-  - board-utilities.md
-  - ../reference/tillr-drain-successor.md
+summary: "No backend sets a run wall by default. A lease may be unbounded (timeout_ms == 0 -> leased_until NULL), settle sends any run that produced a commit to the gate regardless of wall status, and an uncommitted walled run is resumed in settle before the lane is reset."
 ---
 
 # Design ruling: remove the run wall and judge committed candidates before wall status
 
 > **Built.** No adapter sets a run wall by default.
 >
-> **Whose ruling.** "Ruling" here is a design agent's word: `D-RW1` to `D-RW4` are the designer's decisions of 2026-11-15, and the owner may overturn any of them. No words of the owner's are recorded for them.
+> **Whose ruling.** "Ruling" here is a design agent's word: `D-RW1` to `D-RW4` are the designer's decisions of 2026-11-15, and the owner may overturn any of them.
 
-**Ruling.** `tillr` has no default per-run wall: [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) carries no `timeout_seconds`, the backend adapters wrap the harness in `timeout(1)` only when `--timeout` is explicitly passed, and `timeout_seconds: 0` / `timeout_ms: 0` in `tillr-run` and `tillr-drain` is an unbounded run whose lane lease carries `leased_until = NULL`. When an explicit wall does fire (`StateTimedOut` or exit `124`), `settle` in [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) (stated in [`docs/reference/tillr-drain-successor.md`](../reference/tillr-drain-successor.md#transition-table)) checks `HEAD != base` **before** `AttemptUnjudged`, so any committed candidate goes to `Verify` / `judge`; when `HEAD == base`, it resumes the run in `settle` while the lane still holds its worktree, `brief.md`, and `session-id`, before resetting the lane. `AttemptUnjudged` stays outside `AttemptInfrastructure`. Sections 1 to 4 give the reasoning for each decision as it was argued against the tree that still had the wall.
+A **run wall** (this document's word) is a limit on the total wall-clock duration of one
+agent run, after which the run is killed. It is not a limit on one network read, and not
+the lane lease, which only says how long a lane is reserved.
+
+**Ruling.** `tillr` has no default run wall:
+
+- [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) carries no
+  `timeout_seconds`, and the backend adapters (`run-pi`, `run-claude`, `run-muse`,
+  `run-agy` under `tools/tillr-run/backends/`) wrap the harness in `timeout(1)` only when
+  `--timeout` is passed.
+- `timeout_seconds: 0` or `timeout_ms: 0` is an unbounded run whose lane lease carries
+  `leased_until = NULL`.
+- When an explicit wall does fire, `settle` in
+  [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) (stated in the
+  drain reference's [transition table](../reference/tillr-drain-successor.md#transition-table))
+  judges a run that committed and resumes one that did not.
 
 ---
 
 ## 1. Should the wall exist at all?
 
-**Decision (`D-RW1`):** **No.** Remove the default wall everywhere; keep `timeout_seconds` / `timeout_ms` only as an optional per-backend or per-request bound (`0` or omitted means no wall). Keep `ClassifyAttempt` (`tools/tillr-drain/drain/failover.go`) mapping `StateTimedOut` and `adapterWallExit` (`124`) to `AttemptUnjudged` outside `AttemptInfrastructure` — reclassifying a wall as infrastructure would re-run long work from scratch on a second backend and increment `InfraFailures`, doubling waste instead of removing the cause.
+**Decision (`D-RW1`):** **No.** There is no default wall anywhere. `timeout_seconds` and
+`timeout_ms` remain as an optional per-backend or per-request bound; `0` or omitted means
+no wall, and a negative value is refused.
 
-**Evidence and survey of existing mechanisms:**
+A run that an explicit wall did cut (`StateTimedOut`, or the adapter's exit `124`) is
+classified `AttemptUnjudged` by `ClassifyAttempt` in `tools/tillr-drain/drain/failover.go`,
+never as an infrastructure failure. Classifying it as infrastructure would re-run long
+work from the start on a second backend and count against that backend.
 
-- **A total-run wall is a budget, not a fault detector.** [`docs/design/momentum-principle.md`](../design/momentum-principle.md) forbids budgets that stop valid work. In the measured wave, the 1800s wall caught zero hangs, stranded two runs that had already committed (`04b`, `04c`), and killed `04d` 18 seconds after all checks passed — wiping 28 minutes of reasoning and 5 verified edits.
-- **Two independent 1800s walls exist today.** `run.Exec` (`tools/tillr-run/run/exec.go`) kills `-pgid` via `context.WithTimeout` from `backend-policy.json`'s `timeout_seconds: 1800`, **and** `run-pi`, `run-muse`, and `run-agy` (`tools/tillr-run/backends/*/run-*`) independently wrap the harness in `timeout "$wall"` with `wall=1800` (plus `--print-timeout "${wall}s"` in `run-agy`) while `Backend.command` (`tools/tillr-run/run/request.go`) never passes `--timeout`. Removing only the policy key would leave the adapter wall firing at 1800s.
-- **Every legitimate failure claimed for the wall is already handled elsewhere — except one that a total-run wall cannot solve anyway:**
-  1. *Normal exit or harness crash:* `run.Apply` (`tools/tillr-run/run/apply.go`) clears `lanes.state` and `leased_until` in the same SQLite transaction that writes the terminal `run.record`; `SpendExtractorTimeout` (`60s` in `exec.go`) bounds post-exit report extraction.
-  2. *Operator stop or wedged child on shutdown:* `ProcessSteps.Run` (`tools/tillr-drain/drain/steps.go`) sends `SIGTERM` with `cmd.WaitDelay = 30 * time.Second`; `execFace` (`tools/tillr-run/main.go`) catches `SIGINT`/`SIGTERM`, kills the process group, and writes the terminal record on `context.WithoutCancel(ctx)`.
-  3. *Orphaned lane lease after `tillr-run` itself is `SIGKILL`ed:* [`board-utilities.md`](./board-utilities.md) section 5.6 (`D-UT17`) required `timeout_ms > 0` solely to populate `lanes.leased_until` (`ClaimLease` in `tools/tillr-run/run/lease.go`). Survey of the tree shows `NULL`-expiry leases are **already implemented end to end**: `lanes.leased_until` (`tools/tillr-run/run/schema.go`) is nullable; `expiredLeases` (`lease.go`) skips `leased_until IS NULL`; `readLanes` and `activeLeases` (`tools/tillr-drain/drain/plan.go`) hold `NULL`-expiry lanes; `Loop.planNothing` (`loop.go`) stops cleanly with `StopLanesLeased` naming `tillr run release <lane>`; and `ReleaseLane` (`lease.go`) frees a `NULL`-expiry lane immediately (requiring only a one-line guard in `closeRun` so `LeasedUntil == 0` stamps `now` rather than Unix epoch `0`).
-  4. *Silent TCP/stream stall inside a harness (`D-LR4`):* Nothing in `tillr-run` or `tillr-drain` probes mid-turn socket liveness, and a wall on total run duration cannot distinguish a stalled socket from 28 minutes of active thinking. Live run activity is already on screen (`tillr-view`, `tillr run lanes`, `git-trace2.jsonl`, `bash-shim.sh`). Any socket-idle timeout belongs per HTTP read inside the harness, never on total run duration in `tillr`.
+**Why:**
+
+- **A total-run wall is a budget, not a fault detector.** The
+  [momentum principle](./momentum-principle.md) forbids budgets that stop valid work.
+  Measured over one batch of runs under an 1800-second wall: the wall caught no hang, cut
+  two runs that had already committed, and killed a third 18 seconds after all of its
+  checks had passed.
+- **Every failure a wall was meant to cover is handled elsewhere:**
+  1. *Normal exit or harness crash:* the terminal `run.record` and the lane release are
+     written in one store transaction.
+  2. *Operator stop:* the runner catches `SIGINT` and `SIGTERM`, kills the process group
+     and writes the terminal record.
+  3. *A runner killed outright:* a lease with a deadline is reaped by `ReapExpiredLeases`
+     in `tools/tillr-run/run/lease.go`. A `NULL`-deadline lease is skipped by that reaper,
+     the loop stops with `lanes-leased` naming `tillr run release <lane>`, and
+     `ReleaseLane` frees it (`D-UT17` in the
+     [utilities design's decision ledger](./board-utilities.md#14-decision-ledger)).
+  4. *A stalled network stream inside a harness:* a wall on total duration cannot tell a
+     stalled socket from a long stretch of thinking. An idle timeout belongs on one read
+     inside the harness, never on the run.
 
 ---
 
 ## 2. When the wall fires on a run that produced a commit
 
-**Decision (`D-RW2`):** **Reorder `settle` so commit-produced (`HEAD != base`) dominates `AttemptUnjudged`.** Whenever an explicit wall (`StateTimedOut` or exit `124`) fires on a run whose target `HEAD` moved off `base` (and whose log footer is not `RESULT: blocked`), `settle` transitions the item to **candidate** and runs `Verify` (`judge`), exactly as for `AttemptAnswered`. Once `Steps.Gate` records a `gate.verdict` (`judged == true`), that verdict governs `plan`, `AuthorizeRetry`, and `tillr-view` over `AttemptUnjudged`.
+**Decision (`D-RW2`):** **A commit dominates the wall.** When an explicit wall fires on a
+run whose lane `HEAD` moved off its base, and whose report does not end `RESULT: blocked`,
+`settle` treats the run as a candidate and runs `Verify`, exactly as for a run that
+finished. Once the gate records a `gate.verdict`, that verdict governs planning and retry
+authorization, not the unjudged class.
 
-**Evidence:**
+**Why:**
 
-- **State-model contradiction.** [`tillr-drain-successor.md`](../reference/tillr-drain-successor.md#the-successor-function-and-derived-positions) defined **candidate** as *"the run's terminal record is in the store, the run produced a commit, and the gate has not judged it"*, yet its [transition table](../reference/tillr-drain-successor.md#transition-table) (`running -> settle`) and `Loop.settle` (`loop.go`) branched on `AttemptUnjudged` before reading `HEAD`, stranding committed runs `04b` and `04c` in `held` (`run-unjudged`).
-- **Why the wall never needs to dominate a committed tree.** Every hazard of a mid-run kill after a commit is already caught mechanically inside `Loop.Verify` (`loop.go`):
-  1. *Half-written second edit left uncommitted at kill time:* `Loop.fenceViolation` runs `git status --porcelain` before `Steps.Gate` and refuses any dirty or untracked file with `boundary-scope-escape` (`RefusalFence`), pinning `HEAD` and holding the item.
-  2. *Out-of-scope commit:* `Loop.fenceViolation` checks `git diff --name-only -z base..head` against `fence.txt` before `Steps.Gate`.
-  3. *Incomplete commit that breaks checks:* `Steps.Gate` runs the planned checks against `HEAD^{tree}`, records `RefusalGate` (`gate-failed`) without freezing `item_criteria`, and pins `HEAD` at `refs/tillr/runs/<run_id>`.
-- **Companion retry-deadlock fix required by this reordering.** Today `plan.go` (`retryHoldReason`, `retryFor`), `retries.go` (`AuthorizeRetry`), and `tools/tillr-view/dispatchable.go` (`retryRefused`) assume `judged` and `AttemptUnjudged` are mutually exclusive. If a walled-but-committed candidate reaches `Gate` and fails, both `judged` and `AttemptUnjudged` become true on that `run_id`: `retryHoldReason` would misreport `run-unjudged` instead of `gate-failed`, and `AuthorizeRetry` / `retryFor` / `retryRefused` would reject **every** single-string `Acknowledge` value (`judged` requires `"gate-failed"` while `AttemptUnjudged` requires `"unjudged"`). Guarding the unjudged branch with `!judged` makes `gate.verdict` authoritative once the gate has spoken.
+- **The state model requires it.** The drain reference defines a
+  [candidate](../reference/tillr-drain-successor.md#the-successor-function-and-derived-positions)
+  as a run whose terminal record is stored, that produced a commit, and that the gate has
+  not judged. A walled run with a commit meets that definition.
+- **The gate catches every hazard of a mid-run kill.** `Loop.fenceViolation` refuses a
+  dirty worktree or an out-of-fence path before the gate runs, and the gate runs the
+  planned checks against the committed tree, so an incomplete commit fails as
+  `gate-failed` with its head pinned at `refs/tillr/runs/<run_id>`.
+- **The retry acknowledgment follows the gate.** A walled candidate that then fails the
+  gate is both judged and unjudged-by-class. Retry authorization checks the gate's result
+  first, so the hold reads `gate-failed` and accepts `--acknowledge gate-failed`; the
+  `unjudged` acknowledgment is required only when no verdict exists.
 
 ---
 
 ## 3. When the wall fires on a run that produced no commit
 
-**Decision (`D-RW3`):** **Auto-resume once per attempt in `settle` (`!record.Resumed`), in place on the same lane and `run_id`, before `abandon` resets the worktree.** If the resumed segment commits, Decision 2 (`D-RW2`) sends it to `Verify` / `judge`; if it hits the wall a second time without a commit (or if the lane lacks a valid `session-id` or `brief.md`), `settle` resets the lane and holds the item as `run-unjudged`. Never auto-resume in `expire` (`ReapExpiredLeases`), where the runner vanished unobserved.
+**Decision (`D-RW3`):** **Resume in place, in `settle`, before the lane is reset.** The
+continuation runs on the same lane and `run_id`, with the same harness session, and spends
+neither a retry nor a failover hop. If the continuation commits, `D-RW2` sends it to the
+gate. A run is never resumed when its lease is reaped, because that runner vanished
+unobserved.
 
-**Evidence and survey of existing mechanisms:**
+`resumeAfterWall` in `tools/tillr-drain/drain/loop.go` implements it. Two bounds apply:
 
-- **Existing mechanism and why its current wiring is insufficient.** `tools/tillr-drain/drain/resume.go` (`Resume`) and `tools/tillr-run/run/exec.go` (`Request.Resume`, `ReadSessionID`, `openRunLog` with `O_APPEND`, `appendResume`, `Record.Resumed`) already continue a killed run on the same `run_id`, warm harness session (`--session-id`), and staged worktree without spending a retry or failover hop. Today `Resume` is wired only to the manual CLI face `tillr-drain resume`, while `Loop.settle` (`loop.go`) immediately calls `abandon` (`resetLane` -> `git reset --hard main`) — destroying uncommitted worktree edits (`04d`) and freeing the lane to be overwritten by the next dispatch (`LaneStager.Stage` replaces `brief.md` and `session-id`), making even manual `tillr-drain resume` impossible.
-- **Why "wait for a person" fails the reconstruction constraint.** An uncommitted walled run has `HEAD == base`, so `pin` writes no commit ref beyond `base`; its only artifacts are untracked lane files that vanish on reset or store reconstruction from committed documents. Giving the warm session one continuation segment while its verified worktree edits (`04d`) are still on disk converts uncommitted work into a judged commit (landed on `main` or pinned at `refs/tillr/runs/<run_id>`).
-- **Why once per attempt (`!record.Resumed`), not unbounded and not once per item.** `Record.Resumed` (`apply.go`) and the `run.resume` event (`exec.go`) are already scoped to `run_id` (one attempt), requiring zero schema or state changes. Bounding at one `run.resume` per `run_id` prevents an infinite wall loop on a genuinely stuck prompt, while allowing a fresh operator-authorized retry (`ActionRetry`, new `run_id`) its own clean attempt.
+| Case | Bound |
+| :--- | :--- |
+| The run left uncommitted work inside its fence | Continued until a continuation repeats the previous one identically |
+| The run left no uncommitted work | One continuation per `run_id` (`Record.Resumed`) |
+
+A lane with no `brief.md` or no session id has nothing to continue, so the item is held as
+`run-unjudged`.
+
+**Why:** an uncommitted walled run has no commit to pin, so its only artifacts are files
+in the lane worktree, which a reset destroys. Continuing the warm session while those
+edits are on disk turns them into a commit the gate can judge.
 
 ---
 
 ## 4. What is the smallest diff?
 
-**Decision (`D-RW4`):** **Ship `D-RW1`–`D-RW3` as one queue item (~75 LOC of production changes across `tillr-run`, `tillr-drain`, `tillr-view`, and `backend-policy.json`, plus test updates and `just pack-sync`).** Splitting wall removal from the `settle` ordering fix leaves explicit-timeout tests and reaped runs with the `judged && AttemptUnjudged` deadlock; landing them together touches one cohesive seam with no schema migration and no new item state.
-
----
-
-## The smallest diff
-
-### Fence (`allowed_paths`)
-
-```json
-[
-  "config/tillr/backend-policy.json",
-  "tools/tillr-run/",
-  "tools/tillr-drain/",
-  "tools/tillr-view/",
-  "tests/tillr-muse-backend.test.py",
-  "docs/design/board-utilities.md",
-  "docs/reference/tillr-drain-successor.md"
-]
-```
-
-*(Note: `fencePaths` in `tools/tillr-drain/drain/stage.go` automatically derives `yolo-packs/tillr/files/local/share/tillr/{tillr-run,tillr-drain,tillr-view}/`, `yolo-packs/tillr/skills/tillr-operating/SKILL.md`, and `tests/tillr-docs.test.py` from `tools/tillr-*/`, but derives `tests/tillr-muse-backend.test.py` only when `tools/tillr-run/backends` is named directly — so `tests/tillr-muse-backend.test.py` and `config/tillr/backend-policy.json` must be listed explicitly.)*
-
-### File-by-file changes
-
-1. **`config/tillr/backend-policy.json`** — Remove `"timeout_seconds": 1800` from `agy`, `muse`, `pi`, and `pi-designer`.
-2. **`tools/tillr-run/backends/pi/run-pi`, `tools/tillr-run/backends/muse/run-muse`, `tools/tillr-run/backends/agy/run-agy`** — Default `wall=` (empty) instead of `wall=1800`. Prepend `timeout "$wall"` (and pass `--print-timeout "${wall}s"` in `run-agy`) only when `--timeout` was explicitly passed with `wall > 0`.
-3. **`tools/tillr-run/run/request.go` & `tools/tillr-drain/drain/policy.go`** — Mark `Backend.TimeoutSeconds` `omitempty`; in `Backend.Missing()`, refuse `b.TimeoutSeconds < 0` instead of `<= 0` (`0` = unbounded). When `b.TimeoutSeconds > 0`, `Backend.command()` passes `--timeout <seconds>` so adapter and runner bounds cannot silently diverge.
-4. **`tools/tillr-run/run/exec.go` & `tools/tillr-run/run/lease.go`** — Mark `Request.TimeoutMS` `omitempty`; refuse `< 0` instead of `<= 0` in `checkRequest` and `ClaimLease`. When `req.TimeoutMS == 0`: `Exec` uses `context.WithCancel(ctx)` instead of `context.WithTimeout`, and `ClaimLease` writes `leased_until = NULL` (`claim.LeasedUntil` `0` / `omitempty`). In `closeRun`, when `claimed.LeasedUntil == 0`, set `FinishedAt` to `now.UTC()` instead of `time.UnixMilli(0)`.
-5. **`tools/tillr-drain/drain/stage.go` & `tools/tillr-run/backends/brief-template.md`** — Render `TIMEOUT_SECONDS` (or `- **Timeout:**` line) as `"none"` when `spec.TimeoutMS == 0` and `"<N> seconds"` when `> 0`, so unbounded briefs never print `Timeout: 0 seconds`.
-6. **`tools/tillr-drain/drain/loop.go` (`Loop.settle`)** — After `AttemptInfrastructure` handling, check `reportFooter(log) == "blocked"` and read `headSHA` vs `baseSHA` **before** `class == AttemptUnjudged`:
-   - If `headSHA != baseSHA`, reset `l.infraStreak = 0` and call `l.Verify(...)` regardless of whether `class` is `AttemptAnswered` or `AttemptUnjudged`.
-   - If `headSHA == baseSHA` and `class == AttemptUnjudged`: when `!record.Resumed`, `<lane-dir>/brief.md` exists, and `run.ReadSessionID(l.laneDirPath(lane)) != ""`, execute one resumed run (`resumedReq := request; resumedReq.Resume = true`) inside `snapshot` / `Steps.Run` / `closeRunBracket` (honoring `ctx.Err()`), then settle the resumed result once; otherwise call `l.abandon` (`run-unjudged`).
-7. **`tools/tillr-drain/drain/plan.go`, `tools/tillr-drain/drain/retries.go`, `tools/tillr-view/dispatchable.go`** — Check `gateResults[latest] == GateFailed` before `AttemptUnjudged` in `retryHoldReason`, and guard the `AttemptUnjudged` acknowledgment check with `!judged` in `retryFor`, `AuthorizeRetry`, and `retryRefused`.
-8. **Docs, tests, and pack mirror** — Amend [`docs/design/board-utilities.md`](./board-utilities.md) (section 5.6, `D-UT17`) and [`docs/reference/tillr-drain-successor.md`](../reference/tillr-drain-successor.md#transition-table) (`running -> settle` and `dispatch` lease prose; graduated from the former design's section 2.3); update the negative-timeout / wall assertions in `tools/tillr-run/run/{request_test.go,lease_test.go}`, `tools/tillr-run/{main_test.go,backends_test.go}`, `tools/tillr-drain/drain/policy_test.go`, `tools/tillr-drain/{main_test.go,loop_test.go}`, `tools/tillr-view/dispatchable_test.go`, and `tests/tillr-muse-backend.test.py`; add unit tests for three cases:
-   - an unbounded `TimeoutMS == 0` execution, its `NULL` lease, and `ReleaseLane`;
-   - a walled-but-committed run reaching `Gate`/`Land`, and remaining retryable via
-     `--acknowledge gate-failed` if `Gate` fails;
-   - an uncommitted walled run auto-resuming once, and holding on a second
-     uncommitted wall.
-   Then run `just pack-sync`.
-
-### Queue item criteria
-
-1. `config/tillr/backend-policy.json` carries no `timeout_seconds`, and `run-pi`, `run-muse`, and `run-agy` run without `timeout(1)` when `--timeout` is omitted while still honoring an explicit `--timeout N` (`python3 tests/tillr-muse-backend.test.py`).
-2. `tillr-run` and `tillr-drain` accept `timeout_seconds: 0` / `timeout_ms: 0` (refusing `< 0`), lease the lane with `leased_until IS NULL`, release the lane atomically on terminal `run.record`, and stamp `finished_at = now` on manual `tillr run release` (`go test ./...` in `tools/tillr-run`).
-3. In `Loop.settle`, a `StateTimedOut` or exit-`124` run with `HEAD != base` proceeds through `Verify` (`fenceViolation` -> `Gate` -> `Land`), and if `Gate` fails, `drain plan`, `AuthorizeRetry`, and `tillr-view` classify the hold as `gate-failed` and accept `--acknowledge gate-failed` (`go test ./...` in `tools/tillr-drain` and `tools/tillr-view`).
-4. In `Loop.settle`, a `StateTimedOut` or exit-`124` run with `HEAD == base` and a valid lane `session-id` auto-resumes at most once (`!record.Resumed`) before resetting the lane, landing if the resumed segment commits and holding as `run-unjudged` if the resumed segment also produces no commit (`go test ./...` in `tools/tillr-drain`).
-5. `just pack-sync` leaves zero diff under `yolo-packs/tillr/` (`python3 tests/pack-sync.test.py` and `python3 tests/tillr-docs.test.py`).
+**Decision (`D-RW4`):** `D-RW1` to `D-RW3` are one change. Removing the wall without the
+`settle` ordering leaves a walled, committed, gate-failed run that no acknowledgment can
+retry. The change needs no schema migration and no new item state.
 
 ---
 
@@ -129,10 +134,10 @@ Every row is a **designer's decision; the owner may overturn it**.
 
 | ID | Ruling | Rejects |
 | :--- | :--- | :--- |
-| `D-RW1` | Remove default `timeout_seconds` from `config/tillr/backend-policy.json` and default `wall=1800` from `run-pi`, `run-muse`, and `run-agy`; allow `timeout_ms == 0` (`leased_until = NULL`), superseding `D-UT17` and `D-LR4` on mandatory positive run walls while keeping `AttemptUnjudged` outside `AttemptInfrastructure`. | Keeping or tuning the 1800s wall (violates [`momentum-principle.md`](./momentum-principle.md); pure false-positive loss in the measured wave); reclassifying walls as `AttemptInfrastructure` (wastes failover budget on long work). |
-| `D-RW2` | Check `HEAD != base` before `AttemptUnjudged` in `settle` (`loop.go` and [`tillr-drain-successor.md`](../reference/tillr-drain-successor.md#transition-table)), and treat `gate.verdict` (`judged`) as superseding `AttemptUnjudged` in `plan.go`, `retries.go`, and `tillr-view/dispatchable.go`. | Holding committed runs as `run-unjudged` (`04b`, `04c`); leaving `judged && AttemptUnjudged` unsatisfiable in `AuthorizeRetry`. |
-| `D-RW3` | Auto-resume an uncommitted walled run (`HEAD == base`, `AttemptUnjudged`) once per attempt (`!record.Resumed`) in `settle` before `abandon` resets the lane; never auto-resume in `expire`. **Its "once" is superseded** by the owner's later rulings that a killed run resumes uncounted and that nothing carries an attempt count: an uncommitted walled run is resumed, uncounted. Built in part: a continuation of uncommitted fenced work is now bounded only by the identical-repeat rule, while a wall-cut run with no uncommitted work keeps its one continuation (`resumeAfterWall` in `tools/tillr-drain/drain/loop.go`). | Immediate `abandon` + `held` (destroys uncommitted edits like `04d` and leaves non-reconstructible state); unbounded resumes. |
-| `D-RW4` | Land `D-RW1`–`D-RW3` as a single fenced queue item with `just pack-sync` and doc updates to [`board-utilities.md`](./board-utilities.md) and [`tillr-drain-successor.md`](../reference/tillr-drain-successor.md). | Splitting wall removal from the `settle`/`AuthorizeRetry` ordering fix, or introducing a schema migration / sixth item state. |
+| `D-RW1` | No default `timeout_seconds` in `config/tillr/backend-policy.json` and no default wall in any adapter; `timeout_ms == 0` is an unbounded run with `leased_until = NULL`. A walled run stays `AttemptUnjudged`, outside the infrastructure class. | Keeping or tuning a default wall (violates the [momentum principle](./momentum-principle.md)); classifying a wall as an infrastructure failure. |
+| `D-RW2` | `settle` checks for a commit before the unjudged class, and a `gate.verdict` supersedes the unjudged class in planning and retry authorization. | Holding committed runs as `run-unjudged`; an acknowledgment no value can satisfy. |
+| `D-RW3` | An uncommitted walled run is resumed in `settle` before the lane is reset, uncounted; never resumed when a lease is reaped. Built in part: a continuation of uncommitted fenced work is bounded only by the identical-repeat rule, while a wall-cut run with no uncommitted work keeps one continuation (`resumeAfterWall`). | Resetting the lane at once (destroys uncommitted edits); resuming with no bound at all. |
+| `D-RW4` | `D-RW1` to `D-RW3` ship as one change. | Separating wall removal from the `settle` and retry ordering; a schema migration or a new item state. |
 
 ---
 

@@ -2,18 +2,17 @@
 title: "Contract: tillr (the library)"
 status: in-review
 stage: DESIGN
-updated: 2026-11-22
 tags: [tillr, contract, library]
-summary: "What the tillr library provides to every other tillr utility and what it expects, initially read at dab5a2da0e and updated through dc42dbc335 and D-TW63–D-TW67: the record envelope, the six exit codes, the event log, the store opener and its three registries, the board definition, settings, the Vantage index reader and the watch rules. It expects nothing from another utility by design, and reads four of their tables today."
+summary: "What the tillr library provides to every other tillr utility and what it expects: the record envelope, the six exit codes, the event log, the store opener and its three registries, the board definition, settings, the Vantage index reader and the watch rules. It expects nothing from another utility by design, and reads four of their tables."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr (the library)
 
-**Status:** 2026-11-22. Initially read at `dab5a2da0e` (when nothing in the contract check was built) and updated on 2026-11-22 for the watch package's second-build, item-subject closure, per-rule load baselines, and item-tracking event kinds, tables, and read-only SQL expectations ([`../tillr-watch.md`](../tillr-watch.md), `D-TW27`–`D-TW35`, `D-TW63`, `D-TW65`–`D-TW67`). This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private, and the post-`dab5a2da0e` watch amendments referenced here, are from operator requests and designer decisions that the owner has not ruled on and may overturn.
+**Status:** The contract examples and the contract check are not built: `fd -t d '^contract$' tools` finds nothing. The lists below describe what the code provides and reads; the watch rows follow [the watch design](../tillr-watch.md). This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
-**What it is.** A Go library at `tools/tillr` with no program of its own. Every Go utility links it. It has seven packages others can import (`record`, `event`, `store`, `definition`, `settings`, `vantage`, `watch`) and one that holds only tests (`conformance`).
+**What it is.** A Go library at `tools/tillr` with no program of its own. Every Go utility links it. This contract covers seven packages others can import (`record`, `event`, `store`, `definition`, `settings`, `vantage`, `watch`) and one that holds only tests (`conformance`). The library also holds `checkresult` and `notify`, which this contract does not list yet.
 
 ## 1. What it provides
 
@@ -71,18 +70,18 @@ The envelope has nine fields: `record_version`, `kind`, `id`, `producer` (`syste
 - **The default definition's name** `git-landing`, and the prerequisite names `fence`, `design-document`, `design-questions`, `owner-clean`.
 - **A question's answered state** `answered`.
 
-One sentence is compared today and becomes private: the recovery remedy in `store/recover.go`, which the view repeats in `apierror.go` and tests for.
+One sentence is compared by another utility, and the contract makes it private: the recovery remedy in `store/recover.go`, which the view repeats in `apierror.go` and tests for.
 
 ## 2. What it expects
 
-The library is the bottom of the build: its `go.mod` requires no other tillr module. What it reads from others today:
+The library is the bottom of the build: its `go.mod` requires no other tillr module. What it reads from others:
 
 | Expectation | Provider | Through | Where it is read |
 | :--- | :--- | :--- | :--- |
 | Rows of `items` (`item_id`, `state`, `seat`, `waiting_on`), to refuse a definition that drops a state items hold, evaluate the `items` watch projection, auto-close terminal item-subject episodes (`D-TW63`), and validate/reconcile item-tracked alerts (`D-TW67`) | [tillr-item](./tillr-item.md) | SQL | `definition/store.go`, `watch/tillr_source.go`, `watch/lifecycle.go`, `watch/eval.go` |
 | Rows of `workflow_selections` (`item_id`, `workflow`), to evaluate `workflow:<name>` watch rule scopes (`D-TW31`) | [tillr-drain](./tillr-drain.md) | SQL | `watch/tillr_source.go` |
 | `workflow_selections`, `graph_revisions`, `node_runs`, rewritten when a store moves to schema version 6 | [tillr-drain](./tillr-drain.md) | SQL | `store/judge_migration.go` |
-| `item_grants`, a retired table, archived and dropped by the same migration | [tillr-item](./tillr-item.md) | SQL | `store/judge_migration.go` |
+| `item_grants`, a table of earlier schema versions, archived and dropped by the same migration | [tillr-item](./tillr-item.md) | SQL | `store/judge_migration.go` |
 | The owners' registrations, made when their packages load: the library composes the schema from whatever the running program linked | every utility that owns a table or a kind | Go, at load | `store/registry.go` |
 | The Vantage index command's JSON: `id state title line preference leaning blockedOn` | `vantage-check`, outside tillr | subprocess | `vantage/vantage.go` |
 | For each watch rule, the kinds it names and the payload fields its text addresses | the kind's owner | SQL on `events` | `watch/pattern.go` |
@@ -112,7 +111,7 @@ The library is the bottom of the build: its `go.mod` requires no other tillr mod
 
 All pins live in `tools/tillr` and run in its fast suite.
 
-- **Exists today.** `TestTheFourContractPiecesArePresent`, `TestTheExitCodesAreTheContract`, `TestTheEnvelopeRefusesAnUnsupportedVersionAndAForeignSystem`, `TestTheKindRegistryRefusesASecondOwner`, `TestTheEventUtilitysDDLIsAppendOnly` and `TestTheStoreUtilityRegistersItsOwnContract`, and the import guard in `definition/definition_test.go`.
+- **Exists.** `TestTheFourContractPiecesArePresent`, `TestTheExitCodesAreTheContract`, `TestTheEnvelopeRefusesAnUnsupportedVersionAndAForeignSystem`, `TestTheKindRegistryRefusesASecondOwner`, `TestTheEventUtilitysDDLIsAppendOnly` and `TestTheStoreUtilityRegistersItsOwnContract`, and the import guard in `definition/definition_test.go`.
 - **Packages.** One file per package uses every listed name with the caller's types, so a rename or a changed signature fails to compile in the library.
 - **The envelope.** One example file per field arrangement, encoded and decoded by the test.
 - **Tables.** The `events` columns are compared with the list; a test opens a store and reads each listed column.

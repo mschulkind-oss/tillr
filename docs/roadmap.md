@@ -24,9 +24,9 @@ not permission to build or delete.
 
 3. **Cost display, when there is a phase for it** — iceboxed. The store records
    spend per run; nothing shows it: not the header, not a queue row, not the item pane
-   ([`OQ-OBD4`](reference/observatory-design.md#why-its-this-way)). Asked and deliberately
-   deferred rather than answered, so the work is a phase of its own — including what a figure
-   should cover (a run, an attempt, a night) and how it is formatted.
+   ([`OQ-OBD4`](reference/observatory-design.md#why-its-this-way)). The question is deferred,
+   not answered, so the work is a phase of its own, including what a figure should cover
+   (a run, an attempt, a night) and how it is formatted.
 
 4. [Self-hosted tillr building, watchable in the observatory](design/tillr-selfhosted-build.md) —
    the shortest route the design found to a loop that runs the tree's own code. Long-lived
@@ -36,6 +36,6 @@ not permission to build or delete.
    because Steps 1–2 are what make every later item's verification mean something.
 
 5. [The idea pipeline: from owner sentence to landed commit](design/tillr-idea-pipeline.md) —
-   the flow the owner asked for: an idea dumped in chat becomes a top-ranked `idea` item, spawns
-   scouting, a design, and fenced builds. All four of its questions are settled; what it owes is
-   a build order, on [the tillr roadmap](tillr/roadmap.md).
+   an idea the owner types becomes an `idea` item that spawns scouting, a design, and fenced
+   builds. It has no open question; item kinds and the lineage tree are not built, and their
+   order is on [the tillr roadmap](tillr/roadmap.md).
