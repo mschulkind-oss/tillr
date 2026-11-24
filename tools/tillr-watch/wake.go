@@ -136,6 +136,7 @@ type notifyWakeOptions struct {
 	ticks             <-chan time.Time
 	minNotifyInterval time.Duration
 	onCoalesce        func() func()
+	onRelayProgress   func(bool, notify.Frame)
 }
 
 type notifyWakeSource struct {
@@ -146,6 +147,7 @@ type notifyWakeSource struct {
 	wakes             chan struct{}
 	minNotifyInterval time.Duration
 	onCoalesce        func() func()
+	onRelayProgress   func(bool, notify.Frame)
 	lastNotifyWake    time.Time
 	deadlineExpired   bool
 	flushedDeadline   bool
@@ -184,6 +186,7 @@ func watchNotify(ctx context.Context, storePath string, opts notifyWakeOptions) 
 		wakes:             make(chan struct{}, 1),
 		minNotifyInterval: opts.minNotifyInterval,
 		onCoalesce:        opts.onCoalesce,
+		onRelayProgress:   opts.onRelayProgress,
 		relayParentCtx:    context.WithoutCancel(ctx),
 	}
 	if opts.noNotify {
@@ -324,9 +327,12 @@ func (s *notifyWakeSource) readLoop(ctx context.Context, sub *notify.Subscriptio
 			// Immediately evaluate on reconnect so transitions committed while
 			// disconnected do not wait for the 15-second fallback timer.
 			s.signalWake()
+			if s.onRelayProgress != nil {
+				s.onRelayProgress(true, notify.Frame{})
+			}
 		}
 
-		_, err := sub.Next(ctx)
+		frame, err := sub.Next(ctx)
 		if err != nil {
 			_ = sub.Close()
 			sub = nil
@@ -336,6 +342,9 @@ func (s *notifyWakeSource) readLoop(ctx context.Context, sub *notify.Subscriptio
 			continue
 		}
 		s.signalWake()
+		if s.onRelayProgress != nil {
+			s.onRelayProgress(false, frame)
+		}
 	}
 }
 

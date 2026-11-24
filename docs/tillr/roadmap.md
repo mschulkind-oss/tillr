@@ -52,8 +52,6 @@ First by rule 3: every other entry is built and verified by someone who starts f
    - **Known failures:**
      - [`detached_gate_restart_test.go`](../../tools/tillr-drain/drain/detached_gate_restart_test.go)
        races its gate fixture for a process-id file.
-     - [`wake_test.go`](../../tools/tillr-watch/wake_test.go) gives a wake three seconds
-       (`time.After(3 * time.Second)`), which a loaded machine exceeds.
      - `TestLandingRollWithFailedStoreMigrationAlarmsAndKeepsOldBuild` in
        [`restart_lost_worker_test.go`](../../tools/tillr-drain/drain/restart_lost_worker_test.go)
        failed once on 2026-11-24 with `database is locked (5) (SQLITE_BUSY)` in its

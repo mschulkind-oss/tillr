@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
@@ -67,6 +68,45 @@ func appendRawRefusalWithoutNotify(t *testing.T, storePath, itemID string) {
 	}
 }
 
+func TestNotifyWakeDeliveredWithoutDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		wake := &notifyWakeSource{wakes: make(chan struct{}, 1)}
+		result := make(chan wakeReason, 1)
+		go func() {
+			reason, _ := wake.next(ctx, nil)
+			result <- reason
+		}()
+		synctest.Wait()
+		select {
+		case reason := <-result:
+			t.Fatalf("wake without signal: %v", reason)
+		default:
+		}
+		wake.signalWake()
+		synctest.Wait()
+		select {
+		case reason := <-result:
+			if reason != notifyWake {
+				t.Fatalf("wake reason = %v, want notifyWake", reason)
+			}
+		default:
+			t.Fatal("queued notification did not wake the waiter")
+		}
+	})
+}
+
+func TestNotifyWakeDeadlineWithoutSignal(t *testing.T) {
+	wake := &notifyWakeSource{wakes: make(chan struct{}, 1)}
+	deadline := make(chan time.Time)
+	close(deadline)
+	reason, err := wake.next(t.Context(), deadline)
+	if err != nil || reason != deadlineWake {
+		t.Fatalf("missing wake: reason=%v err=%v, want deadlineWake", reason, err)
+	}
+}
+
 func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 	for _, name := range []string{"direct", "symlink"} {
 		t.Run("relayed-frame/"+name, func(t *testing.T) {
@@ -92,6 +132,26 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 			fact(t, s, `{"item_id":"item-a"}`)
 
 			ctx, cancel := context.WithCancel(t.Context())
+			deadline := make(chan time.Time)
+			idle := make(chan struct{}, 1)
+			frameRead := make(chan struct{}, 1)
+			hooks := &waitTestHooks{
+				deadline: deadline,
+				onIdle: func(bool) {
+					select {
+					case idle <- struct{}{}:
+					default:
+					}
+				},
+				onRelayProgress: func(reconnected bool, frame notify.Frame) {
+					if !reconnected && frame.ItemID == "wake-test-marker" {
+						select {
+						case frameRead <- struct{}{}:
+						default:
+						}
+					}
+				},
+			}
 			type waitResult struct {
 				code        int
 				out, stderr string
@@ -101,14 +161,18 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 			go func() {
 				defer close(done)
 				var out, stderr bytes.Buffer
-				code := runWithTicks(ctx, []string{"wait", "--store", storeArg, "--rules", rules}, &out, &stderr, make(chan time.Time))
+				code := runWithWaitHooks(ctx, []string{"wait", "--store", storeArg, "--rules", rules}, &out, &stderr, make(chan time.Time), hooks)
 				result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
 			}()
 			defer func() {
 				cancel()
 				<-done
 			}()
-			awaitAttached(t, s)
+			select {
+			case <-idle:
+			case <-done:
+				t.Fatalf("wait exited before becoming idle: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+			}
 
 			// Commit the second refusal directly to SQLite without publishing a
 			// notification: wait must stay asleep rather than scanning -wal.
@@ -124,15 +188,25 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 			if name == "symlink" {
 				topic = notify.TopicResync
 			}
-			if err := notify.PublishContext(t.Context(), s.Path(), notify.Frame{Topic: topic}); err != nil {
+			if err := notify.PublishContext(t.Context(), s.Path(), notify.Frame{Topic: topic, ItemID: "wake-test-marker"}); err != nil {
 				t.Fatal(err)
 			}
 
+			// The relay acknowledges enqueue, not receipt. Only expire the
+			// injected deadline after the reader processed this particular frame.
+			// A transport that never progresses is bounded by the test runner's
+			// hang guard, not a per-wake scheduling budget.
 			select {
+			case <-frameRead:
+				close(deadline)
 			case <-done:
-			case <-time.After(3 * time.Second):
-				t.Fatal("wait did not wake on relayed frame")
+				select {
+				case <-frameRead:
+				default:
+					t.Fatalf("wait exited before reading relayed frame: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+				}
 			}
+			<-done
 			if result.code != 0 || result.stderr != "" || !strings.Contains(result.out, "item-a has 2 refusals") {
 				t.Fatalf("wait output after relayed frame: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
 			}
@@ -176,6 +250,17 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 		fact(t, s, `{"item_id":"item-fallback"}`)
 		ctx, cancel := context.WithCancel(t.Context())
 		ticks := make(chan time.Time)
+		deadline := make(chan time.Time)
+		idle := make(chan struct{}, 1)
+		hooks := &waitTestHooks{
+			deadline: deadline,
+			onIdle: func(bool) {
+				select {
+				case idle <- struct{}{}:
+				default:
+				}
+			},
+		}
 		type waitResult struct {
 			code        int
 			out, stderr string
@@ -185,14 +270,18 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 		go func() {
 			defer close(done)
 			var out, stderr bytes.Buffer
-			code := runWithTicks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks)
+			code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks, hooks)
 			result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
 		}()
 		defer func() {
 			cancel()
 			<-done
 		}()
-		awaitAttached(t, s)
+		select {
+		case <-idle:
+		case <-done:
+			t.Fatalf("wait exited before becoming idle: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+		}
 
 		appendRawRefusalWithoutNotify(t, s.Path(), "item-fallback")
 		select {
@@ -201,12 +290,12 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 		case <-time.After(40 * time.Millisecond):
 		}
 
-		ticks <- time.Now()
 		select {
+		case ticks <- time.Now():
+			close(deadline)
 		case <-done:
-		case <-time.After(3 * time.Second):
-			t.Fatal("wait did not evaluate on fallback tick")
 		}
+		<-done
 		if result.code != 0 || result.stderr != "" || !strings.Contains(result.out, "item-fallback has 2 refusals") {
 			t.Fatalf("fallback evaluation: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
 		}
@@ -226,6 +315,31 @@ func TestWatchWaitReconnectsAndEvaluatesImmediatelyAfterRelayKill(t *testing.T) 
 	_, stopFirstRelay := startExternalRelay(t, s.Path())
 
 	ctx, cancel := context.WithCancel(t.Context())
+	deadline := make(chan time.Time)
+	idle := make(chan struct{}, 1)
+	armed := make(chan struct{})
+	reconnected := make(chan struct{}, 1)
+	hooks := &waitTestHooks{
+		deadline: deadline,
+		onIdle: func(bool) {
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		},
+		onRelayProgress: func(isReconnect bool, _ notify.Frame) {
+			if isReconnect {
+				select {
+				case <-armed:
+					select {
+					case reconnected <- struct{}{}:
+					default:
+					}
+				default:
+				}
+			}
+		},
+	}
 	type waitResult struct {
 		code        int
 		out, stderr string
@@ -235,14 +349,18 @@ func TestWatchWaitReconnectsAndEvaluatesImmediatelyAfterRelayKill(t *testing.T) 
 	go func() {
 		defer close(done)
 		var out, stderr bytes.Buffer
-		code := runWithTicks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules}, &out, &stderr, make(chan time.Time))
+		code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules}, &out, &stderr, make(chan time.Time), hooks)
 		result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
 	}()
 	defer func() {
 		cancel()
 		<-done
 	}()
-	awaitAttached(t, s)
+	select {
+	case <-idle:
+	case <-done:
+		t.Fatalf("wait exited before becoming idle: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	}
 
 	// Kill the relay and commit firing events while the socket is absent so
 	// post-commit publish drops every wake hint.
@@ -255,13 +373,20 @@ func TestWatchWaitReconnectsAndEvaluatesImmediatelyAfterRelayKill(t *testing.T) 
 
 	// Restart the relay; wait must reconnect with backoff and immediately run
 	// its evaluation pass without waiting on the 15-second fallback clock.
+	close(armed)
 	startExternalRelay(t, s.Path())
 
 	select {
+	case <-reconnected:
+		close(deadline)
 	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("wait did not reconnect and evaluate missed commits")
+		select {
+		case <-reconnected:
+		default:
+			t.Fatalf("wait exited before reconnecting: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+		}
 	}
+	<-done
 	if result.code != 0 || result.stderr != "" || !strings.Contains(result.out, "item-reconnect has 2 refusals") {
 		t.Fatalf("reconnect evaluation: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
 	}
