@@ -39,7 +39,7 @@ summary: "What a drain records so a read-only server can show every item, stage 
 
 # Observatory truthfulness, provenance, and shared primitives
 
-> **Delivered copy.** This is `docs/reference/observatory-design.md` from this repository at commit `2fa55241a8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/observatory-design.md` from this repository at commit `06e63d0112` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 `tillr-view` serves the read-only truthfulness layer and shared UI primitives
 that every observatory page and CLI summary builds on. Its job is to make sure a

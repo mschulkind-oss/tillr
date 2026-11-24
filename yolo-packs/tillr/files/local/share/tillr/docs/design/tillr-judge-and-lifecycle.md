@@ -20,7 +20,7 @@ depends-on:
 
 # The Item Judge and Lifecycle in Tillr
 
-> **Delivered copy.** This is `docs/design/tillr-judge-and-lifecycle.md` from this repository at commit `2fa55241a8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-judge-and-lifecycle.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-judge-and-lifecycle.md` from this repository at commit `06e63d0112` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-judge-and-lifecycle.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** in review. The Built column of the [decision ledger](#decision-ledger) says what is in the code, and [Section 7](#7-what-is-built-and-what-is-owed) lists what is not. One question is open, [OQ-JL5](#OQ-JL5).
 

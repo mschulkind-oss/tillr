@@ -8,7 +8,7 @@ summary: "The one page to read first about tillr: every design and reference doc
 
 # tillr designs: what is built, what is designed, and what is still open
 
-> **Delivered copy.** This is `docs/tillr/design-status.md` from this repository at commit `2fa55241a8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/design-status.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/design-status.md` from this repository at commit `06e63d0112` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/design-status.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 One row per document under `docs/design`, `docs/reference` and `docs/tillr`. Each status is the
 one the document states for itself, in its frontmatter and its status paragraph, and the document
