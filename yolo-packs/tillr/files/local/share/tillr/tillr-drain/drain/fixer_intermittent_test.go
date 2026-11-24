@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -846,5 +849,106 @@ func TestSettleResolvedFixerRunsAcrossPass(t *testing.T) {
 			started := l.cfg.Now().UTC().Add(-time.Minute)
 			tc.verify(t, f, l, fixer, "run-"+fixer+"-a1", started)
 		})
+	}
+}
+
+func TestLiveFixerProvedByRerunRecordsRegisteredEventOncePerProof(t *testing.T) {
+	if _, err := event.Lookup(FixerProvedKind); err != nil {
+		t.Fatalf("FixerProvedKind %q is not registered: %v", FixerProvedKind, err)
+	}
+
+	ctx := context.Background()
+	f, l, fixer, _ := fixerRoutingFixture(t)
+	var report bytes.Buffer
+	l.cfg.Report = &report
+
+	run1 := "run-" + fixer + "-a1"
+	now := l.cfg.Now().UTC()
+	claimFixerLease(t, f, run1, fixer, "lane-1", "fixture", now)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return appendEffect(tx, dispatchStartedKind, run1, pendingWork{
+			Decision: Decision{ItemID: fixer, LaneID: "lane-1", RunRequest: &run.Request{RunID: run1, ItemID: fixer, LaneID: "lane-1", Backend: "fixture"}},
+			BaseSHA:  runGit(t, f.root, "rev-parse", TrunkRef),
+		}, now)
+	})
+
+	readLatestProof := func() fixerProof {
+		t.Helper()
+		var raw []byte
+		fixtureRead(t, f, func(r *store.Reader) error {
+			return r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_id=? ORDER BY seq DESC LIMIT 1`, FixerProvedKind, fixer).Scan(&raw)
+		})
+		var got fixerProof
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal %s payload: %v", FixerProvedKind, err)
+		}
+		return got
+	}
+
+	// First proof while live run is active: logs "proved by rerun" and writes one FixerProvedKind event.
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "unrelated change 1")
+	tip1 := runGit(t, f.root, "rev-parse", TrunkRef)
+	t1 := now.Add(time.Minute)
+	writeGreenProof(t, l, tip1, t1, []string{"go-tool/unit"})
+	l.cfg.Now = func() time.Time { return t1 }
+	if err := l.resolveProvedFixers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report.String(), fixer+" proved by rerun") {
+		t.Fatalf("report missing rerun proof log line:\n%s", report.String())
+	}
+	if n := countStoreEvents(t, f.storePath, FixerProvedKind, fixer); n != 1 {
+		t.Fatalf("%s count after first proof = %d, want 1", FixerProvedKind, n)
+	}
+	got1 := readLatestProof()
+	if got1.FixerItem != fixer || got1.Green != tip1 || !slices.Equal(got1.Checks, []string{"go-tool/unit"}) {
+		t.Fatalf("first %s payload = %+v, want fixer=%q green=%q checks=[go-tool/unit]", FixerProvedKind, got1, fixer, tip1)
+	}
+
+	// Repeated passes against the same red observation do not duplicate the event or log line.
+	report.Reset()
+	l.cfg.Now = func() time.Time { return t1.Add(time.Minute) }
+	if err := l.resolveProvedFixers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := countStoreEvents(t, f.storePath, FixerProvedKind, fixer); n != 1 {
+		t.Fatalf("%s count after repeated pass = %d, want 1", FixerProvedKind, n)
+	}
+	if strings.Contains(report.String(), "proved by rerun") {
+		t.Fatalf("repeated pass logged proved by rerun again:\n%s", report.String())
+	}
+
+	// A newer red observation followed by a later proof records one new event for that proof.
+	t2 := t1.Add(2 * time.Minute)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return appendEffect(tx, FixerAttachedKind, fixer, map[string]string{"red": tip1}, t2)
+	})
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "unrelated change 2")
+	tip2 := runGit(t, f.root, "rev-parse", TrunkRef)
+	t3 := t2.Add(time.Minute)
+	writeGreenProof(t, l, tip2, t3, []string{"go-tool/unit"})
+	report.Reset()
+	l.cfg.Now = func() time.Time { return t3 }
+	if err := l.resolveProvedFixers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report.String(), fixer+" proved by rerun") {
+		t.Fatalf("report missing second rerun proof log line:\n%s", report.String())
+	}
+	if n := countStoreEvents(t, f.storePath, FixerProvedKind, fixer); n != 2 {
+		t.Fatalf("%s count after second proof = %d, want 2", FixerProvedKind, n)
+	}
+	got2 := readLatestProof()
+	if got2.FixerItem != fixer || got2.Green != tip2 || !slices.Equal(got2.Checks, []string{"go-tool/unit"}) {
+		t.Fatalf("second %s payload = %+v, want fixer=%q green=%q checks=[go-tool/unit]", FixerProvedKind, got2, fixer, tip2)
+	}
+
+	// Re-running after the second proof keeps the count at 2.
+	l.cfg.Now = func() time.Time { return t3.Add(time.Minute) }
+	if err := l.resolveProvedFixers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := countStoreEvents(t, f.storePath, FixerProvedKind, fixer); n != 2 {
+		t.Fatalf("%s count after repeat of second proof = %d, want 2", FixerProvedKind, n)
 	}
 }
