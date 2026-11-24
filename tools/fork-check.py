@@ -6174,7 +6174,8 @@ def execute_check(check: Check, root: Path, diff_base: str | None,
                   cancel: "Cancellation | None" = None,
                   cache: VerdictCache | None = None,
                   runtime: RuntimeFingerprint | None = None, *,
-                  measure_landing: bool = False) -> None:
+                  measure_landing: bool = False,
+                  package_verdicts: "GatePackageVerdicts | None" = None) -> None:
     """Run one planned check in place: its one run, its transcript and its end.
 
     The run goes through `execute_attempt`, and it happens exactly once: a failure is
@@ -6189,7 +6190,7 @@ def execute_check(check: Check, root: Path, diff_base: str | None,
     check.start_ns = time.time_ns()
     started = time.monotonic_ns() if measure_landing else None
     execute_attempt(root, check, diff_base, cancel=cancel, cache=cache, runtime=runtime,
-                    measure_landing=measure_landing)
+                    measure_landing=measure_landing, package_verdicts=package_verdicts)
     capture_fork_conflict(root, check, cancel)
     if check.timeout > 0 and check.seconds > check.timeout:
         check.warnings.append(f"ran {clock(check.seconds)}, over target {check.timeout}s; "
@@ -6218,7 +6219,8 @@ def execute_check(check: Check, root: Path, diff_base: str | None,
 def run_plan_checks(plan: Plan, root: Path, diff_base: str | None,
                     jobs: int, cache: VerdictCache | None = None,
                     runtime: RuntimeFingerprint | None = None,
-                    heavy_jobs: int | None = None) -> tuple[float, int, int | None]:
+                    heavy_jobs: int | None = None,
+                    package_verdicts: "GatePackageVerdicts | None" = None) -> tuple[float, int, int | None]:
     """Run the plan's checks concurrently where they are independent; report in plan order.
 
     One line per check, in plan order, on stderr as each one finishes: a run of eight
@@ -6284,7 +6286,8 @@ def run_plan_checks(plan: Plan, root: Path, diff_base: str | None,
             checks, jobs,
             lambda index: execute_check(checks[index], root, diff_base, cancellation,
                                         cache=cache, runtime=runtime,
-                                        measure_landing=getattr(plan, "measure_landing", False)),
+                                        measure_landing=getattr(plan, "measure_landing", False),
+                                        package_verdicts=package_verdicts),
             on_start=on_start, on_complete=on_complete,
             cheap_first=True, blame=stop_after_failure,
             terminate=cancellation.cancel, on_not_run=on_not_run,
@@ -8780,14 +8783,144 @@ def record_verdict(root: Path, check: Check, cache: VerdictCache,
 
 GO_SHARDS_EVIDENCE_ENV = "TILLR_GO_SHARDS_EVIDENCE_OUT"
 GO_AFFECTED_EVIDENCE_ENV = "TILLR_GO_AFFECTED_EVIDENCE_OUT"
+GO_VERDICTS_IN_ENV = "TILLR_GO_VERDICTS_IN"
+GO_VERDICTS_OUT_ENV = "TILLR_GO_VERDICTS_OUT"
 SELF_SUITE_TIMING_ENV = "TILLR_SELF_SUITE_TIMING_OUT"
+
+
+def _load_go_affected_helper(root: Path):
+    helper_path = root / "tools" / "gate" / "go_affected.py"
+    if not helper_path.is_file():
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("_fork_check_go_affected", helper_path)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as error:
+        print(f"fork-check: cannot load go_affected helper: {error}", file=sys.stderr)
+        return None
+
+
+class GatePackageVerdicts:
+    """Thread-safe per-package Go verdict store for pre-conflict recording and -cfix reuse."""
+
+    def __init__(self, root: Path, spans_out: str, mod) -> None:
+        self.root = root.resolve()
+        self.mod = mod
+        self.run_dir = Path(spans_out).resolve().parent
+        self.out_path = self.run_dir / mod.GO_PACKAGE_VERDICTS_FILE
+        self.is_cfix = mod.is_cfix_run_id(self.run_dir.name)
+        self.prior = mod.load_prior_cfix_verdicts(self.run_dir) if self.is_cfix else None
+        self.prior_path = ""
+        if self.prior and self.prior.get("packages"):
+            try:
+                fd, tmp_prior = tempfile.mkstemp(prefix="gate-go-verdicts-in-")
+                os.close(fd)
+                mod.save_package_verdicts_atomic(Path(tmp_prior), self.prior)
+                self.prior_path = tmp_prior
+            except OSError as error:
+                print(f"fork-check: cannot stage prior Go verdicts: {error}", file=sys.stderr)
+        self._lock = threading.Lock()
+        self._graph: dict | None = None
+        self._edges: dict | None = None
+        self._digest_cache: dict = {}
+        self._has_entries = False
+        self.recorded: dict = {
+            "schema": 1,
+            "item_id": mod.read_run_item_id(self.run_dir),
+            "run_id": self.run_dir.name,
+            "packages": {},
+        }
+
+    @classmethod
+    def create(cls, root: Path, spans_out: str) -> "GatePackageVerdicts | None":
+        if not spans_out:
+            return None
+        mod = _load_go_affected_helper(root)
+        if mod is None:
+            return None
+        return cls(root, spans_out, mod)
+
+    def _ensure_graph_locked(self) -> tuple[dict, dict]:
+        if self._graph is None:
+            self._graph = self.mod.load_tillr_graph(self.root)
+            self._edges = self.mod.load_edges(self.root)
+        assert self._edges is not None
+        return self._graph, self._edges
+
+    def partition_module_packages(self, module_dir: str) -> tuple[list[str], list[str], list[str]]:
+        with self._lock:
+            graph, edges = self._ensure_graph_locked()
+            if module_dir in graph["failed_modules"]:
+                return [], [], []
+            test_pkgs = list(graph["module_test_pkgs"].get(module_dir, ()))
+            if not test_pkgs or not self.prior:
+                return test_pkgs, [], list(test_pkgs)
+            reused: list[str] = []
+            remaining: list[str] = []
+            for pkg in test_pkgs:
+                if self.mod.package_verdict_reusable(
+                    self.root,
+                    pkg,
+                    graph,
+                    edges,
+                    self.prior,
+                    selected_tests=None,
+                    cache=self._digest_cache,
+                ):
+                    reused.append(pkg)
+                else:
+                    remaining.append(pkg)
+            return test_pkgs, reused, remaining
+
+    def record_whole_packages(self, pkgs: list[str]) -> None:
+        if not pkgs:
+            return
+        with self._lock:
+            graph, edges = self._ensure_graph_locked()
+            for pkg in pkgs:
+                if self.mod.record_package_verdict(
+                    self.root,
+                    pkg,
+                    graph,
+                    edges,
+                    self.recorded,
+                    selected_tests=None,
+                    cache=self._digest_cache,
+                ):
+                    self._has_entries = True
+
+    def merge_verdicts_dict(self, data: dict) -> None:
+        with self._lock:
+            if self.mod.merge_package_verdicts_into(self.recorded, data):
+                self._has_entries = True
+
+    def save(self) -> None:
+        with self._lock:
+            if not self._has_entries:
+                return
+            payload = copy.deepcopy(self.recorded)
+        try:
+            self.mod.save_package_verdicts_atomic(self.out_path, payload)
+        except OSError as error:
+            print(f"fork-check: cannot write Go package verdicts: {error}", file=sys.stderr)
+
+    def close(self) -> None:
+        if self.prior_path:
+            with contextlib.suppress(OSError):
+                Path(self.prior_path).unlink(missing_ok=True)
+            self.prior_path = ""
 
 
 def run_self_suite_check(root: Path, check: Check, env: dict, drop: tuple,
                          cancel: Cancellation | None) -> tuple[int, str, float]:
     check.self_suite = None
     path = None
-    drop = (*drop, GO_SHARDS_EVIDENCE_ENV, GO_AFFECTED_EVIDENCE_ENV)
+    drop = (*drop, GO_SHARDS_EVIDENCE_ENV, GO_AFFECTED_EVIDENCE_ENV,
+            GO_VERDICTS_IN_ENV, GO_VERDICTS_OUT_ENV)
     try:
         try:
             fd, path = tempfile.mkstemp(prefix="gate-self-suite-")
@@ -8814,18 +8947,38 @@ def run_self_suite_check(root: Path, check: Check, env: dict, drop: tuple,
 
 
 def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
-                         cancel: Cancellation | None) -> tuple[int, str, float]:
+                         cancel: Cancellation | None, *,
+                         measure_landing: bool = True,
+                         package_verdicts: GatePackageVerdicts | None = None) -> tuple[int, str, float]:
     drop = (*drop, SELF_SUITE_TIMING_ENV)
     if check.kind == "go-affected":
         path = None
+        verdicts_out_path = None
         try:
-            try:
-                fd, path = tempfile.mkstemp(prefix="gate-go-affected-")
-                os.close(fd)
-                env = {**env, GO_AFFECTED_EVIDENCE_ENV: path}
-            except OSError as error:
-                print(f"fork-check: cannot prepare go-affected evidence: {error}", file=sys.stderr)
+            if measure_landing:
+                try:
+                    fd, path = tempfile.mkstemp(prefix="gate-go-affected-")
+                    os.close(fd)
+                    env = {**env, GO_AFFECTED_EVIDENCE_ENV: path}
+                except OSError as error:
+                    print(f"fork-check: cannot prepare go-affected evidence: {error}", file=sys.stderr)
+                    drop += (GO_AFFECTED_EVIDENCE_ENV,)
+            else:
                 drop += (GO_AFFECTED_EVIDENCE_ENV,)
+            if package_verdicts is not None:
+                try:
+                    fd_v, verdicts_out_path = tempfile.mkstemp(prefix="gate-go-verdicts-out-")
+                    os.close(fd_v)
+                    env = {**env, GO_VERDICTS_OUT_ENV: verdicts_out_path}
+                except OSError as error:
+                    print(f"fork-check: cannot prepare go-affected verdicts: {error}", file=sys.stderr)
+                    drop += (GO_VERDICTS_OUT_ENV,)
+                if package_verdicts.prior_path:
+                    env = {**env, GO_VERDICTS_IN_ENV: package_verdicts.prior_path}
+                else:
+                    drop += (GO_VERDICTS_IN_ENV,)
+            else:
+                drop += (GO_VERDICTS_IN_ENV, GO_VERDICTS_OUT_ENV)
             rc, output, elapsed = run_command(
                 root, check.argv, check.timeout, env, (*drop, GO_SHARDS_EVIDENCE_ENV), cancel)
             if path is not None:
@@ -8835,19 +8988,123 @@ def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
                         check.go_build.append(json.loads(data))
                 except (OSError, ValueError) as error:
                     print(f"fork-check: cannot read go-affected evidence: {error}", file=sys.stderr)
+            if (
+                verdicts_out_path is not None
+                and package_verdicts is not None
+                and not (cancel is not None and cancel.cancelled)
+            ):
+                with contextlib.suppress(OSError, ValueError):
+                    vdata = Path(verdicts_out_path).read_text(encoding="utf-8")
+                    if vdata:
+                        package_verdicts.merge_verdicts_dict(json.loads(vdata))
             return rc, output, elapsed
         finally:
             if path is not None:
                 with contextlib.suppress(OSError):
                     Path(path).unlink(missing_ok=True)
+            if verdicts_out_path is not None:
+                with contextlib.suppress(OSError):
+                    Path(verdicts_out_path).unlink(missing_ok=True)
 
-    drop += (GO_AFFECTED_EVIDENCE_ENV,)
+    drop += (GO_AFFECTED_EVIDENCE_ENV, GO_VERDICTS_IN_ENV, GO_VERDICTS_OUT_ENV)
     sharded = check.kind == "gate-runner" and check.go_module in GO_SHARD_DIRS
+    test_pkgs: list[str] = []
+    reused_pkgs: list[str] = []
+    remaining_pkgs: list[str] = []
+    if package_verdicts is not None and check.go_module:
+        test_pkgs, reused_pkgs, remaining_pkgs = package_verdicts.partition_module_packages(
+            check.go_module
+        )
+
+    if test_pkgs and not remaining_pkgs:
+        if check.kind == "gate-runner":
+            tail_argv: list[str] | None = None
+            if len(check.argv) == 3 and check.argv[:2] == ["sh", "-c"]:
+                for slot in ("gate", "proof"):
+                    prefix = go_tool_command(check.go_module, slot_class=slot) + (
+                        "" if check.go_module in GO_SHARD_DIRS else " && cd ../.."
+                    )
+                    if check.argv[2] == prefix:
+                        tail_argv = []
+                        break
+                    if check.argv[2].startswith(prefix + " && "):
+                        tail_argv = ["sh", "-c", check.argv[2][len(prefix + " && ") :]]
+                        break
+            if tail_argv is not None:
+                if tail_argv:
+                    rc, tail_out, elapsed = run_command(
+                        root, tail_argv, check.timeout, env, (*drop, GO_SHARDS_EVIDENCE_ENV), cancel
+                    )
+                else:
+                    rc, tail_out, elapsed = 0, "", 0.0
+                output = (
+                    f"gate-runner: reused {len(reused_pkgs)} passing Go package verdict(s) "
+                    f"from pre-conflict gate\n{tail_out}"
+                )
+                if rc == 0 and package_verdicts is not None and not (cancel is not None and cancel.cancelled):
+                    package_verdicts.record_whole_packages(reused_pkgs)
+                if measure_landing:
+                    check.go_build.append({
+                        "module": check.go_module,
+                        "execution": "reused",
+                        "selector": "./...",
+                        "mode": "compiled-shards" if sharded else "go-test",
+                        "packages": [{"import_path": p, "test_cache": "reused"} for p in reused_pkgs],
+                    })
+                return rc, output, elapsed
+        elif check.kind == "go-substrate":
+            output = (
+                f"go-substrate: reused {len(reused_pkgs)} passing Go package verdict(s) "
+                "from pre-conflict gate\n"
+            )
+            if package_verdicts is not None:
+                package_verdicts.record_whole_packages(reused_pkgs)
+            if measure_landing:
+                check.go_build.append({
+                    "module": check.go_module,
+                    "execution": "reused",
+                    "selector": "./...",
+                    "mode": "go-test",
+                    "packages": [{"import_path": p, "test_cache": "reused"} for p in reused_pkgs],
+                })
+            return 0, output, 0.0
+
+    if check.kind == "go-substrate" and reused_pkgs and remaining_pkgs:
+        run_argv = check.argv
+        if (
+            len(check.argv) == 3
+            and check.argv[:2] == ["sh", "-c"]
+            and check.argv[2] == go_tool_command(check.go_module)
+        ):
+            pkg_args = " ".join(shlex.quote(p) for p in remaining_pkgs)
+            run_argv = [
+                "sh",
+                "-c",
+                f"cd {shlex.quote(check.go_module)} && CGO_ENABLED=0 go test "
+                f"-parallel {GO_TOOL_PARALLEL} -timeout {GO_TEST_TIMEOUT} {pkg_args}",
+            ]
+        rc, output, elapsed = run_command(
+            root, run_argv, check.timeout, env, (*drop, GO_SHARDS_EVIDENCE_ENV), cancel
+        )
+        if rc == 0 and package_verdicts is not None and not (cancel is not None and cancel.cancelled):
+            package_verdicts.record_whole_packages(test_pkgs)
+        if measure_landing:
+            ran_entries = native_go_packages(output)
+            reused_entries = [{"import_path": p, "test_cache": "reused"} for p in reused_pkgs]
+            check.go_build.append({
+                "module": check.go_module,
+                "execution": "ran",
+                "selector": "./...",
+                "mode": "go-test",
+                "packages": sorted([*reused_entries, *ran_entries], key=lambda r: r["import_path"]),
+            })
+        return rc, output, elapsed
+
     observation = {"module": check.go_module, "execution": "ran", "selector": "./...",
                    "mode": "compiled-shards" if sharded else "go-test"}
     path = None
     try:
-        if sharded:
+        if sharded and measure_landing:
             try:
                 fd, path = tempfile.mkstemp(prefix="gate-go-shards-")
                 os.close(fd)
@@ -8858,21 +9115,26 @@ def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
         else:
             drop += (GO_SHARDS_EVIDENCE_ENV,)
         rc, output, elapsed = run_command(root, check.argv, check.timeout, env, drop, cancel)
-        if path is not None:
-            try:
-                data = Path(path).read_text()
-                # A check can fail before reaching Go discovery, leaving the file empty.
-                if data:
-                    inventory = json.loads(data)
-                    if isinstance(inventory, list):
-                        observation["packages"] = inventory
-                    elif isinstance(inventory, dict) and isinstance(inventory.get("packages"), list):
-                        observation.update(discovery=inventory.get("discovery"), packages=inventory["packages"])
-            except (OSError, ValueError) as error:
-                print(f"fork-check: cannot read Go shard package evidence: {error}", file=sys.stderr)
-        elif not sharded:
-            observation["packages"] = native_go_packages(output)
-        check.go_build.append(observation)
+        if rc == 0 and test_pkgs and package_verdicts is not None and not (
+            cancel is not None and cancel.cancelled
+        ):
+            package_verdicts.record_whole_packages(test_pkgs)
+        if measure_landing:
+            if path is not None:
+                try:
+                    data = Path(path).read_text()
+                    # A check can fail before reaching Go discovery, leaving the file empty.
+                    if data:
+                        inventory = json.loads(data)
+                        if isinstance(inventory, list):
+                            observation["packages"] = inventory
+                        elif isinstance(inventory, dict) and isinstance(inventory.get("packages"), list):
+                            observation.update(discovery=inventory.get("discovery"), packages=inventory["packages"])
+                except (OSError, ValueError) as error:
+                    print(f"fork-check: cannot read Go shard package evidence: {error}", file=sys.stderr)
+            elif not sharded:
+                observation["packages"] = native_go_packages(output)
+            check.go_build.append(observation)
         return rc, output, elapsed
     finally:
         if path is not None:
@@ -8886,7 +9148,8 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
                     cancel: "Cancellation | None" = None,
                     cache: VerdictCache | None = None,
                     runtime: RuntimeFingerprint | None = None, *,
-                    measure_landing: bool = False) -> None:
+                    measure_landing: bool = False,
+                    package_verdicts: GatePackageVerdicts | None = None) -> None:
     """Run a check once and record what that one run said.
 
     One execution of the check's command, or one pass of an in-process guard: `check.rc`,
@@ -8955,19 +9218,23 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
                 parent = Path(spans).parent.name
                 if parent:
                     command_env["GO_TEST_SHARDS_HOLDER"] = "trunk-proof" if parent == ".rolling" else f"gate:{parent}"
-        collect_go = measure_landing and (
+        is_landing_go = (
             (check.go_module and check.kind in ("gate-runner", "go-substrate"))
             or check.kind == "go-affected"
         )
+        collect_go = is_landing_go and (measure_landing or package_verdicts is not None)
         for attempt in range(OUTSIDE_SIGNAL_RERUNS + 1):
             if collect_go:
-                check.rc, check.output, ran = run_landing_go_check(root, check, command_env, drop, cancel)
+                check.rc, check.output, ran = run_landing_go_check(
+                    root, check, command_env, drop, cancel,
+                    measure_landing=measure_landing, package_verdicts=package_verdicts)
             elif check.kind == "self-suite":
                 check.rc, check.output, ran = run_self_suite_check(root, check, command_env, drop, cancel)
             else:
                 check.rc, check.output, ran = run_command(
                     root, check.argv, check.timeout, command_env,
-                    (*drop, GO_SHARDS_EVIDENCE_ENV, GO_AFFECTED_EVIDENCE_ENV, SELF_SUITE_TIMING_ENV), cancel)
+                    (*drop, GO_SHARDS_EVIDENCE_ENV, GO_AFFECTED_EVIDENCE_ENV,
+                     GO_VERDICTS_IN_ENV, GO_VERDICTS_OUT_ENV, SELF_SUITE_TIMING_ENV), cancel)
             seconds += ran
             signal_number = outside_signal(check.rc)
             if signal_number is None or (cancel is not None and cancel.cancelled):
@@ -9908,9 +10175,22 @@ def run_gate(argv: list[str]) -> int:
         for check in plan.checks:
             if check.cache_provenance is not None:
                 check.cache_provenance["commit"] = head
-    check_wall, peak, halted = run_plan_checks(plan, root, diff_base, jobs,
-                                               cache=cache, runtime=runtime,
-                                               heavy_jobs=heavy_jobs)
+    package_verdicts: GatePackageVerdicts | None = None
+    if options.tier == TIER_LANDING and spans_out and any(
+        (c.go_module and c.kind in ("gate-runner", "go-substrate")) or c.kind == "go-affected"
+        for c in plan.checks
+    ):
+        package_verdicts = GatePackageVerdicts.create(root, spans_out)
+    try:
+        check_wall, peak, halted = run_plan_checks(plan, root, diff_base, jobs,
+                                                   cache=cache, runtime=runtime,
+                                                   heavy_jobs=heavy_jobs,
+                                                   package_verdicts=package_verdicts)
+        if package_verdicts is not None:
+            package_verdicts.save()
+    finally:
+        if package_verdicts is not None:
+            package_verdicts.close()
     if cache is not None:
         # The verdict cache is a separate file with no read-modify-write to serialise:
         # a concurrent save is a cache miss, not a lost run entry, so it takes no lock.
