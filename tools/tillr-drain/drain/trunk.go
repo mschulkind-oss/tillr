@@ -697,7 +697,7 @@ func (l *Loop) judgeTrunkChecks(ctx context.Context, replay ReplayStep, candidat
 		return ReplayOutcome{}, source, err
 	}
 	out, err := restartWork(ctx, l, func(child context.Context) (ReplayOutcome, error) {
-		return replay.Replay(child, candidate, rev, rest)
+		return l.runReplay(child, replay, candidate, rev, rest)
 	})
 	l.sweepDisabledMarkers(ctx)
 	if err != nil || !out.Known || out.Rev != "" && out.Rev != rev {
@@ -1372,7 +1372,7 @@ func (l *Loop) culpritLandingAttribution(ctx context.Context, replay ReplayStep,
 	}
 	isRed := func(sha string) (bool, bool) {
 		out, err := restartWork(ctx, l, func(child context.Context) (ReplayOutcome, error) {
-			return replay.Replay(child, candidate, sha, checks)
+			return l.runReplay(child, replay, candidate, sha, checks)
 		})
 		l.sweepDisabledMarkers(ctx)
 		if err != nil || !out.Known || out.Rev != "" && out.Rev != sha {
