@@ -107,6 +107,19 @@ func withRegistryLockOrDefault(ctx context.Context, repo string, withLock func(c
 	return fn()
 }
 
+func withWorktreeListLock(ctx context.Context, repo string, fn func() error) error {
+	common, err := heavy.GitOutput(ctx, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return err
+	}
+	unlock, err := acquireDefaultRegistryLock(ctx, filepath.Join(strings.TrimSpace(common), "worktree-registry.lock"))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
+}
+
 func acquireDefaultRegistryLock(ctx context.Context, path string) (func(), error) {
 	lock, err := land.OpenLock(path)
 	if err != nil {
@@ -401,6 +414,132 @@ func heavyEndedFailingChecks(endedOutcome string, checks []HeavyCheck) []string 
 	}
 	return failing
 }
+
+type proofWorktreeEntry struct {
+	path     string
+	prunable bool
+	locked   bool
+}
+
+func sameWorktreePath(a, b string) bool {
+	abs := func(p string) string {
+		if resolved, err := filepath.Abs(p); err == nil {
+			return resolved
+		}
+		return filepath.Clean(p)
+	}
+	if abs(a) == abs(b) {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(abs(a))
+	rb, errB := filepath.EvalSymlinks(abs(b))
+	return errA == nil && errB == nil && ra == rb
+}
+
+func findProofWorktree(ctx context.Context, repo, work string) (proofWorktreeEntry, bool, error) {
+	var out string
+	err := withWorktreeListLock(ctx, repo, func() error {
+		var err error
+		out, err = heavy.GitOutput(ctx, repo, "worktree", "list", "--porcelain")
+		return err
+	})
+	if err != nil {
+		return proofWorktreeEntry{}, false, err
+	}
+	var current *proofWorktreeEntry
+	match := func(wt *proofWorktreeEntry) bool {
+		return wt != nil && sameWorktreePath(wt.path, work)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			if match(current) {
+				return *current, true, nil
+			}
+			current = nil
+			continue
+		}
+		key, rest, _ := strings.Cut(line, " ")
+		switch key {
+		case "worktree":
+			if match(current) {
+				return *current, true, nil
+			}
+			current = &proofWorktreeEntry{path: rest}
+		case "prunable":
+			if current != nil {
+				current.prunable = true
+			}
+		case "locked":
+			if current != nil {
+				current.locked = true
+			}
+		}
+	}
+	if match(current) {
+		return *current, true, nil
+	}
+	return proofWorktreeEntry{}, false, nil
+}
+
+func worktreeInProgress(gitDir string) bool {
+	for _, name := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply"} {
+		if _, err := os.Stat(filepath.Join(gitDir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// tryReuseProofWorktree moves an already-registered, non-prunable, unlocked
+// proof worktree to a detached checkout of tip in place, removes all untracked
+// and ignored files, and verifies HEAD and cleanliness before returning true.
+// Any failure returns false so the caller falls through to the remove-and-add
+// recovery path.
+func tryReuseProofWorktree(ctx context.Context, work, tip string) bool {
+	info, err := os.Stat(filepath.Join(work, ".git"))
+	if err != nil || info.IsDir() {
+		return false
+	}
+	gitDir, err := heavy.GitOutput(ctx, work, "rev-parse", "--path-format=absolute", "--git-dir")
+	if err != nil {
+		return false
+	}
+	if worktreeInProgress(gitDir) {
+		for _, sub := range [][]string{{"merge", "--abort"}, {"rebase", "--abort"}, {"cherry-pick", "--abort"}, {"revert", "--abort"}} {
+			_, _ = heavy.GitOutput(ctx, work, sub...)
+		}
+	}
+	wantTip, err := heavy.GitOutput(ctx, work, "rev-parse", tip+"^{commit}")
+	if err != nil {
+		return false
+	}
+	if _, err := heavy.GitOutput(ctx, work, "clean", "-ffdx"); err != nil {
+		return false
+	}
+	if _, err := heavy.GitOutput(ctx, work, "checkout", "--force", "--detach", wantTip); err != nil {
+		return false
+	}
+	if _, err := heavy.GitOutput(ctx, work, "reset", "--hard", wantTip); err != nil {
+		return false
+	}
+	if _, err := heavy.GitOutput(ctx, work, "clean", "-ffdx"); err != nil {
+		return false
+	}
+	head, err := heavy.GitOutput(ctx, work, "rev-parse", "HEAD")
+	if err != nil || head != wantTip {
+		return false
+	}
+	branch, err := heavy.GitOutput(ctx, work, "branch", "--show-current")
+	if err != nil || branch != "" {
+		return false
+	}
+	status, err := heavy.GitOutput(ctx, work, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all", "--ignored")
+	if err != nil || status != "" {
+		return false
+	}
+	return true
+}
+
 func (r HeavyRunner) inTree(ctx context.Context, tip string, fn func(string) error) error {
 	if err := os.MkdirAll(filepath.Dir(r.Work), 0755); err != nil {
 		return err
@@ -416,34 +555,32 @@ func (r HeavyRunner) inTree(ctx context.Context, tip string, fn func(string) err
 	if root == work {
 		return Usagef("heavy worktree must not be the main checkout")
 	}
-	// The shared lock proves no other heavy run owns this path. Recover a tree
-	// left by a killed runner without pruning any other worktree registrations.
-	if err := withRegistryLockOrDefault(ctx, r.Root, r.WithWorktreeRegistryLock, func() error {
-		if err := r.unlockProofWorktree(ctx, work); err != nil {
+	reused := false
+	if entry, found, err := findProofWorktree(ctx, r.Root, work); err == nil && found && !entry.prunable && !entry.locked {
+		reused = tryReuseProofWorktree(ctx, r.Work, tip)
+	}
+	if !reused {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, _ = heavy.GitOutput(ctx, r.Root, "worktree", "remove", "--force", r.Work)
-		if err := os.RemoveAll(r.Work); err != nil {
+		// The shared lock proves no other heavy run owns this path. Create the
+		// worktree for the first time, or recover a missing, prunable, locked,
+		// or broken registration without pruning any other worktree registrations.
+		if err := withRegistryLockOrDefault(ctx, r.Root, r.WithWorktreeRegistryLock, func() error {
+			if err := r.unlockProofWorktree(ctx, work); err != nil {
+				return err
+			}
+			_, _ = heavy.GitOutput(ctx, r.Root, "worktree", "remove", "--force", r.Work)
+			if err := os.RemoveAll(r.Work); err != nil {
+				return err
+			}
+			_, err := heavy.GitOutput(ctx, r.Root, "worktree", "add", "--detach", r.Work, tip)
+			return err
+		}); err != nil {
 			return err
 		}
-		_, err := heavy.GitOutput(ctx, r.Root, "worktree", "add", "--detach", r.Work, tip)
-		return err
-	}); err != nil {
-		return err
 	}
-	err = fn(r.Work)
-	if CleanupLost(err) {
-		return err
-	}
-	// Cancellation must not prevent cleanup after the judge's process group has ended.
-	cleanupErr := withRegistryLockOrDefault(context.Background(), r.Root, r.WithWorktreeRegistryLock, func() error {
-		_, err := heavy.GitOutput(context.Background(), r.Root, "worktree", "remove", "--force", r.Work)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	return cleanupErr
+	return fn(r.Work)
 }
 
 // unlockProofWorktree runs under the registry lock. Git can still have a

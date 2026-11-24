@@ -105,8 +105,8 @@ func TestHeavyCancellationEndsDeclarationChildrenBeforeRemovingTree(t *testing.T
 	if len(strings.TrimSpace(string(state))) > 0 && !strings.HasPrefix(strings.TrimSpace(string(state)), "Z") {
 		t.Fatalf("child remains alive: %s", state)
 	}
-	if _, err := os.Stat(runner.Work); !os.IsNotExist(err) {
-		t.Fatalf("worktree remains: %v", err)
+	if _, err := os.Stat(runner.Work); err != nil {
+		t.Fatalf("proof worktree should be retained for reuse: %v", err)
 	}
 }
 
