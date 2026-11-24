@@ -70,3 +70,17 @@ names holds.`, "See **Finishing** for how to end this run.", 1)
 	prefix = strings.ReplaceAll(prefix, "**Report shape**", "**Finishing**")
 	return prefix + "\n" + finishing + "\nThe only other ending is an **obstacle**:" + obstacle + "\nCall `obstacle` with `kind` and that kind's fields in lowercase (`criteria`, `evidence`, `paths`, `checks`, `base`, `command`, `tried`, `missing`, `question`) instead of writing a `RESULT: blocked` footer.\n", nil
 }
+
+const noChangeMarkerLine = "A reproduced no-change finding may finish with no_change."
+
+const noChangeFinishingNote = `If your reproductions establish that nothing in the repository needs changing, leave the
+worktree clean at the staged base and call ` + "`" + `no_change` + "`" + ` with ` + "`" + `cause` + "`" + `, ` + "`" + `evidence` + "`" + `, and
+` + "`" + `why_no_change` + "`" + ` instead of ` + "`" + `land` + "`" + ` or ` + "`" + `obstacle` + "`" + `.
+`
+
+func addNoChangeToFinishing(ending string) string {
+	if strings.Contains(ending, noChangeMarkerLine) {
+		return ending
+	}
+	return ending + "\n" + noChangeMarkerLine + "\n" + noChangeFinishingNote
+}

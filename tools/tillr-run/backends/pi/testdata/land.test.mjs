@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import landTool, { executeLand } from '../land.ts';
+import noChangeTool, { executeNoChange } from '../no_change.ts';
 import obstacleTool, { executeObstacle } from '../obstacle.ts';
 import keepGoing from '../keep-going.ts';
 
@@ -31,7 +32,7 @@ function landFixture(t) {
     assert.equal(existsSync(offer), false, 'a rejected call must not write an offer');
   };
   const change = () => { put('repo/in', 'change'); git('add', 'in'); commit(); return git('rev-parse', 'HEAD'); };
-  return { put, state, cwd, git, base, forbidden, land, offer, refuses, change };
+  return { dir, put, state, cwd, git, base, forbidden, land, offer, refuses, change };
 }
 
 test('land rejects invalid offers', (t) => {
@@ -466,4 +467,29 @@ test('land refuses committed unformatted Go files with their names until formatt
   git('-c', 'user.name=Test', '-c', 'user.email=test@example.org', 'commit', '-q', '--amend', '--no-edit');
   assert.equal(land().park, true);
   assert.equal(existsSync(offer), true);
+});
+
+test('no_change validates clean base and finding, parks offer, and rejects repeats', (t) => {
+  const { dir, cwd, base, git, offer, put } = landFixture(t);
+  const run = (args, id = 'nc-1') => executeNoChange(id, args, cwd, dir, base, () => [], () => false, '/t.jsonl');
+  assert.throws(() => run({ cause: 'c' }), /missing required field.*evidence/);
+  const finding = { cause: 'sibling fix', evidence: 'go test passed', why_no_change: 'already green' };
+  assert.equal(run(finding).park, true);
+  const written = JSON.parse(readFileSync(offer, 'utf8'));
+  assert.deepEqual(written, { call_id: 'nc-1', tool: 'no_change', base, finding, transcript: '/t.jsonl' });
+  rmSync(offer, { force: true });
+
+  put('landing-state.json', JSON.stringify({ refused: [{ tool: 'no_change', base, finding, answer: 'need proof' }] }));
+  assert.throws(() => run(finding, 'nc-2'), /already refused/);
+  rmSync(join(dir, 'landing-state.json'), { force: true });
+
+  writeFileSync(join(cwd, 'dirty.txt'), 'x\n');
+  assert.throws(() => run(finding, 'nc-3'), /not clean/);
+  git('add', 'dirty.txt');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.org', 'commit', '-qm', 'change');
+  assert.throws(() => run(finding, 'nc-4'), /commit exists at HEAD/);
+
+  let registered;
+  noChangeTool({ registerTool: (v) => { registered = v; } });
+  assert.equal(registered.name, 'no_change');
 });

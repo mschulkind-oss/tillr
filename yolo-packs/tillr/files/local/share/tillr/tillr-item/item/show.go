@@ -200,6 +200,23 @@ func readStoredItem(r *store.Reader, id string) (itemPayload, time.Time, error) 
 			}
 		}
 	}
+	var hasFinding bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM pragma_table_info('items') WHERE name = 'finding')`).Scan(&hasFinding); err != nil {
+		return itemPayload{}, time.Time{}, Internalf("checking finding metadata: %v", err)
+	}
+	if hasFinding {
+		var rawFinding string
+		if err := r.QueryRow(`SELECT finding FROM items WHERE item_id = ?`, id).Scan(&rawFinding); err != nil {
+			return itemPayload{}, time.Time{}, Internalf("reading finding metadata: %v", err)
+		}
+		if rawFinding != "" {
+			var finding Finding
+			if err := json.Unmarshal([]byte(rawFinding), &finding); err != nil {
+				return itemPayload{}, time.Time{}, Internalf("decoding finding metadata: %v", err)
+			}
+			payload.Finding = &finding
+		}
+	}
 	if payload.WaitingOn, payload.UnderlyingState, err = ReadWaitingOn(r, id); err != nil {
 		return itemPayload{}, time.Time{}, err
 	}

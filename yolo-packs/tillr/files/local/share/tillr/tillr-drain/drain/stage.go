@@ -216,6 +216,21 @@ type StageSpec struct {
 	// while the trunk is red (OQ-GP7), so the worker does not spend its run on a failure
 	// it did not cause.
 	TrunkRedNotice string
+	// AllowsNoChange is true only on a single-worker@v1 work run.
+	AllowsNoChange bool
+}
+
+func allowsSingleWorkerNoChange(w *Workflow, stage *WorkflowStage, selected, itemID string, isFork bool, blockConflict *item.Conflict, conflict *ConflictBrief, deskDocument string) bool {
+	if isFork || blockConflict != nil || conflict != nil || deskDocument != "" || item.IsCommentItem(itemID) || IsGeneratedRepair(itemID) || isForkRebaseItem(itemID) {
+		return false
+	}
+	if w == nil {
+		return selected == "" || selected == singleWorkerWorkflow
+	}
+	if w.Name != "single-worker" || w.Version != 1 || stage == nil {
+		return false
+	}
+	return stage.ID == "work" && (stage.Kind == "" || stage.Kind == "agent") && stage.Access == "write"
 }
 
 // ConflictBrief is the conflict a conflict-fix run is asked to resolve: the paths git
@@ -573,7 +588,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		if spec.Node != nil && plannedWritePiece(*spec.Node) {
 			ending = strings.Replace(ending, callEndingRequired, "If the piece needs no change, finish with the footer described above.\nOtherwise, this run ends with one tool call; a message without it is not an ending.", 1)
 		}
+		if spec.AllowsNoChange {
+			ending = addNoChangeToFinishing(ending)
+		}
 	}
+	spec.EndingCapability = capability
 	if isFork {
 		method := "Commit the change in the named fork checkout, on its own branch."
 		if isForkRebaseItem(spec.ItemID) {
@@ -624,6 +643,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	brief, err = s.workflowNodeBrief(spec, brief, true, fence)
 	if err != nil {
 		return err
+	}
+	if spec.AllowsNoChange && spec.Node == nil && capability == run.EndingFooter {
+		brief += "\n## No-change ending\n\n" + noChangeMarkerLine + "\nIf reproductions establish that the repository needs no change, leave the worktree clean at base and end your report with CAUSE:, EVIDENCE:, WHY_NO_CHANGE:, and RESULT: no_change.\n"
 	}
 	brief += ending
 	if ideaWords != nil {

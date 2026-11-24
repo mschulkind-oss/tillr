@@ -1133,6 +1133,10 @@ Never change the worker's candidate.
 	if receipt.EvaluatorTask != "" {
 		brief += "\n## Evaluator task\n\n" + receipt.EvaluatorTask + "\n"
 	}
+	if c.NoChange != nil {
+		brief += fmt.Sprintf("\n## No-change finding\n\nRun `%s` reported `no_change` at `evaluated_head=%s`:\n- Cause: %s\n- Evidence: %s\n- Why no change: %s\n\nIndependently reproduce and check this claim at `evaluated_head` (%s) against the item's words and every criterion. Do not cite worker reports or `no-change.json` as evidence.\n",
+			c.NoChange.RunID, c.BaseSHA, c.NoChange.Cause, c.NoChange.Evidence, c.NoChange.WhyNoChange, c.BaseSHA)
+	}
 	brief += fmt.Sprintf("\nEvaluator: run=%s; backend=%s; route=%s\n", receipt.Request.RunID, receipt.Request.Backend, receipt.Request.Route())
 	if l.cfg.Store != "" {
 		guidance, err := itemGuidanceBrief(ctx, l.cfg.Store, c.ItemID, c.Worktree)
@@ -1306,9 +1310,11 @@ func (l *Loop) checkJudgeScope(c Candidate, entries []item.JudgeEntry) error {
 	}
 	for _, runID := range runIDs {
 		artifacts[filepath.Join(RunDir(l.cfg.Root, runID), "node-report.md")] = true
+		artifacts[filepath.Join(RunDir(l.cfg.Root, runID), noChangeFile)] = true
 		scratch := run.DurableDir(l.laneDirPath(c.LaneID), runID)
 		artifacts[filepath.Join(scratch, "report.md")] = true
 		artifacts[filepath.Join(scratch, landingOfferFile)] = true
+		artifacts[filepath.Join(scratch, noChangeFile)] = true
 	}
 	for _, entry := range entries {
 		outside := strings.HasPrefix(strings.ToLower(strings.TrimSpace(entry.Reason)), "report-only:")
@@ -1318,6 +1324,7 @@ func (l *Loop) checkJudgeScope(c Candidate, entries []item.JudgeEntry) error {
 			path, _, _ = strings.Cut(path, "#")
 			path = filepath.Clean(path)
 			outside = outside || strings.HasPrefix(ref, "report:") || artifacts[path] ||
+				filepath.Base(path) == noChangeFile ||
 				(!filepath.IsAbs(path) && artifacts[filepath.Join(c.Worktree, path)])
 		}
 		if outside {

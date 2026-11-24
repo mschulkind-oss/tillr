@@ -450,7 +450,31 @@ func itemDependencyBlocked(r *store.Reader, itemID string) (bool, error) {
 const (
 	quickWayFile     = "do-it-now"
 	planQuickWayKind = "drain.plan-quick"
+	noChangeFile     = "no-change.json"
+	noChangeKind     = "drain.no-change"
 )
+
+type noChangeRecord struct {
+	ItemID      string `json:"item_id"`
+	Attempt     int    `json:"attempt"`
+	NodeID      string `json:"node_id"`
+	RunID       string `json:"run_id"`
+	BaseSHA     string `json:"base_sha"`
+	Cause       string `json:"cause"`
+	Evidence    string `json:"evidence"`
+	WhyNoChange string `json:"why_no_change"`
+}
+
+func (l *Loop) allowsNoChangeDecision(d Decision) bool {
+	var stage *WorkflowStage
+	if d.Workflow != nil {
+		if d.NodeIndex < 0 || d.NodeIndex >= len(d.Workflow.Stages) {
+			return false
+		}
+		stage = &d.Workflow.Stages[d.NodeIndex]
+	}
+	return allowsSingleWorkerNoChange(d.Workflow, stage, d.SelectedWorkflow, d.ItemID, l.laneForkTarget(d.LaneID) != "", d.BlockConflict, nil, d.DeskDocument)
+}
 
 func planAllowsQuickWay(stage WorkflowStage) bool {
 	return (stage.Kind == "" || stage.Kind == "agent") && stage.Seat == "plan" && stage.Access == "read_only" && !(stage.ID == "classify" && classificationNode(stage))
@@ -607,10 +631,15 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 			offered = false
 			footer = "blocked"
 			log = formatObstacleReport(obs)
+		} else if _, isNoChange, ncErr := l.offeredNoChange(ctx, rec.RunID); ncErr != nil {
+			return true, ncErr
+		} else if isNoChange {
+			footer = "no_change"
 		} else {
 			footer = "done"
 		}
 	}
+	noChangeAllowed := footer == "no_change" && l.allowsNoChangeDecision(d)
 	if stage.Kind == "agent" {
 		if ClassifyAttempt(rec, log) == AttemptUnjudged {
 			return true, Externalf("unjudged workflow node requires continuation or inspection")
@@ -646,7 +675,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		if classifyDecisionAttempt(d, rec, log) == AttemptInfrastructure {
 			return true, l.holdFailedWorkflowNode(ctx, d, base, rec, result)
 		}
-		if rec.State == run.StateExited && !readableFooter(footer) {
+		if rec.State == run.StateExited && !readableFooter(footer) && !noChangeAllowed {
 			return true, l.restartUnreadWorkflowNode(ctx, d, base, rec)
 		}
 	}
@@ -699,7 +728,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 				return true, l.markExamined(ctx, d)
 			}
 		}
-		if footer != "done" && footer != "failed" {
+		if footer != "done" && footer != "failed" && !noChangeAllowed {
 			if footer == "blocked" {
 				if writer, finding := missingCandidateFinding(d, base, head, dirty, log); writer >= 0 {
 					ready, err := l.canReturnMissingCandidate(ctx, d, writer)
@@ -755,6 +784,12 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 			return true, retainedAfter(d.LaneID, stop)
 		}
 		return true, l.markExamined(ctx, d)
+	}
+	if noChangeAllowed {
+		if err := l.nodeOutcome(ctx, d, "passed"); err != nil {
+			return true, err
+		}
+		return false, nil
 	}
 	artifacts, outputErr := checkNodeOutputs(l.cfg.Root, d)
 	var delivery *deliveryDecision

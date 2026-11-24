@@ -2,7 +2,9 @@ package drain
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -160,4 +162,81 @@ func (l *Loop) completeGraphWithoutCommit(ctx context.Context, d Decision, c Can
 		return err
 	}
 	return l.endItemUnfinishedRuns(ctx, c.ItemID, c.RunID)
+}
+
+func (l *Loop) completeNoChangeExit(ctx context.Context, d Decision, c Candidate) error {
+	if c.NoChange == nil {
+		return fmt.Errorf("no_change exit requires a finding")
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	at := l.cfg.Now().UTC()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		seen, err := judgmentSeen(tx, "drain.no-change-closed", "item", c.ItemID)
+		if err != nil || seen != 0 {
+			return err
+		}
+		closedBy := "run:" + c.NoChange.RunID
+		judgeRun := ""
+		if receipt := c.Judge; receipt != nil {
+			options := receipt.Options
+			options.Landed = ""
+			options.At = at
+			if err := bindSavedJudge(tx.Reader(), c, receipt, &options); err != nil {
+				return err
+			}
+			if _, err := item.RecordJudge(ctx, tx, receipt.Raw, options); err != nil {
+				return err
+			}
+			closedBy = options.Actor
+			judgeRun = receipt.Request.RunID
+		}
+		if err := item.RecordFinding(ctx, tx, c.ItemID, item.Finding{
+			Cause:         c.NoChange.Cause,
+			Evidence:      c.NoChange.Evidence,
+			WhyNoChange:   c.NoChange.WhyNoChange,
+			EvaluatedHead: c.BaseSHA,
+			WorkerRun:     c.NoChange.RunID,
+			JudgeRun:      judgeRun,
+		}); err != nil {
+			return err
+		}
+		if _, err := item.Close(ctx, tx, c.ItemID, "no_change: "+c.NoChange.WhyNoChange, closedBy, at); err != nil {
+			return err
+		}
+		var callID string
+		err = tx.QueryRow(`SELECT object_id FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.tool')='no_change' ORDER BY seq DESC LIMIT 1`,
+			callOffered, c.NoChange.RunID).Scan(&callID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if callID != "" {
+			answered, err := judgmentSeen(tx, callAnswered, "call", callID)
+			if err != nil {
+				return err
+			}
+			closed, err := judgmentSeen(tx, callClosed, "call", callID)
+			if err != nil {
+				return err
+			}
+			if answered == 0 && closed == 0 {
+				if err := appendLandingCallEvent(tx, callClosed, callID, map[string]string{"reason": "closed-no-change"}, at); err != nil {
+					return err
+				}
+			}
+		}
+		if err := endItemUnfinishedRunsInTx(ctx, tx, c.ItemID, c.RunID, at); err != nil {
+			return err
+		}
+		return appendEffect(tx, "drain.no-change-closed", c.ItemID, map[string]any{
+			"item_id":    c.ItemID,
+			"attempt":    d.Attempt,
+			"worker_run": c.NoChange.RunID,
+			"judge_run":  judgeRun,
+			"base_sha":   c.BaseSHA,
+		}, at)
+	})
 }

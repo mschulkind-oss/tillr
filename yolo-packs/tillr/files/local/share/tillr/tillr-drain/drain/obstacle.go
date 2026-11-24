@@ -225,6 +225,49 @@ func ObstacleKinds() []string {
 	return kinds
 }
 
+// parseNoChangeFinding reads CAUSE:, EVIDENCE:, and WHY_NO_CHANGE: from a report before
+// its RESULT: no_change footer.
+func parseNoChangeFinding(report string) (landingOfferFinding, string) {
+	fields := map[string]string{}
+	current := ""
+	var value []string
+	flush := func() {
+		if current != "" {
+			fields[current] = strings.TrimSpace(strings.Join(value, "\n"))
+		}
+		current, value = "", nil
+	}
+	for _, line := range strings.Split(report, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), ReportFooter) {
+			flush()
+			continue
+		}
+		if name, rest, ok := strings.Cut(strings.TrimSpace(line), ":"); ok {
+			key := strings.ToUpper(strings.Trim(name, " \t*`-"))
+			if key == "CAUSE" || key == "EVIDENCE" || key == "WHY_NO_CHANGE" {
+				flush()
+				current, value = key, []string{strings.TrimSpace(strings.Trim(strings.TrimSpace(rest), "*`"))}
+				continue
+			}
+		}
+		if current != "" {
+			value = append(value, line)
+		}
+	}
+	flush()
+	f := landingOfferFinding{Cause: fields["CAUSE"], Evidence: fields["EVIDENCE"], WhyNoChange: fields["WHY_NO_CHANGE"]}
+	var missing []string
+	for _, pair := range [][2]string{{"`CAUSE:`", f.Cause}, {"`EVIDENCE:`", f.Evidence}, {"`WHY_NO_CHANGE:`", f.WhyNoChange}} {
+		if pair[1] == "" {
+			missing = append(missing, pair[0])
+		}
+	}
+	if len(missing) > 0 {
+		return landingOfferFinding{}, "no_change finding is missing " + strings.Join(missing, ", ")
+	}
+	return f, ""
+}
+
 // workerEndingProblem answers why a worker's report is not one of its two endings, or ""
 // when it is: `RESULT: done`, or `RESULT: blocked` (or the legacy `trunk-broken`) with a
 // complete obstacle. Whether a `done` run committed is the settlement's own question.
