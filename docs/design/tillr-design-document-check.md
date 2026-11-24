@@ -226,7 +226,7 @@ A designer writes to the `design-doc` and `vantage-docs` skills. Under design-do
 | The checklist at the end of the `design-doc` skill only | Rejected. It is a reminder list for someone who has read the skill. Many of its lines are about how the author worked |
 | Rules written into the officer's brief | Rejected. That is the derived checklist under another name |
 
-**Where the first policy's text comes from.** The two skills are not in this repository. They are delivered to every agent's skill directory from the `matt-craft` pack named in the shared yolo configuration. The loop reads them, at dispatch, from the directory the design seat's harness loads. A policy text that cannot be read refuses the dispatch and names the file, as the prose rewrite does for its guide.
+**Where the first policy's text comes from.** The two skills are not in this repository. They are delivered to every agent's skill directory by a pack the operator's configuration names. The loop reads them, at dispatch, from the directory the design seat's harness loads. A policy text that cannot be read refuses the dispatch and names the file, as the prose rewrite does for its guide.
 
 **A policy text that changes** changes the next check and nothing else. No file is checked again because the text moved. Each check records the content hash of the text it read, as a record and never as a trigger.
 

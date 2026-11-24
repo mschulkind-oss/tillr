@@ -46,7 +46,7 @@ owes the code), [item states](./tillr-item-states.md) (what `blocked` stores), a
 - **The owner** is the one human who owns this repository and its policy.
 - **The operator** is the agent session that coordinates the queue: it files items, watches
   the drain and reports to the owner. The store's `decided_by` field spells this actor
-  `whale`, the older name for the same role.
+  `whale`.
 - **Approval-monkey work** is asking the owner to execute or bless an action an agent has
   already decided, where the owner contributes keystrokes and no information.
 - **Owner-only** is the reservation of a decision to the owner because that decision needs

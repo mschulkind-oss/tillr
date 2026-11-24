@@ -199,11 +199,10 @@ claim, before worktree staging. Reranking alone does not reset readiness.
 `claim_ms` stays null when the writer did not measure a claim and preserves a
 measured zero. `stage_ms` records staging
 separately and includes any asynchronous staging reported for that pass.
-On write-open, historical `drain_ticks` rows are copied without replacing new
-measurements or inventing missing historical values. The old
-table remains a migration source; new measurements never write it.
+On write-open, existing `drain_ticks` rows are copied without replacing new
+measurements or inventing missing values; new measurements never write that table.
 
-A change to the gate runner or its wrapper, or to the legacy checker and its audit,
+A change to the gate runner or its wrapper, or to the rolling program and its audit,
 proves its own suite before merging, regardless of `landing_strategy`. The
 [runner-change rule](../../docs/design/gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer)
 keeps that entire landing out of the ordinary time distribution: `gate_ms`,
@@ -283,7 +282,7 @@ conflict, and the release of an existing owner conflict.
 
 A writing workflow stage may set `write_scope` to `"inherit"` (also the default
 when omitted) or a nonempty list of repository-relative path prefixes. A list
-limits only that stage; an omitted scope does not inherit the retired item
+limits only that stage; an omitted scope does not inherit an item's path
 list. Explicit scopes expand to required pack copies and documentation companions.
 The loader refuses invalid values, empty lists, and any scope on a read-only stage.
 
@@ -707,8 +706,7 @@ Claude Code does it. `landingResultPersisted` reads either backend's session fil
 Each seat names one backend unless it gives explicit shares to every backend
 it lists. A singleton array is still accepted. An unshared multi-backend list
 is refused with the seat's name; keep the intended backend, not a fallback.
-Remove the retired `preference` key. Old files that still carry the key can
-load, but its value no longer affects routing.
+A `preference` key is accepted and ignored; its value does not affect routing.
 
 The optional `read_only_seats` list and `seat_purposes` map reference seats
 already mapped in `seats`. A purpose describes the seat's job in one sentence.
@@ -1088,27 +1086,19 @@ child, which is the command's verdict. Before this, one supervisor of a heavy ga
 [`heavyrun/heavy_reap_linux_test.go`](./heavyrun/heavy_reap_linux_test.go) covers both halves.
 
 The runner judges every heavy tree declaration, reusing the gate's remembered results,
-and the legacy rolling checks that have not yet migrated to declarations. `--heavy-gate`
-names the declaration judge; `--rolling` still names the legacy program. An explicitly
-empty `--rolling` disables that legacy coverage, not the declaration checks. Missing
-programs or missing verdict evidence are reported as faults, never silently passed.
+and the rolling checks that are not declarations. `--heavy-gate` names the declaration
+judge; `--rolling` names the rolling program. An explicitly empty `--rolling` disables
+the rolling program's coverage, not the declaration checks. Missing programs or missing
+verdict evidence are reported as faults, never silently passed.
 
-The legacy program's rolling tier (`fork-check.py --tier rolling`) judges the landing-tier
-checks as well as its own, so the green pointer means every check that guards the trunk
-passed at that commit. A landing gate's verdict covers only the checks its own diff
-selected, and a commit an operator made directly carries none; on 2026-11-18 the proof
-reported the red `tillr-docs` check as "the landing tier's business" for five green
-advances. The one step it still leaves to the landing gate is a fork step whose verdict
-reads the upstream a launch would build rather than the tree. Those steps (`series` and
-`patch-branch-inv2`) are reported as unavailable, and green makes no claim about them:
-an unavailable check does not hold the pointer.
+The rolling program judges the landing-tier checks as well as its own, so the green
+pointer means every check that guards the trunk passed at that commit. A landing gate's
+verdict covers only the checks its own diff selected, and a commit an operator made
+directly carries none. A check the rolling program reports as unavailable makes no claim
+and does not hold the pointer.
 
 A fork-quality step that refuses because its candidate checkout is not the series' tree
-(`STALE`) judged nothing, so it holds the run at unknown rather than passing it. The
-candidate under `.forks/candidate/` is shared with every landing gate, so `bin/pi-forks`
-leaves a candidate that is already current untouched: a patch-branch fork's candidate used
-to be detached and checked out again on every materialize, and on 2026-11-18 a proof's
-preflight landed in that window and found it "not checked out on main".
+(`STALE`) judged nothing, so it holds the run at unknown rather than passing it.
 
 The proof compares its commit to the green pointer. It starts declaration checks whose
 reads match changed files or contain them under a directory read ending in `/`, in name
@@ -1222,8 +1212,7 @@ there is no pointer, or when attribution itself answers no verdict, the runner f
 fixer against the tip. Its brief says why no landing is named, in the runner's words, with
 the judge's recorded output. The run stays `red` and the pointer holds; such a red is never
 `unknown`, and the fixer is filed against the tip. Attribution replays the check with
-`fork-check.py --replay`, which plans over every tracked path; it once planned from the
-record's baseline and found nothing to replay on a verified pointer. A stopped loop is not an
+the replay program (`--replay`), which plans over every tracked path. A stopped loop is not an
 attribution failure: it files nothing, and the next run judges again.
 
 A later red tip for the same check attaches to an unresolved fixer rather than filing a
@@ -1354,9 +1343,9 @@ unchanged. With no green commit yet, the waiting view adds no proof row or reade
 Older pointers without a recorded proof time explicitly say the age is unknown; the
 commit's author date is never substituted. The shared report lives beside the result
 store in the Git common directory;
-the retired rolling watermark is neither read nor written on this path.
+the rolling watermark is neither read nor written on this path.
 
-## Legacy rolling trunk audits
+## Rolling trunk audits on the before-merge path
 
 The following cadence remains only on the `before-merge` compatibility path.
 With no watermark (the tip last judged green by the rolling checks), the default rolling
@@ -1512,8 +1501,7 @@ gate steps and unowned heavy checks run under a subreaper supervisor so descenda
 in separate process groups or sessions are terminated and reaped on cancellation rather
 than holding inherited pipes open. The rolling tier's program and the trunk-already-red
 replay's run in a process group of their own: cancellation first sends SIGTERM to the
-program so it can end checks it started in separate sessions (`fork-check` handles SIGTERM
-by canceling its registered checks and exiting 143 without recording a verdict), allows
+program so it can end checks it started in separate sessions, allows
 five seconds for that cleanup before escalating to SIGKILL, and kills what remains in the
 program's own group before removing the scratch worktree. A rolling or replay program that
 starts separate sessions must own their SIGTERM cleanup, because killing only the program's
@@ -1564,8 +1552,7 @@ A single-worker build run has two endings: its commit, or `RESULT: blocked` with
 - `definition` (`CRITERIA`, `EVIDENCE`): a design-seat conflict.
 - `owner` (`QUESTION`): a design-seat conflict carrying the question. The design seat
   answers from the documents or objects `NEXT-ACTOR: owner`.
-  (`fence` was retired by the owner's ruling on 2026-11-19; an old report naming `fence`
-  is read as a missing output.)
+  (A report naming `fence` is read as a missing output.)
 - `trunk` (`CHECKS`, `BASE`): a replay of the named checks on the run's base, and on the
   trunk tip when the trunk has moved past it. When every one is red there, the trunk
   fixer is filed and the item waits on it, as a red gate's acquittal does. When they are
@@ -2282,16 +2269,16 @@ with its judgment and measurements. Each gate starts with fresh measurement
 artifacts, so a fast-tier stall cannot import remaining checks from a prior run.
 
 A gate that ran and reached no verdict is not a candidate failure either. Its answer is
-"error" (the gate's no-verdict exits, such as fork-check's `NOT VERIFIED`), and the loop
-records the wait as `gate-no-verdict` -- a reason this drain coined on 2026-11-18 for "the
+"error" (the gate's no-verdict exits), and the loop
+records the wait as `gate-no-verdict` -- "the
 gate judged nothing; the loop gates this candidate again" -- releases an eligible lane
 after verifying the candidate pin, and gates the same commit again when a lane is available
 ([`drain/gate_no_verdict.go`](./drain/gate_no_verdict.go)). Nothing is counted, no fault is
 written, and no retry or acknowledgment is asked for, so the hold's mover is the loop and
 never a person. The `gate.verdict` with result `error` stays as the evidence of each
 answer. A no-verdict answer that would repeat on every machine is a classification defect
-in the gate, fixed there: fork-check reads a fork build's `FAILED: build` and npm's
-lockfile refusal as verdicts, so such a red goes back to the worker as a gate refusal.
+in the gate, fixed there: a fork build's `FAILED: build` and npm's
+lockfile refusal are verdicts, so such a red goes back to the worker as a gate refusal.
 
 A gate program that refuses its own arguments is the one no-verdict answer that is not
 re-gated. When the gate's stderr says `flag provided but not defined`, `unrecognized
@@ -3070,7 +3057,7 @@ refused.
 
 ## Filing fork work
 
-File with `tillr item request`. Name one fork from `bin/pi-forks.list` and describe the
+File with `tillr item request`. Name one fork from the repository's fork list and describe the
 change in the words on standard input and supply `--title`. The ignored `--path`
 flag does not select a fork; do not name a lane checkout path.
 The `plan` step of `planned-build@v1` records the delivery as repository, fork, or
@@ -3080,8 +3067,8 @@ shipped policies. A path list does not select a fork. Before resuming
 pending fork work, make sure the item's words identify its fork explicitly.
 
 For a fork piece, staging materializes the dispatched lane's checkout and starts it at
-the delivered patch tip. The worker commits only in that checkout and must not run
-`bin/pi-forks export`. The lander alone moves `refs/heads/patch/pi`, marks the delivery
+the delivered patch tip. The worker commits only in that checkout and does not publish
+it. The lander alone moves the fork's `refs/heads/patch/<fork>` branch, marks the delivery
 for sibling boundaries, and refreshes the shared cache's `main`; two items for the same
 fork remain serialized. For a mixed item, the drain records the fork publication and
 only then starts a separate run for the repository part.
@@ -3121,15 +3108,14 @@ not a fork-delivery verdict. The lander publishes the built commit itself rather
 squashing fork history. Dirty or divergent cache and writer checkouts are refused,
 not reset. A missing shared cache is prepared from the gated fork's upstream metadata
 and published only when complete; recovery of an earlier receipt keeps a later delivered
-tip in that cache. On 2026-11-17,
-`go test . -run 'TestFork|TestAForkLane|TestPatchBranchRetirement' -count=1` in this
-directory passed. The integration case exercises failed build refusal, two overlapping
-lane boundaries, the main checkout's `bin/pi-forks check` with existing and freshly
-created caches, and two successive fork landings.
+tip in that cache. The `TestFork`, `TestAForkLane` and `TestPatchBranchRetirement`
+tests in this directory cover it; the integration case exercises failed build refusal,
+two overlapping lane boundaries, existing and freshly created caches, and two successive
+fork landings.
 
 ## The deny-list and the session
 
-Per-item path fences no longer control which files a candidate can change. Before the gate,
+Per-item path fences do not control which files a candidate can change. Before the gate,
 the drain checks the candidate's committed change against `config/tillr/deny-list.json`.
 A refusal returns the matched entry and its reason to the worker. The judge receives the
 changed paths and the diff and checks that the request accounts for the change.

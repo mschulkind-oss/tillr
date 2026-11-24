@@ -542,10 +542,9 @@ rest read.
   accepting them, which is what keeps the keeper's command working for c4.
 - **`replay` and `rolling` take the contract's flags, not the default programs' (c1).** The drain
   calls `replay --only <ids>` and `rolling --all` or `rolling --since <sha>`. The `replay` face
-  runs `python3 tools/fork-check.py --replay --only <ids>` and the `rolling` face runs
-  `python3 tools/fork-check.py --tier rolling` with the range flag it was given. Each adds
-  `--replay` or `--tier rolling` itself, passes its environment through unchanged, and exits with
-  the program's exit code.
+  runs the gate program's replay of those ids and the `rolling` face runs its rolling tier with
+  the range flag it was given. Each adds the replay or rolling-tier flag itself, passes its
+  environment through unchanged, and exits with the program's exit code.
 - **What `describe` prints.** One JSON object whose only key is `hooks`; the drain refuses any
   other key. For each of the six names it lists every flag the contract lists, including the three
   optional `land` flags and both range flags. `describe` reads no store and needs no other flag.
@@ -555,7 +554,7 @@ rest read.
   named `fixer-gate-…` use `fixer-gate`. The test gives the case's arguments to that hook face and
   asserts it parses them to the same values as the flag form. The file has no `replay` or
   `rolling` case, and none is added: the drain's own test writes that file, so this item does not
-  edit it. A second test covers those two faces with a stand-in for `fork-check.py` that records
+  edit it. A second test covers those two faces with a stand-in gate program that records
   its arguments.
 - **If a drain suite fails for c5, stop.** Run the drain's suites as c5 says. With the embedded
   definition unchanged they should pass as they do on the base. A failure there is outside this

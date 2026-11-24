@@ -521,8 +521,8 @@ but [tillr-autoqa.md](./tillr-autoqa.md) is exploratory testing of tillr itself.
 
 - **Read** at snapshot `bdc40d858b50a430a2f598e2dadd71f174c3d09f` (2026-11-16): the index, the
   direction and separable-parts documents whole, [item graphs](../reference/tillr-item-graphs.md), [run-wall-ruling.md](./run-wall-ruling.md) and
-  [gate-rework.md](./gate-rework.md) in part; and Guild's graph-runtime
-  design (`guild/docs/design/guild/graph-runtime/README.md`), in this repository.
+  [gate-rework.md](./gate-rework.md) in part; and the graph-runtime
+  design of another graph runtime, in this repository.
 - **Ran** 2026-11-16, 23:46 to 23:58 America/New_York, the installed binaries (build digest
   `33a5752220ab`), one logged command at a time, on two stores of our own in a plain directory,
   `findings/state.db` and `ideas/state.db`, beside a copy of Mangle's state.
@@ -582,28 +582,28 @@ no preference; we need only the two things distinguishable.
 
 ### 3. Graph change
 
-**Where the owner, Guild and tillr agree.** The owner, 2026-11-17, clarifying his statement of the
+**Where the owner, the other graph runtime and tillr agree.** The owner, 2026-11-17, clarifying his statement of the
 day before: a step cannot replace itself, "but it can emit another node directly downstream of
 itself, which consumes all of its original data that … it will pass through and has the exact same
 output shape"; and "you could have a graph of 10 nodes fully executed. Then at some point in the
 future, you add two nodes to make it 12. That gives you two unexecuted nodes that will then get
 started the next scheduling pass." All three agree on four rules:
 
-| Rule | Guild | tillr |
+| Rule | The other runtime | tillr |
 | :--- | :--- | :--- |
-| No node replaces itself | "caller … cannot modify itself" (Guild's `internal/nodegraph/determinism.go`, lines 56 to 58) | "No node rewrites itself" (`D-IG3`) |
-| Nothing executed changes or becomes unexecuted | once started, "its contract is locked" (Guild's `dag-algebra.md`, Definitions) | a node is fixed when its run is recorded |
-| Every change passes the downstream-shape check | each not-started successor "remains satisfiable" (Guild's `dag-algebra.md`, Revise) | "the outputs the rest of the graph was promised are still promised" |
-| The graph grows by appending; the ordinary pass dispatches what has not run | re-entry by a sibling node (Guild's `execution-model.md`, Retries) | an append-only `graph_revisions` |
+| No node replaces itself | "caller … cannot modify itself" (its determinism rules) | "No node rewrites itself" (`D-IG3`) |
+| Nothing executed changes or becomes unexecuted | once started, "its contract is locked" (its graph algebra, Definitions) | a node is fixed when its run is recorded |
+| Every change passes the downstream-shape check | each not-started successor "remains satisfiable" (its graph algebra, Revise) | "the outputs the rest of the graph was promised are still promised" |
+| The graph grows by appending; the ordinary pass dispatches what has not run | re-entry by a sibling node (its execution model, Retries) | an append-only `graph_revisions` |
 
-**Where tillr's text is narrower than Guild's:**
+**Where tillr's text is narrower than the other runtime's:**
 
-| | Guild | tillr |
+| | The other runtime | tillr |
 | :--- | :--- | :--- |
-| Who may change it | A running node may add pending nodes only it reaches (Guild's `internal/nodegraph/determinism.go`, lines 12 to 25) | A stage declaring `may_replace`, replacing a later, not-started node (`D-IG3`, `D-IG12`) |
+| Who may change it | A running node may add pending nodes only it reaches (its determinism rules) | A stage declaring `may_replace`, replacing a later, not-started node (`D-IG3`, `D-IG12`) |
 | What may be inserted | Any executor or sub-graph whose types fit | A tracked workflow, bounded arguments (`D-IG5`) |
-| Unknown-size growth | A container grows until its exit predicate turns true, then refuses additions, `ContainerFinalized` (Guild's `exit-predicates.md`, substrate invariants) | At most 100 nodes and depth 8 (`D-IG4`) |
-| Edges | Typed case-split, "exactly one fires per upstream emission" (Guild's `dag-algebra.md`, failure as dependency typing) | `when_outcome` `pass` or `fail` (`D-IG6`) |
+| Unknown-size growth | A container grows until its exit predicate turns true, then refuses additions, `ContainerFinalized` (its exit predicates, substrate invariants) | At most 100 nodes and depth 8 (`D-IG4`) |
+| Edges | Typed case-split, "exactly one fires per upstream emission" (its graph algebra, failure as dependency typing) | `when_outcome` `pass` or `fail` (`D-IG6`) |
 | A finished graph | Refuses additions; re-entry by a new sibling node | `landed`, `resolved-elsewhere` terminal; reopen only from `closed` |
 
 **The owner's ruling, 2026-11-17.** On reopening: "Reopening or not, when everything is done, I
@@ -762,10 +762,9 @@ item, cost per step) are carried in above. This file supersedes it; git history 
    as text: in the Words paragraph, twice, and in question 1 of Section 7. There the question's id
    is written as "question QS4", because this repository's checker requires every question id to
    be a link, and that question is not in this repository.
-3. Eight links into Guild's repository, which is not here, are now the file named as text: the
-   graph-runtime design in Section 1, and seven cells of the two tables in Section 3. Each cell
-   keeps the section or line numbers the link pointed at. The line numbers are Guild's, from their
-   checkout.
+3. Eight links to another graph runtime's documents and source, which are not here, are now a
+   description as text: the graph-runtime design in Section 1, and seven cells of the two tables
+   in Section 3. Each cell keeps the section name the link pointed at.
 4. Three names of tillr's documents in Section 1, the item-graphs design, the run-wall ruling and
    the gate rework, are now links to them, because the checker requires a named file beside this
    one to be a link.

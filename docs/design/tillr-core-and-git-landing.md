@@ -49,9 +49,8 @@ measurement it started from.
 **Needs your ruling:** None in this document. The two names it left open, for the kind of layer and
 for the Git-landing instance, were asked in the vocabulary and ruled by the owner on 2026-11-18:
 the layer is a **charter** ([OQ-VO4](./tillr-vocabulary.md#OQ-VO4)) and the first use is
-**`git-landing`** ([OQ-VO5](./tillr-vocabulary.md#OQ-VO5)). This document was written before those
-rulings, so its body still says "definition" where he now says charter; shipped code says
-"definition" too and is not renamed.
+**`git-landing`** ([OQ-VO5](./tillr-vocabulary.md#OQ-VO5)). This document's body says
+"definition" where he says charter; shipped code says "definition" too.
 
 **Awaits your review:** the designer's decisions `D-CG1` to `D-CG5` in
 [the ledger](#decision-ledger).
@@ -174,7 +173,7 @@ directly is below the list.
 2. **On reopening:** "Reopening or not, when everything is done, I suppose should be a policy
    determination for whatever your use case is. Like, we will define valid state transitions for
    an item and reopening might be valid for some and not valid for others."
-3. **On the other differences** between Guild's graph runtime and tillr's item graphs: "they should
+3. **On the other differences** between another graph runtime and tillr's item graphs: "they should
    be all policy things that should be possible if you want them from core. Core should not
    preclude them."
 4. **On fixed graph size limits** (`D-IG4`, at most 100 nodes and a depth of 8): "This 100 steps, I
@@ -232,7 +231,7 @@ Start to finish, one line each, with the tool and file that owns the step **[rea
 8. **Block retirement.** The loop commits the removal of the item's own block before the gate
    ([retire.go](../../tools/tillr-drain/drain/retire.go)).
 9. **Gate.** The gate program `tillr-loop gate` runs [change-gate.py](../../tools/gate/change-gate.py):
-   fast tree checks through `tillr-gate checks`, then the landing tier of `tools/fork-check.py`,
+   fast tree checks through `tillr-gate checks`, then the landing tier's remaining checks,
    within the budget and strategy of [gate-policy.json](../../config/tillr/gate-policy.json). A red
    check is replayed on the base before the candidate is blamed (`Replay` in
    [steps.go](../../tools/tillr-drain/drain/steps.go)).
@@ -367,7 +366,7 @@ already injects the three judgments, so the drain "owns the order and the stoppi
 never a step's judgment", as its header says.
 
 What it does not cover: intake, the fence, staging a worktree, the candidate rule, the boundary
-bracket, block retirement, the replay and rolling programs (which default to `fork-check.py`), trunk
+bracket, block retirement, the replay and rolling programs, trunk
 observation, conflicts, the item's end states, the hold vocabulary, and the views. Those are Go in
 the drain, the item face and the view. By the step count of Section 2, it covers three of seventeen
 steps, and those three are the densest by line **[inferred]**.
@@ -656,7 +655,6 @@ rg 'CREATE TABLE' per utility                                           land: ca
                                                                         drain: dispatches, node_runs, rolling_state,
                                                                         rolling_runs, trunk_history, gate_spans, …
 rg -n -A40 'def loop_command' tools/tillr-roll/tillr-keep               names tillr-loop gate, land, verdict
-rg 'Default(Replay|Rolling|FixerGate)Program' tools/tillr-drain/drain   fork-check.py, fork-check.py, tillr-loop gate
 wc -l tools/tillr-loop/tillr-loop                                       769
 ```
 

@@ -1,5 +1,5 @@
 ---
-title: "Design ruling: remove the run wall and judge committed candidates before wall status"
+title: "Design ruling: no default run wall, and a committed candidate is judged before wall status"
 status: accepted
 stage: CURRENT
 updated: 2026-11-15
@@ -10,7 +10,7 @@ tags:
   - timeout
   - state-machine
   - design-ruling
-summary: "Remove the default 1800s run wall from backend-policy.json and the three backend adapters, allow optional unbounded leases (timeout_ms == 0 -> leased_until NULL), reorder settle so any run that produced a commit transitions to candidate and runs the gate regardless of wall status, and auto-resume an uncommitted walled run once per attempt in settle before resetting the lane."
+summary: "No backend sets a run wall by default. A lease may be unbounded (timeout_ms == 0 -> leased_until NULL), settle sends any run that produced a commit to candidate and the gate regardless of wall status, and an uncommitted walled run is resumed in settle before the lane is reset."
 depends-on:
   - ./momentum-principle.md
   - board-utilities.md
@@ -19,11 +19,11 @@ depends-on:
 
 # Design ruling: remove the run wall and judge committed candidates before wall status
 
-> **Carried out** in commit `adc9b1269`: no adapter sets a run wall by default. This document stays as the record of the ruling.
+> **Built.** No adapter sets a run wall by default.
 >
-> **Whose ruling.** "Ruling" here is a design agent's word: `D-RW1` to `D-RW4` are the designer's decisions of 2026-11-15 (the commit that added this document calls it "the designer's ruling"), and the owner may overturn any of them. No words of the owner's are recorded for them.
+> **Whose ruling.** "Ruling" here is a design agent's word: `D-RW1` to `D-RW4` are the designer's decisions of 2026-11-15, and the owner may overturn any of them. No words of the owner's are recorded for them.
 
-**Ruling.** Remove the default per-run wall across `tillr`: delete `timeout_seconds` from [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json), drop the hardcoded `wall=1800` `timeout(1)` wrapper in `run-pi`, `run-muse`, and `run-agy` unless `--timeout` is explicitly passed, and allow `timeout_seconds: 0` / `timeout_ms: 0` in `tillr-run` and `tillr-drain` as an unbounded run whose lane lease carries `leased_until = NULL` (superseding [`board-utilities.md`](./board-utilities.md) section 5.6 / `D-UT17`). When an explicit wall does fire (`StateTimedOut` or exit `124`), fix `settle` in both [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) and [`docs/reference/tillr-drain-successor.md`](../reference/tillr-drain-successor.md#transition-table) (formerly the drain successor design's section 2.3) to check `HEAD != base` **before** `AttemptUnjudged` so any committed candidate goes to `Verify` / `judge`, and when `HEAD == base`, auto-resume **once per attempt** (`!record.Resumed`) in `settle` while the lane still holds its worktree, `brief.md`, and `session-id` before resetting the lane. Keep `AttemptUnjudged` outside `AttemptInfrastructure`, add no item state, and bump no schema version.
+**Ruling.** `tillr` has no default per-run wall: [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) carries no `timeout_seconds`, the backend adapters wrap the harness in `timeout(1)` only when `--timeout` is explicitly passed, and `timeout_seconds: 0` / `timeout_ms: 0` in `tillr-run` and `tillr-drain` is an unbounded run whose lane lease carries `leased_until = NULL`. When an explicit wall does fire (`StateTimedOut` or exit `124`), `settle` in [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) (stated in [`docs/reference/tillr-drain-successor.md`](../reference/tillr-drain-successor.md#transition-table)) checks `HEAD != base` **before** `AttemptUnjudged`, so any committed candidate goes to `Verify` / `judge`; when `HEAD == base`, it resumes the run in `settle` while the lane still holds its worktree, `brief.md`, and `session-id`, before resetting the lane. `AttemptUnjudged` stays outside `AttemptInfrastructure`. Sections 1 to 4 give the reasoning for each decision as it was argued against the tree that still had the wall.
 
 ---
 
@@ -39,7 +39,7 @@ depends-on:
   1. *Normal exit or harness crash:* `run.Apply` (`tools/tillr-run/run/apply.go`) clears `lanes.state` and `leased_until` in the same SQLite transaction that writes the terminal `run.record`; `SpendExtractorTimeout` (`60s` in `exec.go`) bounds post-exit report extraction.
   2. *Operator stop or wedged child on shutdown:* `ProcessSteps.Run` (`tools/tillr-drain/drain/steps.go`) sends `SIGTERM` with `cmd.WaitDelay = 30 * time.Second`; `execFace` (`tools/tillr-run/main.go`) catches `SIGINT`/`SIGTERM`, kills the process group, and writes the terminal record on `context.WithoutCancel(ctx)`.
   3. *Orphaned lane lease after `tillr-run` itself is `SIGKILL`ed:* [`board-utilities.md`](./board-utilities.md) section 5.6 (`D-UT17`) required `timeout_ms > 0` solely to populate `lanes.leased_until` (`ClaimLease` in `tools/tillr-run/run/lease.go`). Survey of the tree shows `NULL`-expiry leases are **already implemented end to end**: `lanes.leased_until` (`tools/tillr-run/run/schema.go`) is nullable; `expiredLeases` (`lease.go`) skips `leased_until IS NULL`; `readLanes` and `activeLeases` (`tools/tillr-drain/drain/plan.go`) hold `NULL`-expiry lanes; `Loop.planNothing` (`loop.go`) stops cleanly with `StopLanesLeased` naming `tillr run release <lane>`; and `ReleaseLane` (`lease.go`) frees a `NULL`-expiry lane immediately (requiring only a one-line guard in `closeRun` so `LeasedUntil == 0` stamps `now` rather than Unix epoch `0`).
-  4. *Silent TCP/stream stall inside a harness (`D-LR4`):* Nothing in `tillr-run` or `tillr-drain` probes mid-turn socket liveness, and a wall on total run duration cannot distinguish a stalled socket from 28 minutes of active thinking (`run-wall-evidence.md` section 5). Live run activity is already on screen (`tillr-view`, `tillr run lanes`, `git-trace2.jsonl`, `bash-shim.sh`; `run-wall-evidence.md` section 1). Any socket-idle timeout belongs per HTTP read inside the harness, never on total run duration in `tillr`.
+  4. *Silent TCP/stream stall inside a harness (`D-LR4`):* Nothing in `tillr-run` or `tillr-drain` probes mid-turn socket liveness, and a wall on total run duration cannot distinguish a stalled socket from 28 minutes of active thinking. Live run activity is already on screen (`tillr-view`, `tillr run lanes`, `git-trace2.jsonl`, `bash-shim.sh`). Any socket-idle timeout belongs per HTTP read inside the harness, never on total run duration in `tillr`.
 
 ---
 

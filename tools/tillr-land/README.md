@@ -147,7 +147,7 @@ same head, so sibling run boundaries recognize the delivery.
 
 A non-fast-forward release rebase is allowed only from the staged delivery tip,
 with the retained verdict, change record and fork registry for that run. The head
-must be linear above the new release selected by `pi-forks patch-branch target`,
+must be linear above the new release the fork's patch-branch target selects,
 not just above an arbitrary tag. Under the landing lock the lander compares and
 swaps the patch ref to the exact built head and, in the same Git transaction,
 writes the landed marker and pins the old tip at
@@ -208,7 +208,7 @@ refused as `already-on-trunk` when the trunk still carries the change.
 
 ```sh
 tillr-land pass --store .tillr/state.db --repo . --item item-042 --run run-1 --base <base-sha> --head <head-sha> --verdict gate.verdict.json
-tillr-land one --store .tillr/state.db --repo . --branch feat/thing --trunk main --gate 'tillr-gate run --gate python3 tools/fork-check.py'
+tillr-land one --store .tillr/state.db --repo . --branch feat/thing --trunk main --gate '<gate command>'
 ```
 
 `pass` is the landing on its own; an external caller that already has a verdict composes it
