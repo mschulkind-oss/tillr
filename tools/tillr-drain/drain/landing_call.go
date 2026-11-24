@@ -35,27 +35,38 @@ type landingOfferObstacle struct {
 	Fields map[string]string `json:"fields"`
 }
 
+type landingOfferFinding struct {
+	Cause       string `json:"cause"`
+	Evidence    string `json:"evidence"`
+	WhyNoChange string `json:"why_no_change"`
+}
+
 type landingOffer struct {
 	CallID     string                `json:"call_id"`
 	Tool       string                `json:"tool,omitempty"`
 	Commit     string                `json:"commit,omitempty"`
 	Base       string                `json:"base"`
 	Obstacle   *landingOfferObstacle `json:"obstacle,omitempty"`
+	Finding    *landingOfferFinding  `json:"finding,omitempty"`
 	Transcript string                `json:"transcript,omitempty"`
 }
 
 func (o landingOffer) toolName() string {
-	if o.Tool == "obstacle" {
+	switch o.Tool {
+	case "obstacle":
 		return "obstacle"
+	case "no_change":
+		return "no_change"
+	default:
+		return "land"
 	}
-	return "land"
 }
 
 func (o landingOffer) equalOffer(other landingOffer) bool {
 	if o.CallID != other.CallID || o.Tool != other.Tool || o.Commit != other.Commit || o.Base != other.Base || o.Transcript != other.Transcript {
 		return false
 	}
-	return reflect.DeepEqual(o.Obstacle, other.Obstacle)
+	return reflect.DeepEqual(o.Obstacle, other.Obstacle) && reflect.DeepEqual(o.Finding, other.Finding)
 }
 
 type landingCall struct {
@@ -176,12 +187,22 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 	if strings.TrimSpace(offer.CallID) == "" || offer.Base == "" {
 		return landingOfferAbsent, Externalf("landing offer for %s is missing its call id or base", rec.RunID)
 	}
-	if offer.toolName() == "obstacle" {
+	switch offer.toolName() {
+	case "obstacle":
 		if offer.Obstacle == nil || strings.TrimSpace(offer.Obstacle.Kind) == "" {
 			return landingOfferAbsent, Externalf("obstacle call for %s is missing its obstacle kind", rec.RunID)
 		}
-	} else if offer.Commit == "" {
-		return landingOfferAbsent, Externalf("landing offer for %s is missing its commit", rec.RunID)
+	case "no_change":
+		if offer.Commit != "" {
+			return landingOfferAbsent, Externalf("no_change call for %s must not name a commit", rec.RunID)
+		}
+		if offer.Finding == nil || strings.TrimSpace(offer.Finding.Cause) == "" || strings.TrimSpace(offer.Finding.Evidence) == "" || strings.TrimSpace(offer.Finding.WhyNoChange) == "" {
+			return landingOfferAbsent, Externalf("no_change call for %s is missing required finding fields", rec.RunID)
+		}
+	default:
+		if offer.Commit == "" {
+			return landingOfferAbsent, Externalf("landing offer for %s is missing its commit", rec.RunID)
+		}
 	}
 	db, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -261,7 +282,8 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 		node := d.Workflow.Stages[d.NodeIndex]
 		wholeItemWriter = node.Kind == "agent" && node.Access == "write"
 	}
-	if offer.toolName() == "obstacle" {
+	switch offer.toolName() {
+	case "obstacle":
 		if offer.Base != base {
 			return landingCall{}, Externalf("obstacle call for %s does not match its staged base", rec.RunID)
 		}
@@ -269,9 +291,28 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 		if obs.Problem != "" {
 			return landingCall{}, Externalf("obstacle call for %s is incomplete: %s", rec.RunID, obs.Problem)
 		}
-	} else if offer.Commit != head || offer.Base != base || head == base || head == settledBase ||
-		(d.Workflow != nil && d.NodeBaseSHA != "" && head == d.NodeBaseSHA && !wholeItemWriter) {
-		return landingCall{}, Externalf("landing offer for %s does not name a call, its staged base, and new HEAD", rec.RunID)
+	case "no_change":
+		if !l.allowsNoChangeDecision(d) {
+			return landingCall{}, Externalf("no_change call for %s is not allowed on this workflow node", rec.RunID)
+		}
+		if offer.Commit != "" || offer.Base != base || head != base {
+			return landingCall{}, Externalf("no_change call for %s does not match its staged base at HEAD", rec.RunID)
+		}
+		if offer.Finding == nil || strings.TrimSpace(offer.Finding.Cause) == "" || strings.TrimSpace(offer.Finding.Evidence) == "" || strings.TrimSpace(offer.Finding.WhyNoChange) == "" {
+			return landingCall{}, Externalf("no_change call for %s is missing required finding fields", rec.RunID)
+		}
+		dirty, err := l.git(ctx, target, "status", "--porcelain", "--untracked-files=all")
+		if err != nil {
+			return landingCall{}, err
+		}
+		if strings.TrimSpace(dirty) != "" {
+			return landingCall{}, Externalf("no_change call for %s requires a clean worktree", rec.RunID)
+		}
+	default:
+		if offer.Commit != head || offer.Base != base || head == base || head == settledBase ||
+			(d.Workflow != nil && d.NodeBaseSHA != "" && head == d.NodeBaseSHA && !wholeItemWriter) {
+			return landingCall{}, Externalf("landing offer for %s does not name a call, its staged base, and new HEAD", rec.RunID)
+		}
 	}
 	artifactDir := laneDir
 	if d.RunRequest.ReadOnlyGroup != "" {
@@ -348,6 +389,36 @@ func (l *Loop) offeredObstacle(ctx context.Context, runID string) (Obstacle, boo
 		return Obstacle{}, false, nil
 	}
 	return obstacleFromOffer(call.Obstacle), true, nil
+}
+
+func (l *Loop) offeredNoChange(ctx context.Context, runID string) (landingOfferFinding, bool, error) {
+	db, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return landingOfferFinding{}, false, err
+	}
+	defer db.Close()
+	var raw []byte
+	err = db.ReadTx(ctx, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?`, callOffered, runID).Scan(&raw)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return landingOfferFinding{}, false, nil
+	}
+	if err != nil {
+		return landingOfferFinding{}, false, err
+	}
+	var call landingCall
+	if err := json.Unmarshal(raw, &call); err != nil {
+		return landingOfferFinding{}, false, err
+	}
+	if call.Tool != "no_change" || call.Finding == nil {
+		return landingOfferFinding{}, false, nil
+	}
+	return landingOfferFinding{
+		Cause:       strings.TrimSpace(call.Finding.Cause),
+		Evidence:    strings.TrimSpace(call.Finding.Evidence),
+		WhyNoChange: strings.TrimSpace(call.Finding.WhyNoChange),
+	}, true, nil
 }
 
 const (
@@ -637,7 +708,11 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 	if base == "" {
 		base = call.Base
 	}
-	fmt.Fprintf(&text, "Offer commit: %s\nBranch head: %s\nLast base: %s\nOffer run: %s\nOffer scratch: %s\n", call.Commit, head, base, call.RunID, call.Scratch)
+	if call.Tool == "no_change" {
+		fmt.Fprintf(&text, "Offer tool: no_change\nBranch head: %s\nLast base: %s\nOffer run: %s\nOffer scratch: %s\n", head, base, call.RunID, call.Scratch)
+	} else {
+		fmt.Fprintf(&text, "Offer commit: %s\nBranch head: %s\nLast base: %s\nOffer run: %s\nOffer scratch: %s\n", call.Commit, head, base, call.RunID, call.Scratch)
+	}
 	commands := ev.commands
 	answer := landingAnswer{CallID: call.CallID, Kind: choice.Kind, Stage: choice.Stage}
 	if c := candidate.Judge; c != nil && choice.Stage == "judge" {
@@ -756,8 +831,11 @@ func landingAnswerForTurn(answer landingAnswer, runID, dir string) landingAnswer
 }
 
 type landingRefusal struct {
-	Commit string `json:"commit"`
-	Answer string `json:"answer"`
+	Tool    string               `json:"tool,omitempty"`
+	Commit  string               `json:"commit,omitempty"`
+	Base    string               `json:"base,omitempty"`
+	Finding *landingOfferFinding `json:"finding,omitempty"`
+	Answer  string               `json:"answer"`
 }
 
 // Keep historical report findings in the event log, but never use them to
@@ -812,7 +890,11 @@ func (l *Loop) landingState(ctx context.Context, itemID, session string) (map[st
 					return err
 				}
 				if (answer.Kind == "refused" || answer.Kind == "reverted") && !answer.legacyReportOnly() {
-					refused = append(refused, landingRefusal{Commit: call.Commit, Answer: answer.Text})
+					if call.Tool == "no_change" {
+						refused = append(refused, landingRefusal{Tool: "no_change", Base: call.Base, Finding: call.Finding, Answer: answer.Text})
+					} else {
+						refused = append(refused, landingRefusal{Commit: call.Commit, Answer: answer.Text})
+					}
 				}
 			}
 		}
@@ -1029,7 +1111,7 @@ func landingResultPersisted(transcript []byte, session string, answer landingAns
 	for remaining := len(entries); leaf != "" && remaining > 0; remaining-- {
 		e := entries[leaf]
 		m := e.Message
-		if e.Type == "message" && m.Role == "toolResult" && (m.ToolName == "land" || m.ToolName == "obstacle") && m.ToolCallID == answer.CallID {
+		if e.Type == "message" && m.Role == "toolResult" && (m.ToolName == "land" || m.ToolName == "obstacle" || m.ToolName == "no_change") && m.ToolCallID == answer.CallID {
 			return m.IsError && len(m.Content) == 1 && m.Content[0].Type == "text" && m.Content[0].Text == answer.Text && reflect.DeepEqual(m.Details, answer)
 		}
 		leaf = e.ParentID

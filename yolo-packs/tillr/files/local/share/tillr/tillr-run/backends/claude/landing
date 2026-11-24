@@ -33,6 +33,7 @@ import uuid
 
 LAND = "mcp__tillr__land"
 OBSTACLE = "mcp__tillr__obstacle"
+NO_CHANGE = "mcp__tillr__no_change"
 SERVER_NAME = "tillr"
 TAIL_WINDOW = 1 << 20  # the window Claude Code scans for a deferred-tool marker
 
@@ -165,6 +166,16 @@ def validate_obstacle(args):
     return {"kind": kind, "fields": fields}
 
 
+def validate_no_change(args):
+    cause = args.get("cause", "").strip() if isinstance(args.get("cause"), str) else ""
+    evidence = args.get("evidence", "").strip() if isinstance(args.get("evidence"), str) else ""
+    why_no_change = args.get("why_no_change", "").strip() if isinstance(args.get("why_no_change"), str) else ""
+    missing = [k for k, v in (("cause", cause), ("evidence", evidence), ("why_no_change", why_no_change)) if not v]
+    if missing:
+        raise Refusal(f"no_change is missing required field(s): {', '.join(missing)}.")
+    return {"cause": cause, "evidence": evidence, "why_no_change": why_no_change}
+
+
 def write_offer(path, offer):
     temp = f"{path}.{uuid.uuid4()}"
     try:
@@ -179,11 +190,11 @@ def write_offer(path, offer):
             pass
 
 
-def pre_tool_use(event, durable, base):
+def pre_tool_use(event, durable, base, allow_no_change=False):
     """Return ("allow"|"defer"|"deny", reason)."""
     name, call_id = event.get("tool_name"), event.get("tool_use_id")
     cwd, transcript = event.get("cwd") or os.getcwd(), event.get("transcript_path") or ""
-    ending = name in (LAND, OBSTACLE)
+    ending = name in (LAND, OBSTACLE, NO_CHANGE)
     answer = read_record(os.path.join(durable, "landing-answer.json"))
     if ending and answer is not None and answer.get("call_id") == call_id:
         return "allow", "delivering the gate's answer as this call's result"
@@ -200,6 +211,8 @@ def pre_tool_use(event, durable, base):
     if not ending:
         return "allow", None
     try:
+        if name == NO_CHANGE and not allow_no_change:
+            raise Refusal("no_change is not allowed on this stage.")
         state = read_record(os.path.join(durable, "landing-state.json")) or {}
         for entry in state.get("open") or []:
             if entry.get("call_id") not in (call_id, None) and not answered(transcript, entry.get("call_id")):
@@ -226,6 +239,29 @@ def pre_tool_use(event, durable, base):
             if refusal:
                 raise Refusal(f"This commit was already refused. A new commit is required.\n{refusal.get('answer', '')}")
             record = {"call_id": call_id, "commit": head, "base": base, "transcript": transcript}
+        elif name == NO_CHANGE:
+            parsed = validate_no_change(tool_input)
+            if head != base:
+                raise Refusal("A commit exists at HEAD (HEAD is not the staged base); call `mcp__tillr__land` instead.")
+            dirty = dirty_paths(cwd)
+            if dirty:
+                raise Refusal(
+                    "The worktree is not clean; commit and call `mcp__tillr__land`, or remove uncommitted paths before calling no_change:\n"
+                    + "\n".join(dirty)
+                )
+            refusal = next((
+                e for e in state.get("refused") or []
+                if e.get("tool") == "no_change"
+                and e.get("base") == base
+                and isinstance(e.get("finding"), dict)
+                and all(isinstance(e["finding"].get(k), str) and e["finding"][k].strip() == parsed[k]
+                        for k in ("cause", "evidence", "why_no_change"))
+            ), None)
+            if refusal:
+                raise Refusal(
+                    f"This no_change finding was already refused. Provide new evidence or make the required change.\n{refusal.get('answer', '')}"
+                )
+            record = {"call_id": call_id, "tool": "no_change", "base": base, "finding": parsed, "transcript": transcript}
         else:
             parsed = validate_obstacle(tool_input)
             if parsed["kind"] == "seat" and head == base and not dirty_paths(cwd):
@@ -252,7 +288,24 @@ def allows_unchanged_piece():
                           r"An unchanged piece may finish without a commit\.$", text, re.M))
 
 
-def stop(event, durable, base):
+def allows_no_change():
+    brief = os.environ.get("BOARD_DRAIN_BRIEF")
+    if not brief:
+        return False
+    try:
+        with open(brief, encoding="utf-8") as source:
+            text = source.read()
+    except OSError:
+        return False
+    text = re.split(r"^## Saved (?:idea|request) words \(verbatim; \d+ bytes\)$", text, maxsplit=1, flags=re.M)[0]
+    node = re.search(r"(?:^|\n)## Workflow node\n([\s\S]*?)(?=\n## |$)", text)
+    if node and re.search(r"^\nRun only node .+ on the .+ seat; access: (?:read_only|write)\.\nA reproduced no-change finding may finish with no_change\.$", node.group(1), re.M):
+        return True
+    ending = re.search(r"(?:^|\n)## (?:Finishing|No-change ending)\n([\s\S]*?)(?=\n## |$)", text)
+    return bool(ending and re.search(r"^A reproduced no-change finding may finish with no_change\.$", ending.group(1), re.M))
+
+
+def stop(event, durable, base, allow_no_change=False):
     """Return a block reason, or None to let the session stop."""
     pause = os.environ.get("TILLR_PAUSE_REQUEST")
     if pause and os.path.exists(pause):
@@ -288,8 +341,13 @@ def stop(event, durable, base):
         pass
     with open(mark, "w", encoding="utf-8") as out:
         out.write(fingerprint + "\n")
-    reason = ("You ended without calling `mcp__tillr__land` or `mcp__tillr__obstacle`. Call land "
-              "when your commit is ready, or obstacle when an obstacle holds.")
+    if allow_no_change:
+        reason = ("You ended without calling `mcp__tillr__land`, `mcp__tillr__obstacle`, or `mcp__tillr__no_change`. "
+                  "Call land when your commit is ready, no_change when reproductions show nothing in the repository needs changing, "
+                  "or obstacle when an obstacle holds.")
+    else:
+        reason = ("You ended without calling `mcp__tillr__land` or `mcp__tillr__obstacle`. Call land "
+                  "when your commit is ready, or obstacle when an obstacle holds.")
     if allow_unchanged_piece:
         reason += " If the piece already holds at its unchanged, clean base, end with RESULT: done instead."
     return reason
@@ -342,8 +400,9 @@ def prepare(durable, base, base_settings, extra_settings_file=""):
     me = os.path.abspath(__file__)
     py = sys.executable or "python3"
     launch = lambda *words: " ".join(shlex.quote(w) for w in (py, me, *words))  # noqa: E731
-    args = ["--durable", durable, "--base", base]
-    mcp = {"mcpServers": {SERVER_NAME: {"type": "stdio", "command": py, "args": [me, "mcp", "--durable", durable]}}}
+    extra = ["--allow-no-change"] if allows_no_change() else []
+    args = ["--durable", durable, "--base", base, *extra]
+    mcp = {"mcpServers": {SERVER_NAME: {"type": "stdio", "command": py, "args": [me, "mcp", "--durable", durable, *extra]}}}
     settings = {}
     if base_settings:
         merge_settings(settings, load_settings_spec(base_settings))
@@ -364,14 +423,30 @@ def prepare(durable, base, base_settings, extra_settings_file=""):
     return paths
 
 
-def tools():
-    return [
+def tools(allow_no_change=False):
+    items = [
         {"name": "land", "description": "Offer the commit at HEAD for landing, ending this run.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
         {"name": "obstacle", "description": "Report an obstacle that prevents finishing this run, ending the run until resolved. Provide kind and that kind's required fields.",
          "inputSchema": {"type": "object", "required": ["kind"], "properties": dict(
              {"kind": {"type": "string", "enum": sorted(OBSTACLE_REQUIRED)}}, **{f: {"type": "string"} for f in OBSTACLE_FIELDS}), "additionalProperties": False}},
     ]
+    if allow_no_change:
+        items.append({
+            "name": "no_change",
+            "description": "Report a reproduced finding that nothing in the repository needs changing, ending this run.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["cause", "evidence", "why_no_change"],
+                "properties": {
+                    "cause": {"type": "string"},
+                    "evidence": {"type": "string"},
+                    "why_no_change": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+        })
+    return items
 
 
 def call_tool(params, durable):
@@ -387,7 +462,7 @@ def call_tool(params, durable):
     return {"content": [{"type": "text", "text": "This call was not parked. Call mcp__tillr__land or mcp__tillr__obstacle by itself, with no other tool call in the same message."}], "isError": True}
 
 
-def serve(durable):
+def serve(durable, allow_no_change=False):
     for line in sys.stdin:
         try:
             message = json.loads(line)
@@ -400,7 +475,7 @@ def serve(durable):
             result = {"protocolVersion": (message.get("params") or {}).get("protocolVersion", "2024-11-05"),
                       "capabilities": {"tools": {}}, "serverInfo": {"name": SERVER_NAME, "version": "1"}, "instructions": INSTRUCTIONS}
         elif method == "tools/list":
-            result = {"tools": tools()}
+            result = {"tools": tools(allow_no_change=allow_no_change)}
         elif method == "tools/call":
             result = call_tool(message.get("params") or {}, durable)
         elif method == "ping":
@@ -421,6 +496,7 @@ def main(argv):
     parser.add_argument("--base", default=os.environ.get("TILLR_GOAL_BASE", ""))
     parser.add_argument("--settings-json", default="")
     parser.add_argument("--extra-settings-file", default="")
+    parser.add_argument("--allow-no-change", action="store_true")
     options = parser.parse_args(argv)
     if options.command == "held":
         try:
@@ -444,7 +520,7 @@ def main(argv):
         print("landing: the run's scratch directory is not staged", file=sys.stderr)
         return 2
     if options.command == "mcp":
-        serve(options.durable)
+        serve(options.durable, allow_no_change=options.allow_no_change)
     elif options.command == "prepare":
         try:
             print(json.dumps(prepare(options.durable, options.base, options.settings_json, options.extra_settings_file)))
@@ -452,7 +528,7 @@ def main(argv):
             print(f"landing: invalid settings: {exc}", file=sys.stderr)
             return 2
     elif options.command == "pre-tool-use":
-        decision, reason = pre_tool_use(json.load(sys.stdin), options.durable, options.base)
+        decision, reason = pre_tool_use(json.load(sys.stdin), options.durable, options.base, allow_no_change=options.allow_no_change)
         if decision == "allow" and reason is None:
             return 0  # not an ending call: no opinion
         out = {"hookEventName": "PreToolUse", "permissionDecision": decision}
@@ -460,7 +536,7 @@ def main(argv):
             out["permissionDecisionReason"] = reason
         print(json.dumps({"hookSpecificOutput": out}))
     else:
-        reason = stop(json.load(sys.stdin), options.durable, options.base)
+        reason = stop(json.load(sys.stdin), options.durable, options.base, allow_no_change=options.allow_no_change)
         if reason:
             print(json.dumps({"decision": "block", "reason": reason}))
     return 0

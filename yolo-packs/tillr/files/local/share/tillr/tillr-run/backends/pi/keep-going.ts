@@ -28,9 +28,9 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-export type Footer = "done" | "blocked" | "failed" | "trunk-broken";
+export type Footer = "done" | "blocked" | "failed" | "trunk-broken" | "no_change";
 
 export interface Tree {
 	head: string;
@@ -49,6 +49,8 @@ export interface GoalInput {
 	paused: boolean;
 	readOnly?: boolean;
 	allowUnchangedPiece?: boolean;
+	allowNoChange?: boolean;
+	artifactsDir?: string;
 }
 
 export type GoalDecision =
@@ -57,7 +59,7 @@ export type GoalDecision =
 
 export function footerOf(text: string): Footer | undefined {
 	const lines = text.trim().split("\n");
-	const match = /^RESULT: (done|blocked|failed|trunk-broken)$/.exec((lines[lines.length - 1] ?? "").trim());
+	const match = /^RESULT: (done|blocked|failed|trunk-broken|no_change)$/.exec((lines[lines.length - 1] ?? "").trim());
 	return match ? (match[1] as Footer) : undefined;
 }
 
@@ -71,13 +73,15 @@ export const OBSTACLE_REQUIRED: Record<string, string[]> = {
 };
 
 const FIELDS = new Set(["OBSTACLE", ...Object.values(OBSTACLE_REQUIRED).flat()]);
+export const NO_CHANGE_REQUIRED = ["CAUSE", "EVIDENCE", "WHY_NO_CHANGE"] as const;
+const NO_CHANGE_FIELDS = new Set<string>(NO_CHANGE_REQUIRED);
 
-function fieldLine(line: string): [string, string] | undefined {
+function fieldLine(line: string, allowed: Set<string> = FIELDS): [string, string] | undefined {
 	const at = line.indexOf(":");
 	if (at < 0) return undefined;
 	const label = line.slice(0, at).trim();
 	const name = label.replace(/^[\s*`-]+|[\s*`-]+$/g, "").toUpperCase();
-	if (!FIELDS.has(name)) return undefined;
+	if (!allowed.has(name)) return undefined;
 	let value = line.slice(at + 1);
 	if (name === "PATHS") {
 		// Close **PATHS:** markup without stripping punctuation from an entry.
@@ -87,6 +91,36 @@ function fieldLine(line: string): [string, string] | undefined {
 		return [name, value.trim()];
 	}
 	return [name, value.trim().replace(/^[*`]+|[*`]+$/g, "").trim()];
+}
+
+// noChangeProblem answers what makes a no_change report incomplete, or "" when complete.
+// A field's value runs from its line to the next field or the footer.
+export function noChangeProblem(text: string): string {
+	const fields: Record<string, string> = {};
+	let current = "";
+	let value: string[] = [];
+	const flush = () => {
+		if (current) fields[current] = value.join("\n").trim();
+		current = "";
+		value = [];
+	};
+	for (const line of text.split("\n")) {
+		if (line.trim().startsWith("RESULT:")) {
+			flush();
+			continue;
+		}
+		const field = fieldLine(line, NO_CHANGE_FIELDS);
+		if (field) {
+			flush();
+			[current, value] = [field[0], [field[1]]];
+			continue;
+		}
+		if (current) value.push(line);
+	}
+	flush();
+	const missing = NO_CHANGE_REQUIRED.filter((name) => !(fields[name] ?? "").trim()).map((name) => `\`${name}:\``);
+	if (missing.length) return `the no_change finding is missing ${missing.join(", ")}`;
+	return "";
 }
 
 
@@ -173,10 +207,17 @@ export function decide(input: GoalInput): GoalDecision {
 	const unformatted = input.tree.unformatted ?? [];
 	const obstacle = goalObstacleProblem(input.text, footer, committed, clean);
 	if (obstacle === "") return { action: "settle", reason: `the worker named a complete obstacle (RESULT: ${footer})` };
-	if (committed && clean && unformatted.length === 0 && footer) return { action: "settle", reason: "the goal is met: a commit, a clean worktree and a report" };
+	if (committed && clean && unformatted.length === 0 && footer && footer !== "no_change") return { action: "settle", reason: "the goal is met: a commit, a clean worktree and a report" };
 	if (input.readOnly && clean && footer === "done") return { action: "settle", reason: "the goal is met: a read-only step with a clean worktree and a report" };
 	if (unchangedPieceDone(input.allowUnchangedPiece, footer, input.tree, input.base)) {
 		return { action: "settle", reason: "the goal is met: an unchanged piece with a clean worktree and a report" };
+	}
+	const noChangeIssue = footer === "no_change" && input.allowNoChange ? noChangeProblem(input.text) : undefined;
+	const noChangeConflictingArtifacts = footer === "no_change" && input.allowNoChange && input.readOnly && input.artifactsDir
+		? ["do-it-now", "proposal"].filter((name) => existsSync(join(input.artifactsDir!, name)))
+		: [];
+	if (input.allowNoChange && footer === "no_change" && input.tree.head === input.base && clean && noChangeIssue === "" && noChangeConflictingArtifacts.length === 0) {
+		return { action: "settle", reason: "the goal is met: a no_change finding with a clean worktree and required fields" };
 	}
 	const fingerprint = createHash("sha256")
 		.update([input.tree.head, input.tree.status, input.tree.content, unformatted.join("\n"), input.text.trim().replace(/\s+/g, " ")].join("\0"))
@@ -185,7 +226,7 @@ export function decide(input: GoalInput): GoalDecision {
 		return { action: "settle", reason: "identical repeat: the tree and the report are unchanged since the last nudge" };
 	}
 	const missing: string[] = [];
-	const needsCommit = !input.readOnly && !input.allowUnchangedPiece;
+	const needsCommit = !input.readOnly && !input.allowUnchangedPiece && !(input.allowNoChange && footer === "no_change");
 	if (!committed && needsCommit) missing.push(`there is no commit: HEAD is still the base ${input.base.slice(0, 12)}`);
 	if (!clean) {
 		const paths = input.tree.status.trim().split("\n");
@@ -200,6 +241,18 @@ export function decide(input: GoalInput): GoalDecision {
 	else if (footer === "done" && !committed && needsCommit) missing.push("it says RESULT: done, but nothing is committed");
 	else if (footer === "done" && input.allowUnchangedPiece && !input.tree.head) missing.push("HEAD could not be verified");
 	else if (footer === "failed") missing.push("RESULT: failed is not an ending");
+	else if (footer === "no_change") {
+		if (!input.allowNoChange) {
+			missing.push("RESULT: no_change is not allowed on this stage");
+		} else {
+			if (committed) missing.push("a commit exists at HEAD: end with RESULT: done to deliver the commit, not RESULT: no_change");
+			else if (!input.tree.head) missing.push("HEAD could not be verified");
+			if (noChangeIssue) missing.push(noChangeIssue);
+			if (noChangeConflictingArtifacts.length > 0) {
+				missing.push(`RESULT: no_change cannot be used alongside ${noChangeConflictingArtifacts.map((name) => `\`${name}\``).join(" or ")} in the artifacts directory`);
+			}
+		}
+	}
 	if (obstacle) missing.push(`it says RESULT: blocked, but ${obstacle}`);
 	const message = input.readOnly ? [
 		`The run is not finished: ${missing.join("; ")}.`,
@@ -243,6 +296,24 @@ export function isReadOnlyBrief(briefPath: string | undefined): boolean {
 function allowsUnchangedPiece(briefPath: string | undefined): boolean {
 	// The staged node header supplies this line before any piece prompt.
 	return /^\nRun only node .+ on the .+ seat; access: write\.\nAn unchanged piece may finish without a commit\.$/m.test(workflowNodeSection(briefPath));
+}
+
+export function allowsNoChange(briefPath: string | undefined): boolean {
+	if (!briefPath) return false;
+	let text = "";
+	try {
+		text = readFileSync(briefPath, "utf8");
+	} catch {
+		return false;
+	}
+	const saved = text.search(/(?:^|\n)## Saved (?:idea|request) words \(verbatim; \d+ bytes\)\n/);
+	if (saved >= 0) text = text.slice(0, saved);
+	const node = /(?:^|\n)## Workflow node\n([\s\S]*?)(?=\n## |$)/.exec(text)?.[1] ?? "";
+	if (/^\nRun only node .+ on the .+ seat; access: (?:read_only|write)\.\nA reproduced no-change finding may finish with no_change\.$/m.test(node)) {
+		return true;
+	}
+	const ending = /(?:^|\n)## (?:Finishing|No-change ending)\n([\s\S]*?)(?=\n## |$)/.exec(text)?.[1] ?? "";
+	return /^A reproduced no-change finding may finish with no_change\.$/m.test(ending);
 }
 
 function isReadOnlyStep(): boolean {
@@ -302,7 +373,10 @@ async function readTree(pi: any, base?: string): Promise<Tree> {
 export default function keepGoing(pi: any) {
 	const base = process.env.TILLR_GOAL_BASE;
 	if (!base) return;
-	const allowUnchangedPiece = allowsUnchangedPiece(process.env.BOARD_DRAIN_BRIEF);
+	const briefPath = process.env.BOARD_DRAIN_BRIEF;
+	const allowUnchangedPiece = allowsUnchangedPiece(briefPath);
+	const allowNoChange = allowsNoChange(briefPath);
+	const artifactsDir = briefPath ? join(dirname(briefPath), "artifacts") : undefined;
 	let last: any;
 	let previous: string | undefined;
 	pi.on("agent_end", (event: any) => {
@@ -327,8 +401,12 @@ export default function keepGoing(pi: any) {
 			return { continue: true, entries: [...(event?.entries ?? []), {
 				type: "custom_message", customType: "tillr-goal",
 				content: obstacle ? `Your obstacle is incomplete: ${obstacle}. ${OBSTACLE_CONTRACT}` :
-					"You ended without calling `land` or `obstacle`. Call `land` when your commit is ready, or call `obstacle` when an obstacle holds." +
-					(allowUnchangedPiece ? " If the piece already holds at its unchanged, clean base, end with RESULT: done instead." : ""), display: true,
+					allowNoChange
+						? "You ended without calling `land`, `obstacle`, or `no_change`. Call `land` when your commit is ready, call `no_change` when reproductions show nothing in the repository needs changing, or call `obstacle` when an obstacle holds." +
+						  (allowUnchangedPiece ? " If the piece already holds at its unchanged, clean base, end with RESULT: done instead." : "")
+						: "You ended without calling `land` or `obstacle`. Call `land` when your commit is ready, or call `obstacle` when an obstacle holds." +
+						  (allowUnchangedPiece ? " If the piece already holds at its unchanged, clean base, end with RESULT: done instead." : ""),
+				display: true,
 			}] };
 		}
 		const decision = decide({
@@ -341,6 +419,8 @@ export default function keepGoing(pi: any) {
 			paused: !!pause && existsSync(pause),
 			readOnly: isReadOnlyStep(),
 			allowUnchangedPiece,
+			allowNoChange,
+			artifactsDir,
 		});
 		const entries = [...(event?.entries ?? [])];
 		if (decision.action === "settle") {

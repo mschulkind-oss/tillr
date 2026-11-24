@@ -6,6 +6,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr-run/run"
 )
 
 // build-pieces expands its repeated "piece" stage into the planned work nodes.
@@ -20,6 +22,14 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 		return brief, nil
 	}
 	brief += "\n## Workflow node\n\nRun only node " + spec.Node.ID + " on the " + spec.Node.Seat + " seat; access: " + spec.Node.Access + ".\n"
+	if landing && spec.AllowsNoChange {
+		brief += noChangeMarkerLine + "\n"
+		if spec.EndingCapability == run.EndingCallSuspends {
+			brief += "If reproductions establish that the repository needs no change, leave the worktree clean at base and call `no_change` with `cause`, `evidence`, and `why_no_change`.\n"
+		} else {
+			brief += "If reproductions establish that the repository needs no change, leave the worktree clean at base and end your report with CAUSE:, EVIDENCE:, WHY_NO_CHANGE:, and RESULT: no_change.\n"
+		}
+	}
 	if landing && plannedWritePiece(*spec.Node) {
 		// The runner recognizes this generated line immediately after the node header.
 		brief += "An unchanged piece may finish without a commit.\n"

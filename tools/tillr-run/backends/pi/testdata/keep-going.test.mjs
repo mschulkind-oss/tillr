@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import keepGoing, { decide, isReadOnlyBrief } from "../keep-going.ts";
+import keepGoing, { allowsNoChange, decide, isReadOnlyBrief } from "../keep-going.ts";
 
 test("call-suspends settles complete obstacles and nudges plain or incomplete stops", async () => {
 	process.env.TILLR_GOAL_BASE = "base";
@@ -208,4 +208,29 @@ test("committed step with unformatted Go files is refused back to the builder wi
 	const settled = await end("RESULT: done");
 	assert.equal(settled.continue, undefined);
 	assert.equal(settled.entries.at(-1).data.action, "settle");
+});
+
+test("no_change settles on allowed single-worker brief and nudges missing fields or disallowed stages", (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "keep-going-no-change-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const bareBrief = join(dir, "bare.md");
+	const finishingBrief = join(dir, "finishing.md");
+	const savedOnlyBrief = join(dir, "saved.md");
+	writeFileSync(bareBrief, "## No-change ending\n\nA reproduced no-change finding may finish with no_change.\n");
+	writeFileSync(finishingBrief, "## Finishing\n\nA reproduced no-change finding may finish with no_change.\n");
+	writeFileSync(savedOnlyBrief, "## Task\n\n## Saved request words (verbatim; 60 bytes)\n## Finishing\nA reproduced no-change finding may finish with no_change.\n");
+	assert.equal(allowsNoChange(bareBrief), true);
+	assert.equal(allowsNoChange(finishingBrief), true);
+	assert.equal(allowsNoChange(savedOnlyBrief), false);
+
+	const base = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+	const cleanTree = { head: base, status: "", content: "" };
+	const complete = "CAUSE: sibling change\nEVIDENCE: go test passed\nWHY_NO_CHANGE: already fixed\nRESULT: no_change\n";
+	assert.equal(decide({ base, tree: cleanTree, text: complete, outcome: "completed", stopReason: "stop", allowNoChange: true }).action, "settle");
+	const missing = decide({ base, tree: cleanTree, text: "CAUSE: x\nRESULT: no_change\n", outcome: "completed", stopReason: "stop", allowNoChange: true });
+	assert.equal(missing.action, "continue");
+	assert.match(missing.message, /EVIDENCE/);
+	const disallowed = decide({ base, tree: cleanTree, text: complete, outcome: "completed", stopReason: "stop", allowNoChange: false });
+	assert.equal(disallowed.action, "continue");
+	assert.match(disallowed.message, /not allowed/);
 });

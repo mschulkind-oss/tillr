@@ -45,7 +45,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{backendProbeKind, backendOutcomeKind, quotaUpdatedKind, commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, designQuotaRefusedKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind} {
+	for _, kind := range []string{backendProbeKind, backendOutcomeKind, quotaUpdatedKind, commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, designQuotaRefusedKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind, noChangeKind, "drain.no-change-closed"} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}

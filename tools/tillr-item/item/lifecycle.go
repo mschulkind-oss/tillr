@@ -13,6 +13,44 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+// Finding records the structured no_change investigation finding on an item.
+type Finding struct {
+	Cause         string `json:"cause"`
+	Evidence      string `json:"evidence"`
+	WhyNoChange   string `json:"why_no_change"`
+	EvaluatedHead string `json:"evaluated_head"`
+	WorkerRun     string `json:"worker_run"`
+	JudgeRun      string `json:"judge_run,omitempty"`
+}
+
+// RecordFinding persists a validated no_change finding on an item before Close runs.
+func RecordFinding(ctx context.Context, tx *store.Tx, id string, f Finding) error {
+	f.Cause = strings.TrimSpace(f.Cause)
+	f.Evidence = strings.TrimSpace(f.Evidence)
+	f.WhyNoChange = strings.TrimSpace(f.WhyNoChange)
+	f.EvaluatedHead = strings.TrimSpace(f.EvaluatedHead)
+	f.WorkerRun = strings.TrimSpace(f.WorkerRun)
+	f.JudgeRun = strings.TrimSpace(f.JudgeRun)
+	if f.Cause == "" || f.Evidence == "" || f.WhyNoChange == "" || f.EvaluatedHead == "" || f.WorkerRun == "" {
+		return Rejectionf("finding-invalid", id, "no_change finding requires non-empty cause, evidence, why_no_change, evaluated_head, and worker_run")
+	}
+	exists, err := itemExists(ctx, tx.Reader(), id)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return Rejectionf("not-found", id, "no item %q in this store", id)
+	}
+	raw, err := json.Marshal(f)
+	if err != nil {
+		return Internalf("encoding finding: %v", err)
+	}
+	if _, err := tx.Exec(`UPDATE items SET finding = ?, updated_at = ? WHERE item_id = ?`, string(raw), time.Now().UTC().UnixMilli(), id); err != nil {
+		return Internalf("recording finding: %v", err)
+	}
+	return nil
+}
+
 // Close records why an item is no longer wanted and retains its prior disposition.
 // The store write transaction serializes this decision with Land's final state check.
 func Close(ctx context.Context, tx *store.Tx, id, reason, by string, at time.Time) (record.Envelope, error) {
@@ -102,7 +140,8 @@ func Reopen(ctx context.Context, tx *store.Tx, id, reason, by string, at time.Ti
 		return record.Envelope{}, err
 	}
 	p.State = p.ClosedFrom
-	if _, err := tx.Exec(`UPDATE items SET state = ?, updated_at = ? WHERE item_id = ?`, p.State, at.UnixMilli(), id); err != nil {
+	p.Finding = nil
+	if _, err := tx.Exec(`UPDATE items SET state = ?, finding = '', updated_at = ? WHERE item_id = ?`, p.State, at.UnixMilli(), id); err != nil {
 		return record.Envelope{}, Internalf("reopening item: %v", err)
 	}
 	return recordLifecycle(tx, p, at, "reopen", reason, by)

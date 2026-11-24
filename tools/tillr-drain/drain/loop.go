@@ -251,6 +251,7 @@ type Candidate struct {
 	// names the same seat the original dispatch did.
 	Seat                  string             `json:"-"`
 	Workflow              string             `json:"workflow,omitempty"`
+	NoChange              *noChangeRecord    `json:"-"`
 	CandidateChangedPaths []string           `json:"-"` // runtime-only: changed paths captured before replay releases the lane
 	replayCheckLogs       map[string]string  // runtime-only: failing check logs from the gate outcome for case-scoped replay
 	wholeCheckReplay      bool               // runtime-only: force whole-check replay (e.g. stale-fixer tip verification)
@@ -1766,6 +1767,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
 			Returned: decision.Returned, RepeatedCall: decision.RepeatedCall,
 			RetryCandidate: decision.RetryCandidate,
+			AllowsNoChange: l.allowsNoChangeDecision(decision),
 		}
 		if decision.DesignContinuationFrom != "" {
 			spec.SessionID = decision.DesignerSessionID
@@ -2590,6 +2592,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// nothing, and a commit is a candidate like any other.
 	footer := "done"
 	recoveredOwnerQuestion := false
+	var offeredFinding *landingOfferFinding
 	if offered {
 		if obs, isObstacle, obsErr := l.offeredObstacle(ctx, request.RunID); obsErr != nil {
 			return laneOutcome{err: obsErr}
@@ -2597,6 +2600,11 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			offered = false
 			footer = "blocked"
 			log = formatObstacleReport(obs)
+		} else if nc, isNoChange, ncErr := l.offeredNoChange(ctx, request.RunID); ncErr != nil {
+			return laneOutcome{err: ncErr}
+		} else if isNoChange {
+			footer = "no_change"
+			offeredFinding = &nc
 		}
 	} else {
 		footer = reportFooter(log)
@@ -2605,8 +2613,39 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			return laneOutcome{err: err}
 		}
 	}
-	contract := !offered && workerContract(decision, request) && !recoveredOwnerQuestion
 	endingNote := ""
+	if footer == "no_change" && l.allowsNoChangeDecision(decision) {
+		target := l.laneTarget(lane)
+		baseSHA := l.settleBase(lane, mainSHA)
+		headSHA, err := l.revParse(ctx, target, "HEAD")
+		if err != nil {
+			return laneOutcome{err: err}
+		}
+		dirty, err := l.git(ctx, target, "status", "--porcelain", "--untracked-files=all")
+		if err != nil {
+			return laneOutcome{err: err}
+		}
+		if headSHA != baseSHA || strings.TrimSpace(dirty) != "" {
+			detail := "single-worker reported no_change without a clean worktree at base"
+			c := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick, Worktree: target, BaseSHA: baseSHA, HeadSHA: headSHA, RefusalDetail: detail}
+			if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
+				return laneOutcome{err: err}
+			}
+			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA, detail)}
+		}
+		var finding landingOfferFinding
+		var findingErr string
+		if offeredFinding != nil {
+			finding = *offeredFinding
+		} else {
+			finding, findingErr = parseNoChangeFinding(log)
+		}
+		if findingErr == "" {
+			return l.settleSingleWorkerNoChange(ctx, decision, request, lane, tick, target, baseSHA, finding, result)
+		}
+		endingNote = missingOutputDetail(findingErr)
+	}
+	contract := !offered && workerContract(decision, request) && !recoveredOwnerQuestion && endingNote == ""
 	if contract {
 		if problem := workerEndingProblem(log); problem != "" {
 			endingNote = missingOutputDetail(problem)
@@ -2849,6 +2888,77 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// Every non-landing outcome pins the head before the lane is reset, so a refused head
 	// survives garbage collection for the person or the conflict-fixer who reads it.
 	return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, candidate.HeadSHA)}
+}
+
+func (l *Loop) settleSingleWorkerNoChange(ctx context.Context, decision Decision, request run.Request, lane, tick, target, baseSHA string, finding landingOfferFinding, result *LoopResult) laneOutcome {
+	nodeID := ""
+	if decision.Workflow != nil && decision.NodeIndex >= 0 && decision.NodeIndex < len(decision.Workflow.Stages) {
+		nodeID = decision.Workflow.Stages[decision.NodeIndex].ID
+	}
+	nc := noChangeRecord{
+		ItemID:      request.ItemID,
+		Attempt:     decision.Attempt,
+		NodeID:      nodeID,
+		RunID:       request.RunID,
+		BaseSHA:     baseSHA,
+		Cause:       strings.TrimSpace(finding.Cause),
+		Evidence:    strings.TrimSpace(finding.Evidence),
+		WhyNoChange: strings.TrimSpace(finding.WhyNoChange),
+	}
+	scratchDir := run.DurableDir(l.laneDirPath(lane), request.RunID)
+	if err := writeLandingArtifact(scratchDir, noChangeFile, nc); err != nil {
+		return laneOutcome{err: err}
+	}
+	runDir := RunDir(l.cfg.Root, request.RunID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		return laneOutcome{err: err}
+	}
+	if err := writeLandingArtifact(runDir, noChangeFile, nc); err != nil {
+		return laneOutcome{err: err}
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		seen, err := judgmentSeen(tx, noChangeKind, "run", request.RunID)
+		if err != nil || seen != 0 {
+			return err
+		}
+		return appendEffect(tx, noChangeKind, request.RunID, map[string]any{
+			"item_id":  nc.ItemID,
+			"attempt":  nc.Attempt,
+			"node_id":  nc.NodeID,
+			"run_id":   nc.RunID,
+			"base_sha": nc.BaseSHA,
+			"finding": landingOfferFinding{
+				Cause:       nc.Cause,
+				Evidence:    nc.Evidence,
+				WhyNoChange: nc.WhyNoChange,
+			},
+		}, l.cfg.Now().UTC())
+	})
+	s.Close()
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	candidate := Candidate{
+		ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
+		Worktree: target, BaseSHA: baseSHA, HeadSHA: baseSHA,
+		Request: &request, Seat: decision.Seat, Workflow: decision.workflowRef(),
+		NoChange: &nc,
+	}
+	candidate, accepted, err := l.judgeCandidate(ctx, candidate, result)
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	if !accepted {
+		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, baseSHA)}
+	}
+	if err := l.completeNoChangeExit(ctx, decision, candidate); err != nil {
+		return laneOutcome{err: err}
+	}
+	return laneOutcome{stop: l.abandon(ctx, lane, "", "")}
 }
 
 // segmentRepeated records the evidence of a run's uncommitted work before its session is

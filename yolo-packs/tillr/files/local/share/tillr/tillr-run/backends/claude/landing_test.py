@@ -281,5 +281,26 @@ class Prepare(Fixture):
         self.assertIn(" stop ", settings["hooks"]["Stop"][0]["hooks"][0]["command"])
 
 
+class NoChange(Fixture):
+    def test_no_change_tool_allowed_on_single_worker_brief_and_defers_clean_offer(self):
+        brief = Path(self._tmp.name) / "brief.md"
+        brief.write_text("## Finishing\n\nA reproduced no-change finding may finish with no_change.\n")
+        out = self.call("prepare", None, env={"BOARD_DRAIN_BRIEF": str(brief)})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        mcp = json.loads((self.durable / "claude-mcp.json").read_text())["mcpServers"]["tillr"]
+        self.assertIn("--allow-no-change", mcp["args"])
+
+        finding = {"cause": "sibling fix", "evidence": "go test passed", "why_no_change": "already green"}
+        ev = {"tool_name": "mcp__tillr__no_change", "tool_use_id": "nc-1", "cwd": str(self.repo), "tool_input": finding}
+        denied = json.loads(self.call("pre-tool-use", ev).stdout)["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+
+        deferred = json.loads(self.call("pre-tool-use", ev, "--allow-no-change").stdout)["hookSpecificOutput"]
+        self.assertEqual(deferred["permissionDecision"], "defer")
+        offer = json.loads((self.durable / "landing-offer.json").read_text())
+        self.assertEqual(offer["tool"], "no_change")
+        self.assertEqual(offer["finding"], finding)
+
+
 if __name__ == "__main__":
     unittest.main()
