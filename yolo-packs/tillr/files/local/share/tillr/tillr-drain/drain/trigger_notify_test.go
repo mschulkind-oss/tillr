@@ -71,7 +71,7 @@ func buildTillrCLIBinary(t *testing.T) string {
 }
 
 func TestWaitForTriggerWakesOnRelayedStoreChange(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", socketRuntimeDir(t))
 	f, l := passFixture(t, "item-a")
 	l.cfg.StorePollInterval = DefaultFallbackPollInterval
 	startInProcessRelay(t, f.storePath)
@@ -115,7 +115,7 @@ func TestWaitForTriggerWakesOnRelayedStoreChange(t *testing.T) {
 }
 
 func TestWaitForTriggerAutoStartsRelayWhenAbsent(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", socketRuntimeDir(t))
 	tillrBin := buildTillrCLIBinary(t)
 
 	f, l := passFixture(t, "item-a")
@@ -179,7 +179,7 @@ func TestWaitForTriggerFallsBackToPollWhenNoRelay(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+			t.Setenv("XDG_RUNTIME_DIR", socketRuntimeDir(t))
 			f, l := passFixture(t, "item-a")
 			l.cfg.NoNotify = tc.noNotify
 			l.cfg.NotifyBin = tc.notifyBin
@@ -227,7 +227,7 @@ func TestWaitForTriggerFallsBackToPollWhenNoRelay(t *testing.T) {
 }
 
 func TestWaitForTriggerReconnectsAndResyncsAfterRelayRestart(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", socketRuntimeDir(t))
 	f, l := passFixture(t, "item-a")
 	l.cfg.StorePollInterval = DefaultFallbackPollInterval
 	// Prevent auto-start from spawning a subprocess; this test drives the relay in-process.
@@ -275,7 +275,7 @@ func TestWaitForTriggerReconnectsAndResyncsAfterRelayRestart(t *testing.T) {
 }
 
 func TestRefreshSessionHeartbeatDoesNotWakeTrigger(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", socketRuntimeDir(t))
 	f, l := passFixture(t, "item-a")
 	l.cfg.StorePollInterval = DefaultFallbackPollInterval
 	startInProcessRelay(t, f.storePath)
@@ -586,7 +586,7 @@ func snapshotParityStore(t *testing.T, storePath string) paritySnapshot {
 
 func runParityScenario(t *testing.T, withNotify bool) paritySnapshot {
 	t.Helper()
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", socketRuntimeDir(t))
 	f := newRefusalLoopFixture(t, "item-a")
 	// Stage item-b's brief file on main up front so item-b can be filed dynamically
 	// while the loop is waiting in waitForTrigger.
@@ -785,7 +785,7 @@ func TestDrainNotifyAndNoNotifyParityUnderSteppedClock(t *testing.T) {
 }
 
 func TestItemRequestToLoopWakeLatency(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", socketRuntimeDir(t))
 	tillrBin := buildTillrCLIBinary(t)
 
 	f, l := passFixture(t, "item-a")

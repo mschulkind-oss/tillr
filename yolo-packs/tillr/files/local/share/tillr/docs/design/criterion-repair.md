@@ -13,7 +13,7 @@ vantage:
 
 # Repairing a frozen criterion
 
-> **Delivered copy.** This is `docs/design/criterion-repair.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/criterion-repair.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/criterion-repair.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/criterion-repair.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-20. Nothing of criterion supersession is built: tillr refuses an edit to frozen criterion text and holds no record that replaces it (`rg -n -i 'supersession|superseded' tools/tillr-item` on 2026-11-20 finds only the unrelated record for owner decisions and planning-stage constants). The owner ruled four questions on 2026-11-17 and the fifth, [OQ-CR7](#OQ-CR7), on 2026-11-20. One designer's decision of 2026-11-18, [OQ-CR4](#OQ-CR4), and one unattributed settlement carried from [board utilities](board-utilities.md#53-item-alone), [OQ-CR1](#OQ-CR1), remain open to his overturn, and no question is open.
 

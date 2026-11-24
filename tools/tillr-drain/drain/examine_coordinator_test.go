@@ -15,15 +15,22 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-func TestExamineCoordinatorClaimsOnRunExitedWithoutQueuePass(t *testing.T) {
-	// Keep XDG_RUNTIME_DIR short (under /tmp, independent of deep TMPDIR) so
-	// AF_UNIX sun_path stays well under Linux's 108-byte UNIX_PATH_MAX.
-	runtimeDir, err := os.MkdirTemp("/tmp", "tillr-exam-notify-*")
+// socketRuntimeDir returns a short directory for a case's notify socket. A Unix socket
+// path holds at most 108 bytes on Linux, and t.TempDir() sits under the test's temporary
+// root, which may itself be a long path; a directory under /tmp is short wherever the
+// suite runs.
+func socketRuntimeDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "tillr-notify-*")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+func TestExamineCoordinatorClaimsOnRunExitedWithoutQueuePass(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", socketRuntimeDir(t))
 
 	f, l := passFixture(t, "item-a")
 	l.cfg.Lanes = []string{"lane-1"}
@@ -53,6 +60,7 @@ func TestExamineCoordinatorClaimsOnRunExitedWithoutQueuePass(t *testing.T) {
 	subCtx, subCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer subCancel()
 	var sub *notify.Subscription
+	var err error
 	for {
 		sub, err = notify.Subscribe(subCtx, f.storePath, notify.TopicCandidateReady, notify.TopicAgentSlotFreed)
 		if err == nil {

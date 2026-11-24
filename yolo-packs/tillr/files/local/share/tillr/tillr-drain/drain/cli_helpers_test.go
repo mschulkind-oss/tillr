@@ -56,6 +56,18 @@ func scratch(t *testing.T, prefix string) string {
 	return dir
 }
 
+// processEnvironment is the environment this test process started with, read before any
+// case replaces PATH.
+var processEnvironment = os.Environ()
+
+// buildDrainBinary builds the program the command-line cases run. It builds in the
+// environment the process started with, so a case's stubbed tools never take part.
+func buildDrainBinary(target string) ([]byte, error) {
+	build := exec.Command("go", "build", "-o", target, "..")
+	build.Env = processEnvironment
+	return build.CombinedOutput()
+}
+
 func ensureDrainBinDir(t *testing.T) string {
 	t.Helper()
 	drainBinOnce.Do(func() {
@@ -72,8 +84,7 @@ func ensureDrainBinDir(t *testing.T) string {
 		drain.RegisterTestCleanup(func() { _ = os.RemoveAll(dir) })
 		drainBinDirV = dir
 		drainBinPath = filepath.Join(dir, "tillr-drain")
-		build := exec.Command("go", "build", "-o", drainBinPath, "..")
-		if out, err := build.CombinedOutput(); err != nil {
+		if out, err := buildDrainBinary(drainBinPath); err != nil {
 			drainBinErr = os.ErrInvalid
 			t.Logf("building tillr-drain failed: %v\n%s", err, out)
 		}

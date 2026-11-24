@@ -13,7 +13,7 @@ vantage:
 
 # Session Recording — How Do We Record Agent Work Once and Query Every Claim, Cost, and Tick Later?
 
-> **Delivered copy.** This is `docs/design/session-recording.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/session-recording.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/session-recording.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/session-recording.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** In review; partly built. Slice 1 ([§10](#10-the-smallest-first-slice-slice-1)) is [`tools/tillr-trace`](../../tillr-trace/README.md), the command shim and writer tracing; slices 2 and 3 are not filed. The technical architecture is settled across all ten design questions ([§2](#2-seam-analysis-shim-proxy-collector-or-all-three)–[§11](#11-what-makes-this-fail-and-how-the-design-prevents-each)), and three operational policy bounds are ruled by the owner ([the ledger](#122-decision-ledger)). Where this document and the tillr-trace README differ, the README describes what runs.
 

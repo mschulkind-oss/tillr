@@ -10,7 +10,7 @@ summary: "Seven utilities over one shared substrate — store, item, land, drain
 
 # Board utilities: seven utilities over one shared substrate
 
-> **Delivered copy.** This is `docs/design/board-utilities.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/board-utilities.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Accepted, 2026-11-06. The seven `tools/tillr-*` binaries implement this contract.
 

@@ -19,7 +19,7 @@ vantage:
 
 # Tillr Observatory — First-Class Introspection and Web Front End Over a Drain
 
-> **Delivered copy.** This is `docs/design/tillr-observatory.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-observatory.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-observatory.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-observatory.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Built. The server this document designs is `tillr-view serve` ([`tools/tillr-view/`](../../tillr-view/README.md)), with its Go API and React front end. This document holds the introspection contract and the reasoning behind the server's shape. The screens the server renders are the linked pages in [observatory redesign](../reference/observatory-redesign.md), not the single screen drawn in [§6](#6-the-first-screen-two-item-drain-acceptance-walkthrough); provenance badges and the other shared primitives are in [observatory design](../reference/observatory-design.md). Where this document and those references differ, the references describe what runs.
 

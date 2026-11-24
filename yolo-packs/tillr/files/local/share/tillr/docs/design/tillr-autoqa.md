@@ -24,7 +24,7 @@ vantage:
 
 # Standalone AutoQA on the Tillr Contracts
 
-> **Delivered copy.** This is `docs/design/tillr-autoqa.md` from this repository at commit `bf99bb8059` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-autoqa.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-autoqa.md` from this repository at commit `e613f54fde` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-autoqa.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-18. **Iceboxed by the owner** on 2026-11-17: "ice box this autoqa on the roadmap for now. I don't want to design this yet." It is parked on [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), neither abandoned nor accepted, and nothing below is being built. No AutoQA code exists (`rg -i autoqa tools --glob '*.go'` on 2026-11-18 finds only the code and tests that retire the old store vocabulary). The owner has ruled on nothing in this document: every row of its [ledger](#decision-ledger) is a designer's decision and says so.
 
