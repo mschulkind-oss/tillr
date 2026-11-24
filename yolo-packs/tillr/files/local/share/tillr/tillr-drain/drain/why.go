@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -1035,7 +1036,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				return answer, err
 			}
 		}
-		alarm, restartLine, err := staleLoopBuild(r, runningLoop, works)
+		alarm, restartLine, err := staleLoopBuild(r, tick.Root, tick.StorePath, runningLoop, works)
 		if err != nil {
 			return answer, err
 		}
@@ -1317,7 +1318,32 @@ type activeRestartBlocker struct {
 	startedAt time.Time
 }
 
-func activeRestartBlockers(r *store.Reader, loop *liveLoopSession, works map[string]*pendingWork) ([]activeRestartBlocker, error) {
+func activeCandidateGateStart(root, storePath, worktree, runID string) (time.Time, bool) {
+	if runID == "" {
+		return time.Time{}, false
+	}
+	dir := detachedGateDir(root, storePath, worktree, runID)
+	if root == "" && storePath != "" && filepath.Base(filepath.Dir(storePath)) == TillrDir {
+		loopDir := RunDir(filepath.Dir(filepath.Dir(storePath)), runID)
+		if _, ok := readDetachedGateFace(loopDir); ok {
+			dir = loopDir
+		}
+	}
+	if d, ok := readDetachedGateDone(dir); ok && d.RunID == runID {
+		return time.Time{}, false
+	}
+	face, ok := readDetachedGateFace(dir)
+	if !ok || face.RunID != runID || face.StartedAtMS <= 0 {
+		return time.Time{}, false
+	}
+	running, err := heavySupervisorRunning(face.PID, face.StartTicks)
+	if err != nil || !running {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(face.StartedAtMS).UTC(), true
+}
+
+func activeRestartBlockers(r *store.Reader, root, storePath string, loop *liveLoopSession, works map[string]*pendingWork) ([]activeRestartBlocker, error) {
 	var blockers []activeRestartBlocker
 	for _, work := range works {
 		if work == nil || work.Done || work.Decision.RunRequest == nil {
@@ -1327,14 +1353,23 @@ func activeRestartBlockers(r *store.Reader, loop *liveLoopSession, works map[str
 		if work.Examining && owner == nil {
 			owner = work.Owner
 		}
-		if owner == nil || *owner != loop.owner || work.examinationStartedAt.IsZero() {
+		if owner == nil || *owner != loop.owner {
 			continue
 		}
-		name := fmt.Sprintf("gate %s (%s)", work.Decision.ItemID, work.Decision.RunRequest.RunID)
-		if work.Decision.LaneID != "" {
-			name = fmt.Sprintf("gate %s on %s (%s)", work.Decision.ItemID, work.Decision.LaneID, work.Decision.RunRequest.RunID)
+		runID := work.Decision.RunRequest.RunID
+		worktree := ""
+		if work.Candidate != nil {
+			worktree = work.Candidate.Worktree
 		}
-		blockers = append(blockers, activeRestartBlocker{name: name, startedAt: work.examinationStartedAt.UTC()})
+		startedAt, ok := activeCandidateGateStart(root, storePath, worktree, runID)
+		if !ok {
+			continue
+		}
+		name := fmt.Sprintf("gate %s (%s)", work.Decision.ItemID, runID)
+		if work.Decision.LaneID != "" {
+			name = fmt.Sprintf("gate %s on %s (%s)", work.Decision.ItemID, work.Decision.LaneID, runID)
+		}
+		blockers = append(blockers, activeRestartBlocker{name: name, startedAt: startedAt})
 	}
 	rows, err := r.Query(`SELECT COALESCE(object_id, ''), ts, payload FROM events WHERE kind = ? AND ts >= ? ORDER BY seq ASC`, HeavyProgressKind, loop.startedAt)
 	if err != nil {
@@ -1401,7 +1436,7 @@ func joinRestartBlockerNames(blockers []activeRestartBlocker) string {
 // While the loop waits behind a gate or proof that was already running when the
 // new build was installed, why reports a status line instead of an alarm; if a
 // gate or proof started after the install is running, the alarm stands and names it.
-func staleLoopBuild(r *store.Reader, loop *liveLoopSession, works map[string]*pendingWork) (*alarms.Alarm, string, error) {
+func staleLoopBuild(r *store.Reader, root, storePath string, loop *liveLoopSession, works map[string]*pendingWork) (*alarms.Alarm, string, error) {
 	if loop == nil {
 		return nil, "", nil
 	}
@@ -1423,7 +1458,7 @@ func staleLoopBuild(r *store.Reader, loop *liveLoopSession, works map[string]*pe
 	}
 	installedAt := installed.ModTime().UTC()
 	builtAt := installedAt.Format(time.RFC3339Nano)
-	blockers, err := activeRestartBlockers(r, loop, works)
+	blockers, err := activeRestartBlockers(r, root, storePath, loop, works)
 	if err != nil {
 		return nil, "", err
 	}
