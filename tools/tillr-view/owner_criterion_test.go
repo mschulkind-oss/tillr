@@ -72,7 +72,8 @@ func TestWaitingOwnerCriterionAndDispatchableCount(t *testing.T) {
 	if counts["dispatchable"] != float64(0) {
 		t.Fatalf("dispatchable includes owner-held item: %+v", counts)
 	}
-	if _, err := db.Exec(`UPDATE item_criteria SET state='done' WHERE criterion_id='c-owner'`); err != nil {
+	if _, err := db.Exec(`UPDATE item_criteria SET state='done' WHERE criterion_id='c-owner';
+		INSERT INTO events (ts,kind,object_type,object_id,payload) VALUES (4000,'item.verdict','item','item-seed-02','{"criterion_id":"c-owner","verdict":"done"}')`); err != nil {
 		t.Fatal(err)
 	}
 	status, body, raw = h.get("/api/v1/snapshot")

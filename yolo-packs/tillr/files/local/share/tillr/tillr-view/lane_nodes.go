@@ -89,6 +89,14 @@ func laneNodesWith(r *store.Reader, itemID string, deadRuns func() (map[string]b
 }
 
 func enrichLaneNodes(r *store.Reader, rows []laneRow, loop string, deadRuns func() (map[string]bool, error), stats *laneReadStats) error {
+	if err := enrichLaneNodeRows(r, rows, deadRuns); err != nil {
+		return err
+	}
+	applyLaneNodePipelines(rows, loop, stats)
+	return nil
+}
+
+func enrichLaneNodeRows(r *store.Reader, rows []laneRow, deadRuns func() (map[string]bool, error)) error {
 	for i := range rows {
 		row := &rows[i]
 		nodes, err := laneNodesWith(r, row.ItemID, deadRuns)
@@ -112,8 +120,18 @@ func enrichLaneNodes(r *store.Reader, rows []laneRow, loop string, deadRuns func
 				break
 			}
 		}
+	}
+	return nil
+}
+
+func applyLaneNodePipelines(rows []laneRow, loop string, stats *laneReadStats) {
+	for i := range rows {
+		row := &rows[i]
+		if len(row.Nodes) == 0 {
+			continue
+		}
 		current := []laneNode{}
-		for _, n := range nodes {
+		for _, n := range row.Nodes {
 			if n.Attempt == row.Attempt {
 				current = append(current, n)
 			}
@@ -150,5 +168,4 @@ func enrichLaneNodes(r *store.Reader, rows []laneRow, loop string, deadRuns func
 			row.PipelineNote = ""
 		}
 	}
-	return nil
 }

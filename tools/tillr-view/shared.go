@@ -11,6 +11,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -24,10 +25,10 @@ import (
 //
 // What an answer depends on, and how each input is kept honest:
 //
-//   - the store: the stamp is the event head and sqlite's data_version on the server's one
-//     store connection. The head alone would miss a write that appends no event (a lane
-//     lease, a heartbeat, a drain tick row); data_version moves on any commit by another
-//     connection, which is the same signal the live channel's frames are made from.
+//   - the store: the stamp is the event head (events.seq), so non-event housekeeping
+//     commits such as the 1s drain_sessions heartbeat do not rebuild shared answers on
+//     every poll. Routes that also read tables written without appending an event fold a
+//     fingerprint of those rows into extra.
 //   - files the build read (lane logs, step and pipeline records, the loop's drain result
 //     files): each is recorded as it was read, and the answer is reused only while a stat
 //     of each shows the same size and modification time (or the same absence).
@@ -37,15 +38,13 @@ import (
 //   - process presence (a lane's run process being gone, which marks a run interrupted):
 //     not keyed, because reading it replays the event log and walks /proc, which is the cost
 //     being avoided. It is read when the answer is built, so a process that dies with no
-//     store write after is shown at the next store change; the drain's heartbeat commits
-//     within seconds, so that bound is short on a running loop.
-//
-// The data_version stamp is per connection, so the server's pooled store handle reads it on
-// one dedicated connection, just before each answer's transaction begins (Reader.DataVersion):
-// the answer is then at least as new as its stamp, and a stale hit is impossible.
+//     store write after is shown at the next store change.
 type sharedAnswers struct {
 	// builds counts the builder's runs, for the tests: sharing is only shown by it.
 	builds atomic.Int64
+	// onBuild runs inside a build when non-nil, so a test with an injected clock can
+	// attribute deterministic build time to payload_ms without sleeping.
+	onBuild func()
 
 	mu    sync.Mutex
 	slots map[string]*sharedSlot
@@ -56,8 +55,7 @@ type sharedAnswers struct {
 const sharedSlotCap = 64
 
 type storeStamp struct {
-	head        int64
-	dataVersion int64
+	head int64
 }
 
 type sharedSlot struct {
@@ -99,15 +97,11 @@ func arrivalOf(ctx context.Context) int64 {
 
 // readStoreStamp reads the stamp inside the request's own read transaction.
 func readStoreStamp(r *store.Reader) (storeStamp, error) {
-	var stamp storeStamp
-	var err error
-	if stamp.head, err = r.EventHeadSeq(); err != nil {
-		return stamp, err
+	head, err := r.EventHeadSeq()
+	if err != nil {
+		return storeStamp{}, err
 	}
-	if stamp.dataVersion, err = r.DataVersion(); err != nil {
-		return stamp, fmt.Errorf("reading the store's data_version: %w", err)
-	}
-	return stamp, nil
+	return storeStamp{head: head}, nil
 }
 
 // fileDep is one file as it was when a build read it.
@@ -133,15 +127,46 @@ func (d fileDep) unchanged() bool {
 // loopResultsStamp fingerprints the loop directory's drain result files: their names,
 // sizes and modification times. The snapshot and the passes route read them by pattern, so
 // a new file is a change as much as a rewritten one.
+type loopDirCacheEntry struct {
+	modNano int64
+	size    int64
+	matches []string
+}
+
+var loopDirCache sync.Map // loopDir -> loopDirCacheEntry
+
 func loopResultsStamp(loopDir string) string {
 	if loopDir == "" {
 		return ""
 	}
-	matches, err := filepath.Glob(filepath.Join(loopDir, "drain-*.json"))
-	if err != nil {
-		return "glob-error"
+	var matches []string
+	if dirInfo, err := os.Stat(loopDir); err == nil {
+		modNano, size := dirInfo.ModTime().UnixNano(), dirInfo.Size()
+		if time.Since(dirInfo.ModTime()) > time.Second {
+			if cached, ok := loopDirCache.Load(loopDir); ok {
+				entry := cached.(loopDirCacheEntry)
+				if entry.modNano == modNano && entry.size == size {
+					matches = entry.matches
+				}
+			}
+		}
+		if matches == nil {
+			globbed, err := filepath.Glob(filepath.Join(loopDir, "drain-*.json"))
+			if err != nil {
+				return "glob-error"
+			}
+			sort.Strings(globbed)
+			matches = globbed
+			loopDirCache.Store(loopDir, loopDirCacheEntry{modNano: modNano, size: size, matches: matches})
+		}
+	} else {
+		globbed, err := filepath.Glob(filepath.Join(loopDir, "drain-*.json"))
+		if err != nil {
+			return "glob-error"
+		}
+		sort.Strings(globbed)
+		matches = globbed
 	}
-	sort.Strings(matches)
 	h := sha256.New()
 	for _, m := range matches {
 		info, err := os.Stat(m)
@@ -179,6 +204,9 @@ func (a *sharedAnswers) get(ctx context.Context, r *store.Reader, key string, ex
 	if err != nil {
 		// No stamp, no key: answer from a build that is not kept.
 		a.builds.Add(1)
+		if a.onBuild != nil {
+			a.onBuild()
+		}
 		out := build()
 		return out.value, out.failure
 	}
@@ -208,6 +236,9 @@ func (a *sharedAnswers) get(ctx context.Context, r *store.Reader, key string, ex
 	slot.built = false
 	started := arrivals.Load()
 	a.builds.Add(1)
+	if a.onBuild != nil {
+		a.onBuild()
+	}
 	out := build()
 	if out.failure != nil {
 		return nil, out.failure

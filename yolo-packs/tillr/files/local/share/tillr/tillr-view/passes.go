@@ -148,13 +148,55 @@ func (s *server) passesPayload(r *store.Reader, req *http.Request) (any, *apiFai
 	}
 	// The answer is a function of the store, the query and the loop's drain result files
 	// (the session stops it names), so it is shared until one of them changes (shared.go).
-	return s.passesShare.get(req.Context(), r, query.Encode(), func() string { return loopResultsStamp(s.obs.loopDir) }, func() shareBuild {
+	return s.passesShare.get(req.Context(), r, query.Encode(), func() string { return passesExtraStamp(r, s.obs.loopDir) }, func() shareBuild {
 		rows, err := assemblePasses(r, s.obs.loopDir, bounds)
 		if err != nil {
 			return shareBuild{failure: failure(codeStoreUnreadable, "passes could not read its sources: %v", err)}
 		}
 		return shareBuild{value: rows}
 	})
+}
+
+// passesExtraStamp fingerprints the non-event tables assemblePasses reads (hold-only
+// dispatches, recent drain_passes phase timings and drain_sessions intervals without
+// refreshed_at) alongside loopResultsStamp, so 1s session heartbeats do not rebuild passes.
+func passesExtraStamp(r *store.Reader, loopDir string) string {
+	var b strings.Builder
+	b.WriteString(loopResultsStamp(loopDir))
+	var maxDispatch int64
+	if err := r.QueryRow(`SELECT COALESCE(MAX(rowid), 0) FROM dispatches`).Scan(&maxDispatch); err == nil {
+		fmt.Fprintf(&b, "|d:%d", maxDispatch)
+	}
+	var maxPass int64
+	if err := r.QueryRow(`SELECT COALESCE(MAX(rowid), 0) FROM drain_passes`).Scan(&maxPass); err == nil {
+		fmt.Fprintf(&b, "|p:%d", maxPass)
+	}
+	if rows, err := r.Query(`SELECT * FROM drain_passes ORDER BY rowid DESC LIMIT 10`); err == nil {
+		if cols, err := rows.Columns(); err == nil {
+			vals := make([]any, len(cols))
+			ptrs := make([]any, len(cols))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			for rows.Next() {
+				if rows.Scan(ptrs...) == nil {
+					fmt.Fprintf(&b, "|pr:%v", vals)
+				}
+			}
+		}
+		rows.Close()
+	}
+	if rows, err := r.Query(`SELECT session_id, started_at, COALESCE(ended_at, -1) FROM drain_sessions ORDER BY rowid DESC LIMIT 10`); err == nil {
+		for rows.Next() {
+			var sid string
+			var started, ended int64
+			if rows.Scan(&sid, &started, &ended) == nil {
+				fmt.Fprintf(&b, "|s:%s:%d:%d", sid, started, ended)
+			}
+		}
+		rows.Close()
+	}
+	return b.String()
 }
 
 func assemblePasses(r *store.Reader, loopDir string, b passBounds) ([]passRow, error) {

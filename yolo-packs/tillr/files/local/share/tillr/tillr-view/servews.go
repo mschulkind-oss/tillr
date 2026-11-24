@@ -542,6 +542,8 @@ type changeDetector struct {
 	dataVersion int64
 	// eventHead is the highest events.seq the client has been told about.
 	eventHead int64
+	// logs is the running run log paths at eventHead, reused until an event moves runs/lanes.
+	logs map[string]string
 	// logSizes is the size of every running run's log at the last poll, by run id.
 	logSizes map[string]int64
 	primed   bool
@@ -588,6 +590,10 @@ func (d *changeDetector) probe(ctx context.Context) (storeProbe, error) {
 				return err
 			}
 			p.resources = eventResources(events)
+		}
+		if d.primed && head == d.eventHead {
+			p.logs = d.logs
+			return nil
 		}
 		// A run the store still calls running, and a run a lane holds with no row yet: the
 		// terminal write creates the row, so a live run's log is watched from the lease.
@@ -638,7 +644,7 @@ func (d *changeDetector) poll(ctx context.Context) (invalidationFrame, bool, err
 		sizes[runID] = info.Size()
 	}
 	if !d.primed {
-		d.dataVersion, d.eventHead, d.logSizes, d.primed = p.dataVersion, p.eventHead, sizes, true
+		d.dataVersion, d.eventHead, d.logs, d.logSizes, d.primed = p.dataVersion, p.eventHead, p.logs, sizes, true
 		return invalidationFrame{}, false, nil
 	}
 	// The store moved: the events name which entities, and the snapshot names the rest —
@@ -656,7 +662,7 @@ func (d *changeDetector) poll(ctx context.Context) (invalidationFrame, bool, err
 			changed = append(changed, resourceRunLogPrefix+runID)
 		}
 	}
-	d.dataVersion, d.eventHead, d.logSizes = p.dataVersion, p.eventHead, sizes
+	d.dataVersion, d.eventHead, d.logs, d.logSizes = p.dataVersion, p.eventHead, p.logs, sizes
 	if len(changed) == 0 {
 		return invalidationFrame{}, false, nil
 	}
