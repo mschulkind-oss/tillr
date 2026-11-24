@@ -3225,6 +3225,227 @@ def test_max_shards_scales_with_cpu_count() -> None:
         assert count_invocations(loaded_by_cpus[16], 30, narrowed) == 20
 
 
+def test_gotmpdir_inside_slot_scratch_and_cleaned_on_signal() -> None:
+    """Each go test invocation gets GOTMPDIR inside its slot scratch, and signaling leaves no go-build dir in /tmp."""
+    with tempfile.TemporaryDirectory(prefix="go-affected-gotmpdir-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        (repo / "tools" / "gate").mkdir(parents=True)
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}\n")
+        pkg_a = repo / "tools" / "tillr-gotmp" / "pkga"
+        pkg_b = repo / "tools" / "tillr-gotmp" / "pkgb"
+        pkg_a.mkdir(parents=True)
+        pkg_b.mkdir(parents=True)
+        (repo / "tools" / "tillr-gotmp" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-gotmp\n\ngo 1.22\n"
+        )
+        nonce = _fresh_nonce()
+        test_body_template = (
+            "package {pkg}\n"
+            "import (\n"
+            '  "encoding/json"\n'
+            '  "os"\n'
+            '  "path/filepath"\n'
+            '  "testing"\n'
+            '  "time"\n'
+            ")\n"
+            "func TestSlotGoTmpDir(t *testing.T) {{\n"
+            '  if t.Name() == "{nonce}" {{ t.Fatal() }}\n'
+            "  td := t.TempDir()\n"
+            "  exe, err := os.Executable()\n"
+            "  if err != nil {{ t.Fatal(err) }}\n"
+            "  rec := map[string]any{{\n"
+            '    "pkg": "{pkg}",\n'
+            '    "gotmpdir": os.Getenv("GOTMPDIR"),\n'
+            '    "durable": os.Getenv("YOLO_DURABLE_DIR"),\n'
+            '    "tempdir": td,\n'
+            '    "exe": exe,\n'
+            '    "go_test_pid": os.Getppid(),\n'
+            "  }}\n"
+            '  if outDir := os.Getenv("GOTMP_REC_DIR"); outDir != "" {{\n'
+            "    raw, err := json.Marshal(rec)\n"
+            "    if err != nil {{ t.Fatal(err) }}\n"
+            '    dest := filepath.Join(outDir, "{pkg}.json")\n'
+            '    tmpFile := dest + ".tmp"\n'
+            "    if err := os.WriteFile(tmpFile, raw, 0o644); err != nil {{ t.Fatal(err) }}\n"
+            "    if err := os.Rename(tmpFile, dest); err != nil {{ t.Fatal(err) }}\n"
+            "  }}\n"
+            '  if os.Getenv("GOTMP_BLOCK") == "1" {{\n'
+            "    time.Sleep(60 * time.Second)\n"
+            "  }}\n"
+            "}}\n"
+        )
+        (pkg_a / "a_test.go").write_text(test_body_template.format(pkg="pkga", nonce=nonce))
+        (pkg_b / "b_test.go").write_text(test_body_template.format(pkg="pkgb", nonce=nonce))
+
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        lock_dir = tmp_path / "locks"
+        gocache = _shared_gocache()
+        _precompile_go_test(pkg_a, gocache)
+        _precompile_go_test(pkg_b, gocache)
+
+        # Strip TMPDIR and GOTMPDIR to match the production gate environment (where unset
+        # GOTMPDIR + TMPDIR previously caused go test to create /tmp/go-build<number>).
+        base_env = {k: v for k, v in os.environ.items() if k not in ("TMPDIR", "GOTMPDIR")}
+        base_env.update({
+            "YOLO_DURABLE_DIR": str(durable),
+            "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
+            "GO_TEST_SHARDS_CLASS": "ordinary",
+            "GOCACHE": str(gocache),
+        })
+
+        def cleanup_leaked_tmp(go_build_dir: Path | None) -> None:
+            if go_build_dir is not None and go_build_dir.parent == Path("/tmp"):
+                shutil.rmtree(go_build_dir, ignore_errors=True)
+
+        # 1. Multi-package invocation check: every go test invocation gets its own GOTMPDIR
+        # strictly inside its slot scratch directory, and sequential runs still hit Go's cache.
+        rec_dir = tmp_path / "rec-multi"
+        rec_dir.mkdir()
+        ev_file = tmp_path / "multi-ev.json"
+        cmd_both = [
+            sys.executable,
+            str(ROOT / "tools" / "gate" / "go_affected.py"),
+            "--root", str(repo),
+            "--changed",
+            "tools/tillr-gotmp/pkga/a_test.go",
+            "tools/tillr-gotmp/pkgb/b_test.go",
+            "--evidence-out", str(ev_file),
+        ]
+        res1 = subprocess.run(
+            cmd_both,
+            env={**base_env, "GOTMPDIR": "/tmp", "GOTMP_REC_DIR": str(rec_dir)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        assert res1.returncode == 0, res1.stdout
+        seen_gotmpdirs: set[str] = set()
+        for pkg_name in ("pkga", "pkgb"):
+            rec = json.loads((rec_dir / f"{pkg_name}.json").read_text(encoding="utf-8"))
+            slot_scratch = Path(rec["durable"])
+            gotmpdir_raw = rec["gotmpdir"]
+            go_build_dir = Path(rec["exe"]).parents[1]
+            try:
+                assert gotmpdir_raw, f"{pkg_name}: GOTMPDIR was empty: {rec}"
+                gotmpdir = Path(gotmpdir_raw)
+                assert gotmpdir != slot_scratch and gotmpdir.is_relative_to(slot_scratch), (
+                    f"{pkg_name}: GOTMPDIR {gotmpdir} is not a directory inside slot scratch {slot_scratch}"
+                )
+                assert Path(rec["tempdir"]).is_relative_to(gotmpdir), rec
+                assert go_build_dir.name.startswith("go-build"), go_build_dir
+                assert go_build_dir.parent == gotmpdir, (go_build_dir, gotmpdir)
+                assert not (Path("/tmp") / go_build_dir.name).exists(), go_build_dir
+                assert not gotmpdir.exists(), f"slot scratch {gotmpdir} was not cleared when slot ended"
+                seen_gotmpdirs.add(str(gotmpdir))
+            finally:
+                cleanup_leaked_tmp(go_build_dir)
+        assert len(seen_gotmpdirs) == 2, seen_gotmpdirs
+
+        res2 = subprocess.run(
+            cmd_both,
+            env={**base_env, "GOTMP_REC_DIR": str(rec_dir)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        assert res2.returncode == 0, res2.stdout
+        ev2 = json.loads(ev_file.read_text(encoding="utf-8"))
+        assert all(p["cached"] is True for p in ev2["packages"]), ev2
+
+        # 2. Signal checks: ending a slot's go test by signal (SIGTERM to go_affected.py,
+        # SIGKILL directly to go test, and SIGKILL to go_affected.py) leaves no go-build dir in /tmp.
+        cmd_one = [
+            sys.executable,
+            str(ROOT / "tools" / "gate" / "go_affected.py"),
+            "--root", str(repo),
+            "--changed", "tools/tillr-gotmp/pkga/a_test.go",
+        ]
+
+        def start_blocking_slot(tag: str) -> subprocess.Popen[str]:
+            s_rec_dir = tmp_path / f"rec-{tag}"
+            s_rec_dir.mkdir()
+            s_durable = tmp_path / f"durable-{tag}"
+            s_durable.mkdir()
+            return subprocess.Popen(
+                cmd_one,
+                env={
+                    **base_env,
+                    "YOLO_DURABLE_DIR": str(s_durable),
+                    "GOTMP_REC_DIR": str(s_rec_dir),
+                    "GOTMP_BLOCK": "1",
+                },
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+        def wait_slot_ready(tag: str, proc: subprocess.Popen[str]) -> tuple[dict, Path]:
+            rec_file = tmp_path / f"rec-{tag}" / "pkga.json"
+            while not rec_file.is_file():
+                assert proc.poll() is None, (
+                    f"go_affected ({tag}) exited early: {proc.stdout.read() if proc.stdout else ''}"
+                )
+                time.sleep(0.02)
+            rec = json.loads(rec_file.read_text(encoding="utf-8"))
+            return rec, Path(rec["exe"]).parents[1]
+
+        def wait_pid_gone(pid: int) -> None:
+            while True:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return
+                time.sleep(0.02)
+
+        # Launch all three signal cases concurrently so go list runs in parallel across them.
+        proc_term = start_blocking_slot("sigterm-runner")
+        proc_child_kill = start_blocking_slot("sigkill-gotest")
+        proc_kill = start_blocking_slot("sigkill-runner")
+        build_dir_term = build_dir_child = build_dir_kill = None
+        try:
+            rec_term, build_dir_term = wait_slot_ready("sigterm-runner", proc_term)
+            rec_child_kill, build_dir_child = wait_slot_ready("sigkill-gotest", proc_child_kill)
+            rec_kill, build_dir_kill = wait_slot_ready("sigkill-runner", proc_kill)
+
+            # 2a. SIGTERM to go_affected.py while go test is active.
+            proc_term.send_signal(signal.SIGTERM)
+            out_term, _ = proc_term.communicate()
+            assert proc_term.returncode != 0, out_term
+            wait_pid_gone(int(rec_term["go_test_pid"]))
+            assert build_dir_term.name.startswith("go-build"), build_dir_term
+            assert build_dir_term.parent != Path("/tmp"), build_dir_term
+            assert not (Path("/tmp") / build_dir_term.name).exists(), build_dir_term
+            assert not build_dir_term.exists(), f"go-build dir survived slot end: {build_dir_term}"
+            assert not Path(rec_term["gotmpdir"]).exists(), rec_term
+
+            # 2b. SIGKILL directly to the slot's go test process.
+            os.kill(int(rec_child_kill["go_test_pid"]), signal.SIGKILL)
+            out_child, _ = proc_child_kill.communicate()
+            assert proc_child_kill.returncode != 0, out_child
+            assert build_dir_child.name.startswith("go-build"), build_dir_child
+            assert build_dir_child.parent != Path("/tmp"), build_dir_child
+            assert not (Path("/tmp") / build_dir_child.name).exists(), build_dir_child
+            assert not build_dir_child.exists(), f"go-build dir survived slot end: {build_dir_child}"
+            assert not Path(rec_child_kill["gotmpdir"]).exists(), rec_child_kill
+
+            # 2c. SIGKILL to go_affected.py (lifeline subreaper ends go test by SIGKILL).
+            proc_kill.kill()
+            proc_kill.communicate()
+            wait_pid_gone(int(rec_kill["go_test_pid"]))
+            assert build_dir_kill.name.startswith("go-build"), build_dir_kill
+            assert build_dir_kill.parent != Path("/tmp"), build_dir_kill
+            assert not (Path("/tmp") / build_dir_kill.name).exists(), build_dir_kill
+        finally:
+            for proc in (proc_term, proc_child_kill, proc_kill):
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+            for bdir in (build_dir_term, build_dir_child, build_dir_kill):
+                cleanup_leaked_tmp(bdir)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", default=[], help="Run only named test case(s)")
@@ -3238,6 +3459,7 @@ def main(argv: list[str] | None = None) -> int:
     all_cases: list[tuple[str, Callable[[], None]]] = [
         ("test_no_leftover_processes_after_check_finishes", test_no_leftover_processes_after_check_finishes),
         ("test_cfix_regate_reuses_unchanged_package_verdicts", test_cfix_regate_reuses_unchanged_package_verdicts),
+        ("test_gotmpdir_inside_slot_scratch_and_cleaned_on_signal", test_gotmpdir_inside_slot_scratch_and_cleaned_on_signal),
         ("test_fork_check_integration", lambda: test_fork_check_integration(root_graph)),
         ("test_go_affected_slot_wait_order_and_trunk_repair_priority", test_go_affected_slot_wait_order_and_trunk_repair_priority),
         ("test_heavy_failures_replay", lambda: test_heavy_failures_replay(root_graph)),
