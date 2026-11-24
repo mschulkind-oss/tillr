@@ -1819,6 +1819,9 @@ def run_selected_tests(
         wait_ms = 0
         with acquire_invocation_scratch(durable, scratch_key) as (scratch_dir, out_dir):
             env = _bypass_git_shim_env(base_env, scratch_dir)
+            gotmp_dir = Path(os.path.abspath(scratch_dir / "gotmp"))
+            gotmp_dir.mkdir(parents=True, exist_ok=True)
+            env["GOTMPDIR"] = str(gotmp_dir)
             env["YOLO_DURABLE_DIR"] = str(scratch_dir)
             with contextlib.suppress(OSError, subprocess.CalledProcessError):
                 gitconfig = _write_private_gitconfig(scratch_dir, git_values, env=env)
