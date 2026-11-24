@@ -81,8 +81,8 @@ func TestHeavyRegistryCommandsHoldLandLockButJudgeDoesNot(t *testing.T) {
 	if _, err := runner.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(runner.Work); !os.IsNotExist(err) {
-		t.Errorf("checkout was not cleaned: %v", err)
+	if _, err := os.Stat(runner.Work); err != nil {
+		t.Errorf("proof worktree should be retained for reuse: %v", err)
 	}
 }
 
