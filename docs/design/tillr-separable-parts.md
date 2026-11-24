@@ -197,7 +197,7 @@ A consumer may rely on these. A change to any of them is announced as
   `tillr <noun> <face>`.
 - **Faces a consumer may call:**
   - `tillr-store init`, `check`, `events`;
-  - `tillr-item apply`, `list`, `show`, `state`, `close`, `reopen`, `verdict`, `grant`, `decision`,
+  - `tillr-item apply`, `list`, `show`, `state`, `close`, `reopen`, `verdict`, `judge`, `decision`,
     `mail`;
   - `tillr-run exec`, `status`, `lanes`, `release`;
   - `tillr-view status`, `events`, `waiting`, `passes`, `lanes`, `running`;

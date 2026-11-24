@@ -1,6 +1,6 @@
 ---
 name: tillr-designs
-description: Read tillr's design documentation from another repository — what tillr does today, what is built, queued or only proposed, what changed recently, and which surfaces are stable enough to depend on. Use when your project consumes tillr (the Product QA pipeline, or anything that calls its binaries, store, hooks or reports), when you need to check whether a behavior is live or still proposed, or when you want to send tillr comments or requests.
+description: Read tillr's design documentation from another repository — what tillr does today, what is built, partly built, designed or still open, and which surfaces are stable enough to depend on. Use when your project consumes tillr (a pipeline with its own store, or anything that calls its binaries, store, hooks or reports), when you need to check whether a behavior is live or still proposed, or when you want to send tillr comments or requests.
 ---
 
 # Reading tillr's designs from another repository
@@ -20,9 +20,9 @@ ruling [`OQ-VO4`](../../../../docs/design/tillr-vocabulary.md#OQ-VO4)):
   and agent stages and finish by recording hash-bound criterion verdicts with no Git repository,
   gate, or commit.
 
-"Product QA" is a product bug-finding pipeline in its own repository (tillr's first
-external consumer). `docs/design/tillr-autoqa.md` is a different thing: tillr's own exploratory
-self-testing design, currently in the roadmap's Icebox.
+The designs use "Product QA" for an example consumer: a bug-finding pipeline that runs a store
+of its own and lands nothing. `docs/design/tillr-autoqa.md` is a different thing: tillr's own
+exploratory self-testing design, parked in the roadmap's Icebox.
 
 ## Where the files are
 
@@ -110,7 +110,7 @@ GitHub, and neutralizes `<!-- tillr: ... -->` directives so copies are never rea
 The paths below are under `~/.local/share/tillr/`.
 
 1. `docs/tillr/design-status.md` ("Read this first") and `docs/tillr/roadmap.md`: what tillr
-   does today, what is built, queued, proposed, and iceboxed, and how statuses are verified.
+   does today, the status of every document, and the order of the unfinished work.
 2. `tillr/examples/recorded-verdict/README.md`: the worked non-Git example you can run from an
    empty directory.
 3. `docs/design/tillr-separable-parts.md`: first "For a consumer's agent", then Section 2 (the
@@ -122,33 +122,24 @@ The paths below are under `~/.local/share/tillr/`.
    `complete-item` hook contract.
 5. Optional background on how work enters `git-landing`: `docs/design/tillr-intake-paths.md`.
 
-## Built, queued, and only proposed
+## Built, partly built, designed, open and parked
 
-Trust `docs/tillr/design-status.md` and `docs/tillr/roadmap.md` over an individual design's
-header line, and check `~/.local/share/tillr/<module>/README.md` or `<binary> --help` for
-landings newer than `docs/snapshot.json`:
+`docs/tillr/design-status.md` has one row per design and reference document, with one of five
+statuses: **Built**, **Partly built**, **Designed, not built**, **Open questions** (named by
+question id) and **Parked**. Read the row, then the document's own status paragraph, which names
+the code or the command behind the claim. Check `~/.local/share/tillr/<module>/README.md` or
+`<binary> --help` for code newer than `docs/snapshot.json`:
 
-- **Built:** All eight CLI binaries, the first build of the core and charter split (custom
-  `definition.json` lifecycles, `complete-item` hooks, and `examples/recorded-verdict`), item
-  graphs, `planned-build@v1` and seat tiering, queue persistence and ordering, designer desks and
-  comment intake, rolling restarts, the converge planner, fast gate + `after-merge` heavy proof +
-  `auto_revert` + [`OQ-GP7`](../../../../docs/design/tillr-graph-is-the-path.md#OQ-GP7) path-disjoint landing, Observatory pages and reorder/idea actions,
-  Copilot/Bedrock/Claude adapters, `tillr-trace` slice 1, and `land` + `obstacle` tool calls.
-- **Partly built or queued:** Remaining judge-and-lifecycle blocks (owner-criterion holds, raw
-  `item state` terminal-state evidence guards, design-refusal session resume), `uvx vantage-check`
-  default index invocation, heavy-proof recovery and check ordering, direct backend quota
-  reserves, the self-hosted source launcher ([`OQ-SH2`](../../../../docs/design/tillr-selfhosted-build.md#OQ-SH2) open), and unfiled separable-parts items
-  (explicit-store recipe P2, stock plain-command adapter P3, published change feed P4, standalone
-  dead-run probe P6, and charter hooks beyond `complete-item`).
-- **Proposed only (awaiting owner rulings or ledger review — do not build on these):** Companion
-  `<topic>-plan.md` plans retiring hidden item comments (`tillr-queue-mirrors-designs.md`),
-  mandatory pre-landing code diff review ([`OQ-DR1`](../../../../docs/design/tillr-diff-review.md#OQ-DR1), [`OQ-DR2`](../../../../docs/design/tillr-diff-review.md#OQ-DR2)), the policy compliance officer
-  ([`OQ-DP5`](../../../../docs/design/tillr-design-document-check.md#OQ-DP5)), the whole-life item-graph runtime (beyond [`OQ-GP7`](../../../../docs/design/tillr-graph-is-the-path.md#OQ-GP7)), log-per-item storage ([`OQ-TS1`](../../../../docs/design/tillr-storage.md#OQ-TS1),
-  [`OQ-TS3`](../../../../docs/design/tillr-storage.md#OQ-TS3)), early design landing ([`OQ-EL3`](../../../../docs/design/tillr-early-design-landing.md#OQ-EL3)), criterion supersession ([`OQ-CR7`](../../../../docs/design/criterion-repair.md#OQ-CR7)), code-level
-  vocabulary renames, recorded-task benchmark replay, scheduled tasks, and the 20 remaining
-  provenance-review questions.
-- **Iceboxed:** AutoQA exploratory self-testing, Goal Monitor, Muse backend, and Observatory
-  dollar pricing.
+- **Built:** every row of the index's "References" table (`docs/reference/`), the eight
+  programs, and the first build of the core and charter split (custom `definition.json`
+  lifecycles, `complete-item` hooks, and `examples/recorded-verdict`).
+- **Partly built:** the document says which part. `docs/design/tillr-core-and-git-landing.md`
+  Section 8.5 lists the unbuilt units of the split, and `docs/design/tillr-separable-parts.md`
+  Section 3 lists four pieces of consumer-facing work that are not built.
+- **Designed, not built, and Open questions:** do not build on these. A design with open
+  questions promises nothing until the owner rules them.
+- **Parked:** AutoQA, the goal monitor, the Muse adapter and prices on the observatory, listed
+  under the roadmap's Icebox.
 
 ## What is stable — and what is still moving
 
@@ -183,5 +174,5 @@ sync or snapshot, and nothing reads them back.
    example and cover what your pipeline needs from store events and views, cross-repository
    filing and outcome reads, first-adopted surfaces, breaking-change sensitivities, and
    diagnosing or recovering a drain in a repository tillr's maintainers cannot access directly.
-3. tillr's answers return in `docs/design/tillr-separable-parts.md` and queued build plans in the
-   next snapshot this pack delivers.
+3. tillr's answers return in `docs/design/tillr-separable-parts.md` in the next snapshot this
+   pack delivers.
