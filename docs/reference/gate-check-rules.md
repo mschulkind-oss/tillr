@@ -3,7 +3,6 @@ title: "Gate check rules — a red is read once, a check asserts what was record
 status: accepted
 stage: CURRENT
 verified: 2026-11-24
-verified_commit: ed085c74c4e77df9d79e66d0009b7a609445fe71
 covers:
   - tools/tillr-gate/run.go
   - tools/tillr-gate/gate.go
@@ -19,7 +18,7 @@ summary: "Three standing rules for the gate's checks, each with the code that en
 
 # Gate check rules
 
-**Status:** Source-verified 2026-11-24 against `ed085c74c4e77df9d79e66d0009b7a609445fe71`.
+**Status:** Source-verified 2026-11-24 against the tree.
 UNMEASURED: this reference was written by reading the code, not by observing a gate run.
 
 **The gate** is the program that decides whether a change may land: `tillr-gate`
@@ -106,7 +105,7 @@ The scan that enforces part 2 looks for one shape: a wall-clock difference (now 
 taken before the work) compared to a bound. A wait against an absolute deadline is not that
 shape, and part 3 permits it. Every existing hit is recorded in the declarations file with a
 kind, a reason and its repair. A hit with no declaration fails the gate, and so does a
-declaration that no longer matches a hit, because a declaration that outlives its defect only
+declaration that matches no hit, because a declaration that outlives its defect only
 silences the scan.
 
 ## A check set aside from the verdict is narrow, ticketed and counted
@@ -151,7 +150,7 @@ A check whose result depends on what runs beside it is repaired at its cause, no
 | A check that did not answer is not judged, and a stall is gated once more | `gateResult` in `tools/tillr-gate/gate.go`, the watchdog in `tools/tillr-gate/watchdog.go`, and `tools/tillr-drain/drain/gate_stall.go` |
 | A red candidate goes back to its worker with the failure named, with no wait and no count | `tools/tillr-drain`, described under [landing principle 11](../design/landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) |
 | No check asserts elapsed time | `tools/gate/checks/elapsed-time.py`, for the test files a change adds or edits. A scan of the whole test corpus is not enforced by code |
-| An existing timing assertion is declared with its reason and repair | The same check, against `tools/gate-timing-declarations.json`; a declaration that no longer matches a hit fails it |
+| An existing timing assertion is declared with its reason and repair | The same check, against `tools/gate-timing-declarations.json`; a declaration that matches no hit fails it |
 | A deadline's bound is far past expectation; a missing observable is recorded in the product | Not enforced by code. These are review rules |
 | A check is disabled only on a contradicted fingerprint, per episode | `Classify` and `classifyContradiction` in `tools/tillr/checkresult/classify.go`; the marker is written by `tools/tillr-gate/enable.go` |
 | A disabled check names its repair item | `sweepDisabledMarkers` in `tools/tillr-drain/drain/flaky_repair.go` |

@@ -2,49 +2,46 @@
 title: "A question and its design reach the trunk ahead of their item, and nothing is rebased"
 status: in-review
 stage: DESIGN
-updated: 2026-11-18
 tags:
   - tillr
   - graphs
   - landing
   - design
-summary: "How a question for the owner, and the design documents it is about, land on the trunk before the item that raised them: a cut of those documents onto the trunk tip, the ordinary gate and lander, and the item's next take-in. The item branch is never rewritten. On 2026-11-18 the owner ruled that every design change lands early."
-next: "The owner ruled OQ-EL1 on 2026-11-18: every design change lands on the trunk right away, by this operation. The Section 8 amendments are made in the graph design; file the build. All D-EL1 to D-EL7 designer decisions await the owner's review, and nothing is built."
+summary: "How a question for the owner, and the design documents it is about, land on the trunk before the item that raised them: a cut of those documents onto the trunk tip, the ordinary gate and lander, and the item's next take-in. The item branch is never rewritten. Every design change lands early."
+next: "The owner reviews the D-EL1 to D-EL7 designer decisions; then the build is filed. Nothing is built."
 depends-on:
   - tillr-graph-is-the-path.md
 ---
 
 # A question and its design reach the trunk ahead of their item, and nothing is rebased
 
-**Status:** 2026-11-18. None of it is built: it rests on the graph design's step that puts design answers on the item's branch, and that step is not filed. It designs the operation the owner asked for in [OQ-GP6](./tillr-graph-is-the-path.md#OQ-GP6) of [the graph design](./tillr-graph-is-the-path.md). Facts about today's drain and gate were read on 2026-11-18 from [the drain's guide](../../tools/tillr-drain/README.md) and [the gate's guide](../../tools/tillr-gate/README.md); what was not verified is marked. The `D-EL` rows of the ledger are the designer's decisions and await the owner's review.
+**Status:** Nothing is built: `rg -i 'early.?land' tools -g '*.go'` finds no cut node. The operation rests on the step of [the graph design](./tillr-graph-is-the-path.md) that commits design answers on the item's branch. The `D-EL` rows of the ledger are the designer's decisions and await the owner's review.
 
-> **In short.** Landing design early is safe once the worker stays on its own branch, because what made workers stale was cutting a new worker from the trunk, not the design being there. So an item's documents can be copied onto the trunk tip, gated and landed like any candidate, and the item branch picks them up at its next take-in with no history rewritten.
+> **In short.** Landing design early is safe once the worker stays on its own branch, because what makes a worker stale is being started anew from the trunk, not the design being there. So an item's documents can be copied onto the trunk tip, gated and landed like any candidate, and the item branch picks them up at its next take-in with no history rewritten.
 
-**Why it matters.** The owner reads and answers questions in Vantage, which serves the trunk. A question that lives only on an item's branch is one he cannot see, and an item waiting on it would wait forever.
+**Why it matters.** The owner reads and answers questions in Vantage, which serves the trunk. A question that lives only on an item's branch is one the owner cannot see, and an item waiting on it would wait forever.
 
 **The shape.** One new command node, the cut, which builds a documents-only candidate on the trunk tip. The existing gate run and land attempt carry it. The existing take-in brings it back under the branch. The owner's answer returns as a fact that names the question.
 
 **Cost.** An item may have more than one landing: one for its deliverable, and one for each time its documents go ahead. Each early landing costs a gate run, a landing and a proof. A design on the trunk can outlive the item that wrote it.
 
-**Start at [Section 3](#3-the-operation)** for how an early landing works, step by step. [Section 6](#6-always-or-only-with-a-question) compares landing every design change with landing only one that carries a question, and says what "always" costs.
+**Start at [Section 3](#3-the-operation)** for how an early landing works, step by step. [Section 6](#6-always-or-only-with-a-question) says which endings trigger one and what that costs.
 
-**Ruled by the owner on 2026-11-18:** [OQ-EL1](#OQ-EL1), always. **Needs your ruling:** nothing now. **Blocked:** [OQ-EL3](#OQ-EL3), until giving an item up is designed. **Closed without a ruling:** [OQ-EL2](#OQ-EL2), which the drain as built already settles.
+**Needs your ruling:** None. **Blocked:** [OQ-EL3](#OQ-EL3), until giving an item up is designed.
 
-**Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the parent: every node kind, rule and row number used here is its own; the changes this design makes to it are applied there, and [Section 8](#8-amendments-to-the-parent) lists what the ruling of "always" added there), [the landing principles](./landing-principles.md) (a landing change is checked against them).
+**Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the parent: every node kind and rule used here is its own, and [Section 8](#8-amendments-to-the-parent) lists what it carries for this design), [the landing principles](./landing-principles.md) (a landing change is checked against them).
 
 ---
 
 ## 1. The ruling and what it leaves open
 
-The parent puts every design edit on the item's branch, to reach the trunk in the item's one landing (its rule R11 and decision `D-GP9`). The owner then ruled, on 2026-11-17, cleaned from dictation:
-
-> Yeah, we definitely need to land the questions and the designs that changed when they have questions for me. So maybe we need a special operation here that integrates the design into main and then rebases. We may even want to do this all the time. I mean, ideally, the designs actually do land here quickly, but that has lots of other challenges too that this may bring up as well. But I don't want this to block the rest of the work, so if there's more complication here, let's spin up a new design doc.
+The parent commits every design edit on the item's branch (its rule R11). The owner ruled ([OQ-GP6](./tillr-graph-is-the-path.md#OQ-GP6)) that when an item raises a question for the owner, the question and the design text that changed land on the trunk, and that the operation gets its own design if it is complicated. This document is that design.
 
 | | |
 | :--- | :--- |
-| **Settled** | When an item raises a question for the owner, the question and the design text that changed land on the trunk |
-| **Open, decided here** | The operation ([Section 3](#3-the-operation)); what exactly lands ([Section 4](#4-what-lands-early)); how the answer comes back ([Section 5](#5-the-owners-answer)) |
-| **Ruled by the owner, 2026-11-18** | Every design answer lands this way ([OQ-EL1](#OQ-EL1)): "I want to always land design changes on trunk immediately. I think not landing them immediately creates too many issues", and then, with the operation described to him, "let's go with always and this design" |
+| **Settled by the owner** | A question for the owner, and the design text that changed, land on the trunk. Every design answer lands this way, not only one that carries a question ([OQ-EL1](#OQ-EL1)) |
+| **Decided here** | The operation ([Section 3](#3-the-operation)); what exactly lands ([Section 4](#4-what-lands-early)); how the answer comes back ([Section 5](#5-the-owners-answer)) |
+| **Blocked** | What becomes of early-landed documents when their item is given up ([OQ-EL3](#OQ-EL3)) |
 
 The parent's rules bind this design unchanged: no counts and no clocks (R1), no guess triggers (R2), the owner reached only by a written question (R3), work built on the latest trunk (R8), and a done node never changes.
 
@@ -58,7 +55,7 @@ The parent's words keep its meanings: node, in fog, fixed, done, claim, ending, 
 | **Cut** *(coined here)* | A command node that builds a candidate commit on the trunk tip holding only documents, and the candidate it builds | Not a rebase and not a take-in. It writes nothing to the item branch |
 | **Document paths** *(coined here)* | The path patterns a landing definition declares as prose a person reads and no program builds or runs. Only files matching them may be in a cut | Not the item's fence. A document may be inside or outside it |
 
-This repository would declare the Markdown files under `docs/`. I did not verify that every item block lives there; the planner confirms the patterns against where blocks are.
+This repository would declare the Markdown files under `docs/`. Whether every item block lives there is for the planner to confirm against where blocks are.
 
 ## 3. The operation
 
@@ -96,10 +93,10 @@ The cut's endings are `cut` with the candidate and its paths; `empty`, when the 
 
 | What happens | What follows | Who learns |
 | :--- | :--- | :--- |
-| The cut or its land attempt ends `conflict` | The parent's row 11: the session that last wrote those paths is resumed on the latest trunk, after a take-in, and reconciles on the item branch. The cut is added again after it | That session |
-| The gate refuses the cut | The parent's row 9: the session that wrote the documents is resumed with the gate's output, then a new cut | That session |
+| The cut or its land attempt ends `conflict` | The parent's conflict rule: the session that last wrote those paths is resumed on the latest trunk, after a take-in, and reconciles on the item branch. The cut is added again after it | That session |
+| The gate refuses the cut | The parent's gate-refusal rule: the session that wrote the documents is resumed with the gate's output, then a new cut | That session |
 | The trunk is red on a check that reads the documents, and the cut does not fix it | The land attempt waits, by the parent's one waiting rule, with the remedy as mover. An owner question behind it waits too, and the item is under "draining" | The trunk panel |
-| A proof later attributes a red to the early landing | The parent's revert, then row 22: the documents' session is resumed with the check's output | That session |
+| A proof later attributes a red to the early landing | The parent's revert, then the documents' session is resumed with the check's output | That session |
 | The fixing session is a writer, and another writer of the item is running | The fix is claimed when that writer ends. The early landing is later; no other node waits on it | The item page shows the cut waiting on the writer |
 
 > [!WARNING]
@@ -107,27 +104,27 @@ The cut's endings are `cut` with the candidate and its paths; `empty`, when the 
 
 ### 3.3 Why nothing is rebased
 
-The owner's sketch was "integrate, then rebase". The effect he asked for is that the trunk holds the design and the branch holds only what remains. A literal rebase gets there by rewriting every commit on the branch, and that is where it meets the parent's invariant.
+The effect wanted is that the trunk holds the design and the branch holds only what remains. A literal "integrate, then rebase" gets there by rewriting every commit on the branch, and that is where it meets the parent's invariant that a done node never changes.
 
 | | Cut, land, take-in by merge | Integrate, then rebase |
 | :--- | :--- | :--- |
 | **When it may run** | Any time; it does not write the branch | Only when no node of the item is running, since every running node's base would vanish under it |
-| **Heads recorded by done nodes** | Still ancestors of the branch | Unreachable from the branch. The records stay, and name commits the branch no longer contains |
+| **Heads recorded by done nodes** | Still ancestors of the branch | Unreachable from the branch. The records stay, and name commits the branch does not contain |
 | **A session resumed later** | Its transcript's commits are in `git log` | Its transcript names commits that are gone from the branch, and it must be told to distrust its own memory |
 | **A commit that mixed design and work** | Untouched; the design half is simply equal to the trunk | Replayed; its design half becomes an empty change or a conflict |
 | **What "only the remaining work" is true of** | The branch's difference from the trunk, which is all the lander ever lands | The commit list as well |
 | **Cost** | Merge commits on the branch | A history that reads cleanly |
 
-I choose the first. The second buys a tidier commit list on a branch nobody reads, and pays with records that stop being checkable. It follows that the take-in must merge: the parent leaves merge or rebase to the implementer, and with early landings that choice is no longer invisible ([Section 8](#8-amendments-to-the-parent)).
+The design takes the first. The second buys a tidier commit list on a branch nobody reads, and pays with records that stop being checkable. It follows that the take-in must merge: with early landings the choice between merge and rebase is visible in the record, so it is not the implementer's.
 
 ### 3.4 What the gate checks
 
 - **The same gate, with no documents tier.** The candidate is an ordinary commit on the tip. The gate's document checks are what can fail: links and anchors, and the rules in [the repository guide](../../AGENTS.md#documents-state-the-evidence-never-cite-scratch). One of them matters here: a document that cites a commit found only on the item branch is refused, and returns to its writer.
-- **No judge.** A cut has no criteria. The item's criteria are judged when its deliverable lands. The owner ruled on 2026-11-18 that a documents-only landing gets no review: "doc only landings have no review, no. this is for items that land as commits from a design doc" (`D-DR2` in [the diff-review design](./tillr-diff-review.md#decision-ledger)).
+- **No judge and no review.** A cut has no criteria. The item's criteria are judged when its deliverable lands. A documents-only landing gets no review (owner ruling `D-DR2` in [the landing review design](./tillr-diff-review.md#decision-ledger)).
 - **No take-in before it.** The cut is already on the tip. If the trunk moves before the landing, the lander's three-way merge places it, as it does for every candidate.
 - **tillr's own check.** Every changed path of the candidate is a path the cut named, and every such path matches the document paths. A failure is a tooling defect, since the cut builds nothing else.
 
-**What a cut costs at the gate.** Each of the gate's 25 checks declares the paths it reads, and a result is remembered by its inputs (read 2026-11-18). Eight checks read the whole tree, the document checks among them, so a documents-only cut runs those again: the `documents` check takes 0.42 to 0.52 seconds with its passes remembered and about 1.9 to 2.0 seconds with none ([the gate's guide](../../tools/tillr-gate/README.md#declaration-directories)). Whether the full suite's code checks are skipped on a documents-only tip was not measured.
+**What a cut costs at the gate.** Each gate check declares the paths it reads, and a result is remembered by its inputs. The document checks read the whole tree, so a documents-only cut runs them again: [the gate's guide](../../tools/tillr-gate/README.md#declaration-directories) measures the `documents` check at 0.42 to 0.52 seconds with its passes remembered and 1.9 to 2.0 seconds with none. Whether the full suite's code checks are skipped on a documents-only tip is unmeasured.
 
 ## 4. What lands early
 
@@ -142,20 +139,20 @@ I choose the first. The second buys a tidier commit list on a branch nobody read
 
 **What comes along.** A whole file carries every change the branch made to it, by any node.
 
-- **The item's own block,** when it lives in a cut document. The trunk's copy of the block then matches the branch's. That is harmless: a block on the trunk has always described work that is not built yet. The definition in force is still the latest revision recorded in the graph, as the parent rules; the store keeps both readings and the view shows them equal. Sync reads the changed block on the trunk and re-runs nothing (R2). The block is retired at the item's deliverable landing, as before.
-- **A rewrite's edit** to that block. The parent's promise that a rewrite reaches the trunk only with its item no longer holds for a document that goes ahead.
+- **The item's own block,** when it lives in a cut document. The trunk's copy of the block then matches the branch's. That is harmless: a block on the trunk describes work that is not built yet. The definition in force is still the latest revision recorded in the graph, as the parent rules; the store keeps both readings and the view shows them equal. Sync reads the changed block on the trunk and re-runs nothing (R2). The block is retired at the item's deliverable landing.
+- **A rewrite's edit** to that block. A rewrite reaches the trunk with its item only when its document did not go ahead.
 - **A new item block** a designer added to the document. It becomes an item when the cut lands, by ordinary intake.
 - **A worker's edit to the same document.** This is the hazard: a worker who wrote "built" beside a ruling has that claim on the trunk before the code. A node that may trigger a cut is told in its brief that its documents will be read on the trunk ahead of the work, and must leave them true for that reader. Nothing checks it ([Section 10](#10-risks)).
 
-**Degenerate cases.** A question whose anchor is not in the named document at the node's head is `missing-output`, as the parent already rules for an owner named without a question. A document deleted on the branch is deleted by the cut. Two items cutting the same document meet as a `conflict` in the second cut.
+**Degenerate cases.** A question whose anchor is not in the named document at the node's head is `missing-output`, as the parent rules for an owner named without a question. A document deleted on the branch is deleted by the cut. Two items cutting the same document meet as a `conflict` in the second cut.
 
 ## 5. The owner's answer
 
 **The event is "question Q in document D was answered", with the answer.** No rule reads a trunk hash or a changed file.
 
-**An answer counts when it is committed on the trunk.** The question index reads the trunk commit, not the checkout, and writes the fact once for each question: the document, the question id, the answer's text and the trunk commit that holds it. The drain already works this way. An uncommitted edit to a document records no answer ([the drain's guide](../../tools/tillr-drain/README.md#owner-decisions-in-documents); the test `TestUncommittedOwnerAnswerDoesNotChangeTheConflict` pins it), and uncommitted content in the main checkout belongs to the owner, so tillr never commits it for him.
+**An answer counts when it is committed on the trunk.** The question index reads the trunk commit, not the checkout, and writes the fact once for each question: the document, the question id, the answer's text and the trunk commit that holds it. The drain already works this way. An uncommitted edit to a document records no answer ([the drain's guide](../../tools/tillr-drain/README.md#owner-decisions-in-documents); the test `TestUncommittedOwnerAnswerDoesNotChangeTheConflict` pins it), and uncommitted content in the main checkout belongs to the owner, so tillr never commits it.
 
-**An answer given in a Vantage review is not yet an answer to tillr.** Vantage never writes the repository. The owner's statement of 2026-11-16: "Vantage never writes the repository at all in any way. The only thing it does is delete the responses you sent it." The answer reaches the document when an agent records it there, and counts when that commit is on the trunk. Which session does that inside tillr is not designed here.
+**An answer given in a Vantage review is not yet an answer to tillr.** Vantage never writes the repository. The answer reaches the document when an agent records it there, and counts when that commit is on the trunk. Which session does that inside tillr is not designed here.
 
 A later edit to the answer is not an event (R2); a changed ruling is the owner objecting on the item, which the parent already makes an event.
 
@@ -163,104 +160,65 @@ A later edit to the answer is not an event (R2); a changed ruling is the owner o
 
 1. The owner question node ends `answered`. The item leaves "needs you".
 2. The objector is resumed with the question's id and the answer, word for word. Its take-in brings the committed answer under the branch.
-3. The resumed session folds the ruling into the design on the item branch, as the design seat does for any ruling. When that fold reaches the trunk is [Section 6](#6-always-or-only-with-a-question).
+3. The resumed session folds the ruling into the design on the item branch, as the design seat does for any ruling. The fold lands when that node ends ([Section 6](#6-always-or-only-with-a-question)).
 
 ## 6. Always, or only with a question
 
-**Today's behavior is neither option.** A design answer that passes the gate lands by itself, whatever it changed, and a new worker is then started from the trunk ([the drain's guide](../../tools/tillr-drain/README.md#a-design-run-that-ends-without-answering)). So every design change reaches the trunk at once today, as it would under B, and the price is the first worker's session. The parent's step 8 removes that price by committing the answer on the item's branch. That step is what makes holding a design back possible at all.
+**Always** (owner ruling [OQ-EL1](#OQ-EL1)). A cut is added in two cases:
 
-**A — Only with a question.** A cut is added when a node ends with an objection naming the owner. Every other design edit stays on the branch.
+- a node ends with an objection naming the owner;
+- a design answer ends `answered` having changed documents. The objector's resume does not wait for it.
 
-**B — Always.** A cut is also added when a design answer ends `answered` having changed documents. The objector's resume does not wait for it. A design seat's work node is not included: for a design item the document is the deliverable, and it lands judged, with the item.
+A design seat's work node is not included: for a design item the document is the deliverable, and it lands judged, with the item.
 
-**Staleness, re-examined.** The parent rejected early landing as "the source of stale workers". Today a design answer lands by itself and a new worker is then cut from the trunk, at a commit that is neither the one the answer was written against nor the one the first worker stood on, and the first worker's session is thrown away. Both faults are in the second half. Under the parent the answer is committed at the objector's head and the same session resumes from it. Whether a copy of that text is also on the trunk changes nothing the worker reads. Early landing is no longer a cause of staleness under either option.
+**The drain as built does neither.** A design answer that passes the gate lands by itself, and a new worker is then started from the trunk ([the drain's guide](../../tools/tillr-drain/README.md#a-design-run-that-ends-without-answering)). The design reaches the trunk at once, and the price is the first worker's session.
 
-| | A — only with a question | B — always |
+**Early landing does not make workers stale.** The staleness in the built drain comes from starting a new worker from the trunk, at a commit that is neither the one the answer was written against nor the one the first worker stood on. Under the parent the answer is committed at the objector's head and the same session resumes from it. Whether a copy of that text is also on the trunk changes nothing the worker reads.
+
+The alternative, landing early only a change that carries a question, was not taken:
+
+| | Only with a question (rejected) | Always (ruled) |
 | :--- | :--- | :--- |
 | **Other items reading the design** | See it when the item lands. Until then they need an inter-item edge and wait | See it at once and build on it. They may build on a design whose work is later given up |
 | **Two items' designs in conflict** | Found when the second item lands, after work was built on both | Found at the second cut, while the designer's session is warm |
-| **After the owner answers** | The trunk shows the answer; the folded ruling waits for the item. The document sits "answered, not folded" for that long | The fold lands when the designer ends |
-| **An item given up** | Its design never lands, except what a question took ahead | Its design stays on the trunk. Three items written by people have ever been closed unbuilt ([Section 7](#7-an-item-that-is-given-up)) |
-| **One item, one landing** | Broken only for questions, which the owner ruled | One deliverable landing, plus one documents landing for each design answer |
-| **Cost** | A gate run, a landing and a proof for each question | The same for each design answer as well. From 2026-11-15 to 2026-11-18 the store holds 285 design conflicts raised on 104 items, 243 of them answered, against 803 landings. How many answers changed a document was not counted, so 243 more landings, about 30%, is the ceiling |
+| **After the owner answers** | The trunk shows the answer; the folded ruling waits for the item | The fold lands when the designer ends |
+| **An item given up** | Its design never lands, except what a question took ahead | Its design stays on the trunk ([Section 7](#7-an-item-that-is-given-up)) |
+| **Landings per item** | One, plus one per question | One deliverable landing, plus one documents landing for each design answer |
 | **Rules** | Two cases: questions land early, other design does not | One: a designer's documents land when the designer ends |
-
-**I recommend B.** The trunk is where the owner and every other item read designs, and a design that exists only on a branch is invisible to both. The argument against it was staleness, and that argument is gone. What is left against B is the provisional design, which the owner raised himself: "you could have a provisional design in an item that you might not want to land". I think that is the ordinary state of this repository, where a design and its item blocks are on the trunk before any of the work is, and the ledger's built column says what exists. A also leaves a seam: the question lands, the answer lands, and the ruling's consequences do not.
 
 **What "always" costs.**
 
-- **One more landing for each design answer.** Each is a gate run, a landing and a proof of the new tip. The gate's document checks take 0.4 to 2 seconds ([Section 3.4](#34-what-the-gate-checks)). What the full suite costs on a documents-only tip was not measured, and neither was how many design answers change a document; 243 answers against 803 landings is the ceiling.
-- **A design can outlive its work.** When an item is dropped after its design landed, the design stays on the trunk until someone takes it out. How that happens is [OQ-EL3](#OQ-EL3), which waits on a design of giving an item up. Three items have been dropped so far.
-- **A design item's own document is left out.** For an item whose deliverable is the design document, the document is the thing being judged, so it lands once, judged, with the item. Landing it early would put an unjudged deliverable on the trunk.
-- **A document can say more than is built.** A worker who edited the same file has its words on the trunk before its code ([Section 4](#4-what-lands-early)). Nothing checks that.
-
-**What would make me choose A:**
-
-- **Cost.** If a documents-only landing makes the full suite run again in full, each design answer costs a proof, and B is paid for on every item. That was not measured ([Section 3.4](#34-what-the-gate-checks)).
-- **Provisional designs matter more than current ones.** If the owner would rather the trunk never show a design whose work may be dropped, A keeps that for everything but questions.
-- **Items are given up often.** Each one under B leaves a design to remove. Three have been so far.
+- **One more landing for each design answer that changes a document.** Each is a gate run, a landing and a proof of the new tip. What the full suite costs on a documents-only tip is unmeasured ([Section 3.4](#34-what-the-gate-checks)).
+- **A design can outlive its work.** When an item is dropped after its design landed, the design stays on the trunk until someone takes it out ([OQ-EL3](#OQ-EL3)).
+- **A document can say more than is built.** A worker who edited the same file has its words on the trunk before its code ([Section 4](#4-what-lands-early)). Nothing checks that. This is the ordinary state of a repository where a design and its item blocks are on the trunk before the work is; the ledger's built column says what exists.
 
 ## 7. An item that is given up
 
-tillr has no act of giving an item up. An item can be closed, and closing changes nothing on the trunk; of the items people wrote, three have ever been closed unbuilt (read from the store on 2026-11-18). Neither the parent nor this document designs giving up, so what becomes of documents that went ahead cannot be settled yet. It is [OQ-EL3](#OQ-EL3), blocked until that design exists. Until then a closed item's documents stay on the trunk, as they do today.
+tillr has no act of giving an item up. An item can be closed, and closing changes nothing on the trunk. Neither the parent nor this document designs giving up, so what becomes of documents that went ahead cannot be settled yet. It is [OQ-EL3](#OQ-EL3), blocked until that design exists. Until then a closed item's documents stay on the trunk.
 
-**What I would propose then: a designer takes them out.** The item's last node is a design answer that removes from those documents what should not outlast the item and keeps what is a ruling, in the document's ledger. Its documents are cut and landed, and the graph is then complete. A plain revert of the early landings is the alternative I would reject: it deletes the owner's answers with the questions, and it fails once another item has edited the same text.
+**The proposal for then: a designer takes them out.** The item's last node is a design answer that removes from those documents what should not outlast the item and keeps what is a ruling, in the document's ledger. Its documents are cut and landed, and the graph is then complete. A plain revert of the early landings is rejected: it deletes the owner's answers with the questions, and it fails once another item has edited the same text.
 
 ## 8. Amendments to the parent
 
-[The graph design](./tillr-graph-is-the-path.md) carries the amendments this design makes whichever way [OQ-EL1](#OQ-EL1) is ruled: its rule R11, the cut among its node kinds, the merging take-in, the fact for an answered question, rule rows 10, 13 and 22 to 26, migration step 14, and decision `D-GP9`.
+[The graph design](./tillr-graph-is-the-path.md) carries everything this design needs from it, in its own text:
 
-The amendments below were owed once [OQ-EL1](#OQ-EL1) was ruled "always" (2026-11-18), and they are made: the parent carries each replacement as written below. Each shows the parent's earlier text, then its replacement, kept as the record of what changed.
-
-
-**Rule R11.** Replace its last sentence.
-
-```text
-A document that carries a question for the owner reaches it earlier, by an early landing ([early design landing](./tillr-early-design-landing.md)).
-```
-
-```text
-A document that a design answer changed, or that carries a question for the owner, reaches it earlier, by an early landing ([early design landing](./tillr-early-design-landing.md)).
-```
-
-**Rule table row 12**, and a new row 27.
-
-```text
-| 12 | A node ended with an objection naming the design seat | A design answer that starts at the objector's head and forks the document's designer session; when it ends `answered`, a resume of the objector from the design's commit | A conflict row, a separate design run and landing, then a new worker from the trunk |
-```
-
-```text
-| 12 | A node ended with an objection naming the design seat | A design answer that starts at the objector's head and forks the document's designer session; when it ends `answered`, a resume of the objector from the design's commit, which does not wait for row 27 | A conflict row, a separate design run and landing, then a new worker from the trunk |
-| 27 | A design answer ended `answered` having changed documents | A cut of those documents. A resume that repairs a refused or conflicting cut is claimed after the item's running writer ends | Nothing; new |
-```
-
-**The table row on a dependent item**, in the section on the item branch and the latest trunk.
-
-```text
-| **Another item that depends on the decision** | Gets an inter-item edge until this item lands. The design answer's ending may name the items it affects; the queue level adds the edges. No item reads another item's unlanded branch, because that would predicate work on something that may never land |
-```
-
-```text
-| **Another item that depends on the decision** | Reads it on the trunk once the design answer's documents land. An item that depends on the work, and not only on the decision, gets an inter-item edge until this item lands; the design answer's ending may name those items, and the queue level adds the edges. No item reads another item's unlanded branch |
-```
-
-**The migration table.** Add a row.
-
-```text
-| 17 | Every design answer's documents land when it ends | step 14, [early design landing](./tillr-early-design-landing.md) ruled "always" |
-```
+- **Rule R11** says a document that a design answer changed, or that carries a question for the owner, reaches the trunk by an early landing.
+- **The cut** is among its node kinds, the take-in merges, and an answered question is a fact.
+- **Its rule table** follows a design answer that ended `answered` having changed documents with a cut, and claims a repair of a refused or conflicting cut after the item's running writer ends. The objector's resume does not wait for the cut.
+- **A dependent item** reads a decision on the trunk once the design answer's documents land. An item that depends on the work, and not only on the decision, gets an inter-item edge until the item lands.
+- **Its migration table** has a step for the cut and the owner question, and a later step for landing every design answer's documents.
 
 ## 9. Migration and drafted items
 
-This is the parent's step 14, and, since the owner ruled "always", its step 17 after it. Steps 1 to 8 neither wait on it nor change for it: step 8 is built as written, with design answers on the branch only. Until step 14 an item that names the owner is handled as it is today.
+The two items below are the parent's migration steps for this design. The parent's earlier steps neither wait on them nor change for them: design answers are first committed on the branch only, and until the first item below is built an item that names the owner is handled as the drain handles it today.
 
-**State that already exists.** Design answers landed by today's separate design landing are on the trunk and need nothing. An item waiting on the owner under today's holds is imported by the parent's rule; its question is already on the trunk, so its cut ends `empty`.
+**State that already exists.** Design answers landed by the drain's separate design landing are on the trunk and need nothing. An item waiting on the owner under the drain's holds is imported by the parent's rule; its question is already on the trunk, so its cut ends `empty`.
 
-Like the parent's, these are drafted items: proposals in prose, not filed, which nothing reads and from which nothing can be dispatched.
+These are drafted items: proposals in prose, not filed, which nothing reads and from which nothing can be dispatched.
 
 #### Land a question for the owner, and its documents, ahead of the item
 
-When a designer on an item's branch writes a question only the owner can answer, the owner cannot see it: he reads the trunk. This item copies the documents the question is in onto the trunk through the ordinary gate and lander, shows the item under "needs you" once they are there, and resumes the same session with his answer. The item's branch is never rewritten.
+When a designer on an item's branch writes a question only the owner can answer, the owner cannot see it on the trunk. This item copies the documents the question is in onto the trunk through the ordinary gate and lander, shows the item under "needs you" once they are there, and resumes the same session with the answer. The item's branch is never rewritten.
 
 - **Paths:** `tools/tillr-drain/`, `tools/tillr-land/`, `tools/tillr-view/`, `config/tillr/`, `yolo-packs/tillr/`, `docs/`
 - **Waits on:** Route an objection to a design answer on the item's own branch.
@@ -271,14 +229,14 @@ When a designer on an item's branch writes a question only the owner can answer,
 - **c5:** An answer committed on the trunk ends the owner question `answered` with the question's id and the answer's text. An uncommitted edit to the document, and an unrelated trunk commit, end nothing. A test asserts each.
 - **c6:** The objector's session is resumed with the answer after its take-in. No new session is started. A test asserts the session id and the message.
 - **c7:** A refused cut returns to the session that wrote the documents with the gate's output, and a conflicting cut to the session that last wrote the conflicting paths. A test asserts each.
-- **c8:** The take-in merges. The tests that assert a design answer and a rewrite reach the trunk only in the item's landing are narrowed to documents that did not go ahead.
+- **c8:** The take-in merges. Tests that assert a design answer and a rewrite reach the trunk only in the item's landing cover only documents that did not go ahead.
 
 #### Land every design answer's documents when it ends
 
 Once design answers are committed on the item's branch, a design answer reaches the trunk only when its item lands, so other items and the owner read an older design until then. This item lands a design answer's documents as soon as the designer ends, beside the worker's resume, which does not wait.
 
 - **Paths:** `tools/tillr-drain/`, `config/tillr/`, `yolo-packs/tillr/`, `docs/`
-- **Waits on:** Land a question for the owner, and its documents, ahead of the item. The owner's ruling that every design answer lands early, made on 2026-11-18 ([OQ-EL1](#OQ-EL1)).
+- **Waits on:** Land a question for the owner, and its documents, ahead of the item.
 - **c1:** A design answer that ends `answered` having changed a document is followed by a cut of those documents. One that changed none is followed by none. A test asserts both.
 - **c2:** The objector's resume is claimed without waiting for the cut, its gate run or its landing. A test holds the cut at the gate and asserts the resume runs.
 - **c3:** A second cut of one item waits for the first one's landing. A cut in fog is removed when a node of the item ends `submitted`. A test asserts both.
@@ -291,7 +249,7 @@ Once design answers are committed on the item's branch, a design answer reaches 
 | :--- | :--- |
 | **A document lands saying something is built that is not,** because a worker edited the same file | The triggering node's brief says its documents are read ahead of the work. The gate refuses a citation of a branch-only commit. Nothing else checks it; the item page lists the documents that went ahead |
 | **A reverted early landing silently strips the branch** | The resume after the revert restores the documents from its recorded head ([Section 3.2](#32-when-a-step-fails)) |
-| **Every early landing makes the tip unproven** and schedules a proof | Cheap only if the full suite skips the checks a documents-only change cannot affect, which was not measured ([Section 3.4](#34-what-the-gate-checks)). It is the first reason to choose A |
+| **Every early landing makes the tip unproven** and schedules a proof | Cheap only if the full suite skips the checks a documents-only change cannot affect, which is unmeasured ([Section 3.4](#34-what-the-gate-checks)) |
 | **A worker writes the question itself and then runs for hours after the answer** | The trunk holds the answer, because an answer counts only once it is committed there. The fold waits for that node's end |
 | **Other items build on a design that is then withdrawn** | The withdrawal is a document change they take in; a conflict goes to the session that wrote the lines. The queue planner orders what it can see |
 
@@ -301,19 +259,19 @@ Once design answers are committed on the item's branch, a design answer reaches 
 
 ## Decision Ledger
 
-[OQ-EL1](#OQ-EL1) is the owner's ruling of 2026-11-18, which also accepts the operation as a whole. The `D-EL` rows are the designer's decisions of 2026-11-17 that work that operation out in detail. None of them is individually the owner's ruling; the owner may overturn any of them, and all await his review. None is built. [OQ-EL2](#OQ-EL2) is a question closed without a ruling, for the reason its row gives.
+[OQ-EL1](#OQ-EL1) is the owner's ruling, which also accepts the operation as a whole. The `D-EL` rows are the designer's decisions that work the operation out in detail; the owner may overturn any of them, and all await review. [OQ-EL2](#OQ-EL2) is closed without a ruling, for the reason its row gives.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| OQ-EL1 | **Owner ruling: always.** Every design change made while an item is being built is landed on the trunk right away, by the operation this document designs. The owner, having had the operation described to him (a cut of the changed documents onto the trunk tip, the ordinary gate, a refusal returned to the designer's own session, the ordinary landing, and the branch taking the trunk in afterwards): "let's go with always and this design." On merging instead of rebasing: "I don't really care rebase versus merge. It makes no difference to me." His reason for always: "I think not landing them immediately creates too many issues." The other option, landing early only a change that carries a question, is not taken. The amendments [Section 8](#8-amendments-to-the-parent) lists for "always" are made in the graph design. | 2026-11-18 | [Section 6](#6-always-or-only-with-a-question) | — |
-| `D-EL1` | An early landing is a cut on the trunk tip, the ordinary gate run and land attempt, and the item's next take-in. The item branch is never rewritten. **Rejected:** a literal rebase, which may run only when the item is idle and leaves done nodes naming commits the branch no longer holds. | 2026-11-17 | [Section 3](#3-the-operation) | — |
+| OQ-EL1 | **Owner ruling: always.** Every design change made while an item is being built is landed on the trunk right away, by the operation this document designs: "let's go with always and this design." Merge or rebase is left to the design. The reason: "I think not landing them immediately creates too many issues." Landing early only a change that carries a question is not taken. | 2026-11-18 | [Section 6](#6-always-or-only-with-a-question) | — |
+| `D-EL1` | An early landing is a cut on the trunk tip, the ordinary gate run and land attempt, and the item's next take-in. The item branch is never rewritten. **Rejected:** a literal rebase, which may run only when the item is idle and leaves done nodes naming commits the branch does not hold. | 2026-11-17 | [Section 3](#3-the-operation) | — |
 | `D-EL2` | The take-in merges. **Rejected:** leaving merge or rebase to the implementer, which early landings make visible in the record. | 2026-11-17 | [Section 3.3](#33-why-nothing-is-rebased) | — |
 | `D-EL3` | A cut holds whole documents by path: those the triggering node changed, and those its ending names. Only document paths qualify. **Rejected:** replaying commits, and landing only the designer's lines. | 2026-11-17 | [Section 4](#4-what-lands-early) | — |
 | `D-EL4` | The item's block may land early inside a cut document. The definition in force stays the graph's latest revision. **Rejected:** stripping the block from the cut, which lands a file no node wrote. | 2026-11-17 | [Section 4](#4-what-lands-early) | — |
 | `D-EL5` | The gate for a cut is the same gate with no judge and no take-in. **Rejected:** a documents tier, which is a second gate to keep true. | 2026-11-17 | [Section 3.4](#34-what-the-gate-checks) | — |
-| `D-EL6` | The answer returns as a fact naming the question, written once the answer is committed on the trunk. tillr writes no answer onto the trunk itself. **Rejected:** resuming on a changed trunk hash; taking an uncommitted edit as the answer, which the drain refuses today; and a fact written by the view, which cannot exist because Vantage never writes the repository. | 2026-11-18 | [Section 5](#5-the-owners-answer) | — |
-| `D-EL7` | Under "always", the worker's resume does not wait for the design's early landing, and a repair of that landing waits for the item's writer. **Rejected:** holding the worker until the design lands, which stops work behind a red trunk. | 2026-11-17 | [Section 6](#6-always-or-only-with-a-question) | — |
-| `OQ-EL2` | **Closed without a ruling: the drain as built already settles it. The owner may overturn this.** The question asked whether an answer typed into a document and not committed counts. It does not: an answer counts when it is committed on the trunk, and tillr never commits in the owner's checkout. The other option, taking the typed text, would break that built rule. The owner's nearest statement, 2026-11-16: "Vantage never writes the repository at all in any way." | 2026-11-18 | [Section 5](#5-the-owners-answer) | Yes: answer sync reads the trunk commit, and `TestUncommittedOwnerAnswerDoesNotChangeTheConflict` pins it |
+| `D-EL6` | The answer returns as a fact naming the question, written once the answer is committed on the trunk. tillr writes no answer onto the trunk itself. **Rejected:** resuming on a changed trunk hash; taking an uncommitted edit as the answer, which the drain refuses; and a fact written by the view, which cannot exist because Vantage never writes the repository. | 2026-11-18 | [Section 5](#5-the-owners-answer) | — |
+| `D-EL7` | The worker's resume does not wait for the design's early landing, and a repair of that landing waits for the item's writer. **Rejected:** holding the worker until the design lands, which stops work behind a red trunk. | 2026-11-17 | [Section 6](#6-always-or-only-with-a-question) | — |
+| `OQ-EL2` | **Closed without a ruling: the drain as built already settles it. The owner may overturn this.** The question asked whether an answer typed into a document and not committed counts. It does not: an answer counts when it is committed on the trunk, and tillr never commits in the owner's checkout. | 2026-11-18 | [Section 5](#5-the-owners-answer) | Yes: answer sync reads the trunk commit, and `TestUncommittedOwnerAnswerDoesNotChangeTheConflict` pins it |
 
 ---
 
@@ -323,7 +281,7 @@ Once design answers are committed on the item's branch, a design answer reaches 
 
    <!-- vantage: question id=OQ-EL3 blocked-on="a design of how an item is given up, which does not exist yet" -->
 
-   Waits on a design of how an item is given up. tillr has no such act today: an item can be closed, closing changes nothing on the trunk, and three items written by people have ever been closed unbuilt. The question becomes askable when that design exists and says what closing does to an item's branch and to its early landings. Nothing is built that depends on the answer.
+   Waits on a design of how an item is given up. tillr has no such act: an item can be closed, and closing changes nothing on the trunk. The question becomes askable when that design exists and says what closing does to an item's branch and to its early landings. Nothing is built that depends on the answer.
 
    **Answer:**
    > _(empty — fill in when decided)_
