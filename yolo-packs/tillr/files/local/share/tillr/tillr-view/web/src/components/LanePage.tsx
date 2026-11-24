@@ -1,5 +1,6 @@
 import { useItemQuery, useRunTranscriptQuery } from "../models/queries";
 import { useNow } from "../models/clock";
+import { classifyLane, DRAINING_LANE_NOTE, laneRowBusy } from "../models/lanes";
 import type { ChildrenRecord, ItemData, LaneRow, PipelineStep } from "../models/types";
 import { EntityLink } from "./EntityLink";
 import { TranscriptView } from "./TranscriptView";
@@ -26,15 +27,17 @@ export function ChildSessions({ runID, record }: { runID: string; record?: Child
 export function activeLaneRun(lane: LaneRow): string | null {
   return lane.nodes?.find(node => node.attempt === lane.attempt && node.state === "running")?.run_id || lane.run_id || null;
 }
-export function LaneDetail({ lane, item, now }: { lane: LaneRow; item?: ItemData; now: number }) {
+export function LaneDetail({ lane, item, now, configured }: { lane: LaneRow; item?: ItemData; now: number; configured?: string[] }) {
   const recorded = lane.nodes ?? [];
   const current = recorded.filter(node => node.attempt === lane.attempt);
   const nodes: GraphNode[] = recorded.length ? current.map(node => ({id:node.node_id,label:node.node_id,runId:node.run_id,seat:node.seat,state:node.state})) : lane.run_id ? [{ id: lane.run_id, label: `${lane.seat || "worker"} · agent · ${lane.backend}`, runId: lane.run_id, state: lane.state === "running" ? "running" : lane.outcome === "landed" ? "passed" : "failed" }] : [];
   const attempts = recorded.length ? [...new Set(recorded.map(node => node.attempt))] : (item?.runs ?? []).map((_,index) => index+1);
   const runLink = (id: string) => {const run = item?.runs.find(run => run.run_id === id); const seat = run?.seat || recorded.find(node => node.run_id === id)?.seat; return <span key={id}><EntityLink kind="run" id={id} /> {run?.lane_id ? <>· <EntityLink kind="lane" id={run.lane_id} /></> : null}{seat ? <> · seat {seat}</> : null} · {run?.state ?? "run state not read"}</span>;};
+  const group = classifyLane({ lane_id: lane.lane_id, group: lane.group, busy: laneRowBusy(lane) }, configured?.length ? new Set(configured) : null);
+  const groupNote = group === "draining" ? (lane.group_note || DRAINING_LANE_NOTE) : group === "configured" ? "configured lane" : group === "idle" ? "idle lane holding nothing" : null;
   return <>
     <h1>Lane <EntityLink kind="lane" id={lane.lane_id} /></h1>
-    <p>{lane.state} · {lane.state_since_ms === null ? "start not recorded" : elapsed(lane.state_since_ms, now)} · {lane.outcome}</p>
+    <p>{lane.state} · {lane.state_since_ms === null ? "start not recorded" : elapsed(lane.state_since_ms, now)} · {lane.outcome}{groupNote ? ` · ${groupNote}` : ""}</p>
     <p>{lane.item_id ? <EntityLink kind="item" id={lane.item_id} /> : "No item"} · {item?.item.title} · attempt {lane.attempt || "not recorded"}{item || recorded.length ? ` of ${attempts.length}` : ""} · {lane.seat || "no seat asked (policy default)"} · {lane.backend || "backend not recorded"} {lane.run_id ? <EntityLink kind="run" id={lane.run_id} /> : null}</p>
     <UsageSummary usage={lane.usage} />
     <section><h2>Pipeline</h2><PipelineRow steps={lane.pipeline ?? []} now={now} />{lane.pipeline_note ? <p>{lane.pipeline_note}</p> : !lane.pipeline ? <p>Pipeline timing was not recorded.</p> : null}</section>
@@ -46,7 +49,7 @@ export function LaneDetail({ lane, item, now }: { lane: LaneRow; item?: ItemData
     <section><h2>Lane history</h2>{lane.history ? <table><thead><tr><th>Item</th><th>Run</th><th>Lane</th><th>Seat</th><th>State</th><th>Started</th></tr></thead><tbody>{lane.history.map(run => <tr key={run.run_id}><td><EntityLink kind="item" id={run.item_id} /></td><td><EntityLink kind="run" id={run.run_id} /></td><td><EntityLink kind="lane" id={run.lane_id} /></td><td>{run.seat || "—"}</td><td>{run.state}</td><td>{run.started_at_ms ? new Date(run.started_at_ms).toISOString() : "start not recorded"}</td></tr>)}</tbody></table> : <p>Lane history not recorded by this server.</p>}</section>
   </>;
 }
-export function LanePage({ id, lanes, error, live, paused }: { id: string; lanes?: LaneRow[]; error: Error | null; live: boolean; paused: boolean }) {
+export function LanePage({ id, lanes, error, live, paused, configured }: { id: string; lanes?: LaneRow[]; error: Error | null; live: boolean; paused: boolean; configured?: string[] }) {
   const lane = lanes?.find(lane => lane.lane_id === id);
   const item = useItemQuery(lane?.item_id || null, live, paused);
   const runID = lane ? activeLaneRun(lane) : null;
@@ -55,7 +58,7 @@ export function LanePage({ id, lanes, error, live, paused }: { id: string; lanes
   return <main className="entity-page" aria-label="Lane page">
     {!lane ? <h1>Lane <EntityLink kind="lane" id={id} /></h1> : null}
     {error ? <p role="alert">Lanes refused: {error.message}</p> : !lanes ? <p>Reading lane…</p> : !lane ? <p role="alert">Lane <EntityLink kind="lane" id={id} /> is not recorded.</p> : <>
-      <LaneDetail lane={lane} item={item.data?.data} now={now} />
+      <LaneDetail lane={lane} item={item.data?.data} now={now} configured={configured} />
       {item.error ? <p role="alert">Item refused: {item.error.message}</p> : null}
       <h2>Transcript (live)</h2>{runID ? <><a href={`/run/${encodeURIComponent(runID)}?tab=transcript`}>Open full transcript</a><TranscriptView key={runID} runId={runID} transcript={transcript.data?.data} error={transcript.error} /></> : <p>No run recorded.</p>}
     </>}

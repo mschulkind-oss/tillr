@@ -17,6 +17,15 @@ type State struct {
 	Reason string `json:"lane_reason,omitempty"`
 }
 
+// HeldLane describes a lane still held by unfinished, unreleased work in the
+// same pending reservation history readPassPlans consumes.
+type HeldLane struct {
+	LaneID string
+	ItemID string
+	RunID  string
+	Reason string
+}
+
 // KeepReason is the shared worktree-dependency policy. A held repair that has
 // already handed off its pending transition is not a candidate to release.
 func KeepReason(hasCandidate, boundary bool, reason string) string {
@@ -36,15 +45,20 @@ func KeepReason(hasCandidate, boundary bool, reason string) string {
 // run (whose init registers writable schema in a read-only process).
 var sessionIDShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
+type runReq struct {
+	RunID   string `json:"run_id"`
+	Backend string `json:"backend"`
+}
+
 type candidate struct{}
 type pending struct {
 	Decision struct {
-		ItemID     string `json:"item_id"`
-		LaneID     string `json:"lane_id"`
-		RunRequest *struct {
-			RunID   string `json:"run_id"`
-			Backend string `json:"backend"`
-		} `json:"run_request"`
+		ItemID     string  `json:"item_id"`
+		LaneID     string  `json:"lane_id"`
+		RunRequest *runReq `json:"run_request"`
+		Parallel   []struct {
+			RunRequest *runReq `json:"run_request"`
+		} `json:"parallel"`
 	} `json:"decision"`
 	Candidate      *candidate `json:"candidate"`
 	LaneReleased   bool       `json:"lane_released"`
@@ -52,12 +66,59 @@ type pending struct {
 	BoundaryFailed bool       `json:"boundary_failed"`
 	done           bool
 	gated          bool
+	seq            int64
 }
 
-// Read replays the same reservation effects the planner consumes. It projects
-// only capacity and explanations; it never decides readiness or opens a writer.
-func Read(r *store.Reader) (map[string]State, error) {
-	events, err := r.Events(0)
+func (w *pending) indexRuns(byRun map[string]*pending, primaryID string) {
+	byRun[primaryID] = w
+	if w.Decision.RunRequest != nil && w.Decision.RunRequest.RunID != "" {
+		byRun[w.Decision.RunRequest.RunID] = w
+	}
+	for _, node := range w.Decision.Parallel {
+		if node.RunRequest != nil && node.RunRequest.RunID != "" {
+			byRun[node.RunRequest.RunID] = w
+		}
+	}
+}
+
+func (w *pending) findRun(runID string) *runReq {
+	if w.Decision.RunRequest != nil && w.Decision.RunRequest.RunID == runID {
+		return w.Decision.RunRequest
+	}
+	for _, node := range w.Decision.Parallel {
+		if node.RunRequest != nil && node.RunRequest.RunID == runID {
+			return node.RunRequest
+		}
+	}
+	return w.Decision.RunRequest
+}
+
+var replayKinds = []string{
+	"gate.verdict",
+	"land.landing",
+	"run.resume",
+	"drain.started",
+	"drain.node-advanced",
+	"drain.graph-changed",
+	"drain.candidate-assigned",
+	"drain.candidate",
+	"drain.retirement",
+	"drain.prepared-candidate",
+	"drain.gated",
+	"drain.judge-landed",
+	"drain.candidate-release-started",
+	"drain.candidate-lane",
+	"drain.trunk-path-dirty",
+	"drain.repair-held",
+	"drain.gate-stall",
+	"drain.red-cap",
+	"boundary.check",
+	faults.ClearedKind,
+	"drain.examined",
+}
+
+func replay(r *store.Reader) (map[string]*pending, error) {
+	events, err := r.EventsOfKind(0, replayKinds...)
 	if err != nil {
 		return nil, err
 	}
@@ -99,20 +160,22 @@ func Read(r *store.Reader) (map[string]State, error) {
 			}
 			segments[key] = true
 			w := byRun[id]
-			if e.ObjectType != "run" || w == nil || judged[id] || w.gated || w.Decision.RunRequest == nil {
+			if e.ObjectType != "run" || w == nil || judged[id] || w.gated {
 				continue
 			}
-			req := w.Decision.RunRequest
-			if segment.RunID != req.RunID || segment.ItemID != w.Decision.ItemID || segment.LaneID != w.Decision.LaneID || segment.Backend != req.Backend || !sessionIDShape.MatchString(segment.SessionID) || segment.ResumedAt == "" {
+			req := w.findRun(id)
+			if req == nil || segment.RunID != req.RunID || segment.ItemID != w.Decision.ItemID || segment.LaneID != w.Decision.LaneID || segment.Backend != req.Backend || !sessionIDShape.MatchString(segment.SessionID) || segment.ResumedAt == "" {
 				continue
 			}
-			w.done, w.Candidate, w.LaneReleased, w.LaneKeepReason = false, nil, false, ""
-		case "drain.started", "drain.node-advanced":
+			w.done, w.Candidate, w.LaneReleased, w.LaneKeepReason, w.seq = false, nil, false, "", e.Seq
+		case "drain.started", "drain.node-advanced", "drain.graph-changed":
 			var w pending
 			if err := json.Unmarshal(e.Payload, &w); err != nil {
 				return nil, err
 			}
-			works[w.Decision.ItemID], byRun[id] = &w, &w
+			w.seq = e.Seq
+			works[w.Decision.ItemID] = &w
+			w.indexRuns(byRun, id)
 		case "drain.candidate-assigned":
 			if w := byRun[id]; w != nil {
 				// The payload omits a false lane_released: the assignment ends the
@@ -122,15 +185,17 @@ func Read(r *store.Reader) (map[string]State, error) {
 				if err := json.Unmarshal(e.Payload, w); err != nil {
 					return nil, err
 				}
+				w.seq = e.Seq
+				w.indexRuns(byRun, id)
 			}
-		case "drain.candidate", "drain.retirement", "drain.prepared-candidate", "drain.gated":
+		case "drain.candidate", "drain.retirement", "drain.prepared-candidate", "drain.gated", "drain.judge-landed":
 			if w := byRun[id]; w != nil {
 				var c candidate
 				if err := json.Unmarshal(e.Payload, &c); err != nil {
 					return nil, err
 				}
 				w.Candidate = &c
-				if e.Kind == "drain.gated" {
+				if e.Kind == "drain.gated" || e.Kind == "drain.judge-landed" {
 					w.gated = true
 				}
 			}
@@ -155,6 +220,9 @@ func Read(r *store.Reader) (map[string]State, error) {
 					return nil, err
 				}
 				w.Candidate = &held.Candidate
+				if e.Kind == "drain.red-cap" {
+					w.gated = true
+				}
 			}
 		case "boundary.check":
 			var check struct {
@@ -189,6 +257,27 @@ func Read(r *store.Reader) (map[string]State, error) {
 			}
 		}
 	}
+	return works, nil
+}
+
+func keptReason(w *pending, holdReason string) string {
+	reason := w.LaneKeepReason
+	if reason == "" {
+		reason = KeepReason(w.Candidate != nil, w.BoundaryFailed, holdReason)
+		if reason == "" {
+			reason = "candidate awaits pin verification and lane release"
+		}
+	}
+	return reason
+}
+
+// Read replays the same reservation effects the planner consumes. It projects
+// only capacity and explanations; it never decides readiness or opens a writer.
+func Read(r *store.Reader) (map[string]State, error) {
+	works, err := replay(r)
+	if err != nil {
+		return nil, err
+	}
 	holds, err := faults.Read(r)
 	if err != nil {
 		return nil, err
@@ -201,13 +290,46 @@ func Read(r *store.Reader) (map[string]State, error) {
 		s := State{Status: "kept", Reason: w.LaneKeepReason}
 		if w.LaneReleased {
 			s.Status, s.Reason = "released", ""
-		} else if s.Reason == "" {
-			s.Reason = KeepReason(w.Candidate != nil, w.BoundaryFailed, holds[id].Reason)
-			if s.Reason == "" {
-				s.Reason = "candidate awaits pin verification and lane release"
-			}
+		} else {
+			s.Reason = keptReason(w, holds[id].Reason)
 		}
 		out[id] = s
+	}
+	return out, nil
+}
+
+// HeldByLane answers each lane still held by unfinished, unreleased work from
+// the same pending reservation history readPassPlans consumes.
+func HeldByLane(r *store.Reader) (map[string]HeldLane, error) {
+	works, err := replay(r)
+	if err != nil {
+		return nil, err
+	}
+	holds, err := faults.Read(r)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]HeldLane{}
+	bestSeq := map[string]int64{}
+	for id, w := range works {
+		lane := w.Decision.LaneID
+		if w.done || w.LaneReleased || lane == "" {
+			continue
+		}
+		if prev, ok := out[lane]; ok && (w.seq < bestSeq[lane] || (w.seq == bestSeq[lane] && id > prev.ItemID)) {
+			continue
+		}
+		runID := ""
+		if w.Decision.RunRequest != nil {
+			runID = w.Decision.RunRequest.RunID
+		}
+		bestSeq[lane] = w.seq
+		out[lane] = HeldLane{
+			LaneID: lane,
+			ItemID: id,
+			RunID:  runID,
+			Reason: keptReason(w, holds[id].Reason),
+		}
 	}
 	return out, nil
 }

@@ -19,6 +19,7 @@ import {
 } from "../models/board";
 import { useNow } from "../models/clock";
 import { durationText } from "../models/now";
+import { formatSnapshotLaneSummary } from "../models/lanes";
 import { FALLBACK_POLL_MS } from "../models/queries";
 import type { BoardCounts, BoardFilter, BoardView } from "../models/board";
 import type { ApiEnvelope, LaneView, PushSummary, SnapshotData } from "../models/types";
@@ -136,7 +137,7 @@ export function PushPill({ push }: { push?: PushSummary }) {
  * leaving the operator to infer an idle drain from a `working` glyph over no live run. It
  * sits beside the R37 projection fix rather than replacing the NowBand, which stays absent
  * when there is no live run (design §4.4, ledger `D-OBS12`). */
-function LanePill({ lanes }: { lanes?: LaneView[] }) {
+function LanePill({ lanes, configured }: { lanes?: LaneView[]; configured?: string[] }) {
   if (lanes === undefined) {
     return (
       <span
@@ -154,6 +155,19 @@ function LanePill({ lanes }: { lanes?: LaneView[] }) {
     return <span className="lane-pill lane-pill--unknown" title="this server records leases but not whether their runs are still running or settling">
       <span className="lane-pill__dot" />—/— lanes running · work state unrecorded
     </span>;
+  }
+  const configuredSummary = formatSnapshotLaneSummary(lanes, configured);
+  if (configuredSummary) {
+    const anyBusy = lanes.some(lane => (lane.work_state ?? "idle") !== "idle" || Boolean(lane.held_item_id) || lane.group === "draining");
+    return (
+      <span
+        className={anyBusy ? "lane-pill lane-pill--running" : "lane-pill lane-pill--idle"}
+        title={configuredSummary}
+      >
+        <span className="lane-pill__dot" />
+        {configuredSummary}
+      </span>
+    );
   }
   const running = ordinary.filter(lane => lane.work_state === "running").length;
   const expressRunning = express.filter(lane => lane.work_state === "running").length;
@@ -721,7 +735,7 @@ export function ObservatoryHeaderBar({
         <div className="head-meta__row">
           <LiveChip live={live} paused={paused} />
           <LoopBand drain={drain} />
-          <LanePill lanes={snapshot.data.lanes} />
+          <LanePill lanes={snapshot.data.lanes} configured={drain.session?.lanes} />
           <PushPill push={snapshot.data.push} />
           <PauseControl
             paused={paused}

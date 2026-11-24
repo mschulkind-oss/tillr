@@ -2680,6 +2680,10 @@ kbd {
 
 .lane-strip { font: var(--t-data); font-variant-numeric: tabular-nums; }
 .lane-strip li { overflow-wrap: anywhere; }
+.lane-strip__group { margin-top: var(--s3); }
+.lane-strip__group h3 { font: var(--t-label); color: var(--ink-2); margin: 0 0 var(--s1); }
+.lane-strip__draining { color: var(--state-cause); font-weight: 600; }
+.lane-strip__empty { color: var(--ink-3); margin: 0; }
 .lane-strip__action, .lane-strip__derived { color: var(--ink-2); margin-top: var(--s1); }
 .lane-strip__quiet { color: var(--state-cause); }
 .lane-strip small { display: block; color: var(--ink-3); }

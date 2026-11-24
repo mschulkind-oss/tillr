@@ -50,7 +50,7 @@ export function App() {
   let screen;
   if (snapshot.error) screen = <main className="home"><RefusalState code={refusalCode(snapshot.error)} message={snapshot.error.message} onRetry={refresh} /></main>;
   else if (home) screen = <Home lanes={lanes.data?.data} lanesError={lanes.error} snapshot={snapshot.data?.data} waiting={waiting.data?.data} whySource={waiting.data?.whySource} designsWaiting={waiting.data?.designsWaiting} waitingError={waiting.error} passes={passes.data?.data} passesError={passes.error} />;
-  else if (kind === "lane" && id) screen = <LanePage key={id} id={id} lanes={lanes.data?.data} error={lanes.error} live={live} paused={paused} />;
+  else if (kind === "lane" && id) screen = <LanePage key={id} id={id} lanes={lanes.data?.data} error={lanes.error} live={live} paused={paused} configured={snapshot.data?.data.drain_summary.session?.lanes} />;
   else if (adminOpen) screen = <AdminPage route={route} />;
   else if (runsOpen) screen = <RunsPage lanes={lanes.data?.data} lanesError={lanes.error} configured={snapshot.data?.data.drain_summary.session?.lanes} items={snapshot.data?.data.items} />;
   else if (designsOpen) screen = <DesignsPage data={designs.data?.data} error={designs.error} pending={designs.isPending} onRetry={() => void designs.refetch()} path={kind === "design" ? id : undefined} />;

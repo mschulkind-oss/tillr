@@ -25,3 +25,11 @@ func addHeldLaneHistory(r *store.Reader, rows []waitingRow) error {
 	}
 	return nil
 }
+
+func readHeldByLane(r *store.Reader) (map[string]lanestate.HeldLane, error) {
+	held, err := lanestate.HeldByLane(r)
+	if isMissingTable(err) {
+		return map[string]lanestate.HeldLane{}, nil
+	}
+	return held, err
+}

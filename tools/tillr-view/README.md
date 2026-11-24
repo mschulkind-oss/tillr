@@ -336,7 +336,7 @@ Inside the checkout, `just observatory` is the same command. Both recipes run
   port is Vite's UI, and the API one above it answers JSON only.
 - **What reloads in `observatory-dev`:** the UI through Vite, and the API through `air`
   (`tools/tillr-view/.air.toml`, pinned in `mise.toml`). A change to the Go that tillr-view is
-  built from (this directory and the local modules its `go.mod` replaces, so commits landing on
+  built from (this directory and the local modules its [`go.mod`](./go.mod) replaces, so commits landing on
   the checkout count) triggers one rebuild per burst of changes, and a build that succeeds
   replaces the API on the same port. A failed build prints its error in the dev terminal and
   the old API keeps answering. `just observatory` is one process and does not reload.
@@ -458,10 +458,18 @@ row shows its continuation holds the lease, and otherwise `paused`: waiting to b
 resumed, not settling.
 
 Snapshot lane rows preserve the raw lease `state` and add `work_state` using the
-same idle/running/settling projection. The header counts running work, not held
-leases. The header, lane strip, and waiting face count ordinary and
-[express lanes](../tillr-drain/README.md#express-lanes) separately; document desks
-stay visible but count in neither number. When an older server omits `work_state`,
+same idle/running/settling projection. When `drain_sessions` records the loop's
+configured lanes (`lane-1..N` and `express-1..M`), `tillr-view lanes`, `GET /api/v1/lanes`,
+and `GET /api/v1/snapshot` stamp each row's `group` (`configured`, `draining`, `desk`, or
+`idle`) alongside any unfinished, unreleased reservation (`held_item_id`, `held_run_id`,
+`held_reason`). Home's lane strip and the Runs page separate those rows into three labeled
+groups — the loop's configured lanes, draining lanes above the count still finishing
+earlier work (marked `finishing old work, gets no new work`), and idle historical lanes
+holding nothing folded behind a count — while the shared header, loop summary, and lane
+strip state configured versus busy lanes in those terms. Without a recorded session lane
+list, the header, lane strip, and waiting face fall back to counting ordinary and
+[express lanes](../tillr-drain/README.md#express-lanes) separately; active document desks
+stay visible but count in neither pool. When an older server omits `work_state`,
 the header reports an unknown running count rather than treating every lease as work.
 
 Rows carry the item, seat, backend, attempt number, run id, state-start clock,

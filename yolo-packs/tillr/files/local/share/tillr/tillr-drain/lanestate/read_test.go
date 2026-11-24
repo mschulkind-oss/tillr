@@ -102,3 +102,105 @@ func TestReadReservationHistoryNeedsNoDrainSchema(t *testing.T) {
 	appendEvent("run.resume", segment)
 	assert("", "")
 }
+
+func TestHeldByLaneMatchesUnfinishedUnreleasedReservations(t *testing.T) {
+	root := os.Getenv("YOLO_DURABLE_DIR")
+	if root == "" {
+		root = filepath.Join("..", "..", "..", ".yolo", "durable")
+	}
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(root, "lane-held-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	s, err := store.InitFixture(context.Background(), filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	appendRunEvent := func(runID, kind string, payload any) {
+		t.Helper()
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+			_, err := tx.Exec(`INSERT INTO events (ts,kind,object_type,object_id,payload) VALUES (1,?,'run',?,?)`, kind, runID, string(raw))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	appendRunEvent("run-2", "drain.started", map[string]any{
+		"decision": map[string]any{
+			"item_id":     "item-2",
+			"lane_id":     "lane-2",
+			"run_request": map[string]any{"run_id": "run-2", "backend": "pi"},
+		},
+	})
+	appendRunEvent("run-3", "drain.graph-changed", map[string]any{
+		"decision": map[string]any{
+			"item_id":     "item-3",
+			"lane_id":     "lane-3",
+			"run_request": map[string]any{"run_id": "run-3", "backend": "pi"},
+			"parallel": []map[string]any{
+				{"run_request": map[string]any{"run_id": "run-3-sib", "backend": "pi"}},
+			},
+		},
+	})
+	appendRunEvent("run-4", "drain.started", map[string]any{
+		"decision": map[string]any{
+			"item_id":     "item-4",
+			"lane_id":     "lane-4",
+			"run_request": map[string]any{"run_id": "run-4", "backend": "pi"},
+		},
+	})
+	appendRunEvent("run-4", "drain.candidate-lane", map[string]any{"candidate": map[string]any{}, "released": true})
+	appendRunEvent("run-5", "drain.started", map[string]any{
+		"decision": map[string]any{
+			"item_id":     "item-5",
+			"lane_id":     "lane-5",
+			"run_request": map[string]any{"run_id": "run-5", "backend": "pi"},
+		},
+	})
+	appendRunEvent("run-5", "drain.examined", map[string]any{})
+
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		held, err := HeldByLane(r)
+		if err != nil {
+			return err
+		}
+		if len(held) != 2 {
+			t.Fatalf("held = %+v, want 2 lanes (lane-2 and lane-3)", held)
+		}
+		if got := held["lane-2"]; got.ItemID != "item-2" || got.RunID != "run-2" {
+			t.Fatalf("lane-2 = %+v", got)
+		}
+		if got := held["lane-3"]; got.ItemID != "item-3" || got.RunID != "run-3" {
+			t.Fatalf("lane-3 = %+v", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Completing via sibling run ID in parallel marks the reservation done.
+	appendRunEvent("run-3-sib", "drain.examined", map[string]any{})
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		held, err := HeldByLane(r)
+		if err != nil {
+			return err
+		}
+		if len(held) != 1 || held["lane-2"].ItemID != "item-2" {
+			t.Fatalf("after sibling examined, held = %+v", held)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
