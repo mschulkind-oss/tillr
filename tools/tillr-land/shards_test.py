@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -44,28 +45,70 @@ class ShardLivenessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=parent) as temporary:
             root = Path(temporary)
             binary = root / 'fake-test'
-            marker = root / 'child-survived'
+            child_fifo = root / 'child-fifo'
+            os.mkfifo(child_fifo)
+            child_fd = os.open(child_fifo, os.O_RDONLY | os.O_NONBLOCK)
+            self.addCleanup(os.close, child_fd)
+            child_code = '''import sys, time
+with open(sys.argv[1], 'wb', buffering=0):
+    print('ready', flush=True)
+    while True:
+        time.sleep(60)
+'''
             binary.write_text('''#!/usr/bin/env python3
 import subprocess, sys, time
-subprocess.Popen([sys.executable, '-c', "import time,pathlib; time.sleep(3); pathlib.Path(%r).touch()"])
+# Reproduce startup slower than the shard's one-second stall deadline.
+time.sleep(1.2)
+child = subprocess.Popen([sys.executable, '-c', %r, %r], stdout=subprocess.PIPE)
+assert child.stdout.readline() == b'ready\\n'
 print('=== RUN   TestHung', flush=True)
 while True:
  print('still spinning', flush=True)
  time.sleep(0.05)
-''' % str(marker))
+''' % (child_code, str(child_fifo)))
             binary.chmod(0o755)
-            with self.assertRaises(shards.ShardError) as caught:
-                shards.run_shard('fixture', root, binary, ['TestHung'], 2,
-                                 root / 'scratch', '0', [], wall_timeout=1,
-                                 lock_dir=root / 'locks')
+
+            real_monotonic = time.monotonic
+            liveness_deadline = real_monotonic() + 60
+            now = [0.0]
+            started = [False]
+            real_loads = json.loads
+
+            def observe_event(*args, **kwargs):
+                event = real_loads(*args, **kwargs)
+                if event.get('Action') == 'run' and event.get('Test') == 'TestHung':
+                    started[0] = True
+                return event
+
+            class _ClockDriver:
+                interval = 0.02
+
+                @staticmethod
+                def maybe_publish():
+                    if real_monotonic() > liveness_deadline:
+                        self.fail('liveness guard expired waiting for TestHung to start')
+                    if started[0]:
+                        # run_shard has seen the run event and reset its deadline.
+                        now[0] = 2.0
+
+            fake_time = types.SimpleNamespace(monotonic=lambda: now[0],
+                                              time=time.time, sleep=time.sleep)
+            with patch.object(shards, 'time', fake_time), patch.object(shards.json, 'loads', observe_event):
+                with self.assertRaises(shards.ShardError) as caught:
+                    shards.run_shard('fixture', root, binary, ['TestHung'], 2,
+                                     root / 'scratch', '0', [], wall_timeout=1,
+                                     lock_dir=root / 'locks', progress=_ClockDriver())
             self.assertIn('fixture shard 2', str(caught.exception))
-            self.assertIn('TestHung', str(caught.exception))
+            self.assertIn('running: TestHung', str(caught.exception))
             self.assertIn('timed out', str(caught.exception))
+            self.assertTrue(caught.exception.timed_out)
             self.assertTrue(any(e.get('Action') == 'run' and e.get('Test') == 'TestHung'
                                 for e in caught.exception.events))
-            # The child would create this marker if it survived the process-group kill.
-            time.sleep(3.2)
-            self.assertFalse(marker.exists())
+            # The ready child holds the FIFO open indefinitely. EOF proves the
+            # process-group kill closed its descriptor and stopped it.
+            readable, _, _ = select.select([child_fd], [], [], 3.2)
+            self.assertTrue(readable, 'child still holds the FIFO open')
+            self.assertEqual(os.read(child_fd, 1), b'')
 
     def test_progressing_shard_can_outlive_the_stall_deadline(self):
         parent = os.environ.get('TMPDIR') or os.environ['YOLO_DURABLE_DIR']
