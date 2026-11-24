@@ -2,10 +2,10 @@
 title: "A trunk fixer is gated on what its repair reaches and on the checks it was filed to repair"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
+updated: 2026-11-24
 tags: [tillr, gate, landing, drain, forks, design]
-summary: "The trunk fixer's gate stops being the untiered gate over every landing since the last green commit. It becomes the gate any candidate gets, plus the checks the fixer names, run on the fixer's tree. A fork check that is red only because an upstream published a release is reported as one rebase request per fork and release and refuses nobody whose change does not touch that fork; a fork that follows a branch head gets the same acquittal and no request. One question is open for the owner: whether he is told, beyond the queue, when an upstream moves."
-next: "The separate drift probe is not built and has no design of its own. No owner-facing row or hold is built for drift."
+summary: "A trunk fixer's gate is the gate any candidate gets, plus the checks the fixer names, run on the fixer's tree; it reads no range since the last green commit. A fork check that is red only because an upstream published a release is reported as one rebase request per fork and release and refuses nobody whose change does not touch that fork; a fork that follows a branch head, or still commits a series directory, gets the same acquittal and no request."
+next: "The owner reviews D-FG1 to D-FG5. The separate drift probe is not built and has no design of its own."
 depends-on:
   - landing-principles.md
   - ../reference/gate.md
@@ -15,7 +15,7 @@ vantage:
 
 # A trunk fixer is gated on what its repair reaches and on the checks it was filed to repair
 
-**Status:** The fixer's gate and upstream drift settlement are built (`D-FG1` through `D-FG4`). No owner-facing notification is built.
+**Status:** The fixer's gate and upstream drift settlement are built (`D-FG1` to `D-FG4`; `settleFixerGate` in `tools/tillr-drain/drain/fixer_gate.go`, `ForkDriftCheck` in `tools/tillr-drain/remotesync/fork_drift.go`). The drift probe is not built: `rg -n 'drift.probe|driftProbe|DriftProbe' tools -g '*.go'` returns nothing.
 
 > **In short.** A gate over every landing since the last green commit would make the seat that
 > restores a red trunk the only seat an outside release can stop. Its
@@ -34,8 +34,8 @@ is the only judge of them. Upstream drift is noticed later until the drift probe
 
 **Start at** [the fixer's gate](#the-fixers-gate).
 
-**Needs your ruling:** nothing. The owner ruled [OQ-FG1](#OQ-FG1) on 2026-11-21. `D-FG1` to `D-FG5` in the
-[Decision Ledger](#decision-ledger) are the designer's and his to overturn.
+**Needs your ruling:** None. `D-FG1` to `D-FG5` in the [Decision Ledger](#decision-ledger) are the
+designer's, and the owner may overturn them.
 
 **Reads with:** [the gate reference](../reference/gate.md) (the gate
 whose fixer path this design changes) and [landing principles](landing-principles.md).
@@ -379,14 +379,8 @@ This is the designer's decision, part of `D-FG3`, and the owner may overturn it.
 For a fork whose list entry names a series directory, the check never reads the pin file, so a
 change to the pin file cannot make `patch-branch-inv2` pass.
 
-The rule for a fork whose entry in the repository's fork list does not name `patch/<name>`:
-
-| The check on the base | The candidate's diff and the fork's own paths | Outcome |
-| :--- | :--- | :--- |
-| Passes | Any | The candidate's own failure. Ordinary refusal |
-| Red, same answer | Do not intersect | Drift. The candidate lands with the failure recorded as inherited. **No item is filed** |
-| Red, same answer | Intersect | Ordinary refusal, returned to the candidate's worker. No item is filed and nothing is waited on |
-| Could not judge | Any | Not drift and not a verdict, as for any fork |
+A fork whose entry in the repository's fork list does not name `patch/<name>` follows the
+same four rows as [a head follower](#a-fork-that-follows-a-branch-head):
 
 - **The inherited record** names the check, the fork and the release, as for any release
   follower.
@@ -475,7 +469,7 @@ a separate run for the repository part (`checkDeliveryOrder` and `settlePartialD
    release.
 3. **The request closes when the repository part lands.**
 
-**Operator's decision, 2026-11-21; the owner may overturn it.** If the delivered head already
+**When the delivered head already contains the release** (the owner may overturn this). If the delivered head already
 contains the named release, the prescribed rebase leaves that head unchanged. In that case the
 request has no fork part: it goes directly to the repository part and updates the pin from the
 existing delivery. Only pin-backed forks get a generated request; a committed series directory
@@ -512,10 +506,10 @@ candidate that reaches `patch-branch-inv2` after that landing sees it pass.
 
 Rejected, as the designer's decision:
 
-- **The operator rebases.** The request that opened this part excludes it, citing
-  [rule 7](unattended-drain.md#67-rule-7-a-hold-names-the-operator-only-for-a-decision-the-rulebook-reserves)
-  as an owner ruling of 2026-11-21: a hold names the operator only for a decision the rulebook
-  reserves, and a rebase onto a release reserves none.
+- **The operator rebases.** Excluded by
+  [rule 7](unattended-drain.md#67-rule-7-a-hold-names-the-operator-only-for-a-decision-the-rulebook-reserves):
+  a hold names the operator only for a decision the rulebook reserves, and a rebase onto a
+  release reserves none.
 - **The lander rebases.** A rebase can conflict, and settling a conflict is a worker's
   judgment that a gate must then see. The lander delivers what was gated and decides nothing.
 - **Allowing the fork driver's rebase in a drain run.** That command also exports, which moves the
@@ -587,10 +581,9 @@ For [a fork that follows a branch head](#a-fork-that-follows-a-branch-head) and 
 [a fork that still commits a series directory](#a-fork-that-still-commits-a-series-directory)
 no request exists. The inherited record on the candidate and the loop's one line are the notice.
 
-The owner is told by the queue only. He ruled this on 2026-11-21 ([OQ-FG1](#OQ-FG1)): the rebase
-request appears in the queue and on the waiting list like any item, and he is asked something only
-if the rebase hits a conflict an agent cannot settle. No owner-facing row and no hold addressed to
-him is built for drift.
+The owner is told by the queue only ([OQ-FG1](#OQ-FG1)): the rebase request appears in the queue
+and on the waiting list like any item, and the owner is asked something only if the rebase hits a
+conflict an agent cannot settle. Drift has no owner-facing row and no hold addressed to the owner.
 
 ## What this does not change
 
@@ -607,7 +600,6 @@ him is built for drift.
 - The ordinary gate, for any candidate.
 - The drift probe's design. It has no design of its own yet and is still the right discoverer;
   until it is built, drift is seen only when a change touches a series or a pack declaration.
-- `item-gate-pinned-fork-inputs`, which changes how fork checks read their pinned inputs.
 - State that already exists. An open fixer is gated by this rule the next time it is gated.
   No record is rewritten.
 
@@ -628,22 +620,22 @@ him is built for drift.
 | Drift goes unseen while no change touches a fork | Stated above; the probe closes it |
 | A named check's selector is missing from the fixer's record | The gate answers "could not judge" naming the check; it never passes by omission |
 | A head follower drifts and no queue item says so | A head follower's drift is on the verdict of every candidate that inherits it and in one loop line; the rebase is the operator's step. A lander route for it is separate design |
-| A candidate reaching a check whose remote stays unavailable is gated again every pass | `D-FG4` keeps this. `item-gate-pinned-fork-inputs` changes how those checks read their pinned inputs |
+| A candidate reaching a check whose remote stays unavailable is gated again every pass | `D-FG4` keeps this: the loop is the mover, and the hold names the check and what it lacked |
 | A fixer's named list grows while it works, because unnamed reds its diff reaches attach to it | Only a check whose read paths the fixer's own diff changes can attach this way, and only when no other fixer can be waited on. The existing limits on returned refusals bound the loop |
 
 ## Open Questions
 
-None. The owner ruled the one question on 2026-11-21; it is a row in the [Decision Ledger](#decision-ledger).
+None.
 
 ## Decision Ledger
 
-The `D-FG` rows are the designer's decisions of 2026-11-21; the owner may overturn each by comment. The [OQ-FG1](#OQ-FG1) row is his ruling.
+The `D-FG` rows are the designer's decisions; the owner may overturn each. The [OQ-FG1](#OQ-FG1) row is the owner's ruling.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | <a id="OQ-FG1"></a>[OQ-FG1](#OQ-FG1) | Owner ruling: when an upstream release breaks a patch series the owner is told by the queue only. No owner-facing row and no hold. | 2026-11-21 | [Who is told when an upstream moves](#who-is-told-when-an-upstream-moves) | — |
-| `D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. No range since the last green is read. Structural fix. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | Built |
+| `D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. No range since the last green is read. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | Built |
 | `D-FG2` | A fixer stays excluded from acquittal only for the checks it names; for any other check it is judged as any candidate is, except that it is never held behind itself or behind a fixer that waits on it: such a check is attached to the fixer and the refusal returns to its worker. No second fixer is filed for the same commit. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate), [A fixer never waits on itself](#a-fixer-never-waits-on-itself) | Built |
-| `D-FG3` | A `patch-branch-inv2` check red on a candidate and on its base with the same refusal against the same target ref, on a candidate whose diff does not include that fork's own paths, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. Only `patch-branch-inv2` can be drift, selected by kind name; the fork is the check's `--fork` argument and the release is the ref the fork driver's target command prints. The request is filed only for a fork whose target kind is `release` and which is delivered as a delivery branch. It is a mixed item: its worker rebases the fork in its lane checkout with `GIT rebase --onto <release> <old base> main`, the fork part is delivered first, the repository part then rewrites the fork's pin file, the lander fetches each delivered fork commit into the gate's copy of the fork, and the request closes when the repository part lands. The operator takes no step. For a fork that follows a branch head, and for a fork that still commits a series directory, the candidate still lands with the failure inherited, no item is filed, one loop line is printed, and a candidate that touches that fork is refused. Structural fix. (Designer's decision, carrying out the drift-probe decision, itself a designer's decision.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal), [Which checks can be drift](#which-checks-can-be-drift), [A fork that follows a branch head](#a-fork-that-follows-a-branch-head), [A fork that still commits a series directory](#a-fork-that-still-commits-a-series-directory), [Who rebases, and how the recorded commit follows](#who-rebases-and-how-the-recorded-commit-follows) | Built |
+| `D-FG3` | A `patch-branch-inv2` check red on a candidate and on its base with the same refusal against the same target ref, on a candidate whose diff does not include that fork's own paths, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. Only `patch-branch-inv2` can be drift, selected by kind name; the fork is the check's `--fork` argument and the release is the ref the fork driver's target command prints. The request is filed only for a fork whose target kind is `release` and which is delivered as a delivery branch. It is a mixed item: its worker rebases the fork in its lane checkout with `git rebase --onto <release> <old base> main`, the fork part is delivered first, the repository part then rewrites the fork's pin file, the lander fetches each delivered fork commit into the gate's copy of the fork, and the request closes when the repository part lands. The operator takes no step. For a fork that follows a branch head, and for a fork that still commits a series directory, the candidate still lands with the failure inherited, no item is filed, one loop line is printed, and a candidate that touches that fork is refused. (Designer's decision, carrying out the drift-probe decision, itself a designer's decision.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal), [Which checks can be drift](#which-checks-can-be-drift), [A fork that follows a branch head](#a-fork-that-follows-a-branch-head), [A fork that still commits a series directory](#a-fork-that-still-commits-a-series-directory), [Who rebases, and how the recorded commit follows](#who-rebases-and-how-the-recorded-commit-follows) | Built |
 | `D-FG4` | A fork check that could not judge is neither drift nor a verdict. It holds only a candidate whose diff reaches it or a fixer that names it, by the holds the tree already has: an ordinary candidate is held as `gate-no-verdict` and gated again, or as a gate fault when the gate states its own error; a fixer's named check is a gate fault. No gate answer files a tooling-defect item. "Could not judge" on the base is never classified as drift. (Designer's decision.) | 2026-11-21 | [The checks that could not judge](#the-checks-that-could-not-judge) | Built |
-| `D-FG5` | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line; for a fork that follows a branch head, by the inherited record and one loop line. Nothing owner-facing is built ([OQ-FG1](#OQ-FG1)). (Designer's decision.) | 2026-11-21 | [Who is told](#who-is-told-when-an-upstream-moves) | — |
+| `D-FG5` | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line; for a fork that follows a branch head, by the inherited record and one loop line. Nothing is owner-facing ([OQ-FG1](#OQ-FG1)). (Designer's decision.) | 2026-11-21 | [Who is told](#who-is-told-when-an-upstream-moves) | — |
