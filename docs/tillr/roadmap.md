@@ -13,7 +13,6 @@ This page holds unfinished work and its order. Each linked design owns its own s
 and questions; work with no design has its only home here, with its outcome, reason and
 dependencies written under the entry. What is built is described by the references under
 [`docs/reference/`](../reference/) and by each module's README, and what changed is in Git history.
-The [repository roadmap](../roadmap.md) points here.
 
 Three words recur. A **seat** is a role in an item's workflow (design, build, review), which the
 backend policy maps to a model. The **drain** is the loop that plans, runs, gates and lands queued

@@ -1,13 +1,12 @@
 # Vantage planning configuration.
 #
 # Vantage discovers every `roadmap.md` on its own, and no roadmap path is pinned: this
-# repository keeps two, `docs/roadmap.md` and
-# `docs/tillr/roadmap.md`, and pinning either would turn discovery off for the other.
+# repository keeps one, `docs/tillr/roadmap.md`.
 #
 # One tree is excluded from planning: the tillr pack's delivered copies of the tillr
 # design documents (`tools/pack-docs.py`, `just pack-docs`). They are a dated snapshot
 # for agents in other workspaces, not planning documents. Without the exclusion the copy
-# of `docs/tillr/roadmap.md` would be discovered as a third roadmap, and every open
+# of `docs/tillr/roadmap.md` would be discovered as a second roadmap, and every open
 # question in a copy would be indexed a second time beside its source.
 [planning]
 exclude = ["yolo-packs/tillr/files/local/share/tillr/docs/**"]

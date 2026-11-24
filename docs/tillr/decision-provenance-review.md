@@ -3,7 +3,7 @@ title: "Who made the decisions recorded in the tillr designs, and which of them 
 status: in-review
 stage: DESIGN
 tags: [tillr, review, provenance, decisions, design]
-summary: "The owner's rulings on decisions that agents made in the tillr designs without the owner's words, the ten questions of that kind still open, the rule for how such decisions are recorded from here on (OQ-PR21 and OQ-PR22), and the lists of agent-made decisions that need no ruling."
+summary: "The owner's rulings on decisions that agents made in the tillr designs without the owner's words, the ten questions of that kind still open, and the rule for how such decisions are recorded from here on (OQ-PR21 and OQ-PR22)."
 next: "The owner answers the ten open questions (OQ-PR6 to OQ-PR11, OQ-PR15, OQ-PR16, OQ-PR18 and OQ-PR19); then build the gate check and the loop rule of Section 6, which no check enforces yet."
 depends-on:
   - ../design/tillr-queue-mirrors-designs.md#OQ-QM1
@@ -25,7 +25,7 @@ in [Section 6](#6-how-this-stops-happening) is not enforced by any check:
 or what the owner sees is the owner's to make. Several were made by agents and built on.
 
 **The shape.** [Ten open questions](#2-questions-for-the-owner), hardest to undo first;
-[the rule from here on](#6-how-this-stops-happening); then lists that need no ruling.
+then [the rule from here on](#6-how-this-stops-happening).
 
 **Cost.** Reading time. An answer that keeps today's behavior costs nothing more; one that
 changes it becomes work.
@@ -45,37 +45,16 @@ comment in design documents; this page does not ask that again.
 
 ## 1. What the review found
 
-### 1.2. What was delegated, and what "principle" turned out to mean
+An audit of 380 ledger rows across the tillr designs classed 70 as the owner's, 7 as delegated
+by the owner for that row, 293 as an agent's and 10 as naming nobody; 64 of the last two groups
+are of high significance. The classing rests on each row's own text: a row is the owner's only
+when it says the owner ruled, and "an agent's" means no words of the owner's are recorded, not
+that the owner would decide otherwise. The counts are one reading and are not kept current; each
+design's own ledger says who made each of its decisions.
 
-The owner delegated a method: where a principle the owner had already recorded answers a question,
-write the answer down. The owner did not see or rule any individual answer. Applied to 31 questions,
-the method closed two on a dated ruling of the owner's. In most of the rest the "principle" was the
-designer's own earlier leaning, a design another agent wrote, or the fact that the code
-already did it. Several of those answers were ones the owner did not want and has overturned.
-The same pattern appears in design drafts whose ledgers were never ruled and were built from,
-in documents titled "ruling" that an agent wrote, and in about 95 single answers a design
-agent wrote into the roadmap when a build run was blocked.
-
-### 1.3. The counts, and how far to trust them
-
-| Audit set | Rows | The owner's | Delegated by the owner for that row | An agent's | Nobody named |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| Ten designs | 126 | 21 | 2 | 103 | 0 |
-| Thirteen designs | 144 | 37 | 3 | 95 | 9 |
-| Sixteen designs | 110 | 12 | 2 | 95 | 1 |
-| **Total** | **380** | **70** | **7** | **293** | **10** |
-
-Of the 303 rows in the last two columns, 64 are rated high significance. Read the counts with
-four cautions:
-
-- **The classing is strict and rests on text.** Every commit carries the owner's git
-  identity, so authorship says nothing. A row is the owner's only when its own text says the owner
-  ruled.
-- **"An agent's" means none of the owner's words are recorded.** It does not mean the owner would have decided
-  otherwise; several questions below recommend keeping the decision.
-- **Some rows counted as the owner's are an agent's paraphrase.** Few quote the owner.
-- **The counts are a snapshot.** The designs have changed since the audits, and the rows were
-  not recounted.
+The pattern behind the counts: where the owner delegated a method ("apply a principle I have
+already recorded"), the principle applied was often the designer's own earlier leaning, a design
+another agent wrote, or the fact that the code already did it.
 
 ### 1.4. Words used here
 
@@ -304,89 +283,6 @@ every tillr program ([OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2)).
     **Answer:**
 
     > _(empty — fill in when decided)_
-
-## 4. Not yet built, high significance
-
-High-significance decisions an agent made in designs that are not built. The owner can weigh
-each when the owner reads its design.
-
-| Id | Decision | Design |
-| :--- | :--- | :--- |
-| `D-GP5` | All routing is one function that returns what to add to an item's graph and what it waits on | [Graph is the path](../design/tillr-graph-is-the-path.md) |
-| `D-GP6` | Seats are declared in settings; no ladder of models; no model named on a step | same |
-| `D-GP7` | The gate, the judge and the landing become steps in each item's graph | same |
-| `D-GP9` | Design answers and triage may change an item's pass conditions and allowed paths; rewrites and work may not | same |
-| `D-GP11` | A repeated failure is judged against the whole chain, with no count | same |
-| `D-GP13` | A planning agent owns the queue's order and the links between items | same |
-| `D-GP14` | Only a finished proof marks the trunk as failing | same |
-| `D-EL1` | A design change lands on the trunk ahead of its item, through the ordinary gate | [Early design landing](../design/tillr-early-design-landing.md) |
-| `D-EL6` | The owner's answer reaches the waiting work as a fact once it is committed on the trunk | same |
-| `D-VO1` | An item exists without any marker in a document | [Vocabulary](../design/tillr-vocabulary.md) |
-| `D-VO3` | "Run" means one step's execution; the whole try is the "path" | same |
-| `D-VO8` | "Stage" and "step" are fixed words; five others are never used bare | same |
-| `D-LC1` | A worker ends by calling one tool, `land`, with a summary and nothing else | [Landing call](../design/tillr-landing-call.md) |
-| `D-LC5` | That call stays open until the full checks have passed on the change; a revert is its answer | same |
-| `D-TS2` | One writer process holds the store behind a lock; every program writes through it | [Storage](../design/tillr-storage.md) |
-| `D-TS8` | Storage is built in stages, ahead of its place in the graph design's order | same |
-| `D1` | Four rungs decide a conflict: implementer, plan owner, designer, the owner | [Escalation ladder](../design/escalation-ladder.md) |
-| `D2` | The plan owner is a cheap seat distinct from the designer | same |
-| `D8` | A list of things a worker may never edit to make its change fit | same |
-| [OQ-6](../design/escalation-ladder.md#open-questions) | The designer's decisions are reviewed in batches and the owner's silence ratifies them | same |
-| `D-GM6` | Two keys guard the monitor's workflow, one of them the owner's approval | [Goal monitor](../design/tillr-goal-monitor.md) (on the roadmap's Icebox) |
-| `D-GM8` | The monitor cannot repair itself; the owner reading the queue is its outside authority | same |
-
-The escalation ladder's last row is the practice [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22)
-reject; it stays open in that design until the owner rules it there.
-
-## 5. Medium and low significance
-
-### 5.1. Medium, live or partly live
-
-All are an agent's. Rows covered by a question in [Section 2](#2-questions-for-the-owner) or
-[the ledger](#decision-ledger) are left out.
-
-| Id | Design | Decision |
-| :--- | :--- | :--- |
-| `D-GP1`, `D-GP10`, `D-GP12` | [Graph is the path](../design/tillr-graph-is-the-path.md) | One graph per item for life; an objection is the one ending that changes who acts; a visible sub-agent is a step inside its parent |
-| `D-JL3`, `D-JL4`, `D-JL5` | [Judge and lifecycle](../design/tillr-judge-and-lifecycle.md) | No stored "in progress" state; moves between states are checked; a failed gate writes no verdict |
-| `D-JL11` | same | A worker ends with a commit or one of six named obstacles, each with a route (the principle is the owner's; the six and their routes are an agent's) |
-| `D-GR9`, `D-GR10`, `D-GR11` | [Gate reference](../reference/gate.md) | A check that cannot run on this machine is "unavailable"; a check is one declaration file; a budget test |
-| `D-PT1`, `D-PT2`, `D-PT4` | [Planning and model tiering](../design/tillr-planning-node-model-tiering.md) | Each kind of work is a seat and the list is open; a plan lists its pieces; the planner is the first step of a planned build |
-| `D-IG2`, `D-IG3`, `D-IG7` | [Item graphs](../reference/tillr-item-graphs.md) | The outside sees one item; a step is fixed once recorded; a step writes only inside the item's allowed paths |
-| `D-MM1`, `D-MM2` | [Muse backend](../reference/tillr-muse-backend.md) | A backend's contract is where it may write, held by a sandbox and a snapshot; a worktree run commits its own work |
-| `D-CB1`, `D-CB5` | [Claude backend](../reference/tillr-claude-backend.md) | The backend program is started with only tillr's own tool servers; its cost is recorded as its own estimate |
-| `D-IP5` | [Idea pipeline](../design/tillr-idea-pipeline.md) | Scouting and designing one idea are steps of one item; pending answers travel by `tillr item answer` |
-| `D-TC4` | [Convergence](../design/tillr-convergence.md) | One command says why each item is not moving |
-| [OQ-CR1](../design/criterion-repair.md#decision-ledger) | [Criterion repair](../design/criterion-repair.md) | A repair replaces the whole pass condition with a new record and never edits it |
-| `D3`, `D5`, `D6`, `D10` | [Escalation ladder](../design/escalation-ladder.md) | A conflict is a record; answers are typed; a worker's unfinished change is kept; the implementer records and routes |
-| `D-GM11` | [Goal monitor](../design/tillr-goal-monitor.md) | Work that is not yet due is a wait, not a stop |
-| No row | Loop behavior | The loop creates git refs under `refs/tillr/` for runs, landings, the passing commit, trunk history and recovery |
-| No row | Loop behavior | The wording of the commits the loop writes |
-
-About 95 further answers by a design agent to blocked build runs sit in roadmap entries. The
-audit graded almost all of them as engineering detail; they were not re-read one by one.
-
-### 5.2. Medium, not built
-
-| Id | Design | Decision |
-| :--- | :--- | :--- |
-| `D-GP8`, `D-GP15` | [Graph is the path](../design/tillr-graph-is-the-path.md) | Every step starts on the latest trunk; migration records each act before routing on it |
-| [OQ-GR3](../reference/gate.md#why-its-this-way) | [Gate reference](../reference/gate.md) | A change to the gate's own runner lands only after the runner's tests pass |
-| `D-GM1`, `D-GM3`, `D-GM4`, `D-GM7` | [Goal monitor](../design/tillr-goal-monitor.md) | The monitor is a recurring item with a fixed workflow, a schedule, and a fence against changing itself |
-| `D-EL3`, `D-EL5`, `D-EL7` | [Early design landing](../design/tillr-early-design-landing.md) | An early landing holds whole documents only, passes the same gate without a judge, and does not make the worker wait |
-| `D-IP1`, `D-IP2`, `D-IP6` | [Idea pipeline](../design/tillr-idea-pipeline.md) | Items gain a kind; links gain a kind; child items are applied only by the loop after a landing |
-| `D-VO2`, `D-VO6` | [Vocabulary](../design/tillr-vocabulary.md) | What acts on another item's work is a step, not an item; the limit on running agents is its own setting |
-| `D-LC3`, `D-LC4` | [Landing call](../design/tillr-landing-call.md) | Four possible answers to a landing call; a second tool for obstacles |
-| `D-AQ1`, `D-AQ2`, `D-AQ5`, `D-AQ6`, `D-AQ7` | [AutoQA](../design/tillr-autoqa.md) (on the roadmap's Icebox) | A separate program on its own store; four checks before a bug is filed; campaigns bounded by default |
-| `D-TS1`, `D-TS3`, `D-TS7`, `D-TS9` | [Storage](../design/tillr-storage.md) | A narrow write interface; no flush on the write path; after a crash the store is cut back to its first gap; database servers are rejected |
-| `D-TC5` | [Convergence](../design/tillr-convergence.md) | Derived copies are regenerated between commit and gate |
-| `D4`, `D9`, `D11` | [Escalation ladder](../design/escalation-ladder.md) | Routing as an overlay on states; a policy ledger under `docs/policy/`; the designer recommends and the owner ratifies |
-| `D-1`, `D-5`, `D-7`, `D-10` | [Scheduled tasks](../design/scheduled-tasks.md) | Due times and repeat intervals with no scheduler; only the owner and the lead agent may set them |
-
-### 5.3. Low
-
-About 100 further rows are rated low: engineering detail with nothing the owner sees, an
-agent's in every case.
 
 ## 6. How this stops happening
 

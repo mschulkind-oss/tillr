@@ -393,8 +393,8 @@ the events table holds no blocked or hold row for a not-due item, because that r
 ## 11. Decision ledger
 
 Every row below is a designer decision; none carries a quoted ruling from the owner, and the owner
-may overturn any of them ([decision provenance review](../tillr/decision-provenance-review.md)
-[§5.2](../tillr/decision-provenance-review.md#52-medium-not-built)). None is built.
+may overturn any of them ([decision provenance review](../tillr/decision-provenance-review.md#6-how-this-stops-happening)).
+None is built.
 
 | ID | Decision | Reversal condition |
 | :--- | :--- | :--- |

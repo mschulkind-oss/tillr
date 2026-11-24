@@ -174,7 +174,7 @@ A live-proposal design document passes through five layers:
 Two kinds of defect get past layers 1 to 3:
 
 - **Stale or false claims about what is built,** such as a status that says nothing is built when the code exists, or a `Built` column that lags the tree.
-- **Collisions with settled rulings in sibling Decision Ledgers, and designer choices presented as settled.** [The decision-provenance review](../tillr/decision-provenance-review.md#13-the-counts-and-how-far-to-trust-them) counts them.
+- **Collisions with settled rulings in sibling Decision Ledgers, and designer choices presented as settled.** [The decision-provenance review](../tillr/decision-provenance-review.md#1-what-the-review-found) counts them.
 
 ### 6.3 Why the audit checks facts rather than design choices
 
