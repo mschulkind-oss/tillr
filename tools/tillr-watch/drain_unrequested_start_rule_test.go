@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,7 +17,22 @@ import (
 )
 
 func TestDrainUnrequestedStartRule(t *testing.T) {
-	const id = "drain-unrequested-start"
+	const (
+		id       = "drain-unrequested-start"
+		rulePath = "../../config/tillr/watch/drain-unrequested-start.toml"
+	)
+	rawRule, err := os.ReadFile(rulePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileRules, err := watch.LoadRuleDocument(rulePath, rawRule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fileRules) != 1 || fileRules[0].ID != id {
+		t.Fatalf("loaded rules from %s = %+v, want single %s rule", rulePath, fileRules, id)
+	}
+
 	rules, err := watch.LoadRules("../../config/tillr/watch")
 	if err != nil {
 		t.Fatal(err)
@@ -29,10 +45,30 @@ func TestDrainUnrequestedStartRule(t *testing.T) {
 	if reason := rule.UnevaluatedReason(); reason != "" {
 		t.Fatalf("%s unevaluated: %s", id, reason)
 	}
-	for _, text := range append([]string{rule.Guidance.Summary}, append(slices.Clone(rule.Guidance.Check), rule.Guidance.Do...)...) {
-		if strings.Contains(strings.ToLower(text), "expected") {
-			t.Fatalf("%s guidance still calls benign starts expected: %q", id, text)
+	for _, loaded := range []watch.Rule{fileRules[0], rule} {
+		for _, text := range append([]string{loaded.Guidance.Summary}, append(slices.Clone(loaded.Guidance.Check), loaded.Guidance.Do...)...) {
+			if strings.Contains(strings.ToLower(text), "expected") {
+				t.Fatalf("%s guidance still calls benign starts expected: %q", id, text)
+			}
 		}
+	}
+	if !strings.Contains(rule.Guidance.Summary, "ended without a recorded stop or restart request") {
+		t.Fatalf("%s summary does not state the unrecorded stop/restart fault: %q", id, rule.Guidance.Summary)
+	}
+	joinedCheck := strings.Join(rule.Guidance.Check, " ")
+	for _, want := range []string{
+		"keeper: loop exited",
+		"deliberate first launch",
+		".tillr/loop/drain-",
+		"loop: stopped by the operator",
+	} {
+		if !strings.Contains(joinedCheck, want) {
+			t.Fatalf("%s guidance.check missing %q: %q", id, want, joinedCheck)
+		}
+	}
+	joinedDo := strings.Join(rule.Guidance.Do, " ")
+	if !strings.Contains(joinedDo, "ended without a recorded stop or restart request") {
+		t.Fatalf("%s guidance.do missing fault confirmation directive: %q", id, joinedDo)
 	}
 	var lintOut, lintErr bytes.Buffer
 	if code := run(t.Context(), []string{"lint", "../.."}, &lintOut, &lintErr); code != 0 {
