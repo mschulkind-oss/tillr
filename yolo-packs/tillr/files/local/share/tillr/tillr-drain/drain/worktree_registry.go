@@ -16,6 +16,9 @@ import (
 // registry and moves refs, but does not create or remove registrations. Take land.lock
 // first so a writer queued behind a landing never holds up a boundary listing.
 func withWorktreeRegistryLock(ctx context.Context, repo string, fn func() error) error {
+	if err := authorizeWorktreeRoot(repo); err != nil {
+		return err
+	}
 	return withRegistryLocks(ctx, repo, true, fn)
 }
 
