@@ -755,6 +755,7 @@ type Loop struct {
 	questions        QuestionSource
 	ownerAnswerMu    sync.Mutex
 	ownerAnswerBlobs map[string]string
+	testSlots        TestSlotsObserver
 }
 
 func (l *Loop) isActive(runID string) bool {

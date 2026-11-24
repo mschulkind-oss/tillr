@@ -544,6 +544,7 @@ func newRefusalLoopFixtureWithLanes(t *testing.T, laneCount int, ids ...string) 
 	config := filepath.Join(baseDir, "gitconfig")
 	writeForkFile(t, config, "[user]\n name = tillr\n email = tillr@example.invalid\n")
 	t.Setenv("GIT_CONFIG_GLOBAL", config)
+	t.Setenv("GO_TEST_SHARDS_LOCK_DIR", filepath.Join(baseDir, "test-slots"))
 	tpl := getRefusalTemplate(t)
 	root := filepath.Join(baseDir, "repo")
 	if err := copyTemplateDir(filepath.Join(tpl, "repo"), root); err != nil {
