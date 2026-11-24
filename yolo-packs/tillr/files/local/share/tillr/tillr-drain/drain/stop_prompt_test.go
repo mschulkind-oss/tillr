@@ -148,9 +148,12 @@ func TestStopDuringGateRunEndsPromptlyAndNextLoopResumesCandidate(t *testing.T) 
 
 	requestSessionStop(t, f.storePath, 1)
 	clock.advance(PassInterval)
-	clock.ticks <- clock.Now()
-
-	out := <-done
+	var out runOutcome
+	select {
+	case clock.ticks <- clock.Now():
+		out = <-done
+	case out = <-done:
+	}
 	if out.err != nil || out.result.Stop != StopOperatorStop || out.result.Landed != 0 {
 		t.Fatalf("stopped loop answered %+v / %v, want operator-stop with 0 landed", out.result, out.err)
 	}
