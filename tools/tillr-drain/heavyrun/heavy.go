@@ -55,7 +55,10 @@ type HeavyRunner struct {
 	Now func() time.Time
 	// BeforeTip takes ownership at the next tip boundary for a pending build replacement.
 	BeforeTip func(context.Context) error
-	ReuseRed  bool
+	// BeforeReplay checks whether a pending build replacement should take over before
+	// starting an uncached first-red search replay.
+	BeforeReplay func(context.Context) error
+	ReuseRed     bool
 	// WithWorktreeRegistryLock coordinates git worktree registry mutations with concurrent landers.
 	WithWorktreeRegistryLock func(ctx context.Context, repo string, fn func() error) error
 	// UnlockRegisteredWorktree unlocks a stale locked worktree registration before removal.
@@ -302,6 +305,11 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 			stopRunning()
 			storeProgress.Finish("cancelled")
 			return out, ctx.Err()
+		}
+		if errors.Is(e, ErrRestartPending) {
+			stopRunning()
+			storeProgress.Finish(heavyEndedOutcome(ctx, run.Result, e))
+			return out, e
 		}
 		if e == nil && run.Result == "green" {
 			old := base
@@ -662,7 +670,7 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 	} else {
 		red, fault, reason, err := r.FindFirstRed(ctx, run, *check)
 		switch {
-		case err != nil && ctx.Err() == nil && !CleanupLost(err):
+		case err != nil && ctx.Err() == nil && !CleanupLost(err) && !errors.Is(err, ErrRestartPending):
 			r.progressf("loop: heavy %s culprit search gave no verdict, because %v; the fixer is filed against the tip\n", check.CheckID, err)
 		case err == nil && fault:
 			r.progressf("loop: heavy %s culprit search names no commit (%s); the fixer is filed against the tip\n", check.CheckID, reason)
@@ -670,8 +678,8 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 			r.progressf("loop: heavy %s first red commit %s\n", check.CheckID, ShortSHA(red))
 		}
 		if err != nil {
-			// A stop or a lost cleanup is the run's own fault, not attribution's.
-			if ctx.Err() != nil || CleanupLost(err) {
+			// A stop, a lost cleanup, or a pending restart is the run's own boundary, not attribution's.
+			if ctx.Err() != nil || CleanupLost(err) || errors.Is(err, ErrRestartPending) {
 				return "", false, err
 			}
 			check.Detail = JoinDetail(check.Detail, "attribution failed, so no landing is named and the fixer is filed against the tip: "+err.Error())
@@ -696,7 +704,7 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 				if ctx.Err() != nil {
 					return "", false, ctx.Err()
 				}
-				if CleanupLost(err) {
+				if CleanupLost(err) || errors.Is(err, ErrRestartPending) {
 					return "", false, err
 				}
 				var reasons []string
@@ -888,7 +896,7 @@ func (r HeavyRunner) offerRevert(ctx context.Context, tip, sha string, checks []
 	}
 	out, err := r.Revert(ctx, tip, sha, checks, r.one)
 	if err != nil {
-		if ctx.Err() != nil || CleanupLost(err) {
+		if ctx.Err() != nil || CleanupLost(err) || errors.Is(err, ErrRestartPending) {
 			return out, err
 		}
 		out = RevertOutcome{Refused: "the revert could not be attempted: " + err.Error()}
@@ -958,7 +966,7 @@ func (r HeavyRunner) OneLogged(ctx context.Context, sha, id string, removed ...s
 			outcome = "fail"
 		}
 		HeavyStoreStepProgress(ctx, id, outcome)
-	} else if ctx.Err() == nil && !CleanupLost(err) {
+	} else if ctx.Err() == nil && !CleanupLost(err) && !errors.Is(err, ErrRestartPending) {
 		HeavyStoreStepProgress(ctx, id, "error")
 	}
 	return red, logPath, err
@@ -1043,6 +1051,11 @@ func (r HeavyRunner) Replay(ctx context.Context, sha, id, why string) (bool, err
 		if saved, ok := ReadHeavyReplay(dir, sha, id); ok {
 			r.progressf("loop: heavy %s reused replay at %s (%s): %s\n", id, ShortSHA(sha), why, map[bool]string{true: "red", false: "green"}[saved])
 			return saved, nil
+		}
+	}
+	if r.BeforeReplay != nil {
+		if err := r.BeforeReplay(ctx); err != nil {
+			return false, err
 		}
 	}
 	started := r.Now()
@@ -1190,6 +1203,11 @@ func (r HeavyRunner) additionalGoCulprits(ctx context.Context, run HeavyRun, che
 	removed := []string{first}
 	for {
 		replay := func(sha, why string) (bool, error) {
+			if r.BeforeReplay != nil {
+				if err := r.BeforeReplay(ctx); err != nil {
+					return false, err
+				}
+			}
 			r.progressf("loop: heavy %s replaying at %s without %s (%s)\n", check.CheckID, ShortSHA(sha), strings.Join(removed, ", "), why)
 			red, _, err := r.OneLogged(ctx, sha, check.CheckID, removed...)
 			return red, err
