@@ -227,7 +227,7 @@ func syncFace(args []string) int {
 	dryRun := fs.Bool("dry-run", false, "read and report, write nothing")
 	asJSON := fs.Bool("json", false, "print the item.sync record instead of the text report")
 	var roadmaps []string
-	fs.Func("roadmap", "read this tracked docs/ roadmap and its direct links; repeat in desired order", func(path string) error {
+	fs.Func("roadmap", "limit imports to this tracked docs/ roadmap and its unparked direct links (overrides [sync] roadmaps in .tillr.toml); repeat in desired order", func(path string) error {
 		roadmaps = append(roadmaps, path)
 		return nil
 	})

@@ -20,18 +20,26 @@ import (
 // SyncOutcome is what the loop's startup sync did, read from the item.sync record the item
 // binary prints. Notes are pre-rendered as `file:line (heading) item: rule: message`, the
 // form the item face prints them in, because the loop only reports them.
+// SyncSkippedBlock is one unfenced item directive outside the selected roadmap scope.
+type SyncSkippedBlock struct {
+	File   string `json:"file"`
+	ItemID string `json:"item_id"`
+}
+
 type SyncOutcome struct {
 	// ItemFaults retains attribution instead of making readers parse display text.
-	SkippedFiles   []string          `json:"skipped_files,omitempty"`
-	ItemFaults     map[string]string `json:"item_faults,omitempty"`
-	Created        int               `json:"created"`
-	Updated        int               `json:"updated"`
-	Unchanged      int               `json:"unchanged"`
-	Frozen         []string          `json:"frozen,omitempty"`
-	Findings       []string          `json:"findings,omitempty"`
-	Warnings       int               `json:"warnings"`
-	UnsharedOpen   int               `json:"unshared_open"`
-	StaleDocBlocks int               `json:"stale_doc_blocks"`
+	SkippedBlocks  []SyncSkippedBlock `json:"skipped_blocks,omitempty"`
+	SkippedCount   int                `json:"skipped_count,omitempty"`
+	SkippedFiles   []string           `json:"skipped_files,omitempty"`
+	ItemFaults     map[string]string  `json:"item_faults,omitempty"`
+	Created        int                `json:"created"`
+	Updated        int                `json:"updated"`
+	Unchanged      int                `json:"unchanged"`
+	Frozen         []string           `json:"frozen,omitempty"`
+	Findings       []string           `json:"findings,omitempty"`
+	Warnings       int                `json:"warnings"`
+	UnsharedOpen   int                `json:"unshared_open"`
+	StaleDocBlocks int                `json:"stale_doc_blocks"`
 	// Skipped names why no sync ran, for a step set that drives no repository.
 	Skipped string `json:"skipped,omitempty"`
 }
@@ -41,8 +49,16 @@ func (o SyncOutcome) Line() string {
 	if o.Skipped != "" {
 		return "sync skipped: " + o.Skipped
 	}
-	return fmt.Sprintf("sync: created %d, updated %d, unchanged %d, frozen %d, findings %d, warnings %d; unshared_open: %d; stale_doc_blocks: %d",
-		o.Created, o.Updated, o.Unchanged, len(o.Frozen), len(o.Findings), o.Warnings, o.UnsharedOpen, o.StaleDocBlocks)
+	skippedCount := o.SkippedCount
+	if skippedCount == 0 && len(o.SkippedBlocks) > 0 {
+		skippedCount = len(o.SkippedBlocks)
+	}
+	skipped := ""
+	if skippedCount > 0 {
+		skipped = fmt.Sprintf(", skipped %d", skippedCount)
+	}
+	return fmt.Sprintf("sync: created %d, updated %d, unchanged %d, frozen %d, findings %d, warnings %d%s; unshared_open: %d; stale_doc_blocks: %d",
+		o.Created, o.Updated, o.Unchanged, len(o.Frozen), len(o.Findings), o.Warnings, skipped, o.UnsharedOpen, o.StaleDocBlocks)
 }
 
 // syncNote is one finding, warning or frozen definition in the item.sync payload.
@@ -68,15 +84,17 @@ func (n syncNote) String() string {
 
 // syncPayload is the part of the item.sync payload the loop reads.
 type syncPayload struct {
-	SkippedFiles   []string   `json:"skipped_files"`
-	CreatedCount   int        `json:"created_count"`
-	UpdatedCount   int        `json:"updated_count"`
-	UnchangedCount int        `json:"unchanged_count"`
-	Frozen         []syncNote `json:"frozen"`
-	Findings       []syncNote `json:"findings"`
-	Warnings       []syncNote `json:"warnings"`
-	UnsharedOpen   int        `json:"unshared_open"`
-	StaleDocBlocks int        `json:"stale_doc_blocks"`
+	SkippedBlocks  []SyncSkippedBlock `json:"skipped_blocks"`
+	SkippedCount   int                `json:"skipped_count"`
+	SkippedFiles   []string           `json:"skipped_files"`
+	CreatedCount   int                `json:"created_count"`
+	UpdatedCount   int                `json:"updated_count"`
+	UnchangedCount int                `json:"unchanged_count"`
+	Frozen         []syncNote         `json:"frozen"`
+	Findings       []syncNote         `json:"findings"`
+	Warnings       []syncNote         `json:"warnings"`
+	UnsharedOpen   int                `json:"unshared_open"`
+	StaleDocBlocks int                `json:"stale_doc_blocks"`
 }
 
 // Sync runs `tillr-item sync` over the loop's repository and store. Exit 0 and exit 1 are
@@ -131,6 +149,7 @@ func (s *ProcessSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	p := env.Payload
 	outcome := SyncOutcome{
 		Created: p.CreatedCount, Updated: p.UpdatedCount, Unchanged: p.UnchangedCount,
+		SkippedBlocks: p.SkippedBlocks, SkippedCount: p.SkippedCount,
 		SkippedFiles: p.SkippedFiles,
 		Warnings:     len(p.Warnings), UnsharedOpen: p.UnsharedOpen, StaleDocBlocks: p.StaleDocBlocks,
 	}

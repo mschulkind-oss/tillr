@@ -39,13 +39,21 @@ func TestSyncRoadmapScopeCustomNamesParkingAndDryRun(t *testing.T) {
 		ids := p["created"].([]any)
 		sort.Slice(ids, func(i, j int) bool { return ids[i].(string) < ids[j].(string) })
 	}
-	for _, field := range []string{"created", "placed", "scope", "unshared_open", "stale_doc_blocks"} {
+	for _, field := range []string{"created", "placed", "scope", "skipped_blocks", "skipped_count", "unshared_open", "stale_doc_blocks"} {
 		if !reflect.DeepEqual(before[field], after[field]) {
 			t.Fatalf("%s differs: %v vs %v", field, before[field], after[field])
 		}
 	}
-	if after["documents"] != float64(4) {
+	if after["documents"] != float64(2) || after["skipped_count"] != float64(3) {
 		t.Fatalf("unexpected intake: %s", out)
+	}
+	wantSkipped := []any{
+		map[string]any{"file": "docs/other/indirect.md", "item_id": "item-indirect"},
+		map[string]any{"file": "docs/other/roadmap.md", "item_id": "item-other-inline"},
+		map[string]any{"file": "docs/parked.md", "item_id": "item-parked"},
+	}
+	if !reflect.DeepEqual(after["skipped_blocks"], wantSkipped) {
+		t.Fatalf("skipped_blocks = %v, want %v", after["skipped_blocks"], wantSkipped)
 	}
 	s, err := store.OpenRead(context.Background(), db)
 	if err != nil {
@@ -57,7 +65,7 @@ func TestSyncRoadmapScopeCustomNamesParkingAndDryRun(t *testing.T) {
 		if err := r.QueryRow(`SELECT group_concat(item_id||':'||state,',') FROM (SELECT item_id,state FROM items ORDER BY item_id)`).Scan(&rows); err != nil {
 			return err
 		}
-		if rows != "item-inline:in-queue,item-other-inline:not-started,item-parked:not-started,item-shared:in-queue" {
+		if rows != "item-inline:in-queue,item-shared:in-queue" {
 			t.Fatal(rows)
 		}
 		return nil

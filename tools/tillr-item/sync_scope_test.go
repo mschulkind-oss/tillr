@@ -69,8 +69,11 @@ func TestSyncRoadmapScopeReadsOnlyDirectTrackedDocuments(t *testing.T) {
 			t.Fatalf("%s must be explicitly not computed: %s", field, out)
 		}
 	}
+	if p["skipped_count"] != float64(3) {
+		t.Fatalf("skipped_count: %s", out)
+	}
 	code, out = run(t, "sync", "--store", db, "--root", repo, "--roadmap", "docs/a/roadmap.md")
-	if code != 0 || !strings.Contains(string(out), "not computed") || !strings.Contains(string(out), "sync of every document") {
+	if code != 0 || !strings.Contains(string(out), ", skipped 3\n") || !strings.Contains(string(out), "skipped: docs/b/one.md item-b-one\n") || !strings.Contains(string(out), "not computed") || !strings.Contains(string(out), "sync of every document") {
 		t.Fatalf("text exit %d: %s", code, out)
 	}
 }
@@ -166,6 +169,123 @@ func TestSyncRoadmapScopeRefusesInvalidPathsWithoutWrites(t *testing.T) {
 		}
 		if _, err := os.Stat(db); !os.IsNotExist(err) {
 			t.Fatalf("invalid path %q created store", road)
+		}
+	}
+}
+
+func TestSyncSettingsRoadmapsLimitsImportsAndReportsSkippedBlocks(t *testing.T) {
+	repo := syncRepo(t, map[string]string{
+		"docs/tillr/roadmap.md": "# Tillr Roadmap\n" +
+			"Passing mention of [parked](../design/tillr-parked.md#q1) and [pi](../pi/roadmap.md).\n" +
+			"- [Active design](../design/tillr-active.md)\n" +
+			scopeBlock("tillr-inline") +
+			"## Icebox\n" +
+			"- [Parked design](../design/tillr-parked.md)\n" +
+			scopeBlock("tillr-icebox-inline") +
+			"## Exploration\n" +
+			"### Draft without id\n<!-- tillr: item paths=\"docs/\" -->\n- **c1:** draft\n" +
+			"## What this page does not cover\n" +
+			"- [Excluded design](../design/tillr-excluded.md)\n",
+		"docs/design/tillr-active.md":   scopeBlock("tillr-active"),
+		"docs/design/tillr-parked.md":   scopeBlock("tillr-parked"),
+		"docs/design/tillr-excluded.md": scopeBlock("tillr-excluded"),
+		"docs/pi/roadmap.md": "# Pi Roadmap\n- [Pi design](../design/pi-only.md)\n" +
+			"## What this file does not cover\n- [Tillr](../tillr/roadmap.md)\n",
+		"docs/design/pi-only.md": scopeBlock("pi-only"),
+		"docs/unlinked.md":       "### Draft\n<!-- tillr: item id=\"item-unlinked\" paths=\"docs/\" unknown=\"x\" -->\n- **c1:** draft\n",
+	})
+	if err := os.WriteFile(filepath.Join(repo, ".tillr.toml"), []byte("[sync]\nroadmaps = [\"docs/tillr/roadmap.md\"]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	wantSkipped := []any{
+		map[string]any{"file": "docs/design/pi-only.md", "item_id": "item-pi-only"},
+		map[string]any{"file": "docs/design/tillr-excluded.md", "item_id": "item-tillr-excluded"},
+		map[string]any{"file": "docs/design/tillr-parked.md", "item_id": "item-tillr-parked"},
+		map[string]any{"file": "docs/tillr/roadmap.md", "item_id": "item-tillr-icebox-inline"},
+		map[string]any{"file": "docs/tillr/roadmap.md", "item_id": ""},
+		map[string]any{"file": "docs/unlinked.md", "item_id": "item-unlinked"},
+	}
+
+	for _, extra := range [][]string{nil, {"--roadmap", "docs/tillr/roadmap.md"}} {
+		db := filepath.Join(scratch(t, "settings-tillr"), "state.db")
+		jsonArgs := append([]string{"sync", "--store", db, "--root", repo, "--json"}, extra...)
+		code, out := run(t, jsonArgs...)
+		if code != 0 {
+			t.Fatalf("%v exit %d: %s", extra, code, out)
+		}
+		if got := scopeOrder(t, db); got != "item-tillr-active,item-tillr-inline" {
+			t.Fatalf("%v imported %q, want only tillr items", extra, got)
+		}
+		p := scopePayload(t, out)
+		if !reflect.DeepEqual(p["scope"], []any{"docs/tillr/roadmap.md"}) || p["documents"] != float64(2) || p["blocks"] != float64(2) {
+			t.Fatalf("%v payload: %s", extra, out)
+		}
+		if p["skipped_count"] != float64(len(wantSkipped)) || !reflect.DeepEqual(p["skipped_blocks"], wantSkipped) {
+			t.Fatalf("%v skipped_blocks = %v (count %v), want %v", extra, p["skipped_blocks"], p["skipped_count"], wantSkipped)
+		}
+
+		textArgs := append([]string{"sync", "--store", db, "--root", repo}, extra...)
+		code, textOut := run(t, textArgs...)
+		if code != 0 {
+			t.Fatalf("%v text exit %d: %s", extra, code, textOut)
+		}
+		text := string(textOut)
+		for _, wantLine := range []string{
+			"sync: 2 block(s) in 2 tracked document(s): created 0, unchanged 2, updated 0, frozen 0, skipped 6\n",
+			"skipped: docs/design/pi-only.md item-pi-only\n",
+			"skipped: docs/tillr/roadmap.md (missing id)\n",
+		} {
+			if !strings.Contains(text, wantLine) {
+				t.Fatalf("%v missing %q in:\n%s", extra, wantLine, text)
+			}
+		}
+	}
+
+	// Explicit --roadmap overrides .tillr.toml's [sync] roadmaps.
+	db := filepath.Join(scratch(t, "settings-override"), "state.db")
+	code, out := run(t, "sync", "--store", db, "--root", repo, "--roadmap", "docs/pi/roadmap.md", "--json")
+	if code != 0 {
+		t.Fatalf("override exit %d: %s", code, out)
+	}
+	if got := scopeOrder(t, db); got != "item-pi-only" {
+		t.Fatalf("override imported %q, want item-pi-only", got)
+	}
+	p := scopePayload(t, out)
+	if !reflect.DeepEqual(p["scope"], []any{"docs/pi/roadmap.md"}) {
+		t.Fatalf("override scope: %s", out)
+	}
+
+	// Empty [sync] roadmaps = [] keeps unscoped summary text byte-identical when skipped_count == 0.
+	cleanRepo := scopeRepo(t)
+	if err := os.WriteFile(filepath.Join(cleanRepo, ".tillr.toml"), []byte("[sync]\nroadmaps = []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	wholeDB := filepath.Join(scratch(t, "settings-empty"), "state.db")
+	code, wholeText := run(t, "sync", "--store", wholeDB, "--root", cleanRepo)
+	if code != 0 || strings.Contains(string(wholeText), "skipped") {
+		t.Fatalf("whole sync exit %d: %s", code, wholeText)
+	}
+}
+
+func TestSyncSettingsRoadmapsRefusesInvalidConfigWithoutStoreWrites(t *testing.T) {
+	repo := scopeRepo(t)
+	for _, raw := range []string{
+		"[sync\n",
+		"[sync]\nroadmaps = \"docs/a/roadmap.md\"\n",
+		"[sync]\nroadmaps = [\"docs/missing.md\"]\n",
+		"[sync]\nroadmaps = [\"outside.md\"]\n",
+	} {
+		if err := os.WriteFile(filepath.Join(repo, ".tillr.toml"), []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		db := filepath.Join(scratch(t, "settings-invalid"), "state.db")
+		code, out := run(t, "sync", "--store", db, "--root", repo)
+		if code != 2 {
+			t.Fatalf("config %q exited %d, want 2: %s", raw, code, out)
+		}
+		if _, err := os.Stat(db); !os.IsNotExist(err) {
+			t.Fatalf("invalid config %q created store", raw)
 		}
 	}
 }

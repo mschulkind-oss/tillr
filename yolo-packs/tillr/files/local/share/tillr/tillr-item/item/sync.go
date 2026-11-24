@@ -81,6 +81,12 @@ type SyncNote struct {
 	Message string `json:"message"`
 }
 
+// SyncSkippedBlock is one unfenced item directive outside the selected roadmap scope.
+type SyncSkippedBlock struct {
+	File   string `json:"file"`
+	ItemID string `json:"item_id"`
+}
+
 // SyncReport is item.sync's payload. The id lists are what this run wrote (or, on a dry run,
 // would write); the counts beside them are the same lists' lengths, so a reader that wants
 // only the summary does not count.
@@ -92,18 +98,20 @@ type SyncReport struct {
 	Documents int    `json:"documents"`
 	Blocks    int    `json:"blocks"`
 
-	Placed    []SyncPlacement `json:"placed"`
-	Created   []string        `json:"created"`
-	Updated   []string        `json:"updated"`
-	Unchanged []string        `json:"unchanged"`
-	Parked    []string        `json:"parked"`
-	Unparked  []string        `json:"unparked"`
-	Frozen    []SyncNote      `json:"frozen"`
+	Placed        []SyncPlacement    `json:"placed"`
+	Created       []string           `json:"created"`
+	Updated       []string           `json:"updated"`
+	Unchanged     []string           `json:"unchanged"`
+	Parked        []string           `json:"parked"`
+	Unparked      []string           `json:"unparked"`
+	Frozen        []SyncNote         `json:"frozen"`
+	SkippedBlocks []SyncSkippedBlock `json:"skipped_blocks"`
 
 	CreatedCount   int `json:"created_count"`
 	UpdatedCount   int `json:"updated_count"`
 	UnchangedCount int `json:"unchanged_count"`
 	FrozenCount    int `json:"frozen_count"`
+	SkippedCount   int `json:"skipped_count"`
 
 	Warnings []SyncNote `json:"warnings"`
 	Findings []SyncNote `json:"findings"`
@@ -159,8 +167,9 @@ func ReadSyncDocuments(root string) ([]SyncDocument, error) {
 // syncPlan is what one sync decided before writing: per file, the items to write in write
 // order, and the report as a dry run would print it.
 type syncPlan struct {
-	allowed map[string]bool // nil for whole sync; declared ids for partial previews
-	report  SyncReport
+	allowed     map[string]bool // nil for whole sync; declared in-scope ids for partial syncs
+	allowedDocs map[string]bool // nil for whole sync; in-scope document paths for partial syncs
+	report      SyncReport
 	// writes are the files with something to write, in the order they may be written, and
 	// each file's payloads in the order its items may be written.
 	writes []fileWrites
@@ -198,6 +207,9 @@ type fileWrites struct {
 // under its own savepoint, so a refusal Apply makes for one file (an edge cycle, say) rolls
 // back that file alone and becomes its finding.
 func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (SyncReport, error) {
+	if len(in.Roadmaps) > 0 {
+		in.Partial = true
+	}
 	plan, err := planSync(r, in)
 	if err != nil {
 		return SyncReport{}, err
@@ -218,15 +230,11 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	for _, id := range plan.report.Parked {
 		parking[id] = true
 	}
-	var allowed map[string]bool
-	if in.Partial {
-		allowed = docshare.Declared(in.Documents)
-	}
-	checkProtected, err := protectUnreadRanks(tx.Reader(), allowed)
+	checkProtected, err := protectUnreadRanks(tx.Reader(), plan.allowed)
 	if err != nil {
 		return SyncReport{}, err
 	}
-	keyed, err := keyMissingOrder(ctx, tx, in.At, parking, allowed)
+	keyed, err := keyMissingOrder(ctx, tx, in.At, parking, plan.allowed)
 	if err != nil {
 		return SyncReport{}, err
 	}
@@ -366,7 +374,7 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	if err := checkProtected(tx.Reader()); err != nil {
 		return SyncReport{}, err
 	}
-	if err := replaceDesignWithoutItems(tx, report.Warnings, in.At.UnixMilli(), allowedDocuments(in)); err != nil {
+	if err := replaceDesignWithoutItems(tx, report.Warnings, in.At.UnixMilli(), plan.allowedDocs); err != nil {
 		return SyncReport{}, err
 	}
 	if !in.Partial {
@@ -388,16 +396,24 @@ func finishReport(report SyncReport) SyncReport {
 		}
 		return a.Line < b.Line
 	})
+	if report.SkippedBlocks == nil {
+		report.SkippedBlocks = []SyncSkippedBlock{}
+	}
 	report.CreatedCount = len(report.Created)
 	report.UpdatedCount = len(report.Updated)
 	report.UnchangedCount = len(report.Unchanged)
 	report.FrozenCount = len(report.Frozen)
+	report.SkippedCount = len(report.SkippedBlocks)
 	return report
 }
 
 // planSync parses every document, validates every block, compares each with the store and
 // decides what to write. It writes nothing.
 func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
+	scoped := len(in.Roadmaps) > 0
+	if scoped {
+		in.Partial = true
+	}
 	d, err := itemDefinition(r)
 	if err != nil {
 		return syncPlan{}, err
@@ -406,28 +422,80 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	report := SyncReport{
 		Root: in.Root, Documents: len(in.Documents), Partial: in.Partial, Scope: "all-documents",
 		Created: []string{}, Updated: []string{}, Unchanged: []string{}, Frozen: []SyncNote{},
-		Parked: []string{}, Unparked: []string{},
+		Parked: []string{}, Unparked: []string{}, SkippedBlocks: []SyncSkippedBlock{},
 		Warnings: []SyncNote{}, Findings: []SyncNote{}, SkippedFiles: []string{},
 		UnsharedOpenIDs: []string{}, StaleDocBlockIDs: []string{},
 	}
-	if len(in.Roadmaps) > 0 {
+	if scoped {
 		report.Scope = append([]string(nil), in.Roadmaps...)
 	}
 	parked := parkedDocuments(in.Documents, in.Roadmaps)
 	parkedLines := map[string]map[int]bool{}
-	for _, doc := range in.Documents {
-		if isRoadmap(doc.Path, in.Roadmaps) {
-			parkedLines[doc.Path] = map[int]bool{}
-			roadmapLines(doc, func(line int, _ string, parked bool) { parkedLines[doc.Path][line] = parked })
+	skippedRoadmapLines := map[string]map[int]bool{}
+	var inScopeDocs map[string]bool
+	if scoped {
+		inScopeDocs = map[string]bool{}
+		byPath := make(map[string]SyncDocument, len(in.Documents))
+		for _, doc := range in.Documents {
+			byPath[doc.Path] = doc
+		}
+		for _, doc := range in.Documents {
+			if !isRoadmap(doc.Path, in.Roadmaps) {
+				continue
+			}
+			inScopeDocs[doc.Path] = true
+			skippedLines := map[int]bool{}
+			roadmapSections(doc, func(line int, text string, inParked, inExcluded bool) {
+				if inParked || inExcluded {
+					skippedLines[line] = true
+					return
+				}
+				for _, m := range linkTarget.FindAllStringSubmatch(text, -1) {
+					target := roadmapLink(doc.Path, m[1])
+					if target == "" || isRoadmap(target) || isRoadmap(target, in.Roadmaps) || parked[target] {
+						continue
+					}
+					if _, exists := byPath[target]; exists {
+						inScopeDocs[target] = true
+					}
+				}
+			})
+			skippedRoadmapLines[doc.Path] = skippedLines
+		}
+	} else {
+		for _, doc := range in.Documents {
+			if isRoadmap(doc.Path) {
+				parkedLines[doc.Path] = map[int]bool{}
+				roadmapLines(doc, func(line int, _ string, inParked bool) { parkedLines[doc.Path][line] = inParked })
+			}
 		}
 	}
 
 	var blocks []syncBlock
+	var rawSkipped []skippedDirective
+	inScopeDocuments := in.Documents
+	if scoped {
+		inScopeDocuments = make([]SyncDocument, 0, len(inScopeDocs))
+	}
 	bad := map[string]bool{}
 	for _, doc := range in.Documents {
-		found, findings := parseItemBlocks(doc.Path, doc.Content)
+		if scoped && !inScopeDocs[doc.Path] {
+			rawSkipped = append(rawSkipped, scanSkippedDirectives(doc.Path, doc.Content, nil)...)
+			continue
+		}
+		var skipLine func(int) bool
+		if scoped {
+			inScopeDocuments = append(inScopeDocuments, doc)
+			if lines := skippedRoadmapLines[doc.Path]; len(lines) > 0 {
+				skipLine = func(line int) bool { return lines[line] }
+				rawSkipped = append(rawSkipped, scanSkippedDirectives(doc.Path, doc.Content, skipLine)...)
+			}
+		}
+		found, findings := parseItemBlocksScoped(doc.Path, doc.Content, skipLine)
 		for i := range found {
-			found[i].parked = parked[doc.Path] || parkedLines[doc.Path][found[i].line]
+			if !scoped {
+				found[i].parked = parked[doc.Path] || parkedLines[doc.Path][found[i].line]
+			}
 			if ref := found[i].payload.Workflow; ref != "" {
 				rule, message := "", ""
 				if !WorkflowRefValid(ref) {
@@ -447,7 +515,21 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 		report.Findings = append(report.Findings, findings...)
 	}
-	blocks = roadmapBlocks(in.Documents, blocks, in.Roadmaps)
+	if scoped {
+		sort.Slice(rawSkipped, func(i, j int) bool {
+			if rawSkipped[i].file != rawSkipped[j].file {
+				return rawSkipped[i].file < rawSkipped[j].file
+			}
+			return rawSkipped[i].line < rawSkipped[j].line
+		})
+		report.SkippedBlocks = make([]SyncSkippedBlock, len(rawSkipped))
+		for i, s := range rawSkipped {
+			report.SkippedBlocks[i] = SyncSkippedBlock{File: s.file, ItemID: s.itemID}
+		}
+		report.SkippedCount = len(report.SkippedBlocks)
+		report.Documents = len(inScopeDocuments)
+	}
+	blocks = roadmapBlocks(inScopeDocuments, blocks, in.Roadmaps)
 	report.Blocks = len(blocks)
 
 	// One id, one block, across every document: two blocks with one id are two definitions
@@ -497,7 +579,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	if err != nil {
 		return syncPlan{}, err
 	}
-	report.Warnings = append(report.Warnings, designWithoutItems(in.Documents, held, stages, in.Roadmaps)...)
+	report.Warnings = append(report.Warnings, designWithoutItems(inScopeDocuments, held, stages, in.Roadmaps)...)
 
 	// Refuse only new copies of an unfinished stored item. Existing version-suffixed
 	// ids keep their definitions and history; sync does not retroactively rename them.
@@ -752,11 +834,20 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			}
 		}
 	}
-	var allowed map[string]bool
-	if in.Partial {
+	var allowed, allowedDocs map[string]bool
+	if scoped {
+		allowed = map[string]bool{}
+		for _, b := range blocks {
+			if b.payload.ItemID != "" {
+				allowed[b.payload.ItemID] = true
+			}
+		}
+		allowedDocs = inScopeDocs
+	} else if in.Partial {
 		allowed = docshare.Declared(in.Documents)
+		allowedDocs = allowedDocuments(in)
 	}
-	return syncPlan{report: report, writes: writes, placements: placements, allowed: allowed}, nil
+	return syncPlan{report: report, writes: writes, placements: placements, allowed: allowed, allowedDocs: allowedDocs}, nil
 }
 
 // orderFileWrites answers the files with writes in an order where a file is written after
@@ -964,9 +1055,63 @@ func splitLines(content []byte) []string {
 	return strings.Split(text, "\n")
 }
 
+type skippedDirective struct {
+	file   string
+	line   int
+	itemID string
+}
+
+func scanSkippedDirectives(file string, content []byte, skipLine func(int) bool) []skippedDirective {
+	lines := splitLines(content)
+	fenced := make([]bool, len(lines))
+	fence := fenceState{}
+	for i, line := range lines {
+		fenced[i] = fence.step(line)
+	}
+	var out []skippedDirective
+	for i := 0; i < len(lines); i++ {
+		if fenced[i] || !directiveStart.MatchString(strings.TrimLeft(lines[i], " \t")) {
+			continue
+		}
+		var text strings.Builder
+		end := -1
+		for j := i; j < len(lines); j++ {
+			text.WriteString(lines[j])
+			text.WriteString("\n")
+			if strings.Contains(lines[j], "-->") {
+				end = j
+				break
+			}
+		}
+		id := ""
+		if end >= 0 {
+			body := text.String()
+			body = body[strings.Index(body, "<!--")+len("<!--"):]
+			body = body[:strings.Index(body, "-->")]
+			body = strings.TrimSpace(body)
+			body = strings.TrimSpace(strings.TrimPrefix(body, "tillr:"))
+			body = strings.TrimPrefix(body, "item")
+			attrs, _ := docshare.Attributes(body)
+			id = strings.TrimSpace(attrs["id"])
+		}
+		if skipLine == nil || skipLine(i+1) {
+			out = append(out, skippedDirective{file: file, line: i + 1, itemID: id})
+		}
+		if end < 0 {
+			break
+		}
+		i = end
+	}
+	return out
+}
+
 // parseItemBlocks answers every item block in one document and the findings its blocks
 // carry. It reads no store and no disk: the file's bytes are the whole input.
 func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
+	return parseItemBlocksScoped(file, content, nil)
+}
+
+func parseItemBlocksScoped(file string, content []byte, skipLine func(int) bool) ([]syncBlock, []SyncNote) {
 	lines := splitLines(content)
 	fenced := make([]bool, len(lines))
 	fence := fenceState{}
@@ -998,6 +1143,20 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 			continue
 		}
 		if !isDirective(i) {
+			continue
+		}
+		if skipLine != nil && skipLine(i+1) {
+			end := -1
+			for j := i; j < len(lines); j++ {
+				if strings.Contains(lines[j], "-->") {
+					end = j
+					break
+				}
+			}
+			if end < 0 {
+				break
+			}
+			i = end
 			continue
 		}
 		b := syncBlock{file: file, heading: heading, line: i + 1,
@@ -1265,8 +1424,16 @@ func SyncText(report SyncReport, at time.Time) string {
 	if report.DryRun {
 		label = "sync (dry run, nothing written)"
 	}
-	fmt.Fprintf(&b, "%s: %d block(s) in %d tracked document(s): created %d, unchanged %d, updated %d, frozen %d\n",
-		label, report.Blocks, report.Documents, report.CreatedCount, report.UnchangedCount, report.UpdatedCount, report.FrozenCount)
+	skippedCount := report.SkippedCount
+	if skippedCount == 0 && len(report.SkippedBlocks) > 0 {
+		skippedCount = len(report.SkippedBlocks)
+	}
+	skippedSummary := ""
+	if skippedCount > 0 {
+		skippedSummary = fmt.Sprintf(", skipped %d", skippedCount)
+	}
+	fmt.Fprintf(&b, "%s: %d block(s) in %d tracked document(s): created %d, unchanged %d, updated %d, frozen %d%s\n",
+		label, report.Blocks, report.Documents, report.CreatedCount, report.UnchangedCount, report.UpdatedCount, report.FrozenCount, skippedSummary)
 	oldest := ""
 	if report.UnsharedOpenOldest != "" {
 		if t, err := time.Parse(time.RFC3339, report.UnsharedOpenOldest); err == nil {
@@ -1298,6 +1465,13 @@ func SyncText(report SyncReport, at time.Time) string {
 			fmt.Fprintf(&b, " from %s", p.From)
 		}
 		b.WriteByte('\n')
+	}
+	for _, sb := range report.SkippedBlocks {
+		id := sb.ItemID
+		if id == "" {
+			id = "(missing id)"
+		}
+		fmt.Fprintf(&b, "skipped: %s %s\n", sb.File, id)
 	}
 	for _, id := range report.StaleDocBlockIDs {
 		fmt.Fprintf(&b, "stale: %s is landed in this store; delete its block\n", id)

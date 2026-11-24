@@ -36,17 +36,17 @@ func designWithoutItems(docs []SyncDocument, held map[string]storedState, stages
 			covered[path.Clean(target)] = true
 		}
 	}
+	scoped := len(selected) > 0 && len(selected[0]) > 0
 	sort.Strings(roadmaps)
 	var notes []SyncNote
 	for _, roadmap := range roadmaps {
-		fence := fenceState{}
 		heading := ""
-		for i, line := range splitLines(byPath[roadmap].Content) {
-			if fence.step(line) {
-				continue
-			}
+		roadmapSections(byPath[roadmap], func(lineNum int, line string, parked, excluded bool) {
 			if m := headingLine.FindStringSubmatch(line); m != nil {
 				heading = m[2]
+			}
+			if scoped && (parked || excluded) {
+				return
 			}
 			for _, m := range linkTarget.FindAllStringSubmatch(line, -1) {
 				target := m[1]
@@ -70,9 +70,9 @@ func designWithoutItems(docs []SyncDocument, held map[string]storedState, stages
 					continue
 				}
 				covered[target] = true
-				notes = append(notes, SyncNote{File: target, Roadmap: roadmap, Heading: heading, Line: i + 1, Rule: "design-without-item", Message: fmt.Sprintf("%s:%d links this design, which has no item block or non-landed item; owner must file its item block", roadmap, i+1)})
+				notes = append(notes, SyncNote{File: target, Roadmap: roadmap, Heading: heading, Line: lineNum, Rule: "design-without-item", Message: fmt.Sprintf("%s:%d links this design, which has no item block or non-landed item; owner must file its item block", roadmap, lineNum)})
 			}
-		}
+		})
 	}
 	return notes
 }

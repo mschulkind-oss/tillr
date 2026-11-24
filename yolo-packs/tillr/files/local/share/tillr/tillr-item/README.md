@@ -407,20 +407,27 @@ The following rules describe Git-landing, including its established refusal name
   definition rather than the changed block. A second run
   over unchanged documents changes no item and appends no event; it refreshes the
   saved sync observation.
-- **Choose the documents with repeated `--roadmap <path>` flags.** Without the flag,
-  sync reads every tracked Markdown document under `docs/`. With it, sync reads only
-  the named roadmaps and the tracked Markdown documents under `docs/` they link
-  directly, including parked sections. Links in those documents are not followed.
+- **Choose the roadmaps with repeated `--roadmap <path>` flags or `[sync] roadmaps` in `.tillr.toml`.**
+  When `--roadmap` is omitted, `sync` falls back to `[sync] roadmaps` in `<root>/.tillr.toml`
+  (`--roadmap` overrides `.tillr.toml`); when both are empty, `sync` imports every tracked
+  Markdown document under `docs/`. When roadmaps are selected, `sync` imports only blocks
+  sitting outside `Icebox`, `Exploration`, and `What this page/file does not cover` in a
+  selected roadmap or in a non-roadmap, non-parked tracked Markdown document under `docs/`
+  linked directly from such an unparked section. Links inside linked documents are not followed.
   Paths are repository-relative, must name existing tracked Markdown files, and
-  need not have the filename `roadmap.md`. Invalid selections refuse with exit `2`
-  before opening a store writer. Scoped reads refuse symlink traversal, including
-  linked symlinks, rather than import their untracked targets. Repeated copies of
-  one path are read once.
-  First-import entries interleave in flag order instead of roadmap path order.
-  Items whose blocks were not read retain their definitions, states and rank keys;
-  missing keys are filled only for declared items. If source or saved-order placement
-  would rewrite an unread item's crowded rank key, the entire narrowed sync refuses
-  without writing; run a sync of every document for that placement.
+  need not have the filename `roadmap.md`. Invalid `.tillr.toml` files or roadmap selections
+  refuse with exit `2` before opening a store writer. Scoped reads refuse symlink traversal
+  on selected roadmaps and their direct links rather than import untracked targets. Repeated
+  copies of one path are selected once.
+  First-import entries interleave in selected roadmap order instead of roadmap path order.
+  Every unfenced block outside the selected scope is skipped: never created, updated, parked,
+  ranked, or checked for findings, and reported in deterministic `(file, line)` order in
+  `skipped_blocks` (`{file, item_id}`), `skipped_count`, and `skipped: <file> <item_id>` lines
+  in text output (`skipped <N>` appended to the summary line when nonzero). Pre-existing store
+  rows for skipped items retain their definitions, states, and rank keys; missing keys are
+  filled only for in-scope imported items. If source or saved-order placement would rewrite a
+  skipped or unread item's crowded rank key, the entire narrowed sync refuses without writing;
+  run a sync of every document for that placement.
   The `item.sync` payload's `scope` is `"all-documents"` or the ordered list of selected
   roadmap paths. Narrowed reports encode `unshared_open` and `stale_doc_blocks` as
   JSON `null` (not computed), and text says they need a sync of every document.

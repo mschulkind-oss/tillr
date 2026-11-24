@@ -16,28 +16,47 @@ func isRoadmap(file string, selected ...[]string) bool {
 	return strings.HasPrefix(file, "docs/") && path.Base(file) == "roadmap.md"
 }
 
-// roadmapLines visits prose outside code fences, tracking a parked heading and
-// all its descendants until a heading at the same or a higher level ends it.
-func roadmapLines(doc SyncDocument, visit func(int, string, bool)) {
+var excludedSections = []string{"What this page does not cover", "What this file does not cover"}
+
+// roadmapSections visits prose outside code fences, tracking parked and scope-exclusion
+// headings and all their descendants until a heading at the same or a higher level ends them.
+func roadmapSections(doc SyncDocument, visit func(int, string, bool, bool)) {
 	fence := fenceState{}
-	parkedDepth := 0
+	parkedDepth, excludedDepth := 0, 0
 	for i, line := range splitLines(doc.Content) {
 		if fence.step(line) {
 			continue
 		}
 		if h := headingLine.FindStringSubmatch(line); h != nil {
 			depth := len(h[1])
+			title := strings.TrimSpace(strings.TrimRight(h[2], "#"))
 			if parkedDepth != 0 && depth <= parkedDepth {
 				parkedDepth = 0
 			}
+			if excludedDepth != 0 && depth <= excludedDepth {
+				excludedDepth = 0
+			}
 			for _, section := range parkedSections {
-				if strings.HasPrefix(h[2], section) {
+				if strings.HasPrefix(title, section) && parkedDepth == 0 {
 					parkedDepth = depth
 				}
 			}
+			for _, section := range excludedSections {
+				if strings.HasPrefix(title, section) && excludedDepth == 0 {
+					excludedDepth = depth
+				}
+			}
 		}
-		visit(i+1, line, parkedDepth != 0)
+		visit(i+1, line, parkedDepth != 0, excludedDepth != 0)
 	}
+}
+
+// roadmapLines visits prose outside code fences, tracking a parked heading and
+// all its descendants until a heading at the same or a higher level ends it.
+func roadmapLines(doc SyncDocument, visit func(int, string, bool)) {
+	roadmapSections(doc, func(line int, text string, parked, _ bool) {
+		visit(line, text, parked)
+	})
 }
 
 func roadmapLink(file, target string) string {
@@ -72,6 +91,11 @@ func roadmapBlocks(docs []SyncDocument, blocks []syncBlock, selected []string) [
 	for _, b := range blocks {
 		byFile[b.file] = append(byFile[b.file], b)
 	}
+	scoped := len(selected) > 0
+	var parkedTargets map[string]bool
+	if scoped {
+		parkedTargets = parkedDocuments(docs, selected)
+	}
 	claimed := map[string]bool{}
 	var roadmaps [][][]syncBlock
 	for _, d := range docs {
@@ -79,8 +103,8 @@ func roadmapBlocks(docs []SyncDocument, blocks []syncBlock, selected []string) [
 			continue
 		}
 		var entries [][]syncBlock
-		roadmapLines(d, func(line int, text string, parked bool) {
-			if parked {
+		roadmapSections(d, func(line int, text string, parked, excluded bool) {
+			if parked || (scoped && excluded) {
 				return
 			}
 			for _, b := range byFile[d.Path] {
@@ -90,7 +114,7 @@ func roadmapBlocks(docs []SyncDocument, blocks []syncBlock, selected []string) [
 			}
 			for _, m := range linkTarget.FindAllStringSubmatch(text, -1) {
 				target := roadmapLink(d.Path, m[1])
-				if isRoadmap(target) || claimed[target] || len(byFile[target]) == 0 {
+				if isRoadmap(target) || (scoped && (isRoadmap(target, selected) || parkedTargets[target])) || claimed[target] || len(byFile[target]) == 0 {
 					continue
 				}
 				claimed[target] = true
@@ -122,8 +146,10 @@ func roadmapBlocks(docs []SyncDocument, blocks []syncBlock, selected []string) [
 			break
 		}
 	}
-	for _, d := range docs {
-		appendBlocks(byFile[d.Path])
+	if !scoped {
+		for _, d := range docs {
+			appendBlocks(byFile[d.Path])
+		}
 	}
 	return result
 }
