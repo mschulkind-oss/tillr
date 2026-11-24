@@ -1803,6 +1803,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
 			Returned: decision.Returned, RepeatedCall: decision.RepeatedCall,
 			RetryCandidate: decision.RetryCandidate,
+			UnreadFooter:   decision.UnreadFooter,
 			AllowsNoChange: l.allowsNoChangeDecision(decision),
 		}
 		if decision.DesignContinuationFrom != "" {
@@ -1984,7 +1985,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 							nodeBase, decision.NodeBaseSHA = scopeBase, scopeBase
 						}
 					}
-					if err := l.preserveWorkFromBase(ctx, decision.LaneID, previous, nodeBase, "orphaned workflow restarted"); err != nil {
+					preserveReason := "orphaned workflow restarted"
+					if decision.UnreadFooter != "" {
+						preserveReason = unreadFooterReason(decision.UnreadFooter)
+					}
+					if err := l.preserveWorkFromBase(ctx, decision.LaneID, previous, nodeBase, preserveReason); err != nil {
 						if holdErr := failStage("preserve workflow lane", err); holdErr != nil {
 							return nil, holdErr
 						}

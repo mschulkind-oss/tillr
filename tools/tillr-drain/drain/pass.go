@@ -937,6 +937,7 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 			}
 			d.RunRequest = &request
 			d.WorkflowRestart = true
+			d.UnreadFooter = ""
 			workCopy.Decision, workCopy.Ready, workCopy.Orphaned = d, true, false
 			return pendingDecisionInternal(r, &workCopy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID, waiting, reachedRepair, reachedCandidate)
 		}

@@ -199,6 +199,7 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 	stampDecisionRequest(d, request)
 	d.RunRequest = request
 	d.WorkflowRestart = true
+	d.UnreadFooter = ""
 	d.InfrastructureFrom = ""
 	d.Returned, d.WorkerSessionReason = nil, ""
 	d.Action, d.Reason = ActionDispatch, ReasonRepeatingCallFresh

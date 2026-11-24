@@ -98,6 +98,14 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 	if fixerFacts != "" {
 		facts = fixerFacts
 	}
+	if spec.UnreadFooter != "" {
+		note := "The earlier run stopped: " + unreadFooterReason(spec.UnreadFooter) + "."
+		if fixerFacts != "" {
+			facts = fixerFacts + "\n\n" + note
+		} else {
+			facts = note
+		}
+	}
 	values := briefValues{
 		{placeholder: "ITEM_ID", text: recorded.ItemID, field: "item_id"},
 		{placeholder: "TITLE", text: recorded.Title, field: "title"},

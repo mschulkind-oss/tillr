@@ -359,6 +359,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	}
 	next.NodeStartRunID = ""
 	next.WorkflowRestart = false
+	next.UnreadFooter = ""
 	next.NodeInfraFailures = 0
 	next.InfrastructureFrom = ""
 	next.WorkflowRelease = false
@@ -746,6 +747,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 				if err := l.recordBackendWindow(ctx, rec); err != nil {
 					return true, err
 				}
+				d.UnreadFooter = ""
 				return true, l.recordWorkflowRestart(ctx, d, base, rec, "fresh", "", true)
 			}
 		}
@@ -763,7 +765,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 			return true, l.holdFailedWorkflowNode(ctx, d, base, rec, result)
 		}
 		if rec.State == run.StateExited && !readableFooter(footer) && !noChangeAllowed {
-			return true, l.restartUnreadWorkflowNode(ctx, d, base, rec)
+			return true, l.restartUnreadWorkflowNode(ctx, d, base, rec, footer)
 		}
 	}
 	if !l.nonLanding && effectiveAccess == "write" {

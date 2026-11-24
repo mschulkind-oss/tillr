@@ -15,7 +15,11 @@ import (
 func (l *Loop) holdFailedWorkflowNode(ctx context.Context, d Decision, base string, rec run.Record, result *LoopResult) error {
 	log := logTail(rec.ArtifactRefs)
 	if classifyDecisionAttempt(d, rec, log) != AttemptInfrastructure {
-		return l.restartUnreadWorkflowNode(ctx, d, base, rec)
+		footer := reportFooter(log)
+		if readableFooter(footer) {
+			footer = ""
+		}
+		return l.restartUnreadWorkflowNode(ctx, d, base, rec, footer)
 	}
 	if err := l.recordBackendWindow(ctx, rec); err != nil {
 		return err
@@ -30,14 +34,20 @@ func (l *Loop) holdFailedWorkflowNode(ctx context.Context, d Decision, base stri
 		return l.markExamined(ctx, d)
 	}
 	d.InfrastructureFrom = rec.RunID
+	d.UnreadFooter = ""
 	return l.restartWorkflowNode(ctx, d, base, rec, "restart", "workflow infrastructure failure")
 }
 
 // Restart a workflow node that exited normally without a readable RESULT footer,
 // preserving its work and resumable session without counting an infrastructure failure.
-func (l *Loop) restartUnreadWorkflowNode(ctx context.Context, d Decision, base string, rec run.Record) error {
+func (l *Loop) restartUnreadWorkflowNode(ctx context.Context, d Decision, base string, rec run.Record, unreadFooter string) error {
 	d.InfrastructureFrom = rec.RunID
-	return l.restartWorkflowNode(ctx, d, base, rec, "restart", "workflow node answer unread")
+	d.UnreadFooter = unreadFooter
+	preserveReason := "workflow node answer unread"
+	if unreadFooter != "" {
+		preserveReason = unreadFooterReason(unreadFooter)
+	}
+	return l.restartWorkflowNode(ctx, d, base, rec, "restart", preserveReason)
 }
 
 // A refused first message is not a paused session. Release only when the
@@ -57,6 +67,7 @@ func (l *Loop) emptyQuotaRefusal(d Decision, rec run.Record, base, head, dirty s
 }
 
 func (l *Loop) restartInterruptedNode(ctx context.Context, d Decision, base string, rec run.Record) error {
+	d.UnreadFooter = ""
 	return l.restartWorkflowNode(ctx, d, base, rec, "interrupted", "run interrupted by signal")
 }
 

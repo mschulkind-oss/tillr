@@ -13,7 +13,11 @@ import (
 // run identities and their checked outputs, and are not sent to a backend again.
 func (l *Loop) holdFailedParallelNode(ctx context.Context, node Decision, rec run.Record, log string, result *LoopResult) (Decision, bool, error) {
 	if classifyDecisionAttempt(node, rec, log) != AttemptInfrastructure {
-		return l.restartUnreadParallelNode(node, rec)
+		footer := reportFooter(log)
+		if readableFooter(footer) {
+			footer = ""
+		}
+		return l.restartUnreadParallelNode(node, rec, footer)
 	}
 	if err := l.recordBackendWindow(ctx, rec); err != nil {
 		return node, false, err
@@ -22,10 +26,10 @@ func (l *Loop) holdFailedParallelNode(ctx context.Context, node Decision, rec ru
 	if held, err := l.recordInfrastructureFailure(ctx, node, rec, log); held || err != nil {
 		return node, false, err
 	}
-	return l.restartUnreadParallelNode(node, rec)
+	return l.restartUnreadParallelNode(node, rec, "")
 }
 
-func (l *Loop) restartUnreadParallelNode(node Decision, rec run.Record) (Decision, bool, error) {
+func (l *Loop) restartUnreadParallelNode(node Decision, rec run.Record, unreadFooter string) (Decision, bool, error) {
 	policy := l.currentPolicy()
 	if policy == nil {
 		return node, false, Usagef("workflow seat %s has no backend route", node.Seat)
@@ -39,6 +43,7 @@ func (l *Loop) restartUnreadParallelNode(node Decision, rec run.Record) (Decisio
 	stampDecisionRequest(node, request)
 	node.RunRequest = request
 	node.WorkflowRestart = true
+	node.UnreadFooter = unreadFooter
 	node.InfrastructureFrom = rec.RunID
 	node.SelectSeat = false
 	return node, true, nil
@@ -58,6 +63,7 @@ func (l *Loop) parallelInterrupted(node Decision, rec run.Record) (Decision, boo
 	stampDecisionRequest(node, request)
 	node.RunRequest = request
 	node.WorkflowRestart = true
+	node.UnreadFooter = ""
 	node.InfrastructureFrom = ""
 	return node, true, nil
 }
@@ -145,7 +151,7 @@ func (l *Loop) stageParallelReplacement(ctx context.Context, nodes []Decision, i
 	if stagedBase := l.laneBase(node.LaneID); stagedBase != "" {
 		base = stagedBase
 	}
-	spec := StageSpec{Policy: l.currentPolicy(), Continue: true, Isolated: true, Node: &node.Workflow.Stages[node.NodeIndex], InputPaths: paths, LaneID: node.LaneID, ItemID: node.ItemID, RunID: node.RunRequest.RunID, Backend: node.RunRequest.Backend, BaseSHA: base, WorkingDir: node.RunRequest.WorkingDir, TimeoutMS: node.RunRequest.TimeoutMS}
+	spec := StageSpec{Policy: l.currentPolicy(), Continue: true, Isolated: true, Node: &node.Workflow.Stages[node.NodeIndex], InputPaths: paths, LaneID: node.LaneID, ItemID: node.ItemID, RunID: node.RunRequest.RunID, Backend: node.RunRequest.Backend, BaseSHA: base, WorkingDir: node.RunRequest.WorkingDir, TimeoutMS: node.RunRequest.TimeoutMS, UnreadFooter: node.UnreadFooter}
 	if err := l.stageInfrastructureSession(ctx, &node, &spec); err != nil {
 		return err
 	}
