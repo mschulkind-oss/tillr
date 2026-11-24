@@ -32,7 +32,7 @@ setup was fixed that day in `af168297a`). Also on 2026-11-16, a real-store loop 
 [`config/tillr/backend-policy.mixed.json`](../../config/tillr/backend-policy.mixed.json)
 dispatched thirteen conflict-design runs to `claude-designer` (`07:55:43` to `08:22:52`
 UTC), each refused with exit 1 after the real weekly subscription limit had been reached
-([the roadmap's conflict-design routing entry](../tillr/roadmap.md#route-design-work-past-a-design-seat-that-is-out-of-quota);
+(the conflict-design routing defect,
 fixed in `c448c053a`). Both
 [`config/tillr/backend-policy.claude.json`](../../config/tillr/backend-policy.claude.json)
 and [`config/tillr/backend-policy.mixed.json`](../../config/tillr/backend-policy.mixed.json)

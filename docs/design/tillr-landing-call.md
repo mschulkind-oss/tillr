@@ -466,7 +466,7 @@ Smallest first. The running drain keeps working at every step, because the foote
 
 **Step 1 needs nothing from the fork**, and it is worth having if nothing after it is ever built.
 
-**The filed steps live in the roadmap.** Steps 1, 2, 3, 4 and 6 are queue items in [the tillr roadmap](../tillr/roadmap.md#filed-2026-11-18-a-landing-is-a-suspended-tool-call), and their blocks there govern.
+**Steps 1, 2, 3, 4 and 6 are built.** The pi adapter's `land` tool, its transcript check and its obstacle tool are in [`tools/tillr-run/backends/pi/`](../../tools/tillr-run/backends/pi/); what the adapter still needs from pi is on [the tillr roadmap](../tillr/roadmap.md).
 
 ### 10.1 Drafted items
 

@@ -151,7 +151,7 @@ Three consequences the monitor depends on, all inherited rather than re-derived:
 > **The drain must retain a periodic re-evaluation tick, or the poll wait must take the earliest
 > `due_at` as a wake deadline the way it already takes the run deadline.**
 
-It holds. The loop is a daemon by default: when nothing is dispatchable it waits and re-plans, and with no store notification it re-plans on the fallback reconciliation poll (`DefaultFallbackPollInterval`, 15 seconds, in [`tools/tillr-drain/drain/trigger.go`](../../tools/tillr-drain/drain/trigger.go)). The owner ruled that default on 2026-11-15 ([the roadmap block](../tillr/roadmap.md#the-loop-waits-when-nothing-is-dispatchable-and-exiting-is-the-option)). A due time that passes while the loop is idle is therefore noticed on the next poll, with nothing written to wake it.
+It holds. The loop is a daemon by default: when nothing is dispatchable it waits and re-plans, and with no store notification it re-plans on the fallback reconciliation poll (`DefaultFallbackPollInterval`, 15 seconds, in [`tools/tillr-drain/drain/trigger.go`](../../tools/tillr-drain/drain/trigger.go)). The owner ruled that default on 2026-11-15. A due time that passes while the loop is idle is therefore noticed on the next poll, with nothing written to wake it.
 
 One mode does not satisfy it, and [§8](#8-a-not-due-item-when-the-loop-is-told-to-exit-once-drained) is the rule for it.
 
