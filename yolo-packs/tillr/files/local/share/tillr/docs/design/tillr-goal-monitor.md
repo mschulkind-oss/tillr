@@ -12,7 +12,7 @@ summary: "Parked. A goal is a recurring item whose criteria are a property of th
 
 # A goal monitor: a scheduled check-in that inspects the queue and files what it finds
 
-> **Delivered copy.** This is `docs/design/tillr-goal-monitor.md` from this repository at commit `06e63d0112` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-goal-monitor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-goal-monitor.md` from this repository at commit `282386b687` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-goal-monitor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Parked on [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox) until there is a use for it. Nothing is built: `rg 'due_at|goal-checkin|graph.approved' tools config -g '!*.md'` returns nothing. Neither slice in [§10](#10-the-downstream-slices) is in the queue, and both questions are blocked. The [ledger](#11-decision-ledger)'s rows are the designer's decisions; the owner has ruled on none of them. This document states the decisions and the rules an implementer needs; it is short on purpose while the design is parked.
 
