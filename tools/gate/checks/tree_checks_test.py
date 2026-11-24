@@ -17,6 +17,9 @@ HERE = Path(__file__).parent
 spec = importlib.util.spec_from_file_location("go_build", HERE / "go-build.py")
 go_build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(go_build)
+pi_forks_drain_spec = importlib.util.spec_from_file_location("pi_forks_drain", HERE / "pi-forks-drain.py")
+pi_forks_drain = importlib.util.module_from_spec(pi_forks_drain_spec)
+pi_forks_drain_spec.loader.exec_module(pi_forks_drain)
 
 
 def missing_go_reads(reads, root):
@@ -345,7 +348,6 @@ class TreeChecks(unittest.TestCase):
         responses = [
             ("M\tfixture/tool\n\tfixture/tool/lib\n\tfixture/tool/none\n\tfixture/tool/failed\n"
              "\tfixture/tool/cover\n\tfixture/tool/json-cover\n", "", 0),
-            ("", "", 0),
             ('{"Action":"output","Package":"fixture/tool","Output":"ok  \\tfixture/tool\\t(cached)\\n"}\n'
              '{"Action":"output","Package":"fixture/tool/lib","Output":"ok  \\tfixture/tool/lib\\t0.001s\\n"}\n'
              '{"Action":"output","Package":"fixture/tool/json-cover","Output":"\\tfixture/tool/json-cover\\t\\tcoverage: 0.0% of statements\\n"}\n'
@@ -366,7 +368,7 @@ class TreeChecks(unittest.TestCase):
                 patch.object(go_build, "store_result"), \
                 patch.object(go_build.subprocess, "run", side_effect=invoke):
             self.assertEqual(go_build.main(store), 1)
-        self.assertEqual([a[1] for a in calls], ["list", "build", "test"])
+        self.assertEqual([a[1] for a in calls], ["list", "test"])
         self.assertEqual(calls[-1], ["go", "test", "-exec", "true", "./..."])
         evidence, = json.loads(path.read_text())
         self.assertEqual(evidence["execution"], "ran")
@@ -471,12 +473,184 @@ class TreeChecks(unittest.TestCase):
         with patch.dict(os.environ, {"GOFLAGS": "-mod=mod"}), patch.object(go_build.subprocess, "run", recorded):
             self.assertEqual(go_build.build_module(module, self.root)[0], 0)
             expected_cache = os.environ.get("GOCACHE")
-        self.assertEqual([args[:2] for args, _ in calls], [["go", "list"], ["go", "build"], ["go", "test"]])
-        self.assertIn("-exec", calls[2][0])
-        self.assertEqual(calls[2][0][calls[2][0].index("-exec") + 1], "true")
+        self.assertEqual([args[:2] for args, _ in calls], [["go", "list"], ["go", "test"], ["go", "build"]])
+        self.assertIn("-exec", calls[1][0])
+        self.assertEqual(calls[1][0][calls[1][0].index("-exec") + 1], "true")
         for args, env in calls:
             self.assertEqual(env["GOFLAGS"].split(), ["-mod=mod", "-trimpath"], args)
             self.assertEqual(env.get("GOCACHE"), expected_cache, args)
+
+    def test_go_build_links_only_main_packages_after_test_compile(self):
+        module = self.root / "tool"
+        module.mkdir()
+        calls = []
+        def recorded(args, **kwargs):
+            calls.append(args)
+            out = "M\tfixture/tool/cmd/a\n\tfixture/tool/lib\nM\tfixture/tool/cmd/b\n" if args[1] == "list" else ""
+            return subprocess.CompletedProcess(args, 0, stdout=out, stderr="")
+        with patch.object(go_build.subprocess, "run", recorded):
+            self.assertEqual(go_build.build_module(module, self.root)[0], 0)
+        self.assertEqual([args[1] for args in calls], ["list", "test", "build"])
+        self.assertEqual(calls[1], ["go", "test", "-exec", "true", "./..."])
+        self.assertEqual(calls[2][:3], ["go", "build", "-o"])
+        self.assertEqual(calls[2][4:], ["fixture/tool/cmd/a", "fixture/tool/cmd/b"])
+
+    def test_module_memory_ignores_replaced_dependency_test_files_and_orders_waves(self):
+        # A replaced dependency's *_test.go files are never compiled by a downstream
+        # module, and building dependency waves before downstream modules warms GOCACHE
+        # once instead of compiling shared packages simultaneously in every consumer.
+        a, b, c = (self.root / name for name in ("a", "b", "c"))
+        for m in (a, b, c):
+            m.mkdir()
+        (a / "go.mod").write_text("module fixture/a\n\ngo 1.24\n")
+        (a / "a.go").write_text("package a\nfunc A() int { return 1 }\n")
+        (a / "a_test.go").write_text("package a\n")
+        (b / "go.mod").write_text("module fixture/b\n\ngo 1.24\nrequire fixture/a v0.0.0\nreplace fixture/a => ../a\n")
+        (b / "b.go").write_text("package b\nimport \"fixture/a\"\nfunc B() int { return a.A() }\n")
+        (c / "go.mod").write_text(
+            "module fixture/c\n\ngo 1.24\nrequire (\n\tfixture/a v0.0.0\n\tfixture/b v0.0.0\n)\n"
+            "replace fixture/a => ../a\nreplace fixture/b => ../b\n"
+        )
+        (c / "c.go").write_text("package main\nimport \"fixture/b\"\nfunc main() { _ = b.B() }\n")
+        def commit():
+            subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c",
+                            "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+        commit()
+
+        events = []
+        lock = threading.Lock()
+        def build(module, scratch):
+            with lock:
+                events.append(("start", module.name))
+            with lock:
+                events.append(("end", module.name))
+            return 0, ""
+
+        # Reverse GO_TOOL_DIRS order (c, b, a) proves scheduling follows replace waves, not list index.
+        with patch.object(go_build, "GO_TOOL_DIRS", (str(c), str(b), str(a))), \
+                patch.object(go_build.Path, "cwd", return_value=self.root), \
+                patch.object(go_build, "build_module", build):
+            self.assertEqual(go_build.main(), 0)
+            self.assertLess(events.index(("end", "a")), events.index(("start", "b")))
+            self.assertLess(events.index(("end", "b")), events.index(("start", "c")))
+
+            # Editing a's test file rebuilds only a; b and c keep their remembered pass.
+            events.clear()
+            (a / "a_test.go").write_text("package a\n// test-only edit\n")
+            commit()
+            self.assertEqual(go_build.main(), 0)
+            self.assertEqual([name for kind, name in events if kind == "start"], ["a"])
+
+            # Untracked test file in a invalidates only a, whereas untracked prod file invalidates all.
+            events.clear()
+            (a / "extra_test.go").write_text("package a\n")
+            self.assertEqual(go_build.main(), 0)
+            self.assertEqual([name for kind, name in events if kind == "start"], ["a"])
+            (a / "extra_test.go").unlink()
+
+            events.clear()
+            (a / "extra.go").write_text("package a\n")
+            self.assertEqual(go_build.main(), 0)
+            self.assertEqual([name for kind, name in events if kind == "start"], ["a", "b", "c"])
+            (a / "extra.go").unlink()
+
+    def test_mutual_replace_cycle_runs_in_parallel_before_downstream_wave(self):
+        # tillr-drain and tillr-land have mutual module-level replace directives;
+        # members of one strongly connected component must run concurrently in one wave,
+        # and downstream consumers run in the next wave.
+        a, b, c = (self.root / name for name in ("a", "b", "c"))
+        for m in (a, b, c):
+            m.mkdir()
+        (a / "go.mod").write_text("module fixture/a\n\ngo 1.24\nreplace fixture/b => ../b\n")
+        (b / "go.mod").write_text("module fixture/b\n\ngo 1.24\nreplace fixture/a => ../a\n")
+        (c / "go.mod").write_text("module fixture/c\n\ngo 1.24\nreplace fixture/a => ../a\n")
+        for m in (a, b, c):
+            (m / "p.go").write_text(f"package {m.name}\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "cycle"], check=True)
+        cycle_barrier = threading.Barrier(2)
+        order = []
+        lock = threading.Lock()
+        def build(module, scratch):
+            if module.name in ("a", "b"):
+                cycle_barrier.wait(timeout=10)
+            with lock:
+                order.append(module.name)
+            return 0, ""
+        with patch.object(go_build, "GO_TOOL_DIRS", (str(c), str(b), str(a))), \
+                patch.object(go_build.Path, "cwd", return_value=self.root), \
+                patch.object(go_build, "build_module", build):
+            self.assertEqual(go_build.main(), 0)
+        self.assertEqual(set(order[:2]), {"a", "b"})
+        self.assertEqual(order[2], "c")
+
+    def test_module_keys_avoids_per_module_gowork_subprocesses(self):
+        modules = []
+        for name in ("m1", "m2", "m3"):
+            m = self.root / name
+            m.mkdir()
+            (m / "go.mod").write_text(f"module fixture/{name}\n\ngo 1.24\n")
+            (m / "p.go").write_text(f"package {name}\n")
+            modules.append(m)
+        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "mods"], check=True)
+        real_run = subprocess.run
+        gowork_calls = []
+        status_calls = []
+        def spy(args, *pos, **kw):
+            if args[:3] == ["go", "env", "GOWORK"]:
+                gowork_calls.append(args)
+            if len(args) >= 4 and args[0] == "git" and "status" in args:
+                status_calls.append(args)
+            return real_run(args, *pos, **kw)
+        with patch.dict(os.environ, GOWORK=""), patch.object(go_build.subprocess, "run", side_effect=spy), \
+                patch.object(go_build, "git", wraps=go_build.git):
+            first = go_build.module_keys(self.root, modules)
+            second = go_build.module_keys(self.root, modules)
+        self.assertEqual(first, second)
+        self.assertTrue(all(bound for _, bound in first.values()))
+        self.assertEqual(gowork_calls, [])
+        self.assertLessEqual(len(status_calls), 2)
+
+    def test_pi_forks_drain_trims_paths_for_shared_go_cache(self):
+        self.track("bin/pi-forks", "#!/bin/sh\n")
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "base"], check=True)
+        base = subprocess.check_output(["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
+        self.track("bin/pi-forks", "#!/bin/sh\necho changed\n")
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "head"], check=True)
+        head = subprocess.check_output(["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
+        drain_dir = self.root / "tools/tillr-drain"
+        drain_dir.mkdir(parents=True)
+        (drain_dir / "go.mod").write_text("module fixture/drain\n")
+        real_run = subprocess.run
+        recorded = []
+        def fake_run(args, **kwargs):
+            if args and args[0] == "go":
+                recorded.append((args, kwargs.get("cwd"), kwargs.get("env", {})))
+                return subprocess.CompletedProcess(args, 0)
+            return real_run(args, **kwargs)
+        old_cwd = Path.cwd()
+        os.chdir(self.root)
+        try:
+            with patch.dict(os.environ, {"GOFLAGS": "-mod=mod", "LAND_BATCH_LIMIT": "3"}), \
+                    patch.object(pi_forks_drain.subprocess, "run", side_effect=fake_run):
+                expected_cache = os.environ.get("GOCACHE")
+                self.assertEqual(pi_forks_drain.main(base, head), 0)
+        finally:
+            os.chdir(old_cwd)
+        self.assertEqual(len(recorded), 1)
+        args, cwd, env = recorded[0]
+        self.assertEqual(args, ["go", "test", "-count=1", "./drain", "-run", "^TestForkBuildDeliveryAndSuccessiveLaneBases$"])
+        self.assertEqual(cwd, drain_dir)
+        self.assertEqual(env["CGO_ENABLED"], "0")
+        self.assertEqual(env["GOFLAGS"].split(), ["-mod=mod", "-trimpath"])
+        self.assertNotIn("LAND_BATCH_LIMIT", env)
+        self.assertEqual(env.get("GOCACHE"), expected_cache)
 
     def test_go_build_handles_library_missing_main_and_healthy_main(self):
         for name, source, expected in [("library", "package library\nfunc F() {}\n", 0),
