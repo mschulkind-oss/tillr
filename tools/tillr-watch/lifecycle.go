@@ -12,7 +12,7 @@ import (
 	"github.com/mschulkind-oss/tillr/watch"
 )
 
-var errNeedTrackingMigration = errors.New("tracking migration needed")
+var errNeedSchemaMigration = errors.New("schema migration needed")
 
 func runEpisode(ctx context.Context, face string, args []string, out io.Writer) error {
 	f := flag.NewFlagSet(face, flag.ContinueOnError)
@@ -54,6 +54,9 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 	id := operands[0]
 	set := map[string]bool{}
 	f.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if face == "ack" && set["item"] {
+		return refuseEpisodeOptions(ctx, *path, operands, errors.New("--item is not accepted on ack: ack covers one observed instance only; use 'tillr watch track' or 'tillr watch silence' for item-linked suppression"))
+	}
 	if face == "silence" && (set["until"] == set["until-change"] || set["until-change"] && !untilChange) {
 		return refuseEpisodeOptions(ctx, *path, operands, fmt.Errorf("silence requires exactly one of --until and --until-change"))
 	}
@@ -66,9 +69,6 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 	apply := func(e watch.Evaluator) (string, error) {
 		switch face {
 		case "ack":
-			if set["item"] {
-				return "acknowledged", e.AckWithItem(ctx, id, by, optional("note", &note), &item)
-			}
 			return "acknowledged", e.Ack(ctx, id, by, optional("note", &note))
 		case "track":
 			return "tracked by " + item, e.Track(ctx, id, item, optional("by", &by), optional("note", &note))
@@ -81,38 +81,35 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 	var state string
 	err = store.EditExisting(ctx, *path, func(s *store.Store) error {
 		e := watch.Evaluator{Store: s}
-		switch {
-		case face == "track":
+		switch face {
+		case "track":
 			if !set["item"] || item == "" {
 				return e.RefuseEpisode(ctx, id, errors.New("--item is required and must not be empty"))
 			}
 			if set["by"] && by == "" {
 				return e.RefuseEpisode(ctx, id, errors.New("--by must not be empty"))
 			}
-			needMigrate, err := e.NeedsTrackingMigration(ctx, true, id, item, optional("by", &by))
+			needMigrate, err := e.NeedsTrackingMigration(ctx, id, item, optional("by", &by))
 			if err != nil {
 				return err
 			}
 			if needMigrate {
-				return errNeedTrackingMigration
+				return errNeedSchemaMigration
 			}
-		case face == "ack" && set["item"]:
-			if item == "" {
-				return e.RefuseEpisode(ctx, id, errors.New("--item must not be empty"))
-			}
-			needMigrate, err := e.NeedsTrackingMigration(ctx, false, id, item, &by)
+		case "ack":
+			needMigrate, err := e.NeedsAckMigration(ctx, id, by)
 			if err != nil {
 				return err
 			}
 			if needMigrate {
-				return errNeedTrackingMigration
+				return errNeedSchemaMigration
 			}
 		}
 		var applyErr error
 		state, applyErr = apply(e)
 		return applyErr
 	})
-	if errors.Is(err, errNeedTrackingMigration) {
+	if errors.Is(err, errNeedSchemaMigration) {
 		ms, openErr := store.OpenMigrated(ctx, *path)
 		if openErr != nil {
 			err = openErr

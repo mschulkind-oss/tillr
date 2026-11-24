@@ -390,15 +390,15 @@ receiver = "foreground"
 		t.Fatalf("initial lag episode: pair=%+v count=%d, want %s:%s / 1", lagPair, count, c1, c0)
 	}
 
-	// AckWithItem attaches item-lag-fix on open episode and records item_id in watch.alert.acknowledged.
-	itemID := "item-lag-fix"
-	if err := e.AckWithItem(ctx, alertID, "operator", nil, &itemID); err != nil {
-		t.Fatalf("AckWithItem: %v", err)
+	// Track attaches item-lag-fix on open episode and records item_id in watch.alert.tracked.
+	by := "operator"
+	if err := e.Track(ctx, alertID, "item-lag-fix", &by, nil); err != nil {
+		t.Fatalf("Track: %v", err)
 	}
-	var ackItem string
-	lifecycleRead(t, s, `SELECT json_extract(payload,'$.item_id') FROM events WHERE kind='watch.alert.acknowledged'`, &ackItem)
-	if ackItem != "item-lag-fix" {
-		t.Fatalf("ack payload item_id = %q, want item-lag-fix", ackItem)
+	var trackedItem string
+	lifecycleRead(t, s, `SELECT json_extract(payload,'$.item_id') FROM events WHERE kind='watch.alert.tracked'`, &trackedItem)
+	if trackedItem != "item-lag-fix" {
+		t.Fatalf("track payload item_id = %q, want item-lag-fix", trackedItem)
 	}
 
 	// Unchanged lag pair writes nothing and leaves observation_count = 1.

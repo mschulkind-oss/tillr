@@ -87,9 +87,9 @@ func TestWatchTrackAndAckWithItemWaitEndToEnd(t *testing.T) {
 		t.Fatalf("track restore: code=%d err=%q", code, trackErr3)
 	}
 
-	// Also open a second alert and attach via ack --item.
-	fact(t, s, `{"item_id":"trunk-lag"}`)
-	fact(t, s, `{"item_id":"trunk-lag"}`)
+	// Open a second alert; ack --item is refused, while track attaches item-slice-e.
+	fact(t, s, "{"+`"item_id":"trunk-lag"`+"}")
+	fact(t, s, "{"+`"item_id":"trunk-lag"`+"}")
 	code, secondOut, secondErr := invoke("wait", "--rules", dir, "--timeout", "2s", "--seen-through", fmt.Sprint(through))
 	if code != 0 || secondErr != "" {
 		t.Fatalf("second wait: code=%d out=%q err=%q", code, secondOut, secondErr)
@@ -97,9 +97,13 @@ func TestWatchTrackAndAckWithItemWaitEndToEnd(t *testing.T) {
 	through2 := cursor(t, secondOut)
 	var alertID2 string
 	faceRead(t, s, `SELECT alert_id FROM alert_episodes WHERE subject_key='trunk-lag'`, &alertID2)
-	code, ackOut, ackErr := invoke("ack", alertID2, "--by", "operator", "--item", "item-slice-e", "--note", "slice E")
-	if code != 0 || ackErr != "" || ackOut != fmt.Sprintf("alert %s acknowledged\n", alertID2) {
-		t.Fatalf("ack --item: code=%d out=%q err=%q", code, ackOut, ackErr)
+	code, ackRefOut, ackRefErr := invoke("ack", alertID2, "--by", "operator", "--item", "item-slice-e", "--note", "slice E")
+	if code != 1 || ackRefOut != "" || !strings.Contains(ackRefErr, "--item is not accepted on ack") {
+		t.Fatalf("ack --item should refuse: code=%d out=%q err=%q", code, ackRefOut, ackRefErr)
+	}
+	code, track2Out, track2Err := invoke("track", alertID2, "--by", "operator", "--item", "item-slice-e", "--note", "slice E")
+	if code != 0 || track2Err != "" || track2Out != fmt.Sprintf("alert %s tracked by item-slice-e\n", alertID2) {
+		t.Fatalf("track second alert: code=%d out=%q err=%q", code, track2Out, track2Err)
 	}
 
 	// Start a live background wait (re-armed with --seen-through through2).
@@ -264,11 +268,12 @@ func TestWatchTrackRefusalsAndPreMigrationStorePreservation(t *testing.T) {
 		refuse("--item is required", "track", id)
 		refuse("--item is required", "track", id, "--item=")
 		refuse("--by must not be empty", "track", id, "--item=item-open", "--by=")
-		refuse("--item must not be empty", "ack", id, "--by=alice", "--item=")
+		refuse("--item is not accepted on ack", "ack", id, "--by=alice", "--item=")
 		refuse("item item-missing not found", "track", id, "--item=item-missing")
 		refuse("item item-landed is landed; tracking requires an open item", "track", id, "--item=item-landed")
 		refuse("item item-closed is closed; tracking requires an open item", "track", id, "--item=item-closed")
-		refuse("item item-else is resolved-elsewhere; tracking requires an open item", "ack", id, "--by=alice", "--item=item-else")
+		refuse("--item is not accepted on ack", "ack", id, "--by=alice", "--item=item-else")
+		refuse("item item-else is resolved-elsewhere; tracking requires an open item", "track", id, "--item=item-else")
 
 		// Silence the alert first, then attach tracking item via track (clears silence fields!).
 		if code := run(ctx, []string{"silence", "--store", s.Path(), id, "--until=1h"}, io.Discard, io.Discard); code != 0 {
@@ -397,6 +402,9 @@ func TestWatchTrackRefusalsAndPreMigrationStorePreservation(t *testing.T) {
 			{"track", "alrt-legacy", "--item", "item-closed"},
 			{"track", "alrt-legacy", "--item="},
 			{"ack", "alrt-legacy", "--by", "op", "--item", "item-closed"},
+			{"ack", "alrt-legacy", "--by", "op", "--item", "item-open"},
+			{"ack", "alrt-legacy", "--by="},
+			{"ack", "missing", "--by", "op"},
 		} {
 			var out, stderr bytes.Buffer
 			if code := run(ctx, append([]string{args[0], "--store", path}, args[1:]...), &out, &stderr); code != 1 || out.Len() != 0 {
@@ -408,7 +416,29 @@ func TestWatchTrackRefusalsAndPreMigrationStorePreservation(t *testing.T) {
 			}
 		}
 
-		// 3. Accepted track migrates via store.OpenMigrated and commits tracking_item_id!
+		// 3. Accepted ack on a copy of the unmigrated DELETE-mode store migrates via store.OpenMigrated and records watermarks!
+		ackPath := filepath.Join(t.TempDir(), "legacy-ack.db")
+		if err := os.WriteFile(ackPath, before, 0600); err != nil {
+			t.Fatal(err)
+		}
+		var ackLegacyOut, ackLegacyErr bytes.Buffer
+		if code := run(ctx, []string{"ack", "--store", ackPath, "alrt-legacy", "--by", "op"}, &ackLegacyOut, &ackLegacyErr); code != 0 || ackLegacyErr.Len() != 0 || ackLegacyOut.String() != "alert alrt-legacy acknowledged\n" {
+			t.Fatalf("accepted legacy ack: code=%d out=%q err=%q", code, &ackLegacyOut, &ackLegacyErr)
+		}
+		ackReopened, err := store.OpenRead(ctx, ackPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ackReopened.Close()
+		var ackLegacyState string
+		var ackLegacySeq sql.NullInt64
+		var ackLegacyFP sql.NullString
+		faceRead(t, ackReopened, `SELECT state, acked_seq, acked_fingerprint FROM alert_episodes WHERE alert_id='alrt-legacy'`, &ackLegacyState, &ackLegacySeq, &ackLegacyFP)
+		if ackLegacyState != "acknowledged" || !ackLegacySeq.Valid || ackLegacySeq.Int64 != 1 || !ackLegacyFP.Valid {
+			t.Fatalf("migrated ack row: state=%q seq=%+v fp=%+v", ackLegacyState, ackLegacySeq, ackLegacyFP)
+		}
+
+		// 4. Accepted track migrates via store.OpenMigrated and commits tracking_item_id!
 		var accOut, accErr bytes.Buffer
 		if code := run(ctx, []string{"track", "--store", path, "alrt-legacy", "--item", "item-open", "--by", "op"}, &accOut, &accErr); code != 0 || accErr.Len() != 0 || accOut.String() != "alert alrt-legacy tracked by item-open\n" {
 			t.Fatalf("accepted legacy track: code=%d out=%q err=%q", code, &accOut, &accErr)

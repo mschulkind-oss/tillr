@@ -122,6 +122,9 @@ type memEpisode struct {
 	ackedBy              sql.NullString
 	ackedNote            sql.NullString
 	ackedAt              sql.NullInt64
+	ackedSeq             sql.NullInt64
+	ackedFingerprint     sql.NullString
+	ackedLagPair         sql.NullString
 	silenceUntilMS       sql.NullInt64
 	silenceOnFingerprint sql.NullString
 	trackingItemID       sql.NullString
@@ -293,15 +296,20 @@ func (m *memoryState) activeLocked(ruleID string) map[string]episode {
 	for _, ep := range m.episodes {
 		if ep.ruleID == ruleID && ep.state != "resolved" {
 			out[ep.subjectKey] = episode{
-				id:             ep.alertID,
-				state:          ep.state,
-				severity:       ep.severity,
-				opened:         ep.openedSeq,
-				last:           ep.lastObservedSeq,
-				silenceUntil:   ep.silenceUntilMS,
-				silenceOn:      ep.silenceOnFingerprint,
-				trackingItem:   ep.trackingItemID,
-				trackedLagPair: ep.trackedLagPair,
+				id:                   ep.alertID,
+				state:                ep.state,
+				severity:             ep.severity,
+				opened:               ep.openedSeq,
+				last:                 ep.lastObservedSeq,
+				conditionFingerprint: ep.conditionFingerprint,
+				silenceUntil:         ep.silenceUntilMS,
+				silenceOn:            ep.silenceOnFingerprint,
+				trackingItem:         ep.trackingItemID,
+				trackedLagPair:       ep.trackedLagPair,
+				ackedSeq:             ep.ackedSeq,
+				ackedFingerprint:     ep.ackedFingerprint,
+				ackedLagPair:         ep.ackedLagPair,
+				hasAckCols:           true,
 			}
 		}
 	}
@@ -882,6 +890,9 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 				memEp.ackedBy = sql.NullString{}
 				memEp.ackedNote = sql.NullString{}
 				memEp.ackedAt = sql.NullInt64{}
+				memEp.ackedSeq = sql.NullInt64{}
+				memEp.ackedFingerprint = sql.NullString{}
+				memEp.ackedLagPair = sql.NullString{}
 				memEp.conditionFingerprint = newest.fingerprint
 				memEp.bundleJSON = string(bundle)
 				if err := m.appendEventLocked(reopenedKind, ep.id, now, map[string]any{
@@ -957,10 +968,16 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			continue
 		}
 		memEp := m.findAlertLocked(ep.id)
+		var currentLagPair string
 		if r.When.Pattern == LagBehind {
-			pair := c.lag.leaderOID + ":" + c.lag.followerOID
-			if !memEp.trackedLagPair.Valid || memEp.trackedLagPair.String != pair {
-				memEp.trackedLagPair = sql.NullString{String: pair, Valid: true}
+			currentLagPair = c.lag.leaderOID + ":" + c.lag.followerOID
+			if !memEp.trackedLagPair.Valid {
+				memEp.trackedLagPair = sql.NullString{String: currentLagPair, Valid: true}
+			} else if memEp.trackedLagPair.String != currentLagPair {
+				memEp.trackedLagPair = sql.NullString{String: currentLagPair, Valid: true}
+				memEp.lastObservedSeq = max(ep.last, startHead)
+				memEp.lastObservedAt = now.UnixMilli()
+				memEp.observationCount++
 			}
 		}
 		if r.When.Pattern != LagBehind && newest.Seq > ep.last {
@@ -969,7 +986,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			memEp.observationCount++
 			memEp.conditionFingerprint = newest.fingerprint
 		}
-		if cause := ep.reopenCause(now, newest.fingerprint); cause != "" {
+		if cause := ep.reopenCause(r, now, newest, currentLagPair); cause != "" {
 			bundle, err := makeBundle(r, key, ep.id, c)
 			if err != nil {
 				return err
@@ -980,6 +997,9 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			memEp.ackedBy = sql.NullString{}
 			memEp.ackedNote = sql.NullString{}
 			memEp.ackedAt = sql.NullInt64{}
+			memEp.ackedSeq = sql.NullInt64{}
+			memEp.ackedFingerprint = sql.NullString{}
+			memEp.ackedLagPair = sql.NullString{}
 			memEp.conditionFingerprint = newest.fingerprint
 			memEp.bundleJSON = string(bundle)
 			if err := m.appendEventLocked(reopenedKind, ep.id, now, map[string]any{
@@ -1063,6 +1083,7 @@ func (m *memoryState) readEpisodeActionLocked(id string) (*memEpisode, episodeAc
 		trackingItemID: ep.trackingItemID,
 		hasTrackingCol: true,
 		hasLagPairCol:  true,
+		hasAckCols:     true,
 		payload: map[string]any{
 			"alert_id": id, "rule_id": ep.ruleID, "subject_key": ep.subjectKey, "severity": ep.severity,
 		},

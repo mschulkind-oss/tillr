@@ -31,6 +31,7 @@ type episodeAction struct {
 	trackingItemID     sql.NullString
 	hasTrackingCol     bool
 	hasLagPairCol      bool
+	hasAckCols         bool
 	payload            map[string]any
 }
 
@@ -92,10 +93,36 @@ func ensureTrackingColumns(tx *store.Tx, a episodeAction) error {
 	return nil
 }
 
-// NeedsTrackingMigration validates a track or ack-with-item operation read-only
-// and reports whether alert_episodes exists without tracking_item_id so a CLI
-// caller can upgrade via store.OpenMigrated only after all refusals pass.
-func (e Evaluator) NeedsTrackingMigration(ctx context.Context, isTrack bool, id, itemID string, by *string) (bool, error) {
+func ensureAckColumns(tx *store.Tx, a episodeAction) error {
+	if !a.hasLagPairCol {
+		if _, err := tx.Exec(`ALTER TABLE alert_episodes ADD COLUMN tracked_lag_pair TEXT`); err != nil {
+			return err
+		}
+	}
+	if !a.hasAckCols {
+		for _, col := range []struct{ name, decl string }{
+			{"acked_seq", "INTEGER"},
+			{"acked_fingerprint", "TEXT"},
+			{"acked_lag_pair", "TEXT"},
+		} {
+			exists, err := alertEpisodesHasColumn(tx.Reader(), col.name)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				if _, err := tx.Exec(fmt.Sprintf("ALTER TABLE alert_episodes ADD COLUMN %s %s", col.name, col.decl)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// NeedsAckMigration validates an ack operation read-only and reports whether
+// alert_episodes exists without the single-instance ack watermark columns so a
+// CLI caller can upgrade via store.OpenMigrated only after all refusals pass.
+func (e Evaluator) NeedsAckMigration(ctx context.Context, id, by string) (bool, error) {
 	if e.Store == nil {
 		return false, nil
 	}
@@ -105,26 +132,39 @@ func (e Evaluator) NeedsTrackingMigration(ctx context.Context, isTrack bool, id,
 		if err != nil {
 			return err
 		}
-		if isTrack {
-			if itemID == "" {
-				return fmt.Errorf("%w: --item is required and must not be empty", a.refuse(id))
-			}
-			if by != nil && *by == "" {
-				return fmt.Errorf("%w: --by must not be empty", a.refuse(id))
-			}
-			if a.state == "resolved" {
-				return a.refuse(id)
-			}
-		} else {
-			if by == nil || *by == "" {
-				return fmt.Errorf("%w: --by is required and must not be empty", a.refuse(id))
-			}
-			if itemID == "" {
-				return fmt.Errorf("%w: --item must not be empty", a.refuse(id))
-			}
-			if a.state != "open" {
-				return a.refuse(id)
-			}
+		if by == "" {
+			return fmt.Errorf("%w: --by is required and must not be empty", a.refuse(id))
+		}
+		if a.state != "open" {
+			return a.refuse(id)
+		}
+		need = !a.hasAckCols || !a.hasLagPairCol
+		return nil
+	})
+	return need, err
+}
+
+// NeedsTrackingMigration validates a track operation read-only and reports
+// whether alert_episodes exists without tracking_item_id so a CLI caller can
+// upgrade via store.OpenMigrated only after all refusals pass.
+func (e Evaluator) NeedsTrackingMigration(ctx context.Context, id, itemID string, by *string) (bool, error) {
+	if e.Store == nil {
+		return false, nil
+	}
+	var need bool
+	err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
+		a, err := readEpisodeAction(rd, id)
+		if err != nil {
+			return err
+		}
+		if itemID == "" {
+			return fmt.Errorf("%w: --item is required and must not be empty", a.refuse(id))
+		}
+		if by != nil && *by == "" {
+			return fmt.Errorf("%w: --by must not be empty", a.refuse(id))
+		}
+		if a.state == "resolved" {
+			return a.refuse(id)
 		}
 		if err := validateStoreOpenItem(rd, a, id, itemID); err != nil {
 			return err
@@ -135,14 +175,9 @@ func (e Evaluator) NeedsTrackingMigration(ctx context.Context, isTrack bool, id,
 	return need, err
 }
 
-// Ack records an actor's claim on an open episode. It does not evaluate rules.
+// Ack records an actor's single-instance claim on an open episode (recording
+// acked_seq, acked_fingerprint, and acked_lag_pair). It does not evaluate rules.
 func (e Evaluator) Ack(ctx context.Context, id, by string, note *string) error {
-	return e.AckWithItem(ctx, id, by, note, nil)
-}
-
-// AckWithItem records an actor's claim on an open episode, optionally attaching
-// an open queue item that tracks its cause. It does not evaluate rules.
-func (e Evaluator) AckWithItem(ctx context.Context, id, by string, note, itemID *string) error {
 	if e.Store == nil {
 		if e.Source == nil {
 			return fmt.Errorf("watch: Evaluator requires Store or Source")
@@ -152,20 +187,8 @@ func (e Evaluator) AckWithItem(ctx context.Context, id, by string, note, itemID 
 			if by == "" {
 				return fmt.Errorf("%w: --by is required and must not be empty", a.refuse(id))
 			}
-			if itemID != nil && *itemID == "" {
-				return fmt.Errorf("%w: --item must not be empty", a.refuse(id))
-			}
 			if a.state != "open" {
 				return a.refuse(id)
-			}
-			if itemID != nil {
-				if err := validateSourceOpenItem(ctx, e.Source, a, id, *itemID); err != nil {
-					return err
-				}
-				ep.trackingItemID = sql.NullString{String: *itemID, Valid: true}
-				ep.silenceUntilMS = sql.NullInt64{}
-				ep.silenceOnFingerprint = sql.NullString{}
-				a.payload["item_id"] = *itemID
 			}
 			a.payload["by"], a.payload["note"] = by, note
 			ep.state = "acknowledged"
@@ -176,6 +199,9 @@ func (e Evaluator) AckWithItem(ctx context.Context, id, by string, note, itemID 
 				ep.ackedNote = sql.NullString{}
 			}
 			ep.ackedAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
+			ep.ackedSeq = sql.NullInt64{Int64: ep.lastObservedSeq, Valid: true}
+			ep.ackedFingerprint = sql.NullString{String: ep.conditionFingerprint, Valid: true}
+			ep.ackedLagPair = ep.trackedLagPair
 			return nil
 		})
 	}
@@ -183,26 +209,15 @@ func (e Evaluator) AckWithItem(ctx context.Context, id, by string, note, itemID 
 		if by == "" {
 			return fmt.Errorf("%w: --by is required and must not be empty", a.refuse(id))
 		}
-		if itemID != nil && *itemID == "" {
-			return fmt.Errorf("%w: --item must not be empty", a.refuse(id))
-		}
 		if a.state != "open" {
 			return a.refuse(id)
 		}
+		if err := ensureAckColumns(tx, a); err != nil {
+			return err
+		}
 		a.payload["by"], a.payload["note"] = by, note
-		if itemID == nil {
-			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',acked_by=?,acked_note=?,acked_at=? WHERE alert_id=?`, by, note, now.UnixMilli(), id)
-			return err
-		}
-		if err := validateStoreOpenItem(tx.Reader(), a, id, *itemID); err != nil {
-			return err
-		}
-		if err := ensureTrackingColumns(tx, a); err != nil {
-			return err
-		}
-		a.payload["item_id"] = *itemID
-		_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',acked_by=?,acked_note=?,acked_at=?,tracking_item_id=?,silence_until_ms=NULL,silence_on_fingerprint=NULL WHERE alert_id=?`,
-			by, note, now.UnixMilli(), *itemID, id)
+		_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',acked_by=?,acked_note=?,acked_at=?,acked_seq=last_observed_seq,acked_fingerprint=condition_fingerprint,acked_lag_pair=tracked_lag_pair WHERE alert_id=?`,
+			by, note, now.UnixMilli(), id)
 		return err
 	})
 }
@@ -233,6 +248,9 @@ func (e Evaluator) Track(ctx context.Context, id, itemID string, by, note *strin
 			a.payload["note"] = note
 			ep.state = "acknowledged"
 			ep.trackingItemID = sql.NullString{String: itemID, Valid: true}
+			ep.ackedSeq = sql.NullInt64{}
+			ep.ackedFingerprint = sql.NullString{}
+			ep.ackedLagPair = sql.NullString{}
 			ep.silenceUntilMS = sql.NullInt64{}
 			ep.silenceOnFingerprint = sql.NullString{}
 			if by != nil {
@@ -268,17 +286,21 @@ func (e Evaluator) Track(ctx context.Context, id, itemID string, by, note *strin
 		a.payload["item_id"] = itemID
 		a.payload["by"] = by
 		a.payload["note"] = note
+		clearAckWatermarks := ""
+		if a.hasAckCols {
+			clearAckWatermarks = ",acked_seq=NULL,acked_fingerprint=NULL,acked_lag_pair=NULL"
+		}
 		if by != nil {
-			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,acked_by=?,acked_note=?,acked_at=?,silence_until_ms=NULL,silence_on_fingerprint=NULL WHERE alert_id=?`,
+			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,acked_by=?,acked_note=?,acked_at=?,silence_until_ms=NULL,silence_on_fingerprint=NULL`+clearAckWatermarks+` WHERE alert_id=?`,
 				itemID, *by, note, now.UnixMilli(), id)
 			return err
 		}
 		if note != nil {
-			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,acked_note=?,silence_until_ms=NULL,silence_on_fingerprint=NULL WHERE alert_id=?`,
+			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,acked_note=?,silence_until_ms=NULL,silence_on_fingerprint=NULL`+clearAckWatermarks+` WHERE alert_id=?`,
 				itemID, *note, id)
 			return err
 		}
-		_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,silence_until_ms=NULL,silence_on_fingerprint=NULL WHERE alert_id=?`,
+		_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,silence_until_ms=NULL,silence_on_fingerprint=NULL`+clearAckWatermarks+` WHERE alert_id=?`,
 			itemID, id)
 		return err
 	})
@@ -460,8 +482,21 @@ func readEpisodeAction(rd *store.Reader, id string) (episodeAction, error) {
 	if err != nil {
 		return a, err
 	}
+	hasAckedSeq, err := alertEpisodesHasColumn(rd, "acked_seq")
+	if err != nil {
+		return a, err
+	}
+	hasAckedFP, err := alertEpisodesHasColumn(rd, "acked_fingerprint")
+	if err != nil {
+		return a, err
+	}
+	hasAckedLag, err := alertEpisodesHasColumn(rd, "acked_lag_pair")
+	if err != nil {
+		return a, err
+	}
 	a.hasTrackingCol = hasTracking
 	a.hasLagPairCol = hasLagPair
+	a.hasAckCols = hasAckedSeq && hasAckedFP && hasAckedLag
 	var rule, subject, severity string
 	if hasTracking {
 		err = rd.QueryRow(`SELECT state,condition_fingerprint,acked_by,acked_note,tracking_item_id,rule_id,subject_key,severity FROM alert_episodes WHERE alert_id=?`, id).
