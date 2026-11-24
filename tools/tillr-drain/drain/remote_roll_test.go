@@ -33,7 +33,7 @@ func TestRemoteRebaseTriggersRollPaths(t *testing.T) {
 			}
 			remote := p.remoteCommit(t, tc.path, "upstream change\n")
 			p.l.afterGreen(context.Background(), p.local[1])
-			waitAction(t, func() bool { return !p.l.pushAction.busy() && !p.l.rollAction.busy() })
+			waitAction(t, &p.l.pushAction, &p.l.rollAction)
 			if green := runGit(t, p.f.root, "rev-parse", GreenRef); runGit(t, p.f.root, "merge-base", remote, green) != remote {
 				t.Fatal("the replay did not carry green across the upstream commit")
 			}
@@ -87,7 +87,7 @@ func TestRemoteRollSurvivesManualPushProcess(t *testing.T) {
 	}
 	advance := func(tip string) {
 		restarted.afterGreen(ctx, tip)
-		waitAction(t, func() bool { return !restarted.pushAction.busy() && !restarted.rollAction.busy() })
+		waitAction(t, &restarted.pushAction, &restarted.rollAction)
 	}
 	advance("start")
 	if _, err := os.Stat(rolled); !os.IsNotExist(err) {

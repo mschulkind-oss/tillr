@@ -161,7 +161,7 @@ func TestHeavyGreenAdvancePushesTheProvedCommitOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	l.heavyWG.Wait()
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	if remoteTip() != base {
 		t.Fatalf("a red run pushed %s", remoteTip())
 	}
@@ -171,7 +171,7 @@ func TestHeavyGreenAdvancePushesTheProvedCommitOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	l.heavyWG.Wait()
-	waitAction(t, func() bool { return !l.pushAction.busy() })
+	waitAction(t, &l.pushAction)
 	if got := remoteTip(); got != greenTip || got == redTip {
 		t.Fatalf("remote = %s, want proved %s", got, greenTip)
 	}

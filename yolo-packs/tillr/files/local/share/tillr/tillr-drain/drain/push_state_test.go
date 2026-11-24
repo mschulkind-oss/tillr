@@ -32,7 +32,7 @@ func TestAfterGreenRecordsProvingStateOnCleanReplay(t *testing.T) {
 	p := newPushFixture(t)
 	remoteTip := p.remoteCommit(t, "remote.txt", "remote\n")
 	p.l.afterGreen(context.Background(), p.local[1])
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	rebased := runGit(t, p.f.root, "rev-parse", "refs/heads/"+TrunkRef)
 	if rebased == p.local[2] {
 		t.Fatal("main did not move")
@@ -48,7 +48,7 @@ func TestStartupGreenPushKeepsProofHoldAcrossRetries(t *testing.T) {
 	root := p.f.root
 	remoteTip := p.remoteCommit(t, "remote.txt", "remote\n")
 	p.l.afterGreen(ctx, p.local[1])
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	rebased := runGit(t, root, "rev-parse", "refs/heads/"+TrunkRef)
 	green := runGit(t, root, "rev-parse", GreenRef)
 	if green == rebased || rebased == p.local[2] {
@@ -64,7 +64,7 @@ func TestStartupGreenPushKeepsProofHoldAcrossRetries(t *testing.T) {
 		t.Helper()
 		report.Reset()
 		loop.afterGreen(ctx, trigger)
-		waitAction(t, func() bool { return !loop.pushAction.busy() })
+		waitAction(t, &loop.pushAction)
 		return lastPushEvent(t, p.f)
 	}
 	published := func() string {
@@ -100,7 +100,7 @@ func TestGreenProofHoldReadsRefsAndReplayFacts(t *testing.T) {
 	root := p.f.root
 	p.remoteCommit(t, "remote.txt", "remote\n")
 	p.l.afterGreen(ctx, p.local[1])
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	rebased := runGit(t, root, "rev-parse", "refs/heads/"+TrunkRef)
 	green := runGit(t, root, "rev-parse", GreenRef)
 	ref := "refs/heads/" + TrunkRef
@@ -292,7 +292,7 @@ func TestAfterLandingRemoteDeclinedDoesNotReplay(t *testing.T) {
 	remoteBefore := runGit(t, p.remote, "rev-parse", "refs/heads/"+TrunkRef)
 	pushTestHook(t, p.remote, "pre-receive", "declined by server policy")
 	p.l.afterLanding(context.Background(), p.local[2])
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	ev := lastPushEvent(t, p.f)
 	if ev["kind"] != "push-remote-declined" || ev["escalated_mover"] != "operator" {
 		t.Errorf("unexpected decline event: %+v", ev)
@@ -316,7 +316,7 @@ func TestPushHookFailureWithoutPatchMoveRecordsPushFailed(t *testing.T) {
 	p.l.cfg.PostLanding.Push.What = settings.PushTip
 	pushTestHook(t, filepath.Join(p.f.root, ".git"), "pre-push", "local pre-push denied")
 	p.l.afterLanding(context.Background(), p.local[2])
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	if ev := lastPushEvent(t, p.f); ev["kind"] != "push-failed" {
 		t.Fatalf("unexpected hook failure: %+v", ev)
 	}
@@ -339,7 +339,7 @@ func TestPushClassificationAndStructuredState(t *testing.T) {
 	}
 	attempt := func() map[string]any {
 		p.l.afterLanding(ctx, p.local[2])
-		waitAction(t, func() bool { return !p.l.pushAction.busy() })
+		waitAction(t, &p.l.pushAction)
 		return lastPushEvent(t, p.f)
 	}
 	remoteTip := runGit(t, p.remote, "rev-parse", "refs/heads/"+TrunkRef)

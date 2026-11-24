@@ -502,7 +502,7 @@ func TestRemoteSyncHeavyProofAdvancesGreenAndPublishes(t *testing.T) {
 		t.Fatalf("repair did not record the tip awaiting proof: %+v", ev)
 	}
 	p.l.afterGreen(ctx, st.MergeBase)
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	if got := runGit(t, p.remote, "rev-parse", st.Ref); got != st.RemoteTip {
 		t.Fatalf("old green pushed unproved repair: %s", got)
 	}
@@ -517,7 +517,7 @@ func TestRemoteSyncHeavyProofAdvancesGreenAndPublishes(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.l.heavyWG.Wait()
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	if got := runGit(t, p.f.root, "rev-parse", GreenRef); got != tip {
 		t.Fatalf("proof advanced green to %s, want %s", got, tip)
 	}
@@ -533,7 +533,7 @@ func TestRemoteSyncTipModePublishesCompletedRepair(t *testing.T) {
 	p, st, c := stagedReplay(t)
 	p.l.cfg.PostLanding.Push.What = settings.PushTip
 	tip := landStagedReplay(t, p, c)
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindOK || ev["remote_tip"] != tip {
 		t.Fatalf("completed tip-mode repair did not publish: %+v", ev)
 	}

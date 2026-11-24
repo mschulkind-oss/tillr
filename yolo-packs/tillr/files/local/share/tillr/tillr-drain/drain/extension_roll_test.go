@@ -99,7 +99,7 @@ func TestExtensionRollTrunkPaths(t *testing.T) {
 	for _, p := range extPaths {
 		tip := commit(p)
 		l.afterLanding(ctx, tip)
-		waitAction(t, func() bool { return !l.extRollAction.busy() && !l.piRollAction.busy() })
+		waitAction(t, &l.extRollAction, &l.piRollAction)
 		if l.rollAction.busy() {
 			t.Fatalf("extension path %s triggered rollAction", p)
 		}
@@ -152,7 +152,7 @@ func TestExtensionRollAlongsideToolRoll(t *testing.T) {
 	_ = commit // keep helper usage consistent
 
 	l.afterLanding(ctx, tip)
-	waitAction(t, func() bool { return !l.rollAction.busy() && !l.extRollAction.busy() })
+	waitAction(t, &l.rollAction, &l.extRollAction)
 
 	calls, err := os.ReadFile(filepath.Join(l.cfg.Root, "calls"))
 	if err != nil {
@@ -201,13 +201,13 @@ func TestExtensionRollPatchBranch(t *testing.T) {
 	if l.extRollAction.busy() {
 		t.Fatal("patch/pi triggered extRollAction")
 	}
-	waitAction(t, func() bool { return !l.piRollAction.busy() })
+	waitAction(t, &l.piRollAction)
 
 	// refs/heads/patch/pi-subagents MUST trigger extension roll.
 	if _, err := l.landWithActions(ctx, Candidate{BaseRef: "refs/heads/patch/pi-subagents", HeadSHA: unrelated}); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.extRollAction.busy() })
+	waitAction(t, &l.extRollAction)
 
 	if roles := restartRoles(t, l); len(roles) != 0 {
 		t.Fatalf("patch-branch extension roll filed restart requests: %v", roles)
@@ -232,7 +232,7 @@ func TestExtensionRollCoalescing(t *testing.T) {
 
 	l.afterLanding(ctx, commit("yolo-packs/matt/files/extensions/a.ts"))
 	runsFile := filepath.Join(l.cfg.Root, "ext_runs")
-	waitAction(t, func() bool { b, _ := os.ReadFile(runsFile); return string(b) == "run\n" })
+	waitActionCondition(t, &l.extRollAction, func() bool { b, _ := os.ReadFile(runsFile); return string(b) == "run\n" })
 
 	for _, name := range []string{"b.ts", "c.ts", "d.ts"} {
 		l.afterLanding(ctx, commit("yolo-packs/matt/files/extensions/"+name))
@@ -240,7 +240,7 @@ func TestExtensionRollCoalescing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(l.cfg.Root, "release"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.extRollAction.busy() })
+	waitAction(t, &l.extRollAction)
 	if b, err := os.ReadFile(runsFile); err != nil || string(b) != "run\nrun\n" {
 		t.Fatalf("ext_runs = %q, %v", b, err)
 	}
@@ -260,7 +260,7 @@ func TestExtensionRollFailureAndClear(t *testing.T) {
 
 	failedTip := commit("yolo-packs/matt/files/extensions/broken.ts")
 	l.afterLanding(ctx, failedTip)
-	waitAction(t, func() bool { return !l.extRollAction.busy() })
+	waitAction(t, &l.extRollAction)
 
 	mover := holdrules.For(ReasonPiExtensionsBuildFailed).Mover
 	detail, ok := lastExtRollDetail(t, l, failedTip)
@@ -277,7 +277,7 @@ func TestExtensionRollFailureAndClear(t *testing.T) {
 	}
 	okTip := commit("yolo-packs/matt/files/extensions/fixed.ts")
 	l.afterLanding(ctx, okTip)
-	waitAction(t, func() bool { return !l.extRollAction.busy() })
+	waitAction(t, &l.extRollAction)
 
 	detail, ok = lastExtRollDetail(t, l, okTip)
 	if !ok || detail != "" {
@@ -299,7 +299,7 @@ func TestExtensionRollBlocksRestart(t *testing.T) {
 		default:
 			close(release)
 		}
-		waitAction(t, func() bool { return !l.extRollAction.busy() })
+		waitAction(t, &l.extRollAction)
 	}()
 	l.extRollAction.submit("tip", func(string) { <-release })
 
@@ -313,7 +313,7 @@ func TestExtensionRollBlocksRestart(t *testing.T) {
 	}
 
 	close(release)
-	waitAction(t, func() bool { return !l.extRollAction.busy() })
+	waitAction(t, &l.extRollAction)
 	if pending, err := l.buildRestartPending(ctx); err != nil || !pending {
 		t.Fatalf("buildRestartPending after extRollAction idle = %v, %v", pending, err)
 	}

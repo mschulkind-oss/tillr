@@ -76,7 +76,7 @@ func TestRemoteSyncPatchMoveClearancePushesGreen(t *testing.T) {
 	}
 	hook := pushTestHook(t, filepath.Join(root, ".git"), "pre-push", "patch move not acknowledged")
 	p.l.afterGreen(ctx, p.local[1])
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	event := lastPushEvent(t, p.f)
 	if event["kind"] != pushKindPatchMoveHeld {
 		t.Fatalf("missing patch move hold: %+v", event)
@@ -125,7 +125,7 @@ func blockRemoteSyncReplay(t *testing.T, offMain bool) (*pushFixture, string, fu
 		writeForkFile(t, clash, "owner's uncommitted file\n")
 	}
 	p.l.afterLanding(context.Background(), p.local[2])
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 	if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindWorktreeDirty || ev["escalated_mover"] != "operator" {
 		t.Fatalf("blocked replay did not record an operator hold: %+v", ev)
 	}
@@ -141,5 +141,5 @@ func (p *pushFixture) pollPushHold(t *testing.T) {
 	if _, err := p.l.passMode(context.Background(), &LoopResult{}, true); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	waitAction(t, &p.l.pushAction)
 }
