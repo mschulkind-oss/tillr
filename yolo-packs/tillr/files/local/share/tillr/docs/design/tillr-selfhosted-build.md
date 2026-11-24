@@ -15,7 +15,7 @@ next: "The owner rules OQ-SH4 on how tillr builds from Git. The source launcher 
 
 # Self-Hosted Tillr Building, Watchable in the Observatory
 
-> **Delivered copy.** This is `docs/design/tillr-selfhosted-build.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-selfhosted-build.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-selfhosted-build.md` from this repository at commit `5fabdf36fe` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-selfhosted-build.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-24. Partly built; [§2](#2-what-is-built-and-what-is-left) says which parts, each checked against the tree on that date. Other workspaces' tillr follows every landing ([OQ-SH2](#OQ-SH2)) and is to be delivered from what Git holds (`D-SH6`); how that is built is open in [OQ-SH4](#OQ-SH4).
 

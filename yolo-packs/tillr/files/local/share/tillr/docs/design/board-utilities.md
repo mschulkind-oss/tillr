@@ -9,7 +9,7 @@ summary: "Seven utilities over one shared substrate — store, item, land, drain
 
 # tillr utilities: seven utilities over one shared substrate
 
-> **Delivered copy.** This is `docs/design/board-utilities.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/board-utilities.md` from this repository at commit `5fabdf36fe` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Accepted. The seven binaries exist under `tools/tillr-store`, `tools/tillr-item`, `tools/tillr-land`, `tools/tillr-drain`, `tools/tillr-run`, `tools/tillr-gate` and `tools/tillr-view`, with the shared substrate in `tools/tillr` and the wrapper in `tools/tillr-cli`. UNMEASURED: the per-module time budgets of [§9](#9-testability-and-testing-speed) are the acceptance bar and no measurement of them is recorded here. Utilities outside the seven (`tillr-watch`, `tillr-loop`, `tillr-roll`, `tillr-trace`) are described in [tillr-utility-contracts.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-utility-contracts.md), not here.
 

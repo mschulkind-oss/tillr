@@ -22,7 +22,7 @@ vantage:
 
 # Tillr convergence: three structural causes, one target
 
-> **Delivered copy.** This is `docs/design/tillr-convergence.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-convergence.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-convergence.md` from this repository at commit `5fabdf36fe` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-convergence.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Partly built. Built: the item-block reader (`D-TC1`), sync as the document intake
 (`D-TC2`, apart from removed-block retirement), the "why is it not moving" face (`D-TC4`), and hold

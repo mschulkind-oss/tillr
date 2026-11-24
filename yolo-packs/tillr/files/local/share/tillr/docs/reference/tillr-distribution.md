@@ -14,7 +14,7 @@ summary: "tillr is distributed through one pack in a source-plus-launcher patter
 
 # Distribution: one source-built pack with eight `PATH` binaries
 
-> **Delivered copy.** This is `docs/reference/tillr-distribution.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-distribution.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-distribution.md` from this repository at commit `5fabdf36fe` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-distribution.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-24 against the tree. UNMEASURED here: the checks that hold it true are [`tests/pack-sync.test.py`](https://github.com/mschulkind-oss/tillr/blob/main/tests/pack-sync.test.py) (the mirror and the launchers) and [`tests/tillr-docs.test.py`](https://github.com/mschulkind-oss/tillr/blob/main/tests/tillr-docs.test.py) (the documentation split).
 
