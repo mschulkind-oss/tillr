@@ -31,8 +31,8 @@ const (
 	// Registered in drain/events.go.
 	FixerAttachedKind = "drain.fixer-attached"
 
-	dispatchStartedKind = "drain.dispatch-started"
-	examinationDoneKind = "drain.examination-done"
+	dispatchStartedKind = "drain.started"
+	examinationDoneKind = "drain.examined"
 )
 
 // ClassifyCheck is the check-result classifier used by fixer.
