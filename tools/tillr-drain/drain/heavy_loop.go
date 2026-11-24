@@ -247,13 +247,27 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 }
 
 func (l *Loop) restartStopsNextHeavyProof(ctx context.Context) (bool, error) {
-	if l.cfg.Restart == nil || l.restartActionDeferred() {
+	if l.cfg.Restart == nil {
 		return false, nil
 	}
-	if l.restartReplaced.Load() {
-		return true, nil
+	for {
+		if l.restartReplaced.Load() {
+			return true, nil
+		}
+		pending, err := l.restarterPendingWith(ctx, nil)
+		if err != nil || !pending {
+			return false, err
+		}
+		done := l.busyRestartAction()
+		if done == nil {
+			return true, nil
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
 	}
-	return l.restarterPendingWith(ctx, nil)
 }
 
 // Admission and exec cannot cross: the writer checks heavyProofActive after

@@ -154,8 +154,26 @@ func (l *Loop) restartProofActive() bool {
 	return proofActive
 }
 
+func (l *Loop) restartActions() []*landingAction {
+	return []*landingAction{&l.rollAction, &l.piRollAction, &l.extRollAction, &l.pushAction}
+}
+
 func (l *Loop) restartActionDeferred() bool {
-	return l.rollAction.busy() || l.piRollAction.busy() || l.extRollAction.busy() || l.pushAction.busy()
+	for _, a := range l.restartActions() {
+		if a.busy() {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *Loop) busyRestartAction() <-chan struct{} {
+	for _, a := range l.restartActions() {
+		if done := a.idle(); done != nil {
+			return done
+		}
+	}
+	return nil
 }
 
 // restartDeferred keeps the queue working while a tip proof or a post-landing
