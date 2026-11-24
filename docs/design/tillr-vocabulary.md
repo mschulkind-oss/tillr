@@ -333,7 +333,7 @@ Each term has one meaning. A term owned by another document is linked, not redef
 | Term | What it is | What it is not | Identified by; belongs to; has | Today's usage differs |
 | :--- | :--- | :--- | :--- | :--- |
 | **Candidate** | An item-branch head offered for landing, together with the trunk commit it was taken in on | Not a stored row and not a queue entry | A base commit and a head commit | — |
-| **Gate** | The fast checks a candidate must pass before it lands, inside a tested ten-second budget ([gate rework](./gate-rework.md)) | Not the full suite, and not the repository's `just done` | — | Also used for the full suite ("the full, untiered gate") and for the loop step |
+| **Gate** | The fast checks a candidate must pass before it lands, inside a tested ten-second budget ([gate reference](../reference/gate.md)) | Not the full suite, and not the repository's `just done` | — | Also used for the full suite ("the full, untiered gate") and for the loop step |
 | **Check** | One declared test the gate or the full suite runs | Not a criterion | A file under the checks directory | — |
 | **Gate verdict** | The gate's recorded answer on one candidate: pass, fail, or could not judge | Not a criterion verdict. "Verdict" is never used bare | Bound to a base commit and a head tree | — |
 | **Criterion verdict** | A judge's or the owner's recorded answer on one criterion: done, not-done, blocked or defective | Not a gate verdict | The item and the criterion id | — |
@@ -345,7 +345,7 @@ Each term has one meaning. A term owned by another document is linked, not redef
 | **Proven** | A landing contained in a trunk commit whose proof passed, and not reverted: a **proven landing** | Not merely unreverted so far | The green pointer at or past the landing | No `proven` item state (`landing_call_lifecycle.go` closes a landing call with outcome `proven`) |
 | **Full suite** | Every check, as the proof runs them | Not the gate | — | "Heavy tier" |
 | **Trunk; tip** | The repository's shared branch; its newest commit | — | — | — |
-| **Green pointer** | The ref naming the newest proven trunk commit ([gate rework](./gate-rework.md)) | Not a branch | `refs/tillr/green` | — |
+| **Green pointer** | The ref naming the newest proven trunk commit ([gate reference](../reference/gate.md)) | Not a branch | `refs/tillr/green` | — |
 | **Red** | The trunk after a proof ended in failure | Not "unproven". An unproven trunk is not red | The failing trunk commit | The red cap also holds on "unproven" |
 | **Revert** | A landing, with no model in it, that removes one proven-bad landing | Not an item, and not the mechanic | `revert-main-` and twelve hex digits. A land attempt node of the reverted item | Also an item state move out of `landed` |
 | **Pin** | A git ref whose only job is to keep a commit reachable for a record | Not a model pin and not a session pin | `refs/tillr/…` | — |
@@ -441,7 +441,7 @@ Which of the two landings ends the suspension is that design's question, not thi
 | "definition" of a node | The node's kind, inputs and brief | The graph design | Reword when that document is next edited |
 | `WorkflowStage`, "stage" | **Step** | Code, item graphs | Alias in code; reword the document |
 | "template" | **Workflow** | The graph design | Reword |
-| `rolling_*` tables, `--tier rolling`, "heavy tier" | **Proof**; **full suite** | Store, flags, [gate rework](./gate-rework.md) | Alias |
+| `rolling_*` tables, `--tier rolling`, "heavy tier" | **Proof**; **full suite** | Store, flags, [gate reference](../reference/gate.md) | Alias |
 | `drain_ticks`, `tick_id` | **Pass**; **generation** | Store, beside the newer `drain_passes` | Alias |
 
 ---

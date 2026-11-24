@@ -53,7 +53,7 @@ changing the tier. Both answer in a record on stdout when no output path is name
 JSON files each declare one check. Programs and tests can live beside those files; only
 filenames ending in `.json` are declarations. Adding a check adds its files without
 editing a shared list. The complete field contract and defaults are in
-[the check-file design](../../docs/design/gate-rework.md#64-a-check-is-one-file).
+[the gate reference](../../docs/reference/gate.md#a-check-is-one-declaration-file).
 
 ```sh
 tillr-gate plan --registry tools/gate/checks/ --input gate.change.json
@@ -83,7 +83,7 @@ only the admission sum, never a deadline. `--tree-overrun keep` remains compatib
 `carry` is refused because stopping at a budget would discard a working judgment.
 
 The watchdog (the progress observer defined in
-[design Section 6.5](../../docs/design/gate-rework.md#65-ten-seconds-is-a-failing-test))
+[the gate reference](../../docs/reference/gate.md#budgets-and-the-stall-watchdog))
 samples every 1,000 milliseconds. A byte of log growth or CPU progress resets
 its silent-sample count. Sixty consecutive samples with neither ends the group.
 The result is `stalled`, exit 6, not pass, fail, error or over-budget. The
@@ -155,7 +155,7 @@ range is compared with the preceding recorded run, across drain restarts. A seco
 consecutive stall of the same check files one deduplicated trunk fixer naming that
 check; an intervening different range, check or non-stall does not qualify. The
 append-only gate record needs no lock wait, so callers omit its ignored lock flags.
-See the [wrapper watchdog slice](../../docs/design/gate-rework.md#route-the-gate-programs-own-time-limits-through-the-stall-watchdog).
+See [budgets and the stall watchdog](../../docs/reference/gate.md#budgets-and-the-stall-watchdog).
 
 The `documents` change check remembers a pass for each changed document in the
 same result store as tree checks, under a key over the document's blob and every
@@ -194,7 +194,7 @@ failed checks separately. Bare path needs from older generated registries retain
 existing missing-checkout error contract.
 
 Every matched ref's name and resolved commit enters the tree check's
-[fingerprint](../../docs/design/gate-rework.md#62-a-tree-checks-result-is-remembered-by-fingerprint),
+[fingerprint](../../docs/reference/gate.md#remembered-passes),
 the identifier of its declared inputs. Moving a ref reruns the check; removing it makes
 the check unavailable even if a pass was remembered. A ref changing while its command
 runs prevents that result from being remembered under the original inputs.
@@ -204,7 +204,7 @@ runs prevents that result from being remembered under the original inputs.
 `checks` runs the change declarations in a directory, optionally including its fast
 tree declarations. Heavy tree checks are left to the heavy runner. A change check judges the
 caller’s commit range, not the tree alone; the
-[design defines that distinction](../../docs/design/gate-rework.md#61-the-caller-names-the-base).
+[gate reference defines that distinction](../../docs/reference/gate.md#change-checks-and-tree-checks).
 The base and head are required, and the base must be an ancestor of the head. Missing or
 unreadable revisions answer “could not judge” (exit 4) before any check runs. Each program
 receives both commits and reads no remembered baseline. Its exit 4 is also no judgment,
@@ -254,7 +254,7 @@ tillr-gate checks --heavy-tree --only <check-id> --base <tip> --head <tip> --wor
 
 `classify` reads check observations as JSON from standard input and prints their classified
 outcomes (and an optional run-level aggregate) on standard output, as specified in
-[the classifier design](../../docs/design/gate-rework.md#one-classifier-five-outcomes).
+[the gate reference](../../docs/reference/gate.md#result-classification).
 Without a repository or result store it is pure and touches no disk state; when backed by a
 repository or result store it resolves declaration selectors, computes committed
 declaration fingerprints, and writes a marker with copied logs under `disabled/` when a

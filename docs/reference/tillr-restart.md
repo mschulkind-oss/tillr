@@ -38,7 +38,7 @@ related:
   - ./observatory-redesign.md
   - ../design/tillr-selfhosted-build.md
   - ../design/tillr-refused-push.md
-  - ../design/gate-rework.md
+  - ./gate.md
 tags: [tillr, drain, view, run, restart, settings, reference]
 summary: "How tillr replaces `tillr-drain loop` and `tillr-view serve` in place through durable restart requests, pauses and continues agent sessions without burning attempts, migrates active runs onto new builds, reads `.tillr.toml`, and rolls and pushes after landings."
 ---
@@ -180,8 +180,8 @@ in-process state transitions from mid-step interruption:
    Long-running model sessions, whole-tree checks, and detached landing-gate
    waits wrapped in `restartWork` release their mechanical read lock while
    running in a goroutine and poll `gateRestart` every `50ms`. Under
-   [`D-GR43`](../design/gate-rework.md#decision-ledger) and
-   [`D-GR17`](../design/gate-rework.md#decision-ledger), `ProcessSteps.Gate`
+   [`D-GR43`](./gate.md#why-its-this-way) and
+   [`D-GR17`](./gate.md#why-its-this-way), `ProcessSteps.Gate`
    ([`steps.go`](../../tools/tillr-drain/drain/steps.go)) runs the gate program
    in a detached, guarded child session (`--tillr-gate-supervisor`) that writes
    durable live-face (`gate.face.json`) and completion (`gate.done.json`)
@@ -610,7 +610,7 @@ lightweight supervisor holding `<root>/.tillr/keeper.lock`:
   `ProcessSteps.Gate` (`--tillr-gate-supervisor`) installs
   `PR_SET_CHILD_SUBREAPER` and monitors `(ownerPID, ownerStartTicks)` so a loop
   crash or explicit stop reaps the entire gate and separate-session shard tree
-  ([`D-GR17`](../design/gate-rework.md#decision-ledger)), while `syscall.Exec` leaves
+  ([`D-GR17`](./gate.md#why-its-this-way)), while `syscall.Exec` leaves
   `(ownerPID, ownerStartTicks)` intact so the supervisor keeps running across an
   in-place loop upgrade.
 - **`stop-at-gap` signals only the `pi` PID, only after the session header.**

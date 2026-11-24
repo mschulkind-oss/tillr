@@ -257,7 +257,7 @@ the batch fails closed; a suite that names failing assertions is a verdict about
 against, and must route like one.
 
 "Times out" means stopped making progress, never ran longer than expected. The owner ruled on
-2026-11-17 ([`D-GR15`](gate-rework.md#decision-ledger)): "target budgets, watch for stalls, but
+2026-11-17 ([`D-GR15`](../reference/gate.md#why-its-this-way)): "target budgets, watch for stalls, but
 don't let 'load is high' cause failures that would otherwise finish just fine." A time limit on a
 check is a target that is measured and reported; a check still making progress is not stopped
 because a clock passed and is never "could not judge"; what ends one early is a stall seen by a
@@ -276,7 +276,7 @@ first stall as `gate-stall-rerun` and holds a second on the same head tree as `g
 The gate program wrapper applies the same progress rule; a time limit is a reporting target.
 A rolling stall advances no watermark, and a second consecutive stall of the
 same check on the same range files one deduplicated trunk fixer. The
-[wrapper watchdog slice](gate-rework.md#route-the-gate-programs-own-time-limits-through-the-stall-watchdog)
+[wrapper watchdog slice](../reference/gate.md#budgets-and-the-stall-watchdog)
 is covered by injected-observation tests.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tools/tillr-land/) meets it: a gate
@@ -591,14 +591,14 @@ check and asks to fix it at its cause and re-enable it correctly, with its work 
 check is back in the gate program and no longer both passes and fails on the same inputs.
 
 *Measured 2026-11-21:* before `D-GR21` in
-[the gate-rework design](./gate-rework.md#a-contradicted-check-is-disabled), three incompatible
+[the gate reference](../reference/gate.md#a-contradicted-check-is-disabled), three incompatible
 behaviors competed across the gate: crediting a contradicted check as a `flaky` pass, re-running it
 live on unrelated candidates so an intermittent failure still refused landings or filed trunk fixers,
 and treating the contradiction itself as red. When `disabled` was first attempted by teaching check
 consumers one at a time, the kept candidate grew to 111 files and 10,088 added lines and was refused
 eleven times by its verifier because separate Go and Python sites still credited a contradicted
 check green, turned `disabled` into `error`, or dropped its repair item on a cancelled or errored
-step ([the classification inventory](./gate-rework.md#every-place-a-check-result-is-classified)).
+step ([the classification inventory](../reference/gate.md#result-classification)).
 
 *Enforced by:* **partly.** Every moved Go and Python classification site routes through one
 five-outcome classifier in [`tools/tillr/checkresult/classify.go`](../../tools/tillr/checkresult/classify.go)
@@ -636,7 +636,7 @@ call store-backed `tillr-gate classify`, and the drain does not yet pass `--prov
 gating a `flaky-<check-id>` candidate (`rg -n 'prove-disabled' tools/tillr-drain` returned nothing
 on 2026-11-23) or re-classify cached proof/replay records and historical `DISABLED` statuses (slices
 `2c`, `2d`, `3a`, and `3b` in
-[the classifier build order](./gate-rework.md#classify-every-check-result-in-one-place)).
+[the classifier build order](../reference/gate.md#result-classification)).
 
 *Scope:* **not lander-scoped.** It binds the gate and dispatch side — `tillr-gate`, `tillr-drain`,
 and `tillr-loop` — which classify check outcomes, print verdict summaries, sweep disabled markers,

@@ -665,7 +665,7 @@ Two things go wrong when that replay is slow or unlabeled. Measured on 2026-11-2
 **Rejected** (designer's decision; the owner may overturn):
 - *Adding a timer or periodic re-examination pass for released candidates* (it would re-run or race an active replay).
 - *Keeping candidates' lanes leased across post-verdict trunk replay* (wastes scarce worker lanes whenever replay runs).
-- *Scoping the replay only inside the replayed checkout's own gate program* (leaves every replay of a base commit older than that change running the whole tree; see row `D12` in [`gate-rework.md`](./gate-rework.md#every-place-a-check-result-is-classified)).
+- *Scoping the replay only inside the replayed checkout's own gate program* (leaves every replay of a base commit older than that change running the whole tree).
 - *Keeping `run-live` for post-verdict replay and only adding `work.Examiner != nil` to `observeWorkers`* (a finished run with a final verdict and no worker process would report as a live worker, masking a stuck replay).
 
 ### 4.23 A Later Green Proof Resolves a Trunk Fixer Whose Worker Has Finished and Whose Candidate Waits to Gate (`D-JL36`)

@@ -9,7 +9,7 @@ depends-on:
 related:
   - ./tillr-evidence-registry-and-suite-guardrail.md
   - ./tillr-lane-shims.md
-  - ./gate-rework.md
+  - ../reference/gate.md
   - ./session-recording.md
 ---
 

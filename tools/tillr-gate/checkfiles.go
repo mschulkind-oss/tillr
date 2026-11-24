@@ -13,8 +13,8 @@ import (
 )
 
 // checkFile is one JSON declaration beside its program and tests. Execution policy
-// fields are required; the input and scheduling defaults are those in gate-rework
-// Section 6.4 (docs/design/gate-rework.md#64-a-check-is-one-file).
+// fields are required; the input and scheduling defaults are those in the gate
+// reference (docs/reference/gate.md#a-check-is-one-declaration-file).
 // Pointers distinguish an omitted field from an explicitly invalid zero or null.
 type checkFile struct {
 	ID        string   `json:"id"`
