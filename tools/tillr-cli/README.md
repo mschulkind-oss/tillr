@@ -1,29 +1,30 @@
 # tillr-cli — the `tillr` dispatcher
 
 > [!WARNING]
-> **Known Gaps (verified 2026-11-14 at `04957a8a83`).** `tillr` has landed a live
-> candidate on an unattended tick, but three parts are unfinished:
-> 1. **The AutoQA handoff skill is not shipped** — `yolo-packs/tillr/skills/` holds
->    `tillr-operating` only, so the design's `tillr-autoqa` handoff has no skill to dispatch.
-> 2. **The observatory front end is not built** — `tillr view serve` answers 404 for the UI
->    until the front end under `tools/tillr-view/web` is built and embedded, which is a
->    separate Node step and not part of a Go build.
-> 3. **The `tillr` on `PATH` is the pack's rendered tree, not this working tree** — an edit
->    under `tools/tillr*` reaches the launcher only after the pack is mirrored and rendered,
->    so a session that must run its own change builds the working tree first.
->
-> **Do not wire `tillr` into another repository's gate while these stand.** The toolset
-> ships early so it can be reviewed, not so it can be depended on.
+> **Known gaps.** Two things about `tillr` are not what a first reading assumes:
+> 1. **The observatory front end is a separate build** — a `tillr-view` built by a plain
+>    `go build` answers 404 for the UI. The front end under `tools/tillr-view/web` is a
+>    Node build, embedded only under the `observatory` build tag (`just observatory` does
+>    both) or served from a directory named with `--web-dist`.
+> 2. **A `tillr` installed from the pack is not this working tree** — the pack under
+>    `yolo-packs/tillr` builds from its own mirrored copy of the source, which
+>    `just pack-sync` regenerates. To run an edit under `tools/tillr*`, build the working
+>    tree with `just tillr-build`.
 
 ## What this module owns
 
-`tillr` is the control surface over the seven `tillr-<noun>` binaries. It resolves
-`tillr <noun> ...` to `tillr-<noun> ...` on `PATH` and replaces itself with that binary, so
-argv, stdio and the exit code reach the caller untouched.
+`tillr` is the control surface over the eight `tillr-<noun>` binaries: `store`, `item`,
+`land`, `drain`, `run`, `gate`, `view` and `watch`. It resolves `tillr <noun> ...` to
+`tillr-<noun> ...` on `PATH` and replaces itself with that binary, so argv, stdio and the
+exit code reach the caller untouched.
 
-It holds no behavior of its own. It never parses, validates, defaults or rewrites a noun's
-arguments, and it composes nothing: the binaries are the product and this is the spelling
-that lets a caller type `tillr gate plan` instead of `tillr-gate plan`.
+For those nouns it holds no behavior of its own. It never parses, validates, defaults or
+rewrites a noun's arguments, and it composes nothing: the binaries are the product and this
+is the spelling that lets a caller type `tillr gate plan` instead of `tillr-gate plan`.
+
+The ninth noun, `notify`, is built in and has no binary of its own. Its one face, `serve`,
+runs the local Unix-socket relay that passes wake hints between programs sharing a store;
+it requires `--store` and exits once no connection has remained for its idle period.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
@@ -32,15 +33,15 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
 
 - **The handover is an `exec`, not a subprocess.** There is no wrapper left to observe or
   rewrite the child's exit status, signals or stdin.
-- **The noun set is closed.** A noun outside the seven is refused here rather than
+- **The noun set is closed.** A noun outside the nine is refused here rather than
   forwarded anywhere, so the wrapper cannot become a second interface to anything else.
-- **Only `--help` is the wrapper's own answer.** Everything after a noun belongs to the
-  noun.
+- **Only `--help` and `notify` are the wrapper's own answers.** Everything after any
+  other noun belongs to that noun.
 
 ## Standalone invocation
 
-Nothing built from this module does work on its own, so an external caller uses it only as
-spelling. These two lines are the same program:
+Apart from `notify`, nothing built from this module does work on its own, so an external
+caller uses it only as spelling. These two lines are the same program:
 
 ```sh
 tillr gate plan
@@ -49,8 +50,8 @@ tillr-gate plan
 
 ## What it refuses
 
-- **No noun** — names the seven.
-- **A noun outside the seven** — names the seven and the refused word.
+- **No noun** — names the nine.
+- **A noun outside the nine** — names the nine and the refused word.
 - **A noun whose binary is not on `PATH`** — the invocation was well formed and the artifact
   is missing, which is not a usage error.
 

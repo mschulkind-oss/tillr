@@ -1,19 +1,15 @@
 # tillr-store — the store every other utility's fixture starts from
 
 > [!WARNING]
-> **Known Gaps (verified 2026-11-14 at `04957a8a83`).** `tillr` has landed a live
-> candidate on an unattended tick, but three parts are unfinished:
-> 1. **The AutoQA handoff skill is not shipped** — `yolo-packs/tillr/skills/` holds
->    `tillr-operating` only, so the design's `tillr-autoqa` handoff has no skill to dispatch.
-> 2. **The observatory front end is not built** — `tillr view serve` answers 404 for the UI
->    until the front end under `tools/tillr-view/web` is built and embedded, which is a
->    separate Node step and not part of a Go build.
-> 3. **The `tillr` on `PATH` is the pack's rendered tree, not this working tree** — an edit
->    under `tools/tillr*` reaches the launcher only after the pack is mirrored and rendered,
->    so a session that must run its own change builds the working tree first.
->
-> **Do not wire `tillr` into another repository's gate while these stand.** The toolset
-> ships early so it can be reviewed, not so it can be depended on.
+> **Known gaps.** Two things about `tillr` are not what a first reading assumes:
+> 1. **The observatory front end is a separate build** — a `tillr-view` built by a plain
+>    `go build` answers 404 for the UI. The front end under `tools/tillr-view/web` is a
+>    Node build, embedded only under the `observatory` build tag (`just observatory` does
+>    both) or served from a directory named with `--web-dist`.
+> 2. **A `tillr` installed from the pack is not this working tree** — the pack under
+>    `yolo-packs/tillr` builds from its own mirrored copy of the source, which
+>    `just pack-sync` regenerates. To run an edit under `tools/tillr*`, build the working
+>    tree with `just tillr-build`.
 
 ## What this module owns
 
@@ -89,7 +85,7 @@ changes still in the write-ahead log remain visible. The inventory does not use
 SQLite's immutable mode, which would ignore that log. Files and references are
 observed separately from the database transaction, so this is not an atomic snapshot
 of a changing repository. A file that disappears or becomes unreadable during the
-walk is an error, not silently omitted. Nothing changes the existing retention policy.
+walk is an error, not silently omitted.
 
 ## State invariants
 
@@ -97,8 +93,8 @@ walk is an error, not silently omitted. Nothing changes the existing retention p
   columns, not just the store's own tables. A fresh store is ready for `drain why`,
   `view waiting`, `view status`, and `run lanes` without running the loop first.
   `run status --run <id>` reports an absent run with its usual record and exit 1.
-  Read faces still never create or migrate tables; writable opens retain the existing
-  migration path for older stores.
+  Read faces never create or migrate tables; a writable open migrates a store
+  whose schema version is behind.
 - **The store uses SQLite WAL.** Every normal writable open selects and verifies
   SQLite's write-ahead log (WAL), so a killed writer's uncommitted changes are invisible
   to readers. The database and its `-wal`/`-shm` coordination files form the live store,
@@ -118,10 +114,9 @@ walk is an error, not silently omitted. Nothing changes the existing retention p
   all converted yet, writing a `tillr-sqlite ... operation="io-under-write"` line when
   `TILLR_SQLITE_TRACE=1`. I/O a write's callback hands to another goroutine is not seen.
 - **A write transaction reads the kinds it folds, not the whole log.** A whole-log read
-  costs the log's length, and the log is mostly worker records (`run.child-session`):
-  on 2026-11-19 those were 1,267,132 of its 1,294,976 events, and a landing's write waited
-  out its 5-second busy timeout behind plan applications that each copied the log several
-  times. `Reader.EventsOfKind` and `Reader.EventsSelected` answer only the selected events.
+  costs the log's length, and the log is mostly worker records (`run.child-session`), so
+  a whole-log read inside a write makes every other writer wait for it against the
+  5-second busy timeout. `Reader.EventsOfKind` and `Reader.EventsSelected` answer only the selected events.
   In the drain loop they are answered from the committed-event cache — the copy of the
   committed log the long-lived loop process keeps in memory, so a read reads from SQLite
   only what was committed since ([`eventcache.go`](../tillr/store/eventcache.go)) — through
@@ -147,8 +142,7 @@ walk is an error, not silently omitted. Nothing changes the existing retention p
 ## The store's definition
 
 A [definition](../tillr/definition/README.md) states one use's vocabulary and rules.
-The store records the declaration so utilities can share one answer; it does not yet
-make the item utility or drain use that vocabulary in place of their existing rules.
+The store records the declaration so every utility reads one answer.
 
 ```bash
 tillr store init --store checks.sqlite3 --definition checks.json
@@ -157,23 +151,21 @@ tillr store definition --store checks.sqlite3 --set revised-checks.json
 ```
 
 `init --definition` reads and validates the file before creating any store or directory.
-An invalid or unreadable file is refused with exit 2. Without the flag, initialization
-keeps its existing behavior: no declaration or definition event is written. An existing
+An invalid or unreadable file is refused with exit 2. Without the flag, no declaration
+or definition event is written. An existing
 store's declaration is preserved unless the flag explicitly supplies a replacement.
 
 `definition` emits one `store.definition` record. Its payload contains `definition`
 (the name), `version`, `content` (the exact JSON file bytes as a string), `sha256`
 (the lowercase SHA-256 hash of those bytes), and `default`. A store with no declaration
-returns the embedded Git-landing definition with `default: true`, including stores created
-before this face existed. Reading never creates or migrates a store. Missing stores and
+returns the embedded Git-landing definition with `default: true`. Reading never creates or migrates a store. Missing stores and
 corrupt declarations are errors, not requests to create a store or use the default.
 
 `definition --set` validates the new file before opening a writer. It refuses with exit 2
 if any item's current state is absent from the new definition and names every affected
 item and state. The refusal leaves both the declaration and events unchanged. This check
 and the replacement share SQLite's write transaction, so another writer cannot move an
-item between them. The declaration uses the existing `meta` table and needs no schema
-migration. A successful replacement, including `init --definition`, appends
+item between them. The declaration is stored in the `meta` table. A successful replacement, including `init --definition`, appends
 `store.definition.set` with `old_sha256` and `new_sha256` in the same transaction.
 When replacing an implicit default, the old hash names the embedded content. Git, file
 reading, and process execution never occur inside that transaction.
@@ -189,10 +181,10 @@ so consumers do not parse stored JSON themselves.
 flushing it to disk, and the operating system's writeback puts it on disk, typically
 within 30 to 60 seconds. Only an operating-system crash or a power cut can lose the most
 recent commits, and it rolls them back cleanly rather than corrupting the store. Killing a
-process, a container or a jail loses nothing, because the commit is already in the kernel's
-page cache. The owner ruled on 2026-11-16 that `NORMAL` stays. The default, `FULL`, flushed
-the disk inside every commit while holding SQLite's single write lock, so one slow flush
-became a wait for every other writer, against its five-second busy timeout.
+process or a container loses nothing, because the commit is already in the kernel's
+page cache. SQLite's default, `FULL`, flushes the disk inside every commit while holding
+SQLite's single write lock, so one slow flush becomes a wait for every other writer,
+against its five-second busy timeout.
 
 **No program's own writes checkpoint.** A *checkpoint* copies the log's frames back into
 the database file. After a checkpoint that copied every frame, the next writer *restarts*
@@ -248,13 +240,13 @@ copied log to restart. A cycle can miss the restart when a writer commits betwee
 and the second write; it reports that with the log's length, and the loop tries again at
 its next heartbeat. A close does not: the second write also records the log it found (its
 salt and its length, in the meta row `checkpoint.last-cycle`), and a later close runs
-another cycle only once the log has restarted since or grown another 1000 frames. Without
-that record, a log left long by a missed restart made every close run a cycle. A cycle
+another cycle only once the log has restarted since or grown another 1000 frames, so a
+log left long by a missed restart does not make every close run a cycle. A cycle
 whose own write waits out the busy timeout behind another writer is skipped and reported,
 and so is one whose pin's read does (`pin.busy`: another connection held SQLite's
 exclusive lock, as a recovery does); neither faults the loop, because a checkpoint is
-maintenance, and the loop tries again at its next heartbeat. Just before its cycle, the loop's heartbeat announces its next pass 30
-seconds ahead, so a slow checkpoint does not make the loop look dead to `tillr-drain stop`
+maintenance, and the loop tries again at its next heartbeat. Just before its cycle,
+the loop's heartbeat announces its next pass 30 seconds ahead, so a slow checkpoint does not make the loop look dead to `tillr-drain stop`
 or the observatory.
 
 ### Who waits behind each flush
@@ -275,7 +267,7 @@ These are the flushes left inside a lock, and who can be queued behind each one:
   handle, the directory), inside SQLite's writer.** A cycle that finishes leaves one frame
   uncopied, so it leaves no such log. One whose restart write waits out the busy timeout
   does (see [Known limits](#known-limits)), and so does a checkpoint from outside tillr, such
-  as the `sqlite3` command-line tool, or an older tillr build.
+  as the `sqlite3` command-line tool.
 - **The log's first creation: two flushes (the log and its directory), inside SQLite's
   writer.** It happens once, when the store is created, by `tillr-store init` or by a
   loop's first write after the loop has taken the owner. It happens again only if a program
@@ -308,19 +300,15 @@ last restarted), so its growth is visible without a tool that reads SQLite's fil
 
 - **One flush remains inside a writer.** Each restart flushes the new log header in the
   cycle's write, while it holds SQLite's writer. A writer queued behind it times out only if
-  that single flush takes longer than about 5 seconds. The worst measured on this disk was
-  2.1 seconds, and 3.0 seconds under heavier load, but btrfs has recorded a 6.7-second
-  transaction commit here. So a `database is locked` behind it is rare, not impossible.
+  that single flush takes longer than the 5-second busy timeout. So a
+  `database is locked` behind it is rare, not impossible.
 - **The log can grow while writers never pause.** A restart needs a gap with no commit that
   is as long as the checkpoint itself. Writers that never leave such a gap keep the log
   growing, and the loop can only report it and keep trying. A strict bound would need the
   cycle to hold SQLite's writer across the checkpoint's own flushes, which is the same
-  shape as the wait this design removes. The owner ruled on 2026-11-16 to accept this
-  growth with no loop running as a known limit. Measured on 2026-11-16 with no loop
-  running: four programs opening, writing and closing back to back, about 300 a second,
-  never let a close's cycle restart the log, and it reached 412 MB in 90 seconds; the
-  review's own run of that shape reached 170 to 185 MB in 90 seconds. The first program
-  after they stopped restarted it.
+  shape as the wait this design removes. With no loop running, programs that open, write
+  and close back to back can keep any close's cycle from restarting the log; the first
+  program after they stop restarts it.
 - **The log file does not shrink by itself.** A restart writes from the top of the file
   again but keeps its length (no `journal_size_limit` is set, so no writer ever pays to
   truncate it), and the file stays as large as the longest log it has held. To shrink it,
@@ -332,13 +320,8 @@ last restarted), so its growth is visible without a tool that reads SQLite's fil
   opens the store in the instant after that check makes the truncate answer busy instead.
   A program that opens the store when no other connection is open rebuilds SQLite's index
   of the log under SQLite's recovery lock, reading only the current log, not the file's
-  length. Measured on 2026-11-16 with a 432 MB valid log and nothing else open, on a
-  32-core machine whose load average was 37 from other work: that first open read in
-  0.11 seconds with the files in the page cache and 0.12 seconds after evicting them, and a
-  writer opening 20 ms behind it took 0.10 seconds to open. The review measured 0.10
-  seconds at 419 MB. An earlier figure here, 0.9 seconds, was a single reading taken
-  without recording the machine's load, and these replace it.
-- **The close-time threshold is SQLite's default, 1000 frames.** It was not tuned. A
+  length.
+- **The close-time threshold is SQLite's default, 1000 frames.** It is not tuned. A
   smaller one would checkpoint more often at closes; a larger one lets the log, and the
   work the next checkpoint copies, grow further between loops.
 - **A dead loop can read as alive for up to 35 seconds after each checkpoint.** The 30-second
@@ -364,13 +347,9 @@ last restarted), so its growth is visible without a tool that reads SQLite's fil
   last close, which checkpoints and deletes the log under the exclusive lock that a program
   starting at that moment waits behind. The SQLite driver tillr uses (modernc.org/sqlite)
   offers no way to turn that close-time checkpoint off: `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` is
-  not reachable through it. It does offer `SQLITE_FCNTL_PERSIST_WAL`, which keeps the file
-  but not the frames, so the next writer would pay a restart's flushes instead of the
-  creation's, which is no better.
+  not reachable through it.
 - **A close that runs the cycle can delay its own program's exit by seconds on a slow
-  disk.** The review measured it on 2026-11-16 with every flush delayed 2.6 seconds: one
-  program that opened the store, wrote once and closed it, on an 8 MB log, took 10.86
-  seconds to close, with four flushes (the directory, the log, the database and the log
+  disk.** The cycle makes four flushes (the directory, the log, the database and the log
   header). Only the header flush is inside SQLite's writer, so only the closing program
   waits for the rest. It happens at most once per 1000 frames, and only with no loop
   running. No time-budgeted gate check opens the store (`tools/gate` and `tillr-gate` do
@@ -388,7 +367,7 @@ own, and `check` is the one command that says whether a store is worth reading a
 
 ## Recovering an interrupted writer
 
-An older rollback-mode store can carry a **hot rollback journal**, SQLite's saved pages
+A store in SQLite's rollback journal mode can carry a **hot rollback journal**, SQLite's saved pages
 needed to undo a dead writer's uncommitted transaction. A read-only open then fails with
 `SQLITE_READONLY_ROLLBACK` (extended code 776), not a file-permission failure. Run:
 

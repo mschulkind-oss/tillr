@@ -8,8 +8,9 @@ restate a flag, because a copied flag list is the page that disagrees with the b
 later. That split only holds if the documents are checked against the binaries, so this suite
 does the three checks the split needs:
 
-  1. the eight module READMEs exist and each opens with the stamped Known Gaps callout, so a
-     module ships its own judgment rather than source with nothing beside it;
+  1. the eight module READMEs exist and each opens with the Known gaps callout, which lists
+     at least one gap, so a module ships its own judgment rather than source with nothing
+     beside it;
   2. no document carries a flag table, in either spelling the design bans -- a Markdown table
      whose header names a flag, and a line that is an option list;
   3. every `<bin> <face>` (or `tillr <noun> <face>`) invocation a document names is run with
@@ -20,7 +21,7 @@ A face that does not exist is the failure this exists to catch: a document is th
 that can name a face nobody built, and nothing else reads a document for executable claims.
 
 Cases:
-  1. the eight module READMEs open with the same stamped Known Gaps callout;
+  1. the eight module READMEs open with the same Known gaps callout, listing its gaps;
   2. no document carries a flag table;
   3. every documented face answers `--help` with exit 0 and its own flag set.
 
@@ -72,12 +73,11 @@ SKILL = ROOT / "yolo-packs" / "tillr" / "skills" / "tillr-operating" / "SKILL.md
 # skill is read, never edited here: its prose is the loop's home, not a module's.
 DOCUMENTS = [ROOT / "tools" / module / "README.md" for module in MODULES] + [SKILL]
 
-# A known-gaps callout, stamped with the date and commit it was verified at. The stamp is
-# what makes the banner a claim instead of a decoration: a reader can tell a re-verified
-# banner from one nobody has looked at since.
-STAMP = re.compile(
-    r"^> \*\*Known Gaps \(verified \d{4}-\d{2}-\d{2} at `[0-9a-f]{7,40}`\)\.\*\*"
-)
+# A known-gaps callout: the title line, then the gaps as a numbered list. The banner states
+# what is true of the tree it ships in, so it carries no date and no commit; the numbered
+# list is what makes it a claim instead of a decoration.
+TITLE = re.compile(r"^> \*\*Known gaps\.\*\*")
+GAP = re.compile(r"^> \d+\. \*\*\S")
 
 FENCE = re.compile(r"^```[^\n]*\n(.*?)^```", re.S | re.M)
 
@@ -119,34 +119,38 @@ def opening_block(text):
 
 
 def case_callout():
-    """Case 1: the eight module READMEs open with the same stamped Known Gaps callout."""
+    """Case 1: the eight module READMEs open with the same Known gaps callout, listing its gaps."""
     stamps = {}
     for module in MODULES:
         path = ROOT / "tools" / module / "README.md"
         block = opening_block(text_of(path))
         if not block or block[0] != "> [!WARNING]":
             fail(
-                f"tools/{module}/README.md does not open with the Known Gaps callout: its "
+                f"tools/{module}/README.md does not open with the Known gaps callout: its "
                 f"first block is {block[:1] or 'empty'}"
             )
-        if len(block) < 2 or not STAMP.match(block[1]):
+        if len(block) < 2 or not TITLE.match(block[1]):
             fail(
-                f"tools/{module}/README.md's callout carries no stamp: expected a line "
-                f"' > **Known Gaps (verified <date> at `<sha>`).**', got "
+                f"tools/{module}/README.md's callout does not state its known gaps: expected "
+                f"a line '> **Known gaps.**', got "
                 f"{block[1] if len(block) > 1 else 'nothing'}"
+            )
+        if not any(GAP.match(line) for line in block[2:]):
+            fail(
+                f"tools/{module}/README.md's Known gaps callout lists no gap: expected at "
+                f"least one numbered line '> 1. **<the gap>**'"
             )
         stamps[module] = "\n".join(block)
     distinct = set(stamps.values())
     if len(distinct) != 1:
         differing = sorted(module for module, block in stamps.items() if block != stamps[MODULES[0]])
         fail(
-            "the eight module READMEs carry different Known Gaps banners, so a reader cannot "
+            "the eight module READMEs carry different Known gaps banners, so a reader cannot "
             "tell which one is current: "
             + ", ".join(f"tools/{module}/README.md" for module in differing)
         )
-    stamp = re.search(r"verified [^`]+`[0-9a-f]+`", stamps[MODULES[0]])
-    ok(f"every module README opens with the same stamped Known Gaps callout "
-       f"({stamp.group(0) if stamp else stamps[MODULES[0]]})")
+    gaps = sum(1 for line in stamps[MODULES[0]].split("\n") if GAP.match(line))
+    ok(f"every module README opens with the same Known gaps callout ({gaps} gaps listed)")
 
 
 def case_no_flag_table():

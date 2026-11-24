@@ -1,23 +1,19 @@
-# tillr-view — the board, with opt-in owner writes
+# tillr-view — the observatory, with opt-in owner writes
 
 > [!WARNING]
-> **Known Gaps (verified 2026-11-14 at `04957a8a83`).** `tillr` has landed a live
-> candidate on an unattended tick, but three parts are unfinished:
-> 1. **The AutoQA handoff skill is not shipped** — `yolo-packs/tillr/skills/` holds
->    `tillr-operating` only, so the design's `tillr-autoqa` handoff has no skill to dispatch.
-> 2. **The observatory front end is not built** — `tillr view serve` answers 404 for the UI
->    until the front end under `tools/tillr-view/web` is built and embedded, which is a
->    separate Node step and not part of a Go build.
-> 3. **The `tillr` on `PATH` is the pack's rendered tree, not this working tree** — an edit
->    under `tools/tillr*` reaches the launcher only after the pack is mirrored and rendered,
->    so a session that must run its own change builds the working tree first.
->
-> **Do not wire `tillr` into another repository's gate while these stand.** The toolset
-> ships early so it can be reviewed, not so it can be depended on.
+> **Known gaps.** Two things about `tillr` are not what a first reading assumes:
+> 1. **The observatory front end is a separate build** — a `tillr-view` built by a plain
+>    `go build` answers 404 for the UI. The front end under `tools/tillr-view/web` is a
+>    Node build, embedded only under the `observatory` build tag (`just observatory` does
+>    both) or served from a directory named with `--web-dist`.
+> 2. **A `tillr` installed from the pack is not this working tree** — the pack under
+>    `yolo-packs/tillr` builds from its own mirrored copy of the source, which
+>    `just pack-sync` regenerates. To run an edit under `tools/tillr*`, build the working
+>    tree with `just tillr-build`.
 
 ## What this module owns
 
-`tillr-view` renders a board's status and event log from a store snapshot or from a stream
+`tillr-view` renders a store's status and event log from a store snapshot or from a stream
 of records, answers what is running right now, and serves the same answers over HTTP. It
 keeps its own store handle read-only, so reads remain safe while writers run.
 With `serve --write`, it also delegates item placement and idea saving to the item command.
@@ -39,11 +35,11 @@ show “Move to top” on eligible Items-page rows and enable
 {"after":"item-other"}
 ```
 
-The server validates the origin, JSON content type, 1 MiB body limit and closed
+The server validates the origin, JSON content type, body size and closed
 request shape, then runs `tillr-item place` as a separate process. Requests are
 serialized; the server never opens its store for writing. The writer is found
-beside this executable, including pack-cache siblings, then on PATH, or is named
-with `--tillr-item`. A missing writer is an explicit 503 `writer-unavailable`.
+beside this executable, then on PATH, or is named with `--tillr-item`. A missing
+writer is an explicit 503 `writer-unavailable`.
 The [observatory actions reference](../../docs/reference/observatory-actions.md#http-refusals)
 lists the refusal rules. Whoever can reach a write-enabled server can reorder
 items; there is no login. These requests never edit the repository or move a ref.
@@ -79,18 +75,9 @@ close this gap, and uncommitted edits never replace the saved words on the page.
 The committed bytes or, before landing, the intake bytes must match the saved
 hash and size. A missing or altered copy is an explicit read refusal, never
 invented text.
-The [observatory actions reference](../../docs/reference/observatory-actions.md#http-refusals)
-lists request and input statuses; a failed store write also returns 500
-`intake-store-failed`, naming the preserved file. Without `--write`, no New idea
-control or shortcut is available and POST is refused before request validation.
-
-## Dependency advisory backlog
-
-The [web dependency lockfile](./web/package-lock.json) needs a separate security
-review. On 2026-11-17, `npm ci` in `tools/tillr-view/web` completed successfully
-but reported six vulnerabilities: three moderate, one high, and two critical.
-Next: identify the affected packages, repair their dependency versions, and
-verify the browser suite and build. Idea saving does not change those versions.
+A failed store write returns 500 `intake-store-failed`, naming the preserved file.
+Without `--write`, no New idea control or shortcut is available and POST is refused
+before request validation.
 
 ## Earlier uncommitted work
 
@@ -111,9 +98,9 @@ The current-planner and recorded-history waiting views include `lane_status`
 appear in the reason column of terminal and browser tables. A kept lane names
 why its checkout is still needed or why safe release failed; a released lane
 holds no candidate reservation even if another item now runs there. These are
-read-only projections of drain events, not inferences from the item's old lane
+read-only projections of drain events, not inferences from the item's lane
 number. See the [drain's held candidate capacity rule](../tillr-drain/README.md#held-candidate-capacity)
-for the kept classes and pinned-commit retry behavior.
+for the kept classes and the retry behavior.
 
 ## Run wall-time split and drain scheduling decisions
 
@@ -121,32 +108,30 @@ for the kept classes and pinned-commit retry behavior.
 single run, and the Run page (`#/run/<id>`) renders both alongside the span waterfall:
 a **Where wall time went** card, a **Drain scheduling decisions** ledger on the default
 timeline tab, and a **Time order** tab (`?tab=time-order`) that interleaves the drain's
-decisions with the agent's transcript entries on one clock (walking backward through
-`before` cursors when a transcript spans multiple pages and deduplicating supervisor
-`steps.jsonl` rows already carried in `schedule`).
+decisions with the agent's transcript entries on one clock.
 
-`timing` splits `wall_ms` into `model_ms` (union of recorded `run.finish` turn
-intervals, Pi `message_end` / `turn_end` spans, or Claude `stream-json`
-`duration_api_ms` and live turn intervals), `tool_ms` (union of tool execution spans,
-Claude `tool_use`-to-`tool_result` pairs, or `proc-exec.jsonl` subprocess intervals),
-`slot_wait_ms` (union of test-slot wait intervals clipped to the run's window),
-`tool_active_ms` (`tool_ms` minus overlapping `slot_wait_ms` when slot wait is
-`observed`, or `null` when slot wait is `absent` or only a `lower_bound`), and
-`uncovered_ms` (remaining harness and supervisor wall time outside recorded model and
-tool intervals). `tools/go-test-shards.py` appends fail-open `slot.wait` records to
-`slot-waits.jsonl` inside `TILLR_TRACE_DIR` whenever that directory exists, including
-immediate acquisitions (`waited_ms: 0`), contended waits, and interrupted waits
-(`acquired: false`); `GET /api/v1/runs/{id}/timeline` and `tillr view trace` emit the
-same intervals as `slot_wait` spans. Pre-change runs with no `slot-waits.jsonl` report
-`slot_wait_ms` as `lower_bound` when timed busy notices appear in logs, or `absent`
-(`null`, never `0 ms`) when only untimed `<30s` notices or uninstrumented commands exist.
+`timing` splits `wall_ms` into:
+
+- `model_ms` — the union of recorded model-turn intervals;
+- `tool_ms` — the union of tool execution spans, or `proc-exec.jsonl` subprocess
+  intervals;
+- `slot_wait_ms` — the union of test-slot wait intervals clipped to the run's window;
+- `tool_active_ms` — `tool_ms` minus overlapping `slot_wait_ms` when slot wait is
+  `observed`, or `null` when slot wait is `absent` or only a `lower_bound`;
+- `uncovered_ms` — the remaining harness and supervisor wall time outside recorded model
+  and tool intervals.
+
+`tools/go-test-shards.py` appends `slot.wait` records to `slot-waits.jsonl` inside
+`TILLR_TRACE_DIR` whenever that directory exists, and never fails a test run over it.
+`GET /api/v1/runs/{id}/timeline` and `tillr view trace` emit the same intervals as
+`slot_wait` spans. A run with no `slot-waits.jsonl` reports `slot_wait_ms` as
+`lower_bound` when its logs carry timed busy notices, or `absent` (`null`, never `0 ms`)
+otherwise.
 
 `schedule` orders the drain's recorded decisions for that run (`allocation`, `gate`,
-`refusal`, `retry`, `landing`, and `other` holds or conflict pauses) from `events`
-(including evaluator refusals that reference the worker run), `dispatches`, `retries`
-(both retries superseding the run and the retry that authorized it), `landings`,
-`steps.jsonl`, `pipeline.jsonl`, and `gate.plan.json` / `gate.verdict.json` /
-`gate_spans`.
+`refusal`, `retry`, `landing`, and `other` holds or conflict pauses) from the store's
+events, dispatches, retries and landings, and from the run's `steps.jsonl`,
+`pipeline.jsonl` and gate records.
 
 ## Verify refusals on the item page
 
@@ -163,9 +148,10 @@ for when a refusal returns to `work` versus `plan`.
 
 ## State invariants
 
-- **Its store handle never writes.** No store is opened read-write by the view and
+- **Its store handle never writes.** No store is opened read-write by a reading face and
   no migration runs through its reader. Opt-in placement runs the item writer in
-  a separate process; only that process takes the store's writer lock.
+  a separate process; only that process takes the store's writer lock. `restart` is the
+  one face that files a record of its own: a restart request for a running server.
 - **The store is the source of truth, and the absence of a record is the answer.** Where a
   record was never emitted, "there is none" is reported as such and never reconstructed from
   memory.
@@ -184,18 +170,44 @@ tillr-view passes --store /path/to/.tillr/state.db --last 2
 tillr-view lanes --store /path/to/.tillr/state.db [--json]
 tillr-view running --store /path/to/.tillr/state.db [--watch] [--json]
 tillr-view run --store /path/to/.tillr/state.db --run <run-id> [--json]
+tillr-view alarms --store /path/to/.tillr/state.db [--json]
 ```
 
-An external caller points these at a store snapshot; `status --json` reads the same JSON the loop reads;
-`status` answers where the board stands now, and `events` answers what happened in order.
+An external caller points these at a store snapshot. `status` answers where the board
+stands now, and `events` answers what happened in order. `waiting` answers why each
+unlanded item is not moving, `passes` lists what each planning round decided, `lanes`
+lists every configured lane and its current or last run, `running` answers what is in
+flight, and `alarms` lists the active backend alarms. `tillr-view restart` files a restart
+request for a running `serve`, which finishes the requests it is serving and replaces
+itself in place ([restart reference](../../docs/reference/tillr-restart.md)). Each face's
+`--help` owns its flags.
+
+`status --text` prints a readable summary; `status` without a format flag, or with
+`--json`, emits its `view.status` record. Store status reads the last whole writing sync's
+observation directly from the item-owned table, without importing the item writer or
+reading documents for these counts. It prints `unshared_open` (open store items no
+document declares), with the oldest item's last-write age in whole minutes, and
+`stale_doc_blocks` (blocks for landed items), alongside the sync's timestamp. JSON carries
+`synced_at`, both counts, `unshared_open_ids`, `unshared_open_oldest`, and
+`stale_doc_block_ids`. The age advances at read time, but the counts describe that saved
+sync, not current documents. With no table or row, text says `no sync has been recorded`
+and JSON counts are null, never zero. A record stream instead reports its latest supplied
+sync observation, or null when it carries none.
+
+Store-backed `status` and `/api/v1/snapshot` include a `push` summary with
+its destination, published SHA, and the newest push hold's kind, detail, mover and
+start time. Counts compare `refs/tillr/green` (proven) and `refs/heads/main`
+(total) with `refs/tillr/published/<remote>/<branch>` in both tip and green mode.
+An unreadable count is null, not zero. `status --text` and the observatory header
+pill label both counts when a push is held or unpublished commits remain.
+
+### What the waiting face names
 
 For agent reviews, the waiting face recognizes `judge-unreadable`, `eval-failed`,
-`judge-blocked`, and `judge-defective`. The judge is a step in the selected workflow;
-neither the header nor the snapshot reports a renewal. Historical grant waiting records
-remain in event history but do not hold an item. A failed or unreadable review includes its recorded
-controlling reason, rather than an unexplained hold. A blocked item names its recorded
-waiter and reason; a defective item is closed and leaves the waiting list. Its historical
-reason still has an explicit classification. The
+`judge-blocked`, and `judge-defective`. The judge is a step in the selected workflow.
+A failed or unreadable review includes its recorded controlling reason, rather than an
+unexplained hold. A blocked item names its recorded waiter and reason; a defective item
+is closed and leaves the waiting list. The
 [drain's judge contract](../tillr-drain/README.md#opted-in-judgment-before-the-gate)
 defines those outcomes and when the judge's verdicts become records.
 
@@ -207,34 +219,14 @@ repair lands in green mode, `remote-sync-proving` names the heavy runner until
 proof reaches the repaired tip. `remote-sync-worktree-dirty`, `remote-rewritten`,
 `push-patch-move-held`, `push-remote-declined` and `push-failed` name the operator
 and the remedy or retry command. `push-ok` and `remote-sync-cleared` show no
-push waiting row; older push records without a kind keep their failure text and
-retry mover. A stored conflict without a document says that no document exists; it is an operator
-or triage task, not an owner question hidden from Vantage's planning index. Answering
-the saved document and landing that edit releases the question hold on the next sync,
-without a store command.
+push waiting row; a push record without a kind keeps its failure text and
+retry mover. A stored conflict without a document says that no document exists; it is an
+operator or triage task, not an owner question. Answering the saved document and landing
+that edit releases the question hold on the next sync, without a store command.
 
-Store-backed board `status` and `/api/v1/snapshot` include a `push` summary with
-its destination, published SHA, and the newest push hold's kind, detail, mover and
-start time. Counts compare `refs/tillr/green` (proven) and `refs/heads/main`
-(total) with `refs/tillr/published/<remote>/<branch>` in both tip and green mode.
-An unreadable count is null, not zero. `status --text` and the Observatory header
-pill label both counts when a push is held or unpublished commits remain.
-
-`waiting` answers why each unlanded item is not moving, `passes` lists what each planning
-round decided, `lanes` lists every configured lane and its current or last run, and
-`running` answers what is in flight. `status --text` prints a readable summary;
-status without a format flag, or with `--json`, emits its `view.status` record. Store status reads the last whole writing sync's observation
-directly from the item-owned table, without importing the item writer or reading documents
-for these counts. It prints `unshared_open` (open store items no document declares),
-with the oldest item's last-write age in whole minutes, and `stale_doc_blocks` (blocks
-for landed items), alongside the sync's timestamp. JSON carries `synced_at`, both
-counts, `unshared_open_ids`, `unshared_open_oldest`, and `stale_doc_block_ids`.
-The age advances at read time, but the counts describe that saved sync, not current
-documents. With no table or row, text says `no sync has been recorded` and JSON counts
-are null, never zero. A record stream instead reports its latest supplied sync
-observation, or null when it carries none. For an undeclared request, waiting output names
-triage on the design seat while it is due or running, then the owner with the full
-conflict report. See the [document-fed workflow prerequisite](../tillr-drain/README.md#document-fed-workflow-prerequisite).
+For an undeclared request, waiting output names triage on the design seat while it is due
+or running, then the owner with the full conflict report. See the
+[document-fed workflow prerequisite](../tillr-drain/README.md#document-fed-workflow-prerequisite).
 
 ### Conflict transitions in the event list
 
@@ -250,7 +242,7 @@ original sequence and compares against the previous record before the cursor.
 ## Landings named by heavy failures
 
 ```sh
-tillr view heavy-misses --root /path/to/repository --store /path/to/.tillr/state.db --from 2026-11-19T15:55:00-05:00 --to 2026-11-21T18:35:00-05:00
+tillr view heavy-misses --root /path/to/repository --store /path/to/.tillr/state.db --from <rfc3339> --to <rfc3339>
 ```
 
 The same flags work with `tillr-view heavy-misses`. The face opens the store
@@ -273,16 +265,19 @@ Later attachments name their own exact red commit and checks. Log-only records
 still report the checks for which they have logs.
 
 The checks are deduplicated per landing, with the underlying event kinds,
-sequences and log or commit references retained. `confirmed` means an automatic
-revert landed after the implicated checks passed on the inverse; `reverted_by`
-is the revert commit. `offered` means the revert could not be done and the offered
-attribution was not verified by a landed revert. `disproved` means the inverse
-still left that check red: do not count that offer as a catchable miss. In a
-grouped revert, an inverse that stops at one red check does not disprove the
-other checks. If the receipt does not identify which check stopped the replay,
-the report keeps the grouped offer without marking any check `disproved`.
-`named` means only that a failure record names the commit. A fixer can be reused
-or filed at an observed tip without attributing the failure to that landing.
+sequences and log or commit references retained:
+
+- `confirmed` means an automatic revert landed after the implicated checks passed on the
+  inverse; `reverted_by` is the revert commit.
+- `offered` means the revert could not be done and the offered attribution was not
+  verified by a landed revert.
+- `disproved` means the inverse still left that check red: do not count that offer as a
+  catchable miss. In a grouped revert, an inverse that stops at one red check does not
+  disprove the other checks. If the receipt does not identify which check stopped the
+  replay, the report keeps the grouped offer without marking any check `disproved`.
+- `named` means only that a failure record names the commit. A fixer can be reused
+  or filed at an observed tip without attributing the failure to that landing.
+
 Fixer records are not always distinguishable by origin, and a `trunk-already-red`
 refusal is not evidence against the refused candidate. After the latest
 association, a successful landing receipt for that fixer item marks it
@@ -295,15 +290,15 @@ fixer outcome changes the separate attribution or revert evidence.
 The report uses durable landing, verdict, revert and fixer events, not the most
 recent heavy-run file. Failures without such observations are not represented.
 `coverage` lists observations that could not be joined and counts landing/check/fixer
-associations with neither a fixer landing nor a green proof in the window. Neither the list nor the summaries
-measure how many failures the fast gate could have caught.
+associations with neither a fixer landing nor a green proof in the window. Neither the
+list nor the summaries measure how many failures the fast gate could have caught.
 
 Changed paths are read from Git at `--root` (default: the current directory),
 comparing the actual trunk commits before and after the landing without rename
 inference. If Git evidence is unavailable, the report gives the reason rather
 than claiming an empty diff. The two summaries count distinct landings per key.
 Changed modules are the nearest Go module directories in those commits. Generated
-Tillr pack mirrors count toward their source modules, while the changed path list
+pack mirrors count toward their source modules, while the changed path list
 retains both. `(non-module)` labels paths outside a Go module, and `(unknown)`
 labels landings for which Git could not supply the module evidence.
 
@@ -336,10 +331,10 @@ Inside the checkout, `just observatory` is the same command. Both recipes run
   port is Vite's UI, and the API one above it answers JSON only.
 - **What reloads in `observatory-dev`:** the UI through Vite, and the API through `air`
   (`tools/tillr-view/.air.toml`, pinned in `mise.toml`). A change to the Go that tillr-view is
-  built from (this directory and the local modules its [`go.mod`](./go.mod) replaces, so commits landing on
-  the checkout count) triggers one rebuild per burst of changes, and a build that succeeds
+  built from (this directory and the local modules its [`go.mod`](./go.mod) replaces)
+  triggers one rebuild per burst of changes, and a build that succeeds
   replaces the API on the same port. A failed build prints its error in the dev terminal and
-  the old API keeps answering. `just observatory` is one process and does not reload.
+  the running API keeps answering. `just observatory` is one process and does not reload.
 
 ### Reaching it from the host when it runs in a jail
 
@@ -370,10 +365,10 @@ board itself answers.
 
 - **Where.** The recipe hands `serve` the directory
   `<checkout>/.yolo/durable/tillr-observatory/logs/<hostname>-<port>/` and prints it at
-  startup. It is under the served checkout, not the jail's durable directory or `~/.cache`, so a
-  log the host's server wrote is the same directory a jail of that checkout reads. Each day
-  is one file, `server-YYYYMMDD.jsonl`, and the file `latest` holds the path of the one being
-  written (text, not a symlink, because a bind mount may not carry one).
+  startup. It is under the served checkout, so a log the host's server wrote is the same
+  directory a jail of that checkout reads. Each day is one file, `server-YYYYMMDD.jsonl`,
+  and the file `latest` holds the path of the one being written (text, not a symlink,
+  because a bind mount may not carry one).
 - **What.** One JSON line per record, each with `v` (the record shape, 1), `kind`, `ts` and
   `rev` (the build revision):
   - `start` — the root, store, build, planner, the recipe's phases (`npm_ci`, `web_build`,
@@ -407,19 +402,17 @@ board itself answers.
   narrow it.
 
 **Vantage's index is cached.** `/why`, `/questions` and an item's `/doc` all need Vantage's
-index, and building it walks the whole tree: about 11 seconds on this checkout. The server
+index, and building it walks the whole tree, which takes seconds. The server
 keeps the last index and reuses it while a fingerprint of the tree's Markdown (each
 non-hidden `*.md` file's path, size and modification time, plus `.vantage.toml` and
 `.vantage/`) is unchanged and the index is under ten minutes old. Taking the fingerprint
-costs about 10 ms, so an answer written in Vantage still leaves the list on the next read.
+is cheap, so an answer written in Vantage still leaves the list on the next read.
 Concurrent requests share one build, and a failed build is never kept.
 
 **Nothing slow runs inside a read transaction.** The server's store handle has one
 connection, so a route that holds its read transaction makes every other route wait. The
 index lookup therefore happens before the transaction opens, and `/why` runs its planner after
-its transaction has closed (the planner reads the store in its own process). Measured against
-the live store on 2026-11-17, a snapshot requested during a cold `/why` waited 16.8 s before
-this change and 23 ms after it.
+its transaction has closed (the planner reads the store in its own process).
 
 ### What each refusal means
 
@@ -433,8 +426,8 @@ Every refusal is one sentence on stderr, and it names the fix:
   supervisor is missing. Install it, or use `just observatory`.
 - **`… is already this build … serving …: open http://…`** (exit 0): the same build already
   serves this store. Open the URL.
-- **`… is held by an observatory built from <rev> …, not this build`**: an older server
-  holds the port. Stop it with the `fuser` command the message prints, then run again.
+- **`… is held by an observatory built from <rev> …, not this build`**: a server from another
+  build holds the port. Stop it with the `fuser` command the message prints, then run again.
 - **`… is already in use by something that is not an observatory`**: another program holds
   the port. Free the port or pick another one.
 - **`… is already answering, so this run would not be the face you see`** (dev only): the
@@ -464,13 +457,12 @@ and `GET /api/v1/snapshot` stamp each row's `group` (`configured`, `draining`, `
 `idle`) alongside any unfinished, unreleased reservation (`held_item_id`, `held_run_id`,
 `held_reason`). Home's lane strip and the Runs page separate those rows into three labeled
 groups — the loop's configured lanes, draining lanes above the count still finishing
-earlier work (marked `finishing old work, gets no new work`), and idle historical lanes
-holding nothing folded behind a count — while the shared header, loop summary, and lane
-strip state configured versus busy lanes in those terms. Without a recorded session lane
-list, the header, lane strip, and waiting face fall back to counting ordinary and
-[express lanes](../tillr-drain/README.md#express-lanes) separately; active document desks
-stay visible but count in neither pool. When an older server omits `work_state`,
-the header reports an unknown running count rather than treating every lease as work.
+earlier work (marked `finishing old work, gets no new work`), and idle lanes
+holding nothing folded behind a count. Without a recorded session lane
+list, the header, lane strip, and waiting face count ordinary and
+[express lanes](../tillr-drain/README.md#express-lanes) separately; active document desks stay visible but count in neither pool. When a row
+carries no `work_state`, the header reports an unknown running count rather than treating
+every lease as work.
 
 Rows carry the item, seat, backend, attempt number, run id, state-start clock,
 and latest action with its clock. The seat is resolved from the run record first
@@ -503,11 +495,9 @@ seconds for step files and quiet ages; Pause stops automatic refreshes.
 
 `--loop-dir` and `--lane-root` default to the loop and lanes directories beside
 the store, on every face including `serve`, so each file is found from the store
-the server was given and never from a path recorded under another mount. Before
-2026-11-16, `serve` had no lane-root default. Every lane then showed `open : no such
-file or directory` and no action. A log that is truly absent is now a plain note:
-`no stream log at <path>`. The JSON command prints the same array served as the API's
-`data`.
+the server was given and never from a path recorded under another mount. A log that is
+absent is a plain note: `no stream log at <path>`. The JSON command prints the same
+array served as the API's `data`.
 
 ## Run transcript
 
@@ -520,8 +510,7 @@ block is a `tool_call` (tool name and input, truncated like every entry), and ea
 timestamps of the call line and the result line. A page that resumes after a call has
 no start for it and leaves the duration out. The closing `result` line is a notice with
 the turn count, the run's wall time and the model time (`duration_api_ms`). Claude's
-reasoning blocks are empty in the stream and are not shown. Before 2026-11-20 these
-lines were read and dropped, so a Claude run showed only its steps.
+reasoning blocks are empty in the stream and are not shown.
 
 A log that is present but has no line this reader recognizes reports
 `sources.log.state: "unparsed"` with the count of lines read, and the transcript's
@@ -556,8 +545,8 @@ on `serve` and `trace` alike. Its default is `<root>/tools/tillr-trace/tillr-tra
 `trace`, the current directory is the root), then the pack's
 `~/.local/share/tillr/tillr-trace/tillr-trace`, then `tillr-trace` on `PATH`. With none
 found, the `trace` source of every run response reads `absent` and only the store's and
-the loop directory's records are shown. The largest run measured on 2026-11-18 (268,000
-subprocess rows) takes about ten seconds to read.
+the loop directory's records are shown. A run with hundreds of thousands of subprocess
+rows takes seconds to read.
 
 `GET /api/v1/runs/{id}/trace?format=otlp-json` and `format=chrome-trace` download
 those same documents. The default format is `otlp-json`; unknown formats are refused.
@@ -591,44 +580,35 @@ route still keeps missing clocks null; only the downloads derive enclosing bound
 first. One pass contains every decision with the same `dispatched_at` millisecond.
 Decisions appear in current queue place order; items outside the order follow
 by item id. Each decision names its item, action, and verbatim reason; actions
-that launch work (`dispatch` and `retry`) also name the lane and run when recorded. Items removed from the queue retain their
-decisions with no place. The command's help owns its flags.
+that launch work (`dispatch` and `retry`) also name the lane and run when recorded.
+Items removed from the queue retain their decisions with no place.
 
 The JSON output is the same array served as `data` by `GET /api/v1/passes`.
-Each row carries `dispatched_at_ms`, `decisions`, and `phases`. The API returns at
-most 50 passes, with an exclusive `before` clock for backward paging and an inclusive
+Each row carries `dispatched_at_ms`, `decisions`, and `phases`. The API pages
+backward with an exclusive `before` clock and takes an inclusive
 `since` lower bound. Both accept nonnegative Unix milliseconds or an RFC 3339 time.
 The clock on the oldest returned row is the next page's `before` value. Invalid
 bounds receive `bad-query`; no decisions is an empty array, not a missing route.
 
-Hold-only passes remain visible with `phases: null`, even when a newer writer stored
-zero phase values for them. For dispatched passes, recorded pass ids select their
-measurements; older rows without that link use an exact timing-row start clock.
-`claim_ms` shows the longest measured start-claim latency before `stage_ms` (worktree
-staging). The text output prints `claim: <N> ms` or `claim: absent` before `stage:`.
-No matching measurement means absent phases, not zero. Individual unrecorded phase
-values remain null, including `claim_ms` for older writers. A recorded gate count of
-zero leaves `gate_ms` null. Measured zero claim and gate durations remain zero.
+Hold-only passes remain visible with `phases: null`. For dispatched passes, recorded
+pass ids select their measurements; a row without that link uses an exact timing-row
+start clock. `claim_ms` shows the longest measured start-claim latency before `stage_ms`
+(worktree staging). The text output prints `claim: <N> ms` or `claim: absent` before
+`stage:`. No matching measurement means absent phases, not zero. Individual unrecorded
+phase values remain null. A recorded gate count of zero leaves `gate_ms` null. Measured
+zero claim and gate durations remain zero.
 
 Only the newest pass in each loop session carries `stop` and its recorded `detail`.
 Paging never moves that annotation to an older pass. Session rows bound decisions by
 their start and end clocks. Result records carry no session id: their stop clocks
 associate them with the ended session before the next session starts. A missing
-result reads `stop not recorded`, including a session still running. Older stores
-without session rows use successive result clocks as session boundaries, including
-history before the first session row was recorded; they cannot identify a missing
-historical session boundary. Result files that explicitly record zero passes, such as
-startup faults, do not supply any pass's stop. Unreadable or malformed result files
-refuse the read explicitly instead of inventing a stop.
+result reads `stop not recorded`, including a session still running. A store
+without session rows uses successive result clocks as session boundaries; it cannot
+identify a missing session boundary. Result files that explicitly record zero passes,
+such as startup faults, do not supply any pass's stop. Unreadable or malformed result
+files refuse the read explicitly instead of inventing a stop.
 
 ## Why each unlanded item is not moving
-
-For a [prose rewrite hold](../tillr-drain/README.md#prose-rewrites-before-build),
-the waiting face shows `awaits-rewrite` as the reason and `rewrite-<item id>` as
-the mover, classified as waiting on work rather than needing the owner. A rewrite
-held by `prose-criteria-count` instead names the owner and the incompatible criteria
-limit, rather than pretending that another worker can resolve it.
-
 
 `waiting` reads the current planner through `tillr-drain why`, as does
 `GET /api/v1/why`. The observatory's Home and Items screens use that route for
@@ -636,6 +616,11 @@ class, reason, and mover, including items no loop pass has ever considered.
 The route's `data` object carries `rows`, `summary`, and the planner's event
 sequence; its response snapshot uses that same sequence. Each row includes the
 full planner decision. No readiness rules are duplicated in the view utility.
+
+For a [prose rewrite hold](../tillr-drain/README.md#prose-rewrites-before-build), the waiting face shows `awaits-rewrite` as the reason and
+`rewrite-<item id>` as the mover, classified as waiting on work rather than needing the
+owner. A rewrite held by `prose-criteria-count` instead names the owner and the
+incompatible criteria limit, rather than pretending that another worker can resolve it.
 
 The planner is found in this order: `--tillr-drain <path>`, then the `tillr-drain` in the
 server's own directory (where `just observatory` and `just tillr-build` put both), then
@@ -646,7 +631,7 @@ another one, is refused as `planner-mismatch`. A planner that cannot be found or
 refused as `planner-unavailable`. Both answer 503 and name the fix. Neither is a store
 failure, and neither says the drain is not moving: the snapshot and its loop heartbeat
 still answer, and Home reads "the planner could not be asked". An invalid policy or
-an incompatible store produces an explicit refusal, never a historical answer
+an incompatible store produces an explicit refusal, never a recorded answer
 presented as current. Each request starts one planner process and reads the
 current document index; it does not migrate the store or write decisions.
 
@@ -654,7 +639,7 @@ Configure `waiting` and `serve` with the loop's `--policy` and `--lanes` inputs.
 These inputs are not retained in the store: absent policy means `no-policy`,
 and absent lanes means all store lanes are offered. `waiting --json` prints the
 presentation rows; the API also carries the summary and full decisions.
-`since` reads `current plan`, not an invented historical start time.
+`since` reads `current plan`, not an invented start time.
 See [the drain's why guide](../tillr-drain/README.md#ask-the-planner-why) for
 summary accounting and the per-item command.
 
@@ -664,15 +649,15 @@ may supply the reason and recovery command, but does not hide the conflict's tra
 
 ### Recorded-decision history
 
-`waiting --history` retains the recorded-decision view, as does
+`waiting --history` reads recorded decisions instead of the current planner, as does
 `GET /api/v1/waiting`. It prints one row per item except those stored as
 `landed`, `closed`, or `resolved-elsewhere`. The columns are #, item id,
 class, where, why, mover, and since. # is the item's
 [place](../../docs/reference/observatory-actions.md#queue-order-and-places), counted
 from 1 across the full order, with empty keys counted last by item id. Parked
-items have no place. Readers never print the stored key. Its JSON output and the historical API use the same row objects; the API
-places the array in its usual `data` field beside the read transaction's snapshot.
-
+items have no place. Readers never print the stored key. Its JSON output and the API
+use the same row objects; the API places the array in its usual `data` field beside the
+read transaction's snapshot.
 
 The classes are `needs you`, `waits on work`, `needs a cause`, `ready`, `moving`, and
 `waits on the loop`. A fixed reason table supplies the class (`class_source: "rule"`),
@@ -714,7 +699,7 @@ as **Mover**. Its JSON row adds **waited**, a duration rounded to the nearest
 second from **Since** to the read time. Other rows carry an empty **waited** value.
 The terminal prints the duration after the paths in **Why**; Home shows it beside
 **Since**. A different dirty path set starts a different reason sequence and a
-new clock. A landed item no longer appears in this view.
+new clock. A landed item does not appear in this view.
 
 A replacement loop holds an item on `run-live` while a run from an earlier loop is still
 alive, because stopping a loop leaves its runs alone. It reads `waits on work` at `lane`.
@@ -729,15 +714,15 @@ another pass records a hold decision. Completing examination clears this failure
 from the waiting view without deleting its original evidence.
 
 **Where** reports the recorded stage: queue, lane, fence, gate, land, or trunk, using
-the current run's gate and refusal events and landing rows, with retired candidate rows
-as history. A later hold does not erase a recorded stage.
+the current run's gate and refusal events and landing rows. A later hold does not erase
+a recorded stage.
 **Mover** names the live run, deferred item, unfinished blockers, or the first unanswered
 question in the current design-document index. The index uses the same root and question
 command configuration as `status` and `serve`. An unreadable or missing document index is
-reported explicitly; a question hold whose question is no longer present reads
-`question not recorded`. Every hold reason resolves to a rule that names its mover; a reason with no rule reads
-"add a history rule for this recorded reason". No question or cause is invented from the
-reason text.
+reported explicitly; a question hold whose question is absent from the index reads
+`question not recorded`. Every hold reason resolves to a rule that names its mover; a
+reason with no rule reads "add a history rule for this recorded reason". No question or
+cause is invented from the reason text.
 
 A `run-processes-live` item fault reads `needs you` with the surviving process list in
 **Why** and the `clear-fault` command in **Mover**.
@@ -759,11 +744,10 @@ drain. It prints three blocks:
 
 1. **The loop and lane header** — `lanes leased: M/K` and the loop's last stop reason from
 the newest `.tillr/loop/drain-*.json`. When an event was appended after that file, the
-header says `stale stop record — newer run exists at seq <N>`: the shape that hid a loop
-whose newest stop record was an older take. When the trailing `drain-*.json` records
-show two or more consecutive abnormal exits for the same cause, `running` (both text and
-`loop.repeated_stop` JSON) and `/api/v1/snapshot` (`drain_summary.repeated_stop`, rendered
-in `LoopBand` and `LoopSummary`) report the stuck-drain streak, time window, and next
+header says `stale stop record — newer run exists at seq <N>`. When the trailing
+`drain-*.json` records show two or more consecutive abnormal exits for the same cause,
+`running` (both text and `loop.repeated_stop` JSON) and `/api/v1/snapshot`
+(`drain_summary.repeated_stop`) report the streak, its time window, and the next
 action even while a newly restarted session is active.
 2. **The active runs** — the lane, run, item, seat, place, title, elapsed (the viewer's clock from
 the run's start), turns and spend so far, in-run loop recoveries (`RECOVERIES`, summarizing
@@ -803,7 +787,7 @@ range), and `stalls`. A `stalled` check failed and passed nothing; the waiting
 reasons `gate-stall-rerun` and `gate-stalled` distinguish its automatic retained-head
 rerun from a second-stall item fault. Durations
 are in milliseconds and keep fractional precision. The median averages the two
-middle samples when the count is even. The 95th percentile uses the standard
+middle samples when the count is even. The 95th percentile uses the
 nearest-rank definition: sort the durations and select position `ceil(0.95 * n)`,
 counting from one. It is `null` with fewer than five timed samples; median and
 maximum are also `null` with no timed samples. Plan spans are not checks. Wait
@@ -848,7 +832,7 @@ Designer sums likewise disclose missing prices beside the reported sum.
 Pass responses and the passes command separate `spend_started_in_loop` from
 `spend_carried_over`: measurements from work this loop started, and from earlier
 loops' workers settled by this pass. Both carry a count of wholly unreported runs
-and field-specific missing counts. A legacy pass with no measurement remains
+and field-specific missing counts. A pass with no measurement remains
 `null`, rather than acquiring an invented zero.
 
 ## Designers and review replies
@@ -873,7 +857,7 @@ A failed read changes nothing; confirmation never holds the item open.
 The loop receives its Vantage address and repository name at startup, not through
 another settings read. With neither provided, written replies stay `written` and the
 page says replies are not being confirmed. These pages only read loop-owned records:
-`GET /api/v1/designs` supplies designers and arrival counts, while the existing item
+`GET /api/v1/designs` supplies designers and arrival counts, while the item
 and document routes carry their comment and designer details.
 
 ## What it refuses
