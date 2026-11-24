@@ -200,16 +200,23 @@ func readPendingHistoryState(r *store.Reader) (*pendingHistoryState, error) {
 	if pendingHistoryFoldHook != nil {
 		pendingHistoryFoldHook()
 	}
-	state := newPendingHistoryState()
-	if err := foldPendingHistory(r, 0, state, nil); err != nil {
-		return nil, err
-	}
-	return state, nil
+	return readPendingHistoryStateCached(r)
 }
 
 // foldPendingHistory extends a private state with ordered events, or reads the
 // relevant kinds after seq if no events were supplied.
 func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, events []event.Event) error {
+	return foldPendingHistoryWithMeta(r, seq, s, events, nil)
+}
+
+type pendingFoldMeta struct {
+	cow   bool
+	state *pendingHistoryState
+	last  event.Event
+	count int
+}
+
+func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistoryState, events []event.Event, meta *pendingFoldMeta) error {
 	if pendingDeltaFoldHook != nil {
 		pendingDeltaFoldHook()
 	}
@@ -220,6 +227,16 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 			return err
 		}
 	}
+	if len(events) == 0 {
+		if meta != nil {
+			meta.state = s
+		}
+		return nil
+	}
+	if meta != nil && meta.cow {
+		s = clonePendingHistoryForDelta(s, events)
+	}
+	pendingEventsFolded.Add(int64(len(events)))
 	works, byRun, judged, segments, discarded := s.works, s.byRun, s.judged, s.segments, s.discarded
 	for _, e := range events {
 		if e.ObjectID == nil {
@@ -536,6 +553,11 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 				work.examinationStartedAt = time.Time{}
 			}
 		}
+	}
+	if meta != nil {
+		meta.state = s
+		meta.last = events[len(events)-1]
+		meta.count = len(events)
 	}
 	return nil
 }
@@ -2017,7 +2039,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if pending == nil {
 				pending, err = readPendingHistoryState(r)
 			} else {
-				err = foldPendingHistory(r, historyHead, pending, nil)
+				pending, err = readPendingHistoryStateCached(r)
 			}
 			if err == nil {
 				historyHead = head
