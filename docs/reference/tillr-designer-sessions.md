@@ -2,14 +2,12 @@
 title: "Designer Sessions and Review Comments"
 status: accepted
 stage: CURRENT
-verified: 2026-11-20
-verified_commit: 47047cacf11667b20746f01591f5204866f995f3
+verified: 2026-11-24
 covers:
   - tools/tillr/settings/settings.go
   - tools/tillr-item/comments.go
   - tools/tillr-item/item/comments.go
   - tools/tillr-item/item/comment_intake.go
-  - tools/tillr-item/docshare/docshare.go
   - tools/tillr-drain/drain/comments.go
   - tools/tillr-drain/drain/comment_intake.go
   - tools/tillr-drain/drain/comment_observatory.go
@@ -31,28 +29,42 @@ related:
 
 # Designer Sessions and Review Comments
 
-**Status:** Current reference · Verified 2026-11-20 against `47047cacf11667b20746f01591f5204866f995f3`. UNMEASURED: the owner's live two-comment run on a tracked design document and any comparison beyond one paired comment of whether a resumed session answers better than a cold one.
+**Status:** Verified 2026-11-24 by reading the code named in `covers`.
+UNMEASURED: whether a resumed session answers a comment better than a new one
+has not been measured beyond the cost comparison in
+[What a turn costs, measured](#what-a-turn-costs-measured).
 
-**Reads with:** [observatory-redesign.md](./observatory-redesign.md) (the linked-page observatory, waiting classes, and dollar-stripped usage display), [observatory-actions.md](./observatory-actions.md) (idea intake and queue placement), [tillr-item-states.md](./tillr-item-states.md) (item lifecycle states and `closed` terminal evidence), [tillr-review-comments.md](../design/tillr-review-comments.md) (the proposed Vantage-free comment command and fast-track extensions), and [decision-provenance-review.md](../tillr/decision-provenance-review.md) ([`OQ-PR12`](../tillr/decision-provenance-review.md#OQ-PR12), the 2026-11-20 owner ruling confirming `D-CD1`–`D-CD11`).
+**Reads with:** [observatory-redesign.md](./observatory-redesign.md) (the
+observatory's pages and waiting classes),
+[observatory-actions.md](./observatory-actions.md) (idea intake and queue
+placement), [tillr-item-states.md](./tillr-item-states.md) (item states), and
+[tillr-review-comments.md](../design/tillr-review-comments.md) (a proposed
+comment command that needs no Vantage server).
 
 ---
 
 ## Overview
 
-Review comments left in Vantage on a tracked design document become generated `design`-seat items (`item-comments-<doc>-<N>`) that run at a dedicated lane directory for that document — its **desk** (`desk-<doc>`) — and resume the harness session that most recently worked on that document (`last_designers`). No agent process stays alive between turns: the session persists as its harness transcript file inside the desk's durable directory while the desk's git worktree is created per run and removed after settlement.
+Review comments left in Vantage (the Markdown viewer whose review API tillr
+reads) on a tracked design document become a generated `design`-seat item. That item
+runs in a lane directory reserved for the document — its **desk** — and resumes
+the harness session that last worked on that document. No agent process stays
+alive between turns: the session persists as its harness transcript file in the
+desk's durable directory, and the desk's worktree exists only while a run needs
+it.
 
 ```text
-Vantage review API ──► intakeComments / `tillr item comments take`
+Vantage review API ──► automatic intake / `tillr item comments take`
                              │
                              ▼
                   item-comments-<doc>-<N>  (holds unstarted <doc> items)
                              │
                              ▼
-                   chooseDesigner at desk-<doc>
+                   session choice at desk-<doc>
           ┌──────────────────┼──────────────────┐
           ▼                  ▼                  ▼
      new session       resumed-warm     resumed-compacted /
-   (cold / fallback)   (inside TTL)      resumed-expired
+                                         resumed-expired
           └──────────────────┼──────────────────┘
                              ▼
             gate + squash land (or zero-commit answer)
@@ -65,180 +77,268 @@ Vantage review API ──► intakeComments / `tillr item comments take`
 
 ## Terms and ownership
 
-- **Last designer (`last_designers` in `tools/tillr-drain/drain/comments.go`):** The single recorded harness session per document path that most recently completed a run at that document's desk (including a failed initial design run). Stored as JSON in `last_designers(document, record)` with `session_id`, `backend`, `model` (policy route), `desk`, `run_id`, `last_request`, `context_tokens`, `cache_lifetime_seconds`, `compacted`, `blob_id`, and `transcript`.
-- **Desk (`desk-<doc>`):** A lane outside the numbered and express pools dedicated to one document (`commentDesk` in `tools/tillr-drain/drain/comments.go`). Its parent directory `<lane-root>/desk-<doc>/` and `<lane-root>/desk-<doc>/durable/` persist across runs so harness session lookup by ID finds the transcript at the same working-directory path (`D-CD3`), while `<lane-root>/desk-<doc>/worktree` exists only during an active or retained run.
-- **Comment batch (`comment_batches` in `tools/tillr-item/item/comments.go`):** One sitting of pending Vantage review comments for a single document, captured atomically with its `item-comments-<doc>-<N>` item and de-duplicated by `comment_taken(document, comment_id, turns, changed)`.
+- **Last designer** — the one recorded harness session per document that most
+  recently completed a run at that document's desk, including a failed first
+  design run. Stored in the `last_designers` table with the session id,
+  backend, model route, desk, last request time, context size, cache lifetime
+  and transcript path. Not the session that first wrote the document.
+- **Desk** (`desk-<doc>`) — a lane outside the numbered and express pools,
+  reserved for one document. Its directory and its `durable/` subdirectory
+  persist across runs, so the harness finds the transcript at the same
+  working-directory path; its `worktree` exists only during a run or while a
+  candidate is retained.
+- **Comment batch** — one sitting of pending review comments on one document,
+  captured atomically with its `item-comments-<doc>-<N>` item. A comment
+  already taken at the same turn count is never taken twice.
 
-| Package / binary | Responsibility |
+| Package | Responsibility |
 | :--- | :--- |
-| `tools/tillr/settings` | Parses `[comments]` in `.tillr.toml` (`vantage_url`, `repo`, `paths`, `quiet_seconds`, `poll_seconds`, `max_running`, `compact_over_tokens`, `refresh_hours`) |
-| `tools/tillr-item` (`comments.go`, `item/comments.go`, `item/comment_intake.go`, `docshare`) | Reads Vantage's `/api/r/<repo>/review` endpoint, filters quiet/unanswered comments, computes the document + companion-plan + linking-roadmap fence, and writes `comment_batches`, `comment_taken`, and `item-comments-<doc>-<N>` |
-| `tools/tillr-drain` (`comments.go`, `comment_intake.go`, `comment_observatory.go`, `designer.go`, `designer_compaction.go`, `plan.go`, `loop.go`) | Polls Vantage, holds dependent items (`design-under-comment`), routes desks, selects/compacts/records designer sessions, verifies `replies.jsonl`, delivers `.vantage/inbox/<item_id>.jsonl` after landing, and confirms delivery |
-| `tools/tillr-run/backends/pi/compact` | Runs `pi --mode rpc --session <transcript>` to compact an expired Pi session in place and reports before/after token counts and compaction spend |
-| `tools/tillr-view` (`designers.go`, `comment_intake.go`, `Designers.tsx`, `DocumentPane.tsx`) | Serves `/api/v1/designs`, attaches `last_designer` to document payloads and `comments` to item payloads, surfaces comment intake/delivery waits, and strips dollar fields before HTTP encoding |
+| `tools/tillr/settings` | Parses the `[comments]` table of `.tillr.toml` |
+| `tools/tillr-item` | Reads Vantage's review endpoint, selects quiet unanswered comments, computes the batch's fence, and writes the batch and its item |
+| `tools/tillr-drain` | Polls Vantage, holds dependent items, routes desks, chooses, compacts and records designer sessions, checks replies, and delivers them after landing |
+| `tools/tillr-run/backends/pi/compact` | Compacts an expired Pi session in place and reports token counts and spend |
+| `tools/tillr-view` | Serves designer sessions and comment batches read-only |
 
 ---
 
 ## Comment intake and batch items
 
-Comments enter the store either on demand through `tillr item comments take` (`tools/tillr-item/comments.go`) or automatically during `Loop.intakeComments` (`tools/tillr-drain/drain/comment_intake.go`) when `.tillr.toml` declares `[comments]`. This is the existing implementation, not the proposed fast track: `intakeComments` returns without polling when `Comments` is nil, as it is with this repository's [tracked settings](../../.tillr.toml). When enabled, the loop schedules its next poll and calls `item.ReadReview` for each eligible document. The [review comments design](../design/tillr-review-comments.md#OQ-RC4) excludes server intake; writing replies to `.vantage/inbox` does not require a server connection.
+Comments enter the store on demand through `tillr item comments take`, or
+automatically during a drain pass when `.tillr.toml` declares `[comments]`.
+Without that table the loop never polls; this repository's
+[tracked settings](../../.tillr.toml) do not declare it.
 
-### Pending and quiet-window filtering
+### Pending comments and the quiet window
 
-- **Public review read (`item.ReadReview` in `tools/tillr-item/item/comments.go`):** Calls `GET <vantage_url>/api/r/<repo>/review?path=<doc>` with a 15-second HTTP timeout; Vantage's private database files are never read directly.
-- **Pending thread (`item.PendingReview`):** An unresolved, non-empty comment is pending when its latest reviewer change is newer than the agent's answer for that round (or no such answer exists). A `noted` acknowledgment is not an answer.
-- **First-intake baseline (`comment_intake`):** On the first automatic poll (or the first hand intake when `[comments]` is configured), `first_intake` is stamped once in `comment_intake(id=1)`. Automatic polling ignores comments whose latest reviewer change (`ReviewChanged`) predates `first_intake`, recording their count in `comment_intake_documents(document, older)` so the observatory surfaces them without flooding old threads. Passing `--older` to `tillr item comments take` includes pre-baseline comments.
-- **Quiet sitting (`item.QuietComments` in `tools/tillr-item/item/comment_intake.go`):** When automatic polling runs (or when hand intake runs in a repository with `[comments]` configured), pending comments on the document are inspected together (`D-CD9`):
-  - If a pending comment has an open comment box (`BoxOpen`), **nothing** is taken for that document.
-  - Otherwise, if the most recent reviewer activity across pending eligible comments occurred fewer than `comments.quiet_seconds` (default `60`) ago, nothing is taken yet.
-  - When `.tillr.toml` has no `[comments]` table, `tillr item comments take --doc <path> --vantage <url>` skips the quiet timer and takes pending comments with closed boxes immediately.
-- **Outage atomicity:** `Loop.intakeComments` fetches `/api/r/<repo>/review` for every non-symlink `.md` file under `comments.paths` (verifying `EvalSymlinks` stays local to the repository) before opening its write transaction. If any fetch fails, no batch is written and `comment_intake.unavailable` is set to `1`.
+- **Read.** Intake calls Vantage's public review endpoint,
+  `GET <vantage_url>/api/r/<repo>/review?path=<doc>`. Vantage's own database
+  files are never read.
+- **Pending.** An unresolved, non-empty comment is pending when its latest
+  reviewer change is newer than the agent's answer for that round, or no such
+  answer exists. A `noted` acknowledgment is not an answer.
+- **First-intake baseline.** The first automatic poll stamps a baseline time
+  once. Automatic polling ignores comments whose latest reviewer change
+  predates it and records their count per document, so the observatory can
+  show them without flooding the queue with old threads.
+  `tillr item comments take --older` includes them.
+- **Quiet sitting** (`D-CD9`). Pending comments on one document are judged
+  together. If any has an open comment box, nothing is taken for that document.
+  Otherwise nothing is taken until the most recent reviewer activity is older
+  than the quiet window. Hand intake in a repository with no `[comments]` table
+  skips the timer and takes pending comments with closed boxes at once.
+- **Outage.** Automatic intake fetches every eligible document under
+  `comments.paths` before it opens its write transaction. If any fetch fails,
+  no batch is written and the observatory shows Vantage as not answering.
 
-### Generated item shape and holds
+### The generated item
 
-`item.TakeComments` (`tools/tillr-item/item/comments.go`) runs inside one SQLite write transaction:
+`TakeComments` (package `item` in `tools/tillr-item`) writes one transaction:
 
-- **One open batch per document:** If any item in `comment_batches` for `doc` is currently in `in-queue`, `in-progress`, or `blocked`, `TakeComments` returns `""` without creating a second batch; remaining comments wait for the next pass after the active batch settles. Already-taken `(document, comment_id, turns, changed)` tuples in `comment_taken` are skipped.
-- **Item identity and rank:** Allocates `item-comments-<CommentDocumentName(doc)>-<N>` (`N` starting at `1`; `CommentDocumentName` strips `docs/design/` and `.md`, slugifying path punctuation and appending an 8-hex SHA-256 suffix when non-slug characters were normalized). Places the item ahead of the lowest active rank by prepending `"0m"` (or `"m"` when the queue is empty), sets `seat = "design"`, `design_doc = doc`, and `state = "in-queue"`.
-- **Fence (`docshare.CommentFence` in `tools/tillr-item/docshare/docshare.go`):** Includes `doc`, its existing companion `<stem>-plan.md` when present on disk, and every tracked roadmap file under `sync.roadmaps` (default `docs/`) that contains a Markdown link resolving to `doc`.
-- **Criteria:** Two mechanical criteria: `c1` requires revising `doc` (or leaving zero commits when already answered) and writing one JSON reply per comment to `<durable>/replies.jsonl`; `c2` requires `uvx vantage-check <doc>` to exit `0` when `doc` still exists.
-- **Planner priority and `design-under-comment` hold (`tools/tillr-drain/drain/plan.go`):** `readOrderedItems` places `item-comments-*` in priority bucket `2` (behind `rewrite-item-*` in bucket `1`, ahead of express items in bucket `3` and ordinary items in bucket `4`). While any `item-comments-*` item for `doc` is open (`in-queue`, `in-progress`, or `blocked`), unstarted items whose `design_doc` equals `doc` or whose `allowed_paths` include `doc` hold with `reason: "design-under-comment"` (`D-CD11`); runs already in flight finish undisturbed.
-- **Pre-dispatch check (`Loop.checkCommentDispatch` in `tools/tillr-drain/drain/comment_intake.go`):** Immediately before claiming a comment item (when a Vantage URL is configured), the loop re-reads `/api/r/<repo>/review`. If Vantage fails to answer, the item is not claimed (`ReasonVantageUnavailable = "Vantage not answering"`). If every comment in the batch has been deleted or marked resolved in Vantage since intake, the loop closes the item via `item.Close` (`"review comments all resolved or deleted before dispatch"`) and replans in the same pass.
+- **One open batch per document.** While a comment item for the document is in
+  any state that is not finished, no second batch is created; remaining
+  comments wait for the next pass after it settles.
+- **Identity and rank.** The item is `item-comments-<doc>-<N>`, where `<doc>`
+  is the document's name without `docs/design/` and `.md`, and `N` counts the
+  document's batches. It is ranked ahead of every ordinary ranked item, with
+  `seat = "design"` and state `in-queue`.
+- **Fence.** The document, its companion `<stem>-plan.md` when that file
+  exists, and every `roadmap.md` under `docs/` that links to the document.
+- **Criteria.** Two mechanical criteria: revise the document (or leave zero
+  commits when it already answers the comments) and write one JSON reply per
+  comment to `replies.jsonl` in the desk's durable directory; and
+  `uvx vantage-check <doc>` exits `0`.
+- **Hold on dependent work** (`D-CD11`). While a comment item for a document is
+  open, unstarted items whose design document is that document hold with
+  `design-under-comment`. Runs already in flight finish undisturbed.
+- **Check before dispatch.** Just before claiming a comment item, the loop
+  re-reads the review. If Vantage does not answer, the item is not claimed
+  (`Vantage not answering`). If every comment in the batch has since been
+  deleted or resolved, the loop closes the item and replans in the same pass.
 
 ---
 
 ## The desk
 
-Every comment item, and every eligible single-document `design`-seat item, runs at its document's desk (`desk-<CommentDocumentName(doc)>`) rather than in a numbered `lane-N` or `express-N` slot (`D-CD3`).
+Every comment item, and every eligible single-document `design`-seat item, runs
+at its document's desk and not in a numbered or express lane (`D-CD3`).
 
-- **Desk routing (`deskDocument` in `tools/tillr-drain/drain/comments.go`):**
-  - Any `item-comments-*` item routes to its batch document's desk even when `[comments]` is absent from `.tillr.toml` (hand intake).
-  - Any other `design`-seat item routes to a document desk only when `[comments]` is configured and the item's `allowed_paths` contain **exactly one** distinct literal `.md` file path (not a directory prefix, not zero, and not two designs) inside `comments.paths`. Multi-document or directory-fenced design runs use ordinary or express pool lanes and record no `last_designers` row.
-- **Concurrency and holds (`countDocumentDesks` in `comments.go`, `plan.go`, `holdrules/holdrules.go`):**
-  - Only one item can occupy a given `desk-<doc>` at a time (across live leases, unsettled candidates, and current-pass dispatches). A second item targeting the same desk holds with `waits on the document's desk` (`ReasonDocumentDeskBusy`), naming the occupying item as mover.
-  - Active document desks (every `desk-*` except `desk-trunk-fixer`) are capped at `comments.max_running` (default `3` when `[comments]` is configured), independent of numbered and express lane counts. Additional desk items hold with `waits on a desk` (`ReasonDeskCapacity`).
-- **Worktree lifecycle and boundary rules:**
-  - `stageComment` (`comments.go`) ensures the `desk-<doc>` row exists in `lanes`, assigns `spec.SessionID`, and records `comment_runs` and `comment_arrivals`.
-  - Staging checks out `<lane-root>/desk-<doc>/worktree` on branch `refs/heads/tillr/<scope>/desk-<doc>`.
-  - On lane reset (`resetLaneTo` / `resetLaneToRegistryLocked` in `tools/tillr-drain/drain/loop.go`) and held-lane release (`held_lane.go`), `desk-*` lanes acquire `withWorktreeRegistryLock` **before** opening any SQLite writer, hard-reset and remove `<lane-root>/desk-<doc>/worktree`, and leave `<lane-root>/desk-<doc>/durable/` intact so the harness session transcript persists on disk.
-  - Run-bracket boundary checks (`loopPlaces.deskBranch` and worktree checks in `tools/tillr-drain/drain/boundary.go`) excuse `<lane-root>/desk-<doc>/worktree` and `refs/heads/tillr/<scope>/desk-<doc>` within the loop's own lane scope so concurrent desk staging or teardown never convicts an unrelated lane run.
+- **Routing.** A comment item always routes to its batch document's desk, with
+  or without `[comments]`. Any other `design`-seat item routes to a desk only
+  when `[comments]` is configured and the item's fence names exactly one
+  literal `.md` path inside `comments.paths`. A design run fenced to several
+  documents or to a directory uses an ordinary or express lane and records no
+  last designer.
+- **One occupant.** One item occupies a desk at a time, counting live leases,
+  unsettled candidates and dispatches in the current pass. A second item holds
+  with `waits on the document's desk`.
+- **Desk cap.** Active document desks are capped at `comments.max_running`,
+  independent of the numbered and express lane counts. Further desk items hold
+  with `waits on a desk`. The trunk fixer's desk is not a document desk and is
+  not counted.
+- **Worktree lifetime.** Staging checks out `<lane-root>/desk-<doc>/worktree`
+  on the desk's own branch. Resetting or releasing the desk removes the
+  worktree and leaves `durable/` intact, so the transcript survives.
+- **Boundary checks.** A run's write-boundary check excuses desk worktrees and
+  desk branches inside the loop's own lane scope, so staging or tearing down a
+  desk never convicts an unrelated run.
 
 ---
 
 ## Choosing at dispatch
 
-When planning or claiming a run at a desk, `chooseDesigner` (`tools/tillr-drain/drain/designer.go`) evaluates the document's `last_designers` row in strict order (and `selectSeatDispatch` in `seat_shares.go` re-evaluates it inside the claim transaction if weighted or round-robin seat selection switches the backend):
+When a run is planned or claimed at a desk, `chooseDesigner` (package `drain`)
+evaluates the document's last designer in this order. If seat selection
+switches the backend inside the claim, the choice is made again.
 
-| Condition | Session used | Recorded `DesignerReason` |
+| Condition | Session used | Recorded reason |
 | :--- | :--- | :--- |
-| No `last_designers` row exists for `doc` | New session ID | `"no-designer"` |
-| Previous backend's adapter directory contains `pause-kind` equal to `cannot-resume` | New session ID | `"cannot-resume"` |
-| `d.Backend != req.Backend` or `d.Model != req.Route()` | New session ID | `"seat-changed"` |
-| `d.Transcript` is missing or not a regular file | New session ID | `"transcript-missing"` |
-| `d.LastRequest` parses, `d.CacheLifetimeSeconds > 0`, and `at < last_request + cache_lifetime_seconds` | `d.SessionID` | `"resumed-warm"` |
-| Cache is expired/unknown, `*d.ContextTokens > 40000`, and `<adapter-dir>/compact` is an executable regular file | `d.SessionID` (after compaction) | `"resumed-compacted"` |
-| Otherwise (expired or unknown cache, `<= 40000` tokens or no `compact` step) | `d.SessionID` (as-is) | `"resumed-expired"` |
+| No last designer for the document | New session | `no-designer` |
+| The previous backend's adapter declares `cannot-resume` | New session | `cannot-resume` |
+| The backend or model route differs from the last designer's | New session | `seat-changed` |
+| The transcript is missing or not a regular file | New session | `transcript-missing` |
+| The cache lifetime is known and has not run out | The recorded session | `resumed-warm` |
+| The cache is expired or unknown, the context is over the compaction threshold, and the adapter has a `compact` step | The recorded session, after compaction | `resumed-compacted` |
+| Otherwise | The recorded session, as it is | `resumed-expired` |
 
-### Staged brief and failed-resume fallback
+### The staged brief and the one fallback
 
-- **Comment brief (`LaneStager.commentTask`, `commentThreadTask` in `tools/tillr-drain/drain/comments.go`):** Embeds every batch comment (`id`, turn count `len(Reactions)` as Vantage `round`, `heading`, `captured_block` or `selected_text`, `question_id`, root comment, and reactions), followed by the four answering rules and a `What moved:` section:
-  - Cold or replacement session: `"new session; read the document"`, plus `Previous session transcript (optional reading): <path>` when a prior `last_designers` row existed.
-  - Resumed session with no recorded `blob_id`: `"no recorded document blob; read the document"`.
-  - Resumed session whose `d.BlobID` matches `BaseSHA:<doc>`: `"unchanged"`.
-  - Resumed session whose `git diff <blob_id> <BaseSHA>:<doc>` is under `400` lines: the unified diff inline; `400` lines or more: `"the document was rewritten; read it again"`.
-  - When `d.Compacted` is true, appends `"Your earlier conversation was summarized."`
-- **One automatic fallback on dead resume (`failedDesignerResume`, `replaceFailedDesigner` in `tools/tillr-drain/drain/designer.go`):** If a `"resumed-*"` run exits nonzero and its log stream contains **no** assistant text, thinking, data, or tool-call output (`D-CD10`), `replaceFailedDesigner` marks the failed `comment_runs` row `outcome = 'resume-failed'` and dispatches **once** in the same settlement pass with `Resume = false`, a fresh session ID, `DesignerReason = "resume-failed"`, and the prior transcript path in the brief (switching to an open quota replacement backend if the original backend's quota window closed). Any run that emitted partial assistant output or tool calls is **not** replayed automatically.
+- **Brief.** The brief embeds every comment in the batch with its thread, the
+  answering rules, and a `What moved:` section. A new session is told to read
+  the document, and is given the previous transcript's path as optional
+  reading when there was one. A resumed session is told the document is
+  unchanged, or is shown the diff since the blob it last saw, or — when that
+  diff is long ([Current values](#current-values)) — is told to read the
+  document again. A compacted session is told its earlier conversation was
+  summarized.
+- **One fallback on a dead resume** (`D-CD10`). If a resumed run exits nonzero
+  having produced no assistant text, thinking or tool call, the loop marks that
+  run `resume-failed` and dispatches once more in the same settlement with a
+  new session and the prior transcript path in the brief. A run that produced
+  any model output is not replayed automatically, so a half-applied edit is
+  never duplicated.
 
 ---
 
 ## The keep-warm rule
 
-Sessions are kept warm solely by the provider's prompt-cache retention window reported on the run stream (`D-CD5`); no background keep-alive timer or synthetic cache-extension request runs.
+A session is warm only for the provider's prompt-cache retention reported on
+its run stream (`D-CD5`). No background keep-alive request runs.
 
-- **Recording the session (`Loop.recordDesigner` in `tools/tillr-drain/drain/comments.go`):** After any run at a document desk settles (even if a writing run failed before creating `doc`), `recordDesigner` scans settled events in the run's JSONL log:
-  - Captures `session.id` and `session.transcript` when emitted (falling back to the lane's `session-id` file and log artifact path), sets `Compacted = true` if `decision.DesignerReason == "resumed-compacted"`, `event.Type == "auto_compaction_end"`, or the same session was already marked `Compacted` in `last_designers`.
-  - On each assistant `turn_end`, updates `LastRequest` from `message.timestamp`, computes `ContextTokens = input + cacheRead + cacheWrite + output`, and reads `CacheLifetimeSeconds` from `usage.cacheLifetimeSeconds` — or, when `cacheLifetimeSeconds` is absent and `cacheWrite > 0` with Anthropic's `cacheWrite1h` present, sets `3600` when `*cacheWrite1h > 0` and `300` otherwise. Absent provider measurements stay `nil` rather than defaulting to an assumed TTL.
-  - Records `BlobID` from `git ls-tree --format=%(objectname) HEAD -- :(literal)<doc>` in the lane target and upserts `last_designers(document, record)`.
-- **Retirement (`Loop.retireDesigners` in `tools/tillr-drain/drain/designer.go`):** At the start of each pass, `retireDesigners` deletes a document's `last_designers` row on two grounds (`D-CD8`):
-  1. **Deleted document:** `<root>/<doc>` does not exist on disk **and** `git ls-tree --name-only <syncedSHA> -- <doc>` is empty on the trunk commit pinned for the pass (preventing a concurrent `git merge --squash` unlink-and-rewrite window or an uncommitted file from erasing a live designer row).
-  2. **Completed stage:** Vantage's stage index (`Done(doc)`) maps the document's `stage` to the `done` role (for example `CURRENT`, `BUILT`, or `SUPERSEDED` per `.vantage.toml`, unless a new comment item re-enters at its desk).
-  Retirement removes only the `last_designers` SQLite row; harness retention owns transcript files on disk.
+- **Recording.** After any run at a document desk settles — including a writing
+  run that failed before creating the document — the loop records the last
+  designer from the run's log: session id and transcript, the time and context
+  size of the last assistant turn, the cache lifetime the provider reported,
+  and the document's blob id on the lane's head. A cache lifetime the provider
+  did not report stays unknown; no lifetime is assumed.
+- **Retirement** (`D-CD8`). At the start of each pass the loop deletes a
+  document's last-designer row when the document is gone from both the working
+  tree and the trunk commit pinned for the pass, or when the document's stage
+  has a `done` role. Only the row is removed; the harness owns transcript
+  retention.
 
 > [!NOTE]
-> **Parsed settings not wired into `tillr-drain` at `8e47153ab`:** `settings.Read` (`tools/tillr/settings/settings.go`) parses and validates `comments.compact_over_tokens` (default `40000`) and `comments.refresh_hours` (default `0`), and `Settings.StartupLine()` prints both. However, `chooseDesigner` in `tools/tillr-drain/drain/designer.go` hardcodes `*d.ContextTokens > 40000` without reading `Comments.CompactOverTokens`, and nothing in `tools/tillr-drain/` reads `Comments.RefreshHours` or sends cache-refresh requests (`D-CD5`).
+> **Two settings are parsed and not used.** `comments.compact_over_tokens` and
+> `comments.refresh_hours` are validated and printed at startup, but
+> `rg -n 'CompactOverTokens|RefreshHours' tools/tillr-drain tools/tillr-view -g '*.go'`
+> returns nothing: the compaction threshold is a literal in `chooseDesigner`,
+> and nothing sends a cache-refresh request.
 
 ### Compaction and crash recovery
 
-Compaction runs lazily at dispatch (`Loop.compactDesigner` and `ensureDesignerCompaction` in `tools/tillr-drain/drain/designer_compaction.go`) only when `chooseDesigner` returned `"resumed-compacted"` (`D-CD6`, `D-CD7`):
+Compaction runs at dispatch, and only when the choice was `resumed-compacted`
+(`D-CD6`, `D-CD7`):
 
-1. **Exclusive journal:** Keyed by `<lane-root>/compactions/<session-id>/<checkpoint>.json`, where `<checkpoint>` is the previous `last_designers.RunID` (sanitized to filename-safe bytes). Before invoking `<adapter-dir>/compact`, `ensureDesignerCompaction` creates this file with `O_CREATE|O_EXCL` recording `session_id`, `checkpoint`, `transcript`, `offset` (current byte size of `transcript`), `run_id`, and `item_id`.
-2. **Adapter execution (`tools/tillr-run/backends/pi/compact`):** Verifies the session header in `--transcript`, snapshots total usage across assistant entries, rewrites `--journal` atomically with `started: true` and the exact pre-compaction byte `offset`, spawns `pi --mode rpc --session <transcript>` (passing `--provider` and `--model` when `--route` is set) with `{"id":"tillr-compact","type":"compact"}` under `--timeout-ms` (default `300000` ms), reads the newly appended `compaction` entry (`tokensBefore`), measures post-compaction summary tokens and added assistant usage (`tokens`, `cost_usd`), and prints the JSON receipt on stdout.
-3. **Receipt persistence:** `ensureDesignerCompaction` writes the receipt into both the journal and `<run-dir>/compaction.json`, and `compactDesigner` appends a `drain.designer-compacted` event (`object_id = journal.RunID`) carrying `item_id`, `session_id`, `tokens_before`, `tokens_after`, `tokens`, and `cost_usd`.
-4. **Crash reconciliation (`reconcileCompactionJournal`):** If a prior loop crashed mid-compaction, the next dispatch or startup pass (`reconcilePendingDesignerCompactions`) inspects the existing journal:
-   - If the journal already carries `receipt`, or `<run-dir>/compaction.json` exists, it reuses that receipt without calling the model again.
-   - If the transcript grew past `journal.Offset` and contains a `type == "compaction"` entry after that offset, it reconstructs the receipt from the transcript tail without re-running `compact`.
-   - If `journal.Started` is false and the transcript size still equals `journal.Offset`, the adapter never started `compact`, so the stale journal is removed and compaction runs cleanly.
-   - Otherwise completion is ambiguous, and `reconcileCompactionJournal` returns an error rather than paying for a second compaction.
+1. **Journal first.** Before the adapter's `compact` step runs, the loop
+   creates a journal file exclusively, keyed by the session and the last
+   designer's run, recording the transcript's current size.
+2. **Compact.** The adapter compacts the session in place and prints a receipt:
+   tokens before and after, and what the compaction spent.
+3. **Record.** The receipt is written into the journal and into the run's
+   directory, and a `drain.designer-compacted` event is appended.
+4. **Recover.** If a journal already exists with no receipt, the loop takes the
+   receipt from the run's directory, or reconstructs it from the transcript
+   when exactly one compaction entry follows the recorded size. Anything else
+   is ambiguous, and the loop returns an error instead of paying for a second
+   compaction.
 
 <a id="what-a-turn-costs-measured"></a>
 
 ### What a turn costs, measured
 
-The 40,000-token compaction threshold and warm-versus-cold policy come from direct measurements on 2026-11-16 on this host (`claude-opus-4-6` via Pi `0.67.1`, where `.yolo` sets `PI_CACHE_RETENTION=long`, giving a 3,600-second cache TTL; without `long`, Pi's Anthropic cache TTL is 300 seconds):
+The compaction threshold and the resume-over-replace policy rest on one
+measurement: a single comment turn against a 35,000-token prior design
+conversation, with one-hour prompt-cache retention, priced four ways.
 
-| Turn shape (35,000-token prior design conversation) | Prompt / cache tokens billed | Measured turn cost |
-| :--- | :--- | :--- |
-| Cold new session reading the document and neighboring files | Fresh input + cache creation (`23,000`–`56,000` tokens across three runs) | `$0.84` |
-| Resumed warm session inside the 1-hour cache window | `~35,000` `cacheRead` tokens + comment turn | `$0.42` |
-| Resumed expired session without compaction (`35,000` tokens) | `~35,000` `cacheWrite` tokens + comment turn | `$1.11` (`+$0.27` vs cold) |
-| Expired session compacted (`$0.57`–`$0.82`) then resumed (`$0.39`–`$0.64`) | Uncached compaction read + fresh summary cache write | `$1.21` (`+$0.37` vs cold; breaks even below un-compacted resume above `~40,000` tokens) |
+| Turn shape | Measured turn cost |
+| :--- | :--- |
+| New session that reads the document and its neighbors | `$0.84` |
+| Resumed inside the cache window | `$0.42` |
+| Resumed after expiry, not compacted | `$1.11` |
+| Compacted after expiry, then resumed | `$1.21` |
+
+Compacting first costs more than resuming as-is at this size and breaks even
+at roughly 40,000 tokens of context.
 
 ---
 
 ## Settlement and reply delivery
 
-When a comment run exits cleanly (`RESULT: done`), settlement verifies `<durable>/replies.jsonl` (`readCommentReplies` in `tools/tillr-drain/drain/comments.go`) before either closing or landing the item:
+When a comment run ends `RESULT: done`, settlement checks `replies.jsonl`
+before it closes or lands the item:
 
-- **Strict 1-to-1 reply validation (`readCommentReplies`):** Every non-empty line in `replies.jsonl` must be valid JSON containing a non-null integer `round`, an `id` matching a comment in the batch, `round == len(comment.Reactions)` at intake, and a non-empty `summary`. Missing, duplicate, foreign, or wrong-round replies record a mechanical `not_done` verdict on `c1` (`actor: "drain/comment-replies"`) and refuse the candidate (`rejectCommentReplies`). Each valid reply receives `path = batch.Document`, `root_text_version = comment.RootTextVersion`, and deterministic `nonce = "tillr-" + sha256(item_id + "\x00" + comment_id)`.
-- **Zero-commit answer (`answerCommentWithoutCommit`):** When the designer made no commit (`HeadSHA == BaseSHA`), the loop checks `git status --porcelain` is clean (refusing as `RefusalFence` if dirty), validates `replies.jsonl`, marks `comment_runs.outcome = 'answered'`, delivers replies against `BaseSHA:<doc>`, and closes the item via `item.Close` (`"answered review comments without a revision"`).
-- **Committed revision (`deliverCommentReplies`, `writeCommentDelivery`):** When the designer committed a revision, the candidate passes through the standard fence check, repo gate (`c2` runs `uvx vantage-check <doc>`), and `tillr-land` squash merge. Only **after** `landings` records `result = 'landed'` for `(item_id, run_id)` (`D-CD4`) does `deliverCommentReplies` store the immutable JSONL payload and landed `blob_id` in `comment_deliveries(run_id, item_id, document, blob_id, body, written=0)`.
-- **Served-checkout guard and atomic inbox drop (`writeCommentDelivery`, `flushCommentDeliveries`):** Before writing `.vantage/inbox/<item_id>.jsonl`, `writeCommentDelivery` compares the bytes of `<root>/<doc>` on disk against `git cat-file blob <blob_id>`. If `<root>/<doc>` is missing or holds unsaved local edits that do not match `blob_id`, delivery waits (`written` stays `0`) and `flushCommentDeliveries` retries from `comment_deliveries` on subsequent passes without needing the removed desk worktree. Once the served file matches `blob_id`, the loop writes `.vantage/inbox/.tillr-*.writing`, `fsync`s file and directory, renames it to `.vantage/inbox/<item_id>.jsonl`, and sets `comment_deliveries.written = 1` and `comment_runs.delivered = 1`.
-- **Post-inbox confirmation (`Loop.confirmCommentReplies` in `tools/tillr-drain/drain/comment_observatory.go`):** Once `.vantage/inbox/<item_id>.jsonl` has been consumed (unlinked by Vantage) and `VantageURL` + `VantageRepo` are configured, the loop queries `/api/r/<repo>/review` and records per-comment state in `comment_reply_states(run_id, comment_id, state)` (emitting `drain.comment-reply-state` events): `"delivered"` when an agent reaction with `kind != "noted"` has `answers_round == reply.Round`, `"dropped"` when the comment ID is gone from Vantage, and `"not confirmed"` otherwise.
+- **One reply per comment.** Each line must be valid JSON naming a comment in
+  the batch, the round that comment was at when taken, and a non-empty summary.
+  A missing, duplicate, foreign or wrong-round reply records a mechanical
+  `not_done` verdict on the first criterion and refuses the candidate.
+- **Zero-commit answer.** When the designer made no commit and the worktree is
+  clean, the loop delivers the replies and closes the item as answered without
+  a revision.
+- **Committed revision** (`D-CD4`). The candidate passes the fence check, the
+  gate and the squash landing like any other. Only after the landing is
+  recorded does the loop store the replies and the landed blob id for delivery.
+- **Served-checkout guard.** Before writing `.vantage/inbox/<item_id>.jsonl`,
+  the loop compares the document on disk in the served checkout with the
+  landed blob. If they differ, delivery waits and is retried on later passes.
+  Once they match, the file is written atomically.
+- **Confirmation.** After Vantage consumes the inbox file, and when a Vantage
+  server is configured, the loop reads the review once more and records each
+  reply as `delivered`, `dropped` (the comment is gone) or `not confirmed`.
 
 ---
 
 ## Observatory surfaces
 
-`tillr-view` exposes designer sessions and comment batches across four read-only surfaces (`tools/tillr-view/designers.go`, `comment_intake.go`, `serve.go`, `priceless.go`, `Designers.tsx`, `DocumentPane.tsx`):
+`tillr-view` shows designer sessions and comment batches read-only:
 
-- **`GET /api/v1/designs` (`DesignsPage` at `/designs` and `/design/<path>`):** Lists every document path present in `last_designers`, `comment_batches`, or `items.design_doc` (optionally filtered by `?path=`), alongside its `last_designer` view and aggregate `arrivals` counts from `comment_arrivals` (`within_lifetime`, `after_lifetime`, `no_session`, `unmeasured`).
-- **Document pane (`GET /api/v1/items/{id}/doc`, `DesignerCard` in `Designers.tsx` and `DocumentPane.tsx`):** Attaches `last_designer` to the item's design document payload. `DesignerCard` displays `session_id`, derived state (`"warm"` with `warm until <timestamp>` while `now < last_request + cache_lifetime_seconds`, `"compacted"` when `compacted` is true, or `"expired"`), `last_request`, `context_tokens`, and links to each comment batch (`/item/<item_id>`) and run (`/run/<run_id>`) with its dispatch `reason`.
-- **Comment item detail (`GET /api/v1/items/{id}`, `readCommentItem`):** Attaches `data.comments` (`document`, `runs`, `comments` with per-reply confirmation state `"waiting on the served checkout"`, `"written"`, `"delivered"`, `"dropped"`, or `"not confirmed"`, and `confirmation_note` when no Vantage server is configured).
-- **Waiting rows (`waitingCommentIntake` in `tools/tillr-view/comment_intake.go`):** Appends store-backed waiting rows when `comment_deliveries` has `written = 0` (`"reply delivery waits on served document <doc>"`), when `comment_intake.unavailable` is `1` (`"Vantage not answering; last answer: <stamp>"`), and when `comment_intake_documents.older > 0` (`"<N> pending comments predate first intake"`, naming `tillr item comments take --doc "<doc>" --older` as the mover).
-- **Dollar-free HTTP output (`withoutPrices` in `tools/tillr-view/priceless.go`):** Although `designerView` and `designerBatch` scan `usage_cost_usd` internally, `serve.go` runs `withoutPrices` over every `/api/v1/` payload before serialization, stripping `cost_usd` and `missing_costs` in accordance with [observatory-redesign.md](./observatory-redesign.md).
+- **`GET /api/v1/designs`** lists every document with a last designer, a
+  comment batch or an item, with the designer's state and counts of how
+  comments arrived relative to the cache lifetime.
+- **The document pane** shows the last designer: session id, derived state
+  (`warm`, `compacted` or `expired`), last request, context size, and links to
+  each batch and run with its dispatch reason.
+- **A comment item's detail** lists its comments with each reply's delivery
+  state.
+- **Waiting rows** appear when a reply waits on the served checkout, when
+  Vantage is not answering, and when pending comments predate the first
+  intake; the last names `tillr item comments take --doc <doc> --older` as the
+  move.
+
+Dollar amounts are stripped from every API payload before it is served; see
+[observatory-redesign.md](./observatory-redesign.md).
 
 ---
 
 ## Current values
 
-Verified at `47047cacf11667b20746f01591f5204866f995f3`. The prose above explains how these settings, timeouts, and thresholds behave; this table is the single place their literal values are stated.
-
-| Value | Setting / literal | Defined in |
+| Value | Literal | Defined in |
 | :--- | :--- | :--- |
-| Automatic quiet window | `comments.quiet_seconds` = `60` s | `Read` in `tools/tillr/settings/settings.go` |
-| Automatic Vantage poll interval | `comments.poll_seconds` = `15` s | `Read` in `tools/tillr/settings/settings.go`; `intakeComments` in `tools/tillr-drain/drain/comment_intake.go` |
-| Concurrent active document desks | `comments.max_running` = `3` | `Read` in `tools/tillr/settings/settings.go`; `plan.go` |
-| Compaction token threshold (enforced) | `*d.ContextTokens > 40000` | `chooseDesigner` in `tools/tillr-drain/drain/designer.go` (`comments.compact_over_tokens` default `40000` in `settings.go` is not read by `drain`) |
-| Cache refresh setting (unwired) | `comments.refresh_hours` = `0` | `Read` in `tools/tillr/settings/settings.go` (parsed only; no caller in `tillr-drain`) |
-| Vantage review HTTP timeout | `15s` | `ReadReview` in `tools/tillr-item/item/comments.go` |
-| Inline document diff ceiling in brief | `< 400` newline characters | `commentTask` in `tools/tillr-drain/drain/comments.go` |
-| Pi RPC compaction timeout | `300000` ms (`5` min default `--timeout-ms`) | `tools/tillr-run/backends/pi/compact` |
-| Anthropic fallback cache TTLs | `3600` s (`cacheWrite1h > 0`), `300` s (`cacheWrite1h == 0`) | `recordDesigner` in `tools/tillr-drain/drain/comments.go` |
-| Desk lane prefix and exclusion | `"desk-"` (excluding `"desk-trunk-fixer"`) | `commentDesk`, `documentDesk` in `tools/tillr-drain/drain/comments.go` |
-| Comment item ID prefix | `"item-comments-<doc>-<N>"` | `TakeComments` in `tools/tillr-item/item/comments.go`; `IsCommentItem` in `docshare/docshare.go` |
-| Planner priority bucket for comments | Bucket `2` (after `rewrite-item-*` `1`, before express `3`) | `readOrderedItems` in `tools/tillr-drain/drain/plan.go` |
-| Hold reasons | `"design-under-comment"`, `"waits on the document's desk"`, `"waits on a desk"`, `"Vantage not answering"` | `tools/tillr-drain/drain/plan.go`, `tools/tillr-drain/holdrules/holdrules.go` |
-| Event kinds | `drain.designer-compacted`, `drain.comment-reply-state` | `designerCompactedKind` (`designer.go`), `commentReplyStateKind` (`comment_observatory.go`) |
+| Quiet window | `comments.quiet_seconds`, default `60` | `tools/tillr/settings` |
+| Vantage poll interval | `comments.poll_seconds`, default `15` | `tools/tillr/settings` |
+| Active document desks | `comments.max_running`, default `3` | `tools/tillr/settings` |
+| Compaction threshold | context over `40000` tokens | `chooseDesigner`, package `drain` |
+| Inline diff ceiling in the brief | fewer than `400` lines | `tools/tillr-drain/drain/comments.go` |
+| Hold reasons | `design-under-comment`, `waits on the document's desk`, `waits on a desk`, `Vantage not answering` | `Rules`, package `holdrules` |
+| Event kinds | `drain.designer-compacted`, `drain.comment-reply-state` | package `drain` |
 
 ---
 
@@ -246,18 +346,19 @@ Verified at `47047cacf11667b20746f01591f5204866f995f3`. The prose above explains
 
 ## Why it's this way
 
-Every row below (`D-CD1`–`D-CD11`) was originally drafted from the 2026-11-16 cache and compaction measurements and subsequently **confirmed by the owner on 2026-11-20** in [`OQ-PR12`](../tillr/decision-provenance-review.md#OQ-PR12) (*"A: comment work closes quickly, and building on a design you have just objected to wastes runs"*).
+The owner confirmed `D-CD1`–`D-CD11` in
+[`OQ-PR12`](../tillr/decision-provenance-review.md#OQ-PR12), 2026-11-20.
 
 | ID | Decision | Why it stays |
 | :--- | :--- | :--- |
-| `D-CD1` | Each sitting of comments on a document becomes a new generated `design`-seat item (`item-comments-<doc>-<N>`) rather than reopening the landed design item or attaching to code-fenced build items | A comment batch has its own Markdown/plan/roadmap fence, mechanical reply and lint criteria, and squash landing (`1e0fe3259`). |
-| `D-CD2` | `last_designers` tracks the session that most recently ran at the document's desk rather than pinning the session that originally authored the file | Later sessions have read the document as revised; pinning the first author leaves its memory stale after any intervening turn. |
-| `D-CD3` | Every design or comment session for a document runs in one fixed desk directory (`<lane-root>/desk-<doc>/`) instead of resuming in whichever pool lane is free | Harness session lookup keys transcripts by working directory, and transcripts hold paths into that desk's durable directory (`4b16f3af8`). |
-| `D-CD4` | The drain delivers `.vantage/inbox/<item_id>.jsonl` only after landing (and only once the served checkout matches the landed blob), never from inside the agent turn | Vantage renders diffs from the served checkout, and delivering a reply before the revision lands shows stale prose or leaks replies from gate-refused runs. |
-| `D-CD5` | A session is warm solely for the cache TTL reported on its stream (`3600` s with `PI_CACHE_RETENTION=long`), with no background keep-alive requests | Extending cache lifetime via synthetic pings only pays above roughly one comment per 50 extra hours, which is unmeasured. |
-| `D-CD6` | Compaction runs lazily at the next cold dispatch when context exceeds `40,000` tokens, never on a timer when the cache expires | Compaction after expiry reads uncached tokens either way; running it on expiry wastes model spend on sessions that never receive another comment (`081eb89f3`). |
-| `D-CD7` | An expired session is resumed (compacted above `40,000` tokens, as-is at or below `40,000`) rather than replaced with a cold session | Starting cold saves `$0.27`–`$0.37` on the first expired comment (`$0.84` cold vs `$1.11` un-compacted or `$1.21` compacted-then-resumed), but loses unrecorded trade-offs and owner remarks carried in the session summary. |
-| `D-CD8` | One `last_designers` row is kept per active design document until the document is deleted from trunk and working tree or reaches a `done` stage | A transcript is a few hundred kilobytes on disk, so time- or count-based eviction discards context for negligible space. |
-| `D-CD9` | When enabled, automatic intake waits `60` quiet seconds per document by default and takes nothing while a pending comment on that document has an open box | One review pass over a document batches into one turn and one squash commit instead of racing the reviewer mid-sentence in the existing poller. This timer does not carry over to the proposed comment track: [no server polling means no debounce](../design/tillr-review-comments.md#OQ-RC2). |
-| `D-CD10` | Non-resumable adapters, changed backend/model routes, missing transcripts, and nonzero resumes that produced zero model output all fall back once to a fresh session | Matches the drain's general session-recovery rule while preventing duplicate edits when a run failed after emitting tool calls or partial prose. |
-| `D-CD11` | An open comment item holds unstarted items targeting its document (`design-under-comment`) without killing runs already in flight | A review comment signals the design may change; holding unstarted items avoids wasted build runs without throwing away nearly finished work ([`OQ-PR12`](../tillr/decision-provenance-review.md#OQ-PR12)). |
+| `D-CD1` | Each sitting of comments on a document becomes a new generated `design`-seat item; it neither reopens the landed design item nor attaches to a build item | A comment batch has its own fence, its own mechanical criteria and its own landing. |
+| `D-CD2` | The last designer is the session that most recently ran at the desk, not the session that first wrote the document | Later sessions have read the document as revised; the first author's memory is stale after any other turn. |
+| `D-CD3` | Every design or comment session for a document runs in one fixed desk directory | Harness session lookup keys a transcript by working directory, and transcripts hold paths into that directory. |
+| `D-CD4` | The drain delivers replies only after landing, and only once the served checkout matches the landed blob; the agent turn never delivers | Vantage renders from the served checkout; an earlier reply shows stale prose or leaks a reply from a refused run. |
+| `D-CD5` | A session is warm only for the cache lifetime its stream reported; nothing extends it | Whether paying to extend the cache is ever worth it is unmeasured. |
+| `D-CD6` | Compaction runs at the next dispatch after expiry, never on a timer | Compaction after expiry reads uncached tokens either way; a timer pays for sessions that never get another comment. |
+| `D-CD7` | An expired session is resumed — compacted above the threshold, as-is below it — and not replaced | A new session is cheaper on the first expired comment ([measured](#what-a-turn-costs-measured)) but loses the trade-offs and owner remarks only the session holds. |
+| `D-CD8` | One last-designer row per document is kept until the document is deleted or its stage is done | A transcript is small; evicting by time or count discards context to save negligible space. |
+| `D-CD9` | Automatic intake waits for a quiet window per document and takes nothing while a comment box is open | One review pass becomes one turn and one commit, and the reviewer is not raced mid-sentence. |
+| `D-CD10` | A non-resumable adapter, a changed route, a missing transcript, and a resume that produced no model output each fall back once to a new session | It matches the drain's general session-recovery rule and never duplicates edits from a run that got partway. |
+| `D-CD11` | An open comment item holds unstarted items on its document and leaves running ones alone | A comment signals the design may change; holding unstarted work avoids wasted runs without discarding nearly finished ones. |

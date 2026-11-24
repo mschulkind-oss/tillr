@@ -2,10 +2,7 @@
 title: "Drain Pass and Successor Reference"
 status: accepted
 stage: CURRENT
-verified: 2026-11-20
-verified_commit: 1552b7c90c8fdfd6cfac469dd8e476536c974d6e
-created: 2026-11-15
-updated: 2026-11-20
+verified: 2026-11-24
 covers:
   - tools/tillr-drain/drain/pass.go
   - tools/tillr-drain/drain/plan.go
@@ -18,7 +15,6 @@ covers:
   - tools/tillr-drain/drain/looprecord.go
   - tools/tillr-drain/drain/boundary.go
   - tools/tillr-drain/drain/once.go
-  - tools/tillr-drain/drain/schema.go
   - tools/tillr-drain/holdrules/holdrules.go
   - tools/tillr-run/run/lease.go
 tags:
@@ -26,7 +22,7 @@ tags:
   - drain
   - state-machine
   - reference
-summary: "Reference for tillr-drain's pure per-item successor function, derived positions and clock-free transition identities, compare-and-swap pass application, asynchronous run and candidate settlement, generation-keyed timing, and trigger-driven fixed-point loop."
+summary: "How tillr-drain advances the queue: a pure per-item successor function, derived positions, clock-free identities, compare-and-swap application, asynchronous settlement, store-counted generations, and a trigger-driven loop."
 depends-on:
   - ../design/board-utilities.md
   - ../design/landing-principles.md
@@ -38,185 +34,267 @@ vantage:
 
 # Drain Pass and Successor Reference
 
-**Status:** Current reference, verified 2026-11-20 against `1552b7c90c8fdfd6cfac469dd8e476536c974d6e`. UNMEASURED: Go test suites verify replay-invariant identities, zero-write empty passes, non-blocking sibling dispatch, and trigger wakeups; live-night lane-idle reduction against the retired batch-tick loop is not measured in this document.
+**Status:** Verified 2026-11-24 by reading the code named in `covers`.
+UNMEASURED: the Go suites test replay-invariant identities, zero-write empty
+passes, non-blocking sibling dispatch and trigger wakeups; this document
+records no measurement of a live drain.
 
-> **In short.** `tillr-drain` advances the queue through a pure per-item successor pass rather than a clock-stamped batch tick. Each pass reads one snapshot of the SQLite store and repository, computes at most one transition per item with clock-free identities, compare-and-swaps those transitions onto live leases, runs workers and candidate gates asynchronously without a batch barrier, and sleeps on triggers once the pass reaches a fixed point.
+> **In short.** `tillr-drain` advances the queue through a **pass**: one read
+> of the store and repository, at most one transition per item, each applied
+> compare-and-swap. Workers and candidate gates run asynchronously, their
+> outcomes return through the store, and the loop sleeps on triggers once a
+> pass changes nothing.
 
----
+The detailed operating reference — every hold reason, coordinator and flag —
+is the [`tillr-drain` README](../../tools/tillr-drain/README.md). This document
+states the model that README builds on and the rules a change must not break.
 
-## Architecture and Component Boundaries
-
-```text
-  SQLite Store (.tillr/state.db) + Git Trunk / Open Questions
-     items, item_edges, runs, lanes, events, retries, conflicts,
-     node_runs, read_only_runs, workflow_runs, drain_item_faults
-       |                                                    ^
-       | 1. Reap expired/orphaned leases + 1 ReadTx         | 2. Per-item CAS WriteTx
-       v                                                    |    + lazy gen-<n> allocation
-  +---------------------------------------------------------+-----------------------+
-  | Pure Planner (drain.Plan / Loop.passPlansGeneration in plan.go, pass.go)        |
-  |   Derives Position -> Decision (dispatch | retry | settle | judge | hold)       |
-  +---------------------------------------------------------+-----------------------+
-                                                            |
-          +-------------------------------------------------+--------------------+
-          | dispatch / retry (ClaimLease)                   | settle / judge     |
-          v                                                 v (NULL lease claim) |
-  +-----------------------------------+       +----------------------------------+--+
-  | Worker Goroutine (launchRun)      |       | Examination Goroutine               |
-  |   TakeBoundary -> tillr-run exec  |       |   (launchExamination -> settle /    |
-  |   -> closeAsyncBracket            |       |    verify -> tillr-gate / land.lock)|
-  +-----------------+-----------------+       +------------------+------------------+
-                    | run.Apply + completion                     | events + completion
-                    +----------------------+---------------------+
-                                           v
-                    +--------------------------------------------+
-                    | Trigger Wait (Loop.waitForTrigger)         |
-                    |   completions | min(lease, 100ms) | stop   |
-                    +--------------------------------------------+
-```
-
-| Subsystem | Owning files | Responsibility |
-| :--- | :--- | :--- |
-| Pure planner and identities | `tools/tillr-drain/drain/plan.go`, `run_id.go`, `schema.go` | Derives item positions, selects transitions or holds, assigns lanes/backends/forks, and computes clock-free run, transition, and decision IDs (`drain.Plan`). |
-| Pass application and async brackets | `tools/tillr-drain/drain/pass.go`, `once.go`, `boundary.go` | Reaps expired and orphaned leases, snapshots per-item `inputVersion`, applies compare-and-swap transitions (`Loop.pass`, `Once`), and brackets each run's filesystem/Git scope. |
-| Settlement and verification | `tools/tillr-drain/drain/loop.go`, `tools/tillr-run/run/lease.go` | Settles terminal worker runs (`Loop.settle`), verifies and lands candidates concurrently (`Loop.Verify`), and manages finite and `NULL`-expiry lane leases (`ClaimLease`, `ReapExpiredLeases`). |
-| Dispatch ledger, generations, timing, and reports | `tools/tillr-drain/drain/dispatches.go`, `generation.go`, `timing.go`, `looprecord.go` | Enforces immutable `dispatches` rows, allocates monotonic `gen-<n>` ordinals (`drain_generations`), records pass phase timings (`drain_passes`), and writes `drain-<first>-<last>.json`. |
-| Trigger loop and hold classification | `tools/tillr-drain/drain/trigger.go`, `tools/tillr-drain/holdrules/holdrules.go` | Blocks idle passes until worker completion, lease expiry, store poll, or stop request, and maps every `Reason` constant to an operator waiting class and mover. |
-
-**Out of scope for this document:** uncommitted build-run continuation rules live in [`tillr-build-commit.md`](./tillr-build-commit.md), three-way squash landing rules live in [`landing-principles.md`](../design/landing-principles.md), and `tillr-view` pass/waiting projections live in [`observatory-redesign.md`](./observatory-redesign.md).
+**Out of scope:** continuing an uncommitted build run
+([`tillr-build-commit.md`](./tillr-build-commit.md)), squash landing
+([`landing-principles.md`](../design/landing-principles.md)), and the
+observatory's projections ([`observatory-redesign.md`](./observatory-redesign.md)).
 
 ---
 
 ## Principles and Invariants
 
-- **Clock-free transition, decision, and run identities (`identifyDecision` in `plan.go`, `markRunID` in `run_id.go`).** Every `TransitionID`, `DecisionID`, and `RunID` is a pure function of item ID, attempt ordinal, workflow stage, run marker, positions, lane ID, and hold attributes (`TestReplayIsInvariantToClockRateAndTriggerSuppression`). Wall-clock `stamp(at)` survives only outside item transitions: rolling-trunk run IDs (`recordRollingRun` in `trunk.go`) and manual `tillr-drain resume` boundary correlations (`Resume` in `resume.go`).
-- **Derived positions, never stored (`planItems` in `plan.go`, `readPendingHistory` in `pass.go`).** `items.state` holds only the owner's item states (`not-started`, `in-queue`, `blocked`, `landed`, `wont-do`, `resolved-elsewhere`). Each pass reconstructs an item's drain position (`queued`, `running`, `candidate`, `landed`, `held`) from `items`, `runs`, `lanes`, and the event fold.
-- **Durable outcomes return through the store, never the call stack (`launchRun` and `readPendingHistory` in `pass.go`).** `dispatch` and `retry` claim the lane lease, launch the worker goroutine, and return immediately. `l.completions` is an in-process wakeup channel only; if the loop restarts mid-run or mid-gate, the next pass derives the exact position from stored `runs`, `lanes`, and `events`.
-- **At most one transition per item per pass, applied compare-and-swap (`applyPlanRecorded` in `pass.go`).** A pass never chains `dispatch -> settle -> judge` synchronously for one item while others wait. Each item's write transaction verifies its `inputVersion` and definition digest before claiming resources, skipping (`stale`) any item whose inputs moved since planning.
-- **Concurrent candidate gates, serialized ref updates (`launchExamination` in `pass.go`, `Loop.Verify` in `loop.go`).** Settled candidates run `tillr-gate` concurrently on their leased lanes without a loop-wide judge lock (`TestSettledLaneDispatchesNextItemWhileSiblingRuns`). Only trunk squash/fast-forward ref writes serialize under `land.lock`.
-- **Empty fixed-point passes write nothing (`passPlansGeneration` in `pass.go`, `allocateGeneration` in `generation.go`).** A pass that neither reaps a lease nor applies a transition allocates no generation and writes zero rows to `dispatches`, `drain_generations`, `drain_passes`, or `events` (`TestRepeatedEmptyPassesWriteNothing`).
+- **Identities are clock-free.** A transition id, decision id and run id are
+  pure functions of the item, its attempt number, its workflow stage, its
+  positions, and for a hold its reason. Replaying the same store facts yields
+  the same ids at any clock rate
+  (`TestReplayIsInvariantToClockRateAndTriggerSuppression`).
+- **Positions are derived, never stored.** `items.state` holds only the
+  [item states](./tillr-item-states.md). Each pass reconstructs where an item
+  stands in the drain from items, runs, lanes and the event log.
+- **Outcomes return through the store, never the call stack.** A dispatch
+  claims a lane, starts the worker and returns. In-process completion
+  notices only wake the loop early; a loop that restarts mid-run or mid-gate
+  derives the same position from stored rows.
+- **At most one transition per item per pass, applied compare-and-swap.** A
+  pass never runs dispatch, settle and judge to completion for one item while
+  others wait. An item whose inputs moved after planning is skipped and
+  replanned.
+- **Candidate gates run concurrently; trunk writes are serialized.** Settled
+  candidates are gated on their own leased lanes with no loop-wide judge lock
+  (`TestSettledLaneDispatchesNextItemWhileSiblingRuns`). Only the landing's
+  trunk ref update takes the repository's land lock.
+- **A pass that changes nothing writes nothing.** It allocates no generation
+  and adds no dispatch, timing or event row
+  (`TestRepeatedEmptyPassesWriteNothing`).
 
 > [!WARNING]
-> Do not add wall-clock timestamps to `TransitionID`, `DecisionID`, or `RunID`, and never `UPDATE` an existing `dispatches` row. `recordPassDecision` (`dispatches.go`) treats identical `decision_id` replays as no-ops and raises `decisionCollisionError` when any column differs, isolating the item under `decision-collision` (`settle-failed` during post-run settlement) rather than overwriting history.
+> Do not add a wall-clock value to a transition, decision or run id, and never
+> update an existing `dispatches` row. Recording an identical decision again is
+> a no-op; recording a different payload under an existing decision id is a
+> `decision-collision` fault that holds that one item instead of overwriting
+> the row.
 
 > [!WARNING]
-> Do not inspect or gate a finished run's worktree without reclaiming its lane lease first. `run.Apply` clears the worker's lease when recording the terminal `run.record`; `applyPlanTrunk` (`pass.go`) immediately reclaims `lanes` with `leased_until = NULL` for `settle` and `judge` so a concurrent pass cannot stage another item onto the candidate's worktree.
+> Do not inspect or gate a finished run's worktree without reclaiming its lane
+> first. The worker's lease is cleared when its terminal record is written; the
+> settle and judge transitions immediately re-lease the lane with no expiry so
+> a concurrent pass cannot stage another item onto the candidate's worktree.
 
 ---
 
 ## The Successor Function and Derived Positions
 
-`drain.Plan` (`plan.go`) and `Loop.passPlansGeneration` (`pass.go`) evaluate one `drain.pass` (`PassKind`) over a single `store.Reader` snapshot plus open document questions and trunk Git facts. For standalone simulation (`tillr-drain plan` and `tillr-drain once`), `PassInput` accepts optional `available_lanes`, `now`, and `max_dispatches` overrides; when omitted (and in the live loop), registered lanes are offered in `lane_id` order, the envelope clock checks finite lease expiries, and lane leases are the sole dispatch bound.
+`drain.Plan` (package `drain` in `tools/tillr-drain`) is the pure planner. It
+reads one store snapshot plus the open document questions and trunk facts, and
+returns one decision per item. `tillr-drain plan` prints that plan and writes
+nothing to the store; `tillr-drain once` and `tillr-drain loop` apply it.
 
-Every stored item derives one of five positions (`Decision.Position` / `Decision.From`):
+The input record kind is `drain.pass`. Its optional `now`, `available_lanes`
+and `max_dispatches` fields exist for simulation. The live loop supplies no
+dispatch cap: registered lanes are offered in lane-id order and lane leases are
+the only bound.
 
-| Position | Derived store condition |
+Every item derives one of five positions:
+
+| Position | Derived condition |
 | :--- | :--- |
-| `landed` | `items.state` is terminal (`landed`, `wont-do`, or `resolved-elsewhere`). |
-| `running` | An active `lanes` lease or `read_only_runs` group holds a run for the item, a terminal `runs` row has not yet been settled by the loop (`!work.Examined`), or a multi-node workflow is between stages (`work.Ready`, `WorkflowRestart`, or `workflow-invalidated`). |
-| `candidate` | A settled attempt produced a pinned candidate commit (`refs/tillr/runs/<run_id>`) that has not yet been judged by `tillr-gate`, with no active lease on the item. |
-| `queued` | `items.state == "in-queue"`, all `item_edges` blockers are satisfied (and proved in `refs/tillr/green` when `lane_base == "green"`), no open question or item hold applies, and either a transition (`dispatch`) is ready or only pass-scoped resources (`no-lane`, `fork-held`, comment-desk capacity) defer it. |
-| `held` | Any non-terminal item blocked by an item-level fact (`not-started`, `blocked`, `blocked-failed`, `question-open`, `owner-only`, `trunk-unproved`, `item-fault`, or an unretried terminal failure/refusal). |
+| `landed` | The item's state is a finished state. |
+| `running` | A live lane lease holds a run for the item, a finished run has not yet been settled, or a multi-node workflow is between stages. |
+| `candidate` | A settled attempt produced a pinned candidate commit that has not yet been judged, and no lease is live on the item. |
+| `queued` | The item is `in-queue`, its blockers are satisfied, no question or item hold applies, and either a dispatch is ready or only a pass-scoped resource (a lane, a fork, a desk) defers it. |
+| `held` | A fact about the item itself holds it: its state, a blocker, an open question, an item fault, or a run ending nothing has retried. |
 
 ---
 
 ## Transition Table
 
-Before planning items, `passPlansGeneration` acquires `withRunStartLock` and reaps two classes of stale leases in one write transaction: `run.ReapExpiredLeases` (`tools/tillr-run/run/lease.go`, freeing `lanes` with finite `leased_until <= now` and closing their `runs` rows as `timed-out`, while skipping `leased_until IS NULL`) and `reapDeadLoopRuns` (`pass.go`, closing orphaned `executing` runs whose `drain_sessions` loop owner is dead). Each item then takes at most one step:
+Before planning, a pass reaps two kinds of stale lease in one write
+transaction: lanes whose finite lease expiry has passed (their runs are closed
+as `timed-out`; a lease with no expiry is never reaped by the clock), and
+executing runs whose owning loop process is gone. Each item then takes at most
+one step:
 
-| From | Action (`Transition`) | Condition | Effect and target position (`To`) |
+| From | Transition | Condition | Effect |
 | :--- | :--- | :--- | :--- |
-| `queued` | `dispatch` | Item is ready, backend seat is open, fork is unclaimed, and a lane is free in the item's pool (express pool first for `item.Express`, `commentDesk` for comment items, `desk-trunk-fixer` fallback for fixers, or ordinary pool). | Stages the lane worktree, claims `lanes` (`leased_until = started_at + TimeoutMS + 300_000` ms, or `NULL` when `TimeoutMS == 0` or parallel `ReadOnlyGroup != ""`), records `drain.started` and `dispatches`, and launches the worker asynchronously -> `running`. |
-| `running` | `dispatch` | Multi-node workflow has a completed stage and its next node (or evaluator restart) is ready (`workflow-next-node`). | Stages the next node (or parallel `read_only_runs` group) on the workflow's retained base commit and launches it -> `running`. |
-| `running` | `settle` (`workflow-invalidated`) | Multi-node workflow item became `owner-only`, left `in-queue`, gained an unmet blocker, or opened a question while its lane lease is free. | Releases the workflow reservation (`WorkflowRelease`) without running another node -> `held`. |
-| `running` | `settle` | Latest worker run wrote its terminal `runs` row and has not been examined (`!work.Examined`), and its lane is free to reclaim. | Reclaims `lanes` (`leased_until = NULL`) and runs `Loop.settle` asynchronously: closes/fails over on `AttemptInfrastructure`; continues uncommitted fenced build work in place ([`tillr-build-commit.md`](./tillr-build-commit.md)); checks `HEAD != base` **before** `AttemptUnjudged` so any committed run enters `Loop.Verify` (`candidate` -> `landed` or `held`/`running`); resumes an uncommitted walled run once (`!record.Resumed` via `resumeAfterWall`); and returns worker refusals (`returned-with-evidence`) until an identical repeat routes to design or owner. |
-| `candidate` | `judge` | Pinned candidate commit (`refs/tillr/runs/<run_id>`) awaits verification, trunk paths/red-cap permit landing, and a lane is free. | Reclaims `lanes` (`leased_until = NULL`), checks fence scope, runs `tillr-gate` concurrently, and squashes onto trunk under `land.lock` (`landed`), or pins the candidate and returns/holds on refusal (`running` or `held`). |
-| `held` | `retry` | Store holds an unconsumed `drain.retry` authorization (`retries.retry_id` absent from `dispatches.retry_id`) and lane/backend/fork resources are available. | Claims `lanes` under a new attempt ordinal, links `dispatches.retry_id`, and launches the worker -> `running`. |
-| `queued` / `held` / `landed` | `hold` (`Transition: "none"`) | Resource deferral on a ready item (`Position: "queued"`), item-level hold (`Position: "held"`), or terminal state (`Position: "landed"`). | Mutates no lane or run state. |
+| `queued` | `dispatch` | The item is ready, its seat's backend is open, its fork is unclaimed, and a lane is free in the item's pool. | Stages the lane, leases it, records the dispatch and starts the worker. The item is `running`. |
+| `running` | `dispatch` | A multi-node workflow finished a stage and its next node is ready. | Stages and starts the next node on the workflow's retained base. The item stays `running`. |
+| `running` | `settle` | The latest worker run has written its terminal record, has not been examined, and its lane can be reclaimed. | Re-leases the lane and examines the run asynchronously: a run that committed goes on to the gate; an infrastructure ending, a refusal or an uncommitted run is continued, returned or held by its own rule. |
+| `running` | `settle` | A workflow item stopped being runnable (it left `in-queue`, gained a blocker or opened a question) while its lane is free. | Releases the workflow's reservation without running another node. The item is `held`. |
+| `candidate` | `judge` | A pinned candidate awaits verification, the trunk permits landing, and a lane is free. | Re-leases the lane, runs the gate, and lands under the land lock. The item is `landed`, or the candidate is returned or held on refusal. |
+| `held` | `retry` | The store holds an unconsumed retry authorization and the resources are available. | Leases a lane under a new attempt number and starts the worker. The item is `running`. |
+| any | `none` | A resource deferral, an item hold, or a finished item. | Changes no lane or run. |
+
+A worker lease expires at the run's start plus its timeout plus a fixed grace
+([Current values](#current-values)). A run with no timeout, and every settle
+and judge lease, carries no expiry.
 
 ---
 
 ## Identities, Records, and Holds
 
-### Deterministic IDs
+### Deterministic ids
 
-- **Attempt ordinal (`nextAttempt` in `plan.go`):** 1-based integer equal to `max(MAX(node_runs.attempt), maxAttemptFromRunIDs(runs), len(nonAcquittedPriors)) + 1`. Numeric parsing (`attemptFromRunID`) keeps ordinals monotonic past attempt 9 and across acquitted refusals (`identity_order_test.go`).
-- **Run ID (`attemptRunID` in `plan.go`, `markRunID` in `run_id.go`):** `run-<item>-a<attempt>` for single-node runs and `run-<item>-a<attempt>-n<stage>` (1-based stage) for workflow nodes. In-attempt continuations append bounded suffixes via `markRunID` (`-<kind>` on the first turn, `-002-<kind>` through `-999-<kind>` thereafter, for `failover`, `restart`, `fresh`, and `interrupted`).
-- **Transition ID (`identifyDecision` in `plan.go`):** `transition-<item>-a<attempt>[-n<stage>][-<run_id>]-<from>[-<to>]`, omitting `-<to>` when `Action == "hold"`.
-- **Decision ID (`identifyDecision` in `plan.go`):**
-  - Active transitions (`dispatch`, `retry`, `settle`, `judge`): `decision-<item>-a<attempt>[-n<stage>][-<run_id>]-<from>-<to>`, appending `-lane-<lane_id>` when `From == "candidate"` so re-examining a pinned candidate on another lane produces a distinct key.
-  - Holds (`Action == "hold"`): `decision-<item>-a<attempt>[-n<stage>]-<from>-<sha256>`, where `<sha256>` hashes the JSON array `[reason, deferred_by, seat, question_id, retry_id, supersedes_run_id]`.
+- **Attempt number.** One more than the highest attempt the item's prior runs
+  record. It is derived from the runs, not from a store counter, so a crashed
+  pass consumes none.
+- **Run id.** `run-<item>-a<attempt>` for a single-node run and
+  `run-<item>-a<attempt>-n<stage>` for a workflow node. A continuation within
+  an attempt appends `-<kind>`, then `-<count>-<kind>` with the count padded to
+  three digits. A digest bounds a long item id so the run id stays under its
+  length limit.
+- **Transition id.** `transition-<item>-a<attempt>[-n<stage>][-<run id>]-<from>[-<to>]`;
+  a hold has no `<to>`.
+- **Decision id.** The transition id with the `decision-` prefix. A transition
+  from `candidate` appends `-lane-<lane>`, so examining one candidate on a
+  second lane is a distinct decision. A hold appends a SHA-256 of its reason
+  and the names that explain it, so two different holds at one position never
+  share an id.
 
-### Dispatch Rows and Hold Classes
+### Dispatch rows and hold classes
 
-`recordPassDecision` (`dispatches.go`) inserts into `dispatches` keyed by `decision_id`. In the live loop (`applyPlanRecorded` in `pass.go`), rows are written only for applied transitions (`dispatch`, `retry`, `settle`, `judge`) and the three candidate-blocking trunk holds (`trunk-path-dirty: …`, `trunk-rewritten: …`, and `red-cap: …` via `recordDirtyDecision`); ordinary holds write nothing so idle waits leave the store untouched. By contrast, `tillr-drain once` (`Once` in `once.go`) records every planned decision whenever at least one `decision_id` in the pass is new.
+The `dispatches` table is keyed by decision id and is append-only. The live
+loop writes a row for each applied transition and for the three holds that
+block a candidate on the trunk (a dirty trunk path, a rewritten trunk, and the
+red cap); ordinary holds write nothing, so an idle wait leaves the store
+untouched. `tillr-drain once` records every planned decision when at least one
+decision id in the pass is new.
 
-Holds divide into three operational categories:
+Holds fall into three classes:
 
-1. **Pass-resource deferrals (`Position = "queued"`):** `no-lane`, `fork-held` (`DeferredBy` naming the item holding the lane's fork checkout via `liveForks` across both live leases and unfinished `pendingWork`), `waits on a desk`, and `waits on the document's desk`. Ordinary repository items never block each other on path overlap at dispatch; only fork items sharing `refs/heads/patch/<fork>` serialize before landing. In `heldDetail` (`loop.go`), `no-lane` and `fork-held` report in a separate `deferred item(s)` summary group.
-2. **Item holds (`Position = "held"`):** Facts about the item, its blockers, open questions, backend/quota windows, or unretried run endings. Every exported `Reason` constant maps to a waiting class and mover in `holdrules.Rules` (`tools/tillr-drain/holdrules/holdrules.go`); retired historical reasons (`capacity`, `inputs-changed`, `readmission-exhausted`, `retry-stale`, `conflict-exhausted`, `run-infra-exhausted`) stay in `holdrules.Rules` solely so historical `dispatches` rows still render.
-3. **Faults:** `NewLoop` (`loop.go`) and `passPlansGeneration` (`pass.go`) treat a missing usable backend policy (`ReasonNoPolicy`) as a startup/pass error (`StopFault`) rather than holding items (`ReasonNoPolicy` appears only in standalone `Plan` calls without a policy). Per-item invariant faults (`decision-collision`, `settle-failed`, `workflow-invalid`) record in `drain_item_faults` and hold only the affected item as `item-fault: …` until cleared with `tillr-drain clear-fault`.
+1. **Resource deferrals** — `no-lane`, `fork-held`, `waits on a desk`,
+   `waits on the document's desk`. The item stays `queued`. Ordinary items never
+   defer each other on overlapping paths at dispatch; only items sharing one
+   fork branch serialize. The fork claim is computed from live leases and
+   unfinished work, not from the current pass alone.
+2. **Item holds.** The item is `held`. Every hold reason maps to a waiting
+   class and a mover in `Rules` (package `holdrules` in `tools/tillr-drain`),
+   which is the list of record; the README's *Adding a hold reason* says how
+   one is added.
+3. **Faults.** A missing usable backend policy stops the loop instead of
+   holding items. An item-local invariant fault (`decision-collision`,
+   `settle-failed`, `workflow-invalid`) is recorded as a `drain.item-fault`
+   event and holds only that item until `tillr-drain clear-fault` acknowledges
+   it.
 
 ---
 
 ## One Pass and Compare-and-Swap Application
 
-`readItems` (`plan.go`) orders every pass deterministically: `fixer-main-*` items first, `rewrite-item-*` items second, ranked items in lexical `rank` order, and unranked items in `item_id` order. When an item is owed an in-place worker return or design continuation on a specific lane, `planItems` reserves that lane (`workerLanes`) ahead of general `queued` dispatches, releasing unused reservations if another ready item would otherwise be `laneShort`.
+Items are visited in a fixed order: trunk-fixer items, then prose-rewrite
+items, then ranked items in rank order, then unranked items by id. A lane owed
+to an item's returning worker is reserved for it ahead of new dispatches.
 
-Application (`applyPlanRecorded` in `pass.go`) separates external I/O from short SQLite write transactions:
+Application keeps external work out of the store's write lock:
 
-1. **Snapshot version (`inputVersionFrom` in `pass.go`):** During the pass's read transaction, each planned item records its `definitionSHA` and an `inputVersion` digest covering item columns, `updated_at`, latest `runs` state and `event_seq`, target lane `state`/`run_id`/`leased_until`, `pendingWork`, `drain_item_faults`, triage version, and `owner-only` criteria. In-memory staging refusals (`Loop.heldFor`) suppress re-staging an item with an unchanged `updated_at` when `IsItemContent` holds.
-2. **External preparation (`writeGathered` in `pass.go`):** Git base resolution, worktree staging (`LaneStager.Stage`), and file reads happen outside SQLite locks.
-3. **Per-item compare-and-swap (`applyPlanTrunk` in `pass.go`):** A short `WriteTx` re-reads `currentDefinition` and `inputVersion`, re-verifies lane availability, `liveForks`, comment-desk caps, and fast-forward trunk state (`trunkAdvancedUntouched`), lazily allocates the pass's `gen-<n>` on the first applied transition, claims the lease, appends `drain.started`, and calls `recordPassDecision`. Any version or resource mismatch aborts only that item's claim (`applied = false`, `stale = true`) so the next pass replans from fresh facts.
-4. **Per-run boundary bracket (`TakeBoundary` in `boundary.go`, `closeAsyncBracket` in `pass.go`):** Each worker goroutine snapshots its own target worktree, watched idle sibling lanes, `SiblingDirs`, `LaneRoot` (`BoundaryScopeRun`), and `PatchRefs` (omitting `Store` while `tillr-run exec` writes legitimately). Before diffing snapshots at run exit, `closeAsyncBracket` clears worktree status for any sibling lane whose `laneChanges` epoch advanced while this worker was running, preventing concurrent legitimate dispatches from convicting a sibling run.
+1. **Snapshot.** While planning, each item records a digest of its definition
+   and of the inputs its decision read: its row, its latest run, its target
+   lane's lease, its unfinished work and its faults.
+2. **Prepare.** Base resolution, worktree staging and file reads happen with no
+   write transaction open.
+3. **Compare and swap.** One short write transaction per item re-reads those
+   inputs, re-checks lane and fork availability, allocates the pass's
+   generation if this is its first applied transition, claims the lease and
+   records the decision. A mismatch abandons only that item's claim; the next
+   pass replans it.
+4. **Bracket the run.** Each worker records the write boundary of its own
+   worktree and the neighboring lanes before and after it runs
+   (`TakeBoundary`). A neighbor that the loop itself staged or reset meanwhile
+   is excused, so one run is never blamed for another's legitimate change.
 
 ---
 
 ## Generations, Timing, and the Trigger Loop
 
-### Generations, `drain_passes`, and Loop Reports
+### Generations, pass timing and loop reports
 
-- **Generations (`generation.go`):** `drain_generations (generation INTEGER PRIMARY KEY)` allocates `"gen-<n>"` inside the first write transaction of a pass that mutates state (lease/orphan reaping or the first applied transition, or `Once` recording a new decision). Every `Decision.PassID`, `run.Request.CorrelationID`, and `PassTiming.TickID` in that pass shares that `"gen-<n>"`, and the sequence continues monotonically across loop processes (`trigger_test.go`).
-- **Pass timing (`timing.go`, `pass_observation.go`):** `drain_passes` (keyed by `tick_id`) records `stage_ms`, `decision_counts`, and `applied_count` when the pass finishes planning (`observePass`), and accumulates asynchronous worker `dispatch_ms` plus candidate `gate_ms`, `gate_max_ms`, `land_ms`, `gate_count`, and runner-change `runner_*` columns back onto the originating generation row (`recordAccumulatedPassTiming`). `DefaultGateBudget` (`330s`) compares against `GateMaxMS` (longest single ordinary gate run, excluding `RunnerGateMS`), setting `gate_over_budget = 1` and logging a warning without filing an item or stopping the loop. On write-open, trigger `drain_copy_legacy_runner_passes` copies any legacy `drain_ticks` rows into `drain_passes` via `INSERT OR IGNORE`.
-- **Loop result files (`looprecord.go`):** `RecordLoopResult` writes `<root>/.tillr/loop/drain-<first>-<last>.json` with envelope `ID: "loop-<first>-<last>"` using numeric generation endpoints (`drain-0-0.json` / `loop-0-0` when a loop exits before allocating any generation, archiving any prior `drain-0-0.json` to `drain-0-0-<unixNano>.json`).
+- **Generation.** A store-counted ordinal, `gen-<n>`, allocated in the first
+  write transaction of a pass that changes state (`allocateGeneration`). Every
+  decision and run request of that pass carries it as its correlation, and the
+  count continues across loop processes.
+- **Pass timing.** `drain_passes` holds one row per generation: planning and
+  staging time when the pass finishes, with worker, gate and landing time
+  added as that asynchronous work completes. A gate run longer than the gate
+  budget ([Current values](#current-values)) is flagged and logged; it files
+  nothing and stops nothing.
+- **Loop report.** A loop writes `<root>/.tillr/loop/drain-<first>-<last>.json`,
+  named by its inclusive first and last generation and not by the clock. A
+  loop that allocated none writes `drain-0-0.json`, archiving an existing one
+  first.
 
-### Fixed-Point Loop and `waitForTrigger`
+### The trigger loop
 
-`Loop.Run` (`pass.go`) repeats `Loop.pass` without sleeping whenever a pass applies work (`timing.Applied > 0`), reaps a lease (`timing.TickID != ""`), hits a compare-and-swap skip (`stale`), or runs a rolling check. When a pass reaches a fixed point with nothing applied:
+`Loop.Run` starts the next pass immediately whenever a pass applied work,
+reaped a lease or skipped a stale item. When a pass changes nothing:
 
-- **In-flight work or timed hold:** If workers or examinations are active in-process (`len(l.active) > 0`), a surviving foreign run holds `run-live` / `no-lane`, a quota-interrupted run holds `backend-window`, or a heavy proof is running (`l.heavyInFlight()`), `pass` calls `waitForTrigger`.
-- **Drained fixed point (`planNothing` in `loop.go`):**
-  - When `len(leases) == 0`: `tillr-drain loop` is a daemon by default (`ExitWhenDrained == false`), logging the waiting summary once per distinct detail and calling `waitForTrigger`; passing `--exit-when-drained` (`ExitWhenDrained == true`) exits 0 with `StopQueueDrained` (`"queue-drained"`).
-  - When `len(leases) > 0` and any foreign lease has `LeasedUntil == nil` (with no active or surviving loop run): returns `StopLanesLeased` (`"lanes-leased"`) naming `tillr run release <lane>`.
-  - When all remaining foreign leases have finite deadlines: logs the held/deferred summary and calls `waitForTrigger`.
+- **Work is in flight or a hold will lift by itself:** the loop waits for a
+  trigger.
+- **Nothing is in flight and no lane is leased:** the loop is a daemon by
+  default, so it reports what is waiting once and waits for a trigger.
+  `--exit-when-drained` stops it instead with `queue-drained` and exit code 0.
+- **A lane is leased with no expiry and no live run owns it:** the loop stops
+  with `lanes-leased` and names `tillr run release <lane>`, because no clock can
+  free that lane.
+- **Every remaining lease has an expiry:** the loop waits for a trigger.
 
-`waitForTrigger` (`trigger.go`) blocks until one of three wakeups fires:
+A trigger wait (`waitForTrigger`) ends on the first of:
 
-1. **In-process completion (`<-l.completions`):** drains all ready `runCompletion` notifications (`takeCompletion`) and immediately starts the next pass.
-2. **Store poll or earliest finite lease expiry (`time.NewTimer`):** wakes after `min(StorePollInterval, earliest(lease.LeasedUntil - now))` where `DefaultStorePollInterval` is `100ms`, checks `drain_sessions.stop_requested` (`checkStopRequested`), and starts the next pass so external store writes (`tillr item`, `tillr drain retry`, foreign `tillr run` completions) and expiring leases are observed promptly (`TestNewStoreFactDispatchesBeforeOwnedRunEnds`).
-3. **Operator stop (`<-ctx.Done()` or `stop_requested`):** cancels active workers, waits for in-flight completions, records `ended_at` on `drain_sessions`, and exits with `StopOperatorStop` (`"operator-stop"`).
+1. **An in-process completion** of a worker or examination.
+2. **A store-change notification** from the local notification relay, which
+   the loop starts when absent. `--no-notify` disables it.
+3. **A timer** set to the fallback poll interval or the earliest finite lease
+   expiry, whichever is sooner. Polling bounds how late a store change is
+   seen; it never bounds how much work runs.
+4. **A stop request**, by signal or `tillr-drain stop`. The loop exits with
+   `operator-stop`.
+
+---
+
+## Current values
+
+| Value | Literal | Defined in |
+| :--- | :--- | :--- |
+| Lease grace past a run's timeout | `300000` ms | `LeaseGraceMS`, package `run` in `tools/tillr-run` |
+| Fallback store poll interval | `15s` | `DefaultFallbackPollInterval`, package `drain` |
+| Gate budget for the over-budget flag | `330s` | `DefaultGateBudget`, package `drain` |
 
 ---
 
 ## Why it's this way
 
-Each row preserves an engineering decision (`D-DS1`–`D-DS16`) that a maintainer reading only the current code might otherwise undo. On 2026-11-20 the owner confirmed `D-DS1`–`D-DS16` as settled engineering detail in [`OQ-PR4`](../tillr/decision-provenance-review.md#OQ-PR4) (with future node-policy amendments tracked in [`tillr-graph-is-the-path.md`](../design/tillr-graph-is-the-path.md#122-decisions-in-other-documents)).
+Each row is a decision a maintainer reading only the code might undo. The
+owner confirmed `D-DS1`–`D-DS16` as settled in
+[`OQ-PR4`](../tillr/decision-provenance-review.md#OQ-PR4), 2026-11-20.
 
 | ID | Decision | Why it stays |
 | :--- | :--- | :--- |
-| D-DS1 | Structure the drain as a total per-item successor function (`Plan` / `passPlansGeneration`) where each pass applies at most one transition per item | Finer wall-clock tick stamps (nanoseconds or run counters) still embed observer timing into identities and keep the batch barrier. |
-| D-DS2 | Key transitions by `(<item>, <attempt>, [stage], [run_id], <from>, <to>)` with attempt ordinals derived from prior runs rather than a store counter | A shared store counter is a pass fact rather than an item fact, burning numbers on crashed passes and diverging on replay. |
-| D-DS3 | Reconstruct each item's drain position (`queued`, `running`, `candidate`, `landed`, `held`) from `items`, `runs`, `lanes`, and `events` instead of storing a `drain_state` column | `items.state` belongs to the owner's vocabulary; a second stored state column creates a dual-write drift hazard after crashes. |
-| D-DS4 | Keep a five-position state set where `held` carries a closed `Reason` rather than promoting every hold reason to its own state | Promoting ~30 hold reasons into top-level states bloats the transition table into dozens of identical `none` rows. |
-| D-DS5 | Return from `dispatch`/`retry` as soon as the worker starts and derive completion from stored `runs` and `events` rather than call-stack state | In-memory-only run state vanishes if the loop restarts mid-run, leaving no way to tell live work from lost work. |
-| D-DS6 | Apply transitions in deterministic priority/rank order with per-item `inputVersion` compare-and-swap, skipping stale items to the next pass | Running `dispatch -> settle -> judge` to completion inside one synchronous pass starves sibling lanes for an entire attempt. |
-| D-DS7 | Bound live dispatches only by lane leases, backend windows, and desk caps, keeping `max_dispatches` strictly as an optional `drain.pass` simulation cap *(originally paired with a serial judge, since widened to concurrent `tillr-gate` runs serialized only at `land.lock`)* | Artificial per-pass dispatch caps throttle ready work in violation of [`momentum-principle.md`](../design/momentum-principle.md). |
-| D-DS8 | Compute `fork-held` (`liveForks`) from live lane leases and unfinished `pendingWork`, not merely dispatches within the current pass | Because passes overlap in-flight runs from earlier passes, a pass-only fork set would let two workers mutate `refs/heads/patch/<fork>` concurrently. |
-| D-DS9 | Bracket filesystem and Git scope per worker run (`BoundaryScopeRun` in `boundary.go` and `pass.go`, excusing sibling `laneChanges` epochs) rather than across a whole batch | A batch-wide bracket cannot attribute an out-of-fence write to the run that caused it once runs execute asynchronously. |
-| D-DS10 | Preserve the pure `Plan` / `apply` split and the read-only `tillr-drain plan` CLI face with optional simulation overrides | Without a pure `Plan` seam, operators and tests cannot inspect what the next pass would do without mutating the store. |
-| D-DS11 | Replace `drain_ticks` with generation-keyed `drain_passes` (migrating legacy rows via `INSERT OR IGNORE` and flagging `gate_over_budget` against `GateMaxMS`, reporting overruns without filing tickets) | Dropping pass-level phase timing with the retired tick would make slow gates invisible until timed by hand. |
-| D-DS12 | Name loop result files by inclusive generation range (`drain-<first>-<last>.json`, `drain-0-0.json` on zero-generation exits) rather than wall-clock timestamps | Second-stamped report filenames collide when two loops start within one second and change across deterministic replays. |
-| D-DS13 | Separate item holds (`Position = "held"`), pass-resource deferrals (`no-lane`, `fork-held`, desk waits at `Position = "queued"`), and policy/item faults (`ReasonNoPolicy`, `drain_item_faults`), retiring `capacity` | Collapsing resource waits, item blockers, and configuration faults into one undifferentiated hold bucket hides whether the loop will retry on its own. |
-| D-DS14 | Land the successor architecture incrementally (starting from derived transition IDs before replacing the loop driver and retiring tick names) | Rewriting the drain in one flag day would halt nightly autonomous landings while the replacement is incomplete. |
-| D-DS15 | Exclude wall-clock time from identities while retaining it for finite lease-expiry comparisons (`ReapExpiredLeases`) and record `created_at` metadata | Leases without wall-clock expiry deadlines cannot reap crashed foreign runners that hold a finite timeout. |
-| D-DS16 | Reclaim `lanes` with `leased_until = NULL` before `settle` and `judge` inspect or gate a candidate worktree | Once `run.Apply` releases the worker lease on exit, an unleased candidate worktree could be claimed and reset by a concurrent pass's dispatch while `tillr-gate` is running. |
+| D-DS1 | The drain is a total per-item successor function; each pass applies at most one transition per item | A clock-stamped batch embeds the observer's timing into identities and makes every item wait for the batch. |
+| D-DS2 | A transition is keyed by item, attempt, stage, run and positions, with the attempt derived from prior runs | A store counter is a fact about passes, not items: crashed passes consume numbers and a replay diverges. |
+| D-DS3 | Drain positions are reconstructed each pass and not stored in a column | `items.state` is the owner's vocabulary; a second stored state drifts from it after a crash. |
+| D-DS4 | Five positions, with `held` carrying a reason from a closed set | One position per hold reason turns the transition table into dozens of identical rows. |
+| D-DS5 | A dispatch returns when the worker starts; completion is read from stored runs and events | State held only in memory vanishes when the loop restarts, and live work cannot be told from lost work. |
+| D-DS6 | Transitions apply in a fixed order with a per-item compare-and-swap; a stale item waits for the next pass | Running one item to completion inside a pass starves every other lane for a whole attempt. |
+| D-DS7 | Live dispatch is bounded only by lane leases, backend windows and desk caps; `max_dispatches` is a simulation input | A per-pass dispatch cap throttles ready work, against [`momentum-principle.md`](../design/momentum-principle.md). |
+| D-DS8 | The fork claim is computed from live leases and unfinished work | Passes overlap runs started by earlier passes; a pass-only claim lets two workers write one fork branch. |
+| D-DS9 | The write boundary is bracketed per run, excusing lanes the loop itself changed | A batch-wide bracket cannot attribute an out-of-fence write to the run that made it once runs are asynchronous. |
+| D-DS10 | The planner stays pure, with a read-only `tillr-drain plan` face that accepts simulation inputs | Without it, nobody can see what the next pass would do without changing the store. |
+| D-DS11 | Pass timing is kept per generation in `drain_passes`, and a slow gate is flagged, not ticketed | Without pass timing a slow gate is invisible until someone times it by hand. |
+| D-DS12 | Loop reports are named by generation range | A clock-named report collides when two loops start in the same second and changes across replays. |
+| D-DS13 | Item holds, resource deferrals and faults are separate classes | One undifferentiated bucket hides whether the loop will move the item by itself. |
+| D-DS14 | The successor model replaces the loop driver in increments, never in one change | A drain that is down while its replacement is incomplete lands nothing. |
+| D-DS15 | Wall-clock time is excluded from identities and kept for finite lease expiry and record timestamps | A lease with no deadline cannot reap a crashed runner that had a timeout. |
+| D-DS16 | The lane is re-leased with no expiry before settle and judge touch a candidate's worktree | Once the worker's lease is cleared, a concurrent dispatch could reset the worktree while the gate runs. |

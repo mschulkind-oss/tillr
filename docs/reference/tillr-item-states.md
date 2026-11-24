@@ -2,9 +2,9 @@
 title: Tillr item states and frozen criteria
 status: accepted
 stage: CURRENT
-verified: 2026-11-16
-verified_commit: 087b4385b9208bf49b20d09fefe9564ea8618e96
+verified: 2026-11-24
 covers:
+  - tools/tillr/definition/
   - tools/tillr-item/
   - tools/tillr-view/serveread.go
   - tools/tillr-view/blocked_waiter_test.go
@@ -15,123 +15,151 @@ tags: [tillr, item, state, reference]
 
 # Tillr item states and frozen criteria
 
-**Status:** Source-verified 2026-11-16 against the code named in `covers`.
+**Status:** Verified 2026-11-24 by reading the code named in `covers`.
 UNMEASURED: this reference does not claim observation of a live drain or view.
 
 An item records the work requested, not the life of one attempt at that work.
-Tillr separates its stored disposition from the view's reading of current activity.
-A stopped attempt is not evidence that someone is still working. An acceptance
-criterion's judgment is separate again: moving the item does not rewrite that judgment.
+Tillr keeps three things apart:
 
-## Stored disposition and displayed activity
+- the item's **stored state**, which says where the request stands;
+- the view's **displayed state**, which adds what is happening to it right now;
+- each acceptance criterion's **judgment**, which moving the item never rewrites.
 
-The writable vocabulary is owned by `writableStates` in
-[`apply.go`](../../tools/tillr-item/item/apply.go). The following table explains its
-meaning together with the derived view; it is not a second transition validator.
+A stopped attempt is not evidence that someone is still working, so "working" is
+never a stored state.
 
-| Stored disposition | What the view reads without a live run or candidate |
-| :--- | :--- |
-| `not-started` | `not_started`: no work currently executing or queued by this reading |
-| `in-queue` | `in_queue`: queued work, even without a current candidate |
-| `blocked` | `blocked`: waiting on someone or something; metadata explains the wait |
-| `landed` | `landed`: this item's work landed |
-| `resolved-elsewhere` | `resolved_elsewhere`: the intent was satisfied by another path |
-| `closed` | `closed`: work is no longer wanted, with its record retained |
+## Stored state and displayed state
 
-`ProjectItemState` in [`serveread.go`](../../tools/tillr-view/serveread.go) emits
-only seven display spellings: the readings above plus `working`. It also carries
-`raw_state` for inspection; that field is not an eighth display state.
+The stored vocabulary and its permitted moves belong to the store's lifecycle
+definition (package `definition` in [`tools/tillr/definition`](../../tools/tillr/definition/)).
+The default definition, `git-landing`
+([`landing.json`](../../tools/tillr/definition/landing.json)), declares six
+states. The table gives their meaning and what the view shows when no run or
+candidate is live.
 
-The projection proceeds in this order:
+| Stored state | Displayed state | Meaning |
+| :--- | :--- | :--- |
+| `not-started` | `not_started` | Nothing is queued or running for this item |
+| `in-queue` | `in_queue` | Queued for work, with or without a current candidate |
+| `blocked` | `blocked` | Waiting on someone or something; stored metadata names the waiter |
+| `landed` | `landed` | This item's work landed |
+| `resolved-elsewhere` | `resolved_elsewhere` | The intent was satisfied by another path |
+| `closed` | `closed` | The work is no longer wanted; its record is retained |
 
-1. Read the stored disposition. Legacy `in-progress` reads as queued, not working.
-   Legacy `completed` starts as not started and reads as landed only when the
-   candidate argument is present at this step.
-2. A supplied candidate changes the display to `in_queue`; a supplied run whose
+`landed`, `resolved-elsewhere` and `closed` are the definition's finished
+states: a finished item satisfies the items that depend on it.
+
+`ProjectItemState` in [`serveread.go`](../../tools/tillr-view/serveread.go) is
+the one place the view reads a stored state. It emits seven displayed states:
+the six above plus `working`. It also carries `raw_state` for inspection; that
+field is not an eighth displayed state. The projection applies these overrides
+in order:
+
+1. Start from the stored state.
+2. A candidate in the queue changes the display to `in_queue`. A run whose
    state is `running` then changes it to `working`.
-3. Unresolved dependency edges change a nonterminal reading to `blocked`.
-   A planner question hold does likewise unless an explicit recorded waiter
-   already explains the block. Landed, resolved-elsewhere and closed readings
-   are exempt from these final blocking overrides.
+3. Unresolved dependency edges change a display that is not finished to
+   `blocked`. A planner question hold does the same unless a recorded waiter
+   already explains the block.
 
-These are ordered overrides, not proof of a general terminal-state priority:
-passing a candidate or running run can override even a terminal stored row.
-In particular, the legacy `completed` intermediate reading is subsequently
-replaced by `in_queue` when that same candidate argument is present. Do not infer
-successful landing merely from that legacy word.
+The overrides are ordered, not a general rule that finished states win: a
+supplied candidate or running run changes the display of a finished row too.
+Only the blocking overrides in step 3 exempt finished displays.
 
-Unlike the original proposal, queue membership is **not solely derived from a live
-candidate**. Stored `in-queue` remains queued after a run produces no judged
-candidate. `SetState` in [`state.go`](../../tools/tillr-item/item/state.go) moves the
-item's disposition alone; identical state and waiting metadata append no new event.
+Queue membership is stored, not derived from a live candidate: `in-queue` stays
+queued after a run produces no judged candidate, because a run that does not
+land does not move the item. `SetState` in
+[`state.go`](../../tools/tillr-item/item/state.go) moves the item's state alone.
+A write that changes neither the state nor the waiting metadata appends no
+event.
+
+## Finishing an item
+
+Under `git-landing`, entering a finished state needs evidence
+(`checkTerminalEvidence` and `checkStateReceipt` in
+[`tools/tillr-item/item`](../../tools/tillr-item/item/)):
+
+- **`landed`** needs at least one criterion, every criterion judged `done`, and
+  a current landing or graph-completion receipt for the item.
+- **`resolved-elsewhere`** needs a `--resolves-via` pointer of the form
+  `item:<id>`, `commit:<sha>` or `doc:<path>`, and is refused for an item that
+  already has a current landing receipt. An item pointer must name another
+  stored item; commit and document pointers are recorded as references and not
+  probed.
+- **Leaving a finished state** needs a reason and an actor.
+- **A move while a landing is publishing the item** to `closed` or
+  `resolved-elsewhere` is refused until that landing records its receipt.
+
+A repeated write of `landed` or `resolved-elsewhere` to an item already in that
+state answers with the stored item and writes nothing.
 
 ## Blocking and closure
 
-`WaitingOn` in [`waiting.go`](../../tools/tillr-item/item/waiting.go) defines the
-stored wait as a waiter and a reason. `SetState` requires both to be nonempty;
-the accepted waiter names are `owner`, `design`, `plan`, or `item:<id>` naming
-an existing item in the same store. This validator does not exclude the item itself.
-Blocking is allowed from not-started, in-queue, or blocked. The writer preserves
-an `underlying_state`; explicitly moving back to not-started or in-queue clears
-the waiting metadata. There is no automatic unblock command implied by the view.
+`WaitingOn` in [`waiting.go`](../../tools/tillr-item/item/waiting.go) is the
+stored wait: a waiter and a reason. A move to `blocked` requires both. The
+accepted waiters are `owner`, `design`, `plan`, or `item:<id>` naming an item in
+the same store; the check does not exclude the item itself. Blocking saves the
+state the item was in as `underlying_state`. Moving back to `not-started` or
+`in-queue` clears the waiting metadata. The view never unblocks an item.
 
-The view prefers the recorded waiter and reason over dependency-edge text.
-For older blocked rows it honestly displays `waiter not recorded`. Dependency
+The view prefers the recorded waiter and reason over dependency-edge text. A
+blocked row with no recorded waiter displays `waiter not recorded`. Dependency
 edges and planner holds can also produce a blocked display without a stored
-blocked disposition. The view's `underlying` text explains the wait; it is not
-necessarily the stored resume disposition.
+`blocked` state, so the view's `underlying` text explains the wait and is not
+necessarily the state the item resumes in.
 
 `Close` and `Reopen` in [`lifecycle.go`](../../tools/tillr-item/item/lifecycle.go)
-require a reason and actor. Close accepts not-started, in-queue, or blocked;
-it refuses an item with a successful landing record. It records the prior state,
-reason, date and actor, leaving blocked metadata intact. Reopen restores that
-saved disposition, including blocked. Ordinary state writes cannot enter or
-leave closed: they must use these lifecycle operations. Definition updates may
-retain closed without reopening it.
+each require a reason and an actor. Close accepts `not-started`, `in-queue` or
+`blocked`. It records the prior state, reason, date and actor, and leaves
+blocked metadata intact. Reopen restores the saved state, including `blocked`.
+Ordinary state writes cannot enter or leave `closed`; they are refused with the
+command to use. A definition update may carry `closed` through without
+reopening the item.
 
-These item operations update the row and append an event in one transaction.
-They do not delete branches, worktrees, runs or candidates, nor do they themselves
-cancel a run or withdraw a candidate. Those broader effects in the historical
-proposal must not be inferred from an item close. Likewise, this writer accepts
-`resolved-elsewhere` without validating a resolving pointer; the state model's
-required evidence is not enforced by `SetState` or `Apply`.
+Each of these operations updates the row and appends an event in one
+transaction. None deletes a branch, worktree, run or candidate, cancels a run,
+or withdraws a candidate.
 
 ## What freezes
 
-`checkState` distinguishes malformed vocabulary from frozen legacy values.
-`abandoned`, `deleted`, and `in-progress` remain readable but no new state write
-may produce them. Unknown names are usage errors; frozen names are state-rule
-rejections. Legacy rows can move to a writable state. `completed` is a legacy
-view input, not an accepted write spelling.
+Three state names — `abandoned`, `deleted` and `in-progress` — are frozen:
+a stored row holding one stays readable and can move to a declared state, and
+no write may produce one (`checkState` in
+[`lifecycle_policy.go`](../../tools/tillr-item/item/lifecycle_policy.go)). A
+frozen name is a state-rule rejection; a name the definition does not declare is
+a usage error. The view reads `in-progress` as queued. It never reads the
+undeclared name `completed` as landed: such a row displays as not started, or as
+queued when a candidate accompanies it.
 
-A criterion freezes independently of the item's lifecycle. In `carryCriteria`
-in [`apply.go`](../../tools/tillr-item/item/apply.go), the signal is a **nonempty
-stored criterion state**, not a presentation timestamp or a scan of verdict events.
-For an existing criterion:
+A criterion freezes independently of the item's state. In `carryCriteria` in
+[`apply.go`](../../tools/tillr-item/item/apply.go), the signal is a **nonempty
+stored criterion state**, not a timestamp or a scan of verdict events. For an
+existing criterion:
 
 - An empty stored state leaves its text editable and permits its removal.
 - A nonempty stored state forbids rewriting its text or omitting it from a
-  replacement definition. Keep it and append a new criterion for changed requirements.
+  replacement definition. Keep it and append a new criterion for a changed
+  requirement.
 - Omitting the state in a definition update carries the stored state forward.
   Supplying a different state is refused, even when the stored state is empty.
 
 `RecordVerdict` in [`verdict.go`](../../tools/tillr-item/item/verdict.go) is the
-separate judgment writer. Changing an item state does not clear criterion states
-or release frozen text. This keeps a recorded judgment attached to the requirement
-it actually judged. It is not a freeze of the whole item definition: title, fence,
-and other editable fields are not frozen by this comparison.
+only writer of a criterion's state. Changing an item's state does not clear
+criterion states or release frozen text, so a recorded judgment stays attached
+to the requirement it judged. The freeze covers criteria only: title, fence and
+other editable fields are not frozen by it.
 
 ## Verification anchors
 
-| Mechanism | Existing regression evidence |
+| Mechanism | Regression test |
 | :--- | :--- |
-| State moves and frozen legacy writes | [state tests](../../tools/tillr-item/state_test.go), `TestStateRefusesAStateNoTransitionMayWrite` |
+| State moves and frozen names | [state tests](../../tools/tillr-item/state_test.go), `TestStateRefusesAStateNoTransitionMayWrite` |
 | Criterion text, removal and state preservation | [criterion tests](../../tools/tillr-item/criterion_state_test.go), `TestAFrozenCriterionsTextCannotBeRewritten`, `TestAFrozenCriterionCannotBeDropped` |
 | Close and reopen | [lifecycle tests](../../tools/tillr-item/lifecycle_test.go), `TestCloseAndReopenRestoreEveryStartingState` |
 | Waiter metadata and clearing | [blocked-state tests](../../tools/tillr-item/blocked_state_test.go), `TestBlockedStateTransitionsAndClearing` |
 | Working requires a live run | [dispatchable tests](../../tools/tillr-view/dispatchable_test.go), `TestProjectItemStateReadsWorkingFromTheLeaseNotTheStore` |
-| Closed display vocabulary | [view tests](../../tools/tillr-view/serve_internal_test.go), `TestProjectItemStateNeverInventsAnEighthState` |
+| Seven displayed states | [view tests](../../tools/tillr-view/serve_internal_test.go), `TestProjectItemStateNeverInventsAnEighthState` |
 
-Re-verification starts with a diff from `verified_commit` over `covers`, then checks
-these writers and the ordered projection. This document does not certify archive behavior or a
-compile-time prohibition on views reading raw state strings.
+To re-verify, read the lifecycle definition, the writers named above and the
+ordered projection. This document does not describe a store that declares a
+lifecycle definition other than `git-landing`.
