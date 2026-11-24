@@ -21,7 +21,7 @@ depends-on:
 
 # Build plan: a tillr core with Git landing as its first definition
 
-> **Delivered copy.** This is `docs/design/tillr-definitions-plan.md` from this repository at commit `3b6faafdae` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-definitions-plan.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-17. Written against `4df6e426f`. The owner said to build on 2026-11-17: "file
 item(s) to build as much of the new tillr as possible so autoqa can play with the real thing and

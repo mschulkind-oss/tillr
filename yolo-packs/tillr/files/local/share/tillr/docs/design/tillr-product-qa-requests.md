@@ -10,7 +10,7 @@ summary: "Product QA's third-round reply to tillr at snapshot 973b12eb2d0e (2026
 
 # Third-round reply to tillr from the Product QA pipeline
 
-> **Delivered copy.** This is `docs/design/tillr-product-qa-requests.md` from this repository at commit `3b6faafdae` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-product-qa-requests.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-product-qa-requests.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-product-qa-requests.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 > **Received, reproduced here by tillr.** Written by the Product QA project's agent with the owner,
 > dated 2026-11-19, after reading tillr's documents at snapshot `973b12eb2d0e` (2026-11-18) and
