@@ -273,7 +273,7 @@ def test_selection_rules(root_graph: dict) -> None:
         assert "TestTheComposedPipelineRunsEndToEndOnAFixture" in by_pkg[
             "github.com/mschulkind-oss/tillr-drain/drain"
         ]["selected_tests"], by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]
-        assert len(by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"]) == 12, (
+        assert len(by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"]) == 13, (
             by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]
         )
         assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, (
@@ -2172,7 +2172,10 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
 
             def run_proof1() -> None:
                 try:
-                    with patch.dict(os.environ, {"TILLR_TRACE_DIR": str(trace_dir)}):
+                    with patch.dict(
+                        os.environ,
+                        {"TILLR_TRACE_DIR": str(trace_dir), "GO_TEST_SHARDS_CLASS": ""},
+                    ):
                         with shards.acquire_shard_slot(
                             lock_dir, 1, notify=proof1_notices.append,
                             slot_class="proof", proof_limit=1, gate_limit=1,
@@ -2197,13 +2200,14 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
 
             def run_proof2() -> None:
                 try:
-                    with shards.acquire_shard_slot(
-                        lock_dir, 1, notify=lambda _m: proof2_waiting.set(),
-                        slot_class="proof", proof_limit=1, gate_limit=1,
-                        holder="trunk-proof", label="proof-wait",
-                    ):
-                        proof2_acquired.set()
-                        assert proof2_release.wait(30)
+                    with patch.dict(os.environ, {"GO_TEST_SHARDS_CLASS": ""}):
+                        with shards.acquire_shard_slot(
+                            lock_dir, 1, notify=lambda _m: proof2_waiting.set(),
+                            slot_class="proof", proof_limit=1, gate_limit=1,
+                            holder="trunk-proof", label="proof-wait",
+                        ):
+                            proof2_acquired.set()
+                            assert proof2_release.wait(30)
                 except BaseException as exc:
                     errors.append(exc)
                     proof2_waiting.set()
