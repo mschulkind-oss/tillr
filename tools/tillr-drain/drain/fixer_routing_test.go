@@ -436,3 +436,175 @@ func TestAGeneratedItemsOwnerHoldShowsTheLoopsQuestion(t *testing.T) {
 		return nil
 	})
 }
+
+func TestGreenProofResolvesCandidateFixerWaitingToGate(t *testing.T) {
+	ctx := context.Background()
+
+	setupCandidate := func(t *testing.T, releaseLane bool) (refusalLoopFixture, *Loop, *fixerLandSteps, string, string, string, time.Time) {
+		t.Helper()
+		f, l, fixer, red := fixerRoutingFixture(t)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id IN ('item-declared', 'item-spare')`)
+			return err
+		})
+
+		now := l.cfg.Now().UTC()
+		runID := "run-" + fixer + "-a1"
+		worktree := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
+		runGit(t, worktree, "checkout", "--detach", red)
+		writeForkFile(t, filepath.Join(worktree, "base.txt"), "candidate fix\n")
+		runGit(t, worktree, "add", "base.txt")
+		runGit(t, worktree, "commit", "-qm", "fix: repair go-tool/unit")
+		candHead := runGit(t, worktree, "rev-parse", "HEAD")
+
+		baseSteps := l.cfg.Steps.(*recordingSteps)
+		steps := &fixerLandSteps{recordingSteps: baseSteps, root: f.root, storePath: f.storePath, t: t}
+		l.cfg.Steps = steps
+
+		req := &run.Request{RunID: runID, ItemID: fixer, LaneID: "lane-1", Backend: "fixture"}
+		cand := Candidate{
+			ItemID: fixer, LaneID: "lane-1", RunID: runID, Worktree: worktree,
+			BaseSHA: red, HeadSHA: candHead, Request: req, Seat: "build",
+		}
+		claimFixerLease(t, f, runID, fixer, "lane-1", "fixture", now)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			if err := appendEffect(tx, dispatchStartedKind, runID, pendingWork{
+				Decision: Decision{ItemID: fixer, LaneID: "lane-1", Seat: "build", RunRequest: req},
+				BaseSHA:  red,
+			}, now); err != nil {
+				return err
+			}
+			if err := appendEffect(tx, candidateReadyKind, runID, cand, now.Add(10*time.Second)); err != nil {
+				return err
+			}
+			if releaseLane {
+				if err := appendEffect(tx, candidateLaneKind, runID, candidateLane{Candidate: cand, Released: true}, now.Add(20*time.Second)); err != nil {
+					return err
+				}
+				if err := appendEffect(tx, examinationReleasedKind, runID, struct{}{}, now.Add(21*time.Second)); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`UPDATE lanes SET state='leased', run_id='run-other-busy', leased_until=NULL WHERE lane_id='lane-1'`); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		recordFixerRunExit(t, f, runID, fixer, "lane-1", "fixture", now, now.Add(10*time.Second), 0, run.EndNormalExit, "fixture/test", 20, 0.02)
+		if !releaseLane {
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				_, err := tx.Exec(`UPDATE lanes SET state='leased', run_id=?, leased_until=NULL WHERE lane_id='lane-1'`, runID)
+				return err
+			})
+		}
+
+		// Pin that the fixture fixer is in the candidate position before the green proof.
+		if d := planFor(t, l, fixer); d.From != "candidate" {
+			t.Fatalf("fixture fixer position = %q (action=%q reason=%q), want candidate", d.From, d.Action, d.Reason)
+		}
+		return f, l, steps, fixer, runID, red, now
+	}
+
+	t.Run("lane-released-waiting-for-lane", func(t *testing.T) {
+		f, l, steps, fixer, runID, _, now := setupCandidate(t, true)
+		runGit(t, f.root, "commit", "--allow-empty", "-qm", "later trunk repair")
+		tip := runGit(t, f.root, "rev-parse", TrunkRef)
+		later := now.Add(time.Minute)
+
+		// Negative control: a green proof that omits the fixer's check leaves it open.
+		writeGreenProof(t, l, tip, later, []string{"go-tool/other"})
+		l.cfg.Now = func() time.Time { return later.Add(time.Second) }
+		if _, err := l.pass(ctx, &LoopResult{}); err != nil {
+			t.Fatal(err)
+		}
+		if got := fixerState(t, f, fixer); got != StateInQueue {
+			t.Fatalf("proof missing fixer's check resolved candidate fixer: %s", got)
+		}
+
+		// refs/tillr/green moves to a descendant whose proof lists the fixer's check.
+		writeGreenProof(t, l, tip, later.Add(5*time.Second), []string{"go-tool/unit"})
+		l.cfg.Now = func() time.Time { return later.Add(6 * time.Second) }
+		runPassAndDrain(t, ctx, l)
+
+		if got := fixerState(t, f, fixer); got != StateResolvedElsewhere {
+			t.Fatalf("candidate fixer state = %s, want %s", got, StateResolvedElsewhere)
+		}
+		if steps.gateCalls != 0 {
+			t.Fatalf("Gate was called %d time(s) for proved candidate fixer, want 0", steps.gateCalls)
+		}
+		if steps.landCalls != 0 {
+			t.Fatalf("Land was called %d time(s) for proved candidate fixer, want 0", steps.landCalls)
+		}
+		if n := countStoreEvents(t, f.storePath, examinationDoneKind, runID); n != 1 {
+			t.Fatalf("examinationDoneKind count = %d, want 1", n)
+		}
+		fixtureRead(t, f, func(r *store.Reader) error {
+			gotGreen, err := fixerProvedGreen(r, fixer)
+			if err != nil {
+				return err
+			}
+			if gotGreen != tip {
+				t.Fatalf("FixerProvedKind green = %q, want %q", gotGreen, tip)
+			}
+			return nil
+		})
+	})
+
+	t.Run("lane-still-held-waiting-to-gate", func(t *testing.T) {
+		f, l, steps, fixer, runID, _, now := setupCandidate(t, false)
+		runGit(t, f.root, "commit", "--allow-empty", "-qm", "later trunk repair")
+		tip := runGit(t, f.root, "rev-parse", TrunkRef)
+		later := now.Add(time.Minute)
+
+		writeGreenProof(t, l, tip, later, []string{"go-tool/unit"})
+		l.cfg.Now = func() time.Time { return later.Add(time.Second) }
+		if err := l.resolveProvedFixers(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := fixerState(t, f, fixer); got != StateResolvedElsewhere {
+			t.Fatalf("resolveProvedFixers did not resolve candidate fixer holding lane: %s", got)
+		}
+		if err := l.settleResolvedFixerRuns(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if steps.gateCalls != 0 {
+			t.Fatalf("Gate was called %d time(s), want 0", steps.gateCalls)
+		}
+		if n := countStoreEvents(t, f.storePath, examinationDoneKind, runID); n != 1 {
+			t.Fatalf("examinationDoneKind count = %d, want 1", n)
+		}
+		fixtureRead(t, f, func(r *store.Reader) error {
+			var laneState string
+			if err := r.QueryRow(`SELECT state FROM lanes WHERE lane_id='lane-1'`).Scan(&laneState); err != nil {
+				return err
+			}
+			if laneState != run.LaneStateIdle {
+				t.Fatalf("lane-1 state = %q, want idle", laneState)
+			}
+			return nil
+		})
+	})
+
+	t.Run("active-examination-stays-live", func(t *testing.T) {
+		f, l, _, fixer, runID, _, now := setupCandidate(t, false)
+		owner, err := currentLoopOwner()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			return appendEffect(tx, examinationOwnerKind, runID, owner, now.Add(15*time.Second))
+		})
+		runGit(t, f.root, "commit", "--allow-empty", "-qm", "later trunk repair")
+		tip := runGit(t, f.root, "rev-parse", TrunkRef)
+		later := now.Add(time.Minute)
+
+		writeGreenProof(t, l, tip, later, []string{"go-tool/unit"})
+		l.cfg.Now = func() time.Time { return later.Add(time.Second) }
+		if err := l.resolveProvedFixers(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := fixerState(t, f, fixer); got != StateInQueue {
+			t.Fatalf("candidate fixer with active examination was closed prematurely: %s", got)
+		}
+	})
+}

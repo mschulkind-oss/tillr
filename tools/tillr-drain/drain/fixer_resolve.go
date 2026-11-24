@@ -547,9 +547,10 @@ func (l *Loop) resolveKeptProvedFixer(ctx context.Context, fixerID string) (bool
 }
 
 // fixerKeepsLive answers whether an open fixer has an active claim/lease/dispatch, a
-// live or unexamined run, or a committed candidate in flight (awaiting examination, or
-// returning from a conflict or judge refusal), so resolveProvedFixers lets it finish
-// instead of closing it.
+// live or unexamined worker run, an active examination, or a refused candidate returning
+// for repair, so resolveProvedFixers lets it finish instead of closing it. A finished
+// worker whose candidate is waiting to gate (position candidate, not actively being
+// examined) does not keep the fixer live.
 func fixerKeepsLive(r *store.Reader, fixerID string) (bool, error) {
 	hasReadOnly, err := tableExists(r, "read_only_runs")
 	if err != nil {
@@ -607,27 +608,53 @@ func fixerKeepsLive(r *store.Reader, fixerID string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if belongs {
+		if !belongs {
+			continue
+		}
+		waiting, err := runIsWaitingCandidate(r, runID)
+		if err != nil {
+			return false, err
+		}
+		if !waiting {
 			return true, nil
 		}
 	}
 
 	// Any unexamined drain.started (including a run that just exited before Loop.settle
-	// examines its commit) keeps the fixer live.
-	var unexaminedStarted bool
-	if err := r.QueryRow(
-		`SELECT EXISTS(
-			SELECT 1 FROM events e
-			WHERE e.kind = ? AND e.object_type = 'run'
-			  AND json_valid(e.payload) AND json_extract(e.payload, '$.decision.item_id') = ?
-			  AND NOT EXISTS(SELECT 1 FROM events x WHERE x.kind = ? AND x.object_type = 'run' AND x.object_id = e.object_id)
-		)`,
+	// examines its commit) keeps the fixer live unless its worker has finished and its
+	// candidate is waiting to gate.
+	startedRows, err := r.Query(
+		`SELECT DISTINCT e.object_id FROM events e
+		 WHERE e.kind = ? AND e.object_type = 'run'
+		   AND json_valid(e.payload) AND json_extract(e.payload, '$.decision.item_id') = ?
+		   AND NOT EXISTS(SELECT 1 FROM events x WHERE x.kind = ? AND x.object_type = 'run' AND x.object_id = e.object_id)`,
 		dispatchStartedKind, fixerID, examinationDoneKind,
-	).Scan(&unexaminedStarted); err != nil {
+	)
+	if err != nil {
 		return false, err
 	}
-	if unexaminedStarted {
-		return true, nil
+	var unexaminedRuns []string
+	for startedRows.Next() {
+		var id string
+		if err := startedRows.Scan(&id); err != nil {
+			startedRows.Close()
+			return false, err
+		}
+		unexaminedRuns = append(unexaminedRuns, id)
+	}
+	if err := startedRows.Err(); err != nil {
+		startedRows.Close()
+		return false, err
+	}
+	startedRows.Close()
+	for _, runID := range unexaminedRuns {
+		waiting, err := runIsWaitingCandidate(r, runID)
+		if err != nil {
+			return false, err
+		}
+		if !waiting {
+			return true, nil
+		}
 	}
 
 	// Any active dispatch without a runs row or examinationDoneKind keeps the fixer live.
@@ -702,6 +729,13 @@ func fixerKeepsLive(r *store.Reader, fixerID string) (bool, error) {
 	if done {
 		return false, nil
 	}
+	waiting, err := runIsWaitingCandidate(r, runID)
+	if err != nil {
+		return false, err
+	}
+	if waiting {
+		return false, nil
+	}
 	var candRaw []byte
 	err = r.QueryRow(
 		`SELECT payload FROM events WHERE kind IN (?, ?) AND object_type = 'run' AND object_id = ? ORDER BY seq DESC LIMIT 1`,
@@ -721,4 +755,90 @@ func fixerKeepsLive(r *store.Reader, fixerID string) (bool, error) {
 		return false, err
 	}
 	return c.HeadSHA != "" && c.BaseSHA != "" && c.HeadSHA != c.BaseSHA, nil
+}
+
+// runIsWaitingCandidate reports whether runID's worker has finished in a terminal
+// (non-resumed) state and produced an unexamined candidate that is waiting to gate
+// rather than actively being examined or already landed.
+func runIsWaitingCandidate(r *store.Reader, runID string) (bool, error) {
+	var state string
+	var eventSeq int64
+	err := r.QueryRow(`SELECT state, event_seq FROM runs WHERE run_id = ?`, runID).Scan(&state, &eventSeq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !isTerminalRunState(state) {
+		return false, nil
+	}
+	var resumed bool
+	if err := r.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? AND seq > ?)`,
+		run.ResumeKind, runID, eventSeq,
+	).Scan(&resumed); err != nil {
+		return false, err
+	}
+	if resumed {
+		return false, nil
+	}
+	var doneOrLanded bool
+	if err := r.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM events WHERE kind IN (?, ?) AND object_type = 'run' AND object_id = ?)`,
+		examinationDoneKind, judgeLandedKind, runID,
+	).Scan(&doneOrLanded); err != nil {
+		return false, err
+	}
+	if doneOrLanded {
+		return false, nil
+	}
+	var candSeq, resumeSeq int64
+	if err := r.QueryRow(
+		`SELECT COALESCE(MAX(seq), 0) FROM events WHERE kind IN (?, ?) AND object_type = 'run' AND object_id = ?`,
+		candidateReadyKind, candidatePreparedKind, runID,
+	).Scan(&candSeq); err != nil {
+		return false, err
+	}
+	if candSeq == 0 {
+		return false, nil
+	}
+	if err := r.QueryRow(
+		`SELECT COALESCE(MAX(seq), 0) FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ?`,
+		run.ResumeKind, runID,
+	).Scan(&resumeSeq); err != nil {
+		return false, err
+	}
+	if resumeSeq > candSeq {
+		return false, nil
+	}
+	var latestExamKind string
+	err = r.QueryRow(
+		`SELECT kind FROM events WHERE kind IN (?, ?) AND object_type = 'run' AND object_id = ? ORDER BY seq DESC LIMIT 1`,
+		examinationClaimedKind, examinationReleasedKind, runID,
+	).Scan(&latestExamKind)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if latestExamKind == examinationClaimedKind {
+		return false, nil
+	}
+	var ownerRaw []byte
+	err = r.QueryRow(
+		`SELECT payload FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? ORDER BY seq DESC LIMIT 1`,
+		examinationOwnerKind, runID,
+	).Scan(&ownerRaw)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if err == nil {
+		var owner *LoopOwner
+		if err := json.Unmarshal(ownerRaw, &owner); err != nil {
+			return false, err
+		}
+		if owner != nil {
+			return false, nil
+		}
+	}
+	return true, nil
 }
