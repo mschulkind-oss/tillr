@@ -123,6 +123,17 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 				c.Writers = append(c.Writers, identity)
 			}
 		}
+		nc, err := attemptNoChangeFinding(r, d.ItemID, d.Attempt)
+		if err != nil {
+			return err
+		}
+		if nc != nil {
+			c.NoChange = nc
+			if c.BaseSHA == "" {
+				c.BaseSHA = nc.BaseSHA
+			}
+			c.HeadSHA = c.BaseSHA
+		}
 		return nil
 	})
 	return c, err
@@ -180,6 +191,15 @@ func (l *Loop) settleEvaluator(ctx context.Context, d Decision, rec run.Record, 
 	}
 	if err := l.nodeOutcome(ctx, d, "passed"); err != nil {
 		return true, err
+	}
+	if c.NoChange != nil {
+		if err := l.completeNoChangeExit(ctx, d, c); err != nil {
+			return true, err
+		}
+		if stop := l.abandon(ctx, d.LaneID, "", ""); stop != "" {
+			return true, Externalf("lane %s cleanup failed: %s", d.LaneID, stop)
+		}
+		return true, l.markExamined(ctx, d)
 	}
 	if rec.State == run.StatePaused {
 		if err := l.readStore(ctx, func(r *store.Reader) error {

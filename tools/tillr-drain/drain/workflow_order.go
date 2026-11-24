@@ -11,6 +11,39 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+func attemptNoChangeFinding(r *store.Reader, itemID string, attempt int) (*noChangeRecord, error) {
+	var raw []byte
+	err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND json_valid(payload) AND json_extract(payload,'$.item_id')=? AND json_extract(payload,'$.attempt')=? ORDER BY seq DESC LIMIT 1`,
+		noChangeKind, itemID, attempt).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		ItemID  string              `json:"item_id"`
+		Attempt int                 `json:"attempt"`
+		NodeID  string              `json:"node_id"`
+		RunID   string              `json:"run_id"`
+		BaseSHA string              `json:"base_sha"`
+		Finding landingOfferFinding `json:"finding"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	return &noChangeRecord{
+		ItemID:      payload.ItemID,
+		Attempt:     payload.Attempt,
+		NodeID:      payload.NodeID,
+		RunID:       payload.RunID,
+		BaseSHA:     payload.BaseSHA,
+		Cause:       payload.Finding.Cause,
+		Evidence:    payload.Finding.Evidence,
+		WhyNoChange: payload.Finding.WhyNoChange,
+	}, nil
+}
+
 // nextWorkflowNode waits for incoming producers to settle, then follows any
 // matching edge. This admits joins of mutually exclusive pass/fail branches;
 // a node with no followed incoming edge is skipped, never dispatched.
@@ -26,8 +59,20 @@ func (l *Loop) nextWorkflowNode(ctx context.Context, d Decision) (int, error) {
 		if err != nil {
 			return err
 		}
-		if workflowDone(d.Workflow, outcomes) {
+		done, err := workflowAttemptDone(tx.Reader(), d.Workflow, d.ItemID, d.Attempt, outcomes)
+		if err != nil {
+			return err
+		}
+		if done {
 			return nil
+		}
+		planNoChange := false
+		if outcomes["work"] == "skipped" {
+			nc, err := attemptNoChangeFinding(tx.Reader(), d.ItemID, d.Attempt)
+			if err != nil {
+				return err
+			}
+			planNoChange = nc != nil && nc.NodeID == "plan"
 		}
 		for i, stage := range d.Workflow.Stages {
 			if outcomes[stage.ID] != "" {
@@ -46,6 +91,9 @@ func (l *Loop) nextWorkflowNode(ctx context.Context, d Decision) (int, error) {
 				matches := outcome == "passed"
 				if edge.WhenOutcome == "fail" {
 					matches = outcome == "handled-fail"
+				}
+				if planNoChange && stage.ID == evaluatorSlot(d.Workflow) && edge.From == "work" && outcome == "skipped" {
+					matches = true
 				}
 				for _, id := range edge.RequiresPassed {
 					matches = matches && outcomes[id] == "passed"

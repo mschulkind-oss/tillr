@@ -40,6 +40,28 @@ func workflowDone(w *Workflow, outcomes map[string]string) bool {
 	return workflow.WorkflowDone(w, outcomes)
 }
 
+func workflowAttemptDone(r *store.Reader, w *Workflow, itemID string, attempt int, outcomes map[string]string) (bool, error) {
+	if workflowDone(w, outcomes) {
+		return true, nil
+	}
+	if outcomes["work"] != "skipped" {
+		return false, nil
+	}
+	nc, err := attemptNoChangeFinding(r, itemID, attempt)
+	if err != nil || nc == nil || nc.NodeID != "plan" {
+		return false, err
+	}
+	for _, id := range workflow.RequiredWorkflowNodes(w) {
+		if id == "work" && outcomes[id] == "skipped" {
+			continue
+		}
+		if outcomes[id] != "passed" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // Finish a graph only after its declared required nodes pass. A no-commit
 // completion records its own evidence and mechanical verdicts, then uses the
 // same item-state step as a landing without invoking gate, land, or verdict programs.
@@ -55,7 +77,10 @@ func (l *Loop) finishWorkflow(ctx context.Context, d Decision, rec run.Record, b
 		if err != nil {
 			return err
 		}
-		done = workflowDone(d.Workflow, outcomes)
+		done, err = workflowAttemptDone(tx.Reader(), d.Workflow, d.ItemID, d.Attempt, outcomes)
+		if err != nil {
+			return err
+		}
 		if !done {
 			return nil
 		}
