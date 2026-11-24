@@ -20,6 +20,7 @@ type observation struct {
 	Value *any   `json:"value,omitempty"`
 
 	fingerprint string           // internal cause facts; not part of the timeline bundle
+	distinct    string           // internal distinct_by value; not part of the timeline bundle
 	lookup      func(string) any // internal event field lookup; not part of the timeline bundle
 }
 
@@ -118,6 +119,22 @@ func (c *condition) observe(r When, e observation, values expressionValues) {
 		c.events = c.events[:0]
 		c.clears = append(c.clears, e.Seq)
 	} else if match {
+		if r.DistinctBy != "" {
+			var raw any
+			if values.event != nil {
+				raw = values.event(r.DistinctBy)
+			} else if e.lookup != nil {
+				raw = e.lookup(r.DistinctBy)
+			}
+			s, ok := raw.(string)
+			if !ok || s == "" {
+				return
+			}
+			e.distinct = s
+			c.events = slices.DeleteFunc(c.events, func(prev observation) bool {
+				return prev.distinct == s
+			})
+		}
 		c.events = append(c.events, e)
 	}
 }
@@ -166,6 +183,7 @@ type ruleDefinitionDigestInput struct {
 	GroupByList       []string    `json:"group_by_list"`
 	Pattern           string      `json:"pattern"`
 	Field             string      `json:"field"`
+	DistinctBy        string      `json:"distinct_by,omitempty"`
 	Pairs             [][2]string `json:"pairs"`
 	Threshold         int64       `json:"threshold"`
 	ThresholdCommits  int64       `json:"threshold_commits"`
@@ -211,6 +229,7 @@ func definitionHash(r Rule) string {
 		GroupByList:       normalizeStrings(r.When.GroupByList),
 		Pattern:           r.When.Pattern,
 		Field:             r.When.Field,
+		DistinctBy:        r.When.DistinctBy,
 		Pairs:             normalizePairs(r.When.Pairs),
 		Threshold:         r.When.Threshold,
 		ThresholdCommits:  r.When.ThresholdCommits,
@@ -331,6 +350,7 @@ func ruleEqual(a, b Rule) bool {
 		slices.Equal(a.When.GroupByList, b.When.GroupByList) &&
 		a.When.Pattern == b.When.Pattern &&
 		a.When.Field == b.When.Field &&
+		a.When.DistinctBy == b.When.DistinctBy &&
 		slices.Equal(a.When.Pairs, b.When.Pairs) &&
 		a.When.Threshold == b.When.Threshold &&
 		a.When.Window == b.When.Window &&

@@ -46,7 +46,7 @@ type When struct {
 	Fingerprint                                []string
 	GroupBy                                    string
 	GroupByList                                []string
-	Pattern, Field                             string
+	Pattern, Field, DistinctBy                 string
 	Pairs                                      [][2]string
 	Threshold, ThresholdCommits                int64
 	Window, ThresholdDuration                  time.Duration
@@ -514,12 +514,14 @@ func loadWhen(k keys, pattern string, refs map[string]bool) When {
 		w.Threshold = 1
 		w.Match = k.expression("match", false)
 	case CountInWindow:
-		k.only(append(allowed, "match", "threshold")...)
+		k.only(append(allowed, "match", "distinct_by", "threshold")...)
 		w.Match = k.expression("match", false)
+		w.DistinctBy = loadDistinctBy(k)
 	case ConsecutiveCount:
-		k.only(append(allowed, "match", "reset", "threshold")...)
+		k.only(append(allowed, "match", "reset", "distinct_by", "threshold")...)
 		w.Match = k.expression("match", true)
 		w.Reset = k.expression("reset", false)
+		w.DistinctBy = loadDistinctBy(k)
 	case AlternatingPair:
 		k.only(append(allowed, "field", "pairs", "threshold")...)
 		w.Field = k.eventPath("field")
@@ -541,6 +543,25 @@ func loadWhen(k keys, pattern string, refs map[string]bool) When {
 		k.reject("window", "must be longer than threshold_duration")
 	}
 	return w
+}
+
+func loadDistinctBy(k keys) string {
+	if _, present := k.values["distinct_by"]; !present {
+		return ""
+	}
+	name := k.text("distinct_by")
+	if name == "" {
+		return ""
+	}
+	if name == "global" || strings.HasPrefix(name, "event.") || !validEventPath(name) {
+		k.reject("distinct_by", "expected an event name without the event. prefix or global, got %q", name)
+		return ""
+	}
+	if isForbiddenGroupByColumn(name) {
+		k.reject("distinct_by", "integer column %q cannot be used as distinct_by", name)
+		return ""
+	}
+	return name
 }
 
 func (k keys) positiveInteger(key string) int64 {

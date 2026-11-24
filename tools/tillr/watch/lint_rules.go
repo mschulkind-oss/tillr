@@ -491,12 +491,14 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[st
 		w.Threshold = 1
 		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, kinds, emit)
 	case CountInWindow:
-		allowed = append(allowed, "match", "threshold")
+		allowed = append(allowed, "match", "distinct_by", "threshold")
 		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, kinds, emit)
+		w.DistinctBy = lintDistinctBy(whenMap, emit)
 	case ConsecutiveCount:
-		allowed = append(allowed, "match", "reset", "threshold")
+		allowed = append(allowed, "match", "reset", "distinct_by", "threshold")
 		w.Match = lintRuleExpr(whenMap, "match", true, w.GroupBy, reads, refs, kinds, emit)
 		w.Reset = lintRuleExpr(whenMap, "reset", false, w.GroupBy, reads, refs, kinds, emit)
+		w.DistinctBy = lintDistinctBy(whenMap, emit)
 	case AlternatingPair:
 		allowed = append(allowed, "field", "pairs", "threshold")
 		field, ok := whenMap["field"].(string)
@@ -564,6 +566,22 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[st
 	}
 
 	return w
+}
+
+func lintDistinctBy(whenMap map[string]any, emit func(string, string)) string {
+	raw, present := whenMap["distinct_by"]
+	if !present {
+		return ""
+	}
+	db, ok := raw.(string)
+	if !ok || db == "" || db == "global" || strings.HasPrefix(db, "event.") || !validEventPath(db) {
+		emit(CodeWatchLintRuleSchema, "when.distinct_by: expected a non-empty valid event path without the event. prefix or global")
+		return ""
+	}
+	if isForbiddenGroupByColumn(db) {
+		emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("when.distinct_by: integer column %q cannot be used as distinct_by", db))
+	}
+	return db
 }
 
 func isForbiddenGroupByColumn(col string) bool {
@@ -642,7 +660,7 @@ func lintRuleGuidance(gMap map[string]any, when When, emit func(string, string))
 		emit(CodeWatchLintEmptyGuidance, "guidance.summary: expected a non-blank string")
 	} else {
 		g.Summary = summary
-		checkGuidanceText("guidance.summary", summary, when.Pattern, false, emit)
+		checkGuidanceText("guidance.summary", summary, when, false, emit)
 	}
 
 	if rawReopen, present := gMap["reopen_summary"]; present {
@@ -652,7 +670,7 @@ func lintRuleGuidance(gMap map[string]any, when When, emit func(string, string))
 			emit(CodeWatchLintEmptyGuidance, "guidance.reopen_summary: expected a non-blank string")
 		} else {
 			g.ReopenSummary = rs
-			checkGuidanceText("guidance.reopen_summary", rs, when.Pattern, true, emit)
+			checkGuidanceText("guidance.reopen_summary", rs, when, true, emit)
 		}
 	}
 
@@ -671,21 +689,21 @@ func lintRuleGuidance(gMap map[string]any, when When, emit func(string, string))
 				emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("guidance.%s[%d]: expected a non-blank string", field.name, i))
 				continue
 			}
-			checkGuidanceText(fmt.Sprintf("guidance.%s[%d]", field.name, i), line, when.Pattern, false, emit)
+			checkGuidanceText(fmt.Sprintf("guidance.%s[%d]", field.name, i), line, when, false, emit)
 		}
 	}
 	return g
 }
 
-func checkGuidanceText(field, text, pattern string, allowEvent bool, emit func(string, string)) {
+func checkGuidanceText(field, text string, when When, allowEvent bool, emit func(string, string)) {
 	tokens, err := extractGuidancePlaceholders(text)
 	if err != nil {
 		emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("%s: %v", field, err))
 		return
 	}
 	for _, tok := range tokens {
-		if !validGuidancePlaceholder(tok, pattern, allowEvent) {
-			emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("%s: invalid or unsupported placeholder {{%s}} for pattern %q", field, tok, pattern))
+		if !validGuidancePlaceholder(tok, when, allowEvent) {
+			emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("%s: invalid or unsupported placeholder {{%s}} for pattern %q", field, tok, when.Pattern))
 		}
 	}
 }
@@ -717,17 +735,19 @@ func extractGuidancePlaceholders(line string) ([]string, error) {
 	return tokens, nil
 }
 
-func validGuidancePlaceholder(tok, pattern string, allowEvent bool) bool {
+func validGuidancePlaceholder(tok string, when When, allowEvent bool) bool {
 	switch tok {
 	case "subject", "rule_id", "alert_id", "count", "elapsed":
 		return true
 	case "leader", "follower", "leader_short", "follower_short":
-		return pattern == LagBehind
+		return when.Pattern == LagBehind
 	case "pair_a", "pair_b":
-		return pattern == AlternatingPair
+		return when.Pattern == AlternatingPair
+	case "distinct_values":
+		return (when.Pattern == CountInWindow || when.Pattern == ConsecutiveCount) && when.DistinctBy != ""
 	}
 	if name, ok := strings.CutPrefix(tok, "event."); ok {
-		if pattern == LagBehind && !allowEvent {
+		if when.Pattern == LagBehind && !allowEvent {
 			return false
 		}
 		if name == "" || strings.HasPrefix(name, "event.") || strings.IndexFunc(name, unicode.IsSpace) >= 0 {

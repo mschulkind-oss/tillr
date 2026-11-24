@@ -113,6 +113,19 @@ func encodeConditionBundle(r Rule, key, id string, c *condition, summaryTemplate
 		base["pair_a"] = c.pair[0]
 		base["pair_b"] = c.pair[1]
 	}
+	if (r.When.Pattern == CountInWindow || r.When.Pattern == ConsecutiveCount) && r.When.DistinctBy != "" {
+		vals := make([]string, 0, len(c.events))
+		for _, ev := range c.events {
+			s := ev.distinct
+			if s == "" && ev.lookup != nil {
+				s, _ = ev.lookup(r.When.DistinctBy).(string)
+			}
+			if s != "" {
+				vals = append(vals, s)
+			}
+		}
+		base["distinct_values"] = strings.Join(vals, ", ")
+	}
 	render := func(lines []string) []string {
 		out := make([]string, len(lines))
 		for i, line := range lines {
