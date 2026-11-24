@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
+	"io"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -104,8 +108,9 @@ func readWorkerRecordsOfItem(r *store.Reader, itemID string) ([]progressClaim, m
 }
 
 // readWorkerRecordsForRuns reads the records of just these runs, through the events_by_object
-// index. A store holds a child-session event for every sample of every child ever run, so
-// reading the kind store-wide decodes a million rows.
+// index. Historical stores hold over a million child-session rows from pre-merge sampling, so
+// reading the kind store-wide decodes a million rows; new runs write child-session events
+// only on lifecycle changes (start and end).
 func readWorkerRecordsForRuns(r *store.Reader, runs map[string]bool) ([]progressClaim, map[string]childrenView, error) {
 	if len(runs) == 0 {
 		return []progressClaim{}, map[string]childrenView{}, nil
@@ -184,7 +189,7 @@ func scanWorkerRecords(rows interface {
 	return claims, children, rows.Err()
 }
 
-func enrichWorkerRecords(r *store.Reader, rows []laneRow) error {
+func enrichWorkerRecords(r *store.Reader, rows []laneRow, stats *laneReadStats) error {
 	rowRuns := make([]map[string]bool, len(rows))
 	wanted := map[string]bool{}
 	for i := range rows {
@@ -206,6 +211,26 @@ func enrichWorkerRecords(r *store.Reader, rows []laneRow) error {
 	if err != nil {
 		return err
 	}
+	for id, group := range children {
+		updated := false
+		for j := range group.Sessions {
+			s := &group.Sessions[j]
+			if s.EndedAt == nil && s.Turns == nil && s.Transcript != "" {
+				facts := liveChildTranscriptFacts(s.Transcript, stats)
+				if facts.started != nil && s.StartedAt == nil {
+					s.StartedAt = facts.started
+					updated = true
+				}
+				if facts.turns != nil {
+					s.Turns = facts.turns
+					updated = true
+				}
+			}
+		}
+		if updated {
+			children[id] = group
+		}
+	}
 	for i := range rows {
 		row := &rows[i]
 		row.Progress = []progressClaim{}
@@ -223,6 +248,64 @@ func enrichWorkerRecords(r *store.Reader, rows []laneRow) error {
 		}
 	}
 	return nil
+}
+
+type childTranscriptFacts struct {
+	started *int64
+	turns   *int
+}
+
+// liveChildTranscriptFacts reads start clock and assistant turn count directly from an
+// open child's JSONL transcript so the lane view stays current while the child runs
+// without appending a run.child-session event on every assistant turn.
+func liveChildTranscriptFacts(path string, stats *laneReadStats) childTranscriptFacts {
+	return memoLaneFile("child-transcript", path, "", stats, func() childTranscriptFacts {
+		f, err := os.Open(path)
+		if err != nil {
+			stats.dep(fileDep{path: path})
+			return childTranscriptFacts{}
+		}
+		defer f.Close()
+		if info, err := f.Stat(); err == nil {
+			stats.dep(depOf(path, info))
+		} else {
+			stats.dep(fileDep{path: path})
+		}
+		var started *int64
+		turns := 0
+		reader := bufio.NewReader(f)
+		for {
+			raw, err := reader.ReadBytes('\n')
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return childTranscriptFacts{}
+			}
+			stats.add(len(raw))
+			var entry struct {
+				Type      string `json:"type"`
+				Timestamp string `json:"timestamp"`
+				Message   struct {
+					Role      string `json:"role"`
+					Timestamp int64  `json:"timestamp"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return childTranscriptFacts{}
+			}
+			if entry.Type == "session" {
+				if at, err := time.Parse(time.RFC3339Nano, entry.Timestamp); err == nil {
+					n := at.UnixMilli()
+					started = &n
+				}
+			}
+			if entry.Type == "message" && entry.Message.Role == "assistant" && (started == nil || entry.Message.Timestamp >= *started) {
+				turns++
+			}
+		}
+		return childTranscriptFacts{started: started, turns: &turns}
+	})
 }
 
 func readChildRun(r *store.Reader, id string) (storeRun, bool, error) {

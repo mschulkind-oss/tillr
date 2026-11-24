@@ -28,12 +28,15 @@ type workerRecords struct {
 	modelTimeouts int
 	recorded      bool
 	children      map[string]string
+	merged        map[string]childSession
+	childOrder    []string
 	sessions      map[string]*sessionObservation
 	lastError     string
 }
 
 type sessionObservation struct {
 	offset      int64
+	exists      bool
 	started     *int64
 	lastMessage *int64
 	turns       int
@@ -52,6 +55,7 @@ func (w *workerRecords) sessionFacts(path string) (*sessionObservation, error) {
 	if err != nil {
 		return nil, err
 	}
+	facts.exists = true
 	defer f.Close()
 	if _, err = f.Seek(facts.offset, io.SeekStart); err != nil {
 		return nil, err
@@ -97,24 +101,26 @@ func (w *workerRecords) sessionFacts(path string) (*sessionObservation, error) {
 }
 
 type childSession struct {
-	RunID      string `json:"run_id"`
-	ItemID     string `json:"item_id"`
-	LaneID     string `json:"lane_id"`
-	SessionID  string `json:"session_id"`
-	Role       string `json:"role"`
-	StartedAt  *int64 `json:"started_at_ms"`
-	EndedAt    *int64 `json:"ended_at_ms"`
-	Turns      *int   `json:"turn_count"`
-	EndClock   string `json:"end_clock"`
-	Transcript string `json:"transcript"`
+	RunID         string `json:"run_id"`
+	ItemID        string `json:"item_id,omitempty"`
+	LaneID        string `json:"lane_id,omitempty"`
+	SessionID     string `json:"session_id"`
+	Role          string `json:"role,omitempty"`
+	StartedAt     *int64 `json:"started_at_ms,omitempty"`
+	EndedAt       *int64 `json:"ended_at_ms,omitempty"`
+	Turns         *int   `json:"turn_count,omitempty"`
+	EndClock      string `json:"end_clock,omitempty"`
+	Transcript    string `json:"transcript"`
+	closeObserved bool
 }
 
 // mergeChild joins two observations of one child transcript: the earliest start, the
-// largest turn count, an observed end over a derived one and the later of two ends of one
-// clock, and the role first recorded. Every rule is commutative and idempotent, so the
-// merge of a fixed set of records is the same whatever order they are read in, and merging
-// one of them again changes nothing. Partial tool results never erase a clock a live
-// status record supplied.
+// largest turn count, a child-specific close observation over a wrapper end clock and an
+// observed end over a derived one (taking the later of two ends of the same rank), and the
+// role first recorded. Every rule is commutative and idempotent, so the merge of a fixed
+// set of records is the same whatever order they are read in, and merging one of them
+// again changes nothing. Partial tool results never erase a clock a live status record
+// supplied.
 func mergeChild(old, c childSession) childSession {
 	if old.Role != "" {
 		c.Role = old.Role
@@ -125,9 +131,12 @@ func mergeChild(old, c childSession) childSession {
 	if c.Turns == nil || (old.Turns != nil && *old.Turns > *c.Turns) {
 		c.Turns = old.Turns
 	}
-	rank := func(clock string) int {
-		switch clock {
+	rank := func(s childSession) int {
+		switch s.EndClock {
 		case "observed":
+			if s.closeObserved {
+				return 3
+			}
 			return 2
 		case "derived":
 			return 1
@@ -137,15 +146,23 @@ func mergeChild(old, c childSession) childSession {
 	switch {
 	case old.EndedAt == nil:
 	case c.EndedAt == nil,
-		rank(old.EndClock) > rank(c.EndClock),
-		rank(old.EndClock) == rank(c.EndClock) && *old.EndedAt > *c.EndedAt:
-		c.EndedAt, c.EndClock = old.EndedAt, old.EndClock
+		rank(old) > rank(c),
+		rank(old) == rank(c) && *old.EndedAt > *c.EndedAt:
+		c.EndedAt, c.EndClock, c.closeObserved = old.EndedAt, old.EndClock, old.closeObserved
 	}
 	return c
 }
 
 func newWorkerRecords(ctx context.Context, s *store.Store, req Request, dir, log string) (*workerRecords, error) {
-	w := &workerRecords{s: s, req: req, dir: dir, log: log, children: map[string]string{}, sessions: map[string]*sessionObservation{}}
+	w := &workerRecords{
+		s:        s,
+		req:      req,
+		dir:      dir,
+		log:      log,
+		children: map[string]string{},
+		merged:   map[string]childSession{},
+		sessions: map[string]*sessionObservation{},
+	}
 	err := s.ReadTx(ctx, func(r *store.Reader) error {
 		rows, err := r.Query(`SELECT kind,payload FROM events WHERE object_type='run' AND object_id=? AND kind IN ('run.progress','run.child-session','run.children-recorded','run.model-timeout') ORDER BY seq`, req.RunID)
 		if err != nil {
@@ -175,7 +192,16 @@ func newWorkerRecords(ctx context.Context, s *store.Store, req Request, dir, log
 				if err := json.Unmarshal([]byte(body), &c); err != nil {
 					return err
 				}
-				w.children[c.Transcript] = body
+				c.closeObserved = c.EndClock == "observed"
+				if _, seen := w.merged[c.Transcript]; !seen {
+					w.childOrder = append(w.childOrder, c.Transcript)
+				}
+				w.merged[c.Transcript] = c
+				norm, err := json.Marshal(c)
+				if err != nil {
+					return err
+				}
+				w.children[c.Transcript] = string(norm)
 			case ModelTimeoutKind:
 				var mt struct {
 					Count int `json:"count"`
@@ -289,7 +315,7 @@ func (w *workerRecords) observe(ctx context.Context, final bool) error {
 			if err = json.Unmarshal(raw, &v); err != nil {
 				return fmt.Errorf("reading Pi child metadata %s: %w", path, err)
 			}
-			return w.discover(ctx, v)
+			return w.collect(v, final)
 		})
 		if err != nil {
 			return err
@@ -319,19 +345,26 @@ func (w *workerRecords) observe(ctx context.Context, final bool) error {
 			w.logOffset += int64(len(raw))
 			continue
 		}
-		if err := w.discover(ctx, v); err != nil {
+		if err := w.collect(v, final); err != nil {
 			return err
 		}
 		w.logOffset += int64(len(raw))
 	}
-	return nil
+	return w.flushChildren(ctx)
 }
 
 func (w *workerRecords) discover(ctx context.Context, v any) error {
+	if err := w.collect(v, false); err != nil {
+		return err
+	}
+	return w.flushChildren(ctx)
+}
+
+func (w *workerRecords) collect(v any, final bool) error {
 	switch value := v.(type) {
 	case []any:
 		for _, v := range value {
-			if err := w.discover(ctx, v); err != nil {
+			if err := w.collect(v, final); err != nil {
 				return err
 			}
 		}
@@ -351,27 +384,6 @@ func (w *workerRecords) discover(ctx context.Context, v any) error {
 				c.EndedAt = &n
 				c.EndClock = "observed"
 			}
-			if x, ok := value["turnCount"].(float64); ok {
-				n := int(x)
-				c.Turns = &n
-			}
-			if usage, ok := value["usage"].(map[string]any); ok && c.Turns == nil {
-				if x, ok := usage["turns"].(float64); ok {
-					n := int(x)
-					c.Turns = &n
-				}
-			}
-			facts, err := w.sessionFacts(path)
-			if err != nil {
-				return err
-			}
-			if facts.started != nil {
-				c.StartedAt = facts.started
-			}
-			if c.Turns == nil && facts.started != nil {
-				n := facts.turns
-				c.Turns = &n
-			}
 			// Pi's per-writer process terminal is a child-specific close observation.
 			if terminal, ok := value["processTerminal"].(map[string]any); ok {
 				if instances, ok := terminal["instances"].([]any); ok {
@@ -381,6 +393,7 @@ func (w *workerRecords) discover(ctx context.Context, v any) error {
 								n := int64(x)
 								c.EndedAt = &n
 								c.EndClock = "observed"
+								c.closeObserved = true
 							}
 						}
 					}
@@ -394,37 +407,97 @@ func (w *workerRecords) discover(ctx context.Context, v any) error {
 			if exit, ok := value["exitCode"].(float64); ok && exit >= 0 {
 				terminal = true
 			}
-			if c.EndedAt == nil && terminal && facts.lastMessage != nil {
-				// Older foreground history stores only a batch clock. Use this child's
-				// last recorded message as a derived end, never the batch completion.
-				c.EndedAt = facts.lastMessage
-				c.EndClock = "derived"
-			}
-			// One transcript can be named by several records that disagree (a status file and
-			// a foreground-history entry, each read on every sample). They merge into one
-			// record that does not depend on read order, so re-reading the same records
-			// changes nothing and writes nothing; a record compared only with the last one
-			// written made disagreeing sources take turns, appending both on every sample.
-			if prev := w.children[path]; prev != "" {
-				var old childSession
-				_ = json.Unmarshal([]byte(prev), &old)
-				c = mergeChild(old, c)
-			}
-			body, _ := json.Marshal(c)
-			if w.children[path] != string(body) {
-				if err := w.append(ctx, "run.child-session", c); err != nil {
+			ended := terminal || c.EndedAt != nil || final
+			old, seen := w.merged[path]
+			var facts *sessionObservation
+			if !seen || (c.StartedAt == nil && old.StartedAt == nil) || ended {
+				var err error
+				facts, err = w.sessionFacts(path)
+				if err != nil {
 					return err
 				}
-				w.children[path] = string(body)
+				if facts.started != nil {
+					c.StartedAt = facts.started
+				}
+			}
+			// Record turn_count once the child (or parent run) ends rather than appending
+			// a store event on every live assistant turn; active readers inspect the live
+			// transcript file directly until the terminal child record is written.
+			if ended {
+				if x, ok := value["turnCount"].(float64); ok {
+					n := int(x)
+					c.Turns = &n
+				}
+				if usage, ok := value["usage"].(map[string]any); ok && c.Turns == nil {
+					if x, ok := usage["turns"].(float64); ok {
+						n := int(x)
+						c.Turns = &n
+					}
+				}
+				if facts != nil && facts.started != nil && (c.Turns == nil || facts.turns > *c.Turns) {
+					n := facts.turns
+					c.Turns = &n
+				}
+				if c.EndedAt == nil && terminal && facts != nil && facts.lastMessage != nil {
+					// Older foreground history stores only a batch clock. Use this child's
+					// last recorded message as a derived end, never the batch completion.
+					c.EndedAt = facts.lastMessage
+					c.EndClock = "derived"
+				}
+			}
+			// Skip unstarted pending steps that have neither a start clock nor a transcript file yet.
+			if seen || ended || c.StartedAt != nil || (facts != nil && facts.exists) {
+				if seen {
+					c = mergeChild(old, c)
+				} else {
+					w.childOrder = append(w.childOrder, path)
+				}
+				w.merged[path] = c
 			}
 		}
 		for _, key := range []string{"steps", "children", "results", "details", "result", "partialResult", "message"} {
 			if v, ok := value[key]; ok {
-				if err := w.discover(ctx, v); err != nil {
+				if err := w.collect(v, final); err != nil {
 					return err
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func (w *workerRecords) flushChildren(ctx context.Context) error {
+	type pendingWrite struct {
+		path string
+		body []byte
+	}
+	var pending []pendingWrite
+	for _, path := range w.childOrder {
+		c := w.merged[path]
+		body, err := json.Marshal(c)
+		if err != nil {
+			return err
+		}
+		if w.children[path] != string(body) {
+			pending = append(pending, pendingWrite{path: path, body: body})
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	if err := w.s.WriteTx(ctx, func(tx *store.Tx) error {
+		now := time.Now().UTC()
+		for _, item := range pending {
+			if _, err := tx.Append(event.Event{Kind: "run.child-session", ObjectType: "run", ObjectID: &w.req.RunID, Payload: item.body, At: now}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, item := range pending {
+		w.children[item.path] = string(item.body)
 	}
 	return nil
 }

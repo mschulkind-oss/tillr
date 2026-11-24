@@ -350,7 +350,7 @@ func assembleLanesCounted(r *store.Reader, storePath, loop, lanes string, now ti
 	if err := enrichLaneNodes(r, rows, loop, d.deadRuns, stats); err != nil {
 		return nil, err
 	}
-	if err := enrichWorkerRecords(r, rows); err != nil {
+	if err := enrichWorkerRecords(r, rows, stats); err != nil {
 		return nil, err
 	}
 	// The seat a run was dispatched for is on its decision row (tillr-drain's
