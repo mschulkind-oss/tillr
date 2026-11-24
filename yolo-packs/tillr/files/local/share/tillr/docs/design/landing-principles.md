@@ -8,7 +8,7 @@ summary: "Seventeen landing principles, each with the measurement it rests on, w
 
 # Landing principles
 
-> **Delivered copy.** This is `docs/design/landing-principles.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-principles.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/landing-principles.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-principles.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 This is the library, not another ruling. Each entry is one durable principle, the measurement it
 rests on, **what enforces it**, what is not enforced, and a scope line naming the program it binds.
@@ -87,7 +87,7 @@ Under the lock, `Land` ([`landing.go`](../../tillr-land/land/landing.go)) calls 
 to merge `base..head` onto `trunkBefore` through plumbing with no working tree, commits with the
 scope-checked `LandingIdentity` and the head's own message, and `Trunk.Move` advances the trunk
 guarded against `trunkBefore`. A landed commit carries no `Tillr-Item:` trailer
-([`queue-persistence-ruling.md`](queue-persistence-ruling.md#3-landing-receipts-without-commit-trailers)).
+([queue persistence](../reference/tillr-queue-persistence.md#landing-receipts-without-commit-trailers)).
 `Land` records the outcome in the `landings` table with both trees: `gated_tree` is the head's tree
 the verdict bound, `landed_tree` is the tree the trunk published.
 
@@ -262,7 +262,7 @@ retry, a design answer, or the recovery of a killed run. Infrastructure failures
 [recorded backend availability](../../tillr-drain/README.md#recorded-backend-availability).
 
 *Not enforced:* the failure fingerprint store, the fleet trip and the drain's own probes specified
-in [the cooldown-removal design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/failure-diagnosed-not-waited-out.md).
+in [the cooldown-removal design](tillr-judge-and-lifecycle.md#424-diagnosing-a-repeated-failure-the-unbuilt-mechanism).
 
 *Scope:* **not lander-scoped.** The lander dispatches no lanes and keeps no retry state.
 

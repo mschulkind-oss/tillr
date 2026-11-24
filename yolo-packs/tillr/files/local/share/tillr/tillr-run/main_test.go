@@ -1060,7 +1060,7 @@ func snapshotOf(t *testing.T, db string) storeSnapshot {
 // request leaves no lane directory, no lane row and no run row.
 //
 // timeout_ms 0 is NOT refused: it is an unbounded run, whose lane lease carries no expiry
-// (design D-RW1, docs/design/run-wall-ruling.md).
+// (design D-RW1, docs/reference/run-wall-ruling.md).
 func TestExecRefusesANegativeTimeout(t *testing.T) {
 	dir := scratch(t, "exec-notimeout")
 	db := filepath.Join(dir, "board.sqlite3")
@@ -1438,8 +1438,8 @@ func TestTheRequestFaceRefusesWhatItCannotDerive(t *testing.T) {
 	})
 }
 
-// TestHelpIsTheFaceSurface pins the layer-1 surface (docs/design/tillr-distribution.md
-// Section 3): `--help` names the faces and a face's `--help` names that face's flags, both
+// TestHelpIsTheFaceSurface pins the layer-1 surface (docs/reference/tillr-distribution.md,
+// "Documentation split"): `--help` names the faces and a face's `--help` names that face's flags, both
 // on stdout and both exit 0.
 func TestHelpIsTheFaceSurface(t *testing.T) {
 	code, out := run(t, "--help")

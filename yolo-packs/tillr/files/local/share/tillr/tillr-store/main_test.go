@@ -499,8 +499,8 @@ func TestEventsRefusesToWriteOverItsOwnStore(t *testing.T) {
 	}
 }
 
-// TestHelpIsTheFaceSurface pins the layer-1 surface (docs/design/tillr-distribution.md
-// Section 3): `--help` names the faces and a face's `--help` names that face's flags, both
+// TestHelpIsTheFaceSurface pins the layer-1 surface (docs/reference/tillr-distribution.md,
+// "Documentation split"): `--help` names the faces and a face's `--help` names that face's flags, both
 // on stdout and both exit 0. A prosa flag table is what this surface exists to replace, so
 // `--help` returning a usage error would make the documents cite a page that is not there.
 func TestHelpIsTheFaceSurface(t *testing.T) {

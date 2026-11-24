@@ -22,7 +22,7 @@ assigned lane, so `sync` does not warn that it is missing even on a fresh reposi
 Other absent paths still receive the ordinary `path-missing` warning.
 
 The design that splits this surface into `--help`, this README and the composition
-skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md).
+skill is [`docs/reference/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-distribution.md).
 
 ## Reporting documents that owe the queue work
 
@@ -375,7 +375,7 @@ The following rules describe Git-landing, including its refusal names
   reads every `<!-- tillr: item ... -->` directive that starts a line outside a fenced block
   in the Markdown git tracks under `docs/`, and writes the items they declare through the
   same record→row mapping `apply` uses. The directive grammar and the field mapping are
-  [the queue-persistence ruling's Section 1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/queue-persistence-ruling.md#1-shared-item-block-shape).
+  [the queue-persistence reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-queue-persistence.md#block-grammar-and-attributes).
   A new item is `in-queue`, or `not-started` when a roadmap's `## Icebox` or
   `## Exploration` section contains its block or links to its document. Parking also
   moves a stored `in-queue` item to `not-started` and clears its rank, through one

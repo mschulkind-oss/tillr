@@ -20,7 +20,7 @@ and clean up what a tick left behind. `copied-usage` detects repeated usage pair
 `mark-copied-usage` corrects one run whose usage came from an earlier run.
 
 The design that splits this surface into `--help`, this README and the composition
-skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md);
+skill is [`docs/reference/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-distribution.md);
 the shared adapter, brief, report, and policy contract is
 [`docs/reference/tillr-muse-backend.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-muse-backend.md).
 
@@ -50,7 +50,7 @@ the shared adapter, brief, report, and policy contract is
   arguments for the harness itself (tools, servers, standing text); the request's argv ends
   with `--` and then those arguments, in order, and a row with none gets no `--`. Only the
   claude adapter takes them; the others refuse the `--` before anything runs
-  ([the claude backend design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md#3-controlling-what-a-seat-may-use)).
+  ([the Claude backend reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-claude-backend.md#controlling-what-a-seat-may-use)).
 - **Only external `SIGTERM` and `SIGINT` record `end_cause: signal`.** When a run has not
   already settled, hit a repeating-call limit, timed out, or recorded an
   `ending_exception`, `exec` records `end_cause: signal` for a direct `SIGTERM` or `SIGINT`,

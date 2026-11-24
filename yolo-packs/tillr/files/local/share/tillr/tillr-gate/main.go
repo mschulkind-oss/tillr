@@ -66,7 +66,7 @@ func faceNames() string {
 
 // parseFlags parses one face's flags and reports whether it has already answered the
 // face. A `--help` writes the face's flags to stdout and answers 0 -- a face's flags are
-// the layer-1 surface (docs/design/tillr-distribution.md Section 3), so the request is an
+// the layer-1 surface (docs/reference/tillr-distribution.md, "Documentation split"), so the request is an
 // answer and not a usage error -- and any other flag error is the usage exit, exactly as
 // before. A face runs only when the second result is false.
 func parseFlags(flags *flag.FlagSet, args []string) (int, bool) {

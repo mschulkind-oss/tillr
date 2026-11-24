@@ -1,6 +1,6 @@
 #!/bin/sh
 # The Claude Code adapter: the only way a drain can spend the owner's Claude subscription,
-# which pi cannot reach (docs/design/tillr-claude-backend.md §2).
+# which pi cannot reach (docs/reference/tillr-claude-backend.md, "The adapter").
 #
 # It runs the Claude Code command line headless (`claude -p`) with the brief on stdin and
 # the stream of JSON lines on stdout. Three flags are always passed, and each is a

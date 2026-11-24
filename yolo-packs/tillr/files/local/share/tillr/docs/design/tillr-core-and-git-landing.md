@@ -15,11 +15,12 @@ depends-on:
 
 # tillr is a core of queues and graphs, and landing in Git is one charter on top of it
 
-> **Delivered copy.** This is `docs/design/tillr-core-and-git-landing.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-core-and-git-landing.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-core-and-git-landing.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-core-and-git-landing.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** The direction is the owner's ([Section 1](#1-the-direction-in-the-owners-words)). The
 charter file, the store that records it and a second charter that lands nothing are built
-([Section 8.2](#82-what-is-built-and-what-is-not)). Five decisions the build rests on are the
+([Section 8.2](#82-what-is-built-and-what-is-not)); the unbuilt units are in
+[Section 8.5](#85-the-unbuilt-units). Five decisions the build rests on are the
 designer's and are the owner's to overturn ([the ledger](#decision-ledger)).
 
 > **In short.** tillr is a core of queues and graphs plus one charter per use, and a charter is a
@@ -39,14 +40,12 @@ the core's programs.
 
 **Needs your ruling:** None.
 
-**Reads with:** [the build plan](tillr-definitions-plan.md) (the units of work),
-[the definition package's README](../../tillr/definition/README.md) (the file's keys and the
+**Reads with:** [the definition package's README](../../tillr/definition/README.md) (the file's keys and the
 hook contract), [tillr-item-graphs.md](../reference/tillr-item-graphs.md) (graphs inside one
 item), [the graph design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md) (landing as nodes of an item's graph),
 [the vocabulary](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md) (one meaning per word),
-[tillr-separable-parts.md](tillr-separable-parts.md) and
-[tillr-product-qa-requests.md](tillr-product-qa-requests.md) (what a non-landing use asked of
-the core).
+[tillr-separable-parts.md](tillr-separable-parts.md) (what a use that lands nothing asks of
+the core, and the contract it gets).
 
 ---
 
@@ -64,6 +63,18 @@ the core).
   in a Git repository, from item blocks in documents through a gate. Its data file is
   [landing.json](../../tillr/definition/landing.json) and its hook program is
   [tillr-loop](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/tillr-loop).
+- **Definition file:** the JSON file that states a definition's vocabulary and rules. Not a
+  workflow file, which states the steps of one item's graph.
+- **Hook program:** the one program a definition names, which the core calls for each judgment it
+  cannot make itself. Not a step flag on the drain's command line, which names one program per
+  step and wins over the hook when given.
+- **Ready state, finished states:** the definition's names for the state the planner dispatches
+  from and the states that end an item. Under `git-landing` they are `in-queue`, and `landed`,
+  `resolved-elsewhere` and `closed`.
+- **Prerequisite:** a named condition the planner checks before it dispatches an item, such as
+  having a design document. A definition names which ones apply to it.
+- **Store that does not land:** a store whose definition completes items some way other than a
+  landing.
 - **A step program:** a program the drain runs for one step and reads by its exit code
   ([steps.go](../../tillr-drain/drain/steps.go)).
 
@@ -88,16 +99,17 @@ Owner ruling, 2026-11-16, restated:
    reverse, that tension is the signal that the choice does not belong in the core: each
    definition supplies it. [Section 6](#6-what-this-changes-in-what-was-said-before) applies it.
 
-### 1.1 The owner's words, as reported by Product QA
+### 1.1 Positions a second use raised
 
-Four further positions of the owner reached this design through the requests of a second use, a
-pipeline that records findings and lands nothing
-([tillr-product-qa-requests.md](tillr-product-qa-requests.md)), and stand as follows:
+Four further positions reached this design through the requests of a second use, a pipeline that
+records findings and lands nothing
+([its requests](tillr-separable-parts.md#7-a-consumers-requests-and-the-state-of-each)), and
+stand as follows:
 
 | Position | Standing |
 | :--- | :--- |
 | A started node is fixed; anything not started may be changed, and the core must not preclude a definition's policy | The owner's direct ruling, in [the graph design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md) |
-| Whether a finished item may be reopened is a definition's policy | Reported only. Built as each definition's list of valid moves, on the designer's `D-CG4` |
+| Whether a finished item may be reopened is a definition's policy | Not ruled by the owner directly. Built as each definition's list of valid moves, on the designer's `D-CG4` |
 | No fixed graph size limits | The owner's direct ruling; an expanded graph reports its size and is refused for none (`D-IG4` in [tillr-item-graphs.md](../reference/tillr-item-graphs.md#why-its-this-way)) |
 | No clock that fails work: budgets are targets and stalls are watched | The owner's direct ruling |
 
@@ -260,7 +272,7 @@ The choices the build rests on:
 | 3 | The kind of layer is a charter and the first instance is `git-landing`; the code keeps "definition" | The owner's | [OQ-CG5](#OQ-CG5) |
 | 4 | The store records the definition it runs, at `tillr store init --definition`; a store with none recorded runs `git-landing` | The designer's | `D-CG2` |
 | 5 | Separation runs beside the drain under a safety rule: the Git-landing queue behaves identically, the existing suites pass unchanged, and an older store opens and drains | The owner's go-ahead; the rule is the designer's | [OQ-CG3](#decision-ledger), `D-CG3` |
-| 6 | Reopening and graph change are a definition's policy; no fixed graph caps; no clock whose only consequence is a kill | The owner's, except reopening ([Section 1.1](#11-the-owners-words-as-reported-by-product-qa)) | `D-CG4` |
+| 6 | Reopening and graph change are a definition's policy; no fixed graph caps; no clock whose only consequence is a kill | The owner's, except reopening ([Section 1.1](#11-positions-a-second-use-raised)) | `D-CG4` |
 
 ### 8.1 What a store that does not land needs from the core
 
@@ -299,7 +311,56 @@ workflows and their nodes, and the views.
 - **Most of the landing behavior behind the hook.** Intake, staging, the candidate rule, the
   boundary check, trunk observation and conflicts are Go in the drain.
 - **The remaining extension points** marked not built in [Section 5](#5-the-extension-points);
-  [the build plan](tillr-definitions-plan.md) lists them as units of work.
+  [Section 8.5](#85-the-unbuilt-units) lists them as units of work.
+
+### 8.3 Rules the build settled
+
+- **"Ready" governs an item's own work, not the answer to a conflict.** The item's own work is dispatched only from the definition's ready state; a conflict's answer run is dispatched from the definition's blocked state. Under a definition that does not complete on a landing, the conflict holds are not raised, and an item in the blocked state is held `blocked`.
+- **One finished-state rule.** Every reader in the drain and the view asks the store's definition which states are finished; none keeps a list of its own.
+- **Each prerequisite name gates its own holds, including the checks that come before them.** A prerequisite the definition does not name is not read at all, so it can neither hold nor fail. A definition that does not name `design-questions` never asks the comment source anything.
+- **The planner reads the definition once per pass** and judges every item, including one already in flight, against that reading. A definition replaced while a run is in flight takes effect at the next pass, and the definition is not recorded on a dispatch.
+- **Every hold reason is a named constant with a waiting rule in the view,** so a test can find every reason and class it as general or landing-only.
+- **Finished states come from the definition; frozen states take no receipt.** The states `abandoned`, `deleted` and `in-progress` stay readable and are never written under any definition.
+- **A repeated move appends nothing.** A write of the state an item already has answers the item and adds no event, so it does not overwrite a stored receipt.
+
+### 8.4 Completion through the definition's hook for items that never land
+
+An item of a store that does not land is finished when it has been judged, not when a commit lands. A definition whose `completes` value is `hook` finishes its items through the `complete-item` hook: once a run ends, the hook records the verdicts and names the finished state, and the drain moves the item there with the reason, pointer and actor.
+
+- **The verdict check belongs to the move, not to the drain.** `tillr item apply` can append a criterion between a read in the drain and the state move, and the item would then finish with a criterion nobody judged. So the check runs inside the move's own write transaction: `tillr item state --require-verdicts` refuses the move as `criteria-unjudged` unless every criterion the item holds at that moment has a recorded verdict naming the hash of its stored text. The drain passes the flag on every move a `complete-item` answer causes, turns the refusal into a hold, and keeps no second check of its own.
+- **The flag is opt-in.** Without it a move behaves as before, so the loop's move to `landed` and the owner's hand moves are untouched. Making the rule part of a definition, so that no move into a finished state can skip it, is not decided.
+- **Recovery after the move never enters Git.** Under a definition that completes on `hook`, recovery of an ended run reads the item. If the item is already in a finished state, the move happened: the drain writes the end-of-run records that are missing and does not call the hook again. Otherwise it runs the completion step again from the hook call.
+- **Calling the hook twice is safe.** A verdict recorded twice is two events for the same answer, and a move to the state an item already has appends nothing.
+- **The Git-only checks made when a run is claimed are skipped under `hook`,** and run as before under `git-landing`.
+
+### 8.5 The unbuilt units
+
+None of these units is queued. Each builds on the definition file, the hook contract or the worked
+example, and each rests on the choices in [the ledger](#decision-ledger). Unit 4 also rests on the
+designer's amendment to `D-IG4` in [item graphs](../reference/tillr-item-graphs.md#why-its-this-way).
+The request ids are those of
+[the separable-parts tables](tillr-separable-parts.md#7-a-consumers-requests-and-the-state-of-each).
+
+1. **Count outcomes and draw the views from the definition** ([R2-8](tillr-separable-parts.md#73-the-first-list)). The status face and the observatory count items by the definition's finished states, and the landings and trunk pages appear only for a definition that lands.
+2. **Add a detail panel from the `detail` hook** (R2-7). The item page asks the hook program for a record drawn from the item's `body_ref`. The hook's contract is written and checked at start; nothing calls it.
+3. **Add graph change as a definition's policy, inside the four core rules** (R2-9). The core keeps one writer per change with its event, no node replacing itself, nothing started changing, and the downstream-shape check. A definition may allow a running node to insert one node directly downstream of itself with the same output shape, and may allow appending nodes to a finished graph, which the next scheduling pass starts.
+4. **Replace the fixed graph caps with a size shown before dispatch** (R2-10). The concern behind `D-IG4` is runaway expansion and the spend that follows it. The guard is the refusal of cycles among workflow files, which makes expansion finite, plus the expanded size shown before the first node runs, plus a budget a definition may set that leads to a named next step for the owner, never a silent refusal. The workflow check reports graph size and refuses no graph for its depth or node count ([workflow_check.go](../../tillr-drain/workflow/workflow_check.go)); [design-from-scouts@v1.json](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/workflows/design-from-scouts@v1.json) bounds scout prompts at `most: 8`; a size budget supplied by a definition is not built.
+5. **Add an uncertain outward effect as a state that blocks a retry until reconciled** (R2-12).
+6. **Add time and tokens per step attempt, with their source** (R2-13). A command step's record says `none` for tokens, not zero.
+7. **Add an owner acknowledgment point** (R2-14): a recorded "seen" per item.
+8. **Verify the waiting class of a blocked item on both faces.** `tillr view waiting` and the served answer both assemble rows through `assembleWaiting` in [waiting.go](../../tillr-view/waiting.go) and the reason table in [holdrules.go](../../tillr-drain/holdrules/holdrules.go); a test that a blocked item reads the same on both is what remains.
+9. **Test that a run started from the record sink's own request links to it,** and fix it if the next pass holds it `run-link-missing`.
+10. **Add the `after-completion` hook and the retention rule.** Roll and push become the `git-landing` definition's `after-completion` hook, and `retention` gains its first rule beyond `keep`. The hook's contract is written and checked at start; nothing calls it.
+
+**The safety rule every change to the core carries** (`D-CG3`). Under `git-landing` the queue
+behaves identically, the existing suites pass unchanged, and a store created before the change
+opens and drains. The drain runs on this code while it is rebuilt, so a change that breaks the
+Git-landing queue stops the building of the rest.
+
+The embedded `git-landing` definition leaves `hooks` unset: the drain's step flags name the six
+step programs. Naming `tillr-loop` in the embedded definition makes the drain run the hook
+program's `describe` at every loop start, including in fixtures that have no such program, so it
+waits on a change to the drain's start check or its fixtures.
 
 ---
 
@@ -318,5 +379,5 @@ decision, which the owner may overturn.
 | `D-CG1` | The one file is a data file plus one hook program, and item graphs stay the inside of an item. It is the seam tillr already enforces, processes and records. **Rejected:** the data file alone; the hook program alone; a workflow graph as a rival shape. | 2026-11-17, designer | [Section 4](#4-what-one-file-could-mean) | ✅ |
 | `D-CG2` | The store records the definition it runs; every utility opens the store, so none can disagree. **Rejected:** a flag on each utility. | 2026-11-17, designer | [Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices) | ✅ |
 | `D-CG3` | The safety rule for separating code the drain runs on. **Rejected:** a freeze on the drain while it is rebuilt. | 2026-11-17, designer | [Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices) | ✅ |
-| `D-CG4` | Whether an item may leave a finished state is each definition's policy, stated in its valid moves. **Rejected:** reopening refused core-wide. | 2026-11-17, designer | [Section 1.1](#11-the-owners-words-as-reported-by-product-qa) | ✅ |
+| `D-CG4` | Whether an item may leave a finished state is each definition's policy, stated in its valid moves. **Rejected:** reopening refused core-wide. | 2026-11-17, designer | [Section 1.1](#11-positions-a-second-use-raised) | ✅ |
 | `D-CG5` | The Judgment column of Section 6: which declined requests are tensions a definition settles and which are protections every definition keeps. | 2026-11-17, designer | [Section 6](#6-what-this-changes-in-what-was-said-before) | — |

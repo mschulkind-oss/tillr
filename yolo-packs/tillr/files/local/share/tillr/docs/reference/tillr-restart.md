@@ -32,8 +32,8 @@ related:
   - ./tillr-drain-successor.md
   - ./tillr-build-commit.md
   - ./observatory-redesign.md
+  - ./tillr-refused-push.md
   - ../design/tillr-selfhosted-build.md
-  - ../design/tillr-refused-push.md
   - ./gate.md
 tags: [tillr, drain, view, run, restart, settings, reference]
 summary: "How tillr replaces `tillr-drain loop` and `tillr-view serve` in place through restart requests recorded in the store, pauses and continues agent sessions without spending an attempt, reads `.tillr.toml`, and rolls and pushes after landings."
@@ -41,7 +41,7 @@ summary: "How tillr replaces `tillr-drain loop` and `tillr-view serve` in place 
 
 # Restarting tillr in place, pausing sessions, and post-landing roll and push
 
-> **Delivered copy.** This is `docs/reference/tillr-restart.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-restart.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-24 by reading the code named in `covers`.
 UNMEASURED: this reference records no observation of a live restart, pause or
@@ -287,7 +287,7 @@ a fenced express repair item (`remote-sync-conflict`). A merge commit among the
 unpublished commits, or a checkout that cannot be moved safely, needs the
 operator.
 
-Under [OQ-RP4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md#OQ-RP4), tillr stamps the
+Under [OQ-RP4](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-refused-push.md#OQ-RP4), tillr stamps the
 configured Git identity on its own trunk landings and enforces nothing about
 any other commit's identity. The published pointer guards against a remote
 rewrite, not against other authors.
@@ -399,7 +399,7 @@ read from `<store>.roll-alarm.json` instead.
 - **A restart does not migrate a running session onto the new build.** A
   worker finishes the segment it started; only a pause request stops one early.
 - **No forced push.** Recovery from a refused push is the linear replay; see
-  [`tillr-refused-push.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md).
+  [`tillr-refused-push.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-refused-push.md).
 - **Patch-branch publication is not tied to `refs/tillr/green`.** Whether to
   narrow it to proved commits is undecided.
 

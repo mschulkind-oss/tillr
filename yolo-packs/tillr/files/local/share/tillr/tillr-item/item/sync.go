@@ -26,7 +26,8 @@ import (
 // and a second record of the batch would claim a transition the log did not make.
 const SyncRecordKind = "item.sync"
 
-// The item block grammar (docs/design/queue-persistence-ruling.md Section 1, D-RS1, and the
+// The item block grammar (docs/reference/tillr-queue-persistence.md, "Block grammar and
+// attributes", D-RS1, and the
 // seat and source-placement amendments):
 //
 //	### <Title>
@@ -120,7 +121,7 @@ type SyncReport struct {
 
 	// UnsharedOpen counts the store's non-terminal items that no document block declares and
 	// that are not store-declared (an item carrying workflow_args, which its record declares):
-	// private residue (docs/design/queue-persistence-ruling.md Section 4). The oldest one's
+	// private residue (docs/reference/tillr-queue-persistence.md, D-RS4). The oldest one's
 	// last write is named so the residue's age is visible, not only its size.
 	DocumentFed        bool     `json:"document_fed"`
 	UnsharedOpen       int      `json:"unshared_open"`

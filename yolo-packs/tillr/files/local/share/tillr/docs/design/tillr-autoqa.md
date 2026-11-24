@@ -16,14 +16,14 @@ depends-on:
   - ../reference/tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
   - board-utilities.md
-  - tillr-distribution.md
+  - ../reference/tillr-distribution.md
 vantage:
   status-chip: true
 ---
 
 # Standalone AutoQA on the Tillr Contracts
 
-> **Delivered copy.** This is `docs/design/tillr-autoqa.md` from this repository at commit `0275c51d52` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-autoqa.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-autoqa.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-autoqa.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Iceboxed by the owner: the design is parked on [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), neither abandoned nor accepted, and nothing below is being built. No AutoQA code exists: `rg -il autoqa tools -g '*.go'` finds only the code and tests that refuse the retired store vocabulary. The owner has ruled on nothing in this document: every row of its [ledger](#decision-ledger) is a designer's decision.
 
@@ -41,7 +41,7 @@ vantage:
 
 **Needs your ruling:** None while the design is iceboxed. [OQ-AQ2](#OQ-AQ2) is blocked until the owner picks the design up.
 
-**Reads with:** [item graphs](../reference/tillr-item-graphs.md) ([workflows](../reference/tillr-item-graphs.md#workflows-selection-and-expansion), [producer-bound artifacts](../reference/tillr-item-graphs.md#producer-bound-artifacts) and [the workflow evaluator](../reference/tillr-item-graphs.md#workflow-evaluator)), [the judge and lifecycle](tillr-judge-and-lifecycle.md) (the judge contract, and `D-JL7`, which keeps AutoQA vocabulary out of the store), [board utilities](board-utilities.md) (the standalone utility boundaries), [tillr distribution](tillr-distribution.md) (the pack), and [the idea pipeline](tillr-idea-pipeline.md) (`derived_from` lineage).
+**Reads with:** [item graphs](../reference/tillr-item-graphs.md) ([workflows](../reference/tillr-item-graphs.md#workflows-selection-and-expansion), [producer-bound artifacts](../reference/tillr-item-graphs.md#producer-bound-artifacts) and [the workflow evaluator](../reference/tillr-item-graphs.md#workflow-evaluator)), [the judge and lifecycle](tillr-judge-and-lifecycle.md) (the judge contract, and `D-JL7`, which keeps AutoQA vocabulary out of the store), [board utilities](board-utilities.md) (the standalone utility boundaries), [tillr distribution](../reference/tillr-distribution.md) (the pack), and [the idea pipeline](tillr-idea-pipeline.md) (`derived_from` lineage).
 
 **Words.** A **System Under Test (SUT)** is the program AutoQA probes; the first is tillr. A **workflow** is a tracked graph of nodes an item runs through, defined by [item graphs](../reference/tillr-item-graphs.md). An **evaluator slot** is the place in a workflow where a judge node sits. [The vocabulary](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#5-the-words) defines item, node, judge, gate and lane.
 
@@ -210,7 +210,7 @@ Every AutoQA reference inside tillr gets a ruling (`D-AQ7`). The last column is 
 | :--- | :--- | :--- |
 | The pack handoff brief, [autoqa-handoff.md](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/tasks/autoqa-handoff.md) | **Delete.** | No: the file is in `yolo-packs/tillr/tasks/`. |
 | The tillr pack's description in [pack.json](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/pack.json) | **Keep the pack; delete the AutoQA text.** | No. |
-| The `tillr-autoqa` skill that [tillr distribution](tillr-distribution.md) proposes | **Supersede.** The tillr pack ships only its operating skill; AutoQA ships in a pack of its own. | The skill is not built; that document still describes it. |
+| A `tillr-autoqa` skill in the tillr pack | **Refuse.** The tillr pack ships only its own skills; AutoQA ships in a pack of its own. | Yes: the skill is not built, and [tillr distribution](../reference/tillr-distribution.md#the-autoqa-handoff-through-the-pack) states the rule. |
 | The AutoQA gap in the eight module READMEs | **Delete it** in one change that keeps [tests/tillr-docs.test.py](https://github.com/mschulkind-oss/tillr/blob/main/tests/tillr-docs.test.py) passing, and regenerate the pack copy. | No: `rg -c 'AutoQA handoff skill is not shipped' tools/*/README.md` answers 1 for each of the eight. |
 | The general-purpose seams: gate events from the drain, exit-code propagation, `gate change` and `run request` | **Keep in tillr.** | Yes. |
 | The store's `autoqa` actor kind, `qa-verification` claim class and `autoqa` decider | **Retire from what can be written**, keeping old rows readable. | Yes: new writes are refused with the rule `actor-retired`. |
@@ -265,7 +265,6 @@ Every row is a designer's decision; the owner has ruled on none of them and may 
 
 ### 6.3 Amendments Owed
 
-- **[tillr distribution](tillr-distribution.md)** still describes a `tillr-autoqa` skill in the tillr pack; `D-AQ1` and `D-AQ7` supersede it.
 - **The eight `tools/tillr-*/README.md` files** carry the AutoQA gap; it is removed, with the pack copy regenerated, in Slice 1 ([§5.2](#52-dogfood-rollout-against-tillr)).
 
 ## Queue item
