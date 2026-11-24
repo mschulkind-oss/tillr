@@ -39,7 +39,6 @@ depends-on:
 - [`tillr-judge-and-lifecycle.md`](./tillr-judge-and-lifecycle.md): what a worker may end with, which is how a planner reports a wrong criterion.
 - [`tillr-graph-is-the-path.md`](./tillr-graph-is-the-path.md): the rule against counts, and seats declared in the policy.
 - [`model-benchmarks-from-drain-records.md`](./model-benchmarks-from-drain-records.md): replaying recorded tasks, the other way to compare models.
-- [The roadmap section that filed the planning stage](../tillr/roadmap.md#filed-2026-11-18-plan-first-then-spend-each-model-where-it-is-enough).
 
 No implementation plan exists, and none is owed until [OQ-PT8](#OQ-PT8) can be asked.
 
@@ -96,7 +95,7 @@ Spend is concentrated in large items. Items whose total is over $3 hold 87% of s
 | Never edited, exited normally | 30 | $5.90 |
 | Never edited, then killed | 28 | $3.43 |
 
-A run that never edits is a scout by accident and costs about $0.20. **39 of the 140 Sol runs that edited (28%) ended with their edits uncommitted**: the defect that [ending with passing work uncommitted](../tillr/roadmap.md#prevent-a-build-run-from-ending-with-passing-work-uncommitted) fixed.
+A run that never edits is a scout by accident and costs about $0.20. **39 of the 140 Sol runs that edited (28%) ended with their edits uncommitted**: a defect that has since been fixed.
 
 ### 1.2 Where a Sol run's money goes
 
@@ -255,7 +254,7 @@ The model names and prices in this document apply to the work machine alone. The
 
 ## 5. The planning stage as built
 
-Seven items landed on 2026-11-18, cut from [the roadmap's planning block](../tillr/roadmap.md#add-a-planning-stage-that-fans-implementation-out-by-seat). This section states what they built; the drain's [README](../../tools/tillr-drain/README.md) is the reference.
+Seven items landed on 2026-11-18, cut from the roadmap's planning block. This section states what they built; the drain's [README](../../tools/tillr-drain/README.md) is the reference.
 
 ### 5.1 The workflow
 
@@ -445,7 +444,7 @@ What exists before then, read on 2026-11-19:
 - **Luna has run on scouting, not in a planned build.** Read from the store on 2026-11-19, 47 `node_runs` rows on the `scout` seat name `gpt-6-luna` in `item-doc-triage-2026-11-18-tillr-roadmap-designs` (`doc-triage@v1`), with 44 priced runs totaling $1.12. No run has used the `test-run` seat, and no `planned-build@v1` item has run a piece on Luna.
 - **A second way to compare models exists on paper:** replaying recorded tasks for several models side by side, in [the model benchmarks design](./model-benchmarks-from-drain-records.md). The cost report compares what landed items cost in production; a replay compares models on the identical task. Neither replaces the other.
 
-One figure is computed inside tillr: the cost medians above. The owner's ruling of 2026-11-15 puts comparisons between backends in a separate project of his, computed from the run records ([the seat-share item](../tillr/roadmap.md#add-backend-shares-to-distribute-seat-work)); that still holds for every rate other than these medians (`D-PT5` in the [Decision Ledger](#decision-ledger)).
+One figure is computed inside tillr: the cost medians above. The owner's ruling of 2026-11-15 puts comparisons between backends in a separate project of his, computed from the run records (the seat-share work); that still holds for every rate other than these medians (`D-PT5` in the [Decision Ledger](#decision-ledger)).
 
 ---
 
