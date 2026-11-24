@@ -57,6 +57,10 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 // ticks overrides the fallback clock in tests; wait uses a 15-second fallback
 // ticker and daemon uses a 60-second ticker.
 func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, ticks <-chan time.Time) int {
+	return runWithWaitHooks(ctx, args, out, stderr, ticks, nil)
+}
+
+func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer, ticks <-chan time.Time, hooks *waitTestHooks) int {
 	fail := func(err error) int { fmt.Fprintln(stderr, "tillr watch:", err); return 1 }
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(out, help)
@@ -201,7 +205,7 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 			return fail(err)
 		}
 	case "wait":
-		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, root: root, timeout: timeout, fallbackPoll: fallbackPoll, follow: follow, noNotify: noNotify, ticks: ticks}, out, stderr)
+		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, root: root, timeout: timeout, fallbackPoll: fallbackPoll, follow: follow, noNotify: noNotify, ticks: ticks, hooks: hooks}, out, stderr)
 		if err != nil {
 			return fail(err)
 		}

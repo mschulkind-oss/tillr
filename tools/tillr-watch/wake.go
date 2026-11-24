@@ -135,6 +135,7 @@ type notifyWakeOptions struct {
 	noNotify          bool
 	ticks             <-chan time.Time
 	minNotifyInterval time.Duration
+	onCoalesce        func() func()
 }
 
 type notifyWakeSource struct {
@@ -144,6 +145,7 @@ type notifyWakeSource struct {
 	stopTicker        func()
 	wakes             chan struct{}
 	minNotifyInterval time.Duration
+	onCoalesce        func() func()
 	lastNotifyWake    time.Time
 	deadlineExpired   bool
 	flushedDeadline   bool
@@ -181,6 +183,7 @@ func watchNotify(ctx context.Context, storePath string, opts notifyWakeOptions) 
 		stopTicker:        stopTicker,
 		wakes:             make(chan struct{}, 1),
 		minNotifyInterval: opts.minNotifyInterval,
+		onCoalesce:        opts.onCoalesce,
 		relayParentCtx:    context.WithoutCancel(ctx),
 	}
 	if opts.noNotify {
@@ -343,6 +346,10 @@ func (s *notifyWakeSource) beginPass() {
 	}
 }
 
+func (s *notifyWakeSource) coalesceArmed() bool {
+	return !s.lastNotifyWake.IsZero()
+}
+
 func (s *notifyWakeSource) next(ctx context.Context, deadline <-chan time.Time) (wakeReason, error) {
 	if ctx.Err() != nil {
 		return notifyWake, ctx.Err()
@@ -388,6 +395,11 @@ func (s *notifyWakeSource) next(ctx context.Context, deadline <-chan time.Time) 
 			if s.minNotifyInterval > 0 && !s.lastNotifyWake.IsZero() {
 				if rem := time.Until(s.lastNotifyWake.Add(s.minNotifyInterval)); rem > 0 {
 					timer := time.NewTimer(rem)
+					if s.onCoalesce != nil {
+						if leave := s.onCoalesce(); leave != nil {
+							defer leave()
+						}
+					}
 					select {
 					case <-ctx.Done():
 						timer.Stop()
