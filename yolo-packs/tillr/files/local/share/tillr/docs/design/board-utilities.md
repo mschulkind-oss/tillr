@@ -10,7 +10,7 @@ summary: "Seven utilities over one shared substrate — store, item, land, drain
 
 # Board utilities: seven utilities over one shared substrate
 
-> **Delivered copy.** This is `docs/design/board-utilities.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/board-utilities.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Accepted, 2026-11-06. Companion to `docs/design/board-sanity-recovery.md` and `docs/design/board-names.md`. **Read the "today" below as the tree the contract was written against (2026-11-06):** the board CLI it decomposes was deleted on 2026-11-11 (`3f02e3b916`, `afdc9a9571`), so every present-tense sentence about `tools/board-cli` is history. The contract itself is live: the seven `tools/tillr-*` binaries implement it, and [the document retirement](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-docs-retirement.md) records which of its companion documents were absorbed or superseded.
 
@@ -492,6 +492,19 @@ stored, including the event sequence it produced; an `apply` that violates
 an edge or state rule exits 1 with an `item.rejection` record naming the
 rule, and writes nothing.
 
+For the Git-landing definition, entering `landed` requires at least one criterion,
+all `done` (`landed-criteria-unmet`), and a current receipt: a `landings` row
+with result `landed` or a `drain.graph-completed` event naming the item
+(`landed-receipt-missing`). A receipt is current if it follows the latest
+return from `landed` to `in-queue`, or no return has occurred. Entering
+`resolved-elsewhere` requires `--resolves-via` with `item:<id>` naming another
+stored item, `commit:<sha>`, or `doc:<path>` (`resolved-pointer-missing`); a
+current receipt refuses the move as `already-landed`. `show` prints the pointer.
+These rules cover changes through `state` and `apply`, not imports of new
+finished items or reads of existing ones. Finished states are terminal except
+that `state` may return a reverted `landed` item to `in-queue` with `--reason`
+and `--by`; `apply` cannot make that return. Same-state writes are idempotent.
+
 Criterion text and criterion state are not ordinary editable fields, and
 `apply` is not their writer. A criterion's `text` is frozen when the
 criterion is first stored: an `apply` that presents different text for an
@@ -504,7 +517,7 @@ actor kind (`mechanical` / `agent` / `human`). An `apply` carrying a changed
 criterion state with no verdict is refused, and a verdict naming any hash
 but the frozen text's is refused; only a verdict retires an item. Who may
 produce each actor kind's verdict — the composed pipeline for a mechanical
-one, an agent only under a recorded sign-off grant — is ruled in
+one, an agent only as the selected workflow's independent evaluator — is ruled in
 [`work-control-judge-in-tillr.md`](work-control-judge-in-tillr.md)
 ([Retirement in the end state](work-control-judge-in-tillr.md#retirement-in-the-end-state)).
 Repairing a frozen criterion that is itself wrong is a supersession record,
@@ -525,18 +538,19 @@ is refused as `claim-class-weakened`. Omitting an authority-bearing criterion
 is refused too, even before it has a verdict, so removing and recreating it
 cannot weaken its class. Class-only hardening does not rewrite frozen
 criterion text or its verdict state. The actor rules, settled in
-[the judge and lifecycle design](tillr-judge-and-lifecycle.md#22-when-generic-judging-survives--and-closing-the-mechanical-stamp-hole-d-jl2), are:
+[the judge and lifecycle design](tillr-judge-and-lifecycle.md#6-the-judge-is-a-step-in-the-flow), are:
 
 | Stored class and meaning | `mechanical` | `agent` | `human` |
 | :--- | :--- | :--- | :--- |
-| `verification-only`: truth settled by a named check on evidence | Allowed with evidence | Allowed with independence and a grant covering this class | Allowed |
-| `red-gate-triage`: judgment about a failing gate | Refused | Allowed with independence and a grant covering this class | Allowed |
-| `direction`: choice between defensible directions | Refused | Allowed with independence and a grant covering this class | Allowed |
+| `verification-only`: truth settled by a named check on evidence | Allowed with evidence | Allowed with independence when listed in `judge_classes` | Allowed |
+| `red-gate-triage`: judgment about a failing gate | Refused | Allowed with independence when listed in `judge_classes`; not listed by the shipped evaluators | Allowed |
+| `direction`: choice between defensible directions | Refused | Allowed with independence when listed in `judge_classes`; not listed by the shipped evaluators | Allowed |
 | `owner-only`: a decision reserved to the owner | Refused | Refused | Allowed; sole writer |
 
 `verdict record` refuses a class differing from the stored one as
 `claim-class-mismatch`, and an incompatible actor as `claim-class-actor`.
-`grant issue` refuses any scope naming `owner-only` as `grant-owner-only`.
+Agent intake checks the persisted evaluator and its class list, and binds the
+verdict to the selected graph, node and exact candidate. No renewal is required.
 A `verification-only` criterion matching `(?i)^owner decision recorded\b`
 is refused by both definition writers as `owner-criterion-untyped`.
 On a migrating store opening, the item utility's registered migration types
@@ -727,7 +741,7 @@ only when staging passes an explicit `--timeout N`. What a wall does not
 excuse is the work a killed run produced: `drain`'s `settle` judges any
 run whose target `HEAD` moved off its base, whatever the exit status, and
 only a run that committed nothing is unjudged
-([`tillr-drain-successor.md`](tillr-drain-successor.md) [Section 2.3](tillr-drain-successor.md#23-the-transition-table)).
+([`tillr-drain-successor.md`](../reference/tillr-drain-successor.md) [Transition Table](../reference/tillr-drain-successor.md#transition-table)).
 
 **Requires:** a store and a caller-named lane root. In fixture use the
 command is a stub (`/bin/true`, a script that writes a known artifact), so
@@ -1477,6 +1491,9 @@ described in one paragraph is a cost this design declines to pay
 
 ## 14. Decision ledger
 
+`D-UT16` records the original claim authority rule. Its grant terms are
+superseded by [the workflow rulebook](tillr-judge-and-lifecycle.md#rulebook-and-its-enforcement).
+
 | ID | Decision | Grounds |
 |---|---|---|
 | D-UT1 | Decompose `tools/board-cli` into utilities over one shared SQLite substrate, partitioned by writer. | G1–G5; [§2](#2-the-seam-analysis) |
@@ -1495,7 +1512,7 @@ described in one paragraph is a cost this design declines to pay
 | D-UT14 | Final gating remains serial — one candidate, one verdict bound to its tree. Parallel gates against one trunk produce at most one landable verdict, and textual non-overlap does not prove semantic independence; parallelism is spent on advisory preflight instead. Speculative gating reopens only on post-decomposition measurements named in [§10.1](#101-parallel-gating-of-non-overlapping-candidates). | [§5.4](#54-land-alone), [§5.10](#510-landing-a-candidate-by-hand-without-the-drain), [§10.1](#101-parallel-gating-of-non-overlapping-candidates) |
 | D-UT15 | No seam moves for a hypothetical second consumer. Reuse is the substrate mechanisms, the record contract, and whichever individual binaries — `tillr-gate` first — a second system takes on their own; a work producer is a client of `item` and a reader of the event log, not an eighth utility, and `drain`'s policy stays board policy with execution already separated in `run`. A second system otherwise builds its own utilities; this reopens only on evidence that the substrate libraries themselves must fork, not on that system needing its own tables, records, or utilities. | [§3.4](#34-the-four-question-test), [§5.3](#53-item-alone), [§5.5](#55-drain-alone), [§5.7](#57-gate-alone), [§8](#8-the-shared-substrate), [§13.1](#131-what-a-second-consumer-would-reuse-and-what-it-would-not) |
 | D-UT16 | Criterion state moves only on an `item.verdict` naming the frozen criterion text's hash, and frozen criterion text cannot be rewritten through `item apply` (append only). Stored `item_criteria.claim_class` defaults to `verification-only` and can only harden. A mechanical verdict from a landed attempt retires only `verification-only`; an agent-issued verdict counts only under an independent actor and a store-enforced grant covering the stored class, never `owner-only`; a human alone judges `owner-only`. Verdict classes must match the stored class, and grants cannot delegate `owner-only`. The actor table and named refusals are in the governing section. (Designer's decision, 2026-11-12, written as a "design ruling"; the owner may overturn it. Claim authority settled 2026-11-16.) | [§5.3](#53-item-alone); [`work-control-judge-in-tillr.md`](work-control-judge-in-tillr.md) ([Retirement in the end state](work-control-judge-in-tillr.md#retirement-in-the-end-state)) |
-| D-UT17 | A lane lease is set by `run exec` at claim for the run's `timeout_ms` plus a 300,000 ms grace, on the store host's clock; `timeout_ms: 0` is an unbounded run whose lease carries `leased_until = NULL` and which no clock reaps; the terminal record releases it, `drain once` reaps an expired lease before planning, and `run release` is the standalone release face. A correction retry keeps the item's lane and worktree under a new lease. (Designer's decision, 2026-11-12, written as a "design ruling"; the owner may overturn it. Unbounded leases amended 2026-11-15 by [`run-wall-ruling.md`](run-wall-ruling.md) `D-RW1`, superseding this decision's mandatory positive wall.) | [§5.5](#55-drain-alone), [§5.6](#56-run-alone); [`tillr-muse-backend.md`](tillr-muse-backend.md) [Section 5](tillr-muse-backend.md#5-steering) |
+| D-UT17 | A lane lease is set by `run exec` at claim for the run's `timeout_ms` plus a 300,000 ms grace, on the store host's clock; `timeout_ms: 0` is an unbounded run whose lease carries `leased_until = NULL` and which no clock reaps; the terminal record releases it, `drain once` reaps an expired lease before planning, and `run release` is the standalone release face. A correction retry keeps the item's lane and worktree under a new lease. (Designer's decision, 2026-11-12, written as a "design ruling"; the owner may overturn it. Unbounded leases amended 2026-11-15 by [`run-wall-ruling.md`](run-wall-ruling.md) `D-RW1`, superseding this decision's mandatory positive wall.) | [§5.5](#55-drain-alone), [§5.6](#56-run-alone); [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md#steering-continuation-and-session-modes) |
 | D-UT19 | A run names its item: `run.record` carries `item_id`, copied from the request and materialized on the `runs` row, so every run is traceable to the work it was dispatched for. (Owner ruling, 2026-11-12.) | [§5.6](#56-run-alone), [§5.5](#55-drain-alone) |
 | D-UT18 | A gated candidate whose trunk moved is carried: `land pass` re-applies it onto the current tip and lands a clean re-application with no second gate; a conflicting re-application isolates the candidate. (Owner ruling stands, recorded 2026-11-12.) | [§5.4](#54-land-alone), [§5.10](#510-landing-a-candidate-by-hand-without-the-drain); [`landing-principles.md`](landing-principles.md) [Section 3](landing-principles.md#3-gate-what-will-be-the-tip-once) |
 | OQ-UT1 | One shared SQLite database, partitioned by writer. Nothing yet pays for several, and the record contract does not foreclose them later. (Owner ruling, 2026-11-06.) | [§8](#8-the-shared-substrate) |

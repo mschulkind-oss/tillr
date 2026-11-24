@@ -15,14 +15,14 @@ depends-on:
   - tillr-core-and-git-landing.md
   - tillr-product-qa-requests.md
   - tillr-definitions-plan.md
-  - tillr-item-graphs.md
+  - ../reference/tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
   - tillr-idea-pipeline.md
 ---
 
 # What tillr will change for Product QA, and what it will not
 
-> **Delivered copy.** This is `docs/design/tillr-separable-parts.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-separable-parts.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-18. tillr's answer to Product QA's second round
 ([Section 7](#7-the-second-round-tillrs-answer)), under the owner's direction in
@@ -37,7 +37,9 @@ owner's; they are in [the ledger](#decision-ledger) and await his review.
 
 > **In short.** tillr's store, items, verdicts and leased runs work outside Git, and a store that
 > never lands now runs end to end. Nothing Product QA asked for was declined: each request is either
-> built or mapped to unfiled work in [Section 7](#7-the-second-round-tillrs-answer).
+> built or mapped to unfiled work in [Section 7](#7-the-second-round-tillrs-answer) (except R2-11,
+> where `D-RW1` and `D-GR15` removed the run and gate kill clocks, while `LeaseGraceMS` on
+> explicit-timeout runs stays in `tillr-run` without a plan).
 
 **Why it matters.** Product QA's agent builds against what this document promises. A promise that is
 stale costs it a wrong build; [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now) is
@@ -61,7 +63,7 @@ something named in it, and ask nothing of you until then.
 **Reads with:** [tillr-core-and-git-landing.md](tillr-core-and-git-landing.md) (the direction
 this proposal sits under), [tillr-definitions-plan.md](tillr-definitions-plan.md) (the built
 items and the unfiled next tranche), [tillr-product-qa-requests.md](tillr-product-qa-requests.md)
-(Product QA's second-round reply, as received), [tillr-item-graphs.md](tillr-item-graphs.md)
+(Product QA's second-round reply, as received), [tillr-item-graphs.md](../reference/tillr-item-graphs.md)
 (graphs inside one item), [tillr-judge-and-lifecycle.md](tillr-judge-and-lifecycle.md) (item
 states and the terminal-state rulings), [tillr-idea-pipeline.md](tillr-idea-pipeline.md) (item
 kinds and child items), [board-utilities.md](board-utilities.md) (the process-and-record seam),
@@ -127,13 +129,13 @@ The owner named both on 2026-11-18 in the vocabulary: the layer is a **charter**
 - **Gate:** the check run on a candidate commit. **Lander:** the program that puts a gated commit
   on the trunk.
 - **Workflow, graph and node:** as defined in
-  [tillr-item-graphs.md, The Words](tillr-item-graphs.md#the-words). A workflow is a tracked
+  [tillr-item-graphs.md, The words](../reference/tillr-item-graphs.md#the-words). A workflow is a tracked
   template of stages. Running it gives an item a graph, and each node is one agent or one command
   call.
 - **Criterion:** one testable condition on an item. **Verdict:** a ruling on one criterion.
 - **Hold:** the planner's named reason for not dispatching an item.
 - **`no_commit` exit:** a workflow's declaration that its item finishes without a commit, so no
-  gate or landing runs ([the exit-condition block](tillr-item-graphs.md#add-an-exit-condition-that-decides-when-an-items-graph-is-done)).
+  gate or landing runs ([exit requirements](../reference/tillr-item-graphs.md#exit-requirements-and-no-commit-completion)).
 - **Unshared item:** an item in a store that no tracked document declares. Sync is the only intake
   ([tillr-convergence.md §3](tillr-convergence.md#3-the-target)), so such an item cannot be
   rebuilt by deleting the store and syncing.
@@ -291,9 +293,9 @@ says which. The arguments from both sides are in
 | :--- | :--- | :--- | :--- | :--- |
 | C1 | New item states per kind | The closed seven-state model ([D-IP1](tillr-idea-pipeline.md#61-settled-decisions)). The owner places lifecycle in the definition, so another definition names its own, which is built | names its own finished states in its definition file, as the worked example does | Real tension: inconclusive must be countable (R2-8) |
 | C2 | Reopening a landed or resolved-elsewhere item | Both are terminal ([lifecycle §3.2](tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)); a lifecycle rule, so the definition's | lists the move in its own definition's valid moves, which is built. Reopening a `closed` item works in the landing definition **[ran]** | Real tension: the owner, as reported, rules it the definition's policy (R2-3) |
-| C3 | A running step that rewrites the graph freely, and placeholders for work of unknown shape | Bounded replacement only, no model-written wiring (`D-IG2`, `D-IG3`, `D-IG5`, `D-IG9`, [§2.2](tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)) | keeps its graph in its dispatcher, or one tillr item per finding | Real tension, narrowed: free rewriting withdrawn; insertion downstream and appending remain (R2-9) |
-| C4 | An uncertain outside effect, such as a lost send, as a state inside a graph | No node changes anything outside its worktree ([§5](tillr-item-graphs.md#5-what-a-node-may-never-be)) | keeps its send step and its uncertain state. Outside a graph, `blocked` with a waiter works today **[ran]** | Real tension: a report send that lost its session (R2-12) |
-| C5 | Deadlines and clocks in the plan | No timers ([§5](tillr-item-graphs.md#5-what-a-node-may-never-be), [agent-runtime.md §6](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#6-the-task-graph)) | orders and times work in its dispatcher | Withdrawn: the time box is the fuzzer run's own business |
+| C3 | A running step that rewrites the graph freely, and placeholders for work of unknown shape | Bounded replacement only, no model-written wiring (`D-IG2`, `D-IG3`, `D-IG5`, `D-IG9`, [proposals and graph revisions](../reference/tillr-item-graphs.md#proposals-and-graph-revisions)) | keeps its graph in its dispatcher, or one tillr item per finding | Real tension, narrowed: free rewriting withdrawn; insertion downstream and appending remain (R2-9) |
+| C4 | An uncertain outside effect, such as a lost send, as a state inside a graph | No node changes anything outside its worktree ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be)) | keeps its send step and its uncertain state. Outside a graph, `blocked` with a waiter works today **[ran]** | Real tension: a report send that lost its session (R2-12) |
+| C5 | Deadlines and clocks in the plan | No timers ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be), [the retired agent runtime design, section 6](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime-retirement.md#what-happened-to-each-section)) | orders and times work in its dispatcher | Withdrawn: the time box is the fuzzer run's own business |
 | C6 | A Go library as the connection | Processes and records ([board-utilities.md §5.9](board-utilities.md#59-the-composed-pipeline)) | calls the commands in [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now) | Withdrawn: processes and records are enough |
 | C7 | Completion by "an artifact recorded and judged" in general | A landing completes an item; another definition completes on its hook's recorded verdict, which is built | declares `completes: "hook"` in its definition file | Real tension: a recorded, judged artifact (R2-2) |
 | C8 | A second loop and keeper beside the first, in one root | The keeper finds a loop by its working directory and locks per root ([tillr-keep](../../tillr-roll/tillr-keep), `find_loop`) | runs a loop with its own root, which gets its own lock and lanes **[inferred]**, not run | Withdrawn: it runs its own store and root |
@@ -466,14 +468,14 @@ one-line fix.
    "immediately on W1 Slice-1 static flattening". They needed command nodes, outputs, the
    `no_commit` exit and the evaluator, all of which have since landed
    ([B1 to B4](#12-on-the-existing-design-path)).
-4. **[tillr-autoqa.md §3.1](tillr-autoqa.md#31-test-idea-items-and-the-two-graph-funnel)**:
+4. **[tillr-autoqa.md §3.1](tillr-autoqa.md#31-test-idea-items-and-the-two-workflow-funnel)**:
    `verify_repro` "spawn[s] a child `qa-confirm@v1` item linked via `derived_from`" from a
    `no_commit` graph. `derived_from` edges are not built, and the drain writes child items only
    after `tillr-land pass` succeeds ([D-IP6](tillr-idea-pipeline.md#61-settled-decisions)), which a
    `no_commit` graph never reaches **[read]**. Neither is queued. [OQ-FQ7](#OQ-FQ7).
-5. **[tillr-autoqa.md §3.1](tillr-autoqa.md#31-test-idea-items-and-the-two-graph-funnel)**:
+5. **[tillr-autoqa.md §3.1](tillr-autoqa.md#31-test-idea-items-and-the-two-workflow-funnel)**:
    `triage_judge` names `role: "evaluator"`. An agent stage names a `seat`
-   ([D-IG13](tillr-item-graphs.md#71-decision-ledger)). The item-graph design is right; the spelling is that design's to change.
+   ([D-IG13](../reference/tillr-item-graphs.md#why-its-this-way)). The item-graph reference is right; the spelling is AutoQA's to change.
 6. **[tillr-autoqa.md](tillr-autoqa.md)**, "In short" and its Cost paragraph: "Zero new states,
    DAG primitives, or judge/grant rules inside `tillr` core". This document agrees on all three and
    adds small changes that are not of those kinds ([A1 to A5](#11-now-or-queued-at-once)).
@@ -557,8 +559,8 @@ line on purpose and enforce it with loader checks:
 - no node that changes anything outside its worktree;
 - one item, one outcome.
 
-These come from [tillr-item-graphs.md §5](tillr-item-graphs.md#5-what-a-node-may-never-be) and
-[agent-runtime.md §6](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#6-the-task-graph) **[read]**. Five of the thirteen
+These come from [what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be) and
+[the retired agent runtime design, section 6](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime-retirement.md#what-happened-to-each-section) **[read]**. Five of the thirteen
 requests cross that line: requests 3, 4, 5, 8 and 13.
 
 **Cost to the current goal.** Most of what Product QA would use is already queued on the drain's own
@@ -588,7 +590,7 @@ Several requests are split cases, and the table says which part is which.
 | 5 | **Cuts against in its general form; the bounded parts are designed.** Replacing a later node that has not started is a queued proposal block, under `D-IG3`. The drain writes child items from a manifest after landing (D-IP6). Folding is `resolved-elsewhere` with an item pointer **[read]**. None of the three is built **[ran]**. | Bounded: queued | Already wanted |
 | 6 | **Unbuilt but consistent.** Command nodes and outputs bound to their producer by sha256 are queued; see B1 and B2. Re-admitting an item only when a stored basis changed exists ([lifecycle §4.2](tillr-judge-and-lifecycle.md#42-sending-a-failed-item-again-under-its-own-id-d-jl6-d-jl8)). Skipping a node whose input digests did not change is not designed **[read]**. | Queued | Cheaper deterministic steps |
 | 7 | **Unbuilt but consistent, in the narrow form.** A `no_commit` exit runs neither gate nor lander and still settles the item; see B3. The two exit codes exist: 1 is negative, 4 is "an outside dependency prevented a decision" **[read]**. | Narrow form: queued | Investigation-only items stop being held as "did nothing" |
-| 8 | **Cuts against, inside a graph** ([§5](tillr-item-graphs.md#5-what-a-node-may-never-be)) **[read]**. Outside a graph it works today as a `blocked` hold **[ran]**. That is how tillr settles its own uncertain landing: by reading the trunk ([already_on_trunk.go](../../tillr-drain/drain/already_on_trunk.go)) **[read]**. | Hours, as a convention | Little |
+| 8 | **Cuts against, inside a graph** ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be)) **[read]**. Outside a graph it works today as a `blocked` hold **[ran]**. That is how tillr settles its own uncertain landing: by reading the trunk ([already_on_trunk.go](../../tillr-drain/drain/already_on_trunk.go)) **[read]**. | Hours, as a convention | Little |
 | 9 | **Unbuilt but consistent; mostly there.** See B5. `tillr run exec` needs a lane directory and an adapter directory **[ran]**. | Days | A run face that can say "dead" without a loop |
 | 10 | **Unbuilt but consistent, except deadlines.** See B7. A second dispatcher cannot share a store with the drain **[ran]**. | Hooks: design round | Shares and caps are already wanted |
 | 11 | **Unbuilt but consistent** with visibility first. See B9. | Hours | "New since you last looked" here too |
@@ -657,9 +659,9 @@ with its event, one writer", for one bounded operation.
 **Where the two words are written down.** Both are in this repository's documents:
 
 - "In fog" is Guild's word for a node that has not started
-  ([The Words](tillr-item-graphs.md#the-words),
-  [§2.2](tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)).
-- Guild is described in [agent-runtime.md §14](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#14-adopting-guilds-graph-algebra)
+  ([The words](../reference/tillr-item-graphs.md#the-words),
+  [proposals and graph revisions](../reference/tillr-item-graphs.md#proposals-and-graph-revisions)).
+- Guild is described in [the retired agent runtime design, section 14](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime-retirement.md#what-happened-to-each-section)
   as "a Go implementation of dynamic graph transformation" from another of the owner's projects
   **[read]**.
 
@@ -672,7 +674,7 @@ The Guild archive those documents cite is no longer in this checkout **[ran]**.
    not ended" is a manifest of child items applied after the producer settles (D-IP6, unbuilt),
    not a node placeholder **[read]**.
 2. **No model writes wiring (`D-IG5`, `D-IG9`).** A step that edits edges freely is the
-   "workflow-engine creep" that [agent-runtime.md §14](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#14-adopting-guilds-graph-algebra)
+   "workflow-engine creep" that [the retired agent runtime design, section 14](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime-retirement.md#what-happened-to-each-section)
    names as the first warning sign **[read]**.
 
 **For the request.** The findings graph really does change shape as it runs. Four operations are
@@ -718,7 +720,7 @@ consistent **[read]**:
 - **Files hold the bytes.** The item's prose is a document section, named by `body_ref`. Run
   reports, logs and briefs are files the run record points to. Node outputs will be files recorded
   with name, type, sha256 and location. An artifact is "a digest plus a locator"
-  ([agent-runtime.md §14](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#14-adopting-guilds-graph-algebra)).
+  ([the retired agent runtime design, section 14](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime-retirement.md#what-happened-to-each-section)).
 
 Product QA's lean toward pointing is right. It needs one more rule: whatever a verdict relied on is
 bound by its digest, so an edited file cannot silently change what was judged.
@@ -778,7 +780,7 @@ is the extension point.
 | R2-8 Outcomes per kind, countable | Accept | `inconclusive` was refused as a state and as a verdict, exit 2 | **Half built:** finished states per definition (`item-def-item-lifecycle`), used by the worked example. Counts in the views are the next tranche's item 1, unfiled |
 | R2-9 A core that does not preclude a definition's graph changes | Accept as the owner's direction | Not built: one replacement operation was queued | Unbuilt; the next tranche's item 3, unfiled |
 | R2-10 No fixed graph size limits | Accept as the owner's direction | As design: `D-IG4` and four criteria carried caps | Unbuilt; the next tranche's item 4, unfiled (see the note below the table) |
-| R2-11 No clock whose only consequence is a kill | Accept as the owner's direction | `D-GR13`'s ceiling and the lease's 300-second grace | Unbuilt, and in no plan: both are still in the tree |
+| R2-11 No clock whose only consequence is a kill | Accept as the owner's direction | `D-GR13`'s ceiling and the lease's 300-second grace | **Partly built:** default run walls are removed (`D-RW1`; `timeout_ms: 0` holds a `NULL`-expiry lease in `tools/tillr-run/run/lease.go`) and `D-GR13`'s kill ceiling is replaced by the stall watchdog (`D-GR15` in `tools/tillr-gate/watchdog.go`, `tools/fork-check.py`). `LeaseGraceMS` (300 s) remains for explicit `timeout_ms > 0` runs, with no plan to remove it |
 | R2-12 An uncertain outward effect as a state that blocks a retry | Accept | Outside a graph, `blocked` with waiter `owner` worked; inside a graph nothing existed | Unbuilt; the next tranche's item 5, unfiled |
 | R2-13 Time and tokens per step attempt, with their source | Accept | An agent run's record carried its times and `usage`; a command step's record had no source | Unbuilt; the next tranche's item 6, unfiled |
 | R2-14 An owner acknowledgment point | Accept | Nothing built; `tillr view events --since` with a cursor is the meanwhile | Unbuilt; the next tranche's item 7, unfiled |

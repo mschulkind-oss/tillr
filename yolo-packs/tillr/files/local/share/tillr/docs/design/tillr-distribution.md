@@ -6,7 +6,7 @@ next: "Rule OQ-TD1, OQ-TD2, OQ-TD3 and OQ-TD4 — pack layout, machine config, a
 
 # Ship `tillr` as one source-built pack with eight `PATH` binaries and a two-skill contract
 
-> **Delivered copy.** This is `docs/design/tillr-distribution.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-distribution.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-12, when the pack was unbuilt; it is built as of 2026-11-16 ([`yolo-packs/tillr`](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/tillr/pack.json) ships the source tree and the eight launchers). Then, the nine Go modules under [`tools/`](https://github.com/mschulkind-oss/tillr/blob/main/tools) work and have landed a live candidate on an unattended tick. Evidence verified at `32aed3dc31`.
 
