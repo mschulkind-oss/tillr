@@ -9,7 +9,7 @@ Start with [docs/tillr/design-status.md](docs/tillr/design-status.md).
 ## Layout
 
 - `tools/tillr*` — the Go modules (one per program or library); `tools/tillr` holds shared packages.
-- `tools/gate`, `tools/fork-check.py` — the local gate behind `just done`.
+- `tools/gate` — the declared checks `tillr-gate` runs (`tools/gate/checks/*.json`); `just done` is the full local gate.
 - `tools/observatory`, `tools/tillr-view` — the web view (`just observatory`).
 - `config/tillr`, `.tillr.toml` — policy and per-repository inputs.
 - `docs/design`, `docs/reference`, `docs/tillr`, `docs/roadmap.md` — designs, references, roadmap.
@@ -28,8 +28,6 @@ $ just done               # the full local gate
 
 ## Status
 
-Under active development. The local gate (`just done`) still carries checks for delivering
-patch series to forked tools (`pi-forks`, `.forks`, `yolo-packs/matt`), which this repository
-does not use; until they are removed, treat those references as a to-do list, not as working
-behavior. `just tillr-build` builds from `refs/tillr/green`; before that ref exists, bootstrap
-with `TILLR_BUILD_UNPROVED=HEAD just tillr-build`.
+Under active development. `just tillr-build` builds from `refs/tillr/green`, the newest
+commit the full suite has proved; before that ref exists, bootstrap with
+`TILLR_BUILD_UNPROVED=HEAD just tillr-build`.
