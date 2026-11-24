@@ -80,3 +80,63 @@ func TestWorkerRecordsClaimsAndChildTranscript(t *testing.T) {
 		t.Fatalf("unrecorded child accepted: %d %s", status, raw)
 	}
 }
+
+func TestLanesDeriveRunningChildTurnCountWithoutStoreChurn(t *testing.T) {
+	h := newServeHarness(t)
+	path := filepath.Join(h.laneRoot, "live-child.jsonl")
+	h.exec(`INSERT INTO events(kind,object_type,object_id,payload,ts) VALUES ('run.child-session','run','run-2','{"run_id":"run-2","item_id":"item-seed-02","lane_id":"lane-2","session_id":"child-live","role":"scout","started_at_ms":1000,"transcript":"` + path + `"}',1001)`)
+
+	readChild := func() map[string]any {
+		t.Helper()
+		status, body, raw := h.get("/api/v1/lanes")
+		if status != http.StatusOK {
+			t.Fatalf("lanes: %d %s", status, raw)
+		}
+		for _, item := range body["data"].([]any) {
+			lane := item.(map[string]any)
+			cs, _ := lane["child_sessions"].(map[string]any)
+			if group, ok := cs["run-2"].(map[string]any); ok {
+				sessions := group["sessions"].([]any)
+				if len(sessions) == 1 {
+					return sessions[0].(map[string]any)
+				}
+			}
+		}
+		t.Fatalf("child-live missing from lanes response: %s", raw)
+		return nil
+	}
+
+	if got := readChild(); got["turn_count"] != nil {
+		t.Fatalf("missing transcript reported turn_count=%v, want nil", got["turn_count"])
+	}
+	if err := os.WriteFile(path, []byte(`{"type":"session","timestamp":"1970-01-01T00:00:01Z"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readChild(); got["turn_count"] != float64(0) {
+		t.Fatalf("empty session transcript reported turn_count=%v, want 0", got["turn_count"])
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(
+		`{"type":"message","timestamp":"1970-01-01T00:00:02Z","message":{"role":"assistant","timestamp":2000,"content":[{"type":"text","text":"turn 1"}]}}` + "\n" +
+			`{"type":"message","timestamp":"1970-01-01T00:00:03Z","message":{"role":"assistant","timestamp":3000,"content":[{"type":"text","text":"turn 2"}]}}` + "\n",
+	)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readChild(); got["turn_count"] != float64(2) {
+		t.Fatalf("live running transcript reported turn_count=%v, want 2 without extra store events", got["turn_count"])
+	}
+
+	h.exec(`INSERT INTO events(kind,object_type,object_id,payload,ts) VALUES ('run.child-session','run','run-2','{"run_id":"run-2","item_id":"item-seed-02","lane_id":"lane-2","session_id":"child-live","role":"scout","started_at_ms":1000,"ended_at_ms":5000,"end_clock":"observed","turn_count":3,"transcript":"` + path + `"}',1002)`)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	got := readChild()
+	if got["turn_count"] != float64(3) || got["ended_at_ms"] != float64(5000) {
+		t.Fatalf("completed child record = %+v, want stored turn_count=3 and ended_at_ms=5000", got)
+	}
+}
