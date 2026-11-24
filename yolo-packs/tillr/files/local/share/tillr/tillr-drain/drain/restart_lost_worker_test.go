@@ -3,12 +3,14 @@ package drain_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -150,9 +152,9 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 	defer s.cmd.Process.Kill()
 	t.Cleanup(func() { exec.Command(s.exe, "stop", "--end-runs", "--store", f.store, "--root", f.root).Run() })
 	if blockedSchema {
-		s.waitFor(t, "the loop's store roll alarm", func() bool {
-			return strings.Contains(s.output(t), "alarm started: ALARM store-roll-blocked (drain)")
-		})
+		if err := waitForStoreRollAlarm(func() string { return s.output(t) }, exited); err != nil {
+			t.Fatal(err)
+		}
 		assertBlockedSchemaRoll(t, s, mode == "schema-unlogged")
 		return
 	}
@@ -461,4 +463,69 @@ func procStatus(t *testing.T, pid int, field string) string {
 	}
 	t.Fatalf("process %d has no %s status field", pid, field)
 	return ""
+}
+
+// waitForStoreRollAlarm polls the loop's output until the store roll alarm is logged or the
+// loop exits. No wall-clock limit is applied: a busy machine makes the roll slower rather
+// than failing the test.
+func waitForStoreRollAlarm(output func() string, exited <-chan error) error {
+	const alarm = "alarm started: ALARM store-roll-blocked (drain)"
+	for {
+		out := output()
+		if strings.Contains(out, alarm) {
+			return nil
+		}
+		select {
+		case err := <-exited:
+			out = output()
+			if strings.Contains(out, alarm) {
+				return nil
+			}
+			return fmt.Errorf("loop exited before raising the store roll alarm: %v\n%s", err, out)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+func TestWaitForStoreRollAlarm(t *testing.T) {
+	t.Run("alarm after delay", func(t *testing.T) {
+		var out atomic.Value
+		out.Store("loop: starting\n")
+		exited := make(chan error, 1)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			out.Store("loop: starting\nalarm started: ALARM store-roll-blocked (drain)\n")
+		}()
+		if err := waitForStoreRollAlarm(func() string { return out.Load().(string) }, exited); err != nil {
+			t.Fatalf("waitForStoreRollAlarm() = %v, want nil", err)
+		}
+	})
+
+	t.Run("loop exits before alarm", func(t *testing.T) {
+		exited := make(chan error, 1)
+		exited <- errors.New("exit status 2")
+		err := waitForStoreRollAlarm(func() string { return "loop: failed early\n" }, exited)
+		if err == nil {
+			t.Fatal("waitForStoreRollAlarm() = nil, want error on early loop exit")
+		}
+		if !strings.Contains(err.Error(), "exit status 2") || !strings.Contains(err.Error(), "loop: failed early") {
+			t.Fatalf("waitForStoreRollAlarm() error = %q, want exit error and loop output", err)
+		}
+	})
+
+	t.Run("alarm logged before exit is observed", func(t *testing.T) {
+		calls := 0
+		exited := make(chan error, 1)
+		exited <- nil
+		err := waitForStoreRollAlarm(func() string {
+			calls++
+			if calls == 1 {
+				return "loop: starting\n"
+			}
+			return "loop: starting\nalarm started: ALARM store-roll-blocked (drain)\n"
+		}, exited)
+		if err != nil {
+			t.Fatalf("waitForStoreRollAlarm() = %v, want nil when alarm was logged before exit", err)
+		}
+	})
 }
