@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -484,6 +485,21 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 				result.Unreadable = err.Error()
 				continue
 			}
+			if r.When.ReopenWhen != nil {
+				firstLoadedSeq := effectiveFirstLoadedSeq(r, baselines, defaultHead)
+				reopenEv, err := deriveLagReopenEvent(rd, ts, r, now, rf, cache, firstLoadedSeq)
+				var unreadable unreadableProjection
+				if errors.As(err, &unreadable) {
+					result.Unreadable = unreadable.Error()
+					continue
+				}
+				if err != nil {
+					return nil, nil, fmt.Errorf("rule %s: %w", r.ID, err)
+				}
+				if lag.fires(r.When) {
+					lag.lag.reopenEvent = reopenEv
+				}
+			}
 			derived[i] = map[string]*condition{"global": lag}
 			continue
 		}
@@ -549,6 +565,31 @@ func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource,
 				result.Unreadable = err.Error()
 				continue
 			}
+			if r.When.ReopenWhen != nil {
+				var resolveBaseline func(string, SourceCursor) int64
+				if e.mem != nil {
+					resolveBaseline = e.mem.resolveFirstLoadedSeq
+				}
+				reopenEv, cursor, err := deriveSourceLagReopenEvent(ctx, src, r, now, rf, resolveBaseline)
+				var unreadable unreadableProjection
+				if errors.As(err, &unreadable) {
+					result.Unreadable = unreadable.Error()
+					continue
+				}
+				if err != nil {
+					return nil, nil, 0, 0, false, fmt.Errorf("rule %s: %w", r.ID, err)
+				}
+				if !hasCursor {
+					hasCursor = true
+					passEpoch = cursor.Epoch
+				}
+				if cursor.Seq > maxHead {
+					maxHead = cursor.Seq
+				}
+				if lag.fires(r.When) {
+					lag.lag.reopenEvent = reopenEv
+				}
+			}
 			derived[i] = map[string]*condition{"global": lag}
 			continue
 		}
@@ -584,6 +625,7 @@ type episode struct {
 	ackedSeq             sql.NullInt64
 	ackedFingerprint     sql.NullString
 	ackedLagPair         sql.NullString
+	ackedWatermark       int64
 	hasAckCols           bool
 }
 
@@ -605,6 +647,9 @@ func (ep episode) reopenCause(r Rule, now time.Time, newest observation, lagPair
 			return "new-instance"
 		}
 		if r.When.Pattern == LagBehind {
+			if r.When.ReopenWhen != nil {
+				return ""
+			}
 			if ep.ackedLagPair.Valid {
 				if lagPair != ep.ackedLagPair.String {
 					return "new-instance"
@@ -719,7 +764,9 @@ func loadActiveEpisodes(rd *store.Reader, cache *evalCache) (activeSnapshot, err
 		cols += ",tracked_lag_pair"
 	}
 	if hasAckCols {
-		cols += ",acked_seq,acked_fingerprint,acked_lag_pair"
+		cols += ",acked_seq,acked_fingerprint,acked_lag_pair,COALESCE(acked_seq,(SELECT MAX(seq) FROM events WHERE object_type='alert' AND object_id=alert_episodes.alert_id AND kind IN ('watch.alert.acknowledged','watch.alert.tracked')),last_observed_seq)"
+	} else {
+		cols += ",COALESCE((SELECT MAX(seq) FROM events WHERE object_type='alert' AND object_id=alert_episodes.alert_id AND kind IN ('watch.alert.acknowledged','watch.alert.tracked')),last_observed_seq)"
 	}
 	rows, err := rd.Query("SELECT " + cols + " FROM alert_episodes WHERE state!='resolved'")
 	if err != nil {
@@ -743,6 +790,7 @@ func loadActiveEpisodes(rd *store.Reader, cache *evalCache) (activeSnapshot, err
 		if hasAckCols {
 			dest = append(dest, &row.ep.ackedSeq, &row.ep.ackedFingerprint, &row.ep.ackedLagPair)
 		}
+		dest = append(dest, &row.ep.ackedWatermark)
 		scanErr := rows.Scan(dest...)
 		if scanErr != nil {
 			return activeSnapshot{}, scanErr
@@ -989,6 +1037,16 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 			}
 			if itemExists && !lookup.isTerminal(itemState) {
 				if firing && firstClear == len(c.clears) {
+					if ep.state == "acknowledged" && r.When.Pattern == LagBehind && r.When.ReopenWhen != nil &&
+						c.lag != nil && c.lag.reopenEvent != nil &&
+						c.lag.reopenEvent.Seq > max(ep.ackedWatermark, loadedSeq) {
+						pair := c.lag.leaderOID + ":" + c.lag.followerOID
+						nextSeq := max(ep.last, max(startHead, c.lag.reopenEvent.Seq))
+						if err := changes.reopenLagWhen(r, key, ep.id, c, pair, nextSeq, trackedID, now); err != nil {
+							return err
+						}
+						continue
+					}
 					if r.When.Pattern == LagBehind {
 						pair := c.lag.leaderOID + ":" + c.lag.followerOID
 						if !ep.trackedLagPair.Valid {
@@ -1094,6 +1152,15 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 		var currentLagPair string
 		if r.When.Pattern == LagBehind {
 			currentLagPair = c.lag.leaderOID + ":" + c.lag.followerOID
+			if ep.state == "acknowledged" && r.When.Pattern == LagBehind && r.When.ReopenWhen != nil &&
+				c.lag != nil && c.lag.reopenEvent != nil &&
+				c.lag.reopenEvent.Seq > max(ep.ackedWatermark, loadedSeq) {
+				nextSeq := max(ep.last, max(startHead, c.lag.reopenEvent.Seq))
+				if err := changes.reopenLagWhen(r, key, ep.id, c, currentLagPair, nextSeq, "", now); err != nil {
+					return err
+				}
+				continue
+			}
 			if !ep.trackedLagPair.Valid {
 				*changes = append(*changes, func(tx *store.Tx) error {
 					_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair=? WHERE alert_id=?`, currentLagPair, ep.id)
@@ -1122,8 +1189,9 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 			if r.When.Pattern == LagBehind {
 				backfillLag = currentLagPair
 			}
+			ackedSeq := ep.ackedWatermark
 			*changes = append(*changes, func(tx *store.Tx) error {
-				_, err := tx.Exec(`UPDATE alert_episodes SET acked_seq=last_observed_seq,acked_fingerprint=condition_fingerprint,acked_lag_pair=? WHERE alert_id=? AND state='acknowledged' AND acked_seq IS NULL`, backfillLag, ep.id)
+				_, err := tx.Exec(`UPDATE alert_episodes SET acked_seq=?,acked_fingerprint=condition_fingerprint,acked_lag_pair=? WHERE alert_id=? AND state='acknowledged' AND acked_seq IS NULL`, ackedSeq, backfillLag, ep.id)
 				return err
 			})
 		}
@@ -1257,6 +1325,153 @@ func (changes *episodeChanges) reopenTracked(r Rule, key, id string, c *conditio
 			lagPair, fingerprint, string(bundle), id)
 		return err
 	})
+}
+
+func (changes *episodeChanges) reopenLagWhen(r Rule, key, id string, c *condition, lagPair string, nextSeq int64, trackedID string, now time.Time) error {
+	bundle, err := makeLagReopenBundle(r, key, id, c, "")
+	if err != nil {
+		return err
+	}
+	body := map[string]any{"cause": "reopen-when"}
+	if trackedID != "" {
+		body["item_id"] = trackedID
+	}
+	return changes.transition(r, key, id, reopenedKind, now, body, func(tx *store.Tx) error {
+		hasTracking, err := alertEpisodesHasColumn(tx.Reader(), "tracking_item_id")
+		if err != nil {
+			return err
+		}
+		hasLagPair, err := alertEpisodesHasColumn(tx.Reader(), "tracked_lag_pair")
+		if err != nil {
+			return err
+		}
+		hasAck, err := alertEpisodesHasColumn(tx.Reader(), "acked_seq")
+		if err != nil {
+			return err
+		}
+		sets := []string{
+			"state='open'",
+			"silence_until_ms=NULL",
+			"silence_on_fingerprint=NULL",
+			"acked_by=NULL",
+			"acked_note=NULL",
+			"acked_at=NULL",
+			"last_observed_seq=?",
+			"last_observed_at=?",
+			"observation_count=observation_count+1",
+			"bundle_json=?",
+		}
+		args := []any{nextSeq, now.UnixMilli(), string(bundle)}
+		if hasTracking {
+			sets = append(sets, "tracking_item_id=NULL")
+		}
+		if hasLagPair {
+			sets = append(sets, "tracked_lag_pair=?")
+			args = append(args, lagPair)
+		}
+		if hasAck {
+			sets = append(sets, "acked_seq=NULL", "acked_fingerprint=NULL", "acked_lag_pair=NULL")
+		}
+		args = append(args, id)
+		_, err = tx.Exec("UPDATE alert_episodes SET "+strings.Join(sets, ",")+" WHERE alert_id=?", args...)
+		return err
+	})
+}
+
+func deriveLagReopenEvent(rd *store.Reader, ts *TillrStoreSource, r Rule, now time.Time, facts subjectFacts, cache *evalCache, firstLoadedSeq int64) (*observation, error) {
+	if r.When.ReopenWhen == nil || len(r.Reads.Events) == 0 {
+		return nil, nil
+	}
+	projection, inScope, err := facts.forSubject("global")
+	if err != nil || !inScope {
+		return nil, err
+	}
+	nowMillis := now.UnixMilli()
+	var best *Observation
+	visit := func(rec Observation) error {
+		if rec.Seq <= firstLoadedSeq || rec.TS > nowMillis {
+			return nil
+		}
+		if r.When.ReopenWhen.eval(expressionValues{event: rec.Lookup, projection: projection, nowMillis: nowMillis}) {
+			if best == nil || rec.Seq > best.Seq {
+				cp := rec
+				best = &cp
+			}
+		}
+		return nil
+	}
+	if cache != nil {
+		if err := cache.forEachEvent(r.Reads.Events, visit); err != nil {
+			return nil, err
+		}
+	} else {
+		args := []any{firstLoadedSeq, nowMillis}
+		for _, k := range r.Reads.Events {
+			args = append(args, k)
+		}
+		rows, err := rd.Query(`SELECT seq,ts,kind,seat,object_type,object_id,revision,payload FROM events
+ WHERE seq > ? AND ts <= ? AND kind IN (?`+strings.Repeat(",?", len(r.Reads.Events)-1)+`) ORDER BY seq`, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			obs, err := scanTillrObservation(rows)
+			if err != nil {
+				return nil, err
+			}
+			if err := visit(obs); err != nil {
+				return nil, err
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if best == nil {
+		return nil, nil
+	}
+	obs := toBundleObs(*best, r.When.Fingerprint)
+	return &obs, nil
+}
+
+func deriveSourceLagReopenEvent(ctx context.Context, src ObservationSource, r Rule, now time.Time, facts subjectFacts, resolveBaseline func(ruleID string, cursor SourceCursor) int64) (*observation, SourceCursor, error) {
+	if r.When.ReopenWhen == nil || len(r.Reads.Events) == 0 || src == nil {
+		return nil, SourceCursor{}, nil
+	}
+	records, cursor, _, err := src.ReadWindow(ctx, math.MinInt64, r.Reads.Events)
+	if err != nil {
+		return nil, SourceCursor{}, err
+	}
+	firstLoadedSeq := cursor.Seq
+	if resolveBaseline != nil {
+		firstLoadedSeq = resolveBaseline(r.ID, cursor)
+	}
+	projection, inScope, err := facts.forSubject("global")
+	if err != nil || !inScope {
+		return nil, cursor, err
+	}
+	nowMillis := now.UnixMilli()
+	var best *Observation
+	for _, rec := range records {
+		if rec.Seq <= firstLoadedSeq || rec.TS > nowMillis {
+			continue
+		}
+		if !slices.Contains(r.Reads.Events, rec.Kind) {
+			continue
+		}
+		if r.When.ReopenWhen.eval(expressionValues{event: rec.Lookup, projection: projection, nowMillis: nowMillis}) {
+			if best == nil || rec.Seq > best.Seq {
+				cp := rec
+				best = &cp
+			}
+		}
+	}
+	if best == nil {
+		return nil, cursor, nil
+	}
+	obs := toBundleObs(*best, r.When.Fingerprint)
+	return &obs, cursor, nil
 }
 
 func (changes *episodeChanges) resolve(r Rule, key, id string, trackingItem sql.NullString, seq int64, now time.Time) error {

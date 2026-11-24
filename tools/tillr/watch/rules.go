@@ -43,20 +43,20 @@ type Reads struct {
 }
 
 type When struct {
-	Fingerprint                    []string
-	GroupBy                        string
-	GroupByList                    []string
-	Pattern, Field                 string
-	Pairs                          [][2]string
-	Threshold, ThresholdCommits    int64
-	Window, ThresholdDuration      time.Duration
-	Leader, Follower, Mode         string
-	Match, Reset, ClearWhen, After *Expression
+	Fingerprint                                []string
+	GroupBy                                    string
+	GroupByList                                []string
+	Pattern, Field                             string
+	Pairs                                      [][2]string
+	Threshold, ThresholdCommits                int64
+	Window, ThresholdDuration                  time.Duration
+	Leader, Follower, Mode                     string
+	Match, Reset, ClearWhen, After, ReopenWhen *Expression
 }
 
 type Guidance struct {
-	Summary   string
-	Check, Do []string
+	Summary, ReopenSummary string
+	Check, Do              []string
 }
 
 type Delivery struct {
@@ -94,8 +94,8 @@ func (r Rule) scopeReason() string {
 	}
 }
 
-func (r Rule) expressions() [4]*Expression {
-	return [4]*Expression{r.When.Match, r.When.Reset, r.When.ClearWhen, r.When.After}
+func (r Rule) expressions() [5]*Expression {
+	return [5]*Expression{r.When.Match, r.When.Reset, r.When.ClearWhen, r.When.After, r.When.ReopenWhen}
 }
 
 func (r Rule) evaluatorReason() string {
@@ -391,6 +391,9 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 		}
 	}
 	r.When = loadWhen(when, pattern, refs)
+	if r.When.ReopenWhen != nil && len(r.Reads.Events) == 0 {
+		when.reject("reopen_when", "requires reads.events")
+	}
 	if namedScope(r.Scope, "workflow:") != "" {
 		if r.When.GroupBy == "global" {
 			when.reject("group_by", "named workflow scope requires a subject")
@@ -401,8 +404,19 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 
 	checkProjectionOperands(when, r, refs)
 	g := root.table("guidance")
-	g.only("summary", "check", "do")
-	r.Guidance = Guidance{Summary: g.text("summary"), Check: g.strings("check", true), Do: g.strings("do", true)}
+	g.only("summary", "reopen_summary", "check", "do")
+	var reopenSummary string
+	if _, present := g.values["reopen_summary"]; present {
+		if r.When.Pattern != LagBehind || r.When.ReopenWhen == nil {
+			g.reject("reopen_summary", "requires lag_behind with when.reopen_when")
+		} else {
+			reopenSummary = g.text("reopen_summary")
+			if strings.TrimSpace(reopenSummary) == "" {
+				g.reject("reopen_summary", "expected a non-empty non-whitespace string")
+			}
+		}
+	}
+	r.Guidance = Guidance{Summary: g.text("summary"), ReopenSummary: reopenSummary, Check: g.strings("check", true), Do: g.strings("do", true)}
 	d := root.table("delivery")
 	d.only("receiver", "also_notify")
 	r.Delivery = Delivery{Receiver: d.text("receiver"), AlsoNotify: d.strings("also_notify", false)}

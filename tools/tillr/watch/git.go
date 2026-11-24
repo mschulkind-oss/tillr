@@ -434,6 +434,7 @@ type lagCondition struct {
 	count                  int64
 	elapsed                time.Duration
 	leaderOID, followerOID string
+	reopenEvent            *observation
 }
 
 func deriveLag(r Rule, g gitSnapshot, now time.Time) (*condition, error) {

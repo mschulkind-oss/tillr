@@ -9,7 +9,7 @@ scope = "core"
 severity = "warning"
 
 [rule.reads]
-events = ["land.landing", "drain.revert"]
+events = ["land.landing", "drain.revert", "drain.heavy-progress"]
 projections = ["git_refs:refs/heads/main,refs/tillr/green"]
 
 [rule.when]
@@ -18,9 +18,11 @@ pattern = "lag_behind"
 leader = "refs/heads/main"
 follower = "refs/tillr/green"
 threshold_duration = "30m"
+reopen_when = 'event.kind == "drain.heavy-progress" and event.phase == "ended" and event.outcome == "red"'
 
 [rule.guidance]
 summary = "The trunk has been unproved for {{elapsed}} ({{count}} commits ahead of the last green proof, {{follower_short}}..{{leader_short}})."
+reopen_summary = "Trunk proof for {{event.tip_sha}} finished red on {{event.failing_checks}} while the trunk remains unproved for {{elapsed}} ({{count}} commits ahead of {{follower_short}}..{{leader_short}})."
 check = ["Look at refs/heads/main, refs/tillr/green, and the heavy runner's latest proof run and logs."]
 do = ["Check whether the heavy runner is stalled, failing, or stopped, and clear the blocker so the green proof catches up."]
 

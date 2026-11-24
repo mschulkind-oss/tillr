@@ -292,7 +292,7 @@ func lintOneRuleTable(path string, index int, table map[string]any, kinds map[st
 	if !gOK {
 		emit(CodeWatchLintEmptyGuidance, "guidance: expected a table")
 	} else {
-		r.Guidance = lintRuleGuidance(guidanceMap, r.When.Pattern, emit)
+		r.Guidance = lintRuleGuidance(guidanceMap, r.When, emit)
 	}
 
 	// [rule.delivery]
@@ -398,7 +398,7 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[st
 	}
 
 	if pattern == LagBehind {
-		allowed := []string{"group_by", "pattern", "leader", "follower", "threshold_commits", "threshold_duration", "mode"}
+		allowed := []string{"group_by", "pattern", "leader", "follower", "threshold_commits", "threshold_duration", "mode", "reopen_when"}
 		for _, k := range slices.Sorted(maps.Keys(whenMap)) {
 			if k != "remedy" && !slices.Contains(allowed, k) {
 				emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.%s: unknown key", k))
@@ -451,6 +451,10 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[st
 				emit(CodeWatchLintRuleSchema, "when.mode: expected any or all")
 			}
 			w.Mode = m
+		}
+		w.ReopenWhen = lintRuleExpr(whenMap, "reopen_when", false, w.GroupBy, reads, refs, kinds, emit)
+		if w.ReopenWhen != nil && len(reads.Events) == 0 {
+			emit(CodeWatchLintUnknownSignal, "when.reopen_when: requires reads.events")
 		}
 		return w
 	}
@@ -627,9 +631,9 @@ func lintRuleExpr(whenMap map[string]any, key string, required bool, groupBy str
 	return exp
 }
 
-func lintRuleGuidance(gMap map[string]any, pattern string, emit func(string, string)) Guidance {
+func lintRuleGuidance(gMap map[string]any, when When, emit func(string, string)) Guidance {
 	for _, k := range slices.Sorted(maps.Keys(gMap)) {
-		if k != "summary" && k != "check" && k != "do" {
+		if k != "summary" && k != "reopen_summary" && k != "check" && k != "do" {
 			emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("guidance.%s: unknown key", k))
 		}
 	}
@@ -638,7 +642,18 @@ func lintRuleGuidance(gMap map[string]any, pattern string, emit func(string, str
 		emit(CodeWatchLintEmptyGuidance, "guidance.summary: expected a non-blank string")
 	} else {
 		g.Summary = summary
-		checkGuidanceText("guidance.summary", summary, pattern, emit)
+		checkGuidanceText("guidance.summary", summary, when.Pattern, false, emit)
+	}
+
+	if rawReopen, present := gMap["reopen_summary"]; present {
+		if when.Pattern != LagBehind || when.ReopenWhen == nil {
+			emit(CodeWatchLintEmptyGuidance, "guidance.reopen_summary: requires lag_behind with when.reopen_when")
+		} else if rs, ok := rawReopen.(string); !ok || strings.TrimSpace(rs) == "" {
+			emit(CodeWatchLintEmptyGuidance, "guidance.reopen_summary: expected a non-blank string")
+		} else {
+			g.ReopenSummary = rs
+			checkGuidanceText("guidance.reopen_summary", rs, when.Pattern, true, emit)
+		}
 	}
 
 	for _, field := range []struct {
@@ -656,20 +671,20 @@ func lintRuleGuidance(gMap map[string]any, pattern string, emit func(string, str
 				emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("guidance.%s[%d]: expected a non-blank string", field.name, i))
 				continue
 			}
-			checkGuidanceText(fmt.Sprintf("guidance.%s[%d]", field.name, i), line, pattern, emit)
+			checkGuidanceText(fmt.Sprintf("guidance.%s[%d]", field.name, i), line, when.Pattern, false, emit)
 		}
 	}
 	return g
 }
 
-func checkGuidanceText(field, text, pattern string, emit func(string, string)) {
+func checkGuidanceText(field, text, pattern string, allowEvent bool, emit func(string, string)) {
 	tokens, err := extractGuidancePlaceholders(text)
 	if err != nil {
 		emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("%s: %v", field, err))
 		return
 	}
 	for _, tok := range tokens {
-		if !validGuidancePlaceholder(tok, pattern) {
+		if !validGuidancePlaceholder(tok, pattern, allowEvent) {
 			emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("%s: invalid or unsupported placeholder {{%s}} for pattern %q", field, tok, pattern))
 		}
 	}
@@ -702,7 +717,7 @@ func extractGuidancePlaceholders(line string) ([]string, error) {
 	return tokens, nil
 }
 
-func validGuidancePlaceholder(tok, pattern string) bool {
+func validGuidancePlaceholder(tok, pattern string, allowEvent bool) bool {
 	switch tok {
 	case "subject", "rule_id", "alert_id", "count", "elapsed":
 		return true
@@ -712,7 +727,7 @@ func validGuidancePlaceholder(tok, pattern string) bool {
 		return pattern == AlternatingPair
 	}
 	if name, ok := strings.CutPrefix(tok, "event."); ok {
-		if pattern == LagBehind {
+		if pattern == LagBehind && !allowEvent {
 			return false
 		}
 		if name == "" || strings.HasPrefix(name, "event.") || strings.IndexFunc(name, unicode.IsSpace) >= 0 {

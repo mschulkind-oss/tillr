@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -435,4 +437,224 @@ func TestTrunkProofStalledFiresWhenCheckReportsNothingForTenMinuteWindow(t *test
 			t.Fatalf("want tip SHA %s in summary, got %q", tip, notices[0].Bundle.Guidance.Summary)
 		}
 	})
+}
+
+func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
+	const rulesDir = "../../config/tillr/watch"
+
+	for _, ackMode := range []string{"ack", "track"} {
+		t.Run(ackMode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			now := time.Now().UTC()
+			root := t.TempDir()
+			var env []string
+			for _, entry := range os.Environ() {
+				if !strings.HasPrefix(entry, "GIT_") {
+					env = append(env, entry)
+				}
+			}
+			env = append(env,
+				"GIT_AUTHOR_NAME=Watch Fixture", "GIT_AUTHOR_EMAIL=watch@example.invalid",
+				"GIT_COMMITTER_NAME=Watch Fixture", "GIT_COMMITTER_EMAIL=watch@example.invalid",
+			)
+
+			s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { s.Close() })
+
+			f := &trunkProofFixture{
+				t:    t,
+				ctx:  ctx,
+				root: root,
+				env:  env,
+				s:    s,
+				now:  now,
+			}
+			f.gitAt(now.Add(-40*time.Minute), "", "init", "--quiet", "--initial-branch=main")
+			f.tree = f.gitAt(now.Add(-40*time.Minute), "", "mktree")
+			f.head = f.gitAt(now.Add(-40*time.Minute), "base", "commit-tree", f.tree)
+			f.gitAt(now.Add(-40*time.Minute), "", "update-ref", "refs/heads/main", f.head)
+			f.gitAt(now.Add(-40*time.Minute), "", "update-ref", "refs/tillr/green", f.head)
+
+			if ackMode == "track" {
+				seedCLIItems(t, s, map[string]string{"item-open": "in-queue"})
+			}
+
+			invoke := func(args ...string) (int, string, string) {
+				var out, stderr bytes.Buffer
+				code := run(ctx, args, &out, &stderr)
+				return code, out.String(), stderr.String()
+			}
+			invokeStore := func(face string, args ...string) (int, string, string) {
+				full := append([]string{face, "--store", s.Path()}, args...)
+				return invoke(full...)
+			}
+			readStatus := func() (alertState string, pending int) {
+				t.Helper()
+				code, out, errOut := invokeStore("status", "--rules", rulesDir, "--root", root, "--json")
+				if code != 0 || errOut != "" {
+					t.Fatalf("status --json: code=%d out=%q err=%q", code, out, errOut)
+				}
+				var payload struct {
+					Alerts []watch.AlertStatus `json:"alerts"`
+					Owners []watch.OwnerStatus `json:"owners"`
+				}
+				if err := json.Unmarshal([]byte(out), &payload); err != nil {
+					t.Fatalf("unmarshal status --json: %v\n%s", err, out)
+				}
+				for _, a := range payload.Alerts {
+					if a.RuleID == "trunk-proof-lag" {
+						alertState = a.State
+						break
+					}
+				}
+				for _, o := range payload.Owners {
+					if o.Owner == "foreground" {
+						pending = o.Pending
+						break
+					}
+				}
+				return alertState, pending
+			}
+			acknowledge := func(alertID string) {
+				t.Helper()
+				var code int
+				var out, errOut string
+				if ackMode == "ack" {
+					code, out, errOut = invokeStore("ack", alertID, "--by", "operator", "--note", "investigating lag")
+					if code != 0 || errOut != "" || out != fmt.Sprintf("alert %s acknowledged\n", alertID) {
+						t.Fatalf("ack: code=%d out=%q err=%q", code, out, errOut)
+					}
+				} else {
+					code, out, errOut = invokeStore("track", alertID, "--item", "item-open", "--by", "operator", "--note", "investigating lag")
+					if code != 0 || errOut != "" || out != fmt.Sprintf("alert %s tracked by item-open\n", alertID) {
+						t.Fatalf("track: code=%d out=%q err=%q", code, out, errOut)
+					}
+				}
+			}
+
+			// Establish baselines before opening lag.
+			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
+				t.Fatalf("init eval: code=%d out=%q err=%q", code, out, errOut)
+			}
+
+			// Open trunk-proof-lag (>= 30m lag), deliver via wait, mark seen, and acknowledge.
+			tip1 := f.landAt(now.Add(-35 * time.Minute))
+			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
+				t.Fatalf("open eval: code=%d out=%q err=%q", code, out, errOut)
+			}
+			code, firstOut, firstErr := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "2s")
+			if code != 0 || firstErr != "" || !strings.Contains(firstOut, "trunk-proof-lag") {
+				t.Fatalf("initial wait: code=%d out=%q err=%q", code, firstOut, firstErr)
+			}
+			seq1 := cursor(t, firstOut)
+			if code, seenOut, seenErr := invokeStore("seen", "--through", fmt.Sprint(seq1)); code != 0 || seenErr != "" {
+				t.Fatalf("seen seq1: code=%d out=%q err=%q", code, seenOut, seenErr)
+			}
+
+			var alertID string
+			faceRead(t, s, `SELECT alert_id FROM alert_episodes WHERE rule_id='trunk-proof-lag'`, &alertID)
+			acknowledge(alertID)
+			if state, pending := readStatus(); state != "acknowledged" || pending != 0 {
+				t.Fatalf("after %s: want state=acknowledged pending=0, got state=%q pending=%d", ackMode, state, pending)
+			}
+
+			// Criterion c6: with trunk-proof-lag acknowledged and no red proof since
+			// (started, running, ended fault, ended canceled, and a new landing), wait delivers nothing.
+			f.appendProgress(now.Add(-2*time.Minute), drain.HeavyProgressFact{TipSHA: tip1, Phase: "started"})
+			f.appendProgress(now.Add(-90*time.Second), drain.HeavyProgressFact{TipSHA: tip1, Phase: "progress", CheckID: "unit", Outcome: "running"})
+			f.appendProgress(now.Add(-60*time.Second), drain.HeavyProgressFact{TipSHA: tip1, Phase: "ended", Outcome: "fault"})
+			f.appendProgress(now.Add(-45*time.Second), drain.HeavyProgressFact{TipSHA: tip1, Phase: "ended", Outcome: "canceled"})
+			tip2 := f.landAt(now.Add(-30 * time.Second))
+
+			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
+				t.Fatalf("c6 eval: code=%d out=%q err=%q", code, out, errOut)
+			}
+			if code, out, errOut := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
+				t.Fatalf("c6 wait expected silence (code 2), got code=%d out=%q err=%q", code, out, errOut)
+			}
+			if state, pending := readStatus(); state != "acknowledged" || pending != 0 {
+				t.Fatalf("c6 status: want state=acknowledged pending=0, got state=%q pending=%d", state, pending)
+			}
+
+			// Criterion c5: a red proof reopens trunk-proof-lag and delivers again naming failing_checks and tip_sha.
+			f.appendProgress(now.Add(-20*time.Second), drain.HeavyProgressFact{
+				TipSHA:        tip2,
+				Phase:         "ended",
+				Outcome:       "red",
+				FailingChecks: "go-tillr-drain",
+			})
+			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
+				t.Fatalf("c5 eval: code=%d out=%q err=%q", code, out, errOut)
+			}
+			var reopenCause string
+			faceRead(t, s, `SELECT json_extract(payload,'$.cause') FROM events WHERE kind='watch.alert.reopened' AND object_id='`+alertID+`' ORDER BY seq DESC LIMIT 1`, &reopenCause)
+			if reopenCause != "reopen-when" {
+				t.Fatalf("want watch.alert.reopened cause=reopen-when, got %q", reopenCause)
+			}
+			code, reopenOut, reopenErr := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "2s")
+			if code != 0 || reopenErr != "" {
+				t.Fatalf("c5 wait: code=%d out=%q err=%q", code, reopenOut, reopenErr)
+			}
+			if !strings.Contains(reopenOut, "trunk-proof-lag") || !strings.Contains(reopenOut, "go-tillr-drain") || !strings.Contains(reopenOut, tip2) {
+				t.Fatalf("c5 wait output missing expected rule/check/tip_sha:\n%s", reopenOut)
+			}
+			seq2 := cursor(t, reopenOut)
+			if code, seenOut, seenErr := invokeStore("seen", "--through", fmt.Sprint(seq2)); code != 0 || seenErr != "" {
+				t.Fatalf("seen seq2: code=%d out=%q err=%q", code, seenOut, seenErr)
+			}
+
+			// Deduplication before re-ack: a duplicate eval/wait while open and already seen delivers nothing.
+			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
+				t.Fatalf("dedup eval: code=%d out=%q err=%q", code, out, errOut)
+			}
+			if code, out, errOut := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
+				t.Fatalf("dedup wait expected silence (code 2), got code=%d out=%q err=%q", code, out, errOut)
+			}
+			if state, pending := readStatus(); state != "open" || pending != 0 {
+				t.Fatalf("dedup status: want state=open pending=0, got state=%q pending=%d", state, pending)
+			}
+
+			// Re-acknowledge after first red proof: stays silent until a second red proof names a new failing check.
+			acknowledge(alertID)
+			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
+				t.Fatalf("re-ack eval: code=%d out=%q err=%q", code, out, errOut)
+			}
+			if code, out, errOut := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
+				t.Fatalf("re-ack wait expected silence (code 2), got code=%d out=%q err=%q", code, out, errOut)
+			}
+			if state, pending := readStatus(); state != "acknowledged" || pending != 0 {
+				t.Fatalf("re-ack status: want state=acknowledged pending=0, got state=%q pending=%d", state, pending)
+			}
+
+			f.appendProgress(now.Add(-10*time.Second), drain.HeavyProgressFact{
+				TipSHA:        tip2,
+				Phase:         "ended",
+				Outcome:       "red",
+				FailingChecks: "go-tillr-watch",
+			})
+			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
+				t.Fatalf("second red eval: code=%d out=%q err=%q", code, out, errOut)
+			}
+			code, secondRedOut, secondRedErr := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "2s")
+			if code != 0 || secondRedErr != "" {
+				t.Fatalf("second red wait: code=%d out=%q err=%q", code, secondRedOut, secondRedErr)
+			}
+			if !strings.Contains(secondRedOut, "trunk-proof-lag") || !strings.Contains(secondRedOut, "go-tillr-watch") || !strings.Contains(secondRedOut, tip2) {
+				t.Fatalf("second red wait output missing expected rule/check/tip_sha:\n%s", secondRedOut)
+			}
+		})
+	}
+}
+
+func TestTrunkProofLagRuleLint(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run(t.Context(), []string{"lint", "../.."}, &out, &errOut)
+	if code != 0 || out.Len() != 0 || errOut.Len() != 0 {
+		t.Fatalf("tillr watch lint ../..: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
 }

@@ -486,7 +486,7 @@ func (s *TillrStoreSource) syncKinds(rd *store.Reader, c *evalCache, rules []Rul
 	kindWindowStart := map[string]int64{}
 	kindMinSeq := map[string]int64{}
 	for _, r := range rules {
-		if !r.Enabled || r.evaluatorReason() != "" || r.When.Pattern == LagBehind {
+		if !r.Enabled || r.evaluatorReason() != "" || (r.When.Pattern == LagBehind && r.When.ReopenWhen == nil) {
 			continue
 		}
 		ws := windowStartMillis(r.When, now)

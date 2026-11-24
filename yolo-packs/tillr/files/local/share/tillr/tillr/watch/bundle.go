@@ -51,11 +51,35 @@ func makeBundle(r Rule, key, id string, c *condition) ([]byte, error) {
 func makeBundleWithPrefix(r Rule, key, id string, c *condition, summaryPrefix string) ([]byte, error) {
 	events := slices.Clone(c.events)
 	slices.Reverse(events)
+	var newestLookup func(string) any
+	if len(c.events) > 0 {
+		newestLookup = c.events[len(c.events)-1].lookup
+	}
+	return encodeConditionBundle(r, key, id, c, r.Guidance.Summary, summaryPrefix, events, newestLookup)
+}
+
+func makeLagReopenBundle(r Rule, key, id string, c *condition, summaryPrefix string) ([]byte, error) {
+	summaryTemplate := r.Guidance.Summary
+	if r.Guidance.ReopenSummary != "" {
+		summaryTemplate = r.Guidance.ReopenSummary
+	}
+	events := []observation{}
+	var newestLookup func(string) any
+	if c.lag != nil && c.lag.reopenEvent != nil {
+		events = []observation{*c.lag.reopenEvent}
+		newestLookup = c.lag.reopenEvent.lookup
+	}
+	return encodeConditionBundle(r, key, id, c, summaryTemplate, summaryPrefix, events, newestLookup)
+}
+
+func encodeConditionBundle(r Rule, key, id string, c *condition, summaryTemplate, summaryPrefix string, events []observation, newestLookup func(string) any) ([]byte, error) {
 	count := int64(len(events))
 	var elapsed int64
 	switch {
 	case c.lag != nil:
-		events = []observation{}
+		if events == nil {
+			events = []observation{}
+		}
 		count, elapsed = c.lag.count, c.lag.elapsed.Milliseconds()
 	case r.When.Pattern == DurationWithoutEvent:
 		elapsed = c.waitAge.Milliseconds()
@@ -89,10 +113,6 @@ func makeBundleWithPrefix(r Rule, key, id string, c *condition, summaryPrefix st
 		base["pair_a"] = c.pair[0]
 		base["pair_b"] = c.pair[1]
 	}
-	var newestLookup func(string) any
-	if len(c.events) > 0 {
-		newestLookup = c.events[len(c.events)-1].lookup
-	}
 	render := func(lines []string) []string {
 		out := make([]string, len(lines))
 		for i, line := range lines {
@@ -100,7 +120,7 @@ func makeBundleWithPrefix(r Rule, key, id string, c *condition, summaryPrefix st
 		}
 		return out
 	}
-	b := Bundle{RuleID: r.ID, Subject: key, Severity: r.Severity, Events: events, Guidance: bundleGuidance{Summary: summaryPrefix + renderGuidanceLine(r.Guidance.Summary, base, newestLookup), Check: render(r.Guidance.Check), Do: render(r.Guidance.Do)}}
+	b := Bundle{RuleID: r.ID, Subject: key, Severity: r.Severity, Events: events, Guidance: bundleGuidance{Summary: summaryPrefix + renderGuidanceLine(summaryTemplate, base, newestLookup), Check: render(r.Guidance.Check), Do: render(r.Guidance.Do)}}
 	return b.encode()
 }
 
