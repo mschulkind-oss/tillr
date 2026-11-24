@@ -3,11 +3,9 @@ title: "Authority, not approval — who decides, who judges, and what the owner 
 status: accepted
 stage: CURRENT
 verified: 2026-11-21
-verified_commit: e167325c21f77151e9eeab22df542b3837e0f631
 covers:
   - tools/tillr-item/item/verdict.go
   - tools/tillr-item/item/judge.go
-  - tools/tillr-item/item/grant.go
   - tools/tillr-item/item/waiting.go
   - tools/tillr-item/item/decision.go
   - tools/tillr-drain/drain/blocked.go
@@ -17,7 +15,7 @@ summary: "The rules for who may decide what: an operation is mechanical, delegat
 
 # Authority, not approval
 
-**Status:** Source-verified 2026-11-21 against `e167325c21f77151e9eeab22df542b3837e0f631`.
+**Status:** Source-verified 2026-11-21.
 UNMEASURED: this reference was written by reading the code, not by observing a live drain.
 
 This page states who may decide what in this repository's agent work: which operations the
@@ -34,8 +32,7 @@ violation today or whether the rule is a convention agents follow.
 | The operator's reporting rule | [`drain-timed-checkin`](../../.agents/skills/drain-timed-checkin/SKILL.md), *Reporting to the owner* |
 
 **Reads with:** [the judge design](../design/tillr-judge-and-lifecycle.md#6-the-judge-is-a-step-in-the-flow)
-(the owner's ruling that a judge is a step in the flow, and the changes that ruling still
-owes the code), [item states](./tillr-item-states.md) (what `blocked` stores), and
+(the owner's ruling that a judge is a step in the flow), [item states](./tillr-item-states.md) (what `blocked` stores), and
 [landing principle 13](../design/landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act)
 (a held state names a mover).
 
@@ -158,14 +155,10 @@ status field, not a check.
 - An agent cannot record a verdict on an `owner-only` criterion, and a mechanical actor can
   record one only on a `verification-only` criterion. Both are refused as `claim-class-actor`.
 
-> [!WARNING]
-> **The code still requires a grant, and this page does not describe it as a rule.** At the
-> verified commit an agent verdict is also refused unless a stored *grant* (a row naming the
-> classes an agent may judge, with an expiry time) covers it. The owner ruled on 2026-11-20
-> that the judge is a step in the workflow and that nothing is granted or expires; the removal
-> is specified in [the judge design](../design/tillr-judge-and-lifecycle.md#6-the-judge-is-a-step-in-the-flow)
-> and is not built yet. Do not extend the grant, and do not cite the independence rule as
-> support for it.
+No stored grant stands between an agent and a verdict. The judge is a step in the workflow
+([the judge design](../design/tillr-judge-and-lifecycle.md#6-the-judge-is-a-step-in-the-flow)),
+nothing is granted and nothing expires: a verdict that cites a `grant_id` is refused as
+`grant-retired`.
 
 ## What enforces each rule today
 
@@ -205,8 +198,7 @@ These hold whatever tool is in use.
 
 ## Current values
 
-Verified at `e167325c21f77151e9eeab22df542b3837e0f631`. The prose above explains what each
-of these is for.
+The prose above explains what each of these is for.
 
 | Value | Setting | Defined in |
 | :--- | :--- | :--- |
