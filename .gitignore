@@ -87,3 +87,5 @@
 .tillr/
 # Built by `go build` in the module directory; never content.
 /tools/tillr-gate/tillr-gate
+/tools/tillr-cli/tillr-cli
+/tools/tillr-watch/tillr-watch
