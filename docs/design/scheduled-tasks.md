@@ -1,7 +1,5 @@
 ---
 title: "Scheduled items: an item not due yet is simply not ready"
-date: 2026-11-02
-updated: 2026-11-24
 status: in-review
 stage: DESIGN
 next: "Ground the build points in [§14](#14-where-the-code-lives-by-symbol) against tools/tillr, tools/tillr-item, tools/tillr-drain and tools/tillr-view, then build V1 and V2 ([§9](#9-staging-v1-v2-and-the-criterion)). The owner may review and overturn the designer decisions in [§11](#11-decision-ledger) and [§12](#12-open-questions)."
@@ -14,7 +12,7 @@ summary: "A due time and a recurrence are two nullable integer columns on the it
 **Status:** Nothing built. tillr has no `due_at` or `recur_interval_ms` column on `items`, no
 `not-due` planner reason, and no `schedule.rearm` event
 (`rg -n 'due_at|recur_interval_ms|not-due|schedule\.rearm' tools -g '*.go'` returns only the
-unrelated `next_due_at` steering timer and the `log-checkpoint.not-due` store reason).
+unrelated `log-checkpoint.not-due` store reason).
 [The roadmap](../tillr/roadmap.md) lists this design as the unbuilt substrate of
 [the goal monitor](tillr-goal-monitor.md). Rows `D-1`–`D-11` in [§11](#11-decision-ledger) and the
 settlement of [`OQ-ST2`](#12-open-questions) are designer decisions without a quoted owner ruling
@@ -54,8 +52,8 @@ The design settles four things:
    ([§5.3](#53-re-arming-in-place-and-the-transition-the-machine-is-missing)).
 4. **No daemon** — the drain's poll is the only clock ([§6](#6-no-daemon)).
 
-No part of this design depends on a time limit that stops a run: the owner ruled on 2026-11-20
-against clocks that stop work.
+No part of this design depends on a time limit that stops a run: the owner ruled against clocks
+that stop work (2026-11-20).
 
 ## 2. The item fields
 
@@ -63,7 +61,7 @@ against clocks that stop work.
 
 | Field | Type | Meaning | Null means |
 | :--- | :--- | :--- | :--- |
-| `items.due_at` | `INTEGER NULL`, unix milliseconds | The next instant this item becomes admissible | No schedule: the item is due now, which is every item that exists today |
+| `items.due_at` | `INTEGER NULL`, unix milliseconds | The next instant this item becomes admissible | No schedule: the item is due now |
 | `items.recur_interval_ms` | `INTEGER NULL` | The period after which a completed item becomes due again | One-shot: schedule once, complete, stay completed |
 
 Both are nullable and additive, so the migration is two registered columns and a schema version
@@ -76,7 +74,7 @@ and the pair is only ever written in two places.
 
 ### 2.2 What an item without them means
 
-Exactly today's behavior, unchanged. `due_at IS NULL` is the due predicate's first disjunct, so
+Unscheduled behavior, unchanged. `due_at IS NULL` is the due predicate's first disjunct, so
 every existing item is due at every instant, and `recur_interval_ms IS NULL` means the completion
 write does nothing new. This is the whole compatibility story: the feature is inert for every
 item that does not opt in.
@@ -223,7 +221,7 @@ hint it does not belong in this queue.
 ### 5.3 Re-arming in place, and the transition the machine is missing
 
 The same item re-arms in place. At the completion write for an item with an interval set, in one
-store transaction: record the completion exactly as today (the run, verdict and landing records
+store transaction: record the completion as for any item (the run, verdict and landing records
 stand — that history *is* the audit trail), append a `schedule.rearm` event carrying the old and new
 due time, return the item to a dispatchable state, and set the next due time. The item never rests
 in `landed`; its runs, verdicts and events accumulate under one id.
@@ -267,7 +265,7 @@ and the item remains due under the drain's ordinary failure handling; this desig
 schedule-specific attempt cap or backoff ([OQ-ST2](#12-open-questions)). That is the right default —
 "not forgotten" includes not silently skipping a period because the attempt broke.
 
-The ordinary failure handling is the owner's ruling of 2026-11-17 — `D-JL10` in
+The ordinary failure handling is an owner ruling (2026-11-17), `D-JL10` in
 [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger): worker endings are
 never counted, nothing re-runs because an input hash changed, a failed or refused worker run returns
 to its own session with its evidence, and only an identical repeat escalates to the design seat. The
@@ -337,10 +335,10 @@ editing it updates every future cycle.
 
 | Question | Answer |
 | :--- | :--- |
-| What happens to existing items? | Nothing. `due_at IS NULL` and `recur_interval_ms IS NULL` are the defaults, and both mean today's behavior |
+| What happens to existing items? | Nothing. `due_at IS NULL` and `recur_interval_ms IS NULL` are the defaults, and both mean an unscheduled item |
 | Does the on-disk format need a version bump? | **Yes**: `store.SchemaVersion` in [`tools/tillr/store/schema.go`](../../tools/tillr/store/schema.go) rises by one, so a binary that reads `due_at` never opens a store without it |
 | What is the migration? | Two additive columns on `items`, registered with `store.RegisterColumn("item", "items", ...)` beside the existing ones in [`tools/tillr-item/item/schema.go`](../../tools/tillr-item/item/schema.go): no row rewritten, no constraint changed, no table rebuild |
-| Does an older build refuse the newer store? | Yes: `store.OpenReadOnly` refuses a newer schema version. That is the honest answer: the older build would not know what a due time means |
+| Does an older build refuse the newer store? | Yes: a build refuses to open a store whose schema version is newer than its own. That is the honest answer: the older build would not know what a due time means |
 | Does the events table need a change? | No. An event kind is free text, so `schedule.rearm` needs no schema change |
 
 ## 9. Staging: V1, V2, and the criterion
@@ -429,7 +427,7 @@ here rather than compacting into [§11](#11-decision-ledger) and remains open to
      silently stops being recurring.
    - **C — Measure first.**
 
-   _Settled (designer's decision on recorded principle at the owner's request; the owner may overturn it):_ A. A failing recurring item is governed by the drain-wide rule like any other item, with no schedule-specific cap. Under the owner's ruling of 2026-11-17 (`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)), a failed worker run goes back to its own session with its evidence, uncounted, and only an identical repeat goes to the design seat.
+   _Settled (designer's decision on recorded principle at the owner's request; the owner may overturn it):_ A. A failing recurring item is governed by the drain-wide rule like any other item, with no schedule-specific cap. Under the owner's ruling (2026-11-17, `D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)), a failed worker run goes back to its own session with its evidence, uncounted, and only an identical repeat goes to the design seat.
 
 ## 13. What this does not decide
 
@@ -442,13 +440,13 @@ here rather than compacting into [§11](#11-decision-ledger) and remains open to
 
 ## 14. Where the code lives, by symbol
 
-Nothing below is built. Each row names where the design attaches in the tree today; the build
+Nothing below is built. Each row names where the design attaches in the tree; the build
 grounds each one before changing it.
 
 | What this design touches | Where it lives |
 | :--- | :--- |
 | The two new columns | `ItemDDL` and `store.RegisterColumn("item", "items", ...)` in [`tools/tillr-item/item/schema.go`](../../tools/tillr-item/item/schema.go) |
-| The version bump and the additive migration | `store.SchemaVersion`, `store.Open` and `store.OpenReadOnly` in [`tools/tillr/store/schema.go`](../../tools/tillr/store/schema.go) |
+| The version bump and the additive migration | `store.SchemaVersion` and `store.Open` in [`tools/tillr/store/schema.go`](../../tools/tillr/store/schema.go) |
 | The planner's item row gains the due time; its filter and ordering are untouched | `itemRow` and the planner's item loading in [`tools/tillr-drain/drain/plan.go`](../../tools/tillr-drain/drain/plan.go) |
 | The new first check, and the `not-due` reason | `(*planner).decide` and the `Reason*` constants in [`tools/tillr-drain/drain/plan.go`](../../tools/tillr-drain/drain/plan.go) |
 | Keeping a not-due item out of the blocked, hold and dependency counts | The `WhyRow` classification in [`tools/tillr-drain/drain/why.go`](../../tools/tillr-drain/drain/why.go), and [`tools/tillr-view/`](../../tools/tillr-view/) |
