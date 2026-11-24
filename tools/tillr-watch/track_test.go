@@ -119,12 +119,39 @@ func TestWatchTrackAndAckWithItemWaitEndToEnd(t *testing.T) {
 		fact(t, s, `{"item_id":"go-affected"}`)
 		fact(t, s, `{"item_id":"trunk-lag"}`)
 	}
-	// Give wait a moment to wake on WAL writes and evaluate; it MUST NOT exit!
-	select {
-	case r := <-waitDone:
-		t.Fatalf("wait exited for tracked repeat while item is open: %+v", r)
-	case <-time.After(150 * time.Millisecond):
+	// Wait until wait evaluates the repeats and raises both recorded observed counts; it MUST NOT exit!
+	poll := time.NewTicker(5 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		select {
+		case r := <-waitDone:
+			t.Fatalf("wait exited for tracked repeat while item is open: %+v", r)
+		default:
+		}
+		var risen int
+		if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+			return rd.QueryRow(
+				`SELECT COUNT(*) FROM alert_episodes WHERE alert_id IN (?, ?) AND observation_count >= 2`,
+				alertID, alertID2,
+			).Scan(&risen)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if risen == 2 {
+			select {
+			case r := <-waitDone:
+				t.Fatalf("wait exited for tracked repeat while item is open: %+v", r)
+			default:
+			}
+			break
+		}
+		select {
+		case r := <-waitDone:
+			t.Fatalf("wait exited for tracked repeat while item is open: %+v", r)
+		case <-poll.C:
+		}
 	}
+	poll.Stop()
 
 	// Verify status text and JSON show observed count rising and item=...
 	code, stText, stErr := invoke("status", "--rules", dir)
