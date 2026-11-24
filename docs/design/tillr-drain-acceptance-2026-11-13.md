@@ -34,7 +34,7 @@ tillr drain loop --root /workspace --lanes 2 \
 - **Spend**: `$0.162990` over `38 744 131` tokens, from two `pi` runs
   (`run-item-seed-02-20261113T062156Z` $0.109994, `run-item-seed-04-20261113T062156Z` $0.052996).
 - **Landed**: `e85442494d feat(seats): a yolo profile names its default seat set` — +242/−4 over five
-  files, authored as `Matthew Schulkind <owner@example.invalid>` by the lander's identity
+  files, authored as the owner's personal identity by the lander's identity
   normalization. Its own suite passes in the landed tree (19 cases, including a real
   `yolo config dump` read back for `seat_set`), and the repository gate answers 0 on it.
 - **Left unjudged**: `item-seed-04`, whose run committed `b583a03f7b` [unlanded] and whose record says
