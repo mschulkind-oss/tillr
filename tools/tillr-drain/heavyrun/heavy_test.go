@@ -86,6 +86,97 @@ func TestHeavyRefusesRewrittenGreenAndCAS(t *testing.T) {
 		t.Fatalf("status=%+v %v", status, err)
 	}
 }
+func TestHeavyRebasedTrunkLeavesGreenUnchanged(t *testing.T) {
+	t.Run("rebased during proof keeps green unchanged and records both tips", func(t *testing.T) {
+		root, base := heavyRepo(t)
+		heavyGit(t, root, "update-ref", GreenRef, base)
+		provedTip := heavyCommit(t, root, "before-rebase")
+		var rebasedTip string
+		runner := heavyFixture(t, root, func(context.Context, string, string) ([]HeavyCheck, error) {
+			if rebasedTip == "" {
+				// Simulate a host `git pull --rebase` while the proof runs:
+				// move main onto a sibling history rooted at base so provedTip leaves the trunk.
+				heavyGit(t, root, "reset", "--hard", base)
+				heavyCommit(t, root, "remote-change")
+				rebasedTip = heavyCommit(t, root, "replayed-change")
+			}
+			return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
+		})
+		out, err := runner.Run(context.Background())
+		if err == nil {
+			t.Fatalf("expected error when proved tip %s left trunk %s; out=%+v", provedTip, rebasedTip, out)
+		}
+		if !strings.Contains(err.Error(), provedTip) || !strings.Contains(err.Error(), rebasedTip) {
+			t.Fatalf("error must name proved tip %s and trunk tip %s, got %q", provedTip, rebasedTip, err.Error())
+		}
+		if green := heavyGit(t, root, "rev-parse", GreenRef); green != base {
+			t.Fatalf("refs/tillr/green = %s, want unchanged base %s", green, base)
+		}
+		if len(out.Runs) != 1 || out.Runs[0].Result != "unknown" || !strings.Contains(out.Runs[0].Detail, provedTip) || !strings.Contains(out.Runs[0].Detail, rebasedTip) {
+			t.Fatalf("run must record proved tip %s and trunk tip %s: %+v", provedTip, rebasedTip, out.Runs)
+		}
+		dir, dirErr := HeavyDirectory(context.Background(), root)
+		if dirErr != nil {
+			t.Fatal(dirErr)
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, "green-"+provedTip+".json")); !os.IsNotExist(statErr) {
+			t.Fatalf("green-%s.json should not be published for an off-trunk tip, statErr=%v", provedTip, statErr)
+		}
+		status, statusErr := ReadHeavyStatus(context.Background(), root, "")
+		if statusErr != nil {
+			t.Fatal(statusErr)
+		}
+		if status.GreenCommit != base {
+			t.Fatalf("status.GreenCommit = %s, want %s", status.GreenCommit, base)
+		}
+		if !strings.Contains(status.Detail, provedTip) || !strings.Contains(status.Detail, rebasedTip) {
+			t.Fatalf("status.Detail must name proved tip %s and trunk tip %s, got %q", provedTip, rebasedTip, status.Detail)
+		}
+
+		// A subsequent proof of the rebased trunk tip succeeds and advances refs/tillr/green as before.
+		next, err := runner.Run(context.Background())
+		if err != nil {
+			t.Fatalf("follow-up proof of rebased tip failed: %v", err)
+		}
+		if len(next.Runs) != 1 || next.Runs[0].Result != "green" || next.Runs[0].TipSHA != rebasedTip {
+			t.Fatalf("follow-up runs=%+v, want green at %s", next.Runs, rebasedTip)
+		}
+		if green := heavyGit(t, root, "rev-parse", GreenRef); green != rebasedTip {
+			t.Fatalf("refs/tillr/green = %s, want rebased tip %s", green, rebasedTip)
+		}
+	})
+
+	t.Run("tip still on trunk after fast-forward moves green as before", func(t *testing.T) {
+		root, base := heavyRepo(t)
+		heavyGit(t, root, "update-ref", GreenRef, base)
+		firstTip := heavyCommit(t, root, "first")
+		var secondTip string
+		var greensAfterReport []string
+		runner := heavyFixture(t, root, func(_ context.Context, dir, _ string) ([]HeavyCheck, error) {
+			sha := heavyGit(t, dir, "rev-parse", "HEAD")
+			if sha == firstTip && secondTip == "" {
+				secondTip = heavyCommit(t, root, "second")
+			}
+			return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
+		})
+		runner.Report = func(HeavyRun) {
+			greensAfterReport = append(greensAfterReport, heavyGit(t, root, "rev-parse", GreenRef))
+		}
+		out, err := runner.Run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Runs) != 2 || out.Runs[0].Result != "green" || out.Runs[1].Result != "green" {
+			t.Fatalf("runs=%+v", out.Runs)
+		}
+		if len(greensAfterReport) != 2 || greensAfterReport[0] != firstTip || greensAfterReport[1] != secondTip {
+			t.Fatalf("greensAfterReport=%v, want [%s %s]", greensAfterReport, firstTip, secondTip)
+		}
+		if green := heavyGit(t, root, "rev-parse", GreenRef); green != secondTip {
+			t.Fatalf("refs/tillr/green = %s, want %s", green, secondTip)
+		}
+	})
+}
 func TestHeavyAttributesFirstRedAndGateFault(t *testing.T) {
 	for _, fault := range []bool{false, true} {
 		t.Run(map[bool]string{false: "landing", true: "gate-fault"}[fault], func(t *testing.T) {

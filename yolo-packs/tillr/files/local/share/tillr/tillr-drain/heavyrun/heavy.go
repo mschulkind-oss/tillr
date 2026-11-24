@@ -312,25 +312,37 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 			return out, e
 		}
 		if e == nil && run.Result == "green" {
-			old := base
-			if old == "" {
-				old = strings.Repeat("0", len(tip))
-			}
-			// Publish evidence by commit before moving the pointer. Cancellation or
-			// a refused compare-and-swap cannot replace the old pointer's time.
-			passed := []string{}
-			for _, check := range run.Checks {
-				if ClassifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome == checkresult.Pass {
-					passed = append(passed, check.CheckID)
-				}
-			}
-			e = PublishHeavyJSON(dir, "green-"+tip+".json", heavy.GreenProof{Commit: tip, ProvedAt: r.Now().UTC(), Passed: passed})
-			if e == nil {
-				_, e = heavy.GitOutput(ctx, r.Root, "update-ref", GreenRef, tip, old)
-			}
-			if e != nil {
-				e = Externalf("green compare-and-swap refused: %v", e)
+			current, curErr := heavy.GitOutput(ctx, r.Root, "rev-parse", r.Trunk+"^{commit}")
+			if curErr != nil {
+				e = Externalf("reading %s before advancing %s: %v", r.Trunk, GreenRef, curErr)
 				run.Result = "unknown"
+			} else if onTrunk, ancErr := fixer.TrunkAncestor(ctx, r.Root, tip, current); ancErr != nil {
+				e = Externalf("checking whether proved tip %s is on %s %s: %v", tip, r.Trunk, current, ancErr)
+				run.Result = "unknown"
+			} else if !onTrunk {
+				e = Externalf("proved tip %s left the trunk (trunk is now %s); %s stays", tip, current, GreenRef)
+				run.Result = "unknown"
+			} else {
+				old := base
+				if old == "" {
+					old = strings.Repeat("0", len(tip))
+				}
+				// Publish evidence by commit before moving the pointer. Cancellation or
+				// a refused compare-and-swap cannot replace the old pointer's time.
+				passed := []string{}
+				for _, check := range run.Checks {
+					if ClassifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome == checkresult.Pass {
+						passed = append(passed, check.CheckID)
+					}
+				}
+				e = PublishHeavyJSON(dir, "green-"+tip+".json", heavy.GreenProof{Commit: tip, ProvedAt: r.Now().UTC(), Passed: passed})
+				if e == nil {
+					_, e = heavy.GitOutput(ctx, r.Root, "update-ref", GreenRef, tip, old)
+				}
+				if e != nil {
+					e = Externalf("green compare-and-swap refused: %v", e)
+					run.Result = "unknown"
+				}
 			}
 		}
 		run.DurationMS = r.Now().Sub(started).Milliseconds()
