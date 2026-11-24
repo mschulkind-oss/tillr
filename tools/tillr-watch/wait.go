@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/notify"
 	"github.com/mschulkind-oss/tillr/watch"
 )
 
@@ -18,6 +19,8 @@ type waitTestHooks struct {
 	onPass     func()
 	onIdle     func(coalesceArmed bool)
 	onCoalesce func() func()
+	// onRelayProgress runs after a wake is queued; its bool marks a reconnect.
+	onRelayProgress func(bool, notify.Frame)
 }
 
 type waitOptions struct {
@@ -32,8 +35,10 @@ type waitOptions struct {
 
 func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr io.Writer) (code int, resultErr error) {
 	var onCoalesce func() func()
+	var onRelayProgress func(bool, notify.Frame)
 	if opts.hooks != nil {
 		onCoalesce = opts.hooks.onCoalesce
+		onRelayProgress = opts.hooks.onRelayProgress
 	}
 	wake, err := watchNotify(ctx, e.Store.Path(), notifyWakeOptions{
 		fallbackPoll:      opts.fallbackPoll,
@@ -41,6 +46,7 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 		ticks:             opts.ticks,
 		minNotifyInterval: defaultMinNotifyInterval,
 		onCoalesce:        onCoalesce,
+		onRelayProgress:   onRelayProgress,
 	})
 	if err != nil {
 		return 1, err
