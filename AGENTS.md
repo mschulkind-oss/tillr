@@ -60,27 +60,26 @@ repo beside the doc if it must be kept. These are the two spellings:
 $YOLO_DURABLE_DIR/...      .yolo/durable/...
 ```
 
-`just done` fails a tracked Markdown file that cites one in prose or inline code (the
-[`scratch` check](./tools/gate/checks/scratch.json)); a command in a fenced block is a
-specimen, not a citation, and is not read. A documented *location* — a tool's
-intended output directory, a configured `PI_SUBAGENTS_WORKTREE_DIR` value — is the
-one exception, each named in the gate's allowlist with the reason it stays.
+The gate's `scratch` check ([`tools/gate/checks/scratch.json`](./tools/gate/checks/scratch.json))
+fails a tracked Markdown file that cites one in prose or inline code; a command in a fenced
+block is a specimen, not a citation, and is not read. A documented *location* — a tool's
+intended output directory — is the one exception, each named in the check's allowlist with the
+reason it stays.
 
 **A commit sha is evidence only when HEAD contains it.** A document that cites a commit
 as proof — "the suite counts are in commit X" — claims a reader can go and read that
 commit. A sha that lived only on a lane branch, or that a history rewrite orphaned, cannot
-be checked, and a reader cannot tell it from a claim that was never true. `just done`
+be checked, and a reader cannot tell it from a claim that was never true. The gate's
+`citations` check ([`tools/gate/checks/citations.json`](./tools/gate/checks/citations.json))
 refuses a line added to tracked Markdown that cites one (`git merge-base --is-ancestor
 <sha> HEAD` says no). When the unlanded citation is the point — a record of what a lane
 did — mark the line `[unlanded]`; that marker is the reader-visible form, and a grep finds
-it. The tree's pre-existing citations are a measured backlog, so the guard judges added
-lines only.
+it. The guard judges added lines only.
 
 **A citation into the tree is an anchor or a quoted line, never a bare line number.**
-A number rots the moment anything above it moves: one relocation can make every citation
-below it stale. Keep a number only as a *historical anchor*, with the commit it was read
-at named beside it (`Line numbers read at 2f0ec38f`), because renumbering the past
-falsifies the record. A **negative claim carries its command and its scope**: `rg 'x'
+A number rots the moment anything above it moves: one relocation makes every citation
+below it stale at once. Cite a heading anchor, a question anchor, a function name or the
+quoted line. A **negative claim carries its command and its scope**: `rg 'x'
 <where>` returning nothing is evidence; "x is not in the tree" is not.
 
 **Name the file; a directory check skips what is hidden.** `uvx vantage-check <dir>` skips
