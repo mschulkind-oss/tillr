@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -70,20 +71,76 @@ while True:
         parent = os.environ.get('TMPDIR') or os.environ['YOLO_DURABLE_DIR']
         with tempfile.TemporaryDirectory(dir=parent) as temporary:
             root = Path(temporary)
+            names = ['TestOne', 'TestTwo', 'TestThree']
+            gates = root / 'gates'
+            gates.mkdir()
+            gate_fds = {}
+            for gate_name in ('start', '0', '1'):
+                fifo = gates / gate_name
+                os.mkfifo(fifo)
+                fd = os.open(fifo, os.O_RDWR)
+                self.addCleanup(os.close, fd)
+                gate_fds[gate_name] = fd
+
             binary = root / 'fake-test'
             binary.write_text('''#!/usr/bin/env python3
-import time
-for name in ('TestOne', 'TestTwo', 'TestThree'):
- print('=== RUN   ' + name, flush=True)
- time.sleep(0.8)
- print('--- PASS: ' + name + ' (0.80s)', flush=True)
+import pathlib, sys
+gates = pathlib.Path(sys.argv[0]).parent / 'gates'
+with (gates / 'start').open('rb') as gate:
+    gate.read(1)
+for index, name in enumerate(('TestOne', 'TestTwo', 'TestThree')):
+    print('=== RUN   ' + name, flush=True)
+    if index > 0:
+        with (gates / str(index - 1)).open('rb') as gate:
+            gate.read(1)
+    print('--- PASS: ' + name + ' (0.80s)', flush=True)
 print('PASS', flush=True)
 ''')
             binary.chmod(0o755)
-            events = shards.run_shard('fixture', root, binary,
-                                      ['TestOne', 'TestTwo', 'TestThree'], 0,
-                                      root / 'scratch', '0', [], wall_timeout=2,
-                                      lock_dir=root / 'locks')
+
+            real_monotonic = time.monotonic
+            liveness_deadline = real_monotonic() + 60.0
+            now = [0.0]
+            completed = []
+            phase = [0]
+            gate_order = ('start', '0', '1')
+
+            class _ClockDriver:
+                interval = 0.02
+
+                @staticmethod
+                def record_test(detail):
+                    completed.append(detail)
+
+                @staticmethod
+                def maybe_publish():
+                    if real_monotonic() > liveness_deadline:
+                        self.fail('liveness guard expired waiting for fake-test progress')
+                    step = phase[0] // 2
+                    if step >= len(gate_order):
+                        return
+                    if phase[0] % 2 == 0:
+                        if step == 0 or len(completed) >= step:
+                            # Advance the stall clock while fake-test is still blocked on its
+                            # current gate so run_shard checks `remaining` before releasing it.
+                            now[0] += 1.5
+                            phase[0] += 1
+                    else:
+                        os.write(gate_fds[gate_order[step]], b'\n')
+                        phase[0] += 1
+
+            fake_time = types.SimpleNamespace(
+                monotonic=lambda: now[0],
+                time=time.time,
+                sleep=time.sleep,
+            )
+            with patch.object(shards, 'time', fake_time):
+                events = shards.run_shard('fixture', root, binary, names, 0,
+                                          root / 'scratch', '0', [], wall_timeout=2,
+                                          lock_dir=root / 'locks',
+                                          progress=_ClockDriver())
+            self.assertEqual(phase[0], 2 * len(gate_order))
+            self.assertEqual(now[0], 4.5)
             self.assertEqual({e.get('Test') for e in events if e.get('Action') == 'pass' and e.get('Test')},
                              {'TestOne', 'TestTwo', 'TestThree'})
 
