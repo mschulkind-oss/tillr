@@ -684,6 +684,10 @@ type Loop struct {
 
 	sessionInitialized bool
 	lastLoopPassAt     time.Time
+	processCPUMu       sync.Mutex
+	lastProcessCPU     *processCPUSnapshot
+	procRoot           string
+	selfPID            int
 	// keepWAL and walKeeper are the store's checkpoint owner, lastCheckpoint is the clock
 	// reading of its last checkpoint, restartPending is whether that cycle left the log
 	// unrestarted, notRestarted counts consecutive log.not-restarted outcomes, and
@@ -1134,6 +1138,7 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 			return nil
 		}
 		l.recordLoopPass(ctx)
+		l.recordProcessCPUIfDue(ctx)
 		l.mu.Lock()
 		dispatched := result.Dispatched
 		if !pendingOnly {

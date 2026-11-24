@@ -516,9 +516,9 @@ func snapshotParityStore(t *testing.T, storePath string) paritySnapshot {
 	defer s.Close()
 	var snap paritySnapshot
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-		// Events (excluding liveness drain.loop-pass which is wall-time throttled).
+		// Events (excluding wall-time-throttled session observation events).
 		rows, err := r.Query(`SELECT kind, COALESCE(object_type,''), COALESCE(object_id,''), COALESCE(payload,'{}')
-			FROM events WHERE kind != ? ORDER BY seq`, LoopPassKind)
+			FROM events WHERE kind NOT IN (?, ?) ORDER BY seq`, LoopPassKind, ProcessCPUKind)
 		if err != nil {
 			return err
 		}
