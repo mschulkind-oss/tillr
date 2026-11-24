@@ -1,0 +1,43 @@
+# At 04:34–04:49 ET on 2026-11-23, lane-1 was kept idle for item-request-b70a54f954
+# ("lane may have a live run in another process domain") with nothing running and
+# 60+ items waiting, with no tillr-watch alert firing.
+# Measured on 2026-11-24 from recorded keep-to-release history in .tillr/state.db
+# (using drain.candidate-lane with released=0, appended at the same releaseCandidateMode
+# keep site where 79b279dc6a added drain.lane-kept on 2026-11-24, paired with the
+# next drain.lane-released or released run.release on that lane) with:
+#   python3 -c "import sqlite3; c = sqlite3.connect('file:.tillr/state.db?mode=ro', uri=True); rows = c.execute(\"SELECT k.seq, k.object_id, json_extract(k.payload, '$.reason'), MIN(r.seq), (MIN(r.ts) - k.ts) / 1000.0 FROM events k JOIN events r ON r.seq > k.seq AND ((r.kind = 'drain.lane-released' AND json_extract(r.payload, '$.lane_id') = json_extract(k.payload, '$.candidate.lane_id')) OR (r.kind = 'run.release' AND json_extract(r.payload, '$.lane_id') = json_extract(k.payload, '$.candidate.lane_id') AND json_extract(r.payload, '$.result') = 'released')) WHERE k.kind = 'drain.candidate-lane' AND json_extract(k.payload, '$.released') = 0 GROUP BY k.seq ORDER BY k.seq\").fetchall(); raw = sorted(w for *_, w in rows); ep = sorted({(run, rsn, rseq): w for _, run, rsn, rseq, w in reversed(rows)}.values()); print(f'raw={len(raw)} min={raw[0]:.1f}s p50={raw[len(raw)//2]:.1f}s max={raw[-1]:.1f}s; episodes={len(ep)} <=15m={[round(w, 1) for w in ep if w <= 900]} >15m={[round(w, 1) for w in ep if w > 900]}')"
+# Result (2026-11-24): raw=18 min=1.1s p50=1425.3s max=172754.6s; episodes=15
+#   <=15m=[1.1, 1.1, 88.8, 160.7, 430.4, 691.3]
+#   >15m=[1136.0, 1425.3, 2508.8, 2862.8, 3356.6, 3374.6, 4846.4, 36767.4, 172754.6]
+# Every transient keep cleared in <= 691.3s (11.5m), while all three 2026-11-23
+# lane-1 false-keep incidents (1136.0s / 18.9m, 1425.3s / 23.8m, 2508.8s / 41.8m)
+# and all six longer stuck keeps (47.7m to 2879.2m) lasted >= 18.9m.
+# Set threshold_duration = "15m".
+[[rule]]
+id = "drain-lane-kept"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.lane-kept", "drain.lane-released", "run.release"]
+
+[rule.when]
+group_by = "lane_id"
+pattern = "duration_without_event"
+after = 'event.kind == "drain.lane-kept"'
+match = 'event.kind == "drain.lane-released" or (event.kind == "run.release" and event.result == "released")'
+threshold_duration = "15m"
+window = "24h"
+
+[rule.guidance]
+summary = "Lane {{subject}} has stayed kept for {{elapsed}} ({{event.reason}}; item {{event.item_id}}, run {{event.run_id}})."
+check = [
+  "Run tillr drain why {{event.item_id}} and tillr drain why to see why {{subject}} is kept ({{event.reason}}) and whether {{event.run_id}} or another run is live on {{subject}}.",
+  "Inspect {{subject}}'s worktree git status and HEAD and check for any live processes holding {{subject}}.",
+]
+do = [
+  "Establish why {{subject}} has not been released after {{event.run_id}} finished — whether a live process, unrecorded commit, or held candidate is keeping {{subject}}, or a stale keep reason is stalling idle capacity — and clear the blocker or release the candidate safely.",
+]
+
+[rule.delivery]
+receiver = "foreground"
