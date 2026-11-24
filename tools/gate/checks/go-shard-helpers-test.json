@@ -4,7 +4,7 @@
   "command": [
     "sh",
     "-c",
-    "python3 tools/tillr-land/shards_test.py && python3 tools/tillr-drain/cache_test.py"
+    "python3 tools/tillr-land/shards_test.py && python3 tools/tillr-drain/cache_test.py --run TestTheComposedPipelineRunsEndToEndOnAFixture"
   ],
   "scope": "tree",
   "tier": "heavy",

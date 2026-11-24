@@ -3358,6 +3358,11 @@ that the `drain` package with child builds reruns while root stays `(cached)` an
 python3 tools/tillr-drain/cache_test.py  # from the repository root; uses YOLO_DURABLE_DIR
 ```
 
+Without `--run` every pass is the whole module's suite, nine times over, so that form is
+for a Go upgrade. The gate's `go-shard-helpers-test` check passes
+`--run TestTheComposedPipelineRunsEndToEndOnAFixture`, the case that builds all five
+siblings, which proves the same invalidation in about a minute.
+
 This check exercises Go's actual file-input handling, rather than assuming that it sees
 sibling builds. Keep it when upgrading Go. It shares the normal Go build cache and never
 uses `-count=1`; ordinary Go source compilation still controls the compiled-code cache.
