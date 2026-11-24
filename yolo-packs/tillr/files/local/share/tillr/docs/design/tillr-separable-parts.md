@@ -19,7 +19,7 @@ depends-on:
 
 # What tillr promises a consumer, and what it will not change
 
-> **Delivered copy.** This is `docs/design/tillr-separable-parts.md` from this repository at commit `08df476656` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-separable-parts.md` from this repository at commit `5fabdf36fe` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-separable-parts.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** The store, items, verdicts and leased runs work outside Git, and a store
 that never lands runs end to end (the worked example under
