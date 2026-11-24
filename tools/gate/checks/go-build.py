@@ -16,7 +16,7 @@ from change_common import git, tree_entries, result_store, stored_result, store_
 from classify import classify
 
 GO_TOOL_DIRS = (
-    "tools/pi-profiler", "tools/tillr", "tools/tillr-store", "tools/tillr-item",
+    "tools/tillr", "tools/tillr-store", "tools/tillr-item",
     "tools/tillr-run", "tools/tillr-gate", "tools/tillr-view", "tools/tillr-land",
     "tools/tillr-drain", "tools/tillr-cli", "tools/tillr-watch",
 )
