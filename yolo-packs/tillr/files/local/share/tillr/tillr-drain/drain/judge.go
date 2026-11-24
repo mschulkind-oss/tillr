@@ -100,11 +100,13 @@ func bindSavedJudge(r *store.Reader, c Candidate, receipt *JudgeReceipt, options
 }
 
 func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResult) (Candidate, bool, error) {
-	if pending, err := l.buildRestartPending(ctx); pending || err != nil {
-		if err != nil {
-			return c, false, err
+	if _, isProc := l.cfg.Steps.(*ProcessSteps); !isProc {
+		if pending, err := l.buildRestartPending(ctx); pending || err != nil {
+			if err != nil {
+				return c, false, err
+			}
+			return c, false, errRestartPending
 		}
-		return c, false, errRestartPending
 	}
 	var mode, compatibilityNode string
 	db, err := store.OpenRead(ctx, l.cfg.Store)
@@ -140,6 +142,12 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		} else if err != nil {
 			return c, false, err
 		}
+	}
+	if pending, err := l.buildRestartPending(ctx); pending || err != nil {
+		if err != nil {
+			return c, false, err
+		}
+		return c, false, errRestartPending
 	}
 	receipt := c.Judge
 	if receipt == nil {
