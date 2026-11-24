@@ -1,6 +1,6 @@
 # tillr-loop
 
-> **Delivered copy.** This is `tools/tillr-loop/README.md` from this repository at commit `06e63d0112` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/README.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `tools/tillr-loop/README.md` from this repository at commit `282386b687` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/README.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 `tillr-loop` is the Git-landing definition's **hook program**: one executable that
 answers judgments the core cannot make, following the
