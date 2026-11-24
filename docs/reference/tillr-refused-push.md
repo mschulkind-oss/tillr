@@ -129,7 +129,7 @@ The unpublished commits $C_1, \dots, C_n$ in $R..T$ are replayed onto $R$ as sin
    - otherwise `git commit-tree` writes the replacement, keeping the original message, author and author date, with the landing identity as committer.
 2. **Pin** the published pointer at $R$.
 3. **Reset.** Confirm the main checkout is on the trunk and the trunk still equals $T$, then `git reset --keep -q <T'>`. A refusal records `remote-sync-worktree-dirty`.
-4. **Remap.** `observeTrunk` ([`trunk_rewrite.go`](../../tools/tillr-drain/drain/trunk_rewrite.go)) records $T \to T'$. A patch-identical replay is matched by `git patch-id --stable` and carries the green pointer. When the replay changed a commit's diff (conflict repair, shifted context, supersession), the drain passes the pairs it constructed instead, because patch identity no longer matches ([Principle 2](../design/landing-principles.md#2-re-application-preserves-the-change-not-the-patch)). If the fetched range touched a roll path, the roll command runs (`rollAfterRemoteSync`).
+4. **Remap.** `observeTrunk` ([`trunk_rewrite.go`](../../tools/tillr-drain/drain/trunk_rewrite.go)) records $T \to T'$. A patch-identical replay is matched by `git patch-id --stable` and carries the green pointer. When the replay changed a commit's diff (conflict repair, shifted context, supersession), the drain passes the pairs it constructed instead, because patch identity does not match ([Principle 2](../design/landing-principles.md#2-re-application-preserves-the-change-not-the-patch)). If the fetched range touched a roll path, the roll command runs (`rollAfterRemoteSync`).
 
 ### 4.3 Tillr checks identity only on the commits it makes
 
