@@ -252,6 +252,8 @@ type Candidate struct {
 	Seat                  string             `json:"-"`
 	Workflow              string             `json:"workflow,omitempty"`
 	CandidateChangedPaths []string           `json:"-"` // runtime-only: changed paths captured before replay releases the lane
+	replayCheckLogs       map[string]string  // runtime-only: failing check logs from the gate outcome for case-scoped replay
+	wholeCheckReplay      bool               // runtime-only: force whole-check replay (e.g. stale-fixer tip verification)
 	replayRelease         *replayLaneRelease // runtime-only: release the lane before a slow gate-failure replay
 	trunkAcquitted        bool               // runtime-only: acquitted as trunk-already-red; keep candidate for re-gate
 }

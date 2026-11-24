@@ -78,6 +78,9 @@ func (l *Loop) fixerRebaseConflicted(ctx context.Context, candidate Candidate, c
 		if !ok {
 			replay = unknownReplay{}
 		}
+		// Proving a fixer is stale requires the whole check to pass on trunk tip,
+		// never a case-only replay from an earlier run log.
+		candidate.wholeCheckReplay = true
 		red, _, known, err := l.redOnTip(ctx, replay, candidate, conflict.Tip, checks)
 		if err != nil {
 			return "", false, err

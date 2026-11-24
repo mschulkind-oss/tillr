@@ -69,28 +69,60 @@ func appendGitConfigEnv(env []string, pairs ...[2]string) []string {
 	return out
 }
 
-// readGoAffectedFailingTests parses the `go-affected: failing packages and tests:`
-// summary from the candidate run's gate logs. It returns (pkg -> tests, true) only
-// when every listed failing package names concrete Go tests; any unnamed package or
-// compile failure returns (nil, false) so the caller falls back to go_affected.py.
-func readGoAffectedFailingTests(runDir string) (map[string][]string, bool) {
-	if runDir == "" {
-		return nil, false
-	}
-	logsDir := filepath.Join(runDir, "logs")
+// isReplayGoCheck reports whether check is a Go test check whose named failing
+// cases can be replayed directly with `go test -run` instead of re-running the
+// whole suite.
+func isReplayGoCheck(check string) bool {
+	return check == goAffectedCheckID ||
+		strings.HasPrefix(check, "go-tool/") ||
+		strings.HasPrefix(check, "go-substrate/") ||
+		strings.HasPrefix(check, "gate-runner/")
+}
+
+// readReplayGoFailingTests extracts concrete failing Go package -> test names for
+// check from the candidate's gate logs: first the check's recorded CheckLogs entry,
+// then per-check and gate logs under RunDir(root, candidate.RunID)/logs. It accepts
+// either `go-affected: failing packages and tests:` (for go-affected) or a matching
+// `fork-check: triage --` section. Any unnamed, truncated, or non-Go failure returns
+// (nil, false) so the caller falls back to replaying the whole check.
+func readReplayGoFailingTests(root string, candidate Candidate, check string) (map[string][]string, bool) {
 	var files []string
-	for _, pattern := range []string{
-		"fork-check-*-go-affected-affected-tillr-go-test-packages-pass.log",
-		"*gate*.triage.log",
-		"*gate*.log",
-	} {
-		matches, _ := filepath.Glob(filepath.Join(logsDir, pattern))
-		sort.Strings(matches)
-		for _, m := range matches {
-			if pattern == "*gate*.log" && strings.HasSuffix(m, ".triage.log") {
-				continue
+	seen := map[string]bool{}
+	addFile := func(path string) {
+		if path == "" {
+			return
+		}
+		if strings.HasSuffix(path, ".triage.log") {
+			whole := strings.TrimSuffix(path, ".triage.log") + ".log"
+			if !seen[whole] {
+				seen[whole] = true
+				files = append(files, whole)
 			}
-			files = append(files, m)
+		}
+		if !seen[path] {
+			seen[path] = true
+			files = append(files, path)
+		}
+	}
+	if candidate.replayCheckLogs != nil {
+		addFile(candidate.replayCheckLogs[check])
+	}
+	if root != "" && candidate.RunID != "" {
+		logsDir := filepath.Join(RunDir(root, candidate.RunID), "logs")
+		patterns := []string{
+			"fork-check-*-" + sanitizeLogComponent(check) + ".log",
+			"*gate*.triage.log",
+			"*gate*.log",
+		}
+		for _, pattern := range patterns {
+			matches, _ := filepath.Glob(filepath.Join(logsDir, pattern))
+			sort.Strings(matches)
+			for _, m := range matches {
+				if pattern == "*gate*.log" && strings.HasSuffix(m, ".triage.log") {
+					continue
+				}
+				addFile(m)
+			}
 		}
 	}
 	for _, path := range files {
@@ -98,12 +130,92 @@ func readGoAffectedFailingTests(runDir string) (map[string][]string, bool) {
 		if err != nil {
 			continue
 		}
-		pkgs, found, concrete := parseGoAffectedSummary(string(raw))
-		if found {
+		text := string(raw)
+		if check == goAffectedCheckID {
+			if pkgs, found, concrete := parseGoAffectedSummary(text); found {
+				return pkgs, concrete
+			}
+		}
+		if pkgs, found, concrete := parseTriageGoTests(text, check); found {
 			return pkgs, concrete
 		}
 	}
 	return nil, false
+}
+
+// parseTriageGoTests parses a `fork-check: triage --` block for the section matching
+// check. It returns (pkgs, found=true, concrete=true) only when the matching section
+// is untruncated and every listed case names a concrete Go test and Go package import
+// path. Any unnamed case, truncated list, or non-Go failure returns (nil, true, false).
+func parseTriageGoTests(content, check string) (map[string][]string, bool, bool) {
+	lines := strings.Split(content, "\n")
+	inBlock := false
+	inCheck := false
+	matched := false
+	pkgs := map[string][]string{}
+	seenByPkg := map[string]map[string]bool{}
+	for _, rawLine := range lines {
+		line := stripForkCheckPipe(rawLine)
+		if !inBlock {
+			if strings.HasPrefix(line, "fork-check: triage -- ") {
+				inBlock = true
+			}
+			continue
+		}
+		if line == "" || (line[0] != ' ' && line[0] != '\t') {
+			break
+		}
+		text := strings.TrimSpace(line)
+		if strings.HasPrefix(line, "  triage ") {
+			id, label, _ := strings.Cut(strings.TrimPrefix(text, "triage "), ": ")
+			if id == check || forkCheckDeclID(id, label, "") == check {
+				inCheck = true
+				matched = true
+			} else {
+				inCheck = false
+			}
+			continue
+		}
+		if !inCheck {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(text, "no case named in the output;"):
+			return nil, true, false
+		case strings.Contains(text, "more failing case(s) not listed"):
+			return nil, true, false
+		case strings.HasPrefix(text, "case: "):
+			rest := strings.TrimPrefix(text, "case: ")
+			name, where := rest, ""
+			if i := strings.LastIndex(rest, " -- "); i >= 0 {
+				name, where = strings.TrimSpace(rest[:i]), strings.TrimSpace(rest[i+4:])
+			}
+			if !goTestName.MatchString(name) {
+				return nil, true, false
+			}
+			pkg := where
+			if idx := strings.Index(pkg, " ("); idx >= 0 {
+				pkg = strings.TrimSpace(pkg[:idx])
+			}
+			if !goImport.MatchString(pkg) || strings.HasSuffix(pkg, ".go") {
+				return nil, true, false
+			}
+			if seenByPkg[pkg] == nil {
+				seenByPkg[pkg] = map[string]bool{}
+			}
+			if !seenByPkg[pkg][name] {
+				seenByPkg[pkg][name] = true
+				pkgs[pkg] = append(pkgs[pkg], name)
+			}
+		}
+	}
+	if !matched {
+		return nil, false, false
+	}
+	if len(pkgs) == 0 {
+		return nil, true, false
+	}
+	return pkgs, true, true
 }
 
 func parseGoAffectedSummary(content string) (map[string][]string, bool, bool) {
@@ -219,21 +331,24 @@ func resolveReplayGoPackage(modules []goModuleInfo, pkg string) (modDir, rel str
 	return "", "", false
 }
 
-// replayGoAffected runs a scoped replay of go-affected on rev inside dir:
+// replayGoCheck runs a scoped replay of a Go test check on rev inside dir:
 //   - If the candidate's gate log names concrete failing Go tests for every failing
-//     package, it runs only those named tests via `go test -json -count=1 -run ...`.
-//   - Otherwise, if candidate changed paths are available and tools/gate/go_affected.py
-//     exists in dir, it runs `python3 tools/gate/go_affected.py --changed <paths...>`.
+//     package (via go-affected summary or fork-check triage), it runs only those
+//     named tests via `go test -json -count=1 -run ...`.
+//   - Otherwise, for go-affected, if candidate changed paths are available and
+//     tools/gate/go_affected.py exists in dir, it runs
+//     `python3 tools/gate/go_affected.py --changed <paths...>`.
 //   - Otherwise, handled is false so Replay falls back to DefaultReplayProgram.
-func (s *ProcessSteps) replayGoAffected(ctx context.Context, dir string, candidate Candidate, rev, check string) (handled, red, known bool, output string, err error) {
-	if s.Root != "" && candidate.RunID != "" {
-		if pkgs, ok := readGoAffectedFailingTests(RunDir(s.Root, candidate.RunID)); ok {
-			red, output, err := s.runNamedGoTestsInReplay(ctx, dir, candidate, rev, pkgs)
-			if err != nil {
-				return true, false, false, output, err
-			}
-			return true, red, true, output, nil
+func (s *ProcessSteps) replayGoCheck(ctx context.Context, dir string, candidate Candidate, rev, check string) (handled, red, known bool, output string, err error) {
+	if pkgs, ok := readReplayGoFailingTests(s.Root, candidate, check); ok {
+		red, output, err := s.runNamedGoTestsInReplay(ctx, dir, candidate, rev, check, pkgs)
+		if err != nil {
+			return true, false, false, output, err
 		}
+		return true, red, true, output, nil
+	}
+	if check != goAffectedCheckID {
+		return false, false, false, "", nil
 	}
 	changed := candidate.CandidateChangedPaths
 	if len(changed) == 0 && s.Root != "" && candidate.BaseSHA != "" && candidate.HeadSHA != "" {
@@ -295,7 +410,28 @@ func (s *ProcessSteps) diffChangedPaths(ctx context.Context, baseSHA, headSHA st
 	return paths
 }
 
-func (s *ProcessSteps) runNamedGoTestsInReplay(ctx context.Context, dir string, candidate Candidate, rev string, pkgs map[string][]string) (bool, string, error) {
+// leafGoTests drops parent test names when a subtest of that parent is also listed
+// (matching go_affected.py's _leaf_failed_tests), so replaying a failing subtest
+// does not re-run every sibling subtest under its parent.
+func leafGoTests(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		hasChild := false
+		prefix := name + "/"
+		for _, other := range names {
+			if strings.HasPrefix(other, prefix) {
+				hasChild = true
+				break
+			}
+		}
+		if !hasChild {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func (s *ProcessSteps) runNamedGoTestsInReplay(ctx context.Context, dir string, candidate Candidate, rev, check string, pkgs map[string][]string) (bool, string, error) {
 	modules := indexReplayGoModules(dir)
 	pkgNames := make([]string, 0, len(pkgs))
 	for pkg := range pkgs {
@@ -331,7 +467,7 @@ func (s *ProcessSteps) runNamedGoTestsInReplay(ctx context.Context, dir string, 
 		}
 		var topLevel []string
 		var subtests []string
-		for _, name := range pkgs[pkg] {
+		for _, name := range leafGoTests(pkgs[pkg]) {
 			if strings.Contains(name, "/") {
 				subtests = append(subtests, name)
 			} else {
@@ -366,7 +502,7 @@ func (s *ProcessSteps) runNamedGoTestsInReplay(ctx context.Context, dir string, 
 			}
 			if cmd.ProcessState == nil {
 				return false, combined.String(), Externalf("replaying %s (%s %s) on %s: %v: %s",
-					goAffectedCheckID, pkg, pattern, shortSHA(rev), runErr, stderr.String())
+					check, pkg, pattern, shortSHA(rev), runErr, stderr.String())
 			}
 			if cmd.ProcessState.ExitCode() != 0 {
 				red = true

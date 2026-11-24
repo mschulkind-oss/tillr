@@ -551,6 +551,9 @@ func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate Ga
 	// A worker's trunk obstacle still requests a base replay. For an actual gate
 	// failure, consult the proof first; a fork base is outside that proof's scope.
 	useBaseProof := gate.Outcome == GateFailed && candidate.BaseRef == ""
+	if gate.Outcome == GateFailed && len(gate.CheckLogs) > 0 {
+		candidate.replayCheckLogs = gate.CheckLogs
+	}
 	out, source, err := l.judgeTrunkChecks(ctx, replay, candidate, base, gate.FailingChecks, useBaseProof)
 	reading := trunkReading{Evidence: "base " + source}
 	if err != nil || !out.Known {
@@ -1270,6 +1273,9 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate *Candidate, gat
 		}
 		if open == "" {
 			if replay, ok := l.cfg.Steps.(ReplayStep); ok {
+				if len(gate.CheckLogs) > 0 && len(candidate.replayCheckLogs) == 0 {
+					candidate.replayCheckLogs = gate.CheckLogs
+				}
 				culprit, attrNote, bisected := l.culpritLandingAttribution(ctx, replay, *candidate, green, redSHA, redChecks)
 				redSHA, note = culprit, attrNote
 				if bisected && l.gatePolicy.AutoRevert && candidate.BaseRef == "" {
