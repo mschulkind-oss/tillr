@@ -88,15 +88,11 @@ about identities."* Six designer's decisions remain marked in
 [its ledger](../design/tillr-refused-push.md#decision-ledger), none of it is built, and it is
 placed in [entry 3](#3-roll-onto-new-code-without-ending-runs).
 
-Five more left this list on 2026-11-18, none by the owner's ruling, and each is his to overturn.
-Two are a designer's decisions: [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4), that the judge
-step gets no separate check of a criterion's premise, and
-[`OQ-AC1`](../design/agent-context-delivery.md#OQ-AC1), that a lane-only extension is held to
-that by a test and not by a manifest key. Two were closed as stale:
+Three more left this list on 2026-11-18, none by the owner's ruling, and each is his to overturn.
+One is a designer's decision: [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4), that the judge
+step gets no separate check of a criterion's premise. One was closed as stale:
 [`OQ-JL4`](../design/tillr-judge-and-lifecycle.md#OQ-JL4), which asked about two next actors
-that no longer exist or cannot be named, and
-[`OQ-AC5`](../design/agent-context-delivery.md#OQ-AC5), which asked how to measure caps the
-owner has since removed. One is blocked: [`OQ-AQ2`](../design/tillr-autoqa.md#OQ-AQ2), until
+that no longer exist or cannot be named. One is blocked: [`OQ-AQ2`](../design/tillr-autoqa.md#OQ-AQ2), until
 AutoQA leaves the [Icebox](#icebox).
 
 1. [Who made the decisions recorded in the tillr designs](./decision-provenance-review.md): the
@@ -245,7 +241,7 @@ reopen then supersede, and a supersession refuses a verdict in flight). One desi
 [its ledger](../design/criterion-repair.md#decision-ledger), and none of criterion supersession is
 built.
 
-[What a lane's agent is told](../design/agent-context-delivery.md#decision-ledger) left this list:
+What a lane's agent is told left this list:
 its two tillr questions are closed as above, and the one it keeps, a startup profile for pi, is
 routed from the pi roadmap.
 

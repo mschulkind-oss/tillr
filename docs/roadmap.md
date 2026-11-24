@@ -20,7 +20,7 @@ that can start before that round closes is the drain's own model, entry 10.
 
 9. **Tillr today: one supervised real drain** is done and retired: the loop
    made its first real landing on 2026-11-13
-   ([the acceptance record](design/tillr-drain-acceptance-2026-11-13.md)) and has landed many
+   (the acceptance record) and has landed many
    changes since. It keeps its number so that the entries below keep theirs.
 
 10. [Replace the drain tick with a successor function](reference/tillr-drain-successor.md) — done

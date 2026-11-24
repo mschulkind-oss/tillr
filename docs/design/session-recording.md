@@ -7,7 +7,6 @@ tags: [design, tillr, pi, observability, recording, provenance]
 summary: "Three-seam observer (tillr-trace collector/indexer, fail-open shell command shim, and provider-response usage hook) that correlates six existing stores under one hierarchical trace key and verifies lane reports against observed execution."
 depends-on:
   - board-utilities.md
-  - tillr-day2.md
 vantage:
   status-chip: true
 ---
@@ -26,8 +25,8 @@ vantage:
 **Cost.** Slice 1 is `ESTIMATE: 3–4 hours` (~430 LoC across [`tools/tillr-drain/`](../../tools/tillr-drain/), [`tools/tillr-run/`](../../tools/tillr-run/), and `tools/tillr-trace/`). Steady-state storage is `ESTIMATE: 1.5–4.5 MiB/day` of normalized JSONL plus `5–25 MiB/day` of windowed compressed command blobs. Runtime overhead is `< 1.5 ms` per shell invocation (`ESTIMATE`) and `0 ms` on `tillr` database transactions.
 **Start at [§2](#2-seam-analysis-shim-proxy-collector-or-all-three)** for the seam trade-offs, **[§4](#4-event-schema-and-the-cross-boundary-correlation-key)** for the event schema and correlation key, **[§8](#8-how-a-recording-becomes-evidence-and-verifies-lane-claims)** for mechanical claim verification, and **[§9](#9-query-cookbook-answering-the-seven-acceptance-questions)** for the seven acceptance queries.
 **Ruled:** a disproved report claim is advisory rather than a pre-gate rejection; the command shim covers every agent-spawned shell and no human shell; one index per workspace. See [the ledger](#122-decision-ledger) (which also records designer decision [`D-SR1`](#44-worker-test-slot-wait-recording-run-wall-time-split-and-chronological-scheduling-decisions-d-sr1) from an operator-filed request).
-**Reads with:** [`board-utilities.md`](./board-utilities.md) (the seven-utility contract and `record.Envelope`), [`tillr-day2.md`](./tillr-day2.md) (the `tillr-drain` unattended loop), [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md) (the `run-muse` / `run-pi` adapter pattern), `bounded-agent-storage.md` (forever-session vs pruned-scratch retention tiers), `whale-interaction-collector.md` (prior rulings on JSONL normalization + rebuildable SQLite indexing), and `tok-stats.md` (per-request token/latency ledger).
-**Terms.** `item`, `lane`, `run`, `candidate`, `verdict`, `route`, `record`, and `event` carry their exact meanings from [`board-utilities.md`](./board-utilities.md) and [`tillr-day2.md`](./tillr-day2.md). Three terms are new:
+**Reads with:** [`board-utilities.md`](./board-utilities.md) (the seven-utility contract and `record.Envelope`), [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md) (the `run-muse` / `run-pi` adapter pattern), `bounded-agent-storage.md` (forever-session vs pruned-scratch retention tiers), `whale-interaction-collector.md` (prior rulings on JSONL normalization + rebuildable SQLite indexing), and `tok-stats.md` (per-request token/latency ledger).
+**Terms.** `item`, `lane`, `run`, `candidate`, `verdict`, `route`, `record`, and `event` carry their exact meanings from [`board-utilities.md`](./board-utilities.md). Three terms are new:
 - **`trace_key`** *(coined here)* — the five-segment hierarchical correlation string `tick_id/item_id/run_id/session_id/span_id` (using `~` for absent segments in interactive runs) propagated via `TILLR_TRACE_KEY`. It identifies where an observation sits in a workflow; it excludes content digests and SQLite row IDs.
 - **`obs.event`** *(coined here)* — an immutable, schema-versioned observation record emitted by a shim or normalized by the collector into daily JSONL shards. It describes what was *observed* across a process, tool, git, or provider seam; it excludes authoritative workflow state transitions, which belong exclusively to `.tillr/state.db`.
 - **`claim_check`** *(coined here)* — a derived verification row comparing an explicit or extracted assertion in a lane's output report (such as `"all five suites exit 0"`) against the observed `proc.exec` records under the same `run_id`, taking into account whether files in a suite's directory were edited *after* the last test execution.
@@ -186,7 +185,7 @@ Why this placement works across both host and jail:
 
 ### 4.1 Terminology: What We Keep vs What We Coin
 
-To stay strictly aligned with [`board-utilities.md`](./board-utilities.md) and [`tillr-day2.md`](./tillr-day2.md):
+To stay strictly aligned with [`board-utilities.md`](./board-utilities.md):
 - We **keep** `record.Envelope` (`record_version`, `kind`, `id`, `producer`, `created_at`, `subject`, `correlation_id`, `idempotency_key`, `payload`), `item`, `lane`, `run`, `candidate`, `verdict`, and `route`.
 - We **coin three terms** (`trace_key`, `obs.event`, and `claim_check`, defined in the header block above) so that observation rows are never confused with authoritative `tillr` state-transition events in `.tillr/state.db`.
 

@@ -32,7 +32,7 @@ vantage:
 
 **Awaits your review:** the designer's decisions `D-SP1` to `D-SP15` in the [Decision Ledger](#decision-ledger).
 
-**Reads with:** [landing principles](./landing-principles.md) (the rules a split must not break), [the judge and lifecycle design](./tillr-judge-and-lifecycle.md) (verdicts, and the rule that no count of attempts routes work), [item graphs](../reference/tillr-item-graphs.md) (pieces inside one item, which a split does not replace), and [when each repair finds a different defect](../tillr/nonconverging-items.md) (the proposal of 2026-11-20 that this design absorbs; [§10.6](#106-the-proposal-of-2026-11-20) says what is kept).
+**Reads with:** [landing principles](./landing-principles.md) (the rules a split must not break), [the judge and lifecycle design](./tillr-judge-and-lifecycle.md) (verdicts, and the rule that no count of attempts routes work), [item graphs](../reference/tillr-item-graphs.md) (pieces inside one item, which a split does not replace), and when each repair finds a different defect (the proposal of 2026-11-20 that this design absorbs; [§10.6](#106-the-proposal-of-2026-11-20) says what is kept).
 
 **Words.** [The vocabulary](./tillr-vocabulary.md#5-the-words) defines item, criterion, candidate, lane and verdict. These are coined in this document:
 
@@ -71,7 +71,7 @@ What I take as ruled by those words:
 
 What the first statement leaves open, because he says so ("I don't know if", "I'm not really sure", "Maybe"): which seats say it and when, what the threshold is, and whether a split is several landings of one item or something else. Those are settled below as the designer's decisions, and he may overturn any of them.
 
-One earlier statement bears on it. On 2026-11-20, of an item whose repairs kept finding new defects, [the proposal of that date](../tillr/nonconverging-items.md) records him saying: "Split it up. That's always a good way to go."
+One earlier statement bears on it. On 2026-11-20, of an item whose repairs kept finding new defects, the proposal of that date records him saying: "Split it up. That's always a good way to go."
 
 On 2026-11-23 at about 01:05 ET, seeing `added_line_limit = 1200` in [`.tillr.toml`](../../.tillr.toml), the owner said, verbatim (`R-SP2`):
 
@@ -126,7 +126,7 @@ Five observations follow, and the design rests on them:
 4. **The planner had no guidance on size.** `rg -n -i 'split|size|independent|large' config/tillr/plan-guidance.md` on 2026-11-21 finds nothing.
 5. **The item was already a second generation.** Its words say it replaces an earlier item whose worker "built most of this", and tell the worker to start from that item's commit. Handing built work to a successor is already done by hand, in prose.
 
-An earlier case has the same shape: the instant-start change, with seven verifier refusals naming different defects over a 39-file candidate ([measured on 2026-11-20](../tillr/instant-start-slices.md#what-is-being-ported)).
+An earlier case has the same shape: the instant-start change, with seven verifier refusals naming different defects over a 39-file candidate (measured on 2026-11-20).
 
 ## 3. What exists today
 
@@ -358,7 +358,7 @@ The split signals follow both rules. None reads a tally, and none acts on a firs
 
 ### 10.6 The proposal of 2026-11-20
 
-[When each repair finds a different defect](../tillr/nonconverging-items.md) proposed measuring three comparisons and a split by hand. This design keeps its comparisons (they are S2, S3 and the item page's measurements), its rule that the old candidate is a donor and never a verified child, and its count of required parts landed. It replaces three things: the operator filing one request per part by hand becomes the drain filing from the statement; the original recorded as "replaced, not landed" becomes a parent that waits and is closed by a check; and the old candidate's work is carved into the parts instead of being offered as reference. Its two questions for the owner are answered here as designer's decisions `D-SP11` and `D-SP12`.
+When each repair finds a different defect proposed measuring three comparisons and a split by hand. This design keeps its comparisons (they are S2, S3 and the item page's measurements), its rule that the old candidate is a donor and never a verified child, and its count of required parts landed. It replaces three things: the operator filing one request per part by hand becomes the drain filing from the statement; the original recorded as "replaced, not landed" becomes a parent that waits and is closed by a check; and the old candidate's work is carved into the parts instead of being offered as reference. Its two questions for the owner are answered here as designer's decisions `D-SP11` and `D-SP12`.
 
 ## 11. What this does not do
 
@@ -457,7 +457,7 @@ None. [OQ-SP1](#OQ-SP1) was ruled by the owner on 2026-11-21 and is compacted in
 | D-SP8 | **Designer's decision; the owner may overturn it.** No verdict or gate result is inherited from the donor: every part is verified and gated on its own tree | 2026-11-21, designer | [§8.3](#83-why-nothing-is-inherited-and-why-a-part-still-lands) | — |
 | D-SP9 | **Designer's decision; the owner may overturn it.** The parent finishes by a closing check of its own criteria against the trunk; a finding there adds a part. Only the owner makes a required part optional | 2026-11-21, designer | [§7.5](#75-when-the-parent-is-finished), [§7.6](#76-failure-and-edge-cases) | — |
 | D-SP10 | **Designer's decision; the owner may overturn it.** The queue shows a parent as one row with its count of parts until the closing check passes, and shows every measurement before any signal holds | 2026-11-21, designer | [§9](#9-what-the-queue-and-the-status-surfaces-show) | Slice 1: size and recorded limits on the item page only |
-| D-SP11 | **Designer's decision; the owner may overturn it.** No count of verifier refusals pauses an item for review. Answers the first question of [the proposal of 2026-11-20](../tillr/nonconverging-items.md#questions-for-the-owner-before-building-policy), consistent with the owner's ruling `D-JL10` | 2026-11-21, designer | [§10.5](#105-no-count-of-attempts-stops-work) | — |
+| D-SP11 | **Designer's decision; the owner may overturn it.** No count of verifier refusals pauses an item for review. Answers the first question of the proposal of 2026-11-20, consistent with the owner's ruling `D-JL10` | 2026-11-21, designer | [§10.5](#105-no-count-of-attempts-stops-work) | — |
 | D-SP12 | **Designer's decision; the owner may overturn it.** The owner is not asked to approve or acknowledge a split. He sees it on the surfaces, and is asked only when a required part would be dropped. Answers the second question of the same proposal | 2026-11-21, designer | [§9](#9-what-the-queue-and-the-status-surfaces-show), [§11](#11-what-this-does-not-do) | — |
 | D-SP13 | **Designer's decision; the owner may overturn it (amended by `D-SP15`).** The build is twelve slices that each land alone, in the order of [§14](#14-the-build-in-slices-that-each-land-alone): what only shows facts first, then a split made by a person, then each caller, with unbuilt slices constrained to act only on signals marked **Measured** in [§6](#6-the-signals) | 2026-11-21, designer | [§14](#14-the-build-in-slices-that-each-land-alone) | Slice 1; slices 2 and 4 marked ahead of their code |
 | D-SP14 | **Designer's decision, answering an operator's request; the owner may overturn it.** The operator's request for slice 4 asks the build to mark the slice built in the slice table. A build seat does not edit a design document, so the mark is the design seat's and the code is the build seat's: the design seat marks the slice "built ahead of its code" when the request reaches it, the slice's build commit changes no line of this document, and neither a build worker nor a verifier treats the request's sentence about the table as unmet. The same holds for every later slice's request. **Rejected:** the build commit edits this document, which the drain's rule for build seats forbids; and leaving the table unmarked until the code lands, which returns every slice's request to the design seat with the same obstacle | 2026-11-22, designer | [§14](#14-the-build-in-slices-that-each-land-alone) | The marks on slices 2 and 4 |

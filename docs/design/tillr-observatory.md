@@ -12,9 +12,6 @@ tags:
 summary: "Defines the first-class introspection contract for tillr-drain and designs the read-only Go + Vite/React web service (tillr-view serve) that renders every item, stage, tool call, and inter-tool communication of a drain without inventing missing evidence."
 depends-on:
   - session-recording.md
-  - tillr-day2.md
-  - tillr-loop-readiness.md
-  - board-item-state-model.md
   - board-utilities.md
 vantage:
   status-chip: true
@@ -36,7 +33,7 @@ vantage:
 
 **Start at** [§1](#1-principles-and-the-guild-era-import-audit) for the governing principles, [§2](#2-the-introspection-contract-and-the-honesty-line) for the introspection contract and what today's data can and cannot answer, [§6](#6-the-first-screen-two-item-drain-acceptance-walkthrough) for the concrete two-item drain screen, and [§10](#10-open-questions) for the four rulings needed: **[OQ-OBS1](#10-open-questions)**, **[OQ-OBS2](#10-open-questions)**, **[OQ-OBS3](#10-open-questions)**, and **[OQ-OBS4](#10-open-questions)**.
 
-**Reads with:** [`docs/design/session-recording.md`](./session-recording.md), [`docs/design/tillr-day2.md`](./tillr-day2.md), [`docs/design/tillr-loop-readiness.md`](./tillr-loop-readiness.md), [`docs/design/board-item-state-model.md`](./board-item-state-model.md), [`docs/design/board-utilities.md`](./board-utilities.md), [`docs/design/landing-principles.md`](./landing-principles.md), and [`tools/tillr-trace/README.md`](../../tools/tillr-trace/README.md).
+**Reads with:** [`docs/design/session-recording.md`](./session-recording.md), [the item-states reference](../reference/tillr-item-states.md), [`docs/design/board-utilities.md`](./board-utilities.md), [`docs/design/landing-principles.md`](./landing-principles.md), and [`tools/tillr-trace/README.md`](../../tools/tillr-trace/README.md).
 
 **Terms.**
 - **The board** — the observatory's queue screen this document designs: the header, the queue rail, the item pane and the evidence pane. Never the retired work board, deleted 2026-11-11; see [observatory-design.md](../reference/observatory-design.md#terms-and-non-purposes) and the document retirement.
@@ -134,7 +131,7 @@ To prevent the UI from ever rendering a plausible-looking lie when an emitter is
 
 ### 3.1 Item state projection: enforcing the board item state model
 
-Per [`docs/design/board-item-state-model.md`](./board-item-state-model.md) ([§2](./board-item-state-model.md#2-classification-of-every-status-the-board-can-show) and [§3](./board-item-state-model.md#3-where-the-internal-machinery-lives)), the observatory must **never** display raw internal machinery strings (`completed`, `in-progress`, `running`, `terminal`, `CandidateReady`, `GateFailed`) as an item's status badge. The Go backend exposes one closed projector function `ProjectItemState(item, activeQueueEntry, activeRun)` that maps every item to the seven human states:
+Per [the item-states reference](../reference/tillr-item-states.md), the observatory must **never** display raw internal machinery strings (`completed`, `in-progress`, `running`, `terminal`, `CandidateReady`, `GateFailed`) as an item's status badge. The Go backend exposes one closed projector function `ProjectItemState(item, activeQueueEntry, activeRun)` that maps every item to the seven human states:
 
 ```
 NotStarted | Working | Blocked(underlying, waitingOn) | InQueue | Landed | ResolvedElsewhere | Closed
@@ -306,7 +303,7 @@ For normal operation (`just observatory`):
 
 ## 6. The First Screen: Two-Item Drain Acceptance Walkthrough
 
-The acceptance test is the owner's two-item drain experiment: run `tillr-drain loop` over two queued items (such as `item-seed-02` and `item-seed-04` from [`docs/design/tillr-loop-readiness.md`](./tillr-loop-readiness.md)), open the web view, and inspect every stage, tool call, inter-tool communication, timestamp, and cost. A dated record of one run of it is in [Section 6.5](#65-the-dated-record-two-items-drained-2026-11-14).
+The acceptance test is the owner's two-item drain experiment: run `tillr-drain loop` over two queued items, open the web view, and inspect every stage, tool call, inter-tool communication, timestamp, and cost. A dated record of one run of it is in [Section 6.5](#65-the-dated-record-two-items-drained-2026-11-14).
 
 ### 6.1 Screen layout and component tree
 
@@ -548,7 +545,7 @@ tools/tillr-view/
   main.go                 # Existing status / events / questions faces + new `serve` subcommand
   serve/
     server.go             # Read-only HTTP + /api/v1/ws handler registration
-    snapshot.go           # Single-ReadTx store reader + board-item-state-model projector
+    snapshot.go           # Single-ReadTx store reader + item-state projector
     dossier.go            # Per-item and per-run stage, exchange, timeline, and artifact assembly
     trace.go              # Read-only reader over tillr-trace index.db + incremental ingest trigger
     server_test.go        # Go unit + integration tests over seeded SQLite & canary fixtures
@@ -623,7 +620,7 @@ Every slice below is scoped to a single lane fence and leaves the tree green:
 | **3. A frontend that needs a rewrite to go live** | React components fetch `/api/v1/*` directly inside `useEffect` into local `useState` hooks, so adding WebSockets later requires rewriting every component's state management. | Every component reads exclusively from TanStack Query v5 hooks keyed by `["snapshot"]`, `["items", id]`, and `["runs", runId]`. Manual refresh in `OBS-3` and `/api/v1/ws` frames in `OBS-5` both call `queryClient.invalidateQueries()` on those keys. |
 | **4. A frontend build that slows `just done`** | Adding an unconditional `npm ci && npm run build` step to [`tools/fork-check.py`](../../tools/fork-check.py) adds 5–15 seconds to every unrelated Go or Markdown commit's gate run. | Go API tests run with an injected `fs.FS` under `CGO_ENABLED=0 go test ./...` in `< 0.5s`; the `tillr-observatory-web` check in [`tools/fork-check.py`](../../tools/fork-check.py) is path-scoped to `tools/tillr-view/web/**` so unrelated commits pay `0 ms`. |
 | **5. Answering "what is it doing" only after the run ends** | The server reads only completed `runs` rows or waits for `tillr-trace` post-run ingestion, showing a blank screen for the 20–120 seconds a model run or `fork-check.py` gate is in flight. | `runs` writes `state = 'running'` at `run.allocate` before the adapter starts; `tillr-view serve` tails `<lane-dir>/<run-id>.log` live up to the last `\n` while `state == 'running'`, and `OBS-1` writes `step.start` lines to `.tillr/loop/<run-id>/steps.jsonl` before each utility subprocess begins. |
-| **6. Contradicting [`board-item-state-model.md`](./board-item-state-model.md)** | The UI renders `items.state` (`in-progress`, `completed`) or `runs.state` (`running`, `exited`) as the item's badge, re-introducing the terminology split [`docs/design/board-item-state-model.md`](./board-item-state-model.md) retired. | One server-side projector function ([§3.1](#31-item-state-projection-enforcing-the-board-item-state-model)) computes `projected_state` (`NotStarted \| Working \| Blocked \| InQueue \| Landed \| ResolvedElsewhere \| Closed`); run and candidate states are nested strictly inside attempt history. |
+| **6. Contradicting the item-state model** | The UI renders `items.state` (`in-progress`, `completed`) or `runs.state` (`running`, `exited`) as the item's badge, re-introducing the terminology split `docs/design/board-item-state-model.md` retired. | One server-side projector function ([§3.1](#31-item-state-projection-enforcing-the-board-item-state-model)) computes `projected_state` (`NotStarted \| Working \| Blocked \| InQueue \| Landed \| ResolvedElsewhere \| Closed`); run and candidate states are nested strictly inside attempt history. |
 | **7. Silently dropped utility `stderr` on step failures** | Today [`tools/tillr-drain/drain/steps.go`](../../tools/tillr-drain/drain/steps.go) (`ProcessSteps.program`) captures `stderr` into a buffer and discards it whenever `cmd.ProcessState != nil`! An operator sees `land: refused` or `gate: error` in the UI with zero diagnostic text. | `OBS-1` persists the bounded `stderr` tail and exit code of every `ProcessSteps` and `tillr-loop` invocation into `.tillr/loop/<run-id>/steps.jsonl`, surfaced directly in `PayloadInspectorDrawer`. |
 
 ---

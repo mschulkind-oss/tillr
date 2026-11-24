@@ -545,8 +545,7 @@ func (t *Trunk) failedMove(ref, to, from string, failure error) error {
 // A bare `update-ref` was this function's first shape, and on 2026-11-13 it moved a trunk
 // and left the repository it landed in with its index and working tree at the pre-landing
 // content: `git status` then reported the landed change in reverse, 4 insertions and 242
-// deletions over the five files the candidate had added
-// (docs/design/tillr-drain-acceptance-2026-11-13.md §4.1). A landing is a write to the
+// deletions over the five files the candidate had added. A landing is a write to the
 // repository, not to a ref, and a ref write is invisible to the index and the files.
 //
 // So when a worktree of this repository has ref checked out, the move is git's own
