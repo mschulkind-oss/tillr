@@ -16,7 +16,8 @@ func TestWaitingDirtyPathsAndElapsedStreak(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	now := time.Now().UTC().Truncate(time.Second)
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	h.setNow(now)
 	for _, q := range []string{
 		`DELETE FROM dispatches`,
 		`INSERT INTO items(item_id,title,state,updated_at) VALUES ('one','one','in-queue',0),('two','two','in-queue',0),('landed','landed','landed',0)`,
@@ -61,15 +62,14 @@ func TestWaitingDirtyPathsAndElapsedStreak(t *testing.T) {
 		if row["class"] != "waits on work" || row["where"] != "land" || row["mover"] != "operator; commit, restore, or change your edit; the landing proceeds as soon as it no longer conflicts" {
 			t.Fatalf("dirty wait unclassified: %v", row)
 		}
-		elapsed, err := time.ParseDuration(row["waited"].(string))
 		want := 2 * time.Minute
 		paths := "a.txt"
 		if id == "two" {
 			want = 3 * time.Minute
 			paths = "a.txt, b.txt"
 		}
-		if err != nil || elapsed < want || elapsed > want+5*time.Second {
-			t.Fatalf("elapsed %v / %v: %v", elapsed, err, row)
+		if row["waited"] != want.String() {
+			t.Fatalf("waited %v, want %v: %v", row["waited"], want, row)
 		}
 		if row["since"] != now.Add(-want).Format(time.RFC3339Nano) || row["why"] != "trunk-path-dirty: "+paths {
 			t.Fatalf("wrong streak/path: %v", row)
