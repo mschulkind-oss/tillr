@@ -1,6 +1,6 @@
 {
   "format": "tillr-pack-docs-1",
-  "commit": "282386b6870e9b2e80c283f5bb55837b693b89be",
+  "commit": "4f503801bb58ab4ee7cb009241a937935747c652",
   "date": "2026-11-24",
   "index": "docs/tillr/design-status.md",
   "jail_root": "~/.local/share/tillr",
@@ -17,7 +17,7 @@
     },
     {
       "source": "docs/reference/gate.md",
-      "blob": "b4b8d49094d2f9156c02411095be6144c560e970",
+      "blob": "0a6f7f9651bbe75d406b38158e0eb25afa2b7a18",
       "delivered": "docs/reference/gate.md"
     },
     {

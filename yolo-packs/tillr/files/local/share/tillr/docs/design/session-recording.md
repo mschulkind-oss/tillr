@@ -11,7 +11,7 @@ vantage:
 
 # Session Recording — How Do We Record Agent Work Once and Query Every Claim, Cost, and Tick Later?
 
-> **Delivered copy.** This is `docs/design/session-recording.md` from this repository at commit `282386b687` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/session-recording.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/session-recording.md` from this repository at commit `4f503801bb` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/session-recording.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Partly built. The command shim, per-run record directory, the
 [`tillr-trace`](../../tillr-trace/README.md) query commands and the slot-wait recording of

@@ -13,7 +13,7 @@ vantage:
 
 # Repairing a frozen criterion
 
-> **Delivered copy.** This is `docs/design/criterion-repair.md` from this repository at commit `282386b687` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/criterion-repair.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/criterion-repair.md` from this repository at commit `4f503801bb` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/criterion-repair.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Nothing of criterion supersession is built: tillr refuses an edit to frozen criterion text and holds no record that replaces it (`rg -n -i 'supersession|superseded' tools/tillr-item -g '!*_test.go'` finds only the unrelated record for owner decisions). Every question is ruled; the [Decision Ledger](#decision-ledger) says which rows are the owner's and which a designer's.
 

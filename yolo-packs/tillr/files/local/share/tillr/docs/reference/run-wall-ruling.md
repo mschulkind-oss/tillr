@@ -21,7 +21,7 @@ summary: "No backend sets a run wall by default. A lease may be unbounded (timeo
 
 # The run wall: none by default, and a committed candidate is judged before wall status
 
-> **Delivered copy.** This is `docs/reference/run-wall-ruling.md` from this repository at commit `282386b687` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/run-wall-ruling.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/run-wall-ruling.md` from this repository at commit `4f503801bb` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/run-wall-ruling.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-24 against the tree. `D-RW1` to `D-RW4` are the designer's
 decisions; the owner may overturn any of them.
