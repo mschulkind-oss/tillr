@@ -14,7 +14,6 @@ covers:
   - tools/tillr-run/backends/preflight.sh
   - tools/tillr-run/backends/report.py
   - tools/tillr-run/backends/usage.py
-  - tools/tillr-run/backends/brief-template.md
   - tools/tillr-run/backends/muse/
   - tools/tillr-run/backends/pi/
   - tools/tillr-run/backends/agy/

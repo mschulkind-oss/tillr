@@ -182,8 +182,8 @@ Inspect `--help` and the `README` files above, then return structured design com
 
 ## 6. Machine scoping
 
-- **Which `packs` lists gain the entry:** Add `"yolo-packs/tillr"` to the shared `packs` array in [`config/yolo-jail/config.toml`](../../config/yolo-jail/config.toml) immediately after `"yolo-packs/matt-agentwork"` (and before `"yolo-packs/seat-profiles"`), so every machine on both `tag-personal` (two machines) and `tag-work` (two machines) receives the pack (see [OQ-TD1](#open-questions)). Because array keys in `config.d/*.toml` replace rather than append, if [`tag-personal/config/yolo-jail/config.d/personal.toml`](../../tag-personal/config/yolo-jail/config.d/personal.toml) or [`tag-work/config/yolo-jail/config.d/work.toml`](../../tag-work/config/yolo-jail/config.d/work.toml) redeclares `packs`, restate `"yolo-packs/tillr"` there too.
-- **What a work machine gets that a personal one does not:** From `yolo-packs/tillr` itself, **nothing differs** — the pack ships identical Go source, launchers, and skills everywhere, and carries zero provider or account configuration. The difference comes entirely from the host's rcm tag layer: a `tag-work` machine layers [`tag-work/config/yolo-jail/config.d/work.toml`](../../tag-work/config/yolo-jail/config.d/work.toml) (`bedrock` and `aws-auth` packs, AWS Bedrock profiles, and no `agy` pack), whereas a `tag-personal` machine layers [`tag-personal/config/yolo-jail/config.d/personal.toml`](../../tag-personal/config/yolo-jail/config.d/personal.toml) (personal provider packs including `agy` and `codex`). Because `tillr` delegates model execution to the workspace's active agent environment rather than naming a provider or `agy`, `yolo-packs/tillr` is tag-agnostic.
+- **Which `packs` lists gain the entry:** Add `"yolo-packs/tillr"` to the shared `packs` array in `config/yolo-jail/config.toml` immediately after `"yolo-packs/matt-agentwork"` (and before `"yolo-packs/seat-profiles"`), so every machine on both `tag-personal` (two machines) and `tag-work` (two machines) receives the pack (see [OQ-TD1](#open-questions)). Because array keys in `config.d/*.toml` replace rather than append, if `tag-personal/config/yolo-jail/config.d/personal.toml` or `tag-work/config/yolo-jail/config.d/work.toml` redeclares `packs`, restate `"yolo-packs/tillr"` there too.
+- **What a work machine gets that a personal one does not:** From `yolo-packs/tillr` itself, **nothing differs** — the pack ships identical Go source, launchers, and skills everywhere, and carries zero provider or account configuration. The difference comes entirely from the host's rcm tag layer: a `tag-work` machine layers `tag-work/config/yolo-jail/config.d/work.toml` (`bedrock` and `aws-auth` packs, AWS Bedrock profiles, and no `agy` pack), whereas a `tag-personal` machine layers `tag-personal/config/yolo-jail/config.d/personal.toml` (personal provider packs including `agy` and `codex`). Because `tillr` delegates model execution to the workspace's active agent environment rather than naming a provider or `agy`, `yolo-packs/tillr` is tag-agnostic.
 
 ---
 
@@ -194,7 +194,7 @@ Each step is independently landable and leaves `yolo pack lint` green:
 1. **Step 1 (`ESTIMATE`: 1h) — Pack manifest, digest launcher, and source sync.** Create `yolo-packs/tillr` with its manifest and shared launcher script, wire `just pack-sync` and [`../../tests/pack-sync.test.py`](../../tests/pack-sync.test.py) to sync the nine [`tools/`](../../tools) modules into `yolo-packs/tillr/files/local/share/tillr/`, and pass `yolo pack lint yolo-packs/tillr`.
 2. **Step 2 (`ESTIMATE`: 1h) — Module `README`s and `--help` conformance test.** Add a concise `README` with the Known Gaps banner to each of the nine [`tools/`](../../tools) modules, re-run `just pack-sync`, and land the test checking documented `<noun> <face>` commands against live `--help`.
 3. **Step 3 (`ESTIMATE`: 45m) — Composition skill (`tillr`) and AutoQA handoff skill (`tillr-autoqa`).** Add both skills under `yolo-packs/tillr/skills/` and verify with `yolo pack lint yolo-packs/tillr`.
-4. **Step 4 (`ESTIMATE`: 30m) — Machine selection and AutoQA dispatch.** Add `"yolo-packs/tillr"` to [`config/yolo-jail/config.toml`](../../config/yolo-jail/config.toml), have the human run `yolo host apply --assert` on the host and relaunch the jail, and dispatch AutoQA against `tillr-autoqa`.
+4. **Step 4 (`ESTIMATE`: 30m) — Machine selection and AutoQA dispatch.** Add `"yolo-packs/tillr"` to `config/yolo-jail/config.toml`, have the human run `yolo host apply --assert` on the host and relaunch the jail, and dispatch AutoQA against `tillr-autoqa`.
 
 **First three actions:**
 1. Author the `yolo-packs/tillr` manifest declaring the `.local/share/tillr` `files` tree, the eight `program` entries (`tillr` and `tillr-{drain,gate,item,land,run,store,view}`), and `{"kind": "skills"}`.
@@ -274,14 +274,14 @@ from a tree the process never loaded.
 
 1. ✅ **OQ-TD1: Should `yolo-packs/tillr` sit in user-scope configuration for every workspace now, or stay opt-in per workspace?**
 
-   An operator opens a second repository or an AutoQA workspace and runs `tillr view status`. Today [`config/yolo-jail/config.toml`](../../config/yolo-jail/config.toml) includes [`yolo-packs/matt-agentwork`](../../yolo-packs/matt-agentwork) globally while `../../yolo-packs/merge-queue` is selected per workspace. We must choose whether every workspace gets the eight `tillr` binaries on `PATH` by default.
+   An operator opens a second repository or an AutoQA workspace and runs `tillr view status`. Today `config/yolo-jail/config.toml` includes `yolo-packs/matt-agentwork` globally while `../../yolo-packs/merge-queue` is selected per workspace. We must choose whether every workspace gets the eight `tillr` binaries on `PATH` by default.
 
-   - **Option A — User-scope in [`config/yolo-jail/config.toml`](../../config/yolo-jail/config.toml):** Every workspace gets the binaries and skills immediately; uninitialized repos remain unaffected because commands refuse without `.tillr/`.
+   - **Option A — User-scope in `config/yolo-jail/config.toml`:** Every workspace gets the binaries and skills immediately; uninitialized repos remain unaffected because commands refuse without `.tillr/`.
    - **Option B — Workspace opt-in only:** Only repos whose workspace config lists `yolo-packs/tillr` get the binaries; running AutoQA elsewhere requires editing that repo's config first.
 
    _Settled:_ option A, by what was built: `config/yolo-jail/config.toml` lists `yolo-packs/tillr` at user scope.
 
-   _Leaning:_ Option A — add `yolo-packs/tillr` to user-scope [`config/yolo-jail/config.toml`](../../config/yolo-jail/config.toml) so operators and AutoQA have the binaries and skills in every workspace, guarded by explicit `.tillr/` initialization.
+   _Leaning:_ Option A — add `yolo-packs/tillr` to user-scope `config/yolo-jail/config.toml` so operators and AutoQA have the binaries and skills in every workspace, guarded by explicit `.tillr/` initialization.
 
    **Answer:**
    > _(empty — fill in when decided)_

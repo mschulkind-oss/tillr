@@ -51,7 +51,7 @@ worktree, and [Section 6](#6-what-we-would-not-fix-tonight) for the temptations 
 **Needs your ruling:** none — all six questions from the brief are decided in
 [D-LR1](#d-lr1)–[D-LR6](#d-lr6).
 **Reads with:** [`tillr-day2.md`](tillr-day2.md), [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md),
-and [`tillr-seed-triage.md`](tillr-seed-triage.md).
+and `tillr-seed-triage.md`.
 
 ---
 
@@ -108,7 +108,7 @@ and where it stops:
 | Rank | Blocker | What breaks tonight if unfixed | Smallest fix | Size (`ESTIMATE`) |
 | :--- | :--- | :--- | :--- | :--- |
 | **1** | <a id="b1-gate-delegation"></a>**B1 — `tillr-loop gate` runs `tillr-gate` natively instead of delegating to [`tools/fork-check.py`](../../tools/fork-check.py), and `CommandSteps.Gate` passes no `--registry` or `--gate-program`** | **Every candidate fails at `Gate` with `gate-error` (exit `4`).** In [`tools/tillr-gate/plan.go`](../../tools/tillr-gate/plan.go) (`owedInProcess`), `scratch` has `selects: []` in the real registry, so it is owed by **every** diff regardless of path; [`tools/tillr-gate/run.go`](../../tools/tillr-gate/run.go) (`Run`) refuses whenever `len(plan.InProcess) > 0`. And [`tools/tillr-drain/drain/steps.go`](../../tools/tillr-drain/drain/steps.go) (`CommandSteps.Gate`) passes only `--store`, `--item-id`, `--run-id`, `--lane`, `--worktree`, `--base-sha`, and `--head-sha` to `tillr-loop gate`. | In [`tools/tillr-loop/tillr-loop`](../../tools/tillr-loop/tillr-loop) (`run_gate`), default `registry` from `${TILLR_LOOP_REGISTRY:-}` (generating `<run-work-dir>/registry.json` via `python3 "$repo_root/tools/fork-check.py" --registry-json` when unset) and default `gate_program` to run `python3 tools/fork-check.py --since "$base_sha" --no-wait` with `PI_FORKS_ROOT="$repo_root"` (exact argv in [Section 2](#2-who-judges-a-candidate-tonight)). | `ESTIMATE: 25 LOC` in [`tools/tillr-loop/tillr-loop`](../../tools/tillr-loop/tillr-loop) + `15 LOC` in [`tools/tillr-loop/test.py`](../../tools/tillr-loop/test.py) (~15 min) |
-| **2** | <a id="b2-seed-items-fence-and-fork-filter"></a>**B2 — `config/tillr/seed-items.json` omits `allowed_paths` on all 5 items and leaves 3 `patch/pi` fork items `in-queue`** | **The loop trips `StopInfraCircuitBreaker` in `<1s` without dispatching a single run.** [`tools/tillr-drain/drain/stage.go`](../../tools/tillr-drain/drain/stage.go) (`briefValues`) refuses any item with `len(recorded.AllowedPaths) == 0`, and [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) (`dispatchOne`) counts every `Stage` error toward `ConsecutiveInfra`. Three staging refusals halt the loop immediately. Even with `allowed_paths` added, the 3 `patch/pi` items break in a lane worktree ([Section 3](#3-the-canary-item-versus-the-seed-items)). | Add the `allowed_paths` lists from [`tillr-seed-triage.md`](tillr-seed-triage.md) ([The list](tillr-seed-triage.md#the-list)) to all 5 items in `config/tillr/seed-items.json`, and set `state: "blocked"` on `item-seed-01`, `item-seed-03`, and `item-seed-05` so tonight's queue dispatches only `item-seed-02` and `item-seed-04`. | `ESTIMATE: 25 LOC` in `config/tillr/seed-items.json` (~10 min) |
+| **2** | <a id="b2-seed-items-fence-and-fork-filter"></a>**B2 — `config/tillr/seed-items.json` omits `allowed_paths` on all 5 items and leaves 3 `patch/pi` fork items `in-queue`** | **The loop trips `StopInfraCircuitBreaker` in `<1s` without dispatching a single run.** [`tools/tillr-drain/drain/stage.go`](../../tools/tillr-drain/drain/stage.go) (`briefValues`) refuses any item with `len(recorded.AllowedPaths) == 0`, and [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) (`dispatchOne`) counts every `Stage` error toward `ConsecutiveInfra`. Three staging refusals halt the loop immediately. Even with `allowed_paths` added, the 3 `patch/pi` items break in a lane worktree ([Section 3](#3-the-canary-item-versus-the-seed-items)). | Add the `allowed_paths` lists from `tillr-seed-triage.md` (The list) to all 5 items in `config/tillr/seed-items.json`, and set `state: "blocked"` on `item-seed-01`, `item-seed-03`, and `item-seed-05` so tonight's queue dispatches only `item-seed-02` and `item-seed-04`. | `ESTIMATE: 25 LOC` in `config/tillr/seed-items.json` (~10 min) |
 | **3** | <a id="b3-post-run-fence-enforcement"></a>**B3 — `allowed_paths` (`fence.txt`) is rendered into `brief.md` and never checked against the candidate's commit before `Gate`/`Land`** | **An out-of-scope edit inside `<lane-dir>/worktree` lands onto `main`.** [`tools/tillr-drain/drain/boundary.go`](../../tools/tillr-drain/drain/boundary.go) (`TakeBoundary`) excuses the entire target `<lane-dir>/worktree`, and [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) (`verifyCandidate`) goes straight from `CandidateReady` to `Steps.Gate`. A model that edits [`AGENTS.md`](../../AGENTS.md), [`tools/fork-check.py`](../../tools/fork-check.py), or an unrelated module inside its worktree is never stopped unless a gate check happens to fail. | Check `git -C <worktree> diff --name-only <base_sha>..<head_sha>` and `git -C <worktree> status --porcelain` against `<lane-dir>/fence.txt` before `Steps.Gate` in [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) (`verifyCandidate`). On any out-of-fence or dirty path, treat as `GateFailed` (`boundary-scope-escape`, [Section 5](#5-the-stop-that-saves-the-owner)). | `ESTIMATE: 45 LOC` in [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) + `25 LOC` in [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/drain/loop_test.go) (~20 min) |
 | **4** | <a id="b4-sterile-worktree-reset"></a>**B4 — `LaneStager.Stage` runs `git worktree add --force -B` without pruning stale registrations or removing dirty worktree directories** | **A prior crashed run or leftover untracked file in `<lane-dir>/worktree` either fails `Stage` (exit `255`) or leaks untracked files into the next tick's worktree.** Canary attempt 2 (`loop2.err` on 2026-11-12) failed with `fatal: cannot force update the branch 'tillr/lane-1' used by worktree at '<lane-dir>'`. Furthermore, `git worktree add --force` over an existing directory does not delete untracked files left by the previous run on that lane. | In [`tools/tillr-drain/drain/stage.go`](../../tools/tillr-drain/drain/stage.go) (`prepareWorktree`), run `git -C <repoRoot> worktree remove --force <worktree>` (ignoring "not a working tree"), `os.RemoveAll(<worktree>)`, and `git -C <repoRoot> worktree prune` before `git -C <repoRoot> worktree add --force -B <branch> <worktree> <baseSHA>`. | `ESTIMATE: 20 LOC` in [`tools/tillr-drain/drain/stage.go`](../../tools/tillr-drain/drain/stage.go) + `15 LOC` in [`tools/tillr-drain/stage_test.go`](../../tools/tillr-drain/drain/stage_test.go) (~15 min) |
 
@@ -223,14 +223,14 @@ through [`tools/tillr-gate/gate.go`](../../tools/tillr-gate/gate.go),
 > **`[D-LR3]` The first overnight burn must exclude fork work (`item-seed-01`, `item-seed-03`, `item-seed-05`) and run only `main`-tree items (`item-seed-02`, `item-seed-04`).**
 > A tick that touches `patch/pi` cannot succeed under the current lane-worktree and
 > host-boundary model: its target files do not exist in a `main` worktree, `.forks/` is
-> gitignored and absent from the lane, and running [`bin/pi-forks`](../../bin/pi-forks) `export`
+> gitignored and absent from the lane, and running `bin/pi-forks` `export`
 > moves `refs/heads/patch/pi` in the host repository, which
 > [`tools/tillr-drain/drain/boundary.go`](../../tools/tillr-drain/drain/boundary.go) flags as a
 > fatal `host-boundary-violation`.
 
 ### Audit of the five seeded items in `config/tillr/seed-items.json`
 
-| Item ID | Archived board item | Target paths ([`tillr-seed-triage.md`](tillr-seed-triage.md) — [The list](tillr-seed-triage.md#the-list)) | Present in `<lane-dir>/worktree` (`main`)? | Tonight's disposition |
+| Item ID | Archived board item | Target paths (`tillr-seed-triage.md` — The list) | Present in `<lane-dir>/worktree` (`main`)? | Tonight's disposition |
 | :--- | :--- | :--- | :--- | :--- |
 | `item-seed-01` | 148 — move `pi` patch series' behavioral tail into settings/extensions | `yolo-packs/pi-fork/patches/`, `yolo-packs/matt/pack.json`, `yolo-packs/matt/files/extensions/`, `patch/pi` | **No** (`patch/pi` sources live in `.forks/pi`) | **Hold (`state: "blocked"`)** — requires `bin/pi-forks export --fork pi`, which moves `refs/heads/patch/pi` and trips `host-boundary-violation`. |
 | `item-seed-02` | 613 — yolo profile names a default seat set (`seat-profiles`) | `config/yolo-jail/`, `tag-personal/config/yolo-jail/`, `tag-work/config/yolo-jail/`, `yolo-packs/seat-profiles/`, `tests/seat-profiles.test.mjs`, `docs/design/seat-profiles.md` | **Yes** (all ordinary files on `main`) | **Run tonight (`state: "in-queue"`)** after adding `allowed_paths`. |
@@ -248,7 +248,7 @@ through [`tools/tillr-gate/gate.go`](../../tools/tillr-gate/gate.go),
 2. **`.forks/` is gitignored and absent from `<lane-dir>/worktree`.** As recorded in
    [`.gitignore`](../../.gitignore) (`/.forks/`) and [`AGENTS.md`](../../AGENTS.md), `.forks/`
    lives only at the root of `/workspace` and is never present inside a linked worktree.
-   Furthermore, [`bin/pi-forks`](../../bin/pi-forks) refuses linked-worktree execution unless
+   Furthermore, `bin/pi-forks` refuses linked-worktree execution unless
    `PI_FORKS_ROOT=/workspace` is set.
 3. **`bin/pi-forks export` trips `host-boundary-violation` and aborts the loop.** Even if a
    model knew to run `PI_FORKS_ROOT=/workspace bin/pi-forks setup --lane lane-1 --fork pi` and
@@ -411,8 +411,8 @@ The coordinator should execute these steps in order before leaving the loop unat
      `--gate python3 --gate-arg tools/fork-check.py --gate-arg --since --gate-arg "$base_sha" --gate-arg --no-wait`
      with `PI_FORKS_ROOT="$repo_root"` to `"$gate_bin" run`.
    - `config/tillr/seed-items.json`: add `allowed_paths`
-     to `item-seed-01` through `item-seed-05` per [`tillr-seed-triage.md`](tillr-seed-triage.md)
-     ([The list](tillr-seed-triage.md#the-list)), and set `state: "blocked"` on
+     to `item-seed-01` through `item-seed-05` per `tillr-seed-triage.md`
+     (The list), and set `state: "blocked"` on
      `item-seed-01`, `item-seed-03`, and `item-seed-05`.
    - [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) (`verifyCandidate`):
      verify `git -C <worktree> status --porcelain` is empty and every changed path in

@@ -29,13 +29,13 @@ vantage:
 
 **Needs your ruling:** None.
 
-**Reads with:** [`board-unified-architecture.md`](board-unified-architecture.md) (the store, drain, and merge-queue design), [`board-rebuild-plan.md`](../pi/board-rebuild-plan.md) (the build hand-off grounded at `4751f558d`), [`whale-interaction-collector.md`](whale-interaction-collector.md) (the historical event collector this complements), and [`turn-stall-watchdog.md`](../pi/turn-stall-watchdog.md) (why open-run stream auto-aborts were removed).
+**Reads with:** `board-unified-architecture.md` (the store, drain, and merge-queue design), `board-rebuild-plan.md` (the build hand-off grounded at `4751f558d`), `whale-interaction-collector.md` (the historical event collector this complements), and `turn-stall-watchdog.md` (why open-run stream auto-aborts were removed).
 
 ---
 
 ## 1. Verdict and Principles
 
-The 2026-10-20 owner ruling in [`turn-stall-watchdog.md`](../pi/turn-stall-watchdog.md) established a foundational rule: never abort an active model turn merely because the stream is quiet, because deep reasoning and overloaded systems look identical to a timer. Yet the rest of the coordination stack still relies on timers to infer whether processes, database calls, and cancellations are alive.
+The 2026-10-20 owner ruling in `turn-stall-watchdog.md` established a foundational rule: never abort an active model turn merely because the stream is quiet, because deep reasoning and overloaded systems look identical to a timer. Yet the rest of the coordination stack still relies on timers to infer whether processes, database calls, and cancellations are alive.
 
 Four principles complete that shift:
 
@@ -46,7 +46,7 @@ Four principles complete that shift:
 
 ### 1.1 Non-Goals
 
-- **No reintroduction of the open-run turn-stall watchdog.** Quiet provider streams during normal turns remain unbounded until the user presses Escape ([`turn-stall-watchdog.md`](../pi/turn-stall-watchdog.md)).
+- **No reintroduction of the open-run turn-stall watchdog.** Quiet provider streams during normal turns remain unbounded until the user presses Escape (`turn-stall-watchdog.md`).
 - **No behavioral changes to coordinator tool fences or approver rubrics.** Splitting `work-control.ts` into modules is a pure structural refactor that preserves every existing test in `yolo-packs/matt/tests/work-control*.test.mjs`.
 
 ---
@@ -59,7 +59,7 @@ Verified against the tree at `4751f558d` on 2026-10-24, here is every load-sensi
 | :--- | :--- | :--- | :--- |
 | **`board drain` worker liveness** (`store.go`) | `RunLivenessStaleness = 2 * time.Minute` | Marks busy workers `interrupted` if heartbeats lag; waits 120s to detect an actual crash. | **POSIX FIFO `runner.lease`**: non-blocking `O_WRONLY` probe returns `ENXIO` the instant the worker process group exits, and never misfires under 100% CPU load. |
 | **`pi-subagents` slot reclamation** (`active-async-capacity.ts`) | `RUNNER_SILENCE_MS = 60_000` & `DEFAULT_ABANDONED_SLOT_RELEASE_AFTER_MS = 20m` | Dead runner without lease check holds capacity slot for up to 20 minutes; silent runner flagged after 60s. | **Immediate FIFO lease sweep**: `observeRunnerLease` (`ENXIO`) reclaims dead slots immediately on queue pump without waiting 20 minutes, and ignores heartbeat silence while `runner.lease` is `held`. |
-| **`board/client.ts` CLI calls** (`board/client.ts`) | `DEFAULT_TIMEOUT_MS = 15_000` + 6-process shell digest per call | Under 12-way process load, shell digest + SQLite WAL pragma contention exceeds 15s and aborts pile syncs. | **Zero-fork binary cache + `OpenRead` fast path** ([`board-unified-architecture.md` §3.3](board-unified-architecture.md#33-replace-busy-polling-and-pid-probes-with-kernel-primitives)) + 60s safety ceiling aligned with SQLite's `busy_timeout`. |
+| **`board/client.ts` CLI calls** (`board/client.ts`) | `DEFAULT_TIMEOUT_MS = 15_000` + 6-process shell digest per call | Under 12-way process load, shell digest + SQLite WAL pragma contention exceeds 15s and aborts pile syncs. | **Zero-fork binary cache + `OpenRead` fast path** (`board-unified-architecture.md` section 3.3) + 60s safety ceiling aligned with SQLite's `busy_timeout`. |
 | **`board-runs.ts` observer widget** (`board-runs.ts`) | `BOARD_RUNS_POLL_MS = 10_000` (`setInterval` spawning `board run list`) | Spawns 360 child processes/hour per idle terminal; lags up to 10s after a run starts or finishes. | **`fs.watch` on `<store-dir>/board.wakeup`** (debounced at 50ms) with a 60s fallback only if the watcher errors. |
 | **Pi `AgentSession` compaction abort** (`.forks/pi`) | `_abortCurrentOperation` only arms `turnSettleBoundMs` when `_isAgentRunActive` is true | Manual compaction with a hung stream ignores `Ctrl+Enter` and blocks `waitForIdle()` forever. | **Unified operation settle bound**: arm `turnSettleBoundMs` on *any* operation abort (`_isAgentRunActive \|\| isCompacting \|\| isBranchSummarizing`). |
 
@@ -115,7 +115,7 @@ stateDiagram-v2
 
 ### 3.4 Leak 4: Misleading Send-Now Status and the 11-State Indicator Mapping (`send-now-status.test.ts`)
 
-- **What happens today.** `InteractiveMode` collapses 11 runtime states ([`tools/queued-message-states/session-state.ts`](../../tools/queued-message-states/session-state.ts)) into 4 `StatusIndicatorKind` values (`"working" | "retry" | "compaction" | "branchSummary"`), clears `"working"` at `agent_end` before `agent_settled` (leaving `S8 turn_end` visually indistinguishable from `S1 idle`), and prints `"Sending queued messages now: waiting for the current turn to cancel"` on a second `Ctrl+Enter` even when waiting on compaction.
+- **What happens today.** `InteractiveMode` collapses 11 runtime states (`tools/queued-message-states/session-state.ts`) into 4 `StatusIndicatorKind` values (`"working" | "retry" | "compaction" | "branchSummary"`), clears `"working"` at `agent_end` before `agent_settled` (leaving `S8 turn_end` visually indistinguishable from `S1 idle`), and prints `"Sending queued messages now: waiting for the current turn to cancel"` on a second `Ctrl+Enter` even when waiting on compaction.
 - **The fix (`INV-INDICATED`).** The suite is the specification, and its constraint is narrower than "name the busy flag": the status for a **stuck** send must not claim a cancellation is running (`/abort|cancel/i` must not match it, because nothing is in flight), the status for an **abort in flight** must claim one, and the two must differ. A compaction-only hang has no abort running, so naming compaction in that state would repeat the original lie in a new sentence. `sendNowStatus(streaming, inFlight)` in `interactive-mode.ts` therefore has four arms, keyed on whether a run is streaming and whether a send is already in flight:
     - streaming, a send already in flight — `"A send-now is already in flight: waiting for the current turn to cancel"`
     - streaming, no send in flight — `"Sending queued messages now: waiting for the current turn to cancel"`
@@ -170,7 +170,7 @@ flowchart TD
 
 Today, `board-runs.ts` polls `board run list --json` every 10 seconds (`BOARD_RUNS_POLL_MS = 10_000`) and ticks a UI repaint timer every 1 second (`BOARD_RUNS_REPAINT_MS = 1_000`), while `work-control.ts` refreshes `BoardPileCache` only at turn boundaries.
 
-With `<store-dir>/board.wakeup` ([`board-unified-architecture.md` §3.3](board-unified-architecture.md#33-replace-busy-polling-and-pid-probes-with-kernel-primitives)):
+With `<store-dir>/board.wakeup` (`board-unified-architecture.md` section 3.3):
 - A single shared watcher (`BoardStoreWatcher` in `board/client.ts`) uses `fs.watch` on the store directory filtering for `board.wakeup`, coalescing bursts with a 50ms trailing debounce.
 - Whenever `board.wakeup` changes, `BoardStoreWatcher` triggers both `BoardPileCache.refresh()` and `board-runs.ts`'s run-list refresh.
 - While no runs are active (`runs.length === 0`), `board-runs.ts` stops its 1-second elapsed-time repaint ticker completely; the ticker runs only while at least one lane is actively `running`.
@@ -199,7 +199,7 @@ At 20,239 lines, `yolo-packs/matt/files/extensions/work-control.ts` is the large
 | `goal-evaluator.ts` | Objective goal evaluation pass, `stalledRounds` tracking, exponential quiet-retry scheduling | `startGoalEvaluation`, `scheduleQuietRetry`, `QUIET_RETRY_INITIAL_DELAY_MS` |
 | `live-runs-ledger.ts` | Subagent event bus subscriptions (`SUBAGENT_ASYNC_*`), capacity queue orphan reconciliation (`reconcileCapacityQueuedRuns`) | `LiveRuns`, `reconcileCapacityQueuedRuns`, `observeSubagentEvents` |
 
-**Constraint:** Every extracted module is registered in [`yolo-packs/matt/pack.json`](../../yolo-packs/matt/pack.json) under `contributes` (`into: ".pi/agent/extensions/work-control/<name>.ts"`), and `work-control.ts` re-exports any symbol imported by existing tests in `yolo-packs/matt/tests/`.
+**Constraint:** Every extracted module is registered in `yolo-packs/matt/pack.json` under `contributes` (`into: ".pi/agent/extensions/work-control/<name>.ts"`), and `work-control.ts` re-exports any symbol imported by existing tests in `yolo-packs/matt/tests/`.
 
 ---
 
@@ -208,7 +208,7 @@ At 20,239 lines, `yolo-packs/matt/files/extensions/work-control.ts` is the large
 | Alternative | Why it was considered | Verdict |
 | :--- | :--- | :--- |
 | **Keep `BOARD_RUNS_POLL_MS` at 10s instead of `fs.watch`** | Avoids managing an `fs.watch` handle in Node.js. | **Rejected.** Spawning a subprocess every 10 seconds across multiple open terminals wastes CPU, clutters strace/audit logs, and still leaves a 10-second blind spot after a run starts or finishes. |
-| **Auto-abort open model runs after 5 minutes of silence** | Would catch dead TCP sockets when a provider hangs mid-stream. | **Rejected.** Violates the 2026-10-20 owner ruling ([`turn-stall-watchdog.md`](../pi/turn-stall-watchdog.md)). Provider socket deadlocks belong to HTTP/TCP keepalive at the transport layer, not a synthetic turn abort that kills extended thinking. |
+| **Auto-abort open model runs after 5 minutes of silence** | Would catch dead TCP sockets when a provider hangs mid-stream. | **Rejected.** Violates the 2026-10-20 owner ruling (`turn-stall-watchdog.md`). Provider socket deadlocks belong to HTTP/TCP keepalive at the transport layer, not a synthetic turn abort that kills extended thinking. |
 | **Rewrite `work-control.ts` from scratch** | Would allow a cleaner greenfield coordinator design. | **Rejected.** `work-control.ts` encodes dozens of hard-won edge cases pinned by 45+ test suites. Incremental extraction of pure submodules preserves 100% behavioral parity while cutting the root file down to orchestration wiring. |
 
 ---
@@ -218,8 +218,8 @@ At 20,239 lines, `yolo-packs/matt/files/extensions/work-control.ts` is the large
 | Risk | Consequence | Mitigation |
 | :--- | :--- | :--- |
 | **`fs.watch` on a non-existent store directory** | Watching `<store-dir>` before `board init` has ever run throws `ENOENT`. | `BoardStoreWatcher` only attaches once `<store-dir>` exists, or re-checks on turn boundaries until the directory is created. |
-| **Missing `pack.json` entry when extracting a submodule from `work-control.ts`** | Works in repo-local tests that import from `yolo-packs/matt/files/extensions/`, but fails in deployed `~/.pi/agent/extensions/` with `ERR_MODULE_NOT_FOUND`. | Every new file under `files/extensions/work-control/` must be added to [`yolo-packs/matt/pack.json`](../../yolo-packs/matt/pack.json) and verified with `yolo pack lint yolo-packs/matt`. |
-| **Pi fork patch series conflicts** | Editing `.forks/pi` directly instead of a lane checkout corrupts the shared fork cache. | Follow the mandatory `bin/pi-forks setup --lane <lane> --fork pi` → commit → `export` → `check` workflow ([`docs/pi/forks.md`](../pi/forks.md)). |
+| **Missing `pack.json` entry when extracting a submodule from `work-control.ts`** | Works in repo-local tests that import from `yolo-packs/matt/files/extensions/`, but fails in deployed `~/.pi/agent/extensions/` with `ERR_MODULE_NOT_FOUND`. | Every new file under `files/extensions/work-control/` must be added to `yolo-packs/matt/pack.json` and verified with `yolo pack lint yolo-packs/matt`. |
+| **Pi fork patch series conflicts** | Editing `.forks/pi` directly instead of a lane checkout corrupts the shared fork cache. | Follow the mandatory `bin/pi-forks setup --lane <lane> --fork pi` → commit → `export` → `check` workflow (`docs/pi/forks.md`). |
 
 ---
 

@@ -10,7 +10,7 @@
 
 ## History and scope
 
-The [October design](../pi/steer5-state-machines-2026-10-29.md) and its [first slice](../pi/board-state-machines-slice1-2026-10-29.md) describe the retired board, not the tillr schema. The later `docs/design/board-state-machine.md` survives in history (`git show 698517e1f^:docs/design/board-state-machine.md`). This proposal changes neither the store nor behavior. It preserves the [landing principles](landing-principles.md): a landing binds evidence about trees, not patch identity; proof binds a revision, not a mutable branch name.
+The October design and its first slice describe the retired board, not the tillr schema. The later `docs/design/board-state-machine.md` survives in history (`git show 698517e1f^:docs/design/board-state-machine.md`). This proposal changes neither the store nor behavior. It preserves the [landing principles](landing-principles.md): a landing binds evidence about trees, not patch identity; proof binds a revision, not a mutable branch name.
 
 ## Inventory at the design baseline
 

@@ -21,7 +21,7 @@ depends-on:
 
 # Build plan: a tillr core with Git landing as its first definition
 
-> **Delivered copy.** This is `docs/design/tillr-definitions-plan.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-definitions-plan.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-17. Written against `4df6e426f`. The owner said to build on 2026-11-17: "file
 item(s) to build as much of the new tillr as possible so autoqa can play with the real thing and
@@ -769,7 +769,7 @@ the fixtures it had to edit.
 - **This item repairs that test, because its file is under this item's paths.** The repair removes
   the deadline: the test's context is cancelled when the test ends and carries no timeout, so a hang
   is ended by the test binary's own limit and not by a clock that depends on load. That is the
-  repair the [sharded-runner report](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/tillr-go-shards-2026-11-17.md) records for the other
+  repair the sharded-runner report records for the other
   nested test deadlines. The test's assertions do not change. Raising 10 to a larger number is not
   the repair, since any fixed number fails at some load.
 - **The same rule covers any other test the full suite fails.** If the failing test's file is under

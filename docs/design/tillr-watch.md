@@ -13,7 +13,6 @@ related:
   - ./run-wall-ruling.md
   - ./failure-diagnosed-not-waited-out.md
   - ./tillr-judge-and-lifecycle.md
-  - ./handoff-items-and-steering-timer.md
   - ./tillr-goal-monitor.md
   - ./tillr-live-drain-config.md
   - ./tillr-alert-triage-seat.md
@@ -145,8 +144,8 @@ Four settled repository rulings forbid failing or stopping work on attempt count
 
 ### 3.3 Relation to One-Breakage Dedup, Steering Timers, and Goal Monitors
 
-- **Generalizes [the retired agent runtime design Section 20 ("One breakage, one investigation")](./agent-runtime-retirement.md#what-happened-to-each-section):** `D-OC1`–`D-OC8` established mechanical signature deduplication, transition-driven invocation, and the `D-OC5` precondition (*never dispatch a second investigation while an open breakage already has a non-terminal attempt*). `tillr-watch` lifts that exact episode discipline from gate check breakages to **all** cross-utility rules (`D-TW5`, `D-TW7`).
-- **Replaces time-polling in [`steering-timer`](../reference/steering-timer.md) when waiting on state:** `steering-timer.ts` ([`handoff-items-and-steering-timer.md` Section 4.2](./handoff-items-and-steering-timer.md#42-the-mechanism-a-pi-extension-owning-a-durable-steering-record)) injects periodic clock-based check-ins (`every N minutes`) so a foreground whale keeps nudging a long goal. When an agent is instead waiting on *specific store/git conditions* ("tell me when `refs/tillr/green` catches up, or when `item-X` reaches `verify`, or if `tillr-roll` fails"), waking every 10 minutes on a timer wastes turns when nothing happened and lags up to 10 minutes when it did. `tillr-watch` provides **event-driven, zero-polling wakeups** from a durable record in the store, delivered by a background watcher the foreground agent runs ([Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3), [D-TW11](#D-TW11)); it adds no Pi extension.
+- **Generalizes the retired agent runtime design Section 20 ("One breakage, one investigation"):** `D-OC1`–`D-OC8` established mechanical signature deduplication, transition-driven invocation, and the `D-OC5` precondition (*never dispatch a second investigation while an open breakage already has a non-terminal attempt*). `tillr-watch` lifts that exact episode discipline from gate check breakages to **all** cross-utility rules (`D-TW5`, `D-TW7`).
+- **Replaces time-polling in `steering-timer` when waiting on state:** `steering-timer.ts` (`handoff-items-and-steering-timer.md` Section 4.2) injects periodic clock-based check-ins (`every N minutes`) so a foreground whale keeps nudging a long goal. When an agent is instead waiting on *specific store/git conditions* ("tell me when `refs/tillr/green` catches up, or when `item-X` reaches `verify`, or if `tillr-roll` fails"), waking every 10 minutes on a timer wastes turns when nothing happened and lags up to 10 minutes when it did. `tillr-watch` provides **event-driven, zero-polling wakeups** from a durable record in the store, delivered by a background watcher the foreground agent runs ([Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3), [D-TW11](#D-TW11)); it adds no Pi extension.
 - **Complements [`tillr-goal-monitor.md`](./tillr-goal-monitor.md):** The iceboxed goal monitor evaluates high-level prose roadmap goals on a scheduled `due_at` cadence via an LLM node. `tillr-watch` is a **0-LLM-token mechanical evaluator** running continuously on event commits, invoking an agent *only* when a declared threshold or agent watch actually fires.
 
 ---
@@ -948,7 +947,7 @@ This subsection records an operator request filed on 2026-11-22 after `trunk-pro
 **What happened at 4:13 AM ET on 2026-11-22 during the proof of `28e0b8a725`.** Commit `28e0b8a725` (`feat(tillr-gate): route runner sites G1-G12 through shared checkresult classifier`) modified `tools/tillr/checkresult/*`, `tools/tillr-gate/*`, and `tools/gate/classification-scan.test.py`. Because `tools/tillr-drain/go.mod` replaces `github.com/mschulkind-oss/tillr => ../tillr`, `go_tool_watches("tools/tillr-drain", root)` in [`tools/fork-check.py`](../../tools/fork-check.py) selected `go-tool/tools-tillr-drain-s-whole-suite-passes` (`CGO_ENABLED=0 python3 tools/go-test-shards.py tools/tillr-drain -k 6 --slot-class proof --timeout 0`). During `28e0b8a725`'s heavy proof:
 
 1. At **4:03:47 AM ET**, `self-suite` (`the gate's own audit suite still passes`) finished green and emitted `drain.heavy-progress` (`phase = "progress"`, `outcome = "pass"`).
-2. From **4:03:47 AM ET to 4:13:48 AM ET (`10m 01s`)**, `go-tool/tools-tillr-drain-s-whole-suite-passes` ran while **eight lane workers were simultaneously running Go tests** on the machine. Unloaded on 2026-11-17 ([Commands and measurements](../pi/tillr-go-shards-2026-11-17.md#commands-and-measurements)), `tillr-drain` ran in `40.31s` across `1,166` tests; at `6df7e5bf5a`, `tools/tillr-drain` has **9 test packages and over 1,880 `Test*` functions** (`> 1,500` in `tools/tillr-drain/drain`, `> 350` in `tools/tillr-drain`, plus 7 smaller subpackages). Under eight-worker load — with ordinary slots held by workers and CPU and I/O shared across up to 22 concurrent Go test processes — that single healthy check ran for `10m 01s`.
+2. From **4:03:47 AM ET to 4:13:48 AM ET (`10m 01s`)**, `go-tool/tools-tillr-drain-s-whole-suite-passes` ran while **eight lane workers were simultaneously running Go tests** on the machine. Unloaded on 2026-11-17 (Commands and measurements), `tillr-drain` ran in `40.31s` across `1,166` tests; at `6df7e5bf5a`, `tools/tillr-drain` has **9 test packages and over 1,880 `Test*` functions** (`> 1,500` in `tools/tillr-drain/drain`, `> 350` in `tools/tillr-drain`, plus 7 smaller subpackages). Under eight-worker load — with ordinary slots held by workers and CPU and I/O shared across up to 22 concurrent Go test processes — that single healthy check ran for `10m 01s`.
 3. Because `observe()` in [`tools/tillr-drain/heavyrun/heavy_legacy_progress.py`](../../tools/tillr-drain/heavyrun/heavy_legacy_progress.py) appends to `state["completed"]` only *after* `execute_with_events(...)` returns, zero `drain.heavy-progress` events were written between `4:03:47` and `4:13:48 AM ET`. At **4:13:47 AM ET** (`10m 00s` after `4:03:47`), `trunk-proof-stalled` opened a false alert; 1 second later at **4:13:48 AM ET** `go-tool/tools-tillr-drain-s-whole-suite-passes` passed, and 5 seconds after that (**4:13:53 AM ET**) the proof ended `green`.
 
 **Why a measured-duration window, shard-end-only events, and wall-clock heartbeats fail under load.** The operator request asked the designer to decide how the alert tells a long healthy check from a hung one — *"for example the heavy runner reporting progress per package or shard inside a long check, or a window taken from the measured time of the longest check. Do not make the test suite's speed depend on load to pass; the alert must hold under load."* Evaluating each candidate against that load constraint rules out three approaches:
@@ -1771,7 +1770,7 @@ also_notify = ["subscribers"]
 
 ### 6.1 One record per condition, never per pass: the Alert Episode state machine ([D-TW5](#D-TW5))
 
-If `tillr-drain` runs a pass every few seconds while `refs/tillr/green` lags for 25 minutes, a naive checker would emit hundreds of duplicate alerts and trigger hundreds of agent turns. Extending `D-OC1`–`D-OC5` in [the retired agent runtime design Section 20](./agent-runtime-retirement.md#what-happened-to-each-section), `tillr-watch` enforces **one active episode per `(rule_id, subject_key)`** in `.tillr/state.db`:
+If `tillr-drain` runs a pass every few seconds while `refs/tillr/green` lags for 25 minutes, a naive checker would emit hundreds of duplicate alerts and trigger hundreds of agent turns. Extending `D-OC1`–`D-OC5` in the retired agent runtime design Section 20, `tillr-watch` enforces **one active episode per `(rule_id, subject_key)`** in `.tillr/state.db`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS alert_episodes (
@@ -2030,7 +2029,7 @@ Claude Code stops a background command at the `timeout` it was started with, and
 
 Nothing depends on the watcher ending cleanly. If the harness stops it at two hours, or anything else ends it, no state is lost, because the watcher holds none: the next `wait` shows whatever is pending. A watch that fires while no watcher is attached (between an exit and the re-arm, or between two sessions) is shown the moment the next `wait` starts.
 
-**In Pi: one watcher for the life of the session.** Pi's `background_task` tool (start, status, logs, stop and watch; [the background-work research](../research/pi-background-work.md)) sets no time limit on a task, so the agent starts the watcher once, with no `--timeout`:
+**In Pi: one watcher for the life of the session.** Pi's `background_task` tool (start, status, logs, stop and watch; the background-work research) sets no time limit on a task, so the agent starts the watcher once, with no `--timeout`:
 
 ```text
 tillr watch wait --store <repository root>/.tillr/state.db --rules <repository root>/config/tillr/watch --follow

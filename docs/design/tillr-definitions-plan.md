@@ -767,7 +767,7 @@ the fixtures it had to edit.
 - **This item repairs that test, because its file is under this item's paths.** The repair removes
   the deadline: the test's context is cancelled when the test ends and carries no timeout, so a hang
   is ended by the test binary's own limit and not by a clock that depends on load. That is the
-  repair the [sharded-runner report](../pi/tillr-go-shards-2026-11-17.md) records for the other
+  repair the sharded-runner report records for the other
   nested test deadlines. The test's assertions do not change. Raising 10 to a larger number is not
   the repair, since any fixed number fails at some load.
 - **The same rule covers any other test the full suite fails.** If the failing test's file is under

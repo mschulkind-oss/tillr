@@ -9,7 +9,7 @@ summary: "The one page to read first about tillr: every design and reference doc
 
 # tillr designs: what is built, what is queued, and what is only proposed
 
-> **Delivered copy.** This is `docs/tillr/design-status.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/design-status.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/design-status.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/design-status.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-16. Every status below was checked against the tree at `424cc9db0` and the
 queue on this checkout's store that evening, not copied from the documents' own status lines;
@@ -182,22 +182,22 @@ Kept for their evidence. None is delivered with the pack; each link goes to the 
 | [Day 2](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-day2.md) | The plan of 2026-11-12 for the first unattended loop. | Historical: the loop runs unattended | not shipped |
 | [Loop readiness](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-loop-readiness.md) | What blocked an overnight burn on 2026-11-12. | Historical | not shipped |
 | [Chunking plan](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-chunking-plan.md) | The 2026-11-12 cut of remaining work into lanes. | Historical: replaced by item blocks | not shipped |
-| [Seed triage](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-seed-triage.md) | The first seed of 56 board items. | Historical: the seed file is frozen and the queue lives in documents | not shipped |
+| Seed triage | The first seed of 56 board items. | Historical: the seed file is frozen and the queue lives in documents | not shipped |
 | [Coverage 2026-11-13](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-coverage-2026-11-13.md) | A walk of fifteen designs for owed work. | Historical record | not shipped |
 | [Drain acceptance 2026-11-13](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-drain-acceptance-2026-11-13.md) | The first unattended two-lane run, measured. | Historical record | not shipped |
 | [Observatory QA 2026-11-13](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-qa-2026-11-13.md) | Findings against the first observatory. | Historical record | not shipped |
-| [Queue inventory 2026-11-13](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/queue-inventory-2026-11-13.md) | Every candidate piece of work, surveyed. | Historical record | not shipped |
-| [Board utilities plan](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities-plan.md) | The implementation plan for the seven programs. | Graduated: built | not shipped |
-| [Board utilities lanes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities-lanes.md) | That plan cut into lanes. | Graduated | not shipped |
-| [Board documents retirement](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-docs-retirement.md) | Retiring the old board's documents. | Done | not shipped |
-| [Board names](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-names.md) | Naming the machine; chose tillr. | Historical | not shipped |
-| [LAND-3 inventory](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/land-3i-inventory.md) | mq against tillr-land, before one lander was chosen. | Deprecated | not shipped |
-| [mq retirement](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/mq-retirement.md) | Deleting the merge queue and rebuilding inside tillr. | Historical: mq is gone | not shipped |
+| Queue inventory 2026-11-13 | Every candidate piece of work, surveyed. | Historical record | not shipped |
+| Board utilities plan | The implementation plan for the seven programs. | Graduated: built | not shipped |
+| Board utilities lanes | That plan cut into lanes. | Graduated | not shipped |
+| Board documents retirement | Retiring the old board's documents. | Done | not shipped |
+| Board names | Naming the machine; chose tillr. | Historical | not shipped |
+| LAND-3 inventory | mq against tillr-land, before one lander was chosen. | Deprecated | not shipped |
+| mq retirement | Deleting the merge queue and rebuilding inside tillr. | Historical: mq is gone | not shipped |
 | [Run wall evidence](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/run-wall-evidence.md) | The measurement behind the run wall ruling. | Historical record | not shipped |
 | [Gate dual-run evidence](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-dual-run-evidence.md) | The Go gate against the Python gate on three candidates. | Historical record | not shipped |
-| [Landing system](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/landing-system.md) | The two landers before tillr-land. | Superseded by landing principles | not shipped |
-| [Landing runbook](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/landing-runbook.md) | Draining the old board by hand. | Superseded by the tillr-land README | not shipped |
-| [Drain velocity research](https://github.com/mschulkind-oss/tillr/blob/main/docs/research/tillr-drain-velocity.md) | One overnight ten-lane drain, observed. | Research record | not shipped |
+| Landing system | The two landers before tillr-land. | Superseded by landing principles | not shipped |
+| Landing runbook | Draining the old board by hand. | Superseded by the tillr-land README | not shipped |
+| Drain velocity research | One overnight ten-lane drain, observed. | Research record | not shipped |
 
 ## What is changing right now
 

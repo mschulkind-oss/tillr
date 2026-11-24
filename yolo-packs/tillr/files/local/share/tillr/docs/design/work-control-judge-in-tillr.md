@@ -9,7 +9,7 @@ next: "Build ITEM-V (the `item.verdict` writer rules) on the E2 critical path; a
 
 # The item judge in tillr: migrate the verdict, delete the turn-end judge and the shadow
 
-> **Delivered copy.** This is `docs/design/work-control-judge-in-tillr.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/work-control-judge-in-tillr.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/work-control-judge-in-tillr.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/work-control-judge-in-tillr.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-12. Ruled by a design seat, not by the owner; nothing built. The owner has not accepted the assessment this build rests on: the first version's next step was the owner accepting or rejecting the MIGRATE ruling, and on 2026-11-11 a design seat ruled it in his place (`dcc4eef9f`), with no words of his recorded. Evidence is the current tree:
 the four tillr design documents, the approver design, both work-control
@@ -38,13 +38,13 @@ whatever its verdicts are worth in coordinator sessions.
 split in [Retirement in the end state](#retirement-in-the-end-state).
 
 **Reads with:** [`board-utilities.md`](board-utilities.md) (the seven
-utilities), [`board-utilities-lanes.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities-lanes.md) (the
-build order), [`board-sanity-recovery.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-sanity-recovery.md) (why
-the board is being rebuilt), [the retired agent runtime design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime-retirement.md) (what
-Pi keeps; the work-control split), [`approver-agent.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/approver-agent.md)
+utilities), `board-utilities-lanes.md` (the
+build order), `board-sanity-recovery.md` (why
+the board is being rebuilt), the retired agent runtime design (what
+Pi keeps; the work-control split), `approver-agent.md`
 (the approver seat's own design),
-[`work-control.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/work-control.md) and
-[`agent-work-control.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/agent-work-control.md) (why the judge
+`work-control.md` and
+`agent-work-control.md` (why the judge
 exists).
 
 ---
@@ -79,7 +79,7 @@ exists).
   nothing".
 - **Gate verdict** — a different verdict entirely: whether the checks in a
   gate plan passed on one candidate tree. It is about a tree, never about
-  whether an item's criterion is met. [the retired agent runtime design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime-retirement.md)
+  whether an item's criterion is met. the retired agent runtime design
   separates these as attempt result, candidate verdict, and **sign-off** —
   a recorded judgment, by a named actor, that a claim about work may
   stand. The item verdict is a sign-off in that sense.
@@ -87,7 +87,7 @@ exists).
 - **Whale seat** — my shorthand, from the code's own `whaleSeat`, for a
   session whose coordinator mode is `running` or `paused` (anything but
   `off`). What mode itself means is contested territory: the work-control
-  split in [the retired agent runtime design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime-retirement.md) rules the mode deleted
+  split in the retired agent runtime design rules the mode deleted
   as a state (its ledger row D1), replaced by two narrower facts — *the
   session may continue itself* and *continuation is paused*.
 - **Cutover** — the planned promotion of the approver seat from shadow to
@@ -143,7 +143,7 @@ state}`, but no record kind, face, or writer rule says who may move a
 criterion's state, on what evidence. The lane plan inherits the silence:
 its ITEM lanes cover apply/show, decisions and mail, and the design-doc
 read-through, and no lane in
-[`board-utilities-lanes.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities-lanes.md) mentions verdicts
+`board-utilities-lanes.md` mentions verdicts
 at all. Left as written, `item apply` would accept criterion state from
 whoever presents the record — self-certification, reintroduced by
 omission at the new boundary.
@@ -202,7 +202,7 @@ cutover" is not one event that finishes; every fresh branch and every
 model-row change re-enters shadow and re-earns it, which is why shadow
 output is a permanent feature of ordinary sessions rather than a
 migration with an end date. Third, and most damning, **the shadow's
-canonical launch path does not work**: [`approver-agent.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/approver-agent.md)
+canonical launch path does not work**: `approver-agent.md`
 records, with a test pinning it, that the rendered launch requests are
 refused by the item fence in their canonical cases and were refused one
 fence earlier on the wire, and the shadow notice itself now says "no
@@ -275,7 +275,7 @@ which the code cannot supply, and I did not inspect session transcripts.
 Whether the AA3 population has ever passed on any live branch — the owner
 seeing shadow notices proves those sessions were in shadow phase, nothing
 more. And whether the approver brand survives the subagent tool boundary
-in production, which [`approver-agent.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/approver-agent.md) itself
+in production, which `approver-agent.md` itself
 records as not established by anything in this tree. The code verdict is
 narrower and I am confident in it: with mode genuinely `off` and no
 `review_items` call, neither quoted message can be produced.

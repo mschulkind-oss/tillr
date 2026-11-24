@@ -7,7 +7,7 @@ summary: "What comes next for tillr and why in that order: the rulings only the 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Last reconciled: 2026-11-15**, late, against the tree, the store and `vantage-check index`.
 The repository roadmap's [Tillr section](https://github.com/mschulkind-oss/tillr/blob/main/docs/roadmap.md#tillr) points here. This page owns the order
@@ -249,7 +249,7 @@ built.
 
 [What a lane's agent is told](../design/agent-context-delivery.md#decision-ledger) left this list:
 its two tillr questions are closed as above, and the one it keeps, a startup profile for pi, is
-routed from [the pi roadmap](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/roadmap.md).
+routed from the pi roadmap.
 
 [The item graph is the whole path](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md), written on 2026-11-17 to
 the owner's rulings of that day, proposes that every act on an item is a node in its graph and that
@@ -446,7 +446,7 @@ passes across the gate and trunk proof and stopping lane workers from burning sh
 module suites;
 the [review comments design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-review-comments.md#7-decision-ledger) proposes
 replacing that subprocess reader with a native question parser; no owner question blocks it.
-[The overnight velocity evaluation](https://github.com/mschulkind-oss/tillr/blob/main/docs/research/tillr-drain-velocity.md)
+The overnight velocity evaluation
 puts identifying the store's live writer ahead of changing concurrency, because a lock-acquisition
 fault stops progress regardless of lane admission. It is evidence and a recommended investigation,
 not authorization to change the drain's policy.
@@ -587,7 +587,7 @@ get cheaper by being opened again.
   [entry 6](#6-the-observatory-answers-the-owners-questions) landed.
 - [The evidence tool](https://github.com/mschulkind-oss/tillr/blob/main/tools/pipeline-evidence/) still carries a reader for the deleted
   merge queue. Replacing it with a reader of the tillr store's landings is owed
-  ([the retirement design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/mq-retirement.md#9-open-questions)), and so is deleting
+  (the retirement design), and so is deleting
   `.workboard.toml`, which nothing reads any more.
 - [Scheduled tasks](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#12-open-questions) is fully settled and unbuilt:
   tillr has no due date or interval on an item yet. It is the substrate of the goal monitor,
@@ -646,7 +646,7 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
 
 ## What this page does not cover
 
-- **Pi**: its patches, forks, extensions and usage capture are in the [pi roadmap](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/roadmap.md).
+- **Pi**: its patches, forks, extensions and usage capture are in the pi roadmap.
 - **The rest of the repository** is in the [repository roadmap](https://github.com/mschulkind-oss/tillr/blob/main/docs/roadmap.md).
 - **Which item runs next** is the queue's answer, from `tillr-view waiting`, not this page's.
 
@@ -1596,14 +1596,14 @@ missing rather than report that the change failed verification.
   inputs. The 2026-11-15 `structural` failure involved seven absent local `patch/*` branches;
   the after-merge check lacked shared fork checkouts.
 - **Where:** [Gate checks](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/), [fork checker](https://github.com/mschulkind-oss/tillr/blob/main/tools/fork-check.py),
-  [fork export command](https://github.com/mschulkind-oss/tillr/blob/main/bin/pi-forks), and [delivery packs](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/).
+  fork export command, and [delivery packs](https://github.com/mschulkind-oss/tillr/blob/main/yolo-packs/).
   Criteria c2 and c3 were restored on 2026-11-17 after commit `bf87a76d8b` replaced them with
   landing and boundary-check requirements. Those requirements belong to
   [routing a landing around the owner's uncommitted edits](#route-a-landing-around-the-owners-uncommitted-edits),
   which carries its own c2 and c3. Do not change the lander or drain for this item.
 - **Publishing (2026-11-18, answers the fourth run's report of blocked):** The recorded commit is
   what a check reads. It does not constrain publication, so do not change
-  [the publisher](https://github.com/mschulkind-oss/tillr/blob/main/bin/patch-branches-publish) or [the push hook](https://github.com/mschulkind-oss/tillr/blob/main/hooks/pre-push);
+  the publisher or [the push hook](https://github.com/mschulkind-oss/tillr/blob/main/hooks/pre-push);
   both stay outside this item's paths. In c1, "must be at" states what a check judges: exporting
   moves the local branch and the record in one change, so the two agree after every export. A
   branch moved any other way is not this item's concern. What the remote holds is still proved
@@ -1654,7 +1654,7 @@ missing rather than report that the change failed verification.
   for each row above (`<branch>` includes `patch/`). If any check exits nonzero, stop and report
   the branch and ancestry check's exit status; do not rewind it or repin the delivery. If all
   three pass, fetch each exact ID from the locator into its own new empty bare repository.
-  If a pin is unavailable, follow [the host publication step](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/patch-branches/published.md#5-the-host-step)
+  If a pin is unavailable, follow the host publication step
   and repeat the fetches in new empty repositories. The publisher sends branch tips, not
   individual pins. Report the locator and one row per pin:
   `branch | object ID | ancestry exit | empty-repository fetch exit`. Record the actual Git
@@ -1662,13 +1662,13 @@ missing rather than report that the change failed verification.
   three rows show `0` for both checks. Neither a successful push, an advertised tip nor a
   local cache substitutes for those results.
 - **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
-  tests run the scenario files under [their cases directory](https://github.com/mschulkind-oss/tillr/blob/main/tests/pi-forks/), so those
-  files, [their shared library](https://github.com/mschulkind-oss/tillr/blob/main/tests/pi-forks/lib.sh),
-  [the fork list](https://github.com/mschulkind-oss/tillr/blob/main/bin/pi-forks.list) and
-  [the static series test](https://github.com/mschulkind-oss/tillr/blob/main/tests/pi-patch-series.test.sh) are now inside this item's paths.
+  tests run the scenario files under their cases directory, so those
+  files, their shared library,
+  the fork list and
+  the static series test are now inside this item's paths.
   A case that asserts the old contract is rewritten to assert c2, not kept and not deleted. The
   one known today is the last block of
-  [the candidate-check case](https://github.com/mschulkind-oss/tillr/blob/main/tests/pi-forks/cases/25-candidate-check.sh), which expects
+  the candidate-check case, which expects
   `candidate --check` to turn stale when the cache's local `patch/chkconv` branch moves. Under
   c2 the candidate's identity for a fork delivered from a patch branch is the recorded commit, so
   that block becomes three assertions: moving the record makes the candidate stale and the
@@ -1698,7 +1698,7 @@ missing rather than report that the change failed verification.
     `just pack-sync` after editing and commit the regenerated copy in the same commit; do not
     edit the copy by hand.
 - **Verify:** Use [fork-check tests](https://github.com/mschulkind-oss/tillr/blob/main/tests/fork-check.test.py) and
-  [fork export tests](https://github.com/mschulkind-oss/tillr/blob/main/tests/pi-forks.test.sh) to check that exporting updates the recorded
+  fork export tests to check that exporting updates the recorded
   commit, deleting all local `patch/*` branches changes no result, and empty, current, and
   stale-only caches produce the same answer. Check that a cache hit triggers no refresh and
   that a fetch refusal names the missing commit and remote and returns `could not judge`.
@@ -2213,7 +2213,7 @@ finding therefore goes into the store, and the face reads it there:
 
 ## Filed 2026-11-15: other people and other agents change the repository while the drain runs
 
-Principle (owner's ruling of 2026-10-23, in [agent work control](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/agent-work-control.md#the-owners-direct-lane-owner-ruled-2026-10-23)): a
+Principle (owner's ruling of 2026-10-23, in agent work control): a
 direct edit is the owner's hand, it takes no lock, collisions heal at the landing and not at the
 edit, and a dirty tree is a wait and not a failure. The owner also asked, in the retired
 autonomous-landing design (now carried by [the landing principles](../design/landing-principles.md#3-gate-what-will-be-the-tip-once)),
@@ -3472,7 +3472,7 @@ like you pulled some remote change when work was going on, which I will also do 
 sometimes." They did decide it. The old board design ruled on 2026-10-31 that the landing
 stashes the owner's uncommitted work, moves the trunk and re-applies the work, as `git pull
 --autostash` does (decision D33, built as task P10 in
-[`docs/design/board-state-machine-plan.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-state-machine-plan.md#p10--the-compare-and-swap-autostashes-the-checkout-independent-needs-no-other-task)).
+`docs/design/board-state-machine-plan.md`).
 The move to tillr dropped it with the old board tool (`docs/design/tillr-seed-triage.md`, row 592),
 and nothing replaced it.
 
@@ -3889,7 +3889,7 @@ the three were already ruled above and the third was not a failure.
 
 **Agent details:**
 
-- **Ref:** [`docs/design/board-state-machine-plan.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-state-machine-plan.md#p10--the-compare-and-swap-autostashes-the-checkout-independent-needs-no-other-task) P10 (D33, "the comparison-and-swap autostashes"; fences: never drop the stash on a failed apply, never stash during the gate); `docs/design/landing-principles.md`; the boundary table in `tools/tillr-drain/README.md`.
+- **Ref:** `docs/design/board-state-machine-plan.md` P10 (D33, "the comparison-and-swap autostashes"; fences: never drop the stash on a failed apply, never stash during the gate); `docs/design/landing-principles.md`; the boundary table in `tools/tillr-drain/README.md`.
 - **Where:** `Trunk.Move` and `Trunk.UncommittedPaths` in `tools/tillr-land/land/trunk.go`; `finishLanding` in `tools/tillr-land/land/landing.go`, which calls `Trunk.Move` inside the write transaction; the ignored ref prefixes in `tools/tillr-drain/drain/boundary.go`; the dirty refusal in `tools/tillr-land/`; `tools/tillr-drain/drain/dirty_hold.go`; `trunk-path-dirty` in `tools/tillr-drain/holdrules/holdrules.go` and in `tools/tillr-view/waiting.go`; the drain README section "Owner edits and waiting landings"; `yolo-packs/tillr/skills/tillr-operating/`.
 - **Plan for the builder (2026-11-18, second version; superseded the same day by the build order at the head of this block, and kept as the description of what the patch at the end of this block holds; a builder does not carry it out):** every step below was made by the design seat in a scratch copy on `d4eecbea3` and the result is in the evidence line for this amendment, so a step that fails for the builder is a mistake in carrying it out, not an open design question. Do the steps in order and run the named tests after each. Run every `go test` with `-timeout 120s` or longer, never shorter; a landing test in this module takes about one second and the slowest takes nine. Run a whole module only as `python3 tools/go-test-shards.py tools/<module> -k 6` with no `--shard-timeout` and no `--timeout`, in the background if the harness limits a command's time: the three modules take several minutes together. `python3 tests/tillr-docs.test.py` takes 60 seconds, so give it at least 300.
   1. **Start from the last build.** In the lane worktree run `git diff bf86efa42 refs/tillr/preserved/run-item-land-across-owner-edits-a23 -- tools docs yolo-packs/tillr/skills | git apply`. The ref is in the main repository and is readable from the lane. The patch applies without offsets that matter on `d4eecbea3`; if the base has moved and it does not apply, use `git apply --3way` and resolve. Do not take `yolo-packs/tillr/files/` from the ref. This build already holds the hold rules change, the view test with the `operator;` prefix, the lock record and the reclaim of a dead lander's lock, so none of those is written again.
@@ -5155,7 +5155,7 @@ leaves behind when it ends, is killed, or is orphaned.
 
 ## Filed 2026-11-17: fork work on a drain with several lanes
 
-Three items filed on 2026-11-17 from [the usage ledger's request](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/usage-recording-request.md)
+Three items filed on 2026-11-17 from the usage ledger's request
 change the Pi and pi-subagents forks. Those are the first items to fence a fork checkout at all, and
 reading how the drain would run them turned up two ways they would collide with the other lanes.
 
@@ -5178,7 +5178,7 @@ built it. The three usage-recording fork items wait on this one.
 
 **Agent details:**
 
-- **Ref:** AGENTS.md, "Landing a lane: shared forks, verified candidates" and "Patching an upstream tool: patch series first"; [the fork guide](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/forks.md); the run-boundary table in [the drain README](../../tillr-drain/README.md).
+- **Ref:** AGENTS.md, "Landing a lane: shared forks, verified candidates" and "Patching an upstream tool: patch series first"; the fork guide; the run-boundary table in [the drain README](../../tillr-drain/README.md).
 - **Where:** `forkTarget` and `ensureForkCheckout` in `tools/tillr-drain/drain/stage.go`; `freeLane`, `forkOf` and `forkHeldBy` in `tools/tillr-drain/drain/plan.go`; `liveForks` in `tools/tillr-drain/drain/pass.go`; `landedPatchMove` in `tools/tillr-drain/drain/boundary.go`; `PatchRef` with the patch-branch refusals in `tools/tillr-land/land/`; and the `path-missing` warning in `tools/tillr-item/item/sync.go`.
 - **Evidence (what already protects):** 2026-11-17, `rg -n 'ReasonForkHeld' tools/tillr-drain/drain/plan.go`: two items that deliver the same fork never run together. The hold counts this pass's dispatches, live leases and unfinished examinations (`liveForks`), whatever lane each is on. Commit `35a4d848d` added fork staging, the boundary's excuse for a run's own patch ref, and the lander's patch-branch move with its rewind refusal.
 - **Evidence (c1):** `forkTarget` keeps only fence entries under `.forks/lanes/` followed by the dispatched lane's id, and `TestForkTargetIgnoresAnotherLanesCheckout` pins that. `freeLane` returns the first free lane in id order and never reads the fence.
@@ -5570,7 +5570,7 @@ lies in how tillr runs pi. It is the second-largest saving that the model-tierin
 
 **Agent details:**
 
-- **Ref:** [the model-tiering design](../design/tillr-planning-node-model-tiering.md), Section 1.2, "Where a Sol run's money goes", and Section 1.6, lever 2; [the usage ledger's request](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/usage-recording-request.md), whose section 4 is a different gap (cache writes that are billed but never recorded, filed as `item-pi-fork-billing-attempts`). This item explains writes that are recorded, so do not duplicate that one.
+- **Ref:** [the model-tiering design](../design/tillr-planning-node-model-tiering.md), Section 1.2, "Where a Sol run's money goes", and Section 1.6, lever 2; the usage ledger's request, whose section 4 is a different gap (cache writes that are billed but never recorded, filed as `item-pi-fork-billing-attempts`). This item explains writes that are recorded, so do not duplicate that one.
 - **Where:** the run logs the loop keeps beside each lane, which each run record's artifacts name; each assistant message's `usage` carries `input`, `cacheRead` and `cacheWrite`. The pi adapter is `tools/tillr-run/backends/pi/run-pi`. `PI_CACHE_RETENTION=long` is set for every pi session by the matt pack (commit `c5f4a82f7`).
 - **Evidence:** 2026-11-17, a per-turn read of the 227 Sol logs: cache writes cost $126.06 in all. Turns after the first that read nothing from the cache and wrote more than 50k tokens cost $30.18. They occur in 13 logs, starting at a context between 63k and 264k tokens, with a median of 132k. In `run-item-obs2-shell-home-a3`, turns 89 to 108 each read 0 and wrote between 132k and 149k tokens.
 - **Evidence:** 2026-11-17, the same read: turns whose cache read equals the previous turn's while they write more than 15k tokens cost $20.53. In `run-item-drain-stop-keeps-runs-a3`, turns 34 to 53 each read exactly 92,262 tokens while their writes grew from 20,862 to 48,266, and from turn 54 every turn read nothing.
@@ -6108,7 +6108,7 @@ The item above publishes an owner's question into a document and closes the conf
 - **Ref:** the section "Owner decisions in documents" in `tools/tillr-drain/README.md`; [`docs/reference/tillr-queue-persistence.md`](../reference/tillr-queue-persistence.md#open-questions-and-vantage-read-through), `D-UT4` and the section on the `question-open` hold and the Vantage index.
 - **Where:** `settleOwnerAnswers` in `tools/tillr-drain/drain/owner_answer.go`, which `refreshDocuments` in `loop.go` calls with the trunk commit; `VantageQuestions`, with its `Root`, `Command` and `Context`, and `LedgerIDs` on `DocumentQuestions`, in `tools/tillr/vantage/vantage.go`; the tests and the helper `ownerIndexCommand` in `tools/tillr-drain/drain/owner_question_test.go`; `yolo-packs/tillr/` copies, regenerated with `just pack-sync`.
 - **The prerequisite is checked before any edit.** `rg -n 'func \(l \*Loop\) settleOwnerAnswers' tools/tillr-drain/drain/owner_answer.go` and `rg -n 'LedgerIDs' tools/tillr/vantage/vantage.go` each print a line once `item-owner-conflict-is-a-document-question` has landed. If either prints nothing, the lane was staged from a base without it. That is a staging fault for the loop to repair by restaging, and it is not a question for the design seat or the owner.
-- **Measured 2026-11-18, how the index reports an answer (`vantage-check` 0.12.0).** In a copy of the tree, filling in the `**Answer:**` text of [`OQ-CL1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/cost-levers/qa.md#OQ-CL1) left its state `open`. Changing its title marker from 💬 to ✅ made `uvx vantage-check index --format json` report the state `answered`. The tool's source reads the state from that marker only: ✅ is settled, 🔒 is blocked, and anything else is open. A document's `ledgerIds` are the first-cell ids of the table rows under a heading that reads `Decision Ledger`. On the same date 31 of 472 documents had a non-empty `ledgerIds`, and `docs/design/approver-agent.md` listed ten ids there with no entry in `questions`. So a test's answered question carries ✅ in its title, and its compacted ruling is a row `| <id> | ... |` under a `## Decision Ledger` heading with the numbered entry removed.
+- **Measured 2026-11-18, how the index reports an answer (`vantage-check` 0.12.0).** In a copy of the tree, filling in the `**Answer:**` text of retired question CL1 left its state `open`. Changing its title marker from 💬 to ✅ made `uvx vantage-check index --format json` report the state `answered`. The tool's source reads the state from that marker only: ✅ is settled, 🔒 is blocked, and anything else is open. A document's `ledgerIds` are the first-cell ids of the table rows under a heading that reads `Decision Ledger`. On the same date 31 of 472 documents had a non-empty `ledgerIds`, and `docs/design/approver-agent.md` listed ten ids there with no entry in `questions`. So a test's answered question carries ✅ in its title, and its compacted ruling is a row `| <id> | ... |` under a `## Decision Ledger` heading with the numbered entry removed.
 - **Measured 2026-11-18, the committed tree can be indexed on its own.** `git archive HEAD | tar -x -C <dir>` wrote the tree in 0.13 seconds, 59 MB, and `uvx vantage-check index --format json` run in that directory took 13.7 seconds and reported the same 472 documents and 171 questions as the checkout. So the sync can read the trunk commit's index without touching the checkout, and it must not do so on every pass.
 - **Settled by the design seat on 2026-11-18, and the owner's to overturn.** None of this is an open question for a worker.
   - **The sync reads the committed tree.** For each conflict in status `question`, the sync compares `git rev-parse <commit>:<document>` with the blob it last examined for that conflict, kept in memory on the loop in a map from conflict id to blob, and does nothing more for that conflict when they are equal. When any differ, it exports the commit once with `git archive` into a temporary directory, runs the index command there through a new `VantageQuestions` whose `Root` is that directory and whose `Command` is `l.cfg.QuestionsCmd`, and removes the directory. It never uses `l.questions`, which reads the checkout, and it never reads the document itself. It deletes the `git diff` against the checkout, which the committed read replaces. An index that fails, or a document the commit does not hold, changes nothing, and the blob is not remembered, so the next pass tries again. A blob is remembered after its question has been examined, whatever the outcome.
@@ -8849,7 +8849,7 @@ Once a seat is whatever the policy maps, the policies can name more kinds of wor
 
 - **Ref:** the references and the out-of-scope list in [the first item of this split](#add-a-planning-stage-that-fans-implementation-out-by-seat), and the policy check as [the item before this one](#move-the-seat-check-from-a-fixed-list-to-the-backend-policy) leaves it: `Policy.Check` accepts any well-formed seat name, `expandWorkflow` in `workflow_check.go` refuses a stage on a seat the policy does not map, and `Policy` carries `Ref`, the path of the file it was read from.
 - **The starting seats, settled by the design seat on 2026-11-18.** The four existing seats stay as they are: design on Fable 5.2, build on Terra, review on Sol, scout on Luna. Six seats are new. `plan` on Sol reads the item and the tree and writes the piece list. `edit` on Terra applies a settled edit named in the plan, such as a rename, a signature change at known call sites or a reformat. `test-write` on Terra writes tests from the criteria. `test-run` on Luna runs a named check command and reports its result without fixing it. `docs` on Terra writes the doc and README changes. `verify` on Sol is the join. In `config/tillr/backend-policy.bedrock.json` those are the backends `pi` for `plan` and `verify`, `pi-build` for `edit`, `test-write` and `docs`, and `pi-scout` for `test-run`. A piece that is real implementation goes to `build`, and read-only searching goes to `scout`.
-- **Three questions the earlier text left open, now closed.** Luna does not write in a tillr node. [`OQ-SP6`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/seat-profiles.md#OQ-SP6) found it fit only for single-turn infilling and shallow search, and the owner's instruction of 2026-11-18 put it on the scout seat, which is read-only, so both stand: Luna fills `scout` and `test-run`, the policy lists those two under `read_only_seats`, and c1 makes that mechanical for a workflow file, as the piece list item does for a planner's proposal. That is why `edit` is on Terra. It stays its own seat, apart from `build`, so that moving it to a cheaper model later is one policy edit made on a measurement from the cost item below. `edit` and `test-run` stay two seats, because one writes and the other must not. `plan` has no second seat on the design model: a planner that meets a design decision reports blocked, and that is the route to the design model. None of the seven items edits `yolo-packs/seat-profiles/`, so Luna stays out of every pi sub-agent set.
+- **Three questions the earlier text left open, now closed.** Luna does not write in a tillr node. retired question SP6 found it fit only for single-turn infilling and shallow search, and the owner's instruction of 2026-11-18 put it on the scout seat, which is read-only, so both stand: Luna fills `scout` and `test-run`, the policy lists those two under `read_only_seats`, and c1 makes that mechanical for a workflow file, as the piece list item does for a planner's proposal. That is why `edit` is on Terra. It stays its own seat, apart from `build`, so that moving it to a cheaper model later is one policy edit made on a measurement from the cost item below. `edit` and `test-run` stay two seats, because one writes and the other must not. `plan` has no second seat on the design model: a planner that meets a design decision reports blocked, and that is the route to the design model. None of the seven items edits `yolo-packs/seat-profiles/`, so Luna stays out of every pi sub-agent set.
 - **Build order, each step a stop only if it fails.** Do the steps in order in one run. The end of a step is not an ending, and the commit is made once, at step 4.
   1. **The two policy keys.** Add `ReadOnlySeats`, a list under `read_only_seats`, and `SeatPurposes`, a map under `seat_purposes`, to `Policy` in `tools/tillr-drain/drain/policy.go`. `Policy.Check` refuses an entry of either that names a seat the policy does not map, and the refusal names the key and the seat. Test: one case for each key in `drain/policy_test.go`.
   2. **The read-only check.** Add it to `expandWorkflow` in `workflow_check.go` beside the unmapped-seat finding, under a new rule, `workflow-read-only-seat-writes`: a stage whose `access` is `write` on a seat the policy lists under `read_only_seats` is refused. The check is made only when a policy is given. Add the rule name to the list of graph rules in the `switch` in that file that holds `workflow-unknown-seat`, and to the list of rules in that file's opening comment. Test: `readWorkflow` refuses a `write` node on a read-only seat of a fixture policy.

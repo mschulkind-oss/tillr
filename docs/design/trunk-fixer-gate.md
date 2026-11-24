@@ -41,7 +41,7 @@ is the only judge of them. Upstream drift is noticed later until the drift probe
 **Reads with:** [the gate rework](gate-rework.md) (its
 [Section 6.9](gate-rework.md#69-upstream-drift-is-a-probe-not-a-check) already takes drift out of
 the gate; this design applies it to the fixer), [landing principles](landing-principles.md), and
-[the fork workflow](../pi/forks.md).
+the fork workflow.
 
 ---
 
@@ -383,7 +383,7 @@ The rule for a fork whose declaration says `follow: "head"`:
   with that drift inherited. That line and the candidate's verdict are the whole notice.
 - **No rebase request, no trunk fixer and no hold** come from head-follower drift.
 - **The rebase stays the operator's step**, `bin/pi-forks rebase`, by the existing rule in
-  [the fork workflow](../pi/forks.md). The lander's release-only rule is unchanged.
+  the fork workflow. The lander's release-only rule is unchanged.
 
 **Why no request is filed.** A request is useful only when the queue can close it. For a head
 follower nothing in the drain can, so filing one would add an item that never lands and a hold
@@ -436,7 +436,7 @@ The rule for a fork whose entry in `bin/pi-forks.list` does not name `patch/<nam
   drift inherited. That line and the candidate's verdict are the whole notice.
 - **No rebase request, no trunk fixer and no hold** come from it.
 - **The rebase stays the operator's step**, `bin/pi-forks rebase`, which re-exports the series
-  directory, by the existing rule in [the fork workflow](../pi/forks.md).
+  directory, by the existing rule in the fork workflow.
 - **The build tests the delivery form before it files.** A request is filed only after
   `series_is_branch` holds for the fork; the target kind `release` alone is not enough.
 
@@ -481,7 +481,7 @@ What the tree does, read on 2026-11-21:
 | What does the gate do when that copy lacks the commit? | It fetches the commit from the remote on the record's second line. When the remote does not serve it, the check could not judge | `ensure` in `tools/gate/checks/fork_input.py` |
 | Who writes the record? | Only `bin/pi-forks export`, which refuses to run in a drain run. `rg -n 'fork-pins' tools/tillr-land tools/tillr-drain -g '!*_test.go'` returns nothing, and the one test that matches writes the file by hand as a fixture | `export_branch` and `refuse_in_drain` in `bin/pi-forks` |
 | Who puts a delivered commit into the gate's copy? | Only that same export, by a local fetch from the lane checkout. `rg -n 'forks/inputs' tools/tillr-land tools/tillr-drain` returns nothing | `export_branch` in `bin/pi-forks` |
-| When does the remote serve a rewritten patch branch? | After the owner acknowledges the move and `bin/patch-branches-publish --force-rewritten` runs on the host | [Git movement and run convictions](../../tools/tillr-drain/README.md#git-movement-and-run-convictions) and [the roll-forward rule](../pi/forks.md#roll-forward-on-releases-never-on-a-branch-head) |
+| When does the remote serve a rewritten patch branch? | After the owner acknowledges the move and `bin/patch-branches-publish --force-rewritten` runs on the host | [Git movement and run convictions](../../tools/tillr-drain/README.md#git-movement-and-run-convictions) and the roll-forward rule |
 
 So a delivered rebase changes nothing the check reads. The record still names the old commit,
 and the check stays red against the release until the record moves.
@@ -584,7 +584,7 @@ Rejected, as the designer's decision:
   that touches the fork would be released into a refusal.
 - **Pointing the check at the patch branch instead of the record.** The record is what makes
   the check answer the same way in every worktree
-  ([how a patch branch is resolved](../pi/forks.md#how-a-patch-branch-is-resolved)), and
+  (how a patch branch is resolved), and
   changing it would change the ordinary gate.
 
 **What this leaves undone.** An ordinary fork delivery, one that only adds commits, also leaves

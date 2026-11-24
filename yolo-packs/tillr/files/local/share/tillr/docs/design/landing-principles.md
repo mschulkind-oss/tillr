@@ -3,20 +3,13 @@ title: "Landing principles — the durable rulings, and what enforces each"
 status: accepted
 stage: CURRENT
 verified: 2026-11-23
-covers:
-  - docs/design/escalation-ladder.md
-  - docs/design/gate-rework.md
-  - docs/design/tillr-judge-and-lifecycle.md
-  - docs/pi/candidate-triage-2026-10-28.md
-  - docs/pi/landing-replay-ruling-2026-11-02.md
-  - docs/pi/stranded-candidates-2026-11-02.md
 tags: [board, landing, principles, rulings, library]
 summary: "Seventeen principles distilled from the landing rulings of 2026-10-28 to 2026-11-21, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. Principles 5 and 6's per-attempt budgets are superseded by the 2026-11-17 owner ruling D-JL10 (worker endings are never counted; identical repeats diagnose at design). A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
 ---
 
 # Landing principles
 
-> **Delivered copy.** This is `docs/design/landing-principles.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-principles.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/landing-principles.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-principles.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 This is the library, not another ruling. Each entry is one durable principle, the measurement that
 produced it, the ruling that owns the detail, the column that matters — **what enforces it today** —
@@ -24,9 +17,9 @@ and a scope line naming the one lander it binds, or saying it is not lander-scop
 nothing in the enforcement column is a stated intent; saying so is what keeps this file honest
 instead of reading as a description of the machinery.
 
-The rulings it distils are [the candidate triage](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/candidate-triage-2026-10-28.md) (the budget
-and the escalation ladder), [the replay ruling](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/landing-replay-ruling-2026-11-02.md)
-(squash-on-merge, and the deletion of `unverified`), and [the re-test record](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/stranded-candidates-2026-11-02.md)
+The rulings it distils are the candidate triage (the budget
+and the escalation ladder), the replay ruling
+(squash-on-merge, and the deletion of `unverified`), and the re-test record
 (the measurement behind P5). Read those for argument; read this to check a proposed change against
 what has already been settled.
 
@@ -36,7 +29,7 @@ The tree has one lander: [`tools/tillr-land`](../../tillr-land/). It is the only
 can move the trunk ref for a candidate, and the only program a scope line may name when it binds a
 lander. The two programs this section used to describe are gone: the board's landing pass was deleted
 with the board CLI, and the merge queue was retired in the ruling recorded in
-[`mq-retirement.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/mq-retirement.md) [Section 1.1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/mq-retirement.md#11-the-owners-ruling-delete-first-rebuild-in-pieces).
+`mq-retirement.md` Section 1.1.
 
 A scope line therefore takes one of three shapes:
 
@@ -405,7 +398,7 @@ mechanism: a fingerprint over the failing stage and the normalized error, an inp
 with every failure, an admission rule keyed on a named change rather than a clock, a fleet trip at
 the third distinct item under one inputs hash, and the drain's own tier-0 probes. That design is the
 surviving record; the reference that described the built behavior was retired with its producer in
-[the document retirement](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-docs-retirement.md).
+the document retirement.
 
 *Scope:* **not lander-scoped.** It binds the dispatch side — `tillr-drain` and `tillr-loop` — which
 dispatches and re-dispatches work and holds retry, budget and bench state. The lander dispatches no
@@ -706,7 +699,7 @@ The library is only useful if it is consulted. Two mechanisms survive, in order 
 
 The third mechanism this section used to name — that the board constellation listed this file in a
 reading order handed to every design seat — went with the board: the constellation was retired in
-[the document retirement](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-docs-retirement.md). Nothing replaces it yet, so the AGENTS.md
+the document retirement. Nothing replaces it yet, so the AGENTS.md
 link is the only channel that reaches a reader who did not arrive from a ruling.
 
 When a ruling is overturned, the principle is amended or retired here **in the same commit**. A

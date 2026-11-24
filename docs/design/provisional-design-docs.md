@@ -51,7 +51,7 @@ And:
 
 > "if we know that an item will be attached to a design doc, we need to get it to that state as soon as possible, even if we're not ready to do the follow-up work immediately."
 
-*(In the dictated transcript, "Tiller" is `tillr` and "matcraft" is the owner's `matt-craft` skill pack configured in [`config/yolo-jail/config.toml`](../../config/yolo-jail/config.toml), which owns the `design-doc` skill. This document is written in the provisional form it specifies.)*
+*(In the dictated transcript, "Tiller" is `tillr` and "matcraft" is the owner's `matt-craft` skill pack configured in `config/yolo-jail/config.toml`, which owns the `design-doc` skill. This document is written in the provisional form it specifies.)*
 
 ---
 
@@ -116,7 +116,7 @@ Today [`plan.go`](../../tools/tillr-drain/drain/plan.go) (`ReasonDesignDocMissin
 
 ### What would change in `matt-craft`'s `design-doc` skill
 
-`design-doc` lives in the external `matt-craft` pack mounted by [`config/yolo-jail/config.toml`](../../config/yolo-jail/config.toml), outside this repository's fence. Making provisional capture official there would add three rules ([OQ-PD4](#OQ-PD4)):
+`design-doc` lives in the external `matt-craft` pack mounted by `config/yolo-jail/config.toml`, outside this repository's fence. Making provisional capture official there would add three rules ([OQ-PD4](#OQ-PD4)):
 
 1. **A fifth operation, *Provisional capture*:** alongside *drafting*, *review iteration*, *compacting*, and *auditing*, codify the immediate no-research capture pass and waive *Completeness / The holes, by name* while `PROVISIONAL` holds (requiring that floor upon promotion).
 2. **Provisional status & stage convention:** specify the `**Status:** YYYY-MM-DD — PROVISIONAL ...` header line (and `stage: PROVISIONAL` if [OQ-PD2](#OQ-PD2) widens the seven-word stage table).
@@ -182,7 +182,7 @@ Today [`plan.go`](../../tools/tillr-drain/drain/plan.go) (`ReasonDesignDocMissin
 
 4. 💬 **OQ-PD4: Should `matt-craft`'s `design-doc` skill adopt provisional capture as an official operation?**
 
-   `design-doc` in `matt-craft` ([`config/yolo-jail/config.toml`](../../config/yolo-jail/config.toml)) currently requires *Completeness / The holes, by name* on every drafted design doc and compacts deliberation history aggressively.
+   `design-doc` in `matt-craft` (`config/yolo-jail/config.toml`) currently requires *Completeness / The holes, by name* on every drafted design doc and compacts deliberation history aggressively.
 
    - **A — Add *Provisional capture* to `matt-craft`'s `design-doc` skill (and `vantage-docs` if `stage: PROVISIONAL` is chosen).** Officially waives completeness while `PROVISIONAL`, standardizes the header marker across all repos, and exempts `## Owner prompt` from compaction.
    - **B — Keep provisional docs as a `tillr`-local convention in `tillr-designs` only.** Leaves `matt-craft` untouched and scopes the waiver to `tillr` drain intake.

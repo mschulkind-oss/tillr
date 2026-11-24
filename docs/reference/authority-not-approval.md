@@ -11,7 +11,6 @@ covers:
   - tools/tillr-item/item/waiting.go
   - tools/tillr-item/item/decision.go
   - tools/tillr-drain/drain/blocked.go
-  - .agents/skills/drain-timed-checkin/SKILL.md
 tags: [tillr, authority, owner, judge, verdict, reference]
 summary: "The rules for who may decide what: an operation is mechanical, delegated or the owner's by three ordered tests; the owner is asked a question with real options and never asked to run a command; and an agent that judges is never the agent whose work is judged. Each rule is listed with the code that enforces it today, or marked as a convention where nothing does."
 ---

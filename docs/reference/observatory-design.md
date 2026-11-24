@@ -90,7 +90,7 @@ observatory baseline).
 
 **Terms:**
 
-- **The board:** Without qualification in observatory and tillr documents, the observatory's queue surface served by `tillr-view serve` (originally the four-region screen of header, queue rail, item pane, and evidence pane; now the linked Home and Items pages in [observatory redesign](./observatory-redesign.md)). **Never the retired work board** (`tools/board-cli` and its session extensions), which was deleted in `3f02e3b916` and `afdc9a9571`; see [board documents retirement](../design/board-docs-retirement.md).
+- **The board:** Without qualification in observatory and tillr documents, the observatory's queue surface served by `tillr-view serve` (originally the four-region screen of header, queue rail, item pane, and evidence pane; now the linked Home and Items pages in [observatory redesign](./observatory-redesign.md)). **Never the retired work board** (`tools/board-cli` and its session extensions), which was deleted in `3f02e3b916` and `afdc9a9571`; see board documents retirement.
 - **The wire:** The JSON shapes returned by `/api/v1/*` and emitted over `/api/v1/ws`, defined by the Go structs in `tools/tillr-view/serve.go`, `serveobs.go`, `servews.go`, and `apierror.go` and mirrored in `tools/tillr-view/web/src/models/types.ts`.
 - **Truthful absence:** A field the store or filesystem did not record, rendered as a named reason (`not recorded`, `absent`, `unobserved seam`, `no description recorded`) rather than hidden, collapsed into `"—"`, or turned into `0`.
 

@@ -48,7 +48,7 @@ This design solves the running drain as built today without creating throwaway s
 
 ## 2. How the retired `board` handled lane add and remove
 
-The retired `board` drain implemented live lane scaling across four commits (`8b5e1a944`, `7e5440ca3`, `6c8042fe6`, and `cafd2ca2f`) before `board` was deleted in `3f02e3b91` and `afdc9a957`. Its operator behavior is also recorded in [the landing runbook](../reference/landing-runbook.md) and [hand-drain tactics](./hand-drain-tactics-2026-10-31.md).
+The retired `board` drain implemented live lane scaling across four commits (`8b5e1a944`, `7e5440ca3`, `6c8042fe6`, and `cafd2ca2f`) before `board` was deleted in `3f02e3b91` and `afdc9a957`. Its operator behavior is also recorded in the landing runbook and hand-drain tactics.
 
 ### What `board` built
 

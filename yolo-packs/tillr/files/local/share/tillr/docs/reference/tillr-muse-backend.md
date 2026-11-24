@@ -14,7 +14,6 @@ covers:
   - tools/tillr-run/backends/preflight.sh
   - tools/tillr-run/backends/report.py
   - tools/tillr-run/backends/usage.py
-  - tools/tillr-run/backends/brief-template.md
   - tools/tillr-run/backends/muse/
   - tools/tillr-run/backends/pi/
   - tools/tillr-run/backends/agy/
@@ -34,7 +33,7 @@ vantage:
 
 # Backend adapters, brief staging, and the Muse backend
 
-> **Delivered copy.** This is `docs/reference/tillr-muse-backend.md` from this repository at commit `4b6fdf35e8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-muse-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-muse-backend.md` from this repository at commit `d0941c1a47` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-muse-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-20 against `f7a5e29047375e1a233bf1f65be4f0d6b3013c14`.
 

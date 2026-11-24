@@ -201,7 +201,7 @@ runs prevents that result from being remembered under the original inputs.
 
 The eight patch-ref declarations judge the commits recorded in `yolo-packs/fork-pins/`,
 not local branches. They fetch a missing commit into a cache and report a missing input
-if the fetch fails. The [structural suite](https://github.com/mschulkind-oss/tillr/blob/main/tests/pi-patch-series.test.sh) judges
+if the fetch fails. The structural suite judges
 the tree's locator and pack metadata without fetching. The pi check also judges the
 build script at its recorded commit.
 

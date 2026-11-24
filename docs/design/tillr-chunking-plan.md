@@ -53,7 +53,7 @@ passes (see [Section 2](#2-the-fact-base-re-read)):
 
 *Measurement:* the extended composed-pipeline case (chunk PIPE-REAL) green inside `just done`,
 plus `tillr-gate dualrun` classifying at least the empty evidence candidate `agree`, per GAP3
-in [`gap-analysis-2026-11-11.md`](../gap-analysis-2026-11-11.md).
+in `gap-analysis-2026-11-11.md`.
 
 **E2 — repeatable machinery: Ember as a drain selection.** A second tick against the same
 store dispatches again: a finished run's lane is released and reused under a stated rule, a
@@ -81,11 +81,11 @@ tree on 2026-11-12; the plan is built on the right-hand column.
 
 | Claim in the brief or an older plan | What the tree says |
 | :--- | :--- |
-| GATE-4 has not landed, so every tillr lane lands ungated | **Landed.** [`tools/fork-check.py`](../../tools/fork-check.py)'s `GO_TOOL_DIRS` lists all nine tillr modules beside `tools/pi-profiler` and `tools/mq`; [`gap-analysis-2026-11-11.md`](../gap-analysis-2026-11-11.md) records the same. Tillr lanes are gated. The hazard is the inverse one, priced in [Section 7](#7-risks-and-owner-questions): while the gate is environmentally red, a chunk's own red cannot be told from the environment's |
+| GATE-4 has not landed, so every tillr lane lands ungated | **Landed.** [`tools/fork-check.py`](../../tools/fork-check.py)'s `GO_TOOL_DIRS` lists all nine tillr modules beside `tools/pi-profiler` and `tools/mq`; `gap-analysis-2026-11-11.md` records the same. Tillr lanes are gated. The hazard is the inverse one, priced in [Section 7](#7-risks-and-owner-questions): while the gate is environmentally red, a chunk's own red cannot be told from the environment's |
 | The wave plan's next lanes are still to dispatch | **Mostly landed.** Present and tested in the tree: ITEM-PKG, ITEM-2+3, LAND-1/2, GATE-3, RUN-2's read faces, DRAIN-1 (`plan` and `once`), VIEW-2R, and the `tillr` wrapper. Of [`tillr-next-steps.md`](tillr-next-steps.md) [Section 1](tillr-next-steps.md#1-the-next-wave-named), only the deferred halves remain: `question-open`, leases, in-process gate parity, DRAIN-2 and LAND-3 |
 | The goal is the composed pipeline running on a fixture | **Already true, in stub form.** `TestTheComposedPipelineRunsEndToEndOnAFixture` in [`tools/tillr-drain/pipeline_test.go`](../../tools/tillr-drain/drain/pipeline_test.go) drives all eight steps as separate binary invocations — with `/bin/true` as the run command and a one-check registry whose in-process list is empty; run on 2026-11-12, it passes. E1 above is that case with the two stubs removed, which is why GATE-5 and MM-1S are on its path |
 | Ember drain selection still waits on five settlements | **The settlements are ruled; the builds remain.** The gap analysis's Ember list predates the 2026-11-12 revision, which compacted [OQ-MM3](../reference/tillr-muse-backend.md#why-its-this-way) into per-item selection in the policy and [OQ-MM5](../reference/tillr-muse-backend.md#why-its-this-way) into no-sealing-before-unattended. The lease rules and the correction worktree are ruled in [`board-utilities.md`](board-utilities.md) [§5.6](board-utilities.md#56-run-alone) and [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md#steering-continuation-and-session-modes) ([Section 14](board-utilities.md#14-decision-ledger), D-UT17): a correction keeps its lane's worktree. What still gates selection is building GAP4's lane lifecycle (chunk LEASE) and GAP2's `question-open` (chunk DRAIN-Q) |
-| The gate cannot go green; the installed yolo predates the fix | **Confirmed for one suite.** `yolo --version` in this jail reads `0.17.1+196`, and running [`yolo-packs/matt/tests/bedrock-context.test.mjs`](../../yolo-packs/matt/tests/bedrock-context.test.mjs) on 2026-11-12 fails its `[1m]`-twin case. The brief names a second pack-suite red this plan did not run; [Section 7](#7-risks-and-owner-questions) carries the consequence. The trunk is `main`, not `master` — `master` survives only as a fixture trunk name inside tests |
+| The gate cannot go green; the installed yolo predates the fix | **Confirmed for one suite.** `yolo --version` in this jail reads `0.17.1+196`, and running `yolo-packs/matt/tests/bedrock-context.test.mjs` on 2026-11-12 fails its `[1m]`-twin case. The brief names a second pack-suite red this plan did not run; [Section 7](#7-risks-and-owner-questions) carries the consequence. The trunk is `main`, not `master` — `master` survives only as a fixture trunk name inside tests |
 
 ## 3. The chunks
 

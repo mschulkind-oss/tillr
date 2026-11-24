@@ -63,7 +63,7 @@ a branch it cannot deliver.
 **Every push is an opportunity to publish, and the hook takes it.** Before it looks at
 what the push carries, it runs `bin/patch-branches-publish`, which pushes every patch
 branch this repository requires: the ones a manifest in the tree names, and one per
-series in [`bin/pi-forks.list`](../bin/pi-forks.list), because the migration gives each
+series in `bin/pi-forks.list`, because the migration gives each
 pack a locator and a locator whose branch the remote does not hold is a migration that
 cannot proceed. A branch is the delivery only once the remote has it, and a branch
 created or moved with no manifest change is otherwise invisible: on 2026-10-24
