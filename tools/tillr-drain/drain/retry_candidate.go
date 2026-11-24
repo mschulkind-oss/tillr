@@ -43,7 +43,7 @@ func (p *planner) retryCandidate(itemID, runID string) *RetryCandidate {
 		if id := p.history.judgeWriters[runID]; id != "" {
 			writer = id
 		}
-		if d := p.inputDecisions[writer]; d.Workflow != nil && d.NodeIndex >= 0 && d.NodeIndex < len(d.Workflow.Stages) && d.Workflow.Stages[d.NodeIndex].Access == "write" {
+		if d := p.inputDecision(writer); d.Workflow != nil && d.NodeIndex >= 0 && d.NodeIndex < len(d.Workflow.Stages) && d.Workflow.Stages[d.NodeIndex].Access == "write" {
 			c.WorkerSession = &WorkerSession{RunID: writer, Workflow: d.Workflow, NodeIndex: d.NodeIndex, NodeBaseSHA: d.NodeBaseSHA, Attempt: d.Attempt, BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA}
 		}
 	}

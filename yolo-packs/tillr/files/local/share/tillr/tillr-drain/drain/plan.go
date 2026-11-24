@@ -293,6 +293,11 @@ type planDetails struct {
 	retryLaneWait map[string]bool
 	workerLanes   map[string]string
 	maskedWorkers map[string]Decision
+	works         map[string]*pendingWork
+	designHistory map[string]*pendingWork
+	conflicts     map[string]item.Conflict
+	faults        map[string]ItemFault
+	obstacleHolds map[string]obstacles.Hold
 }
 
 func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, def definition.Definition, details *planDetails) ([]record.Envelope, error) {
@@ -315,9 +320,14 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if err != nil {
 		return nil, err
 	}
-	works, designHistory, err := readPendingHistory(r)
-	if err != nil {
-		return nil, readFailure(err)
+	var works, designHistory map[string]*pendingWork
+	if details != nil && details.works != nil && details.designHistory != nil {
+		works, designHistory = details.works, details.designHistory
+	} else {
+		works, designHistory, err = readPendingHistory(r)
+		if err != nil {
+			return nil, readFailure(err)
+		}
 	}
 	for i := range items {
 		if !tick.plansItem(items[i].ItemID, works[items[i].ItemID]) {
@@ -369,10 +379,8 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	for id, list := range escalations {
 		escalated[id] = escalatedBackend(list)
 	}
-	inputDecisions, err := readInputDecisions(r)
-	if err != nil {
-		return nil, readFailure(err)
-	}
+	inputDecisions := map[string]Decision{}
+	inputDecisionsLoaded := map[string]bool{}
 	var build BuildStamp
 	if tick.Build != nil {
 		build = *tick.Build
@@ -480,9 +488,14 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			deskOwners[work.Decision.LaneID] = work.Decision.ItemID
 		}
 	}
-	conflicts, err := item.ReadConflicts(r)
-	if err != nil {
-		return nil, readFailure(err)
+	var conflicts map[string]item.Conflict
+	if details != nil && details.conflicts != nil {
+		conflicts = details.conflicts
+	} else {
+		conflicts, err = item.ReadConflicts(r)
+		if err != nil {
+			return nil, readFailure(err)
+		}
 	}
 	waits := map[string]item.WaitingOn{}
 	for _, row := range items {
@@ -532,15 +545,23 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if err != nil {
 		return nil, readFailure(err)
 	}
+	runIDsByItem, err := readAllRunIDs(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	var nodeMaxByItem map[string]int
+	if hasNodes {
+		nodeMaxByItem, err = readNodeAttemptMaxes(r)
+		if err != nil {
+			return nil, readFailure(err)
+		}
+	}
 	attempts, nodeCounts := map[string]int{}, map[string]int{}
 	for _, row := range items {
 		if !tick.plansItem(row.ItemID, works[row.ItemID]) {
 			continue
 		}
-		attempts[row.ItemID], nodeCounts[row.ItemID], err = readAttemptInputs(r, hasNodes, row.ItemID, priors[row.ItemID], designHistory)
-		if err != nil {
-			return nil, err
-		}
+		attempts[row.ItemID], nodeCounts[row.ItemID] = computeAttemptInputs(row.ItemID, nodeMaxByItem[row.ItemID], priors[row.ItemID], runIDsByItem[row.ItemID], designHistory)
 	}
 	if details != nil {
 		details.nextOrdinals = attempts
@@ -552,6 +573,10 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	obstacleHolds, releasedObstacles, err := ReadObstacleHolds(r)
 	if err != nil {
 		return nil, readFailure(err)
+	}
+	if details != nil {
+		details.faults = faults
+		details.obstacleHolds = obstacleHolds
 	}
 	// released names the lanes a returned worker or a design continuation reserved but did
 	// not take in an earlier round of this plan. A reservation keeps a checkout for the one
@@ -584,7 +609,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
 			waits: waits, escalated: escalated, maskedWorkers: maskedWorkers,
 			at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
-			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: attempts, nodeCounts: nodeCounts, requests: requests,
+			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, inputDecisionsLoaded: inputDecisionsLoaded, inputDecisionReader: r, works: works, attempts: attempts, nodeCounts: nodeCounts, requests: requests,
 		}
 		if details != nil {
 			p.retryLaneWait = make(map[string]bool)
@@ -1272,6 +1297,8 @@ type planner struct {
 	conflicts            map[string]item.Conflict
 	inputs               map[string]*RunInputs
 	inputDecisions       map[string]Decision
+	inputDecisionsLoaded map[string]bool
+	inputDecisionReader  *store.Reader
 	works                map[string]*pendingWork
 	designHistory        map[string]*pendingWork
 	tick                 Pass
@@ -2052,7 +2079,7 @@ func (p *planner) retryFor(itemID string) *retry {
 		}
 		// Closed means a build already consumed the answer; preserve the existing
 		// retirement of the authorization used by the conflict's raising run.
-		if d := p.inputDecisions[c.RunID]; d.Action == ActionRetry && d.RetryID == row.RetryID {
+		if d := p.inputDecision(c.RunID); d.Action == ActionRetry && d.RetryID == row.RetryID {
 			return nil
 		}
 	}
@@ -2229,6 +2256,15 @@ func readAttemptInputs(r *store.Reader, hasNodes bool, id string, priors []prior
 			return 0, 0, readFailure(err)
 		}
 	}
+	ids, err := readRunIDs(r, id)
+	if err != nil {
+		return 0, 0, readFailure(err)
+	}
+	next, nodeCount := computeAttemptInputs(id, count, priors, ids, byRun)
+	return next, nodeCount, nil
+}
+
+func computeAttemptInputs(id string, count int, priors []priorRun, ids []string, byRun map[string]*pendingWork) (int, int) {
 	// A run that is not a node run (a design run for a block conflict is named
 	// run-<item>-a<N>) still holds its ordinal, so the next attempt is past it.
 	maxAttempt := count
@@ -2236,10 +2272,6 @@ func readAttemptInputs(r *store.Reader, hasNodes bool, id string, priors []prior
 		if n := attemptFromRunID(id, prior.RunID); n > maxAttempt {
 			maxAttempt = n
 		}
-	}
-	ids, err := readRunIDs(r, id)
-	if err != nil {
-		return 0, 0, readFailure(err)
 	}
 	for _, runID := range ids {
 		// Judged non-node runs can be absent from priors. Also, an inline
@@ -2258,7 +2290,72 @@ func readAttemptInputs(r *store.Reader, hasNodes bool, id string, priors []prior
 		// a run id ordinal can only move it further.
 		next = len(priors) + 1
 	}
-	return next, count, nil
+	return next, count
+}
+
+func readAllRunIDs(r *store.Reader) (map[string][]string, error) {
+	rows, err := r.Query(`SELECT item_id, run_id FROM runs WHERE item_id IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var itemID, runID string
+		if err := rows.Scan(&itemID, &runID); err != nil {
+			return nil, err
+		}
+		out[itemID] = append(out[itemID], runID)
+	}
+	return out, rows.Err()
+}
+
+func readNodeAttemptMaxes(r *store.Reader) (map[string]int, error) {
+	rows, err := r.Query(`SELECT n.item_id, MAX(n.attempt) FROM node_runs n
+ JOIN runs r ON r.run_id=n.run_id AND r.item_id=n.item_id GROUP BY n.item_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var itemID string
+		var maxAttempt int
+		if err := rows.Scan(&itemID, &maxAttempt); err != nil {
+			return nil, err
+		}
+		out[itemID] = maxAttempt
+	}
+	return out, rows.Err()
+}
+
+func (p *planner) inputDecision(runID string) Decision {
+	if runID == "" {
+		return Decision{}
+	}
+	if d, ok := p.inputDecisions[runID]; ok {
+		return d
+	}
+	if p.inputDecisionReader == nil || p.inputDecisionsLoaded[runID] {
+		return Decision{}
+	}
+	if p.inputDecisionsLoaded == nil {
+		p.inputDecisionsLoaded = map[string]bool{}
+	}
+	p.inputDecisionsLoaded[runID] = true
+	var payload []byte
+	if err := p.inputDecisionReader.QueryRow(`SELECT payload FROM events WHERE object_id = ? AND +kind = ? ORDER BY seq DESC LIMIT 1`, runID, inputRecordedKind).Scan(&payload); err != nil {
+		return Decision{}
+	}
+	var d Decision
+	if json.Unmarshal(payload, &d) == nil {
+		if p.inputDecisions == nil {
+			p.inputDecisions = map[string]Decision{}
+		}
+		p.inputDecisions[runID] = d
+		return d
+	}
+	return Decision{}
 }
 
 // attemptFromRunID answers the attempt N of `run-<item>-a<N>` or `run-<item>-a<N>-n<K>`,
@@ -2800,7 +2897,7 @@ type runHistory struct {
 // Item-object state writes are recognized by the state in their payload, regardless of
 // kind. Other evidence (including a wait release without a state) is folded by kind.
 func readRunHistory(r *store.Reader) (runHistory, error) {
-	events, err := r.EventsSelected(0, store.EventSelection{Kinds: []string{GateVerdictKind, RefusalKind, callOffered, obstacles.HeldKind, item.WaitReleasedKind}, ObjectTypes: []string{"item"}})
+	events, err := r.EventsOfKind(0, GateVerdictKind, RefusalKind, callOffered, obstacles.HeldKind, item.WaitReleasedKind)
 	if err != nil {
 		return runHistory{}, readFailure(err)
 	}
@@ -2809,18 +2906,15 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 		refusals: map[string]string{}, judgeHolds: map[string]string{}, gateResults: map[string]string{},
 		endings: map[string]refusalPayload{}, obstacleCalls: map[string]*WorkerSession{}, judgeWriters: map[string]string{}, obstacleEndings: map[string]obstacles.Hold{},
 	}
+	var obstacleRunIDs []string
+	obstacleSeen := map[string]bool{}
 	for _, e := range events {
 		if e.Kind == callOffered && e.ObjectType == "call" {
 			var call landingCall
 			if err := json.Unmarshal(e.Payload, &call); err == nil && call.Tool == "obstacle" && call.RunID != "" && call.SessionID != "" {
-				var reqJSON []byte
-				var backend, route string
-				if row := r.QueryRow(`SELECT json_extract(payload,'$.decision.run_request') FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, dispatchStartedKind, call.RunID); row != nil && row.Scan(&reqJSON) == nil && len(reqJSON) > 0 {
-					var req run.Request
-					if json.Unmarshal(reqJSON, &req) == nil {
-						backend = req.Backend
-						route = req.Route()
-					}
+				if !obstacleSeen[call.RunID] {
+					obstacleSeen[call.RunID] = true
+					obstacleRunIDs = append(obstacleRunIDs, call.RunID)
 				}
 				history.obstacleCalls[call.RunID] = &WorkerSession{
 					RunID:     call.RunID,
@@ -2829,8 +2923,6 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 					LaneID:    filepath.Base(filepath.Dir(call.RunLog)),
 					BaseSHA:   call.Base,
 					HeadSHA:   call.Base,
-					Backend:   backend,
-					Route:     route,
 				}
 			}
 			continue
@@ -2885,20 +2977,111 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 			history.waitReleases[*e.ObjectID] = release.RunID
 			continue
 		}
-		var payload struct {
-			State string `json:"state"`
-		}
-		if err := json.Unmarshal(e.Payload, &payload); err != nil || payload.State == "" {
-			// An item event that does not say what state the item is in is not evidence
-			// about the item's runs, so it leaves the item's history as it was.
-			continue
-		}
-		history.known[*e.ObjectID] = true
-		if payload.State == StateInProgress {
-			history.ranBefore[*e.ObjectID] = true
+	}
+	if len(obstacleRunIDs) > 0 {
+		if err := populateObstacleCallBackends(r, obstacleRunIDs, history.obstacleCalls); err != nil {
+			return history, readFailure(err)
 		}
 	}
+	if err := readItemStateHistory(r, &history); err != nil {
+		return history, readFailure(err)
+	}
 	return history, nil
+}
+
+func populateObstacleCallBackends(r *store.Reader, runIDs []string, calls map[string]*WorkerSession) error {
+	const chunk = 500
+	for start := 0; start < len(runIDs); start += chunk {
+		end := start + chunk
+		if end > len(runIDs) {
+			end = len(runIDs)
+		}
+		batch := runIDs[start:end]
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, dispatchStartedKind)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT object_id, json_extract(payload,'$.decision.run_request') FROM events WHERE kind=? AND object_type='run' AND object_id IN (`+placeholders+`) ORDER BY seq`, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var runID string
+			var reqJSON []byte
+			if err := rows.Scan(&runID, &reqJSON); err != nil {
+				rows.Close()
+				return err
+			}
+			if len(reqJSON) == 0 {
+				continue
+			}
+			var req run.Request
+			if json.Unmarshal(reqJSON, &req) == nil {
+				if ws := calls[runID]; ws != nil {
+					ws.Backend = req.Backend
+					ws.Route = req.Route()
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+	}
+	return nil
+}
+
+func readItemStateHistory(r *store.Reader, history *runHistory) error {
+	rows, err := r.Query(`SELECT object_id,
+ MAX(CASE WHEN json_extract(payload, '$.state') = ? THEN 1 ELSE 0 END)
+ FROM events
+ WHERE object_id IN (SELECT item_id FROM items)
+  AND object_type = 'item'
+  AND json_valid(payload)
+  AND json_type(payload, '$.state') = 'text'
+  AND json_extract(payload, '$.state') <> ''
+ GROUP BY object_id`, StateInProgress)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table: items") {
+			events, selErr := r.EventsSelected(0, store.EventSelection{ObjectTypes: []string{"item"}})
+			if selErr != nil {
+				return selErr
+			}
+			for _, e := range events {
+				if e.ObjectType != "item" || e.ObjectID == nil {
+					continue
+				}
+				var payload struct {
+					State string `json:"state"`
+				}
+				if json.Unmarshal(e.Payload, &payload) != nil || payload.State == "" {
+					continue
+				}
+				history.known[*e.ObjectID] = true
+				if payload.State == StateInProgress {
+					history.ranBefore[*e.ObjectID] = true
+				}
+			}
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var itemID string
+		var ran int
+		if err := rows.Scan(&itemID, &ran); err != nil {
+			return err
+		}
+		history.known[itemID] = true
+		if ran != 0 {
+			history.ranBefore[itemID] = true
+		}
+	}
+	return rows.Err()
 }
 
 // readFailure classifies a failed read. A store that does not carry item's or run's

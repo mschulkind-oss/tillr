@@ -7,6 +7,7 @@ import (
 	"maps"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -209,9 +210,22 @@ func loadFoldedPendingHistoryStateCached(r *store.Reader, readOnly bool) (*pendi
 // *pendingWork entries that delta can mutate deep-cloned, so folding delta into
 // the returned state leaves prev untouched for concurrent readers.
 func clonePendingHistoryForDelta(prev *pendingHistoryState, delta []event.Event) *pendingHistoryState {
+	byParent := make(map[string][]*pendingWork, len(prev.byParent))
+	if prev.byParent != nil {
+		for parent, list := range prev.byParent {
+			byParent[parent] = slices.Clone(list)
+		}
+	} else {
+		for _, w := range prev.works {
+			if w != nil && w.Ready && w.ParentRunID != "" {
+				byParent[w.ParentRunID] = append(byParent[w.ParentRunID], w)
+			}
+		}
+	}
 	next := &pendingHistoryState{
 		works:     maps.Clone(prev.works),
 		byRun:     maps.Clone(prev.byRun),
+		byParent:  byParent,
 		judged:    maps.Clone(prev.judged),
 		segments:  maps.Clone(prev.segments),
 		discarded: maps.Clone(prev.discarded),
@@ -236,8 +250,8 @@ func clonePendingHistoryForDelta(prev *pendingHistoryState, delta []event.Event)
 			// Creates a fresh pendingWork or updates judged only.
 		case examinationReleasedKind:
 			cloneWork(next.byRun[*e.ObjectID])
-			for _, w := range next.works {
-				if w.Ready && w.ParentRunID == *e.ObjectID {
+			for _, w := range next.byParent[*e.ObjectID] {
+				if next.works[w.Decision.ItemID] == w && w.Ready && w.ParentRunID == *e.ObjectID {
 					cloneWork(w)
 				}
 			}
@@ -266,6 +280,13 @@ func clonePendingHistoryForDelta(prev *pendingHistoryState, delta []event.Event)
 		for id, w := range next.byRun {
 			if cp, ok := cloned[w]; ok {
 				next.byRun[id] = cp
+			}
+		}
+		for _, list := range next.byParent {
+			for i, w := range list {
+				if cp, ok := cloned[w]; ok {
+					list[i] = cp
+				}
 			}
 		}
 	}

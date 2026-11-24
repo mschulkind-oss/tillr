@@ -531,7 +531,8 @@ func clonePendingHistoryState(s *pendingHistoryState) *pendingHistoryState {
 	}
 	out := &pendingHistoryState{
 		works: make(map[string]*pendingWork, len(s.works)), byRun: make(map[string]*pendingWork, len(s.byRun)),
-		judged: maps.Clone(s.judged), segments: maps.Clone(s.segments), discarded: maps.Clone(s.discarded),
+		byParent: map[string][]*pendingWork{},
+		judged:   maps.Clone(s.judged), segments: maps.Clone(s.segments), discarded: maps.Clone(s.discarded),
 	}
 	seen := make(map[*pendingWork]*pendingWork, len(s.byRun))
 	clone := func(w *pendingWork) *pendingWork {
@@ -546,7 +547,11 @@ func clonePendingHistoryState(s *pendingHistoryState) *pendingHistoryState {
 		return copy
 	}
 	for id, w := range s.works {
-		out.works[id] = clone(w)
+		cw := clone(w)
+		out.works[id] = cw
+		if cw != nil && cw.Ready && cw.ParentRunID != "" {
+			out.byParent[cw.ParentRunID] = append(out.byParent[cw.ParentRunID], cw)
+		}
 	}
 	for id, w := range s.byRun {
 		out.byRun[id] = clone(w)

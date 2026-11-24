@@ -130,16 +130,20 @@ func readInputDecisions(r *store.Reader) (map[string]Decision, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]Decision{}
+	latest := make(map[string]json.RawMessage, len(events))
 	for _, e := range events {
 		if e.Kind != inputRecordedKind || e.ObjectID == nil {
 			continue
 		}
+		latest[*e.ObjectID] = e.Payload
+	}
+	out := make(map[string]Decision, len(latest))
+	for id, payload := range latest {
 		var d Decision
-		if err := json.Unmarshal(e.Payload, &d); err != nil {
+		if err := json.Unmarshal(payload, &d); err != nil {
 			return nil, err
 		}
-		out[*e.ObjectID] = d
+		out[id] = d
 	}
 	return out, nil
 }

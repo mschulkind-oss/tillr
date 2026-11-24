@@ -190,13 +190,15 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 
 type pendingHistoryState struct {
 	works, byRun                map[string]*pendingWork
+	byParent                    map[string][]*pendingWork
 	judged, segments, discarded map[string]bool
 }
 
 func newPendingHistoryState() *pendingHistoryState {
 	return &pendingHistoryState{
 		works: map[string]*pendingWork{}, byRun: map[string]*pendingWork{},
-		judged: map[string]bool{}, segments: map[string]bool{}, discarded: map[string]bool{},
+		byParent: map[string][]*pendingWork{},
+		judged:   map[string]bool{}, segments: map[string]bool{}, discarded: map[string]bool{},
 	}
 }
 
@@ -241,8 +243,16 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 	if meta != nil && meta.cow {
 		s = clonePendingHistoryForDelta(s, events)
 	}
+	if s.byParent == nil {
+		s.byParent = map[string][]*pendingWork{}
+		for _, w := range s.works {
+			if w != nil && w.Ready && w.ParentRunID != "" {
+				s.byParent[w.ParentRunID] = append(s.byParent[w.ParentRunID], w)
+			}
+		}
+	}
 	pendingEventsFolded.Add(int64(len(events)))
-	works, byRun, judged, segments, discarded := s.works, s.byRun, s.judged, s.segments, s.discarded
+	works, byRun, byParent, judged, segments, discarded := s.works, s.byRun, s.byParent, s.judged, s.segments, s.discarded
 	for _, e := range events {
 		if e.ObjectID == nil {
 			continue
@@ -258,6 +268,9 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 			}
 			works[work.Decision.ItemID] = &work
 			byRun[*e.ObjectID] = &work
+			if work.Ready && work.ParentRunID != "" {
+				byParent[work.ParentRunID] = append(byParent[work.ParentRunID], &work)
+			}
 			// Every sibling belongs to this pending set. Standalone continuation
 			// may name any one of them, not just the primary dispatch run.
 			for _, node := range parallelNodes(work.Decision) {
@@ -379,8 +392,8 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 					work.examinationStartedAt = time.Time{}
 				}
 			}
-			for _, work := range works {
-				if work.Ready && work.ParentRunID == *e.ObjectID {
+			for _, work := range byParent[*e.ObjectID] {
+				if works[work.Decision.ItemID] == work && work.Ready && work.ParentRunID == *e.ObjectID {
 					work.Examining = false
 					if work.Examiner == nil {
 						work.examinationStartedAt = time.Time{}
@@ -530,6 +543,9 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 				work.LaneReleased, work.LaneKeepReason, work.ReleasePending = false, "", ""
 				if err := json.Unmarshal(e.Payload, work); err != nil {
 					return err
+				}
+				if work.Ready && work.ParentRunID != "" {
+					byParent[work.ParentRunID] = append(byParent[work.ParentRunID], work)
 				}
 				if work.Candidate != nil {
 					work.Candidate.Request, work.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
