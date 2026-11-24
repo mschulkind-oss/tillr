@@ -17,9 +17,12 @@ match = 'event.role == "drain" and empty(event.restart_request) and empty(event.
 window = "1h"
 
 [rule.guidance]
-summary = "The drain loop started after a previous loop exited without a restart or stop request."
-check = ["Check the keeper's output, the last lines of the loop's log, and the newest loop result file under .tillr/loop/ to see why the previous loop exited."]
-do = ["Determine why the previous loop exited without tillr drain restart or tillr drain stop and fix any underlying fault."]
+summary = "The drain loop started after a previous loop ended without a recorded stop or restart request."
+check = [
+  "Check the keeper output (.tillr/keeper.log or tools/tillr-roll/tillr-keep) for 'keeper: loop exited; restart in <seconds>s' before 'keeper: started loop <pid>' or a fresh 'keeper: started loop <pid>' / 'keeper: watching loop <pid>' with no preceding 'restart: stopping loop <pid>' or 'keeper: stopped; loop left running', versus a deliberate first launch with no prior unstopped loop.",
+  "Check the previous loop's log and newest .tillr/loop/drain-<stamp>.json for a fault exit ('loop: stopped after ...: fault', drain.loop-ended) or an abrupt mid-run cutoff missing 'loop: stopped by the operator' ('\"stop\": \"operator-stop\"').",
+]
+do = ["Determine why the previous loop ended without a recorded stop or restart request and fix any underlying fault."]
 
 [rule.delivery]
 receiver = "foreground"
