@@ -13,6 +13,13 @@ import (
 	"github.com/mschulkind-oss/tillr/watch"
 )
 
+type waitTestHooks struct {
+	deadline   <-chan time.Time
+	onPass     func()
+	onIdle     func(coalesceArmed bool)
+	onCoalesce func() func()
+}
+
 type waitOptions struct {
 	owner, storePath, rulesPath, root string
 	timeout                           time.Duration
@@ -20,14 +27,20 @@ type waitOptions struct {
 	follow                            bool
 	noNotify                          bool
 	ticks                             <-chan time.Time
+	hooks                             *waitTestHooks
 }
 
 func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr io.Writer) (code int, resultErr error) {
+	var onCoalesce func() func()
+	if opts.hooks != nil {
+		onCoalesce = opts.hooks.onCoalesce
+	}
 	wake, err := watchNotify(ctx, e.Store.Path(), notifyWakeOptions{
 		fallbackPoll:      opts.fallbackPoll,
 		noNotify:          opts.noNotify,
 		ticks:             opts.ticks,
 		minNotifyInterval: defaultMinNotifyInterval,
+		onCoalesce:        onCoalesce,
 	})
 	if err != nil {
 		return 1, err
@@ -50,7 +63,9 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 		}
 	}()
 	var deadline <-chan time.Time
-	if opts.timeout > 0 {
+	if opts.hooks != nil && opts.hooks.deadline != nil {
+		deadline = opts.hooks.deadline
+	} else if opts.timeout > 0 {
 		timer := time.NewTimer(opts.timeout)
 		defer timer.Stop()
 		deadline = timer.C
@@ -62,6 +77,9 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 	var diagnostics ruleDiagnostics
 	for {
 		wake.beginPass()
+		if opts.hooks != nil && opts.hooks.onPass != nil {
+			opts.hooks.onPass()
+		}
 		results, err := e.EvaluateRules(ctx)
 		if err != nil {
 			return 1, err
@@ -100,6 +118,9 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 					return 1, err
 				}
 			}
+		}
+		if opts.hooks != nil && opts.hooks.onIdle != nil {
+			opts.hooks.onIdle(wake.coalesceArmed())
 		}
 		reason, err := wake.next(ctx, deadline)
 		if err != nil {

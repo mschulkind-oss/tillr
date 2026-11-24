@@ -892,6 +892,7 @@ func TestWatchWaitIdleUnderStoreWritesAndDeliversAlert(t *testing.T) {
 }
 
 func TestWatchWaitDeliversAlertCommittedBeforeTimeoutDuringWALBurst(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "")
 	s, rules := fixture(t, false)
 	var initOut, initErr bytes.Buffer
 	if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
@@ -901,37 +902,145 @@ func TestWatchWaitDeliversAlertCommittedBeforeTimeoutDuringWALBurst(t *testing.T
 		t.Fatal(err)
 	}
 
-	ctx := t.Context()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ticks := make(chan time.Time)
+	deadline := make(chan time.Time)
+
 	type waitResult struct {
 		code        int
 		out, stderr string
 	}
-	done := make(chan waitResult, 1)
+	var (
+		mu          sync.Mutex
+		cond        = sync.NewCond(&mu)
+		passCount   int
+		passHeadSeq int64
+		passHeadErr error
+		idleCount   int
+		idleHeadSeq int64
+		idleArmed   bool
+		inCoalesce  bool
+		waitDone    bool
+		result      waitResult
+	)
+	hooks := &waitTestHooks{
+		deadline: deadline,
+		onPass: func() {
+			head, err := s.EventHeadSeq()
+			mu.Lock()
+			passCount++
+			passHeadSeq = head
+			if err != nil && passHeadErr == nil {
+				passHeadErr = err
+			}
+			mu.Unlock()
+		},
+		onIdle: func(armed bool) {
+			mu.Lock()
+			idleCount = passCount
+			idleHeadSeq = passHeadSeq
+			idleArmed = armed
+			cond.Broadcast()
+			mu.Unlock()
+		},
+		onCoalesce: func() func() {
+			mu.Lock()
+			inCoalesce = true
+			cond.Broadcast()
+			mu.Unlock()
+			return func() {
+				mu.Lock()
+				inCoalesce = false
+				cond.Broadcast()
+				mu.Unlock()
+			}
+		},
+	}
+
 	go func() {
 		var out, stderr bytes.Buffer
-		code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "120ms"}, &out, &stderr)
-		done <- waitResult{code: code, out: out.String(), stderr: stderr.String()}
+		code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "120ms"}, &out, &stderr, ticks, hooks)
+		mu.Lock()
+		result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
+		waitDone = true
+		cond.Broadcast()
+		mu.Unlock()
 	}()
-	awaitAttached(t, s)
+	defer func() {
+		cancel()
+		mu.Lock()
+		for !waitDone {
+			cond.Wait()
+		}
+		mu.Unlock()
+	}()
 
-	// Trigger a first WAL wake so the 150ms coalesce window is active, then
-	// commit a firing alert inside that window before the 120ms timeout expires.
+	mu.Lock()
+	for idleCount < 1 && !waitDone {
+		cond.Wait()
+	}
+	if err := passHeadErr; err != nil {
+		mu.Unlock()
+		t.Fatal(err)
+	}
+	if waitDone {
+		r := result
+		mu.Unlock()
+		t.Fatalf("wait exited before burst: code=%d out=%q stderr=%q", r.code, r.out, r.stderr)
+	}
+	mu.Unlock()
+
+	// Trigger a first wake so the coalesce window is active, wait until that
+	// quiet pass has completed, then commit a firing alert before letting the
+	// waiter's deadline expire inside the coalesce window.
+	var unrelatedSeq int64
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Append(event.Event{Kind: "watch-bench.burst-unrelated", ObjectType: "item", At: time.Now().UTC(), Payload: []byte(`{}`)})
+		var err error
+		unrelatedSeq, err = tx.Append(event.Event{Kind: "watch-bench.burst-unrelated", ObjectType: "item", At: time.Now().UTC(), Payload: []byte(`{}`)})
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(20 * time.Millisecond)
-	fact(t, s, `{"item_id":"item-burst"}`)
-	fact(t, s, `{"item_id":"item-burst"}`)
+	if err := notify.PublishContext(ctx, s.Path(), notify.Frame{Topic: notify.TopicQueueChanged}); err != nil {
+		t.Fatal(err)
+	}
 
-	select {
-	case r := <-done:
-		if r.code != 0 || !strings.Contains(r.out, "item-burst has 2 refusals") {
-			t.Fatalf("wait missed pre-deadline alert during WAL coalesce window: code=%d out=%q stderr=%q", r.code, r.out, r.stderr)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("wait did not exit")
+	mu.Lock()
+	for (idleHeadSeq < unrelatedSeq || !idleArmed) && !waitDone {
+		cond.Wait()
+	}
+	if err := passHeadErr; err != nil {
+		mu.Unlock()
+		t.Fatal(err)
+	}
+	if waitDone {
+		r := result
+		mu.Unlock()
+		t.Fatalf("wait exited on unrelated event: code=%d out=%q stderr=%q", r.code, r.out, r.stderr)
+	}
+	mu.Unlock()
+
+	fact(t, s, `{"item_id":"item-burst"}`)
+	fact(t, s, `{"item_id":"item-burst"}`)
+	if err := notify.PublishContext(ctx, s.Path(), notify.Frame{Topic: notify.TopicQueueChanged}); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	for !inCoalesce && !waitDone {
+		cond.Wait()
+	}
+	if !waitDone {
+		close(deadline)
+	}
+	for !waitDone {
+		cond.Wait()
+	}
+	r := result
+	mu.Unlock()
+
+	if r.code != 0 || !strings.Contains(r.out, "item-burst has 2 refusals") {
+		t.Fatalf("wait missed pre-deadline alert during WAL coalesce window: code=%d out=%q stderr=%q", r.code, r.out, r.stderr)
 	}
 }
