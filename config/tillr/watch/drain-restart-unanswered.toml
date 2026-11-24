@@ -1,0 +1,38 @@
+# At 02:09 ET on 2026-11-23, the drain loop had been unable to restart onto the
+# build installed at 01:02 ET for 67 minutes while new gates kept taking the
+# restart lock first, with no tillr-watch alert firing.
+# Measured on 2026-11-24 from recorded drain.restart-request to drain.restart-answer
+# history in .tillr/state.db with:
+#   python3 -c "import sqlite3; c = sqlite3.connect('file:.tillr/state.db?mode=ro', uri=True); rows = c.execute(\"SELECT (MIN(a.ts) - r.ts) / 1000.0, json_extract(a.payload, '$.answer') FROM events r JOIN events a ON a.kind = 'drain.restart-answer' AND a.object_id = r.object_id AND a.seq > r.seq WHERE r.kind = 'drain.restart-request' AND json_extract(r.payload, '$.role') = 'drain' GROUP BY r.seq\").fetchall(); all_s = sorted(w for w, _ in rows); act_s = sorted(w for w, k in rows if k != 'superseded'); print(f'all={len(all_s)} p50={all_s[len(all_s)//2]:.1f}s p90={all_s[int(len(all_s)*0.9)]:.1f}s max={all_s[-1]:.1f}s; acted={len(act_s)} p50={act_s[len(act_s)//2]:.1f}s p95={act_s[int(len(act_s)*0.95)]:.1f}s p99={act_s[-2]:.1f}s max={act_s[-1]:.1f}s')"
+# Result (2026-11-24): all=361 p50=258.4s p90=1504.1s max=6243.6s; acted=198 p50=108.1s p95=753.0s p99=1928.4s max=4314.0s
+# Every non-starved loop restart completed in <= 1928.4s (32.1m, waiting on a
+# running trunk proof); the only acted-on request above 32.1m was the 4314.0s
+# (71.9m) 2026-11-23 starvation incident. Set threshold_duration = "35m".
+[[rule]]
+id = "drain-restart-unanswered"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.restart-request", "drain.restart-answer"]
+
+[rule.when]
+group_by = "object_id"
+pattern = "duration_without_event"
+after = 'event.kind == "drain.restart-request" and event.role == "drain"'
+match = 'event.kind == "drain.restart-answer"'
+threshold_duration = "35m"
+window = "24h"
+
+[rule.guidance]
+summary = "Loop restart request {{subject}} has gone unanswered for {{elapsed}}."
+check = [
+  "Run tillr drain why to read stale-loop-build and loop_restart_line and see which gate, proof, or stopped loop is holding the restart.",
+  "Check that the drain loop process is alive and inspect the drain loop log and newest drain.restart-request and drain.restart-answer events.",
+]
+do = [
+  "Establish why the drain loop has not answered {{subject}} — whether new gates or proofs are starving the restart lock or the loop has stalled or exited — and fix the blocker or restart the loop.",
+]
+
+[rule.delivery]
+receiver = "foreground"
