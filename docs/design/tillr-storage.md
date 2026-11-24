@@ -31,7 +31,7 @@ depends-on:
 
 **Needs your ruling:** None open. **Blocked:** [OQ-TS1](#OQ-TS1) and [OQ-TS3](#OQ-TS3), until the trials are run again. **Decided by the designer, for the owner's review:** [OQ-TS2](#OQ-TS2).
 
-**Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the model this store serves; its Section 10 lists the needs), [the SQLite contention recovery](../recovery/sqlite-contention/README.md) (the incidents and the residual limit in landing), [the store's own reference](../../tools/tillr-store/README.md) (today's checkpoint scheme, which this deletes).
+**Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the model this store serves; its Section 10 lists the needs), [the store contention reference](../reference/tillr-store-contention.md) (the residual limit in landing), [the store's own reference](../../tools/tillr-store/README.md) (today's checkpoint scheme, which this deletes).
 
 ---
 
@@ -83,7 +83,7 @@ The first row decides more than it seems to. A store that needs no flush before 
 
 On 2026-11-17 one SQLite file of about 36 MB held about 55 tables. On 2026-11-18 the file is 1.16 GB: of its 1,292,581 events, 1,266,578 are `run.child-session` events written that one day by 35 runs. The cause is not diagnosed, and it is a defect of its own ([Section 9.1](#91-what-is-fixed-first-whatever-is-ruled)). Every tillr program opens the file, and callers compose their own write transactions through one primitive that takes the write lock, runs the caller's function, and commits. About 135 files outside tests carry SQL; 142 call sites use the write primitive (counted 2026-11-18). The committed write rate is low (85 landings in 9.6 hours on the overnight run of 2026-11-15) while the rate of opens and probes is high.
 
-Eleven incidents were recorded for 2026-11, up to 2026-11-17, in [the contention recovery](../recovery/sqlite-contention/README.md) and the commits it names. By primary cause:
+Eleven incidents were recorded for 2026-11, up to 2026-11-17, in the commit log. By primary cause:
 
 | Cause | Count | Examples |
 | :--- | ---: | :--- |
