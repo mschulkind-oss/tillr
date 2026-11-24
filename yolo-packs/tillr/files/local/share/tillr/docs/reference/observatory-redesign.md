@@ -21,7 +21,7 @@ summary: "How the tillr observatory and `tillr-view` answer operator questions a
 
 # Tillr observatory — linked entity pages, read faces, and truthfulness contract
 
-> **Delivered copy.** This is `docs/reference/observatory-redesign.md` from this repository at commit `3b6faafdae` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-redesign.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/observatory-redesign.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-redesign.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-20 against `bc8dda147c84de98a239194961e0fb4b187bea79`.
 UNMEASURED: no timed operator session is recorded; verification rests on the Go

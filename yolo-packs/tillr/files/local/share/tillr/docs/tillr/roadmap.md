@@ -7,7 +7,7 @@ summary: "What comes next for tillr and why in that order: the rulings only the 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `3b6faafdae` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Last reconciled: 2026-11-15**, late, against the tree, the store and `vantage-check index`.
 The repository roadmap's [Tillr section](https://github.com/mschulkind-oss/tillr/blob/main/docs/roadmap.md#tillr) points here. This page owns the order

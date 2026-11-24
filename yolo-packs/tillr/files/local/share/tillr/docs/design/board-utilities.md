@@ -10,7 +10,7 @@ summary: "Seven utilities over one shared substrate — store, item, land, drain
 
 # Board utilities: seven utilities over one shared substrate
 
-> **Delivered copy.** This is `docs/design/board-utilities.md` from this repository at commit `3b6faafdae` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/board-utilities.md` from this repository at commit `264f98eedd` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/board-utilities.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Accepted, 2026-11-06. Companion to `docs/design/board-sanity-recovery.md` and `docs/design/board-names.md`. **Read the "today" below as the tree the contract was written against (2026-11-06):** the board CLI it decomposes was deleted on 2026-11-11 (`3f02e3b916`, `afdc9a9571`), so every present-tense sentence about `tools/board-cli` is history. The contract itself is live: the seven `tools/tillr-*` binaries implement it, and the document retirement records which of its companion documents were absorbed or superseded.
 
