@@ -657,7 +657,7 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 			if err != nil {
 				return nil, err
 			}
-			elapsed := time.Since(started).Round(time.Second)
+			elapsed := now.Sub(started).Round(time.Second)
 			if elapsed < 0 {
 				elapsed = 0
 			}
