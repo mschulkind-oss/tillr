@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -27,6 +28,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-drain/stop"
 	"github.com/mschulkind-oss/tillr-item/workflowmeta"
+	"github.com/mschulkind-oss/tillr/notify"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -129,6 +131,19 @@ type server struct {
 	// The shared answers (shared.go): one build per store change for the routes whose answer
 	// costs a second or more, and the push summary's git reads beside the snapshot's.
 	snapshotShare, lanesShare, passesShare, pushShare sharedAnswers
+	// Notification wake-hint subscription and fallback reconciliation (servews.go; D-SN5, D-SN6).
+	fallbackPoll     time.Duration
+	disconnectedPoll time.Duration
+	reconnectInitial time.Duration
+	reconnectMax     time.Duration
+	noNotify         bool
+	autoSpawnNotify  bool
+	notifyIdleExit   time.Duration
+	tillrFlag        string
+	notifySpawnMu    sync.Mutex
+	newWSTicker      func(time.Duration) wsTicker
+	wsSubscribed     atomic.Int32
+	wsPolls          atomic.Int64
 	// now is the clock request handlers read; it defaults to time.Now and tests pin it
 	// so seeded sessions and deadlines do not age out when the host is slow.
 	now func() time.Time
@@ -203,11 +218,16 @@ func serveFace(args []string) (record.Envelope, int) {
 	itemFlag := fs.String("tillr-item", "", "the item writer (default: beside this executable, then PATH)")
 	check := fs.Bool("check", false, "parse the flags and open the store, then exit 0 without listening; any failure exits non-zero with one line")
 	plannerFlag := fs.String("tillr-drain", "", "the tillr-drain whose `why` answers /why (default: the one beside this executable, then PATH); it must be this server's build")
+	fallbackPoll := fs.Duration("fallback-poll", wsFallbackPollInterval, "how often a subscribed live socket re-reads the store when no notification arrives")
+	noNotify := fs.Bool("no-notify", false, "disable local notification socket subscribe and relay auto-start, relying only on --fallback-poll")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
 	}
 	if *storePath == "" {
 		return record.Envelope{}, usagef("serve needs --store <path>")
+	}
+	if *fallbackPoll <= 0 {
+		return record.Envelope{}, usagef("serve: --fallback-poll must be positive")
 	}
 	ctx := context.Background()
 	// The snapshot folds the same few event kinds on every request; keep them between reads
@@ -220,6 +240,9 @@ func serveFace(args []string) (record.Envelope, int) {
 	srv.plannerFlag = *plannerFlag
 	srv.writeEnabled = *writeEnabled
 	srv.itemFlag = *itemFlag
+	srv.fallbackPoll = *fallbackPoll
+	srv.noNotify = *noNotify
+	srv.autoSpawnNotify = !*noNotify
 	// The check is startup without the listening: the store, the front end and the
 	// planner are all read the way a launch reads them, because a binary that passes here
 	// and then refuses to start would have cost the working server its place.
@@ -316,6 +339,8 @@ func resolveTraceBin(root, named string) string {
 // operator who started the face by hand still reads which condition they named.
 func newServer(ctx context.Context, storePath, loopDir, laneRoot, traceBin, root, vantageBase string, questionsCmd []string) *server {
 	srv := &server{storePath: storePath, root: root, vantageBase: vantageBase, questionsCmd: questionsCmd,
+		fallbackPoll: wsFallbackPollInterval, disconnectedPoll: wsDisconnectedPollInterval,
+		reconnectInitial: wsReconnectInitial, reconnectMax: wsReconnectMax, notifyIdleExit: notify.DefaultIdleExit,
 		checkout: &checkoutWatch{root: root, git: runGit, now: time.Now}, vantage: newVantageCache(root, questionsCmd),
 		now: time.Now}
 	srv.openStore(ctx)
