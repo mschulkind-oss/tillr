@@ -144,7 +144,7 @@ receiver = "foreground"
 		}
 	}
 
-	// Repeat 1 while open: observation_count rises, Pending stays empty.
+	// Repeat 1 while open: observation_count rises, state stays acknowledged, Pending stays empty.
 	now = now.Add(10 * time.Minute)
 	watchFact(t, s, now, `{"slowest_check":"go-affected","wall_ms":160000}`)
 	watchFact(t, s, now, `{"median_ms":105000}`)
@@ -154,24 +154,57 @@ receiver = "foreground"
 	if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
 		t.Fatalf("Pending while tracked open = %+v (%v), want empty", p, err)
 	}
-
-	// Dip / window aging while tracked item is still open:
-	// - Advance 2 hours so fast-gate-run-slow's 1h window ages out (!firing).
-	// - Emit clear_when dip (median_ms = 80000) on fast-gate-median-slow (!firing + c.clears).
-	now = now.Add(2 * time.Hour)
-	watchFact(t, s, now, `{"median_ms":80000}`)
-	if _, err := e.EvaluateRules(ctx); err != nil {
-		t.Fatal(err)
-	}
 	var runState, medState string
 	var runCount, medCount int64
 	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, observation_count FROM alert_episodes WHERE alert_id=%q`, runAlertID), &runState, &runCount)
 	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, observation_count FROM alert_episodes WHERE alert_id=%q`, medAlertID), &medState, &medCount)
 	if runState != "acknowledged" || runCount != 2 || medState != "acknowledged" || medCount != 2 {
-		t.Fatalf("after dip while tracked: run=%s/%d med=%s/%d, want acknowledged/2 for both", runState, runCount, medState, medCount)
+		t.Fatalf("while condition still holds: run=%s/%d med=%s/%d, want acknowledged/2 for both", runState, runCount, medState, medCount)
 	}
 
-	// Repeat after dip while item is still open (move item-slice-d to not-started to cover all open states):
+	// Another evaluation while condition still holds (inside 1h window, no clear_when) keeps both acknowledged.
+	now = now.Add(10 * time.Minute)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, observation_count FROM alert_episodes WHERE alert_id=%q`, runAlertID), &runState, &runCount)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, observation_count FROM alert_episodes WHERE alert_id=%q`, medAlertID), &medState, &medCount)
+	if runState != "acknowledged" || runCount != 2 || medState != "acknowledged" || medCount != 2 {
+		t.Fatalf("steady firing pass while tracked: run=%s/%d med=%s/%d, want acknowledged/2 for both", runState, runCount, medState, medCount)
+	}
+
+	// Condition stops holding while tracked item is still open:
+	// - Advance 2 hours so fast-gate-run-slow's 1h window ages out (!firing).
+	// - Emit clear_when dip (median_ms = 80000) on fast-gate-median-slow (!firing + c.clears).
+	// Both tracked episodes resolve with reason condition-cleared and item_id in watch.alert.resolved.
+	now = now.Add(2 * time.Hour)
+	watchFact(t, s, now, `{"median_ms":80000}`)
+	var clearSeq int64
+	lifecycleRead(t, s, `SELECT MAX(seq) FROM events`, &clearSeq)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
+		t.Fatalf("Pending on condition-cleared while tracked = %+v (%v), want empty", p, err)
+	}
+	var runReason, runTrack, runEvReason, runEvItem string
+	var medReason, medTrack, medEvReason, medEvItem string
+	var medResolvedSeq int64
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, resolved_reason, tracking_item_id, observation_count FROM alert_episodes WHERE alert_id=%q`, runAlertID), &runState, &runReason, &runTrack, &runCount)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, resolved_reason, resolved_seq, tracking_item_id, observation_count FROM alert_episodes WHERE alert_id=%q`, medAlertID), &medState, &medReason, &medResolvedSeq, &medTrack, &medCount)
+	if runState != "resolved" || runReason != "condition-cleared" || runTrack != "item-slice-d" || runCount != 2 {
+		t.Fatalf("runAlert after window clear while tracked: state=%q reason=%q track=%q count=%d", runState, runReason, runTrack, runCount)
+	}
+	if medState != "resolved" || medReason != "condition-cleared" || medResolvedSeq != clearSeq || medTrack != "item-slice-e" || medCount != 2 {
+		t.Fatalf("medAlert after clear_when while tracked: state=%q reason=%q seq=%d (want %d) track=%q count=%d", medState, medReason, medResolvedSeq, clearSeq, medTrack, medCount)
+	}
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.reason'), json_extract(payload,'$.item_id') FROM events WHERE kind='watch.alert.resolved' AND object_id=%q`, runAlertID), &runEvReason, &runEvItem)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.reason'), json_extract(payload,'$.item_id') FROM events WHERE kind='watch.alert.resolved' AND object_id=%q`, medAlertID), &medEvReason, &medEvItem)
+	if runEvReason != "condition-cleared" || runEvItem != "item-slice-d" || medEvReason != "condition-cleared" || medEvItem != "item-slice-e" {
+		t.Fatalf("resolved events: run=%s/%s med=%s/%s", runEvReason, runEvItem, medEvReason, medEvItem)
+	}
+
+	// Firing again later opens episode_num = 2 fresh (untracked, state = open).
 	setWatchItemState(t, s, "item-slice-d", "not-started")
 	now = now.Add(5 * time.Minute)
 	watchFact(t, s, now, `{"slowest_check":"go-affected","wall_ms":175000}`)
@@ -179,15 +212,60 @@ receiver = "foreground"
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var epCount int
-	lifecycleRead(t, s, `SELECT COUNT(*) FROM alert_episodes`, &epCount)
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT observation_count FROM alert_episodes WHERE alert_id=%q`, runAlertID), &runCount)
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT observation_count FROM alert_episodes WHERE alert_id=%q`, medAlertID), &medCount)
-	if epCount != 2 || runCount != 3 || medCount != 3 {
-		t.Fatalf("after post-dip repeat: epCount=%d runCount=%d medCount=%d, want 2/3/3", epCount, runCount, medCount)
+	ep2Notices, err := e.Pending(ctx, "foreground")
+	if err != nil || len(ep2Notices) != 2 {
+		t.Fatalf("Pending on re-fire after condition-cleared = %+v (%v), want 2 notices", ep2Notices, err)
 	}
-	if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
-		t.Fatalf("Pending after post-dip repeat = %+v (%v), want empty", p, err)
+	ep2Through := ep2Notices[len(ep2Notices)-1].Seq
+	_ = e.Shown(ctx, "foreground", ep2Through)
+	_ = e.Seen(ctx, "foreground", ep2Through)
+
+	var runEp2ID, medEp2ID string
+	for _, n := range ep2Notices {
+		switch n.Bundle.RuleID {
+		case "fast-gate-run-slow":
+			runEp2ID = n.AlertID
+		case "fast-gate-median-slow":
+			medEp2ID = n.AlertID
+		}
+	}
+	var runEp2Num, medEp2Num int64
+	var runEp2Track, medEp2Track sql.NullString
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT episode_num, tracking_item_id FROM alert_episodes WHERE alert_id=%q`, runEp2ID), &runEp2Num, &runEp2Track)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT episode_num, tracking_item_id FROM alert_episodes WHERE alert_id=%q`, medEp2ID), &medEp2Num, &medEp2Track)
+	if runEp2Num != 2 || runEp2Track.Valid || medEp2Num != 2 || medEp2Track.Valid {
+		t.Fatalf("fresh episode 2 rows: run=%d/%+v med=%d/%+v", runEp2Num, runEp2Track, medEp2Num, medEp2Track)
+	}
+
+	// Attach open items again; also cover clear + re-fire between two evaluations on medEp2ID.
+	if err := e.Track(ctx, runEp2ID, "item-slice-d", &by, &note); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Track(ctx, medEp2ID, "item-slice-e", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	watchFact(t, s, now, `{"median_ms":80000}`)
+	var midClearSeq int64
+	lifecycleRead(t, s, `SELECT MAX(seq) FROM events`, &midClearSeq)
+	now = now.Add(time.Minute)
+	watchFact(t, s, now, `{"median_ms":98000}`)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, resolved_reason, resolved_seq FROM alert_episodes WHERE alert_id=%q`, medEp2ID), &medState, &medReason, &medResolvedSeq)
+	if medState != "resolved" || medReason != "condition-cleared" || medResolvedSeq != midClearSeq {
+		t.Fatalf("medEp2 clear+refire in one pass: state=%q reason=%q seq=%d (want %d)", medState, medReason, medResolvedSeq, midClearSeq)
+	}
+	ep3Notices, err := e.Pending(ctx, "foreground")
+	if err != nil || len(ep3Notices) != 1 || ep3Notices[0].Bundle.RuleID != "fast-gate-median-slow" {
+		t.Fatalf("Pending on clear+refire in one pass = %+v (%v), want fast-gate-median-slow episode 3", ep3Notices, err)
+	}
+	medEp3ID := ep3Notices[0].AlertID
+	_ = e.Shown(ctx, "foreground", ep3Notices[0].Seq)
+	_ = e.Seen(ctx, "foreground", ep3Notices[0].Seq)
+	if err := e.Track(ctx, medEp3ID, "item-slice-e", nil, nil); err != nil {
+		t.Fatal(err)
 	}
 
 	// Now item-slice-d lands while fast-gate-run-slow is STILL true (plus one more repeat on the same pass),
@@ -208,32 +286,32 @@ receiver = "foreground"
 	for _, n := range reopened {
 		byAlert[n.AlertID] = n
 	}
-	if got := byAlert[runAlertID].Bundle.Guidance.Summary; !strings.HasPrefix(got, "tracked fix item-slice-d landed and the condition persists: fast-gate check go-affected ran ") {
-		t.Fatalf("runAlert reopened summary = %q", got)
+	if got := byAlert[runEp2ID].Bundle.Guidance.Summary; !strings.HasPrefix(got, "tracked fix item-slice-d landed and the condition persists: fast-gate check go-affected ran ") {
+		t.Fatalf("runEp2 reopened summary = %q", got)
 	}
-	if got := byAlert[medAlertID].Bundle.Guidance.Summary; got != "tracked fix item-slice-e closed and the condition persists: fast-gate median exceeded 90s" {
-		t.Fatalf("medAlert reopened summary = %q", got)
+	if got := byAlert[medEp3ID].Bundle.Guidance.Summary; got != "tracked fix item-slice-e closed and the condition persists: fast-gate median exceeded 90s" {
+		t.Fatalf("medEp3 reopened summary = %q", got)
 	}
 
 	// Check reopened events and cleared tracking fields.
 	var runCause, runItem, runItemState string
 	var runTracking sql.NullString
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, observation_count, tracking_item_id FROM alert_episodes WHERE alert_id=%q`, runAlertID), &runState, &runCount, &runTracking)
-	if runState != "open" || runCount != 4 || runTracking.Valid {
-		t.Fatalf("reopened runAlert row: state=%q count=%d tracking=%+v", runState, runCount, runTracking)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, observation_count, tracking_item_id FROM alert_episodes WHERE alert_id=%q`, runEp2ID), &runState, &runCount, &runTracking)
+	if runState != "open" || runCount != 2 || runTracking.Valid {
+		t.Fatalf("reopened runEp2 row: state=%q count=%d tracking=%+v", runState, runCount, runTracking)
 	}
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.cause'), json_extract(payload,'$.item_id'), json_extract(payload,'$.item_state') FROM events WHERE kind='watch.alert.reopened' AND object_id=%q`, runAlertID), &runCause, &runItem, &runItemState)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.cause'), json_extract(payload,'$.item_id'), json_extract(payload,'$.item_state') FROM events WHERE kind='watch.alert.reopened' AND object_id=%q`, runEp2ID), &runCause, &runItem, &runItemState)
 	if runCause != "tracked-item-landed" || runItem != "item-slice-d" || runItemState != "landed" {
-		t.Fatalf("runAlert reopened event: cause=%q item=%q state=%q", runCause, runItem, runItemState)
+		t.Fatalf("runEp2 reopened event: cause=%q item=%q state=%q", runCause, runItem, runItemState)
 	}
 	var medCause, medItem, medItemState string
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.cause'), json_extract(payload,'$.item_id'), json_extract(payload,'$.item_state') FROM events WHERE kind='watch.alert.reopened' AND object_id=%q`, medAlertID), &medCause, &medItem, &medItemState)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.cause'), json_extract(payload,'$.item_id'), json_extract(payload,'$.item_state') FROM events WHERE kind='watch.alert.reopened' AND object_id=%q`, medEp3ID), &medCause, &medItem, &medItemState)
 	if medCause != "tracked-item-closed" || medItem != "item-slice-e" || medItemState != "closed" {
-		t.Fatalf("medAlert reopened event: cause=%q item=%q state=%q", medCause, medItem, medItemState)
+		t.Fatalf("medEp3 reopened event: cause=%q item=%q state=%q", medCause, medItem, medItemState)
 	}
 
 	// Confirm the reopened notices; subsequent evaluations must neither re-wake nor
-	// falsely re-resolve medAlert from the earlier median_ms=80000 clear at seq <= ep.last!
+	// falsely re-resolve medEp3 from the earlier median_ms=80000 clear at seq <= ep.last!
 	newThrough := reopened[len(reopened)-1].Seq
 	if err := e.Shown(ctx, "foreground", newThrough); err != nil {
 		t.Fatal(err)
@@ -249,9 +327,9 @@ receiver = "foreground"
 	if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
 		t.Fatalf("Pending after confirming reopened notice = %+v (%v), want empty", p, err)
 	}
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT state FROM alert_episodes WHERE alert_id=%q`, medAlertID), &medState)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT state FROM alert_episodes WHERE alert_id=%q`, medEp3ID), &medState)
 	if medState != "open" {
-		t.Fatalf("medAlert falsely resolved by earlier pre-last clear: state=%q, want open", medState)
+		t.Fatalf("medEp3 falsely resolved by earlier pre-last clear: state=%q, want open", medState)
 	}
 }
 
@@ -345,31 +423,47 @@ receiver = "foreground"
 		t.Fatalf("after c2: pair=%+v count=%d, want %s:%s / 2", lagPair, count, c2, c0)
 	}
 
-	// Follower catches up (!firing) while item-lag-fix is still open: stays acknowledged, clears tracked_lag_pair to "".
+	// Follower catches up (!firing) while item-lag-fix is still open: resolves with reason condition-cleared.
 	git("update-ref", "refs/tillr/green", c2)
 	now = now.Add(time.Minute)
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var state string
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, tracked_lag_pair, observation_count FROM alert_episodes WHERE alert_id=%q`, alertID), &state, &lagPair, &count)
-	if state != "acknowledged" || !lagPair.Valid || lagPair.String != "" || count != 2 {
-		t.Fatalf("after catch-up while open: state=%q pair=%+v count=%d", state, lagPair, count)
+	if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
+		t.Fatalf("Pending after lag catch-up while open = %+v (%v), want empty", p, err)
+	}
+	var state, resReason, resTrack, evReason, evItem string
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, resolved_reason, tracking_item_id, observation_count FROM alert_episodes WHERE alert_id=%q`, alertID), &state, &resReason, &resTrack, &count)
+	if state != "resolved" || resReason != "condition-cleared" || resTrack != "item-lag-fix" || count != 2 {
+		t.Fatalf("after catch-up while open: state=%q reason=%q track=%q count=%d", state, resReason, resTrack, count)
+	}
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.reason'), json_extract(payload,'$.item_id') FROM events WHERE kind='watch.alert.resolved' AND object_id=%q`, alertID), &evReason, &evItem)
+	if evReason != "condition-cleared" || evItem != "item-lag-fix" {
+		t.Fatalf("resolved event while open: reason=%q item_id=%q", evReason, evItem)
 	}
 
-	// New lag c3:c2 while item-lag-fix is still open: increments observation_count to 3 without waking.
+	// New lag c3:c2 while item-lag-fix is still open opens episode 2 fresh (untracked).
 	git("commit", "--quiet", "--allow-empty", "-m", "c3")
 	c3 := git("rev-parse", "HEAD")
 	now = now.Add(time.Minute)
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, tracked_lag_pair, observation_count FROM alert_episodes WHERE alert_id=%q`, alertID), &state, &lagPair, &count)
-	if state != "acknowledged" || lagPair.String != c3+":"+c2 || count != 3 {
-		t.Fatalf("after c3 lag: state=%q pair=%+v count=%d", state, lagPair, count)
+	ep2Notices, err := e.Pending(ctx, "foreground")
+	if err != nil || len(ep2Notices) != 1 {
+		t.Fatalf("Pending on fresh lag episode 2 = %+v (%v), want 1", ep2Notices, err)
 	}
-	if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
-		t.Fatalf("Pending while lag tracked = %+v (%v), want empty", p, err)
+	ep2ID := ep2Notices[0].AlertID
+	_ = e.Shown(ctx, "foreground", ep2Notices[0].Seq)
+	_ = e.Seen(ctx, "foreground", ep2Notices[0].Seq)
+	var ep2Num int64
+	var ep2Track sql.NullString
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, episode_num, tracking_item_id, tracked_lag_pair, observation_count FROM alert_episodes WHERE alert_id=%q`, ep2ID), &state, &ep2Num, &ep2Track, &lagPair, &count)
+	if state != "open" || ep2Num != 2 || ep2Track.Valid || lagPair.String != c3+":"+c2 || count != 1 {
+		t.Fatalf("after c3 lag: state=%q num=%d track=%+v pair=%+v count=%d", state, ep2Num, ep2Track, lagPair, count)
+	}
+	if err := e.Track(ctx, ep2ID, "item-lag-fix", nil, nil); err != nil {
+		t.Fatal(err)
 	}
 
 	// Follower catches up to c3 AND item-lag-fix lands -> resolves quietly with item_id in watch.alert.resolved!
@@ -382,31 +476,30 @@ receiver = "foreground"
 	if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
 		t.Fatalf("Pending on quiet tracked resolve = %+v (%v), want empty", p, err)
 	}
-	var resReason, resTrack, evItem string
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, resolved_reason, tracking_item_id FROM alert_episodes WHERE alert_id=%q`, alertID), &state, &resReason, &resTrack)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT state, resolved_reason, tracking_item_id FROM alert_episodes WHERE alert_id=%q`, ep2ID), &state, &resReason, &resTrack)
 	if state != "resolved" || resReason != "condition-cleared" || resTrack != "item-lag-fix" {
 		t.Fatalf("quiet resolved row: state=%q reason=%q tracking=%q", state, resReason, resTrack)
 	}
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.item_id') FROM events WHERE kind='watch.alert.resolved' AND object_id=%q`, alertID), &evItem)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.item_id') FROM events WHERE kind='watch.alert.resolved' AND object_id=%q`, ep2ID), &evItem)
 	if evItem != "item-lag-fix" {
 		t.Fatalf("resolved event item_id = %q, want item-lag-fix", evItem)
 	}
 
-	// A subsequent lag opens episode 2 fresh (untracked) and tests resolved-elsewhere reopen wording.
+	// A subsequent lag opens episode 3 fresh (untracked) and tests resolved-elsewhere reopen wording.
 	git("commit", "--quiet", "--allow-empty", "-m", "c4")
 	now = now.Add(time.Minute)
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var ep2ID string
-	var ep2Num int64
-	var ep2Track sql.NullString
-	lifecycleRead(t, s, `SELECT alert_id, episode_num, tracking_item_id FROM alert_episodes WHERE state='open'`, &ep2ID, &ep2Num, &ep2Track)
-	if ep2Num != 2 || ep2Track.Valid {
-		t.Fatalf("episode 2: num=%d track=%+v", ep2Num, ep2Track)
+	var ep3ID string
+	var ep3Num int64
+	var ep3Track sql.NullString
+	lifecycleRead(t, s, `SELECT alert_id, episode_num, tracking_item_id FROM alert_episodes WHERE state='open'`, &ep3ID, &ep3Num, &ep3Track)
+	if ep3Num != 3 || ep3Track.Valid {
+		t.Fatalf("episode 3: num=%d track=%+v", ep3Num, ep3Track)
 	}
 	setWatchItemState(t, s, "item-alt", "in-queue")
-	if err := e.Track(ctx, ep2ID, "item-alt", nil, nil); err != nil {
+	if err := e.Track(ctx, ep3ID, "item-alt", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	setWatchItemState(t, s, "item-alt", "resolved-elsewhere")
@@ -422,7 +515,7 @@ receiver = "foreground"
 		t.Fatalf("unexpected resolved-elsewhere summary: %q", reopened[0].Bundle.Guidance.Summary)
 	}
 	var altCause, altState string
-	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.cause'), json_extract(payload,'$.item_state') FROM events WHERE kind='watch.alert.reopened' AND object_id=%q`, ep2ID), &altCause, &altState)
+	lifecycleRead(t, s, fmt.Sprintf(`SELECT json_extract(payload,'$.cause'), json_extract(payload,'$.item_state') FROM events WHERE kind='watch.alert.reopened' AND object_id=%q`, ep3ID), &altCause, &altState)
 	if altCause != "tracked-item-landed" || altState != "resolved-elsewhere" {
 		t.Fatalf("resolved-elsewhere event: cause=%q state=%q", altCause, altState)
 	}
@@ -565,6 +658,47 @@ receiver = "foreground"
 		}
 		if p, err := e.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
 			t.Fatalf("Source Pending while tracked = %+v (%v)", p, err)
+		}
+
+		// Clearing while item-1 is still open resolves the episode with condition-cleared and item_id.
+		curNow = curNow.Add(2 * time.Hour)
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		stCleared, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+		if err != nil || len(stCleared.Alerts) != 0 {
+			t.Fatalf("Source status after clear while item open = %+v (%v), want 0 active alerts", stCleared, err)
+		}
+		if len(e.mem.episodes) != 1 || e.mem.episodes[0].state != "resolved" || e.mem.episodes[0].resolvedReason.String != "condition-cleared" || e.mem.episodes[0].trackingItemID.String != "item-1" {
+			t.Fatalf("Source memEpisode after clear = %+v", e.mem.episodes[0])
+		}
+		var resolvedEventPayload map[string]any
+		for _, ev := range e.mem.events {
+			if ev.objectID == alertID && ev.kind == resolvedKind {
+				if err := json.Unmarshal(ev.payload, &resolvedEventPayload); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if resolvedEventPayload["reason"] != "condition-cleared" || resolvedEventPayload["item_id"] != "item-1" {
+			t.Fatalf("Source watch.alert.resolved payload = %+v", resolvedEventPayload)
+		}
+
+		// Re-firing later opens fresh episode 2 untracked; track it again to test item disappearance.
+		curNow = curNow.Add(5 * time.Minute)
+		src.append("gate.done", curNow, map[string]any{"check": "lint"})
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		ep2Notices, err := e.Pending(ctx, "foreground")
+		if err != nil || len(ep2Notices) != 1 || e.mem.episodes[1].episodeNum != 2 || e.mem.episodes[1].trackingItemID.Valid {
+			t.Fatalf("Source episode 2 = %+v (%v)", ep2Notices, err)
+		}
+		alertID2 := ep2Notices[0].AlertID
+		_ = e.Shown(ctx, "foreground", ep2Notices[0].Seq)
+		_ = e.Seen(ctx, "foreground", ep2Notices[0].Seq)
+		if err := e.Track(ctx, alertID2, "item-1", nil, nil); err != nil {
+			t.Fatalf("Source Track ep2: %v", err)
 		}
 
 		// Missing item row on a windowed rule does not reopen until a new matching event is recorded.
