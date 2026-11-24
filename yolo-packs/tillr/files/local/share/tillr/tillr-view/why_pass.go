@@ -13,6 +13,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr-item/docshare"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -25,8 +26,9 @@ import (
 //
 // A recorded pass applies the decisions it acted on, not one per item, so an item's row is
 // its newest recorded decision, and the pass named in the answer is the newest pass: the
-// answer is "what the loop last said", with the pass's age beside it. An item the loop has
-// not decided yet says so.
+// answer is "what the loop last said", with the pass's age beside it. Queued items with no
+// recorded decision because every lane they can use is busy say they are waiting for a lane;
+// an item the loop has not looked at yet says so.
 
 // whyPassDecision is the `decision` object of a row read from the record.
 type whyPassDecision struct {
@@ -86,10 +88,6 @@ func (s *server) whyFromPass(ctx context.Context, now time.Time) (json.RawMessag
 		if !live {
 			return passFallback{"no loop is running (" + note + ")"}
 		}
-		lanes := session.Lanes
-		if lanes == nil {
-			lanes = []string{}
-		}
 		err = r.QueryRow(`SELECT tick_id, started_at FROM drain_passes ORDER BY started_at DESC LIMIT 1`).Scan(&passID, &passAt)
 		if errors.Is(err, sql.ErrNoRows) || isMissingTable(err) {
 			return passFallback{"no pass is recorded"}
@@ -99,6 +97,23 @@ func (s *server) whyFromPass(ctx context.Context, now time.Time) (json.RawMessag
 		}
 		if head, err = r.EventHeadSeq(); err != nil {
 			return err
+		}
+		storeLanes, knownLane, busy, err := passLanes(r, now)
+		if err != nil {
+			return err
+		}
+		refused, err := readLaneConditions(r)
+		if err != nil {
+			return err
+		}
+		lanes := session.Lanes
+		lanesSource := "live loop"
+		if lanes == nil {
+			lanes = storeLanes
+			if lanes == nil {
+				lanes = []string{}
+			}
+			lanesSource = "store"
 		}
 		items, err := readItemsBase(r)
 		if err != nil {
@@ -111,6 +126,10 @@ func (s *server) whyFromPass(ctx context.Context, now time.Time) (json.RawMessag
 				open = append(open, it)
 			}
 		}
+		express, err := passExpressItems(r, open)
+		if err != nil {
+			return err
+		}
 		places := itemPlaces(open)
 		started := time.Now()
 		latest, err := latestDecisions(r)
@@ -118,9 +137,27 @@ func (s *server) whyFromPass(ctx context.Context, now time.Time) (json.RawMessag
 			return err
 		}
 		phase(ctx, "pass_decisions", map[string]any{"ms": msSince(time.Now, started), "items": len(open)})
+		for _, it := range open {
+			d := latest[it.ItemID]
+			if d.DecisionID == "" {
+				continue
+			}
+			row := whyPassRecordedRow(it, places[it.ItemID], d)
+			if row.Class == "moving" && row.LaneID != "" && !knownLane[row.LaneID] {
+				busy[row.LaneID] = true
+			}
+		}
+		laneCtx := passLaneContext{
+			offered:      lanes,
+			busy:         busy,
+			refused:      refused,
+			express:      express,
+			lastLookedAt: max(passAt, session.RefreshedAtMS),
+			passAt:       passAt,
+		}
 		rows := make([]whyPassRow, 0, len(open))
 		for _, it := range open {
-			rows = append(rows, passRow4(it, places[it.ItemID], latest[it.ItemID]))
+			rows = append(rows, whyPassItemRow(it, places[it.ItemID], latest[it.ItemID], laneCtx))
 		}
 		sortPassRows(rows)
 		declared, err := definition.ForReader(r)
@@ -141,8 +178,8 @@ func (s *server) whyFromPass(ctx context.Context, now time.Time) (json.RawMessag
 		phase(ctx, "pass_trunk", map[string]any{"ms": msSince(time.Now, started)})
 		doc = map[string]any{
 			"alarms": active, "definition": declared.Name, "event_head_seq": head,
-			"lanes": lanes, "lanes_source": "live loop", "rows": rows,
-			"summary": passSummary(rows, len(lanes), active), "designs_waiting": nonNil(designs),
+			"lanes": lanes, "lanes_source": lanesSource, "rows": rows,
+			"summary": passSummary(rows, lanes, busy, active), "designs_waiting": nonNil(designs),
 		}
 		if trunk != nil {
 			doc["trunk"], doc["trunk_line"] = trunk, line
@@ -227,15 +264,158 @@ type whyPassDecisionRow struct {
 	AtMS                                                                int64
 }
 
-func passRow4(it storeItem, place int, d whyPassDecisionRow) whyPassRow {
+type passLaneContext struct {
+	offered      []string
+	busy         map[string]bool
+	refused      map[string]laneCondition
+	express      map[string]bool
+	lastLookedAt int64
+	passAt       int64
+}
+
+func passLanes(r *store.Reader, now time.Time) ([]string, map[string]bool, map[string]bool, error) {
+	known := map[string]bool{}
+	busy := map[string]bool{}
+	rows, err := r.Query(`SELECT lane_id, state, leased_until FROM lanes ORDER BY lane_id`)
+	if isMissingTable(err) {
+		return nil, known, busy, nil
+	}
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	nowMS := now.UnixMilli()
+	for rows.Next() {
+		var id, state string
+		var until sql.NullInt64
+		if err := rows.Scan(&id, &state, &until); err != nil {
+			return nil, nil, nil, err
+		}
+		ids = append(ids, id)
+		known[id] = true
+		if state == "leased" && (!until.Valid || until.Int64 > nowMS) {
+			busy[id] = true
+		}
+	}
+	return ids, known, busy, rows.Err()
+}
+
+func passExpressItems(r *store.Reader, open []storeItem) (map[string]bool, error) {
+	stored := map[string]bool{}
+	var hasExpress bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='express')`).Scan(&hasExpress); err != nil {
+		return nil, err
+	}
+	if hasExpress {
+		rows, err := r.Query(`SELECT item_id FROM items WHERE COALESCE(express, 0) <> 0 AND state NOT IN ('landed','closed','resolved-elsewhere')`)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			stored[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	ideas, err := ideaIDs(r)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, it := range open {
+		if !docshare.IsCommentItem(it.ItemID) && (stored[it.ItemID] || ideas[it.ItemID] || strings.HasPrefix(it.ItemID, "item-idea-") || strings.HasPrefix(it.ItemID, "sync-remote-")) {
+			out[it.ItemID] = true
+		}
+	}
+	return out, nil
+}
+
+func usablePassLanes(offered []string, refused map[string]laneCondition, isExpress bool) ([]string, string, string) {
+	seen := map[string]bool{}
+	var ordinary, all []string
+	for _, lane := range offered {
+		if lane == "" || seen[lane] || strings.HasPrefix(lane, "desk-") {
+			continue
+		}
+		if _, out := refused[lane]; out {
+			continue
+		}
+		seen[lane] = true
+		all = append(all, lane)
+		if !strings.HasPrefix(lane, "express-") {
+			ordinary = append(ordinary, lane)
+		}
+	}
+	if !isExpress {
+		if len(ordinary) == 1 {
+			return ordinary, "ordinary lane", "ordinary lane"
+		}
+		return ordinary, "ordinary lanes", "ordinary lane"
+	}
+	if len(ordinary) == 0 {
+		if len(all) == 1 {
+			return all, "express lane", "express lane"
+		}
+		return all, "express lanes", "express lane"
+	}
+	if len(all) == 1 {
+		return all, "ordinary or express lane", "ordinary or express lane"
+	}
+	return all, "ordinary or express lanes", "ordinary or express lane"
+}
+
+func whyPassItemRow(it storeItem, place int, d whyPassDecisionRow, lanes passLaneContext) whyPassRow {
+	if d.DecisionID != "" {
+		return whyPassRecordedRow(it, place, d)
+	}
+	row := whyPassRow{State: it.State, WaitingOn: []string{}}
+	row.Place, row.ItemID, row.ClassSource = place, it.ItemID, "rule"
+	if it.State == "in-queue" && !docshare.IsCommentItem(it.ItemID) && it.UpdatedAtMS <= lanes.lastLookedAt {
+		usable, poolPlural, poolSingular := usablePassLanes(lanes.offered, lanes.refused, lanes.express[it.ItemID])
+		allBusy := len(usable) > 0
+		for _, lane := range usable {
+			if !lanes.busy[lane] {
+				allBusy = false
+				break
+			}
+		}
+		if allBusy {
+			ahead := max(0, place-1)
+			aheadText := fmt.Sprintf("%d items ahead", ahead)
+			if ahead == 1 {
+				aheadText = "1 item ahead"
+			}
+			laneList := strings.Join(usable, ", ")
+			sinceMS := it.UpdatedAtMS
+			if sinceMS <= 0 {
+				sinceMS = lanes.passAt
+			}
+			row.Position = "held"
+			row.Class, row.Where, row.Reason = "waits on work", "queue", "no-lane"
+			row.Why = fmt.Sprintf("waiting for a lane: queue place %d, %s; can use %s (%s)", place, aheadText, poolPlural, laneList)
+			row.Mover = fmt.Sprintf("a free %s (%s)", poolSingular, laneList)
+			row.Since = time.UnixMilli(sinceMS).UTC().Format(time.RFC3339Nano)
+			row.WaitingOn = append(row.WaitingOn, usable...)
+			return row
+		}
+	}
+	row.Class, row.Where, row.Why, row.Mover, row.Since = "waits on the loop", "queue", "not yet planned", "the next pass", "no pass yet"
+	row.Reason = row.Why
+	return row
+}
+
+func whyPassRecordedRow(it storeItem, place int, d whyPassDecisionRow) whyPassRow {
 	row := whyPassRow{State: it.State, WaitingOn: []string{}}
 	row.Place, row.ItemID, row.ClassSource = place, it.ItemID, "pass"
-	if d.DecisionID == "" {
-		row.Class, row.Where, row.Why, row.Mover, row.Since = "waits on the loop", "queue", "not yet planned", "the next pass", "no pass yet"
-		row.Class, row.ClassSource = "waits on the loop", "rule"
-		row.Reason = row.Why
-		return row
-	}
 	position := "held"
 	if d.Action == "hold" {
 		rule := waitingRuleFor(d.Reason)
@@ -279,18 +459,17 @@ func sortPassRows(rows []whyPassRow) {
 	}
 }
 
-// passSummary tallies the rows the way the planner's summary partitions them. Lane
-// occupancy beyond the offered count is the planner's to know; it is not guessed here.
-func passSummary(rows []whyPassRow, offered int, active []alarms.Alarm) map[string]any {
+// passSummary tallies the rows the way the planner's summary partitions them.
+func passSummary(rows []whyPassRow, offered []string, busyLanes map[string]bool, active []alarms.Alarm) map[string]any {
 	held := map[string]int{}
 	running, ready, owner, drainNext, design, operator := 0, 0, 0, 0, 0, 0
-	busy := map[string]bool{}
+	movingBusy := map[string]bool{}
 	for _, row := range rows {
 		switch {
 		case row.Class == "moving":
 			running++
 			if row.LaneID != "" {
-				busy[row.LaneID] = true
+				movingBusy[row.LaneID] = true
 			}
 			continue
 		case row.Class == "ready":
@@ -309,9 +488,24 @@ func passSummary(rows []whyPassRow, offered int, active []alarms.Alarm) map[stri
 			drainNext++
 		}
 	}
+	offeredCount, busyCount := 0, 0
+	seen := map[string]bool{}
+	for _, lane := range offered {
+		if lane == "" || seen[lane] {
+			continue
+		}
+		seen[lane] = true
+		offeredCount++
+		if busyLanes[lane] {
+			busyCount++
+		}
+	}
+	if offeredCount == 0 {
+		busyCount = len(movingBusy)
+	}
 	return map[string]any{"alarms": active, "running": running, "could_run": ready, "held": held,
 		"owner_waiting": owner, "drain_next": drainNext, "design_next": design, "operator_next": operator,
-		"lanes_offered": offered, "lanes_busy": len(busy)}
+		"lanes_offered": offeredCount, "lanes_busy": busyCount}
 }
 
 // whyTrunkStatus answers the trunk's proof when the trunk is unproved, as the planner face does.
