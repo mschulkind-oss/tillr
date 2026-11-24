@@ -4,14 +4,14 @@ status: in-review
 stage: DESIGN
 updated: 2026-11-21
 tags: [tillr, contract, view]
-summary: "What tillr-view provides and expects, read from the code at dab5a2da0e: twelve faces, three record kinds, and the HTTP API its own web client reads. It owns no table and is the largest consumer: it names thirty-three tables in its own SQL, links fourteen drain packages, runs four other programs, and its tests write other utilities' rows by hand in 96 files. All three heavy failures were its suite."
+summary: "What tillr-view provides and expects, read from the code: twelve faces, three record kinds, and the HTTP API its own web client reads. It owns no table and is the largest consumer: it names thirty-three tables in its own SQL, links fourteen drain packages, runs four other programs, and its tests write other utilities' rows by hand in 96 files. All three heavy failures were its suite."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-view
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** The surface in sections 1 and 2 describes the code as it is. The contract examples, name-set files and builders of section 4 are not built: `fd -t d '^contract$' tools` finds nothing. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
 **What it is.** One Go program at `tools/tillr-view` and a web client under `web/`. It shows the store: status, what is waiting and why, lanes, runs, and the observatory server. It is a `main` package, so nothing can import it.
 
@@ -80,7 +80,7 @@ From the others:
 | `run.record`, `run.request`, `run.allocate`, `run.resume`, `run.finish`, `run.usage`, `run.progress`, `run.child-session` payloads | [tillr-run](./tillr-run.md) | SQL on `events`, records | `payloads.go`, `usage.go`, `worker_records.go` |
 | The harness stream log in the lane directory | [tillr-run](./tillr-run.md) | files | `transcript.go` |
 | `landings` by column; `land.landing`; the result `squash-conflict`; the published ref's name | [tillr-land](./tillr-land.md) | SQL, Git | `landings.go`, `waiting.go`, `push_summary.go` |
-| `candidates`, `landing_attempts`, `land.candidate`, `land.attempt`: retired, still read | [tillr-land](./tillr-land.md) | SQL | `serveread.go`, `payloads.go` |
+| `candidates`, `landing_attempts`, `land.candidate`, `land.attempt`: read, and written by nothing | [tillr-land](./tillr-land.md) | SQL | `serveread.go`, `payloads.go` |
 | `gate.change`, `gate.plan` and `gate.verdict` files in the run directory; the `gate.verdict` event (`run_id verdict_id result`) | [tillr-gate](./tillr-gate.md), and [tillr-drain](./tillr-drain.md) for the event | files, SQL | `run_schedule.go`, `serveobs.go`, `running.go` |
 | `run <id>`: the document `run`, `events`, `claims` | [tillr-trace](./tillr-trace.md) | subprocess | `serveread.go` |
 | `proc-exec.jsonl`, which it also parses itself | [tillr-trace](./tillr-trace.md) | files | `run_timing.go`, `transcript.go` |
@@ -102,14 +102,14 @@ That the view provides almost nothing to other utilities is the point of this fi
 
 ## 4. How the contract is pinned
 
-**What the view provides** is pinned in `tools/tillr-view`: `TestHelpIsTheFaceSurface` exists; a test of `serve --check` and one of `restart`'s exit codes are added.
+**What the view provides** is pinned in `tools/tillr-view`: `TestHelpIsTheFaceSurface` exists; a test of `serve --check` and one of `restart`'s exit codes are to add.
 
-**What the view expects** is pinned in each provider, and this is where the view's suite changes most.
+**What the view expects** is pinned in each provider, and this is where the view's suite changes most. Each of the following is to build.
 
 - **No sibling is built.** A view test that needs the planner's answer reads the drain's `why` examples. `buildPair`, `buildFreshDrainBinary` and the six builds of `tillr-item` go.
 - **No row is typed.** A view test that needs a store asks the owners' builders for the situation: an item blocked on the owner, a held dispatch, a finished run, a landing. `serve-fixture.sql` and the 28 inline `CREATE TABLE` statements go.
 - **No sentence is compared.** A view test compares a row's `reason`, `class`, `where` and the owner part of `mover`. The 21 files that compare `why` and `mover` text change to names.
-- **No rule is walked.** `TestWaitingEveryDrainReasonHasARule` moves to the drain, where a new reason without a rule already fails.
+- **No rule is walked.** `TestWaitingEveryDrainReasonHasARule` moves to the drain, where a new reason without a rule fails.
 - **One test of its own stays for the join:** given the drain's example answer, the view's `waiting` row carries the same reason, class and mover. That tests the view's code against a fixed input, which is all a consumer's suite should need.
 
 The view keeps one check against the real planner: the build-stamp match at run time, which refuses a planner from a different build. That is a deployment check and not a test.

@@ -4,14 +4,14 @@ status: in-review
 stage: DESIGN
 updated: 2026-11-22
 tags: [tillr, contract, watch]
-summary: "What tillr-watch provides and expects, initially read at dab5a2da0e and updated through the second build (dc42dbc335) and D-TW55–D-TW67: evaluation, status, wait/seen, episode lifecycle faces (ack, track, silence, resolve), live rule overrides (rule), and pre-flight lint, with agent-readable notice and status formats and three exit codes that differ from every other utility's."
+summary: "What tillr-watch provides and expects: evaluation, status, wait/seen, episode lifecycle faces (ack, track, silence, resolve), live rule overrides (rule), and pre-flight lint, with agent-readable notice and status formats and three exit codes that differ from every other utility's."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-watch
 
-**Status:** 2026-11-22. Initially read at `dab5a2da0e` (when nothing in the contract check was built) and updated on 2026-11-22 to reflect the landed second build (`50cfbf21c3`..`dc42dbc335`), `tillr watch lint` (`3c5cd80bbe`), and the operator-request / designer specifications in [`../tillr-watch.md`](../tillr-watch.md) (`D-TW27`–`D-TW38`, `D-TW55`–`D-TW61`, `D-TW63`, `D-TW65`–`D-TW67`, under owner ruling `D-TW64`). This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private, and the non-ruling post-`dab5a2da0e` watch amendments referenced here (`D-TW27`–`D-TW38`, `D-TW55`–`D-TW61`, `D-TW63`, `D-TW65`–`D-TW67`), are from operator requests and designer decisions that the owner has not ruled on and may overturn.
+**Status:** The surface in sections 1 and 2 describes the code as it is, including the watch decisions `D-TW27`–`D-TW38`, `D-TW55`–`D-TW61`, `D-TW63` and `D-TW65`–`D-TW67` of [`../tillr-watch.md`](../tillr-watch.md). The pins listed under "To add" in section 4 are not built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it. The watch decisions named here, other than the owner ruling `D-TW64`, are designer's decisions the owner may overturn.
 
 **What it is.** One Go program at `tools/tillr-watch`. The rule engine is the `watch` package of [the library](./tillr.md); this program gives it faces. A **watch rule** is a TOML table that names event kinds and a condition over them; when the condition holds, the rule opens an alert.
 
@@ -66,7 +66,7 @@ It reads the rule files under `--rules`, reads Git refs under `--root` when a ru
 | For each rule, the kinds it reads and the payload fields its text addresses. The two example rules read `drain.node-advanced`, `drain.refusal`, `drain.revert`, `drain.fixer-proved`, `boundary.check` and `land.landing` | [tillr-drain](./tillr-drain.md), [tillr-land](./tillr-land.md) | SQL on `events` | the rule files |
 | The write-ahead log beside the store, changed by any writer | [tillr](./tillr.md) | files | `wait.go` |
 
-Two things it cannot have today. The gate's kinds are registered in a `main` package that nothing can link, so a rule naming `gate.verdict` is refused as unregistered. And a rule's payload path is checked against no list, so a renamed field makes the rule quietly match nothing.
+Two things it cannot have. The gate's kinds are registered in a `main` package that nothing can link, so a rule naming `gate.verdict` is refused as unregistered. And a rule's payload path is checked against no list, so a renamed field makes the rule quietly match nothing.
 
 ## 3. Contract and private
 
@@ -74,13 +74,13 @@ Two things it cannot have today. The gate's kinds are registered in a `main` pac
 
 **Private:** the notice's wording, the separator line, and everything on standard error.
 
-**The exit codes are a defect and not a contract.** They become the library's: 2 for usage, 3 for a store this build cannot open, and a named code for the timeout. Which code the timeout takes is small, and my default is 1 (a negative answer: nothing fired); the owner may overturn it.
+**The exit codes are a defect and not a contract.** They become the library's: 2 for usage, 3 for a store this build cannot open, and a named code for the timeout. Which code the timeout takes is small, and the designer's default is 1 (a negative answer: nothing fired); the owner may overturn it.
 
 ## 4. How the contract is pinned
 
 In `tools/tillr-watch`, in its fast suite.
 
-- **Exists today.** `TestWatchWaitFromQuietToFiring`, `TestWatchStatusReadOnly`, `TestWatchWritableFacesRequireExistingStore`, `TestFollowDelivery`, `TestClaudeRearmDelivery`. They append a `drain.refusal` with a payload typed by hand.
+- **Exists.** `TestWatchWaitFromQuietToFiring`, `TestWatchStatusReadOnly`, `TestWatchWritableFacesRequireExistingStore`, `TestFollowDelivery`, `TestClaudeRearmDelivery`. They append a `drain.refusal` with a payload typed by hand.
 - **To add.** One example of `wait`'s output per situation (one notice, several, cut guidance), compared for the marker lines and the JSON line. One example per exit code. A conformance test like every other Go utility's.
 - **Rules against their providers.** Each event entry in a provider's contract lists its payload fields. The rule loader's test reads those lists and fails a rule that addresses a field no entry has. The tests' hand-typed payloads are replaced by the provider's event examples.
 
