@@ -886,10 +886,11 @@ func loopFace(args []string) int {
 		// Nowhere to write the record: the root is what names it.
 		return fail(drain.Usagef("loop needs --root <repository>"))
 	}
-	// The loop reads the event log many times a second, often inside a write
-	// transaction; with the cache, such a read is a tail read instead of a scan of the
-	// whole history under the store's write lock (store.CacheCommittedEvents).
-	store.CacheCommittedEvents()
+	// The loop folds the same selected event kinds many times a second, often inside a
+	// write transaction; with the narrow cache, each selected read is a tail read for its
+	// keys without holding the whole log (mostly unselected run.child-session worker
+	// records) in memory (store.CacheSelectedEvents).
+	store.CacheSelectedEvents()
 	failStartup := func(err error) int {
 		if *check {
 			return fail(err)

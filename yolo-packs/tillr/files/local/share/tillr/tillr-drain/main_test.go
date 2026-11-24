@@ -3,6 +3,9 @@ package main_test
 import (
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -367,5 +370,51 @@ func TestPlanRefusesAnOverrideNamingAnUnknownItem(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "item_999") {
 		t.Fatalf("the refusal %q does not name the stale override", output)
+	}
+}
+
+// On 2026-11-23 the live drain loop held 3.8 GB resident because loopFace enabled
+// store.CacheCommittedEvents(), which retained all 1.39M events in memory (1.37 GB in
+// store.(*eventCache), 92% unselected run.child-session worker records). loopFace must
+// enable the narrow selected-event cache instead.
+func TestLoopUsesSelectedEventCache(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+	var foundSelected, foundCommitted bool
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "loopFace" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || pkg.Name != "store" {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "CacheSelectedEvents":
+				foundSelected = true
+			case "CacheCommittedEvents":
+				foundCommitted = true
+			}
+			return true
+		})
+	}
+	if !foundSelected {
+		t.Error("loopFace does not call store.CacheSelectedEvents()")
+	}
+	if foundCommitted {
+		t.Error("loopFace calls store.CacheCommittedEvents(), which retains the whole event log")
 	}
 }

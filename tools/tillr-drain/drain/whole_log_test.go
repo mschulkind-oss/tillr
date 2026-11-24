@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -436,5 +437,46 @@ func TestNoPassQueryCorrelatesTheEventsWithEachRun(t *testing.T) {
 				t.Errorf("%s line %d correlates the events with each run: %s", name, i+1, strings.TrimSpace(line))
 			}
 		}
+	}
+}
+
+// With the narrow selected-event cache (store.CacheSelectedEvents), planning and applying
+// a pass against a store flooded with large unselected run.child-session payloads must not
+// retain those payloads in the in-process event cache.
+func TestSelectedEventCacheDoesNotRetainUnselectedWorkerRecords(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	pad := strings.Repeat("x", 64*1024)
+	const count = 400 // ~25.6 MB of unselected run.child-session payloads
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		id := "run-elsewhere-a1"
+		for i := 0; i < count; i++ {
+			body := fmt.Sprintf(`{"run_id":%q,"session_id":"%s-child-%d","pad":%q}`, id, id, i, pad)
+			if _, err := tx.Append(event.Event{Kind: "run.child-session", ObjectType: "run", ObjectID: &id, Payload: []byte(body), At: time.Unix(int64(i), 0).UTC()}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	p := mustPlan(t, l)[0]
+	if ok, _, err := l.applyPlan(context.Background(), p, base, l.cfg.Now()); err != nil || !ok {
+		t.Fatalf("dispatch claim: %v %v", ok, err)
+	}
+
+	runtime.GC()
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	var retained int64
+	if after.HeapAlloc > before.HeapAlloc {
+		retained = int64(after.HeapAlloc - before.HeapAlloc)
+	}
+	// Retaining the 400 x 64 KB unselected payloads would hold >= 25 MB in eventCache.
+	const limit = 12 * 1024 * 1024
+	if retained >= limit {
+		t.Fatalf("planning/applying retained %.1f MB of heap (limit %.1f MB); unselected worker records may be cached", float64(retained)/(1024*1024), float64(limit)/(1024*1024))
 	}
 }
