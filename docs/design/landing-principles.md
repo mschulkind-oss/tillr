@@ -85,7 +85,7 @@ Under the lock, `Land` ([`landing.go`](../../tools/tillr-land/land/landing.go)) 
 to merge `base..head` onto `trunkBefore` through plumbing with no working tree, commits with the
 scope-checked `LandingIdentity` and the head's own message, and `Trunk.Move` advances the trunk
 guarded against `trunkBefore`. A landed commit carries no `Tillr-Item:` trailer
-([`queue-persistence-ruling.md`](queue-persistence-ruling.md#3-landing-receipts-without-commit-trailers)).
+([queue persistence](../reference/tillr-queue-persistence.md#landing-receipts-without-commit-trailers)).
 `Land` records the outcome in the `landings` table with both trees: `gated_tree` is the head's tree
 the verdict bound, `landed_tree` is the tree the trunk published.
 

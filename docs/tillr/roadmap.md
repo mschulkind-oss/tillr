@@ -185,7 +185,7 @@ Third by rule 2: each of these is a place where a red check costs more than the 
     failure is fingerprinted from its own text, and a deterministic one blocks its items on one
     diagnosis ticket. After landing velocity because it reads that tier's results.
 
-14. [The trunk fixer's gate](../design/trunk-fixer-gate.md): the fixer gets the gate any candidate
+14. [The trunk fixer's gate](../reference/gate.md#the-trunk-fixers-gate): the fixer gets the gate any candidate
     gets plus the checks it names. Its fork-release reporting leaves with entry 4.
 
 ## 4. A drain that runs unattended
@@ -205,7 +205,7 @@ person who did not need to be asked.
     ([plan sketch](../design/tillr-evidence-registry-and-suite-guardrail-plan.md)): the gate, the
     trunk proof and a worker's brief trust one recorded result instead of running a check again.
 
-18. [Refused pushes](../design/tillr-refused-push.md): when the remote branch has moved, replay
+18. [Refused pushes](../reference/tillr-refused-push.md): when the remote branch has moved, replay
     unpublished commits onto it instead of holding every later publication.
 
 19. [Shared-path serialization](../design/tillr-shared-path-serialization.md): two items that
@@ -315,7 +315,7 @@ Seventh because it lowers the cost of every run and stops nothing when it is mis
     ([plan sketch](../design/tillr-live-drain-config-plan.md)): named policies an operator
     switches while the drain runs.
 
-48. [The `claude` run adapter](../design/tillr-claude-backend.md) and
+48. [The `claude` run adapter](../reference/tillr-claude-backend.md) and
     [the landing call](../design/tillr-landing-call.md): the adapter's call-suspending ending
     is the landing call's next build step.
 
@@ -356,9 +356,8 @@ Last because it changes how tillr is delivered and nothing about what it does.
     [the definitions build plan](../design/tillr-definitions-plan.md): four small pieces of work
     and the plan's next tranche are unfiled.
 
-58. Graduate two built designs into references:
-    [the utilities](../design/board-utilities.md) and
-    [the observatory server](../design/tillr-observatory.md).
+58. Graduate a built design into a reference:
+    [the utilities](../design/board-utilities.md).
 
 59. [Who made the decisions recorded in the designs](./decision-provenance-review.md): the owner
     keeps, overturns or reopens the decisions a designer made. It is last in build order because

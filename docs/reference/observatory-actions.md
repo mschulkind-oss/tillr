@@ -48,7 +48,7 @@ commands. The HTTP server keeps its own store handle read-only and runs
 **Reads with:** [the tillr observatory reference](./observatory-redesign.md)
 (the pages and the read-only server contract),
 [tillr item states](./tillr-item-states.md) (the projected states),
-[the queue persistence ruling](../design/queue-persistence-ruling.md) and
+[queue persistence](./tillr-queue-persistence.md) and
 [queue persistence](./tillr-queue-persistence.md) (document-backed item blocks
 and private store state), [the idea pipeline](../design/tillr-idea-pipeline.md)
 (lineage and downstream shaping), and

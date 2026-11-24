@@ -29,7 +29,8 @@ What it pins, and why each case is here rather than in a live run:
     model resolves before the run, Pi gets the brief through `BOARD_DRAIN_BRIEF` and its
     own `--thinking`, Agy gets it on stdin with `YOLO_NO_LAUNCH_FLAGS=1` and no effort
     flag, and each keeps stderr out of the stream;
-  * the claude adapter (docs/design/tillr-claude-backend.md §2) gets the brief on stdin,
+  * the claude adapter (docs/reference/tillr-claude-backend.md, "The adapter") gets the
+    brief on stdin,
     always passes `--strict-mcp-config` and `--dangerously-skip-permissions`, exports the
     lane markers, and passes everything after a `--` to the harness unchanged — while the
     adapters that take no harness arguments refuse that `--` before anything runs.
@@ -473,7 +474,7 @@ def test_policy():
         check(entry.get("model"), f"{name}: no model id, and an adapter carries none of its own")
         # No backend carries a wall. A total-run bound is a budget, not a fault detector:
         # the retired 1800s default killed runs that had already committed (design D-RW1,
-        # docs/design/run-wall-ruling.md). `--timeout N` on the argv is the only wall left.
+        # docs/reference/run-wall-ruling.md). `--timeout N` on the argv is the only wall left.
         check(
             "timeout_seconds" not in entry,
             f"{name}: the policy still carries a timeout_seconds wall",
@@ -714,8 +715,8 @@ def test_preflight(workspace):
                 None,
             )
         else:
-            # A row's harness_args reach the adapter after a `--` (tillr-claude-backend.md
-            # §3). An adapter that takes none refuses it as it refuses any argument it does
+            # A row's harness_args reach the adapter after a `--` (tillr-claude-backend.md,
+            # "Controlling what a seat may use"). An adapter that takes none refuses it as it refuses any argument it does
             # not know, before the harness is started, rather than dropping it silently.
             cases["a harness-argument tail"] = (
                 required + ["--model", "fixture-model-x", "--", "--tools", "Read"],

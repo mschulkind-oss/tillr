@@ -66,7 +66,7 @@ Four adapters ship: `pi`, `claude`, `agy`, and `muse`. A fifth backend name, `co
 <adapter> --backend <name> --model <model> [--effort <effort>] [--account <account>] [--timeout <seconds>] [-- <harness_args...>]
 ```
 
-`--timeout` is written only for a positive `timeout_seconds`; omitted or `0` means the run has no wall ([run wall ruling](../design/run-wall-ruling.md)). A backend with a `models` rotation draws one id per run, keyed by the run id.
+`--timeout` is written only for a positive `timeout_seconds`; omitted or `0` means the run has no wall ([run wall ruling](./run-wall-ruling.md)). A backend with a `models` rotation draws one id per run, keyed by the run id.
 
 `checkRequest` in `exec.go` refuses a request before anything is created: a missing `run_id`, `backend`, or `command`; an absolute `working_dir`; a negative `timeout_ms`; or any `env_refs` (the config loader that would resolve them is not built). `Request.Route` reads the `--model` element back out of the argv, so the record's route is what the adapter was handed; a `command` run has no route.
 

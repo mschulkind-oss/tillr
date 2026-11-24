@@ -1,9 +1,9 @@
 # The Claude Code backend — `claude`
 
 The adapter that runs the Claude Code command line headless (`claude -p`). It is the only
-way a drain can spend a Claude subscription, which pi cannot reach. Design:
-[`docs/design/tillr-claude-backend.md`](../../../../docs/design/tillr-claude-backend.md),
-sections 1 to 4; the adapter contract every backend shares is
+way a drain can spend a Claude subscription, which pi cannot reach. Reference:
+[`docs/reference/tillr-claude-backend.md`](../../../../docs/reference/tillr-claude-backend.md);
+the adapter contract every backend shares is
 [`docs/reference/tillr-muse-backend.md`](../../../../docs/reference/tillr-muse-backend.md).
 
 | File | What it is |
@@ -29,7 +29,7 @@ explains errors, recorded readings, and the waiting view.
 
 The command uses `CLAUDE_CODE_OAUTH_TOKEN` or Claude Code's existing credentials,
 never a model prompt or credential refresh as a fallback. The
-[reading method and measured cost](../../../../docs/design/tillr-claude-backend.md#direct-readings-and-the-owners-reserve)
+[reading method and measured cost](../../../../docs/reference/tillr-claude-backend.md#direct-readings-and-the-owners-reserve)
 record the endpoint and live verification.
 
 ## What the adapter does

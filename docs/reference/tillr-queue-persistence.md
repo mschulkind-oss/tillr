@@ -25,7 +25,6 @@ covers:
 depends-on:
   - ./observatory-actions.md
   - ./tillr-item-states.md
-  - ../design/queue-persistence-ruling.md
   - ../design/board-utilities.md
 tags: [tillr, reference, queue-persistence, sync, reconcile, vantage, store, inventory]
 summary: "How tillr projects tracked Markdown item blocks and roadmap links into .tillr/state.db without a committed JSON queue file, places first-time imports in interleaved roadmap order, parks Icebox and Exploration documents, reads open questions through one Vantage index reader, reports unfiled staged designs via tillr item reconcile, and inventories the epoch execution record via tillr store inventory."
@@ -52,7 +51,7 @@ Two read-only companion faces expose what lies outside the synced item set: `til
 | Read-only staged-document reconciliation (`tillr item reconcile`) | [`tools/tillr-item/reconcile.go`](../../tools/tillr-item/reconcile.go), [`tools/tillr-item/item/reconcile.go`](../../tools/tillr-item/item/reconcile.go) |
 | Read-only epoch storage and Git ref report (`tillr store inventory`) | [`tools/tillr-store/inventory.go`](../../tools/tillr-store/inventory.go) |
 
-**Reads with:** [`tools/tillr-item/README.md`](../../tools/tillr-item/README.md) and [`tools/tillr-store/README.md`](../../tools/tillr-store/README.md) (module-level contracts and CLI faces), [the queue persistence ruling](../design/queue-persistence-ruling.md) (`D-RS1`–`D-RS5` on the open-work block grammar, trailer ban, and private store boundary), [observatory actions](./observatory-actions.md) (`place`, `idea` intake, `from` chaining, and the `[order] record` rebuild file), [tillr item states](./tillr-item-states.md) (the seven projected states and frozen criteria), [item graphs](./tillr-item-graphs.md) (workflow references and store-declared requests), [the queue mirrors the designs](../design/tillr-queue-mirrors-designs.md) (the unbuilt companion-plan replacement for hidden item comments, [`OQ-QM1`](../design/tillr-queue-mirrors-designs.md#OQ-QM1)), and [the decision-provenance review](../tillr/decision-provenance-review.md) (owner rulings [`OQ-PR1`](../tillr/decision-provenance-review.md#OQ-PR1), [`OQ-PR13`](../tillr/decision-provenance-review.md#OQ-PR13), [`OQ-PR14`](../tillr/decision-provenance-review.md#OQ-PR14) and open reviews [`OQ-PR9`](../tillr/decision-provenance-review.md#OQ-PR9)–[`OQ-PR11`](../tillr/decision-provenance-review.md#OQ-PR11)).
+**Reads with:** [`tools/tillr-item/README.md`](../../tools/tillr-item/README.md) and [`tools/tillr-store/README.md`](../../tools/tillr-store/README.md) (module-level contracts and CLI faces), [observatory actions](./observatory-actions.md) (`place`, `idea` intake, `from` chaining, and the `[order] record` rebuild file), [tillr item states](./tillr-item-states.md) (the seven projected states and frozen criteria), [item graphs](./tillr-item-graphs.md) (workflow references and store-declared requests), [the queue mirrors the designs](../design/tillr-queue-mirrors-designs.md) (the unbuilt companion-plan replacement for hidden item comments, [`OQ-QM1`](../design/tillr-queue-mirrors-designs.md#OQ-QM1)), and [the decision-provenance review](../tillr/decision-provenance-review.md) (owner rulings [`OQ-PR1`](../tillr/decision-provenance-review.md#OQ-PR1), [`OQ-PR13`](../tillr/decision-provenance-review.md#OQ-PR13), [`OQ-PR14`](../tillr/decision-provenance-review.md#OQ-PR14) and open reviews [`OQ-PR9`](../tillr/decision-provenance-review.md#OQ-PR9)–[`OQ-PR11`](../tillr/decision-provenance-review.md#OQ-PR11)).
 
 ---
 
@@ -67,6 +66,21 @@ Two read-only companion faces expose what lies outside the synced item set: `til
 | **Store-declared requests and uncommitted idea words** | Scheduling projection | `.tillr/state.db` (`request_words`, `idea_intake`) + `<store-dir>/intake/<id>.txt` | **Idea words commit on design landing** | `tillr-item request` rows carry `storeDeclared = true` and omit document blocks (`docshare.StoreDeclared`). `tillr-item idea` writes `<store-dir>/intake/<id>.txt` and marks `GET /api/v1/items/{id}` `not yet in the tree` until committed (`tools/tillr-view/idea_words.go`); `D-QP4`'s header badge, overdue timer, and deletion lock are not built. |
 | **Sync observations (`sync_residue`, `design_without_item`)** | Scheduling projection | `.tillr/state.db` | **No** | Replaced atomically by `tillr item sync` so read faces (`tillr-view status`, `GET /api/v1/waiting`) never rescan `docs/`. |
 | **Runs, attempts, verdicts, spend, shell wrapper logs, lane trees, and `refs/tillr/*`** | Epoch execution record | `.tillr/state.db`, `.tillr/loop/<run_id>/`, `.tillr/lanes/`, `refs/tillr/*` | **No** | Retained across restarts ([`OQ-QP3`](#why-its-this-way), `D-QP7`); `tillr store inventory` measures every category without deleting anything, while `tillr store retire-epoch` and size caps remain unbuilt. Per-run Git Trace2 (`git-trace2.jsonl`, [`OQ-QP4`](#why-its-this-way)) is not recorded. |
+
+---
+
+### What stays private (`D-RS5`)
+
+Two developers sharing a repository share documents, tests and code, never a live queue. These
+facts stay solely in `.tillr/` and are lost when a workspace disappears or moves machines:
+
+| Private surface | Why leaving it out of git is right |
+| :--- | :--- |
+| **Personal order (stored `items.rank` keys)** | The order is private unless the repository sets `order.record`. With that opt-in, a plain text [order record](./observatory-actions.md#the-order-record) carries the hand order across a rebuild; sync uses it only to place newly imported items, never to move items already held. Roadmaps still separate active work from `## Icebox` and `## Exploration`. |
+| **In-flight execution (`lanes`, leases, `runs`, retries, `usage_cost_usd`)** | Workbench state of one machine's processes; meaningless on a second developer's machine. |
+| **Local `decisions` holds and frozen `not-done` flags** | They record why one developer paused a broken item locally. An architectural finding belongs in a design document's prose or ledger. |
+| **`landed` rows and item-to-commit joins** | Once code and updated documents are on the trunk, the item handle has done its job; git history documents the change in repository terms. |
+| **Unpromoted ideas and slices of an `in-review` draft** | Unfinished personal thoughts. They show as `unshared_open`, and residue lost inside that window is accepted. |
 
 ---
 
@@ -89,6 +103,32 @@ Two read-only companion faces expose what lies outside the synced item set: `til
 - **Required:** `id` (`^item-[a-z0-9-]+$`) and `paths` (comma-separated repo-relative path prefixes without `..`, wildcards, or leading `/`).
 - **Optional:** `blocked_by` (comma-separated item IDs, never self-referential), `seat` (`ValidSeatName`), `prose` (guide mark such as `"2"`), `workflow` (`<name>@v<N>` or `"single-worker@v1"`), `claims` (`c<N>:<claim-class>` pairs; omitted criteria default to `verification-only`, and untyped `owner decision recorded` text is refused), `judge` (`"agent"`, omitted for mechanical retirement), `from` (origin item ID for initial placement), and `express` (`"true"` or `"false"`). State, rank, and tombstone attributes (`state`, `rank`, `closed`, `resolved-by`) are forbidden (`D-RS1`).
 - **Derived references:** `design_doc` is set to the declaring file's repo-relative path, and `body_ref` is `<file>#<heading-slug>` (or `<file>` when titled from a top-level bullet with no heading).
+
+### Which work gets a shared block (`D-RS2`)
+
+`body_ref` is provenance, not an automatic home. A stored item gets a committed item block if and
+only if all four clauses hold:
+
+1. **Agent-executable:** `c1` is a repository change a lane can verify, not an owner decision
+   recorded in a document.
+2. **Accepted specification:** `design_doc` (or `body_ref` when `design_doc` is empty) carries
+   `status: accepted`, or the item is a standalone code or gate defect with no unsettled design.
+3. **Trunk-stageable fence:** every prefix in `allowed_paths` resolves on the trunk.
+4. **Unfrozen, non-conflicting criteria:** no criterion is frozen `not-done` on a specification
+   conflict against a settled ruling.
+
+A qualifying block lives inside its accepted plan or design document when one exists, and
+otherwise inline on [the tillr roadmap](../tillr/roadmap.md). The rest get no block:
+
+- **Owner rulings and host actions** live in Vantage question directives. A duplicate item block
+  breaks `D-UT4` of [`board-utilities.md`](../design/board-utilities.md#14-decision-ledger) and
+  lets a lane mechanically stamp `c1` done.
+- **Slices cut from an `in-review` draft** are private staging; the design's prose already holds
+  the architecture.
+- **Conflicted or container items** would turn local queue debris into a shared mandate.
+
+A finished or dropped block is deleted from its document. An architectural rejection becomes a
+ledger row, never a dead item block.
 
 ### Read scope, per-file savepoints, and criterion freeze
 
@@ -157,6 +197,29 @@ Two read-only companion faces expose what lies outside the synced item set: `til
 ### `design-without-item` warnings
 
 `designWithoutItemWarnings` (`tools/tillr-item/item/design_without_item.go`) checks every non-parked roadmap link targeting `docs/design/*.md` (excluding `*-plan.md` files and scope-exclusion headings starting with `"What this file does not cover"`). When the linked design exists in the synced set, its frontmatter `stage` is neither `BUILT` nor `DONE`, it declares zero item blocks (and no companion `<stem>-plan.md` declares a block), and no non-`landed` row in `items` names the design in `design_doc` or `body_ref`, `Sync` emits a `design-without-item` warning (keeping exit `0`) and upserts the observation in `design_without_item` (preserving `first_seen` until cleared). `GET /api/v1/waiting` and `tillr-view waiting` (`tools/tillr-view/waiting_design.go`) project each `design_without_item` row under `class: "needs you"`, `where: "queue"`, `why: "design-without-item: <roadmap>:<line>"`, `mover: "owner: file the document's item block"`.
+
+---
+
+## Landing receipts without commit trailers
+
+No commit names a tillr item, and nothing scans commit trailers (`D-RS3`).
+
+- **No trailer.** `Trunk.Squash` in `tools/tillr-land/land` takes no item id and writes the head's
+  message unchanged, and the worker brief (`tools/tillr-run/backends/brief-template.md`) forbids
+  an item id or trailer in the commit message.
+- **The private receipt** is `items.state = 'landed'` and `landings.trunk_after` in one
+  developer's `.tillr/state.db`. A cold store on a fresh machine reconstructs zero `landed` rows.
+- **The shared receipt** is the absence of the open item block, or `stage: BUILT` or `CURRENT` on
+  the document. The drain strips a candidate's block before the gate
+  ([block retirement](#read-scope-per-file-savepoints-and-criterion-freeze)), so the landing
+  itself removes it.
+- **A fresh machine loses** `landed` rows, item-to-commit attribution, retry counts, gate and
+  judge envelopes, and spend. The repository's history and the gate suites carry every fact a team
+  needs about landed code.
+- **A block left behind** by a landing whose retirement did not reach the trunk is synced as open
+  once on a fresh machine, runs against a tree where its criteria already pass, and is retired in
+  a documentation-only commit. One idempotent check is cheaper than private queue ids in every
+  commit.
 
 ---
 
@@ -251,7 +314,7 @@ For routing metadata (`on-spine`, `parked`, `unrouted`), `reconcile` joins `sect
 
 ## Why it's this way
 
-Each row is an owner ruling or a designer's decision ([`OQ-QP1`](#why-its-this-way)–[`OQ-QP4`](#why-its-this-way), `D-QP1`–`D-QP13`).
+Each row is an owner ruling or a designer's decision ([`OQ-QP1`](#why-its-this-way)–[`OQ-QP4`](#why-its-this-way), `D-RS1`–`D-RS5`, `D-QP1`–`D-QP13`). The owner may overturn any designer's decision.
 
 | ID | Decision | Status and why |
 | :--- | :--- | :--- |
@@ -259,6 +322,11 @@ Each row is an owner ruling or a designer's decision ([`OQ-QP1`](#why-its-this-w
 | OQ-QP2 | Author slice definitions in tracked Markdown via `<!-- tillr: item id="…" paths="…" -->` comments under `### <Title>` with `- **c<N>:**` bullets *(designer's decision, 2026-11-15, amended by `D-RS1`; **overturned by owner 2026-11-18 in [`OQ-QM1`](../design/tillr-queue-mirrors-designs.md#OQ-QM1) and 2026-11-20 in [`OQ-PR14`](../tillr/decision-provenance-review.md#OQ-PR14)**)* | Currently built in `sync.go` and `retire.go`. Overturned for future work in [`tillr-queue-mirrors-designs.md`](../design/tillr-queue-mirrors-designs.md) (unbuilt), which replaces hidden in-document comments with mirrored roadmap designs and companion `<topic>-plan.md` files so human-read designs hold no build metadata. |
 | OQ-QP3 | Impose no automatic age or byte eviction on `.tillr/` run artifacts; ship a read-only `tillr store inventory` first and leave retention bounds dormant until the owner reviews the inventory *(owner ruling, 2026-11-14)* | Built (`tools/tillr-store/inventory.go`); automatic eviction and `retire-epoch` remain unbuilt so run logs and failure evidence are never silently discarded behind the owner's back. |
 | OQ-QP4 | Do not record per-run Git Trace2 (`git-trace2.jsonl`) *(designer's 2026-11-15 keep-on decision **overturned by owner on 2026-11-17**)* | Built (`run-pi` and `run-claude` unset `GIT_TRACE2*`; shell wrapper `proc-exec.jsonl` stays). One run recorded 918,054 git commands (~500 MB) for zero diagnostic value. |
+| D-RS1 | The item block is the `<!-- tillr: item … -->` comment of [`OQ-QP2`](#why-its-this-way) under a heading plus `- **c<N>:**` bullets, with the attribute `blocked_by`, multi-line attribute whitespace allowed, fenced code blocks ignored, and no state, rank or tombstone attribute. **Rejected:** an `after=` edge alias, and `closed=` / `resolved-by=` tombstones that leak tillr state into prose. *(designer's decision; amended by the owner's [`OQ-QM1`](../design/tillr-queue-mirrors-designs.md#OQ-QM1))* | Built ([block grammar](#block-grammar-and-attributes)). |
+| D-RS2 | A stored item gets a committed block only when it passes the four-clause rule. **Rejected:** a block for every stored item through `body_ref`. *(designer's decision)* | A convention for authors; nothing enforces it ([which work gets a shared block](#which-work-gets-a-shared-block-d-rs2)). |
+| D-RS3 | No commit names an item: the lander stamps no trailer, `landed` is private state, and the shared landing receipt is the deleted block. **Rejected:** trailers for a cold rebuild. The owner's [`OQ-PR1`](../tillr/decision-provenance-review.md#OQ-PR1) rules the same for commit messages. *(designer's decision)* | Built ([landing receipts](#landing-receipts-without-commit-trailers)). |
+| D-RS4 | `tillr item sync` reads item blocks and reports the `unshared_open` and `stale_doc_blocks` residue counters. **Rejected:** hand-edited blocks with no sync reader. *(designer's decision)* | Built ([sync residue](#read-scope-per-file-savepoints-and-criterion-freeze)). |
+| D-RS5 | The order is private unless the repository sets `order.record`; active runs, leases, spend, local `decisions`, `landed` rows and unpromoted draft slices stay private to `.tillr/`. **Rejected:** committed `.tillr/` snapshots, and one repository-wide rank order. *(designer's decision)* | In force ([what stays private](#what-stays-private-d-rs5)). |
 | D-QP1 | Keep no committed JSON queue file and no `tillr item seed` *(designer's decision, 2026-11-14; settled in [`OQ-TC1`](../design/tillr-convergence.md#decision-ledger); under review in [`OQ-PR10`](../tillr/decision-provenance-review.md#OQ-PR10))* | Built (`tillr-item seed` exits `2`). A committed queue file causes multi-lane JSON merge conflicts and dual-source drift; work without a design enters via `tillr-item request` or `idea`. |
 | D-QP2 | Keep `drain.Plan` a fast read over `.tillr/state.db` and project tracked `docs/**/*.md` into `.tillr/state.db` via `tillr item sync` at startup, after trunk advances, and on demand, sharing one `vantage-check index` reader across drain, view, and `item show` *(designer's decision, 2026-11-14; trailer scan dropped by `D-RS3` / [`OQ-PR1`](../tillr/decision-provenance-review.md#OQ-PR1); block source governed by [`OQ-QM1`](../design/tillr-queue-mirrors-designs.md#OQ-QM1))* | Built (`sync.go`, `sync_residue.go`, `tools/tillr/vantage/vantage.go`, `tools/tillr-view/status.go`). Keeps planner passes pure and fast while making committed documents the shared queue definition. |
 | D-QP3 | Declare child build items in tracked Markdown synced after landing rather than applying untracked `.tillr/loop/<run_id>/derived-items.json` manifests *(designer's decision, 2026-11-14, superseding `D-IP6` in [`tillr-idea-pipeline.md`](../design/tillr-idea-pipeline.md#61-settled-decisions); moving to `<topic>-plan.md` under [`OQ-QM1`](../design/tillr-queue-mirrors-designs.md#OQ-QM1))* | Built (`sync_from.go`, [`observatory-actions.md`](./observatory-actions.md#idea-intake-and-the-design-turn)). Ensures child items enter the queue only when their parent commit lands on `main`. |

@@ -200,7 +200,8 @@ func TestThePiAdapterAcceptsASeatAliasAndItsExtractorReadsTheReport(t *testing.T
 // The claude adapter takes the same seat alias form (`claude-designer` is the design seat's
 // backend on the work machine), passes the policy row's harness arguments through after its
 // own fixed flags, and its extractor reads the report and the usage the stream's `result`
-// line carries (docs/design/tillr-claude-backend.md §2–§3).
+// line carries (docs/reference/tillr-claude-backend.md, "The adapter" and
+// "Controlling what a seat may use").
 func TestTheClaudeAdapterAcceptsASeatAliasAndPassesItsHarnessArgs(t *testing.T) {
 	adapter, err := filepath.Abs(filepath.Join("backends", "claude", "run-claude"))
 	if err != nil {

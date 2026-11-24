@@ -26,7 +26,7 @@ write boundary before and after a run and compares the pair; `resume` continues 
 died without a verdict from its own harness session; `loop` is the unattended supervisor.
 
 The design that splits this surface into `--help`, this README and the composition
-skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribution.md).
+skill is [`docs/reference/tillr-distribution.md`](../../docs/reference/tillr-distribution.md).
 
 ## Moving a running loop onto new code
 
@@ -838,7 +838,7 @@ continuation's claim transaction.
 The [Claude quota command](../tillr-run/backends/claude/quota) uses one authenticated
 HTTP GET, not a Claude model session. Its authentication, live measurement, and
 zero-model-token cost are recorded in the
-[Claude backend design](../../docs/design/tillr-claude-backend.md#direct-readings-and-the-owners-reserve).
+[Claude backend reference](../../docs/reference/tillr-claude-backend.md#direct-readings-and-the-owners-reserve).
 `tillr view waiting` shows each probed backend, both fractions, reserve, and when
 it reopens, including open backends and explicit failed/stale readings.
 
@@ -2892,7 +2892,7 @@ landed. A manual push recovering a repair can file a conflict at a newer remote
 tip without closing the landed repair. Tip mode pushes the new tip; green mode
 keeps green behind the first resolution and records
 `remote-sync-proving` until proof reaches the replayed tip. The
-[refused-push design](../../docs/design/tillr-refused-push.md) explains the replay
+[refused-push reference](../../docs/reference/tillr-refused-push.md) explains the replay
 and its recovery guarantees.
 
 ### Set-aside and recovery pointers

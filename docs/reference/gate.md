@@ -11,13 +11,16 @@ covers:
   - tools/tillr-loop/tillr-loop
   - tools/go-test-shards.py
   - tools/tillr-drain/drain/heavy_steps.go
+  - tools/tillr-drain/drain/fixer_gate.go
+  - tools/tillr-drain/remotesync/fork_drift.go
+  - tools/tillr-land/land/fork_rebase.go
   - tools/tillr-drain/drain/gate_stall.go
   - tools/tillr-drain/drain/lane_base.go
   - tools/tillr-drain/drain/runner_timing.go
   - tools/tillr-drain/redcap/
   - config/tillr/gate-policy.json
 tags: [gate, checks, landing, proof, reference]
-summary: "How the gate works: one JSON declaration per check, a fast tier that judges a candidate before it lands and a heavy tier that proves the trunk after the merge, passes remembered by a fingerprint of declared inputs, one classifier for every check result, and budgets that are targets with a watchdog that ends only a stalled check."
+summary: "How the gate works: one JSON declaration per check, a fast tier that judges a candidate before it lands and a heavy tier that proves the trunk after the merge, the gate a trunk fixer gets and the rule for a fork check an upstream release turned red, passes remembered by a fingerprint of declared inputs, one classifier for every check result, and budgets that are targets with a watchdog that ends only a stalled check."
 ---
 
 # The gate
@@ -275,6 +278,111 @@ landings or elapsed time since the last green commit.
 `rolling` judges every heavy declaration on the checked-out revision, and `replay` and
 `fixer-gate` judge the one tree declaration `--only` names.
 
+## The trunk fixer's gate
+
+A **trunk fixer** is the generated item `fixer-main-<sha>` that the drain files when a trunk
+check is red and a revert does not settle it. It names the failing check ids. Its gate runs two
+things in order and passes only when both pass (`settleFixerGate` in `tools/tillr-drain/drain`):
+
+1. **The ordinary gate, unchanged**, over the fixer's own base and head: the change checks, the
+   fast tree checks and the landing tier its diff selects.
+2. **The named checks.** Every check the fixer's criterion names, run on the fixer's tree by the
+   selectors the proof recorded for them (`fixer-gate --only <proof selector>`), including a
+   heavy check the ordinary gate would leave to the proof. They run only after the ordinary
+   gate passes.
+
+The second part tests the fixer's claim. A fixer that lands without repairing leaves the trunk
+red and is never reverted, so the claim is tested before the merge.
+
+- **No range since the last green commit is read.** The fixer is rebased onto the tip and judged
+  on its own diff. Other landings are judged by the proof after the merge, so the fixer's cost
+  does not grow with how long the trunk has been red.
+- **A fixer that names no check** runs the ordinary gate alone and is resolved only by a whole
+  green proof.
+- **A named check that fails** is a verdict: the refusal returns to the fixer's worker. A refusal
+  that mixes named and unnamed checks is a verdict too, and nothing is acquitted.
+- **A named check that could not judge** holds the fixer as a gate fault (`gate-harness-error`)
+  naming the check. It never passes by omission, and no defect item is filed.
+- **A named check that is an upstream reader** (a fork check declared not reusable) is dropped
+  when the gate is composed, with a line saying so. A red there is the change's own failure or
+  [upstream drift](#upstream-drift).
+- **The fixer cannot choose its checks.** The list comes from the fixer's record, and the gate's
+  own code stays outside a fixer's fence.
+
+For a check the fixer does not name, red on its base and on the tip, the fixer is judged by the
+inherited-failure rule as any candidate is, with one difference: **a fixer never waits on
+itself.**
+
+| The fixer's diff and the check's read paths | The fixer the ordinary rule would hold it behind | Outcome |
+| :--- | :--- | :--- |
+| Do not intersect | Not asked | The fixer lands with the failure recorded as inherited |
+| Intersect | A different fixer, which does not wait on this one | The fixer is held behind that fixer |
+| Intersect | This fixer itself, or a fixer that already waits on this one | The check is attached to this fixer and the refusal returns to its worker; no hold is recorded |
+
+An attached check joins the fixer's list of red checks and its watched paths join the fence,
+minus the gate's own code. From the next gate it is a named check. One fixer per red commit
+stays the rule; no second fixer is filed for the same commit.
+
+> [!WARNING]
+> Do not make the fixer's gate pass by skipping fork checks by name. The repair is the scope: a
+> fixer whose diff touches a fork's series is still judged on that series, like any change.
+
+## Upstream drift
+
+**Upstream drift** *(coined here)* is a `patch-branch-inv2` check that is red on a candidate, red
+on the candidate's base with the same answer, on a candidate that does not touch that fork. It is
+a question about what an upstream repository published, not a verdict about a commit, so it
+refuses nobody whose change does not touch the fork. The rule applies to every candidate, not
+only a fixer (`ForkDriftCheck` in `tools/tillr-drain/remotesync`).
+
+| The check on the base | The candidate's diff and the fork's own paths | Outcome |
+| :--- | :--- | :--- |
+| Passes | Any | The candidate's own failure: an ordinary refusal |
+| Red, same answer | Do not intersect | Drift. The candidate lands with the failure recorded as inherited, and one rebase request is filed |
+| Red, same answer | Intersect | Drift on a fork the candidate changes. One rebase request is filed and the candidate waits on it by name, unless it is that request's own work |
+| Could not judge | Any | Neither drift nor a verdict: "could not judge", named |
+
+- **Only `patch-branch-inv2` can be drift**, selected by its kind name. It is planned once per
+  fork with a fetch and asks whether that fork's delivery branch (`refs/heads/patch/<fork>`)
+  merges the upstream it follows. `series`, `patch-branch-inv3`, `forks-check`, `build` and
+  `fork-quality` answer about the tree or a build and are never drift.
+- **"Same answer"** means both sides carry the fork driver's refusal phrase `conflicts with` and
+  name the same target ref. A red without the phrase is a check that could not judge; a different
+  ref on the two sides means the upstream moved between the runs, and the candidate is gated
+  again.
+- **The fork's own paths** are its pin file (the tracked three-line record of the delivered
+  commit, its remote and the upstream commit the fork's changes sit on) and, for a fork that
+  commits a series directory, the paths under it (`Touches`). The check's `watches` are not the
+  test, because they name the whole pack.
+- **A fork pinned to a commit is never drift.** Its check answers for a fixed commit.
+- **No trunk fixer is filed for drift**, because no trunk commit is at fault and the proof does
+  not judge these checks.
+
+A **rebase request** *(coined here)* is one generated fork item per fork and release. It is filed
+only for a fork that follows releases and is delivered as a delivery branch (`Requestable`). A
+second observation attaches to the open request, and a newer release updates it in place. It holds
+nothing but changes to that fork. It is a mixed item:
+
+1. **Fork part.** The request's worker rebases the fork in its lane checkout with
+   `git rebase --onto <release> <old base> main`, the fork's gate builds that head, and the lander
+   delivers it to the delivery branch. The lander accepts a rewritten head only for a release
+   (`releaseRebase` in `tools/tillr-land/land`) and never rebases. It then fetches the delivered
+   commit into the gate's own copy of the fork, so the next gate needs no publication step.
+2. **Repository part.** A second run, fenced to the pin file, rewrites the record to the delivered
+   commit and the release's commit. `patch-branch-inv2` judges the record, not the delivery
+   branch, so the check passes only when this part lands, and that landing closes the request.
+
+When the delivered head already contains the release, the request has no fork part. The operator
+takes no step; a conflict that needs a product decision is the worker's `owner` obstacle.
+
+A fork that follows a branch head, and a fork that still commits a series directory, get the same
+acquittal and no request: nothing in the drain could close one. The inherited record on the
+candidate and one loop line per fork and upstream commit are the whole notice, a candidate that
+touches such a fork is refused in the ordinary way, and the rebase stays the operator's step.
+
+The owner is told of drift by the queue only: the rebase request appears in the queue and on the
+waiting list like any item. Drift has no owner-facing row and no hold addressed to the owner.
+
 ## Go test execution
 
 Whole Go suites and affected packages both run through `tools/go-test-shards.py`.
@@ -328,6 +436,11 @@ with `tillr-gate` on `PATH`. To run one heavy check: `just done --only <id>`.
 - **`shadow` reads only the tier names `landing` and `rolling`**, which no declaration file
   carries, so against a declaration directory it measures every planned check as one tier.
 - **Single test cases cannot be set aside.** Only a whole check can be disabled.
+- **No drift probe.** [Upstream drift](#upstream-drift) is seen only when a change reaches a
+  fork's `patch-branch-inv2` check; nothing looks for it at loop start or after a landing that
+  changes a pack declaration (`rg -n 'drift.probe|driftProbe|DriftProbe' tools -g '*.go'` returns
+  nothing). A fork that follows a branch head or commits a series directory has no queue route
+  for its rebase.
 
 ## Current values
 
@@ -372,6 +485,12 @@ and other documents.
 | D-GR44 | A non-Go file in a package's `reads` may name the tests that read it (`read_tests`); no reading package is dropped. | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) |
 | D-GR48 | Slot classes are served `repair`, `proof`, `gate`, `ordinary`; wait state is scoped by a rules version. | [Go test execution](#go-test-execution) |
 | D-GR49 | Proofs and suite checks reuse Go's result cache, with a digest of declared non-Go inputs in the key. | [Go test execution](#go-test-execution) |
+| D-FG1 | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. No range since the last green is read. Keeping an untiered range is rejected: its cost grows with the red range. (Designer's decision.) | [The trunk fixer's gate](#the-trunk-fixers-gate) |
+| D-FG2 | A fixer stays excluded from acquittal only for the checks it names. For any other check it is judged as any candidate is, except that it is never held behind itself or behind a fixer that waits on it. A second fixer for the same commit is rejected. (Designer's decision.) | [The trunk fixer's gate](#the-trunk-fixers-gate) |
+| D-FG3 | A `patch-branch-inv2` check red on a candidate and its base with the same refusal against the same target ref, on a candidate that does not touch the fork, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. The lander never rebases and never writes the pin file; the operator takes no step. (Designer's decision.) | [Upstream drift](#upstream-drift) |
+| D-FG4 | A fork check that could not judge is neither drift nor a verdict, and no gate answer files a tooling-defect item. (Designer's decision.) | [Upstream drift](#upstream-drift) |
+| D-FG5 | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line. (Designer's decision.) | [Upstream drift](#upstream-drift) |
+| OQ-FG1 | Owner: when an upstream release breaks a patch series the owner is told by the queue only. No owner-facing row and no hold. | [Upstream drift](#upstream-drift) |
 | OQ-GR1 | There is no cap on landings while a trunk check is red. | [A red proof](#a-red-proof) |
 | OQ-GR2 | New work starts from the green pointer; see `D-GR24`. | [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer) |
 | OQ-GR3 | A change to the gate's own code runs its affected test packages before the merge. | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) |

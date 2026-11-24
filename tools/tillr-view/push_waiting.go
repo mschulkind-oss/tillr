@@ -9,7 +9,8 @@ import (
 
 // pushEvent is a drain.post-landing-action payload with action "push". Events written
 // before the structured states carry only action, detail and what; Kind is empty for them
-// and they keep the older reading (docs/design/tillr-refused-push.md, Section 7).
+// and they keep the older reading (docs/reference/tillr-refused-push.md, "Showing the state and its
+// mover while it lasts").
 type pushEvent struct {
 	What              string `json:"what"`
 	Kind              string `json:"kind"`

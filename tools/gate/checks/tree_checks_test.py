@@ -59,7 +59,7 @@ class TreeChecks(unittest.TestCase):
         self.track("guide.md", "```sh\ncat .yolo/durable/report.md\n```\n")
         self.assertEqual(tree_common.scratch_citations(self.root), [])
         location = "build into `$YOLO_DURABLE_DIR/bin` and prepend it to PATH.\n"
-        self.track("docs/design/tillr-distribution.md", location)
+        self.track("docs/reference/tillr-distribution.md", location)
         self.assertEqual(tree_common.scratch_citations(self.root), [])
         self.track("guide.md", location)
         self.assertTrue(tree_common.scratch_citations(self.root))
@@ -68,7 +68,7 @@ class TreeChecks(unittest.TestCase):
         # The tillr pack delivers dated copies of design documents (tools/pack-docs.py).
         # A copy carries its source's lines, so it is excused exactly where its source is.
         line = "build into `$YOLO_DURABLE_DIR/bin` and prepend it to PATH.\n"
-        copy = "yolo-packs/tillr/files/local/share/tillr/docs/design/tillr-distribution.md"
+        copy = "yolo-packs/tillr/files/local/share/tillr/docs/reference/tillr-distribution.md"
         self.track(copy, line)
         self.assertEqual(tree_common.scratch_citations(self.root), [])
         other = "yolo-packs/tillr/files/local/share/tillr/docs/design/other.md"

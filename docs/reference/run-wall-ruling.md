@@ -1,28 +1,34 @@
 ---
-title: "Design ruling: no default run wall, and a committed candidate is judged before wall status"
+title: "The run wall: none by default, and a committed candidate is judged before wall status"
 status: accepted
 stage: CURRENT
+verified: 2026-11-24
+covers:
+  - config/tillr/backend-policy.json
+  - tools/tillr-run/backends/
+  - tools/tillr-run/run/lease.go
+  - tools/tillr-drain/drain/loop.go
+  - tools/tillr-drain/drain/failover.go
 tags:
   - tillr
   - drain
   - run
   - timeout
   - state-machine
-  - design-ruling
+  - reference
 summary: "No backend sets a run wall by default. A lease may be unbounded (timeout_ms == 0 -> leased_until NULL), settle sends any run that produced a commit to the gate regardless of wall status, and an uncommitted walled run is resumed in settle before the lane is reset."
 ---
 
-# Design ruling: remove the run wall and judge committed candidates before wall status
+# The run wall: none by default, and a committed candidate is judged before wall status
 
-> **Built.** No adapter sets a run wall by default.
->
-> **Whose ruling.** "Ruling" here is a design agent's word: `D-RW1` to `D-RW4` are the designer's decisions of 2026-11-15, and the owner may overturn any of them.
+**Status:** Verified 2026-11-24 against the tree. `D-RW1` to `D-RW4` are the designer's
+decisions; the owner may overturn any of them.
 
-A **run wall** (this document's word) is a limit on the total wall-clock duration of one
+A **run wall** *(coined here)* is a limit on the total wall-clock duration of one
 agent run, after which the run is killed. It is not a limit on one network read, and not
 the lane lease, which only says how long a lane is reserved.
 
-**Ruling.** `tillr` has no default run wall:
+`tillr` has no default run wall:
 
 - [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) carries no
   `timeout_seconds`, and the backend adapters (`run-pi`, `run-claude`, `run-muse`,
@@ -37,9 +43,9 @@ the lane lease, which only says how long a lane is reserved.
 
 ---
 
-## 1. Should the wall exist at all?
+## No default wall
 
-**Decision (`D-RW1`):** **No.** There is no default wall anywhere. `timeout_seconds` and
+**`D-RW1`:** There is no default wall anywhere. `timeout_seconds` and
 `timeout_ms` remain as an optional per-backend or per-request bound; `0` or omitted means
 no wall, and a negative value is refused.
 
@@ -51,7 +57,7 @@ work from the start on a second backend and count against that backend.
 **Why:**
 
 - **A total-run wall is a budget, not a fault detector.** The
-  [momentum principle](./momentum-principle.md) forbids budgets that stop valid work.
+  [momentum principle](../design/momentum-principle.md) forbids budgets that stop valid work.
   Measured over one batch of runs under an 1800-second wall: the wall caught no hang, cut
   two runs that had already committed, and killed a third 18 seconds after all of its
   checks had passed.
@@ -64,16 +70,16 @@ work from the start on a second backend and count against that backend.
      in `tools/tillr-run/run/lease.go`. A `NULL`-deadline lease is skipped by that reaper,
      the loop stops with `lanes-leased` naming `tillr run release <lane>`, and
      `ReleaseLane` frees it (`D-UT17` in the
-     [utilities design's decision ledger](./board-utilities.md#14-decision-ledger)).
+     [utilities design's decision ledger](../design/board-utilities.md#14-decision-ledger)).
   4. *A stalled network stream inside a harness:* a wall on total duration cannot tell a
      stalled socket from a long stretch of thinking. An idle timeout belongs on one read
      inside the harness, never on the run.
 
 ---
 
-## 2. When the wall fires on a run that produced a commit
+## A wall on a run that produced a commit
 
-**Decision (`D-RW2`):** **A commit dominates the wall.** When an explicit wall fires on a
+**`D-RW2`:** **A commit dominates the wall.** When an explicit wall fires on a
 run whose lane `HEAD` moved off its base, and whose report does not end `RESULT: blocked`,
 `settle` treats the run as a candidate and runs `Verify`, exactly as for a run that
 finished. Once the gate records a `gate.verdict`, that verdict governs planning and retry
@@ -96,9 +102,9 @@ authorization, not the unjudged class.
 
 ---
 
-## 3. When the wall fires on a run that produced no commit
+## A wall on a run that produced no commit
 
-**Decision (`D-RW3`):** **Resume in place, in `settle`, before the lane is reset.** The
+**`D-RW3`:** **Resume in place, in `settle`, before the lane is reset.** The
 continuation runs on the same lane and `run_id`, with the same harness session, and spends
 neither a retry nor a failover hop. If the continuation commits, `D-RW2` sends it to the
 gate. A run is never resumed when its lease is reaped, because that runner vanished
@@ -120,27 +126,13 @@ edits are on disk turns them into a commit the gate can judge.
 
 ---
 
-## 4. What is the smallest diff?
-
-**Decision (`D-RW4`):** `D-RW1` to `D-RW3` are one change. Removing the wall without the
-`settle` ordering leaves a walled, committed, gate-failed run that no acknowledgment can
-retry. The change needs no schema migration and no new item state.
-
----
-
-## Decision ledger
+## Why it's this way
 
 Every row is a **designer's decision; the owner may overturn it**.
 
 | ID | Ruling | Rejects |
 | :--- | :--- | :--- |
-| `D-RW1` | No default `timeout_seconds` in `config/tillr/backend-policy.json` and no default wall in any adapter; `timeout_ms == 0` is an unbounded run with `leased_until = NULL`. A walled run stays `AttemptUnjudged`, outside the infrastructure class. | Keeping or tuning a default wall (violates the [momentum principle](./momentum-principle.md)); classifying a wall as an infrastructure failure. |
+| `D-RW1` | No default `timeout_seconds` in `config/tillr/backend-policy.json` and no default wall in any adapter; `timeout_ms == 0` is an unbounded run with `leased_until = NULL`. A walled run stays `AttemptUnjudged`, outside the infrastructure class. | Keeping or tuning a default wall (violates the [momentum principle](../design/momentum-principle.md)); classifying a wall as an infrastructure failure. |
 | `D-RW2` | `settle` checks for a commit before the unjudged class, and a `gate.verdict` supersedes the unjudged class in planning and retry authorization. | Holding committed runs as `run-unjudged`; an acknowledgment no value can satisfy. |
-| `D-RW3` | An uncommitted walled run is resumed in `settle` before the lane is reset, uncounted; never resumed when a lease is reaped. Built in part: a continuation of uncommitted fenced work is bounded only by the identical-repeat rule, while a wall-cut run with no uncommitted work keeps one continuation (`resumeAfterWall`). | Resetting the lane at once (destroys uncommitted edits); resuming with no bound at all. |
-| `D-RW4` | `D-RW1` to `D-RW3` ship as one change. | Separating wall removal from the `settle` and retry ordering; a schema migration or a new item state. |
-
----
-
-## Open questions
-
-None.
+| `D-RW3` | An uncommitted walled run is resumed in `settle` before the lane is reset, uncounted; never resumed when a lease is reaped. A continuation of uncommitted fenced work is bounded only by the identical-repeat rule, while a wall-cut run with no uncommitted work keeps one continuation (`resumeAfterWall`). | Resetting the lane at once (destroys uncommitted edits); resuming with no bound at all. |
+| `D-RW4` | `D-RW1` to `D-RW3` hold together: with no wall but without the `settle` ordering, a walled, committed, gate-failed run is one no acknowledgment can retry. | Separating wall removal from the `settle` and retry ordering; a schema migration or a new item state. |

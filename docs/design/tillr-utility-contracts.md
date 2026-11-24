@@ -187,7 +187,7 @@ Five decisions sit in that table:
 - **Any change to an example is a contract change, including an added field.** There is no judgment of "compatible" to make. An addition costs a regenerated file and a consumer run that passes.
 - **A table is private unless it is listed.** Listing is for reading plain rows. A read that derives meaning, such as which items are waiting or why a lane is held, goes through a reader the owner provides, because the derivation is the owner's and a second copy of it lets the view and the drain disagree. For each pair, the first slice lists the columns that are read today, so the pin exists at once; the pair's file says which stay listed and which move behind a reader.
 - **A Go package is an allowed kind of entry inside this repository.** The view links fourteen drain packages. [OQ-UC1](#OQ-UC1) asks the owner whether that stands. The pins are the same either way: a reader's answers are examples, and an example is a record.
-- **Flags are contract only when an entry lists them.** [The distribution design](./tillr-distribution.md) bans a flag list in a document; the contract lists the flags another utility passes and no others.
+- **Flags are contract only when an entry lists them.** [The distribution reference](../reference/tillr-distribution.md) bans a flag list in a document; the contract lists the flags another utility passes and no others.
 - **Standard error is never contract.** No consumer parses it. A consumer that needs what it says gets a record field or an exit code.
 
 ## 6. Contract examples
@@ -464,7 +464,7 @@ For the two pairs inside one utility: the report's bytes are an example written 
 | Consumer tests regenerate their inputs by running the provider's binary | Rejected | It needs built binaries in a unit suite, which is slow and makes the view's suite build every module. It also fails in the consumer, not the provider |
 | Put all thirteen in one module with one suite | Rejected | The ruling says they are separate utilities with defined APIs |
 | Records and commands only, no Go package as contract, starting now | Left to the owner | It is option B of [OQ-UC1](#OQ-UC1). It is the cleaner line and the larger build |
-| Write the contracts as prose only | Rejected | A document nothing checks goes stale, which is why [the distribution design](./tillr-distribution.md) bans it for flags |
+| Write the contracts as prose only | Rejected | A document nothing checks goes stale, which is why [the distribution reference](../reference/tillr-distribution.md) bans it for flags |
 
 ## 15. Risks
 

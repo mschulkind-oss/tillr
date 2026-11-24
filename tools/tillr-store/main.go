@@ -629,7 +629,7 @@ func newID() string {
 const faceList = "init, definition, seed, check, recover, checkpoint, inventory or events"
 
 // helpExit is what parseFlags answers for a `--help`. A face's flags are the layer-1
-// surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer
+// surface (docs/reference/tillr-distribution.md, "Documentation split"), so a help request is an answer
 // and not a usage error: run turns this into exit 0, and no face ever sees it.
 const helpExit = -1
 
