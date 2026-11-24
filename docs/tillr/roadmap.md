@@ -163,7 +163,7 @@ AutoQA leaves the [Icebox](#icebox).
 8. [Self-hosted tillr building](../design/tillr-selfhosted-build.md)
    ([`OQ-SH4`](../design/tillr-selfhosted-build.md#OQ-SH4), after the owner ruled
    [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2) on 2026-11-20 to follow every landing
-   and directed reading from Git like `pi-fork`): how `yolo` builds and delivers tillr from Git so
+   and directed reading from Git): how `yolo` builds and delivers tillr from Git so
    the pack's source copy and `just pack-sync` can be removed, and whether `/workspace` keeps its
    local `PATH` launcher. Next because the pack copy is a cost on every landing that stops nothing,
    and none of Git delivery or the source launcher is built.
@@ -240,10 +240,6 @@ reopen then supersede, and a supersession refuses a verdict in flight). One desi
 ([`OQ-CR1`](../design/criterion-repair.md#OQ-CR1)) remain marked in
 [its ledger](../design/criterion-repair.md#decision-ledger), and none of criterion supersession is
 built.
-
-What a lane's agent is told left this list:
-its two tillr questions are closed as above, and the one it keeps, a startup profile for pi, is
-routed from the pi roadmap.
 
 [The item graph is the whole path](../design/tillr-graph-is-the-path.md), written on 2026-11-17 to
 the owner's rulings of that day, proposes that every act on an item is a node in its graph and that
@@ -445,21 +441,20 @@ puts identifying the store's live writer ahead of changing concurrency, because 
 fault stops progress regardless of lane admission. It is evidence and a recommended investigation,
 not authorization to change the drain's policy.
 
-On 2026-11-15 the loop stopped whole five times for the trouble of one item,
-and each stop ended every run in flight. The causes are found and the repairs are filed as items
-on this page, in this order:
+One item's trouble must never stop the whole loop, because a stop ends every run in flight. The
+repairs are filed as items on this page, in this order:
 
 - [Other people and other agents change the repository while the drain runs](#filed-2026-11-15-other-people-and-other-agents-change-the-repository-while-the-drain-runs).
-  First because an operator's uncommitted edit is what caused the stops, and the owner's ruling of
-  2026-10-23 already says such an edit is a wait and never a failure; manual `git pull --rebase`
-  absorption landed on 2026-11-20 (`aed03075b`), while automatic remote rebase on a refused
-  autopush is placed in [entry 3](#3-roll-onto-new-code-without-ending-runs).
+  First because an operator's uncommitted edit can stop the loop, and the owner's ruling of
+  2026-10-23 says such an edit is a wait and never a failure. Manual `git pull --rebase`
+  absorption is built; automatic remote rebase on a refused autopush is placed in
+  [entry 3](#3-roll-onto-new-code-without-ending-runs).
 - [One item's trouble holds that item, and recovery is a command](#filed-2026-11-15-one-items-trouble-holds-that-item-and-recovery-is-a-command).
-  Second because every recovery that night was done by hand and two of them caused the next stop.
+  Second because a recovery done by hand can itself cause the next stop.
 - [Anyone can ask why an item is not running](#filed-2026-11-15-anyone-can-ask-why-an-item-is-not-running)
   and [the loop says why every item is where it is](#filed-2026-11-15-the-loop-says-why-every-item-is-where-it-is-and-what-it-has-spent).
-  Third because half the lanes sat idle with no stated reason, and the second of these also
-  carries the spend ceiling and turning the after-merge check back on.
+  Third because a lane must never sit idle with no stated reason, and the second of these also
+  carries the spend ceiling and the after-merge check.
 
 ### Route Vantage index reads through uvx by default
 
@@ -487,11 +482,10 @@ invocation mistake does not hide the real reasons items are held.
 
 ## 3. Roll onto new code without ending runs
 
-[Rolling tillr onto new code](../reference/tillr-restart.md) is built: all nine blocks of its build
-order had landed by 2026-11-18, among them the pause, the restart request, the roll and push
-after a landing, and this repository's settings file. It stays third as the record of why it
-came first: every restart on 2026-11-15 was a kill, so a fix to tillr itself cost the runs in
-flight, and [entry 4](#4-choose-where-each-seat-runs) reuses its stop-and-continue step.
+[Rolling tillr onto new code](../reference/tillr-restart.md) is built: the pause, the restart
+request, the roll and push after a landing, and this repository's settings file. It is third
+because a restart that kills the runs in flight makes every fix to tillr itself cost them, and
+[entry 4](#4-choose-where-each-seat-runs) reuses its stop-and-continue step.
 [Refused autopushes](../design/tillr-refused-push.md), decided on 2026-11-20
 ([`OQ-RP1`](../design/tillr-refused-push.md#OQ-RP1) to
 [`OQ-RP4`](../design/tillr-refused-push.md#OQ-RP4)) and unbuilt, sits here after
@@ -526,27 +520,27 @@ upfront plan step and failed-verify restart after they cost the most rework on 2
 
 ## 5. The ten-second gate
 
-[The gate rework](../design/gate-rework.md) is decided and, as of 2026-11-18, built except one
-decision: every slice of its build order has landed, and so have the red cap, the lane base and
-runner-pays-first. The upstream drift probe of its `D-GR12` is not built. Fifth because the
-owner's target is a gate measured in seconds and landings that outpace ten lanes.
+[The gate rework](../design/gate-rework.md) is decided and built except one decision: every slice
+of its build order is built, and so are the red cap, the lane base and runner-pays-first. The
+upstream drift probe of its `D-GR12` is not built. Fifth because the owner's target is a gate
+measured in seconds and landings that outpace ten lanes.
 
-Automatic revert landed on 2026-11-18 and is on here. First of the gate's remaining work is
+Automatic revert is built and on. First of the gate's remaining work is
 [shortening the time from a red landing to its revert](#shorten-the-time-from-a-red-landing-to-its-revert),
 because every lane waits on that revert.
 
 ## 6. The observatory answers the owner's questions
 
-[The observatory redesign](../reference/observatory-redesign.md) graduated to a system reference: all ten slices had landed
-by 2026-11-18, including the lane strip, lane page, dependency graph and usage figures, and so
-had [the observatory's first two writes](../reference/observatory-actions.md). Sixth, and not
+[The observatory redesign](../reference/observatory-redesign.md) is a system reference: all ten slices are built,
+including the lane strip, lane page, dependency graph and usage figures, and so
+are [the observatory's first two writes](../reference/observatory-actions.md). Sixth, and not
 higher, because [entry 2](#2-keep-the-loop-running) fixes what the screens would only report.
 Also filed here: [a stopped loop says what stopped it](#filed-2026-11-15-the-observatory-speaks-to-its-reader-not-to-its-builders).
 
 ## 7. The drain's own model
 
-[Replace the drain tick with a converge function](../reference/tillr-drain-successor.md) graduated to a system reference:
-all five of its steps had landed by 2026-11-18, the last retiring the tick's names. The reference is
+[Replace the drain tick with a converge function](../reference/tillr-drain-successor.md) is a system reference:
+all five of its steps are built. The reference is
 titled "Drain Pass and Successor Reference"; the owner's name for the step is converge.
 
 ## 8. Design work that keeps its context
@@ -565,9 +559,8 @@ needed to keep it running.
 
 ## 9. Move the queue's items off this page
 
-The sections below hold about forty item blocks that were filed here during 2026-11-15 because
-the work had no other home that night. That makes this page four times its budget and mixes
-priority with work detail. Each block belongs in the design it builds. Ninth, and deliberately
+The sections below hold the queue's item blocks. That makes this page many times its budget and
+mixes priority with work detail. Each block belongs in the design it builds. Ninth, and deliberately
 not done yet: moving a block changes what the queue reads, and it should be done one design at
 a time as each is cut into build items.
 
@@ -576,13 +569,11 @@ a time as each is cut into build items.
 Each predates the round above. They are behind it because a ruling that is already open does not
 get cheaper by being opened again.
 
-- [Observatory truthfulness and primitives](../reference/observatory-design.md) is built and graduated
-  to a system reference; its earlier four-region layout was superseded screen by screen as
-  [entry 6](#6-the-observatory-answers-the-owners-questions) landed.
-- [The evidence tool](../../tools/pipeline-evidence/) still carries a reader for the deleted
-  merge queue. Replacing it with a reader of the tillr store's landings is owed
-  (the retirement design), and so is deleting
-  `.workboard.toml`, which nothing reads any more.
+- [Observatory truthfulness and primitives](../reference/observatory-design.md) is built and is a
+  system reference; the screens are those of
+  [entry 6](#6-the-observatory-answers-the-owners-questions).
+- [The evidence tool](../../tools/pipeline-evidence/) has no reader of the tillr store's landings.
+  Adding one, in place of the readers of stores this repository does not have, is owed.
 - [Scheduled tasks](../design/scheduled-tasks.md#12-open-questions) is fully settled and unbuilt:
   tillr has no due date or interval on an item yet. It is the substrate of the goal monitor,
   which is in the [Icebox](#icebox).
@@ -640,7 +631,6 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
 
 ## What this page does not cover
 
-- **Pi**: its patches, forks, extensions and usage capture are in the pi roadmap.
 - **The rest of the repository** is in the [repository roadmap](../roadmap.md).
 - **Which item runs next** is the queue's answer, from `tillr-view waiting`, not this page's.
 
@@ -682,11 +672,10 @@ recovery while the proof continues. Each lands as its own commit and names the i
 **Agent Details**
 
 - **Ref:** [gate rework Section 6.8](../design/gate-rework.md#68-a-red-heavy-check), the "Time to a revert" paragraph; the owner's ruling in [`OQ-GP1`](../design/tillr-graph-is-the-path.md#OQ-GP1).
-- **Where:** the parity case `test_drain_name_parity` in `tests/go-test-shards.test.py`, the
-  Go suite cases in `tests/fork-check.test.py`, and the "Time to a revert" paragraph of the gate
-  design. This item changes nothing under `tools/`, though the directive's paths still list
+- **Where:** the parity case `test_drain_name_parity` in `tests/go-test-shards.test.py` and the
+  "Time to a revert" paragraph of the gate design. This item changes nothing under `tools/`, though the directive's paths still list
   those modules from before the split.
-- **Verify:** `python3 tests/go-test-shards.test.py` and `python3 tests/fork-check.test.py`, each
+- **Verify:** `python3 tests/go-test-shards.test.py`
   with `TMPDIR` set to the run's scratch, and `uvx vantage-check docs/design/gate-rework.md`.
 
 **Why the work is split, settled by the design seat on 2026-11-18.** Three builds stopped on this
@@ -699,8 +688,7 @@ verdicts that arrive together, and the CPU priority. The design seat then built 
 a lane on 2026-11-18 at `332a18704`, to settle those points by measurement. With the changes of
 the third and fourth items, `python3 tools/go-test-shards.py tools/tillr-drain -k 6` passed 2,086
 tests. With the second item's change, the same command for `tools/tillr-run` passed 220. With this
-item's change, `python3 tests/go-test-shards.test.py` ran 15 tests in 10.4 seconds and
-`python3 tests/fork-check.test.py` exited 0. The changes were then discarded, because the design
+item's change, `python3 tests/go-test-shards.test.py` ran 15 tests in 10.4 seconds. The changes were then discarded, because the design
 seat's commit is this document. Each block below carries what that build found.
 
 **The earlier builds' saved work is not applied by any of the four items.** The change at
@@ -720,11 +708,10 @@ file was outside the item's paths. The run was right to stop. The paths now name
 `tests/go-test-shards.test.py`, and nothing else about the item is reopened. These were read on
 `2acf66dc4` on 2026-11-18:
 
-- **A proof runs the drain suite three times today, not two.** `GO_SHARD_DIRS` in
-  `tools/fork-check.py` already names `tools/tillr-drain`, so the legacy check
+- **A proof runs the drain suite three times today, not two.** The legacy check
   `go-tool/tools-tillr-drain` runs the suite sharded. That run is the one c4 keeps. The other two
   are both in `test_drain_name_parity`, which runs `go test -json ./... -count=1` and then the
-  sharded runner over the same module. `tools/fork-check.py` therefore needs no change for c4.
+  sharded runner over the same module. The legacy check therefore needs no change for c4.
 - **The parity case can compare names without running a test.** With `shards.run_shard` replaced
   by a function that records each shard's package and names and returns no events,
   `shards.run` over `tools/tillr-drain` planned 1,171 names with no name twice. They equalled the
@@ -749,14 +736,13 @@ Three points settle the change:
    the case replaces `run_shard` from the test. The rest of the file stays as it is, and it has no
    copy under `yolo-packs/`.
 
-For c6, the regression test for c4 is in two parts. The parity case fails if it launches a command
+For c6, the regression test for c4 is the parity case. It fails if it launches a command
 that runs a test, which is any argument beginning `-test.run`, or a `go test` with neither `-list`
-nor `-c`. A case in `tests/fork-check.test.py` asserts that a heavy plan holds exactly one command
-naming `tools/tillr-drain` as a suite to run. The gate design's "Time to a revert" paragraph still
+nor `-c`. The gate design's "Time to a revert" paragraph still
 says the legacy check runs the suite whole; correct it under c6.
 
 **Build order, each step a stop only if it fails.** Do the steps in order in one run. The end of
-a step is not an ending, and the commit is made once, at step 4.
+a step is not an ending, and the commit is made once, at step 3.
 
 1. **The parity case.** In `tests/go-test-shards.test.py`, add `import re` beside the other
    imports, change the first line to say that parity lists the real drain suite and runs none of
@@ -798,35 +784,16 @@ a step is not an ending, and the commit is made once, at step 4.
         self.assertEqual(set(planned), native)
 ```
 
-2. **The plan case.** In `tests/fork-check.test.py`, find the loop over
-   `(module.TIER_LANDING, module.TIER_ROLLING)` that ends with
-   `assert selected == expected, (directory, tier, selected)`. Directly after that assertion, add
-   the lines below, at the same indentation as the assertion.
-
-```python
-                # A proof runs the drain's suite once: one rolling command names it, the
-                # sharded one. The parity case in tests/go-test-shards.test.py starts no run of it.
-                if directory == "tools/tillr-drain" and tier == module.TIER_ROLLING:
-                    drain_runs = [check.argv[-1] for check in plan.checks
-                                  if "tools/tillr-drain" in check.argv[-1]
-                                  and ("go-test-shards.py" in check.argv[-1]
-                                       or "go test" in check.argv[-1])]
-                    assert len(drain_runs) == 1 and "go-test-shards.py" in drain_runs[0], drain_runs
-```
-
-3. **The gate design.** In the "Time to a revert" paragraph of `docs/design/gate-rework.md`,
+2. **The gate design.** In the "Time to a revert" paragraph of `docs/design/gate-rework.md`,
    replace the statement that the legacy check runs the same suite whole with what is true: the
    legacy check `go-tool` for `tools/tillr-drain` runs the suite sharded, the parity case ran it
    twice more until this change, and it now lists and plans the suite and runs none of it. In
    point 2 of that paragraph, say the duplicate runs are gone. Change the paragraph's last line,
    which says the changes are filed as one roadmap item, to say they are four items that start at
    the same link. Leave points 1 and 3 and the words "proposed, not built" for the later items.
-   If `docs/pi/tillr-go-shards-2026-11-17.md` describes the parity case as running the suite,
-   correct that sentence too.
-4. **Finish.** Run the two commands under **Verify** with `TMPDIR` set to the run's scratch, then
+3. **Finish.** Run the command under **Verify** with `TMPDIR` set to the run's scratch, then
    `uvx vantage-check docs/design/gate-rework.md` and `python3 tests/tillr-docs.test.py`. Make one
-   commit holding all of it. `tests/fork-check.test.py` takes about three minutes and prints many
-   lines; its exit status is the result. No file under `tools/` changes, so `just pack-sync` has
+   commit holding all of it. No file under `tools/` changes, so `just pack-sync` has
    nothing to do.
 
 **What does stop this build:** a failing test that needs a file outside the item's paths, or a
@@ -967,11 +934,11 @@ test below passed in its four cases.
   checks that are not affected, in name order. When no legacy watch matches, the legacy program
   runs last, as it does today.
 - **The order inside the legacy program does not change.** The program runs its checks side by
-  side and starts the longest first, and `tools/fork-check.py` is not edited.
-- **The watches are read only when they can change the order.** `legacyCheckWatches` runs
-  `python3 tools/fork-check.py --registry-json`, which took 1.5 seconds on 2026-11-18. It is called
+  side and starts the longest first, and the program is not edited.
+- **The watches are read only when they can change the order.** `legacyCheckWatches` asks
+  the legacy program for its registry, which took 1.5 seconds on 2026-11-18. It is called
   only when there are changed paths and at least one declaration check is not affected. A tree
-  with no `tools/fork-check.py` answers no watches, and the legacy program then runs last.
+  with no legacy program answers no watches, and the legacy program then runs last.
 - **The returned list keeps the order the checks ran in.** With nothing affected, that is the
   declaration checks and then the legacy checks, as today.
 
@@ -1085,7 +1052,7 @@ func heavyReadsChanged(reads, paths []string) bool {
    `heavy_steps_test.go` does. The tree holds two heavy tree declarations with `"remember":false`:
    `a-unaffected` reads `unrelated/`, and `z-affected` reads `late-input`. Each one's command
    appends its own id to an order file outside the tree. The tree also holds a
-   `tools/fork-check.py` of one line, which prints
+   one-line legacy registry program, which prints
    `{"declarations":[{"id":"legacy","watches":[{"path":"legacy-input"}]}]}`. The rolling program
    is a script from the `executable` helper that appends `legacy` to the order file and writes a
    span file with one check `legacy` of status `PASS`. The test commits that tree, points the green
@@ -1171,10 +1138,10 @@ something to find before starting: the criteria are met by this build's own run 
 - **A landing whose revert was refused can be offered again for a later check.** A refusal
   changed nothing on the trunk.
 - **Legacy verdicts need no observer.** The last build reported that legacy verdicts arrive
-  together. They do, at the program's first failed check: `run_checks` in `tools/fork-check.py`
+  together. They do, at the program's first failed check: the legacy program
   stops the pass on a red check, ends the checks in flight and names the rest not-run. So the
   judge reports the legacy checks when the program ends, which is before any declaration check
-  that runs after it. `heavy_legacy_progress.py` and `tools/fork-check.py` are not edited.
+  that runs after it. `heavy_legacy_progress.py` and the legacy program are not edited.
 - **Only a check that failed outright is recovered early.** A stalled check is retried at the end
   of the run, as today, and a second stall names the tip there.
 - **Fixers are filed when the run ends, as today.** Recovery searches and offers the revert. A
@@ -1478,7 +1445,7 @@ func (e *heavyEarly) recover(check HeavyCheck) error {
      rulings.
    - `TestHeavyLegacyFailureRecoversWhileALaterDeclarationRuns`, in
      `heavy_early_legacy_test.go`, has one declaration `slow`, which reads `unrelated/` and waits
-     for the marker as above. Its `tools/fork-check.py` is one line that prints a registry with
+     for the marker as above. Its legacy registry program is one line that prints a registry with
      one declaration, `legacy`, of kind `fixture` and label `legacy`, watching `value`. The
      rolling program writes one span for `legacy` with that kind and label and the status `FAIL`,
      and exits 1. The replay program exits 0 when `value` holds `good`. The base holds `good` and
@@ -1559,146 +1526,6 @@ and [the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md#41-a
 
 Built: this landed in commit `ed5cb51a2e`.
 
-## Filed 2026-11-15: a check reads what the tree pins, never what a machine happens to hold
-
-On 2026-11-15 the repo gate failed on a fresh machine because local delivery branches were
-missing. The check after merging also could not judge because shared fork checkouts were absent.
-Both checks depended on what that machine happened to hold rather than on the content recorded
-in the repository.
-
-### Isolate fork checks from local machine state
-
-**Theme:** Repo Gate
-
-Forks are upstream tools that we deliver with our own changes. A fork check should produce the
-same answer on a fresh machine as on one that has been building those tools for months. To make
-that possible, the repository must record the exact commit to check, and exporting a patch series
-must update that record along with the delivered changes. Checks can reuse a local cache of
-commits, but they must fetch the recorded commit when it is missing instead of choosing whatever
-version is already available. If the fetch cannot succeed, the gate must explain which input is
-missing rather than report that the change failed verification.
-
-**Outcomes:**
-
-- Record the exact fork commit with each delivery and use it on every machine.
-- Reuse cached commits and fetch only when the required commit is missing.
-- Report a missing input separately from a failed check, with enough detail to retrieve it.
-
-**Agent Details:**
-
-- **Ref:** [The gate rework](../design/gate-rework.md) defines the gate's response to missing
-  inputs. The 2026-11-15 `structural` failure involved seven absent local `patch/*` branches;
-  the after-merge check lacked shared fork checkouts.
-- **Where:** [Gate checks](../../tools/gate/), [fork checker](../../tools/fork-check.py),
-  fork export command, and [delivery packs](../../yolo-packs/).
-  Criteria c2 and c3 were restored on 2026-11-17 after commit `bf87a76d8b` replaced them with
-  landing and boundary-check requirements. Those requirements belong to
-  [routing a landing around the owner's uncommitted edits](#route-a-landing-around-the-owners-uncommitted-edits),
-  which carries its own c2 and c3. Do not change the lander or drain for this item.
-- **Publishing (2026-11-18, answers the fourth run's report of blocked):** The recorded commit is
-  what a check reads. It does not constrain publication, so do not change
-  the publisher or [the push hook](../../hooks/pre-push);
-  both stay outside this item's paths. In c1, "must be at" states what a check judges: exporting
-  moves the local branch and the record in one change, so the two agree after every export. A
-  branch moved any other way is not this item's concern. What the remote holds is still proved
-  by the existing `bin/pi-forks patch-branch published` command, which this item leaves as it is.
-  A publisher that refused a branch differing from the record would refuse every push made
-  between a lane's export and that lane's landing, because the branch moves at export and the
-  record reaches the trunk only when the lane lands.
-- **Initial pins (designer's decision, 2026-11-20; the owner may overturn it):** Keep the
-  delivery commits selected in the thirteenth run. That run could fetch the older advertised
-  todo-list commit but got `upload-pack: not our ref` for the repaired one. The older commit
-  does not build; fetching it proves connectivity, not that the required input is available.
-  Use these exact inputs and the pack locator:
-
-  ```text
-  git@github.com:mschulkind-oss/tillr
-  patch/pi                   24c7e4f89e08740a99271379314b8eba67321a31
-  patch/pi-manage-todo-list  6e1b6bdd1a2a480dcb98d213b9dd9953a87bfe41
-  patch/pi-subagents         6daa160be67be20ca344c0414b3f79a9585b6df6
-  ```
-
-  The lane must not push, substitute an older tip, or change the locator.
-- **Publication history (2026-11-20):**
-  On 2026-11-20 the nineteenth run repeated the fifteenth and seventeenth runs' check:
-  `git fetch --no-tags <locator> <object-id>` in a separate empty bare repository for each
-  of the three rows above. All three fetches returned `upload-pack: not our ref` (Git exit
-  128). On the same date the twenty-first and twenty-third runs each found that `patch/pi`
-  and `patch/pi-subagents` fetched successfully (Git exit 0), but `patch/pi-manage-todo-list`
-  returned `upload-pack: not our ref` (Git exit 128) for its pinned object above. The
-  twenty-third run stopped before the build or gate: the missing input means `could not judge`
-  (gate exit 4), not a failed build. This is a host publication task, not a request to choose
-  another pin. The twenty-fifth, twenty-seventh and twenty-ninth runs received no host fetch
-  results. The twenty-ninth run cited the earlier Git exit 128, not a fresh fetch. The
-  thirty-first, thirty-third and thirty-fifth runs asked for host verification.
-
-  **Build without publication proof (designer's answer to the forty-seventh run, 2026-11-21;
-  the owner may overturn it):** The forty-seventh run had no host results and stopped before
-  implementation. This replaces the earlier build hold: implement c1–c4 with the pins above
-  and test export, cache hits, fetches and refusals against local fixtures. No host results
-  are needed to dispatch that work. Fixture success proves the check's behavior, not that the
-  live remote serves the pins. Their availability is unknown. If a real check needs a pin and
-  its fetch fails, it must name the commit and remote and return `could not judge` (exit 4);
-  do not turn a fixture result into a passing verdict for that delivery.
-
-  **Host publication proof:** Only the host operator verifies publication, separately from
-  implementation. No lane should publish or repeat the host checks below.
-
-  In the host repository checkout, run `git merge-base --is-ancestor <object-id> refs/heads/<branch>`
-  for each row above (`<branch>` includes `patch/`). If any check exits nonzero, stop and report
-  the branch and ancestry check's exit status; do not rewind it or repin the delivery. If all
-  three pass, fetch each exact ID from the locator into its own new empty bare repository.
-  If a pin is unavailable, follow the host publication step
-  and repeat the fetches in new empty repositories. The publisher sends branch tips, not
-  individual pins. Report the locator and one row per pin:
-  `branch | object ID | ancestry exit | empty-repository fetch exit`. Record the actual Git
-  statuses; write `not run` for a skipped fetch, never `0`. Claim publication only when all
-  three rows show `0` for both checks. Neither a successful push, an advertised tip nor a
-  local cache substitutes for those results.
-- **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
-  tests run the scenario files under their cases directory, so those
-  files, their shared library,
-  the fork list and
-  the static series test are now inside this item's paths.
-  A case that asserts the old contract is rewritten to assert c2, not kept and not deleted. The
-  one known today is the last block of
-  the candidate-check case, which expects
-  `candidate --check` to turn stale when the cache's local `patch/chkconv` branch moves. Under
-  c2 the candidate's identity for a fork delivered from a patch branch is the recorded commit, so
-  that block becomes three assertions: moving the record makes the candidate stale and the
-  message names both commits; moving the local branch while the record stays changes nothing;
-  deleting the local branch changes nothing. Change any other case the same way when it fails
-  for the same reason, and leave every case about publishing as it is.
-- **Gate runner tests (2026-11-18, answers the eighth run's report of blocked):** Two tests in
-  [the gate runner's needs test](../../tools/tillr-gate/needs_test.go) assert the old contract, so
-  that file and [the runner's README](../../tools/tillr-gate/README.md) are now inside this item's
-  paths. Change no other file under `tools/tillr-gate/`: the runner's handling of a `ref:` need
-  stays as it is, and the other tests in that file, which use `patch/*` names only as fixtures for
-  that handling, stay unchanged. Rewrite the two tests to assert c2 and c4; do not delete them.
-  - `TestPatchRefProgramJudgesPiBranchContents` builds a fixture repository that records a commit
-    and a fixture remote that holds it. The check judges the build script at the recorded commit.
-    Moving the local `patch/pi` branch changes no answer, and neither does deleting it. A record
-    whose commit the fixture remote lacks exits with the `could not judge` status and names the
-    commit and the remote.
-  - `TestFreshCloneStructuralWithoutPatchBranches` keeps its clone without patch branches and its
-    run of the structural suite. In place of eight `unavailable` outcomes it asserts that none of
-    the eight fork declarations names a `ref:refs/heads/patch/` need and that each one reads its
-    fork's record. It must not contact the network, so it does not run the eight checks against
-    the real remotes.
-  - In the README, the section on optional local refs keeps its description of `ref:` needs. Its
-    last paragraph, which says the eight declarations judge local branches, is rewritten to say
-    they judge the recorded commit.
-  - `tools/tillr-gate/` is also delivered as a copy under `yolo-packs/tillr/`. Run
-    `just pack-sync` after editing and commit the regenerated copy in the same commit; do not
-    edit the copy by hand.
-- **Verify:** Use [fork-check tests](../../tests/fork-check.test.py) and
-  fork export tests to check that exporting updates the recorded
-  commit, deleting all local `patch/*` branches changes no result, and empty, current, and
-  stale-only caches produce the same answer. Check that a cache hit triggers no refresh and
-  that a fetch refusal names the missing commit and remote and returns `could not judge`.
-
-
-
 ## Filed 2026-11-15: the documents are part of the world the loop converges on
 
 [The drain's successor reference](../reference/tillr-drain-successor.md#the-successor-function-and-derived-positions)
@@ -1743,12 +1570,11 @@ same change and holds no tracing supervisor: it is the change to commit, with on
 these in order:
 
 1. Apply the kept work's `tools/`, `tests/` and `docs/` paths. Do not redesign or rewrite it.
-   `rg -n -i 'ptrace' tools/tillr-gate tools/fork-check.py` must return no line.
+   `rg -n -i 'ptrace' tools/tillr-gate` must return no line.
 2. Change the one assertion in `tools/gate/checks/change_checks_test.py` as the last ruling says,
    and run `python3 tools/gate/checks/change_checks_test.py` to its end.
-3. Run `python3 tools/go-test-shards.py tools/tillr-gate -k 6`, then
-   `python3 tests/fork-check.test.py`. Give each command a limit of 3600 seconds, on its own, not
-   chained with another. A command that was cut off is no result: run it again, and do not report
+3. Run `python3 tools/go-test-shards.py tools/tillr-gate -k 6` with a limit of 3600 seconds, on its
+   own, not chained with another command. A command that was cut off is no result: run it again, and do not report
    blocked for it.
 4. Run `just pack-sync` last, to its end, then check `git status --short` and commit once.
 
@@ -1779,7 +1605,6 @@ report that detection is unavailable rather than implying that the check is bein
   `tools/tillr-gate/cpu_linux_test.go`, `tools/tillr-gate/watchdog_test.go`,
   the verdict record in `tools/tillr-gate/run.go` and `tools/tillr-gate/gate.go` with their
   tests,
-  [`tools/fork-check.py`](../../tools/fork-check.py), `tests/fork-check.test.py`,
   [gate README](../../tools/tillr-gate/README.md), and the gate design's stall section.
 - **Evidence:** On 2026-11-17, the drain's gate logs in a rootless Podman jail with
   `/proc/sys/kernel/perf_event_paranoid` set to 2 recorded
@@ -1807,8 +1632,8 @@ directory, so both files and their tests are inside the fence, and the delivered
    and the gate's path in `gate.go`.
 2. **One fixed name per source.** The field holds a short constant naming the source that
    supplied the last CPU sample: one name for the kernel counter, one for the fallback. The
-   check log prints the same name, and `tools/fork-check.py` uses the same names in its log line
-   and in the stall record that already carries `cpu_time_ms`. When neither source can be read
+   check log prints the same name, and so does
+   the stall record that already carries `cpu_time_ms`. When neither source can be read
    the field is absent and `watchdog_unavailable` carries the reason, as it does today.
 3. **No reader outside the gate changes.** The drain reads the verdict in
    `tools/tillr-drain/drain/gate_stall.go` and does not refuse a field it does not know, so the
@@ -1817,7 +1642,7 @@ directory, so both files and their tests are inside the fence, and the delivered
 The criteria below are unchanged.
 
 **Ruling, 2026-11-17 (answers the sixth run's report of blocked):** the sixth run restored the
-fifth run's change and stopped when `python3 tests/fork-check.test.py` passed a 300-second limit.
+fifth run's change and stopped when the Python suite passed a 300-second limit.
 That change kept stall detection on by putting every check under a supervisor that
 [traces](https://man7.org/linux/man-pages/man2/ptrace.2.html) it: the supervisor stops each
 thread as it exits and saves its CPU time. The run could not tell a slow suite from a hung one.
@@ -1829,10 +1654,8 @@ same jail, on base `123aeab1b`, with the preserved change from
   with a load average near 80 on 32 processors, and then failed. So a 300-second cut-off says
   nothing about the change.
 - **The suite is red on the base, before this item's tests.** It stops at the assertion
-  `a timing declaration no longer matches a hit`, naming
-  `tools/bedrock-spend/internal/cli/cli_test.go: if time.Since(started) > time.Second {`. Commit
-  `e99cdf1a9` removed that line from the test and left its entry in
-  `tools/gate-timing-declarations.json`. The Python regression tests this item adds sit after
+  `a timing declaration no longer matches a hit`: an entry in
+  `tools/gate-timing-declarations.json` names a test line that is no longer in the tree. The Python regression tests this item adds sit after
   that assertion, so no run has yet reached them.
 - **The tracing supervisor hangs a check.** With the stale entry removed in the working tree
   only, the suite reached its last step, `go test -C tools/tillr-gate ./... -run` over the new
@@ -1849,7 +1672,7 @@ same jail, on base `123aeab1b`, with the preserved change from
 Four points settle the fallback:
 
 1. **The fallback only reads; it never traces.** Drop the tracing supervisor: the file
-   `tools/tillr-gate/process_accounting.py`, its copy inside `tools/fork-check.py`, the socket
+   `tools/tillr-gate/process_accounting.py`, the socket
    that nested watchers shared, and the code that starts a check under them. Nothing the fallback
    does may be able to delay, stop or signal the check.
 2. **What a sample reads.** The members are the live processes in the check's process group,
@@ -1900,11 +1723,10 @@ new decision.
    change it says to keep.
 2. **How to prove the Python suite with the stale declaration outside the paths.** The second
    ruling's last paragraph already says it; these are its steps. Read on `2d70932eb` on
-   2026-11-18: `rg -n -F 'if time.Since(started) > time.Second {'` over
-   `tools/gate-timing-declarations.json` and `tools/bedrock-spend/internal/cli/cli_test.go`
-   returns one line, in the declarations file, and none in the test, so the suite is still red
+   2026-11-18: `rg -n -F 'if time.Since(started) > time.Second {' tools/gate-timing-declarations.json`
+   returns one line, and the test it names holds no such line, so the suite is still red
    there before it reaches this item's tests.
-   - Run `python3 tests/fork-check.test.py` once on the unchanged declarations file, with no
+   - Run the Python suite once on the unchanged declarations file, with no
      limit shorter than the run, and keep the assertion it stops at.
    - Remove the stale entry in the working tree only and run the suite again. This run is the
      proof of c6 and c7, and its output goes in the report.
@@ -1950,9 +1772,9 @@ The order of work, which the next run follows:
    never restored and never edited by hand.
 2. **Build the fallback before anything else.** The restored change is the starting material, not
    the candidate. Do what the second ruling's four points say: delete
-   `tools/tillr-gate/process_accounting.py`, its copy inside `tools/fork-check.py`, the shared
+   `tools/tillr-gate/process_accounting.py`, the shared
    socket and the code that starts a check under them, and write the fallback that only reads.
-   The work is not ready to sync while `rg -n -i 'ptrace' tools/tillr-gate tools/fork-check.py`
+   The work is not ready to sync while `rg -n -i 'ptrace' tools/tillr-gate`
    returns a line.
 3. **Test.** Run `python3 tools/go-test-shards.py tools/tillr-gate -k 6`, then the Python suite by
    the steps in the ruling above.
@@ -1984,7 +1806,7 @@ in the rulings above changes; what changes is where a run finds them. These were
   refs/tillr/preserved/run-item-gate-stall-watch-without-perf-counter-a13` still lists the
   supervisor, and that ref's 19 files are the sixth run's.
 - **Both stops were the caller's limit.** `just pack-sync; python3 tests/tillr-docs.test.py` ran
-  under one 20-second limit, and the Go tests, `python3 tests/fork-check.test.py`, the sharded
+  under one 20-second limit, and the Go tests, the Python suite, the sharded
   suite and the sync test ran chained under one 180-second limit. The second ruling measured the
   Python suite alone at 4 minutes 2 seconds on a busy machine, so 180 seconds could not finish it.
   `python3 tests/tillr-docs.test.py` is no part of this item's proof and is left to the gate.
@@ -2006,7 +1828,7 @@ and then removed:
 
 - **The kept work is the read-only change.** Its ten files apply cleanly, none of them is
   `tools/tillr-gate/process_accounting.py`, and
-  `rg -n -i 'ptrace' tools/tillr-gate tools/fork-check.py` returns no line. It is the change that
+  `rg -n -i 'ptrace' tools/tillr-gate` returns no line. It is the change that
   landed as `36e74e541`.
 - **Why it was reverted.** `e30659c1e` reverted it because the check `change-checks-test` failed
   on the trunk. `test_markdown_change_runs_all_declared_checks_against_caller_base` in
@@ -2017,7 +1839,7 @@ and then removed:
 - **The amended test passes.** With the assertion changed as below,
   `python3 tools/gate/checks/change_checks_test.py` ran 39 tests in 46 seconds and passed.
 - **The stale timing declaration is gone.** The `rg` command in the third ruling returns no line
-  on this base, so `python3 tests/fork-check.test.py` runs on the unchanged tree and the third
+  on this base, so the Python suite runs on the unchanged tree and the third
   ruling's steps for removing and restoring the declaration no longer apply.
 
 Three points settle the test:
@@ -3054,80 +2876,11 @@ it was argued. Three designs are built and have none, so they sit in the plannin
 ### Write the references for the item states, usage capture and the upstream-pin check
 
 
-**Ruling, 2026-11-16 (answers the third run's conflict):** the third run stopped because c3 named
-`tools/fork-check.py` as the home of the upstream-pin rule, and that file's step 22 now reads
-"RETIRED here: commit citations are a change declaration under tools/gate/checks/". The
-upstream-pin rule is the one that lets a document cite a commit outside this repository's history
-when the commit belongs to an upstream project. It is implemented in
-`tools/gate/checks/change_common.py` (`UPSTREAM_REF` and `unreachable_citations`) and run by
-`tools/gate/checks/citations.py`; c3 now names those files. The fix record still names the older
-location, so the reference says the rule moved and the record is left as written apart from its
-pointer. Reading those files needs no wider paths: the item writes only under `docs/`.
-
-## Filed 2026-11-16: two outside skills join the default agent skills
-
-### Add BMAD elicitation and Superpowers brainstorming skills
-
-The owner asked on 2026-11-16 for two skills from outside projects to be available to every
-agent that starts from the default packs, without a separate installation in each project. One
-helps an agent draw out what a person means before it builds, and the other runs a structured
-brainstorm. Both come from public repositories, and copying their files into this repository
-would leave two hand-kept copies to drift. So each is named by its Git address and the packs
-fetch it. The house brainstorming skill already exists and must keep working as it does today.
-Adding the outside one beside it must never replace it or leave two skills a person cannot tell
-apart.
-
-This item was filed into the queue on 2026-11-16 without a block in this document, so the loop
-dispatched it and its worker stopped after 34 seconds, reporting that the section its body names
-does not exist. The block below is that section, restored with the same id, paths and criteria
-the queue already holds.
-
-
-**Ruling, 2026-11-17 (answers the first run's conflict):** the first run stopped because this
-document held no section under the heading above and no text about either skill. That was true
-of the commit it was staged from, `094c6c322d`, which predates the commit that restored this
-block, `8814931dc`. The section now exists at the anchor the run's brief names, with the same
-id, paths and criteria the queue holds, so the brief and the tree agree and nothing in the
-criteria changes. The next run builds from this block as written. It needs no wider paths: the
-packs, the three configuration directories, `tests/` and `docs/` are all inside the item's paths
-already.
-
-**Ruling, 2026-11-17 (answers the third run's conflict):** the third run stopped because c2
-named a BMAD directory that the public repository no longer has. That was checked again on
-2026-11-17: `git ls-remote https://github.com/bmad-code-org/BMAD-METHOD.git HEAD` returned
-`e435a22574fe55722841086e5566420178b98df3`, and a clone at that commit has no `src/` directory.
-The same skill, still named `bmad-advanced-elicitation` in its own `SKILL.md`, now lives at
-`skills/core-tools/bmad-advanced-elicitation`. The owner asked for the skill, not for a
-directory, so c2 below now names the directory the skill is in today and the run builds against
-that. Do not reach back to an older commit to recover the old directory: that would freeze the
-skill at a version its authors have moved on from. The Superpowers directory, `skills/brainstorming`
-at `22f0b463e7a5e579904dd6211a520321035526f7`, is where c2 says it is and does not change. If
-either project moves its skill again, that is the unavailable source c5 already covers: the
-launch must fail visibly, and the repair is a one-line change to the directory named in the pack.
-
-**Owner ruling, 2026-11-20:** “Add two such entries to the packs list in config/yolo-jail/config.toml (fence widened to it): BMAD's bmad-advanced-elicitation and Superpowers' brainstorming, the second under a namespace so it does not collide with the house brainstorming skill. Pin each ref to a commit.”
-
-The fifth run tested yolo 0.17.1, which rejected top-level `only`. Use the 0.18.0 form in
-`yolo config-ref` under “Direct user TOML scoped imports” instead. Edit the shared file,
-not a host installation. In each Git entry set `git` to the corresponding c2 URL and `ref`
-to a full commit SHA. Use `subdir = "skills"` for both. For BMAD, set
-`skills = { dir = "core-tools", only = ["bmad-advanced-elicitation"] }` and `bare = true`;
-for Superpowers, set `skills = { dir = ".", only = ["brainstorming"] }` and
-`namespace = "superpowers"`. The selectors name skills, not paths. Import each selected
-directory with its resources, not the upstream pack's hooks or other skills.
-
-**Designer ruling, 2026-11-20 (owner may overturn):** The two imports deliver skill discovery, not a working installation of either framework. The eighth run's scratch-home `yolo pack explain` showed both selections and `yolo check --no-build` reported 37 passes and no failures. The two limitations it found are upstream prerequisites, not yolo refusals:
-
-- At the BMAD pin above, elicitation calls the project's `_bmad/scripts/resolve_customization.py` and `_bmad/scripts/resolve_config.py`. In an empty project the first call failed with “No such file or directory (os error 2)”. Document that running elicitation requires BMAD's project setup; do not run setup or install the `bmad` skill as part of this import.
-- At the Superpowers pin above, brainstorming ends by invoking `superpowers:writing-plans`. Document that this handoff is unavailable unless writing-plans is separately provided. Do not register it, substitute a house skill, or change the upstream instructions. A dependency readable in the Git checkout is not a registered skill.
-
-
-**Agent details:**
-
-- **Ref:** Owner request, 2026-11-16: add these two skills to the default pack-loaded set, using Git URLs.
-- **Sources:** [BMAD Advanced Elicitation](https://github.com/bmad-code-org/BMAD-METHOD/tree/main/skills/core-tools/bmad-advanced-elicitation), [Superpowers Brainstorming](https://github.com/obra/superpowers/tree/main/skills/brainstorming).
-- **Where:** The shared `config/yolo-jail/config.toml` applies on every host at its next launch. Leave the house skill, machine-specific configuration and deployed home directories unchanged.
-- **Verify:** Before committing the configuration, run `yolo pack explain` for each pinned import and `yolo check` against the candidate user layer in a scratch home. Confirm the selected names and resources; files merely staged or a selection not yet verified are not proof of discovery. Report which commands ran, their output, and the binary and render tested. These checks supplement c5, not replace it. If either import cannot deliver its skill, report the exact refusal for the yolo request document rather than importing the whole repository.
+**Where the upstream-pin rule lives.** The upstream-pin rule is the one that lets a document cite
+a commit outside this repository's history when the commit belongs to an upstream project. It is
+implemented in `tools/gate/checks/change_common.py` (`UPSTREAM_REF` and `unreachable_citations`)
+and run by `tools/gate/checks/citations.py`; c3 names those files. Reading those files needs no
+wider paths: the item writes only under `docs/`.
 
 ## Filed 2026-11-16: defects the first observed drain pass turned up
 
@@ -3389,7 +3142,7 @@ the loop's line should say how much actually ran.
 **Agent details:**
 
 - **Ref:** the rolling tier and its watermark in `tools/tillr-drain/README.md`; `{since}` in `DefaultRollingProgram`, which becomes `--all` when there is no watermark.
-- **Where:** `maybeRolling` in `tools/tillr-drain/drain/trunk.go` and `Rolling` in `tools/tillr-drain/drain/steps.go`; the `--all` planning in `tools/fork-check.py`.
+- **Where:** `maybeRolling` in `tools/tillr-drain/drain/trunk.go` and `Rolling` in `tools/tillr-drain/drain/steps.go`; the gate's `--all` planning.
 - **Evidence:** 2026-11-17 02:06:27 to 02:06:39 UTC, `tillr drain loop` printed `rolling run green over ..01142982834a; watermark advances to 01142982834a`. The rolling span file it wrote, `.tillr/lanes/.rolling/gate.spans.json`, showed the plan `tier rolling, changed 0`, 6 checks executed (4 cached) and 54 skipped with "no ... changed" reasons, wall time 4.4 s.
 
 ### Prevent a conflict's routing change from reading as a duplicate
@@ -3463,12 +3216,9 @@ The owner expects to edit, pull and commit in the main checkout while the loop r
 warning, and expects a landing to cope. On 2026-11-17 the owner said: "we're supposed to be able
 to ad hoc land stuff. and if the drain needs to land, didn't we decide autostash equiv was ok?
 like you pulled some remote change when work was going on, which I will also do without warning
-sometimes." They did decide it. The old board design ruled on 2026-10-31 that the landing
-stashes the owner's uncommitted work, moves the trunk and re-applies the work, as `git pull
---autostash` does (decision D33, built as task P10 in
-`docs/design/board-state-machine-plan.md`).
-The move to tillr dropped it with the old board tool (`docs/design/tillr-seed-triage.md`, row 592),
-and nothing replaced it.
+sometimes." It was decided: the ruling of 2026-10-31 is that the landing stashes the owner's
+uncommitted work, moves the trunk and re-applies the work, as `git pull --autostash` does.
+Nothing in tillr does that.
 
 **Build this item with the steps below. Read this section first; it is the ruling of
 2026-11-18, amended the same day to answer the latest build's conflict.** Everything in this block after this
@@ -3576,7 +3326,7 @@ no test result to report.
      Give each command a timeout of at least an hour, although the three suites took under
      fifteen minutes together here. Pass no `--shard-timeout` and no `--timeout`, and do not run
      a narrower `go test` in place of a suite.
-  5. **Commit.** `git add -A tools docs/tillr/land-across-owner-edits yolo-packs/tillr`, then
+  5. **Commit.** `git add -A tools yolo-packs/tillr`, then
      one commit. It holds 53 files: the 29 of steps 1 and 2 and the 24
      mirror copies. `docs/tillr/roadmap.md` is not part of it. Append `c1` to `c8` to the
      progress file before the commit.
@@ -3591,7 +3341,7 @@ no test result to report.
   that alone is not a stop.
 - **If the command is run a second time in one lane,** the first `git apply` fails because the
   build is already there. Run `git reset -q --hard HEAD` and
-  `git clean -fdq -- tools docs/tillr/land-across-owner-edits yolo-packs/tillr` in the lane
+  `git clean -fdq -- tools yolo-packs/tillr` in the lane
   worktree, then the whole command again.
 - **If a test fails in step 4,** run it alone once, with the trace variables unset and
   `-timeout 300s`. A test that passes alone is recorded in the report and does not stop the
@@ -3680,8 +3430,7 @@ four cases the criteria did not name. The rulings:
 - **The landing lock does not hold the owner's editor.** The owner can save at any moment, so a
   prediction can go stale, and the lander checks again before it writes.
 - **`refs/stash` is ordinary Git and stops nothing.** The drain README's boundary table and
-  `TestOrdinaryGitUseDuringARunNeverConvictsIt` are the truth; the sentence in
-  `docs/design/tillr-day2.md` that says otherwise is out of date. The recovery copy still stays
+  `TestOrdinaryGitUseDuringARunNeverConvictsIt` are the truth. The recovery copy still stays
   out of `refs/stash`, because that list belongs to the owner.
 
 A third build stopped the same day on a case where c6 and c7 disagreed. When a landing turns a
@@ -3883,7 +3632,7 @@ the three were already ruled above and the third was not a failure.
 
 **Agent details:**
 
-- **Ref:** `docs/design/board-state-machine-plan.md` P10 (D33, "the comparison-and-swap autostashes"; fences: never drop the stash on a failed apply, never stash during the gate); `docs/design/landing-principles.md`; the boundary table in `tools/tillr-drain/README.md`.
+- **Ref:** the fences of the 2026-10-31 ruling (never drop the stash on a failed apply, never stash during the gate); `docs/design/landing-principles.md`; the boundary table in `tools/tillr-drain/README.md`.
 - **Where:** `Trunk.Move` and `Trunk.UncommittedPaths` in `tools/tillr-land/land/trunk.go`; `finishLanding` in `tools/tillr-land/land/landing.go`, which calls `Trunk.Move` inside the write transaction; the ignored ref prefixes in `tools/tillr-drain/drain/boundary.go`; the dirty refusal in `tools/tillr-land/`; `tools/tillr-drain/drain/dirty_hold.go`; `trunk-path-dirty` in `tools/tillr-drain/holdrules/holdrules.go` and in `tools/tillr-view/waiting.go`; the drain README section "Owner edits and waiting landings"; `yolo-packs/tillr/skills/tillr-operating/`.
 - **Plan for the builder (2026-11-18, second version; superseded the same day by the build order at the head of this block, and kept as the description of what the patch at the end of this block holds; a builder does not carry it out):** every step below was made by the design seat in a scratch copy on `d4eecbea3` and the result is in the evidence line for this amendment, so a step that fails for the builder is a mistake in carrying it out, not an open design question. Do the steps in order and run the named tests after each. Run every `go test` with `-timeout 120s` or longer, never shorter; a landing test in this module takes about one second and the slowest takes nine. Run a whole module only as `python3 tools/go-test-shards.py tools/<module> -k 6` with no `--shard-timeout` and no `--timeout`, in the background if the harness limits a command's time: the three modules take several minutes together. `python3 tests/tillr-docs.test.py` takes 60 seconds, so give it at least 300.
   1. **Start from the last build.** In the lane worktree run `git diff bf86efa42 refs/tillr/preserved/run-item-land-across-owner-edits-a23 -- tools docs yolo-packs/tillr/skills | git apply`. The ref is in the main repository and is readable from the lane. The patch applies without offsets that matter on `d4eecbea3`; if the base has moved and it does not apply, use `git apply --3way` and resolve. Do not take `yolo-packs/tillr/files/` from the ref. This build already holds the hold rules change, the view test with the `operator;` prefix, the lock record and the reclaim of a dead lander's lock, so none of those is written again.
@@ -4712,9 +4461,9 @@ filed when the first has landed.
 
 ## Filed 2026-11-17: two red bases that held queue items
 
-Two queue items stopped on 2026-11-17 because a check that is red on `main`, and that the item
-did not touch, failed under them. Each worker stopped as its brief says, and the drain held the
-item. The two items below fix those checks, and each held item now waits on its fix.
+A queue item stops when a check that is red on `main`, and that the item did not touch, fails
+under it: the worker stops as its brief says, and the drain holds the item. The item below fixes
+such a check, and the held item waits on the fix.
 
 ### Fix the flaky full-trace-queue test in the store
 
@@ -4738,36 +4487,6 @@ loses nothing, and the fix belongs in how the test waits for its own capture.
 - **Where:** `capturedStalledSQLiteStderr` and the test body in `tools/tillr/store/trace_queue_test.go`; `reportLoss` and `FlushSQLiteTrace` in `tools/tillr/store/trace.go`, which this item reads and does not change.
 - **Evidence:** 2026-11-17, with the load average near 26 on a 32-core machine, 24 copies of the compiled test binary each ran the test 100 times, and 14 of the 24 failed. The failure line was `trace_queue_test.go:190: the trace never reported its loss (want a line ending "dropped spans=0 records=20 sink_errors=0"): []`. On the same machine, `go test -count=50` and `go test -race -count=200` of that one test, run alone, both passed, so the failure needs load.
 - **Evidence:** `reportLoss` in `tools/tillr/store/trace.go` flushes the report to the sink before it stores the reported count, and `FlushSQLiteTrace` waits for that count, so the product's order is correct. The test's `read` returns the buffer the copier goroutine fills, with no wait for that copier.
-
-### Prevent strict validation failures in the cloud-usage mod
-
-The cloud-usage mod keeps a journal of Claude Code's model usage. Strict plugin validation treats
-warnings as errors, so it must pass before workers can use it to check their changes. On
-2026-11-17 it failed on the unchanged mod with the installed Claude Code. A worker adding channel
-and route intent reproduced the failure on a copy of its base revision and stopped, leaving that
-work on hold. Fixing the underlying warnings will let workers distinguish problems in their own
-changes from problems already present in the mod.
-
-The warnings come from TypeScript checks on the mod's hooks. Missing type declarations generated
-by Claude Code are the leading suspect, but that cause has not been established. The implementing
-agent must determine whether the declarations, the mod's configuration, its sources, or a
-combination need fixing. Validation must still check the hooks and reject warnings after the fix.
-
-**Outcomes:**
-
-- Pass strict validation from a clean checkout without weakening the checks.
-- Catch future validation failures with an automated test and document any setup needed.
-- Keep the mod's existing behavior and tests working.
-
-
-
-**Agent details:**
-
-- **Where:** `yolo-packs/matt-mods/mods/cloud-usage/tsconfig.json`, `hooks/*.ts` and `tests/*.ts` in that mod; the "Develop and test" section of `yolo-packs/matt-mods/README.md`; the "Offline development" section of the mod's README.
-- **Investigate:** The mod's `tsconfig.json` extends `.claude-plugin/types/tsconfig.json`. Claude Code writes that configuration and its type declarations on first load; the repository ignores the generated directory. Establish whether its absence explains the warnings before choosing a fix.
-- **Verify:** Run the strict validation command in c1 and record `claude --version` and the date. Add the regression test specified in c3, check the clean-checkout instructions in c4, and run every existing suite and pack lint listed in c5.
-- **Evidence:** 2026-11-17, `claude plugin validate --strict yolo-packs/matt-mods/mods/cloud-usage` listed 22 warnings and ended `Validation failed (--strict treats warnings as errors)`: 12 TS5097 (an import path ending in `.ts` while `allowImportingTsExtensions` is off), 5 TS2345 and 4 TS2532 (possibly undefined values), and one TS2304 (`Cannot find name 'setTimeout'`). The same command also failed for `todo-cleanup` and `tok-stats`.
-- **Evidence:** 2026-11-17, `.claude-plugin/types/` is absent from the mod's checkout and from `~/.claude/mods/cloud-usage` in this jail, and `.gitignore` lists `/yolo-packs/matt-mods/mods/*/.claude-plugin/types/`. A copy of the mod validated outside the repository failed the same way. No test or recipe invokes the validator: `rg -n 'plugin validate' tests .justfile tools/fork-check.py` finds nothing outside the READMEs and docs.
 
 ## Filed 2026-11-17: make the Go suites fast and trustworthy
 
@@ -4801,8 +4520,7 @@ which was red at its base. It was right to stop. That test is fixed on the trunk
 `f4bbfaf26`, so it is no longer a reason to stop, and this item does not touch store tracing.
 
 The second run built the whole item, and the gate refused it on one check out of eleven. The
-whole-tree `scratch` check failed on line 64 of the run's report,
-`docs/pi/tillr-go-shards-2026-11-17.md`, where a sentence about shard isolation named the durable
+whole-tree `scratch` check failed on the run's report, where a sentence about shard isolation named the durable
 scratch directory's environment variable in inline code. The other ten checks passed. The
 repository forbids a tracked Markdown file from naming that directory, by its variable or by its
 path, outside a fenced block; the two spellings are listed in the root `AGENTS.md` under
@@ -4889,11 +4607,11 @@ planner's choice does not flip from run to run.
 
 **Agent details:**
 
-- **Where:** a new runner beside `tools/fork-check.py`; the drain module in `tools/tillr-drain/`; `GO_TOOL_COST_ESTIMATE` and its comment in `tools/fork-check.py`; the `.justfile` recipe that runs the gate; `yolo-packs/tillr/`.
+- **Where:** a new runner under `tools/`; the drain module in `tools/tillr-drain/`; the gate's cost estimate for a Go suite (`GO_TOOL_COST_ESTIMATE`); the `.justfile` recipe that runs the gate; `yolo-packs/tillr/`.
 - **Evidence:** 2026-11-16, `go test ./... -count=1` in the drain module: 64.0 s and 64.3 s wall at load 3 to 6 (package `drain` 215 tests in 64 s, root package 247 tests in 55 s, run side by side), 69.3 s at load 17 to 23, 118 s with `-p 1`. User 70 s plus system 37 s over 64 s wall is about 1.7 cores. Compile and link cost about 2 s. A run makes about 18,900 `git` execs (11,505 of them `git rev-parse`). Turning git's fsync off changed nothing (63 to 66 s); test directories on a memory filesystem saved about 5 s and made `TestFenceViolationScopesAForkCheckoutToItsRepoRelativePath` fail.
 - **Evidence:** 2026-11-16, sharding with a test binary built once per package and balanced on recorded durations: K=6 took 13.7 to 14.5 s, K=8 took 14.5 s, K=4 took 17.9 s, at load 7 to 30. The only failures were three tests that need the `config/` directory, absent from the exported copy.
 - **Evidence:** 2026-11-16, `t.Parallel()` trial on the 127 of 247 root tests that do not call `t.Setenv`: root wall unchanged at 55.0 s. `t.Setenv` appears at 43 call sites in the root package and 17 in `drain`, and the stub adapters read `GATE_ROOT`, `STUB_ROOT`, `RETIRE_*` and `PASS_*` from the environment.
-- **Evidence:** the cost estimate was recorded at 30.9 s on 2026-11-15; `rg -n 'COST_ESTIMATE|30\.9' tools/fork-check.py` finds it (2026-11-17).
+- **Evidence:** the cost estimate was recorded at 30.9 s on 2026-11-15.
 - **Evidence (c10):** 2026-11-17, run `run-item-shard-the-tillr-go-suites-a4`: the gate ran seven checks and failed one, `observatory-dev`, after 4 min 40 s, with seven failed cases and the line `observatory-dev: npm ci (there are no node_modules)`. `ls tools/tillr-view/web/node_modules` in a lane worktree at `fb90b1a96` on the same day reports no such directory.
 - **Where (c10):** `write_stubs` in `tests/observatory-dev.test.py` writes the stub `npm`; `ensure_modules` in `tools/observatory/run.sh` runs `npm ci` when the directory is missing and then writes the stamp.
 - **Evidence (c11):** 2026-11-17, in a lane worktree at `fb90b1a96` with no change applied, the command in the ruling exited 1 with `../../tillr-drain: the program calls os.Exit 2 times outside tests; only main's flushed exit may`. `rg -n 'os\.Exit' tools/tillr-drain --glob '*.go' --glob '!*_test.go'` finds the call in `main.go` and the one in `drain/heavy_supervisor.go`.
@@ -5000,15 +4718,15 @@ this item, as c8. It is made in `tests/observatory-dev.test.py`, which is inside
 
 **Ruling, 2026-11-17 (answers the sixth run's conflict):** the run was right to stop, and c4 as
 it stood was wrong about the tree. It said the loop holds an acquitted item with the reason
-`trunk-broken` and gates it again after the fixer lands, "the same way a fork-check acquittal
-does". A fork-check acquittal does neither. It sets the item's state to `blocked`, with the fixer
+`trunk-broken` and gates it again after the fixer lands, "the same way a legacy-check acquittal
+does". A legacy-check acquittal does neither. It sets the item's state to `blocked`, with the fixer
 recorded as the waiter, and nothing ever takes the item out of that state: the planner answers the
 ordinary `blocked` reason for it, because that rule is read before the red-trunk rule, and it
 still answers `blocked` after the fixer has landed. An acquitted item is therefore stranded until
 a person moves it by hand. The run's reproduction is in the evidence below.
 
 The return path does not exist, so this item builds it, for every acquittal: the tree-check
-acquittal this item adds and the fork-check acquittal that is already there share one path. Four
+acquittal this item adds and the legacy-check acquittal that is already there share one path. Four
 things are settled.
 
 - The acquittal is unchanged. It still records the `trunk-already-red` refusal, files the
@@ -5102,10 +4820,10 @@ that no such script is in the fixer's fence.
 **Agent details:**
 
 - **Ref:** `docs/design/landing-principles.md`, the rule that a mechanism whose cost rises with trunk activity is pointed the wrong way: the tree checks are cheap (about 0.5 s each in the fast tier), so running them on every hand commit is the right direction. `tools/tillr-drain/README.md`, the section on broken-trunk detection.
-- **Where:** `tools/gate/change-gate.py` runs `tillr-gate checks --fast-tree --base --head`; the declarations are under `tools/gate/checks/`. `DefaultReplayProgram` and `DefaultRollingProgram` in `tools/tillr-drain/drain/trunk.go`; `trunkAlreadyRed` there and `gateFailureContext` in `tools/tillr-drain/drain/steps.go`; the `done` recipe in `.justfile`; the rolling tier in `tools/fork-check.py`.
+- **Where:** `tools/gate/change-gate.py` runs `tillr-gate checks --fast-tree --base --head`; the declarations are under `tools/gate/checks/`. `DefaultReplayProgram` and `DefaultRollingProgram` in `tools/tillr-drain/drain/trunk.go`; `trunkAlreadyRed` there and `gateFailureContext` in `tools/tillr-drain/drain/steps.go`; the `done` recipe in `.justfile`; the gate's rolling tier.
 - **Evidence:** 2026-11-17, a hand commit on the trunk that put a documented build directory in a tracked README passed `just done`. `python3 tools/gate/checks/scratch.py` at the trunk then exited 1 with two findings, and the drain's gate refused the next candidate on the `scratch` check. A rolling run over the range holding that commit finished green and moved its watermark.
-- **Evidence:** 2026-11-17, why the candidate was not acquitted. `DefaultReplayProgram` is `python3 tools/fork-check.py --replay --only {only}`, and `{only}` is the failing check ids from the gate's verdict. The replay matches fork-check kinds, and the gate's tree-check ids are a separate set. `python3 tools/fork-check.py --replay --only scratch` in a clone of the trunk printed `no planned check matches --only` and exited 2, which the loop reads as "could not replay", so it leaves the refusal standing and never files a fixer. The acquittal step therefore exists, but only for ids that fork-check also knows. A change-gate tree check has no replay path, so the gate's refusal stands even when the trunk is the one that is red.
-- **Evidence:** 2026-11-17, `just done` after the repair ran five fork-check checks (`file-size`, `tillr-backends`, `tillr-docs` and two `go-tool` suites) and none of the gate's tree checks. `tillr-gate checks --fast-tree` over the same range ran all eleven declarations and passed.
+- **Evidence:** 2026-11-17, why the candidate was not acquitted. `DefaultReplayProgram` replays `{only}`, which is the failing check ids from the gate's verdict. The replay matches legacy check kinds, and the gate's tree-check ids are a separate set. A replay of `scratch` alone in a clone of the trunk printed `no planned check matches --only` and exited 2, which the loop reads as "could not replay", so it leaves the refusal standing and never files a fixer. The acquittal step therefore exists, but only for ids that the legacy program also knows. A change-gate tree check has no replay path, so the gate's refusal stands even when the trunk is the one that is red.
+- **Evidence:** 2026-11-17, `just done` after the repair ran five legacy checks (`file-size`, `tillr-backends`, `tillr-docs` and two `go-tool` suites) and none of the gate's tree checks. `tillr-gate checks --fast-tree` over the same range ran all eleven declarations and passed.
 - **Evidence:** 2026-11-17, `python3 tests/observatory-dev.test.py` in a lane worktree at trunk commit `1524cddc9`, with no change applied, exited 1 after 4 min 40 s with seven failed cases, all in the supervision half. Its output held `observatory-dev: npm ci (there are no node_modules)` and then `tools/observatory/run.sh: line 174: …/tools/tillr-view/web/node_modules/.tillr-platform: No such file or directory`. `ls tools/tillr-view/web` in that worktree shows no `node_modules`; the directory is ignored by `.gitignore` and exists in the main checkout. The fourth run's gate log shows the same seven cases and the same two lines, with the check selected `because: the dev recipe, Procfile, tool declaration or supervision suite changed`.
 - **Where (c8):** `write_stubs` in `tests/observatory-dev.test.py` writes the stub `npm`, whose comment reads `` `ci` is a no-op ``; the supervision cases start the recipe with the repository as its working directory. `ensure_modules` in `tools/observatory/run.sh` runs `npm ci` when the directory is missing and then writes the stamp.
 - **Evidence (c8, second run):** 2026-11-17, run `run-item-shard-the-tillr-go-suites-a4`: the gate refused the candidate on `observatory-dev` after 4 min 40 s, with seven failed cases and the line `npm ci (there are no node_modules)`. That candidate changed gate code and not the dev recipe, so the failure reaches any item that changes the gate, not only items that change `.justfile`; c8's repair of the suite covers it, and no separate item is filed.
@@ -5162,7 +4880,7 @@ branch. Two things stop such items from being safe on a drain that runs several 
 staging reads only the checkout of the lane the item was dispatched to, while the planner gives the
 item whichever lane is free. An item fenced to lane 1's checkout but given lane 3 is therefore staged
 as an ordinary item, with nothing in its fence that it can edit. Second, the fork procedure ends with
-`bin/pi-forks export`, which moves `refs/heads/patch/<fork>` in this repository while the worker is
+an export, which moves `refs/heads/patch/<fork>` in this repository while the worker is
 still running. The run boundary then convicts every other run open at that moment, because the only
 other-lane patch-branch move it excuses is one the lander has marked. A moved patch branch also
 reaches every host at its next launch once it is pushed, so it should move only after the gate has
@@ -5172,11 +4890,11 @@ built it. The three usage-recording fork items wait on this one.
 
 **Agent details:**
 
-- **Ref:** AGENTS.md, "Landing a lane: shared forks, verified candidates" and "Patching an upstream tool: patch series first"; the fork guide; the run-boundary table in [the drain README](../../tools/tillr-drain/README.md).
+- **Ref:** the run-boundary table in [the drain README](../../tools/tillr-drain/README.md).
 - **Where:** `forkTarget` and `ensureForkCheckout` in `tools/tillr-drain/drain/stage.go`; `freeLane`, `forkOf` and `forkHeldBy` in `tools/tillr-drain/drain/plan.go`; `liveForks` in `tools/tillr-drain/drain/pass.go`; `landedPatchMove` in `tools/tillr-drain/drain/boundary.go`; `PatchRef` with the patch-branch refusals in `tools/tillr-land/land/`; and the `path-missing` warning in `tools/tillr-item/item/sync.go`.
 - **Evidence (what already protects):** 2026-11-17, `rg -n 'ReasonForkHeld' tools/tillr-drain/drain/plan.go`: two items that deliver the same fork never run together. The hold counts this pass's dispatches, live leases and unfinished examinations (`liveForks`), whatever lane each is on. Commit `35a4d848d` added fork staging, the boundary's excuse for a run's own patch ref, and the lander's patch-branch move with its rewind refusal.
 - **Evidence (c1):** `forkTarget` keeps only fence entries under `.forks/lanes/` followed by the dispatched lane's id, and `TestForkTargetIgnoresAnotherLanesCheckout` pins that. `freeLane` returns the first free lane in id order and never reads the fence.
-- **Evidence (c3):** the drain README's boundary table excuses a sibling's move of `refs/heads/patch/<fork>` only when a `refs/tillr/landed/` marker written during the bracket names it, and, as of `eadcebd7a`, lists an unassigned move of `refs/heads/patch/<fork>`, a fork export included, as Observed: `CompareRunObserved` in `tools/tillr-drain/drain/boundary.go` records it and does not attribute it to the run, so no run is convicted for it. What remains open is that nothing shows or holds an observed move before a push, which is `item-patch-branch-move-held-visible`. AGENTS.md says that `export --lane` for a patch-branch fork moves this repository's `patch/<name>`.
+- **Evidence (c3):** the drain README's boundary table excuses a sibling's move of `refs/heads/patch/<fork>` only when a `refs/tillr/landed/` marker written during the bracket names it, and, as of `eadcebd7a`, lists an unassigned move of `refs/heads/patch/<fork>`, a fork export included, as Observed: `CompareRunObserved` in `tools/tillr-drain/drain/boundary.go` records it and does not attribute it to the run, so no run is convicted for it. What remains open is that nothing shows or holds an observed move before a push, which is `item-patch-branch-move-held-visible`.
 - **Evidence (c7):** 2026-11-17, `tillr-item sync --dry-run` printed `path-missing` for each of the three usage-recording fork items, because no lane checkout exists until staging makes one.
 - **Evidence:** 2026-11-17, before the usage-recording items were filed, `rg -n 'paths="[^"]*\.forks' docs` found no item that fences a fork checkout, and commit `81243bf84` records that fork-series items had been blocked since the beginning. The drain has never run one.
 
@@ -5211,7 +4929,7 @@ below stand as written and nothing in the shutdown design is reopened. Three poi
 - **Start from the built work.** The third run's candidate is kept at
   `refs/tillr/runs/run-item-loop-stop-ends-rolling-checks-a3`. It holds the implementation, its
   tests, the drain README section and the pack copy, and it reported the full drain and
-  `fork-check` suites passing. Carry that change onto the current base and do not write the item
+  gate suites passing. Carry that change onto the current base and do not write the item
   again. Take this roadmap from the trunk and not from the candidate, then make only the edit
   the brief asks of this block. Run `just pack-sync` and do not resolve a pack copy by hand. A
   file that merges without a conflict can still be wrong against the newer trunk, so the full
@@ -5223,21 +4941,20 @@ below stand as written and nothing in the shutdown design is reopened. Three poi
 **Ruling, 2026-11-17 (answers the conflict the sixth run raised):** the sixth run rebuilt c1 to
 c4 and stopped because the leak survives on the path the loop really uses, and closing it needs
 a file outside the item's fence. The finding is correct, so the fence gains `tools/tillr-loop/`
-and the item gains c5. The shutdown design in the drain and in `tools/fork-check.py` is not
+and the item gains c5. The shutdown design in the drain and in the check runner is not
 reopened.
 
-- **What the run found.** The loop does not start `tools/fork-check.py` itself when the loop
+- **What the run found.** The loop does not start the check runner itself when the loop
   adapter is configured. It starts `tools/tillr-loop/tillr-loop rolling` or `replay`, and
-  `revision_check` in that program runs `fork-check.py` as a child with `subprocess.run` and no
+  `revision_check` in that program runs the check runner as a child with `subprocess.run` and no
   signal handling. The built change sends SIGTERM to the program the loop started, which is the
-  adapter. The adapter dies at once, and the group SIGKILL that follows ends `fork-check.py`
+  adapter. The adapter dies at once, and the group SIGKILL that follows ends the check runner
   before it can cancel the checks it placed in other sessions. Read on 2026-11-17 at
-  `a1fdff636`: `rg -n 'subprocess.run\(\["python3", "tools/fork-check.py"' tools/tillr-loop/tillr-loop`
-  finds that one call, and `rg -n 'signal' tools/tillr-loop/tillr-loop` finds nothing.
+  `a1fdff636`: `rg -n 'signal' tools/tillr-loop/tillr-loop` finds nothing.
 - **The fix is settled: the adapter becomes the check runner.** For the `rolling` and `replay`
   steps the adapter flushes its output and replaces itself with
-  `python3 tools/fork-check.py <flags>` using `os.execvp`, so the process the loop signals is
-  `fork-check.py`. The argv, the working directory, the environment, the output and the exit
+  the check runner using `os.execvp`, so the process the loop signals is
+  the check runner. The argv, the working directory, the environment, the output and the exit
   status stay what they are today, and an `OSError` from the call is still refused as "cannot
   run revision check". Do not build signal forwarding in the adapter: a parent that forwards and
   waits is a second shutdown sequence to keep correct, and replacing the process needs none. The
@@ -5245,7 +4962,7 @@ reopened.
 - **The adapter has a committed copy.** After editing `tools/tillr-loop/tillr-loop`, run
   `python3 tools/tillr-loop/sync-adapter.py`, which rewrites the copy the drain embeds at
   `tools/tillr-drain/drain/tillr-loop.py`, and then `just pack-sync`. Run
-  `python3 tools/tillr-loop/test.py` beside the drain and `fork-check` suites.
+  `python3 tools/tillr-loop/test.py` beside the drain suite.
 - **Start from the sixth run's work.** Its uncommitted change is kept at
   `refs/tillr/preserved/run-item-loop-stop-ends-rolling-checks-a6`, made on `a1fdff636`: the
   runner, the drain shutdown, their tests, the drain README and the pack copies, eight files.
@@ -5258,22 +4975,8 @@ reopened.
 c1 to c5, saw the shutdown tests pass, and stopped without a commit because a full suite was red
 for a reason outside their change. Neither failure is a design question, so the criteria, the
 paths and the shutdown design stand as written. What was missing is the rule for finishing
-when the base is red, and these five points are that rule.
+when the base is red, and these three points are that rule.
 
-- **The `fork-check` suite is red on the base.** Measured on 2026-11-18 in a clean worktree at
-  `c15a5440e`, with none of this item's work applied: `python3 tests/fork-check.test.py` exited 1
-  at the assertion `a timing declaration no longer matches a hit`, naming
-  `tools/bedrock-spend/internal/cli/cli_test.go: if time.Since(started) > time.Second {`. Commit
-  `e99cdf1a9` removed that line from the test and left its entry in
-  `tools/gate-timing-declarations.json`. That file is outside this item's paths and stays
-  outside them; the entry is the trunk's to repair.
-- **How to prove the Python suite anyway.** Run `python3 tests/fork-check.test.py` once on the
-  unchanged declarations file, with no limit shorter than the run, and keep the assertion it
-  stops at. Remove the stale entry in the working tree only and run the suite again; that run
-  is the proof of c2 and its output goes in the report. Restore the file with
-  `git checkout -- tools/gate-timing-declarations.json`, check that `git status --short` does
-  not list it, and only then commit. If the first run passed, because the entry was repaired on
-  the run's base, skip the removal.
 - **The heavy test is not this item's.** The ninth run saw
   `TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery/legacy` fail once inside the full drain
   suite with the owner gone before its judge child started. That test waits on a child process
@@ -5287,9 +4990,7 @@ when the base is red, and these five points are that rule.
 - **Commit, then report.** A red suite on the base is not a reason to end without a commit: a
   run with no commit has no candidate, and the base cannot be replayed against nothing. Make
   the one commit, holding this item's paths and the pack copy and nothing else, once the
-  shutdown tests, the adapter suite and the drain suite are accounted for as above. Then, if the
-  first `fork-check` run stopped at the stale declaration, end the report with the trunk broken,
-  naming that assertion, the declarations file and the base sha. Otherwise report done.
+  shutdown tests, the adapter suite and the drain suite are accounted for as above. Then report done.
 - **Start from the ninth run's work.** It is kept at
   `refs/tillr/preserved/run-item-loop-stop-ends-rolling-checks-a9`, uncommitted work saved on
   base `3318def2f`: eleven files, which are the runner, its test, the adapter and its embedded
@@ -5316,9 +5017,7 @@ when the base is red, and these five points are that rule.
 - **Ref:** the review's finding M1-1, and the earlier shutdown fix in `runCheckGroup` that
   this item completes.
 - **Where:** `runCheckGroup` and `endProcessGroup` in
-  [`steps.go`](../../tools/tillr-drain/drain/steps.go); `_run_cancellable`,
-  `_kill_process_group` and `Cancellation.cancel` in
-  [`fork-check.py`](../../tools/fork-check.py); `revision_check` in
+  [`steps.go`](../../tools/tillr-drain/drain/steps.go); `revision_check` in
   [`tillr-loop`](../../tools/tillr-loop/tillr-loop), with its embedded copy
   `tools/tillr-drain/drain/tillr-loop.py`.
 - **Verify:** For c1 and c3, use a child that calls `setsid` to create a separate session
@@ -5328,8 +5027,8 @@ when the base is red, and these five points are that rule.
   For c5, run the c1 and c3 tests through the adapter's `rolling` and `replay` steps, and
   confirm each fails when `revision_check` is put back to `subprocess.run`.
 - **Evidence:** At 05:17 on 2026-11-17, an orphaned `go test -parallel 48` continued for
-  about two minutes after a stop. That day, `rg -n 'start_new_session' tools/fork-check.py`
-  found `_run_cancellable` starting each check in its own session, while
+  about two minutes after a stop. That day the check runner
+  started each check in its own session, while
   `rg -n 'cmd.Cancel' tools/tillr-drain/drain/steps.go` found the loop's kill aimed at
   `-cmd.Process.Pid`, only the runner's process group. The shipped test passed because its
   child stayed in that group. A copy whose child called `os.setsid()` failed with
@@ -5365,7 +5064,7 @@ branch, and when the record of observed moves cannot be read, nothing is publish
 **Agent details:**
 
 - **Ref:** the review's finding M2-3, and `item-drain-fork-lane-safety` c3 for who may move the branch.
-- **Where:** `CompareRunObserved` in `tools/tillr-drain/drain/boundary.go`; the report at the `recorded, not attributed to the run` line in `tools/tillr-drain/drain/loop.go`; `tools/tillr-view/waiting.go`; `bin/patch-branches-publish`; in `hooks/pre-push`, the `publish_failed` fall-through after the publisher call and the `git push` of `{oid}:refs/heads/{branch}` in the per-manifest loop of `main`.
+- **Where:** `CompareRunObserved` in `tools/tillr-drain/drain/boundary.go`; the report at the `recorded, not attributed to the run` line in `tools/tillr-drain/drain/loop.go`; `tools/tillr-view/waiting.go`; the publisher; in `hooks/pre-push`, the `publish_failed` fall-through after the publisher call and the `git push` of `{oid}:refs/heads/{branch}` in the per-manifest loop of `main`.
 - **Verify:** c1: record an unexpected observed move and assert that `tillr view waiting` names the fork, run, and old and new commits. c2: assert that publishing refuses an unacknowledged move with the fork and acknowledgment instructions, but publishes a branch with no observation. c3: acknowledge the move and assert that the row clears, publishing succeeds, and the record identifies who acknowledged it and when. c4: assert that a lander-marked move or the run's own delivery produces neither a waiting row nor a publishing refusal. c5: in `tests/pre-push-guard.test.sh` or a test beside it, run the hook itself, not the publisher alone, for the three pushes, and read the remote's ref after each. c6: remove read permission from the store, or replace it with a file that is not a store, and run both programs.
 - **Evidence:** 2026-11-17, `rg -n 'observed = append' tools/tillr-drain/drain/boundary.go` shows `compareRunRefs` feeding `observed`, not `violations`, and `rg -n 'patch/' tools/tillr-view/waiting.go` finds no waiting rule for an observation. Until this lands, before a push, check the loop log for `recorded, not attributed to the run` naming `refs/heads/patch/`.
 - **Design answer, 2026-11-17, to the conflict the first build raised:** the build was right to stop. Its reviewer reproduced `hooks/pre-push` publishing a branch the publisher had just refused, and the hook was outside the item's paths. The paths now include `hooks/pre-push`, and c5 and c6 state the two rules the first criteria left open: every route is held, and an unreadable record refuses. c1 to c4 keep their meaning; c1 gains the row's controls and the uncapped hold, both of which the first build found.
@@ -5374,7 +5073,7 @@ branch, and when the record of observed moves cannot be read, nothing is publish
 - [unlanded] **The first build, kept as history; the build order below starts from a later commit:** `refs/tillr/preserved/run-item-patch-branch-move-held-visible-a3` in the main checkout holds it, uncommitted work saved as one commit on base `f1647cf10`: 23 files, the drain's recording and acknowledgment command, the shared `patchmoves` reader, the view's rows, the publisher's refusal, their tests and the pack copy. On 2026-11-17 `git merge-tree --write-tree --merge-base f1647cf10 a376bfdac <that ref>` printed a tree and no conflict. Carry it forward and add what c5 and c6 require; do not write c1 to c4 again. Its report gave these as passing: `python3 tools/go-test-shards.py tools/tillr-drain -k 6` with 1536 tests, the same for `tools/tillr-view` with 435, and `python3 tests/patch-move-publish.test.py` with 5. Those are that run's report, not a check made here, and a clean merge is not a verdict: run them again on the new base.
 - **Known gaps in the first build, from its own review:** store discovery uses `Path.exists()`, which reads a permission error as absence (c6); the hold check covers only the branches `required()` returns (c5); the waiting row gets item-only controls and its hint omits `--store` (c1).
 - **Design answer, 2026-11-17, to the second conflict:** no design question is open. The two builds that followed the first answer each read the saved first build, changed nothing, and reported that no repository blocker was found. Neither named a criterion it could not meet, and neither disputed c1 to c6, so the criteria, the paths and the rules above stand unchanged. Reading the saved build is the first step of this work, not the work, and finding it sound is not a reason to stop: a build that ends with no commit has not attempted the item.
-- [unlanded] **The saved build still applies:** on 2026-11-17, in a worktree at `123aeab1b`, `git merge-tree --write-tree --merge-base f1647cf10 123aeab1b refs/tillr/preserved/run-item-patch-branch-move-held-visible-a3` printed a tree and exited 0, and `git diff f1647cf10 <that ref> | git apply --check -3 -` exited 0 for all 23 files. The ref is a merge commit whose first parent is `f1647cf10`, so the diff against that parent is the whole first build. The same day, `rg -n 'publish_failed' hooks/pre-push` still found the fall-through, `rg -n 'def required' bin/patch-branches-publish` still found the branch list the first build's check is limited to, and `rg -n 'patch/' tools/tillr-view/waiting.go` still found nothing.
+- [unlanded] **The saved build still applies:** on 2026-11-17, in a worktree at `123aeab1b`, `git merge-tree --write-tree --merge-base f1647cf10 123aeab1b refs/tillr/preserved/run-item-patch-branch-move-held-visible-a3` printed a tree and exited 0, and `git diff f1647cf10 <that ref> | git apply --check -3 -` exited 0 for all 23 files. The ref is a merge commit whose first parent is `f1647cf10`, so the diff against that parent is the whole first build. The same day, `rg -n 'publish_failed' hooks/pre-push` still found the fall-through, the publisher still held the branch list the first build's check is limited to, and `rg -n 'patch/' tools/tillr-view/waiting.go` still found nothing.
 - [unlanded] **Design answer, 2026-11-18, to the third conflict:** the work is built and one line of documentation refused it. The ninth run committed all of c1 to c6 as `cd1d3979a`, kept under `refs/tillr/runs/run-item-patch-branch-move-held-visible-a9` in the main checkout as that ref's first parent: 24 files, with the shared reader, the hook's refusal, the three-route hook test, the unreadable-store test and the pack copy. The gate ran four checks on it. The hook suite and the hook installer passed, and `python3 tests/tillr-docs.test.py` failed on exactly one line: `tools/tillr-drain/README.md:1033 is an option list`. That line is the second line of the README's acknowledgment example, a shell continuation that begins with `--observation`; the documentation suite refuses any indented line that begins with two dashes, inside a code fence or not. The tenth run then ended in three seconds with no change. No criterion is disputed and none changes.
 - [unlanded] **The repair, checked here:** on 2026-11-18 at `2ca3cedff`, `git diff cd1d3979a^ cd1d3979a | git apply -3 -` applied all 24 files with no conflict. With the example then written on one line, `tillr drain acknowledge-patch-move --store .tillr/state.db --observation 123 --fork pi --by owner`, in the README and in its pack copy, `python3 tests/tillr-docs.test.py` exited 0 and printed `ok   no document carries a flag table (9 documents)`. The Go suites and the hook suite were not run again here; the ninth run's report gives them as passing on its base, which is that run's report and not a check made here.
 - **Build order, each step a stop only if it fails.** This replaces the earlier order: start from the ninth run's commit, which already contains the first build and everything c5 and c6 added, and do not go back to the first build's saved ref.
@@ -5382,7 +5081,7 @@ branch, and when the record of observed moves cannot be read, nothing is publish
   2. In `tools/tillr-drain/README.md`, write the acknowledgment example as one line, so that no line of any tillr document begins with whitespace followed by two dashes. Do not weaken `tests/tillr-docs.test.py`.
   3. Run `just pack-sync`, then `python3 tests/tillr-docs.test.py`, `python3 tests/patch-move-publish.test.py`, `bash tests/pre-push-guard.test.sh`, and the sharded suites for `tools/tillr-drain` and `tools/tillr-view`. Run the hook suite with a canonical `TMPDIR`, one with no symbolic link in its path: the ninth run saw five hook identity assertions fail under a non-canonical one, and that is the test's environment, not a defect to chase. Repair anything the new base broke.
   4. Make one commit holding all of it. Applying the commit and reading it is not the work: a run that ends with no commit has not attempted the item.
-- **The publisher's signal to the hook is settled:** `bin/patch-branches-publish` exits 3 when it refuses for a hold or for an unreadable record, and keeps exit 1 for every other failure. On 2026-11-17 `rg -n 'return 0 if ok else 1' bin/patch-branches-publish` showed 0 and 1 as its only statuses, and its argument parser uses 2. `hooks/pre-push` refuses the whole push on 3 and keeps the existing fall-through on 1.
+- **The publisher's signal to the hook is settled:** the publisher exits 3 when it refuses for a hold or for an unreadable record, and keeps exit 1 for every other failure. On 2026-11-17 it had 0 and 1 as its only statuses, and its argument parser uses 2. `hooks/pre-push` refuses the whole push on 3 and keeps the existing fall-through on 1.
 - **What does stop this build:** a failing test that needs a file outside the item's paths, or a criterion that two of c1 to c6 make impossible together. Report either with the test's output or the two criteria named. A report without one of those is not a conflict for the design seat.
 
 ### Hold lanes until their runs' background processes exit
@@ -5471,7 +5170,7 @@ that need to be removed.
 - **The test the second build stopped on is repaired on the trunk:** `TestCommentPathTwice` failed because `retireDesigners` read a document as deleted while a landing was rewriting its file. "fix(tillr-drain): keep a designer row while a landing rewrites its document", commit `650f1f16e`, repaired that; it is not in the second build's base `f1647cf10` and is in `123aeab1b`. Measured on 2026-11-17 at `123aeab1b` on a 32-processor machine with no change applied: the compiled `drain` test binary run as `-test.run '^TestCommentPathTwice$' -test.count=6` in 24 processes at once passed all 144 runs, where the same command before the repair failed 8 of 144. The second build does not touch `designer.go`, `comments.go` or `comments_test.go`, so it cannot bring the failure back.
 - **A red test in the full suite is not a reason to report blocked, and not a reason to end without a commit:** a failure in a test this change touches, or in the startup, lane rotation or held-lane code, is this item's to repair. So is `TestWaitingEveryDrainReasonHasARule`, as the answer of 2026-11-18 to the tenth run says. Any other full-suite failure is replayed with the single test run repeatedly and in parallel, once on the change and once on the base with no change applied. A test that fails on the base too is named in the report with both outputs. A test that passes every replay on both is a load-sensitive test: name it in the report with the failing output and the replay counts, run the full suite once more by itself, and commit when that run exits 0. Every one of these endings has a commit. The gate replays a red check on the base itself and files the trunk's fixer; a report footer does neither.
 - [unlanded] **Design answer, 2026-11-18, to the conflict the fifth run raised:** no criterion changes, and no design question is open. The fifth run built c1 to c4, passed its focused tests, and stopped without a commit because one shell command that ran the format check, the full drain suite and the full view suite together was killed at the worker's 600-second command limit. No test failed. Measured on 2026-11-18: the fifth run's work, `refs/tillr/preserved/run-item-loop-start-holds-blocked-lane-a5` in the main checkout, merged onto `9eac60321` with `git merge-tree --write-tree --name-only --merge-base 3da00ddcf 9eac60321 <that ref>` and no conflict, and in a copy of that merged tree `python3 tools/go-test-shards.py tools/tillr-drain -k 6` exited 0 with `1657 tests passed` and the same command for `tools/tillr-view` exited 0 with `448 tests passed`. The two focused commands named above printed `ok` in 7.9 and 2.2 seconds.
-- **The suite is slow under load, not hung:** that drain run took 7 minutes 13 seconds and the view run 33 seconds, on a 32-processor machine whose load average was between 55 and 70 because other lanes were testing. The 40 seconds in `docs/pi/tillr-go-shards-2026-11-17.md` was measured on a quiet machine. A command limit of 600 seconds leaves the drain suite under three minutes of margin on a busy machine, and none when it shares the command with anything else.
+- **The suite is slow under load, not hung:** that drain run took 7 minutes 13 seconds and the view run 33 seconds, on a 32-processor machine whose load average was between 55 and 70 because other lanes were testing. The 40 seconds measured for the same suite was on a quiet machine. A command limit of 600 seconds leaves the drain suite under three minutes of margin on a busy machine, and none when it shares the command with anything else.
 - **Run each full suite as its own command, with its own limit:** start `python3 tools/go-test-shards.py tools/tillr-drain -k 6` alone, as a background task or with a command timeout of at least 1800 seconds, with its output redirected to a file in the run's scratch directory, and read the exit status and the `tests passed` line when it ends. Do the same for `tools/tillr-view`. Run `just format --check` as a third command, so its exit status is recorded. Set `TMPDIR` to the run's scratch directory first; the fifth run's first redirect went to the filesystem root because it was unset.
 - **A command the worker's own limit killed is not a verdict and not a blocker:** it says nothing about the tests. Run it again by itself with a longer limit. Report blocked on a suite only when the runner exits nonzero, and then follow the red-test rule above.
 - [unlanded] **Start from the fifth run's work, which replaces the second build as the start:** `refs/tillr/preserved/run-item-loop-start-holds-blocked-lane-a5` holds the same 12 files as the second build, +646 -30, already carried to base `3da00ddcf`, so it is nearer the trunk. It is a two-parent commit whose second parent is the saved index and holds nothing, so apply its first-parent diff: `git diff <that ref>^1 <that ref> | git apply --3way` in the lane worktree. On 2026-11-18 that command with `--check` added exited 0 at `9eac60321`. Its message is a recovery record, so the new commit gets its own. Run `just pack-sync` instead of trusting the carried pack copies. Since `3da00ddcf` the trunk changed `loop.go` and `pass.go` in "fix(tillr-drain): hold the item, not the loop, when a lane's work cannot be preserved" and "fix(tillr-drain): read the second-failure routing outside the write lock"; the merge was clean and both suites passed with them, as measured above. On a later trunk the suites decide again.
@@ -5565,7 +5264,7 @@ lies in how tillr runs pi. It is the second-largest saving that the model-tierin
 **Agent details:**
 
 - **Ref:** [the model-tiering design](../design/tillr-planning-node-model-tiering.md), Section 1.2, "Where a Sol run's money goes", and Section 1.6, lever 2; the usage ledger's request, whose section 4 is a different gap (cache writes that are billed but never recorded, filed as `item-pi-fork-billing-attempts`). This item explains writes that are recorded, so do not duplicate that one.
-- **Where:** the run logs the loop keeps beside each lane, which each run record's artifacts name; each assistant message's `usage` carries `input`, `cacheRead` and `cacheWrite`. The pi adapter is `tools/tillr-run/backends/pi/run-pi`. `PI_CACHE_RETENTION=long` is set for every pi session by the matt pack (commit `c5f4a82f7`).
+- **Where:** the run logs the loop keeps beside each lane, which each run record's artifacts name; each assistant message's `usage` carries `input`, `cacheRead` and `cacheWrite`. The pi adapter is `tools/tillr-run/backends/pi/run-pi`.
 - **Evidence:** 2026-11-17, a per-turn read of the 227 Sol logs: cache writes cost $126.06 in all. Turns after the first that read nothing from the cache and wrote more than 50k tokens cost $30.18. They occur in 13 logs, starting at a context between 63k and 264k tokens, with a median of 132k. In `run-item-obs2-shell-home-a3`, turns 89 to 108 each read 0 and wrote between 132k and 149k tokens.
 - **Evidence:** 2026-11-17, the same read: turns whose cache read equals the previous turn's while they write more than 15k tokens cost $20.53. In `run-item-drain-stop-keeps-runs-a3`, turns 34 to 53 each read exactly 92,262 tokens while their writes grew from 20,862 to 48,266, and from turn 54 every turn read nothing.
 - **Evidence:** 2026-11-16, the design's own read: turns that started five or more minutes after the previous one carry under 2% of the cache writes, so idle expiry is not the cause. The largest Fable run, of `item-design-gate-rework`, wrote 1.695M tokens to the cache against a largest context of 256k.
@@ -5593,7 +5292,7 @@ too, so that it exits once its session settles.
 **Agent details:**
 
 - **Ref:** `tools/tillr-run/README.md`, the run face's exit handling and its pause face; `item-run-commit-before-ending`, which changes how a run that ends without a candidate is settled in the same exit handling, so this item waits for it; `item-drain-hold-repeatedly-orphaned`, whose run is the evidence.
-- **Where:** `Exec` and `waitForPause` in `tools/tillr-run/run/exec.go` and `tools/tillr-run/run/pause.go` (the wait that returns only when `cmd.Wait` does, and the process group the child leads); the end causes in `tools/tillr-run/run/schema.go`; `ClassifyAttempt` and `ReportFooter` in `tools/tillr-drain/drain/failover.go`; the stream's `agent_settled` event, which `tools/tillr-view/transcript_test.go` shows in a transcript; the Pi adapter `tools/tillr-run/backends/pi/run-pi`, which ends in `exec pi --print --mode json` so that the harness is the run's process, and the Pi fork's patch series under `yolo-packs/pi-fork/patches` if the exit belongs in print mode itself.
+- **Where:** `Exec` and `waitForPause` in `tools/tillr-run/run/exec.go` and `tools/tillr-run/run/pause.go` (the wait that returns only when `cmd.Wait` does, and the process group the child leads); the end causes in `tools/tillr-run/run/schema.go`; `ClassifyAttempt` and `ReportFooter` in `tools/tillr-drain/drain/failover.go`; the stream's `agent_settled` event, which `tools/tillr-view/transcript_test.go` shows in a transcript; the Pi adapter `tools/tillr-run/backends/pi/run-pi`, which ends in `exec pi --print --mode json` so that the harness is the run's process.
 - **Evidence:** 2026-11-17, lane-4, run `run-item-drain-hold-repeatedly-orphaned-a3-cfix`: the stream wrote `agent_settled` and the report ended `RESULT: done` at 05:20:48Z, and the change was committed. The `pi` process did not exit, and for 54 minutes the run never finished, the loop could not examine the candidate, and the lane was occupied.
 - **Evidence:** 2026-11-17, the same run: `pi` was idle, its CPU time did not advance, and its only children were two idle MCP helper servers. Ending the helpers did not make it exit. A SIGTERM to `pi` alone at 06:14:55Z ended it with exit 143, the run was recorded `normal-exit` with code 143, and the loop then judged the candidate and the gate passed.
 - **Evidence:** 2026-11-17, `rg -n 'cmd.Wait' tools/tillr-run/run/pause.go`: `waitForPause` waits only on the harness's exit, so nothing in the run face ends a harness that has settled. `rg -n 'ReportFooter' tools/tillr-drain/drain/failover.go`: `ClassifyAttempt` judges an exited run whose log carries the `RESULT:` footer even when the exit code is not zero, except 124 and 2, which is why the candidate was judged once the process was ended by hand.
@@ -5738,8 +5437,8 @@ build record, not work to replay. Tillr stamps its own trunk landings and no lon
 other trunk commits or carries identity acceptances across rewrites. The repository's own
 identity gate remains separate.
 
-On 2026-11-17 at 08:08 -0500, commit `6f2d9d938` [unlanded] reached `main` as `fork-check test
-<test@example.invalid>` with the message `initial`. A test fixture had run its `git add -A` and
+On 2026-11-17 at 08:08 -0500, commit `6f2d9d938` [unlanded] reached `main` under a test fixture's identity
+(`<test@example.invalid>`) with the message `initial`. A test fixture had run its `git add -A` and
 `git commit` against the real repository and swept an agent's uncommitted drain work onto the
 trunk. Nothing stopped it, and nothing noticed it: `tests/git-identity.test.py` fails on the commit,
 but only when someone runs the gate, and the loop kept landing on top of it. The loop should read
@@ -5822,7 +5521,7 @@ criterion changes.
 - **Fixtures to repair:** the root package of `tools/tillr-drain` runs its tests one after another, so the first fixture that waits hides the rest; in the fourth run five of its six shards were stuck. The kept work already points the suite's git config at `Fixture Landing <landing@example.invalid>` in `runTests` in `tools/tillr-drain/main_test.go`, and the `git` helper in `pipeline_test.go` commits as that identity. What still writes to a fixture trunk as someone else: stand-in landers that cherry-pick a worker's commit unchanged, as in `testDesignAmendment` in `blocked_answer_test.go`; scripts that commit straight to the fixture root, such as the `trunk move` commit in `conflict_test.go`; and the `Fixture` base commit in `TestPlanHoldsAnItemBlockedByAnUnlandedItem` in `main_test.go`. `rg -n 'user\.(name|email)|cherry-pick' tools/tillr-drain/*_test.go` lists the candidates; read each to see whether its commit reaches the trunk.
 - **Verify the suite with a deadline:** run `python3 tools/go-test-shards.py tools/tillr-drain -k 6 --timeout 20m`. The runner's default sets no deadline, so a waiting loop prints nothing; with `--timeout` a stuck shard ends with the name of the test and its stack. A stack ending in `waitForTrigger` under `planNothing` is one more fixture to repair, not a reason to stop. Repair it and run again until the suite passes. A failure that is not this wait, lies outside the item's paths and also fails on the base with this work removed is the trunk's: report it and carry on, as with the red trunk check above. Stop and report only when the failure is caused by this work and its repair lies outside the item's paths.
 - **Hook limits, read 2026-11-17:** `hooks/` holds only `pre-push`, and `bin/hooks-install` copies each executable there into the shared hooks directory, so one hook covers the main checkout and every worktree. A hook runs only for `git commit`, `merge` and `am`. It does not run for `commit-tree` or `update-ref`, and `--no-verify` and a `core.hooksPath` override skip it, so the hook is a convenience and the loop's check in c1 is the guard.
-- **Evidence:** [unlanded] 2026-11-17, `git log -1 --format='%an <%ae> %s' 6f2d9d938` prints `fork-check test <test@example.invalid> initial`, and `git reflog main` records it as `commit: initial` at 08:08:12. The cause was a fixture inheriting `GIT_DIR` and `GIT_WORK_TREE`, reproduced in a scratch clone.
+- **Evidence:** [unlanded] 2026-11-17, `git log -1 --format='%an <%ae> %s' 6f2d9d938` prints a test fixture's identity (`<test@example.invalid>`) and the subject `initial`, and `git reflog main` records it as `commit: initial` at 08:08:12. The cause was a fixture inheriting `GIT_DIR` and `GIT_WORK_TREE`, reproduced in a scratch clone.
 
 ### Prevent losing heavy proof across loop restarts
 
@@ -6000,7 +5699,7 @@ The work is four items, split by the design seat on 2026-11-18 after builds kept
 - **Evidence, the index:** `uvx vantage-check index --format json` lists open questions per document, and none of the six conflicts appears in it.
 - **The prerequisite is checked before any edit.** In the staged tree, `rg -n 'tillr-drain/vantage' tools -g '*.go'` and `rg -n 'func parseQuestions' tools/tillr-item` both return nothing once `item-qp-one-question-reader` has landed. If either prints a match, the lane was staged from a base without the prerequisite. That is a staging fault for the loop to repair by restaging, and it is not a question for the design seat or the owner. The worker reports it as such and does not move the reader itself. `tools/tillr/` is in this item's paths only so the landed reader can expose ledger ids.
 - **Evidence, 2026-11-17 about 19:00Z:** a worker run staged for this item stopped before editing. `rg -n 'tillr-drain/vantage' tools/tillr-drain/drain/questions.go tools/tillr-view/waiting.go` printed one import in each file, `rg --files tools/tillr | rg '/vantage/'` printed nothing, and `rg -n 'func parseQuestions' tools/tillr-item/item/questions.go` printed the hand-written parser. The same three commands printed the same results when this block was amended later that day.
-- **Evidence, 2026-11-18, the ledger ids:** a worker run built the question, the hold and the migration, then stopped on the second criterion. Its answer check treated a deleted question as answered, and it could read an index cached from an uncommitted edit. `uvx vantage-check index --format json` (version 0.12.0) on this date printed a `ledgerIds` list for each document, and 31 of 472 documents had a non-empty one: `docs/design/approver-agent.md` listed ten ids there and had no entry in `questions`. `rg -n 'ledger' tools/tillr/vantage` printed nothing, so the reader drops that list. The second criterion and the paths were amended to close both faults.
+- **Evidence, 2026-11-18, the ledger ids:** a worker run built the question, the hold and the migration, then stopped on the second criterion. Its answer check treated a deleted question as answered, and it could read an index cached from an uncommitted edit. `uvx vantage-check index --format json` (version 0.12.0) on this date printed a `ledgerIds` list for each document, and 31 of 472 documents had a non-empty one: one of them listed ten ids there and had no entry in `questions`. `rg -n 'ledger' tools/tillr/vantage` printed nothing, so the reader drops that list. The second criterion and the paths were amended to close both faults.
 - **Any new hold reason is classified.** `TestAllDefinedHoldReasonsAreClassified` in `tools/tillr-drain` fails on a reason that has no class, and the same worker run failed it with a new `owner-answer-sync` reason. A reason this item adds gets a class and a next mover in the same change.
 - **Evidence, 2026-11-18, two contradictions answered:** a worker run stopped before editing on two pairs of criteria. The second said a published question leaves the conflict open while the sixth told the migration to close it, and the earlier worker's migration had required the conflict to be `answered` or `closed` straight after publishing and printed "answered conflict". The sixth now follows the second: the migration publishes and leaves the conflict open. The third claimed every owner-waiting item is in the index while the fourth keeps a conflict that has no document. The fourth now gives that conflict to the operator, so it is not owner-waiting and the third's equality holds without it.
 - **Evidence, 2026-11-18, the deleted question:** a later worker run stopped before editing on the second and third criteria. The second kept an item held with its conflict open after its question was deleted, and the third defined owner-waiting as held `question-open` and required equality with the index's open questions, which cannot list a deleted one. The block did not say which hold the deleted case takes. It is now ruled an operator repair: the item is held `question-removed`, a new reason with the operator as mover, so it is in neither of the third criterion's sets. `rg -n 'question-removed' tools -g '*.go'` printed nothing on this date, so the reason is new and the classification rule above applies to it.
@@ -6102,7 +5801,7 @@ The item above publishes an owner's question into a document and closes the conf
 - **Ref:** the section "Owner decisions in documents" in `tools/tillr-drain/README.md`; [`docs/reference/tillr-queue-persistence.md`](../reference/tillr-queue-persistence.md#open-questions-and-vantage-read-through), `D-UT4` and the section on the `question-open` hold and the Vantage index.
 - **Where:** `settleOwnerAnswers` in `tools/tillr-drain/drain/owner_answer.go`, which `refreshDocuments` in `loop.go` calls with the trunk commit; `VantageQuestions`, with its `Root`, `Command` and `Context`, and `LedgerIDs` on `DocumentQuestions`, in `tools/tillr/vantage/vantage.go`; the tests and the helper `ownerIndexCommand` in `tools/tillr-drain/drain/owner_question_test.go`; `yolo-packs/tillr/` copies, regenerated with `just pack-sync`.
 - **The prerequisite is checked before any edit.** `rg -n 'func \(l \*Loop\) settleOwnerAnswers' tools/tillr-drain/drain/owner_answer.go` and `rg -n 'LedgerIDs' tools/tillr/vantage/vantage.go` each print a line once `item-owner-conflict-is-a-document-question` has landed. If either prints nothing, the lane was staged from a base without it. That is a staging fault for the loop to repair by restaging, and it is not a question for the design seat or the owner.
-- **Measured 2026-11-18, how the index reports an answer (`vantage-check` 0.12.0).** In a copy of the tree, filling in the `**Answer:**` text of retired question CL1 left its state `open`. Changing its title marker from 💬 to ✅ made `uvx vantage-check index --format json` report the state `answered`. The tool's source reads the state from that marker only: ✅ is settled, 🔒 is blocked, and anything else is open. A document's `ledgerIds` are the first-cell ids of the table rows under a heading that reads `Decision Ledger`. On the same date 31 of 472 documents had a non-empty `ledgerIds`, and `docs/design/approver-agent.md` listed ten ids there with no entry in `questions`. So a test's answered question carries ✅ in its title, and its compacted ruling is a row `| <id> | ... |` under a `## Decision Ledger` heading with the numbered entry removed.
+- **Measured 2026-11-18, how the index reports an answer (`vantage-check` 0.12.0).** In a copy of the tree, filling in the `**Answer:**` text of retired question CL1 left its state `open`. Changing its title marker from 💬 to ✅ made `uvx vantage-check index --format json` report the state `answered`. The tool's source reads the state from that marker only: ✅ is settled, 🔒 is blocked, and anything else is open. A document's `ledgerIds` are the first-cell ids of the table rows under a heading that reads `Decision Ledger`. On the same date 31 of 472 documents had a non-empty `ledgerIds`, and one of them listed ten ids there with no entry in `questions`. So a test's answered question carries ✅ in its title, and its compacted ruling is a row `| <id> | ... |` under a `## Decision Ledger` heading with the numbered entry removed.
 - **Measured 2026-11-18, the committed tree can be indexed on its own.** `git archive HEAD | tar -x -C <dir>` wrote the tree in 0.13 seconds, 59 MB, and `uvx vantage-check index --format json` run in that directory took 13.7 seconds and reported the same 472 documents and 171 questions as the checkout. So the sync can read the trunk commit's index without touching the checkout, and it must not do so on every pass.
 - **Settled by the design seat on 2026-11-18, and the owner's to overturn.** None of this is an open question for a worker.
   - **The sync reads the committed tree.** For each conflict in status `question`, the sync compares `git rev-parse <commit>:<document>` with the blob it last examined for that conflict, kept in memory on the loop in a map from conflict id to blob, and does nothing more for that conflict when they are equal. When any differ, it exports the commit once with `git archive` into a temporary directory, runs the index command there through a new `VantageQuestions` whose `Root` is that directory and whose `Command` is `l.cfg.QuestionsCmd`, and removes the directory. It never uses `l.questions`, which reads the checkout, and it never reads the document itself. It deletes the `git diff` against the checkout, which the committed read replaces. An index that fails, or a document the commit does not hold, changes nothing, and the blob is not remembered, so the next pass tries again. A blob is remembered after its question has been examined, whatever the outcome.
@@ -8843,7 +8542,7 @@ Once a seat is whatever the policy maps, the policies can name more kinds of wor
 
 - **Ref:** the references and the out-of-scope list in [the first item of this split](#add-a-planning-stage-that-fans-implementation-out-by-seat), and the policy check as [the item before this one](#move-the-seat-check-from-a-fixed-list-to-the-backend-policy) leaves it: `Policy.Check` accepts any well-formed seat name, `expandWorkflow` in `workflow_check.go` refuses a stage on a seat the policy does not map, and `Policy` carries `Ref`, the path of the file it was read from.
 - **The starting seats, settled by the design seat on 2026-11-18.** The four existing seats stay as they are: design on Fable 5.2, build on Terra, review on Sol, scout on Luna. Six seats are new. `plan` on Sol reads the item and the tree and writes the piece list. `edit` on Terra applies a settled edit named in the plan, such as a rename, a signature change at known call sites or a reformat. `test-write` on Terra writes tests from the criteria. `test-run` on Luna runs a named check command and reports its result without fixing it. `docs` on Terra writes the doc and README changes. `verify` on Sol is the join. In `config/tillr/backend-policy.bedrock.json` those are the backends `pi` for `plan` and `verify`, `pi-build` for `edit`, `test-write` and `docs`, and `pi-scout` for `test-run`. A piece that is real implementation goes to `build`, and read-only searching goes to `scout`.
-- **Three questions the earlier text left open, now closed.** Luna does not write in a tillr node. retired question SP6 found it fit only for single-turn infilling and shallow search, and the owner's instruction of 2026-11-18 put it on the scout seat, which is read-only, so both stand: Luna fills `scout` and `test-run`, the policy lists those two under `read_only_seats`, and c1 makes that mechanical for a workflow file, as the piece list item does for a planner's proposal. That is why `edit` is on Terra. It stays its own seat, apart from `build`, so that moving it to a cheaper model later is one policy edit made on a measurement from the cost item below. `edit` and `test-run` stay two seats, because one writes and the other must not. `plan` has no second seat on the design model: a planner that meets a design decision reports blocked, and that is the route to the design model. None of the seven items edits `yolo-packs/seat-profiles/`, so Luna stays out of every pi sub-agent set.
+- **Three questions the earlier text left open, now closed.** Luna does not write in a tillr node. retired question SP6 found it fit only for single-turn infilling and shallow search, and the owner's instruction of 2026-11-18 put it on the scout seat, which is read-only, so both stand: Luna fills `scout` and `test-run`, the policy lists those two under `read_only_seats`, and c1 makes that mechanical for a workflow file, as the piece list item does for a planner's proposal. That is why `edit` is on Terra. It stays its own seat, apart from `build`, so that moving it to a cheaper model later is one policy edit made on a measurement from the cost item below. `edit` and `test-run` stay two seats, because one writes and the other must not. `plan` has no second seat on the design model: a planner that meets a design decision reports blocked, and that is the route to the design model. None of the seven items changes which models a pi worker's own sub-agents may use, so Luna stays out of every pi sub-agent set.
 - **Build order, each step a stop only if it fails.** Do the steps in order in one run. The end of a step is not an ending, and the commit is made once, at step 4.
   1. **The two policy keys.** Add `ReadOnlySeats`, a list under `read_only_seats`, and `SeatPurposes`, a map under `seat_purposes`, to `Policy` in `tools/tillr-drain/drain/policy.go`. `Policy.Check` refuses an entry of either that names a seat the policy does not map, and the refusal names the key and the seat. Test: one case for each key in `drain/policy_test.go`.
   2. **The read-only check.** Add it to `expandWorkflow` in `workflow_check.go` beside the unmapped-seat finding, under a new rule, `workflow-read-only-seat-writes`: a stage whose `access` is `write` on a seat the policy lists under `read_only_seats` is refused. The check is made only when a policy is given. Add the rule name to the list of graph rules in the `switch` in that file that holds `workflow-unknown-seat`, and to the list of rules in that file's opening comment. Test: `readWorkflow` refuses a `write` node on a read-only seat of a fixture policy.
@@ -8922,9 +8621,9 @@ A worker that builds an item alone does every step on its own model, and its bri
 **Agent details:**
 
 - **Ref:** the references and the out-of-scope list in [the first item of this split](#add-a-planning-stage-that-fans-implementation-out-by-seat). This item waits on [the item that declares the starting seats](#add-the-starting-seats-to-every-backend-policy), which adds the policy keys this one reads: `read_only_seats`, and `seat_purposes`, a map from seat name to one sentence. A seat with no purpose prints its name alone.
-- **A policy seat is not a sub-agent choice, settled by the design seat on 2026-11-18.** An earlier criterion had the pi adapter make the policy's seats available to a worker's own sub-agents, and a worker reported that this contradicts keeping Luna out of every pi sub-agent set. It does, and the criterion was rewritten. There are two vocabularies. A tillr seat is a name the backend policy maps to a backend, and tillr starts a run on it as a node. A pi worker's own sub-agents are pi's agents, such as its scout and its worker, and `yolo-packs/seat-profiles/files/seat-profiles.json` pins their models through the set in force. That file excludes Luna from every set and has no entry for a tillr seat name, so passing policy seats through would need a second model registry beside it, and this item adds none. The adapter therefore passes nothing, no seat is filtered into an "eligible" subset, and the brief lists all of the policy's seats with the read-only ones marked. Starting a worker's sub-agent on a tillr seat is the dispatched-children work under [`OQ-GP5`](../design/tillr-graph-is-the-path.md#OQ-GP5), which is out of scope.
-- **Where to look for the implementer brief:** `tools/tillr-run/backends/brief-template.md` (the nine sections every adapter requires) and `tools/tillr-run/backends/pi/run-pi`, which sets `PI_SUBAGENTS_TEMP_ROOT` and the child-session marker for pi's own sub-agents. `yolo-packs/seat-profiles/` decides which models a worker's own sub-agents may use, and this item reads it and does not edit it or `run-pi`. The template is filled in `tools/tillr-drain/drain/stage.go`, in the module that already holds the policy, so the filler takes the seat names, the purposes and the read-only list from the policy in force. Add one section to the template for the seat lines and the fixed paragraph, and keep the paragraph free of any harness's agent names, since the template serves every adapter.
-- **The template has a second filler, settled by the design seat on 2026-11-18.** A worker reported that `filled_brief` in `tests/tillr-muse-backend.test.py` reads `brief-template.md` and replaces only the placeholders in its fixed `values` map, so a new placeholder reaches `preflight.sh` unfilled and is refused. That is right: `tools/fork-check.py` runs that test for any backend change, and on 2026-11-18 `rg -ln 'brief-template' tests` found two more files, `tests/tillr-docs.test.py` and `tests/pack-sync.test.py`, neither of which fills a placeholder or counts the sections. The item's paths include that one test file, for the one map entry step 1 names, because the template and its fixture must change in the same commit for the gate to pass.
+- **A policy seat is not a sub-agent choice, settled by the design seat on 2026-11-18.** An earlier criterion had the pi adapter make the policy's seats available to a worker's own sub-agents, and a worker reported that this contradicts keeping Luna out of every pi sub-agent set. It does, and the criterion was rewritten. There are two vocabularies. A tillr seat is a name the backend policy maps to a backend, and tillr starts a run on it as a node. A pi worker's own sub-agents are pi's agents, such as its scout and its worker, and pi's own configuration pins their models through the set in force. That configuration excludes Luna from every set and has no entry for a tillr seat name, so passing policy seats through would need a second model registry beside it, and this item adds none. The adapter therefore passes nothing, no seat is filtered into an "eligible" subset, and the brief lists all of the policy's seats with the read-only ones marked. Starting a worker's sub-agent on a tillr seat is the dispatched-children work under [`OQ-GP5`](../design/tillr-graph-is-the-path.md#OQ-GP5), which is out of scope.
+- **Where to look for the implementer brief:** `tools/tillr-run/backends/brief-template.md` (the nine sections every adapter requires) and `tools/tillr-run/backends/pi/run-pi`, which sets `PI_SUBAGENTS_TEMP_ROOT` and the child-session marker for pi's own sub-agents. Pi's own configuration decides which models a worker's own sub-agents may use, and this item does not edit it or `run-pi`. The template is filled in `tools/tillr-drain/drain/stage.go`, in the module that already holds the policy, so the filler takes the seat names, the purposes and the read-only list from the policy in force. Add one section to the template for the seat lines and the fixed paragraph, and keep the paragraph free of any harness's agent names, since the template serves every adapter.
+- **The template has a second filler, settled by the design seat on 2026-11-18.** A worker reported that `filled_brief` in `tests/tillr-muse-backend.test.py` reads `brief-template.md` and replaces only the placeholders in its fixed `values` map, so a new placeholder reaches `preflight.sh` unfilled and is refused. That is right: the gate runs that test for any backend change, and on 2026-11-18 `rg -ln 'brief-template' tests` found two more files, `tests/tillr-docs.test.py` and `tests/pack-sync.test.py`, neither of which fills a placeholder or counts the sections. The item's paths include that one test file, for the one map entry step 1 names, because the template and its fixture must change in the same commit for the gate to pass.
 - **Build order, each step a stop only if it fails.** Make the commit once, at step 2.
   1. **The implementer brief (c1).** Add one section, `## Seats`, to `tools/tillr-run/backends/brief-template.md`, with a placeholder for the seat lines and the fixed paragraph, and fill the placeholder in `renderBrief` in `stage.go` from the policy in force. `tools/tillr-run/backends/preflight.sh` holds the list of the template's sections and refuses a brief that lacks one, so add the heading there and correct the count in its messages and in the READMEs that `rg -ln 'nine sections|all nine' tools` finds. Do not change `tools/tillr-run/backends/pi/run-pi`. The Muse acceptance test fills the same template from a fixed map: add the new placeholder's name and a fixture value to `values` in `filled_brief` in `tests/tillr-muse-backend.test.py`, change nothing else in that file, and run `python3 tests/tillr-muse-backend.test.py`. Tests as c1 states.
   2. **Finish.** Run `just pack-sync`, `python3 tools/go-test-shards.py tools/tillr-drain -k 6` and the same for `tools/tillr-run`, `yolo pack lint yolo-packs/tillr` and `python3 tests/tillr-docs.test.py`. Make one commit holding all of it.
