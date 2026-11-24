@@ -6849,6 +6849,82 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
     plan.skips = kept_skips
 
 
+GO_AFFECTED_BASE_WATCHES = (
+    "tools/gate/go_affected.py",
+    "tools/gate/go-test-edges.json",
+    "tests/go-affected.test.py",
+)
+
+
+def tillr_go_modules(root: Path) -> list[str]:
+    """The tillr Go module directories present in `root` (`tools/tillr` and `tools/tillr-*`)."""
+    mods: list[str] = []
+    if (root / "tools" / "tillr" / "go.mod").is_file():
+        mods.append("tools/tillr")
+    if (root / "tools").is_dir():
+        mods.extend(f"tools/{p.parent.name}" for p in sorted((root / "tools").glob("tillr-*/go.mod")))
+    return mods
+
+
+def go_module_import_path(gomod: Path) -> str:
+    """The module path declared by `gomod`, or empty when unreadable."""
+    try:
+        text = gomod.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        line = line.split("//", 1)[0].strip()
+        if line.startswith(("module ", "module\t")):
+            parts = line.split()
+            if len(parts) >= 2:
+                return parts[1].strip('"')
+    return ""
+
+
+def go_edge_modules(root: Path, tillr_mods: list[str] | None = None,
+                    edges_data: dict | None = None) -> tuple[str, ...]:
+    """Tillr Go module directories that `tools/gate/go-test-edges.json` describes."""
+    if edges_data is None:
+        edges_file = root / "tools" / "gate" / "go-test-edges.json"
+        if not edges_file.is_file():
+            return ()
+        try:
+            loaded = json.loads(edges_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ()
+        if not isinstance(loaded, dict):
+            return ()
+        edges_data = loaded
+    if not edges_data:
+        return ()
+    if tillr_mods is None:
+        tillr_mods = tillr_go_modules(root)
+    described: list[str] = []
+    for mod in tillr_mods:
+        mod_path = go_module_import_path(root / mod / "go.mod")
+        if mod_path and any(
+            isinstance(pkg, str) and (pkg == mod_path or pkg.startswith(f"{mod_path}/"))
+            for pkg in edges_data
+        ):
+            described.append(mod)
+    return tuple(described)
+
+
+def go_affected_suite_matches(path: str, edge_mods: tuple[str, ...]) -> bool:
+    """Whether `path` selects `go-affected-suite`."""
+    if watched_path(path, set(GO_AFFECTED_BASE_WATCHES)):
+        return True
+    return path.endswith("_test.go") and any(path.startswith(f"{mod}/") for mod in edge_mods)
+
+
+def go_affected_suite_selects(root: Path) -> list[dict]:
+    """Registry `selects` patterns for `go-affected-suite`."""
+    return [
+        *({"path": path} for path in GO_AFFECTED_BASE_WATCHES),
+        *({"regex": rf"^{re.escape(mod)}/.*_test\.go$"} for mod in go_edge_modules(root)),
+    ]
+
+
 def build_plan(
     root: Path, series: list[Series], record: Record, changed: list[str], force_all: str | None,
     build: bool, audit_upstreams: bool = True, yolo: YoloBuild | None = None,
@@ -7299,19 +7375,21 @@ def build_plan(
 
     # Affected Go test packages across all tillr modules (landing-tier only; rolling/full
     # run whole module suites).
-    tillr_mods: list[str] = []
-    if (root / "tools" / "tillr" / "go.mod").is_file():
-        tillr_mods.append("tools/tillr")
-    if (root / "tools").is_dir():
-        tillr_mods.extend(f"tools/{p.parent.name}" for p in sorted((root / "tools").glob("tillr-*/go.mod")))
+    tillr_mods = tillr_go_modules(root)
     edges_reads: list[str] = []
+    edges_data: dict = {}
     edges_file = root / "tools" / "gate" / "go-test-edges.json"
     if edges_file.is_file():
         try:
-            for entry in json.loads(edges_file.read_text(encoding="utf-8")).values():
-                edges_reads.extend(entry.get("reads", ()))
+            loaded_edges = json.loads(edges_file.read_text(encoding="utf-8"))
+            if isinstance(loaded_edges, dict):
+                edges_data = loaded_edges
+                for entry in edges_data.values():
+                    if isinstance(entry, dict):
+                        edges_reads.extend(entry.get("reads", ()))
         except (OSError, ValueError):
             pass
+    edge_mods = go_edge_modules(root, tillr_mods, edges_data)
     affected_watches = tuple(dict.fromkeys((*(m + "/" for m in tillr_mods), *edges_reads)))
     affected_changed = [path for path in changed if watched_path(path, set(affected_watches))]
     if affected_changed and (root / "tools" / "gate" / "go_affected.py").is_file():
@@ -7330,24 +7408,21 @@ def build_plan(
     else:
         plan.not_planned("go-affected", "no tillr Go module or declared edge input changed")
 
-    go_affected_watches = (
-        "tools/gate/go_affected.py",
-        "tools/gate/go-test-edges.json",
-        "tests/go-affected.test.py",
-    )
-    go_affected_suite = [path for path in changed if watched_path(path, set(go_affected_watches))]
+    go_affected_watches = (*GO_AFFECTED_BASE_WATCHES, *(f"{mod}/" for mod in edge_mods))
+    go_affected_suite = [path for path in changed if go_affected_suite_matches(path, edge_mods)]
     if go_affected_suite:
         plan.checks.append(
             Check("go-affected-suite",
                   "go-affected selection, edges, and cache invalidation suite passes",
                   [sys.executable, "tests/go-affected.test.py"],
-                  "go_affected.py, go-test-edges.json, or tests/go-affected.test.py changed",
+                  "go_affected.py, go-test-edges.json, tests/go-affected.test.py, or an edge-described tillr Go _test.go file changed",
                   300, watches=go_affected_watches,
+                  selected_by=tuple(go_affected_suite),
                   cost=CHECK_COST_ESTIMATE["go-affected-suite"])
         )
     else:
         plan.not_planned("go-affected-suite (tests/go-affected.test.py)",
-                         "go_affected.py, go-test-edges.json, and tests/go-affected.test.py are unchanged")
+                         "go_affected.py, go-test-edges.json, tests/go-affected.test.py, and edge-described tillr Go _test.go files are unchanged")
 
     # The sharded Go test runner's own regression suite (6-40s). `tools/gate/checks/go-test-shards-test.json`
     # is `scope: "tree", tier: "heavy"` (so it also covers Go module test-name parity in JudgeHeavy),
@@ -9762,11 +9837,13 @@ def declaration_of(check: "Check", index: int, root: Path, changed: list[str]) -
     to build.
     """
     pid = re.compile(rf"run-{os.getpid()}(?!\d)")
+    selects = (go_affected_suite_selects(root)
+               if check.kind == "go-affected-suite" else selection_patterns(check))
     decl = {
         "id": declaration_id(check.kind, check.label, root),
         "kind": check.kind,
         "label": check.label,
-        "selects": selection_patterns(check),
+        "selects": selects,
         "selected_by": list(check.selected_by) if check.selected_by is not None else [],
         "command": list(check.argv),
         "watches": watch_patterns(check.watches),
