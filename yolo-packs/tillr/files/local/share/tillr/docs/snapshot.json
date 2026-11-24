@@ -1,6 +1,6 @@
 {
   "format": "tillr-pack-docs-1",
-  "commit": "5fabdf36feb128aaeb47bb7ba5c9ab6bb1e22e90",
+  "commit": "2fa55241a803d54c000be88d6e5e12e93c244a8c",
   "date": "2026-11-24",
   "index": "docs/tillr/design-status.md",
   "jail_root": "~/.local/share/tillr",

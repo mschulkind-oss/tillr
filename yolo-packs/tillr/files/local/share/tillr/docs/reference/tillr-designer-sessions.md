@@ -29,7 +29,7 @@ related:
 
 # Designer Sessions and Review Comments
 
-> **Delivered copy.** This is `docs/reference/tillr-designer-sessions.md` from this repository at commit `5fabdf36fe` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-designer-sessions.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-designer-sessions.md` from this repository at commit `2fa55241a8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-designer-sessions.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-24 by reading the code named in `covers`.
 UNMEASURED: whether a resumed session answers a comment better than a new one

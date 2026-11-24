@@ -20,7 +20,7 @@ vantage:
 
 # The Claude Code backend: headless runs on a subscription, and waiting when its window is spent
 
-> **Delivered copy.** This is `docs/reference/tillr-claude-backend.md` from this repository at commit `5fabdf36fe` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-claude-backend.md` from this repository at commit `2fa55241a8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-24 against the tree. MEASURED: the adapter's defaults
 ([What a headless run loads](#what-a-headless-run-loads)), a dispatch and landing in a scratch

@@ -15,7 +15,7 @@ depends-on:
 
 # tillr is a core of queues and graphs, and landing in Git is one charter on top of it
 
-> **Delivered copy.** This is `docs/design/tillr-core-and-git-landing.md` from this repository at commit `5fabdf36fe` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-core-and-git-landing.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-core-and-git-landing.md` from this repository at commit `2fa55241a8` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-core-and-git-landing.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** The direction is the owner's ([Section 1](#1-the-direction-in-the-owners-words)). The
 charter file, the store that records it and a second charter that lands nothing are built
