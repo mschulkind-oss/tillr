@@ -253,17 +253,39 @@ func (f loopFixture) steps(t *testing.T, gate, land, verdict string) *drain.Proc
 
 // passStager is the stager the loop's step-level cases drive: it stages no worktree and
 // renders no brief, because those cases are about the order the loop keeps and the lane
-// worktrees stageLanes already created are enough for them. It does write the lane's fence,
-// which is the one staged artifact the loop itself reads back: a stager that wrote none
-// would leave every candidate in these cases outside a fence that does not exist. The real
-// stager has its own cases (stage_test.go).
+// worktrees stageLanes already created are enough for them. It writes the lane's fence and
+// base-sha files, which are the staged artifacts the loop itself reads back: without the
+// fence every candidate would be rejected, and without updating base_sha/item_base_sha a
+// repair staged after stagePinnedCandidate would keep the held candidate's stale base. The
+// real stager has its own cases (stage_test.go).
 type passStager struct {
 	laneRoot string
 	fence    []string
 }
 
 func (s passStager) Stage(_ context.Context, spec drain.StageSpec) error {
-	return writeFence(s.laneRoot, spec.LaneID, s.fence)
+	if err := writeFence(s.laneRoot, spec.LaneID, s.fence); err != nil {
+		return err
+	}
+	baseSHA := spec.BaseSHA
+	itemBaseSHA := baseSHA
+	if spec.KeptItemBaseSHA != "" {
+		baseSHA, itemBaseSHA = spec.KeptItemBaseSHA, spec.KeptItemBaseSHA
+	} else if spec.Node != nil && spec.Continue {
+		itemBaseSHA = spec.ItemBaseSHA
+	}
+	dir := filepath.Join(s.laneRoot, spec.LaneID)
+	if baseSHA != "" {
+		if err := os.WriteFile(filepath.Join(dir, drain.BaseSHAFile), []byte(baseSHA+"\n"), 0o644); err != nil {
+			return err
+		}
+	}
+	if itemBaseSHA != "" {
+		if err := os.WriteFile(filepath.Join(dir, drain.ItemBaseSHAFile), []byte(itemBaseSHA+"\n"), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // writeFence writes the fence staging writes: <lane-root>/<lane>/fence.txt, one repo-relative

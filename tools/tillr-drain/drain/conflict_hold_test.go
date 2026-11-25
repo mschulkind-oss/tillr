@@ -44,7 +44,13 @@ func TestRepairStagingFailureSurvivesRestartWithoutCancelingSiblings(t *testing.
 case "$lane" in
  lane-1) while [ ! -f "$REPAIR_SIGNALS/started-2" ] || [ ! -f "$REPAIR_SIGNALS/started-3" ]; do sleep 0.01; done ;;
  *) touch "$REPAIR_SIGNALS/started-${lane#lane-}"
-    while [ ! -f "$REPAIR_SIGNALS/release" ]; do sleep 0.01; done ;;
+    while [ ! -f "$REPAIR_SIGNALS/release" ]; do sleep 0.01; done
+    file="sibling-${lane#lane-}.txt"
+    echo candidate > "$file"
+    git add "$file"
+    git -c user.name=stub -c user.email=stub@example.invalid commit -q -m candidate
+    printf 'RESULT: done\n'
+    exit 0 ;;
 esac
 `+conflictAdapter)
 	f := newLoopFixture(t, adapter)
@@ -73,7 +79,7 @@ printf '%%s\n' '%s'
  *) exit 0 ;;
 esac
 `, landFirst))
-	stage := &failingRepairStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"base.txt"}}, signals: signals}
+	stage := &failingRepairStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"base.txt", "sibling-2.txt", "sibling-3.txt"}}, signals: signals}
 	steps := f.steps(t, always(t, "gate", 0), land, always(t, "verdict", 0))
 	result, err := f.newLoopWith(t, 3, steps, stage, os.Stderr).Run(context.Background())
 	if err != nil {

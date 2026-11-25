@@ -786,8 +786,8 @@ func TestRollTestsEndEveryProcessTheyStartBeforeReturning(t *testing.T) {
 			t.Fatalf("parsing worker pid: %v", err)
 		}
 		stopAtGapPID := procParentPID(t, workerPID)
-		if cmd := procCmdline(stopAtGapPID); !strings.Contains(cmd, "roll-adapter-") || !strings.Contains(cmd, "/backends/pi/stop-at-gap") {
-			t.Fatalf("worker parent %d cmdline = %q, want roll-adapter stop-at-gap", stopAtGapPID, cmd)
+		if cmd := procCmdline(stopAtGapPID); !strings.Contains(cmd, "roll-adapter-") || !strings.Contains(cmd, "pi-stop-at-gap") {
+			t.Fatalf("worker parent %d cmdline = %q, want roll-adapter pi-stop-at-gap", stopAtGapPID, cmd)
 		}
 		if cmd := procCmdline(workerPID); !strings.Contains(cmd, "/pi ") {
 			t.Fatalf("worker %d cmdline = %q, want stub pi", workerPID, cmd)
