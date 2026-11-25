@@ -197,7 +197,7 @@ An escalation to the owner carries a structured `question` and concrete `options
 
 Escalation reuses the `wait` and `seen` protocol of [the general agent watch design](./general-agent-watch.md#7-how-an-agent-in-any-harness-is-woken) (`D-AT8`):
 
-1. The operating session runs one `tillr watch wait ... --owner operator-session` watcher ([the timed drain check-in skill](../../.agents/skills/drain-timed-checkin/SKILL.md#start-or-resume)).
+1. The operating session runs one `tillr watch wait ... --owner operator-session` watcher (the timed drain check-in skill (an operating skill kept outside this repository)).
 2. For that owner, pending notices are the unsettled episodes of `receiver = "operator-session"` rules, the episodes of `triage` rules with a `watch.alert.escalated` event newer than the owner's `seen_seq`, and the unsettled reminders of [the alert workflow](./tillr-watch-alert-workflow.md#6-making-unsettled-alerts-unmistakable--and-showing-every-alert-transition-and-linked-item-in-the-observatory). Episodes still untriaged, being triaged, or settled inside `tillr` do not wake it.
 3. An escalated notice leads with a `triage` block (run id, outcome, `escalated_to`, item id, finding, and `action_needed` or `question` with `options`), placed ahead of raw event lines so truncation to 8 KiB never drops the triage conclusion.
 4. Printing a notice advances `shown_seq` only. `seen_seq` advances when the operating session re-arms with `--seen-through` or runs `tillr watch seen` ([D-TW11](./tillr-watch.md#D-TW11)), so a lost turn never drops an escalated alert.

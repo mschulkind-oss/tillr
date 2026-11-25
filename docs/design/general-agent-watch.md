@@ -321,7 +321,7 @@ In each, the agent confirms and continues by running the printed `re-arm:` line.
    answer (a quiet timeout, lint errors); `2` usage; `3` incompatible schema; `4` external I/O;
    `5` internal. The slice that changes the quiet timeout's code updates
    [the operating skill](../../yolo-packs/tillr/skills/tillr-operating/SKILL.md) and
-   [the timed check-in skill](../../.agents/skills/drain-timed-checkin/SKILL.md) in the same
+   the timed check-in skill (an operating skill kept outside this repository) in the same
    change.
 
 ---

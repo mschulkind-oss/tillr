@@ -29,7 +29,7 @@ violation today or whether the rule is a convention agents follow.
 | The waiter a blocked item must name | `tools/tillr-item/item` (`WaitingOn`, `checkWaitingOn`) |
 | Who decided a recorded decision | `tools/tillr-item/item` (`RecordDecision`, `decided_by`) |
 | Routing a worker's obstacle to the design seat and then to the owner | `tools/tillr-drain/drain` (`ObstacleOwner`, `DesignNextActorField`) |
-| The operator's reporting rule | [`drain-timed-checkin`](../../.agents/skills/drain-timed-checkin/SKILL.md), *Reporting to the owner* |
+| The operator's reporting rule | the operator's timed check-in skill (an operating skill kept outside this repository), *Reporting to the owner* |
 
 **Reads with:** [the judge design](../design/tillr-judge-and-lifecycle.md#6-the-judge-is-a-step-in-the-flow)
 (the owner's ruling that a judge is a step in the flow), [item states](./tillr-item-states.md) (what `blocked` stores), and
@@ -174,7 +174,7 @@ no program refuses a violation.
 | A worker cannot settle an owner decision by guessing | The worker brief's `owner` obstacle, which requires a `QUESTION:` line, and `tools/tillr-drain/drain`, which sends a worker's obstacle to the design seat first and to the owner only on that seat's `NEXT-ACTOR: owner` |
 | A recorded decision says who decided it | `RecordDecision` in `tools/tillr-item/item`: `decided_by` is `owner` or `whale` |
 | The four owner-only classes, and the three placement tests | Nothing. The `owner-only` claim class is the only stored form, and it is set per criterion by whoever writes the item |
-| "Please run X" is forbidden; an owner request carries real options, evidence and a recommendation | Nothing in code. [`drain-timed-checkin`](../../.agents/skills/drain-timed-checkin/SKILL.md) instructs the operator, and the worker brief asks for the question and its options |
+| "Please run X" is forbidden; an owner request carries real options, evidence and a recommendation | Nothing in code. The operator's timed check-in skill (an operating skill kept outside this repository) instructs the operator, and the worker brief asks for the question and its options |
 | A delegated action carries an evidence packet written before the action | Nothing beyond the verdict's own evidence requirement above. No program checks a packet for other delegated actions |
 | The decider and the executor are recorded separately | Nothing. `decided_by` records the decider; no field records a separate executor |
 

@@ -264,7 +264,7 @@ Unsettled episodes, including resolved ones, are surfaced in three places (`D-AW
    ```
 
 2. **`tillr watch wait`.** Advancing `seen_seq` confirms delivery of the first notice; it does not retire an unsettled episode. An episode routed or escalated to the operating session that is still unsettled after `unsettled_remind_after` (default `15m`) is re-emitted with an `UNSETTLED` banner. Episodes escalated to the owner are excluded. The notice footer prints the `investigate`, `settle`, `silence` and `ack` command templates.
-3. **`tillr drain why`** raises a standing `unsettled-watch-alerts` alarm with the count, the oldest age and the alert ids, excluding episodes under a live triage claim or waiting on the owner. [The timed drain check-in skill](../../.agents/skills/drain-timed-checkin/SKILL.md) treats each such alert as work to finish before the check-in report.
+3. **`tillr drain why`** raises a standing `unsettled-watch-alerts` alarm with the count, the oldest age and the alert ids, excluding episodes under a live triage claim or waiting on the owner. The timed drain check-in skill (an operating skill kept outside this repository) treats each such alert as work to finish before the check-in report.
 
 ### 6.2 Observatory surfaces: what is built today versus what is new
 

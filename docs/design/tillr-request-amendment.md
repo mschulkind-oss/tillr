@@ -84,7 +84,7 @@ What follows from the measurements:
 1. **The answer never reaches the request.** A design record sits in a document. The worker and the verifier are still handed the original words and criteria and must find the record and reconcile the two.
 2. **One flaw is answered per round.** The design seat is asked about the one sentence the worker reported, so a request with three flaws can cost three rounds.
 3. **The worker stops for flaws that block nothing.**
-4. **Many flaws can be read in the words on the day a request is filed**: four of six requests examined closely carried one. The repository's filing guidance names each kind ([the drain check-in skill](../../.agents/skills/drain-timed-checkin/SKILL.md#filing-work)).
+4. **Many flaws can be read in the words on the day a request is filed**: four of six requests examined closely carried one. The repository's filing guidance names each kind (the drain check-in skill (an operating skill kept outside this repository)).
 5. **Some stops are not flaws in the request.** A node of the plan cannot write a file its change requires; that is a flaw in the plan.
 6. **Narrowing is done by closing the item** and filing new requests by hand, which drops the lane, the worker's session and the item's history.
 7. **Narrower words end refusals about what the request stops naming.** They do not end refusals inside the named scope.
