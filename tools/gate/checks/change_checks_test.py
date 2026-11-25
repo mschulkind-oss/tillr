@@ -676,10 +676,10 @@ sys.exit(rc)
         verdict, = result.stdout.splitlines()
         checks = json.loads(verdict)["payload"]["checks"]
         expected = IDS | {"gate-budget", "scratch", "design-citations", "pack-sync", "go-build", "format",
-                          "go-affected", "go-edges"}
+                          "go-affected", "go-edges", "go-module-inventory"}
         self.assertEqual({check["check_id"] for check in checks}, expected)
         self.assertEqual(len(checks), len(expected))
-        skipped = {"format", "gate-budget", "go-affected", "go-build", "go-edges", "workflows"}
+        skipped = {"format", "gate-budget", "go-affected", "go-build", "go-edges", "go-module-inventory", "workflows"}
         self.assertEqual({check["check_id"]: check["result"] for check in checks}, {
             ident: "skipped: no changed path is read" if ident in skipped else "pass"
             for ident in expected
@@ -926,6 +926,173 @@ sys.exit(rc)
         stale = self.check("elapsed-time", py_head, stale_head)
         self.assertEqual(stale.returncode, 1, stale.stdout + stale.stderr)
         self.assertIn("no longer matches a hit", stale.stdout)
+
+    def test_go_module_addition_and_removal_select_inventory_checks_in_candidate_gate(self):
+        # Verify through the real tillr-gate --fast-tree --scope-to-change runner that a
+        # candidate adding or removing a go.mod under tools/ runs every per-module
+        # inventory check (TestMain cleanup, declared-suite tree check, source-scanning
+        # edges, and go-affected module discovery), while ordinary tools/ edits do not
+        # invoke the heavy inventory sub-checks.
+        checks_dir = self.repo / "inventory-checks"
+        checks_dir.mkdir()
+        for name in ("go-module-inventory.json", "go-edges.json"):
+            shutil.copy(ROOT / "tools/gate/checks" / name, checks_dir / name)
+
+        shutil.copy(ROOT / "tools/gate/go_affected.py", self.repo / "tools/gate/go_affected.py")
+        shutil.copy(ROOT / "tools/gate/checks/go-edges.py", self.repo / "tools/gate/checks/go-edges.py")
+        shutil.copy(ROOT / "tools/gate/checks/go-module-inventory.py", self.repo / "tools/gate/checks/go-module-inventory.py")
+
+        marker_log = self.repo / ".inventory-markers"
+        (self.repo / "tests").mkdir(exist_ok=True)
+        (self.repo / "tests/tillr-scratch.test.py").write_text(
+            "import os, sys\n"
+            "from pathlib import Path\n"
+            f"Path({str(marker_log)!r}).open('a').write('testmain-cleanup\\n')\n"
+            "if os.environ.get('FAIL_TESTMAIN') == '1':\n"
+            "    print('simulated TestMain failure')\n"
+            "    sys.exit(1)\n"
+        )
+        (self.repo / "tools/gate/checks/tree_checks_test.py").write_text(
+            "import unittest\n"
+            "from pathlib import Path\n"
+            "class TreeChecks(unittest.TestCase):\n"
+            "    def test_every_go_module_is_built_and_has_a_declared_suite(self):\n"
+            f"        Path({str(marker_log)!r}).open('a').write('declared-suites\\n')\n"
+            "    def test_a_declaration_reading_a_go_module_reads_its_in_repo_dependencies(self):\n"
+            f"        Path({str(marker_log)!r}).open('a').write('in-repo-deps\\n')\n"
+        )
+        (self.repo / "tests/go-affected.test.py").write_text(
+            "from pathlib import Path\n"
+            "def test_discover_modules():\n"
+            f"    Path({str(marker_log)!r}).open('a').write('go-affected-modules\\n')\n"
+        )
+
+        (self.repo / "tools/tillr").mkdir(parents=True, exist_ok=True)
+        (self.repo / "tools/tillr/go.mod").write_text("module github.com/mschulkind-oss/tillr\n\ngo 1.24\n")
+        (self.repo / "tools/tillr-existing").mkdir(parents=True, exist_ok=True)
+        (self.repo / "tools/tillr-existing/go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-existing\n\ngo 1.24\n"
+        )
+        (self.repo / "tools/tillr-existing/main.go").write_text("package main\nfunc main() {}\n")
+
+        def_pkg = "github.com/mschulkind-oss/tillr/definition"
+        def_test = "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+        store_pkg = "github.com/mschulkind-oss/tillr/store"
+        store_test = "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+        edges = {
+            def_pkg: {
+                "builds": [],
+                "reads": ["tools/tillr-existing/", "tools/tillr/"],
+                "read_tests": {
+                    "tools/tillr-existing/": [def_test],
+                    "tools/tillr/": [def_test],
+                },
+            },
+            store_pkg: {
+                "builds": [],
+                "reads": ["tools/tillr-existing/"],
+                "read_tests": {
+                    "tools/tillr-existing/": [store_test],
+                },
+            },
+        }
+        edges_path = self.repo / "tools/gate/go-test-edges.json"
+        edges_path.write_text(json.dumps(edges, indent=2) + "\n")
+
+        self.git("add", "inventory-checks", "tools", "tests")
+        base = self.commit()
+
+        # 1. Ordinary tools/ edit (no go.mod added or removed): go-module-inventory exits 0
+        #    without invoking the heavy inventory checks.
+        (self.repo / "tools/tillr-existing/main.go").write_text("package main\nfunc main() { _ = 1 }\n")
+        self.git("add", "tools/tillr-existing/main.go")
+        head_edit = self.commit()
+        res_edit = self.runner_check(
+            "--fast-tree", "--scope-to-change",
+            "--base", base, "--head", head_edit,
+            "--checks", str(checks_dir),
+        )
+        self.assertEqual(res_edit.returncode, 0, res_edit.stdout + res_edit.stderr)
+        checks_edit = {c["check_id"]: c["result"] for c in json.loads(res_edit.stdout)["payload"]["checks"]}
+        self.assertEqual(checks_edit, {"go-edges": "pass", "go-module-inventory": "pass"})
+        self.assertFalse(marker_log.exists(), "ordinary tools/ edit should not invoke heavy inventory checks")
+
+        # 2. Candidate adds tools/tillr-new/go.mod without declaring it in go-test-edges.json:
+        #    both go-edges and go-module-inventory run and fail, and every inventory sub-check executes.
+        (self.repo / "tools/tillr-new").mkdir(parents=True)
+        (self.repo / "tools/tillr-new/go.mod").write_text("module github.com/mschulkind-oss/tillr-new\n\ngo 1.24\n")
+        self.git("add", "tools/tillr-new/go.mod")
+        head_add_undeclared = self.commit()
+        res_add_fail = self.runner_check(
+            "--fast-tree", "--scope-to-change",
+            "--base", head_edit, "--head", head_add_undeclared,
+            "--checks", str(checks_dir),
+        )
+        self.assertEqual(res_add_fail.returncode, 1, res_add_fail.stdout + res_add_fail.stderr)
+        checks_add_fail = {c["check_id"]: c["result"] for c in json.loads(res_add_fail.stdout)["payload"]["checks"]}
+        self.assertEqual(checks_add_fail, {"go-edges": "fail", "go-module-inventory": "fail"})
+        ran_on_add = marker_log.read_text().splitlines()
+        self.assertEqual(ran_on_add, ["testmain-cleanup", "declared-suites", "in-repo-deps", "go-affected-modules"])
+
+        # 3. Declare tools/tillr-new/ in go-test-edges.json: when TestMain fails, the candidate gate
+        #    still fails; when all inventory checks pass, the candidate gate passes.
+        edges[def_pkg]["reads"].append("tools/tillr-new/")
+        edges[def_pkg]["read_tests"]["tools/tillr-new/"] = [def_test]
+        edges[store_pkg]["reads"].append("tools/tillr-new/")
+        edges[store_pkg]["read_tests"]["tools/tillr-new/"] = [store_test]
+        edges_path.write_text(json.dumps(edges, indent=2) + "\n")
+        self.git("add", "tools/gate/go-test-edges.json")
+        head_add_declared = self.commit()
+
+        marker_log.unlink()
+        fail_env = dict(self.env, FAIL_TESTMAIN="1")
+        res_tm_fail = subprocess.run(
+            [str(self.runner), "checks", "--fast-tree", "--scope-to-change",
+             "--base", head_edit, "--head", head_add_declared,
+             "--worktree", str(self.repo), "--checks", str(checks_dir),
+             "--logs", str(self.repo / "logs-tm-fail")],
+            cwd=self.repo, env=fail_env, capture_output=True, text=True,
+        )
+        self.assertEqual(res_tm_fail.returncode, 1, res_tm_fail.stdout + res_tm_fail.stderr)
+        checks_tm_fail = {c["check_id"]: c["result"] for c in json.loads(res_tm_fail.stdout)["payload"]["checks"]}
+        self.assertEqual(checks_tm_fail, {"go-edges": "pass", "go-module-inventory": "fail"})
+
+        marker_log.unlink()
+        res_add_pass = self.runner_check(
+            "--fast-tree", "--scope-to-change",
+            "--base", head_edit, "--head", head_add_declared,
+            "--checks", str(checks_dir),
+        )
+        self.assertEqual(res_add_pass.returncode, 0, res_add_pass.stdout + res_add_pass.stderr)
+        checks_add_pass = {c["check_id"]: c["result"] for c in json.loads(res_add_pass.stdout)["payload"]["checks"]}
+        self.assertEqual(checks_add_pass, {"go-edges": "pass", "go-module-inventory": "pass"})
+        self.assertEqual(
+            marker_log.read_text().splitlines(),
+            ["testmain-cleanup", "declared-suites", "in-repo-deps", "go-affected-modules"],
+        )
+
+        # 4. Candidate removes tools/tillr-new/go.mod: inventory checks run again.
+        marker_log.unlink()
+        self.git("rm", "-q", "tools/tillr-new/go.mod")
+        edges[def_pkg]["reads"].remove("tools/tillr-new/")
+        del edges[def_pkg]["read_tests"]["tools/tillr-new/"]
+        edges[store_pkg]["reads"].remove("tools/tillr-new/")
+        del edges[store_pkg]["read_tests"]["tools/tillr-new/"]
+        edges_path.write_text(json.dumps(edges, indent=2) + "\n")
+        self.git("add", "tools/gate/go-test-edges.json")
+        head_remove = self.commit()
+        res_remove = self.runner_check(
+            "--fast-tree", "--scope-to-change",
+            "--base", head_add_declared, "--head", head_remove,
+            "--checks", str(checks_dir),
+        )
+        self.assertEqual(res_remove.returncode, 0, res_remove.stdout + res_remove.stderr)
+        checks_remove = {c["check_id"]: c["result"] for c in json.loads(res_remove.stdout)["payload"]["checks"]}
+        self.assertEqual(checks_remove, {"go-edges": "pass", "go-module-inventory": "pass"})
+        self.assertEqual(
+            marker_log.read_text().splitlines(),
+            ["testmain-cleanup", "declared-suites", "in-repo-deps", "go-affected-modules"],
+        )
 
 
 if __name__ == "__main__":

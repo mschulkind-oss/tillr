@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"math"
 	"os"
@@ -68,17 +67,27 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	os.Exit(runTests(m))
+}
+
+// runTests returns before TestMain exits, so cleanup also runs after setup or test failure.
+func runTests(m *testing.M) int {
 	wd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "getwd: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	testRepoRoot = filepath.Clean(filepath.Join(wd, "..", ".."))
 
-	tmpDir, err := os.MkdirTemp("", "tillr-trace-test-*")
+	root := os.Getenv("YOLO_DURABLE_DIR")
+	if root == "" {
+		root = filepath.Join("..", "..", ".yolo", "durable")
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return 1
+	}
+	tmpDir, err := os.MkdirTemp(root, "tillr-trace-bin-")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mkdtemp: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -87,14 +96,14 @@ func TestMain(m *testing.M) {
 	build.Dir = wd
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "go build failed: %v\n%s\n", err, out)
-		os.Exit(1)
+		os.Stderr.Write(out)
+		return 1
 	}
 
 	testDefaultTraceDir = filepath.Join(tmpDir, "default-trace-root")
 	_ = os.Setenv("TILLR_TRACE_ROOT", testDefaultTraceDir)
 
-	os.Exit(m.Run())
+	return m.Run()
 }
 
 func turnEnd(index int, text string, tsMS int64) map[string]any {

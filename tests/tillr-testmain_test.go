@@ -112,8 +112,8 @@ func TestRepositoryTestMainCleanup(t *testing.T) {
 			})
 		}
 	}
-	if found != 8 {
-		t.Errorf("checked %d TestMain builders, want 8; update the inventory for new modules", found)
+	if found != 9 {
+		t.Errorf("checked %d TestMain builders, want 9; update the inventory for new modules", found)
 	}
 }
 
@@ -127,7 +127,7 @@ func probeCleanup(t *testing.T, path string, fset *token.FileSet, file *ast.File
 	var source bytes.Buffer
 	source.WriteString(`package main
 import ("os"; "os/exec"; "path/filepath")
-var bin, binDir, gateBin, wrapperBin, viewBin string
+var bin, binDir, gateBin, wrapperBin, viewBin, testBinPath, testDefaultTraceDir, testRepoRoot string
 type suite struct{}
 func (*suite) Run() int {
     switch os.Getenv("PROBE_MODE") {
