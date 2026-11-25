@@ -588,6 +588,8 @@ type Loop struct {
 	restartHoldWaiting          bool          // true while a pending restart is waiting for an active trunk proof or existing restartMechanical holds to drain
 	restartSettlements          atomic.Int32  // admitted gate/landing holds currently blocking exec
 	heavyMu                     sync.Mutex
+	baseReplayMu                sync.Mutex
+	activeBaseReplays           int
 	fixerWaitMu                 sync.Mutex
 	forkRebaseMu                sync.Mutex
 	revertMu                    sync.Mutex

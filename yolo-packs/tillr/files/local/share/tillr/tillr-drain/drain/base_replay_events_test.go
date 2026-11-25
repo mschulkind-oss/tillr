@@ -192,6 +192,9 @@ func TestBaseReplayEventsAreRegisteredAndRecordedThroughDrain(t *testing.T) {
 			if startedEv.ObjectType != "run" || startedEv.ObjectID == nil || *startedEv.ObjectID != startedPayload.RunID {
 				t.Fatalf("started object = (%q, %v), want (run, %q)", startedEv.ObjectType, startedEv.ObjectID, startedPayload.RunID)
 			}
+			if startedPayload.ActiveReplays != 1 {
+				t.Fatalf("started active_replays = %d, want 1", startedPayload.ActiveReplays)
+			}
 
 			if endedPayload.BaseSHA != startedPayload.BaseSHA || endedPayload.ItemID != startedPayload.ItemID || endedPayload.RunID != startedPayload.RunID || !reflect.DeepEqual(endedPayload.Checks, startedPayload.Checks) {
 				t.Fatalf("ended names %+v do not match started %+v", endedPayload, startedPayload)
@@ -201,6 +204,16 @@ func TestBaseReplayEventsAreRegisteredAndRecordedThroughDrain(t *testing.T) {
 			}
 			if endedPayload.ElapsedMS != 1500 {
 				t.Fatalf("ended elapsed_ms = %d, want 1500", endedPayload.ElapsedMS)
+			}
+			if endedPayload.ActiveReplays != 0 {
+				t.Fatalf("ended active_replays = %d, want 0", endedPayload.ActiveReplays)
+			}
+			var rawEnded map[string]any
+			if err := json.Unmarshal(endedEv.Payload, &rawEnded); err != nil {
+				t.Fatalf("unmarshal raw ended payload: %v", err)
+			}
+			if got, ok := rawEnded["active_replays"]; !ok || got != float64(0) {
+				t.Fatalf("raw ended active_replays = (%v, %t), want explicit JSON 0", got, ok)
 			}
 			if endedEv.ObjectType != "run" || endedEv.ObjectID == nil || *endedEv.ObjectID != endedPayload.RunID {
 				t.Fatalf("ended object = (%q, %v), want (run, %q)", endedEv.ObjectType, endedEv.ObjectID, endedPayload.RunID)
