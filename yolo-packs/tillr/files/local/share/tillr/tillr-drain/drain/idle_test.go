@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -59,5 +63,233 @@ func TestDefaultWaitReportsFiveHoldsOnceAcrossOneHundredIdlePasses(t *testing.T)
 	pass()
 	if strings.Count(report.String(), "\n") != 2 {
 		t.Fatalf("changed hold did not produce a fresh summary: %q", report.String())
+	}
+}
+
+func TestIdleLoopDoesNotReplanUnchangedHeldItems(t *testing.T) {
+	const heldCount = 60
+	ids := make([]string, heldCount)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("held-%03d", i)
+	}
+	f, l := passFixture(t, ids...)
+	l.cfg.ExitWhenDrained = false
+	l.cfg.NoNotify = true
+	l.cfg.StorePollInterval = time.Millisecond
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = ?`, StateBlocked)
+		return err
+	})
+	var report bytes.Buffer
+	l.cfg.Report = &report
+	var result LoopResult
+	ctx := context.Background()
+	if _, err := l.refreshDocuments(ctx, &result); err != nil {
+		t.Fatal(err)
+	}
+	report.Reset()
+
+	var planCalls atomic.Int64
+	planDefinitionCalls.Store(&planCalls)
+	t.Cleanup(func() { planDefinitionCalls.Store(nil) })
+
+	pass := func() {
+		t.Helper()
+		stop, err := l.pass(ctx, &result)
+		if err != nil || stop != "" {
+			t.Fatalf("idle pass stopped: %s / %v", stop, err)
+		}
+	}
+
+	// First idle pass plans once and reports the held summary.
+	pass()
+	if got := planCalls.Load(); got != 1 {
+		t.Fatalf("after first idle pass: planDefinition calls = %d, want 1", got)
+	}
+	if !strings.Contains(report.String(), fmt.Sprintf("%d held item(s)", heldCount)) {
+		t.Fatalf("waiting summary = %q, want %d held item(s)", report.String(), heldCount)
+	}
+
+	// Repeated idle passes over an unchanged store do not re-plan.
+	for i := 0; i < 20; i++ {
+		pass()
+	}
+	if got := planCalls.Load(); got != 1 {
+		t.Fatalf("after 20 unchanged idle passes: planDefinition calls = %d, want 1", got)
+	}
+
+	// Session telemetry events alone do not trigger a re-plan.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		sess := "sess-idle"
+		_, err := tx.Append(event.Event{
+			Kind:       LoopPassKind,
+			ObjectType: "session",
+			ObjectID:   &sess,
+			Payload:    []byte(`{"session_id":"sess-idle","wall_ms":1,"phases_ms":{"other":1}}`),
+			At:         l.cfg.Now().UTC(),
+		})
+		if err != nil {
+			return err
+		}
+		_, err = tx.Append(event.Event{
+			Kind:       CheckpointNotRestartedKind,
+			ObjectType: "session",
+			ObjectID:   &sess,
+			Payload:    []byte(`{"log_frames":10,"log_bytes":40960,"consecutive_cycles":1,"session_id":"sess-idle"}`),
+			At:         l.cfg.Now().UTC(),
+		})
+		return err
+	})
+	for i := 0; i < 5; i++ {
+		pass()
+	}
+	if got := planCalls.Load(); got != 1 {
+		t.Fatalf("after telemetry events: planDefinition calls = %d, want 1", got)
+	}
+
+	// A changed hold wakes the loop to plan again, then returns to quiet idle.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = ? WHERE item_id = ?`, StateLanded, ids[heldCount-1])
+		return err
+	})
+	pass()
+	if got := planCalls.Load(); got != 2 {
+		t.Fatalf("after changed hold: planDefinition calls = %d, want 2", got)
+	}
+	pass()
+	if got := planCalls.Load(); got != 2 {
+		t.Fatalf("after settling post-change: planDefinition calls = %d, want 2", got)
+	}
+
+	// A new item wakes the loop to plan again.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		now := l.cfg.Now().UTC().UnixMilli()
+		_, err := tx.Exec(`INSERT INTO items(item_id, state, title, rank, updated_at) VALUES (?, ?, ?, ?, ?)`,
+			"held-new", StateBlocked, "new held item", "zzzz", now)
+		return err
+	})
+	pass()
+	if got := planCalls.Load(); got != 3 {
+		t.Fatalf("after new item: planDefinition calls = %d, want 3", got)
+	}
+
+	// A trunk move wakes the loop to plan again.
+	writeForkFile(t, filepath.Join(f.root, "idle-move.txt"), "moved\n")
+	runGit(t, f.root, "add", "idle-move.txt")
+	runGit(t, f.root, "commit", "-qm", "move trunk")
+	pass()
+	if got := planCalls.Load(); got != 4 {
+		t.Fatalf("after trunk move: planDefinition calls = %d, want 4", got)
+	}
+
+	// A finished run wakes the loop to plan again.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		now := l.cfg.Now().UTC().UnixMilli()
+		_, err := tx.Exec(`INSERT OR IGNORE INTO lanes(lane_id, state) VALUES (?, ?)`, "lane-1", "free")
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO runs(run_id, item_id, lane_id, backend, state, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			"run-idle-finished", ids[0], "lane-1", "stub", "exited", now-1000, now)
+		return err
+	})
+	pass()
+	if got := planCalls.Load(); got != 5 {
+		t.Fatalf("after finished run: planDefinition calls = %d, want 5", got)
+	}
+}
+
+type idleWaitSignal struct {
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (s *idleWaitSignal) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, err := s.buf.Write(p)
+	if strings.Contains(s.buf.String(), "waiting for a trigger") {
+		s.once.Do(func() { close(s.waiting) })
+	}
+	return n, err
+}
+
+func TestIdleLoopRunDoesNotReplanUntilChange(t *testing.T) {
+	const heldCount = 60
+	ids := make([]string, heldCount)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("held-%03d", i)
+	}
+	f := newRefusalLoopFixture(t, ids...)
+	l := f.loop(t, &recordingSteps{}, &itemContentStager{})
+	l.cfg.Policy.Backends = map[string]Backend{"fixture": {Adapter: "fixture"}}
+	l.cfg.ExitWhenDrained = false
+	l.cfg.NoNotify = true
+	l.cfg.StorePollInterval = 10 * time.Millisecond
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = ?`, StateBlocked)
+		return err
+	})
+
+	sig := &idleWaitSignal{waiting: make(chan struct{})}
+	l.cfg.Report = sig
+
+	var planCalls atomic.Int64
+	planDefinitionCalls.Store(&planCalls)
+	t.Cleanup(func() { planDefinitionCalls.Store(nil) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := l.Run(ctx)
+		done <- err
+	}()
+
+	select {
+	case <-sig.waiting:
+	case err := <-done:
+		t.Fatalf("loop exited before reaching idle wait: %v", err)
+	case <-time.After(hangGuard):
+		t.Fatal("timed out waiting for loop to enter idle wait")
+	}
+
+	settledCalls := planCalls.Load()
+	if settledCalls == 0 {
+		t.Fatal("expected at least one planDefinition call before entering idle wait")
+	}
+
+	// Across many fallback poll intervals with no store change, planDefinition must not run again.
+	time.Sleep(150 * time.Millisecond)
+	if got := planCalls.Load(); got != settledCalls {
+		t.Fatalf("planDefinition ran while idle with unchanged store: got %d, want %d", got, settledCalls)
+	}
+
+	// A changed hold wakes the loop to plan again.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = ? WHERE item_id = ?`, StateLanded, ids[0])
+		return err
+	})
+	deadline := time.Now().Add(hangGuard)
+	for time.Now().Before(deadline) {
+		if planCalls.Load() > settledCalls {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := planCalls.Load(); got <= settledCalls {
+		t.Fatalf("changed hold did not wake idle Loop.Run to re-plan: got %d, want > %d", got, settledCalls)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Loop.Run returned error on cancel: %v", err)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("timed out waiting for Loop.Run to stop")
 	}
 }

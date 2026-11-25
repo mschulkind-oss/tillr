@@ -3095,6 +3095,25 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
 		return "", err
 	}
+	l.lastPassPendingOnly = pendingOnly
+	if l.idleState != nil {
+		if err := l.timePassPhase("refresh_lane_count", func() error { return l.refreshLaneCount(ctx, false) }); err != nil {
+			return "", err
+		}
+		endDrain := l.startPassPhase("drain_completions")
+		drained, stop, err := l.drainCompletionsCount(ctx, result)
+		endDrain()
+		if stop != "" || err != nil {
+			return stop, err
+		}
+		if err := l.timePassPhase("refresh_policy", func() error { return l.refreshPolicy() }); err != nil {
+			return "", err
+		}
+		if drained == 0 && l.idleUnchanged(ctx, l.cfg.Now().UTC(), pendingOnly) {
+			return l.waitForTrigger(ctx, nil, l.cfg.Now().UTC(), result)
+		}
+		l.idleState = nil
+	}
 	if !l.nonLanding {
 		end := l.startPassPhase("sweep_disabled_markers")
 		l.sweepDisabledMarkers(ctx)

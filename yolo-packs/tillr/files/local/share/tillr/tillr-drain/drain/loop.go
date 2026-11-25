@@ -744,6 +744,8 @@ type Loop struct {
 	// waitingDetail retains all holds, not just the five printed examples, so a
 	// changed reason outside the summary still reports a changed queue.
 	waitingDetail            string
+	idleState                *idlePlanState
+	lastPassPendingOnly      bool
 	nextCommentPoll          time.Time
 	hasAnswers               bool
 	pollOnly                 bool // test seam: suppress accelerators, retain store polling
@@ -1574,6 +1576,7 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 			}
 			l.waitingDetail = detail
 			result.Detail = detail
+			l.idleState = l.captureIdleState(ctx, holds, at, l.lastPassPendingOnly)
 			return l.waitForTrigger(ctx, leases, at, result)
 		}
 		l.reportf("loop: %s\n", detail)
