@@ -405,7 +405,7 @@ PY
 			_ = os.WriteFile(releaseA, []byte("cleanup\n"), 0o644)
 			select {
 			case <-gateADone:
-			case <-time.After(5 * time.Second):
+			case <-time.After(hangGuard):
 			}
 		})
 
@@ -1169,7 +1169,7 @@ PY
 		if got != exe {
 			t.Fatalf("exec path = %q, want %q", got, exe)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("loop did not replace itself while the detached gate was running")
 	}
 

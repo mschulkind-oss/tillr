@@ -1097,6 +1097,125 @@ sys.exit(rc)
             ["testmain-cleanup", "declared-suites", "in-repo-deps", "go-affected-modules"],
         )
 
+    def test_elapsed_time_check_refuses_short_positive_deadlines_and_allows_waits_and_guards(self):
+        (self.repo / "pkg").mkdir()
+
+        # 1. Passing cases: hangGuard, heartbeatStallBound, 5 * time.Minute, negative waits,
+        # polling ticks, and non-test Go files.
+        (self.repo / "pkg/prod.go").write_text(
+            "package pkg\nimport \"time\"\n"
+            "func Wait(ev <-chan struct{}) {\n"
+            "\tselect {\n\tcase <-ev:\n\tcase <-time.After(5 * time.Second):\n\t\tpanic(\"boom\")\n\t}\n"
+            "}\n"
+        )
+        (self.repo / "pkg/good_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "const (\n\thangGuard = 5 * time.Minute\n\theartbeatStallBound = 10 * time.Minute\n)\n"
+            "func TestGuardsAndNegativeWaits(t *testing.T) {\n"
+            "\tev := make(chan struct{})\n"
+            "\tselect {\n\tcase <-ev:\n\tcase <-time.After(hangGuard):\n\t\tt.Fatal(\"hang\")\n\t}\n"
+            "\tselect {\n\tcase <-ev:\n\tcase <-time.After(heartbeatStallBound):\n\t\tt.Fatal(\"stall\")\n\t}\n"
+            "\tselect {\n\tcase <-ev:\n\tcase <-time.After(5 * time.Minute):\n\t\tt.Fatal(\"five min\")\n\t}\n"
+            "\t// Negative wait: fail if event arrives, empty body on short timer.\n"
+            "\tselect {\n\tcase <-ev:\n\t\tt.Fatal(\"unexpected event\")\n\tcase <-time.After(200 * time.Millisecond):\n\t}\n"
+            "\t// Polling tick: empty body on short timer.\n"
+            "\tfor i := 0; i < 1; i++ {\n"
+            "\t\tselect {\n\t\tcase <-ev:\n\t\tcase <-time.After(10 * time.Millisecond):\n\t\t\t// retry\n\t\t}\n"
+            "\t}\n"
+            "}\n"
+        )
+        self.git("add", "pkg")
+        good_head = self.commit()
+        good_res = self.check("elapsed-time", self.base, good_head)
+        self.assertEqual(good_res.returncode, 0, good_res.stdout + good_res.stderr)
+
+        # 2. Direct short case <-time.After(5 * time.Second): calling t.Fatal is refused.
+        (self.repo / "pkg/direct_short_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "func TestDirectShort(t *testing.T) {\n"
+            "\tev := make(chan struct{})\n"
+            "\tselect {\n"
+            "\tcase <-ev:\n"
+            "\tcase <-time.After(5 * time.Second):\n"
+            "\t\tt.Fatal(\"did not happen\")\n"
+            "\t}\n"
+            "}\n"
+        )
+        self.git("add", "pkg/direct_short_test.go")
+        direct_head = self.commit()
+        direct_res = self.check("elapsed-time", good_head, direct_head)
+        self.assertEqual(direct_res.returncode, 1, direct_res.stdout + direct_res.stderr)
+        self.assertIn("pkg/direct_short_test.go:10: case <-time.After(5 * time.Second):", direct_res.stdout)
+        self.assertIn("hangGuard", direct_res.stdout)
+
+        # 3a. Assigned deadline := time.After(10 * time.Second) in failing case <-deadline: is refused.
+        (self.repo / "pkg/assigned_case_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "func TestAssignedCase(t *testing.T) {\n"
+            "\tev := make(chan struct{})\n"
+            "\tdeadline := time.After(10 * time.Second)\n"
+            "\tselect {\n"
+            "\tcase <-ev:\n"
+            "\tcase <-deadline:\n"
+            "\t\tt.Fatalf(\"timeout\")\n"
+            "\t}\n"
+            "}\n"
+        )
+        self.git("add", "pkg/assigned_case_test.go")
+        assigned_case_head = self.commit()
+        assigned_case_res = self.check("elapsed-time", direct_head, assigned_case_head)
+        self.assertEqual(assigned_case_res.returncode, 1, assigned_case_res.stdout + assigned_case_res.stderr)
+        self.assertIn("pkg/assigned_case_test.go:8: deadline := time.After(10 * time.Second)", assigned_case_res.stdout)
+
+        # 3b. Assigned deadline := time.After(10 * time.Second) passed to a call is refused.
+        (self.repo / "pkg/assigned_call_test.go").write_text(
+            "package pkg\nimport (\n\t\"context\"\n\t\"testing\"\n\t\"time\"\n)\n"
+            "func TestAssignedCall(t *testing.T) {\n"
+            "\tdeadline := time.After(10 * time.Second)\n"
+            "\t_ = wakeNext(context.Background(), deadline)\n"
+            "}\n"
+            "func wakeNext(ctx context.Context, ch <-chan time.Time) error { return nil }\n"
+        )
+        self.git("add", "pkg/assigned_call_test.go")
+        assigned_call_head = self.commit()
+        assigned_call_res = self.check("elapsed-time", assigned_case_head, assigned_call_head)
+        self.assertEqual(assigned_call_res.returncode, 1, assigned_call_res.stdout + assigned_call_res.stderr)
+        self.assertIn("pkg/assigned_call_test.go:8: deadline := time.After(10 * time.Second)", assigned_call_res.stdout)
+
+        # 4. File-local const shortGuard = 30 * time.Second in failing case <-time.After(shortGuard): is refused.
+        (self.repo / "pkg/const_short_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "const shortGuard = 30 * time.Second\n"
+            "func TestConstShort(t *testing.T) {\n"
+            "\tev := make(chan struct{})\n"
+            "\tselect {\n"
+            "\tcase <-ev:\n"
+            "\tcase <-time.After(shortGuard):\n"
+            "\t\tt.Error(\"too slow\")\n"
+            "\t}\n"
+            "}\n"
+        )
+        self.git("add", "pkg/const_short_test.go")
+        const_head = self.commit()
+        const_res = self.check("elapsed-time", assigned_call_head, const_head)
+        self.assertEqual(const_res.returncode, 1, const_res.stdout + const_res.stderr)
+        self.assertIn("pkg/const_short_test.go:11: case <-time.After(shortGuard):", const_res.stdout)
+
+        # 5. A short deadline declared in tools/gate-timing-declarations.json passes.
+        (self.repo / "tools/gate-timing-declarations.json").write_text(json.dumps({
+            "declarations": [{
+                "file": "pkg/const_short_test.go",
+                "snippet": "case <-time.After(shortGuard):",
+                "kind": "backlog",
+                "reason": "fixture short deadline declaration",
+                "repair": "replace shortGuard with hangGuard",
+            }]
+        }) + "\n")
+        self.git("add", "tools/gate-timing-declarations.json")
+        declared_head = self.commit()
+        declared_res = self.check("elapsed-time", assigned_call_head, declared_head)
+        self.assertEqual(declared_res.returncode, 0, declared_res.stdout + declared_res.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

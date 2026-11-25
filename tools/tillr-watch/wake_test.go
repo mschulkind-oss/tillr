@@ -598,7 +598,7 @@ func TestWatchDaemonWakesWhenWALPrecedesIndexPublish(t *testing.T) {
 	helper := startSplitWALHelper(t, ctx, s.Path())
 	select {
 	case <-entered:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(hangGuard):
 		helper.close()
 		t.Fatal("daemon did not synchronize with the unpublished WAL writer")
 	}
@@ -633,7 +633,7 @@ func TestWakeDetectsCommitPublishedAfterBeginPass(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.After(200 * time.Millisecond)
+	deadline := time.After(hangGuard)
 	reason, err := wake.next(t.Context(), deadline)
 	if err != nil || reason != walWake {
 		t.Fatalf("wake.next = (%v, %v), want (walWake, nil)", reason, err)

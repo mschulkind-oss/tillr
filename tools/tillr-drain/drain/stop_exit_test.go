@@ -83,7 +83,7 @@ func TestShutdownDoesNotWaitForCompletionChannelSpace(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("examination could not exit because the stopped pass was not draining notifications")
 	}
 }

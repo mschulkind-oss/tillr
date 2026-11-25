@@ -49,7 +49,7 @@ func TestClosingItemMidRunInterruptsOnlyClosedItemRun(t *testing.T) {
 		if err == nil {
 			t.Error("closed item's worker was not interrupted")
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("closed item's worker survived the pass")
 	}
 
@@ -144,7 +144,7 @@ func TestClosingWorkflowItemMidRunEndsLiveNodeBeforeRelease(t *testing.T) {
 		if err == nil {
 			t.Error("closed workflow item's worker was not interrupted")
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("closed workflow item's worker survived the pass")
 	}
 

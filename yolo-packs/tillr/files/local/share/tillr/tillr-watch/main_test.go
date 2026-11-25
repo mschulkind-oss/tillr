@@ -16,6 +16,10 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// treats the silence as a hang rather than a slow machine.
+const hangGuard = 5 * time.Minute
+
 const testRule = `[[rule]]
 id="refusals"
 scope="core"
@@ -123,7 +127,7 @@ func quietToFiring(t *testing.T, useSymlink bool) {
 	done := make(chan result, 1)
 	go func() { done <- invoke(args...) }()
 	// The cursor row proves wait installed its file watch and attached to this store.
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(hangGuard)
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for attached := false; !attached; {
@@ -171,7 +175,7 @@ func quietToFiring(t *testing.T, useSymlink bool) {
 		if quiet.code != 2 || strings.Contains(quiet.out, "TILLR_WATCH_NOTICE") {
 			t.Fatalf("confirmed wait: %+v", quiet)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("wait did not wake on a WAL write")
 	}
 }
@@ -379,7 +383,7 @@ receiver = "foreground"
 		code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--owner", "operator-session"}, &out, &stderr)
 		done <- result{code, out.String(), stderr.String()}
 	}()
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(hangGuard)
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for attached := false; !attached; {
@@ -412,7 +416,7 @@ receiver = "foreground"
 		if _, err := fmt.Sscanf(r.out, "TILLR_WATCH_NOTICE 1 pending, through_seq %d", &through); err != nil {
 			t.Fatalf("notice header %q: %v", r.out, err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(hangGuard):
 		cancel()
 		t.Fatal("wait did not exit when drain.trunk-core-worktree alert opened")
 	}

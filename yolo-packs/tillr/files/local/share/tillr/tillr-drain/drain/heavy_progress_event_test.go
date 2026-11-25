@@ -376,7 +376,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 			_ = os.WriteFile(releaseFile, nil, 0o644)
 		}()
 
-		deadline := time.After(10 * time.Second)
+		deadline := time.After(hangGuard)
 		for {
 			if _, err := os.Stat(startedFile); err == nil {
 				break
@@ -402,7 +402,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 		if err := os.WriteFile(growFile, nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		deadline = time.After(10 * time.Second)
+		deadline = time.After(hangGuard)
 		for {
 			events := readHeavyProgressEvents(t, storePath)
 			sawRunning := false
@@ -507,7 +507,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 			_ = os.WriteFile(releaseFile, nil, 0o644)
 		}()
 
-		deadline := time.After(10 * time.Second)
+		deadline := time.After(hangGuard)
 		for {
 			if _, err := os.Stat(startedFile); err == nil {
 				break
@@ -623,7 +623,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 
 		waitFor := func(path string) {
 			t.Helper()
-			deadline := time.After(10 * time.Second)
+			deadline := time.After(hangGuard)
 			for {
 				if _, err := os.Stat(path); err == nil {
 					return
@@ -639,7 +639,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 		}
 		waitForRunningCount := func(want int) {
 			t.Helper()
-			deadline := time.After(10 * time.Second)
+			deadline := time.After(hangGuard)
 			for {
 				events := readHeavyProgressEvents(t, storePath)
 				count := 0
@@ -769,7 +769,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 			_ = os.WriteFile(releaseFile, nil, 0o644)
 		}()
 
-		deadline := time.After(10 * time.Second)
+		deadline := time.After(hangGuard)
 		for {
 			if _, err := os.Stat(startedFile); err == nil {
 				break

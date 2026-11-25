@@ -51,7 +51,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 	if err := l.maybeRolling(ctx, tip, false, &LoopResult{}); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.After(20 * time.Second)
+	deadline := time.After(hangGuard)
 waiting:
 	for {
 		if _, err := os.Stat(entered); err == nil {
@@ -219,7 +219,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 	interrupted := func(tip, hung string) {
 		ctx, cancel := context.WithCancel(context.Background())
 		l := start(ctx, tip)
-		deadline := time.After(20 * time.Second)
+		deadline := time.After(hangGuard)
 		for {
 			if _, err := os.Stat(filepath.Join(work, "entered-"+hung)); err == nil {
 				break
@@ -307,7 +307,7 @@ func TestHeavyRestartMidBisectionReusesFinishedReplays(t *testing.T) {
 	}
 	select {
 	case <-entered:
-	case <-time.After(20 * time.Second):
+	case <-time.After(hangGuard):
 		cancel()
 		l.heavyWG.Wait()
 		t.Fatal("bisection did not reach its third replay")

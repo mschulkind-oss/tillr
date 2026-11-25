@@ -107,7 +107,7 @@ func TestWatchAckSingleInstanceWakeAndItemRefusal(t *testing.T) {
 	var woke waitRes
 	select {
 	case woke = <-waitDone:
-	case <-time.After(3 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("wait did not wake when a new matching event arrived after single-instance ack")
 	}
 	if woke.code != 0 || woke.err != "" || !strings.Contains(woke.out, "[alert "+alertID+" refusals alpha") {

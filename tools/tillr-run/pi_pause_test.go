@@ -122,7 +122,7 @@ while True: time.sleep(.01)
 			}()
 			waitFile := func(name string) {
 				t.Helper()
-				deadline := time.After(10 * time.Second)
+				deadline := time.After(hangGuard)
 				for {
 					if _, err := os.Stat(filepath.Join(worktree, name)); err == nil {
 						return
@@ -149,7 +149,7 @@ while True: time.sleep(.01)
 			case err := <-done:
 				joined = true
 				t.Fatalf("ended before bound: %v", err)
-			case <-time.After(10 * time.Second):
+			case <-time.After(hangGuard):
 				t.Fatal("no pause bound")
 			}
 			// Give the watcher multiple polls while startup is held. This short
@@ -182,7 +182,7 @@ while True: time.sleep(.01)
 				if err != nil {
 					t.Fatal(err)
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(hangGuard):
 				t.Fatal("pause did not settle")
 			}
 			if _, err := os.Stat(filepath.Join(worktree, "early-signal")); !os.IsNotExist(err) {

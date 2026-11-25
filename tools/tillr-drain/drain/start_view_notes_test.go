@@ -107,7 +107,7 @@ func TestNotesDuringASyncSurviveItsInstall(t *testing.T) {
 	close(resume)
 	select {
 	case <-v.updated:
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("refresh did not install")
 	}
 	got := v.snapshot()

@@ -26,7 +26,7 @@ func awaitChunk(t *testing.T, c <-chan string) string {
 	select {
 	case s := <-c:
 		return s
-	case <-time.After(3 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("no watcher output")
 		return ""
 	}

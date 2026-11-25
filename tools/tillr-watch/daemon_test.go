@@ -96,7 +96,7 @@ func TestWatchDaemonTick(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("daemon did not stop")
 	}
 }

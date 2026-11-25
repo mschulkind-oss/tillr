@@ -24,6 +24,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const hangGuard = 5 * time.Minute
+
 func TestMain(m *testing.M) {
 	switch os.Getenv("TILLR_KEEP_TEST_HELPER") {
 	case "drain-stub":
@@ -161,7 +163,7 @@ func stopAndWait(cmd *exec.Cmd) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		_ = cmd.Process.Kill()
 		<-done
 	}

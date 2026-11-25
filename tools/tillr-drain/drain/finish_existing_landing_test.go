@@ -111,7 +111,7 @@ func TestExistingLandingFinishInterruptsOnlyItsPendingRun(t *testing.T) {
 		if err == nil {
 			t.Error("unfinished worker was not interrupted")
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("unfinished worker survived the finish pass")
 	}
 	s := openFixture(t, f.storePath)

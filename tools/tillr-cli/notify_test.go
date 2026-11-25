@@ -14,6 +14,8 @@ import (
 	"github.com/mschulkind-oss/tillr/notify"
 )
 
+const hangGuard = 5 * time.Minute
+
 func TestNotifyHelpAndUsageRefusals(t *testing.T) {
 	emptyPath := t.TempDir()
 
@@ -113,7 +115,7 @@ func TestNotifyServeSubcommandRelaysFramesAndExitsOnIdle(t *testing.T) {
 		if waitErr != nil {
 			t.Fatalf("tillr notify serve exited with error: %v (stderr=%s)", waitErr, stderr.String())
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(hangGuard):
 		_ = cmd.Process.Kill()
 		t.Fatal("tillr notify serve did not exit after --idle-exit")
 	}

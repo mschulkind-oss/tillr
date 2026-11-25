@@ -140,7 +140,7 @@ func TestHeavyProofStartsAfterFixerLandsWhileCandidateGatesRunAndRestartPending(
 	var provedTip string
 	select {
 	case provedTip = <-entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		close(releaseProof)
 		h.l.heavyWG.Wait()
 		t.Fatalf("trunk proof of repaired tip %s did not start while candidate gate ran and restart was pending", shortSHA(repairedTip))
@@ -726,7 +726,7 @@ PY
 		if compA.outcome.err != nil || compA.result.Landed != 1 {
 			t.Fatalf("item-a completion while proof active and restart pending: outcome=%+v result=%+v", compA.outcome, compA.result)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("item-a whose gate passed did not land while trunk proof was active and restart was pending")
 	}
 	if got := itemStateOf(t, f.storePath, cA.ItemID); got != StateLanded {
@@ -761,7 +761,7 @@ PY
 		if compC.outcome.err != nil || compC.result.Landed != 1 {
 			t.Fatalf("item-c completion while proof active and restart pending: outcome=%+v result=%+v", compC.outcome, compC.result)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("already-gated item-c did not land while trunk proof was active and restart was pending")
 	}
 	if got := itemStateOf(t, f.storePath, cC.ItemID); got != StateLanded {
@@ -1031,7 +1031,7 @@ PY
 		if compA.outcome.err != nil || compA.result.Rejected != 1 || compA.result.Landed != 0 {
 			t.Fatalf("item-a completion while proof active and restart pending: outcome=%+v result=%+v", compA.outcome, compA.result)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("item-a whose gate failed did not settle while trunk proof was active and restart was pending")
 	}
 	assertFailedSettled(cA)
@@ -1052,7 +1052,7 @@ PY
 		if compB.outcome.err != nil || compB.result.Rejected != 1 || compB.result.Landed != 0 {
 			t.Fatalf("item-b completion while proof active and restart pending: outcome=%+v result=%+v", compB.outcome, compB.result)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("item-b whose gate already failed on disk did not settle while trunk proof was active and restart was pending")
 	}
 	assertFailedSettled(cB)
@@ -1247,7 +1247,7 @@ func TestPendingRestartWaitsForBusyPostLandingActionBeforeNextProof(t *testing.T
 					waitAction(t, action)
 					<-heavyDone
 					t.Fatalf("next proof started on %s while %s action was busy and restart was pending", shortSHA(got), tc.name)
-				case <-time.After(5 * time.Second):
+				case <-time.After(hangGuard):
 					close(releaseAction)
 					actionReleased = true
 					waitAction(t, action)

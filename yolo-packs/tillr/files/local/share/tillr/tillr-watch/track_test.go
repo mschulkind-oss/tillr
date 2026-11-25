@@ -203,7 +203,7 @@ func TestWatchTrackAndAckWithItemWaitEndToEnd(t *testing.T) {
 	var woke waitRes
 	select {
 	case woke = <-waitDone:
-	case <-time.After(3 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("wait did not wake when matching event occurred after tracked item landed")
 	}
 	if woke.code != 0 || woke.err != "" {

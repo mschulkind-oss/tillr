@@ -109,7 +109,7 @@ func TestWaitForTriggerWakesOnRelayedStoreChange(t *testing.T) {
 		if err != nil {
 			t.Fatalf("waitForTrigger: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("waitForTrigger did not wake on relayed store-change frame")
 	}
 }
@@ -163,7 +163,7 @@ func TestWaitForTriggerAutoStartsRelayWhenAbsent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("waitForTrigger: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("waitForTrigger did not wake via auto-started relay")
 	}
 }
@@ -213,7 +213,7 @@ func TestWaitForTriggerFallsBackToPollWhenNoRelay(t *testing.T) {
 				if err != nil {
 					t.Fatalf("waitForTrigger: %v", err)
 				}
-			case <-time.After(2 * time.Second):
+			case <-time.After(hangGuard):
 				t.Fatal("waitForTrigger did not wake on fallback poll timer")
 			}
 			if waited != DefaultFallbackPollInterval {
@@ -269,7 +269,7 @@ func TestWaitForTriggerReconnectsAndResyncsAfterRelayRestart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("waitForTrigger: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("waitForTrigger did not wake immediately on relay reconnect")
 	}
 }
@@ -321,7 +321,7 @@ func TestRefreshSessionHeartbeatDoesNotWakeTrigger(t *testing.T) {
 		if err != nil {
 			t.Fatalf("waitForTrigger: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("real store mutation did not wake waitForTrigger")
 	}
 }
@@ -838,7 +838,7 @@ func TestItemRequestToLoopWakeLatency(t *testing.T) {
 		if err := <-wakeErr; err != nil {
 			t.Fatalf("waitForTrigger: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("waitForTrigger did not wake after tillr item request")
 	}
 

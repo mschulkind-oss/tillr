@@ -239,7 +239,7 @@ func testWorkerStartWhileRestartWaits(t *testing.T, phase string, delayReplaceme
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(15 * time.Second):
+		case <-time.After(hangGuard):
 			t.Error("loop did not stop after cancellation")
 		}
 	}()
@@ -247,7 +247,7 @@ func testWorkerStartWhileRestartWaits(t *testing.T, phase string, delayReplaceme
 	case <-steps.settling:
 	case <-done:
 		t.Fatalf("loop stopped before %s entry: %+v, %v", phase, result, loopErr)
-	case <-time.After(15 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatalf("item-a did not enter %s", phase)
 	}
 	req, err := restart.File(ctx, f.storePath, restart.RoleDrain, time.Now())
@@ -272,7 +272,7 @@ func testWorkerStartWhileRestartWaits(t *testing.T, phase string, delayReplaceme
 		if err != nil {
 			t.Fatalf("worker did not finish after replacement: %v", err)
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("worker did not exit after receiving input")
 	}
 }

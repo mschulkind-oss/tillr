@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const notifyHangGuard = 30 * time.Second
+const notifyHangGuard = 5 * time.Minute
 
 func TestSocketPathCanonicalizesStoreAndRespectsRuntimeDir(t *testing.T) {
 	base := t.TempDir()

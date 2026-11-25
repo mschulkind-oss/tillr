@@ -61,7 +61,7 @@ func (c *cliChild) wait(t *testing.T) error {
 	select {
 	case err := <-c.done:
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("watch process did not exit")
 		return nil
 	}

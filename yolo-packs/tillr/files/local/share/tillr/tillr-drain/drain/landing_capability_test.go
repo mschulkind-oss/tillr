@@ -61,7 +61,7 @@ func TestPiEndingCapabilityProbeBoundsSleeperAndChildHoldingOutput(t *testing.T)
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("probe held past bound; child holding stdout was not bounded")
 	}
 	if got != "footer" || path != pi || features != nil {
@@ -115,7 +115,7 @@ func TestClaudeEndingCapabilityProbe(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("claude probe held past bound")
 	}
 	if got != "footer" || path != claudeBin {

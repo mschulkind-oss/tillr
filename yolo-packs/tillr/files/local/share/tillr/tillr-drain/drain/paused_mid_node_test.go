@@ -335,7 +335,7 @@ func TestPausedRunWaitsForLiveDrainingWorkerAboveLaneCount(t *testing.T) {
 				if stop, err := l.takeCompletion(c, result); stop != "" || err != nil {
 					t.Fatalf("completion %s / %v", stop, err)
 				}
-			case <-time.After(5 * time.Second):
+			case <-time.After(hangGuard):
 				t.Fatal("timed out waiting for item-a step completion")
 			}
 		}

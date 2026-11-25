@@ -106,7 +106,7 @@ func settlingStartFixture(t *testing.T, lanes int, now func() time.Time) (*Loop,
 			if loopErr != nil {
 				t.Error(loopErr)
 			}
-		case <-time.After(15 * time.Second):
+		case <-time.After(hangGuard):
 			t.Error("loop did not stop")
 		}
 	})
@@ -114,7 +114,7 @@ func settlingStartFixture(t *testing.T, lanes int, now func() time.Time) (*Loop,
 	case <-steps.settling:
 	case <-done:
 		t.Fatalf("loop exited before settlement: %v", loopErr)
-	case <-time.After(15 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("item-a did not enter settlement")
 	}
 	return l, steps
@@ -137,7 +137,7 @@ func waitSettlingStart(t *testing.T, steps *settlingStartSteps, want string) {
 		if lane != want {
 			t.Fatalf("item-b started on %s, want %s", lane, want)
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatalf("item-b did not start on %s", want)
 	}
 }
@@ -263,7 +263,7 @@ func TestStartCoordinatorPollsWithoutFilesystemWatcher(t *testing.T) {
 	})()
 	select {
 	case <-refreshed:
-	case <-time.After(15 * time.Second):
+	case <-time.After(hangGuard):
 		t.Fatal("store poll did not wake the fallback watcher")
 	}
 }
@@ -330,7 +330,7 @@ func TestStartShutdownJoinsStaging(t *testing.T) {
 		t.Fatal("staging did not start")
 	}
 	cancel()
-	deadline := time.After(15 * time.Second)
+	deadline := time.After(hangGuard)
 	select {
 	case <-stage.canceled:
 	case <-deadline:
