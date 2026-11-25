@@ -102,15 +102,17 @@ def load_edges(root: Path) -> dict[str, dict]:
             val = entry.get(key, [])
             if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
                 raise ValueError(f"{path}: {pkg}.{key} must be a list of strings")
-        if "read_tests" in entry:
-            read_tests = entry["read_tests"]
-            if not isinstance(read_tests, dict):
-                raise ValueError(f"{path}: {pkg}.read_tests must be an object")
-            reads_set = set(entry.get("reads", []))
-            for rule, names in read_tests.items():
-                if not isinstance(rule, str) or rule not in reads_set:
+        for map_key, list_key in (("build_tests", "builds"), ("read_tests", "reads")):
+            if map_key not in entry:
+                continue
+            scoped_tests = entry[map_key]
+            if not isinstance(scoped_tests, dict):
+                raise ValueError(f"{path}: {pkg}.{map_key} must be an object")
+            allowed_keys = set(entry.get(list_key, []))
+            for rule, names in scoped_tests.items():
+                if not isinstance(rule, str) or rule not in allowed_keys:
                     raise ValueError(
-                        f"{path}: {pkg}.read_tests key {rule!r} must appear in {pkg}.reads"
+                        f"{path}: {pkg}.{map_key} key {rule!r} must appear in {pkg}.{list_key}"
                     )
                 if (
                     not isinstance(names, list)
@@ -118,7 +120,7 @@ def load_edges(root: Path) -> dict[str, dict]:
                     or not all(isinstance(t, str) and bool(t.strip()) and t == t.strip() for t in names)
                 ):
                     raise ValueError(
-                        f"{path}: {pkg}.read_tests[{rule!r}] must be a non-empty list of test names"
+                        f"{path}: {pkg}.{map_key}[{rule!r}] must be a non-empty list of test names"
                     )
     return data
 
@@ -218,15 +220,15 @@ def _resolve_edge_builds(
     root: Path,
     edge: dict,
     pkg_info: dict[str, dict],
-) -> tuple[list[str], list[str]]:
-    files: set[str] = set()
-    mods: set[str] = set()
-    missing: list[str] = []
+) -> dict[str, list[str] | None]:
+    per_target: dict[str, list[str] | None] = {}
     for target in edge.get("builds", []):
         info = pkg_info.get(target)
         if not info:
-            missing.append(target)
+            per_target[target] = None
             continue
+        files: set[str] = set()
+        mods: set[str] = set()
         closure = {target} | info["deps"]
         for dep in closure:
             dinfo = pkg_info.get(dep)
@@ -238,12 +240,13 @@ def _resolve_edge_builds(
                 for child in dpath.iterdir():
                     if child.is_file():
                         files.add(child.relative_to(root).as_posix())
-    for mod in mods:
-        for mf in ("go.mod", "go.sum"):
-            mp = root / mod / mf
-            if mp.is_file():
-                files.add(f"{mod}/{mf}")
-    return sorted(files), missing
+        for mod in mods:
+            for mf in ("go.mod", "go.sum"):
+                mp = root / mod / mf
+                if mp.is_file():
+                    files.add(f"{mod}/{mf}")
+        per_target[target] = sorted(files)
+    return per_target
 
 
 def compute_edge_digest(
@@ -252,18 +255,35 @@ def compute_edge_digest(
     pkg_info: dict[str, dict],
     *,
     active_tests: set[str] | list[str] | tuple[str, ...] | None = None,
-    resolved_builds: tuple[list[str], list[str]] | None = None,
+    resolved_builds: dict[str, list[str] | None] | tuple[list[str], list[str]] | None = None,
 ) -> str:
     hasher = hashlib.sha256()
-    if resolved_builds is None:
-        build_files, missing_builds = _resolve_edge_builds(root, edge, pkg_info)
-    else:
-        build_files, missing_builds = resolved_builds
-    for target in missing_builds:
-        hasher.update(f"missing-build:{target}\n".encode("utf-8"))
-    files: set[str] = set(build_files)
+    build_tests = edge.get("build_tests", {})
     read_tests = edge.get("read_tests", {})
     active_set = set(active_tests) if active_tests is not None else None
+    files: set[str] = set()
+    if resolved_builds is None:
+        resolved_by_target: dict[str, list[str] | None] | None = _resolve_edge_builds(
+            root, edge, pkg_info
+        )
+    elif isinstance(resolved_builds, dict):
+        resolved_by_target = resolved_builds
+    else:
+        legacy_files, legacy_missing = resolved_builds
+        for target in legacy_missing:
+            hasher.update(f"missing-build:{target}\n".encode("utf-8"))
+        files.update(legacy_files)
+        resolved_by_target = None
+    if resolved_by_target is not None:
+        for target in edge.get("builds", []):
+            if active_set is not None and target in build_tests:
+                if not (set(build_tests[target]) & active_set):
+                    continue
+            target_files = resolved_by_target.get(target)
+            if target_files is None:
+                hasher.update(f"missing-build:{target}\n".encode("utf-8"))
+            else:
+                files.update(target_files)
     for rule in edge.get("reads", []):
         if active_set is not None and rule in read_tests:
             if not (set(read_tests[rule]) & active_set):
@@ -806,6 +826,7 @@ def select_affected_packages(
     changed_pkgs: set[str] = set()
     floor_triggers: set[str] = set()
     whole_pkg_selected: set[str] = set()
+    matched_scoped_builds: dict[str, list[str]] = {}
     matched_scoped_reads: dict[str, list[str]] = {}
 
     # Step 1: Changed paths -> packages or floor triggers.
@@ -862,27 +883,32 @@ def select_affected_packages(
         info = pkg_info.get(test_pkg)
         if not info or not info["has_tests"]:
             continue
-        builds_hit = False
+        matched_builds: list[str] = []
         for target in edge.get("builds", []):
             if target in changed_pkgs:
-                builds_hit = True
-                break
+                matched_builds.append(target)
+                continue
             tinfo = pkg_info.get(target)
             if tinfo and (tinfo["deps"] & changed_pkgs):
-                builds_hit = True
-                break
+                matched_builds.append(target)
         matched_reads = [
             rule
             for rule in edge.get("reads", [])
             if any(path_matches_read(p, rule) for p in norm_changed)
         ]
-        if builds_hit or matched_reads:
+        if matched_builds or matched_reads:
             mark(test_pkg, "edge")
+            build_tests_map = edge.get("build_tests", {})
             read_tests_map = edge.get("read_tests", {})
-            if builds_hit or not matched_reads or any(r not in read_tests_map for r in matched_reads):
+            if any(t not in build_tests_map for t in matched_builds) or any(
+                r not in read_tests_map for r in matched_reads
+            ):
                 whole_pkg_selected.add(test_pkg)
             else:
-                matched_scoped_reads[test_pkg] = matched_reads
+                if matched_builds:
+                    matched_scoped_builds[test_pkg] = matched_builds
+                if matched_reads:
+                    matched_scoped_reads[test_pkg] = matched_reads
 
     # Step 4: Floor (unplaceable changes -> module + modules replacing it).
     floor_modules: list[str] = []
@@ -909,11 +935,17 @@ def select_affected_packages(
             continue
         has_edge = ip in edges
         selected_tests: list[str] | None = None
-        if ip not in whole_pkg_selected and ip in matched_scoped_reads:
+        if ip not in whole_pkg_selected and (ip in matched_scoped_builds or ip in matched_scoped_reads):
+            build_tests_map = edges[ip].get("build_tests", {})
             read_tests_map = edges[ip].get("read_tests", {})
             wanted_list: list[str] = []
             wanted_set: set[str] = set()
-            for rule in matched_scoped_reads[ip]:
+            for target in matched_scoped_builds.get(ip, ()):
+                for tname in build_tests_map.get(target, ()):
+                    if tname != "TestEdgeInputs" and tname not in wanted_set:
+                        wanted_set.add(tname)
+                        wanted_list.append(tname)
+            for rule in matched_scoped_reads.get(ip, ()):
                 for tname in read_tests_map.get(rule, ()):
                     if tname != "TestEdgeInputs" and tname not in wanted_set:
                         wanted_set.add(tname)
@@ -2021,7 +2053,7 @@ def run_selected_tests(
                     fallback_graph = load_tillr_graph(root)
                 resolved = _resolve_edge_builds(root, edge, fallback_graph["pkg_info"])
             else:
-                resolved = ([], [])
+                resolved = {}
         return compute_edge_digest(
             root, edge, {}, active_tests=active_tests, resolved_builds=resolved
         )

@@ -250,7 +250,36 @@ def test_selection_rules(root_graph: dict) -> None:
 
     sel = go_affected.select_affected_packages(ROOT, ["tools/tillr-item/main.go"], graph=root_graph)
     by_pkg = {item["import_path"]: item for item in sel["selected"]}
+    root_edges = go_affected.load_edges(ROOT)
     assert by_pkg["github.com/mschulkind-oss/tillr-view"]["reason"] == "edge", by_pkg
+    assert set(by_pkg["github.com/mschulkind-oss/tillr-view"]["selected_tests"] or ()) == set(
+        root_edges["github.com/mschulkind-oss/tillr-view"]["build_tests"]["github.com/mschulkind-oss/tillr-item"]
+    ), by_pkg["github.com/mschulkind-oss/tillr-view"]
+
+    # High-fanout builds edges in go-test-edges.json narrow to the tests that build each sibling.
+    for changed_sib, consumer_pkg, sib_ip in [
+        (
+            "tools/tillr-view/main.go",
+            "github.com/mschulkind-oss/tillr-drain/drain",
+            "github.com/mschulkind-oss/tillr-view",
+        ),
+        (
+            "tools/tillr-store/main.go",
+            "github.com/mschulkind-oss/tillr-item",
+            "github.com/mschulkind-oss/tillr-store",
+        ),
+        (
+            "tools/tillr-gate/main.go",
+            "github.com/mschulkind-oss/tillr-land",
+            "github.com/mschulkind-oss/tillr-gate",
+        ),
+    ]:
+        sel = go_affected.select_affected_packages(ROOT, [changed_sib], graph=root_graph)
+        by_pkg = {item["import_path"]: item for item in sel["selected"]}
+        assert by_pkg[consumer_pkg]["reason"] == "edge", (changed_sib, by_pkg[consumer_pkg])
+        assert set(by_pkg[consumer_pkg]["selected_tests"] or ()) == set(
+            root_edges[consumer_pkg]["build_tests"][sib_ip]
+        ), (changed_sib, by_pkg[consumer_pkg])
 
     # 9. Non-Go reads edges.
     for changed_path, expected_pkgs in [
@@ -285,7 +314,8 @@ def test_selection_rules(root_graph: dict) -> None:
         pkgs = {item["import_path"] for item in sel["selected"]}
         assert expected_pkgs <= pkgs, f"{changed_path}: missing {expected_pkgs - pkgs} in {pkgs}"
         for item in sel["selected"]:
-            assert item["selected_tests"] is None, f"unscoped read {changed_path} narrowed {item}"
+            if item["import_path"] in expected_pkgs:
+                assert item["selected_tests"] is None, f"unscoped read {changed_path} narrowed {item}"
 
     # 10. Scoped read_tests on one read path select only the reading packages and narrow
     # each to its reader tests, whether the path changes alone or beside an unrelated file.
@@ -337,8 +367,22 @@ def test_selection_rules(root_graph: dict) -> None:
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
     assert by_pkg[gate_pkg]["selected_tests"] == gate_readers, by_pkg
 
-    sel_builds = go_affected.select_affected_packages(
+    # Pairing a scoped read path with a scoped builds edge narrows to the union of both.
+    sel_scoped_both = go_affected.select_affected_packages(
         ROOT, [scoped_read, "tools/tillr-cli/main.go"], edges=scoped_edges, graph=root_graph
+    )
+    by_pkg = {item["import_path"]: item for item in sel_scoped_both["selected"]}
+    cli_builders = scoped_edges[drain_pkg]["build_tests"]["github.com/mschulkind-oss/tillr-cli"]
+    assert set(by_pkg[drain_pkg]["selected_tests"] or ()) == set(drain_readers) | set(cli_builders), (
+        by_pkg[drain_pkg]
+    )
+    assert by_pkg[gate_pkg]["selected_tests"] == gate_readers, by_pkg
+
+    # Pairing with an unscoped builds edge widens back to whole-package execution.
+    unscoped_build_edges = json.loads(json.dumps(scoped_edges))
+    unscoped_build_edges[drain_pkg].get("build_tests", {}).pop("github.com/mschulkind-oss/tillr-cli", None)
+    sel_builds = go_affected.select_affected_packages(
+        ROOT, [scoped_read, "tools/tillr-cli/main.go"], edges=unscoped_build_edges, graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_builds["selected"]}
     assert "github.com/mschulkind-oss/tillr-drain" not in by_pkg, by_pkg
@@ -489,25 +533,29 @@ def test_edges_file_honest_and_env_read() -> None:
                 assert (ROOT / rule).is_file(), (
                     f"{pkg_import}: file reads rule {rule!r} missing on disk"
                 )
-        read_tests = edges[pkg_import].get("read_tests", {})
-        assert isinstance(read_tests, dict), f"{pkg_import}: read_tests must be a dict"
         pkg_test_names = set(go_affected.scan_package_tests(ROOT, {
             "import_path": pkg_import,
             "module": f"tools/{rel.split('/', 1)[0]}",
             "dir_rel": f"tools/{rel}",
         }))
-        for rule, names in read_tests.items():
-            assert rule in read_rules, f"{pkg_import}: read_tests key {rule!r} missing from reads"
-            assert isinstance(names, list) and names, f"{pkg_import}: read_tests[{rule!r}] must be non-empty"
-            assert "TestEdgeInputs" not in names, (
-                f"{pkg_import}: omit TestEdgeInputs from read_tests[{rule!r}]; go_affected appends it"
-            )
-            missing_tests = [n for n in names if n not in pkg_test_names]
-            assert not missing_tests, (
-                f"{pkg_import}: read_tests[{rule!r}] names tests absent from package: {missing_tests}"
-            )
+        for map_key, allowed_keys in (
+            ("build_tests", set(edges[pkg_import].get("builds", []))),
+            ("read_tests", read_rules),
+        ):
+            scoped_tests = edges[pkg_import].get(map_key, {})
+            assert isinstance(scoped_tests, dict), f"{pkg_import}: {map_key} must be a dict"
+            for rule, names in scoped_tests.items():
+                assert rule in allowed_keys, f"{pkg_import}: {map_key} key {rule!r} missing from declaration list"
+                assert isinstance(names, list) and names, f"{pkg_import}: {map_key}[{rule!r}] must be non-empty"
+                assert "TestEdgeInputs" not in names, (
+                    f"{pkg_import}: omit TestEdgeInputs from {map_key}[{rule!r}]; go_affected appends it"
+                )
+                missing_tests = [n for n in names if n not in pkg_test_names]
+                assert not missing_tests, (
+                    f"{pkg_import}: {map_key}[{rule!r}] names tests absent from package: {missing_tests}"
+                )
 
-    # load_edges refuses invalid read_tests declarations.
+    # load_edges refuses invalid build_tests and read_tests declarations.
     with tempfile.TemporaryDirectory(prefix="go-affected-edges-val-", dir=scratch_root()) as tmp:
         bad_repo = Path(tmp)
         (bad_repo / "tools" / "gate").mkdir(parents=True)
@@ -517,6 +565,12 @@ def test_edges_file_honest_and_env_read() -> None:
             {"github.com/mschulkind-oss/tillr-gate": {"reads": ["a.py"], "read_tests": {"a.py": []}}},
             {"github.com/mschulkind-oss/tillr-gate": {"reads": ["a.py"], "read_tests": {"a.py": [123]}}},
             {"github.com/mschulkind-oss/tillr-gate": {"reads": ["a.py"], "read_tests": {"a.py": [""]}}},
+            {"github.com/mschulkind-oss/tillr-gate": {"builds": ["example.com/a"], "build_tests": ["bad"]}},
+            {"github.com/mschulkind-oss/tillr-gate": {"builds": ["example.com/a"], "build_tests": {"example.com/b": ["TestX"]}}},
+            {"github.com/mschulkind-oss/tillr-gate": {"builds": ["example.com/a"], "build_tests": {"example.com/a": []}}},
+            {"github.com/mschulkind-oss/tillr-gate": {"builds": ["example.com/a"], "build_tests": {"example.com/a": [123]}}},
+            {"github.com/mschulkind-oss/tillr-gate": {"builds": ["example.com/a"], "build_tests": {"example.com/a": [""]}}},
+            {"github.com/mschulkind-oss/tillr-gate": {"builds": ["example.com/a"], "build_tests": {"example.com/a": [" TestX "]}}},
         ):
             (bad_repo / "tools" / "gate" / "go-test-edges.json").write_text(json.dumps(bad_edges))
             try:
@@ -524,7 +578,7 @@ def test_edges_file_honest_and_env_read() -> None:
             except ValueError:
                 pass
             else:
-                raise AssertionError(f"load_edges accepted invalid read_tests: {bad_edges}")
+                raise AssertionError(f"load_edges accepted invalid scoped tests: {bad_edges}")
 
 
 def test_edge_cache_invalidation() -> None:
@@ -1631,6 +1685,185 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
         )
         assert rc == 0, out
         assert (pids_dir / "CFG").is_file() and (pids_dir / "UNREL").is_file()
+        assert set(ev["packages"][0]) == {"import_path", "module", "reason", "elapsed_ms", "cached"}, ev
+
+
+def test_scoped_build_tests_execution_cache_and_sharding() -> None:
+    """Prove build_tests narrows -run, LPT-shards >=25s builder subsets, scopes digests, and hits Go's cache."""
+    pkg = "github.com/mschulkind-oss/tillr-scoped"
+    sib_a_pkg = "github.com/mschulkind-oss/tillr-siba"
+    sib_b_pkg = "github.com/mschulkind-oss/tillr-sibb"
+    with tempfile.TemporaryDirectory(prefix="go-affected-build-scoped-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        (repo / "tools" / "tillr-siba").mkdir(parents=True)
+        (repo / "tools" / "tillr-sibb").mkdir(parents=True)
+        (repo / "tools" / "tillr-scoped").mkdir(parents=True)
+        (repo / "tools" / "gate").mkdir(parents=True)
+        shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", repo / "tools" / "gate" / "go_affected.py")
+        shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
+
+        (repo / "tools" / "tillr-siba" / "go.mod").write_text(f"module {sib_a_pkg}\n\ngo 1.22\n")
+        sib_a_main = repo / "tools" / "tillr-siba" / "main.go"
+        sib_a_main.write_text('package main\nfunc main() { println("sibA-v1") }\n')
+
+        (repo / "tools" / "tillr-sibb" / "go.mod").write_text(f"module {sib_b_pkg}\n\ngo 1.22\n")
+        sib_b_main = repo / "tools" / "tillr-sibb" / "main.go"
+        sib_b_main.write_text('package main\nfunc main() { println("sibB-v1") }\n')
+
+        pids_dir = tmp_path / "pids"
+        pids_dir.mkdir()
+
+        nonce = _fresh_nonce()
+        (repo / "tools" / "tillr-scoped" / "go.mod").write_text(f"module {pkg}\n\ngo 1.22\n")
+        (repo / "tools" / "tillr-scoped" / "scoped_test.go").write_text(
+            'package main\n'
+            'import (\n'
+            '  "fmt"\n'
+            '  "os"\n'
+            '  "path/filepath"\n'
+            '  "strings"\n'
+            '  "testing"\n'
+            ')\n'
+            'func TestEdgeInputs(t *testing.T) {\n'
+            f'  if t.Name() == "{nonce}" {{ t.Fatal() }}\n'
+            '  if os.Getenv("TILLR_GATE_EDGE_INPUTS") == "" {\n'
+            '    t.Fatal("missing TILLR_GATE_EDGE_INPUTS")\n'
+            '  }\n'
+            '}\n'
+            'func recordPID(t *testing.T, name string) {\n'
+            '  if dir := os.Getenv("SCOPED_PIDS_DIR"); dir != "" {\n'
+            '    _ = os.WriteFile(filepath.Join(dir, name), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644)\n'
+            '  }\n'
+            '}\n'
+            'func TestBuildsSibA1(t *testing.T) {\n'
+            '  recordPID(t, "A1")\n'
+            '  raw, err := os.ReadFile("../tillr-siba/main.go")\n'
+            '  if err != nil { t.Fatal(err) }\n'
+            '  if !strings.Contains(string(raw), "sibA-") { t.Fatalf("bad sibA: %q", raw) }\n'
+            '}\n'
+            'func TestBuildsSibA2(t *testing.T) {\n'
+            '  recordPID(t, "A2")\n'
+            '  raw, err := os.ReadFile("../tillr-siba/main.go")\n'
+            '  if err != nil { t.Fatal(err) }\n'
+            '  if strings.Contains(string(raw), "BROKEN_A2") { t.Fatalf("sibA broke A2: %q", raw) }\n'
+            '}\n'
+            'func TestBuildsSibB(t *testing.T) {\n'
+            '  recordPID(t, "B")\n'
+            '  raw, err := os.ReadFile("../tillr-sibb/main.go")\n'
+            '  if err != nil { t.Fatal(err) }\n'
+            '  if !strings.Contains(string(raw), "sibB-") { t.Fatalf("bad sibB: %q", raw) }\n'
+            '}\n'
+            'func TestUnrelatedMustNotRunWhenNarrowed(t *testing.T) {\n'
+            '  recordPID(t, "UNREL")\n'
+            '  if os.Getenv("ALLOW_UNRELATED") != "1" {\n'
+            '    t.Fatal("unrelated test ran during narrowed builds execution")\n'
+            '  }\n'
+            '}\n'
+        )
+        edges_data = {
+            pkg: {
+                "builds": [sib_a_pkg, sib_b_pkg],
+                "build_tests": {
+                    sib_a_pkg: ["TestBuildsSibA1", "TestBuildsSibA2"],
+                },
+                "reads": [],
+            }
+        }
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text(json.dumps(edges_data))
+        (repo / "tools" / "go-test-durations.json").write_text(json.dumps({
+            pkg: {
+                "TestBuildsSibA1": 20.0,
+                "TestBuildsSibA2": 15.0,
+            }
+        }))
+
+        ev_file = tmp_path / "ev.json"
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        lock_dir = tmp_path / "locks"
+        gocache = _shared_gocache()
+        _precompile_go_test(repo / "tools" / "tillr-scoped", gocache)
+
+        def run_scoped(changed: list[str], extra_env: dict[str, str] | None = None) -> tuple[int, str, dict]:
+            env_patch = {
+                "GOCACHE": str(gocache),
+                "YOLO_DURABLE_DIR": str(durable),
+                "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
+                "GO_TEST_SHARDS_CLASS": "ordinary",
+                "SCOPED_PIDS_DIR": str(pids_dir),
+                **(extra_env or {}),
+            }
+            with patch.dict(os.environ, env_patch):
+                sel = go_affected.select_affected_packages(repo, changed)
+                rc, out, ev = go_affected.run_selected_tests(repo, sel, ev_path=str(ev_file))
+                return rc, out, ev
+
+        # 1. Scoped builds change runs only TestBuildsSibA1 + TestBuildsSibA2 (+ TestEdgeInputs),
+        # splits into 2 LPT shard processes, and records "tests" in evidence.
+        rc, out, ev = run_scoped(["tools/tillr-siba/main.go"])
+        assert rc == 0, out
+        assert (pids_dir / "A1").is_file() and (pids_dir / "A2").is_file()
+        assert not (pids_dir / "B").exists() and not (pids_dir / "UNREL").exists()
+        pid_a1 = (pids_dir / "A1").read_text(encoding="utf-8")
+        pid_a2 = (pids_dir / "A2").read_text(encoding="utf-8")
+        assert pid_a1 != pid_a2, f"expected 2 LPT shards for 35s builder subset, got same pid {pid_a1}"
+        assert len(ev["packages"]) == 1, ev
+        assert ev["packages"][0]["cached"] is False, ev
+        assert ev["packages"][0]["tests"] == ["TestBuildsSibA1", "TestBuildsSibA2"], ev
+        assert set(ev["packages"][0]) == {
+            "import_path", "module", "reason", "elapsed_ms", "cached", "tests"
+        }, ev
+
+        # 2. Second run with unchanged inputs hits Go's result cache across both shards.
+        (pids_dir / "A1").unlink()
+        (pids_dir / "A2").unlink()
+        rc, out, ev = run_scoped(["tools/tillr-siba/main.go"])
+        assert rc == 0, out
+        assert ev["packages"][0]["cached"] is True, ev
+        assert not (pids_dir / "A1").exists() and not (pids_dir / "A2").exists()
+
+        # 3. Editing tillr-siba/main.go invalidates the digest and catches TestBuildsSibA2's failure.
+        sib_a_main.write_text('package main\nfunc main() { println("sibA-v2 BROKEN_A2") }\n')
+        rc, out, ev = run_scoped(["tools/tillr-siba/main.go"])
+        assert rc != 0, out
+        assert ev["packages"][0]["cached"] is False, ev
+        assert "TestBuildsSibA2" in out, out
+        sib_a_main.write_text('package main\nfunc main() { println("sibA-v3") }\n')
+
+        # 4. Subset-scoped edge digest: non-builder shard ignores scoped sib_a edits while
+        # tracking unscoped sib_b edits; builder shard tracks both sib_a and unscoped sib_b.
+        graph = go_affected.load_tillr_graph(repo)
+        edge_entry = edges_data[pkg]
+        d_unrel_before = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestUnrelatedMustNotRunWhenNarrowed"]
+        )
+        d_builder_before = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestBuildsSibA1"]
+        )
+        sib_a_main.write_text('package main\nfunc main() { println("sibA-v4") }\n')
+        d_unrel_after_a = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestUnrelatedMustNotRunWhenNarrowed"]
+        )
+        d_builder_after_a = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestBuildsSibA1"]
+        )
+        assert d_unrel_after_a == d_unrel_before, "non-builder shard digest changed on scoped builds edit"
+        assert d_builder_after_a != d_builder_before, "builder shard digest missed scoped builds edit"
+
+        sib_b_main.write_text('package main\nfunc main() { println("sibB-v2") }\n')
+        d_unrel_after_b = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestUnrelatedMustNotRunWhenNarrowed"]
+        )
+        assert d_unrel_after_b != d_unrel_after_a, "non-builder shard digest missed unscoped builds edit"
+
+        # 5. Pairing with an unscoped builds change widens back to whole-package (5-field evidence).
+        rc, out, ev = run_scoped(
+            ["tools/tillr-siba/main.go", "tools/tillr-sibb/main.go"],
+            {"ALLOW_UNRELATED": "1", "SCOPED_PIDS_DIR": str(pids_dir)},
+        )
+        assert rc == 0, out
+        assert (pids_dir / "B").is_file() and (pids_dir / "UNREL").is_file()
         assert set(ev["packages"][0]) == {"import_path", "module", "reason", "elapsed_ms", "cached"}, ev
 
 
@@ -2929,6 +3162,7 @@ def main(argv: list[str] | None = None) -> int:
         ("test_edges_file_honest_and_env_read", test_edges_file_honest_and_env_read),
         ("test_stalled_run_prints_nothing_without_test_events", test_stalled_run_prints_nothing_without_test_events),
         ("test_scoped_read_tests_execution_cache_and_sharding", test_scoped_read_tests_execution_cache_and_sharding),
+        ("test_scoped_build_tests_execution_cache_and_sharding", test_scoped_build_tests_execution_cache_and_sharding),
         ("test_concurrent_runs_do_not_share_scratch_and_preserve_cache", test_concurrent_runs_do_not_share_scratch_and_preserve_cache),
         ("test_streams_progress_lines_before_run_ends", test_streams_progress_lines_before_run_ends),
         ("test_suite_gocache_and_runner_helpers", test_suite_gocache_and_runner_helpers),
