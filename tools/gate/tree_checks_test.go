@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path"
@@ -425,5 +426,121 @@ func TestTreeDeclarationReadingGoModuleReadsInRepoDependencies(t *testing.T) {
 		if got := missingGoReads(decl.Reads, root); len(got) != 0 {
 			t.Fatalf("%s: missing Go dependencies in reads: %v", e.Name(), got)
 		}
+	}
+}
+
+func loadShardRunnerFlags(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	cmd := exec.Command("python3", filepath.Join(root, "tools", "go-test-shards.py"), "--help")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go-test-shards.py --help: %v: %s", err, out)
+	}
+	flags := make(map[string]bool)
+	inOptions := false
+	for _, line := range splitLines(string(out)) {
+		if strings.TrimSpace(line) == "options:" {
+			inOptions = true
+			continue
+		}
+		if !inOptions || !strings.HasPrefix(line, "  -") {
+			continue
+		}
+		head := strings.TrimSpace(line)
+		if idx := strings.Index(head, "  "); idx >= 0 {
+			head = head[:idx]
+		}
+		for _, part := range strings.Split(head, ",") {
+			tok := strings.Fields(strings.TrimSpace(part))
+			if len(tok) > 0 && strings.HasPrefix(tok[0], "-") {
+				flags[tok[0]] = true
+			}
+		}
+	}
+	if len(flags) == 0 {
+		t.Fatalf("parsed no flags from go-test-shards.py --help:\n%s", out)
+	}
+	return flags
+}
+
+func checkShardRunnerCommandFlags(command []string, accepted map[string]bool) error {
+	var tokens []string
+	if len(command) >= 3 && command[0] == "sh" && command[1] == "-c" {
+		tokens = strings.Fields(command[2])
+	} else {
+		tokens = command
+	}
+	for i := 0; i < len(tokens); i++ {
+		tok := strings.Trim(tokens[i], "\"'()")
+		if tok != "tools/go-test-shards.py" && !strings.HasSuffix(tok, "/go-test-shards.py") {
+			continue
+		}
+		for j := i + 1; j < len(tokens); j++ {
+			raw := tokens[j]
+			if raw == "&&" || raw == "||" || raw == ";" || raw == "|" {
+				break
+			}
+			arg := strings.Trim(raw, "\"'()")
+			if strings.HasPrefix(arg, "-") {
+				flag := arg
+				if eq := strings.IndexByte(flag, '='); eq >= 0 {
+					flag = flag[:eq]
+				}
+				if !accepted[flag] {
+					return fmt.Errorf("unrecognized go-test-shards.py flag %q", flag)
+				}
+			}
+			if strings.Contains(raw, ")") {
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func TestTreeGoTestShardsDeclarationsUseAcceptedFlags(t *testing.T) {
+	root, _ := loadTestContext(t)
+	accepted := loadShardRunnerFlags(t, root)
+
+	if err := checkShardRunnerCommandFlags([]string{
+		"sh", "-c", "CGO_ENABLED=0 python3 tools/go-test-shards.py tools/gate -k 6 --cache --timeout 0",
+	}, accepted); err != nil {
+		t.Fatalf("expected valid shard command to pass, got: %v", err)
+	}
+	if err := checkShardRunnerCommandFlags([]string{
+		"sh", "-c", "CGO_ENABLED=0 python3 tools/go-test-shards.py tools/gate -k 6 --cache --slot-class proof --timeout 0",
+	}, accepted); err == nil {
+		t.Fatal("expected --slot-class to fail validation, got nil")
+	}
+
+	checksDir := filepath.Join(root, "tools", "gate", "checks")
+	entries, err := os.ReadDir(checksDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(checksDir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decl struct {
+			Command []string `json:"command"`
+		}
+		if err := json.Unmarshal(raw, &decl); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(strings.Join(decl.Command, " "), "go-test-shards.py") {
+			checked++
+			if err := checkShardRunnerCommandFlags(decl.Command, accepted); err != nil {
+				t.Fatalf("%s: %v", e.Name(), err)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("expected at least one check declaration invoking go-test-shards.py")
 	}
 }
