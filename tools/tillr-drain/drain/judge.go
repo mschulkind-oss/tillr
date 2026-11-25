@@ -187,6 +187,30 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 	if c.WorkerHeadSHA != "" {
 		workerHead = c.WorkerHeadSHA
 	}
+	// A landing candidate carries its workflow evaluator's receipt without its
+	// non-serialized Evaluator request. Restore that identity when re-judging or
+	// recovering an explicit workflow evaluator so a not-done verdict takes the
+	// verify-not-done path back to the builder rather than holding as eval-failed.
+	restoreWorkflowEvaluator := func(r *JudgeReceipt, req *run.Request) {
+		if r != nil {
+			if len(c.Writers) == 0 {
+				c.Writers = r.Writers
+			}
+			if len(c.Producers) == 0 {
+				c.Producers = r.Producers
+			}
+			if len(c.EvaluatorInputs) == 0 {
+				c.EvaluatorInputs = r.Inputs
+			}
+			if c.EvaluatorTask == "" {
+				c.EvaluatorTask = r.EvaluatorTask
+			}
+		}
+		if c.Evaluator == nil && req != nil && compatibilityNode != binding.EvaluatorNode && req.NodeID == binding.EvaluatorNode && req.Workflow == binding.Workflow {
+			evalReq := *req
+			c.Evaluator = &evalReq
+		}
+	}
 	if receipt != nil && c.RebasedFromHead != "" && receipt.Options.ItemID == c.ItemID && receipt.Options.Head == c.RebasedFromHead && receipt.Options.Head != workerHead {
 		var diskReceipt *JudgeReceipt
 		if c.Judge != nil {
@@ -215,28 +239,20 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					return c, false, errJudgeBackendHeld
 				}
 			}
-			if len(c.Writers) == 0 {
-				c.Writers = receipt.Writers
-			}
-			if len(c.Producers) == 0 {
-				c.Producers = receipt.Producers
-			}
-			if len(c.EvaluatorInputs) == 0 {
-				c.EvaluatorInputs = receipt.Inputs
-			}
-			if c.EvaluatorTask == "" {
-				c.EvaluatorTask = receipt.EvaluatorTask
-			}
 			req := receipt.Request
 			req.RunID = markRunID(req.RunID, "fresh")
 			req = l.refreshJudgeRequest(req)
 			req.SessionTurn, req.ResumePrompt = false, ""
+			restoreWorkflowEvaluator(receipt, &req)
 			replacementRequest = &req
 			receipt = nil
 			c.Judge = nil
 			l.reportf("loop: re-judging %s after pre-gate rebase onto %s (previous judgment was for %s)\n",
 				c.ItemID, shortSHA(c.BaseSHA), shortSHA(c.RebasedFromHead))
 		}
+	}
+	if receipt != nil {
+		restoreWorkflowEvaluator(receipt, &receipt.Request)
 	}
 	if receipt != nil && len(receipt.Raw) == 0 {
 		var rec *run.Record

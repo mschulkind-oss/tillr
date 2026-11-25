@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -383,4 +384,163 @@ func TestPreRebaseRepairedTrunkStillHoldsUnrelatedSavedJudgment(t *testing.T) {
 	if result.RefusedSteps[ReasonJudgeUnreadable] != 1 {
 		t.Fatalf("RefusedSteps = %v, want 1 %s", result.RefusedSteps, ReasonJudgeUnreadable)
 	}
+}
+
+// When the fresh verify run after a pre-gate rebase writes a not-done verdict, it must
+// take the verify-not-done path: record verify-not-done on the workflow run, dispatch the
+// build step on the rebased candidate with the verifier's findings, and never record
+// eval-failed or hold the item as run-link-missing for the operator.
+func TestPreRebaseRejudgmentFailReturnsToBuilder(t *testing.T) {
+	ctx := context.Background()
+	f, l, baseSteps := judgeRouteFixture(t, "pass")
+	steps := &rebasedJudgeRouteSteps{judgeRouteSteps: baseSteps}
+	l.cfg.Steps = steps
+	report := &strings.Builder{}
+	l.cfg.Report = report
+
+	writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), evaluatorWorkflow)
+	runGit(t, f.root, "add", "config/tillr/workflows")
+	runGit(t, f.root, "commit", "-qm", "evaluator workflow")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET workflow='scout-then-build@v1' WHERE item_id='item-a'`)
+		return err
+	})
+
+	const findingReason = "regression after rebase: broken edge case"
+	var repaired, rebasedHead string
+	var returnedBuildBrief, returnedBuildBase, returnedBuildParent string
+	judgeCalls := 0
+	workerCalls := 0
+
+	origRun := steps.Run
+	customSteps := &callbackSteps{
+		rebasedJudgeRouteSteps: steps,
+		beforeRun: func(req run.Request) {
+			isJudge := req.Node == "judge" || strings.HasSuffix(req.RunID, "-judge") || req.NodeID == "evaluate" || strings.HasSuffix(req.NodeID, "/evaluate")
+			if !isJudge {
+				workerCalls++
+				if workerCalls == 3 {
+					// Returned build step after the fresh verify failed.
+					target := filepath.Join(f.laneRoot, req.LaneID, WorktreeDir)
+					raw, err := os.ReadFile(filepath.Join(f.laneRoot, req.LaneID, BriefFile))
+					if err != nil {
+						t.Fatalf("read returned build brief: %v", err)
+					}
+					returnedBuildBrief = string(raw)
+					returnedBuildBase = l.laneBase(req.LaneID)
+					returnedBuildParent = runGit(t, target, "rev-parse", "HEAD")
+				}
+				return
+			}
+			judgeCalls++
+			if judgeCalls == 2 {
+				target := filepath.Join(f.laneRoot, req.LaneID, WorktreeDir)
+				rebasedHead = runGit(t, target, "rev-parse", "HEAD")
+				baseSteps.entries = []item.JudgeEntry{{
+					CriterionID:   "c1",
+					CriterionHash: item.CriterionHash("the first criterion of item-a"),
+					Verdict:       item.VerdictNotDone,
+					ClaimClass:    item.ClaimVerification,
+					Reason:        findingReason,
+					Evidence:      []string{"file:tools/item-a/result.txt"},
+					Findings: item.VerdictFindings{{
+						Kind:  "regression",
+						Case:  "rebased candidate broke edge case",
+						Paths: []string{"file:tools/item-a/result.txt"},
+					}},
+				}}
+			} else {
+				baseSteps.entries = nil
+			}
+		},
+		runFn: origRun,
+	}
+	l.cfg.Steps = customSteps
+
+	baseSteps.afterJudge = func() {
+		if judgeCalls != 1 {
+			return
+		}
+		writeForkFile(t, filepath.Join(f.root, "repair.txt"), "trunk repair\n")
+		runGit(t, f.root, "add", "repair.txt")
+		runGit(t, f.root, "commit", "-qm", "fix: repair trunk after judge")
+		repaired = runGit(t, f.root, "rev-parse", TrunkRef)
+		if err := recordTrunkRepair(ctx, f.root, repaired, "repair deferred to proof of "+shortSHA(repaired)+": focused check passed"); err != nil {
+			t.Fatalf("recordTrunkRepair: %v", err)
+		}
+	}
+
+	result := &LoopResult{}
+	for i := 0; i < 20; i++ {
+		if _, err := l.pass(ctx, result); err != nil {
+			t.Fatalf("pass %d: %v\n%s", i, err, report.String())
+		}
+		drainOwned(t, l, result)
+	}
+
+	var evalFailed, verifyNotDone, holds, verdicts int
+	var itemState, refusalRunID string
+	fixtureRead(t, f, func(r *store.Reader) error {
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND json_extract(payload,'$.step')=?`, RefusalKind, ReasonEvalFailed).Scan(&evalFailed); err != nil {
+			return err
+		}
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND json_extract(payload,'$.step')=?`, RefusalKind, RefusalVerifyNotDone).Scan(&verifyNotDone); err != nil {
+			return err
+		}
+		if verifyNotDone > 0 {
+			if err := r.QueryRow(`SELECT object_id FROM events WHERE kind=? AND json_extract(payload,'$.step')=? ORDER BY seq DESC LIMIT 1`, RefusalKind, RefusalVerifyNotDone).Scan(&refusalRunID); err != nil {
+				return err
+			}
+		}
+		if err := r.QueryRow(`SELECT COUNT(*) FROM dispatches WHERE item_id='item-a' AND action='hold'`).Scan(&holds); err != nil {
+			return err
+		}
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='item.verdict'`).Scan(&verdicts); err != nil {
+			return err
+		}
+		return r.QueryRow(`SELECT state FROM items WHERE item_id='item-a'`).Scan(&itemState)
+	})
+	if evalFailed != 0 {
+		t.Fatalf("eval-failed refusals = %d, want 0\n%s", evalFailed, report.String())
+	}
+	if holds != 0 {
+		t.Fatalf("operator holds = %d, want 0\n%s", holds, report.String())
+	}
+	if verifyNotDone != 1 {
+		t.Fatalf("verify-not-done refusals = %d, want 1\n%s", verifyNotDone, report.String())
+	}
+	if refusalRunID != "run-item-a-a1-n3" {
+		t.Fatalf("verify-not-done refusal run_id = %q, want run-item-a-a1-n3\n%s", refusalRunID, report.String())
+	}
+	if !strings.Contains(report.String(), "run-item-a-a1-n3-fresh") {
+		t.Fatalf("expected fresh re-judgment run run-item-a-a1-n3-fresh in report:\n%s", report.String())
+	}
+	if workerCalls != 3 {
+		t.Fatalf("worker calls = %d, want 3 (scout, build, returned build)\n%s", workerCalls, report.String())
+	}
+	if returnedBuildBase != repaired {
+		t.Fatalf("returned build base = %s, want repaired trunk %s\n%s", shortSHA(returnedBuildBase), shortSHA(repaired), report.String())
+	}
+	if returnedBuildParent != rebasedHead {
+		t.Fatalf("returned build started on %s, want rebased head %s\n%s", shortSHA(returnedBuildParent), shortSHA(rebasedHead), report.String())
+	}
+	if !strings.Contains(returnedBuildBrief, findingReason) {
+		t.Fatalf("returned build brief lacks verifier finding %q:\n%s", findingReason, returnedBuildBrief)
+	}
+	if itemState != StateLanded || verdicts != 1 {
+		t.Fatalf("final item state = %q, verdicts = %d, want landed and 1\n%s", itemState, verdicts, report.String())
+	}
+}
+
+type callbackSteps struct {
+	*rebasedJudgeRouteSteps
+	beforeRun func(run.Request)
+	runFn     func(context.Context, run.Request) (run.Record, string, error)
+}
+
+func (s *callbackSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	if s.beforeRun != nil {
+		s.beforeRun(req)
+	}
+	return s.runFn(ctx, req)
 }

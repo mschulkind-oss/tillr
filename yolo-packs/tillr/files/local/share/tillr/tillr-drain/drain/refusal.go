@@ -181,7 +181,7 @@ func refusalStepsWords(steps map[string]int) string {
 // concludingRefusals are the refusal steps that end their run's examination: refuse()
 // records them, the caller then abandons the lane, and the item's next attempt is a new
 // run.
-var concludingRefusals = []string{RefusalLand, RefusalDeliveryOrder, RefusalGate, RefusalFence, RefusalNoOp, RefusalNodeOutput, RefusalPlanOutput}
+var concludingRefusals = []string{RefusalLand, RefusalDeliveryOrder, RefusalGate, RefusalVerifyNotDone, RefusalFence, RefusalNoOp, RefusalNodeOutput, RefusalPlanOutput}
 
 // concludedByRefusal answers whether runID's examination already ended in a refusal: a
 // concluding drain.refusal recorded after the run's latest candidate, assignment or
