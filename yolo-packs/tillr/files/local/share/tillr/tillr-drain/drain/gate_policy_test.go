@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestRepositoryGatePolicyUsesGreenLaneBase(t *testing.T) {
+func TestRepositoryGatePolicyUsesTipLaneBase(t *testing.T) {
 	const path = "../../../config/tillr/gate-policy.json"
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -20,8 +20,8 @@ func TestRepositoryGatePolicyUsesGreenLaneBase(t *testing.T) {
 	if err := json.Unmarshal(raw, &policy); err != nil {
 		t.Fatalf("%s: %v", path, err)
 	}
-	if policy.LaneBase != "green" {
-		t.Fatalf("%s: lane_base = %q, want explicit green", path, policy.LaneBase)
+	if policy.LaneBase != "tip" {
+		t.Fatalf("%s: lane_base = %q, want explicit tip", path, policy.LaneBase)
 	}
 }
 

@@ -2,5 +2,5 @@
   "landing_strategy": "after-merge",
   "auto_revert": true,
   "budget_ms": 10000,
-  "lane_base": "green"
+  "lane_base": "tip"
 }

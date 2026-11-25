@@ -563,17 +563,6 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			earlier = trunkNotice
 		}
 	}
-	for i := range values {
-		if values[i].placeholder == "FACTS" && earlier != "" {
-			if strings.HasPrefix(values[i].text, "None carried:") {
-				values[i].text = strings.TrimSpace(earlier)
-			} else if strings.HasPrefix(earlier, "\n") {
-				values[i].text += earlier
-			} else {
-				values[i].text = strings.TrimRight(values[i].text, "\n") + "\n\n" + strings.TrimSpace(earlier)
-			}
-		}
-	}
 	capability := run.EndingFooter
 	metadataDir := laneDir
 	if spec.Isolated {
@@ -594,6 +583,27 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		((spec.Node == nil && (recorded.Seat == "" || recorded.Seat == "build")) ||
 			(spec.Node != nil && spec.Node.Kind == "agent" && spec.Node.Seat == "build" && spec.Node.Access == "write")) {
 		capability = run.EndingCallSuspends
+	}
+	if !isFork && !IsTrunkFixer(spec.ItemID) && !IsRemoteSyncItem(spec.ItemID) && s.Root != "" && itemBaseSHA != "" {
+		if green, greenErr := heavyGreen(ctx, s.Root); greenErr == nil && (green == "" || green != itemBaseSHA) {
+			notice := unprovedBaseNotice(itemBaseSHA, green, capability)
+			if earlier != "" {
+				earlier += "\n\n" + notice
+			} else {
+				earlier = notice
+			}
+		}
+	}
+	for i := range values {
+		if values[i].placeholder == "FACTS" && earlier != "" {
+			if strings.HasPrefix(values[i].text, "None carried:") {
+				values[i].text = strings.TrimSpace(earlier)
+			} else if strings.HasPrefix(earlier, "\n") {
+				values[i].text += earlier
+			} else {
+				values[i].text = strings.TrimRight(values[i].text, "\n") + "\n\n" + strings.TrimSpace(earlier)
+			}
+		}
 	}
 	brief, err := renderBriefWithEnding(s.Template, recorded.ItemID, values, capability)
 	if err != nil {
@@ -1385,6 +1395,26 @@ func renderBriefWithEnding(templatePath, itemID string, values briefValues, capa
 		return provided[placeholder.FindStringSubmatch(found)[1]]
 	})
 	return rendered, nil
+}
+
+// unprovedBaseNotice warns a worker when its lane starts from a commit other than
+// refs/tillr/green so unrelated trunk failures are reported as a trunk obstacle rather
+// than fixed inside the item.
+func unprovedBaseNotice(baseSHA, greenSHA, capability string) string {
+	where := "no proved green commit is recorded yet"
+	if greenSHA != "" {
+		where = "the proved green commit is " + shortSHA(greenSHA)
+	}
+	report := "naming the failing checks in `CHECKS:` and this base in `BASE:`, as described under Report shape"
+	if capability == run.EndingCallSuspends {
+		report = "calling `obstacle` with `kind: \"trunk\"`, the failing checks in `checks`, and this base in `base`"
+	}
+	return fmt.Sprintf(
+		"Unproved base warning: this lane's base (%s) is unproved (%s). "+
+			"A failing test that your change did not touch may already be red on the trunk. "+
+			"Do not fix unrelated trunk failures inside this item; report them as a `trunk` obstacle (%s).",
+		shortSHA(baseSHA), where, report,
+	)
 }
 
 // dropTemplateComments removes every HTML comment in the template. A comment is the

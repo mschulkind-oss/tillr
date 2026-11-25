@@ -218,11 +218,17 @@ earlier loops' runs it settled; a sum that omits a measurement is labeled a lowe
 
 ## The commit a new lane starts from
 
-The gate policy's `lane_base` defaults to `green`. A new dispatch records and stages the
-commit at `refs/tillr/green`, the
+The gate policy's `lane_base` defaults to `green`. Under `green`, a new dispatch records
+and stages the commit at `refs/tillr/green`, the
 [green pointer](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate.md#after-merge-proof-and-the-green-pointer) that
-names the last proved trunk commit. With `tip` it stages the trunk tip. A trunk fixer (the
-generated item that repairs a red trunk check) always starts from the tip.
+names the last proved trunk commit. With `tip` it stages the trunk tip. This repository
+sets `lane_base` to `tip` in
+[`config/tillr/gate-policy.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/gate-policy.json) while keeping `green`
+as the program default for repositories with no setting. Whenever a non-fixer lane's base
+is not the proved commit, the worker's brief warns that the base is unproved and may carry
+red tests unrelated to the change, and instructs the worker to report such a failure as a
+`trunk` obstacle instead of fixing it inside the item. A trunk fixer (the generated item
+that repairs a red trunk check) always starts from the tip.
 
 - **A finished blocker must be proved.** Under `green`, a dependent item waits with
   `trunk-unproved` until the green pointer contains its blocker's landing.

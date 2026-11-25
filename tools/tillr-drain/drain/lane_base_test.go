@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -394,4 +395,112 @@ func TestApplyPlannedChecksOnlyDispatchedItemsBlockers(t *testing.T) {
 	if err2 != nil || ok2 || work2 != nil {
 		t.Fatalf("expected unproved own blocker to decline dispatch: ok=%v work=%+v err=%v", ok2, work2, err2)
 	}
+}
+
+func TestLaneBaseUnprovedBriefWarning(t *testing.T) {
+	ctx := context.Background()
+	f, l := passFixture(t, "item-a")
+	l.cfg.Stage = &LaneStager{
+		Root:     f.root,
+		LaneRoot: f.laneRoot,
+		Store:    f.storePath,
+		Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"),
+		Now:      l.cfg.Now,
+	}
+	green := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "unproved tip")
+	tip := runGit(t, f.root, "rev-parse", TrunkRef)
+
+	stageAndRead := func(t *testing.T, lane, itemID, runID, base string) string {
+		t.Helper()
+		if err := l.cfg.Stage.Stage(ctx, StageSpec{
+			LaneID:     lane,
+			ItemID:     itemID,
+			RunID:      runID,
+			Backend:    "fixture",
+			BaseSHA:    base,
+			WorkingDir: WorktreeDir,
+		}); err != nil {
+			t.Fatalf("Stage(%s, %s): %v", itemID, shortSHA(base), err)
+		}
+		raw, err := os.ReadFile(filepath.Join(f.laneRoot, lane, BriefFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	assertHasWarning := func(t *testing.T, brief string) {
+		t.Helper()
+		for _, want := range []string{"Unproved base warning:", "unproved", "unrelated", "`trunk` obstacle", "CHECKS:", "BASE:"} {
+			if !strings.Contains(brief, want) {
+				t.Fatalf("brief missing %q:\n%s", want, brief)
+			}
+		}
+	}
+
+	t.Run("no_green_pointer_warns", func(t *testing.T) {
+		brief := stageAndRead(t, "lane-1", "item-a", "run-item-a-a1", tip)
+		assertHasWarning(t, brief)
+	})
+
+	runGit(t, f.root, "update-ref", GreenRef, green)
+
+	t.Run("unproved_tip_warns", func(t *testing.T) {
+		brief := stageAndRead(t, "lane-1", "item-a", "run-item-a-a2", tip)
+		assertHasWarning(t, brief)
+		if !strings.Contains(brief, shortSHA(green)) {
+			t.Fatalf("brief does not name proved green commit %s:\n%s", shortSHA(green), brief)
+		}
+	})
+
+	t.Run("proved_base_omits_warning", func(t *testing.T) {
+		brief := stageAndRead(t, "lane-1", "item-a", "run-item-a-a3", green)
+		if strings.Contains(brief, "Unproved base warning:") {
+			t.Fatalf("proved base brief unexpectedly contains unproved-base warning:\n%s", brief)
+		}
+	})
+
+	t.Run("trunk_fixer_omits_warning", func(t *testing.T) {
+		fixerID := "fixer-main-" + shortSHA(tip)
+		nowMS := l.cfg.Now().UnixMilli()
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			if _, err := tx.Exec(`INSERT INTO items(item_id,state,title,updated_at) VALUES(?,'in-queue','fix red trunk',?)`, fixerID, nowMS); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`INSERT INTO item_criteria(item_id,criterion_id,text,state) VALUES(?,'trunk-green','checks: unit','unverified')`, fixerID)
+			return err
+		})
+		brief := stageAndRead(t, "lane-1", fixerID, "run-"+fixerID+"-a1", tip)
+		if strings.Contains(brief, "Unproved base warning:") {
+			t.Fatalf("trunk fixer brief unexpectedly contains unproved-base warning:\n%s", brief)
+		}
+	})
+
+	t.Run("unproved_tip_warns_call_suspends", func(t *testing.T) {
+		if err := l.cfg.Stage.Stage(ctx, StageSpec{
+			LaneID:           "lane-1",
+			ItemID:           "item-a",
+			RunID:            "run-item-a-a4",
+			Backend:          "fixture",
+			BaseSHA:          tip,
+			WorkingDir:       WorktreeDir,
+			EndingCapability: run.EndingCallSuspends,
+		}); err != nil {
+			t.Fatalf("Stage call-suspends: %v", err)
+		}
+		raw, err := os.ReadFile(filepath.Join(f.laneRoot, "lane-1", BriefFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		brief := string(raw)
+		for _, want := range []string{"Unproved base warning:", "unproved", "unrelated", "`trunk` obstacle", "`checks`", "`base`"} {
+			if !strings.Contains(brief, want) {
+				t.Fatalf("call-suspends brief missing %q:\n%s", want, brief)
+			}
+		}
+		if strings.Contains(brief, "Report shape") {
+			t.Fatalf("call-suspends brief unexpectedly mentions Report shape:\n%s", brief)
+		}
+	})
 }
