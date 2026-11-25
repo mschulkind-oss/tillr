@@ -230,8 +230,8 @@ func (l *Loop) armRestartPending(gen uint64) (<-chan struct{}, bool) {
 // waitForRestartAnswer blocks until any pending restart request that is not
 // deferred by post-landing actions has been answered (replaced or answered
 // without replacing) or deferred by a post-landing action. When allowDuringProof
-// is true, an active trunk proof also lets the caller (an already-passed
-// candidate landing) proceed without waiting for the proof to end.
+// is true, an active trunk proof also lets the caller (a candidate whose gate
+// has already passed or failed) proceed without waiting for the proof to end.
 func (l *Loop) waitForRestartAnswer(ctx context.Context, allowDuringProof bool) error {
 	for {
 		if l.restartReplaced.Load() {
@@ -391,8 +391,9 @@ func (l *Loop) lockRestartGateStart(ctx context.Context) (context.Context, func(
 
 // lockRestartLanding acquires a settlement hold that may still proceed while a
 // pending restart is waiting on an active trunk proof, so a candidate whose gate
-// has already passed lands without waiting for the proof to end. Once the proof
-// ends, the pending restart still blocks new holds before the next proof or gate.
+// has already passed or failed settles without waiting for the proof to end.
+// Once the proof ends, the pending restart still blocks new holds before the
+// next proof or gate.
 func (l *Loop) lockRestartLanding(ctx context.Context) (context.Context, func(), error) {
 	return l.lockRestartStep(ctx, true, true, false)
 }

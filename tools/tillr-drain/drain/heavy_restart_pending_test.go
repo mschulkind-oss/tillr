@@ -829,6 +829,262 @@ PY
 	}
 }
 
+// TestFailedGateSettlesWhileRestartWaitsOnTrunkProof reproduces the 2026-11-24
+// 04:31 sequence: while a loop restart is pending and waiting on an active
+// trunk proof, a detached gate that ends failed (or has already ended failed
+// on disk) settles immediately without waiting for the proof to end: its
+// timing, verdict, and refusal are recorded and its lane is released. Once the
+// proof ends, the pending restart still replaces the loop.
+func TestFailedGateSettlesWhileRestartWaitsOnTrunkProof(t *testing.T) {
+	t.Setenv("TILLR_LOOP_STORE", "")
+	f := newRefusalLoopFixtureWithLanes(t, 2, "item-a", "item-b")
+	holdWALKeeper(t, f.storePath)
+
+	if err := os.MkdirAll(filepath.Join(f.root, "tools", "gate", "checks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(f.root, "tools", "gate", "checks", "unit.json"), `{"id":"unit","scope":"tree","tier":"heavy"}`+"\n")
+	runGit(t, f.root, "add", "tools/gate/checks/unit.json")
+	runGit(t, f.root, "commit", "-qm", "declare heavy unit check")
+	base := heavyGit(t, f.root, "rev-parse", TrunkRef)
+	heavyGit(t, f.root, "update-ref", GreenRef, base)
+	tip1 := heavyCommit(t, f.root, "tip-1")
+
+	work := scratchUnderDurable(t)
+	enteredGateA := filepath.Join(work, "entered-gate-a")
+	releaseGateA := filepath.Join(work, "release-gate-a")
+	enteredProof1 := filepath.Join(work, "entered-proof-1")
+	releaseProof1 := filepath.Join(work, "release-proof-1")
+
+	gateProg := executable(t, fmt.Sprintf(`exec python3 - "$@" <<'PY'
+import os, pathlib, sys, time
+args = sys.argv[1:]
+item = args[args.index("--item") + 1] if "--item" in args else ""
+if item == "item-a":
+    pathlib.Path(%q).write_text(str(os.getpid()) + "\n")
+    rel = pathlib.Path(%q)
+    while not rel.exists():
+        time.sleep(0.02)
+    sys.exit(1)
+PY
+`, enteredGateA, releaseGateA))
+
+	heavyGateBin := executable(t, fmt.Sprintf(`exec python3 - "$@" <<'PY'
+import json, pathlib, sys, time
+args = sys.argv[1:]
+head = args[args.index("--head") + 1] if "--head" in args else ""
+entered = pathlib.Path(%q)
+if not entered.exists():
+    entered.write_text(head + "\n")
+    rel = pathlib.Path(%q)
+    while not rel.exists():
+        time.sleep(0.02)
+print(json.dumps({"kind": "gate.verdict", "payload": {"checks": [{"check_id": "unit", "result": "pass"}]}}))
+PY
+`, enteredProof1, releaseProof1))
+
+	steps := detachedGateTestSteps(t, f, time.Now, gateProg)
+	steps.HeavyGateBin = heavyGateBin
+	l := configureDetachedGateLoop(t, f, steps)
+	l.cfg.Lanes = []string{"lane-1", "lane-2"}
+	l.gatePolicy.LandingStrategy = "after-merge"
+	l.gatePolicy.LaneBase = "green"
+
+	exe := filepath.Join(work, "tillr-drain-next")
+	if err := writeForkSafe(exe, []byte("next build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var execed []string
+	l.cfg.Restart = &RestartConfig{
+		Executable: exe,
+		Check:      func(context.Context, string) error { return nil },
+		Exec: func(path string, argv, env []string) error {
+			execed = append(execed, path)
+			return nil
+		},
+	}
+
+	cA := prepareReadyCandidate(t, f, l, "item-a")
+	cB := prepareReadyCandidate(t, f, l, "item-b")
+
+	// Seed a finished failed detached gate on disk for item-b so we also cover
+	// attaching to an already-failed detached gate while the proof is active.
+	gateDirB := steps.gateRunDir(cB)
+	if err := os.MkdirAll(gateDirB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nowMS := l.cfg.Now().UnixMilli()
+	if err := writeJSONAtomic(filepath.Join(gateDirB, GateDoneFile), detachedGateDone{
+		RunID:         cB.RunID,
+		BaseSHA:       cB.BaseSHA,
+		HeadSHA:       cB.HeadSHA,
+		Argv:          []string{gateProg, "--item", cB.ItemID},
+		Cwd:           cB.Worktree,
+		StartedAtMS:   nowMS - 1000,
+		FinishedAtMS:  nowMS,
+		ExitCode:      1,
+		MeasureTiming: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	here, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for _, c := range []Candidate{cA, cB} {
+			if _, err := tx.Exec(`UPDATE lanes SET state=?, run_id=?, leased_until=NULL WHERE lane_id=?`, run.LaneStateLeased, c.RunID, c.LaneID); err != nil {
+				return err
+			}
+			if err := appendEffect(tx, examinationOwnerKind, c.RunID, here, l.cfg.Now()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer func() {
+		cancel()
+		_ = os.WriteFile(releaseGateA, []byte("cleanup\n"), 0o644)
+		_ = os.WriteFile(releaseProof1, []byte("cleanup\n"), 0o644)
+		l.heavyWG.Wait()
+		l.examinations.Wait()
+	}()
+
+	l.completions = make(chan runCompletion, 4)
+
+	// 1. Start item-a's detached gate before the restart is filed.
+	dA := Decision{
+		Action:     ActionJudge,
+		ItemID:     cA.ItemID,
+		LaneID:     cA.LaneID,
+		RunRequest: &run.Request{RunID: cA.RunID, ItemID: cA.ItemID, LaneID: cA.LaneID},
+	}
+	l.launchExamination(ctx, dA, &pendingWork{Decision: dA, Candidate: &cA, BaseSHA: cA.BaseSHA}, l.cfg.Now(), &PassTiming{}, nil)
+	waitForPath[error](t, enteredGateA, nil)
+
+	// 2. Start trunk proof 1 on tip1 and wait until it is active.
+	if err := l.startHeavy(ctx, tip1); err != nil {
+		t.Fatalf("startHeavy(tip1): %v", err)
+	}
+	waitForPath[error](t, enteredProof1, nil)
+
+	// 3. File a pending drain restart while proof 1 is active and arm the barrier.
+	req, err := restart.File(ctx, f.storePath, restart.RoleDrain, l.cfg.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handled, stop, err := l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
+		t.Fatalf("gateRestart while trunk proof active = %v, %q, %v; want deferred", handled, stop, err)
+	}
+
+	assertFailedSettled := func(c Candidate) {
+		t.Helper()
+		var (
+			laneState string
+			timings   int
+			verdicts  int
+			refusals  int
+		)
+		sCheck := openFixture(t, f.storePath)
+		defer sCheck.Close()
+		if err := sCheck.ReadTx(ctx, func(r *store.Reader) error {
+			if err := r.QueryRow(`SELECT state FROM lanes WHERE lane_id=?`, c.LaneID).Scan(&laneState); err != nil {
+				return err
+			}
+			if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=?`, FastGateTimingKind, c.RunID).Scan(&timings); err != nil {
+				return err
+			}
+			if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=?`, GateVerdictKind, c.RunID).Scan(&verdicts); err != nil {
+				return err
+			}
+			return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=? AND json_extract(payload,'$.step')=?`, RefusalKind, c.RunID, RefusalGate).Scan(&refusals)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if laneState != run.LaneStateIdle {
+			t.Fatalf("%s lane %s state = %q while proof active, want %q", c.ItemID, c.LaneID, laneState, run.LaneStateIdle)
+		}
+		if timings != 1 {
+			t.Fatalf("%s %s count = %d while proof active, want 1", c.ItemID, FastGateTimingKind, timings)
+		}
+		if verdicts != 1 {
+			t.Fatalf("%s %s count = %d while proof active, want 1", c.ItemID, GateVerdictKind, verdicts)
+		}
+		if refusals != 1 {
+			t.Fatalf("%s %s (step=%s) count = %d while proof active, want 1", c.ItemID, RefusalKind, RefusalGate, refusals)
+		}
+	}
+
+	// 4. Release item-a's detached gate (exit 1 / fail) while proof 1 is still active.
+	// It must settle immediately without waiting for proof 1 to end.
+	if err := os.WriteFile(releaseGateA, []byte("go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case compA := <-l.completions:
+		if compA.itemID != cA.ItemID {
+			t.Fatalf("unexpected completion for %s while waiting for %s: %+v", compA.itemID, cA.ItemID, compA)
+		}
+		if compA.outcome.err != nil || compA.result.Rejected != 1 || compA.result.Landed != 0 {
+			t.Fatalf("item-a completion while proof active and restart pending: outcome=%+v result=%+v", compA.outcome, compA.result)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("item-a whose gate failed did not settle while trunk proof was active and restart was pending")
+	}
+	assertFailedSettled(cA)
+
+	// 5. item-b (already ended failed on disk) must also settle without waiting for proof 1 to end.
+	dB := Decision{
+		Action:     ActionJudge,
+		ItemID:     cB.ItemID,
+		LaneID:     cB.LaneID,
+		RunRequest: &run.Request{RunID: cB.RunID, ItemID: cB.ItemID, LaneID: cB.LaneID},
+	}
+	l.launchExamination(ctx, dB, &pendingWork{Decision: dB, Candidate: &cB, BaseSHA: cB.BaseSHA}, l.cfg.Now(), &PassTiming{}, nil)
+	select {
+	case compB := <-l.completions:
+		if compB.itemID != cB.ItemID {
+			t.Fatalf("unexpected completion for %s while waiting for %s: %+v", compB.itemID, cB.ItemID, compB)
+		}
+		if compB.outcome.err != nil || compB.result.Rejected != 1 || compB.result.Landed != 0 {
+			t.Fatalf("item-b completion while proof active and restart pending: outcome=%+v result=%+v", compB.outcome, compB.result)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("item-b whose gate already failed on disk did not settle while trunk proof was active and restart was pending")
+	}
+	assertFailedSettled(cB)
+
+	// 6. End proof 1. The pending restart must replace the loop and answer "restarted".
+	if err := os.WriteFile(releaseProof1, []byte("go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+
+	if handled, stop, err := l.gateRestart(ctx, &LoopResult{}); !handled || stop != StopRestarted || err != nil {
+		t.Fatalf("gateRestart after proof 1 ended = %v, %q, %v; want replaced", handled, stop, err)
+	}
+	if len(execed) == 0 {
+		t.Fatal("replacement did not exec after proof 1 ended")
+	}
+	l.examinations.Wait()
+
+	t.Setenv(restart.RequestEnv, req.ID)
+	t.Setenv(restart.FromEnv, "old-build")
+	if err := l.adoptRestart(ctx); err != nil {
+		t.Fatalf("adoptRestart: %v", err)
+	}
+	ans, err := restart.AwaitAnswer(ctx, f.storePath, req.ID, time.Millisecond)
+	if err != nil {
+		t.Fatalf("request %s unanswered: %v", req.ID, err)
+	}
+	if ans.Answer != restart.AnswerRestarted {
+		t.Fatalf("restart answer = %+v, want %q", ans, restart.AnswerRestarted)
+	}
+}
+
 // Reproduces the 2026-11-24 12:15 collision: a drain restart is pending and a
 // post-landing roll or push action is busy when a trunk proof ends green, with
 // a newer unproved tip on trunk. The runner must wait for the busy action to

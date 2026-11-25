@@ -3414,7 +3414,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			}
 		}
 		var unlock func()
-		if isProc && procSteps.hasPassedDetachedGate(candidate) {
+		if isProc && procSteps.hasSettledDetachedGate(candidate) {
 			ctx, unlock, err = l.lockRestartLanding(ctx)
 		} else if isProc {
 			ctx, unlock, err = l.lockRestartGateStart(ctx)
@@ -3442,7 +3442,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, err
 		}
 		var unlock func()
-		if isProc && procSteps.hasPassedDetachedGate(candidate) {
+		if isProc && procSteps.hasSettledDetachedGate(candidate) {
 			ctx, unlock, err = l.lockRestartLanding(ctx)
 		} else if isProc {
 			ctx, unlock, err = l.lockRestartGateStart(ctx)
@@ -3487,7 +3487,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		} else {
 			done, waitErr := restartWork(ctx, l, func(waitCtx context.Context) (detachedGateDone, error) {
 				d, err := procSteps.awaitDetachedGate(waitCtx, l, handle)
-				if err == nil && detachedGatePassed(candidate, d) {
+				if err == nil && detachedGateSettled(candidate, d) {
 					if held, ok := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold); ok {
 						held.allowDuringProof.Store(true)
 					}
