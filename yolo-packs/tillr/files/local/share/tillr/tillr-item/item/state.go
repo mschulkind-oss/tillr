@@ -33,7 +33,7 @@ func SetState(ctx context.Context, tx *store.Tx, itemID, state string, at time.T
 }
 
 // SetStateWithReceipt records evidence and an actor for entering a finished state,
-// and the existing reason and actor event for leaving one.
+// and the reason and actor event for leaving a finished state or releasing a blocked item.
 func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string, at time.Time, receipt MoveReceipt, waiting ...WaitingOn) (record.Envelope, error) {
 	if itemID == "" {
 		return record.Envelope{}, Usagef("an item state write needs an item_id")
@@ -175,6 +175,18 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 			action = FinishExistingLandingAction
 		}
 		return recordLifecycle(tx, payload, at, action, receipt.Reason, receipt.By)
+	}
+	if from == d.Blocked && state == d.Ready && (receipt.Reason != "" || receipt.By != "") {
+		env, err := recordLifecycle(tx, payload, at, "release", receipt.Reason, receipt.By)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+		if landedBlocker != "" {
+			if err := recordWaitRelease(tx, itemID, landedBlocker, at); err != nil {
+				return record.Envelope{}, err
+			}
+		}
+		return env, nil
 	}
 	payload.UpdatedAt = at.UTC().Format(time.RFC3339)
 	body, err := json.Marshal(payload)

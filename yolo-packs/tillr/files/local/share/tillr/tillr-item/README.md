@@ -283,10 +283,13 @@ this check. Hook completion always supplies it.
 
 A state flag that cannot be stored on the requested move is refused as `flag-not-stored`,
 naming the flag, even if its value is explicitly empty. `--reason` is supported for
-entering or leaving a finished state or entering the blocked role; `--by` for entering
-or leaving a finished state; `--resolves-via` only for entering a finished state;
-`--waiter` only for the blocked role. A same-state finished retry accepts its entry
-flags but leaves the original evidence intact.
+entering or leaving a finished state, entering the blocked role, or releasing a blocked
+item to the ready role; `--by` for entering or leaving a finished state or releasing a
+blocked item to the ready role; `--resolves-via` only for entering a finished state;
+`--waiter` only for the blocked role. Releasing a blocked item to the ready role with
+`--by` or `--reason` records them on the `item.update` event with
+`lifecycle_action: release` without replacing finished-state evidence. A same-state
+finished retry accepts its entry flags but leaves the original evidence intact.
 
 The states `abandoned`, `deleted`, and `in-progress` are frozen: a row holding one
 stays readable, but no write may name one as a destination. Sync treats finished rows

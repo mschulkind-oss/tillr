@@ -2,6 +2,8 @@ package main
 
 import (
 	"net/http"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -163,5 +165,46 @@ func TestItemHistoryReadsObjectWaitingOn(t *testing.T) {
 	moves := body["data"].(map[string]any)["state_moves"].([]any)
 	if len(moves) != 2 || moves[1].(map[string]any)["reason"] != "choose" {
 		t.Fatalf("state_moves = %v", moves)
+	}
+}
+
+func TestItemHistoryShowsBlockedRelease(t *testing.T) {
+	h := newServeHarness(t)
+	bin := filepath.Join(t.TempDir(), "tillr-item")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	build.Dir = "../tillr-item"
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build tillr-item: %v\n%s", err, out)
+	}
+	runItem := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(bin, args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("tillr-item %v: %v\n%s", args, err, out)
+		}
+	}
+	runItem("state", "--store", h.store, "--item", "item-seed-06", "--state", "blocked",
+		"--waiter", "owner", "--reason", "needs owner ruling", "--now", "2026-11-24T10:00:00Z")
+	runItem("state", "--store", h.store, "--item", "item-seed-06", "--state", "in-queue",
+		"--by", "operator", "--reason", "owner approved", "--now", "2026-11-24T10:01:00Z")
+	status, body, raw := h.get("/api/v1/items/item-seed-06")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, raw)
+	}
+	moves := body["data"].(map[string]any)["state_moves"].([]any)
+	if len(moves) < 2 {
+		t.Fatalf("state_moves = %v", moves)
+	}
+	last := moves[len(moves)-1].(map[string]any)
+	for field, want := range map[string]any{
+		"from":   "blocked",
+		"to":     "in-queue",
+		"action": "release",
+		"actor":  "operator",
+		"reason": "owner approved",
+	} {
+		if !reflect.DeepEqual(last[field], want) {
+			t.Errorf("last state_move.%s = %v; want %v (move=%v)", field, last[field], want, last)
+		}
 	}
 }

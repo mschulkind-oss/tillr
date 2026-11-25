@@ -16,13 +16,14 @@ var commitPointerShape = regexp.MustCompile(`^[0-9a-fA-F]+$`)
 func checkStateReceipt(r *store.Reader, d definition.Definition, id, from, to string, receipt MoveReceipt) error {
 	entering := d.IsFinished(to)
 	leaving := from != to && d.IsFinished(from)
+	releasing := from == d.Blocked && to == d.Ready
 	supplied := func(flag, value string) bool { return value != "" || slices.Contains(receipt.Flags, flag) }
 	for _, f := range []struct {
 		name, value string
 		stored      bool
 	}{
-		{"reason", receipt.Reason, entering || leaving || to == d.Blocked},
-		{"by", receipt.By, entering || leaving},
+		{"reason", receipt.Reason, entering || leaving || to == d.Blocked || releasing},
+		{"by", receipt.By, entering || leaving || releasing},
 		{"resolves-via", receipt.ResolvesVia, entering},
 		// Internal callers may carry waiting metadata through an unblock. Only
 		// an explicitly supplied CLI --waiter is an unused flag on that move.

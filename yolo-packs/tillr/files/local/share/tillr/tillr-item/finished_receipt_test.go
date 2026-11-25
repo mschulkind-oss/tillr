@@ -129,19 +129,122 @@ func TestStateFlagNotStored(t *testing.T) {
 }
 
 func TestStateReadyMoveRefusesReason(t *testing.T) {
-	db := findingsStore(t)
-	findingsItem(t, db, "finding")
-	if code, out := findingState(t, db, "finding", "waiting", "--waiter", "owner", "--reason", "needs review"); code != 0 {
-		t.Fatalf("block: %d %s", code, out)
+	db := filepath.Join(scratch(t, "ready-refuses-reason"), "state.db")
+	p := base("item-not-started", "work")
+	p.State = "not-started"
+	if code, out := apply(t, db, envelope(t, "item.record", p.ItemID, p)); code != 0 {
+		t.Fatalf("seed: %d %s", code, out)
 	}
-	code, out := findingState(t, db, "finding", "queued", "--reason", "would be lost")
-	assertRefused(t, code, out, "flag-not-stored")
-	if !strings.Contains(decode(t, out).Payload.Reason, "--reason") {
-		t.Fatalf("flag unnamed: %s", out)
+	for _, tc := range []struct {
+		flags []string
+		flag  string
+	}{
+		{[]string{"--reason", "would be lost"}, "--reason"},
+		{[]string{"--by", "operator"}, "--by"},
+	} {
+		code, out := findingState(t, db, p.ItemID, "in-queue", tc.flags...)
+		assertRefused(t, code, out, "flag-not-stored")
+		if !strings.Contains(decode(t, out).Payload.Reason, tc.flag) {
+			t.Fatalf("flag unnamed: %s", out)
+		}
+		if stateRow(t, db, p.ItemID) != "not-started" {
+			t.Fatal("refusal moved item")
+		}
 	}
-	if stateRow(t, db, "finding") != "waiting" {
-		t.Fatal("refusal moved item")
-	}
+}
+
+func TestBlockedReleaseRecordsByAndReason(t *testing.T) {
+	t.Run("git-landing blocked to in-queue", func(t *testing.T) {
+		db := filepath.Join(scratch(t, "blocked-release-git"), "state.db")
+		p := base("item-held", "held work")
+		p.State = "in-queue"
+		if code, out := apply(t, db, envelope(t, "item.record", p.ItemID, p)); code != 0 {
+			t.Fatalf("seed: %d %s", code, out)
+		}
+		if code, out := findingState(t, db, p.ItemID, "blocked", "--waiter", "owner", "--reason", "waiting on owner"); code != 0 {
+			t.Fatalf("block: %d %s", code, out)
+		}
+		// Unstored flags on a release remain refused.
+		for _, tc := range []struct {
+			flags []string
+			flag  string
+		}{
+			{[]string{"--resolves-via", "doc:a.md"}, "--resolves-via"},
+			{[]string{"--waiter", "owner"}, "--waiter"},
+		} {
+			code, out := findingState(t, db, p.ItemID, "in-queue", tc.flags...)
+			assertRefused(t, code, out, "flag-not-stored")
+			if !strings.Contains(decode(t, out).Payload.Reason, tc.flag) {
+				t.Fatalf("flag unnamed: %s", out)
+			}
+			if stateRow(t, db, p.ItemID) != "blocked" {
+				t.Fatal("refusal moved item")
+			}
+		}
+		code, out := findingState(t, db, p.ItemID, "in-queue", "--by", "operator", "--reason", "owner approved release")
+		if code != 0 {
+			t.Fatalf("release: %d %s", code, out)
+		}
+		if stateRow(t, db, p.ItemID) != "in-queue" {
+			t.Fatalf("state = %q, want in-queue", stateRow(t, db, p.ItemID))
+		}
+		ev := latestItemPayload(t, db, p.ItemID)
+		for k, want := range map[string]string{
+			"state":            "in-queue",
+			"lifecycle_action": "release",
+			"lifecycle_by":     "operator",
+			"lifecycle_reason": "owner approved release",
+		} {
+			if ev[k] != want {
+				t.Fatalf("event %s=%v, want %q (event=%v)", k, ev[k], want, ev)
+			}
+		}
+		code, out = run(t, "show", "--store", db, "--item", p.ItemID)
+		if code != 0 {
+			t.Fatalf("show: %d %s", code, out)
+		}
+		shown := receiptPayload(t, out)
+		if shown["waiting_on"] != nil || shown["underlying_state"] != nil {
+			t.Fatalf("blocked metadata not cleared: %s", out)
+		}
+		for _, k := range []string{"lifecycle_reason", "lifecycle_by"} {
+			if _, ok := shown[k]; ok {
+				t.Fatalf("release wrote finished-state column %s: %s", k, out)
+			}
+		}
+	})
+
+	t.Run("custom definition blocked to ready", func(t *testing.T) {
+		db := findingsStore(t)
+		findingsItem(t, db, "finding")
+		if code, out := findingState(t, db, "finding", "waiting", "--waiter", "owner", "--reason", "needs review"); code != 0 {
+			t.Fatalf("block: %d %s", code, out)
+		}
+		if code, out := findingState(t, db, "finding", "queued", "--by", "reviewer", "--reason", "approved"); code != 0 {
+			t.Fatalf("release: %d %s", code, out)
+		}
+		ev := latestItemPayload(t, db, "finding")
+		if ev["lifecycle_action"] != "release" || ev["lifecycle_by"] != "reviewer" || ev["lifecycle_reason"] != "approved" {
+			t.Fatalf("event=%v", ev)
+		}
+	})
+
+	t.Run("release does not invalidate existing landing receipt", func(t *testing.T) {
+		db := storedWithCriterion(t, "blocked-release-landing", "open")
+		if code, out := recordVerdict(t, db, mechanicalVerdict()); code != 0 {
+			t.Fatalf("verdict: %d %s", code, out)
+		}
+		addTerminalEvidence(t, db, "item_042", "landing.recorded")
+		if code, out := findingState(t, db, "item_042", "blocked", "--waiter", "owner", "--reason", "check"); code != 0 {
+			t.Fatalf("block: %d %s", code, out)
+		}
+		if code, out := findingState(t, db, "item_042", "in-queue", "--by", "operator", "--reason", "ok to land"); code != 0 {
+			t.Fatalf("release: %d %s", code, out)
+		}
+		if code, out := state(t, db, "item_042", "landed", "2026-11-17T12:05:00Z"); code != 0 {
+			t.Fatalf("land after release should keep landing receipt: %d %s", code, out)
+		}
+	})
 }
 
 func TestFinishedStateExitRetainsEntryReceipt(t *testing.T) {
