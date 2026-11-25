@@ -143,6 +143,9 @@ func (l *Loop) checkpointIfDue(ctx context.Context) error {
 	if !due {
 		return nil
 	}
+	if err := claimGateFor(l.cfg.Store).wait(ctx); err != nil && ctx.Err() != nil {
+		return err
+	}
 	if err := l.refreshSession(ctx, now.Add(CheckpointAllowance)); err != nil {
 		return err
 	}

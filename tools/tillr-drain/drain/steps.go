@@ -1219,7 +1219,18 @@ func (s *ProcessSteps) itemState(ctx context.Context, itemID, runID, state strin
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	started := time.Now().UnixMilli()
-	out, err := cmd.Output()
+	var out []byte
+	var err error
+	if state == StateLanded && s.Store != "" {
+		// Hold the loop's repeating writers off the store's write lock while
+		// `tillr-item state ... landed` settles this landed item (claim_gate.go).
+		func() {
+			defer claimGateFor(s.Store).begin()()
+			out, err = cmd.Output()
+		}()
+	} else {
+		out, err = cmd.Output()
+	}
 	if spanErr := s.recordStep(runID, stepSpan("item-state", append([]string{s.ItemBin}, args...), cmd, started, stderr.String())); spanErr != nil {
 		return spanErr
 	}
