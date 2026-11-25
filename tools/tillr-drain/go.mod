@@ -7,7 +7,7 @@ require (
 	github.com/mschulkind-oss/tillr-item v0.0.0
 	github.com/mschulkind-oss/tillr-land v0.0.0
 	github.com/mschulkind-oss/tillr-run v0.0.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	modernc.org/sqlite v1.61.0
 )
 
