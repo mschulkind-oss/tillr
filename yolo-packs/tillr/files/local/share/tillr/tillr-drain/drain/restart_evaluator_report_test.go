@@ -77,13 +77,24 @@ fi
 			t.Fatalf("first restart: %s", answer)
 		}
 		s.waitForSuccessorPass(t)
-		if err := s.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = s.cmd.Process.Signal(syscall.SIGCONT) })
 		ctx := context.Background()
 		st, err := store.Open(ctx, s.f.store, true)
 		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.cmd.Process.Signal(syscall.SIGCONT) })
+		// Take the writer while freezing so the loop cannot be stopped mid-write,
+		// which would leave the store locked when RequestPause runs below.
+		if err := st.WriteTx(ctx, func(*store.Tx) error {
+			if err := s.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+				return err
+			}
+			s.waitFor(t, "loop to stop before pausing the evaluator", func() bool {
+				return strings.HasPrefix(procStatus(t, s.cmd.Process.Pid, "State"), "T")
+			})
+			return nil
+		}); err != nil {
+			st.Close()
 			t.Fatal(err)
 		}
 		err = run.RequestPause(ctx, st, id, 2*time.Second, time.Now())
