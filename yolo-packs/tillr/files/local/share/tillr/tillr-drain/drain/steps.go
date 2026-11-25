@@ -1595,7 +1595,11 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 				if red {
 					out.Red = append(out.Red, check)
 					if s.LaneRoot != "" && rev != "" {
-						if replayLog := writeReplayCheckLog(ctx, dir, rev, check, output, filepath.Join(s.LaneRoot, ".rolling", "logs", rev)); replayLog != "" {
+						text := output
+						if strings.TrimSpace(text) == "" {
+							text = fmt.Sprintf("replay of %s on %s failed with no output\n", check, shortSHA(rev))
+						}
+						if replayLog := writeReplayCheckLog(ctx, dir, rev, check, text, filepath.Join(s.LaneRoot, ".rolling", "logs", rev)); replayLog != "" {
 							if out.CheckLogs == nil {
 								out.CheckLogs = map[string]string{}
 							}
@@ -1614,9 +1618,10 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = dir
 		cmd.Env = s.replayChildEnv(candidate, "TILLR_FORK_DRIFT=1")
+		var stdout bytes.Buffer
 		var stderr stderrTail
 		var combined bytes.Buffer
-		cmd.Stdout = &combined
+		cmd.Stdout = io.MultiWriter(&combined, &stdout)
 		cmd.Stderr = io.MultiWriter(&combined, &stderr)
 		runErr := runCheckGroup(cmd)
 		if ctx.Err() != nil {
@@ -1645,7 +1650,16 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 				out.forkConflicts[check] = observation
 			}
 			if s.LaneRoot != "" && rev != "" {
-				if replayLog := writeReplayCheckLog(ctx, dir, rev, check, combined.String(), filepath.Join(s.LaneRoot, ".rolling", "logs", rev)); replayLog != "" {
+				logDir := filepath.Join(s.LaneRoot, ".rolling", "logs", rev)
+				replayLog := replayVerdictCheckLog(dir, stdout.Bytes(), check, logDir)
+				if replayLog == "" {
+					text := combined.String()
+					if strings.TrimSpace(text) == "" {
+						text = fmt.Sprintf("replay of %s on %s exited %d with no output\n", check, shortSHA(rev), code)
+					}
+					replayLog = writeReplayCheckLog(ctx, dir, rev, check, text, logDir)
+				}
+				if replayLog != "" {
 					if out.CheckLogs == nil {
 						out.CheckLogs = map[string]string{}
 					}
@@ -1658,6 +1672,38 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		}
 	}
 	return out, nil
+}
+
+// replayVerdictCheckLog extracts a failing check's log_ref from a declaration-runner
+// gate.verdict written to stdout by tillr-loop replay and snapshots it (with its whole
+// sibling, if any) under logDir before the replay worktree is removed.
+func replayVerdictCheckLog(dir string, stdout []byte, check, logDir string) string {
+	checks, err := decodeHeavyVerdict(stdout)
+	if err != nil {
+		return ""
+	}
+	for _, c := range checks {
+		if c.CheckID != check {
+			continue
+		}
+		ref := c.LogRef
+		if ref == "" {
+			ref = c.LogPath
+		}
+		if ref == "" {
+			return ""
+		}
+		suffix := ".log"
+		if strings.HasSuffix(ref, ".triage.log") {
+			suffix = ".triage.log"
+		}
+		dstName := "replay-" + sanitizeLogComponent(check) + suffix
+		if copied, ok := copyLogWithWhole(dir, ref, logDir, dstName); ok {
+			return copied
+		}
+		return ""
+	}
+	return ""
 }
 
 func runCheckGroup(cmd *exec.Cmd) error { return runCheckGroupStarted(cmd, nil) }

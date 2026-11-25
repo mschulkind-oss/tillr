@@ -469,3 +469,176 @@ func TestFixerBriefWithTemplateBracesInFailureOutputPassesPreflight(t *testing.T
 		}
 	}
 }
+
+func TestBaseReplayAcquittalCarriesReplayLogInsteadOfCandidateLog(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.gatePolicy.AutoRevert = false
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+
+	candLog := filepath.Join(t.TempDir(), "fork-check-00-go-affected-test.log")
+	if err := os.WriteFile(candLog, []byte("candidate-only failure: missing TestCandidateOnlyAssertion\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	replayScript := filepath.Join(t.TempDir(), "replay.sh")
+	replayBody := `#!/bin/sh
+set -eu
+echo "replay-on-base failure: check failed on base revision"
+exit 1
+`
+	if err := os.WriteFile(replayScript, []byte(replayBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ps := &ProcessSteps{Root: f.root, LaneRoot: f.laneRoot, ReplayProgram: replayScript + " {only}"}
+	l.cfg.Steps = replayProcessSteps{Steps: l.cfg.Steps, ps: ps}
+
+	cand := Candidate{ItemID: "item-a", RunID: "run-item-a-a1", LaneID: "lane-1", BaseSHA: base}
+	gate := GateOutcome{
+		Outcome:       GateFailed,
+		FailingChecks: []string{"go-affected-test"},
+		CheckWatches:  map[string][]string{"go-affected-test": {"a.txt"}},
+		CheckLogs:     map[string]string{"go-affected-test": candLog},
+	}
+	var loopRes LoopResult
+	_, held, err := l.settleTrunkAlreadyRed(context.Background(), &cand, gate, &loopRes)
+	if err != nil || !held {
+		t.Fatalf("settleTrunkAlreadyRed = (held=%v, err=%v), want (true, nil)", held, err)
+	}
+
+	fixerID := TrunkFixerID(base)
+	runID := "run-" + fixerID + "-a1"
+	_, _, brief := stageTrunkFixerForTest(t, f.root, f.laneRoot, f.storePath, fixerID, base, runID)
+
+	if !strings.Contains(brief, "replay-on-base failure: check failed on base revision") {
+		t.Fatalf("fixer brief lacks replay output:\n%s", brief)
+	}
+	if strings.Contains(brief, "candidate-only failure") || strings.Contains(brief, "TestCandidateOnlyAssertion") {
+		t.Fatalf("candidate log leaked into fixer brief:\n%s", brief)
+	}
+	copied, err := filepath.Glob(filepath.Join(RunDir(f.root, runID), "fixer.logs", "*.log"))
+	if err != nil || len(copied) == 0 {
+		t.Fatalf("copied fixer logs = %v, err = %v", copied, err)
+	}
+	for _, p := range copied {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "candidate-only failure") {
+			t.Fatalf("candidate log leaked into %s:\n%s", p, raw)
+		}
+		if !strings.Contains(string(raw), "replay-on-base failure: check failed on base revision") {
+			t.Fatalf("replay output missing from %s:\n%s", p, raw)
+		}
+	}
+}
+
+func TestBaseReplayDeclarationVerdictCarriesReplayLogRefInsteadOfCandidateLog(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.gatePolicy.AutoRevert = false
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+
+	candLog := filepath.Join(t.TempDir(), "00-go-affected-test.log")
+	if err := os.WriteFile(candLog, []byte("candidate-only failure: missing TestCandidateOnlyAssertion\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	replayLogsDir := filepath.Join(t.TempDir(), "replay-logs")
+	if err := os.MkdirAll(replayLogsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	replayScript := filepath.Join(t.TempDir(), "replay-verdict.sh")
+	replayBody := `#!/bin/sh
+set -eu
+check="$1"
+whole="` + replayLogsDir + `/00-${check}.log"
+triage="` + replayLogsDir + `/00-${check}.triage.log"
+cat > "$whole" <<'EOF'
+FAIL: test_base_only (go-affected)
+AssertionError: base replay saw real failure on base
+EOF
+cat > "$triage" <<EOF
+tillr-gate: triage of ${check} -- fail -- the whole output is ${whole}
+FAIL: test_base_only (go-affected)
+EOF
+printf '{"record_version":1,"kind":"gate.verdict","payload":{"result":"fail","checks":[{"check_id":"%s","result":"fail","log_ref":"%s"}]}}\n' "$check" "$triage"
+exit 1
+`
+	if err := os.WriteFile(replayScript, []byte(replayBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ps := &ProcessSteps{Root: f.root, LaneRoot: f.laneRoot, ReplayProgram: replayScript + " {only}"}
+	l.cfg.Steps = replayProcessSteps{Steps: l.cfg.Steps, ps: ps}
+
+	cand := Candidate{ItemID: "item-a", RunID: "run-item-a-a1", LaneID: "lane-1", BaseSHA: base}
+	gate := GateOutcome{
+		Outcome:       GateFailed,
+		FailingChecks: []string{"go-affected-test"},
+		CheckWatches:  map[string][]string{"go-affected-test": {"a.txt"}},
+		CheckLogs:     map[string]string{"go-affected-test": candLog},
+	}
+	var loopRes LoopResult
+	_, held, err := l.settleTrunkAlreadyRed(context.Background(), &cand, gate, &loopRes)
+	if err != nil || !held {
+		t.Fatalf("settleTrunkAlreadyRed = (held=%v, err=%v), want (true, nil)", held, err)
+	}
+
+	fixerID := TrunkFixerID(base)
+	runID := "run-" + fixerID + "-a1"
+	_, _, brief := stageTrunkFixerForTest(t, f.root, f.laneRoot, f.storePath, fixerID, base, runID)
+
+	if !strings.Contains(brief, "base replay saw real failure on base") {
+		t.Fatalf("fixer brief lacks replay check log output:\n%s", brief)
+	}
+	if strings.Contains(brief, "candidate-only failure") || strings.Contains(brief, "TestCandidateOnlyAssertion") {
+		t.Fatalf("candidate log leaked into fixer brief:\n%s", brief)
+	}
+	copiedTriage := filepath.Join(RunDir(f.root, runID), "fixer.logs", "replay-go-affected-test.triage.log")
+	copiedWhole := filepath.Join(RunDir(f.root, runID), "fixer.logs", "replay-go-affected-test.log")
+	if raw, err := os.ReadFile(copiedWhole); err != nil || !strings.Contains(string(raw), "base replay saw real failure on base") {
+		t.Fatalf("copied whole replay log (%s) = %q, err = %v", copiedWhole, raw, err)
+	}
+	if raw, err := os.ReadFile(copiedTriage); err != nil || !strings.Contains(string(raw), "FAIL: test_base_only") {
+		t.Fatalf("copied triage replay log (%s) = %q, err = %v", copiedTriage, raw, err)
+	}
+}
+
+func TestBaseReplaySilentFailureDoesNotCarryCandidateLog(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.gatePolicy.AutoRevert = false
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+
+	candLog := filepath.Join(t.TempDir(), "00-silent-check.log")
+	if err := os.WriteFile(candLog, []byte("candidate-only failure: must not leak\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	replayScript := filepath.Join(t.TempDir(), "replay-silent.sh")
+	if err := os.WriteFile(replayScript, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ps := &ProcessSteps{Root: f.root, LaneRoot: f.laneRoot, ReplayProgram: replayScript + " {only}"}
+	l.cfg.Steps = replayProcessSteps{Steps: l.cfg.Steps, ps: ps}
+
+	cand := Candidate{ItemID: "item-a", RunID: "run-item-a-a1", LaneID: "lane-1", BaseSHA: base}
+	gate := GateOutcome{
+		Outcome:       GateFailed,
+		FailingChecks: []string{"silent-check"},
+		CheckWatches:  map[string][]string{"silent-check": {"a.txt"}},
+		CheckLogs:     map[string]string{"silent-check": candLog},
+	}
+	var loopRes LoopResult
+	_, held, err := l.settleTrunkAlreadyRed(context.Background(), &cand, gate, &loopRes)
+	if err != nil || !held {
+		t.Fatalf("settleTrunkAlreadyRed = (held=%v, err=%v), want (true, nil)", held, err)
+	}
+
+	fixerID := TrunkFixerID(base)
+	runID := "run-" + fixerID + "-a1"
+	_, _, brief := stageTrunkFixerForTest(t, f.root, f.laneRoot, f.storePath, fixerID, base, runID)
+	if strings.Contains(brief, "candidate-only failure") {
+		t.Fatalf("candidate log leaked into fixer brief on silent replay failure:\n%s", brief)
+	}
+	if !strings.Contains(brief, "exited 1 with no output") {
+		t.Fatalf("fixer brief lacks silent replay note:\n%s", brief)
+	}
+}

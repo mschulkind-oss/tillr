@@ -74,14 +74,7 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 		reading, err := l.trunkAlreadyRed(ctx, candidate, gate)
 		red := reading.Red
 		if err == nil && reading.Confirmed {
-			for id, ref := range reading.CheckLogs {
-				if gate.CheckLogs[id] == "" && ref != "" {
-					if gate.CheckLogs == nil {
-						gate.CheckLogs = map[string]string{}
-					}
-					gate.CheckLogs[id] = ref
-				}
-			}
+			gate.CheckLogs = preferReplayCheckLogs(gate.CheckLogs, reading.CheckLogs)
 			var held bool
 			if held, err = l.acquitRedWithPaths(ctx, &candidate, gate, reading.RedSHA, red, nil, result); err == nil {
 				if !held {

@@ -1090,16 +1090,31 @@ func (l *Loop) settleTrunkAlreadyRed(ctx context.Context, candidate *Candidate, 
 			candidate.ItemID, strings.Join(reading.Red, ", "), shortSHA(reading.RedSHA), strings.Join(changedPaths, ", "))
 		return GatePassedInherited, false, nil
 	}
-	for id, ref := range reading.CheckLogs {
-		if gate.CheckLogs[id] == "" && ref != "" {
-			if gate.CheckLogs == nil {
-				gate.CheckLogs = map[string]string{}
-			}
-			gate.CheckLogs[id] = ref
-		}
+	if len(gate.CheckLogs) > 0 && len(candidate.replayCheckLogs) == 0 {
+		candidate.replayCheckLogs = gate.CheckLogs
 	}
+	gate.CheckLogs = preferReplayCheckLogs(gate.CheckLogs, reading.CheckLogs)
 	held, err := l.acquitRedWithPaths(ctx, candidate, gate, reading.RedSHA, reading.Red, intersecting, result)
 	return "", held, err
+}
+
+// preferReplayCheckLogs returns a copy of base with every non-empty replay log
+// overriding the candidate's log for the same check id, so a trunk fixer carries
+// what the base or tip replay saw rather than the candidate's own gate output.
+func preferReplayCheckLogs(base, replay map[string]string) map[string]string {
+	if len(replay) == 0 {
+		return base
+	}
+	out := make(map[string]string, len(base)+len(replay))
+	for id, ref := range base {
+		out[id] = ref
+	}
+	for id, ref := range replay {
+		if ref != "" {
+			out[id] = ref
+		}
+	}
+	return out
 }
 
 // intersectingRedPaths returns the sorted unique candidate paths that intersect any red
