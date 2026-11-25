@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const provedPointerRef = "refs/tillr/green"
+
 var errMissingRef = errors.New("ref not found")
 
 type refPair struct{ leader, follower string }
@@ -553,6 +555,10 @@ func readGit(ctx context.Context, root string, rules []Rule, cache *gitCache, ch
 			continue
 		}
 		if follower.err != nil {
+			if pair.follower == provedPointerRef && errors.Is(follower.err, errMissingRef) {
+				g.pairs[pair] = projectionFact[lagFact]{}
+				continue
+			}
 			g.pairs[pair] = projectionFact[lagFact]{err: follower.err}
 			continue
 		}
@@ -667,7 +673,7 @@ func gitCommitWith(ctx context.Context, root, ref string, checkIO func(string) e
 		raw, err = gitOutputWith(ctx, root, checkIO, onExec, "rev-parse", "--verify", "--end-of-options", strings.TrimSpace(string(raw))+"^{commit}")
 	} else {
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && len(exitErr.Stderr) == 0 {
+		if errors.As(err, &exitErr) && ((exitErr.ExitCode() == 1 && len(exitErr.Stderr) == 0) || (ref == provedPointerRef && gitRefAbsent(ctx, root, ref, checkIO, onExec))) {
 			return "", fmt.Errorf("git ref %s: %w: %w", ref, errMissingRef, err)
 		}
 	}
@@ -675,6 +681,12 @@ func gitCommitWith(ctx context.Context, root, ref string, checkIO func(string) e
 		return "", fmt.Errorf("git ref %s: %w", ref, err)
 	}
 	return strings.TrimSpace(string(raw)), nil
+}
+
+func gitRefAbsent(ctx context.Context, root, ref string, checkIO func(string) error, onExec func([]string)) bool {
+	_, err := gitOutputWith(ctx, root, checkIO, onExec, "show-ref", "--exists", "--", ref)
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 2
 }
 
 func gitLagWith(ctx context.Context, root, leader, follower string, checkIO func(string) error, onExec func([]string)) (lagFact, error) {
@@ -738,6 +750,9 @@ func (l lagCondition) fires(w When) bool {
 func (g gitSnapshot) ruleError(r Rule) error {
 	for _, ref := range r.gitRefs() {
 		if fact := g.refs[ref]; fact.err != nil {
+			if ref == provedPointerRef && errors.Is(fact.err, errMissingRef) {
+				continue
+			}
 			return fact.err
 		}
 	}

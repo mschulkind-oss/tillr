@@ -662,3 +662,70 @@ func TestTrunkProofLagRuleLint(t *testing.T) {
 		t.Fatalf("tillr watch lint ../..: code=%d out=%q err=%q", code, out.String(), errOut.String())
 	}
 }
+
+func TestTrunkProofLagWithoutProvedPointer(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	var env []string
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GIT_") {
+			env = append(env, entry)
+		}
+	}
+	env = append(env,
+		"GIT_AUTHOR_NAME=Watch Fixture", "GIT_AUTHOR_EMAIL=watch@example.invalid",
+		"GIT_COMMITTER_NAME=Watch Fixture", "GIT_COMMITTER_EMAIL=watch@example.invalid",
+	)
+	gitAt := func(at time.Time, input string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd.Stdin = strings.NewReader(input)
+		date := fmt.Sprintf("@%d +0000", at.Unix())
+		cmd.Env = append(append([]string(nil), env...), "GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	now := time.Now().UTC()
+	gitAt(now.Add(-2*time.Hour), "", "init", "--quiet", "--initial-branch=main")
+	tree := gitAt(now.Add(-2*time.Hour), "", "mktree")
+	base := gitAt(now.Add(-2*time.Hour), "base", "commit-tree", tree)
+	tip := gitAt(now.Add(-time.Hour), "tip", "commit-tree", tree, "-p", base)
+	gitAt(now, "", "update-ref", "refs/heads/main", tip)
+
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	rulesDir := filepath.Join(t.TempDir(), "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rawRule, err := os.ReadFile("../../config/tillr/watch/trunk-proof-lag.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rulesDir, "trunk-proof-lag.toml"), rawRule, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	invoke := func(args ...string) (int, string, string) {
+		var out, errOut bytes.Buffer
+		code := run(ctx, append(args, "--store", s.Path(), "--rules", rulesDir, "--root", root), &out, &errOut)
+		return code, out.String(), errOut.String()
+	}
+
+	if code, out, errOut := invoke("eval", "--once"); code != 0 || errOut != "" {
+		t.Fatalf("eval --once without refs/tillr/green: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if code, out, errOut := invoke("wait", "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
+		t.Fatalf("wait without refs/tillr/green: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if code, out, errOut := invoke("status"); code != 0 || errOut != "" || !strings.Contains(out, "rule trunk-proof-lag skipped=0") || !strings.Contains(out, "pending=0") {
+		t.Fatalf("status without refs/tillr/green: code=%d out=%q err=%q", code, out, errOut)
+	}
+}

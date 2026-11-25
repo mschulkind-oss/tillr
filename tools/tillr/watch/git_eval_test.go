@@ -392,3 +392,90 @@ func TestWatchGitCacheSymbolicRefAndMissingRef(t *testing.T) {
 		t.Fatalf("expected git subprocess fallback for unreadable ref dir")
 	}
 }
+
+func TestWatchAbsentProvedPointer(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	root, leader, _ := forkedRepo(t, now)
+	const greenRef = "refs/tillr/green"
+	if oid, err := gitCommit(ctx, root, greenRef); oid != "" || !errors.Is(err, errMissingRef) {
+		t.Fatalf("gitCommit absent %s = (%q, %v), want errMissingRef", greenRef, oid, err)
+	}
+	lagTemplate := `[[rule]]
+id = "trunk-proof-lag"
+scope = "core"
+severity = "warning"
+[rule.reads]
+projections = ["git_refs:refs/heads/leader,refs/tillr/green"]
+[rule.when]
+pattern = "lag_behind"
+group_by = "global"
+leader = "refs/heads/leader"
+follower = "refs/tillr/green"
+threshold_commits = 1
+[rule.guidance]
+summary = "lag"
+check = ["look"]
+do = ["fix"]
+[rule.delivery]
+receiver = "foreground"
+`
+	s := watchStore(t)
+	e := Evaluator{Store: s, Root: root, Rules: watchRules(t, lagTemplate), Clock: func() time.Time { return now }}
+	results, err := e.EvaluateRules(ctx)
+	if err != nil || len(results) != 1 || results[0].Diagnostic() != "" {
+		t.Fatalf("absent %s should evaluate cleanly, got %+v: %v", greenRef, results, err)
+	}
+	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 0 {
+		t.Fatalf("absent %s should not fire, got %+v: %v", greenRef, notices, err)
+	}
+
+	// An expression reading git.ref("refs/tillr/green") also sees "" without error.
+	register(t, "watch-test.fact")
+	exprText := strings.NewReplacer(
+		`"test.watch"`, `"watch-test.fact"`,
+		"[rule.when]", "projections=['git_refs:"+greenRef+"']\n[rule.when]",
+		`window = "90s"`, "window = '90s'\n"+fmt.Sprintf(`match = 'git.ref("%s") == ""'`, greenRef),
+	).Replace(validRule)
+	exprStore := watchStore(t)
+	exprEval := Evaluator{Store: exprStore, Root: root, Rules: watchRules(t, exprText), Clock: func() time.Time { return now }}
+	if _, err := exprEval.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, exprStore, now, `{"detail":{"item-id":"one"}}`)
+	exprResults, err := exprEval.EvaluateRules(ctx)
+	if err != nil || len(exprResults) != 1 || exprResults[0].Diagnostic() != "" {
+		t.Fatalf("absent %s expression should evaluate cleanly, got %+v: %v", greenRef, exprResults, err)
+	}
+	if notices, err := exprEval.Pending(ctx, "foreground"); err != nil || len(notices) != 1 {
+		t.Fatalf("absent %s expression should match empty string, got %+v: %v", greenRef, notices, err)
+	}
+
+	// A proved pointer that exists and cannot be read still reports an error.
+	blob := fixtureGit(t, root, "not a commit", now, "hash-object", "-w", "--stdin")
+	fixtureGit(t, root, "", now, "update-ref", greenRef, blob)
+	results, err = e.EvaluateRules(ctx)
+	if err != nil || len(results) != 1 || !strings.Contains(results[0].Unreadable, greenRef) {
+		t.Fatalf("blob %s should report unreadable error, got %+v: %v", greenRef, results, err)
+	}
+
+	// Corrupt loose ref file also reports an error.
+	refPath := filepath.Join(root, ".git", filepath.FromSlash(greenRef))
+	if err := os.WriteFile(refPath, []byte("not-a-valid-oid\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	results, err = e.EvaluateRules(ctx)
+	if err != nil || len(results) != 1 || !strings.Contains(results[0].Unreadable, greenRef) {
+		t.Fatalf("corrupt %s should report unreadable error, got %+v: %v", greenRef, results, err)
+	}
+
+	// Once pointed at a real commit, normal lag evaluation works.
+	if err := os.Remove(refPath); err != nil {
+		t.Fatal(err)
+	}
+	fixtureGit(t, root, "", now, "update-ref", greenRef, leader)
+	results, err = e.EvaluateRules(ctx)
+	if err != nil || len(results) != 1 || results[0].Diagnostic() != "" {
+		t.Fatalf("valid %s should evaluate cleanly, got %+v: %v", greenRef, results, err)
+	}
+}
