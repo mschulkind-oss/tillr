@@ -30,7 +30,7 @@ MIRROR_ROOT = Path("yolo-packs/tillr/files/local/share/tillr")
 # Includes shared libraries and source-only modules, not just programs on PATH.
 SHIPPED = (
     "tillr", "tillr-cli", "tillr-drain", "tillr-gate", "tillr-item", "tillr-land",
-    "tillr-run", "tillr-store", "tillr-view", "tillr-trace", "tillr-roll",
+    "tillr-run", "tillr-store", "tillr-view", "tillr-watch", "tillr-trace", "tillr-roll",
 )
 
 # The README beside this executable belongs to the documentation snapshot, not the mirror.

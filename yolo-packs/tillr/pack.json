@@ -1,6 +1,6 @@
 {
   "name": "tillr",
-  "description": "The tillr toolset: eight `tillr*` binaries on PATH built lazily from the Go source this pack ships, a dated snapshot of tillr's design documentation under ~/.local/share/tillr/docs, the seven-step loop skill, the skill for reading the designs from another repository, and the AutoQA design-review handoff.",
+  "description": "The tillr toolset: nine `tillr*` binaries on PATH built lazily from the Go source this pack ships, a dated snapshot of tillr's design documentation under ~/.local/share/tillr/docs, the seven-step loop skill, the skill for reading the designs from another repository, and the AutoQA design-review handoff.",
   "contributes": [
     // The toolset's Go tree, delivered whole to ~/.local/share/tillr/<module>. It is a
     // GENERATED copy of tools/tillr* in this repository, produced by
@@ -8,19 +8,19 @@
     // pack ships source and never a compiled artifact: each launcher below builds one
     // binary from this tree, once per source digest.
     //
-    // The shared library module `tillr` is part of the tree because the eight binaries
+    // The shared library module `tillr` is part of the tree because the nine binaries
     // resolve it through relative `replace` paths in their go.mod files.
     {
       "kind": "files",
       "from": "files/local/share/tillr",
       "into": ".local/share/tillr"
     },
-    // The eight names on PATH. yolo owns a name on PATH by declaration and refuses a
+    // The nine names on PATH. yolo owns a name on PATH by declaration and refuses a
     // `files` entry into ~/.local/bin, so each is a program whose run file is the
-    // launcher. Eight declarations rather than one `tillr` dispatcher, because the
-    // dispatcher refuses to run unless all seven `tillr-<noun>` binaries are on PATH,
-    // and because an external agent composes individual tools (`tillr-gate`,
-    // `tillr-view`) without routing through the drain loop.
+    // launcher. Nine declarations rather than one `tillr` dispatcher: the dispatcher
+    // resolves only the selected noun's binary, and an external agent composes
+    // individual tools (`tillr-gate`, `tillr-view`, `tillr-watch`) without routing
+    // through the drain loop.
     //
     // The launchers exec the tree in the caller's working directory: a tillr store is
     // discovered from the repository the caller is in, so a launcher that changed
@@ -79,6 +79,13 @@
       "bin": "tillr-view",
       "via": "pack",
       "from": "programs/tillr-view",
+      "run": "run"
+    },
+    {
+      "kind": "program",
+      "bin": "tillr-watch",
+      "via": "pack",
+      "from": "programs/tillr-watch",
       "run": "run"
     },
     // The loop's composition skill: how the eight binaries compose across the seven

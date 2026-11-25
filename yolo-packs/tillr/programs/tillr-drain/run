@@ -7,7 +7,7 @@
 # ${XDG_CACHE_HOME:-$HOME/.cache}/tillr/bin/<name>-<digest>, and execs that copy; a warm
 # cache runs no Go command at all.
 #
-# The eight launchers are one body: `tillr` is the umbrella dispatcher and is built from
+# The launchers share one body: `tillr` is the umbrella dispatcher and is built from
 # module `tillr-cli`; every other name is built from the module of the same name. Only
 # the two assignments below differ between them, and tests/pack-sync.test.py refuses a
 # copy that has drifted.

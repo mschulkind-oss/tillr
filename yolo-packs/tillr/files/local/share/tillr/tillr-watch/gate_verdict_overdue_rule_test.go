@@ -1,0 +1,307 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/watch"
+)
+
+func TestGateVerdictOverdueRule(t *testing.T) {
+	const (
+		ruleID   = "gate-verdict-overdue"
+		rulePath = "../../config/tillr/watch/gate-verdict-overdue.toml"
+	)
+
+	rawRule, err := os.ReadFile(rulePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", rulePath, err)
+	}
+	var commentLines []string
+	for _, line := range strings.Split(string(rawRule), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			commentLines = append(commentLines, trimmed)
+		}
+	}
+	comment := strings.Join(commentLines, "\n")
+	for _, required := range []string{
+		"2026-11-23",
+		"fixer-main-1293971a3597",
+		"824",
+		"gate.verdict.json",
+		"duration_ms",
+		"99th",
+		"3,650 s",
+	} {
+		if !strings.Contains(comment, required) {
+			t.Fatalf("rule comment in %s must state where 3,650 s was measured (missing %q):\n%s", rulePath, required, comment)
+		}
+	}
+
+	allRules, err := watch.LoadRules("../../config/tillr/watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := slices.IndexFunc(allRules, func(r watch.Rule) bool { return r.ID == ruleID })
+	if idx < 0 {
+		t.Fatalf("missing %s rule in config/tillr/watch", ruleID)
+	}
+	rule := allRules[idx]
+	if rule.Scope != "core" || rule.Severity != "warning" || !rule.Enabled ||
+		rule.Delivery.Receiver != "foreground" ||
+		!slices.Equal(rule.Reads.Events, []string{drain.GateStartedKind, drain.GateVerdictKind}) ||
+		rule.When.GroupBy != "object_id" ||
+		rule.When.Pattern != watch.DurationWithoutEvent ||
+		rule.When.ThresholdDuration != 3650*time.Second ||
+		rule.When.Window != 24*time.Hour {
+		t.Fatalf("unexpected %s configuration: %+v", ruleID, rule)
+	}
+	for _, text := range append([]string{rule.Guidance.Summary}, append(slices.Clone(rule.Guidance.Check), rule.Guidance.Do...)...) {
+		if strings.Contains(strings.ToLower(text), "expected") {
+			t.Fatalf("%s guidance calls a firing alarm expected: %q", ruleID, text)
+		}
+	}
+
+	appendGateStarted := func(ctx context.Context, t *testing.T, st *store.Store, runID, itemID, laneID, baseSHA string, at time.Time) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{
+			"item_id":  itemID,
+			"run_id":   runID,
+			"lane_id":  laneID,
+			"base_sha": baseSHA,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := runID
+		if err := st.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{
+				Kind:       drain.GateStartedKind,
+				ObjectType: "run",
+				ObjectID:   &id,
+				At:         at,
+				Payload:    body,
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	appendGateVerdict := func(ctx context.Context, t *testing.T, st *store.Store, runID, itemID, laneID, treeSHA, result string, durationMS int64, at time.Time) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{
+			"verdict_id":  "verdict-" + runID,
+			"run_id":      runID,
+			"item_id":     itemID,
+			"lane_id":     laneID,
+			"tree_sha":    treeSHA,
+			"result":      result,
+			"duration_ms": durationMS,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := runID
+		if err := st.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{
+				Kind:       drain.GateVerdictKind,
+				ObjectType: "run",
+				ObjectID:   &id,
+				At:         at,
+				Payload:    body,
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	newHarness := func(t *testing.T, rules []watch.Rule, start time.Time) (context.Context, *store.Store, *time.Time, func() []watch.Notice) {
+		t.Helper()
+		ctx := context.Background()
+		s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+		now := start
+		e := watch.Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		pending := func() []watch.Notice {
+			t.Helper()
+			results, err := e.EvaluateRules(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, res := range results {
+				if res.ID == ruleID && (res.Diagnostic() != "" || res.Skipped != 0) {
+					t.Fatalf("unexpected %s evaluation result: %+v", ruleID, res)
+				}
+			}
+			notices, err := e.Pending(ctx, "foreground")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return notices
+		}
+		return ctx, s, &now, pending
+	}
+
+	t0 := time.Date(2026, 11, 23, 9, 13, 0, 0, time.UTC)
+
+	t.Run("gate ending sooner than 3650s stays closed", func(t *testing.T) {
+		ctx, st, now, pending := newHarness(t, []watch.Rule{rule}, t0)
+
+		appendGateStarted(ctx, t, st, "run-median-1", "item-median", "lane-1", "aaaa1111", t0)
+		*now = t0.Add(56 * time.Second)
+		appendGateVerdict(ctx, t, st, "run-median-1", "item-median", "lane-1", "bbbb1111", "pass", 56_000, *now)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("56s gate with verdict opened notices: %+v", notices)
+		}
+
+		t1 := t0.Add(2 * time.Minute)
+		*now = t1
+		appendGateStarted(ctx, t, st, "run-just-under-1", "item-under", "lane-3", "aaaa2222", t1)
+		*now = t1.Add(3649 * time.Second)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("gate with no verdict at 3649s (< 3650s) opened notices: %+v", notices)
+		}
+		appendGateVerdict(ctx, t, st, "run-just-under-1", "item-under", "lane-3", "bbbb2222", "pass", 3_649_000, *now)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("gate finishing at 3649s opened notices: %+v", notices)
+		}
+
+		*now = t1.Add(3650 * time.Second)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("already-verdicted gate opened notices at 3650s: %+v", notices)
+		}
+		*now = t1.Add(88 * time.Minute)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("already-verdicted gate opened notices at 88m: %+v", notices)
+		}
+	})
+
+	t.Run("gate with no verdict at or past 3650s opens and resolves on verdict", func(t *testing.T) {
+		ctx, st, now, pending := newHarness(t, []watch.Rule{rule}, t0)
+
+		const (
+			hungRun  = "run-fixer-main-1293971a3597-a1-n1"
+			hungItem = "fixer-main-1293971a3597"
+			hungLane = "lane-2"
+		)
+		appendGateStarted(ctx, t, st, hungRun, hungItem, hungLane, "aaaa3333", t0)
+
+		// Another run starting and completing its gate in the meantime must not clear hungRun.
+		*now = t0.Add(10 * time.Minute)
+		appendGateStarted(ctx, t, st, "run-other-1", "item-other", "lane-4", "aaaa4444", *now)
+		*now = t0.Add(11 * time.Minute)
+		appendGateVerdict(ctx, t, st, "run-other-1", "item-other", "lane-4", "bbbb4444", "pass", 60_000, *now)
+
+		*now = t0.Add(3649 * time.Second)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("want quiet at 3649s before 3650s threshold, got %+v", notices)
+		}
+
+		*now = t0.Add(3650 * time.Second)
+		opened := pending()
+		if len(opened) != 1 || opened[0].Bundle.RuleID != ruleID || opened[0].Bundle.Subject != hungRun || opened[0].Bundle.Severity != "warning" {
+			t.Fatalf("want one warning notice for %s at 3650s, got %+v", hungRun, opened)
+		}
+		guidance := opened[0].Bundle.Guidance
+		allGuidance := strings.Join(append([]string{guidance.Summary}, append(slices.Clone(guidance.Check), guidance.Do...)...), " ")
+		if !strings.Contains(guidance.Summary, hungRun) ||
+			!strings.Contains(guidance.Summary, hungItem) ||
+			!strings.Contains(guidance.Summary, hungLane) ||
+			!strings.Contains(guidance.Summary, "60m") ||
+			strings.Contains(allGuidance, "{{") ||
+			strings.Contains(allGuidance, "unknown") {
+			t.Fatalf("guidance must render run, item, lane, and elapsed duration without raw placeholders or unknown: %+v", guidance)
+		}
+
+		// At 88 minutes (the 2026-11-23 incident duration), the same episode stays open.
+		*now = t0.Add(88 * time.Minute)
+		at88m := pending()
+		if len(at88m) != 1 || at88m[0].AlertID != opened[0].AlertID || at88m[0].Bundle.Subject != hungRun {
+			t.Fatalf("want same open episode %s at 88m, got %+v", opened[0].AlertID, at88m)
+		}
+
+		// Recording gate.verdict for hungRun resolves the open episode.
+		*now = t0.Add(94 * time.Minute)
+		appendGateVerdict(ctx, t, st, hungRun, hungItem, hungLane, "bbbb3333", "fail", 5_640_000, *now)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("gate.verdict for %s should resolve %s, got %+v", hungRun, ruleID, notices)
+		}
+	})
+
+	t.Run("across all config rules on 88m gate with no verdict", func(t *testing.T) {
+		ctx := context.Background()
+		root := t.TempDir()
+		s, err := store.Open(ctx, filepath.Join(t.TempDir(), "all-rules.db"), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+
+		now := t0
+		e := watch.Evaluator{Store: s, Root: root, Rules: allRules, Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		appendGateStarted(ctx, t, s, "run-all-fast", "item-fast", "lane-1", "cccc1111", t0)
+		now = t0.Add(56 * time.Second)
+		appendGateVerdict(ctx, t, s, "run-all-fast", "item-fast", "lane-1", "dddd1111", "pass", 56_000, now)
+
+		appendGateStarted(ctx, t, s, "run-all-hung", "fixer-main-1293971a3597", "lane-2", "cccc2222", t0)
+		now = t0.Add(88 * time.Minute)
+
+		results, err := e.EvaluateRules(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, res := range results {
+			if res.ID == ruleID && res.Diagnostic() != "" {
+				t.Fatalf("unexpected diagnostic on %s: %+v", res.ID, res)
+			}
+			if res.Skipped != 0 {
+				t.Fatalf("unexpected skipped events on %s: %+v", res.ID, res)
+			}
+		}
+		notices, err := e.Pending(ctx, "foreground")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(notices) != 1 || notices[0].Bundle.RuleID != ruleID || notices[0].Bundle.Subject != "run-all-hung" {
+			t.Fatalf("want only %s for run-all-hung across config/tillr/watch, got %+v", ruleID, notices)
+		}
+	})
+
+	root := filepath.Clean(filepath.Join("..", ".."))
+	policies, err := filepath.Glob(filepath.Join(root, "config", "tillr", "backend-policy*.json"))
+	if err != nil || len(policies) == 0 {
+		t.Fatalf("glob policies: %v (len=%d)", err, len(policies))
+	}
+	slices.Sort(policies)
+	lintArgs := []string{"lint", root}
+	for _, p := range policies {
+		lintArgs = append(lintArgs, "--policy", p)
+	}
+	var lintOut, lintErr bytes.Buffer
+	if code := run(t.Context(), lintArgs, &lintOut, &lintErr); code != 0 || lintOut.Len() != 0 || lintErr.Len() != 0 {
+		t.Fatalf("tillr watch lint failed: code=%d stdout=%q stderr=%q", code, lintOut.String(), lintErr.String())
+	}
+}

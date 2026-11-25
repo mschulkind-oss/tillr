@@ -80,6 +80,7 @@ MIRRORED_MODULES = (
     "tillr-run",
     "tillr-store",
     "tillr-view",
+    "tillr-watch",
     "tillr-trace",
     "tillr-roll",
 )

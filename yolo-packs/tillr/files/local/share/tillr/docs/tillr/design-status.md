@@ -105,7 +105,7 @@ programs: `tillr` and the store, item, run, drain, gate, land and view programs.
 | [loop adapter](../../tillr-loop/README.md) | The `git-landing` charter's hook program: this repository's glue between the drain and its gate and lander. | Built | shipped |
 | [tillr-trace](../../tillr-trace/README.md) | Records the commands a run starts, through a shell shim the run adapters set, and answers questions from those records. | Partly built ([session recording](../design/session-recording.md)) | shipped |
 | [`tools/tillr`](../../tillr/) | The shared library: the store opener, records, exit codes, settings, the watch rules and the [definition package](../../tillr/definition/README.md). | Built | |
-| [`tools/tillr-watch`](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-watch/) | Standing alert rules over the store ([the watch design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-watch.md)). | Partly built | |
+| [`tools/tillr-watch`](../../tillr-watch/) | Standing alert rules over the store ([the watch design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-watch.md)). | Partly built | |
 | [`tools/tillr-roll`](../../tillr-roll/) | `tillr-roll.py` builds and installs new binaries; `tillr-keep` restarts the drain loop when it exits. | Built | |
 | [`tools/gate`](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/) | This repository's own check declarations and gate scripts ([the gate reference](../reference/gate.md)). | Built | |
 | [`tools/observatory`](https://github.com/mschulkind-oss/tillr/blob/main/tools/observatory/) | `run.sh`, which builds and serves the observatory for this checkout. | Built | |

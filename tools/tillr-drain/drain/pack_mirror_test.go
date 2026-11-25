@@ -45,8 +45,8 @@ func TestGateSeesRegeneratedTillrPackMirror(t *testing.T) {
 	ctx := context.Background()
 	f, l := passFixture(t, "item-a")
 	lane := l.laneTarget("lane-1")
-	const source = "tools/tillr-drain/"
-	const mirror = "yolo-packs/tillr/files/local/share/tillr/tillr-drain/"
+	const source = "tools/tillr-watch/"
+	const mirror = "yolo-packs/tillr/files/local/share/tillr/tillr-watch/"
 	writePackFixture(t, f.root, ".justfile", "pack-sync:\n    @true\n") // Old recipe: it takes no module arguments.
 	for path, body := range map[string]string{
 		"yolo-packs/tillr/pack.json": "{}\n",
@@ -71,7 +71,7 @@ func TestGateSeesRegeneratedTillrPackMirror(t *testing.T) {
 	writeForkFile(t, filepath.Join(lane, source, "README.md"), "[Doc](../../docs/work.md)\n")
 	runGit(t, lane, "rm", source+"removed")
 	runGit(t, lane, "add", source)
-	runGit(t, lane, "commit", "-m", "feat: update drain source only")
+	runGit(t, lane, "commit", "-m", "feat: update watch source only")
 	worker := runGit(t, lane, "rev-parse", "HEAD")
 	writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), FenceFile), source+"\n")
 	c := Candidate{ItemID: "item-a", LaneID: "lane-1", RunID: "run-pack-mirror", Worktree: lane, BaseSHA: base, HeadSHA: worker}

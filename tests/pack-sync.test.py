@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The one generated pack tree: the tillr pack's copy of every `tools/tillr*` module.
 
-`tools/tillr`, its eight binaries and the `tillr-trace` shim are the canonical source.
+`tools/tillr`, its nine binaries and the `tillr-trace` shim are the canonical source.
 `yolo-packs/tillr/files/local/share/tillr/<module>` is a committed copy, because the pack
 -- not this checkout -- is what puts `tillr` on PATH in a workspace that has no `tools/`.
 `just pack-sync` mirrors each module; this suite fails when a copy diverges from its
@@ -13,7 +13,7 @@ output (`tools/tillr-store/tillr-store`) is IGNORED by git and is the one kind o
 mirror leaves out; an untracked-but-not-ignored `.go` file is source the launcher must
 build, so it is copied.
 
-Shipping and launching are two different sets. Nine Go modules ship and build the eight
+Shipping and launching are two different sets. Ten Go modules ship and build the nine
 names on PATH; `tillr-trace` ships and launches nothing, because it is the recording shim
 `tillr-run`'s pi adapter sources through `BASH_ENV`, and a pack that left it out silently
 recorded no subprocess at all.
@@ -39,7 +39,7 @@ Cases:
   3. every copied file has the source's exec bit, and none is a symlink;
   4. a Python bytecode cache is a build output and never enters the source set, so a
      developer's global gitignore cannot decide what this check reads;
-  5. the eight launchers are one body, each naming the module it builds, one per declared
+  5. the nine launchers are one body, each naming the module it builds, one per declared
      `program` entry;
   6. the documentation transform: links re-resolved for the delivered tree, item
      directives inert outside fences, fences and frontmatter untouched, one banner;
@@ -76,12 +76,13 @@ MODULES = (
     "tillr-run",
     "tillr-store",
     "tillr-view",
+    "tillr-watch",
     "tillr-trace",
     "tillr-roll",
 )
 
 # The modules that ship without a launcher, so the pack must claim no name on PATH for
-# them: `tillr` is the shared library the eight binaries resolve through relative
+# them: `tillr` is the shared library the binaries resolve through relative
 # `replace` paths (the dispatcher named `tillr` is built from `tillr-cli`), and
 # `tillr-trace` is sourced as a shim rather than run as a program.
 # `tillr-roll` is the repository's keeper, invoked by its just recipe, not a PATH binary.
@@ -326,7 +327,7 @@ def declared_programs():
 
 
 def case_launchers():
-    """The eight launchers are one body, each naming the module that builds it."""
+    """The launchers are one body, each naming the module that builds it."""
     bodies = {}
     for bin_name, module in sorted(PROGRAM_MODULES.items()):
         path = PROGRAMS / bin_name / "run"
@@ -345,14 +346,14 @@ def case_launchers():
     for bin_name, body in bodies.items():
         assert body == canonical, (
             f"the {bin_name} launcher's body has drifted from the tillr launcher's; the "
-            "eight are one script and only the header line and the two assignments differ"
+            "launchers are one script and only the header line and the two assignments differ"
         )
     declared = sorted(declared_programs())
     assert declared == sorted(PROGRAM_MODULES), (
         "the manifest's `program` entries and the launchers do not match: declared "
         f"{declared}, launchers {sorted(PROGRAM_MODULES)}"
     )
-    ok(f"the eight launchers are one body, each naming its module, one per declared "
+    ok(f"the launchers are one body, each naming its module, one per declared "
        f"program ({len(declared)} entries)")
 
 

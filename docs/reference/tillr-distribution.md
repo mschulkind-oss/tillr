@@ -1,5 +1,5 @@
 ---
-title: "Distribution: one source-built pack with eight PATH binaries"
+title: "Distribution: one source-built pack with nine PATH binaries"
 status: accepted
 stage: CURRENT
 verified: 2026-11-24
@@ -9,30 +9,30 @@ covers:
   - tests/pack-sync.test.py
   - tests/tillr-docs.test.py
 tags: [tillr, pack, distribution, documentation, reference]
-summary: "tillr is distributed through one pack in a source-plus-launcher pattern: the module source is mirrored into the pack, eight program entries on PATH each build and cache one binary from that source, and documentation is split into three layers where --help alone owns flags."
+summary: "tillr is distributed through one pack in a source-plus-launcher pattern: the module source is mirrored into the pack, nine program entries on PATH each build and cache one binary from that source, and documentation is split into three layers where --help alone owns flags."
 ---
 
-# Distribution: one source-built pack with eight `PATH` binaries
+# Distribution: one source-built pack with nine `PATH` binaries
 
 **Status:** Verified 2026-11-24 against the tree. UNMEASURED here: the checks that hold it true are [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) (the mirror and the launchers) and [`tests/tillr-docs.test.py`](../../tests/tillr-docs.test.py) (the documentation split).
 
-`tillr` is distributed through one pack, [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json), in a **source-plus-launcher** pattern: the module source is mirrored into the pack, eight `program` entries on `PATH` each build and cache one binary from that source, and documentation is split into three layers where `--help` alone owns flags.
+`tillr` is distributed through one pack, [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json), in a **source-plus-launcher** pattern: the module source is mirrored into the pack, nine `program` entries on `PATH` each build and cache one binary from that source, and documentation is split into three layers where `--help` alone owns flags.
 
 | Component | Lives in |
 | :--- | :--- |
-| Pack declaration: eight `program` launchers, one `files` tree, the skills | [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json) |
+| Pack declaration: nine `program` launchers, one `files` tree, the skills | [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json) |
 | Module source and its mirror | [`tools/`](../../tools), copied by `just pack-sync` to `yolo-packs/tillr/files/` |
 | Mirror and launcher check | [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) |
 | Documentation split check | [`tests/tillr-docs.test.py`](../../tests/tillr-docs.test.py) |
 | Loop composition skill | [`tillr-operating`](../../yolo-packs/tillr/skills/tillr-operating/SKILL.md) |
 
-**Cost.** The module source exists twice: under [`tools/`](../../tools) and, mirrored by `just pack-sync`, under [`yolo-packs/`](../../yolo-packs). Eight `program` entries put eight launchers in `~/.local/bin/`.
+**Cost.** The module source exists twice: under [`tools/`](../../tools) and, mirrored by `just pack-sync`, under [`yolo-packs/`](../../yolo-packs). Nine `program` entries put nine launchers in `~/.local/bin/`.
 
 ---
 
-## One pack, eight programs, and what `PATH` sees
+## Pack programs on `PATH`
 
-One pack at `yolo-packs/tillr` named `tillr` declares **eight `program` contributions** (the umbrella dispatcher `tillr` plus the seven standalone `tillr-<noun>` binaries), **one `files` contribution**, and **one `skills` contribution**.
+One pack at `yolo-packs/tillr` named `tillr` declares **nine `program` contributions** (the umbrella dispatcher `tillr` plus eight standalone `tillr-<noun>` binaries), **one `files` contribution**, and **one `skills` contribution**.
 
 | Module directory | Binary on `PATH` |
 | :--- | :--- |
@@ -45,10 +45,11 @@ One pack at `yolo-packs/tillr` named `tillr` declares **eight `program` contribu
 | [`tools/tillr-run`](../../tools/tillr-run) | `tillr-run` |
 | [`tools/tillr-store`](../../tools/tillr-store) | `tillr-store` |
 | [`tools/tillr-view`](../../tools/tillr-view) | `tillr-view` |
+| [`tools/tillr-watch`](../../tools/tillr-watch) | `tillr-watch` |
 
 Each binary's `--help` owns its face list; this document does not enumerate faces.
 
-Three constraints force eight `program` declarations rather than a single `tillr` entry:
+Three constraints require separate `program` declarations rather than a single `tillr` entry:
 
 1. **The dispatcher resolves its siblings through `PATH`.** [`tools/tillr-cli`](../../tools/tillr-cli) refuses a noun whose `tillr-<noun>` binary is not on `PATH`.
 2. **`yolo` owns `~/.local/bin` by declaration.** `yolo` refuses a `files` contribution into `~/.local/bin`; every executable on `PATH` is a `program` contribution (`via: "pack"`).
@@ -61,7 +62,7 @@ Three constraints force eight `program` declarations rather than a single `tillr
 The pack delivers source as `files`, and each `program` is a launcher that builds and caches its binary.
 
 - **Source delivery (`files`):** `just pack-sync` copies the module directories named in `MODULES` of [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) into the pack's `files/local/share/tillr/<module>/`, which `yolo` renders to `~/.local/share/tillr/<module>/`. That test guards the copy against drift. [`tools/tillr`](../../tools/tillr) is part of the tree because the binary modules resolve the shared library through relative `replace` paths in `go.mod`.
-- **Launcher mechanics (`program`):** The eight launchers are one body that differs in two assignments: the binary's name and its module (`tillr` builds from `tillr-cli`; `tillr-<noun>` builds from the module of the same name). The launcher never changes its own working directory (`go build` runs in a subshell) and ends with `exec`, so a store named relative to the caller's directory resolves in the caller's repository.
+- **Launcher mechanics (`program`):** The launchers share one body that differs in two assignments: the binary's name and its module (`tillr` builds from `tillr-cli`; `tillr-<noun>` builds from the module of the same name). The launcher never changes its own working directory (`go build` runs in a subshell) and ends with `exec`, so a store named relative to the caller's directory resolves in the caller's repository.
 - **Warm cache fast path:** A `current-<bin>-<root-hash>` symlink under `${XDG_CACHE_HOME:-$HOME/.cache}/tillr/bin/` names the last build. On each call the launcher checks whether any non-test `.go`, `go.mod` or `go.sum` file anywhere under the source root is newer than the symlink. When nothing is newer it `exec`s the cached binary with no `go` invocation.
 - **A source change mid-session:** When a file under the source root becomes newer, the next call hashes every non-test `.go`, `go.mod` and `go.sum` file of the whole tree into a digest, builds `<bin>-<digest>` with `CGO_ENABLED=0` to a temporary name, moves it into place (or drops it when a concurrent caller won the race), repoints the symlink, and `exec`s it. In-flight processes keep the binary they loaded.
 - **A machine with no Go toolchain:**
@@ -138,7 +139,7 @@ The pack ships identical source, launchers and skills on every machine, and carr
 | **Docs drifting from `--help`** | Flags are banned from `README` and skill files ([the documentation split](#documentation-split-and-the-honesty-rule)); the documentation test checks every documented `tillr* <face>` call against live `--help` output and rejects flag tables. |
 | **Launcher breaks without a Go toolchain** | The warm path uses only file tests and no `go` call; a cold cache without `go` exits `1` naming the missing digest and toolchain ([Build and delivery](#build-and-delivery)), and the launcher never runs at jail startup. |
 | **The pack runs `tillr` in a repository that did not ask for it** | No `briefing` and no configuration overlay runs `tillr`; the pack only puts the binaries and skills in reach. |
-| **An edit to one module leaves another module's binary stale** | The fast-path check and the digest both walk the whole source tree ([Build and delivery](#build-and-delivery)), so any source change invalidates all eight cached binaries on their next call. |
+| **An edit to one module leaves another module's binary stale** | The fast-path check and the digest both walk the whole source tree ([Build and delivery](#build-and-delivery)), so any source change invalidates all cached binaries on their next call. |
 
 ---
 

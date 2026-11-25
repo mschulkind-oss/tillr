@@ -377,7 +377,7 @@ tillr-restart *args:
 
 # Check the one generated pack copy: the tillr pack's tree against tools/tillr*,
 # module by module, byte for byte, with the README rewrite, the exec bits, and the
-# eight launchers' shared body.
+# launchers' shared body.
 pack-sync-test:
     @python3 tests/pack-sync.test.py
 
