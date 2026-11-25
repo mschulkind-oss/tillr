@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
@@ -32,36 +33,167 @@ func ReadObstacleHolds(r *store.Reader) (map[string]obstacles.Hold, map[string]s
 	return obstacles.Read(r)
 }
 
+type trunkObstacleKind int
+
+const (
+	trunkObstacleInvalid trunkObstacleKind = iota
+	trunkObstacleProofChecks
+	trunkObstaclePlainCommand
+)
+
+type trunkObstacleCheck struct {
+	Kind        trunkObstacleKind
+	Entries     []string
+	ProofChecks []string
+	Rejected    []rejectedTrunkCheck
+}
+
+// gateCheckInventory reads every declared check in tools/gate/checks/*.json and any
+// legacy registry, separating checks the trunk proof runs from other gate checks.
+func (l *Loop) gateCheckInventory(ctx context.Context) (proof map[string]bool, other map[string]string, err error) {
+	proof = map[string]bool{}
+	other = map[string]string{}
+	if l.cfg.Root == "" {
+		return proof, other, nil
+	}
+	checksDir := filepath.Join(l.cfg.Root, "tools", "gate", "checks")
+	entries, err := os.ReadDir(checksDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, nil, err
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(checksDir, entry.Name()))
+		if err != nil {
+			return nil, nil, err
+		}
+		var check struct {
+			ID, Scope, Tier string
+		}
+		if err := json.Unmarshal(raw, &check); err != nil {
+			return nil, nil, err
+		}
+		if check.ID == "" {
+			continue
+		}
+		if check.Scope == "tree" && check.Tier == "heavy" {
+			proof[check.ID] = true
+		} else {
+			kind := strings.Trim(strings.Join([]string{check.Scope, check.Tier}, "/"), "/")
+			if kind == "" {
+				kind = "non-proof"
+			}
+			other[check.ID] = kind
+		}
+	}
+	legacy, err := legacyCheckDeclarations(ctx, l.cfg.Root)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, check := range legacy {
+		if check.ID == "" {
+			continue
+		}
+		if check.Tier == "rolling" {
+			proof[check.ID] = true
+		} else if !proof[check.ID] {
+			tier := check.Tier
+			if tier == "" {
+				tier = "non-proof"
+			}
+			other[check.ID] = tier
+		}
+	}
+	return proof, other, nil
+}
+
 // trunkProofLists checks against the inventory the trunk proof can actually run:
 // declared heavy tree checks and the legacy rolling tier, not landing-only checks.
 func (l *Loop) trunkProofLists(ctx context.Context, checks []string) (bool, error) {
 	if len(checks) == 0 || l.cfg.Root == "" {
 		return false, nil
 	}
-	heavy, err := heavyCheckDeclarations(l.cfg.Root)
-	if err != nil && !os.IsNotExist(err) {
-		return false, err
-	}
-	var remaining []string
-	for _, id := range checks {
-		if _, ok := heavy[id]; !ok {
-			remaining = append(remaining, id)
-		}
-	}
-	if len(remaining) == 0 {
-		return true, nil
-	}
-	legacy, err := legacyCheckDeclarations(ctx, l.cfg.Root)
+	proof, _, err := l.gateCheckInventory(ctx)
 	if err != nil {
 		return false, err
 	}
-	var rolling []string
-	for _, check := range legacy {
-		if check.Tier == "rolling" {
-			rolling = append(rolling, check.ID)
+	for _, id := range checks {
+		if !proof[id] {
+			return false, nil
 		}
 	}
-	return allIn(remaining, rolling), nil
+	return true, nil
+}
+
+// classifyTrunkObstacle classifies the entries in a trunk obstacle's CHECKS field:
+//   - trunkObstacleProofChecks: every entry is a check the trunk proof runs;
+//   - trunkObstaclePlainCommand: at least one entry is a plain command outside the
+//     gate's checks, and no entry is an unknown check id, non-proof gate check, or prose;
+//   - trunkObstacleInvalid: empty CHECKS or at least one rejected entry, each with its reason.
+func (l *Loop) classifyTrunkObstacle(ctx context.Context, obs Obstacle) (trunkObstacleCheck, error) {
+	entries := obs.trunkCheckEntries()
+	if len(entries) == 0 {
+		return trunkObstacleCheck{
+			Kind:     trunkObstacleInvalid,
+			Rejected: []rejectedTrunkCheck{{Reason: "no checks named"}},
+		}, nil
+	}
+	proof, other, err := l.gateCheckInventory(ctx)
+	if err != nil {
+		return trunkObstacleCheck{}, err
+	}
+	allGate := make(map[string]bool, len(proof)+len(other))
+	for id := range proof {
+		allGate[id] = true
+	}
+	for id := range other {
+		allGate[id] = true
+	}
+	var proofChecks, plainCommands []string
+	var rejected []rejectedTrunkCheck
+	for _, entry := range entries {
+		switch {
+		case proof[entry]:
+			proofChecks = append(proofChecks, entry)
+		case other[entry] != "":
+			rejected = append(rejected, rejectedTrunkCheck{
+				Entry:  entry,
+				Reason: "gate check (" + other[entry] + "), not a trunk proof check",
+			})
+		case obstacleCheckID.MatchString(entry):
+			rejected = append(rejected, rejectedTrunkCheck{
+				Entry:  entry,
+				Reason: "unknown check id",
+			})
+		case looksLikePlainCommand(entry, allGate):
+			plainCommands = append(plainCommands, entry)
+		default:
+			rejected = append(rejected, rejectedTrunkCheck{
+				Entry:  entry,
+				Reason: "not a check id or command",
+			})
+		}
+	}
+	if len(rejected) > 0 {
+		return trunkObstacleCheck{
+			Kind:     trunkObstacleInvalid,
+			Entries:  entries,
+			Rejected: rejected,
+		}, nil
+	}
+	if len(plainCommands) > 0 {
+		return trunkObstacleCheck{
+			Kind:    trunkObstaclePlainCommand,
+			Entries: entries,
+		}, nil
+	}
+	return trunkObstacleCheck{
+		Kind:        trunkObstacleProofChecks,
+		Entries:     entries,
+		ProofChecks: proofChecks,
+	}, nil
 }
 
 func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle) error {
@@ -82,17 +214,24 @@ func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle)
 	}
 	var checks []string
 	if obs.Kind == ObstacleTrunk {
-		checks = obs.trunkChecks()
-		known, err := l.trunkProofLists(ctx, checks)
+		classified, err := l.classifyTrunkObstacle(ctx, obs)
 		if err != nil {
 			return err
 		}
-		if !known {
-			l.reportf("loop: %s named an invalid trunk obstacle: returned to its worker\n", d.ItemID)
+		switch classified.Kind {
+		case trunkObstacleProofChecks:
+			checks = classified.ProofChecks
+		case trunkObstaclePlainCommand:
+			// Plain command outside the gate's checks: record an operator-held
+			// obstacle (checks == nil -> Mover == "operator") so it alerts the
+			// operator and does not send the worker back to land without it.
+			checks = nil
+		default:
+			l.reportf("loop: %s named an invalid trunk obstacle (%s): returned to its worker\n", d.ItemID, formatInvalidTrunkObstacle(classified.Entries, classified.Rejected))
 			return l.recordRefusal(ctx, Candidate{
 				ItemID: d.ItemID, RunID: runID, LaneID: d.LaneID,
 				Worktree: l.laneTarget(d.LaneID), BaseSHA: baseSHA, HeadSHA: headSHA,
-				RefusalDetail: invalidTrunkObstacleDetail(obs),
+				RefusalDetail: invalidTrunkObstacleDetail(obs, classified.Rejected...),
 			}, RefusalNoOp)
 		}
 	}
@@ -204,7 +343,7 @@ func (l *Loop) releaseTrunkObstacleHolds(ctx context.Context) error {
 			return err
 		}
 		for _, h := range active {
-			if h.Kind == ObstacleTrunk {
+			if h.Kind == ObstacleTrunk && h.Mover == "drain" && len(h.Checks) > 0 {
 				holds = append(holds, h)
 			}
 		}

@@ -39,6 +39,15 @@ func TestNewHoldFormatsEveryObstacleKind(t *testing.T) {
 			wantMoverSub:  "go-tool/unit, tillr-docs",
 		},
 		{
+			kind:          "trunk",
+			fields:        map[string]string{"CHECKS": "pytest tests/test_api.py", "BASE": "abc1234"},
+			checks:        nil,
+			wantReason:    "obstacle-trunk",
+			wantWhySub:    []string{"command outside gate checks", "pytest tests/test_api.py"},
+			wantMoverPref: "operator; ",
+			wantMoverSub:  "pytest tests/test_api.py",
+		},
+		{
 			kind:          "tooling",
 			fields:        map[string]string{"COMMAND": "go test ./...", "EVIDENCE": "exec: gcc: executable file not found\nin $PATH", "PATHS": "tools/tillr-drain/"},
 			wantReason:    "obstacle-tooling",

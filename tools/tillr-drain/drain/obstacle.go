@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -87,24 +88,144 @@ func (o Obstacle) List(name string) []string {
 	return out
 }
 
-var obstacleCheckID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_./:-]*$`)
+var (
+	obstacleCheckID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_./:-]*$`)
+	commandWordRe   = regexp.MustCompile(`^(?:\.?/[A-Za-z0-9_./-]+|[A-Za-z0-9][A-Za-z0-9_./-]*)$`)
+	envAssignRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+)
+
+var proseStarters = map[string]bool{
+	"a": true, "all": true, "an": true, "because": true, "broken": true,
+	"check": true, "checks": true, "failed": true, "failing": true, "fails": true,
+	"it": true, "no": true, "not": true, "red": true, "see": true,
+	"some": true, "suite": true, "suites": true, "test": true, "tests": true,
+	"that": true, "the": true, "these": true, "this": true, "those": true,
+}
+
+var proseWords = map[string]bool{
+	"already": true, "and": true, "are": true, "because": true, "both": true,
+	"broken": true, "cannot": true, "did": true, "does": true, "fail": true,
+	"failed": true, "failing": true, "fails": true, "from": true, "has": true,
+	"have": true, "in": true, "is": true, "missing": true, "not": true,
+	"now": true, "on": true, "pass": true, "passed": true, "passes": true,
+	"passing": true, "the": true, "was": true, "were": true, "when": true,
+	"with": true,
+}
+
+// trunkCheckEntries splits CHECKS on commas and newlines, trimming whitespace and backticks.
+func (o Obstacle) trunkCheckEntries() []string {
+	var out []string
+	for _, entry := range strings.FieldsFunc(o.Field("CHECKS"), func(r rune) bool { return r == ',' || r == '\n' }) {
+		item := strings.Trim(strings.TrimSpace(entry), "`")
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
 
 // trunkChecks reads whole entries, never individual words in an explanation. Reject
 // the entire claim if any entry is not an ID; a partial claim is not what was reported.
 func (o Obstacle) trunkChecks() []string {
-	var checks []string
-	for _, entry := range strings.FieldsFunc(o.Field("CHECKS"), func(r rune) bool { return r == ',' || r == '\n' }) {
-		id := strings.Trim(strings.TrimSpace(entry), "`")
+	entries := o.trunkCheckEntries()
+	for _, id := range entries {
 		if !obstacleCheckID.MatchString(id) {
 			return nil
 		}
-		checks = append(checks, id)
 	}
-	return checks
+	return entries
 }
 
-func invalidTrunkObstacleDetail(o Obstacle) string {
-	return "The run's trunk obstacle did not name only trunk check IDs: " + o.Field("CHECKS") +
+// rejectedTrunkCheck names one CHECKS entry that was not accepted and the reason why.
+type rejectedTrunkCheck struct {
+	Entry  string
+	Reason string
+}
+
+func formatRejectedTrunkChecks(rejected []rejectedTrunkCheck) string {
+	if len(rejected) == 0 {
+		return "no checks named"
+	}
+	parts := make([]string, 0, len(rejected))
+	for _, r := range rejected {
+		if r.Entry == "" {
+			parts = append(parts, r.Reason)
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%q: %s", r.Entry, r.Reason))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func formatInvalidTrunkObstacle(named []string, rejected []rejectedTrunkCheck) string {
+	rej := formatRejectedTrunkChecks(rejected)
+	if len(named) == 0 || len(named) == len(rejected) {
+		return rej
+	}
+	return fmt.Sprintf("named: %s; rejected: %s", strings.Join(named, ", "), rej)
+}
+
+func looksLikePlainCommand(entry string, knownGateChecks map[string]bool) bool {
+	if strings.ContainsAny(entry, "—–“”‘’") {
+		return false
+	}
+	fields := strings.Fields(entry)
+	if len(fields) == 0 {
+		return false
+	}
+	i := 0
+	for i < len(fields) && envAssignRe.MatchString(fields[i]) {
+		i++
+	}
+	if i >= len(fields) {
+		return false
+	}
+	cmd := fields[i]
+	if len(fields) == 1 && obstacleCheckID.MatchString(cmd) {
+		return false
+	}
+	if knownGateChecks[cmd] {
+		return false
+	}
+	if !commandWordRe.MatchString(cmd) {
+		return false
+	}
+	if proseStarters[strings.ToLower(cmd)] {
+		return false
+	}
+	last := fields[len(fields)-1]
+	if len(last) >= 2 && last[len(last)-1] == '.' && isASCIIAlpha(last[len(last)-2]) && !strings.ContainsAny(last[:len(last)-1], "/.") {
+		return false
+	}
+	if !hasCommandFlag(fields[i+1:]) {
+		for _, tok := range fields[i+1:] {
+			if proseWords[strings.ToLower(tok)] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isASCIIAlpha(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func hasCommandFlag(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") && len(arg) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func invalidTrunkObstacleDetail(o Obstacle, rejected ...rejectedTrunkCheck) string {
+	detail := "The run's trunk obstacle did not name only trunk check IDs: " + o.Field("CHECKS")
+	if len(rejected) > 0 {
+		detail += " (" + formatRejectedTrunkChecks(rejected) + ")"
+	}
+	return detail +
 		". A failing test within your own fence, including in a fork checkout, is work to continue, not a trunk check to wait on. Continue the work and commit. Use CHECKS only for exact trunk check IDs, separated by commas or newlines."
 }
 

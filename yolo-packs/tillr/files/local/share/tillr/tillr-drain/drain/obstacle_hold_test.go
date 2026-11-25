@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
@@ -508,4 +510,160 @@ func TestOwnerObstacleHoldRedispatchesWhenCleared(t *testing.T) {
 	if d := planFor(t, l, id); d.Action != ActionRetry {
 		t.Fatalf("cleared owner obstacle did not retry: %+v", d)
 	}
+}
+
+// TestTrunkObstacleGateCheckUnknownIDAndPlainCommand covers the three trunk obstacle
+// shapes: a named gate check holds on the drain, an unknown check id returns to the
+// worker with a loop line naming the checks and rejection reasons, and a plain command
+// outside the gate's checks records an operator-alerting obstacle hold without sending
+// the worker back.
+func TestTrunkObstacleGateCheckUnknownIDAndPlainCommand(t *testing.T) {
+	ctx := context.Background()
+
+	runCase := func(t *testing.T, checksField string) (refusalLoopFixture, *Loop, string, string) {
+		t.Helper()
+		f, l, _ := workflowLoopFixture(t, "")
+		var logBuf bytes.Buffer
+		l.cfg.Report = &logBuf
+		putTrunkObstacleChecks(t, f.root)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state='closed'`)
+			return err
+		})
+		id := fileFixtureRequestWith(t, f, "Run criterion check\n", "build", "scout-then-build@v1", requestFence, false)
+		base := runGit(t, f.root, "rev-parse", TrunkRef)
+		var reported bool
+		steps := &obstacleRequestSteps{
+			t: t, f: f,
+			report: func(req run.Request) (string, *landingOffer) {
+				if req.NodeID == "work" {
+					reported = true
+					return wrapExtractedReport(req.RunID, "OBSTACLE: trunk\nCHECKS: "+checksField+"\nBASE: "+base+"\nRESULT: blocked\n"), nil
+				}
+				return wrapExtractedReport(req.RunID, "RESULT: done\n"), nil
+			},
+		}
+		l.cfg.Steps = steps
+		result := &LoopResult{}
+		for i := 0; i < 6 && !reported; i++ {
+			if _, err := l.pass(ctx, result); err != nil {
+				t.Fatal(err)
+			}
+			drainOwned(t, l, result)
+		}
+		if !reported {
+			t.Fatalf("work node did not report: runs=%v", steps.runs)
+		}
+		return f, l, id, logBuf.String()
+	}
+
+	t.Run("named-gate-check", func(t *testing.T) {
+		f, l, id, _ := runCase(t, "go-tool/unit, gate-budget-test")
+		if d := planFor(t, l, id); d.Action != ActionHold || d.Reason != ReasonObstacleTrunk {
+			t.Fatalf("expected trunk obstacle hold, got %+v", d)
+		}
+		fixtureRead(t, f, func(r *store.Reader) error {
+			active, _, err := obstacles.Read(r)
+			if err != nil {
+				return err
+			}
+			h, ok := active[id]
+			if !ok {
+				t.Fatalf("missing obstacle hold for %s", id)
+			}
+			if h.Mover != "drain" || len(h.Checks) != 2 {
+				t.Fatalf("hold = %+v, want mover=drain and 2 checks", h)
+			}
+			answer, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+			if err != nil {
+				return err
+			}
+			if answer.Summary.DrainNext != 1 || answer.Summary.OperatorNext != 0 {
+				t.Fatalf("summary = %+v, want drain=1 operator=0", answer.Summary)
+			}
+			return nil
+		})
+	})
+
+	t.Run("unknown-check-id", func(t *testing.T) {
+		_, l, id, logs := runCase(t, "go-tool/unit, no-such-check, tillr-docs")
+		d := planFor(t, l, id)
+		if d.Action != ActionDispatch || d.Reason != ReasonReturned || d.Returned == nil {
+			t.Fatalf("expected worker return for unknown check id, got %+v", d)
+		}
+		var invalidLine string
+		for _, line := range strings.Split(logs, "\n") {
+			if strings.Contains(line, "named an invalid trunk obstacle") {
+				invalidLine = line
+				break
+			}
+		}
+		if invalidLine == "" {
+			t.Fatalf("missing invalid trunk obstacle line in logs:\n%s", logs)
+		}
+		for _, want := range []string{
+			"go-tool/unit",
+			"no-such-check",
+			"unknown check id",
+			"tillr-docs",
+			"not a trunk proof check",
+		} {
+			if !strings.Contains(invalidLine, want) {
+				t.Errorf("invalid trunk obstacle line %q lacks %q", invalidLine, want)
+			}
+		}
+	})
+
+	t.Run("plain-command", func(t *testing.T) {
+		const cmd = "pytest tests/test_api.py -k smoke"
+		f, l, id, logs := runCase(t, cmd)
+		if strings.Contains(logs, "named an invalid trunk obstacle") {
+			t.Fatalf("plain command was rejected as invalid:\n%s", logs)
+		}
+		if d := planFor(t, l, id); d.Action != ActionHold || d.Reason != ReasonObstacleTrunk {
+			t.Fatalf("plain command should hold on trunk obstacle, not return to worker: %+v", d)
+		}
+		fixtureRead(t, f, func(r *store.Reader) error {
+			active, _, err := obstacles.Read(r)
+			if err != nil {
+				return err
+			}
+			h, ok := active[id]
+			if !ok {
+				t.Fatalf("missing obstacle hold for %s", id)
+			}
+			if h.Kind != ObstacleTrunk || h.Mover != "operator" || len(h.Checks) != 0 {
+				t.Fatalf("hold = %+v, want kind=trunk mover=operator checks=nil", h)
+			}
+			if !strings.Contains(h.Reason, cmd) {
+				t.Fatalf("hold reason %q lacks command %q", h.Reason, cmd)
+			}
+			answer, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+			if err != nil {
+				return err
+			}
+			if answer.Summary.OperatorNext != 1 || answer.Summary.DrainNext != 0 {
+				t.Fatalf("summary = %+v, want operator=1 drain=0", answer.Summary)
+			}
+			for _, row := range answer.Rows {
+				if row.ItemID != id {
+					continue
+				}
+				if row.Class != "needs you" || !strings.HasPrefix(row.Mover, "operator; ") || !strings.Contains(row.Why, cmd) {
+					t.Fatalf("why row = %+v, want needs you / operator naming %q", row, cmd)
+				}
+			}
+			return nil
+		})
+		// An unrelated trunk proof pass must not auto-release an operator-held plain command.
+		runGit(t, f.root, "commit", "--allow-empty", "-qm", "unrelated trunk fix")
+		repaired := runGit(t, f.root, "rev-parse", TrunkRef)
+		writeGreenProof(t, l, repaired, l.cfg.Now().UTC().Add(time.Minute), []string{"go-tool/unit", "gate-budget-test"})
+		if err := l.releaseTrunkAcquittals(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if d := planFor(t, l, id); d.Action != ActionHold || d.Reason != ReasonObstacleTrunk {
+			t.Fatalf("unrelated trunk proof released operator-held plain command: %+v", d)
+		}
+	})
 }

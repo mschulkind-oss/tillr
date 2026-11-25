@@ -66,7 +66,29 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 		}
 		checks := o.trunkChecks()
 		if len(checks) == 0 {
-			return returnToWorker(invalidTrunkObstacleDetail(o), ""), true
+			classified, err := l.classifyTrunkObstacle(ctx, o)
+			if err != nil {
+				return laneOutcome{err: err}, true
+			}
+			if classified.Kind == trunkObstaclePlainCommand {
+				holdDecision := d
+				if holdDecision.NodeBaseSHA == "" {
+					holdDecision.NodeBaseSHA = candidate.BaseSHA
+				}
+				if holdDecision.LaneID == "" {
+					holdDecision.LaneID = lane
+				}
+				if holdDecision.RunRequest == nil {
+					reqCopy := req
+					holdDecision.RunRequest = &reqCopy
+				}
+				if err := l.recordObstacleHold(ctx, holdDecision, o); err != nil {
+					return laneOutcome{err: err}, true
+				}
+				return laneOutcome{stop: l.abandonFromBase(ctx, lane, req.RunID, head, candidate.BaseSHA, "trunk obstacle outside gate checks: held for operator")}, true
+			}
+			l.reportf("loop: %s named an invalid trunk obstacle (%s): returned to its worker\n", req.ItemID, formatInvalidTrunkObstacle(classified.Entries, classified.Rejected))
+			return returnToWorker(invalidTrunkObstacleDetail(o, classified.Rejected...), ""), true
 		}
 		// The replay runs in a scratch worktree of its own and holds no store transaction;
 		// it holds this lane only because a refuted claim continues this lane's session.

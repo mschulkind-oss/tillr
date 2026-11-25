@@ -63,13 +63,21 @@ func NewHold(itemID, runID, kind string, rawFields map[string]string, checks []s
 			h.Action = "answer the question and retry the item, or close the item (tillr item close --item " + itemID + ")"
 		}
 	case "trunk":
-		checksText := strings.Join(checks, ", ")
-		if checksText == "" {
-			checksText = OneLine(fields["CHECKS"])
+		if len(checks) > 0 {
+			checksText := strings.Join(checks, ", ")
+			h.Mover = "drain"
+			h.Reason = "checks: " + checksText
+			h.Action = "returns when checks " + checksText + " are green"
+		} else {
+			cmdText := OneLine(fields["CHECKS"])
+			h.Mover = "operator"
+			h.Reason = "command outside gate checks: " + cmdText
+			if runID != "" {
+				h.Action = "check trunk failure for " + cmdText + " and retry run " + runID + " (tillr drain retry --item " + itemID + " --run " + runID + " --by <who> --why <reason>)"
+			} else {
+				h.Action = "check trunk failure for " + cmdText + " and retry the item"
+			}
 		}
-		h.Mover = "drain"
-		h.Reason = "checks: " + checksText
-		h.Action = "returns when checks " + checksText + " are green"
 	case "tooling":
 		cmd := OneLine(fields["COMMAND"])
 		ev := FirstLine(fields["EVIDENCE"])

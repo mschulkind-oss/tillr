@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
@@ -446,5 +447,28 @@ func TestObstacleCallRoutesEqualToFooterAndDeliversReplies(t *testing.T) {
 		if ans.CallID != "call-def" || ans.Kind != "design-answer" || !strings.Contains(ans.Text, "Design answer commit:") {
 			t.Fatalf("unexpected design answer reply: %+v", ans)
 		}
+	})
+}
+
+func TestRouteObstaclePlainCommandHoldsForOperator(t *testing.T) {
+	const cmd = "pytest tests/test_api.py"
+	f, l, work := obstacleFixture(t, &obstacleSteps{known: true}, "item-a")
+	settleReport(t, f, l, work, "OBSTACLE: trunk\nCHECKS: "+cmd+"\nBASE: "+work.BaseSHA+"\nRESULT: blocked\n")
+	if d := planFor(t, l, "item-a"); d.Action != ActionHold || d.Reason != ReasonObstacleTrunk {
+		t.Fatalf("expected operator trunk hold, got %+v", d)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		active, _, err := obstacles.Read(r)
+		if err != nil {
+			return err
+		}
+		h, ok := active["item-a"]
+		if !ok {
+			t.Fatalf("missing obstacle hold for item-a")
+		}
+		if h.Kind != ObstacleTrunk || h.Mover != "operator" || !strings.Contains(h.Reason, cmd) {
+			t.Fatalf("hold = %+v, want kind=trunk mover=operator reason~=%q", h, cmd)
+		}
+		return nil
 	})
 }
