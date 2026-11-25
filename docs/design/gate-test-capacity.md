@@ -10,8 +10,8 @@ tags:
   - priority
   - testing
   - design
-summary: "How many test processes tillr runs at once, and who decides. The kernel schedules runnable threads; tillr never samples processor load or estimates load outside itself. One gate's shard ceiling is twice the processor count (built). Four choices are open for the owner: a fixed cross-run ceiling or none, a memory-pressure guard or kernel limits alone, priority among tillr's own process classes, and whether ready gates run at once, in arrival order, or batched."
-next: "The owner rules on OQ-GTC1 through OQ-GTC4 and reviews D-GTC1 through D-GTC4."
+summary: "How many test processes tillr runs at once, and who decides. The kernel schedules runnable threads; tillr never samples processor load or estimates load outside itself. One gate's shard ceiling is twice the processor count (built), and ready candidates keep starting their gates one at a time when ready rather than queueing in arrival order or batching (OQ-GTC4, ruled 2026-11-25). Three choices are open for the owner: a fixed cross-run ceiling or none (OQ-GTC1), a memory-pressure guard or kernel limits alone (OQ-GTC2), and priority among tillr's own process classes (OQ-GTC3)."
+next: "The owner rules on OQ-GTC1 through OQ-GTC3 and reviews D-GTC1 through D-GTC4."
 depends-on:
   - ../reference/gate.md
   - landing-principles.md
@@ -24,13 +24,13 @@ vantage:
 
 # Gate test concurrency, memory pressure, and internal process priority under kernel scheduling
 
-**Status:** The per-gate shard ceiling (`D-GTC4`) and the shim-free `git` environment of `D-GTC3` are in the tree. Nothing else here is built: no cross-run limit is enforced, no memory-pressure guard exists, and no priority is set among tillr's own processes. The owner's rulings are quoted in [Section 1](#1-the-rulings-that-govern-this-design); the designer's decisions (`D-GTC1` to `D-GTC4`) may be overturned by the owner; four policy choices are open in [`OQ-GTC1`](#OQ-GTC1) to [`OQ-GTC4`](#OQ-GTC4).
+**Status:** The per-gate shard ceiling (`D-GTC4`) and the shim-free `git` environment of `D-GTC3` are in the tree, and running each ready gate one at a time when ready is settled ([`OQ-GTC4`](#OQ-GTC4), ruled 2026-11-25). Nothing else here is built: no cross-run limit is enforced, no memory-pressure guard exists, and no priority is set among tillr's own processes. The owner's rulings are quoted in [Section 1](#1-the-rulings-that-govern-this-design) and [the owner's rulings](#the-owners-rulings); the designer's decisions (`D-GTC1` to `D-GTC4`) may be overturned by the owner; three policy choices remain open in [`OQ-GTC1`](#OQ-GTC1) to [`OQ-GTC3`](#OQ-GTC3).
 
-> **In short.** Scheduling runnable threads across processors is the kernel's job, protecting the rest of a machine belongs to the cgroup the workspace runs in, and a test that fails because the machine is busy is a broken test. So tillr builds no user-space processor scheduler. What it may still choose is a fixed ceiling on test processes, a guard on memory pressure, a priority order among its own process classes, and the order in which ready gates start.
+> **In short.** Scheduling runnable threads across processors is the kernel's job, protecting the rest of a machine belongs to the cgroup the workspace runs in, and a test that fails because the machine is busy is a broken test. So tillr builds no user-space processor scheduler, and ready candidates keep starting their gates one at a time as they finish rather than queueing in arrival order or batching ([`OQ-GTC4`](#OQ-GTC4)). What tillr may still choose is a fixed ceiling on test processes, a guard on memory pressure, and a priority order among its own process classes.
 
 - **Start at:** [Section 2](#2-when-gates-run-together) for when gates overlap and why they are not batched, [Section 3](#3-concurrent-test-process-limits-and-memory-pressure) for limits and memory, [Section 4](#4-priority-among-tillrs-own-processes) for priority, and [Section 5](#5-arrival-order-and-batching-against-running-ready-gates-at-once) for the schedule comparison.
-- **Needs your ruling:** [`OQ-GTC1`](#OQ-GTC1), [`OQ-GTC2`](#OQ-GTC2), [`OQ-GTC3`](#OQ-GTC3) and [`OQ-GTC4`](#OQ-GTC4).
-- **Reads with:** [the gate reference](../reference/gate.md), which owns `go-affected`, the detached landing gate and the stall watchdog; [the landing principles](./landing-principles.md), which own the single-candidate verdict and the three-way squash; and [the vocabulary](./tillr-vocabulary.md).
+- **Needs your ruling:** [`OQ-GTC1`](#OQ-GTC1), [`OQ-GTC2`](#OQ-GTC2) and [`OQ-GTC3`](#OQ-GTC3).
+- **Reads with:** [the gate reference](../reference/gate.md), which owns `go-affected`, the detached landing gate and the stall watchdog; [the landing principles](./landing-principles.md), which own the single-candidate verdict and the three-way squash; [the gate batching research record](../research/gate-batching.md), which records the schedule comparison and the 2026-11-25 burst measurement; and [the vocabulary](./tillr-vocabulary.md).
 
 **The measurement the design rests on.** On one 32-processor machine, a Go gate running alone took 5 to 8 minutes. Six Go gates running together beside a trunk proof took 18 to 21 minutes each, at a load average of 130 to 180, with the container's memory pressure at 0.00 and 81 GB free. A later reading of host-wide memory pressure under five or six gates and a proof showed 11% to 15% of time stalled over ten seconds, with no process killed.
 
@@ -38,7 +38,7 @@ vantage:
 
 ## 1. The rulings that govern this design
 
-Five owner rulings bind it (`R-GTC1` to `R-GTC5` in [the owner's rulings](#the-owners-rulings)).
+Six owner rulings bind it (`R-GTC1` to `R-GTC5` and [`OQ-GTC4`](#OQ-GTC4) in [the owner's rulings](#the-owners-rulings)).
 
 1. **No fallbacks (`R-GTC1`).** Whatever the owner picks in the open questions is enforced directly. If a chosen mechanism needs an interface that is missing or unwritable, the runner fails loudly, naming the path, and does not drop to another mode. No dead toggle is left behind.
 2. **Lane count is judged by wasted work (`R-GTC2`).** A priority or ordering rule inside tillr is worth having only if it reduces wasted work, such as a shorter conflict window for a finished candidate or a faster trunk repair.
@@ -49,6 +49,7 @@ Five owner rulings bind it (`R-GTC1` to `R-GTC5` in [the owner's rulings](#the-o
    - a ceiling, if one is kept, is a fixed multiple of `os.cpu_count()`;
    - protecting the rest of the machine belongs to the cgroup limits on the workspace or container, set by its owner outside tillr;
    - a test that assumes a fast machine is defective test code ([`tools/gate/checks/elapsed-time.py`](../../tools/gate/checks/elapsed-time.py) checks changed test files), and is never an argument for a limit.
+6. **Gates are not batched or queued in arrival order ([`OQ-GTC4`](#OQ-GTC4)).** Candidates keep being gated one at a time, each starting when it is ready; they are not combined into one tree and not held to collect a batch (`"ok, so let's not batch. close it with a resaerch report recorded for the future I guess?"`, 2026-11-25; recorded in [the gate batching research record](../research/gate-batching.md)).
 
 ## 2. When gates run together
 
@@ -146,14 +147,14 @@ Two conclusions follow:
 1. **Running all at once clears the batch sooner than arrival order.** A gate alone does not keep every processor busy: selection, compile warm-up, I/O waits and the last long shards leave capacity unused. Serial gates pay those gaps once each; concurrent gates overlap them. Arrival order helps only the first candidate, at the expense of the rest.
 2. **Batching loses on expected time as well as on attribution.** At a 15% failure rate per candidate, a batch of six passes together 38% of the time. A failed batch needs about three more gate rounds to bisect, which is slower than six independent gates run together, and it requires replacing the single-candidate verdict of [Section 2.2](#22-why-gates-are-not-batched).
 
-The choice is [`OQ-GTC4`](#OQ-GTC4).
+**Ruling ([`OQ-GTC4`](#OQ-GTC4), closed 2026-11-25).** Schedule **A** stands (`"ok, so let's not batch. close it with a resaerch report recorded for the future I guess?"`): candidates keep being gated one at a time, each starting when it is ready, neither combined into one tree nor held to collect a batch. The schedule comparison and the 2026-11-25 operating-session measurement are recorded in [the gate batching research record](../research/gate-batching.md).
 
 ## 6. Checked against the landing principles
 
 | Principle | How the design meets it |
 | :--- | :--- |
 | [A refusal must be a verdict](./landing-principles.md#1-a-refusal-must-be-a-verdict); [a gate that cannot answer must say which](./landing-principles.md#8-a-gate-that-cannot-answer-must-say-which) | A chosen mechanism whose file cannot be read or written ends the run as an error naming the path, never as a refusal of the candidate |
-| [Gate what will be the tip, once](./landing-principles.md#3-gate-what-will-be-the-tip-once) | Kept under every option but batching |
+| [Gate what will be the tip, once](./landing-principles.md#3-gate-what-will-be-the-tip-once) | Kept: batching is ruled out ([`OQ-GTC4`](#OQ-GTC4)), and each candidate is gated once on its own diff |
 | [A surface that hides parked work is a false report](./landing-principles.md#7-a-surface-that-hides-parked-work-is-a-false-report) | A weight never parks a process. A semaphore, a pressure guard or a gate queue, if chosen, records its wait time apart from execution time |
 | [A principle cites the measurement that produced it](./landing-principles.md#12-a-principle-cites-the-measurement-that-produced-it) | The measurements are stated at the top and in [Section 3.3](#33-one-gates-shard-ceiling) |
 | [Convict a run on what it did](./landing-principles.md#14-convict-a-run-on-what-it-did-not-on-what-happened-while-it-ran) | A slow run is not a failed run, and one candidate's red check never convicts a sibling |
@@ -206,21 +207,6 @@ The choice is [`OQ-GTC4`](#OQ-GTC4).
    **Answer:**
    > _(empty — fill in when decided)_
 
-4. 💬 **OQ-GTC4: Should ready candidates keep starting their gates at once, run their Go gates in arrival order, or be batched into one combined gate?**
-
-   [Section 5](#5-arrival-order-and-batching-against-running-ready-gates-at-once) compares the three on measured times.
-
-   - **A — Start every ready gate and let the kernel schedule them.** Clears a burst soonest in total, keeps fast gates fast and keeps the single-candidate verdict.
-   - **B — Run Go gates in arrival order, one or two at a time; other gates start at once.** The first candidate of a burst finishes sooner and the last much later, and a cross-gate lock is needed.
-   - **C — Gate waiting candidates as one combined tree, bisecting on failure.** Fastest when every candidate passes; one red candidate stalls the rest, and landing principles 2 and 3 must be amended.
-
-   <!-- vantage: question id=OQ-GTC4 leaning="A — the hold that made gates start together is removed, and even in a burst concurrent gates finish sooner in total than a queue or a bisected batch." -->
-
-   _Leaning:_ A — the hold that made gates start together is removed, and even in a burst concurrent gates finish sooner in total than a queue or a bisected batch.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
-
 ---
 
 ## Decision Ledger
@@ -236,6 +222,7 @@ Two tables, so the owner's words are never presented as the designer's choices.
 | <a id="R-GTC3"></a>`R-GTC3` | **Every unexplained pause is a bug.** "There shouldn't be random pauses, and if there is, that's a bug that you fix." | 2026-11-20 | [Section 1](#1-the-rulings-that-govern-this-design) | — |
 | <a id="R-GTC4"></a>`R-GTC4` | **Budgets are targets, stalls end checks, and load must not fail valid work.** "target budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just fine." | 2026-11-17 | [Section 1](#1-the-rulings-that-govern-this-design) | The stall watchdog, in [the gate reference](../reference/gate.md#budgets-and-the-stall-watchdog) |
 | <a id="R-GTC5"></a>`R-GTC5` | **The kernel schedules runnable threads; no limit is inferred from load.** "What does it mean for a core to be in use? I've never heard of any program scheduling cores and claiming that they're in use and allocating them. […] the whole point of a kernel is to schedule these things." "if that test assumes a fast machine, that test is broken. […] pick something responsible based on the number of processors, like two times the number of processors or something like that, and just do it. Unless we're hitting memory pressure, more of them is not an issue, and I can apply cgroups to workspaces and jails […] I don't want you guessing about external loads. […] But prioritizing within our own machinery, that's something that's potentially useful, if we have a reason to think that that is useful." | 2026-11-24 | [Section 1](#1-the-rulings-that-govern-this-design) | — |
+| <a id="OQ-GTC4"></a>[`OQ-GTC4`](#OQ-GTC4) | **Gates are not batched or queued in arrival order (question closed).** "ok, so let's not batch. close it with a resaerch report recorded for the future I guess?" Candidates keep being gated one at a time, each starting when it is ready; they are not combined into one tree and not held to collect a batch. Recorded for future revisiting in [the gate batching research record](../research/gate-batching.md). | 2026-11-25 | [Section 1](#1-the-rulings-that-govern-this-design), [Section 2.2](#22-why-gates-are-not-batched), [Section 5](#5-arrival-order-and-batching-against-running-ready-gates-at-once) | Yes (current loop behavior; [research record](../research/gate-batching.md)) |
 
 ### The designer's decisions
 
