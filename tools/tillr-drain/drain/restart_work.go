@@ -180,12 +180,6 @@ func (l *Loop) markRestartWaitingOnHold() {
 	l.restartGateMu.Unlock()
 }
 
-func (l *Loop) clearRestartWaitingOnHold() {
-	l.restartGateMu.Lock()
-	l.restartHoldWaiting = false
-	l.restartGateMu.Unlock()
-}
-
 func (l *Loop) isRestartWaitingOnHold() bool {
 	l.restartGateMu.Lock()
 	waiting := l.restartHoldWaiting
@@ -221,7 +215,7 @@ func (l *Loop) armRestartPending(gen uint64) (<-chan struct{}, bool) {
 	if l.restartPendingWait == nil {
 		l.restartPendingWait = make(chan struct{})
 	}
-	if l.restartDefersToSettlement() {
+	if l.restartDefersToSettlement() || l.restartProofActive() {
 		l.restartHoldWaiting = true
 	}
 	return l.restartPendingWait, false
@@ -291,9 +285,9 @@ func (h *restartMechanicalHold) acquireGateStart(ctx context.Context) error {
 		if h.loop.restartReplaced.Load() {
 			return errRestartPending
 		}
-		if h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() && !h.loop.restartProofActive() &&
-			(h.loop.isRestartWaitingOnHold() || h.loop.restartDefersToSettlement()) {
-			if err := h.loop.waitForRestartAnswer(ctx, true); err != nil {
+		if h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() &&
+			(h.loop.restartProofActive() || h.loop.isRestartWaitingOnHold() || h.loop.restartDefersToSettlement()) {
+			if err := h.loop.waitForRestartAnswer(ctx, false); err != nil {
 				return err
 			}
 		}
@@ -302,10 +296,17 @@ func (h *restartMechanicalHold) acquireGateStart(ctx context.Context) error {
 			h.release()
 			return errRestartPending
 		}
-		if h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() && !h.loop.restartProofActive() &&
-			h.loop.isRestartWaitingOnHold() {
-			h.release()
-			continue
+		if h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() {
+			if h.loop.isRestartWaitingOnHold() {
+				h.release()
+				continue
+			}
+			if h.loop.restartProofActive() {
+				if _, waitCh := h.loop.restartWaitState(); waitCh != nil {
+					h.release()
+					continue
+				}
+			}
 		}
 		return nil
 	}
@@ -380,7 +381,7 @@ func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func
 
 // lockRestartGateStart acquires a brief settlement hold to prepare a candidate
 // and start or attach its detached gate. While a pending restart is already
-// waiting on existing holds to drain (outside an active trunk proof or
+// waiting on an active trunk proof or existing holds to drain (outside a
 // post-landing action), new gate starts wait for the restart to be answered so
 // they do not starve exec. Once the gate is running, restartWork releases the
 // hold so a pending restart can replace the loop while the gate runs;

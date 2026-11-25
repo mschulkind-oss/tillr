@@ -504,3 +504,247 @@ func TestPendingRestartNotStarvedByNewGateStarts(t *testing.T) {
 		}
 	})
 }
+
+func TestPendingRestartNotStarvedByNewGateStartsWhileTrunkProofRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		gateRestartFirst bool
+	}{
+		{name: "new_gate_before_gateRestart", gateRestartFirst: false},
+		{name: "gateRestart_before_new_gate", gateRestartFirst: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHarness(t, []byte("next build"), func(context.Context, string) error { return nil })
+			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+			defer cancel()
+
+			// Gate 1 and a trunk proof are already running when the restart is requested.
+			_, releaseGate1, err := h.l.lockRestartGateStart(ctx)
+			if err != nil {
+				t.Fatalf("gate 1 lock: %v", err)
+			}
+			gate1Released := false
+			defer func() {
+				if !gate1Released {
+					releaseGate1()
+				}
+			}()
+
+			h.l.heavyMu.Lock()
+			h.l.heavyProofActive = true
+			h.l.heavyMu.Unlock()
+			proofEnded := false
+			defer func() {
+				if !proofEnded {
+					h.l.heavyMu.Lock()
+					h.l.heavyProofActive = false
+					h.l.heavyMu.Unlock()
+				}
+			}()
+
+			// File a pending restart request while the proof and Gate 1 are active.
+			h.request(t, 1)
+			if tc.gateRestartFirst {
+				if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
+					t.Fatalf("gateRestart while proof and gate 1 active = %v, %q, %v; want deferred", handled, stop, err)
+				}
+			}
+
+			waiting := make(chan struct{}, 6)
+			h.l.restartWaitObs = func() {
+				select {
+				case waiting <- struct{}{}:
+				default:
+				}
+			}
+
+			// Newly ready candidates arrive while the proof and Gate 1 run and must wait
+			// for the restart answer rather than starting gates.
+			const initialArrivals = 2
+			acquired := make(chan int, initialArrivals+3)
+			done := make(chan error, initialArrivals+3)
+			launchCandidate := func(id int) {
+				go func() {
+					_, unlock, err := h.l.lockRestartGateStart(ctx)
+					if err == nil {
+						acquired <- id
+						unlock()
+					}
+					done <- err
+				}()
+			}
+			for i := 0; i < initialArrivals; i++ {
+				launchCandidate(i + 2)
+			}
+			for i := 0; i < initialArrivals; i++ {
+				select {
+				case <-waiting:
+				case id := <-acquired:
+					t.Fatalf("candidate %d acquired restartMechanical while trunk proof ran and restart was pending", id)
+				case err := <-done:
+					t.Fatalf("new gate start returned before restart was answered: %v", err)
+				case <-time.After(hangGuard):
+					t.Fatal("hung waiting for new gate start to block on pending restart while proof ran")
+				}
+			}
+
+			// Gate 1 finishes while the proof is still running; the restart still waits
+			// for the running proof, and another ready candidate still waits too.
+			releaseGate1()
+			gate1Released = true
+			if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
+				t.Fatalf("gateRestart while proof still active = %v, %q, %v; want deferred", handled, stop, err)
+			}
+			launchCandidate(initialArrivals + 2)
+			select {
+			case <-waiting:
+			case id := <-acquired:
+				t.Fatalf("candidate %d acquired restartMechanical after gate 1 finished while proof still ran", id)
+			case err := <-done:
+				t.Fatalf("mid-proof candidate returned before restart was answered: %v", err)
+			case <-time.After(hangGuard):
+				t.Fatal("hung waiting for mid-proof candidate to block on pending restart")
+			}
+
+			// The proof finishes. Even if another candidate becomes ready before
+			// gateRestart runs, it must still wait rather than starting a gate.
+			h.l.heavyMu.Lock()
+			h.l.heavyProofActive = false
+			h.l.heavyMu.Unlock()
+			proofEnded = true
+			launchCandidate(initialArrivals + 3)
+			select {
+			case <-waiting:
+			case id := <-acquired:
+				t.Fatalf("candidate %d acquired restartMechanical after proof ended and before restart", id)
+			case err := <-done:
+				t.Fatalf("post-proof candidate returned before restart was answered: %v", err)
+			case <-time.After(hangGuard):
+				t.Fatal("hung waiting for post-proof candidate to block on pending restart")
+			}
+
+			// Once both the in-flight gate and proof have finished, the restart replaces the loop.
+			if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); !handled || stop != StopRestarted || err != nil {
+				t.Fatalf("gateRestart after gate 1 and proof finished = %v, %q, %v; want replaced", handled, stop, err)
+			}
+			if len(h.execed) == 0 {
+				t.Fatal("replacement did not exec")
+			}
+
+			for i := 0; i < initialArrivals+2; i++ {
+				select {
+				case err := <-done:
+					if !errors.Is(err, errRestartPending) {
+						t.Fatalf("waiting candidate err = %v, want errRestartPending", err)
+					}
+				case <-time.After(hangGuard):
+					t.Fatal("waiting candidate did not unblock after replacement")
+				}
+			}
+			select {
+			case id := <-acquired:
+				t.Fatalf("candidate %d acquired hold despite loop replacement", id)
+			default:
+			}
+		})
+	}
+
+	t.Run("non_replacement_unblocks_waiting_gate_start_after_proof", func(t *testing.T) {
+		h := newRestartHarness(t, nil, func(context.Context, string) error { return nil })
+		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+		defer cancel()
+
+		h.l.heavyMu.Lock()
+		h.l.heavyProofActive = true
+		h.l.heavyMu.Unlock()
+		proofEnded := false
+		defer func() {
+			if !proofEnded {
+				h.l.heavyMu.Lock()
+				h.l.heavyProofActive = false
+				h.l.heavyMu.Unlock()
+			}
+		}()
+
+		req := h.request(t, 1)[0]
+		if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
+			t.Fatalf("gateRestart while proof active = %v, %q, %v; want deferred", handled, stop, err)
+		}
+
+		waiting := make(chan struct{}, 1)
+		h.l.restartWaitObs = func() {
+			select {
+			case waiting <- struct{}{}:
+			default:
+			}
+		}
+
+		gateHeld := make(chan struct{})
+		releaseGate := make(chan struct{})
+		gateDone := make(chan error, 1)
+		go func() {
+			_, unlock, err := h.l.lockRestartGateStart(ctx)
+			if err != nil {
+				gateDone <- err
+				return
+			}
+			close(gateHeld)
+			<-releaseGate
+			unlock()
+			gateDone <- nil
+		}()
+
+		select {
+		case <-waiting:
+		case <-gateHeld:
+			t.Fatal("gate acquired hold before non-replacement restart was answered")
+		case err := <-gateDone:
+			t.Fatalf("gate returned before non-replacement restart was answered: %v", err)
+		case <-time.After(hangGuard):
+			t.Fatal("hung waiting for gate waiting on pending non-replacement restart during proof")
+		}
+
+		h.l.heavyMu.Lock()
+		h.l.heavyProofActive = false
+		h.l.heavyMu.Unlock()
+		proofEnded = true
+
+		if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); !handled || stop != "" || err != nil {
+			t.Fatalf("gateRestart = %v, %q, %v; want handled without replacing", handled, stop, err)
+		}
+		if got := h.answer(t, req.ID).Answer; got != restart.AnswerAlreadyCurrent {
+			t.Fatalf("answer = %q, want %q", got, restart.AnswerAlreadyCurrent)
+		}
+
+		awaitRestartTest(t, gateHeld, "gate acquiring hold after non-replacement answer")
+		close(releaseGate)
+		select {
+		case err := <-gateDone:
+			if err != nil {
+				t.Fatalf("gate err = %v, want nil", err)
+			}
+		case <-time.After(hangGuard):
+			t.Fatal("gate did not finish")
+		}
+	})
+
+	t.Run("new_trunk_proof_waits_for_pending_restart_while_gate_runs", func(t *testing.T) {
+		h := newRestartHarness(t, []byte("next build"), func(context.Context, string) error { return nil })
+		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+		defer cancel()
+
+		_, releaseGate, err := h.l.lockRestartSettlement(ctx)
+		if err != nil {
+			t.Fatalf("gate lock: %v", err)
+		}
+		defer releaseGate()
+
+		h.request(t, 1)
+		if h.l.beginHeavyProof(ctx) {
+			h.l.heavyMu.Lock()
+			h.l.heavyProofActive = false
+			h.l.heavyMu.Unlock()
+			t.Fatal("beginHeavyProof started a new trunk proof while a restart was pending behind a running gate")
+		}
+	})
+}

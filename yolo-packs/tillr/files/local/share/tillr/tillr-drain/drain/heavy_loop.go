@@ -18,8 +18,8 @@ type heavyParentCtxKey struct{}
 
 // startHeavy is a trigger, not a gate on dispatch or a synchronous landing step.
 // The shared flock excludes replacement loops; this mutex coalesces local triggers.
-// A pending loop restart does not hold back a trunk proof: while candidate gates keep
-// the restart waiting, the new tip's proof still starts immediately.
+// A pending loop restart holds back new trunk proofs until the restart is answered
+// so new proofs do not starve exec behind already-running work.
 func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 	if l.isRestartReplaced() {
 		return errRestartPending
@@ -261,17 +261,14 @@ func (l *Loop) restartStopsNextHeavyProof(ctx context.Context) (bool, error) {
 // excluding this short reader, not after waiting for the running proof.
 func (l *Loop) beginHeavyProof(ctx context.Context) bool {
 	if stop, err := l.restartStopsNextHeavyProof(ctx); err != nil || stop {
-		if err != nil {
-			return false
-		}
-		if l.restartMechanical.TryLock() {
-			l.restartMechanical.Unlock()
-			return false
-		}
+		return false
 	}
 	l.restartMechanical.RLock()
 	defer l.restartMechanical.RUnlock()
 	if l.restartReplaced.Load() {
+		return false
+	}
+	if _, waitCh := l.restartWaitState(); waitCh != nil && !l.restartActionDeferred() {
 		return false
 	}
 	l.heavyMu.Lock()

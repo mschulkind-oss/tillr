@@ -226,6 +226,7 @@ func (l *Loop) gateRestartWith(ctx context.Context, result *LoopResult, stopChec
 	// so already-held locks and the active proof drain instead of starving exec.
 	l.markRestartPending()
 	if l.restartProofActive() {
+		l.markRestartWaitingOnHold()
 		return false, "", nil
 	}
 	// Do not queue an exclusive waiter behind another item's gate or landing.
@@ -237,7 +238,7 @@ func (l *Loop) gateRestartWith(ctx context.Context, result *LoopResult, stopChec
 	// A proof may have started between the check above and TryLock. Keep the
 	// pending-restart barrier armed while deferred only by that proof.
 	if l.restartProofActive() && !l.restartActionDeferred() {
-		l.clearRestartWaitingOnHold()
+		l.markRestartWaitingOnHold()
 		l.restartMechanical.Unlock()
 		return false, "", nil
 	}
