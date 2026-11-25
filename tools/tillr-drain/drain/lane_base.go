@@ -1,11 +1,14 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
@@ -21,20 +24,58 @@ const ReasonTrunkUnproved = "trunk-unproved"
 // contain the blocker's recorded landing, even after following known rewrites.
 const ReasonBlockerLandingNotOnTrunk = "blocker-landing-not-on-trunk"
 
-func containsCommit(ctx context.Context, root, ancestor, tip string) (bool, error) {
-	ancestry := func(ctx context.Context, a, t string) (bool, error) {
-		cmd := exec.CommandContext(ctx, "git", "-C", root, "merge-base", "--is-ancestor", a, t)
-		raw, err := cmd.CombinedOutput()
-		if err == nil {
-			return true, nil
-		}
-		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
-			return false, nil
-		}
-		return false, Externalf("checking lane base ancestry: %v: %s", err, raw)
+func checkAncestry(ctx context.Context, root, a, t string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "merge-base", "--is-ancestor", a, t)
+	raw, err := cmd.CombinedOutput()
+	if err == nil {
+		return true, nil
 	}
+	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, Externalf("checking lane base ancestry: %v: %s", err, raw)
+}
+
+func isFullHexSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func notContainedCommits(ctx context.Context, root string, ancestors []string, tip string) (map[string]bool, error) {
+	var stdin strings.Builder
+	stdin.WriteString("--end-of-options\n^")
+	stdin.WriteString(tip)
+	stdin.WriteByte('\n')
+	for _, a := range ancestors {
+		stdin.WriteString(a)
+		stdin.WriteByte('\n')
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "rev-list", "--stdin")
+	cmd.Stdin = strings.NewReader(stdin.String())
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	raw, err := cmd.Output()
+	if err != nil {
+		return nil, Externalf("checking lane base ancestry: %v: %s", err, stderr.Bytes())
+	}
+	missing := make(map[string]bool)
+	for _, sha := range strings.Fields(string(raw)) {
+		missing[sha] = true
+	}
+	return missing, nil
+}
+
+func containsCommit(ctx context.Context, root, ancestor, tip string) (bool, error) {
 	out, err := gather(ctx, gitKey("ancestry", root, []string{"merge-base", "--is-ancestor", ancestor, tip}), func(ctx context.Context) (string, error) {
-		yes, err := ancestry(ctx, ancestor, tip)
+		yes, err := checkAncestry(ctx, root, ancestor, tip)
 		if err != nil {
 			return "", err
 		}
@@ -43,7 +84,7 @@ func containsCommit(ctx context.Context, root, ancestor, tip string) (bool, erro
 			// replaced it (trunk_rewrites); git itself no longer knows the old sha as
 			// ancestry.
 			if a, t := rewriteTranslate(ctx, root, ancestor, tip); a != ancestor || t != tip {
-				if yes, err = ancestry(ctx, a, t); err != nil {
+				if yes, err = checkAncestry(ctx, root, a, t); err != nil {
 					return "", err
 				}
 			}
@@ -54,6 +95,146 @@ func containsCommit(ctx context.Context, root, ancestor, tip string) (bool, erro
 		return "no", nil
 	})
 	return out == "yes", err
+}
+
+// containsCommits answers, for each commit in ancestors, whether tip contains it
+// (directly or via a recorded trunk rewrite). Multiple full-SHA commits for the same
+// tip are checked with one git process rather than one per commit.
+func containsCommits(ctx context.Context, root string, ancestors []string, tip string) (map[string]bool, error) {
+	result := make(map[string]bool, len(ancestors))
+	if len(ancestors) == 0 {
+		return result, nil
+	}
+	var fullSHAs, other []string
+	seen := make(map[string]bool, len(ancestors))
+	for _, a := range ancestors {
+		if seen[a] {
+			continue
+		}
+		seen[a] = true
+		if isFullHexSHA(a) {
+			fullSHAs = append(fullSHAs, a)
+		} else {
+			other = append(other, a)
+		}
+	}
+	slices.Sort(other)
+	for _, a := range other {
+		ok, err := containsCommit(ctx, root, a, tip)
+		if err != nil {
+			return nil, err
+		}
+		result[a] = ok
+	}
+	if len(fullSHAs) == 0 {
+		return result, nil
+	}
+	if len(fullSHAs) == 1 {
+		ok, err := containsCommit(ctx, root, fullSHAs[0], tip)
+		if err != nil {
+			return nil, err
+		}
+		result[fullSHAs[0]] = ok
+		return result, nil
+	}
+	slices.Sort(fullSHAs)
+	fullSet := make(map[string]bool, len(fullSHAs))
+	for _, a := range fullSHAs {
+		fullSet[a] = true
+	}
+	keyArgs := make([]string, 0, len(fullSHAs)+2)
+	keyArgs = append(keyArgs, "rev-list", "^"+tip)
+	keyArgs = append(keyArgs, fullSHAs...)
+	out, err := gather(ctx, gitKey("ancestry-batch", root, keyArgs), func(ctx context.Context) (string, error) {
+		origMissing, err := notContainedCommits(ctx, root, fullSHAs, tip)
+		if err != nil {
+			return "", err
+		}
+		stillMissing := make(map[string]bool)
+		type translatedCheck struct {
+			orig string
+			a    string
+		}
+		byTip := map[string][]translatedCheck{}
+		for _, a := range fullSHAs {
+			if !origMissing[a] {
+				continue
+			}
+			stillMissing[a] = true
+			// A commit the trunk's rewrite replaced is contained as the commit that
+			// replaced it (trunk_rewrites); git itself no longer knows the old sha as
+			// ancestry.
+			if ta, tt := rewriteTranslate(ctx, root, a, tip); ta != a || tt != tip {
+				if tt == tip && fullSet[ta] {
+					if !origMissing[ta] {
+						delete(stillMissing, a)
+					}
+					continue
+				}
+				byTip[tt] = append(byTip[tt], translatedCheck{orig: a, a: ta})
+			}
+		}
+		for _, tt := range slices.Sorted(maps.Keys(byTip)) {
+			checks := byTip[tt]
+			var tFull, tOther []string
+			tSeen := make(map[string]bool, len(checks))
+			for _, c := range checks {
+				if tSeen[c.a] {
+					continue
+				}
+				tSeen[c.a] = true
+				if isFullHexSHA(c.a) {
+					tFull = append(tFull, c.a)
+				} else {
+					tOther = append(tOther, c.a)
+				}
+			}
+			var tMissing map[string]bool
+			if len(tFull) > 0 {
+				tMissing, err = notContainedCommits(ctx, root, tFull, tt)
+				if err != nil {
+					return "", err
+				}
+			}
+			otherContained := map[string]bool{}
+			for _, a := range tOther {
+				ok, err := checkAncestry(ctx, root, a, tt)
+				if err != nil {
+					return "", err
+				}
+				otherContained[a] = ok
+			}
+			for _, c := range checks {
+				var ok bool
+				if isFullHexSHA(c.a) {
+					ok = !tMissing[c.a]
+				} else {
+					ok = otherContained[c.a]
+				}
+				if ok {
+					delete(stillMissing, c.orig)
+				}
+			}
+		}
+		var uncontained []string
+		for _, a := range fullSHAs {
+			if stillMissing[a] {
+				uncontained = append(uncontained, a)
+			}
+		}
+		return strings.Join(uncontained, "\n"), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	uncontained := make(map[string]bool)
+	for _, sha := range strings.Fields(out) {
+		uncontained[sha] = true
+	}
+	for _, a := range fullSHAs {
+		result[a] = !uncontained[a]
+	}
+	return result, nil
 }
 
 // gitKey names one git command in one checkout, the key gathered I/O is answered by. The
@@ -158,6 +339,62 @@ func unprovedBlockersFromCommits(ctx context.Context, root, green, tip string, s
 	if green == "" {
 		return waits, nil
 	}
+	byTarget := map[string][]string{}
+	seenTargetSHA := map[string]map[string]bool{}
+	seenBlocker := map[string]bool{}
+	for id, blockers := range edges {
+		if IsTrunkFixer(id) {
+			continue
+		}
+		for _, blocker := range blockers {
+			if states[blocker] != StateLanded || seenBlocker[blocker] {
+				continue
+			}
+			seenBlocker[blocker] = true
+			landing := commits[blocker]
+			if landing.sha == "" {
+				continue
+			}
+			// A fork landing delivers an already judged commit to its patch
+			// branch, not to main. Its recorded trunk_after must be retained
+			// by that delivery branch; main's green pointer cannot contain it.
+			target := green
+			if strings.HasPrefix(landing.ref, "refs/heads/patch/") {
+				target = landing.ref
+			}
+			if seenTargetSHA[target] == nil {
+				seenTargetSHA[target] = map[string]bool{}
+			}
+			if !seenTargetSHA[target][landing.sha] {
+				seenTargetSHA[target][landing.sha] = true
+				byTarget[target] = append(byTarget[target], landing.sha)
+			}
+		}
+	}
+	containedByTarget := make(map[string]map[string]bool, len(byTarget))
+	for _, target := range slices.Sorted(maps.Keys(byTarget)) {
+		contained, err := containsCommits(ctx, root, byTarget[target], target)
+		if err != nil {
+			return nil, err
+		}
+		containedByTarget[target] = contained
+	}
+	var onTrunk map[string]bool
+	if tip != "" && tip != green {
+		var unprovedGreen []string
+		for _, sha := range byTarget[green] {
+			if !containedByTarget[green][sha] {
+				unprovedGreen = append(unprovedGreen, sha)
+			}
+		}
+		if len(unprovedGreen) > 0 {
+			var err error
+			onTrunk, err = containsCommits(ctx, root, unprovedGreen, tip)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	reasons := map[string]string{}
 	for id, blockers := range edges {
 		if IsTrunkFixer(id) {
@@ -172,30 +409,14 @@ func unprovedBlockersFromCommits(ctx context.Context, root, green, tip string, s
 				reason = ReasonTrunkUnproved
 				landing := commits[blocker]
 				if landing.sha != "" {
-					// A fork landing delivers an already judged commit to its patch
-					// branch, not to main. Its recorded trunk_after must be retained
-					// by that delivery branch; main's green pointer cannot contain it.
 					target := green
 					if strings.HasPrefix(landing.ref, "refs/heads/patch/") {
 						target = landing.ref
 					}
-					ok, err := containsCommit(ctx, root, landing.sha, target)
-					if err != nil {
-						return nil, err
-					}
-					if ok {
+					if containedByTarget[target][landing.sha] {
 						reason = ""
-					} else if tip != "" && target == green {
-						onTrunk := false
-						if tip != green {
-							onTrunk, err = containsCommit(ctx, root, landing.sha, tip)
-							if err != nil {
-								return nil, err
-							}
-						}
-						if !onTrunk {
-							reason = fmt.Sprintf("%s: %s at %s", ReasonBlockerLandingNotOnTrunk, blocker, landing.sha)
-						}
+					} else if tip != "" && target == green && !onTrunk[landing.sha] {
+						reason = fmt.Sprintf("%s: %s at %s", ReasonBlockerLandingNotOnTrunk, blocker, landing.sha)
 					}
 				}
 				reasons[blocker] = reason

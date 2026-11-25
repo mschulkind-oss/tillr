@@ -3,7 +3,9 @@ package drain
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -503,4 +505,237 @@ func TestLaneBaseUnprovedBriefWarning(t *testing.T) {
 			t.Fatalf("call-suspends brief unexpectedly mentions Report shape:\n%s", brief)
 		}
 	})
+}
+
+func wrapGitLog(t *testing.T) (logPath string) {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	logPath = filepath.Join(dir, "git.log")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %q\nexec %q \"$@\"\n", logPath, realGit)
+	bin := filepath.Join(dir, "git")
+	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}
+
+func readGitLog(t *testing.T, logPath string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(logPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func TestUnprovedBlockersUsesOneGitProcessPerTip(t *testing.T) {
+	f, l := passFixture(t,
+		"proved-1", "proved-2", "proved-3", "proved-4", "proved-5",
+		"unproved-1", "unproved-2", "missing-1",
+		"dep-proved-1", "dep-proved-2", "dep-proved-3", "dep-proved-4", "dep-proved-5",
+		"dep-unproved-1", "dep-unproved-2", "dep-missing-1",
+	)
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	provedSHAs := make([]string, 5)
+	for i := range provedSHAs {
+		runGit(t, f.root, "commit", "--allow-empty", "-qm", fmt.Sprintf("proved %d", i+1))
+		provedSHAs[i] = runGit(t, f.root, "rev-parse", TrunkRef)
+	}
+	green := provedSHAs[len(provedSHAs)-1]
+	runGit(t, f.root, "update-ref", GreenRef, green)
+
+	unprovedSHAs := make([]string, 2)
+	for i := range unprovedSHAs {
+		runGit(t, f.root, "commit", "--allow-empty", "-qm", fmt.Sprintf("unproved %d", i+1))
+		unprovedSHAs[i] = runGit(t, f.root, "rev-parse", TrunkRef)
+	}
+	tip := unprovedSHAs[len(unprovedSHAs)-1]
+
+	// Create a detached commit not on trunk.
+	runGit(t, f.root, "checkout", "-qb", "side-history", base)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "not on trunk")
+	missingSHA := runGit(t, f.root, "rev-parse", "HEAD")
+	runGit(t, f.root, "checkout", "-q", TrunkRef)
+
+	states := map[string]string{
+		"proved-1": StateLanded, "proved-2": StateLanded, "proved-3": StateLanded, "proved-4": StateLanded, "proved-5": StateLanded,
+		"unproved-1": StateLanded, "unproved-2": StateLanded, "missing-1": StateLanded,
+	}
+	edges := map[string][]string{
+		"dep-proved-1": {"proved-1"}, "dep-proved-2": {"proved-2"}, "dep-proved-3": {"proved-3"},
+		"dep-proved-4": {"proved-4"}, "dep-proved-5": {"proved-5"},
+		"dep-unproved-1": {"unproved-1"}, "dep-unproved-2": {"unproved-2"},
+		"dep-missing-1": {"missing-1"},
+	}
+	commits := map[string]landedBlockerCommit{
+		"proved-1":   {sha: provedSHAs[0]},
+		"proved-2":   {sha: provedSHAs[1]},
+		"proved-3":   {sha: provedSHAs[2]},
+		"proved-4":   {sha: provedSHAs[3]},
+		"proved-5":   {sha: provedSHAs[4]},
+		"unproved-1": {sha: unprovedSHAs[0]},
+		"unproved-2": {sha: unprovedSHAs[1]},
+		"missing-1":  {sha: missingSHA},
+	}
+
+	logPath := wrapGitLog(t)
+	waits, err := unprovedBlockersFromCommits(context.Background(), f.root, green, tip, states, edges, commits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 5; i++ {
+		id := fmt.Sprintf("dep-proved-%d", i)
+		if got := waits[id]; got != "" {
+			t.Errorf("%s: got wait %q, want empty", id, got)
+		}
+	}
+	for i := 1; i <= 2; i++ {
+		id := fmt.Sprintf("dep-unproved-%d", i)
+		if got := waits[id]; got != ReasonTrunkUnproved {
+			t.Errorf("%s: got wait %q, want %q", id, got, ReasonTrunkUnproved)
+		}
+	}
+	wantMissing := fmt.Sprintf("%s: missing-1 at %s", ReasonBlockerLandingNotOnTrunk, missingSHA)
+	if got := waits["dep-missing-1"]; got != wantMissing {
+		t.Errorf("dep-missing-1: got wait %q, want %q", got, wantMissing)
+	}
+
+	lines := readGitLog(t, logPath)
+	// Expect one git process for green and one for tip (2 total), not one per blocker (11).
+	if len(lines) != 2 {
+		t.Fatalf("git invocations = %d, want 2 (one per tip):\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	_ = l
+}
+
+func TestUnprovedBlockersBatchHonorsRewriteTranslate(t *testing.T) {
+	f, l := passFixture(t, "direct", "rewritten-proved", "rewritten-unproved", "unmapped",
+		"dep-direct", "dep-rewritten-proved", "dep-rewritten-unproved", "dep-unmapped")
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+
+	// Old history that gets rewritten.
+	runGit(t, f.root, "checkout", "-qb", "old-history", base)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "old proved")
+	oldProved := runGit(t, f.root, "rev-parse", "HEAD")
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "old unproved")
+	oldUnproved := runGit(t, f.root, "rev-parse", "HEAD")
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "unmapped lost")
+	unmapped := runGit(t, f.root, "rev-parse", "HEAD")
+
+	// New trunk history.
+	runGit(t, f.root, "checkout", "-q", TrunkRef)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "direct proved")
+	directProved := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "replacement proved")
+	newProved := runGit(t, f.root, "rev-parse", TrunkRef)
+	green := newProved
+	runGit(t, f.root, "update-ref", GreenRef, green)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "replacement unproved")
+	newUnproved := runGit(t, f.root, "rev-parse", TrunkRef)
+	tip := newUnproved
+
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		now := l.cfg.Now().Format(time.RFC3339)
+		if _, err := tx.Exec(`INSERT INTO trunk_rewrites(old_sha,new_sha,recorded_at) VALUES(?,?,?)`, oldProved, newProved, now); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO trunk_rewrites(old_sha,new_sha,recorded_at) VALUES(?,?,?)`, oldUnproved, newUnproved, now)
+		return err
+	})
+	registerRewriteStore(f.root, l.cfg.Store)
+
+	states := map[string]string{
+		"direct":             StateLanded,
+		"rewritten-proved":   StateLanded,
+		"rewritten-unproved": StateLanded,
+		"unmapped":           StateLanded,
+	}
+	edges := map[string][]string{
+		"dep-direct":             {"direct"},
+		"dep-rewritten-proved":   {"rewritten-proved"},
+		"dep-rewritten-unproved": {"rewritten-unproved"},
+		"dep-unmapped":           {"unmapped"},
+	}
+	commits := map[string]landedBlockerCommit{
+		"direct":             {sha: directProved},
+		"rewritten-proved":   {sha: oldProved},
+		"rewritten-unproved": {sha: oldUnproved},
+		"unmapped":           {sha: unmapped},
+	}
+
+	waits, err := unprovedBlockersFromCommits(context.Background(), f.root, green, tip, states, edges, commits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waits["dep-direct"]; got != "" {
+		t.Errorf("dep-direct: got %q, want empty", got)
+	}
+	if got := waits["dep-rewritten-proved"]; got != "" {
+		t.Errorf("dep-rewritten-proved: got %q, want empty", got)
+	}
+	if got := waits["dep-rewritten-unproved"]; got != ReasonTrunkUnproved {
+		t.Errorf("dep-rewritten-unproved: got %q, want %q", got, ReasonTrunkUnproved)
+	}
+	wantUnmapped := fmt.Sprintf("%s: unmapped at %s", ReasonBlockerLandingNotOnTrunk, unmapped)
+	if got := waits["dep-unmapped"]; got != wantUnmapped {
+		t.Errorf("dep-unmapped: got %q, want %q", got, wantUnmapped)
+	}
+}
+
+func TestUnprovedBlockersBatchWorksWithGather(t *testing.T) {
+	f, _ := passFixture(t, "b1", "b2", "b3", "dep")
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "b1")
+	s1 := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "b2")
+	s2 := runGit(t, f.root, "rev-parse", TrunkRef)
+	green := s2
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "b3")
+	s3 := runGit(t, f.root, "rev-parse", TrunkRef)
+
+	states := map[string]string{"b1": StateLanded, "b2": StateLanded, "b3": StateLanded}
+	edges := map[string][]string{"dep": {"b1", "b2", "b3"}}
+	commits := map[string]landedBlockerCommit{"b1": {sha: s1}, "b2": {sha: s2}, "b3": {sha: s3}}
+
+	s := gatheredStore(t)
+	logPath := wrapGitLog(t)
+
+	// Read phase gathers once; write phase reuses the gathered batch with zero git processes.
+	gctx, facts := gatheringFor(context.Background())
+	waits, err := unprovedBlockersFromCommits(gctx, f.root, green, "", states, edges, commits)
+	if err != nil || waits["dep"] != ReasonTrunkUnproved {
+		t.Fatalf("read phase: waits=%v err=%v", waits, err)
+	}
+	if got := len(readGitLog(t, logPath)); got != 1 {
+		t.Fatalf("read phase git invocations = %d, want 1", got)
+	}
+	err = writeGatheredFrom(context.Background(), s, facts, func(ctx context.Context, _ *store.Tx) error {
+		w, err := unprovedBlockersFromCommits(ctx, f.root, green, "", states, edges, commits)
+		if err != nil {
+			return err
+		}
+		if w["dep"] != ReasonTrunkUnproved {
+			t.Fatalf("write phase: waits=%v", w)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(readGitLog(t, logPath)); got != 1 {
+		t.Fatalf("after writeGatheredFrom git invocations = %d, want 1", got)
+	}
 }
