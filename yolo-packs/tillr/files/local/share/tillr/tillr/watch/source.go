@@ -66,6 +66,10 @@ type subjectFacts interface {
 	forSubject(subject string) (lookup func(projectionOperand) any, inScope bool, err error)
 }
 
+type observationFacts interface {
+	forObservation(subject string, eventLookup func(string) any) (lookup func(projectionOperand) any, inScope bool, err error)
+}
+
 type ruleScopePreparer interface {
 	prepareRule(ctx context.Context, r Rule, g gitSnapshot) (facts subjectFacts, outOfScope string, unsupported string, err error)
 }

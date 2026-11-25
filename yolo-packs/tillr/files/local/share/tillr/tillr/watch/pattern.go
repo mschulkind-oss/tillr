@@ -535,7 +535,7 @@ func observeCompositeRecord(
 	}
 	if len(tuple) == n {
 		subject := encodeCompositeSubject(tuple)
-		projection, inScope, err := facts.forSubject(subject)
+		projection, inScope, err := lookupSubjectFacts(facts, subject, lookup)
 		if err != nil {
 			return err
 		}
@@ -596,7 +596,7 @@ func observeRecord(
 			return nil
 		}
 	}
-	projection, inScope, err := facts.forSubject(subject)
+	projection, inScope, err := lookupSubjectFacts(facts, subject, lookup)
 	if err != nil {
 		return err
 	}
@@ -611,6 +611,13 @@ func observeRecord(
 	obs := toBundleObs(rec, r.When.Fingerprint)
 	c.observe(r.When, obs, expressionValues{event: lookup, projection: projection, nowMillis: nowMillis})
 	return nil
+}
+
+func lookupSubjectFacts(facts subjectFacts, subject string, eventLookup func(string) any) (func(projectionOperand) any, bool, error) {
+	if obsFacts, ok := facts.(observationFacts); ok {
+		return obsFacts.forObservation(subject, eventLookup)
+	}
+	return facts.forSubject(subject)
 }
 
 func deriveCached(r Rule, now time.Time, facts subjectFacts, cache *evalCache, firstLoadedSeq int64, activeSubjects activeCompositeFunc) (map[string]*condition, int, error) {

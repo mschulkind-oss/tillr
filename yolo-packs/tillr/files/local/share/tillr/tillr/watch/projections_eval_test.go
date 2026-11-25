@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -332,4 +333,64 @@ func TestWatchItemAbsentVersusUnreadable(t *testing.T) {
 		t.Fatalf("results %+v: %v", got, err)
 	}
 	check()
+}
+
+func TestWatchItemLookupFallsBackToEventItemID(t *testing.T) {
+	register(t, "watch-test.fact")
+	ctx := context.Background()
+	s := watchStore(t)
+	now := time.Unix(1700000000, 0)
+	watchSQL(t, s, `CREATE TABLE items(item_id TEXT PRIMARY KEY,state TEXT,seat TEXT,waiting_on TEXT)`)
+	watchSQL(t, s, `INSERT INTO items VALUES ('item-open','in-queue',NULL,NULL), ('item-closed','closed',NULL,NULL)`)
+	doc := `[[rule]]
+id = "run-item-state"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["watch-test.fact"]
+projections = ["items"]
+[rule.when]
+group_by = "object_id"
+pattern = "predicate_match"
+match = 'event.kind == "watch-test.fact"'
+clear_when = 'item.state == "closed"'
+[rule.guidance]
+summary = "run {{subject}}"
+check = ["check"]
+do = ["do"]
+[rule.delivery]
+receiver = "foreground"
+`
+	e := Evaluator{Store: s, Rules: watchRules(t, doc), Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ runID, itemID string }{
+		{"run-1", "item-open"},
+		{"run-2", "item-closed"},
+	} {
+		runID := tc.runID
+		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{
+				Kind:       "watch-test.fact",
+				ObjectType: "run",
+				ObjectID:   &runID,
+				At:         now,
+				Payload:    []byte(fmt.Sprintf(`{"item_id":%q,"run_id":%q}`, tc.itemID, tc.runID)),
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := e.EvaluateRules(ctx); err != nil || len(got) != 1 || got[0].Diagnostic() != "" {
+		t.Fatalf("results %+v: %v", got, err)
+	}
+	notices, err := e.Pending(ctx, "foreground")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notices) != 1 || notices[0].Bundle.Subject != "run-1" {
+		t.Fatalf("want only run-1 (item-open), got %+v", notices)
+	}
 }

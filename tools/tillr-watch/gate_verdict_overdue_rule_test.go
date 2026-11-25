@@ -247,6 +247,46 @@ func TestGateVerdictOverdueRule(t *testing.T) {
 		}
 	})
 
+	t.Run("run whose item is closed, landed, or resolved elsewhere does not fire", func(t *testing.T) {
+		ctx, st, now, pending := newHarness(t, []watch.Rule{rule}, t0)
+
+		setItemState := func(itemID, state string) {
+			t.Helper()
+			if err := st.WriteTx(ctx, func(tx *store.Tx) error {
+				_, err := tx.Exec(
+					`INSERT INTO items (item_id, title, state, updated_at) VALUES (?, ?, ?, ?)
+					 ON CONFLICT(item_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`,
+					itemID, itemID, state, now.UnixMilli(),
+				)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		setItemState("item-closed", "closed")
+		setItemState("item-landed", "landed")
+		setItemState("item-resolved", "resolved-elsewhere")
+		setItemState("item-open", "in-queue")
+
+		appendGateStarted(ctx, t, st, "run-closed-1", "item-closed", "lane-1", "eeee1111", t0)
+		appendGateStarted(ctx, t, st, "run-landed-1", "item-landed", "lane-2", "eeee2222", t0)
+		appendGateStarted(ctx, t, st, "run-resolved-1", "item-resolved", "lane-3", "eeee3333", t0)
+		appendGateStarted(ctx, t, st, "run-open-1", "item-open", "lane-4", "eeee4444", t0)
+
+		*now = t0.Add(4 * time.Hour)
+		opened := pending()
+		if len(opened) != 1 || opened[0].Bundle.Subject != "run-open-1" {
+			t.Fatalf("want only open item run-open-1 to fire (closed/landed/resolved-elsewhere must not match), got %+v", opened)
+		}
+
+		// Closing the open item later resolves its already-open episode.
+		setItemState("item-open", "closed")
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("closing item-open should resolve %s for run-open-1, got %+v", ruleID, notices)
+		}
+	})
+
 	t.Run("across all config rules on 88m gate with no verdict", func(t *testing.T) {
 		ctx := context.Background()
 		root := t.TempDir()

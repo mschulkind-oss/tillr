@@ -400,6 +400,10 @@ func (p *storeFacts) forRule(r Rule, g gitSnapshot) (facts tillrRuleFacts, outOf
 }
 
 func (p tillrRuleFacts) forSubject(subject string) (lookup func(projectionOperand) any, inScope bool, err error) {
+	return p.forObservation(subject, nil)
+}
+
+func (p tillrRuleFacts) forObservation(subject string, eventLookup func(string) any) (lookup func(projectionOperand) any, inScope bool, err error) {
 	if p.workflow != "" {
 		workflow, err := p.store.workflow(subject)
 		if err != nil {
@@ -414,6 +418,14 @@ func (p tillrRuleFacts) forSubject(subject string) (lookup func(projectionOperan
 		item, err = p.store.item(subject)
 		if err != nil {
 			return nil, false, unreadableProjection{"items", err}
+		}
+		if !item.state.Valid && !item.seat.Valid && !item.waitingOn.Valid && eventLookup != nil {
+			if itemID, ok := eventLookup("item_id").(string); ok && itemID != "" && itemID != subject {
+				item, err = p.store.item(itemID)
+				if err != nil {
+					return nil, false, unreadableProjection{"items", err}
+				}
+			}
 		}
 	}
 	return func(op projectionOperand) any {

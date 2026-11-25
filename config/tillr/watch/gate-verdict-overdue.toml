@@ -9,7 +9,9 @@
 # fail or stalled.
 #
 # Alert when a gate.started event has no gate.verdict for the same run
-# (object_id) after 3,650 s; no automatic remedy is attached.
+# (object_id) after 3,650 s and the run's item is not closed, landed, or
+# resolved elsewhere (items and charter projections); no automatic remedy is
+# attached.
 [[rule]]
 id = "gate-verdict-overdue"
 scope = "core"
@@ -17,12 +19,14 @@ severity = "warning"
 
 [rule.reads]
 events = ["gate.started", "gate.verdict"]
+projections = ["items", "charter"]
 
 [rule.when]
 group_by = "object_id"
 pattern = "duration_without_event"
 after = 'event.kind == "gate.started"'
 match = 'event.kind == "gate.verdict"'
+clear_when = 'item.state == charter.closed or item.state in charter.finished'
 threshold_duration = "3650s"
 window = "24h"
 
