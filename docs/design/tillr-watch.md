@@ -7,7 +7,7 @@ stage: DECIDED
 stage-since: 2026-11-24
 tags: [tillr, watch, alerting, lint, workflows, charter, foreground]
 summary: "Standing rules, kept as data, that read the tillr store and open one alert per condition for the agent in the foreground; an alert never fails, benches or caps work."
-next: "Build agent watches, the subscribe stream, the outcome record, the five designed rules in Sections 5.14 to 5.18, and the session-relaunch provenance in Section 5.19; the owner reviews the designer decisions in the ledger."
+next: "Build the shipped-versus-repository rule split in Section 10, agent watches, the subscribe stream, the outcome record, the five designed rules in Sections 5.14 to 5.18, and the session-relaunch provenance in Section 5.19; the owner reviews the designer decisions in the ledger."
 related:
   - ./landing-principles.md
   - ../reference/run-wall-ruling.md
@@ -24,10 +24,14 @@ vantage:
 
 # Agent Alerting and Process Watchdog (`tillr-watch`)
 
-**Status:** every question is ruled; the engine, the command line, the linter and 36 rules are
-built; agent watches, the subscribe stream, five designed rules and the session-relaunch provenance
-on `drain-unrequested-start` ([Section 5.19](#519-session-relaunch-provenance-on-drain-unrequested-start-d-tw82))
-are not. The Built column of the [decision ledger](#9-decision-ledger) says which is which.
+**Status:** every question in [Section 8](#8-open-questions) is ruled; the engine, the command
+line, the linter and 36 rules are built; the shipped-versus-repository rule split
+([Section 4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87),
+[Section 10](#10-build-slices-for-shipped-and-repository-watch-rules)), agent watches, the
+subscribe stream, five designed rules and the session-relaunch provenance on
+`drain-unrequested-start`
+([Section 5.19](#519-session-relaunch-provenance-on-drain-unrequested-start-d-tw82)) are not. The
+Built column of the [decision ledger](#9-decision-ledger) says which is which.
 
 > **In short:** `tillr-watch` reads the tillr store, judges it against standing rules written as
 > TOML, and keeps one alert per condition until the condition ends. It tells the foreground agent
@@ -46,10 +50,14 @@ episode tables and the `watch.alert.*` events.
 
 **Start at:** [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) for what a rule is,
 [Section 6.1](#61-one-record-per-condition-never-per-pass-the-alert-episode-state-machine-d-tw5)
-for what an alert is, and [Section 5.3](#53-the-rules-shipped-under-configtillrwatch) for the rules
-that exist.
+for what an alert is, [Section 4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87)
+for how `tillr` ships its own rules and merges a consumer's, and
+[Section 5.3](#53-which-rules-belong-to-tillr-and-which-stay-with-a-repository-d-tw83) for the
+sorted rule catalog.
 
-**Needs your ruling:** nothing. [Section 8](#8-open-questions) is empty.
+**Needs your ruling:** nothing in [Section 8](#8-open-questions); the designer's decisions in the
+[decision ledger](#9-decision-ledger) — including [D-TW83](#D-TW83) to [D-TW88](#D-TW88) on shipped
+versus repository watch rules — have no owner ruling on the mechanism and may be overturned.
 
 **Reads with:** [`tillr-state-machines.md`](./tillr-state-machines.md) (prevention),
 [`tillr-watch-alert-workflow.md`](./tillr-watch-alert-workflow.md) and
@@ -193,13 +201,134 @@ accepts both blocks ([D-TW56](#D-TW56)):
 }
 ```
 
+### 4.3 Shipped rules, pack delivery, and repository overrides ([D-TW83](#D-TW83) to [D-TW87](#D-TW87))
+
+On 2026-11-24, this repository and a consumer repository getting its programs from
+[`yolo-packs/tillr`](../../yolo-packs/tillr) each carried a copy of the same 33 `.toml` files under
+`config/tillr/watch/`. The boundary from the 2026-11-25 request is that rules describing the
+drain's own behavior belong to `tillr`, while rules about one repository's own content stay with
+that repository. Every choice of classification, delivery, override syntax, runtime resolution, lint
+merging and build order here and in
+[Section 5.3](#53-which-rules-belong-to-tillr-and-which-stay-with-a-repository-d-tw83),
+[Section 7.2](#72-tillr-watch-lint-checking-a-workflows-whole-configuration-before-it-runs-d-tw10)
+and [Section 10](#10-build-slices-for-shipped-and-repository-watch-rules) is **the designer's
+decision**: the owner has not ruled on the mechanism and may overturn any part of it.
+
+#### How the pack delivers shipped rules ([D-TW84](#D-TW84))
+
+1. **Canonical location in `tillr`.** The 32 `tillr`-owned files (35 rules;
+   [Section 5.3](#53-which-rules-belong-to-tillr-and-which-stay-with-a-repository-d-tw83)) move
+   from `config/tillr/watch/` to `tools/tillr-watch/rules/*.toml`. Putting them in
+   `tools/tillr-watch` rather than `tools/tillr/watch` keeps `tools/tillr` free of sibling-module
+   imports ([`boundaries_test.go`](../../tools/tillr-watch/boundaries_test.go)) while placing the
+   files beside `tools/tillr-watch`'s event registrations and `*_rule_test.go` suite.
+2. **Pack mirror and install.** `just pack-sync`
+   ([`pack-mirror.py`](../../tools/tillr-drain/drain/pack-mirror.py)) already mirrors every tracked
+   file under `tools/tillr-watch` into `yolo-packs/tillr/files/local/share/tillr/tillr-watch/`,
+   which `yolo host apply` installs to `$HOME/.local/share/tillr/tillr-watch/rules/*.toml`
+   (`$TILLR_INSTALL_ROOT/tillr-watch/rules/*.toml`). A consumer repository carries none of those
+   files in its own tree, while operators and agents can still read the plain `.toml` files under
+   `$TILLR_INSTALL_ROOT/tillr-watch/rules/`.
+3. **Compile-time embedding and launcher stamp.** `tools/tillr-watch` embeds `rules/*.toml` with
+   `//go:embed rules/*.toml` (the same pattern [`definition.go`](../../tools/tillr/definition/definition.go)
+   uses for `landing.json`), and `list_inputs()` in the pack launcher template
+   ([`yolo-packs/tillr/programs/tillr-watch/run`](../../yolo-packs/tillr/programs/tillr-watch/run)
+   and sibling `run` scripts checked by [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py))
+   hashes `*.toml` and `*.json` alongside `*.go`, `go.mod` and `go.sum`. Editing a shipped rule
+   invalidates only `tillr-watch`'s build stamp in the pack cache, and standalone binaries built by
+   `just tillr-build` or `tillr-roll` (which compile in a temporary clone removed on exit and run
+   without `TILLR_INSTALL_ROOT`) still carry the exact rule set of their commit.
+
+#### How a consumer adds or overrides a rule ([D-TW85](#D-TW85))
+
+A repository keeps its own tracked watch configuration under `<root>/config/tillr/watch/*.toml`.
+That directory is optional: a consumer with no repository-specific rules or threshold changes has
+no `config/tillr/watch/` directory. Within `<root>/config/tillr/watch/*.toml`, three tracked forms
+are supported:
+
+| Need | What the consumer writes in `config/tillr/watch/*.toml` | Effect |
+| :--- | :--- | :--- |
+| Add a repository-owned rule | `[[rule]]` with an `id` not in the shipped set | Validated as a complete rule and added (`source=file`). |
+| Tune or disable a shipped rule without copying it | `[[override]]` naming a shipped `id` plus only the leaf keys to change (`enabled`, `scope`, `severity`, `[override.reads]`, `[override.when]`, `[override.guidance]`, `[override.delivery]`) | Clones the shipped rule's TOML table, overlays the given leaf keys (the same operation `tillr watch rule tune --set` runs in [`rule_store.go`](../../tools/tillr/watch/rule_store.go)), and validates the merged rule (`source=file`). Unmentioned fields inherit future pack updates. |
+| Replace a shipped rule wholesale | `[[rule]]` with the same `id` as a shipped rule | Replaces the shipped rule's table in full (`source=file`). Used when changing `when.pattern` so old pattern-specific keys do not survive, and keeps rolling upgrades clean while a consumer still carries unmodified copies of the 32 files. |
+
+```toml
+# Disable one shipped rule and raise another's threshold in a consumer repository:
+[[override]]
+id = "drain-lane-kept"
+enabled = false
+
+[[override]]
+id = "fast-gate-run-slow"
+
+[override.when]
+match = 'event.total_ms > 120000'
+```
+
+Refusals within the repository layer:
+
+- Duplicate `id`s *within* `<root>/config/tillr/watch/` (across two `[[rule]]` blocks, two
+  `[[override]]` blocks, or a `[[rule]]` and an `[[override]]` naming the same `id`) fail loading
+  and `lint`.
+- An `[[override]]` with no keys beside `id`, an unknown TOML key, an `id` not present in the
+  shipped set, or `--no-shipped-rules` fails loading and `lint`.
+
+Live operator changes in SQLite (`tillr watch rule add|tune|reset`, [OQ-TW5](#OQ-TW5),
+[D-TW35](#D-TW35)) remain available above both tracked layers.
+
+#### What `tillr-watch` reads at runtime ([D-TW86](#D-TW86))
+
+Rules resolve in three layers from lowest to highest precedence:
+
+| Precedence | Layer | Where it comes from | `source=` in `rule list` |
+| :--- | :--- | :--- | :--- |
+| 1 | Shipped | Embedded `tools/tillr-watch/rules/*.toml` (omitted only under `--no-shipped-rules`) | `shipped` |
+| 2 | Repository file | `<root>/config/tillr/watch/*.toml` when present, or explicit `--rules <path>` | `file` |
+| 3 | Store override | `watch_rule_overrides` in `<root>/.tillr/state.db` | `store` |
+
+Runtime rules:
+
+1. **Optional `--rules` and inferred `<root>`.** `--rules` becomes optional on `eval`, `daemon`,
+   `wait`, `status` and `rule` (`rule` also accepts optional `--root`). When `--rules` is omitted,
+   `<root>` comes from `--root` or, when `--store` resolves to `<root>/.tillr/<file>`, from
+   `--store`'s parent directory; if `<root>/config/tillr/watch` exists as a directory, its `.toml`
+   files form layer 2 (a non-directory or broken `.toml` there fails with exit 1; a missing
+   directory means layer 2 is empty).
+2. **Explicit `--rules <path>` still layers over shipped rules.** Callers and skills that pass
+   `--rules <root>/config/tillr/watch` (as
+   [`tillr-operating/SKILL.md`](../../yolo-packs/tillr/skills/tillr-operating/SKILL.md) does today)
+   require `<path>` to exist and merge `<path>` on top of layer 1, so deleting duplicate files from
+   a consumer's `config/tillr/watch/` never drops the 35 shipped rules under existing invocations.
+   `--no-shipped-rules` omits layer 1 for isolated unit tests or standalone rule sets and requires
+   `--rules` or an existing `<root>/config/tillr/watch`.
+3. **`rule tune`, `rule reset` and baseline hashes.** `rule tune <id>` clones the effective rule
+   from layers 1–3; `rule reset <id>` deletes the `watch_rule_overrides` row so `<id>` falls back
+   to `file` if present, otherwise `shipped`. `watch_rule_baselines` ([D-TW66](#D-TW66)) hashes
+   effective rule fields and ignores `source`, so removing an unmodified duplicate `.toml` from a
+   consumer repository switches `source=file` to `source=shipped` without resetting episodes or
+   event baselines.
+4. **Charter check before Git reads.** `Evaluator` and `ReadStatus` check a rule's `charter:<name>`
+   scope against the store's charter (`definition.ForReader`) before requiring `--root` or reading
+   `git_refs:`. On a non-landing store such as `recorded-verdict`, `trunk-proof-lag`
+   (`scope = "charter:git-landing"`) reports `out-of-scope="recorded-verdict"` and needs neither
+   `--root` nor `.git`.
+
+| Alternative considered | Designer's reason to reject |
+| :--- | :--- |
+| Read shipped `.toml` files only from `$TILLR_INSTALL_ROOT` at runtime (no `//go:embed`) | Breaks standalone `just tillr-build` and `tillr-roll` binaries, which compile in a deleted temporary clone and run without `TILLR_INSTALL_ROOT`. |
+| Deep-merge partial `[[rule]]` blocks instead of separate `[[override]]` and wholesale `[[rule]]` | `[rule.when]` is a pattern-discriminated union; deep-merging a pattern change leaves forbidden keys from the shipped pattern behind. |
+| Make `--rules <dir>` omit shipped rules by default | Existing `--rules <root>/config/tillr/watch` invocations in consumer sessions would silently lose all 35 drain rules once duplicate files are deleted. |
+
 ## 5. Alert Rules as Tunable Data and the Starting Rule Catalog
 
 ### 5.1 Declarative rule schema ([D-TW4](#D-TW4), [OQ-TW5](#OQ-TW5))
 
-A rule is data. It contains no code and names no command to run. The loader walks
-[`config/tillr/watch`](../../config/tillr/watch) for `.toml` files; a file may hold more than one
-rule. A row in the store table `watch_rule_overrides` replaces the whole file rule with the same id,
+A rule is data. It contains no code and names no command to run. Today the loader walks
+[`config/tillr/watch`](../../config/tillr/watch) for `.toml` files; under
+[Section 4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87)
+([D-TW84](#D-TW84) to [D-TW86](#D-TW86), not yet built) it layers `<root>/config/tillr/watch` over
+`tillr`'s embedded `tools/tillr-watch/rules/*.toml`. A file may hold more than one rule. A row in
+the store table `watch_rule_overrides` replaces the whole file or shipped rule with the same id,
 so a threshold can be tuned without a commit, and `rule export` prints the override as TOML to
 commit later ([D-TW35](#D-TW35)).
 
@@ -271,50 +400,77 @@ shipped rule that covers a condition, where one exists, is named beside it.
 | `empty-reason-record` | A refusal recorded with no reason | not shipped |
 | `high-attempt-diagnostic` | An item on a high attempt number | `drain-item-fifth-attempt` |
 
-### 5.3 The rules shipped under `config/tillr/watch`
+### 5.3 Which rules belong to `tillr` and which stay with a repository ([D-TW83](#D-TW83))
 
-Thirty-six rules in 33 files. Each file has its own loader-and-evaluation test in
-[`tools/tillr-watch`](../../tools/tillr-watch) ([D-TW42](#D-TW42)). All are `warning` except
-`drain-backend-closed`, which is `high`.
+[`config/tillr/watch`](../../config/tillr/watch) currently holds 36 rules in 33 `.toml` files, each
+with a loader-and-evaluation test in [`tools/tillr-watch`](../../tools/tillr-watch)
+([D-TW42](#D-TW42)). All are `warning` except `drain-backend-closed`, which is `high`. Three files
+carry two rules each (`drain-revert.toml`: `drain-landing-reverted` and
+`drain-revert-not-possible`; `fast-gate-slow.toml`: `fast-gate-run-slow` and
+`fast-gate-median-slow`; `trunk-proof-lag.toml`: `trunk-proof-lag` and `trunk-proof-stalled`); each
+remaining file is `<id>.toml`.
 
-| Rule | Reads | Pattern | Subject | Limit |
-| :--- | :--- | :--- | :--- | :--- |
-| `drain-loop-fault` | `drain.loop-ended` | `predicate_match` | global | 1h window |
-| `drain-loop-no-pass` | `drain.loop-pass` | `duration_without_event` | global | 5m |
-| `drain-unrequested-start` | `drain.build-started` | `predicate_match` | global | 1h window |
-| `drain-checkpoint-not-restarted` | `drain.checkpoint-not-restarted` | `predicate_match` | global | 3m window |
-| `drain-restart-unanswered` | `drain.restart-request`, `drain.restart-answer` | `duration_without_event` | `object_id` | 35m |
-| `drain-pi-build-stale` | `drain.pi-build-stale`, `drain.pi-build-current` | `predicate_match` | global | until cleared |
-| `drain-store-busy` | `drain.store-busy` | `predicate_match` | global | 1h window |
-| `drain-backend-closed` | `drain.backend-outcome`, `drain.backend-probe` | `predicate_match` | `object_id` | until cleared |
-| `drain-dispatch-declined` | `drain.dispatch-declined` | `count_in_window` | `object_id` | 3 in 10m |
-| `drain-repeated-step-dispatches` | `run.allocate` | `count_in_window` | `item_id`, `node` | 5 in 10m |
-| `drain-item-fifth-attempt` | `run.allocate`, `land.landing` | `predicate_match` | `item_id` | until cleared |
-| `drain-item-fault` | `drain.item-fault` | `predicate_match` | `item_id` | 1h window |
-| `drain-obstacle-hold` | `drain.obstacle-hold` | `predicate_match` | `item_id` | 1h window |
-| `drain-plan-output-unparseable` | `drain.refusal` | `predicate_match` | `item_id` | 24h window |
-| `drain-judge-unreadable` | `drain.refusal` | `predicate_match` | `item_id` | 1h window |
-| `drain-repeated-verifier-refusals` | `drain.refusal` | `count_in_window` | `item_id` | 5 in 24h |
-| `drain-repeated-refusal` | `drain.refusal`, `land.landing` | `consecutive_count` | global | 2 distinct items in 24h |
-| `drain-repeated-item-conflicts` | `item.conflict`, `items` and `charter` projections | `count_in_window` | `item_id` | 2 in 24h |
-| `drain-trunk-fixer-filed` | `item.add` | `predicate_match` | `item_id` | 1h window |
-| `drain-landing-reverted` | `drain.revert` | `predicate_match` | `landing` | 1h window |
-| `drain-revert-not-possible` | `drain.revert` | `predicate_match` | `landing` | 1h window |
-| `drain-heavy-fault` | `drain.heavy-fault` | `predicate_match` | `tip_sha` | 1h window |
-| `drain-lane-refused` | `drain.lane-refused`, `drain.lane-restored` | `predicate_match` | `lane_id`, `reason` | until cleared |
-| `drain-lane-kept` | `drain.lane-kept`, `drain.lane-released`, `run.release` | `duration_without_event` | `lane_id` | 15m |
-| `drain-test-slots-free-with-waiters` | `drain.test-slots-free-with-waiters`, `drain.test-slots-cleared` | `predicate_match` | `lock_dir` | until cleared |
-| `drain-trunk-core-worktree` | `drain.trunk-core-worktree` | `predicate_match` | `config_path` | 1h window |
-| `land-squash-conflict` | `land.landing` | `predicate_match` | `item_id` | 1h window |
-| `land-repeated-squash-conflicts` | `land.landing` | `consecutive_count` | `item_id` | 3 in 24h |
-| `gate-verdict-overdue` | `gate.started`, `gate.verdict` | `duration_without_event` | `object_id` | 3650s |
-| `gate-repeated-stall` | `gate.verdict` | `count_in_window` | `tree_sha` | 3 in 24h |
-| `gate-drain-stalls` | `gate.verdict` | `count_in_window` | global | 3 in 4h |
-| `fast-gate-run-slow` | `drain.fast-gate-timing` | `predicate_match` | `slowest_check` | 1h window |
-| `fast-gate-median-slow` | `drain.fast-gate-timing` | `predicate_match` | global | 24h window |
-| `run-model-timeout` | `run.model-timeout`, `run.finish` | `predicate_match` | `run_id` | until cleared |
-| `trunk-proof-lag` | `land.landing`, `drain.revert`, `drain.heavy-progress`, Git refs | `lag_behind` | global | 30m |
-| `trunk-proof-stalled` | `drain.heavy-progress`, `drain.heavy-fault`, `drain.loop-ended`, `drain.build-started` | `duration_without_event` | global | 10m |
+Under the designer's classification ([D-TW83](#D-TW83), not yet built; the owner may overturn it):
+
+- **32 files (35 rules) describe `tillr`'s own behavior and move to `tools/tillr-watch/rules/`.**
+  Every event and projection they read is emitted by `tillr-drain`, `tillr-run`, `tillr-gate`,
+  `tillr-land`, `tillr-item` or `tillr`'s Git-landing charter. Thirty-four keep `scope = "core"`
+  (on a non-landing charter, event-only landing and gate rules never see matching events and stay
+  quiet; [D-TW21](#D-TW21)); `trunk-proof-lag` moves from `scope = "core"` to
+  `scope = "charter:git-landing"` because its `git_refs:refs/heads/main,refs/tillr/green`
+  projection belongs specifically to `git-landing` and otherwise fails `watch-lint-unknown-signal`
+  on hook-completed charters. Seven shipped rules carry default limits calibrated on this
+  repository (`drain-checkpoint-not-restarted`, `drain-restart-unanswered`, `drain-lane-kept`,
+  `gate-verdict-overdue`, `gate-drain-stalls`, `fast-gate-run-slow`, `fast-gate-median-slow`) that
+  a consumer tunes with `[[override]]` ([D-TW85](#D-TW85)).
+- **1 file (1 rule) describes one repository's own content and stays in that repository's
+  `config/tillr/watch/`.** [`drain-pi-build-stale.toml`](../../config/tillr/watch/drain-pi-build-stale.toml)
+  (`drain-pi-build-stale`) watches `drain.pi-build-stale` and `drain.pi-build-current` and directs
+  the operator to `refs/heads/patch/pi`, `pi-builds/current.json` and `bin/pi-forks build-pi` —
+  artifacts of the consumer repository that maintains the `pi` patch-series fork
+  (`git for-each-ref refs/heads/patch/` and `fd pi-forks bin` return nothing in this repository,
+  where fork handling is slated for removal under
+  [roadmap entry 4](../tillr/roadmap.md#2-a-core-that-carries-only-its-own-code)). It stays in
+  `<consumer>/config/tillr/watch/drain-pi-build-stale.toml` and is removed from `tillr`.
+
+| Rule | Home & target scope | Reads | Pattern | Subject | Limit |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `drain-loop-fault` | `tillr` (`core`) | `drain.loop-ended` | `predicate_match` | global | 1h window |
+| `drain-loop-no-pass` | `tillr` (`core`) | `drain.loop-pass` | `duration_without_event` | global | 5m |
+| `drain-unrequested-start` | `tillr` (`core`) | `drain.build-started` | `predicate_match` | global | 1h window |
+| `drain-checkpoint-not-restarted` | `tillr` (`core`) | `drain.checkpoint-not-restarted` | `predicate_match` | global | 3m window |
+| `drain-restart-unanswered` | `tillr` (`core`) | `drain.restart-request`, `drain.restart-answer` | `duration_without_event` | `object_id` | 35m |
+| `drain-store-busy` | `tillr` (`core`) | `drain.store-busy` | `predicate_match` | global | 1h window |
+| `drain-backend-closed` | `tillr` (`core`) | `drain.backend-outcome`, `drain.backend-probe` | `predicate_match` | `object_id` | until cleared |
+| `drain-dispatch-declined` | `tillr` (`core`) | `drain.dispatch-declined` | `count_in_window` | `object_id` | 3 in 10m |
+| `drain-repeated-step-dispatches` | `tillr` (`core`) | `run.allocate` | `count_in_window` | `item_id`, `node` | 5 in 10m |
+| `drain-item-fifth-attempt` | `tillr` (`core`) | `run.allocate`, `land.landing` | `predicate_match` | `item_id` | until cleared |
+| `drain-item-fault` | `tillr` (`core`) | `drain.item-fault` | `predicate_match` | `item_id` | 1h window |
+| `drain-obstacle-hold` | `tillr` (`core`) | `drain.obstacle-hold` | `predicate_match` | `item_id` | 1h window |
+| `drain-plan-output-unparseable` | `tillr` (`core`) | `drain.refusal` | `predicate_match` | `item_id` | 24h window |
+| `drain-judge-unreadable` | `tillr` (`core`) | `drain.refusal` | `predicate_match` | `item_id` | 1h window |
+| `drain-repeated-verifier-refusals` | `tillr` (`core`) | `drain.refusal` | `count_in_window` | `item_id` | 5 in 24h |
+| `drain-repeated-refusal` | `tillr` (`core`) | `drain.refusal`, `land.landing` | `consecutive_count` | global | 2 distinct items in 24h |
+| `drain-repeated-item-conflicts` | `tillr` (`core`) | `item.conflict`, `items` and `charter` projections | `count_in_window` | `item_id` | 2 in 24h |
+| `drain-trunk-fixer-filed` | `tillr` (`core`) | `item.add` | `predicate_match` | `item_id` | 1h window |
+| `drain-landing-reverted` | `tillr` (`core`) | `drain.revert` | `predicate_match` | `landing` | 1h window |
+| `drain-revert-not-possible` | `tillr` (`core`) | `drain.revert` | `predicate_match` | `landing` | 1h window |
+| `drain-heavy-fault` | `tillr` (`core`) | `drain.heavy-fault` | `predicate_match` | `tip_sha` | 1h window |
+| `drain-lane-refused` | `tillr` (`core`) | `drain.lane-refused`, `drain.lane-restored` | `predicate_match` | `lane_id`, `reason` | until cleared |
+| `drain-lane-kept` | `tillr` (`core`) | `drain.lane-kept`, `drain.lane-released`, `run.release` | `duration_without_event` | `lane_id` | 15m |
+| `drain-test-slots-free-with-waiters` | `tillr` (`core`) | `drain.test-slots-free-with-waiters`, `drain.test-slots-cleared` | `predicate_match` | `lock_dir` | until cleared |
+| `drain-trunk-core-worktree` | `tillr` (`core`) | `drain.trunk-core-worktree` | `predicate_match` | `config_path` | 1h window |
+| `land-squash-conflict` | `tillr` (`core`) | `land.landing` | `predicate_match` | `item_id` | 1h window |
+| `land-repeated-squash-conflicts` | `tillr` (`core`) | `land.landing` | `consecutive_count` | `item_id` | 3 in 24h |
+| `gate-verdict-overdue` | `tillr` (`core`) | `gate.started`, `gate.verdict` | `duration_without_event` | `object_id` | 3650s |
+| `gate-repeated-stall` | `tillr` (`core`) | `gate.verdict` | `count_in_window` | `tree_sha` | 3 in 24h |
+| `gate-drain-stalls` | `tillr` (`core`) | `gate.verdict` | `count_in_window` | global | 3 in 4h |
+| `fast-gate-run-slow` | `tillr` (`core`) | `drain.fast-gate-timing` | `predicate_match` | `slowest_check` | 1h window |
+| `fast-gate-median-slow` | `tillr` (`core`) | `drain.fast-gate-timing` | `predicate_match` | global | 24h window |
+| `run-model-timeout` | `tillr` (`core`) | `run.model-timeout`, `run.finish` | `predicate_match` | `run_id` | until cleared |
+| `trunk-proof-lag` | `tillr` (`charter:git-landing`) | `land.landing`, `drain.revert`, `drain.heavy-progress`, Git refs | `lag_behind` | global | 30m |
+| `trunk-proof-stalled` | `tillr` (`core`) | `drain.heavy-progress`, `drain.heavy-fault`, `drain.loop-ended`, `drain.build-started` | `duration_without_event` | global | 10m |
+| `drain-pi-build-stale` | fork-owning repo (`core`) | `drain.pi-build-stale`, `drain.pi-build-current` | `predicate_match` | global | until cleared |
 
 Two rules about rule text apply to every file. Guidance may name the command that answers the
 alert, since naming is not executing ([D-TW42](#D-TW42)). No rule or alert text calls a firing
@@ -664,9 +820,9 @@ exist and the drain dispatches nothing in response to an alert.
 
 Mode B is the delivery that exists. The foreground agent starts `tillr watch wait` as a background
 process in its own session, with `--store`, `--rules` and `--owner` given explicitly
-([D-TW36](#D-TW36)). `wait` blocks until an episode needs that owner and then prints it and exits,
-which is the wake-up every agent harness already supports; no harness extension is involved
-([OQ-TW3](#OQ-TW3), [D-TW11](#D-TW11)).
+([D-TW36](#D-TW36); `--rules` becomes optional under [D-TW86](#D-TW86)). `wait` blocks until an
+episode needs that owner and then prints it and exits, which is the wake-up every agent harness
+already supports; no harness extension is involved ([OQ-TW3](#OQ-TW3), [D-TW11](#D-TW11)).
 
 - **What is printed.** Each open episode whose opening or reopening sequence is greater than the
   owner's `seen_seq`, with its guidance and bundle ([D-TW14](#D-TW14)).
@@ -770,15 +926,18 @@ open, which is the point: the cause has an owner.
 Nothing in the engine assumes Git except the `git_refs:` projection. A workflow whose verdict is
 recorded and not derived from a tree, such as the
 [`recorded-verdict` example](../../tools/tillr/examples/recorded-verdict/definition.json), writes
-the same event kinds for runs and verdicts, so the event rules apply as they stand. Such a workflow
-omits rules that use `lag_behind` and declares its own in its rule directory with scope
-`workflow:<name>` ([D-TW31](#D-TW31)).
+the same event kinds for runs and verdicts, so the event rules apply as they stand. Under
+[D-TW83](#D-TW83) and [D-TW86](#D-TW86), `trunk-proof-lag` carries `scope = "charter:git-landing"`
+and is skipped automatically (`out-of-scope="recorded-verdict"`) without requiring `--root` or a
+trimmed rule directory; a non-Git workflow declares its own rules in `config/tillr/watch/` with
+scope `workflow:<name>` or `charter:<name>` ([D-TW31](#D-TW31)).
 
 ### 7.2 `tillr watch lint`: checking a workflow's whole configuration before it runs ([D-TW10](#D-TW10))
 
-`tillr watch lint --root DIR [--charter FILE] [--workflows DIR] [--rules DIR] [--json]` reads a
-workflow's definition, charter and rules together and reports what would misbehave at run time.
-It prints one finding per line, or JSON, and exits non-zero on any finding ([D-TW55](#D-TW55)).
+`tillr watch lint [<repo-or-dir>] [--charter FILE] [--workflows DIR] [--policy FILE]... [--rules PATH] [--no-shipped-rules]`
+reads a workflow's definition, charter, policies and rules together and reports what would
+misbehave at run time. It prints one finding per line and exits non-zero on any finding
+([D-TW55](#D-TW55)).
 
 | Code | Finding |
 | :--- | :--- |
@@ -795,9 +954,29 @@ It prints one finding per line, or JSON, and exits non-zero on any finding ([D-T
 | `watch-lint-empty-guidance` | A rule has no guidance text |
 | `watch-lint-forbidden-remedy` | A rule names an action to execute |
 
-The linter lives in the engine package and imports the drain's event registrations so that
-`unknown-signal` knows every registered kind. The gate's `workflows` check
-([`workflows.py`](../../tools/gate/checks/workflows.py)) runs it on the repository root and on the
+**What `lint` reads when shipped and repository rules are both present** (designer's decision,
+[D-TW87](#D-TW87); not yet built, and the owner may overturn it):
+
+1. Unless `--no-shipped-rules` is passed, `lint` first loads and checks `tillr`'s embedded
+   `tools/tillr-watch/rules/*.toml` (`shipped:rules/<file>.toml`).
+2. It then checks `<root>/config/tillr/watch` when present, or `--rules <path>` when given
+   explicitly (`<path>` must exist; symlinks fail `watch-lint-rule-schema`). Within the repository
+   layer, duplicate `id`s across `[[rule]]` and `[[override]]` entries, empty `[[override]]`
+   blocks, or `[[override]]` entries naming a non-shipped `id` emit `watch-lint-rule-schema` naming
+   the repository file.
+3. `lint` merges the two layers by `id` — replacing any shipped rule matched by a repository
+   `[[rule]]` or overlaying any shipped rule matched by a repository `[[override]]`, attributing
+   the merged entry's `Source` to the repository file — and runs tuple-wide checks
+   (`watch-lint-unbounded-return`, `watch-lint-unknown-signal`, `watch-lint-unknown-stage`) over
+   the merged effective rule set. A consumer repository running `planned-build@v1` without a local
+   copy of `drain-repeated-verifier-refusals.toml` passes `watch-lint-unbounded-return` through the
+   shipped rule; if the consumer disables `drain-repeated-verifier-refusals` via `[[override]]`
+   without another per-item bound, `lint` catches the unbounded return.
+
+The linter lives in the engine package (`tools/tillr/watch`), receives the embedded rules from
+`tools/tillr-watch` alongside the drain's event registrations so that `unknown-signal` knows every
+registered kind, and runs in the gate's `workflows` check
+([`workflows.py`](../../tools/gate/checks/workflows.py)) on the repository root and on the
 `recorded-verdict` example ([D-TW61](#D-TW61)).
 
 ## 8. Open Questions
@@ -859,7 +1038,7 @@ code was not read for that row.
 | <a id="D-TW39"></a>**D-TW39** | Rules for the ten drain conditions ship in `config/tillr/watch`. | 2026-11-21 | [§5.4](#54-the-ten-drain-conditions-d-tw39) | partly: condition 10 has no rule |
 | <a id="D-TW40"></a>**D-TW40** | Condition 5 is two `drain.revert` rules; a heavy-proof failure has no rule of its own. | 2026-11-21 | [§5.4](#54-the-ten-drain-conditions-d-tw39) | yes |
 | <a id="D-TW41"></a>**D-TW41** | Verifying a rule never writes to the repository's own store. | 2026-11-21 | [§5.4](#54-the-ten-drain-conditions-d-tw39) | yes |
-| <a id="D-TW42"></a>**D-TW42** | One rule file per build with its own test; guidance may name the answering command. | 2026-11-21 | [§5.3](#53-the-rules-shipped-under-configtillrwatch) | yes |
+| <a id="D-TW42"></a>**D-TW42** | One rule file per build with its own test; guidance may name the answering command. | 2026-11-21 | [§5.3](#53-which-rules-belong-to-tillr-and-which-stay-with-a-repository-d-tw83) | yes |
 | <a id="D-TW43"></a>**D-TW43** | Two fast-gate rules read `drain.fast-gate-timing`; the median threshold is 90 seconds. | 2026-11-22 | [§5.5](#55-fast-gate-time-two-rules-and-the-event-they-read-d-tw43) | yes |
 | <a id="D-TW44"></a>**D-TW44** | `drain-unrequested-start`, and `restart_request` on `drain.build-started`. | 2026-11-21 | [§5.4](#54-the-ten-drain-conditions-d-tw39) | yes |
 | <a id="D-TW45"></a>**D-TW45** | `drain.loop-pass` about once a minute, and `drain-loop-no-pass` at five minutes. | 2026-11-21 | [§5.4](#54-the-ten-drain-conditions-d-tw39) | yes |
@@ -890,7 +1069,7 @@ code was not read for that row.
 | <a id="D-TW70"></a>**D-TW70** | The progress contract holds in the cached mode of the shard runner. | 2026-11-23 | [§5.9](#59-trunk-proof-lag-and-stalled-heavy-proof-progress-d-tw54) | not checked |
 | <a id="D-TW71"></a>**D-TW71** | `stop_request` and `initial` on `drain.build-started` keep requested starts quiet. | 2026-11-24 | [§5.12](#512-requested-stop-and-start-quiet-on-drain-unrequested-start-d-tw71) | yes |
 | <a id="D-TW72"></a>**D-TW72** | A tracked episode resolves on a cleared condition as an untracked one does. | 2026-11-24 | [§6.10](#610-tracking-an-alert-cause-with-an-open-queue-item-d-tw67) | yes |
-| <a id="D-TW73"></a>**D-TW73** | Owner: no rule or alert text calls a firing alarm "expected". | 2026-11-22 | [§5.3](#53-the-rules-shipped-under-configtillrwatch) | yes |
+| <a id="D-TW73"></a>**D-TW73** | Owner: no rule or alert text calls a firing alarm "expected". | 2026-11-22 | [§5.3](#53-which-rules-belong-to-tillr-and-which-stay-with-a-repository-d-tw83) | yes |
 | <a id="D-TW74"></a>**D-TW74** | The guidance of `drain-unrequested-start` says what to check and nothing about normality. | 2026-11-23 | [§5.12](#512-requested-stop-and-start-quiet-on-drain-unrequested-start-d-tw71) | yes |
 | <a id="D-TW75"></a>**D-TW75** | `reopen_when` on `lag_behind`, `acked_seq` on the episode, `failing_checks` on a red proof. | 2026-11-23 | [§5.9](#59-trunk-proof-lag-and-stalled-heavy-proof-progress-d-tw54) | yes |
 | <a id="D-TW76"></a>**D-TW76** | `distinct_by` and `{{distinct_values}}`; `drain-repeated-refusal` at two distinct items. | 2026-11-23 | [§5.13](#513-drain-refusals-across-different-items-with-no-landing-between-them-d-tw76) | yes |
@@ -900,3 +1079,21 @@ code was not read for that row.
 | <a id="D-TW80"></a>**D-TW80** | A projection-only `predicate_match` for a fixer still queued under a green proof. | 2026-11-23 | [§5.17](#517-trunk-fixer-still-queued-after-a-green-proof-passed-its-checks-d-tw80) | no |
 | <a id="D-TW81"></a>**D-TW81** | Per-process CPU samples and a `for_each` rule over them. | 2026-11-24 | [§5.18](#518-sustained-cpu-usage-over-half-a-core-in-tillr-watch-wait-or-tillr-view-serve-d-tw81) | partly: event only |
 | <a id="D-TW82"></a>**D-TW82** | Designer (answering a 2026-11-24 consumer-repository operator request; not an owner ruling): `tillr-drain` records `session_id`, `loop_owner` and `.present` lease before `publishDrainBuild`, sets `session_relaunch` and `prior_domain` on `drain.build-started` when a dead prior foreign process domain ended without `stop == "fault"` (with pre-upgrade `drain_sessions` stale-heartbeat fallback), and `drain-unrequested-start` adds `not (event.session_relaunch == true)`. | 2026-11-25 | [§5.19](#519-session-relaunch-provenance-on-drain-unrequested-start-d-tw82) | no |
+| <a id="D-TW83"></a>**D-TW83** | Designer (no owner ruling on mechanism; owner may overturn): of the 33 `.toml` files (36 rules) in `config/tillr/watch/`, 32 files (35 rules) watch `tillr`'s own behavior and ship with `tillr` (`34` `core`, plus `trunk-proof-lag` moved to `charter:git-landing`); `drain-pi-build-stale.toml` watches repository-specific `pi`-fork artifacts and stays only in that repository's `config/tillr/watch/`. | 2026-11-25 | [§5.3](#53-which-rules-belong-to-tillr-and-which-stay-with-a-repository-d-tw83) | no |
+| <a id="D-TW84"></a>**D-TW84** | Designer (no owner ruling on mechanism; owner may overturn): canonical shipped rules live in `tools/tillr-watch/rules/*.toml`, mirrored by `just pack-sync` into `yolo-packs/tillr/files/local/share/tillr/tillr-watch/rules/*.toml` and embedded via `//go:embed`, with `*.toml` and `*.json` added to pack launcher input hashing. | 2026-11-25 | [§4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87) | no |
+| <a id="D-TW85"></a>**D-TW85** | Designer (no owner ruling on mechanism; owner may overturn): a consumer's optional `<root>/config/tillr/watch/*.toml` adds rules via `[[rule]]`, patches leaf keys of shipped rules via `[[override]]`, or replaces a shipped rule in full via `[[rule]]` with the same `id`; duplicate `id`s within the repository layer or `[[override]]` on a non-shipped `id` are refused. | 2026-11-25 | [§4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87) | no |
+| <a id="D-TW86"></a>**D-TW86** | Designer (no owner ruling on mechanism; owner may overturn): runtime precedence is `shipped` (`source=shipped`) < repository files (`source=file`) < `watch_rule_overrides` (`source=store`); `--rules` becomes optional (inferring `<root>` from `--root` or `<root>/.tillr/<file>`), explicit `--rules` still layers over shipped rules unless `--no-shipped-rules` is given, and charter scope is checked before requiring `--root` or reading `git_refs:`. | 2026-11-25 | [§4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87) | no |
+| <a id="D-TW87"></a>**D-TW87** | Designer (no owner ruling on mechanism; owner may overturn): `tillr watch lint` validates shipped rules (unless `--no-shipped-rules`), validates repository `[[rule]]` and `[[override]]` files, merges by `id` attributing overridden entries to the repository file, and runs workflow and charter cross-checks over the merged set. | 2026-11-25 | [§7.2](#72-tillr-watch-lint-checking-a-workflows-whole-configuration-before-it-runs-d-tw10) | no |
+| <a id="D-TW88"></a>**D-TW88** | Designer (no owner ruling on mechanism; owner may overturn): land the shipped-and-repository rule split in three slices — library layering and lint merge, embedded rules and pack launcher stamp, then duplicate removal and cross-reference updates — so consumer repositories have no flag day. | 2026-11-25 | [§10](#10-build-slices-for-shipped-and-repository-watch-rules) | no |
+
+## 10. Build Slices for Shipped and Repository Watch Rules
+
+These slices are the designer's plan ([D-TW88](#D-TW88); not built, and the owner may overturn
+them). Each slice lands green on its own and leaves rolling pack consumers working before and after
+they delete their duplicate rule files.
+
+| Slice | Scope | Verification |
+| :--- | :--- | :--- |
+| **1. Layered loader, `[[override]]`, charter-first Git gating, and merged lint in `tools/tillr/watch`** | Add `LoadRuleLayers` over an `fs.FS` of shipped `.toml` files plus an optional repository directory; tag unoverridden shipped rules `Source: "shipped"` and repository additions, `[[override]]` patches and wholesale `[[rule]]` replacements `Source: "file"` (`watch_rule_overrides` stays `Source: "store"`). Refuse duplicate `id`s within the repository layer and `[[override]]` entries that are empty or name a non-shipped `id`. Check `charter:<name>` scope against `definition.ForReader` before `requireRoot` and `gitRequirements`. Add `ShippedFS` and `NoShippedRules` to `LintOptions` so `Lint` validates both layers, merges by `id` with repository attribution, and runs `lintWorkflowsWithRules` and `lintRulesWithContext` on the merged set. | Unit tests in `tools/tillr/watch` cover `source=shipped\|file\|store`, `rule tune` and `rule reset` fallback (`store` -> `file` -> `shipped`), baseline-hash stability when an unchanged rule moves from `file` to `shipped`, `[[override]]` leaf overlays and refusals, wholesale `[[rule]]` replacement, non-landing charter evaluation without `--root`, and `Lint` passing `watch-lint-unbounded-return` via a shipped rule and failing when disabled by `[[override]]`. |
+| **2. Embed the 32 shipped files in `tools/tillr-watch/rules/`, wire CLI defaults, and update pack launcher hashing** | Copy the 32 `tillr`-owned `.toml` files into `tools/tillr-watch/rules/`, setting `scope = "charter:git-landing"` on `trunk-proof-lag` in `trunk-proof-lag.toml`; embed `rules/*.toml` in `tools/tillr-watch`. Make `--rules` optional on `eval`, `daemon`, `wait`, `status` and `rule` (adding optional `--root` to `rule` and `--no-shipped-rules` across rule-loading commands and `lint`); infer `<root>` from `<root>/.tillr/<file>` when `--root` is omitted; layer `<root>/config/tillr/watch` or explicit `--rules` over embedded rules unless `--no-shipped-rules` is passed. Add `*.toml` and `*.json` to `list_inputs()` in `yolo-packs/tillr/programs/*/run` and `tests/pack-sync.test.py`, and run `just pack-sync`. | CLI tests in `tools/tillr-watch` cover zero-flag-day coexistence (when `<root>/config/tillr/watch/` still holds copies of the 32 files), a consumer repository with no `config/tillr/watch/`, a consumer repository with an added rule plus `[[override]]`, `recorded-verdict` lint and `eval --once` without `--root`, and `python3 tests/pack-sync.test.py`. |
+| **3. Remove `config/tillr/watch/*.toml` from `tillr`, convert `pi_build_stale_rule_test.go`, and update links** | Remove the 32 duplicated files and `drain-pi-build-stale.toml` from `tillr`'s `config/tillr/watch/` (leaving `drain-pi-build-stale.toml` solely in the `pi`-fork consumer repository's `config/tillr/watch/`). Point `tools/tillr-watch/*_rule_test.go` at `rules/`, convert `pi_build_stale_rule_test.go` into a consumer-repository fixture test (`<temp-root>/config/tillr/watch/drain-pi-build-stale.toml` alongside the 35 shipped rules), update `tools/gate/checks/workflows.test.py`, `tools/gate/checks/go-affected.json`, `tools/gate/go-test-edges.json`, `tests/go-affected.test.py`, `yolo-packs/tillr/skills/tillr-operating/SKILL.md` and the file links in `docs/design/tillr-closed-backend-probe.md`, `docs/design/tillr-read-face-timing.md`, `docs/tillr/roadmap.md` and `docs/reference/gate.md` (followed by `just pack-sync` and `just pack-docs` if shipped docs change). | `tillr watch lint` passes on `tillr` and `recorded-verdict`; Go tests, `workflows`, `go-affected`, `pack-sync` and `documents` gate checks pass; a consumer fixture carrying only `config/tillr/watch/drain-pi-build-stale.toml` loads 35 `source=shipped` rules and 1 `source=file` rule. |
