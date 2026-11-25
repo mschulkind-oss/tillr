@@ -193,7 +193,7 @@ The policy snapshot (`PolicyState`, `.tillr/loop/backend-policy.json`) gains `pr
 | Seats | Backend | Model route |
 | :--- | :--- | :--- |
 | `design` | `pi-designer` | `github-copilot/gemini-4-carbon` |
-| `plan`, `review`, `verify` | `pi` | `github-copilot/gemini-4-carbon` |
+| `plan`, `review`, `verify`, `tricky` | `pi` | `github-copilot/gemini-4-neon` |
 | `build`, `edit`, `test-write`, `docs` | `pi-build` | `github-copilot/gemini-4-hydrogen` |
 | `scout`, `classify`, `test-run` (read-only) | `pi-scout` | `github-copilot/gemini-3.8-flash` |
 
