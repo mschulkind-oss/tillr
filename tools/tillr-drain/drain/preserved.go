@@ -63,6 +63,29 @@ func (l *Loop) baseInCheckout(ctx context.Context, lane, base string) string {
 	return base
 }
 
+// nodeBaseOnCandidate returns nodeBase when it lies on the candidate's current
+// itemBase..head lineage, and head otherwise. A pre-gate rebase onto a newer trunk
+// rewrites commits after the old base, leaving the previous node's recorded
+// NodeBaseSHA outside itemBase..head (off-lineage for a later piece, or older than
+// itemBase for the first piece). A run resuming on that candidate starts from head,
+// so head is its scope base rather than the stale pre-rebase commit.
+func (l *Loop) nodeBaseOnCandidate(ctx context.Context, target, itemBase, head, nodeBase string) string {
+	if nodeBase == "" || target == "" || head == "" || nodeBase == head {
+		return nodeBase
+	}
+	onHead, err := containsCommit(ctx, target, nodeBase, head)
+	if err != nil || !onHead {
+		return head
+	}
+	if itemBase != "" {
+		afterBase, err := containsCommit(ctx, target, itemBase, nodeBase)
+		if err != nil || !afterBase {
+			return head
+		}
+	}
+	return nodeBase
+}
+
 func (l *Loop) preserveWorkFromBase(ctx context.Context, lane, runID, base, reason string) error {
 	if runID == "" {
 		return nil

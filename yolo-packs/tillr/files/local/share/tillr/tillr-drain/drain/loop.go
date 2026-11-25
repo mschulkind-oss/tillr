@@ -2171,6 +2171,9 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
 				}
 				decision.NodeBaseSHA = l.baseInCheckout(ctx, decision.LaneID, decision.NodeBaseSHA)
+				if !l.nonLanding && decision.NodeBaseSHA != "" {
+					decision.NodeBaseSHA = l.nodeBaseOnCandidate(ctx, l.laneTarget(decision.LaneID), l.laneBase(decision.LaneID), l.headOf(ctx, decision.LaneID), decision.NodeBaseSHA)
+				}
 				decision.NodeStartRunID = decision.RunRequest.RunID
 				if recErr := l.recordStagedNode(ctx, decision); recErr != nil {
 					endRecordStaged()

@@ -155,7 +155,15 @@ func (l *Loop) captureSession(ctx context.Context, c Candidate, allowClassificat
 	if head == "" {
 		head = l.headOf(ctx, c.LaneID)
 	}
-	return &WorkerSession{RunID: req.RunID, SessionID: session, LaneDir: l.laneDirPath(c.LaneID), LaneID: c.LaneID, BaseSHA: base, HeadSHA: head, Backend: req.Backend, Route: req.Route(), Workflow: decision.Workflow, NodeIndex: decision.NodeIndex, NodeBaseSHA: decision.NodeBaseSHA, Attempt: decision.Attempt}, nil
+	nodeBase := decision.NodeBaseSHA
+	if !l.nonLanding && nodeBase != "" {
+		target := c.Worktree
+		if target == "" {
+			target = l.laneTarget(c.LaneID)
+		}
+		nodeBase = l.nodeBaseOnCandidate(ctx, target, base, head, nodeBase)
+	}
+	return &WorkerSession{RunID: req.RunID, SessionID: session, LaneDir: l.laneDirPath(c.LaneID), LaneID: c.LaneID, BaseSHA: base, HeadSHA: head, Backend: req.Backend, Route: req.Route(), Workflow: decision.Workflow, NodeIndex: decision.NodeIndex, NodeBaseSHA: nodeBase, Attempt: decision.Attempt}, nil
 }
 
 // captureLandedWorkerSession uses the run's immutable staging copies. A held
@@ -203,7 +211,15 @@ func (l *Loop) captureLandedWorkerSession(ctx context.Context, c Candidate) (*Wo
 	if head == "" {
 		head = c.HeadSHA
 	}
-	return &WorkerSession{RunID: req.RunID, SessionID: id, LaneDir: l.laneDirPath(req.LaneID), LaneID: req.LaneID, BaseSHA: base, HeadSHA: head, Backend: req.Backend, Route: req.Route(), Workflow: work.Decision.Workflow, NodeIndex: work.Decision.NodeIndex, NodeBaseSHA: work.Decision.NodeBaseSHA, Attempt: work.Decision.Attempt}, nil
+	nodeBase := work.Decision.NodeBaseSHA
+	if !l.nonLanding && nodeBase != "" && c.Worktree != "" {
+		itemBase := c.BaseSHA
+		if itemBase == "" {
+			itemBase = base
+		}
+		nodeBase = l.nodeBaseOnCandidate(ctx, c.Worktree, itemBase, head, nodeBase)
+	}
+	return &WorkerSession{RunID: req.RunID, SessionID: id, LaneDir: l.laneDirPath(req.LaneID), LaneID: req.LaneID, BaseSHA: base, HeadSHA: head, Backend: req.Backend, Route: req.Route(), Workflow: work.Decision.Workflow, NodeIndex: work.Decision.NodeIndex, NodeBaseSHA: nodeBase, Attempt: work.Decision.Attempt}, nil
 }
 
 // landedWorkerSession reads the snapshot made before the landing released its lane.
@@ -368,7 +384,7 @@ func judgedCandidateReturn(d Decision) *WorkerSession {
 		return nil
 	}
 	s := d.Returned.WorkerSession
-	if s == nil || s.HeadSHA == "" || s.HeadSHA == s.BaseSHA || s.HeadSHA == s.NodeBaseSHA {
+	if s == nil || s.HeadSHA == "" || s.HeadSHA == s.BaseSHA {
 		return nil
 	}
 	return s

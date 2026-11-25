@@ -544,3 +544,244 @@ func (s *callbackSteps) Run(ctx context.Context, req run.Request) (run.Record, s
 	}
 	return s.runFn(ctx, req)
 }
+
+type failingGateSteps struct {
+	recordingSteps
+	gated []Candidate
+}
+
+func (s *failingGateSteps) Gate(_ context.Context, c Candidate) (GateOutcome, error) {
+	s.gated = append(s.gated, c)
+	return GateOutcome{
+		Outcome:       GateFailed,
+		FailingChecks: []string{"check-a"},
+	}, nil
+}
+
+// A builder piece that resumes on a candidate rebased onto a newer trunk before the
+// gate is checked against the files that resumed run changed: trunk files brought in
+// by the rebase (and earlier pieces' files) are not a scope escape, while an
+// out-of-scope file changed by the resumed run itself is still refused.
+func TestPreRebaseResumedPieceNotRefusedForTrunkChanges(t *testing.T) {
+	ctx := context.Background()
+	f, l := passFixture(t, "item-a")
+	declareWorkerResumeFixture(t, l)
+	steps := &failingGateSteps{}
+	l.cfg.Steps = steps
+	report := &strings.Builder{}
+	l.cfg.Report = report
+	l.cfg.Stage = &LaneStager{
+		Root:     f.root,
+		LaneRoot: f.laneRoot,
+		Store:    f.storePath,
+		Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"),
+		Now:      l.cfg.Now,
+	}
+
+	first := mustPlan(t, l)[0]
+	oldBase := runGit(t, f.root, "rev-parse", TrunkRef)
+	w := &Workflow{
+		Name:    "planned-build",
+		Version: 1,
+		Stages: []WorkflowStage{
+			{ID: "work/piece-one", Kind: "agent", Seat: "build", Access: "write", WriteScope: WorkflowScope{Paths: []string{"piece1.txt"}}},
+			{ID: "work/piece-two", Kind: "agent", Seat: "build", Access: "write", WriteScope: WorkflowScope{Paths: []string{"piece2.txt"}}},
+		},
+		Edges: []WorkflowEdge{{From: "work/piece-one", To: "work/piece-two", WhenOutcome: "pass"}},
+	}
+
+	laneID := first.decision.LaneID
+	laneDir := l.laneDirPath(laneID)
+	target := l.laneTarget(laneID)
+
+	// Piece 1 commits piece1.txt atop oldBase.
+	writeForkFile(t, filepath.Join(target, "piece1.txt"), "piece 1\n")
+	runGit(t, target, "add", "piece1.txt")
+	runGit(t, target, "commit", "-qm", "feat: piece 1")
+	p1Head := runGit(t, target, "rev-parse", "HEAD")
+
+	// Piece 2 starts at p1Head and commits piece2.txt.
+	first.decision.Workflow = w
+	first.decision.NodeIndex = 1
+	first.decision.NodeBaseSHA = p1Head
+	first.decision.RunRequest.RunID = "run-item-a-a1-n2"
+	sessionID := "11111111-1111-4111-8111-111111111111"
+	writeForkFile(t, filepath.Join(laneDir, SessionIDFile), sessionID+"\n")
+	writeForkFile(t, filepath.Join(laneDir, BaseSHAFile), oldBase+"\n")
+	writeForkFile(t, filepath.Join(laneDir, ItemBaseSHAFile), oldBase+"\n")
+	writeForkFile(t, filepath.Join(laneDir, FenceFile), "piece2.txt\n")
+	writeForkFile(t, filepath.Join(target, "piece2.txt"), "piece 2 initial\n")
+	runGit(t, target, "add", "piece2.txt")
+	runGit(t, target, "commit", "-qm", "feat: piece 2")
+	p2Head := runGit(t, target, "rev-parse", "HEAD")
+
+	ok, _, err := l.applyPlan(ctx, first, oldBase, l.cfg.Now())
+	if err != nil || !ok {
+		t.Fatalf("applyPlan: ok=%v err=%v", ok, err)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if err := applyTerminal(tx, run.Record{
+			RunID:        first.decision.RunRequest.RunID,
+			ItemID:       "item-a",
+			LaneID:       laneID,
+			Backend:      "fixture",
+			State:        run.StateExited,
+			ExitCode:     countPtr(0),
+			StartedAt:    l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+			FinishedAt:   l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+			ArtifactRefs: []run.ArtifactRef{},
+			EndCause:     run.EndNormalExit,
+		}); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES('item-a',1,'work/piece-one','run-item-a-a1-n1','passed')`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE node_runs SET outcome='passed' WHERE item_id='item-a' AND attempt=1 AND node_id='work/piece-two'`); err != nil {
+			return err
+		}
+		return nil
+	})
+
+	// Trunk advances with a repair commit that touches an out-of-scope file.
+	if err := os.MkdirAll(filepath.Join(f.root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(f.root, "docs", "trunk-only.md"), "# trunk change\n")
+	runGit(t, f.root, "add", "docs/trunk-only.md")
+	runGit(t, f.root, "commit", "-qm", "docs: trunk change outside piece scope")
+	repaired := runGit(t, f.root, "rev-parse", TrunkRef)
+	if err := recordTrunkRepair(ctx, f.root, repaired, "trunk repaired at "+shortSHA(repaired)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify pre-rebases the candidate onto the repaired trunk, then the gate fails.
+	cand := Candidate{
+		ItemID:   "item-a",
+		LaneID:   laneID,
+		RunID:    first.decision.RunRequest.RunID,
+		Worktree: target,
+		BaseSHA:  oldBase,
+		HeadSHA:  p2Head,
+	}
+	var verifyRes LoopResult
+	_, landed, err := l.Verify(ctx, cand, &verifyRes, nil)
+	if err != nil {
+		t.Fatalf("Verify failed: %v\n%s", err, report.String())
+	}
+	if landed {
+		t.Fatalf("expected gate failure, not landing\n%s", report.String())
+	}
+	if len(steps.gated) != 1 || steps.gated[0].BaseSHA != repaired {
+		t.Fatalf("expected pre-rebased gate on %s, got %+v\n%s", shortSHA(repaired), steps.gated, report.String())
+	}
+	rebasedHead := steps.gated[0].HeadSHA
+	if rebasedHead == p2Head {
+		t.Fatalf("expected rebased head different from %s", shortSHA(p2Head))
+	}
+	if err := l.markExamined(ctx, first.decision); err != nil {
+		t.Fatal(err)
+	}
+
+	// Plan and stage the resumed piece-2 run on the rebased candidate.
+	resumed := mustPlan(t, l)[0]
+	if resumed.decision.Action != ActionDispatch || resumed.decision.NodeIndex != 1 || !resumed.decision.RunRequest.SessionTurn {
+		t.Fatalf("expected resumed piece-2 dispatch, got %+v", resumed.decision)
+	}
+	if ok, _, err := l.applyPlan(ctx, resumed, repaired, l.cfg.Now()); err != nil || !ok {
+		t.Fatalf("applyPlan (resumed): ok=%v err=%v", ok, err)
+	}
+	staged, err := l.stageDispatches(ctx, []Decision{resumed.decision}, repaired, &LoopResult{})
+	if err != nil || len(staged) != 1 {
+		t.Fatalf("stageDispatches failed: err=%v staged=%d\n%s", err, len(staged), report.String())
+	}
+	if staged[0].NodeBaseSHA != rebasedHead {
+		t.Fatalf("staged NodeBaseSHA = %s, want rebased head %s (old node base was %s)",
+			shortSHA(staged[0].NodeBaseSHA), shortSHA(rebasedHead), shortSHA(p1Head))
+	}
+
+	// Resumed piece-2 commits a change only to its in-scope file piece2.txt.
+	writeForkFile(t, filepath.Join(target, "piece2.txt"), "piece 2 repaired\n")
+	runGit(t, target, "add", "piece2.txt")
+	runGit(t, target, "commit", "-qm", "fix: piece 2 gate repair")
+	repairHead := runGit(t, target, "rev-parse", "HEAD")
+
+	fencePath := filepath.Join(laneDir, FenceFile)
+	escape, err := l.fenceViolationAt(ctx, Candidate{
+		ItemID:   "item-a",
+		LaneID:   laneID,
+		RunID:    staged[0].RunRequest.RunID,
+		Worktree: target,
+		BaseSHA:  staged[0].NodeBaseSHA,
+		HeadSHA:  repairHead,
+	}, fencePath)
+	if err != nil {
+		t.Fatalf("fenceViolationAt failed: %v", err)
+	}
+	if escape != "" {
+		t.Fatalf("resumed piece on rebased candidate was falsely refused: %s", escape)
+	}
+
+	// Positive control: an out-of-scope edit by the resumed run itself is still refused.
+	writeForkFile(t, filepath.Join(target, "outside.txt"), "escaped\n")
+	runGit(t, target, "add", "outside.txt")
+	runGit(t, target, "commit", "-qm", "bad: touch out-of-scope file")
+	escapedHead := runGit(t, target, "rev-parse", "HEAD")
+
+	escape, err = l.fenceViolationAt(ctx, Candidate{
+		ItemID:   "item-a",
+		LaneID:   laneID,
+		RunID:    staged[0].RunRequest.RunID,
+		Worktree: target,
+		BaseSHA:  staged[0].NodeBaseSHA,
+		HeadSHA:  escapedHead,
+	}, fencePath)
+	if err != nil {
+		t.Fatalf("fenceViolationAt (escape control) failed: %v", err)
+	}
+	if !strings.Contains(escape, ScopeEscape) || !strings.Contains(escape, "outside.txt") {
+		t.Fatalf("expected boundary-scope-escape for outside.txt, got %q", escape)
+	}
+}
+
+func TestNodeBaseOnCandidateAfterPreGateRebase(t *testing.T) {
+	ctx := context.Background()
+	f, l := passFixture(t, "item-a")
+	oldBase := runGit(t, f.root, "rev-parse", TrunkRef)
+	lane := l.laneTarget("lane-1")
+
+	writeForkFile(t, filepath.Join(lane, "piece1.txt"), "piece 1\n")
+	runGit(t, lane, "add", "piece1.txt")
+	runGit(t, lane, "commit", "-qm", "feat: piece 1")
+	p1 := runGit(t, lane, "rev-parse", "HEAD")
+
+	writeForkFile(t, filepath.Join(lane, "piece2.txt"), "piece 2\n")
+	runGit(t, lane, "add", "piece2.txt")
+	runGit(t, lane, "commit", "-qm", "feat: piece 2")
+	p2 := runGit(t, lane, "rev-parse", "HEAD")
+
+	// Unrebased lineage keeps the recorded node base for both first and later pieces.
+	if got := l.nodeBaseOnCandidate(ctx, lane, oldBase, p1, oldBase); got != oldBase {
+		t.Fatalf("unrebased first piece: got %s, want %s", shortSHA(got), shortSHA(oldBase))
+	}
+	if got := l.nodeBaseOnCandidate(ctx, lane, oldBase, p2, p1); got != p1 {
+		t.Fatalf("unrebased later piece: got %s, want %s", shortSHA(got), shortSHA(p1))
+	}
+
+	// Rebase onto a newer trunk commit.
+	writeForkFile(t, filepath.Join(f.root, "trunk-only.txt"), "trunk\n")
+	runGit(t, f.root, "add", "trunk-only.txt")
+	runGit(t, f.root, "commit", "-qm", "chore: trunk advance")
+	newBase := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, lane, "rebase", "--onto", newBase, oldBase)
+	rebasedHead := runGit(t, lane, "rev-parse", "HEAD")
+
+	// Both an off-lineage later-piece node base (p1) and an older-than-base first-piece
+	// node base (oldBase) advance to the commit the resumed run actually starts from.
+	if got := l.nodeBaseOnCandidate(ctx, lane, newBase, rebasedHead, p1); got != rebasedHead {
+		t.Fatalf("rebased later piece: got %s, want %s", shortSHA(got), shortSHA(rebasedHead))
+	}
+	if got := l.nodeBaseOnCandidate(ctx, lane, newBase, rebasedHead, oldBase); got != rebasedHead {
+		t.Fatalf("rebased first piece: got %s, want %s", shortSHA(got), shortSHA(rebasedHead))
+	}
+}
