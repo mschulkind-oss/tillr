@@ -47,7 +47,9 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 	var stop string
 	var landed bool
 	var err error
-	if work.RepairHold != nil {
+	if c.NoChange != nil {
+		stop, landed, err = l.verifyNoChange(ctx, work.Decision, &c, local)
+	} else if work.RepairHold != nil {
 		// Retry the retained repair, not another gate and land of the same
 		// original candidate. The original conflict remains the evidence.
 		endConflict := timeHandoffPhase(ctx, "conflict_fix")

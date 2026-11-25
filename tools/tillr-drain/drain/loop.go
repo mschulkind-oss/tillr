@@ -254,7 +254,7 @@ type Candidate struct {
 	// names the same seat the original dispatch did.
 	Seat                  string             `json:"-"`
 	Workflow              string             `json:"workflow,omitempty"`
-	NoChange              *noChangeRecord    `json:"-"`
+	NoChange              *noChangeRecord    `json:"no_change,omitempty"`
 	CandidateChangedPaths []string           `json:"-"` // runtime-only: changed paths captured before replay releases the lane
 	replayCheckLogs       map[string]string  // runtime-only: failing check logs from the gate outcome for case-scoped replay
 	wholeCheckReplay      bool               // runtime-only: force whole-check replay (e.g. stale-fixer tip verification)
@@ -2811,7 +2811,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			finding, findingErr = parseNoChangeFinding(log)
 		}
 		if findingErr == "" {
-			return l.settleSingleWorkerNoChange(ctx, decision, request, lane, tick, target, baseSHA, finding, result)
+			return l.settleSingleWorkerNoChange(ctx, decision, request, lane, tick, target, baseSHA, finding, at, deferJudge, &prepared, result)
 		}
 		endingNote = missingOutputDetail(findingErr)
 	}
@@ -3063,7 +3063,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, candidate.HeadSHA)}
 }
 
-func (l *Loop) settleSingleWorkerNoChange(ctx context.Context, decision Decision, request run.Request, lane, tick, target, baseSHA string, finding landingOfferFinding, result *LoopResult) laneOutcome {
+func (l *Loop) settleSingleWorkerNoChange(ctx context.Context, decision Decision, request run.Request, lane, tick, target, baseSHA string, finding landingOfferFinding, at time.Time, deferJudge bool, prepared *bool, result *LoopResult) laneOutcome {
 	nodeID := ""
 	if decision.Workflow != nil && decision.NodeIndex >= 0 && decision.NodeIndex < len(decision.Workflow.Stages) {
 		nodeID = decision.Workflow.Stages[decision.NodeIndex].ID
@@ -3121,17 +3121,46 @@ func (l *Loop) settleSingleWorkerNoChange(ctx context.Context, decision Decision
 		Request: &request, Seat: decision.Seat, Workflow: decision.workflowRef(),
 		NoChange: &nc,
 	}
-	candidate, accepted, err := l.judgeCandidate(ctx, candidate, result)
+	if deferJudge {
+		if err := appendJudgmentThen(ctx, l.cfg.Store, candidateReadyKind, "run", request.RunID, candidate, at, func(tx *store.Tx) error {
+			tx.Notify(notify.TopicAgentSlotFreed, candidate.ItemID, candidate.RunID)
+			return nil
+		}); err != nil {
+			return laneOutcome{err: err}
+		}
+		*prepared = true
+		return laneOutcome{}
+	}
+	stop, closed, err := l.verifyNoChange(ctx, decision, &candidate, result)
 	if err != nil {
 		return laneOutcome{err: err}
 	}
-	if !accepted {
+	if stop != "" {
+		return laneOutcome{stop: stop}
+	}
+	if !closed {
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, baseSHA)}
 	}
-	if err := l.completeNoChangeExit(ctx, decision, candidate); err != nil {
-		return laneOutcome{err: err}
-	}
 	return laneOutcome{stop: l.abandon(ctx, lane, "", "")}
+}
+
+func (l *Loop) verifyNoChange(ctx context.Context, decision Decision, prepared *Candidate, result *LoopResult) (string, bool, error) {
+	candidate := *prepared
+	defer func() { *prepared = candidate }()
+	if err := l.checkItemTerminal(ctx, candidate.ItemID, "gate"); err != nil {
+		return "", false, err
+	}
+	candidate, accepted, err := l.judgeCandidate(ctx, candidate, result)
+	if err != nil {
+		return "", false, err
+	}
+	if !accepted {
+		return "", false, nil
+	}
+	if err := l.completeNoChangeExit(ctx, decision, candidate); err != nil {
+		return "", false, err
+	}
+	return "", true, nil
 }
 
 // segmentRepeated records the evidence of a run's uncommitted work before its session is

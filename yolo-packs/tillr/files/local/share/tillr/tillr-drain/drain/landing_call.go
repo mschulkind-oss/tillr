@@ -63,7 +63,7 @@ func (o landingOffer) toolName() string {
 }
 
 func (o landingOffer) equalOffer(other landingOffer) bool {
-	if o.CallID != other.CallID || o.Tool != other.Tool || o.Commit != other.Commit || o.Base != other.Base || o.Transcript != other.Transcript {
+	if o.CallID != other.CallID || o.toolName() != other.toolName() || o.Commit != other.Commit || o.Base != other.Base || o.Transcript != other.Transcript {
 		return false
 	}
 	return reflect.DeepEqual(o.Obstacle, other.Obstacle) && reflect.DeepEqual(o.Finding, other.Finding)
@@ -82,6 +82,16 @@ type landingCall struct {
 	Adapter     string `json:"adapter"`
 	Capability  string `json:"ending_capability"`
 	Tool        string `json:"tool"`
+}
+
+// recordedOffer restores Tool from landingCall.Tool, which shadows the embedded
+// landingOffer.Tool during JSON unmarshaling.
+func (c landingCall) recordedOffer() landingOffer {
+	o := c.landingOffer
+	if o.Tool == "" {
+		o.Tool = c.Tool
+	}
+	return o
 }
 
 type landingFinding struct {
@@ -232,7 +242,7 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 				intake = landingOfferDuplicate
 				return nil
 			}
-			if !existing.landingOffer.equalOffer(offer) {
+			if !existing.recordedOffer().equalOffer(offer) {
 				return Externalf("run %s changed its recorded landing offer %s", rec.RunID, offer.CallID)
 			}
 			intake = landingOfferSubmitted
@@ -882,7 +892,7 @@ func (l *Loop) landingState(ctx context.Context, itemID, session string) (map[st
 				return err
 			}
 			if session != "" && call.SessionID == session && !finished {
-				open = append(open, call.landingOffer)
+				open = append(open, call.recordedOffer())
 			}
 			if len(answerRaw) > 0 {
 				var answer landingAnswer

@@ -3,10 +3,12 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -25,6 +27,7 @@ type singleWorkerNoChangeSteps struct {
 	runs        int
 	cancelAfter int
 	cancel      context.CancelFunc
+	afterRun    func()
 }
 
 func (s *singleWorkerNoChangeSteps) Sync(context.Context) (SyncOutcome, error) {
@@ -95,6 +98,9 @@ func (s *singleWorkerNoChangeSteps) Run(_ context.Context, req run.Request) (run
 	if s.cancelAfter > 0 && s.runs > s.cancelAfter && s.cancel != nil {
 		s.cancel()
 		return run.Record{}, "", context.Canceled
+	}
+	if s.afterRun != nil {
+		s.afterRun()
 	}
 	if s.callSuspend {
 		return rec, "", nil
@@ -476,5 +482,127 @@ func TestPlannedBuildPlanNoChangeRefusesProposalConflict(t *testing.T) {
 	}
 	if got := itemStateInStore(t, f, id); got != "in-queue" {
 		t.Fatalf("item state = %q, want in-queue", got)
+	}
+}
+
+func TestSingleWorkerNoChangeSettledOnceAcrossTwoPasses(t *testing.T) {
+	ctx := context.Background()
+	steps := &singleWorkerNoChangeSteps{
+		callSuspend: true,
+		report:      "CAUSE: caused by sibling candidate\nEVIDENCE: ran targeted test on base, passed\nWHY_NO_CHANGE: trunk needs no change\nRESULT: no_change\n",
+	}
+	f, l := setupSingleWorkerNoChange(t, ctx, steps, run.EndingCallSuspends)
+	l.cfg.Lanes = []string{"lane-1"}
+	trunkBefore := runGit(t, f.root, "rev-parse", TrunkRef)
+
+	// Hold judge dispatch as soon as the worker exits, simulating a binary roll
+	// overlapping the first settlement pass.
+	steps.afterRun = func() { l.rollChecking.Add(1) }
+
+	result := &LoopResult{}
+	// Pass 1 dispatches the worker; its immediate settlement runs while
+	// rollChecking holds judge dispatch.
+	if _, err := l.pass(ctx, result); err != nil {
+		t.Fatalf("dispatch pass: %v", err)
+	}
+	for len(l.active) > 0 {
+		select {
+		case c := <-l.completions:
+			if stop, err := l.takeCompletion(c, result); stop != "" || (err != nil && !errors.Is(err, errRestartPending)) {
+				t.Fatalf("completion %s / %v", stop, err)
+			}
+		case <-time.After(hangGuard):
+			t.Fatalf("owned transition did not finish%s", ownedTransitionTimeoutDiagnostic())
+		}
+	}
+	if steps.runs != 1 {
+		t.Fatalf("runs after dispatch pass = %d, want 1", steps.runs)
+	}
+
+	// Pass 2 runs after the roll clears and finishes judging the no-change
+	// finding without re-settling or faulting.
+	l.rollChecking.Add(-1)
+	graphPass(t, l, result)
+
+	if trunkAfter := runGit(t, f.root, "rev-parse", TrunkRef); trunkAfter != trunkBefore {
+		t.Fatalf("trunk moved from %s to %s", trunkBefore, trunkAfter)
+	}
+
+	var shown struct {
+		State       string        `json:"state"`
+		CloseReason string        `json:"close_reason"`
+		Finding     *item.Finding `json:"finding"`
+	}
+	var noChangeEvents, itemFaults, closedCalls int
+	fixtureRead(t, f, func(r *store.Reader) error {
+		env, err := item.Show(r, "item-a", "show-1")
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(env.Payload, &shown); err != nil {
+			return err
+		}
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=?`, noChangeKind).Scan(&noChangeEvents); err != nil {
+			return err
+		}
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=?`, itemFaultKind).Scan(&itemFaults); err != nil {
+			return err
+		}
+		return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND json_extract(payload,'$.reason')='closed-no-change'`, callClosed).Scan(&closedCalls)
+	})
+	if noChangeEvents != 1 {
+		t.Fatalf("drain.no-change events = %d, want 1", noChangeEvents)
+	}
+	if itemFaults != 0 {
+		t.Fatalf("drain.item-fault events = %d, want 0", itemFaults)
+	}
+	if shown.State != "closed" || shown.CloseReason != "no_change: trunk needs no change" {
+		t.Fatalf("unexpected item state: %+v", shown)
+	}
+	if shown.Finding == nil || shown.Finding.Cause != "caused by sibling candidate" || shown.Finding.Evidence != "ran targeted test on base, passed" || shown.Finding.WhyNoChange != "trunk needs no change" {
+		t.Fatalf("unexpected finding: %+v", shown.Finding)
+	}
+	if closedCalls != 1 {
+		t.Fatalf("closed-no-change calls = %d, want 1", closedCalls)
+	}
+}
+
+func TestIntakeLandingOfferReexaminesNoChangeOffer(t *testing.T) {
+	ctx := context.Background()
+	steps := &singleWorkerNoChangeSteps{callSuspend: true}
+	f, l := setupSingleWorkerNoChange(t, ctx, steps, run.EndingCallSuspends)
+	l.cfg.Lanes = []string{"lane-1"}
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	d := mustPlan(t, l)[0].decision
+	staged, err := l.stageDispatches(ctx, []Decision{d}, base, &LoopResult{})
+	if err != nil || len(staged) != 1 {
+		t.Fatalf("stage: %v (len=%d)", err, len(staged))
+	}
+	d = staged[0]
+	rec, _, err := steps.Run(ctx, *d.RunRequest)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got, err := l.intakeLandingOffer(ctx, d, rec, base)
+	if err != nil || got != landingOfferSubmitted {
+		t.Fatalf("first intake = (%v, %v), want (submitted, nil)", got, err)
+	}
+	got, err = l.intakeLandingOffer(ctx, d, rec, base)
+	if err != nil || got != landingOfferSubmitted {
+		t.Fatalf("second intake = (%v, %v), want (submitted, nil)", got, err)
+	}
+
+	mutated := landingOffer{
+		CallID:  "call-nc-1",
+		Tool:    "no_change",
+		Base:    base,
+		Finding: &landingOfferFinding{Cause: "different cause", Evidence: "ran targeted test on base, passed", WhyNoChange: "trunk needs no change"},
+	}
+	if err := writeLandingArtifact(run.DurableDir(l.laneDirPath(d.LaneID), rec.RunID), landingOfferFile, mutated); err != nil {
+		t.Fatalf("write mutated offer: %v", err)
+	}
+	if _, err := l.intakeLandingOffer(ctx, d, rec, base); err == nil || !strings.Contains(err.Error(), "changed its recorded landing offer") {
+		t.Fatalf("mutated intake err = %v, want changed its recorded landing offer", err)
 	}
 }
