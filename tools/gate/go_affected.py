@@ -6,6 +6,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
 import ctypes
+import errno
 import fcntl
 import hashlib
 import importlib.util
@@ -1257,11 +1258,344 @@ def _kill_and_reap_descendants(root_pid: int, max_wait: float = 5.0) -> None:
         time.sleep(0.01)
 
 
+_WATCHDOG_INTERVAL_RE = re.compile(
+    r"^\s*const\s+WatchdogSampleInterval\s*=\s*(?:(\d+)\s*\*\s*)?time\.(Nanosecond|Microsecond|Millisecond|Second|Minute|Hour)\b",
+    re.MULTILINE,
+)
+_WATCHDOG_SILENT_RE = re.compile(
+    r"^\s*const\s+WatchdogSilentSamples\s*=\s*(\d+)\b",
+    re.MULTILINE,
+)
+_GO_TIME_UNIT_SECONDS = {
+    "Nanosecond": 1e-9,
+    "Microsecond": 1e-6,
+    "Millisecond": 1e-3,
+    "Second": 1.0,
+    "Minute": 60.0,
+    "Hour": 3600.0,
+}
+
+
+def _load_watchdog_constants(watchdog_path: Path | None = None) -> tuple[float, int] | None:
+    """Read WatchdogSampleInterval (seconds) and WatchdogSilentSamples from tools/tillr-gate/watchdog.go."""
+    path = (
+        watchdog_path
+        if watchdog_path is not None
+        else Path(__file__).resolve().parents[1] / "tillr-gate" / "watchdog.go"
+    )
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m_int = _WATCHDOG_INTERVAL_RE.search(text)
+    m_sil = _WATCHDOG_SILENT_RE.search(text)
+    if m_int is None or m_sil is None:
+        return None
+    mult = int(m_int.group(1)) if m_int.group(1) is not None else 1
+    interval_s = mult * _GO_TIME_UNIT_SECONDS[m_int.group(2)]
+    silent_samples = int(m_sil.group(1))
+    if interval_s <= 0 or silent_samples <= 0:
+        return None
+    return interval_s, silent_samples
+
+
+class _BinaryStallWatchdog:
+    """Apply tools/tillr-gate's watchdog sample rule to one test binary's process-tree CPU."""
+
+    def __init__(self, silent_threshold: int) -> None:
+        self.silent_threshold = silent_threshold
+        self.previous_members: dict[tuple[int, str], int] | None = None
+        self.high_cpu_ns = 0
+        self.previous_cpu_ns = 0
+        self.initialized = False
+        self.silent_samples = 0
+        self.unavailable = ""
+
+    def observe(self, cpu_ns: int, cpu_changed: bool, err: str = "") -> bool:
+        if self.unavailable:
+            return False
+        if err:
+            self.unavailable = f"watchdog unavailable: {err}"
+            self.silent_samples = 0
+            return False
+        if not self.initialized:
+            self.previous_cpu_ns = cpu_ns
+            self.initialized = True
+            return False
+        if cpu_changed or cpu_ns > self.previous_cpu_ns:
+            self.silent_samples = 0
+        else:
+            self.silent_samples += 1
+        self.previous_cpu_ns = cpu_ns
+        return self.silent_samples >= self.silent_threshold
+
+    def observe_tree(
+        self,
+        members: dict[tuple[int, str], int],
+        total_ns: int,
+        changed: bool,
+        err: str = "",
+    ) -> bool:
+        if err:
+            return self.observe(0, False, err)
+        if self.previous_members is not None:
+            if len(self.previous_members) != len(members):
+                changed = True
+            else:
+                for member_id, ns in members.items():
+                    if self.previous_members.get(member_id) != ns:
+                        changed = True
+                        break
+        self.previous_members = members
+        if total_ns > self.high_cpu_ns:
+            self.high_cpu_ns = total_ns
+        return self.observe(self.high_cpu_ns, changed)
+
+
+def _is_proc_gone(exc: OSError) -> bool:
+    return exc.errno in (errno.ENOENT, errno.ESRCH)
+
+
+def _parse_proc_stat_fields(raw: str) -> list[str] | None:
+    end = raw.rfind(")")
+    if end < 0:
+        return None
+    fields = raw[end + 1:].split()
+    return fields if len(fields) >= 20 else None
+
+
+def _scan_proc_stats(
+    proc_root: Path = Path("/proc"),
+) -> tuple[dict[int, list[str]], dict[int, list[int]], dict[int, list[int]]] | None:
+    by_pid: dict[int, list[str]] = {}
+    children_of: dict[int, list[int]] = {}
+    by_pgrp: dict[int, list[int]] = {}
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        name = entry.name
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        try:
+            raw = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        fields = _parse_proc_stat_fields(raw)
+        if fields is None:
+            continue
+        try:
+            ppid = int(fields[1])
+            pgrp = int(fields[2])
+        except ValueError:
+            continue
+        by_pid[pid] = fields
+        children_of.setdefault(ppid, []).append(pid)
+        by_pgrp.setdefault(pgrp, []).append(pid)
+    return by_pid, children_of, by_pgrp
+
+
+def _is_go_test_binary(proc_root: Path, pid: int) -> bool:
+    try:
+        raw = (proc_root / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return False
+    args = [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
+    return bool(args) and args[0].endswith(".test") and any(a.startswith("-test.") for a in args[1:])
+
+
+def _sample_process_tree_cpu(
+    proc_root: Path,
+    root_pid: int,
+    by_pid: dict[int, list[str]],
+    children_of: dict[int, list[int]],
+    by_pgrp: dict[int, list[int]],
+) -> tuple[dict[tuple[int, str], int], int, bool, str]:
+    if root_pid not in by_pid:
+        return {}, 0, True, ""
+    queue: list[int] = [root_pid]
+    seen: set[int] = {root_pid}
+    for p in by_pgrp.get(root_pid, ()):
+        if p in by_pid and p not in seen:
+            seen.add(p)
+            queue.append(p)
+    snapshots: list[tuple[int, list[str]]] = []
+    idx = 0
+    while idx < len(queue):
+        cur = queue[idx]
+        idx += 1
+        snapshots.append((cur, by_pid[cur]))
+        for child in children_of.get(cur, ()):
+            if child in by_pid and child not in seen:
+                seen.add(child)
+                queue.append(child)
+
+    try:
+        tick_ns = 1_000_000_000 // os.sysconf("SC_CLK_TCK")
+    except (ValueError, OSError):
+        tick_ns = 10_000_000
+
+    members: dict[tuple[int, str], int] = {}
+    total = 0
+    changed = False
+    for pid, fields in snapshots:
+        member_id = (pid, fields[19])
+        pid_dir = proc_root / str(pid)
+        task_dir = pid_dir / "task"
+        try:
+            tasks = list(task_dir.iterdir())
+        except OSError as exc:
+            if _is_proc_gone(exc):
+                if pid_dir.exists():
+                    return {}, 0, False, str(exc)
+                changed = True
+                continue
+            return {}, 0, False, str(exc)
+        ns = 0
+        for task in tasks:
+            try:
+                data = (task / "schedstat").read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                if _is_proc_gone(exc):
+                    if task.exists():
+                        return {}, 0, False, str(exc)
+                    changed = True
+                    continue
+                return {}, 0, False, str(exc)
+            values = data.split()
+            if not values:
+                return {}, 0, False, f"empty schedstat for {pid}"
+            try:
+                ns += int(values[0])
+            except ValueError as exc:
+                return {}, 0, False, str(exc)
+        try:
+            after_raw = (pid_dir / "stat").read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            if _is_proc_gone(exc):
+                changed = True
+                continue
+            return {}, 0, False, str(exc)
+        latest = _parse_proc_stat_fields(after_raw)
+        if latest is None:
+            return {}, 0, False, f"malformed process stat for {pid}"
+        if latest[19] != fields[19] or latest[2] != fields[2]:
+            changed = True
+            continue
+        try:
+            cutime = int(fields[13])
+            cstime = int(fields[14])
+        except ValueError as exc:
+            return {}, 0, False, str(exc)
+        if cutime < 0 or cstime < 0:
+            return {}, 0, False, f"invalid child CPU for {pid}"
+        children_ns = (cutime + cstime) * tick_ns
+        members[member_id] = ns
+        total += ns + children_ns
+    return members, total, changed, ""
+
+
+def _signal_if_same_process(proc_root: Path, pid: int, expected_start: str, sig: int) -> bool:
+    try:
+        raw = (proc_root / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    fields = _parse_proc_stat_fields(raw)
+    if fields is None or fields[0] == "Z" or fields[19] != expected_start:
+        return False
+    try:
+        os.kill(pid, sig)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def _step_go_test_watchdog(
+    go_pid: int,
+    silent_threshold: int,
+    watchers: dict[tuple[int, str], _BinaryStallWatchdog],
+    signalled: set[tuple[int, str]],
+    *,
+    proc_root: Path = Path("/proc"),
+    on_signal=None,
+) -> None:
+    scan = _scan_proc_stats(proc_root)
+    if scan is None:
+        return
+    by_pid, children_of, by_pgrp = scan
+    go_fields = by_pid.get(go_pid)
+    if go_fields is None or go_fields[0] == "Z":
+        return
+
+    live_children: set[tuple[int, str]] = set()
+    for pid in children_of.get(go_pid, ()):
+        fields = by_pid.get(pid)
+        if fields is None or fields[0] == "Z":
+            continue
+        identity = (pid, fields[19])
+        live_children.add(identity)
+        if identity not in watchers and identity not in signalled:
+            if _is_go_test_binary(proc_root, pid):
+                watchers[identity] = _BinaryStallWatchdog(silent_threshold)
+
+    for identity in list(watchers):
+        if identity not in live_children:
+            watchers.pop(identity, None)
+
+    for identity, watcher in list(watchers.items()):
+        if identity in signalled:
+            continue
+        pid, start_time = identity
+        members, total_ns, changed, err = _sample_process_tree_cpu(
+            proc_root, pid, by_pid, children_of, by_pgrp
+        )
+        if watcher.observe_tree(members, total_ns, changed, err):
+            signalled.add(identity)
+            watchers.pop(identity, None)
+            if on_signal is not None:
+                on_signal(pid)
+            else:
+                _signal_if_same_process(proc_root, pid, start_time, signal.SIGQUIT)
+
+
+def _watch_go_test_binaries(
+    go_pid: int,
+    sample_interval: float,
+    silent_threshold: int,
+    stop_event: threading.Event,
+    *,
+    proc_root: Path = Path("/proc"),
+    on_signal=None,
+) -> None:
+    watchers: dict[tuple[int, str], _BinaryStallWatchdog] = {}
+    signalled: set[tuple[int, str]] = set()
+    next_tick = time.monotonic()
+    while not stop_event.is_set():
+        _step_go_test_watchdog(
+            go_pid,
+            silent_threshold,
+            watchers,
+            signalled,
+            proc_root=proc_root,
+            on_signal=on_signal,
+        )
+        next_tick += sample_interval
+        wait = next_tick - time.monotonic()
+        if wait <= 0:
+            next_tick = time.monotonic()
+            continue
+        if stop_event.wait(wait):
+            return
+
+
 def _invocation_guard_main(lifeline_fd: int, command: list[str]) -> int:
     """Run command as a Linux subreaper and kill/reap every descendant on exit."""
     _set_child_subreaper()
     me = os.getpid()
     cleanup_lock = threading.Lock()
+    stop_watcher = threading.Event()
 
     def cleanup_all() -> None:
         with cleanup_lock:
@@ -1285,6 +1619,14 @@ def _invocation_guard_main(lifeline_fd: int, command: list[str]) -> int:
 
     threading.Thread(target=watch_lifeline, daemon=True).start()
     child = subprocess.Popen(command)
+    watchdog_spec = _load_watchdog_constants()
+    if watchdog_spec is not None and sys.platform.startswith("linux"):
+        interval_s, silent_samples = watchdog_spec
+        threading.Thread(
+            target=_watch_go_test_binaries,
+            args=(child.pid, interval_s, silent_samples, stop_watcher),
+            daemon=True,
+        ).start()
     code = 0
     try:
         # As a Linux subreaper, wait on any child (-1) rather than child.pid
@@ -1304,6 +1646,7 @@ def _invocation_guard_main(lifeline_fd: int, command: list[str]) -> int:
                 child.returncode = code
                 break
     finally:
+        stop_watcher.set()
         cleanup_all()
     return 128 - code if code < 0 else code
 

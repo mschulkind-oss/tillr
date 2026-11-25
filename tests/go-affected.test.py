@@ -3115,6 +3115,186 @@ def test_gotmpdir_inside_slot_scratch_and_cleaned_on_signal() -> None:
                 cleanup_leaked_tmp(bdir)
 
 
+def test_binary_watchdog_constants_and_sample_rule() -> None:
+    """go_affected reads watchdog constants from tools/tillr-gate/watchdog.go and applies its sample rule."""
+    spec = go_affected._load_watchdog_constants()
+    assert spec == (1.0, 60), spec
+    assert go_affected._load_watchdog_constants(ROOT / "tools" / "tillr-gate" / "missing.go") is None
+
+    _interval_s, silent_samples = spec
+
+    # 59 silent samples after initialization do not stall; the 60th does.
+    w = go_affected._BinaryStallWatchdog(silent_samples)
+    assert w.observe_tree({(100, "1"): 500}, 500, False) is False
+    for _ in range(silent_samples - 1):
+        assert w.observe_tree({(100, "1"): 500}, 500, False) is False
+    assert w.silent_samples == silent_samples - 1
+    assert w.observe_tree({(100, "1"): 500}, 500, False) is True
+    assert w.silent_samples == silent_samples
+
+    # CPU growth resets silent_samples to 0.
+    w_cpu = go_affected._BinaryStallWatchdog(silent_samples)
+    assert w_cpu.observe_tree({(100, "1"): 500}, 500, False) is False
+    for _ in range(silent_samples - 1):
+        assert w_cpu.observe_tree({(100, "1"): 500}, 500, False) is False
+    assert w_cpu.observe_tree({(100, "1"): 501}, 501, False) is False
+    assert w_cpu.silent_samples == 0
+
+    # Child membership/runtime change resets silent_samples even below the high-water total.
+    w_mem = go_affected._BinaryStallWatchdog(silent_samples)
+    assert w_mem.observe_tree({(100, "1"): 1000}, 1000, False) is False
+    for n in range(silent_samples * 2):
+        assert w_mem.observe_tree({(100, "1"): 500, (200 + n, str(n)): 10}, 510, False) is False
+    assert w_mem.silent_samples == 0
+
+    # Unavailable accounting disables detection permanently without signalling.
+    w_err = go_affected._BinaryStallWatchdog(silent_samples)
+    assert w_err.observe_tree({}, 0, False, "permission denied") is False
+    assert w_err.unavailable != ""
+    for _ in range(silent_samples * 2):
+        assert w_err.observe_tree({(100, "1"): 500}, 500, False) is False
+
+
+def test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalled() -> None:
+    """A stalled go test binary receives SIGQUIT with stacks and fails; CPU-active binaries pass."""
+    stall_pkg = "github.com/mschulkind-oss/tillr-stall-sigquit"
+    busy_pkg = "github.com/mschulkind-oss/tillr-busy-cpu"
+    child_pkg = "github.com/mschulkind-oss/tillr-busy-child"
+    with tempfile.TemporaryDirectory(prefix="go-affected-sigquit-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        (repo / "tools" / "gate").mkdir(parents=True)
+        (repo / "tools" / "tillr-gate").mkdir(parents=True)
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}\n")
+        shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", repo / "tools" / "gate" / "go_affected.py")
+        # Keep the 60-sample threshold and accelerate the sample interval so 60 samples take ~1.5s.
+        (repo / "tools" / "tillr-gate" / "watchdog.go").write_text(
+            "package main\n"
+            'import "time"\n'
+            "const WatchdogSampleInterval = 25 * time.Millisecond\n"
+            "const WatchdogSilentSamples = 60\n",
+            encoding="utf-8",
+        )
+
+        # 1. Stalled binary: blocks on a channel receive with zero CPU usage.
+        stall_dir = repo / "tools" / "tillr-stall-sigquit"
+        stall_dir.mkdir(parents=True)
+        (stall_dir / "go.mod").write_text(f"module {stall_pkg}\n\ngo 1.22\n")
+        (stall_dir / "stall_test.go").write_text(
+            "package main\n"
+            "import (\n"
+            '  "testing"\n'
+            '  "time"\n'
+            ")\n"
+            "func TestStalledBinaryBlocksForever(t *testing.T) {\n"
+            "  ch := make(chan struct{})\n"
+            "  go func() {\n"
+            "    time.Sleep(time.Hour)\n"
+            "    close(ch)\n"
+            "  }()\n"
+            "  <-ch\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        # 2. Busy binary: burns CPU past the 60-sample window (~2.5s > ~1.5s) and exits 0.
+        busy_dir = repo / "tools" / "tillr-busy-cpu"
+        busy_dir.mkdir(parents=True)
+        (busy_dir / "go.mod").write_text(f"module {busy_pkg}\n\ngo 1.22\n")
+        (busy_dir / "busy_test.go").write_text(
+            "package main\n"
+            "import (\n"
+            '  "testing"\n'
+            '  "time"\n'
+            ")\n"
+            "func TestBusyBinaryKeepsRunning(t *testing.T) {\n"
+            "  deadline := time.Now().Add(2500 * time.Millisecond)\n"
+            "  var sink uint64\n"
+            "  for time.Now().Before(deadline) {\n"
+            "    for i := 0; i < 10000; i++ {\n"
+            "      sink += uint64(i)\n"
+            "    }\n"
+            "  }\n"
+            "  if sink == 0 {\n"
+            '    t.Fatal("unreachable")\n'
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        # 3. Busy child: Go test binary itself blocks in Wait(), while its child burns CPU.
+        child_dir = repo / "tools" / "tillr-busy-child"
+        child_dir.mkdir(parents=True)
+        (child_dir / "go.mod").write_text(f"module {child_pkg}\n\ngo 1.22\n")
+        (child_dir / "child_test.go").write_text(
+            "package main\n"
+            "import (\n"
+            '  "os/exec"\n'
+            '  "testing"\n'
+            ")\n"
+            "func TestBusyChildKeepsParentAlive(t *testing.T) {\n"
+            '  cmd := exec.Command("python3", "-c", "import time; end = time.monotonic() + 2.5\\nwhile time.monotonic() < end: pass")\n'
+            "  if out, err := cmd.CombinedOutput(); err != nil {\n"
+            '    t.Fatalf("child failed: %v: %s", err, out)\n'
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        gocache = _shared_gocache()
+        _precompile_go_test(stall_dir, gocache)
+        _precompile_go_test(busy_dir, gocache)
+        _precompile_go_test(child_dir, gocache)
+
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        env = {
+            **os.environ,
+            "YOLO_DURABLE_DIR": str(durable),
+            "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
+            "GO_TEST_SHARDS_CLASS": "ordinary",
+            "GOCACHE": str(gocache),
+        }
+        runner = str(repo / "tools" / "gate" / "go_affected.py")
+
+        stall_res = subprocess.run(
+            [sys.executable, runner, "--root", str(repo), "--changed", "tools/tillr-stall-sigquit/stall_test.go"],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+        )
+        assert stall_res.returncode != 0, stall_res.stdout
+        assert "SIGQUIT: quit" in stall_res.stdout, stall_res.stdout
+        assert "goroutine " in stall_res.stdout, stall_res.stdout
+        assert "TestStalledBinaryBlocksForever" in stall_res.stdout, stall_res.stdout
+
+        busy_res = subprocess.run(
+            [sys.executable, runner, "--root", str(repo), "--changed", "tools/tillr-busy-cpu/busy_test.go"],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+        )
+        assert busy_res.returncode == 0, busy_res.stdout
+        assert "SIGQUIT" not in busy_res.stdout, busy_res.stdout
+        assert f"go-affected: pass {busy_pkg} TestBusyBinaryKeepsRunning " in busy_res.stdout, busy_res.stdout
+
+        child_res = subprocess.run(
+            [sys.executable, runner, "--root", str(repo), "--changed", "tools/tillr-busy-child/child_test.go"],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+        )
+        assert child_res.returncode == 0, child_res.stdout
+        assert "SIGQUIT" not in child_res.stdout, child_res.stdout
+        assert f"go-affected: pass {child_pkg} TestBusyChildKeepsParentAlive " in child_res.stdout, child_res.stdout
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", default=[], help="Run only named test case(s)")
@@ -3149,6 +3329,8 @@ def main(argv: list[str] | None = None) -> int:
         ("test_failure_refusal_names_packages_and_tests_far_above_tail", test_failure_refusal_names_packages_and_tests_far_above_tail),
         ("test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim", test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim),
         ("test_max_shards_scales_with_cpu_count", test_max_shards_scales_with_cpu_count),
+        ("test_binary_watchdog_constants_and_sample_rule", test_binary_watchdog_constants_and_sample_rule),
+        ("test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalled", test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalled),
     ]
     if args.case:
         wanted = set(args.case)
