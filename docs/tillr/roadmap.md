@@ -214,8 +214,10 @@ person who did not need to be asked.
 21. [A probe for a closed backend](../design/tillr-closed-backend-probe.md): one failed run stops
     closing a backend for every seat until a person probes it.
 
-22. [What the operator settles is settled inside tillr](../design/operator-decisions-inside-tillr.md):
-    each kind of hand action gets a taker inside tillr. Ten of its slices wait on no question.
+22. [What the operator settles is settled inside tillr](../design/operator-decisions-inside-tillr.md)
+    and [ended-item saves](../design/tillr-ended-item-saves.md): each kind of hand action gets a
+    taker inside tillr, `refs/tillr/ended/<run>` ends without hand deletion, and lane saves bound
+    untracked files before Git hashes them. Ten slices of the first design wait on no question.
 
 23. [Convergence](../design/tillr-convergence.md): a cold machine rebuilds the queue from the
     documents, drains it and shows every stopped item with the act that moves it.
@@ -375,6 +377,7 @@ which entry waits. A question that blocks nothing yet is reached through its des
 | Whether a worker's `seat` obstacle still moves an item to a stronger model | [`OQ-JL5`](../design/tillr-judge-and-lifecycle.md#OQ-JL5) | Part of entry 25; the removal does not wait |
 | How a closed backend is probed, and where a failed probe is routed | [`OQ-BP1`](../design/tillr-closed-backend-probe.md#OQ-BP1) to [`OQ-BP3`](../design/tillr-closed-backend-probe.md#OQ-BP3) | Entry 21 |
 | Whether a program may repair its own stuck state, what tillr does with no ordered work left, and which seat takes the operator's judgments | [`OQ-OD1`](../design/operator-decisions-inside-tillr.md#OQ-OD1) to [`OQ-OD3`](../design/operator-decisions-inside-tillr.md#OQ-OD3) | Three slices of entry 22 |
+| Who may drop an ended-item save absent from trunk, what happens when untracked files exceed the save bound, and whether idle ended-item lanes save-and-reset or hold | [`OQ-EW1`](../design/tillr-ended-item-saves.md#OQ-EW1) to [`OQ-EW3`](../design/tillr-ended-item-saves.md#OQ-EW3) | The ended-item-saves part of entry 22 |
 | Limits and priority among concurrent test processes | [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1) to [`OQ-GTC4`](../design/gate-test-capacity.md#OQ-GTC4) | Entry 11 |
 | Whether every new request is read for flaws before its first worker | [`OQ-RA1`](../design/tillr-request-amendment.md#OQ-RA1) | The last slices of entry 31 |
 | What happens to running slices when a review comment arrives, and how the existing backlog is treated | [`OQ-DT1`](../design/tillr-design-to-planning-transition.md#OQ-DT1), [`OQ-DT2`](../design/tillr-design-to-planning-transition.md#OQ-DT2) | The later slices of entry 33 |
