@@ -22,6 +22,10 @@ func runTests(m *testing.M) int {
 	if root == "" {
 		root = filepath.Join("..", "..", ".yolo", "durable")
 	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return 1
+	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return 1
 	}
@@ -295,24 +299,45 @@ func TestHelpNamesTheNouns(t *testing.T) {
 }
 
 func TestWrapperAnswersVersionItself(t *testing.T) {
-	dir := stubDir(t, stub{"store", 4})
-	code, stdout, stderr := runWrapper(t, dir, "", "--version")
-	if code != 0 {
-		t.Fatalf("--version exited %d, want 0: %s", code, stderr)
-	}
-	if stderr != "" {
-		t.Errorf("stderr = %q, want empty", stderr)
-	}
-	line := strings.TrimSuffix(stdout, "\n")
-	if strings.Contains(line, "\n") {
-		t.Fatalf("--version is multi-line: %q", stdout)
-	}
-	for _, want := range []string{"green ", "digest ", "exe " + wrapperBin} {
-		if !strings.Contains(line, want) {
-			t.Errorf("--version = %q, missing %q", line, want)
+	t.Run("default", func(t *testing.T) {
+		dir := stubDir(t, stub{"store", 4})
+		code, stdout, stderr := runWrapper(t, dir, "", "--version")
+		if code != 0 {
+			t.Fatalf("--version exited %d, want 0: %s", code, stderr)
+		}
+		if stderr != "" {
+			t.Errorf("stderr = %q, want empty", stderr)
+		}
+		line := strings.TrimSuffix(stdout, "\n")
+		if strings.Contains(line, "\n") {
+			t.Fatalf("--version is multi-line: %q", stdout)
+		}
+		for _, want := range []string{"green ", "digest ", "exe " + wrapperBin} {
+			if !strings.Contains(line, want) {
+				t.Errorf("--version = %q, missing %q", line, want)
+			}
+		}
+		if ran, _ := recorded(t, dir, "store"); ran {
+			t.Errorf("tillr --version ran tillr-store")
+		}
+	})
+
+	t.Run("unset YOLO_DURABLE_DIR", func(t *testing.T) {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestWrapperAnswersVersionItself/default$")
+		cmd.Env = envWithout("YOLO_DURABLE_DIR")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("with YOLO_DURABLE_DIR unset: %v\n%s", err, out)
+		}
+	})
+}
+
+func envWithout(key string) []string {
+	prefix := key + "="
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, prefix) {
+			env = append(env, entry)
 		}
 	}
-	if ran, _ := recorded(t, dir, "store"); ran {
-		t.Errorf("tillr --version ran tillr-store")
-	}
+	return env
 }
