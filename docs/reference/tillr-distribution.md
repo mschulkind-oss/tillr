@@ -1,38 +1,38 @@
 ---
-title: "Distribution: one source-built pack with nine PATH binaries"
+title: "Distribution: one source-built pack with eleven PATH binaries"
 status: accepted
 stage: CURRENT
-verified: 2026-11-24
+verified: 2026-11-25
 covers:
   - yolo-packs/tillr/pack.json
   - yolo-packs/tillr/skills/
   - tools/tillr/packsync/
   - tools/tillr/tillrdocs/
 tags: [tillr, pack, distribution, documentation, reference]
-summary: "tillr is distributed through one pack in a source-plus-launcher pattern: the module source is mirrored into the pack, nine program entries on PATH each build and cache one binary from that source, and documentation is split into three layers where --help alone owns flags."
+summary: "tillr is distributed through one pack in a source-plus-launcher pattern: the module source is mirrored into the pack, eleven program entries on PATH each build and cache one binary from that source, and documentation is split into three layers where --help alone owns flags."
 ---
 
-# Distribution: one source-built pack with nine `PATH` binaries
+# Distribution: one source-built pack with eleven `PATH` binaries
 
-**Status:** Verified 2026-11-24 against the tree. UNMEASURED here: the checks that hold it true are [`tools/tillr/packsync`](../../tools/tillr/packsync) (the mirror and the launchers) and [`tools/tillr/tillrdocs`](../../tools/tillr/tillrdocs) (the documentation split).
+**Status:** Verified 2026-11-25 against the tree. UNMEASURED here: the checks that hold it true are [`tools/tillr/packsync`](../../tools/tillr/packsync) (the mirror and the launchers) and [`tools/tillr/tillrdocs`](../../tools/tillr/tillrdocs) (the documentation split).
 
-`tillr` is distributed through one pack, [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json), in a **source-plus-launcher** pattern: the module source is mirrored into the pack, nine `program` entries on `PATH` each build and cache one binary from that source, and documentation is split into three layers where `--help` alone owns flags.
+`tillr` is distributed through one pack, [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json), in a **source-plus-launcher** pattern: the module source is mirrored into the pack, eleven `program` entries on `PATH` each build and cache one binary from that source, and documentation is split into three layers where `--help` alone owns flags.
 
 | Component | Lives in |
 | :--- | :--- |
-| Pack declaration: nine `program` launchers, one `files` tree, the skills | [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json) |
+| Pack declaration: eleven `program` launchers, one `files` tree, the skills | [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json) |
 | Module source and its mirror | [`tools/`](../../tools), copied by `just pack-sync` to `yolo-packs/tillr/files/` |
 | Mirror and launcher check | [`tools/tillr/packsync`](../../tools/tillr/packsync) |
 | Documentation split check | [`tools/tillr/tillrdocs`](../../tools/tillr/tillrdocs) |
 | Loop composition skill | [`tillr-operating`](../../yolo-packs/tillr/skills/tillr-operating/SKILL.md) |
 
-**Cost.** The module source exists twice: under [`tools/`](../../tools) and, mirrored by `just pack-sync`, under [`yolo-packs/`](../../yolo-packs). Nine `program` entries put nine launchers in `~/.local/bin/`.
+**Cost.** The module source exists twice: under [`tools/`](../../tools) and, mirrored by `just pack-sync`, under [`yolo-packs/`](../../yolo-packs). Eleven `program` entries put eleven launchers in `~/.local/bin/`.
 
 ---
 
 ## Pack programs on `PATH`
 
-One pack at `yolo-packs/tillr` named `tillr` declares **nine `program` contributions** (the umbrella dispatcher `tillr` plus eight standalone `tillr-<noun>` binaries), **one `files` contribution**, and **one `skills` contribution**.
+One pack at `yolo-packs/tillr` named `tillr` declares **eleven `program` contributions** (the umbrella dispatcher `tillr`, nine standalone `tillr-<noun>` binaries, and the `tillr-loop` Git-landing hook program), **one `files` contribution**, and **one `skills` contribution**.
 
 | Module directory | Binary on `PATH` |
 | :--- | :--- |
@@ -42,8 +42,11 @@ One pack at `yolo-packs/tillr` named `tillr` declares **nine `program` contribut
 | [`tools/tillr-gate`](../../tools/tillr-gate) | `tillr-gate` |
 | [`tools/tillr-item`](../../tools/tillr-item) | `tillr-item` |
 | [`tools/tillr-land`](../../tools/tillr-land) | `tillr-land` |
+| [`tools/tillr-loop`](../../tools/tillr-loop) | `tillr-loop` |
+| [`tools/tillr-roll`](../../tools/tillr-roll) | *(none: source-only rolling-release helper)* |
 | [`tools/tillr-run`](../../tools/tillr-run) | `tillr-run` |
 | [`tools/tillr-store`](../../tools/tillr-store) | `tillr-store` |
+| [`tools/tillr-trace`](../../tools/tillr-trace) | `tillr-trace` |
 | [`tools/tillr-view`](../../tools/tillr-view) | `tillr-view` |
 | [`tools/tillr-watch`](../../tools/tillr-watch) | `tillr-watch` |
 

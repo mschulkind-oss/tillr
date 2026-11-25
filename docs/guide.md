@@ -3,7 +3,7 @@ title: "User guide: what tillr is, why to use it, and your first landed item"
 status: accepted
 stage: CURRENT
 tags: [tillr, guide, onboarding]
-summary: "What tillr is, why to use it instead of running coding agents by hand, how charters and Git landing work, and a step-by-step walkthrough from a fresh clone to one landed item."
+summary: "What tillr is, why to use it instead of running coding agents by hand, how charters and Git landing work, how to set up tillr in a yolo jail from the pack, and a step-by-step walkthrough from a fresh clone to one landed item."
 ---
 
 # User guide: what tillr is, why to use it, and your first landed item
@@ -80,7 +80,148 @@ Under the default `git-landing` charter, a finished change goes through a strict
 
 ---
 
-## 5. Walkthrough: from a fresh clone to your first landed item
+## 5. Setting up tillr in a yolo jail from the pack
+
+If you already use `yolo` (`yolo-jail`) on your host machine, you do not need to clone and build `tillr` in every repository. Instead, you can select the `tillr` pack once in your user configuration and get the `tillr` programs and skills inside every `yolo` jail you launch.
+
+Four terms apply to this setup:
+
+- **A `yolo` jail** — an isolated container environment launched by `yolo` where coding agents work against a bind-mounted repository without direct access to your host credentials or home directory.
+- **A pack** — a directory of jail configuration (files, lazy program launchers, and agent skills) that `yolo` delivers into a jail at launch.
+- **User scope vs. workspace scope** — `yolo` keeps pack selection in **user scope** (`~/.config/yolo-jail/config.toml`), never in a repository's `yolo-jail.toml`. Because a workspace config travels with the repository and is agent-editable, `yolo check` refuses a `packs` key in `yolo-jail.toml`. Selecting `yolo-packs/tillr` in user scope makes it available in every workspace you launch, and nothing in the pack runs `tillr` unasked.
+- **A skill** — a `SKILL.md` instruction file delivered into each agent's skill directory that teaches the agent how to follow a specific workflow.
+
+### Selecting `yolo-packs/tillr` on the host
+
+Run the selection commands **on the host** (inside a jail, `yolo pack add` refuses with exit `1` because only the host edits `~/.config/yolo-jail/config.toml`).
+
+First, inspect what the pack claims before selecting it. From a local clone of `tillr`, run `yolo pack lint yolo-packs/tillr` (or `yolo pack footprint ./yolo-packs/tillr`). Observed in this jail on `yolo-packs/tillr`:
+
+```console
+$ yolo pack lint yolo-packs/tillr
+✓ pack ok — 2123 file(s) stage
+delivers:
+  skills         skills/ → every agent (declared broadcast)  (contributes[12])
+declares 14 claim(s):
+  executables    22 files  ...
+  files          .local/share/tillr  read-only tree
+  program        tillr  pack tree: programs/tillr
+  program        tillr-drain  pack tree: programs/tillr-drain
+  program        tillr-gate  pack tree: programs/tillr-gate
+  program        tillr-item  pack tree: programs/tillr-item
+  program        tillr-land  pack tree: programs/tillr-land
+  program        tillr-loop  pack tree: programs/tillr-loop
+  program        tillr-run  pack tree: programs/tillr-run
+  program        tillr-store  pack tree: programs/tillr-store
+  program        tillr-trace  pack tree: programs/tillr-trace
+  program        tillr-view  pack tree: programs/tillr-view
+  program        tillr-watch  pack tree: programs/tillr-watch
+  skills         → every agent  from skills/ — merged (workspace < built-in < packs < your local pack)
+```
+
+Next, add the pack on the host in one of two ways:
+
+- **From GitHub (recommended: pin a tag or full 40-hex commit SHA).** A tag or commit SHA is never re-fetched automatically by a launch; `--ref main` follows `main` and re-fetches at most hourly:
+
+  ```console
+  $ yolo pack add --git https://github.com/mschulkind-oss/tillr \
+      --subdir yolo-packs/tillr \
+      --ref <tag-or-commit-sha>
+  ```
+
+- **From a local clone of `tillr`.** Register the clone's `yolo-packs` directory under `[pack_sources]` in user config, then add `tillr` from that source:
+
+  ```console
+  $ yolo config set pack_sources.tillr-local '"~/code/tillr/yolo-packs"' --user
+  $ yolo pack add tillr-local/tillr
+  ```
+
+Optionally run `yolo pack install` on the host to fetch a Git pack immediately instead of waiting for the next launch.
+
+*(Not verified in this jail: `yolo pack add`, `yolo config set --user`, and `yolo pack install` edit or fetch into the host's user config and pack store, so they cannot be executed from inside a jail. Their syntax was checked against `yolo pack --help` and `yolo config-ref` inside this jail.)*
+
+### Applying the change and relaunching the jail
+
+On the host:
+
+1. **Apply to host config surfaces (when you also run agents on the host):**
+
+   ```console
+   $ yolo host apply --assert
+   ```
+
+   Without `--assert`, `yolo host apply` runs as a dry run and writes nothing. Running it inside a jail refuses with exit `1`.
+
+2. **Relaunch the workspace jail** so `yolo` renders the pack's files, launchers, and skills into the jail's home directory (`~/.local/bin/` and `~/.local/share/tillr/`):
+
+   ```console
+   $ yolo stop && yolo -- bash
+   ```
+
+*(Not verified in this jail: `yolo host apply --assert` and `yolo stop && yolo -- bash` are host-only commands. Their syntax was checked against `yolo host --help` and `yolo stop --help` inside this jail.)*
+
+### Proving all eleven programs are on `PATH`
+
+The pack puts **eleven** source-built launchers on `PATH` (`~/.local/bin/`): `tillr`, `tillr-drain`, `tillr-gate`, `tillr-item`, `tillr-land`, `tillr-loop`, `tillr-run`, `tillr-store`, `tillr-trace`, `tillr-view`, and `tillr-watch`. A **source-built launcher** compiles its Go binary from `~/.local/share/tillr/<module>/` on first call for a given source digest and caches it under `${XDG_CACHE_HOME:-$HOME/.cache}/tillr/bin/`; subsequent calls run the cached binary without invoking Go (see [Distribution: one source-built pack with eleven PATH binaries](./reference/tillr-distribution.md)).
+
+Inside the relaunched jail, confirm that all eleven programs resolve on `PATH` and answer `--help`:
+
+```console
+$ for bin in tillr tillr-drain tillr-gate tillr-item tillr-land tillr-loop tillr-run tillr-store tillr-trace tillr-view tillr-watch; do
+    printf '%-12s %s\n' "$bin" "$("$bin" --help 2>&1 | head -n 1)"
+  done
+tillr        tillr: store, item, land, drain, run, gate, view, watch, trace, notify
+tillr-drain  tillr-drain: probe-backend, workflow, why, workers, policy, plan, once, split, retry, clear-fault, accept-rewrite, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, scale, stop, restart, keep, fork-gate, loop-adapter or loop
+tillr-gate   tillr-gate: change, checks, classify, enable, plan, run, shadow
+tillr-item   tillr-item: apply, rank, dep, sync, reconcile, comments, list, show, state, place, idea, doc-triage, request, close, reopen, decision, mail, verdict or judge
+tillr-land   tillr-land: pass or one
+tillr-loop   tillr-loop: the Git-landing definition's hook program.
+tillr-run    tillr-run: exec, pause, request, lanes, status, release, mark-copied-usage, copied-usage, claude-landing, claude-quota, pi-build-agent-dir, pi-stop-at-gap, pi-compact, pi-landing-call-held or extract-report
+tillr-store  tillr-store: init, definition, seed, check, recover, checkpoint, inventory or events
+tillr-trace  usage: tillr-trace [-h] [--trace-root TRACE_ROOT] [--store STORE] [--loop-dir LOOP_DIR]
+tillr-view   tillr-view: status, events, heavy-misses, waiting, alarms, passes, lanes, running, run, trace, serve, restart or perf-log
+tillr-watch  Usage:
+```
+
+*(Observed in this jail on 2026-11-25. In this verification jail, `tillr-loop` and `tillr-trace` were served from the repository's `PATH`-prepended build because the host's rendered pack predated those two launchers; on a freshly applied pack all eleven resolve from `~/.local/bin/`.)*
+
+### Skills delivered by the pack — and skills not in the pack yet
+
+`yolo-packs/tillr` delivers **two** skills into every agent's skill directory:
+
+- **`tillr-operating`** ([`yolo-packs/tillr/skills/tillr-operating/SKILL.md`](../yolo-packs/tillr/skills/tillr-operating/SKILL.md)) — how to operate and recover the drain loop: how the binaries compose across the seven-step loop (`plan → stage → run → judge → land → verify → audit`), which exit code means what, and how to learn flags from each binary's `--help`.
+- **`tillr-designs`** ([`yolo-packs/tillr/skills/tillr-designs/SKILL.md`](../yolo-packs/tillr/skills/tillr-designs/SKILL.md)) — how to read the delivered design documentation snapshot (`~/.local/share/tillr/docs/`), tell what is built versus designed, open, or parked, see which surfaces are stable, and send requests or comments from another repository.
+
+Two things are **not** delivered by the pack today:
+
+- **Other operator skills** — skills an operating agent uses for timed drain check-ins and lane work are not in `yolo-packs/tillr` yet.
+- **Repository-local skills** — [`tillr-prose-style`](../.agents/skills/tillr-prose-style/SKILL.md) (writing readable queue item prose) lives in this repository's `.agents/skills/` directory rather than in the pack.
+
+### Getting a `pi` with `parked-tool-calls` inside a jail
+
+No pack in this repository installs `mschulkind-oss/tillr-pi` (`ls yolo-packs/` lists only `tillr`). Inside your jail, check first whether the `pi` already on `PATH` advertises `parked-tool-calls`:
+
+```console
+$ pi --features
+["parked-tool-calls"]
+```
+
+*(Observed in this jail on 2026-11-25.)*
+
+If `parked-tool-calls` is missing, build `mschulkind-oss/tillr-pi` from its `tillr-required` branch following [Getting a compatible `pi` from `mschulkind-oss/tillr-pi`](#getting-a-compatible-pi-from-mschulkind-osstillr-pi). Place the clone in a directory that persists across jail restarts rather than `/tmp` or a throwaway home path, then put its `cli.js` symlink ahead of upstream `pi` on `PATH` and re-run `pi --features`.
+
+### First steps once the pack is active
+
+With the eleven `tillr*` binaries and a compatible `pi` on `PATH`, the existing walkthrough below covers the rest of the setup:
+
+1. **Create a store** in your repository — follow [Creating a store in your own repository](#creating-a-store-in-your-own-repository) (`tillr store init --store .tillr/state.db`).
+2. **Write a backend policy** — follow [Writing a backend policy](#writing-a-backend-policy). When running from the pack without a `tillr` clone, point `adapter` at `~/.local/share/tillr/tillr-run/backends/pi/run-pi` (and pass `--brief-template ~/.local/share/tillr/tillr-run/backends/brief-template.md` if your repository does not carry its own template).
+3. **Probe a backend** before relying on it — run `tillr drain probe-backend --store .tillr/state.db --backend <name> -- <smoke-command>` (see [Three things most likely to go wrong first](#three-things-most-likely-to-go-wrong-first)).
+4. **Start the keeper** — a **keeper** (`tillr drain keep`) is the lightweight supervisor that keeps `tillr drain loop` alive for a checkout without changing any item decision. Start it with `tillr drain keep -- --policy ~/.config/tillr/my-policy.json --lanes 1` (or `just tillr-keep -- --policy ~/.config/tillr/my-policy.json --lanes 1` inside a `tillr` clone), and see [Starting the loop and reading what it prints](#starting-the-loop-and-reading-what-it-prints) and [Where a landed item ends up](#where-a-landed-item-ends-up) to read loop output and inspect landed work.
+
+---
+
+## 6. Walkthrough: from a fresh clone to your first landed item
 
 The steps below take you from an empty environment to one commit landed by the drain loop in a Git repository of your own.
 
@@ -92,7 +233,7 @@ Check that these tools are on your `PATH` before you start:
 $ go version        # Go toolchain (builds the tillr programs)
 $ just --version    # command runner used by the build recipe
 $ git --version     # Git (worktrees, three-way merge landing)
-$ python3 --version # Python 3 (runs the loop's embedded gate/land/verdict adapter)
+$ python3 --version # Python 3 (used by the pi backend adapter and the default change-gate scripts)
 $ node --version    # Node.js >= 22.19 (required to build tillr-pi)
 ```
 
@@ -170,7 +311,8 @@ Two environment variables are required on a fresh clone:
 
 If you instead want `tillr` on `PATH` across repositories that carry no `tillr` source via the
 `yolo` pack (`yolo-packs/tillr`), see
-[Distribution: one source-built pack with nine PATH binaries](./reference/tillr-distribution.md).
+[Setting up tillr in a yolo jail from the pack](#5-setting-up-tillr-in-a-yolo-jail-from-the-pack)
+and [Distribution: one source-built pack with eleven PATH binaries](./reference/tillr-distribution.md).
 
 ### Writing a backend policy
 
@@ -402,7 +544,7 @@ A landed item leaves three durable traces:
 
 ---
 
-## 6. Where to go next
+## 7. Where to go next
 
 - **Charters:** [Charters: how they work and how to write your own](./guide/charters.md) — how
   to define custom item states and finish items through a hook without Git landing, with a

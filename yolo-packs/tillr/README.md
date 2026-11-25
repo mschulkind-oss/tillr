@@ -15,7 +15,7 @@ A delivered path mirrors the repository path, with a leading `tools/` dropped. S
 
 ## What tillr does today
 
-The pack delivers ten command-line programs over one SQLite database (`state.db` plus its write-ahead log): the umbrella `tillr` dispatcher and `tillr-store`, `tillr-item`, `tillr-run`, `tillr-drain`, `tillr-gate`, `tillr-land`, `tillr-trace`, `tillr-view`, and `tillr-watch`. Callers compose them as OS processes that exchange exit codes and versioned JSON records (`record_version: 1`). Each face's flags live on the binary's own `--help`.
+The pack delivers eleven command-line programs on `PATH` over one SQLite database (`state.db` plus its write-ahead log): the umbrella `tillr` dispatcher, `tillr-store`, `tillr-item`, `tillr-run`, `tillr-drain`, `tillr-gate`, `tillr-land`, `tillr-loop`, `tillr-trace`, `tillr-view`, and `tillr-watch`. Callers compose them as OS processes that exchange exit codes and versioned JSON records (`record_version: 1`). Each face's flags live on the binary's own `--help`.
 
 Under [the core-and-charter direction](../../docs/design/tillr-core-and-git-landing.md), tillr separates general machinery of queues, leased runs, criteria, and finite workflow graphs (**the core**) from the per-use configuration (**charter**, ruled in [`OQ-VO4`](../../docs/design/tillr-vocabulary.md#OQ-VO4) and [`OQ-VO5`](../../docs/design/tillr-vocabulary.md#OQ-VO5); still spelled `definition` in code and flags today):
 
@@ -77,4 +77,4 @@ The index is the only list of what ships. To add a document, add its row to a ta
 
 ## Deploying a change
 
-The pack deploys through yolo. On the host, run `yolo host apply --assert`, then relaunch each running jail. Run `yolo pack lint yolo-packs/tillr` after every edit to the pack.
+The pack deploys through yolo (see [Setting up tillr in a yolo jail from the pack](../../docs/guide.md#5-setting-up-tillr-in-a-yolo-jail-from-the-pack) for first-time selection). On the host, run `yolo host apply --assert`, then relaunch each running jail. Run `yolo pack lint yolo-packs/tillr` after every edit to the pack.

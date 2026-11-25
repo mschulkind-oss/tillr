@@ -1,6 +1,6 @@
 # tillr
 
-`tillr` is a work-queue toolchain for coding agents: a family of command-line programs (`tillr`, `tillr-drain`, `tillr-gate`, `tillr-item`, `tillr-land`, `tillr-run`, `tillr-store`, `tillr-view`, `tillr-watch`) backed by one SQLite **store** (the database that holds all queued tasks, their states, and an append-only event log). You put tasks—called **items**—into the queue, and a background **drain loop** runs an agent for each item in its own isolated Git worktree (a **lane**), checks the result against your repository's tests (the **gate**), and squashes passing work onto your trunk branch as one clean commit (**landing**). It is built for developers and teams who want coding agents to work through a backlog in parallel without colliding with each other or leaving broken commits on the main branch.
+`tillr` is a work-queue toolchain for coding agents: a family of eleven command-line programs (`tillr`, `tillr-drain`, `tillr-gate`, `tillr-item`, `tillr-land`, `tillr-loop`, `tillr-run`, `tillr-store`, `tillr-trace`, `tillr-view`, `tillr-watch`) backed by one SQLite **store** (the database that holds all queued tasks, their states, and an append-only event log). You put tasks—called **items**—into the queue, and a background **drain loop** runs an agent for each item in its own isolated Git worktree (a **lane**), checks the result against your repository's tests (the **gate**), and squashes passing work onto your trunk branch as one clean commit (**landing**). It is built for developers and teams who want coding agents to work through a backlog in parallel without colliding with each other or leaving broken commits on the main branch.
 
 ## Why use tillr
 
@@ -35,7 +35,7 @@ While `tillr` runs, you talk to **the whale**—the coordinating AI session that
 - `tools/observatory`, `tools/tillr-view` — the web view (`just observatory`).
 - `config/tillr`, [`.tillr.toml`](.tillr.toml) — policy and per-repository configuration.
 - `docs/design`, `docs/reference`, `docs/tillr` — designs, references, and [the roadmap](docs/tillr/roadmap.md).
-- `yolo-packs/tillr` — the yolo pack that ships the binaries and a docs snapshot.
+- `yolo-packs/tillr` — the yolo pack that puts the eleven `tillr*` launchers on `PATH` and ships the skills and a docs snapshot.
 - `.agents/skills`, `hooks`, `tests` — agent skills, git hooks, and repository-level tests.
 
 ## Build and test

@@ -8,7 +8,7 @@ summary: "Self-contained operating reference for an AI agent running tillr in a 
 
 # Agent operating guide: commands, exit codes, and rules
 
-This page is the operating reference for an agent running `tillr` in a repository. For what `tillr` is, why to use it, and how Git landing works, see the [user guide](../guide.md). For charters (`--definition`), see [the charter guide](./charters.md).
+This page is the operating reference for an agent running `tillr` in a repository. For what `tillr` is, why to use it, and how Git landing works, see the [user guide](../guide.md). To install the `tillr` binaries and skills in a `yolo` jail from the pack, see [Setting up tillr in a yolo jail from the pack](../guide.md#5-setting-up-tillr-in-a-yolo-jail-from-the-pack). For charters (`--definition`), see [the charter guide](./charters.md).
 
 ---
 
