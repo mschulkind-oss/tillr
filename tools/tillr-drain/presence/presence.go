@@ -130,7 +130,13 @@ func StoreIdentity(path string) (string, error) {
 }
 
 // RunProcessEnvironment reads /proc/<pid>/environ only when the process is owned by uid.
+// A denied environment read still supplies no markers, even if the process directory
+// passed the ownership check.
 func RunProcessEnvironment(dir string, uid uint32) ([]byte, error) {
+	return readRunProcessEnvironment(dir, uid, os.ReadFile)
+}
+
+func readRunProcessEnvironment(dir string, uid uint32, readFile func(string) ([]byte, error)) ([]byte, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		return nil, err
@@ -142,7 +148,11 @@ func RunProcessEnvironment(dir string, uid uint32) ([]byte, error) {
 	if stat.Uid != uid {
 		return nil, nil
 	}
-	return os.ReadFile(filepath.Join(dir, "environ"))
+	env, err := readFile(filepath.Join(dir, "environ"))
+	if errors.Is(err, os.ErrPermission) {
+		return nil, nil
+	}
+	return env, err
 }
 
 // LiveRunIDs answers, from one process-table scan, every run ID a live process
