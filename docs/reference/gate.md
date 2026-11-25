@@ -4,7 +4,7 @@ status: in-review
 stage: DESIGN
 planning-actions: none
 verified: 2026-11-25
-next: "The owner rules OQ-GR4, OQ-GR5, OQ-GR6 and OQ-GR7."
+next: "The owner rules OQ-GR4, OQ-GR5 and OQ-GR6."
 covers:
   - tools/gate/
   - tools/tillr-gate/
@@ -25,15 +25,15 @@ covers:
   - tools/tillr-view/heavy_misses.go
   - config/tillr/gate-policy.json
 tags: [gate, checks, landing, proof, reference]
-summary: "How the gate works: one JSON declaration per check, a fast tier that judges a candidate before it lands and a heavy tier that proves the trunk after the merge, the gate a trunk fixer gets and the rule for a fork check an upstream release turned red, passes remembered by a fingerprint of declared inputs, one classifier for every check result, budgets that are targets with a watchdog that ends only a stalled check, four open questions for the owner, and the gate rework's decision ledger."
+summary: "How the gate works: one JSON declaration per check, a fast tier that judges a candidate before it lands and a heavy tier that proves the trunk after the merge, the gate a trunk fixer gets and the rule for a fork check an upstream release turned red, passes remembered by a fingerprint of declared inputs, one classifier for every check result, budgets that are targets with a watchdog that ends only a stalled check, three open questions for the owner, and the gate rework's decision ledger."
 vantage:
   status-chip: true
 ---
 
 # The gate
 
-**Status:** Source-verified 2026-11-25 against the tree. Four choices await the owner in
-[`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7). In
+**Status:** Source-verified 2026-11-25 against the tree. Three choices await the owner in
+[`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5) and [`OQ-GR6`](#OQ-GR6). In
 [Why it's this way](#why-its-this-way), only rows quoting the owner's dated words are owner
 rulings; every designer or operator-request decision may be overturned by the owner.
 UNMEASURED: this reference was written by reading the code and the recorded decision ledger,
@@ -798,6 +798,8 @@ pre-merge `go-affected`):
 | **`gate 5, proof 10` (current)** | **~2.5 min** median | **~3.8 s** median | **~16–20 min** low contention; **~30–40+ min** in multi-gate bursts | **~20–45 min** | **~9.7/h** (larger batches during bursts) |
 | **`proof 5, gate 10` (swapped)** | **~3.5–5 min** median (1.3x–2.0x during active proof shards) | **~4–8 s** | **~16–22 min** consistently | **~17–30 min** consistently | **~7–9/h** (smaller unproved tip gap) |
 
+On 2026-11-25 the owner chose option B of [`OQ-GR7`](#OQ-GR7) (`"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`), swapping the priority order to `repair > proof > gate > worker` (`repair 0, proof 5, gate 10, worker 15` under `nice`, and `repair=400, proof=200, gate=100, worker=50` under cgroup v2 `cpu.weight` by the designer's [`D-GTC5`](../design/gate-test-capacity.md#D-GTC5) and [`D-GTC11`](../design/gate-test-capacity.md#D-GTC11) in [gate test capacity](../design/gate-test-capacity.md)) with no cap on concurrent gates, because nothing publishes (`refs/tillr/green` does not advance) without a proof; the swap is not yet built ([`tools/tillr-drain/drain/process_priority.go`](../../tools/tillr-drain/drain/process_priority.go) still orders `gate` before `proof`).
+
 ### A red proof
 
 When a heavy check fails, the runner searches the landings since the green pointer for the
@@ -947,8 +949,11 @@ Whole Go suites and affected packages both run through
   The cross-run file-lock slot pool and `ENFORCE_SLOT_LIMITS` in
   [`tools/go-test-shards.py`](../../tools/go-test-shards.py) were deleted under
   [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1): each test invocation bounds only
-  its own fan-out, and processor share among `repair`, `gate`, `proof`, and `worker`
-  processes is weighted by the kernel via cgroup v2 `cpu.weight` subgroups or `nice`.
+  its own fan-out, and processor share among `repair`, `proof`, `gate`, and `worker`
+  processes is weighted by the kernel via cgroup v2 `cpu.weight` subgroups or `nice`
+  ([`OQ-GR7`](#OQ-GR7), [`OQ-GTC3`](../design/gate-test-capacity.md#OQ-GTC3);
+  [`tools/tillr-drain/drain/process_priority.go`](../../tools/tillr-drain/drain/process_priority.go)
+  still holds the pre-[`OQ-GR7`](#OQ-GR7) `gate > proof` order until built).
 - **Unchanged packages are not re-run ([`D-GR49`](#D-GR49)).** With explicit `--cache` (the
   default mode stays uncached), a package under `100` top-level tests (`SHARD_THRESHOLD`)
   runs as one group and a larger one shards by the duration-balanced bucket formula without
@@ -1018,6 +1023,11 @@ with `tillr-gate` on `PATH`. To run one heavy check: `just done --only <id>`.
   (`rg 'SIGQUIT: quit' tools/gate/go_affected.py` and `rg 'fork-check: triage' tools/gate/`
   return nothing), so a test binary ended by `SIGQUIT` is not yet named as a blocked failing
   case in `drain.refusal`.
+- **Swapping `proof` ahead of `gate` ([`OQ-GR7`](#OQ-GR7)) is not built.**
+  [`tools/tillr-drain/drain/process_priority.go`](../../tools/tillr-drain/drain/process_priority.go)
+  and [`tools/tillr-drain/why.go`](../../tools/tillr-drain/why.go) still weight `gate`
+  (`cpu.weight` `200`, `nice 5`) ahead of `proof` (`cpu.weight` `100`, `nice 10`) rather
+  than `repair > proof > gate > worker`.
 - **The drain's stall re-gate and `gate-stalled` hold are the only stall recovery.** A stalled
   check in `just done` is reported as "could not judge" and nothing re-runs it.
 - **`reads` is trusted.** Nothing verifies that a check reads only what it declares, and
@@ -1168,34 +1178,6 @@ The prose above explains what each is for.
 
    > _(empty — fill in when decided)_
 
-4. 💬 **OQ-GR7: Should the trunk proof run at a higher priority (`nice 5`) than candidate gates (`nice 10`), or stay at `gate 5, proof 10`?**
-
-   In [`Measured proof vs. gate contention (2026-11-25)`](#measured-proof-vs-gate-contention-2026-11-25),
-   76%–83% of high-contention proof wall time (56.60–104.30 min vs. 16.25–19.86 min at low
-   contention) came from CPU contention with `go-affected` gates under `gate 5, proof 10`
-   (3.05x CFS weight per thread for gates over proofs). Commit `5e728e5a` ([`D-GR54`](#D-GR54))
-   already cut `go-affected` median wall time from ~27–29 min to ~2.5 min, so swapping
-   `proof` to `nice 5` and `gate` to `nice 10` only adds ~1–2.5 min to `go-affected` gates
-   during active proof shards while keeping proof cycle time consistently ~16–22 min even
-   during multi-gate bursts.
-
-   - **A — Keep `repair 0, gate 5, proof 10, worker 15`.** Preserves the fastest pre-merge
-     gate turnaround (~2.5 min median for `go-affected`, ~3.8 s for fast-only gates) and ~9.7
-     landings/h, accepting slower proofs (~30–40+ min) and wider unproved-tip gaps during
-     multi-gate bursts.
-   - **B — Swap to `repair 0, proof 5, gate 10, worker 15`.** Gives the single trunk proof
-     3.05x CFS weight over candidate gates so proofs finish consistently in ~16–22 min and
-     publish smaller batches every ~17–30 min, at the cost of ~3.5–5 min `go-affected` gates
-     during active proof shards (~7–9 landings/h).
-
-   <!-- vantage: question id=OQ-GR7 leaning="B — now that D-GR54 cut go-affected gates to ~2.5 min, giving the single trunk proof nice 5 keeps proof time consistently ~16–22 min and shrinks the unproved-tip window while adding only ~1–2.5 min to contending go-affected gates." -->
-
-   _Leaning:_ B — now that [`D-GR54`](#D-GR54) cut `go-affected` gates to ~2.5 min, giving the single trunk proof `nice 5` keeps proof time consistently ~16–22 min and shrinks the unproved-tip window while adding only ~1–2.5 min to contending `go-affected` gates.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
 ## Why it's this way
 
 Each row is a ruling or engineering decision a maintainer might otherwise undo. The ids are
@@ -1226,6 +1208,7 @@ and spelling verbatim.
 | <a id="OQ-FG1"></a>[OQ-FG1](#OQ-FG1) | When an upstream release breaks a patch series, the owner is told by the queue only: no owner-facing row and no hold addressed to the owner. | 2026-11-24 | [Upstream drift](#upstream-drift) | Yes |
 | <a id="D-GR53"></a>`D-GR53` | Carried in a filed request of 2026-11-25: `"sounds like a good idea. do it"`, in answer to moving the `tillr-drain` integration tests out of the pre-merge `go-affected` gate and proving them after the merge after 2026-11-25 `go-affected` timing measurements showed `tillr-drain/drain`'s `~2,000` subprocess-heavy integration tests (`~4,800 s` summed test-wall time) accounting for `83.0%`–`99.99%` of every >20-minute gate. Amends [`D-GR38`](#D-GR38) and [`D-GR39`](#D-GR39); leaves [`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50) and [`I3`](#I3) in force (`tools/tillr-gate` and `tools/gate` suites never land on deferred proof). Mechanism chosen by the designer in [`D-GR54`](#D-GR54). | 2026-11-25 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
 | <a id="D-GR55"></a>`D-GR55` | `"yes let's do it and warn there may be unrelated red tests"`, in answer to lanes starting at `refs/tillr/green` (29 landings behind the tip, causing 17 squash conflicts in ten hours and several gate failures on stale bases): this repository sets `lane_base: tip` in [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json) while the program default for a repository with no setting stays `green`, and whenever a non-fixer lane's base is not the proved commit, the worker's brief warns that the base is unproved and may carry unrelated red tests to be reported as a `trunk` obstacle rather than fixed inside the item. Supersedes [`D-GR24`](#D-GR24) for this repository's `lane_base` setting. | 2026-11-25 | [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer), [Current values](#current-values) | Yes |
+| <a id="OQ-GR7"></a>[OQ-GR7](#OQ-GR7) | Carried in a filed request of 2026-11-25, answering [`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7): `"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`. Option B of [`OQ-GR7`](#OQ-GR7) swaps processor priority from `repair 0, gate 5, proof 10, worker 15` to `repair 0, proof 5, gate 10, worker 15` (`repair > proof > gate > worker`) with no cap on concurrent gates, amending [`OQ-GTC3`](../design/gate-test-capacity.md#OQ-GTC3) in [gate test capacity](../design/gate-test-capacity.md) because nothing publishes (`refs/tillr/green` does not advance) without a proof; cgroup v2 `cpu.weight` values (`repair=400, proof=200, gate=100, worker=50`) and status-line ordering are set by the designer in [`D-GTC5`](../design/gate-test-capacity.md#D-GTC5) and [`D-GTC11`](../design/gate-test-capacity.md#D-GTC11). ([`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5) and [`OQ-GR6`](#OQ-GR6) remain open above until each is updated.) | 2026-11-25 | [Measured proof vs. gate contention (2026-11-25)](#measured-proof-vs-gate-contention-2026-11-25), [Go test execution](#go-test-execution), [Known gaps](#known-gaps) | No |
 
 ### Answered open questions
 
