@@ -48,12 +48,27 @@ newer() {
 	for entry in "$1"/*; do
 		[ -e "$entry" ] || continue
 		if [ -d "$entry" ]; then
+			case ${entry##*/} in
+			node_modules | dist) continue ;;
+			esac
 			newer "$entry" && return 0
 		else
 			case ${entry##*/} in
 			*_test.go) ;;
 			*.go | go.mod | go.sum) [ "$entry" -nt "$current" ] && return 0 ;;
 			esac
+			if [ "$mod" = tillr-view ]; then
+				case $entry in
+				"$root/tillr-view/web/tests/"*) ;;
+				"$root/tillr-view/web/"*)
+					case ${entry##*/} in
+					*.ts | *.tsx | *.js | *.jsx | *.css | *.html | package.json | package-lock.json)
+						[ "$entry" -nt "$current" ] && return 0
+						;;
+					esac
+					;;
+				esac
+			fi
 		fi
 	done
 	return 1
@@ -86,6 +101,9 @@ sources() {
 		for entry in "$dir"/*; do
 			[ -e "$entry" ] || continue
 			if [ -d "$entry" ]; then
+				case ${entry##*/} in
+				node_modules | dist) continue ;;
+				esac
 				sources "$entry"
 			else
 				case ${entry##*/} in
@@ -107,7 +125,74 @@ digest=$(
 
 built=$cache/$bin-$digest
 
-if [ ! -x "$built" ]; then
+web_newer() {
+	for entry in "$1"/*; do
+		[ -e "$entry" ] || continue
+		if [ -d "$entry" ]; then
+			case ${entry##*/} in
+			node_modules | dist | tests) continue ;;
+			esac
+			web_newer "$entry" && return 0
+		else
+			case ${entry##*/} in
+			*.ts | *.tsx | *.js | *.jsx | *.css | *.html | package.json | package-lock.json)
+				[ "$entry" -nt "$web_built" ] && return 0
+				;;
+			esac
+		fi
+	done
+	return 1
+}
+
+web_tags=
+web_rebuilt=
+obs_marker=$built.obs
+if [ "$mod" = tillr-view ]; then
+	web=$root/$mod/web
+	web_built=$web/dist/index.html
+	if [ -d "$web" ]; then
+		if [ ! -f "$web_built" ] || web_newer "$web"; then
+			if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+				web_platform=$(node -p 'process.platform + "-" + process.arch + (process.platform === "linux" ? (process.report.getReport().header.glibcVersionRuntime ? "-gnu" : "-musl") : "")' 2>/dev/null || true)
+				stamp=$web/node_modules/.tillr-platform
+				need_ci=
+				if [ ! -d "$web/node_modules" ]; then
+					need_ci=1
+				elif [ "$web/package-lock.json" -nt "$web/node_modules/.package-lock.json" ]; then
+					need_ci=1
+				elif [ -n "$web_platform" ]; then
+					if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$web_platform" ]; then
+						need_ci=1
+					fi
+				fi
+				if [ -n "$need_ci" ]; then
+					if npm --prefix "$web" ci --no-audit --no-fund >&2; then
+						[ -n "$web_platform" ] && printf '%s\n' "$web_platform" >"$stamp"
+					else
+						need_ci=failed
+					fi
+				fi
+				if [ "$need_ci" != failed ] && npm --prefix "$web" run build >&2 && [ -f "$web_built" ]; then
+					web_rebuilt=1
+				fi
+			elif [ ! -f "$web_built" ]; then
+				echo "$bin: node and npm not found; building without observatory web UI (install node and npm to build it, or pass --web-dist)" >&2
+			fi
+		fi
+		if [ -f "$web_built" ]; then
+			web_tags="-tags observatory"
+		elif command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+			echo "$bin: observatory front-end build failed; building without observatory web UI (pass --web-dist to serve external assets)" >&2
+		fi
+	fi
+	if [ -n "$web_tags" ] && [ ! -e "$obs_marker" ]; then
+		web_rebuilt=1
+	elif [ -z "$web_tags" ] && [ -e "$obs_marker" ]; then
+		web_rebuilt=1
+	fi
+fi
+
+if [ ! -x "$built" ] || [ -n "$web_rebuilt" ]; then
 	command -v go >/dev/null 2>&1 || {
 		echo "$bin: no cached binary for $digest and no go toolchain to build it" >&2
 		exit 1
@@ -117,14 +202,21 @@ if [ ! -x "$built" ]; then
 	trap 'rm -f "$tmp"' EXIT HUP INT TERM
 	(
 		cd "$root/$mod"
-		CGO_ENABLED=0 go build -o "$tmp" .
+		CGO_ENABLED=0 go build $web_tags -o "$tmp" .
 	) || exit 1
 	# Two callers racing a cold cache build the same source: whoever moves second finds
 	# the winner's binary already in place and keeps it.
-	if [ -x "$built" ]; then
+	if [ -x "$built" ] && [ -z "$web_rebuilt" ]; then
 		rm -f "$tmp"
 	else
-		mv "$tmp" "$built"
+		mv -f "$tmp" "$built"
+		if [ "$mod" = tillr-view ]; then
+			if [ -n "$web_tags" ]; then
+				: >"$obs_marker"
+			else
+				rm -f "$obs_marker"
+			fi
+		fi
 	fi
 	trap - EXIT HUP INT TERM
 fi
