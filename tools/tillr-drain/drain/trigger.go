@@ -310,6 +310,7 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 	if l.pollOnly {
 		completions = nil
 	}
+	_, restartWaitCh := l.restartWaitState()
 	handleCompletion := func(c runCompletion) (bool, string, error) {
 		before := l.dispatched(result)
 		stop, err := l.finishRunStep(ctx, c, result)
@@ -340,6 +341,15 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 			if done, stop, err := handleCompletion(c); done {
 				return stop, err
 			}
+		case <-restartWaitCh:
+			if err := l.checkStopRequested(ctx); err != nil {
+				if stoppedByOperator(ctx, err) {
+					result.Detail = "the loop was asked to stop while waiting for a trigger"
+					return StopOperatorStop, nil
+				}
+				return "", err
+			}
+			return "", nil
 		case <-notifyWake:
 			if err := l.checkStopRequested(ctx); err != nil {
 				if stoppedByOperator(ctx, err) {

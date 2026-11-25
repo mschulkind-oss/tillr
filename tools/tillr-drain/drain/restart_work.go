@@ -221,6 +221,34 @@ func (l *Loop) armRestartPending(gen uint64) (<-chan struct{}, bool) {
 	return l.restartPendingWait, false
 }
 
+// restartGateStartHeld reports whether a pending loop restart is holding new
+// gate starts. If the pending restart is in the store before restartPendingWait
+// has been armed, it arms restartPendingWait so the loop waits on it until the
+// restart is answered or deferred by a post-landing action.
+func (l *Loop) restartGateStartHeld(ctx context.Context) (bool, error) {
+	if l.restartReplaced.Load() {
+		return true, nil
+	}
+	if l.cfg.Restart == nil || l.restartActionDeferred() {
+		return false, nil
+	}
+	for {
+		gen, waitCh := l.restartWaitState()
+		if waitCh != nil {
+			return true, nil
+		}
+		pending, err := l.restarterPendingWith(ctx, nil)
+		if err != nil || !pending {
+			return false, err
+		}
+		_, retry := l.armRestartPending(gen)
+		if retry {
+			continue
+		}
+		return true, nil
+	}
+}
+
 // waitForRestartAnswer blocks until any pending restart request that is not
 // deferred by post-landing actions has been answered (replaced or answered
 // without replacing) or deferred by a post-landing action. When allowDuringProof

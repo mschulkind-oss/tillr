@@ -1562,6 +1562,23 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 	return l.waitForTrigger(ctx, leases, at, result)
 }
 
+func (l *Loop) reportRestartWaiting(waiting []Decision, result *LoopResult) {
+	all := make([]string, len(waiting))
+	for i, d := range waiting {
+		all[i] = d.ItemID
+	}
+	detail := fmt.Sprintf("%d candidate(s) waiting for the restart: %s", len(all), strings.Join(all, ", "))
+	if l.waitingDetail != detail {
+		examples := all
+		if len(examples) > 5 {
+			examples = examples[:5]
+		}
+		l.reportf("loop: %d candidate(s) waiting for the restart: %s; waiting for the restart answer or a changed fact\n", len(all), strings.Join(examples, ", "))
+	}
+	l.waitingDetail = detail
+	result.Detail = detail
+}
+
 func holdText(hold Decision) string {
 	if hold.BackendHoldCause != "" {
 		return fmt.Sprintf("%s (%s: %s: %s; mover: %s)", hold.ItemID, hold.Reason, hold.DeferredBy, hold.BackendHoldCause, hold.BackendHoldMover)

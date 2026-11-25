@@ -1456,6 +1456,7 @@ type heldExpressItem struct {
 
 type plannedApplication struct {
 	decision            Decision
+	work                *pendingWork
 	version             string
 	parentRunID         string
 	definitionSHA       string
@@ -1883,7 +1884,7 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 			}
 		}
 		*plans = append(*plans, plannedApplication{
-			decision: d, version: version, parentRunID: parent, start: start,
+			decision: d, work: work, version: version, parentRunID: parent, start: start,
 			definitionSHA: declared.SHA256, definition: &declared.Parsed,
 			expressAheadChecked: aheadChecked, expressAheadHeld: aheadHeld,
 		})
@@ -3363,6 +3364,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if drained > 0 {
 		stale = true
 	}
+	var restartWaiting []Decision
 plans:
 	for i := 0; i < len(plans); i++ {
 		if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
@@ -3400,6 +3402,16 @@ plans:
 				holdWrites = append(holdWrites, write)
 			}
 			continue
+		}
+		if l.judgeWaitsForGateStart(d, p.work) {
+			held, err := l.restartGateStartHeld(ctx)
+			if err != nil {
+				return "", err
+			}
+			if held {
+				restartWaiting = append(restartWaiting, d)
+				continue
+			}
 		}
 		endApply := l.startPassPhase("apply_plans")
 		cancelled, changed, err := l.applyReadyPlan(ctx, p, &mainSHA, at, timing, &laneWatch{watched, epochs}, result)
@@ -3461,6 +3473,10 @@ plans:
 	if timing.Applied > 0 || timing.TickID != "" {
 		l.waitingDetail = ""
 		return "", nil
+	}
+	if len(restartWaiting) > 0 {
+		l.reportRestartWaiting(restartWaiting, result)
+		return l.waitForTrigger(ctx, leases, at, result)
 	}
 	if l.activeCount() > 0 {
 		l.waitingDetail = ""
@@ -3551,6 +3567,26 @@ func (l *Loop) prepareClaimedStage(ctx context.Context, d *Decision, base *strin
 	return staged, false, err
 }
 
+// judgeWaitsForGateStart reports whether an ActionJudge decision needs to start
+// a new gate (as opposed to landing an already-gated candidate, settling a
+// detached gate that already finished on disk, or closing a terminal/released
+// item).
+func (l *Loop) judgeWaitsForGateStart(d Decision, work *pendingWork) bool {
+	if d.Action != ActionJudge || d.WorkflowRelease || d.Reason == ReasonItemAlreadyTerminal {
+		return false
+	}
+	if work == nil || work.Candidate == nil {
+		return false
+	}
+	if work.Gated || work.DirtyHold != nil {
+		return false
+	}
+	if procSteps, isProc := l.cfg.Steps.(*ProcessSteps); isProc && procSteps.hasSettledDetachedGate(*work.Candidate) {
+		return false
+	}
+	return true
+}
+
 // applyReadyPlan is shared by the queue pass and an item-local completion handoff.
 // It leaves cancellation replanning to the queue pass, which owns lane offers.
 func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, timing *PassTiming, watch *laneWatch, result *LoopResult) (cancelled, stale bool, err error) {
@@ -3559,6 +3595,13 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 		if pending, err := l.buildRestartPending(ctx); err != nil {
 			return false, false, err
 		} else if pending {
+			return false, false, nil
+		}
+	}
+	if l.judgeWaitsForGateStart(d, p.work) {
+		if held, err := l.restartGateStartHeld(ctx); err != nil {
+			return false, false, err
+		} else if held {
 			return false, false, nil
 		}
 	}
