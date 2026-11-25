@@ -252,7 +252,7 @@ func TestTheDispatchRecordCarriesTheSeatAndTheBackendThatAnswered(t *testing.T) 
 // leaves out is an item refused for the policy's gap rather than for a bad request, which
 // is the failure the seat layer exists to make loud.
 func TestTheShippedPolicyMapsEverySeat(t *testing.T) {
-	raw, err := os.ReadFile("../../../config/tillr/backend-policy.json")
+	raw, err := os.ReadFile("../../../config/tillr/backend-policy.or-carbon.json")
 	if err != nil {
 		t.Fatalf("reading the shipped policy failed: %v", err)
 	}

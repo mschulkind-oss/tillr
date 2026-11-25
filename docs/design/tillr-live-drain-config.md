@@ -317,7 +317,7 @@ $ tillr drain config
 ordinary_lanes   20        source: operator (via tillr drain scale)
                            status: 20 active, 0 draining
 express_lanes    2         source: .tillr.toml ([lanes] express)
-policy_path      config/tillr/backend-policy.json (sha256: 9f3c1a2e…)
+policy_path      config/tillr/backend-policy.or-carbon.json (sha256: 9f3c1a2e…)
 backend_caps     claude-designer=2 (2/2 active)
                            source: operator override
 seat_caps        (none)

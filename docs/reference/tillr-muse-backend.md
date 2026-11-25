@@ -23,7 +23,7 @@ covers:
   - tools/tillr-drain/drain/backend_availability.go
   - tools/tillr-drain/drain/boundary.go
   - tools/tillr-drain/workflow/workflow.go
-  - config/tillr/backend-policy.json
+  - config/tillr/backend-policy.or-carbon.json
   - tests/tillr-muse-backend.test.py
 tags: [tillr, run, drain, backends, muse, adapters, reference]
 summary: "How tillr stages a ten-section lane brief, runs an agent harness behind an argv-and-record adapter contract, extracts one nineteen-key report, checks a per-run write boundary, and picks a backend from the policy file; the muse adapter ships and no seat dispatches to it."
@@ -37,7 +37,7 @@ vantage:
 
 Tillr runs an agent harness (a command-line coding agent such as `pi` or `claude`) across a process-and-record boundary, not through an in-process Go interface. `tillr-drain` picks a backend from its policy file, stages an untracked `brief.md` and `fence.txt` in the lane directory, and emits a `run.request` whose `backend` field names the backend and whose `command[0]` is that backend's adapter program under [`tools/tillr-run/backends/`](../../tools/tillr-run/backends/). `tillr-run exec` claims the lane, runs the adapter, captures its output, runs the adapter's `extract-report` helper to turn the harness's own stream into one nineteen-key `report.md`, and writes a terminal `run.record` that is materialized into the `runs` table.
 
-Four adapters ship: `pi`, `claude`, `agy`, and `muse`. A fifth backend name, `command`, runs a workflow command node directly with no adapter. **The `muse` backend is declared and not dispatched to:** [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) lists it under `backends`, and neither `default_backend` nor any seat names it. It is in the roadmap's [icebox](../tillr/roadmap.md#icebox). The same is true of `agy` in that policy file.
+Four adapters ship: `pi`, `claude`, `agy`, and `muse`. A fifth backend name, `command`, runs a workflow command node directly with no adapter. **The `muse` backend is declared and not dispatched to:** [`config/tillr/backend-policy.or-carbon.json`](../../config/tillr/backend-policy.or-carbon.json) lists it under `backends`, and neither `default_backend` nor any seat names it. It is in the roadmap's [icebox](../tillr/roadmap.md#icebox). The same is true of `agy` in that policy file.
 
 | Component | Lives in |
 | :--- | :--- |
@@ -52,7 +52,7 @@ Four adapters ship: `pi`, `claude`, `agy`, and `muse`. A fifth backend name, `co
 | Lane staging and brief rendering; derived fence (`FencePaths`) | [`tools/tillr-drain/drain/stage.go`](../../tools/tillr-drain/drain/stage.go), [`tools/tillr-drain/workflow/workflow.go`](../../tools/tillr-drain/workflow/workflow.go) |
 | Attempt classification (`ClassifyAttempt`), backend closure and probes | [`tools/tillr-drain/drain/failover.go`](../../tools/tillr-drain/drain/failover.go), [`backend_availability.go`](../../tools/tillr-drain/drain/backend_availability.go) |
 | Boundary snapshots (`TakeBoundary`, `CompareRunObserved`) | [`tools/tillr-drain/drain/boundary.go`](../../tools/tillr-drain/drain/boundary.go) |
-| Tracked policies and the offline four-adapter contract suite | [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json), [`tests/tillr-muse-backend.test.py`](../../tests/tillr-muse-backend.test.py) |
+| Tracked policies and the offline four-adapter contract suite | [`config/tillr/backend-policy.or-carbon.json`](../../config/tillr/backend-policy.or-carbon.json), [`tests/tillr-muse-backend.test.py`](../../tests/tillr-muse-backend.test.py) |
 
 ---
 
@@ -191,7 +191,7 @@ A failing test, an empty diff, an out-of-fence write, and a red gate are all **a
 
 ## Backend policy, selection, and failover
 
-[`policy.go`](../../tools/tillr-drain/drain/policy.go) loads the JSON document `policy_ref` names. The tracked default is [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json), with `backend-policy.*.json` variants beside it. Its keys:
+[`policy.go`](../../tools/tillr-drain/drain/policy.go) loads the JSON document `policy_ref` names. The tracked default is [`config/tillr/backend-policy.or-carbon.json`](../../config/tillr/backend-policy.or-carbon.json), with `backend-policy.*.json` variants beside it. Its keys:
 
 - `default_backend` — required; the backend for an item that asks for no seat.
 - `backends` — backend name to `run.Backend`. `Policy.Check` refuses an entry `Backend.Missing` rejects. No model id from a tracked policy may appear anywhere under `tools/tillr*` (`D-MM5`; the muse backend test scans for them).
@@ -249,8 +249,8 @@ Source-verified 2026-11-24.
 
 | Setting / identifier | Current value | Defined in |
 | :--- | :--- | :--- |
-| Default backend | `default_backend: "pi"`; every seat maps to `pi` except `design`, which maps to `pi-designer` | [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) |
-| Backends declared and not dispatched to | `muse`, `agy` | [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) |
+| Default backend | `default_backend: "pi"`; every seat maps to `pi` except `design`, which maps to `pi-designer` | [`config/tillr/backend-policy.or-carbon.json`](../../config/tillr/backend-policy.or-carbon.json) |
+| Backends declared and not dispatched to | `muse`, `agy` | [`config/tillr/backend-policy.or-carbon.json`](../../config/tillr/backend-policy.or-carbon.json) |
 | Preflight refusal exit code | `2`, with `run-<name>: refused: ...` on stderr | `refuse` in [`preflight.sh`](../../tools/tillr-run/backends/preflight.sh); `adapterRefusedExit` in [`failover.go`](../../tools/tillr-drain/drain/failover.go) |
 | Adapter wall exit code | `124` | `adapterWallExit` in [`failover.go`](../../tools/tillr-drain/drain/failover.go) |
 | Required brief headings | `Header`, `Task`, `Scope and boundaries`, `Seats`, `Settled decisions`, `Facts carried`, `Method`, `Verification commands`, `Report shape`, `Stop conditions` | `REQUIRED_HEADINGS` in [`preflight.sh`](../../tools/tillr-run/backends/preflight.sh) |

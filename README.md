@@ -35,18 +35,17 @@ commit the full suite has proved; before that ref exists, bootstrap with
 ## Running the loop
 
 A *backend policy* is the JSON file that says which adapter program and model fill each
-seat (the role a run plays: build, design, verify and so on). The loop's default,
-[`config/tillr/backend-policy.json`](config/tillr/backend-policy.json), sends every seat to
-OpenRouter through pi and fails at the first run on a machine with no OpenRouter key. Pick
-the file under [`config/tillr`](config/tillr) that matches the credentials the machine has
-and name it with `--policy`:
+seat (the role a run plays: build, design, verify and so on). With no `--policy` the loop reads `config/tillr/backend-policy.json` in the repository it
+operates, and this repository ships no file at that path: every policy here is named for the
+models it uses. Pick the file under [`config/tillr`](config/tillr) that matches the
+credentials the machine has and name it with `--policy`:
 
 | File | Needs |
 | :--- | :--- |
-| `backend-policy.json` | pi with an OpenRouter key |
+| `backend-policy.or-carbon.json` | pi with an OpenRouter key |
 | `backend-policy.bedrock.json` | pi with Amazon Bedrock access |
-| `backend-policy.copilot.json`, `backend-policy.gemini.json` | pi with a GitHub Copilot login |
-| `backend-policy.claude.json`, `backend-policy.mixed.json` | the `claude` program, and pi with Amazon Bedrock access |
+| `backend-policy.gemini.json` | pi with a GitHub Copilot login |
+| `backend-policy.claude.json` | the `claude` program, and pi with Amazon Bedrock access |
 | `backend-policy.claude-copilot.json` | the `claude` program, and pi with a GitHub Copilot login |
 
 ```console

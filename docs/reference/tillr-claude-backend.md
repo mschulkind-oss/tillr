@@ -8,7 +8,7 @@ covers:
   - tools/tillr-run/run/request.go
   - tools/tillr-drain/drain/backend_availability.go
   - config/tillr/backend-policy.claude.json
-  - config/tillr/backend-policy.mixed.json
+  - config/tillr/backend-policy.claude-copilot.json
 tags:
   - tillr
   - backend
@@ -42,7 +42,7 @@ waits for it.
 | Subscription quota command | `tools/tillr-run/backends/claude/quota` |
 | Harness arguments on a run request | `tools/tillr-run/run` (`harness_args`) |
 | Quota admission and the waiting view | [the drain's reference](../../tools/tillr-drain/README.md#backend-quota-admission) |
-| Policies that route seats here | [`config/tillr/backend-policy.claude.json`](../../config/tillr/backend-policy.claude.json), [`config/tillr/backend-policy.mixed.json`](../../config/tillr/backend-policy.mixed.json) |
+| Policies that route seats here | [`config/tillr/backend-policy.claude.json`](../../config/tillr/backend-policy.claude.json), [`config/tillr/backend-policy.claude-copilot.json`](../../config/tillr/backend-policy.claude-copilot.json) |
 
 Neither policy file sets `quota` or `reserve`; opting a row in is the owner's configuration
 choice.
