@@ -74,13 +74,18 @@ mechanism from the throughput side.
 
 The gate runs once. If the trunk moves during a gate, the already-gated change is re-applied onto
 the new tip and **landed without a second gate**, so throughput does not depend on the rate of
-incoming change.
+incoming change. Lanes run independently, landings must outpace them at ten lanes and again at
+twenty, and nothing a landing waits for may be shared between lanes except the squash itself
+(owner ruling [`D-GR2`](../reference/gate.md#D-GR2), 2026-11-15).
 
 *Basis:* re-gating on every trunk move makes landing a function of everyone else's velocity — the
 inverted polarity of principle 2. The owner's stated model is a protected branch that does not
-require candidates to be up to date before they merge.
+require candidates to be up to date before they merge, paired with the 2026-11-15 ruling
+[`D-GR2`](../reference/gate.md#D-GR2) that landings must outpace independent lanes at ten lanes
+and again at twenty.
 
-*Enforced by:* [`tools/tillr-land`](../../tools/tillr-land/). The gate runs outside `land.lock`.
+*Enforced by:* [`tools/tillr-land`](../../tools/tillr-land/) and [`tillr-drain`](../../tools/tillr-drain/).
+The gate runs outside `land.lock`, and sibling gates enter without waiting on an in-flight gate.
 Under the lock, `Land` ([`landing.go`](../../tools/tillr-land/land/landing.go)) calls `Trunk.Squash`
 to merge `base..head` onto `trunkBefore` through plumbing with no working tree, commits with the
 scope-checked `LandingIdentity` and the head's own message, and `Trunk.Move` advances the trunk
@@ -102,9 +107,17 @@ the verdict bound, `landed_tree` is the tree the trunk published.
 
 Pinned by `TestAMovedTrunkSquashesTheChangeOntoTheNewTip` and
 `TestASquashConflictIsRecordedAndPinsTheHead` in
-[`main_test.go`](../../tools/tillr-land/main_test.go).
+[`main_test.go`](../../tools/tillr-land/main_test.go), and at ten and twenty concurrent lanes by
+`TestTenLanesLandWithoutWaitingOnEachOther` and `TestTwentyLanesLandWithoutWaitingOnEachOther` in
+[`scale_test.go`](../../tools/tillr-drain/drain/scale_test.go) (every sibling lands while the
+first lane's gate stays held open).
 
-*Scope:* **the landing transaction.**
+*Not enforced:* the scale tests enter at the candidate-examination seam with fixture gates and
+assert no wall-clock rate ([the gate check rules](../reference/gate-check-rules.md#a-check-asserts-what-was-recorded-never-elapsed-time));
+whether landings outpace real workers at ten and twenty lanes is observed from recorded gate and
+landing timings rather than gated by a test.
+
+*Scope:* **the landing transaction and the drain.**
 
 ## 4. Every outcome is state-changing
 
