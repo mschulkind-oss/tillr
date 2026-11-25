@@ -65,7 +65,7 @@ func loadLag(k keys, w When, refs map[string]bool) When {
 	return w
 }
 
-func checkProjectionOperands(k keys, r Rule, refs map[string]bool) {
+func checkProjectionOperands(k keys, r Rule, refs, proofRefs map[string]bool) {
 	for _, expr := range []struct {
 		key string
 		exp *Expression
@@ -79,9 +79,13 @@ func checkProjectionOperands(k keys, r Rule, refs map[string]bool) {
 				if !refs[operand.ref] {
 					k.reject(expr.key, "git.ref(%q) requires a listed ref in reads.projections", operand.ref)
 				}
+			case operand.name == "item.fixer_proved":
+				if r.When.GroupBy == "global" || !slices.Contains(r.Reads.Projections, "fixer_checks") || !proofRefs[operand.ref] {
+					k.reject(expr.key, "item.fixer_proved(%q) requires a non-global subject, fixer_checks, and green_proof:%s in reads.projections", operand.ref, operand.ref)
+				}
 			case strings.HasPrefix(operand.name, "item."):
 				switch operand.name {
-				case "item.state", "item.seat", "item.waiting_on":
+				case "item.id", "item.state", "item.seat", "item.waiting_on":
 					if r.When.GroupBy == "global" || !slices.Contains(r.Reads.Projections, "items") {
 						k.reject(expr.key, "%s requires an items projection and a non-global subject", operand.name)
 					}

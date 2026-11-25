@@ -1,0 +1,24 @@
+# On 2026-11-23 at 09:25 ET, fixer-main-18f649ca0940 remained in-queue as a
+# finished candidate even though the green proof at c71d69320029 had already
+# passed its check (D-TW80). Alert whenever a fixer-main-* item stays in-queue
+# after refs/tillr/green has a green proof covering every check it was filed for.
+[[rule]]
+id = "drain-trunk-fixer-proved-queued"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+projections = ["items", "fixer_checks", "green_proof:refs/tillr/green"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'item.id matches "^fixer-main-" and item.state == "in-queue" and item.fixer_proved("refs/tillr/green")'
+
+[rule.guidance]
+summary = "Trunk fixer {{subject}} is still in-queue after refs/tillr/green passed every check it was filed for."
+check = ["inspect {{subject}} in the queue, its trunk-green criterion, and the green proof at refs/tillr/green (.git/tillr-gate/green-*.json)"]
+do = ["check why the drain left {{subject}} in-queue instead of resolving it against the green proof, and resolve or close {{subject}}"]
+
+[rule.delivery]
+receiver = "foreground"

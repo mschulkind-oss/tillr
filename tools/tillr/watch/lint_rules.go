@@ -220,6 +220,7 @@ func lintOneRuleTable(path string, index int, table map[string]any, kinds map[st
 
 	// [rule.reads]
 	refs := make(map[string]bool)
+	proofRefs := make(map[string]bool)
 	readsMap, readsOK := table["reads"].(map[string]any)
 	if !readsOK {
 		emit(CodeWatchLintUnknownSignal, "reads: expected a table")
@@ -252,7 +253,7 @@ func lintOneRuleTable(path string, index int, table map[string]any, kinds map[st
 				r.Reads.Projections = projList
 				for _, proj := range projList {
 					switch {
-					case proj == "items" || proj == "charter":
+					case proj == "items" || proj == "charter" || proj == "fixer_checks":
 					case strings.HasPrefix(proj, "git_refs:"):
 						list := strings.TrimPrefix(proj, "git_refs:")
 						if list == "" {
@@ -266,14 +267,24 @@ func lintOneRuleTable(path string, index int, table map[string]any, kinds map[st
 								}
 							}
 						}
+					case strings.HasPrefix(proj, "green_proof:"):
+						ref := strings.TrimPrefix(proj, "green_proof:")
+						if !validRef(ref) {
+							emit(CodeWatchLintUnknownSignal, fmt.Sprintf("reads.projections: invalid Git ref %q in %q", ref, proj))
+						} else {
+							proofRefs[ref] = true
+						}
 					default:
 						emit(CodeWatchLintUnknownSignal, fmt.Sprintf("reads.projections: unknown projection %q", proj))
 					}
 				}
 			}
 		}
-		if pattern != LagBehind && len(r.Reads.Events) == 0 {
+		if pattern != LagBehind && pattern != PredicateMatch && len(r.Reads.Events) == 0 {
 			emit(CodeWatchLintUnknownSignal, "reads.events: expected a non-empty list of event kinds")
+		}
+		if pattern == PredicateMatch && len(r.Reads.Events) == 0 && !slices.Contains(r.Reads.Projections, "items") {
+			emit(CodeWatchLintUnknownSignal, "reads.projections: projection-only predicate_match requires \"items\"")
 		}
 		if pattern == LagBehind && len(r.Reads.Events) == 0 && len(r.Reads.Projections) == 0 {
 			emit(CodeWatchLintUnknownSignal, "reads: lag_behind requires events or projections")
@@ -284,7 +295,7 @@ func lintOneRuleTable(path string, index int, table map[string]any, kinds map[st
 	if !whenOK {
 		emit(CodeWatchLintRuleSchema, "when: expected a table")
 	} else {
-		r.When = lintRuleWhen(whenMap, r.Scope, r.Reads, refs, kinds, emit)
+		r.When = lintRuleWhen(whenMap, r.Scope, r.Reads, refs, proofRefs, kinds, emit)
 	}
 
 	// [rule.guidance]
@@ -292,7 +303,7 @@ func lintOneRuleTable(path string, index int, table map[string]any, kinds map[st
 	if !gOK {
 		emit(CodeWatchLintEmptyGuidance, "guidance: expected a table")
 	} else {
-		r.Guidance = lintRuleGuidance(guidanceMap, r.When, emit)
+		r.Guidance = lintRuleGuidance(guidanceMap, r.When, len(r.Reads.Events) > 0, emit)
 	}
 
 	// [rule.delivery]
@@ -340,7 +351,7 @@ func tomlStringList(raw any) ([]string, bool) {
 	return out, true
 }
 
-func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[string]bool, kinds map[string]bool, emit func(string, string)) When {
+func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proofRefs map[string]bool, kinds map[string]bool, emit func(string, string)) When {
 	var w When
 	pattern, ok := whenMap["pattern"].(string)
 	if !ok || pattern == "" {
@@ -452,24 +463,33 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[st
 			}
 			w.Mode = m
 		}
-		w.ReopenWhen = lintRuleExpr(whenMap, "reopen_when", false, w.GroupBy, reads, refs, kinds, emit)
+		w.ReopenWhen = lintRuleExpr(whenMap, "reopen_when", false, w.GroupBy, reads, refs, proofRefs, kinds, emit)
 		if w.ReopenWhen != nil && len(reads.Events) == 0 {
 			emit(CodeWatchLintUnknownSignal, "when.reopen_when: requires reads.events")
 		}
 		return w
 	}
 
+	projectionOnly := pattern == PredicateMatch && len(reads.Events) == 0
+	if projectionOnly && (w.GroupBy != "item_id" || len(w.GroupByList) != 0) {
+		emit(CodeWatchLintRuleSchema, "when.group_by: projection-only predicate_match requires group_by = \"item_id\"")
+	}
+
 	if rawFP, present := whenMap["fingerprint"]; present {
-		fp, ok := tomlStringList(rawFP)
-		if !ok || len(fp) == 0 {
-			emit(CodeWatchLintRuleSchema, "when.fingerprint: expected a non-empty list of strings")
+		if projectionOnly {
+			emit(CodeWatchLintRuleSchema, "when.fingerprint: projection-only predicate_match must omit fingerprint")
 		} else {
-			for _, name := range fp {
-				if name == "" || !validEventPath(name) || strings.HasPrefix(name, "event.") {
-					emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.fingerprint: invalid event path %q", name))
+			fp, ok := tomlStringList(rawFP)
+			if !ok || len(fp) == 0 {
+				emit(CodeWatchLintRuleSchema, "when.fingerprint: expected a non-empty list of strings")
+			} else {
+				for _, name := range fp {
+					if name == "" || !validEventPath(name) || strings.HasPrefix(name, "event.") {
+						emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.fingerprint: invalid event path %q", name))
+					}
 				}
+				w.Fingerprint = fp
 			}
-			w.Fingerprint = fp
 		}
 	}
 
@@ -477,8 +497,8 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[st
 	switch pattern {
 	case DurationWithoutEvent:
 		allowed = append(allowed, "after", "match", "threshold_duration")
-		w.After = lintRuleExpr(whenMap, "after", true, w.GroupBy, reads, refs, kinds, emit)
-		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, kinds, emit)
+		w.After = lintRuleExpr(whenMap, "after", true, w.GroupBy, reads, refs, proofRefs, kinds, emit)
+		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, proofRefs, kinds, emit)
 		s, ok := whenMap["threshold_duration"].(string)
 		d := parseWindow(s)
 		if !ok || d <= 0 {
@@ -489,15 +509,18 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[st
 	case PredicateMatch:
 		allowed = append(allowed, "match")
 		w.Threshold = 1
-		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, kinds, emit)
+		w.Match = lintRuleExpr(whenMap, "match", projectionOnly, w.GroupBy, reads, refs, proofRefs, kinds, emit)
+		if projectionOnly && w.Match != nil && w.Match.usesEvent {
+			emit(CodeWatchLintUnknownSignal, "when.match: projection-only predicate_match cannot reference event.*")
+		}
 	case CountInWindow:
 		allowed = append(allowed, "match", "distinct_by", "threshold")
-		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, kinds, emit)
+		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, proofRefs, kinds, emit)
 		w.DistinctBy = lintDistinctBy(whenMap, emit)
 	case ConsecutiveCount:
 		allowed = append(allowed, "match", "reset", "distinct_by", "threshold")
-		w.Match = lintRuleExpr(whenMap, "match", true, w.GroupBy, reads, refs, kinds, emit)
-		w.Reset = lintRuleExpr(whenMap, "reset", false, w.GroupBy, reads, refs, kinds, emit)
+		w.Match = lintRuleExpr(whenMap, "match", true, w.GroupBy, reads, refs, proofRefs, kinds, emit)
+		w.Reset = lintRuleExpr(whenMap, "reset", false, w.GroupBy, reads, refs, proofRefs, kinds, emit)
 		w.DistinctBy = lintDistinctBy(whenMap, emit)
 	case AlternatingPair:
 		allowed = append(allowed, "field", "pairs", "threshold")
@@ -532,7 +555,13 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[st
 		return w
 	}
 
-	w.ClearWhen = lintRuleExpr(whenMap, "clear_when", false, w.GroupBy, reads, refs, kinds, emit)
+	if projectionOnly {
+		if _, hasClear := whenMap["clear_when"]; hasClear {
+			emit(CodeWatchLintRuleSchema, "when.clear_when: projection-only predicate_match must omit clear_when")
+		}
+	} else {
+		w.ClearWhen = lintRuleExpr(whenMap, "clear_when", false, w.GroupBy, reads, refs, proofRefs, kinds, emit)
+	}
 
 	for _, k := range slices.Sorted(maps.Keys(whenMap)) {
 		if k != "remedy" && !slices.Contains(allowed, k) {
@@ -550,7 +579,12 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[st
 	}
 
 	_, hasWindow := whenMap["window"]
-	if pattern == PredicateMatch && w.ClearWhen != nil && !hasWindow {
+	if projectionOnly {
+		if hasWindow {
+			emit(CodeWatchLintRuleSchema, "when.window: projection-only predicate_match must omit window")
+		}
+		w.Window = 0
+	} else if pattern == PredicateMatch && w.ClearWhen != nil && !hasWindow {
 		w.Window = 0
 	} else {
 		s, ok := whenMap["window"].(string)
@@ -588,7 +622,7 @@ func isForbiddenGroupByColumn(col string) bool {
 	return col == "seq" || col == "ts" || col == "revision"
 }
 
-func lintRuleExpr(whenMap map[string]any, key string, required bool, groupBy string, reads Reads, refs map[string]bool, kinds map[string]bool, emit func(string, string)) *Expression {
+func lintRuleExpr(whenMap map[string]any, key string, required bool, groupBy string, reads Reads, refs, proofRefs map[string]bool, kinds map[string]bool, emit func(string, string)) *Expression {
 	raw, present := whenMap[key]
 	if !present {
 		if required {
@@ -615,9 +649,13 @@ func lintRuleExpr(whenMap map[string]any, key string, required bool, groupBy str
 			if !refs[op.ref] {
 				emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: git.ref(%q) requires a listed ref in reads.projections", key, op.ref))
 			}
+		case op.name == "item.fixer_proved":
+			if groupBy == "global" || !slices.Contains(reads.Projections, "fixer_checks") || !proofRefs[op.ref] {
+				emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: item.fixer_proved(%q) requires a non-global subject, fixer_checks, and green_proof:%s in reads.projections", key, op.ref, op.ref))
+			}
 		case strings.HasPrefix(op.name, "item."):
 			switch op.name {
-			case "item.state", "item.seat", "item.waiting_on":
+			case "item.id", "item.state", "item.seat", "item.waiting_on":
 				if groupBy == "global" || !slices.Contains(reads.Projections, "items") {
 					emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: %s requires an items projection and a non-global subject", key, op.name))
 				}
@@ -649,18 +687,19 @@ func lintRuleExpr(whenMap map[string]any, key string, required bool, groupBy str
 	return exp
 }
 
-func lintRuleGuidance(gMap map[string]any, when When, emit func(string, string)) Guidance {
+func lintRuleGuidance(gMap map[string]any, when When, hasEvents bool, emit func(string, string)) Guidance {
 	for _, k := range slices.Sorted(maps.Keys(gMap)) {
 		if k != "summary" && k != "reopen_summary" && k != "check" && k != "do" {
 			emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("guidance.%s: unknown key", k))
 		}
 	}
+	allowEvent := hasEvents && when.Pattern != LagBehind
 	var g Guidance
 	if summary, ok := gMap["summary"].(string); !ok || strings.TrimSpace(summary) == "" {
 		emit(CodeWatchLintEmptyGuidance, "guidance.summary: expected a non-blank string")
 	} else {
 		g.Summary = summary
-		checkGuidanceText("guidance.summary", summary, when, false, emit)
+		checkGuidanceText("guidance.summary", summary, when, allowEvent, emit)
 	}
 
 	if rawReopen, present := gMap["reopen_summary"]; present {
@@ -689,7 +728,7 @@ func lintRuleGuidance(gMap map[string]any, when When, emit func(string, string))
 				emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("guidance.%s[%d]: expected a non-blank string", field.name, i))
 				continue
 			}
-			checkGuidanceText(fmt.Sprintf("guidance.%s[%d]", field.name, i), line, when, false, emit)
+			checkGuidanceText(fmt.Sprintf("guidance.%s[%d]", field.name, i), line, when, allowEvent, emit)
 		}
 	}
 	return g
@@ -747,7 +786,7 @@ func validGuidancePlaceholder(tok string, when When, allowEvent bool) bool {
 		return (when.Pattern == CountInWindow || when.Pattern == ConsecutiveCount) && when.DistinctBy != ""
 	}
 	if name, ok := strings.CutPrefix(tok, "event."); ok {
-		if when.Pattern == LagBehind && !allowEvent {
+		if !allowEvent {
 			return false
 		}
 		if name == "" || strings.HasPrefix(name, "event.") || strings.IndexFunc(name, unicode.IsSpace) >= 0 {
@@ -792,8 +831,8 @@ func lintRulesWithContext(rules []lintedRule, charter charterData, workflows []l
 		if charter.valid && charter.def.Completes != "landing" {
 			if r.Scope == "core" || r.Scope == "charter:"+charter.def.Name {
 				for _, proj := range r.Reads.Projections {
-					if strings.HasPrefix(proj, "git_refs:") {
-						fc.add(lr.source, CodeWatchLintUnknownSignal, fmt.Sprintf("rule %q: git_refs projection %q is incompatible with charter %q (completes=%q)", r.ID, proj, charter.def.Name, charter.def.Completes))
+					if strings.HasPrefix(proj, "git_refs:") || proj == "fixer_checks" || strings.HasPrefix(proj, "green_proof:") {
+						fc.add(lr.source, CodeWatchLintUnknownSignal, fmt.Sprintf("rule %q: projection %q is incompatible with charter %q (completes=%q)", r.ID, proj, charter.def.Name, charter.def.Completes))
 					}
 				}
 			}

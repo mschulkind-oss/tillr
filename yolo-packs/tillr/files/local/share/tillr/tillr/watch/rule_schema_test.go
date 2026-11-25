@@ -98,3 +98,64 @@ func TestWatchDurationAndProjectionSchema(t *testing.T) {
 		})
 	}
 }
+
+func TestWatchProjectionOnlyAndFixerProvedSchema(t *testing.T) {
+	register(t, "test.watch")
+	base := `[[rule]]
+id = "proved-queued"
+scope = "core"
+severity = "warning"
+[rule.reads]
+projections = ["items", "fixer_checks", "green_proof:refs/tillr/green"]
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'item.id matches "^fixer-main-" and item.state == "in-queue" and item.fixer_proved("refs/tillr/green")'
+[rule.guidance]
+summary = "Fixer {{subject}} is still queued"
+check = ["inspect {{subject}}"]
+do = ["resolve {{subject}}"]
+[rule.delivery]
+receiver = "foreground"
+`
+	for _, tc := range []struct{ name, old, value, wantKey string }{
+		{"valid", "", "", ""},
+		{"empty-events", "[rule.reads]", "[rule.reads]\nevents = []", ""},
+		{"missing-items", `"items", `, "", "reads.projections"},
+		{"missing-fixer-checks", `"fixer_checks", `, "", "when.match"},
+		{"missing-green-proof", `, "green_proof:refs/tillr/green"`, "", "when.match"},
+		{"mismatched-green-proof", `green_proof:refs/tillr/green`, `green_proof:refs/heads/main`, "when.match"},
+		{"bad-green-proof-ref", `green_proof:refs/tillr/green`, `green_proof:refs/tillr/green~1`, "reads.projections"},
+		{"wrong-group-by", `group_by = "item_id"`, `group_by = "object_id"`, "when.group_by"},
+		{"global-group-by", `group_by = "item_id"`, `group_by = "global"`, "when.group_by"},
+		{"list-group-by", `group_by = "item_id"`, `group_by = ["item_id", "run_id"]`, "when.group_by"},
+		{"missing-match", "match = 'item.id matches \"^fixer-main-\" and item.state == \"in-queue\" and item.fixer_proved(\"refs/tillr/green\")'\n", "", "when.match"},
+		{"match-uses-event", `item.state == "in-queue"`, `event.kind == "test.watch"`, "when.match"},
+		{"has-window", `pattern = "predicate_match"`, "pattern = \"predicate_match\"\nwindow = \"10m\"", "when.window"},
+		{"has-clear-when", `pattern = "predicate_match"`, "pattern = \"predicate_match\"\nclear_when = \"item.state == 'closed'\"", "when.clear_when"},
+		{"has-fingerprint", `pattern = "predicate_match"`, "pattern = \"predicate_match\"\nfingerprint = [\"item_id\"]", "when.fingerprint"},
+		{"has-after", `pattern = "predicate_match"`, "pattern = \"predicate_match\"\nafter = \"true\"", "when.after"},
+		{"has-reset", `pattern = "predicate_match"`, "pattern = \"predicate_match\"\nreset = \"true\"", "when.reset"},
+		{"guidance-event-placeholder", `summary = "Fixer {{subject}} is still queued"`, `summary = "Fixer {{event.item_id}} is still queued"`, "guidance.summary"},
+		{"item-id-without-items", `"items", `, "", "reads.projections"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rules, err := LoadRuleDocument("test", []byte(strings.Replace(base, tc.old, tc.value, 1)))
+			if tc.wantKey != "" {
+				if rules != nil || !hasError(err, "test:", tc.wantKey+":") {
+					t.Fatalf("wanted %s refusal, got %v, %v", tc.wantKey, rules, err)
+				}
+				return
+			}
+			if err != nil || len(rules) != 1 {
+				t.Fatalf("load: %v, %v", rules, err)
+			}
+			if rules[0].evaluatorReason() != "" {
+				t.Fatalf("unexpected evaluatorReason: %q", rules[0].evaluatorReason())
+			}
+			if refs := rules[0].greenProofRefs(); len(refs) != 1 || refs[0] != "refs/tillr/green" {
+				t.Fatalf("greenProofRefs = %v", refs)
+			}
+		})
+	}
+}

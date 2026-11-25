@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +15,8 @@ import (
 	"strings"
 	"time"
 )
+
+var errMissingRef = errors.New("ref not found")
 
 type refPair struct{ leader, follower string }
 
@@ -24,14 +28,31 @@ type fileStamp struct {
 	size    int64
 }
 
+type greenProofFact struct {
+	oid      string
+	provedAt time.Time
+	passed   []string
+	recorded bool
+}
+
+type greenProofCacheEntry struct {
+	path  string
+	stamp fileStamp
+	fact  greenProofFact
+	err   error
+}
+
 type gitCache struct {
-	root        string
-	commonDir   string
-	commonDirOK bool
-	peeled      map[string]string
-	lags        map[oidPair]lagFact
-	packedStat  fileStamp
-	packedRefs  map[string]string
+	root         string
+	commonDir    string
+	commonDirOK  bool
+	peeled       map[string]string
+	lags         map[oidPair]lagFact
+	packedStat   fileStamp
+	packedRefs   map[string]string
+	proofs       map[string]greenProofCacheEntry
+	shortCommits map[string]projectionFact[string]
+	ancestors    map[oidPair]bool
 }
 
 func (c *gitCache) reset(root string) {
@@ -41,6 +62,9 @@ func (c *gitCache) reset(root string) {
 	c.lags = map[oidPair]lagFact{}
 	c.packedStat = fileStamp{}
 	c.packedRefs = nil
+	c.proofs = map[string]greenProofCacheEntry{}
+	c.shortCommits = map[string]projectionFact[string]{}
+	c.ancestors = map[oidPair]bool{}
 }
 
 func resolveCommonDir(root string) (string, bool) {
@@ -136,20 +160,28 @@ func parsePackedRefs(data []byte) map[string]string {
 	return refs
 }
 
-func (c *gitCache) readRefOID(ref string) (string, bool) {
+type refLookupStatus uint8
+
+const (
+	refLookupFallback refLookupStatus = iota
+	refLookupFound
+	refLookupMissing
+)
+
+func (c *gitCache) readRefOID(ref string) (string, refLookupStatus) {
 	if !c.commonDirOK || !isSharedRef(ref) {
-		return "", false
+		return "", refLookupFallback
 	}
 	data, err := os.ReadFile(filepath.Join(c.commonDir, filepath.FromSlash(ref)))
 	if err == nil {
 		oid := strings.TrimSpace(string(data))
 		if isHexOID(oid) {
-			return oid, true
+			return oid, refLookupFound
 		}
-		return "", false
+		return "", refLookupFallback
 	}
 	if !os.IsNotExist(err) {
-		return "", false
+		return "", refLookupFallback
 	}
 	packedPath := filepath.Join(c.commonDir, "packed-refs")
 	st, err := os.Stat(packedPath)
@@ -157,7 +189,7 @@ func (c *gitCache) readRefOID(ref string) (string, bool) {
 	if err == nil {
 		stamp = fileStamp{exists: true, modTime: st.ModTime(), size: st.Size()}
 	} else if !os.IsNotExist(err) {
-		return "", false
+		return "", refLookupFallback
 	}
 	if stamp != c.packedStat {
 		c.packedStat = stamp
@@ -166,7 +198,7 @@ func (c *gitCache) readRefOID(ref string) (string, bool) {
 			if err != nil {
 				c.packedStat = fileStamp{}
 				c.packedRefs = nil
-				return "", false
+				return "", refLookupFallback
 			}
 			c.packedRefs = parsePackedRefs(raw)
 		} else {
@@ -174,7 +206,10 @@ func (c *gitCache) readRefOID(ref string) (string, bool) {
 		}
 	}
 	oid, ok := c.packedRefs[ref]
-	return oid, ok
+	if ok {
+		return oid, refLookupFound
+	}
+	return "", refLookupMissing
 }
 
 func (c *gitCache) commit(ctx context.Context, root, ref string, checkIO func(string) error, onExec func([]string)) (string, error) {
@@ -183,7 +218,8 @@ func (c *gitCache) commit(ctx context.Context, root, ref string, checkIO func(st
 			return "", err
 		}
 	}
-	if rawOID, ok := c.readRefOID(ref); ok {
+	switch rawOID, status := c.readRefOID(ref); status {
+	case refLookupFound:
 		if peeled, found := c.peeled[rawOID]; found {
 			return peeled, nil
 		}
@@ -194,8 +230,179 @@ func (c *gitCache) commit(ctx context.Context, root, ref string, checkIO func(st
 		peeled := strings.TrimSpace(string(raw))
 		c.peeled[rawOID] = peeled
 		return peeled, nil
+	case refLookupMissing:
+		return "", fmt.Errorf("git ref %s: %w", ref, errMissingRef)
+	default:
+		return gitCommitWith(ctx, root, ref, checkIO, onExec)
 	}
-	return gitCommitWith(ctx, root, ref, checkIO, onExec)
+}
+
+func (c *gitCache) resolveCommit(ctx context.Context, root, rev string, checkIO func(string) error, onExec func([]string)) (string, error) {
+	if checkIO != nil {
+		if err := checkIO("watch Git projection"); err != nil {
+			return "", err
+		}
+	}
+	if c != nil {
+		if fact, ok := c.shortCommits[rev]; ok {
+			return fact.value, fact.err
+		}
+	}
+	raw, err := gitOutputWith(ctx, root, checkIO, onExec, "rev-parse", "--verify", "--end-of-options", rev+"^{commit}")
+	if err != nil {
+		var exitErr *exec.ExitError
+		if c != nil && errors.As(err, &exitErr) {
+			c.shortCommits[rev] = projectionFact[string]{err: err}
+		}
+		return "", err
+	}
+	oid := strings.TrimSpace(string(raw))
+	if c != nil {
+		c.shortCommits[rev] = projectionFact[string]{value: oid}
+	}
+	return oid, nil
+}
+
+func (c *gitCache) isAncestor(ctx context.Context, root, ancestorOID, descendantOID string, checkIO func(string) error, onExec func([]string)) (bool, error) {
+	if checkIO != nil {
+		if err := checkIO("watch Git projection"); err != nil {
+			return false, err
+		}
+	}
+	if ancestorOID == descendantOID {
+		return true, nil
+	}
+	key := oidPair{leader: descendantOID, follower: ancestorOID}
+	if c != nil {
+		if okVal, found := c.ancestors[key]; found {
+			return okVal, nil
+		}
+	}
+	_, err := gitOutputWith(ctx, root, checkIO, onExec, "merge-base", "--is-ancestor", ancestorOID, descendantOID)
+	if err == nil {
+		if c != nil {
+			c.ancestors[key] = true
+		}
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		if c != nil {
+			c.ancestors[key] = false
+		}
+		return false, nil
+	}
+	return false, err
+}
+
+func (c *gitCache) fixerAncestorOfGreen(ctx context.Context, root, shortSHA, greenOID string, checkIO func(string) error, onExec func([]string)) (bool, error) {
+	redOID, err := c.resolveCommit(ctx, root, shortSHA, checkIO, onExec)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return true, nil
+		}
+		return false, err
+	}
+	var mainOID string
+	if c != nil {
+		mainOID, err = c.commit(ctx, root, "refs/heads/main", checkIO, onExec)
+	} else {
+		mainOID, err = gitCommitWith(ctx, root, "refs/heads/main", checkIO, onExec)
+	}
+	if err != nil {
+		if errors.Is(err, errMissingRef) {
+			return true, nil
+		}
+		return false, err
+	}
+	onMain, err := c.isAncestor(ctx, root, redOID, mainOID, checkIO, onExec)
+	if err != nil || !onMain {
+		return !onMain, err
+	}
+	return c.isAncestor(ctx, root, redOID, greenOID, checkIO, onExec)
+}
+
+func (c *gitCache) readGreenProof(ctx context.Context, root, commonDir, oid string, checkIO func(string) error, onExec func([]string)) (greenProofFact, error) {
+	if checkIO != nil {
+		if err := checkIO("watch Git projection"); err != nil {
+			return greenProofFact{}, err
+		}
+	}
+	gateDir := filepath.Join(commonDir, "tillr-gate")
+	primaryPath := filepath.Join(gateDir, "green-"+oid+".json")
+	st, err := os.Stat(primaryPath)
+	if err == nil {
+		stamp := fileStamp{exists: true, modTime: st.ModTime(), size: st.Size()}
+		if c != nil {
+			if entry, ok := c.proofs[oid]; ok && entry.path == primaryPath && entry.stamp == stamp {
+				return entry.fact, entry.err
+			}
+		}
+		fact, parseErr := parseGreenProofFile(primaryPath, oid, true)
+		if c != nil {
+			c.proofs[oid] = greenProofCacheEntry{path: primaryPath, stamp: stamp, fact: fact, err: parseErr}
+		}
+		return fact, parseErr
+	}
+	if !os.IsNotExist(err) {
+		return greenProofFact{}, unreadableProjection{"green_proof", err}
+	}
+
+	fallbackPath := filepath.Join(gateDir, "green.json")
+	st, err = os.Stat(fallbackPath)
+	if os.IsNotExist(err) {
+		return greenProofFact{recorded: false}, nil
+	}
+	if err != nil {
+		return greenProofFact{}, unreadableProjection{"green_proof", err}
+	}
+	stamp := fileStamp{exists: true, modTime: st.ModTime(), size: st.Size()}
+	if c != nil {
+		if entry, ok := c.proofs[oid]; ok && entry.path == fallbackPath && entry.stamp == stamp {
+			return entry.fact, entry.err
+		}
+	}
+	fact, parseErr := parseGreenProofFile(fallbackPath, oid, false)
+	if c != nil {
+		c.proofs[oid] = greenProofCacheEntry{path: fallbackPath, stamp: stamp, fact: fact, err: parseErr}
+	}
+	return fact, parseErr
+}
+
+func parseGreenProofFile(path, oid string, strictCommit bool) (greenProofFact, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return greenProofFact{}, unreadableProjection{"green_proof", err}
+	}
+	var payload struct {
+		Commit   string   `json:"commit"`
+		ProvedAt string   `json:"proved_at"`
+		Passed   []string `json:"passed"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return greenProofFact{}, unreadableProjection{"green_proof", err}
+	}
+	if payload.Commit != oid {
+		if strictCommit {
+			return greenProofFact{}, unreadableProjection{"green_proof", fmt.Errorf("commit %q does not match %s", payload.Commit, oid)}
+		}
+		return greenProofFact{recorded: false}, nil
+	}
+	var provedAt time.Time
+	if payload.ProvedAt != "" {
+		var err error
+		provedAt, err = time.Parse(time.RFC3339, payload.ProvedAt)
+		if err != nil {
+			return greenProofFact{}, unreadableProjection{"green_proof", fmt.Errorf("invalid proved_at %q: %w", payload.ProvedAt, err)}
+		}
+	}
+	return greenProofFact{
+		oid:      oid,
+		provedAt: provedAt,
+		passed:   payload.Passed,
+		recorded: true,
+	}, nil
 }
 
 func (c *gitCache) lag(ctx context.Context, root, leader, follower string, checkIO func(string) error, onExec func([]string)) (lagFact, error) {
@@ -219,18 +426,23 @@ type lagFact struct {
 }
 
 type gitSnapshot struct {
-	refs  map[string]projectionFact[string]
-	pairs map[refPair]projectionFact[lagFact]
+	refs        map[string]projectionFact[string]
+	pairs       map[refPair]projectionFact[lagFact]
+	greenProofs map[string]projectionFact[greenProofFact]
 }
 
-func (r Rule) refs() []string {
+func (r Rule) gitRefs() []string {
 	var refs []string
 	bareGitRefs := false
 	for _, entry := range r.Reads.Projections {
 		if entry == "git_refs" {
 			bareGitRefs = true
 		} else if names, ok := strings.CutPrefix(entry, "git_refs:"); ok {
-			refs = append(refs, strings.Split(names, ",")...)
+			for ref := range strings.SplitSeq(names, ",") {
+				if !slices.Contains(refs, ref) {
+					refs = append(refs, ref)
+				}
+			}
 		}
 	}
 	if bareGitRefs {
@@ -255,23 +467,44 @@ func (r Rule) refs() []string {
 	return refs
 }
 
-func gitRequirements(rules []Rule) (refs []string, pairs []refPair) {
+func (r Rule) greenProofRefs() []string {
+	var refs []string
+	for _, entry := range r.Reads.Projections {
+		if ref, ok := strings.CutPrefix(entry, "green_proof:"); ok && ref != "" && !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+func (r Rule) refs() []string {
+	refs := r.gitRefs()
+	for _, ref := range r.greenProofRefs() {
+		if !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+func gitRequirements(rules []Rule) (refs []string, pairs []refPair, proofRefs []string) {
 	for _, r := range rules {
 		if !r.Enabled || r.evaluatorReason() != "" {
 			continue
 		}
 		refs = append(refs, r.refs()...)
+		proofRefs = append(proofRefs, r.greenProofRefs()...)
 		if r.When.Pattern == LagBehind {
 			pairs = append(pairs, refPair{r.When.Leader, r.When.Follower})
 		}
 	}
-	return refs, pairs
+	return refs, pairs, proofRefs
 }
 
 // covers checks presence, not readability: a failed Git read is still a fact
 // for this pass and must not cause another evaluation attempt.
 func (g gitSnapshot) covers(rules []Rule) bool {
-	refs, pairs := gitRequirements(rules)
+	refs, pairs, proofRefs := gitRequirements(rules)
 	for _, ref := range refs {
 		if _, ok := g.refs[ref]; !ok {
 			return false
@@ -282,26 +515,32 @@ func (g gitSnapshot) covers(rules []Rule) bool {
 			return false
 		}
 	}
+	for _, ref := range proofRefs {
+		if _, ok := g.greenProofs[ref]; !ok {
+			return false
+		}
+	}
 	return true
 }
 
 func readGit(ctx context.Context, root string, rules []Rule, cache *gitCache, checkIO func(string) error, onExec func([]string)) (gitSnapshot, error) {
-	g := gitSnapshot{refs: map[string]projectionFact[string]{}, pairs: map[refPair]projectionFact[lagFact]{}}
-	refs, pairs := gitRequirements(rules)
-	if cache != nil && (len(refs) > 0 || len(pairs) > 0) && (cache.root != root || cache.peeled == nil) {
+	g := gitSnapshot{
+		refs:        map[string]projectionFact[string]{},
+		pairs:       map[refPair]projectionFact[lagFact]{},
+		greenProofs: map[string]projectionFact[greenProofFact]{},
+	}
+	refs, pairs, proofRefs := gitRequirements(rules)
+	if cache == nil && (len(refs) > 0 || len(pairs) > 0 || len(proofRefs) > 0) {
+		cache = &gitCache{}
+	}
+	if cache != nil && (len(refs) > 0 || len(pairs) > 0 || len(proofRefs) > 0) && (cache.root != root || cache.peeled == nil) {
 		cache.reset(root)
 	}
 	for _, ref := range refs {
 		if _, ok := g.refs[ref]; ok {
 			continue
 		}
-		var oid string
-		var err error
-		if cache != nil {
-			oid, err = cache.commit(ctx, root, ref, checkIO, onExec)
-		} else {
-			oid, err = gitCommitWith(ctx, root, ref, checkIO, onExec)
-		}
+		oid, err := cache.commit(ctx, root, ref, checkIO, onExec)
 		g.refs[ref] = projectionFact[string]{oid, err}
 	}
 	for _, pair := range pairs {
@@ -317,17 +556,46 @@ func readGit(ctx context.Context, root string, rules []Rule, cache *gitCache, ch
 			g.pairs[pair] = projectionFact[lagFact]{err: follower.err}
 			continue
 		}
-		var lag lagFact
-		var err error
-		if cache != nil {
-			lag, err = cache.lag(ctx, root, leader.value, follower.value, checkIO, onExec)
-		} else {
-			lag, err = gitLagWith(ctx, root, leader.value, follower.value, checkIO, onExec)
-		}
+		lag, err := cache.lag(ctx, root, leader.value, follower.value, checkIO, onExec)
 		if err != nil {
 			err = fmt.Errorf("git lag %s behind %s: %w", pair.follower, pair.leader, err)
 		}
 		g.pairs[pair] = projectionFact[lagFact]{lag, err}
+	}
+	if len(proofRefs) > 0 {
+		commonDir, commonErr := cache.commonDir, error(nil)
+		if !cache.commonDirOK {
+			raw, err := gitOutputWith(ctx, root, checkIO, onExec, "rev-parse", "--git-common-dir")
+			if err != nil {
+				commonErr = unreadableProjection{"green_proof", err}
+			} else {
+				commonDir = strings.TrimSpace(string(raw))
+				if !filepath.IsAbs(commonDir) {
+					commonDir = filepath.Join(root, commonDir)
+				}
+				commonDir = filepath.Clean(commonDir)
+			}
+		}
+		for _, ref := range proofRefs {
+			if _, ok := g.greenProofs[ref]; ok {
+				continue
+			}
+			if commonErr != nil {
+				g.greenProofs[ref] = projectionFact[greenProofFact]{err: commonErr}
+				continue
+			}
+			refFact := g.refs[ref]
+			if refFact.err != nil {
+				if errors.Is(refFact.err, errMissingRef) {
+					g.greenProofs[ref] = projectionFact[greenProofFact]{value: greenProofFact{recorded: false}}
+				} else {
+					g.greenProofs[ref] = projectionFact[greenProofFact]{err: unreadableProjection{"green_proof", refFact.err}}
+				}
+				continue
+			}
+			fact, err := cache.readGreenProof(ctx, root, commonDir, refFact.value, checkIO, onExec)
+			g.greenProofs[ref] = projectionFact[greenProofFact]{value: fact, err: err}
+		}
 	}
 	return g, ctx.Err()
 }
@@ -397,6 +665,11 @@ func gitCommitWith(ctx context.Context, root, ref string, checkIO func(string) e
 	raw, err := gitOutputWith(ctx, root, checkIO, onExec, "show-ref", "--hash", "--verify", "--", ref)
 	if err == nil {
 		raw, err = gitOutputWith(ctx, root, checkIO, onExec, "rev-parse", "--verify", "--end-of-options", strings.TrimSpace(string(raw))+"^{commit}")
+	} else {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && len(exitErr.Stderr) == 0 {
+			return "", fmt.Errorf("git ref %s: %w: %w", ref, errMissingRef, err)
+		}
 	}
 	if err != nil {
 		return "", fmt.Errorf("git ref %s: %w", ref, err)
@@ -463,8 +736,13 @@ func (l lagCondition) fires(w When) bool {
 }
 
 func (g gitSnapshot) ruleError(r Rule) error {
-	for _, ref := range r.refs() {
+	for _, ref := range r.gitRefs() {
 		if fact := g.refs[ref]; fact.err != nil {
+			return fact.err
+		}
+	}
+	for _, ref := range r.greenProofRefs() {
+		if fact := g.greenProofs[ref]; fact.err != nil {
 			return fact.err
 		}
 	}

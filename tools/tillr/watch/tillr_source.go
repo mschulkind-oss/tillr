@@ -125,7 +125,9 @@ func (s *TillrStoreSource) Project(ctx context.Context, names []string) (map[str
 				}
 				itemMap := make(map[string]map[string]any, len(items))
 				for id, f := range items {
-					entry := map[string]any{}
+					entry := map[string]any{
+						"item.id": id,
+					}
 					if f.value.state.Valid {
 						entry["item.state"] = f.value.state.String
 					}
@@ -141,6 +143,33 @@ func (s *TillrStoreSource) Project(ctx context.Context, names []string) (map[str
 					itemMap[id] = entry
 				}
 				out["items"] = itemMap
+			case "fixer_checks":
+				rows, err := rd.Query(`SELECT item_id FROM item_criteria WHERE item_id IS NULL LIMIT 0`)
+				if err != nil {
+					return unreadableProjection{"fixer_checks", err}
+				}
+				rows.Close()
+				fcMap, err := loadAllFixerChecks(rd)
+				if err != nil {
+					return unreadableProjection{"fixer_checks", err}
+				}
+				items, err := loadAllItems(rd)
+				if err != nil && !isMissingTableError(err, "items") {
+					return unreadableProjection{"fixer_checks", err}
+				}
+				fcOut := make(map[string]map[string]any, len(fcMap))
+				for id, fc := range fcMap {
+					seq := fc.maxEventSeq
+					if it, ok := items[id]; ok && it.value.eventSeq > seq {
+						seq = it.value.eventSeq
+					}
+					fcOut[id] = map[string]any{
+						"provable":    fc.provable,
+						"seen_ms":     fc.seenMS,
+						"subject_seq": seq,
+					}
+				}
+				out["fixer_checks"] = fcOut
 			case "workflow_selections":
 				wfs, err := loadAllWorkflows(rd)
 				if err != nil {
@@ -173,7 +202,7 @@ func (s *TillrStoreSource) WatchTargets() ([]string, time.Duration) {
 	return []string{s.Store.Path() + "-wal"}, defaultStorePollTick
 }
 
-func (s *TillrStoreSource) prepareRule(ctx context.Context, r Rule, g gitSnapshot) (subjectFacts, string, string, error) {
+func (s *TillrStoreSource) prepareRule(ctx context.Context, r Rule, g gitSnapshot, ancestors fixerAncestorFacts) (subjectFacts, string, string, error) {
 	if s == nil || s.Store == nil {
 		return nil, "", "", fmt.Errorf("tillr store source requires a non-nil Store")
 	}
@@ -187,11 +216,11 @@ func (s *TillrStoreSource) prepareRule(ctx context.Context, r Rule, g gitSnapsho
 	err := s.Store.ReadTx(ctx, func(rd *store.Reader) error {
 		sf := s.readFacts(rd)
 		var err error
-		facts, outOfScope, err = sf.forRule(r, g)
+		facts, outOfScope, err = sf.forRule(r, g, ancestors)
 		if err != nil || outOfScope != "" {
 			return err
 		}
-		if facts.items {
+		if facts.items && !sf.itemsLoaded {
 			items, err := loadAllItems(rd)
 			if err != nil {
 				return unreadableProjection{"items", err}
@@ -243,9 +272,91 @@ func loadAllItems(rd *store.Reader) (map[string]projectionFact[itemFacts], error
 		if scanErr != nil {
 			return nil, scanErr
 		}
+		f.id = id
+		f.exists = true
 		out[id] = projectionFact[itemFacts]{value: f}
 	}
 	return out, rows.Err()
+}
+
+type fixerChecksFacts struct {
+	provable    []string
+	seenMS      int64
+	maxEventSeq int64
+}
+
+func loadAllFixerChecks(rd *store.Reader) (map[string]fixerChecksFacts, error) {
+	out := map[string]fixerChecksFacts{}
+	rows, err := rd.Query(`SELECT item_id, text FROM item_criteria WHERE criterion_id = 'trunk-green' AND item_id >= 'fixer-main-' AND item_id < 'fixer-main.'`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id, text string
+		if err := rows.Scan(&id, &text); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		fc := out[id]
+		fc.provable = provableChecks(fixerChecksFromText(text))
+		out[id] = fc
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	evRows, err := rd.Query(`SELECT object_id, COALESCE(MAX(ts), 0), COALESCE(MAX(seq), 0) FROM events WHERE object_id >= 'fixer-main-' AND object_id < 'fixer-main.' AND kind IN ('item.add', 'drain.fixer-attached') GROUP BY object_id`)
+	if err != nil {
+		if isMissingTableError(err, "events") {
+			return out, nil
+		}
+		return nil, err
+	}
+	for evRows.Next() {
+		var id string
+		var seenMS, maxSeq int64
+		if err := evRows.Scan(&id, &seenMS, &maxSeq); err != nil {
+			evRows.Close()
+			return nil, err
+		}
+		fc := out[id]
+		fc.seenMS = seenMS
+		fc.maxEventSeq = maxSeq
+		out[id] = fc
+	}
+	if err := evRows.Err(); err != nil {
+		evRows.Close()
+		return nil, err
+	}
+	evRows.Close()
+	return out, nil
+}
+
+func readFixerCandidateSHAs(rd *store.Reader) ([]string, error) {
+	hasItems, err := tableExists(rd, "items")
+	if err != nil || !hasItems {
+		return nil, err
+	}
+	rows, err := rd.Query(`SELECT item_id FROM items WHERE item_id >= 'fixer-main-' AND item_id < 'fixer-main.'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var shas []string
+	seen := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if shortSHA, ok := strings.CutPrefix(id, "fixer-main-"); ok && shortSHA != "" && !seen[shortSHA] {
+			seen[shortSHA] = true
+			shas = append(shas, shortSHA)
+		}
+	}
+	return shas, rows.Err()
 }
 
 func loadAllWorkflows(rd *store.Reader) (map[string]projectionFact[sql.NullString], error) {
@@ -267,6 +378,8 @@ func loadAllWorkflows(rd *store.Reader) (map[string]projectionFact[sql.NullStrin
 }
 
 type itemFacts struct {
+	id                     string
+	exists                 bool
 	state, seat, waitingOn sql.NullString
 	eventSeq               int64
 }
@@ -274,12 +387,13 @@ type itemFacts struct {
 // storeFacts live for one snapshot, including negative lookups. A rule never
 // sees different values for the same subject, even across event kinds.
 type storeFacts struct {
-	rd                           *store.Reader
-	charter                      func() (CharterFacts, error)
-	checkItems, checkWorkflows   func() error
-	items                        map[string]projectionFact[itemFacts]
-	workflows                    map[string]projectionFact[sql.NullString]
-	itemsLoaded, workflowsLoaded bool
+	rd                                              *store.Reader
+	charter                                         func() (CharterFacts, error)
+	checkItems, checkWorkflows, checkFixerChecks    func() error
+	items                                           map[string]projectionFact[itemFacts]
+	workflows                                       map[string]projectionFact[sql.NullString]
+	fixerChecksMap                                  map[string]fixerChecksFacts
+	itemsLoaded, workflowsLoaded, fixerChecksLoaded bool
 }
 
 func readStoreFacts(rd *store.Reader) *storeFacts {
@@ -307,7 +421,8 @@ func (s *TillrStoreSource) readFacts(rd *store.Reader) *storeFacts {
 	return &storeFacts{
 		rd: rd, charter: charter,
 		checkItems: probe(itemColumns), checkWorkflows: probe(workflowColumn),
-		items: map[string]projectionFact[itemFacts]{}, workflows: map[string]projectionFact[sql.NullString]{},
+		checkFixerChecks: probe("SELECT item_id FROM item_criteria"),
+		items:            map[string]projectionFact[itemFacts]{}, workflows: map[string]projectionFact[sql.NullString]{},
 	}
 }
 
@@ -320,6 +435,9 @@ func (p *storeFacts) item(subject string) (itemFacts, error) {
 		fact.err = p.rd.QueryRow(itemColumns+` WHERE item_id=?`, subject).Scan(&fact.value.state, &fact.value.seat, &fact.value.waitingOn)
 		if errors.Is(fact.err, sql.ErrNoRows) {
 			fact = projectionFact[itemFacts]{}
+		} else if fact.err == nil {
+			fact.value.id = subject
+			fact.value.exists = true
 		}
 		p.items[subject] = fact
 	}
@@ -342,11 +460,13 @@ func (p *storeFacts) workflow(subject string) (sql.NullString, error) {
 }
 
 type tillrRuleFacts struct {
-	store    *storeFacts
-	git      gitSnapshot
-	charter  map[string]any
-	workflow string
-	items    bool
+	store          *storeFacts
+	git            gitSnapshot
+	fixerAncestors fixerAncestorFacts
+	charter        map[string]any
+	workflow       string
+	items          bool
+	fixerChecks    bool
 }
 
 func charterProjectionMap(d CharterFacts) map[string]any {
@@ -362,12 +482,14 @@ func charterProjectionMap(d CharterFacts) map[string]any {
 
 // forRule checks the charter scope first. An out-of-scope rule does not read
 // store projections. Git was acquired outside the store transaction.
-func (p *storeFacts) forRule(r Rule, g gitSnapshot) (facts tillrRuleFacts, outOfScope string, err error) {
+func (p *storeFacts) forRule(r Rule, g gitSnapshot, ancestors fixerAncestorFacts) (facts tillrRuleFacts, outOfScope string, err error) {
 	facts = tillrRuleFacts{
-		store:    p,
-		git:      g,
-		workflow: namedScope(r.Scope, "workflow:"),
-		items:    slices.Contains(r.Reads.Projections, "items"),
+		store:          p,
+		git:            g,
+		fixerAncestors: ancestors,
+		workflow:       namedScope(r.Scope, "workflow:"),
+		items:          slices.Contains(r.Reads.Projections, "items"),
+		fixerChecks:    slices.Contains(r.Reads.Projections, "fixer_checks"),
 	}
 	name := namedScope(r.Scope, "charter:")
 	readsCharter := slices.Contains(r.Reads.Projections, "charter")
@@ -390,6 +512,27 @@ func (p *storeFacts) forRule(r Rule, g gitSnapshot) (facts tillrRuleFacts, outOf
 		if err := p.checkItems(); err != nil {
 			return facts, "", unreadableProjection{"items", err}
 		}
+		if r.isProjectionPredicateMatch() && !p.itemsLoaded {
+			items, err := loadAllItems(p.rd)
+			if err != nil {
+				return facts, "", unreadableProjection{"items", err}
+			}
+			p.items = items
+			p.itemsLoaded = true
+		}
+	}
+	if facts.fixerChecks {
+		if err := p.checkFixerChecks(); err != nil {
+			return facts, "", unreadableProjection{"fixer_checks", err}
+		}
+		if !p.fixerChecksLoaded {
+			fcMap, err := loadAllFixerChecks(p.rd)
+			if err != nil {
+				return facts, "", unreadableProjection{"fixer_checks", err}
+			}
+			p.fixerChecksMap = fcMap
+			p.fixerChecksLoaded = true
+		}
 	}
 	if facts.workflow != "" {
 		if err := p.checkWorkflows(); err != nil {
@@ -397,6 +540,61 @@ func (p *storeFacts) forRule(r Rule, g gitSnapshot) (facts tillrRuleFacts, outOf
 		}
 	}
 	return facts, "", nil
+}
+
+func (p tillrRuleFacts) candidateSubjects(r Rule) []string {
+	onlyFixers := slices.Contains(r.Reads.Projections, "fixer_checks")
+	var ids []string
+	for id, f := range p.store.items {
+		if !f.value.exists {
+			continue
+		}
+		if onlyFixers && !strings.HasPrefix(id, "fixer-main-") {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+func (p tillrRuleFacts) subjectSeq(subject string) int64 {
+	var seq int64
+	if f, ok := p.store.items[subject]; ok && f.value.eventSeq > seq {
+		seq = f.value.eventSeq
+	}
+	if fc, ok := p.store.fixerChecksMap[subject]; ok && fc.maxEventSeq > seq {
+		seq = fc.maxEventSeq
+	}
+	return seq
+}
+
+func (p tillrRuleFacts) evalFixerProved(itemID string, gp greenProofFact) (bool, error) {
+	shortSHA, ok := strings.CutPrefix(itemID, "fixer-main-")
+	if !ok || shortSHA == "" {
+		return false, nil
+	}
+	fc := p.store.fixerChecksMap[itemID]
+	if len(fc.provable) == 0 {
+		return false, nil
+	}
+	if !gp.recorded || len(gp.passed) == 0 {
+		return false, nil
+	}
+	if fc.seenMS > 0 && !gp.provedAt.IsZero() && gp.provedAt.UnixMilli() <= fc.seenMS {
+		return false, nil
+	}
+	anc, ok := p.fixerAncestors[fixerAncestorKey{shortSHA: shortSHA, greenOID: gp.oid}]
+	if !ok {
+		return false, errNewGitFact
+	}
+	if anc.err != nil {
+		return false, anc.err
+	}
+	if !anc.value {
+		return false, nil
+	}
+	return proofCoversChecks(gp.passed, fc.provable), nil
 }
 
 func (p tillrRuleFacts) forSubject(subject string) (lookup func(projectionOperand) any, inScope bool, err error) {
@@ -419,7 +617,7 @@ func (p tillrRuleFacts) forObservation(subject string, eventLookup func(string) 
 		if err != nil {
 			return nil, false, unreadableProjection{"items", err}
 		}
-		if !item.state.Valid && !item.seat.Valid && !item.waitingOn.Valid && eventLookup != nil {
+		if !item.exists && eventLookup != nil {
 			if itemID, ok := eventLookup("item_id").(string); ok && itemID != "" && itemID != subject {
 				item, err = p.store.item(itemID)
 				if err != nil {
@@ -428,15 +626,44 @@ func (p tillrRuleFacts) forObservation(subject string, eventLookup func(string) 
 			}
 		}
 	}
+	var fixerProved map[string]bool
+	if p.fixerChecks && len(p.git.greenProofs) > 0 {
+		itemID := subject
+		if item.exists {
+			itemID = item.id
+		} else if eventLookup != nil {
+			if id, ok := eventLookup("item_id").(string); ok && id != "" {
+				itemID = id
+			}
+		}
+		fixerProved = make(map[string]bool, len(p.git.greenProofs))
+		for ref, gpFact := range p.git.greenProofs {
+			if gpFact.err != nil {
+				continue
+			}
+			proved, err := p.evalFixerProved(itemID, gpFact.value)
+			if err != nil {
+				return nil, false, err
+			}
+			fixerProved[ref] = proved
+		}
+	}
 	return func(op projectionOperand) any {
 		var column sql.NullString
 		switch op.name {
+		case "item.id":
+			if !item.exists {
+				return nil
+			}
+			return item.id
 		case "item.state":
 			column = item.state
 		case "item.seat":
 			column = item.seat
 		case "item.waiting_on":
 			column = item.waitingOn
+		case "item.fixer_proved":
+			return fixerProved[op.ref]
 		case "git.ref":
 			return p.git.refs[op.ref].value
 		default:

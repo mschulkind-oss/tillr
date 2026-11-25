@@ -95,6 +95,58 @@ func TestWatchExpressionProjectionValues(t *testing.T) {
 	}
 }
 
+func TestWatchExpressionFixerProvedAndUsesEvent(t *testing.T) {
+	exp, err := ParseExpression(`item.id matches "^fixer-main-" and item.state == "in-queue" and item.fixer_proved("refs/tillr/green")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exp.Supported() || exp.usesEvent {
+		t.Fatalf("unexpected flags: supported=%v usesEvent=%v", exp.Supported(), exp.usesEvent)
+	}
+	wantOp := projectionOperand{name: "item.fixer_proved", ref: "refs/tillr/green"}
+	if len(exp.projections) != 3 || exp.projections[2] != wantOp {
+		t.Fatalf("projections = %+v, want [2]=%+v", exp.projections, wantOp)
+	}
+	values := expressionValues{
+		projection: func(op projectionOperand) any {
+			switch op {
+			case projectionOperand{name: "item.id"}:
+				return "fixer-main-18f649ca0940"
+			case projectionOperand{name: "item.state"}:
+				return "in-queue"
+			case wantOp:
+				return true
+			default:
+				return nil
+			}
+		},
+	}
+	if !exp.eval(values) {
+		t.Fatal("expected expression to evaluate true")
+	}
+
+	evExp, err := ParseExpression(`item.state == "in-queue" and event.kind == "gate.verdict"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !evExp.usesEvent {
+		t.Fatal("expected usesEvent=true when event.* is referenced")
+	}
+
+	for _, bad := range []string{
+		`item.fixer_proved()`,
+		`item.fixer_proved(event.ref)`,
+		`item.fixer_proved("refs/tillr/green", "extra")`,
+		`item.fixer_proved("refs/tillr/green").extra`,
+		`item.fixer_proved("main")`,
+		`item.fixer_proved("refs/tillr/green~1")`,
+	} {
+		if _, err := ParseExpression(bad); err == nil {
+			t.Errorf("%s: want syntax error", bad)
+		}
+	}
+}
+
 func TestWatchExpressionSyntax(t *testing.T) {
 	for _, text := range []string{
 		`seat not in pair or item.state in charter.finished`,

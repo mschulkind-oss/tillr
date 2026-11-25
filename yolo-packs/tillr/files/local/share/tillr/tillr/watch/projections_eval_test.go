@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -392,5 +394,227 @@ receiver = "foreground"
 	}
 	if len(notices) != 1 || notices[0].Bundle.Subject != "run-1" {
 		t.Fatalf("want only run-1 (item-open), got %+v", notices)
+	}
+}
+
+func writeGreenProofJSON(t *testing.T, root, oid string, provedAt time.Time, passed []string) string {
+	t.Helper()
+	gateDir := filepath.Join(root, ".git", "tillr-gate")
+	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{
+		"commit": oid,
+		"passed": passed,
+	}
+	if !provedAt.IsZero() {
+		payload["proved_at"] = provedAt.UTC().Format(time.RFC3339)
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(gateDir, "green-"+oid+".json")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestProjectionPredicateMatchFixerProved(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0).UTC()
+	root := t.TempDir()
+	fixtureGit(t, root, "", now, "init")
+	fixtureGit(t, root, "", now, "config", "user.name", "Test")
+	fixtureGit(t, root, "", now, "config", "user.email", "test@example.com")
+	fixtureGit(t, root, "", now, "commit", "--allow-empty", "-m", "red")
+	redOID := fixtureGit(t, root, "", now, "rev-parse", "HEAD")
+	fixtureGit(t, root, "", now, "branch", "-M", "main")
+	fixtureGit(t, root, "", now.Add(time.Minute), "commit", "--allow-empty", "-m", "green")
+	greenOID := fixtureGit(t, root, "", now.Add(time.Minute), "rev-parse", "HEAD")
+	fixtureGit(t, root, "", now.Add(time.Minute), "update-ref", "refs/tillr/green", greenOID)
+
+	s := watchStore(t)
+	watchSQL(t, s, `CREATE TABLE items(item_id TEXT PRIMARY KEY,state TEXT,seat TEXT,waiting_on TEXT,event_seq INTEGER)`)
+
+	doc := `[[rule]]
+id = "fixer-proved-queued"
+scope = "core"
+severity = "warning"
+[rule.reads]
+projections = ["items", "fixer_checks", "green_proof:refs/tillr/green"]
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'item.id matches "^fixer-main-" and item.state == "in-queue" and item.fixer_proved("refs/tillr/green")'
+[rule.guidance]
+summary = "Fixer {{subject}} proved ({{count}} {{elapsed}})"
+check = ["check"]
+do = ["do"]
+[rule.delivery]
+receiver = "foreground"
+`
+	rules := watchRules(t, doc)
+	if got := rules[0].UnevaluatedReason(); got != "reads projections" {
+		t.Fatalf("UnevaluatedReason = %q, want %q", got, "reads projections")
+	}
+	if got := rules[0].evaluatorReason(); got != "" {
+		t.Fatalf("evaluatorReason = %q, want empty", got)
+	}
+
+	e := Evaluator{Store: s, Root: root, Rules: rules, Clock: func() time.Time { return now.Add(2 * time.Minute) }}
+
+	// Missing item_criteria table -> unreadableProjection{"fixer_checks", ...}.
+	res, err := e.EvaluateRules(ctx)
+	if err != nil || len(res) != 1 || !strings.Contains(res[0].Unreadable, "fixer_checks:") {
+		t.Fatalf("expected fixer_checks unreadable, got %+v (%v)", res, err)
+	}
+
+	watchSQL(t, s, `CREATE TABLE item_criteria(item_id TEXT,criterion_id TEXT,text TEXT)`)
+
+	fixerID := "fixer-main-" + redOID[:12]
+	watchSQL(t, s, `INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES (?,'item.add','item',?,?)`, now.UnixMilli(), fixerID, `{"item_id":"`+fixerID+`"}`)
+	var addSeq int64
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT MAX(seq) FROM events WHERE object_id = ?`, fixerID).Scan(&addSeq)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	watchSQL(t, s, `INSERT INTO items VALUES (?,'in-queue',NULL,NULL,?)`, fixerID, addSeq)
+	watchSQL(t, s, `INSERT INTO item_criteria VALUES (?,'trunk-green','(red: check-a, go-test:tools/tillr:watch:TestFoo)')`, fixerID)
+
+	// Missing proof file -> quiet.
+	if res, err := e.EvaluateRules(ctx); err != nil || len(res) != 1 || res[0].Diagnostic() != "" {
+		t.Fatalf("missing proof should be clean: %+v (%v)", res, err)
+	}
+	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 0 {
+		t.Fatalf("missing proof should not alert: %+v (%v)", notices, err)
+	}
+
+	// Proof recorded at or before seen_ms -> quiet.
+	writeGreenProofJSON(t, root, greenOID, now, []string{"check-a", "go-tool/tools-tillr-s-whole-suite-passes"})
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 0 {
+		t.Fatalf("stale proof should not alert: %+v (%v)", notices, err)
+	}
+
+	// Proof missing one check -> quiet.
+	writeGreenProofJSON(t, root, greenOID, now.Add(time.Minute), []string{"check-a"})
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 0 {
+		t.Fatalf("partial proof should not alert: %+v (%v)", notices, err)
+	}
+
+	// Empty (red: ) check list never fires vacuously.
+	emptyFixer := "fixer-main-" + greenOID[:12]
+	watchSQL(t, s, `INSERT INTO items VALUES (?,'in-queue',NULL,NULL,?)`, emptyFixer, addSeq)
+	watchSQL(t, s, `INSERT INTO item_criteria VALUES (?,'trunk-green','(red: )')`, emptyFixer)
+
+	// Full proof after seen_ms -> opens alert for fixerID only.
+	writeGreenProofJSON(t, root, greenOID, now.Add(time.Minute), []string{"check-a", "go-tool/tools-tillr-s-whole-suite-passes"})
+	if res, err := e.EvaluateRules(ctx); err != nil || len(res) != 1 || res[0].Diagnostic() != "" {
+		t.Fatalf("EvaluateRules: %+v (%v)", res, err)
+	}
+	notices, err := e.Pending(ctx, "foreground")
+	if err != nil || len(notices) != 1 {
+		t.Fatalf("expected 1 notice, got %+v (%v)", notices, err)
+	}
+	if notices[0].Bundle.Subject != fixerID || notices[0].Bundle.Events == nil || len(notices[0].Bundle.Events) != 0 {
+		t.Fatalf("unexpected notice bundle: %+v", notices[0].Bundle)
+	}
+	if notices[0].Bundle.Guidance.Summary != fmt.Sprintf("Fixer %s proved (1 0s)", fixerID) {
+		t.Fatalf("unexpected summary: %q", notices[0].Bundle.Guidance.Summary)
+	}
+
+	// Unrelated store writes do not advance last_observed_seq or observation_count, and preserve ack.
+	note := "investigating"
+	if err := e.Ack(ctx, notices[0].AlertID, "op", &note); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now.Add(2*time.Minute), `{"unrelated":true}`)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var epState string
+	var epLast, epCount int64
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT state, last_observed_seq, observation_count FROM alert_episodes WHERE alert_id = ?`, notices[0].AlertID).Scan(&epState, &epLast, &epCount)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if epState != "acknowledged" || epLast != addSeq || epCount != 1 {
+		t.Fatalf("after unrelated write: state=%q last=%d count=%d, want acknowledged/%d/1", epState, epLast, epCount, addSeq)
+	}
+
+	// Condition cleared (e.g. item leaves in-queue to ready) -> resolves with condition-cleared.
+	watchSQL(t, s, `UPDATE items SET state='ready' WHERE item_id=?`, fixerID)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var resolvedReason string
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT state, resolved_reason FROM alert_episodes WHERE alert_id = ?`, notices[0].AlertID).Scan(&epState, &resolvedReason)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if epState != "resolved" || resolvedReason != "condition-cleared" {
+		t.Fatalf("expected resolved/condition-cleared, got %q/%q", epState, resolvedReason)
+	}
+
+	// Re-arm condition (back to in-queue) -> opens episode 2, then manual resolve suppresses re-open while subject_seq <= resolved_seq.
+	watchSQL(t, s, `UPDATE items SET state='in-queue' WHERE item_id=?`, fixerID)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var ep2ID string
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT alert_id FROM alert_episodes WHERE rule_id='fixer-proved-queued' AND state='open'`).Scan(&ep2ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Resolve(ctx, ep2ID, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now.Add(3*time.Minute), `{"unrelated":2}`)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var activeCount int
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT COUNT(*) FROM alert_episodes WHERE rule_id='fixer-proved-queued' AND state!='resolved'`).Scan(&activeCount)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if activeCount != 0 {
+		t.Fatalf("manual resolution should suppress reopen while subject_seq <= resolved_seq, activeCount=%d", activeCount)
+	}
+
+	// Newer drain.fixer-attached advances subject_seq past resolved_seq -> re-opens episode 3, then item-closed resolves it.
+	watchSQL(t, s, `INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES (?,'drain.fixer-attached','item',?,?)`, now.Add(30*time.Second).UnixMilli(), fixerID, `{"item_id":"`+fixerID+`"}`)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var ep3ID string
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT alert_id FROM alert_episodes WHERE rule_id='fixer-proved-queued' AND state='open'`).Scan(&ep3ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	watchSQL(t, s, `UPDATE items SET state='closed' WHERE item_id=?`, fixerID)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT state, resolved_reason FROM alert_episodes WHERE alert_id = ?`, ep3ID).Scan(&epState, &resolvedReason)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if epState != "resolved" || resolvedReason != "item-closed" {
+		t.Fatalf("expected resolved/item-closed, got %q/%q", epState, resolvedReason)
 	}
 }

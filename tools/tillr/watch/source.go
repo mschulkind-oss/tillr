@@ -71,12 +71,12 @@ type observationFacts interface {
 }
 
 type ruleScopePreparer interface {
-	prepareRule(ctx context.Context, r Rule, g gitSnapshot) (facts subjectFacts, outOfScope string, unsupported string, err error)
+	prepareRule(ctx context.Context, r Rule, g gitSnapshot, ancestors fixerAncestorFacts) (facts subjectFacts, outOfScope string, unsupported string, err error)
 }
 
-func prepareSourceRule(ctx context.Context, src ObservationSource, r Rule, g gitSnapshot) (subjectFacts, string, string, error) {
+func prepareSourceRule(ctx context.Context, src ObservationSource, r Rule, g gitSnapshot, ancestors fixerAncestorFacts) (subjectFacts, string, string, error) {
 	if prep, ok := src.(ruleScopePreparer); ok {
-		return prep.prepareRule(ctx, r, g)
+		return prep.prepareRule(ctx, r, g, ancestors)
 	}
 	switch r.Scope {
 	case "", "*":
@@ -89,8 +89,8 @@ func prepareSourceRule(ctx context.Context, src ObservationSource, r Rule, g git
 	var customNames []string
 	for _, proj := range r.Reads.Projections {
 		switch {
-		case proj == "git_refs" || strings.HasPrefix(proj, "git_refs:"):
-		case proj == "items" || proj == "charter" || proj == "workflow_selections":
+		case proj == "git_refs" || strings.HasPrefix(proj, "git_refs:") || strings.HasPrefix(proj, "green_proof:"):
+		case proj == "items" || proj == "charter" || proj == "workflow_selections" || proj == "fixer_checks":
 			return nil, "", fmt.Sprintf("not evaluated: projection %q requires a tillr store source", proj), nil
 		default:
 			customNames = append(customNames, proj)
@@ -570,6 +570,19 @@ func isWindowedEventRule(w When) bool {
 	return w.Window > 0 && w.Pattern != LagBehind && w.Pattern != DurationWithoutEvent
 }
 
+func conditionNewest(r Rule, c *condition, fallbackSeq int64) observation {
+	if r.When.Pattern == LagBehind {
+		return observation{Seq: fallbackSeq}
+	}
+	if r.isProjectionPredicateMatch() {
+		if c.subjectSeq > 0 {
+			return observation{Seq: c.subjectSeq}
+		}
+		return observation{Seq: fallbackSeq}
+	}
+	return c.events[len(c.events)-1]
+}
+
 type itemTerminalChecker struct {
 	ready       bool
 	closedState string
@@ -851,7 +864,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 							memEp.observationCount++
 						}
 					} else {
-						newest := c.events[len(c.events)-1]
+						newest := conditionNewest(r, c, ep.last)
 						if newest.Seq > ep.last {
 							memEp.lastObservedSeq = newest.Seq
 							memEp.lastObservedAt = now.UnixMilli()
@@ -883,7 +896,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 						memEp.observationCount++
 					}
 				} else {
-					newest = c.events[len(c.events)-1]
+					newest = conditionNewest(r, c, ep.last)
 					if isWindowedEventRule(r.When) {
 						cutoff := max(ep.last, lookup.terminalSeq(trackedID))
 						if newest.Seq <= cutoff {
@@ -944,12 +957,9 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 		if !firing {
 			continue
 		}
-		newest := observation{Seq: startHead}
-		if r.When.Pattern != LagBehind {
-			newest = c.events[len(c.events)-1]
-		}
+		newest := conditionNewest(r, c, startHead)
 		if !exists {
-			if r.When.Pattern != LagBehind && newest.Seq <= loadedSeq {
+			if r.When.Pattern != LagBehind && !r.isProjectionPredicateMatch() && newest.Seq <= loadedSeq {
 				continue
 			}
 			previous, reason, resolvedSeq := m.lastEpisodeLocked(r.ID, key)
@@ -1014,11 +1024,14 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 				memEp.observationCount++
 			}
 		}
-		if r.When.Pattern != LagBehind && newest.Seq > ep.last {
-			memEp.lastObservedSeq = newest.Seq
-			memEp.lastObservedAt = now.UnixMilli()
-			memEp.observationCount++
-			memEp.conditionFingerprint = newest.fingerprint
+		if r.When.Pattern != LagBehind {
+			newest = conditionNewest(r, c, ep.last)
+			if newest.Seq > ep.last {
+				memEp.lastObservedSeq = newest.Seq
+				memEp.lastObservedAt = now.UnixMilli()
+				memEp.observationCount++
+				memEp.conditionFingerprint = newest.fingerprint
+			}
 		}
 		if cause := ep.reopenCause(r, now, newest, currentLagPair); cause != "" {
 			bundle, err := makeBundle(r, key, ep.id, c)

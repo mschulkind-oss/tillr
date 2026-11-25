@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math"
 	"reflect"
 	"slices"
@@ -44,13 +45,15 @@ func fingerprint(names []string, lookup func(string) any) string {
 }
 
 type condition struct {
-	events      []observation // counted events, in seq order
-	clears      []int64
-	pair        [2]string
-	previous    observation
-	hadPrevious bool
-	waitAge     time.Duration
-	lag         *lagCondition
+	events          []observation // counted events, in seq order
+	clears          []int64
+	pair            [2]string
+	previous        observation
+	hadPrevious     bool
+	waitAge         time.Duration
+	lag             *lagCondition
+	projectionMatch bool
+	subjectSeq      int64
 }
 
 func (c *condition) fires(w When) bool {
@@ -59,6 +62,11 @@ func (c *condition) fires(w When) bool {
 		return len(c.events) != 0 && c.waitAge >= w.ThresholdDuration
 	case LagBehind:
 		return c.lag != nil && c.lag.fires(w)
+	case PredicateMatch:
+		if c.projectionMatch {
+			return true
+		}
+		return int64(len(c.events)) >= w.Threshold
 	default:
 		return int64(len(c.events)) >= w.Threshold
 	}
@@ -761,4 +769,41 @@ func deriveFromSource(
 		}
 	}
 	return subjects, skipped, cursor, nil
+}
+
+func (r Rule) isProjectionPredicateMatch() bool {
+	return r.When.Pattern == PredicateMatch && len(r.Reads.Events) == 0
+}
+
+type projectionSubjectFacts interface {
+	subjectFacts
+	candidateSubjects(r Rule) []string
+	subjectSeq(subject string) int64
+}
+
+func deriveProjectionMatch(r Rule, facts subjectFacts, now time.Time) (map[string]*condition, error) {
+	pf, ok := facts.(projectionSubjectFacts)
+	if !ok {
+		return nil, fmt.Errorf("projection-only predicate_match requires item projection subjects")
+	}
+	candidates := pf.candidateSubjects(r)
+	subjects := map[string]*condition{}
+	nowMillis := now.UnixMilli()
+	for _, subject := range candidates {
+		projection, inScope, err := pf.forSubject(subject)
+		if err != nil {
+			return nil, err
+		}
+		if !inScope {
+			continue
+		}
+		if r.When.Match != nil && r.When.Match.eval(expressionValues{projection: projection, nowMillis: nowMillis}) {
+			subjects[subject] = &condition{
+				projectionMatch: true,
+				subjectSeq:      pf.subjectSeq(subject),
+				lag:             &lagCondition{count: 1},
+			}
+		}
+	}
+	return subjects, nil
 }

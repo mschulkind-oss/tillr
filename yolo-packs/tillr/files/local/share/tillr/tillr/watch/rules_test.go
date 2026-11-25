@@ -1,8 +1,11 @@
 package watch
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +222,7 @@ func TestWatchRuleEligibility(t *testing.T) {
 	for _, tt := range []struct{ when, projections, reason string }{
 		{"pattern = 'duration_without_event'\nafter = 'event.pass == false'\nthreshold_duration = '1m'\nwindow = '2m'", "", ""},
 		{"pattern = 'predicate_match'\nwindow = '1m'", "[]", ""},
+		{"pattern = 'predicate_match'\nwindow = '1m'", "['fixer_checks', 'green_proof:refs/tillr/green']", ""},
 		{"pattern = 'predicate_match'\nwindow = '1m'", "['heavy_lock_state']", "unsupported projection \"heavy_lock_state\""},
 		{"pattern = 'predicate_match'\nwindow = '1m'\nmatch = 'age(event.ts) > 1'", "", ""},
 		{"pattern = 'predicate_match'\nwindow = '1m'\nclear_when = 'event.seat not in [\"a\"]'", "", ""},
@@ -252,4 +256,178 @@ func hasError(err error, parts ...string) bool {
 		}
 	}
 	return true
+}
+
+func TestWatchFixerCheckHelpers(t *testing.T) {
+	text := "Fix trunk (red: unit-a, go-test:tools/tillr-drain:./drain:TestFoo, go-test, go-test/legacy)"
+	got := fixerChecksFromText(text)
+	want := []string{"unit-a", "go-test:tools/tillr-drain:./drain:TestFoo", "go-test", "go-test/legacy"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("fixerChecksFromText = %v, want %v", got, want)
+	}
+	if empty := fixerChecksFromText("no list here"); len(empty) != 0 {
+		t.Fatalf("expected empty checks, got %v", empty)
+	}
+
+	provable := provableChecks(got)
+	wantProvable := []string{"unit-a", "go-test:tools/tillr-drain:./drain:TestFoo", "go-test/legacy"}
+	if !slices.Equal(provable, wantProvable) {
+		t.Fatalf("provableChecks = %v, want %v", provable, wantProvable)
+	}
+
+	if suite := goSuiteProofID("go-test:tools/tillr-drain:./drain:TestFoo"); suite != "go-tool/tools-tillr-drain-s-whole-suite-passes" {
+		t.Fatalf("goSuiteProofID = %q", suite)
+	}
+	if suite := goSuiteProofID("unit-a"); suite != "" {
+		t.Fatalf("expected empty suite for non-go-test, got %q", suite)
+	}
+
+	if !proofCoversChecks([]string{"unit-a", "go-tool/tools-tillr-drain-s-whole-suite-passes", "go-test/legacy"}, provable) {
+		t.Fatal("expected exact + goSuiteProofID to cover")
+	}
+	if !proofCoversChecks([]string{"lint/markdown"}, []string{"lint"}) {
+		t.Fatal("expected bare <kind>/ prefix match")
+	}
+	if proofCoversChecks([]string{"unit-a"}, nil) {
+		t.Fatal("expected empty checks not to be covered")
+	}
+	if proofCoversChecks(nil, []string{"unit-a"}) {
+		t.Fatal("expected empty passed not to cover")
+	}
+}
+
+func TestWatchGreenProofAndFixerAncestryGit(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Watch Test", "GIT_AUTHOR_EMAIL=watch@example.invalid",
+			"GIT_COMMITTER_NAME=Watch Test", "GIT_COMMITTER_EMAIL=watch@example.invalid",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit("init", "--quiet", "-b", "main")
+	runGit("commit", "--quiet", "--allow-empty", "-m", "c1")
+	c1 := runGit("rev-parse", "HEAD")
+	runGit("commit", "--quiet", "--allow-empty", "-m", "c2")
+	c2 := runGit("rev-parse", "HEAD")
+	runGit("commit", "--quiet", "--allow-empty", "-m", "c3")
+	c3 := runGit("rev-parse", "HEAD")
+
+	ruleText := `[[rule]]
+id = "proved-queued"
+scope = "core"
+severity = "warning"
+[rule.reads]
+projections = ["items", "fixer_checks", "green_proof:refs/tillr/green"]
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'item.id matches "^fixer-main-" and item.state == "in-queue" and item.fixer_proved("refs/tillr/green")'
+[rule.guidance]
+summary = "Fixer {{subject}}"
+check = ["inspect"]
+do = ["resolve"]
+[rule.delivery]
+receiver = "foreground"
+`
+	rules, err := LoadRuleDocument("test", []byte(ruleText))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var execCount int
+	onExec := func([]string) { execCount++ }
+	var cache gitCache
+
+	// 1. Missing ref in valid git repo -> no recorded proof, Diagnostic() == "", zero git spawns.
+	snap, err := readGit(ctx, root, rules, &cache, nil, onExec)
+	if err != nil || snap.ruleError(rules[0]) != nil || snap.greenProofs["refs/tillr/green"].value.recorded {
+		t.Fatalf("missing ref: snap=%+v ruleErr=%v err=%v", snap, snap.ruleError(rules[0]), err)
+	}
+	if execCount != 0 {
+		t.Fatalf("expected 0 git spawns for missing ref, got %d", execCount)
+	}
+
+	// 2. Non-Git root -> unreadableProjection{"green_proof", ...}.
+	nonGit := t.TempDir()
+	var nonGitCache gitCache
+	badSnap, err := readGit(ctx, nonGit, rules, &nonGitCache, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rErr := badSnap.ruleError(rules[0]); rErr == nil || !strings.Contains(rErr.Error(), "green_proof:") {
+		t.Fatalf("expected green_proof unreadableProjection on non-Git root, got %v", rErr)
+	}
+
+	// 3. Ref present, proof file missing -> no recorded proof.
+	runGit("update-ref", "refs/tillr/green", c2)
+	snap, err = readGit(ctx, root, rules, &cache, nil, onExec)
+	if err != nil || snap.ruleError(rules[0]) != nil || snap.greenProofs["refs/tillr/green"].value.recorded {
+		t.Fatalf("missing proof file: snap=%+v ruleErr=%v err=%v", snap, snap.ruleError(rules[0]), err)
+	}
+	firstExec := execCount
+	if firstExec == 0 {
+		t.Fatal("expected initial peel of refs/tillr/green")
+	}
+	// Cached idle pass -> 0 spawns.
+	snap, err = readGit(ctx, root, rules, &cache, nil, onExec)
+	if err != nil || execCount != firstExec {
+		t.Fatalf("idle pass spawned git: %d -> %d, err=%v", firstExec, execCount, err)
+	}
+
+	// 4. Fallback green.json with mismatched commit -> no recorded proof.
+	gateDir := filepath.Join(root, ".git", "tillr-gate")
+	put(t, gateDir, "green.json", `{"commit":"`+c1+`","proved_at":"2026-11-23T09:25:00Z","passed":["chk"]}`)
+	snap, err = readGit(ctx, root, rules, &cache, nil, onExec)
+	if err != nil || snap.ruleError(rules[0]) != nil || snap.greenProofs["refs/tillr/green"].value.recorded {
+		t.Fatalf("mismatched green.json: snap=%+v ruleErr=%v err=%v", snap, snap.ruleError(rules[0]), err)
+	}
+
+	// 5. Fallback green.json with matching commit -> recorded proof.
+	put(t, gateDir, "green.json", `{"commit":"`+c2+`","proved_at":"2026-11-23T09:25:00Z","passed":["chk"]}`)
+	snap, err = readGit(ctx, root, rules, &cache, nil, onExec)
+	if err != nil || snap.ruleError(rules[0]) != nil || !snap.greenProofs["refs/tillr/green"].value.recorded {
+		t.Fatalf("matching green.json: snap=%+v ruleErr=%v err=%v", snap, snap.ruleError(rules[0]), err)
+	}
+
+	// 6. Primary green-<oid>.json overrides green.json; corrupt/mismatched fails with unreadableProjection.
+	put(t, gateDir, "green-"+c2+".json", `{"commit":"`+c1+`","proved_at":"2026-11-23T09:25:00Z","passed":["chk"]}`)
+	snap, err = readGit(ctx, root, rules, &cache, nil, onExec)
+	if err != nil || snap.ruleError(rules[0]) == nil || !strings.Contains(snap.ruleError(rules[0]).Error(), "green_proof:") {
+		t.Fatalf("expected unreadableProjection for mismatched green-<oid>.json, got %v", snap.ruleError(rules[0]))
+	}
+	put(t, gateDir, "green-"+c2+".json", `{"commit":"`+c2+`","proved_at":"not-rfc3339","passed":["chk"]}`)
+	snap, err = readGit(ctx, root, rules, &cache, nil, onExec)
+	if err != nil || snap.ruleError(rules[0]) == nil || !strings.Contains(snap.ruleError(rules[0]).Error(), "green_proof:") {
+		t.Fatalf("expected unreadableProjection for bad proved_at, got %v", snap.ruleError(rules[0]))
+	}
+	put(t, gateDir, "green-"+c2+".json", `{"commit":"`+c2+`","proved_at":"2026-11-23T09:25:00Z","passed":["chk"]}`)
+	snap, err = readGit(ctx, root, rules, &cache, nil, onExec)
+	if err != nil || snap.ruleError(rules[0]) != nil || !snap.greenProofs["refs/tillr/green"].value.recorded {
+		t.Fatalf("valid green-<oid>.json: %+v, ruleErr=%v, err=%v", snap, snap.ruleError(rules[0]), err)
+	}
+
+	// 7. Ancestry checks cached in gitCache: c1 <= c2 (true), c3 <= c2 (false), cached on repeat (0 spawns).
+	if ok, err := cache.fixerAncestorOfGreen(ctx, root, c1[:12], c2, nil, onExec); err != nil || !ok {
+		t.Fatalf("c1 ancestor of c2: ok=%v err=%v", ok, err)
+	}
+	if ok, err := cache.fixerAncestorOfGreen(ctx, root, c3[:12], c2, nil, onExec); err != nil || ok {
+		t.Fatalf("c3 should not be ancestor of c2: ok=%v err=%v", ok, err)
+	}
+	afterAncestry := execCount
+	if ok, err := cache.fixerAncestorOfGreen(ctx, root, c1[:12], c2, nil, onExec); err != nil || !ok {
+		t.Fatalf("cached c1: ok=%v err=%v", ok, err)
+	}
+	if ok, err := cache.fixerAncestorOfGreen(ctx, root, c3[:12], c2, nil, onExec); err != nil || ok {
+		t.Fatalf("cached c3: ok=%v err=%v", ok, err)
+	}
+	if execCount != afterAncestry {
+		t.Fatalf("expected 0 git spawns on cached ancestry checks, got %d -> %d", afterAncestry, execCount)
+	}
 }

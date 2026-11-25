@@ -100,7 +100,8 @@ func (r Rule) expressions() [5]*Expression {
 
 func (r Rule) evaluatorReason() string {
 	for _, projection := range r.Reads.Projections {
-		if projection != "items" && projection != "charter" && projection != "git_refs" && !strings.HasPrefix(projection, "git_refs:") {
+		if projection != "items" && projection != "charter" && projection != "git_refs" && projection != "fixer_checks" &&
+			!strings.HasPrefix(projection, "git_refs:") && !strings.HasPrefix(projection, "green_proof:") {
 			return fmt.Sprintf("unsupported projection %q", projection)
 		}
 	}
@@ -373,13 +374,14 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 	reads.only("events", "projections")
 	when := root.table("when")
 	pattern := when.text("pattern")
-	r.Reads = Reads{Events: reads.strings("events", pattern != LagBehind), Projections: reads.strings("projections", false)}
+	r.Reads = Reads{Events: reads.strings("events", pattern != LagBehind && pattern != PredicateMatch), Projections: reads.strings("projections", false)}
 	for _, kind := range r.Reads.Events {
 		if !kinds[kind] {
 			reads.reject("events", "unregistered event kind %q", kind)
 		}
 	}
 	refs := make(map[string]bool)
+	proofRefs := make(map[string]bool)
 	for _, projection := range r.Reads.Projections {
 		if list, ok := strings.CutPrefix(projection, "git_refs:"); ok {
 			for ref := range strings.SplitSeq(list, ",") {
@@ -388,9 +390,32 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 				}
 				refs[ref] = true
 			}
+		} else if ref, ok := strings.CutPrefix(projection, "green_proof:"); ok {
+			if !validRef(ref) {
+				reads.reject("projections", "invalid Git ref %q in %q", ref, projection)
+			}
+			proofRefs[ref] = true
 		}
 	}
-	r.When = loadWhen(when, pattern, refs)
+	projectionOnly := pattern == PredicateMatch && len(r.Reads.Events) == 0
+	if projectionOnly && !slices.Contains(r.Reads.Projections, "items") {
+		reads.reject("projections", "projection-only predicate_match requires \"items\"")
+	}
+	r.When = loadWhen(when, pattern, refs, projectionOnly)
+	if projectionOnly {
+		if r.When.GroupBy != "item_id" || len(r.When.GroupByList) != 0 {
+			when.reject("group_by", "projection-only predicate_match requires group_by = \"item_id\"")
+		}
+		if r.When.Match != nil && r.When.Match.usesEvent {
+			when.reject("match", "projection-only predicate_match cannot reference event.*")
+		}
+		if _, has := when.values["clear_when"]; has {
+			when.reject("clear_when", "projection-only predicate_match must omit clear_when")
+		}
+		if _, has := when.values["fingerprint"]; has {
+			when.reject("fingerprint", "projection-only predicate_match must omit fingerprint")
+		}
+	}
 	if r.When.ReopenWhen != nil && len(r.Reads.Events) == 0 {
 		when.reject("reopen_when", "requires reads.events")
 	}
@@ -402,7 +427,7 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 		}
 	}
 
-	checkProjectionOperands(when, r, refs)
+	checkProjectionOperands(when, r, refs, proofRefs)
 	g := root.table("guidance")
 	g.only("summary", "reopen_summary", "check", "do")
 	var reopenSummary string
@@ -417,6 +442,27 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 		}
 	}
 	r.Guidance = Guidance{Summary: g.text("summary"), ReopenSummary: reopenSummary, Check: g.strings("check", true), Do: g.strings("do", true)}
+	if projectionOnly {
+		checkNoEventPlaceholder := func(key, text string) {
+			tokens, err := extractGuidancePlaceholders(text)
+			if err != nil {
+				return
+			}
+			for _, tok := range tokens {
+				if strings.HasPrefix(tok, "event.") {
+					g.reject(key, "projection-only predicate_match cannot use {{%s}}", tok)
+					return
+				}
+			}
+		}
+		checkNoEventPlaceholder("summary", r.Guidance.Summary)
+		for i, line := range r.Guidance.Check {
+			checkNoEventPlaceholder(fmt.Sprintf("check[%d]", i), line)
+		}
+		for i, line := range r.Guidance.Do {
+			checkNoEventPlaceholder(fmt.Sprintf("do[%d]", i), line)
+		}
+	}
 	d := root.table("delivery")
 	d.only("receiver", "also_notify")
 	r.Delivery = Delivery{Receiver: d.text("receiver"), AlsoNotify: d.strings("also_notify", false)}
@@ -487,7 +533,7 @@ func loadGroupBy(k keys) (string, []string) {
 	}
 }
 
-func loadWhen(k keys, pattern string, refs map[string]bool) When {
+func loadWhen(k keys, pattern string, refs map[string]bool, projectionOnly bool) When {
 	w := When{Pattern: pattern}
 	w.GroupBy, w.GroupByList = loadGroupBy(k)
 	if pattern == LagBehind {
@@ -512,7 +558,7 @@ func loadWhen(k keys, pattern string, refs map[string]bool) When {
 	case PredicateMatch:
 		k.only(append(allowed, "match")...)
 		w.Threshold = 1
-		w.Match = k.expression("match", false)
+		w.Match = k.expression("match", projectionOnly)
 	case CountInWindow:
 		k.only(append(allowed, "match", "distinct_by", "threshold")...)
 		w.Match = k.expression("match", false)
@@ -534,7 +580,12 @@ func loadWhen(k keys, pattern string, refs map[string]bool) When {
 		w.Threshold = k.positiveInteger("threshold")
 	}
 	_, hasWindow := k.values["window"]
-	if w.Pattern == PredicateMatch && w.ClearWhen != nil && !hasWindow {
+	if w.Pattern == PredicateMatch && projectionOnly {
+		if hasWindow {
+			k.reject("window", "projection-only predicate_match must omit window")
+		}
+		w.Window = 0
+	} else if w.Pattern == PredicateMatch && w.ClearWhen != nil && !hasWindow {
 		w.Window = 0
 	} else {
 		w.Window = k.duration("window")

@@ -194,12 +194,18 @@ func (e Evaluator) RuleResults(ctx context.Context) ([]RuleResult, error) {
 			return nil, fmt.Errorf("watch: Evaluator requires Store or Source")
 		}
 		now := e.now()
-		git, err := readGit(ctx, e.Root, e.Rules, nil, e.gitCheckIO(), e.onGitExec)
-		if err != nil {
-			return nil, err
+		var cache gitCache
+		for {
+			git, ancestors, err := e.readSourceGit(ctx, e.Rules, &cache)
+			if err != nil {
+				return nil, err
+			}
+			results, _, _, _, _, err := e.deriveSourceRules(ctx, e.Source, e.Rules, git, ancestors, now)
+			if errors.Is(err, errNewGitFact) {
+				continue
+			}
+			return results, err
 		}
-		results, _, _, _, _, err := e.deriveSourceRules(ctx, e.Source, e.Rules, git, now)
-		return results, err
 	}
 	var results []RuleResult
 	err := e.readEvaluation(ctx, e.Rules, func(_ *store.Reader, rows []RuleResult) error {
@@ -213,25 +219,47 @@ func (e Evaluator) RuleResults(ctx context.Context) ([]RuleResult, error) {
 // fixed set of rules for both reads and may inspect other rows in that snapshot.
 func (e Evaluator) readEvaluation(ctx context.Context, rules []Rule, visit func(*store.Reader, []RuleResult) error) error {
 	now := e.now()
-	git, err := readGit(ctx, e.Root, rules, nil, e.gitCheckIO(), e.onGitExec)
-	if err != nil {
+	needFixers := needsFixerCandidates(rules)
+	var cache gitCache
+	for {
+		var fixerSHAs []string
+		if needFixers {
+			if err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
+				var err error
+				fixerSHAs, err = readFixerCandidateSHAs(rd)
+				return err
+			}); err != nil {
+				return err
+			}
+		}
+		git, err := readGit(ctx, e.Root, rules, &cache, e.gitCheckIO(), e.onGitExec)
+		if err != nil {
+			return err
+		}
+		ancestors, err := readFixerAncestors(ctx, e.Root, rules, git, &cache, fixerSHAs, e.gitCheckIO(), e.onGitExec)
+		if err != nil {
+			return err
+		}
+		err = e.Store.ReadTx(ctx, func(rd *store.Reader) error {
+			head, err := rd.EventHeadSeq()
+			if err != nil {
+				return err
+			}
+			baselines, err := readRuleBaselines(rd)
+			if err != nil {
+				return err
+			}
+			results, _, err := e.deriveRules(rd, rules, git, ancestors, now, nil, baselines, head, nil)
+			if err != nil {
+				return err
+			}
+			return visit(rd, results)
+		})
+		if errors.Is(err, errNewGitFact) {
+			continue
+		}
 		return err
 	}
-	return e.Store.ReadTx(ctx, func(rd *store.Reader) error {
-		head, err := rd.EventHeadSeq()
-		if err != nil {
-			return err
-		}
-		baselines, err := readRuleBaselines(rd)
-		if err != nil {
-			return err
-		}
-		results, _, err := e.deriveRules(rd, rules, git, now, nil, baselines, head, nil)
-		if err != nil {
-			return err
-		}
-		return visit(rd, results)
-	})
 }
 
 // CheckRules validates effective rules before wait records any delivery state.
@@ -257,6 +285,79 @@ func (e Evaluator) effective(rd *store.Reader) ([]Rule, map[string]bool, error) 
 	return rules, disabledOverrides, err
 }
 
+type fixerAncestorKey struct {
+	shortSHA string
+	greenOID string
+}
+
+type fixerAncestorFacts map[fixerAncestorKey]projectionFact[bool]
+
+func needsFixerCandidates(rules []Rule) bool {
+	for _, r := range rules {
+		if !r.Enabled || r.evaluatorReason() != "" {
+			continue
+		}
+		if len(r.greenProofRefs()) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func readFixerAncestors(ctx context.Context, root string, rules []Rule, git gitSnapshot, cache *gitCache, shortSHAs []string, checkIO func(string) error, onExec func([]string)) (fixerAncestorFacts, error) {
+	if len(shortSHAs) == 0 {
+		return nil, nil
+	}
+	out := fixerAncestorFacts{}
+	for _, r := range rules {
+		if !r.Enabled || r.evaluatorReason() != "" {
+			continue
+		}
+		for _, ref := range r.greenProofRefs() {
+			pf, ok := git.greenProofs[ref]
+			if !ok || pf.err != nil || !pf.value.recorded || len(pf.value.passed) == 0 {
+				continue
+			}
+			greenOID := pf.value.oid
+			for _, shortSHA := range shortSHAs {
+				key := fixerAncestorKey{shortSHA: shortSHA, greenOID: greenOID}
+				if _, done := out[key]; done {
+					continue
+				}
+				anc, err := cache.fixerAncestorOfGreen(ctx, root, shortSHA, greenOID, checkIO, onExec)
+				if err != nil {
+					out[key] = projectionFact[bool]{err: unreadableProjection{"green_proof", err}}
+				} else {
+					out[key] = projectionFact[bool]{value: anc}
+				}
+			}
+		}
+	}
+	return out, ctx.Err()
+}
+
+func (e Evaluator) readSourceGit(ctx context.Context, rules []Rule, cache *gitCache) (gitSnapshot, fixerAncestorFacts, error) {
+	var fixerSHAs []string
+	if ts, ok := e.Source.(*TillrStoreSource); ok && ts != nil && ts.Store != nil && needsFixerCandidates(rules) {
+		if err := ts.Store.ReadTx(ctx, func(rd *store.Reader) error {
+			var err error
+			fixerSHAs, err = readFixerCandidateSHAs(rd)
+			return err
+		}); err != nil {
+			return gitSnapshot{}, nil, err
+		}
+	}
+	git, err := readGit(ctx, e.Root, rules, cache, e.gitCheckIO(), e.onGitExec)
+	if err != nil {
+		return gitSnapshot{}, nil, err
+	}
+	ancestors, err := readFixerAncestors(ctx, e.Root, rules, git, cache, fixerSHAs, e.gitCheckIO(), e.onGitExec)
+	if err != nil {
+		return gitSnapshot{}, nil, err
+	}
+	return git, ancestors, nil
+}
+
 var errNewGitFact = errors.New("effective rules need another Git fact")
 
 // EvaluateRules uses live overrides and leaves episodes with unreadable projections untouched.
@@ -279,49 +380,54 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 		if e.mem == nil {
 			e.mem = newMemoryState()
 		}
-		now := e.now()
-		git, err := readGit(ctx, e.Root, rules, &e.mem.git, e.gitCheckIO(), e.onGitExec)
-		if err != nil {
-			return nil, err
-		}
-		if e.afterGit != nil {
-			e.afterGit()
-		}
-		results, derived, startHead, passEpoch, hasCursor, err := e.deriveSourceRules(ctx, e.Source, rules, git, now)
-		if err != nil {
-			return nil, err
-		}
-		lookup := newSourceItemTerminal(ctx, e.Source)
-		ruleByID := make(map[string]*Rule, len(e.Rules)+len(rules))
-		for i := range e.Rules {
-			r := e.Rules[i]
-			ruleByID[r.ID] = &r
-		}
-		for i := range rules {
-			r := rules[i]
-			ruleByID[r.ID] = &r
-		}
-		reconciled := make(map[string]bool, len(rules))
-		baselines := e.mem.prepareEpoch(hasCursor, passEpoch)
-		for i, subjects := range derived {
-			if subjects == nil {
+		for {
+			now := e.now()
+			git, ancestors, err := e.readSourceGit(ctx, rules, &e.mem.git)
+			if err != nil {
+				return nil, err
+			}
+			if e.afterGit != nil {
+				e.afterGit()
+			}
+			results, derived, startHead, passEpoch, hasCursor, err := e.deriveSourceRules(ctx, e.Source, rules, git, ancestors, now)
+			if errors.Is(err, errNewGitFact) {
 				continue
 			}
-			reconciled[rules[i].ID] = true
-			loadedSeq := effectiveLoadedSeq(rules[i], baselines, startHead)
-			if err := e.mem.reconcileRule(rules[i], subjects, startHead, loadedSeq, now, lookup); err != nil {
-				return nil, fmt.Errorf("rule %s: %w", rules[i].ID, err)
+			if err != nil {
+				return nil, err
 			}
+			lookup := newSourceItemTerminal(ctx, e.Source)
+			ruleByID := make(map[string]*Rule, len(e.Rules)+len(rules))
+			for i := range e.Rules {
+				r := e.Rules[i]
+				ruleByID[r.ID] = &r
+			}
+			for i := range rules {
+				r := rules[i]
+				ruleByID[r.ID] = &r
+			}
+			reconciled := make(map[string]bool, len(rules))
+			baselines := e.mem.prepareEpoch(hasCursor, passEpoch)
+			for i, subjects := range derived {
+				if subjects == nil {
+					continue
+				}
+				reconciled[rules[i].ID] = true
+				loadedSeq := effectiveLoadedSeq(rules[i], baselines, startHead)
+				if err := e.mem.reconcileRule(rules[i], subjects, startHead, loadedSeq, now, lookup); err != nil {
+					return nil, fmt.Errorf("rule %s: %w", rules[i].ID, err)
+				}
+			}
+			if err := e.mem.resolveTerminalRemaining(ruleByID, reconciled, startHead, now, lookup); err != nil {
+				return nil, err
+			}
+			fullRules := rules
+			if !live {
+				fullRules = e.Rules
+			}
+			e.mem.updateBaselines(rules, results, fullRules, live, startHead, now)
+			return results, nil
 		}
-		if err := e.mem.resolveTerminalRemaining(ruleByID, reconciled, startHead, now, lookup); err != nil {
-			return nil, err
-		}
-		fullRules := rules
-		if !live {
-			fullRules = e.Rules
-		}
-		e.mem.updateBaselines(rules, results, fullRules, live, startHead, now)
-		return results, nil
 	}
 	if e.cache == nil || e.cache.sourceKey != e.Store {
 		e.cache = newEvalCache(e.Store)
@@ -336,17 +442,25 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 		now := e.now()
 		var startHead int64
 		var rules []Rule
+		var fixerSHAs []string
 		if err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
 			var err error
 			startHead, err = rd.EventHeadSeq()
 			if err == nil {
 				rules, _, err = readRules(rd)
 			}
+			if err == nil && needsFixerCandidates(rules) {
+				fixerSHAs, err = readFixerCandidateSHAs(rd)
+			}
 			return err
 		}); err != nil {
 			return nil, err
 		}
 		git, err := readGit(ctx, e.Root, rules, &e.cache.git, e.gitCheckIO(), e.onGitExec)
+		if err != nil {
+			return nil, err
+		}
+		ancestors, err := readFixerAncestors(ctx, e.Root, rules, git, &e.cache.git, fixerSHAs, e.gitCheckIO(), e.onGitExec)
 		if err != nil {
 			return nil, err
 		}
@@ -371,7 +485,7 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 				return nil, err
 			}
 			var derived []map[string]*condition
-			results, derived, err = e.deriveRules(rd, rules, git, now, e.cache, baselines, startHead, &activeSnap)
+			results, derived, err = e.deriveRules(rd, rules, git, ancestors, now, e.cache, baselines, startHead, &activeSnap)
 			if err != nil {
 				return nil, err
 			}
@@ -440,7 +554,7 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 	}
 }
 
-func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, now time.Time, cache *evalCache, baselines map[string]ruleBaseline, defaultHead int64, activeSnap *activeSnapshot) ([]RuleResult, []map[string]*condition, error) {
+func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, ancestors fixerAncestorFacts, now time.Time, cache *evalCache, baselines map[string]ruleBaseline, defaultHead int64, activeSnap *activeSnapshot) ([]RuleResult, []map[string]*condition, error) {
 	ts := e.storeSource()
 	if cache != nil {
 		if err := ts.syncKinds(rd, cache, rules, now, baselines, defaultHead, e.onEventQuery); err != nil {
@@ -470,8 +584,11 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 			result.Unsupported = fmt.Sprintf("unsupported scope %q", r.Scope)
 			continue
 		}
-		rf, outOfScope, err := facts.forRule(r, git)
+		rf, outOfScope, err := facts.forRule(r, git, ancestors)
 		if err != nil {
+			if errors.Is(err, errNewGitFact) {
+				return nil, nil, err
+			}
 			result.Unreadable = err.Error()
 			continue
 		}
@@ -488,6 +605,9 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 			if r.When.ReopenWhen != nil {
 				firstLoadedSeq := effectiveFirstLoadedSeq(r, baselines, defaultHead)
 				reopenEv, err := deriveLagReopenEvent(rd, ts, r, now, rf, cache, firstLoadedSeq)
+				if errors.Is(err, errNewGitFact) {
+					return nil, nil, err
+				}
 				var unreadable unreadableProjection
 				if errors.As(err, &unreadable) {
 					result.Unreadable = unreadable.Error()
@@ -503,6 +623,22 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 			derived[i] = map[string]*condition{"global": lag}
 			continue
 		}
+		if r.isProjectionPredicateMatch() {
+			subjects, err := deriveProjectionMatch(r, rf, now)
+			if errors.Is(err, errNewGitFact) {
+				return nil, nil, err
+			}
+			var unreadable unreadableProjection
+			if errors.As(err, &unreadable) {
+				result.Unreadable = unreadable.Error()
+				continue
+			}
+			if err != nil {
+				return nil, nil, fmt.Errorf("rule %s: %w", r.ID, err)
+			}
+			derived[i] = subjects
+			continue
+		}
 		firstLoadedSeq := effectiveFirstLoadedSeq(r, baselines, defaultHead)
 		var subjects map[string]*condition
 		var n int
@@ -510,6 +646,9 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 			subjects, n, err = deriveCached(r, now, rf, cache, firstLoadedSeq, activeSubjects)
 		} else {
 			subjects, n, err = ts.deriveRule(rd, r, now, rf, firstLoadedSeq)
+		}
+		if errors.Is(err, errNewGitFact) {
+			return nil, nil, err
 		}
 		var unreadable unreadableProjection
 		if errors.As(err, &unreadable) {
@@ -524,7 +663,7 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 	return results, derived, nil
 }
 
-func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource, rules []Rule, git gitSnapshot, now time.Time) ([]RuleResult, []map[string]*condition, int64, int64, bool, error) {
+func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource, rules []Rule, git gitSnapshot, ancestors fixerAncestorFacts, now time.Time) ([]RuleResult, []map[string]*condition, int64, int64, bool, error) {
 	var activeSubjects activeCompositeFunc
 	if e.mem != nil {
 		activeSubjects = e.mem.activeCompositeSubjects
@@ -532,9 +671,10 @@ func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource,
 	results := make([]RuleResult, len(rules))
 	derived := make([]map[string]*condition, len(rules))
 	var (
-		maxHead   int64
-		passEpoch int64
-		hasCursor bool
+		maxHead     int64
+		passEpoch   int64
+		hasCursor   bool
+		hasProjOnly bool
 	)
 	for i, r := range rules {
 		result := &results[i]
@@ -546,8 +686,11 @@ func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource,
 		if result.Disabled || result.Unsupported != "" {
 			continue
 		}
-		rf, outOfScope, unsupported, err := prepareSourceRule(ctx, src, r, git)
+		rf, outOfScope, unsupported, err := prepareSourceRule(ctx, src, r, git, ancestors)
 		if err != nil {
+			if errors.Is(err, errNewGitFact) {
+				return nil, nil, 0, 0, false, err
+			}
 			result.Unreadable = err.Error()
 			continue
 		}
@@ -571,6 +714,9 @@ func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource,
 					resolveBaseline = e.mem.resolveFirstLoadedSeq
 				}
 				reopenEv, cursor, err := deriveSourceLagReopenEvent(ctx, src, r, now, rf, resolveBaseline)
+				if errors.Is(err, errNewGitFact) {
+					return nil, nil, 0, 0, false, err
+				}
 				var unreadable unreadableProjection
 				if errors.As(err, &unreadable) {
 					result.Unreadable = unreadable.Error()
@@ -593,7 +739,27 @@ func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource,
 			derived[i] = map[string]*condition{"global": lag}
 			continue
 		}
+		if r.isProjectionPredicateMatch() {
+			hasProjOnly = true
+			subjects, err := deriveProjectionMatch(r, rf, now)
+			if errors.Is(err, errNewGitFact) {
+				return nil, nil, 0, 0, false, err
+			}
+			var unreadable unreadableProjection
+			if errors.As(err, &unreadable) {
+				result.Unreadable = unreadable.Error()
+				continue
+			}
+			if err != nil {
+				return nil, nil, 0, 0, false, fmt.Errorf("rule %s: %w", r.ID, err)
+			}
+			derived[i] = subjects
+			continue
+		}
 		subjects, n, cursor, err := deriveFromSource(ctx, src, r, now, rf, e.mem.resolveFirstLoadedSeq, activeSubjects)
+		if errors.Is(err, errNewGitFact) {
+			return nil, nil, 0, 0, false, err
+		}
 		var unreadable unreadableProjection
 		if errors.As(err, &unreadable) {
 			result.Unreadable = unreadable.Error()
@@ -610,6 +776,16 @@ func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource,
 			maxHead = cursor.Seq
 		}
 		result.Skipped, derived[i] = n, subjects
+	}
+	if hasProjOnly && !hasCursor && src != nil {
+		_, cursor, _, err := src.ReadWindow(ctx, now.UnixMilli(), nil)
+		if err == nil {
+			hasCursor = true
+			passEpoch = cursor.Epoch
+			if cursor.Seq > maxHead {
+				maxHead = cursor.Seq
+			}
+		}
 	}
 	return results, derived, maxHead, passEpoch, hasCursor, nil
 }
@@ -1062,7 +1238,7 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 							})
 						}
 					} else {
-						newest := c.events[len(c.events)-1]
+						newest := conditionNewest(r, c, ep.last)
 						if newest.Seq > ep.last {
 							*changes = append(*changes, func(tx *store.Tx) error {
 								_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
@@ -1096,7 +1272,7 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 						})
 					}
 				} else {
-					newest = c.events[len(c.events)-1]
+					newest = conditionNewest(r, c, ep.last)
 					if isWindowedEventRule(r.When) {
 						cutoff := max(ep.last, lookup.terminalSeq(trackedID))
 						if newest.Seq <= cutoff {
@@ -1136,12 +1312,9 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 		if !firing {
 			continue
 		}
-		newest := observation{Seq: startHead}
-		if r.When.Pattern != LagBehind {
-			newest = c.events[len(c.events)-1]
-		}
+		newest := conditionNewest(r, c, startHead)
 		if !exists {
-			if r.When.Pattern != LagBehind && newest.Seq <= loadedSeq {
+			if r.When.Pattern != LagBehind && !r.isProjectionPredicateMatch() && newest.Seq <= loadedSeq {
 				continue
 			}
 			if err := changes.open(rd, r, key, c, newest, now); err != nil {
@@ -1174,11 +1347,14 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 				})
 			}
 		}
-		if r.When.Pattern != LagBehind && newest.Seq > ep.last {
-			*changes = append(*changes, func(tx *store.Tx) error {
-				_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
-				return err
-			})
+		if r.When.Pattern != LagBehind {
+			newest = conditionNewest(r, c, ep.last)
+			if newest.Seq > ep.last {
+				*changes = append(*changes, func(tx *store.Tx) error {
+					_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
+					return err
+				})
+			}
 		}
 		if cause := ep.reopenCause(r, now, newest, currentLagPair); cause != "" {
 			if err := changes.reopen(r, key, ep.id, c, newest.fingerprint, cause, now); err != nil {

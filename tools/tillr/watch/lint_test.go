@@ -782,3 +782,141 @@ receiver = "foreground"
 		t.Fatalf("expected 0 findings for != and not in operators, got %v", findings)
 	}
 }
+
+func TestLintProjectionOnlyPredicateAndFixerProof(t *testing.T) {
+	registerLintTestKinds(t)
+
+	// 1. Valid projection-only predicate_match with item.id and item.fixer_proved.
+	cleanRoot := t.TempDir()
+	writeLintFile(t, cleanRoot, "config/tillr/watch/proved.toml", `[[rule]]
+id = "drain-trunk-fixer-proved-queued"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+projections = ["items", "fixer_checks", "green_proof:refs/tillr/green"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'item.id matches "^fixer-main-" and item.state == "in-queue" and item.fixer_proved("refs/tillr/green")'
+
+[rule.guidance]
+summary = "Fixer {{subject}} is still queued"
+check = ["Inspect {{subject}}"]
+do = ["Resolve {{subject}}"]
+
+[rule.delivery]
+receiver = "foreground"
+`)
+	findings, err := Lint(context.Background(), LintOptions{Root: cleanRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("expected 0 findings for valid projection-only rule, got %v", findings)
+	}
+
+	// 2. Non-landing charter refuses fixer_checks and green_proof: on core and charter:<name> scopes.
+	hookRoot := t.TempDir()
+	writeLintFile(t, hookRoot, "definition.json", `{
+  "definition": "hook-flow",
+  "version": 1,
+  "states": ["ready", "blocked", "closed"],
+  "ready": "ready",
+  "blocked": "blocked",
+  "closed": "closed",
+  "finished": ["closed"],
+  "transitions": [
+    { "from": "ready", "to": "closed" },
+    { "from": "ready", "to": "blocked" },
+    { "from": "blocked", "to": "ready" }
+  ],
+  "prerequisites": [],
+  "completes": "hook",
+  "retention": "keep",
+  "brief_template": "brief.md",
+  "hooks": { "argv": ["true"], "names": ["pre-commit"] }
+}`)
+	writeLintFile(t, hookRoot, "config/tillr/watch/proved.toml", `[[rule]]
+id = "core-fixer"
+scope = "core"
+severity = "warning"
+[rule.reads]
+projections = ["items", "fixer_checks", "green_proof:refs/tillr/green"]
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'item.fixer_proved("refs/tillr/green")'
+[rule.guidance]
+summary = "{{subject}}"
+check = ["inspect"]
+do = ["resolve"]
+[rule.delivery]
+receiver = "foreground"
+
+[[rule]]
+id = "charter-fixer"
+scope = "charter:hook-flow"
+severity = "warning"
+[rule.reads]
+projections = ["items", "fixer_checks", "green_proof:refs/tillr/green"]
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'item.fixer_proved("refs/tillr/green")'
+[rule.guidance]
+summary = "{{subject}}"
+check = ["inspect"]
+do = ["resolve"]
+[rule.delivery]
+receiver = "foreground"
+`)
+	findings, err = Lint(context.Background(), LintOptions{Root: hookRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasLintCode(t, findings, CodeWatchLintUnknownSignal, `rule "core-fixer": projection "fixer_checks"`)
+	assertHasLintCode(t, findings, CodeWatchLintUnknownSignal, `rule "core-fixer": projection "green_proof:refs/tillr/green"`)
+	assertHasLintCode(t, findings, CodeWatchLintUnknownSignal, `rule "charter-fixer": projection "fixer_checks"`)
+	assertHasLintCode(t, findings, CodeWatchLintUnknownSignal, `rule "charter-fixer": projection "green_proof:refs/tillr/green"`)
+
+	// 3. Projection-only refusals: missing items, wrong group_by, event.*, window/clear_when/fingerprint, {{event.*}}.
+	badRoot := t.TempDir()
+	writeLintFile(t, badRoot, "config/tillr/watch/bad.toml", `[[rule]]
+id = "bad-proj-only"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+projections = ["fixer_checks"]
+
+[rule.when]
+group_by = "object_id"
+pattern = "predicate_match"
+match = 'event.kind == "drain.refusal" and item.fixer_proved("refs/tillr/green")'
+window = "5m"
+clear_when = "true"
+fingerprint = ["item_id"]
+
+[rule.guidance]
+summary = "Bad {{event.item_id}}"
+check = ["inspect"]
+do = ["resolve"]
+
+[rule.delivery]
+receiver = "foreground"
+`)
+	findings, err = Lint(context.Background(), LintOptions{Root: badRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasLintCode(t, findings, CodeWatchLintUnknownSignal, `projection-only predicate_match requires "items"`)
+	assertHasLintCode(t, findings, CodeWatchLintRuleSchema, `projection-only predicate_match requires group_by = "item_id"`)
+	assertHasLintCode(t, findings, CodeWatchLintUnknownSignal, `cannot reference event.*`)
+	assertHasLintCode(t, findings, CodeWatchLintUnknownSignal, `item.fixer_proved("refs/tillr/green") requires`)
+	assertHasLintCode(t, findings, CodeWatchLintRuleSchema, `must omit window`)
+	assertHasLintCode(t, findings, CodeWatchLintRuleSchema, `must omit clear_when`)
+	assertHasLintCode(t, findings, CodeWatchLintRuleSchema, `must omit fingerprint`)
+	assertHasLintCode(t, findings, CodeWatchLintEmptyGuidance, `{{event.item_id}}`)
+}

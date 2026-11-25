@@ -19,6 +19,7 @@ type Expression struct {
 	unsupported      bool
 	usesAge          bool
 	usesNotIn        bool
+	usesEvent        bool
 	projections      []projectionOperand
 	eventComparisons []eventComparison
 }
@@ -41,7 +42,7 @@ type termMeta struct {
 // payload cannot supply it, even when the payload has a similarly named key.
 type projectionOperand struct {
 	name string
-	ref  string // only for git.ref
+	ref  string // only for git.ref and item.fixer_proved
 }
 
 type expressionValues struct {
@@ -82,7 +83,7 @@ func ParseExpression(text string) (*Expression, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
-	return &Expression{source: text, root: root, unsupported: p.unsupported, usesAge: p.usesAge, usesNotIn: p.usesNotIn, projections: p.projections, eventComparisons: p.eventComparisons}, nil
+	return &Expression{source: text, root: root, unsupported: p.unsupported, usesAge: p.usesAge, usesNotIn: p.usesNotIn, usesEvent: p.usesEvent, projections: p.projections, eventComparisons: p.eventComparisons}, nil
 }
 
 type token struct {
@@ -98,6 +99,7 @@ type parser struct {
 	unsupported      bool
 	usesAge          bool
 	usesNotIn        bool
+	usesEvent        bool
 	projections      []projectionOperand
 	eventComparisons []eventComparison
 }
@@ -345,6 +347,18 @@ func (p *parser) value() (operand, termMeta) {
 				ref, _ := strconv.Unquote(first.text) // checked by values
 				return p.project(projectionOperand{name: name, ref: ref}), termMeta{kind: "call"}
 			}
+			if name == "item.fixer_proved" {
+				if first.kind != "string" || len(args) != 1 || suffix != "" {
+					p.fail("item.fixer_proved requires one quoted ref name")
+					return nil, termMeta{}
+				}
+				ref, _ := strconv.Unquote(first.text) // checked by values
+				if !validRef(ref) {
+					p.fail("item.fixer_proved requires a valid Git ref name")
+					return nil, termMeta{}
+				}
+				return p.project(projectionOperand{name: name, ref: ref}), termMeta{kind: "call"}
+			}
 			if name == "age" && suffix == "" {
 				if len(args) != 1 {
 					p.fail("age requires one operand")
@@ -375,6 +389,7 @@ func (p *parser) value() (operand, termMeta) {
 			return literal(nil), termMeta{kind: "call"}
 		}
 		if field, ok := strings.CutPrefix(name, "event."); ok {
+			p.usesEvent = true
 			return func(v expressionValues) any { return v.event(field) }, termMeta{kind: "event", eventField: field}
 		}
 		if strings.HasPrefix(name, "item.") || strings.HasPrefix(name, "charter.") {

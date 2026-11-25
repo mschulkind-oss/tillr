@@ -718,3 +718,144 @@ func TestTillrStoreSourceAdapterContract(t *testing.T) {
 		t.Fatalf("Pending via TillrStoreSource: %+v, %v", notices, err)
 	}
 }
+
+func TestSourceProjectionPredicateMatchParity(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0).UTC()
+	root := t.TempDir()
+	fixtureGit(t, root, "", now, "init")
+	fixtureGit(t, root, "", now, "config", "user.name", "Test")
+	fixtureGit(t, root, "", now, "config", "user.email", "test@example.com")
+	fixtureGit(t, root, "", now, "commit", "--allow-empty", "-m", "red")
+	redOID := fixtureGit(t, root, "", now, "rev-parse", "HEAD")
+	fixtureGit(t, root, "", now, "branch", "-M", "main")
+	fixtureGit(t, root, "", now.Add(time.Minute), "commit", "--allow-empty", "-m", "green")
+	greenOID := fixtureGit(t, root, "", now.Add(time.Minute), "rev-parse", "HEAD")
+	fixtureGit(t, root, "", now.Add(time.Minute), "update-ref", "refs/tillr/green", greenOID)
+	writeGreenProofJSON(t, root, greenOID, now.Add(time.Minute), []string{"check-a"})
+
+	s := watchStore(t)
+	watchSQL(t, s, `CREATE TABLE items(item_id TEXT PRIMARY KEY,state TEXT,seat TEXT,waiting_on TEXT,event_seq INTEGER)`)
+	watchSQL(t, s, `CREATE TABLE item_criteria(item_id TEXT,criterion_id TEXT,text TEXT)`)
+
+	fixerID := "fixer-main-" + redOID[:12]
+	watchSQL(t, s, `INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES (?,'item.add','item',?,?)`, now.UnixMilli(), fixerID, `{"item_id":"`+fixerID+`"}`)
+	var addSeq int64
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT MAX(seq) FROM events WHERE object_id = ?`, fixerID).Scan(&addSeq)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	watchSQL(t, s, `INSERT INTO items VALUES (?,'in-queue',NULL,NULL,?)`, fixerID, addSeq)
+	watchSQL(t, s, `INSERT INTO item_criteria VALUES (?,'trunk-green','(red: check-a)')`, fixerID)
+
+	src := NewTillrStoreSource(s)
+	src.Clock = func() time.Time { return now.Add(2 * time.Minute) }
+
+	// Project exposes item.id on items and fixer_checks.
+	proj, err := src.Project(ctx, []string{"items", "fixer_checks"})
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	itemsProj := proj["items"].(map[string]map[string]any)
+	if itemsProj[fixerID]["item.id"] != fixerID {
+		t.Fatalf("items[fixerID][item.id] = %v, want %s", itemsProj[fixerID]["item.id"], fixerID)
+	}
+	fcProj := proj["fixer_checks"].(map[string]map[string]any)
+	if fcProj[fixerID]["subject_seq"] != addSeq {
+		t.Fatalf("fixer_checks[fixerID][subject_seq] = %v, want %d", fcProj[fixerID]["subject_seq"], addSeq)
+	}
+
+	// Non-TillrStoreSource refuses fixer_checks.
+	memSrc := &memoryObservationSource{}
+	memRule := watchRules(t, `[[rule]]
+id = "mem-fixer"
+scope = "core"
+severity = "warning"
+[rule.reads]
+projections = ["items", "fixer_checks", "green_proof:refs/tillr/green"]
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'item.id matches "^fixer-main-" and item.fixer_proved("refs/tillr/green")'
+[rule.guidance]
+summary = "{{subject}}"
+check = ["c"]
+do = ["d"]
+[rule.delivery]
+receiver = "foreground"
+`)[0]
+	memEval := Evaluator{Source: memSrc, Root: root, Rules: []Rule{memRule}, Clock: src.Clock}
+	if res, err := memEval.RuleResults(ctx); err != nil || len(res) != 1 || res[0].Unsupported != `not evaluated: scope "core" requires a tillr store source` {
+		t.Fatalf("expected unsupported scope on memory source, got %+v (%v)", res, err)
+	}
+
+	rules := watchRules(t, `[[rule]]
+id = "source-fixer-proved"
+scope = "core"
+severity = "warning"
+[rule.reads]
+projections = ["items", "fixer_checks", "green_proof:refs/tillr/green"]
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'item.id matches "^fixer-main-" and item.state == "in-queue" and item.fixer_proved("refs/tillr/green")'
+[rule.guidance]
+summary = "Fixer {{subject}} proved ({{count}} {{elapsed}})"
+check = ["c"]
+do = ["d"]
+[rule.delivery]
+receiver = "foreground"
+`)
+	e := Evaluator{Source: src, Root: root, Rules: rules, Clock: src.Clock}
+	res, err := e.EvaluateRules(ctx)
+	if err != nil || len(res) != 1 || res[0].Diagnostic() != "" {
+		t.Fatalf("EvaluateRules via Source: %+v (%v)", res, err)
+	}
+	notices, err := e.Pending(ctx, "foreground")
+	if err != nil || len(notices) != 1 || notices[0].Bundle.Subject != fixerID || len(notices[0].Bundle.Events) != 0 {
+		t.Fatalf("Pending via Source: %+v (%v)", notices, err)
+	}
+
+	// Ack watermark stability across unrelated store writes.
+	note := "ack"
+	if err := e.Ack(ctx, notices[0].AlertID, "op", &note); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now.Add(2*time.Minute), `{"unrelated":true}`)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil || len(st.Alerts) != 1 || st.Alerts[0].State != "acknowledged" {
+		t.Fatalf("expected acknowledged alert after unrelated write, got %+v (%v)", st, err)
+	}
+
+	// condition-cleared resolution when item leaves in-queue.
+	watchSQL(t, s, `UPDATE items SET state='ready' WHERE item_id=?`, fixerID)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, err = e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil || len(st.Alerts) != 0 {
+		t.Fatalf("expected 0 active alerts after condition-cleared, got %+v (%v)", st, err)
+	}
+
+	// Re-open on in-queue, then item-closed resolution.
+	watchSQL(t, s, `UPDATE items SET state='in-queue' WHERE item_id=?`, fixerID)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, err = e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil || len(st.Alerts) != 1 || st.Alerts[0].State != "open" {
+		t.Fatalf("expected reopened open alert, got %+v (%v)", st, err)
+	}
+	watchSQL(t, s, `UPDATE items SET state='closed' WHERE item_id=?`, fixerID)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, err = e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil || len(st.Alerts) != 0 {
+		t.Fatalf("expected 0 active alerts after item-closed, got %+v (%v)", st, err)
+	}
+}

@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -239,4 +240,155 @@ receiver = "foreground"
 	eval()
 	episode("resolved", startHead)
 	assertWatchResolutionEvent(t, s, startHead)
+}
+
+func TestFixerProvedGitProofAndRetry(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0).UTC()
+	root := t.TempDir()
+	fixtureGit(t, root, "", now, "init")
+	fixtureGit(t, root, "", now, "config", "user.name", "Test")
+	fixtureGit(t, root, "", now, "config", "user.email", "test@example.com")
+	fixtureGit(t, root, "", now, "commit", "--allow-empty", "-m", "base")
+	baseOID := fixtureGit(t, root, "", now, "rev-parse", "HEAD")
+	fixtureGit(t, root, "", now, "branch", "-M", "main")
+	fixtureGit(t, root, "", now.Add(time.Minute), "commit", "--allow-empty", "-m", "red")
+	redOID := fixtureGit(t, root, "", now.Add(time.Minute), "rev-parse", "HEAD")
+	fixtureGit(t, root, "", now.Add(2*time.Minute), "commit", "--allow-empty", "-m", "green")
+	greenOID := fixtureGit(t, root, "", now.Add(2*time.Minute), "rev-parse", "HEAD")
+
+	s := watchStore(t)
+	watchSQL(t, s, `CREATE TABLE items(item_id TEXT PRIMARY KEY,state TEXT,seat TEXT,waiting_on TEXT,event_seq INTEGER)`)
+	watchSQL(t, s, `CREATE TABLE item_criteria(item_id TEXT,criterion_id TEXT,text TEXT)`)
+
+	doc := `[[rule]]
+id = "fixer-proved-git"
+scope = "core"
+severity = "warning"
+[rule.reads]
+projections = ["items", "fixer_checks", "green_proof:refs/tillr/green"]
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'item.id matches "^fixer-main-" and item.state == "in-queue" and item.fixer_proved("refs/tillr/green")'
+[rule.guidance]
+summary = "Fixer {{subject}} proved"
+check = ["check"]
+do = ["do"]
+[rule.delivery]
+receiver = "foreground"
+`
+	rules := watchRules(t, doc)
+
+	// Missing --root is refused.
+	noRoot := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now.Add(3 * time.Minute) }}
+	if _, err := noRoot.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err == nil || !strings.Contains(err.Error(), "--root") {
+		t.Fatalf("expected --root error, got %v", err)
+	}
+
+	e := Evaluator{Store: s, Root: root, Rules: rules, Clock: func() time.Time { return now.Add(3 * time.Minute) }}
+
+	// 1. Missing ref -> quiet.
+	if res, err := e.EvaluateRules(ctx); err != nil || len(res) != 1 || res[0].Diagnostic() != "" {
+		t.Fatalf("missing ref should be clean: %+v (%v)", res, err)
+	}
+
+	// 2. Corrupt proof file -> diagnostic contains green_proof:.
+	fixtureGit(t, root, "", now, "update-ref", "refs/tillr/green", baseOID)
+	gateDir := filepath.Join(root, ".git", "tillr-gate")
+	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	corruptPath := filepath.Join(gateDir, "green-"+baseOID+".json")
+	if err := os.WriteFile(corruptPath, []byte(`{bad json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := e.EvaluateRules(ctx); err != nil || len(res) != 1 || !strings.Contains(res[0].Unreadable, "green_proof:") {
+		t.Fatalf("expected green_proof unreadable, got %+v (%v)", res, err)
+	}
+
+	// 3. redOID on main, but refs/tillr/green points to baseOID (not a descendant of redOID) -> quiet.
+	writeGreenProofJSON(t, root, baseOID, now.Add(2*time.Minute), []string{"check-a"})
+	fixerID := "fixer-main-" + redOID[:12]
+	watchSQL(t, s, `INSERT INTO items VALUES (?,'in-queue',NULL,NULL,0)`, fixerID)
+	watchSQL(t, s, `INSERT INTO item_criteria VALUES (?,'trunk-green','(red: check-a)')`, fixerID)
+	if res, err := e.EvaluateRules(ctx); err != nil || len(res) != 1 || res[0].Diagnostic() != "" {
+		t.Fatalf("non-descendant green proof should be clean: %+v (%v)", res, err)
+	}
+	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 0 {
+		t.Fatalf("non-descendant green proof should stay quiet: %+v (%v)", notices, err)
+	}
+
+	// 4. Advance refs/tillr/green to greenOID (descendant of redOID) and test errNewGitFact retry
+	// when a new fixer-main-* row is inserted between pre-Git read and ApplyPlan.
+	fixtureGit(t, root, "", now.Add(2*time.Minute), "update-ref", "refs/tillr/green", greenOID)
+	writeGreenProofJSON(t, root, greenOID, now.Add(2*time.Minute), []string{"check-a"})
+	fixer2ID := "fixer-main-" + baseOID[:12]
+	inserted := false
+	e.afterGit = func() {
+		if inserted {
+			return
+		}
+		inserted = true
+		watchSQL(t, s, `INSERT INTO items VALUES (?,'in-queue',NULL,NULL,0)`, fixer2ID)
+		watchSQL(t, s, `INSERT INTO item_criteria VALUES (?,'trunk-green','(red: check-a)')`, fixer2ID)
+	}
+	res, err := e.EvaluateRules(ctx)
+	if err != nil || len(res) != 1 || res[0].Diagnostic() != "" {
+		t.Fatalf("EvaluateRules with errNewGitFact retry: %+v (%v)", res, err)
+	}
+	notices, err := e.Pending(ctx, "foreground")
+	if err != nil || len(notices) != 2 {
+		t.Fatalf("expected 2 notices after retry, got %d (%+v, %v)", len(notices), notices, err)
+	}
+
+	// 5. ReadStatus runs cleanly outside SQLite transactions.
+	st, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil || len(st.Rules) != 1 || st.Rules[0].Diagnostic() != "" || len(st.Alerts) != 2 {
+		t.Fatalf("ReadStatus = %+v (%v)", st, err)
+	}
+}
+
+func TestWatchGitCacheSymbolicRefAndMissingRef(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	root, leader, _ := forkedRepo(t, now)
+	fixtureGit(t, root, "", now, "symbolic-ref", "refs/heads/alias", leaderRef)
+
+	var cache gitCache
+	cache.reset(root)
+
+	// 1. Symbolic ref under refs/ falls back to gitCommitWith and resolves target OID.
+	execs := 0
+	oid, err := cache.commit(ctx, root, "refs/heads/alias", nil, func([]string) { execs++ })
+	if err != nil || oid != leader {
+		t.Fatalf("symbolic ref commit = %q (%v), want %q", oid, err, leader)
+	}
+	if execs == 0 {
+		t.Fatalf("expected git subprocess fallback for symbolic ref")
+	}
+
+	// 2. Genuinely missing ref under refs/ returns errMissingRef with zero git subprocesses.
+	execs = 0
+	_, err = cache.commit(ctx, root, "refs/tillr/does-not-exist", nil, func([]string) { execs++ })
+	if !errors.Is(err, errMissingRef) {
+		t.Fatalf("missing ref err = %v, want errMissingRef", err)
+	}
+	if execs != 0 {
+		t.Fatalf("missing ref spawned %d git subprocesses, want 0", execs)
+	}
+
+	// 3. Non-NotExist IO error (directory at ref path) falls back rather than returning errMissingRef.
+	dirRef := filepath.Join(root, ".git", "refs", "heads", "isdir")
+	if err := os.MkdirAll(dirRef, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	execs = 0
+	_, err = cache.commit(ctx, root, "refs/heads/isdir", nil, func([]string) { execs++ })
+	if err == nil || errors.Is(err, errMissingRef) {
+		t.Fatalf("unreadable ref dir err = %v, want non-errMissingRef error", err)
+	}
+	if execs == 0 {
+		t.Fatalf("expected git subprocess fallback for unreadable ref dir")
+	}
 }
