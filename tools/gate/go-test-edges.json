@@ -117,7 +117,6 @@
         "TestFaultLeavesTwoRunsToFinishAndReplacementJudgesOnce",
         "TestFetchAndOrdinaryRefsConvictNoRun",
         "TestFixerGateJudgesOwnDiffThenNamedChecksAndLands",
-        "TestForkBuildCommandContracts",
         "TestFreshStartExplicitLanesReplacesSavedTargetAndReportsSource",
         "TestGatePolicyRefusesInvalidValuesBeforeDispatch",
         "TestGatePolicyRefusesMalformedDocument",
@@ -349,7 +348,6 @@
         "TestCheckSubprocessesSuppressPythonBytecodeInCheckedOutWorktrees",
         "TestDisabledMarkerSweepDeduplicatesWhileOpenAndEnablesAfterLand",
         "TestFixerGateJudgesOwnDiffThenNamedChecksAndLands",
-        "TestForkBuildCommandContracts",
         "TestGateAndHeavyProofStripSQLiteTraceFromCheckEnv",
         "TestHeavyCancellationEndsDeclarationChildrenBeforeRemovingTree",
         "TestHeavyExecClosesOwnershipAndReplacementProvesTipWithoutAnotherLanding",
@@ -779,6 +777,13 @@
       "yolo-packs/tillr/pack.json",
       "yolo-packs/tillr/programs/"
     ]
+  },
+  "github.com/mschulkind-oss/tillr-drain/forkgate": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-drain",
+      "github.com/mschulkind-oss/tillr-gate"
+    ],
+    "reads": []
   },
   "github.com/mschulkind-oss/tillr-gate": {
     "builds": [],
