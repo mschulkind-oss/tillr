@@ -311,7 +311,7 @@ The recorder must not be able to fail a launch, a run or a landing.
 ### 7.2 Overhead
 
 The shim uses shell builtins only, with no fork per command; the budget is at most 1.5 ms per shell
-command. The [tillr-trace test suite](../../tools/tillr-trace/test.py) runs the shim against an
+command. The [tillr-trace test suite](../../tools/tillr-trace/shim_test.go) runs the shim against an
 unwritable trace directory and asserts the command's behavior is unchanged.
 
 ---

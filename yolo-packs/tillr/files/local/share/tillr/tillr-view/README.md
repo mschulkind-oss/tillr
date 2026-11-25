@@ -541,12 +541,12 @@ A run's model turns, tool calls and subprocess rows are read on demand from the 
 artifacts (its log, `proc-exec.jsonl` and gate records) by
 [`tillr-trace run <run-id>`](https://github.com/mschulkind-oss/tillr/blob/main/tillr-trace/README.md#no-index-every-answer-is-read-from-the-artifacts),
 once per request; there is no trace index and no cache. `--trace-bin` names that program,
-on `serve` and `trace` alike. Its default is `<root>/tools/tillr-trace/tillr-trace` (for
-`trace`, the current directory is the root), then the pack's
-`~/.local/share/tillr/tillr-trace/tillr-trace`, then `tillr-trace` on `PATH`. With none
-found, the `trace` source of every run response reads `absent` and only the store's and
-the loop directory's records are shown. A run with hundreds of thousands of subprocess
-rows takes seconds to read.
+on `serve` and `trace` alike. Its default is a sibling `tillr-trace` beside this
+executable (including the launcher's digest-suffixed cache), then `tillr-trace` on
+`PATH`, then `<root>/tools/tillr-trace/tillr-trace` (for `trace`, the current directory
+is the root). With none found, the `trace` source of every run response reads `absent`
+and only the store's and the loop directory's records are shown. A run with hundreds of
+thousands of subprocess rows takes seconds to read.
 
 `GET /api/v1/runs/{id}/trace?format=otlp-json` and `format=chrome-trace` download
 those same documents. The default format is `otlp-json`; unknown formats are refused.

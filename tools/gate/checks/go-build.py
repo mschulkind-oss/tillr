@@ -18,7 +18,7 @@ from classify import classify
 GO_TOOL_DIRS = (
     "tools/tillr", "tools/tillr-store", "tools/tillr-item",
     "tools/tillr-run", "tools/tillr-gate", "tools/tillr-view", "tools/tillr-land",
-    "tools/tillr-drain", "tools/tillr-cli", "tools/tillr-watch",
+    "tools/tillr-drain", "tools/tillr-cli", "tools/tillr-watch", "tools/tillr-trace",
 )
 
 _GO_ENV_CACHE = {}

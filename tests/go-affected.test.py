@@ -94,6 +94,7 @@ def test_discover_modules() -> None:
         "tools/tillr-land",
         "tools/tillr-run",
         "tools/tillr-store",
+        "tools/tillr-trace",
         "tools/tillr-view",
         "tools/tillr-watch",
     ]

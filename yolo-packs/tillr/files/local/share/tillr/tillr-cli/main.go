@@ -21,7 +21,7 @@ func main() {
 
 // nouns is the dispatch set, in the order the usage line prints it. A noun
 // has to be added here to be reachable; the wrapper never forwards unknown nouns.
-var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view", "watch", "notify"}
+var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view", "watch", "trace", "notify"}
 
 // dispatch is one invocation, resolved: the binary that answers it and the arguments it
 // is handed, unread.

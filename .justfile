@@ -333,7 +333,8 @@ tillr-build:
     fi
     # `tillr-cli` builds the dispatcher named `tillr`; the shared library module of that name is
     # not a program, so it is built through its dependents rather than emitted here.
-    for module in tillr-cli tillr-drain tillr-gate tillr-item tillr-land tillr-run tillr-store tillr-view; do
+    for module in tillr-cli tillr-drain tillr-gate tillr-item tillr-land tillr-run tillr-store tillr-trace tillr-view; do
+        [ -f "$work/source/tools/$module/go.mod" ] || continue
         name="${module}"
         [ "$module" = "tillr-cli" ] && name="tillr"
         tags=""

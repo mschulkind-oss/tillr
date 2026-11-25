@@ -99,10 +99,10 @@ and loses only the field it could not read.
 The parser reads a JSONL source one line at a time, so peak memory is the rows it keeps,
 not the size of the largest file.
 
-The store is never written, opened read-write, or migrated: `Store` in
-[`tillr_trace.py`](./tillr_trace.py) creates its connection with `file:...?mode=ro` and a
-`PRAGMA query_only` lock behind it, and the test suite runs the CLI against a read-only
-store copy and asserts a write on that connection raises.
+The store is never written, opened read-write, or migrated: `openStore` in
+[`store.go`](./store.go) opens its connection with `file:...?mode=ro` and a
+`PRAGMA query_only = ON` lock behind it, and the test suite runs the CLI against a read-only
+store copy and asserts a write on that connection fails.
 
 ## The commands
 
@@ -217,7 +217,7 @@ never give by accident.
 ## Tests
 
 ```bash
-python3 tools/tillr-trace/test.py     # prints each case and exits 0
+cd tools/tillr-trace && go test ./...
 ```
 
 The fixture [`testdata/canary-run.log`](./testdata/canary-run.log) is a `pi --mode json`

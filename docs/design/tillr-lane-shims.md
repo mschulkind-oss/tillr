@@ -182,7 +182,7 @@ Under the owner's ruling in [`docs/design/session-recording.md`](./session-recor
 ```
 
 - **Fail-closed on the guard, fail-open on the log write.** Unlike [`tools/tillr-trace/bash-shim.sh`](../../tools/tillr-trace/bash-shim.sh) (which lets the traced command run if trace writing fails), a shim refusal **always exits `1`** even if `$TILLR_TRACE_DIR` is missing or unwritable.
-- **How the operator reads it.** [`tools/tillr-trace/tillr_trace.py`](../../tools/tillr-trace/tillr_trace.py) gains a `refusals` subcommand (`tillr-trace refusals [--runs 100] [--json]`) that scans `.tillr/loop/run-*/shim-refusals.jsonl` on demand — matching `audit` and `summary`, which scan 100 runs in milliseconds — and prints which lanes and items hit which `(tool, rule)` and how many times, plus a `Shim refusals` block in `tillr-trace run <run-id>` and on that run's Observatory detail page. Keep refusals on these trace and per-run surfaces; do not add a counter to `tillr view status` or Observatory Home ([OQ-LS4](#OQ-LS4)).
+- **How the operator reads it.** [`tools/tillr-trace`](../../tools/tillr-trace/) gains a `refusals` subcommand (`tillr-trace refusals [--runs 100] [--json]`) that scans `.tillr/loop/run-*/shim-refusals.jsonl` on demand — matching `audit` and `summary`, which scan 100 runs in milliseconds — and prints which lanes and items hit which `(tool, rule)` and how many times, plus a `Shim refusals` block in `tillr-trace run <run-id>` and on that run's Observatory detail page. Keep refusals on these trace and per-run surfaces; do not add a counter to `tillr view status` or Observatory Home ([OQ-LS4](#OQ-LS4)).
 
 ---
 
@@ -212,7 +212,7 @@ After seeing a denial, the worker may use one setting to bypass one named shim f
 
 ## 9. Scope and risks
 
-- **In scope:** Worker executions started through [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go) (`pi`, `claude`, future agent adapters, and `command` workflow nodes) and trace reporting in [`tools/tillr-trace/tillr_trace.py`](../../tools/tillr-trace/tillr_trace.py) / [`tools/tillr-view`](../../tools/tillr-view/).
+- **In scope:** Worker executions started through [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go) (`pi`, `claude`, future agent adapters, and `command` workflow nodes) and trace reporting in [`tools/tillr-trace`](../../tools/tillr-trace/) / [`tools/tillr-view`](../../tools/tillr-view/).
 - **Out of scope:** Changing `yolo-jail`'s own `/home/agent/.yolo/bin/block/` container shims for interactive human sessions; replacing `boundary.go` (which remains in `tillr-drain` as a post-run assertion that catches anything both layers missed).
 
 | Risk | Mitigation |

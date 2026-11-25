@@ -4,7 +4,7 @@ This pack ([`pack.json`](./pack.json)) delivers tillr, the owner's work-queue to
 
 | What | Where it lands in the jail | Produced by |
 | :--- | :--- | :--- |
-| The Go modules, supporting scripts such as `tillr-trace`, and the nine `tillr*` launchers on `PATH` that build lazily per source digest | `~/.local/share/tillr/<module>/`, `~/.local/bin/` | `just pack-sync`, checked by [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) |
+| The Go modules and the ten `tillr*` launchers on `PATH` that build lazily per source digest | `~/.local/share/tillr/<module>/`, `~/.local/bin/` | `just pack-sync`, checked by [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) |
 | The [Git-landing loop adapter](../../tools/tillr-loop/README.md), the program the loop calls to check, land, and record verdicts for candidates | `~/.local/share/tillr/tillr-loop/tillr-loop` (invoke by path; no `PATH` launcher) | `just pack-sync`, checked by the same suite |
 | A dated snapshot of tillr's design documentation: the [status index](../../docs/tillr/design-status.md) and every document it marks `shipped` | `~/.local/share/tillr/docs/`, plus `~/.local/share/tillr/tillr-loop/README.md` | `just pack-docs` ([`tools/pack-docs.py`](../../tools/pack-docs.py)), checked by the same suite |
 | Two skills: [`tillr-operating`](./skills/tillr-operating/SKILL.md) (running and recovering the loop) and [`tillr-designs`](./skills/tillr-designs/SKILL.md) (reading the designs and sending tillr requests from another repository) | each agent's skill directory | [`skills/`](./skills/) |
@@ -15,7 +15,7 @@ A delivered path mirrors the repository path, with a leading `tools/` dropped. S
 
 ## What tillr does today
 
-The pack delivers nine command-line programs over one SQLite database (`state.db` plus its write-ahead log): the umbrella `tillr` dispatcher and `tillr-store`, `tillr-item`, `tillr-run`, `tillr-drain`, `tillr-gate`, `tillr-land`, `tillr-view`, and `tillr-watch`. Callers compose them as OS processes that exchange exit codes and versioned JSON records (`record_version: 1`). Each face's flags live on the binary's own `--help`.
+The pack delivers ten command-line programs over one SQLite database (`state.db` plus its write-ahead log): the umbrella `tillr` dispatcher and `tillr-store`, `tillr-item`, `tillr-run`, `tillr-drain`, `tillr-gate`, `tillr-land`, `tillr-trace`, `tillr-view`, and `tillr-watch`. Callers compose them as OS processes that exchange exit codes and versioned JSON records (`record_version: 1`). Each face's flags live on the binary's own `--help`.
 
 Under [the core-and-charter direction](../../docs/design/tillr-core-and-git-landing.md), tillr separates general machinery of queues, leased runs, criteria, and finite workflow graphs (**the core**) from the per-use configuration (**charter**, ruled in [`OQ-VO4`](../../docs/design/tillr-vocabulary.md#OQ-VO4) and [`OQ-VO5`](../../docs/design/tillr-vocabulary.md#OQ-VO5); still spelled `definition` in code and flags today):
 

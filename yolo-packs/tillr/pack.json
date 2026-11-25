@@ -76,6 +76,13 @@
     },
     {
       "kind": "program",
+      "bin": "tillr-trace",
+      "via": "pack",
+      "from": "programs/tillr-trace",
+      "run": "run"
+    },
+    {
+      "kind": "program",
       "bin": "tillr-view",
       "via": "pack",
       "from": "programs/tillr-view",

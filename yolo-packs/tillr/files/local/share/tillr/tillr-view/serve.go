@@ -299,31 +299,33 @@ func serveFace(args []string) (record.Envelope, int) {
 }
 
 // traceBinHelp is the flag text every face that reads a run's recorded streams shares.
-var traceBinHelp = "the tillr-trace program that reads a run's recorded artifacts on demand (default: <root>/tools/tillr-trace/tillr-trace, the pack's ~/.local/share/tillr/tillr-trace/tillr-trace, then tillr-trace on PATH)"
+var traceBinHelp = "the tillr-trace program that reads a run's recorded artifacts on demand (default: sibling tillr-trace, tillr-trace on PATH, then <root>/tools/tillr-trace/tillr-trace)"
 
-// resolveTraceBin answers the tillr-trace program a run's streams are read with. It is a
-// Python script beside the Go tree rather than a built binary, so it is not necessarily on
-// PATH: a checkout's own copy matches the code being served, and the pack's copy is what a
-// delivered install has. A named program always wins, and one that does not exist is
-// reported as absent rather than replaced by a fallback.
+// resolveTraceBin answers the tillr-trace program a run's streams are read with. A named
+// program always wins, and one that does not exist is reported as absent rather than
+// replaced by a fallback. Otherwise it checks for a sibling binary beside this
+// executable (including the launcher's digest-suffixed cache), then tillr-trace on PATH,
+// and finally <root>/tools/tillr-trace/tillr-trace.
 func resolveTraceBin(root, named string) string {
 	if named != "" {
 		return named
 	}
-	candidates := []string{filepath.Join(root, "tools", "tillr-trace", "tillr-trace")}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, ".local", "share", "tillr", "tillr-trace", "tillr-trace"))
-	}
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			if abs, err := filepath.Abs(candidate); err == nil {
-				return abs
+	if exe, err := os.Executable(); err == nil {
+		for _, candidate := range siblingCandidates(exe, "tillr-trace") {
+			if executableFile(candidate) == nil {
+				return candidate
 			}
-			return candidate
 		}
 	}
 	if path, err := exec.LookPath("tillr-trace"); err == nil {
 		return path
+	}
+	candidate := filepath.Join(root, "tools", "tillr-trace", "tillr-trace")
+	if executableFile(candidate) == nil {
+		if abs, err := filepath.Abs(candidate); err == nil {
+			return abs
+		}
+		return candidate
 	}
 	return ""
 }

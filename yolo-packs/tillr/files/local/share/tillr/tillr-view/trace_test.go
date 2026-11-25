@@ -324,9 +324,12 @@ func TestTraceObservationNanoseconds(t *testing.T) {
 // are scratch directories, so an index written to either default would be seen here.
 func TestTraceReadsTheRunArtifactsWithNoIndex(t *testing.T) {
 	h := newServeHarness(t)
-	bin, err := filepath.Abs(filepath.Join("..", "tillr-trace", "tillr-trace"))
-	if err != nil {
-		t.Fatal(err)
+	bin := filepath.Join(t.TempDir(), "tillr-trace")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	build.Dir = filepath.Join("..", "tillr-trace")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build tillr-trace: %v\n%s", err, out)
 	}
 	traceRoot := filepath.Join(t.TempDir(), "trace-root")
 	stateHome := filepath.Join(t.TempDir(), "state")

@@ -41,7 +41,7 @@ func runTests(m *testing.M) int {
 
 // nouns is the dispatch set under test, spelled here rather than imported so a wrapper
 // that narrowed or widened it disagrees with this list instead of agreeing with itself.
-var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view", "watch", "notify"}
+var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view", "watch", "trace", "notify"}
 
 // stubScript is one fake tillr-<noun>. It records that it ran and the argv it was handed,
 // copies stdin to stdout, writes one line to stderr, and exits with the code the test
@@ -138,6 +138,7 @@ func TestDispatchPassesArgvStdioAndExitCode(t *testing.T) {
 		{"gate", 6},
 		{"view", 7},
 		{"watch", 2},
+		{"trace", 5},
 	}
 	for _, spec := range specs {
 		t.Run(spec.noun, func(t *testing.T) {

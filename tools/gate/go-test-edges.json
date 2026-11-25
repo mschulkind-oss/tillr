@@ -936,7 +936,8 @@
     "builds": [
       "github.com/mschulkind-oss/tillr-drain",
       "github.com/mschulkind-oss/tillr-item",
-      "github.com/mschulkind-oss/tillr-run"
+      "github.com/mschulkind-oss/tillr-run",
+      "github.com/mschulkind-oss/tillr-trace"
     ],
     "build_tests": {
       "github.com/mschulkind-oss/tillr-drain": [

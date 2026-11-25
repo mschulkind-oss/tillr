@@ -2,8 +2,9 @@
   "id": "tillr-trace",
   "label": "the trace reader's cases pass",
   "command": [
-    "python3",
-    "tools/tillr-trace/test.py"
+    "sh",
+    "-c",
+    "cd tools/tillr-trace && CGO_ENABLED=0 GOFLAGS=-trimpath go test -parallel 1 -timeout 0 ./..."
   ],
   "scope": "tree",
   "tier": "heavy",
@@ -13,7 +14,8 @@
     "tools/tillr-trace/"
   ],
   "tools": [
-    "python3",
+    "sh",
+    "go",
     "git"
   ]
 }

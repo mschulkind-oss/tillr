@@ -19,6 +19,7 @@
     "tools/tillr-land/",
     "tools/tillr-run/",
     "tools/tillr-store/",
+    "tools/tillr-trace/",
     "tools/tillr-view/",
     "tools/tillr-watch/",
     "tools/tillr/",

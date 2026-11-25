@@ -16,6 +16,7 @@
 /tools/tillr-gate/tillr-gate
 /tools/tillr-cli/tillr-cli
 /tools/tillr-watch/tillr-watch
+/tools/tillr-trace/tillr-trace
 
 # Python bytecode.
 __pycache__/

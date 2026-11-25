@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The one generated pack tree: the tillr pack's copy of every `tools/tillr*` module.
 
-`tools/tillr`, its nine binaries and the `tillr-trace` shim are the canonical source.
+`tools/tillr` and its binaries (including `tillr-trace` and its recording shim) are the canonical source.
 `yolo-packs/tillr/files/local/share/tillr/<module>` is a committed copy, because the pack
 -- not this checkout -- is what puts `tillr` on PATH in a workspace that has no `tools/`.
 `just pack-sync` mirrors each module; this suite fails when a copy diverges from its
@@ -13,10 +13,9 @@ output (`tools/tillr-store/tillr-store`) is IGNORED by git and is the one kind o
 mirror leaves out; an untracked-but-not-ignored `.go` file is source the launcher must
 build, so it is copied.
 
-Shipping and launching are two different sets. Ten Go modules ship and build the nine
-names on PATH; `tillr-trace` ships and launches nothing, because it is the recording shim
-`tillr-run`'s pi adapter sources through `BASH_ENV`, and a pack that left it out silently
-recorded no subprocess at all.
+Shipping and launching are two different sets. The Go program modules ship and build the
+names on PATH; `tillr` is the shared library module and `tillr-roll` is the repository's
+keeper.
 
 A copied README must not link out of the pack: `../../docs/...` is correct beside
 `tools/` and dead inside a pack, where it resolves to `files/local/docs/...` and the
@@ -84,9 +83,8 @@ MODULES = (
 # The modules that ship without a launcher, so the pack must claim no name on PATH for
 # them: `tillr` is the shared library the binaries resolve through relative
 # `replace` paths (the dispatcher named `tillr` is built from `tillr-cli`), and
-# `tillr-trace` is sourced as a shim rather than run as a program.
 # `tillr-roll` is the repository's keeper, invoked by its just recipe, not a PATH binary.
-SOURCE_ONLY_MODULES = ("tillr", "tillr-cli", "tillr-trace", "tillr-roll")
+SOURCE_ONLY_MODULES = ("tillr", "tillr-cli", "tillr-roll")
 
 # The modules that ship WITH a launcher, keyed by the name on PATH. The name is not always
 # the module directory: `tillr` is the umbrella dispatcher, built from `tillr-cli`.
