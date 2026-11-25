@@ -367,13 +367,13 @@ tillr-roll *args:
 # Positional arguments keep each one intact, including an empty `--rolling ''`.
 [positional-arguments]
 tillr-keep *args:
-    @python3 tools/tillr-roll/tillr-keep "$@"
+    @tillr-drain keep "$@"
 
 # Stand the keeper down, stop the loop, wait for exit, build from HEAD, and restart the keeper
 # with the running loop's (or recorded launch's) policy and lane count. Safe when no loop runs.
 [positional-arguments]
 tillr-restart *args:
-    @python3 tools/tillr-roll/tillr-keep --restart "$@"
+    @tillr-drain keep --restart "$@"
 
 # Check the one generated pack copy: the tillr pack's tree against tools/tillr*,
 # module by module, byte for byte, with the README rewrite, the exec bits, and the

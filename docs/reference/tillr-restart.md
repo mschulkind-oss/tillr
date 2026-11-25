@@ -27,7 +27,8 @@ covers:
   - tools/tillr-view/restart.go
   - tools/tillr-view/build.go
   - tools/tillr-roll/tillr-roll.py
-  - tools/tillr-roll/tillr-keep
+  - tools/tillr-drain/keep/keep.go
+  - tools/tillr-drain/keep/restart.go
 related:
   - ./tillr-drain-successor.md
   - ./tillr-build-commit.md
@@ -351,9 +352,9 @@ operator, who resolves the named problem and runs `just tillr-roll`. A later
 drain build start clears it. When the event cannot be appended, the alarm is
 read from `<store>.roll-alarm.json` instead.
 
-### `tools/tillr-roll/tillr-keep` (`just tillr-keep` and `just tillr-restart`)
+### `tillr-drain keep` (`just tillr-keep` and `just tillr-restart`)
 
-[`tillr-keep`](../../tools/tillr-roll/tillr-keep) holds
+[`tools/tillr-drain/keep/keep.go`](../../tools/tillr-drain/keep/keep.go) holds
 `.tillr/keeper.lock` and keeps one loop running:
 
 - It starts `tillr-drain loop` with the standard step programs and records its
@@ -413,7 +414,7 @@ read from `<store>.roll-alarm.json` instead.
 | Pause timeout | `120` seconds | `roll.pause_timeout_seconds`; `tillr-run pause --pause-timeout-seconds` |
 | Grace before killing a harness that cannot stop at a gap | `10s` | package `run` in `tools/tillr-run` |
 | Push timeout | `5m` | `pushTimeout`, package `drain` |
-| Keeper wait after a loop exit | `60` seconds, doubling to `1800`; reset after a `300`-second run | [`tillr-keep`](../../tools/tillr-roll/tillr-keep) |
+| Keeper wait after a loop exit | `60` seconds, doubling to `1800`; reset after a `300`-second run | [`tools/tillr-drain/keep/keep.go`](../../tools/tillr-drain/keep/keep.go) |
 | This repository's push setting | `push.what = "green"` | [`.tillr.toml`](../../.tillr.toml) |
 
 ---

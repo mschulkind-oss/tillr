@@ -159,7 +159,7 @@ One line per step, with the program that owns it.
     `trunk-path-dirty` ([dirty_hold.go](../../tools/tillr-drain/drain/dirty_hold.go)).
 16. **After the landing.** Optional roll and push actions are read from the settings file
     ([settings.go](../../tools/tillr/settings/settings.go)); the keeper
-    ([tillr-keep](../../tools/tillr-roll/tillr-keep)) restarts the loop.
+    ([`tillr-drain keep`](../../tools/tillr-drain/keep/keep.go)) restarts the loop.
 
 ---
 

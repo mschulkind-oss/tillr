@@ -1,10 +1,10 @@
 {
   "id": "tillr-roll",
-  "label": "the repository roll and keeper suites pass",
+  "label": "the repository roll suite passes",
   "command": [
     "sh",
     "-c",
-    "python3 tests/tillr-roll.test.py && python3 tests/tillr-keep.test.py"
+    "python3 tests/tillr-roll.test.py"
   ],
   "scope": "tree",
   "tier": "heavy",
@@ -12,7 +12,6 @@
   "reads": [
     ".justfile",
     ".tillr.toml",
-    "tests/tillr-keep.test.py",
     "tests/tillr-roll.test.py",
     "tools/gate/checks/tillr-roll.json",
     "tools/tillr-roll/"

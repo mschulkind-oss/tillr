@@ -654,7 +654,7 @@ restart request.
 
 When an operating session's container or jail exits (closing PID 1 in a Linux PID namespace sends
 `SIGKILL` to every background process in that namespace) or the host reboots,
-[`tools/tillr-roll/tillr-keep`](../../tools/tillr-roll/tillr-keep) and `tillr-drain loop` vanish
+[`tillr-drain keep`](../../tools/tillr-drain/keep/keep.go) and `tillr-drain loop` vanish
 together without running `tillr drain stop` or `endSession`. On the next session launch,
 `publishDrainBuild` in [`tools/tillr-drain/drain/restart.go`](../../tools/tillr-drain/drain/restart.go)
 sees an earlier `drain.build-started` for `role == "drain"`, no `TILLR_RESTART_REQUEST`, and no
@@ -666,7 +666,7 @@ with `restart_request`, `stop_request` and `initial` all absent — matching
 
 - **The loop (`tillr-drain`), not `tillr-keep`, writes and reads the record.** Consumer
   repositories and manual runs invoke `tillr-drain loop` either under
-  [`tools/tillr-roll/tillr-keep`](../../tools/tillr-roll/tillr-keep) or directly
+  [`tillr-drain keep`](../../tools/tillr-drain/keep/keep.go) or directly
   ([`tillr-separable-parts.md`](./tillr-separable-parts.md#21-the-stable-surface)). Recording
   provenance in `tillr-drain` covers both without coupling `tillr-drain` to `tillr-keep` or
   launcher-specific environment variables, and reuses `presence.Owner` in

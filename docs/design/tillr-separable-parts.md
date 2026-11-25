@@ -85,7 +85,7 @@ and the first use **`git-landing`**; the code and the flag `--definition` keep t
   document a face reads or writes, in the envelope [board-utilities.md](./board-utilities.md)
   defines.
 - **Drain:** the loop that plans, runs, gates and lands items. **Keeper:** the program that restarts
-  the drain when it exits ([tillr-keep](../../tools/tillr-roll/tillr-keep)).
+  the drain when it exits ([`tillr-drain keep`](../../tools/tillr-drain/keep/keep.go)).
 - **Lane:** a leased slot with its own directory, where one run executes. **Lease:** the claim on a
   lane.
 - **Gate:** the check run on a candidate commit. **Lander:** the program that puts a gated commit
@@ -182,7 +182,7 @@ core, so several of these open up in a consumer's own definition. The reasons ar
 | C5 | Deadlines and clocks in the plan | No timers | Orders and times work in its dispatcher | Withdrawn |
 | C6 | A Go library as the connection | Processes and records | Calls the commands in [Section 2](#2-the-contract-between-tillr-and-a-consumer) | Withdrawn |
 | C7 | Completion by "an artifact recorded and judged" | A landing completes an item; another definition completes on its hook's recorded verdict | Declares `completes: "hook"` in its definition file | Built |
-| C8 | A second loop and keeper beside the first, in one root | The keeper finds a loop by its working directory and locks per root (`find_loop` in [tillr-keep](../../tools/tillr-roll/tillr-keep)) | Runs a loop with its own store and root | Withdrawn |
+| C8 | A second loop and keeper beside the first, in one root | The keeper finds a loop by its working directory and locks per root (`FindLoop` in [`tools/tillr-drain/keep/keep.go`](../../tools/tillr-drain/keep/keep.go)) | Runs a loop with its own store and root | Withdrawn |
 
 ---
 
