@@ -515,8 +515,8 @@ PY
 			RunRequest: &run.Request{RunID: cB.RunID, ItemID: cB.ItemID, LaneID: cB.LaneID},
 		}
 		claimed, ok, err := l.claimSettledCandidateJudge(settleCtx, dB, &PassTiming{})
-		if err != nil || !ok || claimed == nil {
-			t.Fatalf("claimSettledCandidateJudge refused sibling detached gate while restart pending: claimed=%v ok=%v err=%v", claimed != nil, ok, err)
+		if err != nil || ok || claimed != nil {
+			t.Fatalf("claimSettledCandidateJudge admitted sibling while restart pending: claimed=%v ok=%v err=%v", claimed != nil, ok, err)
 		}
 
 		waiting := make(chan struct{}, 1)
@@ -1080,7 +1080,7 @@ PY
 	}
 }
 
-func TestReadyCandidateGateStartsWhileRestartPendingAndLoopReplacesWhileGateRuns(t *testing.T) {
+func TestReadyCandidateGateWaitsWhileRestartPendingUntilLoopReplaces(t *testing.T) {
 	t.Setenv("TILLR_LOOP_STORE", "")
 	f := newRefusalLoopFixtureWithLanes(t, 2, "item-a")
 	holdWALKeeper(t, f.storePath)
@@ -1149,8 +1149,8 @@ PY
 	}
 	l.markRestartPending()
 
-	// Both claimSettledCandidateJudge and launchExamination must admit the ready candidate
-	// so its detached gate starts without waiting for the pending restart to be answered.
+	// Neither claimSettledCandidateJudge nor launchExamination may start a new detached gate
+	// while the loop restart is pending.
 	d := Decision{
 		Action:     ActionJudge,
 		ItemID:     c.ItemID,
@@ -1158,55 +1158,44 @@ PY
 		RunRequest: &run.Request{RunID: c.RunID, ItemID: c.ItemID, LaneID: c.LaneID},
 	}
 	claimed, ok, err := l.claimSettledCandidateJudge(ctx, d, &PassTiming{})
-	if err != nil || !ok || claimed == nil {
-		t.Fatalf("claimSettledCandidateJudge while restart pending = (%v, %v, %v); want admitted", claimed != nil, ok, err)
+	if err != nil || ok || claimed != nil {
+		t.Fatalf("claimSettledCandidateJudge while restart pending = (%v, %v, %v); want refused", claimed != nil, ok, err)
 	}
 
 	l.completions = make(chan runCompletion, 2)
-	l.launchExamination(ctx, d, claimed, l.cfg.Now(), &PassTiming{}, nil)
+	l.launchExamination(ctx, d, &pendingWork{Decision: d, Candidate: &c, BaseSHA: c.BaseSHA}, l.cfg.Now(), &PassTiming{}, nil)
 
-	// Criterion 5: the ready candidate's gate starts without waiting for the restart to be answered.
-	waitForPath[error](t, enteredGate, nil)
+	select {
+	case comp := <-l.completions:
+		if !errors.Is(comp.outcome.err, errRestartPending) {
+			t.Fatalf("completion while restart pending = %+v, want errRestartPending", comp.outcome)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("examination did not defer while restart was pending")
+	}
+	l.examinations.Wait()
 
-	// Criterion 6: the pending restart is still answered — the loop replaces itself while that gate runs.
+	if _, err := os.Stat(enteredGate); err == nil {
+		t.Fatal("new detached gate started while loop restart was pending")
+	}
+
+	// Now gateRestart replaces the loop without any gate having started on the old build.
+	if handled, stop, err := l.gateRestart(ctx, &LoopResult{}); !handled || stop != StopRestarted || err != nil {
+		t.Fatalf("gateRestart = %v, %q, %v; want replaced", handled, stop, err)
+	}
 	select {
 	case got := <-execCh:
 		if got != exe {
 			t.Fatalf("exec path = %q, want %q", got, exe)
 		}
 	case <-time.After(hangGuard):
-		t.Fatal("loop did not replace itself while the detached gate was running")
+		t.Fatal("loop did not replace itself")
 	}
 
-	// The detached gate must still be alive after replacement.
-	rawPID, err := os.ReadFile(enteredGate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gatePID, err := strconv.Atoi(strings.TrimSpace(string(rawPID)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !processAlive(gatePID) {
-		t.Fatalf("detached gate pid %d died during replacement", gatePID)
-	}
-
-	select {
-	case comp := <-l.completions:
-		if !errors.Is(comp.outcome.err, errRestartPending) || comp.outcome.stop != stopLaneRetained {
-			t.Fatalf("completion after replacement = %+v, want stopLaneRetained + errRestartPending", comp.outcome)
-		}
-	case <-time.After(hangGuard):
-		t.Fatal("examination did not complete after replacement")
-	}
-	l.examinations.Wait()
-
-	// Release the gate and verify the successor loop adopts the restart, reclaims the gate,
-	// and lands item-a without running the gate a second time.
+	// The successor adopts the restart and runs the gate once to land item-a.
 	if err := os.WriteFile(releaseGate, []byte("go\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
 	t.Setenv(restart.RequestEnv, req.ID)
 	t.Setenv(restart.FromEnv, "old-build")
 	steps2 := detachedGateTestSteps(t, f, time.Now, gateProg)

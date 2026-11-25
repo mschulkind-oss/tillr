@@ -75,7 +75,7 @@ func (s *ProcessSteps) startRunFaceContext(ctx context.Context, cmd *exec.Cmd, r
 			if err != nil {
 				return err
 			}
-			if len(state.Pending) > 0 && !loop.restartDefersToSettlement() && !loop.restartDeferred() {
+			if len(state.Pending) > 0 && !loop.restartActionDeferred() {
 				return errRestartPending
 			}
 			if err := ctx.Err(); err != nil {

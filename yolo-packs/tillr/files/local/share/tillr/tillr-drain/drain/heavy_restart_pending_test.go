@@ -90,7 +90,7 @@ func TestHeavyProofWaitsForPendingRestartWhileCandidateGatesRun(t *testing.T) {
 	h.l.cfg.Steps = steps
 
 	// Simulate an active candidate gate holding restartMechanical (and a settlement)
-	// while a loop restart is pending, so gateRestart cannot exec.
+	// while a loop restart is pending, so gateRestart cannot exec yet.
 	_, releaseGate, err := h.l.lockRestartSettlement(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -249,23 +249,21 @@ func TestPendingRestartDeferredByTrunkProofStopsNewGatesAndSecondProof(t *testin
 		t.Fatalf("gateRestart while trunk proof active = %v, %q, %v; want deferred", handled, stop, err)
 	}
 
-	// Workers keep starting and running while the restart is deferred by the trunk proof.
-	if pending, err := h.l.buildRestartPending(ctx); err != nil || pending {
-		t.Fatalf("buildRestartPending while trunk proof active = %v, %v; want false, nil", pending, err)
+	// No new workers start while a loop restart is pending, even during an active trunk proof.
+	if pending, err := h.l.buildRestartPending(ctx); err != nil || !pending {
+		t.Fatalf("buildRestartPending while trunk proof active = %v, %v; want true, nil", pending, err)
 	}
-	if _, unlockMech, err := h.l.lockRestartMechanical(ctx); err != nil {
-		t.Fatalf("lockRestartMechanical while trunk proof active = %v; want nil", err)
-	} else {
-		unlockMech()
+	if _, unlockMech, err := h.l.lockRestartMechanical(ctx); !errors.Is(err, errRestartPending) {
+		if err == nil {
+			unlockMech()
+		}
+		t.Fatalf("lockRestartMechanical while trunk proof active = %v; want errRestartPending", err)
 	}
 	procSteps := &ProcessSteps{Store: h.f.storePath}
 	cmd := exec.Command("true")
 	handoffCtx := context.WithValue(ctx, runStartAdmissionKey{}, h.l)
-	if err := procSteps.startRunFaceContext(handoffCtx, cmd, run.Request{RunID: "worker-while-proof"}); err != nil {
-		t.Fatalf("worker handoff while trunk proof active = %v; want nil", err)
-	}
-	if err := cmd.Wait(); err != nil {
-		t.Fatal(err)
+	if err := procSteps.startRunFaceContext(handoffCtx, cmd, run.Request{RunID: "worker-while-proof"}); !errors.Is(err, errRestartPending) {
+		t.Fatalf("worker handoff while trunk proof active = %v; want errRestartPending", err)
 	}
 
 	// No gate starts for the finished candidate, either directly from settlement or via ActionJudge.
@@ -289,7 +287,18 @@ func TestPendingRestartDeferredByTrunkProofStopsNewGatesAndSecondProof(t *testin
 	h.l.completions = make(chan runCompletion, 1)
 	work := &pendingWork{Decision: d, Candidate: &c, BaseSHA: c.BaseSHA}
 	h.l.launchExamination(ctx, d, work, h.l.cfg.Now(), &PassTiming{}, nil)
-	awaitRestartTest(t, waiting, "finished candidate waiting on pending restart")
+	var completion runCompletion
+	var completedEarly bool
+	select {
+	case <-waiting:
+	case completion = <-h.l.completions:
+		completedEarly = true
+		if !errors.Is(completion.outcome.err, errRestartPending) {
+			t.Fatalf("candidate examination err while proof active = %v, want errRestartPending", completion.outcome.err)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("finished candidate did not defer or wait on pending restart")
+	}
 	if got := steps.gateCalls.Load(); got != 0 {
 		t.Fatalf("gateCalls while trunk proof active = %d, want 0", got)
 	}
@@ -332,11 +341,12 @@ func TestPendingRestartDeferredByTrunkProofStopsNewGatesAndSecondProof(t *testin
 		t.Fatal("replacement did not exec")
 	}
 
-	var completion runCompletion
-	select {
-	case completion = <-h.l.completions:
-	case <-time.After(hangGuard):
-		t.Fatal("waiting candidate examination did not unblock after replacement")
+	if !completedEarly {
+		select {
+		case completion = <-h.l.completions:
+		case <-time.After(hangGuard):
+			t.Fatal("waiting candidate examination did not unblock after replacement")
+		}
 	}
 	h.l.examinations.Wait()
 	if !errors.Is(completion.outcome.err, errRestartPending) {
@@ -479,7 +489,15 @@ func TestPendingRestartAfterGreenProofRestartsBeforeNextProofAndGates(t *testing
 		RunRequest: &run.Request{RunID: c1.RunID, ItemID: c1.ItemID, LaneID: c1.LaneID},
 	}
 	h.l.launchExamination(ctx, d1, &pendingWork{Decision: d1, Candidate: &c1, BaseSHA: c1.BaseSHA}, h.l.cfg.Now(), &PassTiming{}, nil)
-	awaitRestartTest(t, waiting, "finished candidate waiting on pending restart")
+	select {
+	case <-waiting:
+	case comp := <-h.l.completions:
+		if !errors.Is(comp.outcome.err, errRestartPending) {
+			t.Fatalf("finished candidate examination err = %v, want errRestartPending", comp.outcome.err)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("finished candidate did not defer or wait on pending restart")
+	}
 
 	// Advance trunk to a newer unproved tip while proof 1 is still running.
 	tip2 := heavyCommit(t, h.f.root, "tip-2")
@@ -668,14 +686,7 @@ PY
 		t.Fatalf("gateRestart while trunk proof active = %v, %q, %v; want deferred", handled, stop, err)
 	}
 
-	// 4. item-b (needing a new gate) must block on the pending restart without starting a gate.
-	waitingB := make(chan struct{}, 1)
-	l.restartWaitObs = func() {
-		select {
-		case waitingB <- struct{}{}:
-		default:
-		}
-	}
+	// 4. item-b (needing a new detached gate) must not start a gate while proof 1 is active and restart is pending.
 	dB := Decision{
 		Action:     ActionJudge,
 		ItemID:     cB.ItemID,
@@ -683,7 +694,15 @@ PY
 		RunRequest: &run.Request{RunID: cB.RunID, ItemID: cB.ItemID, LaneID: cB.LaneID},
 	}
 	l.launchExamination(ctx, dB, &pendingWork{Decision: dB, Candidate: &cB, BaseSHA: cB.BaseSHA}, l.cfg.Now(), &PassTiming{}, nil)
-	awaitRestartTest(t, waitingB, "item-b waiting on pending restart")
+	var compB runCompletion
+	select {
+	case compB = <-l.completions:
+	case <-time.After(hangGuard):
+		t.Fatal("item-b examination did not defer while restart was pending")
+	}
+	if compB.itemID != cB.ItemID || !errors.Is(compB.outcome.err, errRestartPending) {
+		t.Fatalf("item-b completion while restart pending = %+v, want errRestartPending", compB)
+	}
 
 	// 5. Release item-a's detached gate (exit 0 / pass) while proof 1 is still active.
 	// It must finish judging and land without waiting for proof 1 to end.
@@ -755,17 +774,7 @@ PY
 	if len(execed) == 0 {
 		t.Fatal("replacement did not exec after proof 1 ended")
 	}
-
-	var compB runCompletion
-	select {
-	case compB = <-l.completions:
-	case <-time.After(hangGuard):
-		t.Fatal("waiting item-b examination did not unblock after replacement")
-	}
 	l.examinations.Wait()
-	if compB.itemID != cB.ItemID || !errors.Is(compB.outcome.err, errRestartPending) {
-		t.Fatalf("item-b completion = %+v, want errRestartPending", compB)
-	}
 
 	// Only item-a ran the gate; item-b never started a gate.
 	gateRaw, err := os.ReadFile(gateLog)
@@ -1387,5 +1396,288 @@ func TestNoPendingRestartStartsNextProofWhilePostLandingActionBusy(t *testing.T)
 				t.Fatalf("proved tips = %v, want [%s %s]", gotProved, shortSHA(tip1), shortSHA(tip2))
 			}
 		})
+	}
+}
+
+// Reproduces the 2026-11-25 starvation sequence: a trunk proof is active, a
+// loop restart request arrives, a pre-restart detached gate fails and frees its
+// lane, and both the refused item (attempt 2, -a2-n1) and a queued item are
+// ready to dispatch while another candidate is ready to gate. While the restart
+// request is pending, no new worker run, detached gate, or second trunk proof
+// may start until the restart is answered.
+func TestPendingRestartWhileTrunkProofRunsStartsNoNewWorkersOrGates(t *testing.T) {
+	t.Setenv("TILLR_LOOP_STORE", "")
+	f := newRefusalLoopFixtureWithLanes(t, 3, "item-a", "item-b", "item-c")
+	holdWALKeeper(t, f.storePath)
+
+	if err := os.MkdirAll(filepath.Join(f.root, "tools", "gate", "checks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(f.root, "tools", "gate", "checks", "unit.json"), `{"id":"unit","scope":"tree","tier":"heavy"}`+"\n")
+	runGit(t, f.root, "add", "tools/gate/checks/unit.json")
+	runGit(t, f.root, "commit", "-qm", "declare heavy unit check")
+	base := heavyGit(t, f.root, "rev-parse", TrunkRef)
+	heavyGit(t, f.root, "update-ref", GreenRef, base)
+	tip1 := heavyCommit(t, f.root, "tip-1")
+
+	work := scratchUnderDurable(t)
+	enteredGateA := filepath.Join(work, "entered-gate-a")
+	releaseGateA := filepath.Join(work, "release-gate-a")
+	gateStartsFile := filepath.Join(work, "gate-starts.log")
+	workerStartsFile := filepath.Join(work, "worker-starts.log")
+	enteredProof1 := filepath.Join(work, "entered-proof-1")
+	releaseProof1 := filepath.Join(work, "release-proof-1")
+
+	gateProg := executable(t, fmt.Sprintf(`exec python3 - "$@" <<'PY'
+import os, pathlib, sys, time
+args = sys.argv[1:]
+item = args[args.index("--item") + 1] if "--item" in args else ""
+run_id = os.environ.get("TILLR_RUN_ID", item)
+with open(%q, "a") as fh:
+    fh.write(f"{item}\n")
+if item == "item-a":
+    entered = pathlib.Path(%q)
+    if not entered.exists():
+        tmp = entered.with_name(f".{entered.name}.{os.getpid()}.tmp")
+        tmp.write_text(str(os.getpid()) + "\n")
+        os.replace(tmp, entered)
+        rel = pathlib.Path(%q)
+        while not rel.exists():
+            time.sleep(0.02)
+        sys.exit(1)
+PY
+`, gateStartsFile, enteredGateA, releaseGateA))
+
+	runBin := executable(t, fmt.Sprintf(`exec python3 - "$@" <<'PY'
+import json, os, pathlib, subprocess, sys
+args = sys.argv[1:]
+run_id = os.environ.get("TILLR_RUN_ID", "")
+with open(%q, "a") as fh:
+    fh.write(f"{run_id}\n")
+worktree = args[args.index("--worktree") + 1] if "--worktree" in args else ""
+if worktree:
+    pathlib.Path(worktree, f"work-{run_id}.txt").write_text(run_id + "\n")
+    subprocess.run(["git", "-C", worktree, "add", "."], check=True)
+    subprocess.run(["git", "-C", worktree, "commit", "-qm", f"work {run_id}"], check=True)
+print(json.dumps({"run_id": run_id, "state": "finished", "end_cause": "completed"}))
+PY
+`, workerStartsFile))
+
+	heavyGateBin := executable(t, fmt.Sprintf(`exec python3 - "$@" <<'PY'
+import json, pathlib, sys, time
+args = sys.argv[1:]
+head = args[args.index("--head") + 1] if "--head" in args else ""
+entered = pathlib.Path(%q)
+if not entered.exists():
+    entered.write_text(head + "\n")
+    rel = pathlib.Path(%q)
+    while not rel.exists():
+        time.sleep(0.02)
+print(json.dumps({"kind": "gate.verdict", "payload": {"checks": [{"check_id": "unit", "result": "pass"}]}}))
+PY
+`, enteredProof1, releaseProof1))
+
+	steps := detachedGateTestSteps(t, f, time.Now, gateProg)
+	steps.RunBin = runBin
+	steps.HeavyGateBin = heavyGateBin
+	l := configureDetachedGateLoop(t, f, steps)
+	l.cfg.Lanes = []string{"lane-1", "lane-2", "lane-3"}
+	l.gatePolicy.LandingStrategy = "after-merge"
+	l.gatePolicy.LaneBase = "green"
+
+	exe := filepath.Join(work, "tillr-drain-next")
+	if err := writeForkSafe(exe, []byte("next build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var execed []string
+	l.cfg.Restart = &RestartConfig{
+		Executable: exe,
+		Check:      func(context.Context, string) error { return nil },
+		Exec: func(path string, argv, env []string) error {
+			execed = append(execed, path)
+			return nil
+		},
+	}
+
+	// item-a is on lane-1 with a pre-restart detached gate.
+	// item-b is on lane-2 with a finished worker run ready to be gated, but NO gate started yet.
+	// item-c is queued, ready to be dispatched as soon as a lane is free.
+	cA := prepareReadyCandidate(t, f, l, "item-a")
+	cB := prepareReadyCandidate(t, f, l, "item-b")
+	here, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET allowed_paths='["a.txt"]' WHERE item_id='item-a'`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE items SET allowed_paths='["b.txt"]' WHERE item_id='item-b'`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE items SET allowed_paths='["c.txt"]' WHERE item_id='item-c'`); err != nil {
+			return err
+		}
+		for _, c := range []Candidate{cA, cB} {
+			if _, err := tx.Exec(`UPDATE lanes SET state=?, run_id=?, leased_until=NULL WHERE lane_id=?`, run.LaneStateLeased, c.RunID, c.LaneID); err != nil {
+				return err
+			}
+			if err := appendEffect(tx, examinationOwnerKind, c.RunID, here, l.cfg.Now()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer func() {
+		cancel()
+		_ = os.WriteFile(releaseGateA, []byte("cleanup\n"), 0o644)
+		_ = os.WriteFile(releaseProof1, []byte("cleanup\n"), 0o644)
+		l.heavyWG.Wait()
+		l.examinations.Wait()
+	}()
+
+	l.completions = make(chan runCompletion, 8)
+
+	// 1. Start item-a's detached gate BEFORE the restart request is filed.
+	dA := Decision{
+		Action:     ActionJudge,
+		ItemID:     cA.ItemID,
+		LaneID:     cA.LaneID,
+		RunRequest: &run.Request{RunID: cA.RunID, ItemID: cA.ItemID, LaneID: cA.LaneID},
+	}
+	l.launchExamination(ctx, dA, &pendingWork{Decision: dA, Candidate: &cA, BaseSHA: cA.BaseSHA}, l.cfg.Now(), &PassTiming{}, nil)
+	waitForPath[error](t, enteredGateA, nil)
+
+	// 2. Start trunk proof 1 on tip1 and wait until it is active.
+	if err := l.startHeavy(ctx, tip1); err != nil {
+		t.Fatalf("startHeavy(tip1): %v", err)
+	}
+	waitForPath[error](t, enteredProof1, nil)
+
+	// 3. File a pending drain restart while proof 1 is active and arm the barrier.
+	req, err := restart.File(ctx, f.storePath, restart.RoleDrain, l.cfg.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handled, stop, err := l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
+		t.Fatalf("gateRestart while trunk proof active = %v, %q, %v; want deferred", handled, stop, err)
+	}
+
+	// 4. Release item-a's pre-restart detached gate (exit 1 / refused) while proof 1 is active.
+	// It must settle and free lane-1 so item-a (attempt 2) and queued item-b are both eligible.
+	if err := os.WriteFile(releaseGateA, []byte("go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case compA := <-l.completions:
+		if compA.itemID != cA.ItemID || compA.outcome.err != nil || compA.result.Rejected != 1 {
+			t.Fatalf("item-a settlement while proof active = %+v (result=%+v), want 1 rejection", compA, compA.result)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("item-a failed gate did not settle while trunk proof was active")
+	}
+
+	// 5. Confirm both item-a (retry after refusal) and item-c (queued) are planned,
+	// then run a scheduling pass while proof 1 is still active and restart is pending.
+	// Neither item-a (-a2-n1) nor queued item-c may be dispatched as new workers.
+	var sawRetryA, sawDispatchC bool
+	for _, p := range mustPlan(t, l) {
+		if p.decision.ItemID == "item-a" && (p.decision.Action == ActionRetry || p.decision.Action == ActionDispatch) {
+			sawRetryA = true
+		}
+		if p.decision.ItemID == "item-c" && p.decision.Action == ActionDispatch {
+			sawDispatchC = true
+		}
+	}
+	if !sawRetryA || !sawDispatchC {
+		t.Fatalf("expected item-a retry (%v) and item-c dispatch (%v) to be planned after refusal", sawRetryA, sawDispatchC)
+	}
+	passResult := LoopResult{}
+	if stop, err := l.pass(ctx, &passResult); stop != "" || err != nil {
+		t.Fatalf("pass while trunk proof active = %q, %v; want empty, nil", stop, err)
+	}
+	if passResult.Dispatched != 0 {
+		t.Fatalf("pass dispatched %d new worker runs while restart was pending and trunk proof active, want 0", passResult.Dispatched)
+	}
+
+	// Also verify a direct candidate gate attempt for item-b (no pre-restart gate)
+	// waits for the pending restart rather than starting a new detached gate.
+	dB := Decision{
+		Action:     ActionJudge,
+		ItemID:     cB.ItemID,
+		LaneID:     cB.LaneID,
+		RunRequest: &run.Request{RunID: cB.RunID, ItemID: cB.ItemID, LaneID: cB.LaneID},
+	}
+	waitingForRestart := make(chan struct{}, 2)
+	l.restartWaitObs = func() {
+		select {
+		case waitingForRestart <- struct{}{}:
+		default:
+		}
+	}
+	l.launchExamination(ctx, dB, &pendingWork{Decision: dB, Candidate: &cB, BaseSHA: cB.BaseSHA}, l.cfg.Now(), &PassTiming{}, nil)
+	select {
+	case <-waitingForRestart:
+	case compB := <-l.completions:
+		if !errors.Is(compB.outcome.err, errRestartPending) {
+			t.Fatalf("item-b completed examination while restart was pending: %+v", compB)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("item-b did not defer or wait on pending restart before starting a new detached gate")
+	}
+
+	// Verify no new worker started and no new gate started after item-a's pre-restart gate.
+	if raw, err := os.ReadFile(workerStartsFile); err == nil && strings.TrimSpace(string(raw)) != "" {
+		t.Fatalf("worker runs started after restart request while trunk proof active:\n%s", string(raw))
+	}
+	rawGates, err := os.ReadFile(gateStartsFile)
+	if err != nil {
+		t.Fatalf("read gate starts: %v", err)
+	}
+	gateLines := strings.Fields(string(rawGates))
+	if len(gateLines) != 1 || gateLines[0] != "item-a" {
+		t.Fatalf("gate starts = %v, want only pre-restart [item-a]", gateLines)
+	}
+
+	// 6. End proof 1. The pending restart must replace the loop and answer "restarted".
+	if err := os.WriteFile(releaseProof1, []byte("go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+
+	if handled, stop, err := l.gateRestart(ctx, &LoopResult{}); !handled || stop != StopRestarted || err != nil {
+		t.Fatalf("gateRestart after proof 1 ended = %v, %q, %v; want replaced", handled, stop, err)
+	}
+	if len(execed) == 0 {
+		t.Fatal("replacement did not exec after proof 1 ended")
+	}
+	l.examinations.Wait()
+
+	// Confirm still zero post-restart worker starts and only the 1 pre-restart gate.
+	if raw, err := os.ReadFile(workerStartsFile); err == nil && strings.TrimSpace(string(raw)) != "" {
+		t.Fatalf("worker runs started before restart completed:\n%s", string(raw))
+	}
+	rawGates, err = os.ReadFile(gateStartsFile)
+	if err != nil {
+		t.Fatalf("read gate starts after restart: %v", err)
+	}
+	gateLines = strings.Fields(string(rawGates))
+	if len(gateLines) != 1 || gateLines[0] != "item-a" {
+		t.Fatalf("gate starts after restart = %v, want only pre-restart [item-a]", gateLines)
+	}
+
+	t.Setenv(restart.RequestEnv, req.ID)
+	t.Setenv(restart.FromEnv, "old-build")
+	if err := l.adoptRestart(ctx); err != nil {
+		t.Fatalf("adoptRestart: %v", err)
+	}
+	ans, err := restart.AwaitAnswer(ctx, f.storePath, req.ID, time.Millisecond)
+	if err != nil {
+		t.Fatalf("request %s unanswered: %v", req.ID, err)
+	}
+	if ans.Answer != restart.AnswerRestarted {
+		t.Fatalf("restart answer = %+v, want %q", ans, restart.AnswerRestarted)
 	}
 }

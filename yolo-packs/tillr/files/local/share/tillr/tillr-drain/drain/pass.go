@@ -3545,6 +3545,13 @@ func (l *Loop) prepareClaimedStage(ctx context.Context, d *Decision, base *strin
 // It leaves cancellation replanning to the queue pass, which owns lane offers.
 func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, timing *PassTiming, watch *laneWatch, result *LoopResult) (cancelled, stale bool, err error) {
 	d := p.decision
+	if d.Action == ActionDispatch || d.Action == ActionRetry {
+		if pending, err := l.buildRestartPending(ctx); err != nil {
+			return false, false, err
+		} else if pending {
+			return false, false, nil
+		}
+	}
 	ok, work, err := l.applyPlanTrunk(ctx, p, mainSHA, at, &timing.TickID)
 	if err != nil {
 		result.StopItemID, result.StopStep = d.ItemID, "apply plan"
@@ -3625,6 +3632,17 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 				return false, false, cancelErr
 			}
 			return false, false, stopErr
+		}
+		if pending, err := l.buildRestartPending(startCtx); err != nil {
+			if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
+				return false, false, cancelErr
+			}
+			return false, false, err
+		} else if pending {
+			if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
+				return false, false, cancelErr
+			}
+			return false, false, nil
 		}
 		startHandoff.setDecision(staged[0])
 		l.launchRun(withStartHandoff(ctx, startHandoff), staged[0], at, watch, result)

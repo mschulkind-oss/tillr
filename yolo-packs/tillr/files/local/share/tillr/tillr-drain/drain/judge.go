@@ -100,7 +100,11 @@ func bindSavedJudge(r *store.Reader, c Candidate, receipt *JudgeReceipt, options
 }
 
 func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResult) (Candidate, bool, error) {
-	if _, isProc := l.cfg.Steps.(*ProcessSteps); !isProc {
+	allowSettledGate := false
+	if procSteps, isProc := l.cfg.Steps.(*ProcessSteps); isProc && procSteps.hasSettledDetachedGate(c) {
+		allowSettledGate = true
+	}
+	if !allowSettledGate {
 		if pending, err := l.buildRestartPending(ctx); pending || err != nil {
 			if err != nil {
 				return c, false, err
@@ -143,11 +147,13 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			return c, false, err
 		}
 	}
-	if pending, err := l.buildRestartPending(ctx); pending || err != nil {
-		if err != nil {
-			return c, false, err
+	if !allowSettledGate {
+		if pending, err := l.buildRestartPending(ctx); pending || err != nil {
+			if err != nil {
+				return c, false, err
+			}
+			return c, false, errRestartPending
 		}
-		return c, false, errRestartPending
 	}
 	receipt := c.Judge
 	if receipt == nil {

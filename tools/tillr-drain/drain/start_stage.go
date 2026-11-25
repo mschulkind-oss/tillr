@@ -86,6 +86,11 @@ func (l *Loop) stageAndLaunchClaimed(ctx context.Context, d Decision, base strin
 	if l.isRestartReplaced() {
 		return errRestartPending
 	}
+	if pending, err := l.buildRestartPending(ctx); err != nil {
+		return err
+	} else if pending {
+		return errRestartPending
+	}
 	startHandoffFrom(ctx).setDecision(ready)
 	l.launchRun(ctx, ready, at, watch, result)
 	launched = true

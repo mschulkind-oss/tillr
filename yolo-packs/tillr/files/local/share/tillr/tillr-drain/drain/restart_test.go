@@ -169,7 +169,7 @@ func (s *restartWhileSettlingSteps) Run(ctx context.Context, req run.Request) (r
 	return run.Record{}, "", ctx.Err()
 }
 
-func TestPendingRestartLetsWorkerStartWhileSettlementDrains(t *testing.T) {
+func TestPendingRestartStopsWorkerStartWhileSettlementDrains(t *testing.T) {
 	for _, phase := range []string{"gate", "land"} {
 		t.Run(phase, func(t *testing.T) { testWorkerStartWhileRestartWaits(t, phase, nil) })
 	}
@@ -258,22 +258,23 @@ func testWorkerStartWhileRestartWaits(t *testing.T, phase string, delayReplaceme
 		t.Fatalf("replacement acted during %s: %v, %q, %v", phase, handled, stop, err)
 	}
 	fileStartWhileSettling(t, l, time.Now())
-	waitSettlingStart(t, steps.settlingStartSteps, "lane-2")
+	if _, err := l.pass(ctx, &LoopResult{}); err != nil {
+		t.Fatalf("pass while settling and restart pending: %v", err)
+	}
+	select {
+	case lane := <-steps.settlingStartSteps.started:
+		t.Fatalf("worker started on %s while restart was pending during %s", lane, phase)
+	default:
+	}
 	close(steps.release)
 	<-done
 	if loopErr != nil || result.Stop != StopRestarted {
 		t.Fatalf("loop stopped without replacing: %+v, %v", result, loopErr)
 	}
-	if _, err := fmt.Fprintln(input, "survived"); err != nil {
-		t.Fatalf("worker did not survive replacement %s: %v", req.ID, err)
-	}
 	select {
-	case err := <-steps.workerDone:
-		if err != nil {
-			t.Fatalf("worker did not finish after replacement: %v", err)
-		}
-	case <-time.After(hangGuard):
-		t.Fatal("worker did not exit after receiving input")
+	case lane := <-steps.settlingStartSteps.started:
+		t.Fatalf("worker started on %s before replacement %s finished", lane, req.ID)
+	default:
 	}
 }
 

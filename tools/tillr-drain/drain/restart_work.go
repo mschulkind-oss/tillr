@@ -153,7 +153,7 @@ func (l *Loop) newRestartTicker() heartbeatTicker {
 }
 
 func (l *Loop) buildRestartPending(ctx context.Context) (bool, error) {
-	if l.cfg.Restart == nil || l.restartDeferred() || l.restartDefersToSettlement() {
+	if l.cfg.Restart == nil || l.restartActionDeferred() {
 		return false, nil
 	}
 	return l.restarterPendingWith(ctx, nil)
@@ -277,41 +277,6 @@ func (h *restartMechanicalHold) acquire() {
 	}
 }
 
-func (h *restartMechanicalHold) acquireGateStart(ctx context.Context) error {
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if h.loop.restartReplaced.Load() {
-			return errRestartPending
-		}
-		if h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() &&
-			(h.loop.restartProofActive() || h.loop.isRestartWaitingOnHold() || h.loop.restartDefersToSettlement()) {
-			if err := h.loop.waitForRestartAnswer(ctx, false); err != nil {
-				return err
-			}
-		}
-		h.acquire()
-		if h.loop.restartReplaced.Load() {
-			h.release()
-			return errRestartPending
-		}
-		if h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() {
-			if h.loop.isRestartWaitingOnHold() {
-				h.release()
-				continue
-			}
-			if h.loop.restartProofActive() {
-				if _, waitCh := h.loop.restartWaitState(); waitCh != nil {
-					h.release()
-					continue
-				}
-			}
-		}
-		return nil
-	}
-}
-
 func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
 	for {
 		allowDuringProof := h.allowDuringProof.Load()
@@ -323,12 +288,10 @@ func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
 			if h.loop.restartReplaced.Load() {
 				return errRestartPending
 			}
-			if !h.loop.restartDefersToSettlement() {
-				if pending, err := h.loop.buildRestartPending(ctx); err != nil {
-					return err
-				} else if pending {
-					return errRestartPending
-				}
+			if pending, err := h.loop.buildRestartPending(ctx); err != nil {
+				return err
+			} else if pending {
+				return errRestartPending
 			}
 		}
 		h.acquire()
@@ -343,7 +306,7 @@ func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
 				h.release()
 				continue
 			}
-		} else if !h.settling && !h.loop.restartDefersToSettlement() {
+		} else if !h.settling {
 			if pending, err := h.loop.buildRestartPending(ctx); err != nil {
 				h.release()
 				return err
@@ -379,15 +342,12 @@ func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func
 	return l.lockRestartStep(ctx, true, false, false)
 }
 
-// lockRestartGateStart acquires a brief settlement hold to prepare a candidate
-// and start or attach its detached gate. While a pending restart is already
-// waiting on an active trunk proof or existing holds to drain (outside a
-// post-landing action), new gate starts wait for the restart to be answered so
-// they do not starve exec. Once the gate is running, restartWork releases the
-// hold so a pending restart can replace the loop while the gate runs;
-// re-acquiring the hold after the gate finishes follows the settlement wait rules.
+// lockRestartGateStart acquires a settlement hold to prepare a candidate and
+// start its detached gate. While any loop restart request is pending (including
+// while waiting on an active trunk proof or existing holds), new gate starts
+// wait for the restart to be answered so they never starve exec.
 func (l *Loop) lockRestartGateStart(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, true, false, true)
+	return l.lockRestartStep(ctx, true, false, false)
 }
 
 // lockRestartLanding acquires a settlement hold that may still proceed while a
@@ -399,18 +359,12 @@ func (l *Loop) lockRestartLanding(ctx context.Context) (context.Context, func(),
 	return l.lockRestartStep(ctx, true, true, false)
 }
 
-func (l *Loop) lockRestartStep(ctx context.Context, settling, allowDuringProof, allowPendingStart bool) (context.Context, func(), error) {
+func (l *Loop) lockRestartStep(ctx context.Context, settling, allowDuringProof, _ bool) (context.Context, func(), error) {
 	h, nested := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold)
 	if !nested {
 		h = &restartMechanicalHold{loop: l, settling: settling}
 		h.allowDuringProof.Store(allowDuringProof)
-		var err error
-		if allowPendingStart {
-			err = h.acquireGateStart(ctx)
-		} else {
-			err = h.acquireContext(ctx)
-		}
-		if err != nil {
+		if err := h.acquireContext(ctx); err != nil {
 			return ctx, func() {}, err
 		}
 		return context.WithValue(ctx, restartMechanicalKey{}, h), h.release, nil
@@ -537,8 +491,12 @@ func restartWork[T any](ctx context.Context, l *Loop, work func(context.Context)
 				return zero, err
 			}
 			if errors.Is(a.err, errRestartPending) {
-				// Handoff refused a request filed after initial admission. Its
-				// answer is now known: retry launch only if no replacement occurred.
+				// Handoff refused a request filed after initial admission. Wait until
+				// the pending restart is answered, and retry launch only if no
+				// replacement occurred.
+				if err := l.waitForRestartAnswer(ctx, false); err != nil {
+					return zero, err
+				}
 				done = start()
 				continue
 			}

@@ -160,10 +160,8 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 		if l.restartReplaced.Load() {
 			return nil, false, nil
 		}
-		if _, isProc := l.cfg.Steps.(*ProcessSteps); !isProc {
-			if pending, err := l.restarterPendingWith(ctx, nil); err != nil || pending {
-				return nil, false, err
-			}
+		if pending, err := l.restarterPendingWith(ctx, nil); err != nil || pending {
+			return nil, false, err
 		}
 	}
 	here, err := currentLoopOwner()

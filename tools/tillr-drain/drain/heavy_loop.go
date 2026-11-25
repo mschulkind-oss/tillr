@@ -258,8 +258,15 @@ func (l *Loop) beginHeavyProof(ctx context.Context) bool {
 	if l.restartReplaced.Load() {
 		return false
 	}
-	if _, waitCh := l.restartWaitState(); waitCh != nil && !l.restartActionDeferred() {
-		return false
+	if !l.restartActionDeferred() {
+		if _, waitCh := l.restartWaitState(); waitCh != nil {
+			return false
+		}
+		if l.cfg.Restart != nil {
+			if pending, err := l.restarterPendingWith(ctx, nil); err != nil || pending {
+				return false
+			}
+		}
 	}
 	l.heavyMu.Lock()
 	l.heavyProofActive = true
