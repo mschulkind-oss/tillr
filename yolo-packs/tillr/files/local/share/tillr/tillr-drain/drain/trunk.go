@@ -76,7 +76,7 @@ const DefaultRollingProgram = ""
 
 // DefaultFixerGateProgram judges a named check after the ordinary candidate gate passes.
 // The drain supplies the candidate flags and the proof's selector as --only.
-const DefaultFixerGateProgram = "python3 tools/tillr-loop/tillr-loop fixer-gate"
+const DefaultFixerGateProgram = builtAdapterProgram + " fixer-gate"
 
 // DefaultReplayProgram re-runs a red gate's failing checks on the base, `{only}` being the
 // comma-separated check ids. It is handed no candidate flags: it judges a revision.

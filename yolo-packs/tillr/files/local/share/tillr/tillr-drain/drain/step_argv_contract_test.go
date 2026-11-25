@@ -145,24 +145,17 @@ const (
 )
 
 func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
-	repo, adapter := repositoryFile(t, "tools/tillr-loop/tillr-loop")
+	repo, _ := repositoryFile(t, "tools/tillr-loop/tillr-loop")
 	f, _ := passFixture(t, "item-a")
 	log := adapterStubs(t)
 	worktree := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
-	// The fixer's default program is spelled relative to the candidate worktree, where the
-	// candidate's own copy of the adapter lives. The fixture lane is not this repository, so
-	// it is given the real adapter at that path.
-	if err := os.MkdirAll(filepath.Join(worktree, "tools", "tillr-loop"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(adapter, filepath.Join(worktree, "tools", "tillr-loop", "tillr-loop")); err != nil {
-		t.Fatal(err)
-	}
+	// Like a consumer repository, the fixture worktree has no adapter source.
+	// The keeper's commands and the fixer default use the running build's copy.
 	steps := &ProcessSteps{
 		Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Now: time.Now,
-		GateProgram:      "python3 " + adapter + " gate",
-		LandProgram:      "python3 " + adapter + " land",
-		VerdictProgram:   "python3 " + adapter + " verdict",
+		GateProgram:      "builtin:tillr-loop gate",
+		LandProgram:      "builtin:tillr-loop land",
+		VerdictProgram:   "builtin:tillr-loop verdict",
 		FixerGateProgram: DefaultFixerGateProgram,
 	}
 	candidate := func(item, run string) Candidate {

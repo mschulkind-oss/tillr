@@ -15,7 +15,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import signal
 import sqlite3
 import subprocess
@@ -220,10 +219,9 @@ def observe_loop(stop, child):
 
 
 def loop_command(root, extra):
-    adapter = root / "tools/tillr-loop/tillr-loop"
     command = ["tillr-drain", "loop", "--root", str(root)]
     for face in ("gate", "land", "verdict"):
-        command.extend(["--" + face, shlex.join(["python3", str(adapter), face])])
+        command.extend(["--" + face, f"builtin:tillr-loop {face}"])
     return command + extra
 
 
