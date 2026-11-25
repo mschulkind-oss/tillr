@@ -126,7 +126,7 @@ A flaw is a fact about the request that a reader can check against the words, th
 | F4 | **Unbounded reach.** The words bind the work to every case of something without naming the cases, or to the whole of a document | "for every", "any", "all of", "exactly as the design says" | "For every gate run"; "Follow the design's decisions exactly" | Names the cases this item delivers and defers the rest ([§6.2](#62-deferring-a-case)) |
 | F5 | **Several behaviors.** The words name behaviors that could each land if the others never shipped | The split design's [signals](./tillr-item-split.md#6-the-signals) for filing | A request for an evaluator, three projections and six commands | Not an amendment: the design seat answers with a split statement |
 | F6 | **A criterion that joins clauses.** One criterion holds several testable clauses | The criterion as written | — | Replaces it by one criterion per clause, within the limit of eight |
-| F7 | **Against a recorded ruling or decision.** The words ask for what a ruling or a design decision forbids | The reader's citation of the ruling | — | [§6.3](#63-what-an-amendment-may-not-do) |
+| F7 | **Against a recorded ruling or decision.** The words ask for what a ruling or a design decision forbids | The reader's citation of the ruling | — | [§6.3](#63-what-an-amendment-may-not-do); when a worker's `definition` obstacle cites a settled decision that the request did not name, [settled-decision conflicts](./tillr-settled-decision-conflicts.md) proposes routing straight to a person on the first conflict ([`OQ-SDC1`](./tillr-settled-decision-conflicts.md#OQ-SDC1)) |
 
 Three things are not flaws in a request, and are not answered by an amendment:
 

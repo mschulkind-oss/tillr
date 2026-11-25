@@ -166,6 +166,7 @@ Each reference describes code that is in the tree and names it in its `covers` l
 | [Scheduled items](../design/scheduled-tasks.md) | A due time and a recurrence on the item; an item not yet due is not ready, with no daemon. | Designed, not built | not shipped |
 | [The escalation ladder](../design/escalation-ladder.md) | A lane that finds its plan or design wrong records the conflict and routes it to a seat with authority. | Partly built in a narrower shape; its seven questions await the owner | not shipped |
 | [Operator decisions inside tillr](../design/operator-decisions-inside-tillr.md) | Seven kinds of hand action by the operator, and who inside tillr takes each. | Open questions: [OQ-OD1](../design/operator-decisions-inside-tillr.md#OQ-OD1) to [OQ-OD3](../design/operator-decisions-inside-tillr.md#OQ-OD3) | not shipped |
+| [Settled-decision conflicts](../design/tillr-settled-decision-conflicts.md) | A worker conflict that cites a settled decision bypasses the design seat when the request did not name it or lacks authority, alerts immediately, and shows the request words beside the broken decisions. | Open questions: [OQ-SDC1](../design/tillr-settled-decision-conflicts.md#OQ-SDC1), [OQ-SDC2](../design/tillr-settled-decision-conflicts.md#OQ-SDC2) | not shipped |
 
 ## Designs: review and compliance
 

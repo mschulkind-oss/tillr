@@ -136,7 +136,7 @@ The 34 closes and finishes each carry a reason the operator wrote. Read by reaso
 | **A rewrite** | The request's words are wrong about the tree | The request-amendment design takes over ([§9.2](#92-the-request-rewrite-design)) |
 | **An objection naming the owner** | The decision is one of [§6](#6-what-is-the-owners) | The item is held on the owner with the question and its options |
 
-The seat is given the owner's words, the obstacle's fields, the run's report and candidate if it made one, the item's earlier answers, and the design documents the words reach.
+The seat is given the owner's words, the obstacle's fields, the run's report and candidate if it made one, the item's earlier answers, and the design documents the words reach. When a worker's `definition` conflict cites a settled decision that the filed request did not name — or a non-owner request cites an owner ruling — [settled-decision conflicts](./tillr-settled-decision-conflicts.md) proposes bypassing the design seat on the first report and holding on a person ([`OQ-SDC1`](./tillr-settled-decision-conflicts.md#OQ-SDC1), [`OQ-SDC2`](./tillr-settled-decision-conflicts.md#OQ-SDC2)).
 
 **`tooling`: a defect item.** A worker that names a broken tool has found a defect in tillr or its harness. The drain files one item from the obstacle's `COMMAND`, `EVIDENCE` and `PATHS` fields, and the held item waits on it through a `blocked_by` edge. The drain releases the wait when the defect item lands.
 
