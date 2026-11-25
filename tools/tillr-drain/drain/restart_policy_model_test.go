@@ -190,6 +190,29 @@ func TestWorkflowRestartHoldsWhenBackendRemovedFromPolicy(t *testing.T) {
 	})
 }
 
+func TestWorkflowRestartHoldsWhenItemSeatRemovedFromPolicy(t *testing.T) {
+	f, l, steps := restartGraphFixture(t)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET seat='tricky' WHERE item_id='item-a'`)
+		return err
+	})
+	l.cfg.Policy.Seats["tricky"] = "fixture"
+	deadOwnerClaim(t, f, l, decisionFor(t, l, "item-a"))
+	delete(l.cfg.Policy.Seats, "tricky") // Leave the workflow's seat and backend usable.
+
+	next := replaceGraphLoop(t, f, l, steps)
+	got := planFor(t, next, "item-a")
+	if got.Action != ActionHold || got.RunRequest != nil || got.Seat != "tricky" || !strings.HasPrefix(got.Reason, ReasonSeatUnmapped+": ") {
+		t.Fatalf("restart with an unmapped item seat = %+v, want a hold with no request", got)
+	}
+
+	next.cfg.Policy.Seats["tricky"] = "fixture"
+	got = planFor(t, next, "item-a")
+	if got.Action != ActionDispatch || !got.WorkflowRestart || got.RunRequest == nil || got.RunRequest.Backend != "fixture" {
+		t.Fatalf("restart with a restored seat mapping = %+v, want the original workflow restarted on fixture", got)
+	}
+}
+
 func TestWorkflowRestartDropsSessionTurnWhenRouteChanges(t *testing.T) {
 	policy := &Policy{
 		DefaultBackend: "pi",

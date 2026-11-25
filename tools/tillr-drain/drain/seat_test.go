@@ -12,7 +12,6 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
-	"github.com/mschulkind-oss/tillr/store"
 )
 
 // seatPolicy writes a policy whose seat map is the caller's, with every backend running
@@ -41,24 +40,6 @@ func seatPolicy(t *testing.T, seats map[string]string, models map[string]string)
 		"seats":           seats,
 		"backends":        backends,
 	})
-}
-
-// setSeat updates a fixture row directly. The item writer checks only the shape;
-// the planner checks whether the seat is mapped by the active policy.
-func setSeat(t *testing.T, storePath, itemID, seat string) {
-	t.Helper()
-	ctx := context.Background()
-	s, err := store.Open(ctx, storePath, false)
-	if err != nil {
-		t.Fatalf("opening %s failed: %v", storePath, err)
-	}
-	defer s.Close()
-	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET seat = ? WHERE item_id = ?`, seat, itemID)
-		return err
-	}); err != nil {
-		t.Fatalf("writing seat %q onto %s failed: %v", seat, itemID, err)
-	}
 }
 
 // Criterion 1: an item names a seat and never a model, and the policy's seat map reaches
@@ -128,48 +109,102 @@ func TestSwappingTheDesignSeatIsOnePolicyLine(t *testing.T) {
 	}
 }
 
-// runPlan plans a fixture tick without asserting success, so a case can read a refusal.
-func runPlan(t *testing.T, storePath, tickPath string) (int, string) {
-	t.Helper()
-	out := filepath.Join(scratch(t, "out"), "decisions.json")
-	code, output := invoke(t, "plan", "--store", storePath, "--input", tickPath, "--output", out)
-	return code, string(output)
-}
-
-// Criterion 3, first half: a seat the policy does not map refuses the whole plan, naming the
-// seat and the seats the policy does map. It is never defaulted to the tick's backend, which
-// would dispatch design work to the build model and record it as intended.
-func TestPlanRefusesASeatThePolicyDoesNotMap(t *testing.T) {
-	storePath := fixture(t, itemRecordSeated("item_042", "in-queue", "design"))
-	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1,
-		seatPolicy(t, map[string]string{"build": "fixture", "review": "fixture"}, nil))
-
-	code, output := runPlan(t, storePath, tickPath)
-	if code != 2 {
-		t.Fatalf("plan exited %d, want 2: %s", code, output)
+// An unmapped explicit seat holds only its own item: mapped work still settles, and
+// editing the policy lets the same queued item dispatch without rewriting its seat.
+func TestLoopHoldsAnUnmappedSeatWhileMappedWorkLandsAndPolicyRepairDispatches(t *testing.T) {
+	builder := stub(t, "builder-adapter", committingAdapter)
+	designer := stub(t, "designer-adapter", committingAdapter)
+	floor := stub(t, "floor-adapter", failingAdapter)
+	f := newLoopFixture(t, floor)
+	policy := &drain.Policy{
+		DefaultBackend: "fixture",
+		Seats:          map[string]string{"build": "pi-builder"},
+		Backends: map[string]drain.Backend{
+			"fixture":     {Adapter: floor, Model: "floor-model", TimeoutSeconds: 60},
+			"pi-builder":  {Adapter: builder, Model: "builder-model", TimeoutSeconds: 60},
+			"pi-designer": {Adapter: designer, Model: "designer-model", TimeoutSeconds: 60},
+		},
 	}
-	for _, want := range []string{`item "item_042"`, `seat "design"`, "does not map", "build, review", "never defaulted"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("the refusal %q does not name %q", output, want)
+	policyPath := filepath.Join(scratch(t, "seat-policy"), "policy.json")
+	writePolicy := func() {
+		t.Helper()
+		raw, err := json.Marshal(policy)
+		if err != nil {
+			t.Fatalf("encoding the policy failed: %v", err)
+		}
+		writeFile(t, policyPath, string(raw))
+	}
+	writePolicy()
+	var err error
+	f.policy, err = drain.LoadPolicy(policyPath)
+	if err != nil {
+		t.Fatalf("loading the policy failed: %v", err)
+	}
+	// Put the unmapped item first so its hold must leave the lane for mapped work.
+	fixtureAt(t, f.store,
+		seatedFencedItemRecord("item_041", "in-queue", "design", "candidate.txt"),
+		seatedFencedItemRecord("item_042", "in-queue", "build", "candidate.txt"),
+	)
+
+	var report bytes.Buffer
+	loop := f.newLoopWith(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)),
+		passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, &report)
+	result, err := loop.Run(context.Background())
+	if err != nil {
+		t.Fatalf("an unmapped seat must not stop the mixed queue: %v", err)
+	}
+	if result.Dispatched != 1 || result.Landed != 1 {
+		t.Fatalf("want one mapped dispatch and landing, got %+v", result)
+	}
+	if got := itemStateOf(t, f.store, "item_042"); got != "landed" {
+		t.Fatalf("the mapped item is %q, want landed", got)
+	}
+	mappedRuns := runsForItem(t, f.store, "item_042")
+	if len(mappedRuns) != 1 || mappedRuns[0].Backend != "pi-builder" {
+		t.Fatalf("want one mapped run on pi-builder, got %+v", mappedRuns)
+	}
+	if runs := runsForItem(t, f.store, "item_041"); len(runs) != 0 {
+		t.Fatalf("the unmapped seat must never run on the default backend: %+v", runs)
+	}
+	if got := itemStateOf(t, f.store, "item_041"); got != "in-queue" {
+		t.Fatalf("the unmapped item is %q, want it still in-queue", got)
+	}
+	for _, want := range []string{"seat-unmapped: ", "item_041", "design", policyPath, "mover: operator"} {
+		if !strings.Contains(report.String(), want) {
+			t.Fatalf("the hold report does not name %q:\n%s", want, report.String())
 		}
 	}
+
+	tickPath := tick(t, "2026-11-12T00:00:00Z", []string{"lane-1"}, 1, policyPath)
+	held := decisionFor(t, plan(t, f.store, tickPath), "item_041")
+	if held.Action != drain.ActionHold || held.RunRequest != nil || held.Seat != "design" || !strings.HasPrefix(held.Reason, "seat-unmapped: ") {
+		t.Fatalf("want a seat-unmapped hold with no request, got %+v", held)
+	}
+	for _, want := range []string{"design", policyPath} {
+		if !strings.Contains(held.Reason, want) {
+			t.Fatalf("the hold reason %q does not name %q", held.Reason, want)
+		}
+	}
+
+	// Repair only the same policy file. The item and store are not recreated.
+	policy.Seats["design"] = "pi-designer"
+	writePolicy()
+	recovered := decisionFor(t, plan(t, f.store, tickPath), "item_041")
+	if recovered.Action != drain.ActionDispatch || recovered.Seat != "design" || recovered.RunRequest == nil || recovered.RunRequest.Backend != "pi-designer" {
+		t.Fatalf("want the repaired seat to dispatch on pi-designer, never fixture: %+v", recovered)
+	}
+	if model := modelOf(t, recovered.RunRequest); model != "designer-model" {
+		t.Fatalf("the repaired seat dispatches model %q, want designer-model", model)
+	}
 }
 
-// An unmapped seat is refused at plan time, with the policy and its mapped seats named.
-func TestPlanRefusesAnUnmappedSeat(t *testing.T) {
-	storePath := fixture(t, itemRecordSeated("item_042", "in-queue", "build"))
-	setSeat(t, storePath, "item_042", "qa")
-	policyPath := seatPolicy(t, map[string]string{"design": "fixture", "build": "fixture", "review": "fixture", "scout": "fixture"}, nil)
+func TestPlanHoldsAnUnmappedSeatOnABlockedItem(t *testing.T) {
+	storePath := fixture(t, itemRecordSeated("item_042", "blocked", "tricky"))
+	policyPath := seatPolicy(t, map[string]string{"build": "builder"}, nil)
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policyPath)
-
-	code, output := runPlan(t, storePath, tickPath)
-	if code != 2 {
-		t.Fatalf("plan exited %d, want 2: %s", code, output)
-	}
-	for _, want := range []string{`item "item_042"`, `seat "qa"`, "which the policy does not map", "build, design, review, scout", "seats are declared in " + policyPath} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("the refusal %q does not name %q", output, want)
-		}
+	got := decisionFor(t, plan(t, storePath, tickPath), "item_042")
+	if got.Action != drain.ActionHold || got.RunRequest != nil || !strings.HasPrefix(got.Reason, "seat-unmapped: ") || got.Seat != "tricky" {
+		t.Fatalf("want a seat-unmapped hold with no request, got %+v", got)
 	}
 }
 

@@ -472,15 +472,6 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if err := checkOverrides(policy, states); err != nil {
 		return nil, err
 	}
-	seatItems := make([]itemRow, 0, len(items))
-	for _, row := range items {
-		if !unshared[row.ItemID] && (!tick.pendingOnly || tick.plansItem(row.ItemID, works[row.ItemID])) {
-			seatItems = append(seatItems, row)
-		}
-	}
-	if err := checkSeats(policy, seatItems); err != nil {
-		return nil, err
-	}
 	forks, err := liveForks(r, at, works)
 	if err != nil {
 		return nil, readFailure(err)
@@ -985,6 +976,13 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			// or candidate judgment waits on the dependency.
 			depBlocked := item.State == def.Ready && p.dependencyBlocked(edges[item.ItemID])
 			depHold := depBlocked && (work.Ready || isDispatch(decision) || decision.Action == ActionJudge)
+			// An unmapped item seat bars another launch, not settlement of work
+			// already started under an earlier policy.
+			if err == nil && !ownerNextNode && !depHold && isDispatch(decision) && !unshared[item.ItemID] {
+				if hold, ok := unmappedSeatHold(policy, item, decision.Attempt); ok {
+					decision = hold
+				}
+			}
 			// A node waiting to start whose decision lane has left the rotation (a refused
 			// claim took it out) cannot be offered that lane again: it is planned onto a
 			// free one, as a released lane is.
@@ -1148,6 +1146,8 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			if err != nil {
 				return nil, nil, err
 			}
+		} else if hold, ok := unmappedSeatHold(policy, item, p.nextAttempt(item.ItemID)); ok && !p.finished(item.State) {
+			decision = hold
 		} else {
 			var (
 				w                *Workflow
@@ -2738,45 +2738,17 @@ func decodeFence(stored string) ([]string, error) {
 	return paths, nil
 }
 
-// checkSeats refuses a plan whose items ask for a seat this policy cannot route, before a
-// single decision is built. Two defects are refused, and both name the seat and the seats
-// the policy does map:
-//
-//   - an item names a seat the item model does not define, which is a typo in the store
-//     rather than a dispatch; and
-//   - an item names a seat the policy does not map, which is the one outcome the seat layer
-//     exists to forbid: a silent fall-through to the tick's default backend would send
-//     design work to the build model and record it as though it were intended.
-//
-// The whole plan is refused rather than one item, because a seat the policy cannot route is
-// a document to fix, not a per-item decision: the policy is the only place a seat may be
-// silenced, and doing it by omission is exactly what this check refuses.
-func checkSeats(policy *Policy, items []itemRow) error {
-	if policy == nil {
-		return nil
+// unmappedSeatHold checks the item's explicit seat before it can take a lane.
+// It is computed from the active policy each pass, not stored as an item fault.
+func unmappedSeatHold(policy *Policy, it itemRow, attempt int) (Decision, bool) {
+	if policy == nil || it.Seat == "" || len(policy.seatList(it.Seat)) != 0 {
+		return Decision{}, false
 	}
-	for _, it := range items {
-		if it.Seat == "" {
-			continue
-		}
-		if len(policy.seatList(it.Seat)) == 0 {
-			return Usagef("item %q asks for seat %q, which the policy does not map: the policy maps %s; %s; a seat is never defaulted to the tick's backend",
-				it.ItemID, it.Seat, mappedSeats(policy), policy.seatDeclaration())
-		}
-	}
-	return nil
-}
-
-// mappedSeats answers the seats a policy maps in a stable order, so a refusal reads the
-// same twice and names what the operator can choose from. A policy that maps none is not
-// an empty string in the message: "none" is the answer, and it is what makes the refusal
-// say plainly that the seat layer has not been set up at all.
-func mappedSeats(policy *Policy) string {
-	names := policy.seatNames()
-	if len(names) == 0 {
-		return "none"
-	}
-	return strings.Join(names, ", ")
+	detail := fmt.Sprintf("seat %q is not mapped; %s", it.Seat, policy.seatDeclaration())
+	d := Decision{ItemID: it.ItemID, Seat: it.Seat, Action: ActionHold, From: "held", Attempt: attempt,
+		Reason: ReasonSeatUnmapped + ": " + detail}
+	identifyDecision(&d)
+	return d, true
 }
 
 // readEdges answers every blocked_by edge in the store, keyed by the blocked item.
