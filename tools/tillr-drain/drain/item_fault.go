@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -160,6 +161,9 @@ func ClearItemFaultHold(tx *store.Tx, itemID string, seq int64, at time.Time) (I
 	if err := retractRefusedRunClaim(tx, f, at); err != nil {
 		return ItemFault{}, err
 	}
+	if err := releaseRetainedRunProcessesLease(tx, f, at); err != nil {
+		return ItemFault{}, err
+	}
 	if err := clearItemFault(tx, f, at); err != nil {
 		return ItemFault{}, err
 	}
@@ -200,6 +204,72 @@ func retractRefusedRunClaim(tx *store.Tx, f ItemFault, at time.Time) error {
 	// Once the fault is clear, the next pass can offer the item with no
 	// synthetic run record in its history.
 	return retractClaim(tx, w.Decision, at, true)
+}
+
+// releaseRetainedRunProcessesLease releases the examination lease and claim kept when
+// run-processes-live retained an ended run's lane. Pending work still reserves the lane
+// for this item, so clearing the fault lets the running loop examine the run on a
+// following pass without opening the lane to another item.
+func releaseRetainedRunProcessesLease(tx *store.Tx, f ItemFault, at time.Time) error {
+	if f.Reason != ReasonRunProcessesLive {
+		return nil
+	}
+	r := tx.Reader()
+	works, err := readPending(r)
+	if err != nil {
+		return err
+	}
+	w := works[f.ItemID]
+	if w == nil || w.Done || w.Decision.RunRequest == nil {
+		return nil
+	}
+	runID, laneID := w.Decision.RunRequest.RunID, w.Decision.LaneID
+	if runID == "" || laneID == "" {
+		return nil
+	}
+	if f.LaneID != "" && f.LaneID != laneID {
+		return nil
+	}
+	if f.RunID != "" && !slices.Contains(examinationRunIDs(w), f.RunID) {
+		return nil
+	}
+	if w.Candidate == nil {
+		if len(w.Decision.Parallel) > 0 {
+			done, err := parallelTerminal(r, w.Decision)
+			if err != nil || !done {
+				return err
+			}
+		} else {
+			rec, err := terminalRecord(r, runID)
+			if err != nil || rec == nil {
+				return err
+			}
+		}
+	}
+	res, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ? AND state = ? AND leased_until IS NULL`, run.LaneStateIdle, laneID, runID, run.LaneStateLeased)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if w.Examiner != nil {
+		if err := appendEffect(tx, examinationOwnerKind, runID, (*LoopOwner)(nil), at); err != nil {
+			return err
+		}
+	}
+	if w.Examining {
+		if err := appendEffect(tx, examinationReleasedKind, runID, struct{}{}, at); err != nil {
+			return err
+		}
+	}
+	if n > 0 {
+		if err := appendEffect(tx, laneReleasedKind, runID, laneReleased{LaneID: laneID, Cause: laneReleaseEnded}, at); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func clearItemFault(tx *store.Tx, f ItemFault, at time.Time) error {

@@ -66,11 +66,13 @@ func TestSurvivingRunProcessesScansMarkedLiveProcesses(t *testing.T) {
 
 type survivingLoopSteps struct {
 	*recordingSteps
-	t         *testing.T
-	f         refusalLoopFixture
-	strayCmd  *exec.Cmd
-	itemARun  string
-	itemALane string
+	t                *testing.T
+	f                refusalLoopFixture
+	strayCmd         *exec.Cmd
+	itemARun         string
+	itemALane        string
+	itemARuns        int
+	skipLandingOffer bool
 }
 
 func (s *survivingLoopSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -86,17 +88,20 @@ func (s *survivingLoopSteps) Run(ctx context.Context, req run.Request) (run.Reco
 	commit := runGit(s.t, path, "rev-parse", "HEAD")
 
 	if req.ItemID == "item-a" {
+		s.itemARuns++
 		s.itemARun = req.RunID
 		s.itemALane = req.LaneID
-		// Reproduce the 2026-11-19 crash: landing-offer.json exists and a marked
-		// process outlives the ended run.
-		offerDir := run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID)
-		if err := os.MkdirAll(offerDir, 0o755); err != nil {
-			return run.Record{}, "", err
-		}
-		offer := fmt.Sprintf(`{"call_id":"call-a","summary":"item-a work","commit":%q,"base":%q}`, commit, runGit(s.t, s.f.root, "rev-parse", TrunkRef))
-		if err := os.WriteFile(filepath.Join(offerDir, landingOfferFile), []byte(offer), 0o600); err != nil {
-			return run.Record{}, "", err
+		if !s.skipLandingOffer {
+			// Reproduce the 2026-11-19 crash: landing-offer.json exists and a marked
+			// process outlives the ended run.
+			offerDir := run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID)
+			if err := os.MkdirAll(offerDir, 0o755); err != nil {
+				return run.Record{}, "", err
+			}
+			offer := fmt.Sprintf(`{"call_id":"call-a","summary":"item-a work","commit":%q,"base":%q}`, commit, runGit(s.t, s.f.root, "rev-parse", TrunkRef))
+			if err := os.WriteFile(filepath.Join(offerDir, landingOfferFile), []byte(offer), 0o600); err != nil {
+				return run.Record{}, "", err
+			}
 		}
 		cmd := exec.Command("sleep", "600")
 		cmd.Env = append(os.Environ(), "TILLR_RUN_ID="+req.RunID, "TILLR_LOOP_STORE="+s.f.storePath)
@@ -289,6 +294,120 @@ func TestSurvivingProcessesHoldOnlyTheirItemAndKeepLoopRunning(t *testing.T) {
 	})
 	if raw, err := os.ReadFile(filepath.Join(l.laneTarget(steps.itemALane), "tools", "item-a", "work.txt")); err != nil || string(raw) != "work for item-a\n" {
 		t.Fatalf("item-a worktree was touched: %q / %v", raw, err)
+	}
+}
+
+func TestEndedRunExaminedAfterRunProcessesLiveFaultCleared(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.ExitWhenDrained = false
+	l.cfg.StorePollInterval = 20 * time.Millisecond
+	steps := &survivingLoopSteps{
+		recordingSteps:   l.cfg.Steps.(*recordingSteps),
+		t:                t,
+		f:                f,
+		skipLandingOffer: true,
+	}
+	l.cfg.Steps = steps
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct {
+		res LoopResult
+		err error
+	}, 1)
+	defer func() {
+		cancel()
+		<-done
+	}()
+	go func() {
+		defer close(done)
+		res, err := l.Run(ctx)
+		done <- struct {
+			res LoopResult
+			err error
+		}{res, err}
+	}()
+
+	waitFor := func(what string, limit time.Duration, check func() bool) {
+		t.Helper()
+		deadline := time.NewTimer(limit)
+		defer deadline.Stop()
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if check() {
+				return
+			}
+			select {
+			case out := <-done:
+				t.Fatalf("loop exited while waiting for %s: stop=%q detail=%q err=%v", what, out.res.Stop, out.res.Detail, out.err)
+			case <-deadline.C:
+				t.Fatalf("timed out waiting for %s", what)
+			case <-ticker.C:
+			}
+		}
+	}
+
+	var fault ItemFault
+	waitFor("run-processes-live fault on item-a", hangGuard, func() bool {
+		var ok bool
+		fixtureRead(t, f, func(r *store.Reader) error {
+			faults, err := ReadItemFaults(r)
+			if err != nil {
+				return err
+			}
+			fault, ok = faults["item-a"]
+			return nil
+		})
+		return ok && fault.Reason == ReasonRunProcessesLive
+	})
+
+	// End the surviving process and clear the fault while the same loop keeps running.
+	if steps.strayCmd == nil || steps.strayCmd.Process == nil {
+		t.Fatal("item-a did not start a marked child process")
+	}
+	_ = steps.strayCmd.Process.Kill()
+	_ = steps.strayCmd.Wait()
+	steps.strayCmd = nil
+
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		cleared, err := ClearItemFaultHold(tx, "item-a", fault.Seq, l.cfg.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if cleared.Reason != ReasonRunProcessesLive {
+			t.Fatalf("cleared reason = %q, want %q", cleared.Reason, ReasonRunProcessesLive)
+		}
+		return nil
+	})
+
+	// Without restarting the loop, a following pass examines the ended run and lands it.
+	waitFor("ended run examination and landing after clear-fault", hangGuard, func() bool {
+		var settled bool
+		fixtureRead(t, f, func(r *store.Reader) error {
+			var state, laneState string
+			if err := r.QueryRow(`SELECT state FROM items WHERE item_id = 'item-a'`).Scan(&state); err != nil {
+				return err
+			}
+			if err := r.QueryRow(`SELECT state FROM lanes WHERE lane_id = ?`, steps.itemALane).Scan(&laneState); err != nil {
+				return err
+			}
+			works, err := readPending(r)
+			if err != nil {
+				return err
+			}
+			settled = state == StateLanded && laneState == run.LaneStateIdle && works["item-a"] != nil && works["item-a"].Done
+			return nil
+		})
+		return settled
+	})
+
+	if steps.itemARuns != 1 {
+		t.Fatalf("item-a ran %d times, want 1 (the ended run itself should be examined)", steps.itemARuns)
+	}
+	cancel()
+	out := <-done
+	if out.res.Stop == StopFault || out.res.Stop == StopLanesLeased || (out.err != nil && out.err != context.Canceled) {
+		t.Fatalf("loop stopped unexpectedly: stop=%q detail=%q err=%v", out.res.Stop, out.res.Detail, out.err)
 	}
 }
 

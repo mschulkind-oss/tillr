@@ -1539,6 +1539,20 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 			return l.waitForTrigger(ctx, leases, at, result)
 		}
 	}
+	retainedForFault := map[string]bool{}
+	for _, d := range holds {
+		if d.Reason == ReasonRunProcessesLive && d.LaneID != "" {
+			retainedForFault[d.LaneID] = true
+		}
+	}
+	unaccounted := make([]LaneLease, 0, len(leases))
+	for _, lease := range leases {
+		if lease.LeasedUntil == nil && retainedForFault[lease.LaneID] {
+			continue
+		}
+		unaccounted = append(unaccounted, lease)
+	}
+	leases = unaccounted
 	if len(leases) == 0 {
 		detail := fmt.Sprintf("a full tick planned nothing dispatchable: %s", held)
 		if !l.cfg.ExitWhenDrained {
