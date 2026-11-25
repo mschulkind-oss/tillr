@@ -1034,6 +1034,7 @@ func (l *Loop) settleTrunkAlreadyRed(ctx context.Context, candidate *Candidate, 
 		var detail string
 		if candidate.laneReleasedForReplay() {
 			detail = repairedAtTipReleasedDetail(gate.FailingChecks, oldBase, reading.RepairedAt)
+			candidate.RestartOnTip = true
 		} else {
 			from := candidate.WorkerHeadSHA
 			if from == "" {

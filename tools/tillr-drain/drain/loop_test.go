@@ -44,7 +44,7 @@ const counting = `if [ -n "$STUB_COUNT" ]; then echo "$0 $*" >> "$STUB_COUNT"; f
 
 // committingAdapterBody is the work a stub adapter does: it writes one file and commits it on
 // the lane's branch, which is the candidate the loop reads.
-const committingAdapterBody = `echo candidate > candidate.txt
+const committingAdapterBody = `printf '%s\n' "${TILLR_RUN_ID:-candidate}" > candidate.txt
 git add candidate.txt
 git -c user.name=stub -c user.email=stub@example.invalid commit -q -m candidate
 `

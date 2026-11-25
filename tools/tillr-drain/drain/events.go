@@ -298,6 +298,21 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 			payload.Detail = gateRefusalDetail(RunDir(l.cfg.Root, candidate.RunID), payload.Detail, payload.Checks)
 		}
 		switch step {
+		case RefusalGate:
+			if candidate.BlockConflict == nil && !candidate.RestartOnTip {
+				// Keep the refused candidate commit reachable so a fresh build run can
+				// stage on it when the worker's session cannot be resumed.
+				if candidate.HeadSHA != "" {
+					if err := l.pinCandidateHead(ctx, candidate); err != nil {
+						return err
+					}
+				}
+				var err error
+				payload.WorkerSession, err = l.gateBuildSession(ctx, candidate)
+				if err != nil {
+					return err
+				}
+			}
 		case RefusalVerifyNotDone:
 			payload.VerifyFeedback = candidate.verifyFeedback
 			if candidate.VerifyReplan {

@@ -797,7 +797,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		}
 	}
 	if stage.Kind == "agent" {
-		if verifyBuildReturn(d.Returned) {
+		if verifyBuildReturn(d.Returned) || gateBuildReturn(d.Returned) {
 			if why, wrong := l.builderPlanWrong(d, stage, footer, log); wrong {
 				// The build step cannot meet the findings within the plan: the plan step runs
 				// again, with the builder's explanation and the findings it was given.

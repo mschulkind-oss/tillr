@@ -1193,13 +1193,22 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					}
 				}
 			}
-			// The build step runs again on the candidate the verifier read, in a fresh
+			// The build step runs again on the candidate the verifier or gate read, in a fresh
 			// session when the writer's cannot be resumed, and on whatever lane the plan
 			// offers: the graph (with any expanded pieces and the inserted work stage) is
 			// retained even when the original lane is unavailable.
 			if !retainedGraph && (verifyBuildReturn(e) || verifyNoVerdictReturn(e)) && e.WorkerSession.NodeIndex >= 0 && e.WorkerSession.NodeIndex < len(e.WorkerSession.Workflow.Stages) {
 				w, resumeNode, loadErr = e.WorkerSession.Workflow, e.WorkerSession.NodeIndex, nil
 				retainedGraph = true
+			}
+			if !retainedGraph && gateBuildReturn(e) {
+				if gw, gnode := buildStageForGateReturn(e.WorkerSession.Workflow, e.WorkerSession.NodeIndex); gw != nil {
+					w, resumeNode, loadErr = gw, gnode, nil
+					retainedGraph = true
+				} else if gw, gnode := buildStageForGateReturn(w, -1); gw != nil && loadErr == nil {
+					w, resumeNode = gw, gnode
+					retainedGraph = true
+				}
 			}
 			var reused []string
 			reusedFrom := 0
@@ -1282,7 +1291,8 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					if decision.RunRequest.SessionTurn && decision.Returned.WorkerSession.Workflow != nil {
 						decision.NodeBaseSHA = decision.Returned.WorkerSession.NodeBaseSHA
 					}
-					if verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned) {
+					if verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned) ||
+						(gateBuildReturn(decision.Returned) && !decision.RunRequest.SessionTurn) {
 						// Per-node checks measure the repair commit atop the candidate; the
 						// whole item still diffs against its own base.
 						decision.NodeBaseSHA = decision.Returned.WorkerSession.HeadSHA
@@ -1299,6 +1309,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					} else if w.Stages[resumeNode].TimeoutMS > 0 {
 						decision.RunRequest.TimeoutMS = w.Stages[resumeNode].TimeoutMS
 					}
+				} else if decision.RunRequest != nil && decision.BlockConflict == nil && gateBuildReturn(decision.Returned) && !decision.RunRequest.SessionTurn {
+					// Record the refused candidate commit in drain.started even for non-workflow items.
+					decision.NodeBaseSHA = decision.Returned.WorkerSession.HeadSHA
 				}
 			}
 			identifyDecision(&decision)

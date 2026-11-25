@@ -40,8 +40,14 @@ func verifyNoVerdictReturn(e *ReturnedEnding) bool {
 	return e != nil && e.Cause == RefusalVerifyNoVerdict && e.WorkerSession != nil && e.WorkerSession.Workflow != nil
 }
 
+// gateBuildReturn reports whether a gate refusal carries a candidate commit that a fresh
+// build run can stage on when the worker's session cannot be resumed.
+func gateBuildReturn(e *ReturnedEnding) bool {
+	return e != nil && e.Cause == RefusalGate && e.WorkerSession != nil && e.WorkerSession.BaseSHA != "" && e.WorkerSession.HeadSHA != ""
+}
+
 func workerSessionReason(s *WorkerSession, req *run.Request) string {
-	if s == nil {
+	if s == nil || s.SessionID == "" {
 		return "session-missing"
 	}
 	id, err := ReadSessionID(s.LaneDir)
@@ -72,6 +78,176 @@ func (l *Loop) captureWorkerSession(ctx context.Context, c Candidate) (*WorkerSe
 // capturePlanSession snapshots a planner or classifier session while its lane still belongs to the run.
 func (l *Loop) capturePlanSession(ctx context.Context, c Candidate) (*WorkerSession, error) {
 	return l.captureSession(ctx, c, true)
+}
+
+func (l *Loop) startedDecision(ctx context.Context, runID string) (Decision, bool, error) {
+	if runID == "" {
+		return Decision{}, false, nil
+	}
+	var decision Decision
+	found := false
+	err := l.readStore(ctx, func(r *store.Reader) error {
+		var raw []byte
+		if err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, dispatchStartedKind, runID).Scan(&raw); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		var w pendingWork
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return err
+		}
+		decision, found = w.Decision, true
+		return nil
+	})
+	return decision, found, err
+}
+
+// buildStageForGateReturn picks the build stage to run on a refused candidate when a gate
+// refusal cannot resume its worker session: an unscoped build stage if the graph already
+// has one (including planned-build's work stage after plan took do-it-now), a new unscoped
+// work stage before the evaluator when pieces were expanded, or the writing stage on a
+// workflow without an evaluator.
+func buildStageForGateReturn(w *Workflow, currentIndex int) (*Workflow, int) {
+	if w == nil || len(w.Stages) == 0 {
+		return nil, 0
+	}
+	raw, err := json.Marshal(w)
+	if err != nil {
+		return nil, 0
+	}
+	var cp Workflow
+	if err := json.Unmarshal(raw, &cp); err != nil {
+		return nil, 0
+	}
+	isUnscopedBuild := func(s WorkflowStage) bool {
+		return s.Kind == "agent" && s.Access == "write" && (s.Seat == "build" || s.Seat == "") && s.WriteScope.Paths == nil
+	}
+	if currentIndex >= 0 && currentIndex < len(cp.Stages) && isUnscopedBuild(cp.Stages[currentIndex]) {
+		return &cp, currentIndex
+	}
+	for i, s := range cp.Stages {
+		if isUnscopedBuild(s) {
+			return &cp, i
+		}
+	}
+	if slot := evaluatorSlot(&cp); slot != "" {
+		for i, s := range cp.Stages {
+			if s.ID == slot {
+				insertRepairWorkStage(&cp, i, "the gate's refusal")
+				return &cp, i
+			}
+		}
+	}
+	if currentIndex >= 0 && currentIndex < len(cp.Stages) && cp.Stages[currentIndex].Access == "write" {
+		return &cp, currentIndex
+	}
+	for i := len(cp.Stages) - 1; i >= 0; i-- {
+		if cp.Stages[i].Access == "write" {
+			return &cp, i
+		}
+	}
+	return nil, 0
+}
+
+// gateBuildSession captures the worker session for a gate refusal, and when no resumable
+// session exists (for example after a replay released the lane, a plan do-it-now run, or a
+// conflict-repair run whose dispatch carries no workflow graph), still records the refused
+// candidate commit and the build step that will repair it.
+func (l *Loop) gateBuildSession(ctx context.Context, c Candidate) (*WorkerSession, error) {
+	s, err := l.captureWorkerSession(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	writerID := c.RunID
+	if c.Evaluator != nil || len(c.Writers) > 0 {
+		writerID = judgeWriterRun(c)
+	}
+	if s != nil {
+		if s.Workflow == nil && isConflictFixRun(writerID) {
+			orig, found, err := l.startedDecision(ctx, conflictFixOriginal(writerID))
+			if err != nil {
+				return nil, err
+			}
+			if found && orig.Workflow != nil {
+				if gw, gnode := buildStageForGateReturn(orig.Workflow, orig.NodeIndex); gw != nil {
+					s.Workflow, s.NodeIndex = gw, gnode
+					if orig.Attempt > 0 {
+						s.Attempt = orig.Attempt
+					}
+				}
+			}
+		}
+		return s, nil
+	}
+	head := c.WorkerHeadSHA
+	if head == "" {
+		head = c.HeadSHA
+	}
+	if head == "" && !c.laneReleasedForReplay() {
+		head = l.headOf(ctx, c.LaneID)
+	}
+	if head == "" {
+		return nil, nil
+	}
+	base := c.BaseSHA
+	if base == "" && !c.laneReleasedForReplay() {
+		base = l.laneBase(c.LaneID)
+	}
+	if base == "" {
+		dir := RunDir(l.cfg.Root, c.RunID)
+		for _, name := range []string{ItemBaseSHAFile, BaseSHAFile} {
+			if raw, readErr := os.ReadFile(filepath.Join(dir, name)); readErr == nil && strings.TrimSpace(string(raw)) != "" {
+				base = strings.TrimSpace(string(raw))
+				break
+			}
+		}
+	}
+	if base == "" {
+		return nil, nil
+	}
+	decision, found, err := l.startedDecision(ctx, writerID)
+	if err != nil {
+		return nil, err
+	}
+	if found && (decision.BlockConflict != nil || decision.DeskDocument != "") {
+		return nil, nil
+	}
+	wf := decision.Workflow
+	nodeIndex := decision.NodeIndex
+	attempt := decision.Attempt
+	if wf == nil && isConflictFixRun(writerID) {
+		orig, origFound, err := l.startedDecision(ctx, conflictFixOriginal(writerID))
+		if err != nil {
+			return nil, err
+		}
+		if origFound {
+			if orig.BlockConflict != nil || orig.DeskDocument != "" {
+				return nil, nil
+			}
+			wf = orig.Workflow
+			nodeIndex = orig.NodeIndex
+			if orig.Attempt > 0 {
+				attempt = orig.Attempt
+			}
+		}
+	}
+	session := &WorkerSession{
+		RunID:       c.RunID,
+		LaneDir:     l.laneDirPath(c.LaneID),
+		LaneID:      c.LaneID,
+		BaseSHA:     base,
+		HeadSHA:     head,
+		NodeBaseSHA: head,
+		Attempt:     attempt,
+	}
+	if wf != nil {
+		if gw, gnode := buildStageForGateReturn(wf, nodeIndex); gw != nil {
+			session.Workflow, session.NodeIndex = gw, gnode
+		}
+	}
+	return session, nil
 }
 
 func (l *Loop) captureSession(ctx context.Context, c Candidate, allowClassification bool) (*WorkerSession, error) {
@@ -271,7 +447,16 @@ func (l *Loop) retainedWorkerSession(ctx context.Context, runID string) (*Worker
 			return err
 		}
 		session = p.WorkerSession
-		if session == nil || p.Step != RefusalVerifyNotDone {
+		if session == nil {
+			return nil
+		}
+		if p.Step == RefusalGate && session.SessionID == "" {
+			// No resumable session is held on the lane; the refused candidate is pinned
+			// for fresh staging on whichever lane the next run receives.
+			session = nil
+			return nil
+		}
+		if p.Step != RefusalVerifyNotDone {
 			return nil
 		}
 		// Use the recorded hold, not the current fault: an operator may have
@@ -356,7 +541,7 @@ func carryReturnedNodeInputs(tx *store.Tx, d Decision) error {
 	var old *WorkerSession
 	if c := d.RetryCandidate; c != nil && c.Available {
 		old = c.WorkerSession
-	} else if d.Returned != nil && d.RunRequest != nil && (d.RunRequest.SessionTurn || d.WorkerSessionReason == "resume-failed" || verifyBuildReturn(d.Returned) || verifyNoVerdictReturn(d.Returned)) {
+	} else if d.Returned != nil && d.RunRequest != nil && (d.RunRequest.SessionTurn || d.WorkerSessionReason == "resume-failed" || verifyBuildReturn(d.Returned) || verifyNoVerdictReturn(d.Returned) || gateBuildReturn(d.Returned)) {
 		old = d.Returned.WorkerSession
 	}
 	if d.RunRequest == nil || d.Workflow == nil || old == nil {

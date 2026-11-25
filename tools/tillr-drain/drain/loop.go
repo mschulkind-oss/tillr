@@ -201,7 +201,11 @@ type Candidate struct {
 	EvaluatorTask   string            `json:"-"`
 	// VerifyReplan is set on a verify-not-done refusal whose findings say the plan was
 	// wrong (a reason beginning plan-wrong:); the item then returns to the plan step.
-	VerifyReplan   bool `json:"-"`
+	VerifyReplan bool `json:"-"`
+	// RestartOnTip is set when a gate failure was red only on an old base that the trunk
+	// has already repaired and the lane was released for replay, so the next run starts
+	// from the latest trunk rather than from the old candidate commit.
+	RestartOnTip   bool `json:"-"`
 	verifyFeedback *verifyFeedback
 	// Runtime-only observation, sampled when the gate records a stall.
 	gateCount     func() int
@@ -1867,9 +1871,9 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			spec.KeptHeadSHA = decision.RetryCandidate.HeadSHA
 			spec.KeptItemBaseSHA = decision.RetryCandidate.BaseSHA
 		}
-		freshVerifyReturn := (decision.Reason == ReasonReturned || decision.Action == ActionRetry) && (verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned)) && !request.SessionTurn
-		if freshVerifyReturn {
-			// A fresh build run keeps the candidate the verifier read, even on a cold lane.
+		freshCandidateReturn := (decision.Reason == ReasonReturned || decision.Action == ActionRetry) && (verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned) || gateBuildReturn(decision.Returned)) && !request.SessionTurn
+		if freshCandidateReturn {
+			// A fresh build run keeps the candidate the verifier or gate read, even on a cold lane.
 			s := decision.Returned.WorkerSession
 			spec.KeptHeadSHA = s.HeadSHA
 			spec.KeptItemBaseSHA = s.BaseSHA
@@ -1922,7 +1926,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			spec.InputPaths = paths
 			if !revertedSession {
-				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry && !freshVerifyReturn && decision.RetryCandidate == nil) || decision.WorkflowRestart
+				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry && !freshCandidateReturn && decision.RetryCandidate == nil) || decision.WorkflowRestart
 			}
 			if decision.NodeIndex == 1 && spec.KeptHeadSHA == "" &&
 				((classificationNode(decision.Workflow.Stages[0]) &&
@@ -2176,7 +2180,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			l.clearStageInfraLine(request.ItemID, decision.LaneID)
 			if decision.Workflow != nil {
-				if spec.preservedConflict != nil || decision.NodeBaseSHA == "" || (decision.NodeIndex == 0 && !request.SessionTurn && !resumeCommitted) || revertedSession {
+				if spec.preservedConflict != nil || decision.NodeBaseSHA == "" || (decision.NodeIndex == 0 && !request.SessionTurn && !resumeCommitted && spec.KeptHeadSHA == "") || revertedSession {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
 				}
 				decision.NodeBaseSHA = l.baseInCheckout(ctx, decision.LaneID, decision.NodeBaseSHA)

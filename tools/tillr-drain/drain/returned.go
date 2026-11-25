@@ -204,7 +204,11 @@ func returnedBrief(e ReturnedEnding) string {
 	fmt.Fprintf(&b, "This item's previous run, %s, did not land. ", e.RunID)
 	switch e.Cause {
 	case RefusalGate:
-		b.WriteString("The gate refused its candidate.")
+		if gateBuildReturn(&e) {
+			b.WriteString("The gate refused the candidate commit this run starts from. Fix the findings on this candidate commit and keep the commit clean; if they cannot be met within the plan, end with RESULT: blocked, OBSTACLE: definition, CRITERIA: plan, and EVIDENCE: plan-wrong: <reason>.")
+		} else {
+			b.WriteString("The gate refused its candidate.")
+		}
 	case RefusalVerifyNotDone:
 		switch {
 		case verifyBuildReturn(&e):

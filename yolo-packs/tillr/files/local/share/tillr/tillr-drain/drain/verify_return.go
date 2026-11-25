@@ -168,13 +168,17 @@ func (l *Loop) verifyBuildSession(ctx context.Context, c Candidate) (*WorkerSess
 // the evaluator: it runs after every required stage and before the evaluator, and is
 // required to pass.
 func insertVerifyWorkStage(w *Workflow, evaluator int) {
+	insertRepairWorkStage(w, evaluator, "the verifier's findings")
+}
+
+func insertRepairWorkStage(w *Workflow, evaluator int, findings string) {
 	var planned []string
 	for _, s := range w.Stages[:evaluator] {
 		if s.Access == "write" {
 			planned = append(planned, fmt.Sprintf("- %s (seat %s): %s", s.ID, s.Seat, strings.TrimSpace(s.Prompt)))
 		}
 	}
-	prompt := "Repair the candidate commit this run starts from against the verifier's findings. The plan divided the work into these pieces:\n" + strings.Join(planned, "\n")
+	prompt := "Repair the candidate commit this run starts from against " + findings + ". The plan divided the work into these pieces:\n" + strings.Join(planned, "\n")
 	stage := WorkflowStage{ID: verifyReturnWorkStage, Parent: verifyReturnWorkStage, Kind: "agent", Seat: "build", Access: "write", Prompt: prompt}
 	// A repair may need to change any piece of the candidate, not just the last writer's scope.
 	stage.WriteScope = WorkflowScope{}
