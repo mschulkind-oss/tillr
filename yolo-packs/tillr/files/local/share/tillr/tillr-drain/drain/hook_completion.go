@@ -30,17 +30,8 @@ type completionSteps interface {
 	CompleteItem(context.Context, string, string, definition.Definition) (bool, error)
 }
 
-// ConfigureNonLanding supplies the root-relative extractor directory explicitly:
-// the run utility otherwise derives its default by invoking Git.
-func (s *ProcessSteps) ConfigureNonLanding() {
-	if s.BackendsDir == "" && s.Root != "" {
-		root := s.Root
-		if absRoot, err := filepath.Abs(root); err == nil {
-			root = absRoot
-		}
-		s.BackendsDir = filepath.Join(root, "tools", "tillr-run", "backends")
-	}
-}
+// ConfigureNonLanding is called when a definition completes without landing.
+func (s *ProcessSteps) ConfigureNonLanding() {}
 
 // CompleteItem calls the definition outside any store transaction. The state
 // subprocess alone checks verdict receipts and moves the item in one write.

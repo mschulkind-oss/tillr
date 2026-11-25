@@ -198,6 +198,7 @@ class Fixture:
 
     def env(self, **extra):
         env = dict(os.environ)
+        env.pop("TILLR_INSTALL_ROOT", None)
         env["PATH"] = f"{self.bin}:{os.environ['PATH']}"
         env["STUB_LOG"] = str(self.log)
         env["STUB_ITEM_SHOW"] = str(self.item_show)
@@ -262,9 +263,8 @@ def test_gate_names_the_gate_program_and_its_argv(tmp):
     """The gate's judgment is `tillr-gate run --gate <program>`, and the argv is exact.
 
     The adapter hands the program's own words on as `--gate` plus one `--gate-arg` each,
-    and the default program is this tree's gate scoped to the candidate's base. The
-    program path is relative: an absolute path would judge the checkout the loop runs
-    from instead of the candidate's worktree.
+    and the default program resolves `change-gate.py` from `tillr-gate`'s installation,
+    scoped to the candidate's base.
 
     Negative control: the stub only hands the program on when the case asks it to
     (`STUB_EXEC_GATE`), and a stub that answered the exit itself while never invoking the
@@ -277,21 +277,19 @@ def test_gate_names_the_gate_program_and_its_argv(tmp):
     assert result.returncode == GATE_PASS, (result.returncode, result.stderr)
     runs = [call for call in fixture.calls() if call.startswith("run ")]
     assert runs, fixture.calls()
+    installed_gate = str(HERE.parent / "tillr-gate" / "change-gate.py")
     want = (
         "--logs " + str(fixture.run_dir / "logs")
-        + " --gate python3 --gate-arg tools/gate/change-gate.py --gate-arg --base"
+        + " --gate python3 --gate-arg " + installed_gate + " --gate-arg --base"
         + " --gate-arg " + fixture.base
         + " --gate-arg --head --gate-arg " + fixture.head
         + " --gate-arg --runner --gate-arg tillr-gate"
         + " --gate-arg --logs --gate-arg " + str(fixture.run_dir / "change-logs")
     )
     assert want in runs[-1], runs[-1]
-    # What `tillr-gate run` is handed: the program is relative, so the face's own
-    # `cmd.Dir = <worktree>` resolves it inside the tree being judged, and the range is
-    # the candidate's base.
     programs = [c for c in fixture.calls() if c.startswith("python3-argv: ")]
     assert programs == [
-        "python3-argv: tools/gate/change-gate.py --base " + fixture.base
+        "python3-argv: " + installed_gate + " --base " + fixture.base
         + " --head " + fixture.head + " --runner tillr-gate --logs "
         + str(fixture.run_dir / "change-logs")
     ], fixture.calls()
@@ -457,7 +455,7 @@ def test_revision_hooks_run_declared_tree_checks_and_keep_exit_status(tmp):
 
     The exit status and both output streams are the judge's own, because the adapter
     replaces itself with it. A heavy declaration is named to `tillr-gate checks
-    --heavy-tree --only`; a fast one goes to the tree's `tools/gate/tree-check.py`.
+    --heavy-tree --only`; a fast one goes to `tillr-gate`'s installed `tree-check.py`.
 
     Negative controls: a change-scope declaration and an undeclared id are refused with
     exit 4 and run nothing, since neither has a verdict on a single revision.
@@ -466,7 +464,9 @@ def test_revision_hooks_run_declared_tree_checks_and_keep_exit_status(tmp):
     declare(fixture, "heavy-one", "tree", "heavy")
     declare(fixture, "fast-one", "tree", "fast")
     declare(fixture, "change-one", "change", "fast")
-    tree_check = fixture.repo / "tools" / "gate" / "tree-check.py"
+    install_root = fixture.tmp / "install"
+    (install_root / "tillr-gate").mkdir(parents=True)
+    tree_check = install_root / "tillr-gate" / "tree-check.py"
     tree_check.write_text("import os, sys\n"
                           "open(os.environ['STUB_LOG'], 'a').write('tree-check ' + ' '.join(sys.argv[1:]) + '\\n')\n"
                           "sys.exit(int(os.environ.get('STUB_REVISION', '0')))\n")
@@ -493,7 +493,7 @@ def test_revision_hooks_run_declared_tree_checks_and_keep_exit_status(tmp):
     for code in (0, 1, 6):
         fixture.log.write_text("")
         result = subprocess.run([sys.executable, str(ADAPTER), "replay", "--only", "fast-one"],
-                                cwd=fixture.repo, env=fixture.env(STUB_REVISION=code),
+                                cwd=fixture.repo, env=fixture.env(STUB_REVISION=code, TILLR_INSTALL_ROOT=install_root),
                                 capture_output=True, text=True)
         assert result.returncode == code, (result.returncode, result.stderr)
         assert fixture.calls() == ["tree-check --only fast-one --base HEAD --head HEAD --runner "
@@ -807,7 +807,8 @@ def test_self_check_names_argv_without_running_it(tmp):
     assert "tillr-gate run" in out, out
     # The gate's judgment and the logs its verdict will name are visible before a night of
     # ticks, not discovered from a directory afterwards.
-    assert "--gate python3 --gate-arg tools/gate/change-gate.py" in out, out
+    installed_gate = str(HERE.parent / "tillr-gate" / "change-gate.py")
+    assert "--gate python3 --gate-arg " + installed_gate in out, out
     assert "--gate-arg --base --gate-arg " + fixture.base in out, out
     assert "--gate-arg --head --gate-arg " + fixture.head in out, out
     assert "--logs " + str(fixture.run_dir / "logs") in out, out
@@ -905,6 +906,112 @@ def test_the_three_faces_agree_on_the_run_directory_from_any_cwd(tmp):
         + from_lane)
 
 
+def test_consumer_repo_uses_installed_runners_ignoring_worktree_decoy(tmp):
+    """A consumer repo with no tillr source (and a decoy under tools/gate/) uses TILLR_INSTALL_ROOT."""
+    fixture = Fixture(tmp)
+    fixture.write_stub("python3", PYTHON_STUB)
+    git(fixture.repo, "checkout", "tillr/lane-1")
+    declare(fixture, "fast-one", "tree", "fast")
+    # Decoys in the consumer worktree must never be resolved or executed.
+    decoy_gate = fixture.repo / "tools" / "gate" / "change-gate.py"
+    decoy_tree = fixture.repo / "tools" / "gate" / "tree-check.py"
+    decoy_gate.write_text("import sys; sys.exit(99)\n")
+    decoy_tree.write_text("import sys; sys.exit(99)\n")
+
+    install_root = fixture.tmp / "install"
+    install_gate_dir = install_root / "tillr-gate"
+    install_gate_dir.mkdir(parents=True)
+    installed_change = install_gate_dir / "change-gate.py"
+    installed_tree = install_gate_dir / "tree-check.py"
+    installed_change.write_text("# installed change-gate\n")
+    installed_tree.write_text(
+        "import os, sys\n"
+        "open(os.environ['STUB_LOG'], 'a').write('installed-tree-check ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+        "sys.exit(0)\n"
+    )
+
+    env = fixture.env(TILLR_INSTALL_ROOT=install_root, STUB_EXEC_GATE="1")
+    result = fixture.run_adapter("gate", env=env)
+    assert result.returncode == GATE_PASS, (result.returncode, result.stderr)
+    calls = fixture.calls()
+    assert any(c.startswith("plan ") and f"--registry {fixture.repo / 'tools' / 'gate' / 'checks'}" in c for c in calls), calls
+    assert any(c == f"python3-argv: {installed_change} --base {fixture.base} --head {fixture.head} --runner tillr-gate --logs {fixture.run_dir / 'change-logs'}" for c in calls), calls
+
+    # self-check also prints the installed runner.
+    fixture.gate_verdict()
+    sc = fixture.run_adapter("self-check", env=fixture.env(TILLR_INSTALL_ROOT=install_root))
+    assert sc.returncode == 0, (sc.returncode, sc.stderr)
+    assert f"--gate python3 --gate-arg {installed_change}" in sc.stdout, sc.stdout
+
+    # replay and fixer-gate resolve tree-check.py from TILLR_INSTALL_ROOT, ignoring decoy.
+    for kind, extra in (("replay", ["--only", "fast-one"]),
+                        ("fixer-gate", [*fixture.candidate(), "--only", "fast-one"])):
+        fixture.log.write_text("")
+        res = subprocess.run([sys.executable, str(ADAPTER), kind, *extra],
+                             cwd=fixture.repo, env=fixture.env(TILLR_INSTALL_ROOT=install_root),
+                             capture_output=True, text=True)
+        assert res.returncode == 0, (kind, res.returncode, res.stderr)
+        assert any(c.startswith("installed-tree-check --only fast-one ") for c in fixture.calls()), (kind, fixture.calls())
+
+
+def test_missing_or_invalid_installed_runner_refuses(tmp):
+    """Missing installed runners refuse with EXIT_EXTERNAL naming the path; --gate-program still works."""
+    fixture = Fixture(tmp)
+    git(fixture.repo, "checkout", "tillr/lane-1")
+    declare(fixture, "fast-one", "tree", "fast")
+    # Decoys in the consumer worktree must never act as a fallback.
+    (fixture.repo / "tools" / "gate" / "change-gate.py").write_text("import sys; sys.exit(0)\n")
+    (fixture.repo / "tools" / "gate" / "tree-check.py").write_text("import sys; sys.exit(0)\n")
+
+    missing_root = fixture.tmp / "empty-install"
+    (missing_root / "tillr-gate").mkdir(parents=True)
+    missing_change = missing_root / "tillr-gate" / "change-gate.py"
+    missing_tree = missing_root / "tillr-gate" / "tree-check.py"
+
+    # Missing change-gate.py refuses gate and self-check with exit 4 naming the installed path.
+    for kind in ("gate", "self-check"):
+        fixture.log.write_text("")
+        res = fixture.run_adapter(kind, env=fixture.env(TILLR_INSTALL_ROOT=missing_root))
+        assert res.returncode == GATE_COULD_NOT_JUDGE, (kind, res.returncode, res.stderr)
+        assert str(missing_change) in res.stderr, (kind, res.stderr)
+        assert fixture.calls() == [], (kind, fixture.calls())
+
+    # Missing tree-check.py refuses replay and fixer-gate with exit 4 naming the installed path.
+    for kind, extra in (("replay", ["--only", "fast-one"]),
+                        ("fixer-gate", [*fixture.candidate(), "--only", "fast-one"])):
+        res = subprocess.run([sys.executable, str(ADAPTER), kind, *extra],
+                             cwd=fixture.repo, env=fixture.env(TILLR_INSTALL_ROOT=missing_root),
+                             capture_output=True, text=True)
+        assert res.returncode == GATE_COULD_NOT_JUDGE, (kind, res.returncode, res.stderr)
+        assert str(missing_tree) in res.stderr, (kind, res.stderr)
+
+    # Relative TILLR_INSTALL_ROOT refuses with exit 4 naming TILLR_INSTALL_ROOT.
+    rel = fixture.run_adapter("gate", env=fixture.env(TILLR_INSTALL_ROOT="relative/install"))
+    assert rel.returncode == GATE_COULD_NOT_JUDGE, (rel.returncode, rel.stderr)
+    assert "TILLR_INSTALL_ROOT" in rel.stderr, rel.stderr
+
+    # Standalone / stdin invocation in a consumer repo without TILLR_INSTALL_ROOT refuses.
+    stdin_res = subprocess.run(
+        [sys.executable, "-", "gate", *fixture.candidate(), *fixture.common()],
+        input=ADAPTER.read_text(),
+        cwd=fixture.repo,
+        env=fixture.env(),
+        capture_output=True,
+        text=True,
+    )
+    assert stdin_res.returncode == GATE_COULD_NOT_JUDGE, (stdin_res.returncode, stdin_res.stderr)
+    assert "TILLR_INSTALL_ROOT" in stdin_res.stderr, stdin_res.stderr
+
+    # Explicit --gate-program override still works even when TILLR_INSTALL_ROOT lacks change-gate.py.
+    override = fixture.run_adapter(
+        "gate",
+        ["--gate-program", "custom-gate --flag"],
+        env=fixture.env(TILLR_INSTALL_ROOT=missing_root),
+    )
+    assert override.returncode == GATE_PASS, (override.returncode, override.stderr)
+    runs = [c for c in fixture.calls() if c.startswith("run ")]
+    assert runs and "--gate custom-gate --gate-arg --flag" in runs[-1], runs
+
 
 def main():
     failures = []
@@ -937,6 +1044,8 @@ def main():
             test_self_check_shows_the_declarations_directory,
             test_no_root_refuses,
             test_the_three_faces_agree_on_the_run_directory_from_any_cwd,
+            test_consumer_repo_uses_installed_runners_ignoring_worktree_decoy,
+            test_missing_or_invalid_installed_runner_refuses,
         ]
         # Every case runs, and every failure is reported before the exit: one broken case
         # used to stop the run, so the cases after it were never read and a second stale

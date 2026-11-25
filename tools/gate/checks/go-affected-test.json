@@ -28,7 +28,7 @@
     "tools/tillr/",
     "tools/gate/checks/go-affected.json",
     "tools/go-test-shards.py",
-    "tools/gate/change-gate.py"
+    "tools/tillr-gate/change-gate.py"
   ],
   "tools": [
     "python3",

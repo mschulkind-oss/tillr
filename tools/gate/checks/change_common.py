@@ -15,6 +15,7 @@ import roadmap_sections
 
 # The checks are executable scripts in a subdirectory of the gate adapters.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tillr-gate"))
 
 HEAD = "HEAD"
 TS_SIZE_WARN_LINES = 2000
@@ -328,7 +329,7 @@ def identity_findings(root, base, head):
 DOCUMENT_MEMORY_FORMAT = "documents-1"
 DOCUMENT_CHECK_FILES = ("tools/gate/checks/documents.json", "tools/gate/checks/documents.py",
                         "tools/gate/checks/change_common.py", "tools/gate/checks/roadmap_sections.py",
-                        "tools/gate/classify.py")
+                        "tools/tillr-gate/classify.py")
 DOCUMENT_CONFIG_NAMES = (".vantage.toml", ".vantageignore")
 LINK_DESTINATIONS = (
     re.compile(r"\]\(\s*<([^>\n]*)>"),

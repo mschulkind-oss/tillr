@@ -7,8 +7,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SITES = {
-    "tools/gate/tree-check.py": ("main",),
-    "tools/gate/change-gate.py": ("main", "warm_trimmed_go_cache"),
+    "tools/tillr-gate/tree-check.py": ("main",),
+    "tools/tillr-gate/change-gate.py": ("main", "warm_trimmed_go_cache"),
     "tools/gate/checks/change_common.py": ("stored_result", "judge_document_set"),
     "tools/gate/checks/go-build.py": ("main",),
 }

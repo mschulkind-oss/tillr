@@ -244,7 +244,7 @@ def module_keys(root, modules):
         return {}
     entries = tree_entries(root)
     code_paths = ("tools/gate/checks/go-build.py", "tools/gate/checks/change_common.py",
-                  "tools/gate/checks/roadmap_sections.py", "tools/gate/classify.py")
+                  "tools/gate/checks/roadmap_sections.py", "tools/tillr-gate/classify.py")
     code = {p: entries.get(p, ("", "", "absent"))[2] for p in code_paths}
     env = build_env()
     settings, version_stdout = _go_metadata(root, env)

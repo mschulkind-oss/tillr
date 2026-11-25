@@ -303,8 +303,8 @@ def test_selection_rules(root_graph: dict) -> None:
             "github.com/mschulkind-oss/tillr-drain",
             "github.com/mschulkind-oss/tillr-drain/drain",
         }),
-        ("tools/gate/change-gate.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
-        ("tools/gate/classify.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
+        ("tools/tillr-gate/change-gate.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
+        ("tools/tillr-gate/classify.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("tools/tillr-loop/drain-argv.json", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("yolo-packs/tillr/pack.json", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("tools/tillr/store/testdata/crash_writer.py", {
@@ -327,7 +327,7 @@ def test_selection_rules(root_graph: dict) -> None:
 
     # 10. Scoped read_tests on one read path select only the reading packages and narrow
     # each to its reader tests, whether the path changes alone or beside an unrelated file.
-    scoped_read = "tools/gate/change-gate.py"
+    scoped_read = "tools/tillr-loop/tillr-loop"
     drain_pkg = "github.com/mschulkind-oss/tillr-drain/drain"
     gate_pkg = "github.com/mschulkind-oss/tillr-gate"
     drain_readers = go_affected.scan_package_tests(ROOT, {

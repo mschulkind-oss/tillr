@@ -26,6 +26,14 @@ func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
 	}
 	f, _ := passFixture(t, "item-a")
 	adapterStubs(t)
+	installRoot := t.TempDir()
+	installGate := filepath.Join(installRoot, "tillr-gate")
+	if err := os.MkdirAll(installGate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(installGate, "change-gate.py"), "print('change gate ran')\n")
+	writeForkFile(t, filepath.Join(installGate, "tree-check.py"), "print('named check ran')\n")
+	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	worktree := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
 	head := runGit(t, worktree, "rev-parse", "HEAD")
 	if err := os.MkdirAll(filepath.Join(worktree, "tools"), 0755); err != nil {
@@ -67,13 +75,12 @@ func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
 				}
 			case "fixer-gate":
 				// The named check is a fast whole-tree declaration, so the adapter hands it to
-				// the tree's own tree-check program; the stand-in answers a pass.
+				// tillr-gate's installed tree-check program; the stand-in answers a pass.
 				if err := os.MkdirAll(filepath.Join(worktree, "tools", "gate", "checks"), 0o755); err != nil {
 					t.Fatal(err)
 				}
 				writeForkFile(t, filepath.Join(worktree, "tools", "gate", "checks", "fixture.json"),
 					`{"id": "`+values["--only"]+`", "scope": "tree", "tier": "fast"}`+"\n")
-				writeForkFile(t, filepath.Join(worktree, "tools", "gate", "tree-check.py"), "print('named check ran')\n")
 				if answer, output := steps.fixerCheck(context.Background(), c, values["--only"]); answer != "pass" {
 					t.Fatalf("named check %s: %s", answer, output)
 				}

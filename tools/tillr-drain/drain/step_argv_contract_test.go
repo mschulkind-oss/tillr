@@ -148,6 +148,18 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 	repo, _ := repositoryFile(t, "tools/tillr-loop/tillr-loop")
 	f, _ := passFixture(t, "item-a")
 	log := adapterStubs(t)
+	installRoot := scratchUnderDurable(t)
+	_, changeGateSrc := repositoryFile(t, "tools/tillr-gate/change-gate.py")
+	changeGateRaw, err := os.ReadFile(changeGateSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(installRoot, "tillr-gate"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(installRoot, "tillr-gate", "change-gate.py"), string(changeGateRaw))
+	writeForkFile(t, filepath.Join(installRoot, "tillr-gate", "tree-check.py"), "import sys\nassert sys.argv[1:3] == ['--only', 'fixture/check']\n")
+	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	worktree := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
 	// Like a consumer repository, the fixture worktree has no adapter source.
 	// The keeper's commands and the fixer default use the running build's copy.
@@ -191,7 +203,6 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeForkFile(t, filepath.Join(worktree, "tools", "gate", "checks", "fixture.json"), `{"id": "fixture/check", "scope": "tree", "tier": "fast"}`+"\n")
-	writeForkFile(t, filepath.Join(worktree, "tools", "gate", "tree-check.py"), "import sys\nassert sys.argv[1:3] == ['--only', 'fixture/check']\n")
 	if answer, output := steps.fixerCheck(ctx, c, "fixture/check"); answer != "pass" {
 		t.Fatalf("named check %s: %s", answer, output)
 	}

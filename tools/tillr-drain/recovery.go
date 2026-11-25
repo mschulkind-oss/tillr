@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -37,7 +38,7 @@ func recoveryFace(face string, args []string) int {
 		verdict = fs.String("verdict", "", "the loop's verdict program")
 		itemBin = fs.String("item-bin", "tillr-item", "the item-state program used by the loop")
 		runBin = fs.String("run-bin", "tillr-run", "the run program used for the loop's conflict repair")
-		template = fs.String("brief-template", "", "the loop's brief template (default <root>/tools/tillr-run/backends/brief-template.md)")
+		template = fs.String("brief-template", "", "the loop's brief template (default: the installed tillr-run template)")
 		questionsCmd = fs.String("questions-cmd", "", questionsCmdHelp)
 		replay = fs.String("replay", drain.DefaultReplayProgram, "the loop's failing-check replay program")
 		fixerGate = fs.String("fixer-gate", drain.DefaultFixerGateProgram, "the loop's named-check judge for trunk fixers")
@@ -102,7 +103,11 @@ func recoveryFace(face string, args []string) int {
 		steps.ItemBin, steps.RunBin = *itemBin, *runBin
 		steps.ReplayProgram, steps.FixerGateProgram = *replay, *fixerGate
 		if *template == "" {
-			*template = filepath.Join(*root, "tools", "tillr-run", "backends", "brief-template.md")
+			resolved, err := run.ResolveBriefTemplate()
+			if err != nil {
+				return fail(drain.Usagef("--brief-template: %v", err))
+			}
+			*template = resolved
 		}
 		stager.Template = *template
 		questions = commandFields(*questionsCmd)

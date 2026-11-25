@@ -103,9 +103,11 @@ EXIT_STALLED = 6
 CANDIDATE_FIELDS = ("item", "lane", "run", "worktree", "base", "head")
 
 # Judge change declarations with the caller's base and head, then run the remaining
-# repository checks. Relative program paths resolve inside the candidate worktree.
-DEFAULT_GATE_PROGRAM = ("python3 tools/gate/change-gate.py --base {base} --head {head} "
+# repository checks. The default runner resolves from tillr-gate's installation.
+DEFAULT_GATE_PROGRAM = ("python3 {script} --base {base} --head {head} "
                         "--runner {runner} --logs {logs}")
+
+GATE_MODULE_HEADER = "module github.com/mschulkind-oss/tillr-gate"
 
 # The check registry a gate run plans from when the caller names none: the candidate's
 # own declarations, one JSON file per check.
@@ -290,7 +292,7 @@ def criterion_hash(text: str) -> str:
 def compose_gate(ctx: Ctx, dry: bool) -> list[Step]:
     """Derive the change, plan it, then judge it with `tillr-gate run`.
 
-    The judge is `tools/gate/change-gate.py`, run through `tillr-gate run --gate`. The real
+    The judge is `tillr-gate`'s installed `change-gate.py`, run through `tillr-gate run --gate`. The real
     registry owes three in-process checks (file-size, scratch, design-citations) on every
     change, and `tillr-gate run` refuses to answer for a check it cannot run — so a plan
     judged by that face alone is `error` for every candidate. The two faces are not
@@ -684,7 +686,11 @@ def parser_for(kind: str) -> argparse.ArgumentParser:
                                  f"${REGISTRY_ENV}, else the candidate's tools/gate/checks directory)")
         parser.add_argument("--gate-program", default=None,
                             help="the program `tillr-gate run --gate` runs (default: "
-                                 f"{DEFAULT_GATE_PROGRAM})")
+                                 + DEFAULT_GATE_PROGRAM.format(
+                                     script="<tillr-gate>/change-gate.py",
+                                     base="{base}", head="{head}",
+                                     runner="{runner}", logs="{logs}")
+                                 + ")")
     if kind in ("land", "self-check"):
         parser.add_argument("--base-ref", default=None, help="the branch the base sha is on")
         parser.add_argument("--message-from", default=None,
@@ -703,8 +709,60 @@ def parser_for(kind: str) -> argparse.ArgumentParser:
     return parser
 
 
+def _is_tillr_gate_dir(path: Path) -> bool:
+    gomod = path / "go.mod"
+    try:
+        if not gomod.is_file():
+            return False
+        first_line = gomod.read_text(encoding="utf-8").splitlines()[0]
+    except (OSError, UnicodeError, IndexError):
+        return False
+    return first_line == GATE_MODULE_HEADER
+
+
+def resolve_gate_runner(script: str) -> str:
+    """Resolve a tillr-gate runner script from tillr-gate's installation.
+
+    Never walks consumer ancestors, never searches PATH, and never falls back to
+    <worktree>/tools/gate/<script>.
+    """
+    install_root = os.environ.get("TILLR_INSTALL_ROOT", "")
+    if install_root:
+        root_path = Path(install_root)
+        if not root_path.is_absolute():
+            raise Refusal(
+                EXIT_EXTERNAL,
+                f"TILLR_INSTALL_ROOT must be absolute: {install_root}",
+            )
+        gate_dir = root_path / "tillr-gate"
+    else:
+        gate_dir = None
+        if "__file__" in globals() and __file__ not in ("-", "<stdin>"):
+            sibling = Path(__file__).resolve().parent.parent / "tillr-gate"
+            if _is_tillr_gate_dir(sibling):
+                gate_dir = sibling
+        if gate_dir is None:
+            cwd = Path.cwd().resolve()
+            checkout = cwd.parent.parent if cwd.parent.name == "tools" else cwd
+            candidate = checkout / "tools" / "tillr-gate"
+            if _is_tillr_gate_dir(candidate):
+                gate_dir = candidate
+        if gate_dir is None:
+            raise Refusal(
+                EXIT_EXTERNAL,
+                f"cannot locate tillr-gate installation for {script}; set TILLR_INSTALL_ROOT",
+            )
+    runner_path = gate_dir / script
+    if not runner_path.is_file():
+        raise Refusal(
+            EXIT_EXTERNAL,
+            f"installed tillr-gate runner {runner_path} is missing or not a regular file",
+        )
+    return str(runner_path)
+
+
 def gate_program(args: argparse.Namespace) -> str | None:
-    """The program `tillr-gate run --gate` executes: the caller's, or this tree's gate.
+    """The program `tillr-gate run --gate` executes: the caller's, or tillr-gate's installed runner.
 
     Only the gate face has one. The default is built from the candidate's base sha, which
     is the range the change record states, so the plan and the judgment cover one diff.
@@ -713,9 +771,11 @@ def gate_program(args: argparse.Namespace) -> str | None:
         return None
     if args.gate_program:
         return args.gate_program
+    script = resolve_gate_runner("change-gate.py")
     root = resolve_root(args.root, args.worktree)
     logs = Path(args.work_dir or str(Path(root) / ".tillr" / "loop")) / args.run / "change-logs"
     return DEFAULT_GATE_PROGRAM.format(
+        script=shlex.quote(script),
         base=shlex.quote(args.base), head=shlex.quote(args.head),
         runner=shlex.quote(args.tillr_gate), logs=shlex.quote(str(logs)))
 
@@ -837,7 +897,7 @@ def revision_check(kind: str, args: argparse.Namespace) -> int:
         if tier == "heavy":
             argv += ["--only", args.only]
         else:
-            argv = [sys.executable, "tools/gate/tree-check.py", "--only", args.only,
+            argv = [sys.executable, resolve_gate_runner("tree-check.py"), "--only", args.only,
                     "--base", "HEAD", "--head", "HEAD", "--runner", runner]
     try:
         # Keep the PID the drain signals: the judge owns the separate check sessions.

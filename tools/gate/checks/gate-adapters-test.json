@@ -4,7 +4,7 @@
   "command": [
     "sh",
     "-c",
-    "python3 tools/gate/change-gate.test.py && python3 tools/gate/classification-scan.test.py && python3 tools/gate/done.test.py"
+    "python3 tools/tillr-gate/change-gate.test.py && python3 tools/gate/classification-scan.test.py && python3 tools/gate/done.test.py"
   ],
   "scope": "tree",
   "tier": "heavy",

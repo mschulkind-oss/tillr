@@ -43,6 +43,9 @@ class Changes(unittest.TestCase):
         self.git("init", "-q")
         (self.repo / "README.md").write_text("# Fixture\n")
         shutil.copytree(ROOT / "tools/gate", self.repo / "tools/gate", ignore=shutil.ignore_patterns("__pycache__"))
+        (self.repo / "tools/tillr-gate").mkdir(parents=True)
+        for name in ("change-gate.py", "tree-check.py", "classify.py"):
+            shutil.copy(ROOT / "tools/tillr-gate" / name, self.repo / "tools/tillr-gate" / name)
         # These cases judge routing and findings, not whether a subprocess fits a
         # production fast budget. Deadline semantics have signal-blocking Go cases.
         for path in (self.repo / "tools/gate/checks").glob("*.json"):
@@ -669,7 +672,7 @@ sys.exit(rc)
         base = self.commit()  # The stubbed commands are fixture infrastructure, not the candidate.
         (self.repo / "README.md").write_text("# Changed\n")
         head = self.commit()
-        result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", base,
+        result = subprocess.run(["python3", "tools/tillr-gate/change-gate.py", "--base", base,
                                  "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
                                 cwd=self.repo, env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -716,7 +719,7 @@ sys.exit(rc)
         self.base = self.commit()
         (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
         head = self.commit()
-        result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", self.base,
+        result = subprocess.run(["python3", "tools/tillr-gate/change-gate.py", "--base", self.base,
                                  "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
                                 cwd=self.repo, env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -725,7 +728,7 @@ sys.exit(rc)
         # The renderer is unavailable outright: it cannot check, and it cannot say which
         # version it is, so the pass the first run remembered cannot be confirmed either.
         self.env.update(RENDER_RC="3", RENDER_VERSION_RC="3")
-        result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", self.base,
+        result = subprocess.run(["python3", "tools/tillr-gate/change-gate.py", "--base", self.base,
                                  "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
                                 cwd=self.repo, env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 4)
@@ -742,7 +745,7 @@ sys.exit(rc)
                           f"open({str(self.repo / 'runner-args.json')!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
                           "sys.exit(1)\n")
         runner.chmod(0o755)
-        result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", self.base,
+        result = subprocess.run(["python3", "tools/tillr-gate/change-gate.py", "--base", self.base,
                                  "--head", head, "--runner", str(runner), "--logs", str(self.repo / "logs")],
                                 cwd=self.repo, env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -768,7 +771,7 @@ sys.exit(rc)
                           "if '--help' in sys.argv:\n print('  -fast-tree')\n sys.exit(0)\n"
                           f"open({str(log)!r}, 'a').write('runner\\n')\nsys.exit(1)\n")
         runner.chmod(0o755)
-        gate = ["python3", "tools/gate/change-gate.py", "--base", self.base, "--head", head,
+        gate = ["python3", "tools/tillr-gate/change-gate.py", "--base", self.base, "--head", head,
                 "--runner", str(runner), "--logs", str(self.repo / "logs")]
         for rc in ("4", "0", "0"):
             (self.repo / "warm-rc").write_text(rc)
@@ -801,7 +804,7 @@ sys.exit(rc)
 
         red_logs = self.repo / "logs-red"
         refused = subprocess.run(
-            ["python3", "tools/gate/change-gate.py", "--base", base, "--head", red_head,
+            ["python3", "tools/tillr-gate/change-gate.py", "--base", base, "--head", red_head,
              "--runner", str(self.runner), "--logs", str(red_logs)],
             cwd=self.repo, env=self.env, capture_output=True, text=True,
         )
@@ -832,7 +835,7 @@ sys.exit(rc)
 
         green_logs = self.repo / "logs-green"
         passed = subprocess.run(
-            ["python3", "tools/gate/change-gate.py", "--base", base, "--head", green_head,
+            ["python3", "tools/tillr-gate/change-gate.py", "--base", base, "--head", green_head,
              "--runner", str(self.runner), "--logs", str(green_logs)],
             cwd=self.repo, env=self.env, capture_output=True, text=True,
         )

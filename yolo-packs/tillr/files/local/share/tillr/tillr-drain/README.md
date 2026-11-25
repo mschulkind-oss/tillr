@@ -106,8 +106,7 @@ Read:
   `plan-guidance.md` when present.
 - `<root>/.tillr.toml`: the tables `lanes`, `push`, `roll`, `comments`, `workflows`,
   `prose`, `sync` and `candidate_size`.
-- `tools/tillr-run/backends/brief-template.md` (or the `--brief-template` file), from which
-  staging renders each brief.
+- The installed `tillr-run` brief template (`$TILLR_INSTALL_ROOT/tillr-run/backends/brief-template.md`, or `tools/tillr-run/backends/brief-template.md` when run from tillr's source checkout; or the `--brief-template` file), from which staging renders each brief.
 - `bin/pi-forks.list` under the root, for [fork handling](#fork-handling).
 
 Written:
@@ -123,7 +122,7 @@ Written:
   `tillr-gate/`, and refs under `refs/tillr/`
   ([ref lifetimes](#ref-lifetimes-and-backlog-cleanup)).
 
-Environment the drain reads: `TILLR_SQLITE_TRACE` (`1` traces store statements),
+Environment the drain reads: `TILLR_INSTALL_ROOT` (absolute path to tillr's installed modules), `TILLR_SQLITE_TRACE` (`1` traces store statements),
 `TILLR_RESTART_REQUEST` and `TILLR_RESTART_FROM` (set by an in-place restart),
 `TILLR_PI_BUILDS_DIR`, and `CLAUDE_CODE_DISABLE_DEFERRED_TOOL_RESUME` ([landing calls](#landing-calls)). It marks every
 process of a run with `TILLR_RUN_ID` and `TILLR_LOOP_STORE` (the canonical store path), and
@@ -1080,8 +1079,7 @@ carries only what the adapter requires. What the code does:
 - **Staging.** A fork piece's checkout is `.forks/lanes/<lane>/<fork>`, started at the
   delivered patch tip. The worker commits there and publishes nothing; the lander alone
   moves `refs/heads/patch/<fork>`.
-- **Gate.** [`fork-gate.py`](fork-gate.py) runs the `fork-build` check on a clean copy of
-  the candidate head, then `fork-quality` from its `FORK_QUALITY` table.
+- **Gate.** [`fork-gate.py`](fork-gate.py) (resolved from `$TILLR_INSTALL_ROOT/tillr-drain/fork-gate.py` or tillr's source checkout, never `<root>/tools/`) runs the `fork-build` check on a clean copy of the candidate head, then `fork-quality` from its `FORK_QUALITY` table.
 - **Holds.** A held fork candidate is pinned under `refs/tillr/held-forks/`
   ([`remotesync/held_fork.go`](./remotesync/held_fork.go)).
 

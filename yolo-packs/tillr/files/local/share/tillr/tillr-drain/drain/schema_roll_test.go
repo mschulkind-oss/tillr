@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS schema_migrations`, 1)
 	t.Setenv("SCHEMA_ROLL_SCRIPT", roller)
 	t.Setenv("SCHEMA_ROLL_STORE", f.store)
 	t.Setenv("SCHEMA_ROLL_POLICY", string(policy))
+	installRoot := filepath.Join(dir, "install")
+	installedTemplate := filepath.Join(installRoot, "tillr-run", "backends", "brief-template.md")
+	if err := os.MkdirAll(filepath.Dir(installedTemplate), 0755); err != nil {
+		t.Fatal(err)
+	}
+	copyFile(t, "../../tillr-run/backends/brief-template.md", installedTemplate, nil)
+	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	fixture := filepath.Join(dir, "roll-fixture.py")
 	writeFile(t, fixture, `import importlib.util
 import os

@@ -886,7 +886,7 @@ func loopFace(args []string) int {
 	policyPath := fs.String("policy", "", "the backend policy (default <root>/config/tillr/backend-policy.json)")
 	runBin := fs.String("run-bin", "tillr-run", "the tillr-run binary the run step executes")
 	itemBin := fs.String("item-bin", "tillr-item", "the tillr-item binary the item-state step executes: a landed candidate's item is `landed`, and a run that reports `blocked` leaves its item `blocked`")
-	briefTemplate := fs.String("brief-template", "", "the tracked brief template staging renders each run's brief from (default <root>/tools/tillr-run/backends/brief-template.md)")
+	briefTemplate := fs.String("brief-template", "", "the brief template staging renders each run's brief from (default: the installed tillr-run template)")
 	gate := fs.String("gate", "", "the gate program: exit 0 pass, 1 fail, anything else could not judge")
 	land := fs.String("land", "", "the land program: exit 0 landed, 1 not landed")
 	verdict := fs.String("verdict", "", "the verdict program: records the item's verdict, named by --verdict")
@@ -967,7 +967,11 @@ func loopFace(args []string) int {
 		*policyPath = filepath.Join(*root, "config", "tillr", "backend-policy.json")
 	}
 	if *briefTemplate == "" {
-		*briefTemplate = filepath.Join(*root, "tools", "tillr-run", "backends", "brief-template.md")
+		resolved, err := run.ResolveBriefTemplate()
+		if err != nil {
+			return failStartup(drain.Usagef("--brief-template: %v", err))
+		}
+		*briefTemplate = resolved
 	}
 	policy, err := readPolicy(*policyPath)
 	if err != nil {

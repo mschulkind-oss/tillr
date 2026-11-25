@@ -75,9 +75,8 @@ type ProcessSteps struct {
 	// SyncRoadmaps is passed in order to every sync; empty reads all documents.
 	SyncRoadmaps []string
 	// BackendsDir is where the backend's extractor lives, handed to `run exec` so the
-	// run's spend reaches the record. Empty asks `run exec` for its own default, which is
-	// the repository's `tools/tillr-run/backends`; a case that wants a spend to see sets
-	// it, because no fixture backend has an extractor in the real directory.
+	// run's spend reaches the record. Empty omits `--backends-dir` so `run exec` resolves
+	// its own installed backends directory.
 	BackendsDir string
 	// Now is the injected clock `run exec` stamps the claim with.
 	Now func() time.Time
@@ -178,18 +177,14 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 		args = append(args, "--resume")
 	}
 	backendsDir := s.BackendsDir
-	if s.Root != "" {
-		root := s.Root
-		if absRoot, err := filepath.Abs(root); err == nil {
-			root = absRoot
-		}
-		if backendsDir == "" {
-			backendsDir = filepath.Join(root, "tools", "tillr-run", "backends")
-		} else if !filepath.IsAbs(backendsDir) {
+	if backendsDir != "" {
+		if !filepath.IsAbs(backendsDir) && s.Root != "" {
+			root := s.Root
+			if absRoot, err := filepath.Abs(root); err == nil {
+				root = absRoot
+			}
 			backendsDir = filepath.Join(root, backendsDir)
 		}
-	}
-	if backendsDir != "" {
 		args = append(args, "--backends-dir", backendsDir)
 	}
 	// A run face owns its lifetime. Only an explicit stop or build migration
@@ -509,7 +504,11 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 	program := s.GateProgram
 	fork := strings.TrimPrefix(candidate.BaseRef, "refs/heads/patch/")
 	if s.hooks == nil && fork != candidate.BaseRef {
-		program = "python3 " + filepath.Join(s.Root, "tools", "tillr-drain", "fork-gate.py") + " --fork " + fork
+		forkGate, err := ResolveForkGate()
+		if err != nil {
+			return detachedGateHandle{}, Externalf("resolving fork-gate.py: %v", err)
+		}
+		program = "python3 " + forkGate + " --fork " + fork
 	}
 	if program == "" {
 		return detachedGateHandle{}, Usagef("the loop was given no program for this step: it cannot judge a candidate without one")

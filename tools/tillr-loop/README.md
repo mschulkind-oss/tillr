@@ -45,7 +45,7 @@ out in the caller's working directory. All three faces run declarations from
 |---|---|
 | `rolling` | every heavy whole-tree declaration: `tillr-gate checks --heavy-tree --base HEAD --head HEAD --worktree . --checks tools/gate/checks --logs <logs>` |
 | `replay`, `fixer-gate`, naming a heavy declaration | the same command with `--only <check>` |
-| `replay`, `fixer-gate`, naming a fast whole-tree declaration | `python3 tools/gate/tree-check.py --only <check> --base HEAD --head HEAD --runner <tillr-gate>` |
+| `replay`, `fixer-gate`, naming a fast whole-tree declaration | `python3 <tillr-gate>/tree-check.py --only <check> --base HEAD --head HEAD --runner <tillr-gate>` |
 
 A name that is not a whole-tree declaration is refused with exit 4 and runs nothing: a
 change check compares two commits, so it has no verdict on a single revision. A missing
@@ -147,7 +147,7 @@ That mode is separate from `self-check`, which composes and displays real invoca
 
 | Face | Real invocation | What it derives |
 |---|---|---|
-| `gate` | `tillr-gate change --item I --lane L --run U --worktree W --base B --head H --now T --output <run>/gate.change.json`, then `tillr-gate plan --registry R --input gate.change.json --output gate.plan.json --root <worktree>`, then `tillr-gate run --input gate.plan.json --worktree <worktree> --output gate.verdict.json --logs <run>/logs --gate python3 --gate-arg tools/gate/change-gate.py --gate-arg --base --gate-arg <base> --gate-arg --head --gate-arg <head> --gate-arg --runner --gate-arg tillr-gate --gate-arg --logs --gate-arg <run>/change-logs` (`--gate-program P` replaces the program's words) | the candidate's argv for `tillr-gate change`, which derives the `gate.change` record itself: base, `head^{tree}` and `git diff --name-only base...head`, all read in the candidate worktree. Which checks the change owes stays `plan`'s decision. The registry `R` is `--registry`, else `$TILLR_LOOP_REGISTRY`, else the candidate worktree's `tools/gate/checks` directory, so a lane that adds or changes a declaration is judged by it. |
+| `gate` | `tillr-gate change --item I --lane L --run U --worktree W --base B --head H --now T --output <run>/gate.change.json`, then `tillr-gate plan --registry R --input gate.change.json --output gate.plan.json --root <worktree>`, then `tillr-gate run --input gate.plan.json --worktree <worktree> --output gate.verdict.json --logs <run>/logs --gate python3 --gate-arg <tillr-gate>/change-gate.py --gate-arg --base --gate-arg <base> --gate-arg --head --gate-arg <head> --gate-arg --runner --gate-arg tillr-gate --gate-arg --logs --gate-arg <run>/change-logs` (`--gate-program P` replaces the program's words) | the candidate's argv for `tillr-gate change`, which derives the `gate.change` record itself: base, `head^{tree}` and `git diff --name-only base...head`, all read in the candidate worktree. Which checks the change owes stays `plan`'s decision. The registry `R` is `--registry`, else `$TILLR_LOOP_REGISTRY`, else the candidate worktree's `tools/gate/checks` directory, so a lane that adds or changes a declaration is judged by it. |
 | `land` | `tillr-land pass --store S --repo R --item I --run U --base B --head H --verdict <run>/gate.verdict.json --base-ref <branch> --now T --run-dir <run> [--message-from M] [--observed-trunk O]` | `--observed-trunk` is the loop's last observed trunk tip, passed through unchanged: the lander refuses with `trunk-rewritten` under the land lock if the trunk no longer contains it, and records it. `--repo` = root, `--store` = `<root>/.tillr/state.db`, `--base-ref` = the branch the root is checked out on. There is no queue record and no derived candidate id: the gate's verdict is the only input, and the candidate's own four fields name the landing. |
 | `verdict` | `tillr-item show --store S --item <id> --root R` to read the frozen criteria, then one `tillr-item verdict record --store S --input <record> --now T` per criterion | one `item.verdict` per criterion whose stored `claim_class` is `verification-only`: the store's frozen text hashed, `done` on `--verdict pass` after a landing, `actor_kind: mechanical`, and the gate verdict, run and head as its evidence. A criterion of any other class is left for a non-mechanical verdict. |
 
@@ -161,7 +161,7 @@ It is bookkeeping rather than judgment, which is why it is a
 sibling of `run exec` and not a fourth adapter face: the verdict retires criteria, and this
 says where the item's work stands.
 
-The default judgment is [`tools/gate/change-gate.py`](../gate/change-gate.py), run by
+The default judgment is [`tools/tillr-gate/change-gate.py`](../tillr-gate/change-gate.py), run by
 `tillr-gate run --gate`. It runs `tillr-gate checks --fast-tree` once with the candidate's
 base and head: the declared change checks and the fast whole-tree checks, scoped to the
 change when the runner supports `--scope-to-change`. The base must be an ancestor of the
@@ -169,8 +169,10 @@ head, and the head must be the commit checked out in the worktree; otherwise the
 answers exit 4. An unavailable check answers "could not judge," not "candidate rejected."
 
 `tillr-gate` keeps the outer plan and verdict record because `tillr-land pass` binds that
-record to the candidate tree. The programs are spelled **relative** so they resolve inside
-the candidate worktree. Change-check logs live in `<run>/change-logs`, beside the run's
+record to the candidate tree. Both `change-gate.py` and `tree-check.py` resolve from
+`tillr-gate`'s installation (`$TILLR_INSTALL_ROOT/tillr-gate/<script>`, or the source
+checkout's `tools/tillr-gate/<script>` when invoked directly), never from the candidate
+worktree's `tools/gate/`. Change-check logs live in `<run>/change-logs`, beside the run's
 other records.
 
 `--root` defaults to the checkout the adapter runs in (`git rev-parse --show-toplevel`),
@@ -215,7 +217,8 @@ becomes `true`.
 - **Detached root** (land) — no branch to land onto, and `--base-ref` was not named.
 - **No criteria** (verdict) — an item whose store holds no criterion retires nothing.
 - **A missing or non-runnable program** — `tillr-gate`, `tillr-land`, `tillr-item` or `git`
-  not on PATH: exit 4.
+  not on PATH, or `change-gate.py` / `tree-check.py` missing or unlocatable from `tillr-gate`'s
+  installation (`TILLR_INSTALL_ROOT` unset outside a source checkout or not absolute): exit 4.
 
 ## The self-check
 

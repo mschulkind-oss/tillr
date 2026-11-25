@@ -97,6 +97,19 @@ func TestRecordedVerdictExampleREADME(t *testing.T) {
 			t.Errorf("Git ran: %s (%v)", raw, err)
 		}
 	})
+	installRoot := filepath.Join(parent, "install")
+	installedTemplate := filepath.Join(installRoot, "tillr-run", "backends", "brief-template.md")
+	if err := os.MkdirAll(filepath.Dir(installedTemplate), 0755); err != nil {
+		t.Fatal(err)
+	}
+	templateBytes, err := os.ReadFile("../../tillr-run/backends/brief-template.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeForkSafe(installedTemplate, templateBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	t.Setenv("TILLR_EXAMPLE", copied)
 	t.Setenv("GIT_CALLS", calls)
 	t.Setenv("GIT_CEILING_DIRECTORIES", parent)

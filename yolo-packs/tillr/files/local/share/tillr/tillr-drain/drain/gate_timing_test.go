@@ -279,7 +279,7 @@ func TestGateTimingEventRequiresAppendedMeasuredLine(t *testing.T) {
 }
 
 func TestJudgeAutomaticRevertDoesNotOptIntoFastTiming(t *testing.T) {
-	_, adapter := repositoryFile(t, "tools/gate/change-gate.py")
+	_, adapter := repositoryFile(t, "tools/tillr-gate/change-gate.py")
 	_, judge := repositoryFile(t, "tools/fork-check.py")
 	t.Setenv("FIXTURE_CHANGE_GATE", adapter)
 	t.Setenv("FIXTURE_FORK_CHECK", judge)

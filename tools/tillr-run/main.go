@@ -12,11 +12,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"sort"
-	"strings"
 	"syscall"
 	"time"
 
@@ -106,7 +103,7 @@ func execFace(args []string) int {
 	input := fs.String("input", "", "the run.request to execute")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
 	resume := fs.Bool("resume", false, "continue the run from its lane's session id instead of starting cold: the run id, lane, brief and fence are reused, the run's log is appended to, and the store records a run.resume event on the same run (a request whose payload sets resume already asks for this)")
-	backendsDir := fs.String("backends-dir", "", "the directory the backends' extract-report programs live in: the run's spend is read from the report its backend's extractor writes (default <repo>/tools/tillr-run/backends, derived from the git common dir)")
+	backendsDir := fs.String("backends-dir", "", "the directory the backends' extract-report programs live in: the run's spend is read from the report its backend's extractor writes (default <install-root>/tillr-run/backends)")
 	if err := parseFlags(fs, args); err != nil {
 		return fail(err)
 	}
@@ -164,7 +161,11 @@ func execFace(args []string) int {
 	defer s.Close()
 
 	if *backendsDir == "" {
-		*backendsDir = defaultBackendsDir()
+		resolved, err := run.ResolveBackendsDir()
+		if err != nil {
+			return fail(run.Externalf("%v", err))
+		}
+		*backendsDir = resolved
 	}
 	stored, err := run.Exec(ctx, s, req, run.ExecOptions{LaneRoot: *laneRoot, BackendsDir: *backendsDir, Now: at})
 	if err != nil {
@@ -323,24 +324,6 @@ func backendNames(backends map[string]run.Backend) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// defaultBackendsDir answers where the backends' extractors live, derived from the git
-// common directory rather than from the working directory: a run's cwd is inside its
-// lane's worktree, so a relative default would resolve against the lane and find nothing.
-// `<git-common-dir>/..` is the repository's root in a linked worktree as well, which is
-// the same derivation the loop and the jails use. An unresolvable repository answers the
-// empty string, which reads no spend rather than guessing a path.
-func defaultBackendsDir() string {
-	out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
-	if err != nil {
-		return ""
-	}
-	dir := strings.TrimSpace(string(out))
-	if dir == "" {
-		return ""
-	}
-	return filepath.Join(filepath.Dir(dir), "tools", "tillr-run", "backends")
 }
 
 // lanesFace lists the store's lanes. It writes nothing: it reports the lease as it

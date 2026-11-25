@@ -209,7 +209,7 @@ tillr-gate checks --base <lane-base> --head <candidate-head> --logs <run>/change
 
 The repository’s change declarations cover commit identity, commit citations, rendering
 changed Markdown, elapsed-time waits in tests, the fast-budget total, and refusing newly
-added TypeScript files over 3,000 lines. The [loop’s default judge](../gate/change-gate.py)
+added TypeScript files over 3,000 lines. The [loop’s default judge](change-gate.py)
 runs the change declarations and the fast tree checks, and nothing else; it exits with the
 runner's verdict.
 
