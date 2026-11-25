@@ -472,6 +472,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		}
 		liveWorker := len(liveWorkers) != 0
 		var closedBlockers []string
+		ownLaneReason := ""
 		switch {
 		case liveWorker:
 			// The item's own run is doing the work, not blocking it.
@@ -602,10 +603,47 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			// Work that still holds its lane continues only in that worktree: it is held
 			// behind that lane's lease (its run, or its examination), not by the others.
 			row.WaitingOn = append(row.WaitingOn, d.LaneID)
+			if !paused {
+				if len(ownLeases) > 0 && ownLeases[0].RunID != "" {
+					holder := ownLeases[0].RunID
+					isJudge, judgeErr := isJudgeRunForItem(r, holder, it.ItemID, d.LaneID)
+					if judgeErr != nil {
+						return answer, judgeErr
+					}
+					var waitDetail string
+					switch {
+					case isJudge && works[it.ItemID].Candidate != nil && works[it.ItemID].Candidate.RebasedFromHead != "":
+						waitDetail = fmt.Sprintf("re-judgment run %s holds %s", holder, d.LaneID)
+						ownLaneReason = "candidate awaits re-judgment"
+					case isJudge:
+						waitDetail = fmt.Sprintf("judge run %s holds %s", holder, d.LaneID)
+						ownLaneReason = "candidate awaits judge"
+					case works[it.ItemID].Decision.RunRequest != nil && holder == works[it.ItemID].Decision.RunRequest.RunID:
+						waitDetail = fmt.Sprintf("examination lease %s holds %s", holder, d.LaneID)
+						ownLaneReason = "candidate awaits examination"
+					default:
+						waitDetail = fmt.Sprintf("run %s holds %s", holder, d.LaneID)
+						ownLaneReason = "lane leased by " + holder
+					}
+					row.Why += ": " + waitDetail
+				} else if works[it.ItemID].Candidate != nil {
+					if works[it.ItemID].LaneBusyByOther {
+						row.Why += ": " + d.LaneID + " is busy with another run"
+						ownLaneReason = "waiting for " + d.LaneID + " to free"
+					} else {
+						row.Why += ": waiting for an ordinary agent slot to judge"
+						ownLaneReason = "candidate awaits judge slot"
+					}
+				}
+			}
 			if !documentDesk(d.LaneID) && !slices.Contains(configured, d.LaneID) {
 				// The lane is above the loop's count: the loop keeps serving it until this
 				// work lands or is released, and offers it nothing new (drainingLanes).
-				row.Why += ": lane " + d.LaneID + " is draining: above the loop's lane count, it finishes " + it.ItemID + " and takes nothing new"
+				sep := ": "
+				if strings.Contains(row.Why, ":") {
+					sep = "; "
+				}
+				row.Why += sep + "lane " + d.LaneID + " is draining: above the loop's lane count, it finishes " + it.ItemID + " and takes nothing new"
 			}
 		case d.Reason == ReasonNoLane:
 			if excluded := refusedLaneWaits(configured, it.Express, refused); len(excluded) != 0 {
@@ -794,6 +832,9 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				}
 				if row.LaneReason != "" && d.Reason == ReasonDecisionCollision && work.Candidate == nil && work.Decision.RunRequest != nil {
 					row.LaneReason = fmt.Sprintf("%s still owns %s: %s", work.Decision.RunRequest.RunID, work.Decision.LaneID, row.LaneReason)
+				}
+				if row.LaneReason == "" && ownLaneReason != "" {
+					row.LaneReason = ownLaneReason
 				}
 				if row.LaneReason == "" {
 					row.LaneReason = "candidate awaits pin verification and lane release"

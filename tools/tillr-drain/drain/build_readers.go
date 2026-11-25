@@ -45,6 +45,9 @@ func (l *Loop) awaitBuildReader(ctx context.Context, id string) error {
 							return err
 						}
 					}
+					if _, err := tx.Exec(`UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE run_id=? AND state=?`, run.LaneStateIdle, id, run.LaneStateLeased); err != nil {
+						return err
+					}
 					if rec != nil && !isTerminalRunState(rec.State) {
 						return endNonTerminalRunRow(ctx, tx, id, "superseded by build reader restart", true, l.cfg.Now().UTC())
 					}

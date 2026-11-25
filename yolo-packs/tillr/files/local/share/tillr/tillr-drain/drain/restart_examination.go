@@ -108,6 +108,33 @@ func (l *Loop) reclaimDetachedGateExaminations(ctx context.Context) error {
 	return l.reclaimDetachedGateExaminationsWith(ctx, false, nil)
 }
 
+// isJudgeRunForItem reports whether runID was recorded as a judge or re-judgment
+// request for itemID on laneID.
+func isJudgeRunForItem(r *store.Reader, runID, itemID, laneID string) (bool, error) {
+	if runID == "" || itemID == "" {
+		return false, nil
+	}
+	var reqItem, reqLane sql.NullString
+	err := r.QueryRow(
+		`SELECT json_extract(payload,'$.item_id'), json_extract(payload,'$.request.lane_id')
+		 FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`,
+		judgeRequestKind, runID,
+	).Scan(&reqItem, &reqLane)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !reqItem.Valid || reqItem.String != itemID {
+		return false, nil
+	}
+	if laneID != "" && reqLane.Valid && reqLane.String != "" && reqLane.String != laneID {
+		return false, nil
+	}
+	return true, nil
+}
+
 func (l *Loop) reclaimDetachedGateExaminationsWith(ctx context.Context, stopChecked bool, scope *pollReaderScope) error {
 	if l.cfg.Store == "" {
 		return nil
@@ -122,21 +149,28 @@ func (l *Loop) reclaimDetachedGateExaminationsWith(ctx context.Context, stopChec
 			return nil
 		}
 	}
-	leased := map[string]string{}
+	type leasedLane struct {
+		runID       string
+		hasDeadline bool
+	}
+	nowMS := l.cfg.Now().UTC().UnixMilli()
+	leased := map[string]leasedLane{}
+	judgeLeases := map[string]bool{}
 	var works map[string]*pendingWork
 	err := l.withPollReader(ctx, scope, func(r *store.Reader) error {
-		rows, err := r.Query(`SELECT lane_id, run_id FROM lanes WHERE state=? AND leased_until IS NULL AND run_id IS NOT NULL`, run.LaneStateLeased)
+		rows, err := r.Query(`SELECT lane_id, run_id, leased_until FROM lanes WHERE state=? AND run_id IS NOT NULL AND (leased_until IS NULL OR leased_until > ?)`, run.LaneStateLeased, nowMS)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
 			var laneID, runID string
-			if err := rows.Scan(&laneID, &runID); err != nil {
+			var leasedUntil sql.NullInt64
+			if err := rows.Scan(&laneID, &runID, &leasedUntil); err != nil {
 				rows.Close()
 				return err
 			}
 			if !l.isRunActive(runID) {
-				leased[laneID] = runID
+				leased[laneID] = leasedLane{runID: runID, hasDeadline: leasedUntil.Valid}
 			}
 		}
 		if err := rows.Close(); err != nil {
@@ -149,7 +183,30 @@ func (l *Loop) reclaimDetachedGateExaminationsWith(ctx context.Context, stopChec
 			return nil
 		}
 		works, err = readPending(r)
-		return err
+		if err != nil {
+			return err
+		}
+		for _, w := range works {
+			if w.Done || w.Candidate == nil || w.Examining || w.Examiner != nil || w.Decision.RunRequest == nil {
+				continue
+			}
+			id := w.Decision.RunRequest.RunID
+			if l.isRunActive(id) {
+				continue
+			}
+			lane, ok := leased[w.Decision.LaneID]
+			if !ok || lane.runID == id {
+				continue
+			}
+			okJudge, err := isJudgeRunForItem(r, lane.runID, w.Decision.ItemID, w.Decision.LaneID)
+			if err != nil {
+				return err
+			}
+			if okJudge {
+				judgeLeases[w.Decision.ItemID] = true
+			}
+		}
+		return nil
 	})
 	if err != nil || len(leased) == 0 {
 		return err
@@ -170,18 +227,31 @@ func (l *Loop) reclaimDetachedGateExaminationsWith(ctx context.Context, stopChec
 			continue
 		}
 		id := w.Decision.RunRequest.RunID
-		if leased[w.Decision.LaneID] != id {
+		if l.isRunActive(id) {
 			continue
 		}
-		c, recErr := l.recoverRetirement(ctx, *w.Candidate)
-		if recErr != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			c = *w.Candidate
+		lane, ok := leased[w.Decision.LaneID]
+		if !ok {
+			continue
 		}
-		dir := detachedGateDir(l.cfg.Root, l.cfg.Store, c.Worktree, id)
-		live, done := hasDetachedGateInDir(dir, c, true)
+		reclaimJudge := lane.runID != id && judgeLeases[w.Decision.ItemID]
+		if !reclaimJudge && (lane.runID != id || lane.hasDeadline) {
+			continue
+		}
+		var live, done bool
+		if reclaimJudge {
+			live = true
+		} else {
+			c, recErr := l.recoverRetirement(ctx, *w.Candidate)
+			if recErr != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				c = *w.Candidate
+			}
+			dir := detachedGateDir(l.cfg.Root, l.cfg.Store, c.Worktree, id)
+			live, done = hasDetachedGateInDir(dir, c, true)
+		}
 		if ws == nil {
 			ws, err = store.Open(ctx, l.cfg.Store, true)
 			if err != nil {
@@ -206,14 +276,22 @@ func (l *Loop) reclaimDetachedGateExaminationsWith(ctx context.Context, stopChec
 					return nil
 				}
 				var state string
-				var runID, leasedUntil sql.NullString
+				var runID sql.NullString
+				var leasedUntil sql.NullInt64
 				if err := tx.QueryRow(`SELECT state, run_id, leased_until FROM lanes WHERE lane_id=?`, w2.Decision.LaneID).Scan(&state, &runID, &leasedUntil); err != nil {
 					if err == sql.ErrNoRows {
 						return nil
 					}
 					return err
 				}
-				if state != run.LaneStateLeased || !runID.Valid || runID.String != id || leasedUntil.Valid {
+				if state != run.LaneStateLeased || !runID.Valid || runID.String != lane.runID {
+					return nil
+				}
+				if reclaimJudge {
+					if leasedUntil.Valid && leasedUntil.Int64 <= now.UnixMilli() {
+						return nil
+					}
+				} else if leasedUntil.Valid {
 					return nil
 				}
 				tickID, err := allocateGeneration(tx)
