@@ -3301,6 +3301,21 @@ def test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalle
         assert "SIGQUIT: quit" in stall_res.stdout, stall_res.stdout
         assert "goroutine " in stall_res.stdout, stall_res.stdout
         assert "TestStalledBinaryBlocksForever" in stall_res.stdout, stall_res.stdout
+        assert "fork-check: triage -- 1 failed check(s), diagnosed from this run's own output and never re-run:" in stall_res.stdout, stall_res.stdout
+        assert "  triage go-affected: Go test packages affected by the change pass" in stall_res.stdout, stall_res.stdout
+        assert "       case: TestStalledBinaryBlocksForever -- " in stall_res.stdout, stall_res.stdout
+        assert "stall_test.go:" in stall_res.stdout, stall_res.stdout
+        assert (
+            "       assertion: blocked: the test binary was ended by SIGQUIT while this test was running"
+            in stall_res.stdout
+        ), stall_res.stdout
+        assert (
+            "       one case: go -C tools/tillr-stall-sigquit test . -run '^TestStalledBinaryBlocksForever$'"
+            in stall_res.stdout
+        ), stall_res.stdout
+        assert (
+            f"  {stall_pkg}: TestStalledBinaryBlocksForever" in stall_res.stdout
+        ), stall_res.stdout
 
         busy_res = subprocess.run(
             [sys.executable, runner, "--root", str(repo), "--changed", "tools/tillr-busy-cpu/busy_test.go"],
@@ -3376,6 +3391,193 @@ def test_single_test_shard_sets_gomaxprocs_and_p1() -> None:
         assert env.get("GOMAXPROCS") == "1", env.get("GOMAXPROCS")
 
 
+def test_sigquit_extracts_blocked_tests_first_in_bounded_triage() -> None:
+    """SIGQUIT goroutine stacks yield blocked-test cases first in bounded triage and failed_tests."""
+    from unittest import mock
+
+    pkg = "github.com/mschulkind-oss/tillr-drain/drain"
+    assertion = "blocked: the test binary was ended by SIGQUIT while this test was running"
+
+    # Without SIGQUIT: quit, stack-like lines produce no SIGQUIT cases.
+    no_sigquit = (
+        f"{pkg}.TestNotBlocked(0xc000123456)\n"
+        "\t/workspace/tools/tillr-drain/drain/not_blocked_test.go:10 +0x10\n"
+    )
+    assert go_affected.extract_sigquit_cases(no_sigquit) == []
+
+    # Reconstructed in event order from go test -json output chunks and plain lines,
+    # excluding TestMain, closures, lowercase Test* helpers, methods, and `created by`.
+    sigquit_events = [
+        {"Action": "run", "Package": pkg, "Test": "TestOrdinaryFail"},
+        {"Action": "output", "Package": pkg, "Test": "TestOrdinaryFail", "Output": "    ordinary_test.go:22: boom\n"},
+        {"Action": "output", "Package": pkg, "Test": "TestOrdinaryFail", "Output": "--- FAIL: TestOrdinaryFail (0.01s)\n"},
+        {"Action": "fail", "Package": pkg, "Test": "TestOrdinaryFail", "Elapsed": 0.01},
+        {"Action": "run", "Package": pkg, "Test": "TestWorkflowExitRecordRestart"},
+        {"Action": "output", "Package": pkg, "Test": "TestWorkflowExitRecordRestart", "Output": "SIGQUIT: quit\n"},
+        {"Action": "output", "Package": pkg, "Test": "TestWorkflowExitRecordRestart", "Output": "goroutine 42 [chan receive, 15 minutes]:\n"},
+        {"Action": "output", "Package": pkg, "Test": "TestWorkflowExitRecordRestart", "Output": f"{pkg}.TestWorkflowExitRecordRestart(0xc000123456)\n"},
+        {"Action": "output", "Package": pkg, "Test": "TestWorkflowExitRecordRestart", "Output": "\t/workspace/tools/tillr-drain/drain/workflow_exit_record_test.go:123 +0x45\n"},
+        {"Action": "output", "Package": pkg, "Output": "goroutine 43 [chan receive]:\n"},
+        {"Action": "output", "Package": pkg, "Output": f"{pkg}.TestWorkflowExitRecordRestart.func1(0xc000123456)\n"},
+        {"Action": "output", "Package": pkg, "Output": "\t/workspace/tools/tillr-drain/drain/workflow_exit_record_test.go:99 +0x12\n"},
+        {"Action": "output", "Package": pkg, "Output": f"{pkg}.TestWorkflowExitRecordRestart(0xc000123456)\n"},
+        {"Action": "output", "Package": pkg, "Output": "\t/workspace/tools/tillr-drain/drain/duplicate_test.go:1 +0x1\n"},
+        {"Action": "output", "Package": pkg, "Output": f"{pkg}.TestMain(0xc000123456)\n"},
+        {"Action": "output", "Package": pkg, "Output": "\t/workspace/tools/tillr-drain/drain/main_test.go:15 +0x20\n"},
+        {"Action": "output", "Package": pkg, "Output": f"{pkg}.Testhelper(0xc000123456)\n"},
+        {"Action": "output", "Package": pkg, "Output": "\t/workspace/tools/tillr-drain/drain/helper_test.go:15 +0x20\n"},
+        {"Action": "output", "Package": pkg, "Output": f"{pkg}.(*runner).TestMethod(0xc000123456)\n"},
+        {"Action": "output", "Package": pkg, "Output": "\t/workspace/tools/tillr-drain/drain/method_test.go:15 +0x20\n"},
+        {"Action": "output", "Package": pkg, "Output": f"created by {pkg}.TestCreatedBy in goroutine 1\n"},
+        {"Action": "output", "Package": pkg, "Output": "\t/workspace/tools/tillr-drain/drain/created_test.go:15 +0x20\n"},
+        {"Action": "output", "Package": pkg, "Output": f"{pkg}_test.TestExternalBlocked(0xc000123456)\n"},
+        {"Action": "output", "Package": pkg, "Output": "\t/workspace/tools/tillr-drain/drain/ext_test.go:55 +0x12\n"},
+        {"Action": "fail", "Package": pkg, "Elapsed": 900.0},
+    ]
+    raw_sigquit = "".join(json.dumps(ev) + "\n" for ev in sigquit_events)
+    cases = go_affected.extract_sigquit_cases(raw_sigquit)
+    assert cases == [
+        {
+            "package": pkg,
+            "name": "TestWorkflowExitRecordRestart",
+            "where": "/workspace/tools/tillr-drain/drain/workflow_exit_record_test.go:123 +0x45",
+            "assertion": assertion,
+            "sigquit": True,
+        },
+        {
+            "package": pkg,
+            "name": "TestExternalBlocked",
+            "where": "/workspace/tools/tillr-drain/drain/ext_test.go:55 +0x12",
+            "assertion": assertion,
+            "sigquit": True,
+        },
+    ], cases
+
+    # Frame at EOF with no following line keeps empty where (rendered as "(no file named)").
+    eof_sigquit = f"SIGQUIT: quit\n{pkg}.TestNoFollowingLine(0xc000123456)\n"
+    eof_cases = go_affected.extract_sigquit_cases(eof_sigquit)
+    assert eof_cases == [
+        {
+            "package": pkg,
+            "name": "TestNoFollowingLine",
+            "where": "",
+            "assertion": assertion,
+            "sigquit": True,
+        }
+    ], eof_cases
+    eof_triage = go_affected.format_triage_block(eof_cases, {})
+    assert "       case: TestNoFollowingLine -- (no file named)\n" in eof_triage, eof_triage
+
+    # parse_go_test_json preserves its 2-tuple return and puts SIGQUIT tests first in failed_tests.
+    parsed_res = go_affected.parse_go_test_json(raw_sigquit)
+    assert isinstance(parsed_res, tuple) and len(parsed_res) == 2, type(parsed_res)
+    parsed, _readable = parsed_res
+    assert parsed[pkg]["failed_tests"] == [
+        "TestWorkflowExitRecordRestart",
+        "TestExternalBlocked",
+        "TestOrdinaryFail",
+    ], parsed[pkg]
+
+    # Bounded triage in run_selected_tests: SIGQUIT cases come first ahead of 12 ordinary failures,
+    # keeping 10 total and noting the dropped count, right before format_failure_summary.
+    with tempfile.TemporaryDirectory(prefix="go-affected-sigquit-triage-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        mod_dir = repo / "tools" / "tillr-drain" / "drain"
+        mod_dir.mkdir(parents=True)
+        (repo / "tools" / "gate").mkdir(parents=True)
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}", encoding="utf-8")
+        selection = {
+            "selected": [
+                {
+                    "module": "tools/tillr-drain",
+                    "import_path": pkg,
+                    "dir_rel": "tools/tillr-drain/drain",
+                    "reason": "direct",
+                    "selected_tests": None,
+                    "has_edge": False,
+                    "edge_digest": None,
+                }
+            ],
+            "selection_ms": 5,
+        }
+
+        many_events = []
+        for idx in range(1, 12):
+            tname = f"TestOrdinary{idx:02d}"
+            many_events.extend([
+                {"Action": "run", "Package": pkg, "Test": tname},
+                {"Action": "output", "Package": pkg, "Test": tname, "Output": f"    fail_test.go:{idx}: failed {idx}\n"},
+                {"Action": "output", "Package": pkg, "Test": tname, "Output": f"--- FAIL: {tname} (0.01s)\n"},
+                {"Action": "fail", "Package": pkg, "Test": tname, "Elapsed": 0.01},
+            ])
+        many_events.extend([
+            {"Action": "run", "Package": pkg, "Test": "TestSub/leaf"},
+            {"Action": "output", "Package": pkg, "Test": "TestSub/leaf", "Output": "        sub_test.go:77: leaf bad\n"},
+            {"Action": "output", "Package": pkg, "Test": "TestSub/leaf", "Output": "    --- FAIL: TestSub/leaf (0.01s)\n"},
+            {"Action": "fail", "Package": pkg, "Test": "TestSub/leaf", "Elapsed": 0.01},
+            {"Action": "output", "Package": pkg, "Test": "TestSub", "Output": "--- FAIL: TestSub (0.02s)\n"},
+            {"Action": "fail", "Package": pkg, "Test": "TestSub", "Elapsed": 0.02},
+            {"Action": "output", "Package": pkg, "Output": "SIGQUIT: quit\n"},
+            {"Action": "output", "Package": pkg, "Output": f"{pkg}.TestWorkflowExitRecordRestart(0xc000123456)\n"},
+            {"Action": "output", "Package": pkg, "Output": "\t/workspace/tools/tillr-drain/drain/workflow_exit_record_test.go:123 +0x45\n"},
+            {"Action": "output", "Package": pkg, "Output": f"{pkg}_test.TestExternalBlocked(0xc000123456)\n"},
+            {"Action": "output", "Package": pkg, "Output": "\t/workspace/tools/tillr-drain/drain/ext_test.go:55 +0x12\n"},
+            {"Action": "output", "Package": pkg, "Output": f"FAIL\t{pkg}\t900.00s\n"},
+            {"Action": "fail", "Package": pkg, "Elapsed": 900.0},
+        ])
+        stream = "".join(json.dumps(ev) + "\n" for ev in many_events)
+
+        def fake_run_guarded(cmd, *, cwd, env, out_dir, on_line):
+            return 1, stream
+
+        with mock.patch.object(go_affected, "_run_guarded_command", side_effect=fake_run_guarded), \
+                mock.patch.dict(os.environ, {"YOLO_DURABLE_DIR": str(tmp_path / "durable")}):
+            rc, out, _ = go_affected.run_selected_tests(repo, selection, progress_stream=False)
+
+        assert rc == 1, out
+        triage_idx = out.index("fork-check: triage -- 1 failed check(s), diagnosed from this run's own output and never re-run:\n")
+        summary_idx = out.index("go-affected: failing packages and tests:\n")
+        assert triage_idx < summary_idx, (triage_idx, summary_idx)
+        triage_section = out[triage_idx:summary_idx]
+        expected_prefix = (
+            "fork-check: triage -- 1 failed check(s), diagnosed from this run's own output and never re-run:\n"
+            "  triage go-affected: Go test packages affected by the change pass\n"
+            "       case: TestWorkflowExitRecordRestart -- /workspace/tools/tillr-drain/drain/workflow_exit_record_test.go:123 +0x45\n"
+            f"       assertion: {assertion}\n"
+            "       one case: go -C tools/tillr-drain test ./drain -run '^TestWorkflowExitRecordRestart$'\n"
+            "       case: TestExternalBlocked -- /workspace/tools/tillr-drain/drain/ext_test.go:55 +0x12\n"
+            f"       assertion: {assertion}\n"
+            "       one case: go -C tools/tillr-drain test ./drain -run '^TestExternalBlocked$'\n"
+            f"       case: TestOrdinary01 -- {pkg} (fail_test.go:1)\n"
+            "       assertion: failed 1\n"
+            "       one case: go -C tools/tillr-drain test ./drain -run '^TestOrdinary01$'\n"
+        )
+        assert triage_section.startswith(expected_prefix), triage_section
+        case_lines = [ln for ln in triage_section.splitlines() if ln.startswith("       case: ")]
+        assert len(case_lines) == 10, case_lines
+        assert "       (4 more failing case(s) not listed; the packet keeps 10)\n" in triage_section, triage_section
+        summary_section = out[summary_idx:]
+        assert (
+            f"  {pkg}: TestWorkflowExitRecordRestart, TestExternalBlocked, TestOrdinary01"
+            in summary_section
+        ), summary_section
+
+        # Unnamed failure (e.g. build error) prints the no-case triage line.
+        def fake_unnamed_fail(cmd, *, cwd, env, out_dir, on_line):
+            return 1, f"# {pkg}\ndrain/broken.go:1:1: syntax error\nFAIL\t{pkg} [build failed]\n"
+
+        with mock.patch.object(go_affected, "_run_guarded_command", side_effect=fake_unnamed_fail), \
+                mock.patch.dict(os.environ, {"YOLO_DURABLE_DIR": str(tmp_path / "durable")}):
+            rc2, out2, _ = go_affected.run_selected_tests(repo, selection, progress_stream=False)
+
+        assert rc2 == 1, out2
+        assert (
+            "       no case named in the output; reproduce with: python3 tools/gate/go_affected.py\n"
+            in out2
+        ), out2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", default=[], help="Run only named test case(s)")
@@ -3414,6 +3616,7 @@ def main(argv: list[str] | None = None) -> int:
         ("test_single_test_shard_sets_gomaxprocs_and_p1", test_single_test_shard_sets_gomaxprocs_and_p1),
         ("test_binary_watchdog_constants_and_sample_rule", test_binary_watchdog_constants_and_sample_rule),
         ("test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalled", test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalled),
+        ("test_sigquit_extracts_blocked_tests_first_in_bounded_triage", test_sigquit_extracts_blocked_tests_first_in_bounded_triage),
     ]
     if args.case:
         wanted = set(args.case)

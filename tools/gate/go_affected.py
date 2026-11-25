@@ -1114,6 +1114,191 @@ def _leaf_failed_tests(names: list[str]) -> list[str]:
     ]
 
 
+TRIAGE_CASES = 10
+SIGQUIT_ASSERTION = "blocked: the test binary was ended by SIGQUIT while this test was running"
+_SIGQUIT_FRAME_RE = re.compile(
+    r"^(?P<pkg>(?:[^\s()]+/)?[^\s./()]+)\.(?P<name>Test(?:[^a-z\W]\w*)?)\("
+)
+_GO_FAIL_HEADER_RE = re.compile(r"^\s*--- FAIL: (?P<name>\S+) \(")
+_GO_FAIL_LOC_RE = re.compile(r"^\s+(?P<file>[\w./-]+\.go):(?P<line>\d+):\s*(?P<msg>.*)$")
+_GO_PKG_FAIL_RE = re.compile(r"^FAIL\t(?P<package>\S+)")
+
+
+def _reconstruct_go_test_output(stdout: str) -> str:
+    """Reconstruct raw test binary output in event order from `go test -json` or plain lines."""
+    chunks: list[str] = []
+    for line in stdout.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if not stripped.startswith("{"):
+            chunks.append(line)
+            continue
+        try:
+            ev = json.loads(stripped)
+        except ValueError:
+            chunks.append(line)
+            continue
+        if not isinstance(ev, dict):
+            chunks.append(line)
+            continue
+        if ev.get("Action") == "output":
+            out_chunk = ev.get("Output")
+            if isinstance(out_chunk, str):
+                chunks.append(out_chunk)
+    return "".join(chunks)
+
+
+def extract_sigquit_cases(
+    stdout: str,
+    known_packages: set[str] | None = None,
+) -> list[dict]:
+    """Return one failing case per unique top-level Test* frame in a SIGQUIT goroutine dump."""
+    lines = _reconstruct_go_test_output(stdout).splitlines()
+    sigquit_idx: int | None = None
+    for idx, line in enumerate(lines):
+        if line.strip() == "SIGQUIT: quit":
+            sigquit_idx = idx
+            break
+    if sigquit_idx is None:
+        return []
+
+    cases: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    known = known_packages or set()
+    for idx in range(sigquit_idx + 1, len(lines)):
+        m = _SIGQUIT_FRAME_RE.match(lines[idx])
+        if not m:
+            continue
+        name = m.group("name")
+        if name == "TestMain":
+            continue
+        raw_pkg = m.group("pkg")
+        pkg = raw_pkg[:-5] if raw_pkg.endswith("_test") and raw_pkg not in known else raw_pkg
+        key = (pkg, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        where = lines[idx + 1].strip() if idx + 1 < len(lines) else ""
+        cases.append({
+            "package": pkg,
+            "name": name,
+            "where": where,
+            "assertion": SIGQUIT_ASSERTION,
+            "sigquit": True,
+        })
+    return cases
+
+
+def _extract_fail_cases(readable: str, parsed: dict[str, dict]) -> list[dict]:
+    """Extract ordinary failing test cases from `--- FAIL:` blocks in readable `go test` output."""
+    raw_cases: list[dict] = []
+    open_cases: list[dict] = []
+    current: dict | None = None
+    for line in readable.splitlines():
+        m_fail = _GO_FAIL_HEADER_RE.match(line)
+        if m_fail:
+            current = {
+                "package": "",
+                "name": m_fail.group("name"),
+                "file": "",
+                "line": "",
+                "assertion": "",
+            }
+            raw_cases.append(current)
+            open_cases.append(current)
+            continue
+        m_loc = _GO_FAIL_LOC_RE.match(line)
+        if m_loc and current is not None and not current["file"]:
+            current["file"] = m_loc.group("file")
+            current["line"] = m_loc.group("line")
+            current["assertion"] = m_loc.group("msg").strip()
+            continue
+        m_pkg = _GO_PKG_FAIL_RE.match(line)
+        if m_pkg:
+            pkg_name = m_pkg.group("package")
+            for case in open_cases:
+                case["package"] = pkg_name
+            open_cases = []
+            current = None
+
+    if open_cases and parsed:
+        sole_pkg = next(iter(parsed)) if len(parsed) == 1 else ""
+        for case in open_cases:
+            if case["package"]:
+                continue
+            if sole_pkg:
+                case["package"] = sole_pkg
+                continue
+            matches = [
+                p for p, rec in parsed.items()
+                if case["name"] in (rec.get("failed_tests") or ())
+            ]
+            if len(matches) == 1:
+                case["package"] = matches[0]
+
+    names_by_pkg: dict[str, list[str]] = {}
+    for case in raw_cases:
+        names_by_pkg.setdefault(case["package"], []).append(case["name"])
+    leaves_by_pkg = {pkg: set(_leaf_failed_tests(names)) for pkg, names in names_by_pkg.items()}
+
+    cases: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for case in raw_cases:
+        pkg = case["package"]
+        name = case["name"]
+        if name not in leaves_by_pkg.get(pkg, ()):
+            continue
+        key = (pkg, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        loc = f"{case['file']}:{case['line']}" if case["file"] and case["line"] else ""
+        if pkg and loc:
+            where = f"{pkg} ({loc})"
+        elif pkg:
+            where = pkg
+        elif loc:
+            where = loc
+        else:
+            where = ""
+        cases.append({
+            "package": pkg,
+            "name": name,
+            "where": where,
+            "assertion": case["assertion"],
+            "sigquit": False,
+        })
+    return cases
+
+
+def format_triage_block(
+    cases: list[dict],
+    pkg_locations: dict[str, tuple[str, str]],
+) -> str:
+    """Render a bounded `fork-check: triage --` block for a failing `go-affected` run."""
+    lines = [
+        "fork-check: triage -- 1 failed check(s), diagnosed from this run's own output and never re-run:\n",
+        "  triage go-affected: Go test packages affected by the change pass\n",
+    ]
+    if not cases:
+        lines.append("       no case named in the output; reproduce with: python3 tools/gate/go_affected.py\n")
+        return "".join(lines)
+    kept = cases[:TRIAGE_CASES]
+    for case in kept:
+        where = case.get("where") or "(no file named)"
+        lines.append(f"       case: {case['name']} -- {where}\n")
+        assertion = case.get("assertion", "")
+        if assertion:
+            lines.append(f"       assertion: {assertion.splitlines()[0]}\n")
+        loc = pkg_locations.get(case.get("package", ""))
+        if loc is not None:
+            mod, pkg_rel = loc
+            lines.append(f"       one case: go -C {mod} test {pkg_rel} -run '^{case['name']}$'\n")
+    dropped = len(cases) - len(kept)
+    if dropped > 0:
+        lines.append(f"       ({dropped} more failing case(s) not listed; the packet keeps {len(kept)})\n")
+    return "".join(lines)
+
+
 def format_failure_summary(failed_packages: list[tuple[str, list[str]]]) -> str:
     """Render the failing packages and tests block appended to failed check output."""
     if not failed_packages:
@@ -1189,8 +1374,21 @@ def parse_go_test_json(stdout: str) -> tuple[dict[str, dict], str]:
                     rec["elapsed_ms"] = int(round(elapsed * 1000))
                 rec["passed"] = action != "fail"
 
+    sigquit_by_pkg: dict[str, list[str]] = {}
+    for case in extract_sigquit_cases(stdout, known_packages=set(results)):
+        sigquit_by_pkg.setdefault(case["package"], []).append(case["name"])
+
+    for pkg, sq_names in sigquit_by_pkg.items():
+        rec = results.setdefault(
+            pkg, {"elapsed_ms": 0, "cached": False, "passed": False, "failed_tests": []}
+        )
+        if rec["passed"] is not False:
+            rec["passed"] = False
+
     for pkg, rec in results.items():
-        rec["failed_tests"] = _leaf_failed_tests(raw_failed.get(pkg, []))
+        normal_failed = _leaf_failed_tests(raw_failed.get(pkg, []))
+        sq_failed = sigquit_by_pkg.get(pkg, [])
+        rec["failed_tests"] = list(dict.fromkeys(sq_failed + normal_failed))
         if rec["passed"] is False:
             chunks = pkg_chunks.setdefault(pkg, [])
             for key in [k for k in list(test_headers) + list(test_bodies) if k[0] == pkg]:
@@ -2189,9 +2387,33 @@ def run_selected_tests(
 
     outputs: list[str] = []
     pkg_shards: dict[str, list[dict]] = {}
+    pkg_sigquit_tests: dict[str, list[str]] = {}
     pkg_failed_tests: dict[str, list[str]] = {}
     failed_pkgs_order: list[str] = []
     failed_pkgs_set: set[str] = set()
+    all_sigquit_cases: list[dict] = []
+    all_fail_cases: list[dict] = []
+    pkg_locations: dict[str, tuple[str, str]] = {}
+    for item in selected:
+        ip = item["import_path"]
+        mod = item.get("module") or ""
+        if ip == "./..." or not mod:
+            continue
+        pkg_rel: str | None = None
+        dir_rel = item.get("dir_rel")
+        if isinstance(dir_rel, str) and dir_rel:
+            rel = os.path.relpath(dir_rel, mod).replace(os.sep, "/")
+            pkg_rel = "." if rel == "." else f"./{rel}"
+        else:
+            raw_dir = item.get("dir")
+            if isinstance(raw_dir, str) and raw_dir:
+                try:
+                    rel = Path(raw_dir).resolve().relative_to((root / mod).resolve()).as_posix()
+                    pkg_rel = "." if rel == "." else f"./{rel}"
+                except ValueError:
+                    pkg_rel = None
+        if pkg_rel is not None:
+            pkg_locations[ip] = (mod, pkg_rel)
     max_slot_wait_ms = 0
     rc_all = 0
     stream = sys.stdout if progress_stream is None else progress_stream
@@ -2205,16 +2427,23 @@ def run_selected_tests(
             stream.write(progress)
             stream.flush()
 
-    def record_failed_pkg(pkg_name: str, tests: list[str]) -> None:
+    def record_failed_pkg(pkg_name: str, tests: list[str], *, sigquit_tests: list[str] | None = None) -> None:
         if pkg_name not in failed_pkgs_set:
             failed_pkgs_set.add(pkg_name)
             failed_pkgs_order.append(pkg_name)
+        if sigquit_tests:
+            sq_bucket = pkg_sigquit_tests.setdefault(pkg_name, [])
+            for name in sigquit_tests:
+                if name not in sq_bucket:
+                    sq_bucket.append(name)
         bucket = pkg_failed_tests.setdefault(pkg_name, [])
         for name in tests:
             if name not in bucket:
                 bucket.append(name)
 
-    def run_one(inv: tuple[str, list[dict], str | None, str | None, str]) -> tuple[int, str, int, dict[str, dict]]:
+    def run_one(
+        inv: tuple[str, list[dict], str | None, str | None, str],
+    ) -> tuple[int, str, int, dict[str, dict], list[dict], list[dict]]:
         mod, items, digest, run_pattern, scratch_key = inv
         cmd = ["go", "test", "-json", "-timeout", "0", "-p", "1", "-parallel", "1"]
         if run_pattern is not None:
@@ -2241,24 +2470,37 @@ def run_selected_tests(
                 cmd, cwd=root / mod, env=env, out_dir=out_dir, on_line=emit_progress
             )
         parsed, readable = parse_go_test_json(stdout)
-        return rc, readable, wait_ms, parsed
+        sigquit_cases = extract_sigquit_cases(stdout, known_packages=set(parsed))
+        fail_cases = _extract_fail_cases(readable, parsed)
+        return rc, readable, wait_ms, parsed, sigquit_cases, fail_cases
 
     if invocations:
         with ThreadPoolExecutor(max_workers=min(16, len(invocations))) as pool:
-            for inv, (rc, readable_out, wait_ms, parsed) in zip(invocations, pool.map(run_one, invocations)):
+            for inv, (rc, readable_out, wait_ms, parsed, sigquit_cases, fail_cases) in zip(
+                invocations, pool.map(run_one, invocations)
+            ):
                 mod, items, _digest, _run_pattern, _scratch_key = inv
                 if wait_ms > max_slot_wait_ms:
                     max_slot_wait_ms = wait_ms
                 inv_recorded_failure = False
+                inv_sigquit_by_pkg: dict[str, list[str]] = {}
+                for case in sigquit_cases:
+                    inv_sigquit_by_pkg.setdefault(case["package"], []).append(case["name"])
                 for pkg_name, rec in parsed.items():
                     pkg_shards.setdefault(pkg_name, []).append(rec)
                     failed_tests = rec.get("failed_tests") or []
                     if rec.get("passed") is False or failed_tests:
-                        record_failed_pkg(pkg_name, failed_tests)
+                        record_failed_pkg(
+                            pkg_name,
+                            failed_tests,
+                            sigquit_tests=inv_sigquit_by_pkg.get(pkg_name),
+                        )
                         inv_recorded_failure = True
                 if rc != 0:
                     rc_all = rc
                     outputs.append(readable_out)
+                    all_sigquit_cases.extend(sigquit_cases)
+                    all_fail_cases.extend(fail_cases)
                     if not inv_recorded_failure:
                         for item in items:
                             pkg_label = mod if item["import_path"] == "./..." else item["import_path"]
@@ -2317,12 +2559,47 @@ def run_selected_tests(
         f"({sum(1 for p in packages_evidence if p['cached'])} cached{reused_note}, "
         f"selection {selection['selection_ms']}ms, slot_wait {max_slot_wait_ms}ms)\n"
     )
-    failure_summary = (
-        format_failure_summary([(p, pkg_failed_tests.get(p, [])) for p in failed_pkgs_order])
-        if rc_all != 0
-        else ""
-    )
-    return rc_all, summary + "".join(outputs) + failure_summary, evidence
+    triage_block = ""
+    failure_summary = ""
+    if rc_all != 0:
+        ordered_pkg_tests: list[tuple[str, list[str]]] = []
+        for pkg_name in failed_pkgs_order:
+            combined = list(dict.fromkeys(
+                pkg_sigquit_tests.get(pkg_name, []) + pkg_failed_tests.get(pkg_name, [])
+            ))
+            ordered_pkg_tests.append((pkg_name, combined))
+
+        triage_cases: list[dict] = []
+        seen_cases: set[tuple[str, str]] = set()
+        for case in all_sigquit_cases:
+            key = (case["package"], case["name"])
+            if key not in seen_cases:
+                seen_cases.add(key)
+                triage_cases.append(case)
+        for case in all_fail_cases:
+            key = (case["package"], case["name"])
+            if key not in seen_cases:
+                seen_cases.add(key)
+                triage_cases.append(case)
+        for pkg_name, tests in ordered_pkg_tests:
+            for name in tests:
+                key = (pkg_name, name)
+                if key not in seen_cases:
+                    seen_cases.add(key)
+                    triage_cases.append({
+                        "package": pkg_name,
+                        "name": name,
+                        "where": pkg_name,
+                        "assertion": "",
+                        "sigquit": False,
+                    })
+        triage_block = format_triage_block(triage_cases, pkg_locations)
+        failure_summary = format_failure_summary(ordered_pkg_tests)
+
+    body = "".join(outputs)
+    if body and triage_block and not body.endswith("\n"):
+        body += "\n"
+    return rc_all, summary + body + triage_block + failure_summary, evidence
 
 
 def git_changed_paths(root: Path, base: str, head: str) -> list[str]:
