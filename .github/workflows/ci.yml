@@ -17,7 +17,7 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: tools/*/go.sum
-      - uses: extractions/setup-just@v2
+      - uses: extractions/setup-just@v4
       - name: Identify git for tests that create commits
         run: |
           git config --global user.name "CI"
