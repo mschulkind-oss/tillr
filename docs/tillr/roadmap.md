@@ -382,7 +382,7 @@ which entry waits. A question that blocks nothing yet is reached through its des
 | Where the companion-plan rulebook belongs | [`OQ-RJ5`](../design/tillr-review-rules.md#OQ-RJ5) | Part of entry 42 |
 | Whether a build run has a strict ceiling at the build tier | [`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3) | Entry 44 |
 | How a design item starts, and how strictly a designer is pushed to scouts | [`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1) to [`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3) | Entry 45 |
-| Which models the held subscription profile uses, and what it does at its reserve | [`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1) to [`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3) | Entry 47 |
+| Which models the held subscription profile uses, and what it does at its reserve | [`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1) and [`OQ-DSP2`](../design/tillr-seat-profiles.md#OQ-DSP2) | Entry 47 |
 | The watcher's command name, whether a rule may run a probe, and where its episodes live | [`OQ-GW1`](../design/general-agent-watch.md#OQ-GW1) to [`OQ-GW3`](../design/general-agent-watch.md#OQ-GW3) | The later slices of entry 54 |
 | Whether a Go package may be the contract between two utilities | [`OQ-UC1`](../design/tillr-utility-contracts.md#OQ-UC1) | The later slices of entry 55 |
 | How tillr builds from Git | [`OQ-SH4`](../design/tillr-selfhosted-build.md#OQ-SH4) | Entry 56 |
