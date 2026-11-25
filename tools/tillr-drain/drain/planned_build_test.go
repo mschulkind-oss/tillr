@@ -193,6 +193,132 @@ func TestPlannedBuildProposal(t *testing.T) {
 	}
 }
 
+func TestPlannedBuildProposalTaskContradictions(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rule       string
+		wantDetail []string
+		pieces     []map[string]any
+	}{
+		{
+			name:       "file-outside-write-scope",
+			rule:       "proposal-task-outside-scope",
+			wantDetail: []string{"cutover", "tools/gate/go_affected.py"},
+			pieces: []map[string]any{
+				{
+					"id":          "cutover",
+					"seat":        "build",
+					"access":      "write",
+					"write_scope": []string{"tools/gate/checks/go-affected.json"},
+					"prompt":      "Delete tools/gate/go_affected.py and update tools/gate/checks/go-affected.json.",
+				},
+			},
+		},
+		{
+			name:       "check-loading-deleted-python-outside-write-scope",
+			rule:       "proposal-task-outside-scope",
+			wantDetail: []string{"delete-py", "tests/go-affected.test.py"},
+			pieces: []map[string]any{
+				{
+					"id":          "delete-py",
+					"seat":        "build",
+					"access":      "write",
+					"write_scope": []string{"tools/gate/go_affected.py"},
+					"prompt":      "Delete tools/gate/go_affected.py and pass python3 tests/go-affected.test.py.",
+				},
+			},
+		},
+		{
+			name:       "go-test-pinning-check-declaration-outside-write-scope",
+			rule:       "proposal-task-outside-scope",
+			wantDetail: []string{"pin-check", "tools/tillr-gate/goaffected/goaffected_test.go"},
+			pieces: []map[string]any{
+				{
+					"id":          "pin-check",
+					"seat":        "build",
+					"access":      "write",
+					"write_scope": []string{"tools/gate/checks/go-affected.json"},
+					"prompt":      "Update tools/gate/checks/go-affected.json and pass go test -C tools/tillr-gate ./goaffected.",
+				},
+			},
+		},
+		{
+			name:       "task-forbids-committing",
+			rule:       "proposal-task-forbids-commit",
+			wantDetail: []string{"uncommitted-piece"},
+			pieces: []map[string]any{
+				{
+					"id":          "uncommitted-piece",
+					"seat":        "build",
+					"access":      "write",
+					"write_scope": []string{"tools/gate/checks/go-affected.json"},
+					"prompt":      "Update tools/gate/checks/go-affected.json. Leave all changes in the worktree (do not commit yet).",
+				},
+			},
+		},
+		{
+			name: "passing-plan-includes-files-and-checks-in-write-scope",
+			rule: "",
+			pieces: []map[string]any{
+				{
+					"id":          "cutover",
+					"seat":        "build",
+					"access":      "write",
+					"write_scope": []string{"tools/gate/go_affected.py", "tests/go-affected.test.py", "tools/gate/checks/go-affected.json", "tools/tillr-gate/goaffected/"},
+					"prompt":      "Delete tools/gate/go_affected.py, update tools/gate/checks/go-affected.json and tests/go-affected.test.py, pass python3 tests/go-affected.test.py and go test -C tools/tillr-gate ./goaffected, and commit.",
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, base := plannedFixture(t)
+			for rel, body := range map[string]string{
+				"tools/gate/go_affected.py":                      "# python calculator\n",
+				"tools/gate/checks/go-affected.json":             `{"id":"go-affected"}` + "\n",
+				"tests/go-affected.test.py":                      "mod = load(ROOT / \"tools\" / \"gate\" / \"go_affected.py\")\n",
+				"tools/tillr-gate/goaffected/goaffected_test.go": "package goaffected\nvar _ = filepath.Join(root, \"tools\", \"gate\", \"checks\", \"go-affected.json\")\n",
+			} {
+				full := filepath.Join(f.root, filepath.FromSlash(rel))
+				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeForkFile(t, full, body)
+			}
+
+			steps := &plannedSteps{workflowSteps: base, proposal: pieceProposal(tc.pieces), overlap: make(chan struct{})}
+			l.cfg.Steps = steps
+			result := &LoopResult{}
+			graphPass(t, l, result)
+			graphPass(t, l, result)
+
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var rule, detail, before, after string
+				if err := r.QueryRow(`SELECT rule,detail,before_graph,after_graph FROM graph_revisions`).Scan(&rule, &detail, &before, &after); err != nil {
+					return err
+				}
+				if rule != tc.rule {
+					t.Fatalf("rule=%q want %q (detail=%q)", rule, tc.rule, detail)
+				}
+				if tc.rule != "" {
+					if before != after {
+						t.Fatalf("refusal changed graph")
+					}
+					for _, sub := range tc.wantDetail {
+						if !strings.Contains(detail, sub) {
+							t.Fatalf("detail %q lacks %q", detail, sub)
+						}
+					}
+					return nil
+				}
+				if before == after {
+					t.Fatalf("expected accepted proposal to update graph")
+				}
+				return nil
+			})
+		})
+	}
+}
+
 func TestPlannedBuildPieceScheduling(t *testing.T) {
 	_, l, base := plannedFixture(t)
 	l.cfg.Lanes = []string{"lane-1", "lane-2"}

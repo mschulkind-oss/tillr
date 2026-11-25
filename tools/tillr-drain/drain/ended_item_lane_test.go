@@ -80,7 +80,7 @@ func TestClosingItemAfterTestWriteUncommittedWorkRestoresLane(t *testing.T) {
 	steps := &testWriteSteps{
 		workflowSteps: baseSteps,
 		proposal: pieceProposal([]map[string]any{
-			{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write failing test, leave uncommitted"},
+			{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write failing test"},
 			{"id": "impl", "seat": "build", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "implement fix"},
 		}),
 	}
@@ -247,7 +247,7 @@ func TestAllTerminalEndingsSaveUncommittedWorkAndRestoreLane(t *testing.T) {
 			steps := &testWriteSteps{
 				workflowSteps: baseSteps,
 				proposal: pieceProposal([]map[string]any{
-					{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write failing test, leave uncommitted"},
+					{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write failing test"},
 					{"id": "impl", "seat": "build", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "implement fix"},
 				}),
 			}
@@ -326,7 +326,7 @@ func TestWorkflowReleaseAfterItemClosedSavesUncommittedHandoff(t *testing.T) {
 		workflowSteps: baseSteps,
 		commitFirst:   true,
 		proposal: pieceProposal([]map[string]any{
-			{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write setup and leave failing test uncommitted"},
+			{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write setup and failing test"},
 			{"id": "impl", "seat": "build", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "implement fix"},
 		}),
 	}
@@ -432,7 +432,7 @@ func TestReclaimEndedItemLanesLeavesActiveItemWorkUntouched(t *testing.T) {
 	steps := &testWriteSteps{
 		workflowSteps: baseSteps,
 		proposal: pieceProposal([]map[string]any{
-			{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write failing test, leave uncommitted"},
+			{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write failing test"},
 			{"id": "impl", "seat": "build", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "implement fix"},
 		}),
 	}
@@ -466,7 +466,7 @@ func TestReclaimEndedItemLanesSkipsPendingFoldAndTempSorts(t *testing.T) {
 	steps := &testWriteSteps{
 		workflowSteps: baseSteps,
 		proposal: pieceProposal([]map[string]any{
-			{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write failing test, leave uncommitted"},
+			{"id": "tests", "seat": "test-write", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "write failing test"},
 			{"id": "impl", "seat": "build", "access": "write", "write_scope": []string{"tools/item-a"}, "prompt": "implement fix"},
 		}),
 	}

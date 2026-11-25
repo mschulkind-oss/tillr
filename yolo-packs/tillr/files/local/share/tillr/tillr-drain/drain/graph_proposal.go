@@ -544,11 +544,21 @@ func (l *Loop) settleProposal(tx *store.Tx, d *Decision, artifacts []nodeArtifac
 					r = "proposal-seat-unmapped"
 				} else if strings.Contains(err.Error(), "workflow-read-only-seat-writes") {
 					r = "proposal-read-only-seat-writes"
+				} else if strings.Contains(err.Error(), "workflow-task-outside-scope") {
+					r = "proposal-task-outside-scope"
+				} else if strings.Contains(err.Error(), "workflow-task-forbids-commit") {
+					r = "proposal-task-forbids-commit"
 				}
 				refuse(r, err)
 			} else {
 				if err := inner.CheckScopes(nil); err != nil {
 					refuse("proposal-scope-outside-fence", err)
+				} else if err := inner.CheckNodeTasks(l.cfg.Root); err != nil {
+					r := "proposal-task-outside-scope"
+					if strings.Contains(err.Error(), "workflow-task-forbids-commit") {
+						r = "proposal-task-forbids-commit"
+					}
+					refuse(r, err)
 				} else {
 					_, _, pinned, err := item.ReadWorkflowSelection(tx.Reader(), d.ItemID)
 					if err != nil {

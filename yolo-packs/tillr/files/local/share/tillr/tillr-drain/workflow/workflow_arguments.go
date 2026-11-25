@@ -159,6 +159,9 @@ func ParseWorkflowPiece(root string, value any) (WorkflowPiece, error) {
 			return p, err
 		}
 	}
+	if err := ValidateNodeTask(root, p.ID, p.Access, p.WriteScope, p.Prompt); err != nil {
+		return p, err
+	}
 	if outputs, ok := fields["outputs"]; ok {
 		if _, ok := outputs.(map[string]any); !ok {
 			return p, fmt.Errorf("piece outputs must be a map")
