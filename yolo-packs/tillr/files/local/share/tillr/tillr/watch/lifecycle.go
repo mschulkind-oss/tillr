@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/definition"
@@ -19,10 +20,55 @@ const (
 	trackedKind      = "watch.alert.tracked"
 	silencedKind     = "watch.alert.silenced"
 	reopenedKind     = "watch.alert.reopened"
+	investigatedKind = "watch.alert.investigated"
+	settledKind      = "watch.alert.settled"
 )
 
 // ErrAlertNotFound reports that no episode has the given alert ID.
 var ErrAlertNotFound = errors.New("not found")
+
+// ErrInvestigationRequired reports that settle was attempted without a recorded
+// investigation or inline cause and evidence.
+var ErrInvestigationRequired = errors.New("investigation required before settlement")
+
+// SettleOptions configures Evaluator.Settle.
+type SettleOptions struct {
+	By       string
+	Outcome  string // "fix-rule" | "fix-fault"
+	ItemID   string
+	LinkKind string // optional: "filed" | "linked"
+	Cause    string // optional inline investigation cause
+	Evidence string // optional inline investigation evidence
+}
+
+var settlementColumnNames = []string{
+	"settlement_state",
+	"investigated_by",
+	"investigated_at",
+	"investigation_cause",
+	"investigation_evidence",
+	"outcome",
+	"item_link_kind",
+	"settled_by",
+	"settled_at",
+	"settled_seq",
+	"settled_fingerprint",
+	"settled_lag_pair",
+	"reopen_count_for_item",
+}
+
+func hasSettlementColumns(rd *store.Reader) (bool, error) {
+	for _, col := range settlementColumnNames {
+		ok, err := alertEpisodesHasColumn(rd, col)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
 
 type episodeAction struct {
 	state, fingerprint string
@@ -31,9 +77,13 @@ type episodeAction struct {
 	ackedNote          sql.NullString
 	trackingItemID     sql.NullString
 	trackedLagPair     sql.NullString
+	settlementState    string
+	outcome            sql.NullString
+	settledBy          sql.NullString
 	hasTrackingCol     bool
 	hasLagPairCol      bool
 	hasAckCols         bool
+	hasSettlementCols  bool
 	payload            map[string]any
 }
 
@@ -54,40 +104,61 @@ func (a episodeAction) refuse(id string) error {
 	return fmt.Errorf("alert %s is %s", id, a.state)
 }
 
-func validateStoreOpenItem(rd *store.Reader, a episodeAction, id, itemID string) error {
+func validateStoreSettleItem(rd *store.Reader, a episodeAction, id, itemID string) error {
 	hasItems, err := tableExists(rd, "items")
 	if err != nil {
 		return err
 	}
 	if !hasItems {
-		return fmt.Errorf("%w: items table does not exist", a.refuse(id))
+		// Standalone watch store without an items table accepts any non-empty reference (D-AW10).
+		return nil
 	}
 	rec, err := definition.ForReader(rd)
 	if err != nil {
 		return fmt.Errorf("%w: %w", a.refuse(id), err)
 	}
+	return validateStoreSettleItemWithItems(rd, a, id, itemID, rec.Parsed)
+}
+
+func validateStoreSettleItemWithItems(rd *store.Reader, a episodeAction, id, itemID string, d definition.Definition) error {
+	var hasEventSeq bool
+	if err := rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name = 'event_seq')`).Scan(&hasEventSeq); err != nil {
+		return err
+	}
 	var st sql.NullString
-	err = rd.QueryRow(`SELECT state FROM items WHERE item_id = ?`, itemID).Scan(&st)
+	var itemSeq int64
+	var err error
+	if hasEventSeq {
+		err = rd.QueryRow(`SELECT state, COALESCE(event_seq, 0) FROM items WHERE item_id = ?`, itemID).Scan(&st, &itemSeq)
+	} else {
+		err = rd.QueryRow(`SELECT state FROM items WHERE item_id = ?`, itemID).Scan(&st)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: item %s not found", a.refuse(id), itemID)
 	}
 	if err != nil {
 		return err
 	}
-	d := rec.Parsed
-	if st.String == d.Closed || slices.Contains(d.Finished, st.String) {
-		return fmt.Errorf("%w: item %s is %s; tracking requires an open item", a.refuse(id), itemID, st.String)
+	if st.String == d.Closed {
+		return fmt.Errorf("%w: item %s is %s; cannot settle with a closed item", a.refuse(id), itemID, st.String)
 	}
-	return nil
-}
-
-func ensureTrackingColumns(tx *store.Tx, a episodeAction) error {
-	if !a.hasTrackingCol {
-		if _, err := tx.Exec(`ALTER TABLE alert_episodes ADD COLUMN tracking_item_id TEXT`); err != nil {
-			return err
+	if slices.Contains(d.Finished, st.String) {
+		if itemSeq == 0 {
+			hasEvents, err := tableExists(rd, "events")
+			if err != nil {
+				return err
+			}
+			if hasEvents {
+				if err := rd.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM events WHERE object_type = 'item' AND object_id = ?`, itemID).Scan(&itemSeq); err != nil {
+					return err
+				}
+			}
+		}
+		if itemSeq <= a.lastObservedSeq {
+			return fmt.Errorf("%w: item %s is %s (seq %d <= last observed seq %d); file a new item", a.refuse(id), itemID, st.String, itemSeq, a.lastObservedSeq)
 		}
 	}
-	return ensureAckColumns(tx, a)
+	return nil
 }
 
 func ensureAckColumns(tx *store.Tx, a episodeAction) error {
@@ -117,7 +188,7 @@ func ensureAckColumns(tx *store.Tx, a episodeAction) error {
 }
 
 // NeedsAckMigration validates an ack operation read-only and reports whether
-// alert_episodes exists without the single-instance ack watermark columns so a
+// alert_episodes exists without the single-instance ack or settlement columns so a
 // CLI caller can upgrade via store.OpenMigrated only after all refusals pass.
 func (e Evaluator) NeedsAckMigration(ctx context.Context, id, by string) (bool, error) {
 	if e.Store == nil {
@@ -135,16 +206,32 @@ func (e Evaluator) NeedsAckMigration(ctx context.Context, id, by string) (bool, 
 		if a.state != "open" {
 			return a.refuse(id)
 		}
-		need = !a.hasAckCols || !a.hasLagPairCol
+		need = !a.hasAckCols || !a.hasLagPairCol || !a.hasSettlementCols
 		return nil
 	})
 	return need, err
 }
 
-// NeedsTrackingMigration validates a track operation read-only and reports
-// whether alert_episodes exists without tracking_item_id so a CLI caller can
-// upgrade via store.OpenMigrated only after all refusals pass.
-func (e Evaluator) NeedsTrackingMigration(ctx context.Context, id, itemID string, by *string) (bool, error) {
+func validateInvestigationFields(a episodeAction, id, by, cause, evidence string) error {
+	if strings.TrimSpace(by) == "" {
+		return fmt.Errorf("%w: --by is required and must not be empty", a.refuse(id))
+	}
+	trimmedCause := strings.TrimSpace(cause)
+	if trimmedCause == "" {
+		return fmt.Errorf("%w: --cause is required and must not be empty", a.refuse(id))
+	}
+	if strings.EqualFold(trimmedCause, "unknown") {
+		return fmt.Errorf("%w: --cause must not be %q", a.refuse(id), "unknown")
+	}
+	if strings.TrimSpace(evidence) == "" {
+		return fmt.Errorf("%w: --evidence is required and must not be empty", a.refuse(id))
+	}
+	return nil
+}
+
+// NeedsInvestigateMigration validates an investigate operation read-only and reports
+// whether alert_episodes lacks the settlement columns.
+func (e Evaluator) NeedsInvestigateMigration(ctx context.Context, id, by, cause, evidence string) (bool, error) {
 	if e.Store == nil {
 		return false, nil
 	}
@@ -154,26 +241,82 @@ func (e Evaluator) NeedsTrackingMigration(ctx context.Context, id, itemID string
 		if err != nil {
 			return err
 		}
-		if itemID == "" {
-			return fmt.Errorf("%w: --item is required and must not be empty", a.refuse(id))
-		}
-		if by != nil && *by == "" {
-			return fmt.Errorf("%w: --by must not be empty", a.refuse(id))
-		}
-		if a.state == "resolved" {
-			return a.refuse(id)
-		}
-		if err := validateStoreOpenItem(rd, a, id, itemID); err != nil {
+		if err := validateInvestigationFields(a, id, by, cause, evidence); err != nil {
 			return err
 		}
-		need = !a.hasTrackingCol || !a.hasLagPairCol || !a.hasAckCols
+		if a.settlementState == "settled" {
+			return fmt.Errorf("alert %s is already settled", id)
+		}
+		need = !a.hasSettlementCols
 		return nil
 	})
 	return need, err
 }
 
+// NeedsSettleMigration validates a settle operation read-only and reports
+// whether alert_episodes lacks the settlement or tracking columns.
+func (e Evaluator) NeedsSettleMigration(ctx context.Context, id string, opts SettleOptions) (bool, error) {
+	if e.Store == nil {
+		return false, nil
+	}
+	var need bool
+	err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
+		a, err := readEpisodeAction(rd, id)
+		if err != nil {
+			return err
+		}
+		if err := validateSettleOptions(a, id, opts); err != nil {
+			return err
+		}
+		if a.settlementState == "settled" {
+			if err := checkSettleConflict(a, id, opts); err != nil {
+				return err
+			}
+			need = !a.hasSettlementCols || !a.hasTrackingCol || !a.hasLagPairCol
+			return nil
+		}
+		if opts.Cause != "" || opts.Evidence != "" {
+			if err := validateInvestigationFields(a, id, opts.By, opts.Cause, opts.Evidence); err != nil {
+				return err
+			}
+		} else if a.settlementState != "investigated" {
+			return fmt.Errorf("%w: %s", ErrInvestigationRequired, a.refuse(id))
+		}
+		if err := validateStoreSettleItem(rd, a, id, opts.ItemID); err != nil {
+			return err
+		}
+		need = !a.hasSettlementCols || !a.hasTrackingCol || !a.hasLagPairCol
+		return nil
+	})
+	return need, err
+}
+
+func validateSettleOptions(a episodeAction, id string, opts SettleOptions) error {
+	if strings.TrimSpace(opts.By) == "" {
+		return fmt.Errorf("%w: --by is required and must not be empty", a.refuse(id))
+	}
+	if opts.Outcome != "fix-rule" && opts.Outcome != "fix-fault" {
+		return fmt.Errorf("%w: --outcome must be fix-rule or fix-fault", a.refuse(id))
+	}
+	if strings.TrimSpace(opts.ItemID) == "" {
+		return fmt.Errorf("%w: --item is required and must not be empty", a.refuse(id))
+	}
+	if opts.LinkKind != "" && opts.LinkKind != "filed" && opts.LinkKind != "linked" {
+		return fmt.Errorf("%w: --link-kind must be filed or linked", a.refuse(id))
+	}
+	return nil
+}
+
+func checkSettleConflict(a episodeAction, id string, opts SettleOptions) error {
+	if a.settledBy.String == opts.By && a.outcome.String == opts.Outcome && a.trackingItemID.String == opts.ItemID {
+		return nil
+	}
+	return fmt.Errorf("alert %s is already settled by %s (outcome=%s, item=%s)", id, a.settledBy.String, a.outcome.String, a.trackingItemID.String)
+}
+
 // Ack records an actor's single-instance claim on an open episode (recording
-// acked_seq, acked_fingerprint, and acked_lag_pair). It does not evaluate rules.
+// acked_seq, acked_fingerprint, and acked_lag_pair) and moves settlement_state
+// from uninvestigated to investigating. It does not evaluate rules.
 func (e Evaluator) Ack(ctx context.Context, id, by string, note *string) error {
 	if e.Store == nil {
 		if e.Source == nil {
@@ -189,6 +332,9 @@ func (e Evaluator) Ack(ctx context.Context, id, by string, note *string) error {
 			}
 			a.payload["by"], a.payload["note"] = by, note
 			ep.state = "acknowledged"
+			if ep.settlementState == "" || ep.settlementState == "uninvestigated" {
+				ep.settlementState = "investigating"
+			}
 			ep.ackedBy = sql.NullString{String: by, Valid: true}
 			if note != nil {
 				ep.ackedNote = sql.NullString{String: *note, Valid: true}
@@ -225,94 +371,189 @@ func (e Evaluator) Ack(ctx context.Context, id, by string, note *string) error {
 			ackedSeq = max(ackedSeq, headSeq)
 		}
 		a.payload["by"], a.payload["note"] = by, note
+		if a.hasSettlementCols {
+			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',acked_by=?,acked_note=?,acked_at=?,acked_seq=?,acked_fingerprint=condition_fingerprint,acked_lag_pair=tracked_lag_pair,settlement_state=CASE WHEN settlement_state IN ('uninvestigated','') THEN 'investigating' ELSE settlement_state END WHERE alert_id=?`,
+				by, note, now.UnixMilli(), ackedSeq, id)
+			return err
+		}
 		_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',acked_by=?,acked_note=?,acked_at=?,acked_seq=?,acked_fingerprint=condition_fingerprint,acked_lag_pair=tracked_lag_pair WHERE alert_id=?`,
 			by, note, now.UnixMilli(), ackedSeq, id)
 		return err
 	})
 }
 
-// Track attaches or updates the open queue item tracking an unresolved alert
-// episode and records watch.alert.tracked. It does not evaluate rules.
-func (e Evaluator) Track(ctx context.Context, id, itemID string, by, note *string) error {
+// Investigate records the established cause and evidence on an episode in any
+// state (including resolved), moving settlement_state to investigated.
+func (e Evaluator) Investigate(ctx context.Context, id, by, cause, evidence string) error {
 	if e.Store == nil {
 		if e.Source == nil {
 			return fmt.Errorf("watch: Evaluator requires Store or Source")
 		}
 		now := e.now()
-		return e.mem.act(id, trackedKind, now, func(ep *memEpisode, a episodeAction) error {
-			if itemID == "" {
-				return fmt.Errorf("%w: --item is required and must not be empty", a.refuse(id))
-			}
-			if by != nil && *by == "" {
-				return fmt.Errorf("%w: --by must not be empty", a.refuse(id))
-			}
-			if a.state == "resolved" {
-				return a.refuse(id)
-			}
-			if err := validateSourceOpenItem(ctx, e.Source, a, id, itemID); err != nil {
+		return e.mem.act(id, investigatedKind, now, func(ep *memEpisode, a episodeAction) error {
+			if err := validateInvestigationFields(a, id, by, cause, evidence); err != nil {
 				return err
 			}
-			a.payload["item_id"] = itemID
-			a.payload["by"] = by
-			a.payload["note"] = note
-			ep.state = "acknowledged"
-			ep.trackingItemID = sql.NullString{String: itemID, Valid: true}
-			ep.ackedSeq = sql.NullInt64{Int64: max(ep.lastObservedSeq, e.mem.lastSourceSeq), Valid: true}
-			ep.ackedFingerprint = sql.NullString{}
-			ep.ackedLagPair = sql.NullString{}
-			ep.silenceUntilMS = sql.NullInt64{}
-			ep.silenceOnFingerprint = sql.NullString{}
-			if by != nil {
-				ep.ackedBy = sql.NullString{String: *by, Valid: true}
-				ep.ackedAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
-				if note != nil {
-					ep.ackedNote = sql.NullString{String: *note, Valid: true}
-				} else {
-					ep.ackedNote = sql.NullString{}
-				}
-			} else if note != nil {
-				ep.ackedNote = sql.NullString{String: *note, Valid: true}
+			if a.settlementState == "settled" {
+				return fmt.Errorf("alert %s is already settled", id)
 			}
+			a.payload["by"] = by
+			a.payload["cause"] = cause
+			a.payload["evidence"] = evidence
+			ep.settlementState = "investigated"
+			ep.investigatedBy = sql.NullString{String: by, Valid: true}
+			ep.investigatedAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
+			ep.investigationCause = sql.NullString{String: cause, Valid: true}
+			ep.investigationEvidence = sql.NullString{String: evidence, Valid: true}
 			return nil
 		})
 	}
-	return e.act(ctx, id, trackedKind, func(tx *store.Tx, a episodeAction, now time.Time) error {
-		if itemID == "" {
-			return fmt.Errorf("%w: --item is required and must not be empty", a.refuse(id))
-		}
-		if by != nil && *by == "" {
-			return fmt.Errorf("%w: --by must not be empty", a.refuse(id))
-		}
-		if a.state == "resolved" {
-			return a.refuse(id)
-		}
-		if err := validateStoreOpenItem(tx.Reader(), a, id, itemID); err != nil {
+	return e.act(ctx, id, investigatedKind, func(tx *store.Tx, a episodeAction, now time.Time) error {
+		if err := validateInvestigationFields(a, id, by, cause, evidence); err != nil {
 			return err
 		}
-		if err := ensureTrackingColumns(tx, a); err != nil {
-			return err
+		if a.settlementState == "settled" {
+			return fmt.Errorf("alert %s is already settled", id)
 		}
-		headSeq, err := tx.Reader().EventHeadSeq()
+		if !a.hasSettlementCols {
+			return fmt.Errorf("alert %s: settlement columns missing; migrate store first", id)
+		}
+		a.payload["by"] = by
+		a.payload["cause"] = cause
+		a.payload["evidence"] = evidence
+		_, err := tx.Exec(`UPDATE alert_episodes SET settlement_state='investigated',investigated_by=?,investigated_at=?,investigation_cause=?,investigation_evidence=? WHERE alert_id=?`,
+			by, now.UnixMilli(), cause, evidence, id)
+		return err
+	})
+}
+
+// Settle records an episode's settlement outcome (fix-rule or fix-fault) and
+// verified queue item, plus single-instance settled watermarks.
+func (e Evaluator) Settle(ctx context.Context, id string, opts SettleOptions) error {
+	if e.Store == nil {
+		if e.Source == nil {
+			return fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		now := e.now()
+		return e.mem.settle(id, now, func(ep *memEpisode, a episodeAction) (bool, error) {
+			if err := validateSettleOptions(a, id, opts); err != nil {
+				return false, err
+			}
+			if a.settlementState == "settled" {
+				return false, checkSettleConflict(a, id, opts)
+			}
+			inline := opts.Cause != "" || opts.Evidence != ""
+			if inline {
+				if err := validateInvestigationFields(a, id, opts.By, opts.Cause, opts.Evidence); err != nil {
+					return false, err
+				}
+			} else if a.settlementState != "investigated" {
+				return false, fmt.Errorf("%w: %s", ErrInvestigationRequired, a.refuse(id))
+			}
+			if err := validateSourceSettleItem(ctx, e.Source, a, id, opts.ItemID); err != nil {
+				return false, err
+			}
+			if inline {
+				ep.investigatedBy = sql.NullString{String: opts.By, Valid: true}
+				ep.investigatedAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
+				ep.investigationCause = sql.NullString{String: opts.Cause, Valid: true}
+				ep.investigationEvidence = sql.NullString{String: opts.Evidence, Valid: true}
+			}
+			settledSeq := ep.lastObservedSeq
+			if ep.trackedLagPair.Valid && ep.trackedLagPair.String != "" {
+				settledSeq = max(settledSeq, e.mem.lastSourceSeq)
+			}
+			ep.settlementState = "settled"
+			ep.outcome = sql.NullString{String: opts.Outcome, Valid: true}
+			ep.trackingItemID = sql.NullString{String: opts.ItemID, Valid: true}
+			if opts.LinkKind != "" {
+				ep.itemLinkKind = sql.NullString{String: opts.LinkKind, Valid: true}
+			} else {
+				ep.itemLinkKind = sql.NullString{}
+			}
+			ep.settledBy = sql.NullString{String: opts.By, Valid: true}
+			ep.settledAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
+			ep.settledSeq = sql.NullInt64{Int64: settledSeq, Valid: true}
+			ep.settledFingerprint = sql.NullString{String: ep.conditionFingerprint, Valid: true}
+			ep.settledLagPair = ep.trackedLagPair
+			return inline, nil
+		}, opts)
+	}
+	return e.Store.WriteTx(ctx, func(tx *store.Tx) error {
+		a, err := readEpisodeAction(tx.Reader(), id)
 		if err != nil {
 			return err
 		}
-		ackedSeq := max(a.lastObservedSeq, headSeq)
-		a.payload["item_id"] = itemID
-		a.payload["by"] = by
-		a.payload["note"] = note
-		if by != nil {
-			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,acked_by=?,acked_note=?,acked_at=?,silence_until_ms=NULL,silence_on_fingerprint=NULL,acked_seq=?,acked_fingerprint=NULL,acked_lag_pair=NULL WHERE alert_id=?`,
-				itemID, *by, note, now.UnixMilli(), ackedSeq, id)
+		if err := validateSettleOptions(a, id, opts); err != nil {
 			return err
 		}
-		if note != nil {
-			_, err := tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,acked_note=?,silence_until_ms=NULL,silence_on_fingerprint=NULL,acked_seq=?,acked_fingerprint=NULL,acked_lag_pair=NULL WHERE alert_id=?`,
-				itemID, *note, ackedSeq, id)
+		if a.settlementState == "settled" {
+			return checkSettleConflict(a, id, opts)
+		}
+		inline := opts.Cause != "" || opts.Evidence != ""
+		if inline {
+			if err := validateInvestigationFields(a, id, opts.By, opts.Cause, opts.Evidence); err != nil {
+				return err
+			}
+		} else if a.settlementState != "investigated" {
+			return fmt.Errorf("%w: %s", ErrInvestigationRequired, a.refuse(id))
+		}
+		if err := validateStoreSettleItem(tx.Reader(), a, id, opts.ItemID); err != nil {
 			return err
 		}
-		_, err = tx.Exec(`UPDATE alert_episodes SET state='acknowledged',tracking_item_id=?,silence_until_ms=NULL,silence_on_fingerprint=NULL,acked_seq=?,acked_fingerprint=NULL,acked_lag_pair=NULL WHERE alert_id=?`,
-			itemID, ackedSeq, id)
-		return err
+		if !a.hasSettlementCols || !a.hasTrackingCol || !a.hasLagPairCol {
+			return fmt.Errorf("alert %s: settlement columns missing; migrate store first", id)
+		}
+		now := e.now()
+		settledSeq := a.lastObservedSeq
+		if a.trackedLagPair.Valid && a.trackedLagPair.String != "" {
+			headSeq, err := tx.Reader().EventHeadSeq()
+			if err != nil {
+				return err
+			}
+			settledSeq = max(settledSeq, headSeq)
+		}
+		var linkKind sql.NullString
+		if opts.LinkKind != "" {
+			linkKind = sql.NullString{String: opts.LinkKind, Valid: true}
+		}
+		if inline {
+			if _, err := tx.Exec(`UPDATE alert_episodes SET settlement_state='settled',investigated_by=?,investigated_at=?,investigation_cause=?,investigation_evidence=?,outcome=?,tracking_item_id=?,item_link_kind=?,settled_by=?,settled_at=?,settled_seq=?,settled_fingerprint=condition_fingerprint,settled_lag_pair=tracked_lag_pair WHERE alert_id=?`,
+				opts.By, now.UnixMilli(), opts.Cause, opts.Evidence, opts.Outcome, opts.ItemID, linkKind, opts.By, now.UnixMilli(), settledSeq, id); err != nil {
+				return err
+			}
+			invPayload := map[string]any{
+				"alert_id":    id,
+				"rule_id":     a.payload["rule_id"],
+				"subject_key": a.payload["subject_key"],
+				"severity":    a.payload["severity"],
+				"by":          opts.By,
+				"cause":       opts.Cause,
+				"evidence":    opts.Evidence,
+			}
+			if err := appendAlert(tx, id, investigatedKind, now, invPayload); err != nil {
+				return err
+			}
+		} else {
+			if _, err := tx.Exec(`UPDATE alert_episodes SET settlement_state='settled',outcome=?,tracking_item_id=?,item_link_kind=?,settled_by=?,settled_at=?,settled_seq=?,settled_fingerprint=condition_fingerprint,settled_lag_pair=tracked_lag_pair WHERE alert_id=?`,
+				opts.Outcome, opts.ItemID, linkKind, opts.By, now.UnixMilli(), settledSeq, id); err != nil {
+				return err
+			}
+		}
+		settlePayload := map[string]any{
+			"alert_id":    id,
+			"rule_id":     a.payload["rule_id"],
+			"subject_key": a.payload["subject_key"],
+			"severity":    a.payload["severity"],
+			"by":          opts.By,
+			"outcome":     opts.Outcome,
+			"item_id":     opts.ItemID,
+			"settled_seq": settledSeq,
+		}
+		if opts.LinkKind != "" {
+			settlePayload["link_kind"] = opts.LinkKind
+		}
+		return appendAlert(tx, id, settledKind, now, settlePayload)
 	})
 }
 
@@ -410,53 +651,6 @@ func silenceTime(input string, now time.Time) (time.Time, error) {
 	return expires, nil
 }
 
-// Resolve records a manual resolution through the store head at the time of
-// the action, excluding the resolution event itself.
-func (e Evaluator) Resolve(ctx context.Context, id, note string) error {
-	if e.Store == nil {
-		if e.Source == nil {
-			return fmt.Errorf("watch: Evaluator requires Store or Source")
-		}
-		now := e.now()
-		return e.mem.act(id, resolvedKind, now, func(ep *memEpisode, a episodeAction) error {
-			if note == "" {
-				return fmt.Errorf("%w: --reason is required and must not be empty", a.refuse(id))
-			}
-			if a.state == "resolved" {
-				return a.refuse(id)
-			}
-			seq := max(e.mem.lastSourceSeq, ep.lastObservedSeq)
-			a.payload["resolved_seq"], a.payload["reason"], a.payload["note"] = seq, "manual", note
-			if a.trackingItemID.Valid && a.trackingItemID.String != "" {
-				a.payload["item_id"] = a.trackingItemID.String
-			}
-			ep.state = "resolved"
-			ep.resolvedSeq = sql.NullInt64{Int64: seq, Valid: true}
-			ep.resolvedAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
-			ep.resolvedReason = sql.NullString{String: "manual", Valid: true}
-			return nil
-		})
-	}
-	return e.act(ctx, id, resolvedKind, func(tx *store.Tx, a episodeAction, now time.Time) error {
-		if note == "" {
-			return fmt.Errorf("%w: --reason is required and must not be empty", a.refuse(id))
-		}
-		if a.state == "resolved" {
-			return a.refuse(id)
-		}
-		seq, err := tx.Reader().EventHeadSeq()
-		if err != nil {
-			return err
-		}
-		a.payload["resolved_seq"], a.payload["reason"], a.payload["note"] = seq, "manual", note
-		if a.trackingItemID.Valid && a.trackingItemID.String != "" {
-			a.payload["item_id"] = a.trackingItemID.String
-		}
-		_, err = tx.Exec(`UPDATE alert_episodes SET state='resolved',resolved_seq=?,resolved_at=?,resolved_reason='manual' WHERE alert_id=?`, seq, now.UnixMilli(), id)
-		return err
-	})
-}
-
 // RefuseEpisode reports an invalid command option alongside the episode state
 // without editing the store.
 func (e Evaluator) RefuseEpisode(ctx context.Context, id string, reason error) error {
@@ -504,9 +698,14 @@ func readEpisodeAction(rd *store.Reader, id string) (episodeAction, error) {
 	if err != nil {
 		return a, err
 	}
+	hasSettlementCols, err := hasSettlementColumns(rd)
+	if err != nil {
+		return a, err
+	}
 	a.hasTrackingCol = hasTracking
 	a.hasLagPairCol = hasLagPair
 	a.hasAckCols = hasAckedSeq && hasAckedFP && hasAckedLag
+	a.hasSettlementCols = hasSettlementCols
 	var rule, subject, severity string
 	cols := "state,condition_fingerprint,last_observed_seq,acked_by,acked_note"
 	dest := []any{&a.state, &a.fingerprint, &a.lastObservedSeq, &a.ackedBy, &a.ackedNote}
@@ -517,6 +716,10 @@ func readEpisodeAction(rd *store.Reader, id string) (episodeAction, error) {
 	if hasLagPair {
 		cols += ",tracked_lag_pair"
 		dest = append(dest, &a.trackedLagPair)
+	}
+	if hasSettlementCols {
+		cols += ",settlement_state,outcome,settled_by"
+		dest = append(dest, &a.settlementState, &a.outcome, &a.settledBy)
 	}
 	cols += ",rule_id,subject_key,severity"
 	dest = append(dest, &rule, &subject, &severity)

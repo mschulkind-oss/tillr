@@ -36,12 +36,29 @@ func init() {
 		{"acked_fingerprint", "TEXT"},
 		{"acked_lag_pair", "TEXT"},
 		{"variables_json", "TEXT NOT NULL DEFAULT '{}'"},
+		{"settlement_state", "TEXT NOT NULL DEFAULT 'uninvestigated'"},
+		{"investigated_by", "TEXT"},
+		{"investigated_at", "INTEGER"},
+		{"investigation_cause", "TEXT"},
+		{"investigation_evidence", "TEXT"},
+		{"outcome", "TEXT"},
+		{"item_link_kind", "TEXT"},
+		{"settled_by", "TEXT"},
+		{"settled_at", "INTEGER"},
+		{"settled_seq", "INTEGER"},
+		{"settled_fingerprint", "TEXT"},
+		{"settled_lag_pair", "TEXT"},
+		{"reopen_count_for_item", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := store.RegisterColumn("watch", "alert_episodes", col.name, col.decl); err != nil {
 			panic(err)
 		}
 	}
-	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, trackedKind, silencedKind, reopenedKind, ruleSetKind, ruleResetKind} {
+	if err := store.RegisterColumnBackfill("watch", "alert_episodes", "settlement_state",
+		`UPDATE alert_episodes SET settlement_state = 'settled' WHERE state = 'resolved'`); err != nil {
+		panic(err)
+	}
+	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, trackedKind, silencedKind, reopenedKind, investigatedKind, settledKind, ruleSetKind, ruleResetKind} {
 		if err := event.Register(kind, "watch"); err != nil {
 			panic(err)
 		}
@@ -77,7 +94,20 @@ CREATE TABLE IF NOT EXISTS alert_episodes (
  resolved_at INTEGER,
  resolved_reason TEXT,
  bundle_json TEXT NOT NULL,
- variables_json TEXT NOT NULL DEFAULT '{}'
+ variables_json TEXT NOT NULL DEFAULT '{}',
+ settlement_state TEXT NOT NULL DEFAULT 'uninvestigated',
+ investigated_by TEXT,
+ investigated_at INTEGER,
+ investigation_cause TEXT,
+ investigation_evidence TEXT,
+ outcome TEXT,
+ item_link_kind TEXT,
+ settled_by TEXT,
+ settled_at INTEGER,
+ settled_seq INTEGER,
+ settled_fingerprint TEXT,
+ settled_lag_pair TEXT,
+ reopen_count_for_item INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS alert_episodes_one_active
     ON alert_episodes(rule_id, subject_key) WHERE state != 'resolved';
@@ -813,6 +843,12 @@ type episode struct {
 	ackedLagPair         sql.NullString
 	ackedWatermark       int64
 	hasAckCols           bool
+	settlementState      string
+	settledSeq           sql.NullInt64
+	settledFingerprint   sql.NullString
+	settledLagPair       sql.NullString
+	reopenCountForItem   int64
+	hasSettlementCols    bool
 }
 
 func (ep episode) reopenCause(r Rule, now time.Time, newest observation, lagPair string) string {
@@ -824,7 +860,41 @@ func (ep episode) reopenCause(r Rule, now time.Time, newest observation, lagPair
 		if ep.silenceOn.Valid && ep.silenceOn.String != newest.fingerprint {
 			return "fingerprint-changed"
 		}
-	case "acknowledged":
+		return ""
+	}
+	if ep.settlementState == "settled" {
+		settledFP := ep.conditionFingerprint
+		if ep.settledFingerprint.Valid {
+			settledFP = ep.settledFingerprint.String
+		}
+		if newest.fingerprint != settledFP {
+			return "new-instance"
+		}
+		if r.When.Pattern == LagBehind {
+			if r.When.ReopenWhen != nil {
+				return ""
+			}
+			if ep.settledLagPair.Valid {
+				if lagPair != ep.settledLagPair.String {
+					return "new-instance"
+				}
+			} else if ep.trackedLagPair.Valid && ep.trackedLagPair.String != "" {
+				if lagPair != ep.trackedLagPair.String {
+					return "new-instance"
+				}
+			}
+			return ""
+		}
+		settledSeq := ep.last
+		if ep.settledSeq.Valid {
+			settledSeq = ep.settledSeq.Int64
+		}
+		if newest.Seq > settledSeq {
+			return "new-instance"
+		}
+		return ""
+	}
+	if ep.state == "acknowledged" {
 		ackedFP := ep.conditionFingerprint
 		if ep.ackedFingerprint.Valid {
 			ackedFP = ep.ackedFingerprint.String
@@ -905,7 +975,7 @@ func (s activeSnapshot) sortedCompositeKeys(ruleID string, n int) []string {
 }
 
 func loadActiveEpisodes(rd *store.Reader, cache *evalCache) (activeSnapshot, error) {
-	var hasTracking, hasLagPair, hasAckCols bool
+	var hasTracking, hasLagPair, hasAckCols, hasSettlementCols bool
 	if cache != nil && cache.hasAlertTrackingCols {
 		hasTracking, hasLagPair = true, true
 	} else {
@@ -942,6 +1012,18 @@ func loadActiveEpisodes(rd *store.Reader, cache *evalCache) (activeSnapshot, err
 			cache.hasAlertAckCols = true
 		}
 	}
+	if cache != nil && cache.hasAlertSettlementCols {
+		hasSettlementCols = true
+	} else {
+		var err error
+		hasSettlementCols, err = hasSettlementColumns(rd)
+		if err != nil {
+			return activeSnapshot{}, err
+		}
+		if cache != nil && hasSettlementCols {
+			cache.hasAlertSettlementCols = true
+		}
+	}
 	cols := "rule_id,subject_key,episode_num,alert_id,severity,opened_seq,last_observed_seq,condition_fingerprint,state,silence_until_ms,silence_on_fingerprint"
 	if hasTracking {
 		cols += ",tracking_item_id"
@@ -953,6 +1035,9 @@ func loadActiveEpisodes(rd *store.Reader, cache *evalCache) (activeSnapshot, err
 		cols += ",acked_seq,acked_fingerprint,acked_lag_pair,COALESCE(acked_seq,(SELECT MAX(seq) FROM events WHERE object_type='alert' AND object_id=alert_episodes.alert_id AND kind IN ('watch.alert.acknowledged','watch.alert.tracked')),last_observed_seq)"
 	} else {
 		cols += ",COALESCE((SELECT MAX(seq) FROM events WHERE object_type='alert' AND object_id=alert_episodes.alert_id AND kind IN ('watch.alert.acknowledged','watch.alert.tracked')),last_observed_seq)"
+	}
+	if hasSettlementCols {
+		cols += ",settlement_state,settled_seq,settled_fingerprint,settled_lag_pair,reopen_count_for_item"
 	}
 	rows, err := rd.Query("SELECT " + cols + " FROM alert_episodes WHERE state!='resolved'")
 	if err != nil {
@@ -966,6 +1051,7 @@ func loadActiveEpisodes(rd *store.Reader, cache *evalCache) (activeSnapshot, err
 	for rows.Next() {
 		var row activeEpisodeRow
 		row.ep.hasAckCols = hasAckCols
+		row.ep.hasSettlementCols = hasSettlementCols
 		dest := []any{&row.ruleID, &row.subject, &row.epNum, &row.ep.id, &row.ep.severity, &row.ep.opened, &row.ep.last, &row.ep.conditionFingerprint, &row.ep.state, &row.ep.silenceUntil, &row.ep.silenceOn}
 		if hasTracking {
 			dest = append(dest, &row.ep.trackingItem)
@@ -977,6 +1063,9 @@ func loadActiveEpisodes(rd *store.Reader, cache *evalCache) (activeSnapshot, err
 			dest = append(dest, &row.ep.ackedSeq, &row.ep.ackedFingerprint, &row.ep.ackedLagPair)
 		}
 		dest = append(dest, &row.ep.ackedWatermark)
+		if hasSettlementCols {
+			dest = append(dest, &row.ep.settlementState, &row.ep.settledSeq, &row.ep.settledFingerprint, &row.ep.settledLagPair, &row.ep.reopenCountForItem)
+		}
 		scanErr := rows.Scan(dest...)
 		if scanErr != nil {
 			return activeSnapshot{}, scanErr
@@ -1215,130 +1304,6 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 		}
 		firing := r.Enabled && c.fires(r.When)
 		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.last })
-		if exists && ep.trackingItem.Valid && ep.trackingItem.String != "" {
-			if !lookup.ready {
-				continue
-			}
-			trackedID := ep.trackingItem.String
-			itemState, itemExists, err := lookup.stateOf(trackedID)
-			if err != nil {
-				continue
-			}
-			if itemExists && !lookup.isTerminal(itemState) {
-				if firing && firstClear == len(c.clears) {
-					if ep.state == "acknowledged" && r.When.Pattern == LagBehind && r.When.ReopenWhen != nil &&
-						c.lag != nil && c.lag.reopenEvent != nil &&
-						c.lag.reopenEvent.Seq > max(ep.ackedWatermark, loadedSeq) {
-						pair := c.lag.leaderOID + ":" + c.lag.followerOID
-						nextSeq := max(ep.last, max(startHead, c.lag.reopenEvent.Seq))
-						if err := changes.reopenLagWhen(r, key, ep.id, c, pair, nextSeq, trackedID, now); err != nil {
-							return err
-						}
-						continue
-					}
-					if r.When.Pattern == LagBehind {
-						pair := c.lag.leaderOID + ":" + c.lag.followerOID
-						if !ep.trackedLagPair.Valid {
-							*changes = append(*changes, func(tx *store.Tx) error {
-								_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair=? WHERE alert_id=?`, pair, ep.id)
-								return err
-							})
-						} else if ep.trackedLagPair.String != pair {
-							nextSeq := max(ep.last, startHead)
-							*changes = append(*changes, func(tx *store.Tx) error {
-								_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair=?,last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, pair, nextSeq, now.UnixMilli(), ep.id)
-								return err
-							})
-						}
-					} else {
-						newest := conditionNewest(r, c, ep.last)
-						if newest.Seq > ep.last {
-							varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
-							*changes = append(*changes, func(tx *store.Tx) error {
-								hasVarsCol, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
-								if err != nil {
-									return err
-								}
-								if hasVarsCol {
-									_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=?,variables_json=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, varsJSON, ep.id)
-									return err
-								}
-								_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
-								return err
-							})
-						}
-					}
-					continue
-				}
-			} else {
-				if !firing {
-					seq := startHead
-					if firstClear < len(c.clears) {
-						seq = c.clears[firstClear]
-					}
-					if err := changes.resolve(r, key, ep.id, ep.trackingItem, seq, now); err != nil {
-						return err
-					}
-					continue
-				}
-				newest := observation{Seq: startHead}
-				var lagPair any
-				if r.When.Pattern == LagBehind {
-					pair := c.lag.leaderOID + ":" + c.lag.followerOID
-					lagPair = pair
-					if ep.trackedLagPair.Valid && ep.trackedLagPair.String != pair {
-						nextSeq := max(ep.last, startHead)
-						*changes = append(*changes, func(tx *store.Tx) error {
-							_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, nextSeq, now.UnixMilli(), ep.id)
-							return err
-						})
-					}
-				} else {
-					newest = conditionNewest(r, c, ep.last)
-					if isWindowedEventRule(r.When) {
-						cutoff := max(ep.last, lookup.terminalSeq(trackedID))
-						if newest.Seq <= cutoff {
-							if newest.Seq > ep.last {
-								varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
-								*changes = append(*changes, func(tx *store.Tx) error {
-									hasVarsCol, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
-									if err != nil {
-										return err
-									}
-									if hasVarsCol {
-										_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=?,variables_json=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, varsJSON, ep.id)
-										return err
-									}
-									_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
-									return err
-								})
-							}
-							continue
-						}
-					}
-					if newest.Seq > ep.last {
-						varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
-						*changes = append(*changes, func(tx *store.Tx) error {
-							hasVarsCol, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
-							if err != nil {
-								return err
-							}
-							if hasVarsCol {
-								_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,variables_json=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), varsJSON, ep.id)
-								return err
-							}
-							_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, newest.Seq, now.UnixMilli(), ep.id)
-							return err
-						})
-					}
-				}
-				cause, recordedState := lookup.reopenCause(itemState, itemExists)
-				if err := changes.reopenTracked(r, key, ep.id, c, newest.fingerprint, lagPair, cause, trackedID, recordedState, now); err != nil {
-					return err
-				}
-				continue
-			}
-		}
 		if exists && (!firing || firstClear < len(c.clears)) {
 			seq := startHead
 			if firstClear < len(c.clears) {
@@ -1365,10 +1330,31 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 		var currentLagPair string
 		if r.When.Pattern == LagBehind {
 			currentLagPair = c.lag.leaderOID + ":" + c.lag.followerOID
-			if ep.state == "acknowledged" && r.When.Pattern == LagBehind && r.When.ReopenWhen != nil &&
+			watermark := ep.ackedWatermark
+			if ep.settlementState == "settled" && ep.settledSeq.Valid {
+				watermark = max(watermark, ep.settledSeq.Int64)
+			}
+			if (ep.state == "acknowledged" || ep.settlementState == "settled") && r.When.ReopenWhen != nil &&
 				c.lag != nil && c.lag.reopenEvent != nil &&
-				c.lag.reopenEvent.Seq > max(ep.ackedWatermark, loadedSeq) {
+				c.lag.reopenEvent.Seq > max(watermark, loadedSeq) {
 				nextSeq := max(ep.last, max(startHead, c.lag.reopenEvent.Seq))
+				if ep.settlementState == "settled" && ep.trackingItem.Valid && ep.trackingItem.String != "" && lookup.ready {
+					trackedID := ep.trackingItem.String
+					itemState, itemExists, err := lookup.stateOf(trackedID)
+					if err == nil && itemExists && !lookup.isTerminal(itemState) {
+						if err := changes.reopenLagWhenSettledOpenItem(r, key, ep.id, c, currentLagPair, nextSeq, trackedID, now); err != nil {
+							return err
+						}
+						continue
+					}
+					if err == nil {
+						recCause, recState := lookup.reopenCause(itemState, itemExists)
+						if err := changes.reopenSettledTerminal(r, key, ep.id, c, newest.fingerprint, currentLagPair, nextSeq, recCause, trackedID, recState, now); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 				if err := changes.reopenLagWhen(r, key, ep.id, c, currentLagPair, nextSeq, "", now); err != nil {
 					return err
 				}
@@ -1406,6 +1392,27 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 			}
 		}
 		if cause := ep.reopenCause(r, now, newest, currentLagPair); cause != "" {
+			if ep.settlementState == "settled" && ep.trackingItem.Valid && ep.trackingItem.String != "" && lookup.ready {
+				trackedID := ep.trackingItem.String
+				itemState, itemExists, err := lookup.stateOf(trackedID)
+				if err == nil && itemExists && !lookup.isTerminal(itemState) {
+					if err := changes.reopenSettledOpenItem(r, key, ep.id, c, newest.fingerprint, currentLagPair, cause, trackedID, now); err != nil {
+						return err
+					}
+					continue
+				}
+				if err == nil {
+					recCause, recState := lookup.reopenCause(itemState, itemExists)
+					var lagPair any
+					if r.When.Pattern == LagBehind {
+						lagPair = currentLagPair
+					}
+					if err := changes.reopenSettledTerminal(r, key, ep.id, c, newest.fingerprint, lagPair, 0, recCause, trackedID, recState, now); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if err := changes.reopen(r, key, ep.id, c, newest.fingerprint, cause, now); err != nil {
 				return err
 			}
@@ -1533,6 +1540,10 @@ func (changes *episodeChanges) reopen(r Rule, key, id string, c *condition, fing
 		if err != nil {
 			return err
 		}
+		hasSettle, err := hasSettlementColumns(tx.Reader())
+		if err != nil {
+			return err
+		}
 		sets := []string{
 			"state='open'",
 			"silence_until_ms=NULL",
@@ -1543,6 +1554,18 @@ func (changes *episodeChanges) reopen(r Rule, key, id string, c *condition, fing
 		}
 		if hasAck {
 			sets = append(sets, "acked_seq=NULL", "acked_fingerprint=NULL", "acked_lag_pair=NULL")
+		}
+		if hasSettle {
+			sets = append(sets,
+				"settlement_state=CASE WHEN settlement_state IN ('investigating','settled') THEN 'uninvestigated' ELSE settlement_state END",
+				"outcome=NULL",
+				"item_link_kind=NULL",
+				"settled_by=NULL",
+				"settled_at=NULL",
+				"settled_seq=NULL",
+				"settled_fingerprint=NULL",
+				"settled_lag_pair=NULL",
+			)
 		}
 		sets = append(sets, "condition_fingerprint=?", "bundle_json=?")
 		args := []any{fingerprint, string(bundle)}
@@ -1556,7 +1579,63 @@ func (changes *episodeChanges) reopen(r Rule, key, id string, c *condition, fing
 	})
 }
 
-func (changes *episodeChanges) reopenTracked(r Rule, key, id string, c *condition, fingerprint string, lagPair any, cause, itemID, itemState string, now time.Time) error {
+func (changes *episodeChanges) reopenSettledOpenItem(r Rule, key, id string, c *condition, fingerprint string, lagPair string, cause, itemID string, now time.Time) error {
+	bundle, err := makeBundle(r, key, id, c)
+	if err != nil {
+		return err
+	}
+	varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
+	body := map[string]any{"cause": cause, "item_id": itemID}
+	return changes.transition(r, key, id, reopenedKind, now, body, func(tx *store.Tx) error {
+		hasAck, err := alertEpisodesHasColumn(tx.Reader(), "acked_seq")
+		if err != nil {
+			return err
+		}
+		hasVars, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
+		if err != nil {
+			return err
+		}
+		hasSettle, err := hasSettlementColumns(tx.Reader())
+		if err != nil {
+			return err
+		}
+		sets := []string{
+			"state='open'",
+			"silence_until_ms=NULL",
+			"silence_on_fingerprint=NULL",
+			"acked_by=NULL",
+			"acked_note=NULL",
+			"acked_at=NULL",
+		}
+		if hasAck {
+			sets = append(sets, "acked_seq=NULL", "acked_fingerprint=NULL", "acked_lag_pair=NULL")
+		}
+		if hasSettle {
+			sets = append(sets,
+				"settlement_state='uninvestigated'",
+				"outcome=NULL",
+				"item_link_kind=NULL",
+				"settled_by=NULL",
+				"settled_at=NULL",
+				"settled_seq=NULL",
+				"settled_fingerprint=NULL",
+				"settled_lag_pair=NULL",
+				"reopen_count_for_item=reopen_count_for_item+1",
+			)
+		}
+		sets = append(sets, "condition_fingerprint=?", "bundle_json=?")
+		args := []any{fingerprint, string(bundle)}
+		if hasVars {
+			sets = append(sets, "variables_json=?")
+			args = append(args, varsJSON)
+		}
+		args = append(args, id)
+		_, err = tx.Exec("UPDATE alert_episodes SET "+strings.Join(sets, ",")+" WHERE alert_id=?", args...)
+		return err
+	})
+}
+
+func (changes *episodeChanges) reopenSettledTerminal(r Rule, key, id string, c *condition, fingerprint string, lagPair any, nextSeq int64, cause, itemID, itemState string, now time.Time) error {
 	bundle, err := makeBundleWithPrefix(r, key, id, c, trackedPersistPrefix(itemID, itemState))
 	if err != nil {
 		return err
@@ -1576,6 +1655,10 @@ func (changes *episodeChanges) reopenTracked(r Rule, key, id string, c *conditio
 		if err != nil {
 			return err
 		}
+		hasSettle, err := hasSettlementColumns(tx.Reader())
+		if err != nil {
+			return err
+		}
 		sets := []string{
 			"state='open'",
 			"tracking_item_id=NULL",
@@ -1587,11 +1670,94 @@ func (changes *episodeChanges) reopenTracked(r Rule, key, id string, c *conditio
 			"acked_at=NULL",
 		}
 		args := []any{lagPair}
+		if nextSeq > 0 {
+			sets = append(sets, "last_observed_seq=?", "last_observed_at=?", "observation_count=observation_count+1")
+			args = append(args, nextSeq, now.UnixMilli())
+		}
 		if hasAck {
 			sets = append(sets, "acked_seq=NULL", "acked_fingerprint=NULL", "acked_lag_pair=NULL")
 		}
+		if hasSettle {
+			sets = append(sets,
+				"settlement_state='uninvestigated'",
+				"outcome=NULL",
+				"item_link_kind=NULL",
+				"settled_by=NULL",
+				"settled_at=NULL",
+				"settled_seq=NULL",
+				"settled_fingerprint=NULL",
+				"settled_lag_pair=NULL",
+			)
+		}
 		sets = append(sets, "condition_fingerprint=?", "bundle_json=?")
 		args = append(args, fingerprint, string(bundle))
+		if hasVars {
+			sets = append(sets, "variables_json=?")
+			args = append(args, varsJSON)
+		}
+		args = append(args, id)
+		_, err = tx.Exec("UPDATE alert_episodes SET "+strings.Join(sets, ",")+" WHERE alert_id=?", args...)
+		return err
+	})
+}
+
+func (changes *episodeChanges) reopenLagWhenSettledOpenItem(r Rule, key, id string, c *condition, lagPair string, nextSeq int64, trackedID string, now time.Time) error {
+	bundle, err := makeLagReopenBundle(r, key, id, c, "")
+	if err != nil {
+		return err
+	}
+	varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
+	body := map[string]any{"cause": "reopen-when", "item_id": trackedID}
+	return changes.transition(r, key, id, reopenedKind, now, body, func(tx *store.Tx) error {
+		hasLagPair, err := alertEpisodesHasColumn(tx.Reader(), "tracked_lag_pair")
+		if err != nil {
+			return err
+		}
+		hasAck, err := alertEpisodesHasColumn(tx.Reader(), "acked_seq")
+		if err != nil {
+			return err
+		}
+		hasVars, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
+		if err != nil {
+			return err
+		}
+		hasSettle, err := hasSettlementColumns(tx.Reader())
+		if err != nil {
+			return err
+		}
+		sets := []string{
+			"state='open'",
+			"silence_until_ms=NULL",
+			"silence_on_fingerprint=NULL",
+			"acked_by=NULL",
+			"acked_note=NULL",
+			"acked_at=NULL",
+			"last_observed_seq=?",
+			"last_observed_at=?",
+			"observation_count=observation_count+1",
+			"bundle_json=?",
+		}
+		args := []any{nextSeq, now.UnixMilli(), string(bundle)}
+		if hasLagPair {
+			sets = append(sets, "tracked_lag_pair=?")
+			args = append(args, lagPair)
+		}
+		if hasAck {
+			sets = append(sets, "acked_seq=NULL", "acked_fingerprint=NULL", "acked_lag_pair=NULL")
+		}
+		if hasSettle {
+			sets = append(sets,
+				"settlement_state='uninvestigated'",
+				"outcome=NULL",
+				"item_link_kind=NULL",
+				"settled_by=NULL",
+				"settled_at=NULL",
+				"settled_seq=NULL",
+				"settled_fingerprint=NULL",
+				"settled_lag_pair=NULL",
+				"reopen_count_for_item=reopen_count_for_item+1",
+			)
+		}
 		if hasVars {
 			sets = append(sets, "variables_json=?")
 			args = append(args, varsJSON)
@@ -1629,6 +1795,10 @@ func (changes *episodeChanges) reopenLagWhen(r Rule, key, id string, c *conditio
 		if err != nil {
 			return err
 		}
+		hasSettle, err := hasSettlementColumns(tx.Reader())
+		if err != nil {
+			return err
+		}
 		sets := []string{
 			"state='open'",
 			"silence_until_ms=NULL",
@@ -1651,6 +1821,18 @@ func (changes *episodeChanges) reopenLagWhen(r Rule, key, id string, c *conditio
 		}
 		if hasAck {
 			sets = append(sets, "acked_seq=NULL", "acked_fingerprint=NULL", "acked_lag_pair=NULL")
+		}
+		if hasSettle {
+			sets = append(sets,
+				"settlement_state=CASE WHEN settlement_state IN ('investigating','settled') THEN 'uninvestigated' ELSE settlement_state END",
+				"outcome=NULL",
+				"item_link_kind=NULL",
+				"settled_by=NULL",
+				"settled_at=NULL",
+				"settled_seq=NULL",
+				"settled_fingerprint=NULL",
+				"settled_lag_pair=NULL",
+			)
 		}
 		if hasVars {
 			sets = append(sets, "variables_json=?")

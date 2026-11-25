@@ -523,10 +523,13 @@ receiver = "foreground"
 			t.Fatal(err)
 		}
 
-		// 6. Track to open item -> non-red + ref advance stay quiet -> post-track red reopens!
+		// 6. Settle to open item -> non-red + ref advance stay quiet -> post-settle red reopens!
 		by := "operator"
-		if err := e.Track(ctx, alertID, "item-1", &by, nil); err != nil {
-			t.Fatalf("Track: %v", err)
+		if err := e.Settle(ctx, alertID, SettleOptions{
+			By: by, Outcome: "fix-fault", ItemID: "item-1",
+			Cause: "lag", Evidence: "red proof",
+		}); err != nil {
+			t.Fatalf("Settle: %v", err)
 		}
 		now = now.Add(time.Second)
 		appendEv("watch-test.green", `{"outcome":"green"}`)
@@ -537,11 +540,11 @@ receiver = "foreground"
 			t.Fatal(err)
 		}
 		st, obsCount, trk := readState(alertID)
-		if st != "acknowledged" || !trk.Valid || trk.String != "item-1" {
-			t.Fatalf("tracked episode should stay acknowledged: state=%q trk=%+v", st, trk)
+		if !trk.Valid || trk.String != "item-1" {
+			t.Fatalf("settled episode should keep tracking_item_id: state=%q trk=%+v", st, trk)
 		}
 		if pending, err := e.Pending(ctx, "foreground"); err != nil || len(pending) != 0 {
-			t.Fatalf("expected no pending while tracked without red proof, got %+v (%v)", pending, err)
+			t.Fatalf("expected no pending while settled without red proof, got %+v (%v)", pending, err)
 		}
 
 		now = now.Add(time.Second)
@@ -551,7 +554,7 @@ receiver = "foreground"
 			t.Fatal(err)
 		}
 		st, newObsCount, trk = readState(alertID)
-		if st != "open" || trk.Valid || newObsCount != obsCount+1 {
+		if st != "open" || !trk.Valid || trk.String != "item-1" || newObsCount != obsCount+1 {
 			t.Fatalf("after tracked red reopen: state=%q trk=%+v obs=%d (want open, null, %d)", st, trk, newObsCount, obsCount+1)
 		}
 		notices, err = e.Pending(ctx, "foreground")

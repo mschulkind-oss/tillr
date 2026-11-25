@@ -133,6 +133,11 @@ func addMissingColumns(ctx context.Context, tx migrationsExec) error {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("store: adding column %s.%s: %w", column.table, column.column, err)
 		}
+		if backfill, ok := columnBackfillFor(column.table, column.column); ok {
+			if _, err := tx.ExecContext(ctx, backfill); err != nil {
+				return fmt.Errorf("store: backfilling column %s.%s: %w", column.table, column.column, err)
+			}
+		}
 	}
 	return nil
 }

@@ -232,3 +232,80 @@ func TestTwoOpensOfOneStoreAtOnceBothAddTheMissingColumn(t *testing.T) {
 		}
 	}
 }
+
+func TestColumnBackfillRunsOnceWhenColumnIsAdded(t *testing.T) {
+	if err := store.RegisterDDL("registry-backfill", `CREATE TABLE IF NOT EXISTS registry_backfill_rows (id TEXT PRIMARY KEY, state TEXT NOT NULL);`); err != nil {
+		t.Fatalf("registering DDL: %v", err)
+	}
+	if err := store.RegisterColumn("registry-backfill", "registry_backfill_rows", "settled", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		t.Fatalf("registering column: %v", err)
+	}
+	if err := store.RegisterColumnBackfill("registry-backfill", "registry_backfill_rows", "settled",
+		`UPDATE registry_backfill_rows SET settled = 1 WHERE state = 'resolved'`); err != nil {
+		t.Fatalf("registering backfill: %v", err)
+	}
+	// Idempotent re-registration succeeds; conflicting registration fails.
+	if err := store.RegisterColumnBackfill("registry-backfill", "registry_backfill_rows", "settled",
+		`UPDATE registry_backfill_rows SET settled = 1 WHERE state = 'resolved'`); err != nil {
+		t.Fatalf("re-registering identical backfill: %v", err)
+	}
+	if err := store.RegisterColumnBackfill("registry-backfill-other", "registry_backfill_rows", "settled",
+		`UPDATE registry_backfill_rows SET settled = 2`); err == nil {
+		t.Fatal("expected conflict error when another owner registers a backfill for the same column")
+	}
+
+	path := filepath.Join(t.TempDir(), "board.sqlite3")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("opening raw sqlite: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE registry_backfill_rows (id TEXT PRIMARY KEY, state TEXT NOT NULL);
+		INSERT INTO registry_backfill_rows (id, state) VALUES ('r1', 'resolved'), ('r2', 'open');`); err != nil {
+		db.Close()
+		t.Fatalf("seeding legacy table: %v", err)
+	}
+	db.Close()
+
+	s, err := store.OpenMigrated(context.Background(), path)
+	if err != nil {
+		t.Fatalf("OpenMigrated: %v", err)
+	}
+	var s1, s2 int
+	if err := s.ReadTx(context.Background(), func(rd *store.Reader) error {
+		if err := rd.QueryRow(`SELECT settled FROM registry_backfill_rows WHERE id='r1'`).Scan(&s1); err != nil {
+			return err
+		}
+		return rd.QueryRow(`SELECT settled FROM registry_backfill_rows WHERE id='r2'`).Scan(&s2)
+	}); err != nil {
+		s.Close()
+		t.Fatalf("reading migrated rows: %v", err)
+	}
+	if s1 != 1 || s2 != 0 {
+		s.Close()
+		t.Fatalf("after migration: r1.settled=%d r2.settled=%d, want 1 and 0", s1, s2)
+	}
+	// Insert a new resolved row with settled=0 and reopen: backfill must NOT run again.
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO registry_backfill_rows (id, state, settled) VALUES ('r3', 'resolved', 0)`)
+		return err
+	}); err != nil {
+		s.Close()
+		t.Fatalf("inserting r3: %v", err)
+	}
+	s.Close()
+
+	s2nd, err := store.OpenMigrated(context.Background(), path)
+	if err != nil {
+		t.Fatalf("second OpenMigrated: %v", err)
+	}
+	defer s2nd.Close()
+	var s3 int
+	if err := s2nd.ReadTx(context.Background(), func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT settled FROM registry_backfill_rows WHERE id='r3'`).Scan(&s3)
+	}); err != nil {
+		t.Fatalf("reading r3: %v", err)
+	}
+	if s3 != 0 {
+		t.Fatalf("after second open: r3.settled=%d, want 0 (backfill must run once only)", s3)
+	}
+}

@@ -393,21 +393,27 @@ receiver = "foreground"
 			t.Fatalf("store alerts = %+v, want 1 open alert for fixer-settled", st.Alerts)
 		}
 
-		// Manual resolve still suppresses reopening at same opened_seq (D-TW33).
+		// Investigate and settle with an open item; re-evaluating the same window does not reopen or wake.
+		setWatchItemState(t, s, "item-fix", "in-queue")
 		ev.Clock = func() time.Time { return now.Add(15 * time.Second) }
-		if err := ev.Resolve(ctx, st.Alerts[0].ID, "investigated"); err != nil {
+		if err := ev.Investigate(ctx, st.Alerts[0].ID, "operator", "fixer resolved elsewhere", "checked item state"); err != nil {
+			t.Fatal(err)
+		}
+		if err := ev.Settle(ctx, st.Alerts[0].ID, SettleOptions{By: "operator", Outcome: "fix-fault", ItemID: "item-fix"}); err != nil {
 			t.Fatal(err)
 		}
 		ev.Clock = func() time.Time { return now.Add(20 * time.Second) }
 		if _, err := ev.EvaluateRules(ctx); err != nil {
 			t.Fatal(err)
 		}
-		st, err = ev.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
-		if err != nil {
+		var reopenEvs int
+		if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+			return rd.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='watch.alert.reopened' AND object_id=?`, st.Alerts[0].ID).Scan(&reopenEvs)
+		}); err != nil {
 			t.Fatal(err)
 		}
-		if len(st.Alerts) != 0 {
-			t.Fatalf("after manual resolve: active alerts = %+v, want 0", st.Alerts)
+		if reopenEvs != 0 {
+			t.Fatalf("after settle on same window: reopen events = %d, want 0", reopenEvs)
 		}
 	})
 

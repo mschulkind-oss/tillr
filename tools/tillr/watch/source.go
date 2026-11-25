@@ -111,33 +111,46 @@ func prepareSourceRule(ctx context.Context, src ObservationSource, r Rule, g git
 }
 
 type memEpisode struct {
-	alertID              string
-	ruleID               string
-	subjectKey           string
-	episodeNum           int64
-	state                string
-	severity             string
-	conditionFingerprint string
-	openedSeq            int64
-	openedAt             int64
-	lastObservedSeq      int64
-	lastObservedAt       int64
-	observationCount     int64
-	ackedBy              sql.NullString
-	ackedNote            sql.NullString
-	ackedAt              sql.NullInt64
-	ackedSeq             sql.NullInt64
-	ackedFingerprint     sql.NullString
-	ackedLagPair         sql.NullString
-	silenceUntilMS       sql.NullInt64
-	silenceOnFingerprint sql.NullString
-	trackingItemID       sql.NullString
-	trackedLagPair       sql.NullString
-	resolvedSeq          sql.NullInt64
-	resolvedAt           sql.NullInt64
-	resolvedReason       sql.NullString
-	bundleJSON           string
-	variablesJSON        string
+	alertID               string
+	ruleID                string
+	subjectKey            string
+	episodeNum            int64
+	state                 string
+	severity              string
+	conditionFingerprint  string
+	openedSeq             int64
+	openedAt              int64
+	lastObservedSeq       int64
+	lastObservedAt        int64
+	observationCount      int64
+	ackedBy               sql.NullString
+	ackedNote             sql.NullString
+	ackedAt               sql.NullInt64
+	ackedSeq              sql.NullInt64
+	ackedFingerprint      sql.NullString
+	ackedLagPair          sql.NullString
+	silenceUntilMS        sql.NullInt64
+	silenceOnFingerprint  sql.NullString
+	trackingItemID        sql.NullString
+	trackedLagPair        sql.NullString
+	resolvedSeq           sql.NullInt64
+	resolvedAt            sql.NullInt64
+	resolvedReason        sql.NullString
+	bundleJSON            string
+	variablesJSON         string
+	settlementState       string
+	investigatedBy        sql.NullString
+	investigatedAt        sql.NullInt64
+	investigationCause    sql.NullString
+	investigationEvidence sql.NullString
+	outcome               sql.NullString
+	itemLinkKind          sql.NullString
+	settledBy             sql.NullString
+	settledAt             sql.NullInt64
+	settledSeq            sql.NullInt64
+	settledFingerprint    sql.NullString
+	settledLagPair        sql.NullString
+	reopenCountForItem    int64
 }
 
 type memAlertEvent struct {
@@ -310,6 +323,10 @@ func (m *memoryState) activeLocked(ruleID string) map[string]episode {
 					}
 				}
 			}
+			settlementState := ep.settlementState
+			if settlementState == "" {
+				settlementState = "uninvestigated"
+			}
 			out[ep.subjectKey] = episode{
 				id:                   ep.alertID,
 				state:                ep.state,
@@ -326,6 +343,12 @@ func (m *memoryState) activeLocked(ruleID string) map[string]episode {
 				ackedLagPair:         ep.ackedLagPair,
 				ackedWatermark:       ackedWatermark,
 				hasAckCols:           true,
+				settlementState:      settlementState,
+				settledSeq:           ep.settledSeq,
+				settledFingerprint:   ep.settledFingerprint,
+				settledLagPair:       ep.settledLagPair,
+				reopenCountForItem:   ep.reopenCountForItem,
+				hasSettlementCols:    true,
 			}
 		}
 	}
@@ -605,18 +628,16 @@ func (c itemTerminalChecker) terminalSeq(itemID string) int64 {
 
 func (c itemTerminalChecker) reopenCause(state string, exists bool) (string, string) {
 	if !exists {
-		return "tracked-item-closed", "missing"
+		return "recurred-after-item-missing", "missing"
 	}
-	if state != c.closedState {
-		return "tracked-item-landed", state
-	}
-	return "tracked-item-closed", state
+	return "recurred-after-item-" + state, state
 }
 
-func validateSourceOpenItem(ctx context.Context, src ObservationSource, a episodeAction, id, itemID string) error {
+func validateSourceSettleItem(ctx context.Context, src ObservationSource, a episodeAction, id, itemID string) error {
 	lookup := newSourceItemTerminal(ctx, src)
 	if !lookup.ready {
-		return fmt.Errorf("%w: tracking requires charter and items projections", a.refuse(id))
+		// Standalone mode without items/charter projections accepts any non-empty reference (D-AW10).
+		return nil
 	}
 	state, exists, err := lookup.stateOf(itemID)
 	if err != nil {
@@ -625,8 +646,14 @@ func validateSourceOpenItem(ctx context.Context, src ObservationSource, a episod
 	if !exists {
 		return fmt.Errorf("%w: item %s not found", a.refuse(id), itemID)
 	}
+	if state == lookup.closedState {
+		return fmt.Errorf("%w: item %s is %s; cannot settle with a closed item", a.refuse(id), itemID, state)
+	}
 	if lookup.isTerminal(state) {
-		return fmt.Errorf("%w: item %s is %s; tracking requires an open item", a.refuse(id), itemID, state)
+		itemSeq := lookup.terminalSeq(itemID)
+		if itemSeq <= a.lastObservedSeq {
+			return fmt.Errorf("%w: item %s is %s (seq %d <= last observed seq %d); file a new item", a.refuse(id), itemID, state, itemSeq, a.lastObservedSeq)
+		}
 	}
 	return nil
 }
@@ -839,122 +866,6 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 		}
 		firing := r.Enabled && c.fires(r.When)
 		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.last })
-		if exists && ep.trackingItem.Valid && ep.trackingItem.String != "" {
-			if !lookup.ready {
-				continue
-			}
-			trackedID := ep.trackingItem.String
-			itemState, itemExists, err := lookup.stateOf(trackedID)
-			if err != nil {
-				continue
-			}
-			memEp := m.findAlertLocked(ep.id)
-			if itemExists && !lookup.isTerminal(itemState) {
-				if firing && firstClear == len(c.clears) {
-					if ep.state == "acknowledged" && r.When.Pattern == LagBehind && r.When.ReopenWhen != nil &&
-						c.lag != nil && c.lag.reopenEvent != nil &&
-						c.lag.reopenEvent.Seq > max(ep.ackedWatermark, loadedSeq) {
-						pair := c.lag.leaderOID + ":" + c.lag.followerOID
-						nextSeq := max(ep.last, max(startHead, c.lag.reopenEvent.Seq))
-						if err := m.reopenLagWhenLocked(memEp, r, key, c, pair, nextSeq, trackedID, now); err != nil {
-							return err
-						}
-						continue
-					}
-					if r.When.Pattern == LagBehind {
-						pair := c.lag.leaderOID + ":" + c.lag.followerOID
-						if !ep.trackedLagPair.Valid {
-							memEp.trackedLagPair = sql.NullString{String: pair, Valid: true}
-						} else if ep.trackedLagPair.String != pair {
-							memEp.trackedLagPair = sql.NullString{String: pair, Valid: true}
-							memEp.lastObservedSeq = max(ep.last, startHead)
-							memEp.lastObservedAt = now.UnixMilli()
-							memEp.observationCount++
-						}
-					} else {
-						newest := conditionNewest(r, c, ep.last)
-						if newest.Seq > ep.last {
-							memEp.lastObservedSeq = newest.Seq
-							memEp.lastObservedAt = now.UnixMilli()
-							memEp.observationCount++
-							memEp.conditionFingerprint = newest.fingerprint
-							memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
-						}
-					}
-					continue
-				}
-			} else {
-				if !firing {
-					seq := startHead
-					if firstClear < len(c.clears) {
-						seq = c.clears[firstClear]
-					}
-					if err := m.resolveEpisodeLocked(memEp, r.ID, key, r.Severity, r.Delivery.Receiver, seq, now, "condition-cleared"); err != nil {
-						return err
-					}
-					continue
-				}
-				newest := observation{Seq: startHead}
-				var nextLagPair sql.NullString
-				if r.When.Pattern == LagBehind {
-					pair := c.lag.leaderOID + ":" + c.lag.followerOID
-					nextLagPair = sql.NullString{String: pair, Valid: true}
-					if ep.trackedLagPair.Valid && ep.trackedLagPair.String != pair {
-						memEp.lastObservedSeq = max(ep.last, startHead)
-						memEp.lastObservedAt = now.UnixMilli()
-						memEp.observationCount++
-					}
-				} else {
-					newest = conditionNewest(r, c, ep.last)
-					if isWindowedEventRule(r.When) {
-						cutoff := max(ep.last, lookup.terminalSeq(trackedID))
-						if newest.Seq <= cutoff {
-							if newest.Seq > ep.last {
-								memEp.lastObservedSeq = newest.Seq
-								memEp.lastObservedAt = now.UnixMilli()
-								memEp.observationCount++
-								memEp.conditionFingerprint = newest.fingerprint
-								memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
-							}
-							continue
-						}
-					}
-					if newest.Seq > ep.last {
-						memEp.lastObservedSeq = newest.Seq
-						memEp.lastObservedAt = now.UnixMilli()
-						memEp.observationCount++
-						memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
-					}
-				}
-				cause, recordedState := lookup.reopenCause(itemState, itemExists)
-				bundle, err := makeBundleWithPrefix(r, key, ep.id, c, trackedPersistPrefix(trackedID, recordedState))
-				if err != nil {
-					return err
-				}
-				memEp.state = "open"
-				memEp.trackingItemID = sql.NullString{}
-				memEp.trackedLagPair = nextLagPair
-				memEp.silenceUntilMS = sql.NullInt64{}
-				memEp.silenceOnFingerprint = sql.NullString{}
-				memEp.ackedBy = sql.NullString{}
-				memEp.ackedNote = sql.NullString{}
-				memEp.ackedAt = sql.NullInt64{}
-				memEp.ackedSeq = sql.NullInt64{}
-				memEp.ackedFingerprint = sql.NullString{}
-				memEp.ackedLagPair = sql.NullString{}
-				memEp.conditionFingerprint = newest.fingerprint
-				memEp.bundleJSON = string(bundle)
-				memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
-				if err := m.appendEventLocked(reopenedKind, ep.id, now, map[string]any{
-					"alert_id": ep.id, "rule_id": r.ID, "subject_key": key,
-					"severity": r.Severity, "receiver": r.Delivery.Receiver,
-					"cause": cause, "item_id": trackedID, "item_state": recordedState,
-				}); err != nil {
-					return err
-				}
-				continue
-			}
-		}
 		if exists && (!firing || firstClear < len(c.clears)) {
 			seq := startHead
 			if firstClear < len(c.clears) {
@@ -1005,6 +916,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 				trackedLagPair:       lagPair,
 				bundleJSON:           string(bundle),
 				variablesJSON:        encodeVariablesJSON(extractVariables(r, key, c)),
+				settlementState:      "uninvestigated",
 			})
 			if err := m.appendEventLocked(openedKind, id, now, map[string]any{
 				"alert_id": id, "rule_id": r.ID, "subject_key": key,
@@ -1019,10 +931,31 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 		var currentLagPair string
 		if r.When.Pattern == LagBehind {
 			currentLagPair = c.lag.leaderOID + ":" + c.lag.followerOID
-			if ep.state == "acknowledged" && r.When.Pattern == LagBehind && r.When.ReopenWhen != nil &&
+			watermark := ep.ackedWatermark
+			if ep.settlementState == "settled" && ep.settledSeq.Valid {
+				watermark = max(watermark, ep.settledSeq.Int64)
+			}
+			if (ep.state == "acknowledged" || ep.settlementState == "settled") && r.When.ReopenWhen != nil &&
 				c.lag != nil && c.lag.reopenEvent != nil &&
-				c.lag.reopenEvent.Seq > max(ep.ackedWatermark, loadedSeq) {
+				c.lag.reopenEvent.Seq > max(watermark, loadedSeq) {
 				nextSeq := max(ep.last, max(startHead, c.lag.reopenEvent.Seq))
+				if ep.settlementState == "settled" && ep.trackingItem.Valid && ep.trackingItem.String != "" && lookup.ready {
+					trackedID := ep.trackingItem.String
+					itemState, itemExists, err := lookup.stateOf(trackedID)
+					if err == nil && itemExists && !lookup.isTerminal(itemState) {
+						if err := m.reopenLagWhenSettledOpenItemLocked(memEp, r, key, c, currentLagPair, nextSeq, trackedID, now); err != nil {
+							return err
+						}
+						continue
+					}
+					if err == nil {
+						recCause, recState := lookup.reopenCause(itemState, itemExists)
+						if err := m.reopenSettledTerminalLocked(memEp, r, key, c, newest.fingerprint, currentLagPair, nextSeq, recCause, trackedID, recState, now); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 				if err := m.reopenLagWhenLocked(memEp, r, key, c, currentLagPair, nextSeq, "", now); err != nil {
 					return err
 				}
@@ -1048,6 +981,23 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			}
 		}
 		if cause := ep.reopenCause(r, now, newest, currentLagPair); cause != "" {
+			if ep.settlementState == "settled" && ep.trackingItem.Valid && ep.trackingItem.String != "" && lookup.ready {
+				trackedID := ep.trackingItem.String
+				itemState, itemExists, err := lookup.stateOf(trackedID)
+				if err == nil && itemExists && !lookup.isTerminal(itemState) {
+					if err := m.reopenSettledOpenItemLocked(memEp, r, key, c, newest.fingerprint, currentLagPair, cause, trackedID, now); err != nil {
+						return err
+					}
+					continue
+				}
+				if err == nil {
+					recCause, recState := lookup.reopenCause(itemState, itemExists)
+					if err := m.reopenSettledTerminalLocked(memEp, r, key, c, newest.fingerprint, currentLagPair, 0, recCause, trackedID, recState, now); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			bundle, err := makeBundle(r, key, ep.id, c)
 			if err != nil {
 				return err
@@ -1061,6 +1011,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			memEp.ackedSeq = sql.NullInt64{}
 			memEp.ackedFingerprint = sql.NullString{}
 			memEp.ackedLagPair = sql.NullString{}
+			clearMemSettlement(memEp)
 			memEp.conditionFingerprint = newest.fingerprint
 			memEp.bundleJSON = string(bundle)
 			memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
@@ -1074,6 +1025,108 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 		}
 	}
 	return nil
+}
+
+func clearMemSettlement(memEp *memEpisode) {
+	if memEp.settlementState == "investigating" || memEp.settlementState == "settled" || memEp.settlementState == "" {
+		memEp.settlementState = "uninvestigated"
+	}
+	memEp.outcome = sql.NullString{}
+	memEp.itemLinkKind = sql.NullString{}
+	memEp.settledBy = sql.NullString{}
+	memEp.settledAt = sql.NullInt64{}
+	memEp.settledSeq = sql.NullInt64{}
+	memEp.settledFingerprint = sql.NullString{}
+	memEp.settledLagPair = sql.NullString{}
+}
+
+func (m *memoryState) reopenSettledOpenItemLocked(memEp *memEpisode, r Rule, key string, c *condition, fingerprint, lagPair, cause, itemID string, now time.Time) error {
+	bundle, err := makeBundle(r, key, memEp.alertID, c)
+	if err != nil {
+		return err
+	}
+	memEp.state = "open"
+	memEp.silenceUntilMS = sql.NullInt64{}
+	memEp.silenceOnFingerprint = sql.NullString{}
+	memEp.ackedBy = sql.NullString{}
+	memEp.ackedNote = sql.NullString{}
+	memEp.ackedAt = sql.NullInt64{}
+	memEp.ackedSeq = sql.NullInt64{}
+	memEp.ackedFingerprint = sql.NullString{}
+	memEp.ackedLagPair = sql.NullString{}
+	clearMemSettlement(memEp)
+	memEp.reopenCountForItem++
+	memEp.conditionFingerprint = fingerprint
+	memEp.bundleJSON = string(bundle)
+	memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
+	return m.appendEventLocked(reopenedKind, memEp.alertID, now, map[string]any{
+		"alert_id": memEp.alertID, "rule_id": r.ID, "subject_key": key,
+		"severity": r.Severity, "receiver": r.Delivery.Receiver,
+		"cause": cause, "item_id": itemID,
+	})
+}
+
+func (m *memoryState) reopenSettledTerminalLocked(memEp *memEpisode, r Rule, key string, c *condition, fingerprint, lagPair string, nextSeq int64, cause, itemID, itemState string, now time.Time) error {
+	bundle, err := makeBundleWithPrefix(r, key, memEp.alertID, c, trackedPersistPrefix(itemID, itemState))
+	if err != nil {
+		return err
+	}
+	memEp.state = "open"
+	memEp.trackingItemID = sql.NullString{}
+	if lagPair != "" {
+		memEp.trackedLagPair = sql.NullString{String: lagPair, Valid: true}
+	}
+	memEp.silenceUntilMS = sql.NullInt64{}
+	memEp.silenceOnFingerprint = sql.NullString{}
+	memEp.ackedBy = sql.NullString{}
+	memEp.ackedNote = sql.NullString{}
+	memEp.ackedAt = sql.NullInt64{}
+	memEp.ackedSeq = sql.NullInt64{}
+	memEp.ackedFingerprint = sql.NullString{}
+	memEp.ackedLagPair = sql.NullString{}
+	clearMemSettlement(memEp)
+	if nextSeq > 0 {
+		memEp.lastObservedSeq = nextSeq
+		memEp.lastObservedAt = now.UnixMilli()
+		memEp.observationCount++
+	}
+	memEp.conditionFingerprint = fingerprint
+	memEp.bundleJSON = string(bundle)
+	memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
+	return m.appendEventLocked(reopenedKind, memEp.alertID, now, map[string]any{
+		"alert_id": memEp.alertID, "rule_id": r.ID, "subject_key": key,
+		"severity": r.Severity, "receiver": r.Delivery.Receiver,
+		"cause": cause, "item_id": itemID, "item_state": itemState,
+	})
+}
+
+func (m *memoryState) reopenLagWhenSettledOpenItemLocked(memEp *memEpisode, r Rule, key string, c *condition, lagPair string, nextSeq int64, trackedID string, now time.Time) error {
+	bundle, err := makeLagReopenBundle(r, key, memEp.alertID, c, "")
+	if err != nil {
+		return err
+	}
+	memEp.state = "open"
+	memEp.trackedLagPair = sql.NullString{String: lagPair, Valid: true}
+	memEp.silenceUntilMS = sql.NullInt64{}
+	memEp.silenceOnFingerprint = sql.NullString{}
+	memEp.ackedBy = sql.NullString{}
+	memEp.ackedNote = sql.NullString{}
+	memEp.ackedAt = sql.NullInt64{}
+	memEp.ackedSeq = sql.NullInt64{}
+	memEp.ackedFingerprint = sql.NullString{}
+	memEp.ackedLagPair = sql.NullString{}
+	clearMemSettlement(memEp)
+	memEp.reopenCountForItem++
+	memEp.lastObservedSeq = nextSeq
+	memEp.lastObservedAt = now.UnixMilli()
+	memEp.observationCount++
+	memEp.bundleJSON = string(bundle)
+	memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
+	return m.appendEventLocked(reopenedKind, memEp.alertID, now, map[string]any{
+		"alert_id": memEp.alertID, "rule_id": r.ID, "subject_key": key,
+		"severity": r.Severity, "receiver": r.Delivery.Receiver,
+		"cause": "reopen-when", "item_id": trackedID,
+	})
 }
 
 func (m *memoryState) reopenLagWhenLocked(memEp *memEpisode, r Rule, key string, c *condition, lagPair string, nextSeq int64, trackedID string, now time.Time) error {
@@ -1092,6 +1145,7 @@ func (m *memoryState) reopenLagWhenLocked(memEp *memEpisode, r Rule, key string,
 	memEp.ackedSeq = sql.NullInt64{}
 	memEp.ackedFingerprint = sql.NullString{}
 	memEp.ackedLagPair = sql.NullString{}
+	clearMemSettlement(memEp)
 	memEp.lastObservedSeq = nextSeq
 	memEp.lastObservedAt = now.UnixMilli()
 	memEp.observationCount++
@@ -1169,15 +1223,25 @@ func (m *memoryState) readEpisodeActionLocked(id string) (*memEpisode, episodeAc
 	if ep == nil {
 		return nil, episodeAction{}, fmt.Errorf("alert %s %w", id, ErrAlertNotFound)
 	}
+	settlementState := ep.settlementState
+	if settlementState == "" {
+		settlementState = "uninvestigated"
+	}
 	return ep, episodeAction{
-		state:          ep.state,
-		fingerprint:    ep.conditionFingerprint,
-		ackedBy:        ep.ackedBy,
-		ackedNote:      ep.ackedNote,
-		trackingItemID: ep.trackingItemID,
-		hasTrackingCol: true,
-		hasLagPairCol:  true,
-		hasAckCols:     true,
+		state:             ep.state,
+		fingerprint:       ep.conditionFingerprint,
+		lastObservedSeq:   ep.lastObservedSeq,
+		ackedBy:           ep.ackedBy,
+		ackedNote:         ep.ackedNote,
+		trackingItemID:    ep.trackingItemID,
+		trackedLagPair:    ep.trackedLagPair,
+		settlementState:   settlementState,
+		outcome:           ep.outcome,
+		settledBy:         ep.settledBy,
+		hasTrackingCol:    true,
+		hasLagPairCol:     true,
+		hasAckCols:        true,
+		hasSettlementCols: true,
 		payload: map[string]any{
 			"alert_id": id, "rule_id": ep.ruleID, "subject_key": ep.subjectKey, "severity": ep.severity,
 		},
@@ -1219,4 +1283,51 @@ func (m *memoryState) act(id, kind string, now time.Time, change func(*memEpisod
 		return err
 	}
 	return m.appendEventLocked(kind, id, now, a.payload)
+}
+
+func (m *memoryState) settle(id string, now time.Time, change func(*memEpisode, episodeAction) (bool, error), opts SettleOptions) error {
+	if m == nil {
+		return fmt.Errorf("alert %s %w", id, ErrAlertNotFound)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ep, a, err := m.readEpisodeActionLocked(id)
+	if err != nil {
+		return err
+	}
+	alreadySettled := a.settlementState == "settled"
+	inline, err := change(ep, a)
+	if err != nil {
+		return err
+	}
+	if alreadySettled {
+		return nil
+	}
+	if inline {
+		if err := m.appendEventLocked(investigatedKind, id, now, map[string]any{
+			"alert_id":    id,
+			"rule_id":     ep.ruleID,
+			"subject_key": ep.subjectKey,
+			"severity":    ep.severity,
+			"by":          opts.By,
+			"cause":       opts.Cause,
+			"evidence":    opts.Evidence,
+		}); err != nil {
+			return err
+		}
+	}
+	body := map[string]any{
+		"alert_id":    id,
+		"rule_id":     ep.ruleID,
+		"subject_key": ep.subjectKey,
+		"severity":    ep.severity,
+		"by":          opts.By,
+		"outcome":     opts.Outcome,
+		"item_id":     opts.ItemID,
+		"settled_seq": ep.settledSeq.Int64,
+	}
+	if opts.LinkKind != "" {
+		body["link_kind"] = opts.LinkKind
+	}
+	return m.appendEventLocked(settledKind, id, now, body)
 }

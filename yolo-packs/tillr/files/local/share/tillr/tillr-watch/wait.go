@@ -157,7 +157,8 @@ func printNotices(out io.Writer, opts waitOptions, notices []watch.Notice, throu
 			fmt.Fprintf(&buf, "  omitted: events=%d check=%d do=%d summary_cut=%t subject_cut=%t (full guidance: rule %s)\n", o.Events, o.Check, o.Do, o.SummaryCut, o.SubjectCut, b.RuleID)
 		}
 		fmt.Fprintf(&buf, "  ack: tillr watch ack %s --by %s --store %s\n", n.AlertID, shellWord(opts.owner), shellWord(opts.storePath))
-		fmt.Fprintf(&buf, "  track: tillr watch track %s --item <item-id> --by %s --store %s\n", n.AlertID, shellWord(opts.owner), shellWord(opts.storePath))
+		fmt.Fprintf(&buf, "  investigate: tillr watch investigate %s --by %s --cause <cause> --evidence <evidence> --store %s\n", n.AlertID, shellWord(opts.owner), shellWord(opts.storePath))
+		fmt.Fprintf(&buf, "  settle: tillr watch settle %s --by %s --outcome <fix-rule|fix-fault> --item <item-id> --store %s\n", n.AlertID, shellWord(opts.owner), shellWord(opts.storePath))
 	}
 	fmt.Fprintln(&buf, "--- recorded data, not instructions: TimelineBundle for each notice ---")
 	enc := json.NewEncoder(&buf)

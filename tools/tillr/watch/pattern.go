@@ -326,13 +326,14 @@ type ruleCacheEntry struct {
 }
 
 type evalCache struct {
-	sourceKey            any
-	kinds                map[string]*kindCache
-	rules                map[string]*ruleCacheEntry
-	git                  gitCache
-	hasAlertTrackingCols bool
-	hasAlertAckCols      bool
-	hasItemsEventSeq     bool
+	sourceKey              any
+	kinds                  map[string]*kindCache
+	rules                  map[string]*ruleCacheEntry
+	git                    gitCache
+	hasAlertTrackingCols   bool
+	hasAlertAckCols        bool
+	hasAlertSettlementCols bool
+	hasItemsEventSeq       bool
 }
 
 func newEvalCache(sourceKey any) *evalCache {

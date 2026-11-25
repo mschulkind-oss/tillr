@@ -18,23 +18,28 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 	f := flag.NewFlagSet(face, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	path := f.String("store", "", "path to the tillr state database")
-	var by, note, item, until, reason string
+	var by, note, item, until, reason, cause, evidence, outcome, linkKind string
 	var untilChange bool
 	switch face {
 	case "ack":
 		f.StringVar(&by, "by", "", "actor acknowledging the alert")
 		f.StringVar(&note, "note", "", "acknowledgement note")
 		f.StringVar(&item, "item", "", "open queue item tracking the alert's cause")
-	case "track":
-		f.StringVar(&item, "item", "", "open queue item tracking the alert's cause")
-		f.StringVar(&by, "by", "", "actor recording the tracking item")
-		f.StringVar(&note, "note", "", "tracking note")
+	case "investigate":
+		f.StringVar(&by, "by", "", "actor investigating the alert")
+		f.StringVar(&cause, "cause", "", "established cause of the alert")
+		f.StringVar(&evidence, "evidence", "", "concrete evidence read")
+	case "settle":
+		f.StringVar(&by, "by", "", "actor settling the alert")
+		f.StringVar(&outcome, "outcome", "", "settlement outcome (fix-rule or fix-fault)")
+		f.StringVar(&item, "item", "", "queue item ID")
+		f.StringVar(&linkKind, "link-kind", "", "link kind (filed or linked)")
+		f.StringVar(&cause, "cause", "", "optional inline investigation cause")
+		f.StringVar(&evidence, "evidence", "", "optional inline investigation evidence")
 	case "silence":
 		f.StringVar(&until, "until", "", "duration or RFC 3339 time")
 		f.BoolVar(&untilChange, "until-change", false, "silence until the fingerprint changes")
 		f.StringVar(&reason, "reason", "", "silence reason")
-	case "resolve":
-		f.StringVar(&reason, "reason", "", "resolution note")
 	}
 	operands, err := parseEpisodeArgs(f, args)
 	if err == flag.ErrHelp {
@@ -55,7 +60,10 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 	set := map[string]bool{}
 	f.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	if face == "ack" && set["item"] {
-		return refuseEpisodeOptions(ctx, *path, operands, errors.New("--item is not accepted on ack: ack covers one observed instance only; use 'tillr watch track' or 'tillr watch silence' for item-linked suppression"))
+		return refuseEpisodeOptions(ctx, *path, operands, errors.New("--item is not accepted on ack: ack covers one observed instance only; use 'tillr watch settle' or 'tillr watch silence' for item-linked settlement or suppression"))
+	}
+	if face == "settle" && set["cause"] != set["evidence"] {
+		return refuseEpisodeOptions(ctx, *path, operands, errors.New("--cause and --evidence must be provided together"))
 	}
 	if face == "silence" && (set["until"] == set["until-change"] || set["until-change"] && !untilChange) {
 		return refuseEpisodeOptions(ctx, *path, operands, fmt.Errorf("silence requires exactly one of --until and --until-change"))
@@ -66,38 +74,48 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 		}
 		return nil
 	}
+	settleOpts := watch.SettleOptions{
+		By:       by,
+		Outcome:  outcome,
+		ItemID:   item,
+		LinkKind: linkKind,
+		Cause:    cause,
+		Evidence: evidence,
+	}
 	apply := func(e watch.Evaluator) (string, error) {
 		switch face {
 		case "ack":
 			return "acknowledged", e.Ack(ctx, id, by, optional("note", &note))
-		case "track":
-			return "tracked by " + item, e.Track(ctx, id, item, optional("by", &by), optional("note", &note))
-		case "silence":
+		case "investigate":
+			return "investigated", e.Investigate(ctx, id, by, cause, evidence)
+		case "settle":
+			return fmt.Sprintf("settled (%s -> %s)", outcome, item), e.Settle(ctx, id, settleOpts)
+		default: // silence
 			return "silenced", e.Silence(ctx, id, optional("until", &until), optional("reason", &reason))
-		default: // resolve
-			return "resolved", e.Resolve(ctx, id, reason)
 		}
 	}
 	var state string
 	err = store.EditExisting(ctx, *path, func(s *store.Store) error {
 		e := watch.Evaluator{Store: s}
 		switch face {
-		case "track":
-			if !set["item"] || item == "" {
-				return e.RefuseEpisode(ctx, id, errors.New("--item is required and must not be empty"))
-			}
-			if set["by"] && by == "" {
-				return e.RefuseEpisode(ctx, id, errors.New("--by must not be empty"))
-			}
-			needMigrate, err := e.NeedsTrackingMigration(ctx, id, item, optional("by", &by))
+		case "ack":
+			needMigrate, err := e.NeedsAckMigration(ctx, id, by)
 			if err != nil {
 				return err
 			}
 			if needMigrate {
 				return errNeedSchemaMigration
 			}
-		case "ack":
-			needMigrate, err := e.NeedsAckMigration(ctx, id, by)
+		case "investigate":
+			needMigrate, err := e.NeedsInvestigateMigration(ctx, id, by, cause, evidence)
+			if err != nil {
+				return err
+			}
+			if needMigrate {
+				return errNeedSchemaMigration
+			}
+		case "settle":
+			needMigrate, err := e.NeedsSettleMigration(ctx, id, settleOpts)
 			if err != nil {
 				return err
 			}

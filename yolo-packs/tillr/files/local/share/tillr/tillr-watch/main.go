@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -27,9 +28,9 @@ const help = `Usage:
   tillr watch wait --store PATH --rules DIR [--root DIR] [--owner ID] [--timeout DUR | --follow] [--fallback-poll DUR] [--no-notify] [--seen-through SEQ]
   tillr watch seen --store PATH --through SEQ [--owner ID]
   tillr watch ack ID --store PATH --by ACTOR [--note TEXT]
-  tillr watch track ID --store PATH --item ITEM_ID [--by ACTOR] [--note TEXT]
+  tillr watch investigate ID --store PATH --by ACTOR --cause TEXT --evidence TEXT
+  tillr watch settle ID --store PATH --by ACTOR --outcome (fix-rule|fix-fault) --item ITEM_ID [--link-kind filed|linked] [--cause TEXT --evidence TEXT]
   tillr watch silence ID --store PATH (--until DUR_OR_TIME | --until-change) [--reason TEXT]
-  tillr watch resolve ID --store PATH --reason TEXT
   tillr watch rule list --store PATH --rules DIR
   tillr watch rule show ID --store PATH --rules DIR
   tillr watch rule add FILE --store PATH --rules DIR --by ACTOR
@@ -73,8 +74,12 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	}
 	face := args[0]
 	switch face {
-	case "ack", "track", "silence", "resolve":
+	case "ack", "investigate", "settle", "silence":
 		if err := runEpisode(ctx, face, args[1:], out); err != nil {
+			if errors.Is(err, watch.ErrInvestigationRequired) {
+				fmt.Fprintln(stderr, "tillr watch:", err)
+				return 2
+			}
 			return fail(err)
 		}
 		return 0

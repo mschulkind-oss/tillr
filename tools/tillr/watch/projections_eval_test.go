@@ -566,7 +566,7 @@ receiver = "foreground"
 		t.Fatalf("expected resolved/condition-cleared, got %q/%q", epState, resolvedReason)
 	}
 
-	// Re-arm condition (back to in-queue) -> opens episode 2, then manual resolve suppresses re-open while subject_seq <= resolved_seq.
+	// Re-arm condition (back to in-queue) -> opens episode 2, then settle suppresses reopen while subject_seq <= settled_seq.
 	watchSQL(t, s, `UPDATE items SET state='in-queue' WHERE item_id=?`, fixerID)
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
@@ -577,21 +577,24 @@ receiver = "foreground"
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Resolve(ctx, ep2ID, "manual"); err != nil {
+	if err := e.Settle(ctx, ep2ID, SettleOptions{
+		By: "operator", Outcome: "fix-fault", ItemID: fixerID,
+		Cause: "fixer queued", Evidence: "checked item state",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	watchFact(t, s, now.Add(3*time.Minute), `{"unrelated":2}`)
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var activeCount int
+	var reopenCount int
 	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
-		return rd.QueryRow(`SELECT COUNT(*) FROM alert_episodes WHERE rule_id='fixer-proved-queued' AND state!='resolved'`).Scan(&activeCount)
+		return rd.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='watch.alert.reopened' AND object_id=?`, ep2ID).Scan(&reopenCount)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if activeCount != 0 {
-		t.Fatalf("manual resolution should suppress reopen while subject_seq <= resolved_seq, activeCount=%d", activeCount)
+	if reopenCount != 0 {
+		t.Fatalf("settle should suppress reopen while subject_seq <= settled_seq, reopenCount=%d", reopenCount)
 	}
 
 	// Newer drain.fixer-attached advances subject_seq past resolved_seq -> re-opens episode 3, then item-closed resolves it.

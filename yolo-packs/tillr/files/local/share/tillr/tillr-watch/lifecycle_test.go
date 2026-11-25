@@ -126,18 +126,18 @@ func TestWatchEpisodeFaces(t *testing.T) {
 			{"ack", "--by is required", []string{"--store", s.Path(), id, "--by="}},
 			{"ack", "flag needs an argument: -by", []string{"--store", s.Path(), id, "--by"}},
 			{"ack", "flag needs an argument: -note", []string{"--store", s.Path(), id, "--by=judge", "--note"}},
-			{"resolve", "--reason is required", []string{"--store", s.Path(), id, "--reason="}},
-			{"resolve", "flag needs an argument: -reason", []string{"--store", s.Path(), id, "--reason"}},
+			{"investigate", "--cause is required", []string{"--store", s.Path(), id, "--by=judge", "--cause=", "--evidence=seq 1"}},
+			{"investigate", "flag needs an argument: -cause", []string{"--store", s.Path(), id, "--by=judge", "--cause"}},
 			{"silence", "flag needs an argument: -until", []string{"--store", s.Path(), id, "--until"}},
 			{"silence", "invalid boolean value", []string{"--store", s.Path(), "--until-change=bad", id}},
 			{"ack", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--by=judge", "extra"}},
 			{"silence", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--until=1h", "extra"}},
-			{"resolve", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--reason=checked", "extra"}},
+			{"investigate", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--by=judge", "--cause=c", "--evidence=e", "extra"}},
 			{"ack", "requires --store and one alert ID", []string{id, "extra", "--store", s.Path(), "--by=judge"}},
 			{"silence", "requires --store and one alert ID", []string{"--store", s.Path(), "extra", id, "--until=1h"}},
-			{"resolve", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--reason=checked", "--", "--extra"}},
-			{"resolve", "not defined: -rules", []string{"--store", s.Path(), "--rules", dir, id, "--reason=done"}},
-			{"resolve", "not defined: -rules", []string{id, "--rules", dir, "--store", s.Path(), "--reason=done"}},
+			{"investigate", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--by=judge", "--cause=c", "--evidence=e", "--", "--extra"}},
+			{"investigate", "not defined: -rules", []string{"--store", s.Path(), "--rules", dir, id, "--by=judge", "--cause=c", "--evidence=e"}},
+			{"settle", "not defined: -rules", []string{id, "--rules", dir, "--store", s.Path(), "--by=judge", "--outcome=fix-fault", "--item=item-1"}},
 			{"silence", "exactly one", []string{"--store", s.Path(), id}},
 			{"silence", "exactly one", []string{"--store", s.Path(), id, "--until=1h", "--until-change"}},
 			{"silence", "exactly one", []string{"--store", s.Path(), id, "--until-change=false"}},
@@ -159,7 +159,7 @@ func TestWatchEpisodeFaces(t *testing.T) {
 	refuseOptions("open", "")
 	refuseDeadline("open", "")
 	refuse("not found", "ack", "missing", "--by=alice")
-	refuse("not defined: -rules", "resolve", id, "--reason=done", "--rules", dir)
+	refuse("not defined: -rules", "investigate", id, "--by=alice", "--cause=c", "--evidence=e", "--rules", dir)
 	if head() != start {
 		t.Fatal("refusals appended events")
 	}
@@ -226,17 +226,7 @@ func TestWatchEpisodeFaces(t *testing.T) {
 	if by != winner || note != nil || ackedAt == 0 || until != time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli() || fp != nil {
 		t.Fatalf("unexpected silenced state: %q %v %d %d %v", by, note, ackedAt, until, fp)
 	}
-	success("alert "+id+" resolved\n", "resolve", id, "--reason=fixed")
-	refuseOptions("resolved", winner)
-	for _, face := range []struct{ name, flag string }{{"ack", "--by=bob"}, {"silence", "--until=1h"}, {"resolve", "--reason=fixed"}} {
-		refuse("resolved", face.name, id, face.flag)
-	}
-	var resolved int64
-	var reason string
-	faceRead(t, s, `SELECT resolved_seq,resolved_reason FROM alert_episodes`, &resolved, &reason)
-	if resolved != start+3 || reason != "manual" || head() != start+4 {
-		t.Fatalf("resolved seq=%d reason=%q head=%d (started at %d)", resolved, reason, head(), start)
-	}
+	success("alert "+id+" investigated\n", "investigate", id, "--by=bob", "--cause=real fault", "--evidence=seq 1")
 	for i, want := range []struct {
 		kind   string
 		fields map[string]any
@@ -244,7 +234,7 @@ func TestWatchEpisodeFaces(t *testing.T) {
 		{"acknowledged", map[string]any{"by": winner, "note": nil}},
 		{"silenced", map[string]any{"reason": "waiting"}},
 		{"silenced", map[string]any{"until": "2099-01-01T00:00:00Z"}},
-		{"resolved", map[string]any{"reason": "manual", "note": "fixed"}},
+		{"investigated", map[string]any{"by": "bob", "cause": "real fault", "evidence": "seq 1"}},
 	} {
 		var kind, object, idInEvent string
 		var raw []byte
@@ -390,8 +380,8 @@ func TestWatchRefusedMutationsPreserveExistingStore(t *testing.T) {
 		{"silence", "alert missing not found", []string{"silence", "missing", "--until-change"}},
 		{"silence-mode", "alert missing not found", []string{"silence", "missing"}},
 		{"silence-existing-fp", "alert alrt-existing is open", []string{"silence", "alrt-existing", "--until-change"}},
-		{"resolve", "alert missing not found", []string{"resolve", "missing", "--reason", "inspected"}},
-		{"resolve-flag", "alert missing not found", []string{"resolve", "missing", "--reason"}},
+		{"investigate", "alert missing not found", []string{"investigate", "missing", "--by", "op", "--cause", "c", "--evidence", "e"}},
+		{"settle", "alert missing not found", []string{"settle", "missing", "--by", "op", "--outcome", "fix-fault", "--item", "item-1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if mode := journal("PRAGMA journal_mode=DELETE"); mode != "delete" {

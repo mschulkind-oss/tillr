@@ -442,7 +442,7 @@ func TestTrunkProofStalledFiresWhenCheckReportsNothingForTenMinuteWindow(t *test
 func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 	const rulesDir = "../../config/tillr/watch"
 
-	for _, ackMode := range []string{"ack", "track"} {
+	for _, ackMode := range []string{"ack", "settle"} {
 		t.Run(ackMode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -480,7 +480,7 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 			f.gitAt(now.Add(-40*time.Minute), "", "update-ref", "refs/heads/main", f.head)
 			f.gitAt(now.Add(-40*time.Minute), "", "update-ref", "refs/tillr/green", f.head)
 
-			if ackMode == "track" {
+			if ackMode == "settle" {
 				seedCLIItems(t, s, map[string]string{"item-open": "in-queue"})
 			}
 
@@ -530,9 +530,9 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 						t.Fatalf("ack: code=%d out=%q err=%q", code, out, errOut)
 					}
 				} else {
-					code, out, errOut = invokeStore("track", alertID, "--item", "item-open", "--by", "operator", "--note", "investigating lag")
-					if code != 0 || errOut != "" || out != fmt.Sprintf("alert %s tracked by item-open\n", alertID) {
-						t.Fatalf("track: code=%d out=%q err=%q", code, out, errOut)
+					code, out, errOut = invokeStore("settle", alertID, "--by", "operator", "--outcome", "fix-fault", "--item", "item-open", "--cause", "investigating lag", "--evidence", "lagged")
+					if code != 0 || errOut != "" || out != fmt.Sprintf("alert %s settled (fix-fault -> item-open)\n", alertID) {
+						t.Fatalf("settle: code=%d out=%q err=%q", code, out, errOut)
 					}
 				}
 			}
@@ -559,8 +559,12 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 			var alertID string
 			faceRead(t, s, `SELECT alert_id FROM alert_episodes WHERE rule_id='trunk-proof-lag'`, &alertID)
 			acknowledge(alertID)
-			if state, pending := readStatus(); state != "acknowledged" || pending != 0 {
-				t.Fatalf("after %s: want state=acknowledged pending=0, got state=%q pending=%d", ackMode, state, pending)
+			wantState := "acknowledged"
+			if ackMode == "settle" {
+				wantState = "open"
+			}
+			if state, pending := readStatus(); state != wantState || pending != 0 {
+				t.Fatalf("after %s: want state=%s pending=0, got state=%q pending=%d", ackMode, wantState, state, pending)
 			}
 
 			// Criterion c6: with trunk-proof-lag acknowledged and no red proof since
@@ -577,8 +581,8 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 			if code, out, errOut := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
 				t.Fatalf("c6 wait expected silence (code 2), got code=%d out=%q err=%q", code, out, errOut)
 			}
-			if state, pending := readStatus(); state != "acknowledged" || pending != 0 {
-				t.Fatalf("c6 status: want state=acknowledged pending=0, got state=%q pending=%d", state, pending)
+			if state, pending := readStatus(); state != wantState || pending != 0 {
+				t.Fatalf("c6 status: want state=%s pending=0, got state=%q pending=%d", wantState, state, pending)
 			}
 
 			// Criterion c5: a red proof reopens trunk-proof-lag and delivers again naming failing_checks and tip_sha.
@@ -627,8 +631,8 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 			if code, out, errOut := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
 				t.Fatalf("re-ack wait expected silence (code 2), got code=%d out=%q err=%q", code, out, errOut)
 			}
-			if state, pending := readStatus(); state != "acknowledged" || pending != 0 {
-				t.Fatalf("re-ack status: want state=acknowledged pending=0, got state=%q pending=%d", state, pending)
+			if state, pending := readStatus(); state != wantState || pending != 0 {
+				t.Fatalf("re-ack status: want state=%s pending=0, got state=%q pending=%d", wantState, state, pending)
 			}
 
 			f.appendProgress(now.Add(-10*time.Second), drain.HeavyProgressFact{

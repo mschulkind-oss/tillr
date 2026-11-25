@@ -37,10 +37,11 @@ type ownerDDL struct {
 type Materializer func(ctx context.Context, tx *Tx, env record.Envelope) (record.Envelope, error)
 
 var (
-	registryMu        sync.RWMutex
-	registeredDDL     []ownerDDL
-	registeredColumns []ownerColumn
-	materializers     = map[string]materializerEntry{}
+	registryMu                sync.RWMutex
+	registeredDDL             []ownerDDL
+	registeredColumns         []ownerColumn
+	registeredColumnBackfills []ownerColumnBackfill
+	materializers             = map[string]materializerEntry{}
 )
 
 // RegisterDDL adds one owner's DDL to the schema the store migrates to. The defect
@@ -106,6 +107,53 @@ func RegisterColumn(owner, table, column, decl string) error {
 	}
 	registeredColumns = append(registeredColumns, ownerColumn{owner: owner, table: table, column: column, decl: decl})
 	return nil
+}
+
+// ownerColumnBackfill is a one-time SQL statement executed immediately after
+// addMissingColumns adds the named column to an existing table.
+type ownerColumnBackfill struct {
+	owner  string
+	table  string
+	column string
+	stmt   string
+}
+
+// RegisterColumnBackfill registers a one-time SQL statement to run in the same
+// migration transaction immediately after ALTER TABLE adds (table, column).
+// If the column already exists on the table, the backfill does not run.
+func RegisterColumnBackfill(owner, table, column, stmt string) error {
+	if owner == "" || table == "" || column == "" || stmt == "" {
+		return fmt.Errorf("store: a column backfill registration needs an owner, a table, a column and a statement")
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for _, existing := range registeredColumnBackfills {
+		if existing.table != table || existing.column != column {
+			continue
+		}
+		if existing.owner == owner && existing.stmt == stmt {
+			return nil
+		}
+		return fmt.Errorf("store: column backfill for %s.%s is already registered by owner %q", table, column, existing.owner)
+	}
+	registeredColumnBackfills = append(registeredColumnBackfills, ownerColumnBackfill{
+		owner:  owner,
+		table:  table,
+		column: column,
+		stmt:   stmt,
+	})
+	return nil
+}
+
+func columnBackfillFor(table, column string) (string, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	for _, entry := range registeredColumnBackfills {
+		if entry.table == table && entry.column == column {
+			return entry.stmt, true
+		}
+	}
+	return "", false
 }
 
 // RegisterMaterializer registers one utility's record→row mapping for a record kind.

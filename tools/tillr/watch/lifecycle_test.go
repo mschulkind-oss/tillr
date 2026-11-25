@@ -206,38 +206,55 @@ func TestWatchEpisodeManualResolveSequence(t *testing.T) {
 			} else {
 				evaluateLifecycle(t, &e)
 			}
-			watchFact(t, s, now, `{}`)
+			factSeq := watchFact(t, s, now, `{}`)
 			evaluateLifecycle(t, &e)
 			notices, err := e.Pending(ctx, "foreground")
 			if err != nil || len(notices) != 1 {
 				t.Fatalf("pending: %v %v", notices, err)
 			}
 			head := notices[0].Seq
-			if err := e.Resolve(ctx, notices[0].AlertID, "investigated"); err != nil {
+			if err := e.Settle(ctx, notices[0].AlertID, SettleOptions{
+				By: "operator", Outcome: "fix-fault", ItemID: "item-1",
+				Cause: "investigated", Evidence: "checked logs",
+			}); err != nil {
 				t.Fatal(err)
 			}
-			var resolved int64
-			lifecycleRead(t, s, `SELECT resolved_seq FROM alert_episodes`, &resolved)
-			if resolved != head {
-				t.Fatalf("resolved_seq = %d, want pre-command head %d", resolved, head)
+			var settledSeq int64
+			lifecycleRead(t, s, `SELECT settled_seq FROM alert_episodes`, &settledSeq)
+			wantMinSeq := factSeq
+			if lag {
+				wantMinSeq = head
+			}
+			if settledSeq < wantMinSeq {
+				t.Fatalf("settled_seq = %d, want >= %d", settledSeq, wantMinSeq)
 			}
 			evaluateLifecycle(t, &e)
 			if !lag {
-				var n int
-				lifecycleRead(t, s, `SELECT COUNT(*) FROM alert_episodes`, &n)
-				if n != 1 {
-					t.Fatalf("resolve did not suppress already counted facts: %d episodes", n)
+				var st string
+				lifecycleRead(t, s, `SELECT state FROM alert_episodes`, &st)
+				if st != "open" {
+					t.Fatalf("settle should keep same window quiet without reopening: state=%q", st)
 				}
 				head = watchFact(t, s, now, `{}`)
 				evaluateLifecycle(t, &e)
+				var reopenEvCount int
+				lifecycleRead(t, s, `SELECT COUNT(*) FROM events WHERE kind='watch.alert.reopened'`, &reopenEvCount)
+				if reopenEvCount != 1 {
+					t.Fatalf("expected 1 reopen event after new fact past settled_seq, got %d", reopenEvCount)
+				}
 			} else {
-				// The manual resolve event itself is a later store event for lag rules.
-				head++
+				evaluateLifecycle(t, &e)
+				var reopenEvCount int
+				lifecycleRead(t, s, `SELECT COUNT(*) FROM events WHERE kind='watch.alert.reopened'`, &reopenEvCount)
+				if reopenEvCount != 0 {
+					t.Fatalf("lag rule should not reopen on same lag pair after settle, got %d", reopenEvCount)
+				}
+				return
 			}
-			var opened int64
-			lifecycleRead(t, s, `SELECT opened_seq FROM alert_episodes WHERE episode_num=2 AND state='open'`, &opened)
-			if opened != head {
-				t.Fatalf("opened_seq = %d, want %d", opened, head)
+			var reopenedSeq int64
+			lifecycleRead(t, s, `SELECT last_observed_seq FROM alert_episodes WHERE state='open'`, &reopenedSeq)
+			if reopenedSeq != head {
+				t.Fatalf("reopened last_observed_seq = %d, want %d", reopenedSeq, head)
 			}
 		})
 	}
@@ -310,10 +327,13 @@ receiver = "foreground"
 	if err := e.Silence(t.Context(), stepID, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Resolve(t.Context(), checkID, "handled"); err != nil {
+	if err := e.Settle(t.Context(), checkID, SettleOptions{
+		By: "operator", Outcome: "fix-fault", ItemID: "item-1",
+		Cause: "handled", Evidence: "checked logs",
+	}); err != nil {
 		t.Fatal(err)
 	}
-	// Advance cache past the silence and resolve events, then verify an idle pass takes no writer.
+	// Advance cache past the silence and settle events, then verify an idle pass takes no writer.
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
