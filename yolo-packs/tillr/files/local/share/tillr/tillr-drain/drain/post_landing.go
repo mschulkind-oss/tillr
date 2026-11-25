@@ -101,8 +101,19 @@ var piSeriesPaths = []string{"yolo-packs/pi-fork/", "bin/pi-forks.list"}
 
 func (l *Loop) landWithActions(ctx context.Context, candidate Candidate) (LandOutcome, error) {
 	out, err := l.cfg.Steps.Land(ctx, candidate)
-	if err == nil && out.Result == LandLanded && out.TrunkAfter != "" {
-		l.afterLandingCandidate(context.WithoutCancel(ctx), candidate, out.TrunkAfter)
+	if err == nil && out.Result == LandLanded {
+		if candidate.BaseRef == "" {
+			tip := out.TrunkAfter
+			if tip == "" && l.cfg.Root != "" {
+				tip, _ = l.revParse(context.WithoutCancel(ctx), l.cfg.Root, TrunkRef)
+			}
+			if tip != "" {
+				l.checkActiveGatesOnTrunkMove(ctx, tip)
+			}
+		}
+		if out.TrunkAfter != "" {
+			l.afterLandingCandidate(context.WithoutCancel(ctx), candidate, out.TrunkAfter)
+		}
 	}
 	return out, err
 }

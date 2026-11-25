@@ -206,6 +206,9 @@ func (l *Loop) completeRemoteSyncReplayItem(ctx context.Context, c Candidate, re
 }
 
 func (l *Loop) afterRemoteSyncReplay(ctx context.Context, replay *remoteSyncReplay, result *LoopResult) {
+	if replay != nil && replay.Rewrite.Tip != "" {
+		l.checkActiveGatesOnTrunkMove(ctx, replay.Rewrite.Tip)
+	}
 	l.publishRemoteSyncReplay(ctx, replay.Candidate.ItemID, replay.publication())
 	l.mu.Lock()
 	result.Landed++

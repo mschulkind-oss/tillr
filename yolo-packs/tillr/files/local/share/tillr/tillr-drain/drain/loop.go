@@ -600,6 +600,9 @@ type Loop struct {
 	restartHoldWaiting          bool          // true while a pending restart is waiting for an active trunk proof or existing restartMechanical holds to drain
 	restartSettlements          atomic.Int32  // admitted gate/landing holds currently blocking exec
 	heavyMu                     sync.Mutex
+	activeGatesMu               sync.Mutex
+	activeGates                 map[*activeGate]struct{}
+	lastLandedTip               string
 	baseReplayMu                sync.Mutex
 	activeBaseReplays           int
 	fixerWaitMu                 sync.Mutex
@@ -3532,6 +3535,34 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	// If we cannot establish ordinary eligibility, omit the observation.
 	required, _, timingErr := l.requiredChecks(ctx, candidate.ItemID)
 	candidate.skipFastGateTiming = timingErr != nil || len(required) != 0
+	gateCtx, cancelGate := context.WithCancel(ctx)
+	defer cancelGate()
+	var active *activeGate
+	if !doneGate {
+		var conflicts []string
+		var conflictTip string
+		active, conflicts, conflictTip, err = l.prepareActiveGate(ctx, candidate, cancelGate)
+		if err != nil {
+			if ExitCode(err) == record.ExitExternal {
+				return "", false, l.candidateFault(ctx, candidate, err.Error())
+			}
+			return "", false, err
+		}
+		if len(conflicts) > 0 {
+			if isProc && liveGate {
+				if handle, attachErr := procSteps.startOrAttachDetachedGate(ctx, candidate); attachErr == nil {
+					procSteps.stopDetachedGate(handle)
+				}
+			}
+			finishPreGate()
+			l.reportf("loop: %s does not apply to trunk %s before gate (%s); sending to conflict repair\n",
+				candidate.ItemID, shortSHA(conflictTip), strings.Join(conflictPaths(conflicts), ", "))
+			endConflict := timeHandoffPhase(ctx, "conflict_fix")
+			defer endConflict()
+			return l.conflictFix(ctx, candidate, LandOutcome{Result: LandSquashConflict, ConflictPaths: conflicts}, result, timing)
+		}
+		defer l.unregisterActiveGate(active)
+	}
 	l.mu.Lock()
 	l.gatesInFlight++
 	l.mu.Unlock()
@@ -3542,7 +3573,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	var gate GateOutcome
 	var stalledGateCount int
 	if isProc {
-		handle, startErr := procSteps.startOrAttachDetachedGate(ctx, candidate)
+		handle, startErr := procSteps.startOrAttachDetachedGate(gateCtx, candidate)
 		if startErr != nil {
 			l.mu.Lock()
 			stalledGateCount = l.gatesInFlight
@@ -3552,7 +3583,13 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			err = startErr
 		} else {
 			done, waitErr := restartWork(ctx, l, func(waitCtx context.Context) (detachedGateDone, error) {
-				d, err := procSteps.awaitDetachedGate(waitCtx, l, handle)
+				gateWaitCtx, cancelGateWait := context.WithCancel(waitCtx)
+				stopCancel := context.AfterFunc(gateCtx, cancelGateWait)
+				defer func() {
+					stopCancel()
+					cancelGateWait()
+				}()
+				d, err := procSteps.awaitDetachedGate(gateWaitCtx, l, handle)
 				if err == nil && detachedGateSettled(candidate, d) {
 					if held, ok := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold); ok {
 						held.allowDuringProof.Store(true)
@@ -3576,12 +3613,20 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			}
 		}
 	} else {
-		gate, err = l.cfg.Steps.Gate(ctx, candidate)
+		gate, err = l.cfg.Steps.Gate(gateCtx, candidate)
 		endGate()
 		l.mu.Lock()
 		stalledGateCount = l.gatesInFlight
 		l.gatesInFlight--
 		l.mu.Unlock()
+	}
+	l.unregisterActiveGate(active)
+	if conflicts, conflictTip := active.conflict(); len(conflicts) > 0 && ctx.Err() == nil {
+		l.reportf("loop: %s no longer applies to trunk %s during gate (%s); stopping gate and sending to conflict repair\n",
+			candidate.ItemID, shortSHA(conflictTip), strings.Join(conflictPaths(conflicts), ", "))
+		endConflict := timeHandoffPhase(ctx, "conflict_fix")
+		defer endConflict()
+		return l.conflictFix(ctx, candidate, LandOutcome{Result: LandSquashConflict, ConflictPaths: conflicts}, result, timing)
 	}
 	endPostGate := timeHandoffPhase(ctx, "post_gate")
 	postGateEnded := false
