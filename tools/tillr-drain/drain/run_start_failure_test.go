@@ -50,6 +50,25 @@ func TestARunThatCannotStartHoldsItsItemAndNotTheLoop(t *testing.T) {
 	})
 }
 
+// An older loop recorded the setup refusal without retracting its dispatch.
+// Clearing that existing fault restores the pending workflow node too.
+func TestClearFaultRetractsAnExistingExecSetupRefusal(t *testing.T) {
+	f, l, _, d := node1Claim(t)
+	id := d.RunRequest.RunID
+	failing := ItemFault{ItemID: d.ItemID, RunID: id, Reason: ReasonSettleFailed,
+		Detail: "run: tillr-run exec could not run " + id + ": exit status 2: tillr-run: reading adapter pause-kind: no such file or directory"}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return l.recordItemFaultTx(tx, failing)
+	})
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return ClearItemFault(tx, d.ItemID, mustFaults(t, tx.Reader())[d.ItemID].Seq, l.cfg.Now())
+	})
+	assertClaimRetracted(t, f, d)
+	if got := decisionFor(t, l, d.ItemID).decision; got.Action != ActionDispatch || got.RunRequest == nil || got.RunRequest.RunID != id {
+		t.Fatalf("the pending node was not offered again: %+v", got)
+	}
+}
+
 func mustFaults(t *testing.T, r *store.Reader) map[string]ItemFault {
 	t.Helper()
 	faults, err := ReadItemFaults(r)

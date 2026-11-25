@@ -485,7 +485,7 @@ func retryFace(args []string) int {
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
 		var err error
 		retry, err = drain.AuthorizeRetry(ctx, tx, drain.RetryRequest{
-			ItemID: *itemID, RunID: *runID, By: *by, Why: *why, At: at.UTC(),
+			StorePath: *path, ItemID: *itemID, RunID: *runID, By: *by, Why: *why, At: at.UTC(),
 			Acknowledge: *acknowledge,
 		})
 		return err

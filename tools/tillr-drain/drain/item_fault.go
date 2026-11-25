@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/faults"
@@ -68,7 +69,10 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		var err error
 		f.Seq, err = l.appendItemFaultTx(tx, f)
-		return err
+		if err != nil {
+			return err
+		}
+		return retractRefusedRunClaim(tx, f, l.cfg.Now().UTC())
 	})
 	if err == nil {
 		if reason == ReasonPreserveFailed || reason == ReasonDecisionCollision {
@@ -145,7 +149,46 @@ func ClearItemFault(tx *store.Tx, itemID string, seq int64, at time.Time) error 
 	if f.Reason == reasonVerifyTriage {
 		return Usagef("item %q is held for verifier triage; %s", itemID, f.ClearCommand(""))
 	}
+	if err := retractRefusedRunClaim(tx, f, at); err != nil {
+		return err
+	}
 	return clearItemFault(tx, f, at)
+}
+
+// execSetupRefused recognizes the run face's usage exit with no output record,
+// as persisted by ProcessSteps.Run and holdSettleFailure. Use the saved evidence
+// so clearance also works for faults recorded by an earlier drain build. A lost
+// or crashed run face is not proof that no worker started.
+func execSetupRefused(f ItemFault) bool {
+	if f.Reason != ReasonSettleFailed || f.RunID == "" || !strings.HasPrefix(f.Detail, "run: ") {
+		return false
+	}
+	_, _, ok := strings.Cut(f.Detail, " exec could not run "+f.RunID+": exit status 2: tillr-run: ")
+	return ok
+}
+
+func retractRefusedRunClaim(tx *store.Tx, f ItemFault, at time.Time) error {
+	if !execSetupRefused(f) {
+		return nil
+	}
+	r := tx.Reader()
+	works, err := readPending(r)
+	if err != nil {
+		return err
+	}
+	w := works[f.ItemID]
+	if w == nil || w.Done || w.Ready || w.Examining || w.Examiner != nil || w.Decision.RunRequest == nil ||
+		w.Decision.RunRequest.RunID != f.RunID || len(w.Decision.Parallel) != 0 {
+		return nil
+	}
+	var recorded bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM runs WHERE run_id=?)`, f.RunID).Scan(&recorded); err != nil || recorded {
+		return err
+	}
+	// Release the unlaunched dispatch in the same write as the fault change.
+	// Once the fault is clear, the next pass can offer the item with no
+	// synthetic run record in its history.
+	return retractClaim(tx, w.Decision, at, true)
 }
 
 func clearItemFault(tx *store.Tx, f ItemFault, at time.Time) error {

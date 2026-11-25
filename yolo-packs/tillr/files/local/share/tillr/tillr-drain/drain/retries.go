@@ -95,11 +95,13 @@ type Retry struct {
 // At is the injected clock, so two authorizations made from the same words and the same
 // clock produce the same row.
 type RetryRequest struct {
-	ItemID string
-	RunID  string
-	By     string
-	Why    string
-	At     time.Time
+	// StorePath supplies the path for operator commands printed on refusal.
+	StorePath string
+	ItemID    string
+	RunID     string
+	By        string
+	Why       string
+	At        time.Time
 	// Acknowledge is the outcome the operator is acknowledging: "" for the unchanged
 	// harness-only retry, RetryAckGateFailed for a run the gate judged, or
 	// RetryAckUnjudged for a run a wall cut short. It is validated against the store's
@@ -180,6 +182,13 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 		   FROM runs WHERE run_id = ?`, req.RunID,
 	).Scan(&runItemID, &rec.RunID, &rec.Backend, &rec.State, &exitCode, &refs); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			faults, err := ReadItemFaults(tx.Reader())
+			if err != nil {
+				return Retry{}, readFailure(err)
+			}
+			if f := faults[req.ItemID]; f.RunID == req.RunID && execSetupRefused(f) {
+				return Retry{}, Usagef("the store holds no run %q: the run face refused before the worker started. No retry command is accepted. After repairing the cause, run:\n%s", req.RunID, f.ClearCommand(req.StorePath))
+			}
 			return Retry{}, Usagef("the store holds no run %q. %s", req.RunID, latestRunCommand(tx.Reader(), req.ItemID))
 		}
 		return Retry{}, readFailure(err)

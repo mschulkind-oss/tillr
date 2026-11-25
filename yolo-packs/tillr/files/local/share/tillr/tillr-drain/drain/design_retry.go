@@ -57,7 +57,7 @@ func latestRunCommand(r *store.Reader, itemID string) string {
 		itemID, run.StateExited, run.StateFailedToStart, run.StateTimedOut,
 	).Scan(&runID)
 	if err != nil || runID == "" {
-		return noRetryCommand(fmt.Sprintf("item %q has no finished run, so the loop moves: it dispatches the item when the plan admits it", itemID))
+		return noRetryCommand(fmt.Sprintf("item %q has no finished run, so the loop moves: it dispatches the item on the next pass that admits it", itemID))
 	}
 	return fmt.Sprintf("Item %q's latest finished run is %s. A retry names it: %s", itemID, runID, retryCommand(itemID, runID, ""))
 }
