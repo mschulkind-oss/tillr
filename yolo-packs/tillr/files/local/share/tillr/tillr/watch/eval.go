@@ -882,7 +882,7 @@ func (s activeSnapshot) compositeSubjects(ruleID string, n int) map[string][]str
 	}
 	tuples := map[string][]string{}
 	for key := range eps {
-		if tuple, ok := decodeCompositeSubject(key, n); ok {
+		if tuple, ok := decodeSubjectKey(key, n); ok {
 			tuples[key] = tuple
 		}
 	}
@@ -896,7 +896,7 @@ func (s activeSnapshot) sortedCompositeKeys(ruleID string, n int) []string {
 	}
 	var keys []string
 	for key := range eps {
-		if _, ok := decodeCompositeSubject(key, n); ok {
+		if _, ok := decodeSubjectKey(key, n); ok {
 			keys = append(keys, key)
 		}
 	}

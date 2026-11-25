@@ -286,7 +286,7 @@ func (m *memoryState) activeCompositeSubjects(ruleID string, n int) (map[string]
 	var keys []string
 	for _, ep := range m.episodes {
 		if ep.ruleID == ruleID && ep.state != "resolved" {
-			if tuple, ok := decodeCompositeSubject(ep.subjectKey, n); ok {
+			if tuple, ok := decodeSubjectKey(ep.subjectKey, n); ok {
 				tuples[ep.subjectKey] = tuple
 				keys = append(keys, ep.subjectKey)
 			}

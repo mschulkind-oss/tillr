@@ -925,7 +925,7 @@ func (s *TillrStoreSource) activeCompositeSubjects(rd *store.Reader, ruleID stri
 		if err := rows.Scan(&key); err != nil {
 			return nil, nil, err
 		}
-		if tuple, ok := decodeCompositeSubject(key, n); ok {
+		if tuple, ok := decodeSubjectKey(key, n); ok {
 			tuples[key] = tuple
 			keys = append(keys, key)
 		}
@@ -945,14 +945,16 @@ func (s *TillrStoreSource) deriveRule(rd *store.Reader, r Rule, now time.Time, f
 	names := r.When.groupByNames()
 	subjects := map[string]*condition{}
 	subjectTuples := map[string][]string{}
-	if len(names) >= 2 {
+	if len(names) >= 2 || r.When.ForEach != "" {
 		seededTuples, _, err := s.activeCompositeSubjects(rd, r.ID, len(names))
 		if err != nil {
 			return nil, 0, err
 		}
 		for key, tuple := range seededTuples {
 			subjects[key] = &condition{}
-			subjectTuples[key] = tuple
+			if len(names) >= 2 {
+				subjectTuples[key] = tuple
+			}
 		}
 	}
 	args := []any{firstLoadedSeq, windowStartMillis(r.When, now), now.UnixMilli()}

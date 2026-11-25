@@ -212,6 +212,7 @@ type ruleDefinitionDigestInput struct {
 	Pattern            string            `json:"pattern"`
 	Field              string            `json:"field"`
 	DistinctBy         string            `json:"distinct_by,omitempty"`
+	ForEach            string            `json:"for_each,omitempty"`
 	Pairs              [][2]string       `json:"pairs"`
 	Threshold          int64             `json:"threshold"`
 	ThresholdCommits   int64             `json:"threshold_commits"`
@@ -261,6 +262,7 @@ func definitionHash(r Rule) string {
 		Pattern:            r.When.Pattern,
 		Field:              r.When.Field,
 		DistinctBy:         r.When.DistinctBy,
+		ForEach:            r.When.ForEach,
 		Pairs:              normalizePairs(r.When.Pairs),
 		Threshold:          r.When.Threshold,
 		ThresholdCommits:   r.When.ThresholdCommits,
@@ -385,6 +387,7 @@ func ruleEqual(a, b Rule) bool {
 		a.When.Pattern == b.When.Pattern &&
 		a.When.Field == b.When.Field &&
 		a.When.DistinctBy == b.When.DistinctBy &&
+		a.When.ForEach == b.When.ForEach &&
 		slices.Equal(a.When.Pairs, b.When.Pairs) &&
 		a.When.Threshold == b.When.Threshold &&
 		a.When.Window == b.When.Window &&
@@ -511,6 +514,13 @@ func unescapeSubjectPart(s string) (string, bool) {
 	return b.String(), true
 }
 
+func decodeSubjectKey(key string, n int) ([]string, bool) {
+	if n == 1 {
+		return []string{key}, true
+	}
+	return decodeCompositeSubject(key, n)
+}
+
 func decodeCompositeSubject(key string, n int) ([]string, bool) {
 	parts := strings.Split(key, "/")
 	if len(parts) != n {
@@ -549,6 +559,7 @@ func observeCompositeRecord(
 	subjects map[string]*condition,
 	subjectTuples map[string][]string,
 	skipped *int,
+	seenInEvent map[string]bool,
 ) error {
 	n := len(names)
 	tuple := make([]string, 0, n)
@@ -576,6 +587,9 @@ func observeCompositeRecord(
 		}
 		if !inScope {
 			return nil
+		}
+		if seenInEvent != nil {
+			seenInEvent[subject] = true
 		}
 		subjectTuples[subject] = tuple
 		c := subjects[subject]
@@ -619,8 +633,89 @@ func observeRecord(
 	subjectTuples map[string][]string,
 	skipped *int,
 ) error {
+	if r.When.ForEach != "" {
+		return observeForEachRecord(r, names, rec, facts, nowMillis, subjects, subjectTuples, skipped)
+	}
+	return observeSingleRecord(r, names, rec, facts, nowMillis, subjects, subjectTuples, skipped, nil)
+}
+
+func observeForEachRecord(
+	r Rule,
+	names []string,
+	rec Observation,
+	facts subjectFacts,
+	nowMillis int64,
+	subjects map[string]*condition,
+	subjectTuples map[string][]string,
+	skipped *int,
+) error {
+	raw := rec.Lookup(r.When.ForEach)
+	var elems []any
+	switch list := raw.(type) {
+	case []any:
+		elems = list
+	case []map[string]any:
+		elems = make([]any, len(list))
+		for i, m := range list {
+			elems[i] = m
+		}
+	default:
+		*skipped++
+		return nil
+	}
+	elemRule := r
+	elemRule.When.ForEach = ""
+	seenInEvent := make(map[string]bool, len(elems))
+	for _, elem := range elems {
+		elemMap, ok := elem.(map[string]any)
+		if !ok || elemMap == nil {
+			*skipped++
+			continue
+		}
+		merged := make(map[string]any, len(rec.Fields)+len(elemMap))
+		maps.Copy(merged, rec.Fields)
+		maps.Copy(merged, elemMap)
+		for _, col := range []string{"seat", "object_type", "object_id", "revision"} {
+			if v, exists := rec.Fields[col]; exists {
+				merged[col] = v
+			} else {
+				delete(merged, col)
+			}
+		}
+		child := Observation{
+			Seq:    rec.Seq,
+			TS:     rec.TS,
+			Kind:   rec.Kind,
+			Fields: merged,
+		}
+		if err := observeSingleRecord(elemRule, names, child, facts, nowMillis, subjects, subjectTuples, skipped, seenInEvent); err != nil {
+			return err
+		}
+	}
+	if r.When.Pattern == ConsecutiveCount && r.When.Reset == nil {
+		for sub, c := range subjects {
+			if !seenInEvent[sub] {
+				c.events = c.events[:0]
+				c.clears = append(c.clears, rec.Seq)
+			}
+		}
+	}
+	return nil
+}
+
+func observeSingleRecord(
+	r Rule,
+	names []string,
+	rec Observation,
+	facts subjectFacts,
+	nowMillis int64,
+	subjects map[string]*condition,
+	subjectTuples map[string][]string,
+	skipped *int,
+	seenInEvent map[string]bool,
+) error {
 	if len(names) >= 2 {
-		return observeCompositeRecord(r, names, rec, facts, nowMillis, subjects, subjectTuples, skipped)
+		return observeCompositeRecord(r, names, rec, facts, nowMillis, subjects, subjectTuples, skipped, seenInEvent)
 	}
 	lookup := rec.Lookup
 	subject := "global"
@@ -652,6 +747,9 @@ func observeRecord(
 	if !inScope {
 		return nil
 	}
+	if seenInEvent != nil {
+		seenInEvent[subject] = true
+	}
 	c := subjects[subject]
 	if c == nil {
 		c = &condition{}
@@ -679,7 +777,7 @@ func deriveCached(r Rule, now time.Time, facts subjectFacts, cache *evalCache, f
 		seededTuples map[string][]string
 		activeKeys   []string
 	)
-	if len(names) >= 2 && activeSubjects != nil {
+	if (len(names) >= 2 || r.When.ForEach != "") && activeSubjects != nil {
 		var err error
 		seededTuples, activeKeys, err = activeSubjects(r.ID, len(names))
 		if err != nil {
@@ -705,7 +803,9 @@ func deriveCached(r Rule, now time.Time, facts subjectFacts, cache *evalCache, f
 	subjectTuples := map[string][]string{}
 	for key, tuple := range seededTuples {
 		subjects[key] = &condition{}
-		subjectTuples[key] = tuple
+		if len(names) >= 2 {
+			subjectTuples[key] = tuple
+		}
 	}
 	skipped := 0
 	var (
@@ -774,14 +874,16 @@ func deriveFromSource(
 	names := r.When.groupByNames()
 	subjects := map[string]*condition{}
 	subjectTuples := map[string][]string{}
-	if len(names) >= 2 && activeSubjects != nil {
+	if (len(names) >= 2 || r.When.ForEach != "") && activeSubjects != nil {
 		seededTuples, _, err := activeSubjects(r.ID, len(names))
 		if err != nil {
 			return nil, 0, SourceCursor{}, err
 		}
 		for key, tuple := range seededTuples {
 			subjects[key] = &condition{}
-			subjectTuples[key] = tuple
+			if len(names) >= 2 {
+				subjectTuples[key] = tuple
+			}
 		}
 	}
 	winLo := windowStartMillis(r.When, now)

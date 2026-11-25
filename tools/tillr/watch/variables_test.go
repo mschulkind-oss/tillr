@@ -39,6 +39,7 @@ func registerShippedWatchKinds(t *testing.T) {
 		"drain.obstacle-hold",
 		"drain.pi-build-current",
 		"drain.pi-build-stale",
+		"drain.process-cpu",
 		"drain.refusal",
 		"drain.restart-answer",
 		"drain.restart-request",

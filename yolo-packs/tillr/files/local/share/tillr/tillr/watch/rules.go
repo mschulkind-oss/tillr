@@ -48,7 +48,7 @@ type When struct {
 	GroupBy                                    string
 	GroupByList                                []string
 	GroupByAny                                 []string
-	Pattern, Field, DistinctBy                 string
+	Pattern, Field, DistinctBy, ForEach        string
 	Pairs                                      [][2]string
 	Threshold, ThresholdCommits                int64
 	Window, ThresholdDuration                  time.Duration
@@ -429,6 +429,9 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 			when.reject("group_by", "%v", err)
 		}
 	}
+	if r.When.ForEach != "" && len(r.Reads.Events) == 0 {
+		when.reject("for_each", "requires reads.events")
+	}
 	if r.When.ReopenWhen != nil && len(r.Reads.Events) == 0 {
 		when.reject("reopen_when", "requires reads.events")
 	}
@@ -636,7 +639,8 @@ func loadWhen(k keys, pattern string, refs map[string]bool, projectionOnly bool)
 	if _, present := k.values["keep_on_terminal_item"]; present {
 		w.KeepOnTerminalItem = requiredValue[bool](k, "keep_on_terminal_item", "a boolean")
 	}
-	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint", "keep_on_terminal_item"}
+	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint", "keep_on_terminal_item", "for_each"}
+	w.ForEach = loadForEach(k)
 	switch w.Pattern {
 	case DurationWithoutEvent:
 		k.only(append(allowed, "after", "match", "threshold_duration")...)
@@ -714,6 +718,34 @@ func loadDistinctBy(k keys) string {
 	}
 	if isForbiddenGroupByColumn(name) {
 		k.reject("distinct_by", "integer column %q cannot be used as distinct_by", name)
+		return ""
+	}
+	return name
+}
+
+func isForbiddenForEachPath(col string) bool {
+	switch col {
+	case "global", "kind", "seat", "object_type", "object_id":
+		return true
+	default:
+		return false
+	}
+}
+
+func loadForEach(k keys) string {
+	if _, present := k.values["for_each"]; !present {
+		return ""
+	}
+	name := k.text("for_each")
+	if name == "" {
+		return ""
+	}
+	if isForbiddenGroupByColumn(name) {
+		k.reject("for_each", "integer column %q cannot be used as for_each", name)
+		return ""
+	}
+	if isForbiddenForEachPath(name) || strings.HasPrefix(name, "event.") || !validEventPath(name) {
+		k.reject("for_each", "expected a payload path without the event. prefix or reserved column, got %q", name)
 		return ""
 	}
 	return name

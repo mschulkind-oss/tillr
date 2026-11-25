@@ -1,0 +1,34 @@
+# Incident (2026-11-23 00:50 ET): tillr watch wait sat at 133% CPU while idle
+# and tillr-view serve sat at 120% CPU, both found only by hand.
+# Reads registered kind drain.process-cpu (sampled once per minute in tools/tillr-drain/drain/process_cpu.go).
+
+[[rule]]
+id = "drain-process-cpu-high"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.process-cpu"]
+
+[rule.when]
+for_each = "processes"
+group_by = "process_key"
+pattern = "consecutive_count"
+match = 'event.role in ["tillr-watch-wait", "tillr-view-serve"] and event.cpu_percent > 50'
+threshold = 10
+window = "30m"
+
+[rule.guidance]
+summary = "Process {{event.role}} (PID {{event.pid}}, {{subject}}) used over 50% CPU for {{count}} consecutive 1-minute samples (latest {{event.cpu_percent}}%)."
+check = [
+  "Inspect /proc/{{event.pid}}/cmdline, /proc/{{event.pid}}/stat, /proc/{{event.pid}}/stack, and /proc/{{event.pid}}/fd to confirm PID {{event.pid}} is still live and check its kernel wait and open file descriptors.",
+  "Capture a 30-second CPU profile before stopping or restarting the process: perf record -F 99 -p {{event.pid}} -g -- sleep 30 && perf report --stdio --no-children.",
+  "If {{event.role}} is tillr-view-serve, run tillr-view perf-log (just observatory-perf) to identify hot HTTP routes, SSE streams, or SQLite queries; if {{event.role}} is tillr-watch-wait, run tillr watch status --store .tillr/state.db --rules config/tillr/watch and tillr view events --kind drain.process-cpu to check wakeup churn versus idle spin.",
+]
+do = [
+  "Establish why {{event.role}} (PID {{event.pid}}) is sustaining {{event.cpu_percent}}% CPU from the profile and logs before restarting it, and file or track the queue item fixing the root cause.",
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]

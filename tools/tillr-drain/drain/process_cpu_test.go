@@ -195,10 +195,10 @@ func TestProcessCPUEventShapeAndMinuteCadenceFromFakeProc(t *testing.T) {
 		MaxRole:             ProcessRoleWatchWait,
 		MaxPID:              2001,
 		Processes: []ProcessCPUEntry{
-			{PID: 1001, Role: ProcessRoleDrainLoop, CPUPercent: 3},
-			{PID: 2001, Role: ProcessRoleWatchWait, CPUPercent: 133},
-			{PID: 2002, Role: ProcessRoleWatchWait, CPUPercent: 0},
-			{PID: 3001, Role: ProcessRoleViewServe, CPUPercent: 120},
+			{PID: 1001, Role: ProcessRoleDrainLoop, CPUPercent: 3, ProcessKey: "drain-loop:1001:5000"},
+			{PID: 2001, Role: ProcessRoleWatchWait, CPUPercent: 133, ProcessKey: "tillr-watch-wait:2001:6000"},
+			{PID: 2002, Role: ProcessRoleWatchWait, CPUPercent: 0, ProcessKey: "tillr-watch-wait:2002:6100"},
+			{PID: 3001, Role: ProcessRoleViewServe, CPUPercent: 120, ProcessKey: "tillr-view-serve:3001:7000"},
 		},
 	}
 	if !reflect.DeepEqual(first.Fact, wantFirst) {
@@ -244,14 +244,38 @@ func TestProcessCPUEventShapeAndMinuteCadenceFromFakeProc(t *testing.T) {
 		MaxRole:             ProcessRoleViewServe,
 		MaxPID:              3002,
 		Processes: []ProcessCPUEntry{
-			{PID: 1001, Role: ProcessRoleDrainLoop, CPUPercent: 1},
-			{PID: 2002, Role: ProcessRoleWatchWait, CPUPercent: 0},
-			{PID: 3001, Role: ProcessRoleViewServe, CPUPercent: 2},
-			{PID: 3002, Role: ProcessRoleViewServe, CPUPercent: 25},
+			{PID: 1001, Role: ProcessRoleDrainLoop, CPUPercent: 1, ProcessKey: "drain-loop:1001:5000"},
+			{PID: 2002, Role: ProcessRoleWatchWait, CPUPercent: 0, ProcessKey: "tillr-watch-wait:2002:6100"},
+			{PID: 3001, Role: ProcessRoleViewServe, CPUPercent: 2, ProcessKey: "tillr-view-serve:3001:7000"},
+			{PID: 3002, Role: ProcessRoleViewServe, CPUPercent: 25, ProcessKey: "tillr-view-serve:3002:9500"},
 		},
 	}
 	if !reflect.DeepEqual(events[1].Fact, wantSecond) {
 		t.Fatalf("second %s payload mismatch:\n got: %+v\nwant: %+v", ProcessCPUKind, events[1].Fact, wantSecond)
+	}
+
+	// Third minute (+3m): OS reuses PID 2001 with a newer startTime (9900 vs earlier 6000).
+	// Its process_key must be distinct so a restarted watcher never inherits the exited process's identity.
+	writeFakeProcEntry(t, fakeProc, 2001, "tillr-watch", "R", 3600, 0, 9900, "/usr/local/bin/tillr-watch", "wait", "--owner", "whale")
+	now = now.Add(time.Minute)
+	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+		t.Fatalf("180s runPasses: %v", err)
+	}
+	events = readProcessCPUEvents(t, f.storePath)
+	if len(events) != 3 {
+		t.Fatalf("expected 3 %s events at +3m, got %d", ProcessCPUKind, len(events))
+	}
+	var reusedKey string
+	for _, p := range events[2].Fact.Processes {
+		if p.PID == 2001 && p.Role == ProcessRoleWatchWait {
+			reusedKey = p.ProcessKey
+		}
+	}
+	if reusedKey != "tillr-watch-wait:2001:9900" {
+		t.Fatalf("reused PID 2001 process_key = %q, want %q", reusedKey, "tillr-watch-wait:2001:9900")
+	}
+	if reusedKey == events[0].Fact.Processes[1].ProcessKey {
+		t.Fatalf("reused PID 2001 process_key %q collided with earlier process", reusedKey)
 	}
 }
 

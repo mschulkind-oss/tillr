@@ -544,7 +544,8 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proof
 		}
 	}
 
-	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint", "keep_on_terminal_item"}
+	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint", "keep_on_terminal_item", "for_each"}
+	w.ForEach = lintForEach(whenMap, reads, emit)
 	switch pattern {
 	case DurationWithoutEvent:
 		allowed = append(allowed, "after", "match", "threshold_duration")
@@ -683,6 +684,30 @@ func lintDistinctBy(whenMap map[string]any, emit func(string, string)) string {
 		emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("when.distinct_by: integer column %q cannot be used as distinct_by", db))
 	}
 	return db
+}
+
+func lintForEach(whenMap map[string]any, reads Reads, emit func(string, string)) string {
+	raw, present := whenMap["for_each"]
+	if !present {
+		return ""
+	}
+	if len(reads.Events) == 0 {
+		emit(CodeWatchLintRuleSchema, "when.for_each: requires reads.events")
+	}
+	fe, ok := raw.(string)
+	if !ok || fe == "" {
+		emit(CodeWatchLintRuleSchema, "when.for_each: expected a non-empty payload path without the event. prefix or reserved column")
+		return ""
+	}
+	if isForbiddenGroupByColumn(fe) {
+		emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("when.for_each: integer column %q cannot be used as for_each", fe))
+		return fe
+	}
+	if isForbiddenForEachPath(fe) || strings.HasPrefix(fe, "event.") || !validEventPath(fe) {
+		emit(CodeWatchLintRuleSchema, "when.for_each: expected a non-empty payload path without the event. prefix or reserved column")
+		return ""
+	}
+	return fe
 }
 
 func isForbiddenGroupByColumn(col string) bool {

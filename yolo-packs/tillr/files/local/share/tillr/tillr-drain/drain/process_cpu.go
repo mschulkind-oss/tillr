@@ -42,6 +42,7 @@ type ProcessCPUEntry struct {
 	PID        int    `json:"pid"`
 	Role       string `json:"role"`
 	CPUPercent int    `json:"cpu_percent"`
+	ProcessKey string `json:"process_key"`
 }
 
 // ProcessCPUFact is the payload of a ProcessCPUKind event.
@@ -206,6 +207,7 @@ func buildProcessCPUFact(sessionID string, elapsed time.Duration, prev *processC
 			PID:        s.pid,
 			Role:       s.role,
 			CPUPercent: pct,
+			ProcessKey: s.role + ":" + strconv.Itoa(s.pid) + ":" + strconv.FormatUint(s.startTime, 10),
 		}
 		processes = append(processes, entry)
 
