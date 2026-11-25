@@ -225,6 +225,19 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 		if err != nil || len(leases) != 0 {
 			return err
 		}
+		if !row.Express && !isCommandDecision(d) && d.DeskDocument == "" && !isExpressLane(d.LaneID) && !strings.HasPrefix(d.LaneID, "desk-") {
+			expressByID, err := readExpressByID(r)
+			if err != nil {
+				return err
+			}
+			active, err := collectActiveOrdinaryAgents(r, at, works, byRun, expressByID)
+			if err != nil {
+				return err
+			}
+			if active[d.RunRequest.RunID] == "" && len(active) >= ordinaryLaneCount(l.rotationLanes()) {
+				return nil
+			}
+		}
 		var kind string
 		err = r.QueryRow(`SELECT kind FROM events WHERE object_type='lane' AND object_id=? AND kind IN (?, ?) ORDER BY seq DESC LIMIT 1`,
 			d.LaneID, laneRefusedKind, laneRestoredKind).Scan(&kind)
@@ -317,7 +330,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 		if err != nil || !open || (d.DesignContinuationFrom != "" && d.RunRequest.SessionTurn && shut[d.RunRequest.Backend]) {
 			return err
 		}
-		claimed, err = l.recordFastStart(ctx, tx, d, base, fork, owner, byRun, policy, shut, parallelShut, at)
+		claimed, err = l.recordFastStart(ctx, tx, d, base, fork, owner, works, byRun, policy, shut, parallelShut, at)
 		return err
 	}))
 	if errors.Is(err, errSeatWindowClosed) {
@@ -336,7 +349,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 	return true, claimed, claimed.Decision.PassID, claimed.Decision, nil
 }
 
-func (l *Loop) recordFastStart(ctx context.Context, tx *store.Tx, d Decision, base, fork string, owner *presence.Owner, byRun map[string]*pendingWork, policy *Policy, shut, parallelShut map[string]bool, at time.Time) (*pendingWork, error) {
+func (l *Loop) recordFastStart(ctx context.Context, tx *store.Tx, d Decision, base, fork string, owner *presence.Owner, works, byRun map[string]*pendingWork, policy *Policy, shut, parallelShut map[string]bool, at time.Time) (*pendingWork, error) {
 	if d.BlockConflict != nil {
 		c := *d.BlockConflict
 		c.Status, c.DesignRunID = "awaiting", d.RunRequest.RunID
@@ -388,7 +401,7 @@ func (l *Loop) recordFastStart(ctx context.Context, tx *store.Tx, d Decision, ba
 	if err := carryRetainedReaders(tx, d); err != nil {
 		return nil, err
 	}
-	if err := l.claimParallelWithShut(tx, &d, byRun, parallelShut); err != nil {
+	if err := l.claimParallelWithWorks(tx, &d, works, byRun, parallelShut); err != nil {
 		return nil, err
 	}
 	nodes := parallelNodes(d)

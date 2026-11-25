@@ -5,6 +5,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
@@ -116,6 +117,13 @@ func (v *startView) noteStartClaimed(d Decision, work *pendingWork) {
 		}
 		s.storeRuns = withNote(s.storeRuns, lane, runID)
 		s.occupied = withNote(s.occupied, lane, true)
+		if !isExpressLane(lane) && !strings.HasPrefix(lane, "desk-") && !s.itemsByID[id].Express {
+			for _, node := range parallelNodes(claimed.Decision) {
+				if node.RunRequest != nil && !isCommandDecision(node) {
+					s.activeOrdinaryAgents = withNote(s.activeOrdinaryAgents, node.RunRequest.RunID, lane)
+				}
+			}
+		}
 		s.setStartWork(claimed, nil)
 		s.holdItem(id, ReasonRunLive)
 		s.offerLanes(s.rotation, time.Time{})
@@ -171,6 +179,7 @@ func (s *startSnapshot) releaseLane(lane, runID string, detached bool) {
 	}
 	s.storeRuns = withoutNote(s.storeRuns, lane)
 	stillHeld := false
+	keepContinuing := false
 	if s.pending != nil {
 		for _, w := range s.pending.works {
 			if w.Decision.LaneID != lane || w.Done || w.LaneReleased {
@@ -182,11 +191,21 @@ func (s *startSnapshot) releaseLane(lane, runID string, detached bool) {
 				s.setStartWork(&cp, w)
 			} else {
 				stillHeld = true // A lease release alone does not dispose of a candidate.
+				if !detached && w.Candidate == nil && !w.BoundaryFailed && w.Decision.Workflow != nil && (w.Ready || workflowHasOutgoingEdge(w.Decision)) {
+					keepContinuing = true
+				}
 			}
 		}
 	}
 	if !stillHeld {
 		s.occupied = withoutNote(s.occupied, lane)
+	}
+	if !keepContinuing {
+		for key, activeLane := range s.activeOrdinaryAgents {
+			if activeLane == lane {
+				s.activeOrdinaryAgents = withoutNote(s.activeOrdinaryAgents, key)
+			}
+		}
 	}
 }
 

@@ -62,6 +62,10 @@ func (l *Loop) claimParallelFrom(tx *store.Tx, d *Decision, byRun map[string]*pe
 }
 
 func (l *Loop) claimParallelWithShut(tx *store.Tx, d *Decision, byRun map[string]*pendingWork, shut map[string]bool) error {
+	return l.claimParallelWithWorks(tx, d, nil, byRun, shut)
+}
+
+func (l *Loop) claimParallelWithWorks(tx *store.Tx, d *Decision, works, byRun map[string]*pendingWork, shut map[string]bool) error {
 	if d.Workflow == nil || evaluatorNode(*d) || d.Workflow.Stages[d.NodeIndex].Access != "read_only" || len(d.Parallel) > 0 {
 		return nil
 	}
@@ -72,6 +76,29 @@ func (l *Loop) claimParallelWithShut(tx *store.Tx, d *Decision, byRun map[string
 	limit := d.Workflow.MaxParallel
 	if limit == 0 {
 		limit = 4
+	}
+	expressByID, err := readExpressByID(tx.Reader())
+	if err != nil {
+		return err
+	}
+	ordinary := !expressByID[d.ItemID] && !isExpressLane(d.LaneID) && !strings.HasPrefix(d.LaneID, "desk-")
+	agentBudget := limit
+	if ordinary {
+		if works == nil {
+			works, byRun, err = readPendingHistory(tx.Reader())
+			if err != nil {
+				return err
+			}
+		}
+		active, err := collectActiveOrdinaryAgents(tx.Reader(), l.cfg.Now().UTC(), works, byRun, expressByID)
+		if err != nil {
+			return err
+		}
+		used := len(active)
+		if d.Workflow.Stages[d.NodeIndex].Kind != "command" && (d.RunRequest == nil || active[d.RunRequest.RunID] == "") {
+			used++
+		}
+		agentBudget = max(0, ordinaryLaneCount(l.rotationLanes())-used)
 	}
 	indices := []int{d.NodeIndex}
 	candidates := []int{}
@@ -119,9 +146,16 @@ func (l *Loop) claimParallelWithShut(tx *store.Tx, d *Decision, byRun map[string
 	}
 	sort.Slice(candidates, func(i, j int) bool { return d.Workflow.Stages[candidates[i]].ID < d.Workflow.Stages[candidates[j]].ID })
 	for _, i := range candidates {
-		if len(indices) < limit {
-			indices = append(indices, i)
+		if len(indices) >= limit {
+			break
 		}
+		if ordinary && d.Workflow.Stages[i].Kind != "command" {
+			if agentBudget <= 0 {
+				continue
+			}
+			agentBudget--
+		}
+		indices = append(indices, i)
 	}
 	if len(indices) < 2 {
 		return nil

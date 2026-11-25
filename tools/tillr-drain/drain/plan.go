@@ -590,6 +590,11 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if details != nil {
 		maskedWorkers = details.maskedWorkers
 	}
+	initialActiveOrdinary, err := collectActiveOrdinaryAgents(r, at, works, designHistory, expressByIDFromRows(items))
+	if err != nil {
+		return nil, err
+	}
+	runningAgentLimit := ordinaryLaneCount(*tick.AvailableLanes)
 	released := map[string]bool{}
 	for {
 		clear(maskedWorkers)
@@ -608,7 +613,8 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			priors: attemptPriors, retries: retries, classes: classes, latest: latest,
 			obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
 			waits: waits, escalated: escalated, maskedWorkers: maskedWorkers,
-			at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
+			at: at, assigned: map[string]bool{}, runningAgentLimit: runningAgentLimit, activeOrdinaryAgents: maps.Clone(initialActiveOrdinary),
+			fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
 			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, inputDecisionsLoaded: inputDecisionsLoaded, inputDecisionReader: r, works: works, attempts: attempts, nodeCounts: nodeCounts, requests: requests,
 		}
 		if details != nil {
@@ -839,6 +845,9 @@ func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges ma
 			if p.captureStart == nil {
 				p.assigned[slot] = true
 				p.pausedReserved[row.ItemID] = slot
+				if !row.Express {
+					p.claimOrdinaryAgentSlot(false, false, slot, "paused:"+row.ItemID)
+				}
 			}
 			reservedSlots = append(reservedSlots, row.Express)
 		} else {
@@ -1007,15 +1016,24 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					// selected request, but stage it fresh on the newly assigned lane.
 					decision.WorkflowRestart = false
 				}
-				lane, ok := p.freeLane(item.Express)
-				if !ok && decision.Action == ActionJudge {
-					if itemOrder == nil {
-						itemOrder = make(map[string]int, len(items))
-						for i, row := range items {
-							itemOrder[row.ItemID] = i
+				isCommand := isCommandDecision(decision) || (decision.Action == ActionJudge && item.JudgeMode != "agent")
+				runKey := ""
+				if decision.RunRequest != nil {
+					runKey = decision.RunRequest.RunID
+				}
+				var lane string
+				ok := p.ordinaryAgentSlotOpen(item.Express, isCommand, runKey)
+				if ok {
+					lane, ok = p.freeLane(item.Express)
+					if !ok && decision.Action == ActionJudge {
+						if itemOrder == nil {
+							itemOrder = make(map[string]int, len(items))
+							for i, row := range items {
+								itemOrder[row.ItemID] = i
+							}
 						}
+						lane, ok = p.freeLaneOverLaterReservation(item.Express, itemOrder, idx)
 					}
-					lane, ok = p.freeLaneOverLaterReservation(item.Express, itemOrder, idx)
 				}
 				if !ok {
 					decision.Action, decision.Reason, decision.To = ActionHold, ReasonNoLane, ""
@@ -1026,6 +1044,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					decision.RunRequest = &req
 					if p.captureStart == nil {
 						p.assigned[lane] = true
+						p.claimOrdinaryAgentSlot(item.Express, isCommand, lane, runKey)
 					}
 				}
 				identifyDecision(&decision)
@@ -1095,6 +1114,20 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				decision.From, decision.To = from, ""
 				decision.Action, decision.Reason = ActionHold, ReasonNoLane
 				identifyDecision(&decision)
+			}
+			if !(work.LaneReleased || laneOut) && decision.Action == ActionJudge && item.JudgeMode == "agent" && !decision.WorkflowRelease && !item.Express && !isExpressLane(decision.LaneID) && !strings.HasPrefix(decision.LaneID, "desk-") && p.pausedReserved[item.ItemID] == "" {
+				isCommand := isCommandDecision(decision)
+				runKey := "judge:" + item.ItemID
+				if decision.RunRequest != nil && decision.RunRequest.RunID != "" {
+					runKey = decision.RunRequest.RunID
+				}
+				if !p.ordinaryAgentSlotOpen(item.Express, isCommand, runKey) {
+					decision.From, decision.To = "candidate", ""
+					decision.Action, decision.Reason = ActionHold, ReasonNoLane
+					identifyDecision(&decision)
+				} else {
+					p.claimOrdinaryAgentSlot(item.Express, isCommand, decision.LaneID, runKey)
+				}
 			}
 			if depHold && !decision.WorkflowRelease {
 				decision = Decision{ItemID: item.ItemID, Attempt: decision.Attempt, From: "held", Action: ActionHold, Reason: ReasonBlocked}
@@ -1415,12 +1448,14 @@ type planner struct {
 	releasedObstacles map[string]string
 	// questions answers what each item's design document still asks. It is the planner's
 	// only read outside the store, and it is nil-safe: a nil source answers "unknown".
-	questions      QuestionSource
-	at             time.Time
-	dispatched     int
-	assigned       map[string]bool
-	pausedBlocked  map[string]bool
-	pausedReserved map[string]string
+	questions            QuestionSource
+	at                   time.Time
+	dispatched           int
+	assigned             map[string]bool
+	runningAgentLimit    int
+	activeOrdinaryAgents map[string]string
+	pausedBlocked        map[string]bool
+	pausedReserved       map[string]string
 	// laneShort records that some item asked this plan for a free lane and got none.
 	laneShort bool
 	// forks includes live leases and unfinished examinations, then adds this plan's
@@ -1659,10 +1694,17 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	case p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches:
 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
 	default:
-		lane, ok := p.freeLane(item.Express)
+		isCommand := item.Command != nil
+		runKey := attemptRunID(item.ItemID, p.nextAttempt(item.ItemID))
+		slotOpen := p.ordinaryAgentSlotOpen(item.Express, isCommand, runKey)
+		var lane string
+		var ok bool
+		if slotOpen {
+			lane, ok = p.freeLane(item.Express)
+		}
 		ownJudgeLane := p.returnedJudgeLane(item.ItemID, returned)
 		if ownJudgeLane != "" && (item.Express || !isExpressLane(ownJudgeLane)) {
-			lane, ok = ownJudgeLane, p.retainedLaneFreeFor(ownJudgeLane, item.ItemID) && !p.tick.OutLanes[ownJudgeLane]
+			lane, ok = ownJudgeLane, slotOpen && p.retainedLaneFreeFor(ownJudgeLane, item.ItemID) && !p.tick.OutLanes[ownJudgeLane]
 			if !ok {
 				decision.Action, decision.Reason = ActionHold, ReasonNoLane
 				decision.LaneID, decision.Returned = ownJudgeLane, returned
@@ -1672,7 +1714,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 				break
 			}
 		}
-		if ownJudgeLane == "" && returned != nil && returned.WorkerSession != nil && (item.Express || !isExpressLane(returned.WorkerSession.LaneID)) && p.retainedLaneFreeFor(returned.WorkerSession.LaneID, item.ItemID) {
+		if ownJudgeLane == "" && returned != nil && returned.WorkerSession != nil && (item.Express || !isExpressLane(returned.WorkerSession.LaneID)) && slotOpen && p.retainedLaneFreeFor(returned.WorkerSession.LaneID, item.ItemID) {
 			lane = returned.WorkerSession.LaneID
 			ok = true
 		}
@@ -1708,6 +1750,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			break
 		}
 		p.assignLane(lane)
+		p.claimOrdinaryAgentSlot(item.Express, isCommand, lane, runKey)
 		if p.captureStart == nil {
 			p.forks = append(p.forks, plannedFork{itemID: item.ItemID, fork: item.Delivery.activeFork()})
 		}
@@ -2262,6 +2305,33 @@ func (p *planner) assignLane(lane string) {
 		p.assigned[lane] = true
 		p.dispatched++
 	}
+}
+
+func (p *planner) ordinaryAgentSlotOpen(express, isCommand bool, runKey string) bool {
+	if p.captureStart != nil || express || isCommand {
+		return true
+	}
+	if runKey != "" && p.activeOrdinaryAgents[runKey] != "" {
+		return true
+	}
+	if len(p.activeOrdinaryAgents) < p.runningAgentLimit {
+		return true
+	}
+	p.laneShort = true
+	return false
+}
+
+func (p *planner) claimOrdinaryAgentSlot(express, isCommand bool, lane, runKey string) {
+	if p.captureStart != nil || express || isCommand || isExpressLane(lane) || strings.HasPrefix(lane, "desk-") {
+		return
+	}
+	if p.activeOrdinaryAgents == nil {
+		p.activeOrdinaryAgents = map[string]string{}
+	}
+	if runKey == "" {
+		runKey = "planned:" + lane
+	}
+	p.activeOrdinaryAgents[runKey] = lane
 }
 
 func (p *planner) freeLane(express ...bool) (string, bool) {

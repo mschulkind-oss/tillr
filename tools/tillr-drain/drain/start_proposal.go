@@ -112,7 +112,9 @@ func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Poli
 		tick: tick, policy: policy, held: lanes, deskOwners: owners, itemStates: s.states, history: s.history,
 		priors: s.attemptPriors, retries: s.retries, classes: classes, latest: latest,
 		obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
-		waits: waits, escalated: s.escalated, at: at, fixerOpen: trunkFixerOpen(rows, s.def), unproved: unproved,
+		waits: waits, escalated: s.escalated, at: at,
+		runningAgentLimit: ordinaryLaneCount(*tick.AvailableLanes), activeOrdinaryAgents: maps.Clone(s.activeOrdinaryAgents),
+		fixerOpen: trunkFixerOpen(rows, s.def), unproved: unproved,
 		designHistory: s.pending.byRun, inputs: inputs, inputDecisions: s.inputDecisions,
 		works: s.pending.works, attempts: s.attempts, nodeCounts: s.nodeCounts, requests: s.requests,
 	}
@@ -349,8 +351,13 @@ func (s startSnapshot) nextFreshStartWithGates(gates int) (startViewEntry, bool)
 }
 
 func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, bool) {
+	limit := ordinaryLaneCount(s.rotation)
+	activeCount := len(s.activeOrdinaryAgents)
 	var claimed map[string]bool
 	for _, express := range s.pausedReserved {
+		if !express {
+			activeCount++
+		}
 		if lane := s.firstFreeLaneExcept(express, claimed); lane != "" {
 			if claimed == nil {
 				claimed = map[string]bool{}
@@ -372,21 +379,32 @@ func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, b
 			// fresh start cannot claim it first.
 			if d.LaneID == "" && (d.Action == ActionJudge || (freshOnly && isDispatch(d))) {
 				if work.GateStall == nil || work.GateStall.canRetry(gates) {
-					lane := s.firstFreeLaneExcept(e.express, claimed)
-					if lane == "" && d.Action == ActionJudge {
-						if itemOrder == nil {
-							itemOrder = make(map[string]int, len(s.items))
-							for i, item := range s.items {
-								itemOrder[item.id] = i
+					isCommand := isCommandDecision(d)
+					runKey := ""
+					if d.RunRequest != nil {
+						runKey = d.RunRequest.RunID
+					}
+					alreadyActive := runKey != "" && s.activeOrdinaryAgents[runKey] != ""
+					if e.express || isCommand || alreadyActive || activeCount < limit {
+						lane := s.firstFreeLaneExcept(e.express, claimed)
+						if lane == "" && d.Action == ActionJudge {
+							if itemOrder == nil {
+								itemOrder = make(map[string]int, len(s.items))
+								for i, item := range s.items {
+									itemOrder[item.id] = i
+								}
+							}
+							lane = s.firstFreeLaneOverLaterReservation(e.express, claimed, itemOrder, idx)
+						}
+						if lane != "" {
+							if claimed == nil {
+								claimed = map[string]bool{}
+							}
+							claimed[lane] = true
+							if !e.express && !isCommand && !alreadyActive && !isExpressLane(lane) && !strings.HasPrefix(lane, "desk-") {
+								activeCount++
 							}
 						}
-						lane = s.firstFreeLaneOverLaterReservation(e.express, claimed, itemOrder, idx)
-					}
-					if lane != "" {
-						if claimed == nil {
-							claimed = map[string]bool{}
-						}
-						claimed[lane] = true
 					}
 				}
 				continue
@@ -398,12 +416,20 @@ func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, b
 		if !isDispatch(d) || d.RunRequest == nil {
 			continue
 		}
+		isCommand := isCommandDecision(d)
+		isDesk := d.DeskDocument != "" || strings.HasPrefix(d.LaneID, "desk-")
+		alreadyActive := s.activeOrdinaryAgents[d.RunRequest.RunID] != ""
+		slotOpen := e.express || isCommand || isDesk || alreadyActive || activeCount < limit
 		lane := d.LaneID // concrete lanes include desks and retained continuations
 		if lane == "" {
-			lane = s.firstFreeLaneExcept(e.express, claimed)
+			if slotOpen {
+				lane = s.firstFreeLaneExcept(e.express, claimed)
+			}
 			if lane == "" && (IsTrunkFixer(q.id) || IsRemoteSyncItem(q.id)) && !s.occupied["desk-trunk-fixer"] {
 				lane = "desk-trunk-fixer"
 			}
+		} else if !slotOpen {
+			continue
 		} else if owner := s.reservations[lane]; (owner != "" && owner != q.id) || (freshOnly && s.occupied[lane]) || claimed[lane] {
 			continue
 		}

@@ -62,7 +62,7 @@ func TestRerankViaPlaceDoesNotCancelPlannedStart(t *testing.T) {
 		}
 
 		// Subsequent plans observe the new queue order (item-c before item-b).
-		l.cfg.Lanes = []string{"lane-2"}
+		l.cfg.Lanes = []string{"lane-1", "lane-2"}
 		nextPlans := mustPlan(t, l)
 		var nextDispatch string
 		for _, p := range nextPlans {
@@ -126,7 +126,7 @@ func TestRerankViaPlaceDoesNotCancelPlannedStart(t *testing.T) {
 		}
 
 		// Subsequent plans observe item-c ahead of item-b.
-		l.cfg.Lanes = []string{"lane-2"}
+		l.cfg.Lanes = []string{"lane-1", "lane-2"}
 		nextPlans := mustPlan(t, l)
 		var nextDispatch string
 		for _, p := range nextPlans {

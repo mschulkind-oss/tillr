@@ -96,7 +96,8 @@ func (s *scoutedDesignSteps) Run(ctx context.Context, req run.Request) (run.Reco
 func TestScoutedDesignWorkflowLoop(t *testing.T) {
 	for _, mode := range []string{"scouts", "none", "commit", "missing"} {
 		t.Run(mode, func(t *testing.T) {
-			f, l, base := workflowLoopFixture(t, "")
+			f, l, base := workflowLoopFixtureWithLanes(t, 4, "")
+			l.cfg.Lanes = []string{"lane-1", "lane-2", "lane-3", "lane-4"}
 			l.cfg.Policy.Seats["design"] = "fixture"
 			for _, ref := range []string{"scouted-design@v1", "design-from-scouts@v1"} {
 				raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "tillr", "workflows", ref+".json"))

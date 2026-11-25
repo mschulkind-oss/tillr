@@ -179,7 +179,8 @@ func mustReadTriageWorkflow(t *testing.T) string {
 // finding; tweak adjusts the loop and the shared parallel fixture before the loop starts.
 func runDocTriage(t *testing.T, docs []string, tweak func(*Loop, *parallelSteps)) (refusalLoopFixture, *docTriageSteps, *LoopResult) {
 	t.Helper()
-	f, l, base := workflowLoopFixture(t, "")
+	f, l, base := workflowLoopFixtureWithLanes(t, 4, "")
+	l.cfg.Lanes = []string{"lane-1", "lane-2", "lane-3", "lane-4"}
 	l.cfg.Policy.Seats["design"] = "fixture"
 	writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/doc-triage@v1.json"), mustReadTriageWorkflow(t))
 	runGit(t, f.root, "add", ".")

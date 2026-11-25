@@ -34,11 +34,12 @@ type startQueueRow struct{ id, rank string }
 // A snapshot and its collections are immutable after publication. Its
 // proposals are advisory; the legacy pass alone decides what starts.
 type startSnapshot struct {
-	items      []startQueueRow
-	occupied   map[string]bool
-	storeLanes map[string]bool // raw leases, before overlaying pending work
-	storeRuns  map[string]string
-	rotation   []string
+	items                []startQueueRow
+	occupied             map[string]bool
+	storeLanes           map[string]bool // raw leases, before overlaying pending work
+	storeRuns            map[string]string
+	activeOrdinaryAgents map[string]string // active ordinary agent run key -> lane_id
+	rotation             []string
 
 	entries                         map[string]startViewEntry
 	holds, reservations             map[string]string
@@ -450,7 +451,10 @@ func (s *startSnapshot) refreshLaneFacts(r *store.Reader, at time.Time, leases b
 		}
 	}
 	s.occupied = s.storeLanes
-	s.forks, err = liveForks(r, at, s.pending.works)
+	if s.forks, err = liveForks(r, at, s.pending.works); err != nil {
+		return err
+	}
+	s.activeOrdinaryAgents, err = collectActiveOrdinaryAgents(r, at, s.pending.works, s.pending.byRun, expressByIDFromMap(s.itemsByID))
 	return err
 }
 

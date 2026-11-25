@@ -262,7 +262,7 @@ func TestDispatchStampsWorkflowAndSingleWorkerRunRecords(t *testing.T) {
 		l.cfg.Steps = steps
 
 		result := &LoopResult{}
-		for i := 0; i < 8; i++ {
+		for i := 0; i < 12; i++ {
 			if _, err := l.pass(context.Background(), result); err != nil {
 				t.Fatalf("pass %d: %v", i, err)
 			}

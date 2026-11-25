@@ -187,7 +187,7 @@ func (s *parallelSteps) writeRun(ctx context.Context, req run.Request) (run.Reco
 }
 
 func parallelFixture(t *testing.T) (refusalLoopFixture, *Loop, *parallelSteps) {
-	f, l, serial := workflowLoopFixture(t, "")
+	f, l, serial := workflowLoopFixtureWithLanes(t, 4, "")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id!='item-a'`)
 		return err
@@ -216,6 +216,7 @@ func parallelFixture(t *testing.T) (refusalLoopFixture, *Loop, *parallelSteps) {
 	serial.marker = filepath.Join(gitdir, "parallel-marker")
 	writeForkFile(t, serial.marker, "preserved")
 	steps := &parallelSteps{workflowSteps: serial, overlap: make(chan struct{})}
+	l.cfg.Lanes = []string{"lane-1", "lane-2", "lane-3", "lane-4"}
 	l.cfg.Steps = steps
 	return f, l, steps
 }

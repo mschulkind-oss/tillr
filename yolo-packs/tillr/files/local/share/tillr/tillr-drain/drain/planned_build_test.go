@@ -195,6 +195,7 @@ func TestPlannedBuildProposal(t *testing.T) {
 
 func TestPlannedBuildPieceScheduling(t *testing.T) {
 	_, l, base := plannedFixture(t)
+	l.cfg.Lanes = []string{"lane-1", "lane-2"}
 	pieces := []map[string]any{piece("one", "build", "write"), piece("two", "edit", "write"), piece("three", "build", "write"), piece("four", "scout", "read_only"), piece("five", "scout", "read_only")}
 	steps := &plannedSteps{workflowSteps: base, proposal: pieceProposal(pieces), overlap: make(chan struct{})}
 	l.cfg.Steps = steps

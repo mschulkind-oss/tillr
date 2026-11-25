@@ -138,7 +138,12 @@ func (s *workflowSteps) ItemState(ctx context.Context, id, runID, state string, 
 
 func workflowLoopFixture(t *testing.T, mode string) (refusalLoopFixture, *Loop, *workflowSteps) {
 	t.Helper()
-	f := newRefusalLoopFixture(t, "item-a", "item-b")
+	return workflowLoopFixtureWithLanes(t, 2, mode)
+}
+
+func workflowLoopFixtureWithLanes(t *testing.T, laneCount int, mode string) (refusalLoopFixture, *Loop, *workflowSteps) {
+	t.Helper()
+	f := newRefusalLoopFixtureWithLanes(t, laneCount, "item-a", "item-b")
 	for _, p := range []string{"config/tillr/workflows", "briefs"} {
 		if err := os.MkdirAll(filepath.Join(f.root, p), 0755); err != nil {
 			t.Fatal(err)

@@ -157,6 +157,7 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 		}
 		lanesChanged := delta.rotation || !maps.Equal(prev.storeLanes, next.storeLanes) ||
 			!maps.Equal(prev.deskOwners, next.deskOwners) || !reflect.DeepEqual(prev.forks, next.forks) ||
+			!maps.Equal(prev.activeOrdinaryAgents, next.activeOrdinaryAgents) ||
 			((delta.lanes || len(delta.pending) > 0 || len(delta.reopened) > 0) && !maps.Equal(prev.heldLanes(), next.heldLanes()))
 		for _, id := range delta.reopened {
 			touched[id] = true
@@ -365,7 +366,7 @@ func (d *startStoreDelta) apply(r *store.Reader, s *startSnapshot, at time.Time,
 			return err
 		}
 	}
-	if d.lanes || len(d.pending) > 0 || len(d.reopened) > 0 {
+	if d.lanes || len(d.pending) > 0 || len(d.reopened) > 0 || len(d.items) > 0 {
 		if err := s.refreshLaneFacts(r, at, d.lanes); err != nil {
 			return err
 		}

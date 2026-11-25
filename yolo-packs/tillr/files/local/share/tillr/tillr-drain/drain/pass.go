@@ -2382,6 +2382,22 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if work != nil && !work.Done && !work.Ready && !d.WorkflowRestart {
 				return decline("the item still has unfinished work", "the previous work for "+d.ItemID+" to settle")
 			}
+			if (!hasTargetRow || !targetRow.Express) && !isCommandDecision(d) && d.DeskDocument == "" && !isExpressLane(d.LaneID) && !strings.HasPrefix(d.LaneID, "desk-") {
+				retainedContinuation := work != nil && (work.Ready || d.WorkflowRestart) && !work.LaneReleased && !l.outLanes()[d.LaneID]
+				if !retainedContinuation {
+					active, err := collectActiveOrdinaryAgents(tx.Reader(), at, works, designHistory, expressByIDFromRows(items))
+					if err != nil {
+						return err
+					}
+					runID := ""
+					if d.RunRequest != nil {
+						runID = d.RunRequest.RunID
+					}
+					if (runID == "" || active[runID] == "") && len(active) >= ordinaryLaneCount(l.rotationLanes()) {
+						return decline("running-agent limit reached", "a running ordinary agent to finish")
+					}
+				}
+			}
 			base := trunkSHA
 			if p.start != nil {
 				base = p.start.base
@@ -2502,7 +2518,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if err := carryRetainedReaders(tx, d); err != nil {
 				return err
 			}
-			if err := l.claimParallelFrom(tx, &d, designHistory); err != nil {
+			if err := l.claimParallelWithWorks(tx, &d, works, designHistory, nil); err != nil {
 				return err
 			}
 			shut, err := readDispatchShutFrom(tx.Reader(), at, l.currentPolicy(), d, designHistory)

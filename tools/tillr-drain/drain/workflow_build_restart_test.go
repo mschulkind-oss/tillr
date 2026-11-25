@@ -80,7 +80,7 @@ printf 'RESULT: done\n'
 		t.Fatal(err)
 	}
 	defer out.Close()
-	s.cmd = exec.Command(s.exe, "loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot, "--lanes", "1", "--policy", policy, "--run-bin", sibling(t, "run"), "--item-bin", sibling(t, "item"), "--brief-template", filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), "--gate", always(t, "gate", 0), "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0))
+	s.cmd = exec.Command(s.exe, "loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot, "--lanes", "2", "--policy", policy, "--run-bin", sibling(t, "run"), "--item-bin", sibling(t, "item"), "--brief-template", filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), "--gate", always(t, "gate", 0), "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0))
 	s.cmd.Stdout, s.cmd.Stderr = out, out
 	if err := s.cmd.Start(); err != nil {
 		t.Fatal(err)
