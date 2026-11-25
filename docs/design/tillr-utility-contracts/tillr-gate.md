@@ -4,7 +4,7 @@ status: in-review
 stage: DESIGN
 updated: 2026-11-25
 tags: [tillr, contract, gate]
-summary: "What tillr-gate provides and expects: seven faces, four record kinds, seven exit codes with the stall code 6, and the remembered-results directory. Its record types are in a `main` package nobody can import, so five utilities each hold a copy. It expects the check declarations and the registry from the operated repository. By `D-UC16` the default runner scripts are to become its own."
+summary: "What tillr-gate provides and expects: seven faces on HEAD (plus the `shards` face under `D-UC18`), four record kinds, seven exit codes with the stall code 6, and the remembered-results directory. Its record types are in a `main` package nobody can import, so five utilities each hold a copy. It expects the check declarations and the registry from the operated repository. By `D-UC16` the default runner scripts are to become its own, and by `D-UC18` `tools/go-test-shards.py` and its Python test suites move into `tillr-gate shards`."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
@@ -13,7 +13,7 @@ depends-on:
 
 **Status:** What it provides and what it expects describe the code as it is. The split into contract and private, the pins and the reach-in fixes are proposed and not built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
-**What it is.** One Go program at `tools/tillr-gate`. It derives what a candidate changed, plans which checks that change needs, runs them, and writes a verdict. It opens no store.
+**What it is.** One Go program at `tools/tillr-gate`. On `HEAD` today it has seven faces: it derives what a candidate changed, plans which checks that change needs, runs them, and writes a verdict. It opens no store. By `D-UC18` of [the overview](../tillr-utility-contracts.md#83-the-go-test-shard-runner-moves-to-go) — the designer's decision from an operator request, which the owner may overturn — `tools/go-test-shards.py` and its Python test suites (`tests/go-test-shards.test.py` and `tools/tillr-land/shards_test.py`) also move into `tools/tillr-gate/shards` as the eighth face `tillr-gate shards`.
 
 ## 1. What it provides
 
@@ -39,9 +39,11 @@ depends-on:
 | 5 | Internal |
 | 6 | A check stalled |
 
+Under `D-UC18` of [the overview](../tillr-utility-contracts.md#83-the-go-test-shard-runner-moves-to-go) (the designer's decision from an operator request, not yet built), `tillr-gate` gains an eighth face, `shards`, porting `tools/go-test-shards.py` with identical flags (`<module>` in any order with flags, `--edge-digest`, `-k`/`--shards`, `--cache`, `--durations`, `--record`, `--events`, `--scratch`, `--timeout`, `--shard-timeout`, `--progress-file` and `--progress-interval`), exit codes (`0` on pass, `--edge-digest` or `--help`; `1` on shard failure, lane `--cache` refusal or runtime error; `2` on usage or missing scratch configuration; `128 + signum` on `SIGINT`/`SIGTERM`), `go-test-shards: ` summary and failure lines, and JSON output files, run by `.justfile`, `tools/gate/checks/go-test-tillr-*.json`, `tillr-roll` and developers.
+
 ### 1.2 Go packages
 
-None. Every type below is in a `main` package and cannot be imported.
+None on `HEAD` today: every type below is in a `main` package and cannot be imported. Under `D-UC18` of [the overview](../tillr-utility-contracts.md#83-the-go-test-shard-runner-moves-to-go) (the designer's decision from an operator request, not yet built), `tools/tillr-gate/shards` (`github.com/mschulkind-oss/tillr-gate/shards`) holds the sharded Go test runner and its ported Go test suite while the gate's record types remain governed by [Section 3](#3-contract-and-private).
 
 ### 1.3 Records
 
@@ -66,6 +68,7 @@ None.
 | `<logs>/<check>.log` and `.triage.log`, named by a check's `log_ref` | drain |
 | `<git common directory>/tillr-gate/results/<key>.<verdict>.json`, the remembered results | the repository's gate scripts |
 | `TILLR_FAST_VERDICT_OUT`, which it sets for the `--gate` program and reads back | the gate scripts; the drain also sets it |
+| Under `D-UC18` (not yet built), `TILLR_GO_SHARDS_PROGRESS_OUT` / `--progress-file`, `TILLR_GO_SHARDS_EVIDENCE_OUT`, `--events` and `--record` written by `shards` | drain (`JudgeHeavy` and `runHeavyLegacy`), `go_affected.py` cross-tool cache tests, callers |
 
 ### 1.6 Names others match on
 
@@ -95,6 +98,7 @@ It reads no store, imports no other utility, and runs no other tillr program.
 **Contract:**
 
 - `change`, `plan`, `run` and `checks` with the flags above, and the seven exit codes.
+- Under `D-UC18` (the designer's decision from an operator request, which the owner may overturn), `shards` with its flags and positional/flag ordering, exit codes (`0`, `1`, `2` and `128 + signum`), refusal to choose a scratch directory itself, refusal of `--cache` in a lane (`TILLR_RUN_ID`), child process-group lifetime guard, `go-test-shards: ` summary and shard-failure lines read by the drain and the roller, and JSON shapes for `--events`, `--record`, `--progress-file` / `TILLR_GO_SHARDS_PROGRESS_OUT` and `TILLR_GO_SHARDS_EVIDENCE_OUT`.
 - `gate.change` whole. Of `gate.plan`: `plan_id base_sha tree_sha registry_digest`, and per check `check_id reads kind label tier`. Of `gate.verdict`: all eight top-level fields; per check `check_id result duration_ms budget_ms over_budget_ms log_ref`; the inherited failure whole.
 - The names of [§1.6](#16-names-others-match-on).
 - The remembered-results directory and its file name form, because the gate scripts read it.
@@ -117,6 +121,7 @@ In `tools/tillr-gate`, in its fast suite.
 - **Exit codes.** A name-set file with the seven codes, compared with the constants. The drain, the adapter and the two gate scripts compare against it.
 - **What it accepts.** A test loads every real declaration under `tools/gate/checks` and the registry example. This one reads outside the module by design: the declarations are its input, and a declaration it refuses must fail here before a drain meets it.
 - **Events.** The gate keeps the record kinds. The drain's events take names of their own ([the overview's fix for RI-37](../tillr-utility-contracts.md#10-reach-ins-today)), so a program can link both, and `tillr-watch` can know them.
+- **Shard runner (`D-UC18`).** Once built, Go unit tests in `tools/tillr-gate/shards` replace `tests/go-test-shards.test.py`, `tools/tillr-land/shards_test.py` and `tools/tillr-land/shards_liveness_test.go` in the same commit, keeping every case.
 
 ## 5. Reach-ins to fix
 
