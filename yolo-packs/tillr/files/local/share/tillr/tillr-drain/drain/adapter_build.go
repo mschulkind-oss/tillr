@@ -24,10 +24,20 @@ func stepBuildEnv() string {
 	return "TILLR_LOOP_ADAPTER_BUILD=" + adapterBuildName
 }
 
-// standardAdapterArg identifies only the standard script under this loop's root. A
-// different caller-supplied program is never replaced, even if it has the same basename.
+// builtAdapterProgram selects the adapter shipped inside the running drain binary.
+// The keeper passes the same command word for its step programs.
+const builtAdapterProgram = "builtin:tillr-loop"
+
+// standardAdapterArg recognizes the built-in command and, for older configurations,
+// the standard script under this loop's root. Other programs run as configured.
 func (s *ProcessSteps) standardAdapterArg(argv []string) int {
-	if s.Root == "" || len(argv) == 0 {
+	if len(argv) == 0 {
+		return -1
+	}
+	if argv[0] == builtAdapterProgram {
+		return 0
+	}
+	if s.Root == "" {
 		return -1
 	}
 	standard, err := filepath.Abs(filepath.Join(s.Root, "tools", "tillr-loop", "tillr-loop"))

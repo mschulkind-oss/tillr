@@ -170,10 +170,12 @@ class KeeperTests(unittest.TestCase):
         self.assertEqual(keeper.restart_delay(delay, 300), (60, 60))
 
     def test_command_only_composes_loop(self):
-        command = keeper.loop_command(ROOT, ["--lanes", "3"])
-        self.assertEqual(command[:4], ["tillr-drain", "loop", "--root", str(ROOT)])
+        with tempfile.TemporaryDirectory(prefix="consumer repo ", dir=SCRATCH) as directory:
+            root = Path(directory)
+            command = keeper.loop_command(root, ["--lanes", "3"])
+        self.assertEqual(command[:4], ["tillr-drain", "loop", "--root", str(root)])
         for face in ("gate", "land", "verdict"):
-            self.assertIn("--" + face, command)
+            self.assertEqual(command[command.index("--" + face) + 1], f"builtin:tillr-loop {face}")
         self.assertNotIn("retry", command)
         self.assertNotIn("--no-after-merge-check", command)
         self.assertEqual(command[-2:], ["--lanes", "3"])

@@ -10,6 +10,18 @@ import (
 	"testing"
 )
 
+func TestDefaultFixerGateDoesNotNeedAnAdapterCheckout(t *testing.T) {
+	// Selecting the built-in adapter needs neither a repository root nor a script
+	// path. The command still runs in the consumer's worktree.
+	steps := &ProcessSteps{}
+	cmd := steps.stepCommand(context.Background(), append(strings.Fields(DefaultFixerGateProgram), "--help"), nil)
+	cmd.Dir = t.TempDir()
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), stepArgvCheckVersion) {
+		t.Fatalf("default fixer-gate did not start the built-in adapter: %v: %s", err, out)
+	}
+}
+
 func TestStandardStepsKeepTheirBuildAfterAnAdapterLanding(t *testing.T) {
 	root := scratchUnderDurable(t)
 	adapter := filepath.Join(root, "tools", "tillr-loop", "tillr-loop")
