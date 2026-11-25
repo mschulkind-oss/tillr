@@ -57,7 +57,7 @@ func TestThePiAdapterRefusesAPiWithoutParkedToolCalls(t *testing.T) {
 		"output not a list": `if [ "${1:-}" = --features ]; then echo 'pi 1.6.0'; exit 0; fi`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			code, out, ran := runPiWithStub(t, probe, "TILLR_PI_PROBE_SECONDS=1")
+			code, out, ran := runPiWithStub(t, probe)
 			if code != 2 {
 				t.Fatalf("exit %d, want the refusal's 2: %s", code, out)
 			}
@@ -78,10 +78,6 @@ func TestThePiAdapterRefusesWhenTheFeatureProbeFails(t *testing.T) {
 		probe string
 		wants []string
 	}{
-		"a probe that times out": {
-			probe: `if [ "${1:-}" = --features ]; then echo x >> "$PROBE_COUNT"; sleep 600; fi`,
-			wants: []string{"run-pi: refused:", "probe", "failed", "timed out after 1 seconds", "unknown", "parked-tool-calls"},
-		},
 		"an unknown flag": {
 			probe: `if [ "${1:-}" = --features ]; then echo x >> "$PROBE_COUNT"; printf 'unknown option --features\nmore details\n' >&2; exit 1; fi`,
 			wants: []string{"run-pi: refused:", "probe", "failed", "1", "unknown option --features", "unknown", "parked-tool-calls"},
@@ -89,7 +85,7 @@ func TestThePiAdapterRefusesWhenTheFeatureProbeFails(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			countFile := filepath.Join(scratch(t, "probe-count"), "count")
-			code, out, ran := runPiWithStub(t, tc.probe, "TILLR_PI_PROBE_SECONDS=1", "PROBE_COUNT="+countFile)
+			code, out, ran := runPiWithStub(t, tc.probe, "PROBE_COUNT="+countFile)
 			if code != 2 {
 				t.Fatalf("exit %d, want the refusal's 2: %s", code, out)
 			}
@@ -145,6 +141,17 @@ func TestThePiAdapterRunsAPiThatListsParkedToolCalls(t *testing.T) {
 	}
 	if _, err := os.Stat(ran); err != nil {
 		t.Fatalf("the run did not start: %s", out)
+	}
+}
+
+func TestThePiAdapterWaitsForASlowFeatureProbe(t *testing.T) {
+	probe := `if [ "${1:-}" = --features ]; then sleep 2; echo '["parked-tool-calls"]'; exit 0; fi`
+	code, out, ran := runPiWithStub(t, probe, "TILLR_PI_PROBE_SECONDS=1")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 for a slow probe: %s", code, out)
+	}
+	if _, err := os.Stat(ran); err != nil {
+		t.Fatalf("the run did not start after a slow probe answered: %s", out)
 	}
 }
 

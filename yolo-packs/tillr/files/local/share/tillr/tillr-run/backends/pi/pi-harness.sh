@@ -250,7 +250,6 @@ pi_require_features() {
         _pi_have=$TILLR_PI_FEATURES
         _pi_source="TILLR_PI_FEATURES states"
     else
-        _pi_timeout=${TILLR_PI_PROBE_SECONDS:-20}
         _pi_errfile=$(mktemp "${TMPDIR:-/tmp}/pi-probe.XXXXXX")
         _pi_rc=0
         _pi_attempt=0
@@ -258,16 +257,14 @@ pi_require_features() {
             _pi_attempt=$((_pi_attempt + 1))
             _pi_rc=0
             : > "$_pi_errfile"
-            _pi_probe=$(PI_OFFLINE=1 PI_TELEMETRY=0 timeout "$_pi_timeout" \
+            _pi_probe=$(PI_OFFLINE=1 PI_TELEMETRY=0 \
                 "$PI_HARNESS_BIN" --features </dev/null 2>"$_pi_errfile") || _pi_rc=$?
             [ "$_pi_rc" -eq 0 ] && break
         done
         _pi_err_line=$(head -n 1 "$_pi_errfile" 2>/dev/null | tr -d '\r' || true)
         rm -f "$_pi_errfile"
         if [ "$_pi_rc" -ne 0 ]; then
-            if [ "$_pi_rc" -eq 124 ]; then
-                _pi_how="timed out after $_pi_timeout seconds"
-            elif [ -n "$_pi_err_line" ]; then
+            if [ -n "$_pi_err_line" ]; then
                 _pi_how="exited with status $_pi_rc: $_pi_err_line"
             else
                 _pi_how="exited with status $_pi_rc (no stderr)"
@@ -293,7 +290,7 @@ if isinstance(names, list):
                 ;;
         esac
     done
-    unset _pi_have _pi_probe _pi_source _pi_need _pi_timeout _pi_errfile _pi_rc _pi_attempt _pi_err_line _pi_how
+    unset _pi_have _pi_probe _pi_source _pi_need _pi_errfile _pi_rc _pi_attempt _pi_err_line _pi_how
 }
 
 pi_prepare_harness_env() {
