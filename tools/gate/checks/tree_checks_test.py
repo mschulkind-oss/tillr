@@ -121,8 +121,8 @@ class TreeChecks(unittest.TestCase):
     def test_ten_fast_checks_fit_and_extra_declaration_fails(self):
         declarations = [json.loads(path.read_text()) for path in HERE.glob("*.json")]
         fast = [check for check in declarations if check["tier"] == "fast"]
-        # The budget check itself is admission, not one of the ten admitted checks.
-        self.assertEqual(len([check for check in fast if check["id"] != "gate-budget"]), 10)
+        # The budget check itself is admission, not one of the eleven admitted checks.
+        self.assertEqual(len([check for check in fast if check["id"] != "gate-budget"]), 11)
         result = subprocess.run(["python3", str(HERE / "gate-budget.py")], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for check in declarations:

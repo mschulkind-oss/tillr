@@ -125,6 +125,47 @@ def load_edges(root: Path) -> dict[str, dict]:
     return data
 
 
+SOURCE_SCANNING_EDGES: tuple[tuple[str, str, bool], ...] = (
+    (
+        "github.com/mschulkind-oss/tillr/definition",
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers",
+        True,
+    ),
+    (
+        "github.com/mschulkind-oss/tillr/store",
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit",
+        False,
+    ),
+)
+
+
+def missing_source_scanning_edges(root: Path) -> list[str]:
+    """Return refusal messages for any tillr Go module absent from source-scanning edges."""
+    edges = load_edges(root)
+    modules = discover_tillr_modules(root)
+    findings: list[str] = []
+    for pkg, test_name, include_root_module in SOURCE_SCANNING_EDGES:
+        entry = edges.get(pkg)
+        if entry is None:
+            findings.append(f"{pkg}: missing entry in tools/gate/go-test-edges.json")
+            continue
+        reads = set(entry.get("reads", []))
+        read_tests = entry.get("read_tests", {})
+        for mod in modules:
+            if not include_root_module and mod == "tools/tillr":
+                continue
+            rule = f"{mod}/"
+            if rule not in reads:
+                findings.append(
+                    f"{pkg}: missing {rule!r} in tools/gate/go-test-edges.json reads"
+                )
+            elif test_name not in read_tests.get(rule, []):
+                findings.append(
+                    f"{pkg}: missing {test_name!r} in tools/gate/go-test-edges.json read_tests[{rule!r}]"
+                )
+    return findings
+
+
 def build_env() -> dict[str, str]:
     env = dict(os.environ, CGO_ENABLED="0")
     for key in STRIPPED_OUTER_ENV:

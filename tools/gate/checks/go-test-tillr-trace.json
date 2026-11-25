@@ -1,6 +1,6 @@
 {
-  "id": "tillr-trace",
-  "label": "the trace reader's cases pass",
+  "id": "go-test-tillr-trace",
+  "label": "tools/tillr-trace's whole Go suite passes",
   "command": [
     "sh",
     "-c",
@@ -10,7 +10,7 @@
   "tier": "heavy",
   "timeout_ms": 300000,
   "reads": [
-    "tools/gate/checks/tillr-trace.json",
+    "tools/gate/checks/go-test-tillr-trace.json",
     "tools/tillr-trace/"
   ],
   "tools": [

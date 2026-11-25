@@ -2400,6 +2400,167 @@ def test_cross_module_source_scanning_edges(root_graph: dict) -> None:
                 assert by_pkg[store_pkg]["selected_tests"] == [store_test], (sample_path, by_pkg[store_pkg])
 
 
+def test_candidate_gate_fails_on_undeclared_go_module() -> None:
+    """Adding a Go module under tools/ without declaring it in source-scanning reads fails
+    the go-edges check in the candidate's gate (--fast-tree --scope-to-change) before merge."""
+    decl_path = ROOT / "tools" / "gate" / "checks" / "go-edges.json"
+    decl = json.loads(decl_path.read_text(encoding="utf-8"))
+    assert decl["id"] == "go-edges", decl
+    assert decl["scope"] == "tree" and decl["tier"] == "fast", decl
+
+    with tempfile.TemporaryDirectory(dir=scratch_root(), prefix="ga-cand-edges-") as tmp:
+        tmp_path = Path(tmp)
+        runner = tmp_path / "tillr-gate"
+        env = go_affected.build_env()
+        subprocess.run(
+            ["go", "build", "-o", str(runner), "."],
+            cwd=ROOT / "tools" / "tillr-gate",
+            env=env,
+            check=True,
+        )
+
+        repo = tmp_path / "repo"
+        checks_dir = repo / "tools" / "gate" / "checks"
+        checks_dir.mkdir(parents=True)
+        shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", repo / "tools" / "gate" / "go_affected.py")
+        shutil.copy2(decl_path, checks_dir / "go-edges.json")
+        shutil.copy2(ROOT / "tools" / "gate" / "checks" / "go-edges.py", checks_dir / "go-edges.py")
+
+        (repo / "tools" / "tillr").mkdir(parents=True)
+        (repo / "tools" / "tillr" / "go.mod").write_text("module github.com/mschulkind-oss/tillr\n\ngo 1.22\n")
+        (repo / "tools" / "tillr-existing").mkdir(parents=True)
+        (repo / "tools" / "tillr-existing" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-existing\n\ngo 1.22\n"
+        )
+
+        def_pkg = "github.com/mschulkind-oss/tillr/definition"
+        def_test = "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+        store_pkg = "github.com/mschulkind-oss/tillr/store"
+        store_test = "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+        edges = {
+            def_pkg: {
+                "builds": [],
+                "reads": ["tools/tillr-existing/", "tools/tillr/"],
+                "read_tests": {
+                    "tools/tillr-existing/": [def_test],
+                    "tools/tillr/": [def_test],
+                },
+            },
+            store_pkg: {
+                "builds": [],
+                "reads": ["tools/tillr-existing/"],
+                "read_tests": {
+                    "tools/tillr-existing/": [store_test],
+                },
+            },
+        }
+        edges_path = repo / "tools" / "gate" / "go-test-edges.json"
+        edges_path.write_text(json.dumps(edges, indent=2) + "\n", encoding="utf-8")
+
+        git_env = dict(
+            env,
+            GIT_AUTHOR_NAME="Test User",
+            GIT_AUTHOR_EMAIL="test@example.com",
+            GIT_COMMITTER_NAME="Test User",
+            GIT_COMMITTER_EMAIL="test@example.com",
+        )
+
+        def git(*args: str) -> str:
+            res = subprocess.run(
+                ["git", *args],
+                cwd=repo,
+                env=git_env,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            return res.stdout.strip()
+
+        git("init")
+        git("add", ".")
+        git("commit", "-m", "base")
+        base = git("rev-parse", "HEAD")
+
+        # Add a new Go module under tools/ without declaring it in go-test-edges.json.
+        (repo / "tools" / "tillr-new").mkdir(parents=True)
+        (repo / "tools" / "tillr-new" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-new\n\ngo 1.22\n"
+        )
+        git("add", "tools/tillr-new/go.mod")
+        git("commit", "-m", "add undeclared module")
+        head_missing = git("rev-parse", "HEAD")
+
+        logs_fail = tmp_path / "logs-fail"
+        res_fail = subprocess.run(
+            [
+                str(runner),
+                "checks",
+                "--fast-tree",
+                "--scope-to-change",
+                "--base",
+                base,
+                "--head",
+                head_missing,
+                "--worktree",
+                str(repo),
+                "--checks",
+                str(checks_dir),
+                "--logs",
+                str(logs_fail),
+            ],
+            cwd=repo,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        assert res_fail.returncode != 0, (res_fail.returncode, res_fail.stdout, res_fail.stderr)
+        verdict_fail = json.loads(res_fail.stdout.splitlines()[0])
+        checks_fail = {c["check_id"]: c for c in verdict_fail["payload"]["checks"]}
+        assert "go-edges" in checks_fail, checks_fail
+        assert checks_fail["go-edges"]["result"] == "fail", checks_fail["go-edges"]
+        log_texts = "\n".join(p.read_text(encoding="utf-8") for p in logs_fail.glob("*.log"))
+        assert "tools/tillr-new/" in log_texts, log_texts
+        assert "tools/gate/go-test-edges.json" in log_texts, log_texts
+
+        # Now declare tools/tillr-new/ in both source-scanning packages; the candidate gate passes.
+        edges[def_pkg]["reads"].append("tools/tillr-new/")
+        edges[def_pkg]["read_tests"]["tools/tillr-new/"] = [def_test]
+        edges[store_pkg]["reads"].append("tools/tillr-new/")
+        edges[store_pkg]["read_tests"]["tools/tillr-new/"] = [store_test]
+        edges_path.write_text(json.dumps(edges, indent=2) + "\n", encoding="utf-8")
+        git("add", "tools/gate/go-test-edges.json")
+        git("commit", "-m", "declare new module in edges")
+        head_declared = git("rev-parse", "HEAD")
+
+        logs_pass = tmp_path / "logs-pass"
+        res_pass = subprocess.run(
+            [
+                str(runner),
+                "checks",
+                "--fast-tree",
+                "--scope-to-change",
+                "--base",
+                base,
+                "--head",
+                head_declared,
+                "--worktree",
+                str(repo),
+                "--checks",
+                str(checks_dir),
+                "--logs",
+                str(logs_pass),
+            ],
+            cwd=repo,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        assert res_pass.returncode == 0, (res_pass.returncode, res_pass.stdout, res_pass.stderr)
+        verdict_pass = json.loads(res_pass.stdout.splitlines()[0])
+        checks_pass = {c["check_id"]: c for c in verdict_pass["payload"]["checks"]}
+        assert checks_pass["go-edges"]["result"] == "pass", checks_pass["go-edges"]
+
+
 def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
     """Conflict-repair (-cfix) regates reuse passing per-package verdicts from the item's
     pre-conflict go-affected run when package transitive inputs and declared edge digests
@@ -3205,6 +3366,7 @@ def main(argv: list[str] | None = None) -> int:
         ("test_selection_rules", lambda: test_selection_rules(root_graph)),
         ("test_drain_subpackage_isolation", lambda: test_drain_subpackage_isolation(root_graph)),
         ("test_cross_module_source_scanning_edges", lambda: test_cross_module_source_scanning_edges(root_graph)),
+        ("test_candidate_gate_fails_on_undeclared_go_module", test_candidate_gate_fails_on_undeclared_go_module),
         ("test_edge_cache_invalidation", test_edge_cache_invalidation),
         ("test_edges_file_honest_and_env_read", test_edges_file_honest_and_env_read),
         ("test_stalled_run_prints_nothing_without_test_events", test_stalled_run_prints_nothing_without_test_events),

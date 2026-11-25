@@ -11,8 +11,11 @@
   "reads": [
     "tests/go-affected.test.py",
     "tools/gate/checks/go-affected-test.json",
+    "tools/gate/checks/go-edges.json",
+    "tools/gate/checks/go-edges.py",
     "tools/gate/go-test-edges.json",
     "tools/gate/go_affected.py",
+    "tools/tillr-cli/",
     "tools/tillr-drain/",
     "tools/tillr-gate/",
     "tools/tillr-item/",

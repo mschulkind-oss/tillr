@@ -676,10 +676,10 @@ sys.exit(rc)
         verdict, = result.stdout.splitlines()
         checks = json.loads(verdict)["payload"]["checks"]
         expected = IDS | {"gate-budget", "scratch", "design-citations", "pack-sync", "go-build", "format",
-                          "go-affected"}
+                          "go-affected", "go-edges"}
         self.assertEqual({check["check_id"] for check in checks}, expected)
         self.assertEqual(len(checks), len(expected))
-        skipped = {"format", "gate-budget", "go-affected", "go-build", "workflows"}
+        skipped = {"format", "gate-budget", "go-affected", "go-build", "go-edges", "workflows"}
         self.assertEqual({check["check_id"]: check["result"] for check in checks}, {
             ident: "skipped: no changed path is read" if ident in skipped else "pass"
             for ident in expected

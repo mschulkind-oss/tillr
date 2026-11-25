@@ -1004,6 +1004,7 @@
       "tools/tillr-land/",
       "tools/tillr-run/",
       "tools/tillr-store/",
+      "tools/tillr-trace/",
       "tools/tillr-view/",
       "tools/tillr-watch/",
       "tools/tillr/"
@@ -1030,6 +1031,9 @@
       "tools/tillr-store/": [
         "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
       ],
+      "tools/tillr-trace/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
       "tools/tillr-view/": [
         "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
       ],
@@ -1051,6 +1055,7 @@
       "tools/tillr-land/",
       "tools/tillr-run/",
       "tools/tillr-store/",
+      "tools/tillr-trace/",
       "tools/tillr-view/",
       "tools/tillr-watch/"
     ],
@@ -1074,6 +1079,9 @@
         "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
       ],
       "tools/tillr-store/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ],
+      "tools/tillr-trace/": [
         "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
       ],
       "tools/tillr-view/": [

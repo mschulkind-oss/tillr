@@ -1,0 +1,17 @@
+{
+  "id": "go-edges",
+  "label": "Every tillr Go module is declared in source-scanning test edges",
+  "command": [
+    "python3",
+    "tools/gate/checks/go-edges.py"
+  ],
+  "scope": "tree",
+  "tier": "fast",
+  "budget_ms": 200,
+  "reads": [
+    "tools/"
+  ],
+  "tools": [
+    "python3"
+  ]
+}
