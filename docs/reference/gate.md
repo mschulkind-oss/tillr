@@ -305,7 +305,8 @@ counts are outside that record's scope.
 
 `go-affected` ([`tools/gate/checks/go-affected.json`](../../tools/gate/checks/go-affected.json),
 [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py)) is the change check that runs
-Go tests before a landing ([`D-GR38`](#D-GR38), [`D-GR39`](#D-GR39)). Across all ten tillr Go
+Go tests before a landing ([`D-GR38`](#D-GR38), [`D-GR39`](#D-GR39), amended on 2026-11-25 by
+[`D-GR53`](#D-GR53) and [`D-GR54`](#D-GR54)). Across all ten tillr Go
 modules (`tools/tillr` and each `tools/tillr-*` directory holding a `go.mod`, excluding the
 pack mirrors), it selects four sets:
 
@@ -324,6 +325,95 @@ alone selected the package ([`D-GR44`](#D-GR44)). A counterpart `build_tests` ma
 `builds` edges to the tests that build a sibling program ([`D-GR51`](#D-GR51)) is designed
 and not yet built (`rg -c 'build_tests' tools/gate/go-test-edges.json tools/gate/go_affected.py`
 returns `0`).
+
+**Deferring `tillr-drain/drain` integration tests to the after-merge proof ([`D-GR53`](#D-GR53),
+[`D-GR54`](#D-GR54)).** Recorded `go-affected` timings from 2026-11-25 showed
+`github.com/mschulkind-oss/tillr-drain/drain` accounting for `83.0%`–`99.99%` of total package
+shard time across every gate run over twenty minutes: its `~2,000` subprocess-heavy integration
+tests sum roughly `4,800 s` of test-wall time across shards (`3,674.67 s` recorded in
+[`tools/go-test-durations.json`](../../tools/go-test-durations.json)), so no priority,
+shard-count or single-test tuning meets the `90 s` median slow-gate alert threshold in
+[`config/tillr/watch/fast-gate-slow.toml`](../../config/tillr/watch/fast-gate-slow.toml) while
+they run before the merge. On 2026-11-25 the owner ruled `"sounds like a good idea. do it"`
+([`D-GR53`](#D-GR53), amending [`D-GR38`](#D-GR38) and [`D-GR39`](#D-GR39)) in answer to
+moving the `tillr-drain` integration tests out of pre-merge `go-affected` and proving them
+after the merge, while keeping [`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50) and [`I3`](#I3) in
+force (`tools/tillr-gate` and `tools/gate` suites stay before the merge).
+
+Choosing between moving `drain`'s integration tests into a separate Go package and amending
+`go-affected` selection so `github.com/mschulkind-oss/tillr-drain/drain` is proved after the
+merge — a designer decision from a filed request (`D-GR54`), not an owner ruling, which the
+owner may overturn — is **designed and not yet built**
+(`rg -c 'DEFERRED_PROOF_PACKAGES' tools/gate/go_affected.py` returns `0`):
+
+- **Why `go-affected` selection is amended rather than splitting `drain` (`D-GR54`).** Across
+  the tillr Go modules (`39` Go test packages, `3,894` top-level `Test*` functions excluding
+  `TestEdgeInputs`), `38` packages (`1,809` tests — including all `14` other Go test packages
+  in `tools/tillr-drain` summing `126` tests across root `tools/tillr-drain` and leaf
+  subpackages, plus `24` packages across `tools/tillr`, `tools/tillr-gate` and sibling modules)
+  sit outside `github.com/mschulkind-oss/tillr-drain/drain`. Inside
+  [`tools/tillr-drain/drain`](../../tools/tillr-drain/drain/) (`574` `*_test.go` files, `2,090`
+  `Test*` functions), `535` files (`2,041` tests, `3,674.67 s` — `97.7%` of its tests and
+  `99.95%` of its recorded duration) are subprocess, Git, SQLite or server integration tests
+  and only `32` files (`49` tests, `1.83 s`) are pure in-memory unit tests; `436` of those
+  `535` integration files (`1,687` tests, `2,901.94 s`, including four of the five slowest
+  cases) are white-box `package drain` tests referencing `942` distinct unexported declarations
+  of `package drain` across `457` files. Splitting `drain` into a separate integration-test
+  package would have to export hundreds of `drain` internals, move `535` files, rewrite
+  [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json) and
+  [`tools/go-test-durations.json`](../../tools/go-test-durations.json), and *still* exclude the
+  new package in `go-affected` (because `select_affected_packages` selects any test package in
+  `tools/tillr-drain` via reverse test imports, declared edges or the module floor) to retain
+  only `49` unit tests (`1.83 s`, `1,858` vs. `1,809` pre-merge Go tests). Amending
+  `go-affected` selection keeps `97.4%` of non-integration Go tests (`1,809` of `1,858` across
+  `38` of `39` test packages) before the merge, keeps pre-merge compilation of all `574`
+  `tools/tillr-drain/drain/*_test.go` files in fast check `go-build` (`go test -exec true ./...`
+  in [`tools/gate/checks/go-build.py`](../../tools/gate/checks/go-build.py)), touches zero
+  files under `tools/tillr-drain/drain/`, and must be stated in the build commit body.
+- **`DEFERRED_PROOF_PACKAGES` in `go-affected` ([`tools/gate/go_affected.py`](../../tools/gate/go_affected.py)).**
+  Define `DEFERRED_PROOF_PACKAGES = frozenset({"github.com/mschulkind-oss/tillr-drain/drain"})`
+  (in [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py), or in the Go
+  `go-affected` planner if `go_affected.py` has been ported to Go) and add
+  `drop_packages: set[str] | None = None` to `select_affected_packages`, defaulting to
+  `DEFERRED_PROOF_PACKAGES` when `None`. Non-test edits under `tools/tillr-drain/drain/` still
+  add `"github.com/mschulkind-oss/tillr-drain/drain"` to `changed_pkgs` in Step 1 so reverse
+  test-import consumers (root `github.com/mschulkind-oss/tillr-drain`,
+  `github.com/mschulkind-oss/tillr-store`, `github.com/mschulkind-oss/tillr-watch`,
+  `github.com/mschulkind-oss/tillr-view`) and `builds`/`reads` edges (including narrowed
+  `github.com/mschulkind-oss/tillr/definition` and `github.com/mschulkind-oss/tillr/store`)
+  still run before the merge, while `drop_packages` is excluded from `all_reads` (skipping
+  `load_tillr_graph` when a diff touches only paths read exclusively by `tillr-drain/drain`)
+  and omitted from `selected` across all four selection reasons (`changed`, `import`, `edge`
+  and `floor`).
+- **Edge retention and after-merge `reads` ([`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json),
+  [`tools/gate/checks/go-test-tillr-drain.json`](../../tools/gate/checks/go-test-tillr-drain.json)).**
+  Keep `github.com/mschulkind-oss/tillr-drain/drain` in
+  [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json) so `--cache` in
+  [`tools/go-test-shards.py`](../../tools/go-test-shards.py) continues passing
+  `TILLR_GATE_EDGE_INPUTS` digests for `drain`'s built sibling binaries and read files during
+  the after-merge `go-test-tillr-drain` run. Expand `reads` in
+  [`tools/gate/checks/go-test-tillr-drain.json`](../../tools/gate/checks/go-test-tillr-drain.json)
+  to cover every `builds` module directory (plus transitive `replace` dependencies required by
+  `missing_go_reads` in [`tools/gate/checks/tree_checks_test.py`](../../tools/gate/checks/tree_checks_test.py))
+  and every `reads` rule declared for `DEFERRED_PROOF_PACKAGES` in
+  [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json), preventing
+  `tillr-gate checks --heavy-tree` from reusing a stale remembered pass when a sibling binary
+  or read config/pack file changes.
+- **Selection and declaration tests ([`tests/go-affected.test.py`](../../tests/go-affected.test.py)).**
+  Update `test_selection_rules`, `test_drain_subpackage_isolation` and
+  `test_heavy_failures_replay` so default `select_affected_packages` asserts
+  `"github.com/mschulkind-oss/tillr-drain/drain"` is absent from `selected` on direct, import,
+  edge and `go.mod`-floor changes while non-deferred reverse importers and edge readers still
+  select (passing `drop_packages=set()` or non-deferred packages where cases unit-test
+  `read_tests`/`build_tests` narrowing algebra), and extend
+  `test_check_declarations_cover_selection_inputs` to assert
+  [`tools/gate/checks/go-test-tillr-drain.json`](../../tools/gate/checks/go-test-tillr-drain.json)'s
+  `reads` covers every `builds` module directory and `reads` rule of `DEFERRED_PROOF_PACKAGES`
+  in [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json). Keep the
+  `go-affected` selector, [`tools/gate/checks/go-test-tillr-drain.json`](../../tools/gate/checks/go-test-tillr-drain.json)
+  and [`tests/go-affected.test.py`](../../tests/go-affected.test.py) in one writable fence so
+  selection and declaration assertions update together. Process priorities and how the
+  after-merge proof searches a range for a red landing are out of scope.
 
 `go-affected` runs `go test` on the selected packages with Go's result cache on: no selected
 package is ever run with `-count=1`, and `-count=1` is never used as a fallback
@@ -824,6 +914,14 @@ with `tillr-gate` on `PATH`. To run one heavy check: `just done --only <id>`.
   that changes a pack declaration (`rg -n 'drift.probe|driftProbe|DriftProbe' tools -g '*.go'`
   returns nothing). A fork that follows a branch head or commits a series directory has no
   queue route for its rebase.
+- **Deferring `tillr-drain/drain` from pre-merge `go-affected` ([`D-GR53`](#D-GR53), [`D-GR54`](#D-GR54)) is not built.**
+  [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) still selects
+  `github.com/mschulkind-oss/tillr-drain/drain` before the merge
+  (`rg -c 'DEFERRED_PROOF_PACKAGES' tools/gate/go_affected.py` returns `0`), and
+  [`tools/gate/checks/go-test-tillr-drain.json`](../../tools/gate/checks/go-test-tillr-drain.json)
+  does not yet list every `builds` module and non-Go `reads` input declared for
+  `github.com/mschulkind-oss/tillr-drain/drain` in
+  [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json).
 
 ## Current values
 
@@ -986,8 +1084,9 @@ and spelling verbatim.
 | <a id="D-GR18"></a>`D-GR18` | `"for this repository, I want a personal filter that says the commits may only be one of the two identities, my personal or professional identity. But that is for this repository, not for Tiller."` | 2026-11-20 | [Change checks and tree checks](#change-checks-and-tree-checks) | Yes |
 | <a id="D-GR21"></a>`D-GR21` | Two statements on a check whose result store holds both a pass and a fail for one fingerprint: `"The correct move for a flaky test is disable it, file an item to fix it, and don't let it block anything. It is not considered green, but it also doesn't let you block other things."` and `"And the principle here is you make the trunk green by disabling the flaky test. The test is not green because it's flaky, but the trunk is green because the test is no longer included.And yes, the item that is filed should be to re-enable it correctly, the test that was flaky."` Replaces the `flaky` pass of [`D-GR8`](#D-GR8), the live re-run in [the evidence registry design](../design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3), and a 2026-11-20 operator request for a red verdict. | 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled), [landing principle 17](../design/landing-principles.md#17-disable-a-flaky-check-file-its-repair-and-count-it-neither-green-nor-blocking) | Yes |
 | <a id="D-GR24"></a>`D-GR24` | `"So I think the real rule should be you can only start a new item if the previous item's trunk landing went green because you don't want to start it until the other one has landed on the trunk and it's okay and then you always just base an item on the most recent green on the trunk, and I think that satisfies everything."` and `"And yes, of course, a trunk fixer is meant to only be based on a red change, so of course it's based on a red one."` Replaces the 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2) for new work. Reading `"the previous item"` as the item's blocker (holding the dependent item as `trunk-unproved` under `lane_base: green`) comes from an operator request of 2026-11-21, not the owner's words, and may be overturned by the owner; five built exceptions await the owner in [`OQ-GR5`](#OQ-GR5). | 2026-11-21 | [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer) | Yes |
-| <a id="D-GR38"></a>`D-GR38` | Carried in an operator request of 2026-11-21: `"if you think drain suite selected tests are 40 seconds, let's do that, and monitor how it goes, just make sure we have perf monitoring all over it. 10 seconds was apsirational"`. Amends [`D-GR1`](#D-GR1), overturns the designer's leaning in [`D-GR27`](#D-GR27) (which leaned against running tests before the merge), treats 40 seconds as a cost-table estimate rather than a limit, and makes performance monitoring ([`D-GR30`](#D-GR30)) a condition of acceptance so the check could not land without its timing record. | 2026-11-21 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
+| <a id="D-GR38"></a>`D-GR38` | Carried in an operator request of 2026-11-21: `"if you think drain suite selected tests are 40 seconds, let's do that, and monitor how it goes, just make sure we have perf monitoring all over it. 10 seconds was apsirational"`. Amends [`D-GR1`](#D-GR1), overturns the designer's leaning in [`D-GR27`](#D-GR27) (which leaned against running tests before the merge), treats 40 seconds as a cost-table estimate rather than a limit, and makes performance monitoring ([`D-GR30`](#D-GR30)) a condition of acceptance so the check could not land without its timing record. Amended on 2026-11-25 by [`D-GR53`](#D-GR53) to move the `tillr-drain` integration tests out of pre-merge `go-affected` into the after-merge proof after measured `go-affected` timings showed `tillr-drain/drain` accounting for `83.0%`–`99.99%` of >20-minute gates. | 2026-11-21; amended 2026-11-25 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
 | <a id="OQ-FG1"></a>[OQ-FG1](#OQ-FG1) | When an upstream release breaks a patch series, the owner is told by the queue only: no owner-facing row and no hold addressed to the owner. | 2026-11-24 | [Upstream drift](#upstream-drift) | Yes |
+| <a id="D-GR53"></a>`D-GR53` | Carried in a filed request of 2026-11-25: `"sounds like a good idea. do it"`, in answer to moving the `tillr-drain` integration tests out of the pre-merge `go-affected` gate and proving them after the merge after 2026-11-25 `go-affected` timing measurements showed `tillr-drain/drain`'s `~2,000` subprocess-heavy integration tests (`~4,800 s` summed test-wall time) accounting for `83.0%`–`99.99%` of every >20-minute gate. Amends [`D-GR38`](#D-GR38) and [`D-GR39`](#D-GR39); leaves [`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50) and [`I3`](#I3) in force (`tools/tillr-gate` and `tools/gate` suites never land on deferred proof). Mechanism chosen by the designer in [`D-GR54`](#D-GR54). | 2026-11-25 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [Known gaps](#known-gaps) | No |
 
 ### Answered open questions
 
@@ -1036,7 +1135,7 @@ may overturn any of them.
 | <a id="D-GR35"></a>`D-GR35` | Under the worktree registry lock it holds, the heavy runner unlocks a stale locked registration of its own proof worktree (`unlockRegisteredWorktree`), logs the path, lock reason and lock mtime, and continues with remove and add, recording the original lock's cause as not established. Rejected: `git worktree prune` (touches other worktrees), `git worktree add --force --force` (overrides unrecorded), or blaming in-place restart against the code. | 2026-11-21 | [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer) | Yes |
 | <a id="D-GR36"></a>`D-GR36` | *(Build-slice bookkeeping.)* Applied [`D-GR34`](#D-GR34)'s fixture rule across Go, Python and loop tests while noting a source-built `tillr-gate` is the real binary, not a stand-in; its omission of a file list was overturned by [`D-GR37`](#D-GR37). | 2026-11-22 | [Result classification](#result-classification) | Yes |
 | <a id="D-GR37"></a>`D-GR37` | *(Build-slice bookkeeping.)* Extended [`D-GR34`](#D-GR34) and [`D-GR36`](#D-GR36) to fixtures copying the retired gate script and listed the four copying test files in the slice plan. | 2026-11-22 | [Result classification](#result-classification) | Yes |
-| <a id="D-GR39"></a>`D-GR39` | `go-affected` runs before the merge outside the 9,000 ms fast cap with Go's cache on and no time limit ([`D-GR15`](#D-GR15)), selecting changed packages, reverse test-import closures across modules, declared `builds`/`reads` edges in `tools/gate/go-test-edges.json`, and the whole-module (plus `replace`) floor when a change cannot be placed; also covers the `9,000` ms cap applying only to fast declarations every candidate runs. Rejected: fresh whole sharded suites ([`D-GR27`](#D-GR27)), a 40,000 ms fast check with a raised cap, edited-test-only selection, import graph without declared edges, unkeyed edge caching, `-count=1` everywhere, or a build system / coverage maps. | 2026-11-22; amended 2026-11-23 and 2026-11-24 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [Budgets and the stall watchdog](#budgets-and-the-stall-watchdog) | Yes |
+| <a id="D-GR39"></a>`D-GR39` | `go-affected` runs before the merge outside the 9,000 ms fast cap with Go's cache on and no time limit ([`D-GR15`](#D-GR15)), selecting changed packages, reverse test-import closures across modules, declared `builds`/`reads` edges in `tools/gate/go-test-edges.json`, and the whole-module (plus `replace`) floor when a change cannot be placed; also covers the `9,000` ms cap applying only to fast declarations every candidate runs. Amended on 2026-11-25 by [`D-GR53`](#D-GR53) and [`D-GR54`](#D-GR54) to defer `github.com/mschulkind-oss/tillr-drain/drain` from pre-merge `go-affected` execution to the after-merge `go-test-tillr-drain` proof while keeping `drain` in `changed_pkgs` so non-deferred reverse importers and declared-edge consumers still run before the merge. Rejected: fresh whole sharded suites ([`D-GR27`](#D-GR27)), a 40,000 ms fast check with a raised cap, edited-test-only selection, import graph without declared edges, unkeyed edge caching, `-count=1` everywhere, or a build system / coverage maps. | 2026-11-22; amended 2026-11-23, 2026-11-24 and 2026-11-25 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [Budgets and the stall watchdog](#budgets-and-the-stall-watchdog) | Partly ([`D-GR54`](#D-GR54)) |
 | <a id="D-GR40"></a>`D-GR40` | Amends [`D-GR39`](#D-GR39) to match the operator request (`"runs go test on the selected packages with Go's test cache left on (no -count=1)"`): `go-affected` never passes or falls back to `-count=1`, and passes a digest of declared edge inputs in `TILLR_GATE_EDGE_INPUTS` read once by tests so Go's cache hits on unchanged inputs and invalidates on changes. Rejected: `-count=1` on declared-edge packages, leaving edge inputs invisible to Go's cache, copying the drain's input helper into every module, or deleting cached results before running. | 2026-11-22; amended 2026-11-24 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
 | <a id="D-GR41"></a>`D-GR41` | `tillr-gate` atomically writes the disabled marker and copies both logs at the contradicting observation before returning, and the drain sweeps markers at pass start and after every gate/replay/heavy step before live `disabled` emission turns on; plain `tillr-gate classify` touches no disk while `--repo`, `--store` and `--prove-disabled` opt into store access. Rejected: building all slices in one commit, emitting `disabled` before consumers land, or opening SQLite in `tillr-gate`. | 2026-11-22 | [Result classification](#result-classification) | Yes |
 | <a id="D-GR42"></a>`D-GR42` | *(Build-slice bookkeeping.)* Scoped the drain rolling/heavy/proof classifier slice: excluded run-level settlements and booleans from dummy `Classify` calls, added function-keyed scan tests on shared files, and added named protocols for zero outcome change. | 2026-11-22 | [Result classification](#result-classification) | Yes |
@@ -1055,6 +1154,7 @@ may overturn any of them.
 | <a id="D-FG3"></a>`D-FG3` | A `patch-branch-inv2` check red on a candidate and its base with the same refusal against the same target ref, on a candidate that does not touch the fork, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. The lander never rebases and never writes the pin file; the operator takes no step. | 2026-11-24 | [Upstream drift](#upstream-drift) | Yes |
 | <a id="D-FG4"></a>`D-FG4` | A fork check that could not judge is neither drift nor a verdict, and no gate answer files a tooling-defect item. | 2026-11-24 | [Upstream drift](#upstream-drift) | Yes |
 | <a id="D-FG5"></a>`D-FG5` | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line. | 2026-11-24 | [Upstream drift](#upstream-drift) | Yes |
+| <a id="D-GR54"></a>`D-GR54` | **From a filed request; the designer's decision, not an owner ruling (the owner may overturn it).** Implements [`D-GR53`](#D-GR53) by amending `go-affected` selection rather than splitting `tools/tillr-drain/drain` into a separate integration-test package (to be stated in the build commit body): `DEFERRED_PROOF_PACKAGES = frozenset({"github.com/mschulkind-oss/tillr-drain/drain"})` (default of `drop_packages` on `select_affected_packages` in `tools/gate/go_affected.py`, or its Go counterpart if ported) omits `github.com/mschulkind-oss/tillr-drain/drain` from `all_reads` and from `selected` across all four reasons (`changed`, `import`, `edge`, `floor`) while still recording `drain` in `changed_pkgs` so non-deferred reverse importers and declared-edge consumers run before the merge (`1,809` of `1,858` non-integration Go tests across `38` of `39` test packages stay pre-merge, plus compilation of all `574` `drain/*_test.go` files in `go-build`, with zero edits under `tools/tillr-drain/drain/`); `github.com/mschulkind-oss/tillr-drain/drain` stays in `tools/gate/go-test-edges.json` for `go-test-shards.py --cache` during after-merge `go-test-tillr-drain`; `tools/gate/checks/go-test-tillr-drain.json` `reads` expands to cover all `builds` modules (plus transitive `replace` dependencies) and `reads` rules of `DEFERRED_PROOF_PACKAGES`; and `tests/go-affected.test.py` updates selection and declaration-coverage assertions in the same fence. `tools/tillr-gate` and `tools/gate` suites stay pre-merge ([`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50), [`I3`](#I3)); process priorities and red-range bisection are out of scope. Rejected: moving `drain` integration tests into a separate Go package (`436` of `535` integration files are white-box `package drain` tests touching `942` unexported declarations across `457` files and still require `go-affected` exclusion to save `49` unit tests / `1.83 s`); moving only the `99` `package drain_test` integration files (leaves `1,687` white-box integration tests / `2,901.94 s` before the merge); dropping the whole `tools/tillr-drain` module (`14` fast non-`drain` packages / `126` tests); omitting `drain` from `changed_pkgs` (drops reverse-import and `builds`-edge coverage); removing `drain` from `go-test-edges.json` or leaving `go-test-tillr-drain.json` `reads` incomplete (stale remembered heavy-tree passes); or deferring gate suites. | 2026-11-25, designer, from a filed request | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [Known gaps](#known-gaps) | No |
 
 ### Landing-velocity rulings (2026-11-05)
 
