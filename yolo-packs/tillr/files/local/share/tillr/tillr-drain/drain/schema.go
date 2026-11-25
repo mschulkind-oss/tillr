@@ -82,6 +82,8 @@ const (
 	// force no longer defines. The reason appends the seat and missing backend name, and
 	// DeferredBy carries the backend name.
 	ReasonBackendMissing = "backend-missing"
+	// ReasonSeatUnmapped holds an item whose explicit seat has no active mapping.
+	ReasonSeatUnmapped = "seat-unmapped"
 	// ReasonCommandFault is a command process failure, not an agent backend route.
 	ReasonCommandFault = "command-fault"
 	// ReasonReady is a dispatch's reason: the item is queued, unblocked, and a lane and

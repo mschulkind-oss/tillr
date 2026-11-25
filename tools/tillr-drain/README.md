@@ -178,9 +178,11 @@ wait, never a stop.
   daemon unless `--exit-when-drained` is given.
 - **A held lane is never reported as a drained queue.** `lanes-leased` and `queue-drained`
   are different answers.
-- **A seat is a role, not a model.** An item names a seat and never a model id. A plan whose
-  items ask for a seat the policy does not map is refused before any decision. If the
-  seat's backend is closed, the item waits.
+- **A seat is a role, not a model.** An item names a seat and never a model ID. If the
+  active policy does not map the seat, the item waits as `seat-unmapped` while the loop
+  continues with other items. The hold names the seat and policy file. It clears when the
+  operator puts a policy that maps the seat in force; no default backend fills a named
+  seat. If the seat's backend is closed, the item also waits.
 - **An adapter's refusal of a brief is the brief's fault, not the backend's.** An adapter
   that prints `run-<adapter>: refused: <reason>` and exits 2 classifies as `refused`: no
   backend is closed, and the item is held as `adapter-refused` until
@@ -884,10 +886,9 @@ item for rework.
 
 A fault stop is for a failure that cannot be attributed to one item: the store cannot be
 opened, read or written; the trunk cannot be read; settings are invalid or shared machinery
-cannot start (no usable backend policy, an unmapped seat, a document sync program that
-cannot run); or a step program exits 2 at run time or refuses its argument check. When the
-loop ends on an error it appends `drain.loop-ended` to the store before writing its result
-file.
+cannot start (no usable backend policy or a document sync program that cannot run); or a
+step program exits 2 at run time or refuses its argument check. When the loop ends on an
+error it appends `drain.loop-ended` to the store before writing its result file.
 
 ## Held candidate capacity
 

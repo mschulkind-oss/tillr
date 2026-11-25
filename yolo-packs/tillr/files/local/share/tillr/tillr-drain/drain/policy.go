@@ -339,10 +339,8 @@ func checkBackend(name string, b Backend) error {
 // decision, so it outranks the seat, which is a statement about the kind of work, which in
 // turn outranks the default backend for unseated work.
 //
-// A seat the policy does not map never reaches here: Plan refuses such a plan before it
-// builds a decision (checkSeats), because the alternative is dispatching design work to the
-// build model and recording it as intended. The fall-through below is therefore the default
-// backend for the item that asked for no seat, not a silent default for one that did.
+// The planner holds items whose explicit seat is not mapped, before it offers a
+// dispatch. The default is for work that did not ask for a seat.
 func (p Policy) firstBackend(row itemRow) string {
 	if name, ok := p.Overrides[row.ItemID]; ok {
 		return name

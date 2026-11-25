@@ -1530,6 +1530,9 @@ func holdText(hold Decision) string {
 	if hold.BackendHoldCause != "" {
 		return fmt.Sprintf("%s (%s: %s: %s; mover: %s)", hold.ItemID, hold.Reason, hold.DeferredBy, hold.BackendHoldCause, hold.BackendHoldMover)
 	}
+	if strings.HasPrefix(hold.Reason, ReasonSeatUnmapped+": ") {
+		return fmt.Sprintf("%s (%s; mover: %s)", hold.ItemID, hold.Reason, holdrules.For(hold.Reason).Mover)
+	}
 	if hold.DeferredBy != "" {
 		return fmt.Sprintf("%s (%s behind %s)", hold.ItemID, hold.Reason, hold.DeferredBy)
 	}

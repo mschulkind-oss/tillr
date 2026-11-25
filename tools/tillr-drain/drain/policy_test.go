@@ -11,7 +11,7 @@ import (
 	"github.com/mschulkind-oss/tillr-run/run"
 )
 
-func TestPolicyDeclaresSeatsForItemsAndWorkflows(t *testing.T) {
+func TestPolicyDeclaresSeatsForWorkflows(t *testing.T) {
 	root := t.TempDir()
 	policyPath := filepath.Join(root, "backend-policy.json")
 	workflowPath := filepath.Join(root, "scout-then-build@v1.json")
@@ -36,21 +36,15 @@ func TestPolicyDeclaresSeatsForItemsAndWorkflows(t *testing.T) {
 	for _, seat := range []string{"architect-2", "architect-3"} {
 		t.Run(seat, func(t *testing.T) {
 			write(workflowPath, []byte(strings.Replace(workflowFixture, `"seat":"scout"`, `"seat":"`+seat+`"`, 1)))
-			planErr := checkSeats(policy, []itemRow{{ItemID: "item-a", Seat: seat}})
-			_, workflowErr := readWorkflow(root, workflowPath, policy, map[string]bool{})
+			_, err := readWorkflow(root, workflowPath, policy, map[string]bool{})
 			if seat == "architect-2" {
-				if planErr != nil || workflowErr != nil {
-					t.Fatalf("mapped seat refused: planner=%v; workflow=%v", planErr, workflowErr)
+				if err != nil {
+					t.Fatalf("mapped seat refused: %v", err)
 				}
 				return
 			}
-			for _, check := range []struct {
-				err  error
-				want string
-			}{{planErr, "which the policy does not map"}, {workflowErr, "workflow-unknown-seat"}} {
-				if check.err == nil || !strings.Contains(check.err.Error(), check.want) || !strings.Contains(check.err.Error(), seat) || !strings.Contains(check.err.Error(), declaration) {
-					t.Errorf("expected %q refusal for %s naming %s, got %v", check.want, seat, policyPath, check.err)
-				}
+			if err == nil || !strings.Contains(err.Error(), "workflow-unknown-seat") || !strings.Contains(err.Error(), seat) || !strings.Contains(err.Error(), declaration) {
+				t.Errorf("expected workflow-unknown-seat refusal for %s naming %s, got %v", seat, policyPath, err)
 			}
 		})
 	}

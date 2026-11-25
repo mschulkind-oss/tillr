@@ -206,7 +206,9 @@ A failing test, an empty diff, an out-of-fence write, and a red gate are all **a
 2. The head of the item's seat list
 3. `default_backend`
 
-`checkSeats` refuses a plan in which an item asks for a seat the policy does not map, so the default never silently fills a named seat.
+If the active policy does not map an item's named seat, the planner holds that item and
+continues planning the rest. The default backend never fills a named seat. See the
+[drain invariants](../../tools/tillr-drain/README.md#state-invariants) for how the hold clears.
 
 A run classified **infrastructure** closes its backend. Availability is projected from recorded facts only: the run's terminal event closes the backend, and a successful operator probe (`ProbeBackend`, recorded as `drain.backend-probe`) reopens it. A clock, a policy edit, a restart, or a quota reading does not. While a backend is closed, open backends take the work, and an item with no open backend holds with the closed backend named on its decision.
 
