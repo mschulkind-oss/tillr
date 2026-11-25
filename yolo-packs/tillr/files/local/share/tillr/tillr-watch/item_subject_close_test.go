@@ -188,7 +188,7 @@ func TestWatchItemSubjectAlertClosesWhenItemLandsOrCloses(t *testing.T) {
 		return out.String()
 	}
 	invokeStore("ack", landAlertID, "--by", "operator")
-	invokeStore("silence", compAlertID, "--until", "2h")
+	invokeStore("silence", compAlertID, "--by", "operator", "--item", itemComp, "--reason", "known comp", "--cause", "known comp", "--evidence", "event seq", "--until", "2h")
 
 	// Close itemClose, land itemLand, and close itemComp without modifying their in-window events.
 	setItem(itemClose, "closed")

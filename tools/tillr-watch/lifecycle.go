@@ -18,8 +18,7 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 	f := flag.NewFlagSet(face, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	path := f.String("store", "", "path to the tillr state database")
-	var by, note, item, until, reason, cause, evidence, outcome, linkKind string
-	var untilChange bool
+	var by, note, item, cause, evidence, outcome, linkKind string
 	switch face {
 	case "ack":
 		f.StringVar(&by, "by", "", "actor acknowledging the alert")
@@ -36,10 +35,6 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 		f.StringVar(&linkKind, "link-kind", "", "link kind (filed or linked)")
 		f.StringVar(&cause, "cause", "", "optional inline investigation cause")
 		f.StringVar(&evidence, "evidence", "", "optional inline investigation evidence")
-	case "silence":
-		f.StringVar(&until, "until", "", "duration or RFC 3339 time")
-		f.BoolVar(&untilChange, "until-change", false, "silence until the fingerprint changes")
-		f.StringVar(&reason, "reason", "", "silence reason")
 	}
 	operands, err := parseEpisodeArgs(f, args)
 	if err == flag.ErrHelp {
@@ -65,9 +60,6 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 	if face == "settle" && set["cause"] != set["evidence"] {
 		return refuseEpisodeOptions(ctx, *path, operands, errors.New("--cause and --evidence must be provided together"))
 	}
-	if face == "silence" && (set["until"] == set["until-change"] || set["until-change"] && !untilChange) {
-		return refuseEpisodeOptions(ctx, *path, operands, fmt.Errorf("silence requires exactly one of --until and --until-change"))
-	}
 	optional := func(name string, value *string) *string {
 		if set[name] {
 			return value
@@ -88,10 +80,8 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 			return "acknowledged", e.Ack(ctx, id, by, optional("note", &note))
 		case "investigate":
 			return "investigated", e.Investigate(ctx, id, by, cause, evidence)
-		case "settle":
+		default: // settle
 			return fmt.Sprintf("settled (%s -> %s)", outcome, item), e.Settle(ctx, id, settleOpts)
-		default: // silence
-			return "silenced", e.Silence(ctx, id, optional("until", &until), optional("reason", &reason))
 		}
 	}
 	var state string

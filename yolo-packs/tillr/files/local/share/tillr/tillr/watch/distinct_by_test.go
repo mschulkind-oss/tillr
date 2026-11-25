@@ -435,8 +435,15 @@ receiver = "foreground"
 	}
 	// Silence and expire silence so reopen re-renders bundle with updated distinct_values order ("item-b, item-c, item-a").
 	until := "1m"
-	reason := "check order"
-	if err := e.Silence(ctx, alertID, &until, &reason); err != nil {
+	if _, err := e.Silence(ctx, SilenceOptions{
+		AlertID:  alertID,
+		By:       "operator",
+		ItemID:   "item-silence",
+		Reason:   "check order",
+		Until:    &until,
+		Cause:    "known ordering",
+		Evidence: "bundle check",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(2 * time.Minute)

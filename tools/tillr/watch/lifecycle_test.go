@@ -106,11 +106,15 @@ func TestWatchEpisodeTimeSilenceAndClearing(t *testing.T) {
 			}
 			id := first[0].AlertID
 			until := "10s"
-			// Replacing fingerprint silence with time silence must clear the old terms.
-			if err := e.Silence(ctx, id, nil, nil); err != nil {
-				t.Fatal(err)
-			}
-			if err := e.Silence(ctx, id, &until, nil); err != nil {
+			if _, err := e.Silence(ctx, SilenceOptions{
+				AlertID:  id,
+				By:       "operator",
+				ItemID:   "item-1",
+				Reason:   "waiting",
+				Until:    &until,
+				Cause:    "known cause",
+				Evidence: "log seq",
+			}); err != nil {
 				t.Fatal(err)
 			}
 			now = now.Add(9 * time.Second)
@@ -167,7 +171,15 @@ func TestWatchEpisodeFractionalSilenceDeadline(t *testing.T) {
 	lifecycleRead(t, s, `SELECT alert_id FROM alert_episodes`, &id)
 	deadline := now.Add(time.Second + 900*time.Microsecond)
 	until := deadline.Format(time.RFC3339Nano)
-	if err := e.Silence(ctx, id, &until, nil); err != nil {
+	if _, err := e.Silence(ctx, SilenceOptions{
+		AlertID:  id,
+		By:       "operator",
+		ItemID:   "item-1",
+		Reason:   "waiting",
+		Until:    &until,
+		Cause:    "known cause",
+		Evidence: "log seq",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	var state string
@@ -324,7 +336,15 @@ receiver = "foreground"
 	if stepFP == "" || checkFP == "" || stepFP == checkFP {
 		t.Fatalf("shared kind cache mixed fingerprints: step=%q check=%q", stepFP, checkFP)
 	}
-	if err := e.Silence(t.Context(), stepID, nil, nil); err != nil {
+	if _, err := e.Silence(t.Context(), SilenceOptions{
+		AlertID:     stepID,
+		By:          "operator",
+		ItemID:      "item-1",
+		Reason:      "waiting",
+		UntilChange: true,
+		Cause:       "known cause",
+		Evidence:    "log seq",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Settle(t.Context(), checkID, SettleOptions{

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -20,6 +19,12 @@ import (
 func TestWatchEpisodeFaces(t *testing.T) {
 	ctx := context.Background()
 	s, dir := fixture(t, false)
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO items(item_id, title, state, updated_at, event_seq) VALUES ('item-1', 'open item', 'in-queue', 0, 0)`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// Guard every domain table installed in the fixture. The tested faces may
 	// write only episodes and events; even a no-op UPDATE must not be attempted.
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
@@ -97,7 +102,7 @@ func TestWatchEpisodeFaces(t *testing.T) {
 			{"2000-01-01T00:00:00Z", "must be later than the current time"},
 		} {
 			before := head()
-			code, out, diag := call("silence", id, "--until="+tc.until)
+			code, out, diag := call("silence", id, "--by=alice", "--item=item-1", "--reason=waiting", "--cause=c", "--evidence=e", "--until="+tc.until)
 			if code != 1 || out != "" || !strings.Contains(diag, tc.reason) || !strings.Contains(diag, wantEpisode) {
 				t.Errorf("silence --until=%s: code=%d out=%q stderr=%q, want %q and %q", tc.until, code, out, diag, wantEpisode, tc.reason)
 			}
@@ -131,10 +136,10 @@ func TestWatchEpisodeFaces(t *testing.T) {
 			{"silence", "flag needs an argument: -until", []string{"--store", s.Path(), id, "--until"}},
 			{"silence", "invalid boolean value", []string{"--store", s.Path(), "--until-change=bad", id}},
 			{"ack", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--by=judge", "extra"}},
-			{"silence", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--until=1h", "extra"}},
+			{"silence", "requires one alert ID or --rule", []string{"--store", s.Path(), id, "--until=1h", "extra"}},
 			{"investigate", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--by=judge", "--cause=c", "--evidence=e", "extra"}},
 			{"ack", "requires --store and one alert ID", []string{id, "extra", "--store", s.Path(), "--by=judge"}},
-			{"silence", "requires --store and one alert ID", []string{"--store", s.Path(), "extra", id, "--until=1h"}},
+			{"silence", "requires one alert ID or --rule", []string{"--store", s.Path(), "extra", id, "--until=1h"}},
 			{"investigate", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--by=judge", "--cause=c", "--evidence=e", "--", "--extra"}},
 			{"investigate", "not defined: -rules", []string{"--store", s.Path(), "--rules", dir, id, "--by=judge", "--cause=c", "--evidence=e"}},
 			{"settle", "not defined: -rules", []string{id, "--rules", dir, "--store", s.Path(), "--by=judge", "--outcome=fix-fault", "--item=item-1"}},
@@ -155,7 +160,7 @@ func TestWatchEpisodeFaces(t *testing.T) {
 		}
 	}
 	start := head()
-	refuse("no fingerprint", "silence", id, "--until-change")
+	refuse("no fingerprint", "silence", id, "--by=alice", "--item=item-1", "--reason=waiting", "--cause=c", "--evidence=e", "--until-change")
 	refuseOptions("open", "")
 	refuseDeadline("open", "")
 	refuse("not found", "ack", "missing", "--by=alice")
@@ -214,27 +219,28 @@ func TestWatchEpisodeFaces(t *testing.T) {
 	refuse(winner, "ack", id, "--by", winner)
 	refuseOptions("acknowledged", winner)
 	refuseDeadline("acknowledged", winner)
-	refuse("acknowledged by "+winner+" and has no fingerprint; use --until", "silence", id, "--until-change")
-	success("alert "+id+" silenced\n", "silence", id, "--until=1h", "--reason=waiting")
+	refuse("acknowledged by "+winner+" and has no fingerprint; use --until", "silence", id, "--by=alice", "--item=item-1", "--reason=waiting", "--cause=c", "--evidence=e", "--until-change")
+	success("alert "+id+" investigated\n", "investigate", id, "--by=bob", "--cause=real fault", "--evidence=seq 1")
+	code, silOut, silDiag := call("silence", id, "--by=alice", "--item=item-1", "--until=1h", "--reason=waiting")
+	if code != 0 || silDiag != "" || !strings.HasPrefix(silOut, "alert "+id+" silenced (sil-") {
+		t.Fatalf("silence failed: code=%d out=%q stderr=%q", code, silOut, silDiag)
+	}
 	refuseOptions("silenced", winner)
 	refuse("silenced (acknowledged by "+winner+")", "ack", id, "--by=bob")
-	success("alert "+id+" silenced\n", "silence", "--until=2099-01-01T03:00:00+03:00", "--", id)
-	var by string
+	var by, silID string
 	var ackedAt, until int64
 	var note, fp *string
-	faceRead(t, s, `SELECT acked_by,acked_note,acked_at,silence_until_ms,silence_on_fingerprint FROM alert_episodes`, &by, &note, &ackedAt, &until, &fp)
-	if by != winner || note != nil || ackedAt == 0 || until != time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli() || fp != nil {
-		t.Fatalf("unexpected silenced state: %q %v %d %d %v", by, note, ackedAt, until, fp)
+	faceRead(t, s, `SELECT acked_by,acked_note,acked_at,silence_until_ms,silence_on_fingerprint,silence_id FROM alert_episodes`, &by, &note, &ackedAt, &until, &fp, &silID)
+	if by != winner || note != nil || ackedAt == 0 || until == 0 || fp != nil || !strings.HasPrefix(silID, "sil-") {
+		t.Fatalf("unexpected silenced state: %q %v %d %d %v %q", by, note, ackedAt, until, fp, silID)
 	}
-	success("alert "+id+" investigated\n", "investigate", id, "--by=bob", "--cause=real fault", "--evidence=seq 1")
 	for i, want := range []struct {
 		kind   string
 		fields map[string]any
 	}{
 		{"acknowledged", map[string]any{"by": winner, "note": nil}},
-		{"silenced", map[string]any{"reason": "waiting"}},
-		{"silenced", map[string]any{"until": "2099-01-01T00:00:00Z"}},
 		{"investigated", map[string]any{"by": "bob", "cause": "real fault", "evidence": "seq 1"}},
+		{"silenced", map[string]any{"reason": "waiting", "by": "alice", "item_id": "item-1"}},
 	} {
 		var kind, object, idInEvent string
 		var raw []byte
@@ -294,8 +300,14 @@ func TestWatchEpisodeFingerprintSilenceAndWait(t *testing.T) {
 	faceRead(t, s, `SELECT alert_id,opened_seq FROM alert_episodes`, &id, &opened)
 	faceRead(t, s, `SELECT shown_seq FROM foreground_delivery`, &shown)
 	command(io.Discard, "seen", "--through", fmt.Sprint(shown))
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO items(item_id, title, state, updated_at, event_seq) VALUES ('item-1', 'open item', 'in-queue', 0, 0)`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	command(io.Discard, "ack", id, "--by=alice", "--note=investigating")
-	command(io.Discard, "silence", id, "--until-change", "--reason=known signature")
+	command(io.Discard, "silence", id, "--by=alice", "--item=item-1", "--until-change", "--reason=known signature", "--cause=known signature", "--evidence=seq 1")
 	var payload string
 	faceRead(t, s, `SELECT payload FROM events WHERE kind='watch.alert.silenced'`, &payload)
 	var silenced map[string]any
@@ -377,9 +389,9 @@ func TestWatchRefusedMutationsPreserveExistingStore(t *testing.T) {
 		{"ack-arity", "requires --store and one alert ID", []string{"ack", "missing", "--by=operator", "extra"}},
 		{"ack-existing-arity", "alert alrt-existing is open", []string{"ack", "alrt-existing", "--by=operator", "extra"}},
 		{"ack-existing-empty", "alert alrt-existing is open", []string{"ack", "alrt-existing", "--by="}},
-		{"silence", "alert missing not found", []string{"silence", "missing", "--until-change"}},
+		{"silence", "alert missing not found", []string{"silence", "missing", "--by", "operator", "--item", "item-1", "--reason", "r", "--cause", "c", "--evidence", "e", "--until-change"}},
 		{"silence-mode", "alert missing not found", []string{"silence", "missing"}},
-		{"silence-existing-fp", "alert alrt-existing is open", []string{"silence", "alrt-existing", "--until-change"}},
+		{"silence-existing-fp", "alert alrt-existing is open", []string{"silence", "alrt-existing", "--by", "operator", "--item", "item-1", "--reason", "r", "--cause", "c", "--evidence", "e", "--until-change"}},
 		{"investigate", "alert missing not found", []string{"investigate", "missing", "--by", "op", "--cause", "c", "--evidence", "e"}},
 		{"settle", "alert missing not found", []string{"settle", "missing", "--by", "op", "--outcome", "fix-fault", "--item", "item-1"}},
 	} {

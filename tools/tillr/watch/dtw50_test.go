@@ -613,7 +613,15 @@ func TestDTW50EventPlaceholdersInGuidanceAndReopen(t *testing.T) {
 	}
 
 	// Silence until fingerprint changes and then reopen with a newer event; guidance must re-render from newest event.
-	if err := eval.Silence(ctx, alertID, nil, nil); err != nil {
+	if _, err := eval.Silence(ctx, SilenceOptions{
+		AlertID:     alertID,
+		By:          "operator",
+		ItemID:      "item-silence",
+		Reason:      "waiting on fix",
+		UntilChange: true,
+		Cause:       "known issue",
+		Evidence:    "bundle event",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	seq2Fact := appendKindEvent(t, s, "watch-test.fact", now, `{"lane_id":"lane-1","detail":{"check":"unlanded"},"count":99,"flag":false}`)
@@ -628,9 +636,9 @@ func TestDTW50EventPlaceholdersInGuidanceAndReopen(t *testing.T) {
 	if err := json.Unmarshal([]byte(rawBundle), &b); err != nil {
 		t.Fatal(err)
 	}
-	wantReopen := "lane=lane-1 nested=unlanded int=99 bool=false seq=4 kind=watch-test.fact"
-	if seq2Fact != 4 {
-		t.Fatalf("seq2Fact = %d, want 4", seq2Fact)
+	wantReopen := "lane=lane-1 nested=unlanded int=99 bool=false seq=5 kind=watch-test.fact"
+	if seq2Fact != 5 {
+		t.Fatalf("seq2Fact = %d, want 5", seq2Fact)
 	}
 	if b.Guidance.Summary != wantReopen {
 		t.Errorf("reopened summary = %q, want %q", b.Guidance.Summary, wantReopen)

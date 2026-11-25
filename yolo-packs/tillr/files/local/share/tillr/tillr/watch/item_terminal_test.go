@@ -138,7 +138,15 @@ receiver = "foreground"
 		t.Fatal(err)
 	}
 	until := "2h"
-	if err := e.Silence(ctx, byKey["item-refusals:item-silenced"].ID, &until, nil); err != nil {
+	if _, err := e.Silence(ctx, SilenceOptions{
+		AlertID:  byKey["item-refusals:item-silenced"].ID,
+		By:       "operator",
+		ItemID:   "item-silenced",
+		Reason:   "waiting on item",
+		Until:    &until,
+		Cause:    "known refusal",
+		Evidence: "event seq",
+	}); err != nil {
 		t.Fatal(err)
 	}
 

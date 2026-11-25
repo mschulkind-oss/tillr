@@ -326,7 +326,7 @@ func TestWatchWritableFacesRequireExistingStore(t *testing.T) {
 		{"ack", "missing", "--by", "operator"},
 		{"investigate", "missing", "--by", "operator", "--cause", "c", "--evidence", "e"},
 		{"settle", "missing", "--by", "operator", "--outcome", "fix-fault", "--item", "item-1"},
-		{"silence", "missing", "--until", "1h"},
+		{"silence", "missing", "--by", "operator", "--item", "item-1", "--reason", "r", "--cause", "c", "--evidence", "e", "--until", "1h"},
 	} {
 		var stderr bytes.Buffer
 		if code := run(context.Background(), append(args, "--store", path), io.Discard, &stderr); code != 1 || !strings.Contains(stderr.String(), path) {

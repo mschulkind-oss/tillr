@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,7 +31,10 @@ const help = `Usage:
   tillr watch ack ID --store PATH --by ACTOR [--note TEXT]
   tillr watch investigate ID --store PATH --by ACTOR --cause TEXT --evidence TEXT
   tillr watch settle ID --store PATH --by ACTOR --outcome (fix-rule|fix-fault) --item ITEM_ID [--link-kind filed|linked] [--cause TEXT --evidence TEXT]
-  tillr watch silence ID --store PATH (--until DUR_OR_TIME | --until-change) [--reason TEXT]
+  tillr watch silence ID --store PATH --by ACTOR --item ITEM_ID --reason TEXT (--until DUR_OR_TIME | --until-change) [--cause TEXT --evidence TEXT] [--rules DIR]
+  tillr watch silence --rule ID [--var KEY=VAL ...] --store PATH --rules DIR --by ACTOR --item ITEM_ID --reason TEXT (--until DUR_OR_TIME | --until-change) --cause TEXT --evidence TEXT
+  tillr watch silence list --store PATH [--all] [--json]
+  tillr watch silence lift SILENCE_ID --store PATH --by ACTOR --reason TEXT
   tillr watch rule list --store PATH --rules DIR
   tillr watch rule show ID --store PATH --rules DIR
   tillr watch rule add FILE --store PATH --rules DIR --by ACTOR
@@ -74,9 +78,18 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	}
 	face := args[0]
 	switch face {
-	case "ack", "investigate", "settle", "silence":
+	case "ack", "investigate", "settle":
 		if err := runEpisode(ctx, face, args[1:], out); err != nil {
 			if errors.Is(err, watch.ErrInvestigationRequired) {
+				fmt.Fprintln(stderr, "tillr watch:", err)
+				return 2
+			}
+			return fail(err)
+		}
+		return 0
+	case "silence":
+		if err := runSilence(ctx, args[1:], out); err != nil {
+			if errors.Is(err, watch.ErrInvestigationRequired) || errors.Is(err, watch.ErrInvalidSilenceBinding) || strings.Contains(err.Error(), watch.ErrInvalidSilenceBinding.Error()) {
 				fmt.Fprintln(stderr, "tillr watch:", err)
 				return 2
 			}
