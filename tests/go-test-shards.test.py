@@ -36,6 +36,10 @@ class RunnerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(dir=parent)
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        env_patch = patch.dict(os.environ)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        os.environ.pop(shards.PROGRESS_OUT_ENV, None)
 
     def test_package_evidence_distinguishes_shards_from_go_result_cache(self):
         target = self.root / 'packages.json'
@@ -82,11 +86,12 @@ class RunnerTests(unittest.TestCase):
         script.chmod(0o755)
         return script
 
-    def assert_shard_exit(self, binary, names, message):
+    def assert_shard_exit(self, binary, names, message, scratch=None):
         # Exercise the CLI exit contract with a real shard and test2json process.
-        def run(*args):
+        scratch_dir = scratch or (self.root / 'scratch')
+        def run(*args, **kwargs):
             return shards.run_shard('fixture', self.root, binary, names, 0,
-                                    self.root / 'scratch', '3600s')
+                                    scratch_dir, '3600s')
         record = self.root / 'record.json'
         record.write_text('{}')
         stderr = io.StringIO()
@@ -217,6 +222,16 @@ class RunnerTests(unittest.TestCase):
         binary = self.fake("print('PASS')\n")
         self.assert_shard_exit(binary, ['TestMissing'], 'TestMissing')
 
+    def test_shard_exit_handles_progress_env_set_and_unset(self):
+        binary = self.fake("print('=== RUN   TestFail'); print('--- FAIL: TestFail (0.00s)'); print('FAIL'); raise SystemExit(1)\n")
+        with patch.dict(os.environ, {shards.PROGRESS_OUT_ENV: str(self.root / 'env-progress.json')}):
+            self.assert_shard_exit(binary, ['TestFail'], 'failed', scratch=self.root / 'scratch-set')
+            self.assertNotIn(shards.PROGRESS_OUT_ENV, os.environ)
+        env_without = os.environ.copy()
+        env_without.pop(shards.PROGRESS_OUT_ENV, None)
+        with patch.dict(os.environ, env_without, clear=True):
+            self.assert_shard_exit(binary, ['TestFail'], 'failed', scratch=self.root / 'scratch-unset')
+
     def test_packages_run_their_shards_side_by_side(self):
         packages = [{'ImportPath': name, 'Dir': str(self.root), 'TestGoFiles': ['x_test.go']}
                     for name in ['one', 'two']]
@@ -334,7 +349,7 @@ func TestMain(m *testing.M) {
 
     def test_failed_run_still_writes_events(self):
         binary = self.fake("print('=== RUN   TestPass'); print('--- PASS: TestPass (0.00s)'); print('=== RUN   TestFail'); print('--- FAIL: TestFail (0.00s)'); print('FAIL'); raise SystemExit(1)\n")
-        def run(*args):
+        def run(*args, **kwargs):
             return shards.run_shard('fixture', self.root, binary, ['TestPass', 'TestFail'], 0,
                                     self.root / 'scratch', '0')
         record = self.root / 'durations.json'
