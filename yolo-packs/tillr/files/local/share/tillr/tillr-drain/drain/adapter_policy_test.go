@@ -118,3 +118,57 @@ func TestPolicyAdapterCompanionsUseInstalledDirectory(t *testing.T) {
 		t.Fatalf("capabilities = %v", l.endingCapabilities)
 	}
 }
+
+func TestRelativeAdapterResolvesAgainstInstallRoot(t *testing.T) {
+	dir := t.TempDir()
+	installRoot := filepath.Join(dir, "install")
+	installed := filepath.Join(installRoot, "tillr-run", "backends", "pi", "run-pi")
+	if err := os.MkdirAll(filepath.Dir(installed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installed, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
+
+	// Consumer repository with no tools/ directory resolves relative tillr-run
+	// adapter paths against TILLR_INSTALL_ROOT.
+	consumer := filepath.Join(dir, "consumer")
+	if err := os.MkdirAll(consumer, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"tools/tillr-run/backends/pi/run-pi", "./tools/tillr-run/backends/pi/run-pi"} {
+		p := Policy{
+			Root:           consumer,
+			DefaultBackend: "pi",
+			Backends: map[string]Backend{
+				"pi": {Adapter: rel, Model: "fixture"},
+			},
+		}
+		got := p.request("item-a", "lane-1", "run-a", "pi").Command[0]
+		if got != installed {
+			t.Fatalf("consumer %s: got %q, want %q", rel, got, installed)
+		}
+	}
+
+	// When tillr operates on its own repository (trunk has tools/tillr-run/backends/...),
+	// the trunk's adapter still wins even when TILLR_INSTALL_ROOT is set.
+	trunk := filepath.Join(dir, "trunk")
+	trunkAdapter := filepath.Join(trunk, "tools", "tillr-run", "backends", "pi", "run-pi")
+	if err := os.MkdirAll(filepath.Dir(trunkAdapter), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trunkAdapter, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	trunkPolicy := Policy{
+		Root:           trunk,
+		DefaultBackend: "pi",
+		Backends: map[string]Backend{
+			"pi": {Adapter: "tools/tillr-run/backends/pi/run-pi", Model: "fixture"},
+		},
+	}
+	if got := trunkPolicy.request("item-a", "lane-1", "run-a", "pi").Command[0]; got != trunkAdapter {
+		t.Fatalf("trunk: got %q, want %q", got, trunkAdapter)
+	}
+}

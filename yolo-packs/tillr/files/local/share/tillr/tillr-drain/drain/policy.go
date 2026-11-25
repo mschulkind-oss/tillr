@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -362,19 +363,37 @@ func (p Policy) firstBackend(row itemRow) string {
 // drain.decision embeds the full run.request, a model id in argv is recorded run evidence),
 // and nothing else in the request names it. This face decides which backend; run decides
 // what a request on it says.
-// resolveAdapterPath resolves a repository-relative adapter path against root
-// (the trunk checkout the loop runs from) so workers running in a lane worktree
-// execute the trunk's adapter rather than their own lane's copy. Bare command
-// names (no path separator) are left for PATH lookup, and absolute paths are
-// returned unchanged.
+const relBackendsPrefix = "tools/tillr-run/backends/"
+
+// resolveAdapterPath resolves a repository-relative adapter path. When the
+// adapter exists under root (the trunk checkout the loop runs from, such as
+// tillr's own repository), it resolves against root so workers running in a
+// lane worktree execute the trunk's adapter rather than their own lane's copy.
+// When root does not carry the adapter and the path is under
+// tools/tillr-run/backends/, it resolves against tillr's installation via
+// run.ResolveBackendsDir (honoring TILLR_INSTALL_ROOT) so a consumer repository
+// with no tools/tillr-run finds the installed adapter and its side files. Bare
+// command names (no path separator) are left for PATH lookup, and absolute
+// paths are returned unchanged.
 func resolveAdapterPath(root, adapter string) string {
 	if root == "" || adapter == "" || filepath.IsAbs(adapter) || !strings.ContainsRune(adapter, filepath.Separator) {
 		return adapter
 	}
+	base := root
 	if absRoot, err := filepath.Abs(root); err == nil {
-		return filepath.Join(absRoot, adapter)
+		base = absRoot
 	}
-	return filepath.Join(root, adapter)
+	rootPath := filepath.Join(base, adapter)
+	if _, err := os.Stat(rootPath); err == nil {
+		return rootPath
+	}
+	clean := filepath.ToSlash(filepath.Clean(adapter))
+	if rest, ok := strings.CutPrefix(clean, relBackendsPrefix); ok && rest != "" {
+		if backendsDir, err := run.ResolveBackendsDir(); err == nil {
+			return filepath.Join(backendsDir, filepath.FromSlash(rest))
+		}
+	}
+	return rootPath
 }
 
 func (p Policy) request(itemID, laneID, runID, backendName string) *run.Request {
