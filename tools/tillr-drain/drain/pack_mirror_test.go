@@ -424,3 +424,31 @@ func TestPackMirrorDeletingWholeModuleDirectory(t *testing.T) {
 		}
 	})
 }
+
+func TestFilterMirrorConflictReports(t *testing.T) {
+	reports := []string{
+		"CONFLICT (content): Merge conflict in tools/tillr-drain/drain/conflict.go",
+		"CONFLICT (content): Merge conflict in " + tillrMirrorRoot + "tillr-drain/drain/conflict.go",
+		"CONFLICT (modify/delete): " + tillrMirrorRoot + "tillr-loop/tillr-loop deleted in HEAD",
+		"CONFLICT (content): Merge conflict in " + tillrMirrorRoot + "tillr-loop/README.md",
+		"CONFLICT (content): Merge conflict in " + tillrMirrorRoot + "docs/reference/gate.md",
+	}
+	nonMirror, modules := filterMirrorConflictReports(reports)
+	wantNonMirror := []string{
+		"CONFLICT (content): Merge conflict in tools/tillr-drain/drain/conflict.go",
+		"CONFLICT (content): Merge conflict in " + tillrMirrorRoot + "tillr-loop/README.md",
+		"CONFLICT (content): Merge conflict in " + tillrMirrorRoot + "docs/reference/gate.md",
+	}
+	if len(nonMirror) != len(wantNonMirror) {
+		t.Fatalf("nonMirror = %v, want %v", nonMirror, wantNonMirror)
+	}
+	for i := range wantNonMirror {
+		if nonMirror[i] != wantNonMirror[i] {
+			t.Fatalf("nonMirror[%d] = %q, want %q", i, nonMirror[i], wantNonMirror[i])
+		}
+	}
+	wantModules := []string{"tillr-drain", "tillr-loop"}
+	if len(modules) != len(wantModules) || modules[0] != wantModules[0] || modules[1] != wantModules[1] {
+		t.Fatalf("modules = %v, want %v", modules, wantModules)
+	}
+}

@@ -262,6 +262,7 @@ type Candidate struct {
 	replayRelease         *replayLaneRelease // runtime-only: release the lane before a slow gate-failure replay
 	trunkAcquitted        bool               // runtime-only: acquitted as trunk-already-red; keep candidate for re-gate
 	trunkFixer            *trunkFixerHold    // runtime-only: trunk fixer hold recorded for kept-candidate attribution
+	mirrorRepairCount     int                // runtime-only: bounds mechanical mirror-only conflict repairs in one pass
 }
 
 type trunkFixerHold struct {
@@ -3242,9 +3243,11 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	// A candidate reaching this point is a run that committed, and the count is taken here
 	// rather than at the dispatch so a run that produced no commit is never read as a
 	// candidate the loop refused.
-	l.mu.Lock()
-	result.Candidates++
-	l.mu.Unlock()
+	if candidate.mirrorRepairCount == 0 {
+		l.mu.Lock()
+		result.Candidates++
+		l.mu.Unlock()
+	}
 	if refused, err := l.refuseOutOfOrderDelivery(ctx, candidate, result); refused || err != nil {
 		return "", false, err
 	}

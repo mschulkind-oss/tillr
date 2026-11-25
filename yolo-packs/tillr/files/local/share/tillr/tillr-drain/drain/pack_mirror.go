@@ -13,6 +13,59 @@ import (
 
 const tillrMirrorRoot = "yolo-packs/tillr/files/local/share/tillr/"
 
+// packMirrorModule reports whether path is a generated pack-mirror copy under
+// tillrMirrorRoot that packmirror.Sync owns, returning its module name. Paths owned by
+// pack-docs (such as tillr-loop/README.md or docs/) return false.
+func packMirrorModule(path string) (string, bool) {
+	if !strings.HasPrefix(path, tillrMirrorRoot) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(path, tillrMirrorRoot)
+	module, rel, ok := strings.Cut(rest, "/")
+	if !ok || rel == "" {
+		return "", false
+	}
+	if module == packmirror.LoopModule {
+		if rel == "README.md" {
+			return "", false
+		}
+		return module, true
+	}
+	for _, shipped := range packmirror.Shipped {
+		if module == shipped {
+			return module, true
+		}
+	}
+	return "", false
+}
+
+// filterMirrorConflictReports splits git CONFLICT lines into non-mirror reports and the
+// deduplicated pack-mirror module names whose mirrored copies conflicted.
+func filterMirrorConflictReports(reports []string) ([]string, []string) {
+	var nonMirror []string
+	var mirrorModules []string
+	seenModule := map[string]bool{}
+	for _, report := range reports {
+		if module, ok := packMirrorModule(conflictPath(report)); ok {
+			if !seenModule[module] {
+				seenModule[module] = true
+				mirrorModules = append(mirrorModules, module)
+			}
+			continue
+		}
+		nonMirror = append(nonMirror, report)
+	}
+	return nonMirror, mirrorModules
+}
+
+func (l *Loop) hasPackManifest(ctx context.Context, worktree, rev string) (bool, error) {
+	if worktree == "" || rev == "" {
+		return false, nil
+	}
+	manifest, err := l.git(ctx, worktree, "ls-tree", rev, "--", "yolo-packs/tillr/pack.json")
+	return manifest != "", err
+}
+
 // stagePackMirror renders only the shipped modules touched by this candidate, so
 // unrelated candidates do not pick up pre-existing drift. The worker's fence has passed.
 func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
@@ -22,15 +75,12 @@ func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
 		return false, err
 	}
 	// Match SHIPPED in the renderer. The standalone loop adapter is selected below.
-	modules := []string{"tillr", "tillr-cli", "tillr-drain", "tillr-gate", "tillr-item", "tillr-land", "tillr-run", "tillr-store", "tillr-view", "tillr-watch", "tillr-trace", "tillr-roll"}
 	var selectedModules []string
-	var destinations []string
 	changedPaths := strings.Split(paths, "\x00")
-	for _, module := range modules {
+	for _, module := range packmirror.Shipped {
 		for _, path := range changedPaths {
 			if strings.HasPrefix(path, "tools/"+module+"/") || strings.HasPrefix(path, tillrMirrorRoot+module+"/") {
 				selectedModules = append(selectedModules, module)
-				destinations = append(destinations, tillrMirrorRoot+module)
 				break
 			}
 		}
@@ -41,17 +91,27 @@ func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
 	for _, path := range changedPaths {
 		if (strings.HasPrefix(path, loopSourcePrefix) && path != loopSourcePrefix+"README.md") ||
 			(strings.HasPrefix(path, loopMirrorPrefix) && path != loopMirrorPrefix+"README.md") {
-			selectedModules = append(selectedModules, "tillr-loop")
-			destinations = append(destinations, tillrMirrorRoot+"tillr-loop")
+			selectedModules = append(selectedModules, packmirror.LoopModule)
 			break
 		}
 	}
-	if len(destinations) == 0 {
+	if len(selectedModules) == 0 {
 		return false, nil
 	}
-	manifest, err := l.git(ctx, c.Worktree, "ls-tree", c.HeadSHA, "--", "yolo-packs/tillr/pack.json")
-	if err != nil || manifest == "" {
+	hasManifest, err := l.hasPackManifest(ctx, c.Worktree, c.HeadSHA)
+	if err != nil || !hasManifest {
 		return false, err
+	}
+	return l.syncAndStagePackMirrorModules(ctx, c, selectedModules)
+}
+
+func (l *Loop) syncAndStagePackMirrorModules(ctx context.Context, c Candidate, selectedModules []string) (bool, error) {
+	if len(selectedModules) == 0 {
+		return false, nil
+	}
+	destinations := make([]string, 0, len(selectedModules))
+	for _, module := range selectedModules {
+		destinations = append(destinations, tillrMirrorRoot+module)
 	}
 	status := []string{"status", "--porcelain", "--untracked-files=all"}
 	if out, err := l.git(ctx, c.Worktree, status...); err != nil {

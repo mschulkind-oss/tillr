@@ -3,7 +3,9 @@ package drain
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -85,9 +87,42 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	// The markers are the worker's change against the moved trunk, so the brief never
 	// shows the worker a conflict the loop's own retirement made. They are also the
 	// conflict's evidence: a merge that cannot be replayed keys on its paths alone.
-	markers, markersErr := "", error(nil)
+	hasManifest, err := l.hasPackManifest(ctx, l.cfg.Root, mainSHA)
+	if err != nil {
+		return "", false, err
+	}
+	tree, mergeReports, markersErr := "", []string(nil), error(nil)
 	if mainSHA != "" && candidate.BaseSHA != "" && reapplyHead != "" {
-		markers, markersErr = l.conflictMarkers(ctx, candidate.BaseSHA, mainSHA, reapplyHead)
+		mergeRepo := l.cfg.Root
+		if candidate.Worktree != "" {
+			mergeRepo = candidate.Worktree
+		}
+		tree, mergeReports, markersErr = l.mergeTree(ctx, mergeRepo, candidate.BaseSHA, mainSHA, reapplyHead)
+	}
+	mirrorOmitted := false
+	if hasManifest {
+		filteredReports, mirrorModules := filterMirrorConflictReports(landed.ConflictPaths)
+		if len(landed.ConflictPaths) > 0 && len(filteredReports) == 0 && len(mirrorModules) > 0 {
+			if candidate.Worktree != "" && candidate.BaseSHA != "" && reapplyHead != "" && mainSHA != "" && mainSHA != candidate.BaseSHA && candidate.BaseRef == "" && candidate.mirrorRepairCount < 2 && markersErr == nil && tree != "" {
+				nonMirrorMerge, _ := filterMirrorConflictReports(mergeReports)
+				if len(nonMirrorMerge) == 0 {
+					return l.repairMirrorOnlyConflict(ctx, candidate, mainSHA, reapplyHead, tree, mirrorModules, result, timing)
+				}
+				landed.ConflictPaths = nonMirrorMerge
+				mirrorOmitted = true
+			}
+		} else if len(filteredReports) > 0 && len(mirrorModules) > 0 {
+			landed.ConflictPaths = filteredReports
+			mirrorOmitted = true
+		}
+	}
+	markers := ""
+	if markersErr == nil && tree != "" {
+		mergeRepo := l.cfg.Root
+		if candidate.Worktree != "" {
+			mergeRepo = candidate.Worktree
+		}
+		markers, markersErr = l.conflictMarkersFromTree(ctx, mergeRepo, tree, mergeReports, hasManifest)
 	}
 	key := conflictEndingKey(landed.ConflictPaths, markers, candidate.RunID)
 	worker := candidate.WorkerSession
@@ -222,6 +257,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 			TrunkSHA:      mainSHA,
 			OriginalRunID: candidate.RunID,
 			PreparedHead:  preparedHead,
+			MirrorOmitted: mirrorOmitted,
 		},
 	}
 	if fix.SessionTurn {
@@ -406,19 +442,17 @@ func conflictPath(report string) string {
 	return ""
 }
 
-// conflictMarkers runs the same three-way merge the lander ran and reads the conflicted
-// blobs it wrote, so the fix run's brief carries the markers a model resolves rather than
-// only the paths it would have to merge to see. The merge-tree output names the tree first;
-// a conflict exits non-zero with that tree still on stdout, which is why the output is read
-// even when the command fails.
-func (l *Loop) conflictMarkers(ctx context.Context, base, trunk, head string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", l.cfg.Root,
+// mergeTree runs the same three-way merge the lander ran and returns the written tree SHA
+// and any CONFLICT lines git reported. A conflict exits non-zero with the tree still on
+// stdout, so stdout is read even when the command fails.
+func (l *Loop) mergeTree(ctx context.Context, repo, base, trunk, head string) (string, []string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", repo,
 		"merge-tree", "--write-tree", "--merge-base="+base, trunk, head)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil && len(out) == 0 {
-		return "", Externalf("reading the conflict markers for %s onto %s: %v: %s",
+		return "", nil, Externalf("reading the conflict markers for %s onto %s: %v: %s",
 			shortSHA(head), shortSHA(trunk), err, strings.TrimSpace(stderr.String()))
 	}
 	lines := strings.Split(string(out), "\n")
@@ -427,18 +461,33 @@ func (l *Loop) conflictMarkers(ctx context.Context, base, trunk, head string) (s
 		tree = strings.TrimSpace(lines[0])
 	}
 	if tree == "" {
-		return "", nil
+		return "", nil, nil
 	}
-	var markers strings.Builder
+	var reports []string
 	for _, line := range lines[1:] {
-		if !strings.HasPrefix(strings.TrimSpace(line), "CONFLICT") {
-			continue
+		if strings.HasPrefix(strings.TrimSpace(line), "CONFLICT") {
+			reports = append(reports, strings.TrimSpace(line))
 		}
+	}
+	return tree, reports, nil
+}
+
+// conflictMarkersFromTree reads the conflicted blobs mergeTree wrote, so the fix run's
+// brief carries the markers a model resolves rather than only the paths it would have to
+// merge to see. When skipPackMirror is true, generated pack-mirror copies are omitted.
+func (l *Loop) conflictMarkersFromTree(ctx context.Context, repo, tree string, reports []string, skipPackMirror bool) (string, error) {
+	var markers strings.Builder
+	for _, line := range reports {
 		path := conflictPath(line)
 		if path == "" {
 			continue
 		}
-		body, err := l.git(ctx, l.cfg.Root, "show", tree+":"+path)
+		if skipPackMirror {
+			if _, ok := packMirrorModule(path); ok {
+				continue
+			}
+		}
+		body, err := l.git(ctx, repo, "show", tree+":"+path)
 		if err != nil {
 			// A path the merge deleted has no blob to show. The report above still names
 			// it, so the brief keeps the path and omits the content rather than failing.
@@ -447,4 +496,147 @@ func (l *Loop) conflictMarkers(ctx context.Context, base, trunk, head string) (s
 		fmt.Fprintf(&markers, "### %s\n%s\n", path, body)
 	}
 	return markers.String(), nil
+}
+
+// repairMirrorOnlyConflict mechanically repairs a conflict whose only conflicting paths
+// are generated pack-mirror copies: it applies the cleanly merged non-mirror tree onto
+// mainSHA, restores pack-mirror paths to mainSHA so prepareCandidate regenerates them via
+// pack-sync, commits, and re-enters verify with no worker run.
+func (l *Loop) repairMirrorOnlyConflict(ctx context.Context, candidate Candidate, mainSHA, reapplyHead, tree string, mirrorModules []string, result *LoopResult, timing *PassTiming) (string, bool, error) {
+	if err := l.pinCandidateHead(ctx, candidate); err != nil {
+		return "", false, err
+	}
+	if err := l.preserveWork(ctx, candidate.LaneID, candidate.RunID, "candidate conflicted only on pack mirror"); err != nil {
+		return "", false, err
+	}
+	if err := l.resetLaneTo(ctx, candidate.LaneID, mainSHA); err != nil {
+		return "", false, err
+	}
+	if _, err := l.git(ctx, candidate.Worktree, "read-tree", "--reset", "-u", tree); err != nil {
+		return "", false, Externalf("applying merged tree for mirror-only conflict repair of %s: %v", candidate.ItemID, err)
+	}
+	if err := l.restorePackMirrorPaths(ctx, candidate.Worktree, mainSHA); err != nil {
+		return "", false, err
+	}
+	changed, err := l.git(ctx, candidate.Worktree, "diff", "--cached", "--name-only")
+	if err != nil {
+		return "", false, err
+	}
+	if strings.TrimSpace(changed) == "" {
+		// Non-mirror changes are already on mainSHA. Regenerate the conflicted mirror
+		// modules to see whether any mirror drift remains; otherwise settle as already-on-trunk.
+		synced, err := l.syncAndStagePackMirrorModules(ctx, candidate, mirrorModules)
+		if err != nil {
+			return "", false, err
+		}
+		if !synced {
+			l.reportf("loop: %s conflicted only on pack mirror paths (%s) and its change is already on %s\n",
+				candidate.ItemID, strings.Join(mirrorModules, ", "), shortSHA(mainSHA))
+			return "", false, l.settleAlreadyOnTrunk(ctx, candidate)
+		}
+	}
+	msg, err := l.git(ctx, candidate.Worktree, "log", "-1", "--format=%B", reapplyHead)
+	if err != nil || strings.TrimSpace(msg) == "" {
+		msg = "chore: reapply candidate onto trunk"
+	} else {
+		msg = strings.TrimRight(msg, "\n")
+	}
+	if _, err := l.git(ctx, candidate.Worktree, "commit", "-m", msg); err != nil {
+		return "", false, Externalf("committing mirror-only conflict repair for %s: %v", candidate.ItemID, err)
+	}
+	newHead, err := l.revParse(ctx, candidate.Worktree, "HEAD")
+	if err != nil {
+		return "", false, err
+	}
+	repaired := candidate
+	repaired.BaseSHA = mainSHA
+	repaired.HeadSHA = newHead
+	repaired.WorkerHeadSHA = ""
+	repaired.RetirementTreeSHA = ""
+	repaired.mirrorRepairCount = candidate.mirrorRepairCount + 1
+	if repaired.RebasedFromHead == "" && reapplyHead != "" && reapplyHead != newHead {
+		repaired.RebasedFromHead = reapplyHead
+	}
+	if err := l.recordMirrorRebasedCandidate(ctx, repaired); err != nil {
+		return "", false, err
+	}
+	l.reportf("loop: %s conflicted only on pack mirror paths (%s); repaired mechanically onto %s without a worker run\n",
+		candidate.ItemID, strings.Join(mirrorModules, ", "), shortSHA(mainSHA))
+	return l.verify(ctx, &repaired, result, timing)
+}
+
+func (l *Loop) restorePackMirrorPaths(ctx context.Context, worktree, mainSHA string) error {
+	diffOut, err := l.git(ctx, worktree, "diff", "--cached", "--name-only", "-z", mainSHA, "--", tillrMirrorRoot)
+	if err != nil || diffOut == "" {
+		return err
+	}
+	var mirrorPaths []string
+	for _, p := range strings.Split(diffOut, "\x00") {
+		if p == "" {
+			continue
+		}
+		if _, ok := packMirrorModule(p); ok {
+			mirrorPaths = append(mirrorPaths, p)
+		}
+	}
+	if len(mirrorPaths) == 0 {
+		return nil
+	}
+	inMainOut, err := l.git(ctx, worktree, append([]string{"ls-tree", "-z", "-r", "--name-only", mainSHA, "--"}, mirrorPaths...)...)
+	if err != nil {
+		return err
+	}
+	inMain := map[string]bool{}
+	for _, p := range strings.Split(inMainOut, "\x00") {
+		if p != "" {
+			inMain[p] = true
+		}
+	}
+	var toCheckout, toRemove []string
+	for _, p := range mirrorPaths {
+		if inMain[p] {
+			toCheckout = append(toCheckout, p)
+		} else {
+			toRemove = append(toRemove, p)
+		}
+	}
+	if len(toCheckout) > 0 {
+		if _, err := l.git(ctx, worktree, append([]string{"checkout", mainSHA, "--"}, toCheckout...)...); err != nil {
+			return err
+		}
+	}
+	if len(toRemove) > 0 {
+		if _, err := l.git(ctx, worktree, append([]string{"rm", "-f", "--ignore-unmatch", "--"}, toRemove...)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *Loop) recordMirrorRebasedCandidate(ctx context.Context, candidate Candidate) error {
+	if candidate.LaneID != "" && l.cfg.LaneRoot != "" {
+		laneDir := l.laneDirPath(candidate.LaneID)
+		for _, name := range []string{BaseSHAFile, ItemBaseSHAFile} {
+			path := filepath.Join(laneDir, name)
+			if _, statErr := os.Stat(path); statErr == nil {
+				if err := os.WriteFile(path, []byte(candidate.BaseSHA+"\n"), 0o644); err != nil {
+					return Externalf("recording lane %s's base: %v", candidate.LaneID, err)
+				}
+			}
+		}
+	}
+	if l.cfg.Store != "" {
+		s, err := store.Open(ctx, l.cfg.Store, true)
+		if err != nil {
+			return err
+		}
+		err = s.WriteTx(ctx, func(tx *store.Tx) error {
+			return appendEffect(tx, candidatePreparedKind, candidate.RunID, candidate, l.cfg.Now().UTC())
+		})
+		s.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

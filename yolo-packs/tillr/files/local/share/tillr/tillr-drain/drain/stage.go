@@ -258,6 +258,10 @@ type ConflictBrief struct {
 	// PreparedHead is the pinned head when the loop retired the candidate's item block on
 	// top of HeadSHA. The brief tells the worker not to re-apply that loop-owned commit.
 	PreparedHead string
+	// MirrorOmitted is true when conflicting pack-mirror copies under
+	// yolo-packs/tillr/files/local/share/tillr/ were omitted because pack-sync regenerates
+	// them after the repair.
+	MirrorOmitted bool
 }
 
 // Stager produces the lane directory one run needs: its worktree, its brief, its fence and
@@ -1691,6 +1695,9 @@ func conflictFacts(conflict ConflictBrief, durableDir string) string {
 		for _, path := range conflict.Paths {
 			body.WriteString("- " + path + "\n")
 		}
+	}
+	if conflict.MirrorOmitted {
+		body.WriteString("\nConflicting mirrored copies under `yolo-packs/tillr/files/local/share/tillr/` were omitted; `pack-sync` regenerates them after your repair.\n")
 	}
 	if len(conflict.Reports) > 0 {
 		body.WriteString("\nThe three-way merge reported:\n\n```\n")
