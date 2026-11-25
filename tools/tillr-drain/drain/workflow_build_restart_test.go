@@ -85,11 +85,8 @@ printf 'RESULT: done\n'
 	if err := s.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		writeFile(t, filepath.Join(dir, "release"), "done")
-		s.cmd.Process.Kill()
-		s.cmd.Wait()
-	}()
+	s.recordLoopOwner()
+	t.Cleanup(func() { s.stop(t) })
 	s.waitFor(t, "the third and fourth nodes to start", func() bool {
 		return len(lines(t, filepath.Join(dir, "three.started"))) > 0 && len(lines(t, filepath.Join(dir, "four.started"))) > 0
 	})
@@ -134,4 +131,8 @@ printf 'RESULT: done\n'
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestInPlaceRestartWorkflowReadersEndsFixtureProcesses(t *testing.T) {
+	assertNoMarkedProcessAliveAfter(t, "workflow_build_restart", TestInPlaceRestartKeepsLiveWorkflowReaders)
 }

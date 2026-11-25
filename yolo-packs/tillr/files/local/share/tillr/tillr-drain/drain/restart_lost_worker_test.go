@@ -148,9 +148,22 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 		t.Fatal(err)
 	}
 	exited := make(chan error, 1)
-	go func() { exited <- s.cmd.Wait() }()
-	defer s.cmd.Process.Kill()
-	t.Cleanup(func() { exec.Command(s.exe, "stop", "--end-runs", "--store", f.store, "--root", f.root).Run() })
+	waitDone := make(chan struct{})
+	go func() {
+		exited <- s.cmd.Wait()
+		close(waitDone)
+	}()
+	t.Cleanup(func() {
+		_ = s.cmd.Process.Signal(syscall.SIGCONT)
+		_ = exec.Command(s.exe, "stop", "--end-runs", "--store", f.store, "--root", f.root).Run()
+		select {
+		case <-waitDone:
+		case <-time.After(hangGuard):
+			_ = s.cmd.Process.Kill()
+			<-waitDone
+		}
+		waitAndCleanupStoreRuns(t, f.store)
+	})
 	if blockedSchema {
 		if err := waitForStoreRollAlarm(func() string { return s.output(t) }, exited); err != nil {
 			t.Fatal(err)

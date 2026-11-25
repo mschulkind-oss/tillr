@@ -22,6 +22,7 @@ else
 fi
 `+committingAdapter)
 	f := newLoopFixture(t, adapter)
+	t.Cleanup(func() { cleanupStoreRuns(t, f.store) })
 	t.Setenv("PASS_RELEASE", release)
 	t.Setenv("PASS_FIRST", filepath.Join(signals, "first"))
 	t.Setenv("PASS_THIRD", third)

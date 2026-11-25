@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -50,20 +49,6 @@ fi
 	s := startRoll(t, 1, run.PauseWhereItStands, harness)
 	// Only the loop needs tracing; the test's own store handles need not log.
 	t.Setenv("TILLR_SQLITE_TRACE", "")
-	t.Cleanup(func() {
-		// Stop only this fixture's loop and its latest recorded harness. This
-		// also cleans up if the test fails before it can pause the first segment.
-		s.cmd.Process.Kill()
-		pids := lines(t, s.pids)
-		if len(pids) > 0 {
-			fields := strings.Fields(pids[len(pids)-1])
-			if len(fields) > 0 {
-				if pid, err := strconv.Atoi(fields[0]); err == nil {
-					syscall.Kill(pid, syscall.SIGTERM)
-				}
-			}
-		}
-	})
 	s.inFlight(t, 1)
 	const id = "run-item_041-a1"
 	ctx := context.Background()

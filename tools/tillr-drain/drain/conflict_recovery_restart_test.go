@@ -19,7 +19,6 @@ func TestInterruptedRecoveredRepairSettlesExistingCommitWithoutColdRestart(t *te
 		writeFile(t, filepath.Join(signals, name), "fixture\n")
 	}
 	marker := filepath.Join(signals, "repair-committed")
-	t.Cleanup(func() { writeFile(t, marker+".release", "finish") })
 	adapter := stub(t, "adapter", fmt.Sprintf(`case "$TILLR_RUN_ID" in
  *-cfix)
   if [ -f %q ]; then echo duplicate-cold-repair; printf 'RESULT: done\n'; exit 0; fi
@@ -33,6 +32,10 @@ func TestInterruptedRecoveredRepairSettlesExistingCommitWithoutColdRestart(t *te
 esac
 `, marker, marker, marker+".release")+conflictAdapter)
 	f := newLoopFixture(t, adapter)
+	t.Cleanup(func() {
+		writeFile(t, marker+".release", "finish")
+		cleanupStoreRuns(t, f.store)
+	})
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	conflict := landingEnvelope(t, "squash-conflict", []string{"CONFLICT (content): Merge conflict in base.txt"})
 	land := conflictLandScript(t, f.root, conflict, landingEnvelope(t, "landed", nil), 0)

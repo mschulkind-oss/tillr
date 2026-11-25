@@ -48,6 +48,7 @@ case "$lane" in
 esac
 `+conflictAdapter)
 	f := newLoopFixture(t, adapter)
+	t.Cleanup(func() { cleanupStoreRuns(t, f.store) })
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"), itemRecord("item_042", "in-queue"), itemRecord("item_043", "in-queue"))
 	conflict := landingEnvelope(t, "squash-conflict", []string{"CONFLICT (content): Merge conflict in base.txt"})
 	base := git(t, f.root, "rev-parse", "HEAD")

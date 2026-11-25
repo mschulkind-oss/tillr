@@ -60,16 +60,6 @@ fi
 		}
 	}, harness)
 	t.Setenv("TILLR_SQLITE_TRACE", "")
-	t.Cleanup(func() {
-		_ = s.cmd.Process.Kill()
-		for _, line := range lines(t, s.pids) {
-			if fields := strings.Fields(line); len(fields) == 2 {
-				if pid, err := strconv.Atoi(fields[0]); err == nil {
-					_ = syscall.Kill(pid, syscall.SIGTERM)
-				}
-			}
-		}
-	})
 	s.waitFor(t, "the first-segment evaluator", func() bool { return len(lines(t, s.pids)) == 1 })
 	fields := strings.Fields(lines(t, s.pids)[0])
 	pid, err := strconv.Atoi(fields[0])
@@ -90,6 +80,7 @@ fi
 		if err := s.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = s.cmd.Process.Signal(syscall.SIGCONT) })
 		ctx := context.Background()
 		st, err := store.Open(ctx, s.f.store, true)
 		if err != nil {
@@ -115,8 +106,20 @@ fi
 			t.Fatal(err)
 		}
 		done := make(chan error, 1)
-		go func() { done <- resumeCmd.Wait() }()
-		t.Cleanup(func() { _ = resumeCmd.Process.Signal(syscall.SIGTERM) })
+		resumeDone := make(chan struct{})
+		go func() {
+			done <- resumeCmd.Wait()
+			close(resumeDone)
+		}()
+		t.Cleanup(func() {
+			_ = resumeCmd.Process.Signal(syscall.SIGTERM)
+			select {
+			case <-resumeDone:
+			case <-time.After(hangGuard):
+				_ = resumeCmd.Process.Kill()
+				<-resumeDone
+			}
+		})
 		segments++
 		s.waitFor(t, "the resumed evaluator", func() bool {
 			select {

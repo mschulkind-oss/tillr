@@ -23,6 +23,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-drain/presence"
+	"github.com/mschulkind-oss/tillr-run/run"
 )
 
 // rollHarness keeps a fixture worker in flight and records any TERM it receives, so
@@ -126,13 +127,20 @@ func startConfiguredRoll(t *testing.T, lanes int, pauseKind string, configure fu
 	if err := s.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	s.recordLoopOwner()
+	t.Cleanup(func() { s.stop(t) })
+	return s
+}
+
+func (s *rollScenario) recordLoopOwner() {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return
+	}
 	if here, err := presence.CurrentOwner(); err == nil {
 		if start, err := presence.ProcessStart(s.cmd.Process.Pid); err == nil && start != "" {
 			s.loopOwner = presence.Owner{PID: s.cmd.Process.Pid, Start: start, Domain: here.Domain, UID: here.UID}
 		}
 	}
-	t.Cleanup(func() { s.stop(t) })
-	return s
 }
 
 func storeRunOwners(storePath string, here *presence.Owner) ([]presence.Owner, error) {
@@ -179,6 +187,129 @@ func storeRunOwners(storePath string, here *presence.Owner) ([]presence.Owner, e
 	return owners, nil
 }
 
+func forceEndStoreRuns(storePath string, here *presence.Owner, seen []presence.Owner) {
+	if live, err := storeRunOwners(storePath, here); err == nil {
+		seen = append(seen, live...)
+	}
+	signalLive := func(sig syscall.Signal) {
+		for _, o := range seen {
+			if dead, err := presence.OwnerDead(&o, here); err == nil && !dead {
+				_ = syscall.Kill(o.PID, sig)
+			}
+		}
+	}
+	allDead := func() bool {
+		if live, err := storeRunOwners(storePath, here); err == nil && len(live) > 0 {
+			seen = append(seen, live...)
+			return false
+		}
+		for _, o := range seen {
+			if dead, err := presence.OwnerDead(&o, here); err == nil && !dead {
+				return false
+			}
+		}
+		return true
+	}
+	signalLive(syscall.SIGTERM)
+	deadline := time.Now().Add(hangGuard)
+	for time.Now().Before(deadline) {
+		if allDead() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	signalLive(syscall.SIGKILL)
+	killDeadline := time.Now().Add(hangGuard)
+	for time.Now().Before(killDeadline) {
+		if allDead() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func waitForStoreRunsExit(t *testing.T, ctx context.Context, storePath string, here *presence.Owner, seen []presence.Owner) {
+	t.Helper()
+	for {
+		live, err := storeRunOwners(storePath, here)
+		if err != nil {
+			forceEndStoreRuns(storePath, here, seen)
+			t.Errorf("checking live run processes: %v", err)
+			return
+		}
+		seen = append(seen, live...)
+		stillAlive := len(live) > 0
+		for i := 0; !stillAlive && i < len(seen); i++ {
+			dead, err := presence.OwnerDead(&seen[i], here)
+			if err != nil {
+				forceEndStoreRuns(storePath, here, seen)
+				t.Errorf("checking run process %d: %v", seen[i].PID, err)
+				return
+			}
+			if !dead {
+				stillAlive = true
+			}
+		}
+		if !stillAlive {
+			return
+		}
+		if err := ctx.Err(); err != nil {
+			forceEndStoreRuns(storePath, here, seen)
+			t.Errorf("timed out waiting for run processes to exit: %v", err)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func cleanupStoreRuns(t *testing.T, storePath string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer cancel()
+	here, err := presence.CurrentOwner()
+	if err != nil {
+		t.Errorf("reading current owner to clean store runs: %v", err)
+		return
+	}
+	seen, err := storeRunOwners(storePath, here)
+	if err != nil {
+		t.Errorf("listing live run processes for cleanup: %v", err)
+		return
+	}
+	if len(seen) > 0 {
+		if _, err := drain.EndRuns(ctx, storePath); err != nil {
+			forceEndStoreRuns(storePath, here, seen)
+		} else {
+			waitForStoreRunsExit(t, ctx, storePath, here, seen)
+		}
+	}
+	if err := stopStoreNotifyRelays(ctx, storePath, here); err != nil {
+		t.Errorf("stopping notify relays: %v", err)
+	}
+}
+
+func waitAndCleanupStoreRuns(t *testing.T, storePath string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer cancel()
+	here, err := presence.CurrentOwner()
+	if err != nil {
+		t.Errorf("reading current owner to wait for store runs: %v", err)
+		return
+	}
+	seen, err := storeRunOwners(storePath, here)
+	if err != nil {
+		t.Errorf("listing live run processes for cleanup: %v", err)
+		return
+	}
+	if len(seen) > 0 {
+		waitForStoreRunsExit(t, ctx, storePath, here, seen)
+	}
+	if err := stopStoreNotifyRelays(ctx, storePath, here); err != nil {
+		t.Errorf("stopping notify relays: %v", err)
+	}
+}
+
 func (s *rollScenario) stop(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
@@ -194,6 +325,8 @@ func (s *rollScenario) stop(t *testing.T) {
 	if _, err := drain.Stop(ctx, drain.StopConfig{Store: s.f.store, EndRuns: true}); err != nil {
 		_ = s.cmd.Process.Kill()
 		_ = s.cmd.Wait()
+		forceEndStoreRuns(s.f.store, here, seen)
+		_ = stopStoreNotifyRelays(ctx, s.f.store, here)
 		t.Errorf("stopping roll fixture: %v", err)
 		return
 	}
@@ -203,6 +336,8 @@ func (s *rollScenario) stop(t *testing.T) {
 			_ = s.cmd.Process.Signal(syscall.SIGTERM)
 			_ = s.cmd.Wait()
 			if _, err := drain.Stop(ctx, drain.StopConfig{Store: s.f.store, EndRuns: true}); err != nil {
+				forceEndStoreRuns(s.f.store, here, seen)
+				_ = stopStoreNotifyRelays(ctx, s.f.store, here)
 				t.Errorf("ending roll runs after early loop stop: %v", err)
 				return
 			}
@@ -212,35 +347,9 @@ func (s *rollScenario) stop(t *testing.T) {
 	} else {
 		_ = s.cmd.Wait()
 	}
-	for {
-		live, err := storeRunOwners(s.f.store, here)
-		if err != nil {
-			t.Errorf("checking live roll run processes: %v", err)
-			return
-		}
-		seen = append(seen, live...)
-		stillAlive := len(live) > 0
-		for i := 0; !stillAlive && i < len(seen); i++ {
-			dead, err := presence.OwnerDead(&seen[i], here)
-			if err != nil {
-				t.Errorf("checking roll run process %d: %v", seen[i].PID, err)
-				return
-			}
-			if !dead {
-				stillAlive = true
-			}
-		}
-		if !stillAlive {
-			if err := stopStoreNotifyRelays(ctx, s.f.store, here); err != nil {
-				t.Errorf("stopping roll notify relays: %v", err)
-			}
-			return
-		}
-		if err := ctx.Err(); err != nil {
-			t.Errorf("timed out waiting for roll run processes to exit: %v", err)
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	waitForStoreRunsExit(t, ctx, s.f.store, here, seen)
+	if err := stopStoreNotifyRelays(ctx, s.f.store, here); err != nil {
+		t.Errorf("stopping roll notify relays: %v", err)
 	}
 }
 
@@ -668,6 +777,22 @@ func TestRollTestsEndEveryProcessTheyStartBeforeReturning(t *testing.T) {
 			t.Fatalf("recorded process %d (%s) still alive after test returned", o.PID, procCmdline(o.PID))
 		}
 	}
+
+	assertNoMarkedProcessAliveAfter(t, "roll_adapter_stop_at_gap", func(t *testing.T) {
+		s := startRoll(t, 1, run.PauseWhereItStands)
+		s.inFlight(t, 1)
+		workerPID, err := strconv.Atoi(strings.Fields(lines(t, s.pids)[0])[0])
+		if err != nil {
+			t.Fatalf("parsing worker pid: %v", err)
+		}
+		stopAtGapPID := procParentPID(t, workerPID)
+		if cmd := procCmdline(stopAtGapPID); !strings.Contains(cmd, "roll-adapter-") || !strings.Contains(cmd, "/backends/pi/stop-at-gap") {
+			t.Fatalf("worker parent %d cmdline = %q, want roll-adapter stop-at-gap", stopAtGapPID, cmd)
+		}
+		if cmd := procCmdline(workerPID); !strings.Contains(cmd, "/pi ") {
+			t.Fatalf("worker %d cmdline = %q, want stub pi", workerPID, cmd)
+		}
+	})
 
 	assertNoMarkedProcessAliveAfter(t, "restart_in_place", TestRestartReplacesTheLoopInPlaceWithoutSignalingARun)
 	assertNoMarkedProcessAliveAfter(t, "no_request", TestNoRequestMeansTheRunningBinaryNeverRestarts)
