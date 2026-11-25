@@ -44,16 +44,20 @@ func (s *pausedMidNodeSteps) shouldPause(req run.Request) bool {
 func (s *pausedMidNodeSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
 	laneDir := filepath.Join(s.f.laneRoot, req.LaneID)
 	if req.Resume {
-		s.resumedReqs = append(s.resumedReqs, req)
 		session, err := ReadSessionID(laneDir)
 		if err != nil {
 			return run.Record{}, "", err
 		}
+		s.mu.Lock()
+		s.resumedReqs = append(s.resumedReqs, req)
 		s.resumeSession = session
+		s.mu.Unlock()
 	}
 	if s.shouldPause(req) {
+		s.mu.Lock()
 		s.pausedOnce = true
 		s.runs = append(s.runs, req)
+		s.mu.Unlock()
 		session, err := ReadSessionID(laneDir)
 		if err != nil {
 			return run.Record{}, "", err
@@ -62,7 +66,9 @@ func (s *pausedMidNodeSteps) Run(ctx context.Context, req run.Request) (run.Reco
 			session = "paused-session-" + req.RunID
 			writeForkFile(s.t, filepath.Join(laneDir, SessionIDFile), session+"\n")
 		}
+		s.mu.Lock()
 		s.pauseSession = session
+		s.mu.Unlock()
 		evalPath := filepath.Join(run.DurableDir(laneDir, req.RunID), "eval.output")
 		if _, err := os.Stat(evalPath); err == nil {
 			return run.Record{}, "", os.ErrExist
@@ -91,7 +97,9 @@ func (s *pausedMidNodeSteps) Run(ctx context.Context, req run.Request) (run.Reco
 		writeForkFile(s.t, filepath.Join(laneDir, SessionIDFile), "session-"+req.RunID+"\n")
 	}
 	if req.ItemID != "item-a" {
+		s.mu.Lock()
 		s.runs = append(s.runs, req)
+		s.mu.Unlock()
 		if req.ItemID == s.blockItem && s.unblock != nil {
 			if s.blockEntered != nil {
 				select {

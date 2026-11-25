@@ -31,10 +31,14 @@ type judgeRouteSteps struct {
 }
 
 func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	s.mu.Lock()
 	s.runs = append(s.runs, req)
+	s.mu.Unlock()
 	target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
 	if req.Node != "judge" && !strings.HasSuffix(req.RunID, "-judge") && req.NodeID != "evaluate" && !strings.HasSuffix(req.NodeID, "/evaluate") {
+		s.mu.Lock()
 		s.order = append(s.order, "worker")
+		s.mu.Unlock()
 		if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
 			return run.Record{}, "", err
 		}
@@ -51,9 +55,14 @@ func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record,
 			runGit(s.t, target, "reset", "--hard", "HEAD")
 			runGit(s.t, target, "clean", "-fd")
 		}
-		s.workerHead = runGit(s.t, target, "rev-parse", "HEAD")
+		head := runGit(s.t, target, "rev-parse", "HEAD")
+		s.mu.Lock()
+		s.workerHead = head
+		s.mu.Unlock()
 	} else {
+		s.mu.Lock()
 		s.order = append(s.order, "judge")
+		s.mu.Unlock()
 		if req.Backend != "reviewer" {
 			s.t.Errorf("judge backend %s", req.Backend)
 		}
@@ -120,8 +129,10 @@ func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record,
 	return rec, "RESULT: done\n", err
 }
 func (s *judgeRouteSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, error) {
+	s.mu.Lock()
 	s.order = append(s.order, "gate")
 	s.gates++
+	s.mu.Unlock()
 	outcome := GatePassed
 	if s.mode == "gate-fail" {
 		outcome = GateFailed
@@ -132,7 +143,9 @@ func (s *judgeRouteSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, e
 	return GateOutcome{Outcome: outcome}, nil
 }
 func (s *judgeRouteSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	s.mu.Lock()
 	s.order = append(s.order, "landing")
+	s.mu.Unlock()
 	if s.mode == "land-fail" {
 		return LandOutcome{Result: LandRefused}, nil
 	}
@@ -143,7 +156,9 @@ func (s *judgeRouteSteps) Land(ctx context.Context, c Candidate) (LandOutcome, e
 	return outcome, err
 }
 func (s *judgeRouteSteps) Verdict(context.Context, Candidate, string) error {
+	s.mu.Lock()
 	s.mechanical++
+	s.mu.Unlock()
 	return nil
 }
 

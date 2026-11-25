@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 
 type workflowSteps struct {
 	recordingSteps
+	mu        sync.Mutex
+	landMu    sync.Mutex
 	t         *testing.T
 	f         refusalLoopFixture
 	runs      []run.Request
@@ -28,7 +31,9 @@ type workflowSteps struct {
 }
 
 func (s *workflowSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	s.mu.Lock()
 	s.runs = append(s.runs, req)
+	s.mu.Unlock()
 	target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
 	if s.fork != "" {
 		target = s.fork
@@ -99,13 +104,21 @@ func (s *workflowSteps) Run(ctx context.Context, req run.Request) (run.Record, s
 	return rec, report, err
 }
 func (s *workflowSteps) Gate(_ context.Context, c Candidate) (GateOutcome, error) {
+	s.mu.Lock()
 	s.gates++
-	if c.BaseSHA != s.firstHead {
+	firstHead := s.firstHead
+	s.mu.Unlock()
+	if c.BaseSHA != firstHead {
 		s.t.Errorf("candidate base changed: %s", c.BaseSHA)
 	}
 	return GateOutcome{Outcome: GatePassed}, nil
 }
 func (s *workflowSteps) Land(_ context.Context, c Candidate) (LandOutcome, error) {
+	// Real landings serialize trunk writes behind tillr-land's lock; two
+	// lanes landing concurrently in a fixture repo must serialize their
+	// merge and commit on HEAD the same way.
+	s.landMu.Lock()
+	defer s.landMu.Unlock()
 	runGit(s.t, s.f.root, "merge", "--squash", c.HeadSHA)
 	runGit(s.t, s.f.root, "commit", "-qm", "land workflow")
 	fixtureLanding(s.t, s.f.storePath, c)
@@ -486,4 +499,55 @@ func TestWorkflowNextAttemptCountsItemsNotNodes(t *testing.T) {
 		}
 	}
 	t.Fatal("missing item")
+}
+
+func TestWorkflowStepsLandSerializesConcurrentCommits(t *testing.T) {
+	f, _, steps := workflowLoopFixture(t, "")
+	base := runGit(t, f.root, "rev-parse", "HEAD")
+
+	makeCandidate := func(itemID, laneID, runID, file string) Candidate {
+		t.Helper()
+		wt := filepath.Join(f.laneRoot, laneID, WorktreeDir)
+		runGit(t, wt, "checkout", "--force", "-B", "tillr/"+laneID, base)
+		runGit(t, wt, "reset", "--hard", base)
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(wt, file)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeForkFile(t, filepath.Join(wt, file), itemID+"\n")
+		runGit(t, wt, "add", file)
+		runGit(t, wt, "commit", "-qm", "build "+itemID)
+		head := runGit(t, wt, "rev-parse", "HEAD")
+		return Candidate{ItemID: itemID, LaneID: laneID, RunID: runID, BaseSHA: base, HeadSHA: head, Worktree: wt}
+	}
+
+	// Stage two disjoint candidates on separate lanes and land them at the same instant.
+	cA := makeCandidate("item-a", "lane-1", "run-item-a-a1", "tools/item-a/a.txt")
+	cB := makeCandidate("item-b", "lane-2", "run-item-b-a1", "tools/item-b/b.txt")
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, c := range []Candidate{cA, cB} {
+		wg.Add(1)
+		go func(c Candidate) {
+			defer wg.Done()
+			<-start
+			_, err := steps.Land(context.Background(), c)
+			errs <- err
+		}(c)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Land failed: %v", err)
+		}
+	}
+
+	for _, file := range []string{"tools/item-a/a.txt", "tools/item-b/b.txt"} {
+		if _, err := os.Stat(filepath.Join(f.root, file)); err != nil {
+			t.Fatalf("expected landed file %s on trunk: %v", file, err)
+		}
+	}
 }
