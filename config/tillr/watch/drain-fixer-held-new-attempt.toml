@@ -1,0 +1,33 @@
+# 2026-11-23 incident: item-request-b70a54f954 was held behind a trunk fixer at
+# 04:55 ET with a finished candidate, and at 08:53 ET after the fixer closed the
+# drain started run-item-request-b70a54f954-a2-n1 instead of gating the kept
+# candidate.
+# Registered event kinds read: drain.fixer-attached, gate.started, gate.verdict, run.allocate.
+[[rule]]
+id = "drain-fixer-held-new-attempt"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.fixer-attached", "gate.started", "gate.verdict", "run.allocate"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+after = 'event.kind == "drain.fixer-attached" and not (event.kept_candidate == false)'
+reset = 'event.kind in ["gate.started", "gate.verdict"]'
+match = 'event.kind == "run.allocate" and not (event.seat in ["design", "review", "verify"]) and not (event.run_id matches "-(judge|cfix|fresh|restart|interrupted|failover)$")'
+window = "24h"
+
+[rule.guidance]
+summary = "Item {{subject}} started worker run {{event.run_id}} on {{event.lane_id}} after a trunk-fixer hold without gating its kept candidate again."
+check = [
+  "Inspect the event timeline for {{subject}} (drain.candidate, drain.fixer-attached, drain.examination-done, gate.started, gate.verdict, and run.allocate for {{event.run_id}}) and run tillr drain why {{subject}} to see why the kept candidate was retired or bypassed instead of gated.",
+  "Check whether the kept candidate commit is still reachable in git and whether candidate retirement or release logic dropped it before examination."
+]
+do = [
+  "Recover the kept candidate commit if still reachable, diagnose the drain transition that started {{event.run_id}} instead of gating the kept candidate, and file or track the fix."
+]
+
+[rule.delivery]
+receiver = "foreground"

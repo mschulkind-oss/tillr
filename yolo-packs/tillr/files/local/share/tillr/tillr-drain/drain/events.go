@@ -846,15 +846,77 @@ func runRefs(decisions []Decision) []runRef {
 	return refs
 }
 
-// A first stall or diagnosed fault authorizes a fresh examination of the same
-// run. Its transition sequence distinguishes measurements even when plan+tree
-// reproduces the gate's deterministic verdict id.
+// A first stall, diagnosed fault, or kept-candidate trunk-already-red hold
+// authorizes a fresh examination of the same run. Its transition sequence
+// distinguishes measurements even when plan+tree reproduces the gate's
+// deterministic verdict id.
 func gateJudgmentEpoch(r *store.Reader, runID string) (int64, error) {
 	var seq int64
 	err := r.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM events WHERE
  (kind=? AND object_id=?) OR
- (kind=? AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.reason') IN (?,?))`, gateStallHeldKind, runID, itemFaultClearedKind, runID, StopGateHarnessError, ReasonGateStalled).Scan(&seq)
+ (kind=? AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.reason') IN (?,?)) OR
+ (kind=? AND object_id=? AND json_extract(payload,'$.kept_candidate')=1) OR
+ (kind=? AND object_id=? AND json_extract(payload,'$.step')=?)`,
+		gateStallHeldKind, runID,
+		itemFaultClearedKind, runID, StopGateHarnessError, ReasonGateStalled,
+		FixerAttachedKind, runID,
+		RefusalKind, runID, RefusalTrunkAlreadyRed,
+	).Scan(&seq)
 	return seq, err
+}
+
+// keptCandidateFixerAttachedPayload is the run-scoped `drain.fixer-attached` payload
+// recorded after `gate.finishJudgment()` when a kept candidate is held behind a
+// `fixer-main-*` trunk fixer.
+type keptCandidateFixerAttachedPayload struct {
+	ItemID        string   `json:"item_id"`
+	RunID         string   `json:"run_id"`
+	LaneID        string   `json:"lane_id"`
+	FixerItem     string   `json:"fixer_item"`
+	RedSHA        string   `json:"red_sha"`
+	FailingChecks []string `json:"failing_checks"`
+	KeptCandidate bool     `json:"kept_candidate"`
+}
+
+func (l *Loop) recordKeptCandidateFixerAttached(ctx context.Context, candidate Candidate, hold trunkFixerHold) error {
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return Incompatiblef("%v", err)
+	}
+	defer s.Close()
+	checks := hold.failingChecks
+	if checks == nil {
+		checks = []string{}
+	}
+	payload := keptCandidateFixerAttachedPayload{
+		ItemID:        candidate.ItemID,
+		RunID:         candidate.RunID,
+		LaneID:        candidate.LaneID,
+		FixerItem:     hold.fixerID,
+		RedSHA:        hold.redSHA,
+		FailingChecks: checks,
+		KeptCandidate: true,
+	}
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		var afterGateSeq int64
+		if err := tx.QueryRow(
+			`SELECT COALESCE(MAX(seq), 0) FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ?`,
+			GateVerdictKind, candidate.RunID,
+		).Scan(&afterGateSeq); err != nil {
+			return err
+		}
+		var seen int
+		if err := tx.QueryRow(
+			`SELECT count(*) FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? AND seq > ? AND json_extract(payload, '$.kept_candidate') = 1`,
+			FixerAttachedKind, candidate.RunID, afterGateSeq,
+		).Scan(&seen); err != nil {
+			return err
+		}
+		if seen > 0 {
+			return nil
+		}
+		return appendEffect(tx, FixerAttachedKind, candidate.RunID, payload, l.cfg.Now().UTC())
+	})
 }
 func (s *ProcessSteps) gateJudgmentEpoch(ctx context.Context, runID string) (int64, error) {
 	st, err := store.OpenRead(ctx, s.Store)

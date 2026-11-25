@@ -141,7 +141,7 @@ func (l *Loop) fileDefectItem(ctx context.Context, reporter string, o Obstacle) 
 			if _, err := tx.Exec(`UPDATE items SET allowed_paths=? WHERE item_id=?`, string(raw), id); err != nil {
 				return err
 			}
-			return appendEffect(tx, FixerAttachedKind, id, map[string]any{"defect_item": id, "reporter": reporter, "allowed_paths": merged}, l.cfg.Now())
+			return appendEffect(tx, FixerAttachedKind, id, map[string]any{"item_id": id, "defect_item": id, "reporter": reporter, "allowed_paths": merged, "kept_candidate": false}, l.cfg.Now())
 		case errors.Is(scanErr, sql.ErrNoRows):
 		default:
 			return readFailure(scanErr)

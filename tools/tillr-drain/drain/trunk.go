@@ -1360,6 +1360,11 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate *Candidate, gat
 	l.reportf("loop: %s acquitted as trunk-already-red: replay found %s red on %s, so %s is held blocked by %s\n",
 		candidate.ItemID, strings.Join(redChecks, ", "), shortSHA(redSHA), candidate.ItemID, fixerID)
 	candidate.trunkAcquitted = true
+	candidate.trunkFixer = &trunkFixerHold{
+		fixerID:       fixerID,
+		redSHA:        redSHA,
+		failingChecks: append([]string(nil), redChecks...),
+	}
 	return true, nil
 }
 
@@ -1645,7 +1650,7 @@ func (l *Loop) routeTrunkFixer(ctx context.Context, redSHA string, failing []str
 					return err
 				}
 			}
-			return appendEffect(tx, FixerAttachedKind, fixerID, map[string]any{"fixer_item": fixerID, "red_sha": redSHA, "failing_checks": failing, "allowed_paths": paths}, l.cfg.Now())
+			return appendEffect(tx, FixerAttachedKind, fixerID, map[string]any{"item_id": fixerID, "fixer_item": fixerID, "red_sha": redSHA, "failing_checks": failing, "allowed_paths": paths, "kept_candidate": false}, l.cfg.Now())
 		}
 		var state string
 		scanErr := tx.QueryRow(`SELECT state FROM items WHERE item_id = ?`, fixerID).Scan(&state)

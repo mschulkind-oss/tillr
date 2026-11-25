@@ -261,6 +261,13 @@ type Candidate struct {
 	wholeCheckReplay      bool               // runtime-only: force whole-check replay (e.g. stale-fixer tip verification)
 	replayRelease         *replayLaneRelease // runtime-only: release the lane before a slow gate-failure replay
 	trunkAcquitted        bool               // runtime-only: acquitted as trunk-already-red; keep candidate for re-gate
+	trunkFixer            *trunkFixerHold    // runtime-only: trunk fixer hold recorded for kept-candidate attribution
+}
+
+type trunkFixerHold struct {
+	fixerID       string
+	redSHA        string
+	failingChecks []string
 }
 
 type replayLaneRelease struct {
@@ -3647,6 +3654,11 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, err
 		}
 		if acquitted {
+			if candidate.trunkFixer != nil && l.cfg.Store != "" && candidate.RunID != "" {
+				if err := l.recordKeptCandidateFixerAttached(ctx, candidate, *candidate.trunkFixer); err != nil {
+					return "", false, err
+				}
+			}
 			return "", false, nil
 		}
 		// A red gate is a refusal about the code, never a verdict: no judge retired the
