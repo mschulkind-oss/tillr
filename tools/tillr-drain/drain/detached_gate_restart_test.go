@@ -397,14 +397,16 @@ PY
 		defer cancel()
 
 		gateADone := make(chan error, 1)
+		gateAFinished := make(chan struct{})
 		go func() {
+			defer close(gateAFinished)
 			_, err := steps.Gate(ctx, cA)
 			gateADone <- err
 		}()
 		t.Cleanup(func() {
 			_ = os.WriteFile(releaseA, []byte("cleanup\n"), 0o644)
 			select {
-			case <-gateADone:
+			case <-gateAFinished:
 			case <-time.After(hangGuard):
 			}
 		})

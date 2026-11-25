@@ -151,6 +151,11 @@ func TestAnOutOfRotationLaneIsQuietUntilItChangesOrTheSlowIntervalPasses(t *test
 	l := f.loop(t, steps, stager)
 	now := time.Date(2026, 11, 17, 6, 0, 0, 0, time.UTC)
 	l.cfg.Now = func() time.Time { return now }
+	l.triggerTimer = func(time.Duration) (<-chan time.Time, func()) {
+		ch := make(chan time.Time, 1)
+		ch <- now
+		return ch, func() {}
+	}
 	var report bytes.Buffer
 	l.cfg.Report = &report
 

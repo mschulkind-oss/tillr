@@ -32,6 +32,11 @@ func TestWaitingDoesNotRepeatUnknownRollingChecksOnIdlePolls(t *testing.T) {
 	l.cfg.ExitWhenDrained = false
 	at := l.cfg.Now()
 	l.cfg.Now = func() time.Time { return at }
+	l.triggerTimer = func(time.Duration) (<-chan time.Time, func()) {
+		ch := make(chan time.Time, 1)
+		ch <- at
+		return ch, func() {}
+	}
 	var result LoopResult
 	pass := func(want int) {
 		t.Helper()
