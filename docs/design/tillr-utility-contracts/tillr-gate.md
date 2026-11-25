@@ -71,7 +71,7 @@ None.
 | `<git common directory>/tillr-gate/results/<key>.<verdict>.json`, the remembered results | the repository's gate scripts |
 | `TILLR_FAST_VERDICT_OUT`, which it sets for the `--gate` program and reads back | the gate scripts; the drain also sets it |
 | Under `D-UC18` (not yet built), `TILLR_GO_SHARDS_PROGRESS_OUT` / `--progress-file`, `TILLR_GO_SHARDS_EVIDENCE_OUT`, `--events` and `--record` written by `shards` | drain (`JudgeHeavy` and `runHeavyLegacy`), `go_affected.py` (or `goaffected` under `D-UC19`) cross-tool cache tests, callers |
-| Under `D-UC19` (not yet built), `TILLR_GO_AFFECTED_EVIDENCE_OUT` / `--evidence-out`, `TILLR_GO_VERDICTS_IN` / `--verdicts-in`, `TILLR_GO_VERDICTS_OUT` / `--verdicts-out` and `TILLR_GATE_EDGE_INPUTS` read and written by `go-affected` | `change-gate.py`, `fork-gate.py`, `goevidence.go`, drain base replay (`replay_go_affected.go`), `TestEdgeInputs` helpers |
+| Under `D-UC19` (not yet built), `TILLR_GO_AFFECTED_EVIDENCE_OUT` / `--evidence-out`, `TILLR_GO_VERDICTS_IN` / `--verdicts-in`, `TILLR_GO_VERDICTS_OUT` / `--verdicts-out` and `TILLR_GATE_EDGE_INPUTS` read and written by `go-affected` | `change-gate.py`, `tillr-drain fork-gate` (`forkgate.go`), `goevidence.go`, drain base replay (`replay_go_affected.go`), `TestEdgeInputs` helpers (`edge_inputs_test.go`) |
 
 ### 1.6 Names others match on
 
@@ -126,7 +126,7 @@ In `tools/tillr-gate`, in its fast suite.
 - **What it accepts.** A test loads every real declaration under `tools/gate/checks` and the registry example. This one reads outside the module by design: the declarations are its input, and a declaration it refuses must fail here before a drain meets it.
 - **Events.** The gate keeps the record kinds. The drain's events take names of their own ([the overview's fix for RI-37](../tillr-utility-contracts.md#10-reach-ins-today)), so a program can link both, and `tillr-watch` can know them.
 - **Shard runner (`D-UC18`).** Once built, Go unit tests in `tools/tillr-gate/shards` replace `tests/go-test-shards.test.py`, `tools/tillr-land/shards_test.py` and `tools/tillr-land/shards_liveness_test.go` in the same commit, keeping every case.
-- **Affected-packages runner (`D-UC19`).** Once built, Go unit tests in `tools/tillr-gate/goaffected` replace `tests/go-affected.test.py` and `tools/gate/checks/go-affected-test.json` in the same commit, keeping every case (including `TestDiscoverModules`, `TestEdgeInputs` and the refusing-git-shim test).
+- **Affected-packages runner (`D-UC19`).** Once built, Go unit tests in `tools/tillr-gate/goaffected` replace `tests/go-affected.test.py` and `tools/gate/checks/go-affected-test.json` in the same commit, keeping every case (including `TestDiscoverModules`, `TestEdgeInputs`, the refusing-git-shim test, and `TestCheckDeclarationsCoverSelectionInputs` pinning `go-affected.json`'s `exec go run -C tools/tillr-gate . go-affected --root "$PWD" --base "$1" --head "$2"` command and `go-test-tillr-gate.json` coverage over a synthetic repository staging `tools/tillr` and `tools/tillr-gate`).
 
 ## 5. Reach-ins to fix
 
