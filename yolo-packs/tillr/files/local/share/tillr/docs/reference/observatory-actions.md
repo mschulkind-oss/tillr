@@ -26,7 +26,7 @@ summary: "How tillr numbers and moves items in the queue (`tillr-item place` and
 
 # Observatory actions — queue placement, idea intake, and browser writes
 
-> **Delivered copy.** This is `docs/reference/observatory-actions.md` from this repository at commit `4f503801bb` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/observatory-actions.md` from this repository at commit `033b21d403` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-24 against the tree. UNMEASURED: no use of the
 page's writes on a live queue is recorded here; verification rests on reading

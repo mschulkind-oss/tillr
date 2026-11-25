@@ -34,7 +34,7 @@ vantage:
 
 # Queue persistence — tracked document sync, roadmap placement, reconciliation, and store inventory
 
-> **Delivered copy.** This is `docs/reference/tillr-queue-persistence.md` from this repository at commit `4f503801bb` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-queue-persistence.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/reference/tillr-queue-persistence.md` from this repository at commit `033b21d403` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-queue-persistence.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** Verified 2026-11-20. UNMEASURED: the blocks' tests are the evidence.
 

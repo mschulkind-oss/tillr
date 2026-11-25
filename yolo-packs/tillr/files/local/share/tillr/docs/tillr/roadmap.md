@@ -7,7 +7,7 @@ summary: "The unfinished work on tillr, in the order it should be done and why: 
 
 # Roadmap — tillr
 
-> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `4f503801bb` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/tillr/roadmap.md` from this repository at commit `033b21d403` (2026-11-24), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/roadmap.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Reconciled:** 2026-11-24, against the tree and `uvx vantage-check index --roadmap docs/tillr/roadmap.md`.
 
@@ -54,17 +54,11 @@ First by rule 3: every other entry is built and verified by someone who starts f
    - **Known failures:**
      - [`detached_gate_restart_test.go`](../../tillr-drain/drain/detached_gate_restart_test.go)
        races its gate fixture for a process-id file.
-     - [`wake_test.go`](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-watch/wake_test.go) gives a wake three seconds
-       (`time.After(3 * time.Second)`), which a loaded machine exceeds.
      - `TestLandingRollWithFailedStoreMigrationAlarmsAndKeepsOldBuild` in
        [`restart_lost_worker_test.go`](../../tillr-drain/drain/restart_lost_worker_test.go)
        failed once on 2026-11-24 with `database is locked (5) (SQLITE_BUSY)` in its
        `store_event` case while other suites ran beside it, and passed four times run alone
        (`go test ./drain -run TestLandingRollWithFailedStoreMigration -count=4`).
-     - `test_stalled_test_is_named_and_process_group_is_killed` in
-       [`shards_test.py`](../../tillr-land/shards_test.py) gives its stand-in test binary
-       one second (`wall_timeout=1`) to start and print. It failed once on 2026-11-24 inside a
-       full `just done` and passed three times run alone.
    - **Depends on:** nothing.
 
 ## 2. A core that carries only its own code
