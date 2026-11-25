@@ -606,3 +606,80 @@ func TestNotRestartedCheckpointAppendsRegisteredEvent(t *testing.T) {
 		}
 	}
 }
+
+// SQLite does not shrink the -wal file when it restarts the log, so after a restart with few
+// frames the file size can still reflect an earlier peak. Missed checkpoint cycles with a
+// small frame count must not raise a growth warning just because the file is large; the
+// warning fires only once frames since the last restart reach LogReportFrames, and again
+// each time the frame count doubles, resetting on a restart.
+func TestGrowthWarningJudgesFramesNotHistoricalFileSize(t *testing.T) {
+	report := &lockedBuffer{}
+	l := &Loop{}
+	l.cfg.Report = report
+
+	const peakFileBytes int64 = 724304272
+	// A restart leaves the file at its historical peak size.
+	l.reportCheckpoint(store.Checkpointed{Restarted: true, LogBytes: peakFileBytes})
+
+	// Four missed cycles with few active frames must not trigger a growth warning.
+	for range 4 {
+		l.reportCheckpoint(store.Checkpointed{
+			LogFrames:    191,
+			CopiedFrames: 190,
+			LogBytes:     peakFileBytes,
+		})
+	}
+	if out := report.String(); strings.Contains(out, "has grown to") {
+		t.Fatalf("a large historical WAL file with 191 frames raised a false growth warning:\n%s", out)
+	}
+
+	// Crossing LogReportFrames triggers the first growth warning.
+	l.reportCheckpoint(store.Checkpointed{
+		LogFrames:    LogReportFrames,
+		CopiedFrames: LogReportFrames - 1,
+		LogBytes:     peakFileBytes,
+	})
+	if got := strings.Count(report.String(), "has grown to"); got != 1 {
+		t.Fatalf("expected 1 growth warning at %d frames, got %d:\n%s", LogReportFrames, got, report.String())
+	}
+
+	// Below double the reported frame count, another miss does not warn again.
+	l.reportCheckpoint(store.Checkpointed{
+		LogFrames:    LogReportFrames*2 - 1,
+		CopiedFrames: LogReportFrames*2 - 2,
+		LogBytes:     peakFileBytes,
+	})
+	if got := strings.Count(report.String(), "has grown to"); got != 1 {
+		t.Fatalf("expected still 1 growth warning below doubling, got %d:\n%s", got, report.String())
+	}
+
+	// Doubling the frame count triggers a second growth warning.
+	l.reportCheckpoint(store.Checkpointed{
+		LogFrames:    LogReportFrames * 2,
+		CopiedFrames: LogReportFrames*2 - 1,
+		LogBytes:     peakFileBytes,
+	})
+	if got := strings.Count(report.String(), "has grown to"); got != 2 {
+		t.Fatalf("expected 2 growth warnings after doubling to %d frames, got %d:\n%s", LogReportFrames*2, got, report.String())
+	}
+
+	// A restart resets the threshold: a later miss with few frames stays quiet, and
+	// reaching LogReportFrames again raises a new warning.
+	l.reportCheckpoint(store.Checkpointed{Restarted: true, LogBytes: peakFileBytes})
+	l.reportCheckpoint(store.Checkpointed{
+		LogFrames:    177,
+		CopiedFrames: 176,
+		LogBytes:     peakFileBytes,
+	})
+	if got := strings.Count(report.String(), "has grown to"); got != 2 {
+		t.Fatalf("expected no growth warning after restart with 177 frames, got %d:\n%s", got, report.String())
+	}
+	l.reportCheckpoint(store.Checkpointed{
+		LogFrames:    LogReportFrames,
+		CopiedFrames: LogReportFrames - 1,
+		LogBytes:     peakFileBytes,
+	})
+	if got := strings.Count(report.String(), "has grown to"); got != 3 {
+		t.Fatalf("expected 3 growth warnings after post-restart growth to %d frames, got %d:\n%s", LogReportFrames, got, report.String())
+	}
+}

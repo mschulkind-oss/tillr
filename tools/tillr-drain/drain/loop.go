@@ -693,7 +693,7 @@ type Loop struct {
 	// unrestarted, notRestarted counts consecutive log.not-restarted outcomes, and
 	// retryWait bounds how soon the next retry runs (0 for the next heartbeat, then backed
 	// off up to CheckpointInterval; see openWALKeeper); sessionMu guards all six.
-	// missedRestarts, reportedLogBytes and reportedLockError are the heartbeat goroutine's
+	// missedRestarts, reportedLogFrames and reportedLockError are the heartbeat goroutine's
 	// own. beforeCheckpoint and checkpointed are test seams, run just before and just after
 	// each heartbeat checkpoint.
 	keepWAL           bool
@@ -703,7 +703,7 @@ type Loop struct {
 	notRestarted      int
 	retryWait         time.Duration
 	missedRestarts    int
-	reportedLogBytes  int64
+	reportedLogFrames int
 	reportedLockError bool
 	beforeCheckpoint  func()
 	checkpointed      func(store.Checkpointed)

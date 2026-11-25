@@ -67,11 +67,14 @@ func (l *Loop) keepWALWhileRunning() {
 	l.keepWAL = true
 }
 
-// LogReportBytes is the write-ahead log size past which a Loop whose checkpoint cycles keep
-// missing the log's restart reports it, and again each time the log doubles. A restart needs
-// no commit between the owner's pin and its write; writers that never leave that gap keep
-// the log growing, and this is how an operator hears about it.
-const LogReportBytes = 64 << 20
+// LogReportFrames is the write-ahead log length, in frames since the last restart (about
+// 64 MiB at the store's 4 KiB page size), past which a Loop whose checkpoint cycles keep
+// missing the log's restart reports it, and again each time the frame count doubles.
+// Judging frames rather than the file's size avoids false warnings after a restart: SQLite
+// keeps the -wal file at its historical peak size until explicitly truncated. A restart
+// needs no commit between the owner's pin and its write; writers that never leave that gap
+// keep the log growing, and this is how an operator hears about it.
+const LogReportFrames = 16384
 
 // checkpointRetryDelay answers how long checkpointIfDue waits before retrying after
 // notRestarted consecutive log.not-restarted cycles: 0 after the first miss so the next
@@ -212,7 +215,7 @@ func (l *Loop) recordCheckpointNotRestarted(ctx context.Context, c store.Checkpo
 }
 
 // reportCheckpoint says what an operator needs to hear about one cycle: a skipped cycle, the
-// first miss after a restart, a log that has passed LogReportBytes (and each doubling after
+// first miss after a restart, a log that has passed LogReportFrames (and each doubling after
 // that), and the restart that ends a run of misses. It holds no lock.
 func (l *Loop) reportCheckpoint(c store.Checkpointed) {
 	switch {
@@ -220,7 +223,7 @@ func (l *Loop) reportCheckpoint(c store.Checkpointed) {
 		if l.missedRestarts > 0 {
 			l.reportf("loop: the write-ahead log restarted after %d missed checkpoint cycles (log file %d bytes)\n", l.missedRestarts, c.LogBytes)
 		}
-		l.missedRestarts, l.reportedLogBytes = 0, 0
+		l.missedRestarts, l.reportedLogFrames = 0, 0
 		return
 	case c.WriterBusy:
 		l.reportf("loop: the checkpoint's own write waited out SQLite's busy timeout behind another writer (TILLR_SQLITE_TRACE=1 names it); the cycle is skipped and tried again at the next heartbeat\n")
@@ -230,9 +233,9 @@ func (l *Loop) reportCheckpoint(c store.Checkpointed) {
 		l.reportf("loop: the checkpoint did not restart the write-ahead log (%d log frames, %d copied, log file %d bytes): a commit came between the checkpoint and the loop's write, or a reader held frames back; trying again at the next heartbeat\n", c.LogFrames, c.CopiedFrames, c.LogBytes)
 	}
 	l.missedRestarts++
-	if threshold := max(l.reportedLogBytes*2, LogReportBytes); c.LogBytes >= threshold {
-		l.reportedLogBytes = threshold
-		l.reportf("loop: the write-ahead log has grown to %d bytes (%d log frames) without a restart in %d checkpoint cycles: writers are leaving no gap for one\n", c.LogBytes, c.LogFrames, l.missedRestarts)
+	if threshold := max(l.reportedLogFrames*2, LogReportFrames); c.LogFrames >= threshold {
+		l.reportedLogFrames = c.LogFrames
+		l.reportf("loop: the write-ahead log has grown to %d log frames (log file %d bytes) without a restart in %d checkpoint cycles: writers are leaving no gap for one\n", c.LogFrames, c.LogBytes, l.missedRestarts)
 	}
 }
 
