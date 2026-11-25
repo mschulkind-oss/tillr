@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -342,7 +343,7 @@ def stop_keeper(path):
 
 
 def restart_drain(root, extra, lock_path, build_cmd=None, drain_bin="tillr-drain"):
-    """Stand the keeper down, stop the loop, wait for exit, build from HEAD, and start the keeper."""
+    """Stand the keeper down, stop the loop, and restart onto the available programs."""
     # 1. Read policy and lane count from the running loop (if any) or recorded launch BEFORE stopping.
     loop_pid = find_loop(root)
     restart_args, policy, lanes = resolve_restart_args(root, extra, loop_pid)
@@ -364,12 +365,21 @@ def restart_drain(root, extra, lock_path, build_cmd=None, drain_bin="tillr-drain
     else:
         print("restart: no loop running", flush=True)
 
-    # 4. Build from the current HEAD.
-    head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
-    env = {**os.environ, "TILLR_BUILD_UNPROVED": head}
-    cmd = build_cmd if build_cmd is not None else ["just", "--justfile", str(root / ".justfile"), "tillr-build"]
-    print(f"restart: building from HEAD {head[:12]}", flush=True)
-    subprocess.run(cmd, cwd=root, env=env, check=True)
+    # 4. A source checkout builds its own programs; a consumer uses the installed
+    # pack launchers on PATH, which build their rendered source when necessary.
+    if build_cmd is not None or (root / "tools/tillr-drain/go.mod").is_file():
+        head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+        env = {**os.environ, "TILLR_BUILD_UNPROVED": head}
+        cmd = build_cmd if build_cmd is not None else ["just", "--justfile", str(root / ".justfile"), "tillr-build"]
+        print(f"restart: building from HEAD {head[:12]}", flush=True)
+        subprocess.run(cmd, cwd=root, env=env, check=True)
+
+    # PATH entries are interpreted in the keeper's working directory, not ours.
+    search_path = os.pathsep.join(str(root / entry) for entry in os.get_exec_path())
+    names = ("tillr", "tillr-drain", "tillr-gate", "tillr-item", "tillr-land",
+             "tillr-run", "tillr-store", "tillr-view", "tillr-watch")
+    programs = [f"{name}={shutil.which(name, path=search_path) or 'not found'}" for name in names]
+    print(f"restart: PATH programs (launchers or binaries): {', '.join(programs)}", flush=True)
 
     # 5. Start the keeper again in the background with the resolved policy and lane count.
     keeper_cmd = [sys.executable, str(Path(__file__).resolve()), "--root", str(root)]
@@ -402,7 +412,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="repository checkout (default: current directory)")
     parser.add_argument("--stop", action="store_true", help="stop only the keeper for this checkout")
-    parser.add_argument("--restart", action="store_true", help="stand keeper down, stop loop, wait for exit, build HEAD, and restart keeper")
+    parser.add_argument("--restart", action="store_true", help="stand keeper down, stop loop, wait for exit, and restart onto available programs")
     parser.add_argument("loop_args", nargs=argparse.REMAINDER, help="additional loop arguments after --")
     args = parser.parse_args()
     root = args.root.resolve()

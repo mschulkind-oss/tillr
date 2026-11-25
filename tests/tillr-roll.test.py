@@ -442,6 +442,81 @@ class RollTest(unittest.TestCase):
                     cwd=root, env=env, capture_output=True, text=True,
                 )
 
+    def test_restart_in_consumer_uses_path_programs_without_tillr_build(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / 'consumer'
+            root.mkdir()
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            bin_dir = Path(work) / 'bin'
+            bin_dir.mkdir()
+            log = Path(work) / 'drain.log'
+            drain = bin_dir / 'tillr-drain'
+            drain.write_text(
+                '#!/usr/bin/env python3\n'
+                'import sys\n'
+                'from pathlib import Path\n'
+                f'Path({str(log)!r}).write_text(" ".join(sys.argv[1:]))\n'
+            )
+            drain.chmod(0o755)
+            gate = bin_dir / 'tillr-gate'
+            gate.write_text('#!/bin/sh\n')
+            gate.chmod(0o755)
+            # Like the pack, the keeper is installed separately from the operated repo.
+            installed = Path(work) / 'share/tillr/tillr-roll/tillr-keep'
+            installed.parent.mkdir(parents=True)
+            installed.write_bytes(Path(keep.__file__).read_bytes())
+            (root / '.justfile').write_text(
+                '[positional-arguments]\ntillr-keep *args:\n'
+                f'    @python3 {installed} "$@"\n'
+            )
+            (root / '.tillr').mkdir()
+            (root / '.tillr/keeper.launch.json').write_text(
+                json.dumps({'policy': 'config/consumer.json', 'lanes': '3'}))
+            env = {**os.environ, 'YOLO_DURABLE_DIR': work,
+                   'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
+            try:
+                result = subprocess.run(['just', 'tillr-keep', '--restart'], cwd=root,
+                                        env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f'tillr-drain={drain}', result.stdout)
+                self.assertIn(f'tillr-gate={gate}', result.stdout)
+                self.assertIn('PATH programs', result.stdout)
+                self.assertIn('policy=config/consumer.json, lanes=3', result.stdout)
+                self.assertNotIn('building from HEAD', result.stdout)
+                deadline = time.monotonic() + 5
+                while not log.exists():
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.02)
+                self.assertIn('loop --root', log.read_text())
+                self.assertIn('--policy config/consumer.json --lanes 3', log.read_text())
+            finally:
+                subprocess.run([sys.executable, str(installed), '--root', str(root), '--stop'],
+                               cwd=root, env=env, capture_output=True, text=True)
+
+    def test_consumer_reports_programs_using_keeper_working_directory(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / 'consumer'
+            root.mkdir()
+            bin_dir = root / 'relative-bin'
+            bin_dir.mkdir()
+            drain = bin_dir / 'tillr-drain'
+            drain.write_text('#!/bin/sh\n')
+            drain.chmod(0o755)
+            output = io.StringIO()
+            with patch.object(keep, 'find_loop', return_value=None), \
+                    patch.object(keep, 'stop_keeper'), \
+                    patch.object(keep, 'wait_for_keeper_exit'), \
+                    patch.object(keep.subprocess, 'run') as run, \
+                    patch.object(keep.subprocess, 'check_output') as git, \
+                    patch.object(keep.subprocess, 'Popen', return_value=type('Proc', (), {'pid': 42})()), \
+                    patch.dict(os.environ, {'PATH': 'relative-bin', 'YOLO_DURABLE_DIR': work}), \
+                    redirect_stdout(output):
+                keep.restart_drain(root, [], root / '.tillr/keeper.lock')
+            run.assert_not_called()
+            git.assert_not_called()
+            self.assertIn(f'tillr-drain={drain}', output.getvalue())
+            self.assertIn('tillr-gate=not found', output.getvalue())
+
     def test_pi_extensions_invokes_build_agent_dir_without_restarts(self):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work) / 'repo'
@@ -554,7 +629,7 @@ class RollTest(unittest.TestCase):
                     patch.object(keep.subprocess, 'Popen', side_effect=fake_popen), \
                     patch.dict(os.environ, {'YOLO_DURABLE_DIR': work}), \
                     redirect_stdout(output):
-                keep.restart_drain(root, [], lock_path)
+                keep.restart_drain(root, [], lock_path, build_cmd=['fixture-build'])
 
         text = output.getvalue()
         self.assertGreater(now[0], 60.0)
