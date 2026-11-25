@@ -135,7 +135,7 @@ func TestWorkerCannotRegisterWorktreesOrBranchesInDrainRepository(t *testing.T) 
 		assertDrainRepoUntouched(t)
 
 		policyPath := filepath.Join(scratch(t, "cli-policy"), "policy.json")
-		writeFile(t, policyPath, fmt.Sprintf(`{"default_backend":"fixture","backends":{"fixture":{"adapter":%q,"model":"fixture-model","timeout_seconds":60}}}`, adapter))
+		writeFile(t, policyPath, fmt.Sprintf(`{"default_backend":"fixture","backends":{"fixture":{"adapter":%q,"model":"fixture-model","timeout_seconds":0}}}`, adapter))
 		cliLanes := filepath.Join(scratch(t, "cli-measure"), "cli-lanes")
 		code, out := invoke(t, "loop",
 			"--exit-when-drained",

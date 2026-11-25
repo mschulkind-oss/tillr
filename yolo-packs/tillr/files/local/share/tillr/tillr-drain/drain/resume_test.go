@@ -81,7 +81,7 @@ func newResumableFixture(t *testing.T) resumableFixture {
 	f.policy.DefaultBackend = "pi"
 	delete(f.policy.Backends, "fixture")
 	f.policy.Backends["pi"] = drain.Backend{
-		Adapter: adapter, Model: "fixture-model", Effort: "low", TimeoutSeconds: 60,
+		Adapter: adapter, Model: "fixture-model", Effort: "low", TimeoutSeconds: 0,
 	}
 	fixtureAt(t, f.store, fencedItemRecord("item_041", "in-queue", "candidate.txt"))
 	stager := &drain.LaneStager{
@@ -92,7 +92,7 @@ func newResumableFixture(t *testing.T) resumableFixture {
 	runID := "run-item_041-1"
 	if err := stager.Stage(context.Background(), drain.StageSpec{
 		LaneID: "lane-1", ItemID: "item_041", RunID: runID, Backend: "pi",
-		BaseSHA: f.rootBase(t), WorkingDir: "worktree", TimeoutMS: 60000,
+		BaseSHA: f.rootBase(t), WorkingDir: "worktree", TimeoutMS: 0,
 	}); err != nil {
 		t.Fatalf("staging the lane failed: %v", err)
 	}

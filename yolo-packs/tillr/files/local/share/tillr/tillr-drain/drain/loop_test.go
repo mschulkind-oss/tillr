@@ -227,7 +227,7 @@ func newLoopFixture(t *testing.T, adapter string) loopFixture {
 		policy: &drain.Policy{
 			DefaultBackend: "fixture",
 			Backends: map[string]drain.Backend{
-				"fixture": {Adapter: adapter, Model: "fixture-model", TimeoutSeconds: 60},
+				"fixture": {Adapter: adapter, Model: "fixture-model", TimeoutSeconds: 0},
 			},
 		},
 	}
@@ -764,8 +764,8 @@ exit 4
 	f.policy = &drain.Policy{
 		DefaultBackend: "pi",
 		Backends: map[string]drain.Backend{
-			"pi":  {Adapter: pi, Model: "pi-model", TimeoutSeconds: 60},
-			"agy": {Adapter: agy, Model: "agy-model", TimeoutSeconds: 60},
+			"pi":  {Adapter: pi, Model: "pi-model", TimeoutSeconds: 0},
+			"agy": {Adapter: agy, Model: "agy-model", TimeoutSeconds: 0},
 		},
 	}
 	fixtureAt(t, f.store, fencedItemRecord("item_041", "in-queue", "candidate.txt"))

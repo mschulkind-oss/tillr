@@ -89,7 +89,7 @@ func newWalledFixture(t *testing.T, harness string) walledFixture {
 	f.policy.DefaultBackend = "pi"
 	delete(f.policy.Backends, "fixture")
 	f.policy.Backends["pi"] = drain.Backend{
-		Adapter: adapter, Model: "fixture-model", Effort: "low", TimeoutSeconds: 60,
+		Adapter: adapter, Model: "fixture-model", Effort: "low", TimeoutSeconds: 0,
 	}
 	fixtureAt(t, f.store, fencedItemRecord("item_041", "in-queue", "candidate.txt"))
 	return walledFixture{

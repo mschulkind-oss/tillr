@@ -20,7 +20,7 @@ func hookFixture(t *testing.T, answer string, verdict bool) (loopFixture, *drain
 	t.Helper()
 	root := scratch(t, "hook-root")
 	db := fixture(t, fencedItemRecord("finding", "in-queue"))
-	f := loopFixture{root: root, store: db, laneRoot: filepath.Join(scratch(t, "hook-lanes"), "lanes"), count: filepath.Join(root, "calls"), policy: &drain.Policy{DefaultBackend: "fixture", Backends: map[string]drain.Backend{"fixture": {Adapter: stub(t, "adapter", "printf 'RESULT: done\\n'"), Model: "fixture", TimeoutSeconds: 60}}}}
+	f := loopFixture{root: root, store: db, laneRoot: filepath.Join(scratch(t, "hook-lanes"), "lanes"), count: filepath.Join(root, "calls"), policy: &drain.Policy{DefaultBackend: "fixture", Backends: map[string]drain.Backend{"fixture": {Adapter: stub(t, "adapter", "printf 'RESULT: done\\n'"), Model: "fixture", TimeoutSeconds: 0}}}}
 	itemBin := sibling(t, "item")
 	sibling(t, "view") // Build observers before installing the Git sentinel.
 	body := "set -e\necho called >> " + f.count + "\n"

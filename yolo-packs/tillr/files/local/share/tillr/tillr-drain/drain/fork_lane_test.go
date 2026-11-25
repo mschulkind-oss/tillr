@@ -241,7 +241,7 @@ printf 'RESULT: done\n'
 		Lanes:           []string{"lane-1"},
 		Policy: &drain.Policy{
 			DefaultBackend: "fixture",
-			Backends:       map[string]drain.Backend{"fixture": {Adapter: adapter, Model: "fixture-model", TimeoutSeconds: 60}},
+			Backends:       map[string]drain.Backend{"fixture": {Adapter: adapter, Model: "fixture-model", TimeoutSeconds: 0}},
 		},
 		Steps:  &forkTestSteps{&evidenceProcessSteps{steps}},
 		Stage:  lf.stager(),

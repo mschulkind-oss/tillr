@@ -120,9 +120,9 @@ func TestLoopHoldsAnUnmappedSeatWhileMappedWorkLandsAndPolicyRepairDispatches(t 
 		DefaultBackend: "fixture",
 		Seats:          map[string]string{"build": "pi-builder"},
 		Backends: map[string]drain.Backend{
-			"fixture":     {Adapter: floor, Model: "floor-model", TimeoutSeconds: 60},
-			"pi-builder":  {Adapter: builder, Model: "builder-model", TimeoutSeconds: 60},
-			"pi-designer": {Adapter: designer, Model: "designer-model", TimeoutSeconds: 60},
+			"fixture":     {Adapter: floor, Model: "floor-model", TimeoutSeconds: 0},
+			"pi-builder":  {Adapter: builder, Model: "builder-model", TimeoutSeconds: 0},
+			"pi-designer": {Adapter: designer, Model: "designer-model", TimeoutSeconds: 0},
 		},
 	}
 	policyPath := filepath.Join(scratch(t, "seat-policy"), "policy.json")
@@ -313,8 +313,8 @@ func TestLoopHoldsASingleBackendSeatWithoutFailover(t *testing.T) {
 		DefaultBackend: "pi",
 		Seats:          map[string]string{"design": "pi-designer"},
 		Backends: map[string]drain.Backend{
-			"pi":          {Adapter: floor, Model: "floor-model", TimeoutSeconds: 60},
-			"pi-designer": {Adapter: designer, Model: "designer-model", TimeoutSeconds: 60},
+			"pi":          {Adapter: floor, Model: "floor-model", TimeoutSeconds: 0},
+			"pi-designer": {Adapter: designer, Model: "designer-model", TimeoutSeconds: 0},
 		},
 	}
 	fixtureAt(t, f.store, seatedFencedItemRecord("item_042", "in-queue", "design", "candidate.txt"))

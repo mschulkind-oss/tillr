@@ -465,15 +465,18 @@ func procStatus(t *testing.T, pid int, field string) string {
 	return ""
 }
 
-// waitForStoreRollAlarm polls the loop's output until the store roll alarm is logged or the
-// loop exits. No wall-clock limit is applied: a busy machine makes the roll slower rather
-// than failing the test.
+// waitForStoreRollAlarm polls the loop's output until the store roll alarm is logged, a
+// worker is left unjudged, or the loop exits. No wall-clock limit is applied: a busy machine
+// makes the roll slower rather than failing the test.
 func waitForStoreRollAlarm(output func() string, exited <-chan error) error {
 	const alarm = "alarm started: ALARM store-roll-blocked (drain)"
 	for {
 		out := output()
 		if strings.Contains(out, alarm) {
 			return nil
+		}
+		if strings.Contains(out, "is left unjudged") || strings.Contains(out, "(run-unjudged)") {
+			return fmt.Errorf("fixture worker left an item unjudged before the store roll alarm:\n%s", out)
 		}
 		select {
 		case err := <-exited:
@@ -528,4 +531,24 @@ func TestWaitForStoreRollAlarm(t *testing.T) {
 			t.Fatalf("waitForStoreRollAlarm() = %v, want nil when alarm was logged before exit", err)
 		}
 	})
+
+	t.Run("item left unjudged before alarm", func(t *testing.T) {
+		exited := make(chan error, 1)
+		out := "loop: item_041 was cut short and is left unjudged on lane-1\n" +
+			"loop: a full tick planned nothing dispatchable: 2 held item(s): item_041 (run-unjudged), item_042 (not-ready); waiting for a trigger\n"
+		err := waitForStoreRollAlarm(func() string { return out }, exited)
+		if err == nil {
+			t.Fatal("waitForStoreRollAlarm() = nil, want error when an item is left unjudged")
+		}
+		if !strings.Contains(err.Error(), "unjudged") {
+			t.Fatalf("waitForStoreRollAlarm() error = %q, want unjudged detail", err)
+		}
+	})
+}
+
+func TestNewLoopFixtureHasNoWallLimit(t *testing.T) {
+	f := newLoopFixture(t, "/bin/true")
+	if got := f.policy.Backends["fixture"].TimeoutSeconds; got != 0 {
+		t.Fatalf("newLoopFixture fixture backend TimeoutSeconds = %d, want 0 (unbounded)", got)
+	}
 }
