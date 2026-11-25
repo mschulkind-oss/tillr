@@ -31,3 +31,30 @@ $ just done               # the full local gate
 Under active development. `just tillr-build` builds from `refs/tillr/green`, the newest
 commit the full suite has proved; before that ref exists, bootstrap with
 `TILLR_BUILD_UNPROVED=HEAD just tillr-build`.
+
+## Running the loop
+
+A *backend policy* is the JSON file that says which adapter program and model fill each
+seat (the role a run plays: build, design, verify and so on). The loop's default,
+[`config/tillr/backend-policy.json`](config/tillr/backend-policy.json), sends every seat to
+OpenRouter through pi and fails at the first run on a machine with no OpenRouter key. Pick
+the file under [`config/tillr`](config/tillr) that matches the credentials the machine has
+and name it with `--policy`:
+
+| File | Needs |
+| :--- | :--- |
+| `backend-policy.json` | pi with an OpenRouter key |
+| `backend-policy.bedrock.json` | pi with Amazon Bedrock access |
+| `backend-policy.copilot.json`, `backend-policy.gemini.json` | pi with a GitHub Copilot login |
+| `backend-policy.claude.json`, `backend-policy.mixed.json` | the `claude` program, and pi with Amazon Bedrock access |
+| `backend-policy.claude-copilot.json` | the `claude` program, and pi with a GitHub Copilot login |
+
+```console
+$ export PATH="$YOLO_DURABLE_DIR/bin:$PATH"   # where `just tillr-build` puts the programs
+$ tillr store init --store .tillr/state.db
+$ just tillr-keep -- --policy config/tillr/backend-policy.bedrock.json --lanes 1
+```
+
+`tillr drain probe-backend` checks one backend before the loop depends on it. The pi adapter
+also requires a pi that lists the `parked-tool-calls` feature; see
+[the pi backend](tools/tillr-run/backends/pi/README.md#required-pi-features).
