@@ -28,6 +28,7 @@ const (
 type Rule struct {
 	ID, Scope, Severity string
 	Enabled             bool
+	Variables           map[string]string
 	Reads               Reads
 	When                When
 	Guidance            Guidance
@@ -355,7 +356,7 @@ func (k keys) expression(key string, required bool) *Expression {
 func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, error) {
 	c.noRemedy(table, "")
 	root := keys{c, "", table}
-	root.only("id", "enabled", "scope", "severity", "reads", "when", "guidance", "delivery")
+	root.only("id", "enabled", "scope", "severity", "variables", "reads", "when", "guidance", "delivery")
 	r := Rule{ID: root.text("id"), Enabled: true, Scope: root.text("scope"), Severity: root.text("severity"), table: cloneTable(table)}
 	if len(r.ID) > 128 {
 		root.reject("id", "must be at most 128 bytes")
@@ -414,6 +415,16 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 		}
 		if _, has := when.values["fingerprint"]; has {
 			when.reject("fingerprint", "projection-only predicate_match must omit fingerprint")
+		}
+	}
+	if rawVars, present := table["variables"]; present {
+		r.Variables = loadVariables(root, rawVars, r.When.Pattern)
+	}
+	if _, err := resolveVariables(r); err != nil {
+		if _, present := table["variables"]; present {
+			root.reject("variables", "%v", err)
+		} else {
+			when.reject("group_by", "%v", err)
 		}
 	}
 	if r.When.ReopenWhen != nil && len(r.Reads.Events) == 0 {
@@ -476,6 +487,35 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 		checkReceiver("also_notify", value)
 	}
 	return r, c.err
+}
+
+func loadVariables(root keys, raw any, pattern string) map[string]string {
+	tbl, ok := raw.(map[string]any)
+	if !ok {
+		root.reject("variables", "expected a table")
+		return nil
+	}
+	if pattern == LagBehind {
+		root.reject("variables", "not allowed on lag_behind rules")
+		return nil
+	}
+	if len(tbl) == 0 {
+		return nil
+	}
+	vars := make(map[string]string, len(tbl))
+	for _, key := range slices.Sorted(maps.Keys(tbl)) {
+		if !validVarIdent(key) {
+			root.reject("variables."+key, "expected an ASCII identifier ([A-Za-z_][A-Za-z0-9_]*)")
+			continue
+		}
+		val, ok := tbl[key].(string)
+		if !ok || !validVariableEventPath(val) {
+			root.reject("variables."+key, "expected a non-empty event path without event. prefix or whitespace")
+			continue
+		}
+		vars[key] = val
+	}
+	return vars
 }
 
 func loadGroupBy(k keys) (string, []string) {

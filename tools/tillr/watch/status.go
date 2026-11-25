@@ -17,16 +17,17 @@ type Status struct {
 }
 
 type AlertStatus struct {
-	ID       string  `json:"alert_id"`
-	RuleID   string  `json:"rule_id"`
-	Subject  string  `json:"subject"`
-	State    string  `json:"state"`
-	Severity string  `json:"severity"`
-	Opened   string  `json:"opened"`
-	Observed int64   `json:"observed"`
-	By       *string `json:"by,omitempty"`
-	Until    string  `json:"until,omitempty"`
-	ItemID   *string `json:"item_id,omitempty"`
+	ID       string            `json:"alert_id"`
+	RuleID   string            `json:"rule_id"`
+	Subject  string            `json:"subject"`
+	State    string            `json:"state"`
+	Severity string            `json:"severity"`
+	Opened   string            `json:"opened"`
+	Observed int64             `json:"observed"`
+	Vars     map[string]string `json:"vars"`
+	By       *string           `json:"by,omitempty"`
+	Until    string            `json:"until,omitempty"`
+	ItemID   *string           `json:"item_id,omitempty"`
 }
 
 type OwnerStatus struct {
@@ -139,11 +140,18 @@ func (s *Status) readAlerts(rd *store.Reader) error {
 	if err != nil {
 		return err
 	}
-	query := `SELECT alert_id, rule_id, subject_key, state, severity, opened_at, observation_count, acked_by, silence_until_ms FROM alert_episodes WHERE state<>'resolved' ORDER BY opened_seq, alert_id`
-	if hasTracking {
-		query = `SELECT alert_id, rule_id, subject_key, state, severity, opened_at, observation_count, acked_by, silence_until_ms, tracking_item_id FROM alert_episodes WHERE state<>'resolved' ORDER BY opened_seq, alert_id`
+	hasVars, err := alertEpisodesHasColumn(rd, "variables_json")
+	if err != nil {
+		return err
 	}
-	rows, err := rd.Query(query)
+	cols := "alert_id, rule_id, subject_key, state, severity, opened_at, observation_count, acked_by, silence_until_ms"
+	if hasTracking {
+		cols += ", tracking_item_id"
+	}
+	if hasVars {
+		cols += ", variables_json"
+	}
+	rows, err := rd.Query(`SELECT ` + cols + ` FROM alert_episodes WHERE state<>'resolved' ORDER BY opened_seq, alert_id`)
 	if err != nil {
 		return err
 	}
@@ -153,16 +161,23 @@ func (s *Status) readAlerts(rd *store.Reader) error {
 		var opened int64
 		var until sql.NullInt64
 		var by, itemID *string
-		var scanErr error
+		var rawVars sql.NullString
+		dest := []any{&alert.ID, &alert.RuleID, &alert.Subject, &alert.State, &alert.Severity, &opened, &alert.Observed, &by, &until}
 		if hasTracking {
-			scanErr = rows.Scan(&alert.ID, &alert.RuleID, &alert.Subject, &alert.State, &alert.Severity, &opened, &alert.Observed, &by, &until, &itemID)
-		} else {
-			scanErr = rows.Scan(&alert.ID, &alert.RuleID, &alert.Subject, &alert.State, &alert.Severity, &opened, &alert.Observed, &by, &until)
+			dest = append(dest, &itemID)
 		}
-		if scanErr != nil {
-			return scanErr
+		if hasVars {
+			dest = append(dest, &rawVars)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return err
 		}
 		alert.Opened = statusTime(opened)
+		if hasVars {
+			alert.Vars = decodeVariablesJSON(rawVars.String)
+		} else {
+			alert.Vars = map[string]string{}
+		}
 		switch alert.State {
 		case "acknowledged":
 			alert.By = by

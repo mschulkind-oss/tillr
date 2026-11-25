@@ -1,9 +1,12 @@
 package watch
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -134,5 +137,186 @@ func TestWatchStatusReportsStoredAlertsAndLatestNotices(t *testing.T) {
 	e.Rules = watchRules(t, strings.Replace(doc, `receiver = "foreground"`, `receiver = "subscribers"`, 1))
 	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 1 || notices[0].Bundle.Subject != "will-reopen" {
 		t.Fatalf("foreground override should deliver the reopening: %+v, %v", notices, err)
+	}
+}
+
+func TestWatchStatusAlertVarsAndUnmigratedSchema(t *testing.T) {
+	register(t, "watch-test.fact")
+	ctx := t.Context()
+	now := time.Unix(1700000000, 0).UTC()
+
+	rulesDoc := `
+[[rule]]
+id = "r-global"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["watch-test.fact"]
+[rule.when]
+group_by = "global"
+pattern = "count_in_window"
+match = 'event.kind == "watch-test.fact"'
+threshold = 1
+window = "1h"
+[rule.guidance]
+summary = "global"
+check = ["c"]
+do = ["d"]
+[rule.delivery]
+receiver = "foreground"
+
+[[rule]]
+id = "r-single"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["watch-test.fact"]
+[rule.when]
+group_by = "detail.item_id"
+pattern = "count_in_window"
+threshold = 1
+window = "1h"
+[rule.guidance]
+summary = "single"
+check = ["c"]
+do = ["d"]
+[rule.delivery]
+receiver = "foreground"
+
+[[rule]]
+id = "r-composite"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["watch-test.fact"]
+[rule.when]
+group_by = ["lane_id", "reason"]
+pattern = "count_in_window"
+threshold = 1
+window = "1h"
+[rule.guidance]
+summary = "composite"
+check = ["c"]
+do = ["d"]
+[rule.delivery]
+receiver = "foreground"
+
+[[rule]]
+id = "r-vars"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["watch-test.fact"]
+[rule.when]
+group_by = "detail.item_id"
+pattern = "count_in_window"
+threshold = 1
+window = "1h"
+[rule.variables]
+item = "detail.item_id"
+node = "detail.node"
+[rule.guidance]
+summary = "vars"
+check = ["c"]
+do = ["d"]
+[rule.delivery]
+receiver = "foreground"
+`
+
+	s := watchStore(t)
+	e := Evaluator{Store: s, Rules: watchRules(t, rulesDoc), Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now, `{"lane_id":"lane-1","reason":"dirty","detail":{"item_id":"it-1","node":"build"}}`)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	ro, err := store.OpenRead(ctx, s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	e.Store = ro
+
+	got, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Alerts) != 4 {
+		t.Fatalf("expected 4 alerts, got %+v", got.Alerts)
+	}
+	byRule := make(map[string]AlertStatus, len(got.Alerts))
+	for _, a := range got.Alerts {
+		byRule[a.RuleID] = a
+	}
+	wantVars := map[string]map[string]string{
+		"r-global":    {},
+		"r-single":    {"item_id": "it-1"},
+		"r-composite": {"lane_id": "lane-1", "reason": "dirty"},
+		"r-vars":      {"item": "it-1", "node": "build"},
+	}
+	for ruleID, want := range wantVars {
+		a, ok := byRule[ruleID]
+		if !ok {
+			t.Fatalf("missing alert for %q in %+v", ruleID, got.Alerts)
+		}
+		if a.Vars == nil || !maps.Equal(a.Vars, want) {
+			t.Errorf("alert %q Vars = %#v, want %#v", ruleID, a.Vars, want)
+		}
+	}
+
+	// Unmigrated alert_episodes lacking variables_json must safely return {} without mutating the store.
+	ro.Close()
+	watchSQL(t, s, `
+		DROP TABLE alert_episodes;
+		CREATE TABLE alert_episodes (
+			alert_id TEXT PRIMARY KEY,
+			rule_id TEXT NOT NULL,
+			subject_key TEXT NOT NULL,
+			episode_num INTEGER NOT NULL,
+			state TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			condition_fingerprint TEXT NOT NULL,
+			opened_seq INTEGER NOT NULL,
+			opened_at INTEGER NOT NULL,
+			last_observed_seq INTEGER NOT NULL,
+			last_observed_at INTEGER NOT NULL,
+			observation_count INTEGER NOT NULL DEFAULT 1,
+			silence_until_ms INTEGER,
+			silence_on_fingerprint TEXT,
+			acked_by TEXT,
+			acked_note TEXT,
+			acked_at INTEGER,
+			resolved_seq INTEGER,
+			resolved_at INTEGER,
+			resolved_reason TEXT,
+			bundle_json TEXT NOT NULL
+		);
+		INSERT INTO alert_episodes(alert_id,rule_id,subject_key,episode_num,state,severity,condition_fingerprint,
+			opened_seq,opened_at,last_observed_seq,last_observed_at,bundle_json)
+		VALUES ('old-1','r-single','it-1',1,'open','warning','fp',1,0,1,0,'{}');
+	`)
+	before, err := os.ReadFile(s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ro2, err := store.OpenRead(ctx, s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro2.Close()
+	e.Store = ro2
+	got2, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil {
+		t.Fatalf("ReadStatus on unmigrated alert_episodes: %v", err)
+	}
+	if len(got2.Alerts) != 1 || got2.Alerts[0].ID != "old-1" || got2.Alerts[0].Vars == nil || len(got2.Alerts[0].Vars) != 0 {
+		t.Fatalf("unmigrated alert Vars = %+v", got2.Alerts)
+	}
+	after, err := os.ReadFile(s.Path())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("ReadStatus mutated store on unmigrated schema: %v", err)
 	}
 }

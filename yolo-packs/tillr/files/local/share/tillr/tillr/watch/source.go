@@ -137,6 +137,7 @@ type memEpisode struct {
 	resolvedAt           sql.NullInt64
 	resolvedReason       sql.NullString
 	bundleJSON           string
+	variablesJSON        string
 }
 
 type memAlertEvent struct {
@@ -516,6 +517,7 @@ func (m *memoryState) readStatusInto(s *Status, rules []Rule) {
 			Severity: ep.severity,
 			Opened:   statusTime(ep.openedAt),
 			Observed: ep.observationCount,
+			Vars:     decodeVariablesJSON(ep.variablesJSON),
 		}
 		switch ep.state {
 		case "acknowledged":
@@ -870,6 +872,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 							memEp.lastObservedAt = now.UnixMilli()
 							memEp.observationCount++
 							memEp.conditionFingerprint = newest.fingerprint
+							memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
 						}
 					}
 					continue
@@ -905,6 +908,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 								memEp.lastObservedAt = now.UnixMilli()
 								memEp.observationCount++
 								memEp.conditionFingerprint = newest.fingerprint
+								memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
 							}
 							continue
 						}
@@ -913,6 +917,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 						memEp.lastObservedSeq = newest.Seq
 						memEp.lastObservedAt = now.UnixMilli()
 						memEp.observationCount++
+						memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
 					}
 				}
 				cause, recordedState := lookup.reopenCause(itemState, itemExists)
@@ -933,6 +938,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 				memEp.ackedLagPair = sql.NullString{}
 				memEp.conditionFingerprint = newest.fingerprint
 				memEp.bundleJSON = string(bundle)
+				memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
 				if err := m.appendEventLocked(reopenedKind, ep.id, now, map[string]any{
 					"alert_id": ep.id, "rule_id": r.ID, "subject_key": key,
 					"severity": r.Severity, "receiver": r.Delivery.Receiver,
@@ -992,6 +998,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 				observationCount:     1,
 				trackedLagPair:       lagPair,
 				bundleJSON:           string(bundle),
+				variablesJSON:        encodeVariablesJSON(extractVariables(r, key, c)),
 			})
 			if err := m.appendEventLocked(openedKind, id, now, map[string]any{
 				"alert_id": id, "rule_id": r.ID, "subject_key": key,
@@ -1031,6 +1038,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 				memEp.lastObservedAt = now.UnixMilli()
 				memEp.observationCount++
 				memEp.conditionFingerprint = newest.fingerprint
+				memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
 			}
 		}
 		if cause := ep.reopenCause(r, now, newest, currentLagPair); cause != "" {
@@ -1049,6 +1057,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			memEp.ackedLagPair = sql.NullString{}
 			memEp.conditionFingerprint = newest.fingerprint
 			memEp.bundleJSON = string(bundle)
+			memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
 			if err := m.appendEventLocked(reopenedKind, ep.id, now, map[string]any{
 				"alert_id": ep.id, "rule_id": r.ID, "subject_key": key,
 				"severity": r.Severity, "receiver": r.Delivery.Receiver,
@@ -1081,6 +1090,7 @@ func (m *memoryState) reopenLagWhenLocked(memEp *memEpisode, r Rule, key string,
 	memEp.lastObservedAt = now.UnixMilli()
 	memEp.observationCount++
 	memEp.bundleJSON = string(bundle)
+	memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
 	body := map[string]any{
 		"alert_id": memEp.alertID, "rule_id": r.ID, "subject_key": key,
 		"severity": r.Severity, "receiver": r.Delivery.Receiver,

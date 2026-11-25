@@ -35,6 +35,7 @@ func init() {
 		{"acked_seq", "INTEGER"},
 		{"acked_fingerprint", "TEXT"},
 		{"acked_lag_pair", "TEXT"},
+		{"variables_json", "TEXT NOT NULL DEFAULT '{}'"},
 	} {
 		if err := store.RegisterColumn("watch", "alert_episodes", col.name, col.decl); err != nil {
 			panic(err)
@@ -75,7 +76,8 @@ CREATE TABLE IF NOT EXISTS alert_episodes (
  resolved_seq INTEGER,
  resolved_at INTEGER,
  resolved_reason TEXT,
- bundle_json TEXT NOT NULL
+ bundle_json TEXT NOT NULL,
+ variables_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS alert_episodes_one_active
     ON alert_episodes(rule_id, subject_key) WHERE state != 'resolved';
@@ -1240,8 +1242,17 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 					} else {
 						newest := conditionNewest(r, c, ep.last)
 						if newest.Seq > ep.last {
+							varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
 							*changes = append(*changes, func(tx *store.Tx) error {
-								_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
+								hasVarsCol, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
+								if err != nil {
+									return err
+								}
+								if hasVarsCol {
+									_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=?,variables_json=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, varsJSON, ep.id)
+									return err
+								}
+								_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
 								return err
 							})
 						}
@@ -1277,8 +1288,17 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 						cutoff := max(ep.last, lookup.terminalSeq(trackedID))
 						if newest.Seq <= cutoff {
 							if newest.Seq > ep.last {
+								varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
 								*changes = append(*changes, func(tx *store.Tx) error {
-									_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
+									hasVarsCol, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
+									if err != nil {
+										return err
+									}
+									if hasVarsCol {
+										_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=?,variables_json=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, varsJSON, ep.id)
+										return err
+									}
+									_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
 									return err
 								})
 							}
@@ -1286,8 +1306,17 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 						}
 					}
 					if newest.Seq > ep.last {
+						varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
 						*changes = append(*changes, func(tx *store.Tx) error {
-							_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, newest.Seq, now.UnixMilli(), ep.id)
+							hasVarsCol, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
+							if err != nil {
+								return err
+							}
+							if hasVarsCol {
+								_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,variables_json=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), varsJSON, ep.id)
+								return err
+							}
+							_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, newest.Seq, now.UnixMilli(), ep.id)
 							return err
 						})
 					}
@@ -1350,8 +1379,17 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 		if r.When.Pattern != LagBehind {
 			newest = conditionNewest(r, c, ep.last)
 			if newest.Seq > ep.last {
+				varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
 				*changes = append(*changes, func(tx *store.Tx) error {
-					_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
+					hasVarsCol, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
+					if err != nil {
+						return err
+					}
+					if hasVarsCol {
+						_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=?,variables_json=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, varsJSON, ep.id)
+						return err
+					}
+					_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
 					return err
 				})
 			}
@@ -1438,18 +1476,33 @@ func (changes *episodeChanges) open(rd *store.Reader, r Rule, key string, c *con
 	if r.When.Pattern == LagBehind {
 		lagPair = c.lag.leaderOID + ":" + c.lag.followerOID
 	}
+	varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
 	return changes.transition(r, key, id, openedKind, now, map[string]any{"opened_seq": newest.Seq}, func(tx *store.Tx) error {
 		hasLagCol, err := alertEpisodesHasColumn(tx.Reader(), "tracked_lag_pair")
 		if err != nil {
 			return err
 		}
-		if hasLagCol {
-			_, err = tx.Exec(`INSERT INTO alert_episodes (alert_id,rule_id,subject_key,episode_num,state,severity,condition_fingerprint,opened_seq,opened_at,last_observed_seq,last_observed_at,tracked_lag_pair,bundle_json)
- VALUES (?,?,?,?,'open',?,?,?,?,?,?,?,?)`, id, r.ID, key, previous+1, r.Severity, newest.fingerprint, newest.Seq, now.UnixMilli(), newest.Seq, now.UnixMilli(), lagPair, string(bundle))
+		hasVarsCol, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
+		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`INSERT INTO alert_episodes (alert_id,rule_id,subject_key,episode_num,state,severity,condition_fingerprint,opened_seq,opened_at,last_observed_seq,last_observed_at,bundle_json)
- VALUES (?,?,?,?,'open',?,?,?,?,?,?,?)`, id, r.ID, key, previous+1, r.Severity, newest.fingerprint, newest.Seq, now.UnixMilli(), newest.Seq, now.UnixMilli(), string(bundle))
+		cols := []string{"alert_id", "rule_id", "subject_key", "episode_num", "state", "severity", "condition_fingerprint", "opened_seq", "opened_at", "last_observed_seq", "last_observed_at"}
+		vals := []any{id, r.ID, key, previous + 1, r.Severity, newest.fingerprint, newest.Seq, now.UnixMilli(), newest.Seq, now.UnixMilli()}
+		placeholders := []string{"?", "?", "?", "?", "'open'", "?", "?", "?", "?", "?", "?"}
+		if hasLagCol {
+			cols = append(cols, "tracked_lag_pair")
+			vals = append(vals, lagPair)
+			placeholders = append(placeholders, "?")
+		}
+		cols = append(cols, "bundle_json")
+		vals = append(vals, string(bundle))
+		placeholders = append(placeholders, "?")
+		if hasVarsCol {
+			cols = append(cols, "variables_json")
+			vals = append(vals, varsJSON)
+			placeholders = append(placeholders, "?")
+		}
+		_, err = tx.Exec(fmt.Sprintf(`INSERT INTO alert_episodes (%s) VALUES (%s)`, strings.Join(cols, ","), strings.Join(placeholders, ",")), vals...)
 		return err
 	})
 }
@@ -1459,18 +1512,35 @@ func (changes *episodeChanges) reopen(r Rule, key, id string, c *condition, fing
 	if err != nil {
 		return err
 	}
+	varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
 	return changes.transition(r, key, id, reopenedKind, now, map[string]any{"cause": cause}, func(tx *store.Tx) error {
 		hasAck, err := alertEpisodesHasColumn(tx.Reader(), "acked_seq")
 		if err != nil {
 			return err
 		}
-		if hasAck {
-			_, err = tx.Exec(`UPDATE alert_episodes SET state='open',silence_until_ms=NULL,silence_on_fingerprint=NULL,
- acked_by=NULL,acked_note=NULL,acked_at=NULL,acked_seq=NULL,acked_fingerprint=NULL,acked_lag_pair=NULL,condition_fingerprint=?,bundle_json=? WHERE alert_id=?`, fingerprint, string(bundle), id)
+		hasVars, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
+		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`UPDATE alert_episodes SET state='open',silence_until_ms=NULL,silence_on_fingerprint=NULL,
- acked_by=NULL,acked_note=NULL,acked_at=NULL,condition_fingerprint=?,bundle_json=? WHERE alert_id=?`, fingerprint, string(bundle), id)
+		sets := []string{
+			"state='open'",
+			"silence_until_ms=NULL",
+			"silence_on_fingerprint=NULL",
+			"acked_by=NULL",
+			"acked_note=NULL",
+			"acked_at=NULL",
+		}
+		if hasAck {
+			sets = append(sets, "acked_seq=NULL", "acked_fingerprint=NULL", "acked_lag_pair=NULL")
+		}
+		sets = append(sets, "condition_fingerprint=?", "bundle_json=?")
+		args := []any{fingerprint, string(bundle)}
+		if hasVars {
+			sets = append(sets, "variables_json=?")
+			args = append(args, varsJSON)
+		}
+		args = append(args, id)
+		_, err = tx.Exec("UPDATE alert_episodes SET "+strings.Join(sets, ",")+" WHERE alert_id=?", args...)
 		return err
 	})
 }
@@ -1480,6 +1550,7 @@ func (changes *episodeChanges) reopenTracked(r Rule, key, id string, c *conditio
 	if err != nil {
 		return err
 	}
+	varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
 	body := map[string]any{
 		"cause":      cause,
 		"item_id":    itemID,
@@ -1490,15 +1561,32 @@ func (changes *episodeChanges) reopenTracked(r Rule, key, id string, c *conditio
 		if err != nil {
 			return err
 		}
-		if hasAck {
-			_, err = tx.Exec(`UPDATE alert_episodes SET state='open',tracking_item_id=NULL,tracked_lag_pair=?,silence_until_ms=NULL,silence_on_fingerprint=NULL,
- acked_by=NULL,acked_note=NULL,acked_at=NULL,acked_seq=NULL,acked_fingerprint=NULL,acked_lag_pair=NULL,condition_fingerprint=?,bundle_json=? WHERE alert_id=?`,
-				lagPair, fingerprint, string(bundle), id)
+		hasVars, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
+		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`UPDATE alert_episodes SET state='open',tracking_item_id=NULL,tracked_lag_pair=?,silence_until_ms=NULL,silence_on_fingerprint=NULL,
- acked_by=NULL,acked_note=NULL,acked_at=NULL,condition_fingerprint=?,bundle_json=? WHERE alert_id=?`,
-			lagPair, fingerprint, string(bundle), id)
+		sets := []string{
+			"state='open'",
+			"tracking_item_id=NULL",
+			"tracked_lag_pair=?",
+			"silence_until_ms=NULL",
+			"silence_on_fingerprint=NULL",
+			"acked_by=NULL",
+			"acked_note=NULL",
+			"acked_at=NULL",
+		}
+		args := []any{lagPair}
+		if hasAck {
+			sets = append(sets, "acked_seq=NULL", "acked_fingerprint=NULL", "acked_lag_pair=NULL")
+		}
+		sets = append(sets, "condition_fingerprint=?", "bundle_json=?")
+		args = append(args, fingerprint, string(bundle))
+		if hasVars {
+			sets = append(sets, "variables_json=?")
+			args = append(args, varsJSON)
+		}
+		args = append(args, id)
+		_, err = tx.Exec("UPDATE alert_episodes SET "+strings.Join(sets, ",")+" WHERE alert_id=?", args...)
 		return err
 	})
 }
@@ -1508,6 +1596,7 @@ func (changes *episodeChanges) reopenLagWhen(r Rule, key, id string, c *conditio
 	if err != nil {
 		return err
 	}
+	varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
 	body := map[string]any{"cause": "reopen-when"}
 	if trackedID != "" {
 		body["item_id"] = trackedID
@@ -1522,6 +1611,10 @@ func (changes *episodeChanges) reopenLagWhen(r Rule, key, id string, c *conditio
 			return err
 		}
 		hasAck, err := alertEpisodesHasColumn(tx.Reader(), "acked_seq")
+		if err != nil {
+			return err
+		}
+		hasVars, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
 		if err != nil {
 			return err
 		}
@@ -1547,6 +1640,10 @@ func (changes *episodeChanges) reopenLagWhen(r Rule, key, id string, c *conditio
 		}
 		if hasAck {
 			sets = append(sets, "acked_seq=NULL", "acked_fingerprint=NULL", "acked_lag_pair=NULL")
+		}
+		if hasVars {
+			sets = append(sets, "variables_json=?")
+			args = append(args, varsJSON)
 		}
 		args = append(args, id)
 		_, err = tx.Exec("UPDATE alert_episodes SET "+strings.Join(sets, ",")+" WHERE alert_id=?", args...)

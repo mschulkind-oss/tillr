@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
@@ -184,27 +185,28 @@ type ruleBaseline struct {
 }
 
 type ruleDefinitionDigestInput struct {
-	Scope             string      `json:"scope"`
-	Events            []string    `json:"events"`
-	Projections       []string    `json:"projections"`
-	GroupBy           string      `json:"group_by"`
-	GroupByList       []string    `json:"group_by_list"`
-	Pattern           string      `json:"pattern"`
-	Field             string      `json:"field"`
-	DistinctBy        string      `json:"distinct_by,omitempty"`
-	Pairs             [][2]string `json:"pairs"`
-	Threshold         int64       `json:"threshold"`
-	ThresholdCommits  int64       `json:"threshold_commits"`
-	Window            int64       `json:"window"`
-	ThresholdDuration int64       `json:"threshold_duration"`
-	Leader            string      `json:"leader"`
-	Follower          string      `json:"follower"`
-	Mode              string      `json:"mode"`
-	Match             string      `json:"match"`
-	Reset             string      `json:"reset"`
-	ClearWhen         string      `json:"clear_when"`
-	After             string      `json:"after"`
-	ReopenWhen        string      `json:"reopen_when"`
+	Scope             string            `json:"scope"`
+	Variables         map[string]string `json:"variables,omitempty"`
+	Events            []string          `json:"events"`
+	Projections       []string          `json:"projections"`
+	GroupBy           string            `json:"group_by"`
+	GroupByList       []string          `json:"group_by_list"`
+	Pattern           string            `json:"pattern"`
+	Field             string            `json:"field"`
+	DistinctBy        string            `json:"distinct_by,omitempty"`
+	Pairs             [][2]string       `json:"pairs"`
+	Threshold         int64             `json:"threshold"`
+	ThresholdCommits  int64             `json:"threshold_commits"`
+	Window            int64             `json:"window"`
+	ThresholdDuration int64             `json:"threshold_duration"`
+	Leader            string            `json:"leader"`
+	Follower          string            `json:"follower"`
+	Mode              string            `json:"mode"`
+	Match             string            `json:"match"`
+	Reset             string            `json:"reset"`
+	ClearWhen         string            `json:"clear_when"`
+	After             string            `json:"after"`
+	ReopenWhen        string            `json:"reopen_when"`
 }
 
 func normalizeStrings(s []string) []string {
@@ -231,6 +233,7 @@ func exprSource(e *Expression) string {
 func definitionHash(r Rule) string {
 	in := ruleDefinitionDigestInput{
 		Scope:             r.Scope,
+		Variables:         r.Variables,
 		Events:            normalizeStrings(r.Reads.Events),
 		Projections:       normalizeStrings(r.Reads.Projections),
 		GroupBy:           r.When.GroupBy,
@@ -351,6 +354,7 @@ func ruleEqual(a, b Rule) bool {
 	return a.ID == b.ID &&
 		a.Scope == b.Scope &&
 		a.Enabled == b.Enabled &&
+		maps.Equal(a.Variables, b.Variables) &&
 		slices.Equal(a.Reads.Events, b.Reads.Events) &&
 		slices.Equal(a.Reads.Projections, b.Reads.Projections) &&
 		slices.Equal(a.When.Fingerprint, b.When.Fingerprint) &&

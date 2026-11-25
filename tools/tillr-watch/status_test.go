@@ -246,9 +246,9 @@ func TestWatchStatusSortedStoredRows(t *testing.T) {
 	}
 	want := `rule aaa skipped=0
 rule refusals skipped=0
-alert b rule=refusals subject="alice" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 until=change
-alert c rule=refusals subject="charlie" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 until=1970-01-01T00:00:03Z
-alert z rule=removed subject="bob" state=acknowledged severity=warning opened=1970-01-01T00:00:01Z observed=1 by="a\"b"
+alert b rule=refusals subject="alice" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"alice"} until=change
+alert c rule=refusals subject="charlie" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"charlie"} until=1970-01-01T00:00:03Z
+alert z rule=removed subject="bob" state=acknowledged severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"bob"} by="a\"b"
 owner foreground watcher=unattached last_wait=- pending=0
 owner z watcher=unattached last_wait=1970-01-01T00:00:02Z pending=0
 `
@@ -259,8 +259,204 @@ owner z watcher=unattached last_wait=1970-01-01T00:00:02Z pending=0
 	if code := run(ctx, append(args, "--json"), &out, &stderr); code != 0 {
 		t.Fatalf("status = %d: %s", code, &stderr)
 	}
-	want = `{"rules":[{"id":"aaa","skipped":0},{"id":"refusals","skipped":0}],"alerts":[{"alert_id":"b","rule_id":"refusals","subject":"alice","state":"silenced","severity":"warning","opened":"1970-01-01T00:00:01Z","observed":1,"until":"change"},{"alert_id":"c","rule_id":"refusals","subject":"charlie","state":"silenced","severity":"warning","opened":"1970-01-01T00:00:01Z","observed":1,"until":"1970-01-01T00:00:03Z"},{"alert_id":"z","rule_id":"removed","subject":"bob","state":"acknowledged","severity":"warning","opened":"1970-01-01T00:00:01Z","observed":1,"by":"a\"b"}],"owners":[{"owner":"foreground","attached":false,"since":null,"last_wait":null,"pending":0},{"owner":"z","attached":false,"since":null,"last_wait":"1970-01-01T00:00:02Z","pending":0}]}` + "\n"
+	want = `{"rules":[{"id":"aaa","skipped":0},{"id":"refusals","skipped":0}],"alerts":[{"alert_id":"b","rule_id":"refusals","subject":"alice","state":"silenced","severity":"warning","opened":"1970-01-01T00:00:01Z","observed":1,"vars":{"item_id":"alice"},"until":"change"},{"alert_id":"c","rule_id":"refusals","subject":"charlie","state":"silenced","severity":"warning","opened":"1970-01-01T00:00:01Z","observed":1,"vars":{"item_id":"charlie"},"until":"1970-01-01T00:00:03Z"},{"alert_id":"z","rule_id":"removed","subject":"bob","state":"acknowledged","severity":"warning","opened":"1970-01-01T00:00:01Z","observed":1,"vars":{"item_id":"bob"},"by":"a\"b"}],"owners":[{"owner":"foreground","attached":false,"since":null,"last_wait":null,"pending":0},{"owner":"z","attached":false,"since":null,"last_wait":"1970-01-01T00:00:02Z","pending":0}]}` + "\n"
 	if out.String() != want {
 		t.Fatalf("status:\n%s\nwant:\n%s", &out, want)
+	}
+}
+
+func TestWatchStatusVarsAndUnmigratedStore(t *testing.T) {
+	s, rules := fixture(t, false)
+	ctx := t.Context()
+
+	multiDoc := `
+[[rule]]
+id = "r-global"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["drain.refusal"]
+[rule.when]
+group_by = "global"
+pattern = "count_in_window"
+match = 'event.kind == "drain.refusal"'
+threshold = 1
+window = "1h"
+[rule.guidance]
+summary = "global"
+check = ["c"]
+do = ["d"]
+[rule.delivery]
+receiver = "foreground"
+
+[[rule]]
+id = "r-composite"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["drain.refusal"]
+[rule.when]
+group_by = ["lane_id", "reason"]
+pattern = "count_in_window"
+threshold = 1
+window = "1h"
+[rule.guidance]
+summary = "composite"
+check = ["c"]
+do = ["d"]
+[rule.delivery]
+receiver = "foreground"
+
+[[rule]]
+id = "r-vars"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["drain.refusal"]
+[rule.when]
+group_by = "detail.item_id"
+pattern = "count_in_window"
+threshold = 1
+window = "1h"
+[rule.variables]
+item = "detail.item_id"
+node = "detail.node"
+[rule.guidance]
+summary = "vars"
+check = ["c"]
+do = ["d"]
+[rule.delivery]
+receiver = "foreground"
+`
+	if err := os.WriteFile(filepath.Join(rules, "nested", "multi.toml"), []byte(multiDoc), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 {
+		t.Fatalf("init eval = %d: %s", code, &stderr)
+	}
+	fact(t, s, `{"item_id":"it-1","lane_id":"lane-1","reason":"dirty","detail":{"item_id":"it-1","node":"build"}}`)
+	fact(t, s, `{"item_id":"it-1","lane_id":"lane-1","reason":"dirty","detail":{"item_id":"it-1","node":"build"}}`)
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 {
+		t.Fatalf("eval = %d: %s", code, &stderr)
+	}
+
+	var out bytes.Buffer
+	args := []string{"status", "--store", s.Path(), "--rules", rules}
+	if code := run(ctx, args, &out, &stderr); code != 0 {
+		t.Fatalf("status text = %d: %s", code, &stderr)
+	}
+	text := out.String()
+	for _, want := range []string{
+		`rule=r-global `,
+		`vars={}`,
+		`rule=refusals `,
+		`vars={"item_id":"it-1"}`,
+		`rule=r-composite `,
+		`vars={"lane_id":"lane-1","reason":"dirty"}`,
+		`rule=r-vars `,
+		`vars={"item":"it-1","node":"build"}`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status text missing %q:\n%s", want, text)
+		}
+	}
+
+	out.Reset()
+	if code := run(ctx, append(args, "--json"), &out, &stderr); code != 0 {
+		t.Fatalf("status json = %d: %s", code, &stderr)
+	}
+	var report struct {
+		Alerts []struct {
+			RuleID string            `json:"rule_id"`
+			Vars   map[string]string `json:"vars"`
+		} `json:"alerts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("unmarshal status json: %v\n%s", err, &out)
+	}
+	gotVars := make(map[string]map[string]string, len(report.Alerts))
+	for _, a := range report.Alerts {
+		if a.Vars == nil {
+			t.Fatalf("alert %q had nil vars in JSON: %s", a.RuleID, &out)
+		}
+		gotVars[a.RuleID] = a.Vars
+	}
+	for ruleID, want := range map[string]map[string]string{
+		"r-global":    {},
+		"refusals":    {"item_id": "it-1"},
+		"r-composite": {"lane_id": "lane-1", "reason": "dirty"},
+		"r-vars":      {"item": "it-1", "node": "build"},
+	} {
+		got, ok := gotVars[ruleID]
+		if !ok {
+			t.Fatalf("missing alert for %q in %s", ruleID, &out)
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("alert %q vars = %v, want %v", ruleID, got, want)
+		}
+	}
+
+	// Unmigrated alert_episodes lacking variables_json must surface vars={} without mutating the store.
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(`
+			DROP TABLE alert_episodes;
+			CREATE TABLE alert_episodes (
+				alert_id TEXT PRIMARY KEY,
+				rule_id TEXT NOT NULL,
+				subject_key TEXT NOT NULL,
+				episode_num INTEGER NOT NULL,
+				state TEXT NOT NULL,
+				severity TEXT NOT NULL,
+				condition_fingerprint TEXT NOT NULL,
+				opened_seq INTEGER NOT NULL,
+				opened_at INTEGER NOT NULL,
+				last_observed_seq INTEGER NOT NULL,
+				last_observed_at INTEGER NOT NULL,
+				observation_count INTEGER NOT NULL DEFAULT 1,
+				silence_until_ms INTEGER,
+				silence_on_fingerprint TEXT,
+				acked_by TEXT,
+				acked_note TEXT,
+				acked_at INTEGER,
+				resolved_seq INTEGER,
+				resolved_at INTEGER,
+				resolved_reason TEXT,
+				bundle_json TEXT NOT NULL
+			);
+			INSERT INTO alert_episodes(alert_id,rule_id,subject_key,episode_num,state,severity,condition_fingerprint,
+				opened_seq,opened_at,last_observed_seq,last_observed_at,bundle_json)
+			VALUES ('old-1','refusals','it-1',1,'open','warning','fp',1,0,1,0,'{}');
+		`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := run(ctx, args, &out, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("unmigrated text status = %d, stderr=%s", code, &stderr)
+	}
+	if !strings.Contains(out.String(), `alert old-1 rule=refusals subject="it-1" state=open severity=warning opened=1970-01-01T00:00:00Z observed=1 vars={}`) {
+		t.Fatalf("unmigrated text status = %s", &out)
+	}
+
+	out.Reset()
+	if code := run(ctx, append(args, "--json"), &out, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("unmigrated json status = %d, stderr=%s", code, &stderr)
+	}
+	if !strings.Contains(out.String(), `"alert_id":"old-1"`) || !strings.Contains(out.String(), `"vars":{}`) {
+		t.Fatalf("unmigrated json status = %s", &out)
+	}
+
+	after, err := os.ReadFile(s.Path())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("status mutated unmigrated store: %v", err)
 	}
 }

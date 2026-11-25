@@ -73,7 +73,12 @@ func printStatus(ctx context.Context, e watch.Evaluator, path string, asJSON boo
 		if a.ItemID != nil {
 			suffix += " item=" + jsonString(*a.ItemID)
 		}
-		if _, err := fmt.Fprintf(out, "alert %s rule=%s subject=%s state=%s severity=%s opened=%s observed=%d%s\n", a.ID, a.RuleID, jsonString(a.Subject), a.State, a.Severity, a.Opened, a.Observed, suffix); err != nil {
+		varsMap := a.Vars
+		if varsMap == nil {
+			varsMap = map[string]string{}
+		}
+		varsJSON, _ := json.Marshal(varsMap)
+		if _, err := fmt.Fprintf(out, "alert %s rule=%s subject=%s state=%s severity=%s opened=%s observed=%d vars=%s%s\n", a.ID, a.RuleID, jsonString(a.Subject), a.State, a.Severity, a.Opened, a.Observed, string(varsJSON), suffix); err != nil {
 			return err
 		}
 	}

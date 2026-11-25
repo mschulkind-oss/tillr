@@ -126,6 +126,14 @@ func encodeConditionBundle(r Rule, key, id string, c *condition, summaryTemplate
 		}
 		base["distinct_values"] = strings.Join(vals, ", ")
 	}
+	vars := extractVariables(r, key, c)
+	for _, name := range r.VariableNames() {
+		val, ok := vars[name]
+		if !ok || val == "" {
+			val = "unknown"
+		}
+		base["var."+name] = val
+	}
 	render := func(lines []string) []string {
 		out := make([]string, len(lines))
 		for i, line := range lines {

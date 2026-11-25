@@ -920,3 +920,220 @@ receiver = "foreground"
 	assertHasLintCode(t, findings, CodeWatchLintRuleSchema, `must omit fingerprint`)
 	assertHasLintCode(t, findings, CodeWatchLintEmptyGuidance, `{{event.item_id}}`)
 }
+
+func TestLintRuleVariables(t *testing.T) {
+	registerLintTestKinds(t)
+
+	newLintRoot := func(t *testing.T, ruleTOML string) string {
+		t.Helper()
+		root := t.TempDir()
+		writeLintFile(t, root, "config/tillr/backend-policy.json", minimalPolicyJSON)
+		writeLintFile(t, root, "config/tillr/workflows/simple-build@v1.json", minimalLandingWorkflowJSON)
+		writeLintFile(t, root, "config/tillr/watch/rules.toml", ruleTOML)
+		return root
+	}
+
+	t.Run("valid_derived_aliased_and_declared_var_placeholders", func(t *testing.T) {
+		doc := `[[rule]]
+id = "vars-valid"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.refusal"]
+
+[rule.when]
+group_by = ["item_id", "detail.stage"]
+pattern = "count_in_window"
+match = 'event.kind == "drain.refusal"'
+threshold = 2
+window = "1h"
+
+[rule.variables]
+stage_alias = "detail.stage"
+reason = "detail.reason"
+
+[rule.guidance]
+summary = "Item {{var.item_id}} at {{var.stage_alias}} ({{var.reason}})."
+check = ["Check {{var.item_id}} on {{var.stage_alias}}."]
+do = ["Handle {{var.reason}} for {{var.item_id}}."]
+
+[rule.delivery]
+receiver = "foreground"
+`
+		findings, err := Lint(context.Background(), LintOptions{Root: newLintRoot(t, doc)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(findings) != 0 {
+			t.Fatalf("expected 0 findings, got %v", findings)
+		}
+	})
+
+	t.Run("schema_errors_on_rule_variables", func(t *testing.T) {
+		base := func(topExtra, sectionExtra, summary string) string {
+			return `[[rule]]
+id = "vars-bad"
+scope = "core"
+severity = "warning"
+` + topExtra + `
+
+[rule.reads]
+events = ["drain.refusal"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "count_in_window"
+match = 'event.kind == "drain.refusal"'
+threshold = 2
+window = "1h"
+` + sectionExtra + `
+
+[rule.guidance]
+summary = "` + summary + `"
+check = ["Inspect {{subject}}."]
+do = ["Fix {{subject}}."]
+
+[rule.delivery]
+receiver = "foreground"
+`
+		}
+
+		lagWithVars := `[[rule]]
+id = "lag-vars"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+projections = ["git_refs:refs/heads/main,refs/heads/proved"]
+
+[rule.when]
+group_by = "global"
+pattern = "lag_behind"
+leader = "refs/heads/main"
+follower = "refs/heads/proved"
+threshold_commits = 1
+
+[rule.variables]
+item = "item_id"
+
+[rule.guidance]
+summary = "Lag {{count}}."
+check = ["Check lag."]
+do = ["Advance proved."]
+
+[rule.delivery]
+receiver = "foreground"
+`
+
+		cases := []struct {
+			name string
+			doc  string
+			want string
+		}{
+			{"non_table", base(`variables = "bad"`, "", "Summary {{subject}}."), "expected a table"},
+			{"ident_digit", base("", "[rule.variables]\n\"1bad\" = \"detail.x\"", "Summary {{subject}}."), "ASCII identifier"},
+			{"ident_hyphen", base("", "[rule.variables]\n\"bad-name\" = \"detail.x\"", "Summary {{subject}}."), "ASCII identifier"},
+			{"ident_dot", base("", "[rule.variables]\n\"bad.name\" = \"detail.x\"", "ASCII identifier"), "ASCII identifier"},
+			{"path_empty", base("", "[rule.variables]\nx = \"\"", "Summary {{subject}}."), "non-empty event path"},
+			{"path_leading_dot", base("", "[rule.variables]\nx = \".foo\"", "Summary {{subject}}."), "non-empty event path"},
+			{"path_trailing_dot", base("", "[rule.variables]\nx = \"foo.\"", "Summary {{subject}}."), "non-empty event path"},
+			{"path_double_dot", base("", "[rule.variables]\nx = \"foo..bar\"", "Summary {{subject}}."), "non-empty event path"},
+			{"path_event_prefix", base("", "[rule.variables]\nx = \"event.foo\"", "Summary {{subject}}."), "non-empty event path"},
+			{"path_whitespace", base("", "[rule.variables]\nx = \"foo bar\"", "Summary {{subject}}."), "non-empty event path"},
+			{"path_non_string", base("", "[rule.variables]\nx = 123", "Summary {{subject}}."), "non-empty event path"},
+			{"collision", base("", "[rule.variables]\nitem_id = \"other.path\"", "Summary {{subject}}."), "collides"},
+			{"lag_behind_forbidden", lagWithVars, "not allowed on lag_behind"},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				findings, err := Lint(context.Background(), LintOptions{Root: newLintRoot(t, tc.doc)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertHasLintCode(t, findings, CodeWatchLintRuleSchema, tc.want)
+			})
+		}
+	})
+
+	t.Run("invalid_var_guidance_placeholders", func(t *testing.T) {
+		unknownVar := `[[rule]]
+id = "unknown-var"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["drain.refusal"]
+[rule.when]
+group_by = "item_id"
+pattern = "count_in_window"
+match = 'event.kind == "drain.refusal"'
+threshold = 2
+window = "1h"
+[rule.guidance]
+summary = "Unknown {{var.missing}}."
+check = ["Check {{var.item_id}}."]
+do = ["Fix {{var.item_id}}."]
+[rule.delivery]
+receiver = "foreground"
+`
+
+		globalVar := `[[rule]]
+id = "global-var"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["drain.refusal"]
+[rule.when]
+group_by = "global"
+pattern = "count_in_window"
+match = 'event.kind == "drain.refusal"'
+threshold = 2
+window = "1h"
+[rule.guidance]
+summary = "Global {{var.item_id}}."
+check = ["Check global."]
+do = ["Fix global."]
+[rule.delivery]
+receiver = "foreground"
+`
+
+		lagVar := `[[rule]]
+id = "lag-var"
+scope = "core"
+severity = "warning"
+[rule.reads]
+projections = ["git_refs:refs/heads/main,refs/heads/proved"]
+[rule.when]
+group_by = "global"
+pattern = "lag_behind"
+leader = "refs/heads/main"
+follower = "refs/heads/proved"
+threshold_commits = 1
+[rule.guidance]
+summary = "Lag {{var.anything}}."
+check = ["Check lag."]
+do = ["Advance proved."]
+[rule.delivery]
+receiver = "foreground"
+`
+
+		for _, tc := range []struct {
+			name string
+			doc  string
+			want string
+		}{
+			{"unknown_var", unknownVar, "{{var.missing}}"},
+			{"global_rule_var", globalVar, "{{var.item_id}}"},
+			{"lag_behind_var", lagVar, "{{var.anything}}"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				findings, err := Lint(context.Background(), LintOptions{Root: newLintRoot(t, tc.doc)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertHasLintCode(t, findings, CodeWatchLintEmptyGuidance, tc.want)
+			})
+		}
+	})
+}
