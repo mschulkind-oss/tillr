@@ -3,7 +3,7 @@ rewrite = true
 
 [lanes]
 # Reserves lanes for express items.
-express = 1
+express = 2
 
 [candidate_size]
 # Sets advisory thresholds recorded beside each verifier refusal; neither blocks landing.
