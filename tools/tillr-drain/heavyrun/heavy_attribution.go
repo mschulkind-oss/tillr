@@ -180,7 +180,7 @@ func (r HeavyRunner) RetainRedRepairs(ctx context.Context, run *HeavyRun, order 
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
-				if CleanupLost(err) || errors.Is(err, ErrRestartPending) {
+				if CleanupLost(err) {
 					return nil, err
 				}
 				if err == nil && !red {

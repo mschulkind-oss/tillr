@@ -158,16 +158,6 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				}
 				return nil
 			}
-			runner.BeforeReplay = func(bctx context.Context) error {
-				stop, err := l.restartStopsNextHeavyProof(bctx)
-				if err != nil {
-					return err
-				}
-				if stop {
-					return errRestartPending
-				}
-				return nil
-			}
 			runner.WithWorktreeRegistryLock = withWorktreeRegistryLock
 			runner.UnlockRegisteredWorktree = unlockRegisteredWorktree
 			if l.gatePolicy.AutoRevert {

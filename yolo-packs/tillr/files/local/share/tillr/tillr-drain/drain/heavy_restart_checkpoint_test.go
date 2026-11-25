@@ -10,7 +10,7 @@ import (
 )
 
 func TestHeavyReplacementKeepsProofAndReplayResults(t *testing.T) {
-	for _, hold := range []string{"proof", "replay", "completed"} {
+	for _, hold := range []string{"proof", "replay"} {
 		t.Run(hold, func(t *testing.T) {
 			h := newRestartHarness(t, []byte("replacement"), func(context.Context, string) error { return nil }, "")
 			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
@@ -41,30 +41,18 @@ func TestHeavyReplacementKeepsProofAndReplayResults(t *testing.T) {
 			if err := h.l.startHeavy(ctx, tip); err != nil {
 				t.Fatal(err)
 			}
-			var request restart.Request
-			if hold == "completed" {
-				h.l.heavyWG.Wait()
-				request = h.request(t, 1)[0]
-			} else {
-				awaitRestartTest(t, entered, "live "+hold)
-				request = h.request(t, 1)[0]
-				_, stop, err := h.l.gateRestart(ctx, &LoopResult{})
-				close(release)
-				h.l.heavyWG.Wait()
-				if err != nil || stop != "" || h.execed != nil {
-					t.Fatalf("replacement discarded live %s: %s, %v, %v", hold, stop, err, h.execed)
-				}
+			awaitRestartTest(t, entered, "live "+hold)
+			request := h.request(t, 1)[0]
+			_, stop, err := h.l.gateRestart(ctx, &LoopResult{})
+			close(release)
+			h.l.heavyWG.Wait()
+			if err != nil || stop != "" || h.execed != nil {
+				t.Fatalf("replacement discarded live %s: %s, %v, %v", hold, stop, err, h.execed)
 			}
 			if _, stop, err := h.l.gateRestart(ctx, &LoopResult{}); err != nil || stop != StopRestarted {
 				t.Fatalf("replacement after checkpoint=%s, %v", stop, err)
 			}
 			wantOld := []string{":" + tip, "unit:" + base, "unit:" + tip}
-			switch hold {
-			case "proof":
-				wantOld = []string{":" + tip}
-			case "replay":
-				wantOld = []string{":" + tip, "unit:" + base}
-			}
 			if !reflect.DeepEqual(calls, wantOld) {
 				t.Fatalf("old image calls=%v want=%v", calls, wantOld)
 			}
@@ -72,25 +60,29 @@ func TestHeavyReplacementKeepsProofAndReplayResults(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if hold != "proof" {
-				if red, ok := readHeavyReplay(dir, base, "unit"); red || !ok {
-					t.Fatal("finished replay was not recorded")
-				}
+			if red, ok := readHeavyReplay(dir, base, "unit"); red || !ok {
+				t.Fatal("finished replay was not recorded")
+			}
+			completed, ok := completedHeavyRed(dir, base, tip)
+			if !ok {
+				t.Fatal("red proof did not publish completed red before restart")
+			}
+			if len(completed.Checks) != 1 || completed.Checks[0].FirstRedLanding != tip {
+				t.Fatalf("completed checks = %+v, want first red landing %s", completed.Checks, tip)
+			}
+			events := readHeavyProgressEvents(t, h.l.cfg.Store)
+			if len(events) == 0 {
+				t.Fatal("expected heavy progress events")
+			}
+			wantEnded := HeavyProgressFact{TipSHA: tip, Phase: "ended", Outcome: "red", FailingChecks: "unit"}
+			if last := events[len(events)-1].Fact; last != wantEnded {
+				t.Fatalf("ended progress event = %+v, want %+v", last, wantEnded)
 			}
 			// The replacement has no old goroutine, attempted tip, or in-memory result.
-			var nextCalls []string
 			next := &Loop{cfg: h.l.cfg}
-			next.cfg.Steps = heavyTestSteps{judge: func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
-				sha := heavyGit(t, dir, "rev-parse", "HEAD")
-				nextCalls = append(nextCalls, only+":"+sha)
-				if hold == "completed" {
-					t.Error("replacement reran the completed proof")
-				}
-				result := "fail"
-				if sha == base {
-					result = "pass"
-				}
-				return []HeavyCheck{{CheckID: "unit", Result: result}}, nil
+			next.cfg.Steps = heavyTestSteps{judge: func(context.Context, string, string) ([]HeavyCheck, error) {
+				t.Error("replacement reran the completed proof")
+				return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
 			}}
 			t.Setenv(restart.RequestEnv, request.ID)
 			t.Setenv(restart.FromEnv, "old-build")
@@ -104,23 +96,11 @@ func TestHeavyReplacementKeepsProofAndReplayResults(t *testing.T) {
 				t.Fatal(err)
 			}
 			next.heavyWG.Wait()
-			var wantNext []string
-			switch hold {
-			case "proof":
-				wantNext = []string{":" + tip, "unit:" + base, "unit:" + tip}
-			case "replay":
-				wantNext = []string{":" + tip, "unit:" + tip}
-			case "completed":
-				wantNext = nil
-			}
-			if !reflect.DeepEqual(nextCalls, wantNext) {
-				t.Fatalf("replacement calls=%v want=%v", nextCalls, wantNext)
-			}
 		})
 	}
 }
 
-func TestPendingRestartTakenBetweenFirstRedReplaysAndSearchResumesWithoutRepeat(t *testing.T) {
+func TestRedProofFinishesAttributionBeforePendingRestartAndNextLoopReusesReplays(t *testing.T) {
 	h := newRestartHarness(t, []byte("replacement"), func(context.Context, string) error { return nil }, "")
 	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
@@ -153,7 +133,7 @@ func TestPendingRestartTakenBetweenFirstRedReplaysAndSearchResumesWithoutRepeat(
 		if isGreen(sha) {
 			result = "pass"
 		}
-		return []HeavyCheck{{CheckID: "unit", Result: result}}, nil
+		return []HeavyCheck{{CheckID: "unit", Result: result, Detail: "first failure"}}, nil
 	}}
 
 	if err := h.l.startHeavy(ctx, c3); err != nil {
@@ -169,22 +149,34 @@ func TestPendingRestartTakenBetweenFirstRedReplaysAndSearchResumesWithoutRepeat(
 	close(releaseBaseReplay)
 	h.l.heavyWG.Wait()
 
-	wantOld := []string{":" + c3, "unit:" + base}
-	if !reflect.DeepEqual(oldCalls, wantOld) {
-		t.Fatalf("old image calls = %v, want %v (next replay must not start while restart is pending)", oldCalls, wantOld)
-	}
 	dir, err := heavyDirectory(ctx, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := completedHeavyRed(dir, base, c3); ok {
-		t.Fatal("interrupted first-red search published a completed red proof")
+	completed, ok := completedHeavyRed(dir, base, c3)
+	if !ok {
+		t.Fatal("red proof did not finish and publish before pending restart")
+	}
+	if len(completed.Checks) != 1 || completed.Checks[0].FirstRedLanding != c2 {
+		t.Fatalf("completed checks = %+v, want first red landing %s", completed.Checks, c2)
+	}
+	events := readHeavyProgressEvents(t, h.l.cfg.Store)
+	if len(events) == 0 {
+		t.Fatal("expected heavy progress events")
+	}
+	wantEnded := HeavyProgressFact{TipSHA: c3, Phase: "ended", Outcome: "red", FailingChecks: "unit"}
+	if last := events[len(events)-1].Fact; last != wantEnded {
+		t.Fatalf("ended progress event = %+v, want %+v", last, wantEnded)
 	}
 
 	if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); !handled || stop != StopRestarted || err != nil || h.execed == nil {
-		t.Fatalf("gateRestart after first replay = %v, %q, %v (execed=%v); want replaced", handled, stop, err, h.execed)
+		t.Fatalf("gateRestart after red proof finished = %v, %q, %v (execed=%v); want replaced", handled, stop, err, h.execed)
 	}
 
+	// A new commit lands and the replacement loop proves it with a different failure detail
+	// so attribution cannot short-circuit on heavy-attributions.json; it must still reuse
+	// the replays recorded before the restart instead of searching from the beginning.
+	c4 := heavyCommit(t, root, "red-after-restart")
 	var nextCalls []string
 	next := &Loop{cfg: h.l.cfg}
 	next.cfg.Steps = heavyTestSteps{judge: func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
@@ -194,7 +186,7 @@ func TestPendingRestartTakenBetweenFirstRedReplaysAndSearchResumesWithoutRepeat(
 		if isGreen(sha) {
 			result = "pass"
 		}
-		return []HeavyCheck{{CheckID: "unit", Result: result}}, nil
+		return []HeavyCheck{{CheckID: "unit", Result: result, Detail: "second failure"}}, nil
 	}}
 	t.Setenv(restart.RequestEnv, req.ID)
 	t.Setenv(restart.FromEnv, "old-build")
@@ -202,25 +194,24 @@ func TestPendingRestartTakenBetweenFirstRedReplaysAndSearchResumesWithoutRepeat(
 		t.Fatal(err)
 	}
 	if ans := h.answer(t, req.ID); ans.Answer != restart.AnswerRestarted {
-		t.Fatalf("restart answer before next replay = %+v, want %q", ans, restart.AnswerRestarted)
+		t.Fatalf("restart answer = %+v, want %q", ans, restart.AnswerRestarted)
 	}
 
-	if err := next.startHeavy(ctx, c3); err != nil {
+	if err := next.startHeavy(ctx, c4); err != nil {
 		t.Fatal(err)
 	}
 	next.heavyWG.Wait()
 
-	if slices.Contains(nextCalls, "unit:"+base) {
-		t.Fatalf("replacement repeated already-judged replay at base %s: calls=%v", base, nextCalls)
+	for _, alreadyJudged := range []string{base, c1, c2} {
+		if slices.Contains(nextCalls, "unit:"+alreadyJudged) {
+			t.Fatalf("replacement repeated already-judged replay at %s: calls=%v (old calls=%v)", alreadyJudged, nextCalls, oldCalls)
+		}
 	}
-	if !slices.Contains(nextCalls, "unit:"+c3) {
-		t.Fatalf("replacement did not continue search with next replay at tip %s: calls=%v", c3, nextCalls)
-	}
-	completed, ok := completedHeavyRed(dir, base, c3)
+	completedNext, ok := completedHeavyRed(dir, base, c4)
 	if !ok {
-		t.Fatal("replacement did not complete the red proof")
+		t.Fatal("replacement did not complete the red proof at new tip")
 	}
-	if len(completed.Checks) != 1 || completed.Checks[0].FirstRedLanding != c2 {
-		t.Fatalf("completed checks = %+v, want first red landing %s", completed.Checks, c2)
+	if len(completedNext.Checks) != 1 || completedNext.Checks[0].FirstRedLanding != c2 {
+		t.Fatalf("replacement completed checks = %+v, want first red landing %s", completedNext.Checks, c2)
 	}
 }
