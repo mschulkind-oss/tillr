@@ -333,6 +333,69 @@ receives a digest of its declared inputs (scoped to the active subset's inputs w
 in `TILLR_GATE_EDGE_INPUTS`, which the package's tests read once so Go's test cache reruns
 the package when an edge input changes and answers from cache when it does not.
 
+**Failure triage and `SIGQUIT`-blocked test cases ([`D-GR52`](#D-GR52)).** This subsection
+states a designer's decision made from an operator request; it is not an owner ruling, and
+the owner may overturn it. Designed and not yet built (`rg 'SIGQUIT: quit'
+tools/gate/go_affected.py` and `rg 'fork-check: triage' tools/gate/` return nothing). Commit
+`cf31b7e8` added the binary stall watchdog (`_watch_go_test_binaries` in
+[`tools/gate/go_affected.py`](../../tools/gate/go_affected.py)), which sends `SIGQUIT` to an
+idle `.test` binary, and an operator can send `SIGQUIT` the same way. When a Go test binary
+ends on `SIGQUIT`, Go writes `SIGQUIT: quit` and all goroutine stacks without emitting a
+test-level `"Action": "fail"` event or `--- FAIL:` line for the running test. Commit
+`11650445` retired `tools/fork-check.py` (which formerly built the failing-case list and
+printed the `fork-check: triage --` block), while `gateFailingChecks` in
+[`tools/tillr-drain/drain/returned.go`](../../tools/tillr-drain/drain/returned.go) already
+calls `readTriageBlock`
+([`tools/tillr-drain/drain/refusal_cases.go`](../../tools/tillr-drain/drain/refusal_cases.go))
+directly on `go-affected`'s recorded check log (`change-logs/<NN>-go-affected.log`). To make
+`drain.refusal` name blocked tests while changing only
+[`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) (and its unit tests in
+[`tests/go-affected.test.py`](../../tests/go-affected.test.py)):
+
+1. **`SIGQUIT` case extraction.** When `go_affected.py` reads a test binary's output
+   (reconstructed in event order from `go test -json` `"Output"` chunks or plain lines) that
+   contains `SIGQUIT: quit`, it adds one failing case per unique top-level test function
+   named in that binary's goroutine stacks — a stack frame line of the form
+   `<package>.Test<Name>(` (matching Go's top-level `Test*` naming rule as in
+   `scan_package_tests` and excluding `TestMain`, closures such as `.Test<Name>.func1(`, and
+   `created by` lines). Each case sets `name` to `Test<Name>`, `assertion` to
+   `"blocked: the test binary was ended by SIGQUIT while this test was running"`, and
+   `where` to the stack frame line immediately below the `<package>.Test<Name>(` frame line
+   stripped of surrounding whitespace (or `"(no file named)"` on the printed `case:` line
+   only if no line follows). When `<package>` ends in `_test` for an external test package,
+   its Go package import path strips `_test` when matching the invocation's package so both
+   `failed_tests` (in `go-affected: failing packages and tests:`, preserving
+   `parse_go_test_json`'s `(results, readable)` return tuple) and the `one case:` command
+   name the real import path.
+2. **Ordering and bounded triage block.** On any failing run (`rc_all != 0`),
+   `go_affected.py` builds a deduplicated failing-case list across all failed invocations in
+   which **all `SIGQUIT` cases come first** (and `SIGQUIT` test names likewise come first in
+   each package's `failed_tests` list), ahead of ordinary failing cases parsed from
+   `--- FAIL:` blocks (carrying the first `<file>:<line>: <assertion>` line and
+   `<package> (<file>:<line>)` or `<package>` as `where`) and any remaining `failed_tests`
+   entries not already covered. Immediately before `format_failure_summary`
+   (`go-affected: failing packages and tests:`, kept at the end of standard output so
+   trailing-line excerpts keep the package summary), `go_affected.py` prints a bounded
+   `fork-check: triage -- 1 failed check(s), diagnosed from this run's own output and never re-run:`
+   block with header `  triage go-affected: Go test packages affected by the change pass`
+   ([`tools/gate/checks/go-affected.json`](../../tools/gate/checks/go-affected.json)),
+   keeping at most `TRIAGE_CASES = 10` cases (`       case: <name> -- <where>`,
+   `       assertion: <assertion>`, and `       one case: go -C <module> test <pkg_rel> -run '^<name>$'`
+   when the package resolves to a module directory, plus
+   `       (<dropped> more failing case(s) not listed; the packet keeps <kept>)` when
+   truncated, or
+   `       no case named in the output; reproduce with: python3 tools/gate/go_affected.py`
+   when no case was named). Placing `SIGQUIT` cases first ensures the 10-case triage bound
+   and `failureSummary` in [`refusal_cases.go`](../../tools/tillr-drain/drain/refusal_cases.go)
+   keep the blocked test in `drain.refusal` ahead of other failing tests.
+3. **Scope boundary.** Only [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py)
+   and its unit test suite [`tests/go-affected.test.py`](../../tests/go-affected.test.py)
+   change for that item; [`tools/tillr-drain/`](../../tools/tillr-drain/),
+   [`tools/tillr-gate/`](../../tools/tillr-gate/),
+   [`tools/go-test-shards.py`](../../tools/go-test-shards.py), `-timeout 0` and Go's
+   `"panic: test timed out"` output, who sends `SIGQUIT`, and the blocked test itself stay
+   untouched.
+
 **Gate code never lands on deferred proof ([`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50), and
 [`I3`](#I3)).** Under either `landing_strategy` (`before-merge` or `after-merge`), a change
 to the gate's own code (`tools/tillr-gate/` and `tools/gate/`, fenced as its own item by
@@ -629,6 +692,13 @@ with `tillr-gate` on `PATH`. To run one heavy check: `just done --only <id>`.
   (`rg -c 'build_tests' tools/gate/go-test-edges.json tools/gate/go_affected.py` returns `0`),
   so a change to a built sibling binary still runs every test in each package whose `builds`
   list names it.
+- **`SIGQUIT`-blocked test triage in `go-affected` ([`D-GR52`](#D-GR52)) is not built.**
+  [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) neither extracts top-level
+  `<package>.Test<Name>(` frames from `SIGQUIT: quit` goroutine stacks nor prints a bounded
+  `fork-check: triage --` block for `readTriageBlock`
+  (`rg 'SIGQUIT: quit' tools/gate/go_affected.py` and `rg 'fork-check: triage' tools/gate/`
+  return nothing), so a test binary ended by `SIGQUIT` is not yet named as a blocked failing
+  case in `drain.refusal`.
 - **The drain's stall re-gate and `gate-stalled` hold are the only stall recovery.** A stalled
   check in `just done` is reported as "could not judge" and nothing re-runs it.
 - **`reads` is trusted.** Nothing verifies that a check reads only what it declares, and
@@ -868,6 +938,7 @@ may overturn any of them.
 | <a id="D-GR49"></a>`D-GR49` | `tools/go-test-shards.py` gains explicit `--cache` (default stays uncached), running packages under 100 top-level tests as one group and sharding larger ones without `-count=1` with per-package and per-bucket edge digests and per-package cache-hit evidence, while refusing `--cache` inside a lane worker (`TILLR_RUN_ID` set); amended 2026-11-24 by `D-GTC4` in [gate test capacity](../design/gate-test-capacity.md) (`go_affected.py` shard ceiling `2 * os.cpu_count()`, `go-test-shards.py` at `12`). Rejected: unkeyed caching below 100 tests, replacing the suite runner, keeping large packages uncached, or making `--cache` the default. | 2026-11-23; amended 2026-11-24 | [Go test execution](#go-test-execution) | Yes |
 | <a id="D-GR50"></a>`D-GR50` | Amends [`OQ-GR3`](#OQ-GR3), [`D-GR30`](#D-GR30), [`D-GR39`](#D-GR39), [`D-GR43`](#D-GR43) and [`D-GR49`](#D-GR49): moves whole-module `tools/tillr` (`go-test-tillr`) to after the merge; brings `tools/tillr` and `tools/tillr-gate` into `go-affected` so affected Go packages of all ten modules run before the merge with cache on; splits the gate runner's check so before the merge it watches `tools/tillr-gate/`, `tools/gate/` and the pack mirror of `tillr-gate` and runs the two Python runner suites (never deferred) while after the merge it runs the whole `tools/tillr-gate` Go suite plus both Python suites; and blocks `tools/tillr-gate/` or `tools/tillr/` landings when `go` is missing rather than deferring. **Rejected:** keeping the two modules excluded from `go-affected`; **moving the gate runner's Python suites out of the pre-merge gate to after the merge** (lets a broken adapter land unjudged, violating [`OQ-GR3`](#OQ-GR3)); renaming after-merge check ids; **allowing a `tools/tillr-gate/` Go edit to land when `go` is missing because a pre-merge check is Python-only**. See [`OQ-GR6`](#OQ-GR6) for the current check-declaration conflict. | 2026-11-23 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [`OQ-GR6`](#OQ-GR6) | Partly ([`OQ-GR6`](#OQ-GR6)) |
 | <a id="D-GR51"></a>`D-GR51` | Counterpart of [`D-GR44`](#D-GR44) for built sibling programs: optional `build_tests` in `tools/gate/go-test-edges.json` narrowing `builds` edges to named tests when all triggering edges are narrowed (widening to the whole package on any wider reason), with subset-scoped edge digests and deterministic tests. Rejected: keeping builds package-wide, dropping build edges, replacing string lists with objects, or editing the drain's input helper in the same item. | 2026-11-24 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [Known gaps](#known-gaps) | No |
+| <a id="D-GR52"></a>`D-GR52` | **From an operator request; the designer's decision, not an owner ruling (the owner may overturn it).** When `tools/gate/go_affected.py` reads a test binary's output containing `SIGQUIT: quit`, it extracts one failing case per unique top-level test function in that binary's goroutine stacks (`<package>.Test<Name>(`, matching Go's top-level `Test*` rule and excluding `TestMain` and closures), with `assertion` `"blocked: the test binary was ended by SIGQUIT while this test was running"` and the trimmed stack frame line immediately below `<package>.Test<Name>(` as `where`, prepending those tests first in both `failed_tests` and `go_affected.py`'s failing-case list (ahead of `--- FAIL:` and remaining `failed_tests` cases) and printing a `TRIAGE_CASES = 10` bounded `fork-check: triage --` block for `go-affected` immediately before `format_failure_summary` so `readTriageBlock` in `tools/tillr-drain/drain/refusal_cases.go` populates `drain.refusal` with no change outside `tools/gate/go_affected.py` and `tests/go-affected.test.py`. **Rejected:** editing `tools/tillr-drain/`, `tools/tillr-gate/` or `tools/go-test-shards.py` against the request's `"Change nothing else"` scope; appending `SIGQUIT` cases after ordinary `--- FAIL:` cases where bounded triage drops them; matching `TestMain` or `.funcN(` closures as top-level test cases; changing `parse_go_test_json`'s 2-tuple return signature. | 2026-11-25, designer, from an operator request | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [Known gaps](#known-gaps) | No |
 | <a id="D-FG1"></a>`D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. No range since the last green is read. Keeping an untiered range is rejected: its cost grows with the red range. | 2026-11-24 | [The trunk fixer's gate](#the-trunk-fixers-gate) | Yes |
 | <a id="D-FG2"></a>`D-FG2` | A fixer stays excluded from acquittal only for the checks it names. For any other check it is judged as any candidate is, except that it is never held behind itself or behind a fixer that waits on it. A second fixer for the same commit is rejected. | 2026-11-24 | [The trunk fixer's gate](#the-trunk-fixers-gate) | Yes |
 | <a id="D-FG3"></a>`D-FG3` | A `patch-branch-inv2` check red on a candidate and its base with the same refusal against the same target ref, on a candidate that does not touch the fork, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. The lander never rebases and never writes the pin file; the operator takes no step. | 2026-11-24 | [Upstream drift](#upstream-drift) | Yes |
