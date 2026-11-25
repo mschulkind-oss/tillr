@@ -192,11 +192,40 @@ func (l *Loop) clearRestartPending() {
 	ch := l.restartPendingWait
 	l.restartPendingWait = nil
 	l.restartHoldWaiting = false
+	l.conflictRestartWaits = nil
 	l.restartAnswerGen++
 	l.restartGateMu.Unlock()
 	if ch != nil {
 		close(ch)
 	}
+}
+
+func (l *Loop) noteConflictRestartWait(runID, headSHA, trunkSHA string) {
+	if runID == "" || trunkSHA == "" {
+		return
+	}
+	l.restartGateMu.Lock()
+	if l.conflictRestartWaits == nil {
+		l.conflictRestartWaits = map[string]conflictRestartWait{}
+	}
+	l.conflictRestartWaits[runID] = conflictRestartWait{headSHA: headSHA, trunkSHA: trunkSHA}
+	l.restartGateMu.Unlock()
+}
+
+func (l *Loop) hasConflictRestartWait(runID, headSHA, trunkSHA string) bool {
+	if runID == "" || trunkSHA == "" {
+		return false
+	}
+	l.restartGateMu.Lock()
+	w, ok := l.conflictRestartWaits[runID]
+	l.restartGateMu.Unlock()
+	if !ok || w.trunkSHA != trunkSHA {
+		return false
+	}
+	if w.headSHA != "" && headSHA != "" && w.headSHA != headSHA {
+		return false
+	}
+	return true
 }
 
 func (l *Loop) restartWaitState() (uint64, <-chan struct{}) {

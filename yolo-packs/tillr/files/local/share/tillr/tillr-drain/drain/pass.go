@@ -95,6 +95,8 @@ type pendingWork struct {
 	ReopenedHeadSHA      string    `json:"-"`
 	ReopenedBaseSHA      string    `json:"-"`
 	ReopenedWriterRunID  string    `json:"-"`
+	ConflictHeadSHA      string    `json:"-"`
+	ConflictTrunkSHA     string    `json:"-"`
 	examinationStartedAt time.Time `json:"-"`
 }
 
@@ -312,12 +314,29 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 			}
 		case "land.landing":
 			var landing struct {
-				RunID string `json:"run_id"`
+				RunID       string `json:"run_id"`
+				Result      string `json:"result"`
+				HeadSHA     string `json:"head_sha"`
+				TrunkBefore string `json:"trunk_before"`
+				TrunkAfter  string `json:"trunk_after"`
 			}
 			if err := json.Unmarshal(e.Payload, &landing); err != nil {
 				return err
 			}
 			judged[landing.RunID] = true
+			if work := byRun[landing.RunID]; work != nil {
+				if landing.Result == LandSquashConflict {
+					trunk := landing.TrunkAfter
+					if trunk == "" {
+						trunk = landing.TrunkBefore
+					}
+					work.ConflictHeadSHA = landing.HeadSHA
+					work.ConflictTrunkSHA = trunk
+				} else {
+					work.ConflictHeadSHA = ""
+					work.ConflictTrunkSHA = ""
+				}
+			}
 		case run.ResumeKind:
 			// Exec emits this in the claim transaction, after run.allocate and
 			// before the continued process starts. A terminal record alone is
@@ -3365,6 +3384,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		stale = true
 	}
 	var restartWaiting []Decision
+	var restartConflictWaiting []Decision
 plans:
 	for i := 0; i < len(plans); i++ {
 		if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
@@ -3410,6 +3430,16 @@ plans:
 			}
 			if held {
 				restartWaiting = append(restartWaiting, d)
+				continue
+			}
+		}
+		if l.judgeWaitsForConflictRepair(d, p.work, mainSHA) {
+			held, err := l.restartGateStartHeld(ctx)
+			if err != nil {
+				return "", err
+			}
+			if held {
+				restartConflictWaiting = append(restartConflictWaiting, d)
 				continue
 			}
 		}
@@ -3474,8 +3504,8 @@ plans:
 		l.waitingDetail = ""
 		return "", nil
 	}
-	if len(restartWaiting) > 0 {
-		l.reportRestartWaiting(restartWaiting, result)
+	if len(restartWaiting) > 0 || len(restartConflictWaiting) > 0 {
+		l.reportRestartWaiting(restartWaiting, restartConflictWaiting, result)
 		return l.waitForTrigger(ctx, leases, at, result)
 	}
 	if l.activeCount() > 0 {
@@ -3587,6 +3617,28 @@ func (l *Loop) judgeWaitsForGateStart(d Decision, work *pendingWork) bool {
 	return true
 }
 
+// judgeWaitsForConflictRepair reports whether an ActionJudge decision has
+// already conflicted against mainSHA (or holds a retained conflict repair) and
+// therefore only needs to stage conflict repair, which a pending restart holds.
+func (l *Loop) judgeWaitsForConflictRepair(d Decision, work *pendingWork, mainSHA string) bool {
+	if d.Action != ActionJudge || d.WorkflowRelease || d.Reason == ReasonItemAlreadyTerminal {
+		return false
+	}
+	if work == nil || work.Candidate == nil {
+		return false
+	}
+	if work.RepairHold != nil {
+		return true
+	}
+	if mainSHA == "" || work.Candidate.BaseRef != "" || mainSHA == work.Candidate.BaseSHA {
+		return false
+	}
+	if work.ConflictTrunkSHA == mainSHA && (work.ConflictHeadSHA == "" || work.Candidate.HeadSHA == "" || work.ConflictHeadSHA == work.Candidate.HeadSHA) {
+		return true
+	}
+	return l.hasConflictRestartWait(work.Candidate.RunID, work.Candidate.HeadSHA, mainSHA)
+}
+
 // applyReadyPlan is shared by the queue pass and an item-local completion handoff.
 // It leaves cancellation replanning to the queue pass, which owns lane offers.
 func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, timing *PassTiming, watch *laneWatch, result *LoopResult) (cancelled, stale bool, err error) {
@@ -3599,6 +3651,13 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 		}
 	}
 	if l.judgeWaitsForGateStart(d, p.work) {
+		if held, err := l.restartGateStartHeld(ctx); err != nil {
+			return false, false, err
+		} else if held {
+			return false, false, nil
+		}
+	}
+	if l.judgeWaitsForConflictRepair(d, p.work, *mainSHA) {
 		if held, err := l.restartGateStartHeld(ctx); err != nil {
 			return false, false, err
 		} else if held {

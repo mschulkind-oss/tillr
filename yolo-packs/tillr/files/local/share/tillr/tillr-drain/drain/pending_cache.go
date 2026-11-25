@@ -246,8 +246,15 @@ func clonePendingHistoryForDelta(prev *pendingHistoryState, delta []event.Event)
 			continue
 		}
 		switch e.Kind {
-		case dispatchStartedKind, nodeAdvancedKind, graphChangedKind, "land.landing":
-			// Creates a fresh pendingWork or updates judged only.
+		case dispatchStartedKind, nodeAdvancedKind, graphChangedKind:
+			// Creates a fresh pendingWork.
+		case "land.landing":
+			var landing struct {
+				RunID string `json:"run_id"`
+			}
+			if json.Unmarshal(e.Payload, &landing) == nil && landing.RunID != "" {
+				cloneWork(next.byRun[landing.RunID])
+			}
 		case examinationReleasedKind:
 			cloneWork(next.byRun[*e.ObjectID])
 			for _, w := range next.byParent[*e.ObjectID] {

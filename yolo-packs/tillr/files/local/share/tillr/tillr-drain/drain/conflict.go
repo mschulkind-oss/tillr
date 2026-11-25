@@ -172,6 +172,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	if pending, err := l.buildRestartPending(ctx); err != nil {
 		return "", false, err
 	} else if pending {
+		l.noteConflictRestartWait(candidate.RunID, candidate.HeadSHA, mainSHA)
 		return "", false, errRestartPending
 	}
 	policy := l.currentPolicy()

@@ -595,10 +595,11 @@ type Loop struct {
 	stopInheritedReaper         func()
 	restartMechanical           sync.RWMutex
 	restartGateMu               sync.Mutex
-	restartPendingWait          chan struct{} // non-nil while a restart not deferred by post-landing actions is pending; closed when answered or action-deferred
-	restartAnswerGen            uint64        // incremented whenever restartPendingWait is cleared
-	restartHoldWaiting          bool          // true while a pending restart is waiting for an active trunk proof or existing restartMechanical holds to drain
-	restartSettlements          atomic.Int32  // admitted gate/landing holds currently blocking exec
+	restartPendingWait          chan struct{}                  // non-nil while a restart not deferred by post-landing actions is pending; closed when answered or action-deferred
+	restartAnswerGen            uint64                         // incremented whenever restartPendingWait is cleared
+	restartHoldWaiting          bool                           // true while a pending restart is waiting for an active trunk proof or existing restartMechanical holds to drain
+	conflictRestartWaits        map[string]conflictRestartWait // run_id -> conflict held by pending restart; guarded by restartGateMu
+	restartSettlements          atomic.Int32                   // admitted gate/landing holds currently blocking exec
 	heavyMu                     sync.Mutex
 	activeGatesMu               sync.Mutex
 	activeGates                 map[*activeGate]struct{}
@@ -1580,18 +1581,38 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 	return l.waitForTrigger(ctx, leases, at, result)
 }
 
-func (l *Loop) reportRestartWaiting(waiting []Decision, result *LoopResult) {
-	all := make([]string, len(waiting))
-	for i, d := range waiting {
-		all[i] = d.ItemID
-	}
-	detail := fmt.Sprintf("%d candidate(s) waiting for the restart: %s", len(all), strings.Join(all, ", "))
-	if l.waitingDetail != detail {
-		examples := all
-		if len(examples) > 5 {
-			examples = examples[:5]
+type conflictRestartWait struct {
+	headSHA  string
+	trunkSHA string
+}
+
+func (l *Loop) reportRestartWaiting(gateWaiting, conflictWaiting []Decision, result *LoopResult) {
+	formatClause := func(prefix string, list []Decision, limit int) string {
+		ids := make([]string, len(list))
+		for i, d := range list {
+			ids[i] = d.ItemID
 		}
-		l.reportf("loop: %d candidate(s) waiting for the restart: %s; waiting for the restart answer or a changed fact\n", len(all), strings.Join(examples, ", "))
+		if limit > 0 && len(ids) > limit {
+			ids = ids[:limit]
+		}
+		return fmt.Sprintf("%d %s: %s", len(list), prefix, strings.Join(ids, ", "))
+	}
+	var detailParts, lineParts []string
+	if len(gateWaiting) > 0 {
+		detailParts = append(detailParts, formatClause("candidate(s) waiting for the restart", gateWaiting, 0))
+		lineParts = append(lineParts, formatClause("candidate(s) waiting for the restart", gateWaiting, 5))
+	}
+	if len(conflictWaiting) > 0 {
+		detailParts = append(detailParts, formatClause("candidate(s) waiting for the restart to stage conflict repair", conflictWaiting, 0))
+		lineParts = append(lineParts, formatClause("candidate(s) waiting for the restart to stage conflict repair", conflictWaiting, 5))
+	}
+	detail := strings.Join(detailParts, "; ")
+	if l.waitingDetail != detail {
+		waitFor := "waiting for the restart answer or a changed fact"
+		if len(gateWaiting) == 0 && len(conflictWaiting) > 0 {
+			waitFor = "waiting for the restart answer or a trunk move"
+		}
+		l.reportf("loop: %s; %s\n", strings.Join(lineParts, "; "), waitFor)
 	}
 	l.waitingDetail = detail
 	result.Detail = detail
