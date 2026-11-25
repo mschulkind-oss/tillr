@@ -245,8 +245,18 @@ func clearFaultFace(args []string) int {
 		return fail(openFailure(err))
 	}
 	defer s.Close()
-	if err := s.WriteTx(ctx, func(tx *store.Tx) error { return drain.ClearItemFault(tx, *itemID, *seq, time.Now().UTC()) }); err != nil {
+	var cleared drain.ItemFault
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		var err error
+		cleared, err = drain.ClearItemFaultHold(tx, *itemID, *seq, time.Now().UTC())
+		return err
+	}); err != nil {
 		return fail(err)
+	}
+	if cleared.Reason != "" {
+		fmt.Printf("cleared fault %d (%s) on %s\n", *seq, cleared.Reason, *itemID)
+	} else {
+		fmt.Printf("cleared fault %d on %s\n", *seq, *itemID)
 	}
 	return record.ExitOK
 }

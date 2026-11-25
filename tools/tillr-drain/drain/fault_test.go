@@ -100,3 +100,37 @@ func TestClearFaultRequiresTheCurrentEvidenceAndDoesNotEraseIt(t *testing.T) {
 		t.Fatalf("absent fault clear %d", code)
 	}
 }
+
+func TestClearFaultPrintsClearedItemAndFault(t *testing.T) {
+	path := scratch(t, "fault-print-store") + "/state.db"
+	fixtureAt(t, path, itemRecord("item_042", "in-queue"))
+	s, err := store.Open(context.Background(), path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seq int64
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		id := "item_042"
+		var err error
+		seq, err = tx.Append(event.Event{
+			Kind:       "drain.item-fault",
+			ObjectType: "item",
+			ObjectID:   &id,
+			Payload:    []byte(`{"item_id":"item_042","reason":"stage-failed","detail":"worktree missing"}`),
+			At:         time.Now(),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	code, out := invoke(t, "clear-fault", "--store", path, "--item", "item_042", "--fault", fmt.Sprint(seq))
+	if code != 0 {
+		t.Fatalf("clear-fault failed (%d): %s", code, out)
+	}
+	want := fmt.Sprintf("cleared fault %d (stage-failed) on item_042\n", seq)
+	if string(out) != want {
+		t.Fatalf("clear-fault output = %q, want %q", string(out), want)
+	}
+}

@@ -135,24 +135,35 @@ func (l *Loop) appendItemFaultTx(tx *store.Tx, f ItemFault) (int64, error) {
 // ClearItemFault acknowledges a diagnosed fault, binding the act to the latest
 // fault's sequence so a stale command cannot clear a newer conviction.
 func ClearItemFault(tx *store.Tx, itemID string, seq int64, at time.Time) error {
+	_, err := ClearItemFaultHold(tx, itemID, seq, at)
+	return err
+}
+
+// ClearItemFaultHold acknowledges a diagnosed fault, binding the act to the
+// latest fault's sequence so a stale command cannot clear a newer conviction,
+// and returns the cleared hold.
+func ClearItemFaultHold(tx *store.Tx, itemID string, seq int64, at time.Time) (ItemFault, error) {
 	faults, err := ReadItemFaults(tx.Reader())
 	if err != nil {
-		return err
+		return ItemFault{}, err
 	}
 	f, ok := faults[itemID]
 	if !ok {
-		return Usagef("item %q has no fault hold", itemID)
+		return ItemFault{}, Usagef("item %q has no fault hold", itemID)
 	}
 	if f.Seq != seq {
-		return Usagef("item %q has fault %d, not %d; inspect waiting again", itemID, f.Seq, seq)
+		return ItemFault{}, Usagef("item %q has fault %d, not %d; inspect waiting again", itemID, f.Seq, seq)
 	}
 	if f.Reason == reasonVerifyTriage {
-		return Usagef("item %q is held for verifier triage; %s", itemID, f.ClearCommand(""))
+		return ItemFault{}, Usagef("item %q is held for verifier triage; %s", itemID, f.ClearCommand(""))
 	}
 	if err := retractRefusedRunClaim(tx, f, at); err != nil {
-		return err
+		return ItemFault{}, err
 	}
-	return clearItemFault(tx, f, at)
+	if err := clearItemFault(tx, f, at); err != nil {
+		return ItemFault{}, err
+	}
+	return f, nil
 }
 
 // execSetupRefused recognizes the run face's usage exit with no output record,
