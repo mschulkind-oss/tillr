@@ -231,11 +231,13 @@ func (l *Loop) gateRestartWith(ctx context.Context, result *LoopResult, stopChec
 	// Do not queue an exclusive waiter behind another item's gate or landing.
 	// The request stays unanswered and a subsequent pass can take it.
 	if !l.restartMechanical.TryLock() {
+		l.markRestartWaitingOnHold()
 		return false, "", nil
 	}
 	// A proof may have started between the check above and TryLock. Keep the
 	// pending-restart barrier armed while deferred only by that proof.
 	if l.restartProofActive() && !l.restartActionDeferred() {
+		l.clearRestartWaitingOnHold()
 		l.restartMechanical.Unlock()
 		return false, "", nil
 	}

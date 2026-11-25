@@ -171,10 +171,33 @@ func (l *Loop) markRestartPending() {
 	l.restartGateMu.Unlock()
 }
 
+func (l *Loop) markRestartWaitingOnHold() {
+	l.restartGateMu.Lock()
+	if l.restartPendingWait == nil {
+		l.restartPendingWait = make(chan struct{})
+	}
+	l.restartHoldWaiting = true
+	l.restartGateMu.Unlock()
+}
+
+func (l *Loop) clearRestartWaitingOnHold() {
+	l.restartGateMu.Lock()
+	l.restartHoldWaiting = false
+	l.restartGateMu.Unlock()
+}
+
+func (l *Loop) isRestartWaitingOnHold() bool {
+	l.restartGateMu.Lock()
+	waiting := l.restartHoldWaiting
+	l.restartGateMu.Unlock()
+	return waiting
+}
+
 func (l *Loop) clearRestartPending() {
 	l.restartGateMu.Lock()
 	ch := l.restartPendingWait
 	l.restartPendingWait = nil
+	l.restartHoldWaiting = false
 	l.restartAnswerGen++
 	l.restartGateMu.Unlock()
 	if ch != nil {
@@ -197,6 +220,9 @@ func (l *Loop) armRestartPending(gen uint64) (<-chan struct{}, bool) {
 	}
 	if l.restartPendingWait == nil {
 		l.restartPendingWait = make(chan struct{})
+	}
+	if l.restartDefersToSettlement() {
+		l.restartHoldWaiting = true
 	}
 	return l.restartPendingWait, false
 }
@@ -258,18 +284,31 @@ func (h *restartMechanicalHold) acquire() {
 }
 
 func (h *restartMechanicalHold) acquireGateStart(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if h.loop.restartReplaced.Load() {
+			return errRestartPending
+		}
+		if h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() && !h.loop.restartProofActive() &&
+			(h.loop.isRestartWaitingOnHold() || h.loop.restartDefersToSettlement()) {
+			if err := h.loop.waitForRestartAnswer(ctx, true); err != nil {
+				return err
+			}
+		}
+		h.acquire()
+		if h.loop.restartReplaced.Load() {
+			h.release()
+			return errRestartPending
+		}
+		if h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() && !h.loop.restartProofActive() &&
+			h.loop.isRestartWaitingOnHold() {
+			h.release()
+			continue
+		}
+		return nil
 	}
-	if h.loop.restartReplaced.Load() {
-		return errRestartPending
-	}
-	h.acquire()
-	if h.loop.restartReplaced.Load() {
-		h.release()
-		return errRestartPending
-	}
-	return nil
 }
 
 func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
@@ -340,10 +379,12 @@ func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func
 }
 
 // lockRestartGateStart acquires a brief settlement hold to prepare a candidate
-// and start or attach its detached gate without waiting for a pending restart.
-// Once the gate is running, restartWork releases the hold so the pending
-// restart can replace the loop while the gate runs; re-acquiring the hold after
-// the gate finishes follows the settlement wait rules.
+// and start or attach its detached gate. While a pending restart is already
+// waiting on existing holds to drain (outside an active trunk proof or
+// post-landing action), new gate starts wait for the restart to be answered so
+// they do not starve exec. Once the gate is running, restartWork releases the
+// hold so a pending restart can replace the loop while the gate runs;
+// re-acquiring the hold after the gate finishes follows the settlement wait rules.
 func (l *Loop) lockRestartGateStart(ctx context.Context) (context.Context, func(), error) {
 	return l.lockRestartStep(ctx, true, false, true)
 }

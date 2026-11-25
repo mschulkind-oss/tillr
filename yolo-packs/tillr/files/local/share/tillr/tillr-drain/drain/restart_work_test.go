@@ -320,3 +320,187 @@ func TestPendingRestartWhileDeferredAllowsNewGateHold(t *testing.T) {
 		t.Fatalf("gateRestart after roll and gate 1 finished = %v, %q, %v; want replaced", handled, stop, err)
 	}
 }
+
+func TestPendingRestartNotStarvedByNewGateStarts(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		gateRestartFirst bool
+	}{
+		{name: "new_gate_before_gateRestart", gateRestartFirst: false},
+		{name: "gateRestart_before_new_gate", gateRestartFirst: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHarness(t, []byte("next build"), func(context.Context, string) error { return nil })
+			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+			defer cancel()
+
+			// Gate 1 started before the new build / restart request.
+			_, releaseGate1, err := h.l.lockRestartGateStart(ctx)
+			if err != nil {
+				t.Fatalf("gate 1 lock: %v", err)
+			}
+			gate1Released := false
+			defer func() {
+				if !gate1Released {
+					releaseGate1()
+				}
+			}()
+
+			// File a pending restart request while Gate 1 holds restartMechanical.
+			h.request(t, 1)
+			if tc.gateRestartFirst {
+				if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
+					t.Fatalf("gateRestart while gate 1 held = %v, %q, %v; want deferred", handled, stop, err)
+				}
+			}
+
+			waiting := make(chan struct{}, 4)
+			h.l.restartWaitObs = func() {
+				select {
+				case waiting <- struct{}{}:
+				default:
+				}
+			}
+
+			// New candidates keep becoming ready while Gate 1 is running and must not
+			// acquire restartMechanical and postpone the restart past Gate 1.
+			const arrivals = 2
+			acquired := make(chan int, arrivals+1)
+			done := make(chan error, arrivals+1)
+			launchCandidate := func(id int) {
+				go func() {
+					_, unlock, err := h.l.lockRestartGateStart(ctx)
+					if err == nil {
+						acquired <- id
+						unlock()
+					}
+					done <- err
+				}()
+			}
+			for i := 0; i < arrivals; i++ {
+				launchCandidate(i + 2)
+			}
+			for i := 0; i < arrivals; i++ {
+				select {
+				case <-waiting:
+				case id := <-acquired:
+					t.Fatalf("candidate %d acquired restartMechanical while restart was pending behind gate 1", id)
+				case err := <-done:
+					t.Fatalf("new gate start returned before restart was answered: %v", err)
+				case <-time.After(hangGuard):
+					t.Fatal("hung waiting for new gate start to block on pending restart")
+				}
+			}
+
+			// Gate 1 finishes and releases its hold. Even if another candidate becomes
+			// ready before gateRestart runs, it must also wait rather than taking a hold.
+			releaseGate1()
+			gate1Released = true
+			launchCandidate(arrivals + 2)
+			select {
+			case <-waiting:
+			case id := <-acquired:
+				t.Fatalf("candidate %d acquired restartMechanical after gate 1 released and before restart", id)
+			case err := <-done:
+				t.Fatalf("post-release candidate returned before restart was answered: %v", err)
+			case <-time.After(hangGuard):
+				t.Fatal("hung waiting for post-release candidate to block on pending restart")
+			}
+
+			if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); !handled || stop != StopRestarted || err != nil {
+				t.Fatalf("gateRestart after gate 1 release = %v, %q, %v; want replaced", handled, stop, err)
+			}
+			if len(h.execed) == 0 {
+				t.Fatal("replacement did not exec")
+			}
+
+			for i := 0; i < arrivals+1; i++ {
+				select {
+				case err := <-done:
+					if !errors.Is(err, errRestartPending) {
+						t.Fatalf("waiting candidate err = %v, want errRestartPending", err)
+					}
+				case <-time.After(hangGuard):
+					t.Fatal("waiting candidate did not unblock after replacement")
+				}
+			}
+			select {
+			case id := <-acquired:
+				t.Fatalf("candidate %d acquired hold despite loop replacement", id)
+			default:
+			}
+		})
+	}
+
+	t.Run("non_replacement_unblocks_waiting_gate_start", func(t *testing.T) {
+		h := newRestartHarness(t, nil, func(context.Context, string) error { return nil })
+		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+		defer cancel()
+
+		_, releaseGate1, err := h.l.lockRestartGateStart(ctx)
+		if err != nil {
+			t.Fatalf("gate 1 lock: %v", err)
+		}
+		gate1Released := false
+		defer func() {
+			if !gate1Released {
+				releaseGate1()
+			}
+		}()
+
+		req := h.request(t, 1)[0]
+		if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
+			t.Fatalf("gateRestart while gate 1 held = %v, %q, %v; want deferred", handled, stop, err)
+		}
+
+		waiting := make(chan struct{}, 1)
+		h.l.restartWaitObs = func() {
+			select {
+			case waiting <- struct{}{}:
+			default:
+			}
+		}
+
+		gate2Held := make(chan struct{})
+		releaseGate2 := make(chan struct{})
+		gate2Done := make(chan error, 1)
+		go func() {
+			_, unlock, err := h.l.lockRestartGateStart(ctx)
+			if err != nil {
+				gate2Done <- err
+				return
+			}
+			close(gate2Held)
+			<-releaseGate2
+			unlock()
+			gate2Done <- nil
+		}()
+
+		awaitRestartTest(t, waiting, "gate 2 waiting on pending non-replacement restart")
+		select {
+		case <-gate2Held:
+			t.Fatal("gate 2 acquired hold before non-replacement restart was answered")
+		default:
+		}
+
+		releaseGate1()
+		gate1Released = true
+		if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); !handled || stop != "" || err != nil {
+			t.Fatalf("gateRestart = %v, %q, %v; want handled without replacing", handled, stop, err)
+		}
+		if got := h.answer(t, req.ID).Answer; got != restart.AnswerAlreadyCurrent {
+			t.Fatalf("answer = %q, want %q", got, restart.AnswerAlreadyCurrent)
+		}
+
+		awaitRestartTest(t, gate2Held, "gate 2 acquiring hold after non-replacement answer")
+		close(releaseGate2)
+		select {
+		case err := <-gate2Done:
+			if err != nil {
+				t.Fatalf("gate 2 err = %v, want nil", err)
+			}
+		case <-time.After(hangGuard):
+			t.Fatal("gate 2 did not finish")
+		}
+	})
+}
