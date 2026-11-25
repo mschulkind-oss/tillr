@@ -105,3 +105,11 @@ That is the external checker's behaviour rather than a house preference, so a le
 section gets the labelled link, and a section-sign label is written only for a plain-numbered
 section. The collision is what bites: with no plain `#4` heading in the document the section-sign
 form passes, so a green document breaks when it later gains a `4`.
+
+
+## Operating the loop here
+
+- **Session directory and rulings file:** Not fixed in this repository.
+- **Lanes:** [`.tillr.toml`](./.tillr.toml) reserves `2` express lanes (`[lanes] express = 2`) and sets no ordinary lane count (`tillr-drain loop` defaults `--lanes` to `2` on a fresh start, overridden by `--lanes` or a saved `ordinary_lanes` scale target).
+- **Backend policy:** The backend policy in force is passed with `--policy` from outside the repository; the tracked [`config/tillr/backend-policy.json`](./config/tillr/backend-policy.json) is only an example with placeholder model names.
+- **Watch rules:** [`config/tillr/watch`](./config/tillr/watch).
