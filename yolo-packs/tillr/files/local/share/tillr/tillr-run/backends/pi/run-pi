@@ -370,6 +370,33 @@ if [ -n "$wall" ] && [ "$wall" -gt 0 ]; then
     set -- timeout "$wall" "$@"
 fi
 
+# Keep pi's temporary files (saved tool output, codemode scratch) inside this run's
+# own scratch directory and remove that one directory after pi exits.
+run_scratch=${YOLO_DURABLE_DIR:-}
+if [ -z "$run_scratch" ] && [ -n "${TILLR_PROGRESS_FILE:-}" ]; then
+    run_scratch=$(dirname -- "$TILLR_PROGRESS_FILE")
+fi
+run_scratch=${run_scratch%/}
+run_tmp_dir=
+cleanup_run_tmp() {
+    if [ -n "$run_tmp_dir" ]; then
+        rm -rf -- "$run_tmp_dir"
+    fi
+}
+if [ -n "$run_scratch" ]; then
+    if [ "${TMPDIR:-}" = "$run_scratch/tmp" ] && [ -d "$run_scratch/tmp" ]; then
+        run_tmp_dir=$(mktemp -d "$run_scratch/tmp/run.XXXXXX")
+    else
+        run_tmp_dir=$run_scratch/tmp
+        mkdir -p -- "$run_tmp_dir"
+    fi
+    TMPDIR=$run_tmp_dir
+    export TMPDIR
+    trap 'cleanup_run_tmp' EXIT
+    trap 'cleanup_run_tmp; trap - INT; kill -INT $$' INT
+    trap 'cleanup_run_tmp; trap - TERM; kill -TERM $$' TERM
+fi
+
 if [ -n "$landing_promptless" ]; then
     copy=$landing_dir/landing-output
     status=$landing_dir/landing-status
@@ -399,5 +426,10 @@ PY
     else
         exit "$code"
     fi
+fi
+if [ -n "$run_tmp_dir" ]; then
+    rc=0
+    "$@" <"$prompt" 2>"$err" || rc=$?
+    exit "$rc"
 fi
 exec "$@" <"$prompt" 2>"$err"
