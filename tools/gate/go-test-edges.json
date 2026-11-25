@@ -993,5 +993,95 @@
       "tools/tillr/examples/",
       "tools/tillr/watch/testdata/"
     ]
+  },
+  "github.com/mschulkind-oss/tillr/definition": {
+    "builds": [],
+    "reads": [
+      "tools/tillr-cli/",
+      "tools/tillr-drain/",
+      "tools/tillr-gate/",
+      "tools/tillr-item/",
+      "tools/tillr-land/",
+      "tools/tillr-run/",
+      "tools/tillr-store/",
+      "tools/tillr-view/",
+      "tools/tillr-watch/",
+      "tools/tillr/"
+    ],
+    "read_tests": {
+      "tools/tillr-cli/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
+      "tools/tillr-drain/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
+      "tools/tillr-gate/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
+      "tools/tillr-item/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
+      "tools/tillr-land/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
+      "tools/tillr-run/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
+      "tools/tillr-store/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
+      "tools/tillr-view/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
+      "tools/tillr-watch/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
+      "tools/tillr/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ]
+    }
+  },
+  "github.com/mschulkind-oss/tillr/store": {
+    "builds": [],
+    "reads": [
+      "tools/tillr-cli/",
+      "tools/tillr-drain/",
+      "tools/tillr-gate/",
+      "tools/tillr-item/",
+      "tools/tillr-land/",
+      "tools/tillr-run/",
+      "tools/tillr-store/",
+      "tools/tillr-view/",
+      "tools/tillr-watch/"
+    ],
+    "read_tests": {
+      "tools/tillr-cli/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ],
+      "tools/tillr-drain/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ],
+      "tools/tillr-gate/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ],
+      "tools/tillr-item/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ],
+      "tools/tillr-land/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ],
+      "tools/tillr-run/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ],
+      "tools/tillr-store/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ],
+      "tools/tillr-view/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ],
+      "tools/tillr-watch/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ]
+    }
   }
 }

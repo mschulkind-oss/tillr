@@ -154,7 +154,7 @@ func TestStateReadyMoveRefusesReason(t *testing.T) {
 }
 
 func TestBlockedReleaseRecordsByAndReason(t *testing.T) {
-	t.Run("git-landing blocked to in-queue", func(t *testing.T) {
+	t.Run("default definition blocked to in-queue", func(t *testing.T) {
 		db := filepath.Join(scratch(t, "blocked-release-git"), "state.db")
 		p := base("item-held", "held work")
 		p.State = "in-queue"

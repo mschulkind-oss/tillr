@@ -202,16 +202,23 @@ def test_selection_rules(root_graph: dict) -> None:
     assert "github.com/mschulkind-oss/tillr-view" in by_pkg, by_pkg
     assert by_pkg["github.com/mschulkind-oss/tillr-view"]["reason"] in ("import", "edge"), by_pkg
 
-    # 5. Unplaceable go.mod change triggers floor for module and replacing modules.
+    # 5. Unplaceable go.mod change triggers floor for module and replacing modules
+    #    (cross-module source-scanning packages in tools/tillr also select via edge).
     sel = go_affected.select_affected_packages(ROOT, ["tools/tillr-drain/go.mod"], graph=root_graph)
-    assert set(sel["floor_modules"]) >= {
+    floor_mods = set(sel["floor_modules"])
+    assert floor_mods >= {
         "tools/tillr-drain",
         "tools/tillr-land",
         "tools/tillr-store",
         "tools/tillr-view",
         "tools/tillr-watch",
     }, sel["floor_modules"]
-    assert all(item["reason"] == "floor" for item in sel["selected"]), sel["selected"]
+    assert all(
+        item["reason"] == "floor" for item in sel["selected"] if item["module"] in floor_mods
+    ), sel["selected"]
+    assert all(
+        item["reason"] == "edge" for item in sel["selected"] if item["module"] not in floor_mods
+    ), sel["selected"]
 
     # 6. Deleted package path triggers floor.
     sel = go_affected.select_affected_packages(ROOT, ["tools/tillr-drain/deletedpkg/foo.go"], graph=root_graph)
@@ -2323,7 +2330,8 @@ def test_drain_subpackage_isolation(root_graph: dict) -> None:
         selected_ips = {item["import_path"] for item in sel["selected"]}
         assert not (selected_ips & subpkg_ips), (drain_path, selected_ips & subpkg_ips)
 
-    # 2. Changing a *_test.go file in any extracted subpackage selects ONLY that subpackage.
+    # 2. Changing a *_test.go file in any extracted subpackage selects ONLY that subpackage
+    #    within tillr-drain (cross-module source-scanning tests in tools/tillr also run narrowed).
     subpkg_tests = {
         "workflow": "tools/tillr-drain/workflow/workflow_test.go",
         "remotesync": "tools/tillr-drain/remotesync/remote_sync_test.go",
@@ -2333,7 +2341,8 @@ def test_drain_subpackage_isolation(root_graph: dict) -> None:
     for sub, test_path in subpkg_tests.items():
         sel = go_affected.select_affected_packages(ROOT, [test_path], graph=root_graph)
         selected_ips = {item["import_path"] for item in sel["selected"]}
-        assert selected_ips == {f"github.com/mschulkind-oss/tillr-drain/{sub}"}, (sub, selected_ips)
+        drain_ips = {ip for ip in selected_ips if ip.startswith("github.com/mschulkind-oss/tillr-drain")}
+        assert drain_ips == {f"github.com/mschulkind-oss/tillr-drain/{sub}"}, (sub, selected_ips)
 
     # 3. Changing workflow.go selects workflow, drain, and root tillr-drain,
     #    and does NOT select remotesync, fixer, heavyrun, or heavy.
@@ -2353,6 +2362,42 @@ def test_drain_subpackage_isolation(root_graph: dict) -> None:
         "github.com/mschulkind-oss/tillr-drain/heavy",
     }
     assert not (selected_ips & forbidden_ips), (selected_ips & forbidden_ips)
+
+
+def test_cross_module_source_scanning_edges(root_graph: dict) -> None:
+    """Every scanned Go module selects the tools/tillr source-scanning tests that walk it."""
+    edges = go_affected.load_edges(ROOT)
+    modules = go_affected.discover_tillr_modules(ROOT)
+    def_pkg = "github.com/mschulkind-oss/tillr/definition"
+    def_test = "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+    store_pkg = "github.com/mschulkind-oss/tillr/store"
+    store_test = "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+
+    assert def_pkg in edges, edges
+    assert store_pkg in edges, edges
+
+    for mod in modules:
+        rule = f"{mod}/"
+        assert rule in edges[def_pkg]["reads"], (mod, edges[def_pkg]["reads"])
+        assert def_test in edges[def_pkg]["read_tests"][rule], (mod, edges[def_pkg]["read_tests"])
+        # Pick a Go package directory inside the module (for tools/tillr, a sibling package
+        # that definition does not import) and test both *_test.go and *.go edits.
+        sample_dir = "tools/tillr/vantage" if mod == "tools/tillr" else mod
+        for sample_path in (
+            f"{sample_dir}/synthetic_charter_probe_test.go",
+            f"{sample_dir}/synthetic_charter_probe.go",
+        ):
+            sel = go_affected.select_affected_packages(ROOT, [sample_path], graph=root_graph)
+            by_pkg = {item["import_path"]: item for item in sel["selected"]}
+            assert def_pkg in by_pkg, (sample_path, sorted(by_pkg))
+            assert by_pkg[def_pkg]["reason"] == "edge", (sample_path, by_pkg[def_pkg])
+            assert by_pkg[def_pkg]["selected_tests"] == [def_test], (sample_path, by_pkg[def_pkg])
+            if mod != "tools/tillr":
+                assert rule in edges[store_pkg]["reads"], (mod, edges[store_pkg]["reads"])
+                assert store_test in edges[store_pkg]["read_tests"][rule], (mod, edges[store_pkg]["read_tests"])
+                assert store_pkg in by_pkg, (sample_path, sorted(by_pkg))
+                assert by_pkg[store_pkg]["reason"] == "edge", (sample_path, by_pkg[store_pkg])
+                assert by_pkg[store_pkg]["selected_tests"] == [store_test], (sample_path, by_pkg[store_pkg])
 
 
 def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
@@ -3159,6 +3204,7 @@ def main(argv: list[str] | None = None) -> int:
         ("test_heavy_failures_replay", lambda: test_heavy_failures_replay(root_graph)),
         ("test_selection_rules", lambda: test_selection_rules(root_graph)),
         ("test_drain_subpackage_isolation", lambda: test_drain_subpackage_isolation(root_graph)),
+        ("test_cross_module_source_scanning_edges", lambda: test_cross_module_source_scanning_edges(root_graph)),
         ("test_edge_cache_invalidation", test_edge_cache_invalidation),
         ("test_edges_file_honest_and_env_read", test_edges_file_honest_and_env_read),
         ("test_stalled_run_prints_nothing_without_test_events", test_stalled_run_prints_nothing_without_test_events),
