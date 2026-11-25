@@ -1296,6 +1296,75 @@ func TestBeta(t *testing.T) {{ checkRepo(t) }}
                 self.assertEqual(cmd_part[cmd_part.index('-p') + 1], '1')
                 self.assertEqual(env_group.get('GOMAXPROCS'), '1')
 
+    def test_max_shards_scales_with_cpu_count(self):
+        """MAX_SHARDS matches go_affected (2 * os.cpu_count(), 12 when undetermined) and scales past 12."""
+        go_affected_spec = importlib.util.spec_from_file_location(
+            'go_affected_max_shards_test', ROOT / 'tools/gate/go_affected.py'
+        )
+        go_affected = importlib.util.module_from_spec(go_affected_spec)
+        go_affected_spec.loader.exec_module(go_affected)
+
+        host_cpus = os.cpu_count()
+        expected_host = 2 * host_cpus if host_cpus and host_cpus > 0 else 12
+        self.assertEqual(shards.MAX_SHARDS, expected_host)
+        self.assertEqual(shards.MAX_SHARDS, go_affected.MAX_SHARDS)
+
+        def load_shards(name):
+            mod_spec = importlib.util.spec_from_file_location(name, RUNNER)
+            mod = importlib.util.module_from_spec(mod_spec)
+            mod_spec.loader.exec_module(mod)
+            return mod
+
+        loaded_by_cpus = {}
+        for cpus in (1, 4, 8, 16, 32):
+            with patch.object(os, 'cpu_count', return_value=cpus):
+                mod = load_shards(f'shards_cpus_{cpus}')
+            self.assertEqual(mod.MAX_SHARDS, 2 * cpus)
+            loaded_by_cpus[cpus] = mod
+
+        for missing in (None, 0, -1):
+            with patch.object(os, 'cpu_count', return_value=missing):
+                mod = load_shards(f'shards_missing_{missing}')
+            self.assertEqual(mod.MAX_SHARDS, 12)
+
+        pkg = 'example.com/tx/sharded'
+        pkg_dir = self.root / 'sharded'
+        pkg_dir.mkdir()
+
+        def count_cached_shards(mod, total_tests):
+            lines = ['package sharded', 'import "testing"']
+            lines.extend(f'func TestCase{i:04d}(t *testing.T) {{}}' for i in range(total_tests))
+            (pkg_dir / 'sharded_test.go').write_text('\n'.join(lines) + '\n')
+
+            pkg_json = json.dumps({
+                'ImportPath': pkg,
+                'Dir': str(pkg_dir),
+                'TestGoFiles': ['sharded_test.go'],
+            })
+            seen = []
+            seen_lock = threading.Lock()
+
+            def fake_run_cached_group(import_path, *_args, **_kwargs):
+                with seen_lock:
+                    seen.append(import_path)
+                return ([{'Action': 'pass', 'Package': import_path}], 'miss')
+
+            with (
+                patch.object(mod.subprocess, 'check_output', return_value=pkg_json + '\n'),
+                patch.object(mod, 'run_cached_group', side_effect=fake_run_cached_group),
+                patch.object(mod, '_load_go_affected', return_value=go_affected),
+                patch.object(go_affected, '_global_git_config', return_value=[]),
+            ):
+                mod.run(pkg_dir, 6, {}, self.root / 'scratch', '0', cache=True, durable_dir=self.root / 'durable')
+            return len(seen)
+
+        # 2,500 tests -> 2,500 // 125 = 20 uncapped shards.
+        # On 8 processors (MAX_SHARDS = 16), scales past 12 and caps at 16;
+        # on 16 processors (MAX_SHARDS = 32), runs all 20 shards and caps 5,000 tests (40 uncapped) at 32.
+        self.assertEqual(count_cached_shards(loaded_by_cpus[8], 2500), 16)
+        self.assertEqual(count_cached_shards(loaded_by_cpus[16], 2500), 20)
+        self.assertEqual(count_cached_shards(loaded_by_cpus[16], 5000), 32)
+
 
 if __name__ == '__main__':
     unittest.main()
