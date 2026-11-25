@@ -4,7 +4,7 @@ status: in-review
 stage: DESIGN
 planning-actions: none
 verified: 2026-11-25
-next: "The owner rules OQ-GR4, OQ-GR5 and OQ-GR6."
+next: "The owner rules OQ-GR4, OQ-GR5, OQ-GR6 and OQ-GR7."
 covers:
   - tools/gate/
   - tools/tillr-gate/
@@ -25,15 +25,15 @@ covers:
   - tools/tillr-view/heavy_misses.go
   - config/tillr/gate-policy.json
 tags: [gate, checks, landing, proof, reference]
-summary: "How the gate works: one JSON declaration per check, a fast tier that judges a candidate before it lands and a heavy tier that proves the trunk after the merge, the gate a trunk fixer gets and the rule for a fork check an upstream release turned red, passes remembered by a fingerprint of declared inputs, one classifier for every check result, budgets that are targets with a watchdog that ends only a stalled check, three open questions for the owner, and the gate rework's decision ledger."
+summary: "How the gate works: one JSON declaration per check, a fast tier that judges a candidate before it lands and a heavy tier that proves the trunk after the merge, the gate a trunk fixer gets and the rule for a fork check an upstream release turned red, passes remembered by a fingerprint of declared inputs, one classifier for every check result, budgets that are targets with a watchdog that ends only a stalled check, four open questions for the owner, and the gate rework's decision ledger."
 vantage:
   status-chip: true
 ---
 
 # The gate
 
-**Status:** Source-verified 2026-11-25 against the tree. Three choices await the owner in
-[`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5) and [`OQ-GR6`](#OQ-GR6). In
+**Status:** Source-verified 2026-11-25 against the tree. Four choices await the owner in
+[`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7). In
 [Why it's this way](#why-its-this-way), only rows quoting the owner's dated words are owner
 rulings; every designer or operator-request decision may be overturned by the owner.
 UNMEASURED: this reference was written by reading the code and the recorded decision ledger,
@@ -688,6 +688,116 @@ that such a failure is reported as a `trunk` obstacle rather than fixed inside t
 trunk fixer always starts from the tip, because the failure it repairs is not in the proved
 commit.
 
+### Measured proof vs. gate contention (2026-11-25)
+
+Measured on 2026-11-25 against the recorded runs in `.tillr/state.db` (`drain.heavy-progress`,
+`gate.started`, `gate.verdict`, `land.landing`), `.tillr/loop/*/gate.timing.jsonl`, and
+`.tillr/lanes/.rolling/logs/` (17 completed proofs, 173 timed gates, 103 landings; no program
+behavior changes). Priority `repair 0, gate 5, proof 10, worker 15` took effect at `07:43:20 ET`
+(`2026-11-25T12:43:20Z` in `.tillr/loop/backend-policy-changes.jsonl`), and commit `5e728e5a`
+([`D-GR54`](#D-GR54), deferring `tillr-drain/drain` from pre-merge `go-affected`) landed at
+`12:52:59 ET`. All figures below were produced with:
+
+```sh
+python3 - <<'EOF'
+import datetime, glob, json, os, sqlite3, statistics
+con = sqlite3.connect("file:.tillr/state.db?mode=ro", uri=True)
+PRIO_MS = int(datetime.datetime(2026, 11, 25, 12, 43, 20, tzinfo=datetime.timezone.utc).timestamp() * 1000)
+DEFER_MS = next(
+    ts for ts, p in con.execute("SELECT ts, payload FROM events WHERE kind='land.landing' ORDER BY seq")
+    if json.loads(p).get("trunk_after", "").startswith("5e728e5a")
+)
+proofs, cur = [], None
+for ts, p in con.execute("SELECT ts, payload FROM events WHERE kind='drain.heavy-progress' ORDER BY seq"):
+    d = json.loads(p)
+    if d.get("phase") == "started":
+        cur = {"sha": d["tip_sha"], "start": ts, "events": []}
+    elif d.get("phase") == "progress" and cur:
+        cur["events"].append((ts, d.get("check_id"), d.get("outcome")))
+    elif d.get("phase") == "ended" and cur:
+        cur["end"], cur["outcome"] = ts, d.get("outcome")
+        proofs.append(cur); cur = None
+
+g_start = {(json.loads(p).get("run_id") or oid): ts for ts, oid, p in con.execute("SELECT ts, object_id, payload FROM events WHERE kind='gate.started'")}
+g_end = {(json.loads(p).get("run_id") or oid): ts for ts, oid, p in con.execute("SELECT ts, object_id, payload FROM events WHERE kind='gate.verdict'")}
+gates = []
+for path in glob.glob(".tillr/loop/*/gate.timing.jsonl"):
+    rid = os.path.basename(os.path.dirname(path))
+    lines = [json.loads(l) for l in open(path) if l.strip()]
+    if not lines:
+        continue
+    td = lines[-1]
+    cpath = os.path.join(os.path.dirname(path), "change-logs", "gate.checks.jsonl")
+    s0 = json.loads(open(cpath).readline()).get("started_at_ms") if os.path.exists(cpath) else None
+    s, e = s0 or g_start.get(rid), g_end.get(rid)
+    if s and e:
+        ga = td.get("checks", {}).get("go-affected", {})
+        gates.append({"start": s, "end": e, "wall_ms": td["wall_ms"], "ga_ran": ga.get("execution") == "ran", "checks": td.get("checks", {})})
+
+for name, grp in [
+    ("pre-0743", [p for p in proofs if p["start"] < PRIO_MS]),
+    ("0743-1253", [p for p in proofs if PRIO_MS <= p["start"] < DEFER_MS]),
+    ("post-1253", [p for p in proofs if p["start"] >= DEFER_MS]),
+]:
+    durs = [(p["end"] - p["start"]) / 60000.0 for p in grp]
+    print("proof", name, len(grp), "green", sum(p["outcome"] == "green" for p in grp),
+          f"med={statistics.median(durs):.2f}m min={min(durs):.2f}m max={max(durs):.2f}m")
+EOF
+```
+
+**Proof wall time by check, low contention vs. high contention.** Under `conc < 2` (fewer than
+two concurrent `go-affected` gates on average) vs. `conc >= 2`:
+
+- **Whole-proof wall time:**
+  - `00:35:50–07:43:04 ET` (pre-priority-change, 7 proofs): **32.60–101.75 min** (median
+    **53.20 min**), 1 green (`95d7043eb6`, 101.75 min, publishing 47 landings).
+  - `07:43:22–12:51:20 ET` (`gate 5, proof 10`, pre-`5e728e5a`, 7 proofs): median **53.57 min**
+    (4 cancelled by loop restarts; completed proofs `c3d74d27e2` **104.30 min** at `conc=5.34`
+    and `79bdcbbf72` **40.18 min** at `conc=3.77`, publishing 31 and 4 landings).
+  - `12:53–14:40:55 ET` (post-`5e728e5a`, 3 proofs): **16.25–19.86 min** (median **16.56 min**;
+    `43455fc4dd` green in **16.56 min** at `conc=0.58`, publishing 15 landings).
+- **Contention share of proof time:** Comparing low-contention proofs (`conc < 2`: 16.25–19.86 min,
+  median **16.56 min**) against high-contention uncached proofs (`conc = 4.53–6.50`:
+  56.60–104.30 min, median **95.87 min**), **76%–83% (~40–85 min)** of high-contention proof
+  wall time was CPU contention with `go-affected` gates.
+- **Per-check proof wall time (executed checks only, excluding cached passes):**
+  - `go-test-tillr-drain`: **393.2 s** (6.6 min) median at `conc < 2` (**268.6 s** / 4.5 min at
+    `conc=0.58` in `43455fc4dd`) vs. **681.8 s** (11.4 min) median at `conc >= 2` and
+    **35.6–38.9 min** at `conc = 5.16–6.50`.
+  - `go-shard-helpers-test`: **152.6 s** (2.5 min) median at `conc < 2` vs. **550.6 s** (9.2 min)
+    median at `conc >= 2` (up to **35.4 min** in `c3d74d27e2`).
+  - `go-test-shards-test`: **194.2 s** (3.2 min) vs. **681.7 s** (11.4 min).
+  - `change-checks-test`: **91.4 s** (1.5 min) vs. **352.1 s** (5.9 min).
+  - `go-test-tillr-view`: **21.7 s** vs. **158.8 s**; `tillr-docs`: **25.6 s** vs. **150.0 s**;
+    `go-test-tillr-land`: **28.9 s** vs. **145.8 s**; `tillr-backends`: **33.6 s** vs. **156.6 s**.
+
+**Gate wall time by check (`gate.timing.jsonl`, 173 runs).**
+
+- **Whole-gate wall time:** Fast-only gates (`go-affected` not run) took median **6.7 s**
+  pre-07:43, **6.1 s** in `07:43–12:53`, and **3.8 s** (1.6–9.4 s) post-`5e728e5a`. `go-affected`
+  gates took median **1,611.1 s** (pre-07:43) and **1,766.5 s** (`07:43–12:53`), dropping after
+  `5e728e5a` (excluding 3 stale-base runs) to median **150.3 s** (21.0–236.7 s).
+- **Per-check gate wall time (median across all executions):** `go-affected` **1,575.61 s**
+  (**150.1 s** post-`5e728e5a` non-stale), `go-build` **58.89 s**, `workflows` **19.40 s**,
+  `pack-sync` **6.19 s**, `documents` **2.92 s**, `scratch` **2.24 s**, `design-citations` **2.15 s**,
+  `go-edges` **2.13 s**, `elapsed-time` **1.86 s**, `go-module-inventory` **1.73 s**,
+  `citations` **1.70 s**, `file-size` **1.66 s**, `format` **1.59 s**, `commit-identity` **1.47 s**,
+  `gate-budget` **1.46 s**.
+
+**Estimated effect of swapping `gate` (5) and `proof` (10) on gate time and landings published per hour.**
+Under Linux CFS `nice` weights (`nice 5` = 335, `nice 10` = 110, **3.05x** CPU share per runnable
+thread), `gate 5, proof 10` starved proofs during `go-affected` bursts. Across the recorded
+windows, landings merged at **9.29/h** (pre-07:43, 62 in 6.67 h), **4.46/h** (`07:43–12:53`,
+23 in 5.16 h), and **9.70/h** (post-12:53, 18 in 1.86 h), while green proofs published batches of
+47, 31, 4, and 15 landings (`0.24` green proofs/h pre-`D-GR54`, `1` green proof in 1.86 h
+post-`D-GR54`). Under the post-`D-GR54` workload (where `tillr-drain/drain` no longer runs in
+pre-merge `go-affected`):
+
+| Priority order | `go-affected` gate wall | Fast-only gate wall | Proof wall (uncached) | Time between proved commits | Estimated landings published/h |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`gate 5, proof 10` (current)** | **~2.5 min** median | **~3.8 s** median | **~16–20 min** low contention; **~30–40+ min** in multi-gate bursts | **~20–45 min** | **~9.7/h** (larger batches during bursts) |
+| **`proof 5, gate 10` (swapped)** | **~3.5–5 min** median (1.3x–2.0x during active proof shards) | **~4–8 s** | **~16–22 min** consistently | **~17–30 min** consistently | **~7–9/h** (smaller unproved tip gap) |
+
 ### A red proof
 
 When a heavy check fails, the runner searches the landings since the green pointer for the
@@ -1053,6 +1163,34 @@ The prose above explains what each is for.
    <!-- vantage: question id=OQ-GR6 leaning="A — a broken Python gate adapter can misjudge candidates that land before the after-merge proof finishes, and reverting the adapter does not re-judge landings it already passed (OQ-GR3, I3)." -->
 
    _Leaning:_ A — a broken Python gate adapter can misjudge candidates that land before the after-merge proof finishes, and reverting the adapter does not re-judge landings it already passed ([`OQ-GR3`](#OQ-GR3), [`I3`](#I3)).
+
+   **Answer:**
+
+   > _(empty — fill in when decided)_
+
+4. 💬 **OQ-GR7: Should the trunk proof run at a higher priority (`nice 5`) than candidate gates (`nice 10`), or stay at `gate 5, proof 10`?**
+
+   In [`Measured proof vs. gate contention (2026-11-25)`](#measured-proof-vs-gate-contention-2026-11-25),
+   76%–83% of high-contention proof wall time (56.60–104.30 min vs. 16.25–19.86 min at low
+   contention) came from CPU contention with `go-affected` gates under `gate 5, proof 10`
+   (3.05x CFS weight per thread for gates over proofs). Commit `5e728e5a` ([`D-GR54`](#D-GR54))
+   already cut `go-affected` median wall time from ~27–29 min to ~2.5 min, so swapping
+   `proof` to `nice 5` and `gate` to `nice 10` only adds ~1–2.5 min to `go-affected` gates
+   during active proof shards while keeping proof cycle time consistently ~16–22 min even
+   during multi-gate bursts.
+
+   - **A — Keep `repair 0, gate 5, proof 10, worker 15`.** Preserves the fastest pre-merge
+     gate turnaround (~2.5 min median for `go-affected`, ~3.8 s for fast-only gates) and ~9.7
+     landings/h, accepting slower proofs (~30–40+ min) and wider unproved-tip gaps during
+     multi-gate bursts.
+   - **B — Swap to `repair 0, proof 5, gate 10, worker 15`.** Gives the single trunk proof
+     3.05x CFS weight over candidate gates so proofs finish consistently in ~16–22 min and
+     publish smaller batches every ~17–30 min, at the cost of ~3.5–5 min `go-affected` gates
+     during active proof shards (~7–9 landings/h).
+
+   <!-- vantage: question id=OQ-GR7 leaning="B — now that D-GR54 cut go-affected gates to ~2.5 min, giving the single trunk proof nice 5 keeps proof time consistently ~16–22 min and shrinks the unproved-tip window while adding only ~1–2.5 min to contending go-affected gates." -->
+
+   _Leaning:_ B — now that [`D-GR54`](#D-GR54) cut `go-affected` gates to ~2.5 min, giving the single trunk proof `nice 5` keeps proof time consistently ~16–22 min and shrinks the unproved-tip window while adding only ~1–2.5 min to contending `go-affected` gates.
 
    **Answer:**
 
