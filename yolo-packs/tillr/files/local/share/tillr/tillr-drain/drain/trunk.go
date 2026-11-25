@@ -76,11 +76,11 @@ const DefaultRollingProgram = ""
 
 // DefaultFixerGateProgram judges a named check after the ordinary candidate gate passes.
 // The drain supplies the candidate flags and the proof's selector as --only.
-const DefaultFixerGateProgram = builtAdapterProgram + " fixer-gate"
+const DefaultFixerGateProgram = loopAdapterProgram + " fixer-gate"
 
 // DefaultReplayProgram re-runs a red gate's failing checks on the base, `{only}` being the
 // comma-separated check ids. It is handed no candidate flags: it judges a revision.
-const DefaultReplayProgram = "python3 tools/tillr-loop/tillr-loop replay --only {only}"
+const DefaultReplayProgram = "tillr-loop replay --only {only}"
 
 const goAffectedCheckID = "go-affected/affected-tillr-go-test-packages-pass"
 
@@ -92,12 +92,10 @@ var GateCodePaths = []string{
 	"tools/tillr-gate/",
 	"tools/gate/",
 	"tools/tillr-loop/",
-	"tools/tillr-drain/drain/tillr-loop.py",
 	"tools/tillr-drain/drain/fixer_gate.go",
 	"tools/gate-timing-declarations.json",
 	"yolo-packs/tillr/files/local/share/tillr/tillr-gate/",
 	"yolo-packs/tillr/files/local/share/tillr/tillr-loop/",
-	"yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/tillr-loop.py",
 	"yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/fixer_gate.go",
 }
 

@@ -127,8 +127,8 @@ func TestGateSeesRegeneratedTillrPackMirror(t *testing.T) {
 
 func TestPackMirrorRegeneratesLoopAdapterWithoutChangingDocs(t *testing.T) {
 	f, l := passFixture(t, "item-a")
-	const source = "tools/tillr-loop/tillr-loop"
-	const mirror = tillrMirrorRoot + "tillr-loop/tillr-loop"
+	const source = "tools/tillr-loop/main.go"
+	const mirror = tillrMirrorRoot + "tillr-loop/main.go"
 	const readme = tillrMirrorRoot + "tillr-loop/README.md"
 	writePackFixture(t, f.root, "yolo-packs/tillr/pack.json", "{}\n")
 	writePackFixture(t, f.root, readme, "snapshot\n")
@@ -232,8 +232,8 @@ func TestPackMirrorDeletingLoopAdapterAndCopyLands(t *testing.T) {
 	ctx := context.Background()
 	f, l := passFixture(t, "item-a")
 	const (
-		adapterSource = "tools/tillr-loop/tillr-loop"
-		adapterMirror = tillrMirrorRoot + "tillr-loop/tillr-loop"
+		adapterSource = "tools/tillr-loop/main.go"
+		adapterMirror = tillrMirrorRoot + "tillr-loop/main.go"
 		adapterReadme = tillrMirrorRoot + "tillr-loop/README.md"
 		drainSource   = "tools/tillr-drain/script"
 		drainMirror   = tillrMirrorRoot + "tillr-drain/script"
@@ -308,8 +308,8 @@ func TestPackMirrorDeletingLoopAdapterAndCopyLands(t *testing.T) {
 
 func TestPackMirrorDeletingLoopAdapter(t *testing.T) {
 	const (
-		source = "tools/tillr-loop/tillr-loop"
-		mirror = tillrMirrorRoot + "tillr-loop/tillr-loop"
+		source = "tools/tillr-loop/main.go"
+		mirror = tillrMirrorRoot + "tillr-loop/main.go"
 		readme = tillrMirrorRoot + "tillr-loop/README.md"
 	)
 	setup := func(t *testing.T) (*Loop, string, string) {

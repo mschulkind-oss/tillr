@@ -96,7 +96,7 @@ func (s *fixerGateFixtureSteps) Verdict(ctx context.Context, c Candidate, verdic
 
 func TestFixerGateJudgesOwnDiffThenNamedChecksAndLands(t *testing.T) {
 	ctx := context.Background()
-	repo, adapter := repositoryFile(t, "tools/tillr-loop/tillr-loop")
+	repo, _ := repositoryFile(t, "tools/tillr-loop/go.mod")
 	tmp := scratchUnderDurable(t)
 	declareSiblingInputs(t)
 	for _, tool := range []string{"tillr-land", "tillr-gate"} {
@@ -205,8 +205,10 @@ func TestVariants(t *testing.T) {
 			for _, file := range []string{FenceFile, ItemFenceFile} {
 				writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), file), testPath+"\n")
 			}
+			repoRoot, _ := repositoryFile(t, "tools/tillr-gate/change-gate.py")
+			t.Setenv("TILLR_INSTALL_ROOT", filepath.Join(repoRoot, "tools"))
 			steps := &ProcessSteps{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Now: time.Now,
-				GateProgram: "python3 " + adapter + " gate", LandProgram: "python3 " + adapter + " land", FixerGateProgram: DefaultFixerGateProgram}
+				GateProgram: "tillr-loop gate", LandProgram: "tillr-loop land", FixerGateProgram: DefaultFixerGateProgram}
 			l.cfg.Steps = &fixerGateFixtureSteps{ProcessSteps: steps}
 			c := Candidate{ItemID: id, RunID: "run-fixer", LaneID: "lane-1", BaseSHA: base, HeadSHA: head, Worktree: lane}
 			var result LoopResult

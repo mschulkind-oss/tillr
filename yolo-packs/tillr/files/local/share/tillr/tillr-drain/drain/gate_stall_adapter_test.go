@@ -13,7 +13,7 @@ import (
 // The real adapter invokes a wrapper stand-in with the same record contract as
 // tillr-gate run --gate. No watchdog sleeps or elapsed-time assertions enter it.
 func TestProcessStepsRealAdapterPreservesStallAndStartError(t *testing.T) {
-	_, adapter := repositoryFile(t, "tools/tillr-loop/tillr-loop")
+	_, _ = repositoryFile(t, "tools/tillr-loop/go.mod")
 	f, l, _, c := stalledFixture(t, false)
 	dir := scratchUnderDurable(t)
 	stub := filepath.Join(dir, "tillr-gate")
@@ -43,10 +43,12 @@ if face=='run':
 	if err := writeForkSafe(stub, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
+	repoRoot, _ := repositoryFile(t, "tools/tillr-gate/change-gate.py")
+	t.Setenv("TILLR_INSTALL_ROOT", filepath.Join(repoRoot, "tools"))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TILLR_LOOP_REGISTRY", filepath.Join(dir, "registry.json"))
 	t.Setenv("STUB_GATE_RESULT", "stalled")
-	steps := &ProcessSteps{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Now: time.Now, GateProgram: "python3 " + adapter + " gate"}
+	steps := &ProcessSteps{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Now: time.Now, GateProgram: "tillr-loop gate"}
 	gate, err := steps.Gate(context.Background(), c)
 	if err != nil || gate.Outcome != GateStalled || len(gate.StalledChecks) != 1 || gate.StalledChecks[0].CheckID != "documents" || gate.StalledChecks[0].CPUTimeMS != 12 {
 		t.Fatalf("stall: %+v %v", gate, err)

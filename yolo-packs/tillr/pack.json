@@ -62,6 +62,13 @@
     },
     {
       "kind": "program",
+      "bin": "tillr-loop",
+      "via": "pack",
+      "from": "programs/tillr-loop",
+      "run": "run"
+    },
+    {
+      "kind": "program",
       "bin": "tillr-run",
       "via": "pack",
       "from": "programs/tillr-run",

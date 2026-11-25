@@ -13,7 +13,7 @@ its definition's `hooks` to the following object (the path is relative to the re
 where the loop starts):
 
 ```json
-{"argv":["python3","tools/tillr-loop/tillr-loop"],"names":["gate","land","verdict","fixer-gate","replay","rolling"]}
+{"argv":["tillr-loop"],"names":["gate","land","verdict","fixer-gate","replay","rolling"]}
 ```
 
 With that declaration, the drain selects all six steps without step flags and checks
@@ -22,11 +22,11 @@ With that declaration, the drain selects all six steps without step flags and ch
 
 ```sh
 tillr drain loop --root <repo> --lanes 1 \
-  --gate    "tools/tillr-loop/tillr-loop gate --root <repo>" \
-  --land    "tools/tillr-loop/tillr-loop land" \
-  --verdict "tools/tillr-loop/tillr-loop verdict"
+  --gate    "tillr-loop gate --root <repo>" \
+  --land    "tillr-loop land" \
+  --verdict "tillr-loop verdict"
 
-tools/tillr-loop/tillr-loop self-check \
+tillr-loop self-check \
   --item <id> --lane <id> --run <id> --worktree <lane-worktree> --base <sha> --head <sha>
 ```
 
@@ -56,38 +56,35 @@ directory, environment (including `TILLR_GATE_SPANS_OUT`) and process id, and it
 status reaches the caller untranslated: an unknown result is never turned into a
 judgment. The hook name selects the operation; the only selector is `--only`.
 
-In flag mode the drain defaults `--replay` to `python3 tools/tillr-loop/tillr-loop replay
---only {only}` and `--fixer-gate` to `python3 tools/tillr-loop/tillr-loop fixer-gate`. It
-runs no rolling program unless `--rolling` names one, because the declared heavy checks
-are its after-merge proof.
+In flag mode the drain defaults `--replay` to `tillr-loop replay --only {only}` and
+`--fixer-gate` to `tillr-loop fixer-gate`. It runs no rolling program unless `--rolling`
+names one, because the declared heavy checks are its after-merge proof.
 
 ## Step programs belong to the running build
 
-When a configured command names this repository's standard adapter under the loop's
-`--root`, the drain runs its own compiled-in copy, not the live working-tree file. This
-applies to gate, fixer gate, land and verdict, whether the command runs the adapter
-through `python3` or directly as a script. Startup prints one line per step identifying the build's
-embedded adapter or an unchanged caller-configured program. Other scripts run exactly
-as configured; naming a different adapter path does not select the embedded copy.
-Definition hooks also run the exact declared executable, not the build's embedded
-adapter, even when the declaration names the standard adapter path.
+When a configured command names `tillr-loop`, `builtin:tillr-loop`, or the legacy
+`tools/tillr-loop/tillr-loop` path under the loop's `--root`, the drain runs its own
+compiled-in Go adapter package ([`loop`](./loop)), not an external executable from the
+live working tree. This applies to gate, fixer gate, land and verdict. Startup prints one
+line per step identifying the build's compiled-in adapter or an unchanged caller-configured
+program. Other programs run exactly as configured; naming a different adapter path does
+not select the compiled-in adapter. Definition hooks also run the exact declared
+executable, not the build's compiled-in adapter, even when the declaration names
+`tillr-loop`.
 
-The copy is committed as [tillr-loop.py](../tillr-drain/drain/tillr-loop.py) and embedded
-in the drain binary. A landing that edits the source therefore does not change a running
-loop's next step. Rebuild the tillr programs together and restart the loop to change its
-standard step programs. Direct invocations from a shell still read the file named on
-that command line. The underlying repository checks are not embedded by this mechanism.
+Because the Go adapter package is compiled directly into `tillr-drain`, a landing that edits
+its source does not change a running loop's next step. Rebuild the tillr programs together
+and restart the loop to change its standard step programs. Direct invocations of
+`tillr-loop` from a shell run the installed or built binary. The underlying repository
+checks are not embedded by this mechanism.
 
-After editing the adapter, regenerate its copy, then mirror the pack and commit both:
+After editing `tools/tillr-loop`, mirror the pack and commit both:
 
 ```sh
-python3 tools/tillr-loop/sync-adapter.py
 just pack-sync
 ```
 
-Both the drain suite and this adapter's suite refuse drift between source and copy.
-`just tillr-build` compiles the committed copy from the same revision as its Go
-programs; it does not regenerate from the current checkout.
+`just tillr-build` compiles the adapter from the same revision as the other Go programs.
 
 The drain supplies its build stamp through `TILLR_LOOP_ADAPTER_BUILD`. If `tillr-item
 show` omits a criterion's `claim_class` field, verdict refuses with exit 4, says the
@@ -240,9 +237,10 @@ The drain records the combined judgment before it hands the verdict to the lande
 
 ## Test
 
-`python3 tools/tillr-loop/test.py` runs the three adapters against stub stand-ins for the
-real programs (a temp directory on PATH, one per face, each answering a chosen exit code
-and logging its argv). It pins the gate and land and verdict mappings above, a missing
+`just go-test-shards tools/tillr-loop` (or `cd tools/tillr-loop && go test ./...`) runs the
+Go suite for the three adapters against stub stand-ins for the real programs (a temp directory
+on PATH, one per face, each answering a chosen exit code and logging its argv). It pins the
+gate and land and verdict mappings above, a missing
 judge as exit 4, a change that cannot be derived as exit 4, the candidate argv the gate
 hands `tillr-gate change` and that the adapter writes no change record of its own, the exact
 argv the gate hands `tillr-gate run` (the `--gate`/`--gate-arg` program and `--logs`) and
@@ -263,8 +261,8 @@ flag added to the drain fails the drain's suite until this adapter accepts it an
 regenerated, and a flag this adapter stops accepting fails this suite.
 
 It runs every case and reports all failures before exiting non-zero, so one stale assertion
-cannot hide the rest. The gate runs it too, as the `tillr-loop` check
-([`tools/gate/checks/tillr-loop.json`](../gate/checks/tillr-loop.json)): a heavy whole-tree
-declaration whose reads include this directory, so `just done` and the drain's after-merge
-proof run it, and a case that stops describing the adapter is caught without anyone
-running the suite by hand.
+cannot hide the rest. The gate runs it too, as the `go-test-tillr-loop` check
+([`tools/gate/checks/go-test-tillr-loop.json`](../gate/checks/go-test-tillr-loop.json)): a
+heavy whole-tree declaration whose reads include this directory, so `just done` and the
+drain's after-merge proof run it, and a case that stops describing the adapter is caught
+without anyone running the suite by hand.

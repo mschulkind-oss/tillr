@@ -17,6 +17,7 @@
     "tools/gate/go_affected.py",
     "tools/tillr-cli/",
     "tools/tillr-drain/",
+    "tools/tillr-loop/",
     "tools/tillr-gate/",
     "tools/tillr-item/",
     "tools/tillr-land/",

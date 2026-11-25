@@ -319,14 +319,22 @@ func TestSub(t *testing.T) {
 import "testing"
 func TestUnrelatedFail(t *testing.T) { t.Fatal("unrelated package failure") }
 `)
-	// The default replay program is the tree's loop adapter; the stand-in records the
-	// arguments it was handed.
+	// The default replay program is the tree's loop adapter; the stand-in tillr-gate
+	// records the arguments it was handed.
 	wholeCheckLog := filepath.Join(t.TempDir(), "whole-check-called.txt")
-	writeReplayTestFile(t, filepath.Join(root, "tools", "tillr-loop", "tillr-loop"), `import sys
+	bin := t.TempDir()
+	fakeGate := filepath.Join(bin, "tillr-gate")
+	writeReplayTestFile(t, fakeGate, `#!/usr/bin/env python3
+import sys
 with open(`+`"`+wholeCheckLog+`"`+`, "a") as f:
     f.write(" ".join(sys.argv[1:]) + "\n")
 sys.exit(0)
 `)
+	if err := os.Chmod(fakeGate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	writeReplayTestFile(t, filepath.Join(root, "tools", "gate", "checks", "go-tool-sample.json"), `{"id": "go-tool/tools-sample-s-whole-suite-passes", "scope": "tree", "tier": "heavy"}`+"\n")
 	runGit(t, root, "add", ".")
 	runGit(t, root, "commit", "-qm", "base")
 	baseSHA := runGit(t, root, "rev-parse", "HEAD")
@@ -408,8 +416,8 @@ sys.exit(0)
 		if err != nil {
 			t.Fatalf("expected the whole check fallback: %v", err)
 		}
-		if got := strings.TrimSpace(string(raw)); got != "replay --only "+checkID {
-			t.Fatalf("whole-check args = %q, want %q", got, "replay --only "+checkID)
+		if got := strings.TrimSpace(string(raw)); !strings.Contains(got, "--only "+checkID) {
+			t.Fatalf("whole-check args = %q, want --only %s", got, checkID)
 		}
 	})
 
@@ -436,8 +444,8 @@ sys.exit(0)
 		if err != nil {
 			t.Fatalf("expected the whole check when wholeCheckReplay=true: %v", err)
 		}
-		if got := strings.TrimSpace(string(raw)); got != "replay --only "+checkID {
-			t.Fatalf("whole-check args = %q, want %q", got, "replay --only "+checkID)
+		if got := strings.TrimSpace(string(raw)); !strings.Contains(got, "--only "+checkID) {
+			t.Fatalf("whole-check args = %q, want --only %s", got, checkID)
 		}
 	})
 

@@ -25,15 +25,10 @@ func TestDefaultFixerGateDoesNotNeedAnAdapterCheckout(t *testing.T) {
 func TestStandardStepsKeepTheirBuildAfterAnAdapterLanding(t *testing.T) {
 	root := scratchUnderDurable(t)
 	adapter := filepath.Join(root, "tools", "tillr-loop", "tillr-loop")
-	_, source := repositoryFile(t, "tools/tillr-loop/tillr-loop")
-	raw, err := os.ReadFile(source)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(filepath.Dir(adapter), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeForkFile(t, adapter, string(raw))
+	writeForkFile(t, adapter, "#!/bin/sh\necho 'adapter at build'\n")
 	git := func(args ...string) {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
@@ -45,9 +40,9 @@ func TestStandardStepsKeepTheirBuildAfterAnAdapterLanding(t *testing.T) {
 	git("add", ".")
 	git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "adapter at build")
 	steps := &ProcessSteps{Root: root, Store: filepath.Join(root, "absent-store"),
-		GateProgram:      "python3 tools/tillr-loop/tillr-loop gate",
+		GateProgram:      "tillr-loop gate",
 		LandProgram:      "python3 " + adapter + " land",
-		VerdictProgram:   "python3 " + adapter + " verdict",
+		VerdictProgram:   "python3 tools/tillr-loop/tillr-loop verdict",
 		FixerGateProgram: DefaultFixerGateProgram}
 	// Land a contract-breaking adapter into the runtime checkout after constructing the steps.
 	writeForkFile(t, adapter, "import sys\nprint('adapter from newer landing', file=sys.stderr)\nsys.exit(99)\n")
@@ -140,6 +135,8 @@ func TestStandardAdapterSelectionOnlyReplacesTheScript(t *testing.T) {
 		command string
 		want    int
 	}{
+		{"tillr-loop gate", 0},
+		{"builtin:tillr-loop gate", 0},
 		{"python3 tools/tillr-loop/tillr-loop gate", 1},
 		{"python3 " + adapter + " land", 1},
 		{"python3 -u -B " + adapter + " verdict", 3},
@@ -155,21 +152,5 @@ func TestStandardAdapterSelectionOnlyReplacesTheScript(t *testing.T) {
 		if got := steps.standardAdapterArg(strings.Fields(tc.command)); got != tc.want {
 			t.Errorf("selection %q = %d, want %d", tc.command, got, tc.want)
 		}
-	}
-}
-
-func TestEmbeddedAdapterMatchesItsSource(t *testing.T) {
-	_, source := repositoryFile(t, "tools/tillr-loop/tillr-loop")
-	copy := filepath.Join(filepath.Dir(source), "..", "tillr-drain", "drain", "tillr-loop.py")
-	want, err := os.ReadFile(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(copy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatal("embedded adapter drift: run python3 tools/tillr-loop/sync-adapter.py")
 	}
 }

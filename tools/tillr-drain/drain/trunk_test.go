@@ -39,8 +39,7 @@ func TestGateCodePathsAreNeverInAFixerFence(t *testing.T) {
 		"tools/gate/done.py",
 		"tools/gate/checks/go-build.json",
 		"tools/tillr-gate/run.go",
-		"tools/tillr-loop/tillr-loop",
-		"tools/tillr-drain/drain/tillr-loop.py",
+		"tools/tillr-loop/main.go",
 		"tools/tillr-drain/drain/fixer_gate.go",
 		"yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/fixer_gate.go",
 	} {

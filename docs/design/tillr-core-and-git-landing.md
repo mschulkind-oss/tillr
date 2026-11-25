@@ -60,7 +60,7 @@ the core, and the contract it gets).
 - **The `git-landing` charter** *("the landing definition" below)*: the charter that lands changes
   in a Git repository, from item blocks in documents through a gate. Its data file is
   [landing.json](../../tools/tillr/definition/landing.json) and its hook program is
-  [tillr-loop](../../tools/tillr-loop/tillr-loop).
+  [tillr-loop](../../tools/tillr-loop/).
 - **Definition file:** the JSON file that states a definition's vocabulary and rules. Not a
   workflow file, which states the steps of one item's graph.
 - **Hook program:** the one program a definition names, which the core calls for each judgment it

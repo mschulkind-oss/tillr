@@ -40,12 +40,14 @@ func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
 			}
 		}
 	}
-	// Select only the executable: pack-docs owns the README in the same directory.
-	const adapter = "tillr-loop/tillr-loop"
+	// Mirror tools/tillr-loop/ (except README.md, owned by pack-docs).
+	const loopSourcePrefix = "tools/tillr-loop/"
+	const loopMirrorPrefix = tillrMirrorRoot + "tillr-loop/"
 	for _, path := range changedPaths {
-		if path == "tools/"+adapter || path == tillrMirrorRoot+adapter {
+		if (strings.HasPrefix(path, loopSourcePrefix) && path != loopSourcePrefix+"README.md") ||
+			(strings.HasPrefix(path, loopMirrorPrefix) && path != loopMirrorPrefix+"README.md") {
 			args = append(args, "tillr-loop")
-			destinations = append(destinations, tillrMirrorRoot+adapter)
+			destinations = append(destinations, tillrMirrorRoot+"tillr-loop")
 			break
 		}
 	}

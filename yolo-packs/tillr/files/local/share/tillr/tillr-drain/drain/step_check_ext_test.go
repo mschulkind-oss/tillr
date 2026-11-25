@@ -33,20 +33,20 @@ func TestStepFlagRefusalStopsBeforeDispatch(t *testing.T) {
 	for _, check := range []bool{false, true} {
 		t.Run(stringBool(check), func(t *testing.T) {
 			f := newLoopFixture(t, stub(t, "adapter", "exit 0"))
-			raw, err := os.ReadFile(filepath.Join("..", "..", "tillr-loop", "tillr-loop"))
-			if err != nil {
+			// Model an installed adapter that has not learned one flag the loop sends.
+			oldAdapter := `#!/bin/sh
+case "$*" in
+  *--help*) echo "tillr-step-argv-check-v1"; exit 0 ;;
+  *--check-argv*) echo "error: unrecognized arguments: --observed-trunk" >&2; exit 2 ;;
+esac
+exit 0
+`
+			path := filepath.Join(scratch(t, "old-adapter"), "tillr-loop")
+			writeFile(t, path, oldAdapter)
+			if err := os.Chmod(path, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			// Model an installed adapter that has not learned one flag the loop sends.
-			old := "        parser.add_argument(\"--observed-trunk\", default=None, metavar=\"SHA\",\n" +
-				"                            help=\"the loop's last observed trunk tip, handed to `tillr-land pass`, \"\n" +
-				"                                 \"which refuses with trunk-rewritten if the trunk no longer contains it\")\n"
-			if !strings.Contains(string(raw), old) {
-				t.Fatal("adapter's observed-trunk declaration changed")
-			}
-			path := filepath.Join(scratch(t, "old-adapter"), "tillr-loop")
-			writeFile(t, path, strings.Replace(string(raw), old, "", 1))
-			bad := "python3 " + path + " land"
+			bad := path + " land"
 			args := append(stepCheckArgs(t, f), "--gate", "/bin/true", "--land", bad, "--verdict", "/bin/true")
 			if check {
 				args = append(args, "--check")

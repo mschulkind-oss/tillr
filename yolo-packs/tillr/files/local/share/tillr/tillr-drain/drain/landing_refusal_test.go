@@ -93,11 +93,7 @@ func TestNonLandingPreservesCriteriaAndAllowsSync(t *testing.T) {
 			f := newLoopFixture(t, stub(t, "adapter", adapter))
 			syncLandingItem(t, f, landingItemDefinition)
 			before := landingCriteria(t, f.store)
-			verdictAdapter, err := filepath.Abs("../../tillr-loop/tillr-loop")
-			if err != nil {
-				t.Fatal(err)
-			}
-			verdict := fmt.Sprintf("python3 %q verdict --root %q --tillr-item %q", verdictAdapter, f.root, sibling(t, "item"))
+			verdict := fmt.Sprintf("tillr-loop verdict --root %q --tillr-item %q", f.root, sibling(t, "item"))
 			land := always(t, "land", 1)
 			// A refused landing goes back to its worker with the evidence; the second,
 			// identical refusal is a repeat, and with no design seat in the fixture's

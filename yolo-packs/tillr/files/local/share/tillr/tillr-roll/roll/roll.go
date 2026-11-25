@@ -580,10 +580,9 @@ func InstallCommit(root, live, tip string, noRequest bool, store string, retirem
 		}
 	}
 
-	adapter := filepath.Join(source, "tools/tillr-loop/tillr-loop")
 	checkArgs := []string{filepath.Join(stage, "tillr-drain"), "loop", "--check", "--root", source, "--store", store}
 	for _, face := range []string{"gate", "land", "verdict"} {
-		checkArgs = append(checkArgs, "--"+face, shellJoin([]string{"python3", adapter, face}))
+		checkArgs = append(checkArgs, "--"+face, "tillr-loop "+face)
 	}
 	checkEnv := withEnvVar(baseEnv, "PATH", stage+string(os.PathListSeparator)+os.Getenv("PATH"))
 	var checkedRes CmdResult

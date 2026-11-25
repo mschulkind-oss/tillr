@@ -145,7 +145,7 @@ const (
 )
 
 func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
-	repo, _ := repositoryFile(t, "tools/tillr-loop/tillr-loop")
+	repo, _ := repositoryFile(t, "tools/tillr-loop/go.mod")
 	f, _ := passFixture(t, "item-a")
 	log := adapterStubs(t)
 	installRoot := scratchUnderDurable(t)
@@ -165,9 +165,9 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 	// The keeper's commands and the fixer default use the running build's copy.
 	steps := &ProcessSteps{
 		Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Now: time.Now,
-		GateProgram:      "builtin:tillr-loop gate",
-		LandProgram:      "builtin:tillr-loop land",
-		VerdictProgram:   "builtin:tillr-loop verdict",
+		GateProgram:      "tillr-loop gate",
+		LandProgram:      "tillr-loop land",
+		VerdictProgram:   "tillr-loop verdict",
 		FixerGateProgram: DefaultFixerGateProgram,
 	}
 	candidate := func(item, run string) Candidate {
@@ -193,7 +193,7 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 		if err != nil || out.Outcome != GatePassed {
 			t.Fatalf("%s: gate argv: %+v, %v", g.name, out, err)
 		}
-		keep(g.name, run, "gate", 3)
+		keep(g.name, run, "gate", 2)
 	}
 	c := candidate(TrunkFixerID(fixtureBase), "run-fixer-named")
 	c.HeadSHA = runGit(t, worktree, "rev-parse", "HEAD")
@@ -206,7 +206,7 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 	if answer, output := steps.fixerCheck(ctx, c, "fixture/check"); answer != "pass" {
 		t.Fatalf("named check %s: %s", answer, output)
 	}
-	keep("fixer-named", c.RunID, "fixer-gate", 3)
+	keep("fixer-named", c.RunID, "fixer-gate", 2)
 	args := generated[len(generated)-1].Args
 	args[slices.Index(args, "--head")+1] = "<head>"
 
@@ -246,7 +246,7 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 		if l.name == "land" && strings.Contains(last, "--observed-trunk") {
 			t.Fatalf("the adapter invented an observation the drain never made: %s", last)
 		}
-		keep(l.name, run, "land", 3)
+		keep(l.name, run, "land", 2)
 	}
 
 	// Verdict: the only verdict the loop records.
@@ -255,7 +255,7 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 	if err := steps.Verdict(ctx, candidate("item-a", run), "pass"); err != nil {
 		t.Fatalf("the adapter did not accept the drain's verdict argv: %v", err)
 	}
-	keep("verdict", run, "verdict", 3)
+	keep("verdict", run, "verdict", 2)
 
 	path := filepath.Join(repo, drainArgvFixture)
 	var encoded bytes.Buffer
@@ -291,7 +291,7 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 // a trunk observation in the store. The observation is honored rather than swallowed: the
 // same landing refuses with trunk-rewritten when the observed tip is no longer on the trunk.
 func TestTheDrainLandsThroughTheRealAdapterAndTheRealLander(t *testing.T) {
-	_, adapter := repositoryFile(t, "tools/tillr-loop/tillr-loop")
+	_, _ = repositoryFile(t, "tools/tillr-loop/go.mod")
 	root := scratchUnderDurable(t)
 	config := filepath.Join(root, "gitconfig")
 	writeForkFile(t, config, "[user]\n name = tillr\n email = tillr@example.invalid\n")
@@ -378,7 +378,7 @@ func TestTheDrainLandsThroughTheRealAdapterAndTheRealLander(t *testing.T) {
 			writeRunRecord(t, RunDir(repo, run), string(verdict))
 
 			steps := &ProcessSteps{Root: repo, Store: db, Now: time.Now,
-				LandProgram: "python3 " + adapter + " land --tillr-land " + bin}
+				LandProgram: "tillr-loop land --tillr-land " + bin}
 			out, err := steps.Land(context.Background(), Candidate{
 				ItemID: "item-a", LaneID: "lane-1", RunID: run, Worktree: lane,
 				BaseSHA: base, HeadSHA: head, ObservedTrunk: observed,

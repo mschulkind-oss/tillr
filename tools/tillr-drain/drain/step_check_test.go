@@ -78,11 +78,11 @@ else:
 }
 
 func TestStartupChecksTheRealAdapterWithoutCandidateArtifacts(t *testing.T) {
-	_, adapter := repositoryFile(t, "tools/tillr-loop/tillr-loop")
+	_, _ = repositoryFile(t, "tools/tillr-loop/go.mod")
 	root := scratchUnderDurable(t)
 	steps := &ProcessSteps{Root: root, Store: filepath.Join(root, "absent-store"),
-		GateProgram: "python3 " + adapter + " gate", LandProgram: "python3 " + adapter + " land",
-		VerdictProgram: "python3 " + adapter + " verdict", FixerGateProgram: "python3 " + adapter + " fixer-gate"}
+		GateProgram: "tillr-loop gate", LandProgram: "tillr-loop land",
+		VerdictProgram: "tillr-loop verdict", FixerGateProgram: "tillr-loop fixer-gate"}
 	var warnings bytes.Buffer
 	if err := steps.CheckPrograms(context.Background(), &warnings); err != nil {
 		t.Fatal(err)

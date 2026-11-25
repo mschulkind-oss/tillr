@@ -15,6 +15,7 @@
     "tools/gate/go-test-edges.json",
     "tests/go-test-shards.test.py",
     "tools/tillr-drain/",
+    "tools/tillr-loop/",
     "tools/tillr-roll/",
     "tools/tillr/",
     "tools/tillr-item/",

@@ -30,6 +30,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/keep"
 	"github.com/mschulkind-oss/tillr-drain/patchmoves"
 	"github.com/mschulkind-oss/tillr-drain/restart"
+	"github.com/mschulkind-oss/tillr-loop/loop"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
@@ -42,6 +43,12 @@ import (
 // goroutine. Tracing off, each flush is one atomic load.
 func main() {
 	defer store.FlushSQLiteTraceAtExit()
+	if os.Getenv("TILLR_DRAIN_EXEC_LOOP_ADAPTER") == "1" {
+		_ = os.Unsetenv("TILLR_DRAIN_EXEC_LOOP_ADAPTER")
+		code := loop.Main(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+		store.FlushSQLiteTraceAtExit()
+		os.Exit(code)
+	}
 	code := dispatch(os.Args[1:])
 	store.FlushSQLiteTraceAtExit()
 	os.Exit(code)
@@ -113,6 +120,8 @@ func dispatch(args []string) int {
 		return keep.Run(rest, os.Stdout, os.Stderr)
 	case "fork-gate":
 		return forkgate.Run(rest, os.Stdout, os.Stderr)
+	case "loop-adapter":
+		return loop.Main(rest, os.Stdin, os.Stdout, os.Stderr)
 	default:
 		return fail(drain.Usagef("unknown face %q: want %s", face, faceList))
 	}
@@ -776,7 +785,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "probe-backend, workflow, why, workers, policy, plan, once, split, retry, clear-fault, accept-rewrite, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, scale, stop, restart, keep, fork-gate or loop"
+const faceList = "probe-backend, workflow, why, workers, policy, plan, once, split, retry, clear-fault, accept-rewrite, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, scale, stop, restart, keep, fork-gate, loop-adapter or loop"
 
 func scaleFace(args []string) int {
 	fs := newFlagSet("scale")

@@ -294,9 +294,9 @@ $ tillr drain loop \
   --store "$PWD/.tillr/state.db" \
   --policy "$HOME/.config/tillr/my-policy.json" \
   --brief-template "$TILLR_CLONE/tools/tillr-run/backends/brief-template.md" \
-  --gate "builtin:tillr-loop gate --gate-program true" \
-  --land "builtin:tillr-loop land" \
-  --verdict "builtin:tillr-loop verdict" \
+  --gate "tillr-loop gate --gate-program true" \
+  --land "tillr-loop land" \
+  --verdict "tillr-loop verdict" \
   --replay "" \
   --lanes 1 \
   --check
@@ -315,9 +315,9 @@ $ tillr drain loop \
   --store "$PWD/.tillr/state.db" \
   --policy "$HOME/.config/tillr/my-policy.json" \
   --brief-template "$TILLR_CLONE/tools/tillr-run/backends/brief-template.md" \
-  --gate "builtin:tillr-loop gate --gate-program true" \
-  --land "builtin:tillr-loop land" \
-  --verdict "builtin:tillr-loop verdict" \
+  --gate "tillr-loop gate --gate-program true" \
+  --land "tillr-loop land" \
+  --verdict "tillr-loop verdict" \
   --replay "" \
   --lanes 1 \
   --exit-when-drained
@@ -397,7 +397,7 @@ A landed item leaves three durable traces:
 
 3. **Missing `tools/gate/checks/` or default `change-gate.py` in your repository.** The loop
    reports `gate-no-verdict`. Commit at least one check JSON file under `tools/gate/checks/`, and
-   pass `--gate-program` inside `--gate` (for example `--gate "builtin:tillr-loop gate --gate-program true"`
+   pass `--gate-program` inside `--gate` (for example `--gate "tillr-loop gate --gate-program true"`
    or your repository's own test command).
 
 ---

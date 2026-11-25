@@ -92,6 +92,7 @@ def test_discover_modules() -> None:
         "tools/tillr-gate",
         "tools/tillr-item",
         "tools/tillr-land",
+        "tools/tillr-loop",
         "tools/tillr-roll",
         "tools/tillr-run",
         "tools/tillr-store",
@@ -328,7 +329,7 @@ def test_selection_rules(root_graph: dict) -> None:
 
     # 10. Scoped read_tests on one read path select only the reading packages and narrow
     # each to its reader tests, whether the path changes alone or beside an unrelated file.
-    scoped_read = "tools/tillr-loop/tillr-loop"
+    scoped_read = "tools/pack-mirror-links.py"
     drain_pkg = "github.com/mschulkind-oss/tillr-drain/drain"
     gate_pkg = "github.com/mschulkind-oss/tillr-gate"
     drain_readers = go_affected.scan_package_tests(ROOT, {

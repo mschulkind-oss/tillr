@@ -350,11 +350,7 @@ func testRemoteSyncLandingEvidence(t *testing.T, phase string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build tillr-item: %v: %s", err, out)
 	}
-	adapter, err := filepath.Abs("../../tillr-loop/tillr-loop")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.l.cfg.Steps = &ProcessSteps{Root: p.f.root, Store: p.f.storePath, Now: p.l.cfg.Now, ItemBin: bin, VerdictProgram: "python3 " + adapter + " verdict --tillr-item " + bin}
+	p.l.cfg.Steps = &ProcessSteps{Root: p.f.root, Store: p.f.storePath, Now: p.l.cfg.Now, ItemBin: bin, VerdictProgram: "tillr-loop verdict --tillr-item " + bin}
 	var tip string
 	if phase == "uninterrupted" {
 		tip = landStagedReplay(t, p, c)

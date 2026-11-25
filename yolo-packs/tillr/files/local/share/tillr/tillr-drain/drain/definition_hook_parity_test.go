@@ -1,0 +1,111 @@
+package drain
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
+	declareSiblingInputs(t)
+	adapter := filepath.Join(scratchUnderDurable(t), "tillr-loop")
+	build := exec.Command("go", "build", "-o", adapter, ".")
+	build.Dir = filepath.Join("..", "..", "tillr-loop")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build tillr-loop: %v: %s", err, out)
+	}
+	_, fixture := repositoryFile(t, drainArgvFixture)
+	raw, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []argvCase
+	if err := json.Unmarshal(raw, &cases); err != nil || len(cases) == 0 {
+		t.Fatalf("fixture: %v", err)
+	}
+	f, _ := passFixture(t, "item-a")
+	adapterStubs(t)
+	installRoot := t.TempDir()
+	installGate := filepath.Join(installRoot, "tillr-gate")
+	if err := os.MkdirAll(installGate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(installGate, "change-gate.py"), "print('change gate ran')\n")
+	writeForkFile(t, filepath.Join(installGate, "tree-check.py"), "print('named check ran')\n")
+	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
+	worktree := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
+	head := runGit(t, worktree, "rev-parse", "HEAD")
+	if err := os.MkdirAll(filepath.Join(worktree, "tools"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	hooks, _ := hookStub(t, []string{"gate", "land", "verdict", "fixer-gate", "replay", "rolling"}, "")
+	hooks.Argv = []string{adapter}
+	steps := &ProcessSteps{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Now: time.Now}
+	steps.ConfigureHooks(hooks, nil) // No explicit step flags: only the definition supplies them.
+	if err := steps.CheckPrograms(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		t.Run(tc.Case, func(t *testing.T) {
+			args := append([]string{}, tc.Args...)
+			for i, word := range args {
+				word = strings.ReplaceAll(word, "<worktree>", worktree)
+				word = strings.ReplaceAll(word, "<root>", f.root)
+				word = strings.ReplaceAll(word, "<store>", f.storePath)
+				args[i] = strings.ReplaceAll(word, "<head>", head)
+			}
+			values := map[string]string{}
+			for i := 0; i < len(args); i++ {
+				if args[i] != "--all" {
+					values[args[i]] = args[i+1]
+					i++
+				}
+			}
+			c := Candidate{ItemID: values["--item"], LaneID: values["--lane"], RunID: values["--run"], Worktree: values["--worktree"], BaseSHA: values["--base"], HeadSHA: values["--head"], ObservedTrunk: values["--observed-trunk"], BaseRef: values["--base-ref"], WorkerHeadSHA: values["--message-from"]}
+			if tc.Face == "land" || tc.Face == "verdict" {
+				writeRunRecord(t, RunDir(f.root, c.RunID), "{}\n")
+			}
+			face := tc.Face
+			switch face {
+			case "gate":
+				out, err := steps.Gate(context.Background(), c)
+				if err != nil || out.Outcome != GatePassed {
+					t.Fatalf("gate: %+v / %v", out, err)
+				}
+			case "fixer-gate":
+				// The named check is a fast whole-tree declaration, so the adapter hands it to
+				// tillr-gate's installed tree-check program; the stand-in answers a pass.
+				if err := os.MkdirAll(filepath.Join(worktree, "tools", "gate", "checks"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeForkFile(t, filepath.Join(worktree, "tools", "gate", "checks", "fixture.json"),
+					`{"id": "`+values["--only"]+`", "scope": "tree", "tier": "fast"}`+"\n")
+				if answer, output := steps.fixerCheck(context.Background(), c, values["--only"]); answer != "pass" {
+					t.Fatalf("named check %s: %s", answer, output)
+				}
+			case "land":
+				out, err := steps.Land(context.Background(), c)
+				if err != nil || out.Result != LandLanded {
+					t.Fatalf("land: %+v / %v", out, err)
+				}
+			case "verdict":
+				if err := steps.Verdict(context.Background(), c, values["--verdict"]); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				t.Fatalf("unhandled fixture face %q", face)
+			}
+			got := lastSpanArgv(t, f.root, c.RunID)
+			want := append([]string{adapter, face}, args...)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("definition hook argv = %v, flag form = %v", got, want)
+			}
+		})
+	}
+}

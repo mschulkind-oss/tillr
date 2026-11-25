@@ -316,10 +316,6 @@ signal.pause()
 `
 	program := executable(t, "exec python3 - <<'PY'\n"+fixture+"PY")
 	if adapter {
-		path, err := filepath.Abs("../../tillr-loop/tillr-loop")
-		if err != nil {
-			t.Fatal(err)
-		}
 		// The adapter replaces itself with the judge on PATH, so the stand-in judge is the
 		// fixture program, and the named check is a heavy whole-tree declaration at the tip.
 		bin := scratchUnderDurable(t)
@@ -340,9 +336,9 @@ signal.pause()
 		runGit(t, root, "add", "tools/gate/checks/check.json")
 		runGit(t, root, "commit", "-m", "Add check fixture")
 		tip = runGit(t, root, "rev-parse", "HEAD")
-		program = path + " rolling --all"
+		program = "tillr-loop rolling --all"
 		if replay {
-			program = path + " replay --only {only}"
+			program = "tillr-loop replay --only {only}"
 		}
 	}
 	laneRoot := filepath.Join(root, ".tillr", "lanes")

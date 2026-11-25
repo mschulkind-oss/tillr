@@ -4,8 +4,8 @@ This pack ([`pack.json`](./pack.json)) delivers tillr, the owner's work-queue to
 
 | What | Where it lands in the jail | Produced by |
 | :--- | :--- | :--- |
-| The Go modules and the ten `tillr*` launchers on `PATH` that build lazily per source digest | `~/.local/share/tillr/<module>/`, `~/.local/bin/` | `just pack-sync`, checked by [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) |
-| The [Git-landing loop adapter](../../tools/tillr-loop/README.md), the program the loop calls to check, land, and record verdicts for candidates | `~/.local/share/tillr/tillr-loop/tillr-loop` (invoke by path; no `PATH` launcher) | `just pack-sync`, checked by the same suite |
+| The Go modules and the eleven `tillr*` launchers on `PATH` that build lazily per source digest | `~/.local/share/tillr/<module>/`, `~/.local/bin/` | `just pack-sync`, checked by [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) |
+| The [Git-landing loop adapter](../../tools/tillr-loop/README.md), the program the loop calls to check, land, and record verdicts for candidates | `~/.local/share/tillr/tillr-loop/`, `~/.local/bin/tillr-loop` (built lazily per source digest like the other `tillr*` launchers) | `just pack-sync`, checked by the same suite |
 | A dated snapshot of tillr's design documentation: the [status index](../../docs/tillr/design-status.md) and every document it marks `shipped` | `~/.local/share/tillr/docs/`, plus `~/.local/share/tillr/tillr-loop/README.md` | `just pack-docs` ([`tools/pack-docs.py`](../../tools/pack-docs.py)), checked by the same suite |
 | Two skills: [`tillr-operating`](./skills/tillr-operating/SKILL.md) (running and recovering the loop) and [`tillr-designs`](./skills/tillr-designs/SKILL.md) (reading the designs and sending tillr requests from another repository) | each agent's skill directory | [`skills/`](./skills/) |
 

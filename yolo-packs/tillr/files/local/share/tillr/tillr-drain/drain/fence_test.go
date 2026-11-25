@@ -76,16 +76,14 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 		},
 		{
 			name:    "the loop program inside a module's directory",
-			allowed: []string{"tools/tillr-loop/tillr-loop"},
+			allowed: []string{"tools/tillr-loop/main.go"},
 			want: []string{
-				"tools/tillr-loop/tillr-loop",
+				"tools/tillr-loop/main.go",
 				mirror + "tillr-loop/",
 				"tools/tillr-loop/README.md",
 				skill,
 				docsTest,
 				"tools/tillr-loop/",
-				"tools/tillr-drain/drain/tillr-loop.py",
-				mirror + "tillr-drain/drain/tillr-loop.py",
 			},
 			why: "a fence naming only the program barred the lane from the test and README judged with it",
 		},

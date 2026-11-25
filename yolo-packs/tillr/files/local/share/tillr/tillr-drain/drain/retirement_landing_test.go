@@ -52,10 +52,6 @@ func TestLoopRetiredBlockLandsUnderTheWorkerMessage(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, out)
 	}
-	adapter, err := filepath.Abs(filepath.Join("..", "..", "tillr-loop", "tillr-loop"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := RunDir(repo, candidate.RunID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -71,7 +67,7 @@ func TestLoopRetiredBlockLandsUnderTheWorkerMessage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "gate.verdict.json"), verdict, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	steps := &ProcessSteps{Root: repo, LandProgram: "python3 " + adapter + " land --store " + f.storePath + " --tillr-land " + bin}
+	steps := &ProcessSteps{Root: repo, LandProgram: "tillr-loop land --store " + f.storePath + " --tillr-land " + bin}
 	outcome, err := steps.Land(context.Background(), candidate)
 	if err != nil || outcome.Result != LandLanded {
 		t.Fatalf("land: %+v / %v", outcome, err)

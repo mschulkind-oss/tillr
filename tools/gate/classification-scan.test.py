@@ -68,6 +68,7 @@ GO_SITES = {
     ),
     "tools/tillr-drain/drain/trunk_release.go": ("repairedTrunkWaiter", "releaseTrunkAcquittals"),
     "tools/tillr-drain/heavy/status.go": ("ReadStatus",),
+    "tools/tillr-loop/loop/loop.go": ("execute",),
 }
 UNMOVED_GO = ()
 
@@ -271,11 +272,6 @@ class ClassificationScanTest(unittest.TestCase):
             functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
             self.assertEqual({n.name for n in functions}, set(names), path)
             self.assertEqual(raw_exit_comparisons(functions), [], path)
-        loop = ast.parse((ROOT / "tools/tillr-loop/tillr-loop").read_text())
-        execute = next(n for n in loop.body if isinstance(n, ast.FunctionDef) and n.name == "execute")
-        self.assertEqual(loop_gate_comparisons(execute), [])
-        self.assertEqual((ROOT / "tools/tillr-loop/tillr-loop").read_bytes(),
-                         (ROOT / "tools/tillr-drain/drain/tillr-loop.py").read_bytes())
         self.assertEqual(UNMOVED_PYTHON, ())
         self.assertEqual([p for p in UNMOVED_GO if p.startswith("tools/tillr-gate/")], [])
         for path, names in GO_SITES.items():
@@ -283,7 +279,7 @@ class ClassificationScanTest(unittest.TestCase):
             for fn in names:
                 self.assertRegex(source, rf"(?m)^func\s+(?:\([^)]+\)\s+)?{re.escape(fn)}\s*\(", path)
         unmoved_go = set(UNMOVED_GO)
-        for root_dir in ("tools/tillr-gate", "tools/tillr-drain"):
+        for root_dir in ("tools/tillr-gate", "tools/tillr-drain", "tools/tillr-loop"):
             for go_file in sorted((ROOT / root_dir).rglob("*.go")):
                 if go_file.name.endswith("_test.go"):
                     continue
@@ -328,16 +324,15 @@ def main():
         self.assertEqual(raw_exit_comparisons(source.body), [2])
 
     def test_early_loop_stall_branch_cannot_bypass_classification(self):
-        loop = ast.parse((ROOT / "tools/tillr-loop/tillr-loop").read_text())
-        execute = next(n for n in loop.body if isinstance(n, ast.FunctionDef) and n.name == "execute")
-        gate_index = next(i for i, n in enumerate(execute.body) if isinstance(n, ast.If)
-                          and ast.unparse(n.test) == "kind == 'gate'")
-        old_branch, = ast.parse('''\
-if kind == "gate" and code == EXIT_STALLED:
-    return EXIT_STALLED
-''').body
-        execute.body.insert(gate_index, old_branch)
-        self.assertEqual(loop_gate_comparisons(execute), [old_branch.lineno])
+        source = '''package loop
+func execute(kind string, code int) int {
+	if kind == "gate" && code == ExitStalled {
+		return ExitStalled
+	}
+	return 0
+}
+'''
+        self.assertEqual(raw_go_comparisons(source), [3])
 
     def test_scan_allows_shape_checks_forwarding_and_rendering(self):
         source = ast.parse('''\

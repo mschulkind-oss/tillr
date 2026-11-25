@@ -554,12 +554,6 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 		probeCmd := s.stepCommand(ctx, argv, nil)
 		childArgv = append([]string(nil), probeCmd.Args...)
 		childEnv = append(withoutProcessEnv(probeCmd.Env, dropEnv...), env...)
-		if s.standardAdapterArg(argv) >= 0 {
-			stdinFile = filepath.Join(gateDir, "gate.stdin")
-			if err := os.WriteFile(stdinFile, []byte(builtAdapter), 0o600); err != nil {
-				return detachedGateHandle{}, Externalf("writing gate adapter stdin: %v", err)
-			}
-		}
 	}
 
 	ownerPID, ownerStartTicks, err := heavySupervisorIdentity()
@@ -1662,9 +1656,14 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		if len(argv) == 0 {
 			return ReplayOutcome{Rev: rev, Known: false}, nil
 		}
-		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd := s.stepCommand(ctx, argv, nil)
 		cmd.Dir = dir
-		cmd.Env = s.replayChildEnv(candidate, "TILLR_FORK_DRIFT=1")
+		env := s.replayChildEnv(candidate, "TILLR_FORK_DRIFT=1")
+		env = append(withoutProcessEnv(env, "TILLR_LOOP_ADAPTER_BUILD", "TILLR_DRAIN_EXEC_LOOP_ADAPTER"), stepBuildEnv())
+		if s.standardAdapterArg(argv) >= 0 {
+			env = append(env, execLoopAdapterEnv)
+		}
+		cmd.Env = env
 		replayClass := ProcessClassGate
 		if IsRevertItem(candidate.ItemID) || IsTrunkFixer(candidate.ItemID) {
 			replayClass = ProcessClassRepair
@@ -1885,9 +1884,14 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	defer cleanup()
 	spans := filepath.Join(s.LaneRoot, ".rolling", GateSpansFile)
 	_ = os.Remove(spans)
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := s.stepCommand(ctx, argv, nil)
 	cmd.Dir = dir
-	cmd.Env = s.checkProcessEnv(os.Environ(), "TILLR_GATE_SPANS_OUT="+spans)
+	env := s.checkProcessEnv(os.Environ(), "TILLR_GATE_SPANS_OUT="+spans)
+	env = append(withoutProcessEnv(env, "TILLR_LOOP_ADAPTER_BUILD", "TILLR_DRAIN_EXEC_LOOP_ADAPTER"), stepBuildEnv())
+	if s.standardAdapterArg(argv) >= 0 {
+		env = append(env, execLoopAdapterEnv)
+	}
+	cmd.Env = env
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	rollingLog := ""

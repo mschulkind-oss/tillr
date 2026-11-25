@@ -400,13 +400,13 @@ func TestCommandOnlyComposesLoop(t *testing.T) {
 	for _, face := range []string{"gate", "land", "verdict"} {
 		found := false
 		for i := 0; i < len(command)-1; i++ {
-			if command[i] == "--"+face && command[i+1] == "builtin:tillr-loop "+face {
+			if command[i] == "--"+face && command[i+1] == "tillr-loop "+face {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("command %v missing --%s builtin:tillr-loop %s", command, face, face)
+			t.Errorf("command %v missing --%s tillr-loop %s", command, face, face)
 		}
 	}
 	for _, forbidden := range []string{"retry", "--no-after-merge-check"} {

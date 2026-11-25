@@ -478,9 +478,9 @@ func observeLoopWithPoll(stop <-chan struct{}, child *LoopChild, out io.Writer, 
 func LoopCommand(root string, extra []string) []string {
 	cmd := []string{
 		"tillr-drain", "loop", "--root", root,
-		"--gate", "builtin:tillr-loop gate",
-		"--land", "builtin:tillr-loop land",
-		"--verdict", "builtin:tillr-loop verdict",
+		"--gate", "tillr-loop gate",
+		"--land", "tillr-loop land",
+		"--verdict", "tillr-loop verdict",
 	}
 	return append(cmd, extra...)
 }

@@ -9,7 +9,7 @@ covers:
   - tools/gate/
   - tools/tillr-gate/
   - tools/tillr/checkresult/
-  - tools/tillr-loop/tillr-loop
+  - tools/tillr-loop/
   - tools/go-test-shards.py
   - tools/tillr-drain/drain/heavy_steps.go
   - tools/tillr-drain/drain/fixer_gate.go
@@ -56,7 +56,7 @@ the merge, and the drain proving the trunk after it.
 | The stall watchdog | [`tools/tillr-gate`](../../tools/tillr-gate/) (`watchCommand`, `ExitStalled`) |
 | Classifying a check result | [`tools/tillr/checkresult`](../../tools/tillr/checkresult/) (`Classify`, `Aggregate`), reached through `tillr-gate classify` and [`tools/gate/classify.py`](../../tools/gate/classify.py) |
 | The local gate | [`tools/gate/done.py`](../../tools/gate/done.py), started by the `done` recipe |
-| The landing gate's judge | [`tools/gate/change-gate.py`](../../tools/gate/change-gate.py), composed by [`tools/tillr-loop/tillr-loop`](../../tools/tillr-loop/tillr-loop) |
+| The landing gate's judge | [`tools/gate/change-gate.py`](../../tools/gate/change-gate.py), composed by [`tools/tillr-loop/`](../../tools/tillr-loop/) |
 | Affected Go test packages, and whole Go suites | [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py), [`tools/go-test-shards.py`](../../tools/go-test-shards.py) |
 | The after-merge proof | [`tools/tillr-drain`](../../tools/tillr-drain/) ([After-merge heavy runs](../../tools/tillr-drain/README.md#after-merge-heavy-runs)) |
 | Gate settings | [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json), read by `ReadGatePolicy` in [`tools/tillr-drain/redcap`](../../tools/tillr-drain/redcap/) |

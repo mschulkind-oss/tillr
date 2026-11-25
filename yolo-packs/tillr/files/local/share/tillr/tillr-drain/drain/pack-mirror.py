@@ -33,9 +33,8 @@ SHIPPED = (
     "tillr-run", "tillr-store", "tillr-view", "tillr-watch", "tillr-trace", "tillr-roll",
 )
 
-# The README beside this executable belongs to the documentation snapshot, not the mirror.
+# The README beside this module belongs to the documentation snapshot, not the mirror.
 LOOP_MODULE = "tillr-loop"
-LOOP_ADAPTER = Path(LOOP_MODULE) / LOOP_MODULE
 
 # `[label](target)` and `[label](target#anchor)`. A target with a scheme, an absolute
 # path, or a bare fragment is not a relative link and is never rewritten.
@@ -89,14 +88,42 @@ def check_destination(root, dest):
 
 
 def mirror_loop_adapter(root):
-    source = root / "tools" / LOOP_ADAPTER
-    dest = root / MIRROR_ROOT / LOOP_ADAPTER
+    source = Path("tools") / LOOP_MODULE
+    dest = root / MIRROR_ROOT / LOOP_MODULE
     check_destination(root, dest)
-    dest.unlink(missing_ok=True)
-    if source.is_file():
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, dest)
-        print(f"pack-sync: mirrored {source.relative_to(root)} -> {dest.relative_to(root)}")
+
+    paths = subprocess.check_output(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", str(source)],
+        cwd=root,
+    ).split(b"\0")
+    live = []
+    for raw in paths:
+        if not raw:
+            continue
+        path = Path(os.fsdecode(raw))
+        if path == source / "README.md":
+            continue
+        src = root / path
+        if src.exists():
+            live.append((path, src))
+    if dest.is_symlink() or dest.is_file():
+        dest.unlink()
+    elif dest.exists():
+        for entry in list(dest.iterdir()):
+            if entry.name == "README.md":
+                continue
+            if entry.is_symlink() or entry.is_file():
+                entry.unlink()
+            elif entry.is_dir():
+                shutil.rmtree(entry)
+    if not live:
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    for path, src in live:
+        dst = dest / path.relative_to(source)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+    print(f"pack-sync: mirrored {source} -> {dest.relative_to(root)}")
 
 
 def mirror_module(root, module):

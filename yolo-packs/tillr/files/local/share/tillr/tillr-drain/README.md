@@ -1044,12 +1044,12 @@ verdicts hold the item as `criteria-unjudged`; other invalid answers hold it as
 
 ## Where step programs come from
 
-For gate, fixer gate, land and verdict, a configured command naming the standard adapter at
-`tools/tillr-loop/tillr-loop` under `--root` runs the copy embedded in the drain binary
-([`drain/tillr-loop.py`](./drain/tillr-loop.py)); the working-tree file is not read. Other
-programs run as configured, and a definition's hook program always runs the declared
-executable. Changing the standard step programs means rebuilding the tillr programs and
-restarting the loop
+For gate, fixer gate, land and verdict, a configured command naming `tillr-loop`,
+`builtin:tillr-loop`, or the legacy `tools/tillr-loop/tillr-loop` path under `--root` runs
+the compiled-in Go adapter package ([`tools/tillr-loop/loop`](https://github.com/mschulkind-oss/tillr/blob/main/tillr-loop/loop)); the
+working-tree is not read. Other programs run as configured, and a definition's hook
+program always runs the declared executable. Changing the standard step programs means
+rebuilding the tillr programs and restarting the loop
 ([the adapter README](https://github.com/mschulkind-oss/tillr/blob/main/tillr-loop/README.md#step-programs-belong-to-the-running-build)).
 
 ## Step-program argument contract

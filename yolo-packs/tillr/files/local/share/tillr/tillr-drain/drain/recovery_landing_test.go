@@ -60,10 +60,6 @@ func TestExamineLandsRealFixtureWithTheLoopsRecords(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
-	adapter, err := filepath.Abs(filepath.Join("..", "..", "tillr-loop", "tillr-loop"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var baseline []string
 	for _, manual := range []bool{false, true} {
 		p := newPendingTerminalFixture(t, true, "")
@@ -77,9 +73,10 @@ func TestExamineLandsRealFixtureWithTheLoopsRecords(t *testing.T) {
 		runGit(t, p.f.root, "add", "sibling.txt")
 		runGit(t, p.f.root, "commit", "-qm", "concurrent trunk change")
 		l := p.replacement(t, &terminalSteps{})
-		steps := &recoveryLandingSteps{t: t, ProcessSteps: &ProcessSteps{Root: p.f.root, Store: p.f.storePath, LaneRoot: l.cfg.LaneRoot, Now: l.cfg.Now, ItemBin: filepath.Join(root, "tillr-item"), LandProgram: "python3 " + adapter + " land --store " + p.f.storePath + " --tillr-land " + filepath.Join(root, "tillr-land"), VerdictProgram: "python3 " + adapter + " verdict"}}
+		steps := &recoveryLandingSteps{t: t, ProcessSteps: &ProcessSteps{Root: p.f.root, Store: p.f.storePath, LaneRoot: l.cfg.LaneRoot, Now: l.cfg.Now, ItemBin: filepath.Join(root, "tillr-item"), LandProgram: "tillr-loop land --store " + p.f.storePath + " --tillr-land " + filepath.Join(root, "tillr-land"), VerdictProgram: "tillr-loop verdict"}}
 		l.cfg.Steps = steps
 		var result LoopResult
+		var err error
 		if manual {
 			result, err = l.Examine(context.Background(), p.runID)
 		} else {

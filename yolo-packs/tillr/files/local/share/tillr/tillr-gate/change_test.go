@@ -173,8 +173,8 @@ func TestTheChangeFaceRefusesARequestItCannotDerive(t *testing.T) {
 	}
 }
 
-// loopAdapter is the loop's own front end, relative to this package.
-const loopAdapter = "../tillr-loop/tillr-loop"
+// loopModule is the loop's own Go module, relative to this package.
+const loopModule = "../tillr-loop"
 
 // TestTheLoopWritesTheChangeRecordTheFaceWrites is the one-shape acceptance, byte for byte.
 //
@@ -184,12 +184,14 @@ const loopAdapter = "../tillr-loop/tillr-loop"
 // caller that is not the loop would do. A difference in either direction is two shapes
 // again, so the assertion is `bytes.Equal` rather than a field-by-field comparison.
 func TestTheLoopWritesTheChangeRecordTheFaceWrites(t *testing.T) {
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Skip("python3 is not on PATH: the loop's own suite (tools/tillr-loop/test.py) covers its argv")
+	if _, err := os.Stat(filepath.Join(loopModule, "go.mod")); err != nil {
+		t.Skipf("the loop's module is not beside this package: %v", err)
 	}
-	if _, err := os.Stat(loopAdapter); err != nil {
-		t.Skipf("the loop's adapter is not beside this package: %v", err)
+	loopBin := filepath.Join(scratch(t, "loop-bin"), "tillr-loop")
+	build := exec.Command("go", "build", "-o", loopBin, ".")
+	build.Dir = loopModule
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build tillr-loop: %v\n%s", err, out)
 	}
 	root, base := fixtureRepo(t)
 	head := changeRepoGit(t, root, "rev-parse", "HEAD")
@@ -197,7 +199,7 @@ func TestTheLoopWritesTheChangeRecordTheFaceWrites(t *testing.T) {
 	work := scratch(t, "loop-change-work")
 	registry := builtRegistry(t, nil, nil)
 
-	cmd := exec.Command(python, loopAdapter, "gate",
+	cmd := exec.Command(loopBin, "gate",
 		"--item", "item-1", "--lane", "lane-1", "--run", "run-1",
 		"--worktree", root, "--base", base, "--head", head,
 		"--root", root, "--store", filepath.Join(scratch(t, "loop-store"), "state.db"),

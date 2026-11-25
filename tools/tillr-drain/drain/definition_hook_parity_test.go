@@ -1,11 +1,10 @@
 package drain
 
-// Compiled into the drain package by test.py's Go overlay. This keeps the test
-// with the hook program while exercising the drain's real dispatch code paths.
 import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -14,7 +13,13 @@ import (
 )
 
 func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
-	_, adapter := repositoryFile(t, "tools/tillr-loop/tillr-loop")
+	declareSiblingInputs(t)
+	adapter := filepath.Join(scratchUnderDurable(t), "tillr-loop")
+	build := exec.Command("go", "build", "-o", adapter, ".")
+	build.Dir = filepath.Join("..", "..", "tillr-loop")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build tillr-loop: %v: %s", err, out)
+	}
 	_, fixture := repositoryFile(t, drainArgvFixture)
 	raw, err := os.ReadFile(fixture)
 	if err != nil {
@@ -40,7 +45,7 @@ func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	hooks, _ := hookStub(t, []string{"gate", "land", "verdict", "fixer-gate", "replay", "rolling"}, "")
-	hooks.Argv = []string{"python3", adapter}
+	hooks.Argv = []string{adapter}
 	steps := &ProcessSteps{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Now: time.Now}
 	steps.ConfigureHooks(hooks, nil) // No explicit step flags: only the definition supplies them.
 	if err := steps.CheckPrograms(context.Background(), nil); err != nil {
@@ -97,7 +102,7 @@ func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
 				t.Fatalf("unhandled fixture face %q", face)
 			}
 			got := lastSpanArgv(t, f.root, c.RunID)
-			want := append([]string{"python3", adapter, face}, args...)
+			want := append([]string{adapter, face}, args...)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("definition hook argv = %v, flag form = %v", got, want)
 			}

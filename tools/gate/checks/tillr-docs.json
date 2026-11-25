@@ -22,6 +22,7 @@
     "tools/pack-docs.py",
     "tools/tillr-cli/",
     "tools/tillr-drain/",
+    "tools/tillr-loop/",
     "tools/tillr-gate/",
     "tools/tillr-item/",
     "tools/tillr-land/",

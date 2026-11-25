@@ -94,9 +94,9 @@ that runs the item's test:
 ```sh
 tillr-drain loop --exit-when-drained --root "$ROOT" --store "$STORE" \
   --policy "$POLICY" --lanes 1 \
-  --gate "tools/tillr-loop/tillr-loop gate --root $ROOT --store $STORE --gate-program $SCRATCH/probe-gate" \
-  --land "tools/tillr-loop/tillr-loop land --root $ROOT --store $STORE" \
-  --verdict "tools/tillr-loop/tillr-loop verdict --root $ROOT --store $STORE" \
+  --gate "tillr-loop gate --root $ROOT --store $STORE --gate-program $SCRATCH/probe-gate" \
+  --land "tillr-loop land --root $ROOT --store $STORE" \
+  --verdict "tillr-loop verdict --root $ROOT --store $STORE" \
   --questions-cmd "uvx vantage-check index --format json" \
   --rolling '' --replay ''
 ```

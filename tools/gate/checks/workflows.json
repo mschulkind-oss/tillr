@@ -14,6 +14,7 @@
     "config/tillr/workflows/",
     "config/tillr/watch/",
     "tools/tillr-drain/",
+    "tools/tillr-loop/",
     "tools/tillr-roll/",
     "tools/tillr-watch/",
     "tools/tillr/",

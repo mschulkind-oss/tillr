@@ -51,13 +51,6 @@ func TestSchemaRollHelperProcess(t *testing.T) {
 					return err
 				}
 			}
-			adapter := filepath.Join(dest, "tools", "tillr-loop", "tillr-loop")
-			if err := os.MkdirAll(filepath.Dir(adapter), 0o755); err != nil {
-				return err
-			}
-			if err := os.WriteFile(adapter, []byte("# fixture step program\n"), 0o644); err != nil {
-				return err
-			}
 			policy := filepath.Join(dest, "config", "tillr", "backend-policy.json")
 			if err := os.MkdirAll(filepath.Dir(policy), 0o755); err != nil {
 				return err

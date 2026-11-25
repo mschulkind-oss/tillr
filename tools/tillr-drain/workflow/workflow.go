@@ -856,8 +856,6 @@ func FencePaths(allowed []string) []string {
 			add(tillrDocsTest)
 			if module == "tillr-loop" {
 				add("tools/tillr-loop/")
-				add("tools/tillr-drain/drain/tillr-loop.py")
-				add("yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/tillr-loop.py")
 			}
 		}
 		if named == "tools/tillr-run/backends" || strings.HasPrefix(named, "tools/tillr-run/backends/") {

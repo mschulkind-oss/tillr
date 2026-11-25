@@ -90,6 +90,7 @@ SOURCE_ONLY_MODULES = ("tillr", "tillr-cli", "tillr-roll")
 # the module directory: `tillr` is the umbrella dispatcher, built from `tillr-cli`.
 PROGRAM_MODULES = {
     "tillr": "tillr-cli",
+    "tillr-loop": "tillr-loop",
     **{module: module for module in MODULES if module not in SOURCE_ONLY_MODULES},
 }
 
@@ -288,22 +289,36 @@ def case_modes(candidate=False):
 
 
 def case_loop_adapter(candidate=False):
-    """A consumer can run the standalone adapter from the pack's files tree."""
+    """The pack carries the tillr-loop Go module source (except README.md) and no Python script."""
     if candidate:
         print("n/a  the loop adapter: a candidate does not carry the generated tree")
         return
-    relative = Path("tillr-loop/tillr-loop")
-    adapter = COPY / relative
-    assert adapter.is_file() and not adapter.is_symlink() and executable(adapter), (
-        f"the pack must deliver a standalone executable at ~/.local/share/tillr/{relative}; "
-        "run `just pack-sync`"
+    old_script = COPY / "tillr-loop/tillr-loop"
+    assert not old_script.exists() and not old_script.is_symlink(), (
+        f"the pack still carries the removed Python script at {old_script}: run `just pack-sync`"
     )
-    assert adapter.read_bytes() == (ROOT / "tools" / relative).read_bytes(), (
-        "the pack's loop adapter diverges from its source: run `just pack-sync`"
+    want = {rel for rel in committable("tillr-loop") if rel != "README.md"}
+    got = set()
+    loop_copy = COPY / "tillr-loop"
+    if loop_copy.is_dir():
+        for p in loop_copy.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(loop_copy).as_posix()
+                if rel != "README.md":
+                    got.add(rel)
+    assert got == want, (
+        f"the pack's tillr-loop module diverges from tools/tillr-loop/: "
+        f"missing={sorted(str(p) for p in want - got)}, "
+        f"extra={sorted(str(p) for p in got - want)}: run `just pack-sync`"
     )
-    described = subprocess.check_output([str(adapter), "describe"], text=True)
-    assert {"gate", "land", "verdict", "fixer-gate"} <= json.loads(described)["hooks"].keys()
-    ok("the pack delivers the executable loop adapter with its hook faces")
+    for rel in sorted(want):
+        src = ROOT / "tools/tillr-loop" / rel
+        dst = loop_copy / rel
+        assert dst.is_file() and not dst.is_symlink(), f"{dst} must be a regular file"
+        assert dst.read_bytes() == src.read_bytes(), (
+            f"the pack's copy of tillr-loop/{rel} diverges from its source: run `just pack-sync`"
+        )
+    ok("the pack delivers the tillr-loop Go module source without the old Python script")
 
 
 def launcher_body(text):

@@ -157,10 +157,6 @@ VALUES('item-broke','external-review@v1','block',json_remove(?, '$.compatibility
 			t.Fatalf("build %s: %v: %s", module, err, out)
 		}
 	}
-	adapter, err := filepath.Abs(filepath.Join("..", "..", "tillr-loop", "tillr-loop"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	h.loop.cfg.Steps = reworkLandingSteps{recoveryLandingSteps: &recoveryLandingSteps{t: t, ProcessSteps: &ProcessSteps{
 		Root: h.root, Store: h.path, LaneRoot: h.loop.cfg.LaneRoot, Now: h.loop.cfg.Now,
 		GateProgram: executable(t, `
@@ -169,7 +165,7 @@ printf '%s' "$TILLR_ORDINARY_GATE_TIMING" > "$(dirname "$TILLR_GATE_SPANS_OUT")/
 printf '%s' '{"payload":{"checks":[]}}' > "$TILLR_FAST_VERDICT_OUT"
 printf '%s' '{"check_spans":[]}' > "$TILLR_GATE_SPANS_OUT"
 `),
-		ItemBin: filepath.Join(bin, "tillr-item"), LandProgram: "python3 " + adapter + " land --store " + h.path + " --tillr-land " + filepath.Join(bin, "tillr-land"), VerdictProgram: "python3 " + adapter + " verdict --tillr-item " + filepath.Join(bin, "tillr-item"),
+		ItemBin: filepath.Join(bin, "tillr-item"), LandProgram: "tillr-loop land --store " + h.path + " --tillr-land " + filepath.Join(bin, "tillr-land"), VerdictProgram: "tillr-loop verdict --tillr-item " + filepath.Join(bin, "tillr-item"),
 	}}, judge: fileRed("a")}
 	if _, landed, err := h.loop.Verify(ctx, c, &LoopResult{}, nil); err != nil || landed != wantLand {
 		t.Fatalf("verify landed=%v err=%v\n%s", landed, err, h.report)

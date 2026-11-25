@@ -35,7 +35,7 @@ const (
 )
 
 // Modules lists the tillr modules built and installed by tillr-roll.
-var Modules = []string{"cli", "drain", "gate", "item", "land", "run", "store", "view", "watch"}
+var Modules = []string{"cli", "drain", "gate", "item", "land", "loop", "run", "store", "view", "watch"}
 
 // TracePrefixes are diagnostic trace line prefixes filtered from failure details.
 var TracePrefixes = []string{"tillr-sqlite ", "tillr-sqlite-stack ", "tillr-git "}
