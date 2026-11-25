@@ -430,7 +430,7 @@ reports the package, shard, active and unfinished tests, and preserves partial
 separately controls Go's own test deadline.
 
 ```bash
-python3 tools/go-test-shards.py tools/tillr-drain -k 6 --scratch "$TMPDIR"
+go run -C tools/tillr-gate . shards tools/tillr-drain -k 6 --scratch "$TMPDIR"
 ```
 
 Never run `go test ./...` on a whole suite directly: several lanes doing so at once

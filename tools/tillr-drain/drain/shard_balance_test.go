@@ -1,12 +1,16 @@
 package drain
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -14,99 +18,227 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func copyModuleTree(t *testing.T, srcRoot, dstRoot string) {
+	t.Helper()
+	absSrc, err := filepath.Abs(srcRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = filepath.WalkDir(absSrc, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(absSrc, path)
+		if err != nil {
+			return err
+		}
+		if rel != "." && strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		target := filepath.Join(dstRoot, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatalf("copy module %s: %v", srcRoot, err)
+	}
+}
+
 // Newly added tests have no recorded duration. A large fallback must not leave
 // five processes idle while a single process executes all of those tests.
 func TestShardRunnerBalancesUnrecordedTests(t *testing.T) {
-	// The installed pack ships the module but not the repository-only runner.
-	if _, err := os.Stat("../../go-test-shards.py"); os.IsNotExist(err) {
-		t.Skip("repository-only shard runner is not installed")
-	} else if err != nil {
-		t.Fatal(err)
-	}
-	// The Python child is invisible to Go's result cache. Open the runner through
-	// the persistent module-local alias used for sibling source inputs.
 	declareSiblingInputs(t)
-	if _, err := os.ReadFile("../.sibling-inputs/go-test-shards.py"); err != nil {
+	scratch := scratchUnderDurable(t)
+	tillrAbs, err := filepath.Abs(filepath.Join("..", "..", "tillr"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	program := `
-import importlib.util
-spec = importlib.util.spec_from_file_location('shards', '../../go-test-shards.py')
-s = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(s)
-for known in ([], ['TestKnown%d' % i for i in range(6)]):
-    unknown = ['TestNew%d' % i for i in range(120)]
-    names = known + unknown
-    groups = s.assign(names, {name: 1 for name in known}, 6)
-    assert sorted(sum(groups, [])) == sorted(names), groups
-    assert all(18 <= len(group) <= 22 for group in groups), [len(group) for group in groups]
+	gateAbs, err := filepath.Abs(filepath.Join("..", "..", "tillr-gate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeDir := filepath.Join(scratch, "assign-probe")
+	if err := os.MkdirAll(probeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goMod := fmt.Sprintf(`module example.invalid/assign-probe
+
+go 1.26.0
+
+require github.com/mschulkind-oss/tillr-gate v0.0.0
+
+replace github.com/mschulkind-oss/tillr-gate => %s
+
+replace github.com/mschulkind-oss/tillr => %s
+`, gateAbs, tillrAbs)
+	if err := os.WriteFile(filepath.Join(probeDir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainGo := `package main
+
+import (
+	"fmt"
+	"os"
+	"sort"
+
+	"github.com/mschulkind-oss/tillr-gate/shards"
+)
+
+func main() {
+	for _, knownCount := range []int{0, 6} {
+		var names []string
+		durations := map[string]float64{}
+		for i := 0; i < knownCount; i++ {
+			n := fmt.Sprintf("TestKnown%d", i)
+			names = append(names, n)
+			durations[n] = 1.0
+		}
+		for i := 0; i < 120; i++ {
+			names = append(names, fmt.Sprintf("TestNew%d", i))
+		}
+		groups := shards.Assign(names, durations, 6)
+		var flat []string
+		for _, g := range groups {
+			if len(g) < 18 || len(g) > 22 {
+				fmt.Fprintf(os.Stderr, "unbalanced group size %d\n", len(g))
+				os.Exit(1)
+			}
+			flat = append(flat, g...)
+		}
+		want := append([]string(nil), names...)
+		sort.Strings(flat)
+		sort.Strings(want)
+		if len(flat) != len(want) {
+			fmt.Fprintf(os.Stderr, "count mismatch %d != %d\n", len(flat), len(want))
+			os.Exit(1)
+		}
+		for i := range flat {
+			if flat[i] != want[i] {
+				fmt.Fprintf(os.Stderr, "mismatch at %d: %s != %s\n", i, flat[i], want[i])
+				os.Exit(1)
+			}
+		}
+	}
+}
 `
-	if out, err := exec.Command("python3", "-c", program).CombinedOutput(); err != nil {
+	if err := os.WriteFile(filepath.Join(probeDir, "main.go"), []byte(mainGo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "run", "-mod=mod", ".")
+	cmd.Dir = probeDir
+	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("shard assignment: %v\n%s", err, out)
 	}
 }
 
 func TestShardRunnerFailureNamesFailingTestsAndOmitsPassingOutput(t *testing.T) {
-	if _, err := os.Stat("../../go-test-shards.py"); os.IsNotExist(err) {
-		t.Skip("repository-only shard runner is not installed")
-	} else if err != nil {
-		t.Fatal(err)
-	}
 	declareSiblingInputs(t)
-	if _, err := os.ReadFile("../.sibling-inputs/go-test-shards.py"); err != nil {
+	scratch := scratchUnderDurable(t)
+	modDir := filepath.Join(scratch, "fail-mod")
+	if err := os.MkdirAll(modDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	scratch := scratchUnderDurable(t)
-	program := `
-import importlib.util, os, pathlib, sys
-spec = importlib.util.spec_from_file_location('shards', '../../go-test-shards.py')
-s = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(s)
+	if err := os.WriteFile(filepath.Join(modDir, "go.mod"), []byte("module example.invalid/shard-failure-test\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var testSrc strings.Builder
+	testSrc.WriteString(`package failmod
 
-root = pathlib.Path(sys.argv[1])
-binary = root / 'fake.test'
-binary.write_text(
-    "#!/usr/bin/env python3\n"
-    "print('=== RUN   TestAlphaFail')\n"
-    "print('    alpha_test.go:12: broken invariant')\n"
-    "print('--- FAIL: TestAlphaFail (0.01s)')\n"
-    "for i in range(30):\n"
-    "    print(f'=== RUN   TestPass{i}')\n"
-    "    print(f'--- PASS: TestPass{i} (0.01s)')\n"
-    "print('FAIL')\n"
-    "raise SystemExit(1)\n"
-)
-binary.chmod(0o755)
-names = ['TestAlphaFail'] + [f'TestPass{i}' for i in range(30)]
-try:
-    s.run_shard('example.com/pkg', root, binary, names, 2, root / 'scratch', '0')
-except s.ShardError as exc:
-    text = str(exc)
-    first_line = text.splitlines()[0]
-    assert first_line == 'example.com/pkg shard 2 failed (exit 1): TestAlphaFail', f'bad first line: {first_line!r}'
-    assert 'alpha_test.go:12: broken invariant' in text, text
-    assert 'TestPass0' not in text and '--- PASS:' not in text, text
-    passed = {e.get('Test') for e in exc.events if e.get('Action') == 'pass'}
-    assert 'TestPass29' in passed, passed
-else:
-    raise AssertionError('expected ShardError')
-`
-	if out, err := exec.Command("python3", "-c", program, scratch).CombinedOutput(); err != nil {
-		t.Fatalf("shard failure format: %v\n%s", err, out)
+import "testing"
+
+func TestAlphaFail(t *testing.T) {
+	t.Fatal("broken invariant")
+}
+`)
+	for i := 0; i < 30; i++ {
+		fmt.Fprintf(&testSrc, "\nfunc TestPass%d(t *testing.T) {}\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "alpha_test.go"), []byte(testSrc.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	durPath := filepath.Join(scratch, "durations.json")
+	if err := os.WriteFile(durPath, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	eventsPath := filepath.Join(scratch, "events.jsonl")
+	gateAbs, err := filepath.Abs(filepath.Join("..", "..", "tillr-gate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shardScratch := filepath.Join(scratch, "runner")
+	if err := os.MkdirAll(shardScratch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "run", "-C", gateAbs, ".", "shards", modDir,
+		"-k", "1",
+		"--durations", durPath,
+		"--events", eventsPath,
+		"--scratch", shardScratch,
+	)
+	outBytes, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected non-zero exit from failing shard, output:\n%s", string(outBytes))
+	}
+	text := string(outBytes)
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	headerRe := regexp.MustCompile(`^go-test-shards: example\.invalid/shard-failure-test shard \d+ failed \(exit 1\): TestAlphaFail$`)
+	var matchedHeader bool
+	for _, line := range lines {
+		if headerRe.MatchString(line) {
+			matchedHeader = true
+			break
+		}
+	}
+	if !matchedHeader {
+		t.Fatalf("missing shard failure header in output:\n%s", text)
+	}
+	if !strings.Contains(text, "alpha_test.go:") || !strings.Contains(text, "broken invariant") {
+		t.Fatalf("missing failing test detail:\n%s", text)
+	}
+	if strings.Contains(text, "TestPass0") || strings.Contains(text, "--- PASS:") {
+		t.Fatalf("passing test output leaked:\n%s", text)
+	}
+
+	evFile, err := os.Open(eventsPath)
+	if err != nil {
+		t.Fatalf("open events %s: %v", eventsPath, err)
+	}
+	defer evFile.Close()
+	var pass29 bool
+	scanner := bufio.NewScanner(evFile)
+	for scanner.Scan() {
+		var ev struct {
+			Test   string `json:"Test"`
+			Action string `json:"Action"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &ev) == nil && ev.Test == "TestPass29" && ev.Action == "pass" {
+			pass29 = true
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !pass29 {
+		t.Fatalf("expected TestPass29 pass event in %s", eventsPath)
 	}
 }
 
 func TestRollCleanCheckoutIncludesFullTreeAndRecordsShardFailureDetails(t *testing.T) {
-	if _, err := os.Stat("../../go-test-shards.py"); os.IsNotExist(err) {
-		t.Skip("repository-only shard runner is not installed")
-	} else if err != nil {
-		t.Fatal(err)
-	}
 	declareSiblingInputs(t)
-	shardsBytes, err := os.ReadFile("../.sibling-inputs/go-test-shards.py")
-	if err != nil {
-		t.Fatal(err)
-	}
 	work := scratchUnderDurable(t)
 	t.Setenv("TILLR_SQLITE_TRACE", "1")
 
@@ -134,10 +266,15 @@ func TestRollCleanCheckoutIncludesFullTreeAndRecordsShardFailureDetails(t *testi
 	writeFixture(".gitignore", "/.tillr/\n", 0o644)
 	writeFixture("bin/pi-forks", "#!/bin/sh\nexit 0\n", 0o755)
 	writeFixture("yolo-packs/tillr/files/local/share/tillr/marker.txt", "present\n", 0o644)
-	writeFixture("tools/go-test-shards.py", string(shardsBytes), 0o644)
 	writeFixture("tools/go-test-durations.json", "{}\n", 0o644)
 
+	copyModuleTree(t, filepath.Join("..", "..", "tillr"), filepath.Join(repo, "tools", "tillr"))
+	copyModuleTree(t, filepath.Join("..", "..", "tillr-gate"), filepath.Join(repo, "tools", "tillr-gate"))
+
 	for _, mod := range roll.Modules {
+		if mod == "gate" {
+			continue
+		}
 		writeFixture(filepath.Join("tools", "tillr-"+mod, "go.mod"), "module example.invalid/tillr-"+mod+"\n\ngo 1.23\n", 0o644)
 		writeFixture(filepath.Join("tools", "tillr-"+mod, "main.go"), "package main\nfunc main() {}\n", 0o644)
 	}
@@ -200,7 +337,7 @@ func TestPassingAfterFailure(t *testing.T) {}
 		}
 	}
 
-	// Advance tools/tillr-drain so roll runs go-test-shards on tillr-drain.
+	// Advance tools/tillr-drain so roll runs tillr-gate shards on tillr-drain.
 	writeFixture("tools/tillr-drain/main.go", "package main\nfunc main() { _ = 1 }\n", 0o644)
 	runGit(t, repo, "commit", "-qam", "advance drain")
 	second := runGit(t, repo, "rev-parse", "HEAD")

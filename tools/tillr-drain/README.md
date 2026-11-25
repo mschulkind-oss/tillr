@@ -1184,7 +1184,7 @@ prefix in `holdrules.For` when it carries detail after a colon, and run
 ## Test
 
 ```sh
-python3 tools/go-test-shards.py tools/tillr-drain -k 6
+go run -C tools/tillr-gate . shards tools/tillr-drain -k 6
 ```
 
 That runs the module's Go suites in six balanced processes with Go's own test timeout off.

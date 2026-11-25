@@ -561,7 +561,7 @@ rules cover it.
   drain build start.
 
 Ten minutes holds because the proof reports from inside a long check:
-[`go-test-shards.py`](../../tools/go-test-shards.py) takes `--progress-file` and the drain turns
+[`tillr-gate shards`](../../tools/tillr-gate/shards) takes `--progress-file` and the drain turns
 each snapshot into a `progress` event ([D-TW62](#D-TW62)). The same contract is specified for the
 cached mode of that script ([D-TW70](#D-TW70)).
 

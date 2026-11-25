@@ -370,9 +370,6 @@ func setupRollFixture(t *testing.T, work, viewSource string) (string, string, fu
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, "tools", "go-test-shards.py"), []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	git("add", ".")
 	git("commit", "-qm", "fixture source")
 	revision := git("rev-parse", "HEAD")
@@ -622,7 +619,7 @@ func TestRollOfACommitInstallsThatCommitWhileTheSharedCheckoutAdvances(t *testin
 		Stdout: io.Discard,
 		Stderr: io.Discard,
 		Run: func(args []string, opts RunOpts) (CmdResult, error) {
-			if len(args) > 0 && args[0] == "python3" {
+			if len(args) >= 6 && args[0] == "go" && args[1] == "run" && args[4] == "." && args[5] == "shards" {
 				sharded = append(sharded, append([]string(nil), args...))
 				return CmdResult{}, nil
 			}
@@ -674,11 +671,11 @@ func TestRollOfACommitInstallsThatCommitWhileTheSharedCheckoutAdvances(t *testin
 	if len(sharded) != 1 {
 		t.Fatalf("expected 1 sharded test run, got %d: %v", len(sharded), sharded)
 	}
-	if !strings.HasSuffix(sharded[0][1], "tools/go-test-shards.py") || sharded[0][2] != "tools/tillr-drain" {
+	if !strings.HasSuffix(sharded[0][3], "tools/tillr-gate") || sharded[0][6] != "tools/tillr-drain" {
 		t.Fatalf("unexpected sharded command: %v", sharded[0])
 	}
-	if !reflect.DeepEqual(sharded[0][3:7], []string{"-k", "6", "--timeout", "0"}) {
-		t.Fatalf("unexpected sharded flags: %v", sharded[0][3:7])
+	if !reflect.DeepEqual(sharded[0][7:11], []string{"-k", "6", "--timeout", "0"}) {
+		t.Fatalf("unexpected sharded flags: %v", sharded[0][7:11])
 	}
 }
 
@@ -688,7 +685,7 @@ func TestShardedModulesMatchTheGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := regexp.MustCompile(`go-test-shards\.py (tools/[\w-]+) -k`)
+	re := regexp.MustCompile(`go run -C tools/tillr-gate \. shards (tools/[\w-]+) -k`)
 	gateSharded := make(map[string]bool)
 	for _, p := range paths {
 		b, err := os.ReadFile(p)
@@ -1045,7 +1042,7 @@ func TestTestCommitShardsChangedToolsGate(t *testing.T) {
 		Stdout: io.Discard,
 		Stderr: io.Discard,
 		Run: func(args []string, opts RunOpts) (CmdResult, error) {
-			if len(args) > 0 && args[0] == "python3" {
+			if len(args) >= 6 && args[0] == "go" && args[1] == "run" && args[4] == "." && args[5] == "shards" {
 				sharded = append(sharded, append([]string(nil), args...))
 				return CmdResult{}, nil
 			}
@@ -1062,7 +1059,7 @@ func TestTestCommitShardsChangedToolsGate(t *testing.T) {
 	if len(sharded) != 1 {
 		t.Fatalf("expected 1 sharded test run, got %d: %v", len(sharded), sharded)
 	}
-	if !strings.HasSuffix(sharded[0][1], "tools/go-test-shards.py") || sharded[0][2] != "tools/gate" {
+	if !strings.HasSuffix(sharded[0][3], "tools/tillr-gate") || sharded[0][6] != "tools/gate" {
 		t.Fatalf("unexpected sharded command: %v", sharded[0])
 	}
 }

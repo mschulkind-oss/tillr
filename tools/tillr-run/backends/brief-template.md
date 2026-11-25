@@ -135,7 +135,7 @@ without Go's test result cache. Use it yourself only when a change is so broad t
 selection covers it:
 
 ```bash
-python3 tools/go-test-shards.py tools/tillr-drain -k 6
+go run -C tools/tillr-gate . shards tools/tillr-drain -k 6
 ```
 
 Do not call `go test ./...` on a whole suite directly: several lanes doing so at once

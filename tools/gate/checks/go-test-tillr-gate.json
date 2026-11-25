@@ -4,7 +4,7 @@
   "command": [
     "sh",
     "-c",
-    "CGO_ENABLED=0 python3 tools/go-test-shards.py tools/tillr-gate -k 6 --cache --timeout 0"
+    "CGO_ENABLED=0 go run -C tools/tillr-gate . shards tools/tillr-gate -k 6 --cache --timeout 0"
   ],
   "scope": "tree",
   "tier": "heavy",
@@ -15,7 +15,6 @@
     "tools/gate/go-test-edges.json",
     "tools/gate/go_affected.py",
     "tools/go-test-durations.json",
-    "tools/go-test-shards.py",
     "tools/tillr-drain/",
     "tools/tillr-gate/",
     "tools/tillr-item/",

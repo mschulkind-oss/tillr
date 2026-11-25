@@ -9,7 +9,6 @@ import ctypes
 import errno
 import fcntl
 import hashlib
-import importlib.util
 import json
 import math
 import os
@@ -1180,16 +1179,24 @@ def posix_dirname(path: str) -> str:
     return path[:idx] if idx >= 0 else ""
 
 
-def _load_shards_module(root: Path):
-    shards_path = root / "tools" / "go-test-shards.py"
-    if not shards_path.is_file():
-        return None
-    spec = importlib.util.spec_from_file_location("go_test_shards", shards_path)
-    if spec is None or spec.loader is None:
-        return None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def assign(names: list[str], durations: dict[str, float], count: int) -> list[list[str]]:
+    groups: list[list[str]] = [[] for _ in range(count)]
+    known = [name for name in names if name in durations]
+    unknown = [name for name in names if name not in durations]
+    loads = [0.0] * count
+    for name in sorted(known, key=lambda n: (-durations[n], n)):
+        slot = min(range(count), key=lambda i: (loads[i], i))
+        groups[slot].append(name)
+        loads[slot] += durations[name]
+    # Each unmeasured test still occupies time. Distributing them with the mean
+    # recorded cost prevents one growing fallback shard from holding the suite.
+    estimate = sum(durations[name] for name in known) / len(known) if known else 1.0
+    estimate = estimate or 1.0
+    for name in unknown:
+        slot = min(range(count), key=lambda i: (loads[i], i))
+        groups[slot].append(name)
+        loads[slot] += estimate
+    return groups
 
 
 def _load_durations(root: Path) -> dict[str, dict[str, float]]:
@@ -2377,7 +2384,6 @@ def run_selected_tests(
             save_package_verdicts_atomic(Path(verdicts_out), {"schema": 1, "packages": {}})
         return 0, "go-affected: no affected tillr Go test packages\n", initial_evidence
 
-    shards_mod = _load_shards_module(root)
     durations = _load_durations(root)
     edges = load_edges(root)
     fallback_graph: dict | None = graph
@@ -2449,12 +2455,7 @@ def run_selected_tests(
                     MAX_SHARDS,
                     max(2, math.ceil(est_total / NARROWED_SHARD_DURATION_THRESHOLD)),
                 )
-                if shards_mod is not None and hasattr(shards_mod, "assign"):
-                    buckets = shards_mod.assign(reader_tests, subset_durations, shard_count)
-                else:
-                    buckets = [[] for _ in range(shard_count)]
-                    for idx, name in enumerate(reader_tests):
-                        buckets[idx % shard_count].append(name)
+                buckets = assign(reader_tests, subset_durations, shard_count)
                 for shard_idx, bucket in enumerate(buckets):
                     if not bucket:
                         continue
@@ -2486,12 +2487,7 @@ def run_selected_tests(
             non_edge = [t for t in tests if t != "TestEdgeInputs"]
             shard_count = min(MAX_SHARDS, max(MIN_SHARDS, len(non_edge) // 125))
             pkg_durations = durations.get(item["import_path"], {})
-            if shards_mod is not None and hasattr(shards_mod, "assign"):
-                buckets = shards_mod.assign(non_edge, pkg_durations, shard_count)
-            else:
-                buckets = [[] for _ in range(shard_count)]
-                for idx, name in enumerate(non_edge):
-                    buckets[idx % shard_count].append(name)
+            buckets = assign(non_edge, pkg_durations, shard_count)
             for shard_idx, bucket in enumerate(buckets):
                 if not bucket:
                     continue

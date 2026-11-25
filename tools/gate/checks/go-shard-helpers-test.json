@@ -1,29 +1,26 @@
 {
   "id": "go-shard-helpers-test",
-  "label": "the lander's shard helper and the drain's cache helper suites pass",
+  "label": "the drain's cache helper suite passes",
   "command": [
     "sh",
     "-c",
-    "python3 tools/tillr-land/shards_test.py && (cd tools/tillr-drain && go run ./cmd/cache-test --run TestTheComposedPipelineRunsEndToEndOnAFixture)"
+    "cd tools/tillr-drain && go run ./cmd/cache-test --run TestTheComposedPipelineRunsEndToEndOnAFixture"
   ],
   "scope": "tree",
   "tier": "heavy",
   "timeout_ms": 600000,
   "reads": [
     "tools/gate/checks/go-shard-helpers-test.json",
-    "tools/go-test-shards.py",
     "tools/tillr-drain/",
     "tools/tillr-drain/cmd/cache-test/main.go",
     "tools/tillr-loop/",
     "tools/tillr-land/",
-    "tools/tillr-land/shards_test.py",
     "tools/tillr-roll/",
     "tools/tillr/",
     "tools/tillr-item/",
     "tools/tillr-run/"
   ],
   "tools": [
-    "sh",
     "python3",
     "go",
     "git"

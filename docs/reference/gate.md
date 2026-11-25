@@ -10,7 +10,6 @@ covers:
   - tools/tillr-gate/
   - tools/tillr/checkresult/
   - tools/tillr-loop/
-  - tools/go-test-shards.py
   - tools/tillr-drain/drain/heavy_steps.go
   - tools/tillr-drain/drain/fixer_gate.go
   - tools/tillr-drain/remotesync/fork_drift.go
@@ -57,7 +56,7 @@ the merge, and the drain proving the trunk after it.
 | Classifying a check result | [`tools/tillr/checkresult`](../../tools/tillr/checkresult/) (`Classify`, `Aggregate`), reached through `tillr-gate classify` and [`tools/gate`](../../tools/gate/) |
 | The local gate | [`tools/gate/done.go`](../../tools/gate/done.go) (`tools/gate/repo-gate done`), started by the `done` recipe |
 | The landing gate's judge | [`tools/gate/change_gate.go`](../../tools/gate/change_gate.go) (`tools/gate/repo-gate change-gate`), composed by [`tools/tillr-loop/`](../../tools/tillr-loop/) |
-| Affected Go test packages, and whole Go suites | [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py), [`tools/go-test-shards.py`](../../tools/go-test-shards.py) |
+| Affected Go test packages, and whole Go suites | [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py), [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards) (`tillr-gate shards`) |
 | The after-merge proof | [`tools/tillr-drain`](../../tools/tillr-drain/) ([After-merge heavy runs](../../tools/tillr-drain/README.md#after-merge-heavy-runs)) |
 | Gate settings | [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json), read by `ReadGatePolicy` in [`tools/tillr-drain/redcap`](../../tools/tillr-drain/redcap/) |
 
@@ -396,7 +395,7 @@ may still revise) are:
   [`tools/gate/checks/go-test-tillr-drain.json`](../../tools/gate/checks/go-test-tillr-drain.json)).**
   Keep `github.com/mschulkind-oss/tillr-drain/drain` in
   [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json) so `--cache` in
-  [`tools/go-test-shards.py`](../../tools/go-test-shards.py) continues passing
+  [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards) (`tillr-gate shards`) continues passing
   `TILLR_GATE_EDGE_INPUTS` digests for `drain`'s built sibling binaries and read files during
   the after-merge `go-test-tillr-drain` run. Expand `reads` in
   [`tools/gate/checks/go-test-tillr-drain.json`](../../tools/gate/checks/go-test-tillr-drain.json)
@@ -489,7 +488,7 @@ directly on `go-affected`'s recorded check log (`change-logs/<NN>-go-affected.lo
    and its unit test suite [`tests/go-affected.test.py`](../../tests/go-affected.test.py)
    change for that item; [`tools/tillr-drain/`](../../tools/tillr-drain/),
    [`tools/tillr-gate/`](../../tools/tillr-gate/),
-   [`tools/go-test-shards.py`](../../tools/go-test-shards.py), `-timeout 0` and Go's
+   `tools/go-test-shards.py`, `-timeout 0` and Go's
    `"panic: test timed out"` output, who sends `SIGQUIT`, and the blocked test itself stay
    untouched.
 
@@ -948,14 +947,15 @@ addressed to the owner.
 ## Go test execution
 
 Whole Go suites and affected packages both run through
-[`tools/go-test-shards.py`](../../tools/go-test-shards.py).
+[`tools/tillr-gate/shards`](../../tools/tillr-gate/shards) (`tillr-gate shards`) and
+[`tools/gate/go_affected.py`](../../tools/gate/go_affected.py).
 
 - **A test run does not outlive the command that started it ([`D-GR17`](#D-GR17)).** Every
   test process group is tied to the invoking command's lifetime, and the compiled binary
   directory stays valid until every shard exits.
 - **No cross-run slot pool ([`D-GR20`](#D-GR20), [`D-GR48`](#D-GR48), deleted under [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1)).**
-  The cross-run file-lock slot pool and `ENFORCE_SLOT_LIMITS` in
-  [`tools/go-test-shards.py`](../../tools/go-test-shards.py) were deleted under
+  The cross-run file-lock slot pool and `ENFORCE_SLOT_LIMITS` in the shard runner
+  (now [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards)) were deleted under
   [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1): each test invocation bounds only
   its own fan-out, and processor share among `repair`, `proof`, `gate`, and `worker`
   processes is weighted by the kernel via cgroup v2 `cpu.weight` subgroups or `nice`
@@ -966,7 +966,7 @@ Whole Go suites and affected packages both run through
   default mode stays uncached), a package under `100` top-level tests (`SHARD_THRESHOLD`)
   runs as one group and a larger one shards by the duration-balanced bucket formula without
   `-count=1`, putting a digest of declared non-Go inputs per package and per bucket in the
-  cache key (`go_affected.py` caps shards at `2 * os.cpu_count()`, while `go-test-shards.py`
+  cache key (`go_affected.py` caps shards at `2 * os.cpu_count()`, while `tillr-gate shards`
   keeps `MAX_SHARDS = 12`). `--cache` is refused on a repository or `.forks/` module when
   `TILLR_RUN_ID` is set (`_check_cached_worker_refusal`), so a lane worker cannot be answered
   by a cached pass; landing gates, replays and trunk proofs run outside a lane worker and use
@@ -1061,7 +1061,7 @@ The prose above explains what each is for.
 | Result store | `<git-common-dir>/tillr-gate/results/` | `openResultStore` |
 | `just done` logs | `<git-common-dir>/tillr-gate/done-logs/<head>/` | [`tools/gate/done.go`](../../tools/gate/done.go) |
 | Gate policy (and absent-file defaults) | `landing_strategy: after-merge` (default `before-merge`), `auto_revert: true` (default `false`), `lane_base: tip` (default `green`), `budget_ms: 10000` (default `10000`) | [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json), `ReadGatePolicy` in [`tools/tillr-drain/redcap/policy.go`](../../tools/tillr-drain/redcap/policy.go) |
-| Go shard parameters | `SHARD_THRESHOLD = 100`; `MAX_SHARDS = 12` (`go-test-shards.py`) and `2 * os.cpu_count()` (`go_affected.py`) | [`tools/go-test-shards.py`](../../tools/go-test-shards.py), [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) |
+| Go shard parameters | `SHARD_THRESHOLD = 100`; `MAX_SHARDS = 2 * runtime.NumCPU()` (`tillr-gate shards`) and `2 * os.cpu_count()` (`go_affected.py`) | [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards), [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) |
 | Slow-gate alert thresholds | one run over 60 s; median of 20 over 90 s | [`config/tillr/watch/fast-gate-slow.toml`](../../config/tillr/watch/fast-gate-slow.toml) |
 
 ## Open questions

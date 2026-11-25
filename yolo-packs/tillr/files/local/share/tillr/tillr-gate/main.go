@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-gate/shards"
 	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
@@ -39,6 +40,7 @@ var faces = map[string]func([]string) int{
 	"plan":     planFace,
 	"run":      runFace,
 	"shadow":   shadowFace,
+	"shards":   shards.RunCLI,
 }
 
 // run dispatches one invocation and answers with its exit code. An unknown verb is a
@@ -66,7 +68,7 @@ func run(args []string) int {
 
 // faceNames lists the faces in a fixed order, so the usage line is stable.
 func faceNames() string {
-	return "change, checks, classify, enable, plan, run, shadow"
+	return "change, checks, classify, enable, plan, run, shadow, shards"
 }
 
 // parseFlags parses one face's flags and reports whether it has already answered the

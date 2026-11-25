@@ -165,7 +165,7 @@ untracked but present, an edited tracked input, a config the commit lacks), and 
 failing run remembers nothing unless every error finding names a document it was
 given. The documents still to judge go to
 one `uvx vantage-check` run. The inputs are listed in
-[`change_common.py`](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/checks/change_common.py).
+[`change_common.go`](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/change_common.go).
 
 ## Optional local refs
 
@@ -259,6 +259,17 @@ tillr-gate enable
 `enable` records a repaired disabling episode under `enabled/`, moves that episode's
 contradicting records and copied logs into `resolved/`, and removes the active marker when
 it still holds the named episode.
+
+## Sharded Go test runs
+
+`shards` builds each Go package in a module once, balances independent test processes on
+recorded durations, and isolates each shard's scratch and Git configuration. It refuses to
+choose a scratch directory itself when no scratch root is configured, and refuses
+cached runs on repository modules inside a lane worker.
+
+```sh
+tillr-gate shards -k 6 --scratch "$TMPDIR" tools/tillr-drain
+```
 
 ## What it refuses
 

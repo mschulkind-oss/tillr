@@ -29,7 +29,6 @@
     "tools/tillr-watch/",
     "tools/tillr/",
     "tools/gate/checks/go-affected.json",
-    "tools/go-test-shards.py",
     "tools/tillr-gate/change-gate.py"
   ],
   "tools": [

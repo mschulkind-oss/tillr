@@ -346,7 +346,7 @@ installed binaries in the environment's durable `bin` directory:
 - **Tests skipped when already proved.** Tests are skipped when
   `refs/tillr/green` contains the tip, or when the tip's landing records the
   gated tree equal to the landed tree. Otherwise it runs
-  [`tools/go-test-shards.py`](../../tools/go-test-shards.py).
+  [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards) (`tillr-gate shards`).
 - **Smoke check, then swap.** Every program is built into a staging directory
   and run with `--help`; the staged `tillr-drain loop --check` runs against the
   store. Only then is each binary renamed into place. A failed step leaves the

@@ -215,7 +215,7 @@ decision from an operator-filed request, not an owner ruling; the owner may over
 specifies three things:
 
 1. **Fail-open slot-wait spans.** Whenever `acquire_shard_slot` in
-   [`tools/go-test-shards.py`](../../tools/go-test-shards.py) finishes waiting, and
+   `tools/go-test-shards.py` finishes waiting, and
    `$TILLR_TRACE_DIR` names a directory, it appends one JSON line to `slot-waits.jsonl` with the
    wait's start and end, `waited_ms`, slot, class and whether the slot was acquired. An immediate
    acquisition records `waited_ms: 0`, so an observed zero wait is distinct from an unrecorded

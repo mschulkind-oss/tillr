@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Sharded lists the modules whose declared suite runs through tools/go-test-shards.py.
+// Sharded lists the modules whose declared suite runs through `tillr-gate shards`.
 var Sharded = []string{
 	"tools/gate",
 	"tools/tillr-store",

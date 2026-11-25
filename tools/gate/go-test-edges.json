@@ -769,7 +769,6 @@
       "config/tillr/workflows/",
       "tools/tillr-gate/change-gate.py",
       "tools/tillr-gate/classify.py",
-      "tools/go-test-shards.py",
       "tools/tillr/examples/",
       "tools/tillr-loop/drain-argv.json",
       "tools/tillr-run/backends/",
@@ -801,6 +800,14 @@
         "TestClassificationScanGoSites"
       ]
     }
+  },
+  "github.com/mschulkind-oss/tillr-gate/shards": {
+    "builds": [],
+    "reads": [
+      "tools/gate/go_affected.py",
+      "tools/go-test-durations.json",
+      "tools/tillr-drain/"
+    ]
   },
   "github.com/mschulkind-oss/tillr-item": {
     "builds": [
@@ -917,10 +924,7 @@
         "TestTrunkMovesRepeatedlyAfterClaim"
       ]
     },
-    "reads": [
-      "tools/go-test-shards.py",
-      "tools/tillr-land/shards_test.py"
-    ]
+    "reads": []
   },
   "github.com/mschulkind-oss/tillr-run": {
     "builds": [],

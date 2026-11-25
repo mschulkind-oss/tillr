@@ -40,7 +40,7 @@ test *args:
     for mod in tools/*/go.mod; do
         dir="$(dirname "$mod")"
         if [ "$#" -eq 0 ] && [ "$dir" = "tools/tillr-drain" ]; then
-            python3 tools/go-test-shards.py "$dir" -k 6
+            go run -C tools/tillr-gate . shards "$dir" -k 6
         else
             (cd "$dir" && go test ./... "$@")
         fi
@@ -456,4 +456,4 @@ done *args:
 
 # Whole-module execution; prefer targeted `go test -run` while editing.
 go-test-shards module="tools/tillr-drain" *args:
-    @python3 tools/go-test-shards.py {{module}} {{args}}
+    @go run -C tools/tillr-gate . shards {{module}} {{args}}

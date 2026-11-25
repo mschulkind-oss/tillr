@@ -321,9 +321,8 @@ def test_selection_rules(root_graph: dict) -> None:
             "github.com/mschulkind-oss/tillr-run",
             "github.com/mschulkind-oss/tillr-run/run",
         }),
-        ("tools/go-test-shards.py", {
-            "github.com/mschulkind-oss/tillr-land",
-            "github.com/mschulkind-oss/tillr-drain/drain",
+        ("tools/gate/go_affected.py", {
+            "github.com/mschulkind-oss/tillr-gate/shards",
         }),
         ("config/tillr/backend-policy.json", {
             "github.com/mschulkind-oss/tillr-drain",
@@ -1643,7 +1642,6 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
         (repo / "tools" / "gate").mkdir(parents=True)
         (repo / "config").mkdir(parents=True)
         shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", repo / "tools" / "gate" / "go_affected.py")
-        shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
 
         (repo / "tools" / "tillr-sib" / "go.mod").write_text(
             f"module {sib_pkg}\n\ngo 1.22\n"
@@ -1833,7 +1831,6 @@ def test_scoped_build_tests_execution_cache_and_sharding() -> None:
         (repo / "tools" / "tillr-scoped").mkdir(parents=True)
         (repo / "tools" / "gate").mkdir(parents=True)
         shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", repo / "tools" / "gate" / "go_affected.py")
-        shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
 
         (repo / "tools" / "tillr-siba" / "go.mod").write_text(f"module {sib_a_pkg}\n\ngo 1.22\n")
         sib_a_main = repo / "tools" / "tillr-siba" / "main.go"
@@ -2363,7 +2360,6 @@ def test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim
         mod.mkdir(parents=True)
         (repo / "tools" / "gate").mkdir(parents=True)
         (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}\n", encoding="utf-8")
-        shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
         nonce = _fresh_nonce()
         (mod / "go.mod").write_text("module github.com/mschulkind-oss/tillr-gitshim\n\ngo 1.22\n")
         (mod / "gitshim_test.go").write_text(
@@ -2727,7 +2723,6 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
             (repo / mod_rel).mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", repo / "tools" / "gate" / "go_affected.py")
-        shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
         (repo / "tools" / "go-test-durations.json").write_text("{}\n", encoding="utf-8")
 
         (repo / "config" / "view.txt").write_text("v1\n", encoding="utf-8")
@@ -3510,7 +3505,6 @@ def test_single_test_shard_sets_gomaxprocs_and_p1() -> None:
         (mod / "a_test.go").write_text("package example\nimport \"testing\"\nfunc TestOne(t *testing.T) {}\n", encoding="utf-8")
         (repo / "tools" / "gate").mkdir(parents=True)
         (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}", encoding="utf-8")
-        (repo / "tools" / "go-test-shards.py").symlink_to(ROOT / "tools" / "go-test-shards.py")
         selection = {
             "selected": [
                 {

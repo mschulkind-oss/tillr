@@ -279,7 +279,7 @@ func TestCommit(root, source, work, tip, store string, old map[string]BuildFact,
 		if isSharded(relative) {
 			if err := deps.stepped("test "+name, func() error {
 				_, err := deps.run([]string{
-					"python3", filepath.Join(source, "tools/go-test-shards.py"),
+					"go", "run", "-C", filepath.Join(source, "tools/tillr-gate"), ".", "shards",
 					relative, "-k", "6", "--timeout", "0", "--scratch", work,
 				}, RunOpts{Dir: source, Env: buildEnv})
 				return err

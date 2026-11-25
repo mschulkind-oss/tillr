@@ -4,7 +4,7 @@
   "command": [
     "sh",
     "-c",
-    "TILLR_GATE_EDGE_INPUTS=\"$(python3 tools/go-test-shards.py --edge-digest github.com/mschulkind-oss/tillr-watch)\" && export TILLR_GATE_EDGE_INPUTS && cd tools/tillr-watch && CGO_ENABLED=0 GOFLAGS=-trimpath go test -parallel 1 -timeout 0 ./..."
+    "TILLR_GATE_EDGE_INPUTS=\"$(go run -C tools/tillr-gate . shards --edge-digest github.com/mschulkind-oss/tillr-watch)\" && export TILLR_GATE_EDGE_INPUTS && cd tools/tillr-watch && CGO_ENABLED=0 GOFLAGS=-trimpath go test -parallel 1 -timeout 0 ./..."
   ],
   "scope": "tree",
   "tier": "heavy",
@@ -12,8 +12,8 @@
   "reads": [
     "tools/gate/checks/go-test-tillr-watch.json",
     "tools/gate/go-test-edges.json",
-    "tools/go-test-shards.py",
     "tools/tillr-drain/",
+    "tools/tillr-gate/",
     "tools/tillr-loop/",
     "tools/tillr-item/",
     "tools/tillr-land/",

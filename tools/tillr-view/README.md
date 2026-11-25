@@ -121,7 +121,7 @@ decisions with the agent's transcript entries on one clock.
 - `uncovered_ms` — the remaining harness and supervisor wall time outside recorded model
   and tool intervals.
 
-`tools/go-test-shards.py` appends `slot.wait` records to `slot-waits.jsonl` inside
+`tillr-gate shards` appends `slot.wait` records to `slot-waits.jsonl` inside
 `TILLR_TRACE_DIR` whenever that directory exists, and never fails a test run over it.
 `GET /api/v1/runs/{id}/timeline` and `tillr view trace` emit the same intervals as
 `slot_wait` spans. A run with no `slot-waits.jsonl` reports `slot_wait_ms` as

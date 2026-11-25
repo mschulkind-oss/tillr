@@ -431,10 +431,10 @@ func TestTreeDeclarationReadingGoModuleReadsInRepoDependencies(t *testing.T) {
 
 func loadShardRunnerFlags(t *testing.T, root string) map[string]bool {
 	t.Helper()
-	cmd := exec.Command("python3", filepath.Join(root, "tools", "go-test-shards.py"), "--help")
+	cmd := exec.Command("go", "run", "-C", filepath.Join(root, "tools", "tillr-gate"), ".", "shards", "--help")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("go-test-shards.py --help: %v: %s", err, out)
+		t.Fatalf("tillr-gate shards --help: %v: %s", err, out)
 	}
 	flags := make(map[string]bool)
 	inOptions := false
@@ -458,7 +458,7 @@ func loadShardRunnerFlags(t *testing.T, root string) map[string]bool {
 		}
 	}
 	if len(flags) == 0 {
-		t.Fatalf("parsed no flags from go-test-shards.py --help:\n%s", out)
+		t.Fatalf("parsed no flags from tillr-gate shards --help:\n%s", out)
 	}
 	return flags
 }
@@ -472,7 +472,8 @@ func checkShardRunnerCommandFlags(command []string, accepted map[string]bool) er
 	}
 	for i := 0; i < len(tokens); i++ {
 		tok := strings.Trim(tokens[i], "\"'()")
-		if tok != "tools/go-test-shards.py" && !strings.HasSuffix(tok, "/go-test-shards.py") {
+		isShards := tok == "shards" && i > 0 && (strings.Trim(tokens[i-1], "\"'()") == "." || strings.HasSuffix(strings.Trim(tokens[i-1], "\"'()"), "tillr-gate"))
+		if !isShards {
 			continue
 		}
 		for j := i + 1; j < len(tokens); j++ {
@@ -487,7 +488,7 @@ func checkShardRunnerCommandFlags(command []string, accepted map[string]bool) er
 					flag = flag[:eq]
 				}
 				if !accepted[flag] {
-					return fmt.Errorf("unrecognized go-test-shards.py flag %q", flag)
+					return fmt.Errorf("unrecognized tillr-gate shards flag %q", flag)
 				}
 			}
 			if strings.Contains(raw, ")") {
@@ -503,12 +504,12 @@ func TestTreeGoTestShardsDeclarationsUseAcceptedFlags(t *testing.T) {
 	accepted := loadShardRunnerFlags(t, root)
 
 	if err := checkShardRunnerCommandFlags([]string{
-		"sh", "-c", "CGO_ENABLED=0 python3 tools/go-test-shards.py tools/gate -k 6 --cache --timeout 0",
+		"sh", "-c", "CGO_ENABLED=0 go run -C tools/tillr-gate . shards tools/gate -k 6 --cache --timeout 0",
 	}, accepted); err != nil {
 		t.Fatalf("expected valid shard command to pass, got: %v", err)
 	}
 	if err := checkShardRunnerCommandFlags([]string{
-		"sh", "-c", "CGO_ENABLED=0 python3 tools/go-test-shards.py tools/gate -k 6 --cache --slot-class proof --timeout 0",
+		"sh", "-c", "CGO_ENABLED=0 go run -C tools/tillr-gate . shards tools/gate -k 6 --cache --slot-class proof --timeout 0",
 	}, accepted); err == nil {
 		t.Fatal("expected --slot-class to fail validation, got nil")
 	}
@@ -533,7 +534,8 @@ func TestTreeGoTestShardsDeclarationsUseAcceptedFlags(t *testing.T) {
 		if err := json.Unmarshal(raw, &decl); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(strings.Join(decl.Command, " "), "go-test-shards.py") {
+		joined := strings.Join(decl.Command, " ")
+		if strings.Contains(joined, "tillr-gate") && strings.Contains(joined, " shards ") {
 			checked++
 			if err := checkShardRunnerCommandFlags(decl.Command, accepted); err != nil {
 				t.Fatalf("%s: %v", e.Name(), err)
@@ -541,6 +543,6 @@ func TestTreeGoTestShardsDeclarationsUseAcceptedFlags(t *testing.T) {
 		}
 	}
 	if checked == 0 {
-		t.Fatal("expected at least one check declaration invoking go-test-shards.py")
+		t.Fatal("expected at least one check declaration invoking tillr-gate shards")
 	}
 }
