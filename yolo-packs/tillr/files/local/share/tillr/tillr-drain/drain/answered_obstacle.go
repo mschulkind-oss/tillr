@@ -37,9 +37,6 @@ func repeatedAnsweredObstacle(previous, next item.Conflict, current Obstacle) bo
 		return false
 	}
 	switch current.Kind {
-	case ObstacleDefinition:
-		// A criterion can have several gaps; only the evidence identifies the one answered.
-		return collapseSingleLine(first.Field("EVIDENCE")) == collapseSingleLine(current.Field("EVIDENCE"))
 	case ObstacleOwner:
 		return collapseSingleLine(first.Field("QUESTION")) == collapseSingleLine(current.Field("QUESTION"))
 	default:

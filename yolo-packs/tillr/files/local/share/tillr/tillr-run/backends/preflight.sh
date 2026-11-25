@@ -97,7 +97,7 @@ preflight_brief() {
         refuse "the brief '$1' has a saved words byte count that does not match its suffix"
     fi
     checked_template=$(printf '%s\n' "$template_text" | awk '
-        /^## (Answered owner questions|Retry reasons)$/ { in_recorded=1; print; next }
+        /^## (Answered owner questions|Design answers|Retry reasons)$/ { in_recorded=1; print; next }
         /^## / { in_recorded=0 }
         in_recorded && /^>/ { next }
         { print }

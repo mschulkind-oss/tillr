@@ -27,6 +27,15 @@ type answeredOwnerQuestion struct {
 	Via      string
 }
 
+type answeredDesignConflict struct {
+	ConflictID  string
+	RunID       string
+	DesignRunID string
+	Answer      string
+	Via         string
+	At          string
+}
+
 type recordedRetryReason struct {
 	SupersedesRunID string
 	Reason          string
@@ -188,6 +197,7 @@ func itemGuidanceBrief(ctx context.Context, storePath, itemID, worktree string) 
 		conflictByID      = map[string]item.Conflict{}
 		conflictOrder     []string
 		vantageAnsweredAt = map[string]time.Time{}
+		designAnsweredAt  = map[string]time.Time{}
 		buildRetries      []struct {
 			RetryID         string
 			SupersedesRunID string
@@ -249,6 +259,11 @@ func itemGuidanceBrief(ctx context.Context, storePath, itemID, worktree string) 
 			if c.QuestionRef != "" && c.AnswerHead != "" && (c.Status == "answered" || c.Status == "closed") {
 				if _, ok := vantageAnsweredAt[c.ConflictID]; !ok {
 					vantageAnsweredAt[c.ConflictID] = time.UnixMilli(ts).UTC()
+				}
+			}
+			if c.QuestionRef == "" && c.TriageVersion == "" && c.WaitingOn == "build" && (c.Status == "answered" || c.Status == "closed") && (c.AnswerHead != "" || c.DesignRunID != "" || c.AnswerDetail != "") {
+				if _, ok := designAnsweredAt[c.ConflictID]; !ok {
+					designAnsweredAt[c.ConflictID] = time.UnixMilli(ts).UTC()
 				}
 			}
 		}
@@ -548,6 +563,51 @@ func itemGuidanceBrief(ctx context.Context, storePath, itemID, worktree string) 
 		}
 	}
 
+	var designAnswers []answeredDesignConflict
+	for _, cid := range conflictOrder {
+		c := conflictByID[cid]
+		at, ok := designAnsweredAt[cid]
+		if !ok {
+			continue
+		}
+		if c.QuestionRef != "" || c.TriageVersion != "" || c.WaitingOn != "build" || (c.Status != "answered" && c.Status != "closed") || (c.AnswerHead == "" && c.DesignRunID == "" && c.AnswerDetail == "") {
+			continue
+		}
+		ans := strings.TrimSpace(c.AnswerDetail)
+		if ans == "" && c.DesignRunID != "" {
+			if _, after, found := strings.Cut(c.Text, "\n\nDesign run "+c.DesignRunID+":\n"); found {
+				ans = strings.TrimSpace(after)
+			}
+		}
+		if ans == "" && c.AnswerHead != "" {
+			if c.BodyRef != "" {
+				ans = fmt.Sprintf("Updated %s at commit %s.", c.BodyRef, shortSHA(c.AnswerHead))
+			} else {
+				ans = fmt.Sprintf("Landed design answer at commit %s.", shortSHA(c.AnswerHead))
+			}
+		}
+		if ans == "" {
+			continue
+		}
+		via := ""
+		switch {
+		case c.AnswerHead != "" && c.DesignRunID != "":
+			via = fmt.Sprintf("design run `%s`, commit `%s`", c.DesignRunID, shortSHA(c.AnswerHead))
+		case c.AnswerHead != "":
+			via = fmt.Sprintf("commit `%s`", shortSHA(c.AnswerHead))
+		default:
+			via = fmt.Sprintf("design run `%s`", c.DesignRunID)
+		}
+		designAnswers = append(designAnswers, answeredDesignConflict{
+			ConflictID:  c.ConflictID,
+			RunID:       c.RunID,
+			DesignRunID: c.DesignRunID,
+			Answer:      ans,
+			Via:         via,
+			At:          at.UTC().Format(time.RFC3339),
+		})
+	}
+
 	var b strings.Builder
 	if len(answered) > 0 {
 		b.WriteString("\n## Answered owner questions\n\n")
@@ -559,6 +619,18 @@ func itemGuidanceBrief(ctx context.Context, storePath, itemID, worktree string) 
 			}
 			fmt.Fprintf(&b, "\n- **Question**%s:\n%s\n\n  **Answer** (by `%s` at `%s`; %s):\n%s\n",
 				runLabel, quoteBriefLines(a.Question), a.By, a.At, a.Via, quoteBriefLines(a.Answer))
+		}
+	}
+	if len(designAnswers) > 0 {
+		b.WriteString("\n## Design answers\n\n")
+		b.WriteString("A design run answered an earlier obstacle on this item; read and build from each recorded answer below before raising the obstacle again.\n")
+		for _, a := range designAnswers {
+			runLabel := ""
+			if a.RunID != "" {
+				runLabel = fmt.Sprintf(" (run `%s`)", a.RunID)
+			}
+			fmt.Fprintf(&b, "\n- **Obstacle answered**%s (at `%s`; %s):\n%s\n",
+				runLabel, a.At, a.Via, quoteBriefLines(a.Answer))
 		}
 	}
 	if len(retries) > 0 {

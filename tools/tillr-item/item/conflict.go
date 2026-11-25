@@ -32,6 +32,7 @@ type Conflict struct {
 	DesignRunID         string   `json:"design_run_id,omitempty"`
 	QuestionRemovedHead string   `json:"question_removed_head,omitempty"`
 	AnswerHead          string   `json:"answer_head,omitempty"`
+	AnswerDetail        string   `json:"answer_detail,omitempty"`
 	// QuestionRef and QuestionHead identify publication, not an owner ruling.
 	// The document and shared Vantage reader own whether it is still open.
 	QuestionRef   string `json:"question_ref,omitempty"`

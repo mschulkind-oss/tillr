@@ -1332,7 +1332,7 @@ func braceLiteralCount(brief string) int {
 	count, recorded := 0, false
 	for _, line := range strings.Split(brief, "\n") {
 		switch {
-		case line == "## Answered owner questions" || line == "## Retry reasons":
+		case line == "## Answered owner questions" || line == "## Design answers" || line == "## Retry reasons":
 			recorded = true
 		case strings.HasPrefix(line, "## "):
 			recorded = false

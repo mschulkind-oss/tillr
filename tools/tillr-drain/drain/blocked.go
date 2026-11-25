@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
@@ -315,7 +317,10 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 			case designObjectionBuild:
 				// The design seat says the block stands as written: the worker builds it,
 				// with no owner act and no design commit.
-				c.Status, c.WaitingOn = "answered", "build"
+				if c.DesignRunID == "" {
+					c.DesignRunID = d.RunRequest.RunID
+				}
+				c.Status, c.WaitingOn, c.AnswerDetail = "answered", "build", text
 				l.reportf("loop: %s conflict %s goes back to its worker: design run %s says the block stands as written\n", c.ItemID, c.ConflictID, d.RunRequest.RunID)
 			case designMissingActor:
 				// No commit and no actor is a missing output: the design seat states its
@@ -568,6 +573,10 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 			return err
 		}
 	}
+	var answerDetail string
+	if c.QuestionRef == "" {
+		answerDetail = l.designAnswerSummary(ctx, candidate, file)
+	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
@@ -584,10 +593,10 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 			}
 		}
 		if c.QuestionRef != "" {
-			c.QuestionHead, c.AnswerHead = candidate.HeadSHA, ""
+			c.QuestionHead, c.AnswerHead, c.AnswerDetail = candidate.HeadSHA, "", ""
 			c.Status, c.WaitingOn = "question", "owner"
 		} else {
-			c.Status, c.WaitingOn, c.AnswerHead = "answered", "build", candidate.HeadSHA
+			c.Status, c.WaitingOn, c.AnswerHead, c.AnswerDetail = "answered", "build", candidate.HeadSHA, answerDetail
 		}
 		if err := item.RecordConflict(tx, c, l.cfg.Now().UTC()); err != nil {
 			return err
@@ -601,6 +610,9 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 				design := candidate
 				design.RunID = c.RunID
 				detail := fmt.Sprintf("Design answer commit: %s", candidate.HeadSHA)
+				if c.AnswerDetail != "" {
+					detail += "\n" + c.AnswerDetail
+				}
 				if file != "" {
 					detail += "\n" + item.DefinitionBodyContent(c.BodyRef, blockID, []byte(raw))
 				}
@@ -614,6 +626,130 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 		}
 		return nil
 	})
+}
+
+var (
+	markdownHeadingRe = regexp.MustCompile(`^(#{1,6}\s+.+?)\s*$`)
+	diffHunkStartRe   = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+)
+
+func (l *Loop) designAnswerSummary(ctx context.Context, candidate Candidate, file string) string {
+	if l.cfg.Root == "" {
+		if file != "" && candidate.BlockConflict != nil {
+			return fmt.Sprintf("Updated %s", candidate.BlockConflict.BodyRef)
+		}
+		return ""
+	}
+	base, head := candidate.BaseSHA, candidate.HeadSHA
+	ref := head
+	var pathsOut string
+	var err error
+	if base != "" && head != "" {
+		if base == head {
+			if file != "" && candidate.BlockConflict != nil {
+				return fmt.Sprintf("Updated %s", candidate.BlockConflict.BodyRef)
+			}
+			return ""
+		}
+		pathsOut, err = l.git(ctx, l.cfg.Root, "diff-tree", "--no-commit-id", "--name-only", "-r", base, head)
+	}
+	if err != nil || strings.TrimSpace(pathsOut) == "" {
+		base = ""
+		if head != "" {
+			pathsOut, err = l.git(ctx, l.cfg.Root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", head)
+		}
+		if err != nil || strings.TrimSpace(pathsOut) == "" {
+			ref = TrunkRef
+			pathsOut, err = l.git(ctx, l.cfg.Root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", TrunkRef)
+		}
+	}
+	var paths []string
+	for _, line := range strings.Split(pathsOut, "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	slices.Sort(paths)
+	paths = slices.Compact(paths)
+	var mdRecords, otherRecords []string
+	for _, p := range paths {
+		if strings.HasSuffix(strings.ToLower(p), ".md") {
+			if heading := l.designRecordHeading(ctx, base, ref, p); heading != "" {
+				mdRecords = append(mdRecords, fmt.Sprintf("- `%s` — %s", p, heading))
+			} else {
+				mdRecords = append(mdRecords, fmt.Sprintf("- `%s`", p))
+			}
+		} else {
+			otherRecords = append(otherRecords, fmt.Sprintf("- `%s`", p))
+		}
+	}
+	records := mdRecords
+	if len(records) == 0 {
+		records = otherRecords
+	}
+	if len(records) > 0 {
+		return "Landed design record(s):\n" + strings.Join(records, "\n")
+	}
+	if file != "" && candidate.BlockConflict != nil {
+		return fmt.Sprintf("Updated %s", candidate.BlockConflict.BodyRef)
+	}
+	return ""
+}
+
+func (l *Loop) designRecordHeading(ctx context.Context, base, ref, path string) string {
+	var diffOut string
+	var err error
+	if base != "" {
+		diffOut, err = l.git(ctx, l.cfg.Root, "diff", "-U0", base, ref, "--", path)
+	} else {
+		diffOut, err = l.git(ctx, l.cfg.Root, "show", "--format=", "-U0", ref, "--", path)
+	}
+	firstLine := 0
+	if err == nil && diffOut != "" {
+		for _, line := range strings.Split(diffOut, "\n") {
+			if firstLine == 0 {
+				if m := diffHunkStartRe.FindStringSubmatch(line); len(m) == 2 {
+					if n, convErr := strconv.Atoi(m[1]); convErr == nil {
+						firstLine = n
+					}
+				}
+			}
+			if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+				if m := markdownHeadingRe.FindStringSubmatch(line[1:]); len(m) == 2 {
+					return m[1]
+				}
+			}
+		}
+	}
+	raw, err := l.git(ctx, l.cfg.Root, "show", ref+":"+path)
+	if err != nil {
+		raw, err = l.git(ctx, l.cfg.Root, "show", TrunkRef+":"+path)
+	}
+	if err != nil || raw == "" {
+		return ""
+	}
+	return headingForLine(raw, firstLine)
+}
+
+func headingForLine(content string, lineNum int) string {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	if lineNum > 0 {
+		idx := lineNum - 1
+		if idx >= len(lines) {
+			idx = len(lines) - 1
+		}
+		for i := idx; i >= 0; i-- {
+			if m := markdownHeadingRe.FindStringSubmatch(lines[i]); len(m) == 2 {
+				return m[1]
+			}
+		}
+	}
+	for _, line := range lines {
+		if m := markdownHeadingRe.FindStringSubmatch(line); len(m) == 2 {
+			return m[1]
+		}
+	}
+	return ""
 }
 
 // syncAnswerBlock syncs the landed document and refuses an answer whose document does not

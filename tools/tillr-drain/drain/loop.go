@@ -4040,9 +4040,17 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	// makes "every 8 landings" a fact rather than a hope; a write that fails here is a
 	// bookkeeping failure, reported rather than read as a refused landing.
 	if err := l.bumpLandings(ctx); err != nil {
-		l.reportf("loop: landed %s but could not record the landing count: %v\n", candidate.ItemID, err)
+		if candidate.BlockConflict != nil {
+			l.reportf("loop: landed design record for %s but could not record the landing count: %v\n", candidate.ItemID, err)
+		} else {
+			l.reportf("loop: landed %s but could not record the landing count: %v\n", candidate.ItemID, err)
+		}
 	}
-	l.reportf("loop: landed %s (%s)\n", candidate.ItemID, candidate.HeadSHA)
+	if candidate.BlockConflict != nil {
+		l.reportf("loop: landed design record for %s (%s)\n", candidate.ItemID, candidate.HeadSHA)
+	} else {
+		l.reportf("loop: landed %s (%s)\n", candidate.ItemID, candidate.HeadSHA)
+	}
 	l.reportInheritedDrift(ctx, candidate)
 	return "", true, nil
 }
