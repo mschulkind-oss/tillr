@@ -54,12 +54,14 @@ func (a *landingAction) idle() <-chan struct{} {
 	return a.done
 }
 
-func (a *landingAction) submit(landing string, run func(string)) {
+// submit returns the pending trigger it replaced, if any.
+func (a *landingAction) submit(landing string, run func(string)) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.running {
+		replaced := a.pending
 		a.pending = landing
-		return
+		return replaced
 	}
 	a.running = true
 	done := make(chan struct{})
@@ -90,6 +92,7 @@ func (a *landingAction) submit(landing string, run func(string)) {
 			a.mu.Unlock()
 		}
 	}(landing)
+	return ""
 }
 
 const piForkPatchRef = "refs/heads/patch/pi"
@@ -201,6 +204,46 @@ func (l *Loop) reportRollFailure(tip, what string, failure error) {
 	l.reportf("loop: post-landing %s at %s failed: %s\n", kind, shortSHA(tip), strings.Join(strings.Fields(failure.Error()), " "))
 }
 
+// A restart waiting on this proof must go before new gates and proofs. Starting
+// a push here would defer the restart and let those gates start in the old image.
+func (l *Loop) offerGreenAdvance(ctx context.Context, tip string) {
+	if l.cfg.PostLanding.Push.What != settings.PushGreen {
+		l.reportf("loop: push of green %s skipped: [push] what is not green\n", shortSHA(tip))
+		return
+	}
+	stop, err := l.restartStopsNextHeavyProof(ctx)
+	if err != nil {
+		l.reportf("loop: push of green %s skipped: could not check restart: %s\n", shortSHA(tip), strings.Join(strings.Fields(err.Error()), " "))
+		return
+	}
+	if stop {
+		l.reportf("loop: push of green %s deferred to the replacement loop\n", shortSHA(tip))
+		return
+	}
+	l.afterGreen(context.WithoutCancel(ctx), tip)
+}
+
+func (l *Loop) offerStartupGreen(ctx context.Context) {
+	if l.cfg.PostLanding.Push.What != settings.PushGreen || l.greenPushAtStart.Load() {
+		return
+	}
+	// A pass can continue with a restart still pending behind an active proof.
+	// Do not let the startup catch-up add a new reason to defer that restart.
+	if l.cfg.Restart != nil {
+		pending, err := l.restarterPendingWith(ctx, nil)
+		if pending || err != nil {
+			return
+		}
+	}
+	if l.greenPushAtStart.CompareAndSwap(false, true) {
+		l.afterGreen(context.WithoutCancel(ctx), "start")
+	}
+}
+
+func isGreenAdvance(trigger string) bool {
+	return trigger != "" && trigger != "start" && trigger != "hold-cleared"
+}
+
 // afterGreen runs when the green pointer advances. In green mode it pushes the pointer's
 // commit, not the trunk tip: the remote only ever receives what the proof has passed. The
 // argument names the advance for the log; what is pushed is recomputed from the pointer when
@@ -212,16 +255,33 @@ func (l *Loop) afterGreen(ctx context.Context, advanced string) {
 	if p.What != settings.PushGreen {
 		return
 	}
-	l.pushAction.submit(advanced, func(string) {
+	replaced := l.pushAction.submit(advanced, func(trigger string) {
 		green, err := l.pushGreenOnce(ctx, p)
 		// Proof, not publication, makes a roll due. Replay may have moved green.
 		if l.cfg.PostLanding.Roll.Command != "" {
 			l.flushPendingRemoteRoll(ctx, optionalCommit(ctx, l.cfg.Root, GreenRef))
 		}
+		if isGreenAdvance(trigger) {
+			switch {
+			case green != "" && green != trigger:
+				l.reportf("loop: push of green %s skipped: pointer now at %s\n", shortSHA(trigger), shortSHA(green))
+			case green == "" && err == nil:
+				l.reportf("loop: push of green %s skipped: green pointer is absent\n", shortSHA(trigger))
+			case green == "" && err != nil:
+				green = trigger
+			}
+		}
 		if green != "" || err != nil {
 			l.recordPush(ctx, settings.PushGreen, green, err)
 		}
 	})
+	if isGreenAdvance(replaced) && replaced != advanced {
+		reason := "superseded by a newer push request"
+		if isGreenAdvance(advanced) {
+			reason = "superseded by green " + shortSHA(advanced)
+		}
+		l.reportf("loop: push of green %s skipped: %s\n", shortSHA(replaced), reason)
+	}
 }
 
 func matchesRollPaths(changed string, patterns []string) bool {
@@ -356,12 +416,13 @@ var errAlreadyPublished = errors.New("remote already holds the green commit")
 func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) (PushOutcome, error) {
 	conflict, err := l.activeRemoteSyncConflict(ctx)
 	if err != nil {
-		l.reportf("loop: reading active remote-sync repair after push: %v\n", err)
+		l.reportf("loop: push of %s %s could not be classified: reading active remote-sync repair: %s\n", what, shortSHA(tip), strings.Join(strings.Fields(err.Error()), " "))
 		return PushOutcome{}, err
 	}
 	if conflict != nil {
 		failure = conflict
 	} else if errors.Is(failure, errAlreadyPublished) {
+		l.reportf("loop: push of %s %s skipped: %s\n", what, shortSHA(tip), errAlreadyPublished)
 		return l.recordPushState(ctx, what, tip, pushKindOK, nil, nil)
 	}
 	kind, state := pushKindOK, (*pushStateError)(nil)
@@ -373,7 +434,7 @@ func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) 
 		retry = "retried at the next green advance"
 	}
 	if kind == pushKindProving {
-		l.reportf("loop: push of %s %s waits for proof: %s\n", what, shortSHA(tip), failure)
+		l.reportf("loop: push of %s %s waits for proof: %s\n", what, shortSHA(tip), strings.Join(strings.Fields(failure.Error()), " "))
 	} else if kind == pushKindConflict && state != nil && state.escalated == "" {
 		l.reportf("loop: push of %s %s waits for conflict repair: %s\n", what, shortSHA(tip), strings.Join(strings.Fields(failure.Error()), " "))
 	} else if failure != nil {

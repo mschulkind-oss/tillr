@@ -59,13 +59,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			}, Report: func(run HeavyRun) {
 				l.reportf("loop: heavy run %s at %s; green base %s\n", run.Result, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
 				if run.Result == "green" {
-					// Leave the green push to the replacement loop when a pending
-					// restart is waiting on this proof: starting pushAction here
-					// would set restartActionDeferred(), letting the next tip's
-					// proof and waiting candidate gates start before the restart.
-					if stop, stopErr := l.restartStopsNextHeavyProof(heavyCtx); stopErr == nil && !stop {
-						l.afterGreen(context.WithoutCancel(heavyCtx), run.TipSHA)
-					}
+					l.offerGreenAdvance(heavyCtx, run.TipSHA)
 				}
 				if len(run.ReusedChecks) > 0 {
 					l.reportf("loop: heavy %s reused checks=%s\n", shortSHA(run.TipSHA), strings.Join(run.ReusedChecks, ","))
@@ -197,13 +191,6 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				} else {
 					hold.Close()
 					err = errRestartPending
-				}
-			}
-			// A loop's first heavy pass also offers the pointer to the remote, so a push that
-			// failed or never ran before a restart is not left until the next proof.
-			if !errors.Is(err, errRestartPending) {
-				if stop, stopErr := l.restartStopsNextHeavyProof(heavyCtx); stopErr == nil && !stop {
-					l.greenPushAtStart.Do(func() { l.afterGreen(context.WithoutCancel(heavyCtx), "start") })
 				}
 			}
 			if err != nil && heavyCtx.Err() == nil && !errors.Is(err, errRestartPending) {

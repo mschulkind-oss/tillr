@@ -3097,6 +3097,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		if err != nil {
 			return "", err
 		}
+		// Offer an already proved commit after restart and replay recovery, without
+		// waiting for the next proof to finish (or for it to advance green again).
+		l.offerStartupGreen(ctx)
 		if err := l.maybeRolling(ctx, early, false, result); err != nil {
 			return "", err
 		}

@@ -562,7 +562,7 @@ type Loop struct {
 	startView                            atomic.Pointer[startView]
 	endingCapabilities                   map[string]string
 	rollAction, piRollAction, pushAction landingAction
-	greenPushAtStart                     sync.Once
+	greenPushAtStart                     atomic.Bool
 	ownerMigrationItem                   string
 	laneBootstrapReported                bool
 	staleRunsRepaired                    bool
