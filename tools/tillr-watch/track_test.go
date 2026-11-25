@@ -19,11 +19,15 @@ import (
 func seedCLIItems(t *testing.T, s *store.Store, items map[string]string) {
 	t.Helper()
 	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		head, err := tx.Reader().EventHeadSeq()
+		if err != nil {
+			return err
+		}
 		for id, st := range items {
 			if _, err := tx.Exec(
-				`INSERT INTO items (item_id, title, state, updated_at) VALUES (?, ?, ?, 1000)
-				 ON CONFLICT(item_id) DO UPDATE SET state = excluded.state`,
-				id, id, st,
+				`INSERT INTO items (item_id, title, state, updated_at, event_seq) VALUES (?, ?, ?, 1000, ?)
+				 ON CONFLICT(item_id) DO UPDATE SET state = excluded.state, event_seq = excluded.event_seq`,
+				id, id, st, head,
 			); err != nil {
 				return err
 			}
