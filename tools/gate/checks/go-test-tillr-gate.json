@@ -16,7 +16,13 @@
     "tools/gate/go_affected.py",
     "tools/go-test-durations.json",
     "tools/go-test-shards.py",
+    "tools/tillr-drain/",
     "tools/tillr-gate/",
+    "tools/tillr-item/",
+    "tools/tillr-land/",
+    "tools/tillr-loop/",
+    "tools/tillr-roll/",
+    "tools/tillr-run/",
     "tools/tillr/"
   ],
   "tools": [

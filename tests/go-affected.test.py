@@ -377,9 +377,9 @@ def test_selection_rules(root_graph: dict) -> None:
     for ip in list(scoped_edges):
         scoped_edges[ip]["reads"] = [r for r in scoped_edges[ip].get("reads", []) if r != scoped_read]
     scoped_edges[drain_pkg]["reads"].append(scoped_read)
-    scoped_edges[drain_pkg]["read_tests"] = {scoped_read: drain_readers}
+    scoped_edges[drain_pkg].setdefault("read_tests", {})[scoped_read] = drain_readers
     scoped_edges[gate_pkg]["reads"].append(scoped_read)
-    scoped_edges[gate_pkg]["read_tests"] = {scoped_read: gate_readers}
+    scoped_edges[gate_pkg].setdefault("read_tests", {})[scoped_read] = gate_readers
     expected_scoped_pkgs = {drain_pkg, gate_pkg}
     for scoped_changed in (
         [scoped_read],
@@ -407,7 +407,9 @@ def test_selection_rules(root_graph: dict) -> None:
     assert by_pkg[drain_pkg]["selected_tests"] is None, by_pkg
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["reason"] == "import", by_pkg
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
-    assert by_pkg[gate_pkg]["selected_tests"] == gate_readers, by_pkg
+    assert set(by_pkg[gate_pkg]["selected_tests"] or ()) == (
+        set(gate_readers) | {"TestClassificationScanGoSites"}
+    ), by_pkg[gate_pkg]
 
     # Pairing a scoped read path with a scoped builds edge narrows to the union of both.
     sel_scoped_both = go_affected.select_affected_packages(
@@ -571,6 +573,54 @@ def test_edges_file_honest_and_env_read() -> None:
                 declared = set(edges[pkg_import].get("builds", []))
                 missing = found_targets - declared
                 assert not missing, f"{test_file}: {pkg_import} missing builds edges {sorted(missing)}"
+
+    # Scan *_test.go for cross-module Go source walks/parses without a declared read.
+    undeclared_walks = go_affected.undeclared_cross_module_go_reads(ROOT, edges)
+    assert not undeclared_walks, "\n".join(undeclared_walks)
+
+    # Prove the honesty check fails when a test walks Go source outside its own module
+    # without a declared read, and passes once the read is declared.
+    with tempfile.TemporaryDirectory(prefix="go-affected-honest-walk-", dir=scratch_root()) as tmp:
+        walk_repo = Path(tmp)
+        (walk_repo / "tools" / "gate").mkdir(parents=True)
+        (walk_repo / "tools" / "tillr-alpha").mkdir(parents=True)
+        (walk_repo / "tools" / "tillr-beta").mkdir(parents=True)
+        (walk_repo / "tools" / "tillr-alpha" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-alpha\n\ngo 1.22\n",
+            encoding="utf-8",
+        )
+        (walk_repo / "tools" / "tillr-beta" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-beta\n\ngo 1.22\n",
+            encoding="utf-8",
+        )
+        (walk_repo / "tools" / "tillr-alpha" / "scan_test.go").write_text(
+            'package alpha\n\nimport (\n\t"io/fs"\n\t"path/filepath"\n\t"strings"\n\t"testing"\n)\n\n'
+            'func TestScanBeta(t *testing.T) {\n'
+            '\t_ = filepath.WalkDir(filepath.Join("..", "..", "tools/tillr-beta"), func(p string, d fs.DirEntry, err error) error {\n'
+            '\t\tif strings.HasSuffix(p, ".go") { return nil }\n'
+            '\t\treturn nil\n'
+            '\t})\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        edges_path = walk_repo / "tools" / "gate" / "go-test-edges.json"
+        edges_path.write_text("{}\n", encoding="utf-8")
+        missing_walk = go_affected.undeclared_cross_module_go_reads(walk_repo)
+        assert len(missing_walk) == 1, missing_walk
+        assert "tools/tillr-alpha/scan_test.go" in missing_walk[0], missing_walk
+        assert "tools/tillr-beta" in missing_walk[0], missing_walk
+
+        edges_path.write_text(
+            json.dumps({
+                "github.com/mschulkind-oss/tillr-alpha": {
+                    "builds": [],
+                    "reads": ["tools/tillr-beta/"],
+                    "read_tests": {"tools/tillr-beta/": ["TestScanBeta"]},
+                }
+            }),
+            encoding="utf-8",
+        )
+        assert go_affected.undeclared_cross_module_go_reads(walk_repo) == []
 
     # Every package listed in go-test-edges.json must read TILLR_GATE_EDGE_INPUTS in its tests.
     for pkg_import in edges:
@@ -2470,6 +2520,24 @@ def test_cross_module_source_scanning_edges(root_graph: dict) -> None:
                 assert store_pkg in by_pkg, (sample_path, sorted(by_pkg))
                 assert by_pkg[store_pkg]["reason"] == "edge", (sample_path, by_pkg[store_pkg])
                 assert by_pkg[store_pkg]["selected_tests"] == [store_test], (sample_path, by_pkg[store_pkg])
+
+    # TestClassificationScanGoSites in tools/tillr-gate walks tools/tillr-gate and tools/tillr-drain.
+    gate_pkg = "github.com/mschulkind-oss/tillr-gate"
+    scan_test = "TestClassificationScanGoSites"
+    assert gate_pkg in edges, edges
+    for rule in ("tools/tillr-drain/", "tools/tillr-gate/"):
+        assert rule in edges[gate_pkg]["reads"], (rule, edges[gate_pkg]["reads"])
+        assert scan_test in edges[gate_pkg].get("read_tests", {}).get(rule, []), (
+            rule,
+            edges[gate_pkg].get("read_tests"),
+        )
+    refusal_sel = go_affected.select_affected_packages(
+        ROOT, ["tools/tillr-drain/drain/refusal_cases.go"], graph=root_graph
+    )
+    refusal_by_pkg = {item["import_path"]: item for item in refusal_sel["selected"]}
+    assert gate_pkg in refusal_by_pkg, sorted(refusal_by_pkg)
+    assert refusal_by_pkg[gate_pkg]["reason"] == "edge", refusal_by_pkg[gate_pkg]
+    assert refusal_by_pkg[gate_pkg]["selected_tests"] == [scan_test], refusal_by_pkg[gate_pkg]
 
 
 def test_candidate_gate_fails_on_undeclared_go_module() -> None:

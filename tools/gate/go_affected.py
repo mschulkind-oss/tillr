@@ -170,6 +170,120 @@ def missing_source_scanning_edges(root: Path) -> list[str]:
     return findings
 
 
+_GO_WALK_RE = re.compile(r"\b(?:filepath\.Walk(?:Dir)?|fs\.WalkDir)\s*\(")
+_GO_EXT_RE = re.compile(r'(?:HasSuffix|Ext)\([^)]*"\.go"|==\s*"\.go"')
+_GO_PARSE_RE = re.compile(r"\b\w+\.Parse(?:File|Dir)\s*\(")
+_REPO_REL_MOD_RE = re.compile(r'"tools/(tillr(?:-[a-z0-9-]+)?)(?:/([^"]*))?"')
+_PARENT_REL_MOD_RE = re.compile(r'"(?:\.\./)+(tillr(?:-[a-z0-9-]+)?)(?:/([^"]*))?"')
+_FILEPATH_JOIN_RE = re.compile(r"filepath\.Join\(([^)]*)\)")
+_MOD_GLOB_RE = re.compile(r'"(?:tools/)?(tillr-\*|tillr\*)"')
+_STR_LIT_RE = re.compile(r'"([^"]+)"')
+_TILLR_IMPORT_RE = re.compile(r'"(github\.com/mschulkind-oss/[^"]+)"')
+
+
+def _package_tillr_imports(pkg_dir: Path) -> set[str]:
+    imports: set[str] = set()
+    for go_file in pkg_dir.glob("*.go"):
+        try:
+            text = go_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for match in _TILLR_IMPORT_RE.finditer(text):
+            imports.add(match.group(1))
+    return imports
+
+
+def undeclared_cross_module_go_reads(
+    root: Path,
+    edges: dict[str, dict] | None = None,
+) -> list[str]:
+    """Return findings for *_test.go files that walk or parse Go source outside their own module
+    without a declared reads edge in tools/gate/go-test-edges.json."""
+    if edges is None:
+        edges = load_edges(root)
+    modules = discover_tillr_modules(root)
+    mod_names = {mod.split("/", 1)[1] for mod in modules}
+    findings: list[str] = []
+
+    for mod in modules:
+        mod_name = mod.split("/", 1)[1]
+        mod_root = root / mod
+        for test_file in sorted(mod_root.rglob("*_test.go")):
+            text = test_file.read_text(encoding="utf-8")
+            is_go_parse = bool(_GO_PARSE_RE.search(text))
+            is_go_walk = bool(_GO_WALK_RE.search(text) and _GO_EXT_RE.search(text))
+            if not (is_go_parse or is_go_walk):
+                continue
+
+            pkg_rel = test_file.parent.relative_to(mod_root).as_posix()
+            pkg_import = (
+                f"github.com/mschulkind-oss/{mod_name}"
+                if pkg_rel == "."
+                else f"github.com/mschulkind-oss/{mod_name}/{pkg_rel}"
+            )
+
+            targets: set[tuple[str, str]] = set()
+            for match in _REPO_REL_MOD_RE.finditer(text):
+                if match.group(1) in mod_names and match.group(1) != mod_name:
+                    targets.add((match.group(1), (match.group(2) or "").rstrip("/")))
+            for match in _PARENT_REL_MOD_RE.finditer(text):
+                if match.group(1) in mod_names and match.group(1) != mod_name:
+                    targets.add((match.group(1), (match.group(2) or "").rstrip("/")))
+            for match in _FILEPATH_JOIN_RE.finditer(text):
+                args = _STR_LIT_RE.findall(match.group(1))
+                if ".." not in args and "tools" not in args:
+                    continue
+                for idx, arg in enumerate(args):
+                    if arg in mod_names and arg != mod_name:
+                        sub = "/".join(a for a in args[idx + 1 :] if "*" not in a)
+                        targets.add((arg, sub.rstrip("/")))
+                        break
+            for match in _MOD_GLOB_RE.finditer(text):
+                glob_pat = match.group(1)
+                for other in mod_names:
+                    if other == mod_name:
+                        continue
+                    if glob_pat == "tillr-*" and not other.startswith("tillr-"):
+                        continue
+                    targets.add((other, ""))
+
+            if not targets:
+                continue
+
+            # If a whole module is already in targets, drop more specific subpaths under it.
+            whole_mods = {t_mod for t_mod, sub in targets if not sub}
+            deduped = sorted(
+                (t_mod, sub)
+                for t_mod, sub in targets
+                if not sub or t_mod not in whole_mods
+            )
+
+            read_rules = edges.get(pkg_import, {}).get("reads", [])
+            pkg_imports = _package_tillr_imports(test_file.parent)
+            rel_test = test_file.relative_to(root).as_posix()
+
+            for target_mod_name, sub in deduped:
+                if sub and "." in Path(sub).name and not sub.endswith(".go"):
+                    continue
+                target_path = f"tools/{target_mod_name}" + (f"/{sub}" if sub else "")
+                probe = target_path if target_path.endswith(".go") else f"{target_path}/synthetic.go"
+                if any(path_matches_read(probe, rule) for rule in read_rules):
+                    continue
+                target_pkg_sub = Path(sub).parent.as_posix() if sub.endswith(".go") else sub
+                if target_pkg_sub == ".":
+                    target_pkg_sub = ""
+                target_imp = f"github.com/mschulkind-oss/{target_mod_name}" + (
+                    f"/{target_pkg_sub}" if target_pkg_sub else ""
+                )
+                if not is_go_walk and target_imp in pkg_imports:
+                    continue
+                findings.append(
+                    f"{rel_test}: {pkg_import} reads Go source in {target_path} "
+                    f"without a declared read in tools/gate/go-test-edges.json"
+                )
+    return findings
+
+
 def build_env() -> dict[str, str]:
     env = dict(os.environ, CGO_ENABLED="0")
     for key in STRIPPED_OUTER_ENV:

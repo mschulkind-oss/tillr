@@ -789,8 +789,18 @@
       "github.com/mschulkind-oss/tillr-loop"
     ],
     "reads": [
-      "tools/gate/checks/"
-    ]
+      "tools/gate/checks/",
+      "tools/tillr-drain/",
+      "tools/tillr-gate/"
+    ],
+    "read_tests": {
+      "tools/tillr-drain/": [
+        "TestClassificationScanGoSites"
+      ],
+      "tools/tillr-gate/": [
+        "TestClassificationScanGoSites"
+      ]
+    }
   },
   "github.com/mschulkind-oss/tillr-item": {
     "builds": [
