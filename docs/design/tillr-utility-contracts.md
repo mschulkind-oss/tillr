@@ -2,7 +2,7 @@
 title: "Every tillr utility has a written contract: what it provides, what it expects, pinned by the provider's own unit tests"
 status: in-review
 stage: DESIGN
-updated: 2026-11-24
+updated: 2026-11-25
 tags: [tillr, contract, interface, tests, design]
 summary: "Every tillr utility under tools/tillr* has a contract with two halves: what it provides and what it expects from the others. Each promise is pinned by a fast unit test in the utility that makes it, and consumers test against the provider's own examples. This design states the rules, the kinds of promise and their pins, the reads between utilities that have no stated interface, and the order of the build. One question waits on the owner."
 next: "The owner rules OQ-UC1: whether a Go package may be the contract between two utilities. Slices 1 to 5 do not wait on it. Nothing is built."
@@ -275,7 +275,7 @@ Each file has the same five sections: what the utility provides, what it expects
 | `tillr-store` | Store creation, check, recovery, inventory | `tillr`; the item, run, land and drain packages for their registrations | [tillr-store](./tillr-utility-contracts/tillr-store.md) |
 | `tillr-item` | Item records and faces, the `item` package, item tables, states, verdicts, rejection rules | `tillr`; the run, land and drain utilities' rows | [tillr-item](./tillr-utility-contracts/tillr-item.md) |
 | `tillr-run` | `run.record`, lanes, run states and end causes, the adapter protocol | `tillr`; the drain's request; `tillr-trace`'s shim | [tillr-run](./tillr-utility-contracts/tillr-run.md) |
-| `tillr-gate` | `gate.change`, `gate.plan`, `gate.verdict`, the stall exit code | `tillr`; the check declarations and the registry of the repository's gate scripts | [tillr-gate](./tillr-utility-contracts/tillr-gate.md) |
+| `tillr-gate` | `gate.change`, `gate.plan`, `gate.verdict`, the stall exit code; by `D-UC16`, the default gate runner scripts | `tillr`; the check declarations and the registry the operated repository declares | [tillr-gate](./tillr-utility-contracts/tillr-gate.md) |
 | `tillr-land` | `land.landing`, the `land` package, landing tables, results and refusal reasons, ref prefixes, the land lock | `tillr`, `tillr-gate`, `tillr-item`, `tillr-drain` | [tillr-land](./tillr-utility-contracts/tillr-land.md) |
 | `tillr-drain` | The planner's answer, hold reasons and rules, fourteen reader packages, drain tables and events, the run directory | `tillr`, `tillr-item`, `tillr-run`, `tillr-land`, `tillr-gate`, `tillr-loop` | [tillr-drain](./tillr-utility-contracts/tillr-drain.md) |
 | `tillr-view` | Read faces, the HTTP API its web client reads | every utility that owns a table | [tillr-view](./tillr-utility-contracts/tillr-view.md) |
@@ -283,6 +283,50 @@ Each file has the same five sections: what the utility provides, what it expects
 | `tillr-loop` | The gate, land and verdict steps as faces; `describe` | `tillr-gate`, `tillr-land`, `tillr-item`, `tillr-drain` | [tillr-loop](./tillr-utility-contracts/tillr-loop.md) |
 | `tillr-trace` | The `run` document; the shell shim's line format | `tillr-run`, `tillr-drain`, `tillr-gate` | [tillr-trace](./tillr-utility-contracts/tillr-trace.md) |
 | `tillr-roll` | The roller and the keeper as commands | `tillr-drain`, `tillr-view`, `tillr-land`, `tillr` | [tillr-roll](./tillr-utility-contracts/tillr-roll.md) |
+
+### 8.1 Defaults come from tillr's installation
+
+This subsection is from an operator request recorded on 2026-11-25, and its mechanism is the designer's decision (`D-UC16`). It is not an owner ruling, and the owner may overturn it. It amends `D-UC11` for the four defaults below and for nothing else.
+
+**The fault.** A **consumer repository** has a tillr store and is worked by the tillr loop, but does not carry tillr's source. It gets tillr's programs from the pack under `yolo-packs/tillr`, rendered to `~/.local/share/tillr/<module>` with launchers on `PATH`. The request reports that on 2026-11-24 such a repository had to keep copies of tillr's own files under its `tools/` so the pack's programs would work, and that its copy of the gate runner scripts had already drifted from this repository's. The request's words for the fix: "Wanted: the defaults come from tillr's install; a consumer owns only its declared checks."
+
+**What the tree does today**, read on 2026-11-25:
+
+| Default | Where it resolves today | Read with |
+| :--- | :--- | :--- |
+| The brief template | `<root>/tools/tillr-run/backends/brief-template.md` | `rg -n 'brief-template.md' tools/tillr-drain/main.go tools/tillr-drain/recovery.go` |
+| The adapters directory `tillr-run exec` reads, `--backends-dir` | `<repository root>/tools/tillr-run/backends`, derived from the git common directory | `defaultBackendsDir` in `tools/tillr-run/main.go` |
+| The fork gate | `<root>/tools/tillr-drain/fork-gate.py` | `rg -n 'fork-gate.py' tools/tillr-drain/drain/steps.go` |
+| The change gate and the fast tree check | `tools/gate/change-gate.py` and `tools/gate/tree-check.py`, relative to the candidate worktree | `DEFAULT_GATE_PROGRAM` and the `replay` face in `tools/tillr-loop/tillr-loop` |
+
+The first three files are already delivered in the pack, inside `tillr-run` and `tillr-drain`; only the default path points at the operated repository. The two runner scripts are not delivered at all: `tools/gate/` is not a tillr utility and is not in `MODULES` of `tests/pack-sync.test.py`.
+
+**The decision.**
+
+1. **A default never resolves under the operated repository's `tools/`.** Each of the four defaults resolves inside tillr's **installation**: the module directory of the utility that owns the file. That is `tools/<module>` in this repository and `~/.local/share/tillr/<module>` in a rendered pack. How a program finds its own module directory is private to it.
+2. **The owner of each default** is the utility whose tree holds it: `tillr-run` for the brief template and the adapters directory, `tillr-drain` for the fork gate, and `tillr-gate` for the two runner scripts.
+3. **The runner scripts become engine code.** `change-gate.py`, `tree-check.py` and the modules they import move into `tillr-gate`'s tree, so they are delivered with it and exist once. They are no longer "the repository's gate scripts, outside tillr". The thirteen utilities stay thirteen (`D-UC1`).
+4. **A consumer owns only its declared checks**: the files under its own `tools/gate/checks`, which are the declarations and the programs those declarations name. The installed runners read them from the candidate worktree, as they do today. That directory's path is unchanged.
+5. **An explicit flag still wins.** `--brief-template`, `--backends-dir`, `--gate-program` and `--registry` keep their meaning. Only the value used when the flag is absent changes.
+6. **A missing installed default is a refusal that names the installed path.** It never falls back to the operated repository's `tools/`: a fallback would let the drifted copy judge again without anyone seeing it.
+
+**What this changes for the contracts.** The provider of the runner scripts in [tillr-loop](./tillr-utility-contracts/tillr-loop.md) and [tillr-gate](./tillr-utility-contracts/tillr-gate.md) is `tillr-gate`. The check declarations keep an outside provider, now named as the operated repository. [tillr-run](./tillr-utility-contracts/tillr-run.md) and [tillr-drain](./tillr-utility-contracts/tillr-drain.md) each state the default they own.
+
+**Rejected** (the designer's, as the decision is):
+
+| Alternative | Why not |
+| :--- | :--- |
+| Keep the defaults and have each consumer copy the files | It is the fault as reported: engine code in two repositories, already drifted |
+| Try the installation first and fall back to `<root>/tools/` | Which file judged a candidate would depend on what the repository happens to hold |
+| Ship `tools/gate/` whole in the pack, declarations included | The declarations are the consumer's own. This repository's would then be judged against another repository's tree |
+| A new fourteenth utility for the runners | The runners are the judge `tillr-gate run --gate` starts. A new utility adds a contract and a pack module for two scripts |
+
+**Not decided here, and listed for the build:**
+
+- **A runner names this repository's checks.** `change-gate.py` reads `tools/gate/checks/go-build.json` and runs `tools/gate/checks/go-build.py` by name (`rg -n 'go-build' tools/gate/change-gate.py`, 2026-11-25). Engine code that names one repository's declaration needs that step to become a declaration's own business or to be skipped when the declaration is absent.
+- **Which runner judges a candidate that changes the runner.** Today the candidate's copy does, because the path is relative to the candidate worktree. With an installed default, a change to the runners in this repository is judged by the installed copy unless this repository names the candidate's copy with `--gate-program`. [The self-hosted build](./tillr-selfhosted-build.md) owns that choice.
+- **Other files under `tools/gate/`** (`done.py`, `go_affected.py`, `go-test-edges.json`, the tracked identity list) are not named by the request and stay where they are. The drain runs `tools/gate/go_affected.py` only when the file exists (`replay_go_affected.go`).
+- **The adapter itself.** The drain runs its embedded copy, and the pack delivers a standalone one at `~/.local/share/tillr/tillr-loop/tillr-loop` (`case_loop_adapter` in `tests/pack-sync.test.py`), so a consumer already needs no copy of it.
 
 ## 9. Who expects what from whom
 
@@ -450,7 +494,7 @@ For the two pairs inside one utility: the report's bytes are an example written 
 - It does not remove a heavy suite or reduce what the gate selects today. A suite that stops finding anything can be retired by a later decision with its own evidence.
 - It does not write a reference of every flag. A flag is listed only where another utility passes it.
 - It does not give tillr a versioned interface for readers outside this repository. [Tillr as separable parts](./tillr-separable-parts.md) owns that, and nothing here freezes a shape for them.
-- It does not cover the repository's gate scripts (`tools/gate/`) or the fork-target program a fork-series landing runs. Where a utility expects something from one of them, its file names the script as the provider, and the pin is left to that script's own design.
+- It does not cover the operated repository's check declarations (`tools/gate/checks`), the rest of this repository's `tools/gate/` that [§8.1](#81-defaults-come-from-tillrs-installation) leaves in place, or the fork-target program a fork-series landing runs. Where a utility expects something from one of them, its file names it as the provider, and the pin is left to that script's own design. The two default runner scripts are covered: by `D-UC16` they are part of `tillr-gate`.
 - It does not merge or divide a utility, and it does not decide whether the thirteen are the right thirteen.
 - It does not rule on the pack copy under `yolo-packs/tillr/`. A `contract/` directory is part of a utility's tree and is copied with it.
 
@@ -495,7 +539,7 @@ For the two pairs inside one utility: the report's bytes are an example written 
 
 ## Decision Ledger
 
-`R-UC1` is the owner's ruling. Every `D-UC` row is the designer's decision, which the owner may overturn. Nothing is built, so the last column is empty throughout.
+`R-UC1` is the owner's ruling. Every `D-UC` row is the designer's decision, which the owner may overturn. `D-UC16` is the designer's decision made from an operator request, not an owner ruling, and the owner may overturn it too. Nothing is built, so the last column is empty throughout.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -510,8 +554,9 @@ For the two pairs inside one utility: the report's bytes are an example written 
 | D-UC8 | A contract changes in one commit with every consumer it names, and the gate selects consumers' contract tests on a changed `contract/` path and on nothing else for this reason | 2026-11-21, designer | [§7.1](#71-the-steps) | — |
 | D-UC9 | One contract check in the conformance suite, with a list of today's reach-ins that may only shrink | 2026-11-21, designer | [§7.2](#72-the-contract-check) | — |
 | D-UC10 | When a consumer suite or a heavy check still finds something first, the repair adds an example to the provider before anything else | 2026-11-21, designer | [§7.3](#73-when-something-else-still-finds-it-first) | — |
-| D-UC11 | Which of each utility's surface is contract and which is private, as each of the thirteen files states | 2026-11-21, designer | [§8](#8-the-thirteen-contracts) | — |
+| D-UC11 | Which of each utility's surface is contract and which is private, as each of the thirteen files states. **Amended by `D-UC16`** for who provides the default gate runners and where four defaults resolve | 2026-11-21, designer; amended 2026-11-25 | [§8](#8-the-thirteen-contracts) | — |
 | D-UC12 | The 58 reach-ins of [§10](#10-reach-ins-today) are defects, each with the fix named | 2026-11-21, designer | [§10](#10-reach-ins-today) | — |
 | D-UC13 | The fourteen slices and their order: the four pairs of [§3](#3-the-failures-this-answers), then the check, then the pipeline, then the scripts | 2026-11-21, designer | [§11](#11-what-i-would-build-in-order) | — |
 | D-UC14 | The time limits (5 seconds for a utility's contract tests, 1 second for the check) are first guesses to be replaced by slice 1's measurement | 2026-11-21, designer | [§7.5](#75-limits-and-defaults) | — |
 | D-UC15 | Until [OQ-UC1](#OQ-UC1) is answered, a Go package may be an entry, and slices 1 to 5 build that way | 2026-11-21, designer | [§5](#5-what-a-contract-holds-and-how-each-kind-is-pinned) | — |
+| D-UC16 | **From an operator request; the designer's decision, not an owner ruling.** The loop's defaults come from tillr's installation and never from the operated repository's `tools/`: the brief template and the adapters directory from `tillr-run`, the fork gate from `tillr-drain`, the change gate and the fast tree check from `tillr-gate`, whose tree the runner scripts move into. A consumer repository owns only its declared checks under `tools/gate/checks`. An explicit flag still wins, and a missing installed default is a refusal. **Rejected:** consumer copies, a fallback to `<root>/tools/`, shipping the declarations in the pack, a fourteenth utility | 2026-11-25, designer, from an operator request | [§8.1](#81-defaults-come-from-tillrs-installation) | — |

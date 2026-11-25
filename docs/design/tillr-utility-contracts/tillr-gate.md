@@ -2,9 +2,9 @@
 title: "Contract: tillr-gate"
 status: in-review
 stage: DESIGN
-updated: 2026-11-24
+updated: 2026-11-25
 tags: [tillr, contract, gate]
-summary: "What tillr-gate provides and expects: seven faces, four record kinds, seven exit codes with the stall code 6, and the remembered-results directory. Its record types are in a `main` package nobody can import, so five utilities each hold a copy. It expects the check declarations and the registry from the repository's gate scripts."
+summary: "What tillr-gate provides and expects: seven faces, four record kinds, seven exit codes with the stall code 6, and the remembered-results directory. Its record types are in a `main` package nobody can import, so five utilities each hold a copy. It expects the check declarations and the registry from the operated repository. By `D-UC16` the default runner scripts are to become its own."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
@@ -79,14 +79,16 @@ None.
 | Expectation | Provider | Through | Where it is read |
 | :--- | :--- | :--- | :--- |
 | The envelope, the exit codes, the kind registry | [tillr](./tillr.md) | Go import | throughout |
-| The check declarations: each direct `*.json` under `tools/gate/checks`, with the keys `id label command scope tier budget_ms timeout_ms reads tools needs remember writes exclusive` and no others | the repository's gate scripts, outside tillr | files | `checkfiles.go` |
-| The registry: `digest declarations in_process`, with the digest being the hash of the two arrays | the repository's gate scripts, outside tillr | files | `registry.go` |
-| The `--gate` program: its exit code, and the fast verdict it writes to the path in `TILLR_FAST_VERDICT_OUT` | the caller's program; in the drain's loop, `tools/gate/change-gate.py` | subprocess, files | `gate.go` |
+| The check declarations: each direct `*.json` under `tools/gate/checks`, with the keys `id label command scope tier budget_ms timeout_ms reads tools needs remember writes exclusive` and no others | the operated repository, outside tillr | files | `checkfiles.go` |
+| The registry: `digest declarations in_process`, with the digest being the hash of the two arrays | the operated repository, outside tillr | files | `registry.go` |
+| The `--gate` program: its exit code, and the fast verdict it writes to the path in `TILLR_FAST_VERDICT_OUT` | the caller's program; in the drain's loop, the change gate, `change-gate.py`, which `D-UC16` makes this utility's own part | subprocess, files | `gate.go` |
 | `TILLR_HEAVY_LOCK_FD`, an open lock handle | [tillr-drain](./tillr-drain.md) | environment | `checkgroup.go` |
 | An inherited `TILLR_FAST_VERDICT_OUT` | [tillr-drain](./tillr-drain.md) | environment | `gate.go` |
-| That the fast tier's limit, 9000 ms, equals the limit in `tools/gate/checks/gate-budget.py` | the repository's gate scripts | a test | `run.go` |
+| That the fast tier's limit, 9000 ms, equals the limit in `tools/gate/checks/gate-budget.py` | this repository's declared checks | a test | `run.go` |
 
 It reads no store, imports no other utility, and runs no other tillr program.
+
+**The runner scripts.** Wherever this file says "the repository's gate scripts" as a reader or a caller, it means `change-gate.py`, `tree-check.py` and the modules they import, which are under `tools/gate/` today. `D-UC16` of [the overview](../tillr-utility-contracts.md#81-defaults-come-from-tillrs-installation) moves them into this utility's tree, so they are delivered with it and a consumer repository keeps no copy. It is the designer's decision, made from an operator request, and the owner may overturn it. They then become a **part** of this utility, and what they read of the Go program (the `checks` and `classify` faces, the remembered results, `TILLR_FAST_VERDICT_OUT`) is a read between two parts. The check declarations stay the operated repository's own. Nothing has moved yet.
 
 ## 3. Contract and private
 

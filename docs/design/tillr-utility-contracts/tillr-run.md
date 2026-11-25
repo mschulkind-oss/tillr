@@ -2,7 +2,7 @@
 title: "Contract: tillr-run"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
+updated: 2026-11-25
 tags: [tillr, contract, run]
 summary: "What tillr-run provides and expects, read from the code. It has two parts: the Go program and `run` package, which give the drain the run record, lanes, run states and end causes; and the adapter scripts, which give the Go part the report, the pause kind and the ending capability. The drain writes three of its four tables, and the report footer has three parsers with three grammars."
 depends-on:
@@ -117,6 +117,7 @@ What the adapter part provides to the Go part and to the drain:
 | `TILLR_LOOP_STORE`, `TILLR_RUN_ID`, `TILLR_RUN_RESUME` in its environment | [tillr-drain](./tillr-drain.md) | environment | `run/children.go` |
 | That the drain inserted the `lanes` and `read_only_runs` rows for a read-only group before `exec` | [tillr-drain](./tillr-drain.md) | SQL | `run/exec.go` |
 | The brief's required headings and its target line | [tillr-drain](./tillr-drain.md), from the runner's own template | files | `backends/preflight.sh`, the adapters |
+| That `backends/`, with `brief-template.md` in it, is read from this utility's installed directory when `--backends-dir` and the drain's `--brief-template` are absent. Not so today: both defaults point at `<repository root>/tools/tillr-run/backends`. `D-UC16` of [the overview](../tillr-utility-contracts.md#81-defaults-come-from-tillrs-installation), the designer's decision from an operator request | itself, and [tillr-drain](./tillr-drain.md) for the template's default | files | `main.go` (`defaultBackendsDir`) |
 | The shell shim, found by a relative path, and the loop directory it writes into | [tillr-trace](./tillr-trace.md), [tillr-drain](./tillr-drain.md) | files | `backends/pi/run-pi`, `backends/claude/run-claude` |
 | **The Go part from the adapters:** everything in [§1.7](#17-the-adapters-surface), and the three files of each adapter directory | the adapter part | subprocess, files | `run/exec.go`, `run/settled.go`, `run/pause.go` |
 | **The adapters from the Go part:** the argument list `--backend --model --effort --account --timeout`, the working directory, and the environment of [§1.5](#15-files-and-environment) | the Go part | subprocess | each `run-<harness>` |

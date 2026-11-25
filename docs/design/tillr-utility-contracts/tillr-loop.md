@@ -2,7 +2,7 @@
 title: "Contract: tillr-loop"
 status: in-review
 stage: DESIGN
-updated: 2026-11-24
+updated: 2026-11-25
 tags: [tillr, contract, loop, adapter]
 summary: "What tillr-loop provides and expects: one Python script with eight faces, five exit codes, and the `describe` answer the drain checks at start. Its provided side is already held by a generated file of real argument lists. Its expected side is not: it types the flags of the gate, land and item programs and tests against stand-ins that accept anything."
 depends-on:
@@ -25,7 +25,7 @@ depends-on:
 | `land` | one `tillr-land pass` | the candidate flags, the three program flags, and `--observed-trunk --base-ref --message-from` |
 | `verdict` | `tillr-item show`, then one `tillr-item verdict record` per verification-only criterion | the candidate flags, the three program flags and `--verdict` |
 | `fixer-gate` | replaces itself with the judge of one named whole-tree declaration, in a fixer's candidate worktree | the candidate flags, the three program flags and `--only` |
-| `replay`, `rolling` | replace themselves with `tillr-gate checks --heavy-tree` (or `tools/gate/tree-check.py --only` for a fast declaration) on the checked-out revision | `--only`; `--all` or `--since` |
+| `replay`, `rolling` | replace themselves with `tillr-gate checks --heavy-tree` (or the fast tree check, `tree-check.py --only`, for a fast declaration) on the checked-out revision | `--only`; `--all` or `--since` |
 | `describe` | prints `{"hooks": {<face>: [<flags>]}}` | none |
 | `self-check` | prints the commands it would run, and runs nothing | none |
 
@@ -73,15 +73,18 @@ None.
 | `verdict record` with `--store --input --now`, accepting the record of [§1.2](#12-records) | [tillr-item](./tillr-item.md) | subprocess | the `verdict` face |
 | The four claim classes; the verdict `done`; the actor kind `mechanical`; that a criterion's hash is the SHA-256 of its text | [tillr-item](./tillr-item.md) | copies | the `verdict` face |
 | The argument lists of `drain-argv.json`, and `TILLR_LOOP_ADAPTER_BUILD` | [tillr-drain](./tillr-drain.md) | subprocess, environment | every face |
-| The change gate (`tools/gate/change-gate.py`) and the fast tree check (`tools/gate/tree-check.py`) | the repository's gate scripts, outside tillr | subprocess | `gate`, `fixer-gate`, `replay`, `rolling` |
+| The change gate (`change-gate.py`) and the fast tree check (`tree-check.py`), as the default runners | [tillr-gate](./tillr-gate.md), from tillr's installation | subprocess | `gate`, `fixer-gate`, `replay`, `rolling` |
+| The check declarations under the candidate's `tools/gate/checks` | the operated repository, outside tillr | files | `gate`, `fixer-gate`, `replay` |
 
 It reads no store.
+
+**Who provides the runners.** This table named the provider of the two runner scripts as "the repository's gate scripts, outside tillr" until 2026-11-25. `D-UC16` of [the overview](../tillr-utility-contracts.md#81-defaults-come-from-tillrs-installation) changes it: the designer's decision, made from an operator request, which the owner may overturn. The default runners are `tillr-gate`'s and are found in tillr's installation, and the operated repository provides only its declarations. The code does not do this yet: `DEFAULT_GATE_PROGRAM` is `python3 tools/gate/change-gate.py …`, resolved inside the candidate worktree, and the `replay` face runs `tools/gate/tree-check.py` from the checked-out revision (read in `tools/tillr-loop/tillr-loop` on 2026-11-25). `--gate-program` and `--registry` still override the defaults.
 
 ## 3. Contract and private
 
 **Contract:** the six hook faces with the flags `describe` prints; `--check-argv`; the five exit codes; the run directory's three record file names; the `item.verdict` record it writes.
 
-**Private:** `self-check`'s text; every refusal sentence; how it finds the three programs.
+**Private:** `self-check`'s text; every refusal sentence; how it finds the three programs and the installed default runners.
 
 **The copy is a generated file.** It has one writer, the sync script, and two tests already fail when it differs. It stays, because a Go program cannot embed a file from another module.
 
