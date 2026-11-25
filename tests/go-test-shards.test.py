@@ -442,8 +442,8 @@ func TestMain(m *testing.M) {
                 patch.object(shards, 'run', side_effect=fake_run) as mocked_run, \
                 patch.object(shards.sys, 'argv', ['runner', str(self.root), '--durations', str(record)]):
             self.assertEqual(shards.main(), 0)
+            self.assertNotIn(shards.PROGRESS_OUT_ENV, os.environ)
         self.assertEqual(seen_env_during_run, [None])
-        self.assertNotIn(shards.PROGRESS_OUT_ENV, os.environ)
         self.assertEqual(mocked_run.call_args.kwargs['progress_file'], env_target.resolve())
         self.assertEqual(mocked_run.call_args.kwargs['progress_interval'], shards.DEFAULT_PROGRESS_INTERVAL)
 
@@ -455,8 +455,8 @@ func TestMain(m *testing.M) {
                     'runner', str(self.root), '--durations', str(record),
                     '--progress-file', str(flag_target), '--progress-interval', '15']):
             self.assertEqual(shards.main(), 0)
+            self.assertNotIn(shards.PROGRESS_OUT_ENV, os.environ)
         self.assertEqual(seen_env_during_run, [None])
-        self.assertNotIn(shards.PROGRESS_OUT_ENV, os.environ)
         self.assertEqual(mocked_run.call_args.kwargs['progress_file'], flag_target.resolve())
         self.assertEqual(mocked_run.call_args.kwargs['progress_interval'], 15.0)
 

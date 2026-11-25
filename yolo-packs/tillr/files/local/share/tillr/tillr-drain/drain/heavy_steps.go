@@ -176,16 +176,34 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		if only != "" {
 			args = append(args, "--only", only)
 		}
+		var extraEnv []string
+		var checkProgressPath string
+		if only != "" && hasHeavyStoreProgress(ctx) {
+			rollingDir, err := filepath.Abs(filepath.Join(s.LaneRoot, ".rolling"))
+			if err != nil {
+				return nil, err
+			}
+			if err := os.MkdirAll(rollingDir, 0o755); err != nil {
+				return nil, err
+			}
+			checkProgressPath = filepath.Join(rollingDir, "heavy-check-progress-"+nextHeavyLegacyNonce()+".json")
+			extraEnv = append(extraEnv, "TILLR_GO_SHARDS_PROGRESS_OUT="+checkProgressPath)
+		}
 		cmd := exec.CommandContext(ctx, bin, args...)
 		cmd.Dir = dir
-		cmd.Env = s.checkProcessEnv(os.Environ())
+		cmd.Env = s.checkProcessEnv(os.Environ(), extraEnv...)
 		var stderr stderrTail
 		cmd.Stderr = &stderr
 		var stdout strings.Builder
 		cmd.Stdout = &stdout
+		stopProgressWatch := startHeavyReplayProgressWatcher(ctx, checkProgressPath, only)
 		stopLogWatch := startHeavyCheckLogProgressWatcher(ctx, logs, only, s.heavyLogSampleInterval)
 		runErr := runOwnedHeavy(ctx, cmd, "declaration")
+		stopProgressWatch()
 		stopLogWatch()
+		if checkProgressPath != "" {
+			_ = os.Remove(checkProgressPath)
+		}
 		if cleanupLost(runErr) {
 			return nil, runErr
 		}

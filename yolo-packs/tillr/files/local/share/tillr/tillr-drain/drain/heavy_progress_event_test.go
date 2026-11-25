@@ -553,6 +553,267 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 	})
 }
 
+func TestHeavyProgressEventsWatchDeclarationCheckShardProgress(t *testing.T) {
+	t.Run("advancing-snapshots", func(t *testing.T) {
+		root, base := heavyRepo(t)
+		heavyGit(t, root, "update-ref", GreenRef, base)
+		storePath := newHeavyProgressStore(t)
+		work := scratchUnderDurable(t)
+
+		checkID := "go-test-tillr-drain"
+		if err := os.MkdirAll(filepath.Join(root, "tools", "gate", "checks"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", checkID+".json"),
+			`{"id":"`+checkID+`","scope":"tree","tier":"heavy","reads":["value"],"command":["true"]}`)
+		tip := heavyCommit(t, root, "decl-shards-progress")
+
+		startedFile := filepath.Join(work, "started")
+		step1File := filepath.Join(work, "step1")
+		step2File := filepath.Join(work, "step2")
+		releaseFile := filepath.Join(work, "release")
+		envRecord := filepath.Join(work, "env-progress-path")
+
+		fakeGate := executable(t, `
+logs=""
+only=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--logs) logs="$2"; shift 2 ;;
+		--only) only="$2"; shift 2 ;;
+		*) shift ;;
+	esac
+done
+mkdir -p "$logs"
+# Keep the check log completely flat, matching go-test-shards.py while shards run.
+: > "$logs/00-${only}.log"
+printf '%s' "${TILLR_GO_SHARDS_PROGRESS_OUT:-}" > `+envRecord+`
+touch `+startedFile+`
+while [ ! -e `+step1File+` ]; do sleep 0.01; done
+if [ -n "${TILLR_GO_SHARDS_PROGRESS_OUT:-}" ]; then
+	printf '{"seq":1,"completed_units":3,"completed_tests":3}\n' > "$TILLR_GO_SHARDS_PROGRESS_OUT"
+fi
+while [ ! -e `+step2File+` ]; do sleep 0.01; done
+if [ -n "${TILLR_GO_SHARDS_PROGRESS_OUT:-}" ]; then
+	printf '{"seq":2,"completed_units":7,"completed_tests":7}\n' > "$TILLR_GO_SHARDS_PROGRESS_OUT"
+fi
+while [ ! -e `+releaseFile+` ]; do sleep 0.01; done
+printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"pass","duration_ms":50}]}}\n' "$only"
+`)
+
+		steps := &ProcessSteps{
+			Root:                   root,
+			LaneRoot:               work,
+			HeavyGateBin:           fakeGate,
+			heavyLogSampleInterval: 20 * time.Millisecond,
+		}
+		runner := heavyFixture(t, root, steps.JudgeHeavy)
+		runner.Store = storePath
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := runner.Run(context.Background())
+			done <- err
+		}()
+		defer func() {
+			_ = os.WriteFile(step1File, nil, 0o644)
+			_ = os.WriteFile(step2File, nil, 0o644)
+			_ = os.WriteFile(releaseFile, nil, 0o644)
+		}()
+
+		waitFor := func(path string) {
+			t.Helper()
+			deadline := time.After(10 * time.Second)
+			for {
+				if _, err := os.Stat(path); err == nil {
+					return
+				}
+				select {
+				case err := <-done:
+					t.Fatalf("heavy exited early waiting for %s: %v", path, err)
+				case <-deadline:
+					t.Fatalf("timed out waiting for %s", path)
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+		}
+		waitForRunningCount := func(want int) {
+			t.Helper()
+			deadline := time.After(10 * time.Second)
+			for {
+				events := readHeavyProgressEvents(t, storePath)
+				count := 0
+				for _, ev := range events {
+					if ev.Fact.Phase == "ended" {
+						t.Fatalf("saw premature ended before check was released: %+v", events)
+					}
+					if ev.Fact == (HeavyProgressFact{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "running"}) {
+						count++
+					}
+				}
+				if count >= want {
+					return
+				}
+				select {
+				case err := <-done:
+					t.Fatalf("heavy exited before release: %v", err)
+				case <-deadline:
+					t.Fatalf("timed out waiting for %d live running progress events; events=%+v", want, events)
+				case <-time.After(20 * time.Millisecond):
+				}
+			}
+		}
+
+		waitFor(startedFile)
+
+		rawPath, err := os.ReadFile(envRecord)
+		if err != nil {
+			t.Fatalf("read recorded progress path: %v", err)
+		}
+		progressPath := string(rawPath)
+		if progressPath == "" || !filepath.IsAbs(progressPath) {
+			t.Fatalf("TILLR_GO_SHARDS_PROGRESS_OUT = %q, want non-empty absolute path", progressPath)
+		}
+
+		if err := os.WriteFile(step1File, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		waitForRunningCount(1)
+
+		if err := os.WriteFile(step2File, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		waitForRunningCount(2)
+
+		if err := os.WriteFile(releaseFile, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if _, err := os.Stat(progressPath); !os.IsNotExist(err) {
+			t.Fatalf("temporary progress file %q was not removed: err=%v", progressPath, err)
+		}
+
+		events := readHeavyProgressEvents(t, storePath)
+		want := []HeavyProgressFact{
+			{TipSHA: tip, Phase: "started"},
+			{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "running"},
+			{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "running"},
+			{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "pass"},
+			{TipSHA: tip, Phase: "ended", Outcome: "green"},
+		}
+		if len(events) != len(want) {
+			t.Fatalf("events = %+v, want %+v", events, want)
+		}
+		for i := range want {
+			if events[i].Fact != want[i] {
+				t.Fatalf("event[%d] = %+v, want %+v", i, events[i].Fact, want[i])
+			}
+		}
+	})
+
+	t.Run("stalled-snapshots", func(t *testing.T) {
+		root, base := heavyRepo(t)
+		heavyGit(t, root, "update-ref", GreenRef, base)
+		storePath := newHeavyProgressStore(t)
+		work := scratchUnderDurable(t)
+
+		checkID := "go-test-tillr-drain"
+		if err := os.MkdirAll(filepath.Join(root, "tools", "gate", "checks"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", checkID+".json"),
+			`{"id":"`+checkID+`","scope":"tree","tier":"heavy","reads":["value"],"command":["true"]}`)
+		tip := heavyCommit(t, root, "decl-shards-stalled")
+
+		startedFile := filepath.Join(work, "started")
+		releaseFile := filepath.Join(work, "release")
+
+		fakeGate := executable(t, `
+logs=""
+only=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--logs) logs="$2"; shift 2 ;;
+		--only) only="$2"; shift 2 ;;
+		*) shift ;;
+	esac
+done
+mkdir -p "$logs"
+: > "$logs/00-${only}.log"
+# Write a zero-progress snapshot; a hung check completing no tests must not emit running progress.
+if [ -n "${TILLR_GO_SHARDS_PROGRESS_OUT:-}" ]; then
+	printf '{"seq":0,"completed_units":0,"completed_tests":0}\n' > "$TILLR_GO_SHARDS_PROGRESS_OUT"
+fi
+touch `+startedFile+`
+while [ ! -e `+releaseFile+` ]; do sleep 0.01; done
+printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"pass","duration_ms":50}]}}\n' "$only"
+`)
+
+		steps := &ProcessSteps{
+			Root:                   root,
+			LaneRoot:               work,
+			HeavyGateBin:           fakeGate,
+			heavyLogSampleInterval: 20 * time.Millisecond,
+		}
+		runner := heavyFixture(t, root, steps.JudgeHeavy)
+		runner.Store = storePath
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := runner.Run(context.Background())
+			done <- err
+		}()
+		defer func() {
+			_ = os.WriteFile(releaseFile, nil, 0o644)
+		}()
+
+		deadline := time.After(10 * time.Second)
+		for {
+			if _, err := os.Stat(startedFile); err == nil {
+				break
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("heavy exited early: %v", err)
+			case <-deadline:
+				t.Fatal("timed out waiting for startedFile")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+
+		time.Sleep(100 * time.Millisecond)
+		for _, ev := range readHeavyProgressEvents(t, storePath) {
+			if ev.Fact.Phase == "progress" {
+				t.Fatalf("stalled declaration check emitted progress event: %+v", ev.Fact)
+			}
+		}
+
+		if err := os.WriteFile(releaseFile, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		events := readHeavyProgressEvents(t, storePath)
+		want := []HeavyProgressFact{
+			{TipSHA: tip, Phase: "started"},
+			{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "pass"},
+			{TipSHA: tip, Phase: "ended", Outcome: "green"},
+		}
+		if len(events) != len(want) {
+			t.Fatalf("events = %+v, want %+v", events, want)
+		}
+		for i := range want {
+			if events[i].Fact != want[i] {
+				t.Fatalf("event[%d] = %+v, want %+v", i, events[i].Fact, want[i])
+			}
+		}
+	})
+}
+
 func TestHeavyProgressEventsEndedFailingChecks(t *testing.T) {
 	root, base := heavyRepo(t)
 	heavyGit(t, root, "update-ref", GreenRef, base)
