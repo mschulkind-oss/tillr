@@ -36,10 +36,13 @@ func (l *Loop) runFastStart(ctx context.Context, view *startView, result *LoopRe
 		l.mu.Lock()
 		waitingForPass := len(l.stageFaults) > 0 || l.stageBackoff
 		l.mu.Unlock()
-		if snapshot == nil || snapshot == rejected || waitingForPass {
+		if snapshot == nil || snapshot == rejected || waitingForPass || l.rollBlocksDispatch() {
+			rollIdle := l.rollAction.idle()
 			select {
 			case <-ctx.Done():
 			case <-view.updated:
+			case <-rollIdle:
+				rejected = nil
 			case <-timer.C:
 				rejected = nil
 			}

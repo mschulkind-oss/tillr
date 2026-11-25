@@ -169,7 +169,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	// startRunFaceContext would refuse to launch it, and leaving the gated
 	// candidate intact lets the replacement loop stage and run conflict repair
 	// cleanly after exec.
-	if pending, err := l.buildRestartPending(ctx); err != nil {
+	if pending, err := l.runDispatchHeld(ctx); err != nil {
 		return "", false, err
 	} else if pending {
 		l.noteConflictRestartWait(candidate.RunID, candidate.HeadSHA, mainSHA)

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -19,8 +20,8 @@ import (
 // dispatch history (including resumes and orphans) are checked separately.
 func backendAvailabilityChanged(r *store.Reader, after int64) (bool, error) {
 	var changed bool
-	err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind IN (?, ?, ?, ?, ?) AND seq > ?)`,
-		run.FinishKind, backendOutcomeKind, backendProbeKind, callOffered, staleBaseKind, after).Scan(&changed)
+	err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind IN (?, ?, ?, ?, ?, ?) AND seq > ?)`,
+		run.FinishKind, backendOutcomeKind, backendProbeKind, callOffered, staleBaseKind, rollPendingKind, after).Scan(&changed)
 	return changed, err
 }
 
@@ -210,10 +211,81 @@ func classifyUnsavedBackendOutcomes(r *store.Reader, out []backendOutcome, offer
 			continue
 		}
 		rec := out[i].rec
-		out[i].class = classifyWorkAttempt(byRun[rec.RunID], rec, logTail(rec.ArtifactRefs))
-		out[i].closes = out[i].class == AttemptInfrastructure && !answeredByAnotherRule(rec, interrupted, byRun)
+		log := logTail(rec.ArtifactRefs)
+		out[i].class = classifyWorkAttempt(byRun[rec.RunID], rec, log)
+		closes := out[i].class == AttemptInfrastructure && !answeredByAnotherRule(rec, interrupted, byRun)
+		if closes && isUnknownFaceFailure(rec, log) {
+			pending, err := rollPendingAt(r, out[i].seq)
+			if err != nil {
+				return err
+			}
+			if pending {
+				closes = false
+			}
+		}
+		out[i].closes = closes
 	}
 	return nil
+}
+
+// isUnknownFaceFailure reports whether a run exited because an adapter called a
+// tillr CLI face that the installed binary does not yet provide.
+func isUnknownFaceFailure(rec run.Record, log string) bool {
+	if rec.State != run.StateExited {
+		return false
+	}
+	if rec.ExitCode != nil && *rec.ExitCode == 0 {
+		return false
+	}
+	return hasUnknownFaceText(rec.StderrTail) || hasUnknownFaceText(log)
+}
+
+func hasUnknownFaceText(s string) bool {
+	idx := strings.Index(s, `unknown face "`)
+	if idx < 0 {
+		return false
+	}
+	rest := s[idx+len(`unknown face "`):]
+	return strings.IndexByte(rest, '"') > 0
+}
+
+// rollPendingAt reports whether a binary roll for a newer commit was pending or
+// running at event sequence atSeq (or at the current tail when atSeq <= 0).
+func rollPendingAt(r *store.Reader, atSeq int64) (bool, error) {
+	var pendingSeq int64
+	var tip string
+	var err error
+	if atSeq > 0 {
+		err = r.QueryRow(`SELECT seq, COALESCE(object_id,'') FROM events WHERE kind=? AND seq<? ORDER BY seq DESC LIMIT 1`, rollPendingKind, atSeq).Scan(&pendingSeq, &tip)
+	} else {
+		err = r.QueryRow(`SELECT seq, COALESCE(object_id,'') FROM events WHERE kind=? ORDER BY seq DESC LIMIT 1`, rollPendingKind).Scan(&pendingSeq, &tip)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var completed bool
+	if atSeq > 0 {
+		err = r.QueryRow(`SELECT EXISTS(
+			SELECT 1 FROM events
+			WHERE ((kind=? AND json_extract(payload,'$.action')='roll' AND COALESCE(json_extract(payload,'$.what'),'')='' AND object_id=?)
+			    OR (kind=? AND object_id=?))
+			  AND seq>? AND seq<?
+		)`, postLandingKind, tip, restart.BuildKind, restart.RoleDrain, pendingSeq, atSeq).Scan(&completed)
+	} else {
+		err = r.QueryRow(`SELECT EXISTS(
+			SELECT 1 FROM events
+			WHERE ((kind=? AND json_extract(payload,'$.action')='roll' AND COALESCE(json_extract(payload,'$.what'),'')='' AND object_id=?)
+			    OR (kind=? AND object_id=?))
+			  AND seq>?
+		)`, postLandingKind, tip, restart.BuildKind, restart.RoleDrain, pendingSeq).Scan(&completed)
+	}
+	if err != nil {
+		return false, err
+	}
+	return !completed, nil
 }
 
 func seedBackendOutcomesState(r *store.Reader, head int64, byRun map[string]*pendingWork) (*backendOutcomesState, error) {

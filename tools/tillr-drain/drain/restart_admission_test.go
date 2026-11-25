@@ -31,19 +31,32 @@ func TestDeferredRestartDoesNotBlockRunHandoff(t *testing.T) {
 	h := newRestartHarness(t, nil, nil)
 	ctx := context.WithValue(context.Background(), runStartAdmissionKey{}, h.l)
 	release, done := make(chan struct{}), make(chan struct{})
-	h.l.rollAction.submit("tip", func(string) { defer close(done); <-release })
+	h.l.pushAction.submit("tip", func(string) { defer close(done); <-release })
 	defer func() { close(release); <-done }()
 	h.request(t, 1)
 	if pending, err := h.l.buildRestartPending(ctx); err != nil || pending {
-		t.Fatalf("the roll is still in progress: admission=%v/%v", pending, err)
+		t.Fatalf("the push is still in progress: admission=%v/%v", pending, err)
 	}
 	steps := &ProcessSteps{Store: h.f.storePath}
 	cmd := exec.Command("true")
-	if err := steps.startRunFaceContext(ctx, cmd, run.Request{RunID: "while-rolling"}); err != nil {
+	if err := steps.startRunFaceContext(ctx, cmd, run.Request{RunID: "while-pushing"}); err != nil {
 		t.Fatalf("deferred restart prevented handoff: %v", err)
 	}
 	if err := cmd.Wait(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRollActionBlocksRunHandoff(t *testing.T) {
+	h := newRestartHarness(t, nil, nil)
+	ctx := context.WithValue(context.Background(), runStartAdmissionKey{}, h.l)
+	release, done := make(chan struct{}), make(chan struct{})
+	h.l.rollAction.submit("tip", func(string) { defer close(done); <-release })
+	defer func() { close(release); <-done }()
+	steps := &ProcessSteps{Store: h.f.storePath}
+	cmd := exec.Command("true")
+	if err := steps.startRunFaceContext(ctx, cmd, run.Request{RunID: "while-rolling"}); !errors.Is(err, errRestartPending) || cmd.Process != nil {
+		t.Fatalf("active binary roll started a face: err=%v process=%v", err, cmd.Process)
 	}
 }
 

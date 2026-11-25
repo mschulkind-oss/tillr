@@ -246,6 +246,8 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 			d.backendEvents = true
 		case run.ResumeKind, loopOrphanedKind, staleBaseKind:
 			d.unsavedOutcomeInputs = true
+		case rollPendingKind:
+			d.unsavedOutcomeInputs, d.quota, known = true, true, true
 		}
 		switch e.Kind {
 		case run.AllocateKind, run.FinishKind, run.ReleaseKind:

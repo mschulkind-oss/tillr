@@ -105,7 +105,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		allowSettledGate = true
 	}
 	if !allowSettledGate {
-		if pending, err := l.buildRestartPending(ctx); pending || err != nil {
+		if pending, err := l.runDispatchHeld(ctx); pending || err != nil {
 			if err != nil {
 				return c, false, err
 			}
@@ -148,7 +148,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		}
 	}
 	if !allowSettledGate {
-		if pending, err := l.buildRestartPending(ctx); pending || err != nil {
+		if pending, err := l.runDispatchHeld(ctx); pending || err != nil {
 			if err != nil {
 				return c, false, err
 			}
@@ -587,7 +587,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				return c, false, evalStatErr
 			}
 			if evalMissing {
-				if pending, err := l.buildRestartPending(ctx); err != nil {
+				if pending, err := l.runDispatchHeld(ctx); err != nil {
 					return c, false, err
 				} else if pending {
 					return c, false, errRestartPending

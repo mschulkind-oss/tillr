@@ -4,6 +4,7 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,9 +17,13 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/settings"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
-const postLandingKind = "drain.post-landing-action"
+const (
+	postLandingKind = "drain.post-landing-action"
+	rollPendingKind = "drain.roll-pending"
+)
 
 // pushTimeout bounds one push. The jail's git broker may ask the human and wait; a push that
 // has not finished by then is recorded as failed and retried at the next trigger, rather than
@@ -27,6 +32,9 @@ const pushTimeout = 5 * time.Minute
 
 func init() {
 	if err := event.Register(postLandingKind, Utility); err != nil {
+		panic(err)
+	}
+	if err := event.Register(rollPendingKind, Utility); err != nil {
 		panic(err)
 	}
 }
@@ -99,7 +107,46 @@ const piForkPatchRef = "refs/heads/patch/pi"
 
 var piSeriesPaths = []string{"yolo-packs/pi-fork/", "bin/pi-forks.list"}
 
+// rollBlocksDispatch reports whether a trunk landing that may roll or is rolling
+// tillr's binaries is in progress, so no worker or judge run is dispatched against
+// an adapter script from the new commit while old binaries are still installed.
+func (l *Loop) rollBlocksDispatch() bool {
+	return l.rollChecking.Load() > 0 || l.rollAction.busy()
+}
+
+func (l *Loop) recordRollPending(ctx context.Context, tip string) {
+	if l.cfg.Store == "" || tip == "" {
+		return
+	}
+	body, err := json.Marshal(struct {
+		Commit string `json:"commit"`
+	}{Commit: tip})
+	if err != nil {
+		return
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return
+	}
+	defer s.Close()
+	_ = s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{Kind: rollPendingKind, ObjectType: "landing", ObjectID: &tip, Payload: body, At: time.Now().UTC()})
+		return err
+	})
+}
+
 func (l *Loop) landWithActions(ctx context.Context, candidate Candidate) (LandOutcome, error) {
+	mayRoll := candidate.BaseRef == "" && l.cfg.PostLanding.Roll.Command != ""
+	if mayRoll {
+		l.rollChecking.Add(1)
+		defer func() {
+			if l.rollChecking.Add(-1) == 0 && !l.rollAction.busy() {
+				if v := l.startView.Load(); v != nil {
+					v.notifyUpdate()
+				}
+			}
+		}()
+	}
 	out, err := l.cfg.Steps.Land(ctx, candidate)
 	if err == nil && out.Result == LandLanded {
 		if candidate.BaseRef == "" {
@@ -147,6 +194,14 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 	if candidate.BaseRef != "" {
 		return
 	}
+	l.rollChecking.Add(1)
+	defer func() {
+		if l.rollChecking.Add(-1) == 0 && !l.rollAction.busy() {
+			if v := l.startView.Load(); v != nil {
+				v.notifyUpdate()
+			}
+		}
+	}()
 	changed, err := actionCommand(ctx, l.cfg.Root, "git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", tip+"^", tip, "--")
 	if err != nil {
 		l.reportRollFailure(tip, "", err)
@@ -159,6 +214,7 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 // rollChanged submits the deployment actions selected by NUL-separated paths.
 func (l *Loop) rollChanged(ctx context.Context, r settings.Roll, changed, tip string) {
 	if matchesRollPaths(changed, r.Paths) {
+		l.recordRollPending(ctx, tip)
 		l.rollAction.submit(tip, func(tip string) {
 			// After-merge proof owns the suites for a landing. The deployment only
 			// builds and smoke-checks the replacement; it does not queue another proof.

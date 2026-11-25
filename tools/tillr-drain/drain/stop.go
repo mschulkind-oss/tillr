@@ -53,14 +53,20 @@ func (s *ProcessSteps) startRunFaceContext(ctx context.Context, cmd *exec.Cmd, r
 			return err
 		}
 		loop, _ := ctx.Value(runStartAdmissionKey{}).(*Loop)
-		if loop == nil || loop.cfg.Restart == nil {
+		if loop == nil {
+			return cmd.Start()
+		}
+		if loop.rollBlocksDispatch() {
+			return errRestartPending
+		}
+		if loop.cfg.Restart == nil {
 			return cmd.Start()
 		}
 		// The deferred settlement may finish after we read the request. Keep
 		// exec excluded until the child is either started or refused.
 		loop.restartMechanical.RLock()
 		defer loop.restartMechanical.RUnlock()
-		if loop.restartReplaced.Load() {
+		if loop.restartReplaced.Load() || loop.rollBlocksDispatch() {
 			return errRestartPending
 		}
 		db, err := store.Open(ctx, s.Store, true)
@@ -71,6 +77,9 @@ func (s *ProcessSteps) startRunFaceContext(ctx context.Context, cmd *exec.Cmd, r
 		// File and handoff are ordered by the same store writer. Hold it only
 		// through Start (not Wait); the child performs its own allocation later.
 		return db.WriteTx(ctx, func(tx *store.Tx) error {
+			if loop.rollBlocksDispatch() {
+				return errRestartPending
+			}
 			state, err := restart.ReadState(tx.Reader(), restart.RoleDrain)
 			if err != nil {
 				return err

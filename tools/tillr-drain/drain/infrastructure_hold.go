@@ -191,6 +191,10 @@ func (l *Loop) recordInfrastructureFailure(ctx context.Context, d Decision, rec 
 	if !isBackendFailureFor(d, rec, log) {
 		return false, nil
 	}
+	unknownFace := isUnknownFaceFailure(rec, log)
+	if unknownFace && l.rollBlocksDispatch() {
+		return false, nil
+	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return false, err
@@ -209,6 +213,12 @@ func (l *Loop) recordInfrastructureFailure(ctx context.Context, d Decision, rec 
 	}
 	held := false
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		if unknownFace {
+			pending, err := rollPendingAt(tx.Reader(), 0)
+			if err != nil || pending {
+				return err
+			}
+		}
 		var raw []byte
 		err := tx.QueryRow(`SELECT payload FROM events
  WHERE kind=? AND object_id=? AND json_extract(payload,'$.node')=?

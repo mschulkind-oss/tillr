@@ -3426,6 +3426,10 @@ plans:
 			}
 			continue
 		}
+		if (d.Action == ActionDispatch || d.Action == ActionRetry) && l.rollBlocksDispatch() {
+			restartWaiting = append(restartWaiting, d)
+			continue
+		}
 		if l.judgeWaitsForGateStart(d, p.work) {
 			held, err := l.restartGateStartHeld(ctx)
 			if err != nil {
@@ -3647,7 +3651,7 @@ func (l *Loop) judgeWaitsForConflictRepair(d Decision, work *pendingWork, mainSH
 func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, timing *PassTiming, watch *laneWatch, result *LoopResult) (cancelled, stale bool, err error) {
 	d := p.decision
 	if d.Action == ActionDispatch || d.Action == ActionRetry {
-		if pending, err := l.buildRestartPending(ctx); err != nil {
+		if pending, err := l.runDispatchHeld(ctx); err != nil {
 			return false, false, err
 		} else if pending {
 			return false, false, nil
@@ -3748,7 +3752,7 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 			}
 			return false, false, stopErr
 		}
-		if pending, err := l.buildRestartPending(startCtx); err != nil {
+		if pending, err := l.runDispatchHeld(startCtx); err != nil {
 			if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
 				return false, false, cancelErr
 			}

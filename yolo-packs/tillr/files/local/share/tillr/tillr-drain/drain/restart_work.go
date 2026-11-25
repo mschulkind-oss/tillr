@@ -159,6 +159,15 @@ func (l *Loop) buildRestartPending(ctx context.Context) (bool, error) {
 	return l.restarterPendingWith(ctx, nil)
 }
 
+// runDispatchHeld reports whether a binary roll or a pending loop restart
+// holds new run dispatches.
+func (l *Loop) runDispatchHeld(ctx context.Context) (bool, error) {
+	if l.rollBlocksDispatch() {
+		return true, nil
+	}
+	return l.buildRestartPending(ctx)
+}
+
 func (l *Loop) restartDefersToSettlement() bool {
 	return l.restartSettlements.Load() > 0
 }
