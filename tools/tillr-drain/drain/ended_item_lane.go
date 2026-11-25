@@ -615,12 +615,7 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 					continue
 				}
 			}
-			if err := l.restoreForkDelivery(ctx, c.lane, c.runID); err != nil {
-				l.reportf("loop: lane %s fork checkout could not be restored after saving ended item %s: %v\n", c.lane, c.itemID, err)
-				continue
-			}
-			if err := l.resetLane(ctx, c.lane); err != nil {
-				l.reportf("loop: lane %s could not be restored after saving ended item %s: %v\n", c.lane, c.itemID, err)
+			if !l.restoreReclaimedLane(ctx, c) {
 				continue
 			}
 			if l.hasLaneCondition(c.lane, ReasonLaneUncommittedWork) {
@@ -630,4 +625,20 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 		l.recordCleanEndedLane(c.lane, c.runID, epochsBefore[c.lane], saved)
 	}
 	return nil
+}
+
+func (l *Loop) restoreReclaimedLane(ctx context.Context, c endedLaneCandidate) bool {
+	// Like staging, restoration is a loop-owned checkout write. Invalidate sibling
+	// snapshots even if it only partly completes. Clean lanes never enter this bracket.
+	end := l.beginLaneStaging(c.lane)
+	defer end()
+	if err := l.restoreForkDelivery(ctx, c.lane, c.runID); err != nil {
+		l.reportf("loop: lane %s fork checkout could not be restored after saving ended item %s: %v\n", c.lane, c.itemID, err)
+		return false
+	}
+	if err := l.resetLane(ctx, c.lane); err != nil {
+		l.reportf("loop: lane %s could not be restored after saving ended item %s: %v\n", c.lane, c.itemID, err)
+		return false
+	}
+	return true
 }

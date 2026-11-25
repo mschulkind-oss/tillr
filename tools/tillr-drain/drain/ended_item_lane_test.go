@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -522,6 +523,31 @@ func TestReclaimEndedItemLanesSkipsPendingFoldAndTempSorts(t *testing.T) {
 		_, err := item.Close(ctx, tx, "item-a", "superseded", "owner", l.cfg.Now())
 		return err
 	})
+	// A lane-2 run opens its bracket while idle lane-1 still holds the ended item's
+	// test-write handoff. Reclamation is the drain's write, not lane-2's escape.
+	l.cfg.Lanes = []string{"lane-1", "lane-2"}
+	epochs := l.idleLaneEpochs()
+	watched := []string{"lane-1"}
+	opening, err := l.snapshotIdleSiblings(ctx, l.lanePath("lane-2"), watched, epochs)
+	if err != nil {
+		t.Fatalf("opening sibling bracket: %v", err)
+	}
+	lanePath, err := canonicalDir(l.lanePath("lane-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(opening.Lanes, lanePath) {
+		t.Fatalf("opening bracket did not watch lane-1: %v", opening.Lanes)
+	}
+	watchedDirty := false
+	for _, worktree := range opening.Worktrees {
+		if worktree.Path == lanePath && len(worktree.Status) > 0 {
+			watchedDirty = true
+		}
+	}
+	if !watchedDirty {
+		t.Fatal("opening bracket did not capture lane-1's dirty status")
+	}
 	before = pendingFolds.Load()
 	if err := l.reclaimEndedItemLanes(ctx); err != nil {
 		t.Fatalf("ended item reclaimEndedItemLanes: %v", err)
@@ -531,6 +557,15 @@ func TestReclaimEndedItemLanesSkipsPendingFoldAndTempSorts(t *testing.T) {
 	}
 	if status := runGit(t, l.lanePath("lane-1"), "status", "--porcelain", "--untracked-files=all"); status != "" {
 		t.Fatalf("lane-1 still dirty after reclamation: %q", status)
+	}
+
+	sibling := Decision{LaneID: "lane-2", RunRequest: &run.Request{RunID: "run-sibling-reclamation", ItemID: "item-b"}}
+	var boundary LoopResult
+	if _, err := l.closeAsyncBracket(ctx, sibling, l.cfg.Now(), opening, &boundary, watched, epochs); err != nil {
+		t.Fatalf("closing sibling bracket: %v", err)
+	}
+	if check := lastBoundaryCheck(t, f, sibling.RunRequest.RunID); check["clean"] != true {
+		t.Errorf("drain reclamation of idle lane-1 convicted lane-2: check=%v, stop step=%q detail=%q", check, boundary.StopStep, boundary.Detail)
 	}
 
 	// 4. Repeat pass while ended item's lane-1 sits idle and already clean: must skip readPending.
