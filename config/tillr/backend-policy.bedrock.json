@@ -12,7 +12,8 @@
     "test-write": "pi-build",
     "test-run": "pi-scout",
     "docs": "pi-build",
-    "verify": "pi"
+    "verify": "pi",
+    "tricky": "pi"
   },
   "read_only_seats": ["scout", "classify", "test-run"],
   "seat_purposes": {
@@ -26,7 +27,8 @@
     "test-write": "Write tests from the criteria.",
     "test-run": "Run a named check and report its result without fixing it.",
     "docs": "Write documentation and README changes.",
-    "verify": "Join the pieces and verify the combined result."
+    "verify": "Join the pieces and verify the combined result.",
+    "tricky": "Implement a change the ordinary build seat has failed at or that is too intricate for it."
   },
   "escalate": {"build": ["pi-build", "pi"]},
   "backends": {
