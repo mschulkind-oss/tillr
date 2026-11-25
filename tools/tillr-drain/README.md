@@ -1124,7 +1124,16 @@ place, item id, position, reason and mover for every item not stored as `landed`
 summary that partitions the rows into running items, items the next pass could advance,
 and holds counted by reason. Naming an item prints its full explanation, and `--json` gives
 the rows and summary as one object. `--lanes` takes a comma-separated list of lane ids or a
-count. With no policy, readiness is held as `no-policy`.
+count. With no policy, readiness is held as `no-policy`. When a live loop session is active,
+`why` also prints its `priority:` status line (and `process_priority` in `--json`).
+
+## Process-class priority
+
+At startup, `Loop.Run` probes cgroup v2 `cpu.weight` subgroup creation once and logs one
+line stating whether `cgroup v2` (`repair=400`, `gate=200`, `proof=100`, `worker=50`) or
+`nice` (`base + {0, 5, 10, 15}` clamped to `19`) is in force. Every worker, gate, replay,
+and trunk-proof child process is placed into its class at spawn and inherits it across
+all child processes.
 
 ### Adding a hold reason
 

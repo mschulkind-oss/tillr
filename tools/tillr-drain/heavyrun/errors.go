@@ -148,8 +148,18 @@ func RevertedBy(ctx context.Context, storePath, landing string) (string, error) 
 }
 
 // RunCheckGroupStarted runs cmd in its own process group and tells started the command's pid once started.
+func preserveSetpgid(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		return
+	}
+	attr := *cmd.SysProcAttr
+	attr.Setpgid = true
+	cmd.SysProcAttr = &attr
+}
+
 func RunCheckGroupStarted(cmd *exec.Cmd, started func(pid int)) error {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	preserveSetpgid(cmd)
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}
@@ -164,7 +174,7 @@ func RunCheckGroupStarted(cmd *exec.Cmd, started func(pid int)) error {
 // RunHeavyDeclarationGroupStarted runs cmd in its own process group (signaling the whole group on cancel)
 // and tells started the command's pid once started.
 func RunHeavyDeclarationGroupStarted(cmd *exec.Cmd, started func(pid int)) error {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	preserveSetpgid(cmd)
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = CheckGroupGrace
 	err := StartAndWait(cmd, started)

@@ -23,6 +23,7 @@ import (
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -98,6 +99,8 @@ type ProcessSteps struct {
 	// FixerGateProgram judges one named legacy check after GateProgram has accepted
 	// the candidate. The drain supplies --only; empty cannot judge legacy names.
 	FixerGateProgram string
+	priority         *ProcessPriority
+	selfExe          string
 }
 
 // candidateArgs is the candidate as the three programs read it: one flag per field, so a
@@ -193,6 +196,13 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	// A terminal Ctrl-C targets the foreground process group, not just the
 	// supervisor. Keep the face outside that group as well as outside its context.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	runClass := ProcessClassWorker
+	if IsTrunkFixer(req.ItemID) {
+		runClass = ProcessClassRepair
+	}
+	if err := s.priority.ApplyToCmd(cmd, runClass, s.selfExe); err != nil {
+		return run.Record{}, "", err
+	}
 	storeIdentity, err := processStoreIdentity(s.Store)
 	if err != nil {
 		return run.Record{}, "", err
@@ -386,6 +396,7 @@ type detachedGateSpec struct {
 	OwnerStartTicks     string   `json:"owner_start_ticks"`
 	PipelineStartedAtMS int64    `json:"pipeline_started_at_ms,omitempty"`
 	MeasureTiming       bool     `json:"measure_timing"`
+	NiceTarget          *int     `json:"nice_target,omitempty"`
 }
 
 type detachedGateHandle struct {
@@ -520,8 +531,9 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 	}
 	env = append(env, "TILLR_FORK_DRIFT=1", "TILLR_ORDINARY_GATE_TIMING="+timing)
 	trunkRepair := IsRevertItem(candidate.ItemID) || IsTrunkFixer(candidate.ItemID)
+	gateClass := ProcessClassGate
 	if trunkRepair {
-		env = append(env, "GO_TEST_SHARDS_CLASS=repair")
+		gateClass = ProcessClassRepair
 	}
 
 	if err := os.MkdirAll(gateDir, 0o755); err != nil {
@@ -538,9 +550,6 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 	var childEnv []string
 	var stdinFile string
 	dropEnv := []string{"TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE"}
-	if trunkRepair {
-		dropEnv = append(dropEnv, "GO_TEST_SHARDS_CLASS")
-	}
 	if s.isHookCommand(program) {
 		childArgv = append([]string(nil), argv...)
 		baseEnv := withoutProcessEnv(os.Environ(), dropEnv...)
@@ -587,6 +596,9 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 		PipelineStartedAtMS: observation.StartedAtMS,
 		MeasureTiming:       measureTiming,
 	}
+	if target, ok := s.priority.NiceTarget(gateClass); ok {
+		spec.NiceTarget = &target
+	}
 	if err := writeJSONAtomic(specPath, spec); err != nil {
 		return detachedGateHandle{}, Externalf("writing gate supervisor spec: %v", err)
 	}
@@ -602,6 +614,13 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 	cmd := exec.Command(self, "--tillr-gate-supervisor", specPath)
 	cmd.Dir = candidate.Worktree
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if s.priority.Mechanism() == "cgroup" {
+		if err := s.priority.ApplyToCmd(cmd, gateClass, s.selfExe); err != nil {
+			_ = readyW.Close()
+			_ = readyR.Close()
+			return detachedGateHandle{}, err
+		}
+	}
 	cmd.ExtraFiles = []*os.File{readyW}
 	if err := cmd.Start(); err != nil {
 		_ = readyW.Close()
@@ -1009,6 +1028,22 @@ func superviseDetachedGate(args []string) int {
 	default:
 	}
 
+	if spec.NiceTarget != nil {
+		if err := unix.Setpriority(unix.PRIO_PROCESS, 0, *spec.NiceTarget); err != nil {
+			_ = stdoutFile.Close()
+			_ = stderrFile.Close()
+			if stdinFile != nil {
+				_ = stdinFile.Close()
+			}
+			_ = finishHeavyTree()
+			done.NotStarted = true
+			done.StartError = fmt.Sprintf("setpriority(%d): %v", *spec.NiceTarget, err)
+			done.FinishedAtMS = time.Now().UnixMilli()
+			_ = writeJSONAtomic(spec.DoneFile, done)
+			return 0
+		}
+	}
+
 	startedCh := make(chan int, 1)
 	stopReaping := reapWhileSupervising(startedCh)
 	startErr := child.Start()
@@ -1255,6 +1290,11 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 			cmd.Env = append(withoutProcessEnv(cmd.Env, "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE"), env...)
 		} else {
 			cmd = s.stepCommand(ctx, argv, baseEnv)
+		}
+	}
+	if step == "fixer-gate" {
+		if err := s.priority.ApplyToCmd(cmd, ProcessClassRepair, s.selfExe); err != nil {
+			return 0, "", StepSpan{}, err
 		}
 	}
 	cmd.Dir = dir
@@ -1618,6 +1658,13 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = dir
 		cmd.Env = s.replayChildEnv(candidate, "TILLR_FORK_DRIFT=1")
+		replayClass := ProcessClassGate
+		if IsRevertItem(candidate.ItemID) || IsTrunkFixer(candidate.ItemID) {
+			replayClass = ProcessClassRepair
+		}
+		if err := s.priority.ApplyToCmd(cmd, replayClass, s.selfExe); err != nil {
+			return ReplayOutcome{Rev: rev, Known: false}, err
+		}
 		var stdout bytes.Buffer
 		var stderr stderrTail
 		var combined bytes.Buffer

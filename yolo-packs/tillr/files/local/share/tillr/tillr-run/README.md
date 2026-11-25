@@ -127,10 +127,9 @@ store environment markers and have working directories inside the lane; see
 
 ## Worker CPU priority
 
-At startup, `exec` sets the worker process group's niceness to 10. Children started
-later inherit that niceness. The heavy proof keeps the drain's priority. This
-adjustment adds no time limit and stops no process. If the adjustment fails, the
-run continues; `tillr-run` reports the error on stderr unless the group already exited.
+`exec` does not override process priority on its own: it inherits the caller's cgroup v2
+subgroup or niceness (set by `tillr-drain` across the `repair`, `gate`, `proof`, and
+`worker` classes), and every child process started by the worker inherits it automatically.
 
 ## Child environment
 

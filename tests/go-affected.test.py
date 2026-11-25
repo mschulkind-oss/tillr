@@ -656,7 +656,6 @@ def test_edge_cache_invalidation() -> None:
             with patch.dict(os.environ, {
                 "GOCACHE": str(gocache),
                 "YOLO_DURABLE_DIR": str(durable),
-                "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
             }):
                 sel = go_affected.select_affected_packages(repo, changed)
                 rc, out, ev = go_affected.run_selected_tests(repo, sel, ev_path=str(ev_file))
@@ -733,7 +732,6 @@ def test_failed_module_floor_fallback() -> None:
         with patch.dict(os.environ, {
             "GOCACHE": str(_shared_gocache()),
             "YOLO_DURABLE_DIR": str(Path(tmp) / "durable"),
-            "GO_TEST_SHARDS_LOCK_DIR": str(Path(tmp) / "locks"),
         }):
             rc, out, _ev = go_affected.run_selected_tests(repo, sel)
         assert rc != 0, f"expected nonzero rc on broken module, got 0:\n{out}"
@@ -847,8 +845,6 @@ def test_check_declarations_cover_selection_inputs() -> None:
                 **os.environ,
                 "GOCACHE": str(_shared_gocache()),
                 "YOLO_DURABLE_DIR": str(Path(tmp) / "durable"),
-                "GO_TEST_SHARDS_LOCK_DIR": str(Path(tmp) / "locks"),
-                "GO_TEST_SHARDS_CLASS": "ordinary",
             },
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -1065,8 +1061,6 @@ def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
         base = {
             **os.environ,
             "YOLO_DURABLE_DIR": str(shared_durable),
-            "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
-            "GO_TEST_SHARDS_CLASS": "ordinary",
             "GOCACHE": str(gocache),
         }
         cmd = [
@@ -1267,8 +1261,6 @@ def test_no_leftover_processes_after_check_finishes() -> None:
             env={
                 **os.environ,
                 "YOLO_DURABLE_DIR": str(durable),
-                "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
-                "GO_TEST_SHARDS_CLASS": "ordinary",
                 "GOCACHE": str(gocache),
                 "ORPHAN_PIDS_FILE": str(pids_file),
             },
@@ -1376,8 +1368,6 @@ def test_streams_progress_lines_before_run_ends() -> None:
             env={
                 **os.environ,
                 "YOLO_DURABLE_DIR": str(durable),
-                "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
-                "GO_TEST_SHARDS_CLASS": "ordinary",
                 "GOCACHE": str(gocache),
                 "STREAM_RELEASE_FILE": str(release_file),
             },
@@ -1466,8 +1456,6 @@ def test_stalled_run_prints_nothing_without_test_events() -> None:
             env={
                 **os.environ,
                 "YOLO_DURABLE_DIR": str(durable),
-                "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
-                "GO_TEST_SHARDS_CLASS": "ordinary",
                 "GOCACHE": str(gocache),
                 "STALL_STARTED_FILE": str(started_file),
                 "STALL_RELEASE_FILE": str(release_file),
@@ -1610,8 +1598,6 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
             env_patch = {
                 "GOCACHE": str(gocache),
                 "YOLO_DURABLE_DIR": str(durable),
-                "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
-                "GO_TEST_SHARDS_CLASS": "ordinary",
                 "SCOPED_PIDS_DIR": str(pids_dir),
                 **(extra_env or {}),
             }
@@ -1797,8 +1783,6 @@ def test_scoped_build_tests_execution_cache_and_sharding() -> None:
             env_patch = {
                 "GOCACHE": str(gocache),
                 "YOLO_DURABLE_DIR": str(durable),
-                "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
-                "GO_TEST_SHARDS_CLASS": "ordinary",
                 "SCOPED_PIDS_DIR": str(pids_dir),
                 **(extra_env or {}),
             }
@@ -2293,8 +2277,6 @@ def test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim
             "PATH": worker_path,
             "GIT_CONFIG_GLOBAL": str(inherited_cfg),
             "YOLO_DURABLE_DIR": str(durable),
-            "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
-            "GO_TEST_SHARDS_CLASS": "ordinary",
             "GOCACHE": str(gocache),
         }
         env1.pop("YOLO_BYPASS_SHIMS", None)
@@ -2729,7 +2711,6 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
                 **os.environ,
                 "TILLR_RUN_ID": "",
                 "YOLO_DURABLE_DIR": str(durable),
-                "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
                 "GOCACHE": str(gocache),
                 "CFIX_EXEC_LOG_DIR": str(exec_dir),
             }
@@ -3014,8 +2995,6 @@ def test_gotmpdir_inside_slot_scratch_and_cleaned_on_signal() -> None:
         base_env = {k: v for k, v in os.environ.items() if k not in ("TMPDIR", "GOTMPDIR")}
         base_env.update({
             "YOLO_DURABLE_DIR": str(durable),
-            "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
-            "GO_TEST_SHARDS_CLASS": "ordinary",
             "GOCACHE": str(gocache),
         })
 
@@ -3306,8 +3285,6 @@ def test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalle
         env = {
             **os.environ,
             "YOLO_DURABLE_DIR": str(durable),
-            "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
-            "GO_TEST_SHARDS_CLASS": "ordinary",
             "GOCACHE": str(gocache),
         }
         runner = str(repo / "tools" / "gate" / "go_affected.py")
@@ -3347,6 +3324,57 @@ def test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalle
         assert f"go-affected: pass {child_pkg} TestBusyChildKeepsParentAlive " in child_res.stdout, child_res.stdout
 
 
+def test_single_test_shard_sets_gomaxprocs_and_p1() -> None:
+    from unittest import mock
+
+    captured: list[tuple[list[str], dict[str, str]]] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        mod = repo / "tools" / "example"
+        mod.mkdir(parents=True)
+        (mod / "go.mod").write_text("module example.com/example\n\ngo 1.22\n", encoding="utf-8")
+        (mod / "a_test.go").write_text("package example\nimport \"testing\"\nfunc TestOne(t *testing.T) {}\n", encoding="utf-8")
+        (repo / "tools" / "gate").mkdir(parents=True)
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}", encoding="utf-8")
+        (repo / "tools" / "go-test-shards.py").symlink_to(ROOT / "tools" / "go-test-shards.py")
+        selection = {
+            "selected": [
+                {
+                    "module": "tools/example",
+                    "import_path": "example.com/example",
+                    "dir": str(mod),
+                    "reason": "direct",
+                    "tests": ["TestOne"],
+                    "edge_digest": None,
+                    "cacheable": True,
+                }
+            ],
+            "selection_ms": 0,
+        }
+
+        def fake_run_guarded(cmd, *, cwd, env, out_dir, on_line):
+            captured.append((list(cmd), dict(env)))
+            return 0, '{"Action":"pass","Package":"example.com/example","Test":"TestOne"}\n{"Action":"pass","Package":"example.com/example"}\n'
+
+        with mock.patch.object(go_affected, "_run_guarded_command", side_effect=fake_run_guarded), \
+                mock.patch.dict(os.environ, {
+                    "PATH": os.environ.get("PATH", ""),
+                    "YOLO_DURABLE_DIR": str(tmp_path / "durable"),
+                }):
+            rc, out, _ = go_affected.run_selected_tests(
+                repo,
+                selection,
+                progress_stream=False,
+            )
+        assert rc == 0, out
+        assert len(captured) == 1
+        cmd, env = captured[0]
+        assert "-parallel" in cmd and cmd[cmd.index("-parallel") + 1] == "1", cmd
+        assert "-p" in cmd and cmd[cmd.index("-p") + 1] == "1", cmd
+        assert env.get("GOMAXPROCS") == "1", env.get("GOMAXPROCS")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", default=[], help="Run only named test case(s)")
@@ -3382,6 +3410,7 @@ def main(argv: list[str] | None = None) -> int:
         ("test_failure_refusal_names_packages_and_tests_far_above_tail", test_failure_refusal_names_packages_and_tests_far_above_tail),
         ("test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim", test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim),
         ("test_max_shards_scales_with_cpu_count", test_max_shards_scales_with_cpu_count),
+        ("test_single_test_shard_sets_gomaxprocs_and_p1", test_single_test_shard_sets_gomaxprocs_and_p1),
         ("test_binary_watchdog_constants_and_sample_rule", test_binary_watchdog_constants_and_sample_rule),
         ("test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalled", test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalled),
     ]

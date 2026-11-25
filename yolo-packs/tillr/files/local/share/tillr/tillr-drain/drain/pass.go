@@ -3050,9 +3050,6 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if err := l.observeTrunkCoreWorktree(ctx); err != nil {
 		l.reportf("loop: could not record trunk core.worktree observation: %v\n", err)
 	}
-	if err := l.observeTestSlots(ctx); err != nil {
-		l.reportf("loop: could not record test slot observation: %v\n", err)
-	}
 	if err := l.refreshLaneCount(ctx, false); err != nil {
 		return "", err
 	}

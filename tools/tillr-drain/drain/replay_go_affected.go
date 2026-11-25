@@ -18,8 +18,7 @@ import (
 // replayChildEnv builds the environment for every child process ProcessSteps.Replay
 // spawns: it identifies the candidate run and item for ps, omits TILLR_LANE_ID (the
 // lane is released and replay runs in .replay/<rev>) and TILLR_LOOP_STORE (so replay
-// is never mistaken for a surviving worker process), forces GO_TEST_SHARDS_CLASS=ordinary
-// so base replays queue behind trunk proof, and disables background git gc and
+// is never mistaken for a surviving worker process), and disables background git gc and
 // maintenance on historical checkouts.
 func (s *ProcessSteps) replayChildEnv(candidate Candidate, extra ...string) []string {
 	env := withoutProcessEnv(
@@ -28,9 +27,7 @@ func (s *ProcessSteps) replayChildEnv(candidate Candidate, extra ...string) []st
 		"TILLR_ITEM_ID",
 		"TILLR_LANE_ID",
 		"TILLR_LOOP_STORE",
-		"GO_TEST_SHARDS_CLASS",
 	)
-	env = append(env, "GO_TEST_SHARDS_CLASS=ordinary")
 	if candidate.RunID != "" {
 		env = append(env, "TILLR_RUN_ID="+candidate.RunID)
 	}
@@ -365,6 +362,13 @@ func (s *ProcessSteps) replayGoCheck(ctx context.Context, dir string, candidate 
 	cmd := exec.CommandContext(ctx, "python3", args...)
 	cmd.Dir = dir
 	cmd.Env = s.replayChildEnv(candidate, "TILLR_FORK_DRIFT=1")
+	replayClass := ProcessClassGate
+	if IsRevertItem(candidate.ItemID) || IsTrunkFixer(candidate.ItemID) {
+		replayClass = ProcessClassRepair
+	}
+	if err := s.priority.ApplyToCmd(cmd, replayClass, s.selfExe); err != nil {
+		return true, false, false, "", err
+	}
 	var stderr stderrTail
 	var combined bytes.Buffer
 	cmd.Stdout = &combined
@@ -493,6 +497,13 @@ func (s *ProcessSteps) runNamedGoTestsInReplay(ctx context.Context, dir string, 
 			cmd := exec.CommandContext(ctx, "go", "test", "-json", "-count=1", "-run", pattern, rel)
 			cmd.Dir = modDir
 			cmd.Env = s.replayChildEnv(candidate, "CGO_ENABLED=0", "TMPDIR="+scratch, "YOLO_DURABLE_DIR="+scratch, "GIT_CONFIG_GLOBAL="+config)
+			replayClass := ProcessClassGate
+			if IsRevertItem(candidate.ItemID) || IsTrunkFixer(candidate.ItemID) {
+				replayClass = ProcessClassRepair
+			}
+			if err := s.priority.ApplyToCmd(cmd, replayClass, s.selfExe); err != nil {
+				return false, combined.String(), err
+			}
 			var stderr stderrTail
 			cmd.Stdout = &combined
 			cmd.Stderr = io.MultiWriter(&combined, &stderr)

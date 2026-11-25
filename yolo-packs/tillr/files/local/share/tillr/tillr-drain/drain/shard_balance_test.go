@@ -112,7 +112,6 @@ roll = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(roll)
 
 work = pathlib.Path(sys.argv[1])
-os.environ['GO_TEST_SHARDS_LOCK_DIR'] = str(work / 'locks')
 os.environ['TILLR_SQLITE_TRACE'] = '1'
 
 repo = work / 'repo'

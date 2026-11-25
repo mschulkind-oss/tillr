@@ -106,6 +106,7 @@ func whyFace(args []string) int {
 	var answer drain.WhyAnswer
 	var costs bytes.Buffer
 	rewriteNote := ""
+	var livePriority *drain.ProcessPrioritySummary
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		if tick.AvailableLanes == nil {
 			liveLanes, ok, err := drain.LiveLoopLanes(r, *path, time.Now().UTC())
@@ -119,9 +120,15 @@ func whyFace(args []string) int {
 				lanesSource = "store"
 			}
 		}
+		if lp, ok, err := drain.LiveLoopProcessPriority(r, *path, time.Now().UTC()); err != nil {
+			return err
+		} else if ok {
+			livePriority = lp
+		}
 		answer, err = drain.WhyForItem(r, tick, policy, questions, itemID)
 		if err == nil {
 			answer.LanesSource = lanesSource
+			answer.ProcessPriority = livePriority
 		}
 		if err == nil && !*asJSON && itemID == "" {
 			err = landedCosts(r, &costs)
@@ -153,16 +160,20 @@ func whyFace(args []string) int {
 				var report any = row
 				if *asJSON {
 					report = struct {
-						Alarms          []alarms.Alarm `json:"alarms,omitempty"`
-						LoopRestartLine string         `json:"loop_restart_line,omitempty"`
+						Alarms          []alarms.Alarm                `json:"alarms,omitempty"`
+						LoopRestartLine string                        `json:"loop_restart_line,omitempty"`
+						ProcessPriority *drain.ProcessPrioritySummary `json:"process_priority,omitempty"`
 						drain.WhyRow
-					}{answer.Alarms, answer.LoopRestartLine, row}
+					}{answer.Alarms, answer.LoopRestartLine, answer.ProcessPriority, row}
 				}
 				if err := enc.Encode(report); err != nil {
 					return fail(drain.Externalf("writing why: %v", err))
 				}
 				if !*asJSON {
 					fmt.Println(formatWhyLanes(answer.Lanes, answer.LanesSource))
+					if line := formatWhyProcessPriority(answer.ProcessPriority); line != "" {
+						fmt.Println(line)
+					}
 					if line := formatWhyDraining(answer.Draining); line != "" {
 						fmt.Println(line)
 					}
@@ -198,6 +209,9 @@ func whyFace(args []string) int {
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, formatWhyLanes(answer.Lanes, answer.LanesSource))
+		}
+		if line := formatWhyProcessPriority(answer.ProcessPriority); err == nil && line != "" {
+			_, err = fmt.Fprintln(os.Stdout, line)
 		}
 		if line := formatWhyDraining(answer.Draining); err == nil && line != "" {
 			_, err = fmt.Fprintln(os.Stdout, line)
@@ -284,6 +298,30 @@ func formatWhyLanes(lanes []string, source string) string {
 		return label + ": none"
 	}
 	return label + ": " + strings.Join(lanes, ", ")
+}
+
+func formatWhyProcessPriority(p *drain.ProcessPrioritySummary) string {
+	if p == nil {
+		return ""
+	}
+	if p.Mechanism == "cgroup" {
+		return fmt.Sprintf(
+			"priority: cgroup v2 (%s; cpu.weight repair=%d gate=%d proof=%d worker=%d)",
+			p.CgroupRoot,
+			p.Classes[string(drain.ProcessClassRepair)],
+			p.Classes[string(drain.ProcessClassGate)],
+			p.Classes[string(drain.ProcessClassProof)],
+			p.Classes[string(drain.ProcessClassWorker)],
+		)
+	}
+	return fmt.Sprintf(
+		"priority: nice (repair=%d gate=%d proof=%d worker=%d; cgroup unavailable: %s)",
+		p.Classes[string(drain.ProcessClassRepair)],
+		p.Classes[string(drain.ProcessClassGate)],
+		p.Classes[string(drain.ProcessClassProof)],
+		p.Classes[string(drain.ProcessClassWorker)],
+		p.UnavailableReason,
+	)
 }
 
 func revParseTrunk(ctx context.Context, root string) (string, bool) {

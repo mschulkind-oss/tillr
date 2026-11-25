@@ -77,11 +77,12 @@ type WhySummary struct {
 }
 
 type WhyAnswer struct {
-	Alarms       []alarms.Alarm `json:"alarms,omitempty"`
-	Definition   string         `json:"definition"`
-	EventHeadSeq int64          `json:"event_head_seq"`
-	Lanes        []string       `json:"lanes"`
-	LanesSource  string         `json:"lanes_source,omitempty"`
+	Alarms          []alarms.Alarm          `json:"alarms,omitempty"`
+	Definition      string                  `json:"definition"`
+	EventHeadSeq    int64                   `json:"event_head_seq"`
+	Lanes           []string                `json:"lanes"`
+	LanesSource     string                  `json:"lanes_source,omitempty"`
+	ProcessPriority *ProcessPrioritySummary `json:"process_priority,omitempty"`
 	// Draining lists the lanes above the offered count that still hold work, each with the
 	// item it holds. The loop serves them until that work lands or is released.
 	Draining []DrainingLane `json:"draining,omitempty"`
@@ -1315,10 +1316,11 @@ func confirmedReplacement(segmentOwner *LoopOwner, endedAt sql.NullInt64, curren
 }
 
 type liveLoopSession struct {
-	id        string
-	startedAt int64
-	lanes     []string
-	owner     LoopOwner
+	id              string
+	startedAt       int64
+	lanes           []string
+	owner           LoopOwner
+	processPriority *ProcessPrioritySummary
 }
 
 type activeRestartBlocker struct {
@@ -1508,8 +1510,18 @@ func LiveLoopLanes(r *store.Reader, storePath string, now time.Time) ([]string, 
 	return s.lanes, true, nil
 }
 
+// LiveLoopProcessPriority returns the process priority summary recorded by a currently
+// live loop session for storePath, if any.
+func LiveLoopProcessPriority(r *store.Reader, storePath string, now time.Time) (*ProcessPrioritySummary, bool, error) {
+	s, err := findLiveLoopSession(r, storePath, now)
+	if s == nil || s.processPriority == nil {
+		return nil, false, err
+	}
+	return s.processPriority, true, nil
+}
+
 func findLiveLoopSession(r *store.Reader, storePath string, now time.Time) (*liveLoopSession, error) {
-	rows, err := r.Query(`SELECT session_id, started_at, loop_owner, next_pass_at, COALESCE(lanes, '') FROM drain_sessions WHERE ended_at IS NULL AND loop_owner IS NOT NULL ORDER BY started_at DESC, rowid DESC`)
+	rows, err := r.Query(`SELECT session_id, started_at, loop_owner, next_pass_at, COALESCE(lanes, ''), COALESCE(process_priority, '') FROM drain_sessions WHERE ended_at IS NULL AND loop_owner IS NOT NULL ORDER BY started_at DESC, rowid DESC`)
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "no such table") || strings.Contains(msg, "no such column") {
@@ -1518,16 +1530,17 @@ func findLiveLoopSession(r *store.Reader, storePath string, now time.Time) (*liv
 		return nil, readFailure(err)
 	}
 	type candidate struct {
-		id         string
-		startedAt  int64
-		ownerRaw   string
-		nextPassAt int64
-		lanesRaw   string
+		id          string
+		startedAt   int64
+		ownerRaw    string
+		nextPassAt  int64
+		lanesRaw    string
+		priorityRaw string
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.id, &c.startedAt, &c.ownerRaw, &c.nextPassAt, &c.lanesRaw); err != nil {
+		if err := rows.Scan(&c.id, &c.startedAt, &c.ownerRaw, &c.nextPassAt, &c.lanesRaw, &c.priorityRaw); err != nil {
 			rows.Close()
 			return nil, readFailure(err)
 		}
@@ -1553,7 +1566,14 @@ func findLiveLoopSession(r *store.Reader, storePath string, now time.Time) (*liv
 		if err := json.Unmarshal([]byte(c.ownerRaw), &owner); err != nil {
 			continue
 		}
-		session := &liveLoopSession{id: c.id, startedAt: c.startedAt, lanes: lanes, owner: owner}
+		var procPriority *ProcessPrioritySummary
+		if c.priorityRaw != "" {
+			var parsed ProcessPrioritySummary
+			if err := json.Unmarshal([]byte(c.priorityRaw), &parsed); err == nil && parsed.Mechanism != "" {
+				procPriority = &parsed
+			}
+		}
+		session := &liveLoopSession{id: c.id, startedAt: c.startedAt, lanes: lanes, owner: owner, processPriority: procPriority}
 		if here != nil && owner.Domain == here.Domain && owner.UID == here.UID {
 			dead, err := ownerDead(&owner, here)
 			if err == nil && !dead {

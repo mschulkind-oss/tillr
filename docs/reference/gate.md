@@ -561,20 +561,12 @@ Whole Go suites and affected packages both run through
 - **A test run does not outlive the command that started it ([`D-GR17`](#D-GR17)).** Every
   test process group is tied to the invoking command's lifetime, and the compiled binary
   directory stays valid until every shard exits.
-- **Concurrent test binaries have a versioned slot pool ([`D-GR20`](#D-GR20),
-  [`D-GR48`](#D-GR48)), currently disabled pending [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1).**
-  When `ENFORCE_SLOT_LIMITS` is on, runs take file-lock slots in class order `repair`,
-  `proof`, `gate`, `ordinary`, first come first served within a class: `repair` takes any
-  pool ahead of all others; `proof` takes the shared pool and then the `proof` pool; `gate`
-  takes the shared pool and then the `gate` pool, never the `proof` pool, capped at `8` slots
-  per gate (`DEFAULT_GATE_MAX_SLOTS`) and at most `4` reserved `gate` slots
-  (`DEFAULT_GATE_RESERVED_CAP`); `ordinary` (lane workers and base replays) takes the shared
-  pool behind the rest. Physical capacity locks and live holder records stay shared while
-  wait-signaling locks and wait tickets live under `wait-rules/<SLOT_RULES_VERSION>` (`v2`),
-  so processes straddling a rules change never yield to one another. Today
-  `ENFORCE_SLOT_LIMITS = False` in
-  [`tools/go-test-shards.py`](../../tools/go-test-shards.py) leaves cross-run slot limits off
-  while [gate test capacity](../design/gate-test-capacity.md) asks [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1).
+- **No cross-run slot pool ([`D-GR20`](#D-GR20), [`D-GR48`](#D-GR48), deleted under [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1)).**
+  The cross-run file-lock slot pool and `ENFORCE_SLOT_LIMITS` in
+  [`tools/go-test-shards.py`](../../tools/go-test-shards.py) were deleted under
+  [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1): each test invocation bounds only
+  its own fan-out, and processor share among `repair`, `gate`, `proof`, and `worker`
+  processes is weighted by the kernel via cgroup v2 `cpu.weight` subgroups or `nice`.
 - **Unchanged packages are not re-run ([`D-GR49`](#D-GR49)).** With explicit `--cache` (the
   default mode stays uncached), a package under `100` top-level tests (`SHARD_THRESHOLD`)
   runs as one group and a larger one shards by the duration-balanced bucket formula without
@@ -667,7 +659,7 @@ The prose above explains what each is for.
 | Result store | `<git-common-dir>/tillr-gate/results/` | `openResultStore` |
 | `just done` logs | `<git-common-dir>/tillr-gate/done-logs/<head>/` | [`tools/gate/done.py`](../../tools/gate/done.py) |
 | Gate policy (and absent-file defaults) | `landing_strategy: after-merge` (default `before-merge`), `auto_revert: true` (default `false`), `lane_base: green` (default `green`), `budget_ms: 10000` (default `10000`) | [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json), `ReadGatePolicy` in [`tools/tillr-drain/redcap/policy.go`](../../tools/tillr-drain/redcap/policy.go) |
-| Go shard and slot parameters | `SHARD_THRESHOLD = 100`; `MAX_SHARDS = 12` (`go-test-shards.py`) and `2 * os.cpu_count()` (`go_affected.py`); `ENFORCE_SLOT_LIMITS = False`, `SLOT_RULES_VERSION = "v2"`, `DEFAULT_GATE_MAX_SLOTS = 8`, `DEFAULT_GATE_RESERVED_CAP = 4` | [`tools/go-test-shards.py`](../../tools/go-test-shards.py), [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) |
+| Go shard parameters | `SHARD_THRESHOLD = 100`; `MAX_SHARDS = 12` (`go-test-shards.py`) and `2 * os.cpu_count()` (`go_affected.py`) | [`tools/go-test-shards.py`](../../tools/go-test-shards.py), [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) |
 | Slow-gate alert thresholds | one run over 60 s; median of 20 over 90 s | [`config/tillr/watch/fast-gate-slow.toml`](../../config/tillr/watch/fast-gate-slow.toml) |
 
 ## Open questions
@@ -847,7 +839,7 @@ may overturn any of them.
 | <a id="D-GR14"></a>`D-GR14` | *(Implementer's decision.)* `--tree-overrun` defaults to and accepts only `keep`, first while no heavy runner existed and permanently under [`D-GR15`](#D-GR15) because carrying stops a working check at its budget. Rejected: carrying with nothing to judge it, or answering "could not judge" at the budget. | 2026-11-16; ruled permanent 2026-11-17 | [Budgets and the stall watchdog](#budgets-and-the-stall-watchdog) | Yes |
 | <a id="D-GR16"></a>`D-GR16` | Progress is output growth or process-group CPU growth in a 1 s sample; 60 silent samples end the process group as `stalled` (exit 6). The drain re-gates the candidate once when fewer gates are in flight (or none are) and holds on the second stall (`gate-stalled`), keeping `gate-harness-error` for crashes and start failures. Rejected: a longer fixed timeout, or re-gating on the next pass with no named change. | 2026-11-17 | [Budgets and the stall watchdog](#budgets-and-the-stall-watchdog) | Yes |
 | <a id="D-GR19"></a>`D-GR19` | Carries out [`D-GR18`](#D-GR18): apply one tracked list (`tools/gate/allowed-commit-identities.json`) of exact name and address pairs to author and committer in both `tests/git-identity.test.py` and the live `commit-identity` gate check, keeping their ranges and refusal of repo/worktree identity overrides without changing commit creation or tillr. | 2026-11-20 | [Change checks and tree checks](#change-checks-and-tree-checks) | Yes |
-| <a id="D-GR20"></a>`D-GR20` | Bound aggregate Go test parallelism across runs rather than per run, excluding queue wait from shard timeouts; amended on 2026-11-22 by [`D-GR48`](#D-GR48) (currently off under `ENFORCE_SLOT_LIMITS = False` pending [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1)). | 2026-11-20; amended 2026-11-22 | [Go test execution](#go-test-execution) | Yes (off by default) |
+| <a id="D-GR20"></a>`D-GR20` | Bound aggregate Go test parallelism across runs rather than per run, excluding queue wait from shard timeouts; amended on 2026-11-22 by [`D-GR48`](#D-GR48) and deleted under [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1) (replaced by four-class kernel scheduling). | 2026-11-20; amended 2026-11-22 | [Go test execution](#go-test-execution) | Deleted ([`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1)) |
 | <a id="D-GR22"></a>`D-GR22` | Operator's reading of [`D-GR21`](#D-GR21) with the designer's mechanism: a `disabled` result counted apart from passes, a log reference on each stored record, a marker per check id so a new fingerprint does not re-arm an unrepaired check, one deduplicated `flaky-<check-id>` item filed from unfinished markers, and `tillr-gate enable` clearing the marker and contradicting pair once the repair's candidate passes the check. Rejected: a red verdict, a live re-run, disabling by fingerprint alone, or any retry, count or time window. | 2026-11-21; amended 2026-11-22 | [A contradicted check is disabled](#a-contradicted-check-is-disabled), [gate check rules](./gate-check-rules.md) | Yes |
 | <a id="D-GR23"></a>`D-GR23` | Every check-result classification site calls `checkresult.Classify` (`pass`, `fail`, `unknown`, `unavailable`, `disabled`), reached from Python and store reads via `tillr-gate classify`; cached results are classified when used, a replayed commit supplies the declaration and command and never the classification, and repair items are filed by marker sweep without a document block. Rejected: per-site rules, per-program classifiers sharing a table, filing on every verdict exit path, or folding `unavailable` into `unknown`. | 2026-11-21 | [Result classification](#result-classification) | Yes |
 | <a id="D-GR25"></a>`D-GR25` | *(Unruled list awaiting the owner in [`OQ-GR5`](#OQ-GR5).)* Lists the five cases where `lane_base.go` differs from the literal words of [`D-GR24`](#D-GR24); each stays as built until the owner rules. Rejected: changing them silently against the request that carried `D-GR24`. | 2026-11-21 | [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer), [`OQ-GR5`](#OQ-GR5) | As built; awaiting owner |

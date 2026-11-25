@@ -1226,6 +1226,61 @@ func TestBeta(t *testing.T) {{ checkRepo(t) }}
             large_payload = json.loads(ev_large.read_text())
             self.assertEqual(large_payload['packages'][0]['test_cache'], 'hit')
 
+    def test_single_test_shard_sets_gomaxprocs_and_p1(self):
+        captured = []
+
+        class FakeProc:
+            pid = 99999
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(args, **kwargs):
+            captured.append((args, kwargs.get('env', {})))
+            stdout = kwargs.get('stdout')
+            if stdout is not None:
+                stdout.write(b'{"Action":"pass","Package":"example.com/pkg","Test":"TestOne"}\n{"Action":"pass","Package":"example.com/pkg"}\n')
+                stdout.flush()
+            return FakeProc()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / 'pkg.test'
+            fake_bin.write_text('#!/bin/sh\nexit 0\n')
+            fake_bin.chmod(0o755)
+            with patch.object(shards.subprocess, 'Popen', side_effect=fake_popen):
+                shards.run_shard('example.com/pkg', tmp_path, fake_bin, ['TestOne'], 0, tmp_path / 'shard-scratch', '10s', git_values=[])
+                self.assertEqual(len(captured), 1)
+                args_shard, env_shard = captured[0]
+                self.assertIn('-test.parallel=1', args_shard)
+                self.assertEqual(env_shard.get('GOMAXPROCS'), '1')
+
+                captured.clear()
+                shards.run_cached_group(
+                    'example.com/pkg',
+                    tmp_path,
+                    ['TestOne'],
+                    0,
+                    'k1',
+                    tmp_path / 'durable',
+                    '10s',
+                    {'PATH': os.environ.get('PATH', '')},
+                    [],
+                    run_pattern='^TestOne$',
+                )
+                self.assertEqual(len(captured), 1)
+                args_group, env_group = captured[0]
+                cmd_part = args_group[args_group.index('--') + 1:]
+                self.assertIn('-parallel', cmd_part)
+                self.assertEqual(cmd_part[cmd_part.index('-parallel') + 1], '1')
+                self.assertIn('-p', cmd_part)
+                self.assertEqual(cmd_part[cmd_part.index('-p') + 1], '1')
+                self.assertEqual(env_group.get('GOMAXPROCS'), '1')
+
 
 if __name__ == '__main__':
     unittest.main()

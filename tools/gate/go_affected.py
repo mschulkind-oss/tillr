@@ -59,7 +59,6 @@ STRIPPED_OUTER_ENV = (
     "TILLR_SELF_SUITE_TIMING_OUT",
     "TILLR_SQLITE_TRACE",
     "GO_TEST_SHARDS_HOLDER",
-    "GO_TEST_SHARDS_CLASS",
     "TILLR_RUN_ID",
     "TILLR_LOOP_STORE",
     "TILLR_ITEM_ID",
@@ -2217,7 +2216,7 @@ def run_selected_tests(
 
     def run_one(inv: tuple[str, list[dict], str | None, str | None, str]) -> tuple[int, str, int, dict[str, dict]]:
         mod, items, digest, run_pattern, scratch_key = inv
-        cmd = ["go", "test", "-json", "-timeout", "0", "-parallel", "1"]
+        cmd = ["go", "test", "-json", "-timeout", "0", "-p", "1", "-parallel", "1"]
         if run_pattern is not None:
             cmd.extend(["-run", run_pattern])
         cmd.extend(item["import_path"] for item in items)
@@ -2225,6 +2224,7 @@ def run_selected_tests(
         wait_ms = 0
         with acquire_invocation_scratch(durable, scratch_key) as (scratch_dir, out_dir):
             env = _bypass_git_shim_env(base_env, scratch_dir)
+            env["GOMAXPROCS"] = "1"
             gotmp_dir = Path(os.path.abspath(scratch_dir / "gotmp"))
             gotmp_dir.mkdir(parents=True, exist_ok=True)
             env["GOTMPDIR"] = str(gotmp_dir)

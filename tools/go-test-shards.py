@@ -413,6 +413,7 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
               wall_timeout=DEFAULT_SHARD_TIMEOUT, progress=None):
     label = f'{package} shard {index}'
     env = private_environment(label, scratch, git_values)
+    env['GOMAXPROCS'] = '1'
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ShardError(f'{label} cannot start: test binary is missing or not executable: {binary}')
     pattern = '^(' + '|'.join(re.escape(n) for n in names) + ')$'
@@ -602,7 +603,7 @@ def run_cached_group(package, cwd, names, index, scratch_key, durable, timeout,
                      run_pattern=None, wall_timeout=DEFAULT_SHARD_TIMEOUT, progress=None):
     label = f'{package} shard {index}'
     go_affected = _load_go_affected()
-    command = ['go', 'test', '-json', '-timeout', timeout, '-parallel', '1']
+    command = ['go', 'test', '-json', '-timeout', timeout, '-p', '1', '-parallel', '1']
     if run_pattern is not None:
         command.extend(['-run', run_pattern])
     command.append(package)
@@ -611,6 +612,7 @@ def run_cached_group(package, cwd, names, index, scratch_key, durable, timeout,
         with go_affected.acquire_invocation_scratch(durable, scratch_key) as (scratch_dir, _pool_dir):
             try:
                 env = go_affected._bypass_git_shim_env(base_env, scratch_dir)
+                env['GOMAXPROCS'] = '1'
                 env['YOLO_DURABLE_DIR'] = str(scratch_dir)
                 if explicit_scratch:
                     env['TMPDIR'] = str(scratch_dir)

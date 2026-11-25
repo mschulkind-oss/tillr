@@ -22,10 +22,6 @@ import (
 // Request is design §5.6's run.request payload. Command is an argv array, never a
 // shell string: a request that carried a string would make the caller's quoting the
 // utility's problem.
-//
-// WorkerNiceness is the target niceness for a run's process group. The heavy
-// proof keeps the drain's niceness.
-const WorkerNiceness = 10
 
 // StderrTailBytes bounds how much of a worker's standard error (stream.err) a
 // non-zero terminal run record preserves.
@@ -499,11 +495,6 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 			return record.Envelope{}, writeErr
 		}
 		return stored, Externalf("starting %q: %v", req.Command[0], err)
-	}
-	// Lower the group once; later children inherit their parent's niceness.
-	// A group that has already exited needs no adjustment.
-	if err := syscall.Setpriority(syscall.PRIO_PGRP, cmd.Process.Pid, WorkerNiceness); err != nil && err != syscall.ESRCH {
-		os.Stderr.WriteString("tillr-run: the worker's CPU priority was not lowered: " + err.Error() + "\n")
 	}
 	var note string
 	startedAt := time.Now().UTC()

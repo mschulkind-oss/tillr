@@ -92,13 +92,21 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 	if err != nil {
 		return err
 	}
+	var priorityRaw any
+	if l.priority != nil {
+		b, err := json.Marshal(l.priority.Summary())
+		if err != nil {
+			return err
+		}
+		priorityRaw = string(b)
+	}
 	stopFlag := 0
 	err = l.writeTx(ctx, s, func(tx *store.Tx) error {
 		tx.SuppressNotify()
-		if _, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner, lanes)
-   VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
-   refreshed_at = excluded.refreshed_at, next_pass_at = excluded.next_pass_at, lanes = excluded.lanes`,
-			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli(), string(raw), string(lanesRaw)); err != nil {
+		if _, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner, lanes, process_priority)
+   VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
+   refreshed_at = excluded.refreshed_at, next_pass_at = excluded.next_pass_at, lanes = excluded.lanes, process_priority = excluded.process_priority`,
+			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli(), string(raw), string(lanesRaw), priorityRaw); err != nil {
 			return err
 		}
 		return tx.QueryRow(`SELECT COALESCE(stop_requested, 0) FROM drain_sessions WHERE session_id = ?`, l.sessionID).Scan(&stopFlag)

@@ -298,6 +298,14 @@ func TestWhyDefaultsToLiveLoopLanesAndReportsLaneSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	prioJSON, err := json.Marshal(drain.ProcessPrioritySummary{
+		Mechanism:         "nice",
+		UnavailableReason: "/sys/fs/cgroup: read-only file system",
+		Classes:           map[string]int{"repair": 0, "gate": 5, "proof": 10, "worker": 15},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	future := time.Now().Add(time.Minute).UnixMilli()
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
 		for _, id := range []string{"lane-1", "lane-2", "lane-3", "express-1"} {
@@ -305,8 +313,8 @@ func TestWhyDefaultsToLiveLoopLanesAndReportsLaneSet(t *testing.T) {
 				return err
 			}
 		}
-		_, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner, lanes) VALUES ('live-1', 1, ?, ?, ?, ?)`,
-			time.Now().UnixMilli(), future, string(ownerRaw), string(lanesRaw))
+		_, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner, lanes, process_priority) VALUES ('live-1', 1, ?, ?, ?, ?, ?)`,
+			time.Now().UnixMilli(), future, string(ownerRaw), string(lanesRaw), string(prioJSON))
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -328,14 +336,20 @@ func TestWhyDefaultsToLiveLoopLanesAndReportsLaneSet(t *testing.T) {
 	if answer.Summary.LanesOffered != 2 || answer.Rows[0].Reason != drain.ReasonReady || answer.Rows[1].Reason != drain.ReasonNoLane {
 		t.Fatalf("unexpected plan with live loop lanes: summary=%+v rows=%+v", answer.Summary, answer.Rows)
 	}
+	if answer.ProcessPriority == nil || answer.ProcessPriority.Mechanism != "nice" || answer.ProcessPriority.Classes["worker"] != 15 {
+		t.Fatalf("process_priority = %+v, want nice with worker=15", answer.ProcessPriority)
+	}
 
-	// Text output also states which lane set was used.
+	// Text output also states which lane set and priority policy were used.
 	code, out = invoke(t, "why", "--store", path, "--policy", ref)
 	if code != 0 {
 		t.Fatalf("why text: %d %s", code, out)
 	}
 	if !strings.Contains(string(out), "lanes (live loop): lane-1, express-1\n") {
 		t.Fatalf("text output did not name live loop lane set:\n%s", out)
+	}
+	if !strings.Contains(string(out), "priority: nice (repair=0 gate=5 proof=10 worker=15; cgroup unavailable: /sys/fs/cgroup: read-only file system)\n") {
+		t.Fatalf("text output did not include live loop priority line:\n%s", out)
 	}
 
 	// Explicit --lanes overrides the live loop's lane set and says so.
@@ -358,11 +372,15 @@ func TestWhyDefaultsToLiveLoopLanesAndReportsLaneSet(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("why after end: %d %s", code, out)
 	}
-	if err := json.Unmarshal(out, &answer); err != nil {
+	var endedAnswer drain.WhyAnswer
+	if err := json.Unmarshal(out, &endedAnswer); err != nil {
 		t.Fatal(err)
 	}
-	if answer.LanesSource != "store" || answer.Summary.LanesOffered != 4 {
-		t.Fatalf("after loop ended: source=%q offered=%d, want store / 4", answer.LanesSource, answer.Summary.LanesOffered)
+	if endedAnswer.LanesSource != "store" || endedAnswer.Summary.LanesOffered != 4 {
+		t.Fatalf("after loop ended: source=%q offered=%d, want store / 4", endedAnswer.LanesSource, endedAnswer.Summary.LanesOffered)
+	}
+	if endedAnswer.ProcessPriority != nil {
+		t.Fatalf("after loop ended: process_priority = %+v, want omitted", endedAnswer.ProcessPriority)
 	}
 }
 

@@ -235,7 +235,7 @@ func init() {
 	if err := store.RegisterColumn("drain", "node_runs", "quick_way", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		panic(err)
 	}
-	for name, definition := range map[string]string{"loop_owner": "TEXT", "stop_requested": "INTEGER", "lanes": "TEXT"} {
+	for name, definition := range map[string]string{"loop_owner": "TEXT", "stop_requested": "INTEGER", "lanes": "TEXT", "process_priority": "TEXT"} {
 		if err := store.RegisterColumn("drain", "drain_sessions", name, definition); err != nil {
 			panic(err)
 		}

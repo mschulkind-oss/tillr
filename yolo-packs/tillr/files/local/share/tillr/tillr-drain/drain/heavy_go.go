@@ -141,6 +141,9 @@ func (s *ProcessSteps) judgeHeavyGo(ctx context.Context, dir, id string) ([]Heav
 	cmd := exec.CommandContext(ctx, "go", "test", "-json", "-count=1", "-run", strings.Join(patterns, "/"), rel)
 	cmd.Dir = root
 	cmd.Env = s.checkProcessEnv(os.Environ(), "CGO_ENABLED=0", "TMPDIR="+scratch, "YOLO_DURABLE_DIR="+scratch, "GIT_CONFIG_GLOBAL="+config)
+	if err := s.applyHeavyPriority(ctx, cmd); err != nil {
+		return nil, err
+	}
 	var stdout strings.Builder
 	var stderr stderrTail
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

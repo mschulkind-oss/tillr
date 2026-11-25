@@ -460,6 +460,10 @@ type LoopConfig struct {
 	Now func() time.Time
 	// Report is where the loop writes its one line per event. A nil report discards.
 	Report io.Writer
+	// CgroupMountRoot and ProcSelfCgroupPath override /sys/fs/cgroup and
+	// /proc/self/cgroup for tests of process priority initialization.
+	CgroupMountRoot    string
+	ProcSelfCgroupPath string
 }
 
 // LoopResult is what the loop did and why it stopped.
@@ -760,7 +764,7 @@ type Loop struct {
 	questions        QuestionSource
 	ownerAnswerMu    sync.Mutex
 	ownerAnswerBlobs map[string]string
-	testSlots        TestSlotsObserver
+	priority         *ProcessPriority
 }
 
 func (l *Loop) isActive(runID string) bool {
@@ -947,6 +951,16 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		l.mu.Unlock()
 	}()
 	fmt.Fprintf(l.cfg.Report, "loop: build %s\n", l.build)
+	l.priority = InitProcessPriority(l.cfg.Store, l.cfg.CgroupMountRoot, l.cfg.ProcSelfCgroupPath)
+	defer func() {
+		if l.priority != nil {
+			_ = l.priority.Close()
+		}
+	}()
+	if ps, ok := l.cfg.Steps.(*ProcessSteps); ok {
+		ps.priority = l.priority
+	}
+	l.reportf("%s\n", l.priority.LogLine())
 	// Persist the spend accumulated during execution; never rescan history on exit.
 	defer l.recordResult(&result)
 	defer l.closeWALKeeper()

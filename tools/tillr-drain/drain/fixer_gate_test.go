@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -298,32 +299,36 @@ func TestVariants(t *testing.T) {
 	}
 }
 
-func TestTrunkRepairGateSetsRepairSlotClass(t *testing.T) {
+func TestTrunkRepairGateUsesRepairPriorityClass(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	work := t.TempDir()
-	outFile := filepath.Join(t.TempDir(), "slot-class.txt")
-	gateProg := executable(t, fmt.Sprintf(`printf '%%s' "${GO_TEST_SHARDS_CLASS:-}" > %q
+	outFile := filepath.Join(t.TempDir(), "niceness.txt")
+	gateProg := executable(t, fmt.Sprintf(`nice > %q
 exit 0
 `, outFile))
+	prio := newNicePriority("test")
+	defer prio.Close()
+	repairNice, _ := prio.NiceTarget(ProcessClassRepair)
+	gateNice, _ := prio.NiceTarget(ProcessClassGate)
 	steps := &ProcessSteps{
 		Root:             root,
 		Store:            gateTimingStore(t, root),
 		GateProgram:      gateProg,
 		FixerGateProgram: gateProg,
 		Now:              time.Now,
+		priority:         prio,
 	}
 
-	t.Setenv("GO_TEST_SHARDS_CLASS", "")
 	for _, tc := range []struct {
 		name   string
 		itemID string
 		runID  string
-		want   string
+		want   int
 	}{
-		{name: "ordinary candidate", itemID: "item-ordinary-1", runID: "run-item-ordinary-1", want: ""},
-		{name: "revert gate", itemID: RevertItemID("deadbeef1234"), runID: "run-revert-deadbeef1234-cafebabe5678", want: "repair"},
-		{name: "trunk fixer gate", itemID: TrunkFixerID("deadbeef1234"), runID: "run-fixer-main-deadbeef1234-a1-n1", want: "repair"},
+		{name: "ordinary candidate", itemID: "item-ordinary-1", runID: "run-item-ordinary-1", want: gateNice},
+		{name: "revert gate", itemID: RevertItemID("deadbeef1234"), runID: "run-revert-deadbeef1234-cafebabe5678", want: repairNice},
+		{name: "trunk fixer gate", itemID: TrunkFixerID("deadbeef1234"), runID: "run-fixer-main-deadbeef1234-a1-n1", want: repairNice},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_ = os.Remove(outFile)
@@ -342,8 +347,8 @@ exit 0
 			if err != nil {
 				t.Fatalf("read %s: %v", outFile, err)
 			}
-			if string(got) != tc.want {
-				t.Fatalf("GO_TEST_SHARDS_CLASS = %q, want %q", string(got), tc.want)
+			if strings.TrimSpace(string(got)) != strconv.Itoa(tc.want) {
+				t.Fatalf("gate nice = %q, want %d", strings.TrimSpace(string(got)), tc.want)
 			}
 		})
 	}
@@ -366,8 +371,8 @@ exit 0
 		if err != nil {
 			t.Fatalf("read %s: %v", outFile, err)
 		}
-		if string(got) != "repair" {
-			t.Fatalf("GO_TEST_SHARDS_CLASS = %q, want %q", string(got), "repair")
+		if strings.TrimSpace(string(got)) != strconv.Itoa(repairNice) {
+			t.Fatalf("fixerCheck nice = %q, want %d", strings.TrimSpace(string(got)), repairNice)
 		}
 	})
 }

@@ -192,6 +192,9 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		cmd := exec.CommandContext(ctx, bin, args...)
 		cmd.Dir = dir
 		cmd.Env = s.checkProcessEnv(os.Environ(), extraEnv...)
+		if err := s.applyHeavyPriority(ctx, cmd); err != nil {
+			return nil, err
+		}
 		var stderr stderrTail
 		cmd.Stderr = &stderr
 		var stdout strings.Builder
@@ -311,6 +314,9 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = s.checkProcessEnv(os.Environ(), extraEnv...)
+	if err := s.applyHeavyPriority(ctx, cmd); err != nil {
+		return nil, err
+	}
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	// The program's whole output goes to a file under the proof's log directory for

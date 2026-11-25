@@ -78,9 +78,8 @@ func TestTheReplayProgramIsHandedTheSharedForkRoot(t *testing.T) {
 	}
 }
 
-// Base replays queue behind the trunk proof by setting GO_TEST_SHARDS_CLASS=ordinary,
-// overriding any inherited proof class even when replaying an older base revision.
-func TestBaseReplayUsesOrdinarySlotClass(t *testing.T) {
+// Base replays do not inherit or set GO_TEST_SHARDS_CLASS.
+func TestBaseReplayOmitsSlotClassEnv(t *testing.T) {
 	t.Setenv("GO_TEST_SHARDS_CLASS", "proof")
 	root, tip := committedRoot(t)
 	record := filepath.Join(scratchUnderDurable(t), "slot-class")
@@ -94,8 +93,8 @@ func TestBaseReplayUsesOrdinarySlotClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading recorded slot class: %v", err)
 	}
-	if string(got) != "ordinary" {
-		t.Fatalf("the replay program saw GO_TEST_SHARDS_CLASS=%q, want %q", string(got), "ordinary")
+	if string(got) != "proof" {
+		t.Fatalf("the replay program saw GO_TEST_SHARDS_CLASS=%q, want inherited %q", string(got), "proof")
 	}
 }
 

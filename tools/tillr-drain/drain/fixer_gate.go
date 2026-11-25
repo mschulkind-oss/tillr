@@ -34,7 +34,7 @@ func (s *ProcessSteps) fixerCheck(ctx context.Context, c Candidate, id string) (
 	// Modern proof selectors also include focused Go tests and declaration-file
 	// heavy checks. Use their proof judge, not a whole legacy suite or range.
 	if strings.HasPrefix(id, goTestPrefix) || fixerHeavyDeclaration(c.Worktree, id) {
-		check, err := s.JudgeRequired(ctx, c.Worktree, id, "")
+		check, err := s.JudgeRequired(context.WithValue(ctx, heavyRepairKey{}, true), c.Worktree, id, "")
 		if err != nil {
 			return "error", err.Error()
 		}
@@ -54,7 +54,7 @@ func (s *ProcessSteps) fixerCheck(ctx context.Context, c Candidate, id string) (
 	if s.FixerGateProgram == "" {
 		return "error", "no named-check program configured"
 	}
-	fixerEnv := append(withoutProcessEnv(s.checkProcessEnv(nil), "GO_TEST_SHARDS_CLASS"), "GO_TEST_SHARDS_CLASS=repair")
+	fixerEnv := s.checkProcessEnv(nil)
 	code, out, span, err := s.programWithEnv(ctx, "fixer-gate", c.Worktree, s.FixerGateProgram, c, fixerEnv, "--only", id)
 	output := strings.TrimSpace(out + "\n" + span.StderrTail)
 	if err != nil {

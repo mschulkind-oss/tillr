@@ -14,7 +14,10 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/store"
+	"golang.org/x/sys/unix"
 )
+
+const HeavyNiceEnv = "TILLR_HEAVY_NICE"
 
 type HeavyOwnershipKey struct{}
 type HeavyOwnership struct {
@@ -74,6 +77,10 @@ func superviseHeavy(args []string) int {
 		fmt.Fprintln(os.Stderr, "heavy lifetime supervision unavailable:", err)
 		return 4
 	}
+	if err := applyHeavySupervisorNice(); err != nil {
+		_ = os.WriteFile(args[1]+".start-error", []byte(err.Error()), 0600)
+		return 4
+	}
 	pid, startTicks, err := HeavySupervisorIdentity()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -105,7 +112,7 @@ func superviseHeavy(args []string) int {
 	cmd.Stderr = os.Stderr
 	cmd.ExtraFiles = []*os.File{lock}
 	for _, value := range os.Environ() {
-		if !strings.HasPrefix(value, "TILLR_HEAVY_LOCK_FD=") {
+		if !strings.HasPrefix(value, "TILLR_HEAVY_LOCK_FD=") && !strings.HasPrefix(value, HeavyNiceEnv+"=") {
 			cmd.Env = append(cmd.Env, value)
 		}
 	}
@@ -167,10 +174,19 @@ func superviseStep(args []string) int {
 		fmt.Fprintln(os.Stderr, "step lifetime supervision unavailable:", err)
 		return 4
 	}
+	if err := applyHeavySupervisorNice(); err != nil {
+		_ = os.WriteFile(args[0], []byte(err.Error()), 0600)
+		return 4
+	}
 	cmd := exec.CommandContext(ctx, args[1], args[2:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(value, HeavyNiceEnv+"=") {
+			cmd.Env = append(cmd.Env, value)
+		}
+	}
 	started := make(chan int, 1)
 	stopReaping := ReapWhileSupervising(started)
 	err := RunCheckGroupStarted(cmd, func(pid int) { started <- pid })
@@ -266,7 +282,7 @@ func RunOwnedHeavy(ctx context.Context, cmd *exec.Cmd, mode string) error {
 // Cancellation requests cleanup; it does not impose a deadline on the process
 // that owns and acknowledges that cleanup. Only its exit releases the checkout.
 func runHeavySupervisorGroup(cmd *exec.Cmd) error {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	preserveSetpgid(cmd)
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
@@ -279,6 +295,21 @@ func runHeavySupervisorGroup(cmd *exec.Cmd) error {
 	}
 	cmd.WaitDelay = 0
 	return cmd.Run()
+}
+
+func applyHeavySupervisorNice() error {
+	raw := strings.TrimSpace(os.Getenv(HeavyNiceEnv))
+	if raw == "" {
+		return nil
+	}
+	target, err := strconv.Atoi(raw)
+	if err != nil {
+		return fmt.Errorf("invalid %s=%q: %w", HeavyNiceEnv, raw, err)
+	}
+	if err := unix.Setpriority(unix.PRIO_PROCESS, 0, target); err != nil {
+		return fmt.Errorf("setpriority(%d): %w", target, err)
+	}
+	return nil
 }
 
 type HeavyCleanupMarker struct {
