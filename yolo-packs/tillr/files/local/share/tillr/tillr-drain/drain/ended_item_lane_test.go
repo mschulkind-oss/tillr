@@ -684,3 +684,77 @@ func TestReclaimEndedItemLanesReportsUnsavedWorkOnceUntilChanged(t *testing.T) {
 		t.Fatalf("after pass 4 (resolved): lane-1 condition = %+v, want nil", cond)
 	}
 }
+
+func TestSaveEndedItemWorkRecordsKeptFilesAndBytes(t *testing.T) {
+	readSaved := func(t *testing.T, f refusalLoopFixture, runID string) EndedWorkSaved {
+		t.Helper()
+		var saved EndedWorkSaved
+		fixtureRead(t, f, func(rd *store.Reader) error {
+			var raw []byte
+			if err := rd.QueryRow(`SELECT payload FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? ORDER BY seq DESC LIMIT 1`, endedWorkSavedKind, runID).Scan(&raw); err != nil {
+				return err
+			}
+			return json.Unmarshal(raw, &saved)
+		})
+		return saved
+	}
+
+	t.Run("single two-byte scratch file", func(t *testing.T) {
+		f, l, _ := plannedFixture(t)
+		ctx := context.Background()
+		wt := l.lanePath("lane-1")
+		writeForkFile(t, filepath.Join(wt, "scratch.tmp"), "ok")
+
+		saved, err := l.saveEndedItemWork(ctx, "lane-1", "run-item-a-a1-n1", "item-a", "closed", "ended-item-lane")
+		if err != nil || !saved {
+			t.Fatalf("saveEndedItemWork: saved=%v err=%v", saved, err)
+		}
+		got := readSaved(t, f, "run-item-a-a1-n1")
+		if got.KeptFiles != 1 || got.KeptBytes != 2 {
+			t.Fatalf("got kept_files=%d kept_bytes=%d, want 1 and 2 (payload=%+v)", got.KeptFiles, got.KeptBytes, got)
+		}
+		var commitRecord EndedWorkSaved
+		body := runGit(t, f.root, "show", "-s", "--format=%B", got.Ref)
+		if err := json.Unmarshal([]byte(body), &commitRecord); err != nil {
+			t.Fatalf("unmarshal commit body: %v", err)
+		}
+		if commitRecord.KeptFiles != 1 || commitRecord.KeptBytes != 2 {
+			t.Fatalf("commit record kept_files=%d kept_bytes=%d, want 1 and 2", commitRecord.KeptFiles, commitRecord.KeptBytes)
+		}
+	})
+
+	t.Run("multiple files including duplicate content, deletion, and distinct staged copy", func(t *testing.T) {
+		f, l, _ := plannedFixture(t)
+		ctx := context.Background()
+		wt := l.lanePath("lane-1")
+
+		// Add a tracked file on HEAD so we can delete it cleanly.
+		writeForkFile(t, filepath.Join(wt, "tracked.txt"), "tracked")
+		runGit(t, wt, "add", "tracked.txt")
+		runGit(t, wt, "commit", "-qm", "add tracked file")
+
+		// 1. Delete tracked.txt (1 file, 0 kept bytes).
+		if err := os.Remove(filepath.Join(wt, "tracked.txt")); err != nil {
+			t.Fatal(err)
+		}
+		// 2. Two untracked files with identical 5-byte content (2 files, 10 bytes).
+		writeForkFile(t, filepath.Join(wt, "dup1.txt"), "hello")
+		writeForkFile(t, filepath.Join(wt, "dup2.txt"), "hello")
+		// 3. One file staged with 4 bytes, then modified in working copy to 9 bytes (1 file, 13 bytes).
+		writeForkFile(t, filepath.Join(wt, "staged.txt"), "four")
+		runGit(t, wt, "add", "staged.txt")
+		writeForkFile(t, filepath.Join(wt, "staged.txt"), "ninebytes")
+
+		saved, err := l.saveEndedItemWork(ctx, "lane-1", "run-item-a-a2-n1", "item-a", "closed", "ended-item-lane")
+		if err != nil || !saved {
+			t.Fatalf("saveEndedItemWork: saved=%v err=%v", saved, err)
+		}
+		got := readSaved(t, f, "run-item-a-a2-n1")
+		if got.IndexRef == "" {
+			t.Fatalf("expected separate index_ref for diverged staged file: %+v", got)
+		}
+		if got.KeptFiles != 4 || got.KeptBytes != 23 {
+			t.Fatalf("got kept_files=%d kept_bytes=%d, want 4 and 23 (payload=%+v)", got.KeptFiles, got.KeptBytes, got)
+		}
+	})
+}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr/definition"
@@ -43,6 +44,8 @@ type EndedWorkSaved struct {
 	IndexRef   string          `json:"index_ref,omitempty"`
 	Repository string          `json:"repository"`
 	Reason     string          `json:"reason"`
+	KeptFiles  int64           `json:"kept_files"`
+	KeptBytes  int64           `json:"kept_bytes"`
 	Files      []PreservedFile `json:"files"`
 	IndexFiles []PreservedFile `json:"index_files,omitempty"`
 	Unmerged   []string        `json:"unmerged,omitempty"`
@@ -168,9 +171,22 @@ func (l *Loop) saveEndedItemWork(ctx context.Context, lane, runID, itemID, itemS
 		if err := l.snapshotCovered(ctx, target, indexRef, snapshot.indexTree, snapshot.indexFiles); err != nil {
 			return false, err
 		}
+		if p.KeptFiles == 0 && (len(p.Files) > 0 || len(p.IndexFiles) > 0) {
+			keptFiles, keptBytes, err := l.measureEndedWorkKept(ctx, target, snapshot, p.IndexRef != "")
+			if err != nil {
+				return false, err
+			}
+			p.KeptFiles = keptFiles
+			p.KeptBytes = keptBytes
+		}
 	} else {
 		if itemState == "" {
 			itemState = "closed"
+		}
+		hasSeparateIndex := snapshot.indexTree != snapshot.head && snapshot.indexTree != snapshot.tree
+		keptFiles, keptBytes, err := l.measureEndedWorkKept(ctx, target, snapshot, hasSeparateIndex)
+		if err != nil {
+			return false, err
 		}
 		p = EndedWorkSaved{
 			RunID:      runID,
@@ -180,6 +196,8 @@ func (l *Loop) saveEndedItemWork(ctx context.Context, lane, runID, itemID, itemS
 			Ref:        ref,
 			Repository: target,
 			Reason:     reason,
+			KeptFiles:  keptFiles,
+			KeptBytes:  keptBytes,
 			Files:      snapshot.files,
 			Summary:    snapshot.summary,
 			Unmerged:   snapshot.unmerged,
@@ -188,7 +206,7 @@ func (l *Loop) saveEndedItemWork(ctx context.Context, lane, runID, itemID, itemS
 			p.Repository = l.cfg.Root
 		}
 		args := []string{"commit-tree", snapshot.tree, "-p", snapshot.head}
-		if snapshot.indexTree != snapshot.head && snapshot.indexTree != snapshot.tree {
+		if hasSeparateIndex {
 			staged, err := l.git(ctx, target, "commit-tree", snapshot.indexTree, "-p", snapshot.head, "-m", "Staged contents of ended item run "+runID)
 			if err != nil {
 				return false, err
@@ -236,6 +254,95 @@ func (l *Loop) writeEndedWorkRef(ctx context.Context, target string, p EndedWork
 	}
 	_, err = l.git(ctx, target, "update-ref", p.Ref, strings.TrimSpace(string(sha)), "")
 	return err
+}
+
+func (l *Loop) measureEndedWorkKept(ctx context.Context, target string, snapshot workSnapshot, includeIndex bool) (int64, int64, error) {
+	seenPaths := map[string]struct{}{}
+	workBlobs := map[string]string{}
+	var blobRefs []string
+
+	collectTree := func(tree string, isIndex bool) error {
+		out, err := l.git(ctx, target, "--no-optional-locks", "diff", "--raw", "--full-index", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", snapshot.head, tree)
+		if err != nil {
+			return err
+		}
+		for out != "" {
+			meta, rest, ok := strings.Cut(out, "\x00")
+			if !ok {
+				return fmt.Errorf("ended work size: incomplete raw diff metadata")
+			}
+			path, rest, ok := strings.Cut(rest, "\x00")
+			if !ok {
+				return fmt.Errorf("ended work size: incomplete raw diff path")
+			}
+			out = rest
+			fields := strings.Fields(strings.TrimPrefix(meta, ":"))
+			if len(fields) < 5 {
+				return fmt.Errorf("ended work size: malformed raw diff entry %q", meta)
+			}
+			dstMode, dstSHA := fields[1], fields[3]
+			seenPaths[path] = struct{}{}
+			if dstMode == "000000" || dstMode == "160000" || strings.Trim(dstSHA, "0") == "" {
+				continue
+			}
+			if !isIndex {
+				workBlobs[path] = dstSHA
+				blobRefs = append(blobRefs, dstSHA)
+			} else if workBlobs[path] != dstSHA {
+				blobRefs = append(blobRefs, dstSHA)
+			}
+		}
+		return nil
+	}
+
+	if err := collectTree(snapshot.tree, false); err != nil {
+		return 0, 0, err
+	}
+	if includeIndex && snapshot.indexTree != "" && snapshot.indexTree != snapshot.head && snapshot.indexTree != snapshot.tree {
+		if err := collectTree(snapshot.indexTree, true); err != nil {
+			return 0, 0, err
+		}
+	}
+
+	keptFiles := int64(len(seenPaths))
+	if len(blobRefs) == 0 {
+		return keptFiles, 0, nil
+	}
+
+	uniqueSHAs := make([]string, 0, len(blobRefs))
+	seenSHA := make(map[string]struct{}, len(blobRefs))
+	for _, sha := range blobRefs {
+		if _, ok := seenSHA[sha]; !ok {
+			seenSHA[sha] = struct{}{}
+			uniqueSHAs = append(uniqueSHAs, sha)
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", target, "cat-file", "--batch-check=%(objectsize)")
+	cmd.Stdin = strings.NewReader(strings.Join(uniqueSHAs, "\n") + "\n")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, 0, Externalf("measuring ended work blobs in %s: git cat-file: %v: %s", target, err, strings.TrimSpace(stderr.String()))
+	}
+	lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	if len(lines) != len(uniqueSHAs) {
+		return 0, 0, fmt.Errorf("measuring ended work blobs: got %d sizes for %d blobs", len(lines), len(uniqueSHAs))
+	}
+	sizes := make(map[string]int64, len(uniqueSHAs))
+	for i, line := range lines {
+		n, err := strconv.ParseInt(strings.TrimSpace(line), 10, 64)
+		if err != nil || n < 0 {
+			return 0, 0, fmt.Errorf("measuring ended work blob %s: invalid size %q", uniqueSHAs[i], line)
+		}
+		sizes[uniqueSHAs[i]] = n
+	}
+	var keptBytes int64
+	for _, sha := range blobRefs {
+		keptBytes += sizes[sha]
+	}
+	return keptFiles, keptBytes, nil
 }
 
 func (l *Loop) endedWorkRecorded(ctx context.Context, runID, ref string) (bool, error) {

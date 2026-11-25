@@ -1,0 +1,30 @@
+# Consumer report on 2026-11-25: two refs/tillr/ended/<run> saves held ~7,190
+# files and 1.85M lines each (untracked web-view dependencies and build output),
+# while seven held a single 2-byte scratch file. Warn when an ended-item save
+# keeps more than 1 MiB (1048576 bytes).
+[[rule]]
+id = "drain-ended-work-large"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.ended-work-saved"]
+
+[rule.when]
+group_by = "ref"
+pattern = "predicate_match"
+match = 'event.kept_bytes > 1048576'
+window = "24h"
+
+[rule.guidance]
+summary = "Ended-item save {{subject}} kept {{event.kept_files}} files ({{event.kept_bytes}} bytes), over the 1048576-byte limit (item {{event.item_id}} on {{event.lane_id}})."
+check = [
+  "Inspect {{subject}} in {{event.repository}} with git show --stat {{subject}} to see what files were saved.",
+  "Check whether untracked dependencies, build output, or generated files were left unignored in {{event.lane_id}}."
+]
+do = [
+  "Decide whether {{subject}} holds work worth keeping or can be removed, and address why those files were untracked in the lane."
+]
+
+[rule.delivery]
+receiver = "foreground"
