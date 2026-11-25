@@ -37,7 +37,7 @@ vantage:
 
 ## 1. Context and Goal
 
-A running `tillr-drain` loop takes one `--policy <path>` flag naming one of five JSON files under `config/tillr/`: `backend-policy.or-carbon.json` (the default) and the `.bedrock`, `.claude`, `.claude-copilot` and `.gemini` files. Each file maps the drain's eleven workflow seats (`design`, `plan`, `build`, `edit`, `test-write`, `docs`, `review`, `verify`, `scout`, `classify` and `test-run`) to backend rows, and a backend row names an adapter program, a model route and an effort level. The file also holds the default backend and the escalation order.
+A running `tillr-drain` loop takes one `--policy <path>` flag naming a backend policy file; with none it reads `config/tillr/backend-policy.json`, which this repository ships as an example with placeholder models. The owner's own policies (an OpenRouter one, a Bedrock one, a Copilot Gemini one and two Claude ones) were tracked beside it until 2026-11-24 and now live outside the repository. Each file maps the drain's eleven workflow seats (`design`, `plan`, `build`, `edit`, `test-write`, `docs`, `review`, `verify`, `scout`, `classify` and `test-run`) to backend rows, and a backend row names an adapter program, a model route and an effort level. The file also holds the default backend and the escalation order.
 
 Three things make a raw path the wrong surface for an operator:
 
@@ -188,7 +188,7 @@ The policy snapshot (`PolicyState`, `.tillr/loop/backend-policy.json`) gains `pr
 
 ### 7.1 `copilot-gemini` — Active Copilot Gemini Profile (Selected)
 
-`config/tillr/profiles/copilot-gemini.json` carries the assignment of [`config/tillr/backend-policy.gemini.json`](../../config/tillr/backend-policy.gemini.json), without the `read_only_seats` and `seat_purposes` blocks the catalog now holds. Every row runs the adapter `tools/tillr-run/backends/pi/run-pi` at effort `medium`. The default backend is `pi-build`, and `build` escalates from `pi-build` to `pi`.
+`config/tillr/profiles/copilot-gemini.json` carries the assignment of the owner's Copilot Gemini policy (no longer tracked here), without the `read_only_seats` and `seat_purposes` blocks the catalog now holds. Every row runs the adapter `tools/tillr-run/backends/pi/run-pi` at effort `medium`. The default backend is `pi-build`, and `build` escalates from `pi-build` to `pi`.
 
 | Seats | Backend | Model route |
 | :--- | :--- | :--- |
@@ -199,7 +199,7 @@ The policy snapshot (`PolicyState`, `.tillr/loop/backend-policy.json`) gains `pr
 
 ### 7.2 `claude-sub` — Claude Subscription Profile (Defined and Held; NOT Selected)
 
-`config/tillr/profiles/claude-sub.json` puts the strongest model of the Claude subscription on `design` alone and spreads every other seat across the two cheaper ones. [`config/tillr/backend-policy.claude.json`](../../config/tillr/backend-policy.claude.json), by contrast, runs every seat but `design` on one model. Every row runs the adapter `tools/tillr-run/backends/claude/run-claude`, which [the Claude backend reference](../reference/tillr-claude-backend.md) describes. The profile carries:
+`config/tillr/profiles/claude-sub.json` puts the strongest model of the Claude subscription on `design` alone and spreads every other seat across the two cheaper ones. The owner's earlier Claude policy (no longer tracked here), by contrast, runs every seat but `design` on one model. Every row runs the adapter `tools/tillr-run/backends/claude/run-claude`, which [the Claude backend reference](../reference/tillr-claude-backend.md) describes. The profile carries:
 
 ```json
 "hold": {
@@ -265,7 +265,7 @@ What happens to the other policy files is [OQ-DSP3](#OQ-DSP3). Once it is ruled 
 
 3. 💬 **OQ-DSP3: Which of the other policy files should carry forward as named profiles beside `copilot-gemini` and `claude-sub`?**
 
-   `config/tillr/` tracks three other policy files besides the Gemini one: the OpenRouter default (`backend-policy.or-carbon.json`), `.bedrock` and `.claude`, plus `.claude-copilot`, which mixes two of them. Dropping an unused one keeps the list short; dropping one a machine still runs means writing it again. The `.gemini` and `.bedrock` files declare a twelfth seat, `tricky`, which the catalog would have to hold for either file to become a profile.
+   The owner keeps four other policies outside the repository besides the Gemini one: an OpenRouter one, a Bedrock one, a Claude one and one mixing Claude and Copilot. Dropping an unused one keeps the list short; dropping one a machine still runs means writing it again. The Gemini and Bedrock policies declare a twelfth seat, `tricky`, which the catalog would have to hold for either to become a profile.
 
    - **A — Carry forward `bedrock` and `openrouter`, four profiles in all.** One profile per distinct provider setup.
    - **B — Carry forward all six, eight profiles in all.** Keeps every setup as it is, at the cost of a long list.
@@ -292,5 +292,5 @@ What happens to the other policy files is [OQ-DSP3](#OQ-DSP3). Once it is ruled 
 | `D-DSP5` | A switch needs no restart of the loop or its keeper: `drain.config-changed` wakes the loop, `refreshPolicy` replaces the profile at the next pass boundary and resets changed share epochs, and an invalid later edit leaves the accepted policy running. | 2026-11-19, designer | [§5.1](#51-zero-restart-reload-at-the-next-pass-boundary) | — |
 | `D-DSP6` | A switch leaves running processes alone, resolves unclaimed workflow nodes against the new profile, starts fresh worker and designer sessions and never resumes one across harnesses or models, scopes `drain.seat-escalated` by profile, and moves a quota-paused run onto the new profile's open backend when its own is absent or not first. | 2026-11-19, designer | [§5.2](#52-exact-behavior-of-work-and-sessions-in-flight) | — |
 | `D-DSP7` | The policy snapshot records `profile` and `source`, and `tillr status`, `tillr drain profile`, `tillr drain config`, `tillr drain policy`, the observatory header and the `backend-policy` refusal card show the active profile. | 2026-11-19, designer | [§6](#6-how-the-operator-and-owner-see-which-profile-is-active) | — |
-| `D-DSP8` | **Owner direction.** Two first profiles: `copilot-gemini`, the assignment of `backend-policy.gemini.json`, kept selected; and `claude-sub`, the subscription's strongest model on `design` and its two cheaper models on every other seat, defined and held until the Claude backend is proven and the owner asks to switch. | 2026-11-19, owner | [§7](#7-the-first-two-named-profiles) | — |
+| `D-DSP8` | **Owner direction.** Two first profiles: `copilot-gemini`, the assignment of the owner's Copilot Gemini policy, kept selected; and `claude-sub`, the subscription's strongest model on `design` and its two cheaper models on every other seat, defined and held until the Claude backend is proven and the owner asks to switch. | 2026-11-19, owner | [§7](#7-the-first-two-named-profiles) | — |
 | `D-DSP9` | Revises [OQ-TC2](./tillr-convergence.md#OQ-TC2): a named profile of harness and model tiers is a lasting control, not a stopgap on the way to a model-free seat map. The seat catalog removes the repeated blocks, and the untracked store keeps each machine's selection local. | 2026-11-19, designer | [§8](#8-relation-to-the-per-machine-backend-policy-stopgap) | — |

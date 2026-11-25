@@ -1,0 +1,79 @@
+{
+  "about": "An example tillr backend policy: which adapter program and model fill each seat (the role a run plays). The loop reads this path when no --policy is given. The model names here are placeholders, so no run can start on this file as shipped: copy it, put in the models your credentials reach, and name your copy with --policy. The adapters read none of this file; the drain reads it at staging and puts the values on the adapter's argv. `default_backend` fills an item that names no seat, `seats` maps each seat to a backend, `escalate` lists the backends a failed build moves through, and `backends` declares each adapter with its model and effort. The claude, agy and muse rows are declared and mapped to no seat, to show the row each adapter takes; agy carries its effort inside the model name and takes no effort key.",
+  "default_backend": "pi-build",
+  "seats": {
+    "design": "pi-designer",
+    "build": "pi-build",
+    "review": "pi",
+    "scout": "pi-scout",
+    "classify": "pi-scout",
+    "plan": "pi",
+    "edit": "pi-build",
+    "test-write": "pi-build",
+    "test-run": "pi-scout",
+    "docs": "pi-build",
+    "verify": "pi",
+    "tricky": "pi"
+  },
+  "read_only_seats": [
+    "scout",
+    "classify",
+    "test-run"
+  ],
+  "seat_purposes": {
+    "design": "Settle design decisions and specify the intended change.",
+    "build": "Implement the change described by the item or plan.",
+    "review": "Review the candidate against the criteria.",
+    "scout": "Search the tree and report findings without writing.",
+    "classify": "Decide whether delivery is to the repository, a fork, or both without editing either.",
+    "plan": "Read the item and tree and write the piece list.",
+    "edit": "Apply a settled edit named in the plan.",
+    "test-write": "Write tests from the criteria.",
+    "test-run": "Run a named check and report its result without fixing it.",
+    "docs": "Write documentation and README changes.",
+    "verify": "Join the pieces and verify the combined result.",
+    "tricky": "Implement a change the ordinary build seat has failed at or that is too intricate for it."
+  },
+  "escalate": {
+    "build": [
+      "pi-build",
+      "pi"
+    ]
+  },
+  "backends": {
+    "pi": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "example-vendor/model-large",
+      "effort": "medium"
+    },
+    "pi-designer": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "example-vendor/model-frontier",
+      "effort": "medium"
+    },
+    "pi-build": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "example-vendor/model-medium",
+      "effort": "medium"
+    },
+    "pi-scout": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "example-vendor/model-small",
+      "effort": "medium"
+    },
+    "claude": {
+      "adapter": "tools/tillr-run/backends/claude/run-claude",
+      "model": "example-claude-model",
+      "effort": "medium"
+    },
+    "agy": {
+      "adapter": "tools/tillr-run/backends/agy/run-agy",
+      "model": "example-agy-model-medium"
+    },
+    "muse": {
+      "adapter": "tools/tillr-run/backends/muse/run-muse",
+      "model": "example-muse-model",
+      "effort": "high"
+    }
+  }
+}

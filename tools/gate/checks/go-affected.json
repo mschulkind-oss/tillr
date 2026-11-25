@@ -11,11 +11,7 @@
   "tier": "heavy",
   "timeout_ms": 3600000,
   "reads": [
-    "config/tillr/backend-policy.bedrock.json",
-    "config/tillr/backend-policy.claude-copilot.json",
-    "config/tillr/backend-policy.claude.json",
-    "config/tillr/backend-policy.gemini.json",
-    "config/tillr/backend-policy.or-carbon.json",
+    "config/tillr/backend-policy.json",
     "config/tillr/commands.json",
     "config/tillr/deny-list.json",
     "config/tillr/gate-policy.json",

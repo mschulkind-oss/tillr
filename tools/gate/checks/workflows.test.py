@@ -49,7 +49,7 @@ def workflow_repo(repo):
     config_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(ROOT / "config/tillr/workflows", config_dir / "workflows")
     shutil.copytree(ROOT / "config/tillr/watch", config_dir / "watch")
-    shutil.copy2(ROOT / "config/tillr/backend-policy.or-carbon.json", config_dir / "backend-policy.json")
+    shutil.copy2(ROOT / "config/tillr/backend-policy.json", config_dir / "backend-policy.json")
     shutil.copy2(ROOT / "config/tillr/commands.json", config_dir / "commands.json")
 
     return commit_all(repo, "chore: fixture")

@@ -4,7 +4,7 @@ status: accepted
 stage: CURRENT
 verified: 2026-11-24
 covers:
-  - config/tillr/backend-policy.or-carbon.json
+  - config/tillr/backend-policy.json
   - tools/tillr-run/backends/
   - tools/tillr-run/run/lease.go
   - tools/tillr-drain/drain/loop.go
@@ -30,7 +30,7 @@ the lane lease, which only says how long a lane is reserved.
 
 `tillr` has no default run wall:
 
-- [`config/tillr/backend-policy.or-carbon.json`](../../config/tillr/backend-policy.or-carbon.json) carries no
+- [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) carries no
   `timeout_seconds`, and the backend adapters (`run-pi`, `run-claude`, `run-muse`,
   `run-agy` under `tools/tillr-run/backends/`) wrap the harness in `timeout(1)` only when
   `--timeout` is passed.
@@ -132,7 +132,7 @@ Every row is a **designer's decision; the owner may overturn it**.
 
 | ID | Ruling | Rejects |
 | :--- | :--- | :--- |
-| `D-RW1` | No default `timeout_seconds` in `config/tillr/backend-policy.or-carbon.json` and no default wall in any adapter; `timeout_ms == 0` is an unbounded run with `leased_until = NULL`. A walled run stays `AttemptUnjudged`, outside the infrastructure class. | Keeping or tuning a default wall (violates the [momentum principle](../design/momentum-principle.md)); classifying a wall as an infrastructure failure. |
+| `D-RW1` | No default `timeout_seconds` in `config/tillr/backend-policy.json` and no default wall in any adapter; `timeout_ms == 0` is an unbounded run with `leased_until = NULL`. A walled run stays `AttemptUnjudged`, outside the infrastructure class. | Keeping or tuning a default wall (violates the [momentum principle](../design/momentum-principle.md)); classifying a wall as an infrastructure failure. |
 | `D-RW2` | `settle` checks for a commit before the unjudged class, and a `gate.verdict` supersedes the unjudged class in planning and retry authorization. | Holding committed runs as `run-unjudged`; an acknowledgment no value can satisfy. |
 | `D-RW3` | An uncommitted walled run is resumed in `settle` before the lane is reset, uncounted; never resumed when a lease is reaped. A continuation of uncommitted fenced work is bounded only by the identical-repeat rule, while a wall-cut run with no uncommitted work keeps one continuation (`resumeAfterWall`). | Resetting the lane at once (destroys uncommitted edits); resuming with no bound at all. |
 | `D-RW4` | `D-RW1` to `D-RW3` hold together: with no wall but without the `settle` ordering, a walled, committed, gate-failed run is one no acknowledgment can retry. | Separating wall removal from the `settle` and retry ordering; a schema migration or a new item state. |

@@ -100,7 +100,7 @@ The design follows from this order. A planning node is worth having mainly becau
 
 ## 4. Kinds of work
 
-Each kind is defined by what the work needs and what can tell whether it is right. The seat is where the policy places it. The last column is the backend each seat maps to in one shipped policy, [`backend-policy.bedrock.json`](../../config/tillr/backend-policy.bedrock.json), whose four backends are `pi-designer` (expensive), `pi` (mid), `pi-build` (cheap) and `pi-scout` (cheapest); other policies under [`config/tillr/`](../../config/tillr/) map the same seats to other backends.
+Each kind is defined by what the work needs and what can tell whether it is right. The seat is where the policy places it. The last column is the backend each seat maps to in the example policy, [`backend-policy.json`](../../config/tillr/backend-policy.json), whose four pi backends are `pi-designer` (expensive), `pi` (mid), `pi-build` (cheap) and `pi-scout` (cheapest); an operator's own policy may map the same seats to other backends.
 
 | Kind | What it needs | What tells whether it is right | Seat | Backend there |
 | :--- | :--- | :--- | :--- | :--- |

@@ -53,9 +53,6 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 BACKENDS = ROOT / "tools" / "tillr-run" / "backends"
 POLICY = ROOT / "config" / "tillr" / "backend-policy.json"
-BEDROCK_POLICY = ROOT / "config" / "tillr" / "backend-policy.bedrock.json"
-CLAUDE_POLICY = ROOT / "config" / "tillr" / "backend-policy.claude.json"
-CLAUDE_COPILOT_POLICY = ROOT / "config" / "tillr" / "backend-policy.claude-copilot.json"
 TEMPLATE = BACKENDS / "brief-template.md"
 
 # backend name -> (harness command the adapter spawns, its complete fixture)
@@ -447,25 +444,19 @@ def test_policy():
         f"the default backend {policy['default_backend']!r} names no entry",
     )
     # No backend names an adapter outside the dialects, and every dialect's adapter is named
-    # by one of the policies (the claude adapter is on the Claude-first policy only). A
+    # by a backend of the example policy. A
     # NAME is not the unit: `pi-designer` runs the pi adapter on another model, which is the
     # role seam (a model swap is a line in this file, never an edit to an item), so the
     # mapping is checked over adapters rather than over names.
     known = {f"tools/tillr-run/backends/{name}/run-{name}" for name in DIALECTS}
-    bedrock = load_policy(BEDROCK_POLICY)
-    claude = load_policy(CLAUDE_POLICY)
-    claude_copilot = load_policy(CLAUDE_COPILOT_POLICY)
-    named_anywhere = set()
-    for label, document in (("personal", policy), ("bedrock", bedrock), ("claude", claude), ("claude-copilot", claude_copilot)):
-        named = {entry["adapter"] for entry in document["backends"].values()}
-        check(
-            named <= known,
-            f"the {label} policy names adapters {sorted(named - known)} that are not dialects {sorted(DIALECTS)}",
-        )
-        named_anywhere |= named
+    named = {entry["adapter"] for entry in backends.values()}
     check(
-        named_anywhere == known,
-        f"no policy names the adapters {sorted(known - named_anywhere)}",
+        named <= known,
+        f"the policy names adapters {sorted(named - known)} that are not dialects {sorted(DIALECTS)}",
+    )
+    check(
+        named == known,
+        f"the policy names no backend for the adapters {sorted(known - named)}",
     )
     for name, entry in backends.items():
         adapter = ROOT / entry["adapter"]
@@ -512,13 +503,11 @@ def test_policy():
                 entry["models"] and entry["models"][0] == entry["model"],
                 f"{name}: the model list does not start at its `model`",
             )
-    test_claude_policy(claude)
-    test_claude_copilot_policy(claude_copilot)
 
     # D-MM5: the tillr tree ships publicly and names no model vendor, so no id from any
     # policy may appear in it — not as a default, a specimen or a fallback. The Claude
     # policy's short aliases are scanned for too: they live in config/ and nowhere else.
-    every = [entry for document in (policy, bedrock, claude, claude_copilot) for entry in document["backends"].values()]
+    every = list(backends.values())
     ids = [entry["model"] for entry in every]
     ids += [m for entry in every for m in entry.get("models", [])]
     check_no_model_ids(ROOT, commit, ids)
@@ -600,86 +589,6 @@ def assert_detached_model_id_scan(proof):
             rejected and f"{name} names the model id {model_id!r}" in stderr.getvalue(),
             f"the model ID scan did not report {model_id!r} in {name}",
         )
-
-
-def test_claude_policy(policy):
-    """The work machine's Claude policy: every seat selects the claude adapter."""
-    check("about" in policy, "the Claude policy does not say what it is")
-    backends = policy["backends"]
-    check(policy["default_backend"] == "claude", f"the Claude default is {policy['default_backend']!r}")
-    check("max_failovers" not in policy, "the Claude policy names the retired max_failovers key")
-    check(
-        policy.get("seats") == {
-            "design": "claude-designer",
-            "build": "claude",
-            "review": "claude",
-            "scout": "claude",
-            "classify": "claude",
-            "plan": "claude",
-            "edit": "claude",
-            "test-write": "claude",
-            "test-run": "claude",
-            "docs": "claude",
-            "verify": "claude",
-        },
-        f"the Claude seats are {policy.get('seats')}",
-    )
-    for seat, names in policy["seats"].items():
-        for name in names if isinstance(names, list) else [names]:
-            check(name in backends, f"the Claude {seat} seat names {name!r}, which is not a backend")
-    for name in ("claude", "claude-designer"):
-        entry = backends[name]
-        check(
-            entry["adapter"] == "tools/tillr-run/backends/claude/run-claude",
-            f"{name}: adapter is {entry['adapter']}",
-        )
-        check(entry.get("model") and entry.get("effort"), f"{name}: no model or no effort")
-    for name, entry in backends.items():
-        adapter = ROOT / entry["adapter"]
-        check(adapter.exists() and os.access(adapter, os.X_OK), f"{name}: {entry['adapter']} is not an executable")
-
-
-def test_claude_copilot_policy(policy):
-    """Claude on subscription for design, plan, review, verify and build;
-    Copilot for scout, classify, edit, test-write, test-run and docs.
-    """
-    check("about" in policy, "the Claude-Copilot policy does not say what it is")
-    check(
-        "operator's, not the owner's" in policy["about"],
-        "the Claude-Copilot policy's about text must state that the seat choices are the operator's, not the owner's",
-    )
-    backends = policy["backends"]
-    check(policy["default_backend"] == "claude", f"the Claude-Copilot default is {policy['default_backend']!r}")
-    check(
-        policy.get("seats") == {
-            "design": "claude-designer",
-            "build": "claude",
-            "review": "claude",
-            "scout": "pi-scout",
-            "classify": "pi-scout",
-            "plan": "claude",
-            "edit": "pi-build",
-            "test-write": "pi-build",
-            "test-run": "pi-scout",
-            "docs": "pi-build",
-            "verify": "claude",
-        },
-        f"the Claude-Copilot seats are {policy.get('seats')}",
-    )
-    for seat, names in policy["seats"].items():
-        for name in names if isinstance(names, list) else [names]:
-            check(name in backends, f"the Claude-Copilot {seat} seat names {name!r}, which is not a backend")
-    for name in ("claude", "claude-designer"):
-        entry = backends[name]
-        check(
-            entry["adapter"] == "tools/tillr-run/backends/claude/run-claude",
-            f"{name}: adapter is {entry['adapter']}",
-        )
-        check(entry.get("account") == "subscription", f"{name}: account is {entry.get('account')!r}, want 'subscription'")
-        check(entry.get("model") and entry.get("effort"), f"{name}: no model or no effort")
-    for name, entry in backends.items():
-        adapter = ROOT / entry["adapter"]
-        check(adapter.exists() and os.access(adapter, os.X_OK), f"{name}: {entry['adapter']} is not an executable")
 
 
 def test_preflight(workspace):

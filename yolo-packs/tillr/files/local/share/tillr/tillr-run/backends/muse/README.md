@@ -121,8 +121,8 @@ backend policy, and a lane staged as above. Then:
 ```
 tools/tillr-run/backends/muse/run-muse \
     --backend muse \
-    --model "$(jq -r '.backends.muse.model' config/tillr/backend-policy.or-carbon.json)" \
-    --effort "$(jq -r '.backends.muse.effort' config/tillr/backend-policy.or-carbon.json)" \
+    --model "$(jq -r '.backends.muse.model' config/tillr/backend-policy.json)" \
+    --effort "$(jq -r '.backends.muse.effort' config/tillr/backend-policy.json)" \
     --brief "$LANE/brief.md" --target "$LANE/worktree" \
     > "$LANE/<run-id>.log"
 ```

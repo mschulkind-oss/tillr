@@ -252,7 +252,7 @@ func TestTheDispatchRecordCarriesTheSeatAndTheBackendThatAnswered(t *testing.T) 
 // leaves out is an item refused for the policy's gap rather than for a bad request, which
 // is the failure the seat layer exists to make loud.
 func TestTheShippedPolicyMapsEverySeat(t *testing.T) {
-	raw, err := os.ReadFile("../../../config/tillr/backend-policy.or-carbon.json")
+	raw, err := os.ReadFile("../../../config/tillr/backend-policy.json")
 	if err != nil {
 		t.Fatalf("reading the shipped policy failed: %v", err)
 	}
@@ -419,82 +419,4 @@ func TestPlanHoldsAListedSeatOnItsFailedBackend(t *testing.T) {
 	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.DeferredBy != "designer-b" || got.RunRequest != nil {
 		t.Fatalf("want hold on designer-b, got %+v", got)
 	}
-}
-
-// The Claude-first policy is the one a drain on the work machine names with --policy to
-// spend the subscription. The Claude seats each name one backend using that adapter.
-func TestTheClaudePolicyLoadsWithSingleBackends(t *testing.T) {
-	var bedrock drain.Policy
-	if raw, err := os.ReadFile("../../../config/tillr/backend-policy.bedrock.json"); err != nil {
-		t.Fatalf("reading the Bedrock policy failed: %v", err)
-	} else if err := json.Unmarshal(raw, &bedrock); err != nil {
-		t.Fatalf("decoding the Bedrock policy failed: %v", err)
-	}
-	if err := bedrock.Check(); err != nil {
-		t.Fatalf("the Bedrock policy fails its own check: %v", err)
-	}
-	// An ordinary item names no seat, so its first dispatch is default_backend, not the build
-	// seat's backend. The owner's 2026-11-18 instruction puts build work on Terra, so the two
-	// must agree or the build seat is set and never reached.
-	if bedrock.DefaultBackend != bedrock.Seats[item.SeatBuild] {
-		t.Fatalf("the Bedrock policy's default_backend %q is not its build seat's backend %q: a seatless item would run off the build seat", bedrock.DefaultBackend, bedrock.Seats[item.SeatBuild])
-	}
-
-	raw, err := os.ReadFile("../../../config/tillr/backend-policy.claude.json")
-	if err != nil {
-		t.Fatalf("reading the Claude policy failed: %v", err)
-	}
-	var policy drain.Policy
-	if err := json.Unmarshal(raw, &policy); err != nil {
-		t.Fatalf("decoding the Claude policy failed: %v", err)
-	}
-	if err := policy.Check(); err != nil {
-		t.Fatalf("the Claude policy fails its own check: %v", err)
-	}
-	want := map[string]string{item.SeatDesign: "claude-designer", item.SeatBuild: "claude", item.SeatReview: "claude", item.SeatScout: "claude"}
-	for seat, backend := range want {
-		if policy.Seats[seat] != backend || len(policy.SeatLists[seat]) != 0 {
-			t.Fatalf("the Claude policy's %s seat is %q (%v), want only %q", seat, policy.Seats[seat], policy.SeatLists[seat], backend)
-		}
-	}
-	for _, name := range []string{"claude", "claude-designer"} {
-		if got := policy.Backends[name].Adapter; got != "tools/tillr-run/backends/claude/run-claude" {
-			t.Fatalf("the Claude policy's %s row names adapter %q", name, got)
-		}
-	}
-	if adapter := filepath.Join("..", "..", "..", policy.Backends["claude"].Adapter); !isExecutable(t, adapter) {
-		t.Fatalf("the claude adapter %s is not an executable file", adapter)
-	}
-
-	claudeCopilot, err := drain.LoadPolicy("../../../config/tillr/backend-policy.claude-copilot.json")
-	if err != nil {
-		t.Fatalf("loading the Claude-Copilot policy failed: %v", err)
-	}
-	for _, name := range []string{"claude", "claude-designer"} {
-		b := claudeCopilot.Backends[name]
-		if b.Account != "subscription" {
-			t.Fatalf("the Claude-Copilot policy's %s row has account %q, want subscription", name, b.Account)
-		}
-		req := b.Request("item_042", "lane-1", "run-1", name)
-		joined := strings.Join(req.Command, "\x00")
-		if !strings.Contains(joined, "--account\x00subscription") {
-			t.Fatalf("the Claude-Copilot policy's %s request %q omits --account subscription", name, req.Command)
-		}
-	}
-	for _, name := range []string{"pi", "pi-designer", "pi-build", "pi-scout"} {
-		b := claudeCopilot.Backends[name]
-		if b.Account != "" {
-			t.Fatalf("the Claude-Copilot policy's %s backend has account %q, want empty", name, b.Account)
-		}
-	}
-}
-
-// isExecutable answers whether path is a regular file with an execute bit.
-func isExecutable(t *testing.T, path string) bool {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
 }

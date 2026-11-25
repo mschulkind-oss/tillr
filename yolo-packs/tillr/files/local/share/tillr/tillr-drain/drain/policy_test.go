@@ -426,52 +426,11 @@ func TestPolicyStartingSeats(t *testing.T) {
 			if got, want := p.seatList("classify"), p.seatList("scout"); !slices.Equal(got, want) {
 				t.Errorf("classify mapped to %v, want scout backends %v", got, want)
 			}
-			switch filepath.Base(path) {
-			case "backend-policy.bedrock.json":
-				for seat, backend := range map[string]string{"plan": "pi", "verify": "pi", "edit": "pi-build", "test-write": "pi-build", "docs": "pi-build", "test-run": "pi-scout"} {
-					if got := p.seatList(seat); !slices.Equal(got, []string{backend}) {
-						t.Errorf("%s mapped to %v, want %s", seat, got, backend)
-					}
-				}
-				for _, seat := range p.seatNames() {
-					for _, backend := range p.seatList(seat) {
-						if backend == "pi-scout" && !readOnly[seat] {
-							t.Errorf("Luna assigned to writing seat %s", seat)
-						}
-					}
-				}
-			case "backend-policy.claude-copilot.json":
-				want := map[string][]string{
-					"design":     {"claude-designer"},
-					"build":      {"claude"},
-					"review":     {"claude"},
-					"plan":       {"claude"},
-					"verify":     {"claude"},
-					"edit":       {"pi-build"},
-					"test-write": {"pi-build"},
-					"docs":       {"pi-build"},
-					"scout":      {"pi-scout"},
-					"test-run":   {"pi-scout"},
-				}
-				for seat, list := range want {
-					if got := p.seatList(seat); !slices.Equal(got, list) {
-						t.Errorf("%s mapped to %v, want %v", seat, got, list)
-					}
-				}
-				for _, seat := range p.seatNames() {
-					for _, backend := range p.seatList(seat) {
-						if backend == "pi-scout" && !readOnly[seat] {
-							t.Errorf("pi-scout assigned to writing seat %s", seat)
-						}
-					}
-				}
-			default:
-				for seat, source := range map[string]string{"plan": "review", "verify": "review", "edit": "build", "test-write": "build", "docs": "build", "test-run": "scout"} {
-					_, seatIsList := p.SeatLists[seat]
-					_, sourceIsList := p.SeatLists[source]
-					if !slices.Equal(p.seatList(seat), p.seatList(source)) || seatIsList != sourceIsList {
-						t.Errorf("%s must copy %s including its list form", seat, source)
-					}
+			for seat, source := range map[string]string{"plan": "review", "verify": "review", "edit": "build", "test-write": "build", "docs": "build", "test-run": "scout"} {
+				_, seatIsList := p.SeatLists[seat]
+				_, sourceIsList := p.SeatLists[source]
+				if !slices.Equal(p.seatList(seat), p.seatList(source)) || seatIsList != sourceIsList {
+					t.Errorf("%s must copy %s including its list form", seat, source)
 				}
 			}
 		})

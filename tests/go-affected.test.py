@@ -264,7 +264,7 @@ def test_selection_rules(root_graph: dict) -> None:
             "github.com/mschulkind-oss/tillr-land",
             "github.com/mschulkind-oss/tillr-drain/drain",
         }),
-        ("config/tillr/backend-policy.or-carbon.json", {
+        ("config/tillr/backend-policy.json", {
             "github.com/mschulkind-oss/tillr-drain",
             "github.com/mschulkind-oss/tillr-drain/drain",
         }),
@@ -348,7 +348,7 @@ def test_selection_rules(root_graph: dict) -> None:
     assert by_pkg[gate_pkg]["selected_tests"] == gate_readers, by_pkg
 
     sel_unscoped = go_affected.select_affected_packages(
-        ROOT, [scoped_read, "config/tillr/backend-policy.or-carbon.json"], edges=scoped_edges, graph=root_graph
+        ROOT, [scoped_read, "config/tillr/backend-policy.json"], edges=scoped_edges, graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_unscoped["selected"]}
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg

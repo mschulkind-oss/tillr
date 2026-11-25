@@ -127,7 +127,7 @@ One line per step, with the program that owns it.
    ([stage.go](../../tools/tillr-drain/drain/stage.go)).
 4. **Run.** `tillr run exec` runs a worker session through the backend adapter the backend policy
    picks by seat ([exec.go](../../tools/tillr-run/run/exec.go),
-   [backend-policy.or-carbon.json](../../config/tillr/backend-policy.or-carbon.json)).
+   [backend-policy.json](../../config/tillr/backend-policy.json)).
 5. **Candidate.** A run whose lane head moved off its base is a candidate; one that did not is
    refused as `candidate-no-op`.
 6. **Boundary check.** Refs and worktrees outside the lane's own are snapshotted around the run

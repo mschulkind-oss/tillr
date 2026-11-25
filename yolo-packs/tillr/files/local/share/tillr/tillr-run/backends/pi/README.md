@@ -456,8 +456,8 @@ the backend policy, and a lane staged as above. Then:
 ```
 tools/tillr-run/backends/pi/run-pi \
     --backend pi \
-    --model "$(jq -r '.backends.pi.model' config/tillr/backend-policy.or-carbon.json)" \
-    --effort "$(jq -r '.backends.pi.effort' config/tillr/backend-policy.or-carbon.json)" \
+    --model "$(jq -r '.backends.pi.model' config/tillr/backend-policy.json)" \
+    --effort "$(jq -r '.backends.pi.effort' config/tillr/backend-policy.json)" \
     --brief "$LANE/brief.md" --target "$LANE/worktree" \
     > "$LANE/<run-id>.log"
 ```

@@ -35,23 +35,17 @@ commit the full suite has proved; before that ref exists, bootstrap with
 ## Running the loop
 
 A *backend policy* is the JSON file that says which adapter program and model fill each
-seat (the role a run plays: build, design, verify and so on). With no `--policy` the loop reads `config/tillr/backend-policy.json` in the repository it
-operates, and this repository ships no file at that path: every policy here is named for the
-models it uses. Pick the file under [`config/tillr`](config/tillr) that matches the
-credentials the machine has and name it with `--policy`:
-
-| File | Needs |
-| :--- | :--- |
-| `backend-policy.or-carbon.json` | pi with an OpenRouter key |
-| `backend-policy.bedrock.json` | pi with Amazon Bedrock access |
-| `backend-policy.gemini.json` | pi with a GitHub Copilot login |
-| `backend-policy.claude.json` | the `claude` program, and pi with Amazon Bedrock access |
-| `backend-policy.claude-copilot.json` | the `claude` program, and pi with a GitHub Copilot login |
+seat (the role a run plays: build, design, verify and so on). With no `--policy` the loop reads
+[`config/tillr/backend-policy.json`](config/tillr/backend-policy.json) in the repository it
+operates. The one here is an example with placeholder model names, so no run starts on it
+as shipped. Which model fills which seat is a personal choice, so keep your own policy
+outside the repository: copy the example, put in models your credentials reach, and name
+your copy with `--policy`.
 
 ```console
 $ export PATH="$YOLO_DURABLE_DIR/bin:$PATH"   # where `just tillr-build` puts the programs
 $ tillr store init --store .tillr/state.db
-$ just tillr-keep -- --policy config/tillr/backend-policy.bedrock.json --lanes 1
+$ just tillr-keep -- --policy ~/.config/tillr/my-policy.json --lanes 1
 ```
 
 `tillr drain probe-backend` checks one backend before the loop depends on it. The pi adapter

@@ -7,8 +7,7 @@ covers:
   - tools/tillr-run/backends/claude/
   - tools/tillr-run/run/request.go
   - tools/tillr-drain/drain/backend_availability.go
-  - config/tillr/backend-policy.claude.json
-  - config/tillr/backend-policy.claude-copilot.json
+  - config/tillr/backend-policy.json
 tags:
   - tillr
   - backend
@@ -42,7 +41,7 @@ waits for it.
 | Subscription quota command | `tools/tillr-run/backends/claude/quota` |
 | Harness arguments on a run request | `tools/tillr-run/run` (`harness_args`) |
 | Quota admission and the waiting view | [the drain's reference](../../tools/tillr-drain/README.md#backend-quota-admission) |
-| Policies that route seats here | [`config/tillr/backend-policy.claude.json`](../../config/tillr/backend-policy.claude.json), [`config/tillr/backend-policy.claude-copilot.json`](../../config/tillr/backend-policy.claude-copilot.json) |
+| Policies that route seats here | Any policy whose backend row names this adapter; the example [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) declares a `claude` row and maps no seat to it |
 
 Neither policy file sets `quota` or `reserve`; opting a row in is the owner's configuration
 choice.
@@ -86,15 +85,15 @@ Five facts the adapter rests on:
 ## Scratch drain measurements
 
 The dispatch-and-landing path is measured in a scratch clone with its own store and one small
-build item whose committed test fails before the work and passes after it. The loop runs the
-Claude-first policy with the real gate adapter and the real lander, and with rolling checks and
+build item whose committed test fails before the work and passes after it. The loop runs a
+policy that maps every seat to the claude adapter, with the real gate adapter and the real lander, and with rolling checks and
 base replay off, so it is not the repository's full landing gate. With `ROOT` naming the
-scratch clone, `STORE` its store, and `SCRATCH` a directory holding an executable `probe-gate`
+scratch clone, `STORE` its store, `POLICY` that policy file, and `SCRATCH` a directory holding an executable `probe-gate`
 that runs the item's test:
 
 ```sh
 tillr-drain loop --exit-when-drained --root "$ROOT" --store "$STORE" \
-  --policy config/tillr/backend-policy.claude.json --lanes 1 \
+  --policy "$POLICY" --lanes 1 \
   --gate "tools/tillr-loop/tillr-loop gate --root $ROOT --store $STORE --gate-program $SCRATCH/probe-gate" \
   --land "tools/tillr-loop/tillr-loop land --root $ROOT --store $STORE" \
   --verdict "tools/tillr-loop/tillr-loop verdict --root $ROOT --store $STORE" \

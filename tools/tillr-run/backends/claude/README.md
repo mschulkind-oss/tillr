@@ -206,8 +206,8 @@ describes. Then, from `$LANE/worktree`:
 ```
 tools/tillr-run/backends/claude/run-claude \
     --backend claude \
-    --model "$(jq -r '.backends.claude.model' config/tillr/backend-policy.claude.json)" \
-    --effort "$(jq -r '.backends.claude.effort' config/tillr/backend-policy.claude.json)" \
+    --model "$(jq -r '.backends.claude.model' config/tillr/backend-policy.json)" \
+    --effort "$(jq -r '.backends.claude.effort' config/tillr/backend-policy.json)" \
     --brief "$LANE/brief.md" --target "$LANE/worktree" \
     > "$LANE/<run-id>.log"
 ```

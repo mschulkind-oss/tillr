@@ -121,7 +121,7 @@ backend policy, and a lane staged as above. Then:
 ```
 tools/tillr-run/backends/agy/run-agy \
     --backend agy \
-    --model "$(jq -r '.backends["agy"].model' config/tillr/backend-policy.or-carbon.json)" \
+    --model "$(jq -r '.backends["agy"].model' config/tillr/backend-policy.json)" \
     --brief "$LANE/brief.md" --target "$LANE/worktree" \
     > "$LANE/<run-id>.log"
 ```
