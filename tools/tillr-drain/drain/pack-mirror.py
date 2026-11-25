@@ -110,18 +110,22 @@ def mirror_module(root, module):
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", str(source)],
         cwd=root,
     ).split(b"\0")
-    if dest.is_symlink() or dest.is_file():
-        dest.unlink()
-    elif dest.exists():
-        shutil.rmtree(dest)
-    dest.mkdir(parents=True)
+    live = []
     for raw in paths:
         if not raw:
             continue
         path = Path(os.fsdecode(raw))
         src = root / path
-        if not src.exists():  # A tracked file can already be deleted in the worktree.
-            continue
+        if src.exists():  # A tracked file can already be deleted in the worktree.
+            live.append((path, src))
+    if dest.is_symlink() or dest.is_file():
+        dest.unlink()
+    elif dest.exists():
+        shutil.rmtree(dest)
+    if not live:
+        return
+    dest.mkdir(parents=True)
+    for path, src in live:
         dst = dest / path.relative_to(source)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)

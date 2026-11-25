@@ -215,3 +215,212 @@ func TestPackMirrorFailureHoldsOnlyThatCandidate(t *testing.T) {
 		t.Fatalf("held candidate pin = %s, want worker commit %s", got, worker)
 	}
 }
+
+type packMirrorLandRecorder struct {
+	*countingJudgeSteps
+	landed func(Candidate)
+}
+
+func (s *packMirrorLandRecorder) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	if s.landed != nil {
+		s.landed(c)
+	}
+	return s.countingJudgeSteps.Land(ctx, c)
+}
+
+func TestPackMirrorDeletingLoopAdapterAndCopyLands(t *testing.T) {
+	ctx := context.Background()
+	f, l := passFixture(t, "item-a")
+	const (
+		adapterSource = "tools/tillr-loop/tillr-loop"
+		adapterMirror = tillrMirrorRoot + "tillr-loop/tillr-loop"
+		adapterReadme = tillrMirrorRoot + "tillr-loop/README.md"
+		drainSource   = "tools/tillr-drain/script"
+		drainMirror   = tillrMirrorRoot + "tillr-drain/script"
+	)
+	for path, body := range map[string]string{
+		"yolo-packs/tillr/pack.json": "{}\n",
+		adapterSource:                "#!/bin/sh\n",
+		adapterMirror:                "#!/bin/sh\n",
+		adapterReadme:                "snapshot\n",
+		drainSource:                  "old\n",
+		drainMirror:                  "old\n",
+	} {
+		writePackFixture(t, f.root, path, body)
+	}
+	runGit(t, f.root, "add", ".")
+	runGit(t, f.root, "commit", "-m", "pack fixture with loop adapter")
+	if err := l.resetLane(ctx, "lane-1"); err != nil {
+		t.Fatal(err)
+	}
+	stageFinishedCandidateOnLane(t, f, l, "item-a", "lane-1")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET allowed_paths = '["candidate.txt","tools/tillr-loop/","tools/tillr-drain/","yolo-packs/tillr/"]' WHERE item_id = 'item-a'`)
+		return err
+	})
+	lane := l.lanePath("lane-1")
+	writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), FenceFile), "candidate.txt\ntools/tillr-loop/\ntools/tillr-drain/\nyolo-packs/tillr/\n")
+	runGit(t, lane, "rm", adapterSource, adapterMirror)
+	writePackFixture(t, lane, drainSource, "new\n")
+	runGit(t, lane, "add", drainSource)
+	runGit(t, lane, "commit", "--amend", "--no-edit")
+
+	steps := &countingJudgeSteps{storePath: f.storePath}
+	var landedHead string
+	l.cfg.Steps = &packMirrorLandRecorder{
+		countingJudgeSteps: steps,
+		landed: func(c Candidate) {
+			landedHead = c.HeadSHA
+			if got := runGit(t, c.Worktree, "ls-tree", c.HeadSHA, adapterSource, adapterMirror); got != "" {
+				t.Errorf("deleted loop adapter still present in landed candidate: %q", got)
+			}
+			if got := runGit(t, c.Worktree, "show", c.HeadSHA+":"+adapterReadme); got != "snapshot" {
+				t.Errorf("loop adapter README was not preserved: %q", got)
+			}
+			if got := runGit(t, c.Worktree, "show", c.HeadSHA+":"+drainMirror); got != "new" {
+				t.Errorf("sibling module mirror was not regenerated: %q", got)
+			}
+		},
+	}
+
+	var result LoopResult
+	stop, err := l.pass(ctx, &result)
+	if err != nil || stop != "" {
+		t.Fatalf("pass failed: stop=%q err=%v", stop, err)
+	}
+	drainOwned(t, l, &result)
+	if result.Candidates != 1 || result.Landed != 1 || result.Rejected != 0 || steps.gates.Load() != 1 || steps.lands.Load() != 1 || steps.verdicts.Load() != 1 || landedHead == "" {
+		t.Fatalf("candidate deleting loop adapter and copy did not land: %+v (gates=%d lands=%d verdicts=%d head=%q)", result, steps.gates.Load(), steps.lands.Load(), steps.verdicts.Load(), landedHead)
+	}
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if len(faults) != 0 {
+			t.Fatalf("unexpected item faults: %+v", faults)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPackMirrorDeletingLoopAdapter(t *testing.T) {
+	const (
+		source = "tools/tillr-loop/tillr-loop"
+		mirror = tillrMirrorRoot + "tillr-loop/tillr-loop"
+		readme = tillrMirrorRoot + "tillr-loop/README.md"
+	)
+	setup := func(t *testing.T) (*Loop, string, string) {
+		t.Helper()
+		f, l := passFixture(t, "item-a")
+		for path, body := range map[string]string{
+			"yolo-packs/tillr/pack.json": "{}\n",
+			source:                       "#!/bin/sh\n",
+			mirror:                       "#!/bin/sh\n",
+			readme:                       "snapshot\n",
+		} {
+			writePackFixture(t, f.root, path, body)
+		}
+		runGit(t, f.root, "add", ".")
+		runGit(t, f.root, "commit", "-m", "pack fixture")
+		base := runGit(t, f.root, "rev-parse", "HEAD")
+		lane := l.laneTarget("lane-1")
+		runGit(t, lane, "reset", "--hard", base)
+		return l, lane, base
+	}
+
+	t.Run("both deleted", func(t *testing.T) {
+		l, lane, base := setup(t)
+		runGit(t, lane, "rm", source, mirror)
+		runGit(t, lane, "commit", "-m", "remove adapter and mirror")
+		c := Candidate{Worktree: lane, BaseSHA: base, HeadSHA: runGit(t, lane, "rev-parse", "HEAD")}
+		changed, err := l.stagePackMirror(context.Background(), c)
+		if err != nil || changed {
+			t.Fatalf("stagePackMirror = (%v, %v), want (false, nil)", changed, err)
+		}
+		if got := runGit(t, lane, "status", "--porcelain"); got != "" {
+			t.Fatalf("worktree not clean after deleting adapter and mirror: %q", got)
+		}
+	})
+
+	t.Run("copy left behind", func(t *testing.T) {
+		l, lane, base := setup(t)
+		runGit(t, lane, "rm", source)
+		runGit(t, lane, "commit", "-m", "remove adapter only")
+		c := Candidate{Worktree: lane, BaseSHA: base, HeadSHA: runGit(t, lane, "rev-parse", "HEAD")}
+		changed, err := l.stagePackMirror(context.Background(), c)
+		if err != nil || !changed {
+			t.Fatalf("stagePackMirror = (%v, %v), want (true, nil)", changed, err)
+		}
+		if got := runGit(t, lane, "diff", "--cached", "--name-status"); got != "D\t"+mirror {
+			t.Fatalf("staged diff = %q, want deletion of %s", got, mirror)
+		}
+		if _, err := os.Lstat(filepath.Join(lane, mirror)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("mirror copy still exists on disk: %v", err)
+		}
+		if got := runGit(t, lane, "ls-files", "--", readme); got != readme {
+			t.Fatalf("loop README should remain tracked: %q", got)
+		}
+	})
+}
+
+func TestPackMirrorDeletingWholeModuleDirectory(t *testing.T) {
+	const (
+		source = "tools/tillr-roll/script.py"
+		mirror = tillrMirrorRoot + "tillr-roll/script.py"
+		dir    = tillrMirrorRoot + "tillr-roll"
+	)
+	setup := func(t *testing.T) (*Loop, string, string) {
+		t.Helper()
+		f, l := passFixture(t, "item-a")
+		for path, body := range map[string]string{
+			"yolo-packs/tillr/pack.json": "{}\n",
+			source:                       "print('hi')\n",
+			mirror:                       "print('hi')\n",
+		} {
+			writePackFixture(t, f.root, path, body)
+		}
+		runGit(t, f.root, "add", ".")
+		runGit(t, f.root, "commit", "-m", "pack fixture")
+		base := runGit(t, f.root, "rev-parse", "HEAD")
+		lane := l.laneTarget("lane-1")
+		runGit(t, lane, "reset", "--hard", base)
+		return l, lane, base
+	}
+
+	t.Run("both deleted", func(t *testing.T) {
+		l, lane, base := setup(t)
+		runGit(t, lane, "rm", source, mirror)
+		runGit(t, lane, "commit", "-m", "remove module and mirror")
+		c := Candidate{Worktree: lane, BaseSHA: base, HeadSHA: runGit(t, lane, "rev-parse", "HEAD")}
+		changed, err := l.stagePackMirror(context.Background(), c)
+		if err != nil || changed {
+			t.Fatalf("stagePackMirror = (%v, %v), want (false, nil)", changed, err)
+		}
+		if _, err := os.Lstat(filepath.Join(lane, dir)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("deleted module mirror directory should not be recreated: %v", err)
+		}
+		if got := runGit(t, lane, "status", "--porcelain"); got != "" {
+			t.Fatalf("worktree not clean after deleting module and mirror: %q", got)
+		}
+	})
+
+	t.Run("copy left behind", func(t *testing.T) {
+		l, lane, base := setup(t)
+		runGit(t, lane, "rm", source)
+		runGit(t, lane, "commit", "-m", "remove module only")
+		c := Candidate{Worktree: lane, BaseSHA: base, HeadSHA: runGit(t, lane, "rev-parse", "HEAD")}
+		changed, err := l.stagePackMirror(context.Background(), c)
+		if err != nil || !changed {
+			t.Fatalf("stagePackMirror = (%v, %v), want (true, nil)", changed, err)
+		}
+		if got := runGit(t, lane, "diff", "--cached", "--name-status"); got != "D\t"+mirror {
+			t.Fatalf("staged diff = %q, want deletion of %s", got, mirror)
+		}
+		if _, err := os.Lstat(filepath.Join(lane, dir)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("deleted module mirror directory should not remain on disk: %v", err)
+		}
+	})
+}

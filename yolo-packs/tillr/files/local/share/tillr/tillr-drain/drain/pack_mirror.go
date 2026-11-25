@@ -3,7 +3,10 @@ package drain
 import (
 	"context"
 	_ "embed"
+	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -77,9 +80,40 @@ func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
 	} else if out != "" {
 		return false, Externalf("pack-sync changed paths outside the selected mirrors: %s", strings.TrimSpace(out))
 	}
-	if _, err := l.git(ctx, c.Worktree, append([]string{"add", "--all", "--force", "--"}, destinations...)...); err != nil {
+	var toStage []string
+	for _, dst := range destinations {
+		exists, err := l.packMirrorDestinationExists(ctx, c.Worktree, dst)
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			toStage = append(toStage, dst)
+		}
+	}
+	if len(toStage) == 0 {
+		return false, nil
+	}
+	if _, err := l.git(ctx, c.Worktree, append([]string{"add", "--all", "--force", "--"}, toStage...)...); err != nil {
 		return false, err
 	}
 	changed, err := l.git(ctx, c.Worktree, "diff", "--cached", "--name-only")
 	return changed != "", err
+}
+
+// packMirrorDestinationExists reports whether dst is present in the worktree or the index.
+// A deleted program whose mirror is already gone exists in neither and must not be passed
+// to git add, which rejects an unmatched pathspec.
+func (l *Loop) packMirrorDestinationExists(ctx context.Context, worktree, dst string) (bool, error) {
+	_, err := os.Lstat(filepath.Join(worktree, filepath.FromSlash(dst)))
+	if err == nil {
+		return true, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	indexed, err := l.git(ctx, worktree, "ls-files", "-z", "--", dst)
+	if err != nil {
+		return false, err
+	}
+	return indexed != "", nil
 }
