@@ -2,6 +2,8 @@ package drain
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -76,11 +78,13 @@ func (l *Loop) readIdleStoreFingerprint(ctx context.Context, afterSeq int64) (
 	maxFinishedAt int64,
 	hasDesignDocs bool,
 	windows map[string]time.Time,
+	rollingWatermark string,
+	rollingLastRunAt time.Time,
 	err error,
 ) {
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
-		return 0, false, nil, 0, 0, 0, false, nil, err
+		return 0, false, nil, 0, 0, 0, false, nil, "", time.Time{}, err
 	}
 	defer s.Close()
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
@@ -152,10 +156,18 @@ func (l *Loop) readIdleStoreFingerprint(ctx context.Context, afterSeq int64) (
 			if qErr != nil {
 				return qErr
 			}
+			var lastRunMS int64
+			qErr = r.QueryRow(`SELECT watermark_sha, last_run_at FROM rolling_state WHERE id = 1`).Scan(&rollingWatermark, &lastRunMS)
+			if qErr != nil && !errors.Is(qErr, sql.ErrNoRows) {
+				return qErr
+			}
+			if lastRunMS > 0 {
+				rollingLastRunAt = time.UnixMilli(lastRunMS).UTC()
+			}
 		}
 		return nil
 	})
-	return latestSeq, nonTelemetryEvent, states, leasedLanes, runCount, maxFinishedAt, hasDesignDocs, windows, err
+	return latestSeq, nonTelemetryEvent, states, leasedLanes, runCount, maxFinishedAt, hasDesignDocs, windows, rollingWatermark, rollingLastRunAt, err
 }
 
 func (l *Loop) readIdleRefs(ctx context.Context) (trunkSHA, greenSHA string, ok bool) {
@@ -187,7 +199,7 @@ func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.T
 		l.activeCount() > 0 || l.heavyInFlight() || l.infrastructureStreak() > 0 || l.hasStageFaults() {
 		return nil
 	}
-	head, _, states, leasedLanes, runCount, maxFinishedAt, hasDesignDocs, windows, err := l.readIdleStoreFingerprint(ctx, -1)
+	head, _, states, leasedLanes, runCount, maxFinishedAt, hasDesignDocs, windows, rollingWatermark, rollingLastRunAt, err := l.readIdleStoreFingerprint(ctx, -1)
 	if err != nil {
 		return nil
 	}
@@ -219,6 +231,17 @@ func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.T
 				nextExpiry = probeAt
 			}
 			break
+		}
+	}
+	if !l.nonLanding && l.gatePolicy.LandingStrategy != "after-merge" && trunkSHA != "" {
+		if step, ok := l.cfg.Steps.(RollingStep); ok && step.RollingConfigured() && rollingWatermark != trunkSHA {
+			if rollingLastRunAt.IsZero() {
+				return nil
+			}
+			rollingAt := rollingLastRunAt.Add(RollingEvery)
+			if nextExpiry.IsZero() || rollingAt.Before(nextExpiry) {
+				nextExpiry = rollingAt
+			}
 		}
 	}
 
@@ -266,7 +289,7 @@ func (l *Loop) idleUnchanged(ctx context.Context, at time.Time, pendingOnly bool
 	if trunkSHA, greenSHA, ok := l.readIdleRefs(ctx); !ok || trunkSHA != idle.trunkSHA || greenSHA != idle.greenSHA {
 		return false
 	}
-	latestSeq, nonTelemetry, states, leasedLanes, runCount, maxFinishedAt, _, _, err := l.readIdleStoreFingerprint(ctx, idle.eventSeq)
+	latestSeq, nonTelemetry, states, leasedLanes, runCount, maxFinishedAt, _, _, _, _, err := l.readIdleStoreFingerprint(ctx, idle.eventSeq)
 	if err != nil || nonTelemetry {
 		return false
 	}

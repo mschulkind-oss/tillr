@@ -293,3 +293,61 @@ func TestIdleLoopRunDoesNotReplanUntilChange(t *testing.T) {
 		t.Fatal("timed out waiting for Loop.Run to stop")
 	}
 }
+
+func TestIdleLoopWithHeldItemsRunsRollingCheckOnIntervalAndTrunkMove(t *testing.T) {
+	f, l := passFixture(t, "held-a", "held-b")
+	steps := &unknownDocumentRollingSteps{}
+	l.cfg.Steps = steps
+	l.cfg.ExitWhenDrained = false
+	l.cfg.NoNotify = true
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = ?`, StateBlocked)
+		return err
+	})
+	at := l.cfg.Now()
+	l.cfg.Now = func() time.Time { return at }
+	l.triggerTimer = func(time.Duration) (<-chan time.Time, func()) {
+		ch := make(chan time.Time, 1)
+		ch <- at
+		return ch, func() {}
+	}
+
+	var planCalls atomic.Int64
+	planDefinitionCalls.Store(&planCalls)
+	t.Cleanup(func() { planDefinitionCalls.Store(nil) })
+
+	var result LoopResult
+	pass := func(wantRolling int, wantPlan int64) {
+		t.Helper()
+		if stop, err := l.pass(context.Background(), &result); err != nil || stop != "" {
+			t.Fatalf("idle pass: %s / %v", stop, err)
+		}
+		if steps.rollingCalls != wantRolling {
+			t.Fatalf("rolling checks = %d, want %d", steps.rollingCalls, wantRolling)
+		}
+		if got := planCalls.Load(); got != wantPlan {
+			t.Fatalf("planDefinition calls = %d, want %d", got, wantPlan)
+		}
+	}
+
+	// First pass runs the rolling check and plans once, then idle polls skip both.
+	pass(1, 1)
+	pass(1, 1)
+	pass(1, 1)
+
+	// Advancing by RollingEvery runs the rolling check once, then skips polls between.
+	at = at.Add(RollingEvery)
+	pass(2, 2)
+	pass(2, 2)
+	pass(2, 2)
+
+	// Advancing again runs the rolling check once more, then skips polls between.
+	at = at.Add(RollingEvery)
+	pass(3, 3)
+	pass(3, 3)
+
+	// Moving the trunk tip runs the rolling check once, then skips polls between.
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "new tip while idle")
+	pass(4, 4)
+	pass(4, 4)
+}
