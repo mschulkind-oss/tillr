@@ -76,7 +76,10 @@ func (p Pattern) Matches(path, root string) bool {
 		}
 		return true
 	}
-	return path == p.Path || (strings.HasSuffix(p.Path, "/") && strings.HasPrefix(path, p.Path))
+	if p.Path == "" || strings.HasPrefix(p.Path, "!") {
+		return false
+	}
+	return coversPath([]string{p.Path}, path)
 }
 
 // Declaration is one check as the gate declares it: what selects it, and the command and
@@ -195,8 +198,17 @@ func (r *Registry) Plan(changed []string, root string) []Check {
 
 // selectedPaths is the changed paths a declaration's patterns select, sorted.
 func selectedPaths(selects []Pattern, changed []string, root string) []string {
+	var exclusions []string
+	for _, pattern := range selects {
+		if strings.HasPrefix(pattern.Path, "!") {
+			exclusions = append(exclusions, pattern.Path[1:])
+		}
+	}
 	var selected []string
 	for _, path := range changed {
+		if len(exclusions) != 0 && coversPath(exclusions, path) {
+			continue
+		}
 		for _, pattern := range selects {
 			if pattern.Matches(path, root) {
 				selected = append(selected, path)

@@ -226,4 +226,20 @@ func TestFileDeclarationsRejectInvalidValuesAndDuplicateIDs(t *testing.T) {
 	if code != 4 || !strings.Contains(string(out), "two.json") || !strings.Contains(string(out), "id") {
 		t.Fatalf("duplicate id exit %d: %s", code, out)
 	}
+	for name, reads := range map[string][]string{
+		"empty-exclusion": {"src/", "!"},
+		"invalid-glob":    {"src/", "!src/["},
+		"exclusion-only":  {"!src/README.md"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := scratch(t, name)
+			decl := fileDeclaration()
+			decl["reads"] = reads
+			putDeclaration(t, d, "invalid.json", decl)
+			code, out := filePlan(t, d, []string{"src/file"})
+			if code != 4 || !strings.Contains(string(out), "invalid.json") || !strings.Contains(string(out), "reads") {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+		})
+	}
 }

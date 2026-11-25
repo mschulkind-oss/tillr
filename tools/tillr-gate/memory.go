@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -57,17 +58,106 @@ func readTreeInputs(root, tree string) ([]treeInput, error) {
 	return inputs, nil
 }
 
-func coversPath(reads []string, path string) bool {
+func parseReadRule(raw string) (pattern string, exclude, isDir bool) {
+	if strings.HasPrefix(raw, "!") {
+		exclude = true
+		raw = raw[1:]
+	}
+	slashed := filepath.ToSlash(raw)
+	isDir = strings.HasSuffix(slashed, "/")
+	pattern = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(raw)), "./")
+	return pattern, exclude, isDir
+}
+
+func validateReadRule(raw string) error {
+	if strings.HasPrefix(raw, "!") && strings.TrimSpace(raw[1:]) == "" {
+		return fmt.Errorf("exclusion has an empty pattern")
+	}
+	pattern, _, _ := parseReadRule(raw)
+	if strings.ContainsAny(pattern, "*?[") {
+		for _, seg := range strings.Split(pattern, "/") {
+			if seg == "**" {
+				continue
+			}
+			if _, err := path.Match(seg, ""); err != nil {
+				return fmt.Errorf("pattern %q: %w", raw, err)
+			}
+		}
+	}
+	return nil
+}
+
+func matchGlobSegments(pSegs, nSegs []string) bool {
+	if len(pSegs) == 0 {
+		return len(nSegs) == 0
+	}
+	if pSegs[0] == "**" {
+		for len(pSegs) > 1 && pSegs[1] == "**" {
+			pSegs = pSegs[1:]
+		}
+		if len(pSegs) == 1 {
+			return true
+		}
+		for i := 0; i <= len(nSegs); i++ {
+			if matchGlobSegments(pSegs[1:], nSegs[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(nSegs) == 0 {
+		return false
+	}
+	ok, err := path.Match(pSegs[0], nSegs[0])
+	if err != nil || !ok {
+		return false
+	}
+	return matchGlobSegments(pSegs[1:], nSegs[1:])
+}
+
+func matchReadRule(pattern string, isDir bool, target string) bool {
+	if pattern == "." {
+		return true
+	}
+	if strings.ContainsAny(pattern, "*?[") {
+		pSegs := strings.Split(pattern, "/")
+		nSegs := strings.Split(target, "/")
+		if matchGlobSegments(pSegs, nSegs) {
+			return true
+		}
+		if isDir {
+			return matchGlobSegments(append(pSegs, "**"), nSegs)
+		}
+		return false
+	}
+	return target == pattern || strings.HasPrefix(target, pattern+"/")
+}
+
+func coversPath(reads []string, target string) bool {
 	if len(reads) == 0 {
 		return true
 	}
-	for _, read := range reads {
-		read = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(read)), "./")
-		if read == "." || path == read || strings.HasPrefix(path, read+"/") {
-			return true
+	if target != "" {
+		target = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(target)), "./")
+	}
+	included := false
+	for _, raw := range reads {
+		pattern, exclude, isDir := parseReadRule(raw)
+		if !exclude && matchReadRule(pattern, isDir, target) {
+			included = true
+			break
 		}
 	}
-	return false
+	if !included {
+		return false
+	}
+	for _, raw := range reads {
+		pattern, exclude, isDir := parseReadRule(raw)
+		if exclude && matchReadRule(pattern, isDir, target) {
+			return false
+		}
+	}
+	return true
 }
 
 // The declaration digest carries the original declaration's exact bytes through a

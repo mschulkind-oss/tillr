@@ -165,5 +165,19 @@ func (file checkFile) validate() error {
 			}
 		}
 	}
+	if len(file.Reads) > 0 {
+		included := 0
+		for _, value := range file.Reads {
+			if err := validateReadRule(value); err != nil {
+				return fmt.Errorf("reads %v", err)
+			}
+			if !strings.HasPrefix(value, "!") {
+				included++
+			}
+		}
+		if included == 0 {
+			return fmt.Errorf("reads exclusions require at least one included path")
+		}
+	}
 	return nil
 }

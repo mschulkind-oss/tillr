@@ -665,3 +665,72 @@ func TestMemoryRerunAfterFailKeepsFailingLogRef(t *testing.T) {
 		}
 	})
 }
+
+func TestCoversPathExclusions(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reads []string
+		path  string
+		want  bool
+	}{
+		{"included file", []string{"tools/tillr/", "!tools/tillr/**/*.md"}, "tools/tillr/main.go", true},
+		{"excluded top md", []string{"tools/tillr/", "!tools/tillr/**/*.md"}, "tools/tillr/README.md", false},
+		{"excluded nested md", []string{"tools/tillr/", "!tools/tillr/**/*.md"}, "tools/tillr/docs/guide.md", false},
+		{"excluded single-level md", []string{"tools/tillr/", "!tools/tillr/*.md"}, "tools/tillr/README.md", false},
+		{"included nested md when single-level excluded", []string{"tools/tillr/", "!tools/tillr/*.md"}, "tools/tillr/docs/guide.md", true},
+		{"excluded exact file", []string{"tools/tillr/", "!tools/tillr/README.md"}, "tools/tillr/README.md", false},
+		{"excluded subdir", []string{"tools/tillr/", "!tools/tillr/docs/"}, "tools/tillr/docs/guide.md", false},
+		{"whole tree with exclusion", []string{".", "!docs/"}, "docs/guide.md", false},
+		{"whole tree non-excluded", []string{".", "!docs/"}, "tools/tillr/main.go", true},
+		{"exclusion before inclusion", []string{"!tools/tillr/**/*.md", "tools/tillr/"}, "tools/tillr/README.md", false},
+		{"exclusion only matches nothing", []string{"!tools/tillr/README.md"}, "tools/tillr/main.go", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := coversPath(tc.reads, tc.path); got != tc.want {
+				t.Fatalf("coversPath(%v, %q) = %t, want %t", tc.reads, tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMemoryExclusionFingerprintAndReuse(t *testing.T) {
+	root, tree1 := memoryRepo(t)
+	memoryWrite(t, filepath.Join(root, "input/README.md"), "# One\n")
+	memoryWrite(t, filepath.Join(root, "input/docs/guide.md"), "# Guide\n")
+	memoryGit(t, root, "add", ".")
+	memoryGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "with docs")
+	tree1 = memoryGit(t, root, "rev-parse", "HEAD^{tree}")
+
+	marker := filepath.Join(t.TempDir(), "marker")
+	check := PlanCheck{
+		CheckID: "tree-check",
+		Scope:   "tree",
+		Reads:   []string{"input/", "!input/**/*.md"},
+		Command: []string{"sh", "-c", "echo ran >> '" + marker + "'"},
+	}
+
+	first, err := memoryRun(t, root, tree1, check)
+	if err != nil || first.Result != ResultPass || first.Memory != "passed" {
+		t.Fatalf("first: %+v %v", first, err)
+	}
+
+	// Changing only excluded Markdown files keeps the same fingerprint and reuses the pass.
+	memoryWrite(t, filepath.Join(root, "input/README.md"), "# Two\n")
+	memoryWrite(t, filepath.Join(root, "input/docs/guide.md"), "# Guide Two\n")
+	memoryGit(t, root, "add", ".")
+	tree2 := memoryGit(t, root, "write-tree")
+	memoryGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "docs only")
+	tree2 = memoryGit(t, root, "rev-parse", "HEAD^{tree}")
+
+	// Even a dirty excluded file in the worktree does not make the check unbound.
+	memoryWrite(t, filepath.Join(root, "input/README.md"), "# Dirty\n")
+
+	second, err := memoryRun(t, root, tree2, check)
+	if err != nil || second.Result != ResultPass || second.Memory != "remembered" || second.PassTime != first.PassTime {
+		t.Fatalf("second: %+v %v", second, err)
+	}
+	raw, _ := os.ReadFile(marker)
+	if string(raw) != "ran\n" {
+		t.Fatalf("remembered check ran again: %q", raw)
+	}
+}

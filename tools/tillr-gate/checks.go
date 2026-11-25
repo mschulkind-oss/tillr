@@ -37,12 +37,27 @@ func selectHeavyDeclarations(reg *Registry, only string) error {
 // readsChanged compares declared reads (not writes or selection triggers) to the
 // candidate. A dynamic read is the set of paths matched by the declaration's selects.
 func readsChanged(check Declaration, paths []string, root string) bool {
+	var reads []string
+	var patterns []Pattern
 	for _, read := range check.Watches {
-		if read.Paths && len(selectedPaths(check.Selects, paths, root)) != 0 {
+		if read.Paths {
+			if len(selectedPaths(check.Selects, paths, root)) != 0 {
+				return true
+			}
+			continue
+		}
+		if read.Path != "" {
+			reads = append(reads, read.Path)
+		} else {
+			patterns = append(patterns, read)
+		}
+	}
+	for _, path := range paths {
+		if len(reads) != 0 && coversPath(reads, path) {
 			return true
 		}
-		for _, path := range paths {
-			if read.Path != "" && coversPath([]string{read.Path}, path) || read.Matches(path, root) {
+		for _, pattern := range patterns {
+			if pattern.Matches(path, root) {
 				return true
 			}
 		}
