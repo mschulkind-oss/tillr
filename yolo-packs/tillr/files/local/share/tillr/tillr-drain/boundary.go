@@ -27,6 +27,11 @@ func boundaryFace(args []string) int {
 	if len(args) == 0 {
 		return fail(drain.Usagef("boundary needs a face: snapshot or check"))
 	}
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+		boundarySnapshotFace([]string{"--help"})
+		boundaryCheckFace([]string{"--help"})
+		return record.ExitOK
+	}
 	switch face, rest := args[0], args[1:]; face {
 	case "snapshot":
 		return boundarySnapshotFace(rest)
