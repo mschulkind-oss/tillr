@@ -318,3 +318,69 @@ func TestReadFlockTableAtomicUnderConcurrentLockChurn(t *testing.T) {
 		}
 	}
 }
+
+func TestInspectTestSlotsWaitersStableUnderConcurrentLockChurn(t *testing.T) {
+	dir := t.TempDir()
+	churnFiles := make([]string, 64)
+	for i := range churnFiles {
+		churnFiles[i] = filepath.Join(dir, fmt.Sprintf("churn-%d.lock", i))
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		held := make([]*os.File, len(churnFiles))
+		defer func() {
+			for _, f := range held {
+				if f != nil {
+					_ = f.Close()
+				}
+			}
+		}()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			for i, p := range churnFiles {
+				f, err := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0o644)
+				if err == nil {
+					_ = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+					held[i] = f
+				}
+			}
+			for i, f := range held {
+				if f != nil {
+					_ = f.Close()
+					held[i] = nil
+				}
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-done
+	}()
+
+	lockDir := filepath.Join(dir, "pool")
+	slot0 := holdFlockFile(t, filepath.Join(lockDir, "slot-0.lock"), syscall.LOCK_EX)
+	_ = holdFlockFile(t, filepath.Join(lockDir, "slot-1.lock"), syscall.LOCK_EX)
+	_ = holdFlockFile(t, filepath.Join(lockDir, "gate-0.lock"), syscall.LOCK_EX)
+	proof0 := holdFlockFile(t, filepath.Join(lockDir, "proof-0.lock"), syscall.LOCK_EX)
+	_ = holdFlockFile(t, filepath.Join(lockDir, "wait-rules", "v2", "wait-queue", "01-00000000000000000001-0000000001-00000000000000000001-00000001-sp.wait"), syscall.LOCK_SH)
+	_ = holdFlockFile(t, filepath.Join(lockDir, "wait-rules", "v2", "proof-waiting.lock"), syscall.LOCK_SH)
+	_ = slot0.Close()
+	_ = proof0.Close()
+	limits := TestSlotsLimits{Ordinary: 2, Gate: 1, Proof: 1}
+
+	for iter := range 200 {
+		snap, err := inspectTestSlots(lockDir, limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snap.TotalSlots != 4 || snap.FreeSlots != 2 || snap.EligibleFreeSlots != 2 || snap.Waiters != 1 {
+			t.Fatalf("iter %d: concurrent lock churn distorted snapshot: got %+v, want total=4 free=2 eligible=2 waiters=1", iter, snap)
+		}
+	}
+}

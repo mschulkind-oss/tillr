@@ -3,33 +3,35 @@
 package drain
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 )
 
 const defaultGateReservedCap = 4
 
-type waiterTicketInode struct {
-	ino   uint64
+type waiterTicket struct {
+	held  bool
 	class string
 	pools string
 }
 
-type waiterClassLockInode struct {
-	ino   uint64
+type waiterClassLock struct {
+	held  bool
 	class string
 }
 
 type waiterNamespaceScan struct {
-	tickets    []waiterTicketInode
-	classLocks []waiterClassLockInode
+	tickets    []waiterTicket
+	classLocks []waiterClassLock
+}
+
+type slotPoolCounts struct {
+	existing int
+	held     int
 }
 
 func inspectTestSlots(lockDir string, limits TestSlotsLimits) (testSlotsSnapshot, error) {
@@ -69,60 +71,29 @@ func inspectTestSlots(lockDir string, limits TestSlotsLimits) (testSlotsSnapshot
 		return testSlotsSnapshot{}, nil
 	}
 
-	slotInodes := map[byte][]uint64{
-		's': statPoolInodes(lockDir, "slot", limits.Ordinary),
-		'p': statPoolInodes(lockDir, "proof", limits.Proof),
-		'g': statPoolInodes(lockDir, "gate", limits.Gate),
+	poolCounts := map[byte]slotPoolCounts{
+		's': probePoolSlots(lockDir, "slot", limits.Ordinary),
+		'p': probePoolSlots(lockDir, "proof", limits.Proof),
+		'g': probePoolSlots(lockDir, "gate", limits.Gate),
 	}
 
-	writeHeld, readHolders, err := readFlockTableOnce()
-	if err != nil {
-		return testSlotsSnapshot{}, err
-	}
-	snap := summarizeTestSlots(namespaces, slotInodes, limits, writeHeld, readHolders)
-	if snap.Waiters > 0 && snap.EligibleFreeSlots > 0 {
-		// /proc/locks is a seq_file read in 4 KiB pages; concurrent unlocks earlier
-		// in the kernel lock list can shift *ppos across a page boundary and omit a
-		// held slot on a single scan. Confirm free slots across 3 additional scans.
-		for range 3 {
-			w, _, scanErr := readFlockTableOnce()
-			if scanErr != nil {
-				return testSlotsSnapshot{}, scanErr
-			}
-			for ino := range w {
-				writeHeld[ino] = true
-			}
-			snap = summarizeTestSlots(namespaces, slotInodes, limits, writeHeld, readHolders)
-			if snap.EligibleFreeSlots == 0 {
-				break
-			}
-		}
-	}
-	return snap, nil
+	return summarizeTestSlots(namespaces, poolCounts, limits), nil
 }
 
 func summarizeTestSlots(
 	namespaces []waiterNamespaceScan,
-	slotInodes map[byte][]uint64,
+	poolCounts map[byte]slotPoolCounts,
 	limits TestSlotsLimits,
-	writeHeld map[uint64]bool,
-	readHolders map[uint64]int,
 ) testSlotsSnapshot {
 	capByPool := map[byte]int{}
 	heldByPool := map[byte]int{}
 	freeByPool := map[byte]int{}
-	totalExisting := len(slotInodes['s']) + len(slotInodes['p']) + len(slotInodes['g'])
+	totalExisting := poolCounts['s'].existing + poolCounts['p'].existing + poolCounts['g'].existing
 	if totalExisting > 0 {
 		for _, pool := range []byte{'s', 'p', 'g'} {
-			capByPool[pool] = len(slotInodes[pool])
-			held := 0
-			for _, ino := range slotInodes[pool] {
-				if writeHeld[ino] {
-					held++
-				}
-			}
-			heldByPool[pool] = held
-			freeByPool[pool] = capByPool[pool] - held
+			capByPool[pool] = poolCounts[pool].existing
+			heldByPool[pool] = poolCounts[pool].held
+			freeByPool[pool] = capByPool[pool] - heldByPool[pool]
 		}
 	} else {
 		capByPool['s'] = max(0, limits.Ordinary)
@@ -138,7 +109,7 @@ func summarizeTestSlots(
 	for _, ns := range namespaces {
 		classTickets := map[string]int{}
 		for _, ticket := range ns.tickets {
-			if readHolders[ticket.ino] <= 0 {
+			if !ticket.held {
 				continue
 			}
 			waiters++
@@ -150,12 +121,10 @@ func summarizeTestSlots(
 			}
 		}
 		for _, cl := range ns.classLocks {
-			holders := readHolders[cl.ino]
-			if holders <= classTickets[cl.class] {
+			if !cl.held || classTickets[cl.class] > 0 {
 				continue
 			}
-			excess := holders - classTickets[cl.class]
-			waiters += excess
+			waiters++
 			pools := classFallbackPools(cl.class, heldByPool['g'])
 			for i := 0; i < len(pools); i++ {
 				eligiblePools[pools[i]] = true
@@ -187,13 +156,13 @@ func scanWaiterNamespace(nsDir string) (waiterNamespaceScan, error) {
 			if entry.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".wait") {
 				continue
 			}
-			ino, ok := statInode(filepath.Join(queueDir, name))
-			if !ok {
+			exists, held := probeFlockHeld(filepath.Join(queueDir, name), syscall.LOCK_EX)
+			if !exists {
 				continue
 			}
 			class, pools := parseWaitTicketName(name)
-			out.tickets = append(out.tickets, waiterTicketInode{
-				ino:   ino,
+			out.tickets = append(out.tickets, waiterTicket{
+				held:  held,
 				class: class,
 				pools: pools,
 			})
@@ -210,9 +179,9 @@ func scanWaiterNamespace(nsDir string) (waiterNamespaceScan, error) {
 		{"proof-waiting.lock", "proof"},
 		{"gate-waiting.lock", "gate"},
 	} {
-		if ino, ok := statInode(filepath.Join(nsDir, item.file)); ok {
-			out.classLocks = append(out.classLocks, waiterClassLockInode{
-				ino:   ino,
+		if exists, held := probeFlockHeld(filepath.Join(nsDir, item.file), syscall.LOCK_EX); exists {
+			out.classLocks = append(out.classLocks, waiterClassLock{
+				held:  held,
 				class: item.class,
 			})
 		}
@@ -267,86 +236,37 @@ func classFallbackPools(class string, heldGate int) string {
 	}
 }
 
-func statPoolInodes(lockDir, prefix string, limit int) []uint64 {
-	if limit <= 0 {
-		return nil
-	}
-	var inodes []uint64
+func probePoolSlots(lockDir, prefix string, limit int) slotPoolCounts {
+	var counts slotPoolCounts
 	for i := 0; i < limit; i++ {
 		path := filepath.Join(lockDir, fmt.Sprintf("%s-%d.lock", prefix, i))
-		if ino, ok := statInode(path); ok {
-			inodes = append(inodes, ino)
+		exists, held := probeFlockHeld(path, syscall.LOCK_SH)
+		if !exists {
+			continue
+		}
+		counts.existing++
+		if held {
+			counts.held++
 		}
 	}
-	return inodes
+	return counts
 }
 
-func statInode(path string) (uint64, bool) {
-	info, err := os.Stat(path)
+// probeFlockHeld reports whether path exists and currently has a flock(2)
+// lock conflicting with probeHow (LOCK_SH for exclusive slot locks, LOCK_EX
+// for shared waiter locks). Probing each lock file directly checks the
+// inode's lock state atomically in the kernel instead of scanning /proc/locks,
+// whose 4 KiB seq_file pages can omit or duplicate entries under concurrent
+// lock churn.
+func probeFlockHeld(path string, probeHow int) (exists, held bool) {
+	f, err := os.Open(path)
 	if err != nil {
-		return 0, false
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, false
-	}
-	return st.Ino, true
-}
-
-// readProcLocksSnapshot reads /proc/locks in one read(2) call from offset 0 so
-// seq_file traverses the kernel lock list in a single atomic pass. Splitting
-// /proc/locks across 4 KiB reads drops the kernel lock between chunks and can
-// skip held locks when earlier entries unlock concurrently.
-// readFlockTableOnce reads /proc/locks once and returns held FLOCK write inodes and
-// per-inode FLOCK shared-read counts. Like store.Holders, locks are matched by inode
-// number alone because btrfs superblock device numbers in /proc/locks differ from stat(2).
-func readFlockTableOnce() (writeHeld map[uint64]bool, readHolders map[uint64]int, err error) {
-	f, err := os.Open("/proc/locks")
-	if err != nil {
-		return nil, nil, err
+		return false, false
 	}
 	defer f.Close()
-
-	var raw bytes.Buffer
-	buf := make([]byte, 32*1024)
-	for {
-		n, readErr := f.Read(buf)
-		if n > 0 {
-			raw.Write(buf[:n])
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return nil, nil, readErr
-		}
+	err = syscall.Flock(int(f.Fd()), probeHow|syscall.LOCK_NB)
+	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+		return true, true
 	}
-
-	writeHeld = map[uint64]bool{}
-	readHolders = map[uint64]int{}
-	for line := range bytes.SplitSeq(raw.Bytes(), []byte{'\n'}) {
-		if len(line) == 0 {
-			continue
-		}
-		fields := strings.Fields(string(line))
-		// A blocked waiter request has "->" in fields[1]; only held locks count.
-		if len(fields) < 6 || fields[1] == "->" || fields[1] != "FLOCK" {
-			continue
-		}
-		parts := strings.Split(fields[5], ":")
-		if len(parts) != 3 {
-			continue
-		}
-		ino, convErr := strconv.ParseUint(parts[2], 10, 64)
-		if convErr != nil {
-			continue
-		}
-		switch fields[3] {
-		case "WRITE":
-			writeHeld[ino] = true
-		case "READ":
-			readHolders[ino]++
-		}
-	}
-	return writeHeld, readHolders, nil
+	return true, false
 }
