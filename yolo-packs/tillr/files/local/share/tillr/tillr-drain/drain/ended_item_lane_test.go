@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -594,5 +595,92 @@ func TestEndedLaneOwnerOrderingMatchesChronologicalTieBreak(t *testing.T) {
 	}
 	if !laterEvent.newerOrEqual(sameSeqRunLate) || sameSeqRunLate.newerOrEqual(laterEvent) {
 		t.Fatal("higher seq must win regardless of source")
+	}
+}
+
+func TestReclaimEndedItemLanesReportsUnsavedWorkOnceUntilChanged(t *testing.T) {
+	f, l, _ := plannedFixture(t)
+	var report bytes.Buffer
+	l.cfg.Report = &report
+	ctx := context.Background()
+
+	// Use lane-1 worktree with a closed item's run and uncommitted work.
+	laneWorktree := l.lanePath("lane-1")
+	writeForkFile(t, filepath.Join(laneWorktree, "leftover.go"), "package main\n")
+
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO lanes (lane_id, state) VALUES ('lane-1', 'idle')`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO runs (run_id, item_id, lane_id, backend, state, started_at, finished_at) VALUES ('run-a', 'item-a', 'lane-1', 'fixture', 'exited', 1, 2)`); err != nil {
+			return err
+		}
+		_, err := item.Close(ctx, tx, "item-a", "superseded", "owner", l.cfg.Now())
+		return err
+	})
+
+	// Poison refs/tillr/ended/run-a so saveEndedItemWork fails with a deterministic error.
+	headSHA := strings.TrimSpace(runGit(t, laneWorktree, "rev-parse", "HEAD"))
+	runGit(t, laneWorktree, "update-ref", endedWorkPrefix+"run-a", headSHA)
+
+	// Pass 1: condition first holds -> reported once and lane-1 taken out of rotation for waiting view.
+	var r LoopResult
+	if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
+		t.Fatalf("pass 1: stop=%q err=%v", stop, err)
+	}
+	const wantPrefix = "holds uncommitted work from ended item item-a (closed) that could not be saved:"
+	if got := strings.Count(report.String(), wantPrefix); got != 1 {
+		t.Fatalf("after pass 1: report has %d occurrences of %q, want 1\nreport:\n%s", got, wantPrefix, report.String())
+	}
+	if n := laneEvents(t, f, laneRefusedKind, "lane-1"); n != 1 {
+		t.Fatalf("after pass 1: %d drain.lane-refused events, want 1", n)
+	}
+	if cond := l.laneConditions["lane-1"]; cond == nil || !cond.out || cond.reason != ReasonLaneUncommittedWork {
+		t.Fatalf("after pass 1: lane-1 condition = %+v, want out with %q", cond, ReasonLaneUncommittedWork)
+	}
+
+	// Pass 2: no state change -> must not repeat the report or record another event, while waiting view still holds.
+	report.Reset()
+	if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
+		t.Fatalf("pass 2: stop=%q err=%v", stop, err)
+	}
+	if got := strings.Count(report.String(), wantPrefix); got != 0 {
+		t.Fatalf("after pass 2 (unchanged): report has %d occurrences of %q, want 0\nreport:\n%s", got, wantPrefix, report.String())
+	}
+	if n := laneEvents(t, f, laneRefusedKind, "lane-1"); n != 1 {
+		t.Fatalf("after pass 2 (unchanged): %d drain.lane-refused events, want 1", n)
+	}
+	if n := laneEvents(t, f, laneRestoredKind, "lane-1"); n != 0 {
+		t.Fatalf("after pass 2 (unchanged): %d drain.lane-restored events, want 0", n)
+	}
+
+	// Pass 3: condition changes (different save failure) -> reported once again.
+	otherCommit := strings.TrimSpace(runGit(t, laneWorktree, "commit-tree", headSHA+"^{tree}", "-p", headSHA, "-m", `{"run_id":"other-run","ref":"refs/tillr/ended/other-run"}`))
+	runGit(t, laneWorktree, "update-ref", endedWorkPrefix+"run-a", otherCommit)
+	report.Reset()
+	if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
+		t.Fatalf("pass 3: stop=%q err=%v", stop, err)
+	}
+	if got := strings.Count(report.String(), wantPrefix); got != 1 {
+		t.Fatalf("after pass 3 (changed): report has %d occurrences of %q, want 1\nreport:\n%s", got, wantPrefix, report.String())
+	}
+	if !strings.Contains(report.String(), "names a different run") {
+		t.Fatalf("after pass 3: expected new error in report:\n%s", report.String())
+	}
+	if n := laneEvents(t, f, laneRefusedKind, "lane-1"); n != 2 {
+		t.Fatalf("after pass 3 (changed): %d drain.lane-refused events, want 2", n)
+	}
+
+	// Pass 4: remove the poisoned ref so saveEndedItemWork succeeds and restores lane-1.
+	runGit(t, laneWorktree, "update-ref", "-d", endedWorkPrefix+"run-a")
+	report.Reset()
+	if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
+		t.Fatalf("pass 4: stop=%q err=%v", stop, err)
+	}
+	if n := laneEvents(t, f, laneRestoredKind, "lane-1"); n != 1 {
+		t.Fatalf("after pass 4 (resolved): %d drain.lane-restored events, want 1", n)
+	}
+	if cond := l.laneConditions["lane-1"]; cond != nil {
+		t.Fatalf("after pass 4 (resolved): lane-1 condition = %+v, want nil", cond)
 	}
 }

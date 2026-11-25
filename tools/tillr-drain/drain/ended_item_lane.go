@@ -605,7 +605,14 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 		}
 		saved, err := l.saveEndedItemWork(ctx, c.lane, c.runID, c.itemID, c.itemState, "item ended ("+c.itemState+")")
 		if err != nil {
-			l.reportf("loop: lane %s holds uncommitted work from ended item %s (%s) that could not be saved: %v\n", c.lane, c.itemID, c.itemState, err)
+			refusal := asLaneRefusal(laneRefusalf(c.lane, ReasonLaneUncommittedWork,
+				"commit or remove the files, or reset the lane deliberately",
+				"lane %s holds uncommitted work from ended item %s (%s) that could not be saved: %v",
+				c.lane, c.itemID, c.itemState, err))
+			refusal.LeftBy = formatLeftBy(c.runID, c.itemID)
+			if rotErr := l.takeLaneOutOfRotation(ctx, refusal); rotErr != nil {
+				l.reportf("loop: lane %s holds uncommitted work from ended item %s (%s) that could not be saved: %v\n", c.lane, c.itemID, c.itemState, err)
+			}
 			continue
 		}
 		if saved {
@@ -621,6 +628,8 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 			if l.hasLaneCondition(c.lane, ReasonLaneUncommittedWork) {
 				_ = l.restoreLane(ctx, c.lane)
 			}
+		} else if l.hasLaneCondition(c.lane, ReasonLaneUncommittedWork) && l.laneWorktreeClean(ctx, c.lane) {
+			_ = l.restoreLane(ctx, c.lane)
 		}
 		l.recordCleanEndedLane(c.lane, c.runID, epochsBefore[c.lane], saved)
 	}

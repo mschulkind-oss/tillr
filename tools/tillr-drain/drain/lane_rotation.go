@@ -148,6 +148,9 @@ func (l *Loop) hasLaneCondition(lane, reason string) bool {
 // takeLaneOutOfRotation records a lane-owned refusal: one event and one line per condition,
 // and nothing while the same condition persists.
 func (l *Loop) takeLaneOutOfRotation(ctx context.Context, refusal *LaneRefusalError) error {
+	if l.cfg.Store != "" {
+		_ = l.loadLaneConditions(ctx)
+	}
 	l.laneMu.Lock()
 	at, err := l.recordLaneRefusal(ctx, refusal)
 	l.laneMu.Unlock()
@@ -277,10 +280,21 @@ func (l *Loop) laneWorktreeClean(ctx context.Context, lane string) bool {
 	if _, err := os.Stat(worktree); err != nil {
 		return false
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", worktree, "status", "--porcelain", "--untracked-files=all")
-	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
-	out, err := cmd.Output()
-	return err == nil && strings.TrimSpace(string(out)) == ""
+	cleanDir := func(dir string) bool {
+		cmd := exec.CommandContext(ctx, "git", "-C", dir, "status", "--porcelain", "--untracked-files=all")
+		cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+		out, err := cmd.Output()
+		return err == nil && strings.TrimSpace(string(out)) == ""
+	}
+	if !cleanDir(worktree) {
+		return false
+	}
+	if target := l.laneTarget(lane); target != worktree {
+		if _, err := os.Stat(target); err == nil && !cleanDir(target) {
+			return false
+		}
+	}
+	return true
 }
 
 // LaneProber is a Stager that can answer whether a lane's own state still refuses staging,
