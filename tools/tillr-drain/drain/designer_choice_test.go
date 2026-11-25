@@ -298,3 +298,76 @@ func TestDesignerCompactRunsOnlyAtColdDispatch(t *testing.T) {
 		})
 	}
 }
+
+func TestDesignerCompactRunPiInvokesTillrRunPiCompact(t *testing.T) {
+	dir := t.TempDir()
+	runPi := filepath.Join(dir, "run-pi")
+	writeForkFile(t, runPi, "#!/bin/sh\n")
+	if err := os.Chmod(runPi, 0755); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "run-other")
+	writeForkFile(t, other, "#!/bin/sh\n")
+	if err := os.Chmod(other, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TILLR_RUN_BIN", "/env/tillr-run")
+	if bin, prefix := compactCommand(&run.Request{Command: []string{runPi}}, "/step/tillr-run"); bin != "/env/tillr-run" || len(prefix) != 1 || prefix[0] != "pi-compact" {
+		t.Fatalf("with TILLR_RUN_BIN: got (%q, %v)", bin, prefix)
+	}
+	t.Setenv("TILLR_RUN_BIN", "")
+	if bin, prefix := compactCommand(&run.Request{Command: []string{runPi}}, "/step/tillr-run"); bin != "/step/tillr-run" || len(prefix) != 1 || prefix[0] != "pi-compact" {
+		t.Fatalf("with RunBin: got (%q, %v)", bin, prefix)
+	}
+	if bin, prefix := compactCommand(&run.Request{Command: []string{runPi}}, ""); bin != "tillr-run" || len(prefix) != 1 || prefix[0] != "pi-compact" {
+		t.Fatalf("with default: got (%q, %v)", bin, prefix)
+	}
+	if bin, prefix := compactCommand(&run.Request{Command: []string{other}}, "/step/tillr-run"); bin != "" || len(prefix) != 0 {
+		t.Fatalf("non-Pi adapter without compact: got (%q, %v)", bin, prefix)
+	}
+
+	f, l, steps := commentFixture(t, "")
+	argvFile := filepath.Join(dir, "argv")
+	runStub := filepath.Join(dir, "tillr-run")
+	writeForkFile(t, runStub, "#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+argvFile+"'\necho '{\"tokens_before\":50000,\"tokens_after\":20000,\"tokens\":1000,\"cost_usd\":0.12}'\n")
+	if err := os.Chmod(runStub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TILLR_RUN_BIN", runStub)
+	l.cfg.Policy.Backends["fixture"] = Backend{Adapter: runPi, Model: "fixture-model"}
+	lifetime, tokens := 300, 50000
+	transcript := filepath.Join(dir, "old.jsonl")
+	writeForkFile(t, transcript, "old")
+	putDesigner(t, f, lastDesigner{
+		Document:             "docs/design/example.md",
+		SessionID:            "11111111-1111-4111-8111-111111111111",
+		Backend:              "fixture",
+		Model:                "fixture-model",
+		Transcript:           transcript,
+		BlobID:               runGit(t, f.root, "rev-parse", "HEAD:docs/design/example.md"),
+		LastRequest:          l.cfg.Now().Add(-301 * time.Second).Format(time.RFC3339Nano),
+		CacheLifetimeSeconds: &lifetime,
+		ContextTokens:        &tokens,
+	})
+	number := 1
+	server := stubReview(t, &number)
+	defer server.Close()
+	takeFixtureComment(t, f, server.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer cancel()
+	if _, err := l.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(steps.sessions) != 1 || steps.sessions[0] != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("sessions %v", steps.sessions)
+	}
+	argvBytes, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(argvBytes)), "\n")
+	if len(lines) < 2 || lines[0] != "pi-compact" {
+		t.Fatalf("expected pi-compact as first arg, got %q", lines)
+	}
+}

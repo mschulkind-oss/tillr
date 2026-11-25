@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -220,53 +219,5 @@ while True: time.sleep(.01)
 				t.Fatalf("stdin brief changed: %v", err)
 			}
 		})
-	}
-}
-
-// Force the child to exit just after an empty pipe-readiness check. A watcher
-// that checks exit only after that check drops the final output deterministically.
-func TestPiPauseWatcherDrainsFinalOutput(t *testing.T) {
-	helper, err := filepath.Abs("backends/pi/stop-at-gap")
-	if err != nil {
-		t.Fatal(err)
-	}
-	code := `import io, runpy, sys
-from types import SimpleNamespace
-namespace = runpy.run_path(sys.argv[1])
-main = namespace["main"]
-g = main.__globals__
-class Child:
-    stdout = SimpleNamespace(fileno=lambda: 7, close=lambda: None)
-    exited = False
-    def poll(self): return 17 if self.exited else None
-    def wait(self): return 17
-child = Child()
-class Selector:
-    calls = 0
-    def __enter__(self): return self
-    def __exit__(self, *args): pass
-    def register(self, *args): pass
-    def unregister(self, *args): pass
-    def select(self, timeout):
-        self.calls += 1
-        if self.calls == 1:
-            # Final output arrives with exit, after select found nothing.
-            child.exited = True
-            return []
-        if self.calls <= 3: return [(SimpleNamespace(fileobj=child.stdout), 1)]
-        return []
-g["subprocess"].Popen = lambda *args, **kwargs: child
-g["selectors"].DefaultSelector = Selector
-chunks = iter([b'final output\n', b''])
-g["os"].read = lambda *args: next(chunks)
-output = io.BytesIO()
-g["sys"] = SimpleNamespace(argv=["watcher", "unused-request", "stub"], stdout=SimpleNamespace(buffer=output))
-assert main() == 17
-assert output.getvalue() == b'final output\n', output.getvalue()
-print("final output retained; exit 17 preserved")
-`
-	cmd := exec.Command("python3", "-c", code, helper)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("natural-exit drain: %v: %s", err, output)
 	}
 }

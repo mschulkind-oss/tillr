@@ -232,7 +232,7 @@ PY
                 printf 'Pi landing transcript not found: %s\n' "$transcript" >&2
                 exit 1
             fi
-            if [ -n "$transcript" ] && "$SELF_DIR/landing-call-held" "$transcript" "$(cat "$landing_id")"; then
+            if [ -n "$transcript" ] && "${TILLR_RUN_BIN:-tillr-run}" pi-landing-call-held "$transcript" "$(cat "$landing_id")"; then
                 printf '%s\n' tool-result > "$landing_dir/landing-delivery"
                 prompt=/dev/null
                 landing_promptless=1
@@ -360,8 +360,7 @@ fi
 # Only runner-managed launches have a pause file. Keep pi's PID private to the
 # watcher: signaling a timeout wrapper or process group would also signal tools.
 if [ -n "${TILLR_PAUSE_REQUEST:-}" ]; then
-    require_harness python3
-    set -- python3 "$SELF_DIR/stop-at-gap" "$TILLR_PAUSE_REQUEST" "$@"
+    set -- "${TILLR_RUN_BIN:-tillr-run}" pi-stop-at-gap "$TILLR_PAUSE_REQUEST" "$@"
 fi
 
 # The wall wraps the whole argv, so the bound is one process group and not the harness's

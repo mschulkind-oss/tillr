@@ -163,7 +163,7 @@ var Rules = map[string]Rule{
 	// The same ruling removed the one conflict-fix run: a conflict goes back to its worker
 	// on the latest trunk, so an item parked under this reason is returned at the next pass.
 	"conflict-exhausted":         {"ready", "queue", "the next pass"},
-	"pi-extensions-build-failed": {"waits on work", "roll", "the next extension or patch-branch landing, or tools/tillr-run/backends/pi/build-agent-dir"},
+	"pi-extensions-build-failed": {"waits on work", "roll", "the next extension or patch-branch landing, or tillr-run pi-build-agent-dir"},
 }
 
 // For resolves a recorded reason to its rule. Drain appends detail to a few reasons

@@ -13,9 +13,9 @@ func TestPiCompactByIDReportsMeasurements(t *testing.T) {
 	for _, mode := range []string{"success", "refused", "wrong-session", "no-usage", "missing-tokens", "exit", "journal"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := scratch(t, "pi-compact")
-			bin := filepath.Join(dir, "bin")
+			binDir := filepath.Join(dir, "bin")
 			capture := filepath.Join(dir, "commands")
-			writeExecutable(t, filepath.Join(bin, "pi"), `#!/usr/bin/env python3
+			writeExecutable(t, filepath.Join(binDir, "pi"), `#!/usr/bin/env python3
 import json,os,sys
 assert sys.argv[1:5] == ['--mode','rpc','--session','11111111-1111-4111-8111-111111111111'],sys.argv
 mode=os.environ['COMPACT_MODE']
@@ -31,11 +31,7 @@ for line in sys.stdin.buffer:
   if mode=='missing-tokens': del data['estimatedTokensAfter']
  print(json.dumps({'type':'response','id':c['id'],'success':mode!='refused','data':data,'error':'refused'}),flush=True)
 `)
-			adapter, err := filepath.Abs("backends/pi/compact")
-			if err != nil {
-				t.Fatal(err)
-			}
-			cmd := exec.Command(adapter, "--backend", "pi-designer", "--model", "fixture-model", "--effort", "medium", "--session-id", "11111111-1111-4111-8111-111111111111")
+			cmd := exec.Command(bin, "pi-compact", "--backend", "pi-designer", "--model", "fixture-model", "--effort", "medium", "--session-id", "11111111-1111-4111-8111-111111111111")
 			transcript := filepath.Join(dir, "session.jsonl")
 			if err := os.WriteFile(transcript, []byte("session\n"), 0644); err != nil {
 				t.Fatal(err)
@@ -45,7 +41,7 @@ for line in sys.stdin.buffer:
 				t.Fatal(err)
 			}
 			cmd.Dir = dir
-			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "COMPACT_MODE="+mode, "CAPTURE="+capture, "TRANSCRIPT="+transcript)
+			cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"), "COMPACT_MODE="+mode, "CAPTURE="+capture, "TRANSCRIPT="+transcript)
 			if mode == "journal" {
 				cmd.Env = append(cmd.Env, "TILLR_COMPACTION_JOURNAL="+journal)
 			}

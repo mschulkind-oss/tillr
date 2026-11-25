@@ -17,7 +17,9 @@
 root, and reads the lane and run state back. `exec` is the run itself; `request` builds the
 request; `pause` requests a restart interruption; `lanes`, `status` and `release` inspect
 and clean up what a tick left behind. `copied-usage` detects repeated usage pairs;
-`mark-copied-usage` corrects one run whose usage came from an earlier run.
+`mark-copied-usage` corrects one run whose usage came from an earlier run. Four Pi
+adapter helper faces — `pi-build-agent-dir`, `pi-stop-at-gap`, `pi-compact`, and
+`pi-landing-call-held` — back the Pi adapter and drain compaction.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/reference/tillr-distribution.md`](../../docs/reference/tillr-distribution.md);
@@ -154,6 +156,7 @@ TILLR_PI_BUILDS_DIR       When set on the caller or when the caller's scratch di
 TILLR_READ_ONLY_GROUP     Only when read_only_group is nonempty: the group sharing a lane lease; otherwise unset.
 TILLR_PI_AGENT_DIRS_DIR   When set in the caller's environment or derivable from the caller's durable directory: the shared directory holding content-keyed trunk Pi agent directories.
 TILLR_EXTENSION_SET_RECORD_FILE Always: the file path in this run's scratch directory where the Pi adapter records the selected extension set.
+TILLR_RUN_BIN             When unset on the caller and os.Executable resolves: the active tillr-run binary path; otherwise inherited.
 YOLO_DURABLE_DIR          When scratch_env is omitted or true: <lane dir>/durable/<run_id>; false preserves the caller's value or absence.
 ```
 

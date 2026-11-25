@@ -180,9 +180,15 @@ func (l *Loop) ensureDesignerCompaction(ctx context.Context, d Decision) (*compa
 		if err = writeCompactionJournal(path, j, true); err != nil {
 			return nil, err
 		}
-		args := append([]string{}, d.RunRequest.Command[1:]...)
+		var runBin string
+		if ps, ok := l.cfg.Steps.(*ProcessSteps); ok {
+			runBin = ps.RunBin
+		}
+		compactBin, compactPrefix := compactCommand(d.RunRequest, runBin)
+		args := append([]string{}, compactPrefix...)
+		args = append(args, d.RunRequest.Command[1:]...)
 		args = append(args, "--session-id", d.DesignerSessionID)
-		cmd := exec.CommandContext(ctx, compactStep(d.RunRequest), args...)
+		cmd := exec.CommandContext(ctx, compactBin, args...)
 		cmd.Dir = l.laneTarget(d.LaneID)
 		cmd.Env = append(os.Environ(), "BOARD_DRAIN_RUN="+d.RunRequest.RunID, "BOARD_DRAIN_SESSION="+d.DesignerSessionID, "TILLR_COMPACTION_JOURNAL="+path)
 		var stderr strings.Builder

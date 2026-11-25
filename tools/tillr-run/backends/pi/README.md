@@ -11,18 +11,16 @@ prompt-file flag, and effort is Pi's own `--thinking` level rather than the muse
 | `run-pi` | The adapter. A `run.request`'s `Command[0]` names it. |
 | [`pi-harness.sh`](./pi-harness.sh) | Resolves a verified rebuilt `pi` privately, wires session env, and records the chosen binary. |
 | [`pi-agent-dir.sh`](./pi-agent-dir.sh) | Resolves the content-keyed trunk agent directory for drain workers and writes the extension-set record. |
-| [`build-agent-dir`](./build-agent-dir) | Builds and verifies a content-keyed Pi agent directory from trunk extensions and patch branches/series. |
+| `tillr-run pi-build-agent-dir` | Builds and verifies a content-keyed Pi agent directory from trunk extensions and patch branches/series. |
 | `extract-report` | The dialect: Pi's event stream in, `report.md` out. |
-| [`compact`](./compact) | Compact an existing session by id, without a user prompt. |
+| `tillr-run pi-compact` | Compact an existing session by id, without a user prompt. |
 | [`keep-going.ts`](./keep-going.ts) | The pi extension that answers an ending that misses the goal, in the same session. |
 | [`land.ts`](./land.ts) | Records a landing offer and parks the call. |
 | [`obstacle.ts`](./obstacle.ts) | Validates and records a named obstacle and parks the call. |
-| [`landing-call-held`](./landing-call-held) | Checks the active transcript branch before a promptless landing continuation. |
+| `tillr-run pi-landing-call-held` | Checks the active transcript branch before a promptless landing continuation. |
 | [`testdata/land.test.mjs`](./testdata/land.test.mjs) | Exercises offer validation, parking and adapter arguments. |
-| [`testdata/landing-call-held.test.py`](./testdata/landing-call-held.test.py) | Checks transcript replay eligibility and fail-closed parsing. |
 | [`testdata/keep-going.test.mjs`](./testdata/keep-going.test.mjs) | Checks that a parked call is not nudged. |
 | [`testdata/extract-report-park.test.py`](./testdata/extract-report-park.test.py) | Checks report extraction for parked calls. |
-| [`testdata/parked-exit.test.py`](./testdata/parked-exit.test.py) | Checks the watcher leaves parked sessions alone. |
 | [`testdata/keep-going-driver.mjs`](./testdata/keep-going-driver.mjs) | Drives [`keep-going.ts`](./keep-going.ts) through scripted endings without a model, for `pi_keep_going_test.go`. |
 | [`testdata/complete.jsonl`](./testdata/complete.jsonl) | A complete event stream, ending in the `RESULT:` footer. |
 | [`testdata/truncated.jsonl`](./testdata/truncated.jsonl) | The same stream cut off before its footer — the negative control. |
@@ -98,7 +96,7 @@ probe and the stated list. Running without the feature is a
 ### Resolving rebuilt pi privately
 
 [`pi-harness.sh`](./pi-harness.sh) selects the `pi` binary for `run-pi` and
-[`compact`](./compact) without placing anything on shared `PATH` (drain-only: foreground
+`tillr-run pi-compact` without placing anything on shared `PATH` (drain-only: foreground
 sessions stay on the installed `pi`):
 
 1. The verified build for the current pi series key (`<builds>/<key>/home/.local/bin/pi` when `<builds>/<key>/.verified` matches `<key>`).
@@ -136,9 +134,9 @@ reads paths that the repository the drain runs in provides and this tree does no
 `yolo-packs/matt/` (a pack of extensions and patch series) and `bin/pi-forks.list` (the
 list of forks). A repository without them runs on the deployed agent directory.
 
-### Content-keyed build (`build-agent-dir`)
+### Content-keyed build (`tillr-run pi-build-agent-dir`)
 
-[`build-agent-dir`](./build-agent-dir) constructs a content-keyed agent directory under
+`tillr-run pi-build-agent-dir` constructs a content-keyed agent directory under
 `TILLR_PI_AGENT_DIRS_DIR` (falling back to the repository's durable agent-dirs root)
 from the repository trunk (`refs/heads/main`, or `HEAD`):
 
@@ -173,8 +171,8 @@ that value onto `runs.extension_set` and `run.Record.ExtensionSet`. Both
 is launched.
 
 If a build fails (or `status.json` already records `state: "held"` for the target key),
-`build-agent-dir` writes `state: "held"` with condition `pi-extensions-build-failed` and
-mover `land a fix to yolo-packs/matt or patch/<fork> on trunk, or rerun tools/tillr-run/backends/pi/build-agent-dir`
+`tillr-run pi-build-agent-dir` writes `state: "held"` with condition `pi-extensions-build-failed` and
+mover `land a fix to yolo-packs/matt or patch/<fork> on trunk, or rerun tillr-run pi-build-agent-dir`
 to `status.json`. [`pi-agent-dir.sh`](./pi-agent-dir.sh) preserves and selects the previous verified working
 set from `current.json` (falling back to the deployed directory if none exists), records
 the held condition in `TILLR_EXTENSION_SET_RECORD_FILE`, and reports the condition and
@@ -185,7 +183,7 @@ mover on stderr.
 When a landing touches `yolo-packs/matt/files/extensions/`, `yolo-packs/matt/patches/`,
 `yolo-packs/matt/pack.json`, `bin/pi-forks.list`, or an extension `patch/<name>` branch
 (other than `patch/pi`), the drain's post-landing roll runs `tillr-roll --pi-extensions`,
-which invokes `build-agent-dir` to rebuild the trunk agent directory. If the roll fails,
+which invokes `tillr-run pi-build-agent-dir` to rebuild the trunk agent directory. If the roll fails,
 the drain records `pi-extensions-build-failed` and its mover on
 `drain.post-landing-action` while keeping the previous working set active.
 
@@ -285,7 +283,7 @@ message.
 
 Pause kind: `stops-at-a-gap`, declared in [`pause-kind`](./pause-kind).
 When the runner writes `TILLR_PAUSE_REQUEST`, the adapter's
-[`stop-at-gap`](./stop-at-gap) watcher sends **SIGUSR1 to the pi process itself**,
+`tillr-run pi-stop-at-gap` watcher sends **SIGUSR1 to the pi process itself**,
 never its process group or a tool child, even when an explicit wall uses `timeout`.
 The watcher forwards JSON output unchanged and waits for the session header before
 signaling: a pi that handles the stop signal emits that header after installing its
@@ -326,7 +324,7 @@ never runs, so every extension timer stays armed. One way to miss it is a comple
 that the extension's `context` hook injects as a fallback into a model call already in
 progress; the journal records those as `fallback-injected` and `observed via fallback`,
 with no `enqueued`. For that, and for any other way pi can fail to exit, the
-[`stop-at-gap`](./stop-at-gap) watcher ends the session on pi's own statements:
+`tillr-run pi-stop-at-gap` watcher ends the session on pi's own statements:
 
 1. The stream carries a top-level `agent_settled`, and no `agent_start` follows it.
    keep-going acts at `agent_before_settle`, so a settle is already its verdict.

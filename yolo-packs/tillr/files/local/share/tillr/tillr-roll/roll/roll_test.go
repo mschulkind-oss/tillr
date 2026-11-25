@@ -938,25 +938,56 @@ func TestReportRefusesMismatchedDigestAndRefusedAnswer(t *testing.T) {
 func TestPiExtensionsInvokesBuildAgentDirWithoutRestarts(t *testing.T) {
 	work := t.TempDir()
 	root := filepath.Join(work, "repo")
-	builder := filepath.Join(root, "tools", "tillr-run", "backends", "pi", "build-agent-dir")
-	if err := os.MkdirAll(filepath.Dir(builder), 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	marker := filepath.Join(work, "built.txt")
-	script := fmt.Sprintf("#!/bin/sh\necho built > %s\n", shellQuote(marker))
-	if err := os.WriteFile(builder, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	type call struct {
+		args []string
+		dir  string
 	}
-	status, err := RollPiExtensions(root, nil)
+	var calls []call
+	deps := &Deps{
+		Run: func(args []string, opts RunOpts) (CmdResult, error) {
+			calls = append(calls, call{args: append([]string(nil), args...), dir: opts.Dir})
+			return CmdResult{}, nil
+		},
+	}
+
+	t.Setenv("TILLR_RUN_BIN", "")
+	status, err := RollPiExtensions(root, deps)
 	if err != nil || status != 0 {
 		t.Fatalf("RollPiExtensions failed: status=%d err=%v", status, err)
 	}
-	got, err := os.ReadFile(marker)
-	if err != nil {
+	if len(calls) != 1 || len(calls[0].args) != 2 || calls[0].args[0] != "tillr-run" || calls[0].args[1] != "pi-build-agent-dir" || calls[0].dir != root {
+		t.Fatalf("calls without go.mod = %+v, want tillr-run pi-build-agent-dir", calls)
+	}
+
+	tillrRunDir := filepath.Join(root, "tools", "tillr-run")
+	if err := os.MkdirAll(tillrRunDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "built\n" {
-		t.Fatalf("marker = %q, want %q", string(got), "built\n")
+	if err := os.WriteFile(filepath.Join(tillrRunDir, "go.mod"), []byte("module example.com/tillr-run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	status, err = RollPiExtensions(root, deps)
+	if err != nil || status != 0 {
+		t.Fatalf("RollPiExtensions with go.mod failed: status=%d err=%v", status, err)
+	}
+	wantGo := []string{"go", "-C", tillrRunDir, "run", ".", "pi-build-agent-dir"}
+	if len(calls) != 1 || fmt.Sprint(calls[0].args) != fmt.Sprint(wantGo) || calls[0].dir != root {
+		t.Fatalf("calls with go.mod = %+v, want %v", calls, wantGo)
+	}
+
+	t.Setenv("TILLR_RUN_BIN", "/custom/tillr-run")
+	calls = nil
+	status, err = RollPiExtensions(root, deps)
+	if err != nil || status != 0 {
+		t.Fatalf("RollPiExtensions with TILLR_RUN_BIN failed: status=%d err=%v", status, err)
+	}
+	wantCustom := []string{"/custom/tillr-run", "pi-build-agent-dir"}
+	if len(calls) != 1 || fmt.Sprint(calls[0].args) != fmt.Sprint(wantCustom) || calls[0].dir != root {
+		t.Fatalf("calls with TILLR_RUN_BIN = %+v, want %v", calls, wantCustom)
 	}
 }
 

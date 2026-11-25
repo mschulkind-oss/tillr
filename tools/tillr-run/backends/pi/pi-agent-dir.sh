@@ -49,7 +49,7 @@ if [ "$_pi_use_deployed" -eq 0 ] && [ -n "${repo_root:-}" ] &&
         _agent_dirs_root=$repo_root/.yolo/durable/pi-agent-dirs
     fi
 
-    _key=$("$SELF_DIR/build-agent-dir" --key 2>/dev/null || true)
+    _key=$("${TILLR_RUN_BIN:-tillr-run}" pi-build-agent-dir --key 2>/dev/null || true)
     if [ -n "$_key" ]; then
         _verified=
         if [ -r "$_agent_dirs_root/$_key/.verified" ]; then
@@ -81,7 +81,7 @@ PY
 
             _built_dir=
             if [ "$_already_held" -eq 0 ]; then
-                _built_dir=$(PI_HARNESS_BIN="${PI_HARNESS_BIN:-}" "$SELF_DIR/build-agent-dir" 2>/dev/null || true)
+                _built_dir=$(PI_HARNESS_BIN="${PI_HARNESS_BIN:-}" "${TILLR_RUN_BIN:-tillr-run}" pi-build-agent-dir 2>/dev/null || true)
             fi
 
             if [ -n "$_built_dir" ] && [ -d "$_built_dir" ]; then
@@ -127,7 +127,7 @@ PY
                     PI_AGENT_DIR_BUILT=0
                     ext_record_line="$_deployed (deployed; held pi-extensions-build-failed for $_key)"
                 fi
-                printf 'run-pi: pi-extensions-build-failed for %s; mover: land a fix to yolo-packs/matt or patch/<fork> on trunk, or rerun tools/tillr-run/backends/pi/build-agent-dir\n' "$_key" >&2
+                printf 'run-pi: pi-extensions-build-failed for %s; mover: land a fix to yolo-packs/matt or patch/<fork> on trunk, or rerun tillr-run pi-build-agent-dir\n' "$_key" >&2
             fi
         fi
     fi

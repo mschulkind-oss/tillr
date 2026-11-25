@@ -2,13 +2,13 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-roll/roll"
 )
 
 func TestExecutePiExtensions(t *testing.T) {
+	t.Setenv("TILLR_RUN_BIN", "")
 	root := t.TempDir()
 	var ran []string
 	var ranDir string
@@ -26,13 +26,13 @@ func TestExecutePiExtensions(t *testing.T) {
 	if err != nil || status != 0 {
 		t.Fatalf("status=%d err=%v", status, err)
 	}
-	want := filepath.Join(root, "tools/tillr-run/backends/pi/build-agent-dir")
-	if len(ran) != 1 || ran[0] != want || ranDir != root {
-		t.Fatalf("ran=%v dir=%q want=%q", ran, ranDir, want)
+	if len(ran) != 2 || ran[0] != "tillr-run" || ran[1] != "pi-build-agent-dir" || ranDir != root {
+		t.Fatalf("ran=%v dir=%q want=[tillr-run pi-build-agent-dir]", ran, ranDir)
 	}
 }
 
 func TestMainPiExtensionsFlag(t *testing.T) {
+	t.Setenv("TILLR_RUN_BIN", "")
 	root := t.TempDir()
 	var ran []string
 	var ranDir string
@@ -50,9 +50,8 @@ func TestMainPiExtensionsFlag(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("expected status 0, got %d", status)
 	}
-	want := filepath.Join(root, "tools/tillr-run/backends/pi/build-agent-dir")
-	if len(ran) != 1 || ran[0] != want || ranDir != root {
-		t.Fatalf("ran=%v dir=%q want=%q", ran, ranDir, want)
+	if len(ran) != 2 || ran[0] != "tillr-run" || ran[1] != "pi-build-agent-dir" || ranDir != root {
+		t.Fatalf("ran=%v dir=%q want=[tillr-run pi-build-agent-dir]", ran, ranDir)
 	}
 }
 

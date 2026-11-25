@@ -2,7 +2,6 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 function readRecord(path: string) {
 	try {
@@ -96,7 +95,7 @@ export default function land(pi: any) {
 			const { YOLO_DURABLE_DIR, TILLR_GOAL_BASE } = process.env;
 			if (!YOLO_DURABLE_DIR || !TILLR_GOAL_BASE) throw new Error("The run's scratch or base is not staged.");
 			return executeLand(callId, ctx.cwd, YOLO_DURABLE_DIR, TILLR_GOAL_BASE, () => {
-					const raw = execFileSync("python3", [fileURLToPath(new URL("./stop-at-gap", import.meta.url)), "--owed-wakes", String(process.pid), String(since)], { encoding: "utf8" });
+					const raw = execFileSync(process.env.TILLR_RUN_BIN || "tillr-run", ["pi-stop-at-gap", "--owed-wakes", String(process.pid), String(since)], { encoding: "utf8" });
 					const wakes = JSON.parse(raw);
 					if (!Array.isArray(wakes)) throw new Error("Cannot determine whether this Pi session owes a background task wake; check its journal before offering.");
 					return wakes;

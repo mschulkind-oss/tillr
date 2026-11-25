@@ -798,8 +798,18 @@ func Roll(root, live string, noRequest, buildPi bool, commit string, deps *Deps)
 
 // RollPiExtensions rebuilds the drain pi extensions agent directory without restarting drain/view.
 func RollPiExtensions(root string, deps *Deps) (int, error) {
-	builder := filepath.Join(root, "tools/tillr-run/backends/pi/build-agent-dir")
-	if _, err := deps.run([]string{builder}, RunOpts{Dir: root}); err != nil {
+	var args []string
+	if runBin := strings.TrimSpace(os.Getenv("TILLR_RUN_BIN")); runBin != "" {
+		args = []string{runBin, "pi-build-agent-dir"}
+	} else {
+		tillrRunDir := filepath.Join(root, "tools", "tillr-run")
+		if info, err := os.Stat(filepath.Join(tillrRunDir, "go.mod")); err == nil && !info.IsDir() {
+			args = []string{"go", "-C", tillrRunDir, "run", ".", "pi-build-agent-dir"}
+		} else {
+			args = []string{"tillr-run", "pi-build-agent-dir"}
+		}
+	}
+	if _, err := deps.run(args, RunOpts{Dir: root}); err != nil {
 		return 1, err
 	}
 	return 0, nil

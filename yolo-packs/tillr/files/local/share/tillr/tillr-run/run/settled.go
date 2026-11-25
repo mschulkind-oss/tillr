@@ -119,7 +119,7 @@ func (m *settledMonitor) observe() error {
 }
 
 // HarnessEndedEvent is the stream event an adapter appends when it ended a harness
-// whose session had settled and that did not exit (backends/pi/stop-at-gap).
+// whose session had settled and that did not exit (tillr-run pi-stop-at-gap).
 const HarnessEndedEvent = "tillr_harness_ended"
 
 // repeatingCall is the record's statement of one `loop_detected` event. The arguments

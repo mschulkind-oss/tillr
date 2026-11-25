@@ -405,6 +405,18 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	if req.ReadOnlyGroup != "" {
 		env = append(env, "TILLR_READ_ONLY_GROUP="+req.ReadOnlyGroup)
 	}
+	if os.Getenv("TILLR_RUN_BIN") == "" {
+		if exe, err := os.Executable(); err == nil && exe != "" {
+			if filepath.Base(exe) == "tillr-run" {
+				env = append(withoutEnv(env, "TILLR_RUN_BIN"), "TILLR_RUN_BIN="+exe)
+			} else {
+				sibling := filepath.Join(filepath.Dir(exe), "tillr-run")
+				if info, err := os.Stat(sibling); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+					env = append(withoutEnv(env, "TILLR_RUN_BIN"), "TILLR_RUN_BIN="+sibling)
+				}
+			}
+		}
+	}
 	env = append(env,
 		"TILLR_SESSION_MODE="+mode,
 		"TILLR_RESUME_PROMPT_FILE="+prompt,

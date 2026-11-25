@@ -13,7 +13,7 @@ covers:
   - tools/tillr-drain/drain/comment_observatory.go
   - tools/tillr-drain/drain/designer.go
   - tools/tillr-drain/drain/designer_compaction.go
-  - tools/tillr-run/backends/pi/compact
+  - tools/tillr-run/pihelper/compact.go
   - tools/tillr-view/designers.go
   - tools/tillr-view/comment_intake.go
   - tools/tillr-view/web/src/components/Designers.tsx
@@ -96,7 +96,7 @@ Vantage review API ──► automatic intake / `tillr item comments take`
 | `tools/tillr/settings` | Parses the `[comments]` table of `.tillr.toml` |
 | `tools/tillr-item` | Reads Vantage's review endpoint, selects quiet unanswered comments, computes the batch's fence, and writes the batch and its item |
 | `tools/tillr-drain` | Polls Vantage, holds dependent items, routes desks, chooses, compacts and records designer sessions, checks replies, and delivers them after landing |
-| `tools/tillr-run/backends/pi/compact` | Compacts an expired Pi session in place and reports token counts and spend |
+| `tillr-run pi-compact` | Compacts an expired Pi session in place and reports token counts and spend |
 | `tools/tillr-view` | Serves designer sessions and comment batches read-only |
 
 ---

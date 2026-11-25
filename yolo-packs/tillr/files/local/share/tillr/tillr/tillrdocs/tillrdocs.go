@@ -291,8 +291,15 @@ func CheckDesignerSessionSelectionDocumented(root string) (string, error) {
 			return "", fmt.Errorf("%s omits the session selection policy", relPath(root, p))
 		}
 	}
-	adapter := filepath.Join(root, "tools/tillr-run/backends/pi/compact")
-	out, err := exec.Command(adapter, "--help").Output()
+	scratch, err := os.MkdirTemp(os.Getenv("YOLO_DURABLE_DIR"), "tillr-docs-compact-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(scratch)
+	if err := BuildModule("tillr-run", "tillr-run", scratch, root); err != nil {
+		return "", fmt.Errorf("building tillr-run failed: %w", err)
+	}
+	out, err := exec.Command(filepath.Join(scratch, "tillr-run"), "pi-compact", "--help").Output()
 	if err != nil || !strings.Contains(string(out), "--session-id") {
 		return "", fmt.Errorf("the documented Pi compact step must answer --help and accept a session id")
 	}

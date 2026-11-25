@@ -8,9 +8,7 @@ import (
 func TestPiLandingCallAdapterTests(t *testing.T) {
 	for _, argv := range [][]string{
 		{"node", "--test", "land.test.mjs", "keep-going.test.mjs"},
-		{"python3", "landing-call-held.test.py"},
 		{"python3", "extract-report-park.test.py"},
-		{"python3", "parked-exit.test.py"},
 		{"python3", "extract-report-repeating.test.py"},
 		{"python3", "extract-report-compaction.test.py"},
 	} {

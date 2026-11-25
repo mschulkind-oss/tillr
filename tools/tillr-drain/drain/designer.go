@@ -45,14 +45,28 @@ func chooseDesigner(d *lastDesigner, req *run.Request, at time.Time, previousAda
 }
 
 func compactStep(req *run.Request) string {
-	if len(req.Command) == 0 {
-		return ""
+	bin, _ := compactCommand(req, "")
+	return bin
+}
+
+func compactCommand(req *run.Request, runBin string) (string, []string) {
+	if req == nil || len(req.Command) == 0 {
+		return "", nil
 	}
 	path := filepath.Join(filepath.Dir(req.Command[0]), "compact")
 	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0 {
-		return path
+		return path, nil
 	}
-	return ""
+	if filepath.Base(req.Command[0]) == "run-pi" {
+		if envBin := strings.TrimSpace(os.Getenv("TILLR_RUN_BIN")); envBin != "" {
+			return envBin, []string{"pi-compact"}
+		}
+		if runBin != "" {
+			return runBin, []string{"pi-compact"}
+		}
+		return "tillr-run", []string{"pi-compact"}
+	}
+	return "", nil
 }
 
 type designerCompaction struct {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -161,92 +160,5 @@ func TestPiSettledHarnessThatNeverExitsIsEndedByTheAdapter(t *testing.T) {
 				t.Fatalf("report did not settle: %v %s", err, report)
 			}
 		})
-	}
-}
-
-// The watcher's question, against journal shapes. Only a wake-policy task can hold a
-// session open, so only one can owe a turn; anything the journal cannot answer is
-// "cannot tell" (None), which never ends a session.
-func TestPiSettledOwedWorkReadsTheBackgroundTaskJournal(t *testing.T) {
-	helper, err := filepath.Abs("backends/pi/stop-at-gap")
-	if err != nil {
-		t.Fatal(err)
-	}
-	code := `import os, runpy, sqlite3, sys, tempfile
-g = runpy.run_path(sys.argv[1])
-owed, journal_path = g["owed_work"], g["journal_path"]
-schema = sys.argv[2]
-def journal(rows, pid=4242, started=1000, disabled=None, prior_rows=()):
-    path = tempfile.mktemp(dir=sys.argv[3], suffix=".sqlite")
-    db = sqlite3.connect(path); db.executescript(schema)
-    db.execute("INSERT INTO instances VALUES ('i', ?, ?, ?, 'session')", (started, pid, disabled))
-    if prior_rows:
-        db.execute("INSERT INTO instances VALUES ('prev', ?, ?, NULL, 'session')", (100, 9999))
-    for inst, batch in (('i', rows), ('prev', prior_rows)):
-        for key, policy, ended, wake, events in batch:
-            db.execute("INSERT INTO tasks VALUES (?, ?, ?, 'x', ?)", (key, inst, policy, ended))
-            if wake is not None:
-                db.execute("INSERT INTO deliveries VALUES (?, ?, ?)", ("d" + key, key, wake))
-                for e in events:
-                    db.execute("INSERT INTO delivery_events (delivery_key, event) VALUES (?, ?)", ("d" + key, e))
-    db.commit(); db.close(); return path
-cases = [
-    ("leaked fallback hold", journal([("a", "wake", 5, 1, ["fallback-injected", "observed"])]), False),
-    ("no tasks at all", journal([]), False),
-    ("running wake task", journal([("a", "wake", None, None, [])]), True),
-    ("running notify task holds nothing", journal([("a", "notify", None, None, [])]), False),
-    ("ended wake, completion not yet decided", journal([("a", "wake", 5, None, [])]), True),
-    ("ended wake, completion enqueued not observed", journal([("a", "wake", 5, 1, ["enqueued"])]), True),
-    ("ended wake in earlier process, never observed", journal([], prior_rows=[("p", "wake", 5, None, [])]), False),
-    ("ended wake in earlier process, enqueued not observed", journal([], prior_rows=[("p", "wake", 5, 1, ["enqueued"])]), False),
-    ("running wake in earlier process still holds", journal([], prior_rows=[("p", "wake", None, None, [])]), True),
-    ("stopped wake task", journal([("a", "wake", 5, 0, [])]), False),
-    ("enqueue failed", journal([("a", "wake", 5, 1, ["enqueue-failed"])]), False),
-    ("another process", journal([], pid=1), None),
-    ("an older process with this pid", journal([], started=1), None),
-    ("disabled journal", journal([], disabled=7), None),
-    ("no journal file", os.path.join(sys.argv[3], "absent.sqlite"), None),
-]
-for name, path, want in cases:
-    got = owed(path, 4242, 500)
-    assert got is want, (name, got, want)
-assert journal_path({"PI_BACKGROUND_TASK_JOURNAL": "off"}) is None
-assert journal_path({"XDG_STATE_HOME": "/s"}) == "/s/pi-background-tasks/journal.sqlite"
-print("ok")
-`
-	cmd := exec.Command("python3", "-I", "-c", code, helper, fakeJournalSchema, scratch(t, "pi-owed"))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-}
-
-// Escalation, with a stand-in child and no clock: a pi that does not exit after its
-// documented shutdown gets the second SIGTERM pi turns into an immediate exit, and
-// only then SIGKILL. A pi that exits on the first is signalled once.
-func TestPiSettledShutdownEscalates(t *testing.T) {
-	helper, err := filepath.Abs("backends/pi/stop-at-gap")
-	if err != nil {
-		t.Fatal(err)
-	}
-	code := `import runpy, signal, subprocess, sys
-end = runpy.run_path(sys.argv[1])["end_settled"]
-class Child:
-    pid = 77
-    def __init__(self, survives): self.survives, self.sent = survives, []
-    def send_signal(self, sig): self.sent.append(sig)
-    def wait(self, timeout=None):
-        assert timeout == 5, timeout
-        if len(self.sent) <= self.survives: raise subprocess.TimeoutExpired("pi", timeout)
-for survives, want in [(0, ["SIGTERM"]), (1, ["SIGTERM", "SIGTERM"]), (2, ["SIGTERM", "SIGTERM", "SIGKILL"])]:
-    child = Child(survives)
-    if survives == 2:
-        child.wait = lambda timeout=None, c=child: (_ for _ in ()).throw(subprocess.TimeoutExpired("pi", 5)) if timeout is not None else None
-    got = end(child, 5)
-    assert [signal.Signals(s).name for s in child.sent] == want, (survives, child.sent)
-    assert got == [f"{name} to pi 77" for name in want], got
-print("ok")
-`
-	if out, err := exec.Command("python3", "-I", "-c", code, helper).CombinedOutput(); err != nil {
-		t.Fatalf("%v: %s", err, out)
 	}
 }

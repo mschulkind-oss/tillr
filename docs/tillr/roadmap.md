@@ -135,7 +135,7 @@ longer exists. Both are removed, and the first needs a seam to move behind.
        reads the journal named by `PI_BACKGROUND_TASK_JOURNAL`.
    - **Unverified:** whether upstream pi's `turn_end` event carries the usage fields
      [`extract-report`](../../tools/tillr-run/backends/pi/extract-report) reads.
-   - **Also:** [`build-agent-dir`](../../tools/tillr-run/backends/pi/build-agent-dir), which
+   - **Also:** [`pi-build-agent-dir`](../../tools/tillr-run/pihelper/build_agent_dir.go), which
      builds the directory pi loads its extensions from, reads three things this repository does
      not have: `yolo-packs/matt/pack.json`, the extensions under `yolo-packs/matt/files/extensions`,
      and `bin/pi-forks.list`. It raises `missing yolo-packs/matt/pack.json on trunk` without the
@@ -156,7 +156,7 @@ Third by rule 2: each of these is a place where a red check costs more than the 
 
 8. **Replay a change-scope check.** A *change-scope check* compares two commits and so has no
    verdict on a single revision; `tillr-loop replay --only <id>` refuses one for that reason
-   ([`tillr-loop`](../../tools/tillr-loop/tillr-loop)).
+   ([`tillr-loop`](../../tools/tillr-loop/)).
    - **Outcome:** a red change-scope check can be replayed on the base, so a failure that is
      already red there is acquitted instead of charged to the change.
    - **Depends on:** nothing.

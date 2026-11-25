@@ -23,7 +23,7 @@ covers:
   - tools/tillr-drain/drain/extension_roll.go
   - tools/tillr-drain/drain/push_refused.go
   - tools/tillr-run/run/pause.go
-  - tools/tillr-run/backends/pi/stop-at-gap
+  - tools/tillr-run/pihelper/stop_at_gap.go
   - tools/tillr-view/restart.go
   - tools/tillr-view/build.go
   - tools/tillr-roll/
@@ -178,7 +178,7 @@ Each backend adapter declares one `pause-kind`, which decides how
 
 | `pause-kind` | Shipped adapters | How the run stops | How the next segment continues |
 | :--- | :--- | :--- | :--- |
-| `stops-at-a-gap` | [`pi`](../../tools/tillr-run/backends/pi/pause-kind) | [`stop-at-gap`](../../tools/tillr-run/backends/pi/stop-at-gap) signals the harness process alone, once its session header shows the handler is installed. The harness finishes the tool calls in flight, starts none, saves the session and exits. The process group is killed only if the request's timeout expires first. | Resumes the saved session in the same lane and worktree. |
+| `stops-at-a-gap` | [`pi`](../../tools/tillr-run/backends/pi/pause-kind) | `tillr-run pi-stop-at-gap` signals the harness process alone, once its session header shows the handler is installed. The harness finishes the tool calls in flight, starts none, saves the session and exits. The process group is killed only if the request's timeout expires first. | Resumes the saved session in the same lane and worktree. |
 | `stops-where-it-stands` | [`claude`](../../tools/tillr-run/backends/claude/pause-kind) | Terminates the process group, waits a short grace, and kills any survivor. | Resumes the saved session. |
 | `cannot-resume` | [`agy`](../../tools/tillr-run/backends/agy/pause-kind), [`muse`](../../tools/tillr-run/backends/muse/pause-kind) | The same termination. | Starts a new session whose opening message carries the interruption reason, the old transcript's path, the worktree's state and the original brief. |
 
@@ -385,7 +385,7 @@ read from `<store>.roll-alarm.json` instead.
   time.** A crashed or stopped loop therefore takes the gate's whole process
   tree with it, while an in-place restart, which changes neither, leaves the
   gate running.
-- **`stop-at-gap` signals only the harness process, only after the session
+- **`tillr-run pi-stop-at-gap` signals only the harness process, only after the session
   header.** An earlier signal reaches the runtime's default handler, and a
   group-wide signal reaches tool children that die on it.
 

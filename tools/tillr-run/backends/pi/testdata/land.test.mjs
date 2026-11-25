@@ -11,6 +11,34 @@ import obstacleTool, { executeObstacle } from '../obstacle.ts';
 import keepGoing from '../keep-going.ts';
 
 const adapter = fileURLToPath(new URL('../', import.meta.url));
+const tillrRunDir = fileURLToPath(new URL('../../../', import.meta.url));
+let builtRunDir;
+let builtRunBin;
+
+function tillrRunBin() {
+  if (process.env.TILLR_RUN_BIN) {
+    return process.env.TILLR_RUN_BIN;
+  }
+  if (!builtRunBin) {
+    const scratchBase = process.env.YOLO_DURABLE_DIR || tmpdir();
+    mkdirSync(scratchBase, { recursive: true });
+    builtRunDir = mkdtempSync(join(scratchBase, 'tillr-run-bin-'));
+    builtRunBin = join(builtRunDir, 'tillr-run');
+    execFileSync('go', ['build', '-o', builtRunBin, '.'], { cwd: tillrRunDir, stdio: 'inherit' });
+    process.env.TILLR_RUN_BIN = builtRunBin;
+  }
+  return builtRunBin;
+}
+
+test.before(() => {
+  tillrRunBin();
+});
+
+test.after(() => {
+  if (builtRunDir) {
+    rmSync(builtRunDir, { recursive: true, force: true });
+  }
+});
 
 function landFixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'land-'));
@@ -106,8 +134,8 @@ test('registered land and obstacle settle through pi as promises, parking and re
   const dir = join(cwd, '..');
   const old = { ...process.env };
   t.after(() => { process.env = old; });
-  writeFileSync(join(dir, 'python3'), '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o700 });
-  Object.assign(process.env, { YOLO_DURABLE_DIR: dir, TILLR_GOAL_BASE: base, BOARD_DRAIN_BRIEF: join(dir, 'brief.md'), PATH: `${dir}:${old.PATH}` });
+  writeFileSync(join(dir, 'tillr-run'), '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o700 });
+  Object.assign(process.env, { YOLO_DURABLE_DIR: dir, TILLR_GOAL_BASE: base, BOARD_DRAIN_BRIEF: join(dir, 'brief.md'), TILLR_RUN_BIN: join(dir, 'tillr-run') });
   const ctx = { cwd, sessionManager: { getSessionFile: () => '', getBranch: () => [] } };
   const tools = {};
   landTool({ on() {}, registerTool: value => { tools.land = value; } });
@@ -162,8 +190,8 @@ test('registered land passes the session file and never writes landing-transcrip
   const base = git('rev-parse', 'HEAD');
   writeFileSync(join(cwd, 'in'), 'changed'); git('add', 'in'); commit();
   writeFileSync(join(dir, 'fence.txt'), 'in\n');
-  writeFileSync(join(dir, 'python3'), '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o700 });
-  Object.assign(process.env, { YOLO_DURABLE_DIR: dir, TILLR_GOAL_BASE: base, BOARD_DRAIN_BRIEF: join(dir, 'brief.md'), PATH: `${dir}:${old.PATH}` });
+  writeFileSync(join(dir, 'tillr-run'), '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o700 });
+  Object.assign(process.env, { YOLO_DURABLE_DIR: dir, TILLR_GOAL_BASE: base, BOARD_DRAIN_BRIEF: join(dir, 'brief.md'), TILLR_RUN_BIN: join(dir, 'tillr-run') });
   const handlers = {}; let tool;
   landTool({ on: (name, fn) => { handlers[name] = fn; }, registerTool: value => { tool = value; } });
   const ctx = { cwd, sessionManager: { getSessionFile: () => '/actual/session.jsonl', getBranch: () => [] } };
@@ -288,7 +316,7 @@ test('stop-at-gap streams park without treating it as a settle or a pause gap', 
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const pause = join(dir, 'pause');
   const stream = '{"type":"session"}\n{"type":"parked","toolCallId":"call","toolName":"land"}\n';
-  const r = spawnSync('python3', [join(adapter, 'stop-at-gap'), pause, 'sh', '-c', 'printf %s "$1"; touch "$2"; sleep .2', 'sh', stream, pause], { encoding: 'utf8', timeout: 5000 });
+  const r = spawnSync(tillrRunBin(), ['pi-stop-at-gap', pause, 'sh', '-c', 'printf %s "$1"; touch "$2"; sleep .2', 'sh', stream, pause], { encoding: 'utf8', timeout: 5000 });
   assert.equal(r.status, 0);
   assert.equal(r.stdout, stream);
 });
@@ -311,7 +339,7 @@ with sqlite3.connect(sys.argv[1]) as db:
         INSERT INTO deliveries VALUES ('delivery', 'observed', 1);
         INSERT INTO delivery_events VALUES ('delivery', 'observed');
     ''')`, journal]);
-  const wakes = (pid) => JSON.parse(execFileSync('python3', [join(adapter, 'stop-at-gap'), '--owed-wakes', pid, '456'], {
+  const wakes = (pid) => JSON.parse(execFileSync(tillrRunBin(), ['pi-stop-at-gap', '--owed-wakes', pid, '456'], {
     env: { ...process.env, PI_BACKGROUND_TASK_JOURNAL: journal }, encoding: 'utf8',
   }));
   assert.deepEqual(wakes('123'), ['owed', 'prior-owed']);

@@ -129,10 +129,6 @@ func TestPiAdapterSelectsTrunkAgentDirAndRecordsExtensionSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	buildTool, err := filepath.Abs("backends/pi/build-agent-dir")
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	dir := scratch(t, "pi-ext-trunk")
 	repo := setupMattTrunkRepo(t, dir)
@@ -163,9 +159,7 @@ func TestPiAdapterSelectsTrunkAgentDirAndRecordsExtensionSet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keyOut, err := exec.Command(buildTool, "--key").Output()
-	_ = keyOut
-	keyCmd := exec.Command(buildTool, "--key")
+	keyCmd := exec.Command(bin, "pi-build-agent-dir", "--key")
 	keyCmd.Dir = worktree
 	keyCmd.Env = cleanPiEnv(
 		"TILLR_PI_AGENT_DIRS_DIR="+agentDirs,
@@ -173,7 +167,7 @@ func TestPiAdapterSelectsTrunkAgentDirAndRecordsExtensionSet(t *testing.T) {
 	)
 	keyBytes, err := keyCmd.Output()
 	if err != nil {
-		t.Fatalf("build-agent-dir --key: %v", err)
+		t.Fatalf("pi-build-agent-dir --key: %v", err)
 	}
 	key1 := strings.TrimSpace(string(keyBytes))
 
@@ -267,12 +261,12 @@ func TestPiAdapterSelectsTrunkAgentDirAndRecordsExtensionSet(t *testing.T) {
 	runGit(t, repo, "add", "yolo-packs/matt/files/extensions/trunk-ext.ts")
 	runGit(t, repo, "commit", "-m", "break matt extension")
 
-	keyCmd2 := exec.Command(buildTool, "--key")
+	keyCmd2 := exec.Command(bin, "pi-build-agent-dir", "--key")
 	keyCmd2.Dir = worktree
 	keyCmd2.Env = cleanPiEnv("TILLR_PI_AGENT_DIRS_DIR="+agentDirs, "TILLR_DEPLOYED_PI_AGENT_DIR="+deployed)
 	keyBytes2, err := keyCmd2.Output()
 	if err != nil {
-		t.Fatalf("build-agent-dir --key 2: %v", err)
+		t.Fatalf("pi-build-agent-dir --key 2: %v", err)
 	}
 	key2 := strings.TrimSpace(string(keyBytes2))
 	if key2 == key1 {

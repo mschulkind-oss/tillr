@@ -68,6 +68,10 @@ func runTests(m *testing.M) int {
 		os.Stderr.Write(out)
 		return 1
 	}
+	if os.Getenv("TILLR_RUN_BIN") == "" {
+		os.Setenv("TILLR_RUN_BIN", bin)
+	}
+	os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return m.Run()
 }
 
@@ -1534,5 +1538,25 @@ func TestExecResumeContinuesTheSameRunAndAppendsItsLog(t *testing.T) {
 	}
 	if resumes := eventsOfKind(t, db, "run.resume"); resumes != 1 {
 		t.Fatalf("the refused resume appended a run.resume event (%d), so it claimed the lane before it was refused", resumes)
+	}
+}
+
+func TestPiHelperFacesHelp(t *testing.T) {
+	faces := []string{
+		"pi-build-agent-dir",
+		"pi-stop-at-gap",
+		"pi-compact",
+		"pi-landing-call-held",
+	}
+	for _, face := range faces {
+		for _, flag := range []string{"-h", "--help"} {
+			code, out := run(t, face, flag)
+			if code != 0 {
+				t.Fatalf("%s %s exited %d, want 0", face, flag, code)
+			}
+			if !strings.Contains(string(out), face) {
+				t.Fatalf("%s %s stdout %q does not name %s", face, flag, string(out), face)
+			}
+		}
 	}
 }

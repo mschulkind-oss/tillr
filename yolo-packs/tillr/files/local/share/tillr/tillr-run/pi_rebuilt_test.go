@@ -82,10 +82,6 @@ func TestPiAdapterResolvesRebuiltPiPrivatelyAndRecordsHarness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compact, err := filepath.Abs(filepath.Join("backends", "pi", "compact"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	backends, err := filepath.Abs("backends")
 	if err != nil {
 		t.Fatal(err)
@@ -412,7 +408,7 @@ for line in sys.stdin.buffer:
 			}
 			cleanDirs = append(cleanDirs, p)
 		}
-		cmd := exec.Command(compact, "--backend", "pi-designer", "--model", "fixture-model", "--effort", "medium", "--session-id", "11111111-1111-4111-8111-111111111111")
+		cmd := exec.Command(bin, "pi-compact", "--backend", "pi-designer", "--model", "fixture-model", "--effort", "medium", "--session-id", "11111111-1111-4111-8111-111111111111")
 		cmd.Dir = repoRoot
 		for _, entry := range os.Environ() {
 			if strings.HasPrefix(entry, "PATH=") || strings.HasPrefix(entry, "YOLO_DURABLE_DIR=") || strings.HasPrefix(entry, "TILLR_PI_BUILDS_DIR=") {
@@ -423,6 +419,7 @@ for line in sys.stdin.buffer:
 		cmd.Env = append(cmd.Env,
 			"PATH="+strings.Join(cleanDirs, string(os.PathListSeparator)),
 			"YOLO_DURABLE_DIR="+filepath.Join(dir, "durable"),
+			"TILLR_PI_ADAPTER_DIR="+filepath.Join(backends, "pi"),
 			"COMPACT_MARKER="+marker,
 			"TRANSCRIPT="+transcript,
 		)
