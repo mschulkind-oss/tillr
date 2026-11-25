@@ -438,6 +438,117 @@ string in `tools/tillr-drain/drain/replay_go_affected_test.go`). Whether to run 
 gate suites before the merge on gate edits or amend `D-GR50` is open for the owner in
 [`OQ-GR6`](#OQ-GR6).
 
+### Measured `go-affected` timings (2026-11-25)
+
+Measured on 2026-11-25 against the recorded runs under `.tillr/loop/` (101 `gate.timing.jsonl`
+records, 52 over 20 minutes / 1,200,000 ms; `go-affected` ran in 68 of them, 63 starting before
+the 07:43 ET priority change at `2026-11-25T12:43:20Z` in `.tillr/loop/backend-policy-changes.jsonl`
+and 5 starting after). No program behavior changes in this measurement.
+
+**Per-package and slowest-test breakdown across four >20-minute gates (2026-11-25).** Package
+totals sum all shards (`go-affected: pass|fail <pkg> (<sec>s)`), and test times list the
+slowest top-level tests (`<TestName>` without `/`), extracted with:
+
+```sh
+python3 - <<'EOF'
+import glob, json, os, re
+pkg_re = re.compile(r'^go-affected: (?:pass|fail) (\S+) \((\d+\.\d+)s\)$')
+test_re = re.compile(r'^go-affected: (?:pass|fail) (\S+) (\S+) \((\d+\.\d+)s\)$')
+for run in [
+    "run-item-request-6dec440553-a4-n1",
+    "run-item-request-da2e75c68f-a1-n1",
+    "run-item-request-1e21846750-a1-n3",
+    "run-item-request-5cd5946151-a2-n1",
+]:
+    t = json.loads(open(f".tillr/loop/{run}/gate.timing.jsonl").readline())
+    log = glob.glob(f".tillr/loop/{run}/change-logs/*go-affected.log")[0]
+    pkgs, tests = {}, []
+    for line in open(log):
+        line = line.strip()
+        if m := pkg_re.match(line):
+            pkgs[m.group(1)] = pkgs.get(m.group(1), 0.0) + float(m.group(2))
+        elif m := test_re.match(line):
+            if "/" not in m.group(2):
+                tests.append((float(m.group(3)), m.group(1), m.group(2)))
+    print(run, t["wall_ms"], t["checks"]["go-affected"]["wall_ms"], sorted(pkgs.items(), key=lambda x: -x[1]))
+    print("  top5:", sorted(tests, reverse=True)[:5])
+EOF
+```
+
+| Recorded gate (`run_id`) | Gate wall (ms) | `go-affected` wall (ms) | Package shard-time breakdown | Slowest top-level tests |
+| :--- | :--- | :--- | :--- | :--- |
+| `run-item-request-6dec440553-a4-n1` (8 pkgs, 2,286 tests; started 07:15:09 ET) | 1,869,571 (31.16 min) | 1,868,665 (31.14 min) | `tillr-drain/drain`: 21,153.68 s (16 shards, max 1,685.49 s); `tillr-watch`: 672.62 s (6 shards); `tillr-view`: 651.82 s (1); `tillr-store`: 236.69 s (1); `tillr-item`: 23.42 s (1); `tillr-drain`: 23.28 s (1); `tillr/definition`: 11.87 s (1); `tillr/store`: 3.57 s (1). Sum: 22,776.95 s. | `TestSiblingFastGateLandsWhileLaneOneGateBlocksAndRestartIsPending` (311.99 s; `concurrent_blocked_gate` 304.74 s), `TestRestartThroughTheShippedLauncherMovesOntoChangedSourceAndAnswersAlreadyCurrent` (233.74 s), `TestForkBuildCommandContracts` (217.55 s), `TestGateRefusalUsesExactTrunkProof` (176.05 s), `TestWorkflowEvaluatorJudgeClassesValidation` (155.59 s). |
+| `run-item-request-da2e75c68f-a1-n1` (3 pkgs, 2,085 tests; started ~06:34 ET) | 1,782,822 (29.71 min) | 1,777,113 (29.62 min) | `tillr-drain/drain`: 24,208.50 s (16 shards, max 1,741.77 s); `tillr/definition`: 2.05 s (1); `tillr/store`: 1.23 s (1). Sum: 24,211.78 s. | `TestSiblingFastGateLandsWhileLaneOneGateBlocksAndRestartIsPending` (314.36 s), `TestTheComposedPipelineRunsEndToEndOnAFixture` (229.89 s), `TestRestartThroughTheShippedLauncherMovesOntoChangedSourceAndAnswersAlreadyCurrent` (229.42 s), `TestAcquittedTreeItemReturnsOnlyAfterItsFixerLands` (212.39 s), `TestVerifyMissingVerdictReturnsToVerify` (182.48 s). |
+| `run-item-request-1e21846750-a1-n3` (8 pkgs, 2,891 tests; started ~06:27 ET) | 2,299,493 (38.32 min) | 2,297,014 (38.28 min) | `tillr-drain/drain`: 22,746.93 s (16 shards, max 1,599.12 s); `tillr-view`: 3,434.67 s (6 shards, max 815.07 s); `tillr-watch`: 495.76 s (6); `tillr-run/run`: 396.56 s (6); `tillr-gate`: 269.53 s (6); `tillr-drain/keep`: 46.78 s (1); `tillr/definition`: 3.31 s (1); `tillr/store`: 0.95 s (1). Sum: 27,394.49 s. | `TestSiblingFastGateLandsWhileLaneOneGateBlocksAndRestartIsPending` (321.85 s), `TestCommandWorkflowOutcomesAndPreservation` (162.79 s), `TestForkBuildCommandContracts` (152.12 s), `TestAcquittedTreeItemReturnsOnlyAfterItsFixerLands` (150.15 s), `TestTheComposedPipelineRunsEndToEndOnAFixture` (148.10 s). |
+| `run-item-request-5cd5946151-a2-n1` (9 pkgs, 2,396 tests; started 07:27:28 ET) | 1,651,843 (27.53 min) | 1,650,581 (27.51 min) | `tillr-drain/drain`: 20,678.80 s (16 shards, max 1,380.80 s); `tillr-view`: 393.30 s (2); `tillr-run/run`: 209.46 s (6); `tillr-run`: 202.34 s (1); `tillr-store`: 103.17 s (1); `tillr-drain`: 32.70 s (1); `tillr-run/claude`: 20.22 s (1); `tillr/definition`: 1.36 s (1); `tillr/store`: 0.69 s (1). Sum: 21,642.04 s. | `TestSiblingFastGateLandsWhileLaneOneGateBlocksAndRestartIsPending` (330.55 s), `TestJudgeFailingDispositions` (278.41 s), `TestCommandWorkflowOutcomesAndPreservation` (241.92 s), `TestCommentRefusedAndAnswerOnly` (195.37 s), `TestObstacleCallRoutesEqualToFooterAndDeliversReplies` (183.26 s). |
+
+In every >20-minute gate, `tillr-drain/drain` accounted for **83.0%–99.99%** of total package shard
+time and ran across 16 concurrent shards (`ThreadPoolExecutor(max_workers=min(16, len(invocations)))`
+in `tools/gate/go_affected.py`), with `slot_wait 0ms` reported in every log.
+
+**Are gates after 07:43 ET faster?** Yes, for gates that *started* after the 07:43 ET priority
+change (`gate` nice 5, `proof` nice 10, `worker` nice 15), checked by reading `started_at_ms` from
+`change-logs/gate.checks.jsonl` and `wall_ms` from `gate.timing.jsonl`:
+
+- Before 07:43 ET, the median across 63 `go-affected` gates was **1,606,590 ms** (26.78 min).
+  Gates that started before 07:43 ET and finished after (`6dec440553-a4-n1`, `5cd5946151-a2-n1`,
+  `9664864271-a2-n1-cfix-cfix`) still took 24.11–31.16 min.
+- Among gates that started after 07:43 ET, `run-item-request-5ef3520666-a2` (same 8 packages as
+  pre-07:43 `5ef3520666-a1`) dropped from **1,782,531 ms** (29.71 min) to **1,031,027 ms**
+  (17.18 min), and `run-item-request-f781208475-a1-n1` (same 3 packages as pre-07:43
+  `da2e75c68f-a1-n1`) dropped from **1,782,822 ms** (29.71 min) to **645,131 ms** (10.75 min;
+  `tillr-drain/drain` shard sum dropped 4.30x from 24,208.50 s to 5,626.00 s).
+
+**Waiting for processors vs. waiting on a clock.** Most of the 30-minute wall time went to
+**waiting for processors** under multi-gate/proof/worker contention, while a smaller set of
+**clock-waiting tests** imposes a ~302 s floor that does not shrink with more CPU:
+
+- Comparing the 2,069 common top-level tests between pre-07:43 `da2e75c68f-a1-n1` (23,680.37 s
+  total) and post-07:43 `f781208475-a1-n1` (5,468.07 s total), **18,212.30 s (76.9%)** vanished
+  when processor contention dropped. CPU-bound integration tests sped up **5.2x–8.0x**
+  (`TestRollingWithoutAVerdictStillDispatches` 82.24 s to 10.34 s;
+  `TestTwentyLanesLandWithoutWaitingOnEachOther` 146.83 s to 24.61 s; `TestForkBuildCommandContracts`
+  133.04 s to 24.22 s; `TestRestartThroughTheShippedLauncherMovesOntoChangedSourceAndAnswersAlreadyCurrent`
+  229.42 s to 64.07 s, matching its standalone measurement via
+  `cd tools/tillr-drain && time go test ./drain -run '^TestRestartThroughTheShippedLauncherMovesOntoChangedSourceAndAnswersAlreadyCurrent$' -count=1`
+  at **67.59 s** wall / 57.18 s user + 9.19 s sys).
+- Clock-waiting tests stayed at **0.99x–1.20x** across contention levels and standalone runs:
+  - `cd tools/tillr-drain && time go test ./drain -run '^TestSiblingFastGateLandsWhileLaneOneGateBlocksAndRestartIsPending/concurrent_blocked_gate$' -count=1`:
+    **302.43 s** wall vs. 50.72 s user + 3.40 s sys (304.74 s in `6dec440553-a4-n1`, 304.06 s in
+    `f781208475-a1-n1`), dominated by a 300 s `hangGuard` (`5 * time.Minute`) wait.
+  - `cd tools/tillr-drain && time go test ./drain -run '^TestWaitingDoesNotRepeatUnknownRollingChecksOnIdlePolls$' -count=1`:
+    **112.09 s** wall vs. 3.32 s user + 1.14 s sys (109.19 s in `5ef3520666-a1`, 107.90 s in
+    `f781208475-a1-n1`), waiting on real-clock idle-poll intervals across seven `l.pass` calls.
+  - `TestAnOutOfRotationLaneIsQuietUntilItChangesOrTheSlowIntervalPasses`: 101.65 s in
+    `da2e75c68f-a1-n1` vs. 92.79 s in `f781208475-a1-n1` (1.10x).
+
+**Why no small tuning change brings the median under 90 seconds, and the smallest change that
+would.** No priority, shard-count, or single-test fix can bring the median under the alert's 90 s
+(`config/tillr/watch/fast-gate-slow.toml`) while every `tools/tillr-drain` candidate runs the
+~2,093-test `tillr-drain/drain` package before the merge:
+
+1. Even with zero processor contention, `TestSiblingFastGateLandsWhileLaneOneGateBlocksAndRestartIsPending`
+   (302.43 s) and `TestWaitingDoesNotRepeatUnknownRollingChecksOnIdlePolls` (112.09 s) each exceed
+   90 s on a single shard.
+2. Even if every clock-waiting test used fake clocks, the remaining ~2,080 tests in
+   `tillr-drain/drain` sum to ~4,800 s of test-wall time (~150 s minimum across 32 cores for a
+   single gate in isolation, and longer whenever multiple gates run concurrently).
+
+The smallest change that would bring the median under 90 s is to stop running `tillr-drain/drain`'s
+~2,000 subprocess-heavy integration tests in pre-merge `go-affected` — either by moving those
+integration tests into a separate package proven in the after-merge heavy tier (leaving fast unit
+tests in `drain`) or by amending [`D-GR38`](#D-GR38) and [`D-GR39`](#D-GR39) to prove
+`tillr-drain/drain` after the merge. Follow-up changes are separate requests:
+
+- **Request 1:** Replace the 300 s `hangGuard` wait in
+  `TestSiblingFastGateLandsWhileLaneOneGateBlocksAndRestartIsPending/concurrent_blocked_gate` and
+  the real-clock idle-poll waits in `TestWaitingDoesNotRepeatUnknownRollingChecksOnIdlePolls` and
+  `TestAnOutOfRotationLaneIsQuietUntilItChangesOrTheSlowIntervalPasses` with explicit synchronization
+  and fake clocks.
+- **Request 2:** Split `tillr-drain/drain`'s fast unit tests from its ~2,000 subprocess integration
+  tests (or move `tillr-drain/drain` out of pre-merge `go-affected` into the after-merge proof) if
+  the 90 s median target in `config/tillr/watch/fast-gate-slow.toml` is to hold.
+
 ## After-merge proof and the green pointer
 
 `landing_strategy` in [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json)
