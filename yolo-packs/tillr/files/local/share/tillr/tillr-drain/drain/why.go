@@ -118,6 +118,14 @@ func decodePolicy(ref string, raw []byte) (*Policy, error) {
 	if err := p.Check(); err != nil {
 		return nil, err
 	}
+	for name, backend := range p.Backends {
+		adapter, err := run.ResolvePolicyAdapter(backend.Adapter)
+		if err != nil {
+			return nil, Usagef("the policy's backend %q: %v", name, err)
+		}
+		backend.Adapter = adapter
+		p.Backends[name] = backend
+	}
 	return &p, nil
 }
 

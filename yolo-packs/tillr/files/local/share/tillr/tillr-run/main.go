@@ -263,6 +263,10 @@ func requestFace(args []string) int {
 	if missing := backend.Missing(); missing != "" {
 		return fail(run.Usagef("the policy's backend %q %s", *backendName, missing))
 	}
+	backend.Adapter, err = run.ResolvePolicyAdapter(backend.Adapter)
+	if err != nil {
+		return fail(run.Usagef("the policy's backend %q: %v", *backendName, err))
+	}
 	req := backend.Request(*itemID, *laneID, *runID, *backendName)
 	req.Seat = *seat
 	req.Workflow = *workflow

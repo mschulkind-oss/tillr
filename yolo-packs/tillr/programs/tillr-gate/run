@@ -22,6 +22,8 @@ bin=tillr-gate
 mod=tillr-gate
 
 root=${HOME:?$bin: HOME is unset}/.local/share/tillr
+TILLR_INSTALL_ROOT=$root
+export TILLR_INSTALL_ROOT
 cache=${XDG_CACHE_HOME:-$HOME/.cache}/tillr/bin
 
 if command -v sha256sum >/dev/null 2>&1; then

@@ -292,7 +292,14 @@ To spread fresh dispatches across backends, give every entry of a seat a positiv
 }
 ```
 
-Each named backend needs a row in the policy's `backends` map. A seat object's `pick` is
+Each named backend needs a row in the policy's `backends` map. Its `adapter` may be
+`run-pi`, `run-claude`, `run-agy` or `run-muse`: tillr resolves that name to its own
+installed executable, independently of the backend key. A missing installed executable
+is an error, not a PATH lookup. Explicit adapter paths retain their existing meaning.
+Direct source invocations use the source checkout; a binary run elsewhere can set
+`TILLR_INSTALL_ROOT` to the rendered installation root.
+
+A seat object's `pick` is
 `in-order` (the default: the backend whose next dispatch is earliest in the proportional
 count order, ties in list order), `round-robin` (forward through the list from the seat's
 last recorded dispatch) or `random` (one draw per fresh dispatch with odds proportional to
