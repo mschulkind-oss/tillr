@@ -1150,7 +1150,8 @@ func isReturnPathBounded(lw loadedWorkflow, v, target lintWorkflowStage, rules [
 			return true
 		}
 		if r.When.Pattern == CountInWindow && r.When.DistinctBy == "" {
-			perItem := r.When.GroupBy == "item_id" || r.When.GroupBy == "object_id" || slices.Contains(r.When.GroupByList, "item_id")
+			perItem := r.When.GroupBy == "item_id" || r.When.GroupBy == "object_id" ||
+				slices.Contains(r.When.GroupByList, "item_id") || slices.Contains(r.When.GroupByAny, "item_id")
 			if !perItem {
 				continue
 			}

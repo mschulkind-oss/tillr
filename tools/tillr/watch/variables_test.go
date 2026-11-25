@@ -24,6 +24,8 @@ func registerShippedWatchKinds(t *testing.T) {
 		"drain.dispatch-declined",
 		"drain.ended-work-saved",
 		"drain.fast-gate-timing",
+		"drain.fixer-attached",
+		"drain.fixer-proved",
 		"drain.heavy-fault",
 		"drain.heavy-progress",
 		"drain.item-fault",
@@ -79,6 +81,12 @@ func TestShippedWatchRulesVariableDerivation(t *testing.T) {
 			}
 			if !slices.Equal(vars, want) {
 				t.Errorf("rule %q composite group_by %v: got vars %v, want %v", r.ID, r.When.GroupByList, vars, want)
+			}
+		case len(r.When.GroupByAny) > 0:
+			singleCount++
+			want := []string{lastDotSegment(r.When.GroupByAny[0])}
+			if !slices.Equal(vars, want) {
+				t.Errorf("rule %q group_by.any %v: got vars %v, want %v", r.ID, r.When.GroupByAny, vars, want)
 			}
 		case r.When.GroupBy == "global" || r.When.GroupBy == "":
 			globalCount++

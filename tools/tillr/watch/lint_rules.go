@@ -409,8 +409,38 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proof
 					w.GroupByList = list
 				}
 			}
+		case map[string]any:
+			for _, key := range slices.Sorted(maps.Keys(gb)) {
+				if key != "any" {
+					emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.group_by: unknown key %q in group_by table", key))
+				}
+			}
+			rawAny, hasAny := gb["any"]
+			list, ok := tomlStringList(rawAny)
+			if !hasAny || !ok || len(list) == 0 {
+				emit(CodeWatchLintRuleSchema, "when.group_by: expected any to be a non-empty list of strings")
+			} else {
+				seen := make(map[string]bool)
+				for _, col := range list {
+					if col == "" || col == "global" || !validEventPath(col) {
+						emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.group_by: invalid entry %q", col))
+					} else if isForbiddenGroupByColumn(col) {
+						emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("when.group_by: integer column %q cannot be used as group_by", col))
+					}
+					if seen[col] {
+						emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.group_by: duplicate entry %q", col))
+					}
+					seen[col] = true
+				}
+				if len(list) == 1 {
+					w.GroupBy = list[0]
+				} else {
+					w.GroupBy = strings.Join(list, " | ")
+				}
+				w.GroupByAny = list
+			}
 		default:
-			emit(CodeWatchLintRuleSchema, "when.group_by: expected a non-empty string or list of strings")
+			emit(CodeWatchLintRuleSchema, "when.group_by: expected a non-empty string, list of strings, or { any = [...] }")
 		}
 	}
 
@@ -427,7 +457,7 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proof
 				emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.%s: unknown key", k))
 			}
 		}
-		if len(w.GroupByList) >= 2 || (w.GroupBy != "" && w.GroupBy != "global") {
+		if len(w.GroupByList) >= 2 || len(w.GroupByAny) > 0 || (w.GroupBy != "" && w.GroupBy != "global") {
 			emit(CodeWatchLintRuleSchema, "when.group_by: lag_behind requires global")
 		}
 		leader, _ := whenMap["leader"].(string)
@@ -483,7 +513,7 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proof
 	}
 
 	projectionOnly := pattern == PredicateMatch && len(reads.Events) == 0
-	if projectionOnly && (w.GroupBy != "item_id" || len(w.GroupByList) != 0) {
+	if projectionOnly && (w.GroupBy != "item_id" || len(w.GroupByList) != 0 || len(w.GroupByAny) != 0) {
 		emit(CodeWatchLintRuleSchema, "when.group_by: projection-only predicate_match requires group_by = \"item_id\"")
 	}
 
@@ -505,7 +535,16 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proof
 		}
 	}
 
-	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint"}
+	if rawKeep, present := whenMap["keep_on_terminal_item"]; present {
+		b, ok := rawKeep.(bool)
+		if !ok {
+			emit(CodeWatchLintRuleSchema, "when.keep_on_terminal_item: expected a boolean")
+		} else {
+			w.KeepOnTerminalItem = b
+		}
+	}
+
+	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint", "keep_on_terminal_item"}
 	switch pattern {
 	case DurationWithoutEvent:
 		allowed = append(allowed, "after", "match", "threshold_duration")
@@ -519,11 +558,27 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proof
 			w.ThresholdDuration = d
 		}
 	case PredicateMatch:
-		allowed = append(allowed, "match")
+		allowed = append(allowed, "after", "match", "reset")
 		w.Threshold = 1
-		w.Match = lintRuleExpr(whenMap, "match", projectionOnly, w.GroupBy, reads, refs, proofRefs, kinds, emit)
-		if projectionOnly && w.Match != nil && w.Match.usesEvent {
-			emit(CodeWatchLintUnknownSignal, "when.match: projection-only predicate_match cannot reference event.*")
+		if _, hasAfter := whenMap["after"]; hasAfter {
+			if projectionOnly {
+				emit(CodeWatchLintRuleSchema, "when.after: projection-only predicate_match must omit after")
+			}
+			w.After = lintRuleExpr(whenMap, "after", true, w.GroupBy, reads, refs, proofRefs, kinds, emit)
+			if _, hasMatch := whenMap["match"]; !hasMatch {
+				emit(CodeWatchLintRuleSchema, "when.match: required when after is set on predicate_match")
+			} else {
+				w.Match = lintRuleExpr(whenMap, "match", true, w.GroupBy, reads, refs, proofRefs, kinds, emit)
+			}
+			w.Reset = lintRuleExpr(whenMap, "reset", false, w.GroupBy, reads, refs, proofRefs, kinds, emit)
+		} else {
+			w.Match = lintRuleExpr(whenMap, "match", projectionOnly, w.GroupBy, reads, refs, proofRefs, kinds, emit)
+			if projectionOnly && w.Match != nil && w.Match.usesEvent {
+				emit(CodeWatchLintUnknownSignal, "when.match: projection-only predicate_match cannot reference event.*")
+			}
+			if _, hasReset := whenMap["reset"]; hasReset {
+				emit(CodeWatchLintRuleSchema, "when.reset: requires after on predicate_match")
+			}
 		}
 	case CountInWindow:
 		allowed = append(allowed, "match", "distinct_by", "threshold")

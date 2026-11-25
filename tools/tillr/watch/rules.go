@@ -47,12 +47,14 @@ type When struct {
 	Fingerprint                                []string
 	GroupBy                                    string
 	GroupByList                                []string
+	GroupByAny                                 []string
 	Pattern, Field, DistinctBy                 string
 	Pairs                                      [][2]string
 	Threshold, ThresholdCommits                int64
 	Window, ThresholdDuration                  time.Duration
 	Leader, Follower, Mode                     string
 	Match, Reset, ClearWhen, After, ReopenWhen *Expression
+	KeepOnTerminalItem                         bool
 }
 
 type Guidance struct {
@@ -404,7 +406,7 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 	}
 	r.When = loadWhen(when, pattern, refs, projectionOnly)
 	if projectionOnly {
-		if r.When.GroupBy != "item_id" || len(r.When.GroupByList) != 0 {
+		if r.When.GroupBy != "item_id" || len(r.When.GroupByList) != 0 || len(r.When.GroupByAny) != 0 {
 			when.reject("group_by", "projection-only predicate_match requires group_by = \"item_id\"")
 		}
 		if r.When.Match != nil && r.When.Match.usesEvent {
@@ -518,27 +520,27 @@ func loadVariables(root keys, raw any, pattern string) map[string]string {
 	return vars
 }
 
-func loadGroupBy(k keys) (string, []string) {
+func loadGroupBy(k keys) (string, []string, []string) {
 	raw, present := k.values["group_by"]
 	if !present {
-		k.reject("group_by", "expected a non-empty string or a non-empty list of strings")
-		return "", nil
+		k.reject("group_by", "expected a non-empty string, a non-empty list of strings, or { any = [...] }")
+		return "", nil, nil
 	}
 	switch v := raw.(type) {
 	case string:
 		if v == "" {
 			k.reject("group_by", "expected a non-empty string")
-			return "", nil
+			return "", nil, nil
 		}
 		if !validEventPath(v) {
 			k.reject("group_by", "expected an event column or a dotted JSON key path with no empty segments")
-			return "", nil
+			return "", nil, nil
 		}
-		return v, nil
+		return v, nil, nil
 	case []any:
 		if len(v) == 0 {
 			k.reject("group_by", "expected a non-empty list of strings")
-			return "", nil
+			return "", nil, nil
 		}
 		list := make([]string, 0, len(v))
 		seen := make(map[string]bool, len(v))
@@ -546,36 +548,79 @@ func loadGroupBy(k keys) (string, []string) {
 			s, ok := elem.(string)
 			if !ok || s == "" {
 				k.reject("group_by", "invalid string at index %d", i)
-				return "", nil
+				return "", nil, nil
 			}
 			if s == "global" {
 				k.reject("group_by", "global is not allowed in a group_by list")
-				return "", nil
+				return "", nil, nil
 			}
 			if !validEventPath(s) {
 				k.reject("group_by", "expected an event column or a dotted JSON key path with no empty segments")
-				return "", nil
+				return "", nil, nil
 			}
 			if seen[s] {
 				k.reject("group_by", "duplicate group_by name %q", s)
-				return "", nil
+				return "", nil, nil
 			}
 			seen[s] = true
 			list = append(list, s)
 		}
 		if len(list) == 1 {
-			return list[0], nil
+			return list[0], nil, nil
 		}
-		return strings.Join(list, ", "), list
+		return strings.Join(list, ", "), list, nil
+	case map[string]any:
+		for _, key := range slices.Sorted(maps.Keys(v)) {
+			if key != "any" {
+				k.reject("group_by", "unknown key %q in group_by table", key)
+				return "", nil, nil
+			}
+		}
+		rawAny, ok := v["any"].([]any)
+		if !ok || len(rawAny) == 0 {
+			k.reject("group_by", "expected any to be a non-empty list of strings")
+			return "", nil, nil
+		}
+		list := make([]string, 0, len(rawAny))
+		seen := make(map[string]bool, len(rawAny))
+		for i, elem := range rawAny {
+			s, ok := elem.(string)
+			if !ok || s == "" {
+				k.reject("group_by", "invalid string at index %d", i)
+				return "", nil, nil
+			}
+			if s == "global" {
+				k.reject("group_by", "global is not allowed in group_by.any")
+				return "", nil, nil
+			}
+			if !validEventPath(s) {
+				k.reject("group_by", "expected an event column or a dotted JSON key path with no empty segments")
+				return "", nil, nil
+			}
+			if isForbiddenGroupByColumn(s) {
+				k.reject("group_by", "integer column %q cannot be used in group_by.any", s)
+				return "", nil, nil
+			}
+			if seen[s] {
+				k.reject("group_by", "duplicate group_by name %q", s)
+				return "", nil, nil
+			}
+			seen[s] = true
+			list = append(list, s)
+		}
+		if len(list) == 1 {
+			return list[0], nil, list
+		}
+		return strings.Join(list, " | "), nil, list
 	default:
-		k.reject("group_by", "expected a non-empty string or a non-empty list of strings")
-		return "", nil
+		k.reject("group_by", "expected a non-empty string, a non-empty list of strings, or { any = [...] }")
+		return "", nil, nil
 	}
 }
 
 func loadWhen(k keys, pattern string, refs map[string]bool, projectionOnly bool) When {
 	w := When{Pattern: pattern}
-	w.GroupBy, w.GroupByList = loadGroupBy(k)
+	w.GroupBy, w.GroupByList, w.GroupByAny = loadGroupBy(k)
 	if pattern == LagBehind {
 		return loadLag(k, w, refs)
 	}
@@ -588,7 +633,10 @@ func loadWhen(k keys, pattern string, refs map[string]bool, projectionOnly bool)
 			}
 		}
 	}
-	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint"}
+	if _, present := k.values["keep_on_terminal_item"]; present {
+		w.KeepOnTerminalItem = requiredValue[bool](k, "keep_on_terminal_item", "a boolean")
+	}
+	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint", "keep_on_terminal_item"}
 	switch w.Pattern {
 	case DurationWithoutEvent:
 		k.only(append(allowed, "after", "match", "threshold_duration")...)
@@ -596,9 +644,25 @@ func loadWhen(k keys, pattern string, refs map[string]bool, projectionOnly bool)
 		w.Match = k.expression("match", false)
 		w.ThresholdDuration = k.duration("threshold_duration")
 	case PredicateMatch:
-		k.only(append(allowed, "match")...)
+		k.only(append(allowed, "after", "match", "reset")...)
 		w.Threshold = 1
-		w.Match = k.expression("match", projectionOnly)
+		if _, hasAfter := k.values["after"]; hasAfter {
+			if projectionOnly {
+				k.reject("after", "projection-only predicate_match must omit after")
+			}
+			w.After = k.expression("after", true)
+			if _, hasMatch := k.values["match"]; !hasMatch {
+				k.reject("match", "required when after is set on predicate_match")
+			} else {
+				w.Match = k.expression("match", true)
+			}
+			w.Reset = k.expression("reset", false)
+		} else {
+			w.Match = k.expression("match", projectionOnly)
+			if _, hasReset := k.values["reset"]; hasReset {
+				k.reject("reset", "requires after on predicate_match")
+			}
+		}
 	case CountInWindow:
 		k.only(append(allowed, "match", "distinct_by", "threshold")...)
 		w.Match = k.expression("match", false)

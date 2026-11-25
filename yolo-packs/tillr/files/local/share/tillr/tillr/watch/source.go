@@ -564,8 +564,11 @@ func (m *memoryState) readStatusInto(s *Status, rules []Rule) {
 	}
 }
 
-func isSuppressiveResolutionReason(reason string) bool {
-	return reason == "manual" || strings.HasPrefix(reason, "item-")
+func isSuppressiveResolutionReason(w When, reason string) bool {
+	if reason == "manual" {
+		return true
+	}
+	return !w.KeepOnTerminalItem && strings.HasPrefix(reason, "item-")
 }
 
 func isWindowedEventRule(w When) bool {
@@ -633,6 +636,9 @@ func (c itemTerminalChecker) reason(rule *Rule, subject string) (string, error) 
 		return "", nil
 	}
 	if rule != nil {
+		if rule.When.KeepOnTerminalItem {
+			return "", nil
+		}
 		var candidate string
 		if len(rule.When.GroupByList) >= 2 {
 			tuple, ok := decodeCompositeSubject(subject, len(rule.When.GroupByList))
@@ -969,7 +975,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 				continue
 			}
 			previous, reason, resolvedSeq := m.lastEpisodeLocked(r.ID, key)
-			if isSuppressiveResolutionReason(reason) && newest.Seq <= resolvedSeq {
+			if isSuppressiveResolutionReason(r.When, reason) && newest.Seq <= resolvedSeq {
 				continue
 			}
 			var randomID [16]byte

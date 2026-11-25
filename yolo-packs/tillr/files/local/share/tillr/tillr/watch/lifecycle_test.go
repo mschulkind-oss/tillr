@@ -27,10 +27,14 @@ func TestWatchFingerprintEncodingAndSource(t *testing.T) {
 			s := watchStore(t)
 			now := time.Unix(1700000000, 0)
 			w := When{Pattern: pattern, GroupBy: "global", Field: "step", Pairs: [][2]string{{"a", "b"}}, Threshold: 1, Window: time.Hour, ThresholdDuration: time.Second, Fingerprint: []string{"missing", "detail.check", "step", "empty", "number", "bool", "list", "obj", "null"}}
-			w.After, _ = ParseExpression(`event.step == "b"`)
-			if pattern != DurationWithoutEvent && pattern != AlternatingPair {
-				w.Match = w.After
-				w.Reset, _ = ParseExpression(`event.step == "reset"`)
+			expr, _ := ParseExpression(`event.step == "b"`)
+			if pattern == DurationWithoutEvent {
+				w.After = expr
+			} else if pattern != AlternatingPair {
+				w.Match = expr
+				if pattern != PredicateMatch {
+					w.Reset, _ = ParseExpression(`event.step == "reset"`)
+				}
 			}
 			r := Rule{ID: "rule", Scope: "core", Enabled: true, Severity: "warning", Reads: Reads{Events: []string{"watch-test.fact"}}, When: w}
 			e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}

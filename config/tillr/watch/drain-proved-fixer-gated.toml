@@ -1,0 +1,36 @@
+# Incident (2026-11-23): fixer-main-1293971a3597 (proved by rerun at ~04:47 ET,
+# then gated for 89 minutes and replayed) and fixer-main-e7ff466d8d4a (gated for
+# 1h 08m after drain.fixer-proved) both entered the gate after the drain had
+# already recorded drain.fixer-proved.
+# Reads registered kinds drain.fixer-proved, drain.fixer-attached, and gate.started.
+
+[[rule]]
+id = "drain-proved-fixer-gated"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.fixer-proved", "drain.fixer-attached", "gate.started"]
+
+[rule.when]
+group_by = { any = ["item_id", "fixer_item", "object_id"] }
+pattern = "predicate_match"
+after = 'event.kind == "drain.fixer-proved"'
+reset = 'event.kind == "drain.fixer-attached" and not (event.kept_candidate == true)'
+match = 'event.kind == "gate.started"'
+window = "24h"
+keep_on_terminal_item = true
+
+[rule.guidance]
+summary = "Gate started for trunk fixer {{subject}} (run {{event.run_id}} on {{event.lane_id}}) after the drain had already recorded drain.fixer-proved for it."
+check = [
+  "Run tillr view events for {{subject}} and {{event.run_id}} to compare the drain.fixer-proved, drain.fixer-attached, and gate.started sequence numbers and check the item's state when gate.started fired.",
+  "Inspect tools/tillr-drain/fixer/fixer_resolve.go and tools/tillr-drain/drain/loop.go to see how {{subject}}'s candidate reached Loop.verify after drain.fixer-proved without being settled first.",
+]
+do = [
+  "Establish why {{subject}} entered the gate after drain.fixer-proved was recorded and file or track the drain fix so proved trunk fixers settle before gating.",
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]

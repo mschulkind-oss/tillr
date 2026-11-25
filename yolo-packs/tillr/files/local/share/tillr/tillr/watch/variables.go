@@ -57,6 +57,9 @@ func groupByVariablePaths(w When) []string {
 	if len(w.GroupByList) >= 2 {
 		return w.GroupByList
 	}
+	if len(w.GroupByAny) > 0 {
+		return []string{w.GroupByAny[0]}
+	}
 	if w.GroupBy != "" && w.GroupBy != "global" {
 		return []string{w.GroupBy}
 	}

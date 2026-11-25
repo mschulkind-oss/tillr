@@ -51,6 +51,7 @@ type condition struct {
 	pair            [2]string
 	previous        observation
 	hadPrevious     bool
+	armed           bool
 	waitAge         time.Duration
 	lag             *lagCondition
 	projectionMatch bool
@@ -90,7 +91,23 @@ func (c *condition) observe(r When, e observation, values expressionValues) {
 	if clear {
 		c.events = c.events[:0]
 		c.hadPrevious = false
+		c.armed = false
 		c.clears = append(c.clears, e.Seq)
+		return
+	}
+	if r.Pattern == PredicateMatch && r.After != nil {
+		if r.Reset != nil && r.Reset.eval(values) {
+			c.armed = false
+			return
+		}
+		if r.After.eval(values) {
+			c.armed = true
+			return
+		}
+		if c.armed && r.Match != nil && r.Match.eval(values) {
+			c.events = append(c.events, e)
+			c.armed = false
+		}
 		return
 	}
 	if r.Pattern == AlternatingPair {
@@ -185,28 +202,30 @@ type ruleBaseline struct {
 }
 
 type ruleDefinitionDigestInput struct {
-	Scope             string            `json:"scope"`
-	Variables         map[string]string `json:"variables,omitempty"`
-	Events            []string          `json:"events"`
-	Projections       []string          `json:"projections"`
-	GroupBy           string            `json:"group_by"`
-	GroupByList       []string          `json:"group_by_list"`
-	Pattern           string            `json:"pattern"`
-	Field             string            `json:"field"`
-	DistinctBy        string            `json:"distinct_by,omitempty"`
-	Pairs             [][2]string       `json:"pairs"`
-	Threshold         int64             `json:"threshold"`
-	ThresholdCommits  int64             `json:"threshold_commits"`
-	Window            int64             `json:"window"`
-	ThresholdDuration int64             `json:"threshold_duration"`
-	Leader            string            `json:"leader"`
-	Follower          string            `json:"follower"`
-	Mode              string            `json:"mode"`
-	Match             string            `json:"match"`
-	Reset             string            `json:"reset"`
-	ClearWhen         string            `json:"clear_when"`
-	After             string            `json:"after"`
-	ReopenWhen        string            `json:"reopen_when"`
+	Scope              string            `json:"scope"`
+	Variables          map[string]string `json:"variables,omitempty"`
+	Events             []string          `json:"events"`
+	Projections        []string          `json:"projections"`
+	GroupBy            string            `json:"group_by"`
+	GroupByList        []string          `json:"group_by_list"`
+	GroupByAny         []string          `json:"group_by_any,omitempty"`
+	Pattern            string            `json:"pattern"`
+	Field              string            `json:"field"`
+	DistinctBy         string            `json:"distinct_by,omitempty"`
+	Pairs              [][2]string       `json:"pairs"`
+	Threshold          int64             `json:"threshold"`
+	ThresholdCommits   int64             `json:"threshold_commits"`
+	Window             int64             `json:"window"`
+	ThresholdDuration  int64             `json:"threshold_duration"`
+	Leader             string            `json:"leader"`
+	Follower           string            `json:"follower"`
+	Mode               string            `json:"mode"`
+	Match              string            `json:"match"`
+	Reset              string            `json:"reset"`
+	ClearWhen          string            `json:"clear_when"`
+	After              string            `json:"after"`
+	ReopenWhen         string            `json:"reopen_when"`
+	KeepOnTerminalItem bool              `json:"keep_on_terminal_item,omitempty"`
 }
 
 func normalizeStrings(s []string) []string {
@@ -232,28 +251,30 @@ func exprSource(e *Expression) string {
 
 func definitionHash(r Rule) string {
 	in := ruleDefinitionDigestInput{
-		Scope:             r.Scope,
-		Variables:         r.Variables,
-		Events:            normalizeStrings(r.Reads.Events),
-		Projections:       normalizeStrings(r.Reads.Projections),
-		GroupBy:           r.When.GroupBy,
-		GroupByList:       normalizeStrings(r.When.GroupByList),
-		Pattern:           r.When.Pattern,
-		Field:             r.When.Field,
-		DistinctBy:        r.When.DistinctBy,
-		Pairs:             normalizePairs(r.When.Pairs),
-		Threshold:         r.When.Threshold,
-		ThresholdCommits:  r.When.ThresholdCommits,
-		Window:            int64(r.When.Window),
-		ThresholdDuration: int64(r.When.ThresholdDuration),
-		Leader:            r.When.Leader,
-		Follower:          r.When.Follower,
-		Mode:              r.When.Mode,
-		Match:             exprSource(r.When.Match),
-		Reset:             exprSource(r.When.Reset),
-		ClearWhen:         exprSource(r.When.ClearWhen),
-		After:             exprSource(r.When.After),
-		ReopenWhen:        exprSource(r.When.ReopenWhen),
+		Scope:              r.Scope,
+		Variables:          r.Variables,
+		Events:             normalizeStrings(r.Reads.Events),
+		Projections:        normalizeStrings(r.Reads.Projections),
+		GroupBy:            r.When.GroupBy,
+		GroupByList:        normalizeStrings(r.When.GroupByList),
+		GroupByAny:         normalizeStrings(r.When.GroupByAny),
+		Pattern:            r.When.Pattern,
+		Field:              r.When.Field,
+		DistinctBy:         r.When.DistinctBy,
+		Pairs:              normalizePairs(r.When.Pairs),
+		Threshold:          r.When.Threshold,
+		ThresholdCommits:   r.When.ThresholdCommits,
+		Window:             int64(r.When.Window),
+		ThresholdDuration:  int64(r.When.ThresholdDuration),
+		Leader:             r.When.Leader,
+		Follower:           r.When.Follower,
+		Mode:               r.When.Mode,
+		Match:              exprSource(r.When.Match),
+		Reset:              exprSource(r.When.Reset),
+		ClearWhen:          exprSource(r.When.ClearWhen),
+		After:              exprSource(r.When.After),
+		ReopenWhen:         exprSource(r.When.ReopenWhen),
+		KeepOnTerminalItem: r.When.KeepOnTerminalItem,
 	}
 	raw, err := json.Marshal(in)
 	if err != nil {
@@ -360,12 +381,14 @@ func ruleEqual(a, b Rule) bool {
 		slices.Equal(a.When.Fingerprint, b.When.Fingerprint) &&
 		a.When.GroupBy == b.When.GroupBy &&
 		slices.Equal(a.When.GroupByList, b.When.GroupByList) &&
+		slices.Equal(a.When.GroupByAny, b.When.GroupByAny) &&
 		a.When.Pattern == b.When.Pattern &&
 		a.When.Field == b.When.Field &&
 		a.When.DistinctBy == b.When.DistinctBy &&
 		slices.Equal(a.When.Pairs, b.When.Pairs) &&
 		a.When.Threshold == b.When.Threshold &&
 		a.When.Window == b.When.Window &&
+		a.When.KeepOnTerminalItem == b.When.KeepOnTerminalItem &&
 		exprEqual(a.When.Match, b.When.Match) &&
 		exprEqual(a.When.Reset, b.When.Reset) &&
 		exprEqual(a.When.ClearWhen, b.When.ClearWhen) &&
@@ -575,6 +598,7 @@ func observeCompositeRecord(
 					c := subjects[subject]
 					c.events = c.events[:0]
 					c.hadPrevious = false
+					c.armed = false
 					c.clears = append(c.clears, rec.Seq)
 				}
 			}
@@ -600,7 +624,20 @@ func observeRecord(
 	}
 	lookup := rec.Lookup
 	subject := "global"
-	if r.When.GroupBy != "global" {
+	if len(r.When.GroupByAny) > 0 {
+		var found bool
+		for _, col := range r.When.GroupByAny {
+			if s, ok := lookup(col).(string); ok && s != "" {
+				subject = s
+				found = true
+				break
+			}
+		}
+		if !found {
+			*skipped++
+			return nil
+		}
+	} else if r.When.GroupBy != "global" {
 		var ok bool
 		subject, ok = lookup(r.When.GroupBy).(string)
 		if !ok {

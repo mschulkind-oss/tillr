@@ -577,6 +577,10 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 		groupBy := r.When.GroupBy
 		if len(r.When.GroupByList) >= 2 {
 			groupBy = strings.Join(r.When.GroupByList, ", ")
+		} else if len(r.When.GroupByAny) >= 2 {
+			groupBy = strings.Join(r.When.GroupByAny, " | ")
+		} else if len(r.When.GroupByAny) == 1 && groupBy == "" {
+			groupBy = r.When.GroupByAny[0]
 		}
 		*result = RuleResult{ID: r.ID, GroupBy: groupBy, Disabled: !r.Enabled, Unsupported: r.evaluatorReason()}
 		if result.Disabled || result.Unsupported != "" {
@@ -683,6 +687,10 @@ func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource,
 		groupBy := r.When.GroupBy
 		if len(r.When.GroupByList) >= 2 {
 			groupBy = strings.Join(r.When.GroupByList, ", ")
+		} else if len(r.When.GroupByAny) >= 2 {
+			groupBy = strings.Join(r.When.GroupByAny, " | ")
+		} else if len(r.When.GroupByAny) == 1 && groupBy == "" {
+			groupBy = r.When.GroupByAny[0]
 		}
 		*result = RuleResult{ID: r.ID, GroupBy: groupBy, Disabled: !r.Enabled, Unsupported: r.evaluatorReason()}
 		if result.Disabled || result.Unsupported != "" {
@@ -1013,6 +1021,9 @@ func candidateItemTerminalIDs(derived []map[string]*condition, rules []Rule, act
 			return
 		}
 		if r != nil {
+			if r.When.KeepOnTerminalItem {
+				return
+			}
 			if len(r.When.GroupByList) >= 2 {
 				if tuple, ok := decodeCompositeSubject(subject, len(r.When.GroupByList)); ok {
 					add(tuple[0])
@@ -1462,7 +1473,7 @@ func (changes *episodeChanges) open(rd *store.Reader, r Rule, key string, c *con
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if isSuppressiveResolutionReason(reason.String) && newest.Seq <= resolvedSeq.Int64 {
+	if isSuppressiveResolutionReason(r.When, reason.String) && newest.Seq <= resolvedSeq.Int64 {
 		return nil
 	}
 	var randomID [16]byte
