@@ -300,7 +300,7 @@ func (l *Loop) SetAside(ctx context.Context, itemID, why string) (string, error)
 		if err != nil {
 			return err
 		}
-		base, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		base, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil {
 			return err
 		}

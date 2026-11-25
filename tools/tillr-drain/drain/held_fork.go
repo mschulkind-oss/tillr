@@ -331,7 +331,7 @@ func (l *Loop) stageHeldFork(ctx context.Context, work *pendingWork, c Candidate
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	trunk, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	trunk, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 	if err != nil {
 		return err
 	}

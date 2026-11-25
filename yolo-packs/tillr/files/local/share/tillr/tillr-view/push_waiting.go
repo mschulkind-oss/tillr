@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/mschulkind-oss/tillr/settings"
 )
 
 // pushEvent is a drain.post-landing-action payload with action "push". Events written
@@ -99,6 +101,10 @@ func (e pushEvent) pushRow() (class, mover, why string, ok bool) {
 		counts = fmt.Sprintf("; %d total local commit(s) unpublished", *e.UnpublishedMain)
 	}
 	detail := firstLine(e.Detail)
+	branch := strings.TrimPrefix(e.Ref, "refs/heads/")
+	if branch == "" {
+		branch = settings.DefaultTrunkBranch
+	}
 	switch e.Kind {
 	case "remote-sync-proving":
 		return "waits on work", fmt.Sprintf("the heavy runner; prove rebased tip %s before pushing", shortSHA(e.provedTip())),
@@ -114,11 +120,11 @@ func (e pushEvent) pushRow() (class, mover, why string, ok bool) {
 			}
 			return "needs you", fmt.Sprintf("owner; resolve gate-code conflict onto %s (%s)", dest, remoteTip), detail + counts, true
 		default:
-			return "needs you", fmt.Sprintf("operator; rebase main onto %s (%s)", dest, remoteTip), detail + counts, true
+			return "needs you", fmt.Sprintf("operator; rebase %s onto %s (%s)", branch, dest, remoteTip), detail + counts, true
 		}
 	case "remote-sync-worktree-dirty":
-		return "needs you", "operator; check out main or commit, stash, or restore clashing paths in the main checkout",
-			fmt.Sprintf("cannot reset main to rebased tip %s because the main checkout is off main or has uncommitted edits on clashing paths", shortSHA(e.provedTip())) + counts, true
+		return "needs you", fmt.Sprintf("operator; commit, stash, or restore clashing paths in the %s checkout", branch),
+			fmt.Sprintf("cannot reset %s to rebased tip %s because the %s checkout has uncommitted edits on clashing paths or %s is checked out in another worktree", branch, shortSHA(e.provedTip()), branch, branch) + counts, true
 	case "remote-rewritten":
 		return "needs you", fmt.Sprintf("operator; reconcile force-pushed %s (%s -> %s)", dest, shortSHA(e.PreviousRemoteTip), remoteTip),
 			fmt.Sprintf("remote rewound or rewrote %s to %s; autopush stopped to avoid re-publishing dropped commits", shortSHA(e.PreviousRemoteTip), remoteTip) + counts, true

@@ -80,7 +80,7 @@ func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopR
 	}
 	var mainSHA string
 	if !l.nonLanding {
-		mainSHA, err = l.revParse(ctx, l.cfg.Root, TrunkRef)
+		mainSHA, err = l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil {
 			return "", err
 		}

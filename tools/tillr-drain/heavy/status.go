@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/mschulkind-oss/tillr/checkresult"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 	"os"
 	"os/exec"
@@ -217,7 +218,15 @@ func ReadStatus(ctx context.Context, root, storePath string) (HeavyStatus, error
 	} else if !os.IsNotExist(e) {
 		return status, e
 	}
-	status.TipCommit, err = GitOutput(ctx, root, "rev-parse", "refs/heads/main"+"^{commit}")
+	trunkRef := "refs/heads/" + settings.DefaultTrunkBranch
+	if root != "" {
+		cfg, err := settings.Read(root)
+		if err != nil {
+			return status, err
+		}
+		trunkRef = cfg.TrunkRef()
+	}
+	status.TipCommit, err = GitOutput(ctx, root, "rev-parse", trunkRef+"^{commit}")
 	if err != nil {
 		return status, err
 	}

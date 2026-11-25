@@ -16,6 +16,7 @@ import (
 	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -98,7 +99,13 @@ func passFace(args []string) int {
 	}
 	ref := *baseRef
 	if ref == "" {
-		if ref, err = trunk.Branch(); err != nil {
+		cfg, err := settings.Read(*repo)
+		if err != nil {
+			return fail(land.Usagef("%v", err))
+		}
+		if cfg.Trunk.Set {
+			ref = cfg.TrunkBranch()
+		} else if ref, err = trunk.Branch(); err != nil {
 			return fail(err)
 		}
 	}
@@ -130,7 +137,7 @@ func oneFace(args []string) int {
 	path := fs.String("store", "", "the store to write")
 	repo := fs.String("repo", "", "the git repository the branch is in")
 	branch := fs.String("branch", "", "the branch to gate and land")
-	trunkRef := fs.String("trunk", "main", "the trunk ref the branch lands on")
+	trunkRef := fs.String("trunk", "", "the trunk ref the branch lands on (default: [trunk] branch in .tillr.toml, or "+settings.DefaultTrunkBranch+")")
 	item := fs.String("item", "", "the item this landing is for; the run when omitted")
 	run := fs.String("run", "", "the run id to file the landing under; derived from the head when omitted")
 	gate := fs.String("gate", "", "the gate program: it prints a gate.verdict and exits 0 pass, 1 fail, anything else could not judge")
@@ -147,6 +154,14 @@ func oneFace(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	resolvedTrunk := *trunkRef
+	if resolvedTrunk == "" {
+		cfg, err := settings.Read(*repo)
+		if err != nil {
+			return fail(land.Usagef("%v", err))
+		}
+		resolvedTrunk = cfg.TrunkBranch()
+	}
 	trunk, err := land.OpenTrunk(*repo)
 	if err != nil {
 		return fail(err)
@@ -159,7 +174,7 @@ func oneFace(args []string) int {
 	defer s.Close()
 
 	req := land.OneRequest{
-		Branch: *branch, Trunk: *trunkRef, Run: *run, Item: *item,
+		Branch: *branch, Trunk: resolvedTrunk, Run: *run, Item: *item,
 		Gate: strings.Fields(*gate), At: at, LockPath: *lockPath, LockWait: *lockWait,
 	}
 	landed, err := land.One(ctx, s, trunk, req)

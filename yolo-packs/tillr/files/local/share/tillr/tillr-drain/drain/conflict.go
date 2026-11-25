@@ -73,7 +73,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 			resetCheckout = head == repairReset[0] && head != candidate.WorkerHeadSHA
 		}
 	}
-	mainSHA, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	mainSHA, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 	if err != nil {
 		return "", false, err
 	}

@@ -14,13 +14,14 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 )
 
 const (
 	// Utility names the tillr utility recorded on drain events.
 	Utility = "drain"
-	// TrunkRef is the trunk branch name.
-	TrunkRef = "main"
+	// TrunkRef is the default trunk branch name.
+	TrunkRef = settings.DefaultTrunkBranch
 	// TrunkBranch is an alias for TrunkRef.
 	TrunkBranch = TrunkRef
 	// TrunkFixerPrefix is the item ID prefix for generated trunk fixers.

@@ -16,6 +16,15 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+// DefaultTrunkBranch is the default branch name when [trunk] branch is unset.
+const DefaultTrunkBranch = "main"
+
+// Trunk names the branch where landings go.
+type Trunk struct {
+	Branch string
+	Set    bool
+}
+
 // Intake names the tracked words directory and the paths an idea may change.
 type Intake struct {
 	Dir   string
@@ -26,6 +35,7 @@ type Intake struct {
 // and push.what "none" disable actions; empty remote/ref mean the trunk's
 // configured upstream. A nil Comments disables automatic review intake.
 type Settings struct {
+	Trunk    Trunk
 	Sync     Sync
 	Intake   Intake
 	Lanes    Lanes
@@ -36,6 +46,19 @@ type Settings struct {
 	// WorkflowDefaults maps seats to workflow references; the drain validates files.
 	WorkflowDefaults map[string]string
 	CandidateSize    CandidateSizeLimits
+}
+
+// TrunkBranch returns the configured landing branch, or DefaultTrunkBranch when unset.
+func (s Settings) TrunkBranch() string {
+	if s.Trunk.Branch == "" {
+		return DefaultTrunkBranch
+	}
+	return s.Trunk.Branch
+}
+
+// TrunkRef returns the full branch reference for the configured landing branch.
+func (s Settings) TrunkRef() string {
+	return "refs/heads/" + s.TrunkBranch()
 }
 
 // Sync selects the roadmaps and their direct links read at each loop sync.
@@ -102,14 +125,19 @@ func Read(root string) (Settings, error) {
 	return read(root, "")
 }
 
-// ReadWithoutLanding rejects explicitly configured roll/push keys, even empty
+// ReadWithoutLanding rejects explicitly configured trunk/roll/push keys, even empty
 // strings and false flags, for the named definition that finishes without landing.
 func ReadWithoutLanding(root, definitionName string) (Settings, error) {
 	return read(root, definitionName)
 }
 
 func read(root, nonLandingDefinition string) (Settings, error) {
-	s := Settings{Roll: Roll{PauseTimeoutSeconds: 120}, Push: Push{What: PushNone}, CandidateSize: DefaultCandidateSizeLimits()}
+	s := Settings{
+		Trunk:         Trunk{Branch: DefaultTrunkBranch},
+		Roll:          Roll{PauseTimeoutSeconds: 120},
+		Push:          Push{What: PushNone},
+		CandidateSize: DefaultCandidateSizeLimits(),
+	}
 	path := filepath.Join(root, ".tillr.toml")
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -125,7 +153,7 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 	refuse := func(key, expected string) error { return fmt.Errorf("%s: %s: expected %s", path, key, expected) }
 	if nonLandingDefinition != "" {
 		var incompatible []string
-		for _, table := range []string{"roll", "push"} {
+		for _, table := range []string{"trunk", "roll", "push"} {
 			if values, ok := tables[table].(map[string]any); ok {
 				for _, key := range keys(values) {
 					incompatible = append(incompatible, table+"."+key)
@@ -139,8 +167,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 	var legacyPush *bool
 	whatSet := false
 	for _, table := range keys(tables) {
-		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" && table != "candidate_size" {
-			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose, intake, lanes, sync or candidate_size)")
+		if table != "trunk" && table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" && table != "candidate_size" {
+			return Settings{}, refuse(table, "a known table (trunk, roll, push, comments, workflows, prose, intake, lanes, sync or candidate_size)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -186,6 +214,13 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					}
 					s.WorkflowDefaults[seat] = ref
 				}
+			case "trunk.branch":
+				str, ok := value.(string)
+				if !ok || !validTrunkBranch(str) {
+					return Settings{}, refuse(full, "a valid short branch name (for example \"main\" or \"dev\", without \"refs/heads/\")")
+				}
+				s.Trunk.Branch = str
+				s.Trunk.Set = true
 			case "roll.command", "push.remote", "push.ref", "comments.vantage_url", "comments.repo", "intake.dir":
 				str, ok := value.(string)
 				if !ok {
@@ -271,6 +306,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				whatSet = true
 			default:
 				expected := "a known push key (what, remote or ref; after_landing is the legacy spelling of what = \"tip\")"
+				if table == "trunk" {
+					expected = "a known trunk key (branch)"
+				}
 				if table == "candidate_size" {
 					expected = "a known candidate_size key (file_limit or added_line_limit)"
 				}
@@ -338,6 +376,31 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 	return s, nil
 }
 
+// validTrunkBranch checks git check-ref-format rules for a short branch name.
+func validTrunkBranch(name string) bool {
+	if name == "" || name == "@" || strings.HasPrefix(name, "-") || strings.HasPrefix(name, "refs/") {
+		return false
+	}
+	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") || strings.Contains(name, "//") {
+		return false
+	}
+	if strings.Contains(name, "..") || strings.Contains(name, "@{") || strings.HasSuffix(name, ".lock") {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c <= 0x20 || c == 0x7f || strings.ContainsRune("~^:?*[\\", rune(c)) {
+			return false
+		}
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
+}
+
 // keys keeps multiple refusals deterministic instead of depending on map iteration.
 func keys(values map[string]any) []string {
 	result := make([]string, 0, len(values))
@@ -368,7 +431,7 @@ func (s Settings) StartupLine() string {
 	if s.Push.Ref != "" {
 		ref = strconv.Quote(s.Push.Ref)
 	}
-	line := fmt.Sprintf("settings: roll.command=%s roll.paths=%s roll.pause_timeout_seconds=%d push.what=%s push.remote=%s push.ref=%s", command, encoded, s.Roll.PauseTimeoutSeconds, s.Push.What, remote, ref)
+	line := fmt.Sprintf("settings: trunk.branch=%s roll.command=%s roll.paths=%s roll.pause_timeout_seconds=%d push.what=%s push.remote=%s push.ref=%s", strconv.Quote(s.TrunkBranch()), command, encoded, s.Roll.PauseTimeoutSeconds, s.Push.What, remote, ref)
 	roadmaps := s.Sync.Roadmaps
 	if roadmaps == nil {
 		roadmaps = []string{}

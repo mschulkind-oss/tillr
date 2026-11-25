@@ -53,7 +53,7 @@ func declarationComments(path, content string) []itemDeclaration {
 func (l *Loop) denyListViolation(ctx context.Context, c Candidate) (string, error) {
 	// Policy comes from committed trunk, not the worktree being judged or loose files.
 	// Repositories that do not track this policy have no repository deny-list.
-	trunk, err := l.revParse(ctx, l.cfg.Root, "refs/heads/"+TrunkRef)
+	trunk, err := l.revParse(ctx, l.cfg.Root, "refs/heads/"+l.trunkRef())
 	if err != nil {
 		return "", err
 	}

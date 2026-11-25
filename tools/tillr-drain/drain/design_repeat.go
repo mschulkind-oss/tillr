@@ -106,7 +106,7 @@ func (l *Loop) designBlockRevision(ctx context.Context, c item.Conflict) string 
 	if file == "" {
 		return ""
 	}
-	raw, err := l.git(ctx, l.cfg.Root, "show", TrunkRef+":"+file)
+	raw, err := l.git(ctx, l.cfg.Root, "show", l.trunkRef()+":"+file)
 	if err != nil {
 		return ""
 	}

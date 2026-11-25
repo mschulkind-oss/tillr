@@ -92,7 +92,7 @@ func (l *Loop) migrateOwnerQuestions(ctx context.Context, result *LoopResult) er
 		if plan == nil || plan.decision.Action != ActionDispatch {
 			return fmt.Errorf("migration: %s cannot dispatch its document conversion: %v", id, plan)
 		}
-		base, e := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		base, e := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if e != nil {
 			return e
 		}

@@ -297,7 +297,7 @@ func (c *gitCache) isAncestor(ctx context.Context, root, ancestorOID, descendant
 	return false, err
 }
 
-func (c *gitCache) fixerAncestorOfGreen(ctx context.Context, root, shortSHA, greenOID string, checkIO func(string) error, onExec func([]string)) (bool, error) {
+func (c *gitCache) fixerAncestorOfGreen(ctx context.Context, root, trunkRef, shortSHA, greenOID string, checkIO func(string) error, onExec func([]string)) (bool, error) {
 	redOID, err := c.resolveCommit(ctx, root, shortSHA, checkIO, onExec)
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -308,9 +308,9 @@ func (c *gitCache) fixerAncestorOfGreen(ctx context.Context, root, shortSHA, gre
 	}
 	var mainOID string
 	if c != nil {
-		mainOID, err = c.commit(ctx, root, "refs/heads/main", checkIO, onExec)
+		mainOID, err = c.commit(ctx, root, trunkRef, checkIO, onExec)
 	} else {
-		mainOID, err = gitCommitWith(ctx, root, "refs/heads/main", checkIO, onExec)
+		mainOID, err = gitCommitWith(ctx, root, trunkRef, checkIO, onExec)
 	}
 	if err != nil {
 		if errors.Is(err, errMissingRef) {

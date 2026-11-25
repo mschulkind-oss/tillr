@@ -261,7 +261,7 @@ func provedLaneBaseAt(ctx context.Context, root, mode, tip string) (string, erro
 		return green, err
 	}
 	if tip == "" {
-		tip, err = heavyGitOutput(ctx, root, "rev-parse", TrunkRef)
+		tip, err = heavyGitOutput(ctx, root, "rev-parse", trunkBranchFor(root))
 		if err != nil {
 			return "", err
 		}
@@ -500,7 +500,7 @@ func blockBase(ctx context.Context, r *store.Reader, root, base, itemID string) 
 	if base == "" {
 		return base, nil
 	}
-	tip, err := heavyGitOutput(ctx, root, "rev-parse", TrunkRef)
+	tip, err := heavyGitOutput(ctx, root, "rev-parse", trunkBranchFor(root))
 	if err != nil {
 		return base, err
 	}

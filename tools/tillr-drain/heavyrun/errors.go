@@ -15,6 +15,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -46,7 +47,7 @@ func Internalf(format string, args ...any) error {
 var ErrRestartPending = errors.New("loop replacement pending")
 
 const (
-	DefaultTrunkRef = "refs/heads/main"
+	DefaultTrunkRef = "refs/heads/" + settings.DefaultTrunkBranch
 	GoTestPrefix    = "go-test:"
 	RevertKind      = "drain.revert"
 	CheckGroupGrace = 5 * time.Second

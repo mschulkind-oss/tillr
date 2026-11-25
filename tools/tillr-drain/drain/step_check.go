@@ -15,6 +15,20 @@ func (s *ProcessSteps) programArgv(program string, c Candidate, extra ...string)
 	return append(argv, extra...)
 }
 
+func (s *ProcessSteps) landArgs(c Candidate) []string {
+	args := landArgs(c)
+	if c.BaseRef == "" {
+		ref := s.TrunkRef
+		if ref == "" {
+			ref = trunkBranchFor(s.Root)
+		}
+		if ref != "" && ref != TrunkRef {
+			args = append(args, "--base-ref", ref)
+		}
+	}
+	return args
+}
+
 func landArgs(c Candidate) []string {
 	var args []string
 	if c.ObservedTrunk != "" {

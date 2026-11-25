@@ -97,7 +97,7 @@ func whyFace(args []string) int {
 		}
 		questions = vantage.Preloaded(*root, vantage.ParseIndex(raw, "--questions-index "+*questionsIndex))
 	} else if *questionsCmd == "" {
-		if sha, ok := revParseTrunk(ctx, *root); ok {
+		if sha, ok := revParseTrunk(ctx, *root, repositorySettings.TrunkBranch()); ok {
 			if preloaded, ok := drain.LoadSavedQuestionsIndex(*root, sha, nil, false); ok {
 				questions = preloaded
 			}
@@ -324,8 +324,11 @@ func formatWhyProcessPriority(p *drain.ProcessPrioritySummary) string {
 	)
 }
 
-func revParseTrunk(ctx context.Context, root string) (string, bool) {
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--verify", drain.TrunkRef)
+func revParseTrunk(ctx context.Context, root, trunkRef string) (string, bool) {
+	if trunkRef == "" {
+		trunkRef = drain.TrunkRef
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--verify", trunkRef)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", false

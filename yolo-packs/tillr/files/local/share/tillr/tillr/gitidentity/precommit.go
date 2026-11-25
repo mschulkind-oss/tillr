@@ -43,7 +43,8 @@ func checkPreCommit(dir string, env []string, stderr io.Writer) error {
 		}
 		return err
 	}
-	if strings.TrimSpace(stdout) != "refs/heads/main" {
+	trunkRef := "refs/heads/" + configuredTrunkBranch(dir, env)
+	if strings.TrimSpace(stdout) != trunkRef {
 		return nil
 	}
 

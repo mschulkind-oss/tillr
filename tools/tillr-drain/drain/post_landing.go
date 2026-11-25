@@ -149,10 +149,15 @@ func (l *Loop) landWithActions(ctx context.Context, candidate Candidate) (LandOu
 	}
 	out, err := l.cfg.Steps.Land(ctx, candidate)
 	if err == nil && out.Result == LandLanded {
+		if candidate.BaseRef == "" && l.cfg.Store != "" {
+			if recErr := RecordTrunkBranchInStore(ctx, l.cfg.Store, l.trunkRef()); recErr != nil {
+				return out, recErr
+			}
+		}
 		if candidate.BaseRef == "" {
 			tip := out.TrunkAfter
 			if tip == "" && l.cfg.Root != "" {
-				tip, _ = l.revParse(context.WithoutCancel(ctx), l.cfg.Root, TrunkRef)
+				tip, _ = l.revParse(context.WithoutCancel(ctx), l.cfg.Root, l.trunkRef())
 			}
 			if tip != "" {
 				l.checkActiveGatesOnTrunkMove(ctx, tip)
@@ -373,7 +378,7 @@ func matchesRollPaths(changed string, patterns []string) bool {
 func pushDestination(ctx context.Context, root string, p settings.Push) (remote, ref string, err error) {
 	remote, ref = p.Remote, p.Ref
 	if remote == "" || ref == "" {
-		upstream, err := actionCommand(ctx, root, "git", "for-each-ref", "--format=%(upstream:remotename)%09%(upstream:remoteref)", "refs/heads/"+TrunkRef)
+		upstream, err := actionCommand(ctx, root, "git", "for-each-ref", "--format=%(upstream:remotename)%09%(upstream:remoteref)", "refs/heads/"+trunkBranchFor(root))
 		if err != nil {
 			return "", "", err
 		}
@@ -408,12 +413,13 @@ func pushTrunkResult(ctx context.Context, root string, p settings.Push) (string,
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
 	_, err = guardPublished(ctx, root, remote, ref)
-	pushed := optionalCommit(ctx, root, "refs/heads/"+TrunkRef)
+	trunkRef := trunkBranchFor(root)
+	pushed := optionalCommit(ctx, root, "refs/heads/"+trunkRef)
 	if err != nil {
 		return pushed, err
 	}
 	if pushed == "" {
-		return "", fmt.Errorf("cannot resolve %s for push", TrunkRef)
+		return "", fmt.Errorf("cannot resolve %s for push", trunkRef)
 	}
 	// Push exactly the commit we will record, even if a landing advances main meanwhile.
 	if err := pushCommand(ctx, root, "--", remote, pushed+":"+ref); err != nil {

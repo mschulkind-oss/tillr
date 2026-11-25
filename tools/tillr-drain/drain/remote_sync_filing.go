@@ -190,7 +190,7 @@ func (l *Loop) fileOrUpdateRemoteSyncItemLocked(ctx context.Context, st remoteSy
 				return err
 			}
 		}
-		conflict, err = readRemoteSyncConflict(tx.Reader(), st, state)
+		conflict, err = readRemoteSyncConflict(tx.Reader(), l.trunkRef(), st, state)
 		return err
 	})
 	if err != nil {
@@ -264,9 +264,9 @@ func remoteSyncDestination(st remoteSyncState) string {
 	return remotesync.RemoteSyncDestination(st)
 }
 
-func remoteSyncConflictError(st remoteSyncState, who, reason string) *pushStateError {
+func remoteSyncConflictError(st remoteSyncState, trunkRef, who, reason string) *pushStateError {
 	return &pushStateError{
 		kind: pushKindConflict, remoteTip: st.RemoteTip, escalated: who,
-		detail: remotesync.RemoteSyncConflictError(st, TrunkRef, who, reason),
+		detail: remotesync.RemoteSyncConflictError(st, trunkRef, who, reason),
 	}
 }

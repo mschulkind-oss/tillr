@@ -1702,7 +1702,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 	for {
 		var refs *startRefs
 		if !l.nonLanding {
-			tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+			tip, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1716,7 +1716,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 		}
 		// Planning also reads working-tree inputs. A landing during that read
 		// can mix versions before a start has been decided; retry the snapshot.
-		current, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		current, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil || current == refs.tip {
 			return plans, leases, err
 		}
@@ -2265,7 +2265,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 		}
 		if !l.nonLanding && isDispatch(d) && p.start == nil {
 			// Work already in flight retains the existing trunk and input checks.
-			head, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+			head, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 			if err != nil {
 				return err
 			}
@@ -2299,7 +2299,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				}
 				// Check the ref after reading the files. An edit at the same tip
 				// is stale input; a later landing belongs to a later decision.
-				head, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+				head, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 				if err != nil {
 					return err
 				}
@@ -2800,7 +2800,7 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 	var routed *secondFailure
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		var err error
-		routed, err = readRepeatedEnding(r, d)
+		routed, err = l.readRepeatedEnding(r, d)
 		return err
 	}); err != nil {
 		return err
@@ -3156,7 +3156,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	// in either on every start cannot keep a restarting loop from ever proving the tip.
 	if !l.nonLanding && l.gatePolicy.LandingStrategy == "after-merge" {
 		if err := l.timePassPhase("maybe_rolling", func() error {
-			early, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+			early, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 			if err != nil {
 				return err
 			}

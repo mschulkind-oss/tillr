@@ -210,6 +210,7 @@ value refuses loop startup and `tillr-drain loop --check`.
 
 | Table and keys | Default | Meaning |
 | :--- | :--- | :--- |
+| `[trunk] branch` | `"main"` | Short Git branch name where trunk landings go. Refuses `refs/` prefixes and invalid ref names. |
 | `[roll] command`, `paths`, `pause_timeout_seconds` | no command, no paths, `120` | A command needs at least one path pattern. The command runs after a landing that touches a matching path. The timeout bounds a pause the loop files. |
 | `[push] what`, `remote`, `ref` | `what = "none"` | `none`, `tip` or `green`. `after_landing = true` is an alternate spelling of `tip`, refused when `what` is also set. An empty `remote` or `ref` resolves from the trunk's configured upstream. |
 | `[lanes] express` | `0` | Count of lanes reserved for owner-facing work. |
@@ -221,9 +222,37 @@ value refuses loop startup and `tillr-drain loop --check`.
 | `[workflows] default` | none | Seat name to workflow, see [`tillr-item-graphs.md`](./tillr-item-graphs.md). |
 
 A store whose lifecycle definition does not finish items by landing refuses
-any `[roll]` or `[push]` key (`ReadWithoutLanding`). At startup and under
+any `[trunk]`, `[roll]` or `[push]` key (`ReadWithoutLanding`). At startup and under
 `--check`, `StartupLine` prints one line naming every setting, including
 inactive defaults.
+
+### Landing branch
+
+`[trunk] branch` names the branch that serves as the repository's trunk
+(default `"main"`). It governs where candidates are squashed, what a fresh lane
+starts from when no proved commit exists, what the after-merge proof proves,
+where `refs/tillr/green` advances, which branch's upstream `[push]` resolves and
+publishes, what the trunk fixer and auto-revert act on, and what the read faces
+and Observatory display. A fork's own checkout keeps its own `main` branch.
+
+The main checkout may remain on another branch while the loop lands on the
+configured landing branch. Only when the main checkout is on the landing branch
+does a landing or remote-sync replay update the main checkout's working tree;
+otherwise the ref advances without disturbing the checked-out branch.
+
+A store records `trunk.branch` in `meta` on its first trunk landing (and legacy
+stores with prior non-patch landings default to `"main"`). If `.tillr.toml`
+later names a different `[trunk] branch`, `tillr-drain` refuses to start (and
+refuses `--check`) with an error naming both branches.
+To switch `[trunk] branch` on a repository that already has a store with
+landings:
+
+1. Stop the loop.
+2. Archive or remove `.tillr/state.db` and the trunk-bound refs
+   (`refs/tillr/green`, `refs/tillr/trunk-history/*`, and
+   `refs/tillr/published/*`).
+3. Update `[trunk] branch` in `.tillr.toml` and initialize a new store (or
+   revert `.tillr.toml` to the recorded branch).
 
 ---
 

@@ -150,7 +150,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		return refuse("landed item " + strings.Join(dependents, ", ") + " declares a dependency on " + of.itemID)
 	}
 	confirmedRedTip := tip
-	if cur, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef); err != nil {
+	if cur, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef()); err != nil {
 		return RevertOutcome{}, err
 	} else if cur != confirmedRedTip {
 		if replay == nil {
@@ -199,7 +199,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 					return
 				case <-ticker.C:
 				}
-				cur, err := heavyGitOutput(watchCtx, l.cfg.Root, "rev-parse", TrunkRef)
+				cur, err := heavyGitOutput(watchCtx, l.cfg.Root, "rev-parse", l.trunkRef())
 				if err != nil || cur == "" || cur == lastChecked {
 					continue
 				}
@@ -233,7 +233,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		return drop(repairedTip)
 	}
 	if ctx.Err() == nil && replay != nil {
-		if cur, cerr := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef); cerr == nil && cur != "" && cur != confirmedRedTip {
+		if cur, cerr := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef()); cerr == nil && cur != "" && cur != confirmedRedTip {
 			if allPass, perr := tipChecksPass(ctx, cur, ids, replay); perr == nil {
 				if allPass {
 					return drop(cur)
@@ -275,7 +275,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 	if gateRefused != "" {
 		return refuse(gateRefused)
 	}
-	candidate.ObservedTrunk, err = heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef)
+	candidate.ObservedTrunk, err = heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef())
 	if err != nil {
 		return RevertOutcome{}, err
 	}
@@ -306,7 +306,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 	}
 	after := landed.TrunkAfter
 	if after == "" {
-		if after, err = heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef); err != nil {
+		if after, err = heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef()); err != nil {
 			return RevertOutcome{}, err
 		}
 	}
@@ -368,7 +368,7 @@ func (l *Loop) revertFromGateReplay(ctx context.Context, candidate Candidate, re
 	if l.cfg.LaneRoot == "" {
 		return RevertOutcome{Refused: "revert worktree root is not configured"}, nil
 	}
-	currentTip, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef)
+	currentTip, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef())
 	if err != nil {
 		if ctx.Err() != nil {
 			return RevertOutcome{}, err

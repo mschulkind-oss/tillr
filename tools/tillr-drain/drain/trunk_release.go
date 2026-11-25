@@ -265,7 +265,7 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 		for _, tf := range landedFixes {
 			repaired := tf.sha
 			if repaired == "" {
-				repaired, _ = l.revParse(ctx, l.cfg.Root, TrunkRef)
+				repaired, _ = l.revParse(ctx, l.cfg.Root, l.trunkRef())
 			}
 			if repaired != "" {
 				if recErr := recordTrunkRepair(ctx, l.cfg.Root, repaired, "test fix "+tf.blockerID+" landed"); recErr != nil {

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr/settings"
 )
 
 const (
@@ -65,11 +67,12 @@ func CheckIdentity(dir string, env []string, stdout io.Writer) int {
 		return 1
 	}
 
-	base := baseOf(dir, env)
+	trunkBranch := configuredTrunkBranch(dir, env)
+	base := baseOf(dir, env, trunkBranch)
 	if base == "" {
 		fmt.Fprintf(stdout, "git-identity: no diff base, so no commit can be called added by this change "+
-			"and its identity was not judged (no usable %s, and no origin/main "+
-			"to take a merge base from)\n", planBaseEnv)
+			"and its identity was not judged (no usable %s, and no origin/%s "+
+			"to take a merge base from)\n", planBaseEnv, trunkBranch)
 		return 0
 	}
 
@@ -193,7 +196,20 @@ func refuse(stdout io.Writer, message string) int {
 	return 2
 }
 
-func baseOf(dir string, env []string) string {
+func configuredTrunkBranch(dir string, env []string) string {
+	root := dir
+	if top, _, code, err := runGit(dir, env, "rev-parse", "--show-toplevel"); err == nil && code == 0 && strings.TrimSpace(top) != "" {
+		root = strings.TrimSpace(top)
+	}
+	if root != "" {
+		if cfg, err := settings.Read(root); err == nil {
+			return cfg.TrunkBranch()
+		}
+	}
+	return settings.DefaultTrunkBranch
+}
+
+func baseOf(dir string, env []string, trunkBranch string) string {
 	named := strings.TrimSpace(lookupEnv(env, planBaseEnv))
 	if named != "" {
 		out, _, code, err := runGit(dir, env, "rev-parse", "--verify", "--quiet", named+"^{commit}")
@@ -202,7 +218,10 @@ func baseOf(dir string, env []string) string {
 		}
 		return ""
 	}
-	for _, upstream := range []string{"origin/main", "origin/HEAD"} {
+	if trunkBranch == "" {
+		trunkBranch = settings.DefaultTrunkBranch
+	}
+	for _, upstream := range []string{"origin/" + trunkBranch, "origin/HEAD"} {
 		out, _, code, err := runGit(dir, env, "merge-base", "HEAD", upstream)
 		if err == nil && code == 0 && strings.TrimSpace(out) != "" {
 			return strings.TrimSpace(out)

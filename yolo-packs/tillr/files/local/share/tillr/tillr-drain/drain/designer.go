@@ -238,7 +238,7 @@ func (l *Loop) retireDesigners(ctx context.Context) error {
 			// trunk's tree is what says the document is gone.
 			if trunkSHA == "" {
 				// Standalone retirement (outside a refreshed pass) still takes one snapshot.
-				trunkSHA, err = l.revParse(ctx, l.cfg.Root, TrunkRef)
+				trunkSHA, err = l.revParse(ctx, l.cfg.Root, l.trunkRef())
 				if err != nil {
 					return err
 				}

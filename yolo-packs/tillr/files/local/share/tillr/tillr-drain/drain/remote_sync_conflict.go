@@ -72,7 +72,7 @@ func (l *Loop) activeRemoteSyncConflict(ctx context.Context) (conflict *pushStat
 		for _, row := range open {
 			st := row.stage
 			if st.Remote == remote && st.Ref == ref && st.BaseSHA != "" && optionalCommit(ctx, l.cfg.Root, remoteSyncPinRef(st.ItemID)) == st.BaseSHA {
-				conflict, err = readRemoteSyncConflict(r, st, row.state)
+				conflict, err = readRemoteSyncConflict(r, l.trunkRef(), st, row.state)
 				return err
 			}
 		}
@@ -83,16 +83,16 @@ func (l *Loop) activeRemoteSyncConflict(ctx context.Context) (conflict *pushStat
 
 // Both human movers are represented by an owner wait. Use the conflict that
 // owns the wait to recover the more specific obstacle routing decision.
-func readRemoteSyncConflict(r *store.Reader, st remoteSyncState, state string) (*pushStateError, error) {
+func readRemoteSyncConflict(r *store.Reader, trunkRef string, st remoteSyncState, state string) (*pushStateError, error) {
 	if state != StateBlocked {
-		return remoteSyncConflictError(st, "", ""), nil
+		return remoteSyncConflictError(st, trunkRef, "", ""), nil
 	}
 	wait, _, err := item.ReadWaitingOn(r, st.ItemID)
 	if err != nil {
 		return nil, err
 	}
 	if wait == nil || wait.Waiter != "owner" {
-		return remoteSyncConflictError(st, "", ""), nil
+		return remoteSyncConflictError(st, trunkRef, "", ""), nil
 	}
 	who, reason := wait.Waiter, wait.Reason
 	if id, ok := strings.CutPrefix(wait.Source, "conflict:"); ok {
@@ -110,7 +110,7 @@ func readRemoteSyncConflict(r *store.Reader, st remoteSyncState, state string) (
 			who, reason = "operator", "repeated ending"
 		}
 	}
-	return remoteSyncConflictError(st, who, reason), nil
+	return remoteSyncConflictError(st, trunkRef, who, reason), nil
 }
 
 func (l *Loop) closeRemoteSyncItem(ctx context.Context, st remoteSyncState) error {
@@ -123,7 +123,7 @@ func (l *Loop) closeRemoteSyncItem(ctx context.Context, st remoteSyncState) erro
 		return err
 	}
 	// Recheck ancestry under the same lock used by replay and filing.
-	reached, err := trunkAncestor(ctx, l.cfg.Root, st.RemoteTip, "refs/heads/"+TrunkRef)
+	reached, err := trunkAncestor(ctx, l.cfg.Root, st.RemoteTip, "refs/heads/"+l.trunkRef())
 	if err != nil || !reached {
 		return err
 	}
@@ -140,7 +140,7 @@ func (l *Loop) closeRemoteSyncItem(ctx context.Context, st remoteSyncState) erro
 			}
 			return err
 		}
-		reason := "remote tip " + shortSHA(st.RemoteTip) + " is now an ancestor of " + TrunkRef
+		reason := "remote tip " + shortSHA(st.RemoteTip) + " is now an ancestor of " + l.trunkRef()
 		_, err := item.Close(ctx, tx, st.ItemID, reason, "tillr-drain", l.cfg.Now().UTC())
 		closed = err == nil
 		return err
@@ -171,7 +171,7 @@ func (l *Loop) closeStaleRemoteSyncItems(ctx context.Context) error {
 		return err
 	}
 	if len(open) != 0 {
-		tip := optionalCommit(ctx, l.cfg.Root, "refs/heads/"+TrunkRef)
+		tip := optionalCommit(ctx, l.cfg.Root, "refs/heads/"+l.trunkRef())
 		for _, row := range open {
 			st := row.stage
 			if tip == "" || st.RemoteTip == "" {

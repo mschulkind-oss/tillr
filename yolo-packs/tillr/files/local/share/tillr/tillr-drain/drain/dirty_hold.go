@@ -48,7 +48,7 @@ func dirtyReason(paths []string) string {
 func (h *dirtyHold) paths(ctx context.Context) ([]string, error) {
 	ref := h.Candidate.BaseRef
 	if ref == "" {
-		ref = TrunkRef
+		ref = trunkBranchFor(h.Root)
 	}
 	trunk, err := boundaryGit(ctx, h.Root, "rev-parse", "--verify", ref+"^{commit}")
 	if err != nil {

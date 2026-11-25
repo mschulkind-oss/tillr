@@ -125,7 +125,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 				return err
 			}
 			if err == nil && *plainInputs != *d.Inputs {
-				_, _ = l.revParse(gctx, l.cfg.Root, TrunkRef)
+				_, _ = l.revParse(gctx, l.cfg.Root, l.trunkRef())
 			}
 		}
 		return nil
@@ -204,7 +204,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 			if *now != *d.Inputs {
 				// Like a legacy planned start, reject an edit at the same tip,
 				// not a later landing. The proposal keeps its decided base.
-				head, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+				head, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 				if err != nil || head == proposal.tip {
 					return err
 				}

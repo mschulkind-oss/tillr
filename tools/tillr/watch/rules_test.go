@@ -414,17 +414,17 @@ receiver = "foreground"
 	}
 
 	// 7. Ancestry checks cached in gitCache: c1 <= c2 (true), c3 <= c2 (false), cached on repeat (0 spawns).
-	if ok, err := cache.fixerAncestorOfGreen(ctx, root, c1[:12], c2, nil, onExec); err != nil || !ok {
+	if ok, err := cache.fixerAncestorOfGreen(ctx, root, "refs/heads/main", c1[:12], c2, nil, onExec); err != nil || !ok {
 		t.Fatalf("c1 ancestor of c2: ok=%v err=%v", ok, err)
 	}
-	if ok, err := cache.fixerAncestorOfGreen(ctx, root, c3[:12], c2, nil, onExec); err != nil || ok {
+	if ok, err := cache.fixerAncestorOfGreen(ctx, root, "refs/heads/main", c3[:12], c2, nil, onExec); err != nil || ok {
 		t.Fatalf("c3 should not be ancestor of c2: ok=%v err=%v", ok, err)
 	}
 	afterAncestry := execCount
-	if ok, err := cache.fixerAncestorOfGreen(ctx, root, c1[:12], c2, nil, onExec); err != nil || !ok {
+	if ok, err := cache.fixerAncestorOfGreen(ctx, root, "refs/heads/main", c1[:12], c2, nil, onExec); err != nil || !ok {
 		t.Fatalf("cached c1: ok=%v err=%v", ok, err)
 	}
-	if ok, err := cache.fixerAncestorOfGreen(ctx, root, c3[:12], c2, nil, onExec); err != nil || ok {
+	if ok, err := cache.fixerAncestorOfGreen(ctx, root, "refs/heads/main", c3[:12], c2, nil, onExec); err != nil || ok {
 		t.Fatalf("cached c3: ok=%v err=%v", ok, err)
 	}
 	if execCount != afterAncestry {

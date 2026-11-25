@@ -211,7 +211,7 @@ func (l *Loop) recordedHeadKeep(ctx context.Context, work *pendingWork, reason s
 		trunk := work.ReleasePending
 		if trunk == "" {
 			var err error
-			trunk, err = l.revParse(ctx, l.cfg.Root, TrunkRef)
+			trunk, err = l.revParse(ctx, l.cfg.Root, l.trunkRef())
 			if err != nil {
 				return "", err
 			}
@@ -388,7 +388,7 @@ func (l *Loop) releaseCandidateMode(ctx context.Context, work *pendingWork, reas
 	resetSHA := work.ReleasePending
 	if kept == "" && resetSHA == "" {
 		var err error
-		resetSHA, err = l.revParse(ctx, l.cfg.Root, TrunkRef)
+		resetSHA, err = l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil {
 			return false, err
 		}
@@ -671,7 +671,7 @@ func (l *Loop) stagePinnedCandidate(ctx context.Context, work *pendingWork) erro
 	// Reuse ordinary worktree admission without rendering another worker brief
 	// or overwriting the archived run inputs and session. Admission compares a
 	// free lane with today's trunk, not this candidate's older base.
-	trunk, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	trunk, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 	if err != nil {
 		return err
 	}

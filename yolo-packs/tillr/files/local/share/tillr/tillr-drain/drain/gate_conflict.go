@@ -105,7 +105,7 @@ func (l *Loop) prepareActiveGate(ctx context.Context, candidate Candidate, cance
 	if !candidateUsesTrunkSquash(candidate) || l.cfg.Root == "" {
 		return nil, nil, "", nil
 	}
-	tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	tip, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 	if err != nil {
 		return nil, nil, "", err
 	}

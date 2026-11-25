@@ -210,7 +210,7 @@ func (l *Loop) supersedeCandidate(ctx context.Context, s supersession) error {
 		record.PinSHA = c.HeadSHA
 	}
 	lane := s.work.Decision.LaneID
-	trunk, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	trunk, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 	if err != nil {
 		return err
 	}

@@ -1005,6 +1005,7 @@ func loopFace(args []string) int {
 		GateProgram: *gate, LandProgram: *land, VerdictProgram: *verdict,
 		ReplayProgram: *replay, RollingProgram: *rolling, FixerGateProgram: *fixerGate,
 		SyncRoadmaps: repositorySettings.Sync.Roadmaps,
+		TrunkRef:     repositorySettings.TrunkBranch(),
 	}
 	explicitSteps := map[string]bool{}
 	fs.Visit(func(set *flag.Flag) { explicitSteps[set.Name] = true })
@@ -1016,6 +1017,7 @@ func loopFace(args []string) int {
 	}
 	stager := &drain.LaneStager{
 		Root: *root, LaneRoot: *laneRoot, Store: *path, Template: *briefTemplate, Now: at,
+		TrunkRef: repositorySettings.TrunkBranch(),
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
@@ -1025,6 +1027,7 @@ func loopFace(args []string) int {
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,
 		CandidateSizeLimits: &repositorySettings.CandidateSize,
 		Restart:             restartConfig(), PostLanding: repositorySettings,
+		TrunkBranch: repositorySettings.TrunkBranch(),
 	})
 	if err != nil {
 		return failStartup(err)

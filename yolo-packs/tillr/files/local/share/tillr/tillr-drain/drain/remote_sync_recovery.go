@@ -25,12 +25,12 @@ type remoteSyncReplay struct {
 
 func (l *Loop) writeRemoteSyncReplay(ctx context.Context, intent *remoteSyncReplay) error {
 	return l.writeRemoteSync(ctx, func(tx *store.Tx) error {
-		return remotesync.WriteRemoteSyncReplay(tx, TrunkRef, Utility, intent, l.cfg.Now().UTC())
+		return remotesync.WriteRemoteSyncReplay(tx, l.trunkRef(), Utility, intent, l.cfg.Now().UTC())
 	})
 }
 
 func (l *Loop) readRemoteSyncReplay(ctx context.Context) (*remoteSyncReplay, error) {
-	raw, err := remotesync.ReadRemoteSyncReplayJSON(ctx, l.cfg.Store, TrunkRef)
+	raw, err := remotesync.ReadRemoteSyncReplayJSON(ctx, l.cfg.Store, l.trunkRef())
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (l *Loop) recoverRemoteSyncReplayLocked(ctx context.Context) (*remoteSyncRe
 	if err != nil || intent == nil {
 		return nil, err
 	}
-	if applied, err := trunkAncestor(ctx, l.cfg.Root, intent.Rewrite.Tip, "refs/heads/"+TrunkRef); err != nil {
+	if applied, err := trunkAncestor(ctx, l.cfg.Root, intent.Rewrite.Tip, "refs/heads/"+l.trunkRef()); err != nil {
 		return nil, err
 	} else if !applied {
 		return nil, l.writeRemoteSyncReplay(ctx, nil)

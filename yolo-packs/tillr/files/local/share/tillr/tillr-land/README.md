@@ -55,7 +55,7 @@ the `red-cap` reason remain in the code and can be removed.
   judged unless the trunk moved, and the row records both so a reader can tell.
   The drain routes gated remote-sync repairs around the ordinary squash. It
   records a completed linear replay with the same landing row and event:
-  `trunk_after` identifies the gated repair, and `replay_tip` identifies `main`
+  `trunk_after` identifies the gated repair, and `replay_tip` identifies the landing branch
   after replaying the remaining commits. The standalone landing command does not
   run this repair path.
 - **No store write is open while git runs or a file is touched.** Under `land.lock`,
@@ -370,7 +370,7 @@ nothing behind. A save made through the path after the replacement goes into the
 
 ### The owner moving the trunk
 
-The owner pulling, committing or rebasing forward on `main` while candidates are gated or in
+The owner pulling, committing or rebasing forward on the landing branch while candidates are gated or in
 flight needs no intervention: the squash is recomputed onto the tip read under the lock and the
 verdict still binds the head's tree. A rewritten history is refused with `trunk-rewritten`.
 

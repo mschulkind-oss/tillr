@@ -10,6 +10,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -29,6 +30,7 @@ func init() {
 // AcceptRewriteRequest names the rewrite an operator accepts and why.
 type AcceptRewriteRequest struct {
 	Root, Store   string
+	TrunkRef      string
 	Lost, Current string
 	By, Why       string
 	At            time.Time
@@ -92,11 +94,19 @@ func AcceptRewrite(ctx context.Context, req AcceptRewriteRequest) (RewriteAccept
 	}
 	defer s.Close()
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		trunkRef := req.TrunkRef
+		if trunkRef == "" {
+			cfg, err := settings.Read(req.Root)
+			if err != nil {
+				return usagef("reading settings: %v", err)
+			}
+			trunkRef = cfg.TrunkBranch()
+		}
 		h, err := ReadTrunkHistory(tx.Reader())
 		if err != nil {
 			return err
 		}
-		tip, err := git("rev-parse", TrunkRef)
+		tip, err := git("rev-parse", "refs/heads/"+trunkRef)
 		if err != nil {
 			return err
 		}

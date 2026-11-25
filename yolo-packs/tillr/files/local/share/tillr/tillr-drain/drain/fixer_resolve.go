@@ -208,20 +208,21 @@ func proofPastRed(ctx context.Context, root, lost, red, proofCommit string) (boo
 	if err != nil || ok {
 		return ok, err
 	}
-	onTrunk, err := containsCommit(ctx, root, red, TrunkRef)
+	trunkRef := trunkBranchFor(root)
+	onTrunk, err := containsCommit(ctx, root, red, trunkRef)
 	if err != nil || onTrunk {
 		return false, err
 	}
-	proofOnTrunk, err := containsCommit(ctx, root, proofCommit, TrunkRef)
+	proofOnTrunk, err := containsCommit(ctx, root, proofCommit, trunkRef)
 	if err != nil || !proofOnTrunk {
 		return false, err
 	}
 	out, err := gather(ctx, gitKey("past-red", root, []string{red, proofCommit, lost}), func(ctx context.Context) (string, error) {
-		_, oldIDs, err := patchIDs(ctx, root, TrunkRef+".."+red)
+		_, oldIDs, err := patchIDs(ctx, root, trunkRef+".."+red)
 		if err != nil {
 			return "", err
 		}
-		newCommits, newIDs, err := patchIDs(ctx, root, red+".."+TrunkRef)
+		newCommits, newIDs, err := patchIDs(ctx, root, red+".."+trunkRef)
 		if err != nil {
 			return "", err
 		}
@@ -239,7 +240,7 @@ func proofPastRed(ctx context.Context, root, lost, red, proofCommit string) (boo
 		if lost != "" {
 			return "no", nil
 		}
-		mb, err := rawGit(ctx, root, nil, "merge-base", red, TrunkRef)
+		mb, err := rawGit(ctx, root, nil, "merge-base", red, trunkRef)
 		if err != nil {
 			return "no", nil
 		}

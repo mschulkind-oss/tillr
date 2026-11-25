@@ -569,7 +569,7 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 	var raw string
 	if file != "" {
 		var err error
-		if raw, err = l.git(ctx, l.cfg.Root, "show", TrunkRef+":"+file); err != nil {
+		if raw, err = l.git(ctx, l.cfg.Root, "show", l.trunkRef()+":"+file); err != nil {
 			return err
 		}
 	}
@@ -659,8 +659,8 @@ func (l *Loop) designAnswerSummary(ctx context.Context, candidate Candidate, fil
 			pathsOut, err = l.git(ctx, l.cfg.Root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", head)
 		}
 		if err != nil || strings.TrimSpace(pathsOut) == "" {
-			ref = TrunkRef
-			pathsOut, err = l.git(ctx, l.cfg.Root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", TrunkRef)
+			ref = l.trunkRef()
+			pathsOut, err = l.git(ctx, l.cfg.Root, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", ref)
 		}
 	}
 	var paths []string
@@ -723,7 +723,7 @@ func (l *Loop) designRecordHeading(ctx context.Context, base, ref, path string) 
 	}
 	raw, err := l.git(ctx, l.cfg.Root, "show", ref+":"+path)
 	if err != nil {
-		raw, err = l.git(ctx, l.cfg.Root, "show", TrunkRef+":"+path)
+		raw, err = l.git(ctx, l.cfg.Root, "show", l.trunkRef()+":"+path)
 	}
 	if err != nil || raw == "" {
 		return ""

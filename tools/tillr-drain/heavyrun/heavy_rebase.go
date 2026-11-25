@@ -116,14 +116,14 @@ func commitPatchID(ctx context.Context, root, sha string) string {
 	return out
 }
 
-// rebaseNote names the rebase of main as the reason sha has no landing record, and
+// RebaseNote names the rebase of the trunk as the reason sha has no landing record, and
 // what the operator does about it.
 func RebaseNote(sha string, m rebasedLandingMatch) string {
 	restore := ""
 	if m.LostTip != "" {
-		restore = ", or restore the pre-rebase history " + ShortSHA(m.LostTip) + " onto main so the landing records match"
+		restore = ", or restore the pre-rebase history " + ShortSHA(m.LostTip) + " onto the trunk so the landing records match"
 	}
-	return fmt.Sprintf("a rebase of main changed the landed commit's sha, so no landing record matches: commit %s landed as %s (item %s) before the rebase; not reverted automatically; operator: run git revert %s on main%s, and fixer-main-%s repairs it otherwise",
+	return fmt.Sprintf("a rebase of the trunk changed the landed commit's sha, so no landing record matches: commit %s landed as %s (item %s) before the rebase; not reverted automatically; operator: run git revert %s on the trunk%s, and fixer-main-%s repairs it otherwise",
 		ShortSHA(sha), ShortSHA(m.PreSHA), m.ItemID, ShortSHA(sha), restore, ShortSHA(sha))
 }
 

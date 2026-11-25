@@ -109,7 +109,7 @@ func (l *Loop) restartConflicted(ctx context.Context, candidate Candidate, lande
 	if err := l.preserveWork(ctx, candidate.LaneID, candidate.RunID, "candidate conflicted twice during landing"); err != nil {
 		return err
 	}
-	revision := TrunkRef
+	revision := l.trunkRef()
 	if mainSHA != "" {
 		revision = mainSHA
 	}

@@ -96,7 +96,7 @@ func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
 		}
 		// A moved trunk is refreshed on the next pass rather than joining its answer
 		// to the revision whose index was just read.
-		tip, e := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		tip, e := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if e != nil {
 			return e
 		}

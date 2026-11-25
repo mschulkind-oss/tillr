@@ -293,6 +293,15 @@ type LaneStager struct {
 	Template string
 	// Now is the injected clock the brief's date is stamped from.
 	Now func() time.Time
+	// TrunkRef names the landing branch; empty reads .tillr.toml or defaults to main.
+	TrunkRef string
+}
+
+func (s *LaneStager) trunkRef() string {
+	if s.TrunkRef != "" {
+		return s.TrunkRef
+	}
+	return trunkBranchFor(s.Root)
 }
 
 // Stage writes one lane directory. The order is deliberate: the item is read and the brief
@@ -1094,7 +1103,7 @@ func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, w
 			return err
 		}
 		if !contained {
-			contained, err = containsCommit(ctx, s.Root, sha, TrunkRef)
+			contained, err = containsCommit(ctx, s.Root, sha, s.trunkRef())
 			if err != nil {
 				return err
 			}

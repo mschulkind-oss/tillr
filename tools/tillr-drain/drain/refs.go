@@ -103,7 +103,7 @@ func sweepRefs(ctx context.Context, req RefSweepRequest, mode refSweepMode) ([]R
 		refs = append(refs, ref)
 		if operatorRef(fields[0]) {
 			operators[fields[1]] = append(operators[fields[1]], fields[0])
-			cmd := exec.CommandContext(ctx, "git", "-C", req.Root, "merge-base", "--is-ancestor", fields[1], TrunkRef)
+			cmd := exec.CommandContext(ctx, "git", "-C", req.Root, "merge-base", "--is-ancestor", fields[1], trunkBranchFor(req.Root))
 			if err := cmd.Run(); err == nil {
 				contained[fields[0]] = true
 			} else if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
@@ -113,7 +113,7 @@ func sweepRefs(ctx context.Context, req RefSweepRequest, mode refSweepMode) ([]R
 	}
 	if !preservedOnly && len(refs) != 0 {
 		// Batch ancestry outside the store writer; bind it to the sampled SHA.
-		merged, err := l.git(ctx, req.Root, "for-each-ref", "--merged="+TrunkRef, "--format=%(refname) %(objectname)", "refs/tillr/runs/")
+		merged, err := l.git(ctx, req.Root, "for-each-ref", "--merged="+l.trunkRef(), "--format=%(refname) %(objectname)", "refs/tillr/runs/")
 		if err != nil {
 			return nil, err
 		}

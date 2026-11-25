@@ -266,7 +266,7 @@ func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, itemID, sha, c
 			return false, err
 		}
 		t.SetContext(ctx)
-		tip, err := t.Head(TrunkRef)
+		tip, err := t.Head(s.trunkRef())
 		if err != nil {
 			return false, err
 		}

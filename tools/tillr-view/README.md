@@ -196,7 +196,7 @@ sync observation, or null when it carries none.
 
 Store-backed `status` and `/api/v1/snapshot` include a `push` summary with
 its destination, published SHA, and the newest push hold's kind, detail, mover and
-start time. Counts compare `refs/tillr/green` (proven) and `refs/heads/main`
+start time. Counts compare `refs/tillr/green` (proven) and the configured landing branch (default `refs/heads/main`)
 (total) with `refs/tillr/published/<remote>/<branch>` in both tip and green mode.
 An unreadable count is null, not zero. `status --text` and the observatory header
 pill label both counts when a push is held or unpublished commits remain.

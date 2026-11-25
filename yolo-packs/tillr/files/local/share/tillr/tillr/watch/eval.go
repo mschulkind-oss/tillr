@@ -17,6 +17,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -340,6 +341,10 @@ func readFixerAncestors(ctx context.Context, root string, rules []Rule, git gitS
 	if len(shortSHAs) == 0 {
 		return nil, nil
 	}
+	trunkRef := (settings.Settings{}).TrunkRef()
+	if cfg, cfgErr := settings.Read(root); cfgErr == nil {
+		trunkRef = cfg.TrunkRef()
+	}
 	out := fixerAncestorFacts{}
 	for _, r := range rules {
 		if !r.Enabled || r.evaluatorReason() != "" {
@@ -356,7 +361,7 @@ func readFixerAncestors(ctx context.Context, root string, rules []Rule, git gitS
 				if _, done := out[key]; done {
 					continue
 				}
-				anc, err := cache.fixerAncestorOfGreen(ctx, root, shortSHA, greenOID, checkIO, onExec)
+				anc, err := cache.fixerAncestorOfGreen(ctx, root, trunkRef, shortSHA, greenOID, checkIO, onExec)
 				if err != nil {
 					out[key] = projectionFact[bool]{err: unreadableProjection{"green_proof", err}}
 				} else {

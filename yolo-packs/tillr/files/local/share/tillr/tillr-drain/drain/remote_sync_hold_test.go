@@ -13,45 +13,67 @@ import (
 )
 
 func TestRemoteSyncDirtyWorktreeHolds(t *testing.T) {
-	for _, offMain := range []bool{false, true} {
-		name := "clashing-path"
-		if offMain {
-			name = "off-main"
+	t.Run("clashing-path", func(t *testing.T) {
+		p, remoteTip, clear := blockRemoteSyncReplay(t)
+		before := lastPushEvent(t, p.f)
+		p.pollPushHold(t)
+		if after := lastPushEvent(t, p.f); !reflect.DeepEqual(before, after) {
+			t.Fatalf("retried while checkout still blocked: %+v -> %+v", before, after)
 		}
-		t.Run(name, func(t *testing.T) {
-			p, remoteTip, clear := blockRemoteSyncReplay(t, offMain)
-			before := lastPushEvent(t, p.f)
-			p.pollPushHold(t)
-			if after := lastPushEvent(t, p.f); !reflect.DeepEqual(before, after) {
-				t.Fatalf("retried while checkout still blocked: %+v -> %+v", before, after)
-			}
-			clear()
-			root := p.f.root
-			unrelated := filepath.Join(root, "one.txt")
-			writeForkFile(t, unrelated, "keep my unstaged edit\n")
+		clear()
+		root := p.f.root
+		unrelated := filepath.Join(root, "one.txt")
+		writeForkFile(t, unrelated, "keep my unstaged edit\n")
 
-			p.pollPushHold(t)
+		p.pollPushHold(t)
 
-			pushed := runGit(t, root, "--git-dir="+p.remote, "rev-parse", TrunkRef)
-			if pushed == remoteTip || pushed != runGit(t, root, "rev-parse", TrunkRef) ||
-				runGit(t, root, "merge-base", pushed, remoteTip) != remoteTip {
-				t.Fatalf("remote = %s, want main replayed on %s", pushed, remoteTip)
-			}
-			if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindOK {
-				t.Fatalf("recovery did not clear the hold: %+v", ev)
-			}
-			if b, err := os.ReadFile(unrelated); err != nil || string(b) != "keep my unstaged edit\n" {
-				t.Fatalf("unrelated edit lost: %q, %v", b, err)
-			}
-			if got := runGit(t, root, "status", "--porcelain"); got != "M one.txt" {
-				t.Fatalf("unrelated edit is not the sole uncommitted change: %q", got)
-			}
-		})
-	}
+		pushed := runGit(t, root, "--git-dir="+p.remote, "rev-parse", TrunkRef)
+		if pushed == remoteTip || pushed != runGit(t, root, "rev-parse", TrunkRef) ||
+			runGit(t, root, "merge-base", pushed, remoteTip) != remoteTip {
+			t.Fatalf("remote = %s, want main replayed on %s", pushed, remoteTip)
+		}
+		if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindOK {
+			t.Fatalf("recovery did not clear the hold: %+v", ev)
+		}
+		if b, err := os.ReadFile(unrelated); err != nil || string(b) != "keep my unstaged edit\n" {
+			t.Fatalf("unrelated edit lost: %q, %v", b, err)
+		}
+		if got := runGit(t, root, "status", "--porcelain"); got != "M one.txt" {
+			t.Fatalf("unrelated edit is not the sole uncommitted change: %q", got)
+		}
+	})
+
+	t.Run("off-main", func(t *testing.T) {
+		p := newPushFixture(t)
+		root := p.f.root
+		p.l.cfg.PostLanding.Push.What = settings.PushTip
+		remoteTip := p.remoteCommit(t, "base.txt", "remote edit\n")
+		runGit(t, root, "checkout", "-qb", "operator")
+		unrelated := filepath.Join(root, "one.txt")
+		writeForkFile(t, unrelated, "keep my operator edit\n")
+
+		p.l.afterLanding(context.Background(), p.local[2])
+		waitAction(t, &p.l.pushAction)
+
+		if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindOK {
+			t.Fatalf("off-main replay should advance via update-ref without holding: %+v", ev)
+		}
+		pushed := runGit(t, root, "--git-dir="+p.remote, "rev-parse", TrunkRef)
+		if pushed == remoteTip || pushed != runGit(t, root, "rev-parse", TrunkRef) ||
+			runGit(t, root, "merge-base", pushed, remoteTip) != remoteTip {
+			t.Fatalf("remote = %s, want main replayed on %s", pushed, remoteTip)
+		}
+		if got := runGit(t, root, "symbolic-ref", "--short", "HEAD"); got != "operator" {
+			t.Fatalf("HEAD = %q, want operator branch untouched", got)
+		}
+		if b, err := os.ReadFile(unrelated); err != nil || string(b) != "keep my operator edit\n" {
+			t.Fatalf("operator edit lost: %q, %v", b, err)
+		}
+	})
 }
 
 func TestRemoteSyncClearanceDoesNotTriggerWhenNothingUnpublished(t *testing.T) {
-	p, remoteTip, clear := blockRemoteSyncReplay(t, false)
+	p, remoteTip, clear := blockRemoteSyncReplay(t)
 	clear()
 	// The operator elected to use the published tip instead of keeping local commits.
 	runGit(t, p.f.root, "reset", "--keep", remoteTip)
@@ -110,7 +132,7 @@ func TestRemoteSyncPatchMoveClearancePushesGreen(t *testing.T) {
 	}
 }
 
-func blockRemoteSyncReplay(t *testing.T, offMain bool) (*pushFixture, string, func()) {
+func blockRemoteSyncReplay(t *testing.T) (*pushFixture, string, func()) {
 	t.Helper()
 	p := newPushFixture(t)
 	root := p.f.root
@@ -118,12 +140,7 @@ func blockRemoteSyncReplay(t *testing.T, offMain bool) (*pushFixture, string, fu
 	remoteTip := p.remoteCommit(t, "base.txt", "remote edit\n")
 	clash := filepath.Join(root, "base.txt")
 	clear := func() { runGit(t, root, "restore", "--", "base.txt") }
-	if offMain {
-		runGit(t, root, "checkout", "-qb", "operator")
-		clear = func() { runGit(t, root, "checkout", "-q", TrunkRef) }
-	} else {
-		writeForkFile(t, clash, "owner's uncommitted file\n")
-	}
+	writeForkFile(t, clash, "owner's uncommitted file\n")
 	p.l.afterLanding(context.Background(), p.local[2])
 	waitAction(t, &p.l.pushAction)
 	if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindWorktreeDirty || ev["escalated_mover"] != "operator" {

@@ -322,7 +322,7 @@ func (l *Loop) laneStillRefuses(ctx context.Context, lane string, c *laneConditi
 	if !ok {
 		return false
 	}
-	base, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	base, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 	if err != nil {
 		return false
 	}
@@ -346,7 +346,7 @@ func (l *Loop) laneHeadRetained(ctx context.Context, lane string, c *laneConditi
 	if out, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--contains", head, "--format=%(refname)", "refs/tillr/runs/"); err == nil && strings.TrimSpace(out) != "" {
 		return true
 	}
-	contained, err := containsCommit(ctx, l.cfg.Root, head, TrunkRef)
+	contained, err := containsCommit(ctx, l.cfg.Root, head, l.trunkRef())
 	return err == nil && contained
 }
 

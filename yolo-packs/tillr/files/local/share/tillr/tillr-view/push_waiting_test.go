@@ -44,7 +44,7 @@ func TestWaitingStructuredPushStates(t *testing.T) {
 		{"conflict operator", `{"action":"push","kind":"remote-sync-conflict","detail":"c","remote":"origin","ref":"main","remote_tip":"` + R + `","escalated_mover":"operator"}`,
 			"t", "needs you", "operator; rebase main onto origin/main (rrrrrrrrrrrr)", "c", ""},
 		{"dirty", `{"action":"push","kind":"remote-sync-worktree-dirty","detail":"d","rebased_tip":"bbbbbbbbbbbbbbbbbb"}`,
-			"t", "needs you", "operator; check out main or commit, stash, or restore clashing paths in the main checkout", "cannot reset main to rebased tip bbbbbbbbbbbb", ""},
+			"t", "needs you", "operator; commit, stash, or restore clashing paths in the main checkout", "cannot reset main to rebased tip bbbbbbbbbbbb", ""},
 		{"rewritten", `{"action":"push","kind":"remote-rewritten","detail":"d","remote":"origin","ref":"main","remote_tip":"` + R + `","previous_remote_tip":"pppp"}`,
 			"t", "needs you", "operator; reconcile force-pushed origin/main (pppp -> rrrrrrrrrrrr)", "", ""},
 		{"patch held", `{"action":"push","kind":"push-patch-move-held","detail":"d"}`,

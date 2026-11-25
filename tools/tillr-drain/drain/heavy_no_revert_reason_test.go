@@ -229,7 +229,7 @@ func TestHeavyNoRevertReasonRecordedForEveryFixerPath(t *testing.T) {
 		if fixers := h.fixers(); len(fixers) != 1 || fixers[0] != TrunkFixerID(rebased) {
 			t.Fatalf("fixers=%v, want [%s]", fixers, TrunkFixerID(rebased))
 		}
-		assertNoRevertReason(t, h.root, h.report.String(), "unit", rebased, "a rebase of main changed the landed commit's sha", "")
+		assertNoRevertReason(t, h.root, h.report.String(), "unit", rebased, "a rebase of the trunk changed the landed commit's sha", "")
 	})
 
 	t.Run("trunk_advanced_beyond_proved_commit", func(t *testing.T) {

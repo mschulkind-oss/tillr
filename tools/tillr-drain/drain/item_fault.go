@@ -424,7 +424,7 @@ func (l *Loop) holdExaminationFailure(ctx context.Context, d Decision, work *pen
 	// A missing trunk is a shared fault, not a failure of the candidate's checkout.
 	// Check only on the error path.
 	if !l.nonLanding {
-		if _, err := l.revParse(ctx, l.cfg.Root, TrunkRef+"^{commit}"); err != nil {
+		if _, err := l.revParse(ctx, l.cfg.Root, l.trunkRef()+"^{commit}"); err != nil {
 			return fmt.Errorf("%v; reading trunk: %w", failure, err)
 		}
 	}

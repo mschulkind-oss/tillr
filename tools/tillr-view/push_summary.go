@@ -8,8 +8,20 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
+
+func trunkBranchFor(root string) string {
+	if root == "" {
+		return settings.DefaultTrunkBranch
+	}
+	s, err := settings.Read(root)
+	if err != nil {
+		return settings.DefaultTrunkBranch
+	}
+	return s.TrunkBranch()
+}
 
 // pushSummary combines the latest push outcome with current ref counts. Green measures
 // proven work and main measures total work, regardless of what the push attempted.
@@ -51,7 +63,7 @@ func readPushSummary(ctx context.Context, r *store.Reader, root string) *pushSum
 	if root != "" && out.Remote != "" && out.Ref != "" {
 		out.PublishedSHA = pushRefCommit(ctx, root, "refs/tillr/published/"+out.Remote+"/"+out.Ref)
 		out.UnpublishedGreenCount = commitsAhead(ctx, root, out.PublishedSHA, "refs/tillr/green")
-		out.UnpublishedMainCount = commitsAhead(ctx, root, out.PublishedSHA, "refs/heads/main")
+		out.UnpublishedMainCount = commitsAhead(ctx, root, out.PublishedSHA, "refs/heads/"+trunkBranchFor(root))
 	}
 	return out
 }
@@ -138,7 +150,7 @@ func pushRefDeps(root string, summary *pushSummary) (deps []fileDep, ok bool) {
 		filepath.Join(gitDir, "packed-refs"),
 		filepath.Join(gitDir, "refs", "tillr", "published", summary.Remote, filepath.FromSlash(summary.Ref)),
 		filepath.Join(gitDir, "refs", "tillr", "green"),
-		filepath.Join(gitDir, "refs", "heads", "main"),
+		filepath.Join(gitDir, "refs", "heads", filepath.FromSlash(trunkBranchFor(root))),
 	} {
 		if fi, err := os.Stat(p); err == nil {
 			deps = append(deps, depOf(p, fi))

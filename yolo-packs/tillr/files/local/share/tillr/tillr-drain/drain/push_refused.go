@@ -109,7 +109,8 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 		return fail("%v", err)
 	}
 	defer release()
-	out, err := rawGit(ctx, root, nil, "rev-parse", "--verify", "refs/heads/"+TrunkRef+"^{commit}")
+	trunkRef := l.trunkRef()
+	out, err := rawGit(ctx, root, nil, "rev-parse", "--verify", "refs/heads/"+trunkRef+"^{commit}")
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -187,14 +188,24 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 		return res, &pushStateError{kind: pushKindWorktreeDirty, remoteTip: remoteTip,
 			resetTarget: cur, escalated: "operator", detail: fmt.Sprintf("%v\nmover: operator. %s", refused, detail)}
 	}
-	if !onMain(ctx, root) {
-		return dirty("The main checkout is not on " + TrunkRef + "; check out " + TrunkRef + " to allow replay.")
-	}
-	if got, err := rawGit(ctx, root, nil, "rev-parse", "refs/heads/"+TrunkRef); err != nil || strings.TrimSpace(got) != tip {
+	if got, err := rawGit(ctx, root, nil, "rev-parse", "refs/heads/"+trunkRef); err != nil || strings.TrimSpace(got) != tip {
 		return fail("the trunk moved while the replay was built")
 	}
-	if _, err := rawGit(ctx, root, nil, "reset", "--keep", "-q", cur); err != nil {
-		return dirty(fmt.Sprintf("The main checkout refused the replay reset; commit, stash or restore the clashing changes: %v", err))
+	if onTrunk(ctx, root, trunkRef) {
+		if _, err := rawGit(ctx, root, nil, "reset", "--keep", "-q", cur); err != nil {
+			return dirty(fmt.Sprintf("The main checkout refused the replay reset; commit, stash or restore the clashing changes: %v", err))
+		}
+	} else {
+		wt, err := trunk.WorktreeFor("refs/heads/" + trunkRef)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if wt != "" {
+			return dirty(fmt.Sprintf("%s is checked out at %s; commit, stash or restore clashing changes there.", trunkRef, wt))
+		}
+		if _, err := rawGit(ctx, root, nil, "update-ref", "refs/heads/"+trunkRef, cur, tip); err != nil {
+			return fail("advancing %s: %v", trunkRef, err)
+		}
 	}
 	res.replayed, res.newTip = len(known.Order), cur
 	release()

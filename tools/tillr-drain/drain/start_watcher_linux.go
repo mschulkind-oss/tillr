@@ -113,7 +113,7 @@ func (w *linuxStartWatcher) bind() {
 		file(filepath.Join(paths.gitDir, "HEAD"), startWatchExternal)
 	}
 	if paths.commonDir != "" {
-		for _, ref := range []string{"packed-refs", "refs/heads/" + TrunkRef, "refs/tillr/green"} {
+		for _, ref := range []string{"packed-refs", "refs/heads/" + trunkBranchFor(paths.root), "refs/tillr/green"} {
 			file(filepath.Join(paths.commonDir, ref), startWatchExternal)
 		}
 	}

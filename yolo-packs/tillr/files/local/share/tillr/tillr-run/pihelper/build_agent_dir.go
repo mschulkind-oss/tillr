@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr/settings"
 	"golang.org/x/sys/unix"
 )
 
@@ -370,13 +371,18 @@ func resolveRepoRoot() (string, error) {
 }
 
 func resolveTrunkRef(repoRoot string) (string, error) {
-	if out, _, code, _ := runGit(repoRoot, "rev-parse", "--verify", "--quiet", "refs/heads/main"); code == 0 && strings.TrimSpace(out) != "" {
-		return "refs/heads/main", nil
+	cfg, err := settings.Read(repoRoot)
+	if err != nil {
+		return "", fmt.Errorf("read repository settings: %w", err)
+	}
+	trunkRef := cfg.TrunkRef()
+	if out, _, code, _ := runGit(repoRoot, "rev-parse", "--verify", "--quiet", trunkRef); code == 0 && strings.TrimSpace(out) != "" {
+		return trunkRef, nil
 	}
 	if out, _, code, _ := runGit(repoRoot, "rev-parse", "--verify", "--quiet", "HEAD"); code == 0 && strings.TrimSpace(out) != "" {
 		return "HEAD", nil
 	}
-	return "", errors.New("cannot resolve refs/heads/main or HEAD")
+	return "", fmt.Errorf("cannot resolve %s or HEAD", trunkRef)
 }
 
 func gitShowText(repoRoot, ref, relPath string) (string, bool) {

@@ -30,10 +30,9 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// The trunk the loop stages lanes from and lands onto. It is `main` because design §4.1's
-// landing step is the only thing that moves it (D-UT18). Fresh lanes start there;
-// returned worker sessions retain the original lane and base.
-const TrunkRef = "main"
+// The default trunk branch the loop stages lanes from and lands onto when [trunk] branch
+// is unset in .tillr.toml.
+const TrunkRef = settings.DefaultTrunkBranch
 
 // Loop stop and historical fault reason spellings. Boundary and gate faults now
 // hold only their attributed item; the Stop-prefixed constants remain readable
@@ -396,6 +395,8 @@ type LoopConfig struct {
 	// ordinary_lanes target in drain_runtime_config rather than being overridden by it.
 	ExplicitLanes *int
 	PostLanding   settings.Settings
+	// TrunkBranch overrides the landing branch; empty reads PostLanding or .tillr.toml.
+	TrunkBranch string
 	// CandidateSizeLimits comes from repository settings; nil uses the built-in defaults.
 	CandidateSizeLimits *settings.CandidateSizeLimits
 	// MigrateOwnerQuestions converts only existing owner decisions, through ordinary
@@ -906,6 +907,16 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if _, err := currentLoopOwner(); err != nil {
 		return nil, err
 	}
+	if cfg.TrunkBranch == "" {
+		if cfg.PostLanding.Trunk.Branch != "" {
+			cfg.TrunkBranch = cfg.PostLanding.Trunk.Branch
+		} else {
+			cfg.TrunkBranch = trunkBranchFor(cfg.Root)
+		}
+	}
+	if err := CheckTrunkBranchStore(context.Background(), cfg.Store, cfg.TrunkBranch); err != nil {
+		return nil, err
+	}
 	l := &Loop{
 		gatePolicy:       gatePolicy,
 		cfg:              cfg,
@@ -1308,7 +1319,7 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 		return "", nil
 	}
 	for {
-		sha, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		sha, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil {
 			return "", err
 		}
@@ -1331,7 +1342,7 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 		if err := l.syncDocuments(ctx, result); err != nil {
 			return "", err
 		}
-		after, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		after, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil {
 			return "", err
 		}
@@ -1782,7 +1793,7 @@ func (l *Loop) prepareContinuedLane(ctx context.Context, decision Decision, item
 		return false, err
 	}
 	if !contained {
-		contained, err = containsCommit(ctx, l.cfg.Root, head, TrunkRef)
+		contained, err = containsCommit(ctx, l.cfg.Root, head, l.trunkRef())
 		if err != nil {
 			return false, err
 		}
@@ -1949,7 +1960,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			// restarted at its first stage is cut from the node base, so a commit the earlier
 			// candidate left on the lane (it stays pinned) cannot turn a read-only first stage
 			// into a boundary violation.
-			revision := TrunkRef
+			revision := l.trunkRef()
 			if decision.Workflow != nil && decision.NodeBaseSHA != "" {
 				revision = decision.NodeBaseSHA
 			}
@@ -2189,7 +2200,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					if l.laneForkTarget(decision.LaneID) == "" {
 						// The dispatch's usual base may be green. Conflict work
 						// starts at the actual trunk tip, with a fresh offer range.
-						tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+						tip, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 						if err != nil {
 							if holdErr := failStage("read trunk for preserved conflict", err); holdErr != nil {
 								return nil, holdErr
@@ -4040,7 +4051,7 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		receipt := *candidate.Judge
 		receipt.Options.Landed = landed.TrunkAfter
 		if receipt.Options.Landed == "" {
-			ref := TrunkRef
+			ref := l.trunkRef()
 			if candidate.BaseRef != "" {
 				ref = candidate.BaseRef
 			}
@@ -4063,7 +4074,7 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	if IsTrunkFixer(candidate.ItemID) && l.cfg.Root != "" {
 		repaired := landed.TrunkAfter
 		if repaired == "" {
-			repaired, _ = l.revParse(ctx, l.cfg.Root, TrunkRef)
+			repaired, _ = l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		}
 		if repaired != "" {
 			if recErr := recordTrunkRepair(ctx, l.cfg.Root, repaired, "trunk fixer "+candidate.ItemID+" landed"); recErr != nil {
@@ -4272,7 +4283,7 @@ func (l *Loop) fenceDiffBase(ctx context.Context, c Candidate) (string, error) {
 	if same, ok := l.sharesRepository(ctx, c.Worktree); !ok || !same {
 		return c.BaseSHA, nil
 	}
-	out, err := l.git(ctx, c.Worktree, "merge-base", "--all", c.HeadSHA, "refs/heads/"+TrunkRef)
+	out, err := l.git(ctx, c.Worktree, "merge-base", "--all", c.HeadSHA, "refs/heads/"+l.trunkRef())
 	if err != nil {
 		return "", err
 	}
@@ -4664,7 +4675,7 @@ func (l *Loop) stageLaneSet(ctx context.Context, lanes []string, startup bool) e
 		// Removing a holder frees its branch, not the work committed on it.
 		// Startup must protect that work just as dispatch staging does, before
 		// recreating a missing worktree resets the branch to trunk.
-		base, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		base, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil {
 			return err
 		}
@@ -4721,7 +4732,7 @@ func (l *Loop) registerLaneSet(ctx context.Context, lanes []string) error {
 // log lives in the lane directory, and deleting a run's evidence to tidy a lane is not a
 // reset's job.
 func (l *Loop) resetLane(ctx context.Context, lane string) error {
-	return l.resetLaneTo(ctx, lane, TrunkRef)
+	return l.resetLaneTo(ctx, lane, l.trunkRef())
 }
 
 func (l *Loop) resetLaneTo(ctx context.Context, lane, revision string) error {

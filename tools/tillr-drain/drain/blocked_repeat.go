@@ -34,7 +34,7 @@ type generatedBlock struct {
 // a changed obstacle, so a repair blocked again after the trunk moved is not a repeat.
 // An unreadable trunk keys nothing, and so repeats nothing.
 func (l *Loop) generatedBlockKey(ctx context.Context, o Obstacle) string {
-	tip, err := l.git(ctx, l.cfg.Root, "rev-parse", TrunkRef+"^{commit}")
+	tip, err := l.git(ctx, l.cfg.Root, "rev-parse", l.trunkRef()+"^{commit}")
 	tip = strings.TrimSpace(tip)
 	if err != nil || tip == "" {
 		return ""

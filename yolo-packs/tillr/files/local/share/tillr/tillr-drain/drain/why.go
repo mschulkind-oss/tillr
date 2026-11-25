@@ -19,6 +19,7 @@ import (
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -1442,7 +1443,7 @@ func activeRestartBlockers(r *store.Reader, root, storePath string, loop *liveLo
 				continue
 			}
 			if trunkID == "" {
-				trunkID = "main"
+				trunkID = settings.DefaultTrunkBranch
 			}
 			switch fact.Phase {
 			case "started":

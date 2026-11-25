@@ -458,7 +458,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	}
 	unproved := map[string]string{}
 	if def.Completes == "landing" {
-		tip := TrunkRef
+		tip := trunkBranchFor(root)
 		if tick.startRefs != nil {
 			tip = tick.startRefs.tip
 		}

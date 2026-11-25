@@ -140,7 +140,7 @@ var Rules = map[string]Rule{
 	"trunk-unproved":     {"waits on work", "trunk", "the heavy runner; prove the trunk"},
 	"obstacle-owner":     {"needs you", "queue", "the owner; answer the question with tillr drain retry, or close the item"},
 
-	"blocker-landing-not-on-trunk": {"needs you", "trunk", "the owner; restore the named landing to main, or map its replacement with tillr drain accept-rewrite"},
+	"blocker-landing-not-on-trunk": {"needs you", "trunk", "the owner; restore the named landing to the trunk, or map its replacement with tillr drain accept-rewrite"},
 
 	"obstacle-trunk":                 {"waits on work", "trunk", "returns when the named checks are green"},
 	"obstacle-tooling":               {"needs you", "queue", "repair the tool or harness and retry the run"},

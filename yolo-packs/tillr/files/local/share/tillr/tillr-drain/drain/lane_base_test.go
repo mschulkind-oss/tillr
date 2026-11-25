@@ -246,7 +246,7 @@ func TestLaneBaseNamesLandingMissingFromGreenTrunk(t *testing.T) {
 			t.Fatalf("ahead=%t: want hold %q, got %s %q", ahead, want, d.Action, d.Reason)
 		}
 		class, where, mover := whyPresentation(d)
-		if class != "needs you" || where != "trunk" || mover != "the owner; restore the named landing to main, or map its replacement with tillr drain accept-rewrite" {
+		if class != "needs you" || where != "trunk" || mover != "the owner; restore the named landing to the trunk, or map its replacement with tillr drain accept-rewrite" {
 			t.Fatalf("waiting presentation: %q %q %q", class, where, mover)
 		}
 	}

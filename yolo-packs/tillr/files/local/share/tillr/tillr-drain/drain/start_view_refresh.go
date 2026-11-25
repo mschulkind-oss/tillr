@@ -133,7 +133,7 @@ func refreshTrunk(ctx context.Context, root string, def definition.Definition) (
 	if root == "" || def.Completes != "landing" {
 		return startBases{}, nil
 	}
-	tip, err := heavyGitOutput(ctx, root, "rev-parse", TrunkRef)
+	tip, err := heavyGitOutput(ctx, root, "rev-parse", trunkBranchFor(root))
 	if err != nil {
 		return startBases{}, err
 	}

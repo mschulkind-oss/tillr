@@ -225,7 +225,7 @@ func (l *Loop) releaseStaleBaseConflicts(ctx context.Context) error {
 		return err
 	}
 	defer s.Close()
-	trunk, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef)
+	trunk, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef())
 	if err != nil {
 		return err
 	}
@@ -309,7 +309,7 @@ func (l *Loop) staleBlockedReport(ctx context.Context, d Decision) (bool, error)
 	if d.RunRequest == nil || IsTrunkFixer(d.ItemID) || IsRemoteSyncItem(d.ItemID) || (d.BlockConflict != nil && d.BlockConflict.TriageVersion != "") {
 		return false, nil
 	}
-	trunk, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef)
+	trunk, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef())
 	if err != nil {
 		return false, err
 	}

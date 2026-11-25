@@ -68,19 +68,20 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 	if verdict.BaseSHA != st.BaseSHA || verdict.TreeSHA != tree || !verdictOK {
 		return refuse("remote-sync needs a passing gate verdict bound to the staged base and candidate tree")
 	}
-	before, err := l.revParse(ctx, root, "refs/heads/"+TrunkRef)
+	trunkRef := l.trunkRef()
+	before, err := l.revParse(ctx, root, "refs/heads/"+trunkRef)
 	if err != nil {
 		return "", false, err
 	}
 	if already, err := trunkAncestor(ctx, root, st.RemoteTip, before); err != nil {
 		return "", false, err
 	} else if already {
-		return refuse("remote-sync remote tip is already on main")
+		return refuse("remote-sync remote tip is already on " + trunkRef)
 	}
 	if present, err := trunkAncestor(ctx, root, st.ConflictCommit, before); err != nil {
 		return "", false, err
 	} else if !present {
-		return refuse("remote-sync conflicting commit is no longer on main")
+		return refuse("remote-sync conflicting commit is no longer on " + trunkRef)
 	}
 	trunk, err := land.OpenTrunk(root)
 	if err != nil {
@@ -117,7 +118,7 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 		release()
 		l.recordPush(ctx, l.cfg.PostLanding.Push.What, before, &pushStateError{
 			kind: pushKindWorktreeDirty, remoteTip: st.RemoteTip, resetTarget: known.Tip, escalated: "operator",
-			detail: detail + "\nmover: operator; check out main or commit, stash, or restore clashing paths in the main checkout",
+			detail: detail + "\nmover: operator; commit, stash, or restore clashing paths in the " + trunkRef + " checkout",
 		})
 		return "", false, l.holdDirty(ctx, c, nil)
 	}
@@ -126,7 +127,7 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 	if h, err := l.observeTrunkLocked(ctx, before, nil); err != nil {
 		return "", false, err
 	} else if h.Lost != "" || h.Observed != before {
-		return "", false, Externalf("cannot replay from %s while main has unresolved history", shortSHA(before))
+		return "", false, Externalf("cannot replay from %s while %s has unresolved history", shortSHA(before), trunkRef)
 	}
 	known.GreenOverride, err = remoteSyncGreen(ctx, root, st, known.Pairs)
 	if err != nil {
@@ -140,18 +141,28 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 	if err := l.checkItemTerminal(ctx, c.ItemID, "land"); err != nil {
 		return "", false, err
 	}
-	if !onMain(ctx, root) {
-		return dirty("remote-sync-worktree-dirty: the main checkout is not on main")
-	}
-	if got, err := l.revParse(ctx, root, "refs/heads/"+TrunkRef); err != nil || got != before {
-		return "", false, Externalf("main moved while preparing the remote-sync replay")
+	if got, err := l.revParse(ctx, root, "refs/heads/"+trunkRef); err != nil || got != before {
+		return "", false, Externalf("%s moved while preparing the remote-sync replay", trunkRef)
 	}
 	intent := &remoteSyncReplay{Candidate: c, Rewrite: *known, Tree: tree, Verdict: verdict, Stage: st}
 	if err := l.writeRemoteSyncReplay(ctx, intent); err != nil {
 		return "", false, err
 	}
-	if _, err := rawGit(ctx, root, nil, "reset", "--keep", "-q", known.Tip); err != nil {
-		return dirty(fmt.Sprintf("remote-sync-worktree-dirty: the main checkout refused the replay reset: %v", err))
+	if onTrunk(ctx, root, trunkRef) {
+		if _, err := rawGit(ctx, root, nil, "reset", "--keep", "-q", known.Tip); err != nil {
+			return dirty(fmt.Sprintf("remote-sync-worktree-dirty: the main checkout refused the replay reset: %v", err))
+		}
+	} else {
+		wt, err := trunk.WorktreeFor("refs/heads/" + trunkRef)
+		if err != nil {
+			return "", false, err
+		}
+		if wt != "" {
+			return dirty(fmt.Sprintf("remote-sync-worktree-dirty: %s is checked out at %s", trunkRef, wt))
+		}
+		if _, err := rawGit(ctx, root, nil, "update-ref", "refs/heads/"+trunkRef, known.Tip, before); err != nil {
+			return "", false, Externalf("advancing %s: %v", trunkRef, err)
+		}
 	}
 	if err := l.finishRemoteSyncReplayLocked(ctx, intent); err != nil {
 		return "", false, err
@@ -168,7 +179,7 @@ func (l *Loop) finishRemoteSyncReplayLocked(ctx context.Context, intent *remoteS
 	if h, err := l.observeTrunkLocked(ctx, "", known); err != nil {
 		return fmt.Errorf("recording remote-sync rewrite: %w", err)
 	} else if h.Lost != "" {
-		return Externalf("main changed before the remote-sync replay was recorded")
+		return Externalf("%s changed before the remote-sync replay was recorded", l.trunkRef())
 	}
 	// This mapping is also durable across recovery and names the actual repair,
 	// not the worker head or the tip after replaying later commits.

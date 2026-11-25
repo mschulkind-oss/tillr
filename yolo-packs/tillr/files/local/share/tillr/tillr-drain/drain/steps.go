@@ -75,6 +75,8 @@ type ProcessSteps struct {
 	Root string
 	// SyncRoadmaps is passed in order to every sync; empty reads all documents.
 	SyncRoadmaps []string
+	// TrunkRef names the landing branch; empty reads .tillr.toml or defaults to main.
+	TrunkRef string
 	// BackendsDir is where the backend's extractor lives, handed to `run exec` so the
 	// run's spend reaches the record. Empty omits `--backends-dir` so `run exec` resolves
 	// its own installed backends directory.
@@ -1143,7 +1145,7 @@ func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutco
 	if err := CheckTrunkWorktree(ctx, s.Root); err != nil {
 		return LandOutcome{}, err
 	}
-	extra := landArgs(candidate)
+	extra := s.landArgs(candidate)
 	code, out, span, err := s.programWithEnv(ctx, "land", ".", s.LandProgram, candidate, []string{"TILLR_LAND_OBSERVE=1"}, extra...)
 	if err != nil {
 		return LandOutcome{}, err

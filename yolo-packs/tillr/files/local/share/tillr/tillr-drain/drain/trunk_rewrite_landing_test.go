@@ -83,7 +83,7 @@ func TestAcceptRewriteMapsUnmappedInteriorLandingByStablePatchID(t *testing.T) {
 		t.Fatalf("before accept: want hold %q, got %s %q", wantHold, d.Action, d.Reason)
 	}
 	class, where, mover := whyPresentation(d)
-	wantMover := "the owner; restore the named landing to main, or map its replacement with tillr drain accept-rewrite"
+	wantMover := "the owner; restore the named landing to the trunk, or map its replacement with tillr drain accept-rewrite"
 	if class != "needs you" || where != "trunk" || mover != wantMover {
 		t.Fatalf("whyPresentation = (%q, %q, %q), want (needs you, trunk, %q)", class, where, mover, wantMover)
 	}

@@ -174,9 +174,10 @@ func checkPublishedAncestry(ctx context.Context, root, remote, ref, prev, tip st
 // tips still on main and not contained in the selected green commit can hold it.
 func (l *Loop) greenProofHold(ctx context.Context, remote, ref, green string) (string, error) {
 	root := l.cfg.Root
-	main := optionalCommit(ctx, root, "refs/heads/"+TrunkRef)
+	trunkRef := l.trunkRef()
+	main := optionalCommit(ctx, root, "refs/heads/"+trunkRef)
 	if main == "" {
-		return "", fmt.Errorf("cannot resolve %s for the proof hold", TrunkRef)
+		return "", fmt.Errorf("cannot resolve %s for the proof hold", trunkRef)
 	}
 	if main == green {
 		return "", nil
@@ -364,7 +365,7 @@ func pushCounts(ctx context.Context, root, remoteTip string) (green, main int) {
 		}
 		return n
 	}
-	return count(GreenRef), count("refs/heads/" + TrunkRef)
+	return count(GreenRef), count("refs/heads/" + trunkBranchFor(root))
 }
 
 func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, state *pushStateError, failure error) (PushOutcome, error) {

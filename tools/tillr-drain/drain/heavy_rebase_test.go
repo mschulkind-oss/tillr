@@ -38,7 +38,7 @@ func TestHeavyNamesRebaseOfMainWhenLandedShaChanged(t *testing.T) {
 		t.Fatalf("fixers=%v, want one against %s", fixers, TrunkFixerID(rebased))
 	}
 	report := h.report.String()
-	for _, want := range []string{"a rebase of main changed the landed commit's sha", shortSHA(landed) + " (item item-break) before the rebase", "operator: run git revert " + shortSHA(rebased)} {
+	for _, want := range []string{"a rebase of the trunk changed the landed commit's sha", shortSHA(landed) + " (item item-break) before the rebase", "operator: run git revert " + shortSHA(rebased)} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report lacks %q:\n%s", want, report)
 		}

@@ -64,7 +64,7 @@ func (l *Loop) observeTrunkWith(ctx context.Context, expected string, known *rew
 		if err != nil {
 			return trunkHistory{}, err
 		}
-		tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		tip, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil {
 			return trunkHistory{}, err
 		}
@@ -103,7 +103,7 @@ func (l *Loop) observeTrunkLocked(ctx context.Context, expected string, known *r
 		}
 		before := h
 		var tip string
-		tip, err = l.revParse(ctx, l.cfg.Root, TrunkRef)
+		tip, err = l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil {
 			return h, err
 		}

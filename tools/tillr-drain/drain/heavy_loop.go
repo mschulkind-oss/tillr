@@ -52,7 +52,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			l.heavyMu.Lock()
 			requested := l.heavyWanted
 			l.heavyMu.Unlock()
-			runner := HeavyRunner{Root: l.cfg.Root, Store: l.cfg.Store, Work: filepath.Join(l.cfg.LaneRoot, ".rolling", "worktree"), Trunk: TrunkRef, Judge: func(jctx context.Context, dir, only string) ([]HeavyCheck, error) {
+			runner := HeavyRunner{Root: l.cfg.Root, Store: l.cfg.Store, Work: filepath.Join(l.cfg.LaneRoot, ".rolling", "worktree"), Trunk: l.trunkRef(), Judge: func(jctx context.Context, dir, only string) ([]HeavyCheck, error) {
 				checks, err := step.JudgeHeavy(jctx, dir, only)
 				l.sweepDisabledMarkers(jctx)
 				return checks, err
@@ -127,7 +127,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				if err != nil {
 					return err
 				}
-				tip, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef)
+				tip, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef())
 				if err != nil {
 					return err
 				}

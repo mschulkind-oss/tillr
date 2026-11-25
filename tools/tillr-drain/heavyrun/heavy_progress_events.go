@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -47,7 +48,7 @@ type heavyStoreProgress struct {
 func (r HeavyRunner) StartStoreProgress(ctx context.Context, tipSHA string) (context.Context, *heavyStoreProgress) {
 	trunkID := strings.TrimPrefix(r.Trunk, "refs/heads/")
 	if trunkID == "" {
-		trunkID = "main"
+		trunkID = settings.DefaultTrunkBranch
 	}
 	p := &heavyStoreProgress{
 		runner:  r,

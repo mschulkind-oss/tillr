@@ -138,7 +138,7 @@ list of forks). A repository without them runs on the deployed agent directory.
 
 `tillr-run pi-build-agent-dir` constructs a content-keyed agent directory under
 `TILLR_PI_AGENT_DIRS_DIR` (falling back to the repository's durable agent-dirs root)
-from the repository trunk (`refs/heads/main`, or `HEAD`):
+from the repository trunk (configured `[trunk] branch`, default `refs/heads/main`, or `HEAD`):
 
 - **Key inputs.** A 12-character SHA-256 key is computed from
   `yolo-packs/matt/files/extensions`, `yolo-packs/matt/pack.json` `yolo-patched`

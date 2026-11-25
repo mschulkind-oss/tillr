@@ -65,7 +65,7 @@ func (l *Loop) preRebaseRepairedTrunk(ctx context.Context, candidate Candidate) 
 	if candidate.BaseRef != "" || l.laneForkTarget(candidate.LaneID) != "" {
 		return candidate, nil
 	}
-	mainSHA, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	mainSHA, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 	if err != nil || mainSHA == "" || mainSHA == candidate.BaseSHA {
 		return candidate, err
 	}

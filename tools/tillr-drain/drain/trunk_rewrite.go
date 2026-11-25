@@ -92,7 +92,7 @@ func (l *Loop) proveRewrite(ctx context.Context, lost, tip string) (*rewriteAbso
 		used[match] = true
 		a.Pairs[old] = match
 	}
-	reflog, _ := rawGit(ctx, root, nil, "reflog", "show", "-n", "3", "--format=%gd: %gs", TrunkRef)
+	reflog, _ := rawGit(ctx, root, nil, "reflog", "show", "-n", "3", "--format=%gd: %gs", trunkBranchFor(root))
 	evidence := "git patch-id --stable matched " + strconv.Itoa(len(a.Pairs)) + " commits between " + base + " and " + lost + " to the trunk " + tip
 	if r := strings.Join(strings.Fields(strings.ReplaceAll(strings.TrimSpace(reflog), "\n", " | ")), " "); r != "" {
 		evidence += "; reflog: " + r
@@ -145,7 +145,7 @@ func (l *Loop) reconcileRewrittenLandings(ctx context.Context) error {
 		return nil
 	}
 	registerRewriteStore(l.cfg.Root, l.cfg.Store)
-	tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	tip, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 	if err != nil {
 		return err
 	}

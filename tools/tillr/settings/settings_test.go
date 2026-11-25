@@ -34,7 +34,8 @@ func TestDefaultsAndTOML(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := settings.Settings{
-		Roll: settings.Roll{PauseTimeoutSeconds: 120}, Push: settings.Push{What: "none"},
+		Trunk: settings.Trunk{Branch: settings.DefaultTrunkBranch},
+		Roll:  settings.Roll{PauseTimeoutSeconds: 120}, Push: settings.Push{What: "none"},
 		CandidateSize: settings.CandidateSizeLimits{FileLimit: 27, AddedLineLimit: 1200},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -60,6 +61,7 @@ added_line_limit = 900
 		t.Fatal(err)
 	}
 	want = settings.Settings{
+		Trunk:         settings.Trunk{Branch: settings.DefaultTrunkBranch},
 		Roll:          settings.Roll{Paths: []string{"tools/tillr*/", "config/tillr/"}, Command: "just tillr-roll --no-request", PauseTimeoutSeconds: 45},
 		Push:          settings.Push{What: "green", Remote: "origin", Ref: "refs/heads/main"},
 		CandidateSize: settings.CandidateSizeLimits{FileLimit: 42, AddedLineLimit: 900},
@@ -101,6 +103,20 @@ func TestRefusalsNameFileKeyAndExpectation(t *testing.T) {
 		{"[roll.extra]\nx = 1", "roll.extra", "command"},
 		{"[candidate_size]\nfile_limit = -1", "candidate_size.file_limit", "nonnegative integer"},
 		{"[candidate_size]\nadded_line_limit = '1200'", "candidate_size.added_line_limit", "nonnegative integer"},
+		{"[trunk]\nother = 'dev'", "trunk.other", "branch"},
+		{"[trunk]\nbranch = 1", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = ''", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = 'refs/heads/dev'", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = 'dev..other'", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = 'dev@{0}'", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = '-dev'", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = '/dev'", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = 'dev/'", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = 'dev//v2'", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = 'dev.lock'", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = '@'", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = 'dev branch'", "trunk.branch", "valid short branch name"},
+		{"[trunk]\nbranch = 'dev~1'", "trunk.branch", "valid short branch name"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.key+tc.body, func(t *testing.T) {
@@ -161,6 +177,39 @@ func TestPushWhatSpellings(t *testing.T) {
 		got, err := settings.Read(dir)
 		if err != nil || got.Push.What != want || !strings.Contains(got.StartupLine(), "push.what="+want+" ") {
 			t.Fatalf("%q: what = %q, %v; line %s", body, got.Push.What, err, got.StartupLine())
+		}
+	}
+}
+
+func TestTrunkBranchSetting(t *testing.T) {
+	dir := root(t)
+	got, err := settings.Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Trunk.Set || got.TrunkBranch() != "main" || got.TrunkRef() != "refs/heads/main" {
+		t.Fatalf("unset trunk = %+v", got.Trunk)
+	}
+	if !strings.Contains(got.StartupLine(), `trunk.branch="main" `) {
+		t.Fatalf("startup line missing default trunk.branch: %s", got.StartupLine())
+	}
+
+	for _, branch := range []string{"dev", "release/v2"} {
+		if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte("[trunk]\nbranch = '"+branch+"'\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, err = settings.Read(dir)
+		if err != nil {
+			t.Fatalf("%q: %v", branch, err)
+		}
+		if !got.Trunk.Set || got.TrunkBranch() != branch || got.TrunkRef() != "refs/heads/"+branch {
+			t.Fatalf("%q: got %+v", branch, got.Trunk)
+		}
+		if !strings.Contains(got.StartupLine(), `trunk.branch="`+branch+`" `) {
+			t.Fatalf("%q: startup line = %s", branch, got.StartupLine())
+		}
+		if _, err := settings.ReadWithoutLanding(dir, "findings"); err == nil || !strings.Contains(err.Error(), "trunk.branch") {
+			t.Fatalf("%q: ReadWithoutLanding = %v, want trunk.branch refusal", branch, err)
 		}
 	}
 }

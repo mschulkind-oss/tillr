@@ -445,7 +445,7 @@ func (l *Loop) rollingUnknownStreak(ctx context.Context) int {
 // the concurrency the two-lane case exists to prove.
 func (l *Loop) bumpLandings(ctx context.Context) error {
 	if l.gatePolicy.LandingStrategy == "after-merge" {
-		tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		tip, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil {
 			return err
 		}
@@ -566,7 +566,7 @@ func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate Ga
 		reading.RedSHA, reading.Confirmed = base, true
 		return reading, nil
 	}
-	tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	tip, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 	if err != nil {
 		return reading, err
 	}
@@ -1316,7 +1316,7 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate *Candidate, gat
 						return false, nil
 					}
 					if out.Dropped != "" {
-						if currentTip, tipErr := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef); tipErr == nil && currentTip != "" {
+						if currentTip, tipErr := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef()); tipErr == nil && currentTip != "" {
 							from := candidate.WorkerHeadSHA
 							if from == "" {
 								from = candidate.HeadSHA
@@ -2019,7 +2019,7 @@ func (l *Loop) preRebaseFixer(ctx context.Context, candidate Candidate) (Candida
 	if !IsTrunkFixer(candidate.ItemID) {
 		return candidate, nil
 	}
-	mainSHA, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	mainSHA, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 	if err != nil {
 		return candidate, err
 	}

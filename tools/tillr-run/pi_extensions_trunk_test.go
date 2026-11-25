@@ -392,3 +392,62 @@ func TestPiAdapterOutsideMattRepoUsesDeployed(t *testing.T) {
 		t.Fatalf("scratch-dir record = %q, want %q", strings.TrimSpace(string(recScratch)), customAgent+" (deployed)")
 	}
 }
+
+func TestBuildAgentDirReadsConfiguredTrunkBranchWithoutMain(t *testing.T) {
+	dir := scratch(t, "pi-ext-dev")
+	repo := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, "yolo-packs", "matt", "files", "extensions"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "init", "-b", "dev")
+	runGit(t, repo, "config", "user.name", "Test User")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+
+	if err := os.WriteFile(filepath.Join(repo, ".tillr.toml"), []byte("[trunk]\nbranch = \"dev\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "yolo-packs", "matt", "pack.json"), []byte(`{"name":"matt","contributions":[]}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "yolo-packs", "matt", "files", "extensions", "trunk-ext.ts"), []byte("export default function() { return 'dev'; }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "bin", "pi-forks.list"), []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "init on dev")
+
+	// Check out a different branch with different extension content so HEAD != refs/heads/dev.
+	runGit(t, repo, "checkout", "-b", "work")
+	if err := os.WriteFile(filepath.Join(repo, "yolo-packs", "matt", "files", "extensions", "trunk-ext.ts"), []byte("export default function() { return 'work'; }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "yolo-packs/matt/files/extensions/trunk-ext.ts")
+	runGit(t, repo, "commit", "-m", "work divergence")
+
+	deployed := setupDeployedAgentDir(t, dir)
+	agentDirs := filepath.Join(dir, "pi-agent-dirs")
+
+	cmd := exec.Command(bin, "pi-build-agent-dir")
+	cmd.Dir = repo
+	cmd.Env = cleanPiEnv(
+		"TILLR_PI_AGENT_DIRS_DIR="+agentDirs,
+		"TILLR_DEPLOYED_PI_AGENT_DIR="+deployed,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pi-build-agent-dir failed: %v\n%s", err, out)
+	}
+	builtDir := strings.TrimSpace(string(out))
+	extBytes, err := os.ReadFile(filepath.Join(builtDir, "extensions", "trunk-ext.ts"))
+	if err != nil {
+		t.Fatalf("read built extension: %v", err)
+	}
+	if !strings.Contains(string(extBytes), "'dev'") {
+		t.Fatalf("built extension = %q, want content from refs/heads/dev (not work HEAD)", string(extBytes))
+	}
+}

@@ -29,7 +29,7 @@ func (l *Loop) escalateRemoteSyncPushState(ctx context.Context, itemID, who, rea
 	if err != nil || !ok {
 		return
 	}
-	l.recordPush(ctx, l.cfg.PostLanding.Push.What, st.OldTrunk, remoteSyncConflictError(st, who, reason))
+	l.recordPush(ctx, l.cfg.PostLanding.Push.What, st.OldTrunk, remoteSyncConflictError(st, l.trunkRef(), who, reason))
 }
 
 func remoteSyncObstacleMover(kind string) (who, reason string) {
@@ -105,9 +105,9 @@ func (l *Loop) pushGreenOnce(ctx context.Context, p settings.Push) (string, erro
 	return green, err
 }
 
-func onMain(ctx context.Context, root string) bool {
+func onTrunk(ctx context.Context, root, trunkRef string) bool {
 	head, err := rawGit(ctx, root, nil, "symbolic-ref", "-q", "HEAD")
-	return err == nil && strings.TrimSpace(head) == "refs/heads/"+TrunkRef
+	return err == nil && strings.TrimSpace(head) == "refs/heads/"+trunkRef
 }
 
 // Only a previously blocked push can be woken by a pass. Checking for clearance
@@ -124,7 +124,7 @@ func (l *Loop) maybeRecoverClearedPushHold(ctx context.Context) {
 			return
 		}
 	case pushKindWorktreeDirty:
-		if !onMain(ctx, root) || last.ResetTarget == "" || optionalCommit(ctx, root, "MERGE_HEAD") != "" {
+		if !onTrunk(ctx, root, l.trunkRef()) || last.ResetTarget == "" || optionalCommit(ctx, root, "MERGE_HEAD") != "" {
 			return
 		}
 		// Test the two-tree checkout that reset --keep would do, without writing
@@ -147,7 +147,7 @@ func (l *Loop) triggerPushNow(ctx context.Context) {
 	case settings.PushGreen:
 		l.afterGreen(ctx, "hold-cleared")
 	case settings.PushTip:
-		if tip := optionalCommit(ctx, l.cfg.Root, "refs/heads/"+TrunkRef); tip != "" {
+		if tip := optionalCommit(ctx, l.cfg.Root, "refs/heads/"+l.trunkRef()); tip != "" {
 			l.submitTipPush(ctx, p, tip)
 		}
 	}

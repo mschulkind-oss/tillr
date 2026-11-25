@@ -30,7 +30,7 @@ func init() {
 func (h *redCapHold) current(ctx context.Context, r *store.Reader, at time.Time) (*redcap.Hold, error) {
 	ref := h.Candidate.BaseRef
 	if ref == "" {
-		ref = TrunkRef
+		ref = trunkBranchFor(h.Root)
 	}
 	if redcap.Exempt(ref, h.Candidate.ItemID) {
 		return nil, nil

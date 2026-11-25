@@ -704,7 +704,7 @@ func (l *Loop) restoreReopenedPausedLane(ctx context.Context, work *pendingWork,
 	}
 
 	if _, err := os.Stat(target); os.IsNotExist(err) && target == worktree {
-		trunk, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		trunk, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 		if err != nil {
 			return err
 		}

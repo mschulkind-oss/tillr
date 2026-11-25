@@ -229,7 +229,7 @@ func (l *Loop) fileForkRebase(ctx context.Context, o forkObservation) (string, e
 	}
 	l.forkRebaseMu.Lock()
 	defer l.forkRebaseMu.Unlock()
-	pin, err := l.git(ctx, l.cfg.Root, "show", TrunkRef+":"+o.Pin())
+	pin, err := l.git(ctx, l.cfg.Root, "show", l.trunkRef()+":"+o.Pin())
 	if err != nil {
 		// A candidate may propose creating a fork; the request must already have
 		// a tracked pin to repair on the trunk.
