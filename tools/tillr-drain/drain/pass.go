@@ -3035,152 +3035,187 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (string, error) {
 func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly bool) (stop string, err error) {
 	defer func() {
 		if errors.Is(err, errRestartPending) {
+			end := l.startPassPhase("gate_restart")
 			_, stop, err = l.gateRestart(ctx, result)
+			end()
 		}
 	}()
-	if handled, stop, err := l.gateRestart(ctx, result); handled || err != nil {
+	endGateRestart := l.startPassPhase("gate_restart")
+	handled, stop, err := l.gateRestart(ctx, result)
+	endGateRestart()
+	if handled || err != nil {
 		return stop, err
 	}
-	if err := l.checkStopRequested(ctx); err != nil {
+	if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
 		return "", err
 	}
 	if !l.nonLanding {
+		end := l.startPassPhase("sweep_disabled_markers")
 		l.sweepDisabledMarkers(ctx)
+		end()
 	}
-	if err := l.observeTrunkCoreWorktree(ctx); err != nil {
+	if err := l.timePassPhase("observe_trunk_core_worktree", func() error { return l.observeTrunkCoreWorktree(ctx) }); err != nil {
 		l.reportf("loop: could not record trunk core.worktree observation: %v\n", err)
 	}
-	if err := l.refreshLaneCount(ctx, false); err != nil {
+	if err := l.timePassPhase("refresh_lane_count", func() error { return l.refreshLaneCount(ctx, false) }); err != nil {
 		return "", err
 	}
-	if stop, err := l.drainCompletions(ctx, result); stop != "" || err != nil {
+	endDrain := l.startPassPhase("drain_completions")
+	stop, err = l.drainCompletions(ctx, result)
+	endDrain()
+	if stop != "" || err != nil {
 		return stop, err
 	}
 	if !l.nonLanding {
-		if err := l.reclaimEndedItemLanes(ctx); err != nil {
+		if err := l.timePassPhase("reclaim_ended_item_lanes", func() error { return l.reclaimEndedItemLanes(ctx) }); err != nil {
 			l.reportf("loop: ended-item lane cleanup failed: %v\n", err)
 		}
+		endPrune := l.startPassPhase("prune_run_refs")
 		l.reportRefSweepFailure(l.pruneRunRefs(ctx))
+		endPrune()
 	}
-	if err := l.intakeComments(ctx); err != nil {
+	if err := l.timePassPhase("intake_comments", func() error { return l.intakeComments(ctx) }); err != nil {
 		return "", err
 	}
-	if err := l.confirmCommentReplies(ctx); err != nil {
+	if err := l.timePassPhase("confirm_comment_replies", func() error { return l.confirmCommentReplies(ctx) }); err != nil {
 		return "", err
 	}
-	if err := l.flushCommentDeliveries(ctx); err != nil {
+	if err := l.timePassPhase("flush_comment_deliveries", func() error { return l.flushCommentDeliveries(ctx) }); err != nil {
 		return "", err
 	}
-	if err := l.refreshPolicy(); err != nil {
+	if err := l.timePassPhase("refresh_policy", func() error { return l.refreshPolicy() }); err != nil {
 		return "", err
 	}
 	// Settle an interrupted repair before trunk observation or the stale-stage sweep
 	// can mistake its replay for a manual reconciliation.
-	if replay, err := l.recoverPendingRemoteSyncReplay(ctx); err != nil {
-		return "", err
-	} else if replay != nil {
+	endReplay := l.startPassPhase("recover_remote_sync_replay")
+	replay, err := l.recoverPendingRemoteSyncReplay(ctx)
+	if err == nil && replay != nil {
 		l.afterRemoteSyncReplay(ctx, replay, result)
 	}
-	if _, err := l.observeTrunk(ctx, ""); err != nil {
+	endReplay()
+	if err != nil {
 		return "", err
 	}
-	if err := l.reconcileRewrittenLandings(ctx); err != nil {
+	endObserveTrunk := l.startPassPhase("observe_trunk")
+	_, err = l.observeTrunk(ctx, "")
+	endObserveTrunk()
+	if err != nil {
+		return "", err
+	}
+	if err := l.timePassPhase("reconcile_rewritten_landings", func() error { return l.reconcileRewrittenLandings(ctx) }); err != nil {
 		return "", err
 	}
 	// After-merge proof starts before document sync and landing reconciliation, so a fault
 	// in either on every start cannot keep a restarting loop from ever proving the tip.
 	if !l.nonLanding && l.gatePolicy.LandingStrategy == "after-merge" {
-		early, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
-		if err != nil {
-			return "", err
-		}
-		// Offer an already proved commit after restart and replay recovery, without
-		// waiting for the next proof to finish (or for it to advance green again).
-		l.offerStartupGreen(ctx)
-		if err := l.maybeRolling(ctx, early, false, result); err != nil {
+		if err := l.timePassPhase("maybe_rolling", func() error {
+			early, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+			if err != nil {
+				return err
+			}
+			// Offer an already proved commit after restart and replay recovery, without
+			// waiting for the next proof to finish (or for it to advance green again).
+			l.offerStartupGreen(ctx)
+			return l.maybeRolling(ctx, early, false, result)
+		}); err != nil {
 			return "", err
 		}
 	}
+	endRefreshDocs := l.startPassPhase("refresh_documents")
 	mainSHA, err := l.refreshDocuments(ctx, result)
+	endRefreshDocs()
 	if err != nil {
 		return "", err
 	}
 	if !l.nonLanding {
-		if err := l.reconcileLandingCalls(ctx); err != nil {
+		if err := l.timePassPhase("reconcile_landing_calls", func() error { return l.reconcileLandingCalls(ctx) }); err != nil {
 			return "", err
 		}
 	}
-	if err := l.retireDesigners(ctx); err != nil {
+	if err := l.timePassPhase("retire_designers", func() error { return l.retireDesigners(ctx) }); err != nil {
 		return "", err
 	}
-	if err := l.checkStopRequested(ctx); err != nil {
-		return "", err
-	}
-	if !l.nonLanding {
-		if err := l.closeStaleRemoteSyncItems(ctx); err != nil {
-			return "", err
-		}
-		l.maybeRecoverClearedPushHold(ctx)
-	}
-	if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {
-		return "", err
-	}
-	if err := l.checkStopRequested(ctx); err != nil {
-		return "", err
-	}
-	if err := l.releaseUnlaunchedClaims(ctx); err != nil {
-		return "", err
-	}
-	if err := l.repairStaleRunRecords(ctx); err != nil {
+	if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
 		return "", err
 	}
 	if !l.nonLanding {
-		if err := l.releaseGeneratedTriage(ctx); err != nil {
+		if err := l.timePassPhase("close_stale_remote_sync_items", func() error {
+			if err := l.closeStaleRemoteSyncItems(ctx); err != nil {
+				return err
+			}
+			l.maybeRecoverClearedPushHold(ctx)
+			return nil
+		}); err != nil {
 			return "", err
 		}
-		if err := l.resolveProvedFixers(ctx); err != nil {
+	}
+	if err := l.timePassPhase("maybe_rolling", func() error { return l.maybeRolling(ctx, mainSHA, false, result) }); err != nil {
+		return "", err
+	}
+	if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
+		return "", err
+	}
+	if err := l.timePassPhase("release_unlaunched_claims", func() error { return l.releaseUnlaunchedClaims(ctx) }); err != nil {
+		return "", err
+	}
+	if err := l.timePassPhase("repair_stale_run_records", func() error { return l.repairStaleRunRecords(ctx) }); err != nil {
+		return "", err
+	}
+	if !l.nonLanding {
+		if err := l.timePassPhase("release_generated_triage", func() error { return l.releaseGeneratedTriage(ctx) }); err != nil {
 			return "", err
 		}
-		if err := l.settleResolvedFixerRuns(ctx); err != nil {
+		if err := l.timePassPhase("resolve_proved_fixers", func() error { return l.resolveProvedFixers(ctx) }); err != nil {
 			return "", err
 		}
-		if err := l.releaseTrunkAcquittals(ctx); err != nil {
+		if err := l.timePassPhase("settle_resolved_fixer_runs", func() error { return l.settleResolvedFixerRuns(ctx) }); err != nil {
 			return "", err
 		}
-		if err := l.supersedeRetriedCandidates(ctx); err != nil {
+		if err := l.timePassPhase("release_trunk_acquittals", func() error { return l.releaseTrunkAcquittals(ctx) }); err != nil {
 			return "", err
 		}
-		if err := l.releaseStaleBaseConflicts(ctx); err != nil {
+		if err := l.timePassPhase("supersede_retried_candidates", func() error { return l.supersedeRetriedCandidates(ctx) }); err != nil {
 			return "", err
 		}
-		if err := l.settleUnansweredDesignRuns(ctx); err != nil {
+		if err := l.timePassPhase("release_stale_base_conflicts", func() error { return l.releaseStaleBaseConflicts(ctx) }); err != nil {
 			return "", err
 		}
-		if err := l.settleMisreadDesignAnswers(ctx); err != nil {
+		if err := l.timePassPhase("settle_unanswered_design_runs", func() error { return l.settleUnansweredDesignRuns(ctx) }); err != nil {
+			return "", err
+		}
+		if err := l.timePassPhase("settle_misread_design_answers", func() error { return l.settleMisreadDesignAnswers(ctx) }); err != nil {
 			return "", err
 		}
 	}
 	at := l.cfg.Now().UTC()
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
 	defer func() {
+		endAlarms := l.startPassPhase("report_alarms")
 		l.reportAlarms(ctx, at)
+		endAlarms()
 		l.countGeneration(result, timing.TickID)
 	}()
 	epochs := l.idleLaneEpochs()
-	if err := l.retireOrderWork(ctx); err != nil {
+	if err := l.timePassPhase("retire_order_work", func() error { return l.retireOrderWork(ctx) }); err != nil {
 		return "", err
 	}
 	// Maintenance may have overlapped a worker or examination finishing.
 	// Any completion drained here missed this pass's top-of-pass ref sweep and
 	// trunk/document sync, so the pass cannot stop as queue-drained without
 	// another pass to run that maintenance.
+	endDrainMaint := l.startPassPhase("drain_completions")
 	maintenanceDrained, stop, err := l.drainCompletionsCount(ctx, result)
+	endDrainMaint()
 	if stop != "" || err != nil {
 		return stop, err
 	}
 	var commentChecks []plannedApplication
 	plan := func(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
-		return l.passPlansMode(ctx, at, generation, pendingOnly, &commentChecks)
+		endPlan := l.startPassPhase("plan")
+		plans, leases, err := l.passPlansMode(ctx, at, generation, pendingOnly, &commentChecks)
+		endPlan()
+		return plans, leases, err
 	}
 	plans, leases, err := plan(ctx, at, &timing.TickID)
 	if err != nil {
@@ -3198,7 +3233,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		}
 	}
 	if len(finished) != 0 {
+		endEndRuns := l.startPassPhase("end_terminal_runs")
 		skipped, err := endRuns(ctx, l.cfg.Store, finished)
+		endEndRuns()
 		if err != nil {
 			return "", err
 		}
@@ -3218,7 +3255,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 				(d.Action != ActionDispatch && d.Action != ActionRetry && d.Action != ActionHold) {
 				continue
 			}
+			endCheckComment := l.startPassPhase("check_comment_dispatch")
 			ready, closed, checkErr := l.checkCommentDispatch(ctx, p, at)
+			endCheckComment()
 			if checkErr != nil {
 				return "", checkErr
 			}
@@ -3245,14 +3284,19 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		if timing.TickID == "" {
 			return
 		}
-		if recordErr := l.observePass(timing, answers); recordErr != nil && err == nil {
+		endObserve := l.startPassPhase("observe_pass")
+		recordErr := l.observePass(timing, answers)
+		endObserve()
+		if recordErr != nil && err == nil {
 			err = recordErr
 		}
 	}()
 	var holds []Decision
 	var holdWrites []func(*store.Tx) error
 	if pendingOnly {
+		endHoldWrites := l.startPassPhase("write_holds")
 		holdWrites, err = startHoldWrites(l.startView.Load(), at)
+		endHoldWrites()
 		if err != nil {
 			return "", err
 		}
@@ -3284,7 +3328,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	// pass, so it is offered the next free lane; each re-plan removes a lane, so this is
 	// bounded by the lane count.
 	replans := 0
+	endDrainPlans := l.startPassPhase("drain_completions")
 	drained, stop, err := l.drainCompletionsCount(ctx, result)
+	endDrainPlans()
 	if stop != "" || err != nil {
 		return stop, err
 	}
@@ -3293,7 +3339,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	}
 plans:
 	for i := 0; i < len(plans); i++ {
-		if err := l.checkStopRequested(ctx); err != nil {
+		if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
 			return "", err
 		}
 		p := plans[i]
@@ -3311,7 +3357,9 @@ plans:
 		if p.checksComments() && item.IsCommentItem(d.ItemID) && (isDispatch(d) || d.Action == ActionHold) {
 			if !commentReady[d.ItemID] {
 				if isDispatch(d) {
-					if err := l.recordDispatchDecline(ctx, d, at, "the Vantage comment is not ready", "Vantage to make the comment available"); err != nil {
+					if err := l.timePassPhase("apply_plans", func() error {
+						return l.recordDispatchDecline(ctx, d, at, "the Vantage comment is not ready", "Vantage to make the comment available")
+					}); err != nil {
 						return "", err
 					}
 				}
@@ -3327,7 +3375,9 @@ plans:
 			}
 			continue
 		}
+		endApply := l.startPassPhase("apply_plans")
 		cancelled, changed, err := l.applyReadyPlan(ctx, p, &mainSHA, at, timing, &laneWatch{watched, epochs}, result)
+		endApply()
 		if err != nil {
 			return "", err
 		}
@@ -3379,7 +3429,7 @@ plans:
 			}
 		}
 	}
-	if err := l.writeHolds(ctx, holdWrites); err != nil {
+	if err := l.timePassPhase("write_holds", func() error { return l.writeHolds(ctx, holdWrites) }); err != nil {
 		return "", err
 	}
 	if timing.Applied > 0 || timing.TickID != "" {
@@ -3409,11 +3459,11 @@ plans:
 	if stale {
 		return "", nil
 	}
-	if err := l.checkStopRequested(ctx); err != nil {
+	if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
 		return "", err
 	}
 	before := l.rollingRuns(result)
-	if err := l.maybeRolling(ctx, mainSHA, true, result); err != nil {
+	if err := l.timePassPhase("maybe_rolling", func() error { return l.maybeRolling(ctx, mainSHA, true, result) }); err != nil {
 		return "", err
 	}
 	if l.rollingRuns(result) != before {
@@ -3423,7 +3473,9 @@ plans:
 		return l.waitForTrigger(ctx, leases, at, result)
 	}
 	if pendingOnly {
+		endStartIdle := l.startPassPhase("start_idle")
 		idle, allHolds, err := l.startIdle(ctx, l.startView.Load(), holds)
+		endStartIdle()
 		if err != nil {
 			return "", err
 		}

@@ -687,12 +687,14 @@ type Loop struct {
 	passSequence    uint64
 	previousAnswers string
 
-	sessionInitialized bool
-	lastLoopPassAt     time.Time
-	processCPUMu       sync.Mutex
-	lastProcessCPU     *processCPUSnapshot
-	procRoot           string
-	selfPID            int
+	sessionInitialized   bool
+	lastLoopPassAt       time.Time
+	passTimer            *loopPassTimer
+	beforeRecordLoopPass func()
+	processCPUMu         sync.Mutex
+	lastProcessCPU       *processCPUSnapshot
+	procRoot             string
+	selfPID              int
 	// keepWAL and walKeeper are the store's checkpoint owner, lastCheckpoint is the clock
 	// reading of its last checkpoint, restartPending is whether that cycle left the log
 	// unrestarted, notRestarted counts consecutive log.not-restarted outcomes, and
@@ -1152,8 +1154,11 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 			result.Detail = "the loop was asked to stop"
 			return nil
 		}
-		l.recordLoopPass(ctx)
+		pt := newLoopPassTimer(l.cfg.Now)
+		l.passTimer = pt
+		endCPU := pt.startPhase("record_process_cpu")
 		l.recordProcessCPUIfDue(ctx)
+		endCPU()
 		l.mu.Lock()
 		dispatched := result.Dispatched
 		if !pendingOnly {
@@ -1161,6 +1166,7 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 		}
 		l.mu.Unlock()
 		done, err := l.passMode(ctx, result, pendingOnly)
+		l.passTimer = nil
 		if err != nil {
 			// A stop that arrived while the tick was reading the store is still the
 			// operator's stop, not a store failure: the signal is why the write was
@@ -1172,6 +1178,7 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 			}
 			return err
 		}
+		l.recordLoopPass(ctx, pt)
 		if done != "" {
 			result.Stop = done
 			return nil

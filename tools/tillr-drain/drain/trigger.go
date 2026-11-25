@@ -257,6 +257,7 @@ func resolveNotifyBin(configured string) (string, error) {
 }
 
 func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.Time, result *LoopResult) (string, error) {
+	defer l.startPassPhase("wait_for_trigger")()
 	if err := l.checkStopRequested(ctx); err != nil {
 		if stoppedByOperator(ctx, err) {
 			result.Detail = "the loop was asked to stop while waiting for a trigger"
