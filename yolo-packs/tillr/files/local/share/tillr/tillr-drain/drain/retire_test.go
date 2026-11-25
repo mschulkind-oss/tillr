@@ -43,8 +43,13 @@ func TestPlanNeedsOnlyPolicyAndStore(t *testing.T) {
 }
 
 func TestStopDetailSeparatesHoldsAndDeferrals(t *testing.T) {
-	got := heldDetail([]Decision{{ItemID: "blocked", Reason: ReasonBlocked}, {ItemID: "waiting", Reason: ReasonNoLane}, {ItemID: "fork", Reason: ReasonForkHeld, DeferredBy: "owner"}})
-	for _, want := range []string{"1 held item(s): blocked", "2 deferred item(s): waiting", "fork (fork-held behind owner)"} {
+	got := heldDetail([]Decision{
+		{ItemID: "blocked", Reason: ReasonBlocked},
+		{ItemID: "waiting", Reason: ReasonNoLane},
+		{ItemID: "limited", Reason: ReasonAgentLimit, DeferredBy: "run-active-a1"},
+		{ItemID: "fork", Reason: ReasonForkHeld, DeferredBy: "owner"},
+	})
+	for _, want := range []string{"1 held item(s): blocked", "3 deferred item(s): waiting", "limited (agent-limit behind run-active-a1)", "fork (fork-held behind owner)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q lacks %q", got, want)
 		}

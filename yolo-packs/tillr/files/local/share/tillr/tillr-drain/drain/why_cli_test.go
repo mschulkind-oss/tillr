@@ -130,7 +130,7 @@ func TestWhyNamesQuestionsAndCapacity(t *testing.T) {
 	if err := json.Unmarshal(out, &answer); err != nil {
 		t.Fatal(err)
 	}
-	if answer.Rows[1].Reason != drain.ReasonNoLane || answer.Rows[1].Mover != "drain; lane-1" || answer.Rows[2].Reason != drain.ReasonQuestionOpen || answer.Rows[2].Mover != "owner; answer docs/design/open.md#OQ-1" {
+	if answer.Rows[1].Reason != drain.ReasonAgentLimit || answer.Rows[1].Mover != "drain; run-first-a1" || answer.Rows[2].Reason != drain.ReasonQuestionOpen || answer.Rows[2].Mover != "owner; answer docs/design/open.md#OQ-1" {
 		t.Fatalf("references: %+v", answer.Rows)
 	}
 	code, out = invoke(t, "why", "missing", "--store", path)
@@ -333,7 +333,7 @@ func TestWhyDefaultsToLiveLoopLanesAndReportsLaneSet(t *testing.T) {
 	if !reflect.DeepEqual(answer.Lanes, []string{"lane-1", "express-1"}) || answer.LanesSource != "live loop" {
 		t.Fatalf("lanes=%v source=%q, want [lane-1 express-1] live loop", answer.Lanes, answer.LanesSource)
 	}
-	if answer.Summary.LanesOffered != 2 || answer.Rows[0].Reason != drain.ReasonReady || answer.Rows[1].Reason != drain.ReasonNoLane {
+	if answer.Summary.LanesOffered != 2 || answer.Rows[0].Reason != drain.ReasonReady || answer.Rows[1].Reason != drain.ReasonAgentLimit || answer.Rows[1].Mover != "drain; run-first-a1" {
 		t.Fatalf("unexpected plan with live loop lanes: summary=%+v rows=%+v", answer.Summary, answer.Rows)
 	}
 	if answer.ProcessPriority == nil || answer.ProcessPriority.Mechanism != "nice" || answer.ProcessPriority.Classes["worker"] != 15 {

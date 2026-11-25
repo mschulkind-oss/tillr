@@ -83,12 +83,38 @@ func TestOrdinaryStartBlockedWhenParallelAgentsFillLimitEvenWithFreeLane(t *test
 
 	lanes := []string{"lane-1", "lane-2"}
 	got := planDecisionByItem(t, f, Pass{Now: at.Format(time.RFC3339Nano), AvailableLanes: &lanes, Build: &l.build}, l.cfg.Policy)
-	if got["item-b"].Action != ActionHold || got["item-b"].Reason != ReasonNoLane {
-		t.Fatalf("item-b = %+v, want hold/%s while 2 parallel ordinary agents fill limit 2", got["item-b"], ReasonNoLane)
+	if got["item-b"].Action != ActionHold || got["item-b"].Reason != ReasonAgentLimit || got["item-b"].DeferredBy != "run-item-a-a1-n1, run-item-a-a1-n2" {
+		t.Fatalf("item-b = %+v, want hold/%s deferred by both running scouts", got["item-b"], ReasonAgentLimit)
 	}
 	if got["item-exp"].Action != ActionDispatch || got["item-exp"].LaneID != "lane-2" {
 		t.Fatalf("item-exp = %+v, want express dispatch on free staged lane-2", got["item-exp"])
 	}
+
+	// Why must report agent-limit and name both running agent runs as mover.
+	fixtureRead(t, f, func(r *store.Reader) error {
+		answer, err := Why(r, Pass{Now: at.Format(time.RFC3339Nano), AvailableLanes: &lanes, Build: &l.build}, l.cfg.Policy, &VantageQuestions{Root: f.root})
+		if err != nil {
+			return err
+		}
+		var found bool
+		for _, row := range answer.Rows {
+			if row.ItemID != "item-b" {
+				continue
+			}
+			found = true
+			if row.Reason != ReasonAgentLimit || row.Position != "queued" || row.Class != "waits on work" || row.Where != "queue" {
+				t.Fatalf("why item-b = %+v, want queued/%s waits on work in queue", row, ReasonAgentLimit)
+			}
+			wantMover := "drain; run-item-a-a1-n1, run-item-a-a1-n2"
+			if row.Mover != wantMover || len(row.WaitingOn) != 2 || row.WaitingOn[0] != "run-item-a-a1-n1" || row.WaitingOn[1] != "run-item-a-a1-n2" {
+				t.Fatalf("why item-b mover=%q waiting_on=%v, want %q", row.Mover, row.WaitingOn, wantMover)
+			}
+		}
+		if !found {
+			t.Fatal("why did not return a row for item-b")
+		}
+		return nil
+	})
 
 	// Settle one of item-a's parallel scouts: now only 1 ordinary agent is active (< limit 2).
 	// Close item-exp and verify item-b can now start on lane-2.
@@ -218,8 +244,8 @@ func TestScaledDownDrainingAgentBlocksOrdinaryStartOnFreeLaneButAllowsExpress(t 
 
 	lanes := []string{"lane-1"}
 	got := planDecisionByItem(t, f, Pass{Now: at.Format(time.RFC3339Nano), AvailableLanes: &lanes, Build: &l.build}, l.cfg.Policy)
-	if got["item-ord"].Action != ActionHold || got["item-ord"].Reason != ReasonNoLane {
-		t.Fatalf("item-ord = %+v, want hold/%s while draining lane-2 fills limit 1", got["item-ord"], ReasonNoLane)
+	if got["item-ord"].Action != ActionHold || got["item-ord"].Reason != ReasonAgentLimit || got["item-ord"].DeferredBy != "run-item-draining-a1" {
+		t.Fatalf("item-ord = %+v, want hold/%s deferred by run-item-draining-a1 while draining lane-2 fills limit 1", got["item-ord"], ReasonAgentLimit)
 	}
 	if got["item-exp"].Action != ActionDispatch || got["item-exp"].LaneID != "lane-1" {
 		t.Fatalf("item-exp = %+v, want express dispatch on free staged lane-1", got["item-exp"])
@@ -337,8 +363,8 @@ func TestContinuingWorkflowKeepsSlotAcrossSettleAndReadyPasses(t *testing.T) {
 
 	lanes := []string{"lane-1", "lane-2"}
 	got := planDecisionByItem(t, f, Pass{Now: at.Format(time.RFC3339Nano), AvailableLanes: &lanes, Build: &l.build}, l.cfg.Policy)
-	if got["item-a"].Action != ActionHold || got["item-a"].Reason != ReasonNoLane {
-		t.Fatalf("settle pass: item-a = %+v, want hold/%s so continuing item-w keeps its slot", got["item-a"], ReasonNoLane)
+	if got["item-a"].Action != ActionHold || got["item-a"].Reason != ReasonAgentLimit || got["item-a"].DeferredBy != "run-item-draining-a1, run-item-w-a1-n1" {
+		t.Fatalf("settle pass: item-a = %+v, want hold/%s so continuing item-w keeps its slot", got["item-a"], ReasonAgentLimit)
 	}
 	if got["item-w"].Action != ActionSettle {
 		t.Fatalf("settle pass: item-w = %+v, want settle", got["item-w"])
@@ -352,8 +378,8 @@ func TestContinuingWorkflowKeepsSlotAcrossSettleAndReadyPasses(t *testing.T) {
 		return appendEffect(tx, nodeAdvancedKind, buildReq.RunID, &pendingWork{Decision: buildDec, Ready: true, ParentRunID: planReq.RunID}, at)
 	})
 	got = planDecisionByItem(t, f, Pass{Now: at.Format(time.RFC3339Nano), AvailableLanes: &lanes, Build: &l.build}, l.cfg.Policy)
-	if got["item-a"].Action != ActionHold || got["item-a"].Reason != ReasonNoLane {
-		t.Fatalf("ready pass: item-a = %+v, want hold/%s while item-w advances to build", got["item-a"], ReasonNoLane)
+	if got["item-a"].Action != ActionHold || got["item-a"].Reason != ReasonAgentLimit || got["item-a"].DeferredBy != "run-item-draining-a1, run-item-w-a1-n2" {
+		t.Fatalf("ready pass: item-a = %+v, want hold/%s while item-w advances to build", got["item-a"], ReasonAgentLimit)
 	}
 	if got["item-w"].Action != ActionDispatch || got["item-w"].LaneID != "lane-1" {
 		t.Fatalf("ready pass: item-w = %+v, want dispatch build on lane-1", got["item-w"])
@@ -421,4 +447,55 @@ func TestStartSnapshotUpdatesActiveOrdinaryAgentsOnLeaseChangeWithNoItemChange(t
 	if e, ok := snap3.nextFreshStart(); !ok || e.decision.ItemID != "item-a" || e.decision.LaneID != "lane-1" {
 		t.Fatalf("after lease expiry: nextFreshStart = (%+v, %v), want item-a on lane-1", e.decision, ok)
 	}
+}
+
+func TestAgentJudgeHeldByRunningAgentLimitNamesRunningRuns(t *testing.T) {
+	f, l := passFixture(t, "item-cand", "item-active")
+	at := l.cfg.Now().UTC()
+	l.cfg.Policy.Seats = map[string]string{"review": "fixture"}
+
+	candReq := &run.Request{RunID: "run-item-cand-a1", ItemID: "item-cand", LaneID: "lane-1", Backend: "fixture"}
+	candDec := Decision{ItemID: "item-cand", LaneID: "lane-1", Action: ActionDispatch, Attempt: 1, RunRequest: candReq}
+	cand := &Candidate{ItemID: "item-cand", LaneID: "lane-1", RunID: candReq.RunID, HeadSHA: "deadbeef"}
+
+	activeReq := &run.Request{RunID: "run-item-active-a1", ItemID: "item-active", LaneID: "lane-2", Backend: "fixture"}
+	activeDec := Decision{ItemID: "item-active", LaneID: "lane-2", Action: ActionDispatch, Attempt: 1, RunRequest: activeReq}
+
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET judge_mode='agent' WHERE item_id='item-cand'`); err != nil {
+			return err
+		}
+		if err := appendEffect(tx, dispatchStartedKind, candReq.RunID, &pendingWork{Decision: candDec, Candidate: cand}, at); err != nil {
+			return err
+		}
+		if _, err := run.ClaimLease(context.Background(), tx, *activeReq, "lane-2", at); err != nil {
+			return err
+		}
+		return appendEffect(tx, dispatchStartedKind, activeReq.RunID, &pendingWork{Decision: activeDec}, at)
+	})
+
+	// Limit 1 (lane-1 offered); lane-2's active ordinary agent fills limit 1.
+	lanes := []string{"lane-1"}
+	got := planDecisionByItem(t, f, Pass{Now: at.Format(time.RFC3339Nano), AvailableLanes: &lanes, Build: &l.build}, l.cfg.Policy)
+	if got["item-cand"].Action != ActionHold || got["item-cand"].Reason != ReasonAgentLimit || got["item-cand"].DeferredBy != "run-item-active-a1" {
+		t.Fatalf("item-cand = %+v, want hold/%s deferred by run-item-active-a1", got["item-cand"], ReasonAgentLimit)
+	}
+
+	fixtureRead(t, f, func(r *store.Reader) error {
+		answer, err := Why(r, Pass{Now: at.Format(time.RFC3339Nano), AvailableLanes: &lanes, Build: &l.build}, l.cfg.Policy, &VantageQuestions{Root: f.root})
+		if err != nil {
+			return err
+		}
+		for _, row := range answer.Rows {
+			if row.ItemID != "item-cand" {
+				continue
+			}
+			if row.Reason != ReasonAgentLimit || row.Mover != "drain; run-item-active-a1" || len(row.WaitingOn) != 1 || row.WaitingOn[0] != "run-item-active-a1" {
+				t.Fatalf("why item-cand = %+v, want %s with mover 'drain; run-item-active-a1'", row, ReasonAgentLimit)
+			}
+			return nil
+		}
+		t.Fatal("why did not return a row for item-cand")
+		return nil
+	})
 }

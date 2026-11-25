@@ -1669,7 +1669,7 @@ func heldDetail(holds []Decision) string {
 	var held, deferred []string
 	for _, hold := range holds {
 		text := holdText(hold)
-		if hold.Reason == ReasonNoLane || hold.Reason == ReasonForkHeld {
+		if hold.Reason == ReasonNoLane || hold.Reason == ReasonAgentLimit || hold.Reason == ReasonForkHeld {
 			deferred = append(deferred, text)
 		} else {
 			held = append(held, text)

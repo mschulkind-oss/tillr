@@ -62,8 +62,7 @@ VALUES ('retry-b','b','old-run','operator','fence widened',3000)`); err != nil {
 		if row.ItemID != "b" {
 			continue
 		}
-		const holder = "lane-1 held by active lease for examined-run"
-		if !strings.Contains(row.Why, "operator retry waiting for a lane: "+holder) || !strings.Contains(row.Mover, holder) {
+		if row.Reason != "agent-limit" || !strings.Contains(row.Why, "operator retry waiting for running-agent limit: examined-run") || !strings.Contains(row.Mover, "examined-run") {
 			t.Errorf("Waiting lost the retry explanation or its mover: %+v", row)
 		}
 		if strings.Contains(row.Reason+row.Why+row.Mover, "harness-refused") {

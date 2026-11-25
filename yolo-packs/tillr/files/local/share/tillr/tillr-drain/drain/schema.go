@@ -131,6 +131,9 @@ const (
 	ReasonNoPolicy = "no-policy"
 	// ReasonNoLane is a hold's reason: no lane the tick offered is free.
 	ReasonNoLane = "no-lane"
+	// ReasonAgentLimit is a hold's reason: ordinary work is waiting because the
+	// running-agent limit is full. DeferredBy names the ordinary agent runs in progress.
+	ReasonAgentLimit = "agent-limit"
 	// ReasonRunLive is a hold's reason: the item's claimed run is still in flight.
 	ReasonRunLive = "run-live"
 	// ReasonNoFence is a hold's reason: the item names no fence, or names the repository

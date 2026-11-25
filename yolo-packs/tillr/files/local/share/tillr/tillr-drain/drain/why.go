@@ -533,6 +533,25 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			row.Why = "operator retry planned for " + d.LaneID + " (lane is free)"
 			row.tableReason = row.Why
 			row.Mover = "dispatch the authorized retry on " + d.LaneID
+		case d.Reason == ReasonAgentLimit:
+			runs := splitDeferredRuns(d.DeferredBy)
+			if excluded := refusedLaneWaits(configured, it.Express, refused); len(excluded) != 0 {
+				row.tableReason = "waiting for lane capacity (lanes out of rotation)"
+				row.WaitingOn = append(runs, excluded...)
+				row.Why = row.tableReason + ": " + strings.Join(row.WaitingOn, "; ")
+				break
+			}
+			row.WaitingOn = append(row.WaitingOn, runs...)
+			if details.retryLaneWait[it.ItemID] {
+				row.Why = "operator retry waiting for running-agent limit"
+				row.tableReason = row.Why
+				if len(row.WaitingOn) > 0 {
+					row.Why += ": " + strings.Join(row.WaitingOn, "; ")
+				}
+			} else if works[it.ItemID] != nil && !works[it.ItemID].Done && !works[it.ItemID].LaneReleased && works[it.ItemID].Candidate != nil {
+				row.Why += ": waiting for an ordinary agent slot to judge"
+				ownLaneReason = "candidate awaits judge slot"
+			}
 		case d.Reason == ReasonNoLane && details.retryLaneWait[it.ItemID]:
 			lanes, laneLeases := offered, leases
 			if d.LaneID != "" {
@@ -1185,6 +1204,8 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "waits on work", where, d.DeferredBy
 	case ReasonNoLane:
 		return "waits on work", where, "the next pass"
+	case ReasonAgentLimit:
+		return "waits on work", where, "a running ordinary agent to finish"
 	case ReasonTrunkBroken:
 		return "waits on work", "trunk", "the trunk fixer"
 	case ReasonTrunkUnproved:
@@ -1235,6 +1256,20 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		}
 		return "needs a cause", "lane", "diagnose the run; tillr drain retry --help"
 	}
+}
+
+func splitDeferredRuns(deferredBy string) []string {
+	if strings.TrimSpace(deferredBy) == "" {
+		return nil
+	}
+	parts := strings.Split(deferredBy, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func nextActorAction(mover string) string {

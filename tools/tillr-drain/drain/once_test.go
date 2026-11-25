@@ -356,8 +356,8 @@ func TestOnceLeavesALiveLeaseHeldAndTheItemWithoutALane(t *testing.T) {
 		t.Fatalf("a tick dispatched %d requests into a live lane", len(requests))
 	}
 	rows := dispatchRows(t, storePath)
-	if len(rows) != 1 || rows[0].Action != drain.ActionHold || rows[0].Reason != drain.ReasonNoLane {
-		t.Fatalf("the decision reads %+v, want hold / no-lane", rows)
+	if len(rows) != 1 || rows[0].Action != drain.ActionHold || rows[0].Reason != drain.ReasonAgentLimit || rows[0].DeferredBy != "run-1" {
+		t.Fatalf("the decision reads %+v, want hold / agent-limit behind run-1", rows)
 	}
 	for _, lane := range lanesIn(t, storePath) {
 		if lane.LaneID != "lane-1" {

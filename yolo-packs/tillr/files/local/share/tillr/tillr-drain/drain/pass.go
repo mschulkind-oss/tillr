@@ -2424,7 +2424,11 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 						runID = d.RunRequest.RunID
 					}
 					if (runID == "" || active[runID] == "") && len(active) >= ordinaryLaneCount(l.rotationLanes()) {
-						return decline("running-agent limit reached", "a running ordinary agent to finish")
+						waitingOn := activeOrdinaryAgentSummary(active)
+						if waitingOn == "" {
+							waitingOn = "a running ordinary agent to finish"
+						}
+						return decline(ReasonAgentLimit, waitingOn)
 					}
 				}
 			}
@@ -3548,7 +3552,7 @@ plans:
 				return l.waitForTrigger(ctx, leases, at, result)
 			}
 		}
-		if hold.RunRequest != nil && (hold.Reason == ReasonRunLive || hold.Reason == ReasonGateReplay || hold.Reason == ReasonNoLane) {
+		if hold.RunRequest != nil && (hold.Reason == ReasonRunLive || hold.Reason == ReasonGateReplay || hold.Reason == ReasonNoLane || hold.Reason == ReasonAgentLimit) {
 			// A replacement has no local completion channel for surviving runs.
 			// Their durable claims are still work, not foreign leased lanes.
 			return l.waitForTrigger(ctx, leases, at, result)

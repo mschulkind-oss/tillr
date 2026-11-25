@@ -96,7 +96,7 @@ func TestBackendWaitLane(t *testing.T) {
 			}
 			fifth := plans[4].decision
 			if contents != "empty" {
-				if fifth.Reason != ReasonNoLane {
+				if fifth.Reason != ReasonAgentLimit {
 					t.Errorf("item with work should keep its only lane: %+v", fifth)
 				}
 				return

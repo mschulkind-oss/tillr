@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -208,7 +209,18 @@ func (l *Loop) startIdle(ctx context.Context, view *startView, holds []Decision)
 		d := s.entries[q.id].decision
 		if isDispatch(d) {
 			// A ready entry without an eligible lane is deferred, not absent.
-			d.Action, d.Reason = ActionHold, ReasonNoLane
+			runKey := ""
+			if d.RunRequest != nil {
+				runKey = d.RunRequest.RunID
+			}
+			limit := ordinaryLaneCount(s.rotation)
+			if !s.entries[q.id].express && !isCommandDecision(d) && d.DeskDocument == "" && !strings.HasPrefix(d.LaneID, "desk-") &&
+				limit > 0 && (runKey == "" || s.activeOrdinaryAgents[runKey] == "") && len(s.activeOrdinaryAgents) >= limit {
+				d.Action, d.Reason = ActionHold, ReasonAgentLimit
+				d.DeferredBy = activeOrdinaryAgentSummary(s.activeOrdinaryAgents)
+			} else {
+				d.Action, d.Reason = ActionHold, ReasonNoLane
+			}
 		}
 		if d.Action == ActionHold {
 			holds = append(holds, d)

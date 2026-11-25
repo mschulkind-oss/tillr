@@ -1023,7 +1023,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					runKey = decision.RunRequest.RunID
 				}
 				var lane string
-				ok := p.ordinaryAgentSlotOpen(item.Express, isCommand, runKey)
+				slotOpen := p.ordinaryAgentSlotOpen(item.Express, isCommand, runKey)
+				limitFull := !slotOpen && p.runningAgentLimit > 0
+				ok := slotOpen
 				if ok {
 					lane, ok = p.freeLane(item.Express)
 					if !ok && decision.Action == ActionJudge {
@@ -1037,7 +1039,12 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					}
 				}
 				if !ok {
-					decision.Action, decision.Reason, decision.To = ActionHold, ReasonNoLane, ""
+					if limitFull {
+						decision.Action, decision.Reason, decision.To = ActionHold, ReasonAgentLimit, ""
+						decision.DeferredBy = activeOrdinaryAgentSummary(p.activeOrdinaryAgents)
+					} else {
+						decision.Action, decision.Reason, decision.To = ActionHold, ReasonNoLane, ""
+					}
 				} else {
 					decision.LaneID = lane
 					req := *decision.RunRequest
@@ -1124,7 +1131,12 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				}
 				if !p.ordinaryAgentSlotOpen(item.Express, isCommand, runKey) {
 					decision.From, decision.To = "candidate", ""
-					decision.Action, decision.Reason = ActionHold, ReasonNoLane
+					if p.runningAgentLimit > 0 {
+						decision.Action, decision.Reason = ActionHold, ReasonAgentLimit
+						decision.DeferredBy = activeOrdinaryAgentSummary(p.activeOrdinaryAgents)
+					} else {
+						decision.Action, decision.Reason = ActionHold, ReasonNoLane
+					}
 					identifyDecision(&decision)
 				} else {
 					p.claimOrdinaryAgentSlot(item.Express, isCommand, decision.LaneID, runKey)
@@ -1498,7 +1510,7 @@ func mayMaskPendingWorker(d Decision) bool {
 	if d.Reason == ReasonRunLive {
 		return true
 	}
-	return d.Reason == ReasonNoLane && d.From == "running" && d.WorkflowRestart && evaluatorNode(d)
+	return (d.Reason == ReasonNoLane || d.Reason == ReasonAgentLimit) && d.From == "running" && d.WorkflowRestart && evaluatorNode(d)
 }
 
 func (p *planner) namedWaitDecision(id string, wait item.WaitingOn) Decision {
@@ -1702,6 +1714,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		isCommand := item.Command != nil
 		runKey := attemptRunID(item.ItemID, p.nextAttempt(item.ItemID))
 		slotOpen := p.ordinaryAgentSlotOpen(item.Express, isCommand, runKey)
+		limitFull := !slotOpen && p.runningAgentLimit > 0
 		var lane string
 		var ok bool
 		if slotOpen {
@@ -1709,9 +1722,15 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		}
 		ownJudgeLane := p.returnedJudgeLane(item.ItemID, returned)
 		if ownJudgeLane != "" && (item.Express || !isExpressLane(ownJudgeLane)) {
-			lane, ok = ownJudgeLane, slotOpen && p.retainedLaneFreeFor(ownJudgeLane, item.ItemID) && !p.tick.OutLanes[ownJudgeLane]
+			ownLaneFree := p.retainedLaneFreeFor(ownJudgeLane, item.ItemID) && !p.tick.OutLanes[ownJudgeLane]
+			lane, ok = ownJudgeLane, slotOpen && ownLaneFree
 			if !ok {
-				decision.Action, decision.Reason = ActionHold, ReasonNoLane
+				if ownLaneFree && limitFull {
+					decision.Action, decision.Reason = ActionHold, ReasonAgentLimit
+					decision.DeferredBy = activeOrdinaryAgentSummary(p.activeOrdinaryAgents)
+				} else {
+					decision.Action, decision.Reason = ActionHold, ReasonNoLane
+				}
 				decision.LaneID, decision.Returned = ownJudgeLane, returned
 				if retry != nil && p.retryLaneWait != nil {
 					p.retryLaneWait[item.ItemID] = true
@@ -1748,7 +1767,12 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			ok = !p.held[lane] && !p.assigned[lane]
 		}
 		if !ok {
-			decision.Action, decision.Reason = ActionHold, ReasonNoLane
+			if limitFull {
+				decision.Action, decision.Reason = ActionHold, ReasonAgentLimit
+				decision.DeferredBy = activeOrdinaryAgentSummary(p.activeOrdinaryAgents)
+			} else {
+				decision.Action, decision.Reason = ActionHold, ReasonNoLane
+			}
 			if retry != nil && p.retryLaneWait != nil {
 				p.retryLaneWait[item.ItemID] = true
 			}
@@ -1887,7 +1911,7 @@ func stampDecisionRequest(d Decision, req *run.Request) {
 func identifyDecision(decision *Decision) {
 	// A resource deferral does not move an otherwise queued item into held.
 	// Pending runs and candidates retain their independently derived positions.
-	if decision.Action == ActionHold && decision.From == "held" && (decision.Reason == ReasonNoLane || decision.Reason == ReasonForkHeld || decision.Reason == ReasonDeskCapacity || decision.Reason == ReasonDocumentDeskBusy) {
+	if decision.Action == ActionHold && decision.From == "held" && (decision.Reason == ReasonNoLane || decision.Reason == ReasonAgentLimit || decision.Reason == ReasonForkHeld || decision.Reason == ReasonDeskCapacity || decision.Reason == ReasonDocumentDeskBusy) {
 		decision.From = "queued"
 	}
 	decision.Position, decision.Transition = decision.From, decision.Action

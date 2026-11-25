@@ -38,7 +38,7 @@ func TestWhyNamesARefusedLaneAndTheExaminationHoldingTheOther(t *testing.T) {
 	}
 	answer := read()
 	row := answer.Rows[0]
-	if !slices.Equal(answer.Lanes, []string{"lane-1"}) || row.Reason != ReasonNoLane || row.TableReason() == ReasonNoLane ||
+	if !slices.Equal(answer.Lanes, []string{"lane-1"}) || row.Reason != ReasonAgentLimit || row.TableReason() == ReasonAgentLimit ||
 		!strings.Contains(row.Why, "out of rotation") || !strings.Contains(row.Why, detail) || !strings.Contains(row.Mover, "examining-run") {
 		t.Fatalf("want a hold naming both the refusal and the holder, got %+v with lanes %v", row, answer.Lanes)
 	}

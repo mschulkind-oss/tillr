@@ -2,6 +2,7 @@ package drain
 
 import (
 	"database/sql"
+	"sort"
 	"strings"
 	"time"
 
@@ -340,6 +341,22 @@ func expressByIDFromMap(items map[string]itemRow) map[string]bool {
 		}
 	}
 	return out
+}
+
+func activeOrdinaryAgentRuns(active map[string]string) []string {
+	if len(active) == 0 {
+		return nil
+	}
+	runs := make([]string, 0, len(active))
+	for runKey := range active {
+		runs = append(runs, runKey)
+	}
+	sort.Strings(runs)
+	return runs
+}
+
+func activeOrdinaryAgentSummary(active map[string]string) string {
+	return strings.Join(activeOrdinaryAgentRuns(active), ", ")
 }
 
 func readExpressByID(r *store.Reader) (map[string]bool, error) {
