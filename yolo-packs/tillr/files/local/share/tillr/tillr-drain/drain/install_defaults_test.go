@@ -20,76 +20,6 @@ func writeTestFile(t *testing.T, path, content string) {
 	writeForkFile(t, path, content)
 }
 
-func TestResolveForkGate(t *testing.T) {
-	installRoot := scratchUnderDurable(t)
-	installed := filepath.Join(installRoot, "tillr-drain", "fork-gate.py")
-	writeTestFile(t, installed, "# installed fork-gate\n")
-
-	consumer := scratchUnderDurable(t)
-	decoy := filepath.Join(consumer, "tools", "tillr-drain", "fork-gate.py")
-	writeTestFile(t, decoy, "# decoy fork-gate\n")
-
-	origWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(origWD) })
-
-	// With TILLR_INSTALL_ROOT set, ResolveForkGate returns the installed path and
-	// ignores any decoy in the operated repository.
-	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
-	if err := os.Chdir(consumer); err != nil {
-		t.Fatal(err)
-	}
-	got, err := ResolveForkGate()
-	if err != nil {
-		t.Fatalf("ResolveForkGate: %v", err)
-	}
-	if got != installed {
-		t.Fatalf("ResolveForkGate = %q, want %q", got, installed)
-	}
-
-	// Missing installed file must be refused naming the installed path, with no fallback to consumer tools/.
-	missingRoot := scratchUnderDurable(t)
-	wantMissing := filepath.Join(missingRoot, "tillr-drain", "fork-gate.py")
-	t.Setenv("TILLR_INSTALL_ROOT", missingRoot)
-	if _, err := ResolveForkGate(); err == nil || !strings.Contains(err.Error(), wantMissing) {
-		t.Fatalf("missing installed fork-gate error = %v, want path %q", err, wantMissing)
-	}
-
-	// Relative TILLR_INSTALL_ROOT must be refused.
-	t.Setenv("TILLR_INSTALL_ROOT", "relative/install")
-	if _, err := ResolveForkGate(); err == nil || !strings.Contains(err.Error(), "absolute") {
-		t.Fatalf("relative TILLR_INSTALL_ROOT error = %v, want absolute error", err)
-	}
-
-	// Unset TILLR_INSTALL_ROOT from consumer repo must be refused (no fallback to consumer tools/).
-	t.Setenv("TILLR_INSTALL_ROOT", "")
-	if _, err := ResolveForkGate(); err == nil {
-		t.Fatal("expected error in consumer repo without TILLR_INSTALL_ROOT")
-	}
-
-	// Unset TILLR_INSTALL_ROOT from source checkout (root, tools/tillr-drain, tools/tillr-drain/drain) resolves checkout fork-gate.py.
-	checkoutRoot := filepath.Clean(filepath.Join(origWD, "..", "..", ".."))
-	wantSource := filepath.Join(checkoutRoot, "tools", "tillr-drain", "fork-gate.py")
-	for _, dir := range []string{
-		checkoutRoot,
-		filepath.Join(checkoutRoot, "tools", "tillr-drain"),
-		filepath.Join(checkoutRoot, "tools", "tillr-drain", "drain"),
-	} {
-		if err := os.Chdir(dir); err != nil {
-			t.Fatal(err)
-		}
-		got, err := ResolveForkGate()
-		if err != nil {
-			t.Fatalf("ResolveForkGate from %s: %v", dir, err)
-		}
-		if got != wantSource {
-			t.Fatalf("ResolveForkGate from %s = %q, want %q", dir, got, wantSource)
-		}
-	}
-}
-
 func TestProcessStepsRunOmitsDefaultBackendsDir(t *testing.T) {
 	f, _ := passFixture(t)
 	// Place a decoy tools/tillr-run/backends in the consumer root.
@@ -154,16 +84,18 @@ printf '{"record_version":1,"kind":"run.record","id":"run-1","producer":{"system
 	}
 }
 
-func TestProcessStepsGateUsesResolvedForkGate(t *testing.T) {
+func TestProcessStepsGateUsesTillrDrainForkGate(t *testing.T) {
 	f, _ := passFixture(t)
 	// Place a decoy tools/tillr-drain/fork-gate.py in the consumer root.
 	writeTestFile(t, filepath.Join(f.root, "tools", "tillr-drain", "fork-gate.py"), "import sys; sys.exit(99)\n")
 
-	installRoot := scratchUnderDurable(t)
+	binDir := scratchUnderDurable(t)
 	calledFile := filepath.Join(scratchUnderDurable(t), "fork-gate-called.txt")
-	installedForkGate := filepath.Join(installRoot, "tillr-drain", "fork-gate.py")
-	writeTestFile(t, installedForkGate, "import pathlib, sys\npathlib.Path("+`"`+calledFile+`"`+").write_text(' '.join(sys.argv[1:]))\n")
-	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
+	drainStub := filepath.Join(binDir, "tillr-drain")
+	if err := os.WriteFile(drainStub, []byte("#!/bin/sh\nprintf '%s' \"$*\" > "+calledFile+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	steps := &ProcessSteps{
 		Root:        f.root,
@@ -191,19 +123,9 @@ func TestProcessStepsGateUsesResolvedForkGate(t *testing.T) {
 	}
 	got, err := os.ReadFile(calledFile)
 	if err != nil {
-		t.Fatalf("installed fork-gate.py was not called: %v", err)
+		t.Fatalf("tillr-drain fork-gate was not called: %v", err)
 	}
-	if !strings.Contains(string(got), "--fork pi") {
-		t.Fatalf("installed fork-gate.py args = %q, want --fork pi", string(got))
-	}
-
-	// Missing installed fork-gate.py must fail naming the installed path, ignoring decoy.
-	missingRoot := scratchUnderDurable(t)
-	t.Setenv("TILLR_INSTALL_ROOT", missingRoot)
-	wantMissing := filepath.Join(missingRoot, "tillr-drain", "fork-gate.py")
-	c.RunID = "run-fork-2"
-	_, err = steps.Gate(context.Background(), c)
-	if err == nil || !strings.Contains(err.Error(), wantMissing) {
-		t.Fatalf("missing installed fork-gate Gate err = %v, want %q", err, wantMissing)
+	if !strings.Contains(string(got), "fork-gate --fork pi") {
+		t.Fatalf("tillr-drain args = %q, want fork-gate --fork pi", string(got))
 	}
 }

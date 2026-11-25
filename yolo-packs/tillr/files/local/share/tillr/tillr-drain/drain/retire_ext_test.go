@@ -229,21 +229,13 @@ func TestPatchBranchRetirementDoesNotChangeTheExportedForkHead(t *testing.T) {
 	writeFile(t, filepath.Join(f.laneRoot, "lane-1", drain.TargetFile), fork+"\n")
 	writeFile(t, filepath.Join(f.laneRoot, "lane-1", drain.PatchRefFile), "refs/heads/patch/fixture\n")
 	fixtureAt(t, f.store, itemRecord("item-target", "in-queue"))
-	installRoot := t.TempDir()
-	helper, err := os.ReadFile("../fork-gate.py")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(installRoot, "tillr-drain"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(installRoot, "tillr-drain", "fork-gate.py"), string(helper))
-	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
-	if err := os.MkdirAll(filepath.Join(f.root, "yolo-packs", "fixture"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(f.root, "yolo-packs/fixture"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(f.root, "yolo-packs/fixture/pack.json"), `{"contributes":[{"patch_branch":"git+https://example.invalid/repo?ref=patch/fixture","build":"test -f candidate.txt"}]}`)
-	t.Setenv("PATH", filepath.Dir(sibling(t, "gate"))+string(os.PathListSeparator)+os.Getenv("PATH"))
+	gateDir := filepath.Dir(sibling(t, "gate"))
+	drainDir := filepath.Dir(drainBin(t))
+	t.Setenv("PATH", gateDir+string(os.PathListSeparator)+drainDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	loop := f.newLoop(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)))
 	candidate := drain.Candidate{ItemID: "item-target", LaneID: "lane-1", RunID: "run-fork", Worktree: fork, BaseRef: "refs/heads/patch/fixture", BaseSHA: base, HeadSHA: head}
 	_, landed, err := loop.Verify(context.Background(), candidate, &drain.LoopResult{}, nil)

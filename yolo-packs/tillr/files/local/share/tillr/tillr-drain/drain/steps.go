@@ -515,11 +515,7 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 	program := s.GateProgram
 	fork := strings.TrimPrefix(candidate.BaseRef, "refs/heads/patch/")
 	if s.hooks == nil && fork != candidate.BaseRef {
-		forkGate, err := ResolveForkGate()
-		if err != nil {
-			return detachedGateHandle{}, Externalf("resolving fork-gate.py: %v", err)
-		}
-		program = "python3 " + forkGate + " --fork " + fork
+		program = "tillr-drain fork-gate --fork " + fork
 	}
 	if program == "" {
 		return detachedGateHandle{}, Usagef("the loop was given no program for this step: it cannot judge a candidate without one")

@@ -20,7 +20,7 @@ covers:
   - tools/tillr-drain/drain/runner_timing.go
   - tools/tillr-drain/drain/scale_test.go
   - tools/tillr-drain/drain/worktree_registry.go
-  - tools/tillr-drain/heavyrun/heavy_legacy_progress.py
+  - tools/tillr-drain/heavyrun/heavy_legacy_progress.go
   - tools/tillr-drain/redcap/
   - tools/tillr-view/heavy_misses.go
   - config/tillr/gate-policy.json
@@ -486,7 +486,7 @@ one that broke it by running that check alone (`--heavy-tree --only <id>`). A na
 whose first-proof output recorded Go's test-timeout panic (`panic: test timed out after ...`)
 or Go's runtime deadlock line (`fatal error: all goroutines are asleep - deadlock!`) is not
 replayed alone during that search, and one trunk fixer is filed against the tip
-(`heavy_legacy_progress.py` in
+(`heavy_legacy_progress.go` in
 [`tools/tillr-drain/heavyrun/`](../../tools/tillr-drain/heavyrun/), [`D-GR31`](#D-GR31)).
 
 With `auto_revert` on ([`D-GR6`](#D-GR6)), the drain reverts the offending landing by itself

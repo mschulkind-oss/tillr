@@ -809,7 +809,7 @@ def case_cache_safe_working_loop_documented():
             if instruction not in text:
                 fail(f"{path.relative_to(ROOT)} omits cache-safe test guidance: {instruction}")
     readme = text_of(ROOT / "tools/tillr-drain/README.md")
-    for evidence in ("test binary declares the sibling sources", "cache_test.py",
+    for evidence in ("test binary declares the sibling sources", "cmd/cache-test/main.go",
                      "siblings.txt"):
         if evidence not in readme:
             fail(f"drain README omits its cache mechanism or regression check: {evidence}")

@@ -296,7 +296,7 @@ This subsection is from an operator request recorded on 2026-11-25, and its mech
 | :--- | :--- | :--- |
 | The brief template | `<root>/tools/tillr-run/backends/brief-template.md` | `rg -n 'brief-template.md' tools/tillr-drain/main.go tools/tillr-drain/recovery.go` |
 | The adapters directory `tillr-run exec` reads, `--backends-dir` | `<repository root>/tools/tillr-run/backends`, derived from the git common directory | `defaultBackendsDir` in `tools/tillr-run/main.go` |
-| The fork gate | `<root>/tools/tillr-drain/fork-gate.py` | `rg -n 'fork-gate.py' tools/tillr-drain/drain/steps.go` |
+| The fork gate | `<root>/tools/tillr-drain/fork-gate.py` (since moved into `tillr-drain fork-gate`) | `rg -n 'fork-gate.py' tools/tillr-drain/drain/steps.go` |
 | The change gate and the fast tree check | `tools/gate/change-gate.py` and `tools/gate/tree-check.py`, relative to the candidate worktree | `DEFAULT_GATE_PROGRAM` and the `replay` face in `tools/tillr-loop/tillr-loop` |
 
 The first three files are already delivered in the pack, inside `tillr-run` and `tillr-drain`; only the default path points at the operated repository. The two runner scripts are not delivered at all: `tools/gate/` is not a tillr utility and is not in `MODULES` of `tests/pack-sync.test.py`.

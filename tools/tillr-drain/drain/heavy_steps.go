@@ -271,22 +271,6 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	for i := range argv {
 		argv[i] = strings.ReplaceAll(argv[i], "{only}", selector)
 	}
-	var (
-		legacyProgressPath string
-		legacyTipSHA       string
-		legacyNonce        string
-		adaptedLegacy      bool
-	)
-	if only == "" {
-		var err error
-		argv, legacyProgressPath, legacyTipSHA, adaptedLegacy, err = heavyLegacyArgv(ctx, argv, s.LaneRoot)
-		if err != nil {
-			return nil, err
-		}
-		if adaptedLegacy {
-			legacyNonce = nextHeavyLegacyNonce()
-		}
-	}
 	spans := filepath.Join(s.LaneRoot, ".rolling", "heavy.spans.json")
 	if only != "" {
 		// A replay can run beside the proof's own program, whose evidence this must not remove.
@@ -300,9 +284,6 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		return nil, err
 	}
 	extraEnv := []string{"TILLR_GATE_SPANS_OUT=" + spans}
-	if legacyNonce != "" {
-		extraEnv = append(extraEnv, "TILLR_HEAVY_LEGACY_NONCE="+legacyNonce)
-	}
 	var replayProgressPath string
 	if only != "" && hasHeavyStoreProgress(ctx) {
 		replayProgressPath = filepath.Join(s.LaneRoot, ".rolling", "heavy-replay-progress.json")
@@ -331,14 +312,12 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 			logPath = ""
 		}
 	}
-	stopWatch := startHeavyLegacyProgressWatcher(ctx, legacyProgressPath, legacyTipSHA, legacyNonce)
 	stopReplayWatch := startHeavyReplayProgressWatcher(ctx, replayProgressPath, only)
 	stopLogWatch := func() {}
 	if only != "" && logPath != "" {
 		stopLogWatch = startHeavyLogFileProgressWatcher(ctx, logPath, only, s.heavyLogSampleInterval)
 	}
 	runErr := runOwnedHeavy(ctx, cmd, "legacy")
-	stopWatch()
 	stopReplayWatch()
 	stopLogWatch()
 	if replayProgressPath != "" {
@@ -462,7 +441,7 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	if exitClassified.Outcome != checkresult.Pass && exitClassified.Outcome != checkresult.Fail {
 		result = append(result, HeavyCheck{CheckID: "legacy-runner", Result: "error", Detail: fmt.Sprintf("exit %d: %s", exitNum, stderr.String()), LogPath: legacyKeptLog(logPath, "error")})
 	}
-	if only == "" && !adaptedLegacy {
+	if only == "" {
 		for _, check := range result {
 			heavyStoreWholeStepProgress(ctx, check.CheckID, check.Result)
 		}

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-drain/forkgate"
 	"github.com/mschulkind-oss/tillr-drain/keep"
 	"github.com/mschulkind-oss/tillr-drain/patchmoves"
 	"github.com/mschulkind-oss/tillr-drain/restart"
@@ -110,6 +111,8 @@ func dispatch(args []string) int {
 		return restartFace(rest)
 	case "keep":
 		return keep.Run(rest, os.Stdout, os.Stderr)
+	case "fork-gate":
+		return forkgate.Run(rest, os.Stdout, os.Stderr)
 	default:
 		return fail(drain.Usagef("unknown face %q: want %s", face, faceList))
 	}
@@ -773,7 +776,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "probe-backend, workflow, why, workers, policy, plan, once, split, retry, clear-fault, accept-rewrite, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, scale, stop, restart, keep or loop"
+const faceList = "probe-backend, workflow, why, workers, policy, plan, once, split, retry, clear-fault, accept-rewrite, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, scale, stop, restart, keep, fork-gate or loop"
 
 func scaleFace(args []string) int {
 	fs := newFlagSet("scale")

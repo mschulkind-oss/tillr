@@ -141,7 +141,7 @@ Sentences other utilities compare, which the contract makes private: every mover
 | `gate.verdict` and `gate.plan` as files; `tillr-gate checks --heavy-tree`; exit 0, 1, 6 | [tillr-gate](./tillr-gate.md) | subprocess, files | `steps.go`, `heavy_steps.go` |
 | The check declarations under `tools/gate/checks` | the operated repository, outside tillr | files | `steps.go` |
 | The brief template, `backends/brief-template.md`, as the default of `--brief-template`, read from the runner's installed directory. Not so today: the default is `<root>/tools/tillr-run/backends/brief-template.md`. `D-UC16` of [the overview](../tillr-utility-contracts.md#81-defaults-come-from-tillrs-installation), the designer's decision from an operator request | [tillr-run](./tillr-run.md) | files | `main.go`, `recovery.go` |
-| The fork gate, `fork-gate.py`, read from this utility's own installed directory. Not so today: it is run from `<root>/tools/tillr-drain/fork-gate.py`. `D-UC16` | itself | subprocess | `steps.go` |
+| The fork gate, now the `tillr-drain fork-gate` face (built into `tillr-drain`, invoked from `steps.go`) rather than `fork-gate.py`. `D-UC16` | itself | subprocess | `steps.go` |
 | The adapter's `describe` answer, its three step faces and `--check-argv` | [tillr-loop](./tillr-loop.md) | subprocess; an embedded copy | `hooks.go`, `adapter_build.go` |
 | The roll command and what it prints | [tillr-roll](./tillr-roll.md) | subprocess | `post_landing.go` |
 

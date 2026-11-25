@@ -85,7 +85,7 @@ longer exists. Both are removed, and the first needs a seam to move behind.
      - The lander: `fork_rebase.go`, `fork_pin.go` and `fork_cache.go` in
        [`tools/tillr-land/land/`](../../tools/tillr-land/land/), and the check name `fork-build`
        that `landing.go` and `fork_rebase.go` treat specially.
-     - The drain: [`fork-gate.py`](../../tools/tillr-drain/fork-gate.py),
+     - The drain: [`forkgate/`](../../tools/tillr-drain/forkgate/) (the `tillr-drain fork-gate` face),
        [`held_fork.go`](../../tools/tillr-drain/remotesync/held_fork.go), and the `.forks/lanes/`
        paths that [`workflow_arguments.go`](../../tools/tillr-drain/workflow/workflow_arguments.go)
        rewrites.
@@ -101,7 +101,7 @@ longer exists. Both are removed, and the first needs a seam to move behind.
      declared `go-affected` id.
    - **Where:** [`fork_check_triage.go`](../../tools/tillr-drain/remotesync/fork_check_triage.go),
      [`legacy_watches.go`](../../tools/tillr-drain/drain/legacy_watches.go),
-     `heavy_legacy_progress.go` and `heavy_legacy_progress.py` in
+     `heavy_legacy_progress.go` in
      [`tools/tillr-drain/heavyrun/`](../../tools/tillr-drain/heavyrun/), `runHeavyLegacy` in
      [`heavy_steps.go`](../../tools/tillr-drain/drain/heavy_steps.go), and the `go-tool/`,
      `go-substrate/` and `gate-runner/` id prefixes in

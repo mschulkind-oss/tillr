@@ -53,13 +53,11 @@ var (
 	heavyCheckEnded                   = heavyrun.HeavyCheckEnded
 	reuseHeavyCheck                   = heavyrun.ReuseHeavyCheck
 	saveHeavyCheck                    = heavyrun.SaveHeavyCheck
-	heavyLegacyArgv                   = heavyrun.HeavyLegacyArgv
-	nextHeavyLegacyNonce              = heavyrun.NextHeavyLegacyNonce
-	startHeavyLegacyProgressWatcher   = heavyrun.StartHeavyLegacyProgressWatcher
 	startHeavyReplayProgressWatcher   = heavyrun.StartHeavyReplayProgressWatcher
 	startHeavyCheckLogProgressWatcher = heavyrun.StartHeavyCheckLogProgressWatcher
 	startHeavyLogFileProgressWatcher  = heavyrun.StartHeavyLogFileProgressWatcher
 	readLegacyEvidence                = heavyrun.ReadLegacyEvidence
+	nextHeavyLegacyNonce              = heavyrun.NextHeavyLegacyNonce
 	runOwnedHeavy                     = heavyrun.RunOwnedHeavy
 	runCheckGroupStarted              = heavyrun.RunCheckGroupStarted
 	runHeavyDeclarationGroupStarted   = heavyrun.RunHeavyDeclarationGroupStarted

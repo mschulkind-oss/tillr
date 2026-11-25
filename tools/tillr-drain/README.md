@@ -1079,7 +1079,8 @@ carries only what the adapter requires. What the code does:
 - **Staging.** A fork piece's checkout is `.forks/lanes/<lane>/<fork>`, started at the
   delivered patch tip. The worker commits there and publishes nothing; the lander alone
   moves `refs/heads/patch/<fork>`.
-- **Gate.** [`fork-gate.py`](fork-gate.py) (resolved from `$TILLR_INSTALL_ROOT/tillr-drain/fork-gate.py` or tillr's source checkout, never `<root>/tools/`) runs the `fork-build` check on a clean copy of the candidate head, then `fork-quality` from its `FORK_QUALITY` table.
+- **Gate.** [`tillr-drain fork-gate`](forkgate/forkgate.go) runs the `fork-build` check on a clean copy of
+  the candidate head, then `fork-quality` from its `FORK_QUALITY` table.
 - **Holds.** A held fork candidate is pinned under `refs/tillr/held-forks/`
   ([`remotesync/held_fork.go`](./remotesync/held_fork.go)).
 
@@ -1187,9 +1188,9 @@ The test binary declares the sibling sources as inputs that Go's test-result cac
 the tests open the sibling Go sources through an ignored, module-local symlink to the
 parent directory. The one sibling list is
 [siblings.txt](internal/testinputs/siblings.txt). The
-[cache regression check](cache_test.py) warms the result in an isolated clone, confirms an
+[cache regression check](cmd/cache-test/main.go) warms the result in an isolated clone, confirms an
 unchanged tree reports `(cached)`, then changes each sibling and requires a noncached
 failure. The gate check `go-shard-helpers-test` runs
-`python3 tools/tillr-drain/cache_test.py --run TestTheComposedPipelineRunsEndToEndOnAFixture`,
-the case that builds every sibling; without `--run` the script repeats the whole suite for
+`(cd tools/tillr-drain && go run ./cmd/cache-test --run TestTheComposedPipelineRunsEndToEndOnAFixture)`,
+the case that builds every sibling; without `--run` the program repeats the whole suite for
 each sibling.

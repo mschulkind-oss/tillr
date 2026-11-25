@@ -2,99 +2,18 @@ package heavyrun
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"time"
 )
 
-//go:embed heavy_legacy_progress.py
-var heavyLegacyProgressProgram string
-
 var heavyLegacyNonceSeq atomic.Uint64
-
-// Keep the legacy program's own planning, scheduling, skip and verdict behavior.
-// Its Python adapter observes completed checks, not a guessed registry subset.
-func HeavyLegacyArgv(ctx context.Context, argv []string, laneRoot string) ([]string, string, string, bool, error) {
-	p, _ := ctx.Value(HeavyProgressKey{}).(*HeavyProgress)
-	if p == nil || len(argv) < 2 || !strings.HasPrefix(filepath.Base(argv[0]), "python") || filepath.Base(argv[1]) != "fork-check.py" {
-		return argv, "", "", false, nil
-	}
-	logs, err := filepath.Abs(filepath.Join(laneRoot, ".rolling", "logs", p.TipSHA))
-	if err != nil {
-		return nil, "", "", false, err
-	}
-	progressPath := filepath.Join(p.dir, "heavy-legacy-progress.json")
-	return append([]string{argv[0], "-c", heavyLegacyProgressProgram, argv[1], progressPath, p.TipSHA, filepath.Join(p.dir, "heavy-progress.json"), logs}, argv[2:]...), progressPath, p.TipSHA, true, nil
-}
 
 func NextHeavyLegacyNonce() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), heavyLegacyNonceSeq.Add(1))
-}
-
-type legacyCompletedStep struct {
-	CheckID string `json:"check_id"`
-	Outcome string `json:"outcome"`
-}
-
-func StartHeavyLegacyProgressWatcher(ctx context.Context, progressPath, tipSHA, nonce string) func() {
-	if progressPath == "" || !HasHeavyStoreProgress(ctx) {
-		return func() {}
-	}
-	seen := 0
-	pollOnce := func() {
-		raw, err := os.ReadFile(progressPath)
-		if err != nil {
-			return
-		}
-		var saved struct {
-			TipSHA    string                `json:"tip_sha"`
-			RunNonce  string                `json:"run_nonce"`
-			Completed []legacyCompletedStep `json:"completed"`
-		}
-		if err := json.Unmarshal(raw, &saved); err != nil {
-			return
-		}
-		if saved.TipSHA != tipSHA || saved.RunNonce != nonce {
-			return
-		}
-		for ; seen < len(saved.Completed); seen++ {
-			item := saved.Completed[seen]
-			if item.Outcome == "running" {
-				HeavyStoreStepProgress(ctx, item.CheckID, item.Outcome)
-				continue
-			}
-			HeavyStoreWholeStepProgress(ctx, item.CheckID, item.Outcome)
-		}
-	}
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(25 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				pollOnce()
-			}
-		}
-	}()
-	return func() {
-		close(stop)
-		<-done
-		if ctx.Err() == nil {
-			pollOnce()
-		}
-	}
 }
 
 func StartHeavyReplayProgressWatcher(ctx context.Context, progressPath, checkID string) func() {
