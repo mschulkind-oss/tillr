@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -393,5 +394,131 @@ func TestAuthorizeRetryReleasesBlockedItemWithoutOwnerConflict(t *testing.T) {
 	d := planFor(t, l, "item_041")
 	if d.Action != ActionRetry || d.SupersedesRunID != runID {
 		t.Fatalf("after AuthorizeRetry got %+v, want ActionRetry superseding %s", d, runID)
+	}
+}
+
+// Built from the 2026-11-25 item-request-e9348f4501 history: a workflow verify node
+// finished and passed, then a pre-gate rebase triggered a fresh re-judgment run
+// (`...-fresh`, recorded with drain.judge.request and no node_runs row) that finished
+// without a refusal or landing. The planner's latest planned run (`...-n3`) and the
+// store's latest finished run (`...-n3-fresh`) differ; the retry command the
+// run-link-missing hold prints must be accepted and release the hold.
+func TestRunLinkMissingRetryReleasesAfterFreshVerifyRun(t *testing.T) {
+	f, l := passFixture(t, "item_041")
+	buildRun := "run-item_041-a2-n2"
+	verifyRun := "run-item_041-a2-n3"
+	freshRun := "run-item_041-a2-n3-fresh"
+	baseAt := l.cfg.Now()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for i, r := range []struct {
+			id, node, outcome string
+			judge             bool
+		}{
+			{buildRun, "build", "passed", false},
+			{verifyRun, "verify", "passed", true},
+			{freshRun, "", "", true},
+		} {
+			at := baseAt.Add(time.Duration(i+2) * time.Second)
+			atStr := at.Format("2006-01-02T15:04:05Z07:00")
+			if r.node != "" {
+				if _, err := tx.Exec(
+					`INSERT INTO node_runs(item_id, attempt, node_id, run_id, outcome) VALUES ('item_041', 2, ?, ?, ?)`,
+					r.node, r.id, r.outcome,
+				); err != nil {
+					return err
+				}
+			}
+			if r.judge {
+				if err := appendEffect(tx, judgeRequestKind, r.id, map[string]any{
+					"item_id":       "item_041",
+					"writer_run_id": buildRun,
+					"seat":          "review",
+				}, at); err != nil {
+					return err
+				}
+			}
+			if err := applyTerminal(tx, run.Record{
+				RunID:        r.id,
+				ItemID:       "item_041",
+				LaneID:       "lane-1",
+				Backend:      "fixture",
+				State:        run.StateExited,
+				ExitCode:     countPtr(0),
+				StartedAt:    atStr,
+				FinishedAt:   atStr,
+				ArtifactRefs: []run.ArtifactRef{},
+				EndCause:     run.EndNormalExit,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	var printedRun string
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		answer, err := Why(r, Pass{}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		if len(answer.Rows) != 1 {
+			t.Fatalf("rows = %+v, want 1", answer.Rows)
+		}
+		row := answer.Rows[0]
+		if !strings.HasPrefix(row.Reason, ReasonRunLinkMissing) {
+			t.Fatalf("reason = %q, want %q (%+v)", row.Reason, ReasonRunLinkMissing, row)
+		}
+		wantCmd := "tillr drain retry --item item_041 --run " + freshRun + " --by <who> --why <reason>"
+		if !strings.Contains(row.Mover, "supersede run "+freshRun+" with "+wantCmd) {
+			t.Fatalf("Mover = %q, want supersede run %s with %s", row.Mover, freshRun, wantCmd)
+		}
+		if row.Decision.SupersedesRunID != freshRun {
+			t.Fatalf("decision SupersedesRunID = %q, want %q", row.Decision.SupersedesRunID, freshRun)
+		}
+		// Extract the --run value from the printed retry command.
+		_, after, ok := strings.Cut(row.Mover, "--run ")
+		if !ok {
+			t.Fatalf("Mover missing --run flag: %q", row.Mover)
+		}
+		printedRun = strings.Fields(after)[0]
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Execute the exact retry run the hold printed.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{
+			ItemID: "item_041",
+			RunID:  printedRun,
+			By:     "operator",
+			Why:    "release run-link-missing hold after fresh verify",
+			At:     baseAt.Add(10 * time.Second),
+		})
+		return err
+	})
+
+	// Planning must now release the hold with ActionRetry.
+	d := planFor(t, l, "item_041")
+	if d.Action != ActionRetry || d.SupersedesRunID != printedRun {
+		t.Fatalf("after AuthorizeRetry(%s) got %+v, want ActionRetry superseding %s", printedRun, d, printedRun)
+	}
+
+	// Once a newer run starts (even without finishing), the retry is retired and does not re-fire.
+	newerRun := "run-item_041-a3-n1"
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		at := baseAt.Add(20 * time.Second)
+		_, err := tx.Exec(
+			`INSERT INTO runs(run_id, item_id, lane_id, backend, state, started_at, finished_at, artifact_refs, event_seq)
+			 VALUES (?, 'item_041', 'lane-1', 'fixture', ?, ?, 0, '[]', 999999)`,
+			newerRun, "running", at.UnixMilli(),
+		)
+		return err
+	})
+	dAfter := planFor(t, l, "item_041")
+	if dAfter.Action == ActionRetry {
+		t.Fatalf("stale retry re-fired after newer unfinished run %s: %+v", newerRun, dAfter)
 	}
 }

@@ -361,7 +361,8 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if err != nil {
 		return nil, err
 	}
-	priors, err := readPriorRunsFrom(r, designHistory)
+	latestFinished := map[string]string{}
+	priors, err := readPriorRunsWithOutcomes(r, designHistory, nil, latestFinished)
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +611,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			quotaShut: quotaShut,
 			forks:     append([]plannedFork(nil), forks...),
 			tick:      tick, policy: policy, held: lanes, deskOwners: owners, itemStates: states, history: history,
-			priors: attemptPriors, retries: retries, classes: classes, latest: latest,
+			priors: attemptPriors, retries: retries, classes: classes, latest: latest, latestFinished: latestFinished,
 			obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
 			waits: waits, escalated: escalated, maskedWorkers: maskedWorkers,
 			at: at, assigned: map[string]bool{}, runningAgentLimit: runningAgentLimit, activeOrdinaryAgents: maps.Clone(initialActiveOrdinary),
@@ -1444,6 +1445,7 @@ type planner struct {
 	retries           map[string]retryRow
 	classes           map[string]AttemptClass
 	latest            map[string]string
+	latestFinished    map[string]string
 	obstacleHolds     map[string]obstacles.Hold
 	releasedObstacles map[string]string
 	// questions answers what each item's design document still asks. It is the planner's
@@ -1681,6 +1683,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	case retry == nil && !interrupted && repeated == nil && !attempt.infrastructureFailure && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && !(item.Delivery.ForkRun != "" && item.Delivery.ForkRun == p.latest[item.ItemID]) && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
 		decision.SupersedesRunID = p.latest[item.ItemID]
+		if p.latestFinished[item.ItemID] != "" {
+			decision.SupersedesRunID = p.latestFinished[item.ItemID]
+		}
 	case p.lands() && forkHeld:
 		decision.Action, decision.Reason = ActionHold, ReasonForkHeld
 		decision.DeferredBy = heldBy
@@ -2223,7 +2228,8 @@ func (p *planner) retryFor(itemID string) *retry {
 		}
 	}
 	r := &retry{retryID: row.RetryID, supersedesRunID: row.SupersedesRunID}
-	latestMatches := p.latest[itemID] == row.SupersedesRunID
+	latestMatches := p.latest[itemID] == row.SupersedesRunID ||
+		(p.latestFinished[itemID] != "" && p.latestFinished[itemID] == row.SupersedesRunID)
 	if e := p.history.endings[row.SupersedesRunID]; !latestMatches && e.Step == ReasonEvalFailed && e.ItemID == itemID {
 		// The finished judge is the operator face's latest run, while prior runs
 		// track the producer. Only that exact durable judge-to-writer link speaks.

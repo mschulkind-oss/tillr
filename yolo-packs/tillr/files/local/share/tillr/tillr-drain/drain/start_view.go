@@ -60,6 +60,7 @@ type startSnapshot struct {
 	edges, reverseEdges               map[string][]string
 	history                           runHistory
 	priors, attemptPriors             map[string][]priorRun
+	latestFinished                    map[string]string
 	retries                           map[string]retryRow
 	inputDecisions                    map[string]Decision
 	escalated                         map[string]string
@@ -425,7 +426,8 @@ func (s *startSnapshot) refreshRunFacts(r *store.Reader, history, priors bool) e
 		}
 	}
 	if priors {
-		if s.priors, err = readPriorRunsWithOutcomes(r, s.pending.byRun, s.backendOutcomes); err != nil {
+		s.latestFinished = map[string]string{}
+		if s.priors, err = readPriorRunsWithOutcomes(r, s.pending.byRun, s.backendOutcomes, s.latestFinished); err != nil {
 			return err
 		}
 	}

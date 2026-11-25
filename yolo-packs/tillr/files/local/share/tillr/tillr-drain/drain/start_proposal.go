@@ -110,7 +110,7 @@ func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Poli
 		definition: &s.def, commentHolds: commentHolds, documentRoot: questions.Root,
 		conflicts: s.conflicts, shut: s.shut, quotaShut: s.quotaShut, infrastructureClosed: s.infrastructureClosed, forks: s.forks,
 		tick: tick, policy: policy, held: lanes, deskOwners: owners, itemStates: s.states, history: s.history,
-		priors: s.attemptPriors, retries: s.retries, classes: classes, latest: latest,
+		priors: s.attemptPriors, retries: s.retries, classes: classes, latest: latest, latestFinished: s.latestFinished,
 		obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
 		waits: waits, escalated: s.escalated, at: at,
 		runningAgentLimit: ordinaryLaneCount(*tick.AvailableLanes), activeOrdinaryAgents: maps.Clone(s.activeOrdinaryAgents),

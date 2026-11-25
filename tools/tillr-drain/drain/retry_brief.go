@@ -101,13 +101,13 @@ func runLinkMissingHold(r *store.Reader, itemID, fallbackRunID string) (runID, w
 				"supersede design run " + c.DesignRunID + " with " + cmd
 		}
 	}
-	runID = fallbackRunID
+	_ = r.QueryRow(
+		`SELECT run_id FROM runs WHERE item_id = ? AND state IN (?, ?, ?)
+		  ORDER BY started_at DESC, event_seq DESC, rowid DESC LIMIT 1`,
+		itemID, run.StateExited, run.StateFailedToStart, run.StateTimedOut,
+	).Scan(&runID)
 	if runID == "" {
-		_ = r.QueryRow(
-			`SELECT run_id FROM runs WHERE item_id = ? AND state IN (?, ?, ?)
-			  ORDER BY started_at DESC, event_seq DESC, rowid DESC LIMIT 1`,
-			itemID, run.StateExited, run.StateFailedToStart, run.StateTimedOut,
-		).Scan(&runID)
+		runID = fallbackRunID
 	}
 	if runID == "" {
 		return "", "item history has no recorded run", "record the item with tillr item apply"

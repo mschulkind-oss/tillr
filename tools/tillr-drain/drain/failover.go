@@ -251,10 +251,10 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 }
 
 func readPriorRunsFrom(r *store.Reader, byRun map[string]*pendingWork) (map[string][]priorRun, error) {
-	return readPriorRunsWithOutcomes(r, byRun, nil)
+	return readPriorRunsWithOutcomes(r, byRun, nil, nil)
 }
 
-func readPriorRunsWithOutcomes(r *store.Reader, byRun map[string]*pendingWork, cached *backendOutcomesState) (map[string][]priorRun, error) {
+func readPriorRunsWithOutcomes(r *store.Reader, byRun map[string]*pendingWork, cached *backendOutcomesState, latestFinished map[string]string) (map[string][]priorRun, error) {
 	interrupted, restaged, err := readInterruptedRuns(r)
 	if err != nil {
 		return nil, err
@@ -348,6 +348,14 @@ func readPriorRunsWithOutcomes(r *store.Reader, byRun map[string]*pendingWork, c
 		startedAt    int64
 		rowid        int64
 	}
+	type latestRow struct {
+		runID     string
+		terminal  bool
+		order     int64
+		startedAt int64
+		rowid     int64
+	}
+	newest := map[string]latestRow{}
 	var ordered []priorRow
 	for rows.Next() {
 		var row priorRow
@@ -355,18 +363,40 @@ func readPriorRunsWithOutcomes(r *store.Reader, byRun map[string]*pendingWork, c
 		if err := rows.Scan(&row.itemID, &row.rec.RunID, &row.rec.Backend, &row.rec.State, &row.exitCode, &row.rec.EndCause, &row.artifactRefs, &row.order, &row.startedAt, &row.rowid, &node); err != nil {
 			return nil, readFailure(err)
 		}
+		if seq, ended := endings[row.rec.RunID]; ended {
+			row.order = seq
+		}
+		if latestFinished != nil {
+			cand := latestRow{
+				runID:     row.rec.RunID,
+				terminal:  terminalRunStates[row.rec.State],
+				order:     row.order,
+				startedAt: row.startedAt,
+				rowid:     row.rowid,
+			}
+			prev, seen := newest[row.itemID]
+			if !seen ||
+				cand.order > prev.order ||
+				(cand.order == prev.order && (cand.startedAt > prev.startedAt || (cand.startedAt == prev.startedAt && cand.rowid > prev.rowid))) {
+				newest[row.itemID] = cand
+			}
+		}
 		// Old stores have no workflow tables. Ordinary judges stay excluded there;
 		// with node runs, an evaluator is itself a workflow run and may be returned.
 		if judged[row.rec.RunID] && !node {
 			continue
 		}
-		if seq, ended := endings[row.rec.RunID]; ended {
-			row.order = seq
-		}
 		ordered = append(ordered, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, readFailure(err)
+	}
+	if latestFinished != nil {
+		for itemID, cand := range newest {
+			if cand.terminal {
+				latestFinished[itemID] = cand.runID
+			}
+		}
 	}
 	sort.SliceStable(ordered, func(i, j int) bool {
 		a, b := ordered[i], ordered[j]
