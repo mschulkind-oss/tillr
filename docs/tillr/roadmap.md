@@ -224,20 +224,26 @@ person who did not need to be asked.
     alerts at once, and shows the request words beside the broken decisions. Two slices wait on
     neither of its questions.
 
-24. [Convergence](../design/tillr-convergence.md): a cold machine rebuilds the queue from the
+24. [RAM-backed `/tmp` for tillr's workspace, with `/tmp` use measured and shrunk to fit](../design/workspace-tmpfs-scratch.md):
+    bound each check and run to a short private `/tmp` directory, compile one stripped test binary
+    per sharded Go package, disable Node's `/tmp/node-compile-cache` in ephemeral runs, stop
+    leaking notify `.sock.lock` files, and watch ten-lane `/tmp` occupancy against a `2 GiB`
+    ceiling on `drain.tmp-usage`. Four slices wait on neither of its questions.
+
+25. [Convergence](../design/tillr-convergence.md): a cold machine rebuilds the queue from the
     documents, drains it and shows every stopped item with the act that moves it.
 
-25. [Every fallback in the drain, the run adapters and the gate](../design/tillr-fallback-inventory.md):
+26. [Every fallback in the drain, the run adapters and the gate](../design/tillr-fallback-inventory.md):
     each path that runs because the intended one failed is removed with a loud failure, or kept
     on the owner's acceptance. Behind its eight questions.
 
-26. [The judge and the item lifecycle](../design/tillr-judge-and-lifecycle.md): remove the
+27. [The judge and the item lifecycle](../design/tillr-judge-and-lifecycle.md): remove the
     automatic move of a failed run to another model, and build the `delivery` obstacle.
 
-27. [The escalation ladder](../design/escalation-ladder.md): a worker whose plan disagrees with
+28. [The escalation ladder](../design/escalation-ladder.md): a worker whose plan disagrees with
     the tree records the conflict and it is routed to a seat with authority to answer.
 
-28. [Storage](../design/tillr-storage.md): fix the store's usage faults, then compare today's
+29. [Storage](../design/tillr-storage.md): fix the store's usage faults, then compare today's
     store with the proposed structures on one workload. Last here because its trials decide
     whether any change is worth making.
 
@@ -245,42 +251,42 @@ person who did not need to be asked.
 
 Fifth by rule 3: the item model is the substrate of sections 6 and 7.
 
-29. [The item graph is the whole path](../design/tillr-graph-is-the-path.md) and
+30. [The item graph is the whole path](../design/tillr-graph-is-the-path.md) and
     [the vocabulary](../design/tillr-vocabulary.md): every act on an item is a node of its graph,
     and worktrees and scratch belong to items. First because the entries below assume it.
 
-30. [Scheduling and notifications](../design/tillr-scheduling-and-notifications.md): the
+31. [Scheduling and notifications](../design/tillr-scheduling-and-notifications.md): the
     scheduling pass decides only which ready node runs next. Six slices, in order.
 
-31. [An oversized item lands in parts](../design/tillr-item-split.md): the accepted parts of a
+32. [An oversized item lands in parts](../design/tillr-item-split.md): the accepted parts of a
     change land without the part objected to.
 
-32. [A request that is hard to deliver is amended once](../design/tillr-request-amendment.md):
+33. [A request that is hard to deliver is amended once](../design/tillr-request-amendment.md):
     the design seat writes an amendment beside the saved words. Eight slices wait on no question.
 
-33. [Criterion repair](../design/criterion-repair.md): a criterion that was wrong when written is
+34. [Criterion repair](../design/criterion-repair.md): a criterion that was wrong when written is
     superseded with a reason, instead of closing its item.
 
-34. [A design with no open questions moves straight to planning](../design/tillr-design-to-planning-transition.md):
+35. [A design with no open questions moves straight to planning](../design/tillr-design-to-planning-transition.md):
     five slices wait on neither of its questions.
 
-35. [The queue mirrors the roadmap's outstanding designs](../design/tillr-queue-mirrors-designs.md):
+36. [The queue mirrors the roadmap's outstanding designs](../design/tillr-queue-mirrors-designs.md):
     every unfinished design a roadmap routes has exactly one item in the queue, and build steps
     live in a companion plan.
 
-36. [Early design landing](../design/tillr-early-design-landing.md): a question and the design
+37. [Early design landing](../design/tillr-early-design-landing.md): a question and the design
     it is about land ahead of the item that raised them.
 
-37. [The idea pipeline](../design/tillr-idea-pipeline.md): item kinds, the typed lineage edge and
+38. [The idea pipeline](../design/tillr-idea-pipeline.md): item kinds, the typed lineage edge and
     the lineage view. Its item kinds wait on entry 3.
 
-38. [Work reaches tillr through several doors](../design/tillr-intake-paths.md): each way work
+39. [Work reaches tillr through several doors](../design/tillr-intake-paths.md): each way work
     enters runs its own small graph and ends in one item shape.
 
-39. [Provisional design documents](../design/provisional-design-docs.md): capture a prompt and
+40. [Provisional design documents](../design/provisional-design-docs.md): capture a prompt and
     its first questions on the trunk before the worked design pass.
 
-40. [Scheduled tasks](../design/scheduled-tasks.md): a due time and a recurrence on an item.
+41. [Scheduled tasks](../design/scheduled-tasks.md): a due time and a recurrence on an item.
     Settled and unbuilt; the substrate of the goal monitor in the [Icebox](#icebox).
 
 ## 6. Review before landing
@@ -288,82 +294,82 @@ Fifth by rule 3: the item model is the substrate of sections 6 and 7.
 Sixth: no agent reads a change before tillr lands it, and these designs add that reading. Behind
 section 5 because a review returns to an item through the graph that section builds.
 
-41. [A review before every code landing](../design/tillr-diff-review.md): an agent that did not
+42. [A review before every code landing](../design/tillr-diff-review.md): an agent that did not
     write the change reads the diff as it will land.
 
-42. [One compliance check on what an item is about to commit](../design/tillr-design-document-check.md):
+43. [One compliance check on what an item is about to commit](../design/tillr-design-document-check.md):
     a cheap agent holds a commit to written policies, never to logic.
 
-43. [Review and compliance routing by kind of file](../design/tillr-review-rules.md): which
-    changed files trigger entries 41 and 42, and which rulebook each is checked against.
+44. [Review and compliance routing by kind of file](../design/tillr-review-rules.md): which
+    changed files trigger entries 42 and 43, and which rulebook each is checked against.
 
-44. [Review comments on a design](../design/tillr-review-comments.md): the fast track that sends
+45. [Review comments on a design](../design/tillr-review-comments.md): the fast track that sends
     a comment to the session that wrote the document.
 
 ## 7. Seats and models
 
 Seventh because it lowers the cost of every run and stops nothing when it is missing.
 
-45. [Who chooses an item's seat, and what the plan step is for](../design/tillr-plan-step-and-seat-selection.md):
+46. [Who chooses an item's seat, and what the plan step is for](../design/tillr-plan-step-and-seat-selection.md):
     replaces the upfront plan step and the restart after a failed verify.
 
-46. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md):
+47. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md):
     design and plan sessions use cheap scouts for search.
 
-47. [Planning and model tiering](../design/tillr-planning-node-model-tiering.md): run more build
-    items through the planned workflow so its cost can be read. After entries 45 and 46, which
+48. [Planning and model tiering](../design/tillr-planning-node-model-tiering.md): run more build
+    items through the planned workflow so its cost can be read. After entries 46 and 47, which
     change that workflow.
 
-48. [Seat profiles and one-command switching](../design/tillr-seat-profiles.md) and
+49. [Seat profiles and one-command switching](../design/tillr-seat-profiles.md) and
     [live changes to drain capacity](../design/tillr-live-drain-config.md)
     ([build sketch](../design/tillr-live-drain-config.md#8-build-phases-sketch)): named policies an operator
     switches while the drain runs.
 
-49. [The `claude` run adapter](../reference/tillr-claude-backend.md) and
+50. [The `claude` run adapter](../reference/tillr-claude-backend.md) and
     [the landing call](../design/tillr-landing-call.md): the adapter's call-suspending ending
     is the landing call's next build step.
 
-50. [Replaying recorded tasks against several models](../design/model-benchmarks-from-drain-records.md):
+51. [Replaying recorded tasks against several models](../design/model-benchmarks-from-drain-records.md):
     its first step, copying the shortlisted task records, runs no model.
 
 ## 8. Watching and alerts
 
 Eighth: these report what sections 3 and 4 repair.
 
-51. [The alert workflow](../design/tillr-watch-alert-workflow.md), then
+52. [The alert workflow](../design/tillr-watch-alert-workflow.md), then
     [the alert triage seat](../design/tillr-alert-triage-seat.md): every alert gets an
     investigation and one recorded outcome, and triage runs in a seat inside tillr. The triage
     slices are chained behind the workflow's.
 
-52. [The watch rules not yet shipped](../design/tillr-watch.md): the designed rules that have no
+53. [The watch rules not yet shipped](../design/tillr-watch.md): the designed rules that have no
     file under [`config/tillr/watch/`](../../config/tillr/watch/).
 
-53. [Read-face timing](../design/tillr-read-face-timing.md): a slow read command is measured and
+54. [Read-face timing](../design/tillr-read-face-timing.md): a slow read command is measured and
     alerted on without the read writing to the store.
 
-54. [Session recording](../design/session-recording.md): its second and third slices.
+55. [Session recording](../design/session-recording.md): its second and third slices.
 
-55. [A watch any agent can use without tillr](../design/general-agent-watch.md): lower priority
+56. [A watch any agent can use without tillr](../design/general-agent-watch.md): lower priority
     than the drain's own work by the owner's instruction. Seven slices wait on no question.
 
 ## 9. Packaging and contracts
 
 Last because it changes how tillr is delivered and nothing about what it does.
 
-56. [Every tillr utility has a written contract](../design/tillr-utility-contracts.md): what each
+57. [Every tillr utility has a written contract](../design/tillr-utility-contracts.md): what each
     provides and expects, kept by fast tests. Five slices wait on no question.
 
-57. [Self-hosted building](../design/tillr-selfhosted-build.md): tillr builds from what Git
+58. [Self-hosted building](../design/tillr-selfhosted-build.md): tillr builds from what Git
     holds, so the pack's source copy can go. Related to entry 1, which decides the first build.
 
-58. [What tillr changes for a consuming pipeline](../design/tillr-separable-parts.md) and
+59. [What tillr changes for a consuming pipeline](../design/tillr-separable-parts.md) and
     [the unbuilt units of the core and charter split](../design/tillr-core-and-git-landing.md#85-the-unbuilt-units):
     four small pieces of work and ten units are not queued.
 
-59. Graduate a built design into a reference:
+60. Graduate a built design into a reference:
     [the utilities](../design/board-utilities.md).
 
-60. [Who made the decisions recorded in the designs](./decision-provenance-review.md): the owner
+61. [Who made the decisions recorded in the designs](./decision-provenance-review.md): the owner
     keeps, overturns or reopens the decisions a designer made. It is last in build order because
     it builds nothing; its questions are first under the heading below.
 
@@ -375,26 +381,27 @@ which entry waits. A question that blocks nothing yet is reached through its des
 | Decision | Owner of the question | Blocks |
 | :--- | :--- | :--- |
 | How a fresh clone gets its first proved commit: the build accepts an unproved commit when no proved one exists, the first full-suite pass creates the ref, or the ref is published with the repository | Unfiled; no design owns it yet, and [the build-commit reference](../reference/tillr-build-commit.md) describes the ref it concerns | Entry 1 |
-| What a repository may declare: landing steps, item kinds, or both, and in which file | Unfiled; the design of entry 3 opens with it | Entries 3, 4 and 37 |
+| What a repository may declare: landing steps, item kinds, or both, and in which file | Unfiled; the design of entry 3 opens with it | Entries 3, 4 and 38 |
 | Whether a run inside a lane may record evidence the gate trusts | [`OQ-ER1`](../design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER1) | Entry 17 |
 | How the landing judge weighs a recorded bypass | [`OQ-LS5`](../design/tillr-lane-shims.md#OQ-LS5) | The last slice of entry 16 |
-| Which fallbacks are kept | [`OQ-FB1`](../design/tillr-fallback-inventory.md#OQ-FB1) to [`OQ-FB8`](../design/tillr-fallback-inventory.md#OQ-FB8) | Entry 25 |
-| Whether a worker's `seat` obstacle still moves an item to a stronger model | [`OQ-JL5`](../design/tillr-judge-and-lifecycle.md#OQ-JL5) | Part of entry 26; the removal does not wait |
+| Which fallbacks are kept | [`OQ-FB1`](../design/tillr-fallback-inventory.md#OQ-FB1) to [`OQ-FB8`](../design/tillr-fallback-inventory.md#OQ-FB8) | Entry 26 |
+| Whether a worker's `seat` obstacle still moves an item to a stronger model | [`OQ-JL5`](../design/tillr-judge-and-lifecycle.md#OQ-JL5) | Part of entry 27; the removal does not wait |
 | How a closed backend is probed, and where a failed probe is routed | [`OQ-BP1`](../design/tillr-closed-backend-probe.md#OQ-BP1) to [`OQ-BP3`](../design/tillr-closed-backend-probe.md#OQ-BP3) | Entry 21 |
 | Whether a program may repair its own stuck state, what tillr does with no ordered work left, and which seat takes the operator's judgments | [`OQ-OD1`](../design/operator-decisions-inside-tillr.md#OQ-OD1) to [`OQ-OD3`](../design/operator-decisions-inside-tillr.md#OQ-OD3) | Three slices of entry 22 |
 | Who may drop an ended-item save absent from trunk, what happens when untracked files exceed the save bound, and whether idle ended-item lanes save-and-reset or hold | [`OQ-EW1`](../design/tillr-ended-item-saves.md#OQ-EW1) to [`OQ-EW3`](../design/tillr-ended-item-saves.md#OQ-EW3) | The ended-item-saves part of entry 22 |
 | Whether a blind non-owner filing holds on the operator first or goes to the owner, and who moves an operator hold when unattended | [`OQ-SDC1`](../design/tillr-settled-decision-conflicts.md#OQ-SDC1), [`OQ-SDC2`](../design/tillr-settled-decision-conflicts.md#OQ-SDC2) | The later slices of entry 23 |
+| Accepted ten-lane `/tmp` ceiling and mount cap, and whether workspace-backed check and suite scratch moves to `tmpfs` | [`OQ-WT1`](../design/workspace-tmpfs-scratch.md#OQ-WT1), [`OQ-WT2`](../design/workspace-tmpfs-scratch.md#OQ-WT2) | Slices 5 and 6 of entry 24 |
 | Limits and priority among concurrent test processes | [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1) to [`OQ-GTC4`](../design/gate-test-capacity.md#OQ-GTC4) | Entry 11 |
-| Whether every new request is read for flaws before its first worker | [`OQ-RA1`](../design/tillr-request-amendment.md#OQ-RA1) | The last slices of entry 32 |
-| What happens to running slices when a review comment arrives, and how the existing backlog is treated | [`OQ-DT1`](../design/tillr-design-to-planning-transition.md#OQ-DT1), [`OQ-DT2`](../design/tillr-design-to-planning-transition.md#OQ-DT2) | The later slices of entry 34 |
-| Who writes a provisional design, and how it is marked | [`OQ-PD1`](../design/provisional-design-docs.md#OQ-PD1) to [`OQ-PD4`](../design/provisional-design-docs.md#OQ-PD4) | Entry 39 |
-| Where the companion-plan rulebook belongs | [`OQ-RJ5`](../design/tillr-review-rules.md#OQ-RJ5) | Part of entry 43 |
-| Whether a build run has a strict ceiling at the build tier | [`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3) | Entry 45 |
-| How a design item starts, and how strictly a designer is pushed to scouts | [`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1) to [`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3) | Entry 46 |
-| Which models the held subscription profile uses, and what it does at its reserve | [`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1) and [`OQ-DSP2`](../design/tillr-seat-profiles.md#OQ-DSP2) | Entry 48 |
-| The watcher's command name, whether a rule may run a probe, and where its episodes live | [`OQ-GW1`](../design/general-agent-watch.md#OQ-GW1) to [`OQ-GW3`](../design/general-agent-watch.md#OQ-GW3) | The later slices of entry 55 |
-| Whether a Go package may be the contract between two utilities | [`OQ-UC1`](../design/tillr-utility-contracts.md#OQ-UC1) | The later slices of entry 56 |
-| How tillr builds from Git | [`OQ-SH4`](../design/tillr-selfhosted-build.md#OQ-SH4) | Entry 57 |
+| Whether every new request is read for flaws before its first worker | [`OQ-RA1`](../design/tillr-request-amendment.md#OQ-RA1) | The last slices of entry 33 |
+| What happens to running slices when a review comment arrives, and how the existing backlog is treated | [`OQ-DT1`](../design/tillr-design-to-planning-transition.md#OQ-DT1), [`OQ-DT2`](../design/tillr-design-to-planning-transition.md#OQ-DT2) | The later slices of entry 35 |
+| Who writes a provisional design, and how it is marked | [`OQ-PD1`](../design/provisional-design-docs.md#OQ-PD1) to [`OQ-PD4`](../design/provisional-design-docs.md#OQ-PD4) | Entry 40 |
+| Where the companion-plan rulebook belongs | [`OQ-RJ5`](../design/tillr-review-rules.md#OQ-RJ5) | Part of entry 44 |
+| Whether a build run has a strict ceiling at the build tier | [`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3) | Entry 46 |
+| How a design item starts, and how strictly a designer is pushed to scouts | [`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1) to [`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3) | Entry 47 |
+| Which models the held subscription profile uses, and what it does at its reserve | [`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1) and [`OQ-DSP2`](../design/tillr-seat-profiles.md#OQ-DSP2) | Entry 49 |
+| The watcher's command name, whether a rule may run a probe, and where its episodes live | [`OQ-GW1`](../design/general-agent-watch.md#OQ-GW1) to [`OQ-GW3`](../design/general-agent-watch.md#OQ-GW3) | The later slices of entry 56 |
+| Whether a Go package may be the contract between two utilities | [`OQ-UC1`](../design/tillr-utility-contracts.md#OQ-UC1) | The later slices of entry 57 |
+| How tillr builds from Git | [`OQ-SH4`](../design/tillr-selfhosted-build.md#OQ-SH4) | Entry 58 |
 | Which recorded decisions the owner keeps | [The provenance review](./decision-provenance-review.md) | Nothing is held; a decision overturned there reopens the design that rests on it |
 
 [Declared state machines for tillr](../design/tillr-state-machines.md) blocks no entry above. Its
