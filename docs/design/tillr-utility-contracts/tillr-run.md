@@ -4,7 +4,7 @@ status: in-review
 stage: DESIGN
 updated: 2026-11-25
 tags: [tillr, contract, run]
-summary: "What tillr-run provides and expects, read from the code. It has two parts: the Go program and `run` package, which give the drain the run record, lanes, run states and end causes; and the adapter scripts, which give the Go part the report, the pause kind and the ending capability. The drain writes three of its four tables, and the report footer has three parsers with three grammars."
+summary: "What tillr-run provides and expects, read from the code. It has two parts: the Go program and `run` package, which give the drain the run record, lanes, run states and end causes (plus, under `D-UC21`, four `pi-*` faces porting the Pi adapter helpers and their Python tests to Go); and the adapter scripts, which give the Go part the report, the pause kind and the ending capability. The drain writes three of its four tables, and the report footer has three parsers with three grammars."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
@@ -15,8 +15,8 @@ depends-on:
 
 **What it is.** The runner starts one agent in a lane and records what it did. It lives at `tools/tillr-run` and has two **parts**, each with its own tests in its own language:
 
-- **The Go part**: the program `tillr-run` and the package `run`.
-- **The adapters**: the scripts under `backends/`, one directory per agent harness, and the shared `report.py`. An **adapter** is the script that starts one harness and turns its output into the one report shape.
+- **The Go part**: the program `tillr-run` and the package `run` (and under `D-UC21` of [the overview](../tillr-utility-contracts.md#86-the-pi-adapter-helpers-move-to-go) — the designer's decision from an operator request, which the owner may overturn — package `tools/tillr-run/pihelper` and four `pi-*` faces porting `backends/pi/{build-agent-dir,stop-at-gap,compact,landing-call-held}` and `backends/pi/testdata/{landing-call-held,parked-exit}.test.py` from Python to Go).
+- **The adapters**: the scripts under `backends/`, one directory per agent harness, and the shared `report.py`. An **adapter** is the script that starts one harness and turns its output into the one report shape. Under `D-UC21`, the four Pi helper scripts move into `tillr-run` while `backends/pi/extract-report` (left to its own item) and the TypeScript extensions (`land.ts`, `obstacle.ts`, `no_change.ts`, `keep-going.ts`) remain in `backends/pi/`.
 
 The Go part runs the adapters and reads the files they write, so the adapters are a provider to it.
 
@@ -36,9 +36,11 @@ The Go part runs the adapters and reads the files they write, so the adapters ar
 
 Only the drain runs `exec`, with exactly the first four flags and sometimes `--resume`.
 
+Under `D-UC21` of [the overview](../tillr-utility-contracts.md#86-the-pi-adapter-helpers-move-to-go) (the designer's decision from an operator request, not yet built), `tillr-run` gains four Pi adapter helper faces — `pi-build-agent-dir`, `pi-stop-at-gap`, `pi-compact` and `pi-landing-call-held` — porting `tools/tillr-run/backends/pi/{build-agent-dir,stop-at-gap,compact,landing-call-held}` with identical flags, positional arguments, standard output/error contracts, exit codes, files and environment variables, answering `tillr-run <face> --help` on standard output with exit `0` naming `<face>`, and called by `run-pi`, `pi-agent-dir.sh`, the Pi TypeScript extensions (`land.ts`, `obstacle.ts`, `no_change.ts`), the drain's cold-designer compaction (`designer.go` and `designer_compaction.go`), and `RollPiExtensions` in `tools/tillr-roll`.
+
 ### 1.2 Go packages
 
-One: `run`. Only the drain imports it. The 48 names its production code uses:
+One imported from outside on `HEAD` today: `run`. Only the drain imports it. Under `D-UC21` of [the overview](../tillr-utility-contracts.md#86-the-pi-adapter-helpers-move-to-go) (the designer's decision from an operator request, not yet built), `tools/tillr-run/pihelper` (`github.com/mschulkind-oss/tillr-run/pihelper`) holds the four ported Pi adapter helpers and their Go unit tests inside `tools/tillr-run`. The 48 names of `run` that production code outside `tillr-run` uses:
 
 - **Records and kinds:** `Record Request RequestRecord StatusRecord Release ArtifactRef Usage Backend`, and `RecordKind RequestKind AllocateKind FinishKind ReleaseKind ResumeKind UsageKind CopiedUsageKind PauseRequestKind`, and `Utility Version`.
 - **States and causes:** `StateExited StateFailedToStart StatePaused StateTimedOut`, `EndNormalExit EndSettledIdle EndRestart EndSignal EndLeaseReclaimed EndRepeatingCall`, `LaneStateIdle LaneStateLeased`, `PauseAtGap PauseWhereItStands PauseCannotResume`, `EndingFooter EndingCallSuspends`, `ReleaseReleased`.
@@ -81,8 +83,9 @@ The request's payload: `read_only_group run_id item_id node_id seat workflow nod
 | `<scratch>/pause-request`, `resume-prompt` | the Go part | the adapters |
 | `<scratch>/harness`, `extension-set` | the adapters | the Go part |
 | `<adapter>/pause-kind`, `ending-capability`, `extract-report` | the repository | the Go part; the drain reads `ending-capability` through the package |
+| Under `D-UC21` (not yet built), `TILLR_PI_AGENT_DIRS_DIR` (`current.json`, `status.json`, `.build.lock`, `<key>/agent`), `PI_BACKGROUND_TASK_JOURNAL` (read-only), and `TILLR_COMPACTION_JOURNAL` | `pi-build-agent-dir`, `pi-background-tasks`, drain (`designer_compaction.go`) | `pi-build-agent-dir`, `pi-agent-dir.sh`, `pi-stop-at-gap`, `pi-compact` |
 
-The environment `exec` sets for the adapter: `TILLR_RUN_ID`, `TILLR_ITEM_ID`, `TILLR_NODE_ID`, `TILLR_LANE_ID`, `TILLR_SESSION_MODE`, `TILLR_RESUME_PROMPT_FILE`, `TILLR_PAUSE_REQUEST`, `TILLR_PROGRESS_FILE`, `TILLR_CHILD_SESSIONS_ROOT`, `TILLR_CHILD_SESSIONS_MARKER`, `TILLR_READ_ONLY_GROUP`, `TILLR_PI_BUILDS_DIR`, `TILLR_PI_AGENT_DIRS_DIR`, `TILLR_HARNESS_RECORD_FILE`, `TILLR_EXTENSION_SET_RECORD_FILE`, `TILLR_RUN_EXEC_ID`, and the scratch directory variable. `TILLR_RUN_ID` and `TILLR_LANE_ID` are also read by `tillr-trace`'s shim and by the drain, from a process's environment.
+The environment `exec` sets for the adapter: `TILLR_RUN_ID`, `TILLR_ITEM_ID`, `TILLR_NODE_ID`, `TILLR_LANE_ID`, `TILLR_SESSION_MODE`, `TILLR_RESUME_PROMPT_FILE`, `TILLR_PAUSE_REQUEST`, `TILLR_PROGRESS_FILE`, `TILLR_CHILD_SESSIONS_ROOT`, `TILLR_CHILD_SESSIONS_MARKER`, `TILLR_READ_ONLY_GROUP`, `TILLR_PI_BUILDS_DIR`, `TILLR_PI_AGENT_DIRS_DIR`, `TILLR_HARNESS_RECORD_FILE`, `TILLR_EXTENSION_SET_RECORD_FILE`, `TILLR_RUN_EXEC_ID`, and the scratch directory variable (plus `TILLR_RUN_BIN` under `D-UC21` so adapter scripts and Pi extensions invoke the executing `tillr-run` binary). `TILLR_RUN_ID` and `TILLR_LANE_ID` are also read by `tillr-trace`'s shim and by the drain, from a process's environment.
 
 ### 1.6 Names others match on
 
@@ -129,6 +132,7 @@ It imports no other utility's package and runs no other tillr program.
 **Contract:**
 
 - `exec`, `status`, `release` and `lanes` with the flags and exits above; `run.record`'s fields; `run.request`'s fields.
+- Under `D-UC21` (the designer's decision from an operator request, which the owner may overturn), `pi-build-agent-dir`, `pi-stop-at-gap`, `pi-compact` and `pi-landing-call-held` with their flags, exit codes, JSON outputs (`current.json`/`status.json`, `--owed-wakes` JSON array or `null`, `tillr_harness_ended` stream event, and compaction receipt JSON), `TILLR_RUN_BIN` propagation, and `TILLR_COMPACTION_JOURNAL` / `PI_BACKGROUND_TASK_JOURNAL` contracts.
 - The seven name sets of [§1.6](#16-names-others-match-on).
 - The 48 package names, and three to add so that the drain stops writing run tables: a claim for a read-only group, a settle for a read-only run, and a quota-pause write.
 - `runs` and `lanes` for the columns other utilities read. `read_only_runs` and `quota_pauses` become private once those three functions exist.
@@ -154,6 +158,7 @@ Each part pins its own side, in its own fast suite.
 - **Name sets (to add).** One test per set of [§1.6](#16-names-others-match-on) compares the file with the constants.
 - **The record (to add).** One `run.record` example per state and end cause, made by `exec` on the `command` backend, in process.
 - **Builders (to add).** `run` publishes builders that make a lane, a run in each state, and a finished run with its events, through `Apply` and `ClaimLease`. The view, the item utility and `tillr-trace` use them in place of typed `INSERT` lines.
+- **Pi adapter helpers (`D-UC21`).** Once built, Go unit tests in `tools/tillr-run` (`pihelper` and top-level `*_test.go`) replace `tools/tillr-run/backends/pi/testdata/{landing-call-held,parked-exit}.test.py` and the `runpy` `stop-at-gap` cases in `pi_pause_test.go` and `pi_settled_exit_test.go` in the same commit that deletes the four Python helpers and two Python test files, with no surviving test shelling out to a deleted Python script.
 
 ## 5. Reach-ins to fix
 
