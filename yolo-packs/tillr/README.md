@@ -4,9 +4,9 @@ This pack ([`pack.json`](./pack.json)) delivers tillr, the owner's work-queue to
 
 | What | Where it lands in the jail | Produced by |
 | :--- | :--- | :--- |
-| The Go modules and the eleven `tillr*` launchers on `PATH` that build lazily per source digest | `~/.local/share/tillr/<module>/`, `~/.local/bin/` | `just pack-sync`, checked by [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) |
+| The Go modules and the eleven `tillr*` launchers on `PATH` that build lazily per source digest | `~/.local/share/tillr/<module>/`, `~/.local/bin/` | `just pack-sync`, checked by [`tools/tillr/cmd/pack-sync-check`](../../tools/tillr/cmd/pack-sync-check) (and `tools/tillr/packsync`) |
 | The [Git-landing loop adapter](../../tools/tillr-loop/README.md), the program the loop calls to check, land, and record verdicts for candidates | `~/.local/share/tillr/tillr-loop/`, `~/.local/bin/tillr-loop` (built lazily per source digest like the other `tillr*` launchers) | `just pack-sync`, checked by the same suite |
-| A dated snapshot of tillr's design documentation: the [status index](../../docs/tillr/design-status.md) and every document it marks `shipped` | `~/.local/share/tillr/docs/`, plus `~/.local/share/tillr/tillr-loop/README.md` | `just pack-docs` ([`tools/pack-docs.py`](../../tools/pack-docs.py)), checked by the same suite |
+| A dated snapshot of tillr's design documentation: the [status index](../../docs/tillr/design-status.md) and every document it marks `shipped` | `~/.local/share/tillr/docs/`, plus `~/.local/share/tillr/tillr-loop/README.md` | `just pack-docs` ([`tools/tillr/cmd/pack-docs`](../../tools/tillr/cmd/pack-docs)), checked by the same suite |
 | Two skills: [`tillr-operating`](./skills/tillr-operating/SKILL.md) (running and recovering the loop) and [`tillr-designs`](./skills/tillr-designs/SKILL.md) (reading the designs and sending tillr requests from another repository) | each agent's skill directory | [`skills/`](./skills/) |
 
 [`tasks/autoqa-handoff.md`](./tasks/autoqa-handoff.md) stays outside `briefing/` on purpose: it is a review task brief handed only to an agent asked to review tillr as a consumer, never broadcast as a house rule.
@@ -57,7 +57,7 @@ The module source is held to `tools/` on every gate run. The documentation is no
 
 - [`files/local/share/tillr/docs/snapshot.json`](./files/local/share/tillr/docs/snapshot.json) records the commit the copies were made from, and the blob of each source.
 - The gated suite proves every copy is exactly the transform of the blob its snapshot names. A hand edit, a missing or stray file, or a live item directive fails it.
-- `python3 tests/pack-sync.test.py --fresh` says whether HEAD has moved past the snapshot. `just pack-docs` runs it after a refresh.
+- `go run -C tools/tillr ./cmd/pack-sync-check --fresh` says whether HEAD has moved past the snapshot. `just pack-docs` runs it after a refresh.
 
 The transform adds a banner naming the source and commit, and re-resolves links. A delivered target gets a relative link, and anything else becomes a link to the repository on GitHub. It also makes `<!-- tillr: ... -->` directives inert. The planning index skips the copies through the exclusion in [`.vantage.toml`](../../.vantage.toml).
 

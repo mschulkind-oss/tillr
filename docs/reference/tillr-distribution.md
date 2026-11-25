@@ -6,15 +6,15 @@ verified: 2026-11-24
 covers:
   - yolo-packs/tillr/pack.json
   - yolo-packs/tillr/skills/
-  - tests/pack-sync.test.py
-  - tests/tillr-docs.test.py
+  - tools/tillr/packsync/
+  - tools/tillr/tillrdocs/
 tags: [tillr, pack, distribution, documentation, reference]
 summary: "tillr is distributed through one pack in a source-plus-launcher pattern: the module source is mirrored into the pack, nine program entries on PATH each build and cache one binary from that source, and documentation is split into three layers where --help alone owns flags."
 ---
 
 # Distribution: one source-built pack with nine `PATH` binaries
 
-**Status:** Verified 2026-11-24 against the tree. UNMEASURED here: the checks that hold it true are [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) (the mirror and the launchers) and [`tests/tillr-docs.test.py`](../../tests/tillr-docs.test.py) (the documentation split).
+**Status:** Verified 2026-11-24 against the tree. UNMEASURED here: the checks that hold it true are [`tools/tillr/packsync`](../../tools/tillr/packsync) (the mirror and the launchers) and [`tools/tillr/tillrdocs`](../../tools/tillr/tillrdocs) (the documentation split).
 
 `tillr` is distributed through one pack, [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json), in a **source-plus-launcher** pattern: the module source is mirrored into the pack, nine `program` entries on `PATH` each build and cache one binary from that source, and documentation is split into three layers where `--help` alone owns flags.
 
@@ -22,8 +22,8 @@ summary: "tillr is distributed through one pack in a source-plus-launcher patter
 | :--- | :--- |
 | Pack declaration: nine `program` launchers, one `files` tree, the skills | [`yolo-packs/tillr`](../../yolo-packs/tillr/pack.json) |
 | Module source and its mirror | [`tools/`](../../tools), copied by `just pack-sync` to `yolo-packs/tillr/files/` |
-| Mirror and launcher check | [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) |
-| Documentation split check | [`tests/tillr-docs.test.py`](../../tests/tillr-docs.test.py) |
+| Mirror and launcher check | [`tools/tillr/packsync`](../../tools/tillr/packsync) |
+| Documentation split check | [`tools/tillr/tillrdocs`](../../tools/tillr/tillrdocs) |
 | Loop composition skill | [`tillr-operating`](../../yolo-packs/tillr/skills/tillr-operating/SKILL.md) |
 
 **Cost.** The module source exists twice: under [`tools/`](../../tools) and, mirrored by `just pack-sync`, under [`yolo-packs/`](../../yolo-packs). Nine `program` entries put nine launchers in `~/.local/bin/`.
@@ -61,7 +61,7 @@ Three constraints require separate `program` declarations rather than a single `
 
 The pack delivers source as `files`, and each `program` is a launcher that builds and caches its binary.
 
-- **Source delivery (`files`):** `just pack-sync` copies the module directories named in `MODULES` of [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) into the pack's `files/local/share/tillr/<module>/`, which `yolo` renders to `~/.local/share/tillr/<module>/`. That test guards the copy against drift. [`tools/tillr`](../../tools/tillr) is part of the tree because the binary modules resolve the shared library through relative `replace` paths in `go.mod`.
+- **Source delivery (`files`):** `just pack-sync` copies the module directories named in `Modules` of [`tools/tillr/packsync/packsync.go`](../../tools/tillr/packsync/packsync.go) into the pack's `files/local/share/tillr/<module>/`, which `yolo` renders to `~/.local/share/tillr/<module>/`. That test guards the copy against drift. [`tools/tillr`](../../tools/tillr) is part of the tree because the binary modules resolve the shared library through relative `replace` paths in `go.mod`.
 - **Launcher mechanics (`program`):** The launchers share one body that differs in two assignments: the binary's name and its module (`tillr` builds from `tillr-cli`; `tillr-<noun>` builds from the module of the same name). The launcher never changes its own working directory (`go build` runs in a subshell) and ends with `exec`, so a store named relative to the caller's directory resolves in the caller's repository.
 - **Warm cache fast path:** A `current-<bin>-<root-hash>` symlink under `${XDG_CACHE_HOME:-$HOME/.cache}/tillr/bin/` names the last build. On each call the launcher checks whether any non-test `.go`, `go.mod` or `go.sum` file anywhere under the source root is newer than the symlink. When nothing is newer it `exec`s the cached binary with no `go` invocation.
 - **A source change mid-session:** When a file under the source root becomes newer, the next call hashes every non-test `.go`, `go.mod` and `go.sum` file of the whole tree into a digest, builds `<bin>-<digest>` with `CGO_ENABLED=0` to a temporary name, moves it into place (or drops it when a concurrent caller won the race), repoints the symlink, and `exec`s it. In-flight processes keep the binary they loaded.
@@ -88,7 +88,7 @@ Every fact about `tillr` has one home across three layers:
 ### The rule that prevents disagreement (One-Home Rule + Mechanical Gate)
 
 1. **Prose cites `<bin> <face> --help` instead of listing flags.** Neither a module `README.md` nor the composition skill states flag names beyond the bare `<bin> <face>` verb needed to show control flow.
-2. **Mechanical `--help` conformance check.** [`tests/tillr-docs.test.py`](../../tests/tillr-docs.test.py) extracts every `tillr` and `tillr-<noun>` invocation from the module `README.md` files and the skill, runs the binary built from the tree with `--help`, and fails when a documented noun or face does not exist or when a document carries a flag table (a table whose header names a flag, or an option-list line).
+2. **Mechanical `--help` conformance check.** [`tools/tillr/tillrdocs`](../../tools/tillr/tillrdocs) extracts every `tillr` and `tillr-<noun>` invocation from the module `README.md` files and the skill, runs the binary built from the tree with `--help`, and fails when a documented noun or face does not exist or when a document carries a flag table (a table whose header names a flag, or an option-list line).
 
 ### How a reader knows which is current — and what is unfinished
 

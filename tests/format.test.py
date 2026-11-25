@@ -150,7 +150,11 @@ class FormatTest(unittest.TestCase):
 
     def test_format_then_pack_sync_keeps_source_and_copy_identical(self):
         source = self.plant("tools/tillr/example.go")
-        self.plant("tools/pack-mirror-links.py", (ROOT / "tools/pack-mirror-links.py").read_bytes())
+        self.plant("tools/tillr/go.mod", (ROOT / "tools/tillr/go.mod").read_bytes())
+        for rel_dir in ("tools/tillr/packmirror", "tools/tillr/cmd/pack-mirror"):
+            for src_file in sorted((ROOT / rel_dir).rglob("*")):
+                if src_file.is_file():
+                    self.plant(src_file.relative_to(ROOT).as_posix(), src_file.read_bytes())
         self.run_command("just", "format")
         self.run_command("just", "pack-sync")
         self.assertEqual(source.read_bytes(), (self.root / PACK / "tillr/example.go").read_bytes())

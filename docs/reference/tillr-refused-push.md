@@ -138,7 +138,7 @@ Under [OQ-RP4](#OQ-RP4), tillr makes its own commits follow the identity git con
 - **What tillr does.** `Trunk.LandingIdentity` reads `user.name` and `user.email` from config scopes a lane cannot write and refuses to land without them or when a repository-local or worktree config overrides them. `Trunk.Squash` stamps the landed commit with that identity ([`trunk.go`](../../tools/tillr-land/land/trunk.go)), and the replay stamps it as committer.
 - **What tillr does not do.** It holds no landing over the author or committer of a commit it did not make, wherever that commit came from. There is no acceptance command and no acceptance record.
 - **No setting.** Git config is the one source of the identity tillr stamps.
-- **A repository's own history rule is not tillr's.** This repository compares each commit to a [tracked list](../../tools/gate/allowed-commit-identities.json) in its own gate ([`git-identity.test.py`](../../tests/git-identity.test.py)). A repository that wants such a rule states it there.
+- **A repository's own history rule is not tillr's.** This repository compares each commit to a [tracked list](../../tools/gate/allowed-commit-identities.json) in its own gate ([`tools/tillr/cmd/git-identity`](../../tools/tillr/cmd/git-identity)). A repository that wants such a rule states it there.
 
 ---
 

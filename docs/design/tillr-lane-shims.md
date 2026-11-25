@@ -196,7 +196,7 @@ A dedicated Go + shell test suite in `tools/tillr-run` tests the real staged shi
 2. **Process-tree signal test:** Spawns one child bearing the run's `TILLR_RUN_EXEC_ID` and one sibling process outside the run; verifies `kill <child>` succeeds (`0`), while `kill <outsider>`, `kill -1`, `bash -c 'kill <outsider>'` (testing the `bash` builtin hook!), `pkill`, and `killall` all exit `1` and leave the outsider alive.
 3. **`yolo-jail` chaining test:** Places `<run-shims>/bin` ahead of a mock `/home/agent/.yolo/bin/block` on `PATH` and verifies that `rm /workspace/.yolo/state` passes the lane shim (if staged on `main checkout`) and is **still refused** by the chained `yolo` `rm` shim, proving lane shims never short-circuit `yolo`'s own guards.
 4. **Immutable `config.env` test:** Verifies `TILLR_TARGET_DIR=/workspace TILLR_RUN_EXEC_ID=other rm /workspace/.tillr/state.db` in the worker shell still reads the runner-written read-only `config.env` and refuses.
-5. **`pack-sync` parity:** [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) verifies that every committable file under `tools/tillr-run` and `tools/tillr-trace` is byte-identical in `yolo-packs/tillr/`.
+5. **`pack-sync` parity:** [`tools/tillr/cmd/pack-sync-check`](../../tools/tillr/cmd/pack-sync-check) (`tools/tillr/packsync`) verifies that every committable file under `tools/tillr-run` and `tools/tillr-trace` is byte-identical in `yolo-packs/tillr/`.
 
 ### Granting a legitimate need rather than working around it
 

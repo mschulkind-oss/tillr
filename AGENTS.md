@@ -45,7 +45,7 @@ Two landing paths exist, and their verification rules are distinct rather than c
   in the checked range, the author and committer must each match either the owner's personal
   or professional name/email pair in the
   [tracked list](./tools/gate/allowed-commit-identities.json). The
-  [standalone check](./tests/git-identity.test.py) and the live gate apply the same list,
+  [standalone check](./tools/tillr/cmd/git-identity) and the live gate apply the same list,
   regardless of which identity the machine uses. Local and worktree identity overrides are
   still refused. When creating a commit, read the identity from Git config and never type it.
 

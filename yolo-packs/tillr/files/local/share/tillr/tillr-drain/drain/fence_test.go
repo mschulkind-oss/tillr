@@ -29,7 +29,8 @@ import (
 // not a blanket widening of every fence.
 func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 	skill := "yolo-packs/tillr/skills/tillr-operating/SKILL.md"
-	docsTest := "tests/tillr-docs.test.py"
+	docsTest := "tools/tillr/tillrdocs/"
+	docsTestMirror := "yolo-packs/tillr/files/local/share/tillr/tillr/tillrdocs/"
 	mirror := "yolo-packs/tillr/files/local/share/tillr/"
 
 	cases := []struct {
@@ -46,6 +47,7 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 				mirror + "tillr-drain/",
 				skill,
 				docsTest,
+				docsTestMirror,
 			},
 			why: "the module's directory already covers its README, so no README entry is derived",
 		},
@@ -58,6 +60,7 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 				"tools/tillr-view/README.md",
 				skill,
 				docsTest,
+				docsTestMirror,
 			},
 			why: "a sub-path does not cover the module's README, which the documentation suite holds",
 		},
@@ -70,6 +73,7 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 				"tools/tillr-run/README.md",
 				skill,
 				docsTest,
+				docsTestMirror,
 				"tests/tillr-muse-backend.test.py",
 			},
 			why: "the adapters' suite is derived from the directory that holds them",
@@ -83,6 +87,7 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 				"tools/tillr-loop/README.md",
 				skill,
 				docsTest,
+				docsTestMirror,
 				"tools/tillr-loop/",
 			},
 			why: "a fence naming only the program barred the lane from the test and README judged with it",
@@ -104,6 +109,19 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 			for i := range want {
 				if got[i] != want[i] {
 					t.Fatalf("fencePaths(%v) = %v, want %v: %s", c.allowed, got, want, c.why)
+				}
+			}
+			// Staging derives the fence from ScopePaths and then passes that scope to fenceText,
+			// so re-expanding a derived module fence must not widen it into tools/tillr/.
+			if c.name != "the loop program inside a module's directory" {
+				again := sortedCopy(fencePaths(got))
+				if len(again) != len(got) {
+					t.Fatalf("fencePaths(fencePaths(%v)) = %v, want idempotent %v", c.allowed, again, got)
+				}
+				for i := range got {
+					if again[i] != got[i] {
+						t.Fatalf("fencePaths(fencePaths(%v)) = %v, want idempotent %v", c.allowed, again, got)
+					}
 				}
 			}
 		})

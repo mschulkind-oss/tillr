@@ -342,7 +342,6 @@ def test_selection_rules(root_graph: dict) -> None:
             "github.com/mschulkind-oss/tillr-watch",
         }),
         ("tools/gate/checks/go-build.py", {"github.com/mschulkind-oss/tillr-gate"}),
-        ("tools/pack-mirror-links.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
     ]:
         sel = go_affected.select_affected_packages(ROOT, [changed_path], graph=root_graph)
         pkgs = {item["import_path"] for item in sel["selected"]}

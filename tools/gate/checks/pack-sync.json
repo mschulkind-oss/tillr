@@ -2,8 +2,11 @@
   "id": "pack-sync",
   "label": "Whole-tree pack-sync check",
   "command": [
-    "python3",
-    "tests/pack-sync.test.py"
+    "go",
+    "run",
+    "-C",
+    "tools/tillr",
+    "./cmd/pack-sync-check"
   ],
   "scope": "tree",
   "tier": "fast",
@@ -12,6 +15,7 @@
     "."
   ],
   "tools": [
-    "python3"
+    "go",
+    "git"
   ]
 }

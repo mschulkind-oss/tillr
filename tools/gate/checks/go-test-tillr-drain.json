@@ -21,7 +21,6 @@
     "tools/gate/go_affected.py",
     "tools/go-test-durations.json",
     "tools/go-test-shards.py",
-    "tools/pack-mirror-links.py",
     "tools/tillr-cli/",
     "tools/tillr-drain/",
     "tools/tillr-gate/",

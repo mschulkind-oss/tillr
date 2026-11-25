@@ -13,8 +13,7 @@
     "tools/gate/",
     "tools/tillr-gate/",
     "tools/tillr/",
-    "tools/tillr-loop/",
-    "tests/git-identity.test.py"
+    "tools/tillr-loop/"
   ],
   "tools": [
     "sh",

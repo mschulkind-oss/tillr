@@ -32,7 +32,7 @@ func writePackFixture(t *testing.T, root, path, body string) {
 
 func writeCurrentPackRecipe(t *testing.T, root string) {
 	t.Helper()
-	for _, path := range []string{".justfile", "tools/pack-mirror-links.py"} {
+	for _, path := range []string{".justfile"} {
 		body, err := os.ReadFile(filepath.Join("..", "..", "..", path))
 		if err != nil {
 			t.Fatal(err)

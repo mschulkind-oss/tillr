@@ -260,15 +260,15 @@ hooks-install *args:
 # Mirror the tillr pack's copy of every `tools/tillr*` module into
 # yolo-packs/tillr/files/local/share/tillr/<module>. The copy is committed because the
 # pack -- not this checkout -- is what puts `tillr` on PATH in a workspace that has no
-# tools/. `tests/pack-sync.test.py` fails when the copy diverges from its source.
-# With module arguments, render only those modules. The drain embeds this same
-# renderer so it can work on candidates with earlier versions of this recipe.
+# tools/. `go run -C tools/tillr ./cmd/pack-sync-check` fails when the copy diverges from its source.
+# With module arguments, render only those modules. The drain calls the same
+# `packmirror.Sync` implementation so it can work on candidates with earlier versions of this recipe.
 [positional-arguments]
 pack-sync *modules:
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(cd "$(dirname "{{justfile()}}")" && pwd)"
-    exec python3 "$root/tools/pack-mirror-links.py" --sync "$root" "$@"
+    exec go run -C "$root/tools/tillr" ./cmd/pack-mirror --sync "$root" "$@"
 
 # Build the eight tillr programs from refs/tillr/green (the last trunk commit proved by
 # the heavy runner), never from the newer tip or working tree. The pack's rendered copy
@@ -380,17 +380,17 @@ tillr-restart *args:
 # module by module, byte for byte, with the README rewrite, the exec bits, and the
 # launchers' shared body.
 pack-sync-test:
-    @python3 tests/pack-sync.test.py
+    @go run -C tools/tillr ./cmd/pack-sync-check
 
 # Refresh the tillr pack's dated snapshot of tillr's design documentation: the status
 # index docs/tillr/design-status.md and every document its tables mark `shipped`, copied
-# from HEAD into yolo-packs/tillr/files/local/share/tillr/docs/ (tools/pack-docs.py), then
+# from HEAD into yolo-packs/tillr/files/local/share/tillr/docs/ (`tools/tillr/cmd/pack-docs`), then
 # judged current against HEAD. Commit the result. Deliberately NOT part of `pack-sync`:
 # lanes run pack-sync, the docs tree is outside a lane's fence, and the drain edits design
 # documents on every landing, so the snapshot is refreshed by hand, never per landing.
 pack-docs:
-    @python3 tools/pack-docs.py sync
-    @python3 tests/pack-sync.test.py --fresh
+    @go run -C tools/tillr ./cmd/pack-docs sync
+    @go run -C tools/tillr ./cmd/pack-sync-check --fresh
 
 # Serve the drain observatory for THIS checkout on http://127.0.0.1:<port> (`just observatory
 # 5000`; the default is 4318), from one process with the front end embedded. It builds

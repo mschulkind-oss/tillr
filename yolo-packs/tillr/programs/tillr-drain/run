@@ -9,7 +9,7 @@
 #
 # The launchers share one body: `tillr` is the umbrella dispatcher and is built from
 # module `tillr-cli`; every other name is built from the module of the same name. Only
-# the two assignments below differ between them, and tests/pack-sync.test.py refuses a
+# the two assignments below differ between them, and `just pack-sync-test` refuses a
 # copy that has drifted.
 #
 # It must not change directory. A store is named relative to the caller's directory

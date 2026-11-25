@@ -67,7 +67,7 @@ const (
 	tillrSkillPath = "yolo-packs/tillr/skills/tillr-operating/SKILL.md"
 	// tillrDocsTest is the suite that holds every module README to the Known Gaps callout
 	// and runs every face a document names against the binary.
-	tillrDocsTest = "tests/tillr-docs.test.py"
+	tillrDocsTest = "tools/tillr/tillrdocs/"
 	// museBackendTest is the suite for the adapters under `tools/tillr-run/backends/`.
 	museBackendTest = "tests/tillr-muse-backend.test.py"
 )

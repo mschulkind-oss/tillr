@@ -123,7 +123,7 @@ a plain command runs as a leased run with an end cause on a store the drain neve
 has one dispatcher: the drain holds an item whose run it did not dispatch as `run-link-missing`.
 
 - **Promised:** a recipe whose every command is checked to answer `--help` by
-  [tests/tillr-docs.test.py](../../tests/tillr-docs.test.py).
+  [tools/tillr/tillrdocs](../../tools/tillr/tillrdocs).
 - **Not promised:** two dispatchers on one store, ever.
 
 **A4. A stock adapter for plain commands.** Not built (P3). `tillr run exec` needs an adapter
@@ -277,7 +277,7 @@ Four pieces of work, none built and none needing a ruling ([`D-FQ1`](#decision-l
   dispatcher.
 - The recipe states that one store has one dispatcher, and names the holds the drain gives a store
   with a second one.
-- [tests/tillr-docs.test.py](../../tests/tillr-docs.test.py) checks each command in it.
+- [tools/tillr/tillrdocs](../../tools/tillr/tillrdocs) checks each command in it.
 
 **P3. Ship a stock adapter for plain commands run through `tillr run exec`.** *(A4.)*
 

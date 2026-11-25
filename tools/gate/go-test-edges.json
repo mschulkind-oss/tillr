@@ -770,7 +770,6 @@
       "tools/tillr-gate/change-gate.py",
       "tools/tillr-gate/classify.py",
       "tools/go-test-shards.py",
-      "tools/pack-mirror-links.py",
       "tools/tillr/examples/",
       "tools/tillr-loop/drain-argv.json",
       "tools/tillr-run/backends/",

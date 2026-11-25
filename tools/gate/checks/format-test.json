@@ -6,6 +6,6 @@
   "remember": false,
   "tier": "heavy",
   "timeout_ms": 60000,
-  "reads": [".justfile", "tests/format.test.py", "tools/gate/checks/format.json", "tools/pack-mirror-links.py"],
-  "tools": ["python3", "just", "git", "gofmt"]
+  "reads": [".justfile", "tests/format.test.py", "tools/gate/checks/format.json", "tools/tillr/"],
+  "tools": ["python3", "just", "git", "gofmt", "go"]
 }

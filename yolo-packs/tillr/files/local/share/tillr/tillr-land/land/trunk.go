@@ -424,7 +424,7 @@ type Identity struct {
 // lands there and would otherwise be the identity every landing in this repository
 // publishes; `worktree` is per-worktree and equally not the deployed identity. A landing
 // refuses both rather than reading past them, because the value a lane wrote is exactly the
-// value tests/git-identity.test.py refuses.
+// value tools/tillr/cmd/git-identity refuses.
 var laneWritableScopes = map[string]bool{"local": true, "worktree": true}
 
 // configEntry is one value git config reports for a key, and the scope it came from.

@@ -1,60 +1,29 @@
-#!/usr/bin/env python3
-"""tillr-hook: pre-commit -- keep foreign identities off main.
+#!/bin/sh
+# tillr-hook: pre-commit -- keep foreign identities off main.
+#
+# Installed by just hooks-install. Plumbing, ref updates, detached commits and
+# commits on other branches do not run this main-only guard; tillr checks the
+# published trunk independently, including under the landing lock.
+set -eu
 
-Installed by just hooks-install. Plumbing, ref updates, detached commits and
-commits on other branches do not run this main-only guard; tillr checks the
-published trunk independently, including under the landing lock.
-"""
-import re
-from pathlib import Path
-import subprocess
-import sys
+hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+local_hook="$hook_dir/pre-commit.local"
+if [ -e "$local_hook" ]; then
+  "$local_hook" "$@" || exit $?
+fi
 
+if [ -n "${TILLR_PRE_COMMIT_BIN:-}" ]; then
+  exec "$TILLR_PRE_COMMIT_BIN" "$@"
+fi
 
-def git(*args):
-    p = subprocess.run(["git", *args], capture_output=True, text=True)
-    if p.returncode:
-        raise RuntimeError(p.stderr.strip() or "git " + " ".join(args) + " failed")
-    return p.stdout.strip()
+top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+if [ -n "$top" ] && [ -d "$top/tools/tillr/cmd/pre-commit-hook" ] && command -v go >/dev/null 2>&1; then
+  exec go run -C "$top/tools/tillr" ./cmd/pre-commit-hook "$@"
+fi
 
+if command -v tillr-pre-commit >/dev/null 2>&1; then
+  exec tillr-pre-commit "$@"
+fi
 
-def main():
-    local = Path(__file__).resolve().with_name("pre-commit.local")
-    if local.exists():
-        p = subprocess.run([str(local), *sys.argv[1:]])
-        if p.returncode:
-            return p.returncode
-    branch = subprocess.run(["git", "symbolic-ref", "--quiet", "HEAD"], capture_output=True, text=True)
-    if branch.returncode == 1:
-        return 0  # detached HEAD
-    if branch.returncode:
-        raise RuntimeError(branch.stderr.strip())
-    if branch.stdout.strip() != "refs/heads/main":
-        return 0
-    identity = []
-    for key in ("user.name", "user.email"):
-        value = ""
-        for line in git("config", "--show-scope", "--get-all", key).splitlines():
-            scope, entry = line.split("\t", 1)
-            if scope in ("local", "worktree"):
-                raise RuntimeError(f"{key} is set in {scope} config; unset it and use the configured global identity")
-            value = entry.strip()
-        if not value:
-            raise RuntimeError(f"{key} is missing; configure the owner's global Git identity")
-        identity.append(value)
-    expected = f"{identity[0]} <{identity[1]}>"
-    for kind in ("AUTHOR", "COMMITTER"):
-        raw = git("var", f"GIT_{kind}_IDENT")
-        match = re.fullmatch(r"(.* <[^>]*>) [0-9]+ [+-][0-9]{4}", raw)
-        if not match or match[1] != expected:
-            print(f"pre-commit: foreign identity on main: {kind.lower()} {raw}; expected {expected}. Remove the identity override or re-author the commit with the configured identity.", file=sys.stderr)
-            return 1
-    return 0
-
-
-if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except (RuntimeError, OSError, ValueError) as error:
-        print(f"pre-commit: {error}; no commit made", file=sys.stderr)
-        sys.exit(1)
+printf 'pre-commit: tillr-pre-commit not found and tools/tillr/cmd/pre-commit-hook not in checkout; no commit made\n' >&2
+exit 1

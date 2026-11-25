@@ -4,7 +4,7 @@
   "contributes": [
     // The toolset's Go tree, delivered whole to ~/.local/share/tillr/<module>. It is a
     // GENERATED copy of tools/tillr* in this repository, produced by
-    // `just pack-sync` and guarded against divergence by tests/pack-sync.test.py. The
+    // `just pack-sync` and guarded against divergence by `just pack-sync-test`. The
     // pack ships source and never a compiled artifact: each launcher below builds one
     // binary from this tree, once per source digest.
     //

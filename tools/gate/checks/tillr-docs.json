@@ -4,7 +4,7 @@
   "command": [
     "sh",
     "-c",
-    "python3 tests/tillr-docs.test.py && python3 tests/tillr-build.test.py && python3 tests/tillr-scratch.test.py"
+    "go test -C tools/tillr ./tillrdocs && go run -C tools/tillr ./cmd/tillr-docs-check && python3 tests/tillr-build.test.py && python3 tests/tillr-scratch.test.py"
   ],
   "scope": "tree",
   "tier": "heavy",
@@ -15,11 +15,9 @@
     "README.md",
     "docs/",
     "tests/tillr-build.test.py",
-    "tests/tillr-docs.test.py",
     "tests/tillr-scratch.test.py",
     "tests/tillr-testmain_test.go",
     "tools/gate/checks/tillr-docs.json",
-    "tools/pack-docs.py",
     "tools/tillr-cli/",
     "tools/tillr-drain/",
     "tools/tillr-loop/",

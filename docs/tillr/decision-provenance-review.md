@@ -205,7 +205,7 @@ every tillr program ([OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2)).
 
 7. 💬 **OQ-PR15: Should copies of your tillr designs be installed in every other workspace?**
 
-   [`pack-docs.py`](../../tools/pack-docs.py) copies every design that
+   [`tools/tillr/cmd/pack-docs`](../../tools/tillr/cmd/pack-docs) (`tools/tillr/packdocs`) copies every design that
    [the status index](./design-status.md) marks `shipped` into the pack, so every workspace
    that installs tillr gets them. No ledger row records that decision. The copies are a
    snapshot, and removing them is a small job.

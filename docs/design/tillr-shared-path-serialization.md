@@ -95,7 +95,7 @@ Every path claim therefore uses exact normalized repository-relative file paths 
 - `tools/<tillr-module>/<rel>` and `yolo-packs/tillr/files/local/share/tillr/<tillr-module>/<rel>`, the pairing [pack-sync.json](../../tools/gate/checks/pack-sync.json) checks.
 - `tools/tillr-loop/tillr-loop` and `tools/tillr-drain/drain/tillr-loop.py`, with its mirror.
 
-Unlike `fencePaths` in [stage.go](../../tools/tillr-drain/drain/stage.go), `claimCompanionPaths` never adds the shared optional companions (`yolo-packs/tillr/skills/tillr-operating/SKILL.md`, `tests/tillr-docs.test.py`) unless an item declares them, because claiming those two files on every tillr module item would serialize all tillr module work.
+Unlike `fencePaths` in [stage.go](../../tools/tillr-drain/drain/stage.go), `claimCompanionPaths` never adds the shared optional companions (`yolo-packs/tillr/skills/tillr-operating/SKILL.md`, `tools/tillr/tillrdocs/`) unless an item declares them, because claiming those two files on every tillr module item would serialize all tillr module work.
 
 ### 3.2 Four authoritative claim sources across every intake and workflow (`D-SPS3`, `D-SPS5`)
 

@@ -209,7 +209,7 @@ Every AutoQA reference inside tillr gets a ruling (`D-AQ7`). The last column is 
 | The pack handoff brief, [autoqa-handoff.md](../../yolo-packs/tillr/tasks/autoqa-handoff.md) | **Delete.** | No: the file is in `yolo-packs/tillr/tasks/`. |
 | The tillr pack's description in [pack.json](../../yolo-packs/tillr/pack.json) | **Keep the pack; delete the AutoQA text.** | No. |
 | A `tillr-autoqa` skill in the tillr pack | **Refuse.** The tillr pack ships only its own skills; AutoQA ships in a pack of its own. | Yes: the skill is not built, and [tillr distribution](../reference/tillr-distribution.md#the-autoqa-handoff-through-the-pack) states the rule. |
-| The AutoQA gap in the eight module READMEs | **Delete it** in one change that keeps [tests/tillr-docs.test.py](../../tests/tillr-docs.test.py) passing, and regenerate the pack copy. | No: `rg -c 'AutoQA handoff skill is not shipped' tools/*/README.md` answers 1 for each of the eight. |
+| The AutoQA gap in the eight module READMEs | **Delete it** in one change that keeps [tools/tillr/tillrdocs](../../tools/tillr/tillrdocs) passing, and regenerate the pack copy. | No: `rg -c 'AutoQA handoff skill is not shipped' tools/*/README.md` answers 1 for each of the eight. |
 | The general-purpose seams: gate events from the drain, exit-code propagation, `gate change` and `run request` | **Keep in tillr.** | Yes. |
 | The store's `autoqa` actor kind, `qa-verification` claim class and `autoqa` decider | **Retire from what can be written**, keeping old rows readable. | Yes: new writes are refused with the rule `actor-retired`. |
 

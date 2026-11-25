@@ -254,5 +254,5 @@ Its tables are also the declaration of what the tillr pack delivers: every row w
 `shipped` is copied, and a row reading `not shipped` is not. To refresh the delivered copies
 after this page or a shipped document changes, commit the change, then run `just pack-docs` and
 commit what it writes. The copies are a snapshot of one commit, so the gate never fails because a
-shipped document changed since; `just pack-docs` and `python3 tests/pack-sync.test.py --fresh`
+shipped document changed since; `just pack-docs` and `go run -C tools/tillr ./cmd/pack-sync-check --fresh`
 say how far the snapshot lags.

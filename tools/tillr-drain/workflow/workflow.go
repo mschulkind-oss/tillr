@@ -25,9 +25,10 @@ const (
 	// DefaultSeatDeclaration is the default seat declaration location hint.
 	DefaultSeatDeclaration = "seats are declared in the backend policy file"
 
-	tillrSkillPath  = "yolo-packs/tillr/skills/tillr-operating/SKILL.md"
-	tillrDocsTest   = "tests/tillr-docs.test.py"
-	museBackendTest = "tests/tillr-muse-backend.test.py"
+	tillrSkillPath      = "yolo-packs/tillr/skills/tillr-operating/SKILL.md"
+	tillrDocsTest       = "tools/tillr/tillrdocs/"
+	tillrDocsTestMirror = "yolo-packs/tillr/files/local/share/tillr/tillr/tillrdocs/"
+	museBackendTest     = "tests/tillr-muse-backend.test.py"
 )
 
 // SeatPolicy describes the seat mappings and read-only constraints enforced
@@ -847,13 +848,16 @@ func FencePaths(allowed []string) []string {
 		// A fence spells a directory with or without its trailing slash and means the same
 		// path either way, so the rules below match on the path and not on the spelling.
 		named := strings.TrimSuffix(p, "/")
-		if module, ok := tillrModule(named); ok {
+		if named == strings.TrimSuffix(tillrDocsTest, "/") {
+			add(tillrDocsTestMirror)
+		} else if module, ok := tillrModule(named); ok {
 			add("yolo-packs/tillr/files/local/share/tillr/" + module + "/")
 			if named != "tools/"+module {
 				add("tools/" + module + "/README.md")
 			}
 			add(tillrSkillPath)
 			add(tillrDocsTest)
+			add(tillrDocsTestMirror)
 			if module == "tillr-loop" {
 				add("tools/tillr-loop/")
 			}

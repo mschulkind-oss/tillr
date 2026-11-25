@@ -2,8 +2,9 @@
   "id": "pack-sync-test",
   "label": "the pack mirror and its documentation snapshot suite passes",
   "command": [
-    "python3",
-    "tests/pack-sync.test.py"
+    "sh",
+    "-c",
+    "go test -C tools/tillr ./packmirror ./packdocs ./packsync && go run -C tools/tillr ./cmd/pack-sync-check"
   ],
   "scope": "tree",
   "tier": "heavy",
@@ -11,15 +12,13 @@
   "reads": [
     ".justfile",
     "docs/",
-    "tests/pack-sync.test.py",
     "tools/",
     "tools/gate/checks/pack-sync-test.json",
-    "tools/pack-docs.py",
-    "tools/pack-mirror-links.py",
     "yolo-packs/tillr/"
   ],
   "tools": [
-    "python3",
+    "sh",
+    "go",
     "git",
     "just"
   ]

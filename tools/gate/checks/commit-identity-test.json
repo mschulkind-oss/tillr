@@ -4,7 +4,7 @@
   "command": [
     "sh",
     "-c",
-    "python3 tests/git-identity.test.py && python3 tests/pre-commit-identity.test.py"
+    "go run -C tools/tillr ./cmd/git-identity && go test -C tools/tillr ./gitidentity"
   ],
   "scope": "tree",
   "tier": "heavy",
@@ -12,15 +12,13 @@
   "reads": [
     "bin/hooks-install",
     "hooks/",
-    "tests/git-identity.test.py",
-    "tests/pre-commit-identity.test.py",
     "tools/gate/",
-    "tools/tillr/",
-    "tools/gate/checks/commit-identity-test.json"
+    "tools/gate/checks/commit-identity-test.json",
+    "tools/tillr/"
   ],
   "tools": [
     "sh",
-    "python3",
+    "go",
     "git"
   ]
 }

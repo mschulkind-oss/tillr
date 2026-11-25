@@ -429,7 +429,7 @@ The phases are ordered so each slice compiles and passes its module's suite on t
 - **Keep slot reconciliation behind one narrow interface** in `tools/tillr-drain/drain/`. When [item-owned worktrees](./tillr-vocabulary.md#3-what-a-lane-was-and-the-worktree-as-a-resource) replace numbered lanes, the runtime config table and the `scale`, `alloc` and `config` faces should carry over to the running-agent limit without a schema change.
 - **Read-only faces open stores that were never migrated.** [`lanestate/read.go`](../../tools/tillr-drain/lanestate/read.go), [`lanes.go`](../../tools/tillr-view/lanes.go) and [`serveread.go`](../../tools/tillr-view/serveread.go) open a store read-only and run no migration, so a query on a new column or table is guarded by schema introspection, and a store without the lifecycle column reads as every lane `active`.
 - **Phases 2 and 4 share files.** Both change [`plan.go`](../../tools/tillr-drain/drain/plan.go) and [`main.go`](../../tools/tillr-drain/main.go), so phase 4 follows phase 2. Phase 3 can run beside either once phase 1's schema is in.
-- **A documented face must exist.** `case_faces_answer_help` in [`tests/tillr-docs.test.py`](../../tests/tillr-docs.test.py) runs each documented `tillr drain <face>` with `--help`, so a slice that documents a new face ships with, or after, the face itself.
+- **A documented face must exist.** `FacesHelpError` in [`tools/tillr/tillrdocs`](../../tools/tillr/tillrdocs) runs each documented `tillr drain <face>` with `--help`, so a slice that documents a new face ships with, or after, the face itself.
 
 ---
 

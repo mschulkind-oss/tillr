@@ -122,7 +122,7 @@ A change check has no verdict on a single revision, so the faces that judge one 
 refuse it.
 
 The `commit-identity` change check ([`tools/gate/checks/commit-identity.json`](../../tools/gate/checks/commit-identity.json))
-and the standalone [`tests/git-identity.test.py`](../../tests/git-identity.test.py) enforce
+and the standalone [`tools/tillr/cmd/git-identity`](../../tools/tillr/cmd/git-identity) (`tools/tillr/gitidentity`) enforce
 this repository's own two-identity policy ([`D-GR18`](#D-GR18) and [`D-GR19`](#D-GR19)), not
 a rule of the tillr programs ([refused pushes](./tillr-refused-push.md#OQ-RP4)): both check
 author and committer against one tracked list of exact name and address pairs
@@ -367,7 +367,7 @@ owner may overturn — is implemented as follows:
   `go-affected` selection keeps `97.4%` of non-integration Go tests (`1,809` of `1,858` across
   `38` of `39` test packages) before the merge, keeps pre-merge compilation of all `574`
   `tools/tillr-drain/drain/*_test.go` files in fast check `go-build` (`go test -exec true ./...`
-  in [`tools/gate/checks/go-build.py`](../../tools/gate/checks/go-build.py)), touches zero
+  in `tools/gate/checks/go-build.py`), touches zero
   files under `tools/tillr-drain/drain/`, and must be stated in the build commit body.
 - **`DEFERRED_PROOF_PACKAGES` in `go-affected` ([`tools/gate/go_affected.py`](../../tools/gate/go_affected.py)).**
   Define `DEFERRED_PROOF_PACKAGES = frozenset({"github.com/mschulkind-oss/tillr-drain/drain"})`
@@ -393,7 +393,7 @@ owner may overturn — is implemented as follows:
   the after-merge `go-test-tillr-drain` run. Expand `reads` in
   [`tools/gate/checks/go-test-tillr-drain.json`](../../tools/gate/checks/go-test-tillr-drain.json)
   to cover every `builds` module directory (plus transitive `replace` dependencies required by
-  `missing_go_reads` in [`tools/gate/checks/tree_checks_test.py`](../../tools/gate/checks/tree_checks_test.py))
+  `missing_go_reads` in `tools/gate/checks/tree_checks_test.py`)
   and every `reads` rule declared for `DEFERRED_PROOF_PACKAGES` in
   [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json), preventing
   `tillr-gate checks --heavy-tree` from reusing a stale remembered pass when a sibling binary
@@ -1109,7 +1109,7 @@ may overturn any of them.
 | <a id="D-GR13"></a>`D-GR13` | *(Implementer's decision.)* Recorded `over_budget_ms` while letting a fast check run past its budget; its outer ceiling kill was superseded on 2026-11-17 by [`D-GR15`](#D-GR15). Rejected: stopping or carrying a change check at its budget, or one ceiling for the whole fast run. | 2026-11-16; superseded in part 2026-11-17 | [Budgets and the stall watchdog](#budgets-and-the-stall-watchdog) | Yes (`over_budget_ms`) |
 | <a id="D-GR14"></a>`D-GR14` | *(Implementer's decision.)* `--tree-overrun` defaults to and accepts only `keep`, first while no heavy runner existed and permanently under [`D-GR15`](#D-GR15) because carrying stops a working check at its budget. Rejected: carrying with nothing to judge it, or answering "could not judge" at the budget. | 2026-11-16; ruled permanent 2026-11-17 | [Budgets and the stall watchdog](#budgets-and-the-stall-watchdog) | Yes |
 | <a id="D-GR16"></a>`D-GR16` | Progress is output growth or process-group CPU growth in a 1 s sample; 60 silent samples end the process group as `stalled` (exit 6). The drain re-gates the candidate once when fewer gates are in flight (or none are) and holds on the second stall (`gate-stalled`), keeping `gate-harness-error` for crashes and start failures. Rejected: a longer fixed timeout, or re-gating on the next pass with no named change. | 2026-11-17 | [Budgets and the stall watchdog](#budgets-and-the-stall-watchdog) | Yes |
-| <a id="D-GR19"></a>`D-GR19` | Carries out [`D-GR18`](#D-GR18): apply one tracked list (`tools/gate/allowed-commit-identities.json`) of exact name and address pairs to author and committer in both `tests/git-identity.test.py` and the live `commit-identity` gate check, keeping their ranges and refusal of repo/worktree identity overrides without changing commit creation or tillr. | 2026-11-20 | [Change checks and tree checks](#change-checks-and-tree-checks) | Yes |
+| <a id="D-GR19"></a>`D-GR19` | Carries out [`D-GR18`](#D-GR18): apply one tracked list (`tools/gate/allowed-commit-identities.json`) of exact name and address pairs to author and committer in both `tools/tillr/cmd/git-identity` (`tools/tillr/gitidentity`) and the live `commit-identity` gate check, keeping their ranges and refusal of repo/worktree identity overrides without changing commit creation or tillr. | 2026-11-20 | [Change checks and tree checks](#change-checks-and-tree-checks) | Yes |
 | <a id="D-GR20"></a>`D-GR20` | Bound aggregate Go test parallelism across runs rather than per run, excluding queue wait from shard timeouts; amended on 2026-11-22 by [`D-GR48`](#D-GR48) and deleted under [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1) (replaced by four-class kernel scheduling). | 2026-11-20; amended 2026-11-22 | [Go test execution](#go-test-execution) | Deleted ([`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1)) |
 | <a id="D-GR22"></a>`D-GR22` | Operator's reading of [`D-GR21`](#D-GR21) with the designer's mechanism: a `disabled` result counted apart from passes, a log reference on each stored record, a marker per check id so a new fingerprint does not re-arm an unrepaired check, one deduplicated `flaky-<check-id>` item filed from unfinished markers, and `tillr-gate enable` clearing the marker and contradicting pair once the repair's candidate passes the check. Rejected: a red verdict, a live re-run, disabling by fingerprint alone, or any retry, count or time window. | 2026-11-21; amended 2026-11-22 | [A contradicted check is disabled](#a-contradicted-check-is-disabled), [gate check rules](./gate-check-rules.md) | Yes |
 | <a id="D-GR23"></a>`D-GR23` | Every check-result classification site calls `checkresult.Classify` (`pass`, `fail`, `unknown`, `unavailable`, `disabled`), reached from Python and store reads via `tillr-gate classify`; cached results are classified when used, a replayed commit supplies the declaration and command and never the classification, and repair items are filed by marker sweep without a document block. Rejected: per-site rules, per-program classifiers sharing a table, filing on every verdict exit path, or folding `unavailable` into `unknown`. | 2026-11-21 | [Result classification](#result-classification) | Yes |
