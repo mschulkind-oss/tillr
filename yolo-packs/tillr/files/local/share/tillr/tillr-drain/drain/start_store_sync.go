@@ -264,9 +264,31 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 		case faults.HeldKind, faults.ClearedKind, BoundaryCheckKind:
 			d.faults = append(d.faults, e)
 			known = true
-		case "run.progress", run.UsageKind, run.CopiedUsageKind:
+		case "run.progress", run.UsageKind, run.CopiedUsageKind,
+			"run.child-session", "run.children-recorded",
+			GateStartedKind, GatePlanKind, FastGateTimingKind:
 			// These are observations, not scheduling changes.
 			if e.ObjectType != "run" {
+				return false
+			}
+			continue
+		case HeavyProgressKind:
+			if e.ObjectType != "trunk" {
+				return false
+			}
+			continue
+		case CheckpointNotRestartedKind, LoopPassKind, ProcessCPUKind, StoreBusyKind:
+			if e.ObjectType != "session" {
+				return false
+			}
+			continue
+		case dispatchDeclinedKind:
+			if e.ObjectType != "item" {
+				return false
+			}
+			continue
+		case "watch.alert.opened", "watch.alert.resolved":
+			if e.ObjectType != "alert" {
 				return false
 			}
 			continue

@@ -212,3 +212,89 @@ func TestStartStoreSyncReleasesLaneOnCancelStaging(t *testing.T) {
 		t.Fatalf("nextFreshStart after cancelStaging = (%v, %+v), want fresh start on %s", ok, start.decision, lane)
 	}
 }
+
+func TestStartStoreSyncSkipsObservationEventsWithoutReseed(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	ctx, at := context.Background(), l.cfg.Now()
+	var sync startStoreSync
+	t.Cleanup(sync.close)
+	rebuilt := false
+	refresh := func(previous startSnapshot) startSnapshot {
+		t.Helper()
+		rebuilt = false
+		next, err := sync.syncStore(ctx, f.storePath, at, l.currentPolicy(), previous, func(_ *store.Reader, _ *startSnapshot, _ map[string]bool) (func() error, error) {
+			rebuilt = true
+			return nil, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return next
+	}
+	before := refresh(startSnapshot{})
+	if !rebuilt {
+		t.Fatal("initial seed did not run rebuild")
+	}
+
+	observations := []struct {
+		kind       string
+		objectType string
+		objectID   string
+	}{
+		{"run.child-session", "run", "run-1"},
+		{"run.children-recorded", "run", "run-1"},
+		{GateStartedKind, "run", "run-1"},
+		{GatePlanKind, "run", "run-1"},
+		{FastGateTimingKind, "run", "run-1"},
+		{HeavyProgressKind, "trunk", "main"},
+		{CheckpointNotRestartedKind, "session", "sess-1"},
+		{LoopPassKind, "session", "sess-1"},
+		{ProcessCPUKind, "session", "sess-1"},
+		{StoreBusyKind, "session", "sess-1"},
+		{dispatchDeclinedKind, "item", "item-a"},
+		{"watch.alert.opened", "alert", "alrt-1"},
+		{"watch.alert.resolved", "alert", "alrt-1"},
+	}
+	prev := before
+	for _, obs := range observations {
+		id := obs.objectID
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{
+				Kind:       obs.kind,
+				ObjectType: obs.objectType,
+				ObjectID:   &id,
+				Payload:    []byte(`{}`),
+				At:         at,
+			})
+			return err
+		})
+		next := refresh(prev)
+		if next.pending != prev.pending {
+			t.Fatalf("%s (%s) triggered a full reseed", obs.kind, obs.objectType)
+		}
+		if rebuilt {
+			t.Fatalf("%s (%s) triggered a proposal rebuild", obs.kind, obs.objectType)
+		}
+		if next.lastEventSeq <= prev.lastEventSeq {
+			t.Fatalf("%s (%s) did not advance lastEventSeq: %d <= %d", obs.kind, obs.objectType, next.lastEventSeq, prev.lastEventSeq)
+		}
+		prev = next
+	}
+
+	// An observation kind carrying an unexpected object_type still reseeds.
+	wrongID := "item-a"
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{
+			Kind:       HeavyProgressKind,
+			ObjectType: "item",
+			ObjectID:   &wrongID,
+			Payload:    []byte(`{}`),
+			At:         at,
+		})
+		return err
+	})
+	fallback := refresh(prev)
+	if fallback.pending == prev.pending || !rebuilt {
+		t.Fatal("observation event with unexpected object_type did not reseed")
+	}
+}
