@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // ReasonRunProcessesLive holds an item whose ended run still has live marked processes
@@ -18,8 +20,10 @@ import (
 const ReasonRunProcessesLive = "run-processes-live"
 
 type survivingProcess struct {
-	PID     int
-	Command string
+	PID       int
+	Start     string
+	Command   string
+	IsRunFace bool
 }
 
 func (p survivingProcess) String() string {
@@ -105,39 +109,155 @@ func survivingRunProcesses(storePath, runID string) ([]survivingProcess, error) 
 		if !hasRun || !hasStore {
 			continue
 		}
-		cmd, gone, err := readProcessCommand(dir)
+		cmd, isFace, gone, err := readProcessCommand(dir)
 		if gone {
 			continue
 		}
 		if err != nil {
 			return nil, fmt.Errorf("checking process %d: %w", pid, err)
 		}
-		procs = append(procs, survivingProcess{PID: pid, Command: cmd})
+		procs = append(procs, survivingProcess{PID: pid, Start: start, Command: cmd, IsRunFace: isFace})
 	}
 	sort.Slice(procs, func(i, j int) bool { return procs[i].PID < procs[j].PID })
 	return procs, nil
 }
 
-func readProcessCommand(dir string) (string, bool, error) {
+func readProcessCommand(dir string) (string, bool, bool, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, "cmdline"))
 	if processGone(err) {
-		return "", true, nil
+		return "", false, true, nil
 	}
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
+	isFace := isRunFaceArgv(raw)
 	cmd := strings.TrimSpace(strings.ReplaceAll(string(raw), "\x00", " "))
 	if cmd != "" {
-		return cmd, false, nil
+		return cmd, isFace, false, nil
 	}
 	comm, err := os.ReadFile(filepath.Join(dir, "comm"))
 	if processGone(err) {
-		return "", true, nil
+		return "", false, true, nil
 	}
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
-	return strings.TrimSpace(string(comm)), false, nil
+	return strings.TrimSpace(string(comm)), isFace, false, nil
+}
+
+type processKey struct {
+	PID   int
+	Start string
+}
+
+// waitProcessExit blocks until the process identified by (pid, start) exits, or until
+// ctx is canceled. It waits on the kernel's pidfd exit notification rather than polling
+// on elapsed time.
+func waitProcessExit(ctx context.Context, pid int, start string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fd, err := unix.PidfdOpen(pid, 0)
+	if errors.Is(err, unix.ESRCH) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("opening pidfd for process %d: %w", pid, err)
+	}
+	defer unix.Close(fd)
+
+	// Recheck start time after opening pidfd so a PID reused before PidfdOpen is
+	// never waited on as the original run face.
+	currentStart, err := processStart(pid)
+	if processGone(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("verifying process %d: %w", pid, err)
+	}
+	if currentStart == "" || currentStart != start {
+		return nil
+	}
+
+	fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	if ctx.Done() != nil {
+		wakeFD, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
+		if err != nil {
+			return fmt.Errorf("creating wakeup eventfd for process %d: %w", pid, err)
+		}
+		done := make(chan struct{})
+		waiterDone := make(chan struct{})
+		go func() {
+			defer close(waiterDone)
+			select {
+			case <-ctx.Done():
+				var buf [8]byte
+				buf[0] = 1
+				_, _ = unix.Write(wakeFD, buf[:])
+			case <-done:
+			}
+		}()
+		defer func() {
+			close(done)
+			<-waiterDone
+			_ = unix.Close(wakeFD)
+		}()
+		fds = append(fds, unix.PollFd{Fd: int32(wakeFD), Events: unix.POLLIN})
+	}
+
+	for {
+		n, err := unix.Poll(fds, -1)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("waiting for process %d exit: %w", pid, err)
+		}
+		if n <= 0 {
+			continue
+		}
+		if fds[0].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR) != 0 {
+			return nil
+		}
+		if len(fds) > 1 && fds[1].Revents != 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+}
+
+// awaitSurvivingRunProcesses scans for live marked processes of runID. If the run's own
+// run face (tillr-run exec) is still in the act of exiting after writing its terminal
+// record, it waits for that face's exit before judging whether any marked processes
+// actually survived.
+func awaitSurvivingRunProcesses(ctx context.Context, storePath, runID string) ([]survivingProcess, error) {
+	waited := map[processKey]bool{}
+	for {
+		procs, err := survivingRunProcesses(storePath, runID)
+		if err != nil {
+			return nil, err
+		}
+		if len(procs) == 0 {
+			return nil, nil
+		}
+		var faces []survivingProcess
+		for _, p := range procs {
+			if p.IsRunFace && !waited[processKey{PID: p.PID, Start: p.Start}] {
+				faces = append(faces, p)
+			}
+		}
+		if len(faces) == 0 {
+			return procs, nil
+		}
+		for _, face := range faces {
+			if err := waitProcessExit(ctx, face.PID, face.Start); err != nil {
+				return nil, err
+			}
+			waited[processKey{PID: face.PID, Start: face.Start}] = true
+		}
+	}
 }
 
 func examinationRunIDs(work *pendingWork) []string {
@@ -160,7 +280,7 @@ func (l *Loop) checkSurvivingRunProcesses(ctx context.Context, itemID, lane stri
 			continue
 		}
 		seen[runID] = true
-		procs, err := survivingRunProcesses(l.cfg.Store, runID)
+		procs, err := awaitSurvivingRunProcesses(ctx, l.cfg.Store, runID)
 		if err != nil {
 			return laneOutcome{err: err}, true
 		}

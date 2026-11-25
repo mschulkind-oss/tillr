@@ -3,7 +3,9 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -492,5 +494,209 @@ func TestRecordLoopResultPreservesConsecutiveZeroGenerationRecords(t *testing.T)
 	}
 	if got := readDetail(currentPath); got != "second exit" {
 		t.Fatalf("current detail = %q, want %q", got, "second exit")
+	}
+}
+
+// startExitingRunFace launches a process whose cmdline matches isRunFaceArgv and whose
+// environment carries TILLR_RUN_ID and TILLR_LOOP_STORE. Closing the returned closer lets
+// the process exit on demand.
+func startExitingRunFace(t *testing.T, storePath, laneRoot, runID string) (*exec.Cmd, io.WriteCloser) {
+	t.Helper()
+	dir := t.TempDir()
+	script := filepath.Join(dir, "exec")
+	// Signal readiness on stdout before blocking on stdin so the caller knows /proc/cmdline
+	// and /proc/environ are populated before scanning.
+	if err := os.WriteFile(script, []byte("printf ready\nread _\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reqPath := filepath.Join(laneRoot, ".requests", runID+".request.json")
+	cmd := exec.Command("sh", "exec", "--store", storePath, "--lane-root", laneRoot, "--input", reqPath)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "TILLR_RUN_ID="+runID, "TILLR_LOOP_STORE="+storePath)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+	buf := make([]byte, len("ready"))
+	if _, err := io.ReadFull(stdout, buf); err != nil {
+		t.Fatalf("fake run face did not become ready: %v", err)
+	}
+	return cmd, stdin
+}
+
+func TestExitingRunFaceWaitsForExitWithoutFaulting(t *testing.T) {
+	f, l, d, rec := savedFixture(t)
+	ctx := context.Background()
+
+	faceCmd, releaseFace := startExitingRunFace(t, f.storePath, f.laneRoot, rec.RunID)
+
+	type checkResult struct {
+		out  laneOutcome
+		held bool
+	}
+	done := make(chan checkResult, 1)
+	go func() {
+		out, held := l.checkSurvivingRunProcesses(ctx, d.ItemID, d.LaneID, rec.RunID)
+		done <- checkResult{out: out, held: held}
+	}()
+
+	// While the run face is still alive, the check must wait on its exit rather than
+	// faulting immediately.
+	select {
+	case res := <-done:
+		t.Fatalf("checkSurvivingRunProcesses returned while run face (pid %d) was still live: held=%t out=%+v", faceCmd.Process.Pid, res.held, res.out)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// Let the run face exit; the check should finish promptly without holding the item.
+	if err := releaseFace.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case res := <-done:
+		if res.held || res.out.err != nil || res.out.stop != "" {
+			t.Fatalf("after run face exited: held=%t out=%+v, want held=false and zero outcome", res.held, res.out)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("timed out waiting for checkSurvivingRunProcesses after run face exited")
+	}
+
+	fixtureRead(t, f, func(r *store.Reader) error {
+		answer, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		for _, row := range answer.Rows {
+			if row.ItemID == d.ItemID && row.Reason == ReasonRunProcessesLive {
+				t.Fatalf("item %s unexpectedly faulted with %s: %+v", d.ItemID, ReasonRunProcessesLive, row)
+			}
+		}
+		return nil
+	})
+}
+
+func TestExitingRunFaceWithSurvivingChildStillHoldsOnChild(t *testing.T) {
+	f, l, d, rec := savedFixture(t)
+	ctx := context.Background()
+
+	faceCmd, releaseFace := startExitingRunFace(t, f.storePath, f.laneRoot, rec.RunID)
+
+	child := exec.Command("sleep", "600")
+	child.Env = append(os.Environ(), "TILLR_RUN_ID="+rec.RunID, "TILLR_LOOP_STORE="+f.storePath)
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if child.Process != nil {
+			_ = child.Process.Kill()
+			_ = child.Wait()
+		}
+	})
+
+	type checkResult struct {
+		out  laneOutcome
+		held bool
+	}
+	done := make(chan checkResult, 1)
+	go func() {
+		out, held := l.checkSurvivingRunProcesses(ctx, d.ItemID, d.LaneID, rec.RunID)
+		done <- checkResult{out: out, held: held}
+	}()
+
+	// While the run face is still exiting, wait for it before judging survivors.
+	select {
+	case res := <-done:
+		t.Fatalf("checkSurvivingRunProcesses returned while run face (pid %d) was still live: held=%t out=%+v", faceCmd.Process.Pid, res.held, res.out)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// Release the run face while the stray child remains alive.
+	if err := releaseFace.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case res := <-done:
+		if !res.held || res.out.stop != stopLaneRetained || res.out.err != nil {
+			t.Fatalf("got held=%t out=%+v, want held=true stopLaneRetained nil err", res.held, res.out)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("timed out waiting for checkSurvivingRunProcesses with surviving child")
+	}
+
+	childPID := strconv.Itoa(child.Process.Pid)
+	facePID := strconv.Itoa(faceCmd.Process.Pid)
+	fixtureRead(t, f, func(r *store.Reader) error {
+		answer, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		var found bool
+		for _, row := range answer.Rows {
+			if row.ItemID != d.ItemID {
+				continue
+			}
+			found = true
+			if row.Reason != ReasonRunProcessesLive {
+				t.Errorf("why reason = %q, want %q", row.Reason, ReasonRunProcessesLive)
+			}
+			if !strings.Contains(row.Why, childPID) || !strings.Contains(row.Why, "sleep") {
+				t.Errorf("why detail = %q, want surviving child PID %s (sleep)", row.Why, childPID)
+			}
+			if strings.Contains(row.Why, facePID) {
+				t.Errorf("why detail = %q, should not list exited run face PID %s", row.Why, facePID)
+			}
+		}
+		if !found {
+			t.Fatalf("Why did not report a row for %s", d.ItemID)
+		}
+		return nil
+	})
+}
+
+func TestExitingRunFaceWaitRespectsContextCancel(t *testing.T) {
+	f, l, d, rec := savedFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, _ = startExitingRunFace(t, f.storePath, f.laneRoot, rec.RunID)
+
+	type checkResult struct {
+		out  laneOutcome
+		held bool
+	}
+	done := make(chan checkResult, 1)
+	go func() {
+		out, held := l.checkSurvivingRunProcesses(ctx, d.ItemID, d.LaneID, rec.RunID)
+		done <- checkResult{out: out, held: held}
+	}()
+
+	select {
+	case res := <-done:
+		t.Fatalf("checkSurvivingRunProcesses returned before cancel: held=%t out=%+v", res.held, res.out)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case res := <-done:
+		if !res.held || !errors.Is(res.out.err, context.Canceled) {
+			t.Fatalf("got held=%t out=%+v, want held=true with context.Canceled", res.held, res.out)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("timed out waiting for canceled checkSurvivingRunProcesses")
 	}
 }

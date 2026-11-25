@@ -169,7 +169,7 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 		}
 		return landingOfferAbsent, err
 	}
-	procs, err := survivingRunProcesses(l.cfg.Store, rec.RunID)
+	procs, err := awaitSurvivingRunProcesses(ctx, l.cfg.Store, rec.RunID)
 	if err != nil {
 		return landingOfferAbsent, err
 	}
@@ -982,7 +982,7 @@ func (l *Loop) reconcileLandingDelivery(ctx context.Context, d Decision) error {
 			return err
 		}
 	}
-	procs, err := survivingRunProcesses(l.cfg.Store, d.RunRequest.RunID)
+	procs, err := awaitSurvivingRunProcesses(ctx, l.cfg.Store, d.RunRequest.RunID)
 	if err != nil {
 		return err
 	}
