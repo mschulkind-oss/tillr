@@ -1,10 +1,20 @@
 {
   "id": "tree-checks-test",
   "label": "Whole-tree check migration regression suite",
-  "command": ["python3", "tools/gate/checks/tree_checks_test.py"],
+  "command": [
+    "sh",
+    "-c",
+    "cd tools/gate && CGO_ENABLED=0 GOFLAGS=-trimpath go test -run 'TestTree|TestDesignCitations|TestScratch|TestGoBuild' ./..."
+  ],
   "scope": "tree",
   "tier": "heavy",
   "timeout_ms": 60000,
-  "reads": ["tools/"],
-  "tools": ["python3", "git", "go"]
+  "reads": [
+    "tools/"
+  ],
+  "tools": [
+    "sh",
+    "go",
+    "git"
+  ]
 }

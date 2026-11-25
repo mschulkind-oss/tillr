@@ -8,7 +8,21 @@ import subprocess
 import sys
 import tempfile
 
-from change_common import validate
+
+def validate(base: str, head: str) -> None:
+    for label, rev in (("base", base), ("head", head)):
+        if not rev:
+            raise RuntimeError(f"missing {label} argument")
+        check = subprocess.run(
+            ["git", "rev-parse", "--verify", rev + "^{commit}"],
+            capture_output=True,
+            text=True,
+        )
+        if check.returncode != 0:
+            raise RuntimeError(check.stderr.strip() or f"invalid {label} revision: {rev}")
+    result = subprocess.run(["git", "merge-base", "--is-ancestor", base, head], capture_output=True)
+    if result.returncode:
+        raise RuntimeError("base is not an ancestor of head")
 
 SELF_TRIGGERS = (
     "tools/gate/checks/go-module-inventory.py",
@@ -76,7 +90,7 @@ def _run_step(name: str, cmd: list[str], root: Path, env: dict[str, str]) -> int
 
 def run_inventory_checks(root: Path) -> int:
     scratch_script = root / "tests" / "tillr-scratch.test.py"
-    tree_test = root / "tools" / "gate" / "checks" / "tree_checks_test.py"
+    tree_test = root / "tools" / "gate" / "tree_checks_test.go"
     edges_script = root / "tools" / "gate" / "checks" / "go-edges.py"
     affected_test = root / "tests" / "go-affected.test.py"
     for required in (scratch_script, tree_test, edges_script, affected_test):
@@ -92,43 +106,43 @@ def run_inventory_checks(root: Path) -> int:
         else:
             env["YOLO_DURABLE_DIR"] = fallback_scratch
 
-        tree_env = dict(env)
-        checks_dir = str(root / "tools" / "gate" / "checks")
-        existing_py = tree_env.get("PYTHONPATH", "")
-        tree_env["PYTHONPATH"] = checks_dir if not existing_py else checks_dir + os.pathsep + existing_py
-
         steps = [
             (
                 "testmain-cleanup",
                 [sys.executable, str(scratch_script)],
+                root,
                 env,
             ),
             (
                 "declared-suites",
                 [
-                    sys.executable,
-                    "-m",
-                    "unittest",
-                    "tree_checks_test.TreeChecks.test_every_go_module_is_built_and_has_a_declared_suite",
-                    "tree_checks_test.TreeChecks.test_a_declaration_reading_a_go_module_reads_its_in_repo_dependencies",
+                    "go",
+                    "test",
+                    "-count=1",
+                    "-run",
+                    "^(TestTreeEveryGoModuleIsBuiltAndHasDeclaredSuite|TestTreeDeclarationReadingGoModuleReadsInRepoDependencies)$",
+                    ".",
                 ],
-                tree_env,
+                root / "tools" / "gate",
+                env,
             ),
             (
                 "go-edges",
                 [sys.executable, str(edges_script)],
+                root,
                 env,
             ),
             (
                 "go-affected-modules",
                 [sys.executable, "-c", DISCOVER_MODULES_SNIPPET, str(affected_test)],
+                root,
                 env,
             ),
         ]
 
         worst = 0
-        for name, cmd, step_env in steps:
-            code = _run_step(name, cmd, root, step_env)
+        for name, cmd, step_cwd, step_env in steps:
+            code = _run_step(name, cmd, step_cwd, step_env)
             if code == 4:
                 return 4
             if code != 0:

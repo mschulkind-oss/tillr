@@ -4,7 +4,7 @@
   "command": [
     "sh",
     "-c",
-    "python3 tools/tillr-gate/change-gate.test.py && python3 tools/gate/classification-scan.test.py && python3 tools/gate/done.test.py"
+    "python3 tools/tillr-gate/change-gate.test.py && cd tools/gate && CGO_ENABLED=0 GOFLAGS=-trimpath go test -run 'TestChangeGate|TestTreeCheck|TestDone|TestClassificationScan' ./..."
   ],
   "scope": "tree",
   "tier": "heavy",
@@ -17,8 +17,8 @@
   ],
   "tools": [
     "sh",
-    "python3",
     "go",
-    "git"
+    "git",
+    "python3"
   ]
 }

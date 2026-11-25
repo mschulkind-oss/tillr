@@ -2,8 +2,8 @@
   "id": "workflows",
   "label": "Tracked workflow definitions",
   "command": [
-    "python3",
-    "tools/gate/checks/workflows.py"
+    "tools/gate/repo-gate",
+    "workflows"
   ],
   "scope": "change",
   "tier": "heavy",
@@ -21,13 +21,15 @@
     "tools/tillr-item/",
     "tools/tillr-run/",
     "tools/tillr-land/",
-    "tools/gate/checks/workflows.py",
-    "tools/gate/checks/change_common.py"
+    "tools/gate/workflows.go",
+    "tools/gate/change_common.go",
+    "tools/gate/main.go",
+    "tools/gate/repo-gate"
   ],
   "tools": [
-    "python3",
+    "go",
     "git",
-    "go"
+    "python3"
   ],
   "remember": false
 }

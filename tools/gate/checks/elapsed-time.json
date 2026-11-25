@@ -2,8 +2,8 @@
   "id": "elapsed-time",
   "label": "elapsed-time against the caller's base and head",
   "command": [
-    "python3",
-    "tools/gate/checks/elapsed-time.py"
+    "tools/gate/repo-gate",
+    "elapsed-time"
   ],
   "scope": "change",
   "tier": "fast",
@@ -12,7 +12,7 @@
     "."
   ],
   "tools": [
-    "python3",
+    "go",
     "git"
   ],
   "remember": false

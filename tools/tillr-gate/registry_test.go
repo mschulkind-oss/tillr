@@ -92,7 +92,7 @@ func TestDocumentsDeclarationDelegatesTheCallerRange(t *testing.T) {
 		if check.ID != "documents" {
 			continue
 		}
-		want := []string{"python3", "tools/gate/checks/documents.py"}
+		want := []string{"tools/gate/repo-gate", "documents"}
 		if strings.Join(check.Command, "\x00") != strings.Join(want, "\x00") || check.Scope != "change" {
 			t.Fatalf("documents is not a change program: %+v", check)
 		}

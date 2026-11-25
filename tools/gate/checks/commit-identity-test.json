@@ -15,6 +15,7 @@
     "tests/git-identity.test.py",
     "tests/pre-commit-identity.test.py",
     "tools/gate/",
+    "tools/tillr/",
     "tools/gate/checks/commit-identity-test.json"
   ],
   "tools": [

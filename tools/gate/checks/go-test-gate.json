@@ -1,0 +1,24 @@
+{
+  "id": "go-test-gate",
+  "label": "tools/gate's whole Go suite passes",
+  "command": [
+    "sh",
+    "-c",
+    "CGO_ENABLED=0 python3 tools/go-test-shards.py tools/gate -k 6 --cache --slot-class proof --timeout 0"
+  ],
+  "scope": "tree",
+  "tier": "heavy",
+  "timeout_ms": 3600000,
+  "reads": [
+    "tools/gate/",
+    "tools/tillr/",
+    "tools/go-test-durations.json",
+    "tools/go-test-shards.py"
+  ],
+  "tools": [
+    "sh",
+    "go",
+    "git",
+    "python3"
+  ]
+}

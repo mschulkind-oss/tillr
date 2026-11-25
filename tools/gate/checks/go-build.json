@@ -2,8 +2,8 @@
   "id": "go-build",
   "label": "Whole-tree go-build check",
   "command": [
-    "python3",
-    "tools/gate/checks/go-build.py"
+    "tools/gate/repo-gate",
+    "go-build"
   ],
   "scope": "tree",
   "tier": "fast",
@@ -22,17 +22,13 @@
     "tools/tillr-watch/",
     "tools/tillr-trace/",
     "tools/tillr-roll/",
-    "tools/gate/checks/go-build.py",
-    "tools/gate/checks/change_common.py",
-    "tools/gate/checks/roadmap_sections.py",
-    "tools/tillr-gate/classify.py",
+    "tools/gate/",
     "go.work",
     "go.work.sum"
   ],
   "tools": [
-    "python3",
-    "git",
     "go",
+    "git",
     "true"
   ]
 }

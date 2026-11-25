@@ -98,7 +98,7 @@ writes a Markdown design change takes 31.6 to 39.7 seconds of generation, while 
 workflow plus the non-document gate checks takes 10 to 28 minutes of wall time. The read-only
 `open` stage of [`scouted-design@v1.json`](../../config/tillr/workflows/scouted-design@v1.json)
 alone ran 229 and 285 seconds on two items before any writer started. The document checks
-([`documents.py`](../../tools/gate/checks/documents.py) and `uvx vantage-check`) finish in
+([`change_common.go`](../../tools/gate/change_common.go) and `uvx vantage-check`) finish in
 seconds.
 
 ### The capture instruction and target latency

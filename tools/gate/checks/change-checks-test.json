@@ -1,11 +1,25 @@
 {
   "id": "change-checks-test",
   "label": "caller-owned range and change-check regression fixtures",
-  "command": ["python3", "tools/gate/checks/change_checks_test.py"],
+  "command": [
+    "sh",
+    "-c",
+    "cd tools/gate && CGO_ENABLED=0 GOFLAGS=-trimpath go test -run 'TestDocuments|TestChange|TestFileSize|TestCitations|TestCommitIdentity|TestElapsedTime' ./..."
+  ],
   "scope": "tree",
   "tier": "heavy",
   "timeout_ms": 300000,
-  "reads": ["tools/gate/", "tools/tillr-gate/", "tools/tillr/", "tools/tillr-loop/", "tests/git-identity.test.py"],
-  "tools": ["python3", "go", "git"],
+  "reads": [
+    "tools/gate/",
+    "tools/tillr-gate/",
+    "tools/tillr/",
+    "tools/tillr-loop/",
+    "tests/git-identity.test.py"
+  ],
+  "tools": [
+    "sh",
+    "go",
+    "git"
+  ],
   "remember": false
 }

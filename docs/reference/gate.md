@@ -54,9 +54,9 @@ the merge, and the drain proving the trunk after it.
 | Planning and running checks, the verdict record | [`tools/tillr-gate`](../../tools/tillr-gate/) (`Plan`, `RunWith`, `VerdictPayload`) |
 | Remembered results | [`tools/tillr-gate`](../../tools/tillr-gate/) (`treeFingerprint`, `resultStore`, `treeMemory`) |
 | The stall watchdog | [`tools/tillr-gate`](../../tools/tillr-gate/) (`watchCommand`, `ExitStalled`) |
-| Classifying a check result | [`tools/tillr/checkresult`](../../tools/tillr/checkresult/) (`Classify`, `Aggregate`), reached through `tillr-gate classify` and [`tools/gate/classify.py`](../../tools/gate/classify.py) |
-| The local gate | [`tools/gate/done.py`](../../tools/gate/done.py), started by the `done` recipe |
-| The landing gate's judge | [`tools/gate/change-gate.py`](../../tools/gate/change-gate.py), composed by [`tools/tillr-loop/`](../../tools/tillr-loop/) |
+| Classifying a check result | [`tools/tillr/checkresult`](../../tools/tillr/checkresult/) (`Classify`, `Aggregate`), reached through `tillr-gate classify` and [`tools/gate`](../../tools/gate/) |
+| The local gate | [`tools/gate/done.go`](../../tools/gate/done.go) (`tools/gate/repo-gate done`), started by the `done` recipe |
+| The landing gate's judge | [`tools/gate/change_gate.go`](../../tools/gate/change_gate.go) (`tools/gate/repo-gate change-gate`), composed by [`tools/tillr-loop/`](../../tools/tillr-loop/) |
 | Affected Go test packages, and whole Go suites | [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py), [`tools/go-test-shards.py`](../../tools/go-test-shards.py) |
 | The after-merge proof | [`tools/tillr-drain`](../../tools/tillr-drain/) ([After-merge heavy runs](../../tools/tillr-drain/README.md#after-merge-heavy-runs)) |
 | Gate settings | [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json), read by `ReadGatePolicy` in [`tools/tillr-drain/redcap`](../../tools/tillr-drain/redcap/) |
@@ -232,7 +232,7 @@ compares nothing locally. A cached result is classified when used, and a replaye
 supplies the check's declaration and command, never its classification.
 
 Go callers call the package. Python callers hand yes-or-no facts about a check's output to
-`tillr-gate classify` through [`tools/gate/classify.py`](../../tools/gate/classify.py) and
+`tillr-gate classify` through [`tools/tillr/checkresult`](../../tools/tillr/checkresult/) and
 decide nothing from them locally. Plain `tillr-gate classify` is pure and touches no disk;
 `--aggregate <order>` folds a run's observations into one aggregate object and answers a
 usage error with no output on an unknown order ([`D-GR33`](#D-GR33)); with `--repo` or
@@ -277,7 +277,7 @@ flowchart LR
     L --> C["tillr-gate change"]
     C --> P["tillr-gate plan"]
     P --> R["tillr-gate run --gate"]
-    R --> G["change-gate.py"]
+    R --> G["repo-gate change-gate"]
     G --> K["tillr-gate checks --fast-tree --scope-to-change"]
 ```
 
@@ -285,7 +285,7 @@ flowchart LR
 digest of the candidate's own declaration directory, and `run --gate` runs one named judge
 and writes the `gate.verdict` record. The lander accepts a verdict only when it binds the
 candidate's base commit and head tree. The judge,
-[`change-gate.py`](../../tools/gate/change-gate.py), refuses unless the named head is checked
+[`change_gate.go`](../../tools/gate/change_gate.go) (`tools/gate/repo-gate change-gate`), refuses unless the named head is checked
 out, then runs every change check and fast tree check through the `checks` face.
 
 With `--scope-to-change`, a check whose declared `reads` are disjoint from the changed paths
@@ -517,7 +517,7 @@ declares `"go"` in `tools` and `go-affected` invokes `go`), and `go-affected` ru
 Go packages before the merge. However, commit `11650445` (2026-11-24) declared the Python
 gate suites ([`tools/gate/checks/gate-adapters-test.json`](../../tools/gate/checks/gate-adapters-test.json)
 and [`tools/gate/checks/change-checks-test.json`](../../tools/gate/checks/change-checks-test.json))
-as `scope: "tree", tier: "heavy"`. Before the merge, `change-gate.py` invokes
+as `scope: "tree", tier: "heavy"`. Before the merge, `repo-gate change-gate` invokes
 `tillr-gate checks --fast-tree`, which in `checksFace`
 ([`tools/tillr-gate/checks.go`](../../tools/tillr-gate/checks.go)) selects only
 `scope: "change"` and `scope: "tree", tier: "fast"` declarations; heavy tree checks run only
@@ -870,7 +870,7 @@ otherwise. Declare `reads` as narrowly as the check truly reads: `reads` is what
 check to a change and what bounds its fingerprint, so an input left out is an input whose
 change does not re-run the check.
 
-To run one fast tree check: `python3 tools/gate/tree-check.py --only <id> --base <commit>`,
+To run one fast tree check: `tools/gate/repo-gate tree-check --only <id> --base <commit>`,
 with `tillr-gate` on `PATH`. To run one heavy check: `just done --only <id>`.
 
 ## Known gaps
@@ -929,14 +929,14 @@ The prose above explains what each is for.
 
 | Value | Setting | Defined in |
 | :--- | :--- | :--- |
-| Fast-tier admission cap | 9,000 ms | `FastTierCapMS` in [`tools/tillr-gate`](../../tools/tillr-gate/); `LIMIT_MS` in [`tools/gate/checks/gate-budget.py`](../../tools/gate/checks/gate-budget.py) |
+| Fast-tier admission cap | 9,000 ms | `FastTierCapMS` in [`tools/tillr-gate`](../../tools/tillr-gate/); `LimitMS` in [`tools/gate/gate_budget.go`](../../tools/gate/gate_budget.go) |
 | Watchdog sample interval, and silent samples to a stall | 1,000 ms, 60 | `WatchdogSampleInterval`, `WatchdogSilentSamples` |
 | Exit codes of `tillr-gate` | 0 pass, 1 fail, 2 usage, 3 unreadable input, 4 could not judge, 5 internal fault, 6 stalled | [`tools/tillr/record`](../../tools/tillr/record/) (`ExitOK` to `ExitInternal`), `ExitStalled` |
-| Exit codes of `just done` | 0 passed, 1 a check failed, 4 could not judge | [`tools/gate/done.py`](../../tools/gate/done.py) |
-| Exit codes of `tree-check.py` | 0, 1, 4 and 6, as `tillr-gate` | [`tools/gate/tree-check.py`](../../tools/gate/tree-check.py) |
+| Exit codes of `just done` | 0 passed, 1 a check failed, 4 could not judge | [`tools/gate/done.go`](../../tools/gate/done.go) |
+| Exit codes of `tree-check` | 0, 1, 4 and 6, as `tillr-gate` | [`tools/gate/tree_check.go`](../../tools/gate/tree_check.go) |
 | Result words in a verdict | `pass`, `fail`, `error`, `stalled`, `unavailable`, `disabled`, `skipped: no changed path is read`, `inherited`, `pass-inherited`, `over-budget` | [`tools/tillr-gate`](../../tools/tillr-gate/) (`ResultPass` and its siblings) |
 | Result store | `<git-common-dir>/tillr-gate/results/` | `openResultStore` |
-| `just done` logs | `<git-common-dir>/tillr-gate/done-logs/<head>/` | [`tools/gate/done.py`](../../tools/gate/done.py) |
+| `just done` logs | `<git-common-dir>/tillr-gate/done-logs/<head>/` | [`tools/gate/done.go`](../../tools/gate/done.go) |
 | Gate policy (and absent-file defaults) | `landing_strategy: after-merge` (default `before-merge`), `auto_revert: true` (default `false`), `lane_base: green` (default `green`), `budget_ms: 10000` (default `10000`) | [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json), `ReadGatePolicy` in [`tools/tillr-drain/redcap/policy.go`](../../tools/tillr-drain/redcap/policy.go) |
 | Go shard parameters | `SHARD_THRESHOLD = 100`; `MAX_SHARDS = 12` (`go-test-shards.py`) and `2 * os.cpu_count()` (`go_affected.py`) | [`tools/go-test-shards.py`](../../tools/go-test-shards.py), [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) |
 | Slow-gate alert thresholds | one run over 60 s; median of 20 over 90 s | [`config/tillr/watch/fast-gate-slow.toml`](../../config/tillr/watch/fast-gate-slow.toml) |

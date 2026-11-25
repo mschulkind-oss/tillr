@@ -2,8 +2,8 @@
   "id": "citations",
   "label": "citations against the caller's base and head",
   "command": [
-    "python3",
-    "tools/gate/checks/citations.py"
+    "tools/gate/repo-gate",
+    "citations"
   ],
   "scope": "change",
   "tier": "fast",
@@ -12,7 +12,7 @@
     "."
   ],
   "tools": [
-    "python3",
+    "go",
     "git"
   ],
   "remember": false

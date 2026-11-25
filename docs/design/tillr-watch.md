@@ -976,7 +976,7 @@ misbehave at run time. It prints one finding per line and exits non-zero on any 
 The linter lives in the engine package (`tools/tillr/watch`), receives the embedded rules from
 `tools/tillr-watch` alongside the drain's event registrations so that `unknown-signal` knows every
 registered kind, and runs in the gate's `workflows` check
-([`workflows.py`](../../tools/gate/checks/workflows.py)) on the repository root and on the
+([`workflows.go`](../../tools/gate/workflows.go)) on the repository root and on the
 `recorded-verdict` example ([D-TW61](#D-TW61)).
 
 ## 8. Open Questions

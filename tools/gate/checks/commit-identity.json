@@ -2,8 +2,8 @@
   "id": "commit-identity",
   "label": "commit-identity against the caller's base and head",
   "command": [
-    "python3",
-    "tools/gate/checks/commit-identity.py"
+    "tools/gate/repo-gate",
+    "commit-identity"
   ],
   "scope": "change",
   "tier": "fast",
@@ -12,7 +12,7 @@
     "."
   ],
   "tools": [
-    "python3",
+    "go",
     "git"
   ],
   "remember": false

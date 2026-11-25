@@ -448,20 +448,19 @@ def case_docs_declaration():
         "tools/pack-docs.py's MIRRORED_MODULES and this suite's MODULES disagree, so a link "
         "into a module would be rewritten as if it were (or were not) delivered")
     # The copy-to-source rule every path-keyed allowance follows: it inverts `destination`,
-    # and the gate's restatement of it (tree_common.excused_as) agrees on every shape.
-    _common_spec = importlib.util.spec_from_file_location(
-        "tree_common", ROOT / "tools" / "gate" / "checks" / "tree_common.py")
-    tree_common = importlib.util.module_from_spec(_common_spec)
-    _common_spec.loader.exec_module(tree_common)
-    assert tree_common.DELIVERED_PREFIX == pack_docs.DELIVERED_PREFIX
+    # and the gate's restatement of it (`tools/gate/repo-gate excused-as`) agrees on every shape.
+    def gate_excused_as(path):
+        res = subprocess.run([str(ROOT / "tools" / "gate" / "repo-gate"), "excused-as", path],
+                             cwd=ROOT, capture_output=True, text=True, check=True)
+        return res.stdout.rstrip("\n")
     assert pack_docs.DELIVERED_PREFIX == COPY.relative_to(ROOT).as_posix() + "/"
     for source in ("docs/design/a.md", "docs/tillr/design-status.md", "tools/tillr-loop/README.md",
                    "tools/tillr-view/README.md", "tools/tillr-run/backends/pi/run-pi"):
         copy = pack_docs.DELIVERED_PREFIX + pack_docs.destination(source)
         assert pack_docs.source_of(copy) == source, (copy, pack_docs.source_of(copy))
-        assert tree_common.excused_as(copy) == source, (copy, tree_common.excused_as(copy))
+        assert gate_excused_as(copy) == source, (copy, gate_excused_as(copy))
     for outside in ("docs/design/a.md", "tools/tillr-view/README.md", "yolo-packs/matt/README.md"):
-        assert pack_docs.source_of(outside) == outside == tree_common.excused_as(outside)
+        assert pack_docs.source_of(outside) == outside == gate_excused_as(outside)
     ok("the index declares exactly its `shipped` rows, names an undecided row, and agrees "
        "with this suite about which modules are mirrored; a delivered copy maps back to its "
        "source by one rule, which the gate's checks restate identically")

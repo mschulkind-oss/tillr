@@ -46,7 +46,7 @@ func init() {
 // gate, land and verdict programs are the caller's, named on the loop's argv.
 //
 // A program step is named rather than hardcoded because the gate and the land are the
-// caller's choice: `tillr-gate run --gate tools/gate/change-gate.py` and `tillr land pass` take
+// caller's choice: `tillr-gate run --gate tools/gate/repo-gate` and `tillr land pass` take
 // records this loop does not author (a gate.plan, an enqueued land.candidate), and a loop
 // that invented those records would be a second, silent implementation of two utilities.
 // The named program reads the candidate on its argv and answers with its exit code.

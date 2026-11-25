@@ -37,9 +37,37 @@ func TestBudgetDeclarationsPlanAndRunTheirOwnDirectory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	gateDir := filepath.Join(root, "tools", "gate")
+	gateEntries, err := os.ReadDir(filepath.Join("..", "gate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range gateEntries {
+		if entry.IsDir() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("..", "gate", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mode := os.FileMode(0o644)
+		if entry.Name() == "repo-gate" {
+			mode = 0o755
+		}
+		if err := os.WriteFile(filepath.Join(gateDir, entry.Name()), raw, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	absTillr, err := filepath.Abs(filepath.Join("..", "tillr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(absTillr, filepath.Join(root, "tools", "tillr")); err != nil {
+		t.Fatal(err)
+	}
 	git(t, root, "add", ".")
 	git(t, root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "checks")
-	code, out := filePlan(t, dir, []string{"tools/gate/checks/gate-budget.py"}, git(t, root, "rev-parse", "HEAD^{tree}"))
+	code, out := filePlan(t, dir, []string{"tools/gate/gate_budget.go"}, git(t, root, "rev-parse", "HEAD^{tree}"))
 	if code != 0 {
 		t.Fatalf("plan exit %d: %s", code, out)
 	}
@@ -48,8 +76,10 @@ func TestBudgetDeclarationsPlanAndRunTheirOwnDirectory(t *testing.T) {
 		t.Fatalf("budget and its test not planned: %s", out)
 	}
 	for _, check := range checks {
-		if !reflect.DeepEqual(check["reads"], []any{"tools/gate/checks/"}) {
-			t.Fatalf("check reads beyond its directory: %v", check)
+		if check["check_id"] == "gate-budget" {
+			if !reflect.DeepEqual(check["reads"], []any{"tools/gate/checks/"}) {
+				t.Fatalf("gate-budget reads beyond its directory: %v", check)
+			}
 		}
 	}
 	planPath := filepath.Join(scratch(t, "budget-plan"), "plan.json")

@@ -452,7 +452,7 @@ observatory-dev port="4318" *args:
 # the checks judge HEAD. --since <base> names the range; --fast runs the first pass
 # only; --only <id> runs one heavy check. It writes no verdict record and moves no ref.
 done *args:
-    @python3 tools/gate/done.py {{args}}
+    @tools/gate/repo-gate done {{args}}
 
 # Whole-module execution; prefer targeted `go test -run` while editing.
 go-test-shards module="tools/tillr-drain" *args:

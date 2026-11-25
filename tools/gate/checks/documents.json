@@ -2,8 +2,8 @@
   "id": "documents",
   "label": "documents against the caller's base and head",
   "command": [
-    "python3",
-    "tools/gate/checks/documents.py"
+    "tools/gate/repo-gate",
+    "documents"
   ],
   "scope": "change",
   "tier": "fast",
@@ -12,7 +12,7 @@
     "."
   ],
   "tools": [
-    "python3",
+    "go",
     "git",
     "uvx"
   ],

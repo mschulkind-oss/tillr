@@ -431,7 +431,7 @@ contradicted check green or turned `disabled` into `error`. One classifier is th
 - **One classifier.** Classification sites route through
   [`classify.go`](../../tools/tillr/checkresult/classify.go) (`Classify`, `Aggregate`), guarded by
   `TestClassificationScanGoSites`, `TestClassificationScanDrainSites` and
-  [`classification-scan.test.py`](../../tools/gate/classification-scan.test.py). `Aggregate` leaves
+  [`classification_scan_test.go`](../../tools/gate/classification_scan_test.go). `Aggregate` leaves
   `disabled` out of both failing and unknown outcomes.
 - **Recorded episodes.** `tillr-gate classify` and `tillr-gate enable` persist a disabled marker on
   an exact-fingerprint contradiction and keep answering `disabled` until `enable` clears it. The run

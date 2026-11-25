@@ -134,7 +134,7 @@ One line per step, with the program that owns it.
    ([boundary.go](../../tools/tillr-drain/drain/boundary.go)).
 7. **Block retirement.** The loop commits the removal of the item's own block before the gate
    ([retire.go](../../tools/tillr-drain/drain/retire.go)).
-8. **Gate.** `tillr-loop gate` runs [change-gate.py](../../tools/gate/change-gate.py) within the
+8. **Gate.** `tillr-loop gate` runs [repo-gate](../../tools/gate/repo-gate) within the
    budget and strategy of [gate-policy.json](../../config/tillr/gate-policy.json). A red check is
    replayed on the base before the candidate is blamed.
 9. **Land.** `tillr-loop land` runs `tillr-land`, which takes the land lock, squashes `base..head`

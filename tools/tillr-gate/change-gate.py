@@ -32,9 +32,22 @@ def supports_change_scope(runner):
                           help_result.stdout + b"\n" + (help_result.stderr or b"")))
 
 
+def _go_build_command():
+    go_build_decl = Path("tools/gate/checks/go-build.json")
+    if not go_build_decl.is_file():
+        return None
+    go_build_script = Path("tools/gate/checks/go-build.py")
+    if go_build_script.is_file():
+        return [sys.executable, str(go_build_script)]
+    repo_gate = Path("tools/gate/repo-gate")
+    if repo_gate.is_file():
+        return [str(repo_gate), "go-build"]
+    return None
+
+
 def go_build_needed(base, head):
     go_build_decl = Path("tools/gate/checks/go-build.json")
-    if not go_build_decl.is_file() or not Path("tools/gate/checks/go-build.py").is_file():
+    if not _go_build_command():
         return False
     try:
         reads = json.loads(go_build_decl.read_text()).get("reads")
@@ -52,7 +65,7 @@ def go_build_needed(base, head):
 def warm_trimmed_go_cache():
     """Run the go-build check once per Go version, unbounded, before the fast tier.
 
-    The fast tier's go-build trims source paths (tools/gate/checks/go-build.py), so a new
+    The fast tier's go-build trims source paths (tools/gate/go_build.go), so a new
     checkout reuses the shared build cache. The first trimmed build on a machine, though,
     compiles the standard library and every module from cold -- 19.9 s measured on
     2026-11-16 -- past the check's 9 s ceiling, which would hold that one item as
@@ -62,8 +75,8 @@ def warm_trimmed_go_cache():
     that could not run is tried again by the next gate, and one that ran (passing or
     failing) is recorded and not repeated. Its output goes to stderr, never stdout.
     """
-    go_build_script = Path("tools/gate/checks/go-build.py")
-    if not Path("tools/gate/checks/go-build.json").is_file() or not go_build_script.is_file():
+    go_build_cmd = _go_build_command()
+    if not go_build_cmd:
         return
     try:
         version = subprocess.run(["go", "env", "GOVERSION"], capture_output=True, text=True).stdout.strip()
@@ -78,7 +91,7 @@ def warm_trimmed_go_cache():
         return
     print(f"change-gate: warming the trimmed Go build cache for {version}, once, outside the fast tier's ceilings",
           file=sys.stderr)
-    warmed = subprocess.run([sys.executable, str(go_build_script)],
+    warmed = subprocess.run(go_build_cmd,
                             stdout=sys.stderr, env=check_environment())
     answer, = classify([{"check": "go-build", "source": "judging-program", "exit_code": warmed.returncode}])
     if answer["outcome"] in ("pass", "fail"):

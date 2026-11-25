@@ -99,7 +99,7 @@ type VerdictCheck struct {
 }
 
 // FastTierCapMS is the fast tier's admission cap: the sum of every fast `budget_ms` may
-// not exceed it. `tools/gate/checks/gate-budget.py` declares the same number as LIMIT_MS,
+// not exceed it. `tools/gate/gate_budget.go` declares the same number as LimitMS,
 // and TestTheTierCapIsTheAdmissionTestsLimit fails when the two disagree.
 // It is only an arithmetic admission cap, never an execution deadline.
 const FastTierCapMS = 9000

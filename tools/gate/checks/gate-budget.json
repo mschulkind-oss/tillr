@@ -1,10 +1,18 @@
 {
   "id": "gate-budget",
   "label": "fast check budgets total at most 9000 ms",
-  "command": ["python3", "tools/gate/checks/gate-budget.py", "tools/gate/checks/"],
+  "command": [
+    "tools/gate/repo-gate",
+    "gate-budget",
+    "tools/gate/checks/"
+  ],
   "scope": "change",
   "tier": "fast",
   "budget_ms": 300,
-  "reads": ["tools/gate/checks/"],
-  "tools": ["python3"]
+  "reads": [
+    "tools/gate/checks/"
+  ],
+  "tools": [
+    "go"
+  ]
 }

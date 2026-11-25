@@ -174,7 +174,7 @@ def source_of(path):
     is the same `docs/` path, and anything else (a module mirror file, the loop README) is
     under `tools/`. A path outside the delivered root is its own source.
 
-    tools/gate/checks/tree_common.py carries the same rule as `excused_as`, because a gate
+    tools/gate/tree_common.go carries the same rule as `excusedAs`, because a gate
     check reads nothing outside its own directory; tests/pack-sync.test.py asserts the two
     agree."""
     if not path.startswith(DELIVERED_PREFIX):

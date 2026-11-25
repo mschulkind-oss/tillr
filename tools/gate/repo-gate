@@ -1,0 +1,98 @@
+#!/bin/sh
+# repo-gate -- launcher for this repository's own gate checks (tools/gate).
+#
+# Builds the standalone tools/gate Go binary once per source digest into
+# ${XDG_CACHE_HOME:-$HOME/.cache}/tillr/repo-gate/repo-gate-<digest> and execs it in
+# the caller's exact working directory. A warm cache runs no Go command at all.
+set -eu
+
+bin=repo-gate
+case $0 in
+*/*) script_dir=${0%/*} ;;
+*) script_dir=. ;;
+esac
+script_dir=$(cd "$script_dir" && pwd)
+tillr_dir=${script_dir%/*}/tillr
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/tillr/repo-gate
+
+if command -v sha256sum >/dev/null 2>&1; then
+	sha256() { sha256sum | cut -d' ' -f1; }
+else
+	sha256() { shasum -a 256 | cut -d' ' -f1; }
+fi
+
+current=$cache/current-$bin-$(printf %s "$script_dir" | sha256 | cut -c1-16)
+
+newer() {
+	for entry in "$1"/*; do
+		[ -e "$entry" ] || continue
+		if [ -d "$entry" ]; then
+			case ${entry##*/} in
+			node_modules | dist | checks) continue ;;
+			esac
+			newer "$entry" && return 0
+		else
+			case ${entry##*/} in
+			*_test.go) ;;
+			*.go | go.mod | go.sum) [ "$entry" -nt "$current" ] && return 0 ;;
+			esac
+		fi
+	done
+	return 1
+}
+
+if [ -x "$current" ] && ! newer "$script_dir" && ! newer "$tillr_dir"; then
+	exec "$current" "$@"
+fi
+
+sources() {
+	for dir in "$@"; do
+		for entry in "$dir"/*; do
+			[ -e "$entry" ] || continue
+			if [ -d "$entry" ]; then
+				case ${entry##*/} in
+				node_modules | dist | checks) continue ;;
+				esac
+				sources "$entry"
+			else
+				case ${entry##*/} in
+				*_test.go) ;;
+				*.go | go.mod | go.sum) echo "$entry" ;;
+				esac
+			fi
+		done
+	done
+}
+
+go_ver=$(go version 2>/dev/null || echo unknown)
+digest=$(
+	{
+		printf '%s\n' "$go_ver"
+		sources "$script_dir" "$tillr_dir" | LC_ALL=C sort | xargs cat
+	} | sha256
+)
+
+built=$cache/$bin-$digest
+
+if [ ! -x "$built" ]; then
+	command -v go >/dev/null 2>&1 || {
+		echo "$bin: no cached binary for $digest and no go toolchain to build it" >&2
+		exit 1
+	}
+	mkdir -p "$cache"
+	tmp=$built.$$
+	trap 'rm -f "$tmp"' EXIT HUP INT TERM
+	(
+		cd "$script_dir"
+		CGO_ENABLED=0 GOFLAGS=-trimpath go build -o "$tmp" .
+	) || exit 1
+	if [ -x "$built" ]; then
+		rm -f "$tmp"
+	else
+		mv -f "$tmp" "$built"
+	fi
+	trap - EXIT HUP INT TERM
+fi
+
+ln -sfn "$built" "$current"
+exec "$built" "$@"

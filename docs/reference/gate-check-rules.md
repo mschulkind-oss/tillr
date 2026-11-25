@@ -10,10 +10,9 @@ covers:
   - tools/tillr/checkresult/classify.go
   - tools/tillr-drain/drain/flaky_repair.go
   - tools/tillr-drain/drain/gate_stall.go
-  - tools/gate/checks/elapsed-time.py
+  - tools/gate/elapsed_time.go
   - tools/gate-timing-declarations.json
-  - tools/gate/checks/change_common.py
-  - tools/gate/checks/citations.py
+  - tools/gate/change_common.go
   - tools/gate/checks/citations.json
 tags: [gate, checks, flake, timing, quarantine, reference]
 summary: "Three standing rules for the gate's checks, each with the code that enforces it today: a failed check is diagnosed from its one run and never re-run to see whether it passes; a check asserts counts, orders and equalities over what the product recorded and never an elapsed duration; and a check set aside from the verdict is narrow, carries the item that repairs it, applies only to the inputs it was recorded against, and is counted apart from passes. A fourth rule covers documents: a commit cited as evidence is reachable from the head, is an upstream pin, or is marked unlanded."
@@ -36,7 +35,7 @@ the dispatch side's subject, in
 | Component | Lives in |
 | :--- | :--- |
 | Running a check once, and the log its verdict names | `tools/tillr-gate/run.go` (`runPlanChecks`, `runCheck`, `VerdictCheck.LogRef`), `tools/tillr-gate/gate.go` (`RunGate`, `writeTriage`) |
-| The timing rule and its scan | `tools/gate/checks/elapsed-time.py`, declared in `tools/gate/checks/elapsed-time.json` |
+| The timing rule and its scan | `tools/gate/elapsed_time.go` (`tools/gate/repo-gate elapsed-time`), declared in `tools/gate/checks/elapsed-time.json` |
 | Recorded exceptions to the timing rule | `tools/gate-timing-declarations.json` |
 | Disabling a contradicted check, and re-enabling it | `tools/tillr/checkresult/classify.go` (`Classify`), `tools/tillr-gate/enable.go`, `tools/tillr-drain/drain/flaky_repair.go` |
 
@@ -153,7 +152,7 @@ document cites as evidence must be history the reader can reach from the checked
 need not be an ancestor of this repository's head. **Unlanded** means a repository change the
 checked head does not contain; the line marker `[unlanded]` makes that visible to a reader.
 
-`unreachable_citations` in `tools/gate/checks/change_common.py` judges the lines a change adds
+`unreachableCitations` in `tools/gate/change_common.go` judges the lines a change adds
 to tracked Markdown between a caller-supplied base and head. It reads the committed document,
 never a dirty working copy, and takes fence membership from the whole document. For each
 lowercase hexadecimal token on an added line:
@@ -179,10 +178,10 @@ under the origin remote, is not an upstream ref.
 > [!WARNING]
 > Do not rename a lane ref to obtain the upstream exemption. Mark the line `[unlanded]`.
 
-To run it alone: `python3 tools/gate/checks/citations.py BASE HEAD`. It exits 0 with no finding,
+To run it alone: `tools/gate/repo-gate citations BASE HEAD`. It exits 0 with no finding,
 1 with findings and 4 when it cannot judge, such as a missing revision or a base that is not an
-ancestor of the head. `test_citations_markers_fences_and_upstream_pins` in
-`tools/gate/checks/change_checks_test.py` holds the lane-only, marker, fence and upstream cases;
+ancestor of the head. `TestCitationsMarkersFencesAndUpstreamPins` in
+`tools/gate/change_checks_test.go` holds the lane-only, marker, fence and upstream cases;
 it does not exercise every accepted ref prefix.
 
 ## What enforces each rule today
@@ -192,12 +191,12 @@ it does not exercise every accepted ref prefix.
 | A failed check is run once and read from its own output | `runPlanChecks` and `runCheck` in `tools/tillr-gate/run.go` run each planned check once and record its `log_ref`; `RunGate` and `writeTriage` in `tools/tillr-gate/gate.go` do the same for a named gate program |
 | A check that did not answer is not judged, and a stall is gated once more | `gateResult` in `tools/tillr-gate/gate.go`, the watchdog in `tools/tillr-gate/watchdog.go`, and `tools/tillr-drain/drain/gate_stall.go` |
 | A red candidate goes back to its worker with the failure named, with no wait and no count | `tools/tillr-drain`, described under [landing principle 11](../design/landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) |
-| No check asserts elapsed time | `tools/gate/checks/elapsed-time.py`, for the test files a change adds or edits. A scan of the whole test corpus is not enforced by code |
+| No check asserts elapsed time | `tools/gate/elapsed_time.go`, for the test files a change adds or edits. A scan of the whole test corpus is not enforced by code |
 | An existing timing assertion is declared with its reason and repair | The same check, against `tools/gate-timing-declarations.json`; a declaration that matches no hit fails it |
 | A deadline's bound is far past expectation; a missing observable is recorded in the product | Not enforced by code. These are review rules |
 | A check is disabled only on a contradicted fingerprint, per episode | `Classify` and `classifyContradiction` in `tools/tillr/checkresult/classify.go`; the marker is written by `tools/tillr-gate/enable.go` |
 | A disabled check names its repair item | `sweepDisabledMarkers` in `tools/tillr-drain/drain/flaky_repair.go` |
-| A commit cited on an added Markdown line is reachable, an upstream pin, or marked `[unlanded]` | `unreachable_citations` in `tools/gate/checks/change_common.py`, declared by `tools/gate/checks/citations.json` |
+| A commit cited on an added Markdown line is reachable, an upstream pin, or marked `[unlanded]` | `unreachableCitations` in `tools/gate/change_common.go`, declared by `tools/gate/checks/citations.json` |
 | A disabled check is reported and counted apart from passes | `writeRunSummary` in `tools/tillr-gate`, held by `TestDisabledCheckExcludedFromPassAndFailCountsAndListedAsDisabled` |
 | A set-aside of single named cases is narrow, ticketed and bound to file content | Not enforced by code |
 
@@ -205,6 +204,6 @@ it does not exercise every accepted ref prefix.
 
 | Value | Setting | Defined in |
 | :--- | :--- | :--- |
-| Kinds a timing declaration may carry | `liveness`, `backlog` | `tools/gate/checks/elapsed-time.py` (`parse_timing_declarations`) |
+| Kinds a timing declaration may carry | `liveness`, `backlog` | `tools/gate/elapsed_time.go` (`parseTimingDeclarations`) |
 | Result words that are not a verdict on the candidate | `error`, `stalled`, `unavailable`, `disabled`, `over-budget` | `tools/tillr-gate/run.go` |
 | Prefix of a filed repair item for a disabled check | `flaky-` | `tools/tillr-drain/drain/flaky_repair.go` (`FlakyRepairPrefix`) |

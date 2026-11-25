@@ -135,12 +135,9 @@ func TestFixerGateJudgesOwnDiffThenNamedChecksAndLands(t *testing.T) {
 				}
 				writeForkFile(t, path, text)
 			}
-			for _, name := range []string{"tools/gate/change-gate.py", "tools/gate/classify.py"} {
-				raw, err := os.ReadFile(filepath.Join(repo, name))
-				if err != nil {
-					t.Fatal(err)
-				}
-				write(name, string(raw))
+			write("tools/gate/repo-gate", "#!/bin/sh\nexec "+filepath.Join(repo, "tools", "gate", "repo-gate")+" \"$@\"\n")
+			if err := os.Chmod(filepath.Join(f.root, "tools", "gate", "repo-gate"), 0o755); err != nil {
+				t.Fatal(err)
 			}
 			write("tools/tillr-drain/go.mod", "module example.invalid/repair\n\ngo 1.22\n")
 			write("tools/tillr-drain/repair.go", "package repair\n")
