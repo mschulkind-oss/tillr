@@ -102,6 +102,50 @@ func TestRequestFaceFilesTheWords(t *testing.T) {
 	}
 }
 
+func TestRequestFaceRefusesAnIdenticalClosedRequest(t *testing.T) {
+	path, s := placeFixture(t, "a")
+	const words = "Do the small thing.\n"
+	args := []string{"--store", path, "--title", "Small thing", "--workflow", "single-worker@v1"}
+	if code, out := requestRun(t, words, args...); code != 0 {
+		t.Fatalf("initial filing exited %d: %s", code, out)
+	}
+	var id string
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		return r.QueryRow(`SELECT item_id FROM request_words`).Scan(&id)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := run(t, "close", "--store", path, "--item", id, "--reason", "no longer needed", "--by", "owner"); code != 0 {
+		t.Fatalf("close exited %d: %s", code, out)
+	}
+	code, out := requestRun(t, words, args...)
+	if code == 0 || !strings.Contains(out, "matched closed item "+id) || !strings.Contains(out, "nothing was queued") {
+		t.Fatalf("closed refile exited %d: %s", code, out)
+	}
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		var state string
+		var count int
+		if err := r.QueryRow(`SELECT state, (SELECT count(*) FROM items) FROM items WHERE item_id=?`, id).Scan(&state, &count); err != nil {
+			return err
+		}
+		if state != "closed" || count != 2 {
+			t.Errorf("after refusal: state=%q, item count=%d; want closed and 2 items", state, count)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "tillr item reopen --item "+id+" --reason <text> --by <who>") {
+		t.Fatalf("closed refile lacks reopen instructions: %s", out)
+	}
+	if code, out := run(t, "reopen", "--store", path, "--item", id, "--reason", "work is needed again", "--by", "owner"); code != 0 {
+		t.Fatalf("reopen exited %d: %s", code, out)
+	}
+	if code, out := requestRun(t, words, args...); code != 0 || !strings.Contains(out, `"place":2`) {
+		t.Fatalf("reopened refile exited %d: %s", code, out)
+	}
+}
+
 func requestRunStreams(t *testing.T, words string, args ...string) (int, string, string) {
 	t.Helper()
 	cmd := exec.Command(bin, append([]string{"request"}, args...)...)

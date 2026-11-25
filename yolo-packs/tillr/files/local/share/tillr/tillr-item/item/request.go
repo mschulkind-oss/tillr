@@ -160,21 +160,30 @@ func normalizeRequest(f *RequestFiling) error {
 // FileRequest files one request in the caller's transaction and places it. It does no I/O
 // but the store's: the words arrive in the filing, and the workflow file was checked
 // (RequestWorkflowCheck) before the transaction opened. Filing the same words with the same
-// choices again answers the first item's place and writes nothing; the same words with
-// different choices are refused, naming the item they already filed.
+// choices again answers the first item's place and writes nothing, unless the item is
+// closed. The same words with different choices are refused, naming the item they already
+// filed.
 func FileRequest(ctx context.Context, tx *store.Tx, f RequestFiling) (record.Envelope, error) {
 	if err := normalizeRequest(&f); err != nil {
 		return record.Envelope{}, err
 	}
 	hash, _ := IdeaHash(f.Words)
 	input := requestInputHash(f)
-	var id, held string
-	err := tx.Reader().QueryRow(`SELECT item_id, input_hash FROM request_words WHERE words_hash=?`, hash).Scan(&id, &held)
+	r := tx.Reader()
+	var id, held, state string
+	err := r.QueryRow(`SELECT item_id, input_hash, state FROM request_words JOIN items USING(item_id) WHERE words_hash=?`, hash).Scan(&id, &held, &state)
 	if err == nil {
 		if held != input {
 			return record.Envelope{}, Rejectionf("request-differs", id, "these words already filed %s with a different title, seat, workflow, criteria, express choice or dependencies; change that item, or file different words", id)
 		}
-		return queuePosition(tx.Reader(), "item.request", id, f.At)
+		d, err := itemDefinition(r)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+		if state == d.Closed {
+			return record.Envelope{}, Rejectionf("request-closed", id, "request matched closed item %s; nothing was queued. To resume it, use tillr item reopen --item %s --reason <text> --by <who>", id, id)
+		}
+		return queuePosition(r, "item.request", id, f.At)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return record.Envelope{}, Internalf("reading request words: %v", err)
