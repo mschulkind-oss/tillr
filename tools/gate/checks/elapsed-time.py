@@ -37,7 +37,7 @@ UNDECLARED_PREFIX = (
     "tools/gate-timing-declarations.json with its reason and its repair: "
 )
 SHORT_DEADLINE_PREFIX = (
-    "a Go test waits with a short positive time.After deadline (< 5m), which a loaded machine "
+    "a Go test waits with a short positive deadline (< 5m), which a loaded machine "
     "can miss; wait with hangGuard (5 minutes) instead of a short positive deadline, or declare "
     "it in tools/gate-timing-declarations.json with its reason and its repair: "
 )
@@ -61,6 +61,8 @@ GO_CONST_BLOCK_START = re.compile(r"^\s*const\s*\(\s*$")
 GO_CONST_BLOCK_ENTRY = re.compile(r"^\s*(\w+)(?:\s+[\w.*\[\]]+)?\s*=\s*(.+)$")
 GO_DIRECT_AFTER_CASE = re.compile(r"^\s*case\s*<-\s*time\.After\(")
 GO_ASSIGN_AFTER = re.compile(r"^\s*(\w+)\s*:?=\s*time\.After\(")
+GO_ASSIGN_NOW_ADD = re.compile(r"^\s*(?:for\s+)?(\w+)\s*:?=\s*time\.Now\(\)\.Add\(")
+GO_ASSIGN_TIMER = re.compile(r"^\s*(\w+)\s*:?=\s*time\.NewTimer\(")
 GO_FAIL_OR_KILL = re.compile(
     r"\b(?:t\.(?:Fatal|Fatalf|Error|Errorf|Fail|FailNow)|panic|Process\.Kill)\s*\("
 )
@@ -263,7 +265,7 @@ def _var_passed_to_call(code: str, var: str) -> bool:
 
 
 def short_deadline_hits_in_text(name: str, text: str):
-    """Yield (name, line_number, snippet) for short positive time.After deadlines in *_test.go."""
+    """Yield (name, line_number, snippet) for short positive deadlines in *_test.go."""
     if not name.endswith("_test.go"):
         return
     lines = text.splitlines()
@@ -282,7 +284,7 @@ def short_deadline_hits_in_text(name: str, text: str):
                 if rest.startswith(":"):
                     colon_pos = code.find(":", after_idx)
                     dur = resolve_go_duration_seconds(expr, consts)
-                    if dur is not None and dur < HANG_GUARD_SECONDS:
+                    if dur is not None and 0 < dur < HANG_GUARD_SECONDS:
                         if _case_body_fails(lines, idx, colon_pos):
                             yield name, idx + 1, snippet
             continue
@@ -295,7 +297,7 @@ def short_deadline_hits_in_text(name: str, text: str):
                 continue
             expr, _ = parsed
             dur = resolve_go_duration_seconds(expr, consts)
-            if dur is None or dur >= HANG_GUARD_SECONDS:
+            if dur is None or dur <= 0 or dur >= HANG_GUARD_SECONDS:
                 continue
             case_re = re.compile(r"^\s*case\s*<-\s*" + re.escape(var) + r"\s*:")
             reassign_re = re.compile(r"\b" + re.escape(var) + r"\s*:?=")
@@ -311,6 +313,55 @@ def short_deadline_hits_in_text(name: str, text: str):
                 elif _var_passed_to_call(code_k, var):
                     yield name, idx + 1, snippet
                     break
+            continue
+
+        m_now = GO_ASSIGN_NOW_ADD.match(code)
+        if m_now:
+            var = m_now.group(1)
+            parsed = _extract_balanced_parens(code, m_now.end() - 1)
+            if parsed is None:
+                continue
+            expr, after_idx = parsed
+            dur = resolve_go_duration_seconds(expr, consts)
+            if dur is None or dur <= 0 or dur >= HANG_GUARD_SECONDS:
+                continue
+            poll_re = re.compile(
+                r"\btime\.(?:Now\(\)\.(?:After|Before)|Until)\(\s*" + re.escape(var) + r"\s*\)"
+            )
+            if poll_re.search(code[after_idx:]):
+                yield name, idx + 1, snippet
+                continue
+            reassign_re = re.compile(r"\b" + re.escape(var) + r"\s*:?=")
+            for k in range(idx + 1, len(lines)):
+                code_k = _strip_go_line_comment(lines[k])
+                if re.match(r"^\s*func\b", code_k) or reassign_re.search(code_k):
+                    break
+                if poll_re.search(code_k):
+                    yield name, idx + 1, snippet
+                    break
+            continue
+
+        m_timer = GO_ASSIGN_TIMER.match(code)
+        if m_timer:
+            var = m_timer.group(1)
+            parsed = _extract_balanced_parens(code, m_timer.end() - 1)
+            if parsed is None:
+                continue
+            expr, _ = parsed
+            dur = resolve_go_duration_seconds(expr, consts)
+            if dur is None or dur <= 0 or dur >= HANG_GUARD_SECONDS:
+                continue
+            case_re = re.compile(r"^\s*case\s*<-\s*" + re.escape(var) + r"\.C\s*:")
+            reassign_re = re.compile(r"\b" + re.escape(var) + r"\s*:?=")
+            for k in range(idx + 1, len(lines)):
+                code_k = _strip_go_line_comment(lines[k])
+                if re.match(r"^\s*func\b", code_k) or reassign_re.search(code_k):
+                    break
+                if case_re.match(code_k):
+                    colon_pos = code_k.find(":")
+                    if _case_body_fails(lines, k, colon_pos):
+                        yield name, idx + 1, snippet
+                        break
 
 
 def parse_timing_declarations(raw: str, label: str = TIMING_DECLARATIONS) -> list[dict]:

@@ -92,7 +92,7 @@ func TestRestartThroughTheShippedLauncherMovesOntoChangedSourceAndAnswersAlready
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 	waitFor := func(what string, ok func() bool) {
 		t.Helper()
-		deadline := time.Now().Add(300 * time.Second)
+		deadline := time.Now().Add(hangGuard)
 		for !ok() {
 			if time.Now().After(deadline) {
 				body, _ := os.ReadFile(out)
@@ -190,7 +190,7 @@ exec "`+realItem+`" "$@"
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 	waitFor := func(what string, ok func() bool) {
 		t.Helper()
-		deadline := time.Now().Add(60 * time.Second)
+		deadline := time.Now().Add(hangGuard)
 		for !ok() {
 			if time.Now().After(deadline) {
 				body, _ := os.ReadFile(out)

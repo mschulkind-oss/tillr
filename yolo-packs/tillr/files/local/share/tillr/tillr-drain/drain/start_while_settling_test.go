@@ -144,7 +144,7 @@ func waitSettlingStart(t *testing.T, steps *settlingStartSteps, want string) {
 
 func waitStartSnapshot(t *testing.T, l *Loop, ready func(startSnapshot) bool) startSnapshot {
 	t.Helper()
-	deadline := time.NewTimer(15 * time.Second)
+	deadline := time.NewTimer(hangGuard)
 	defer deadline.Stop()
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()

@@ -69,7 +69,7 @@ func (c *cliChild) wait(t *testing.T) error {
 
 func eventually(t *testing.T, check func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(hangGuard); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		if check() {
 			return
 		}

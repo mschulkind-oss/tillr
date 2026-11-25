@@ -103,7 +103,7 @@ func (v *servedView) digest() (string, bool) {
 
 func (v *servedView) waitServing(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for time.Now().Before(deadline) {
 		if _, ok := v.digest(); ok {
 			return
@@ -152,7 +152,7 @@ func TestViewRestartReplacesTheServerInPlaceAndTheHeaderReportsIt(t *testing.T) 
 		t.Fatal("the server's process id did not survive the restart")
 	}
 	var after string
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for time.Now().Before(deadline) {
 		if d, ok := v.digest(); ok && d != before {
 			after = d
@@ -201,7 +201,7 @@ func TestViewRestartKeepsServingWhenTheExecFailsAfterTheCheck(t *testing.T) {
 	if code == 0 || !strings.Contains(answer, "refused") || !strings.Contains(answer, "exec") {
 		t.Fatalf("restart --wait = %d %q", code, answer)
 	}
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		if d, ok := v.digest(); ok && d == before {
 			return
@@ -252,7 +252,7 @@ func TestViewRestartThroughALauncherReachesTheLaunchersBuild(t *testing.T) {
 	if answer, code := v.restart(t); code != 0 || !strings.Contains(answer, "restarted") {
 		t.Fatalf("restart --wait = %d %q", code, answer)
 	}
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		if d, ok := v.digest(); ok && d != before {
 			return
@@ -311,7 +311,7 @@ func TestViewRestartThroughTheShippedLauncherMovesOntoChangedSource(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { v.cmd.Process.Kill(); v.cmd.Wait() })
-	deadline := time.Now().Add(300 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	var before string
 	for {
 		if d, ok := v.digest(); ok {
@@ -349,7 +349,7 @@ func TestViewRestartThroughTheShippedLauncherMovesOntoChangedSource(t *testing.T
 	if answer := restartVia(); !strings.Contains(answer, "restarted") {
 		t.Fatalf("changed source answered %q", answer)
 	}
-	deadline = time.Now().Add(60 * time.Second)
+	deadline = time.Now().Add(hangGuard)
 	for {
 		if d, ok := v.digest(); ok && d != before {
 			break

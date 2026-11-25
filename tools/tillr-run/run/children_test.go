@@ -84,7 +84,7 @@ func TestHelperDetachedSession(t *testing.T) {
 			os.Exit(3)
 		}
 		readyFile := filepath.Join(dir, "ready")
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		for deadline := time.Now().Add(hangGuard); time.Now().Before(deadline); {
 			if _, err := os.Stat(readyFile); err == nil {
 				break
 			}
@@ -105,7 +105,7 @@ func TestHelperDetachedSession(t *testing.T) {
 			os.Exit(5)
 		}
 		nestedFile := filepath.Join(dir, "nested.pid")
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		for deadline := time.Now().Add(hangGuard); time.Now().Before(deadline); {
 			if _, err := os.Stat(nestedFile); err == nil {
 				break
 			}

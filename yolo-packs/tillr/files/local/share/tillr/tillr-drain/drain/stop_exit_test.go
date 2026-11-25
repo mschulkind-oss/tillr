@@ -24,7 +24,7 @@ func TestStopWaitsForProcessExitNotSessionReceipt(t *testing.T) {
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	waitForMarker := func(path string) {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(hangGuard)
 		for {
 			if _, err := os.Stat(path); err == nil {
 				return

@@ -102,7 +102,7 @@ exit 0
 			done <- gateRes{out: out, err: err}
 		}()
 
-		deadline := time.Now().Add(10 * time.Second)
+		deadline := time.Now().Add(hangGuard)
 		for {
 			if _, err := os.Stat(enteredFile); err == nil {
 				break

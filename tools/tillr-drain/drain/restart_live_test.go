@@ -337,7 +337,7 @@ func (s *rollScenario) output(t *testing.T) string {
 
 func (s *rollScenario) waitFor(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for !ok() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s\n%s", what, s.output(t))

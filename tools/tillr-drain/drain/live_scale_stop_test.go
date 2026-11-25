@@ -92,7 +92,7 @@ exec "`+sibling(t, "run")+`" "$@"`)
 	}
 	waitFor := func(what string, check func() bool) {
 		t.Helper()
-		deadline := time.Now().Add(15 * time.Second)
+		deadline := time.Now().Add(hangGuard)
 		for !check() {
 			if time.Now().After(deadline) {
 				t.Fatalf("timed out waiting for %s", what)
@@ -109,7 +109,7 @@ exec "`+sibling(t, "run")+`" "$@"`)
 		return false
 	}
 	scale("2")
-	waitForFile(t, filepath.Join(markers, second+".started"), 15*time.Second)
+	waitForFile(t, filepath.Join(markers, second+".started"), hangGuard)
 	if n := len(terminalRunRows(t, f.store)); n != 0 {
 		t.Fatalf("scaling ended a run: %d terminal rows", n)
 	}
@@ -215,7 +215,7 @@ while [ ! -f "$FRESH_LANES_TEST/$TILLR_RUN_ID.release" ] && [ ! -f "$FRESH_LANES
 	// Wait until at least one pass has completed in drain_passes so pass-start
 	// refreshLaneCount and full ready-set planning have both executed.
 	ctx := context.Background()
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		s, err := store.OpenRead(ctx, f.store)
 		if err != nil {

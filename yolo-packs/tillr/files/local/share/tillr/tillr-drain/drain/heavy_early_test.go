@@ -26,7 +26,7 @@ func TestHeavyRedCheckIsRevertedWhileTheProofContinues(t *testing.T) {
 		heavyCheckEnded(ctx, quick)
 		if first {
 			first = false
-			for until := time.Now().Add(time.Minute); time.Now().Before(until); time.Sleep(10 * time.Millisecond) {
+			for until := time.Now().Add(hangGuard); time.Now().Before(until); time.Sleep(10 * time.Millisecond) {
 				if rows := h.reverts(); len(rows) == 1 && rows[0].Result == "reverted" {
 					seen = true
 					break

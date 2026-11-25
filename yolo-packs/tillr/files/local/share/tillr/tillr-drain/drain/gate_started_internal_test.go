@@ -47,7 +47,7 @@ exit 0
 	}
 	defer steps.stopDetachedGate(h1)
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		if _, err := os.Stat(enteredFile); err == nil {
 			break

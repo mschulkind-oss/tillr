@@ -33,7 +33,7 @@ func awaitChunk(t *testing.T, c <-chan string) string {
 }
 func awaitAttached(t *testing.T, s *store.Store) {
 	t.Helper()
-	until := time.Now().Add(3 * time.Second)
+	until := time.Now().Add(hangGuard)
 	for time.Now().Before(until) {
 		var attached bool
 		err := s.ReadTx(context.Background(), func(r *store.Reader) error {

@@ -849,7 +849,7 @@ PY
 
 	stopDone := make(chan error, 1)
 	go func() {
-		deadline := time.Now().Add(10 * time.Second)
+		deadline := time.Now().Add(hangGuard)
 		var hungStartMS int64
 		maxFinishedMS := int64(10) // pack-sync wall_ms in gate.fast.verdict.json
 		for {

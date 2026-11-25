@@ -59,7 +59,7 @@ func runDrainStubHelper() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat("exit"); err == nil {
 			return
@@ -136,7 +136,7 @@ func startDrainStub(t *testing.T, root string, procName string, argv ...string) 
 	if len(wantComm) > 15 {
 		wantComm = wantComm[:15]
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		if info, ok := Process(cmd.Process.Pid); ok && info.Comm == wantComm {
 			break
@@ -513,7 +513,7 @@ func TestStopLeavesLaunchedLoopRunning(t *testing.T) {
 		t.Fatalf("line2 = %q, want 'watching'", line2)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		info, ok := Process(loopPID)
 		if ok && info.Comm == "tillr-drain-abc" {
@@ -1029,7 +1029,7 @@ func TestRestartInConsumerUsesPathProgramsWithoutTillrBuild(t *testing.T) {
 		t.Errorf("consumer should not build from HEAD:\n%s", outStr)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		if data, err := os.ReadFile(logFile); err == nil {
 			s := string(data)
@@ -1152,7 +1152,7 @@ esac
 		_ = stopCmd.Run()
 	}()
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	var oldLoopPID int
 	for {
 		if data, err := os.ReadFile(pidFile); err == nil && len(bytes.TrimSpace(data)) > 0 {
@@ -1204,7 +1204,7 @@ esac
 	if !reflect.DeepEqual(recorded, wantRec) {
 		t.Fatalf("recorded launch = %v, want %v", recorded, wantRec)
 	}
-	deadline = time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(hangGuard)
 	for {
 		if _, err := os.Stat(filepath.Join(work, "keeper.log")); err == nil {
 			break

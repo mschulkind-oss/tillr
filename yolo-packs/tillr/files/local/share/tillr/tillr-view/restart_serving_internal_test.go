@@ -128,7 +128,7 @@ func TestRestartClosesTheLiveChannelGoingAway(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		srv.socketMu.Lock()
 		n := len(srv.sockets)
@@ -142,7 +142,7 @@ func TestRestartClosesTheLiveChannelGoingAway(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	srv.closeSockets()
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(hangGuard))
 	_, _, err = conn.ReadMessage()
 	if !websocket.IsCloseError(err, websocket.CloseGoingAway) {
 		t.Fatalf("the client saw %v, want a going-away close", err)
@@ -232,7 +232,7 @@ func TestAnUpgradeInFlightIsClosedBeforeTheRestartProceeds(t *testing.T) {
 	<-swept
 	conn := <-clients
 	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(hangGuard))
 	if _, _, err := conn.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseGoingAway) {
 		t.Fatalf("the in-flight upgrade's socket saw %v, want a going-away close", err)
 	}

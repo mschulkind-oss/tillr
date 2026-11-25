@@ -860,8 +860,9 @@ sys.exit(rc)
         # Unrelated non-test and clean deadline-wait test changes pass.
         (self.repo / "pkg/clean_test.go").write_text(
             "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "const hangGuard = 5 * time.Minute\n"
             "func TestDeadline(t *testing.T) {\n"
-            "\tdeadline := time.Now().Add(time.Second)\n"
+            "\tdeadline := time.Now().Add(hangGuard)\n"
             "\tif time.Now().Before(deadline) {}\n"
             "}\n"
         )
@@ -1215,6 +1216,122 @@ sys.exit(rc)
         declared_head = self.commit()
         declared_res = self.check("elapsed-time", assigned_call_head, declared_head)
         self.assertEqual(declared_res.returncode, 0, declared_res.stdout + declared_res.stderr)
+
+    def test_elapsed_time_check_refuses_short_polling_deadlines_and_allows_non_polling_waits(self):
+        (self.repo / "pkg").mkdir()
+
+        # 1. Passing cases: hangGuard, 5 * time.Minute, negative time.Now().Add,
+        # non-polling time.Now().Add fixture timestamp, and negative-wait time.NewTimer.
+        (self.repo / "pkg/polling_ok_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "const hangGuard = 5 * time.Minute\n"
+            "func TestPollingAllowed(t *testing.T) {\n"
+            "\td1 := time.Now().Add(hangGuard)\n"
+            "\tfor !time.Now().After(d1) {\n\t\tbreak\n\t}\n"
+            "\td2 := time.Now().Add(5 * time.Minute)\n"
+            "\tif time.Now().Before(d2) {}\n"
+            "\tpast := time.Now().Add(-500 * time.Millisecond)\n"
+            "\t_ = time.Now().After(past)\n"
+            "\tfuture := time.Now().Add(time.Second)\n"
+            "\t_ = future\n"
+            "\ttimer := time.NewTimer(200 * time.Millisecond)\n"
+            "\tdefer timer.Stop()\n"
+            "\tev := make(chan struct{})\n"
+            "\tselect {\n\tcase <-ev:\n\t\tt.Fatal(\"unexpected event\")\n\tcase <-timer.C:\n\t\treturn\n\t}\n"
+            "}\n"
+        )
+        self.git("add", "pkg/polling_ok_test.go")
+        ok_head = self.commit()
+        ok_res = self.check("elapsed-time", self.base, ok_head)
+        self.assertEqual(ok_res.returncode, 0, ok_res.stdout + ok_res.stderr)
+
+        # 2. Assigned deadline := time.Now().Add(90 * time.Second) with time.Now().After(deadline) is refused.
+        (self.repo / "pkg/poll_after_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "func TestPollAfter(t *testing.T) {\n"
+            "\tdeadline := time.Now().Add(90 * time.Second)\n"
+            "\tfor {\n"
+            "\t\tif time.Now().After(deadline) {\n"
+            "\t\t\tt.Fatalf(\"never answered\")\n"
+            "\t\t}\n"
+            "\t}\n"
+            "}\n"
+        )
+        self.git("add", "pkg/poll_after_test.go")
+        after_head = self.commit()
+        after_res = self.check("elapsed-time", ok_head, after_head)
+        self.assertEqual(after_res.returncode, 1, after_res.stdout + after_res.stderr)
+        self.assertIn("pkg/poll_after_test.go:7: deadline := time.Now().Add(90 * time.Second)", after_res.stdout)
+        self.assertIn("hangGuard", after_res.stdout)
+
+        # 3. Inline for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); is refused.
+        (self.repo / "pkg/poll_for_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "func TestPollFor(t *testing.T) {\n"
+            "\tfor deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {\n"
+            "\t}\n"
+            "\tt.Fatal(\"timed out\")\n"
+            "}\n"
+        )
+        self.git("add", "pkg/poll_for_test.go")
+        for_head = self.commit()
+        for_res = self.check("elapsed-time", after_head, for_head)
+        self.assertEqual(for_res.returncode, 1, for_res.stdout + for_res.stderr)
+        self.assertIn(
+            "pkg/poll_for_test.go:7: for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {",
+            for_res.stdout,
+        )
+
+        # 4. Assigned deadline := time.NewTimer(15 * time.Second) with failing case <-deadline.C: is refused.
+        (self.repo / "pkg/poll_timer_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "func TestPollTimer(t *testing.T) {\n"
+            "\tdeadline := time.NewTimer(15 * time.Second)\n"
+            "\tdefer deadline.Stop()\n"
+            "\tselect {\n"
+            "\tcase <-deadline.C:\n"
+            "\t\tt.Fatal(\"did not publish\")\n"
+            "\t}\n"
+            "}\n"
+        )
+        self.git("add", "pkg/poll_timer_test.go")
+        timer_head = self.commit()
+        timer_res = self.check("elapsed-time", for_head, timer_head)
+        self.assertEqual(timer_res.returncode, 1, timer_res.stdout + timer_res.stderr)
+        self.assertIn("pkg/poll_timer_test.go:7: deadline := time.NewTimer(15 * time.Second)", timer_res.stdout)
+
+        # 5. Declaration matching and staleness for polling deadlines.
+        (self.repo / "tools/gate-timing-declarations.json").write_text(json.dumps({
+            "declarations": [{
+                "file": "pkg/poll_timer_test.go",
+                "snippet": "deadline := time.NewTimer(15 * time.Second)",
+                "kind": "backlog",
+                "reason": "fixture short timer declaration",
+                "repair": "replace 15 * time.Second with hangGuard",
+            }]
+        }) + "\n")
+        self.git("add", "tools/gate-timing-declarations.json")
+        declared_head = self.commit()
+        declared_res = self.check("elapsed-time", for_head, declared_head)
+        self.assertEqual(declared_res.returncode, 0, declared_res.stdout + declared_res.stderr)
+
+        (self.repo / "pkg/poll_timer_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "const hangGuard = 5 * time.Minute\n"
+            "func TestPollTimer(t *testing.T) {\n"
+            "\tdeadline := time.NewTimer(hangGuard)\n"
+            "\tdefer deadline.Stop()\n"
+            "\tselect {\n"
+            "\tcase <-deadline.C:\n"
+            "\t\tt.Fatal(\"did not publish\")\n"
+            "\t}\n"
+            "}\n"
+        )
+        self.git("add", "pkg/poll_timer_test.go")
+        stale_head = self.commit()
+        stale_res = self.check("elapsed-time", declared_head, stale_head)
+        self.assertEqual(stale_res.returncode, 1, stale_res.stdout + stale_res.stderr)
+        self.assertIn("timing declaration no longer matches a hit", stale_res.stdout)
 
 
 if __name__ == "__main__":

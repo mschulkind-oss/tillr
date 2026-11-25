@@ -48,9 +48,11 @@ func goEnvVal(t *testing.T, name string) string {
 	return strings.TrimSpace(string(out))
 }
 
+const hangGuard = 5 * time.Minute
+
 func waitForFrontEnd(t *testing.T, base, outPath string) string {
 	t.Helper()
-	deadline := time.Now().Add(90 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	for {
 		resp, err := http.Get(base + "/api/v1/snapshot")
 		if err == nil {

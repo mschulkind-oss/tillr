@@ -457,7 +457,7 @@ func TestInheritedChildrenAreReapedWithoutStealingNewOnes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Nobody waits on proc: it is the zombie an exec leaves behind.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(hangGuard)
 	zombie := func(pid int) bool {
 		raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 		return err == nil && strings.Contains(string(raw[strings.LastIndexByte(string(raw), ')'):]), " Z ")
