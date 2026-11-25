@@ -33,6 +33,10 @@ SHIPPED = (
     "tillr-run", "tillr-store", "tillr-view", "tillr-trace", "tillr-roll",
 )
 
+# The README beside this executable belongs to the documentation snapshot, not the mirror.
+LOOP_MODULE = "tillr-loop"
+LOOP_ADAPTER = Path(LOOP_MODULE) / LOOP_MODULE
+
 # `[label](target)` and `[label](target#anchor)`. A target with a scheme, an absolute
 # path, or a bare fragment is not a relative link and is never rewritten.
 LINK = re.compile(r"\]\((?P<target>[^)\s]+)\)")
@@ -76,14 +80,29 @@ def rewrite_readmes(root):
     print("pack-mirror-links: rewrote %d README(s) under %s" % (rewritten, root))
 
 
-def mirror_module(root, module):
-    source = Path("tools") / module
-    dest = root / MIRROR_ROOT / module
+def check_destination(root, dest):
     for parent in dest.parents:
         if parent == root:
             break
         if parent.is_symlink():
             raise ValueError(f"refusing symlinked destination ancestor: {parent}")
+
+
+def mirror_loop_adapter(root):
+    source = root / "tools" / LOOP_ADAPTER
+    dest = root / MIRROR_ROOT / LOOP_ADAPTER
+    check_destination(root, dest)
+    dest.unlink(missing_ok=True)
+    if source.is_file():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dest)
+        print(f"pack-sync: mirrored {source.relative_to(root)} -> {dest.relative_to(root)}")
+
+
+def mirror_module(root, module):
+    source = Path("tools") / module
+    dest = root / MIRROR_ROOT / module
+    check_destination(root, dest)
 
     # Include tracked and unignored in-progress source, never ignored build outputs.
     # Read the index before clearing the destination in case git cannot list the source.
@@ -113,14 +132,18 @@ def mirror_module(root, module):
 def main(argv):
     if len(argv) >= 3 and argv[1] == "--sync":
         root = Path(argv[2]).resolve()
-        modules = argv[3:] or SHIPPED
+        shipped = (*SHIPPED, LOOP_MODULE)
+        modules = argv[3:] or shipped
         for module in modules:
-            if module not in SHIPPED:
+            if module not in shipped:
                 print(f"pack-sync: unknown module: {module}", file=sys.stderr)
                 return 2
         try:
             for module in modules:
-                mirror_module(root, module)
+                if module == LOOP_MODULE:
+                    mirror_loop_adapter(root)
+                else:
+                    mirror_module(root, module)
         except (OSError, ValueError, subprocess.CalledProcessError) as exc:
             print(f"pack-sync: {exc}", file=sys.stderr)
             return 1
