@@ -37,8 +37,8 @@ waits for it.
 | Component | Lives in |
 | :--- | :--- |
 | Run adapter, report extractor, fixtures | [`tools/tillr-run/backends/claude/`](../../tools/tillr-run/backends/claude/) (`run-claude`, `extract-report`) |
-| Delivery call server and hooks | `tools/tillr-run/backends/claude/landing` |
-| Subscription quota command | `tools/tillr-run/backends/claude/quota` |
+| Delivery call server and hooks | `tools/tillr-run/claude/landing.go` (`tillr-run claude-landing`) |
+| Subscription quota command | `tools/tillr-run/claude/quota.go` (`tillr-run claude-quota`) |
 | Harness arguments on a run request | `tools/tillr-run/run` (`harness_args`) |
 | Quota admission and the waiting view | [the drain's reference](../../tools/tillr-drain/README.md#backend-quota-admission) |
 | Policies that route seats here | Any policy whose backend row names this adapter; the example [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) declares a `claude` row and maps no seat to it |
@@ -211,7 +211,7 @@ until reset, whether or not it has a quota command.
   "adapter": "tools/tillr-run/backends/claude/run-claude",
   "model": "opus",
   "effort": "medium",
-  "quota": ["tools/tillr-run/backends/claude/quota"],
+  "quota": ["tillr-run", "claude-quota"],
   "reserve": 0.2
 }
 ```

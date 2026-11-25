@@ -645,6 +645,7 @@ type requestSingleJudgeSteps struct {
 	reportOnly   bool
 	offerBackend string
 	judgedHeads  []string
+	runBin       string
 }
 
 func (s *requestSingleJudgeSteps) offer(ctx context.Context, scratch, target string, offer landingOffer) error {
@@ -661,7 +662,10 @@ const { executeLand } = await import(tool);
 if (!executeLand(id, target, scratch, base, () => []).park) process.exit(1);
 `, tool, offer.CallID, target, scratch, offer.Base)
 	case "claude":
-		cmd = exec.CommandContext(ctx, "../../tillr-run/backends/claude/landing", "pre-tool-use", "--durable", scratch, "--base", offer.Base)
+		if s.runBin == "" {
+			s.runBin = continuationRunBin(s.t)
+		}
+		cmd = exec.CommandContext(ctx, s.runBin, "claude-landing", "pre-tool-use", "--durable", scratch, "--base", offer.Base)
 		event, err := json.Marshal(map[string]any{
 			"tool_name": "mcp__tillr__land", "tool_use_id": offer.CallID, "cwd": target,
 			"tool_input": map[string]string{},
@@ -677,8 +681,15 @@ if (!executeLand(id, target, scratch, base, () => []).park) process.exit(1);
 	if err != nil {
 		return fmt.Errorf("%s land: %w: %s", s.offerBackend, err, out)
 	}
-	if s.offerBackend == "claude" && !strings.Contains(string(out), `"permissionDecision": "defer"`) {
-		return fmt.Errorf("Claude did not defer the offer: %s", out)
+	if s.offerBackend == "claude" {
+		var resp struct {
+			HookSpecificOutput struct {
+				PermissionDecision string `json:"permissionDecision"`
+			} `json:"hookSpecificOutput"`
+		}
+		if err := json.Unmarshal(out, &resp); err != nil || resp.HookSpecificOutput.PermissionDecision != "defer" {
+			return fmt.Errorf("Claude did not defer the offer: %s", out)
+		}
 	}
 	return nil
 }

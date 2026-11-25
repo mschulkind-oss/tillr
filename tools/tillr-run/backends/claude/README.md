@@ -10,8 +10,8 @@ the adapter contract every backend shares is
 | :--- | :--- |
 | `run-claude` | The adapter. A `run.request`'s `Command[0]` names it. |
 | `extract-report` | The dialect: the harness's stream of JSON lines in, `report.md` out. |
-| [`landing`](./landing) | The delivery call: a stdio MCP server, the `PreToolUse` and `Stop` hooks, the transcript check and the config writer. Tested by [`landing_test.py`](./landing_test.py). |
-| [`quota`](./quota) | One authenticated usage GET, no model tokens; five-hour and seven-day fractions used and UTC reset times. |
+| `tillr-run claude-landing` | The delivery call ([`../../claude/landing.go`](../../claude/landing.go)): a stdio MCP server, the `PreToolUse` and `Stop` hooks, the transcript check and the config writer. Tested by [`../../claude/landing_test.go`](../../claude/landing_test.go). |
+| `tillr-run claude-quota` | One authenticated usage GET ([`../../claude/quota.go`](../../claude/quota.go)), no model tokens; five-hour and seven-day fractions used and UTC reset times. |
 | [`testdata/complete.jsonl`](./testdata/complete.jsonl) | A complete stream, written by hand to the measured line shapes, ending in a `result` line whose text ends in the `RESULT:` footer. |
 | [`testdata/truncated.jsonl`](./testdata/truncated.jsonl) | The same stream cut off before its footer and its `result` line — the negative control. |
 
@@ -112,7 +112,7 @@ drain records `footer` and a run ends with the `RESULT:` footer. The design is
 
 A write node in a lane worktree, staged with that ending, ends with one tool call, as a pi
 worker does with `land`. `run-claude` writes `claude-mcp.json` and `claude-settings.json` into
-the run's scratch directory with `landing prepare` and passes both (`--mcp-config`,
+the run's scratch directory with `tillr-run claude-landing prepare` and passes both (`--mcp-config`,
 `--settings`; both the subscription override and any `--settings` in `harness_args` are
 merged into the same generated settings, while `--setting-sources` remains up to
 `harness_args`):

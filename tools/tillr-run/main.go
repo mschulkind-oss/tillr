@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-run/claude"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/record"
@@ -65,6 +66,10 @@ func dispatch(args []string) int {
 		return statusFace(rest)
 	case "release":
 		return releaseFace(rest)
+	case "claude-landing":
+		return claude.RunLanding(rest, os.Stdin, os.Stdout, os.Stderr)
+	case "claude-quota":
+		return claude.RunQuota(rest, os.Stdout, os.Stderr)
 	default:
 		return fail(run.Usagef("unknown face %q: want %s", face, faceList))
 	}
@@ -464,7 +469,7 @@ func printRecord(env record.Envelope) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "exec, pause, request, lanes, status, release, mark-copied-usage or copied-usage"
+const faceList = "exec, pause, request, lanes, status, release, mark-copied-usage, copied-usage, claude-landing or claude-quota"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/reference/tillr-distribution.md, "Documentation split"), so a help request is an answer

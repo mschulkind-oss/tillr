@@ -8,11 +8,8 @@ import (
 	"testing"
 )
 
-func TestClaudeLandingCallHelperTests(t *testing.T) {
-	cmd := exec.Command("python3", "-B", "backends/claude/landing_test.py")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("landing_test.py: %v\n%s", err, out)
-	}
+func withTillrRunPath(stubBin string) string {
+	return stubBin + string(os.PathListSeparator) + filepath.Dir(bin) + string(os.PathListSeparator) + os.Getenv("PATH")
 }
 
 // stageClaudeLane lays out what staging writes beside a brief for a call-suspends write node.
@@ -57,11 +54,11 @@ func stageClaudeLane(t *testing.T) (adapter, dir, worktree, durable, bin string)
 	return
 }
 
-func runClaudeAdapter(t *testing.T, adapter, worktree, durable, bin, mode string, extra ...string) {
+func runClaudeAdapter(t *testing.T, adapter, worktree, durable, stubBin, mode string, extra ...string) {
 	t.Helper()
 	cmd := exec.Command(adapter, "--backend", "claude", "--model", "fixture-model", "--effort", "medium")
 	cmd.Dir = worktree
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "YOLO_DURABLE_DIR="+durable,
+	cmd.Env = append(os.Environ(), "PATH="+withTillrRunPath(stubBin), "YOLO_DURABLE_DIR="+durable,
 		"TILLR_SESSION_MODE="+mode, "TILLR_RESUME_PROMPT_FILE=", "TILLR_READ_ONLY_GROUP=", "TILLR_PAUSE_REQUEST=")
 	cmd.Env = append(cmd.Env, extra...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -190,7 +187,7 @@ func TestClaudeCallSuspendsMergesSettingsUnsetsDisableAndHandlesResolvedAndMissi
 	argv, envOut, input := filepath.Join(dir, "argv"), filepath.Join(dir, "env"), filepath.Join(dir, "input")
 	cmd := exec.Command(adapter, "--backend", "claude", "--model", "fixture-model", "--effort", "medium", "--account", "subscription", "--", "--tools", "Read,Edit,Bash", "--settings", policySettings)
 	cmd.Dir = worktree
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "YOLO_DURABLE_DIR="+durable,
+	cmd.Env = append(os.Environ(), "PATH="+withTillrRunPath(bin), "YOLO_DURABLE_DIR="+durable,
 		"TILLR_SESSION_MODE=new", "TILLR_RESUME_PROMPT_FILE=", "TILLR_READ_ONLY_GROUP=", "TILLR_PAUSE_REQUEST=",
 		"CLAUDE_CODE_DISABLE_DEFERRED_TOOL_RESUME=1", "STUB_ARGV="+argv, "STUB_ENV="+envOut, "STUB_INPUT="+input)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -200,7 +197,7 @@ func TestClaudeCallSuspendsMergesSettingsUnsetsDisableAndHandlesResolvedAndMissi
 		t.Fatalf("expected exactly one --settings in argv, got %d:\n%s", got, readFile(t, argv))
 	}
 	settings := readFile(t, filepath.Join(durable, "claude-settings.json"))
-	for _, want := range []string{`"CLAUDE_CODE_USE_BEDROCK": ""`, `"CUSTOM_FLAG": "yes"`, `"PreToolUse"`, `"Stop"`} {
+	for _, want := range []string{`"CLAUDE_CODE_USE_BEDROCK":""`, `"CUSTOM_FLAG":"yes"`, `"PreToolUse"`, `"Stop"`} {
 		if !strings.Contains(settings, want) {
 			t.Fatalf("merged settings lack %q: %s", want, settings)
 		}
@@ -235,7 +232,7 @@ func TestClaudeCallSuspendsMergesSettingsUnsetsDisableAndHandlesResolvedAndMissi
 	}
 	missing := exec.Command(adapter, "--backend", "claude", "--model", "fixture-model", "--effort", "medium")
 	missing.Dir = worktree
-	missing.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "YOLO_DURABLE_DIR="+durable,
+	missing.Env = append(os.Environ(), "PATH="+withTillrRunPath(bin), "YOLO_DURABLE_DIR="+durable,
 		"TILLR_SESSION_MODE=resume", "TILLR_RESUME_PROMPT_FILE=", "TILLR_READ_ONLY_GROUP=", "TILLR_PAUSE_REQUEST=")
 	if out, err := missing.CombinedOutput(); err == nil {
 		t.Fatalf("expected non-zero exit on missing transcript, got 0: %s", out)

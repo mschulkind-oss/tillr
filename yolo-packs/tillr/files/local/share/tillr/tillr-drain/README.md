@@ -318,7 +318,7 @@ without starting work, and `reserve`, the fraction of every window kept for the 
 (default 0, range 0 through 1):
 
 ```json
-"quota": ["tools/tillr-run/backends/claude/quota"],
+"quota": ["tillr-run", "claude-quota"],
 "reserve": 0.2
 ```
 

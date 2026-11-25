@@ -163,7 +163,7 @@ export YOLO_NO_LAUNCH_FLAGS
 # --- the delivery call --------------------------------------------------------------
 #
 # A write node staged with the call-suspends ending ends its run with one MCP tool call,
-# `mcp__tillr__land` or `mcp__tillr__obstacle` (backends/claude/landing, design
+# `mcp__tillr__land` or `mcp__tillr__obstacle` (tillr-run claude-landing, design
 # docs/design/tillr-landing-call.md section 7.1): a PreToolUse hook defers the call, the
 # harness exits with it open, and the gate's answer is delivered as that call's own result
 # by a promptless `--resume`. The same goal test as run-pi's keep-going applies: a worker in
@@ -178,9 +178,8 @@ if [ -z "${TILLR_READ_ONLY_GROUP:-}" ] && [ "$target_kind" = "lane worktree" ] &
 fi
 capability=$(lane_path "$brief" ending-capability)
 if [ -n "$goal_base" ] && [ -r "$capability" ] && [ "$(cat "$capability")" = call-suspends ]; then
-    require_harness python3
+    require_harness tillr-run
     [ -n "${YOLO_DURABLE_DIR:-}" ] || refuse "a call-suspends run needs YOLO_DURABLE_DIR, its scratch directory"
-    landing=$(cd -- "$SELF_DIR" && pwd -P)/landing
     landing_dir=$YOLO_DURABLE_DIR
     TILLR_GOAL_BASE=$goal_base
     export TILLR_GOAL_BASE
@@ -208,7 +207,7 @@ if [ -n "$goal_base" ] && [ -r "$capability" ] && [ "$(cat "$capability")" = cal
                 ;;
         esac
     done
-    prepared=$("$landing" prepare --durable "$landing_dir" --base "$goal_base" \
+    prepared=$(tillr-run claude-landing prepare --durable "$landing_dir" --base "$goal_base" \
         ${subscription_settings:+--settings-json} ${subscription_settings:+"$subscription_settings"} \
         --extra-settings-file "$extra_settings_file") ||
         refuse "cannot write the delivery call's MCP and settings files"
@@ -219,7 +218,7 @@ if [ -n "$goal_base" ] && [ -r "$capability" ] && [ "$(cat "$capability")" = cal
     landing_args="--mcp-config $landing_dir/claude-mcp.json --settings $landing_dir/claude-settings.json"
     if [ -e "$landing_dir/landing-answer.json" ]; then
         [ -n "$session" ] && [ "${TILLR_SESSION_MODE:-new}" = resume ] || refuse "landing answer requires an existing Claude session"
-        "$landing" answer "$landing_dir/landing-answer.json" "$landing_dir/landing-call-id" "$landing_dir/landing-prompt" ||
+        tillr-run claude-landing answer "$landing_dir/landing-answer.json" "$landing_dir/landing-call-id" "$landing_dir/landing-prompt" ||
             refuse "landing answer requires a call id and text"
         transcript=
         if [ -r "$landing_dir/landing-transcript" ]; then
@@ -233,7 +232,7 @@ if [ -n "$goal_base" ] && [ -r "$capability" ] && [ "$(cat "$capability")" = cal
         # window; otherwise, or when the replay is refused, the answer travels as a message.
         held=1
         if [ -n "$transcript" ]; then
-            "$landing" held "$transcript" "$(cat "$landing_dir/landing-call-id")" && held=0 || held=$?
+            tillr-run claude-landing held "$transcript" "$(cat "$landing_dir/landing-call-id")" && held=0 || held=$?
         fi
         case $held in
             0)

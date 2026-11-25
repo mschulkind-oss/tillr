@@ -266,7 +266,8 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "st
 `), 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	runBinDir := filepath.Dir(continuationRunBin(t))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+runBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TEST_CLAUDE_TRANSCRIPT", transcript)
 	t.Setenv("CLAUDE_CODE_DISABLE_DEFERRED_TOOL_RESUME", "")
 
