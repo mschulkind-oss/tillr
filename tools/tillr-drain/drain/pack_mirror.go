@@ -23,8 +23,7 @@ func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
 	if err != nil || paths == "" {
 		return false, err
 	}
-	// Match SHIPPED in the renderer. tillr-loop ships only via the adapter
-	// embedded in tillr-drain, not as its own module.
+	// Match SHIPPED in the renderer. The standalone loop adapter is selected below.
 	modules := []string{"tillr", "tillr-cli", "tillr-drain", "tillr-gate", "tillr-item", "tillr-land", "tillr-run", "tillr-store", "tillr-view", "tillr-trace", "tillr-roll"}
 	args := []string{"-I", "-c", packMirrorRenderer, "--sync", "."}
 	var destinations []string
@@ -36,6 +35,15 @@ func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
 				destinations = append(destinations, tillrMirrorRoot+module)
 				break
 			}
+		}
+	}
+	// Select only the executable: pack-docs owns the README in the same directory.
+	const adapter = "tillr-loop/tillr-loop"
+	for _, path := range changedPaths {
+		if path == "tools/"+adapter || path == tillrMirrorRoot+adapter {
+			args = append(args, "tillr-loop")
+			destinations = append(destinations, tillrMirrorRoot+adapter)
+			break
 		}
 	}
 	if len(destinations) == 0 {

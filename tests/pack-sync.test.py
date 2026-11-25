@@ -288,6 +288,25 @@ def case_modes(candidate=False):
     ok("every copied file keeps its source's exec bit and is a regular file")
 
 
+def case_loop_adapter(candidate=False):
+    """A consumer can run the standalone adapter from the pack's files tree."""
+    if candidate:
+        print("n/a  the loop adapter: a candidate does not carry the generated tree")
+        return
+    relative = Path("tillr-loop/tillr-loop")
+    adapter = COPY / relative
+    assert adapter.is_file() and not adapter.is_symlink() and executable(adapter), (
+        f"the pack must deliver a standalone executable at ~/.local/share/tillr/{relative}; "
+        "run `just pack-sync`"
+    )
+    assert adapter.read_bytes() == (ROOT / "tools" / relative).read_bytes(), (
+        "the pack's loop adapter diverges from its source: run `just pack-sync`"
+    )
+    described = subprocess.check_output([str(adapter), "describe"], text=True)
+    assert {"gate", "land", "verdict", "fixer-gate"} <= json.loads(described)["hooks"].keys()
+    ok("the pack delivers the executable loop adapter with its hook faces")
+
+
 def launcher_body(text):
     """A launcher's text with the three lines that legitimately differ removed."""
     kept = []
@@ -581,6 +600,7 @@ def main(argv=None):
     case_tree_matches_source(candidate=candidate)
     case_bytes(candidate=candidate)
     case_modes(candidate=candidate)
+    case_loop_adapter(candidate=candidate)
     case_build_outputs()
     case_copy_build_outputs()
     case_launchers()

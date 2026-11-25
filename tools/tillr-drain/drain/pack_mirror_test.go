@@ -125,6 +125,39 @@ func TestGateSeesRegeneratedTillrPackMirror(t *testing.T) {
 	}
 }
 
+func TestPackMirrorRegeneratesLoopAdapterWithoutChangingDocs(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	const source = "tools/tillr-loop/tillr-loop"
+	const mirror = tillrMirrorRoot + "tillr-loop/tillr-loop"
+	const readme = tillrMirrorRoot + "tillr-loop/README.md"
+	writePackFixture(t, f.root, "yolo-packs/tillr/pack.json", "{}\n")
+	writePackFixture(t, f.root, readme, "snapshot\n")
+	runGit(t, f.root, "add", ".")
+	runGit(t, f.root, "commit", "-m", "pack fixture")
+	base := runGit(t, f.root, "rev-parse", "HEAD")
+	lane := l.laneTarget("lane-1")
+	runGit(t, lane, "reset", "--hard", base)
+	writePackFixture(t, lane, source, "adapter\n")
+	if err := os.Chmod(filepath.Join(lane, source), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, lane, "add", source)
+	runGit(t, lane, "commit", "-m", "add the adapter")
+	c := Candidate{Worktree: lane, BaseSHA: base, HeadSHA: runGit(t, lane, "rev-parse", "HEAD")}
+	if changed, err := l.stagePackMirror(context.Background(), c); err != nil || !changed {
+		t.Fatalf("regenerate loop adapter: changed=%v, err=%v", changed, err)
+	}
+	if got := runGit(t, lane, "diff", "--cached", "--name-only"); got != mirror {
+		t.Fatalf("staged mirror paths = %q, want only %s", got, mirror)
+	}
+	if got := runGit(t, lane, "show", ":"+mirror); got != "adapter" {
+		t.Fatalf("staged adapter = %q", got)
+	}
+	if got := runGit(t, lane, "ls-files", "--stage", mirror); !strings.HasPrefix(got, "100755 ") {
+		t.Fatalf("staged adapter has wrong mode: %q", got)
+	}
+}
+
 func TestPackMirrorFailureHoldsOnlyThatCandidate(t *testing.T) {
 	ctx := context.Background()
 	f, l := passFixture(t, "item-a", "item-b")
