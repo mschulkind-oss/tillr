@@ -82,9 +82,12 @@ run-pi: refused: the pi at /usr/bin/pi lacks the feature 'parked-tool-calls', wh
 adapter requires: `pi --features` lists 'nothing'. ...
 ```
 
-A pi that does not know the flag, prints something other than a JSON list, or does not
-answer within `TILLR_PI_PROBE_SECONDS` (20 by default) is read as listing nothing. The
-probe runs with `PI_OFFLINE=1` and `PI_TELEMETRY=0` and an empty standard input.
+A pi that answers exit 0 with something other than a JSON list is read as listing nothing.
+A probe that exits non-zero or does not answer within `TILLR_PI_PROBE_SECONDS` (20 by
+default) is retried once; if it still fails, the refusal states that the probe failed,
+whether it timed out or exited non-zero (with its status and first stderr line), and that
+the feature is unknown. The probe runs with `PI_OFFLINE=1` and `PI_TELEMETRY=0` and an
+empty standard input.
 
 `TILLR_PI_FEATURES`, when set, is a space-separated list of feature names that the adapter
 takes as stated and does not probe. It exists for tests whose stand-in `pi` is a short
