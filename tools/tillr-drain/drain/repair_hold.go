@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
@@ -127,6 +128,10 @@ func (l *Loop) holdRepair(ctx context.Context, hold *repairHold, cause error) er
 // this request's terminal record/tree, not reset the original candidate and start
 // the same repair ID cold. Both effects commit in one store transaction.
 func (l *Loop) handoffRepair(ctx context.Context, original Candidate, decision Decision, base string) error {
+	return l.handoffRepairWithStage(ctx, original, decision, base, "", nil)
+}
+
+func (l *Loop) handoffRepairWithStage(ctx context.Context, original Candidate, decision Decision, base, fence string, stage *heldLaneStage) error {
 	owner, err := currentLoopOwner()
 	if err != nil {
 		return err
@@ -142,6 +147,11 @@ func (l *Loop) handoffRepair(ctx context.Context, original Candidate, decision D
 		if err := refuseTerminalItem(tx.Reader(), original.ItemID, "repair"); err != nil {
 			return err
 		}
+		if fence != "" || stage != nil {
+			if err := appendEffect(tx, candidateLaneKind, original.RunID, candidateLane{Candidate: original, Released: true, Fence: fence, Stage: stage}, at); err != nil {
+				return err
+			}
+		}
 		if err := appendEffect(tx, examinationDoneKind, original.RunID, struct{}{}, at); err != nil {
 			return err
 		}
@@ -154,4 +164,90 @@ func (l *Loop) handoffRepair(ctx context.Context, original Candidate, decision D
 		}
 		return recordPassDecision(tx, decision, at)
 	})
+}
+
+// restoreConflictCandidate restores the pinned built candidate of an ended
+// conflict-repair run so the next pass resumes conflict repair on that candidate
+// instead of starting a new attempt at the workflow's first node.
+func (l *Loop) restoreConflictCandidate(ctx context.Context, fixWork *pendingWork) (bool, error) {
+	if fixWork == nil || fixWork.Decision.Reason != ReasonConflictFix || fixWork.ParentRunID == "" || fixWork.Decision.RunRequest == nil {
+		return false, nil
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+	var parentCandidate *Candidate
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		_, byRun, err := readPendingHistory(r)
+		if err != nil {
+			return err
+		}
+		if parent := byRun[fixWork.ParentRunID]; parent != nil && parent.Candidate != nil {
+			cp := *parent.Candidate
+			parentCandidate = &cp
+		}
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	if parentCandidate == nil {
+		return false, nil
+	}
+	if err := l.pinnedCandidate(ctx, *parentCandidate); err != nil {
+		return false, nil
+	}
+	at := l.cfg.Now().UTC()
+	var restored bool
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		var txErr error
+		restored, txErr = restoreConflictCandidateTx(tx, fixWork, at, true)
+		return txErr
+	})
+	return restored, err
+}
+
+func restoreConflictCandidateTx(tx *store.Tx, fixWork *pendingWork, at time.Time, markExamined bool) (bool, error) {
+	if fixWork == nil || fixWork.Decision.Reason != ReasonConflictFix || fixWork.ParentRunID == "" || fixWork.Decision.RunRequest == nil {
+		return false, nil
+	}
+	if err := refuseTerminalItem(tx.Reader(), fixWork.Decision.ItemID, "conflict-repair-resume"); err != nil {
+		return false, nil
+	}
+	_, byRun, err := readPendingHistory(tx.Reader())
+	if err != nil {
+		return false, err
+	}
+	parent := byRun[fixWork.ParentRunID]
+	if parent == nil || parent.Candidate == nil || parent.Decision.RunRequest == nil {
+		return false, nil
+	}
+	if markExamined {
+		if err := appendEffect(tx, examinationDoneKind, fixWork.Decision.RunRequest.RunID, struct{}{}, at); err != nil {
+			return false, err
+		}
+	}
+	restored := *parent
+	restored.Done = false
+	restored.Owner = nil
+	restored.Examiner = nil
+	restored.Examining = false
+	restored.Orphaned = false
+	restored.ResumeAfterRestart = false
+	restored.NeedsStage = false
+	restored.LaneReleased = true
+	restored.LaneKeepReason = ""
+	restored.ReleasePending = ""
+	restored.DirtyHold = nil
+	restored.RedCapHold = nil
+	restored.RepairHold = nil
+	restored.GateStall = nil
+	restored.LoopID = ""
+	restored.Ready = false
+	restored.examinationStartedAt = time.Time{}
+	if err := appendEffect(tx, dispatchStartedKind, parent.Decision.RunRequest.RunID, restored, at); err != nil {
+		return false, err
+	}
+	return true, nil
 }

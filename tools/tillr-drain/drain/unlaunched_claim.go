@@ -156,6 +156,15 @@ func clearSupersededNodeClaims(tx *store.Tx, itemID string) error {
 // terminal keeps no pending work, and the caller examines the run instead.
 func restorePendingBeforeClaim(tx *store.Tx, d Decision, at time.Time) (bool, error) {
 	runID := d.RunRequest.RunID
+	if d.Reason == ReasonConflictFix {
+		_, byRun, err := readPendingHistory(tx.Reader())
+		if err != nil {
+			return false, err
+		}
+		if fixWork := byRun[runID]; fixWork != nil && fixWork.ParentRunID != "" {
+			return restoreConflictCandidateTx(tx, fixWork, at, true)
+		}
+	}
 	var claimSeq int64
 	if err := tx.Reader().QueryRow(`SELECT COALESCE(MAX(seq),0) FROM events WHERE kind=? AND object_type='run' AND object_id=?`, dispatchStartedKind, runID).Scan(&claimSeq); err != nil {
 		return false, err

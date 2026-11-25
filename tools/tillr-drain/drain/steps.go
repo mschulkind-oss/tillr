@@ -215,13 +215,16 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return run.Record{}, "", Externalf("creating run output directory %s: %v", dir, err)
 	}
-	stdout, err := os.Create(filepath.Join(dir, RunRecordFile))
+	recordPath := filepath.Join(dir, RunRecordFile)
+	stderrPath := filepath.Join(dir, RunStderrFile)
+	stdout, err := os.Create(recordPath)
 	if err != nil {
 		return run.Record{}, "", Externalf("creating run record output: %v", err)
 	}
-	stderr, err := os.Create(filepath.Join(dir, RunStderrFile))
+	stderr, err := os.Create(stderrPath)
 	if err != nil {
 		stdout.Close()
+		_ = os.Remove(recordPath)
 		return run.Record{}, "", Externalf("creating run error output: %v", err)
 	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
@@ -229,6 +232,8 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	if observeErr != nil {
 		stdout.Close()
 		stderr.Close()
+		_ = os.Remove(recordPath)
+		_ = os.Remove(stderrPath)
 		return run.Record{}, "", observeErr
 	}
 	finishPrep()
@@ -259,10 +264,18 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 			// output files and terminal bookkeeping for the replacement.
 			return run.Record{}, "", ctx.Err()
 		}
-	} else if errors.Is(err, errRestartPending) {
-		return run.Record{}, "", err
-	} else if err != nil && ctx.Err() != nil {
-		return run.Record{}, "", ctx.Err()
+	} else {
+		// No run face ever started. Remove the empty stream files we just opened so
+		// a replacement loop recognizes the claim as unlaunched rather than a
+		// vanished worker face.
+		_ = os.Remove(recordPath)
+		_ = os.Remove(stderrPath)
+		if errors.Is(err, errRestartPending) {
+			return run.Record{}, "", err
+		}
+		if err != nil && ctx.Err() != nil {
+			return run.Record{}, "", ctx.Err()
+		}
 	}
 	if observeErr := pipelineFinish(s.Root, req.RunID, observation); observeErr != nil {
 		return run.Record{}, "", observeErr

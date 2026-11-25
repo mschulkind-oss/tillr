@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-run/run"
 )
@@ -54,5 +55,32 @@ func TestRunHandoffDoesNotStartAfterItsContextWasCanceled(t *testing.T) {
 	cmd := exec.Command("true")
 	if err := steps.startRunFaceContext(ctx, cmd, run.Request{RunID: "not-started"}); !errors.Is(err, context.Canceled) || cmd.Process != nil {
 		t.Fatalf("canceled handoff=%v/%v", err, cmd.Process)
+	}
+}
+
+func TestRunDoesNotLeaveEmptyStreamsWhenRestartRefusesStart(t *testing.T) {
+	h := newRestartHarness(t, nil, nil)
+	h.request(t, 1)
+	ctx := context.WithValue(context.Background(), runStartAdmissionKey{}, h.l)
+	steps := &ProcessSteps{
+		Root:     h.f.root,
+		Store:    h.f.storePath,
+		LaneRoot: h.f.laneRoot,
+		RunBin:   "true",
+		Now:      func() time.Time { return time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC) },
+	}
+	req := run.Request{
+		RunID:      "run-item-1-a1-n2-cfix",
+		ItemID:     "item-1",
+		LaneID:     "lane-1",
+		Backend:    "fixture",
+		WorkingDir: h.f.root,
+	}
+	_, _, err := steps.Run(ctx, req)
+	if !errors.Is(err, errRestartPending) {
+		t.Fatalf("steps.Run err = %v, want errRestartPending", err)
+	}
+	if !missingRunStreams(steps, req.RunID) {
+		t.Fatalf("missingRunStreams(%s) = false after refused start; empty stream files must not remain on disk", req.RunID)
 	}
 }

@@ -165,13 +165,25 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 			candidate.ItemID, shortSHA(mainSHA), shortSHA(candidate.BaseSHA))
 		return "", false, nil
 	}
+	// Do not hand off a new conflict-fix run while a loop restart is pending:
+	// startRunFaceContext would refuse to launch it, and leaving the gated
+	// candidate intact lets the replacement loop stage and run conflict repair
+	// cleanly after exec.
+	if pending, err := l.buildRestartPending(ctx); err != nil {
+		return "", false, err
+	} else if pending {
+		return "", false, errRestartPending
+	}
 	policy := l.currentPolicy()
 	basis, err := l.repairBasis(ctx, candidate, landed, policy)
 	if err != nil {
 		return "", false, err
 	}
 	basis.TrunkSHA = mainSHA
-	fixRunID := conflictFixRunID(candidate.RunID)
+	fixRunID, err := l.nextConflictFixRunID(ctx, candidate.RunID)
+	if err != nil {
+		return "", false, err
+	}
 	fix := *candidate.Request
 	if policy != nil {
 		if _, ok := policy.Backends[fix.Backend]; !ok {
@@ -200,6 +212,21 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	// must leave the original candidate reachable even after garbage collection.
 	if err := l.pinCandidateHead(ctx, candidate); err != nil {
 		return "", false, err
+	}
+	// Capture the candidate's fence and stage metadata before resetting the lane
+	// so that if the conflict-fix run ends at a restart, the loop can restage the
+	// pinned candidate and resume conflict repair rather than restarting the item.
+	heldFence := ""
+	if path, fenceErr := l.itemFencePath(candidate.LaneID); fenceErr == nil {
+		if raw, readErr := os.ReadFile(path); readErr == nil {
+			heldFence = string(raw)
+		}
+	}
+	var heldStage *heldLaneStage
+	if candidate.BaseRef != "" || candidate.Workflow != "" {
+		if saved, saveErr := l.saveHeldLaneStage(ctx, candidate); saveErr == nil {
+			heldStage = saved
+		}
 	}
 	// The lane still holds the candidate's commit. Reset it to the moved trunk before
 	// staging, because the stager is right to refuse a lane whose unlanded commit nobody
@@ -291,7 +318,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	}
 	stampDecisionRequest(decision, &fix)
 	identifyDecision(&decision)
-	if err := l.handoffRepair(ctx, candidate, decision, base); err != nil {
+	if err := l.handoffRepairWithStage(ctx, candidate, decision, base, heldFence, heldStage); err != nil {
 		return "", false, err
 	}
 	outcome := l.runLane(ctx, decision, base, candidate.TickID, l.cfg.Now().UTC(), result, timing, nil)
@@ -311,6 +338,48 @@ func conflictWorkerReason(worker *WorkerSession, req *run.Request, lane string) 
 		return "lane-unavailable"
 	}
 	return workerSessionReason(worker, req)
+}
+
+// nextConflictFixRunID allocates an unused -cfix run ID for candidate.RunID.
+// When an earlier -cfix run ended at a restart (leaving a terminal runs row or
+// drain.orphaned event), resuming conflict repair on the same built candidate
+// must pick a fresh run ID so run allocation and start admission do not collide
+// with the ended -cfix run.
+func (l *Loop) nextConflictFixRunID(ctx context.Context, candidateRunID string) (string, error) {
+	id := conflictFixRunID(candidateRunID)
+	if l.cfg.Store == "" {
+		return id, nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return "", readFailure(err)
+	}
+	defer s.Close()
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		for {
+			var used int
+			if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM runs WHERE run_id = ?)`, id).Scan(&used); err != nil {
+				return readFailure(err)
+			}
+			if used == 0 {
+				if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind = ? AND object_id = ?)`, loopOrphanedKind, id).Scan(&used); err != nil {
+					return readFailure(err)
+				}
+			}
+			if used == 0 {
+				return nil
+			}
+			next := conflictFixRunID(id)
+			if next == id {
+				return fmt.Errorf("could not allocate a fresh conflict-fix run id from %s", id)
+			}
+			id = next
+		}
+	})
+	if err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // nextItemAttempt allocates the next attempt ordinal using the planner's attempt inputs

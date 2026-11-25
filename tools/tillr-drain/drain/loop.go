@@ -2292,9 +2292,18 @@ func (l *Loop) runLane(ctx context.Context, decision Decision, mainSHA, tick str
 		return laneOutcome{err: err}
 	}
 	l.mu.Lock()
+	if l.active == nil {
+		l.active = map[string]bool{}
+	}
+	l.active[request.RunID] = true
 	result.Dispatched++
 	tickNumber := result.Ticks
 	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		delete(l.active, request.RunID)
+		l.mu.Unlock()
+	}()
 	l.reportf("loop: tick %d dispatch %s -> %s on %s\n",
 		tickNumber, request.ItemID, request.Backend, lane)
 	l.markBracketActive(request.RunID)

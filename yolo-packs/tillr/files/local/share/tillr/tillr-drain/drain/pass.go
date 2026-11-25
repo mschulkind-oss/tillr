@@ -263,6 +263,9 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 			if err := json.Unmarshal(e.Payload, &work); err != nil {
 				return err
 			}
+			if work.Candidate != nil {
+				work.Candidate.Request, work.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
+			}
 			if work.Examining || work.Examiner != nil {
 				work.examinationStartedAt = e.At
 			}
@@ -1631,6 +1634,13 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 			}
 			if err := l.resetLane(ctx, d.LaneID); err != nil {
 				return nil, nil, err
+			}
+		}
+		if d.Reason == ReasonConflictFix && work.ParentRunID != "" {
+			if restored, err := l.restoreConflictCandidate(ctx, work); err != nil {
+				return nil, nil, err
+			} else if restored {
+				continue
 			}
 		}
 		if err := l.markExamined(ctx, d); err != nil {
