@@ -4,7 +4,7 @@ status: in-review
 stage: DESIGN
 updated: 2026-11-25
 tags: [tillr, contract, loop, adapter]
-summary: "What tillr-loop provides and expects: one Python script with eight faces, five exit codes, and the `describe` answer the drain checks at start. Its provided side is already held by a generated file of real argument lists. Its expected side is not: it types the flags of the gate, land and item programs and tests against stand-ins that accept anything."
+summary: "What tillr-loop provides and expects: on HEAD today one Python script with eight faces, five exit codes, and the `describe` answer the drain checks at start, ported to Go under D-UC20 with its Python script, Python test suite, sync helper and synced drain copy removed. Its provided side is held by a generated file of real argument lists; its expected side types the flags of the gate, land and item programs and tests against stand-ins."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
@@ -13,7 +13,7 @@ depends-on:
 
 **Status:** Nothing here is built: `tools/tillr-loop` has no `contract/` directory. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it. The faces, flags, exit codes and test names below were checked against `tools/tillr-loop` on 2026-11-24.
 
-**What it is.** One Python script at `tools/tillr-loop/tillr-loop`. The drain's loop has three steps it hands to a program: judge a candidate, land it, record its verdicts. This script is that program for this repository. It turns each step into calls of `tillr-gate`, `tillr-land` and `tillr-item`. The drain holds a byte-for-byte copy and runs the copy. Its [README](../../../tools/tillr-loop/README.md) documents the same faces and exit codes for an operator.
+**What it is.** On `HEAD` today, one Python script at `tools/tillr-loop/tillr-loop`, with a byte-for-byte copy at `tools/tillr-drain/drain/tillr-loop.py` that the drain embeds and runs. The drain's loop has three steps it hands to a program: judge a candidate, land it, record its verdicts. This adapter is that program for this repository: it turns each step into calls of `tillr-gate`, `tillr-land` and `tillr-item`, and its [README](../../../tools/tillr-loop/README.md) documents the same faces and exit codes for an operator. By `D-UC20` of [the overview](../tillr-utility-contracts.md#85-the-loop-adapter-moves-to-go) — the designer's decision from an operator request, which the owner may overturn — `tools/tillr-loop/tillr-loop` and `tools/tillr-loop/test.py` move to Go with the same eight faces, arguments, records, exit codes and environment variables, `tools/tillr-loop/sync-adapter.py` and `tools/tillr-drain/drain/tillr-loop.py` are deleted, and the loop's `--gate`, `--land` and `--verdict` values in the keeper and documents change to the Go program.
 
 ## 1. What it provides
 
@@ -45,21 +45,21 @@ It writes one `item.verdict` record per criterion to `<run directory>/item.verdi
 
 ### 1.3 Go packages, events, tables
 
-None.
+None on `HEAD` today. Under `D-UC20` of [the overview](../tillr-utility-contracts.md#85-the-loop-adapter-moves-to-go) (the designer's decision from an operator request, not yet built), the Go port provides the adapter package linked by `tillr-drain` (in `tools/tillr-loop` or `tools/tillr-drain`, as chosen in the plan step) with no events or tables.
 
 ### 1.4 Files and environment
 
 | Place | Read by |
 | :--- | :--- |
-| `<root>/.tillr/loop/<run>/`: `gate.change.json`, `gate.plan.json`, `gate.verdict.json`, `logs/`, `change-logs/`. The gate writes the first three where this script tells it to | land, drain, view, `tillr-trace` |
+| `<root>/.tillr/loop/<run>/`: `gate.change.json`, `gate.plan.json`, `gate.verdict.json`, `logs/`, `change-logs/`. The gate writes the first three where the adapter tells it to | land, drain, view, `tillr-trace` |
 | [`drain-argv.json`](../../../tools/tillr-loop/drain-argv.json): every argument list the drain sends | its own suite; written by a drain test |
-| `tools/tillr-drain/drain/tillr-loop.py`, the copy, written by `sync-adapter.py` | drain |
+| `tools/tillr-drain/drain/tillr-loop.py`, the copy on `HEAD` today, written by `sync-adapter.py` (deleted with `sync-adapter.py` under `D-UC20` when the Go port replaces the embedded Python script) | drain |
 
 ### 1.5 Names others match on
 
 - The face names `gate`, `land`, `verdict`, `fixer-gate`, `replay`, `rolling`, which are the drain's hook names.
 - The version word `tillr-step-argv-check-v1`.
-- The script's path, typed in the drain, the roller and the keeper.
+- The adapter's command: the Python script's path and `builtin:tillr-loop` on `HEAD` today, changing under `D-UC20` to the Go program in the drain, the roller, the keeper and the documents.
 
 ## 2. What it expects
 
@@ -78,7 +78,7 @@ None.
 
 It reads no store.
 
-**Who provides the runners.** This table named the provider of the two runner scripts as "the repository's gate scripts, outside tillr" until 2026-11-25. `D-UC16` of [the overview](../tillr-utility-contracts.md#81-defaults-come-from-tillrs-installation) changes it: the designer's decision, made from an operator request, which the owner may overturn. The default runners are `tillr-gate`'s and are found in tillr's installation, and the operated repository provides only its declarations. The code does not do this yet: `DEFAULT_GATE_PROGRAM` is `python3 tools/gate/change-gate.py …`, resolved inside the candidate worktree, and the `replay` face runs `tools/gate/tree-check.py` from the checked-out revision (read in `tools/tillr-loop/tillr-loop` on 2026-11-25). `--gate-program` and `--registry` still override the defaults.
+**Who provides the runners.** This table named the provider of the two runner scripts as "the repository's gate scripts, outside tillr" until 2026-11-25. `D-UC16` of [the overview](../tillr-utility-contracts.md#81-defaults-come-from-tillrs-installation) — the designer's decision from an operator request, which the owner may overturn — moved the default runners (`change-gate.py` and `tree-check.py`) to `tillr-gate`'s installation via `TILLR_INSTALL_ROOT`, leaving the operated repository owning only its check declarations (`--gate-program` and `--registry` still override the defaults). `D-UC20` preserves that exact resolution in the Go port.
 
 ## 3. Contract and private
 
@@ -86,21 +86,21 @@ It reads no store.
 
 **Private:** `self-check`'s text; every refusal sentence; how it finds the three programs and the installed default runners.
 
-**The copy is a generated file.** It has one writer, the sync script, and two tests already fail when it differs. It stays, because a Go program cannot embed a file from another module.
+**No synced copy in Go (`D-UC20`).** While the adapter is a Python script on `HEAD` today, `tools/tillr-drain/drain/tillr-loop.py` is kept equal to `tools/tillr-loop/tillr-loop` by `tools/tillr-loop/sync-adapter.py` because `//go:embed` cannot reach a sibling module. By `D-UC20` of [the overview](../tillr-utility-contracts.md#85-the-loop-adapter-moves-to-go) (the designer's decision from an operator request, which the owner may overturn), porting the adapter to Go removes the need for a synced second copy: Go packages link directly into `tillr-drain`, and both `tools/tillr-drain/drain/tillr-loop.py` and `tools/tillr-loop/sync-adapter.py` are deleted (superseding the earlier note that kept the generated copy).
 
 ## 4. How the contract is pinned
 
-In `tools/tillr-loop/test.py`, which runs in seconds.
+On `HEAD` today, in `tools/tillr-loop/test.py` (with `tools/tillr-loop/testdata/drain-hooks_test.go`), which runs in seconds. By `D-UC20` of [the overview](../tillr-utility-contracts.md#85-the-loop-adapter-moves-to-go) (the designer's decision from an operator request, which the owner may overturn), every case in `tools/tillr-loop/test.py` and `drain-hooks_test.go` is ported to Go tests in the same commit that ports the adapter to Go, and `tools/tillr-loop/tillr-loop`, `tools/tillr-loop/test.py`, `tools/tillr-loop/testdata/drain-hooks_test.go`, `tools/tillr-loop/sync-adapter.py` and `tools/tillr-drain/drain/tillr-loop.py` are deleted (removing `test_adapter_copy_matches_source` with the deleted copy).
 
-- **Exists today, for what it provides.** `test_describe_answers_the_hook_contract`, `test_every_argv_the_drain_sends_is_accepted`, `test_check_argv_parses_without_reading_or_judging`, `test_gate_exit_mapping`, `test_land_exit_mapping`, `test_verdict_exit_mapping`, `test_adapter_copy_matches_source`. The first three are the model for this whole design: the drain writes a file of real argument lists, and the adapter's suite replays every one.
-- **To add, for what it expects.** The same in the other direction. The gate, land and the item utility each publish their face and flag lists as files, and a test here checks every argument list this script composes against them. A flag renamed in `tillr-land` then fails land's own contract test first, and this one second, and never a drain run.
-- **Stand-ins fed by examples.** The shell stand-ins stay, because the suite must not build Go programs. What they print comes from the providers' example files: the item utility's `show` example, the gate's verdict examples.
-- **The verdict record.** One example of the record this script writes, checked against the item utility's `verdict record` input entry.
+- **Exists today, for what it provides.** `test_describe_answers_the_hook_contract`, `test_every_argv_the_drain_sends_is_accepted`, `test_check_argv_parses_without_reading_or_judging`, `test_gate_exit_mapping`, `test_land_exit_mapping`, `test_verdict_exit_mapping` (and `test_adapter_copy_matches_source` while `tillr-loop.py` exists on `HEAD`). The first three are the model for this whole design: the drain writes a file of real argument lists, and the adapter's suite replays every one.
+- **To add, for what it expects.** The same in the other direction. The gate, land and the item utility each publish their face and flag lists as files, and a test here checks every argument list the adapter composes against them. A flag renamed in `tillr-land` then fails land's own contract test first, and this one second, and never a drain run.
+- **Stand-ins fed by examples.** The stand-ins stay, because the suite must not build external Go programs. What they print comes from the providers' example files: the item utility's `show` example, the gate's verdict examples.
+- **The verdict record.** One example of the record the adapter writes, checked against the item utility's `verdict record` input entry.
 - **Names.** The claim classes and the stall code are read from the providers' name-set files, not typed here.
 
 ## 5. Reach-ins to fix
 
 Listed with their fixes in [the overview](../tillr-utility-contracts.md#10-reach-ins-today).
 
-- As consumer: RI-47 (it types three programs' flags and tests against stand-ins that accept anything), RI-48 (it parses `show`, writes a verdict record by hand, and copies the hash rule and the claim classes), RI-36 (the stall code typed again), RI-50 (its suite compiles a test into the drain's package).
-- As provider: RI-49 (the copy in the drain).
+- As consumer: RI-47 (it types three programs' flags and tests against stand-ins that accept anything), RI-48 (it parses `show`, writes a verdict record by hand, and copies the hash rule and the claim classes), RI-36 (the stall code typed again), RI-50 (its Python suite compiles a test into the drain's package with an overlay; removed when `D-UC20` ports the suite to Go).
+- As provider: RI-49 (the synced copy in the drain; removed when `D-UC20` ports the adapter to Go).
