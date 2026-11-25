@@ -34,7 +34,7 @@
     "tools/tillr-land/shards_test.py",
     "tools/tillr-loop/drain-argv.json",
     "tools/tillr-loop/tillr-loop",
-    "tools/tillr-roll/tillr-roll.py",
+    "tools/tillr-roll/",
     "tools/tillr-run/",
     "tools/tillr-run/backends/",
     "tools/tillr-store/",

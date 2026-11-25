@@ -16,6 +16,7 @@
     "tools/tillr-drain/",
     "tools/tillr-item/",
     "tools/tillr-land/",
+    "tools/tillr-roll/",
     "tools/tillr-run/",
     "tools/tillr-watch/",
     "tools/tillr/"

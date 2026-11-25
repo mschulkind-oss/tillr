@@ -25,6 +25,7 @@
     "tools/tillr-gate/",
     "tools/tillr-item/",
     "tools/tillr-land/",
+    "tools/tillr-roll/",
     "tools/tillr-run/",
     "tools/tillr-store/",
     "tools/tillr-trace/",

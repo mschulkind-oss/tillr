@@ -1,10 +1,10 @@
 {
-  "id": "tillr-roll",
+  "id": "go-test-tillr-roll",
   "label": "the repository roll suite passes",
   "command": [
     "sh",
     "-c",
-    "python3 tests/tillr-roll.test.py"
+    "cd tools/tillr-roll && CGO_ENABLED=0 GOFLAGS=-trimpath go test -parallel 1 -timeout 0 ./..."
   ],
   "scope": "tree",
   "tier": "heavy",
@@ -12,13 +12,12 @@
   "reads": [
     ".justfile",
     ".tillr.toml",
-    "tests/tillr-roll.test.py",
-    "tools/gate/checks/tillr-roll.json",
+    "tools/gate/checks/go-test-tillr-roll.json",
     "tools/tillr-roll/"
   ],
   "tools": [
     "sh",
-    "python3",
-    "git"
+    "git",
+    "go"
   ]
 }

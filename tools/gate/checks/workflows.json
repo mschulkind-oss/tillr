@@ -1,7 +1,10 @@
 {
   "id": "workflows",
   "label": "Tracked workflow definitions",
-  "command": ["python3", "tools/gate/checks/workflows.py"],
+  "command": [
+    "python3",
+    "tools/gate/checks/workflows.py"
+  ],
   "scope": "change",
   "tier": "heavy",
   "timeout_ms": 20000,
@@ -11,6 +14,7 @@
     "config/tillr/workflows/",
     "config/tillr/watch/",
     "tools/tillr-drain/",
+    "tools/tillr-roll/",
     "tools/tillr-watch/",
     "tools/tillr/",
     "tools/tillr-item/",
@@ -19,6 +23,10 @@
     "tools/gate/checks/workflows.py",
     "tools/gate/checks/change_common.py"
   ],
-  "tools": ["python3", "git", "go"],
+  "tools": [
+    "python3",
+    "git",
+    "go"
+  ],
   "remember": false
 }

@@ -20,6 +20,7 @@
     "tools/tillr-cli/",
     "tools/tillr-watch/",
     "tools/tillr-trace/",
+    "tools/tillr-roll/",
     "tools/gate/checks/go-build.py",
     "tools/gate/checks/change_common.py",
     "tools/gate/checks/roadmap_sections.py",

@@ -26,7 +26,7 @@ covers:
   - tools/tillr-run/backends/pi/stop-at-gap
   - tools/tillr-view/restart.go
   - tools/tillr-view/build.go
-  - tools/tillr-roll/tillr-roll.py
+  - tools/tillr-roll/
   - tools/tillr-drain/keep/keep.go
   - tools/tillr-drain/keep/restart.go
 related:
@@ -300,9 +300,9 @@ is tested, built, installed and kept running ([`D-RT1`](#why-its-this-way)).
 Its settings name `just tillr-roll --no-request` as the roll command, for
 landings under `tools/tillr*/` and `config/tillr/`.
 
-### `tools/tillr-roll/tillr-roll.py` (`just tillr-roll` and `just tillr-build`)
+### `tools/tillr-roll/` (`just tillr-roll` and `just tillr-build`)
 
-[`tillr-roll.py`](../../tools/tillr-roll/tillr-roll.py) turns one commit into
+[`tools/tillr-roll/`](../../tools/tillr-roll/) turns one commit into
 installed binaries in the environment's durable `bin` directory:
 
 - **One roll at a time.** Rolls serialize on a file lock. A roll that waited

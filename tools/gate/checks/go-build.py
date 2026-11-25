@@ -19,6 +19,7 @@ GO_TOOL_DIRS = (
     "tools/tillr", "tools/tillr-store", "tools/tillr-item",
     "tools/tillr-run", "tools/tillr-gate", "tools/tillr-view", "tools/tillr-land",
     "tools/tillr-drain", "tools/tillr-cli", "tools/tillr-watch", "tools/tillr-trace",
+    "tools/tillr-roll",
 )
 
 _GO_ENV_CACHE = {}

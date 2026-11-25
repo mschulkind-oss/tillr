@@ -17,6 +17,7 @@
     "tools/go-test-shards.py",
     "tools/tillr-drain/",
     "tools/tillr-land/",
+    "tools/tillr-roll/",
     "tools/tillr/",
     "tools/tillr-item/",
     "tools/tillr-run/"

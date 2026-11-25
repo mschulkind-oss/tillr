@@ -16,6 +16,7 @@
     "tools/tillr-drain/cache_test.py",
     "tools/tillr-land/",
     "tools/tillr-land/shards_test.py",
+    "tools/tillr-roll/",
     "tools/tillr/",
     "tools/tillr-item/",
     "tools/tillr-run/"

@@ -1,19 +1,129 @@
 package drain_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/mschulkind-oss/tillr-roll/roll"
 	"github.com/mschulkind-oss/tillr/store"
+	_ "modernc.org/sqlite"
 )
 
-// Build real replacement binaries with a higher schema version. The Python
-// fixture supplies those builds to the real roller; it does not fake --check,
+func TestSchemaRollHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_SCHEMA_ROLL_HELPER") != "1" {
+		return
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := os.Getenv("SCHEMA_ROLL_LIVE")
+	storePath := os.Getenv("SCHEMA_ROLL_STORE")
+	policyJSON := os.Getenv("SCHEMA_ROLL_POLICY")
+
+	db, err := sql.Open("sqlite", "file:"+storePath+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var before int
+	if err := db.QueryRow("SELECT max(version) FROM schema_migrations").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	oldItemInfo, err := os.Stat(filepath.Join(live, "tillr-item"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldItemIno := oldItemInfo.Sys().(*syscall.Stat_t).Ino
+
+	deps := &roll.Deps{
+		CleanCheckout: func(rootDir, tip, dest, shared string) error {
+			for _, module := range roll.Modules {
+				if err := os.MkdirAll(filepath.Join(dest, "tools", "tillr-"+module), 0o755); err != nil {
+					return err
+				}
+			}
+			adapter := filepath.Join(dest, "tools", "tillr-loop", "tillr-loop")
+			if err := os.MkdirAll(filepath.Dir(adapter), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(adapter, []byte("# fixture step program\n"), 0o644); err != nil {
+				return err
+			}
+			policy := filepath.Join(dest, "config", "tillr", "backend-policy.json")
+			if err := os.MkdirAll(filepath.Dir(policy), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(policy, []byte(policyJSON), 0o644)
+		},
+		TestCommit: func(rootDir, source, work, tip, storeDir string, old map[string]roll.BuildFact, buildEnv []string) error {
+			return nil
+		},
+		Run: func(args []string, opts roll.RunOpts) (roll.CmdResult, error) {
+			if len(args) >= 2 && args[0] == "go" && args[1] == "build" {
+				target := ""
+				for i := 0; i+1 < len(args); i++ {
+					if args[i] == "-o" {
+						target = args[i+1]
+						break
+					}
+				}
+				if target == "" {
+					return roll.CmdResult{}, fmt.Errorf("missing -o in go build args: %v", args)
+				}
+				built := filepath.Join(live, "next-"+strings.TrimPrefix(filepath.Base(target), "tillr-"))
+				if data, err := os.ReadFile(built); err == nil {
+					if err := os.WriteFile(target, data, 0o755); err != nil {
+						return roll.CmdResult{}, err
+					}
+				} else {
+					if err := os.WriteFile(target, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+						return roll.CmdResult{}, err
+					}
+				}
+				return roll.CmdResult{}, nil
+			}
+			return roll.Run(args, opts, nil)
+		},
+	}
+
+	rc, err := roll.Roll(root, live, true, false, "", deps)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	var after int
+	if err := db.QueryRow("SELECT max(version) FROM schema_migrations").Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("schema_migrations max(version) = %d, want %d", after, before)
+	}
+	var one int
+	if err := db.QueryRow("SELECT 1 FROM sqlite_master WHERE name='fixture_roll_upgrade'").Scan(&one); err != sql.ErrNoRows {
+		t.Fatalf("expected no fixture_roll_upgrade table, got err=%v", err)
+	}
+	newItemInfo, err := os.Stat(filepath.Join(live, "tillr-item"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newItemInfo.Sys().(*syscall.Stat_t).Ino != oldItemIno {
+		t.Fatalf("tillr-item inode changed during staged schema roll")
+	}
+	os.Exit(rc)
+}
+
+// Build real replacement binaries with a higher schema version. The Go test
+// helper supplies those builds to the real roller; it does not fake --check,
 // installation, the restart request, migration, or worker completion.
 func schemaRollFixture(t *testing.T, f loopFixture, live string) string {
 	t.Helper()
@@ -49,15 +159,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations`, 1)
 			t.Fatalf("building version-raising %s: %v: %s", module, err, out)
 		}
 	}
-	roller, err := filepath.Abs("../../tillr-roll/tillr-roll.py")
-	if err != nil {
-		t.Fatal(err)
-	}
 	policy, err := json.Marshal(f.policy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SCHEMA_ROLL_SCRIPT", roller)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("SCHEMA_ROLL_STORE", f.store)
 	t.Setenv("SCHEMA_ROLL_POLICY", string(policy))
 	installRoot := filepath.Join(dir, "install")
@@ -67,60 +176,6 @@ CREATE TABLE IF NOT EXISTS schema_migrations`, 1)
 	}
 	copyFile(t, "../../tillr-run/backends/brief-template.md", installedTemplate, nil)
 	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
-	fixture := filepath.Join(dir, "roll-fixture.py")
-	writeFile(t, fixture, `import importlib.util
-import os
-from pathlib import Path
-import shutil
-import sqlite3
-from contextlib import closing
-
-spec = importlib.util.spec_from_file_location('roll', os.environ['SCHEMA_ROLL_SCRIPT'])
-roll = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(roll)
-root = Path.cwd()
-live = Path(__file__).parent
-store = Path(os.environ['SCHEMA_ROLL_STORE'])
-real_run = roll.run
-with closing(sqlite3.connect(store.as_uri() + '?mode=ro', uri=True)) as db:
-    before = db.execute('SELECT max(version) FROM schema_migrations').fetchone()[0]
-old_item = (live / 'tillr-item').stat().st_ino
-
-def checkout(root, tip, dest, shared):
-    for module in roll.MODULES:
-        (dest / 'tools' / ('tillr-' + module)).mkdir(parents=True)
-    adapter = dest / 'tools/tillr-loop/tillr-loop'
-    adapter.parent.mkdir()
-    adapter.write_text('# fixture step program\n')
-    policy = dest / 'config/tillr/backend-policy.json'
-    policy.parent.mkdir(parents=True)
-    policy.write_text(os.environ['SCHEMA_ROLL_POLICY'])
-
-def run(*args, **kwargs):
-    if args[:2] == ('go', 'build'):
-        target = args[args.index('-o') + 1]
-        built = live / ('next-' + target.name.removeprefix('tillr-'))
-        if built.is_file():
-            shutil.copy2(built, target)
-        else:
-            target.write_text('#!/bin/sh\nexit 0\n')
-            target.chmod(0o755)
-        return None
-    return real_run(*args, **kwargs)
-
-roll.clean_checkout = checkout
-roll.test_commit = lambda *args: None
-roll.run = run
-try:
-    rc = roll.roll(root, live, True)
-except roll.RollFailed as exc:
-    raise SystemExit(str(exc))
-with closing(sqlite3.connect(store.as_uri() + '?mode=ro', uri=True)) as db:
-    assert db.execute('SELECT max(version) FROM schema_migrations').fetchone()[0] == before
-    assert db.execute("SELECT 1 FROM sqlite_master WHERE name='fixture_roll_upgrade'").fetchone() is None
-assert (live / 'tillr-item').stat().st_ino == old_item
-raise SystemExit(rc)
-`)
-	t.Setenv("SCHEMA_ROLL_FIXTURE", fixture)
-	return `python3 -B "$SCHEMA_ROLL_FIXTURE"`
+	t.Setenv("SCHEMA_ROLL_LIVE", dir)
+	return fmt.Sprintf(`GO_WANT_SCHEMA_ROLL_HELPER=1 "%s" -test.run=^TestSchemaRollHelperProcess$`, exe)
 }

@@ -362,7 +362,7 @@ tillr-build:
 # Test, build and smoke the committed checkout before updating the live bin directory.
 [positional-arguments]
 tillr-roll *args:
-    @python3 tools/tillr-roll/tillr-roll.py "$@"
+    @CGO_ENABLED=0 go run -C tools/tillr-roll . "$@"
 
 # Keep this checkout's loop alive; --stop stops only the keeper. Pass loop options after --.
 # Positional arguments keep each one intact, including an empty `--rolling ''`.

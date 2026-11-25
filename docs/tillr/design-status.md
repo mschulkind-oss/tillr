@@ -104,7 +104,7 @@ programs: `tillr` and the store, item, run, drain, gate, land and view programs.
 | [tillr-trace](../../tools/tillr-trace/README.md) | Records the commands a run starts, through a shell shim the run adapters set, and answers questions from those records. | Partly built ([session recording](../design/session-recording.md)) | shipped |
 | [`tools/tillr`](../../tools/tillr/) | The shared library: the store opener, records, exit codes, settings, the watch rules and the [definition package](../../tools/tillr/definition/README.md). | Built | |
 | [`tools/tillr-watch`](../../tools/tillr-watch/) | Standing alert rules over the store ([the watch design](../design/tillr-watch.md)). | Partly built | |
-| [`tools/tillr-roll`](../../tools/tillr-roll/) | `tillr-roll.py` builds and installs new binaries; the keeper (`tillr-drain keep`) lives in [`tools/tillr-drain/keep/`](../../tools/tillr-drain/keep/). | Built | |
+| [`tools/tillr-roll`](../../tools/tillr-roll/) | The Go roller builds and installs new binaries; the keeper (`tillr-drain keep`) lives in [`tools/tillr-drain/keep/`](../../tools/tillr-drain/keep/). | Built | |
 | [`tools/gate`](../../tools/gate/) | This repository's own check declarations and gate scripts ([the gate reference](../reference/gate.md)). | Built | |
 | [`tools/observatory`](../../tools/observatory/) | `run.sh`, which builds and serves the observatory for this checkout. | Built | |
 

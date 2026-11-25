@@ -89,7 +89,7 @@ longer exists. Both are removed, and the first needs a seam to move behind.
        [`held_fork.go`](../../tools/tillr-drain/remotesync/held_fork.go), and the `.forks/lanes/`
        paths that [`workflow_arguments.go`](../../tools/tillr-drain/workflow/workflow_arguments.go)
        rewrites.
-     - The roll tool: the `--pi` option of [`tillr-roll.py`](../../tools/tillr-roll/tillr-roll.py).
+     - The roll tool: the `--pi` option of [tools/tillr-roll](../../tools/tillr-roll/).
    - **Depends on:** entry 3.
 
 5. **Remove the drain's rolling-program protocol.** The drain still parses the report format of a

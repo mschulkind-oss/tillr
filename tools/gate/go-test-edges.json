@@ -775,7 +775,6 @@
       "tools/tillr/examples/",
       "tools/tillr-loop/drain-argv.json",
       "tools/tillr-loop/tillr-loop",
-      "tools/tillr-roll/tillr-roll.py",
       "tools/tillr-run/backends/",
       "yolo-packs/tillr/pack.json",
       "yolo-packs/tillr/programs/"
@@ -1002,6 +1001,7 @@
       "tools/tillr-gate/",
       "tools/tillr-item/",
       "tools/tillr-land/",
+      "tools/tillr-roll/",
       "tools/tillr-run/",
       "tools/tillr-store/",
       "tools/tillr-trace/",
@@ -1023,6 +1023,9 @@
         "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
       ],
       "tools/tillr-land/": [
+        "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
+      ],
+      "tools/tillr-roll/": [
         "TestNameOnlyInOneConstantAndOnlyLifecycleConsumers"
       ],
       "tools/tillr-run/": [
@@ -1053,6 +1056,7 @@
       "tools/tillr-gate/",
       "tools/tillr-item/",
       "tools/tillr-land/",
+      "tools/tillr-roll/",
       "tools/tillr-run/",
       "tools/tillr-store/",
       "tools/tillr-trace/",
@@ -1073,6 +1077,9 @@
         "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
       ],
       "tools/tillr-land/": [
+        "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
+      ],
+      "tools/tillr-roll/": [
         "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
       ],
       "tools/tillr-run/": [

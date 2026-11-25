@@ -1,9 +1,17 @@
 package drain
 
 import (
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr-roll/roll"
+	_ "modernc.org/sqlite"
 )
 
 // Newly added tests have no recorded duration. A large fallback must not leave
@@ -95,131 +103,154 @@ func TestRollCleanCheckoutIncludesFullTreeAndRecordsShardFailureDetails(t *testi
 		t.Fatal(err)
 	}
 	declareSiblingInputs(t)
-	for _, rel := range []string{"../.sibling-inputs/go-test-shards.py", "../.sibling-inputs/tillr-roll/tillr-roll.py"} {
-		if _, err := os.ReadFile(rel); err != nil {
+	shardsBytes, err := os.ReadFile("../.sibling-inputs/go-test-shards.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := scratchUnderDurable(t)
+	t.Setenv("TILLR_SQLITE_TRACE", "1")
+
+	repo := filepath.Join(work, "repo")
+	live := filepath.Join(work, "durable", "bin")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(live, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFixture := func(rel, content string, mode os.FileMode) {
+		t.Helper()
+		p := filepath.Join(repo, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), mode); err != nil {
 			t.Fatal(err)
 		}
 	}
-	scratch := scratchUnderDurable(t)
-	program := `
-from contextlib import closing
-import importlib.util, json, os, pathlib, sqlite3, subprocess, sys, textwrap
 
-shards_path = pathlib.Path('../../go-test-shards.py').resolve()
-roll_path = pathlib.Path('../../tillr-roll/tillr-roll.py').resolve()
-spec = importlib.util.spec_from_file_location('tillr_roll', roll_path)
-roll = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(roll)
+	runGit(t, repo, "init", "-q")
+	writeFixture(".gitignore", "/.tillr/\n", 0o644)
+	writeFixture("bin/pi-forks", "#!/bin/sh\nexit 0\n", 0o755)
+	writeFixture("yolo-packs/tillr/files/local/share/tillr/marker.txt", "present\n", 0o644)
+	writeFixture("tools/go-test-shards.py", string(shardsBytes), 0o644)
+	writeFixture("tools/go-test-durations.json", "{}\n", 0o644)
 
-work = pathlib.Path(sys.argv[1])
-os.environ['TILLR_SQLITE_TRACE'] = '1'
+	for _, mod := range roll.Modules {
+		writeFixture(filepath.Join("tools", "tillr-"+mod, "go.mod"), "module example.invalid/tillr-"+mod+"\n\ngo 1.23\n", 0o644)
+		writeFixture(filepath.Join("tools", "tillr-"+mod, "main.go"), "package main\nfunc main() {}\n", 0o644)
+	}
 
-repo = work / 'repo'
-repo.mkdir()
-live = work / 'durable' / 'bin'
-live.mkdir(parents=True)
+	// Check that clean_checkout materializes committed paths outside tools/ and config/.
+	writeFixture("tools/tillr-drain/checkout_test.go", `package main
 
-def git(*args):
-    return subprocess.check_output(
-        ['git', '-C', str(repo), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', *args],
-        text=True,
-    ).strip()
+import (
+	"os"
+	"testing"
+)
 
-git('init', '-q')
-(repo / '.gitignore').write_text('/.tillr/\n')
-(repo / 'bin').mkdir()
-(repo / 'bin/pi-forks').write_text('#!/bin/sh\nexit 0\n')
-(repo / 'yolo-packs/tillr/files/local/share/tillr').mkdir(parents=True)
-(repo / 'yolo-packs/tillr/files/local/share/tillr/marker.txt').write_text('present\n')
-(repo / 'tools').mkdir()
-(repo / 'tools/go-test-shards.py').write_bytes(shards_path.read_bytes())
-(repo / 'tools/go-test-durations.json').write_text('{}\n')
+func TestCleanCheckoutMaterializesCommittedRepoPathsAndStripsTrace(t *testing.T) {
+	if v, ok := os.LookupEnv("TILLR_SQLITE_TRACE"); ok && v != "" {
+		t.Fatalf("unexpected TILLR_SQLITE_TRACE=%q", v)
+	}
+	for _, p := range []string{"../../bin/pi-forks", "../../yolo-packs/tillr/files/local/share/tillr/marker.txt"} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("missing committed path %s in roll checkout: %v", p, err)
+		}
+	}
+}
 
-for mod in roll.MODULES:
-    mod_dir = repo / 'tools' / f'tillr-{mod}'
-    mod_dir.mkdir(parents=True)
-    (mod_dir / 'go.mod').write_text(f'module example.invalid/tillr-{mod}\n\ngo 1.23\n')
-    (mod_dir / 'main.go').write_text('package main\nfunc main() {}\n')
+func TestFailingInRoll(t *testing.T) {
+	if os.Getenv("FAIL_IN_ROLL") == "1" {
+		t.Fatal("deliberate roll failure")
+	}
+}
 
-# Check that clean_checkout materializes committed paths outside tools/ and config/.
-(repo / 'tools/tillr-drain/checkout_test.go').write_text(textwrap.dedent('''\
-    package main
-    import (
-        "os"
-        "testing"
-    )
-    func TestCleanCheckoutMaterializesCommittedRepoPathsAndStripsTrace(t *testing.T) {
-        if v, ok := os.LookupEnv("TILLR_SQLITE_TRACE"); ok && v != "" {
-            t.Fatalf("unexpected TILLR_SQLITE_TRACE=%q", v)
-        }
-        for _, p := range []string{"../../bin/pi-forks", "../../yolo-packs/tillr/files/local/share/tillr/marker.txt"} {
-            if _, err := os.Stat(p); err != nil {
-                t.Fatalf("missing committed path %s in roll checkout: %v", p, err)
-            }
-        }
-    }
-    func TestFailingInRoll(t *testing.T) {
-        if os.Getenv("FAIL_IN_ROLL") == "1" {
-            t.Fatal("deliberate roll failure")
-        }
-    }
-    func TestPassingAfterFailure(t *testing.T) {}
-'''))
+func TestPassingAfterFailure(t *testing.T) {}
+`, 0o644)
 
-git('add', '.')
-git('commit', '-qm', 'initial')
-first = git('rev-parse', 'HEAD')
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-qm", "initial")
+	first := runGit(t, repo, "rev-parse", "HEAD")
 
-(repo / '.tillr').mkdir()
-store = repo / '.tillr/state.db'
-with closing(sqlite3.connect(store)) as db, db:
-    db.execute(
-        'CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, kind TEXT NOT NULL,'
-        ' actor TEXT, seat TEXT, session_id TEXT, object_type TEXT, object_id TEXT, revision INTEGER,'
-        " payload TEXT NOT NULL DEFAULT '{}')"
-    )
-    db.executemany(
-        'INSERT INTO events(ts, kind, payload) VALUES (0, ?, ?)',
-        (('drain.build-started', json.dumps({'role': r, 'revision': first})) for r in ('drain', 'view')),
-    )
+	if err := os.MkdirAll(filepath.Join(repo, ".tillr"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(repo, ".tillr", "state.db")
+	db, err := sql.Open("sqlite", storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(
+		"CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, kind TEXT NOT NULL," +
+			" actor TEXT, seat TEXT, session_id TEXT, object_type TEXT, object_id TEXT, revision INTEGER," +
+			" payload TEXT NOT NULL DEFAULT '{}')",
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"drain", "view"} {
+		payload, err := json.Marshal(map[string]string{"role": role, "revision": first})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec("INSERT INTO events(ts, kind, payload) VALUES (0, ?, ?)", "drain.build-started", string(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-# Advance tools/tillr-drain so roll runs go-test-shards on tillr-drain.
-(repo / 'tools/tillr-drain/main.go').write_text('package main\nfunc main() { _ = 1 }\n')
-git('commit', '-qam', 'advance drain')
-second = git('rev-parse', 'HEAD')
+	// Advance tools/tillr-drain so roll runs go-test-shards on tillr-drain.
+	writeFixture("tools/tillr-drain/main.go", "package main\nfunc main() { _ = 1 }\n", 0o644)
+	runGit(t, repo, "commit", "-qam", "advance drain")
+	second := runGit(t, repo, "rev-parse", "HEAD")
 
-# 1. Failing roll records failing test name and shard runner failure line in drain.roll-failed.
-os.environ['FAIL_IN_ROLL'] = '1'
-try:
-    roll.roll(repo, live, True, commit=second)
-except roll.RollFailed as exc:
-    msg = str(exc)
-else:
-    raise AssertionError('expected RollFailed')
+	// 1. Failing roll records failing test name and shard runner failure line in drain.roll-failed.
+	t.Setenv("FAIL_IN_ROLL", "1")
+	_, rollErr := roll.Roll(repo, live, true, false, second, nil)
+	var rf *roll.RollFailedError
+	if !errors.As(rollErr, &rf) {
+		t.Fatalf("expected *roll.RollFailedError, got %T: %v", rollErr, rollErr)
+	}
 
-with closing(sqlite3.connect(store)) as db:
-    step, detail = json.loads(
-        db.execute("SELECT payload FROM events WHERE kind = 'drain.roll-failed' ORDER BY seq DESC LIMIT 1").fetchone()[0]
-    )['step'], json.loads(
-        db.execute("SELECT payload FROM events WHERE kind = 'drain.roll-failed' ORDER BY seq DESC LIMIT 1").fetchone()[0]
-    )['detail']
+	var payloadJSON string
+	if err := db.QueryRow("SELECT payload FROM events WHERE kind = 'drain.roll-failed' ORDER BY seq DESC LIMIT 1").Scan(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	var failedPayload struct {
+		Step   string `json:"step"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(payloadJSON), &failedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if failedPayload.Step != "test tillr-drain" {
+		t.Fatalf("step = %q, want %q", failedPayload.Step, "test tillr-drain")
+	}
+	detail := failedPayload.Detail
+	if !strings.Contains(detail, "example.invalid/tillr-drain shard ") || !strings.Contains(detail, "failed (exit 1): TestFailingInRoll") {
+		t.Fatalf("unexpected shard failure header in detail:\n%s", detail)
+	}
+	if !strings.Contains(detail, "TestFailingInRoll") || !strings.Contains(detail, "deliberate roll failure") {
+		t.Fatalf("missing failing test detail:\n%s", detail)
+	}
+	if strings.Contains(detail, "returned non-zero exit status") {
+		t.Fatalf("unexpected generic exit status in detail:\n%s", detail)
+	}
+	if strings.Contains(detail, "TestPassingAfterFailure") {
+		t.Fatalf("passing test output leaked into detail:\n%s", detail)
+	}
 
-assert step == 'test tillr-drain', step
-assert 'example.invalid/tillr-drain shard ' in detail and 'failed (exit 1): TestFailingInRoll' in detail, detail
-assert 'TestFailingInRoll' in detail and 'deliberate roll failure' in detail, detail
-assert 'returned non-zero exit status' not in detail, detail
-assert 'TestPassingAfterFailure' not in detail, detail
-
-# 2. With the failure cleared, clean_checkout has bin/ and yolo-packs/ and strips TILLR_SQLITE_TRACE, so the test step passes.
-os.environ.pop('FAIL_IN_ROLL', None)
-# Stub loop --check by making tillr-drain accept loop --check and exit 0.
-(repo / 'tools/tillr-drain/main.go').write_text('package main\nfunc main() {}\n')
-git('commit', '-qam', 'ready drain')
-third = git('rev-parse', 'HEAD')
-rc = roll.roll(repo, live, True, commit=third)
-assert rc == 0, rc
-`
-	if out, err := exec.Command("python3", "-c", program, scratch).CombinedOutput(); err != nil {
-		t.Fatalf("roll checkout and failure detail: %v\n%s", err, out)
+	// 2. With the failure cleared, clean_checkout has bin/ and yolo-packs/ and strips TILLR_SQLITE_TRACE, so the test step passes.
+	if err := os.Unsetenv("FAIL_IN_ROLL"); err != nil {
+		t.Fatal(err)
+	}
+	// Stub loop --check by making tillr-drain accept loop --check and exit 0.
+	writeFixture("tools/tillr-drain/main.go", "package main\nfunc main() {}\n", 0o644)
+	runGit(t, repo, "commit", "-qam", "ready drain")
+	third := runGit(t, repo, "rev-parse", "HEAD")
+	rc, err := roll.Roll(repo, live, true, false, third, nil)
+	if err != nil || rc != 0 {
+		t.Fatalf("Roll(third) = (%d, %v), want (0, nil)", rc, err)
 	}
 }

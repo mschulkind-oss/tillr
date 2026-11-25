@@ -1,10 +1,29 @@
 {
   "id": "go-test-shards-test",
   "label": "Go shard isolation, completion, and drain test-name parity",
-  "command": ["python3", "tests/go-test-shards.test.py"],
+  "command": [
+    "python3",
+    "tests/go-test-shards.test.py"
+  ],
   "scope": "tree",
   "tier": "heavy",
   "timeout_ms": 3600000,
-  "reads": ["tools/go-test-shards.py", "tools/go-test-durations.json", "tools/gate/go_affected.py", "tools/gate/go-test-edges.json", "tests/go-test-shards.test.py", "tools/tillr-drain/", "tools/tillr/", "tools/tillr-item/", "tools/tillr-run/", "tools/tillr-land/"],
-  "tools": ["python3", "go", "git"]
+  "reads": [
+    "tools/go-test-shards.py",
+    "tools/go-test-durations.json",
+    "tools/gate/go_affected.py",
+    "tools/gate/go-test-edges.json",
+    "tests/go-test-shards.test.py",
+    "tools/tillr-drain/",
+    "tools/tillr-roll/",
+    "tools/tillr/",
+    "tools/tillr-item/",
+    "tools/tillr-run/",
+    "tools/tillr-land/"
+  ],
+  "tools": [
+    "python3",
+    "go",
+    "git"
+  ]
 }

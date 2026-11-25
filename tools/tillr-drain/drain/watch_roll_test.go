@@ -1,22 +1,20 @@
 package drain
 
 import (
+	"bufio"
+	"encoding/json"
+	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr-roll/roll"
 )
 
 func TestNamedRollWatchInstallation(t *testing.T) {
-	declareSiblingInputs(t)
-	if _, err := os.ReadFile("../.sibling-inputs/tillr-roll/tillr-roll.py"); err != nil {
-		t.Fatal(err)
-	}
-	script, err := filepath.Abs("../../tillr-roll/tillr-roll.py")
-	if err != nil {
-		t.Fatal(err)
-	}
 	root := t.TempDir()
 	runGit(t, root, "init", "-q")
 	writePackFixture(t, root, "revision", "pre-watch\n")
@@ -27,203 +25,384 @@ func TestNamedRollWatchInstallation(t *testing.T) {
 	runGit(t, root, "add", ".")
 	runGit(t, root, "commit", "-m", "with watch")
 	current := runGit(t, root, "rev-parse", "HEAD")
+
 	t.Setenv("TILLR_ROLL_VERIFICATION", "after-merge")
-	cmd := exec.Command("python3", "-B", "-", script, old, current)
-	cmd.Dir = root
-	cmd.Stdin = strings.NewReader(`
-import errno
-import io
-import json
-from pathlib import Path
-import runpy
-import subprocess
-import sys
-from types import SimpleNamespace
 
-script, old, current = sys.argv[1:]
-roll = runpy.run_path(script)['roll']
-ns = roll.__globals__
-root = Path.cwd()
-live = root / 'bin'
-rolled = root / 'tillr-roll.commit'
-marker = root / 'tillr-watch.retire'
-watch = live / 'tillr-watch'
-real_run = ns['run']
-deferred = fail_build = refuse_restart = False
-facts = {}
-seq = 0
+	live := filepath.Join(root, "bin")
+	rolled := filepath.Join(root, roll.Rolled)
+	marker := filepath.Join(root, roll.WatchRetire)
+	watch := filepath.Join(live, "tillr-watch")
 
-def run(*args, **kwargs):
-    if args[:2] == ('go', 'build'):
-        target = Path(args[args.index('-o') + 1])
-        if fail_build:
-            raise RuntimeError('fixture build failed')
-        target.write_text(ns['git']('rev-parse', 'HEAD', cwd=kwargs['cwd'].parents[1]))
-    elif args[1:3] == ('loop', '--check'):
-        return SimpleNamespace(stdout=ns['SCHEMA_CHECK'] if deferred else '')
-    elif len(args) == 2 and args[1] == '--help':
-        assert args[0].is_file()
-    else:
-        return real_run(*args, **kwargs)
+	var mu sync.Mutex
+	deferred := false
+	failBuild := false
+	refuseRestart := false
+	facts := map[string]roll.BuildFact{}
+	seq := int64(0)
 
-def activate(stage, commit):
-    assert json.loads((stage / 'roll.json').read_text())['commit'] == commit
-    for child in stage.iterdir():
-        if child.name != 'roll.json':
-            child.replace(live / child.name)
-    rolled.write_text(commit + '\n')
-    (stage / 'roll.json').unlink()
-    stage.rmdir()
+	activate := func(stage, commit string) {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(stage, "roll.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var meta struct {
+			Commit string `json:"commit"`
+		}
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			t.Fatal(err)
+		}
+		if meta.Commit != commit {
+			t.Fatalf("stage commit = %q, want %q", meta.Commit, commit)
+		}
+		entries, err := os.ReadDir(stage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.Name() == "roll.json" {
+				continue
+			}
+			if err := os.Rename(filepath.Join(stage, entry.Name()), filepath.Join(live, entry.Name())); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(rolled, []byte(commit+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(stage, "roll.json")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-def request(args, **kwargs):
-    global seq
-    role = args[0].name.removeprefix('tillr-')
-    if deferred and role == 'drain':
-        stage = live / (ns['SCHEMA_STAGE'] + ns['digest'](args[0]))
-        activate(stage, args[0].read_text())
-    if refuse_restart and (not deferred or role == 'view'):
-        return SimpleNamespace(stdout='fixture\nfixture: refused\n', returncode=1)
-    seq += 1
-    facts[role] = dict(seq=seq, revision=args[0].read_text(), digest=ns['digest'](args[0]))
-    return SimpleNamespace(stdout='fixture\nfixture: restarted\n', returncode=0)
+	var removeHook func(path string) error
 
-ns.update(run=run, builds=lambda store: facts.copy(), record_failure=lambda *args: None,
-          test_commit=lambda *args: None)
-# The imported subprocess module is shared with real_run; only intercept restarts.
-real_subprocess = subprocess.run
-subprocess.run = lambda args, **kwargs: request(args, **kwargs) if args[1] == 'restart' else real_subprocess(args, **kwargs)
+	deps := &roll.Deps{
+		Run: func(args []string, opts roll.RunOpts) (roll.CmdResult, error) {
+			if len(args) >= 2 && args[0] == "go" && args[1] == "build" {
+				target := ""
+				for i := 0; i+1 < len(args); i++ {
+					if args[i] == "-o" {
+						target = args[i+1]
+						break
+					}
+				}
+				if target == "" {
+					t.Fatalf("missing -o in go build args: %v", args)
+				}
+				mu.Lock()
+				shouldFail := failBuild
+				mu.Unlock()
+				if shouldFail {
+					return roll.CmdResult{}, errors.New("fixture build failed")
+				}
+				repoDir := filepath.Dir(filepath.Dir(opts.Dir))
+				rev, err := roll.Git(repoDir, nil, "rev-parse", "HEAD")
+				if err != nil {
+					return roll.CmdResult{}, err
+				}
+				if err := os.WriteFile(target, []byte(rev), 0o755); err != nil {
+					return roll.CmdResult{}, err
+				}
+				return roll.CmdResult{}, nil
+			}
+			if len(args) >= 3 && args[1] == "loop" && args[2] == "--check" {
+				mu.Lock()
+				isDeferred := deferred
+				mu.Unlock()
+				if isDeferred {
+					return roll.CmdResult{Stdout: roll.SchemaCheck + "\n"}, nil
+				}
+				return roll.CmdResult{}, nil
+			}
+			if len(args) == 2 && args[1] == "--help" {
+				info, err := os.Stat(args[0])
+				if err != nil || !info.Mode().IsRegular() {
+					t.Fatalf("smoke target %q is not a regular file: %v", args[0], err)
+				}
+				return roll.CmdResult{}, nil
+			}
+			return roll.Run(args, opts, nil)
+		},
+		Builds: func(store string) (map[string]roll.BuildFact, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			out := make(map[string]roll.BuildFact, len(facts))
+			for k, v := range facts {
+				out[k] = v
+			}
+			return out, nil
+		},
+		RecordFailure: func(store, commit, step, detail string) {},
+		TestCommit: func(root, source, work, tip, store string, old map[string]roll.BuildFact, buildEnv []string) error {
+			return nil
+		},
+		Restart: func(liveDir, rootDir, role string) string {
+			mu.Lock()
+			defer mu.Unlock()
+			exe := filepath.Join(liveDir, "tillr-"+role)
+			if deferred && role == "drain" {
+				d, err := roll.Digest(exe)
+				if err != nil {
+					t.Fatal(err)
+				}
+				content, err := os.ReadFile(exe)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stage := filepath.Join(liveDir, roll.SchemaStage+d)
+				activate(stage, string(content))
+			}
+			if refuseRestart && (!deferred || role == "view") {
+				return "refused"
+			}
+			content, err := os.ReadFile(exe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := roll.Digest(exe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seq++
+			facts[role] = roll.BuildFact{
+				Seq:      seq,
+				Role:     role,
+				Revision: string(content),
+				Digest:   d,
+			}
+			return "restarted"
+		},
+		Remove: func(path string) error {
+			if removeHook != nil {
+				return removeHook(path)
+			}
+			return os.Remove(path)
+		},
+	}
 
-def install(commit, no_request=True):
-    assert roll(root, live, no_request, commit=commit) == 0
+	install := func(commit string, noRequest bool) {
+		t.Helper()
+		rc, err := roll.Roll(root, live, noRequest, false, commit, deps)
+		if err != nil || rc != 0 {
+			t.Fatalf("roll(%s, noRequest=%v) = (%d, %v), want (0, nil)", commit, noRequest, rc, err)
+		}
+	}
 
-def expect_bad_revision():
-    try:
-        install('bad-requested-revision')
-    except subprocess.CalledProcessError as exc:
-        assert exc.cmd[:3] == ('git', 'rev-parse', '--verify'), exc
-    else:
-        raise AssertionError('roll unexpectedly resolved a bad revision')
+	expectBadRevision := func() {
+		t.Helper()
+		_, err := roll.Roll(root, live, true, false, "bad-requested-revision", deps)
+		if err == nil {
+			t.Fatal("roll unexpectedly resolved a bad revision")
+		}
+		var exitErr *roll.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("expected *roll.ExitError for bad revision, got %T: %v", err, err)
+		}
+	}
 
+	expectFailedBuild := func() {
+		t.Helper()
+		_, err := roll.Roll(root, live, true, false, old, deps)
+		if err == nil {
+			t.Fatal("build unexpectedly succeeded")
+		}
+		var rf *roll.RollFailedError
+		if !errors.As(err, &rf) || !strings.Contains(err.Error(), "fixture build failed") {
+			t.Fatalf("expected RollFailedError with fixture build failed, got %T: %v", err, err)
+		}
+	}
 
-def expect_failed_build():
-    try:
-        install(old)
-    except ns['RollFailed'] as exc:
-        assert 'fixture build failed' in str(exc)
-    else:
-        raise AssertionError('build unexpectedly succeeded')
+	mustRead := func(path string) string {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
 
-install(current)
-assert watch.read_text() == current
-fail_build = True
-expect_failed_build()
-assert watch.read_text() == current
-fail_build = False
-rolled.unlink()
-rolled.mkdir()  # Opening the installed commit stamp for writing must fail.
-try:
-    install(old)
-except IsADirectoryError as exc:
-    assert Path(exc.filename) == rolled
-else:
-    raise AssertionError('roll unexpectedly stamped a directory')
-assert watch.read_text() == current
-rolled.rmdir()
-refuse_restart = True
-assert roll(root, live, False, commit=old) == 1
-assert watch.read_text() == current
-refuse_restart = False
-install(old)
-assert not watch.exists() and (live / 'tillr').read_text() == old
+	exists := func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
 
-# A successful requested handoff must retire watch itself, not settle a
-# marker from an earlier --no-request roll.
-install(current)
-deferred = True
-assert watch.read_text() == current and not marker.exists()
-install(old, no_request=False)
-assert rolled.read_text().strip() == old
-assert not watch.exists() and not marker.exists()
-install(current, no_request=False)
-assert watch.read_text() == current
+	install(current, true)
+	if got := mustRead(watch); got != current {
+		t.Fatalf("watch = %q, want %q", got, current)
+	}
 
-refuse_restart = True
-assert roll(root, live, False, commit=old) == 1
-expect_bad_revision()
-assert watch.read_text() == current and not marker.exists()
-refuse_restart = False
+	failBuild = true
+	expectFailedBuild()
+	if got := mustRead(watch); got != current {
+		t.Fatalf("watch after failed build = %q, want %q", got, current)
+	}
+	failBuild = false
 
-# Cleanup failure during settlement of an earlier successful --no-request
-# roll must keep the binary and leave the marker eligible for a retry.
-install(old)
-activate(live / json.loads(marker.read_text())['stage'], old)
-real_unlink = Path.unlink
-def expect_failed_cleanup(target, error):
-    def unlink(path, *args, **kwargs):
-        if target(path):
-            raise PermissionError(error)
-        return real_unlink(path, *args, **kwargs)
+	if err := os.Remove(rolled); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(rolled, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := roll.Roll(root, live, true, false, old, deps); err == nil {
+		t.Fatal("roll unexpectedly stamped a directory")
+	} else {
+		var pathErr *os.PathError
+		if !errors.As(err, &pathErr) || pathErr.Path != rolled || !errors.Is(err, syscall.EISDIR) {
+			t.Fatalf("expected EISDIR on %s, got %T: %v", rolled, err, err)
+		}
+	}
+	if got := mustRead(watch); got != current {
+		t.Fatalf("watch after EISDIR = %q, want %q", got, current)
+	}
+	if err := os.Remove(rolled); err != nil {
+		t.Fatal(err)
+	}
 
-    Path.unlink = unlink
-    try:
-        install(old, no_request=False)
-    except PermissionError as exc:
-        assert str(exc) == error
-    else:
-        raise AssertionError('roll unexpectedly completed retirement')
-    finally:
-        Path.unlink = real_unlink
-    assert watch.read_text() == current and marker.exists()
+	refuseRestart = true
+	if rc, err := roll.Roll(root, live, false, false, old, deps); err != nil || rc != 1 {
+		t.Fatalf("roll with refused restart = (%d, %v), want (1, nil)", rc, err)
+	}
+	if got := mustRead(watch); got != current {
+		t.Fatalf("watch after refused restart = %q, want %q", got, current)
+	}
+	refuseRestart = false
 
-expect_failed_cleanup(lambda path: path == marker, 'fixture marker cleanup failed')
-# The next roll tries to settle the previous installation first. Failure to
-# delete the recovery copy must restore both the binary and the retirement intent.
-expect_failed_cleanup(lambda path: path.name.startswith('.tillr-watch-'), 'fixture backup cleanup failed')
-install(old, no_request=False)
-assert not watch.exists() and not marker.exists() and rolled.read_text().strip() == old
+	install(old, true)
+	if exists(watch) {
+		t.Fatalf("watch %s still exists after install(old)", watch)
+	}
+	if got := mustRead(filepath.Join(live, "tillr")); got != old {
+		t.Fatalf("live/tillr = %q, want %q", got, old)
+	}
 
-for schema_roll in (False, True):
-    deferred = False
-    install(current)
-    deferred = schema_roll
-    stdout = sys.stdout
-    # Neither report line fills this buffer. Only flushing delivers the error.
-    blocked = io.TextIOWrapper(io.BufferedWriter(io.FileIO('/dev/full', 'w')))
-    sys.stdout = blocked
-    try:
-        install(old, no_request=not deferred)
-    except OSError as exc:
-        assert exc.errno == errno.ENOSPC, exc
-    else:
-        raise AssertionError(f'roll with unflushable stdout succeeded (deferred={deferred})')
-    finally:
-        sys.stdout = stdout
-        try:
-            blocked.close()
-        except OSError as exc:
-            assert exc.errno == errno.ENOSPC, exc
-    assert rolled.read_text().strip() == old and watch.read_text() == current
-    expect_bad_revision()
-    assert watch.read_text() == current and not marker.exists()
+	// A successful requested handoff must retire watch itself, not settle a
+	// marker from an earlier --no-request roll.
+	install(current, true)
+	deferred = true
+	if got := mustRead(watch); got != current || exists(marker) {
+		t.Fatalf("unexpected state before deferred handoff: watch=%q marker=%v", got, exists(marker))
+	}
+	install(old, false)
+	if got := strings.TrimSpace(mustRead(rolled)); got != old {
+		t.Fatalf("rolled = %q, want %q", got, old)
+	}
+	if exists(watch) || exists(marker) {
+		t.Fatalf("expected watch and marker removed after deferred handoff: watch=%v marker=%v", exists(watch), exists(marker))
+	}
+	install(current, false)
+	if got := mustRead(watch); got != current {
+		t.Fatalf("watch = %q, want %q", got, current)
+	}
 
-deferred = False
-install(current)
-deferred = True
-install(old)
-assert watch.read_text() == current
-pending = json.loads(marker.read_text())
-assert pending['commit'] == old and pending['stage'].startswith(ns['SCHEMA_STAGE'])
-stage = live / pending['stage']
-fail_build = True
-# Even a matching commit stamp is not enough while staging still exists.
-rolled.write_text(old + '\n')
-expect_failed_build()
-assert watch.read_text() == current and marker.exists() and stage.is_dir()
-activate(stage, old)
-expect_failed_build()
-assert not watch.exists() and not marker.exists()
-`)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("named roll fixture: %v\n%s", err, out)
+	refuseRestart = true
+	if rc, err := roll.Roll(root, live, false, false, old, deps); err != nil || rc != 1 {
+		t.Fatalf("roll with refused restart = (%d, %v), want (1, nil)", rc, err)
+	}
+	expectBadRevision()
+	if got := mustRead(watch); got != current || exists(marker) {
+		t.Fatalf("unexpected state after refused+badrev: watch=%q marker=%v", got, exists(marker))
+	}
+	refuseRestart = false
+
+	// Cleanup failure during settlement of an earlier successful --no-request
+	// roll must keep the binary and leave the marker eligible for a retry.
+	install(old, true)
+	var pending struct {
+		Stage  string `json:"stage"`
+		Commit string `json:"commit"`
+	}
+	if err := json.Unmarshal([]byte(mustRead(marker)), &pending); err != nil {
+		t.Fatal(err)
+	}
+	activate(filepath.Join(live, pending.Stage), old)
+
+	expectFailedCleanup := func(target func(string) bool, errMsg string) {
+		t.Helper()
+		removeHook = func(path string) error {
+			if target(path) {
+				return errors.New(errMsg)
+			}
+			return os.Remove(path)
+		}
+		_, err := roll.Roll(root, live, false, false, old, deps)
+		removeHook = nil
+		if err == nil || err.Error() != errMsg {
+			t.Fatalf("expected cleanup error %q, got %v", errMsg, err)
+		}
+		if got := mustRead(watch); got != current || !exists(marker) {
+			t.Fatalf("expected watch=%q and marker present after failed cleanup, got watch=%q marker=%v", current, got, exists(marker))
+		}
+	}
+
+	expectFailedCleanup(func(path string) bool { return path == marker }, "fixture marker cleanup failed")
+	// The next roll tries to settle the previous installation first. Failure to
+	// delete the recovery copy must restore both the binary and the retirement intent.
+	expectFailedCleanup(func(path string) bool { return strings.HasPrefix(filepath.Base(path), ".tillr-watch-") }, "fixture backup cleanup failed")
+
+	install(old, false)
+	if exists(watch) || exists(marker) || strings.TrimSpace(mustRead(rolled)) != old {
+		t.Fatalf("expected clean retirement after retry: watch=%v marker=%v rolled=%q", exists(watch), exists(marker), mustRead(rolled))
+	}
+
+	for _, schemaRoll := range []bool{false, true} {
+		deferred = false
+		install(current, true)
+		deferred = schemaRoll
+		fullFile, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatalf("open /dev/full: %v", err)
+		}
+		// Neither report line fills this buffer. Only flushing delivers the error.
+		deps.Stdout = bufio.NewWriter(fullFile)
+		_, rollErr := roll.Roll(root, live, !deferred, false, old, deps)
+		deps.Stdout = nil
+		_ = fullFile.Close()
+		if !errors.Is(rollErr, syscall.ENOSPC) {
+			t.Fatalf("roll with unflushable stdout (deferred=%v): got %v, want ENOSPC", schemaRoll, rollErr)
+		}
+		if got := strings.TrimSpace(mustRead(rolled)); got != old {
+			t.Fatalf("rolled = %q, want %q", got, old)
+		}
+		if got := mustRead(watch); got != current {
+			t.Fatalf("watch = %q, want %q", got, current)
+		}
+		expectBadRevision()
+		if got := mustRead(watch); got != current || exists(marker) {
+			t.Fatalf("unexpected state after ENOSPC+badrev: watch=%q marker=%v", got, exists(marker))
+		}
+	}
+
+	deferred = false
+	install(current, true)
+	deferred = true
+	install(old, true)
+	if got := mustRead(watch); got != current {
+		t.Fatalf("watch = %q, want %q", got, current)
+	}
+	if err := json.Unmarshal([]byte(mustRead(marker)), &pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending.Commit != old || !strings.HasPrefix(pending.Stage, roll.SchemaStage) {
+		t.Fatalf("unexpected pending marker: %+v", pending)
+	}
+	stage := filepath.Join(live, pending.Stage)
+	failBuild = true
+	// Even a matching commit stamp is not enough while staging still exists.
+	if err := os.WriteFile(rolled, []byte(old+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expectFailedBuild()
+	if got := mustRead(watch); got != current || !exists(marker) || !exists(stage) {
+		t.Fatalf("expected watch=%q marker=true stage=true, got watch=%q marker=%v stage=%v", current, got, exists(marker), exists(stage))
+	}
+	activate(stage, old)
+	expectFailedBuild()
+	if exists(watch) || exists(marker) {
+		t.Fatalf("expected watch and marker settled after stage activation: watch=%v marker=%v", exists(watch), exists(marker))
 	}
 }

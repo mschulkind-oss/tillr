@@ -6,6 +6,7 @@ require (
 	github.com/mschulkind-oss/tillr v0.0.0
 	github.com/mschulkind-oss/tillr-item v0.0.0
 	github.com/mschulkind-oss/tillr-land v0.0.0
+	github.com/mschulkind-oss/tillr-roll v0.0.0
 	github.com/mschulkind-oss/tillr-run v0.0.0
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.61.0
@@ -30,3 +31,5 @@ replace github.com/mschulkind-oss/tillr-item => ../tillr-item
 replace github.com/mschulkind-oss/tillr-run => ../tillr-run
 
 replace github.com/mschulkind-oss/tillr-land => ../tillr-land
+
+replace github.com/mschulkind-oss/tillr-roll => ../tillr-roll
