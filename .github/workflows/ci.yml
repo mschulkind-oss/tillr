@@ -22,4 +22,7 @@ jobs:
         run: |
           git config --global user.name "CI"
           git config --global user.email "ci@example.invalid"
+      # The test sharding script refuses to pick a scratch directory itself.
       - run: just check-ci
+        env:
+          TMPDIR: ${{ runner.temp }}
