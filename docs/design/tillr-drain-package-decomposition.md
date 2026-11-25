@@ -1,0 +1,520 @@
+---
+title: "Breaking tools/tillr-drain/drain into single-job internal packages via conflict-free extractions"
+status: in-review
+stage: DESIGN
+updated: 2026-11-25
+tags:
+  - tillr
+  - drain
+  - architecture
+  - testing
+  - gate
+  - design
+summary: "Maps all 251 production files (87,692 lines, 761 *Loop methods, 146 Loop struct fields, 24 mutexes) and 585 test files (137,122 lines, 2,125 executable Test* functions, 3,636.34 s recorded duration, 1,521 unexported declarations reached by white-box tests) in tools/tillr-drain/drain, and decomposes 229 production files (72,248 lines) and 180 whole subsystem test files (522 Test* functions, 277.98 s) into 22 single-job packages under tools/tillr-drain/internal/ arranged in a 6-layer DAG below an irreducible 22-file Loop core. Declares 22 single-commit extraction items scheduled across 13 file-disjoint waves so concurrent extractions and live queue edits to drain and pack-sync do not collide, proves zero dropped tests per commit, and locks the boundary with an automated pre-merge architecture check extending D-GR47. Nothing is built."
+next: "The owner reviews the designer's structural decisions D-DPD1 through D-DPD8 in the Decision Ledger and rules on OQ-DPD1 alongside OQ-DFG1. Waves 1 through 4 (E01–E07) can be materialized into queue items as soon as the design is accepted."
+depends-on:
+  - fast-gate-tillr-drain-options.md
+  - landing-principles.md
+  - ../reference/gate.md
+  - ../reference/authority-not-approval.md
+vantage:
+  status-chip: true
+---
+
+# Breaking `tools/tillr-drain/drain` into single-job internal packages via conflict-free extractions
+
+**Status:** Nothing is built: `fd --max-depth 1 --type d . tools/tillr-drain/internal` returns only `tools/tillr-drain/internal/testinputs/`, and `rg -n 'architecture_test\.go|tillr-arch:' tools/tillr-drain` returns nothing at commit `0e57a73d` (2026-11-25). `R-DPD1` ([§1.1](#11-owner-direction-and-standing-rules)) records the owner's verbatim 2026-11-25 direction. Every structural choice in this document — [`D-DPD1`](#D-DPD1) through [`D-DPD8`](#D-DPD8) in the [Decision Ledger](#decision-ledger) — is **the designer's decision, open to the owner to overturn**. [`OQ-DPD1`](#OQ-DPD1) asks the owner how pre-merge `go-affected` treats the three extracted packages whose subprocess test suites exceed `25 s` serial alongside [`OQ-DFG1`](./fast-gate-tillr-drain-options.md#OQ-DFG1).
+
+> **In short.** `tools/tillr-drain/drain` currently compiles **`251` production `.go` files (`87,692` lines)** and **`585` `*_test.go` files (`137,122` lines; `224,814` total lines, `2,125` executable `Test*` functions, `3,636.34 s` recorded duration)** into one Go package where `struct Loop` carries **`146` fields and `24` `sync.Mutex`/`sync.RWMutex` locks**. Over half of `Loop`'s **`761` methods (`382`, `50.2%`)** never touch mutable loop state — they take `(l *Loop)` only to reach `l.cfg.Store`, `l.cfg.Root`, `l.cfg.Now`, `l.git`, `l.reportf`, `Candidate`, or `Decision` — while **`1,042` of `2,125` `Test*` functions (`49.0%`, `512.36 s`)** never run a `Loop` pass or spawn the `tillr-drain` binary. This design extracts **`229` production files (`72,248` lines, `82.4%`)** and **`180` whole test files (`522` `Test*` functions, `277.98 s`)** into **`22` single-job packages under `tools/tillr-drain/internal/`** in a strict 6-layer DAG (`D-DPD1`–`D-DPD3`), leaves only the **`22`-file pass/examination/restart coordinator** in `drain` (`D-DPD4`), lands the move in **`22` single-commit queue items across `13` file-disjoint waves** while ordinary `drain` work and `just pack-sync` continue (`D-DPD5`–`D-DPD7`), and prevents coupling from returning with an automated `< 0.2 s` pre-merge architecture check extending [`D-GR47`](../reference/gate.md#D-GR47) (`D-DPD8`).
+
+**Why it matters.** Because all `251` production files and `585` test files share one Go package namespace:
+- Editing any helper in `drain` recompiles `224,814` lines and invalidates Go's per-binary test cache across all `2,125` tests (`3,636.34 s` in [`tools/go-test-durations.json`](../../tools/go-test-durations.json)).
+- Under [`D-GR54`](../reference/gate.md#D-GR54) (`DEFERRED_PROOF_PACKAGES` deferring `tillr-drain/drain` to after-merge `go-test-tillr-drain`), subsystem logic trapped inside `package drain` gets **`0` tests of its own behavior before the merge** when its source changes, whereas loop-free subpackages run their own fast cached suites before the merge.
+- Subsystem state and locks (`24` mutexes across policy, quotas, CPU accounting, lane rotation, heavy proof, trunk locks, WAL checkpoints, and fast-start views) sit exposed on `struct Loop`, allowing cross-domain field reads and lock-order hazards across `475` white-box test files and `166` production files.
+
+**Start at:**
+- [§1](#1-measured-baseline-what-drain-holds-today-and-how-it-couples) for the owner's direction and the measured AST/`go/types` coupling inventory of all `251` production files, `585` test files, and `1,521` test-referenced unexported names.
+- [§2](#2-target-architecture-single-job-packages-layer-dag-and-seam-interfaces) for the `22` `internal/<pkg>` packages, dependency DAG, seam interfaces, and why the `22`-file `Loop` core cannot be split further.
+- [§3](#3-extraction-sequence-22-single-commit-items-across-13-conflict-free-waves) for the `22` extraction queue items (`E01`–`E22`), conflict-free wave dependencies, coexistence with ongoing `drain` changes and `just pack-sync`, zero-dropped-test check, and per-item caching and pre-merge gate impact.
+- [§4](#4-stopping-decay-structural-rule-and-automated-pre-merge-ratchet) for the structural anti-decay rule and automated check consistent with [`D-GR47`](../reference/gate.md#D-GR47).
+
+**Needs your ruling:** [`OQ-DPD1`](#OQ-DPD1) (how pre-merge `go-affected` handles the three extracted `internal/*` packages whose moved subprocess suites exceed `25 s` serial, alongside [`OQ-DFG1`](./fast-gate-tillr-drain-options.md#OQ-DFG1)).
+
+**Awaits your review:** the designer's structural decisions [`D-DPD1`](#D-DPD1) through [`D-DPD8`](#D-DPD8) in the [Decision Ledger](#decision-ledger). None is an owner ruling, and you may overturn any of them.
+
+**Reads with:** [the gate reference](../reference/gate.md) ([`D-GR47`](../reference/gate.md#D-GR47), [`D-GR49`](../reference/gate.md#D-GR49), [`D-GR53`](../reference/gate.md#D-GR53), [`D-GR54`](../reference/gate.md#D-GR54)), [fast-gate options for `tillr-drain`](./fast-gate-tillr-drain-options.md) ([`OQ-DFG1`](./fast-gate-tillr-drain-options.md#OQ-DFG1)), [landing principles](./landing-principles.md), and [authority, not approval](../reference/authority-not-approval.md).
+
+---
+
+## 1. Measured Baseline: What `drain` Holds Today and How It Couples
+
+### 1.1 Owner direction and standing rules
+
+One dated verbatim statement by the owner sets the goal of this design:
+
+- **`R-DPD1` (2026-11-25, owner):** *"Surely there's a better architecture here. This like interconnected mess of stuff is not good for development speed, it's not good for testing, it's not good for development in general, bugs"*
+
+The owner left the choice of architecture to the designer and asked for a sequence of separately landed extraction items rather than a big-bang rewrite that would collide with active lanes. No other statement in this document is attributed to the owner; every package boundary, layer rule, seam interface, wave dependency, and gate check below (`D-DPD1`–`D-DPD8`) is **the designer's decision, open to the owner to overturn**.
+
+Four standing repository rules bound the design:
+
+1. **Loop-free subpackages never import `drain` ([`D-GR47`](../reference/gate.md#D-GR47)).** Subpackages under `tools/tillr-drain/` that do not run `drain.Loop` never import `github.com/mschulkind-oss/tillr-drain/drain` or the root `github.com/mschulkind-oss/tillr-drain` package in production or test code, and extractions prove isolation and zero dropped tests deterministically rather than by wall-clock timing thresholds.
+2. **Pre-merge vs. after-merge Go test split ([`D-GR53`](../reference/gate.md#D-GR53), [`D-GR54`](../reference/gate.md#D-GR54), [`OQ-DFG1`](./fast-gate-tillr-drain-options.md#OQ-DFG1)).** At commit `0e57a73d` (following `43455fc4` and `5e728e5a`), `DEFERRED_PROOF_PACKAGES` in [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) defers only `github.com/mschulkind-oss/tillr-drain/drain` to after-merge `go-test-tillr-drain`, while `go-build` compiles all `tools/tillr-drain/...` code and tests before the merge and `go-affected` runs all other `tools/tillr-drain` subpackages (`15` test-bearing packages today) and consumer modules before the merge. [`OQ-DFG1`](./fast-gate-tillr-drain-options.md#OQ-DFG1) remains open before the owner.
+3. **External Go callers of `tillr-drain/drain`.** Outside `tools/tillr-drain/drain`, three packages import `github.com/mschulkind-oss/tillr-drain/drain`: root `tools/tillr-drain` (`main.go` and CLI subcommands), `tools/tillr-store` (event payload readers), and `tools/tillr-watch` (watch event schemas). Preserving `drain`'s exported entrypoints and type aliases avoids cross-module churn during internal extractions.
+4. **Shipped module mirror (`pack-sync`) and candidate size.** [`tools/tillr/packsync/packsync.go`](../../tools/tillr/packsync/packsync.go) (`CaseTreeMatchesSource`) skips generated mirror checks on `--candidate` runs while [`tools/tillr-drain/drain/pack_mirror.go`](../../tools/tillr-drain/drain/pack_mirror.go) (`stagePackMirror` and `filterMirrorConflictReports`) renders `yolo-packs/tillr/files/local/share/tillr/tillr-drain/` 1-to-1 per source path at landing. [`.tillr.toml`](../../.tillr.toml) sets advisory `[candidate_size]` thresholds of `file_limit = 27` and `added_line_limit = 1200` (measured by `measureCandidateSize` in `candidate_size.go` with `git diff --numstat -z --find-renames` excluding `yolo-packs/tillr/files/local/share/tillr/`).
+
+### 1.2 Module inventory and the four hub files that knot `drain`
+
+Measured at commit `0e57a73d` on `linux/amd64` (`go -C tools/tillr-drain list -json ./...`, `go/types` over `./drain` and `./drain_test`, `wc -l`, and [`tools/go-test-durations.json`](../../tools/go-test-durations.json)):
+
+- **`tools/tillr-drain` holds `25` Go packages:**
+  - Root CLI `github.com/mschulkind-oss/tillr-drain` (`11` `.go`, `13` `*_test.go`), `cmd/cache-test` (`1` `.go`), and `internal/testinputs` (`1` `.go`, `1` `*_test.go`).
+  - `17` small leaf contract/helper packages (`adaptive`, `check`, `claim`, `classify`, `cost`, `events`, `fence`, `heavy`, `holdrules`, `lanes`, `lock`, `notify`, `parallel`, `questions`, `settings`, `slot`, `verdict`) plus `4` [`D-GR47`](../reference/gate.md#D-GR47) domain leaf packages (`workflow`, `remotesync`, `fixer`, `heavyrun`). Together with root `tillr-drain`, the `15` non-`drain` test-bearing packages in `tools/tillr-drain` hold `139` top-level tests and run in a few seconds.
+  - **`tools/tillr-drain/drain`:** **`251` production `.go` files** (`250` active on `linux/amd64` plus `start_watcher_other.go`, **`87,692` lines**) and **`585` `*_test.go` files** (`475` white-box `package drain` + `110` black-box `package drain_test`, **`137,122` lines**; **`836` files and `224,814` lines total**). Its test files contain `2,144` `^func Test` declarations, of which **`2,125` are executable top-level `Test*` functions** (excluding `TestMain`, `TestEdgeInputs`, and lowercase `func Testfoo` helpers), summing **`3,636.34 s` (`60.6 min`)** of recorded test duration (`3,695.13 s` across all `1,842` entries under `github.com/mschulkind-oss/tillr-drain/drain` in `tools/go-test-durations.json`).
+
+Type-checking intra-package symbol references across all `250` active production files shows why editing any part of `drain` touches everything else. Four hub files carry value schemas, ambient configuration, and SQLite helpers alongside coordinator state:
+
+| Hub file | Lines | Production files referencing it | Top referenced symbols (caller file count) | Structural diagnosis |
+| :--- | ---: | ---: | :--- | :--- |
+| `loop.go` | `4,802` | `182` / `249` (`73.1%`) | `type Loop` (`165`), `Loop.cfg` (`158`: `Store` `139`, `Now` `113`, `Root` `93`), `Loop.reportf` (`84`), `type Candidate` (`79`), `Loop.git` (`53`), `TrunkRef` (`47`), `Loop.revParse` (`39`), `Loop.mu` (`29`) | `Loop` acts as an ambient service bag (`Store`, `Root`, `Now`, `git`, `reportf`) and houses value types (`Candidate`, `GateOutcome`, `TrunkRef`) alongside `24` locks |
+| `plan.go` | `3,271` | `118` / `249` (`47.4%`) | `type Decision` (`81`), `Decision.RunRequest` (`81`), `Decision.ItemID` (`77`), `Decision.LaneID` (`69`), `Decision.Workflow` (`43`), `type itemRow` (`22`), `readFailure` (`19`), `identifyDecision` (`18`) | Subsystems depend on `plan.go` for `Decision` value fields, `Reason*`/`Action*` constants, and store-read helpers rather than for `Plan(...)` |
+| `pass.go` | `4,117` | `107` / `249` (`43.0%`) | `pendingWork.Decision` (`57`), `appendEffect` (`46`), `type pendingWork` (`45`), `terminalRecord` (`27`), `readPending` (`24`), `dispatchStartedKind` (`19`), `readPendingHistory` (`17`) | SQLite pending-work event projection (`pendingWork`, `appendEffect`, `readPending`) lives inside the `4,117`-line pass driver |
+| `events.go` | `930` | `53` / `249` (`21.3%`) | `RefusalKind` (`20`), `type refusalPayload` (`16`), `appendJudgment` (`13`), `GateVerdictKind` (`7`), `judgmentSeen` (`6`) | Event-kind constants and judgment append helpers pull `25` outgoing files via whole-log payload folds |
+
+Meanwhile, `errors.go` (`121` lines, `106` incoming callers, **`0` outgoing intra-`drain` dependencies**) and `schema.go` (`235` lines, `101` incoming callers, **`0` outgoing intra-`drain` dependencies**) are already pure foundational leaves trapped inside `package drain`.
+
+### 1.3 Measured `*Loop` receiver coupling (`761` methods, `146` fields, `24` locks)
+
+Inspecting `struct Loop` in `tools/tillr-drain/drain/loop.go` (`type Loop struct`) and every `(l *Loop)` method across all `250` active production files shows that most `*Loop` methods do not belong on the loop state machine:
+
+- **`struct Loop` holds `146` fields**, including **`24` `sync.Mutex` / `sync.RWMutex` locks** (`laneOfferMu`, `restartMu`, `flakySweepMu`, `restartMechanical`, `restartGateMu`, `heavyMu`, `activeGatesMu`, `baseReplayMu`, `fixerWaitMu`, `forkRebaseMu`, `revertMu`, `mu`, `endedLaneMu`, `reportMu`, `busyWritesMu`, `laneMu`, `quotaMu`, `policyMu`, `sessionMu`, `processCPUMu`, `pollReaderMu`, `restartPollMu`, `historyMu`, `ownerAnswerMu`), **`2` `sync.WaitGroup`s** (`heavyWG`, `examinations`), **`5` `atomic` fields** (`liveLanes`, `startView`, `greenPushAtStart`, `restartReplaced`, `restartSettlements`), and **`3` `chan` fields** (`restartPendingWait`, `completions`, `examineWake`).
+- **`84` of `250` active production files (`25,266` lines, `28.8%`)** never reference `Loop` at all (`plan.go`, `why.go`, `stage.go`, `boundary.go`, `policy.go`, `failover.go`, `backend_outcomes.go`, `icebox.go`, `lane_base.go`, `retry_brief.go`, `heavy_steps.go`, `replay_go_affected.go`, `process_priority.go`, `refusal_cases.go`, `resume.go`, `retries.go`, etc.).
+- Across all **`761` `(l *Loop)` methods** in `drain`:
+  - **`6` methods** read or write **`0` `Loop` fields**;
+  - **`290` methods** read **only `l.cfg`** (`Root`, `Store`, `LaneRoot`, `Now`, `Policy`, `Comments`, `Steps`, `Stage`);
+  - **`86` methods** touch **only `l.cfg` plus `reportMu`/`busyWritesMu`/`pendingBusyWrites`** (logging or SQLite busy-event buffering);
+  - **`382` of `761` `*Loop` methods (`50.2%`)** — and **every `*Loop` method in `60` production files** — never touch mutable loop state or coordinator locks;
+  - The remaining **`379` methods** mutate domain state (policy reload, lane rotation, heavy proof, trunk locks, fast-start snapshot, or active pass/restart state) that splits cleanly between subsystem-owned coordinator structs (`16` locks) and the irreducible `Loop` core (`8` locks).
+
+### 1.4 Measured test coupling and unexported names tests use
+
+Tracing test-to-test helper calls (`go/types` over `475` `package drain` test files and `110` `package drain_test` files) without descending through `Loop.Run` or `Loop.pass`, and cross-referencing `build_tests["github.com/mschulkind-oss/tillr-drain"]` in [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json), classifies every test file and every `Test*` function into five coupling tiers:
+
+| Coupling tier | Test files | File `Test*` count | File duration (`s`) | Per-`Test*` count (exact) | Per-`Test*` duration (`s`) | What the test actually invokes |
+| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
+| **1. Direct subsystem call** (no `Loop`, no `Plan`/`Why`, no `tillr-drain` CLI) | `71` | `121` | `50.70` | `366` | `90.89` | `ProcessSteps`, `JudgeHeavy`, `boundary`, `LaneStager`, `gathered`, `quota_window`, `gate_timing`, etc. |
+| **2. Direct `Plan` / `Why` call** (no `Loop`, no `tillr-drain` CLI) | `11` | `37` | `1.32` | `38` | `1.59` | `Plan(...)`, `Why(...)`, `Policy`, `startWatcher` |
+| **3. Narrow `*Loop` subsystem method only** (never calls `Run`, `pass`, `tick`, `Once`, `verify`, `applyPlan`, or `settleCandidate`; no CLI) | `131` | `420` | `307.60` | `638` | `419.88` | `startHeavy`, `maybeRolling`, `afterGreen`, `healRefusedPush`, `denyListViolation`, `preserveWork`, `passPlans`, `stageDispatches`, `compactDesigner`, etc. |
+| **Subtotal: loop-driver-free tests (Tiers 1–3)** | **`213`** (`180` subsystem-owned) | **`578`** (`522` in `180` files) | **`359.62`** (`277.98` in `180` files) | **`1,042` (`49.0%`)** | **`512.36`** | **`180` whole files (`522` tests, `277.98 s`) move directly with their target `internal/<pkg>` (`33` of `213` test `drain` core helpers/meta-guards)** |
+| **4. In-process `Loop` pass/run driver** (`pass`, `applyPlan`, `Run`, `Verify`) | `273` | `1,190` | `2,455.65` | `763` | `2,310.02` | Multi-step pass, settlement, judge, conflict, and restart integration over `Loop` |
+| **5. Spawns compiled `tillr-drain` CLI binary** (`build_tests` on root `tillr-drain`) | `99` | `357` | `821.07` | `320` | `813.96` | Subprocess CLI / daemon / restart end-to-end tests (`loop_test.go`, `tree_trunk_test.go`, `fixer_gate_test.go`, etc.) |
+| **Total across `tools/tillr-drain/drain`** | **`585`** | **`2,125`** | **`3,636.34`** | **`2,125` (`100%`)** | **`3,636.34`** | **`180` whole test files move in `E01`–`E22`; `405` `Loop`/CLI/meta test files stay in `drain`** |
+
+**Which unexported names tests use.** Across `drain`'s `250` active production files there are **`1,179` exported declarations** and **`4,378` unexported declarations** (`func`, `method`, `type`, `field`, `const`, `var`). `drain`'s `475` white-box (`package drain`) test files directly reference **`1,521` of those `4,378` unexported declarations (`34.7%`)**:
+
+- **Pass and loop-fixture seams staying in `drain` (`339` unexported names in the `22` core files):** `Loop.cfg` (`350` test files), `plannedApplication.decision` (`182`), `Loop.applyPlan` (`106`), `countPtr` (`94`), `Loop.pass` (`92`), `Loop.laneDirPath` (`79`), `Loop.laneTarget` (`65`), `Loop.lanePath` (`49`), `laneOutcome.err` (`44`), `Loop.completions` (`35`), `Loop.stageDispatches` (`30`), `Loop.markExamined` (`27`), `Loop.takeCompletion` (`23`), `Loop.active` (`20`), `Loop.settle` (`20`).
+- **Store-projection and event fixtures (`114` unexported names in `storelog`/`runhistory`, plus `pendingWork` in `pass.go`):** `pendingWork.Decision` (`105` test files), `appendEffect` (`80`), `type pendingWork` (`59`), `dispatchStartedKind` (`46`), `pendingWork.BaseSHA` (`43`), `candidateReadyKind` (`30`), `pendingWork.Done` (`30`), `readPending` (`26`), `appendJudgment` (`20`), `type refusalPayload` (`18`), `Loop.holdItemFault` (`16`). Exporting these on `internal/storelog` and `internal/runhistory` lets both subsystem tests and `drain`'s `Loop` integration tests call them without exposing them outside `tools/tillr-drain` (`internal/` is compiler-enforced module-private).
+- **Subsystem-internal white-box symbols (`1,068` unexported names across the other `20` target packages):** e.g., `shortSHA` (`25` test files) and `deliveryOutput` (`6`) in `boundary`; `currentLoopOwner` (`19`) and `processStoreIdentity` (`5`) in `procguard`; `Policy.request` (`17`) and `logTail` (`7`) in `policy`; `heavyDirectory` (`8`) and `heavyGitOutput` (`5`) in `gatespans`; `preservedPrefix` (`13`) and `laneCondition.out` (`9`) in `lanepool`; `nodeOutputsDir` (`16`) and `loadWorkflow` (`10`) in `flowgraph`; `type landingOffer` (`15`) in `judgesettle`; `Loop.maybeRolling` (`17`) in `trunkland`; `Loop.startHeavy` (`13`) in `heavyproof`; `type remoteSyncState` (`6`) in `remotepush`; `type itemRow` (`9`) and `type planner` (`8`) in `planner`; `type startSnapshot` (`16`) in `startfast`; `whyPresentation` (`7`) in `whyview`. Because each extraction moves the subsystem's white-box `*_test.go` files into `package <subpkg>` alongside the code, subsystem-private symbols stay unexported inside `<subpkg>`, while cross-package fixture helpers used by `drain`'s remaining `Loop` integration tests become exported inside `tools/tillr-drain/internal/<subpkg>`.
+
+### 1.5 Complete 23-domain responsibility map (`251` production files, `585` test files)
+
+Every production file (`251` files, `87,692` lines) and every test file (`585` files, `2,125` executable `Test*` functions, `3,636.34 s`) in `tools/tillr-drain/drain` maps to exactly one target responsibility below:
+
+| Item / Role | Target package | Layer | Prod files | Prod lines | `*Loop` methods today | Test-used unexported names | Movable whole test files | Moved `Test*` count | Moved duration (`s`) | Shared gate tables touched (`EdgeB` / `CScan`) |
+| :--- | :--- | :---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
+| `E01` | `internal/drainmodel` | `0` | `18` | `1,348` | `3` | `23` | `11` | `25` | `0.73` | `0` / `0` |
+| `E02` | `internal/procguard` | `1` | `8` | `2,562` | `16` | `45` | `2` | `5` | `0.00` | `0` / `0` |
+| `E03` | `internal/boundary` | `1` | `10` | `2,525` | `13` | `39` | `10` | `24` | `23.82` | `1` / `0` |
+| `E04` | `internal/storelog` | `1` | `13` | `2,806` | `28` | `67` | `7` | `7` | `0.40` | `0` / `1` (`events.go`) |
+| `E05` | `internal/runhistory` | `1` | `12` | `3,718` | `23` | `47` | `4` | `13` | `0.75` | `0` / `1` (`returned.go`) |
+| `E06` | `internal/policy` | `2` | `14` | `3,241` | `15` | `56` | `10` | `32` | `4.27` | `0` / `0` |
+| `E07` | `internal/gatespans` | `2` | `11` | `2,671` | `5` | `84` | `5` | `21` | `17.44` | `5` / `5` |
+| `E08` | `internal/steps` | `2` | `11` | `4,316` | `4` | `62` | `19` | `41` | `35.17` | `4` / `1` (`steps.go`) |
+| `E09` | `internal/docintake` | `3` | `10` | `2,318` | `10` | `12` | `3` | `13` | `2.15` | `0` / `0` |
+| `E10` | `internal/triage` | `3` | `10` | `2,640` | `26` | `30` | `3` | `10` | `0.29` | `0` / `2` |
+| `E11` | `internal/desk` | `3` | `11` | `3,127` | `28` | `84` | `5` | `7` | `4.86` | `0` / `0` |
+| `E12` | `internal/lanepool` | `3` | `9` | `4,218` | `51` | `69` | `4` | `10` | `9.75` | `0` / `0` |
+| `E13` | `internal/stager` | `3` | `13` | `5,596` | `40` | `85` | `13` | `24` | `4.58` | `0` / `1` (`fork_drift.go`) |
+| `E14` | `internal/flowgraph` | `4` | `10` | `4,001` | `42` | `49` | `5` | `17` | `4.28` | `0` / `0` |
+| `E15` | `internal/judgesettle` | `4` | `19` | `7,394` | `77` | `118` | `1` | `1` | `0.59` | `0` / `0` |
+| `E16` | `internal/fixerloop` | `4` | `7` | `2,155` | `16` | `20` | `1` | `3` | `0.00` | `1` / `2` |
+| `E17` | `internal/trunkland` | `4` | `14` | `4,975` | `70` | `68` | `16` | `43` | `17.27` | `2` / `2` |
+| `E18` | `internal/heavyproof` | `4` | `4` | `1,480` | `25` | `30` | `21` | `77` | `74.05` | `2` / `2` |
+| `E19` | `internal/remotepush` | `4` | `8` | `1,935` | `42` | `36` | `6` | `31` | `41.48` | `1` / `1` (`remote_sync_landing.go`) |
+| `E20` | `internal/planner` | `5` | `2` | `3,302` | `0` | `60` | `12` | `26` | `14.23` | `0` / `1` (`plan.go`) |
+| `E21` | `internal/startfast` | `5` | `13` | `4,139` | `19` | `92` | `13` | `65` | `17.15` | `0` / `0` |
+| `E22` | `internal/whyview` | `5` | `2` | `1,781` | `0` | `6` | `9` | `27` | `4.72` | `0` / `0` |
+| **Extracted sum** | **`22` `internal/*` pkgs** | **`0`–`5`** | **`229`** | **`72,248`** | **`553`** | **`1,182`** | **`180`** | **`522`** | **`277.98`** | **`16` / `19`** |
+| **Core** | `drain` | `6` | `22` | `15,444` | `208` | `339` | `405` | `1,603` | `3,358.36` | `327` / `2` (`loop.go`, `pass.go`) |
+| **Total** | **`23` packages** | **`0`–`6`** | **`251`** | **`87,692`** | **`761`** | **`1,521`** | **`585`** | **`2,125`** | **`3,636.34`** | **`343` / `21`** |
+
+*Note on `EdgeB` and `CScan`:* `EdgeB` counts moved `Test*` functions listed in `build_tests` under `"github.com/mschulkind-oss/tillr-drain/drain"` in [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json) (`343` test-module pairs across `drain`'s `8` `build_tests` keys; `16` move to `internal/*` packages, `327` remain in `drain`). `CScan` counts moved `.go` files named in the three identical `goSites`/`scannedDrainSites` maps in [`tools/gate/classification_scan_test.go`](../../tools/gate/classification_scan_test.go), [`tools/tillr-gate/classification_scan_test.go`](../../tools/tillr-gate/classification_scan_test.go), and [`tools/tillr-drain/drain/classification_scan_test.go`](../../tools/tillr-drain/drain/classification_scan_test.go) (`21` `tools/tillr-drain/drain/*.go` entries total; `19` update to `tools/tillr-drain/internal/<pkg>/*.go` and `2` — `loop.go` and `pass.go` — remain in `drain`).
+
+---
+
+## 2. Target Architecture: Single-Job Packages, Layer DAG, and Seam Interfaces
+
+### 2.1 Module-private `internal/` namespace and stable `drain` bridge (`D-DPD1`)
+
+**Designer's decision (`D-DPD1`); the owner may overturn it.** All `22` extracted packages live under `tools/tillr-drain/internal/<pkg>` (`github.com/mschulkind-oss/tillr-drain/internal/<pkg>`), while:
+1. The existing `21` non-`drain` leaf packages (`workflow`, `remotesync`, `fixer`, `heavyrun`, `heavy`, `holdrules`, `events`, `fence`, `classify`, `cost`, `settings`, `slot`, `lanes`, `lock`, `notify`, `parallel`, `questions`, `verdict`, `adaptive`, `check`, `claim`) remain at **Layer `-1`** (public module leaf contracts that import neither `drain` nor `internal/*`, unless a leaf contract itself is consumed downward by `internal/*`).
+2. `tools/tillr-drain/drain` retains **zero-cost Go type aliases (`type Candidate = drainmodel.Candidate`, `type Decision = drainmodel.Decision`, `type Policy = policy.Policy`, `const ReasonX = drainmodel.ReasonX`) and 1–5 line forwarding functions** in per-domain `drain/<pkg>_bridge.go` files so external callers (`tools/tillr-drain` root CLI, `tools/tillr-store`, `tools/tillr-watch`, and `hold_rules_test.go`) and `drain`'s own `405` integration test files compile without breaking public signatures.
+3. Because Go's compiler forbids any module outside `tools/tillr-drain` from importing `tools/tillr-drain/internal/*`, exporting store-fixture and seam types inside `internal/<pkg>` for `drain` and sibling `internal/*` packages never widens `tillr-drain`'s public cross-module API.
+
+### 2.2 Single job and strict 6-layer dependency DAG (`D-DPD2`)
+
+**Designer's decision (`D-DPD2`); the owner may overturn it.** Every package holds one job and imports only lower-numbered layers (plus Layer `-1` leaf packages and external sibling modules such as `tillr/store`, `tillr-item/item`, `tillr-run/run`, `tillr-gate`, and `tillr-land`):
+
+```text
+Layer 6 (Core):   drain  (live pass scheduler, active examination handoff, post-landing rolls, exec restart barrier)
+                    │
+Layer 5 (Views):  whyview ──► planner ◄── startfast
+                    │            │            │
+Layer 4 (Flows):  remotepush  heavyproof ──► trunkland ◄── fixerloop   judgesettle ──► flowgraph
+                    │            │               │             │             │             │
+Layer 3 (Work):   desk ──► triage ──► docintake               stager ──────► lanepool      │
+                    │        │            │                     │               │          │
+Layer 2 (Drivers): policy                 steps ──────────► gatespans           │          │
+                    │                       │                   │               │          │
+Layer 1 (Infra):  procguard   boundary   runhistory ─────► storelog ◄───────────┴──────────┘
+                    │            │          │                   │
+Layer 0 (Model):  drainmodel  (pure value types, Reason*/Action*/*Kind constants, IDs, spans, errors)
+                    │
+Layer -1 (Leaf):  existing 21 leaf packages (workflow, remotesync, fixer, heavyrun, heavy, holdrules, ...)
+```
+
+| Layer | Package (`tools/tillr-drain/...`) | Single job | Allowed `internal/*` imports |
+| :---: | :--- | :--- | :--- |
+| `0` | `internal/drainmodel` | Define loop-free value types (`Candidate`, `Decision`, `Pass`, `GateOutcome`, `BuildStamp`, `StepSpan`, `SpendTotals`, `PassTiming`), `Reason*`/`Action*`/`*Kind` constants, pure item/path predicates (`IsTrunkFixer`, `IsFlakyRepairItem`, `IsRemoteSyncItem`, `IsConflictFixRun`, `IsExpressLane`), and error classes (`ExitError`, `ItemContentError`). | *(none)* |
+| `1` | `internal/procguard` | Own child OS process groups, cgroup/nice priority classes, `/proc` CPU sampling, live worker listing, and dead-owner orphan reaping. | `drainmodel` |
+| `1` | `internal/boundary` | Snapshot repository and worktree state, enforce filesystem/ref/deny-list/size/format fences, and stage per-module `packmirror` updates. | `drainmodel` |
+| `1` | `internal/storelog` | Own the drain SQLite schema, migrations, busy-retry write transactions, WAL checkpoint keeper, and `events`/`loops`/`dispatches`/`pendingWork` append and fold primitives. | `drainmodel` |
+| `1` | `internal/runhistory` | Compute read-only SQLite projections over pending runs, retries, readmissions, repeated refusals, returned endings, and item faults. | `drainmodel`, `storelog` |
+| `2` | `internal/policy` | Load and hot-reload backend seat policy, probe/record provider quota windows and backend outcomes, and compute seat shares, escalations, and failover choices. | `drainmodel`, `storelog`, `runhistory` |
+| `2` | `internal/gatespans` | Parse gate and heavy-proof span/timing records, compute case-scoped `go-affected` replays, and adapt `heavyrun` proof steps. | `drainmodel`, `procguard`, `boundary`, `storelog`, `runhistory` |
+| `2` | `internal/steps` | Execute external step programs (`tillr-run`, `tillr-land`, `tillr-item sync`, detached gate faces, stop signals, and completion hooks) and record step spans. | `drainmodel`, `procguard`, `boundary`, `storelog`, `runhistory`, `policy`, `gatespans` |
+| `3` | `internal/docintake` | Read and validate Markdown definitions, item requests, splits, ideas, icebox blocks, and trunk-cached Vantage question indexes. | `drainmodel`, `boundary`, `storelog`, `runhistory`, `steps` |
+| `3` | `internal/triage` | Classify blocked items, file tooling/trunk defects, route and hold obstacles, and process owner questions and answers. | `drainmodel`, `boundary`, `storelog`, `runhistory`, `policy`, `docintake` |
+| `3` | `internal/desk` | Ingest document comments, confirm Observatory replies, and compact or retire designer sessions. | `drainmodel`, `procguard`, `boundary`, `storelog`, `runhistory`, `policy`, `steps`, `docintake`, `triage` |
+| `3` | `internal/lanepool` | Manage lane rotation, preserved-work snapshots, ended-item lane reclamation, dirty/stale-base holds, and branch/ref sweeps. | `drainmodel`, `procguard`, `boundary`, `storelog`, `runhistory`, `docintake` |
+| `3` | `internal/stager` | Stage per-run lane and fork checkouts, recover held lanes/forks, and render worker, retry, node, and fork-triage briefs (`STAGE.md`). | `drainmodel`, `procguard`, `boundary`, `storelog`, `runhistory`, `policy`, `gatespans`, `docintake`, `triage`, `desk`, `lanepool` |
+| `4` | `internal/flowgraph` | Evaluate runtime workflow node graphs, node input/output artifacts, graph proposals, and worker session continuations. | `drainmodel`, `boundary`, `storelog`, `runhistory`, `policy`, `docintake`, `triage`, `lanepool`, `stager` |
+| `4` | `internal/judgesettle` | Drive parallel node groups, judge/verify runs, landing calls, and candidate settlement dispositions. | `drainmodel`, `boundary`, `storelog`, `runhistory`, `policy`, `steps`, `docintake`, `triage`, `desk`, `lanepool`, `stager`, `flowgraph` |
+| `4` | `internal/fixerloop` | Gate trunk fixers, check path overlap, rebase fixers, resolve green proofs, and sweep disabled flaky checks into repair items. | `drainmodel`, `boundary`, `storelog`, `runhistory`, `gatespans`, `steps`, `docintake`, `triage`, `lanepool`, `stager` |
+| `4` | `internal/trunkland` | Serialize local trunk access, squash-land candidates, stage conflict-fix runs, track trunk history/rewrites, and retire landed item blocks. | `drainmodel`, `boundary`, `storelog`, `runhistory`, `policy`, `gatespans`, `steps`, `docintake`, `triage`, `lanepool`, `stager`, `flowgraph`, `judgesettle`, `fixerloop` |
+| `4` | `internal/heavyproof` | Coordinate coalesced after-merge heavy proofs, enforce red-cap rules, and execute automatic culprit reverts. | `drainmodel`, `boundary`, `storelog`, `runhistory`, `gatespans`, `steps`, `docintake`, `triage`, `lanepool`, `stager`, `flowgraph`, `judgesettle`, `fixerloop`, `trunkland` |
+| `4` | `internal/remotepush` | Publish proved-green commits to the remote, heal refused pushes, and file/land remote-sync divergence items. | `drainmodel`, `boundary`, `storelog`, `runhistory`, `policy`, `steps`, `triage`, `lanepool`, `trunkland` |
+| `5` | `internal/planner` | Compute pure, side-effect-free pass dispatch `Decision` slices from a SQLite store and repository snapshot. | `drainmodel`, `storelog`, `runhistory`, `policy`, `docintake`, `triage`, `desk`, `lanepool`, `flowgraph`, `judgesettle`, `fixerloop`, `trunkland`, `heavyproof`, `remotepush` |
+| `5` | `internal/startfast` | Maintain the incremental in-memory fast-start snapshot, Linux inotify watcher, and pre-staged claim proposals. | `drainmodel`, `storelog`, `runhistory`, `policy`, `docintake`, `lanepool`, `stager`, `flowgraph`, `judgesettle`, `planner` |
+| `5` | `internal/whyview` | Render operator `tillr-drain why` queue explanations, blocker diagnostics, and human/JSON summaries. | `drainmodel`, `storelog`, `runhistory`, `policy`, `docintake`, `triage`, `lanepool`, `stager`, `trunkland`, `heavyproof`, `planner` |
+| `6` | `drain` | Supervise live passes, background candidate examinations, post-landing roll actions, operator commands, and in-place `exec` restarts. | *(all `internal/*` packages)* |
+
+**Why cycles seen in naive file-prefix splits disappear here.** Running `go/types` across all `10,208` intra-`drain` file-to-symbol edges showed that `91` apparent mutual cycles in a naive file split came from three root causes resolved by this DAG:
+1. Moving `Candidate`, `Decision`, `Reason*`, `Action*`, `*Kind` event constants/payloads, and 10-line ID predicates (`IsTrunkFixer`, `IsFlakyRepairItem`, `IsRemoteSyncItem`, `IsConflictFixRun`, `IsExpressLane`) down to `internal/drainmodel` (Layer `0`) removes upward value dependencies on `loop.go`, `plan.go`, `trunk.go`, and `judge.go`.
+2. Moving `pendingWork`, `appendEffect`, `readPending`, `terminalRecord`, `readFailure`, `readItems`, `readRunHistory`, and `endItemUnfinishedRunsInTx` down to `internal/storelog` and `internal/runhistory` (Layer `1`) removes upward store-helper calls into `pass.go`, `plan.go`, and `end_unfinished_runs.go`.
+3. Keeping `post_landing.go`, `extension_roll.go`, and `pi_roll.go` in `drain` (Layer `6`) removes the upward callback edge from `trunkland` into `heavyproof`, `remotepush`, and `restart.go`.
+
+### 2.3 Seam interfaces replacing `*Loop` ambient coupling (`D-DPD3`)
+
+**Designer's decision (`D-DPD3`); the owner may overturn it.** Instead of passing `*Loop` into `166` files (`382` stateless `cfg`/logger methods + `379` stateful methods), subsystems depend on seven small interfaces and value structs defined at the consuming layer:
+
+```go
+// Layer 0 (internal/drainmodel): immutable workspace and clock environment, replacing l.cfg.* reads in 158 files.
+type Env struct {
+    Root             string
+    StorePath        string
+    LaneRoot         string
+    GateResultsStore string
+    Now              func() time.Time
+    Build            BuildStamp
+    Reportf          func(format string, args ...any)
+}
+
+// Layer 1 (internal/boundary & internal/storelog): narrow git and transactional store capabilities.
+type GitRunner interface {
+    Git(ctx context.Context, dir string, args ...string) (string, error)
+    RevParse(ctx context.Context, dir, rev string) (string, error)
+}
+
+type StoreTx interface {
+    WriteTx(ctx context.Context, op string, fn func(*sql.Tx) error) error
+    ReadDB(ctx context.Context, fn func(*sql.DB) error) error
+}
+
+// Layer 2 (internal/steps): existing 6-method Steps seam (Run, Gate, Land, Verdict, ItemState, Sync),
+// aliased in package drain as `type Steps = steps.Runner`.
+
+// Layer 3 (internal/stager): existing Stager seam (`Stage(ctx, StageSpec) (StageResult, error)`),
+// aliased in package drain as `type Stager = stager.Stager`.
+
+// Layer 4 (internal/trunkland, internal/heavyproof, internal/remotepush):
+// coordinator callbacks so Layer 4 never imports drain's restart or post-landing state machine.
+type RestartBarrier interface {
+    HoldMechanical() (release func(), ok bool) // wraps Loop.restartMechanical RLock / restartSettlements
+    ErrIfRestartPending() error
+}
+
+type PostLandingNotifier interface {
+    OnTrunkLanded(ctx context.Context, landedSHA string, changedPaths []string)
+    OnGreenAdvanced(ctx context.Context, greenSHA string)
+}
+```
+
+Unit tests in any `internal/<pkg>` construct `drainmodel.Env{Root: tmp, StorePath: dbPath, Now: clock.Now}` and a fake `StepRunner` or `RestartBarrier` in 5 lines instead of calling `NewLoop` and wiring a full loop directory.
+
+### 2.4 What stays in `drain` as the loop's irreducible core, and why it cannot be split further (`D-DPD4`)
+
+**Designer's decision (`D-DPD4`); the owner may overturn it.** Twenty-two production files (`15,444` lines today, shrinking to `~9,800` lines once `Candidate`, `GateOutcome`, `pendingWork`, `appendEffect`, `readPending`, and `endItemUnfinishedRunsInTx` move out of `loop.go`, `pass.go`, and `end_unfinished_runs.go`) stay in `tools/tillr-drain/drain`:
+
+- **Pass and dispatch loop (`6` files):** `loop.go`, `pass.go`, `once.go`, `command.go`, `live_scale.go`, `pass_observation.go`.
+- **Wakeup and asynchronous examination handoff (`2` files):** `trigger.go`, `examine_coordinator.go`.
+- **Post-landing roll actions (`3` files):** `post_landing.go`, `extension_roll.go`, `pi_roll.go`.
+- **In-place `exec` restart barrier and crash/claim recovery (`11` files):** `restart.go`, `restart_work.go`, `restart_examination.go`, `restart_rolling.go`, `build_restart.go`, `recovery.go`, `end_unfinished_runs.go`, `unlaunched_claim.go`, `repair_hold.go`, `infrastructure_hold.go`, `terminal_item.go` (plus thin `*_bridge.go` type/function alias files).
+
+`struct Loop` shrinks from **`146` fields and `24` mutexes** to **`<= 45` fields and `8` mutexes** (`mu`, `restartMu`, `restartMechanical`, `restartGateMu`, `pollReaderMu`, `restartPollMu`, `sessionMu`, `reportMu`), holding subsystem pointers (`proc *procguard.Guard`, `store *storelog.Writer`, `policy *policy.Runtime`, `lanes *lanepool.Pool`, `trunk *trunkland.Coordinator`, `heavy *heavyproof.Coordinator`, `push *remotepush.Coordinator`, `start *startfast.Service`) in place of embedded per-subsystem mutexes and maps.
+
+**Why this core cannot be split further.** The remaining `22` files implement one coupled liveness and barrier cycle across four concurrent goroutine roles:
+1. **Pass admission (`pass.go`, `live_scale.go`, `command.go`)** checks `gateRestart` (`restartGateMu` / `restartPendingWait`), claims lanes against `active` / `activeItems` (`mu`), and launches detached workers.
+2. **Completion and background examination (`examine_coordinator.go`, `loop.go`)** receives worker wakeups on `completions`, tracks `examiningRuns` and `examinations` (`sync.WaitGroup`), and acquires a `restartMechanical` read hold (`restartSettlements`) while settling a candidate so an in-place binary replacement cannot cut off a half-recorded gate verdict or landing.
+3. **Post-landing roll and in-place `exec` replacement (`post_landing.go`, `restart.go`, `restart_work.go`, `restart_examination.go`)** must block new admissions (`restartGateMu`), wait for `restartSettlements` and `examinations` to drain without killing detached worker processes, and `exec` the new `tillr-drain` binary in place.
+4. **Startup re-adoption and operator stop (`recovery.go`, `end_unfinished_runs.go`, `unlaunched_claim.go`, `trigger.go`)** re-adopts live worker leases written before `exec`, retracts unlaunched claims, and cancels `loopCtx` (`sessionStop` under `sessionMu` / `pollReaderMu`) when `drain_sessions` records an operator stop.
+
+Splitting pass admission, examination settlement, and the `exec` restart barrier into separate Go packages would either require mutual callback interfaces cycling on every state transition or split lock acquisition order across `mu`, `restartMechanical`, and `restartGateMu`. Keeping them together gives `drain` one job: *coordinate live passes, background examinations, and in-place restarts over single-job subsystem packages*.
+
+---
+
+## 3. Extraction Sequence: `22` Single-Commit Items Across `13` Conflict-Free Waves
+
+### 3.1 Coexisting with live queue edits to `drain` and `just pack-sync` (`D-DPD5`)
+
+**Designer's decision (`D-DPD5`); the owner may overturn it.** The extractions land while the live drain continues landing ordinary bug fixes and features to `drain` and keeping `yolo-packs/tillr/` synchronized. Four rules prevent conflict storms:
+
+1. **Whole-file `git mv` plus per-package `drain/<pkg>_bridge.go` forwarding.** Each extraction moves whole `.go` and `*_test.go` files (`git mv tools/tillr-drain/drain/<f>.go tools/tillr-drain/internal/<pkg>/<f>.go`) and places type aliases (`type X = <pkg>.X`) and 1–5 line `(l *Loop)` forwarding wrappers in a dedicated `tools/tillr-drain/drain/<pkg>_bridge.go` file.
+   - *Effect on concurrent ordinary `drain` lanes:* An in-flight lane editing an unrelated `drain/*.go` file that calls `drain.X` or `l.x(...)` merges cleanly under `Trunk.Squash` ([`tools/tillr-land/land/trunk.go`](../../tools/tillr-land/land/trunk.go)) and compiles unchanged through `<pkg>_bridge.go`. An in-flight lane editing one of the `4`–`19` moved `.go` files in that single commit is resolved by Git's rename-aware three-way merge (`git merge-tree`) or one bounded conflict-fix pass because each extraction touches `8`–`30` source+test files (`git diff --find-renames` stays within or near [`.tillr.toml`](../../.tillr.toml)'s advisory `file_limit = 27`, `added_line_limit = 1200`).
+2. **Disjoint `drain/loop.go` edits.** Concurrent extractions in the same wave **never both edit `drain/loop.go` or `drain/pass.go`**: in multi-item waves, moved `(l *Loop)` methods forward from `drain/<pkg>_bridge.go` using existing `l.cfg` fields, and `struct Loop` field removals happen only in solo spine waves (`E01`, `E05`, `E17`, `E18`, `E20`, `E22`).
+3. **Disjoint shared gate tables (`go-test-edges.json` and `classification_scan_test.go`).** Within every multi-item wave ([§3.3](#33-the-22-extraction-queue-items-e01e22)), **at most one item** moves tests listed in [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json) (`EdgeB > 0`), and **at most one item** moves files listed in [`tools/gate/classification_scan_test.go`](../../tools/gate/classification_scan_test.go), [`tools/tillr-gate/classification_scan_test.go`](../../tools/tillr-gate/classification_scan_test.go), and [`tools/tillr-drain/drain/classification_scan_test.go`](../../tools/tillr-drain/drain/classification_scan_test.go) (`CScan > 0`). Two concurrent extraction items never touch any common file anywhere in the repository.
+4. **`just pack-sync` and `stagePackMirror` coexistence.** Pre-merge candidate gates invoke `pack-sync --candidate`, where `CaseTreeMatchesSource` ([`tools/tillr/packsync/packsync.go`](../../tools/tillr/packsync/packsync.go)) skips generated module copies. At landing, `Loop.stagePackMirror` ([`tools/tillr-drain/drain/pack_mirror.go`](../../tools/tillr-drain/drain/pack_mirror.go)) renders `yolo-packs/tillr/files/local/share/tillr/tillr-drain/<rel>` strictly 1-to-1 per source path with **no shared manifest file** (`yolo-packs/tillr/snapshot.json` tracks only `pack-docs` Markdown documents, never Go source files), and `filterMirrorConflictReports` automatically regenerates `tillr-drain`'s mirror on any rebase/conflict pass. When an operator or manual lane runs `just pack-sync`, disjoint `tools/tillr-drain/...` file sets produce 100% disjoint `yolo-packs/tillr/files/local/share/tillr/tillr-drain/...` diffs.
+
+### 3.2 Deterministic zero-dropped-test parity check (`D-DPD6`)
+
+**Designer's decision (`D-DPD6`); the owner may overturn it.** Consistent with [`D-GR47`](../reference/gate.md#D-GR47), every extraction proves deterministically — without wall-clock thresholds — that zero tests were dropped or silently unlinked:
+
+1. **Automated change-gate check installed in `E01` (`tests/go-affected.test.py` + `tools/gate/change_checks.go`).** Whenever a candidate diff deletes or renames any `*_test.go` file under `tools/tillr-drain/`, the gate parses all `*_test.go` files across `tools/tillr-drain/...` at `base_sha` and `head_sha` (using the same top-level `Test*` rules as `scan_package_tests` in [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py), excluding per-package `TestMain` and `TestEdgeInputs`) and refuses the candidate if any `Test*` name present at `base_sha` is absent at `head_sha` ($T(\text{base}) \setminus T(\text{head}) \neq \emptyset$) or if total executable `Test*` count across `tools/tillr-drain/...` decreases ($|T(\text{head})| < |T(\text{base})|$).
+2. **Per-item worker verification command.** Every extraction item runs:
+   ```sh
+   go -C tools/tillr-drain test -list '^Test' ./...
+   go -C tools/tillr-drain test ./internal/<pkg> .
+   ```
+   verifying that every moved `Test*` function is compiled and discovered by `go test -list` in `./internal/<pkg>` (catching wrong build tags or accidentally lowercased `func test...` names), passes in isolation without importing `drain`, and satisfies `count(drain@head) + count(internal/<pkg>@head) >= count(drain@base)`.
+
+### 3.3 The `22` extraction queue items (`E01`–`E22`)
+
+**Designer's decision (`D-DPD7`); the owner may overturn it.** Each row below declares one queue item (to be materialized into roadmap/queue item blocks only after owner review; this design document carries zero live item directives).
+
+#### Wave and file-disjointness summary
+
+| Wave | Concurrent items in wave | `depends_on` | Shared-file check across wave (`EdgeB`, `CScan`, `loop.go`, AST scans) |
+| :---: | :--- | :--- | :--- |
+| `1` | `E01` (`drainmodel`) | *(none)* | Solo foundation wave (`loop.go` value types, `hold_rules_test.go`, `architecture_test.go`) |
+| `2` | `E02` (`procguard`) \|\| `E03` (`boundary`) \|\| `E04` (`storelog`) | `E01` | Disjoint: `E02` (`0` shared); `E03` (`go-test-edges.json` only); `E04` (`classification_scan_test.go`, `definition_test.go`, `whole_log_test.go` only) |
+| `3` | `E05` (`runhistory`) | `E02`, `E03`, `E04` | Solo Layer-1 spine (`pass.go` `pendingWork`/`appendEffect` bridge, `classification_scan_test.go`, `whole_log_test.go`) |
+| `4` | `E06` (`policy`) \|\| `E07` (`gatespans`) | `E05` | Disjoint: `E06` (`0` shared); `E07` (`go-test-edges.json` + `classification_scan_test.go`) |
+| `5` | `E08` (`steps`) \|\| `E09` (`docintake`) \|\| `E12` (`lanepool`) | `E06`, `E07` | Disjoint: `E08` (`go-test-edges.json` + `classification_scan_test.go`); `E09` (`definition_test.go` only); `E12` (`0` shared) |
+| `6` | `E10` (`triage`) \|\| `E11` (`desk`) | `E08`, `E09`, `E12` | Disjoint: `E10` (`classification_scan_test.go` only); `E11` (`0` shared) |
+| `7` | `E13` (`stager`) \|\| `E14` (`flowgraph`) | `E10`, `E11` | Disjoint: `E13` (`classification_scan_test.go` only); `E14` (`0` shared) |
+| `8` | `E15` (`judgesettle`) \|\| `E16` (`fixerloop`) | `E13`, `E14` | Disjoint: `E15` (`0` shared); `E16` (`go-test-edges.json` + `classification_scan_test.go`) |
+| `9` | `E17` (`trunkland`) | `E15`, `E16` | Solo Layer-4 spine (`go-test-edges.json`, `classification_scan_test.go`, `trunk_transaction_test.go`, `loop.go` lock fields) |
+| `10` | `E18` (`heavyproof`) | `E17` | Solo (`go-test-edges.json`, `classification_scan_test.go`, `loop.go` heavy fields) |
+| `11` | `E20` (`planner`) | `E18` | Solo (`plan.go`, `classification_scan_test.go`; `E19` and `E21` do not collide in Wave 12) |
+| `12` | `E19` (`remotepush`) \|\| `E21` (`startfast`) | `E20` | Disjoint: `E19` (`go-test-edges.json` + `classification_scan_test.go`); `E21` (`0` shared) |
+| `13` | `E22` (`whyview` + core ratchet lock) | `E19`, `E21` | Solo final wave (`why.go`, `whole_log_test.go`, locks `architecture_test.go` to `22` `drain` core files and `<= 45` `Loop` fields / `<= 8` mutexes) |
+
+#### Per-item specifications (`E01`–`E22`)
+
+How test caching and pre-merge `go-affected` behave across every item below (measured from [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) and [`tools/go-test-durations.json`](../../tools/go-test-durations.json)):
+- **Go test caching (`GOCACHE`, used by `go test` and after-merge `go-test-shards.py --cache`):** Moving `N` tests (`D` seconds) out of `drain` into `internal/<pkg>` compiles them into `<pkg>.test` instead of `drain.test`. Edits to `drain` (`Loop` core) or to any `internal/<other>` package that `<pkg>` does not import **never invalidate `<pkg>.test`'s cached pass** (`0 s` cache hit instead of rerunning inside `drain`), and test-only edits to `internal/<pkg>/*_test.go` **never invalidate `drain.test`'s `12` after-merge shards (`3,358.36 s`)**.
+- **Pre-merge `go-affected` execution (under [`D-GR54`](../reference/gate.md#D-GR54), subject to [`OQ-DPD1`](#OQ-DPD1) and [`OQ-DFG1`](./fast-gate-tillr-drain-options.md#OQ-DFG1)):** Today, `0` tests in `package drain` run before the merge when `drain/*.go` changes. Once extracted to `internal/<pkg>` (which is not in `DEFERRED_PROOF_PACKAGES`), editing `internal/<pkg>/*_test.go` runs **only `<pkg>`** (`+ 2` fast repo source-scanner tests in `tillr/definition` and `tillr/store`, `< 3 s`) before the merge; editing `internal/<pkg>/*.go` runs **`<pkg>` plus only its reverse `internal/*` importers** (and existing non-deferred `tillr-drain` consumers) before the merge; and editing `drain` selects **`0` `internal/*` packages** before the merge. Packages with `>= 25.0 s` selected duration are automatically LPT-sharded by `go_affected.py` (`PACKAGE_SHARD_MIN_DURATION_S = 25.0`).
+
+1. **`E01` — Extract `internal/drainmodel` and install the anti-decay & zero-dropped-test checks (Wave 1, `depends_on: []`).**
+   - *Moves:* `18` prod files (`1,348` lines: `errors.go`, `classify.go`, `build.go`, `run_id.go`, `run_pin.go`, `session.go`, `spans.go`, `spend.go`, `timing.go`, `runner_timing.go`, `draining.go`, `stop_explanation.go`, `lane_status.go`, `generation.go`, `gate_policy.go`, `trunk_config.go`, `trunk_rewrite_accept.go`, `landing_call_answer.go`), pure value types/constants from `loop.go`/`plan.go` (`Candidate`, `Decision`, `Pass`, `GateOutcome`, `Env`, `TrunkRef`, `Reason*`, `Action*`, `*Kind`), and `11` test files (`25` `Test*` functions, `0.73 s`: `build_hash_test.go`, `errors_test.go`, `landing_call_answer_test.go`, `run_id_test.go`, `runner_timing_test.go`, `session_migration_test.go`, `session_trace_queue_test.go`, `session_trace_sink_test.go`, `spend_recovery_test.go`, `spend_test.go`, `timing_test.go`); adds `drain/model_aliases.go`, `tools/tillr-drain/architecture_test.go`, and the test-parity check in `tests/go-affected.test.py`.
+   - *Tests stop depending on:* `Loop`, `SQLite` store schemas, git worktrees, and subprocess runners (`markRunID`, `conflictFixRunID`, and `stderrTail` stay white-box inside `drainmodel`).
+   - *Zero-dropped-test check:* Automated `go-affected.test.py` AST test-set inclusion check ($T(\text{base}) \subseteq T(\text{head})$) plus `go -C tools/tillr-drain test -list '^Test' ./internal/drainmodel ./drain`.
+   - *Caching & pre-merge effect:* `25` pure unit tests (`0.73 s`) cache permanently across all `Loop`/subsystem edits and run in `< 1 s` before the merge when `drainmodel` changes (`0 s` pre-merge on `drain` edits).
+
+2. **`E02` — Extract `internal/procguard` (Wave 2, `depends_on: [E01]`, concurrent with `E03`, `E04`).**
+   - *Moves:* `8` prod files (`2,562` lines: `sqlite_trace.go`, `process_priority.go`, `process_cpu.go`, `presence.go`, `workers.go`, `orphan.go`, `surviving_processes.go`, `lane_children.go`) and `2` test files (`5` `Test*` functions, `< 0.05 s`: `sqlite_trace_test.go`, `workers_test.go`), plus `drain/procguard_bridge.go`.
+   - *Tests stop depending on:* `Loop`, SQLite event folding, git worktrees, and planner/workflow types (`currentLoopOwner`, `processStoreIdentity`, and `reapEvidence` move with `procguard`).
+   - *Zero-dropped-test check:* Gate test-set parity check + `go -C tools/tillr-drain test ./internal/procguard`.
+   - *Caching & pre-merge effect:* `5` OS/process tests (`< 0.1 s`) cache independently of all git, store, planner, and `Loop` edits and run pre-merge in `< 1 s` on `procguard` edits.
+
+3. **`E03` — Extract `internal/boundary` (Wave 2, `depends_on: [E01]`, concurrent with `E02`, `E04`).**
+   - *Moves:* `10` prod files (`2,525` lines: `boundary.go`, `parallel_boundary.go`, `worktree_registry.go`, `worktree_authority.go`, `deny_list.go`, `candidate_size.go`, `format_check.go`, `delivery.go`, `index_lock.go`, `pack_mirror.go`) and `10` test files (`24` `Test*` functions, `23.82 s`: `boundary_history_test.go`, `boundary_lander_test.go`, `boundary_ordinary_git_test.go`, `boundary_owner_test.go`, `boundary_rolling_test.go`, `boundary_sibling_test.go`, `delivery_test.go`, `deny_list_test.go`, `worktree_registry_test.go`, `worktree_registry_writers_test.go`); moves `TestARealLandingDuringASiblingRunConvictsNothing` in `tools/gate/go-test-edges.json` (`EdgeB = 1`).
+   - *Tests stop depending on:* `NewLoop`, SQLite store, backend policy, and step runners (`shortSHA`, `deliveryOutput`, and `deliveryDecision` stay white-box in `boundary`).
+   - *Zero-dropped-test check:* Gate test-set parity check + `tests/go-affected.test.py` `build_tests` existence validation.
+   - *Caching & pre-merge effect:* `24` git-fence and registry tests (`23.82 s`) stop rerunning on `Loop`/store/planner changes and run pre-merge (`~24 s` uncached, `0 s` cached) when fence or `pack_mirror` logic changes.
+
+4. **`E04` — Extract `internal/storelog` (Wave 2, `depends_on: [E01]`, concurrent with `E02`, `E03`).**
+   - *Moves:* `13` prod files (`2,806` lines: `schema.go`, `schema_roll.go`, `events.go`, `looprecord.go`, `dispatches.go`, `store_busy.go`, `wal_keeper.go`, `base_replay_events.go`, `loop_ended.go`, `loop_pass.go`, `pass_spend.go`, `pipeline_observation.go`, `handoff_timing.go`) and `7` test files (`7` `Test*` functions, `0.40 s`: `base_replay_events_internal_test.go`, `conformance_test.go`, `dispatches_test.go`, `pipeline_observation_test.go`, `schema_cookie_test.go`, `schema_roll_test.go`, `store_busy_test.go`); updates `events.go` in `classification_scan_test.go` (`CScan = 1`) and widens `definition_test.go` and `whole_log_test.go` to walk `..` (`tools/tillr-drain/`).
+   - *Tests stop depending on:* `Loop`, git worktrees, `ProcessSteps`, and backend policy.
+   - *Zero-dropped-test check:* Gate test-set parity check + `classification_scan_test.go`, `definition_test.go`, and `whole_log_test.go`.
+   - *Caching & pre-merge effect:* `7` SQLite schema/WAL/dispatch tests (`0.40 s`) run pre-merge in `< 1 s` on schema or event-log edits and stay cached across all higher-layer edits.
+
+5. **`E05` — Extract `internal/runhistory` and `pendingWork` projections (Wave 3, `depends_on: [E02, E03, E04]`).**
+   - *Moves:* `12` prod files (`3,718` lines: `gathered.go`, `pending_cache.go`, `running_agents.go`, `retries.go`, `readmit.go`, `refusal.go`, `refusal_cases.go`, `returned.go`, `repeated_ending.go`, `repeating_call.go`, `build_readers.go`, `item_fault.go`), plus `pendingWork`/`appendEffect`/`readPending`/`terminalRecord` from `pass.go`, and `4` test files (`13` `Test*` functions, `0.75 s`: `gathered_fairness_test.go`, `gathered_test.go`, `pending_cache_test.go`, `returned_test.go`); updates `returned.go` in `classification_scan_test.go` (`CScan = 1`) and `whole_log_test.go`.
+   - *Tests stop depending on:* `Loop.pass`, `Plan`, git worktrees, and subprocess execution.
+   - *Zero-dropped-test check:* Gate test-set parity check + `classification_scan_test.go` and `whole_log_test.go`.
+   - *Caching & pre-merge effect:* `13` projection/cache tests (`0.75 s`) run pre-merge in `< 1 s` on history-projection edits and stay cached on `Loop`/planner/step edits.
+
+6. **`E06` — Extract `internal/policy` (Wave 4, `depends_on: [E05]`, concurrent with `E07`).**
+   - *Moves:* `14` prod files (`3,241` lines: `policy.go`, `policy_reload.go`, `policy_seats.go`, `seat_shares.go`, `seat_escalation.go`, `seat_review.go`, `quota_window.go`, `quota_probe.go`, `quota_continue.go`, `failover.go`, `backend_outcomes.go`, `backend_availability.go`, `alarm_report.go`, `dispatch_decline.go`) and `10` test files (`32` `Test*` functions, `4.27 s`: `alarm_report_test.go`, `attempt_test.go`, `policy_one_backend_test.go`, `policy_test.go`, `quota_probe_test.go`, `quota_window_test.go`, `seat_shares_policy_test.go`, `seat_shares_test.go`, `settled_test.go`, `signal_recorded_test.go`).
+   - *Tests stop depending on:* `Loop`, git checkouts, `LaneStager`, `ProcessSteps`, and `Plan` (`Policy.request` and `logTail` stay white-box in `policy`).
+   - *Zero-dropped-test check:* Gate test-set parity check + `go -C tools/tillr-drain test ./internal/policy`.
+   - *Caching & pre-merge effect:* `32` policy/quota/failover tests (`4.27 s`) run pre-merge in `~4 s` when seat/quota/failover logic changes and never rerun on git, step, trunk, or `Loop` edits.
+
+7. **`E07` — Extract `internal/gatespans` (Wave 4, `depends_on: [E05]`, concurrent with `E06`).**
+   - *Moves:* `11` prod files (`2,671` lines: `gate_spans.go`, `gate_timing.go`, `gate_stall.go`, `gate_usage_error.go`, `gate_no_verdict.go`, `heavy_aliases.go`, `heavy_aliases_linux.go`, `heavy_steps.go`, `heavy_go.go`, `legacy_watches.go`, `replay_go_affected.go`) and `5` test files (`21` `Test*` functions, `17.44 s`: `build_heavy_test.go`, `gate_fast_spans_test.go`, `gate_timing_test.go`, `heavy_go_test.go`, `heavy_steps_test.go`); updates `5` `build_tests` entries in `go-test-edges.json` (`EdgeB = 5`) and `5` entries in `classification_scan_test.go` (`CScan = 5`).
+   - *Tests stop depending on:* `Loop`, `Plan`, `LaneStager`, and backend policy (`heavyDirectory` and `heavyGitOutput` stay white-box in `gatespans`).
+   - *Zero-dropped-test check:* Gate test-set parity check + `go-affected.test.py` `build_tests` validation + `classification_scan_test.go`.
+   - *Caching & pre-merge effect:* `21` span/timing/heavy-adapter tests (`17.44 s`) cache independently of `Loop`/planner/policy and run pre-merge (`~17 s` uncached, narrowed by `build_tests` on `tillr-gate` edits).
+
+8. **`E08` — Extract `internal/steps` (Wave 5, `depends_on: [E06, E07]`, concurrent with `E09`, `E12`).**
+   - *Moves:* `11` prod files (`4,316` lines: `steps.go`, `step_check.go`, `adapter_build.go`, `claim_gate.go`, `hooks.go`, `hook_completion.go`, `resume.go`, `run_output.go`, `sync.go`, `stop.go`, `landing_measurements.go`) and `19` test files (`41` `Test*` functions, `35.17 s`: `adapter_build_test.go`, `claim_gate_test.go`, `gate_started_internal_test.go`, `heavy_early_legacy_test.go`, `heavy_early_process_test.go`, `heavy_order_test.go`, `heavy_progress_event_test.go`, `hook_completion_check_test.go`, `hook_completion_pause_test.go`, `hooks_test.go`, `inherited_verdict_test.go`, `land_reason_trace_test.go`, `landing_measurements_test.go`, `run_output_test.go`, `step_check_test.go`, `stop_exit_test.go`, `sync_roadmap_order_test.go`, `sync_scope_test.go`, `sync_trace_test.go`); updates `4` `build_tests` entries in `go-test-edges.json` (`EdgeB = 4`) and `steps.go` in `classification_scan_test.go` (`CScan = 1`).
+   - *Tests stop depending on:* `Loop`, `Plan`, `LaneStager`, workflow graph evaluation, and trunk landing.
+   - *Zero-dropped-test check:* Gate test-set parity check + `go-affected.test.py` + `classification_scan_test.go`.
+   - *Caching & pre-merge effect:* `41` step-runner tests (`35.17 s` serial, LPT-sharded to `~12–15 s` wall-clock when `>= 25 s`, subject to [`OQ-DPD1`](#OQ-DPD1)) cache separately from `Loop`, planner, staging, and trunk coordinators.
+
+9. **`E09` — Extract `internal/docintake` (Wave 5, `depends_on: [E06, E07]`, concurrent with `E08`, `E12`).**
+   - *Moves:* `10` prod files (`2,318` lines: `definition.go`, `definition_already_fixed.go`, `definition_hold.go`, `document_prerequisite.go`, `questions.go`, `request.go`, `split.go`, `idea.go`, `icebox.go`, `prose_rewrite.go`) and `3` test files (`13` `Test*` functions, `2.15 s`: `definition_hook_parity_test.go`, `icebox_test.go`, `split_test.go`); updates `definition.go` allowlist path in `definition_test.go`.
+   - *Tests stop depending on:* `Loop`, `LaneStager`, trunk landing, and heavy proof.
+   - *Zero-dropped-test check:* Gate test-set parity check + `definition_test.go`.
+   - *Caching & pre-merge effect:* `13` definition/icebox/split tests (`2.15 s`) run pre-merge in `~2 s` on document-intake edits and stay cached across `Loop`/trunk/workflow edits.
+
+10. **`E10` — Extract `internal/triage` (Wave 6, `depends_on: [E08, E09, E12]`, concurrent with `E11`).**
+    - *Moves:* `10` prod files (`2,640` lines: `blocked.go`, `blocked_repeat.go`, `defect.go`, `obstacle.go`, `answered_obstacle.go`, `obstacle_hold.go`, `obstacle_route.go`, `owner_question.go`, `owner_answer.go`, `owner_migration.go`) and `3` test files (`10` `Test*` functions, `0.29 s`: `blocked_closed_test.go`, `next_actor_test.go`, `obstacle_test.go`); updates `obstacle_hold.go` and `obstacle_route.go` in `classification_scan_test.go` (`CScan = 2`).
+    - *Tests stop depending on:* `Loop`, `LaneStager`, workflow graph execution, and trunk landing.
+    - *Zero-dropped-test check:* Gate test-set parity check + `classification_scan_test.go`.
+    - *Caching & pre-merge effect:* `10` obstacle/blocked triage tests (`0.29 s`) run pre-merge in `< 1 s` on triage edits and cache across higher layers.
+
+11. **`E11` — Extract `internal/desk` (Wave 6, `depends_on: [E08, E09, E12]`, concurrent with `E10`).**
+    - *Moves:* `11` prod files (`3,127` lines: `comments.go`, `comment_intake.go`, `comment_observatory.go`, `designer.go`, `designer_compaction.go`, `design_answer.go`, `design_continuation.go`, `design_repeat.go`, `design_retry.go`, `design_transport_error.go`, `design_unanswered.go`) and `5` test files (`7` `Test*` functions, `4.86 s`: `comment_observatory_test.go`, `designer_compaction_recovery_test.go`, `designer_response_test.go`, `designer_retire_test.go`, `designer_snapshot_test.go`).
+    - *Tests stop depending on:* `Loop.Run`/`Loop.pass`, trunk landing, heavy proof, and planner (`lastDesigner` stays white-box in `desk`).
+    - *Zero-dropped-test check:* Gate test-set parity check + `go -C tools/tillr-drain test ./internal/desk`.
+    - *Caching & pre-merge effect:* `7` comment/designer-compaction tests (`4.86 s`) run pre-merge in `~5 s` on desk edits and stay cached across non-desk changes.
+
+12. **`E12` — Extract `internal/lanepool` (Wave 5, `depends_on: [E06, E07]`, concurrent with `E08`, `E09`).**
+    - *Moves:* `9` prod files (`4,218` lines: `lane_base.go`, `lane_rotation.go`, `preserved.go`, `preserved_lane.go`, `preserve_hold.go`, `ended_item_lane.go`, `refs.go`, `dirty_hold.go`, `stale_base.go`) and `4` test files (`10` `Test*` functions, `9.75 s`: `preserved_conflict_test.go`, `preserved_index_test.go`, `preserved_lane_test.go`, `preserved_test.go`).
+    - *Tests stop depending on:* `Loop`, `ProcessSteps`, backend policy, and planner (`preservedPrefix` and `laneCondition` stay white-box in `lanepool`).
+    - *Zero-dropped-test check:* Gate test-set parity check + `go -C tools/tillr-drain test ./internal/lanepool`.
+    - *Caching & pre-merge effect:* `10` worktree-preservation/lane-pool tests (`9.75 s`) run pre-merge in `~10 s` on lane-pool edits and stay cached on planner/trunk/`Loop` edits.
+
+13. **`E13` — Extract `internal/stager` (Wave 7, `depends_on: [E10, E11]`, concurrent with `E14`).**
+    - *Moves:* `13` prod files (`5,596` lines: `stage.go`, `plain_stage.go`, `retry_brief.go`, `brief_ending.go`, `node_brief.go`, `lane_copy.go`, `fork_checkout.go`, `fork_check_triage.go`, `fork_drift.go`, `held_fork.go`, `held_fork_inputs.go`, `held_lane.go`, `held_lane_liveness.go`) and `13` test files (`24` `Test*` functions, `4.58 s`: `brief_ending_test.go`, `brief_worker_text_test.go`, `fence_test.go`, `fork_safety_test.go`, `fork_test.go`, `gate_refusal_detail_test.go`, `heartbeat_busy_test.go`, `install_defaults_test.go`, `patch_moves_test.go`, `plain_stage_refusal_test.go`, `stage_conflict_brief_test.go`, `stage_questions_context_test.go`, `startup_owner_test.go`); updates `fork_drift.go` in `classification_scan_test.go` (`CScan = 1`).
+    - *Tests stop depending on:* `Loop`, `ProcessSteps`, trunk landing, and `Plan`.
+    - *Zero-dropped-test check:* Gate test-set parity check + `classification_scan_test.go`.
+    - *Caching & pre-merge effect:* `24` brief-rendering and checkout-staging tests (`4.58 s`) run pre-merge in `~5 s` on staging/brief edits and never rerun on trunk, planner, or `Loop` edits.
+
+14. **`E14` — Extract `internal/flowgraph` (Wave 7, `depends_on: [E10, E11]`, concurrent with `E13`).**
+    - *Moves:* `10` prod files (`4,001` lines: `workflow.go`, `workflow_defaults.go`, `workflow_evaluator.go`, `workflow_exit.go`, `workflow_exit_record.go`, `workflow_failover.go`, `workflow_order.go`, `graph_proposal.go`, `node_outputs.go`, `worker_session.go`) and `5` test files (`17` `Test*` functions, `4.28 s`: `worker_session_interrupted_test.go`, `workflow_check_test.go`, `workflow_cost_test.go`, `workflow_expansion_contract_test.go`, `workflow_expansion_test.go`).
+    - *Tests stop depending on:* `Loop`, trunk landing, heavy proof, and `Plan` (`loadWorkflow` and `decodeWorkflow` stay white-box in `flowgraph`).
+    - *Zero-dropped-test check:* Gate test-set parity check + `go -C tools/tillr-drain test ./internal/flowgraph`.
+    - *Caching & pre-merge effect:* `17` workflow-expansion and node-output tests (`4.28 s`) run pre-merge in `~4 s` on graph edits and cache across trunk/`Loop` edits.
+
+15. **`E15` — Extract `internal/judgesettle` (Wave 8, `depends_on: [E13, E14]`, concurrent with `E16`).**
+    - *Moves:* `19` prod files (`7,394` lines: `parallel.go`, `parallel_failover.go`, `parallel_restart.go`, `judge.go`, `judge_landing.go`, `settle_judge.go`, `paused_judge_unreadable.go`, `restart_judge.go`, `verify_return.go`, `verify_triage.go`, `landing_call.go`, `landing_call_lifecycle.go`, `worker_gate.go`, `commit_continuation.go`, `completion_handoff.go`, `missing_candidate.go`, `retry_candidate.go`, `retry_supersede.go`, `test_fix_hold.go`) and `1` narrow test file (`1` `Test*` function, `0.59 s`: `judge_recovery_test.go`; multi-pass judge/parallel tests stay in `drain` as `Loop.pass` integration tests).
+    - *Tests stop depending on:* `Loop` state machine, trunk squash lock, heavy proof, and `Plan`.
+    - *Zero-dropped-test check:* Gate test-set parity check + `go -C tools/tillr-drain test ./internal/judgesettle`.
+    - *Caching & pre-merge effect:* Isolates `7,394` lines of judge/parallel/landing-call logic so edits to `Loop`, `trunkland`, `heavyproof`, `remotepush`, `startfast`, or `whyview` never recompile `judgesettle`, and `judge_recovery_test.go` (`0.59 s`) runs pre-merge in `< 1 s`.
+
+16. **`E16` — Extract `internal/fixerloop` (Wave 8, `depends_on: [E13, E14]`, concurrent with `E15`).**
+    - *Moves:* `7` prod files (`2,155` lines: `fixer_gate.go`, `fixer_paths.go`, `fixer_rebase.go`, `fixer_resolve.go`, `fixer_settle.go`, `fixer_wait.go`, `flaky_repair.go`) and `1` test file (`3` `Test*` functions, `< 0.1 s`: `flaky_repair_test.go`); moves `TestDisabledMarkerSweepDeduplicatesWhileOpenAndEnablesAfterLand` in `go-test-edges.json` (`EdgeB = 1`) and updates `fixer_gate.go` and `fixer_resolve.go` in `classification_scan_test.go` (`CScan = 2`).
+    - *Tests stop depending on:* `Loop`, trunk landing coordinator, and `Plan`.
+    - *Zero-dropped-test check:* Gate test-set parity check + `go-affected.test.py` + `classification_scan_test.go`.
+    - *Caching & pre-merge effect:* `3` flaky-marker sweep tests (`< 0.1 s`) run pre-merge in `< 1 s` on fixer/flaky-sweep edits and narrow `tillr-gate` `build_tests` edges cleanly.
+
+17. **`E17` — Extract `internal/trunkland` (Wave 9, `depends_on: [E15, E16]`).**
+    - *Moves:* `14` prod files (`4,975` lines: `trunk.go`, `trunk_history.go`, `trunk_lock.go`, `trunk_release.go`, `trunk_repair.go`, `trunk_rewrite.go`, `trunk_worktree.go`, `conflict.go`, `conflict_restart.go`, `already_on_trunk.go`, `gate_conflict.go`, `retire.go`, `retired_order.go`, `revert_withdraw.go`), `5` trunk-lock/history fields out of `struct Loop`, and `16` test files (`43` `Test*` functions, `17.27 s`: `heavy_first_tick_test.go`, `heavy_guard_linux_test.go`, `land_test.go`, `landing_kind_fixer_test.go`, `replay_concurrent_test.go`, `retirement_landing_test.go`, `rolling_coverage_test.go`, `rolling_fork_root_test.go`, `rolling_stall_test.go`, `rolling_test.go`, `step_argv_contract_test.go`, `trunk_lock_protocol_test.go`, `trunk_lock_test.go`, `trunk_observation_test.go`, `trunk_rewrite_landing_test.go`, `trunk_test.go`); updates `2` `build_tests` entries (`EdgeB = 2`), `trunk.go`/`trunk_release.go` in `classification_scan_test.go` (`CScan = 2`), and widens `trunk_transaction_test.go` to walk `..` (`tools/tillr-drain/`).
+    - *Tests stop depending on:* `Loop.Run`/`Loop.pass`, `Plan`, `Why`, fast-start watcher, and remote push.
+    - *Zero-dropped-test check:* Gate test-set parity check + `trunk_transaction_test.go` + `classification_scan_test.go` + `go-affected.test.py`.
+    - *Caching & pre-merge effect:* `43` trunk-lock, rolling-watermark, and retirement tests (`17.27 s`) run pre-merge in `~17 s` on trunk-landing edits and stay cached across planner, fast-start, remote-push, and `Loop` edits.
+
+18. **`E18` — Extract `internal/heavyproof` (Wave 10, `depends_on: [E17]`).**
+    - *Moves:* `4` prod files (`1,480` lines: `heavy_loop.go`, `heavy_revert.go`, `heavy_link.go`, `red_cap.go`), `11` heavy/revert fields and `2` mutexes + `heavyWG` out of `struct Loop`, and `21` test files (`77` `Test*` functions, `74.05 s`: `fixer_logs_test.go`, `gate_replay_revert_test.go`, `heavy_early_test.go`, `heavy_failure_logs_test.go`, `heavy_first_red_test.go`, `heavy_legacy_log_test.go`, `heavy_link_test.go`, `heavy_loop_test.go`, `heavy_moved_red_test.go`, `heavy_no_revert_reason_test.go`, `heavy_ownership_test.go`, `heavy_progress_log_test.go`, `heavy_rebase_test.go`, `heavy_restart_test.go`, `heavy_revert_test.go`, `heavy_revert_tip_passes_test.go`, `heavy_status_line_test.go`, `heavy_test.go`, `heavy_unattributed_test.go`, `red_cap_status_test.go`, `site_classify_1d_test.go`); updates `2` `build_tests` entries (`EdgeB = 2`) and `heavy_loop.go`/`heavy_revert.go` in `classification_scan_test.go` (`CScan = 2`).
+    - *Tests stop depending on:* `Loop.Run`/`Loop.pass`, `Plan`, fast-start watcher, and remote push (`startHeavy` becomes `(*Coordinator).Start` behind `RestartBarrier`).
+    - *Zero-dropped-test check:* Gate test-set parity check + `go-affected.test.py` + `classification_scan_test.go`.
+    - *Caching & pre-merge effect:* `77` heavy-proof and culprit-revert tests (`74.05 s` serial; LPT-sharded across 4 shards to `~20 s` wall-clock when pre-merge, subject to [`OQ-DPD1`](#OQ-DPD1)) cache completely on all non-heavy edits (`0 s` hit on `Loop`, planner, remote-push, and staging changes).
+
+19. **`E19` — Extract `internal/remotepush` (Wave 12, `depends_on: [E20]`, concurrent with `E21`).**
+    - *Moves:* `8` prod files (`1,935` lines: `push_state.go`, `push_refused.go`, `remote_sync.go`, `remote_sync_conflict.go`, `remote_sync_filing.go`, `remote_sync_landing.go`, `remote_sync_recovery.go`, `remote_sync_tree.go`) and `6` test files (`31` `Test*` functions, `41.48 s`: `push_publication_test.go`, `push_refused_test.go`, `push_rewrite_test.go`, `remote_sync_filing_test.go`, `remote_sync_landing_test.go`, `remote_sync_tree_test.go`); updates `TestRemoteSyncLandingSettlesRealItemEvidence` in `go-test-edges.json` (`EdgeB = 1`) and `remote_sync_landing.go` in `classification_scan_test.go` (`CScan = 1`).
+    - *Tests stop depending on:* `Loop.Run`/`Loop.pass`, heavy proof, fast-start watcher, and `Why`.
+    - *Zero-dropped-test check:* Gate test-set parity check + `go-affected.test.py` + `classification_scan_test.go`.
+    - *Caching & pre-merge effect:* `31` push/remote-sync git tests (`41.48 s` serial, LPT-sharded to `~15 s` wall-clock, subject to [`OQ-DPD1`](#OQ-DPD1)) cache across all non-push edits.
+
+20. **`E20` — Extract `internal/planner` (Wave 11, `depends_on: [E18]`).**
+    - *Moves:* `2` prod files (`3,302` lines: `plan.go`, `returned_lane.go`) and `12` test files (`26` `Test*` functions, `14.23 s`: `design_desk_completion_test.go`, `design_objection_test.go`, `design_quota_single_test.go`, `generated_routing_test.go`, `identity_order_test.go`, `plan_verify_test.go`, `repeated_failure_test.go`, `repeated_outputs_test.go`, `rewrite_readers_test.go`, `transition_test.go`, `triage_test.go`, `wait_release_test.go`); updates `plan.go` in `classification_scan_test.go` (`CScan = 1`).
+    - *Tests stop depending on:* `Loop`, `ProcessSteps`, `LaneStager`, and subprocess execution (`itemRow` and `planner` stay white-box in `internal/planner`).
+    - *Zero-dropped-test check:* Gate test-set parity check + `classification_scan_test.go`.
+    - *Caching & pre-merge effect:* `26` pure dispatch-planning tests (`14.23 s`) run pre-merge in `~14 s` whenever scheduling rules change — restoring pre-merge regression coverage to `Plan(...)` — while never rerunning on `Loop` pass/restart edits.
+
+21. **`E21` — Extract `internal/startfast` (Wave 12, `depends_on: [E20]`, concurrent with `E19`).**
+    - *Moves:* `13` prod files (`4,139` lines: `start_claim.go`, `start_coordinator.go`, `start_item_sync.go`, `start_proposal.go`, `start_repair_inputs.go`, `start_stage.go`, `start_store_sync.go`, `start_version.go`, `start_view.go`, `start_view_notes.go`, `start_view_refresh.go`, `start_watcher_linux.go`, `start_watcher_other.go`) and `13` test files (`65` `Test*` functions, `17.15 s`: `backend_recorded_test.go`, `start_claim_test.go`, `start_item_sync_test.go`, `start_lane_released_order_test.go`, `start_stage_test.go`, `start_version_test.go`, `start_view_checkpoint_test.go`, `start_view_notes_test.go`, `start_view_repair_test.go`, `start_view_state_test.go`, `start_view_watcher_test.go`, `start_watcher_test.go`, `start_while_settling_test.go`).
+    - *Tests stop depending on:* `Loop.Run`/`Loop.pass`, trunk landing, heavy proof, remote push, and `Why` (`startSnapshot` and `startStoreSync` stay white-box in `startfast`).
+    - *Zero-dropped-test check:* Gate test-set parity check + `go -C tools/tillr-drain test ./internal/startfast` (plus `GOOS=darwin go -C tools/tillr-drain build ./internal/startfast` verifying `start_watcher_other.go`).
+    - *Caching & pre-merge effect:* `65` incremental-view and Linux watcher tests (`17.15 s`) run pre-merge in `~17 s` on `startfast` edits and stay 100% cached across all trunk, heavy-proof, remote-push, `Why`, and `Loop` edits.
+
+22. **`E22` — Extract `internal/whyview` and lock the `drain` core ceiling (Wave 13, `depends_on: [E19, E21]`).**
+    - *Moves:* `2` prod files (`1,781` lines: `why.go`, `why_refusals.go`) and `9` test files (`27` `Test*` functions, `4.72 s`: `adapter_designer_test.go`, `adapter_policy_test.go`, `fixer_fence_test.go`, `triage_questions_test.go`, `why_fault_mover_test.go`, `why_perf_test.go`, `why_refusals_test.go`, `why_retry_lane_test.go`, `why_rotation_test.go`); updates `why.go` allowlist path in `whole_log_test.go`; tightens `tools/tillr-drain/architecture_test.go` from the `251`-file migration baseline down to the `22` `drain` core coordinator files (`+ *_bridge.go`) and lowers the `struct Loop` ceiling from `146` fields / `24` mutexes to `<= 45` fields / `<= 8` mutexes.
+    - *Tests stop depending on:* `Loop`, `ProcessSteps`, fast-start watcher, and remote push (`whyPresentation` stays white-box in `whyview`).
+    - *Zero-dropped-test check:* Gate test-set parity check + `whole_log_test.go` + `architecture_test.go`.
+    - *Caching & pre-merge effect:* `27` `why` presentation and diagnosis tests (`4.72 s`) run pre-merge in `~5 s` on `whyview` edits (and `tillr-cli` / `tillr-view` consumer checks) without touching `drain` or `startfast`.
+
+---
+
+## 4. Stopping Decay: Structural Rule and Automated Pre-Merge Ratchet
+
+**Designer's decision (`D-DPD8`); the owner may overturn it.** Splitting a package once decays unless an automated pre-merge check refuses changes that put reverse imports, lateral cycles, or new domain files back onto `drain.Loop`. Consistent with [`D-GR47`](../reference/gate.md#D-GR47), `E01` adds `tools/tillr-drain/architecture_test.go` (in the root `github.com/mschulkind-oss/tillr-drain` package, which is **not** in `DEFERRED_PROOF_PACKAGES` and runs in `< 0.2 s` before every merge on any `tools/tillr-drain/...` change) and extends `test_drain_subpackage_isolation` in [`tests/go-affected.test.py`](../../tests/go-affected.test.py) to enforce four invariants:
+
+1. **Universal [`D-GR47`](../reference/gate.md#D-GR47) leaf and `internal/*` isolation.** Dynamic `go list -json ./...` inspection over `tools/tillr-drain` refuses **any** package under `tools/tillr-drain/...` other than root `github.com/mschulkind-oss/tillr-drain` and `github.com/mschulkind-oss/tillr-drain/drain` that imports `drain` or root `tillr-drain` in `Imports`, `TestImports`, or `XTestImports`. New subpackages are covered automatically on creation without editing a central list.
+2. **Self-declared layer DAG (`// tillr-arch: layer=<N> imports=<csv>`).** Every `tools/tillr-drain/internal/<pkg>/doc.go` carries a one-line header naming its integer layer (`0`–`5`, or same-layer sub-rank where `runhistory` imports `storelog`) and its allowed `internal/*` imports. `architecture_test.go` parses every `internal/*/doc.go`, verifies the declared graph is acyclic and strictly downward, and fails if `go list` finds any undeclared `internal/*` import in code or tests. Because each package declares its header in its own `doc.go`, concurrent extraction waves never edit a shared architecture table.
+3. **Monotonic ratchet on `tools/tillr-drain/drain` itself.** Without a ceiling on `drain`, new features can still land as `252`nd `.go` files or `25`th mutexes on `struct Loop`. `architecture_test.go` enforces:
+   - *Filename allowlist:* In `E01`, `drain/` is frozen to its existing `251` `.go` filenames plus `*_aliases.go` / `*_bridge.go` files (where `*_bridge.go` files are AST-checked to contain only `type` aliases, `const`/`var` re-exports, and `<= 10`-line forwarding functions), so no extraction `E02`–`E21` conflicts on `architecture_test.go` while **zero new domain `.go` files can be added to `drain/`**. In `E22`, the allowlist shrinks permanently to the `22` core coordinator files (`+ *_bridge.go`).
+   - *`struct Loop` field and lock ceiling:* `go/ast` inspection of `type Loop struct` in `drain/loop.go` caps field count (`<= 146` in `E01`, ratcheted down to `<= 45` in `E22`) and `sync.Mutex`/`sync.RWMutex` count (`<= 24` in `E01`, ratcheted down to `<= 8` in `E22`).
+4. **Module-wide AST invariant scans.** `definition_test.go` (`E04`/`E09`), `trunk_transaction_test.go` (`E17`), and `whole_log_test.go` (`E04`/`E05`/`E22`) walk `..` (`tools/tillr-drain/`) rather than `.` (`tools/tillr-drain/drain/`), matching `classification_scan_test.go`, so extracting files into `internal/*` never creates a blind spot for raw `item.State*` literals, unlocked `landings` writes, or unindexed whole-table `events` scans.
+
+---
+
+## Open Questions
+
+Adjacent gate-wide questions in [`OQ-DFG1`](./fast-gate-tillr-drain-options.md#OQ-DFG1) (overall pre-merge vs. after-merge policy for `tillr-drain` and the `90 s` `fast-gate-median-slow` watch threshold) are not duplicated here. One decomposition-specific choice awaits the owner:
+
+1. 💬 **OQ-DPD1: Once `E01`–`E22` extract `522` tests (`277.98 s` serial) into `tools/tillr-drain/internal/*`, should all `22` `internal/*` packages run in pre-merge `go-affected`, or should the `3` subprocess-heavy `internal/*` packages over `25 s` serial (`internal/steps`, `internal/remotepush`, `internal/heavyproof`) defer to after-merge `go-test-tillr-drain` if [`OQ-DFG1`](./fast-gate-tillr-drain-options.md#OQ-DFG1) keeps Option C?**
+
+   Nineteen of the `22` extracted `internal/*` packages (`373` moved tests, `127.28 s` serial across all `19` combined, `0.00 s`–`23.82 s` each) run in `< 1 s` to `24 s` when directly edited. Three extracted packages carry subprocess-heavy git/gate suites over `25 s` serial: `internal/steps` (`41` tests, `35.17 s` serial, `~12–15 s` LPT-sharded), `internal/remotepush` (`31` tests, `41.48 s` serial, `~15 s` sharded), and `internal/heavyproof` (`77` tests, `74.05 s` serial, `~20 s` sharded). Under [`D-GR54`](../reference/gate.md#D-GR54), `DEFERRED_PROOF_PACKAGES` currently defers only `github.com/mschulkind-oss/tillr-drain/drain`, so any `internal/*` package runs pre-merge automatically unless added to `DEFERRED_PROOF_PACKAGES`. Waves 1–4 (`E01`–`E07`, max `23.82 s`) do not wait on this question.
+
+   - **A — Run all `22` extracted `internal/*` packages in pre-merge `go-affected` (`DEFERRED_PROOF_PACKAGES` keeps only `tillr-drain/drain`).** Every extracted subsystem regains pre-merge test coverage when its own files or upstream `internal/*` dependencies change (`~1–24 s` on single-package edits; LPT-sharded `~45–60 s` worst-case on a Layer-0 `drainmodel` edit, staying below the `90 s` `fast-gate-median-slow` threshold), while `drain`'s `1,603` `Loop`/CLI integration tests (`3,358.36 s`) remain after-merge (unless [`OQ-DFG1`](./fast-gate-tillr-drain-options.md#OQ-DFG1) selects Option A).
+   - **B — Run the `19` fast `internal/*` packages (`<= 24 s` serial) pre-merge, and add `internal/steps`, `internal/remotepush`, and `internal/heavyproof` (`149` subprocess tests, `150.70 s` serial) to `DEFERRED_PROOF_PACKAGES` alongside `drain`.** Keeps worst-case Layer-0 `drainmodel` pre-merge `go-affected` runs under `~25 s` wall-clock with low subprocess contention across ten lanes, while still caching those three packages independently in after-merge `go-test-tillr-drain --cache`.
+   - **C — Defer all `tools/tillr-drain/internal/*` packages to after-merge `go-test-tillr-drain --cache`, using the decomposition purely for compile speed, fault isolation, and per-package after-merge test caching.** Zero extra pre-merge test time on `tillr-drain` edits beyond today's `D-GR54` baseline, at the cost of catching `internal/*` unit regressions after the merge rather than before it.
+
+   <!-- vantage: question id=OQ-DPD1 leaning="A — all 19 fast packages run in <= 24 s and the 3 larger packages LPT-shard to ~12–20 s when touched (with worst-case Layer-0 edits still under the 90 s median alert), restoring pre-merge behavioral tests to 82% of drain's codebase without bringing back 20-minute Loop integration gates." -->
+
+   _Leaning:_ A — all `19` fast packages run in `<= 24 s` and the `3` larger packages LPT-shard to `~12–20 s` when touched (with worst-case Layer-0 edits still under the `90 s` median alert), restoring pre-merge behavioral tests to `82.4%` of `drain`'s codebase without bringing back `20`-minute `Loop` integration gates.
+
+   **Answer:**
+   > _(empty — fill in when decided)_
+
+---
+
+## Decision Ledger
+
+**Who decided each row.** `R-DPD1` records the owner's verbatim 2026-11-25 statement. Every `D-DPD*` row below (`D-DPD1` through `D-DPD8`) is **the designer's decision, never an owner ruling, and the owner may overturn any of them**.
+
+| ID | Decision | Date | Settled in | Built |
+| :--- | :--- | :--- | :--- | :--- |
+| <a id="R-DPD1"></a>`R-DPD1` | **Owner direction (verbatim).** *"Surely there's a better architecture here. This like interconnected mess of stuff is not good for development speed, it's not good for testing, it's not good for development in general, bugs"* | 2026-11-25, owner | [§1.1](#11-owner-direction-and-standing-rules) | — |
+| <a id="D-DPD1"></a>`D-DPD1` | **Designer's decision; the owner may overturn it.** Place extracted single-job packages under `tools/tillr-drain/internal/<pkg>`, keep the existing `21` non-`drain` leaf packages at Layer `-1`, and retain zero-cost Go type aliases (`type X = <pkg>.X`) and thin forwarding wrappers in `drain/<pkg>_bridge.go` so external callers (`tillr-drain` root, `tillr-store`, `tillr-watch`) and `drain`'s integration tests keep stable public signatures. **Rejected:** public top-level `tools/tillr-drain/<pkg>` packages that widen cross-module API surface, or breaking `drain` callers mid-migration. | 2026-11-25, designer | [§2.1](#21-module-private-internal-namespace-and-stable-drain-bridge-d-dpd1) | — |
+| <a id="D-DPD2"></a>`D-DPD2` | **Designer's decision; the owner may overturn it.** Decompose `229` of `drain`'s `251` production files (`72,248` of `87,692` lines) and `180` whole test files (`522` `Test*` functions, `277.98 s`) into `22` single-job `internal/*` packages across Layers `0`–`5` (`drainmodel`; `procguard`, `boundary`, `storelog`, `runhistory`; `policy`, `gatespans`, `steps`; `docintake`, `triage`, `desk`, `lanepool`, `stager`; `flowgraph`, `judgesettle`, `fixerloop`, `trunkland`, `heavyproof`, `remotepush`; `planner`, `startfast`, `whyview`). **Rejected:** naive file-prefix splits that leave `Candidate`/`Decision`/`pendingWork` in `loop.go`/`plan.go`/`pass.go` (causing `91` mutual cycles), or coarse 3-package splits that preserve multi-job god-packages. | 2026-11-25, designer | [§1.5](#15-complete-23-domain-responsibility-map-251-production-files-585-test-files), [§2.2](#22-single-job-and-strict-6-layer-dependency-dag-d-dpd2) | — |
+| <a id="D-DPD3"></a>`D-DPD3` | **Designer's decision; the owner may overturn it.** Replace ambient `(l *Loop)` receivers on subsystem functions with `drainmodel.Env` and narrow capability seams (`GitRunner`, `StoreTx`, `steps.Runner`, `stager.Stager`, `RestartBarrier`, `PostLandingNotifier`). **Rejected:** a 50-method `Loop` interface imported downward by leaf packages (rejected in [`D-GR47`](../reference/gate.md#D-GR47)). | 2026-11-25, designer | [§2.3](#23-seam-interfaces-replacing-loop-ambient-coupling-d-dpd3) | — |
+| <a id="D-DPD4"></a>`D-DPD4` | **Designer's decision; the owner may overturn it.** Keep `22` coordinator files in `tools/tillr-drain/drain` (`loop.go`, `pass.go`, `once.go`, `command.go`, `live_scale.go`, `pass_observation.go`, `trigger.go`, `examine_coordinator.go`, `post_landing.go`, `extension_roll.go`, `pi_roll.go`, and the `11` restart/recovery files), shrinking `struct Loop` from `146` fields / `24` mutexes to `<= 45` fields / `<= 8` mutexes because pass admission, background examination holds (`restartSettlements`), and in-place `exec` replacement share one mutual-exclusion and liveness cycle. | 2026-11-25, designer | [§2.4](#24-what-stays-in-drain-as-the-loops-irreducible-core-and-why-it-cannot-be-split-further-d-dpd4) | — |
+| <a id="D-DPD5"></a>`D-DPD5` | **Designer's decision; the owner may overturn it.** Land extractions via whole-file `git mv` + per-package `drain/<pkg>_bridge.go` files without concurrent edits to `drain/loop.go`, `tools/gate/go-test-edges.json`, or `classification_scan_test.go`, relying on `stagePackMirror`/`filterMirrorConflictReports` and 1-to-1 `packmirror` paths so live queue edits to `drain` and `just pack-sync` merge without conflict storms. | 2026-11-25, designer | [§3.1](#31-coexisting-with-live-queue-edits-to-drain-and-just-pack-sync-d-dpd5) | — |
+| <a id="D-DPD6"></a>`D-DPD6` | **Designer's decision; the owner may overturn it.** Prove zero dropped tests deterministically on every extraction via an AST test-set inclusion check ($T(\text{base}) \subseteq T(\text{head})$ and $|T(\text{head})| \ge |T(\text{base})|$ across `tools/tillr-drain/...`, wired into `tests/go-affected.test.py` and the change gate in `E01`) plus `go test -list '^Test'` verification on `./internal/<pkg>`. **Rejected:** manual test counts or elapsed-time assertions ([`D-GR47`](../reference/gate.md#D-GR47)). | 2026-11-25, designer | [§3.2](#32-deterministic-zero-dropped-test-parity-check-d-dpd6) | — |
+| <a id="D-DPD7"></a>`D-DPD7` | **Designer's decision; the owner may overturn it.** Execute the decomposition as `22` single-commit queue items (`E01`–`E22`, `8`–`30` moved files each) scheduled across `13` waves with explicit `depends_on` edges so every multi-item wave has 100% disjoint repository and pack-mirror file sets ([`OQ-DPD1`](#OQ-DPD1) governs pre-merge `go-affected` deferral for `E08`, `E18`, and `E19`). | 2026-11-25, designer | [§3.3](#33-the-22-extraction-queue-items-e01e22), [`OQ-DPD1`](#OQ-DPD1) | — |
+| <a id="D-DPD8"></a>`D-DPD8` | **Designer's decision; the owner may overturn it.** Enforce structural anti-decay in `< 0.2 s` pre-merge via `tools/tillr-drain/architecture_test.go` and `tests/go-affected.test.py`: (1) universal ban on any non-`drain`/non-root `tools/tillr-drain` subpackage importing `drain` or root `tillr-drain`, (2) per-package `// tillr-arch: layer=<N> imports=<csv>` DAG check in `internal/<pkg>/doc.go`, (3) `drain/` filename allowlist and `struct Loop` field/mutex ratchet (`146`/`24` -> `<= 45`/`<= 8`), and (4) module-wide `tools/tillr-drain/` scope on `definition_test.go`, `trunk_transaction_test.go`, `whole_log_test.go`, and `classification_scan_test.go`. | 2026-11-25, designer | [§4](#4-stopping-decay-structural-rule-and-automated-pre-merge-ratchet) | — |
