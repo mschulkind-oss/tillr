@@ -608,6 +608,7 @@ type Loop struct {
 	fixerWaitMu                 sync.Mutex
 	forkRebaseMu                sync.Mutex
 	revertMu                    sync.Mutex
+	revertTipPoll               time.Duration // optional; tests may shorten the revert gate's trunk poll interval
 	heavyWG                     sync.WaitGroup
 	heavyRunning                bool
 	heavyProofActive            bool // heavyMu; entry is serialized with exec by restartMechanical

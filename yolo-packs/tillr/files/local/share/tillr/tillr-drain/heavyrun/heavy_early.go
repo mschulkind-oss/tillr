@@ -13,9 +13,9 @@ const HeavyReplayGuard = "heavy.replay-cleanup-pending"
 
 // heavyAttributed is what recovery found for one failing check before the run ended.
 type heavyAttributed struct {
-	check             HeavyCheck
-	against           string
-	bisected, offered bool
+	check                      HeavyCheck
+	against                    string
+	bisected, offered, dropped bool
 }
 
 // heavyEarly recovers failing checks one at a time, in the order they ended, in a
@@ -108,6 +108,7 @@ func (e *heavyEarly) recover(check HeavyCheck) error {
 			if err != nil {
 				return err
 			}
+			a.dropped = out.Dropped != ""
 			if check.RevertedBy != "" {
 				e.reverted[a.against] = check.RevertedBy
 			}

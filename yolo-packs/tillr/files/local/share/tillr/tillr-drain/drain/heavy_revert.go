@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/checkresult"
@@ -67,7 +69,7 @@ type revertPayload struct {
 	Tip       string            `json:"tip"`
 	Checks    []string          `json:"checks"`
 	CheckLogs map[string]string `json:"check_logs,omitempty"`
-	// Result is "reverted" or "not-possible".
+	// Result is "reverted", "dropped", or "not-possible".
 	Result   string `json:"result"`
 	Revert   string `json:"revert,omitempty"`
 	Reason   string `json:"reason,omitempty"`
@@ -102,6 +104,15 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		}
 		out.Refused = reason
 		return out, nil
+	}
+	drop := func(repairedTip string) (RevertOutcome, error) {
+		reason := fmt.Sprintf("trunk tip %s already passes %s", shortSHA(repairedTip), strings.Join(ids, ", "))
+		record.Result, record.Reason = "dropped", reason
+		l.reportf("loop: heavy %s red from %s: automatic revert dropped: %s\n", strings.Join(ids, ","), shortSHA(landing), reason)
+		if err := l.appendRevert(ctx, record, nil); err != nil {
+			return RevertOutcome{}, err
+		}
+		return RevertOutcome{Dropped: reason}, nil
 	}
 	if fixerID, err := l.openFixerForLanding(ctx, landing); err != nil {
 		return RevertOutcome{}, err
@@ -138,6 +149,25 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 	if len(dependents) > 0 {
 		return refuse("landed item " + strings.Join(dependents, ", ") + " declares a dependency on " + of.itemID)
 	}
+	confirmedRedTip := tip
+	if cur, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef); err != nil {
+		return RevertOutcome{}, err
+	} else if cur != confirmedRedTip {
+		if replay == nil {
+			return refuse("trunk advanced to " + shortSHA(cur) + " and cannot confirm whether " + strings.Join(ids, ", ") + " still fails there")
+		}
+		allPass, err := tipChecksPass(ctx, cur, ids, replay)
+		if err != nil {
+			if ctx.Err() != nil || cleanupLost(err) {
+				return RevertOutcome{}, err
+			}
+			return refuse("trunk advanced to " + shortSHA(cur) + " and checking " + strings.Join(ids, ", ") + " there gave no verdict: " + err.Error())
+		}
+		if allPass {
+			return drop(cur)
+		}
+		confirmedRedTip = cur
+	}
 	l.reportf("loop: heavy %s red from landing %s (item %s); reverting it on tip %s\n", strings.Join(ids, ","), shortSHA(landing), of.itemID, shortSHA(tip))
 	work := filepath.Join(l.cfg.LaneRoot, ".revert", "worktree")
 	defer l.removeRevertTree(work)
@@ -149,8 +179,69 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		return refuse(reason)
 	}
 	candidate := Candidate{ItemID: RevertItemID(landing), LaneID: "revert", RunID: "run-revert-" + shortSHA(landing) + "-" + shortSHA(tip), Worktree: work, BaseSHA: tip, HeadSHA: revert}
-	gate, err := l.cfg.Steps.Gate(ctx, candidate)
+	gateCtx, cancelGate := context.WithCancel(ctx)
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	var (
+		watchWG    sync.WaitGroup
+		watchMu    sync.Mutex
+		droppedTip string
+	)
+	if replay != nil {
+		watchWG.Add(1)
+		go func(initialChecked string) {
+			defer watchWG.Done()
+			ticker := time.NewTicker(l.revertTipPollInterval())
+			defer ticker.Stop()
+			lastChecked := initialChecked
+			for {
+				select {
+				case <-watchCtx.Done():
+					return
+				case <-ticker.C:
+				}
+				cur, err := heavyGitOutput(watchCtx, l.cfg.Root, "rev-parse", TrunkRef)
+				if err != nil || cur == "" || cur == lastChecked {
+					continue
+				}
+				lastChecked = cur
+				allPass, err := tipChecksPass(watchCtx, cur, ids, replay)
+				if err != nil {
+					continue
+				}
+				if allPass {
+					watchMu.Lock()
+					droppedTip = cur
+					watchMu.Unlock()
+					cancelGate()
+					return
+				}
+				watchMu.Lock()
+				confirmedRedTip = cur
+				watchMu.Unlock()
+			}
+		}(confirmedRedTip)
+	}
+	gate, err := l.cfg.Steps.Gate(gateCtx, candidate)
+	cancelWatch()
+	watchWG.Wait()
+	cancelGate()
 	l.sweepDisabledMarkers(ctx)
+	watchMu.Lock()
+	repairedTip := droppedTip
+	watchMu.Unlock()
+	if repairedTip != "" {
+		return drop(repairedTip)
+	}
+	if ctx.Err() == nil && replay != nil {
+		if cur, cerr := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef); cerr == nil && cur != "" && cur != confirmedRedTip {
+			if allPass, perr := tipChecksPass(ctx, cur, ids, replay); perr == nil {
+				if allPass {
+					return drop(cur)
+				}
+				confirmedRedTip = cur
+			}
+		}
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return RevertOutcome{}, err
@@ -187,6 +278,21 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 	candidate.ObservedTrunk, err = heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef)
 	if err != nil {
 		return RevertOutcome{}, err
+	}
+	if candidate.ObservedTrunk != confirmedRedTip {
+		if replay == nil {
+			return refuse("trunk advanced to " + shortSHA(candidate.ObservedTrunk) + " and cannot confirm whether " + strings.Join(ids, ", ") + " still fails there")
+		}
+		allPass, err := tipChecksPass(ctx, candidate.ObservedTrunk, ids, replay)
+		if err != nil {
+			if ctx.Err() != nil || cleanupLost(err) {
+				return RevertOutcome{}, err
+			}
+			return refuse("trunk advanced to " + shortSHA(candidate.ObservedTrunk) + " and checking " + strings.Join(ids, ", ") + " there gave no verdict: " + err.Error())
+		}
+		if allPass {
+			return drop(candidate.ObservedTrunk)
+		}
 	}
 	landed, err := l.landWithActions(ctx, candidate)
 	if err != nil {
@@ -294,10 +400,32 @@ func (l *Loop) revertFromGateReplay(ctx context.Context, candidate Candidate, re
 		}
 		out = RevertOutcome{Refused: "the revert could not be attempted: " + err.Error()}
 	}
-	if out.Reverted == "" && out.Refused == "" {
+	if out.Reverted == "" && out.Dropped == "" && out.Refused == "" {
 		out.Refused = "the revert answered neither a landing nor a reason"
 	}
 	return out, nil
+}
+
+func (l *Loop) revertTipPollInterval() time.Duration {
+	if l.revertTipPoll > 0 {
+		return l.revertTipPoll
+	}
+	return 200 * time.Millisecond
+}
+
+// tipChecksPass reports whether every named failing check passes on sha.
+// It stops as soon as any check still fails or fails to produce a verdict.
+func tipChecksPass(ctx context.Context, sha string, ids []string, replay HeavyReplay) (bool, error) {
+	for _, id := range ids {
+		red, err := replay(ctx, sha, id)
+		if err != nil {
+			return false, err
+		}
+		if red {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // buildRevert makes the inverse of landing on tip in a detached checkout and commits it.

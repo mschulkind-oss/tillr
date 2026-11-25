@@ -71,8 +71,11 @@ type HeavyReplay func(ctx context.Context, sha, checkID string) (red bool, err e
 type RevertOutcome struct {
 	// Reverted is the trunk commit the revert landed as; "" when it did not land.
 	Reverted string
+	// Dropped is why the revert was dropped without landing because the current trunk
+	// tip already passes the failing checks; no fixer is needed.
+	Dropped string
 	// Refused is why the revert path ended "not possible", in words a fixer's brief can
-	// carry. It is "" exactly when Reverted is set.
+	// carry. It is "" when Reverted or Dropped is set.
 	Refused string
 	// StillRed is set when a failing check still fails on the tip with the landing
 	// reverted: the attribution did not explain the red and must be searched again.
@@ -768,6 +771,8 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 			switch {
 			case check.RevertedBy != "":
 				continue
+			case a.dropped:
+				continue
 			case !a.offered && a.bisected:
 				bisected[check.CheckID] = true
 			}
@@ -969,6 +974,7 @@ func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, 
 				}
 				switch {
 				case check.RevertedBy != "":
+				case out.Dropped != "":
 				case against != sha:
 					moved = append(moved, movedRepair{against, check})
 				default:
@@ -1003,6 +1009,10 @@ func (r HeavyRunner) noteRevertRefused(check *HeavyCheck) {
 // different attribution can authorize another revert; otherwise repair the tip.
 func (r HeavyRunner) resolveRevert(ctx context.Context, run HeavyRun, check *HeavyCheck, landing string, out RevertOutcome) (string, error) {
 	check.RevertedBy, check.RevertRefused = out.Reverted, out.Refused
+	if out.Dropped != "" {
+		check.Detail = JoinDetail(check.Detail, "automatic revert dropped: "+HeavyBrief(out.Dropped))
+		return landing, nil
+	}
 	if !out.StillRed || out.StillRedCheck != "" && out.StillRedCheck != check.CheckID {
 		r.noteRevertRefused(check)
 		return landing, nil
@@ -1066,7 +1076,7 @@ func (r HeavyRunner) offerRevert(ctx context.Context, tip, sha string, checks []
 		}
 		out = RevertOutcome{Refused: "the revert could not be attempted: " + err.Error()}
 	}
-	if out.Reverted == "" && out.Refused == "" {
+	if out.Reverted == "" && out.Dropped == "" && out.Refused == "" {
 		out.Refused = "the revert answered neither a landing nor a reason"
 	}
 	return out, nil

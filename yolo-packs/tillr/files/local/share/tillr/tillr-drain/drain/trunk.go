@@ -1315,6 +1315,25 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate *Candidate, gat
 							candidate.ItemID, shortSHA(culprit), shortSHA(out.Reverted))
 						return false, nil
 					}
+					if out.Dropped != "" {
+						if currentTip, tipErr := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef); tipErr == nil && currentTip != "" {
+							from := candidate.WorkerHeadSHA
+							if from == "" {
+								from = candidate.HeadSHA
+							}
+							if moved, moveErr := l.moveLaneOntoTip(ctx, candidate.LaneID, from, currentTip); moveErr == nil {
+								oldBase := candidate.BaseSHA
+								detail := repairedAtTipDetail(redChecks, oldBase, currentTip, moved)
+								if moved != "" {
+									candidate.BaseSHA, candidate.HeadSHA, candidate.WorkerHeadSHA = currentTip, moved, moved
+								}
+								candidate.RefusalDetail = strings.TrimSpace(candidate.RefusalDetail + " " + detail)
+							}
+						}
+						l.reportf("loop: %s's revert of %s dropped: %s; no fixer is filed\n",
+							candidate.ItemID, shortSHA(culprit), heavyBrief(out.Dropped))
+						return false, nil
+					}
 					note = joinDetail(note, "Automatic revert of "+shortSHA(culprit)+" for "+strings.Join(redChecks, ", ")+" was not possible: "+heavyBrief(out.Refused))
 					if out.StillRed {
 						redSHA = tipSHA

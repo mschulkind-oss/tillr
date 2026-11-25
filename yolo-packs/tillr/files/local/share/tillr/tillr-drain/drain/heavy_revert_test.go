@@ -27,6 +27,7 @@ type revertSteps struct {
 	root, store string
 	gate        string
 	onGate      func(Candidate)
+	onGateCtx   func(context.Context, Candidate) (GateOutcome, error)
 	mu          *sync.Mutex
 	gated       *[]Candidate
 	returned    *[]string
@@ -34,10 +35,13 @@ type revertSteps struct {
 	requiredLog string
 }
 
-func (s revertSteps) Gate(_ context.Context, c Candidate) (GateOutcome, error) {
+func (s revertSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, error) {
 	s.mu.Lock()
 	*s.gated = append(*s.gated, c)
 	s.mu.Unlock()
+	if s.onGateCtx != nil {
+		return s.onGateCtx(ctx, c)
+	}
 	if s.onGate != nil {
 		s.onGate(c)
 	}
