@@ -989,3 +989,49 @@ func TestRollPiFlagInvokesPiForksBuildPi(t *testing.T) {
 		t.Fatalf("calls = %+v, want %+v", calls, want)
 	}
 }
+
+func TestTestCommitShardsChangedToolsGate(t *testing.T) {
+	work := t.TempDir()
+	root, _, git := setupRollFixture(t, work, "")
+	base := git("rev-parse", "HEAD")
+
+	gateDir := filepath.Join(root, "tools", "gate")
+	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gateDir, "go.mod"), []byte("module example.invalid/gate\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gateDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "tools/gate")
+	git("commit", "-qm", "add tools/gate")
+	tip := git("rev-parse", "HEAD")
+
+	var sharded [][]string
+	deps := &Deps{
+		Stdout: io.Discard,
+		Stderr: io.Discard,
+		Run: func(args []string, opts RunOpts) (CmdResult, error) {
+			if len(args) > 0 && args[0] == "python3" {
+				sharded = append(sharded, append([]string(nil), args...))
+				return CmdResult{}, nil
+			}
+			return Run(args, opts, nil)
+		},
+	}
+	old := map[string]BuildFact{
+		"drain": {Role: "drain", Revision: base},
+		"view":  {Role: "view", Revision: base},
+	}
+	if err := TestCommit(root, root, work, tip, filepath.Join(root, ".tillr", "state.db"), old, nil, deps); err != nil {
+		t.Fatalf("TestCommit failed: %v", err)
+	}
+	if len(sharded) != 1 {
+		t.Fatalf("expected 1 sharded test run, got %d: %v", len(sharded), sharded)
+	}
+	if !strings.HasSuffix(sharded[0][1], "tools/go-test-shards.py") || sharded[0][2] != "tools/gate" {
+		t.Fatalf("unexpected sharded command: %v", sharded[0])
+	}
+}

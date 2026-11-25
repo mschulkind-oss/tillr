@@ -249,7 +249,7 @@ func TestCommit(root, source, work, tip, store string, old map[string]BuildFact,
 		}
 	}
 
-	entries, err := filepath.Glob(filepath.Join(source, "tools", "tillr*"))
+	entries, err := filepath.Glob(filepath.Join(source, "tools", "*"))
 	if err != nil {
 		return err
 	}
