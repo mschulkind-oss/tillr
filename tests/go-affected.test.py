@@ -188,14 +188,21 @@ def test_selection_rules(root_graph: dict) -> None:
         sel = go_affected.select_affected_packages(ROOT, [excluded], graph=root_graph)
         assert sel["selected"] == [], (excluded, sel)
 
-    # 3. Drain package change selects drain packages and tillr-view (via import or builds edge),
-    # exercising full end-to-end graph loading without preloaded graph.
+    # 3. Drain package change defers tillr-drain/drain to after-merge proof while still
+    # selecting non-deferred reverse importers (root tillr-drain, tillr-view) and edge
+    # consumers, exercising full end-to-end graph loading without preloaded graph.
     sel = go_affected.select_affected_packages(ROOT, ["tools/tillr-drain/drain/loop.go"])
     by_pkg = {item["import_path"]: item for item in sel["selected"]}
-    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["reason"] == "changed", by_pkg
+    assert "github.com/mschulkind-oss/tillr-drain/drain" not in by_pkg, by_pkg
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["reason"] == "import", by_pkg
     assert "github.com/mschulkind-oss/tillr-view" in by_pkg, by_pkg
     assert by_pkg["github.com/mschulkind-oss/tillr-view"]["reason"] in ("import", "edge"), by_pkg
+    # Explicitly clearing drop_packages selects drain with reason=changed.
+    sel_unfiltered = go_affected.select_affected_packages(
+        ROOT, ["tools/tillr-drain/drain/loop.go"], drop_packages=set(), graph=root_graph
+    )
+    by_pkg_unfiltered = {item["import_path"]: item for item in sel_unfiltered["selected"]}
+    assert by_pkg_unfiltered["github.com/mschulkind-oss/tillr-drain/drain"]["reason"] == "changed", by_pkg_unfiltered
 
     # 4. Item package change selects item packages and tillr-view (via import or builds edge).
     sel = go_affected.select_affected_packages(ROOT, ["tools/tillr-item/item/doc_triage.go"], graph=root_graph)
@@ -221,6 +228,12 @@ def test_selection_rules(root_graph: dict) -> None:
     assert all(
         item["reason"] == "edge" for item in sel["selected"] if item["module"] not in floor_mods
     ), sel["selected"]
+    floor_pkgs = {item["import_path"] for item in sel["selected"]}
+    assert "github.com/mschulkind-oss/tillr-drain/drain" not in floor_pkgs, floor_pkgs
+    assert {
+        "github.com/mschulkind-oss/tillr-drain",
+        "github.com/mschulkind-oss/tillr-drain/workflow",
+    } <= floor_pkgs, floor_pkgs
 
     # 6. Deleted package path triggers floor.
     sel = go_affected.select_affected_packages(ROOT, ["tools/tillr-drain/deletedpkg/foo.go"], graph=root_graph)
@@ -253,9 +266,9 @@ def test_selection_rules(root_graph: dict) -> None:
     by_pkg = {item["import_path"]: item for item in sel["selected"]}
     assert {
         "github.com/mschulkind-oss/tillr-drain",
-        "github.com/mschulkind-oss/tillr-drain/drain",
         "github.com/mschulkind-oss/tillr-view",
     } <= set(by_pkg), by_pkg
+    assert "github.com/mschulkind-oss/tillr-drain/drain" not in by_pkg, by_pkg
     assert by_pkg["github.com/mschulkind-oss/tillr-view"]["reason"] == "edge", by_pkg
 
     sel = go_affected.select_affected_packages(ROOT, ["tools/tillr-item/main.go"], graph=root_graph)
@@ -267,31 +280,42 @@ def test_selection_rules(root_graph: dict) -> None:
     ), by_pkg["github.com/mschulkind-oss/tillr-view"]
 
     # High-fanout builds edges in go-test-edges.json narrow to the tests that build each sibling.
-    for changed_sib, consumer_pkg, sib_ip in [
+    # Deferred packages are excluded under default selection and narrow when drop_packages is empty.
+    sel_view_default = go_affected.select_affected_packages(ROOT, ["tools/tillr-view/main.go"], graph=root_graph)
+    assert "github.com/mschulkind-oss/tillr-drain/drain" not in {
+        item["import_path"] for item in sel_view_default["selected"]
+    }, sel_view_default["selected"]
+    for changed_sib, consumer_pkg, sib_ip, drop_pkgs in [
         (
             "tools/tillr-view/main.go",
             "github.com/mschulkind-oss/tillr-drain/drain",
             "github.com/mschulkind-oss/tillr-view",
+            set(),
         ),
         (
             "tools/tillr-store/main.go",
             "github.com/mschulkind-oss/tillr-item",
             "github.com/mschulkind-oss/tillr-store",
+            None,
         ),
         (
             "tools/tillr-gate/main.go",
             "github.com/mschulkind-oss/tillr-land",
             "github.com/mschulkind-oss/tillr-gate",
+            None,
         ),
     ]:
-        sel = go_affected.select_affected_packages(ROOT, [changed_sib], graph=root_graph)
+        sel = go_affected.select_affected_packages(
+            ROOT, [changed_sib], drop_packages=drop_pkgs, graph=root_graph
+        )
         by_pkg = {item["import_path"]: item for item in sel["selected"]}
         assert by_pkg[consumer_pkg]["reason"] == "edge", (changed_sib, by_pkg[consumer_pkg])
         assert set(by_pkg[consumer_pkg]["selected_tests"] or ()) == set(
             root_edges[consumer_pkg]["build_tests"][sib_ip]
         ), (changed_sib, by_pkg[consumer_pkg])
 
-    # 9. Non-Go reads edges.
+    # 9. Non-Go reads edges: non-deferred readers select under default; deferred readers
+    # (tillr-drain/drain) stay out of pre-merge selection and select when drop_packages=set().
     for changed_path, expected_pkgs in [
         ("tools/tillr-run/backends/pi/extract-report", {
             "github.com/mschulkind-oss/tillr-run",
@@ -322,10 +346,19 @@ def test_selection_rules(root_graph: dict) -> None:
     ]:
         sel = go_affected.select_affected_packages(ROOT, [changed_path], graph=root_graph)
         pkgs = {item["import_path"] for item in sel["selected"]}
-        assert expected_pkgs <= pkgs, f"{changed_path}: missing {expected_pkgs - pkgs} in {pkgs}"
+        pre_merge_expected = expected_pkgs - go_affected.DEFERRED_PROOF_PACKAGES
+        deferred_expected = expected_pkgs & go_affected.DEFERRED_PROOF_PACKAGES
+        assert pre_merge_expected <= pkgs, f"{changed_path}: missing {pre_merge_expected - pkgs} in {pkgs}"
+        assert not (deferred_expected & pkgs), f"{changed_path}: deferred {deferred_expected & pkgs} in {pkgs}"
         for item in sel["selected"]:
-            if item["import_path"] in expected_pkgs:
+            if item["import_path"] in pre_merge_expected:
                 assert item["selected_tests"] is None, f"unscoped read {changed_path} narrowed {item}"
+        if deferred_expected:
+            sel_all = go_affected.select_affected_packages(
+                ROOT, [changed_path], drop_packages=set(), graph=root_graph
+            )
+            all_pkgs = {item["import_path"] for item in sel_all["selected"]}
+            assert expected_pkgs <= all_pkgs, f"{changed_path}: missing {expected_pkgs - all_pkgs} in {all_pkgs}"
 
     # 10. Scoped read_tests on one read path select only the reading packages and narrow
     # each to its reader tests, whether the path changes alone or beside an unrelated file.
@@ -354,7 +387,7 @@ def test_selection_rules(root_graph: dict) -> None:
         [scoped_read, "README.md"],
     ):
         sel = go_affected.select_affected_packages(
-            ROOT, scoped_changed, edges=scoped_edges, graph=root_graph
+            ROOT, scoped_changed, edges=scoped_edges, drop_packages=set(), graph=root_graph
         )
         by_pkg = {item["import_path"]: item for item in sel["selected"]}
         assert set(by_pkg) == expected_scoped_pkgs, (scoped_changed, set(by_pkg))
@@ -368,7 +401,7 @@ def test_selection_rules(root_graph: dict) -> None:
     # reads edit, or a module floor trigger widens affected packages back to whole-package
     # execution (selected_tests=None) while unaffected reading packages stay narrowed.
     sel_go = go_affected.select_affected_packages(
-        ROOT, [scoped_read, "tools/tillr-drain/drain/loop.go"], edges=scoped_edges, graph=root_graph
+        ROOT, [scoped_read, "tools/tillr-drain/drain/loop.go"], edges=scoped_edges, drop_packages=set(), graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_go["selected"]}
     assert by_pkg[drain_pkg]["reason"] == "changed", by_pkg
@@ -379,7 +412,7 @@ def test_selection_rules(root_graph: dict) -> None:
 
     # Pairing a scoped read path with a scoped builds edge narrows to the union of both.
     sel_scoped_both = go_affected.select_affected_packages(
-        ROOT, [scoped_read, "tools/tillr-cli/main.go"], edges=scoped_edges, graph=root_graph
+        ROOT, [scoped_read, "tools/tillr-cli/main.go"], edges=scoped_edges, drop_packages=set(), graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_scoped_both["selected"]}
     cli_builders = scoped_edges[drain_pkg]["build_tests"]["github.com/mschulkind-oss/tillr-cli"]
@@ -392,7 +425,7 @@ def test_selection_rules(root_graph: dict) -> None:
     unscoped_build_edges = json.loads(json.dumps(scoped_edges))
     unscoped_build_edges[drain_pkg].get("build_tests", {}).pop("github.com/mschulkind-oss/tillr-cli", None)
     sel_builds = go_affected.select_affected_packages(
-        ROOT, [scoped_read, "tools/tillr-cli/main.go"], edges=unscoped_build_edges, graph=root_graph
+        ROOT, [scoped_read, "tools/tillr-cli/main.go"], edges=unscoped_build_edges, drop_packages=set(), graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_builds["selected"]}
     assert "github.com/mschulkind-oss/tillr-drain" not in by_pkg, by_pkg
@@ -400,7 +433,7 @@ def test_selection_rules(root_graph: dict) -> None:
     assert by_pkg[gate_pkg]["selected_tests"] == gate_readers, by_pkg
 
     sel_unscoped = go_affected.select_affected_packages(
-        ROOT, [scoped_read, "config/tillr/backend-policy.json"], edges=scoped_edges, graph=root_graph
+        ROOT, [scoped_read, "config/tillr/backend-policy.json"], edges=scoped_edges, drop_packages=set(), graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_unscoped["selected"]}
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
@@ -408,7 +441,7 @@ def test_selection_rules(root_graph: dict) -> None:
     assert by_pkg[gate_pkg]["selected_tests"] == gate_readers, by_pkg
 
     sel_floor = go_affected.select_affected_packages(
-        ROOT, [scoped_read, "tools/tillr-drain/go.mod"], edges=scoped_edges, graph=root_graph
+        ROOT, [scoped_read, "tools/tillr-drain/go.mod"], edges=scoped_edges, drop_packages=set(), graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_floor["selected"]}
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
@@ -441,28 +474,48 @@ def test_selection_rules(root_graph: dict) -> None:
     for policy_path in policy_files:
         sel_policy = go_affected.select_affected_packages(ROOT, [policy_path], graph=root_graph)
         pkgs = {item["import_path"] for item in sel_policy["selected"]}
-        expected_policy_pkgs = {
-            "github.com/mschulkind-oss/tillr-drain",
-            "github.com/mschulkind-oss/tillr-drain/drain",
-        }
-        assert expected_policy_pkgs <= pkgs, f"{policy_path}: missing {expected_policy_pkgs - pkgs} in {pkgs}"
+        assert "github.com/mschulkind-oss/tillr-drain" in pkgs, f"{policy_path}: {pkgs}"
+        assert "github.com/mschulkind-oss/tillr-drain/drain" not in pkgs, f"{policy_path}: {pkgs}"
+        sel_policy_all = go_affected.select_affected_packages(
+            ROOT, [policy_path], drop_packages=set(), graph=root_graph
+        )
+        all_pkgs = {item["import_path"] for item in sel_policy_all["selected"]}
+        assert "github.com/mschulkind-oss/tillr-drain/drain" in all_pkgs, f"{policy_path}: {all_pkgs}"
 
     workflow_files = sorted(
         p.relative_to(ROOT).as_posix()
         for p in (ROOT / "config" / "tillr" / "workflows").glob("*.json")
     )
     assert workflow_files, "expected config/tillr/workflows/*.json files"
-    for drain_read_path in [
-        *workflow_files,
-        "config/tillr/workflows/new-workflow@v1.json",
+    for workflow_path in [*workflow_files, "config/tillr/workflows/new-workflow@v1.json"]:
+        sel_wf = go_affected.select_affected_packages(ROOT, [workflow_path], graph=root_graph)
+        wf_pkgs = {item["import_path"] for item in sel_wf["selected"]}
+        assert "github.com/mschulkind-oss/tillr-drain/drain" not in wf_pkgs, (workflow_path, wf_pkgs)
+        assert {
+            "github.com/mschulkind-oss/tillr-item",
+            "github.com/mschulkind-oss/tillr-item/item",
+        } <= wf_pkgs, (workflow_path, wf_pkgs)
+        sel_wf_all = go_affected.select_affected_packages(
+            ROOT, [workflow_path], drop_packages=set(), graph=root_graph
+        )
+        assert "github.com/mschulkind-oss/tillr-drain/drain" in {
+            item["import_path"] for item in sel_wf_all["selected"]
+        }, (workflow_path, sel_wf_all)
+    for drain_only_read_path in [
         "config/tillr/commands.json",
         "config/tillr/deny-list.json",
         "config/tillr/gate-policy.json",
         "config/tillr/plan-guidance.md",
     ]:
-        sel_drain_cfg = go_affected.select_affected_packages(ROOT, [drain_read_path], graph=root_graph)
-        pkgs = {item["import_path"] for item in sel_drain_cfg["selected"]}
-        assert "github.com/mschulkind-oss/tillr-drain/drain" in pkgs, f"{drain_read_path}: {pkgs}"
+        # Paths read exclusively by deferred tillr-drain/drain skip pre-merge selection
+        # (and do not require loading the Go graph when graph=None).
+        sel_drain_cfg = go_affected.select_affected_packages(ROOT, [drain_only_read_path])
+        assert sel_drain_cfg["selected"] == [], f"{drain_only_read_path}: {sel_drain_cfg}"
+        sel_drain_cfg_all = go_affected.select_affected_packages(
+            ROOT, [drain_only_read_path], drop_packages=set(), graph=root_graph
+        )
+        all_pkgs = {item["import_path"] for item in sel_drain_cfg_all["selected"]}
+        assert "github.com/mschulkind-oss/tillr-drain/drain" in all_pkgs, f"{drain_only_read_path}: {all_pkgs}"
 
 
 def test_edges_file_honest_and_env_read() -> None:
@@ -811,6 +864,26 @@ def test_check_declarations_cover_selection_inputs() -> None:
     for outside in ("README.md", "tools/dotmod/main_test.go", "tests/tillr-testmain_test.go"):
         assert not covered(outside, suite_decl["reads"]), f"go-affected-test.json reads cover {outside}"
 
+    # After-merge proof for deferred packages (D-GR53, D-GR54): go-test-tillr-drain runs in
+    # the heavy tree tier and its reads cover every builds module directory and every reads
+    # rule declared for DEFERRED_PROOF_PACKAGES in go-test-edges.json.
+    drain_suite_decl = json.loads((checks_dir / "go-test-tillr-drain.json").read_text(encoding="utf-8"))
+    assert drain_suite_decl["scope"] == "tree" and drain_suite_decl["tier"] == "heavy", drain_suite_decl
+    drain_suite_reads = drain_suite_decl["reads"]
+    assert drain_suite_reads == sorted(set(drain_suite_reads)), "go-test-tillr-drain.json reads must be sorted and unique"
+    for deferred_pkg in sorted(go_affected.DEFERRED_PROOF_PACKAGES):
+        edge = edges.get(deferred_pkg, {})
+        for target in edge.get("builds", []):
+            mod_name = target.split("/")[2]
+            probe_path = f"tools/{mod_name}/main.go"
+            assert covered(probe_path, drain_suite_reads), (
+                f"go-test-tillr-drain.json reads do not cover builds target {target} ({probe_path})"
+            )
+        for rule in edge.get("reads", []):
+            assert covered(rule, drain_suite_reads), (
+                f"go-test-tillr-drain.json reads do not cover reads rule {rule!r} of {deferred_pkg}"
+            )
+
     # The declared command, given a base and a head, tests the one package the change affects.
     with tempfile.TemporaryDirectory(prefix="go-affected-decl-", dir=scratch_root()) as tmp:
         repo = Path(tmp) / "repo"
@@ -882,14 +955,28 @@ def test_heavy_failures_replay(root_graph: dict) -> None:
         return  # Shallow or synthetic fixture clone without historical trunk commits.
 
     go_hits = 0
+    deferred_hits = 0
     for sha, expected_pkg in cases:
         changed = go_affected.git_changed_paths(ROOT, f"{sha}~1", sha)
         sel = go_affected.select_affected_packages(ROOT, changed, graph=root_graph)
         selected_pkgs = {p["import_path"]: p["reason"] for p in sel["selected"]}
         if expected_pkg is not None:
-            assert expected_pkg in selected_pkgs, (sha, expected_pkg, selected_pkgs)
-            go_hits += 1
-    assert go_hits == 9, go_hits
+            if expected_pkg in go_affected.DEFERRED_PROOF_PACKAGES:
+                assert expected_pkg not in selected_pkgs, (sha, expected_pkg, selected_pkgs)
+                sel_all = go_affected.select_affected_packages(
+                    ROOT, changed, drop_packages=set(), graph=root_graph
+                )
+                assert expected_pkg in {p["import_path"] for p in sel_all["selected"]}, (
+                    sha,
+                    expected_pkg,
+                    sel_all,
+                )
+                deferred_hits += 1
+            else:
+                assert expected_pkg in selected_pkgs, (sha, expected_pkg, selected_pkgs)
+                go_hits += 1
+    assert go_hits == 8, go_hits
+    assert deferred_hits == 1, deferred_hits
 
 
 def test_failure_refusal_names_packages_and_tests_far_above_tail() -> None:
@@ -2308,10 +2395,12 @@ def test_drain_subpackage_isolation(root_graph: dict) -> None:
     subpkgs = ("workflow", "remotesync", "fixer", "heavyrun")
     subpkg_ips = {f"github.com/mschulkind-oss/tillr-drain/{sub}" for sub in subpkgs}
 
-    # 1. Changing drain production or test files selects none of the four extracted subpackages.
+    # 1. Changing drain production or test files defers tillr-drain/drain and selects none
+    #    of the four extracted subpackages.
     for drain_path in ("tools/tillr-drain/drain/loop.go", "tools/tillr-drain/drain/loop_test.go"):
         sel = go_affected.select_affected_packages(ROOT, [drain_path], graph=root_graph)
         selected_ips = {item["import_path"] for item in sel["selected"]}
+        assert "github.com/mschulkind-oss/tillr-drain/drain" not in selected_ips, (drain_path, selected_ips)
         assert not (selected_ips & subpkg_ips), (drain_path, selected_ips & subpkg_ips)
 
     # 2. Changing a *_test.go file in any extracted subpackage selects ONLY that subpackage
@@ -2328,18 +2417,18 @@ def test_drain_subpackage_isolation(root_graph: dict) -> None:
         drain_ips = {ip for ip in selected_ips if ip.startswith("github.com/mschulkind-oss/tillr-drain")}
         assert drain_ips == {f"github.com/mschulkind-oss/tillr-drain/{sub}"}, (sub, selected_ips)
 
-    # 3. Changing workflow.go selects workflow, drain, and root tillr-drain,
-    #    and does NOT select remotesync, fixer, heavyrun, or heavy.
+    # 3. Changing workflow.go selects workflow and root tillr-drain (fast pre-merge packages),
+    #    and does NOT select deferred tillr-drain/drain, remotesync, fixer, heavyrun, or heavy.
     sel = go_affected.select_affected_packages(
         ROOT, ["tools/tillr-drain/workflow/workflow.go"], graph=root_graph
     )
     selected_ips = {item["import_path"] for item in sel["selected"]}
     assert {
         "github.com/mschulkind-oss/tillr-drain/workflow",
-        "github.com/mschulkind-oss/tillr-drain/drain",
         "github.com/mschulkind-oss/tillr-drain",
     } <= selected_ips, selected_ips
     forbidden_ips = {
+        "github.com/mschulkind-oss/tillr-drain/drain",
         "github.com/mschulkind-oss/tillr-drain/remotesync",
         "github.com/mschulkind-oss/tillr-drain/fixer",
         "github.com/mschulkind-oss/tillr-drain/heavyrun",

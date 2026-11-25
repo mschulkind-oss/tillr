@@ -24,6 +24,11 @@ import threading
 import time
 
 EXCLUDED_PACK_MIRROR_PREFIX = "yolo-packs/tillr/files/local/share/tillr/"
+# Packages whose subprocess-heavy integration suites are proved after the merge
+# (go-test-tillr-drain) rather than in pre-merge go-affected (D-GR53, D-GR54).
+DEFERRED_PROOF_PACKAGES: frozenset[str] = frozenset({
+    "github.com/mschulkind-oss/tillr-drain/drain",
+})
 SHARD_THRESHOLD = 100
 MIN_SHARDS = 6
 MAX_SHARDS = 2 * _cpu_count if (_cpu_count := os.cpu_count()) and _cpu_count > 0 else 12
@@ -820,6 +825,7 @@ def select_affected_packages(
     modules: list[str] | None = None,
     edges: dict[str, dict] | None = None,
     drop_modules: set[str] | None = None,
+    drop_packages: set[str] | frozenset[str] | None = None,
     graph: dict | None = None,
 ) -> dict:
     started = time.monotonic()
@@ -831,9 +837,15 @@ def select_affected_packages(
     )
     edges = load_edges(root) if edges is None else edges
     drop_set = set(drop_modules or ())
+    drop_pkg_set = set(DEFERRED_PROOF_PACKAGES if drop_packages is None else drop_packages)
     norm_changed = [os.path.normpath(p).lstrip("./") for p in changed if p and p.strip()]
 
-    all_reads = [r for e in edges.values() for r in e.get("reads", [])]
+    all_reads = [
+        r
+        for ip, e in edges.items()
+        if ip not in drop_pkg_set
+        for r in e.get("reads", [])
+    ]
     relevant = [
         p for p in norm_changed
         if any(p == m or p.startswith(m + "/") for m in modules)
@@ -920,6 +932,8 @@ def select_affected_packages(
 
     # Step 3: Declared edges (builds + reads).
     for test_pkg, edge in edges.items():
+        if test_pkg in drop_pkg_set:
+            continue
         info = pkg_info.get(test_pkg)
         if not info or not info["has_tests"]:
             continue
@@ -971,7 +985,7 @@ def select_affected_packages(
     selected: list[dict] = []
     for ip in sorted(reasons):
         info = pkg_info[ip]
-        if info["module"] in drop_set:
+        if info["module"] in drop_set or ip in drop_pkg_set:
             continue
         has_edge = ip in edges
         selected_tests: list[str] | None = None
