@@ -292,3 +292,26 @@ func TestHelpNamesTheNouns(t *testing.T) {
 		}
 	}
 }
+
+func TestWrapperAnswersVersionItself(t *testing.T) {
+	dir := stubDir(t, stub{"store", 4})
+	code, stdout, stderr := runWrapper(t, dir, "", "--version")
+	if code != 0 {
+		t.Fatalf("--version exited %d, want 0: %s", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+	line := strings.TrimSuffix(stdout, "\n")
+	if strings.Contains(line, "\n") {
+		t.Fatalf("--version is multi-line: %q", stdout)
+	}
+	for _, want := range []string{"green ", "digest ", "exe " + wrapperBin} {
+		if !strings.Contains(line, want) {
+			t.Errorf("--version = %q, missing %q", line, want)
+		}
+	}
+	if ran, _ := recorded(t, dir, "store"); ran {
+		t.Errorf("tillr --version ran tillr-store")
+	}
+}

@@ -24,6 +24,7 @@ import (
 	_ "github.com/mschulkind-oss/tillr-land/land"
 	_ "github.com/mschulkind-oss/tillr-run/run"
 
+	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
@@ -56,6 +57,10 @@ func run(args []string) int {
 	}
 	if args[0] == "-h" || args[0] == "--help" {
 		fmt.Printf("tillr-store: %s\nRun `tillr-store <face> --help` for one face's flags.\n", faceList)
+		return record.ExitOK
+	}
+	if args[0] == "--version" {
+		fmt.Println(buildstamp.Read().String())
 		return record.ExitOK
 	}
 	face, rest := args[0], args[1:]

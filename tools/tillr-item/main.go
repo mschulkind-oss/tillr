@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/vantage"
@@ -46,6 +47,10 @@ func run(args []string) int {
 	}
 	if args[0] == "-h" || args[0] == "--help" {
 		fmt.Printf("tillr-item: %s\nRun `tillr-item <face> --help` for one face's flags.\n", faceList)
+		return record.ExitOK
+	}
+	if args[0] == "--version" {
+		fmt.Println(buildstamp.Read().String())
 		return record.ExitOK
 	}
 	face, rest := args[0], args[1:]

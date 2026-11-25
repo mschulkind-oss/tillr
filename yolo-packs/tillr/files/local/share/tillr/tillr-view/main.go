@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/vantage"
@@ -49,6 +50,10 @@ func run(args []string) int {
 	}
 	if args[0] == "-h" || args[0] == "--help" {
 		fmt.Printf("tillr-view: %s\nRun `tillr-view <face> --help` for one face's flags.\n", faceList)
+		return record.ExitOK
+	}
+	if args[0] == "--version" {
+		fmt.Println(buildstamp.Read().String())
 		return record.ExitOK
 	}
 	face, rest := args[0], args[1:]

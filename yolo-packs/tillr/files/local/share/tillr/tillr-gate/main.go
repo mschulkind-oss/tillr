@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
 )
@@ -49,6 +50,10 @@ func run(args []string) int {
 	}
 	if args[0] == "-h" || args[0] == "--help" {
 		fmt.Printf("tillr-gate: %s\nRun `tillr-gate <face> --help` for one face's flags.\n", faceNames())
+		return record.ExitOK
+	}
+	if args[0] == "--version" {
+		fmt.Println(buildstamp.Read().String())
 		return record.ExitOK
 	}
 	face, ok := faces[args[0]]

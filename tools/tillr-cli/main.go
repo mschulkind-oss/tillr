@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"syscall"
 
+	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/record"
 )
 
@@ -39,6 +40,10 @@ func run(args []string) int {
 	// over untouched, which is what keeps this from becoming a second interface.
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		fmt.Printf("tillr: %s\nRun `tillr <noun> --help` for one noun's faces.\n", nounList())
+		return record.ExitOK
+	}
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Println(buildstamp.Read().String())
 		return record.ExitOK
 	}
 	if len(args) > 0 && args[0] == "notify" {

@@ -310,7 +310,7 @@ tillr-build:
         printf 'tillr-build: no valid refs/tillr/green; the heavy run at `tillr drain loop` startup (with after-merge checks enabled) creates it after proving the trunk; TILLR_BUILD_UNPROVED=<commit> is the documented bootstrap\n' >&2
         exit 1
     else
-        proof="$proof$green"
+        proof="-X github.com/mschulkind-oss/tillr-drain/drain.greenRevision=$green -X github.com/mschulkind-oss/tillr/buildstamp.greenRevision=$green"
     fi
     durable="${YOLO_DURABLE_DIR:?tillr-build needs YOLO_DURABLE_DIR for build output and scratch}"
     mkdir -p "$durable"

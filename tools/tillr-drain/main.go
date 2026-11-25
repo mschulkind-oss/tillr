@@ -59,6 +59,10 @@ func dispatch(args []string) int {
 		fmt.Printf("tillr-drain: %s\nRun `tillr-drain <face> --help` for one face's flags.\n", faceList)
 		return record.ExitOK
 	}
+	if args[0] == "--version" {
+		fmt.Println(drain.ReadBuildStamp().String())
+		return record.ExitOK
+	}
 	face, rest := args[0], args[1:]
 	switch face {
 	case "probe-backend":

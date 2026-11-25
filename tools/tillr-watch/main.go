@@ -15,6 +15,7 @@ import (
 	// Match tillr-store's producer registry. Linking the drain package registers
 	// its event kinds; no drain command or loop runs in this process.
 	_ "github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/watch"
 )
@@ -64,6 +65,10 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	fail := func(err error) int { fmt.Fprintln(stderr, "tillr watch:", err); return 1 }
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(out, help)
+		return 0
+	}
+	if args[0] == "--version" {
+		fmt.Fprintln(out, buildstamp.Read().String())
 		return 0
 	}
 	face := args[0]
