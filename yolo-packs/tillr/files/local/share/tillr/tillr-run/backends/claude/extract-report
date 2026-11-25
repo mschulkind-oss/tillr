@@ -1,159 +1,17 @@
-#!/usr/bin/env python3
-"""The Claude Code dialect: `claude -p --output-format stream-json --verbose`, one JSON
-object per line (docs/reference/tillr-claude-backend.md, "What a headless run
-loads" and "The adapter").
-
-The stream opens with `system` lines (`subtype: init` carries the session id and the
-model), then `assistant` lines whose `message.content` holds `text`, `thinking` and
-`tool_use` blocks, `user` lines carrying tool results, `rate_limit_event` lines, and, when
-the run finished, one `result` line with the final text, the session id,
-`total_cost_usd` and one `usage` object for the whole run.
-
-The text is the `result` line's `result` when the stream has one. Without it, the run was
-cut off, and the text is the `assistant` lines' text blocks in order, so what did arrive
-is still in the report. One message can arrive on several `assistant` lines, each holding
-different blocks, so every line's text is kept.
-
-Tokens are the `result` line's usage when there is one. Without it they are the
-`assistant` lines' usage counted ONCE PER MESSAGE ID: every line of a message repeats the
-same usage, so summing lines would count a message once per line.
-
-Cost is `total_cost_usd`, an estimate at list prices (D-CB5): a subscription is not billed
-per run, but the number is the harness's own, and `unknown` is kept for a stream that does
-not carry it.
-"""
-
-import datetime
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import report  # noqa: E402  (the shared report shape lives one directory up)
-import usage  # noqa: E402
-
-# The four counters a usage object carries. A cache read and a cache write are both billed,
-# so both count toward the total, as every dialect here counts them.
-USAGE_COUNTERS = (
-    "input_tokens",
-    "cache_creation_input_tokens",
-    "cache_read_input_tokens",
-    "output_tokens",
-)
-
-
-def _usage_total(usage):
-    if not isinstance(usage, dict):
-        return None
-    counted = [usage.get(key) for key in USAGE_COUNTERS]
-    counted = [value for value in counted if isinstance(value, (int, float))]
-    return int(sum(counted)) if counted else None
-
-
-def _text_blocks(message):
-    content = message.get("content")
-    if not isinstance(content, list):
-        return ""
-    return "".join(
-        block.get("text") or ""
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "text"
-    )
-
-
-def _rfc3339(stamp):
-    """An ISO 8601 timestamp from the stream, as the report's whole-second UTC form."""
-    if not isinstance(stamp, str):
-        return None
-    try:
-        moment = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if moment.tzinfo is None:
-        return None
-    return moment.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _normalize_window(info):
-    """Fill top-level utilization from unifiedWindows[rateLimitType] when absent (Claude Code >=2.1.328)."""
-    if not isinstance(info, dict):
-        return None
-    normalized = dict(info)
-    if normalized.get("utilization") is None:
-        unified = normalized.get("unifiedWindows")
-        kind = normalized.get("rateLimitType")
-        if isinstance(unified, dict) and isinstance(kind, str):
-            sub = unified.get(kind)
-            if isinstance(sub, dict) and isinstance(sub.get("utilization"), (int, float)):
-                normalized["utilization"] = sub["utilization"]
-    return normalized
-
-
-def dialect(stream_text):
-    records, unparseable = report.records(stream_text)
-    pieces = []
-    message_usage = {}
-    final = None
-    window = None
-    init_session, model = None, None
-    first_at, last_at = None, None
-    for index, record in enumerate(records):
-        kind = record.get("type")
-        stamp = _rfc3339(record.get("timestamp"))
-        if stamp:
-            first_at = first_at or stamp
-            last_at = stamp
-        if kind == "system" and record.get("subtype") == "init":
-            if isinstance(record.get("session_id"), str):
-                init_session = init_session or record["session_id"]
-            if isinstance(record.get("model"), str):
-                model = model or record["model"]
-        elif kind == "assistant":
-            message = record.get("message")
-            if not isinstance(message, dict):
-                continue
-            pieces.append(_text_blocks(message))
-            total = _usage_total(message.get("usage"))
-            if total is not None:
-                # A line with no id cannot be matched to its siblings, so it stands alone.
-                key = message.get("id") or f"line-{index}"
-                message_usage.setdefault(key, total)
-        elif kind == "rate_limit_event":
-            window = _normalize_window(record.get("rate_limit_info"))
-        elif kind == "result":
-            final = record
-
-    tokens, cost, session = None, None, init_session
-    if final is not None:
-        text = final.get("result") if isinstance(final.get("result"), str) else "".join(pieces)
-        if final.get("stop_reason") == "tool_deferred" and not text.strip():
-            # A parked delivery call ends the process with an empty result: say so, rather
-            # than leave a report that looks like a run that said nothing.
-            text = "[delivery call deferred; waiting for the gate's answer]"
-        tokens = _usage_total(final.get("usage"))
-        if isinstance(final.get("total_cost_usd"), (int, float)):
-            cost = float(final["total_cost_usd"])
-        if isinstance(final.get("session_id"), str):
-            session = final["session_id"]
-    else:
-        text = "".join(pieces)
-    if tokens is None and message_usage:
-        tokens = sum(message_usage.values())
-    return {
-        "window": window,
-        "usage_details": usage.details(records, "claude"),
-        "text": text,
-        "session": session,
-        "model": model,
-        "started": first_at,
-        "finished": last_at,
-        "events": len(records),
-        "unparseable": unparseable,
-        "tokens": tokens,
-        "cost": cost,
-        "lines": len(stream_text.splitlines()),
-    }
-
-
-if __name__ == "__main__":
-    sys.exit(report.run(dialect))
+#!/bin/sh
+set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+mod=$(CDPATH= cd -- "$here/../.." && pwd)
+if [ -n "${TILLR_RUN_BIN:-}" ]; then
+    exec "$TILLR_RUN_BIN" extract-report --dialect claude "$@"
+fi
+if [ -f "$mod/go.mod" ] && [ "$(basename "$(dirname "$mod")")" = "tools" ] && command -v go >/dev/null 2>&1; then
+    tmp=$(mktemp "${TMPDIR:-/tmp}/tillr-run-XXXXXX")
+    trap 'rm -f "$tmp"' EXIT INT TERM
+    CGO_ENABLED=0 go build -C "$mod" -o "$tmp" .
+    set +e
+    "$tmp" extract-report --dialect claude "$@"
+    rc=$?
+    exit "$rc"
+fi
+exec tillr-run extract-report --dialect claude "$@"

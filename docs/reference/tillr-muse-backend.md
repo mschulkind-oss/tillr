@@ -10,8 +10,9 @@ covers:
   - tools/tillr-run/run/pause.go
   - tools/tillr-run/run/ending_capability.go
   - tools/tillr-run/backends/preflight.sh
-  - tools/tillr-run/backends/report.py
-  - tools/tillr-run/backends/usage.py
+  - tools/tillr-run/extract/report.go
+  - tools/tillr-run/extract/usage.go
+  - tools/tillr-run/extract/dialects.go
   - tools/tillr-run/backends/muse/
   - tools/tillr-run/backends/pi/
   - tools/tillr-run/backends/agy/
@@ -45,7 +46,7 @@ Four adapters ship: `pi`, `claude`, `agy`, and `muse`. A fifth backend name, `co
 | Request check, subprocess execution, stream capture, report extraction (`readSpend`) | [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go) |
 | `runs` and `quota_pauses` tables | [`tools/tillr-run/run/schema.go`](../../tools/tillr-run/run/schema.go) |
 | `pause-kind` and `ending-capability` readers, continuation prompt | [`tools/tillr-run/run/pause.go`](../../tools/tillr-run/run/pause.go), [`ending_capability.go`](../../tools/tillr-run/run/ending_capability.go) |
-| Shared preflight, the one `report.md` writer, the usage sidecar helper | [`preflight.sh`](../../tools/tillr-run/backends/preflight.sh), [`report.py`](../../tools/tillr-run/backends/report.py), [`usage.py`](../../tools/tillr-run/backends/usage.py) |
+| Shared preflight, the one `report.md` writer, the usage sidecar helper | [`preflight.sh`](../../tools/tillr-run/backends/preflight.sh), [`report.go`](../../tools/tillr-run/extract/report.go), [`usage.go`](../../tools/tillr-run/extract/usage.go) |
 | Ten-section brief template | [`tools/tillr-run/backends/brief-template.md`](../../tools/tillr-run/backends/brief-template.md) |
 | Harness adapters | [`muse/`](../../tools/tillr-run/backends/muse/), [`pi/`](../../tools/tillr-run/backends/pi/), [`agy/`](../../tools/tillr-run/backends/agy/), [`claude/`](../../tools/tillr-run/backends/claude/) |
 | Policy shape, `firstBackend`, seat lists and shares, seat escalation | [`tools/tillr-drain/drain/policy.go`](../../tools/tillr-drain/drain/policy.go), [`seat_escalation.go`](../../tools/tillr-drain/drain/seat_escalation.go) |
@@ -77,7 +78,7 @@ Four adapters ship: `pi`, `claude`, `agy`, and `muse`. A fifth backend name, `co
 Each adapter directory `tools/tillr-run/backends/<name>/` provides four files:
 
 - `run-<name>` — the POSIX shell wrapper the request names as `command[0]`.
-- `extract-report` — a Python helper `readSpend` runs after the child exits, with `--backend`, `--exit-code`, and `--out`, to write the report.
+- `extract-report` — a helper `readSpend` runs after the child exits, with `--backend`, `--exit-code`, and `--out`, to write the report (dispatches to `tillr-run extract-report`).
 - `pause-kind` — one line read by `ReadPauseKind`: `stops-at-a-gap`, `stops-where-it-stands`, or `cannot-resume`.
 - `ending-capability` — one line read by `ReadEndingCapability`: `footer`, `call-suspends`, or `call-then-message`.
 
@@ -131,7 +132,7 @@ Staging prepares the lane directory for each dispatched run:
 
 After the child exits, `readSpend` runs the `extract-report` beside the adapter, copies `report.md` into the lane directory, and reads the `.usage.json` companion written next to it. A failed extraction never changes how the run ended: the usage stays unknown and the reason travels as a note on the record.
 
-[`report.py`](../../tools/tillr-run/backends/report.py) is the single writer of `report.md`; each adapter's `extract-report` supplies only the parser for its own stream. Every report has nineteen `key: value` lines (`HEADER_KEYS`), a `---` separator, and the assistant's final text:
+[`report.go`](../../tools/tillr-run/extract/report.go) is the single writer of `report.md`; each adapter's `extract-report` supplies only the dialect for its own stream. Every report has nineteen `key: value` lines (`headerKeys`), a `---` separator, and the assistant's final text:
 
 ```text
 # run report
@@ -230,7 +231,7 @@ The append-only log is what makes a resume safe: a resumed segment appends to `<
 
 ## Shipped adapters
 
-All four adapters share `preflight.sh`, `report.py`, and `usage.py`, and [`tests/tillr-muse-backend.test.py`](../../tests/tillr-muse-backend.test.py) runs them offline against recorded streams under each adapter's `testdata/`.
+All four adapters share `preflight.sh`, [`report.go`](../../tools/tillr-run/extract/report.go), and [`usage.go`](../../tools/tillr-run/extract/usage.go), and [`tests/tillr-muse-backend.test.py`](../../tests/tillr-muse-backend.test.py) runs them offline against recorded streams under each adapter's `testdata/`.
 
 | Backend | Pause kind | Ending capability | Harness invocation | Stream |
 | :--- | :--- | :--- | :--- | :--- |
@@ -254,8 +255,8 @@ Source-verified 2026-11-24.
 | Preflight refusal exit code | `2`, with `run-<name>: refused: ...` on stderr | `refuse` in [`preflight.sh`](../../tools/tillr-run/backends/preflight.sh); `adapterRefusedExit` in [`failover.go`](../../tools/tillr-drain/drain/failover.go) |
 | Adapter wall exit code | `124` | `adapterWallExit` in [`failover.go`](../../tools/tillr-drain/drain/failover.go) |
 | Required brief headings | `Header`, `Task`, `Scope and boundaries`, `Seats`, `Settled decisions`, `Facts carried`, `Method`, `Verification commands`, `Report shape`, `Stop conditions` | `REQUIRED_HEADINGS` in [`preflight.sh`](../../tools/tillr-run/backends/preflight.sh) |
-| `report.md` header keys (nineteen, in order) | `backend`, `model`, `route`, `effort`, `session`, `exit code`, `started`, `finished`, `stream lines`, `events`, `unparseable lines`, `tokens`, `cost usd`, `rate limit kind`, `fraction`, `status`, `reset`, `complete`, `result` | `HEADER_KEYS` in [`report.py`](../../tools/tillr-run/backends/report.py) |
-| Extractor exit codes | `0` done, `1` failed, `2` usage, `3` blocked, `4` incomplete, `5` trunk-broken, `6` harness-ended | `EXIT_*` in [`report.py`](../../tools/tillr-run/backends/report.py) |
+| `report.md` header keys (nineteen, in order) | `backend`, `model`, `route`, `effort`, `session`, `exit code`, `started`, `finished`, `stream lines`, `events`, `unparseable lines`, `tokens`, `cost usd`, `rate limit kind`, `fraction`, `status`, `reset`, `complete`, `result` | `headerKeys` in [`report.go`](../../tools/tillr-run/extract/report.go) |
+| Extractor exit codes | `0` done, `1` failed, `2` usage, `3` blocked, `4` incomplete, `5` trunk-broken, `6` harness-ended | `Exit*` constants in [`report.go`](../../tools/tillr-run/extract/report.go) |
 | `pause-kind` values | `stops-at-a-gap` (`pi`), `stops-where-it-stands` (`claude`), `cannot-resume` (`muse`, `agy`) | `PauseAtGap`, `PauseWhereItStands`, `PauseCannotResume` in [`pause.go`](../../tools/tillr-run/run/pause.go) |
 | `ending-capability` values | `footer` (`pi`, `muse`, `agy`), `call-suspends` (`claude`), `call-then-message` (no shipped adapter) | `EndingFooter`, `EndingCallSuspends`, `EndingCallThenMessage` in [`ending_capability.go`](../../tools/tillr-run/run/ending_capability.go) |
 | Seat `pick` values | `in-order`, `round-robin`, `random` | `Policy.Check` in [`policy.go`](../../tools/tillr-drain/drain/policy.go) |

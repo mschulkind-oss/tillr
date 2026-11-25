@@ -1,76 +1,17 @@
-#!/usr/bin/env python3
-"""The muse dialect: `muse exec --json`'s JSONL, one record per line.
-
-The report text is the concatenation of the `payload.text` of every
-`payload_type == "run.output.delta"` record, in stream order. Everything else in the
-stream — `run.lifecycle.started`, `run.usage`, `run.terminal.completed`, the
-`task.lifecycle.*` records — is provenance the header reads, never text.
-
-Verified against a real stream from the CLI's echo provider, 2026-11-12 (no model
-tokens): a delta record is
-
-    {"payload_type": "run.output.delta", "record_type": "status", ...,
-     "payload": {"kind": "run_output_delta", "text": "..."}}
-
-and `run.usage` carries `models[].model` when a real provider served the run (null for
-echo), which is the cross-check against the model id staging supplied.
-"""
-
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import report  # noqa: E402  (the shared report shape lives one directory up)
-
-# The counters a `run.usage` model entry carries. A cache read is billed, so it counts.
-USAGE_COUNTERS = ("input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens")
-
-
-def dialect(stream_text):
-    records, unparseable = report.records(stream_text)
-    texts, session, model = [], None, None
-    # muse reports tokens per model and reports no cost at all: the header says `unknown`
-    # for cost rather than a zero, which is the difference between "not billed" and
-    # "nothing to bill".
-    tokens, saw_tokens = 0, False
-    first_at = last_at = None
-    for record in records:
-        payload = record.get("payload") or {}
-        stream = record.get("stream") or {}
-        if not session and isinstance(stream.get("id"), str):
-            session = stream["id"]
-        recorded_at = record.get("recorded_at")
-        if isinstance(recorded_at, (int, float)):
-            first_at = recorded_at if first_at is None else first_at
-            last_at = recorded_at
-        if record.get("payload_type") == "run.output.delta":
-            text = payload.get("text")
-            if isinstance(text, str):
-                texts.append(text)
-        elif record.get("payload_type") == "run.usage":
-            for entry in payload.get("models") or []:
-                if not isinstance(entry, dict):
-                    continue
-                if not model and entry.get("model"):
-                    model = entry["model"]
-                counted = [entry.get(key) for key in USAGE_COUNTERS]
-                counted = [value for value in counted if isinstance(value, (int, float))]
-                if counted:
-                    tokens += sum(int(value) for value in counted)
-                    saw_tokens = True
-    return {
-        "text": "".join(texts),
-        "session": session,
-        "model": model,
-        "started": report.micros_to_rfc3339(first_at),
-        "finished": report.micros_to_rfc3339(last_at),
-        "events": len(records),
-        "unparseable": unparseable,
-        "tokens": tokens if saw_tokens else None,
-        "lines": len(stream_text.splitlines()),
-    }
-
-
-if __name__ == "__main__":
-    sys.exit(report.run(dialect))
+#!/bin/sh
+set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+mod=$(CDPATH= cd -- "$here/../.." && pwd)
+if [ -n "${TILLR_RUN_BIN:-}" ]; then
+    exec "$TILLR_RUN_BIN" extract-report --dialect muse "$@"
+fi
+if [ -f "$mod/go.mod" ] && [ "$(basename "$(dirname "$mod")")" = "tools" ] && command -v go >/dev/null 2>&1; then
+    tmp=$(mktemp "${TMPDIR:-/tmp}/tillr-run-XXXXXX")
+    trap 'rm -f "$tmp"' EXIT INT TERM
+    CGO_ENABLED=0 go build -C "$mod" -o "$tmp" .
+    set +e
+    "$tmp" extract-report --dialect muse "$@"
+    rc=$?
+    exit "$rc"
+fi
+exec tillr-run extract-report --dialect muse "$@"

@@ -20,7 +20,7 @@ prompt-file flag, and effort is Pi's own `--thinking` level rather than the muse
 | `tillr-run pi-landing-call-held` | Checks the active transcript branch before a promptless landing continuation. |
 | [`testdata/land.test.mjs`](./testdata/land.test.mjs) | Exercises offer validation, parking and adapter arguments. |
 | [`testdata/keep-going.test.mjs`](./testdata/keep-going.test.mjs) | Checks that a parked call is not nudged. |
-| [`testdata/extract-report-park.test.py`](./testdata/extract-report-park.test.py) | Checks report extraction for parked calls. |
+| [`../../extract/pi_test.go`](../../extract/pi_test.go) | Checks report extraction for parked calls, repeating calls, and post-compaction turns. |
 | [`testdata/keep-going-driver.mjs`](./testdata/keep-going-driver.mjs) | Drives [`keep-going.ts`](./keep-going.ts) through scripted endings without a model, for `pi_keep_going_test.go`. |
 | [`testdata/complete.jsonl`](./testdata/complete.jsonl) | A complete event stream, ending in the `RESULT:` footer. |
 | [`testdata/truncated.jsonl`](./testdata/truncated.jsonl) | The same stream cut off before its footer — the negative control. |
@@ -407,7 +407,7 @@ with that header yields `session: unknown` rather than a guess.
   extractor exits 6, "ended by the harness", and the report header reads `result: ended
   by the harness: repeating-call` with `complete: no`. The report's last line names the
   call and its streak. This holds even after an earlier `RESULT:` footer, because the
-  session did not end on that footer. [`testdata/extract-report-repeating.test.py`](./testdata/extract-report-repeating.test.py) covers both recovered and ended streams, plus the
+  session did not end on that footer. [`../../extract/pi_test.go`](../../extract/pi_test.go) covers both recovered and ended streams, plus the
   two `repeating-call-*.jsonl` fixtures cut from recorded runs. The runner records
   such a run's
   [end cause and loop recoveries](../../README.md#a-session-pi-ended-for-a-repeating-call).
