@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -124,11 +125,24 @@ func InitProcessPriority(storePath, cgroupMount, procSelfCgroup string) *Process
 	return newNicePriority(fmt.Sprintf("%s: %v", failPath, failErr))
 }
 
-func newNicePriority(unavailableReason string) *ProcessPriority {
-	base, err := unix.Getpriority(unix.PRIO_PROCESS, 0)
+func currentProcessNice() int {
+	raw, err := unix.Getpriority(unix.PRIO_PROCESS, 0)
 	if err != nil {
-		base = 0
+		return 0
 	}
+	if runtime.GOOS == "linux" {
+		// Linux sys_getpriority returns 20 - nice (1..40 for nice 19..-20);
+		// golang.org/x/sys/unix returns that raw kernel value without conversion.
+		return 20 - raw
+	}
+	return raw
+}
+
+func newNicePriority(unavailableReason string) *ProcessPriority {
+	return newNicePriorityWithBase(currentProcessNice(), unavailableReason)
+}
+
+func newNicePriorityWithBase(base int, unavailableReason string) *ProcessPriority {
 	targets := make(map[ProcessClass]int, len(processClassOrder))
 	classes := make(map[string]int, len(processClassOrder))
 	for _, class := range processClassOrder {

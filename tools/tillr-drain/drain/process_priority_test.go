@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/heavyrun"
 	"github.com/mschulkind-oss/tillr/store"
-	"golang.org/x/sys/unix"
 )
 
 func TestInitProcessPriorityFakeCgroupDelegatedParent(t *testing.T) {
@@ -105,11 +105,39 @@ func TestInitProcessPriorityFakeCgroupSelfDelegated(t *testing.T) {
 	}
 }
 
-func TestInitProcessPriorityFallsBackToNiceOnUnavailableCgroup(t *testing.T) {
-	base, err := unix.Getpriority(unix.PRIO_PROCESS, 0)
-	if err != nil {
-		t.Fatal(err)
+func parseProcStatNice(t *testing.T, raw []byte) int {
+	t.Helper()
+	line := strings.TrimSpace(string(raw))
+	rparen := strings.LastIndexByte(line, ')')
+	if rparen < 0 || rparen+1 >= len(line) {
+		t.Fatalf("malformed /proc/<pid>/stat: %q", line)
 	}
+	fields := strings.Fields(line[rparen+1:])
+	// Field 3 (state) is fields[0], so field 19 (nice) is fields[16].
+	if len(fields) <= 16 {
+		t.Fatalf("short /proc/<pid>/stat (%d fields after comm): %q", len(fields), line)
+	}
+	niceVal, err := strconv.Atoi(fields[16])
+	if err != nil {
+		t.Fatalf("invalid nice field %q in %q: %v", fields[16], line, err)
+	}
+	return niceVal
+}
+
+func readProcSelfNice(t *testing.T) int {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("/proc/self/stat is Linux-only")
+	}
+	raw, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		t.Fatalf("read /proc/self/stat: %v", err)
+	}
+	return parseProcStatNice(t, raw)
+}
+
+func TestInitProcessPriorityFallsBackToNiceOnUnavailableCgroup(t *testing.T) {
+	base := readProcSelfNice(t)
 	missingMount := filepath.Join(t.TempDir(), "missing-cgroup")
 	procCgroup := filepath.Join(t.TempDir(), "proc_cgroup")
 	if err := os.WriteFile(procCgroup, []byte("0::/\n"), 0o644); err != nil {
@@ -135,6 +163,28 @@ func TestInitProcessPriorityFallsBackToNiceOnUnavailableCgroup(t *testing.T) {
 		"; cgroup unavailable: "
 	if !strings.HasPrefix(prio.LogLine(), wantPrefix) {
 		t.Fatalf("LogLine() = %q, want prefix %q", prio.LogLine(), wantPrefix)
+	}
+}
+
+func TestNewNicePriorityZeroBase(t *testing.T) {
+	prio := newNicePriorityWithBase(0, "read-only file system")
+	defer prio.Close()
+
+	wantTargets := map[ProcessClass]int{
+		ProcessClassRepair: 0,
+		ProcessClassGate:   5,
+		ProcessClassProof:  10,
+		ProcessClassWorker: 15,
+	}
+	for class, want := range wantTargets {
+		got, ok := prio.NiceTarget(class)
+		if !ok || got != want {
+			t.Fatalf("NiceTarget(%s) = (%d, %v), want (%d, true)", class, got, ok, want)
+		}
+	}
+	wantLog := "loop: process priority: nice (repair=0 gate=5 proof=10 worker=15; cgroup unavailable: read-only file system)"
+	if prio.LogLine() != wantLog {
+		t.Fatalf("LogLine() = %q, want %q", prio.LogLine(), wantLog)
 	}
 }
 
@@ -318,6 +368,7 @@ func TestProcessPlacementCgroupMechanism(t *testing.T) {
 }
 
 func TestProcessPlacementNiceMechanismAndChildInheritance(t *testing.T) {
+	baseNice := readProcSelfNice(t)
 	prio := newNicePriority("test")
 	defer prio.Close()
 
@@ -332,8 +383,8 @@ func TestProcessPlacementNiceMechanismAndChildInheritance(t *testing.T) {
 		{name: "worker", class: ProcessClassWorker},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out := filepath.Join(t.TempDir(), "nice.txt")
-			cmd := exec.Command("/bin/sh", "-c", `sh -c nice > "$1"`, "nice-child", out)
+			out := filepath.Join(t.TempDir(), "stat.txt")
+			cmd := exec.Command("/bin/sh", "-c", `cat /proc/self/stat > "$1"`, "nice-child", out)
 			if err := prio.ApplyToCmd(cmd, tc.class, ""); err != nil {
 				t.Fatalf("ApplyToCmd(%s): %v", tc.class, err)
 			}
@@ -344,9 +395,10 @@ func TestProcessPlacementNiceMechanismAndChildInheritance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, _ := prio.NiceTarget(tc.class)
-			if strings.TrimSpace(string(raw)) != strconv.Itoa(want) {
-				t.Fatalf("class %s child nice = %q, want %d", tc.class, strings.TrimSpace(string(raw)), want)
+			got := parseProcStatNice(t, raw)
+			want := min(19, baseNice+processClassNiceOffsets[tc.class])
+			if got != want {
+				t.Fatalf("class %s child /proc/self/stat nice = %d, want %d", tc.class, got, want)
 			}
 		})
 	}
@@ -362,8 +414,8 @@ func TestProcessPlacementNiceMechanismAndChildInheritance(t *testing.T) {
 		{name: "heavy-fixer-repair", ctx: context.WithValue(context.WithValue(context.Background(), heavyrun.HeavyUnownedKey{}, true), heavyRepairKey{}, true), class: ProcessClassRepair},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out := filepath.Join(t.TempDir(), "heavy-nice.txt")
-			cmd := exec.CommandContext(tc.ctx, "/bin/sh", "-c", `sh -c nice > "$1"`, "heavy-child", out)
+			out := filepath.Join(t.TempDir(), "heavy-stat.txt")
+			cmd := exec.CommandContext(tc.ctx, "/bin/sh", "-c", `cat /proc/self/stat > "$1"`, "heavy-child", out)
 			if err := steps.applyHeavyPriority(tc.ctx, cmd); err != nil {
 				t.Fatal(err)
 			}
@@ -374,9 +426,10 @@ func TestProcessPlacementNiceMechanismAndChildInheritance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, _ := prio.NiceTarget(tc.class)
-			if strings.TrimSpace(string(raw)) != strconv.Itoa(want) {
-				t.Fatalf("%s child nice = %q, want %d", tc.name, strings.TrimSpace(string(raw)), want)
+			got := parseProcStatNice(t, raw)
+			want := min(19, baseNice+processClassNiceOffsets[tc.class])
+			if got != want {
+				t.Fatalf("%s child /proc/self/stat nice = %d, want %d", tc.name, got, want)
 			}
 		})
 	}
