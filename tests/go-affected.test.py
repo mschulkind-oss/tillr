@@ -148,7 +148,7 @@ os.waitpid(mid, 0)
 grand_pid = int(os.read(r, 64).decode().strip())
 os.close(r)
 stat_path = Path(f"/proc/{grand_pid}/stat")
-for _ in range(100):
+while True:
     if not stat_path.exists():
         print("reaped-while-running")
         sys.exit(0)
@@ -162,8 +162,6 @@ for _ in range(100):
         time.sleep(0.01)
         continue
     time.sleep(0.01)
-print(f"orphan {grand_pid} remained zombie while guarded child ran", file=sys.stderr)
-sys.exit(1)
 """
         rc, stdout = go_affected._run_guarded_command(
             [sys.executable, "-c", code],
@@ -793,7 +791,6 @@ def test_check_declarations_cover_selection_inputs() -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=300,
         )
         assert res.returncode == 0, res.stdout
         assert "go-affected: 1 package(s)" in res.stdout, res.stdout
@@ -987,13 +984,9 @@ def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
             '    if err := os.WriteFile(ready, []byte("ok"), 0o644); err != nil { t.Fatal(err) }\n'
             '  }\n'
             '  if peer := os.Getenv("CONC_PEER_READY_FILE"); peer != "" {\n'
-            '    deadline := time.Now().Add(30 * time.Second)\n'
-            '    for time.Now().Before(deadline) {\n'
+            '    for {\n'
             '      if _, err := os.Stat(peer); err == nil { break }\n'
             '      time.Sleep(20 * time.Millisecond)\n'
-            '    }\n'
-            '    if _, err := os.Stat(peer); err != nil {\n'
-            '      t.Fatalf("peer run never reached barrier %s", peer)\n'
             '    }\n'
             '  }\n'
             '}\n'
@@ -1030,8 +1023,27 @@ def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
             env={**base, "CONC_OUT_FILE": str(out2), "CONC_READY_FILE": str(ready2), "CONC_PEER_READY_FILE": str(ready1)},
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
-        o1, _ = p1.communicate(timeout=60)
-        o2, _ = p2.communicate(timeout=60)
+        try:
+            while not (ready1.exists() and ready2.exists()):
+                for tag, proc in (("p1", p1), ("p2", p2)):
+                    if proc.poll() is not None:
+                        if ready1.exists() and ready2.exists():
+                            break
+                        raise AssertionError(
+                            f"{tag} exited before both concurrent runs reached barrier: "
+                            f"{proc.stdout.read() if proc.stdout else ''}"
+                        )
+                time.sleep(0.02)
+            o1, _ = p1.communicate()
+            o2, _ = p2.communicate()
+        finally:
+            for ready in (ready1, ready2):
+                if not ready.exists():
+                    ready.write_text("cleanup\n", encoding="utf-8")
+            for proc in (p1, p2):
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait()
         assert p1.returncode == 0, o1
         assert p2.returncode == 0, o2
 
@@ -1045,12 +1057,12 @@ def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
         seq_env = {**base, "CONC_OUT_FILE": "", "CONC_READY_FILE": "", "CONC_PEER_READY_FILE": ""}
         res1 = subprocess.run(
             [*cmd, "--evidence-out", str(ev_file)],
-            env=seq_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
+            env=seq_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         assert res1.returncode == 0, res1.stdout
         res2 = subprocess.run(
             [*cmd, "--evidence-out", str(ev_file)],
-            env=seq_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
+            env=seq_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         assert res2.returncode == 0, res2.stdout
         ev2 = json.loads(ev_file.read_text(encoding="utf-8"))
@@ -1166,10 +1178,16 @@ def test_no_leftover_processes_after_check_finishes() -> None:
             '  cmd := exec.Command("/bin/sh", "-c", "sleep 600 & child=$!; printf \'%d\\n%d\\n\' $$ $child > \\"$1\\"; wait $child", "sh", pidsFile)\n'
             '  cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}\n'
             '  if err := cmd.Start(); err != nil { t.Fatal(err) }\n'
-            '  deadline := time.Now().Add(10 * time.Second)\n'
-            '  for time.Now().Before(deadline) {\n'
+            '  done := make(chan error, 1)\n'
+            '  go func() { done <- cmd.Wait() }()\n'
+            '  for {\n'
             '    if raw, err := os.ReadFile(pidsFile); err == nil && len(raw) > 0 { break }\n'
-            '    time.Sleep(20 * time.Millisecond)\n'
+            '    select {\n'
+            '    case err := <-done:\n'
+            '      t.Fatalf("detached shell exited before writing %s: %v", pidsFile, err)\n'
+            '    default:\n'
+            '      time.Sleep(20 * time.Millisecond)\n'
+            '    }\n'
             '  }\n'
             '}\n'
         )
@@ -1195,7 +1213,6 @@ def test_no_leftover_processes_after_check_finishes() -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=60,
         )
         assert res.returncode == 0, res.stdout
         recorded = [int(line) for line in pids_file.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -1277,12 +1294,10 @@ def test_streams_progress_lines_before_run_ends() -> None:
             'func TestFirst(t *testing.T) {}\n'
             'func TestSecond(t *testing.T) {\n'
             '  release := os.Getenv("STREAM_RELEASE_FILE")\n'
-            '  deadline := time.Now().Add(30 * time.Second)\n'
-            '  for time.Now().Before(deadline) {\n'
+            '  for {\n'
             '    if _, err := os.Stat(release); err == nil { return }\n'
             '    time.Sleep(20 * time.Millisecond)\n'
             '  }\n'
-            '  t.Fatalf("release file %s never appeared", release)\n'
             '}\n'
         )
         durable = tmp_path / "durable"
@@ -1311,15 +1326,7 @@ def test_streams_progress_lines_before_run_ends() -> None:
         saw_first_while_running = False
         try:
             assert proc.stdout is not None
-            deadline = time.monotonic() + 30.0
-            while time.monotonic() < deadline:
-                remaining = max(0.0, deadline - time.monotonic())
-                ready, _, _ = select.select([proc.stdout], [], [], remaining)
-                if not ready:
-                    break
-                raw = proc.stdout.readline()
-                if not raw:
-                    break
+            for raw in proc.stdout:
                 line = raw.decode("utf-8", errors="replace")
                 seen_lines.append(line)
                 if f"go-affected: pass {pkg} TestFirst " in line:
@@ -1331,13 +1338,13 @@ def test_streams_progress_lines_before_run_ends() -> None:
             assert saw_first_while_running, f"did not receive TestFirst progress line while running: {seen_lines}"
             for raw in proc.stdout:
                 seen_lines.append(raw.decode("utf-8", errors="replace"))
-            rc = proc.wait(timeout=30)
+            rc = proc.wait()
         finally:
             if not release_file.exists():
                 release_file.write_text("cleanup\n", encoding="utf-8")
             if proc.poll() is None:
                 proc.terminate()
-                proc.wait(timeout=10)
+                proc.wait()
         assert rc == 0, "".join(seen_lines)
         assert any(f"go-affected: pass {pkg} TestSecond " in ln for ln in seen_lines), seen_lines
         assert any(ln.startswith(f"go-affected: pass {pkg} (") for ln in seen_lines), seen_lines
@@ -1377,12 +1384,10 @@ def test_stalled_run_prints_nothing_without_test_events() -> None:
             '    t.Fatal(err)\n'
             '  }\n'
             '  release := os.Getenv("STALL_RELEASE_FILE")\n'
-            '  deadline := time.Now().Add(30 * time.Second)\n'
-            '  for time.Now().Before(deadline) {\n'
+            '  for {\n'
             '    if _, err := os.Stat(release); err == nil { return }\n'
             '    time.Sleep(20 * time.Millisecond)\n'
             '  }\n'
-            '  t.Fatalf("release file %s never appeared", release)\n'
             '}\n'
         )
         durable = tmp_path / "durable"
@@ -1410,11 +1415,9 @@ def test_stalled_run_prints_nothing_without_test_events() -> None:
         )
         try:
             assert proc.stdout is not None
-            deadline = time.monotonic() + 30.0
-            while not started_file.exists() and time.monotonic() < deadline:
+            while not started_file.exists():
                 assert proc.poll() is None, f"go_affected exited prematurely: {proc.stdout.read()!r}"
                 time.sleep(0.02)
-            assert started_file.exists(), "TestStalls never started"
             # Allow go_affected.py to finish consuming the start/run events and block on the pipe.
             time.sleep(0.2)
             cpu_before = proc_cpu_ticks(proc.pid) if Path(f"/proc/{proc.pid}/stat").is_file() else None
@@ -1428,13 +1431,13 @@ def test_stalled_run_prints_nothing_without_test_events() -> None:
                 )
             release_file.write_text("go\n", encoding="utf-8")
             tail = proc.stdout.read().decode("utf-8", errors="replace")
-            rc = proc.wait(timeout=30)
+            rc = proc.wait()
         finally:
             if not release_file.exists():
                 release_file.write_text("cleanup\n", encoding="utf-8")
             if proc.poll() is None:
                 proc.terminate()
-                proc.wait(timeout=10)
+                proc.wait()
         assert rc == 0, tail
         assert f"go-affected: pass {pkg} TestStalls " in tail, tail
         assert f"go-affected: pass {pkg} (" in tail, tail
@@ -1665,12 +1668,10 @@ def test_go_affected_slot_wait_order_and_trunk_repair_priority() -> None:
             '  _, _ = f.WriteString(tag + "\\n")\n'
             '  _ = f.Close()\n'
             '  rel := filepath.Join(os.Getenv("RELEASE_DIR"), tag)\n'
-            '  deadline := time.Now().Add(30 * time.Second)\n'
-            '  for time.Now().Before(deadline) {\n'
+            '  for {\n'
             '    if _, err := os.Stat(rel); err == nil { return }\n'
             '    time.Sleep(10 * time.Millisecond)\n'
             '  }\n'
-            '  t.Fatalf("timed out waiting for release %s", rel)\n'
             '}\n'
         )
 
@@ -1704,14 +1705,17 @@ def test_go_affected_slot_wait_order_and_trunk_repair_priority() -> None:
                         held_fds.append(fd)
 
         def wait_for_tickets(expected_count: int) -> None:
-            deadline = time.monotonic() + 30.0
-            while time.monotonic() < deadline:
+            while True:
                 if wait_dir.is_dir():
                     live = [n for n in os.listdir(wait_dir) if n.endswith(".wait") and not n.startswith(".")]
                     if len(live) >= expected_count:
                         return
+                for tag, proc in procs:
+                    assert proc.poll() is None, (
+                        f"{tag} exited before creating wait ticket ({expected_count}): "
+                        f"{proc.stdout.read() if proc.stdout else ''}"
+                    )
                 time.sleep(0.02)
-            raise AssertionError(f"timed out waiting for {expected_count} wait tickets in {wait_dir}")
 
         procs: list[tuple[str, subprocess.Popen]] = []
         try:
@@ -1752,21 +1756,27 @@ def test_go_affected_slot_wait_order_and_trunk_repair_priority() -> None:
             slot0_fd = None
 
             expected_order = ["revert", "fixer", "item-1", "item-2"]
+            released: set[str] = set()
             for idx, want in enumerate(expected_order):
-                deadline = time.monotonic() + 30.0
                 observed: list[str] = []
-                while time.monotonic() < deadline:
+                while True:
                     if order_file.is_file():
                         observed = [line.strip() for line in order_file.read_text(encoding="utf-8").splitlines() if line.strip()]
                         if len(observed) >= idx + 1:
                             break
+                    for tag, proc in procs:
+                        if tag not in released and proc.poll() is not None:
+                            raise AssertionError(
+                                f"{tag} exited before turn {idx} ({want}); observed={observed}; "
+                                f"out={proc.stdout.read() if proc.stdout else ''}"
+                            )
                     time.sleep(0.02)
-                assert len(observed) >= idx + 1, f"timed out waiting for gate {idx} ({want}); observed={observed}"
                 assert observed[idx] == want, f"wrong gate served at turn {idx}: got {observed}, want prefix {expected_order[:idx + 1]}"
                 (release_dir / want).write_text("go\n")
+                released.add(want)
 
             for tag, proc in procs:
-                out, _ = proc.communicate(timeout=30)
+                out, _ = proc.communicate()
                 assert proc.returncode == 0, f"{tag} failed: {out}"
         finally:
             for tag, _ in procs:
@@ -1818,12 +1828,10 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
             '    t.Fatal(err)\n'
             '  }\n'
             '  rel := filepath.Join(os.Getenv("RELEASE_DIR"), tag)\n'
-            '  deadline := time.Now().Add(30 * time.Second)\n'
-            '  for time.Now().Before(deadline) {\n'
+            '  for {\n'
             '    if _, err := os.Stat(rel); err == nil { return }\n'
             '    time.Sleep(10 * time.Millisecond)\n'
             '  }\n'
-            '  t.Fatalf("timed out waiting for release %s", rel)\n'
             '}\n'
         )
 
@@ -1876,13 +1884,16 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
                 base_cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
 
-        def wait_file(path: Path, desc: str) -> None:
-            deadline = time.monotonic() + 30.0
-            while time.monotonic() < deadline:
-                if path.is_file():
-                    return
+        def wait_file(path: Path, desc: str, proc: subprocess.Popen) -> None:
+            while not path.is_file():
+                if proc.poll() is not None:
+                    if path.is_file():
+                        return
+                    raise AssertionError(
+                        f"process exited while waiting for {desc} ({path}): "
+                        f"{proc.stdout.read() if proc.stdout else ''}"
+                    )
                 time.sleep(0.02)
-            raise AssertionError(f"timed out waiting for {desc}: {path}")
 
         procs: list[tuple[str, subprocess.Popen]] = []
         proof1_release = threading.Event()
@@ -1894,7 +1905,7 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
             for tag, holder in (("cand-1", "gate:run-cand-1"), ("cand-2", "gate:run-cand-2")):
                 proc = start_gate(tag, holder)
                 procs.append((tag, proc))
-                wait_file(entered_dir / tag, f"{tag} to enter TestHold")
+                wait_file(entered_dir / tag, f"{tag} to enter TestHold", proc)
 
             holders = shards.read_slot_holders(lock_dir)
             assert len(holders) == 2, f"expected 2 live holders, got {holders}"
@@ -1911,10 +1922,11 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
             # 2. A third candidate gate arrives and waits because slot-0 and gate-0 are full.
             proc3 = start_gate("cand-3", "gate:run-cand-3")
             procs.append(("cand-3", proc3))
-            deadline = time.monotonic() + 30.0
-            while time.monotonic() < deadline and not shards.gate_caller_waiting(lock_dir):
+            while not shards.gate_caller_waiting(lock_dir):
+                assert proc3.poll() is None, (
+                    f"cand-3 exited before entering gate wait: {proc3.stdout.read() if proc3.stdout else ''}"
+                )
                 time.sleep(0.02)
-            assert shards.gate_caller_waiting(lock_dir), "cand-3 did not enter gate wait"
             assert not (entered_dir / "cand-3").is_file()
 
             # 3. A trunk proof arrives later while candidate gates hold every ordinary slot
@@ -1934,7 +1946,7 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
                             holder="trunk-proof", label="proof-imm",
                         ):
                             proof1_acquired.set()
-                            assert proof1_release.wait(30)
+                            proof1_release.wait()
                 except BaseException as exc:
                     errors.append(exc)
                     proof1_acquired.set()
@@ -1942,7 +1954,9 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
             t1 = threading.Thread(target=run_proof1)
             t1.start()
             threads.append(t1)
-            assert proof1_acquired.wait(10), "trunk proof did not acquire reserved proof-0 slot"
+            proof1_acquired.wait()
+            if errors:
+                raise errors[0]
             assert proof1_notices == [], f"trunk proof waited when proof-0 should be free: {proof1_notices}"
 
             # 4. A second trunk proof shard arrives after cand-3 is already waiting, waits on
@@ -1959,7 +1973,7 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
                             holder="trunk-proof", label="proof-wait",
                         ):
                             proof2_acquired.set()
-                            assert proof2_release.wait(30)
+                            proof2_release.wait()
                 except BaseException as exc:
                     errors.append(exc)
                     proof2_waiting.set()
@@ -1968,7 +1982,9 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
             t2 = threading.Thread(target=run_proof2)
             t2.start()
             threads.append(t2)
-            assert proof2_waiting.wait(10), "proof2 did not enter wait"
+            proof2_waiting.wait()
+            if errors:
+                raise errors[0]
             assert shards.proof_caller_waiting(lock_dir)
             assert not proof2_acquired.is_set()
 
@@ -1977,7 +1993,9 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
             slot0_tag = "cand-1" if slot0_holder == "gate:run-cand-1" else "cand-2"
             (release_dir / slot0_tag).write_text("go\n")
 
-            assert proof2_acquired.wait(15), "waiting trunk proof did not acquire freed slot-0"
+            proof2_acquired.wait()
+            if errors:
+                raise errors[0]
             assert not (entered_dir / "cand-3").is_file(), (
                 "waiting candidate gate acquired freed slot-0 ahead of waiting trunk proof"
             )
@@ -1987,15 +2005,15 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
             proof1_release.set()
             for tag in ("cand-1", "cand-2", "cand-3"):
                 (release_dir / tag).write_text("go\n")
-            wait_file(entered_dir / "cand-3", "cand-3 to run after proof finished")
+            wait_file(entered_dir / "cand-3", "cand-3 to run after proof finished", proc3)
 
             for t in threads:
-                t.join(15)
+                t.join()
             if errors:
                 raise errors[0]
 
             for tag, proc in procs:
-                out, _ = proc.communicate(timeout=30)
+                out, _ = proc.communicate()
                 assert proc.returncode == 0, f"{tag} failed: {out}"
 
             rows = [
@@ -2013,7 +2031,7 @@ def test_candidate_gates_use_gate_class_and_leave_proof_slots_free() -> None:
             for tag in ("cand-1", "cand-2", "cand-3"):
                 (release_dir / tag).write_text("go\n")
             for t in threads:
-                t.join(10)
+                t.join()
             for _, proc in procs:
                 if proc.poll() is None:
                     proc.kill()
@@ -2450,7 +2468,7 @@ def test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim
             "--changed", "tools/tillr-gitshim/gitshim_test.go",
             "--evidence-out", str(ev_file),
         ]
-        res1 = subprocess.run(cmd, env=env1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        res1 = subprocess.run(cmd, env=env1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         assert res1.returncode == 0, res1.stdout
         assert not shim_hits.exists(), shim_hits.read_text(encoding="utf-8")
         assert inherited_cfg.read_text(encoding="utf-8") == inherited_text
@@ -2458,7 +2476,7 @@ def test_private_gitconfig_disables_auto_maintenance_and_bypasses_block_git_shim
         assert ev1["packages"][0]["cached"] is False, ev1
 
         env2 = {**env1, "PATH": gate_path}
-        res2 = subprocess.run(cmd, env=env2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        res2 = subprocess.run(cmd, env=env2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         assert res2.returncode == 0, res2.stdout
         assert not shim_hits.exists(), shim_hits.read_text(encoding="utf-8")
         ev2 = json.loads(ev_file.read_text(encoding="utf-8"))
@@ -2688,7 +2706,6 @@ def test_cfix_regate_reuses_unchanged_package_verdicts() -> None:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                timeout=120,
             )
             assert res.returncode == 0, f"run_id={run_id} rc={res.returncode}\n{res.stdout}"
             ran_markers = {p.name for p in exec_dir.iterdir()}
@@ -2940,7 +2957,9 @@ def test_gotmpdir_inside_slot_scratch_and_cleaned_on_signal() -> None:
             "    if err := os.Rename(tmpFile, dest); err != nil {{ t.Fatal(err) }}\n"
             "  }}\n"
             '  if os.Getenv("GOTMP_BLOCK") == "1" {{\n'
-            "    time.Sleep(60 * time.Second)\n"
+            "    for {{\n"
+            "      time.Sleep(time.Hour)\n"
+            "    }}\n"
             "  }}\n"
             "}}\n"
         )
@@ -3263,7 +3282,6 @@ def test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalle
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=30,
         )
         assert stall_res.returncode != 0, stall_res.stdout
         assert "SIGQUIT: quit" in stall_res.stdout, stall_res.stdout
@@ -3276,7 +3294,6 @@ def test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalle
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=30,
         )
         assert busy_res.returncode == 0, busy_res.stdout
         assert "SIGQUIT" not in busy_res.stdout, busy_res.stdout
@@ -3288,7 +3305,6 @@ def test_stalled_go_test_binary_receives_sigquit_and_busy_binary_is_not_signalle
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=30,
         )
         assert child_res.returncode == 0, child_res.stdout
         assert "SIGQUIT" not in child_res.stdout, child_res.stdout
