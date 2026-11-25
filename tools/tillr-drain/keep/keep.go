@@ -155,7 +155,7 @@ func IsLoopFace(pid int, root string) bool {
 	return resolvePath(target) == resolvePath(root)
 }
 
-// ExtractPolicyAndLanes extracts --policy and --lanes values from loop arguments.
+// ExtractPolicyAndLanes extracts --policy and --max-agents/--lanes values from loop arguments.
 func ExtractPolicyAndLanes(args []string) (policy, lanes string, hasPolicy, hasLanes bool) {
 	for i := 0; i < len(args); {
 		arg := args[i]
@@ -169,9 +169,15 @@ func ExtractPolicyAndLanes(args []string) (policy, lanes string, hasPolicy, hasL
 		case strings.HasPrefix(arg, "-policy="):
 			policy, hasPolicy = strings.TrimPrefix(arg, "-policy="), true
 			i++
-		case (arg == "--lanes" || arg == "-lanes") && i+1 < len(args):
+		case (arg == "--max-agents" || arg == "-max-agents" || arg == "--lanes" || arg == "-lanes") && i+1 < len(args):
 			lanes, hasLanes = args[i+1], true
 			i += 2
+		case strings.HasPrefix(arg, "--max-agents="):
+			lanes, hasLanes = strings.TrimPrefix(arg, "--max-agents="), true
+			i++
+		case strings.HasPrefix(arg, "-max-agents="):
+			lanes, hasLanes = strings.TrimPrefix(arg, "-max-agents="), true
+			i++
 		case strings.HasPrefix(arg, "--lanes="):
 			lanes, hasLanes = strings.TrimPrefix(arg, "--lanes="), true
 			i++
@@ -185,15 +191,15 @@ func ExtractPolicyAndLanes(args []string) (policy, lanes string, hasPolicy, hasL
 	return policy, lanes, hasPolicy, hasLanes
 }
 
-// StripLanes returns loop arguments with any --lanes / -lanes option removed.
+// StripLanes returns loop arguments with any --max-agents / -max-agents / --lanes / -lanes option removed.
 func StripLanes(args []string) []string {
 	cleaned := make([]string, 0, len(args))
 	for i := 0; i < len(args); {
 		arg := args[i]
 		switch {
-		case (arg == "--lanes" || arg == "-lanes") && i+1 < len(args):
+		case (arg == "--max-agents" || arg == "-max-agents" || arg == "--lanes" || arg == "-lanes") && i+1 < len(args):
 			i += 2
-		case strings.HasPrefix(arg, "--lanes=") || strings.HasPrefix(arg, "-lanes="):
+		case strings.HasPrefix(arg, "--max-agents=") || strings.HasPrefix(arg, "-max-agents=") || strings.HasPrefix(arg, "--lanes=") || strings.HasPrefix(arg, "-lanes="):
 			i++
 		default:
 			cleaned = append(cleaned, arg)

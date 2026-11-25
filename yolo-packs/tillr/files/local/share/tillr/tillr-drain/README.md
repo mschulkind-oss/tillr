@@ -920,8 +920,8 @@ reason.
 
 ### Changing the ordinary lane count with work in flight
 
-`tillr drain scale --root . --lanes 3` saves the ordinary lane target; the running loop
-applies it on its next pass without signaling workers. An explicit `--lanes` on a fresh
+`tillr drain scale --root . --max-agents 3` (or its alias `--lanes 3`) saves the running-agent limit; the running loop
+applies it on its next pass without signaling workers. An explicit `--max-agents` (or `--lanes`) on a fresh
 start replaces the saved target. Lowering it stops fresh dispatch to lanes outside the
 rotation; those lanes keep serving the work they hold. Express lanes are unchanged.
 

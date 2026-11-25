@@ -789,9 +789,10 @@ const faceList = "probe-backend, workflow, why, workers, policy, plan, once, spl
 
 func scaleFace(args []string) int {
 	fs := newFlagSet("scale")
-	root := fs.String("root", "", "the repository whose ordinary lanes should change")
+	root := fs.String("root", "", "the repository whose running-agent limit should change")
 	path := fs.String("store", "", "the loop's store (default: <root>/.tillr/state.db)")
-	lanes := fs.Int("lanes", -1, "ordinary lane target (0 stops new ordinary starts)")
+	maxAgents := fs.Int("max-agents", -1, "running-agent limit (0 stops new ordinary starts)")
+	lanes := fs.Int("lanes", -1, "alias for --max-agents")
 	if err := parseFlags(fs, args); err != nil {
 		return fail(err)
 	}
@@ -801,11 +802,37 @@ func scaleFace(args []string) int {
 		}
 		*path = filepath.Join(*root, ".tillr", "state.db")
 	}
-	if err := drain.Scale(context.Background(), *path, *lanes); err != nil {
+	setFlags := map[string]bool{}
+	fs.Visit(func(set *flag.Flag) { setFlags[set.Name] = true })
+	target, _, err := resolveAgentLimit(setFlags, *maxAgents, *lanes, -1)
+	if err != nil {
 		return fail(err)
 	}
-	fmt.Printf("loop: saved ordinary lane target %d; takes effect on the next pass or start\n", *lanes)
+	if err := drain.Scale(context.Background(), *path, target); err != nil {
+		return fail(err)
+	}
+	fmt.Printf("loop: saved ordinary lane target %d; takes effect on the next pass or start\n", target)
 	return record.ExitOK
+}
+
+// resolveAgentLimit reconciles --max-agents and its alias --lanes. Both set the
+// same running-agent limit (D-VO9); passing both with different values is a usage error.
+func resolveAgentLimit(set map[string]bool, maxAgents, lanes, defaultVal int) (int, bool, error) {
+	hasMax := set["max-agents"]
+	hasLanes := set["lanes"]
+	if hasMax && hasLanes {
+		if maxAgents != lanes {
+			return 0, false, drain.Usagef("--max-agents (%d) and --lanes (%d) disagree; pass one", maxAgents, lanes)
+		}
+		return maxAgents, true, nil
+	}
+	if hasMax {
+		return maxAgents, true, nil
+	}
+	if hasLanes {
+		return lanes, true, nil
+	}
+	return defaultVal, false, nil
 }
 
 func stopFace(args []string) int {
@@ -890,7 +917,8 @@ func loopFace(args []string) int {
 	exitWhenDrained := fs.Bool("exit-when-drained", false, "exit with queue-drained when nothing is dispatchable and no run is in flight; the loop is a daemon by default")
 	root := fs.String("root", "", "the repository the loop stages lanes from and lands onto")
 	path := fs.String("store", "", "the store to reap and plan from (default <root>/.tillr/state.db)")
-	laneCount := fs.Int("lanes", 2, "ordinary lane count on a fresh start (replaces any saved scale target when set explicitly; reserved express lanes are configured separately)")
+	maxAgents := fs.Int("max-agents", 2, "running-agent limit on a fresh start (replaces any saved scale target when set explicitly; reserved express lanes are configured separately)")
+	laneCount := fs.Int("lanes", 2, "alias for --max-agents")
 	laneRoot := fs.String("lane-root", "", "where the lanes' worktrees live (default <root>/.tillr/lanes)")
 	backoffBase := fs.Duration("backoff-base", drain.DefaultBackoffBase, "the wait before the next attempt after the first consecutive infrastructure failure; each further one doubles it, up to 5m. It is a wait and not a stop: the loop reports the failure and keeps trying, because the pile still holds work")
 	fallbackPoll := fs.Duration("fallback-poll", drain.DefaultFallbackPollInterval, "fallback store reconciliation poll interval when no relayed notification arrives (D-SN6)")
@@ -935,8 +963,14 @@ func loopFace(args []string) int {
 		}
 		return failLoopStartup(*root, time.Now(), err)
 	}
-	if *laneCount < 0 {
-		return failStartup(drain.Usagef("loop needs --lanes N (N >= 0)"))
+	explicitSteps := map[string]bool{}
+	fs.Visit(func(set *flag.Flag) { explicitSteps[set.Name] = true })
+	agentLimit, explicitLimit, err := resolveAgentLimit(explicitSteps, *maxAgents, *laneCount, 2)
+	if err != nil {
+		return failStartup(err)
+	}
+	if agentLimit < 0 {
+		return failStartup(drain.Usagef("loop needs --max-agents N (N >= 0)"))
 	}
 	// A missing store must not mask invalid repository settings, including
 	// when --check is run before the first loop startup.
@@ -1007,12 +1041,10 @@ func loopFace(args []string) int {
 		SyncRoadmaps: repositorySettings.Sync.Roadmaps,
 		TrunkRef:     repositorySettings.TrunkBranch(),
 	}
-	explicitSteps := map[string]bool{}
-	fs.Visit(func(set *flag.Flag) { explicitSteps[set.Name] = true })
 	steps.ConfigureHooks(hooks, explicitSteps)
 	var explicitLanes *int
-	if explicitSteps["lanes"] {
-		n := *laneCount
+	if explicitLimit {
+		n := agentLimit
 		explicitLanes = &n
 	}
 	stager := &drain.LaneStager{
@@ -1021,7 +1053,7 @@ func loopFace(args []string) int {
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
-		Lanes: append(laneIDs(*laneCount), expressLaneIDs(repositorySettings.Lanes.Express)...), LiveScale: true, ExplicitLanes: explicitLanes, BackoffBase: *backoffBase, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
+		Lanes: append(laneIDs(agentLimit), expressLaneIDs(repositorySettings.Lanes.Express)...), LiveScale: true, ExplicitLanes: explicitLanes, BackoffBase: *backoffBase, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,

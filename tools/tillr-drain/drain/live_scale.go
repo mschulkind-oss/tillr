@@ -36,7 +36,7 @@ func init() {
 // Scale saves an ordinary-lane target without claiming lanes or signaling workers.
 func Scale(ctx context.Context, path string, count int) error {
 	if count < 0 {
-		return Usagef("scale needs --lanes N (N >= 0)")
+		return Usagef("scale needs --max-agents N (N >= 0)")
 	}
 	operator, err := user.Current()
 	if err != nil {
@@ -159,7 +159,7 @@ func (l *Loop) resolveStartupLaneCount(ctx context.Context, inPlaceRestart bool)
 	if l.cfg.ExplicitLanes != nil && !inPlaceRestart {
 		count := *l.cfg.ExplicitLanes
 		if count < 0 {
-			return Usagef("loop needs --lanes N (N >= 0)")
+			return Usagef("loop needs --max-agents N (N >= 0)")
 		}
 		operator, err := user.Current()
 		if err != nil {

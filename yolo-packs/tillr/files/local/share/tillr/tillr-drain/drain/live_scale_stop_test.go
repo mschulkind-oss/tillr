@@ -354,3 +354,95 @@ func TestStartupLaneProvenanceForDefaultZeroNegativeAndInPlaceRestart(t *testing
 		t.Fatalf("adopted restart overwrote saved target: got %d (ok=%v), want 5", saved, ok)
 	}
 }
+
+func TestMaxAgentsFlagAndScaleAlias(t *testing.T) {
+	f := newLoopFixture(t, stub(t, "noop-worker", `printf 'RESULT: done\n'`))
+	fixtureAt(t, f.store)
+	policy := filepath.Join(scratch(t, "max-agents-policy"), "policy.json")
+	raw, err := json.Marshal(f.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, policy, string(raw))
+	baseArgs := []string{
+		"loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot,
+		"--policy", policy, "--run-bin", sibling(t, "run"), "--item-bin", sibling(t, "item"),
+		"--brief-template", filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"),
+		"--gate", always(t, "gate", 0), "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0),
+		"--exit-when-drained",
+	}
+
+	// Help output advertises --max-agents and keeps --lanes as an alias.
+	for _, face := range []string{"loop", "scale"} {
+		code, out := invoke(t, face, "--help")
+		if code != 0 {
+			t.Fatalf("%s --help code = %d, want 0:\n%s", face, code, out)
+		}
+		if !strings.Contains(string(out), "-max-agents") || !strings.Contains(string(out), "-lanes") {
+			t.Fatalf("%s --help missing -max-agents or -lanes:\n%s", face, out)
+		}
+	}
+
+	// scale --max-agents and scale --lanes set the same saved target.
+	if code, out := invoke(t, "scale", "--root", f.root, "--store", f.store, "--max-agents", "4"); code != 0 {
+		t.Fatalf("scale --max-agents 4: %d: %s", code, out)
+	}
+	if saved, ok := readSavedOrdinaryLanes(t, f.store); !ok || saved != 4 {
+		t.Fatalf("saved target after scale --max-agents 4 = %d (ok=%v), want 4", saved, ok)
+	}
+	if code, out := invoke(t, "scale", "--root", f.root, "--store", f.store, "--lanes", "2"); code != 0 {
+		t.Fatalf("scale --lanes 2: %d: %s", code, out)
+	}
+	if saved, ok := readSavedOrdinaryLanes(t, f.store); !ok || saved != 2 {
+		t.Fatalf("saved target after scale --lanes 2 = %d (ok=%v), want 2", saved, ok)
+	}
+
+	// scale validation: missing, negative, and disagreeing flags are refused; matching flags succeed.
+	if code, out := invoke(t, "scale", "--root", f.root, "--store", f.store); code != 2 {
+		t.Fatalf("scale without limit code = %d, want 2:\n%s", code, out)
+	}
+	if code, out := invoke(t, "scale", "--root", f.root, "--store", f.store, "--max-agents", "-1"); code != 2 {
+		t.Fatalf("scale --max-agents -1 code = %d, want 2:\n%s", code, out)
+	}
+	if code, out := invoke(t, "scale", "--root", f.root, "--store", f.store, "--max-agents", "3", "--lanes", "5"); code != 2 {
+		t.Fatalf("scale disagreeing flags code = %d, want 2:\n%s", code, out)
+	}
+	if code, out := invoke(t, "scale", "--root", f.root, "--store", f.store, "--max-agents", "3", "--lanes", "3"); code != 0 {
+		t.Fatalf("scale agreeing flags code = %d, want 0:\n%s", code, out)
+	}
+	if saved, ok := readSavedOrdinaryLanes(t, f.store); !ok || saved != 3 {
+		t.Fatalf("saved target after agreeing scale flags = %d (ok=%v), want 3", saved, ok)
+	}
+
+	// loop validation: negative --max-agents and disagreeing --max-agents/--lanes are refused.
+	if code, out := invoke(t, append(slices.Clone(baseArgs), "--max-agents", "-1")...); code != 2 {
+		t.Fatalf("loop --max-agents -1 code = %d, want 2:\n%s", code, out)
+	}
+	if code, out := invoke(t, append(slices.Clone(baseArgs), "--max-agents", "1", "--lanes", "2")...); code != 2 {
+		t.Fatalf("loop disagreeing flags code = %d, want 2:\n%s", code, out)
+	}
+
+	// loop --check --max-agents 1 does not mutate the saved target 3.
+	if code, out := invoke(t, append(slices.Clone(baseArgs), "--check", "--max-agents", "1")...); code != 0 {
+		t.Fatalf("loop --check --max-agents 1: %d:\n%s", code, out)
+	}
+	if saved, ok := readSavedOrdinaryLanes(t, f.store); !ok || saved != 3 {
+		t.Fatalf("loop --check --max-agents 1 mutated saved target: got %d (ok=%v), want 3", saved, ok)
+	}
+
+	// Fresh start with --max-agents 0 replaces saved target 3.
+	if code, out := invoke(t, append(slices.Clone(baseArgs), "--max-agents", "0")...); code != 0 {
+		t.Fatalf("loop --max-agents 0: %d:\n%s", code, out)
+	}
+	if saved, ok := readSavedOrdinaryLanes(t, f.store); !ok || saved != 0 {
+		t.Fatalf("saved target after loop --max-agents 0 = %d (ok=%v), want 0", saved, ok)
+	}
+
+	// Fresh start with --max-agents 1 sets the running-agent limit to 1.
+	if code, out := invoke(t, append(slices.Clone(baseArgs), "--max-agents", "1")...); code != 0 {
+		t.Fatalf("loop --max-agents 1: %d:\n%s", code, out)
+	}
+	if saved, ok := readSavedOrdinaryLanes(t, f.store); !ok || saved != 1 {
+		t.Fatalf("saved target after loop --max-agents 1 = %d (ok=%v), want 1", saved, ok)
+	}
+}

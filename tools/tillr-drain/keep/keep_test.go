@@ -750,6 +750,45 @@ func TestSavedScaleTargetSurvivesCrashRelaunchAndUnflaggedRestart(t *testing.T) 
 	}
 }
 
+func TestKeepHandlesMaxAgentsFlag(t *testing.T) {
+	stripped := StripLanes([]string{"--policy", "p.json", "--max-agents", "1", "--rolling", "", "--max-agents=2", "-max-agents", "3", "-max-agents=4"})
+	wantStripped := []string{"--policy", "p.json", "--rolling", ""}
+	if !reflect.DeepEqual(stripped, wantStripped) {
+		t.Fatalf("StripLanes = %q, want %q", stripped, wantStripped)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"double-dash", []string{"--policy", "p.json", "--max-agents", "5"}, "5"},
+		{"double-dash-eq", []string{"--policy=p.json", "--max-agents=6"}, "6"},
+		{"single-dash", []string{"-max-agents", "7"}, "7"},
+		{"single-dash-eq", []string{"-max-agents=8"}, "8"},
+	} {
+		_, got, _, has := ExtractPolicyAndLanes(tc.args)
+		if !has || got != tc.want {
+			t.Fatalf("%s: ExtractPolicyAndLanes = (%q, %v), want (%q, true)", tc.name, got, has, tc.want)
+		}
+	}
+
+	root := t.TempDir()
+	if err := WriteRecordedLaunch(root, "config/custom.json", "1", true, true); err != nil {
+		t.Fatal(err)
+	}
+	args, policy, lanes, _, _, err := ResolveRestartArgs(root, []string{"--max-agents", "3"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy != "config/custom.json" || lanes != "3" {
+		t.Fatalf("explicit --max-agents: policy=%q lanes=%q, want (config/custom.json, 3)", policy, lanes)
+	}
+	if !reflect.DeepEqual(args, []string{"--max-agents", "3", "--policy", "config/custom.json"}) {
+		t.Fatalf("args = %q, want [--max-agents 3 --policy config/custom.json]", args)
+	}
+}
+
 func TestStopAbsentIsNoopAndHelpDoesNotStart(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
