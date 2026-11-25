@@ -11,7 +11,7 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.62.0",
+    "@tanstack/react-query": "^5.108.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0"
