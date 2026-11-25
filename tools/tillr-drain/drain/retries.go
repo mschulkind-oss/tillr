@@ -20,19 +20,15 @@ import (
 // record and not an event: the `retries` row is the store's copy, and registering the kind
 // as appendable would claim a state transition this face does not assert.
 //
-// The authorization is a claim — a person says "this run failed in the harness, re-dispatch
-// it and name the run it supersedes" — and `plan` is what decides whether the claim holds:
-// the run must still be the item's latest terminal run, and the gate must never have judged
-// it. That is the distinction A-NORETRY left to "backfill semantics"; the claim supplies the
-// intent, and the store's own `gate.verdict` event supplies the evidence.
+// The authorization is a claim that a run should be retried. `plan` checks that the run
+// is still the item's latest terminal run and that the acknowledgment matches the
+// outcome the store recorded.
 const RetryKind = "drain.retry"
 
 // RetryAckKind is the event a retry appends in the same transaction as its `retries` row
-// when the operator acknowledges the outcome the retry exists to recover from. It is an
-// event rather than a column: the acknowledgment names evidence the store already holds —
-// a `gate.verdict` for a judged run, an attempt class for a wall cut short — and a column
-// on the retries row would be a second copy of that evidence. Its object is the retry, so
-// a reader follows one id from the row to the event.
+// insertion or replacement. The acknowledgment references evidence the store already
+// holds: a `gate.verdict` for a judged run or an attempt class for a wall cut short.
+// The reader follows the retry ID from the row to the event.
 const RetryAckKind = "drain.retry.ack"
 
 // DesignRetryKind is the event a retry appends when it names an item and the design run
@@ -133,8 +129,8 @@ type retryRow struct {
 // The structural checks are this face's: the item exists and is not terminal, the run exists
 // and belongs to that item, and the run is terminal. The judgment checks are the same rule
 // `plan` applies, refused here too so an operator learns immediately instead of creating an
-// authorization the plan cannot honour: the gate must never have judged the run, and a run a
-// wall cut short is inspected rather than retried.
+// authorization the plan cannot honour: a judged run needs a gate-failed acknowledgment,
+// and a run a wall cut short needs an unjudged acknowledgment after inspection.
 //
 // The one check this face deliberately leaves to `plan` is "the run is still the latest":
 // a newer run can appear between the authorization and the next tick, and `plan` then
@@ -278,20 +274,42 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 		Reason:          req.Why,
 		RequestedAt:     at,
 	}
-	var seen int
-	if err := tx.QueryRow(`SELECT count(*) FROM retries WHERE retry_id = ?`, retry.RetryID).Scan(&seen); err != nil {
-		return Retry{}, readFailure(err)
+	var existingItemID, existingRunID string
+	rowErr := tx.QueryRow(
+		`SELECT item_id, supersedes_run_id FROM retries WHERE retry_id = ?`, retry.RetryID,
+	).Scan(&existingItemID, &existingRunID)
+	if rowErr != nil && !errors.Is(rowErr, sql.ErrNoRows) {
+		return Retry{}, readFailure(rowErr)
 	}
-	if seen > 0 {
-		return Retry{}, Usagef("run %q is already authorized for retry: the authorization %q survives in the store. %s", req.RunID, retry.RetryID, noRetryCommand("the loop moves: its next pass dispatches the retry, or holds it naming why (tillr drain why)"))
-	}
-	if _, err := tx.Exec(
-		`INSERT INTO retries (retry_id, item_id, supersedes_run_id, requested_by, reason, requested_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		retry.RetryID, retry.ItemID, retry.SupersedesRunID, retry.RequestedBy, retry.Reason,
-		retry.RequestedAt.UnixMilli(),
-	); err != nil {
-		return Retry{}, Internalf("recording the retry for %q: %v", req.ItemID, err)
+	if rowErr == nil {
+		// Keep one authorization per run. The only replacement is an explicit gate
+		// acknowledgment when the existing authorization does not cover the verdict.
+		replace := false
+		if existingItemID == req.ItemID && existingRunID == req.RunID && req.Acknowledge == RetryAckGateFailed {
+			acks, err := readRetryAcks(tx.Reader())
+			if err != nil {
+				return Retry{}, err
+			}
+			replace = acks[retry.RetryID] != RetryAckGateFailed
+		}
+		if !replace {
+			return Retry{}, Usagef("run %q is already authorized for retry: the authorization %q survives in the store. %s", req.RunID, retry.RetryID, noRetryCommand("the loop moves: its next pass dispatches the retry, or holds it naming why (tillr drain why)"))
+		}
+		if _, err := tx.Exec(
+			`UPDATE retries SET requested_by = ?, reason = ?, requested_at = ? WHERE retry_id = ?`,
+			retry.RequestedBy, retry.Reason, retry.RequestedAt.UnixMilli(), retry.RetryID,
+		); err != nil {
+			return Retry{}, Internalf("recording the retry for %q: %v", req.ItemID, err)
+		}
+	} else {
+		if _, err := tx.Exec(
+			`INSERT INTO retries (retry_id, item_id, supersedes_run_id, requested_by, reason, requested_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			retry.RetryID, retry.ItemID, retry.SupersedesRunID, retry.RequestedBy, retry.Reason,
+			retry.RequestedAt.UnixMilli(),
+		); err != nil {
+			return Retry{}, Internalf("recording the retry for %q: %v", req.ItemID, err)
+		}
 	}
 	if req.Acknowledge != "" {
 		body, err := json.Marshal(retryAckPayload{Acknowledge: req.Acknowledge})
@@ -485,6 +503,7 @@ var terminalRunStates = map[string]bool{
 	run.StateTimedOut:      true,
 }
 
-// retryID is one authorization's identity: the item and the run it supersedes, so a second
-// authorization of the same run is the same row rather than a second claim.
+// retryID is one authorization's deterministic identity: the item and the run it
+// supersedes. A later gate-failed acknowledgment can replace an earlier authorization
+// in the same row; otherwise a second authorization of the same run is refused.
 func retryID(itemID, runID string) string { return "retry-" + itemID + "-" + runID }
