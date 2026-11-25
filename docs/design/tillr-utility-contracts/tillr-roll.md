@@ -2,8 +2,9 @@
 title: "Contract: tillr-roll"
 status: in-review
 stage: DESIGN
+updated: 2026-11-25
 tags: [tillr, contract, roll]
-summary: "What tillr-roll provides and expects: two Python scripts, the roller that builds and installs new binaries and the keeper that keeps the loop running. Other utilities read almost nothing from them. They expect four faces of the drain and the view, two printed lines matched character for character, one event kind read and one written with raw SQL, and the `landings` table."
+summary: "What tillr-roll provides and expects: the roller that builds and installs new binaries (currently Python on HEAD; by D-UC17, ported with its test suite to Go while keeping its CLI, file, event and watch-retirement contracts). The keeper moved to tillr-drain keep. The roller expects faces of the drain and the view, printed lines matched character for character, one event kind read and one written, and the `landings` table."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
@@ -12,12 +13,10 @@ depends-on:
 
 **Status:** The contract examples and their checks are not built: `fd -t d '^contract$' tools` finds nothing. The lists below describe what the code provides and reads. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
 
-**What it is.** Two Python scripts at `tools/tillr-roll`:
+**What it is.** On `HEAD` as of 2026-11-25:
 
-- **The roller**, `tillr-roll.py`: builds every tillr program from a commit, tests what the landing did not prove, installs the programs, and asks the running drain and view to restart onto them.
-- **The keeper**, `tillr-keep`: starts the drain's loop, restarts it when it exits, and stops or rebuilds it on request.
-
-Their tests are outside the directory, in `tests/tillr-roll.test.py` and `tests/tillr-keep.test.py`.
+- **The roller**, `tillr-roll.py` at `tools/tillr-roll` (tested by `tests/tillr-roll.test.py` and four tests in `tools/tillr-drain/drain/`): builds every tillr program from a commit, tests what the landing did not prove, installs the programs, and asks the running drain and view to restart onto them. By `D-UC17` of [the overview](../tillr-utility-contracts.md#82-the-roller-moves-to-go) — the designer's decision from an operator request, which the owner may overturn — `tillr-roll.py` and `tests/tillr-roll.test.py` are ported to Go with identical behavior and deleted.
+- **The keeper** (formerly `tools/tillr-roll/tillr-keep` and `tests/tillr-keep.test.py`, measured here on 2026-11-24): moved on 2026-11-25 into `tillr-drain` as `tillr-drain keep` (`tools/tillr-drain/keep/keep.go`, `restart.go` and `keep_test.go`). The keeper rows below record the pre-move inventory until slice 12 reconciles them with [tillr-drain](./tillr-drain.md).
 
 ## 1. What it provides
 
@@ -36,7 +35,7 @@ It inserts one event kind, `drain.roll-failed`, which the drain's `alarms` packa
 
 ### 1.3 Go packages, tables
 
-None.
+None on `HEAD` today, and no store tables. Under `D-UC17` of [the overview](../tillr-utility-contracts.md#82-the-roller-moves-to-go) (the designer's decision from an operator request, not yet built), when the plan step places the Go port in `tools/tillr-roll`, its Go module (`github.com/mschulkind-oss/tillr-roll`) exposes the roller package for Go callers and sibling tests (including `tools/tillr-drain/drain/watch_roll_test.go`, `post_landing_roll_test.go`, `schema_roll_test.go` and `shard_balance_test.go`).
 
 ### 1.4 Files
 
@@ -77,7 +76,7 @@ None.
 
 ## 3. Contract and private
 
-**Contract:** the roller's four flags and two exit codes, because the drain runs it; the `drain.roll-failed` payload and the fallback file's fields; `roll.json`'s two fields and the staging directory's name form; `tillr-roll.commit`.
+**Contract:** the roller's four flags and two exit codes, because the drain runs it; the `drain.roll-failed` payload and the fallback file's fields; `roll.json`'s two fields and the staging directory's name form; `tillr-roll.commit`; and deferred `tillr-watch.retire` settlement recovery (`D-UC17`: unlinking `tillr-watch.retire` ignores only `os.ErrNotExist`, and any other error unlinking the marker or `.tillr-watch-*` backup fails settlement while restoring `tillr-watch` and preserving `tillr-watch.retire` for retry, as pinned by `TestNamedRollWatchInstallation` in `tools/tillr-drain/drain/watch_roll_test.go`).
 
 **Private:** everything either script prints; the keeper's files; the lock; how suites are chosen.
 
@@ -85,7 +84,7 @@ The one printed thing the drain reads, the failing test's name, becomes a field 
 
 ## 4. How the contract is pinned
 
-In `tests/tillr-roll.test.py` and `tests/tillr-keep.test.py`. Those two files move into `tools/tillr-roll` so that the utility's pins live in it; that is a move and no change of content.
+On `HEAD` today, the roller's suite is `tests/tillr-roll.test.py` (alongside the four roller tests in `tools/tillr-drain/drain/`), while the keeper's suite has already moved to Go in `tools/tillr-drain/keep/keep_test.go`. By `D-UC17` of [the overview](../tillr-utility-contracts.md#82-the-roller-moves-to-go) (the designer's decision from an operator request, which the owner may overturn), `tests/tillr-roll.test.py` is ported to Go tests in the same commit that ports `tillr-roll.py` to Go, keeping every case, and both `tools/tillr-roll/tillr-roll.py` and `tests/tillr-roll.test.py` are deleted (superseding the earlier note that `tests/tillr-roll.test.py` moves into `tools/tillr-roll` unchanged).
 
 - **Exists.** Both suites run without a real store, loop, gate or agent. They type an `events` table of six columns, a `landings` table of four, and a `drain.build-started` payload.
 - **What it provides.** One example of the failure event and one of the fallback file, made by `record_failure`; one of `roll.json`, made by the staging function. The drain's `alarms` and schema-roll tests read them.
