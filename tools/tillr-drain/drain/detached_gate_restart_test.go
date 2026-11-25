@@ -1092,7 +1092,10 @@ import os, pathlib, time
 counter = pathlib.Path(%q)
 n = int(counter.read_text().strip()) if counter.exists() else 0
 counter.write_text(f"{n + 1}\n")
-pathlib.Path(%q).write_text(str(os.getpid()) + "\n")
+entered = pathlib.Path(%q)
+entered_tmp = entered.with_name(f".{entered.name}.{os.getpid()}.tmp")
+entered_tmp.write_text(str(os.getpid()) + "\n")
+os.replace(entered_tmp, entered)
 rel = pathlib.Path(%q)
 while not rel.exists():
     time.sleep(0.02)
