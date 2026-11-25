@@ -241,23 +241,25 @@ func readGoTestFailures(logRef string) goTestLogResult {
 			res.SawTestResult = true
 			continue
 		}
-		if trimmed == "FAIL" {
-			res.SawTestResult = true
-			continue
-		}
-		if strings.HasPrefix(trimmed, "FAIL\t") || strings.HasPrefix(trimmed, "FAIL ") {
-			if fields := strings.Fields(trimmed); len(fields) >= 2 && fields[0] == "FAIL" {
-				pkg := fields[1]
+		if rest, ok := strings.CutPrefix(trimmed, "FAIL"); ok {
+			if rest == "" {
 				res.SawTestResult = true
-				if len(pendingTests) > 0 {
-					for _, t := range pendingTests {
-						record(pkg, t)
-					}
-					pendingTests = nil
-				} else {
-					record(pkg, "")
-				}
 				continue
+			}
+			if rest[0] == '\t' || rest[0] == ' ' {
+				if fields := strings.Fields(rest); len(fields) >= 1 {
+					pkg := fields[0]
+					res.SawTestResult = true
+					if len(pendingTests) > 0 {
+						for _, t := range pendingTests {
+							record(pkg, t)
+						}
+						pendingTests = nil
+					} else {
+						record(pkg, "")
+					}
+					continue
+				}
 			}
 		}
 		if strings.HasPrefix(trimmed, "ok\t") || strings.HasPrefix(trimmed, "ok  \t") ||
