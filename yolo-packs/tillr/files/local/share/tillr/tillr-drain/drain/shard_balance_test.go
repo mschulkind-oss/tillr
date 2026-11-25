@@ -56,7 +56,6 @@ s = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(s)
 
 root = pathlib.Path(sys.argv[1])
-os.environ[s.LOCK_DIR_ENV] = str(root / 'locks')
 binary = root / 'fake.test'
 binary.write_text(
     "#!/usr/bin/env python3\n"

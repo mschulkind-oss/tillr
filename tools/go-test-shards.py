@@ -3,11 +3,8 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import contextlib
-from datetime import datetime, timezone
-import fcntl
 import hashlib
 import importlib.util
-import itertools
 import json
 import math
 import os
@@ -412,774 +409,20 @@ def shared_cache_dir():
     return (base / 'go-build').resolve()
 
 
-LOCK_DIR_ENV = 'GO_TEST_SHARDS_LOCK_DIR'
-SLOT_CLASS_ENV = 'GO_TEST_SHARDS_CLASS'
-HOLDER_ENV = 'GO_TEST_SHARDS_HOLDER'
-SLOT_CLASS_ORDINARY = 'ordinary'
-SLOT_CLASS_PROOF = 'proof'
-SLOT_CLASS_GATE = 'gate'
-SLOT_CLASS_REPAIR = 'repair'
-SLOT_CLASSES = (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF, SLOT_CLASS_GATE, SLOT_CLASS_REPAIR)
-SLOT_RULES_VERSION = 'v2'
-# Canonical slot-scheduling rules for SLOT_RULES_VERSION.
-# Any change to class priority, pool eligibility, wait-lock signaling, or per-pool yielding
-# must bump SLOT_RULES_VERSION so processes straddling a rules change never share a wait queue.
-SLOT_RULES = {
-    'priority': (
-        SLOT_CLASS_REPAIR,
-        SLOT_CLASS_PROOF,
-        SLOT_CLASS_GATE,
-        SLOT_CLASS_ORDINARY,
-    ),
-    'pools': {
-        SLOT_CLASS_REPAIR: ('s', 'p', 'g'),
-        SLOT_CLASS_PROOF: ('s', 'p'),
-        SLOT_CLASS_GATE: ('s', 'g'),
-        SLOT_CLASS_ORDINARY: ('s',),
-    },
-    'wait_locks': {
-        SLOT_CLASS_REPAIR: 'repair-waiting.lock',
-        SLOT_CLASS_PROOF: 'proof-waiting.lock',
-        SLOT_CLASS_GATE: 'gate-waiting.lock',
-        SLOT_CLASS_ORDINARY: None,
-    },
-    'yields_to': {
-        SLOT_CLASS_REPAIR: {
-            's': (),
-            'p': (),
-            'g': (),
-        },
-        SLOT_CLASS_PROOF: {
-            's': (SLOT_CLASS_REPAIR,),
-            'p': (SLOT_CLASS_REPAIR,),
-        },
-        SLOT_CLASS_GATE: {
-            's': (SLOT_CLASS_REPAIR, SLOT_CLASS_PROOF),
-            'g': (SLOT_CLASS_REPAIR,),
-        },
-        SLOT_CLASS_ORDINARY: {
-            's': (SLOT_CLASS_REPAIR, SLOT_CLASS_PROOF, SLOT_CLASS_GATE),
-        },
-    },
-}
-_CLASS_PRIORITY = {slot_class: idx for idx, slot_class in enumerate(SLOT_RULES['priority'])}
-_WAIT_TICKET_SEQ = itertools.count()
-# Experiment: slot limits (machine-wide pool, wait queue, and per-gate caps) are off by default.
-# Set to True to re-enable slot limiting.
-ENFORCE_SLOT_LIMITS = False
-DEFAULT_GATE_MAX_SLOTS = 8
-DEFAULT_GATE_RESERVED_CAP = 4
-# One lock pays for one concurrent Go test, not an entire parallel batch.
-TESTS_PER_SLOT = 1
-# Re-announce long waits periodically so neither logs nor output-based stall watchdogs go silent.
-WAIT_REPORT_INTERVAL = 30.0
-
-
-def default_lock_dir():
-    """Return the slot pool every invocation shares unless one is named.
-
-    GO_TEST_SHARDS_LOCK_DIR names another pool. It exists for this runner's own tests: a
-    test that runs the runner must not wait on slots the rest of the machine holds.
-    """
-    named = os.environ.get(LOCK_DIR_ENV, '').strip()
-    if named:
-        return Path(named).resolve()
-    return shared_cache_dir() / 'go-test-shards-locks'
-
-
-def default_shard_limit():
-    """Machine-wide limit on concurrently running ordinary shards, sized from the core count."""
-    return max(1, ((os.cpu_count() or 1) * 3) // 8)
-
-
-def default_gate_shard_limit(ordinary_limit=None):
-    """Reserved slots only gate and repair runs may take when ordinary slots are full."""
-    limit = max(1, default_shard_limit() if ordinary_limit is None else ordinary_limit)
-    spare = max(0, (os.cpu_count() or 1) - limit)
-    return min(spare, 6, (limit + 1) // 2)
-
-
-def default_proof_shard_limit(ordinary_limit=None, gate_limit=None):
-    """Reserved slots only proof and repair runs may take when ordinary slots are full."""
-    limit = max(1, default_shard_limit() if ordinary_limit is None else ordinary_limit)
-    gate = (default_gate_shard_limit(limit) if gate_limit is None
-            else max(0, gate_limit))
-    spare = max(0, (os.cpu_count() or 1) - limit - gate)
-    return min(spare, 4, (limit + 2) // 3)
-
-
-def resolve_slot_class(slot_class=None):
-    chosen = (slot_class or os.environ.get(SLOT_CLASS_ENV, '')).strip() or SLOT_CLASS_ORDINARY
-    if chosen not in SLOT_CLASSES:
-        raise ValueError(f'invalid slot class {chosen!r}; expected one of {", ".join(SLOT_CLASSES)}')
-    return chosen
-
-
-def resolve_holder_run(holder=None, slot_class=SLOT_CLASS_ORDINARY):
-    """Name the run holding a slot so waiting callers see which runs own the pool."""
-    if holder is not None and str(holder).strip():
-        return str(holder).strip()
-    env_holder = os.environ.get(HOLDER_ENV, '').strip()
-    if env_holder:
-        return env_holder
-    run_id = os.environ.get('TILLR_RUN_ID', '').strip()
-    if run_id:
-        return run_id
-    spans = os.environ.get('TILLR_GATE_SPANS_OUT', '').strip()
-    if spans:
-        parent = Path(spans).parent.name
-        if parent == '.rolling':
-            return 'trunk-proof'
-        if parent:
-            return f'gate:{parent}'
-    if slot_class == SLOT_CLASS_PROOF:
-        return 'trunk-proof'
-    if slot_class in (SLOT_CLASS_GATE, SLOT_CLASS_REPAIR):
-        return f'gate:pid-{os.getpid()}'
-    return f'pid-{os.getpid()}'
-
-
-def is_trunk_repair_holder(holder_name):
-    """Return True when holder_name identifies a revert or trunk-fixer gate run."""
-    name = (holder_name or '').strip()
-    if name.startswith('gate:'):
-        name = name[len('gate:'):]
-    return (
-        name.startswith('run-revert-')
-        or name.startswith('revert-main-')
-        or name.startswith('run-fixer-main-')
-        or name.startswith('fixer-main-')
-    )
-
-
-def try_lock_slot(lock_dir, prefix, count, offset):
-    for step in range(count):
-        slot = (offset + step) % count
-        slot_name = f'{prefix}-{slot}'
-        path = lock_dir / f'{slot_name}.lock'
-        candidate = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
-        try:
-            fcntl.flock(candidate, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return candidate, slot_name
-        except BlockingIOError:
-            os.close(candidate)
-        except BaseException:
-            os.close(candidate)
-            raise
-    return None, None
-
-
-def wait_rules_dir(lock_dir):
-    """Return the rules-versioned wait-coordination directory inside lock_dir."""
-    return Path(lock_dir) / 'wait-rules' / SLOT_RULES_VERSION
-
-
-def wait_queue_dir(lock_dir):
-    """Return the rules-versioned FIFO wait-ticket directory inside lock_dir."""
-    return wait_rules_dir(lock_dir) / 'wait-queue'
-
-
-def _caller_waiting(lock_dir, lock_name):
-    path = wait_rules_dir(lock_dir) / lock_name
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return False
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        return True
-    finally:
-        os.close(fd)
-    return False
-
-
-def _class_caller_waiting(lock_dir, slot_class):
-    lock_name = SLOT_RULES['wait_locks'].get(slot_class)
-    if not lock_name:
-        return False
-    return _caller_waiting(lock_dir, lock_name)
-
-
-def _yielding_waiter_class(lock_dir, chosen_class, pool_char):
-    """Return the highest-priority waiting class that chosen_class yields to on pool_char, or None."""
-    for waiting_class in SLOT_RULES['yields_to'].get(chosen_class, {}).get(pool_char, ()):
-        if _class_caller_waiting(lock_dir, waiting_class):
-            return waiting_class
-    return None
-
-
-def proof_caller_waiting(lock_dir):
-    """Return True when at least one proof-class caller holds a shared lock on proof-waiting."""
-    return _class_caller_waiting(lock_dir, SLOT_CLASS_PROOF)
-
-
-def gate_caller_waiting(lock_dir):
-    """Return True when at least one gate-class caller holds a shared lock on gate-waiting."""
-    return _class_caller_waiting(lock_dir, SLOT_CLASS_GATE)
-
-
-def repair_caller_waiting(lock_dir):
-    """Return True when at least one repair-class caller holds a shared lock on repair-waiting."""
-    return _class_caller_waiting(lock_dir, SLOT_CLASS_REPAIR)
-
-
-def _wait_queue_dir(lock_dir):
-    return wait_queue_dir(lock_dir)
-
-
-def _monotonic_ns():
-    monotonic_ns = getattr(time, 'monotonic_ns', None)
-    return monotonic_ns() if monotonic_ns is not None else int(time.monotonic() * 1_000_000_000)
-
-
-def _wait_ticket_name(priority, arrival_ns, pid, tid, seq, pools):
-    return f'{priority:02d}-{arrival_ns:020d}-{pid:010d}-{tid:020d}-{seq:08d}-{pools}.wait'
-
-
-def _parse_wait_ticket(name):
-    if not name.endswith('.wait') or name.startswith('.'):
-        return None
-    parts = name[:-5].split('-')
-    if len(parts) != 6:
-        return None
-    try:
-        priority = int(parts[0])
-        arrival_ns = int(parts[1])
-    except ValueError:
-        return None
-    return priority, arrival_ns, parts[5]
-
-
-def _register_wait_ticket(wait_queue_dir, priority, pools):
-    wait_queue_dir.mkdir(parents=True, exist_ok=True)
-    arrival_ns = _monotonic_ns()
-    pid = os.getpid()
-    tid = threading.get_ident()
-    seq = next(_WAIT_TICKET_SEQ)
-    name = _wait_ticket_name(priority, arrival_ns, pid, tid, seq, pools)
-    ticket_path = wait_queue_dir / name
-    tmp_path = wait_queue_dir / f'.{name}.tmp'
-    ticket_fd = os.open(tmp_path, os.O_CREAT | os.O_TRUNC | os.O_RDWR, 0o666)
-    try:
-        fcntl.flock(ticket_fd, fcntl.LOCK_SH)
-        os.replace(tmp_path, ticket_path)
-        return ticket_fd, ticket_path, name, (priority, arrival_ns, pid, tid, seq)
-    except BaseException:
-        os.close(ticket_fd)
-        with contextlib.suppress(OSError):
-            tmp_path.unlink()
-        raise
-
-
-def _update_ticket_pools(wait_queue_dir, ticket_path, ticket_meta, new_pools):
-    new_name = _wait_ticket_name(*ticket_meta, new_pools)
-    new_path = wait_queue_dir / new_name
-    os.replace(ticket_path, new_path)
-    return new_path, new_name
-
-
-def _release_wait_ticket(ticket_fd, ticket_path):
-    if ticket_path is not None:
-        with contextlib.suppress(OSError):
-            ticket_path.unlink()
-    _unlock_and_close(ticket_fd)
-
-
-def _waiter_ahead(wait_queue_dir, pool_char, my_priority, my_ticket_name, before_ns=None):
-    """Return the priority of the first live waiter ahead of this caller for pool_char, or None."""
-    try:
-        names = sorted(os.listdir(wait_queue_dir))
-    except OSError:
-        return None
-    for name in names:
-        parsed = _parse_wait_ticket(name)
-        if parsed is None:
-            continue
-        if my_ticket_name is not None and name >= my_ticket_name:
-            break
-        priority, arrival_ns, pools = parsed
-        if my_ticket_name is None:
-            if priority > my_priority:
-                break
-            if priority == my_priority and before_ns is not None and arrival_ns >= before_ns:
-                break
-        if pool_char not in pools:
-            continue
-        path = wait_queue_dir / name
-        try:
-            fd = os.open(path, os.O_RDONLY)
-        except OSError:
-            continue
-        try:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return priority
-            with contextlib.suppress(OSError):
-                path.unlink()
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
-        finally:
-            os.close(fd)
-    return None
-
-
-def _holder_cap_dir(lock_dir, holder_name):
-    slug = re.sub(r'[^A-Za-z0-9_.-]+', '_', holder_name).strip('_')[:48] or 'holder'
-    digest = hashlib.sha256(holder_name.encode('utf-8')).hexdigest()[:12]
-    path = lock_dir / 'holder-caps' / f'{slug}-{digest}'
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _unlock_and_close(fd):
-    if fd is None:
-        return
-    try:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
-
-
-def write_slot_holder(lock_dir, slot_name, holder_name, slot_class):
-    """Publish a live-flock-backed holder record under the caller's exclusive slot lock."""
-    tmp_path = lock_dir / f'.{slot_name}.{os.getpid()}.{threading.get_ident()}.tmp'
-    meta_path = lock_dir / f'{slot_name}.holder.json'
-    payload = json.dumps({
-        'slot': slot_name,
-        'class': slot_class,
-        'run': holder_name,
-        'pid': os.getpid(),
-    }).encode('utf-8')
-    meta_fd = os.open(tmp_path, os.O_CREAT | os.O_TRUNC | os.O_RDWR, 0o666)
-    try:
-        os.write(meta_fd, payload)
-        fcntl.flock(meta_fd, fcntl.LOCK_SH)
-        os.replace(tmp_path, meta_path)
-        return meta_fd, meta_path
-    except BaseException:
-        os.close(meta_fd)
-        with contextlib.suppress(OSError):
-            tmp_path.unlink()
-        raise
-
-
-def read_slot_holders(lock_dir):
-    """Read metadata for every currently live slot holder without touching slot-*.lock."""
-    holders = []
-    try:
-        paths = sorted(lock_dir.glob('*.holder.json'))
-    except OSError:
-        return holders
-    for path in paths:
-        try:
-            fd = os.open(path, os.O_RDONLY)
-        except OSError:
-            continue
-        try:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raw = os.read(fd, 65536)
-                info = json.loads(raw.decode('utf-8', errors='replace'))
-                if isinstance(info, dict):
-                    holders.append(info)
-        except (OSError, ValueError):
-            pass
-        finally:
-            os.close(fd)
-    return holders
-
-
-def describe_slot_holders(holders, fallback_count=0):
-    counts = {}
-    for info in holders:
-        run_name = str(info.get('run') or 'unknown')
-        counts[run_name] = counts.get(run_name, 0) + 1
-    total = sum(counts.values())
-    if total == 0:
-        count = max(1, fallback_count)
-        return f'held by {count} active runner(s)'
-    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-    runs = ', '.join(f'{name} ({count})' for name, count in ordered)
-    return f'held by {total} holder(s) across {len(ordered)} run(s): {runs}'
-
-
-def _iso_utc_ms(epoch_ms):
-    return datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-
-
-def record_slot_wait(*, start_wall_ms, waited_ms, slot, slot_class, holder_name, label, acquired):
-    """Fail-open append of one `slot.wait` JSON line to `$TILLR_TRACE_DIR/slot-waits.jsonl`."""
-    trace_dir = os.environ.get('TILLR_TRACE_DIR', '').strip()
-    if not trace_dir:
-        return
-    try:
-        if not os.path.isdir(trace_dir):
-            return
-        waited = max(0, int(waited_ms))
-        ts_start_ms = int(start_wall_ms)
-        ts_end_ms = ts_start_ms + waited
-        row = {
-            'kind': 'slot.wait',
-            'ts': _iso_utc_ms(ts_start_ms),
-            'ts_end': _iso_utc_ms(ts_end_ms),
-            'ts_start_ms': ts_start_ms,
-            'ts_end_ms': ts_end_ms,
-            'waited_ms': waited,
-            'slot': slot,
-            'class': slot_class,
-            'run': holder_name,
-            'acquired': bool(acquired),
-        }
-        if label is not None:
-            row['label'] = str(label)
-        payload = (json.dumps(row, separators=(',', ':')) + '\n').encode('utf-8')
-        out_path = os.path.join(trace_dir, 'slot-waits.jsonl')
-        out_fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-        try:
-            os.write(out_fd, payload)
-        finally:
-            os.close(out_fd)
-    except OSError:
-        pass
-
-
-@contextlib.contextmanager
-def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
-                       proof_limit=None, gate_limit=None, max_slots=None,
-                       gate_reserved_limit=None, holder=None, label=None):
-    """Acquire one slot from a counted flock pool under lock_dir; wait without timeout.
-
-    When ENFORCE_SLOT_LIMITS is False (the default), yields immediately for every class
-    without touching lock_dir, writing wait tickets or holder records, holding waiting
-    locks, or applying per-gate caps, and records a zero-wait slot.wait span when
-    TILLR_TRACE_DIR is set.
-
-    When ENFORCE_SLOT_LIMITS is True, physical capacity locks (`slot-*`, `proof-*`, `gate-*`),
-    live holder metadata, and `holder-caps/` are shared directly under `lock_dir`.
-    Wait-signaling locks (`*-waiting.lock`) and FIFO wait tickets (`wait-queue/`) live under
-    `lock_dir/wait-rules/<SLOT_RULES_VERSION>` so processes straddling a slot-rules change
-    never read or yield to each other's wait queues.
-
-    Within one rules version, priority order is `repair > proof > gate > ordinary`, and
-    waiters within the same priority class are served in the order their wait began (FIFO):
-    - `ordinary` callers take only `slot-0..limit-1` and yield while any higher-priority
-      caller or earlier ordinary waiter is ahead of them.
-    - `gate` callers cap their simultaneous slots per gate (`max_slots`, default 8) and their
-      simultaneous reserved `gate-*` locks (`gate_reserved_limit`, default 4), try `slot-*`
-      then `gate-*` (never `proof-*`), yield `slot-*` to `repair`, `proof`, and earlier `gate`
-      waiters, and hold a shared lock on `gate-waiting.lock` while waiting.
-    - `proof` callers try `slot-*` then `proof-0..`, yield to `repair` and earlier `proof`
-      waiters, and hold a shared lock on `proof-waiting.lock` while waiting.
-    - `repair` callers (revert and trunk-fixer gates) take `slot-*`, `proof-*`, or `gate-*`
-      ahead of proof, gate, and ordinary callers, with FIFO order among simultaneous trunk
-      repairs.
-    The wait is outside every deadline the runner applies, so it cannot fail the work.
-    """
-    limit = max(1, limit)
-    chosen_class = resolve_slot_class(slot_class)
-    holder_name = resolve_holder_run(holder, chosen_class)
-    if chosen_class != SLOT_CLASS_ORDINARY:
-        env_class = os.environ.get(SLOT_CLASS_ENV, '').strip()
-        if env_class == SLOT_CLASS_REPAIR or is_trunk_repair_holder(holder_name):
-            chosen_class = SLOT_CLASS_REPAIR
-    if not ENFORCE_SLOT_LIMITS:
-        record_slot_wait(
-            start_wall_ms=int(time.time() * 1000), waited_ms=0, slot='unlimited',
-            slot_class=chosen_class, holder_name=holder_name, label=label, acquired=True,
-        )
-        yield
-        return
-    reserved_gate = (max(0, int(gate_limit)) if gate_limit is not None
-                     else default_gate_shard_limit(limit))
-    reserved_proof = (max(0, int(proof_limit)) if proof_limit is not None
-                      else default_proof_shard_limit(limit, reserved_gate))
-    effective_max_slots = (max(1, int(max_slots)) if max_slots is not None
-                           else (DEFAULT_GATE_MAX_SLOTS if chosen_class == SLOT_CLASS_GATE else None))
-    effective_gate_reserved = (
-        (max(0, int(gate_reserved_limit)) if gate_reserved_limit is not None
-         else DEFAULT_GATE_RESERVED_CAP)
-        if chosen_class == SLOT_CLASS_GATE else 0
-    )
-    my_priority = _CLASS_PRIORITY[chosen_class]
-    eligible_pools = SLOT_RULES['pools'][chosen_class]
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    rules_dir = wait_rules_dir(lock_dir)
-    queue_dir = wait_queue_dir(lock_dir)
-    cap_dir = (_holder_cap_dir(lock_dir, holder_name)
-               if (effective_max_slots is not None or effective_gate_reserved > 0)
-               else None)
-    total_cap_fd = None
-    gate_cap_fd = None
-    fd = None
-    slot_name = None
-    wait_fd = None
-    ticket_fd = None
-    ticket_path = None
-    ticket_name = None
-    ticket_meta = None
-    ticket_pools = None
-    wait_started = None
-    next_report_at = None
-    start_wall_ms = int(time.time() * 1000)
-    acquire_started = time.monotonic()
-    span_recorded = False
-    offset = os.getpid() + threading.get_ident()
-    try:
-        while total_cap_fd is None and effective_max_slots is not None:
-            total_cap_fd, _ = try_lock_slot(cap_dir, 'total', effective_max_slots, offset)
-            if total_cap_fd is not None:
-                break
-            now = time.monotonic()
-            if wait_started is None:
-                wait_started = now
-                next_report_at = now
-            if notify is not None and now >= next_report_at:
-                elapsed = int(round(now - wait_started))
-                after = f' after {elapsed}s' if elapsed > 0 else ''
-                notify(f'waiting for a test slot{after}: per-run cap ({effective_max_slots} slots) '
-                       f'reached for {holder_name} in {lock_dir} '
-                       '(not a failure; no timeout applies while waiting)')
-                next_report_at = time.monotonic() + WAIT_REPORT_INTERVAL
-            time.sleep(0.02)
-
-        while fd is None:
-            yield_class_s = _yielding_waiter_class(lock_dir, chosen_class, 's')
-            ahead_s = _waiter_ahead(queue_dir, 's', my_priority, ticket_name)
-            yielding_s = yield_class_s is not None or ahead_s is not None
-            if not yielding_s:
-                attempt_ns = _monotonic_ns() if ticket_name is None else None
-                fd, slot_name = try_lock_slot(lock_dir, 'slot', limit, offset)
-                if fd is not None:
-                    preempt_class_s = _yielding_waiter_class(lock_dir, chosen_class, 's')
-                    preempt_ahead_s = _waiter_ahead(queue_dir, 's', my_priority, ticket_name,
-                                                    before_ns=attempt_ns)
-                    if preempt_class_s is not None or preempt_ahead_s is not None:
-                        _unlock_and_close(fd)
-                        fd = None
-                        slot_name = None
-                        yield_class_s = preempt_class_s
-                        ahead_s = preempt_ahead_s
-                        yielding_s = True
-
-            if fd is None and 'p' in eligible_pools and reserved_proof > 0:
-                ahead_p = _waiter_ahead(queue_dir, 'p', my_priority, ticket_name)
-                if _yielding_waiter_class(lock_dir, chosen_class, 'p') is None and ahead_p is None:
-                    attempt_ns = _monotonic_ns() if ticket_name is None else None
-                    fd, slot_name = try_lock_slot(lock_dir, 'proof', reserved_proof, offset)
-                    if fd is not None and (
-                        _yielding_waiter_class(lock_dir, chosen_class, 'p') is not None
-                        or _waiter_ahead(queue_dir, 'p', my_priority, ticket_name,
-                                         before_ns=attempt_ns) is not None
-                    ):
-                        _unlock_and_close(fd)
-                        fd = None
-                        slot_name = None
-
-            gate_reserved_capped = False
-            if fd is None and 'g' in eligible_pools and reserved_gate > 0:
-                if chosen_class == SLOT_CLASS_GATE:
-                    if effective_gate_reserved > 0:
-                        ahead_g = _waiter_ahead(queue_dir, 'g', my_priority, ticket_name)
-                        if _yielding_waiter_class(lock_dir, chosen_class, 'g') is None and ahead_g is None:
-                            gate_cap_fd, _ = try_lock_slot(
-                                cap_dir, 'gate-reserved', effective_gate_reserved, offset,
-                            )
-                            if gate_cap_fd is None:
-                                gate_reserved_capped = True
-                            else:
-                                try:
-                                    attempt_ns = _monotonic_ns() if ticket_name is None else None
-                                    fd, slot_name = try_lock_slot(lock_dir, 'gate', reserved_gate, offset)
-                                    if fd is not None and (
-                                        _yielding_waiter_class(lock_dir, chosen_class, 'g') is not None
-                                        or _waiter_ahead(queue_dir, 'g', my_priority, ticket_name,
-                                                         before_ns=attempt_ns) is not None
-                                    ):
-                                        _unlock_and_close(fd)
-                                        fd = None
-                                        slot_name = None
-                                except BaseException:
-                                    _unlock_and_close(gate_cap_fd)
-                                    gate_cap_fd = None
-                                    raise
-                                if fd is None:
-                                    _unlock_and_close(gate_cap_fd)
-                                    gate_cap_fd = None
-                else:
-                    ahead_g = _waiter_ahead(queue_dir, 'g', my_priority, ticket_name)
-                    if _yielding_waiter_class(lock_dir, chosen_class, 'g') is None and ahead_g is None:
-                        attempt_ns = _monotonic_ns() if ticket_name is None else None
-                        fd, slot_name = try_lock_slot(lock_dir, 'gate', reserved_gate, offset)
-                        if fd is not None and (
-                            _yielding_waiter_class(lock_dir, chosen_class, 'g') is not None
-                            or _waiter_ahead(queue_dir, 'g', my_priority, ticket_name,
-                                             before_ns=attempt_ns) is not None
-                        ):
-                            _unlock_and_close(fd)
-                            fd = None
-                            slot_name = None
-            if fd is not None:
-                break
-
-            desired_pools = 's'
-            if 'p' in eligible_pools and reserved_proof > 0:
-                desired_pools += 'p'
-            if 'g' in eligible_pools and reserved_gate > 0 and (
-                chosen_class != SLOT_CLASS_GATE
-                or (effective_gate_reserved > 0 and not gate_reserved_capped)
-            ):
-                desired_pools += 'g'
-
-            if ticket_fd is None:
-                ticket_fd, ticket_path, ticket_name, ticket_meta = _register_wait_ticket(
-                    queue_dir, my_priority, desired_pools,
-                )
-                ticket_pools = desired_pools
-            elif desired_pools != ticket_pools:
-                ticket_path, ticket_name = _update_ticket_pools(
-                    queue_dir, ticket_path, ticket_meta, desired_pools,
-                )
-                ticket_pools = desired_pools
-
-            wait_lock_name = SLOT_RULES['wait_locks'].get(chosen_class)
-            if wait_lock_name and wait_fd is None:
-                rules_dir.mkdir(parents=True, exist_ok=True)
-                wait_fd = os.open(rules_dir / wait_lock_name, os.O_CREAT | os.O_RDWR, 0o666)
-                try:
-                    fcntl.flock(wait_fd, fcntl.LOCK_SH)
-                except BaseException:
-                    os.close(wait_fd)
-                    wait_fd = None
-                    raise
-            now = time.monotonic()
-            if wait_started is None:
-                wait_started = now
-                next_report_at = now
-            if notify is not None and now >= next_report_at:
-                holders = read_slot_holders(lock_dir)
-                expected = 1 if yielding_s else limit
-                if len(holders) < expected:
-                    time.sleep(0.005)
-                    holders = read_slot_holders(lock_dir)
-                elapsed = int(round(now - wait_started))
-                after = f' after {elapsed}s' if elapsed > 0 else ''
-                if chosen_class == SLOT_CLASS_REPAIR:
-                    pool_desc = (
-                        f'all {limit} ordinary, {reserved_proof} proof, and {reserved_gate} gate slots '
-                        f'in {lock_dir}'
-                    )
-                elif chosen_class == SLOT_CLASS_GATE:
-                    pool_desc = (
-                        f'all {limit} ordinary and eligible gate slots '
-                        f'({min(effective_gate_reserved, reserved_gate)}/{reserved_gate} per-gate cap) '
-                        f'in {lock_dir}'
-                    )
-                elif chosen_class == SLOT_CLASS_PROOF:
-                    pool_desc = f'all {limit} ordinary and {reserved_proof} proof slots in {lock_dir}'
-                else:
-                    pool_desc = f'ordinary share ({limit} slots) in {lock_dir}'
-                if yield_class_s == SLOT_CLASS_REPAIR or (
-                    ahead_s == _CLASS_PRIORITY[SLOT_CLASS_REPAIR]
-                    and chosen_class != SLOT_CLASS_REPAIR
-                ):
-                    why = 'yielding to a waiting trunk-repair run; '
-                elif yield_class_s == SLOT_CLASS_PROOF or (
-                    ahead_s == _CLASS_PRIORITY[SLOT_CLASS_PROOF]
-                    and SLOT_CLASS_PROOF in SLOT_RULES['yields_to'][chosen_class]['s']
-                ):
-                    why = 'yielding to a waiting proof run; '
-                elif yield_class_s == SLOT_CLASS_GATE or (
-                    ahead_s == _CLASS_PRIORITY[SLOT_CLASS_GATE]
-                    and SLOT_CLASS_GATE in SLOT_RULES['yields_to'][chosen_class]['s']
-                ):
-                    why = 'yielding to a waiting gate run; '
-                elif ahead_s is not None:
-                    why = 'waiting behind an earlier waiter; '
-                else:
-                    why = ''
-                detail = describe_slot_holders(holders, fallback_count=limit)
-                notify(f'waiting for a test slot{after}: {pool_desc} busy ({why}{detail}; '
-                       'not a failure; no timeout applies while waiting)')
-                next_report_at = time.monotonic() + WAIT_REPORT_INTERVAL
-            time.sleep(0.02)
-        if ticket_fd is not None:
-            _release_wait_ticket(ticket_fd, ticket_path)
-            ticket_fd = None
-            ticket_path = None
-        if wait_fd is not None:
-            _unlock_and_close(wait_fd)
-            wait_fd = None
-        waited_ms = (0 if wait_started is None
-                     else max(1, int(round((time.monotonic() - acquire_started) * 1000))))
-        record_slot_wait(
-            start_wall_ms=start_wall_ms, waited_ms=waited_ms, slot=slot_name,
-            slot_class=chosen_class, holder_name=holder_name, label=label, acquired=True,
-        )
-        span_recorded = True
-        meta_fd, meta_path = write_slot_holder(lock_dir, slot_name, holder_name, chosen_class)
-    except BaseException:
-        if not span_recorded:
-            waited_ms = (0 if wait_started is None
-                         else max(0, int(round((time.monotonic() - acquire_started) * 1000))))
-            record_slot_wait(
-                start_wall_ms=start_wall_ms, waited_ms=waited_ms, slot=None,
-                slot_class=chosen_class, holder_name=holder_name, label=label, acquired=False,
-            )
-            span_recorded = True
-        _release_wait_ticket(ticket_fd, ticket_path)
-        _unlock_and_close(wait_fd)
-        _unlock_and_close(fd)
-        _unlock_and_close(gate_cap_fd)
-        _unlock_and_close(total_cap_fd)
-        raise
-    try:
-        yield
-    finally:
-        try:
-            with contextlib.suppress(OSError):
-                meta_path.unlink()
-            os.close(meta_fd)
-        finally:
-            try:
-                _unlock_and_close(fd)
-            finally:
-                try:
-                    _unlock_and_close(gate_cap_fd)
-                finally:
-                    _unlock_and_close(total_cap_fd)
-
-
 def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=None,
-              wall_timeout=DEFAULT_SHARD_TIMEOUT, lock_dir=None, shard_limit=None,
-              slot_class=None, proof_limit=None, gate_limit=None, max_slots=None,
-              gate_reserved_limit=None, holder=None, progress=None):
+              wall_timeout=DEFAULT_SHARD_TIMEOUT, progress=None):
     label = f'{package} shard {index}'
     env = private_environment(label, scratch, git_values)
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ShardError(f'{label} cannot start: test binary is missing or not executable: {binary}')
-    # The lock is held for the whole binary lifetime. Neither the Go timeout nor
-    # the progress watchdog starts until this shard has its own test capacity.
-    effective_lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
-    effective_limit = shard_limit if shard_limit is not None else default_shard_limit()
     pattern = '^(' + '|'.join(re.escape(n) for n in names) + ')$'
     command = ['go', 'tool', 'test2json', '-t', '-p', package, str(binary),
-               '-test.v=test2json', '-test.count=1', f'-test.parallel={TESTS_PER_SLOT}',
+               '-test.v=test2json', '-test.count=1', '-test.parallel=1',
                '-test.timeout=' + timeout, '-test.run=' + pattern]
     try:
         # Files rather than pipes let us recover even if an escaped descendant keeps
         # its inherited output descriptors open after the shard itself is killed.
-        with acquire_shard_slot(effective_lock_dir, effective_limit,
-                                lambda message: print(f'go-test-shards: {label} {message}',
-                                                      file=sys.stderr, flush=True),
-                                slot_class=slot_class, proof_limit=proof_limit,
-                                gate_limit=gate_limit, max_slots=max_slots,
-                                gate_reserved_limit=gate_reserved_limit, holder=holder,
-                                label=label), \
-                tempfile.NamedTemporaryFile(dir=scratch) as out, tempfile.NamedTemporaryFile(dir=scratch) as err, \
+        with tempfile.NamedTemporaryFile(dir=scratch) as out, tempfile.NamedTemporaryFile(dir=scratch) as err, \
                 open(out.name, 'rb') as reader, open(err.name, 'rb') as error_reader, \
                 contextlib.ExitStack() as cleanup:
             lifeline_read, lifeline_write = os.pipe()
@@ -1356,28 +599,16 @@ def _classify_group_cache(events):
 
 def run_cached_group(package, cwd, names, index, scratch_key, durable, timeout,
                      base_env, git_values, *, explicit_scratch=False, edge_digest=None,
-                     run_pattern=None, wall_timeout=DEFAULT_SHARD_TIMEOUT, lock_dir=None,
-                     shard_limit=None, slot_class=None, proof_limit=None, gate_limit=None,
-                     max_slots=None, gate_reserved_limit=None, holder=None, progress=None):
+                     run_pattern=None, wall_timeout=DEFAULT_SHARD_TIMEOUT, progress=None):
     label = f'{package} shard {index}'
     go_affected = _load_go_affected()
-    effective_lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
-    effective_limit = shard_limit if shard_limit is not None else default_shard_limit()
-    command = ['go', 'test', '-json', '-timeout', timeout, '-parallel', str(TESTS_PER_SLOT)]
+    command = ['go', 'test', '-json', '-timeout', timeout, '-parallel', '1']
     if run_pattern is not None:
         command.extend(['-run', run_pattern])
     command.append(package)
 
     try:
-        with acquire_shard_slot(
-            effective_lock_dir, effective_limit,
-            lambda message: print(f'go-test-shards: {label} {message}', file=sys.stderr, flush=True),
-            slot_class=slot_class, proof_limit=proof_limit,
-            gate_limit=gate_limit, max_slots=max_slots,
-            gate_reserved_limit=gate_reserved_limit, holder=holder,
-            label=label,
-        ), \
-                go_affected.acquire_invocation_scratch(durable, scratch_key) as (scratch_dir, _pool_dir):
+        with go_affected.acquire_invocation_scratch(durable, scratch_key) as (scratch_dir, _pool_dir):
             try:
                 env = go_affected._bypass_git_shim_env(base_env, scratch_dir)
                 env['YOLO_DURABLE_DIR'] = str(scratch_dir)
@@ -1533,9 +764,8 @@ def run_cached_group(package, cwd, names, index, scratch_key, durable, timeout,
 
 
 def _run_cached(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT,
-                lock_dir=None, slot_class=None, proof_limit=None, gate_limit=None,
-                max_slots=None, gate_reserved_limit=None, holder=None, evidence_out=None,
-                progress_file=None, progress_interval=DEFAULT_PROGRESS_INTERVAL,
+                evidence_out=None, progress_file=None,
+                progress_interval=DEFAULT_PROGRESS_INTERVAL,
                 explicit_scratch=False, durable_dir=None, uncached_events=None):
     _check_cached_worker_refusal(module)
     if progress_file is not None and (not math.isfinite(progress_interval) or progress_interval <= 0):
@@ -1580,10 +810,6 @@ def _run_cached(module, count, durations, scratch, timeout, *, shard_timeout=DEF
         raise discovery_error
 
     git_values = go_affected._global_git_config(env=raw_env_snap)
-    lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
-    shard_limit = default_shard_limit()
-    resolved_class = resolve_slot_class(slot_class)
-    resolved_holder = resolve_holder_run(holder, resolved_class)
     durable = (
         str(durable_dir) if durable_dir is not None
         else (raw_env_snap.get('YOLO_DURABLE_DIR') or raw_env_snap.get('TMPDIR') or str(scratch))
@@ -1632,9 +858,7 @@ def _run_cached(module, count, durations, scratch, timeout, *, shard_timeout=DEF
             jobs.append((
                 ip, module, names, 0, ip, durable, timeout, base_env, git_values,
                 explicit_scratch, digest_for(ip, None), run_pattern,
-                shard_timeout, lock_dir, shard_limit, resolved_class,
-                proof_limit, gate_limit, max_slots, gate_reserved_limit,
-                resolved_holder, progress,
+                shard_timeout, progress,
             ))
         else:
             has_edge_test = 'TestEdgeInputs' in names
@@ -1653,9 +877,7 @@ def _run_cached(module, count, durations, scratch, timeout, *, shard_timeout=DEF
                     ip, module, shard_names, shard_idx, f'{ip}#shard-{shard_idx}',
                     durable, timeout, base_env, git_values,
                     explicit_scratch, digest_for(ip, bucket), pattern,
-                    shard_timeout, lock_dir, shard_limit, resolved_class,
-                    proof_limit, gate_limit, max_slots, gate_reserved_limit,
-                    resolved_holder, progress,
+                    shard_timeout, progress,
                 ))
             planned_groups[ip] = len(pkg_jobs)
             jobs.extend(pkg_jobs)
@@ -1667,16 +889,12 @@ def _run_cached(module, count, durations, scratch, timeout, *, shard_timeout=DEF
             futures = {}
             for job_index, job in enumerate(jobs):
                 (ip, mod_dir, names, shard_idx, scratch_key, dur, to, benv, gv,
-                 exp_scr, edigest, rpat, sto, ldir, slim, rcls, plim, glim, mslots,
-                 gres, rhold, prog) = job
+                 exp_scr, edigest, rpat, sto, prog) = job
                 fut = pool.submit(
                     run_cached_group,
                     ip, mod_dir, names, shard_idx, scratch_key, dur, to, benv, gv,
                     explicit_scratch=exp_scr, edge_digest=edigest, run_pattern=rpat,
-                    wall_timeout=sto, lock_dir=ldir, shard_limit=slim,
-                    slot_class=rcls, proof_limit=plim, gate_limit=glim,
-                    max_slots=mslots, gate_reserved_limit=gres, holder=rhold,
-                    progress=prog,
+                    wall_timeout=sto, progress=prog,
                 )
                 futures[fut] = (job_index, ip, shard_idx)
             for future in as_completed(futures):
@@ -1724,19 +942,16 @@ def _run_cached(module, count, durations, scratch, timeout, *, shard_timeout=DEF
 
 
 def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT,
-        lock_dir=None, slot_class=None, proof_limit=None, gate_limit=None,
-        max_slots=None, gate_reserved_limit=None, holder=None, evidence_out=None,
-        progress_file=None, progress_interval=DEFAULT_PROGRESS_INTERVAL,
-        cache=False, explicit_scratch=False, durable_dir=None, uncached_events=None):
+        evidence_out=None, progress_file=None,
+        progress_interval=DEFAULT_PROGRESS_INTERVAL, cache=False,
+        explicit_scratch=False, durable_dir=None, uncached_events=None):
     if cache:
         return _run_cached(
             module, count, durations, scratch, timeout,
-            shard_timeout=shard_timeout, lock_dir=lock_dir, slot_class=slot_class,
-            proof_limit=proof_limit, gate_limit=gate_limit, max_slots=max_slots,
-            gate_reserved_limit=gate_reserved_limit, holder=holder,
-            evidence_out=evidence_out, progress_file=progress_file,
-            progress_interval=progress_interval, explicit_scratch=explicit_scratch,
-            durable_dir=durable_dir, uncached_events=uncached_events,
+            shard_timeout=shard_timeout, evidence_out=evidence_out,
+            progress_file=progress_file, progress_interval=progress_interval,
+            explicit_scratch=explicit_scratch, durable_dir=durable_dir,
+            uncached_events=uncached_events,
         )
     if progress_file is not None and (not math.isfinite(progress_interval) or progress_interval <= 0):
         raise ValueError('progress interval must be a positive finite number of seconds')
@@ -1779,10 +994,6 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
         raise discovery_error
     jobs = []
     git_values = global_git_config()
-    lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
-    shard_limit = default_shard_limit()
-    resolved_class = resolve_slot_class(slot_class)
-    resolved_holder = resolve_holder_run(holder, resolved_class)
     for number, package in enumerate(packages):
         if not package.get('TestGoFiles') and not package.get('XTestGoFiles'):
             continue
@@ -1803,9 +1014,7 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
             if group or (not names and index == 0):
                 jobs.append((package['ImportPath'], Path(package['Dir']), binary, group,
                              index, scratch / f'package-{number}-shard-{index}', timeout, git_values,
-                             shard_timeout, lock_dir, shard_limit, resolved_class,
-                             proof_limit, gate_limit, max_slots, gate_reserved_limit,
-                             resolved_holder, progress))
+                             shard_timeout, progress))
     events = []
     shard_errors = []
     # Each package has at most K jobs. Run packages side by side, just as go test
@@ -1835,13 +1044,7 @@ def main():
     if sys.argv[1:2] == [GUARD_FLAG]:
         return guard_main(int(sys.argv[2]), sys.argv[4:])
     install_signal_handlers()
-    parser = argparse.ArgumentParser(
-        description=__doc__,
-        epilog='Each held slot permits one concurrent Go test. On 32 logical CPUs, '
-               '12 ordinary, 4 proof, and 6 gate slots permit at most 22 concurrent tests. '
-               'Waiting messages report live holders by run. Use the same shared pool '
-               'for all runs; direct go test does not participate.',
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('module', type=Path, nargs='?')
     parser.add_argument('-k', '--shards', type=int, default=6)
     parser.add_argument('--cache', action='store_true',
@@ -1852,15 +1055,6 @@ def main():
     parser.add_argument('--record', type=Path, help='write measured top-level durations after success')
     parser.add_argument('--events', type=Path, help='write Go test JSON events, including failed shards')
     parser.add_argument('--scratch', type=Path, help='parent of private scratch; defaults to TMPDIR or YOLO_DURABLE_DIR')
-    parser.add_argument('--lock-dir', type=Path, help='shared lock directory; defaults to $GO_TEST_SHARDS_LOCK_DIR, then <GOCACHE>/go-test-shards-locks')
-    parser.add_argument('--slot-class', choices=SLOT_CLASSES, default=None,
-                        help='slot pool class: repair (revert and trunk-fixer gates; preempts all others), '
-                             'proof (trunk proof; preempts gate and ordinary), '
-                             'gate (landing gates; preempts ordinary), or ordinary (default, or $GO_TEST_SHARDS_CLASS)')
-    parser.add_argument('--max-slots', type=int, default=None, metavar='N',
-                        help=f'maximum simultaneous slots held by this run (default {DEFAULT_GATE_MAX_SLOTS} for --slot-class gate; unlimited otherwise)')
-    parser.add_argument('--holder', default=None,
-                        help='run name reported to waiting callers; defaults to $GO_TEST_SHARDS_HOLDER, $TILLR_RUN_ID, or $TILLR_GATE_SPANS_OUT')
     parser.add_argument('--timeout', default='0', help='explicit Go test timeout; default disables Go\'s own deadline')
     parser.add_argument('--shard-timeout', type=float, default=None, metavar='SECONDS',
                         help=f'maximum seconds without top-level test progress per shard (default {DEFAULT_SHARD_TIMEOUT:g})')
@@ -1888,8 +1082,6 @@ def main():
         parser.error('the following arguments are required: module')
     if args.shards < 1:
         parser.error('shards must be positive')
-    if args.max_slots is not None and args.max_slots < 1:
-        parser.error('max slots must be positive')
     if args.shard_timeout is not None and (not math.isfinite(args.shard_timeout) or args.shard_timeout <= 0):
         parser.error('shard timeout must be a positive finite number of seconds')
     if not math.isfinite(args.progress_interval) or args.progress_interval <= 0:
@@ -1903,14 +1095,6 @@ def main():
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='go-shards-', dir=parent) as temporary:
             options = {} if args.shard_timeout is None else {'shard_timeout': args.shard_timeout}
-            if args.lock_dir is not None:
-                options['lock_dir'] = args.lock_dir.resolve()
-            if args.slot_class is not None:
-                options['slot_class'] = args.slot_class
-            if args.max_slots is not None:
-                options['max_slots'] = args.max_slots
-            if args.holder is not None:
-                options['holder'] = args.holder
             # Consume this invocation's handoff, rather than exposing it to test binaries.
             if evidence_out := os.environ.pop('TILLR_GO_SHARDS_EVIDENCE_OUT', None):
                 options['evidence_out'] = evidence_out

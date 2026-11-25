@@ -433,14 +433,8 @@ separately controls Go's own test deadline.
 python3 tools/go-test-shards.py tools/tillr-drain -k 6 --scratch "$TMPDIR"
 ```
 
-Every shard takes a slot from one machine-wide pool shared by all lanes, with a reserved
-share and wait priority kept for the trunk proof and the landing gate (`--slot-class
-proof`, which lane workers must never pass), so total test parallelism stays near the core
-count. A runner that must wait prints `waiting for a test slot` with the lock directory
-and the runs holding slots; the wait is not a failure and no timeout applies to it, so do
-not retry or raise a timeout. Never run `go test ./...` on a whole suite directly: it
-bypasses the pool, and several lanes doing so at once overloaded the machine and hit Go's
-ten-minute timeout.
+Never run `go test ./...` on a whole suite directly: several lanes doing so at once
+overloaded the machine and hit Go's ten-minute timeout.
 
 Replace the module path for another tillr module and point `--scratch` at the run's
 scratch directory. On each iteration, run the narrowest test selection (the specific

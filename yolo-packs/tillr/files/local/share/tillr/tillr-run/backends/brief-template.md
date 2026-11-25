@@ -124,9 +124,8 @@ printf '%s\n' c1 >> "$TILLR_PROGRESS_FILE"
 ```
 
 Do not run a whole module suite in a lane. The landing gate runs every suite your change
-selects, once, with priority on the test slots, and a failure there comes back to this run
-naming the test. A whole suite run in a lane waits for the same slots and is then run
-again by the gate. When a failure is
+selects, once, and a failure there comes back to this run naming the test. A whole suite
+run in a lane is just run again by the gate. When a failure is
 handed to you (a red check, a gate log, a triage packet), it already names the failing
 test: run that test, not the suite it came from.
 
@@ -139,15 +138,8 @@ selection covers it:
 python3 tools/go-test-shards.py tools/tillr-drain -k 6
 ```
 
-The runner takes a slot from one machine-wide pool shared by every lane, with a reserved
-share and wait priority kept for the trunk proof and the landing gate (`--slot-class
-proof`, which lane workers must never pass), so total test parallelism stays near the core
-count however many lanes run suites at once. A runner that has to wait prints `waiting for
-a test slot` with the lock directory and the runs holding slots; that wait is not a
-failure and no timeout applies to it. Do not call `go test ./...` on a whole suite
-directly: it bypasses the pool, and several lanes doing so at once drove the load average
-past 60 and made `go test` hit its ten-minute timeout. Never retry or raise a timeout to
-get past a wait.
+Do not call `go test ./...` on a whole suite directly: several lanes doing so at once
+drove the load average past 60 and made `go test` hit its ten-minute timeout.
 
 Never end processes by name or pattern: no `pkill`, no `killall`, no `kill` fed from
 `pgrep`. Every lane, the landing gate and the trunk's after-merge proof run this same

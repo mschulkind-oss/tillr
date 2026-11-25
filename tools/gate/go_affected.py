@@ -2027,16 +2027,6 @@ def run_selected_tests(
         )
 
     base_env = build_env()
-    slot_class = (
-        shards_mod.resolve_slot_class(os.environ.get("GO_TEST_SHARDS_CLASS") or shards_mod.SLOT_CLASS_GATE)
-        if shards_mod is not None
-        else None
-    )
-    holder = (
-        shards_mod.resolve_holder_run(None, slot_class)
-        if shards_mod is not None
-        else None
-    )
     git_values: list[tuple[str, str]] = []
     with contextlib.suppress(OSError, subprocess.CalledProcessError):
         git_values = _global_git_config(base_env)
@@ -2174,23 +2164,9 @@ def run_selected_tests(
             else:
                 env.pop("TILLR_GATE_EDGE_INPUTS", None)
 
-            if shards_mod is not None:
-                wait_start = time.monotonic()
-                with shards_mod.acquire_shard_slot(
-                    shards_mod.default_lock_dir(),
-                    shards_mod.default_shard_limit(),
-                    slot_class=slot_class,
-                    holder=holder,
-                    label=f"go-affected:{mod}",
-                ):
-                    wait_ms = int(round((time.monotonic() - wait_start) * 1000))
-                    rc, stdout = _run_guarded_command(
-                        cmd, cwd=root / mod, env=env, out_dir=out_dir, on_line=emit_progress
-                    )
-            else:
-                rc, stdout = _run_guarded_command(
-                    cmd, cwd=root / mod, env=env, out_dir=out_dir, on_line=emit_progress
-                )
+            rc, stdout = _run_guarded_command(
+                cmd, cwd=root / mod, env=env, out_dir=out_dir, on_line=emit_progress
+            )
         parsed, readable = parse_go_test_json(stdout)
         return rc, readable, wait_ms, parsed
 

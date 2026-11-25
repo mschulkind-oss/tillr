@@ -4,7 +4,7 @@
   "command": [
     "sh",
     "-c",
-    "CGO_ENABLED=0 python3 tools/go-test-shards.py tools/tillr-view -k 6 --cache --slot-class proof --timeout 0"
+    "CGO_ENABLED=0 python3 tools/go-test-shards.py tools/tillr-view -k 6 --cache --timeout 0"
   ],
   "scope": "tree",
   "tier": "heavy",
