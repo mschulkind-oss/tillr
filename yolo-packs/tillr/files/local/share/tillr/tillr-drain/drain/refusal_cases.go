@@ -2,6 +2,7 @@ package drain
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -40,17 +41,7 @@ const (
 // recorded log: either the whole log or its bounded `.triage.log` sibling, whose whole log
 // is the name without `.triage`. An unreadable or block-less log answers nothing.
 func readTriageBlock(logRef string) []FailingCheck {
-	if logRef == "" {
-		return nil
-	}
-	whole := strings.TrimSuffix(logRef, ".triage.log")
-	if whole != logRef {
-		whole += ".log"
-	}
-	f, err := os.Open(whole)
-	if err != nil && whole != logRef {
-		f, err = os.Open(logRef)
-	}
+	f, err := openCheckLog(logRef)
 	if err != nil {
 		return nil
 	}
@@ -105,6 +96,210 @@ func readTriageBlock(logRef string) []FailingCheck {
 	return checks
 }
 
+func openCheckLog(logRef string) (*os.File, error) {
+	if logRef == "" {
+		return nil, os.ErrNotExist
+	}
+	whole := strings.TrimSuffix(logRef, ".triage.log")
+	if whole != logRef {
+		whole += ".log"
+	}
+	f, err := os.Open(whole)
+	if err != nil && whole != logRef {
+		f, err = os.Open(logRef)
+	}
+	return f, err
+}
+
+type goTestFailure struct {
+	Package string
+	Test    string
+}
+
+type goTestLogResult struct {
+	Failures      []goTestFailure
+	SawTestResult bool
+}
+
+// readGoTestFailures scans a check's log (following `.triage.log` to its whole `.log`
+// sibling) for Go test failures and package results when no triage packet recorded cases.
+func readGoTestFailures(logRef string) goTestLogResult {
+	f, err := openCheckLog(logRef)
+	if err != nil {
+		return goTestLogResult{}
+	}
+	defer f.Close()
+
+	var (
+		res           goTestLogResult
+		pendingTests  []string
+		inGoAffected  bool
+		recorded      []goTestFailure
+		seen          = map[goTestFailure]bool{}
+		testsWithPkg  = map[string]bool{}
+		pkgsWithTests = map[string]bool{}
+	)
+	addPending := func(name string) {
+		for _, p := range pendingTests {
+			if p == name {
+				return
+			}
+		}
+		pendingTests = append(pendingTests, name)
+	}
+	record := func(pkg, test string) {
+		key := goTestFailure{Package: pkg, Test: test}
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		recorded = append(recorded, key)
+		if pkg != "" && test != "" {
+			testsWithPkg[test] = true
+			pkgsWithTests[pkg] = true
+		}
+	}
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64<<10), triageScanMax)
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			inGoAffected = false
+			continue
+		}
+		if strings.HasPrefix(trimmed, "{") && strings.Contains(trimmed, `"Action"`) {
+			var ev struct {
+				Action  string `json:"Action"`
+				Package string `json:"Package"`
+				Test    string `json:"Test"`
+			}
+			if json.Unmarshal([]byte(trimmed), &ev) == nil && ev.Action != "" {
+				if ev.Action == "pass" || ev.Action == "fail" || ev.Action == "skip" {
+					res.SawTestResult = true
+					if ev.Action == "fail" {
+						if ev.Test != "" {
+							record(ev.Package, ev.Test)
+						} else if ev.Package != "" {
+							record(ev.Package, "")
+						}
+					}
+				}
+				continue
+			}
+		}
+		if shardLine, shardNames := parseShardFailureLine(trimmed); shardLine != "" {
+			res.SawTestResult = true
+			rest := strings.TrimPrefix(shardLine, "go-test-shards: ")
+			pkg := ""
+			if fields := strings.Fields(rest); len(fields) >= 3 && fields[1] == "shard" {
+				pkg = fields[0]
+			}
+			if len(shardNames) > 0 {
+				for _, name := range shardNames {
+					record(pkg, name)
+				}
+			} else if pkg != "" {
+				record(pkg, "")
+			}
+			continue
+		}
+		if trimmed == "go-affected: failing packages and tests:" {
+			inGoAffected = true
+			res.SawTestResult = true
+			continue
+		}
+		if inGoAffected {
+			if strings.HasPrefix(line, "  ") {
+				if pkg, rest, ok := strings.Cut(trimmed, ":"); ok {
+					pkg = strings.TrimSpace(pkg)
+					rest = strings.TrimSpace(rest)
+					if rest != "" && !strings.Contains(rest, "(no failing test named)") && !strings.Contains(rest, "(package failure with no named test)") {
+						for _, part := range strings.Split(rest, ",") {
+							if name := strings.TrimSpace(part); name != "" {
+								record(pkg, name)
+							}
+						}
+					} else if pkg != "" {
+						record(pkg, "")
+					}
+					continue
+				}
+			}
+			inGoAffected = false
+		}
+		if strings.HasPrefix(trimmed, "--- FAIL:") {
+			res.SawTestResult = true
+			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "--- FAIL:"))
+			if fields := strings.Fields(rest); len(fields) > 0 {
+				addPending(fields[0])
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "--- PASS:") || strings.HasPrefix(trimmed, "--- SKIP:") {
+			res.SawTestResult = true
+			continue
+		}
+		if trimmed == "FAIL" {
+			res.SawTestResult = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "FAIL\t") || strings.HasPrefix(trimmed, "FAIL ") {
+			if fields := strings.Fields(trimmed); len(fields) >= 2 && fields[0] == "FAIL" {
+				pkg := fields[1]
+				res.SawTestResult = true
+				if len(pendingTests) > 0 {
+					for _, t := range pendingTests {
+						record(pkg, t)
+					}
+					pendingTests = nil
+				} else {
+					record(pkg, "")
+				}
+				continue
+			}
+		}
+		if strings.HasPrefix(trimmed, "ok\t") || strings.HasPrefix(trimmed, "ok  \t") ||
+			strings.HasPrefix(trimmed, "?\t") || strings.HasPrefix(trimmed, "?   \t") {
+			if fields := strings.Fields(trimmed); len(fields) >= 2 && (fields[0] == "ok" || fields[0] == "?") {
+				res.SawTestResult = true
+				pendingTests = nil
+				continue
+			}
+		}
+	}
+	if scanner.Err() != nil {
+		return goTestLogResult{}
+	}
+	for _, t := range pendingTests {
+		if !testsWithPkg[t] {
+			record("", t)
+		}
+	}
+	// Drop a parent test when one of its subtests failed in the same package, and drop
+	// bare package failures when named failing tests were recorded for that package.
+	hasSubtest := func(pkg, test string) bool {
+		prefix := test + "/"
+		for _, r := range recorded {
+			if r.Package == pkg && strings.HasPrefix(r.Test, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, r := range recorded {
+		if r.Test == "" && pkgsWithTests[r.Package] {
+			continue
+		}
+		if r.Test != "" && hasSubtest(r.Package, r.Test) {
+			continue
+		}
+		res.Failures = append(res.Failures, r)
+	}
+	return res
+}
+
 // failureSummary is the answer's opening: each failing check, each failing case's test
 // name, file and line, assertion and reproduce command, then the instruction to run that
 // named test. A check with no recorded case says "no failing case was recorded" and keeps
@@ -119,6 +314,35 @@ func failureSummary(checks []EndingCheck) string {
 	ran := false
 	for _, c := range checks {
 		if len(c.Failing) == 0 {
+			goRes := readGoTestFailures(c.LogRef)
+			if len(goRes.Failures) > 0 {
+				var part strings.Builder
+				fmt.Fprintf(&part, "check %s\n", c.CheckID)
+				for _, gf := range goRes.Failures {
+					if gf.Test != "" {
+						fmt.Fprintf(&part, "  case: %s\n", gf.Test)
+						if gf.Package != "" {
+							fmt.Fprintf(&part, "    package: %s\n", gf.Package)
+						}
+					} else if gf.Package != "" {
+						fmt.Fprintf(&part, "  package: %s (no failing test named)\n", gf.Package)
+					}
+				}
+				if b.Len()+part.Len() > failureSummaryMax {
+					b.WriteString("(more failing checks omitted; the gate's log has them)\n")
+					goto done
+				}
+				b.WriteString(part.String())
+				continue
+			}
+			if goRes.SawTestResult {
+				fmt.Fprintf(&b, "check %s: Go tests passed", c.CheckID)
+				if c.LogRef != "" {
+					fmt.Fprintf(&b, "; the gate's log is %s", c.LogRef)
+				}
+				b.WriteString("\n")
+				continue
+			}
 			fmt.Fprintf(&b, "check %s: %s", c.CheckID, noCaseRecorded)
 			if c.LogRef != "" {
 				fmt.Fprintf(&b, "; the gate's log is %s", c.LogRef)
@@ -147,12 +371,40 @@ func failureSummary(checks []EndingCheck) string {
 				}
 			}
 			if len(fc.Cases) == 0 {
-				fmt.Fprintf(&part, "  %s", noCaseRecorded)
-				if fc.Reproduce != "" {
-					fmt.Fprintf(&part, "; reproduce with: %s", fc.Reproduce)
-					ran = true
+				var goRes goTestLogResult
+				if len(c.Failing) == 1 {
+					goRes = readGoTestFailures(c.LogRef)
 				}
-				part.WriteString("\n")
+				if len(goRes.Failures) > 0 {
+					for _, gf := range goRes.Failures {
+						if gf.Test != "" {
+							fmt.Fprintf(&part, "  case: %s\n", gf.Test)
+							if gf.Package != "" {
+								fmt.Fprintf(&part, "    package: %s\n", gf.Package)
+							}
+						} else if gf.Package != "" {
+							fmt.Fprintf(&part, "  package: %s (no failing test named)\n", gf.Package)
+						}
+					}
+					if fc.Reproduce != "" {
+						fmt.Fprintf(&part, "  reproduce with: %s\n", fc.Reproduce)
+						ran = true
+					}
+				} else if goRes.SawTestResult {
+					fmt.Fprintf(&part, "  Go tests passed")
+					if fc.Reproduce != "" {
+						fmt.Fprintf(&part, "; reproduce with: %s", fc.Reproduce)
+						ran = true
+					}
+					part.WriteString("\n")
+				} else {
+					fmt.Fprintf(&part, "  %s", noCaseRecorded)
+					if fc.Reproduce != "" {
+						fmt.Fprintf(&part, "; reproduce with: %s", fc.Reproduce)
+						ran = true
+					}
+					part.WriteString("\n")
+				}
 			}
 			if b.Len()+part.Len() > failureSummaryMax {
 				b.WriteString("(more failing checks omitted; the gate's log has them)\n")
