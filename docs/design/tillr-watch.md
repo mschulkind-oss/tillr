@@ -7,7 +7,7 @@ stage: DECIDED
 stage-since: 2026-11-24
 tags: [tillr, watch, alerting, lint, workflows, charter, foreground]
 summary: "Standing rules, kept as data, that read the tillr store and open one alert per condition for the agent in the foreground; an alert never fails, benches or caps work."
-next: "Build agent watches, the subscribe stream, the outcome record and the five designed rules in Sections 5.14 to 5.18; the owner reviews the designer decisions in the ledger."
+next: "Build agent watches, the subscribe stream, the outcome record, the five designed rules in Sections 5.14 to 5.18, and the session-relaunch provenance in Section 5.19; the owner reviews the designer decisions in the ledger."
 related:
   - ./landing-principles.md
   - ../reference/run-wall-ruling.md
@@ -25,8 +25,9 @@ vantage:
 # Agent Alerting and Process Watchdog (`tillr-watch`)
 
 **Status:** every question is ruled; the engine, the command line, the linter and 36 rules are
-built; agent watches, the subscribe stream and five designed rules are not. The Built column of the
-[decision ledger](#9-decision-ledger) says which is which.
+built; agent watches, the subscribe stream, five designed rules and the session-relaunch provenance
+on `drain-unrequested-start` ([Section 5.19](#519-session-relaunch-provenance-on-drain-unrequested-start-d-tw82))
+are not. The Built column of the [decision ledger](#9-decision-ledger) says which is which.
 
 > **In short:** `tillr-watch` reads the tillr store, judges it against standing rules written as
 > TOML, and keeps one alert per condition until the condition ends. It tells the foreground agent
@@ -429,7 +430,10 @@ probe is specified in [`tillr-closed-backend-probe.md`](./tillr-closed-backend-p
 only a drain build with all three empty or false, so a restart someone asked for, a start after a
 requested stop, and the first start of a store are all quiet. The restart protocol is described in
 the [restart reference](../reference/tillr-restart.md). The rule's guidance says what to check and
-does not describe the start as normal ([D-TW74](#D-TW74)).
+does not describe the start as normal ([D-TW74](#D-TW74)). Unbuilt provenance for a start after
+the whole operating session ended is specified in
+[Section 5.19](#519-session-relaunch-provenance-on-drain-unrequested-start-d-tw82)
+([D-TW82](#D-TW82)).
 
 ### 5.13 Drain refusals across different items with no landing between them ([D-TW76](#D-TW76))
 
@@ -470,6 +474,150 @@ is open while the latest green proof already covers the checks it was filed for.
 Partly built. Both processes should be idle between events, so sustained CPU in either is a defect
 worth an alert. The drain records `drain.process-cpu` samples. The rule and the `for_each` key it
 needs, to open one episode per sampled process, are not built.
+
+### 5.19 Session-relaunch provenance on `drain-unrequested-start` ([D-TW82](#D-TW82))
+
+Designed, not built. The loop-restart design graduated in commit `ec98c55f` to the
+[restart reference](../reference/tillr-restart.md), which records built behavior only, so unbuilt
+loop-start provenance for `drain-unrequested-start` is specified here beside [D-TW44](#D-TW44) and
+[D-TW71](#D-TW71) ([Section 5.12](#512-requested-stop-and-start-quiet-on-drain-unrequested-start-d-tw71))
+and updates the [restart reference](../reference/tillr-restart.md) in the final build slice below.
+This section answers a 2026-11-24 operator request from a **consumer repository** (a repository
+whose queue tillr works using the binaries the tillr pack delivers, without carrying tillr's
+source). Every mechanism, field name, rule change and rejected alternative below is the designer's
+decision, not an owner ruling, and the owner may overturn any of it.
+
+Two terms apply here. A **process domain** is the `<boot_id>:<pid_ns>` pair recorded on
+`presence.Owner.Domain` in [`tools/tillr-drain/presence/presence.go`](../../tools/tillr-drain/presence/presence.go)
+from `/proc/sys/kernel/random/boot_id` and `/proc/self/ns/pid`, identifying one OS boot and Linux
+PID namespace. A **session relaunch** is a `tillr-drain loop` start in a new process domain after
+the prior process domain's loop ended without a recorded loop fault, stop request or in-place
+restart request.
+
+#### Why `drain-unrequested-start` fires on session relaunch today
+
+When an operating session's container or jail exits (closing PID 1 in a Linux PID namespace sends
+`SIGKILL` to every background process in that namespace) or the host reboots,
+[`tools/tillr-roll/tillr-keep`](../../tools/tillr-roll/tillr-keep) and `tillr-drain loop` vanish
+together without running `tillr drain stop` or `endSession`. On the next session launch,
+`publishDrainBuild` in [`tools/tillr-drain/drain/restart.go`](../../tools/tillr-drain/drain/restart.go)
+sees an earlier `drain.build-started` for `role == "drain"`, no `TILLR_RESTART_REQUEST`, and no
+newer `drain.stop-requested` (landed in commit `7afe7a37`), so it appends `drain.build-started`
+with `restart_request`, `stop_request` and `initial` all absent — matching
+[`config/tillr/watch/drain-unrequested-start.toml`](../../config/tillr/watch/drain-unrequested-start.toml).
+
+#### Who leaves the record, and what was set aside *(designer's decisions)*
+
+- **The loop (`tillr-drain`), not `tillr-keep`, writes and reads the record.** Consumer
+  repositories and manual runs invoke `tillr-drain loop` either under
+  [`tools/tillr-roll/tillr-keep`](../../tools/tillr-roll/tillr-keep) or directly
+  ([`tillr-separable-parts.md`](./tillr-separable-parts.md#21-the-stable-surface)). Recording
+  provenance in `tillr-drain` covers both without coupling `tillr-drain` to `tillr-keep` or
+  launcher-specific environment variables, and reuses `presence.Owner` in
+  [`tools/tillr-drain/presence/presence.go`](../../tools/tillr-drain/presence/presence.go). On a
+  bare host where `<boot_id>:<pid_ns>` does not change across foreground shells, `tillr-keep` and
+  `tillr-drain loop` run in detached POSIX sessions and are not killed when a foreground shell
+  exits.
+- **Rejected: a wall-clock heartbeat-age threshold alone.** When `tillr-drain loop` crashes inside
+  a live session, `tillr-keep` waits 60 seconds (`INITIAL_BACKOFF`, doubling up to 1,800 seconds)
+  before spawning the replacement loop. During that backoff `drain_sessions.refreshed_at` is 60 to
+  1,800 seconds old — indistinguishable by age alone from a session closed for 1 to 30 minutes. A
+  pure heartbeat-age threshold would silence real in-session crash restarts while still firing on a
+  container relaunched within five seconds.
+- **Rejected: reading `/proc` or `drain_sessions` inside `tillr-watch`.**
+  `drain-unrequested-start` evaluates a `1h` rolling event window ([D-TW4](#D-TW4)). Computing
+  provenance once in `publishDrainBuild` and storing it on `drain.build-started` keeps every event
+  self-describing and keeps the watch rule declarative ([D-TW44](#D-TW44), [D-TW71](#D-TW71)).
+
+#### Record written while running and read on the next start *(designer's decision)*
+
+1. **Written on startup.** Before `publishDrainBuild` in
+   [`tools/tillr-drain/drain/restart.go`](../../tools/tillr-drain/drain/restart.go) opens its write
+   transaction (called from `Loop.Run` in [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go)
+   through `adoptRestart`), the loop mints `Loop.sessionID` when unset and calls
+   `holdLoopPresence(l.cfg.Store)`, creating `<canonical_store>.loops/<hash>.present` containing
+   JSON `presence.Owner` and holding it open for writing; `refreshSession` in
+   [`tools/tillr-drain/drain/pass_observation.go`](../../tools/tillr-drain/drain/pass_observation.go)
+   reuses that `sessionID` and its `holdLoopPresence` call becomes a no-op. `BuildFact` in
+   [`tools/tillr-drain/restart/restart.go`](../../tools/tillr-drain/restart/restart.go) gains
+   `SessionID string` (`"session_id,omitempty"`), `LoopOwner *presence.Owner`
+   (`"loop_owner,omitempty"`, carrying `{pid, start, domain, uid}`), `SessionRelaunch bool`
+   (`"session_relaunch,omitempty"`), and `PriorDomain string` (`"prior_domain,omitempty"`). Even a
+   loop killed before its first `refreshSession` leaves `loop_owner` on `drain.build-started` and
+   its `.present` file beside the store; while running, `refreshSession` continues updating
+   `drain_sessions` every `PassInterval` (`1s`).
+2. **Read on the next start.** When `TILLR_RESTART_REQUEST` is empty and no unconsumed
+   `drain.stop-requested` precedes this start, `publishDrainBuild` reads the latest prior
+   `drain.build-started` with `role == "drain"` (using its `payload.loop_owner` directly when
+   present, and falling back to the latest `drain_sessions` row only when upgrading from a
+   pre-`loop_owner` build event or a pre-event store) together with any `drain.loop-ended` event
+   (`loopEndedKind` in [`tools/tillr-drain/drain/loop_ended.go`](../../tools/tillr-drain/drain/loop_ended.go))
+   and `drain_sessions` row for that prior loop. It sets `SessionRelaunch = true` and
+   `PriorDomain = prevOwner.Domain` if and only if all three conditions hold:
+   - **Process-domain change:** `prevOwner != nil`, `prevOwner.Domain != ""`, `here.Domain != ""`,
+     and `prevOwner.Domain != here.Domain` (a new container PID namespace or a new OS `boot_id`).
+   - **Prior loop did not fault:** no `drain.loop-ended` event for that prior `session_id` (or at
+     a higher `seq` than that prior `drain.build-started`) has `stop == "fault"`. A loop that
+     faulted before the session closed was not ended by the session closing and still raises
+     `drain-unrequested-start` even if the session relaunches after `drain-loop-fault`'s `1h`
+     window expires.
+   - **Prior foreign-domain loop is proven dead:** `!presence.SameBoot(prevOwner.Domain, here.Domain)`
+     (host reboot), `presence.OpenForWriting(presence.LoopPresencePath(identity, *prevOwner)) == presence.StreamUnwritten`
+     (the `.present` file exists and the kernel confirms through `F_SETLEASE` that no writer in any
+     namespace holds it open), its `drain_sessions` row has `ended_at IS NOT NULL` (for example
+     `SIGTERM` during container shutdown recorded `operator-stop` before the namespace vanished),
+     or — when `.present` is `StreamAbsent` on a pre-upgrade row — its `drain_sessions` heartbeat
+     is stale (`now.UnixMilli() > next_pass_at + SessionGrace.Milliseconds()`, matching
+     `SessionGrace = 5s` in [`tools/tillr-drain/drain/stop.go`](../../tools/tillr-drain/drain/stop.go)).
+     If the prior foreign loop is still live (`StreamWritten`, or `StreamAbsent` with a current
+     heartbeat), a second container started alongside a live loop and `SessionRelaunch` stays
+     `false`.
+
+#### Watch-rule predicate and guidance *(designer's decision)*
+
+[`config/tillr/watch/drain-unrequested-start.toml`](../../config/tillr/watch/drain-unrequested-start.toml)
+updates its `match` expression to:
+
+```toml
+match = 'event.role == "drain" and empty(event.restart_request) and empty(event.stop_request) and not (event.initial == true) and not (event.session_relaunch == true)'
+```
+
+Guidance keeps [D-TW73](#D-TW73) and [D-TW74](#D-TW74) intact: it never calls any start
+`"expected"` (enforced by `TestDrainUnrequestedStartRule` in
+[`tools/tillr-watch/drain_unrequested_start_rule_test.go`](../../tools/tillr-watch/drain_unrequested_start_rule_test.go))
+and updates `guidance.check` to note that `session_relaunch` quiets starts following a dead prior
+process domain without a prior loop fault, so a firing notice points to an unstopped restart in the
+same domain, a prior loop `fault` before relaunch, or a second domain started while a foreign loop
+was still live.
+
+#### Build slices
+
+1. **Slice 1 — Loop-owner presence and `session_relaunch` provenance on `drain.build-started`**
+   ([`tools/tillr-drain/restart/restart.go`](../../tools/tillr-drain/restart/restart.go),
+   [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go),
+   [`tools/tillr-drain/drain/restart.go`](../../tools/tillr-drain/drain/restart.go),
+   [`tools/tillr-drain/drain/pass_observation.go`](../../tools/tillr-drain/drain/pass_observation.go),
+   [`tools/tillr-drain/drain/restart_build_fact_test.go`](../../tools/tillr-drain/drain/restart_build_fact_test.go)):
+   mint `sessionID` and call `holdLoopPresence` before `publishDrainBuild`; add `session_id`,
+   `loop_owner`, `session_relaunch` and `prior_domain` to `BuildFact`; classify dead
+   foreign-domain non-fault starts (including pre-upgrade `drain_sessions` stale-heartbeat
+   fallback) as `session_relaunch: true` while keeping same-domain unstopped restarts, prior
+   `stop == "fault"` exits, and live foreign-loop collisions unrequested; test all six cases in
+   `restart_build_fact_test.go`.
+2. **Slice 2 — `drain-unrequested-start` rule predicate and guidance**
+   ([`config/tillr/watch/drain-unrequested-start.toml`](../../config/tillr/watch/drain-unrequested-start.toml),
+   [`tools/tillr-watch/drain_unrequested_start_rule_test.go`](../../tools/tillr-watch/drain_unrequested_start_rule_test.go);
+   follows Slice 1): add `and not (event.session_relaunch == true)` to `match`, update
+   `guidance.check` without calling any start `"expected"` ([D-TW73](#D-TW73)), and add the
+   `session_relaunch` case to `TestDrainUnrequestedStartRule`.
+3. **Slice 3 — Pack mirror and reference update** (`yolo-packs/tillr/` via `just pack-sync`,
+   [`docs/reference/tillr-restart.md`](../reference/tillr-restart.md), `docs/design/tillr-watch.md`;
+   follows Slices 1 and 2): mirror the updated `tillr-drain` source and
+   `config/tillr/watch/drain-unrequested-start.toml` into `yolo-packs/tillr/` so consumer
+   repositories receive them, document `stop_request`, `initial`, `session_id`, `loop_owner`,
+   `session_relaunch` and `prior_domain` on `drain.build-started` in
+   [`docs/reference/tillr-restart.md`](../reference/tillr-restart.md), and mark [D-TW82](#D-TW82)
+   `Built: yes` here.
 
 ## 6. Delivery, Lifecycle, and the Two Operating Modes
 
@@ -751,3 +899,4 @@ code was not read for that row.
 | <a id="D-TW79"></a>**D-TW79** | A rule for a gate started on a proved fixer; any-field `group_by`, `keep_on_terminal_item`. | 2026-11-24 | [§5.16](#516-gate-started-for-a-trunk-fixer-the-drain-has-already-proved-d-tw79) | no |
 | <a id="D-TW80"></a>**D-TW80** | A projection-only `predicate_match` for a fixer still queued under a green proof. | 2026-11-23 | [§5.17](#517-trunk-fixer-still-queued-after-a-green-proof-passed-its-checks-d-tw80) | no |
 | <a id="D-TW81"></a>**D-TW81** | Per-process CPU samples and a `for_each` rule over them. | 2026-11-24 | [§5.18](#518-sustained-cpu-usage-over-half-a-core-in-tillr-watch-wait-or-tillr-view-serve-d-tw81) | partly: event only |
+| <a id="D-TW82"></a>**D-TW82** | Designer (answering a 2026-11-24 consumer-repository operator request; not an owner ruling): `tillr-drain` records `session_id`, `loop_owner` and `.present` lease before `publishDrainBuild`, sets `session_relaunch` and `prior_domain` on `drain.build-started` when a dead prior foreign process domain ended without `stop == "fault"` (with pre-upgrade `drain_sessions` stale-heartbeat fallback), and `drain-unrequested-start` adds `not (event.session_relaunch == true)`. | 2026-11-25 | [§5.19](#519-session-relaunch-provenance-on-drain-unrequested-start-d-tw82) | no |
