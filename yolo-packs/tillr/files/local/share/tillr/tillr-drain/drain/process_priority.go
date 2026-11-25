@@ -29,29 +29,29 @@ type ProcessClass string
 
 const (
 	ProcessClassRepair ProcessClass = "repair"
-	ProcessClassGate   ProcessClass = "gate"
 	ProcessClassProof  ProcessClass = "proof"
+	ProcessClassGate   ProcessClass = "gate"
 	ProcessClassWorker ProcessClass = "worker"
 )
 
 var processClassOrder = []ProcessClass{
 	ProcessClassRepair,
-	ProcessClassGate,
 	ProcessClassProof,
+	ProcessClassGate,
 	ProcessClassWorker,
 }
 
 var processClassWeights = map[ProcessClass]int{
 	ProcessClassRepair: 400,
-	ProcessClassGate:   200,
-	ProcessClassProof:  100,
+	ProcessClassProof:  200,
+	ProcessClassGate:   100,
 	ProcessClassWorker: 50,
 }
 
 var processClassNiceOffsets = map[ProcessClass]int{
 	ProcessClassRepair: 0,
-	ProcessClassGate:   5,
-	ProcessClassProof:  10,
+	ProcessClassProof:  5,
+	ProcessClassGate:   10,
 	ProcessClassWorker: 15,
 }
 
@@ -382,19 +382,19 @@ func (p *ProcessPriority) LogLine() string {
 	}
 	if p.summary.Mechanism == "cgroup" {
 		return fmt.Sprintf(
-			"loop: process priority: cgroup v2 (%s; cpu.weight repair=%d gate=%d proof=%d worker=%d)",
+			"loop: process priority: cgroup v2 (%s; cpu.weight repair=%d proof=%d gate=%d worker=%d)",
 			p.summary.CgroupRoot,
 			p.summary.Classes[string(ProcessClassRepair)],
-			p.summary.Classes[string(ProcessClassGate)],
 			p.summary.Classes[string(ProcessClassProof)],
+			p.summary.Classes[string(ProcessClassGate)],
 			p.summary.Classes[string(ProcessClassWorker)],
 		)
 	}
 	return fmt.Sprintf(
-		"loop: process priority: nice (repair=%d gate=%d proof=%d worker=%d; cgroup unavailable: %s)",
+		"loop: process priority: nice (repair=%d proof=%d gate=%d worker=%d; cgroup unavailable: %s)",
 		p.summary.Classes[string(ProcessClassRepair)],
-		p.summary.Classes[string(ProcessClassGate)],
 		p.summary.Classes[string(ProcessClassProof)],
+		p.summary.Classes[string(ProcessClassGate)],
 		p.summary.Classes[string(ProcessClassWorker)],
 		p.summary.UnavailableReason,
 	)

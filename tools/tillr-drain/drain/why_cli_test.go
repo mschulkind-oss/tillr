@@ -301,7 +301,7 @@ func TestWhyDefaultsToLiveLoopLanesAndReportsLaneSet(t *testing.T) {
 	prioJSON, err := json.Marshal(drain.ProcessPrioritySummary{
 		Mechanism:         "nice",
 		UnavailableReason: "/sys/fs/cgroup: read-only file system",
-		Classes:           map[string]int{"repair": 0, "gate": 5, "proof": 10, "worker": 15},
+		Classes:           map[string]int{"repair": 0, "proof": 5, "gate": 10, "worker": 15},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -348,7 +348,7 @@ func TestWhyDefaultsToLiveLoopLanesAndReportsLaneSet(t *testing.T) {
 	if !strings.Contains(string(out), "lanes (live loop): lane-1, express-1\n") {
 		t.Fatalf("text output did not name live loop lane set:\n%s", out)
 	}
-	if !strings.Contains(string(out), "priority: nice (repair=0 gate=5 proof=10 worker=15; cgroup unavailable: /sys/fs/cgroup: read-only file system)\n") {
+	if !strings.Contains(string(out), "priority: nice (repair=0 proof=5 gate=10 worker=15; cgroup unavailable: /sys/fs/cgroup: read-only file system)\n") {
 		t.Fatalf("text output did not include live loop priority line:\n%s", out)
 	}
 

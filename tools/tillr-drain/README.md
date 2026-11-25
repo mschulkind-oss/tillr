@@ -1137,8 +1137,9 @@ count. With no policy, readiness is held as `no-policy`. When a live loop sessio
 ## Process-class priority
 
 At startup, `Loop.Run` probes cgroup v2 `cpu.weight` subgroup creation once and logs one
-line stating whether `cgroup v2` (`repair=400`, `gate=200`, `proof=100`, `worker=50`) or
-`nice` (`base + {0, 5, 10, 15}` clamped to `19`) is in force. Every worker, gate, replay,
+line stating whether `cgroup v2` (`repair=400`, `proof=200`, `gate=100`, `worker=50`) or
+`nice` (`base + {0, 5, 10, 15}` clamped to `19`, in order `repair`, `proof`, `gate`, `worker`)
+is in force. Every worker, gate, replay,
 and trunk-proof child process is placed into its class at spawn and inherits it across
 all child processes.
 

@@ -52,8 +52,8 @@ func TestInitProcessPriorityFakeCgroupDelegatedParent(t *testing.T) {
 	}
 	for class, wantWeight := range map[ProcessClass]int{
 		ProcessClassRepair: 400,
-		ProcessClassGate:   200,
-		ProcessClassProof:  100,
+		ProcessClassProof:  200,
+		ProcessClassGate:   100,
 		ProcessClassWorker: 50,
 	} {
 		w, err := os.ReadFile(filepath.Join(cgRoot, string(class), "cpu.weight"))
@@ -65,7 +65,7 @@ func TestInitProcessPriorityFakeCgroupDelegatedParent(t *testing.T) {
 			t.Fatalf("CgroupFD(%s) = (%d, %v), want valid fd", class, fd, err)
 		}
 	}
-	wantLog := "loop: process priority: cgroup v2 (" + cgRoot + "; cpu.weight repair=400 gate=200 proof=100 worker=50)"
+	wantLog := "loop: process priority: cgroup v2 (" + cgRoot + "; cpu.weight repair=400 proof=200 gate=100 worker=50)"
 	if prio.LogLine() != wantLog {
 		t.Fatalf("LogLine() = %q, want %q", prio.LogLine(), wantLog)
 	}
@@ -157,8 +157,8 @@ func TestInitProcessPriorityFallsBackToNiceOnUnavailableCgroup(t *testing.T) {
 		}
 	}
 	wantPrefix := "loop: process priority: nice (repair=" + strconv.Itoa(min(19, base)) +
-		" gate=" + strconv.Itoa(min(19, base+5)) +
-		" proof=" + strconv.Itoa(min(19, base+10)) +
+		" proof=" + strconv.Itoa(min(19, base+5)) +
+		" gate=" + strconv.Itoa(min(19, base+10)) +
 		" worker=" + strconv.Itoa(min(19, base+15)) +
 		"; cgroup unavailable: "
 	if !strings.HasPrefix(prio.LogLine(), wantPrefix) {
@@ -172,8 +172,8 @@ func TestNewNicePriorityZeroBase(t *testing.T) {
 
 	wantTargets := map[ProcessClass]int{
 		ProcessClassRepair: 0,
-		ProcessClassGate:   5,
-		ProcessClassProof:  10,
+		ProcessClassProof:  5,
+		ProcessClassGate:   10,
 		ProcessClassWorker: 15,
 	}
 	for class, want := range wantTargets {
@@ -182,9 +182,60 @@ func TestNewNicePriorityZeroBase(t *testing.T) {
 			t.Fatalf("NiceTarget(%s) = (%d, %v), want (%d, true)", class, got, ok, want)
 		}
 	}
-	wantLog := "loop: process priority: nice (repair=0 gate=5 proof=10 worker=15; cgroup unavailable: read-only file system)"
+	wantLog := "loop: process priority: nice (repair=0 proof=5 gate=10 worker=15; cgroup unavailable: read-only file system)"
 	if prio.LogLine() != wantLog {
 		t.Fatalf("LogLine() = %q, want %q", prio.LogLine(), wantLog)
+	}
+}
+
+func TestProofPriorityHigherThanCandidateGate(t *testing.T) {
+	wantOrder := []ProcessClass{
+		ProcessClassRepair,
+		ProcessClassProof,
+		ProcessClassGate,
+		ProcessClassWorker,
+	}
+	if len(processClassOrder) != len(wantOrder) {
+		t.Fatalf("processClassOrder = %v, want %v", processClassOrder, wantOrder)
+	}
+	for i, want := range wantOrder {
+		if processClassOrder[i] != want {
+			t.Fatalf("processClassOrder[%d] = %q, want %q (full: %v)", i, processClassOrder[i], want, processClassOrder)
+		}
+	}
+
+	// Under cgroup v2 cpu.weight, higher weight means higher processor share.
+	cgMount := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cgMount, "cgroup.controllers"), []byte("cpu\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cgMount, "cgroup.procs"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	procCgroup := filepath.Join(t.TempDir(), "proc_cgroup")
+	if err := os.WriteFile(procCgroup, []byte("0::/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cgPrio := InitProcessPriority(filepath.Join(t.TempDir(), "state.db"), cgMount, procCgroup)
+	defer cgPrio.Close()
+	if cgPrio.Mechanism() != "cgroup" {
+		t.Fatalf("mechanism = %q, want cgroup", cgPrio.Mechanism())
+	}
+	cgClasses := cgPrio.Summary().Classes
+	if !(cgClasses["repair"] > cgClasses["proof"] && cgClasses["proof"] > cgClasses["gate"] && cgClasses["gate"] > cgClasses["worker"]) {
+		t.Fatalf("cgroup cpu.weight order = %+v, want repair > proof > gate > worker", cgClasses)
+	}
+
+	// Under POSIX nice, lower niceness means higher processor priority.
+	nicePrio := newNicePriorityWithBase(0, "test")
+	defer nicePrio.Close()
+	repairNice, _ := nicePrio.NiceTarget(ProcessClassRepair)
+	proofNice, _ := nicePrio.NiceTarget(ProcessClassProof)
+	gateNice, _ := nicePrio.NiceTarget(ProcessClassGate)
+	workerNice, _ := nicePrio.NiceTarget(ProcessClassWorker)
+	if !(repairNice < proofNice && proofNice < gateNice && gateNice < workerNice) {
+		t.Fatalf("nice targets = (repair=%d, proof=%d, gate=%d, worker=%d), want repair < proof < gate < worker",
+			repairNice, proofNice, gateNice, workerNice)
 	}
 }
 
@@ -235,7 +286,7 @@ func TestLoopRunLogsPriorityOncePersistsSessionAndWhyReportsIt(t *testing.T) {
 	}
 
 	cgRoot := filepath.Join(cgMount, "tillr-"+storePriorityHash(f.storePath))
-	wantLine := "loop: process priority: cgroup v2 (" + cgRoot + "; cpu.weight repair=400 gate=200 proof=100 worker=50)"
+	wantLine := "loop: process priority: cgroup v2 (" + cgRoot + "; cpu.weight repair=400 proof=200 gate=100 worker=50)"
 	if count := strings.Count(report.String(), wantLine); count != 1 {
 		t.Fatalf("startup log count = %d, want 1\nreport:\n%s", count, report.String())
 	}
@@ -378,8 +429,8 @@ func TestProcessPlacementNiceMechanismAndChildInheritance(t *testing.T) {
 		class ProcessClass
 	}{
 		{name: "repair", class: ProcessClassRepair},
-		{name: "gate", class: ProcessClassGate},
 		{name: "proof", class: ProcessClassProof},
+		{name: "gate", class: ProcessClassGate},
 		{name: "worker", class: ProcessClassWorker},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

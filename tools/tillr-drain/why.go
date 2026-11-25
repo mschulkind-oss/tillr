@@ -306,19 +306,19 @@ func formatWhyProcessPriority(p *drain.ProcessPrioritySummary) string {
 	}
 	if p.Mechanism == "cgroup" {
 		return fmt.Sprintf(
-			"priority: cgroup v2 (%s; cpu.weight repair=%d gate=%d proof=%d worker=%d)",
+			"priority: cgroup v2 (%s; cpu.weight repair=%d proof=%d gate=%d worker=%d)",
 			p.CgroupRoot,
 			p.Classes[string(drain.ProcessClassRepair)],
-			p.Classes[string(drain.ProcessClassGate)],
 			p.Classes[string(drain.ProcessClassProof)],
+			p.Classes[string(drain.ProcessClassGate)],
 			p.Classes[string(drain.ProcessClassWorker)],
 		)
 	}
 	return fmt.Sprintf(
-		"priority: nice (repair=%d gate=%d proof=%d worker=%d; cgroup unavailable: %s)",
+		"priority: nice (repair=%d proof=%d gate=%d worker=%d; cgroup unavailable: %s)",
 		p.Classes[string(drain.ProcessClassRepair)],
-		p.Classes[string(drain.ProcessClassGate)],
 		p.Classes[string(drain.ProcessClassProof)],
+		p.Classes[string(drain.ProcessClassGate)],
 		p.Classes[string(drain.ProcessClassWorker)],
 		p.UnavailableReason,
 	)

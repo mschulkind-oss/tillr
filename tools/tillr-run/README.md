@@ -130,7 +130,7 @@ store environment markers and have working directories inside the lane; see
 ## Worker CPU priority
 
 `exec` does not override process priority on its own: it inherits the caller's cgroup v2
-subgroup or niceness (set by `tillr-drain` across the `repair`, `gate`, `proof`, and
+subgroup or niceness (set by `tillr-drain` across the `repair`, `proof`, `gate`, and
 `worker` classes), and every child process started by the worker inherits it automatically.
 
 ## Child environment
