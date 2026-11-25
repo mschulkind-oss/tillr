@@ -360,6 +360,7 @@ An idea that needs the owner's answer leaves one design-seat item to cut it into
 
 | Term | What it is | What it is not | Today's usage differs |
 | :--- | :--- | :--- | :--- |
+| **Whale** *(coined here)* | The coordinating AI session the owner talks to, which operates tillr on the owner's behalf: it files items, starts and watches the drain, clears faults, and records delegated decisions under `whale` ([authority reference](../reference/authority-not-approval.md#terms)) | Not a lane worker (a worker builds one item in one lane; the whale steers the whole drain and never is a lane), and not the owner | Also called "the operator" or "the operating agent" in older docs; the store's `decided_by` field already spells it `whale` |
 | **The drain** | The program that moves items along their paths; "draining" is the queue emptying | Not one process | — |
 | **Loop** | One long-running process of the drain | Not a session | Its lifetime is called a "session" (`drain_sessions`) |
 | **Pass** | One review of the queue by the loop | Not a tick | "Tick" survives in a table and a column name |

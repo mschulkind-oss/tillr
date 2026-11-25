@@ -1,5 +1,7 @@
 # tillr agent guide
 
+**The whale** ([defined in the authority reference](./docs/reference/authority-not-approval.md#terms)) is the coordinating AI session that operates tillr on the owner's behalf — steering the drain, filing items, and clearing faults — distinct from a lane worker, which builds one item in one lane.
+
 ## Landing a lane: verified candidates
 
 Before changing landing, the gate, the queue or the repair path, check the change against

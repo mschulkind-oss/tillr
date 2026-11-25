@@ -41,9 +41,12 @@ violation today or whether the rule is a convention agents follow.
 ## Terms
 
 - **The owner** is the one human who owns this repository and its policy.
-- **The operator** is the agent session that coordinates the queue: it files items, watches
-  the drain and reports to the owner. The store's `decided_by` field spells this actor
-  `whale`.
+- **The whale** (also called **the operator**) is the coordinating AI session the owner
+  talks to, which operates tillr on the owner's behalf: it files items, starts and watches
+  the drain, clears faults, reports to the owner, and records delegated decisions under
+  `whale` (the store's `decided_by` field accepts `whale` beside `owner`). Unlike a lane
+  worker, which builds one item in one lane, the whale steers the whole drain and never is
+  a lane. See [the vocabulary design](../design/tillr-vocabulary.md#56-the-machinery).
 - **Approval-monkey work** is asking the owner to execute or bless an action an agent has
   already decided, where the owner contributes keystrokes and no information.
 - **Owner-only** is the reservation of a decision to the owner because that decision needs
@@ -172,7 +175,7 @@ no program refuses a violation.
 | An agent cannot judge an owner-only criterion; a mechanical actor judges verification-only criteria alone | `RecordVerdict` and `RecordJudge`; rejection rule `claim-class-actor` |
 | An item waiting on the owner says so | `checkWaitingOn` in `tools/tillr-item/item`: a blocked item must name a waiter (`owner`, `design`, `plan` or another stored item) and a reason; rejection rules `blocked-waiter-missing` and `blocked-waiter-invalid` |
 | A worker cannot settle an owner decision by guessing | The worker brief's `owner` obstacle, which requires a `QUESTION:` line, and `tools/tillr-drain/drain`, which sends a worker's obstacle to the design seat first and to the owner only on that seat's `NEXT-ACTOR: owner` |
-| A recorded decision says who decided it | `RecordDecision` in `tools/tillr-item/item`: `decided_by` is `owner` or `whale` |
+| A recorded decision says who decided it | `RecordDecision` in `tools/tillr-item/item`: `decided_by` is `owner` or [`whale`](#terms) |
 | The four owner-only classes, and the three placement tests | Nothing. The `owner-only` claim class is the only stored form, and it is set per criterion by whoever writes the item |
 | "Please run X" is forbidden; an owner request carries real options, evidence and a recommendation | Nothing in code. The operator's timed check-in skill (an operating skill kept outside this repository) instructs the operator, and the worker brief asks for the question and its options |
 | A delegated action carries an evidence packet written before the action | Nothing beyond the verdict's own evidence requirement above. No program checks a packet for other delegated actions |
@@ -205,4 +208,4 @@ The prose above explains what each of these is for.
 | Claim classes | `verification-only`, `red-gate-triage`, `direction`, `owner-only` | `tools/tillr-item/item` (`claimClasses`) |
 | Actor kinds | `mechanical`, `agent`, `human` | `tools/tillr-item/item` (`actorKinds`) |
 | Waiters a blocked item may name | `owner`, `design`, `plan`, `item:<id>` | `tools/tillr-item/item` (`checkWaitingOn`) |
-| Deciders a decision may name | `owner`, `whale` | `tools/tillr-item/item` (`decidedBys`) |
+| Deciders a decision may name | `owner`, [`whale`](#terms) | `tools/tillr-item/item` (`decidedBys`) |

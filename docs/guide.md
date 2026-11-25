@@ -32,9 +32,12 @@ SQLite store. You file work into the store, start the drain loop, and the loop d
 agents in isolated Git worktrees, checks each result, and lands passing changes onto your trunk
 branch.
 
-Six terms carry the workflow (see [the vocabulary design](./design/tillr-vocabulary.md) for the
+Seven terms carry the workflow (see [the vocabulary design](./design/tillr-vocabulary.md) for the
 full glossary):
 
+- **Whale** — the coordinating AI session you talk to while tillr runs, which operates tillr on
+  your behalf (filing items, watching the drain, clearing faults, and recording delegated
+  decisions under `whale`). See [Working with the whale 🐋](#working-with-the-whale-) below.
 - **Item** — one unit of work tracked in the SQLite store, with a title, request words or
   criteria, and a lifecycle state (`in-queue`, `landed`, `blocked`, and so on).
 - **Seat** — the role a run plays (`build`, `design`, `plan`, `review`, `verify`, and others),
@@ -47,6 +50,26 @@ full glossary):
   trunk branch as a single commit, re-authored to your configured Git identity.
 - **Backend policy** — a JSON file mapping each seat to a backend entry (an adapter program, a
   model name, and an effort level).
+
+### Working with the whale 🐋
+
+When you run `tillr` day to day, the helper you talk to is **the whale** — the coordinating AI
+session that operates `tillr` on your behalf (see
+[the vocabulary design](./design/tillr-vocabulary.md#56-the-machinery)). Instead of typing every
+`tillr` command yourself, you tell the whale what you want done: it files items, starts and
+watches the drain, clears faults, reports status, and records decisions under its own name
+(`whale`, accepted beside `owner` in the store's `decided_by` field).
+
+- **Whale vs. lane worker.** A lane worker is a short-lived agent run that builds, reviews, or
+  verifies **one item in one lane**. The whale is the outer session that steers the **whole
+  drain** and never is a lane.
+- **What the whale decides vs. what stays with you.** Under
+  [Authority, not approval](./reference/authority-not-approval.md#terms), the whale handles
+  reversible, bounded actions covered by settled policy (filing items, restarting the loop,
+  reopening a fixed backend, recording delegated decisions with evidence). Decisions that risk
+  irreversible loss, spending or external commitments, external publication, or changing policy
+  and accepting risk stay with the owner — the whale surfaces those as a question with real
+  options rather than guessing.
 
 ---
 

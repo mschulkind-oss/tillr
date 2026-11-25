@@ -7,6 +7,17 @@ in a lane (a leased git worktree), gates the result and lands one commit per ite
 New to tillr? Start with the [user guide](docs/guide.md). For design and implementation status,
 see [docs/tillr/design-status.md](docs/tillr/design-status.md).
 
+## The whale 🐋
+
+While tillr runs, you talk to **the whale** — the coordinating AI session that operates tillr
+on your behalf. The whale files items, starts and watches the drain, clears faults, and
+records delegated decisions under its own name (`whale`, beside `owner` in the store). It is
+not a lane worker: a worker builds one item in one lane, while the whale steers the whole
+drain and never is a lane. Delegated, reversible actions stay with the whale; irreversible
+loss, spending, external publication, and policy choices stay with the owner (see
+[Authority, not approval](docs/reference/authority-not-approval.md#terms) and
+[the vocabulary design](docs/design/tillr-vocabulary.md#56-the-machinery)).
+
 ## Layout
 
 - `tools/tillr*` — the Go modules (one per program or library); `tools/tillr` holds shared packages.
