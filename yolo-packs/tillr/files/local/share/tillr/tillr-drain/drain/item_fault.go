@@ -66,7 +66,7 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 		return err
 	}
 	defer s.Close()
-	f := ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, Reason: reason, Detail: detail}
+	f := ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, HeadSHA: c.HeadSHA, Reason: reason, Detail: detail}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		var err error
 		f.Seq, err = l.appendItemFaultTx(tx, f)
@@ -97,7 +97,7 @@ func decisionCollisionDetail(collision *decisionCollisionError, action string) s
 }
 
 func (l *Loop) holdItemFaultTx(tx *store.Tx, c Candidate, reason, detail string) error {
-	return l.recordItemFaultTx(tx, ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, Reason: reason, Detail: detail})
+	return l.recordItemFaultTx(tx, ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, HeadSHA: c.HeadSHA, Reason: reason, Detail: detail})
 }
 
 func (l *Loop) recordItemFaultTx(tx *store.Tx, f ItemFault) error {

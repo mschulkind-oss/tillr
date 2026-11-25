@@ -849,8 +849,12 @@ func (s *ProcessSteps) finishDetachedGate(ctx context.Context, candidate Candida
 			}
 		}
 	}
-	if outcome.Outcome == GateErrored && gateUsageError(span.StderrTail) {
-		outcome.ErrorDetail = gateErrorDetail(span.StderrTail, candidateChangedPaths(ctx, candidate))
+	if outcome.Outcome == GateErrored {
+		if detail := gateStartErrorDetail(span.StderrTail, s.gateErrorTriage(candidate)); detail != "" {
+			outcome.ErrorDetail = detail
+		} else if gateUsageError(span.StderrTail) {
+			outcome.ErrorDetail = gateErrorDetail(span.StderrTail, candidateChangedPaths(ctx, candidate))
+		}
 	}
 	var firstStall *gateStallHold
 	if outcome.Outcome == GateStalled {

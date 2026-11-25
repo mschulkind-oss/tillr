@@ -3224,6 +3224,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		if err := l.timePassPhase("supersede_retried_candidates", func() error { return l.supersedeRetriedCandidates(ctx) }); err != nil {
 			return "", err
 		}
+		if err := l.timePassPhase("release_changed_candidate_gate_faults", func() error { return l.releaseChangedCandidateGateFaults(ctx) }); err != nil {
+			return "", err
+		}
 		if err := l.timePassPhase("release_stale_base_conflicts", func() error { return l.releaseStaleBaseConflicts(ctx) }); err != nil {
 			return "", err
 		}

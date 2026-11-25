@@ -23,6 +23,7 @@ type Hold struct {
 	ItemID           string `json:"item_id"`
 	RunID            string `json:"run_id,omitempty"`
 	LaneID           string `json:"lane_id,omitempty"`
+	HeadSHA          string `json:"head_sha,omitempty"`
 	Reason           string `json:"reason"`
 	Detail           string `json:"detail"`
 	RetryAck         string `json:"retry_ack,omitempty"`

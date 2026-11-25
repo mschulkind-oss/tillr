@@ -3781,9 +3781,10 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	case GateErrored:
 		// The gate ran and reached no verdict: nothing was judged, so the same candidate is
 		// gated again on the next pass (gate_no_verdict.go), never held for an operator.
-		// A deterministic answer is the exception: a gate that refused its own arguments
-		// answers the same words on every pass, so the item is held for the operator with
-		// the gate's error as the reason, and its lane is released like any held one.
+		// A deterministic answer is the exception: a gate program that could not start
+		// against this candidate or refused its own arguments answers the same on every
+		// pass, so the item is held for the operator with the gate's error as the reason,
+		// and its lane is released like any held one.
 		if gate.ErrorDetail != "" {
 			return "", false, l.gateFault(ctx, candidate, gate.ErrorDetail)
 		}
