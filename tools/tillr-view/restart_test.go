@@ -268,30 +268,11 @@ func TestViewRestartThroughALauncherReachesTheLaunchersBuild(t *testing.T) {
 // delivered source tree: unchanged source answers already-current, changed source moves the
 // running server onto the newly built binary.
 func TestViewRestartThroughTheShippedLauncherMovesOntoChangedSource(t *testing.T) {
-	dir := viewScratch(t)
-	home := filepath.Join(dir, "home")
+	t.Parallel()
+	dir, home, launcher, planner := renderPackTree(t)
+	seedNoObsLauncherCache(t, home)
 	share := filepath.Join(home, ".local", "share")
-	if err := os.MkdirAll(share, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	source, _ := filepath.Abs(filepath.Join("..", "..", "yolo-packs", "tillr", "files", "local", "share", "tillr"))
-	if out, err := exec.Command("cp", "-r", source, filepath.Join(share, "tillr")).CombinedOutput(); err != nil {
-		t.Fatalf("rendering the pack tree: %v: %s", err, out)
-	}
-	goEnv := func(name string) string {
-		out, err := exec.Command("go", "env", name).Output()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	env := append(os.Environ(), "HOME="+home, "XDG_CACHE_HOME="+filepath.Join(home, ".cache"),
-		"GOCACHE="+goEnv("GOCACHE"), "GOMODCACHE="+goEnv("GOMODCACHE"), "GOFLAGS=-mod=mod", "GOTOOLCHAIN=local", "GOPROXY=off")
-	launcher, _ := filepath.Abs(filepath.Join("..", "..", "yolo-packs", "tillr", "programs", "tillr-view", "run"))
-	planner := filepath.Join(dir, "tillr-drain")
-	if out, err := exec.Command("go", "-C", "../tillr-drain", "build", "-o", planner, ".").CombinedOutput(); err != nil {
-		t.Fatalf("building the planner: %v: %s", err, out)
-	}
+	env := noNodeEnv(t, dir, home)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
