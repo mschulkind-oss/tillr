@@ -121,6 +121,10 @@ type ExecOptions struct {
 	// SettledAfter supplies sample instants after a settled report is observed.
 	// Nil uses time.After; natural immediate exits never arm it.
 	SettledAfter func(time.Duration) <-chan time.Time
+	// WallContext derives the run's bounded context when Request.TimeoutMS > 0. Nil is
+	// context.WithTimeout. A test supplies one to expire the wall deterministically
+	// without depending on machine speed.
+	WallContext func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 }
 
 // SessionIDFile is the lane layout's harness session handle: one UUID, in the lane directory
@@ -444,21 +448,25 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	workerRecords.timeoutOffset = streamOffset
 
-	// A wall is a bound on total run duration, and it exists only when the request names
-	// one: 0 is an unbounded run, whose lane lease carries no expiry either
-	// (`leased_until = NULL`, design D-RW1). The context is still cancellable, because a
-	// stop has to reach the process group whether or not a clock would have.
-	runCtx, cancel := ctx, context.CancelFunc(func() {})
-	if req.TimeoutMS > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMS)*time.Millisecond)
-	}
-	defer cancel()
 	errPath := streamErrPath(artifactDir, workDir, req.Command)
 	if err := os.Remove(errPath); err != nil && !os.IsNotExist(err) {
 		logFile.Close()
 		return record.Envelope{}, Internalf("clearing prior stream.err: %v", err)
 	}
 	adapterPath := resolveExecAdapter(opts.BackendsDir, req.Backend, req.Command[0])
+	// A wall is a bound on total run duration, and it exists only when the request names
+	// one: 0 is an unbounded run, whose lane lease carries no expiry either
+	// (`leased_until = NULL`, design D-RW1). The context is still cancellable, because a
+	// stop has to reach the process group whether or not a clock would have.
+	runCtx, cancel := ctx, context.CancelFunc(func() {})
+	if req.TimeoutMS > 0 {
+		withTimeout := opts.WallContext
+		if withTimeout == nil {
+			withTimeout = context.WithTimeout
+		}
+		runCtx, cancel = withTimeout(ctx, time.Duration(req.TimeoutMS)*time.Millisecond)
+	}
+	defer cancel()
 	cmd := exec.CommandContext(runCtx, adapterPath, req.Command[1:]...)
 	cmd.Dir = workDir
 	cmd.Stdout = logFile
@@ -470,10 +478,22 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		// There was no process, so the injected clock is the only clock there is.
-		payload.State = StateFailedToStart
-		payload.EndCause = EndFailedToStart
 		payload.StartedAt = now.UTC().Format(time.RFC3339)
 		payload.FinishedAt = payload.StartedAt
+		if errors.Is(err, context.DeadlineExceeded) {
+			// A run whose time limit passed while starting is still a completed run
+			// that hit its bound, not a launch failure. Keeping the wall over cmd.Start
+			// preserves the total-duration bound while recording the limit honestly.
+			payload.State = StateTimedOut
+			payload.EndCause = EndTimeLimit
+			stored, writeErr := writeTerminal(writeCtx, s, payload, now, "")
+			if writeErr != nil {
+				return record.Envelope{}, writeErr
+			}
+			return stored, nil
+		}
+		payload.State = StateFailedToStart
+		payload.EndCause = EndFailedToStart
 		stored, writeErr := writeTerminal(writeCtx, s, payload, now, "")
 		if writeErr != nil {
 			return record.Envelope{}, writeErr

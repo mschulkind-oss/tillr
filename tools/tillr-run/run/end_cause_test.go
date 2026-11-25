@@ -392,3 +392,82 @@ func TestRecordsSignalForEverySignaledExit(t *testing.T) {
 		})
 	}
 }
+
+// TestTimeLimitDuringStartEndsAsTimedOut pins that a run whose time limit passes before
+// cmd.Start launches the process ends as timed-out with cause time-limit, not as an error.
+// WallContext expires the wall immediately so the test never depends on machine speed.
+func TestTimeLimitDuringStartEndsAsTimedOut(t *testing.T) {
+	s, root := leaseFixture(t)
+	var gotBound time.Duration
+	env, err := run.Exec(context.Background(), s, run.Request{
+		RunID:      "run-start-timeout",
+		LaneID:     "lane-start-timeout",
+		Backend:    "fixture",
+		Command:    []string{"/bin/true"},
+		WorkingDir: ".",
+		TimeoutMS:  10,
+	}, run.ExecOptions{
+		LaneRoot: filepath.Join(root, "lanes"),
+		Now:      time.Now().UTC(),
+		WallContext: func(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+			gotBound = d
+			return context.WithDeadline(parent, time.Now().Add(-time.Second))
+		},
+	})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if gotBound != 10*time.Millisecond {
+		t.Errorf("wall bound = %v, want 10ms", gotBound)
+	}
+	var rec run.Record
+	if err := json.Unmarshal(env.Payload, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != run.StateTimedOut {
+		t.Errorf("state = %q, want %q", rec.State, run.StateTimedOut)
+	}
+	if rec.EndCause != run.EndTimeLimit {
+		t.Errorf("end_cause = %q, want %q", rec.EndCause, run.EndTimeLimit)
+	}
+	if rec.ExitCode != nil {
+		t.Errorf("exit_code = %d, want nil", *rec.ExitCode)
+	}
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		status, found, err := run.StatusRecord(r, "run-start-timeout")
+		if err != nil {
+			return err
+		}
+		if !found {
+			t.Fatal("run missing from store")
+		}
+		var body struct {
+			Run run.Record `json:"run"`
+		}
+		if err := json.Unmarshal(status.Payload, &body); err != nil {
+			return err
+		}
+		if body.Run.State != run.StateTimedOut || body.Run.EndCause != run.EndTimeLimit {
+			t.Errorf("stored status = %s/%s, want %s/%s", body.Run.State, body.Run.EndCause, run.StateTimedOut, run.EndTimeLimit)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := eventsOf(t, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawFinish := false
+	for _, event := range events {
+		if event.Kind == run.FinishKind {
+			sawFinish = true
+			if got := endCause(t, event.Payload); got != run.EndTimeLimit {
+				t.Errorf("finish event end_cause = %q, want %q", got, run.EndTimeLimit)
+			}
+		}
+	}
+	if !sawFinish {
+		t.Error("missing finish event")
+	}
+}
