@@ -50,6 +50,7 @@ func registerShippedWatchKinds(t *testing.T) {
 		"gate.verdict",
 		"item.add",
 		"item.conflict",
+		"item.update",
 		"land.landing",
 		"run.allocate",
 		"run.finish",
