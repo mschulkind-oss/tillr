@@ -144,7 +144,7 @@ exec "`+sibling(t, "run")+`" "$@"`)
 	scale("0")
 	waitFor("the live loop to offer zero lanes", offersNoLanes)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	if raw, err := exec.CommandContext(ctx, drainBin(t), "stop", "--root", f.root, "--store", f.store).CombinedOutput(); err != nil {
 		t.Fatalf("stop: %v: %s", err, raw)

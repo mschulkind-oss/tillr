@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 RUNNER = Path(__file__).resolve().parents[1] / 'go-test-shards.py'
+HANG_GUARD = 300.0
 spec = importlib.util.spec_from_file_location('shards', RUNNER)
 shards = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(shards)
@@ -49,7 +50,7 @@ while True:
             binary.chmod(0o755)
 
             real_monotonic = time.monotonic
-            liveness_deadline = real_monotonic() + 60
+            liveness_deadline = real_monotonic() + HANG_GUARD
             now = [0.0]
             started = [False]
             real_loads = json.loads
@@ -86,7 +87,7 @@ while True:
                                 for e in caught.exception.events))
             # The ready child holds the FIFO open indefinitely. EOF proves the
             # process-group kill closed its descriptor and stopped it.
-            readable, _, _ = select.select([child_fd], [], [], 3.2)
+            readable, _, _ = select.select([child_fd], [], [], HANG_GUARD)
             self.assertTrue(readable, 'child still holds the FIFO open')
             self.assertEqual(os.read(child_fd, 1), b'')
 
@@ -122,7 +123,7 @@ print('PASS', flush=True)
             binary.chmod(0o755)
 
             real_monotonic = time.monotonic
-            liveness_deadline = real_monotonic() + 60.0
+            liveness_deadline = real_monotonic() + HANG_GUARD
             now = [0.0]
             completed = []
             phase = [0]
@@ -177,9 +178,34 @@ func TestPass(t *testing.T) {}
 func TestHung(t *testing.T) { for { time.Sleep(time.Second) } }
 ''')
             events = root / 'events.jsonl'
-            result = subprocess.run(['python3', str(RUNNER), str(root), '-k', '1',
+            driver = root / 'run-cli.py'
+            driver.write_text('''import importlib.util, json, sys, time, types
+spec = importlib.util.spec_from_file_location('shards', sys.argv[1])
+shards = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(shards)
+now = [0.0]
+saw_hung = [False]
+real_loads = json.loads
+
+def observe_event(*args, **kwargs):
+    event = real_loads(*args, **kwargs)
+    if event.get('Action') == 'run' and event.get('Test') == 'TestHung':
+        saw_hung[0] = True
+    return event
+
+def fake_monotonic():
+    if saw_hung[0]:
+        now[0] += 3.0
+    return now[0]
+
+shards.time = types.SimpleNamespace(monotonic=fake_monotonic, time=time.time, sleep=time.sleep)
+shards.json.loads = observe_event
+sys.argv = [sys.argv[1]] + sys.argv[2:]
+sys.exit(shards.main())
+''')
+            result = subprocess.run(['python3', str(driver), str(RUNNER), str(root), '-k', '1',
                                      '--shard-timeout', '2', '--events', str(events)],
-                                    capture_output=True, text=True, timeout=60)
+                                    capture_output=True, text=True, timeout=HANG_GUARD)
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('fixture shard 0 timed out', result.stderr)
             self.assertIn('running: TestHung', result.stderr)

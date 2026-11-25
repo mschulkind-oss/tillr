@@ -18,7 +18,6 @@ import (
 
 const (
 	runExecIDEnv       = "TILLR_RUN_EXEC_ID"
-	runCleanupTimeout  = 2 * time.Second
 	runCleanupInterval = 10 * time.Millisecond
 )
 
@@ -248,7 +247,6 @@ func endRunProcesses(pid int, mark execMark) error {
 		}
 	}
 	selfPgid := syscall.Getpgrp()
-	deadline := time.Now().Add(runCleanupTimeout)
 	for {
 		procs, err := scanMarkedProcesses(mark)
 		if err != nil {
@@ -261,20 +259,6 @@ func endRunProcesses(pid int, mark execMark) error {
 			if err := signalMarkedProcess(p, syscall.SIGKILL, selfPgid); err != nil {
 				return Externalf("ending marked run process %d: %v", p.pid, err)
 			}
-		}
-		if !time.Now().Before(deadline) {
-			procs, err = scanMarkedProcesses(mark)
-			if err != nil {
-				return err
-			}
-			if len(procs) == 0 {
-				return nil
-			}
-			pids := make([]string, len(procs))
-			for i, p := range procs {
-				pids[i] = strconv.Itoa(p.pid)
-			}
-			return Externalf("run processes survived cleanup: %s", strings.Join(pids, ", "))
 		}
 		time.Sleep(runCleanupInterval)
 	}

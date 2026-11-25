@@ -150,6 +150,29 @@ func assertProcessGone(t *testing.T, pidFile string) {
 	t.Fatalf("process %d from %s remained alive", pid, pidFile)
 }
 
+type manualDeadlineContext struct {
+	context.Context
+	cancel context.CancelFunc
+	cause  func() error
+}
+
+func (c *manualDeadlineContext) Err() error {
+	if c.Context.Err() == nil {
+		return nil
+	}
+	return c.cause()
+}
+
+func newManualDeadlineContext(parent context.Context) (context.Context, func(), context.CancelFunc) {
+	ctx, cancel := context.WithCancelCause(parent)
+	wrapped := &manualDeadlineContext{
+		Context: ctx,
+		cancel:  func() { cancel(context.Canceled) },
+		cause:   func() error { return context.Cause(ctx) },
+	}
+	return wrapped, func() { cancel(context.DeadlineExceeded) }, wrapped.cancel
+}
+
 func TestDetachedSessionAndNestedChildCleanedUpOnExitTimeoutCancelAndPause(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
@@ -197,6 +220,7 @@ func TestDetachedSessionAndNestedChildCleanedUpOnExitTimeoutCancelAndPause(t *te
 			t.Fatal(err)
 		}
 		defer st.Close()
+		wallReady := make(chan struct{})
 		req := run.Request{
 			RunID:      "detached-timeout",
 			Backend:    "command",
@@ -204,7 +228,31 @@ func TestDetachedSessionAndNestedChildCleanedUpOnExitTimeoutCancelAndPause(t *te
 			WorkingDir: run.WorktreeDir,
 			TimeoutMS:  500,
 		}
-		env, err := run.Exec(context.Background(), st, req, run.ExecOptions{LaneRoot: filepath.Join(dir, "lanes"), Now: time.Now()})
+		opts := run.ExecOptions{
+			LaneRoot: filepath.Join(dir, "lanes"),
+			Now:      time.Now(),
+			WallContext: func(parent context.Context, _ time.Duration) (context.Context, context.CancelFunc) {
+				wallCtx, expire, cancel := newManualDeadlineContext(parent)
+				go func() {
+					select {
+					case <-wallReady:
+						expire()
+					case <-wallCtx.Done():
+					}
+				}()
+				return wallCtx, cancel
+			},
+		}
+		go func() {
+			for deadline := time.Now().Add(hangGuard); time.Now().Before(deadline); {
+				if _, err := os.Stat(filepath.Join(dir, "ready")); err == nil {
+					close(wallReady)
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}()
+		env, err := run.Exec(context.Background(), st, req, opts)
 		if err != nil {
 			t.Fatal(err)
 		}

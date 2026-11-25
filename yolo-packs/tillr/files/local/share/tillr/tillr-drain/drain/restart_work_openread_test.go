@@ -150,9 +150,10 @@ func TestRestartWorkConcurrentGoroutinesCoalesceTicks(t *testing.T) {
 		waveCoalesced  atomic.Int64
 	)
 	allArrived := make(chan struct{})
+	allClocks := make(chan struct{})
 	waveDone := make(chan struct{})
 	finishWork := make(chan struct{})
-	var closeArrivedOnce, closeWaveOnce sync.Once
+	var closeArrivedOnce, closeClocksOnce, closeWaveOnce sync.Once
 
 	h.l.pollOpenRead = func(ctx context.Context, path string, opts ...store.OpenOption) (*store.Store, error) {
 		openReads.Add(1)
@@ -162,6 +163,9 @@ func TestRestartWorkConcurrentGoroutinesCoalesceTicks(t *testing.T) {
 		ch := make(chan time.Time, 1)
 		tickChsMu.Lock()
 		tickChs = append(tickChs, ch)
+		if len(tickChs) == workers {
+			closeClocksOnce.Do(func() { close(allClocks) })
+		}
 		tickChsMu.Unlock()
 		return heartbeatTicker{C: ch, Stop: func() {}}
 	}
@@ -214,6 +218,7 @@ func TestRestartWorkConcurrentGoroutinesCoalesceTicks(t *testing.T) {
 	}
 
 	awaitRestartTest(t, allEntered, "all concurrent restartWork goroutines to enter")
+	awaitRestartTest(t, allClocks, "all concurrent restartWork tickers to register")
 	waveArmed.Store(true)
 	now := time.Now()
 	tickChsMu.Lock()
