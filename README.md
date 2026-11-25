@@ -4,7 +4,8 @@ tillr is a work-queue toolchain: a family of command-line programs (`tillr`, `ti
 `tillr-item`, `tillr-gate`, `tillr-land`, `tillr-loop`, `tillr-roll`, `tillr-drain`, `tillr-watch` and
 others) over one SQLite store. Work is tracked as items; a drain loop plans, runs an agent
 in a lane (a leased git worktree), gates the result and lands one commit per item on the trunk.
-Start with [docs/tillr/design-status.md](docs/tillr/design-status.md).
+New to tillr? Start with the [user guide](docs/guide.md). For design and implementation status,
+see [docs/tillr/design-status.md](docs/tillr/design-status.md).
 
 ## Layout
 
