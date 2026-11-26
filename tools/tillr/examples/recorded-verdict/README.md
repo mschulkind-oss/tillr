@@ -68,8 +68,14 @@ A finished finding means its investigation ended, not that every criterion passe
   `actor_kind: mechanical` and `actor: recorded-verdict-stub` for these
   verification-only criteria; this is not evidence of real human approval. The core checks all criteria were
   judged and records the completion event before moving the item.
-- [brief-template.md](./brief-template.md) supplies the brief the plain-directory
-  staging path requires. The findings carry no prerequisite, dependency, or source fence.
+- [brief-template.md](./brief-template.md) supplies the minimal brief this stubbed
+  example uses. Real agent backends whose preflight requires all ten brief sections
+  (such as the `pi` adapter) can instead point `brief_template` at the shipped
+  non-landing template,
+  [brief-template-non-landing.md](../../../tillr-run/backends/brief-template-non-landing.md)
+  (installed at `$HOME/.local/share/tillr/tillr-run/backends/brief-template-non-landing.md`),
+  which includes all ten sections without Git or landing instructions. The findings carry
+  no prerequisite, dependency, or source fence.
 
 ## Consumer surface and limits
 

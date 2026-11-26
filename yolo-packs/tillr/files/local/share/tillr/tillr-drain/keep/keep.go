@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/settings"
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
@@ -480,13 +481,30 @@ func observeLoopWithPoll(stop <-chan struct{}, child *LoopChild, out io.Writer, 
 	}
 }
 
+func hasBriefTemplateFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--brief-template" || arg == "-brief-template" ||
+			strings.HasPrefix(arg, "--brief-template=") || strings.HasPrefix(arg, "-brief-template=") {
+			return true
+		}
+	}
+	return false
+}
+
 // LoopCommand composes the standard `tillr-drain loop` argv for root plus extra options.
+// When .tillr.toml configures [brief] template and extra does not already pass
+// --brief-template, it passes the configured template path through.
 func LoopCommand(root string, extra []string) []string {
 	cmd := []string{
 		"tillr-drain", "loop", "--root", root,
 		"--gate", "tillr-loop gate",
 		"--land", "tillr-loop land",
 		"--verdict", "tillr-loop verdict",
+	}
+	if !hasBriefTemplateFlag(extra) {
+		if cfg, err := settings.Read(root); err == nil && cfg.Brief.Template != "" {
+			cmd = append(cmd, "--brief-template", filepath.Join(root, filepath.FromSlash(cfg.Brief.Template)))
+		}
 	}
 	return append(cmd, extra...)
 }

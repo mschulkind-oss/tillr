@@ -361,3 +361,100 @@ func TestTheClaudeAdapterAccountSubscriptionStripsBedrockEnvAndPassesSettings(t 
 		}
 	}
 }
+
+func TestDefaultBriefTemplateHasNoRepoSpecificRules(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("backends", "brief-template.md"))
+	if err != nil {
+		t.Fatalf("reading default brief template: %v", err)
+	}
+	body := string(raw)
+	for _, forbidden := range []string{
+		"pack mirror",
+		"pack-sync",
+		"go-test-shards",
+		"just done",
+		"tools/tillr-drain",
+		"tools/tillr-gate",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("default brief-template.md must not carry this repository's rule %q", forbidden)
+		}
+	}
+}
+
+func TestNonLandingBriefTemplatePassesPiPreflight(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("backends", "brief-template-non-landing.md"))
+	if err != nil {
+		t.Fatalf("reading non-landing brief template: %v", err)
+	}
+	body := string(raw)
+	for _, forbidden := range []string{
+		"pack mirror",
+		"pack-sync",
+		"go-test-shards",
+		"just done",
+		"{{BASE_SHA}}",
+		"{{OUT_OF_FENCE_PATHS}}",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("brief-template-non-landing.md must not contain %q", forbidden)
+		}
+	}
+
+	adapter, err := filepath.Abs(filepath.Join("backends", "pi", "run-pi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := filepath.Abs(filepath.Join("backends", "pi", "testdata", "complete.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := scratch(t, "non-landing-pi")
+	bin := filepath.Join(base, "bin")
+	writeExecutable(t, filepath.Join(bin, "pi"), "#!/bin/sh\ncat \"$STUB_STREAM\"\n")
+	lane := filepath.Join(base, "lane")
+	work := filepath.Join(lane, "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plainValues := map[string]string{
+		"ITEM_ID":         "finding-001",
+		"TITLE":           "verify non-landing brief preflight",
+		"RUN_ID":          "run-finding-001-a1",
+		"BACKEND":         "pi",
+		"TARGET":          work,
+		"TARGET_KIND":     "plain directory",
+		"DATE":            "2026-11-26",
+		"TIMEOUT_SECONDS": "none",
+		"DURABLE_DIR":     filepath.Join(lane, "durable"),
+		"TASK":            "Investigate the finding and record evidence.",
+		"CRITERION_1":     "the pi adapter accepts the staged brief",
+		"SEAT_LINES":      "- `investigate` — Investigate the finding.",
+		"SETTLED":         "None recorded.",
+		"FACTS":           "None carried.",
+		"METHOD":          "Run the investigation.",
+		"VERIFICATION":    "None recorded.",
+	}
+	rendered := body
+	for k, v := range plainValues {
+		rendered = strings.ReplaceAll(rendered, "{{"+k+"}}", v)
+	}
+	if err := os.WriteFile(filepath.Join(lane, "brief.md"), []byte(rendered), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(adapter, "--backend", "pi", "--model", "fixture-model", "--effort", "low")
+	cmd.Dir = work
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "TILLR_RESUME_PROMPT_FILE=") && !strings.HasPrefix(entry, "TILLR_SESSION_MODE=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env,
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"STUB_STREAM="+stream,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		stderr, _ := os.ReadFile(filepath.Join(lane, "stream.err"))
+		t.Fatalf("pi adapter refused non-landing brief: %v: %s %s", err, out, stderr)
+	}
+}

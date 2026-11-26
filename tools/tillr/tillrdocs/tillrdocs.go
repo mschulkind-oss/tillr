@@ -348,7 +348,7 @@ func CheckWorkerRefusalSessionDocumented(root string) (string, error) {
 
 // CheckCacheSafeWorkingLoopDocumented verifies cache-safe test guidance.
 func CheckCacheSafeWorkingLoopDocumented(root string) (string, error) {
-	brief := filepath.Join(root, "tools/tillr-run/backends/brief-template.md")
+	brief := filepath.Join(root, "config/tillr/brief-template.md")
 	skill := filepath.Join(root, SkillRelPath)
 	for _, p := range []string{brief, skill} {
 		txt, err := textOf(root, p)

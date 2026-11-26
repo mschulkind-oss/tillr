@@ -1,3 +1,7 @@
+[brief]
+# Uses this repository's own brief template with its pack-mirror and test-runner rules.
+template = "config/tillr/brief-template.md"
+
 [prose]
 rewrite = true
 

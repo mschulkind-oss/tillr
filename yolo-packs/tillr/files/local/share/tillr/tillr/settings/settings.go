@@ -31,11 +31,17 @@ type Intake struct {
 	Paths []string
 }
 
+// Brief names a repository-specific brief template that overrides the installed default.
+type Brief struct {
+	Template string
+}
+
 // Settings holds optional post-landing actions and review intake. Empty command
 // and push.what "none" disable actions; empty remote/ref mean the trunk's
 // configured upstream. A nil Comments disables automatic review intake.
 type Settings struct {
 	Trunk    Trunk
+	Brief    Brief
 	Sync     Sync
 	Intake   Intake
 	Lanes    Lanes
@@ -167,8 +173,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 	var legacyPush *bool
 	whatSet := false
 	for _, table := range keys(tables) {
-		if table != "trunk" && table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" && table != "candidate_size" {
-			return Settings{}, refuse(table, "a known table (trunk, roll, push, comments, workflows, prose, intake, lanes, sync or candidate_size)")
+		if table != "trunk" && table != "brief" && table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" && table != "candidate_size" {
+			return Settings{}, refuse(table, "a known table (trunk, brief, roll, push, comments, workflows, prose, intake, lanes, sync or candidate_size)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -221,6 +227,12 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				}
 				s.Trunk.Branch = str
 				s.Trunk.Set = true
+			case "brief.template":
+				str, ok := value.(string)
+				if !ok || !validRepoFilePath(str) {
+					return Settings{}, refuse(full, "a clean repository-relative file path")
+				}
+				s.Brief.Template = str
 			case "roll.command", "push.remote", "push.ref", "comments.vantage_url", "comments.repo", "intake.dir":
 				str, ok := value.(string)
 				if !ok {
@@ -309,6 +321,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				if table == "trunk" {
 					expected = "a known trunk key (branch)"
 				}
+				if table == "brief" {
+					expected = "a known brief key (template)"
+				}
 				if table == "candidate_size" {
 					expected = "a known candidate_size key (file_limit or added_line_limit)"
 				}
@@ -371,6 +386,20 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 		}
 	}
 	return s, nil
+}
+
+// validRepoFilePath checks that path is a clean repository-relative file path outside .git.
+func validRepoFilePath(path string) bool {
+	if path == "" || path == "." || path == ".." || strings.HasSuffix(path, "/") || strings.Contains(path, "\\") || strings.ContainsAny(path, "*?") {
+		return false
+	}
+	if !filepath.IsLocal(path) || filepath.ToSlash(filepath.Clean(path)) != path {
+		return false
+	}
+	if path == ".git" || strings.HasPrefix(path, ".git/") {
+		return false
+	}
+	return true
 }
 
 // validTrunkBranch checks git check-ref-format rules for a short branch name.
@@ -439,6 +468,9 @@ func (s Settings) StartupLine() string {
 	if c := s.Comments; c != nil {
 		paths, _ := json.Marshal(c.Paths)
 		line += fmt.Sprintf(" comments.vantage_url=%s comments.repo=%s comments.paths=%s comments.quiet_seconds=%d comments.poll_seconds=%d comments.max_running=%d comments.compact_over_tokens=%d comments.refresh_hours=%d", strconv.Quote(c.VantageURL), strconv.Quote(c.Repo), paths, c.QuietSeconds, c.PollSeconds, c.MaxRunning, c.CompactOverTokens, c.RefreshHours)
+	}
+	if s.Brief.Template != "" {
+		line += fmt.Sprintf(" brief.template=%s", strconv.Quote(s.Brief.Template))
 	}
 	if s.WorkflowDefaults != nil {
 		defaults, _ := json.Marshal(s.WorkflowDefaults)

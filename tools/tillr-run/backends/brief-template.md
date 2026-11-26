@@ -77,18 +77,6 @@ candidate is the lane's HEAD, so an uncommitted change is no candidate — the t
 second commit in the same lane is a second candidate the loop did not ask for. In the
 main-checkout form, commit nothing at all: the trunk is not a run's to move.
 
-**The pack mirror is part of the change.** The tree under `tools/tillr*` is also delivered
-as a pack copy, and the gate compares the two. When your change touches a `tools/tillr*`
-path, run `just pack-sync` in the target and commit the mirror in the same commit. It is
-derived, not designed: do not hand-edit the mirror, and do not treat it as a second
-concern. A change that skips it is correct work that fails the gate on `pack-sync` alone —
-measured on 2026-11-14, on the first item a real drain ever dispatched.
-
-**Format before committing.** When the target has a `just format` recipe, run `just format`
-after staging new files and before `git commit` (then run `just pack-sync` if `tools/tillr*`
-changed): `just format` reads tracked and staged paths, so running it before `git add` skips
-brand-new Go files.
-
 ## Seats
 
 These are seats tillr runs as nodes; a worker cannot start one.
@@ -123,55 +111,19 @@ The runner records every line as a `run.progress` event while you work.
 printf '%s\n' c1 >> "$TILLR_PROGRESS_FILE"
 ```
 
-Do not run a whole module suite in a lane. The landing gate runs every suite your change
-selects, once, and a failure there comes back to this run naming the test. A whole suite
-run in a lane is just run again by the gate. When a failure is
-handed to you (a red check, a gate log, a triage packet), it already names the failing
-test: run that test, not the suite it came from.
-
-The sharded runner is how the gate runs a suite. Each shard is an independent
-test process with its own scratch and git global configuration, and tests run fresh,
-without Go's test result cache. Use it yourself only when a change is so broad that no
-selection covers it:
-
-```bash
-go run -C tools/tillr-gate . shards tools/tillr-drain -k 6
-```
-
-Do not call `go test ./...` on a whole suite directly: several lanes doing so at once
-drove the load average past 60 and made `go test` hit its ten-minute timeout.
+Run the narrowest targeted tests that cover the behavior you changed, and leave whole
+repository suites to the landing gate. When a failure is handed to you (a red check, a
+gate log, a triage packet), it already names the failing test: run that test, not the
+whole suite it came from.
 
 Never end processes by name or pattern: no `pkill`, no `killall`, no `kill` fed from
-`pgrep`. Every lane, the landing gate and the trunk's after-merge proof run this same
-runner as the same user, so a pattern that matches your suite matches theirs. On
-2026-11-20 `pkill -f go-test-shards` from lane workers ended the proof's suite checks
-with SIGTERM, and the trunk went unproved for eight hours. End only a process you
-started, by the process ID you recorded when you started it.
-
-Replace the module path for another tillr suite. Set `TMPDIR` to this run's scratch
-or pass `--scratch` there. On each iteration, run the narrowest test selection (the
-specific package and targeted `-run` pattern) that covers your change rather than a whole
-module suite:
-
-```bash
-cd tools/tillr-drain && go test ./drain -run '^TestName$'
-```
-
-Before committing, run the tests for the behavior you changed and every test in a file
-you edited; leave whole suites to the gate. Never run `just done` in a lane.
+`pgrep`. End only a process you started, by the process ID you recorded when you started it.
 
 ## Verification commands
 
-Run each of these. Never run the full gate
-(`just done`): it holds the landing lock and is the gate's job at landing time.
+Run each of these. Leave the full landing gate to the loop at landing time.
 
 {{VERIFICATION}}
-
-While working on Go code, use a targeted `-run` for the behavior being changed, and leave
-the whole suite to the gate. In the drain module, drop `-count=1` for the working
-loop: the tests declare the sibling sources as inputs Go's result cache can see, so a
-sibling change reruns tests and an unchanged tree still caches. This is test verification,
-not permission to run the landing gate (`just done`).
 
 ## Report shape
 
