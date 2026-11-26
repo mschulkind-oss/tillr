@@ -21,14 +21,16 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
-
-	"github.com/mschulkind-oss/tillr/buildstamp"
 )
 
 // greenRevision is supplied by just tillr-build's linker from the pinned proof ref.
 // This proof identity is separate from ordinary VCS metadata; never infer it from
 // the runtime checkout.
 var greenRevision string
+
+// supportRevision is populated at init time by support_revision.go in full drain builds,
+// keeping build.go free of external module imports so standalone build-stamp fixtures compile.
+var supportRevision string
 
 // BuildStamp is the build a drain process is running. Every field is best-effort: a binary
 // built outside a repository has no VCS information, and that absence is reported as empty
@@ -99,11 +101,8 @@ func (b BuildStamp) String() string {
 // or VCS information answers an empty revision, because a loop that refuses to say what it
 // is running answers the question by not answering at all.
 func ReadBuildStamp() BuildStamp {
-	stamp := BuildStamp{
-		Revision:        greenRevision,
-		GreenCommit:     greenRevision,
-		SupportRevision: buildstamp.Read().SupportRevision,
-	}
+	stamp := BuildStamp{Revision: greenRevision, GreenCommit: greenRevision}
+	stamp.SupportRevision = supportRevision
 	exe, err := os.Executable()
 	if err == nil {
 		// A running binary replaced on disk by a rename reads back as "<path> (deleted)".

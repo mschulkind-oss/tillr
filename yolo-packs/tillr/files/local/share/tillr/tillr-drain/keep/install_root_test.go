@@ -36,31 +36,19 @@ func TestKeeperPropagatesInstallRootToLoopAndGateAdapter(t *testing.T) {
 		t.Fatalf("build tillr-loop: %v\n%s", err, out)
 	}
 
-	// Custom TILLR_INSTALL_ROOT with a stub change-gate.py and python3 on PATH.
+	// Custom TILLR_INSTALL_ROOT and stub tillr-gate on PATH.
 	customInstallRoot := filepath.Join(tmp, "custom-install-root")
-	gateDir := filepath.Join(customInstallRoot, "tillr-gate")
-	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+	if err := os.MkdirAll(customInstallRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	runnerLog := filepath.Join(tmp, "runner-path.txt")
-	gateScript := filepath.Join(gateDir, "change-gate.py")
-	if err := os.WriteFile(gateScript, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	fakeBin := filepath.Join(tmp, "bin")
 	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Stub python3 records the gate runner script path ($1) and prints a passing verdict JSON.
-	pythonStub := `#!/bin/sh
-printf '%s\n' "$1" > "` + runnerLog + `"
-printf '{"kind":"gate.verdict","verdict":"pass","checks":[]}\n'
-`
-	if err := os.WriteFile(filepath.Join(fakeBin, "python3"), []byte(pythonStub), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(fakeBin, "tillr-gate"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	gateBin := filepath.Join(fakeBin, "tillr-gate")
+	if err := os.WriteFile(gateBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(fakeBin, "tillr-land"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
@@ -70,17 +58,11 @@ printf '{"kind":"gate.verdict","verdict":"pass","checks":[]}\n'
 		t.Fatal(err)
 	}
 
-	// Set up a pack home where HOME/.local/share/tillr has a different (unused) gate dir,
-	// and a stub `go` builds a `tillr-drain` child that invokes `tillr-loop gate`.
+	// Set up a pack home where HOME/.local/share/tillr has a tillr-drain source dir,
+	// and a stub `go` builds a `tillr-drain` child that invokes `tillr-loop self-check`.
 	home := filepath.Join(tmp, "home")
 	packShare := filepath.Join(home, ".local", "share", "tillr")
 	if err := os.MkdirAll(filepath.Join(packShare, "tillr-drain"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(packShare, "tillr-gate"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(packShare, "tillr-gate", "change-gate.py"), []byte("# wrong\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,8 +141,9 @@ fi
 		loopOut, _ := os.ReadFile(loopErrLog)
 		t.Fatalf("read runner log: %v (tillr-loop stderr: %s)", err, string(loopOut))
 	}
-	if !strings.Contains(string(gotRunner), gateScript) {
+	wantGateArg := "--gate " + gateBin + " --gate-arg change-gate"
+	if !strings.Contains(string(gotRunner), wantGateArg) {
 		loopOut, _ := os.ReadFile(loopErrLog)
-		t.Fatalf("tillr-loop describe did not resolve %q:\nstdout:\n%s\nstderr:\n%s", gateScript, string(gotRunner), string(loopOut))
+		t.Fatalf("tillr-loop self-check did not resolve %q:\nstdout:\n%s\nstderr:\n%s", wantGateArg, string(gotRunner), string(loopOut))
 	}
 }

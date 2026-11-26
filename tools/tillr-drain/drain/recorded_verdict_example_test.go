@@ -109,6 +109,17 @@ func TestRecordedVerdictExampleREADME(t *testing.T) {
 	if err := writeForkSafe(installedTemplate, templateBytes, 0644); err != nil {
 		t.Fatal(err)
 	}
+	installedRev := filepath.Join(installRoot, "tillr", "buildstamp", "support-revision")
+	if err := os.MkdirAll(filepath.Dir(installedRev), 0755); err != nil {
+		t.Fatal(err)
+	}
+	revBytes, err := os.ReadFile("../../tillr/buildstamp/support-revision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeForkSafe(installedRev, revBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	t.Setenv("TILLR_EXAMPLE", copied)
 	t.Setenv("GIT_CALLS", calls)

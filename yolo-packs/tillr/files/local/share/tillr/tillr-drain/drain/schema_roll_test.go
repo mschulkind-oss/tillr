@@ -168,7 +168,18 @@ CREATE TABLE IF NOT EXISTS schema_migrations`, 1)
 		t.Fatal(err)
 	}
 	copyFile(t, "../../tillr-run/backends/brief-template.md", installedTemplate, nil)
-	copyFile(t, "../../tillr/buildstamp/support-revision", filepath.Join(installRoot, "tillr", "buildstamp", "support-revision"), nil)
+	for _, name := range []string{"change-gate.py", "tree-check.py", "classify.py"} {
+		dst := filepath.Join(installRoot, "tillr-gate", name)
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			t.Fatal(err)
+		}
+		copyFile(t, filepath.Join("..", "..", "tillr-gate", name), dst, nil)
+	}
+	installedRev := filepath.Join(installRoot, "tillr", "buildstamp", "support-revision")
+	if err := os.MkdirAll(filepath.Dir(installedRev), 0755); err != nil {
+		t.Fatal(err)
+	}
+	copyFile(t, "../../tillr/buildstamp/support-revision", installedRev, nil)
 	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	t.Setenv("SCHEMA_ROLL_LIVE", dir)
 	return fmt.Sprintf(`GO_WANT_SCHEMA_ROLL_HELPER=1 "%s" -test.run=^TestSchemaRollHelperProcess$`, exe)
