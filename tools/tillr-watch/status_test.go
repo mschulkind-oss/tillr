@@ -87,7 +87,7 @@ func TestWatchStatusScopeDiagnostics(t *testing.T) {
 	fact(t, s, `{"item_id":"not-selected"}`)
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(t.Context(), args, &stdout, &stderr); code != 0 || stdout.String() != fmt.Sprintf("summary unsettled=0 (uninvestigated=0 investigating=0 investigated=0) settled=0 active_silences=0\nrule charter out-of-scope=%q\nrule refusals skipped=1\n", charter) {
+	if code := run(t.Context(), args, &stdout, &stderr); code != 0 || stdout.String() != fmt.Sprintf("summary unsettled=0 (uninvestigated=0 investigating=0 investigated=0) settled=0 active_silences=0\ntriage untriaged=0 triaging=0 settled=0 escalated=0\nrule charter out-of-scope=%q\nrule refusals skipped=1\n", charter) {
 		t.Fatalf("scope text: %d, stdout=%s stderr=%s", code, &stdout, &stderr)
 	}
 }
@@ -123,7 +123,7 @@ func TestWatchStatusMissingTablesJSON(t *testing.T) {
 	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules, "--json"}, &out, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("status = %d, %s", code, &stderr)
 	}
-	if want := "{\"summary\":{\"unsettled\":0,\"uninvestigated\":0,\"investigating\":0,\"investigated\":0,\"settled\":0,\"active_silences\":0},\"rules\":[{\"id\":\"refusals\",\"skipped\":0}],\"alerts\":[],\"silences\":[],\"owners\":[]}\n"; out.String() != want {
+	if want := "{\"summary\":{\"unsettled\":0,\"uninvestigated\":0,\"investigating\":0,\"investigated\":0,\"settled\":0,\"active_silences\":0,\"triage\":{\"untriaged\":0,\"triaging\":0,\"settled\":0,\"escalated\":0}},\"rules\":[{\"id\":\"refusals\",\"skipped\":0}],\"alerts\":[],\"silences\":[],\"owners\":[]}\n"; out.String() != want {
 		t.Fatalf("got %s, want %s", &out, want)
 	}
 	after, err := os.ReadFile(s.Path())
@@ -247,11 +247,12 @@ func TestWatchStatusSortedStoredRows(t *testing.T) {
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	wantLines := []struct{ prefix, suffix string }{
 		{"summary unsettled=4 (uninvestigated=4 investigating=0 investigated=0) settled=0 active_silences=0", ""},
+		{"triage untriaged=4 triaging=0 settled=0 escalated=0", ""},
 		{"rule aaa skipped=0", ""},
 		{"rule refusals skipped=0", ""},
-		{`alert b rule=refusals subject="alice" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"alice"} settlement=uninvestigated unsettled_for=`, " until=change"},
-		{`alert c rule=refusals subject="charlie" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"charlie"} settlement=uninvestigated unsettled_for=`, " until=1970-01-01T00:00:03Z"},
-		{`alert z rule=removed subject="bob" state=acknowledged severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"bob"} settlement=uninvestigated unsettled_for=`, ` by="a\"b"`},
+		{`alert b rule=refusals subject="alice" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"alice"} settlement=uninvestigated unsettled_for=`, " until=change triage_state=untriaged"},
+		{`alert c rule=refusals subject="charlie" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"charlie"} settlement=uninvestigated unsettled_for=`, " until=1970-01-01T00:00:03Z triage_state=untriaged"},
+		{`alert z rule=removed subject="bob" state=acknowledged severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"bob"} settlement=uninvestigated unsettled_for=`, ` by="a\"b" triage_state=untriaged`},
 		{"owner foreground watcher=unattached last_wait=- pending=0", ""},
 		{"owner z watcher=unattached last_wait=1970-01-01T00:00:02Z pending=0", ""},
 	}

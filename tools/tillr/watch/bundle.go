@@ -24,10 +24,23 @@ type omission struct {
 	SubjectCut bool `json:"subject_cut"`
 }
 
+type TriageHeader struct {
+	RunID        string   `json:"run_id"`
+	Outcome      string   `json:"outcome"`
+	OutcomeKind  string   `json:"outcome_kind,omitempty"`
+	EscalatedTo  string   `json:"escalated_to,omitempty"`
+	ItemID       string   `json:"item_id,omitempty"`
+	Finding      string   `json:"finding"`
+	ActionNeeded string   `json:"action_needed,omitempty"`
+	Question     string   `json:"question,omitempty"`
+	Options      []string `json:"options,omitempty"`
+}
+
 type Bundle struct {
 	RuleID   string         `json:"rule_id"`
 	Subject  string         `json:"subject"`
 	Severity string         `json:"severity"`
+	Triage   *TriageHeader  `json:"triage,omitempty"`
 	Guidance bundleGuidance `json:"guidance"`
 	Events   []observation  `json:"events"`
 	Omitted  omission       `json:"omitted"`

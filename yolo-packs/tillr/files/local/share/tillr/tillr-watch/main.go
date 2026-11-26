@@ -24,13 +24,15 @@ import (
 
 const help = `Usage:
   tillr watch eval --once --store PATH --rules DIR [--root DIR]
-  tillr watch status --store PATH --rules DIR [--root DIR] [--unsettled] [--json]
+  tillr watch status --store PATH --rules DIR [--root DIR] [--unsettled] [--recent DUR] [--json]
   tillr watch daemon --store PATH --rules DIR [--root DIR]
   tillr watch wait --store PATH --rules DIR [--root DIR] [--owner ID] [--timeout DUR | --follow] [--fallback-poll DUR] [--unsettled-remind-after DUR] [--no-notify] [--seen-through SEQ]
   tillr watch seen --store PATH --through SEQ [--owner ID]
   tillr watch ack ID --store PATH --by ACTOR [--note TEXT]
   tillr watch investigate ID --store PATH --by ACTOR --cause TEXT --evidence TEXT
   tillr watch settle ID --store PATH --by ACTOR --outcome (fix-rule|fix-fault) --item ITEM_ID [--link-kind filed|linked] [--cause TEXT --evidence TEXT]
+  tillr watch claim-triage ID --run RUN_ID --store PATH
+  tillr watch record-triage ID --run RUN_ID --outcome (filed|linked|escalated) --finding TEXT [--outcome-kind (fix-fault|fix-rule)] [--item ITEM_ID] [--escalate-to (operator-session|owner)] [--action-needed TEXT] [--question TEXT] [--option TEXT]... --store PATH
   tillr watch silence ID --store PATH --by ACTOR --item ITEM_ID --reason TEXT (--until DUR_OR_TIME | --until-change) [--cause TEXT --evidence TEXT] [--rules DIR]
   tillr watch silence --rule ID [--var KEY=VAL ...] --store PATH --rules DIR --by ACTOR --item ITEM_ID --reason TEXT (--until DUR_OR_TIME | --until-change) --cause TEXT --evidence TEXT
   tillr watch silence list --store PATH [--all] [--json]
@@ -87,6 +89,20 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 			return fail(err)
 		}
 		return 0
+	case "claim-triage":
+		if err := runClaimTriage(ctx, args[1:], out); err != nil {
+			return fail(err)
+		}
+		return 0
+	case "record-triage":
+		if err := runRecordTriage(ctx, args[1:], out); err != nil {
+			if errors.Is(err, watch.ErrInvalidTriageOutcome) {
+				fmt.Fprintln(stderr, "tillr watch:", err)
+				return 2
+			}
+			return fail(err)
+		}
+		return 0
 	case "silence":
 		if err := runSilence(ctx, args[1:], out); err != nil {
 			if errors.Is(err, watch.ErrInvestigationRequired) || errors.Is(err, watch.ErrInvalidSilenceBinding) || strings.Contains(err.Error(), watch.ErrInvalidSilenceBinding.Error()) {
@@ -107,8 +123,8 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	f := flag.NewFlagSet(face, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	path := f.String("store", "", "path to the tillr state database")
-	var dir, owner, root string
-	var timeout, fallbackPoll, unsettledRemindAfter time.Duration
+	var dir, owner, root, recentStr string
+	var timeout, fallbackPoll, unsettledRemindAfter, recent time.Duration
 	var cursor int64
 	var once, follow, noNotify, asJSON, onlyUnsettled bool
 	switch face {
@@ -125,6 +141,7 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	case "status":
 		f.BoolVar(&asJSON, "json", false, "print the status report as JSON")
 		f.BoolVar(&onlyUnsettled, "unsettled", false, "list every unsettled episode, including resolved ones")
+		f.StringVar(&recentStr, "recent", "", "list episodes opened, triaged, and resolved within this window")
 	case "wait":
 		f.StringVar(&owner, "owner", "foreground", "delivery owner")
 		f.DurationVar(&timeout, "timeout", 0, "time to wait for a notice")
@@ -167,6 +184,16 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	if set["owner"] && owner == "" {
 		return fail(fmt.Errorf("owner must not be empty"))
 	}
+	if set["recent"] {
+		recent = watch.ParseWindow(recentStr)
+		if recent <= 0 {
+			var parseErr error
+			recent, parseErr = time.ParseDuration(recentStr)
+			if parseErr != nil || recent <= 0 {
+				return fail(fmt.Errorf("recent must be a positive duration"))
+			}
+		}
+	}
 	var rules []watch.Rule
 	if face != "seen" {
 		var err error
@@ -189,7 +216,7 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 		}
 	}
 	if face == "status" {
-		if err := printStatus(ctx, watch.Evaluator{Rules: rules, Root: root}, storePath, onlyUnsettled, asJSON, out, stderr); err != nil {
+		if err := printStatus(ctx, watch.Evaluator{Rules: rules, Root: root}, storePath, onlyUnsettled, recent, asJSON, out, stderr); err != nil {
 			return fail(err)
 		}
 		return 0

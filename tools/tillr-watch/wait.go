@@ -325,6 +325,33 @@ func printBundleGuidance(buf *bytes.Buffer, b watch.Bundle) {
 	}
 }
 
+func printTriageHeader(buf *bytes.Buffer, t *watch.TriageHeader) {
+	if t == nil {
+		return
+	}
+	line := fmt.Sprintf("  triage: run=%s outcome=%s", t.RunID, t.Outcome)
+	if t.OutcomeKind != "" {
+		line += " kind=" + t.OutcomeKind
+	}
+	if t.EscalatedTo != "" {
+		line += " escalated_to=" + t.EscalatedTo
+	}
+	if t.ItemID != "" {
+		line += " item=" + t.ItemID
+	}
+	buf.WriteString(line + "\n")
+	fmt.Fprintf(buf, "  finding: %s\n", t.Finding)
+	if t.ActionNeeded != "" {
+		fmt.Fprintf(buf, "  action_needed: %s\n", t.ActionNeeded)
+	}
+	if t.Question != "" {
+		fmt.Fprintf(buf, "  question: %s\n", t.Question)
+	}
+	for _, opt := range t.Options {
+		fmt.Fprintf(buf, "  option: %s\n", opt)
+	}
+}
+
 func printNoticesAndReminders(out io.Writer, opts waitOptions, notices []watch.Notice, reminders []watch.UnsettledReminder, through int64) error {
 	var buf bytes.Buffer
 	if len(notices) > 0 {
@@ -332,6 +359,7 @@ func printNoticesAndReminders(out io.Writer, opts waitOptions, notices []watch.N
 		for _, n := range notices {
 			b := n.Bundle
 			fmt.Fprintf(&buf, "[alert %s %s %s, %s] %s\n", n.AlertID, b.RuleID, b.Subject, b.Severity, b.Guidance.Summary)
+			printTriageHeader(&buf, b.Triage)
 			printBundleGuidance(&buf, b)
 			printAlertActions(&buf, opts, n.AlertID)
 		}
@@ -342,6 +370,7 @@ func printNoticesAndReminders(out io.Writer, opts waitOptions, notices []watch.N
 			b := r.Bundle
 			fmt.Fprintf(&buf, "UNSETTLED [alert %s %s %s, %s state=%s settlement=%s unsettled_for=%s] %s\n",
 				r.AlertID, r.RuleID, r.Subject, r.Severity, r.State, r.Settlement, r.UnsettledFor, b.Guidance.Summary)
+			printTriageHeader(&buf, b.Triage)
 			printBundleGuidance(&buf, b)
 			printAlertActions(&buf, opts, r.AlertID)
 		}

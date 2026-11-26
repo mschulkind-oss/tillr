@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/watch"
@@ -17,12 +18,12 @@ type statusRule struct {
 	OutOfScope string `json:"out_of_scope,omitempty"`
 }
 
-func printStatus(ctx context.Context, e watch.Evaluator, path string, onlyUnsettled, asJSON bool, out, stderr io.Writer) error {
+func printStatus(ctx context.Context, e watch.Evaluator, path string, onlyUnsettled bool, recent time.Duration, asJSON bool, out, stderr io.Writer) error {
 	var s watch.Status
 	if err := store.ReadWithoutCreating(ctx, path, func(db *store.Store) error {
 		e.Store = db
 		var err error
-		s, err = e.ReadStatusWithOptions(ctx, func(owner string) (bool, error) { return isAttached(path, owner) }, watch.StatusOptions{OnlyUnsettled: onlyUnsettled})
+		s, err = e.ReadStatusWithOptions(ctx, func(owner string) (bool, error) { return isAttached(path, owner) }, watch.StatusOptions{OnlyUnsettled: onlyUnsettled, Recent: recent})
 		return err
 	}); err != nil {
 		return err
@@ -58,7 +59,11 @@ func printStatus(ctx context.Context, e watch.Evaluator, path string, onlyUnsett
 		s.Summary.Settled, s.Summary.ActiveSilences); err != nil {
 		return err
 	}
-	if !onlyUnsettled {
+	if _, err := fmt.Fprintf(out, "triage untriaged=%d triaging=%d settled=%d escalated=%d\n",
+		s.Summary.Triage.Untriaged, s.Summary.Triage.Triaging, s.Summary.Triage.Settled, s.Summary.Triage.Escalated); err != nil {
+		return err
+	}
+	if !onlyUnsettled && recent == 0 {
 		for _, r := range rules {
 			field := ""
 			switch {
@@ -94,6 +99,18 @@ func printStatus(ctx context.Context, e watch.Evaluator, path string, onlyUnsett
 		if a.ItemID != nil {
 			suffix += " item=" + jsonString(*a.ItemID)
 		}
+		if a.Triage != nil {
+			suffix += " triage_state=" + a.Triage.State
+			if a.Triage.Outcome != "" {
+				suffix += " triage_outcome=" + a.Triage.Outcome
+			}
+			if a.Triage.OutcomeKind != "" {
+				suffix += " triage_outcome_kind=" + a.Triage.OutcomeKind
+			}
+			if a.Triage.RunID != "" {
+				suffix += " triage_run=" + jsonString(a.Triage.RunID)
+			}
+		}
 		varsMap := a.Vars
 		if varsMap == nil {
 			varsMap = map[string]string{}
@@ -103,7 +120,7 @@ func printStatus(ctx context.Context, e watch.Evaluator, path string, onlyUnsett
 			return err
 		}
 	}
-	if !onlyUnsettled {
+	if !onlyUnsettled && recent == 0 {
 		for _, sil := range s.Silences {
 			varsMap := sil.Vars
 			if varsMap == nil {

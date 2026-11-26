@@ -53,6 +53,15 @@ func init() {
 		{"silence_id", "TEXT"},
 		{"escalated_to", "TEXT"},
 		{"last_reminded_at", "INTEGER"},
+		{"triage_state", "TEXT NOT NULL DEFAULT 'untriaged'"},
+		{"triage_outcome", "TEXT"},
+		{"triage_outcome_kind", "TEXT"},
+		{"triage_run_id", "TEXT"},
+		{"triage_finding", "TEXT"},
+		{"triage_action_needed", "TEXT"},
+		{"triage_question", "TEXT"},
+		{"triage_options_json", "TEXT"},
+		{"triaged_at", "INTEGER"},
 	} {
 		if err := store.RegisterColumn("watch", "alert_episodes", col.name, col.decl); err != nil {
 			panic(err)
@@ -65,7 +74,7 @@ func init() {
 	if err := store.RegisterTableBackfill("watch", "alert_item_links", backfillAlertItemLinks); err != nil {
 		panic(err)
 	}
-	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, trackedKind, silencedKind, reopenedKind, investigatedKind, settledKind, itemLinkedKind, silenceLiftedKind, ruleSetKind, ruleResetKind} {
+	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, trackedKind, silencedKind, reopenedKind, investigatedKind, settledKind, itemLinkedKind, silenceLiftedKind, ruleSetKind, ruleResetKind, triageStartedKind, triagedKind, escalatedKind} {
 		if err := event.Register(kind, "watch"); err != nil {
 			panic(err)
 		}
@@ -117,7 +126,16 @@ CREATE TABLE IF NOT EXISTS alert_episodes (
  reopen_count_for_item INTEGER NOT NULL DEFAULT 0,
  silence_id TEXT,
  escalated_to TEXT,
- last_reminded_at INTEGER
+ last_reminded_at INTEGER,
+ triage_state TEXT NOT NULL DEFAULT 'untriaged',
+ triage_outcome TEXT,
+ triage_outcome_kind TEXT,
+ triage_run_id TEXT,
+ triage_finding TEXT,
+ triage_action_needed TEXT,
+ triage_question TEXT,
+ triage_options_json TEXT,
+ triaged_at INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS alert_episodes_one_active
     ON alert_episodes(rule_id, subject_key) WHERE state != 'resolved';
@@ -1705,6 +1723,10 @@ func (changes *episodeChanges) reopen(r Rule, key, id string, c *condition, fing
 				"settled_lag_pair=NULL",
 			)
 		}
+		sets, err = appendTriageResetSets(tx.Reader(), sets)
+		if err != nil {
+			return err
+		}
 		sets = append(sets, "condition_fingerprint=?", "bundle_json=?")
 		args := []any{fingerprint, string(bundle)}
 		if hasVars {
@@ -1760,6 +1782,10 @@ func (changes *episodeChanges) reopenSettledOpenItem(r Rule, key, id string, c *
 				"settled_lag_pair=NULL",
 				"reopen_count_for_item=reopen_count_for_item+1",
 			)
+		}
+		sets, err = appendTriageResetSets(tx.Reader(), sets)
+		if err != nil {
+			return err
 		}
 		sets = append(sets, "condition_fingerprint=?", "bundle_json=?")
 		args := []any{fingerprint, string(bundle)}
@@ -1826,6 +1852,10 @@ func (changes *episodeChanges) reopenSettledTerminal(r Rule, key, id string, c *
 				"settled_fingerprint=NULL",
 				"settled_lag_pair=NULL",
 			)
+		}
+		sets, err = appendTriageResetSets(tx.Reader(), sets)
+		if err != nil {
+			return err
 		}
 		sets = append(sets, "condition_fingerprint=?", "bundle_json=?")
 		args = append(args, fingerprint, string(bundle))
@@ -1895,6 +1925,10 @@ func (changes *episodeChanges) reopenLagWhenSettledOpenItem(r Rule, key, id stri
 				"settled_lag_pair=NULL",
 				"reopen_count_for_item=reopen_count_for_item+1",
 			)
+		}
+		sets, err = appendTriageResetSets(tx.Reader(), sets)
+		if err != nil {
+			return err
 		}
 		if hasVars {
 			sets = append(sets, "variables_json=?")
@@ -1971,6 +2005,10 @@ func (changes *episodeChanges) reopenLagWhen(r Rule, key, id string, c *conditio
 				"settled_fingerprint=NULL",
 				"settled_lag_pair=NULL",
 			)
+		}
+		sets, err = appendTriageResetSets(tx.Reader(), sets)
+		if err != nil {
+			return err
 		}
 		if hasVars {
 			sets = append(sets, "variables_json=?")

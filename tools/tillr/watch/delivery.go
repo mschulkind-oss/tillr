@@ -47,20 +47,43 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
 	fileForeground := foregroundRules(e.Rules)
 	var notices []Notice
 	err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
+		hasSettlement, err := alertEpisodesHasColumn(rd, "settlement_state")
+		if err != nil {
+			return err
+		}
+		hasActiveTriage, err := alertEpisodesHasColumn(rd, "active_triage_run_id")
+		if err != nil {
+			return err
+		}
+		hasEscalated, err := alertEpisodesHasColumn(rd, "escalated_to")
+		if err != nil {
+			return err
+		}
+		settlementExpr := "'uninvestigated'"
+		if hasSettlement {
+			settlementExpr = "COALESCE(NULLIF(a.settlement_state, ''), 'uninvestigated')"
+		}
+		activeTriageExpr := "''"
+		if hasActiveTriage {
+			activeTriageExpr = "COALESCE(a.active_triage_run_id, '')"
+		}
+		escalatedExpr := "''"
+		if hasEscalated {
+			escalatedExpr = "COALESCE(a.escalated_to, '')"
+		}
 		rows, err := rd.Query(`WITH latest_notice AS (
       SELECT n.object_id AS alert_id, MAX(n.seq) AS seq
       FROM events n
-      WHERE n.kind IN (?,?)
+      WHERE n.kind IN (?,?,?)
         AND n.seq > COALESCE((SELECT seen_seq FROM foreground_delivery WHERE owner_handle=?),0)
         AND n.object_id IS NOT NULL
       GROUP BY n.object_id
    )
-   SELECT v.seq,v.kind,a.alert_id,a.rule_id,a.bundle_json
+   SELECT v.seq,v.kind,a.alert_id,a.rule_id,a.state,`+settlementExpr+`,`+activeTriageExpr+`,`+escalatedExpr+`,a.bundle_json
    FROM latest_notice m
    JOIN alert_episodes a ON a.alert_id=m.alert_id
    JOIN events v ON v.seq=m.seq
-   WHERE a.state='open'
-   ORDER BY v.seq`, openedKind, reopenedKind, owner)
+   ORDER BY v.seq`, openedKind, reopenedKind, escalatedKind, owner)
 		if err != nil {
 			return err
 		}
@@ -68,24 +91,33 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
 		var effectiveForeground map[string]bool
 		for rows.Next() {
 			var n Notice
-			var kind, id string
+			var kind, id, epState, settlement, activeRun, escalatedTo string
 			var bundle []byte
-			if err := rows.Scan(&n.Seq, &kind, &n.AlertID, &id, &bundle); err != nil {
+			if err := rows.Scan(&n.Seq, &kind, &n.AlertID, &id, &epState, &settlement, &activeRun, &escalatedTo, &bundle); err != nil {
 				return err
 			}
-			foreground := fileForeground
-			if kind == reopenedKind {
-				if effectiveForeground == nil {
-					rules, err := ReadEffectiveRules(rd, e.Rules)
-					if err != nil {
-						return err
-					}
-					effectiveForeground = foregroundRules(rules)
+			if kind == escalatedKind {
+				if escalatedTo == "owner" {
+					continue
 				}
-				foreground = effectiveForeground
-			}
-			if !foreground[id] {
-				continue
+			} else {
+				if epState != "open" || settlement == "settled" || activeRun != "" || escalatedTo == "owner" {
+					continue
+				}
+				foreground := fileForeground
+				if kind == reopenedKind {
+					if effectiveForeground == nil {
+						rules, err := ReadEffectiveRules(rd, e.Rules)
+						if err != nil {
+							return err
+						}
+						effectiveForeground = foregroundRules(rules)
+					}
+					foreground = effectiveForeground
+				}
+				if !foreground[id] {
+					continue
+				}
 			}
 			if err := json.Unmarshal(bundle, &n.Bundle); err != nil {
 				return err

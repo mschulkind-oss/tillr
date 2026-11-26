@@ -767,6 +767,11 @@ func (k keys) duration(key string) time.Duration {
 	return d
 }
 
+// ParseWindow parses a positive whole-number duration in s, m, or h.
+func ParseWindow(s string) time.Duration {
+	return parseWindow(s)
+}
+
 func parseWindow(s string) time.Duration {
 	if len(s) < 2 || !strings.ContainsRune("smh", rune(s[len(s)-1])) {
 		return 0

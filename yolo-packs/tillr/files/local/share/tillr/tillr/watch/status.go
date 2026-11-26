@@ -18,19 +18,29 @@ type Status struct {
 	Owners   []OwnerStatus
 }
 
+// TriageSummary counts episodes by triage state.
+type TriageSummary struct {
+	Untriaged int `json:"untriaged"`
+	Triaging  int `json:"triaging"`
+	Settled   int `json:"settled"`
+	Escalated int `json:"escalated"`
+}
+
 // StatusSummary counts episodes by settlement state and active silences.
 type StatusSummary struct {
-	Unsettled      int `json:"unsettled"`
-	Uninvestigated int `json:"uninvestigated"`
-	Investigating  int `json:"investigating"`
-	Investigated   int `json:"investigated"`
-	Settled        int `json:"settled"`
-	ActiveSilences int `json:"active_silences"`
+	Unsettled      int           `json:"unsettled"`
+	Uninvestigated int           `json:"uninvestigated"`
+	Investigating  int           `json:"investigating"`
+	Investigated   int           `json:"investigated"`
+	Settled        int           `json:"settled"`
+	ActiveSilences int           `json:"active_silences"`
+	Triage         TriageSummary `json:"triage"`
 }
 
 // StatusOptions controls what ReadStatusWithOptions returns.
 type StatusOptions struct {
 	OnlyUnsettled bool
+	Recent        time.Duration
 }
 
 // SilenceStatus describes one active silence in watch_silences.
@@ -44,21 +54,31 @@ type SilenceStatus struct {
 	MatchedAlerts int               `json:"matched_alerts"`
 }
 
+type AlertTriageStatus struct {
+	State       string `json:"state"`
+	Outcome     string `json:"outcome,omitempty"`
+	OutcomeKind string `json:"outcome_kind,omitempty"`
+	RunID       string `json:"run_id,omitempty"`
+	ItemID      string `json:"item_id,omitempty"`
+	Finding     string `json:"finding,omitempty"`
+}
+
 type AlertStatus struct {
-	ID           string            `json:"alert_id"`
-	RuleID       string            `json:"rule_id"`
-	Subject      string            `json:"subject"`
-	State        string            `json:"state"`
-	Severity     string            `json:"severity"`
-	Opened       string            `json:"opened"`
-	Observed     int64             `json:"observed"`
-	Vars         map[string]string `json:"vars"`
-	Settlement   string            `json:"settlement,omitempty"`
-	UnsettledFor string            `json:"unsettled_for,omitempty"`
-	EscalatedTo  string            `json:"escalated_to,omitempty"`
-	By           *string           `json:"by,omitempty"`
-	Until        string            `json:"until,omitempty"`
-	ItemID       *string           `json:"item_id,omitempty"`
+	ID           string             `json:"alert_id"`
+	RuleID       string             `json:"rule_id"`
+	Subject      string             `json:"subject"`
+	State        string             `json:"state"`
+	Severity     string             `json:"severity"`
+	Opened       string             `json:"opened"`
+	Observed     int64              `json:"observed"`
+	Vars         map[string]string  `json:"vars"`
+	Settlement   string             `json:"settlement,omitempty"`
+	UnsettledFor string             `json:"unsettled_for,omitempty"`
+	EscalatedTo  string             `json:"escalated_to,omitempty"`
+	By           *string            `json:"by,omitempty"`
+	Until        string             `json:"until,omitempty"`
+	ItemID       *string            `json:"item_id,omitempty"`
+	Triage       *AlertTriageStatus `json:"triage,omitempty"`
 }
 
 type OwnerStatus struct {
@@ -124,7 +144,7 @@ func (e Evaluator) ReadStatusWithOptions(ctx context.Context, attached func(stri
 			if err := s.readSummary(rd); err != nil {
 				return err
 			}
-			if err := s.readAlerts(rd, now, opts.OnlyUnsettled); err != nil {
+			if err := s.readAlerts(rd, now, opts); err != nil {
 				return err
 			}
 		}
@@ -224,9 +244,11 @@ func (s *Status) readSummary(rd *store.Reader) error {
 			}
 			if state == "resolved" {
 				s.Summary.Settled += n
+				s.Summary.Triage.Settled += n
 			} else {
 				s.Summary.Uninvestigated += n
 				s.Summary.Unsettled += n
+				s.Summary.Triage.Untriaged += n
 			}
 		}
 		return rows.Err()
@@ -256,7 +278,41 @@ func (s *Status) readSummary(rd *store.Reader) error {
 			s.Summary.Unsettled += n
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	hasTriage, err := hasTriageColumns(rd)
+	if err != nil {
+		return err
+	}
+	if !hasTriage {
+		s.Summary.Triage.Untriaged = s.Summary.Unsettled
+		s.Summary.Triage.Settled = s.Summary.Settled
+		return nil
+	}
+	tRows, err := rd.Query(`SELECT COALESCE(NULLIF(triage_state, ''), 'untriaged'), COUNT(*) FROM alert_episodes GROUP BY 1`)
+	if err != nil {
+		return err
+	}
+	defer tRows.Close()
+	for tRows.Next() {
+		var tst string
+		var n int
+		if err := tRows.Scan(&tst, &n); err != nil {
+			return err
+		}
+		switch tst {
+		case "triaging":
+			s.Summary.Triage.Triaging += n
+		case "settled":
+			s.Summary.Triage.Settled += n
+		case "escalated":
+			s.Summary.Triage.Escalated += n
+		default:
+			s.Summary.Triage.Untriaged += n
+		}
+	}
+	return tRows.Err()
 }
 
 func (s *Status) readSilences(rd *store.Reader, hasAlerts bool) error {
@@ -305,7 +361,7 @@ func (s *Status) readSilences(rd *store.Reader, hasAlerts bool) error {
 	return nil
 }
 
-func (s *Status) readAlerts(rd *store.Reader, now time.Time, onlyUnsettled bool) error {
+func (s *Status) readAlerts(rd *store.Reader, now time.Time, opts StatusOptions) error {
 	hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
 	if err != nil {
 		return err
@@ -322,6 +378,13 @@ func (s *Status) readAlerts(rd *store.Reader, now time.Time, onlyUnsettled bool)
 	if err != nil {
 		return err
 	}
+	hasTriage, err := hasTriageColumns(rd)
+	if err != nil {
+		return err
+	}
+	if opts.Recent > 0 && !hasTriage {
+		return nil
+	}
 	cols := "alert_id, rule_id, subject_key, state, severity, opened_at, observation_count, acked_by, silence_until_ms"
 	if hasTracking {
 		cols += ", tracking_item_id"
@@ -335,15 +398,27 @@ func (s *Status) readAlerts(rd *store.Reader, now time.Time, onlyUnsettled bool)
 	if hasEscalated {
 		cols += ", COALESCE(escalated_to, '')"
 	}
-	where := "state<>'resolved'"
-	if onlyUnsettled {
-		if hasSettlement {
-			where = "COALESCE(NULLIF(settlement_state, ''), 'uninvestigated')<>'settled'"
-		} else {
-			where = "state<>'resolved'"
+	if hasTriage {
+		cols += ", COALESCE(NULLIF(triage_state, ''), 'untriaged'), COALESCE(triage_outcome, ''), COALESCE(triage_outcome_kind, ''), COALESCE(triage_run_id, ''), COALESCE(triage_finding, '')"
+	}
+	var where string
+	var args []any
+	if opts.Recent > 0 {
+		cutoff := now.Add(-opts.Recent).UnixMilli()
+		where = "state='resolved' AND opened_at>=? AND triaged_at IS NOT NULL AND triaged_at>=? AND resolved_at IS NOT NULL AND resolved_at>=?"
+		args = append(args, cutoff, cutoff, cutoff)
+		if opts.OnlyUnsettled && hasSettlement {
+			where += " AND COALESCE(NULLIF(settlement_state, ''), 'uninvestigated')<>'settled'"
+		}
+	} else {
+		where = "state<>'resolved'"
+		if opts.OnlyUnsettled {
+			if hasSettlement {
+				where = "COALESCE(NULLIF(settlement_state, ''), 'uninvestigated')<>'settled'"
+			}
 		}
 	}
-	rows, err := rd.Query(`SELECT ` + cols + ` FROM alert_episodes WHERE ` + where + ` ORDER BY opened_seq, alert_id`)
+	rows, err := rd.Query(`SELECT `+cols+` FROM alert_episodes WHERE `+where+` ORDER BY opened_seq, alert_id`, args...)
 	if err != nil {
 		return err
 	}
@@ -355,6 +430,7 @@ func (s *Status) readAlerts(rd *store.Reader, now time.Time, onlyUnsettled bool)
 		var by, itemID *string
 		var rawVars sql.NullString
 		var settlement, escalated string
+		var triageState, triageOutcome, triageOutcomeKind, triageRunID, triageFinding string
 		dest := []any{&alert.ID, &alert.RuleID, &alert.Subject, &alert.State, &alert.Severity, &opened, &alert.Observed, &by, &until}
 		if hasTracking {
 			dest = append(dest, &itemID)
@@ -367,6 +443,9 @@ func (s *Status) readAlerts(rd *store.Reader, now time.Time, onlyUnsettled bool)
 		}
 		if hasEscalated {
 			dest = append(dest, &escalated)
+		}
+		if hasTriage {
+			dest = append(dest, &triageState, &triageOutcome, &triageOutcomeKind, &triageRunID, &triageFinding)
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return err
@@ -401,6 +480,19 @@ func (s *Status) readAlerts(rd *store.Reader, now time.Time, onlyUnsettled bool)
 		}
 		if itemID != nil {
 			alert.ItemID = itemID
+		}
+		if hasTriage {
+			t := &AlertTriageStatus{
+				State:       triageState,
+				Outcome:     triageOutcome,
+				OutcomeKind: triageOutcomeKind,
+				RunID:       triageRunID,
+				Finding:     triageFinding,
+			}
+			if itemID != nil {
+				t.ItemID = *itemID
+			}
+			alert.Triage = t
 		}
 		s.Alerts = append(s.Alerts, alert)
 	}
@@ -449,21 +541,59 @@ func (owner *OwnerStatus) readPending(rd *store.Reader, rules []Rule) error {
 			foreground[r.ID] = true
 		}
 	}
-	// EXISTS counts each open episode once, even when several of its
-	// opening events are newer than seen_seq.
-	rows, err := rd.Query(`SELECT a.rule_id FROM alert_episodes a
-		WHERE a.state='open' AND EXISTS (
-			SELECT 1 FROM events v WHERE v.object_id=a.alert_id AND v.kind IN (?, ?)
-			AND v.seq>(SELECT seen_seq FROM foreground_delivery WHERE owner_handle=?)
-		)`, openedKind, reopenedKind, owner.Owner)
+	hasSettlement, err := alertEpisodesHasColumn(rd, "settlement_state")
+	if err != nil {
+		return err
+	}
+	hasActiveTriage, err := alertEpisodesHasColumn(rd, "active_triage_run_id")
+	if err != nil {
+		return err
+	}
+	hasEscalated, err := alertEpisodesHasColumn(rd, "escalated_to")
+	if err != nil {
+		return err
+	}
+	settlementExpr := "'uninvestigated'"
+	if hasSettlement {
+		settlementExpr = "COALESCE(NULLIF(a.settlement_state, ''), 'uninvestigated')"
+	}
+	activeTriageExpr := "''"
+	if hasActiveTriage {
+		activeTriageExpr = "COALESCE(a.active_triage_run_id, '')"
+	}
+	escalatedExpr := "''"
+	if hasEscalated {
+		escalatedExpr = "COALESCE(a.escalated_to, '')"
+	}
+	rows, err := rd.Query(`WITH latest_notice AS (
+      SELECT n.object_id AS alert_id, MAX(n.seq) AS seq
+      FROM events n
+      WHERE n.kind IN (?,?,?)
+        AND n.seq > COALESCE((SELECT seen_seq FROM foreground_delivery WHERE owner_handle=?),0)
+        AND n.object_id IS NOT NULL
+      GROUP BY n.object_id
+   )
+   SELECT v.kind,a.rule_id,a.state,`+settlementExpr+`,`+activeTriageExpr+`,`+escalatedExpr+`
+   FROM latest_notice m
+   JOIN alert_episodes a ON a.alert_id=m.alert_id
+   JOIN events v ON v.seq=m.seq`, openedKind, reopenedKind, escalatedKind, owner.Owner)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var ruleID string
-		if err := rows.Scan(&ruleID); err != nil {
+		var kind, ruleID, epState, settlement, activeRun, escalatedTo string
+		if err := rows.Scan(&kind, &ruleID, &epState, &settlement, &activeRun, &escalatedTo); err != nil {
 			return err
+		}
+		if kind == escalatedKind {
+			if escalatedTo != "owner" {
+				owner.Pending++
+			}
+			continue
+		}
+		if epState != "open" || settlement == "settled" || activeRun != "" || escalatedTo == "owner" {
+			continue
 		}
 		if foreground[ruleID] {
 			owner.Pending++
