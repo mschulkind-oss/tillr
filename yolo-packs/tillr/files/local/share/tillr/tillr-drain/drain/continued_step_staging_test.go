@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	drainfaults "github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
@@ -313,8 +314,26 @@ func TestRepeatedUnchangedStagingFailureIsHeldOnceAndNotRetried(t *testing.T) {
 	if _, held := l.held["item-a"]; held {
 		t.Fatalf("item-a held after first failure, want hold only on repeat")
 	}
+	sRead, err := store.Open(context.Background(), f.storePath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sRead.ReadTx(context.Background(), func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if len(faults) != 0 {
+			t.Fatalf("item faults after first failure = %+v, want none", faults)
+		}
+		return nil
+	}); err != nil {
+		sRead.Close()
+		t.Fatal(err)
+	}
+	sRead.Close()
 
-	// Pass 2: same error repeats unchanged -> held once naming lane and mover.
+	// Pass 2: same error repeats unchanged -> held once as unified stage-failed fault naming run and mover.
 	var res2 LoopResult
 	if _, err := l.pass(context.Background(), &res2); err != nil {
 		t.Fatal(err)
@@ -322,13 +341,38 @@ func TestRepeatedUnchangedStagingFailureIsHeldOnceAndNotRetried(t *testing.T) {
 	if stager.calls != 2 {
 		t.Fatalf("pass 2 calls=%d, want 2", stager.calls)
 	}
-	hold, held := l.held["item-a"]
-	wantReason := ReasonStagingFailed + ": lane-1"
-	if !held || hold.reason != wantReason {
-		t.Fatalf("item-a hold = (%v, %+v), want %q", held, hold, wantReason)
+	if _, held := l.held["item-a"]; held {
+		t.Fatalf("item-a held in memory, want durable %s fault", ReasonStageFailed)
 	}
-	if !strings.Contains(report.String(), "correct the reported staging cause on lane-1") || !strings.Contains(report.String(), "mover:") {
-		t.Fatalf("report does not name lane-specific mover: %s", report.String())
+	var fault ItemFault
+	sRead, err = store.Open(context.Background(), f.storePath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sRead.ReadTx(context.Background(), func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		var ok bool
+		fault, ok = faults["item-a"]
+		if !ok || fault.Reason != ReasonStageFailed || fault.LaneID != "lane-1" || fault.RunID == "" {
+			t.Fatalf("item-a fault = (%v, %+v), want %s on lane-1 with run_id", ok, fault, ReasonStageFailed)
+		}
+		if !strings.Contains(fault.Detail, "staging failure repeated unchanged: persistent staging fault") {
+			t.Fatalf("item-a fault detail = %q, want repeated staging detail", fault.Detail)
+		}
+		return nil
+	}); err != nil {
+		sRead.Close()
+		t.Fatal(err)
+	}
+	sRead.Close()
+	wantRetry := drainfaults.StageRetryCommand(f.storePath, "item-a", fault.RunID)
+	wantClear := fault.ClearCommand(f.storePath)
+	wantMover := "loop: item-a mover: fix the staging fault the detail names, then " + wantRetry + " or " + wantClear + "\n"
+	if !strings.Contains(report.String(), wantMover) {
+		t.Fatalf("report does not name unified stage-failed mover %q: %s", wantMover, report.String())
 	}
 
 	// Pass 3: held item is not retried; stager is not called again.
@@ -339,27 +383,31 @@ func TestRepeatedUnchangedStagingFailureIsHeldOnceAndNotRetried(t *testing.T) {
 	if stager.calls != 2 || res3.InfraFailures != 0 {
 		t.Fatalf("pass 3 retried held item: calls=%d infra=%d", stager.calls, res3.InfraFailures)
 	}
-	class, where, mover := whyPresentation(Decision{Action: ActionHold, Reason: wantReason})
-	if class != "needs you" || where != "lane" || !strings.Contains(mover, "lane-1") {
-		t.Fatalf("whyPresentation = (%q, %q, %q), want needs you / lane / naming lane-1", class, where, mover)
+	class, where, mover := whyPresentation(Decision{Action: ActionHold, Reason: ReasonStageFailed})
+	if class != "needs you" || where != "lane" || !strings.Contains(mover, "fix the staging fault the detail names") {
+		t.Fatalf("whyPresentation = (%q, %q, %q), want needs you / lane / stage-failed mover", class, where, mover)
 	}
-	rule := holdrules.For(wantReason)
-	if rule.Class != "needs you" || rule.Where != "lane" || !strings.Contains(rule.Mover, "lane-1") {
-		t.Fatalf("holdrules.For(%q) = %+v, want needs you / lane / naming lane-1", wantReason, rule)
+	rule := holdrules.For(ReasonStageFailed)
+	if rule.Class != "needs you" || rule.Where != "lane" || !strings.Contains(rule.Mover, "tillr drain retry naming the held run") {
+		t.Fatalf("holdrules.For(%q) = %+v, want needs you / lane / naming held run retry", ReasonStageFailed, rule)
 	}
 
-	// Clearing the lane condition (or recording a retry after the hold) drops the hold so
-	// once the staging fault is fixed, the item dispatches again.
+	// Authorizing a retry for the held run clears the stage-failed fault so once the
+	// staging fault is fixed, the item dispatches again.
 	stager.err = nil
 	s, err := store.Open(context.Background(), f.storePath, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
-		if _, err := tx.Exec(RetryDDL); err != nil {
-			return err
-		}
-		_, err := tx.Exec(`INSERT INTO retries(retry_id, item_id, supersedes_run_id, requested_by, reason, requested_at) VALUES('ret-1', 'item-a', 'run-0', 'operator', 'fixed staging', ?)`, hold.at.Add(time.Second).UnixMilli())
+		_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{
+			StorePath: f.storePath,
+			ItemID:    "item-a",
+			RunID:     fault.RunID,
+			By:        "operator",
+			Why:       "fixed staging",
+			At:        l.cfg.Now().Add(time.Second),
+		})
 		return err
 	}); err != nil {
 		s.Close()
@@ -370,9 +418,24 @@ func TestRepeatedUnchangedStagingFailureIsHeldOnceAndNotRetried(t *testing.T) {
 	if _, err := l.pass(context.Background(), &res4); err != nil {
 		t.Fatal(err)
 	}
-	if _, stillHeld := l.held["item-a"]; stillHeld {
-		t.Fatalf("item-a still held after operator retry")
+	sRead, err = store.Open(context.Background(), f.storePath, false)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if err := sRead.ReadTx(context.Background(), func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if _, stillHeld := faults["item-a"]; stillHeld {
+			t.Fatalf("item-a still held after operator retry: %+v", faults["item-a"])
+		}
+		return nil
+	}); err != nil {
+		sRead.Close()
+		t.Fatal(err)
+	}
+	sRead.Close()
 	if stager.calls != 3 {
 		t.Fatalf("pass 4 after retry calls=%d, want 3", stager.calls)
 	}
