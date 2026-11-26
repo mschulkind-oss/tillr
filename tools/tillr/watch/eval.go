@@ -62,7 +62,10 @@ func init() {
 		`UPDATE alert_episodes SET settlement_state = 'settled' WHERE state = 'resolved'`); err != nil {
 		panic(err)
 	}
-	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, trackedKind, silencedKind, reopenedKind, investigatedKind, settledKind, silenceLiftedKind, ruleSetKind, ruleResetKind} {
+	if err := store.RegisterTableBackfill("watch", "alert_item_links", backfillAlertItemLinks); err != nil {
+		panic(err)
+	}
+	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, trackedKind, silencedKind, reopenedKind, investigatedKind, settledKind, itemLinkedKind, silenceLiftedKind, ruleSetKind, ruleResetKind} {
 		if err := event.Register(kind, "watch"); err != nil {
 			panic(err)
 		}
@@ -126,7 +129,7 @@ CREATE TABLE IF NOT EXISTS foreground_delivery (
  waiting_since INTEGER,
  last_wait_at INTEGER
 );
-` + watchSilencesDDL + ruleOverridesDDL + ruleBaselinesDDL
+` + watchSilencesDDL + ruleOverridesDDL + ruleBaselinesDDL + alertItemLinksDDL
 
 // Evaluator derives rule conditions from a single store snapshot per pass.
 // Only the watch episode transitions and their corresponding events are written.
@@ -1575,7 +1578,7 @@ func (changes *episodeChanges) open(rd *store.Reader, r Rule, key string, c *con
 	} else if liftCause := silences.recentItemLiftCause(r.ID, varsJSON, max(prevOpenedAt, prevResolvedAt)); liftCause != "" {
 		openedPayload["cause"] = liftCause
 	}
-	return changes.transition(r, key, id, openedKind, now, openedPayload, func(tx *store.Tx) error {
+	return changes.transitionAfter(r, key, id, openedKind, now, openedPayload, func(tx *store.Tx) error {
 		hasLagCol, err := alertEpisodesHasColumn(tx.Reader(), "tracked_lag_pair")
 		if err != nil {
 			return err
@@ -1642,6 +1645,11 @@ func (changes *episodeChanges) open(rd *store.Reader, r Rule, key string, c *con
 		}
 		_, err = tx.Exec(fmt.Sprintf(`INSERT INTO alert_episodes (%s) VALUES (%s)`, strings.Join(cols, ","), strings.Join(placeholders, ",")), vals...)
 		return err
+	}, func(tx *store.Tx, seq int64) error {
+		if sil == nil {
+			return nil
+		}
+		return upsertAlertItemLink(tx, id, sil.TrackingItemID, LinkRelationSilence, sil.CreatedBy, sil.Reason, now.UnixMilli(), seq)
 	})
 }
 
@@ -2086,6 +2094,10 @@ func (changes *episodeChanges) resolveWithReason(r Rule, key, id string, trackin
 }
 
 func (changes *episodeChanges) transition(r Rule, key, id, kind string, now time.Time, body map[string]any, update func(*store.Tx) error) error {
+	return changes.transitionAfter(r, key, id, kind, now, body, update, nil)
+}
+
+func (changes *episodeChanges) transitionAfter(r Rule, key, id, kind string, now time.Time, body map[string]any, update func(*store.Tx) error, after func(*store.Tx, int64) error) error {
 	body["alert_id"], body["rule_id"], body["subject_key"] = id, r.ID, key
 	body["severity"], body["receiver"] = r.Severity, r.Delivery.Receiver
 	payload, err := json.Marshal(body)
@@ -2096,8 +2108,14 @@ func (changes *episodeChanges) transition(r Rule, key, id, kind string, now time
 		if err := update(tx); err != nil {
 			return err
 		}
-		_, err := tx.Append(event.Event{Kind: kind, At: now, ObjectType: "alert", ObjectID: &id, Payload: payload})
-		return err
+		seq, err := tx.Append(event.Event{Kind: kind, At: now, ObjectType: "alert", ObjectID: &id, Payload: payload})
+		if err != nil {
+			return err
+		}
+		if after != nil {
+			return after(tx, seq)
+		}
+		return nil
 	})
 	return nil
 }

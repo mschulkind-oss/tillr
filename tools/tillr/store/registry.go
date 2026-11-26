@@ -41,6 +41,7 @@ var (
 	registeredDDL             []ownerDDL
 	registeredColumns         []ownerColumn
 	registeredColumnBackfills []ownerColumnBackfill
+	registeredTableBackfills  []ownerTableBackfill
 	materializers             = map[string]materializerEntry{}
 )
 
@@ -154,6 +155,56 @@ func columnBackfillFor(table, column string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// TableBackfillFunc populates a newly created table within the migration transaction.
+type TableBackfillFunc func(ctx context.Context, tx MigrationExec) error
+
+type ownerTableBackfill struct {
+	owner string
+	table string
+	fn    TableBackfillFunc
+}
+
+// RegisterTableBackfill registers a one-time backfill callback to run in the same
+// migration transaction when table did not exist before migrations() ran.
+// Two owners registering a backfill for the same table is refused; the same owner
+// registering the same table again is a no-op.
+func RegisterTableBackfill(owner, table string, fn TableBackfillFunc) error {
+	if owner == "" || table == "" || fn == nil {
+		return fmt.Errorf("store: a table backfill registration needs an owner, a table and a function")
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for _, existing := range registeredTableBackfills {
+		if existing.table != table {
+			continue
+		}
+		if existing.owner == owner {
+			return nil
+		}
+		return fmt.Errorf("store: table backfill for %s is already registered by owner %q", table, existing.owner)
+	}
+	registeredTableBackfills = append(registeredTableBackfills, ownerTableBackfill{
+		owner: owner,
+		table: table,
+		fn:    fn,
+	})
+	return nil
+}
+
+func tableBackfills() []ownerTableBackfill {
+	registryMu.RLock()
+	registered := make([]ownerTableBackfill, len(registeredTableBackfills))
+	copy(registered, registeredTableBackfills)
+	registryMu.RUnlock()
+	sort.Slice(registered, func(i, j int) bool {
+		if registered[i].owner != registered[j].owner {
+			return registered[i].owner < registered[j].owner
+		}
+		return registered[i].table < registered[j].table
+	})
+	return registered
 }
 
 // RegisterMaterializer registers one utility's record→row mapping for a record kind.

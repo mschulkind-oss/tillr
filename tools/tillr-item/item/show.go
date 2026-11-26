@@ -12,6 +12,7 @@ import (
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/vantage"
+	"github.com/mschulkind-oss/tillr/watchlinks"
 )
 
 // Show answers the stored item.record for one item, read from the rows rather than
@@ -122,6 +123,17 @@ func ShowWithQuestions(r *store.Reader, id, root string, source vantage.Question
 		if value, ok := annotated[key]; ok {
 			fields[key] = value
 		}
+	}
+	linkedAlerts, err := watchlinks.LinkedAlertsForItem(r, id)
+	if err != nil {
+		return record.Envelope{}, Internalf("reading linked alerts for %q: %v", id, err)
+	}
+	if len(linkedAlerts) > 0 {
+		rawLinked, err := json.Marshal(linkedAlerts)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+		fields["linked_alerts"] = rawLinked
 	}
 	return envelopeOf(RecordKind, "item-"+id, env.CreatedAt, fields)
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/watchlinks"
 )
 
 // A filed request is an item the owner or an operator files straight into the queue from
@@ -52,6 +53,7 @@ type RequestFiling struct {
 	Paths       []string
 	Criteria    []string
 	BlockedBy   []string
+	Alerts      []string
 	Ordinary    bool
 	Destination Destination
 	At          time.Time
@@ -93,7 +95,7 @@ func RequestWorkflowCheck(root, ref string) error {
 // requestInputHash is the identity of everything the filer chose except the place: a
 // refile with the same words and the same choices is the same request.
 func requestInputHash(f RequestFiling) string {
-	raw, _ := json.Marshal([]any{string(f.Words), f.Title, f.Seat, f.Workflow, f.Paths, f.Criteria, f.Ordinary, f.BlockedBy})
+	raw, _ := json.Marshal([]any{string(f.Words), f.Title, f.Seat, f.Workflow, f.Paths, f.Criteria, f.Ordinary, f.BlockedBy, f.Alerts})
 	return fmt.Sprintf("%x", sha256.Sum256(raw))
 }
 
@@ -154,6 +156,20 @@ func normalizeRequest(f *RequestFiling) error {
 	}
 	slices.Sort(deps)
 	f.BlockedBy = deps
+	seenAlerts := map[string]bool{}
+	alerts := []string{}
+	for _, alertID := range f.Alerts {
+		alertID = strings.TrimSpace(alertID)
+		if alertID == "" {
+			return Rejectionf("alert-id-empty", "", "--alert must name an alert id")
+		}
+		if !seenAlerts[alertID] {
+			seenAlerts[alertID] = true
+			alerts = append(alerts, alertID)
+		}
+	}
+	slices.Sort(alerts)
+	f.Alerts = alerts
 	if !f.Destination.Valid() {
 		return Usagef("a request needs at most one of --to first|last, --before <item>, --after <item>")
 	}
@@ -234,11 +250,22 @@ func insertRequest(ctx context.Context, tx *store.Tx, f RequestFiling, id, hash,
 	if err != nil {
 		return record.Envelope{}, err
 	}
+	for _, alertID := range f.Alerts {
+		if err := watchlinks.LinkAlertItemInTx(tx, alertID, id, watchlinks.LinkRelationFiled, f.By, "", f.At); err != nil {
+			if errors.Is(err, watchlinks.ErrAlertNotFound) {
+				return record.Envelope{}, Rejectionf("alert-not-found", alertID, "no alert %q in this store", alertID)
+			}
+			return record.Envelope{}, Internalf("linking alert %s to item %s: %v", alertID, id, err)
+		}
+	}
 	var answer map[string]any
 	if err := json.Unmarshal(placed.Payload, &answer); err != nil {
 		return record.Envelope{}, Internalf("reading the placement: %v", err)
 	}
 	answer["seat"], answer["workflow"], answer["allowed_paths"], answer["blocked_by"], answer["words_size"] = f.Seat, f.Workflow, f.Paths, f.BlockedBy, len(f.Words)
+	if len(f.Alerts) > 0 {
+		answer["linked_alerts"] = f.Alerts
+	}
 	return envelopeOf("item.request", id, f.At, answer)
 }
 

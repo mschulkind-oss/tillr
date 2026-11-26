@@ -13,6 +13,7 @@ import (
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/watchlinks"
 )
 
 const (
@@ -25,7 +26,7 @@ const (
 )
 
 // ErrAlertNotFound reports that no episode has the given alert ID.
-var ErrAlertNotFound = errors.New("not found")
+var ErrAlertNotFound = watchlinks.ErrAlertNotFound
 
 // ErrInvestigationRequired reports that settle was attempted without a recorded
 // investigation or inline cause and evidence.
@@ -553,7 +554,11 @@ func (e Evaluator) Settle(ctx context.Context, id string, opts SettleOptions) er
 		if opts.LinkKind != "" {
 			settlePayload["link_kind"] = opts.LinkKind
 		}
-		return appendAlert(tx, id, settledKind, now, settlePayload)
+		seq, err := appendAlertSeq(tx, id, settledKind, now, settlePayload)
+		if err != nil {
+			return err
+		}
+		return upsertAlertItemLink(tx, id, opts.ItemID, opts.Outcome, opts.By, "", now.UnixMilli(), seq)
 	})
 }
 
@@ -672,10 +677,14 @@ func (e Evaluator) act(ctx context.Context, id, kind string, change func(*store.
 }
 
 func appendAlert(tx *store.Tx, id, kind string, now time.Time, body map[string]any) error {
+	_, err := appendAlertSeq(tx, id, kind, now, body)
+	return err
+}
+
+func appendAlertSeq(tx *store.Tx, id, kind string, now time.Time, body map[string]any) (int64, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = tx.Append(event.Event{Kind: kind, At: now, ObjectType: "alert", ObjectID: &id, Payload: payload})
-	return err
+	return tx.Append(event.Event{Kind: kind, At: now, ObjectType: "alert", ObjectID: &id, Payload: payload})
 }

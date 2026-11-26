@@ -50,16 +50,18 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `
 
-// migrationsExec is the statement surface the migration runs on: the connection
+// MigrationExec is the statement surface the migration runs on: the connection
 // open.go's migrate has begun IMMEDIATE. It is not *sql.Tx because database/sql cannot
 // ask for an immediate begin — the driver takes that from the handle's dsn — and the
 // migration is the one transaction in the store that has to have the write lock before it
 // reads (see that function).
-type migrationsExec interface {
+type MigrationExec interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
+
+type migrationsExec = MigrationExec
 
 // migrate applies the DDL list, adds the columns a store is missing, and records the
 // version, in one transaction so a half-migrated store cannot exist. The list is
@@ -83,6 +85,16 @@ func migrate(ctx context.Context, tx migrationsExec) error {
 			return fmt.Errorf("store: schema version %d is newer than supported version %d", version, SchemaVersion)
 		}
 	}
+	var pendingBackfills []ownerTableBackfill
+	for _, tb := range tableBackfills() {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, tb.table).Scan(&n); err != nil {
+			return fmt.Errorf("store: probing table %s before migration: %w", tb.table, err)
+		}
+		if n == 0 {
+			pendingBackfills = append(pendingBackfills, tb)
+		}
+	}
 	for _, ddl := range migrations() {
 		if _, err := tx.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("store: applying schema: %w", err)
@@ -94,6 +106,11 @@ func migrate(ctx context.Context, tx migrationsExec) error {
 	// skipped, which is the registration defect it is.
 	if err := addMissingColumns(ctx, tx); err != nil {
 		return err
+	}
+	for _, tb := range pendingBackfills {
+		if err := tb.fn(ctx, tx); err != nil {
+			return fmt.Errorf("store: backfilling table %s: %w", tb.table, err)
+		}
 	}
 	if version < 6 {
 		if err := migrateJudgeSteps(ctx, tx); err != nil {

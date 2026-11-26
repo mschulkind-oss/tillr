@@ -309,3 +309,63 @@ func TestColumnBackfillRunsOnceWhenColumnIsAdded(t *testing.T) {
 		t.Fatalf("after second open: r3.settled=%d, want 0 (backfill must run once only)", s3)
 	}
 }
+
+func TestARegisteredTableBackfillRunsOnceWhenTableIsCreated(t *testing.T) {
+	if err := store.RegisterDDL("registry-table-backfill", `CREATE TABLE IF NOT EXISTS registry_table_backfill_target (id TEXT PRIMARY KEY, val TEXT NOT NULL);`); err != nil {
+		t.Fatalf("RegisterDDL: %v", err)
+	}
+	runs := 0
+	fn := func(ctx context.Context, tx store.MigrationExec) error {
+		runs++
+		_, err := tx.ExecContext(ctx, `INSERT INTO registry_table_backfill_target (id, val) VALUES ('t1', 'seeded')`)
+		return err
+	}
+	if err := store.RegisterTableBackfill("registry-table-backfill", "registry_table_backfill_target", fn); err != nil {
+		t.Fatalf("RegisterTableBackfill: %v", err)
+	}
+	// Same owner re-registering is a no-op.
+	if err := store.RegisterTableBackfill("registry-table-backfill", "registry_table_backfill_target", fn); err != nil {
+		t.Fatalf("re-registering table backfill: %v", err)
+	}
+	// Different owner for same table is refused.
+	if err := store.RegisterTableBackfill("registry-table-backfill-other", "registry_table_backfill_target", fn); err == nil {
+		t.Fatal("expected conflict error when another owner registers a backfill for the same table")
+	}
+	if err := store.RegisterTableBackfill("", "registry_table_backfill_target", fn); err == nil {
+		t.Fatal("expected error for empty owner")
+	}
+	if err := store.RegisterTableBackfill("registry-table-backfill", "", fn); err == nil {
+		t.Fatal("expected error for empty table")
+	}
+	if err := store.RegisterTableBackfill("registry-table-backfill", "registry_table_backfill_target", nil); err == nil {
+		t.Fatal("expected error for nil func")
+	}
+
+	path := filepath.Join(t.TempDir(), "board.sqlite3")
+	s, err := store.Open(context.Background(), path, true)
+	if err != nil {
+		t.Fatalf("Open(create=true): %v", err)
+	}
+	var got string
+	if err := s.ReadTx(context.Background(), func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT val FROM registry_table_backfill_target WHERE id='t1'`).Scan(&got)
+	}); err != nil {
+		s.Close()
+		t.Fatalf("reading backfilled row: %v", err)
+	}
+	if got != "seeded" || runs != 1 {
+		s.Close()
+		t.Fatalf("got val=%q runs=%d, want 'seeded' and 1", got, runs)
+	}
+	s.Close()
+
+	// Second open: table already exists, so backfill must not run again.
+	s2, err := store.OpenMigrated(context.Background(), path)
+	if err != nil {
+		t.Fatalf("second OpenMigrated: %v", err)
+	}
+	defer s2.Close()
+	if runs != 1 {
+		t.Fatalf("after second open: runs=%d, want 1", runs)
+	}
+}

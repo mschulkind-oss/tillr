@@ -580,7 +580,11 @@ func (e Evaluator) Silence(ctx context.Context, opts SilenceOptions) (SilenceRec
 			if opts.UntilChange {
 				silPayload["until_change"] = true
 			}
-			return appendAlert(tx, aid, silencedKind, now, silPayload)
+			seq, err := appendAlertSeq(tx, aid, silencedKind, now, silPayload)
+			if err != nil {
+				return err
+			}
+			return upsertAlertItemLink(tx, aid, opts.ItemID, LinkRelationSilence, opts.By, opts.Reason, now.UnixMilli(), seq)
 		}
 
 		if plan.resolvedOnly && opts.AlertID != "" {

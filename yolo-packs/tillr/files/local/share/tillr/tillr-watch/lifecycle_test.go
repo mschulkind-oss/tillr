@@ -28,7 +28,7 @@ func TestWatchEpisodeFaces(t *testing.T) {
 	// Guard every domain table installed in the fixture. The tested faces may
 	// write only episodes and events; even a no-op UPDATE must not be attempted.
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-		rows, err := tx.Query(`SELECT name FROM sqlite_schema WHERE type='table' AND (name LIKE '%item%' OR name LIKE '%run%' OR name LIKE '%repair%')`)
+		rows, err := tx.Query(`SELECT name FROM sqlite_schema WHERE type='table' AND name != 'alert_item_links' AND (name LIKE '%item%' OR name LIKE '%run%' OR name LIKE '%repair%')`)
 		if err != nil {
 			return err
 		}
