@@ -33,6 +33,7 @@
   "drain.store-busy",
   "drain.trunk-core-worktree",
   "gate.started",
+  "gate.stopped",
   "gate.verdict",
   "item.add",
   "item.conflict",

@@ -355,6 +355,11 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	}
 	done, err := s.awaitDetachedGate(ctx, nil, handle)
 	if err != nil {
+		reason := "aborted"
+		if ctx.Err() != nil {
+			reason = "cancelled"
+		}
+		s.recordGateStopped(ctx, candidate, reason)
 		return GateOutcome{}, err
 	}
 	return s.finishDetachedGate(ctx, candidate, handle, done)
@@ -730,6 +735,13 @@ func (s *ProcessSteps) stopDetachedGate(handle detachedGateHandle) {
 }
 
 func (s *ProcessSteps) finishDetachedGate(ctx context.Context, candidate Candidate, handle detachedGateHandle, done detachedGateDone) (GateOutcome, error) {
+	verdictHandled := false
+	stopReason := "aborted"
+	defer func() {
+		if !verdictHandled {
+			s.recordGateStopped(ctx, candidate, stopReason)
+		}
+	}()
 	for _, name := range []string{GateFaceFile, GateDoneFile, gateSpecFile, "gate.stdin"} {
 		_ = os.Remove(filepath.Join(handle.dir, name))
 	}
@@ -744,6 +756,7 @@ func (s *ProcessSteps) finishDetachedGate(ctx context.Context, candidate Candida
 		argv0 = done.Argv[0]
 	}
 	if done.NotStarted {
+		stopReason = "not-started"
 		span := stepSpan("gate", done.Argv, &exec.Cmd{Dir: done.Cwd}, done.StartedAtMS, done.StderrTail)
 		span.FinishedAtMS = done.FinishedAtMS
 		if err := s.recordStep(candidate.RunID, span); err != nil {
@@ -775,12 +788,15 @@ func (s *ProcessSteps) finishDetachedGate(ctx context.Context, candidate Candida
 		s.recordGateTiming(context.WithoutCancel(ctx), candidate, span)
 	}
 	if ctx.Err() != nil {
+		stopReason = "cancelled"
 		return GateOutcome{}, ctx.Err()
 	}
 	if done.Interrupted {
+		stopReason = "interrupted"
 		return GateOutcome{}, Externalf("running %q in %s: gate supervisor interrupted: %s", argv0, candidate.Worktree, done.StderrTail)
 	}
 	if done.ExitCode < 0 {
+		stopReason = "signal-or-error"
 		return GateOutcome{}, Externalf("running %q in %s: exit %d: %s", argv0, candidate.Worktree, done.ExitCode, done.StderrTail)
 	}
 	var outBytes []byte
@@ -793,6 +809,7 @@ func (s *ProcessSteps) finishDetachedGate(ctx context.Context, candidate Candida
 	}
 	outStr := string(outBytes)
 	if done.ExitCode == record.ExitUsage {
+		stopReason = "usage-error"
 		return GateOutcome{}, Usagef("configuration fault: %s program %q refused its arguments for %s%s", "gate", s.GateProgram, candidate.ItemID, stderrReason(span))
 	}
 
@@ -889,6 +906,7 @@ func (s *ProcessSteps) finishDetachedGate(ctx context.Context, candidate Candida
 		Outcome: outcome.Outcome, Program: span.Argv, ExitCode: exitCode(span),
 		DurationMS: outcome.DurationMS,
 	}
+	verdictHandled = true
 	if (candidate.deferGateJudgment || len(outcome.forkConflicts) > 0 || outcome.unansweredFork) && (outcome.Outcome == GatePassed || outcome.Outcome == GatePassedInherited || outcome.Outcome == GateFailed) {
 		outcome.finish = func(final GateOutcome) error {
 			judgment.Outcome, judgment.DurationMS = final.Outcome, final.DurationMS

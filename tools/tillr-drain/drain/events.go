@@ -33,6 +33,10 @@ const (
 	BoundaryCheckKind = "boundary.check"
 	// GateStartedKind records that the drain started a candidate's gate.
 	GateStartedKind = "gate.started"
+	// GateStoppedKind records that a started gate ended without a gate.verdict
+	// because the drain stopped it (trunk conflict, loop stop, cancelled revert)
+	// or the gate subprocess exited before producing a verdict.
+	GateStoppedKind = "gate.stopped"
 	// GatePlanKind is the plan the gate computed for a candidate.
 	GatePlanKind = "gate.plan"
 	// GateVerdictKind is the verdict the gate answered for it.
@@ -97,7 +101,7 @@ const (
 // one binary would therefore be refused at init, which is the honest answer — the two
 // spellings of one judgment would have to be reconciled first.
 func init() {
-	for _, kind := range []string{BoundaryCheckKind, GateStartedKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, StageRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, TrunkFailureLinkedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind, FastGateTimingKind} {
+	for _, kind := range []string{BoundaryCheckKind, GateStartedKind, GateStoppedKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, StageRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, TrunkFailureLinkedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind, FastGateTimingKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -510,6 +514,55 @@ func (s *ProcessSteps) recordGateStarted(ctx context.Context, candidate Candidat
 			return Internalf("appending the %s event: %v", GateStartedKind, err)
 		}
 		return nil
+	})
+}
+
+// gateStoppedPayload is the `gate.stopped` payload: the candidate identity and
+// why the started gate ended without a `gate.verdict`.
+type gateStoppedPayload struct {
+	ItemID  string `json:"item_id"`
+	RunID   string `json:"run_id"`
+	LaneID  string `json:"lane_id"`
+	BaseSHA string `json:"base_sha,omitempty"`
+	Reason  string `json:"reason"`
+}
+
+// recordGateStopped appends one `gate.stopped` event when a started gate ends
+// without a `gate.verdict` (for example, stopped for a trunk conflict, cancelled
+// on a loop stop or dropped revert, or exited before producing a verdict). It
+// uses a non-cancelled context and is best-effort so a store error during shutdown
+// never masks the stop or cancellation error.
+func (s *ProcessSteps) recordGateStopped(ctx context.Context, candidate Candidate, reason string) {
+	if s.Store == "" || candidate.RunID == "" {
+		return
+	}
+	at := time.Now().UTC()
+	if s.Now != nil {
+		at = s.Now().UTC()
+	}
+	body, err := json.Marshal(gateStoppedPayload{
+		ItemID:  candidate.ItemID,
+		RunID:   candidate.RunID,
+		LaneID:  candidate.LaneID,
+		BaseSHA: candidate.BaseSHA,
+		Reason:  reason,
+	})
+	if err != nil {
+		return
+	}
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	st, err := store.Open(writeCtx, s.Store, true)
+	if err != nil {
+		return
+	}
+	defer st.Close()
+	id := candidate.RunID
+	_ = st.WriteTx(writeCtx, func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{
+			Kind: GateStoppedKind, ObjectType: "run", ObjectID: &id, Payload: body, At: at,
+		})
+		return err
 	})
 }
 

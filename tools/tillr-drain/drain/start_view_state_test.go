@@ -244,6 +244,7 @@ func TestStartStoreSyncSkipsObservationEventsWithoutReseed(t *testing.T) {
 		{"run.child-session", "run", "run-1"},
 		{"run.children-recorded", "run", "run-1"},
 		{GateStartedKind, "run", "run-1"},
+		{GateStoppedKind, "run", "run-1"},
 		{GatePlanKind, "run", "run-1"},
 		{FastGateTimingKind, "run", "run-1"},
 		{HeavyProgressKind, "trunk", "main"},

@@ -15,12 +15,14 @@ import (
 )
 
 func TestGateStartedEventIsRegistered(t *testing.T) {
-	kind, err := event.Lookup(drain.GateStartedKind)
-	if err != nil {
-		t.Fatalf("event.Lookup(%q) failed: %v", drain.GateStartedKind, err)
-	}
-	if kind.Owner != drain.Utility {
-		t.Fatalf("event.Lookup(%q) owner = %q, want %q", drain.GateStartedKind, kind.Owner, drain.Utility)
+	for _, name := range []string{drain.GateStartedKind, drain.GateStoppedKind} {
+		kind, err := event.Lookup(name)
+		if err != nil {
+			t.Fatalf("event.Lookup(%q) failed: %v", name, err)
+		}
+		if kind.Owner != drain.Utility {
+			t.Fatalf("event.Lookup(%q) owner = %q, want %q", name, kind.Owner, drain.Utility)
+		}
 	}
 }
 
@@ -237,5 +239,60 @@ exit 0
 	}
 	if seenByRun["run-ordinary-1"] != 2 || seenByRun["run-express-1"] != 1 || seenByRun["run-fixer-1"] != 1 {
 		t.Fatalf("view events gate.started counts = %v, want ordinary=2 express=1 fixer=1", seenByRun)
+	}
+}
+
+func TestGateStoppedRecordedWhenGateExitsWithoutVerdict(t *testing.T) {
+	dir := scratch(t, "gate-stopped")
+	root := filepath.Join(dir, "repo")
+	worktree := filepath.Join(dir, "worktree")
+	for _, p := range []string{root, worktree} {
+		if err := os.MkdirAll(filepath.Join(p, ".git"), 0o755); err != nil {
+			t.Fatalf("creating %s failed: %v", p, err)
+		}
+	}
+	storePath := filepath.Join(dir, "board.sqlite3")
+	if initStore, err := store.Open(context.Background(), storePath, true); err != nil {
+		t.Fatalf("initializing store: %v", err)
+	} else {
+		_ = initStore.Close()
+	}
+
+	usageGate := stub(t, "usage-gate", "#!/bin/sh\necho 'bad flag' >&2\nexit 2\n")
+	now := time.Date(2026, 11, 25, 16, 40, 0, 0, time.UTC)
+	steps := &drain.ProcessSteps{
+		Store:       storePath,
+		Root:        root,
+		Now:         func() time.Time { return now },
+		GateProgram: usageGate,
+	}
+	cand := drain.Candidate{
+		ItemID: "item-usage", LaneID: "lane-1", RunID: "run-item-usage-a1-n1",
+		TickID: "tick-1", Worktree: worktree, BaseSHA: "aaaa1111", HeadSHA: "bbbb1111",
+	}
+	if _, err := steps.Gate(context.Background(), cand); err == nil {
+		t.Fatal("expected usage error from Gate, got nil")
+	}
+
+	st, err := store.OpenRead(context.Background(), storePath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	var started, verdicts, stopped int
+	var reason string
+	if err := st.ReadTx(context.Background(), func(r *store.Reader) error {
+		if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=? AND object_id=?`, drain.GateStartedKind, cand.RunID).Scan(&started); err != nil {
+			return err
+		}
+		if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=? AND object_id=?`, drain.GateVerdictKind, cand.RunID).Scan(&verdicts); err != nil {
+			return err
+		}
+		return r.QueryRow(`SELECT count(*), COALESCE(MAX(json_extract(payload, '$.reason')), '') FROM events WHERE kind=? AND object_type='run' AND object_id=?`, drain.GateStoppedKind, cand.RunID).Scan(&stopped, &reason)
+	}); err != nil {
+		t.Fatalf("read store: %v", err)
+	}
+	if started != 1 || verdicts != 0 || stopped != 1 || reason != "usage-error" {
+		t.Fatalf("got started=%d verdicts=%d stopped=%d reason=%q, want 1/0/1/usage-error", started, verdicts, stopped, reason)
 	}
 }

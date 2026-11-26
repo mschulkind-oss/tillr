@@ -269,7 +269,7 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 			known = true
 		case "run.progress", run.UsageKind, run.CopiedUsageKind,
 			"run.child-session", "run.children-recorded",
-			GateStartedKind, GatePlanKind, FastGateTimingKind:
+			GateStartedKind, GateStoppedKind, GatePlanKind, FastGateTimingKind:
 			// These are observations, not scheduling changes.
 			if e.ObjectType != "run" {
 				return false

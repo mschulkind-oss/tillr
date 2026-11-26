@@ -3647,6 +3647,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			if isProc && liveGate {
 				if handle, attachErr := procSteps.startOrAttachDetachedGate(ctx, candidate); attachErr == nil {
 					procSteps.stopDetachedGate(handle)
+					procSteps.recordGateStopped(ctx, candidate, "conflict")
 				}
 			}
 			finishPreGate()
@@ -3699,12 +3700,33 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			if waitErr != nil {
 				if !l.isRestartReplaced() {
 					procSteps.stopDetachedGate(handle)
+					reason := "aborted"
+					if active != nil {
+						if conflicts, _ := active.conflict(); len(conflicts) > 0 && ctx.Err() == nil {
+							reason = "conflict"
+						}
+					}
+					if reason == "aborted" && ctx.Err() != nil {
+						reason = "loop-stopped"
+					}
+					procSteps.recordGateStopped(ctx, candidate, reason)
 				}
 				endGate()
 				err = waitErr
 			} else {
 				gate, err = procSteps.finishDetachedGate(ctx, candidate, handle, done)
 				endGate()
+				if err == nil && gate.finish != nil {
+					defer func() {
+						if gate.finish != nil {
+							reason := "aborted"
+							if ctx.Err() != nil {
+								reason = "loop-stopped"
+							}
+							procSteps.recordGateStopped(ctx, candidate, reason)
+						}
+					}()
+				}
 			}
 		}
 	} else {

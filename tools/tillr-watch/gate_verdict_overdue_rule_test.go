@@ -60,7 +60,7 @@ func TestGateVerdictOverdueRule(t *testing.T) {
 	rule := allRules[idx]
 	if rule.Scope != "core" || rule.Severity != "warning" || !rule.Enabled ||
 		rule.Delivery.Receiver != "foreground" ||
-		!slices.Equal(rule.Reads.Events, []string{drain.GateStartedKind, drain.GateVerdictKind, "drain.set-aside", "drain.candidate-superseded"}) ||
+		!slices.Equal(rule.Reads.Events, []string{drain.GateStartedKind, drain.GateVerdictKind, drain.GateStoppedKind, drain.RefusalKind, "drain.set-aside", "drain.candidate-superseded"}) ||
 		rule.When.GroupBy != "object_id" ||
 		rule.When.Pattern != watch.DurationWithoutEvent ||
 		rule.When.ThresholdDuration != 3650*time.Second ||
@@ -378,6 +378,119 @@ func TestGateVerdictOverdueRule(t *testing.T) {
 		}, *now)
 		if notices := pending(); len(notices) != 0 {
 			t.Fatalf("drain.candidate-superseded for %s should resolve %s, got %+v", lateSupersededRun, ruleID, notices)
+		}
+	})
+
+	t.Run("refused or stopped gate does not fire at 60m and resolves open episode", func(t *testing.T) {
+		ctx, st, now, pending := newHarness(t, []watch.Rule{rule}, t0)
+
+		appendRunEvent := func(kind, runID string, payload any, at time.Time) {
+			t.Helper()
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := runID
+			if err := st.WriteTx(ctx, func(tx *store.Tx) error {
+				_, err := tx.Append(event.Event{
+					Kind:       kind,
+					ObjectType: "run",
+					ObjectID:   &id,
+					At:         at,
+					Payload:    body,
+				})
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Run 1: 2026-11-25 incident shape — gate.started followed by drain.refusal (step=gate) after base replay.
+		const (
+			refusedRun  = "run-item-request-8721e56757-a5-cfix"
+			refusedItem = "item-request-8721e56757"
+		)
+		appendGateStarted(ctx, t, st, refusedRun, refusedItem, "lane-1", "1111aaaa", t0)
+		*now = t0.Add(7*time.Minute + 22*time.Second)
+		appendRunEvent(drain.RefusalKind, refusedRun, map[string]any{
+			"step":    "gate",
+			"item_id": refusedItem,
+			"lane_id": "lane-1",
+			"detail":  "failing checks: recording a refusal, not a verdict",
+		}, *now)
+
+		// Run 2: gate.started followed by gate.stopped (e.g. candidate no longer applies to trunk).
+		const (
+			conflictStoppedRun  = "run-item-conflict-stopped-a1-n1"
+			conflictStoppedItem = "item-conflict-stopped"
+		)
+		appendGateStarted(ctx, t, st, conflictStoppedRun, conflictStoppedItem, "lane-2", "2222aaaa", t0)
+		*now = t0.Add(12 * time.Minute)
+		appendRunEvent(drain.GateStoppedKind, conflictStoppedRun, map[string]any{
+			"item_id": conflictStoppedItem,
+			"run_id":  conflictStoppedRun,
+			"lane_id": "lane-2",
+			"reason":  "conflict",
+		}, *now)
+
+		// Run 3: gate.started followed by gate.stopped at loop stop.
+		const (
+			loopStoppedRun  = "run-item-loop-stopped-a1-n1"
+			loopStoppedItem = "item-loop-stopped"
+		)
+		appendGateStarted(ctx, t, st, loopStoppedRun, loopStoppedItem, "lane-3", "3333aaaa", t0)
+		*now = t0.Add(15 * time.Minute)
+		appendRunEvent(drain.GateStoppedKind, loopStoppedRun, map[string]any{
+			"item_id": loopStoppedItem,
+			"run_id":  loopStoppedRun,
+			"lane_id": "lane-3",
+			"reason":  "loop-stopped",
+		}, *now)
+
+		// Run 4: gate.started with truly no verdict and no ending event must still open at 60m (3650s).
+		const (
+			overdueRun  = "run-item-truly-overdue-a1-n1"
+			overdueItem = "item-truly-overdue"
+		)
+		appendGateStarted(ctx, t, st, overdueRun, overdueItem, "lane-4", "4444aaaa", t0)
+
+		*now = t0.Add(3650 * time.Second)
+		opened := pending()
+		if len(opened) != 1 || opened[0].Bundle.Subject != overdueRun {
+			t.Fatalf("want only %s to open at 3650s (refused and stopped runs must stay quiet), got %+v", overdueRun, opened)
+		}
+
+		// Recording drain.refusal for an already-open episode resolves it.
+		*now = t0.Add(65 * time.Minute)
+		appendRunEvent(drain.RefusalKind, overdueRun, map[string]any{
+			"step":    "gate",
+			"item_id": overdueItem,
+			"lane_id": "lane-4",
+		}, *now)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("drain.refusal for %s should resolve %s, got %+v", overdueRun, ruleID, notices)
+		}
+
+		// Recording gate.stopped for an already-open episode resolves it.
+		const (
+			lateStoppedRun  = "run-item-late-stopped-a1-n1"
+			lateStoppedItem = "item-late-stopped"
+		)
+		appendGateStarted(ctx, t, st, lateStoppedRun, lateStoppedItem, "lane-5", "5555aaaa", *now)
+		*now = (*now).Add(3650 * time.Second)
+		openedLate := pending()
+		if len(openedLate) != 1 || openedLate[0].Bundle.Subject != lateStoppedRun {
+			t.Fatalf("want %s to open at 3650s, got %+v", lateStoppedRun, openedLate)
+		}
+		*now = (*now).Add(time.Minute)
+		appendRunEvent(drain.GateStoppedKind, lateStoppedRun, map[string]any{
+			"item_id": lateStoppedItem,
+			"run_id":  lateStoppedRun,
+			"lane_id": "lane-5",
+			"reason":  "loop-stopped",
+		}, *now)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("gate.stopped for %s should resolve %s, got %+v", lateStoppedRun, ruleID, notices)
 		}
 	})
 

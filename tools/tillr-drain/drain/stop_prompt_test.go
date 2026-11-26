@@ -283,12 +283,19 @@ PY`)
 	s := openFixture(t, f.storePath)
 	defer s.Close()
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-		var verdicts int
+		var verdicts, stopped int
 		if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=?`, GateVerdictKind).Scan(&verdicts); err != nil {
 			return err
 		}
 		if verdicts != 0 {
 			t.Fatalf("canceled Gate recorded %d gate.verdict row(s), want 0", verdicts)
+		}
+		var reason string
+		if err := r.QueryRow(`SELECT count(*), COALESCE(MAX(json_extract(payload, '$.reason')), '') FROM events WHERE kind=? AND object_type='run' AND object_id=?`, GateStoppedKind, c.RunID).Scan(&stopped, &reason); err != nil {
+			return err
+		}
+		if stopped != 1 || reason != "cancelled" {
+			t.Fatalf("canceled Gate recorded gate.stopped count=%d reason=%q, want 1 / cancelled", stopped, reason)
 		}
 		return nil
 	}); err != nil {
