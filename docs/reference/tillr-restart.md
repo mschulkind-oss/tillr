@@ -211,6 +211,7 @@ value refuses loop startup and `tillr-drain loop --check`.
 | Table and keys | Default | Meaning |
 | :--- | :--- | :--- |
 | `[trunk] branch` | `"main"` | Short Git branch name where trunk landings go. Refuses `refs/` prefixes and invalid ref names. |
+| `[gate] checks_dir` | `"tools/gate/checks"` | Clean repository-relative subdirectory (outside `.git`) holding the repository's `*.json` check declarations and optional `format.json` ([`D-RT11`](#why-its-this-way); [`D-UC23`](../design/tillr-utility-contracts.md#88-the-check-declarations-directory-is-configured-in-tillrtoml)). |
 | `[roll] command`, `paths`, `pause_timeout_seconds` | no command, no paths, `120` | A command needs at least one path pattern. The command runs after a landing that touches a matching path. The timeout bounds a pause the loop files. |
 | `[push] what`, `remote`, `ref` | `what = "none"` | `none`, `tip` or `green`. `after_landing = true` is an alternate spelling of `tip`, refused when `what` is also set. An empty `remote` or `ref` resolves from the trunk's configured upstream. |
 | `[lanes] express` | `0` | Count of lanes reserved for owner-facing work. |
@@ -224,7 +225,10 @@ value refuses loop startup and `tillr-drain loop --check`.
 A store whose lifecycle definition does not finish items by landing refuses
 any `[trunk]`, `[roll]` or `[push]` key (`ReadWithoutLanding`). At startup and under
 `--check`, `StartupLine` prints one line naming every setting, including
-inactive defaults.
+inactive defaults (including `gate.checks_dir="<value>"` under
+[`D-RT11`](#why-its-this-way)). On landing, `reloadSettingsOnLanding` updates
+non-restart settings (including `PostLanding.Gate`) in place without raising a
+restart-only drift alarm.
 
 ### Landing branch
 
@@ -464,3 +468,4 @@ read from `<store>.roll-alarm.json` instead.
 | D-RT8 | Automatic push is optional, off by default, never forced, and never blocks the loop *(owner ruling, 2026-11-15)* | A network outage or a diverged upstream must show as a waiting row, not halt lanes or overwrite remote history. |
 | D-RT9 | A harness that cannot stop at a gap is terminated after a short grace on a pause, then resumed from its saved session or restarted from its transcript and worktree; the pi fork is patched to stop at a tool-call gap *(owner rulings, 2026-11-15 and 2026-11-18)* | An explicit pause stops every adapter promptly without losing worktree progress. |
 | D-RT10 | This repository sets `push.what = "green"`; `tip` stays available *(owner decision, 2026-11-18)* | With after-merge verification the trunk can briefly hold an unproved commit; pushing green advances the remote only to proved ones. |
+| D-RT11 | `.tillr.toml` defines `[gate] checks_dir` (default `"tools/gate/checks"`), validated as a clean repository-relative subdirectory outside `.git` with unknown keys, invalid paths and malformed `.tillr.toml` files refused under `D-RT7`, and reloaded in place on landing *(designer decision from an operator request, 2026-11-25; not an owner ruling, and the owner may overturn it; see [`D-UC23`](../design/tillr-utility-contracts.md#88-the-check-declarations-directory-is-configured-in-tillrtoml))* | A consumer repository that keeps its check declarations outside `tools/gate/checks` configures the path once for the fast gate, trunk proof, fixer gate and format check without per-invocation flags or silent fallbacks. |

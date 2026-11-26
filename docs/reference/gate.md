@@ -89,7 +89,7 @@ to the gate is tested against), and [the escalation ladder](../design/escalation
 
 ## A check is one declaration file
 
-A check is one JSON object in a file directly under [`tools/gate/checks/`](../../tools/gate/checks/). Only filenames
+A check is one JSON object in a file directly under the repository's configured `[gate] checks_dir` directory in `.tillr.toml` — [`tools/gate/checks/`](../../tools/gate/checks/) by default and in this repository ([`D-UC23`](../design/tillr-utility-contracts.md#88-the-check-declarations-directory-is-configured-in-tillrtoml)). Only filenames
 ending in `.json` are declarations; programs and tests sit beside them. Adding a check adds
 files and edits no shared list. The loader refuses an unknown field, validates every file
 before anything is planned, and never emits a partial plan: a bad declaration names its file
@@ -995,7 +995,7 @@ Whole Go suites and affected packages both run through
 
 ## Adding or running one check
 
-To add a check, write `tools/gate/checks/<id>.json` and, beside it, the program it runs. A
+To add a check, write `<checks_dir>/<id>.json` (`tools/gate/checks/<id>.json` by default) and, beside it, the program it runs. A
 fast check's `budget_ms` must fit under the cap with the others; `gate-budget` fails
 otherwise. Declare `reads` as narrowly as the check truly reads: `reads` is what scopes the
 check to a change and what bounds its fingerprint, so an input left out is an input whose
@@ -1238,7 +1238,7 @@ may overturn any of them.
 | <a id="D-GR7"></a>`D-GR7` | A change check gets its base from the caller, runs once at landing, and never reads a remembered baseline commit. Rejected: repairing the remembered baseline's cold start. | 2026-11-15 | [Invariants](#invariants), [Change checks and tree checks](#change-checks-and-tree-checks) | Yes |
 | <a id="D-GR8"></a>`D-GR8` | A tree check's pass is remembered in a machine-local store by a fingerprint of its declaration, read files, tool versions and needed refs; a fail is recorded and never reused. Rejected: remembering by commit, and publishing the store. Amended 2026-11-21 by [`D-GR21`](#D-GR21) (contradicted checks are `disabled`, not `flaky` passes). | 2026-11-15; amended 2026-11-21 | [Remembered passes](#remembered-passes) | Yes |
 | <a id="D-GR9"></a>`D-GR9` | A check with an unmet `ref:` machine need is `unavailable`, named with its `git fetch` command, and neither fails nor passes. | 2026-11-15 | [Machine needs](#machine-needs) | Yes |
-| <a id="D-GR10"></a>`D-GR10` | A check is one declaration file under `tools/gate/checks/` with no verdict-changing default, retiring the legacy gate program by attrition. Rejected: sharding a single shared test suite file. | 2026-11-15 | [A check is one declaration file](#a-check-is-one-declaration-file) | Yes |
+| <a id="D-GR10"></a>`D-GR10` | A check is one declaration file under `tools/gate/checks/` (amended 2026-11-25 by [`D-UC23`](../design/tillr-utility-contracts.md#88-the-check-declarations-directory-is-configured-in-tillrtoml) — the designer's decision from an operator request, not an owner ruling — so `.tillr.toml` `[gate] checks_dir` configures that directory and defaults to `tools/gate/checks`) with no verdict-changing default, retiring the legacy gate program by attrition. Rejected: sharding a single shared test suite file. | 2026-11-15; amended 2026-11-25 | [A check is one declaration file](#a-check-is-one-declaration-file) | Yes (`tools/gate/checks`); `D-UC23` pending |
 | <a id="D-GR11"></a>`D-GR11` | The fast budget is enforced by an arithmetic test (`gate-budget`) over declared costs. Rejected: failing landings on measured wall time. Its original per-check carry deadline was amended by [`D-GR13`](#D-GR13) and [`D-GR14`](#D-GR14) and superseded in 2026-11-17 by [`D-GR15`](#D-GR15); the arithmetic test stays. | 2026-11-15; superseded in part 2026-11-17 | [Budgets and the stall watchdog](#budgets-and-the-stall-watchdog) | Yes |
 | <a id="D-GR12"></a>`D-GR12` | A question about a moving upstream belongs in a drift probe that files an item and never moves or holds `refs/tillr/green`. Rejected: keeping it as a commit check. | 2026-11-15 | [Known gaps](#known-gaps), [Upstream drift](#upstream-drift) | No |
 | <a id="D-GR13"></a>`D-GR13` | *(Implementer's decision.)* Recorded `over_budget_ms` while letting a fast check run past its budget; its outer ceiling kill was superseded on 2026-11-17 by [`D-GR15`](#D-GR15). Rejected: stopping or carrying a change check at its budget, or one ceiling for the whole fast run. | 2026-11-16; superseded in part 2026-11-17 | [Budgets and the stall watchdog](#budgets-and-the-stall-watchdog) | Yes (`over_budget_ms`) |

@@ -21,7 +21,7 @@ depends-on:
 
 | Face | What it does | Flags the drain passes |
 | :--- | :--- | :--- |
-| `gate` | `tillr-gate change`, then `tillr-gate plan` over the candidate's `tools/gate/checks` declarations, then `tillr-gate run` | the candidate flags `--item --lane --run --worktree --base --head --root --store --work-dir --now`, and `--tillr-gate --tillr-land --tillr-item --registry --gate-program` |
+| `gate` | `tillr-gate change`, then `tillr-gate plan` over `--registry` (else `$TILLR_LOOP_REGISTRY`, else the candidate's `[gate] checks_dir` directory in `.tillr.toml`, defaulting to `tools/gate/checks`; `D-UC23`), then `tillr-gate run` | the candidate flags `--item --lane --run --worktree --base --head --root --store --work-dir --now`, and `--tillr-gate --tillr-land --tillr-item --registry --gate-program` |
 | `land` | one `tillr-land pass` | the candidate flags, the three program flags, and `--observed-trunk --base-ref --message-from` |
 | `verdict` | `tillr-item show`, then one `tillr-item verdict record` per verification-only criterion | the candidate flags, the three program flags and `--verdict` |
 | `fixer-gate` | replaces itself with the judge of one named whole-tree declaration, in a fixer's candidate worktree | the candidate flags, the three program flags and `--only` |
@@ -64,6 +64,7 @@ Under `D-UC20` of [the overview](../tillr-utility-contracts.md#85-the-loop-adapt
 
 | Expectation | Provider | Through | Where it is read |
 | :--- | :--- | :--- | :--- |
+| The envelope, exit codes, settings (`.tillr.toml` `[gate] checks_dir`; `D-UC23`) | [tillr](./tillr.md) | Go import | `loop.go` |
 | `change` with `--item --lane --run --worktree --base --head --now --output` | [tillr-gate](./tillr-gate.md) | subprocess | `compose_gate` |
 | `plan` with `--registry --input --output --root` | [tillr-gate](./tillr-gate.md) | subprocess | `compose_gate` |
 | `run` with `--input --worktree --output --logs --gate --gate-arg`; exits 0, 1 and 6 kept, and 2 to 5 meaning it refused or could not run the plan | [tillr-gate](./tillr-gate.md) | subprocess | `compose_gate`, `execute` |
@@ -73,11 +74,11 @@ Under `D-UC20` of [the overview](../tillr-utility-contracts.md#85-the-loop-adapt
 | The four claim classes; the verdict `done`; the actor kind `mechanical`; that a criterion's hash is the SHA-256 of its text | [tillr-item](./tillr-item.md) | copies | the `verdict` face |
 | The argument lists of `drain-argv.json`, and `TILLR_LOOP_ADAPTER_BUILD` | [tillr-drain](./tillr-drain.md) | subprocess, environment | every face |
 | The change gate (`change-gate.py`) and the fast tree check (`tree-check.py`), as the default runners | [tillr-gate](./tillr-gate.md), from tillr's installation | subprocess | `gate`, `fixer-gate`, `replay`, `rolling` |
-| The check declarations under the candidate's `tools/gate/checks` | the operated repository, outside tillr | files | `gate`, `fixer-gate`, `replay` |
+| The check declarations under the candidate's or checkout's configured `[gate] checks_dir` directory in `.tillr.toml` (default `tools/gate/checks`; overridden on `gate` and `self-check` by `--registry`, then `TILLR_LOOP_REGISTRY`; `D-UC23`) | the operated repository, outside tillr | files | `gate`, `self-check`, `fixer-gate`, `replay`, `rolling` |
 
 It reads no store.
 
-**Who provides the runners.** This table named the provider of the two runner scripts as "the repository's gate scripts, outside tillr" until 2026-11-25. `D-UC16` of [the overview](../tillr-utility-contracts.md#81-defaults-come-from-tillrs-installation) — the designer's decision from an operator request, which the owner may overturn — moved the default runners (`change-gate.py` and `tree-check.py`) to `tillr-gate`'s installation via `TILLR_INSTALL_ROOT`, leaving the operated repository owning only its check declarations (`--gate-program` and `--registry` still override the defaults). `D-UC20` preserves that exact resolution in the Go port.
+**Who provides the runners.** This table named the provider of the two runner scripts as "the repository's gate scripts, outside tillr" until 2026-11-25. `D-UC16` of [the overview](../tillr-utility-contracts.md#81-defaults-come-from-tillrs-installation) — the designer's decision from an operator request, which the owner may overturn — moved the default runners (`change-gate.py` and `tree-check.py`) to `tillr-gate`'s installation via `TILLR_INSTALL_ROOT`, leaving the operated repository owning only its check declarations (`--gate-program` and `--registry` still override the defaults). `D-UC20` preserves that exact resolution in the Go port, and `D-UC23` ([§8.8 of the overview](../tillr-utility-contracts.md#88-the-check-declarations-directory-is-configured-in-tillrtoml), also the designer's decision from an operator request, which the owner may overturn) reads the operated repository's check-declarations directory from `[gate] checks_dir` in `.tillr.toml` (default `tools/gate/checks`, with `--registry` and `TILLR_LOOP_REGISTRY` keeping precedence on `gate` and `self-check`).
 
 ## 3. Contract and private
 
