@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-flags = ["--item", "--run", "--store", "--root"]
+flags = ["--item", "--run", "--store", "--root", "--artifact-dir"]
 if sys.argv[1:] == ["describe"]:
     print(json.dumps({"hooks": {"complete-item": flags}}))
     sys.exit(0)

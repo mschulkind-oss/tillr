@@ -34,7 +34,7 @@ func hookFlags(name string) []string {
 	case "rolling":
 		return []string{"--all", "--since"}
 	case "complete-item":
-		return []string{"--item", "--run", "--store", "--root"}
+		return []string{"--item", "--run", "--store", "--root", "--artifact-dir"}
 	case "after-completion":
 		return []string{"--item", "--store", "--root"}
 	case "detail":

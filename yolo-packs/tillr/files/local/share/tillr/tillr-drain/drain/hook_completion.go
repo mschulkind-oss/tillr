@@ -28,7 +28,7 @@ type completionFault struct{ reason, detail string }
 func (e *completionFault) Error() string { return e.reason + ": " + e.detail }
 
 type completionSteps interface {
-	CompleteItem(context.Context, string, string, definition.Definition) (bool, error)
+	CompleteItem(context.Context, string, string, string, definition.Definition) (bool, error)
 }
 
 // ConfigureNonLanding is called when a definition completes without landing.
@@ -38,7 +38,7 @@ func (s *ProcessSteps) ConfigureNonLanding() {
 
 // CompleteItem calls the definition outside any store transaction. The state
 // subprocess alone checks verdict receipts and moves the item in one write.
-func (s *ProcessSteps) CompleteItem(ctx context.Context, itemID, runID string, d definition.Definition) (bool, error) {
+func (s *ProcessSteps) CompleteItem(ctx context.Context, itemID, runID, artifactDir string, d definition.Definition) (bool, error) {
 	fault := func(err error) (bool, error) { return false, &completionFault{ReasonCompleteItemFault, err.Error()} }
 	if d.Hooks == nil || !slices.Contains(d.Hooks.Names, "complete-item") {
 		return fault(fmt.Errorf("definition %s has no complete-item hook", d.Name))
@@ -53,7 +53,14 @@ func (s *ProcessSteps) CompleteItem(ctx context.Context, itemID, runID string, d
 	if err != nil {
 		return fault(err)
 	}
-	argv := append(append([]string{}, d.Hooks.Argv...), "complete-item", "--item", itemID, "--run", runID, "--store", db, "--root", root)
+	if artifactDir == "" {
+		artifactDir = RunDir(root, runID)
+	}
+	absArtifactDir, err := filepath.Abs(artifactDir)
+	if err != nil {
+		return fault(err)
+	}
+	argv := append(append([]string{}, d.Hooks.Argv...), "complete-item", "--item", itemID, "--run", runID, "--store", db, "--root", root, "--artifact-dir", absArtifactDir)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = root
 	cmd.Env = withGitCeilingEnv(append(withoutProcessEnv(os.Environ(), "TILLR_NON_LANDING"), "TILLR_NON_LANDING=1"), s.LaneRoot)
@@ -198,7 +205,11 @@ func (l *Loop) settleHook(ctx context.Context, d Decision, result *LoopResult) l
 	if !ok {
 		return laneOutcome{err: Usagef("hook completion requires a complete-item step")}
 	}
-	done, err := steps.CompleteItem(ctx, d.ItemID, d.RunRequest.RunID, declared)
+	artifactDir := l.laneDirPath(d.LaneID)
+	if d.RunRequest != nil && d.RunRequest.ReadOnlyGroup != "" {
+		artifactDir = run.NodeDir(artifactDir, d.RunRequest.RunID)
+	}
+	done, err := steps.CompleteItem(ctx, d.ItemID, d.RunRequest.RunID, artifactDir, declared)
 	if err != nil {
 		var fault *completionFault
 		if !errors.As(err, &fault) {

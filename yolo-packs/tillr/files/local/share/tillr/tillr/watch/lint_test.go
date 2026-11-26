@@ -243,7 +243,7 @@ func TestLintHookContract(t *testing.T) {
 
 	// Valid hook describe passes cleanly.
 	root3 := t.TempDir()
-	hookPath3 := writeLintFile(t, root3, "hook.sh", "#!/bin/sh\necho '{\"hooks\":{\"complete-item\":[\"--item\",\"--run\",\"--store\",\"--root\"]}}'\n")
+	hookPath3 := writeLintFile(t, root3, "hook.sh", "#!/bin/sh\necho '{\"hooks\":{\"complete-item\":[\"--item\",\"--run\",\"--store\",\"--root\",\"--artifact-dir\"]}}'\n")
 	if err := os.Chmod(hookPath3, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestLintCharterCandidate(t *testing.T) {
 
 	// Hook charter + commit_required => refused.
 	root3 := t.TempDir()
-	hookPath := writeLintFile(t, root3, "hook.sh", "#!/bin/sh\necho '{\"hooks\":{\"complete-item\":[\"--item\",\"--run\",\"--store\",\"--root\"]}}'\n")
+	hookPath := writeLintFile(t, root3, "hook.sh", "#!/bin/sh\necho '{\"hooks\":{\"complete-item\":[\"--item\",\"--run\",\"--store\",\"--root\",\"--artifact-dir\"]}}'\n")
 	_ = os.Chmod(hookPath, 0o755)
 	writeLintFile(t, root3, "definition.json", `{
 	  "definition": "hooked",
@@ -530,7 +530,7 @@ receiver = "foreground"
 
 	// git_refs: on scope=core with hook charter => watch-lint-unknown-signal.
 	root2 := t.TempDir()
-	hookPath := writeLintFile(t, root2, "hook.sh", "#!/bin/sh\necho '{\"hooks\":{\"complete-item\":[\"--item\",\"--run\",\"--store\",\"--root\"]}}'\n")
+	hookPath := writeLintFile(t, root2, "hook.sh", "#!/bin/sh\necho '{\"hooks\":{\"complete-item\":[\"--item\",\"--run\",\"--store\",\"--root\",\"--artifact-dir\"]}}'\n")
 	_ = os.Chmod(hookPath, 0o755)
 	writeLintFile(t, root2, "definition.json", `{
 	  "definition": "hooked",

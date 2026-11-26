@@ -107,6 +107,10 @@ func TestABracePairInAnItemFieldIsCarriedIntact(t *testing.T) {
 			item: func(s stagedItem) stagedItem { s.BodyRef = "briefs/{{x}}.md"; return s },
 		},
 		{
+			name: "the task", field: "task",
+			item: func(s stagedItem) stagedItem { s.Task = "do {{x}} now"; return s },
+		},
+		{
 			name: "a criterion", field: "criteria",
 			item: func(s stagedItem) stagedItem {
 				s.Criteria[0].Text = "the thing {{x}} happens"

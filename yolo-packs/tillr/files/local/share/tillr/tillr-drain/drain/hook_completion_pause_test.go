@@ -22,7 +22,7 @@ func (s *countedCompletion) Run(_ context.Context, req run.Request) (run.Record,
 	return run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z"}, "", nil
 }
 
-func (s *countedCompletion) CompleteItem(context.Context, string, string, definition.Definition) (bool, error) {
+func (s *countedCompletion) CompleteItem(context.Context, string, string, string, definition.Definition) (bool, error) {
 	s.calls++
 	return true, nil
 }

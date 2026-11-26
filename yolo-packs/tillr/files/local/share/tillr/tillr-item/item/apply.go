@@ -28,6 +28,7 @@ type itemPayload struct {
 	ItemID          string      `json:"item_id"`
 	Title           string      `json:"title"`
 	BodyRef         string      `json:"body_ref"`
+	Task            string      `json:"task,omitempty"`
 	State           string      `json:"state"`
 	WaitingOn       *WaitingOn  `json:"waiting_on,omitempty"`
 	UnderlyingState string      `json:"underlying_state,omitempty"`
@@ -134,6 +135,20 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 	if payload.ItemID == "" {
 		return record.Envelope{}, Usagef("an item.record needs an item_id")
 	}
+	d, err := itemDefinition(tx.Reader())
+	if err != nil {
+		return record.Envelope{}, err
+	}
+	if len(payload.Criteria) == 0 && len(d.DefaultCriteria) > 0 {
+		payload.Criteria = make([]criterion, len(d.DefaultCriteria))
+		for i, dc := range d.DefaultCriteria {
+			payload.Criteria[i] = criterion{
+				CriterionID: dc.CriterionID,
+				Text:        dc.Text,
+				ClaimClass:  dc.ClaimClass,
+			}
+		}
+	}
 	if err := checkCriteria(payload.ItemID, payload.Criteria); err != nil {
 		return record.Envelope{}, err
 	}
@@ -142,11 +157,6 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 		return record.Envelope{}, err
 	}
 	payload.Criteria = criteria
-
-	d, err := itemDefinition(tx.Reader())
-	if err != nil {
-		return record.Envelope{}, err
-	}
 	existing, err := itemExists(ctx, tx.Reader(), payload.ItemID)
 	if err != nil {
 		return record.Envelope{}, err
@@ -243,16 +253,16 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 		return record.Envelope{}, err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO items (item_id, title, body_ref, state, design_doc, updated_at, allowed_paths, rank, seat, prose, workflow, workflow_args, judge_mode, express)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO items (item_id, title, body_ref, task, state, design_doc, updated_at, allowed_paths, rank, seat, prose, workflow, workflow_args, judge_mode, express)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(item_id) DO UPDATE SET
-		   title = excluded.title, body_ref = excluded.body_ref, state = excluded.state,
+		   title = excluded.title, body_ref = excluded.body_ref, task = excluded.task, state = excluded.state,
 		   design_doc = excluded.design_doc, updated_at = excluded.updated_at,
 		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose, workflow = excluded.workflow, workflow_args = excluded.workflow_args, judge_mode = excluded.judge_mode, express = excluded.express,
 		   waiting_on = CASE WHEN excluded.state IN (?, ?) THEN items.waiting_on ELSE '' END,
 		   underlying_state = CASE WHEN excluded.state IN (?, ?) THEN items.underlying_state ELSE '' END,
 		   lifecycle_reason = ?, lifecycle_by = ?, resolves_via = ?`,
-		payload.ItemID, payload.Title, payload.BodyRef, payload.State, payload.DesignDoc, env.CreatedAt.UnixMilli(),
+		payload.ItemID, payload.Title, payload.BodyRef, payload.Task, payload.State, payload.DesignDoc, env.CreatedAt.UnixMilli(),
 		allowedPaths, payload.Rank, payload.Seat, payload.Prose, payload.Workflow, workflowArgs, payload.JudgeMode, payload.Express,
 		d.Blocked, d.Closed, d.Blocked, d.Closed, payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia,
 	); err != nil {
@@ -419,7 +429,7 @@ func sameTerminalDefinition(a, b itemPayload) bool {
 	ab, bb := slices.Clone(a.BlockedBy), slices.Clone(b.BlockedBy)
 	slices.Sort(ab)
 	slices.Sort(bb)
-	return a.State == b.State && a.Title == b.Title && a.BodyRef == b.BodyRef &&
+	return a.State == b.State && a.Title == b.Title && a.BodyRef == b.BodyRef && a.Task == b.Task &&
 		a.DesignDoc == b.DesignDoc && a.Rank == b.Rank && a.Seat == b.Seat &&
 		a.Prose == b.Prose && a.Workflow == b.Workflow && sameWorkflowArgs(a, b) && a.JudgeMode == b.JudgeMode && a.Express == b.Express && slices.Equal(ac, bc) &&
 		slices.Equal(ab, bb) && slices.Equal(a.AllowedPaths, b.AllowedPaths)

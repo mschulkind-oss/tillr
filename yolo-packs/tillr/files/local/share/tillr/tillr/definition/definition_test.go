@@ -89,6 +89,11 @@ func TestReadRefusals(t *testing.T) {
 		{"observability backslash rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":"charters\\a.toml"}`, "rule_pack"},
 		{"observability non-toml rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":"charters/a.json"}`, "rule_pack"},
 		{"observability bare toml rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":".toml"}`, "rule_pack"},
+		{"default_criteria blank id", `"version":1`, `"version":1,"default_criteria":[{"criterion_id":" ","text":"ok"}]`, "default_criteria"},
+		{"default_criteria blank text", `"version":1`, `"version":1,"default_criteria":[{"criterion_id":"c1","text":"  "}]`, "default_criteria"},
+		{"default_criteria duplicate id", `"version":1`, `"version":1,"default_criteria":[{"criterion_id":"c1","text":"a"},{"criterion_id":"c1","text":"b"}]`, "default_criteria"},
+		{"default_criteria unknown claim_class", `"version":1`, `"version":1,"default_criteria":[{"criterion_id":"c1","text":"a","claim_class":"magic"}]`, "claim_class"},
+		{"default_criteria unknown key", `"version":1`, `"version":1,"default_criteria":[{"criterion_id":"c1","text":"a","extra":true}]`, "extra"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Read(strings.NewReader(strings.Replace(sample, tc.old, tc.replacement, 1)))
@@ -118,8 +123,22 @@ func TestDefaultsAndIndependentReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Retention != "keep" || d.BriefTemplate != "" || d.Hooks != nil || len(d.Finished) != 0 || len(d.Transitions) != 0 || len(d.Prerequisites) != 0 {
+	if d.Retention != "keep" || d.BriefTemplate != "" || d.Hooks != nil || len(d.Finished) != 0 || len(d.Transitions) != 0 || len(d.Prerequisites) != 0 || len(d.DefaultCriteria) != 0 {
 		t.Fatalf("defaults: %+v", d)
+	}
+	nullCriteria, err := Read(strings.NewReader(`{"definition":"minimal","version":1,"states":["ready"],"ready":"ready","blocked":"ready","closed":"ready","completes":"landing","default_criteria":null}`))
+	if err != nil || len(nullCriteria.DefaultCriteria) != 0 {
+		t.Fatalf("null default_criteria: %+v, %v", nullCriteria, err)
+	}
+	withCriteria, err := Read(strings.NewReader(`{"definition":"minimal","version":1,"states":["ready"],"ready":"ready","blocked":"ready","closed":"ready","completes":"landing","default_criteria":[{"criterion_id":"c1","text":"First"},{"criterion_id":"c2","text":"Second","claim_class":"direction"}]}`))
+	if err != nil {
+		t.Fatalf("valid default_criteria: %v", err)
+	}
+	if !reflect.DeepEqual(withCriteria.DefaultCriteria, []DefaultCriterion{
+		{CriterionID: "c1", Text: "First"},
+		{CriterionID: "c2", Text: "Second", ClaimClass: "direction"},
+	}) {
+		t.Fatalf("decoded default_criteria: %+v", withCriteria.DefaultCriteria)
 	}
 	d.Retention = ""
 	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "retention") {

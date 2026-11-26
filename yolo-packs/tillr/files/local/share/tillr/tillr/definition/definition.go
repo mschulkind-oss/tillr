@@ -31,20 +31,29 @@ const (
 // Definition is the version 1 JSON contract. Optional fields retain their Go
 // zero values, except retention, which Read defaults to keep.
 type Definition struct {
-	Name          string         `json:"definition"`
-	Version       int            `json:"version"`
-	States        []string       `json:"states"`
-	Ready         string         `json:"ready"`
-	Blocked       string         `json:"blocked"`
-	Closed        string         `json:"closed"`
-	Finished      []string       `json:"finished"`
-	Transitions   []Transition   `json:"transitions"`
-	Prerequisites []string       `json:"prerequisites"`
-	Completes     string         `json:"completes"`
-	Retention     string         `json:"retention"`
-	BriefTemplate string         `json:"brief_template"`
-	Hooks         *Hooks         `json:"hooks"`
-	Observability *Observability `json:"observability,omitempty"`
+	Name            string             `json:"definition"`
+	Version         int                `json:"version"`
+	States          []string           `json:"states"`
+	Ready           string             `json:"ready"`
+	Blocked         string             `json:"blocked"`
+	Closed          string             `json:"closed"`
+	Finished        []string           `json:"finished"`
+	Transitions     []Transition       `json:"transitions"`
+	Prerequisites   []string           `json:"prerequisites"`
+	Completes       string             `json:"completes"`
+	Retention       string             `json:"retention"`
+	BriefTemplate   string             `json:"brief_template"`
+	DefaultCriteria []DefaultCriterion `json:"default_criteria,omitempty"`
+	Hooks           *Hooks             `json:"hooks"`
+	Observability   *Observability     `json:"observability,omitempty"`
+}
+
+// DefaultCriterion is a criterion declared by a charter to apply to items
+// applied without their own criteria.
+type DefaultCriterion struct {
+	CriterionID string `json:"criterion_id"`
+	Text        string `json:"text"`
+	ClaimClass  string `json:"claim_class,omitempty"`
 }
 
 // HasState reports whether the definition declares the state.
@@ -268,6 +277,24 @@ func (d Definition) Validate() error {
 	}
 	if d.Retention != "keep" {
 		return fmt.Errorf("retention: only keep is supported, got %q", d.Retention)
+	}
+	seenCriteria := make(map[string]bool, len(d.DefaultCriteria))
+	for i, c := range d.DefaultCriteria {
+		if strings.TrimSpace(c.CriterionID) == "" {
+			return fmt.Errorf("default_criteria[%d].criterion_id: must be non-blank", i)
+		}
+		if strings.TrimSpace(c.Text) == "" {
+			return fmt.Errorf("default_criteria[%d].text: must be non-blank", i)
+		}
+		if seenCriteria[c.CriterionID] {
+			return fmt.Errorf("default_criteria: duplicate criterion_id %q", c.CriterionID)
+		}
+		seenCriteria[c.CriterionID] = true
+		switch c.ClaimClass {
+		case "", "verification-only", "red-gate-triage", "direction", "owner-only":
+		default:
+			return fmt.Errorf("default_criteria[%d].claim_class: unknown claim class %q", i, c.ClaimClass)
+		}
 	}
 	if d.Observability != nil {
 		if d.Observability.ProgressEvent != "" {

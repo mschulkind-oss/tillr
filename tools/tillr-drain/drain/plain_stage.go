@@ -109,7 +109,7 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 	values := briefValues{
 		{placeholder: "ITEM_ID", text: recorded.ItemID, field: "item_id"},
 		{placeholder: "TITLE", text: recorded.Title, field: "title"},
-		{placeholder: "TASK", text: taskSection(recorded), field: "body_ref"},
+		{placeholder: "TASK", text: taskSection(recorded), field: taskField(recorded)},
 		{placeholder: "CRITERION_1", text: criteria, field: "criteria"},
 		{placeholder: "RUN_ID", text: spec.RunID},
 		{placeholder: "BACKEND", text: spec.Backend},

@@ -81,6 +81,13 @@ Create `charter.json` with five states (`queued`, `blocked`, `closed`, `verified
   "completes": "hook",
   "retention": "keep",
   "brief_template": "brief.md",
+  "default_criteria": [
+    {
+      "criterion_id": "c1",
+      "text": "HELLO.txt exists in the root directory",
+      "claim_class": "verification-only"
+    }
+  ],
   "hooks": {
     "argv": ["python3", "hook.py"],
     "names": ["complete-item"]
@@ -88,9 +95,10 @@ Create `charter.json` with five states (`queued`, `blocked`, `closed`, `verified
 }
 ```
 
-Note two details:
+Note three details:
 
 - `brief_template` names a template file (`brief.md`) used when staging a lane in a plain directory.
+- `default_criteria` is optional: when declared, any item applied without its own `criteria` receives these criteria automatically. Items that supply their own `criteria` keep their own.
 - `hooks.argv` is executed directly without a shell, and `hooks.names` lists the hook operations this program answers (`complete-item`).
 
 ### Step 2: Write the brief template and workflow files
@@ -159,13 +167,13 @@ The drain loop also reads `config/tillr/backend-policy.json` at startup even whe
 
 ### Step 3: Write the hook program (`hook.py`)
 
-A hook program must answer `describe` (printing the flags it accepts for each hook name) and each hook named in `hooks.names`. For `complete-item`, it must record a verdict for every criterion on the item using `tillr item verdict record` (binding the verdict to the SHA-256 hash of each criterion's text) and print one JSON object naming `state`, `reason`, and `resolves_via`:
+A hook program must answer `describe` (printing the flags it accepts for each hook name) and each hook named in `hooks.names`. For `complete-item`, it receives `--item`, `--run`, `--store`, `--root`, and `--artifact-dir` (the run's artifact directory where the brief and run outputs were written), must record a verdict for every criterion on the item using `tillr item verdict record` (binding the verdict to the SHA-256 hash of each criterion's text), and prints one JSON object naming `state`, `reason`, and `resolves_via`:
 
 ```python
 import argparse, datetime, hashlib, json, subprocess, sys
 from pathlib import Path
 
-FLAGS = ["--item", "--run", "--store", "--root"]
+FLAGS = ["--item", "--run", "--store", "--root", "--artifact-dir"]
 if sys.argv[1:] == ["describe"]:
     print(json.dumps({"hooks": {"complete-item": FLAGS}}))
     sys.exit(0)

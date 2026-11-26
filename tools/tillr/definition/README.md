@@ -86,6 +86,7 @@ judgments the core cannot make. These terms come from
 | `completes` | String | Required | `landing` or `hook`; loop completion routing. `hook` requires a hook program. |
 | `retention` | String | `keep` | Only `keep` is supported; retained store events and run artifacts. No cleanup is implemented. |
 | `brief_template` | String | Empty string | Template for staging's lane brief; empty means no template is supplied. This package does not resolve a file or render it. |
+| `default_criteria` | Array of objects | No entries | Criteria assigned when an item is applied without its own criteria. Each object has required `criterion_id` and `text` strings (nonblank, unique `criterion_id`), and optional `claim_class` (`verification-only`, `red-gate-triage`, `direction`, or `owner-only`). |
 | `hooks` | Object or null | Null (no program) | Hook dispatch. An object has required `argv` and `names` arrays of strings, with no defaults. `argv` is one program's argument vector, starting with a nonblank executable; `names` is a nonempty list of nonblank hook names it answers. |
 | `observability` | Object or null | Null (no bindings) | Optional charter watch bindings. Allowed keys are `progress_event` (nonblank trimmed string naming the forward-throughput event kind) and `rule_pack` (clean relative `.toml` path under the watch rules directory). |
 
@@ -175,7 +176,7 @@ validates `after-completion` and `detail` at startup and does not call them.
 
 | Hook | Flags | Answer record and exit meaning |
 | :--- | :--- | :--- |
-| `complete-item` | `--item`, `--run`, `--store`, `--root` | Prints one JSON object with `state`, `reason`, and optional `resolves_via` pointer. It first records criterion verdicts in the store. Exit 0 requests the named finished state; 1 leaves the item unfinished; any other exit holds it as a hook fault. The core must validate the state and recorded verdicts before moving the item, with actor `definition:<name>`. |
+| `complete-item` | `--item`, `--run`, `--store`, `--root`, `--artifact-dir` | Prints one JSON object with `state`, `reason`, and optional `resolves_via` pointer. `--artifact-dir` is the run's artifact directory. It first records criterion verdicts in the store. Exit 0 requests the named finished state; 1 leaves the item unfinished; any other exit holds it as a hook fault. The core must validate the state and recorded verdicts before moving the item, with actor `definition:<name>`. |
 | `after-completion` | `--item`, `--store`, `--root` | No stdout record required. Exit 0 completes follow-up work; 1 is a negative answer; any other exit is a hook fault. It does not undo the already completed item. |
 | `detail` | `--body-ref`, `--root` | Prints one JSON record envelope of kind `item.detail`, with a definition-specific payload for the item's referenced details. Exit 0 supplies details; 1 means no detail is available; any other exit is a hook fault. |
 

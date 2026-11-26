@@ -105,7 +105,7 @@ func hookContractFlags() map[string][]string {
 		"fixer-gate":       append(slices.Clone(candidate), "--only"),
 		"replay":           []string{"--only"},
 		"rolling":          []string{"--all", "--since"},
-		"complete-item":    []string{"--item", "--run", "--store", "--root"},
+		"complete-item":    []string{"--item", "--run", "--store", "--root", "--artifact-dir"},
 		"after-completion": []string{"--item", "--store", "--root"},
 		"detail":           []string{"--body-ref", "--root"},
 	}

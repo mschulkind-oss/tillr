@@ -84,7 +84,7 @@ func TestHookCompletionRelativePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if done, err := steps.CompleteItem(context.Background(), "finding", "relative-run", d); err != nil || !done {
+	if done, err := steps.CompleteItem(context.Background(), "finding", "relative-run", "", d); err != nil || !done {
 		t.Fatalf("relative completion: done=%v err=%v", done, err)
 	}
 	assertHookReceipt(t, f)
@@ -311,8 +311,8 @@ func TestHookCompletionHoldsAndNegativeAnswer(t *testing.T) {
 // caller can write examination records. Restart uses the durable pending run.
 type stopAfterHookMove struct{ *drain.ProcessSteps }
 
-func (s stopAfterHookMove) CompleteItem(ctx context.Context, itemID, runID string, d definition.Definition) (bool, error) {
-	done, err := s.ProcessSteps.CompleteItem(ctx, itemID, runID, d)
+func (s stopAfterHookMove) CompleteItem(ctx context.Context, itemID, runID, artifactDir string, d definition.Definition) (bool, error) {
+	done, err := s.ProcessSteps.CompleteItem(ctx, itemID, runID, artifactDir, d)
 	if err == nil && done {
 		return done, context.Canceled
 	}
@@ -650,5 +650,181 @@ exec %q "$@"
 	}
 	if strings.TrimSpace(string(statusOut)) != "" {
 		t.Fatalf("enclosing git repo tree changed:\n%s", statusOut)
+	}
+}
+
+func TestHookCompletionTaskArtifactDirAndDefaultCriteria(t *testing.T) {
+	root := scratch(t, "consumer-root")
+	lanes := filepath.Join(scratch(t, "consumer-lanes"), "lanes")
+	db := filepath.Join(root, ".tillr", "state.db")
+	itemBin := sibling(t, "item")
+	runBin := sibling(t, "run")
+	sibling(t, "view")
+	adapter := stub(t, "adapter", "printf 'RESULT: done\\n'")
+	backendsDir := filepath.Join(repoRoot(t), "config", "tillr", "backends")
+
+	hookScript := filepath.Join(root, "hook.py")
+	observedArtifactFile := filepath.Join(root, "observed-artifact-dir.txt")
+	hookCode := fmt.Sprintf(`#!/usr/bin/env python3
+import argparse, hashlib, json, subprocess, sys
+from pathlib import Path
+
+flags = ["--item", "--run", "--store", "--root", "--artifact-dir"]
+if sys.argv[1:] == ["describe"]:
+    print(json.dumps({"hooks": {"complete-item": flags}}))
+    sys.exit(0)
+
+parser = argparse.ArgumentParser()
+parser.add_argument("hook", choices=["complete-item"])
+for flag in flags:
+    parser.add_argument(flag, required=True)
+args = parser.parse_args()
+
+art = Path(args.artifact_dir)
+if not (art / "brief.md").is_file() or not (art / f"{args.run}.log").is_file():
+    sys.stderr.write(f"missing files in {art}: {list(art.iterdir())}\n")
+    sys.exit(2)
+Path(%q).write_text(str(art))
+
+shown = json.loads(subprocess.check_output([%q, "show", "--store", args.store, "--item", args.item]))["payload"]
+for c in shown["criteria"]:
+    v = {
+        "record_version": 1,
+        "kind": "item.verdict",
+        "id": f"{args.run}-{c['criterion_id']}",
+        "producer": {"system": "tillr", "utility": "item", "version": "0.1.0"},
+        "created_at": "2026-11-26T00:00:00Z",
+        "payload": {
+            "item_id": args.item,
+            "criterion_id": c["criterion_id"],
+            "criterion_hash": hashlib.sha256(c["text"].encode()).hexdigest(),
+            "verdict": "done",
+            "claim_class": c["claim_class"],
+            "reason": "verified",
+            "evidence": ["doc:proof.txt"],
+            "actor_kind": "mechanical",
+            "actor": "test-hook",
+        },
+    }
+    vpath = Path(args.root) / f"{args.item}-{c['criterion_id']}-verdict.json"
+    vpath.write_text(json.dumps(v))
+    subprocess.run([%q, "verdict", "record", "--store", args.store, "--input", str(vpath), "--now", "2026-11-26T00:00:00Z"], check=True, stdout=subprocess.DEVNULL)
+
+print(json.dumps({"state": "confirmed", "reason": "verified", "resolves_via": "doc:proof.txt"}))
+`, observedArtifactFile, itemBin, itemBin)
+	writeFile(t, hookScript, hookCode)
+	if err := os.Chmod(hookScript, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	d := plannerFixtureDefinition(t)
+	d.Ready = "in-queue"
+	d.Transitions = append(d.Transitions, definition.Transition{From: "in-queue", To: "confirmed"})
+	d.BriefTemplate = "template.md"
+	d.DefaultCriteria = []definition.DefaultCriterion{
+		{CriterionID: "dc1", Text: "Finding is verified", ClaimClass: "verification-only"},
+	}
+	d.Hooks = &definition.Hooks{Argv: []string{"python3", hookScript}, Names: []string{"complete-item"}}
+	writeFile(t, filepath.Join(root, d.BriefTemplate), "# {{ITEM_ID}}\n\n## Task\n\n{{TASK}}\n\n## Criteria\n\n1. {{CRITERION_1}}\n")
+
+	if err := os.MkdirAll(filepath.Dir(db), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(context.Background(), db, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	setPlannerDefinition(t, db, d)
+
+	// Apply an item with task words and no criteria of its own.
+	itemJSON := `{"record_version":1,"kind":"item.record","id":"req-1","producer":{"system":"tillr","utility":"test","version":"0.1.0"},"created_at":"2026-11-26T00:00:00Z","payload":{"item_id":"finding","title":"Check alert","body_ref":"alerts/1.json","task":"Reproduce alert 1 in staging and capture its output.","state":"in-queue"}}`
+	itemFile := filepath.Join(root, "item.json")
+	writeFile(t, itemFile, itemJSON)
+	if out, err := exec.Command(itemBin, "apply", "--store", db, "--input", itemFile, "--now", "2026-11-26T00:00:00Z").CombinedOutput(); err != nil {
+		t.Fatalf("item apply: %v: %s", err, out)
+	}
+
+	binDir := scratch(t, "consumer-bin")
+	piStub := filepath.Join(binDir, "pi")
+	writeFile(t, piStub, "#!/bin/sh\nif [ \"${1:-}\" = \"--features\" ]; then printf '[]\\n'; exit 0; fi\ncat >/dev/null\nprintf '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"RESULT: done\"}]}}\\n'\n")
+	if err := os.Chmod(piStub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Chdir(root)
+
+	now := func() time.Time { return time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC) }
+	steps := &drain.ProcessSteps{
+		RunBin:      runBin,
+		ItemBin:     itemBin,
+		Store:       db,
+		LaneRoot:    lanes,
+		Root:        root,
+		BackendsDir: backendsDir,
+		Now:         now,
+	}
+	steps.ConfigureHooks(d.Hooks, nil)
+	stager := &drain.LaneStager{Root: root, Store: db, LaneRoot: lanes, Now: now}
+	loop, err := drain.NewLoop(drain.LoopConfig{
+		Root:            root,
+		Store:           db,
+		LaneRoot:        lanes,
+		Lanes:           []string{"lane-1"},
+		Policy:          &drain.Policy{DefaultBackend: "fixture", Backends: map[string]drain.Backend{"fixture": {Adapter: adapter, Model: "fixture"}}},
+		Steps:           steps,
+		Stage:           stager,
+		Now:             now,
+		Report:          os.Stderr,
+		ExitWhenDrained: true,
+		BackoffBase:     time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewLoop: %v", err)
+	}
+	result, err := loop.Run(context.Background())
+	if err != nil {
+		t.Fatalf("loop.Run: %v (result=%+v)", err, result)
+	}
+	if result.Dispatched != 1 {
+		t.Fatalf("Dispatched = %d, want 1", result.Dispatched)
+	}
+
+	// Verify brief contained task words and default criterion.
+	briefBytes, err := os.ReadFile(filepath.Join(lanes, "lane-1", "brief.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := string(briefBytes)
+	if !strings.Contains(brief, "Reproduce alert 1 in staging and capture its output.") {
+		t.Fatalf("brief missing task words:\n%s", brief)
+	}
+	if !strings.Contains(brief, "Finding is verified") {
+		t.Fatalf("brief missing default criterion:\n%s", brief)
+	}
+
+	// Verify hook received --artifact-dir pointing to lane-1.
+	gotArt, err := os.ReadFile(observedArtifactFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotArt) != filepath.Join(lanes, "lane-1") {
+		t.Fatalf("--artifact-dir = %q, want %q", string(gotArt), filepath.Join(lanes, "lane-1"))
+	}
+
+	// Verify item reached confirmed state.
+	st, err := store.OpenRead(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var finalState string
+	if err := st.ReadTx(context.Background(), func(r *store.Reader) error {
+		return r.QueryRow(`SELECT state FROM items WHERE item_id='finding'`).Scan(&finalState)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if finalState != "confirmed" {
+		t.Fatalf("item state = %q, want confirmed", finalState)
 	}
 }

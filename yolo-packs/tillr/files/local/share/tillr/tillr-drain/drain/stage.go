@@ -804,6 +804,7 @@ type stagedItem struct {
 	ItemID       string           `json:"item_id"`
 	Title        string           `json:"title"`
 	BodyRef      string           `json:"body_ref"`
+	Task         string           `json:"task"`
 	DesignDoc    string           `json:"design_doc"`
 	Seat         string           `json:"seat"`
 	Workflow     string           `json:"workflow"`
@@ -1608,7 +1609,7 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 	return briefValues{
 		{placeholder: "ITEM_ID", text: recorded.ItemID, field: "item_id"},
 		{placeholder: "TITLE", text: recorded.Title, field: "title"},
-		{placeholder: "TASK", text: task, field: "body_ref"},
+		{placeholder: "TASK", text: task, field: taskField(recorded)},
 		{placeholder: "CRITERION_1", text: criteria, field: "criteria"},
 		{placeholder: "RUN_ID", text: spec.RunID},
 		{placeholder: "BACKEND", text: spec.Backend},
@@ -1665,11 +1666,25 @@ func wallWords(timeoutMS int) string {
 	return fmt.Sprintf("%d seconds", timeoutMS/1000)
 }
 
+func taskField(recorded stagedItem) string {
+	if strings.Contains(recorded.Task, "{{") || strings.Contains(recorded.Task, "}}") {
+		return "task"
+	}
+	return "body_ref"
+}
+
 // taskSection is the brief's statement of the work: the item's title as the outcome, and
 // where the item's own words are. Staging carries the body reference rather than a copy of
 // the document, because the document is the only copy and a copy would be a second place for
 // it to rot.
 func taskSection(recorded stagedItem) string {
+	if strings.TrimSpace(recorded.Task) != "" {
+		text := recorded.Title + "\n\n" + recorded.Task
+		if recorded.BodyRef != "" {
+			text += fmt.Sprintf("\n\nThe item's body is %s. Staging carries that reference, not a copy: read it there.", recorded.BodyRef)
+		}
+		return text
+	}
 	if recorded.BodyRef == "" {
 		return recorded.Title + "\n\nThe item carries no body reference: its criteria below are the whole of what it states."
 	}

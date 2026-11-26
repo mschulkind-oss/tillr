@@ -126,7 +126,7 @@ printf 'stray\n' > stray.txt
 if git add stray.txt 2>/dev/null && git commit -qm escape 2>/dev/null; then
   exit 99
 fi
-printf '{"hooks":{"complete-item":["--item","--run","--store","--root"]}}\n'
+printf '{"hooks":{"complete-item":["--item","--run","--store","--root","--artifact-dir"]}}\n'
 `
 	if err := writeForkSafe(hookProbe, []byte(hookScript), 0o755); err != nil {
 		t.Fatal(err)
