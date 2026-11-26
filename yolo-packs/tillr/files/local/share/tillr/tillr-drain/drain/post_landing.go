@@ -538,51 +538,6 @@ func actionCommand(ctx context.Context, root, program string, args ...string) (s
 	return string(output), nil
 }
 
-func isShardSlotNoticeLine(line string) bool {
-	return strings.HasPrefix(line, "go-test-shards: ") &&
-		(strings.Contains(line, " waiting for a test slot") || strings.Contains(line, " yielding to a waiting "))
-}
-
-func parseShardFailureLine(trimmed string) (string, []string) {
-	candidate := trimmed
-	if strings.HasPrefix(candidate, "tillr-roll: ") {
-		if idx := strings.Index(candidate, "go-test-shards: "); idx >= 0 {
-			candidate = candidate[idx:]
-		}
-	}
-	if strings.HasPrefix(candidate, "go-test-shards: ") {
-		if isShardSlotNoticeLine(candidate) || strings.Contains(candidate, " tests passed,") {
-			return "", nil
-		}
-		return candidate, shardFailureTestNames(candidate)
-	}
-	fields := strings.Fields(candidate)
-	if len(fields) >= 4 && fields[1] == "shard" && (fields[3] == "failed" || fields[3] == "timed" || fields[3] == "cannot" || fields[3] == "missing") {
-		normalized := "go-test-shards: " + candidate
-		return normalized, shardFailureTestNames(normalized)
-	}
-	return "", nil
-}
-
-func shardFailureTestNames(line string) []string {
-	idx := strings.Index(line, "failed (exit ")
-	if idx < 0 {
-		return nil
-	}
-	rest := line[idx:]
-	colon := strings.Index(rest, "):")
-	if colon < 0 {
-		return nil
-	}
-	var names []string
-	for _, part := range strings.Split(rest[colon+2:], ",") {
-		if name := strings.TrimSpace(part); name != "" {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
 func appendUnique(dst []string, seen map[string]bool, items ...string) []string {
 	for _, item := range items {
 		if item != "" && !seen[item] {

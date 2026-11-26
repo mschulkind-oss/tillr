@@ -66,7 +66,9 @@ func TestEndingKey(t *testing.T) {
 }
 
 func TestRepeatedEnding(t *testing.T) {
-	e := func(run, producer, cause, key string) chainEnding { return chainEnding{run, producer, cause, key} }
+	e := func(run, producer, cause, key string) chainEnding {
+		return chainEnding{RunID: run, Producer: producer, Cause: cause, Key: key}
+	}
 	for _, tc := range []struct {
 		name   string
 		chain  []chainEnding

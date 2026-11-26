@@ -15,13 +15,6 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// These are candidate refusals before the gate, not failures of the gate itself.
-const (
-	RefusalWordsMissing  = "words-missing"
-	RefusalWordsAltered  = "words-altered"
-	RefusalIdeaNoOutcome = "idea-no-outcome"
-)
-
 type ideaIntake struct {
 	path, hash, intake string
 	size               int

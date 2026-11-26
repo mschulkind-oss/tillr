@@ -1,4 +1,4 @@
-package drain
+package runhistory
 
 import (
 	"bufio"
@@ -30,17 +30,17 @@ type FailingCase = remotesync.FailingCase
 type FailingCheck = remotesync.FailingCheck
 
 const (
-	failureHeading = "The gate's answer to your delivery:"
-	noCaseRecorded = "no failing case was recorded"
-	// failureSummaryMax bounds the summary; it is cut between cases, never inside a line.
-	failureSummaryMax = 4000
-	triageScanMax     = 4 << 20
+	FailureHeading = "The gate's answer to your delivery:"
+	NoCaseRecorded = "no failing case was recorded"
+	// FailureSummaryMax bounds the summary; it is cut between cases, never inside a line.
+	FailureSummaryMax = 4000
+	TriageScanMax     = 4 << 20
 )
 
-// readTriageBlock reads the failing checks from the gate's whole log. logRef is the check's
+// ReadTriageBlock reads the failing checks from the gate's whole log. logRef is the check's
 // recorded log: either the whole log or its bounded `.triage.log` sibling, whose whole log
 // is the name without `.triage`. An unreadable or block-less log answers nothing.
-func readTriageBlock(logRef string) []FailingCheck {
+func ReadTriageBlock(logRef string) []FailingCheck {
 	f, err := openCheckLog(logRef)
 	if err != nil {
 		return nil
@@ -49,7 +49,7 @@ func readTriageBlock(logRef string) []FailingCheck {
 	var checks []FailingCheck
 	in := false
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64<<10), triageScanMax)
+	scanner.Buffer(make([]byte, 64<<10), TriageScanMax)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !in {
@@ -111,31 +111,31 @@ func openCheckLog(logRef string) (*os.File, error) {
 	return f, err
 }
 
-type goTestFailure struct {
+type GoTestFailure struct {
 	Package string
 	Test    string
 }
 
-type goTestLogResult struct {
-	Failures      []goTestFailure
+type GoTestLogResult struct {
+	Failures      []GoTestFailure
 	SawTestResult bool
 }
 
-// readGoTestFailures scans a check's log (following `.triage.log` to its whole `.log`
+// ReadGoTestFailures scans a check's log (following `.triage.log` to its whole `.log`
 // sibling) for Go test failures and package results when no triage packet recorded cases.
-func readGoTestFailures(logRef string) goTestLogResult {
+func ReadGoTestFailures(logRef string) GoTestLogResult {
 	f, err := openCheckLog(logRef)
 	if err != nil {
-		return goTestLogResult{}
+		return GoTestLogResult{}
 	}
 	defer f.Close()
 
 	var (
-		res           goTestLogResult
+		res           GoTestLogResult
 		pendingTests  []string
 		inGoAffected  bool
-		recorded      []goTestFailure
-		seen          = map[goTestFailure]bool{}
+		recorded      []GoTestFailure
+		seen          = map[GoTestFailure]bool{}
 		testsWithPkg  = map[string]bool{}
 		pkgsWithTests = map[string]bool{}
 	)
@@ -148,7 +148,7 @@ func readGoTestFailures(logRef string) goTestLogResult {
 		pendingTests = append(pendingTests, name)
 	}
 	record := func(pkg, test string) {
-		key := goTestFailure{Package: pkg, Test: test}
+		key := GoTestFailure{Package: pkg, Test: test}
 		if seen[key] {
 			return
 		}
@@ -161,7 +161,7 @@ func readGoTestFailures(logRef string) goTestLogResult {
 	}
 
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64<<10), triageScanMax)
+	scanner.Buffer(make([]byte, 64<<10), TriageScanMax)
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
@@ -189,7 +189,7 @@ func readGoTestFailures(logRef string) goTestLogResult {
 				continue
 			}
 		}
-		if shardLine, shardNames := parseShardFailureLine(trimmed); shardLine != "" {
+		if shardLine, shardNames := ParseShardFailureLine(trimmed); shardLine != "" {
 			res.SawTestResult = true
 			rest := strings.TrimPrefix(shardLine, "go-test-shards: ")
 			pkg := ""
@@ -272,7 +272,7 @@ func readGoTestFailures(logRef string) goTestLogResult {
 		}
 	}
 	if scanner.Err() != nil {
-		return goTestLogResult{}
+		return GoTestLogResult{}
 	}
 	for _, t := range pendingTests {
 		if !testsWithPkg[t] {
@@ -302,21 +302,21 @@ func readGoTestFailures(logRef string) goTestLogResult {
 	return res
 }
 
-// failureSummary is the answer's opening: each failing check, each failing case's test
+// FailureSummary is the answer's opening: each failing check, each failing case's test
 // name, file and line, assertion and reproduce command, then the instruction to run that
 // named test. A check with no recorded case says "no failing case was recorded" and keeps
 // its log path, as does a refusal that recorded no check. Callers use it for gate refusals.
-func failureSummary(checks []EndingCheck) string {
+func FailureSummary(checks []EndingCheck) string {
 	var b strings.Builder
-	b.WriteString(failureHeading + "\n")
+	b.WriteString(FailureHeading + "\n")
 	if len(checks) == 0 {
-		b.WriteString("the gate refused it, and " + noCaseRecorded + "\n")
+		b.WriteString("the gate refused it, and " + NoCaseRecorded + "\n")
 		return b.String()
 	}
 	ran := false
 	for _, c := range checks {
 		if len(c.Failing) == 0 {
-			goRes := readGoTestFailures(c.LogRef)
+			goRes := ReadGoTestFailures(c.LogRef)
 			if len(goRes.Failures) > 0 {
 				var part strings.Builder
 				fmt.Fprintf(&part, "check %s\n", c.CheckID)
@@ -330,7 +330,7 @@ func failureSummary(checks []EndingCheck) string {
 						fmt.Fprintf(&part, "  package: %s (no failing test named)\n", gf.Package)
 					}
 				}
-				if b.Len()+part.Len() > failureSummaryMax {
+				if b.Len()+part.Len() > FailureSummaryMax {
 					b.WriteString("(more failing checks omitted; the gate's log has them)\n")
 					goto done
 				}
@@ -345,7 +345,7 @@ func failureSummary(checks []EndingCheck) string {
 				b.WriteString("\n")
 				continue
 			}
-			fmt.Fprintf(&b, "check %s: %s", c.CheckID, noCaseRecorded)
+			fmt.Fprintf(&b, "check %s: %s", c.CheckID, NoCaseRecorded)
 			if c.LogRef != "" {
 				fmt.Fprintf(&b, "; the gate's log is %s", c.LogRef)
 			}
@@ -373,9 +373,9 @@ func failureSummary(checks []EndingCheck) string {
 				}
 			}
 			if len(fc.Cases) == 0 {
-				var goRes goTestLogResult
+				var goRes GoTestLogResult
 				if len(c.Failing) == 1 {
-					goRes = readGoTestFailures(c.LogRef)
+					goRes = ReadGoTestFailures(c.LogRef)
 				}
 				if len(goRes.Failures) > 0 {
 					for _, gf := range goRes.Failures {
@@ -400,7 +400,7 @@ func failureSummary(checks []EndingCheck) string {
 					}
 					part.WriteString("\n")
 				} else {
-					fmt.Fprintf(&part, "  %s", noCaseRecorded)
+					fmt.Fprintf(&part, "  %s", NoCaseRecorded)
 					if fc.Reproduce != "" {
 						fmt.Fprintf(&part, "; reproduce with: %s", fc.Reproduce)
 						ran = true
@@ -408,7 +408,7 @@ func failureSummary(checks []EndingCheck) string {
 					part.WriteString("\n")
 				}
 			}
-			if b.Len()+part.Len() > failureSummaryMax {
+			if b.Len()+part.Len() > FailureSummaryMax {
 				b.WriteString("(more failing checks omitted; the gate's log has them)\n")
 				goto done
 			}
@@ -422,22 +422,22 @@ done:
 	return b.String()
 }
 
-const fixerFailureHeading = "The proof's output for the red trunk:"
+const FixerFailureHeading = "The proof's output for the red trunk:"
 
-// fixerFailureSummary formats the failing checks' triage cases, reproduce commands, and
-// bounded output excerpts for a trunk fixer's brief, mirroring failureSummary for gate
+// FixerFailureSummary formats the failing checks' triage cases, reproduce commands, and
+// bounded output excerpts for a trunk fixer's brief, mirroring FailureSummary for gate
 // refusals so a fixer worker never reruns a whole suite to discover what failed.
-func fixerFailureSummary(checks []EndingCheck, excerpts map[string]string) string {
+func FixerFailureSummary(checks []EndingCheck, excerpts map[string]string) string {
 	oneLine := func(s string) string {
 		s = strings.ReplaceAll(s, "\r", " ")
 		return strings.ReplaceAll(s, "\n", " ")
 	}
 	var b strings.Builder
-	b.WriteString(fixerFailureHeading + "\n")
+	b.WriteString(FixerFailureHeading + "\n")
 	ran := false
 	for _, c := range checks {
 		if len(c.Failing) == 0 {
-			fmt.Fprintf(&b, "check %s: %s", oneLine(c.CheckID), noCaseRecorded)
+			fmt.Fprintf(&b, "check %s: %s", oneLine(c.CheckID), NoCaseRecorded)
 			if c.LogRef != "" {
 				fmt.Fprintf(&b, "; the proof's log is %s", oneLine(c.LogRef))
 			}
@@ -445,7 +445,7 @@ func fixerFailureSummary(checks []EndingCheck, excerpts map[string]string) strin
 			if ex := strings.TrimSpace(excerpts[c.CheckID]); ex != "" {
 				for _, line := range strings.Split(ex, "\n") {
 					line = strings.ReplaceAll(line, "\r", "")
-					if b.Len()+len(line)+5 > failureSummaryMax {
+					if b.Len()+len(line)+5 > FailureSummaryMax {
 						b.WriteString("  (more output omitted; read the proof's log above)\n")
 						break
 					}
@@ -475,7 +475,7 @@ func fixerFailureSummary(checks []EndingCheck, excerpts map[string]string) strin
 				}
 			}
 			if len(fc.Cases) == 0 {
-				fmt.Fprintf(&part, "  %s", noCaseRecorded)
+				fmt.Fprintf(&part, "  %s", NoCaseRecorded)
 				if fc.Reproduce != "" {
 					fmt.Fprintf(&part, "; reproduce with: %s", oneLine(fc.Reproduce))
 					ran = true
@@ -487,7 +487,7 @@ func fixerFailureSummary(checks []EndingCheck, excerpts map[string]string) strin
 					}
 				}
 			}
-			if b.Len()+part.Len() > failureSummaryMax {
+			if b.Len()+part.Len() > FailureSummaryMax {
 				b.WriteString("(more failing checks omitted; the proof's logs below have them)\n")
 				goto done
 			}
@@ -499,4 +499,49 @@ done:
 		b.WriteString("Run the named test with its command above, not the whole suite and not the gate.\n")
 	}
 	return b.String()
+}
+
+func IsShardSlotNoticeLine(line string) bool {
+	return strings.HasPrefix(line, "go-test-shards: ") &&
+		(strings.Contains(line, " waiting for a test slot") || strings.Contains(line, " yielding to a waiting "))
+}
+
+func ParseShardFailureLine(trimmed string) (string, []string) {
+	candidate := trimmed
+	if strings.HasPrefix(candidate, "tillr-roll: ") {
+		if idx := strings.Index(candidate, "go-test-shards: "); idx >= 0 {
+			candidate = candidate[idx:]
+		}
+	}
+	if strings.HasPrefix(candidate, "go-test-shards: ") {
+		if IsShardSlotNoticeLine(candidate) || strings.Contains(candidate, " tests passed,") {
+			return "", nil
+		}
+		return candidate, shardFailureTestNames(candidate)
+	}
+	fields := strings.Fields(candidate)
+	if len(fields) >= 4 && fields[1] == "shard" && (fields[3] == "failed" || fields[3] == "timed" || fields[3] == "cannot" || fields[3] == "missing") {
+		normalized := "go-test-shards: " + candidate
+		return normalized, shardFailureTestNames(normalized)
+	}
+	return "", nil
+}
+
+func shardFailureTestNames(line string) []string {
+	idx := strings.Index(line, "failed (exit ")
+	if idx < 0 {
+		return nil
+	}
+	rest := line[idx:]
+	colon := strings.Index(rest, "):")
+	if colon < 0 {
+		return nil
+	}
+	var names []string
+	for _, part := range strings.Split(rest[colon+2:], ",") {
+		if name := strings.TrimSpace(part); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -18,7 +17,7 @@ import (
 )
 
 func init() {
-	for _, kind := range []string{judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, StageRetryKind, verifyTriageResetKind, "drain.graph-completed", RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind} {
+	for _, kind := range []string{judgeRequestKind, judgeLandedKind, verifyTriageResetKind, "drain.graph-completed", RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -153,49 +152,6 @@ type refusalPayload struct {
 	// Selectors are a reverted landing's legacy replay selectors (kind:label) by check
 	// id, kept so the item's next gate can run a check a loop restart forgot.
 	Selectors map[string]string `json:"selectors,omitempty"`
-}
-
-// GateRefusalCauses derives the countable cross-item cause keys for a gate refusal's
-// failing checks (D-TW-RRS1, D-TW-RRS2), keying failing checks with named cases on
-// check plus case and omitting the gate adapter's own wrapper entry (for example,
-// `gate:python3`) when it has no recorded failing checks.
-func GateRefusalCauses(checks []EndingCheck) []RefusalCause {
-	seen := map[string]struct{}{}
-	for _, check := range checks {
-		found := false
-		for _, failing := range check.Failing {
-			if failing.ID == "" {
-				continue
-			}
-			found = true
-			caseFound := false
-			for _, c := range failing.Cases {
-				if c.Name != "" {
-					seen[failing.ID+":"+c.Name] = struct{}{}
-					caseFound = true
-				}
-			}
-			if !caseFound {
-				seen[failing.ID] = struct{}{}
-			}
-		}
-		if !found && check.CheckID != "" && !strings.HasPrefix(check.CheckID, "gate:") {
-			seen[check.CheckID] = struct{}{}
-		}
-	}
-	if len(seen) == 0 {
-		return []RefusalCause{{Cause: "gate:no-verdict"}}
-	}
-	ids := make([]string, 0, len(seen))
-	for id := range seen {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	out := make([]RefusalCause, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, RefusalCause{Cause: "gate:" + id})
-	}
-	return out
 }
 
 // computeRefusalCauses derives the countable cross-item cause keys for a `drain.refusal`

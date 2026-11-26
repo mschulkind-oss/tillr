@@ -1,4 +1,4 @@
-package drain
+package runhistory
 
 import (
 	"context"
@@ -55,50 +55,50 @@ type gatheredAnswer struct {
 	err error
 }
 
-type gathered struct {
+type Gathered struct {
 	mu      sync.Mutex
 	answers map[string]gatheredAnswer
-	// recording is a read phase with no write open: gather runs the I/O and keeps the
+	// recording is a read phase with no write open: Gather runs the I/O and keeps the
 	// answer, so the write that follows normally needs nothing more.
 	recording bool
 	// missed is the first miss of the current attempt. The attempt is rolled back and the
 	// fact fetched whatever fn returned, so code that swallows or rewraps an error cannot
 	// commit a decision made without the fact.
-	missed *gatherMiss
+	missed *GatherMiss
 }
 
 type gatheredKey struct{}
 
-// gatheringFor answers a context in which the drain's wrappers run their I/O and keep each
-// answer in g, for a read phase that precedes writeGatheredFrom(g).
-func gatheringFor(ctx context.Context) (context.Context, *gathered) {
-	g := &gathered{answers: map[string]gatheredAnswer{}, recording: true}
+// GatheringFor answers a context in which the drain's wrappers run their I/O and keep each
+// answer in g, for a read phase that precedes WriteGatheredFrom(g).
+func GatheringFor(ctx context.Context) (context.Context, *Gathered) {
+	g := &Gathered{answers: map[string]gatheredAnswer{}, recording: true}
 	return context.WithValue(ctx, gatheredKey{}, g), g
 }
 
-// gatherMiss is the answer a wrapper gives inside a gathered write for a fact the set does
-// not hold. It carries how to fetch the fact, which writeGathered does with nothing held.
-type gatherMiss struct {
+// GatherMiss is the answer a wrapper gives inside a gathered write for a fact the set does
+// not hold. It carries how to fetch the fact, which WriteGathered does with nothing held.
+type GatherMiss struct {
 	key string
 	run func(context.Context) (string, error)
 }
 
-func (m *gatherMiss) Error() string {
+func (m *GatherMiss) Error() string {
 	return fmt.Sprintf("drain: %s was not gathered before the write; the write rolls back and runs again once it is", m.key)
 }
 
-// isGatherMiss reports whether err is, or wraps, a gatherMiss. A decision that branches on
+// IsGatherMiss reports whether err is, or wraps, a GatherMiss. A decision that branches on
 // an error must test this first: a miss is not the fact, so it must be returned, never read
 // as a negative answer.
-func isGatherMiss(err error) bool {
-	var miss *gatherMiss
+func IsGatherMiss(err error) bool {
+	var miss *GatherMiss
 	return errors.As(err, &miss)
 }
 
-// gather answers the I/O named key. Inside a gathered write it answers from the set or
-// answers a gatherMiss and starts nothing; elsewhere it runs the I/O.
-func gather(ctx context.Context, key string, run func(context.Context) (string, error)) (string, error) {
-	g, _ := ctx.Value(gatheredKey{}).(*gathered)
+// Gather answers the I/O named key. Inside a gathered write it answers from the set or
+// answers a GatherMiss and starts nothing; elsewhere it runs the I/O.
+func Gather(ctx context.Context, key string, run func(context.Context) (string, error)) (string, error) {
+	g, _ := ctx.Value(gatheredKey{}).(*Gathered)
 	if g == nil {
 		store.ReportIO(key)
 		return run(ctx)
@@ -120,7 +120,7 @@ func gather(ctx context.Context, key string, run func(context.Context) (string, 
 		g.mu.Unlock()
 		return out, err
 	}
-	miss := &gatherMiss{key: key, run: run}
+	miss := &GatherMiss{key: key, run: run}
 	g.mu.Lock()
 	if g.missed == nil {
 		g.missed = miss
@@ -129,8 +129,8 @@ func gather(ctx context.Context, key string, run func(context.Context) (string, 
 	return "", miss
 }
 
-// writeGatheredHooks lets a test see each attempt and each fetch.
-var writeGatheredHooks struct {
+// WriteGatheredHooks lets a test see each attempt and each fetch.
+var WriteGatheredHooks struct {
 	// Fetch runs after a missing fact was fetched with no write open.
 	Fetch func(key string)
 	// Held runs with how long an attempt held the write lock, and Yield with the pause
@@ -142,8 +142,8 @@ var writeGatheredHooks struct {
 // yieldAfterMiss waits d with the lock released, so another writer is served in the gap. It
 // answers the context's error when the context ends first.
 func yieldAfterMiss(ctx context.Context, d time.Duration) error {
-	if writeGatheredHooks.Yield != nil {
-		writeGatheredHooks.Yield(d)
+	if WriteGatheredHooks.Yield != nil {
+		WriteGatheredHooks.Yield(d)
 	}
 	if d <= 0 {
 		return ctx.Err()
@@ -158,25 +158,38 @@ func yieldAfterMiss(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// writeGathered runs fn as one store write whose git and file reads are gathered with no
+// WriteGathered runs fn as one store write whose git and file reads are gathered with no
 // write open. fn may run more than once, so it must start each run from nothing: every
 // value it assigns outside the transaction is assigned again by the run that commits.
-func writeGathered(ctx context.Context, s *store.Store, fn func(context.Context, *store.Tx) error) error {
-	return writeGatheredFrom(ctx, s, &gathered{answers: map[string]gatheredAnswer{}}, fn)
+func WriteGathered(ctx context.Context, s *store.Store, fn func(context.Context, *store.Tx) error) error {
+	return WriteGatheredFromWithGate(ctx, s, &Gathered{answers: map[string]gatheredAnswer{}}, nil, fn)
 }
 
-// writeGatheredFrom is writeGathered starting from the answers a read phase gathered
-// (gatheringFor). The set stops recording: from here a missing answer is a miss.
-func writeGatheredFrom(ctx context.Context, s *store.Store, g *gathered, fn func(context.Context, *store.Tx) error) error {
+// WriteGatheredWithGate runs WriteGathered, calling waitClaimGate (when non-nil) before each
+// attempt so freshly launched runs claiming their lanes go first.
+func WriteGatheredWithGate(ctx context.Context, s *store.Store, waitClaimGate func(context.Context) error, fn func(context.Context, *store.Tx) error) error {
+	return WriteGatheredFromWithGate(ctx, s, &Gathered{answers: map[string]gatheredAnswer{}}, waitClaimGate, fn)
+}
+
+// WriteGatheredFrom is WriteGathered starting from the answers a read phase gathered
+// (GatheringFor). The set stops recording: from here a missing answer is a miss.
+func WriteGatheredFrom(ctx context.Context, s *store.Store, g *Gathered, fn func(context.Context, *store.Tx) error) error {
+	return WriteGatheredFromWithGate(ctx, s, g, nil, fn)
+}
+
+// WriteGatheredFromWithGate is WriteGatheredFrom, calling waitClaimGate (when non-nil) before
+// each attempt.
+func WriteGatheredFromWithGate(ctx context.Context, s *store.Store, g *Gathered, waitClaimGate func(context.Context) error, fn func(context.Context, *store.Tx) error) error {
 	g.mu.Lock()
 	g.recording = false
 	g.mu.Unlock()
 	gctx := context.WithValue(ctx, gatheredKey{}, g)
-	gate := claimGateFor(s.Path())
 	for {
 		// A run this process just started is claiming its lane: its write goes first.
-		if err := gate.wait(ctx); err != nil {
-			return err
+		if waitClaimGate != nil {
+			if err := waitClaimGate(ctx); err != nil {
+				return err
+			}
 		}
 		g.mu.Lock()
 		g.missed = nil
@@ -195,12 +208,12 @@ func writeGatheredFrom(ctx context.Context, s *store.Store, g *gathered, fn func
 			}
 			return ferr
 		})
-		var miss *gatherMiss
+		var miss *GatherMiss
 		if !errors.As(err, &miss) {
 			return err
 		}
-		if writeGatheredHooks.Held != nil {
-			writeGatheredHooks.Held(held)
+		if WriteGatheredHooks.Held != nil {
+			WriteGatheredHooks.Held(held)
 		}
 		if err := store.CheckIO(miss.key); err != nil {
 			// A gathered write opened inside another write: fetching here would hold the
@@ -214,8 +227,8 @@ func writeGatheredFrom(ctx context.Context, s *store.Store, g *gathered, fn func
 		g.mu.Lock()
 		g.answers[miss.key] = gatheredAnswer{out: out, err: rerr}
 		g.mu.Unlock()
-		if writeGatheredHooks.Fetch != nil {
-			writeGatheredHooks.Fetch(miss.key)
+		if WriteGatheredHooks.Fetch != nil {
+			WriteGatheredHooks.Fetch(miss.key)
 		}
 		if err := yieldAfterMiss(ctx, held); err != nil {
 			return err

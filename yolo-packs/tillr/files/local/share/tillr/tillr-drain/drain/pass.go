@@ -24,29 +24,8 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// These events record effects, not a second stored item state: the request handed to
-// a runner, the candidate a terminal run produced, and the completed examination.
-// Positions are derived anew from these facts, the terminal record and the lease.
-const (
-	examinationClaimedKind  = "drain.examination-claimed"
-	examinationReleasedKind = "drain.examination-released"
-	dispatchStartedKind     = "drain.started"
-	candidateReadyKind      = "drain.candidate"
-	candidateRetirementKind = "drain.retirement"
-	candidatePreparedKind   = "drain.prepared-candidate"
-	examinationDoneKind     = "drain.examined"
-	designQuotaRefusedKind  = "drain.design-quota-refused"
-	examinationOwnerKind    = "drain.examination.owner"
-	loopOrphanedKind        = "drain.orphaned"
-	// laneReleasedKind records a lane released after its run was examined, for every run,
-	// not only a workflow node (whose drain.examination-released also clears its claim).
-	laneReleasedKind = "drain.lane-released"
-	ActionSettle     = "settle"
-	ActionJudge      = "judge"
-)
-
 func init() {
-	for _, kind := range []string{backendProbeKind, backendOutcomeKind, quotaUpdatedKind, commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, designQuotaRefusedKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind, noChangeKind, "drain.no-change-closed"} {
+	for _, kind := range []string{backendProbeKind, backendOutcomeKind, quotaUpdatedKind, commentReplyStateKind, designerCompactedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind, noChangeKind, "drain.no-change-closed"} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -102,10 +81,6 @@ type pendingWork struct {
 	examinationStartedAt time.Time `json:"-"`
 }
 
-type orphanedRunEffect struct {
-	ResumeAfterRestart bool `json:"resume_after_restart,omitempty"`
-}
-
 func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 	works, _, err := readPendingHistory(r)
 	return works, err
@@ -152,36 +127,6 @@ var pendingHistoryFoldHook func()
 var pendingDeltaFoldHook func()
 
 // pendingHistoryHead marks the event sequence covered by a read-phase fold.
-// Each per-kind maximum is an indexed lookup.
-func pendingHistoryHead(r *store.Reader) (int64, error) {
-	queries := make([]string, len(pendingHistoryKinds))
-	args := make([]any, len(pendingHistoryKinds))
-	for i, kind := range pendingHistoryKinds {
-		queries[i] = "SELECT MAX(seq) AS head FROM events WHERE kind=?"
-		args[i] = kind
-	}
-	var head int64
-	err := r.QueryRow("SELECT COALESCE(MAX(head),0) FROM ("+strings.Join(queries, " UNION ALL ")+")", args...).Scan(&head)
-	return head, err
-}
-
-// pendingHistoryChanged checks only the delta since the read-phase fold. A clean
-// boundary check is an observation: the fold changes state only for a failed check.
-// Other folded events may change ownership, so a claim cannot proceed on stale history.
-func pendingHistoryChanged(r *store.Reader, after int64) (bool, error) {
-	args := make([]any, 0, len(pendingHistoryKinds)+2)
-	args = append(args, after)
-	for _, kind := range pendingHistoryKinds {
-		args = append(args, kind)
-	}
-	args = append(args, BoundaryCheckKind)
-	kinds := strings.TrimSuffix(strings.Repeat("?,", len(pendingHistoryKinds)), ",")
-	var changed bool
-	err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM events WHERE seq>? AND kind IN (`+kinds+`)
-		AND CASE WHEN kind=? THEN json_type(payload, '$.clean') IS NOT 'true' ELSE 1 END)`, args...).Scan(&changed)
-	return changed, err
-}
-
 // Keep every attempt's effective examination state, including superseded dispatches.
 // Second-failure routing needs the same continuation semantics as current planning.
 func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*pendingWork, error) {
@@ -610,34 +555,6 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 	return nil
 }
 
-func terminalRecord(r *store.Reader, id string) (*run.Record, error) {
-	env, found, err := run.StatusRecord(r, id)
-	if err != nil || !found {
-		return nil, err
-	}
-	var status struct {
-		Run *run.Record `json:"run"`
-	}
-	if err := json.Unmarshal(env.Payload, &status); err != nil {
-		return nil, err
-	}
-	// The status row has no resumed column. The terminal event retains that
-	// segment fact, so a replacement Loop does not continue it a second time.
-	var payload []byte
-	err = r.QueryRow(`SELECT payload FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? ORDER BY seq DESC LIMIT 1`, run.FinishKind, id).Scan(&payload)
-	if err == nil && status.Run != nil {
-		var terminal run.Record
-		if err := json.Unmarshal(payload, &terminal); err != nil {
-			return nil, err
-		}
-		status.Run.Resumed = terminal.Resumed
-		status.Run.EndingException = terminal.EndingException
-	} else if err != nil && err != sql.ErrNoRows {
-		return nil, err
-	}
-	return status.Run, nil
-}
-
 // liveContinuation requires both a newer segment and that segment's own active
 // lease. An examination can also lease a lane under the run's ID, but only its
 // finished segment is on record. A reaped continuation has no lease, so the
@@ -654,21 +571,6 @@ func liveContinuation(r *store.Reader, segment resumedSegment, d Decision, at ti
 	err = r.QueryRow(`SELECT NOT EXISTS(SELECT 1 FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? AND seq > ?)`,
 		run.FinishKind, segment.runID, segment.seq).Scan(&live)
 	return live, err
-}
-
-// The lane is leased to the group, not to any one reader. A settled reader
-// cannot borrow an active sibling's lease to appear still running.
-func activeWorkerLease(r *store.Reader, req *run.Request, lane string, at time.Time) (bool, error) {
-	var active bool
-	if req.ReadOnlyGroup != "" {
-		err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM lanes l JOIN read_only_runs m ON m.group_id = l.run_id AND m.lane_id = l.lane_id
-		 WHERE l.lane_id = ? AND l.state = ? AND l.run_id = ? AND m.run_id = ? AND m.item_id = ? AND m.settled = 0)`,
-			lane, run.LaneStateLeased, req.ReadOnlyGroup, req.RunID, req.ItemID).Scan(&active)
-		return active, err
-	}
-	err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM lanes WHERE lane_id = ? AND run_id = ? AND state = ? AND (leased_until IS NULL OR leased_until > ?))`,
-		lane, req.RunID, run.LaneStateLeased, at.UnixMilli()).Scan(&active)
-	return active, err
 }
 
 // A claim can lease the lane before the evaluator starts. A live first segment
@@ -1919,15 +1821,6 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 		})
 	}
 	return nil
-}
-
-func appendEffect(tx *store.Tx, kind, id string, value any, at time.Time) error {
-	body, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Append(event.Event{Kind: kind, ObjectType: "run", ObjectID: &id, Payload: body, At: at})
-	return err
 }
 
 // applyPlan records the transition and claims its resource atomically, after re-reading

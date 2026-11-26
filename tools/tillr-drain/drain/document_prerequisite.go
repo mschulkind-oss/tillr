@@ -134,11 +134,11 @@ func requestVersion(r *store.Reader, id string) (string, string, error) {
 }
 
 func requestVersionFromStored(fields storedBlockFields) (string, string, error) {
-	raw, err := json.Marshal([]any{fields.title, fields.bodyRef, fields.criteria})
+	raw, err := json.Marshal([]any{fields.Title, fields.BodyRef, fields.Criteria})
 	if err != nil {
 		return "", "", err
 	}
-	return fmt.Sprintf("%x", sha256.Sum256(raw)), fields.bodyRef, nil
+	return fmt.Sprintf("%x", sha256.Sum256(raw)), fields.BodyRef, nil
 }
 
 func triageDocument(ref string) string {

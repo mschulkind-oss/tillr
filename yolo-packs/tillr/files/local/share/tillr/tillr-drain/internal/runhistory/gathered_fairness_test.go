@@ -1,10 +1,11 @@
-package drain
+package runhistory
 
 import (
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,16 @@ import (
 
 	"github.com/mschulkind-oss/tillr/store"
 )
+
+func gatheredStore(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
 
 const gatherHelperEnv = "TILLR_GATHER_HELPER_STORE"
 
@@ -50,14 +61,14 @@ func TestAMissingWriteLeavesAnotherProcessATurn(t *testing.T) {
 	const misses = 12
 	var mu sync.Mutex
 	var maxHeld time.Duration
-	writeGatheredHooks.Held = func(d time.Duration) {
+	WriteGatheredHooks.Held = func(d time.Duration) {
 		mu.Lock()
 		defer mu.Unlock()
 		if d > maxHeld {
 			maxHeld = d
 		}
 	}
-	t.Cleanup(func() { writeGatheredHooks.Held = nil })
+	t.Cleanup(func() { WriteGatheredHooks.Held = nil })
 
 	started := make(chan struct{})
 	var once sync.Once
@@ -65,11 +76,11 @@ func TestAMissingWriteLeavesAnotherProcessATurn(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- writeGathered(ctx, s, func(ctx context.Context, tx *store.Tx) error {
+		done <- WriteGathered(ctx, s, func(ctx context.Context, tx *store.Tx) error {
 			once.Do(func() { close(started) })
 			time.Sleep(hold) // the reads fn makes before it reaches the fact it lacks
 			for i := 0; i < misses; i++ {
-				if _, err := gather(ctx, "fact "+strconv.Itoa(i), func(context.Context) (string, error) { return "x", nil }); err != nil {
+				if _, err := Gather(ctx, "fact "+strconv.Itoa(i), func(context.Context) (string, error) { return "x", nil }); err != nil {
 					return err
 				}
 			}

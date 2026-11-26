@@ -36,12 +36,6 @@ const (
 	// RevertKind is one attributed landing's automatic revert, landed or not possible,
 	// keyed by the reverted landing's trunk commit.
 	RevertKind = "drain.revert"
-	// RefusalReverted is the ending a reverted landing's run is given: its item goes back
-	// to its worker with the failing check's output (returnedCauses).
-	RefusalReverted = "reverted"
-	// ReasonLandingReverted is the planner's hold spelling of that ending, read the way
-	// the other returned endings are (returnedReasons).
-	ReasonLandingReverted = "landing-reverted"
 	// revertBy is the actor recorded on the item's move out of `landed`.
 	revertBy = "tillr-drain"
 )

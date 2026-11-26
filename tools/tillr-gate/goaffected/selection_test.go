@@ -2215,7 +2215,7 @@ func TestCrossModuleSourceScanningEdges(t *testing.T) {
 			t.Fatalf("%s missing %s in read_tests[%q]: %v", gatePkg, scanTest, rule, edges[gatePkg].ReadTests[rule])
 		}
 	}
-	refusalSel, err := goaffected.SelectAffectedPackages(root, []string{"tools/tillr-drain/drain/refusal_cases.go"}, nil, rootGraph, nil)
+	refusalSel, err := goaffected.SelectAffectedPackages(root, []string{"tools/tillr-drain/internal/runhistory/refusal_cases.go"}, nil, rootGraph, nil)
 	if err != nil {
 		t.Fatalf("SelectAffectedPackages(refusal_cases.go): %v", err)
 	}

@@ -24,6 +24,7 @@ var reasonSubpackageDirs = []struct {
 	{pkg: "heavyrun", dir: "../heavyrun"},
 	{pkg: "drainmodel", dir: "../internal/drainmodel"},
 	{pkg: "procguard", dir: "../internal/procguard"},
+	{pkg: "runhistory", dir: "../internal/runhistory"},
 }
 
 // allExportedReasons returns every exported Reason* string constant across drain and

@@ -18,7 +18,6 @@ import (
 
 const (
 	ReasonJudgeUnreadable        = "judge-unreadable"
-	ReasonEvalFailed             = "eval-failed"
 	ReasonJudgeBlocked           = "judge-blocked"
 	ReasonJudgeDefective         = "judge-defective"
 	ReasonJudgeDefectiveMismatch = "judge-defective-evidence-mismatch"

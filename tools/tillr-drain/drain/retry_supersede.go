@@ -2,10 +2,8 @@ package drain
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -325,13 +323,4 @@ func laneSupersedable(r *store.Reader, lane, runID string) (string, error) {
 		}
 	}
 	return "", nil
-}
-
-func appendEffectOn(tx *store.Tx, kind, objectType, id string, value any, at time.Time) error {
-	body, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Append(event.Event{Kind: kind, ObjectType: objectType, ObjectID: &id, Payload: body, At: at})
-	return err
 }

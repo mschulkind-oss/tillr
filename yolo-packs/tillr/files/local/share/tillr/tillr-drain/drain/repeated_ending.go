@@ -15,15 +15,6 @@ import (
 // history, so a test can see which lock that reading holds.
 var repeatReading func()
 
-// IdenticalRepeatPrefix opens the text of a conflict an identical repeat raises for the
-// design seat. A conflict whose text opens with it, or with the removed rule's
-// "Second failed attempt:", is that routing's own and is not enriched twice.
-const IdenticalRepeatPrefix = "Identical repeat:"
-
-// conflictAfterRestartPrefix opens the text of the conflict a squash conflict of a fresh
-// attempt raises for the operator after a conflict restart (D-JL12).
-const conflictAfterRestartPrefix = "Conflict after restart:"
-
 // secondFailure is an identical repeat's routing to the design seat, as read from the store
 // before the write that records it: the item, the run the conflict is named for, the run it
 // is raised on, and the evidence text. (The name is the removed second-failure rule's; the

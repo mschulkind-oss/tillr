@@ -104,7 +104,7 @@ func (in *startRepairInputs) itemWordsSources(itemID string, hasProse, hasCriter
 	}
 	if hasCriteria {
 		var b strings.Builder
-		for _, c := range in.blockFields[itemID].criteria {
+		for _, c := range in.blockFields[itemID].Criteria {
 			if c[1] != "" {
 				b.WriteString(c[1])
 				b.WriteByte('\n')

@@ -472,40 +472,6 @@ func conflictRepeatsIn(cycle conflictCycle, candidate Candidate, key string) boo
 	return repeated
 }
 
-// conflictPaths answers the bare paths in the lander's conflict lines. The lander records
-// the CONFLICT lines git printed, not a path list, so the brief names both the lines (the
-// evidence) and the paths a model can open.
-func conflictPaths(reports []string) []string {
-	paths := make([]string, 0, len(reports))
-	seen := map[string]bool{}
-	for _, report := range reports {
-		path := conflictPath(report)
-		if path == "" || seen[path] {
-			continue
-		}
-		seen[path] = true
-		paths = append(paths, path)
-	}
-	return paths
-}
-
-// conflictPath answers the path in one CONFLICT line. git spells a content conflict as
-// `CONFLICT (content): Merge conflict in <path>` and a modify/delete one as
-// `CONFLICT (modify/delete): <path> deleted in ...`; both name the path once.
-func conflictPath(report string) string {
-	line := strings.TrimSpace(report)
-	if i := strings.Index(line, "Merge conflict in "); i >= 0 {
-		return strings.TrimSpace(line[i+len("Merge conflict in "):])
-	}
-	if i := strings.Index(line, "): "); i >= 0 {
-		rest := strings.TrimSpace(line[i+len("): "):])
-		if fields := strings.Fields(rest); len(fields) > 0 {
-			return fields[0]
-		}
-	}
-	return ""
-}
-
 // mergeTree runs the same three-way merge the lander ran and returns the written tree SHA
 // and any CONFLICT lines git reported. A conflict exits non-zero with the tree still on
 // stdout, so stdout is read even when the command fails.

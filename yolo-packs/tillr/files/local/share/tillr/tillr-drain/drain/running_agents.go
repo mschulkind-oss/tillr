@@ -1,23 +1,12 @@
 package drain
 
 import (
-	"database/sql"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/runhistory"
 	"github.com/mschulkind-oss/tillr/store"
 )
-
-type leaseRunKey struct {
-	laneID  string
-	groupID string
-}
-
-type activeReadOnlyMember struct {
-	runID  string
-	itemID string
-}
 
 // collectActiveOrdinaryAgents returns the set of ordinary agent runs currently
 // in progress, mapped from run key to lane id.
@@ -38,30 +27,9 @@ func collectActiveOrdinaryAgents(r *store.Reader, at time.Time, works, byRun map
 	if err != nil {
 		return nil, err
 	}
-	roByLease := map[leaseRunKey][]activeReadOnlyMember{}
-	hasReadOnly, err := tableExists(r, "read_only_runs")
+	roByLease, err := runhistory.ReadUnsettledReadOnlyRuns(r)
 	if err != nil {
-		return nil, readFailure(err)
-	}
-	if hasReadOnly {
-		rows, err := r.Query(`SELECT run_id, group_id, item_id, lane_id FROM read_only_runs WHERE settled = 0`)
-		if err != nil {
-			return nil, readFailure(err)
-		}
-		for rows.Next() {
-			var runID, groupID, itemID, laneID string
-			if err := rows.Scan(&runID, &groupID, &itemID, &laneID); err != nil {
-				rows.Close()
-				return nil, readFailure(err)
-			}
-			key := leaseRunKey{laneID: laneID, groupID: groupID}
-			roByLease[key] = append(roByLease[key], activeReadOnlyMember{runID: runID, itemID: itemID})
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, readFailure(err)
-		}
-		rows.Close()
+		return nil, err
 	}
 
 	nowMS := at.UnixMilli()
@@ -78,16 +46,16 @@ func collectActiveOrdinaryAgents(r *store.Reader, at time.Time, works, byRun map
 			continue
 		}
 		runID := row.runID.String
-		if members := roByLease[leaseRunKey{laneID: row.laneID, groupID: runID}]; len(members) > 0 {
+		if members := roByLease[runhistory.LeaseRunKey{LaneID: row.laneID, GroupID: runID}]; len(members) > 0 {
 			for _, m := range members {
-				if expressByID[m.itemID] {
+				if expressByID[m.ItemID] {
 					continue
 				}
-				work := lookupPendingWork(works, byRun, m.itemID, m.runID, row.laneID)
-				if work != nil && isCommandRunInWork(work, m.runID) {
+				work := lookupPendingWork(works, byRun, m.ItemID, m.RunID, row.laneID)
+				if work != nil && isCommandRunInWork(work, m.RunID) {
 					continue
 				}
-				active[m.runID] = row.laneID
+				active[m.RunID] = row.laneID
 			}
 			continue
 		}
@@ -341,47 +309,4 @@ func expressByIDFromMap(items map[string]itemRow) map[string]bool {
 		}
 	}
 	return out
-}
-
-func activeOrdinaryAgentRuns(active map[string]string) []string {
-	if len(active) == 0 {
-		return nil
-	}
-	runs := make([]string, 0, len(active))
-	for runKey := range active {
-		runs = append(runs, runKey)
-	}
-	sort.Strings(runs)
-	return runs
-}
-
-func activeOrdinaryAgentSummary(active map[string]string) string {
-	return strings.Join(activeOrdinaryAgentRuns(active), ", ")
-}
-
-func readExpressByID(r *store.Reader) (map[string]bool, error) {
-	var hasExpress bool
-	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='express')`).Scan(&hasExpress); err != nil {
-		return nil, readFailure(err)
-	}
-	out := map[string]bool{}
-	if !hasExpress {
-		return out, nil
-	}
-	rows, err := r.Query(`SELECT item_id FROM items WHERE COALESCE(express, 0) != 0`)
-	if err != nil {
-		return nil, readFailure(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil && err != sql.ErrNoRows {
-			return nil, readFailure(err)
-		}
-		out[id] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, readFailure(err)
-	}
-	return out, nil
 }

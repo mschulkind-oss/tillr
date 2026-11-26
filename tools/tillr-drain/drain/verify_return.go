@@ -31,9 +31,6 @@ import (
 // starts with to say the plan was wrong; it is compared case-insensitively.
 const PlanWrongPrefix = "plan-wrong:"
 
-// RefusalVerifyNoVerdict is a machinery ending, not a finding about the candidate.
-const RefusalVerifyNoVerdict = "verify-no-verdict"
-
 // recordMissingVerify pins the exact candidate and retains the expanded graph and all
 // preceding node runs. A subsequent attempt starts a fresh evaluator, not a builder.
 func (l *Loop) recordMissingVerify(ctx context.Context, c Candidate, runID string, preflight bool) error {

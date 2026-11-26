@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
@@ -18,47 +16,6 @@ import (
 )
 
 var errItemFaultHeld = errors.New("item fault held")
-
-const (
-	itemFaultKind              = faults.HeldKind
-	itemFaultClearedKind       = faults.ClearedKind
-	ReasonCandidateMismatch    = "candidate-record-mismatch"
-	ReasonDefinitionSyncFailed = "definition-sync-failed"
-	// ReasonLandHarnessError holds an item whose land step could not deliver it. Like a
-	// gate that cannot judge, it is a fault about this candidate's delivery, not a verdict
-	// on its code, and it must not end the loop for every other lane.
-	ReasonLandHarnessError = "land-harness-error"
-	// ReasonPackSyncFailed keeps the unjudged candidate when mirror preparation fails.
-	ReasonPackSyncFailed = "pack-sync-failed"
-	// ReasonDecisionCollision holds an item whose planned decision could not be recorded,
-	// because its id is already recorded with other columns: a drain defect, held on the
-	// one item it names rather than ending the loop.
-	ReasonDecisionCollision = "decision-collision"
-	// ReasonSettleFailed holds an item whose run could not be settled: an error while
-	// settling one run is that item's condition, not the loop's.
-	ReasonSettleFailed = "settle-failed"
-	// ReasonAdapterRefused holds an item whose run an adapter refused before any model ran
-	// (`<adapter>: refused: <reason>`, exit 2). The adapter's words are the hold's detail
-	// and the operator is the mover: the brief or the environment is what to fix, so no
-	// backend is closed, none is failed over to, and no second run is staged.
-	ReasonAdapterRefused = "adapter-refused"
-	// ReasonStageFailed holds an item whose run could not be staged on its lane or run
-	// directory. Staging one item's run is that item's condition, so its unlaunched claim
-	// is retracted, its lane is freed, and the loop continues for every other item.
-	ReasonStageFailed = "stage-failed"
-)
-
-func init() {
-	for _, kind := range []string{itemFaultKind, itemFaultClearedKind} {
-		if err := event.Register(kind, Utility); err != nil {
-			panic(err)
-		}
-	}
-}
-
-type ItemFault = faults.Hold
-
-func ReadItemFaults(r *store.Reader) (map[string]ItemFault, error) { return faults.Read(r) }
 
 func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail string) error {
 	s, err := store.Open(ctx, l.cfg.Store, true)
@@ -88,15 +45,6 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 		}
 	}
 	return err
-}
-
-// Render the command after append: the event sequence binds it to this exact fault.
-func faultClearDetail(f ItemFault, storePath string) string {
-	return f.Detail + "; after correcting the cause, run " + f.ClearCommand(storePath)
-}
-
-func decisionCollisionDetail(collision *decisionCollisionError, action string) string {
-	return collision.Error() + "; the planned " + action + " was not applied. A drain defect named two decisions alike"
 }
 
 func (l *Loop) holdItemFaultTx(tx *store.Tx, c Candidate, reason, detail string) error {
@@ -171,18 +119,6 @@ func ClearItemFaultHold(tx *store.Tx, itemID string, seq int64, at time.Time) (I
 		return ItemFault{}, err
 	}
 	return f, nil
-}
-
-// execSetupRefused recognizes the run face's usage exit with no output record,
-// as persisted by ProcessSteps.Run and holdSettleFailure. Use the saved evidence
-// so clearance also works for faults recorded by an earlier drain build. A lost
-// or crashed run face is not proof that no worker started.
-func execSetupRefused(f ItemFault) bool {
-	if f.Reason != ReasonSettleFailed || f.RunID == "" || !strings.HasPrefix(f.Detail, "run: ") {
-		return false
-	}
-	_, _, ok := strings.Cut(f.Detail, " exec could not run "+f.RunID+": exit status 2: tillr-run: ")
-	return ok
 }
 
 func retractRefusedRunClaim(tx *store.Tx, f ItemFault, at time.Time) error {
@@ -275,15 +211,6 @@ func releaseRetainedRunProcessesLease(tx *store.Tx, f ItemFault, at time.Time) e
 	return nil
 }
 
-func clearItemFault(tx *store.Tx, f ItemFault, at time.Time) error {
-	body, err := json.Marshal(f)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Append(event.Event{Kind: itemFaultClearedKind, ObjectType: "item", ObjectID: &f.ItemID, Payload: body, At: at})
-	return err
-}
-
 func (l *Loop) candidateFault(ctx context.Context, c Candidate, detail string) error {
 	if err := l.holdItemFault(ctx, c, ReasonCandidateMismatch, detail); err != nil {
 		return err
@@ -328,14 +255,6 @@ func (l *Loop) cancelStaging(ctx context.Context, d Decision) error {
 		l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, true, at)
 	}
 	return err
-}
-
-// A sync fault's explicit clearance invalidates the cached document read even
-// when trunk has not changed. Read the append sequence, not a timestamp tie.
-func syncClearVersion(r *store.Reader) (int64, error) {
-	var seq int64
-	err := r.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM events WHERE kind=? AND json_extract(payload,'$.reason')=?`, itemFaultClearedKind, ReasonDefinitionSyncFailed).Scan(&seq)
-	return seq, err
 }
 
 // holdAdapterRefusal holds the item whose run an adapter refused before any model ran, with
@@ -451,23 +370,4 @@ func (l *Loop) clearStageInfraLine(itemID, lane string) {
 	l.mu.Lock()
 	delete(l.infraLines, itemID+"\x00"+lane)
 	l.mu.Unlock()
-}
-
-func (l *Loop) clearUnrunNode(ctx context.Context, runID string) error {
-	if l.cfg.Store == "" || runID == "" {
-		return nil
-	}
-	s, err := store.Open(ctx, l.cfg.Store, true)
-	if err != nil {
-		return err
-	}
-	defer s.Close()
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		hasNodes, err := tableExists(tx.Reader(), "node_runs")
-		if err != nil || !hasNodes {
-			return err
-		}
-		_, err = tx.Exec(`DELETE FROM node_runs WHERE run_id=? AND outcome='running'`, runID)
-		return err
-	})
 }

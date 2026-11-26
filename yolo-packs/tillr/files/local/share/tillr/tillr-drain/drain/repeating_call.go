@@ -2,93 +2,15 @@ package drain
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/mschulkind-oss/tillr-run/run"
-	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
-
-// A run whose session pi ended because the model kept repeating one identical tool call
-// (run end cause `repeating-call`) is neither an answer nor a machinery failure, and the
-// conversation that looped is not one to continue. The owner asked on 2026-11-19 that such
-// a loop lead to a different action, never to a resume of the same conversation and never
-// to a hold on him:
-//
-//   - The first such ending starts the same item or node again in a fresh session on the
-//     same backend, with a note in its brief that names the call (repeatedCallBrief),
-//     unless the run already recovered from a loop in-run.
-//   - If that fresh session or a session recovered in-run ends the same way, the item
-//     is held with ReasonRepeatingCall, whose mover is the operator.
-//
-// Nothing is counted. "The same way again" is read from the dispatch decision itself:
-// a dispatch made for this reason carries the RepeatedCall it answers, and its Backends
-// are the backends whose sessions in that chain repeated. Any other ending breaks the chain,
-// because the next dispatch carries no RepeatedCall.
-
-// repeatingCallKind records the ending and the route chosen for it, on the run.
-const repeatingCallKind = "drain.repeating-call"
 
 // AttemptRepeating is a run whose session pi ended for a repeating call. It is not
 // infrastructure (it never closes a backend) and not an answer.
 const AttemptRepeating AttemptClass = "repeating-call"
-
-const (
-	ReasonRepeatingCall      = "repeating-call"
-	ReasonRepeatingCallFresh = "restarted in a fresh session: the earlier session repeated one identical call"
-)
-
-const (
-	repeatRouteFresh = "fresh"
-	repeatRouteHold  = "hold"
-)
-
-// RepeatedCall is one repeating-call ending, as its event records it and as the dispatch
-// that answers it carries it into staging.
-type RepeatedCall struct {
-	RunID      string `json:"run_id"`
-	ItemID     string `json:"item_id"`
-	NodeID     string `json:"node_id,omitempty"`
-	Backend    string `json:"backend"`
-	Tool       string `json:"tool"`
-	Args       string `json:"args"`
-	ArgsDigest string `json:"args_digest"`
-	Streak     int    `json:"streak"`
-	Action     string `json:"action,omitempty"`
-	Shape      string `json:"shape,omitempty"`
-	// Backends are the backends whose sessions in this unbroken chain repeated, oldest
-	// first, ending with Backend.
-	Backends []string `json:"backends"`
-	// Route is fresh or hold. NextBackend is the original backend for a fresh
-	// session, and is empty for a hold. Older records can carry a failover route.
-	Route       string `json:"route"`
-	NextBackend string `json:"next_backend,omitempty"`
-}
-
-func init() {
-	if err := event.Register(repeatingCallKind, Utility); err != nil {
-		panic(err)
-	}
-}
-
-// repeatingRoute answers the route for a run that ended for a repeating call on backend,
-// given the RepeatedCall its own dispatch answered (nil when it answered none) and whether
-// the run already recovered from a loop in-run.
-func repeatingRoute(prior *RepeatedCall, backend string, recovered bool) (route, next string, chain []string) {
-	if prior != nil {
-		chain = append(chain, prior.Backends...)
-	}
-	if len(chain) == 0 || chain[len(chain)-1] != backend {
-		chain = append(chain, backend)
-	}
-	if prior == nil && !recovered {
-		return repeatRouteFresh, backend, chain
-	}
-	return repeatRouteHold, "", chain
-}
 
 // newRepeatedCall is the record of one repeating-call ending and its route.
 func newRepeatedCall(d Decision, rec run.Record) RepeatedCall {
@@ -104,21 +26,6 @@ func newRepeatedCall(d Decision, rec run.Record) RepeatedCall {
 		(rec.RepeatingCall != nil && rec.RepeatingCall.Action == "ended")
 	rc.Route, rc.NextBackend, rc.Backends = repeatingRoute(d.RepeatedCall, rec.Backend, recovered)
 	return rc
-}
-
-func (rc RepeatedCall) callLabel() string {
-	if rc.Tool != "" {
-		return rc.Tool
-	}
-	if rc.Shape != "" {
-		return "(" + rc.Shape + ")"
-	}
-	return "(no tool)"
-}
-
-// describe is the call in one line, for the loop's report and a preservation reason.
-func (rc RepeatedCall) describe() string {
-	return fmt.Sprintf("pi ended the session: the model repeated one identical call %d times in a row (%s %s)", rc.Streak, rc.callLabel(), rc.Args)
 }
 
 // recordRepeatedCall appends the ending's event. It does no I/O beyond the store.
@@ -142,8 +49,8 @@ func (l *Loop) settleRepeatingCall(ctx context.Context, d Decision, rec run.Reco
 	if err := l.recordRepeatedCall(ctx, rc); err != nil {
 		return laneOutcome{err: err}
 	}
-	l.reportf("loop: %s %s; route %s %s\n", rec.RunID, rc.describe(), rc.Route, rc.NextBackend)
-	return laneOutcome{stop: l.abandon(ctx, lane, rec.RunID, l.headOf(ctx, lane), rc.describe())}
+	l.reportf("loop: %s %s; route %s %s\n", rec.RunID, rc.Describe(), rc.Route, rc.NextBackend)
+	return laneOutcome{stop: l.abandon(ctx, lane, rec.RunID, l.headOf(ctx, lane), rc.Describe())}
 }
 
 // restartRepeatingNode settles a workflow node pi ended for a repeating call: the same
@@ -157,7 +64,7 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 	var head string
 	if !l.nonLanding {
 		head = l.headOf(ctx, d.LaneID)
-		if err := l.preserveWork(ctx, d.LaneID, rec.RunID, rc.describe()); err != nil {
+		if err := l.preserveWork(ctx, d.LaneID, rec.RunID, rc.Describe()); err != nil {
 			if stop := l.retainUnpreserved(ctx, d.LaneID, rec.RunID, head, err); stop != "" {
 				return retainedAfter(d.LaneID, stop)
 			}
@@ -166,7 +73,7 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 			return err
 		}
 	}
-	l.reportf("loop: %s %s; route %s %s\n", rec.RunID, rc.describe(), rc.Route, rc.NextBackend)
+	l.reportf("loop: %s %s; route %s %s\n", rec.RunID, rc.Describe(), rc.Route, rc.NextBackend)
 	if rc.Route == repeatRouteHold {
 		s, err := store.Open(ctx, l.cfg.Store, true)
 		if err != nil {
@@ -182,7 +89,7 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 		}); err != nil {
 			return err
 		}
-		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, rc.describe()); stop != "" {
+		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, rc.Describe()); stop != "" {
 			return retainedAfter(d.LaneID, stop)
 		}
 		return l.markExamined(ctx, d)
@@ -225,42 +132,4 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 		}
 		return appendEffect(tx, nodeAdvancedKind, request.RunID, pendingWork{Decision: d, BaseSHA: base, Ready: true, ParentRunID: rec.RunID}, l.cfg.Now().UTC())
 	})
-}
-
-// readRepeatedCalls answers every recorded repeating-call ending, keyed by run id.
-func readRepeatedCalls(r *store.Reader) (map[string]RepeatedCall, error) {
-	out := map[string]RepeatedCall{}
-	rows, err := r.Query(`SELECT object_id, payload FROM events WHERE kind=? ORDER BY seq`, repeatingCallKind)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id sql.NullString
-		var body []byte
-		if err := rows.Scan(&id, &body); err != nil {
-			return nil, err
-		}
-		var rc RepeatedCall
-		if err := json.Unmarshal(body, &rc); err != nil {
-			return nil, Internalf("reading the repeating-call ending of %q: %v", id.String, err)
-		}
-		if rc.Route == "failover" {
-			rc.Route, rc.NextBackend = repeatRouteHold, ""
-		}
-		out[id.String] = rc
-	}
-	return out, rows.Err()
-}
-
-// repeatedCallBrief is the brief's section for a run dispatched because an earlier
-// session repeated one identical call: what was repeated, that this is a new session, and
-// where the earlier run's work is kept.
-func repeatedCallBrief(rc RepeatedCall) string {
-	var b strings.Builder
-	b.WriteString("\n## Your previous session\n\n")
-	fmt.Fprintf(&b, "This work's previous run, %s, was ended by pi because its session repeated one identical tool call %d times in a row, each time with the same result:\n\n```\n%s %s\n```\n\n", rc.RunID, rc.Streak, rc.callLabel(), rc.Args)
-	fmt.Fprintf(&b, "This run is a new session on %s; nothing from that conversation carries over. This is not a count against the item. That call's result has not changed, so do not make it again expecting a different one.\n", rc.NextBackend)
-	fmt.Fprintf(&b, "\nThe previous run's committed head, when it committed, is pinned at `refs/tillr/runs/%s`, and uncommitted work it left is kept at `%s%s`. Read them with `git show` or `git diff`, and reuse what is sound; do not move either ref.\n", rc.RunID, preservedPrefix, rc.RunID)
-	return b.String()
 }
