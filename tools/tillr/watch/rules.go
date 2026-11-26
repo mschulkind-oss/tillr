@@ -40,8 +40,9 @@ type Rule struct {
 
 	// Keep the validated table, including omitted vs. explicit optional keys,
 	// for whole-rule encoding and tuning without reconstituting TOML from defaults.
-	table  map[string]any
-	origin string
+	table            map[string]any
+	origin           string
+	unregisteredKind string
 }
 
 // Origin returns the rule's load source ("shipped", "file", or "store").
@@ -80,6 +81,9 @@ type Delivery struct {
 // UnevaluatedReason reports eligibility for the legacy command-facing
 // Evaluate and Skipped methods. Enabled is an independent operator choice.
 func (r Rule) UnevaluatedReason() string {
+	if r.unregisteredKind != "" {
+		return fmt.Sprintf("unregistered event kind %q", r.unregisteredKind)
+	}
 	if reason := r.scopeReason(); reason != "" {
 		return reason
 	}
@@ -112,6 +116,9 @@ func (r Rule) expressions() [5]*Expression {
 }
 
 func (r Rule) evaluatorReason() string {
+	if r.unregisteredKind != "" {
+		return fmt.Sprintf("unregistered event kind %q", r.unregisteredKind)
+	}
 	for _, projection := range r.Reads.Projections {
 		if projection != "items" && projection != "charter" && projection != "git_refs" && projection != "fixer_checks" &&
 			!strings.HasPrefix(projection, "git_refs:") && !strings.HasPrefix(projection, "green_proof:") {
@@ -147,9 +154,21 @@ func LoadRulesFS(fsys fs.FS) ([]Rule, error) {
 	return loadRulesFS(fsys, kinds)
 }
 
+// RuleLoadOptions configures how LoadRuleLayersWithOptions validates rule layers.
+type RuleLoadOptions struct {
+	AllowUnregisteredKinds bool
+}
+
 // LoadRuleLayers loads shipped rules from shippedFS (if non-nil) and layers
 // repository rules and [[override]] entries from repoDir (if non-empty) on top.
 func LoadRuleLayers(shippedFS fs.FS, repoDir string) ([]Rule, error) {
+	return LoadRuleLayersWithOptions(shippedFS, repoDir, RuleLoadOptions{})
+}
+
+// LoadRuleLayersWithOptions loads shipped rules from shippedFS (if non-nil) and
+// layers repository rules and [[override]] entries from repoDir (if non-empty)
+// on top according to opts.
+func LoadRuleLayersWithOptions(shippedFS fs.FS, repoDir string, opts RuleLoadOptions) ([]Rule, error) {
 	kinds := registeredRuleKinds()
 	var rules []Rule
 	shippedByID := make(map[string]Rule)
@@ -190,7 +209,7 @@ func LoadRuleLayers(shippedFS fs.FS, repoDir string) ([]Rule, error) {
 		if err != nil {
 			return err
 		}
-		loaded, err := loadRepoRuleDocument(path, data, kinds, repoSeen, shippedByID)
+		loaded, err := loadRepoRuleDocument(path, data, kinds, repoSeen, shippedByID, opts.AllowUnregisteredKinds)
 		if err != nil {
 			return err
 		}
@@ -308,7 +327,7 @@ func loadRuleDocument(source string, data []byte, kinds map[string]bool, seen ma
 	return rules, nil
 }
 
-func loadRepoRuleDocument(source string, data []byte, kinds map[string]bool, seen map[string]string, shippedByID map[string]Rule) ([]Rule, error) {
+func loadRepoRuleDocument(source string, data []byte, kinds map[string]bool, seen map[string]string, shippedByID map[string]Rule, allowUnregisteredKinds bool) ([]Rule, error) {
 	var doc map[string]any
 	if err := toml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", source, err)
@@ -330,7 +349,7 @@ func loadRepoRuleDocument(source string, data []byte, kinds map[string]bool, see
 				return nil, fmt.Errorf("%s: rule[%d]: expected a rule table", source, i)
 			}
 			id, _ := table["id"].(string)
-			c := &ruleCheck{path: source, id: id, index: i}
+			c := &ruleCheck{path: source, id: id, index: i, allowUnregisteredKinds: allowUnregisteredKinds}
 			rule, err := c.load(table, kinds)
 			if err != nil {
 				return nil, err
@@ -353,7 +372,7 @@ func loadRepoRuleDocument(source string, data []byte, kinds map[string]bool, see
 			if !ok {
 				return nil, fmt.Errorf("%s: override[%d]: expected an override table", source, i)
 			}
-			rule, err := loadOverrideTable(source, i, table, kinds, seen, shippedByID)
+			rule, err := loadOverrideTable(source, i, table, kinds, seen, shippedByID, allowUnregisteredKinds)
 			if err != nil {
 				return nil, err
 			}
@@ -364,9 +383,9 @@ func loadRepoRuleDocument(source string, data []byte, kinds map[string]bool, see
 	return rules, nil
 }
 
-func loadOverrideTable(source string, index int, table map[string]any, kinds map[string]bool, seen map[string]string, shippedByID map[string]Rule) (Rule, error) {
+func loadOverrideTable(source string, index int, table map[string]any, kinds map[string]bool, seen map[string]string, shippedByID map[string]Rule, allowUnregisteredKinds bool) (Rule, error) {
 	id, _ := table["id"].(string)
-	c := &ruleCheck{path: source, id: id, index: index}
+	c := &ruleCheck{path: source, id: id, index: index, allowUnregisteredKinds: allowUnregisteredKinds}
 	c.noRemedy(table, "")
 	if c.err != nil {
 		return Rule{}, c.err
@@ -430,9 +449,10 @@ func applyOverrideTable(source, id string, base, patch map[string]any) (map[stri
 }
 
 type ruleCheck struct {
-	path, id string
-	index    int
-	err      error
+	path, id               string
+	index                  int
+	allowUnregisteredKinds bool
+	err                    error
 }
 
 func (c *ruleCheck) refusal(key, format string, args ...any) error {
@@ -587,7 +607,13 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 	r.Reads = Reads{Events: reads.strings("events", pattern != LagBehind && pattern != PredicateMatch), Projections: reads.strings("projections", false)}
 	for _, kind := range r.Reads.Events {
 		if !kinds[kind] {
-			reads.reject("events", "unregistered event kind %q", kind)
+			if c.allowUnregisteredKinds {
+				if r.unregisteredKind == "" {
+					r.unregisteredKind = kind
+				}
+			} else {
+				reads.reject("events", "unregistered event kind %q", kind)
+			}
 		}
 	}
 	refs := make(map[string]bool)

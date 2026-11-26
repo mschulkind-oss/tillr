@@ -431,3 +431,40 @@ receiver = "foreground"
 		t.Fatalf("expected 0 git spawns on cached ancestry checks, got %d -> %d", afterAncestry, execCount)
 	}
 }
+
+func TestLoadRuleLayersAllowUnregisteredKinds(t *testing.T) {
+	register(t, "test.watch")
+	dir := t.TempDir()
+	put(t, dir, "valid.toml", validRule)
+	put(t, dir, "future.toml", strings.NewReplacer(`id = "case"`, `id = "future"`, `"test.watch"`, `"future.unregistered"`).Replace(validRule))
+
+	if rules, err := LoadRuleLayers(nil, dir); rules != nil || !hasError(err, `rule "future"`, "reads.events", `unregistered event kind "future.unregistered"`) {
+		t.Fatalf("strict LoadRuleLayers: rules=%+v err=%v", rules, err)
+	}
+
+	rules, err := LoadRuleLayersWithOptions(nil, dir, RuleLoadOptions{AllowUnregisteredKinds: true})
+	if err != nil {
+		t.Fatalf("LoadRuleLayersWithOptions: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("loaded %d rules, want 2", len(rules))
+	}
+	var gotFuture, gotValid Rule
+	for _, r := range rules {
+		switch r.ID {
+		case "future":
+			gotFuture = r
+		case "case":
+			gotValid = r
+		}
+	}
+	if gotFuture.evaluatorReason() != `unregistered event kind "future.unregistered"` {
+		t.Fatalf("future evaluatorReason = %q", gotFuture.evaluatorReason())
+	}
+	if gotFuture.UnevaluatedReason() != `unregistered event kind "future.unregistered"` {
+		t.Fatalf("future UnevaluatedReason = %q", gotFuture.UnevaluatedReason())
+	}
+	if gotValid.evaluatorReason() != "" {
+		t.Fatalf("valid evaluatorReason = %q", gotValid.evaluatorReason())
+	}
+}

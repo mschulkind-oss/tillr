@@ -439,3 +439,95 @@ receiver = "foreground"
 		t.Fatalf("confirmed wait: code=%d out=%q err=%q", code, quietOut.String(), quietErr.String())
 	}
 }
+
+func TestWatchWaitStatusAndLintWithUnregisteredEventKind(t *testing.T) {
+	s, rules := fixture(t, false)
+	futureRule := strings.NewReplacer(
+		`id="refusals"`, `id="future-rule"`,
+		`"drain.refusal"`, `"drain.future-unregistered"`,
+	).Replace(testRule)
+	if err := os.WriteFile(filepath.Join(rules, "future.toml"), []byte(futureRule), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Criterion 5 & 6: wait keeps running, prints one line naming the rule and why,
+	// and reports alerts from every other rule.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct {
+		code int
+		out  string
+		err  string
+	}
+	done := make(chan result, 1)
+	go func() {
+		var out, stderr bytes.Buffer
+		code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--owner", "operator-session"}, &out, &stderr)
+		done <- result{code, out.String(), stderr.String()}
+	}()
+
+	deadline := time.After(hangGuard)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for attached := false; !attached; {
+		select {
+		case r := <-done:
+			t.Fatalf("wait exited before alert: %+v", r)
+		case <-deadline:
+			t.Fatal("wait did not attach")
+		case <-ticker.C:
+			err := s.ReadTx(context.Background(), func(rd *store.Reader) error {
+				return rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM foreground_delivery WHERE owner_handle='operator-session' AND waiting_since IS NOT NULL)`).Scan(&attached)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		for range 2 {
+			if _, err := tx.Append(event.Event{At: time.Now(), Kind: "drain.refusal", Payload: []byte(`{"item_id":"item-1"}`)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	wantDiag := "tillr watch: rule future-rule not evaluated: unregistered event kind \"drain.future-unregistered\"\n"
+	select {
+	case r := <-done:
+		if r.code != 0 {
+			t.Fatalf("wait exit=%d out=%q err=%q", r.code, r.out, r.err)
+		}
+		if r.err != wantDiag {
+			t.Fatalf("wait stderr = %q, want %q", r.err, wantDiag)
+		}
+		if !strings.Contains(r.out, "TILLR_WATCH_NOTICE 1 pending") || !strings.Contains(r.out, "refusals item-1") {
+			t.Fatalf("wait stdout missing alert from other rule: %q", r.out)
+		}
+	case <-time.After(hangGuard):
+		cancel()
+		t.Fatal("wait did not exit when drain.refusal alert opened")
+	}
+
+	// Criterion 6: status repeats the one line naming the rule left out and why.
+	var statusOut, statusErr bytes.Buffer
+	if code := run(ctx, []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &statusOut, &statusErr); code != 0 {
+		t.Fatalf("status exit=%d out=%q err=%q", code, statusOut.String(), statusErr.String())
+	}
+	if statusErr.String() != wantDiag {
+		t.Fatalf("status stderr = %q, want %q", statusErr.String(), wantDiag)
+	}
+	if strings.Contains(statusOut.String(), "rule future-rule ") {
+		t.Fatalf("status stdout should exclude unevaluated rule: %q", statusOut.String())
+	}
+
+	// Criterion 7: lint still fails on that rule file.
+	var lintOut, lintErr bytes.Buffer
+	if code := run(ctx, []string{"lint", "--rules", rules, "--no-shipped-rules"}, &lintOut, &lintErr); code != 1 || !strings.Contains(lintOut.String(), `unregistered event kind "drain.future-unregistered"`) {
+		t.Fatalf("lint exit=%d out=%q err=%q", code, lintOut.String(), lintErr.String())
+	}
+}

@@ -32,6 +32,14 @@ func inferRepoRoot(root, storePath string) string {
 }
 
 func loadCLIRules(rulesPath, root, storePath string, noShipped bool) ([]watch.Rule, error) {
+	return loadCLIRulesWithOptions(rulesPath, root, storePath, noShipped, watch.RuleLoadOptions{})
+}
+
+func loadRuntimeCLIRules(rulesPath, root, storePath string, noShipped bool) ([]watch.Rule, error) {
+	return loadCLIRulesWithOptions(rulesPath, root, storePath, noShipped, watch.RuleLoadOptions{AllowUnregisteredKinds: true})
+}
+
+func loadCLIRulesWithOptions(rulesPath, root, storePath string, noShipped bool, opts watch.RuleLoadOptions) ([]watch.Rule, error) {
 	var shipped fs.FS
 	if !noShipped {
 		shipped = shippedRulesFS
@@ -62,5 +70,5 @@ func loadCLIRules(rulesPath, root, storePath string, noShipped bool) ([]watch.Ru
 			return nil, fmt.Errorf("--no-shipped-rules requires --rules or an existing <root>/config/tillr/watch directory")
 		}
 	}
-	return watch.LoadRuleLayers(shipped, repoDir)
+	return watch.LoadRuleLayersWithOptions(shipped, repoDir, opts)
 }

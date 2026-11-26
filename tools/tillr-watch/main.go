@@ -201,7 +201,7 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	var rules []watch.Rule
 	if face != "seen" {
 		var err error
-		rules, err = loadCLIRules(dir, root, *path, noShipped)
+		rules, err = loadRuntimeCLIRules(dir, root, *path, noShipped)
 		if err != nil {
 			return fail(err)
 		}
