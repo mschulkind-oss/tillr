@@ -2,9 +2,9 @@
 title: "Contract: tillr-loop"
 status: in-review
 stage: DESIGN
-updated: 2026-11-25
+updated: 2026-11-26
 tags: [tillr, contract, loop, adapter]
-summary: "What tillr-loop provides and expects: a Go program and `loop` package with eight faces, five exit codes, and the `describe` answer the drain checks at start (ported from Python under D-UC20 with its Python script, Python test suite, sync helper and synced drain copy removed). Its provided side is held by a generated file of real argument lists; its expected side types the flags of the gate, land and item programs and tests against stand-ins."
+summary: "What tillr-loop provides and expects: a Go program and `loop` package with eight faces, five exit codes, and the `describe` answer the drain checks at start (ported from Python under D-UC20 with its Python script, Python test suite, sync helper and synced drain copy removed, amended under D-UC23 for `.tillr.toml` `[gate] checks_dir`, and amended under D-UC24 to invoke compiled `tillr-gate change-gate` and `tillr-gate tree-check` faces rather than `python3` runner scripts). Its provided side is held by a generated file of real argument lists; its expected side types the flags of the gate, land and item programs and tests against stand-ins."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
@@ -25,7 +25,7 @@ depends-on:
 | `land` | one `tillr-land pass` | the candidate flags, the three program flags, and `--observed-trunk --base-ref --message-from` |
 | `verdict` | `tillr-item show`, then one `tillr-item verdict record` per verification-only criterion | the candidate flags, the three program flags and `--verdict` |
 | `fixer-gate` | replaces itself with the judge of one named whole-tree declaration, in a fixer's candidate worktree | the candidate flags, the three program flags and `--only` |
-| `replay`, `rolling` | replace themselves with `tillr-gate checks --heavy-tree` (or the fast tree check, `tree-check.py --only`, for a fast declaration) on the checked-out revision | `--only`; `--all` or `--since` |
+| `replay`, `rolling` | replace themselves with `tillr-gate checks --heavy-tree` (or the fast tree check — `tree-check.py --only` on `HEAD` today, replaced by `tillr-gate tree-check --only` under `D-UC24` — for a fast declaration) on the checked-out revision | `--only`; `--all` or `--since` |
 | `describe` | prints `{"hooks": {<face>: [<flags>]}}` | none |
 | `self-check` | prints the commands it would run, and runs nothing | none |
 
@@ -73,12 +73,12 @@ Under `D-UC20` of [the overview](../tillr-utility-contracts.md#85-the-loop-adapt
 | `verdict record` with `--store --input --now`, accepting the record of [§1.2](#12-records) | [tillr-item](./tillr-item.md) | subprocess | the `verdict` face |
 | The four claim classes; the verdict `done`; the actor kind `mechanical`; that a criterion's hash is the SHA-256 of its text | [tillr-item](./tillr-item.md) | copies | the `verdict` face |
 | The argument lists of `drain-argv.json`, and `TILLR_LOOP_ADAPTER_BUILD` | [tillr-drain](./tillr-drain.md) | subprocess, environment | every face |
-| The change gate (`change-gate.py`) and the fast tree check (`tree-check.py`), as the default runners | [tillr-gate](./tillr-gate.md), from tillr's installation | subprocess | `gate`, `fixer-gate`, `replay`, `rolling` |
+| The change gate (`change-gate.py` on `HEAD` today, replaced by `tillr-gate change-gate` under `D-UC24`) and the fast tree check (`tree-check.py` on `HEAD` today, replaced by `tillr-gate tree-check` under `D-UC24`), as the default runners | [tillr-gate](./tillr-gate.md), from tillr's installation | subprocess | `gate`, `fixer-gate`, `replay`, `rolling` |
 | The check declarations under the candidate's or checkout's configured `[gate] checks_dir` directory in `.tillr.toml` (default `tools/gate/checks`; overridden on `gate` and `self-check` by `--registry`, then `TILLR_LOOP_REGISTRY`; `D-UC23`) | the operated repository, outside tillr | files | `gate`, `self-check`, `fixer-gate`, `replay`, `rolling` |
 
 It reads no store.
 
-**Who provides the runners.** This table named the provider of the two runner scripts as "the repository's gate scripts, outside tillr" until 2026-11-25. `D-UC16` of [the overview](../tillr-utility-contracts.md#81-defaults-come-from-tillrs-installation) — the designer's decision from an operator request, which the owner may overturn — moved the default runners (`change-gate.py` and `tree-check.py`) to `tillr-gate`'s installation via `TILLR_INSTALL_ROOT`, leaving the operated repository owning only its check declarations (`--gate-program` and `--registry` still override the defaults). `D-UC20` preserves that exact resolution in the Go port, and `D-UC23` ([§8.8 of the overview](../tillr-utility-contracts.md#88-the-check-declarations-directory-is-configured-in-tillrtoml), also the designer's decision from an operator request, which the owner may overturn) reads the operated repository's check-declarations directory from `[gate] checks_dir` in `.tillr.toml` (default `tools/gate/checks`, with `--registry` and `TILLR_LOOP_REGISTRY` keeping precedence on `gate` and `self-check`).
+**Who provides the runners.** This table named the provider of the two runner scripts as "the repository's gate scripts, outside tillr" until 2026-11-25. `D-UC16` of [the overview](../tillr-utility-contracts.md#81-defaults-come-from-tillrs-installation) — the designer's decision from an operator request, which the owner may overturn — moved the default runners (`change-gate.py` and `tree-check.py`) to `tillr-gate`'s installation via `TILLR_INSTALL_ROOT`, leaving the operated repository owning only its check declarations (`--gate-program` and `--registry` still override the defaults), and `D-UC20` preserved that resolution in the initial Go port. `D-UC23` ([§8.8 of the overview](../tillr-utility-contracts.md#88-the-check-declarations-directory-is-configured-in-tillrtoml)) reads the operated repository's check-declarations directory from `[gate] checks_dir` in `.tillr.toml` (default `tools/gate/checks`, with `--registry` and `TILLR_LOOP_REGISTRY` keeping precedence on `gate` and `self-check`), and `D-UC24` ([§8.9 of the overview](../tillr-utility-contracts.md#89-the-remaining-python-files-move-to-go-and-a-gate-check-prevents-reintroduction)) — both the designer's decisions from operator requests, which the owner may overturn — compiles `change-gate.py` and `tree-check.py` into `tillr-gate change-gate` and `tillr-gate tree-check` faces so `tillr-loop` invokes the resolved `tillr-gate` binary directly with zero `.py` files and no `python3` or `resolveGateRunner` lookup.
 
 ## 3. Contract and private
 
