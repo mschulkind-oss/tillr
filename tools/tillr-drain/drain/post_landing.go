@@ -147,6 +147,11 @@ func (l *Loop) landWithActions(ctx context.Context, candidate Candidate) (LandOu
 			}
 		}()
 	}
+	mayPiRoll := candidate.BaseRef == piForkPatchRef && l.cfg.PostLanding.Roll.Command != ""
+	if mayPiRoll {
+		l.piRollChecking.Add(1)
+		defer l.piRollChecking.Add(-1)
+	}
 	out, err := l.cfg.Steps.Land(ctx, candidate)
 	if err == nil && out.Result == LandLanded {
 		if candidate.BaseRef == "" && l.cfg.Store != "" {

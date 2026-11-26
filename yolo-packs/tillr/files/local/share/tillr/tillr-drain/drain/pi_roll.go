@@ -138,8 +138,14 @@ ORDER BY seq DESC LIMIT 1`, alarms.PiBuildStaleKind, alarms.PiBuildCurrentKind).
 	return staleKey, wantedKey, standing, nil
 }
 
+// piRollInFlight reports whether a patch/pi landing that will start a roll is
+// in progress or the loop's own pi roll worker is running.
+func (l *Loop) piRollInFlight() bool {
+	return l.piRollChecking.Load() > 0 || l.piRollAction.busy()
+}
+
 func (l *Loop) checkPiBuild(ctx context.Context) {
-	if ctx.Err() != nil || l.nonLanding || l.cfg.Store == "" || l.piRollAction.busy() {
+	if ctx.Err() != nil || l.nonLanding || l.cfg.Store == "" || l.piRollInFlight() {
 		return
 	}
 	buildsDir := piBuildsDir(l.cfg.Root)
@@ -166,6 +172,9 @@ func (l *Loop) checkPiBuild(ctx context.Context) {
 	}
 	staleKey := readCurrentPiBuildKey(buildsDir)
 	if standing && recordedWanted == wantedKey && recordedStale == staleKey {
+		return
+	}
+	if l.piRollInFlight() || hasVerifiedPiBuild(buildsDir, wantedKey) {
 		return
 	}
 	detail := fmt.Sprintf("no verified build for %s", piForkPatchRef)

@@ -580,6 +580,7 @@ type Loop struct {
 	endingCapabilities                   map[string]string
 	rollAction, piRollAction, pushAction landingAction
 	rollChecking                         atomic.Int32
+	piRollChecking                       atomic.Int32
 	greenPushAtStart                     atomic.Bool
 	ownerMigrationItem                   string
 	laneBootstrapReported                bool

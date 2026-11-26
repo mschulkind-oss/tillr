@@ -328,3 +328,217 @@ func TestLoopStartupAndPassPiBuildStaleAlarm(t *testing.T) {
 		t.Fatalf("expected pi-build-stale to clear after building second tip, got:\n%s", cleared)
 	}
 }
+
+func TestPiBuildStaleNotRaisedWhileRollInProgress(t *testing.T) {
+	ctx := context.Background()
+
+	readWhyAlarms := func(t *testing.T, storePath string) string {
+		t.Helper()
+		s, err := store.OpenRead(ctx, storePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		var ans WhyAnswer
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			ans, err = WhyForItem(r, Pass{Now: time.Now().UTC().Format(time.RFC3339), StorePath: storePath}, nil, nil, "")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		if err := alarms.Print(&buf, ans.Alarms); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+
+	countStaleEvents := func(t *testing.T, storePath string) int {
+		t.Helper()
+		s, err := store.OpenRead(ctx, storePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		var n int
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			return r.QueryRow(`SELECT count(*) FROM events WHERE kind = ?`, alarms.PiBuildStaleKind).Scan(&n)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	waitForFile := func(t *testing.T, path string) {
+		t.Helper()
+		deadline := time.Now().Add(hangGuard)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(path); err == nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %s", path)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		wantFail bool
+	}{
+		{name: "roll_succeeds", wantFail: false},
+		{name: "roll_fails", wantFail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, git, _ := actionFixture(t)
+			buildsDir := filepath.Join(t.TempDir(), "pi-builds")
+			t.Setenv("TILLR_PI_BUILDS_DIR", buildsDir)
+
+			// Seed a fork repo with two commits so patch/pi can advance from staleTip to wantedTip.
+			forkWork := t.TempDir()
+			runGit(t, forkWork, "init", "-q", "-b", "patch/pi")
+			writeForkFile(t, filepath.Join(forkWork, "pi.txt"), "pi fork v1\n")
+			runGit(t, forkWork, "add", "pi.txt")
+			runGit(t, forkWork, "commit", "-qm", "ours: pi fork v1")
+			staleTip := runGit(t, forkWork, "rev-parse", "refs/heads/patch/pi")
+			staleKey := staleTip[:12]
+
+			writeForkFile(t, filepath.Join(forkWork, "pi.txt"), "pi fork v2\n")
+			runGit(t, forkWork, "add", "pi.txt")
+			runGit(t, forkWork, "commit", "-qm", "ours: pi fork v2")
+			wantedTip := runGit(t, forkWork, "rev-parse", "refs/heads/patch/pi")
+			wantedKey := wantedTip[:12]
+			if wantedKey == staleKey {
+				t.Fatalf("unexpected key collision %s", wantedKey)
+			}
+
+			// Fetch both commits into the loop repo, pointing patch/pi at staleTip initially.
+			git("fetch", "-q", "--no-tags", forkWork, "+refs/heads/patch/pi:refs/heads/patch/pi")
+			git("update-ref", piForkPatchRef, staleTip)
+
+			staleDir := filepath.Join(buildsDir, staleKey)
+			staleBin := filepath.Join(staleDir, "home", ".local", "bin", "pi")
+			if err := os.MkdirAll(filepath.Dir(staleBin), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(staleBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(staleDir, ".verified"), []byte(staleKey+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cur, err := json.Marshal(map[string]string{"key": staleKey, "pi": staleBin, "dir": staleDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(buildsDir, "current.json"), cur, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			startedFile := filepath.Join(t.TempDir(), "roll-started")
+			releaseFile := filepath.Join(t.TempDir(), "roll-release")
+			var scriptBody string
+			if tc.wantFail {
+				scriptBody = "#!/bin/sh\nset -eu\n: > \"" + startedFile + "\"\nwhile [ ! -f \"" + releaseFile + "\" ]; do sleep 0.01; done\necho 'build-pi: failed' >&2\nexit 2\n"
+			} else {
+				targetDir := filepath.Join(buildsDir, wantedKey)
+				scriptBody = "#!/bin/sh\nset -eu\n: > \"" + startedFile + "\"\nwhile [ ! -f \"" + releaseFile + "\" ]; do sleep 0.01; done\nmkdir -p \"" + targetDir + "/home/.local/bin\"\nprintf '#!/bin/sh\\nexit 0\\n' > \"" + targetDir + "/home/.local/bin/pi\"\nchmod +x \"" + targetDir + "/home/.local/bin/pi\"\nprintf '%s\\n' '" + wantedKey + "' > \"" + targetDir + "/.verified\"\n"
+			}
+			script := filepath.Join(l.cfg.Root, "roll.sh")
+			if err := writeForkSafe(script, []byte(scriptBody), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			l.cfg.PostLanding.Roll = settings.Roll{Command: "./roll.sh --no-request"}
+
+			refUpdated := make(chan struct{})
+			allowLandReturn := make(chan struct{})
+			l.cfg.Steps = landStepsStub{land: func(context.Context, Candidate) (LandOutcome, error) {
+				git("update-ref", piForkPatchRef, wantedTip)
+				close(refUpdated)
+				<-allowLandReturn
+				return LandOutcome{Result: LandLanded, TrunkAfter: wantedTip}, nil
+			}}
+
+			landDone := make(chan error, 1)
+			go func() {
+				_, err := l.landWithActions(ctx, Candidate{
+					ItemID:  "item-pi-" + tc.name,
+					RunID:   "run-pi-" + tc.name,
+					BaseRef: piForkPatchRef,
+				})
+				landDone <- err
+			}()
+
+			// 1. Right after Land moves refs/heads/patch/pi and before Land returns / submitPiRoll runs:
+			//    an alarm pass must not raise pi-build-stale.
+			<-refUpdated
+			l.reportAlarms(ctx, time.Now().UTC())
+			if got := countStaleEvents(t, l.cfg.Store); got != 0 {
+				close(allowLandReturn)
+				_ = os.WriteFile(releaseFile, []byte("go\n"), 0o644)
+				<-landDone
+				waitAction(t, &l.piRollAction)
+				t.Fatalf("pi-build-stale raised during land before roll submission (%d events):\n%s", got, l.reported())
+			}
+			if whyOut := readWhyAlarms(t, l.cfg.Store); strings.Contains(whyOut, alarms.PiBuildStale) {
+				close(allowLandReturn)
+				_ = os.WriteFile(releaseFile, []byte("go\n"), 0o644)
+				<-landDone
+				waitAction(t, &l.piRollAction)
+				t.Fatalf("why reported pi-build-stale during land before roll submission:\n%s", whyOut)
+			}
+
+			// 2. Allow Land to return and wait for the roll command itself to be running;
+			//    an alarm pass while the roll runs must not raise pi-build-stale.
+			close(allowLandReturn)
+			if err := <-landDone; err != nil {
+				_ = os.WriteFile(releaseFile, []byte("go\n"), 0o644)
+				t.Fatal(err)
+			}
+			waitForFile(t, startedFile)
+			l.reportAlarms(ctx, time.Now().UTC())
+			if got := countStaleEvents(t, l.cfg.Store); got != 0 {
+				_ = os.WriteFile(releaseFile, []byte("go\n"), 0o644)
+				waitAction(t, &l.piRollAction)
+				t.Fatalf("pi-build-stale raised while roll was running (%d events):\n%s", got, l.reported())
+			}
+			if whyOut := readWhyAlarms(t, l.cfg.Store); strings.Contains(whyOut, alarms.PiBuildStale) {
+				_ = os.WriteFile(releaseFile, []byte("go\n"), 0o644)
+				waitAction(t, &l.piRollAction)
+				t.Fatalf("why reported pi-build-stale while roll was running:\n%s", whyOut)
+			}
+
+			// 3. Let the roll finish and run another alarm pass.
+			if err := os.WriteFile(releaseFile, []byte("go\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			waitAction(t, &l.piRollAction)
+			l.reportAlarms(ctx, time.Now().UTC())
+
+			report := l.reported()
+			if tc.wantFail {
+				whyOut := readWhyAlarms(t, l.cfg.Store)
+				for _, want := range []string{alarms.PiBuildStale, "failed", staleKey, wantedKey} {
+					if !strings.Contains(whyOut, want) {
+						t.Fatalf("why alarms after failed roll missing %q:\n%s", want, whyOut)
+					}
+				}
+				if !strings.Contains(report, "alarm started: ALARM pi-build-stale (pi)") {
+					t.Fatalf("loop log missing alarm started after failed roll:\n%s", report)
+				}
+			} else {
+				if got := countStaleEvents(t, l.cfg.Store); got != 0 {
+					t.Fatalf("expected 0 pi-build-stale events across successful roll, got %d:\n%s", got, report)
+				}
+				if strings.Contains(report, "alarm started: ALARM pi-build-stale") {
+					t.Fatalf("unexpected pi-build-stale alarm in log for successful roll:\n%s", report)
+				}
+				if want := "post-landing pi roll at " + wantedKey + " built key " + wantedKey; !strings.Contains(report, want) {
+					t.Fatalf("loop log missing %q:\n%s", want, report)
+				}
+				if whyOut := readWhyAlarms(t, l.cfg.Store); strings.Contains(whyOut, alarms.PiBuildStale) {
+					t.Fatalf("unexpected pi-build-stale in why after successful roll:\n%s", whyOut)
+				}
+			}
+		})
+	}
+}
