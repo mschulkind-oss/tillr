@@ -1,4 +1,4 @@
-package drain
+package gatespans
 
 import (
 	"bytes"
@@ -12,29 +12,57 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/boundary"
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
+	"github.com/mschulkind-oss/tillr-drain/internal/procguard"
+	"github.com/mschulkind-oss/tillr-drain/remotesync"
 	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
-// replayChildEnv builds the environment for every child process ProcessSteps.Replay
+const GoAffectedCheckID = "go-affected/affected-tillr-go-test-packages-pass"
+
+// ReplayConfig supplies step-runner and candidate scalar inputs for scoped Go replay.
+type ReplayConfig struct {
+	Root                  string
+	LaneRoot              string
+	SelfExe               string
+	Priority              *procguard.ProcessPriority
+	CheckProcessEnv       func(base []string, extra ...string) []string
+	RunID                 string
+	ItemID                string
+	BaseSHA               string
+	HeadSHA               string
+	CandidateChangedPaths []string
+	ReplayCheckLogs       map[string]string
+}
+
+func (cfg ReplayConfig) baseEnv() []string {
+	if cfg.CheckProcessEnv != nil {
+		return cfg.CheckProcessEnv(os.Environ())
+	}
+	return os.Environ()
+}
+
+// ReplayChildEnv builds the environment for every child process ProcessSteps.Replay
 // spawns: it identifies the candidate run and item for ps, omits TILLR_LANE_ID (the
 // lane is released and replay runs in .replay/<rev>) and TILLR_LOOP_STORE (so replay
 // is never mistaken for a surviving worker process), and disables background git gc and
 // maintenance on historical checkouts.
-func (s *ProcessSteps) replayChildEnv(candidate Candidate, extra ...string) []string {
-	env := withoutProcessEnv(
-		s.checkProcessEnv(os.Environ()),
+func ReplayChildEnv(cfg ReplayConfig, extra ...string) []string {
+	env := procguard.WithoutProcessEnv(
+		cfg.baseEnv(),
 		"TILLR_RUN_ID",
 		"TILLR_ITEM_ID",
 		"TILLR_LANE_ID",
 		"TILLR_LOOP_STORE",
 	)
-	if candidate.RunID != "" {
-		env = append(env, "TILLR_RUN_ID="+candidate.RunID)
+	if cfg.RunID != "" {
+		env = append(env, "TILLR_RUN_ID="+cfg.RunID)
 	}
-	if candidate.ItemID != "" {
-		env = append(env, "TILLR_ITEM_ID="+candidate.ItemID)
+	if cfg.ItemID != "" {
+		env = append(env, "TILLR_ITEM_ID="+cfg.ItemID)
 	}
-	env = appendGitConfigEnv(env,
+	env = AppendGitConfigEnv(env,
 		[2]string{"gc.auto", "0"},
 		[2]string{"gc.autoDetach", "false"},
 		[2]string{"maintenance.auto", "false"},
@@ -43,7 +71,7 @@ func (s *ProcessSteps) replayChildEnv(candidate Candidate, extra ...string) []st
 	return append(env, extra...)
 }
 
-func appendGitConfigEnv(env []string, pairs ...[2]string) []string {
+func AppendGitConfigEnv(env []string, pairs ...[2]string) []string {
 	count := 0
 	out := make([]string, 0, len(env)+len(pairs)*2+1)
 	for _, kv := range env {
@@ -66,23 +94,23 @@ func appendGitConfigEnv(env []string, pairs ...[2]string) []string {
 	return out
 }
 
-// isReplayGoCheck reports whether check is a Go test check whose named failing
+// IsReplayGoCheck reports whether check is a Go test check whose named failing
 // cases can be replayed directly with `go test -run` instead of re-running the
 // whole suite.
-func isReplayGoCheck(check string) bool {
-	return check == goAffectedCheckID ||
+func IsReplayGoCheck(check string) bool {
+	return check == GoAffectedCheckID ||
 		strings.HasPrefix(check, "go-tool/") ||
 		strings.HasPrefix(check, "go-substrate/") ||
 		strings.HasPrefix(check, "gate-runner/")
 }
 
-// readReplayGoFailingTests extracts concrete failing Go package -> test names for
+// ReadReplayGoFailingTests extracts concrete failing Go package -> test names for
 // check from the candidate's gate logs: first the check's recorded CheckLogs entry,
-// then per-check and gate logs under RunDir(root, candidate.RunID)/logs. It accepts
+// then per-check and gate logs under RunDir(root, runID)/logs. It accepts
 // either `go-affected: failing packages and tests:` (for go-affected) or a matching
 // `fork-check: triage --` section. Any unnamed, truncated, or non-Go failure returns
 // (nil, false) so the caller falls back to replaying the whole check.
-func readReplayGoFailingTests(root string, candidate Candidate, check string) (map[string][]string, bool) {
+func ReadReplayGoFailingTests(root, runID string, replayCheckLogs map[string]string, check string) (map[string][]string, bool) {
 	var files []string
 	seen := map[string]bool{}
 	addFile := func(path string) {
@@ -101,13 +129,13 @@ func readReplayGoFailingTests(root string, candidate Candidate, check string) (m
 			files = append(files, path)
 		}
 	}
-	if candidate.replayCheckLogs != nil {
-		addFile(candidate.replayCheckLogs[check])
+	if replayCheckLogs != nil {
+		addFile(replayCheckLogs[check])
 	}
-	if root != "" && candidate.RunID != "" {
-		logsDir := filepath.Join(RunDir(root, candidate.RunID), "logs")
+	if root != "" && runID != "" {
+		logsDir := filepath.Join(drainmodel.RunDir(root, runID), "logs")
 		patterns := []string{
-			"fork-check-*-" + sanitizeLogComponent(check) + ".log",
+			"fork-check-*-" + remotesync.SanitizeLogComponent(check) + ".log",
 			"*gate*.triage.log",
 			"*gate*.log",
 		}
@@ -128,23 +156,23 @@ func readReplayGoFailingTests(root string, candidate Candidate, check string) (m
 			continue
 		}
 		text := string(raw)
-		if check == goAffectedCheckID {
-			if pkgs, found, concrete := parseGoAffectedSummary(text); found {
+		if check == GoAffectedCheckID {
+			if pkgs, found, concrete := ParseGoAffectedSummary(text); found {
 				return pkgs, concrete
 			}
 		}
-		if pkgs, found, concrete := parseTriageGoTests(text, check); found {
+		if pkgs, found, concrete := ParseTriageGoTests(text, check); found {
 			return pkgs, concrete
 		}
 	}
 	return nil, false
 }
 
-// parseTriageGoTests parses a `fork-check: triage --` block for the section matching
+// ParseTriageGoTests parses a `fork-check: triage --` block for the section matching
 // check. It returns (pkgs, found=true, concrete=true) only when the matching section
 // is untruncated and every listed case names a concrete Go test and Go package import
 // path. Any unnamed case, truncated list, or non-Go failure returns (nil, true, false).
-func parseTriageGoTests(content, check string) (map[string][]string, bool, bool) {
+func ParseTriageGoTests(content, check string) (map[string][]string, bool, bool) {
 	lines := strings.Split(content, "\n")
 	inBlock := false
 	inCheck := false
@@ -165,7 +193,7 @@ func parseTriageGoTests(content, check string) (map[string][]string, bool, bool)
 		text := strings.TrimSpace(line)
 		if strings.HasPrefix(line, "  triage ") {
 			id, label, _ := strings.Cut(strings.TrimPrefix(text, "triage "), ": ")
-			if id == check || forkCheckDeclID(id, label, "") == check {
+			if id == check || remotesync.ForkCheckDeclID(id, label, "") == check {
 				inCheck = true
 				matched = true
 			} else {
@@ -215,7 +243,7 @@ func parseTriageGoTests(content, check string) (map[string][]string, bool, bool)
 	return pkgs, true, true
 }
 
-func parseGoAffectedSummary(content string) (map[string][]string, bool, bool) {
+func ParseGoAffectedSummary(content string) (map[string][]string, bool, bool) {
 	const header = "go-affected: failing packages and tests:"
 	lines := strings.Split(content, "\n")
 	for i := 0; i < len(lines); i++ {
@@ -249,9 +277,9 @@ func parseGoAffectedSummary(content string) (map[string][]string, bool, bool) {
 			for _, t := range pkgs[pkg] {
 				seen[t] = true
 			}
-			for _, part := range strings.Split(rest, ",") {
-				name := strings.TrimSpace(part)
-				if !goTestName.MatchString(name) {
+			for _, rawName := range strings.Split(rest, ",") {
+				name := strings.TrimSpace(rawName)
+				if name == "" || !goTestName.MatchString(name) {
 					return nil, true, false
 				}
 				if !seen[name] {
@@ -279,12 +307,12 @@ func stripForkCheckPipe(line string) string {
 	return line
 }
 
-type goModuleInfo struct {
-	dir        string
-	modulePath string
+type GoModuleInfo struct {
+	Dir        string
+	ModulePath string
 }
 
-func indexReplayGoModules(dir string) []goModuleInfo {
+func IndexReplayGoModules(dir string) []GoModuleInfo {
 	var modFiles []string
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 		modFiles = append(modFiles, filepath.Join(dir, "go.mod"))
@@ -293,7 +321,7 @@ func indexReplayGoModules(dir string) []goModuleInfo {
 	sort.Strings(toolMods)
 	modFiles = append(modFiles, toolMods...)
 
-	var modules []goModuleInfo
+	var modules []GoModuleInfo
 	for _, modFile := range modFiles {
 		raw, err := os.ReadFile(modFile)
 		if err != nil {
@@ -301,55 +329,55 @@ func indexReplayGoModules(dir string) []goModuleInfo {
 		}
 		for _, line := range strings.Split(string(raw), "\n") {
 			if fields := strings.Fields(line); len(fields) >= 2 && fields[0] == "module" {
-				modules = append(modules, goModuleInfo{
-					dir:        filepath.Dir(modFile),
-					modulePath: strings.Trim(fields[1], `"`),
+				modules = append(modules, GoModuleInfo{
+					Dir:        filepath.Dir(modFile),
+					ModulePath: strings.Trim(fields[1], `"`),
 				})
 				break
 			}
 		}
 	}
-	// Longest modulePath first so nested modules match before outer ones.
+	// Longest ModulePath first so nested modules match before outer ones.
 	sort.Slice(modules, func(i, j int) bool {
-		return len(modules[i].modulePath) > len(modules[j].modulePath)
+		return len(modules[i].ModulePath) > len(modules[j].ModulePath)
 	})
 	return modules
 }
 
-func resolveReplayGoPackage(modules []goModuleInfo, pkg string) (modDir, rel string, ok bool) {
+func ResolveReplayGoPackage(modules []GoModuleInfo, pkg string) (modDir, rel string, ok bool) {
 	for _, m := range modules {
-		if pkg == m.modulePath {
-			return m.dir, ".", true
+		if pkg == m.ModulePath {
+			return m.Dir, ".", true
 		}
-		if suffix, matched := strings.CutPrefix(pkg, m.modulePath+"/"); matched && filepath.IsLocal(suffix) && filepath.Clean(suffix) == suffix && suffix != "." {
-			return m.dir, "./" + suffix, true
+		if suffix, matched := strings.CutPrefix(pkg, m.ModulePath+"/"); matched && filepath.IsLocal(suffix) && filepath.Clean(suffix) == suffix && suffix != "." {
+			return m.Dir, "./" + suffix, true
 		}
 	}
 	return "", "", false
 }
 
-// replayGoCheck runs a scoped replay of a Go test check on rev inside dir:
+// ReplayGoCheck runs a scoped replay of a Go test check on rev inside dir:
 //   - If the candidate's gate log names concrete failing Go tests for every failing
 //     package (via go-affected summary or fork-check triage), it runs only those
 //     named tests via `go test -json -count=1 -run ...`.
 //   - Otherwise, for go-affected, if candidate changed paths are available and
-//     tools/gate/go_affected.py exists in dir, it runs
-//     `python3 tools/gate/go_affected.py --changed <paths...>`.
+//     tools/tillr-gate/goaffected or tools/gate/go_affected.py exists in dir, it runs
+//     go-affected --changed <paths...>.
 //   - Otherwise, handled is false so Replay falls back to DefaultReplayProgram.
-func (s *ProcessSteps) replayGoCheck(ctx context.Context, dir string, candidate Candidate, rev, check string) (handled, red, known bool, output string, err error) {
-	if pkgs, ok := readReplayGoFailingTests(s.Root, candidate, check); ok {
-		red, output, err := s.runNamedGoTestsInReplay(ctx, dir, candidate, rev, check, pkgs)
+func ReplayGoCheck(ctx context.Context, cfg ReplayConfig, dir, rev, check string) (handled, red, known bool, output string, err error) {
+	if pkgs, ok := ReadReplayGoFailingTests(cfg.Root, cfg.RunID, cfg.ReplayCheckLogs, check); ok {
+		red, output, err := RunNamedGoTestsInReplay(ctx, cfg, dir, rev, check, pkgs)
 		if err != nil {
 			return true, false, false, output, err
 		}
 		return true, red, true, output, nil
 	}
-	if check != goAffectedCheckID {
+	if check != GoAffectedCheckID {
 		return false, false, false, "", nil
 	}
-	changed := candidate.CandidateChangedPaths
-	if len(changed) == 0 && s.Root != "" && candidate.BaseSHA != "" && candidate.HeadSHA != "" {
-		changed = s.diffChangedPaths(ctx, candidate.BaseSHA, candidate.HeadSHA)
+	changed := cfg.CandidateChangedPaths
+	if len(changed) == 0 && cfg.Root != "" && cfg.BaseSHA != "" && cfg.HeadSHA != "" {
+		changed = DiffChangedPaths(ctx, cfg.Root, cfg.BaseSHA, cfg.HeadSHA)
 	}
 	goAffectedPkg := filepath.Join(dir, "tools", "tillr-gate", "goaffected")
 	goAffectedScript := filepath.Join(dir, "tools", "gate", "go_affected.py")
@@ -367,28 +395,28 @@ func (s *ProcessSteps) replayGoCheck(ctx context.Context, dir string, candidate 
 		return false, false, false, "", nil
 	}
 	cmd.Dir = dir
-	cmd.Env = s.replayChildEnv(candidate, "TILLR_FORK_DRIFT=1")
-	replayClass := ProcessClassGate
-	if IsRevertItem(candidate.ItemID) || IsTrunkFixer(candidate.ItemID) {
-		replayClass = ProcessClassRepair
+	cmd.Env = ReplayChildEnv(cfg, "TILLR_FORK_DRIFT=1")
+	replayClass := procguard.ProcessClassGate
+	if drainmodel.IsRevertItem(cfg.ItemID) || drainmodel.IsTrunkFixer(cfg.ItemID) {
+		replayClass = procguard.ProcessClassRepair
 	}
-	if err := s.priority.ApplyToCmd(cmd, replayClass, s.selfExe); err != nil {
+	if err := cfg.Priority.ApplyToCmd(cmd, replayClass, cfg.SelfExe); err != nil {
 		return true, false, false, "", err
 	}
-	var stderr stderrTail
+	var stderr drainmodel.StderrTail
 	var combined bytes.Buffer
 	cmd.Stdout = &combined
 	cmd.Stderr = io.MultiWriter(&combined, &stderr)
-	runErr := runCheckGroup(cmd)
+	runErr := RunCheckGroupStarted(cmd, nil)
 	if ctx.Err() != nil {
 		return true, false, false, combined.String(), ctx.Err()
 	}
 	if cmd.ProcessState == nil {
-		return true, false, false, combined.String(), Externalf("replaying %s on %s: %v: %s",
-			check, shortSHA(rev), runErr, stderr.String())
+		return true, false, false, combined.String(), drainmodel.Externalf("replaying %s on %s: %v: %s",
+			check, boundary.ShortSHA(rev), runErr, stderr.String())
 	}
 	code := cmd.ProcessState.ExitCode()
-	classified := classifyCheck(checkresult.Observation{
+	classified := drainmodel.ClassifyCheck(checkresult.Observation{
 		Check:    check,
 		Commit:   rev,
 		Worktree: dir,
@@ -405,8 +433,8 @@ func (s *ProcessSteps) replayGoCheck(ctx context.Context, dir string, candidate 
 	}
 }
 
-func (s *ProcessSteps) diffChangedPaths(ctx context.Context, baseSHA, headSHA string) []string {
-	cmd := exec.CommandContext(ctx, "git", "-C", s.Root, "diff", "--name-only", baseSHA, headSHA)
+func DiffChangedPaths(ctx context.Context, root, baseSHA, headSHA string) []string {
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "diff", "--name-only", baseSHA, headSHA)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -420,10 +448,10 @@ func (s *ProcessSteps) diffChangedPaths(ctx context.Context, baseSHA, headSHA st
 	return paths
 }
 
-// leafGoTests drops parent test names when a subtest of that parent is also listed
+// LeafGoTests drops parent test names when a subtest of that parent is also listed
 // (matching go_affected.py's _leaf_failed_tests), so replaying a failing subtest
 // does not re-run every sibling subtest under its parent.
-func leafGoTests(names []string) []string {
+func LeafGoTests(names []string) []string {
 	out := make([]string, 0, len(names))
 	for _, name := range names {
 		hasChild := false
@@ -441,15 +469,15 @@ func leafGoTests(names []string) []string {
 	return out
 }
 
-func (s *ProcessSteps) runNamedGoTestsInReplay(ctx context.Context, dir string, candidate Candidate, rev, check string, pkgs map[string][]string) (bool, string, error) {
-	modules := indexReplayGoModules(dir)
+func RunNamedGoTestsInReplay(ctx context.Context, cfg ReplayConfig, dir, rev, check string, pkgs map[string][]string) (bool, string, error) {
+	modules := IndexReplayGoModules(dir)
 	pkgNames := make([]string, 0, len(pkgs))
 	for pkg := range pkgs {
 		pkgNames = append(pkgNames, pkg)
 	}
 	sort.Strings(pkgNames)
 
-	parent := s.LaneRoot
+	parent := cfg.LaneRoot
 	if parent == "" {
 		parent = filepath.Dir(dir)
 	}
@@ -462,7 +490,7 @@ func (s *ProcessSteps) runNamedGoTestsInReplay(ctx context.Context, dir string, 
 	var combined bytes.Buffer
 	red := false
 	for _, pkg := range pkgNames {
-		modDir, rel, ok := resolveReplayGoPackage(modules, pkg)
+		modDir, rel, ok := ResolveReplayGoPackage(modules, pkg)
 		if !ok {
 			continue
 		}
@@ -472,12 +500,12 @@ func (s *ProcessSteps) runNamedGoTestsInReplay(ctx context.Context, dir string, 
 			return false, combined.String(), err
 		}
 		config := filepath.Join(scratch, "gitconfig")
-		if err := privateGoReplayGitConfig(ctx, modDir, config); err != nil {
+		if err := PrivateGoReplayGitConfig(ctx, modDir, config); err != nil {
 			return false, combined.String(), err
 		}
 		var topLevel []string
 		var subtests []string
-		for _, name := range leafGoTests(pkgs[pkg]) {
+		for _, name := range LeafGoTests(pkgs[pkg]) {
 			if strings.Contains(name, "/") {
 				subtests = append(subtests, name)
 			} else {
@@ -502,24 +530,24 @@ func (s *ProcessSteps) runNamedGoTestsInReplay(ctx context.Context, dir string, 
 		for _, pattern := range runPatterns {
 			cmd := exec.CommandContext(ctx, "go", "test", "-json", "-count=1", "-run", pattern, rel)
 			cmd.Dir = modDir
-			cmd.Env = s.replayChildEnv(candidate, "CGO_ENABLED=0", "TMPDIR="+scratch, "YOLO_DURABLE_DIR="+scratch, "GIT_CONFIG_GLOBAL="+config)
-			replayClass := ProcessClassGate
-			if IsRevertItem(candidate.ItemID) || IsTrunkFixer(candidate.ItemID) {
-				replayClass = ProcessClassRepair
+			cmd.Env = ReplayChildEnv(cfg, "CGO_ENABLED=0", "TMPDIR="+scratch, "YOLO_DURABLE_DIR="+scratch, "GIT_CONFIG_GLOBAL="+config)
+			replayClass := procguard.ProcessClassGate
+			if drainmodel.IsRevertItem(cfg.ItemID) || drainmodel.IsTrunkFixer(cfg.ItemID) {
+				replayClass = procguard.ProcessClassRepair
 			}
-			if err := s.priority.ApplyToCmd(cmd, replayClass, s.selfExe); err != nil {
+			if err := cfg.Priority.ApplyToCmd(cmd, replayClass, cfg.SelfExe); err != nil {
 				return false, combined.String(), err
 			}
-			var stderr stderrTail
+			var stderr drainmodel.StderrTail
 			cmd.Stdout = &combined
 			cmd.Stderr = io.MultiWriter(&combined, &stderr)
-			runErr := runCheckGroup(cmd)
+			runErr := RunCheckGroupStarted(cmd, nil)
 			if ctx.Err() != nil {
 				return false, combined.String(), ctx.Err()
 			}
 			if cmd.ProcessState == nil {
-				return false, combined.String(), Externalf("replaying %s (%s %s) on %s: %v: %s",
-					check, pkg, pattern, shortSHA(rev), runErr, stderr.String())
+				return false, combined.String(), drainmodel.Externalf("replaying %s (%s %s) on %s: %v: %s",
+					check, pkg, pattern, boundary.ShortSHA(rev), runErr, stderr.String())
 			}
 			if cmd.ProcessState.ExitCode() != 0 {
 				red = true

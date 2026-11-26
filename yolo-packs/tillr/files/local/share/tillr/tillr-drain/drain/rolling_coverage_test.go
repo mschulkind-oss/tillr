@@ -32,11 +32,11 @@ func TestRollingCoverageDistinguishesMissingUnreadableAndEmptySpans(t *testing.T
 				t.Fatalf("state=%s, want %s", coverage.SpansState, tc.want)
 			}
 			if tc.want == GateSpansRead {
-				if coverage.line() != "0 ran, 0 cached, 0 skipped" {
-					t.Fatal(coverage.line())
+				if coverage.Line() != "0 ran, 0 cached, 0 skipped" {
+					t.Fatal(coverage.Line())
 				}
-			} else if !strings.Contains(coverage.line(), "counts unavailable") {
-				t.Fatal(coverage.line())
+			} else if !strings.Contains(coverage.Line(), "counts unavailable") {
+				t.Fatal(coverage.Line())
 			}
 		})
 	}

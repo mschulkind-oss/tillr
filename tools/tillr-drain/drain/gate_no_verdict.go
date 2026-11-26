@@ -2,14 +2,9 @@ package drain
 
 import (
 	"context"
-	"errors"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
-
-// errGateNoVerdict is the examination outcome of a gate that ran and answered "error":
-// no verdict exists, so the candidate is kept on its lane and the next pass gates it again.
-var errGateNoVerdict = errors.New("candidate waits for the gate to reach a verdict")
 
 // holdGateNoVerdict records the wait after a gate that reached no verdict. The
 // examination may release the lane once the candidate pin is verified. The loop

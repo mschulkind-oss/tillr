@@ -80,8 +80,6 @@ const DefaultFixerGateProgram = loopAdapterProgram + " fixer-gate"
 // comma-separated check ids. It is handed no candidate flags: it judges a revision.
 const DefaultReplayProgram = "tillr-loop replay --only {only}"
 
-const goAffectedCheckID = "go-affected/affected-tillr-go-test-packages-pass"
-
 // GateCodePaths is the gate's own code. A fixer's fence is the union of the suspect
 // change and the failing checks' watched paths, with these removed: a fixer that could
 // edit the gate could make the red disappear by weakening the judge, which is the one
@@ -1874,7 +1872,7 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 			span = "the whole tree up to " + shortSHA(mainSHA)
 		}
 		l.reportf("loop: the rolling run over %s could not judge (exit %d); %s; %s; continuing dispatch. %s\n",
-			span, out.ExitCode, where, out.Coverage.line(), strings.TrimSpace(out.Detail))
+			span, out.ExitCode, where, out.Coverage.Line(), strings.TrimSpace(out.Detail))
 		if streak > 1 || (streak == 1 && base == "") {
 			noun := "runs have"
 			if streak == 1 {
@@ -1898,7 +1896,7 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 		result.RollingGreen++
 		l.mu.Unlock()
 		l.reportf("loop: rolling run green over %s..%s; watermark advances to %s; %s\n",
-			shortSHA(base), shortSHA(mainSHA), shortSHA(mainSHA), out.Coverage.line())
+			shortSHA(base), shortSHA(mainSHA), shortSHA(mainSHA), out.Coverage.Line())
 		return nil
 	}
 	// Red: file the fixer for the tip and leave the watermark where it was.
@@ -1928,7 +1926,7 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 	if fixerErr == nil {
 		l.reportf("loop: rolling run RED over %s..%s (%s); watermark stays at %s and the queue is held behind %s; %s\n",
 			shortSHA(base), shortSHA(mainSHA), strings.Join(fixerChecks, ", "),
-			shortSHA(state.WatermarkSHA), fixerID, out.Coverage.line())
+			shortSHA(state.WatermarkSHA), fixerID, out.Coverage.Line())
 	}
 	return nil
 }

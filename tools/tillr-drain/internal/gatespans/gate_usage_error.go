@@ -1,4 +1,4 @@
-package drain
+package gatespans
 
 import (
 	"context"
@@ -22,8 +22,8 @@ var gateUsageSignatures = []string{
 	"answered exit 2:",
 }
 
-// gateUsageError reports whether a gate's stderr tail names a usage refusal.
-func gateUsageError(stderr string) bool {
+// GateUsageError reports whether a gate's stderr tail names a usage refusal.
+func GateUsageError(stderr string) bool {
 	lower := strings.ToLower(stderr)
 	for _, sig := range gateUsageSignatures {
 		if strings.Contains(lower, sig) {
@@ -33,8 +33,8 @@ func gateUsageError(stderr string) bool {
 	return false
 }
 
-// gateErrorLines is the first lines of the gate's own error, for a hold's reason.
-func gateErrorLines(stderr string, max int) string {
+// GateErrorLines is the first lines of the gate's own error, for a hold's reason.
+func GateErrorLines(stderr string, max int) string {
 	var lines []string
 	for _, line := range strings.Split(stderr, "\n") {
 		if line = strings.TrimSpace(line); line != "" {
@@ -48,50 +48,50 @@ func gateErrorLines(stderr string, max int) string {
 }
 
 const (
-	gateScriptDir = "tools/gate/"
-	gateBinaryDir = "tools/tillr-gate/"
+	GateScriptDir = "tools/gate/"
+	GateBinaryDir = "tools/tillr-gate/"
 )
 
-// gateBinaryDisagreement says plainly when a candidate changes both a gate script and the
+// GateBinaryDisagreement says plainly when a candidate changes both a gate script and the
 // binary the script calls. The gate judges every candidate with the INSTALLED tillr-gate,
 // built from the trunk, never with the candidate's own build: a candidate that built its own
 // judge would certify itself. So the script in such a candidate must stay compatible with
 // the installed binary, and the binary change must land first. Empty when the candidate
 // touches only one side.
-func gateBinaryDisagreement(paths []string) string {
+func GateBinaryDisagreement(paths []string) string {
 	var script, binary bool
 	for _, p := range paths {
 		switch {
-		case strings.HasPrefix(p, gateScriptDir):
+		case strings.HasPrefix(p, GateScriptDir):
 			script = true
-		case strings.HasPrefix(p, gateBinaryDir):
+		case strings.HasPrefix(p, GateBinaryDir):
 			binary = true
 		}
 	}
 	if !script || !binary {
 		return ""
 	}
-	return "this candidate changes both " + gateScriptDir + " (the gate script) and " + gateBinaryDir +
+	return "this candidate changes both " + GateScriptDir + " (the gate script) and " + GateBinaryDir +
 		" (the binary it calls), but the gate runs the installed tillr-gate built from the trunk, " +
 		"not the candidate's own build: the script must stay compatible with the installed binary, " +
 		"so land the binary change first and the script change after"
 }
 
-// candidateChangedPaths lists base..head in the candidate's worktree; a failure reads as none.
-func candidateChangedPaths(ctx context.Context, c Candidate) []string {
-	out, err := exec.CommandContext(ctx, "git", "-C", c.Worktree, "diff", "--name-only", c.BaseSHA, c.HeadSHA).Output()
+// CandidateChangedPaths lists base..head in the candidate's worktree; a failure reads as none.
+func CandidateChangedPaths(ctx context.Context, worktree, baseSHA, headSHA string) []string {
+	out, err := exec.CommandContext(ctx, "git", "-C", worktree, "diff", "--name-only", baseSHA, headSHA).Output()
 	if err != nil {
 		return nil
 	}
 	return strings.Fields(string(out))
 }
 
-// gateErrorDetail is the hold's reason for a deterministic gate error: the gate's first
+// GateErrorDetail is the hold's reason for a deterministic gate error: the gate's first
 // error lines, then the binary disagreement when the candidate has one.
-func gateErrorDetail(stderr string, paths []string) string {
+func GateErrorDetail(stderr string, paths []string) string {
 	detail := "the gate program refused its own arguments and judged nothing; the same program and installed binary answer the same on every pass: " +
-		gateErrorLines(stderr, 3)
-	if d := gateBinaryDisagreement(paths); d != "" {
+		GateErrorLines(stderr, 3)
+	if d := GateBinaryDisagreement(paths); d != "" {
 		detail += "; " + d
 	}
 	return detail

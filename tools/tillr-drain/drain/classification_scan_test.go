@@ -26,15 +26,15 @@ var slice1cDrainSites = []drainSiteRef{
 	// D2
 	{"drain/steps.go", "gateFailureContext"},
 	{"drain/returned.go", "gateFailingChecks"},
-	{"drain/gate_spans.go", "readFastGateSpans"},
-	{"drain/gate_spans.go", "readFailingSpans"},
-	{"drain/gate_spans.go", "readSpansWithStatus"},
-	{"drain/gate_spans.go", "readSpansWithWatches"},
-	{"drain/gate_spans.go", "readMatchingSpans"},
+	{"internal/gatespans/gate_spans.go", "ReadFastGateSpans"},
+	{"internal/gatespans/gate_spans.go", "ReadFailingSpans"},
+	{"internal/gatespans/gate_spans.go", "ReadSpansWithStatus"},
+	{"internal/gatespans/gate_spans.go", "ReadSpansWithWatches"},
+	{"internal/gatespans/gate_spans.go", "ReadMatchingSpans"},
 	// D3
 	{"drain/loop.go", "verify"},
 	// D4
-	{"drain/gate_stall.go", "gateStallContext"},
+	{"internal/gatespans/gate_stall.go", "GateStallContext"},
 	{"drain/pass.go", "foldPendingHistory"},
 	// D5
 	{"remotesync/fork_drift.go", "ReadForkConflicts"},
@@ -78,7 +78,7 @@ var slice1cDrainSites = []drainSiteRef{
 	// D34
 	{"drain/trunk.go", "openTrunkRedNotice"},
 	// Fast-gate timing check reader
-	{"drain/gate_timing.go", "readGateTimingChecks"},
+	{"internal/gatespans/gate_timing.go", "ReadGateTimingChecks"},
 }
 
 var scannedDrainSites = append([]drainSiteRef(nil), append(slice1cDrainSites, slice1dDrainSites...)...)
@@ -93,17 +93,17 @@ var slice1dDrainSites = []drainSiteRef{
 	{"drain/trunk.go", "repeatedRollingStalls"},
 	{"drain/trunk.go", "rollingUnknownStreak"},
 	// D19
-	{"drain/gate_spans.go", "readRollingCoverage"},
-	{"drain/gate_spans.go", "readGateSpans"},
+	{"internal/gatespans/gate_spans.go", "ReadRollingCoverage"},
+	{"internal/gatespans/gate_spans.go", "ReadGateSpans"},
 	{"remotesync/fork_check_triage.go", "ReadFailingSpanMeta"},
 	// D20
-	{"drain/heavy_steps.go", "JudgeHeavy"},
-	{"drain/heavy_steps.go", "decodeHeavyVerdict"},
-	{"drain/heavy_steps.go", "legacyKeptLog"},
+	{"internal/gatespans/heavy_steps.go", "JudgeHeavy"},
+	{"internal/gatespans/heavy_steps.go", "DecodeHeavyVerdict"},
+	{"internal/gatespans/heavy_steps.go", "LegacyKeptLog"},
 	// D21
-	{"drain/heavy_steps.go", "runHeavyLegacy"},
+	{"internal/gatespans/heavy_steps.go", "RunHeavyLegacy"},
 	// D22
-	{"drain/heavy_go.go", "judgeHeavyGo"},
+	{"internal/gatespans/heavy_go.go", "JudgeHeavyGo"},
 	// D23
 	{"heavyrun/heavy.go", "Run"},
 	{"heavyrun/heavy.go", "RunAttempt"},

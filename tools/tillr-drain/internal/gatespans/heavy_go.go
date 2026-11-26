@@ -1,4 +1,4 @@
-package drain
+package gatespans
 
 import (
 	"context"
@@ -10,23 +10,24 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 const (
-	goTestAbsent  = "test not present at this commit"
-	goTestSkipped = "test or enclosing test skipped at this commit"
+	GoTestAbsent  = "test not present at this commit"
+	GoTestSkipped = "test or enclosing test skipped at this commit"
 )
 
 var goTestName = regexp.MustCompile(`^(Test|Example|Fuzz)[\pL\pN_]*(/[^[:space:]]*)*$`)
 var goToolModule = regexp.MustCompile(`^tools/[a-z0-9-]+$`)
 var goImport = regexp.MustCompile(`^[a-zA-Z0-9._~-]+(/[a-zA-Z0-9._~-]+)*$`)
 
-// goSuiteProofID is the legacy declaration id for the suite that emitted a
+// GoSuiteProofID is the legacy declaration id for the suite that emitted a
 // named test. A passing suite is positive evidence even though it does not
 // enumerate tests. A red or unavailable suite provides no such evidence.
-func goSuiteProofID(id string) string {
-	test, ok := strings.CutPrefix(id, goTestPrefix)
+func GoSuiteProofID(id string) string {
+	test, ok := strings.CutPrefix(id, GoTestPrefix)
 	if !ok {
 		return ""
 	}
@@ -39,7 +40,7 @@ func goSuiteProofID(id string) string {
 	return "go-tool/" + slug + "-s-whole-suite-passes"
 }
 
-func goSuiteFailures(label string, evidence legacyFailure, suite HeavyCheck) []HeavyCheck {
+func GoSuiteFailures(label string, evidence LegacyFailure, suite HeavyCheck) []HeavyCheck {
 	module, ok := strings.CutSuffix(label, "'s whole suite passes")
 	if !ok || !goToolModule.MatchString(module) {
 		return []HeavyCheck{suite}
@@ -53,7 +54,7 @@ func goSuiteFailures(label string, evidence legacyFailure, suite HeavyCheck) []H
 			continue
 		}
 		check := suite
-		check.CheckID = goTestPrefix + module + ":" + test.Package + ":" + test.Name
+		check.CheckID = GoTestPrefix + module + ":" + test.Package + ":" + test.Name
 		// A fixture may read outside its module (such as bin/pi-forks).
 		// No declared read set exists at individual test granularity.
 		check.Reads = nil
@@ -78,12 +79,12 @@ func goSuiteFailures(label string, evidence legacyFailure, suite HeavyCheck) []H
 	return checks
 }
 
-// judgeHeavyGo replays a single package-qualified case, including in the required
+// JudgeHeavyGo replays a single package-qualified case, including in the required
 // gate of a previously reverted item. Its ID is self-contained across restarts.
-func (s *ProcessSteps) judgeHeavyGo(ctx context.Context, dir, id string) ([]HeavyCheck, error) {
-	parts := strings.SplitN(strings.TrimPrefix(id, goTestPrefix), ":", 3)
+func JudgeHeavyGo(ctx context.Context, cfg HeavyJudgeConfig, dir, id string) ([]HeavyCheck, error) {
+	parts := strings.SplitN(strings.TrimPrefix(id, GoTestPrefix), ":", 3)
 	if len(parts) != 3 || !goToolModule.MatchString(parts[0]) || !goImport.MatchString(parts[1]) || !goTestName.MatchString(parts[2]) {
-		return nil, Externalf("invalid Go test selector %q", id)
+		return nil, drainmodel.Externalf("invalid Go test selector %q", id)
 	}
 	module, pkg, name := parts[0], parts[1], parts[2]
 	root := filepath.Join(dir, module)
@@ -102,19 +103,19 @@ func (s *ProcessSteps) judgeHeavyGo(ctx context.Context, dir, id string) ([]Heav
 	if pkg != modulePath {
 		suffix, ok := strings.CutPrefix(pkg, modulePath+"/")
 		if modulePath == "" || !ok || !filepath.IsLocal(suffix) || filepath.Clean(suffix) != suffix || suffix == "." {
-			return nil, Externalf("Go package %q is not in module %q", pkg, modulePath)
+			return nil, drainmodel.Externalf("Go package %q is not in module %q", pkg, modulePath)
 		}
 		rel = "./" + suffix
 	}
 	if _, err := os.Stat(filepath.Join(root, rel)); os.IsNotExist(err) {
-		classified := classifyCheck(checkresult.Observation{Check: id, Source: checkresult.FocusedGoTest, PackageAbsent: true})
+		classified := drainmodel.ClassifyCheck(checkresult.Observation{Check: id, Source: checkresult.FocusedGoTest, PackageAbsent: true})
 		switch classified.Outcome {
 		case checkresult.Pass:
 			return []HeavyCheck{{CheckID: id, Result: "pass", Detail: classified.Detail}}, nil
 		case checkresult.Fail:
 			return []HeavyCheck{{CheckID: id, Result: "fail", Detail: classified.Detail}}, nil
 		default:
-			return nil, Externalf("focused Go test %s gave no verdict: %s", name, classified.Detail)
+			return nil, drainmodel.Externalf("focused Go test %s gave no verdict: %s", name, classified.Detail)
 		}
 	} else if err != nil {
 		return nil, err
@@ -125,7 +126,7 @@ func (s *ProcessSteps) judgeHeavyGo(ctx context.Context, dir, id string) ([]Heav
 	}
 	// Like a proof shard, isolate the test and TestMain's scratch and global Git
 	// config. A historical fixture must not be able to change the owner's config.
-	parent := s.LaneRoot
+	parent := cfg.LaneRoot
 	if parent == "" {
 		parent = filepath.Dir(dir)
 	}
@@ -135,20 +136,20 @@ func (s *ProcessSteps) judgeHeavyGo(ctx context.Context, dir, id string) ([]Heav
 	}
 	defer os.RemoveAll(scratch)
 	config := filepath.Join(scratch, "gitconfig")
-	if err := privateGoReplayGitConfig(ctx, root, config); err != nil {
+	if err := PrivateGoReplayGitConfig(ctx, root, config); err != nil {
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, "go", "test", "-json", "-count=1", "-run", strings.Join(patterns, "/"), rel)
 	cmd.Dir = root
-	cmd.Env = s.checkProcessEnv(os.Environ(), "CGO_ENABLED=0", "TMPDIR="+scratch, "YOLO_DURABLE_DIR="+scratch, "GIT_CONFIG_GLOBAL="+config)
-	if err := s.applyHeavyPriority(ctx, cmd); err != nil {
+	cmd.Env = cfg.env(os.Environ(), "CGO_ENABLED=0", "TMPDIR="+scratch, "YOLO_DURABLE_DIR="+scratch, "GIT_CONFIG_GLOBAL="+config)
+	if err := cfg.applyPriority(ctx, cmd); err != nil {
 		return nil, err
 	}
 	var stdout strings.Builder
-	var stderr stderrTail
+	var stderr drainmodel.StderrTail
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	runErr := runOwnedHeavy(ctx, cmd, "declaration")
-	if cleanupLost(runErr) {
+	runErr := RunOwnedHeavy(ctx, cmd, "declaration")
+	if CleanupLost(runErr) {
 		return nil, runErr
 	}
 	if ctx.Err() != nil {
@@ -174,7 +175,7 @@ func (s *ProcessSteps) judgeHeavyGo(ctx context.Context, dir, id string) ([]Heav
 		exitPtr = &v
 	}
 	processErr := cmd.ProcessState == nil || (exitPtr != nil && *exitPtr == 0 && runErr != nil)
-	classified := classifyCheck(checkresult.Observation{
+	classified := drainmodel.ClassifyCheck(checkresult.Observation{
 		Check:        id,
 		Source:       checkresult.FocusedGoTest,
 		ExitCode:     exitPtr,
@@ -192,20 +193,21 @@ func (s *ProcessSteps) judgeHeavyGo(ctx context.Context, dir, id string) ([]Heav
 		return []HeavyCheck{{CheckID: id, Result: "pass", Detail: detail}}, nil
 	case checkresult.Fail:
 		check := HeavyCheck{CheckID: id, Result: "fail", Detail: stdout.String() + stderr.String()}
-		if s.LaneRoot != "" && ctx.Value(heavyInverseKey{}) == nil {
-			logPath := legacyLogPath(ctx, s.LaneRoot, dir, id)
+		if cfg.LaneRoot != "" && ctx.Value(HeavyInverseKey{}) == nil {
+			logPath := LegacyLogPath(ctx, cfg.LaneRoot, dir, id)
 			if logPath != "" && os.WriteFile(logPath, []byte(check.Detail), 0644) == nil {
 				check.LogPath = logPath
 			}
 		}
 		return []HeavyCheck{check}, nil
 	default:
-		return nil, Externalf("focused Go test %s gave no verdict: %v: %s%s", name, runErr, stderr.String(), stdout.String())
+		return nil, drainmodel.Externalf("focused Go test %s gave no verdict: %v: %s%s", name, runErr, stderr.String(), stdout.String())
 	}
 }
 
-// Flatten global includes so their values are visible but their files stay untouched.
-func privateGoReplayGitConfig(ctx context.Context, dir, dest string) error {
+// PrivateGoReplayGitConfig flattens global includes so their values are visible
+// but their files stay untouched.
+func PrivateGoReplayGitConfig(ctx context.Context, dir, dest string) error {
 	if err := os.WriteFile(dest, nil, 0600); err != nil {
 		return err
 	}

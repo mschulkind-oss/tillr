@@ -3,44 +3,14 @@ package drain
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/mschulkind-oss/tillr/checkresult"
-	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr-drain/internal/gatespans"
 	"github.com/mschulkind-oss/tillr/store"
 )
-
-const (
-	GateStalled          = "stalled"
-	GateStallExit        = 6
-	ReasonGateStallRerun = "gate-stall-rerun"
-	ReasonGateStalled    = "gate-stalled"
-	gateStallHeldKind    = "drain.gate-stall"
-	// ReasonGateNoVerdict is the wait between a gate that answered "error" -- it ran and
-	// reached no verdict, so nothing about the candidate was judged -- and the next pass,
-	// which gates the same candidate again on the same lane (gate_no_verdict.go). It is
-	// uncounted and its mover is the loop, never a person.
-	ReasonGateNoVerdict = "gate-no-verdict"
-)
-
-var errGateStallHeld = errors.New("candidate waits for a gate stall rerun")
-
-// StallObservation is the check's watchdog evidence, not a candidate verdict.
-type StallObservation struct {
-	CheckID             string `json:"check_id"`
-	Result              string `json:"result,omitempty"`
-	LastOutputLine      string `json:"last_output_line"`
-	CPUTimeMS           int64  `json:"cpu_time_ms"`
-	SilentSamples       int    `json:"silent_samples"`
-	WatchdogUnavailable string `json:"watchdog_unavailable,omitempty"`
-	DurationMS          int64  `json:"duration_ms"`
-}
 
 type gateStallHold struct {
 	Candidate          Candidate          `json:"candidate"`
@@ -48,51 +18,6 @@ type gateStallHold struct {
 	GatesInFlight      int                `json:"gates_in_flight"`
 	Observations       []StallObservation `json:"observations"`
 	SecondObservations []StallObservation `json:"-"`
-}
-
-func init() {
-	if err := event.Register(gateStallHeldKind, Utility); err != nil {
-		panic(err)
-	}
-}
-
-func (s *ProcessSteps) gateStallContext(c Candidate) ([]StallObservation, error) {
-	body, err := os.ReadFile(filepath.Join(RunDir(s.Root, c.RunID), GateVerdictRecord))
-	if err != nil {
-		return nil, Externalf("reading stalled gate verdict: %v", err)
-	}
-	var rec struct {
-		Payload struct {
-			Result string             `json:"result"`
-			Checks []StallObservation `json:"checks"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(body, &rec); err != nil {
-		return nil, Externalf("reading stalled gate verdict: %v", err)
-	}
-	observations := []StallObservation{}
-	for _, check := range rec.Payload.Checks {
-		res := classifyCheck(checkresult.Observation{
-			Check:    check.CheckID,
-			Commit:   c.HeadSHA,
-			Worktree: c.Worktree,
-			Source:   checkresult.ResultWord,
-			Word:     check.Result,
-		})
-		if res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailStalled {
-			observations = append(observations, check)
-		}
-	}
-	runRes := classifyCheck(checkresult.Observation{
-		Commit:   c.HeadSHA,
-		Worktree: c.Worktree,
-		Source:   checkresult.ResultWord,
-		Word:     rec.Payload.Result,
-	})
-	if runRes.Outcome != checkresult.Unknown || runRes.Detail != checkresult.DetailStalled || len(observations) == 0 {
-		return nil, Externalf("gate exited 6 without a stalled check observation")
-	}
-	return observations, nil
 }
 
 func (l *Loop) gateCount() int {
@@ -187,7 +112,7 @@ func (l *Loop) holdGateStall(ctx context.Context, c Candidate, gate GateOutcome,
 }
 
 func (h *gateStallHold) canRetry(gates int) bool {
-	return len(h.SecondObservations) > 0 || gates == 0 || gates < h.GatesInFlight
+	return gatespans.CanRetryGateStall(len(h.SecondObservations), gates, h.GatesInFlight)
 }
 
 func (l *Loop) secondGateStallFault(ctx context.Context, c Candidate, first *gateStallHold, second []StallObservation) error {

@@ -1,4 +1,4 @@
-package drain
+package gatespans
 
 import (
 	"bytes"
@@ -12,29 +12,31 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
+	"github.com/mschulkind-oss/tillr-drain/internal/storelog"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-const gateTimingFile = "gate.timing.jsonl"
+const GateTimingFile = "gate.timing.jsonl"
 
 const (
-	gateExecutionRan    = "ran"
-	gateExecutionReused = "reused"
-	gateExecutionNotRun = "not-run"
+	GateExecutionRan    = "ran"
+	GateExecutionReused = "reused"
+	GateExecutionNotRun = "not-run"
 )
 
-// This is an observation of the invocation, not a correctness verdict. In
+// GateCheckMeasurement is an observation of the invocation, not a correctness verdict. In
 // particular, a reused check's historic command duration is not its wall time here.
-type gateCheckMeasurement struct {
+type GateCheckMeasurement struct {
 	Execution string          `json:"execution,omitempty"`
 	WallMS    *int64          `json:"wall_ms,omitempty"`
 	GoBuild   json.RawMessage `json:"go_build,omitempty"`
 	SelfSuite json.RawMessage `json:"self_suite,omitempty"`
 }
 
-type fastGateTimingPayload struct {
+type FastGateTimingPayload struct {
 	ItemID         string `json:"item_id"`
 	RunID          string `json:"run_id"`
 	WallMS         int64  `json:"wall_ms"`
@@ -44,30 +46,30 @@ type fastGateTimingPayload struct {
 	Median20WallMS *int64 `json:"median20_wall_ms,omitempty"`
 }
 
-func (s *ProcessSteps) recordGateTiming(ctx context.Context, c Candidate, span StepSpan) {
-	if s.Root == "" || span.ExitCode == nil {
+func RecordGateTiming(ctx context.Context, root, storePath, itemID, runID string, span drainmodel.StepSpan) {
+	if root == "" || span.ExitCode == nil {
 		return // no run directory or the program never started
 	}
-	dir := RunDir(s.Root, c.RunID)
+	dir := drainmodel.RunDir(root, runID)
 	observation := struct {
 		RunID       string                          `json:"run_id"`
 		ExecutionID string                          `json:"gate_execution_id"`
 		WallMS      *int64                          `json:"wall_ms,omitempty"`
 		ExitCode    int                             `json:"exit_code"`
-		Checks      map[string]gateCheckMeasurement `json:"checks"`
-	}{RunID: c.RunID, ExecutionID: rand.Text(), ExitCode: *span.ExitCode, Checks: readGateTimingChecks(dir, span)}
+		Checks      map[string]GateCheckMeasurement `json:"checks"`
+	}{RunID: runID, ExecutionID: rand.Text(), ExitCode: *span.ExitCode, Checks: ReadGateTimingChecks(dir, span)}
 	if ms := span.FinishedAtMS - span.StartedAtMS; ms >= 0 {
 		observation.WallMS = &ms
 	}
-	if err := appendRunLine(s.Root, c.RunID, gateTimingFile, observation); err != nil {
-		fmt.Fprintf(os.Stderr, "drain: could not record fast gate timing for %s: %v\n", c.RunID, err)
+	if err := drainmodel.AppendRunLine(root, runID, GateTimingFile, observation); err != nil {
+		fmt.Fprintf(os.Stderr, "drain: could not record fast gate timing for %s: %v\n", runID, err)
 		return
 	}
-	if observation.WallMS == nil || s.Store == "" {
+	if observation.WallMS == nil || storePath == "" {
 		return
 	}
-	p := fastGateTimingPayload{
-		ItemID: c.ItemID, RunID: c.RunID, WallMS: *observation.WallMS, ExitCode: observation.ExitCode,
+	p := FastGateTimingPayload{
+		ItemID: itemID, RunID: runID, WallMS: *observation.WallMS, ExitCode: observation.ExitCode,
 		SlowestCheck: "unmeasured",
 	}
 	for id, m := range observation.Checks {
@@ -79,13 +81,13 @@ func (s *ProcessSteps) recordGateTiming(ctx context.Context, c Candidate, span S
 			p.SlowestCheck, p.SlowestCheckMS = id, m.WallMS
 		}
 	}
-	if err := appendFastGateTiming(ctx, s.Store, p, time.UnixMilli(span.FinishedAtMS)); err != nil {
+	if err := AppendFastGateTiming(ctx, storePath, p, time.UnixMilli(span.FinishedAtMS)); err != nil {
 		// A measurement is not a judgment: keep the file and the gate outcome.
-		fmt.Fprintf(os.Stderr, "drain: could not publish fast gate timing for %s: %v\n", c.RunID, err)
+		fmt.Fprintf(os.Stderr, "drain: could not publish fast gate timing for %s: %v\n", runID, err)
 	}
 }
 
-func appendFastGateTiming(ctx context.Context, path string, p fastGateTimingPayload, at time.Time) error {
+func AppendFastGateTiming(ctx context.Context, path string, p FastGateTimingPayload, at time.Time) error {
 	s, err := store.Open(ctx, path, false)
 	if err != nil {
 		return err
@@ -94,7 +96,7 @@ func appendFastGateTiming(ctx context.Context, path string, p fastGateTimingPayl
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		// Serialize the read and append so the window ends at this event's
 		// position in the store, even when two gate attempts finish together.
-		median, err := medianFastGateTiming(tx, p.WallMS)
+		median, err := MedianFastGateTiming(tx, p.WallMS)
 		if err != nil {
 			return err
 		}
@@ -104,15 +106,15 @@ func appendFastGateTiming(ctx context.Context, path string, p fastGateTimingPayl
 			return err
 		}
 		_, err = tx.Append(event.Event{
-			Kind: FastGateTimingKind, ObjectType: "run", ObjectID: &p.RunID, Payload: body, At: at,
+			Kind: storelog.FastGateTimingKind, ObjectType: "run", ObjectID: &p.RunID, Payload: body, At: at,
 		})
 		return err
 	})
 }
 
-func medianFastGateTiming(tx *store.Tx, wallMS int64) (*int64, error) {
+func MedianFastGateTiming(tx *store.Tx, wallMS int64) (*int64, error) {
 	rows, err := tx.Query(`SELECT json_extract(payload, '$.wall_ms')
-		FROM events INDEXED BY events_by_kind WHERE kind = ? ORDER BY seq DESC LIMIT 19`, FastGateTimingKind)
+		FROM events INDEXED BY events_by_kind WHERE kind = ? ORDER BY seq DESC LIMIT 19`, storelog.FastGateTimingKind)
 	if err != nil {
 		return nil, err
 	}
@@ -139,10 +141,11 @@ func medianFastGateTiming(tx *store.Tx, wallMS int64) (*int64, error) {
 	return &median, nil
 }
 
-// Only the two phase handoffs are evidence here. The outer verdict judges the
-// wrapper, not an individual check, and may be deferred or later rewritten.
-func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateCheckMeasurement {
-	var gateSpan StepSpan
+// ReadGateTimingChecks reads per-check execution and wall timing from the two phase
+// handoffs. The outer verdict judges the wrapper, not an individual check, and may be
+// deferred or later rewritten.
+func ReadGateTimingChecks(dir string, gateSpans ...drainmodel.StepSpan) map[string]GateCheckMeasurement {
+	var gateSpan drainmodel.StepSpan
 	if len(gateSpans) > 0 {
 		gateSpan = gateSpans[0]
 	}
@@ -159,15 +162,15 @@ func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateChec
 		}
 		return &ms
 	}
-	checks := map[string]gateCheckMeasurement{}
-	add := func(id string, m gateCheckMeasurement) {
+	checks := map[string]GateCheckMeasurement{}
+	add := func(id string, m GateCheckMeasurement) {
 		if id == "" || id == "plan" || strings.HasPrefix(id, "gate:") {
 			return
 		}
 		prev, seen := checks[id]
 		// A skip in one phase must not mask execution or reuse in the other.
 		if !seen || (prev.Execution == "" && m.Execution != "") ||
-			(prev.Execution == gateExecutionNotRun && (m.Execution == gateExecutionRan || m.Execution == gateExecutionReused)) {
+			(prev.Execution == GateExecutionNotRun && (m.Execution == GateExecutionRan || m.Execution == GateExecutionReused)) {
 			checks[id] = m
 		} else if prev.Execution == m.Execution {
 			if prev.WallMS == nil {
@@ -185,7 +188,7 @@ func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateChec
 	if body, err := os.ReadFile(filepath.Join(dir, GateFastVerdictFile)); err == nil {
 		type check struct {
 			ID string `json:"check_id"`
-			gateCheckMeasurement
+			GateCheckMeasurement
 			Result        string `json:"result"`
 			Memory        string `json:"memory"`
 			DurationMS    *int64 `json:"duration_ms"`
@@ -205,14 +208,14 @@ func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateChec
 			// payload envelope and attach the original phase under fast_timing.
 			for _, group := range [][]check{verdict.Payload.FastTiming.Checks, verdict.Payload.Checks} {
 				for _, c := range group {
-					m := c.gateCheckMeasurement
+					m := c.GateCheckMeasurement
 					if m.Execution == "" {
-						memRes := classifyCheck(checkresult.Observation{
+						memRes := drainmodel.ClassifyCheck(checkresult.Observation{
 							Check:  c.ID,
 							Source: checkresult.ResultWord,
 							Word:   c.Memory,
 						})
-						res := classifyCheck(checkresult.Observation{
+						res := drainmodel.ClassifyCheck(checkresult.Observation{
 							Check:  c.ID,
 							Source: checkresult.ResultWord,
 							Word:   c.Result,
@@ -220,21 +223,21 @@ func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateChec
 						switch {
 						case (memRes.Outcome == checkresult.Pass && memRes.Detail == checkresult.DetailRemembered) ||
 							(res.Outcome == checkresult.Pass && res.Detail == checkresult.DetailRemembered):
-							m.Execution = gateExecutionReused
+							m.Execution = GateExecutionReused
 						case res.Outcome == checkresult.Unavailable && res.Detail == checkresult.DetailSkipped:
-							m.Execution = gateExecutionNotRun
+							m.Execution = GateExecutionNotRun
 						case ((res.Outcome == checkresult.Pass && res.Detail == checkresult.DetailPassed) || res.Outcome == checkresult.Fail) &&
 							c.StartUnixNano > 0 && c.EndUnixNano >= c.StartUnixNano:
-							m.Execution = gateExecutionRan
+							m.Execution = GateExecutionRan
 							if m.WallMS == nil && c.DurationMS != nil && *c.DurationMS >= 0 {
 								ms := *c.DurationMS
 								m.WallMS = &ms
 							}
 						case c.StartUnixNano > 0 && c.EndUnixNano <= 0:
-							m.Execution = gateExecutionRan
+							m.Execution = GateExecutionRan
 						}
 					}
-					if m.Execution == gateExecutionRan && m.WallMS == nil && c.StartUnixNano > 0 && c.EndUnixNano <= 0 {
+					if m.Execution == GateExecutionRan && m.WallMS == nil && c.StartUnixNano > 0 && c.EndUnixNano <= 0 {
 						m.WallMS = unfinishedWallMS(c.StartUnixNano / int64(time.Millisecond))
 					}
 					add(c.ID, m)
@@ -242,11 +245,11 @@ func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateChec
 			}
 		}
 	}
-	var spans gateSpansFile
-	if body, err := os.ReadFile(filepath.Join(dir, GateSpansFile)); err == nil && json.Unmarshal(body, &spans) == nil {
+	var spans GateSpansFile
+	if body, err := os.ReadFile(filepath.Join(dir, GateSpansFileName)); err == nil && json.Unmarshal(body, &spans) == nil {
 		for _, span := range spans.CheckSpans {
 			attrs := struct {
-				gateCheckMeasurement
+				GateCheckMeasurement
 				Cached bool `json:"cached"`
 			}{}
 			var hasWallMS bool
@@ -260,25 +263,25 @@ func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateChec
 				}
 			}
 			if attrs.Execution == "" {
-				res := classifyCheck(checkresult.Observation{
+				res := drainmodel.ClassifyCheck(checkresult.Observation{
 					Check:  span.CheckID,
 					Source: checkresult.CheckSpan,
 					Word:   span.Status,
 				})
 				switch {
 				case attrs.Cached || (res.Outcome == checkresult.Pass && res.Detail == checkresult.DetailCached):
-					attrs.Execution = gateExecutionReused
+					attrs.Execution = GateExecutionReused
 				case res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailNotRun:
-					attrs.Execution = gateExecutionNotRun
+					attrs.Execution = GateExecutionNotRun
 				case span.StartNS > 0:
-					attrs.Execution = gateExecutionRan
+					attrs.Execution = GateExecutionRan
 				}
 			}
 			// Only fall back to span timestamps when wall_ms was not emitted at all
 			// (for example, a judging program that reports no wall time) and the
 			// span actually advanced past its start; an unfinished span can have its
 			// end copied from its start, which is not a measured zero.
-			if attrs.WallMS == nil && !hasWallMS && attrs.Execution == gateExecutionRan && span.StartNS > 0 {
+			if attrs.WallMS == nil && !hasWallMS && attrs.Execution == GateExecutionRan && span.StartNS > 0 {
 				if span.EndNS > span.StartNS {
 					ms := (span.EndNS - span.StartNS) / int64(time.Millisecond)
 					attrs.WallMS = &ms
@@ -286,19 +289,19 @@ func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateChec
 					attrs.WallMS = unfinishedWallMS(span.StartNS / int64(time.Millisecond))
 				}
 			}
-			add(span.CheckID, attrs.gateCheckMeasurement)
+			add(span.CheckID, attrs.GateCheckMeasurement)
 		}
 		for _, id := range spans.ReusedChecks {
-			add(id, gateCheckMeasurement{Execution: "reused", WallMS: spans.ReusedWallMS[id]})
+			add(id, GateCheckMeasurement{Execution: "reused", WallMS: spans.ReusedWallMS[id]})
 		}
 		for _, id := range spans.NotRunChecks {
-			add(id, gateCheckMeasurement{Execution: "not-run"})
+			add(id, GateCheckMeasurement{Execution: "not-run"})
 		}
 		for _, skip := range spans.SkippedChecks {
 			if ran := skip.ExecutedCheck; ran != nil {
-				add(ran.CheckID, ran.gateCheckMeasurement)
+				add(ran.CheckID, ran.GateCheckMeasurement)
 			} else {
-				add(skip.CheckID, gateCheckMeasurement{Execution: "not-run"})
+				add(skip.CheckID, GateCheckMeasurement{Execution: "not-run"})
 			}
 		}
 	}
@@ -354,7 +357,7 @@ func readGateTimingChecks(dir string, gateSpans ...StepSpan) map[string]gateChec
 			} else {
 				wallMS = unfinishedWallMS(p.startedAtMS)
 			}
-			add(id, gateCheckMeasurement{Execution: gateExecutionRan, WallMS: wallMS})
+			add(id, GateCheckMeasurement{Execution: GateExecutionRan, WallMS: wallMS})
 		}
 	}
 	return checks

@@ -1,4 +1,4 @@
-package drain
+package gatespans
 
 import (
 	"context"
@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 )
 
-type legacyWatch struct {
+type LegacyWatch struct {
 	Path        string   `json:"path"`
 	Regex       string   `json:"regex"`
 	Paths       bool     `json:"paths"`
@@ -18,18 +20,18 @@ type legacyWatch struct {
 	MustExist   bool     `json:"must_exist"`
 }
 
-type legacyDeclaration struct {
+type LegacyDeclaration struct {
 	ID         string        `json:"id"`
 	Kind       string        `json:"kind"`
 	Label      string        `json:"label"`
 	Tier       string        `json:"tier"`
 	SelectedBy []string      `json:"selected_by"`
-	Selects    []legacyWatch `json:"selects"`
-	Watches    []legacyWatch `json:"watches"`
+	Selects    []LegacyWatch `json:"selects"`
+	Watches    []LegacyWatch `json:"watches"`
 }
 
-// legacyCheckDeclarations reads the gate registry without running a check or taking the landing lock.
-func legacyCheckDeclarations(ctx context.Context, dir string) ([]legacyDeclaration, error) {
+// LegacyCheckDeclarations reads the gate registry without running a check or taking the landing lock.
+func LegacyCheckDeclarations(ctx context.Context, dir string) ([]LegacyDeclaration, error) {
 	path := filepath.Join(dir, "tools", "fork-check.py")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, nil
@@ -41,25 +43,25 @@ func legacyCheckDeclarations(ctx context.Context, dir string) ([]legacyDeclarati
 	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
 	raw, err := cmd.Output()
 	if err != nil {
-		return nil, Externalf("reading legacy check watches: %v", err)
+		return nil, drainmodel.Externalf("reading legacy check watches: %v", err)
 	}
 	var registry struct {
-		Declarations []legacyDeclaration `json:"declarations"`
-		InProcess    []legacyDeclaration `json:"in_process"`
+		Declarations []LegacyDeclaration `json:"declarations"`
+		InProcess    []LegacyDeclaration `json:"in_process"`
 	}
 	if err := json.Unmarshal(raw, &registry); err != nil {
-		return nil, Externalf("reading legacy check watches: %v", err)
+		return nil, drainmodel.Externalf("reading legacy check watches: %v", err)
 	}
 	if registry.Declarations == nil {
-		return nil, Externalf("legacy registry has no declarations")
+		return nil, drainmodel.Externalf("legacy registry has no declarations")
 	}
 	return append(registry.Declarations, registry.InProcess...), nil
 }
 
-// legacyCheckWatches expands the declared watches, not the checks' output writes.
+// LegacyCheckWatches expands the declared watches, not the checks' output writes.
 // Custom judges without a registry supply reads/watches in their spans instead.
-func legacyCheckWatches(ctx context.Context, dir string) (map[string][]string, error) {
-	checks, err := legacyCheckDeclarations(ctx, dir)
+func LegacyCheckWatches(ctx context.Context, dir string) (map[string][]string, error) {
+	checks, err := LegacyCheckDeclarations(ctx, dir)
 	if err != nil || checks == nil {
 		return nil, err
 	}
@@ -78,9 +80,9 @@ func legacyCheckWatches(ctx context.Context, dir string) (map[string][]string, e
 			if watch.Paths {
 				out[check.ID] = append(out[check.ID], check.SelectedBy...)
 				for _, selection := range check.Selects {
-					paths, err := legacyWatchFiles(dir, tracked, selection)
+					paths, err := LegacyWatchFiles(dir, tracked, selection)
 					if err != nil {
-						return nil, Externalf("legacy selection for %s: %v", check.ID, err)
+						return nil, drainmodel.Externalf("legacy selection for %s: %v", check.ID, err)
 					}
 					out[check.ID] = append(out[check.ID], paths...)
 				}
@@ -90,9 +92,9 @@ func legacyCheckWatches(ctx context.Context, dir string) (map[string][]string, e
 				out[check.ID] = append(out[check.ID], watch.Path)
 				continue
 			}
-			paths, err := legacyWatchFiles(dir, tracked, watch)
+			paths, err := LegacyWatchFiles(dir, tracked, watch)
 			if err != nil {
-				return nil, Externalf("legacy watch for %s: %v", check.ID, err)
+				return nil, drainmodel.Externalf("legacy watch for %s: %v", check.ID, err)
 			}
 			out[check.ID] = append(out[check.ID], paths...)
 		}
@@ -105,7 +107,7 @@ func legacyCheckWatches(ctx context.Context, dir string) (map[string][]string, e
 	return out, nil
 }
 
-func legacyWatchFiles(root string, files []string, watch legacyWatch) ([]string, error) {
+func LegacyWatchFiles(root string, files []string, watch LegacyWatch) ([]string, error) {
 	var re *regexp.Regexp
 	if watch.Regex != "" {
 		var err error
