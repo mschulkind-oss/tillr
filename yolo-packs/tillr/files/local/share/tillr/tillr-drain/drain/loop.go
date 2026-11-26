@@ -1739,6 +1739,9 @@ func (l *Loop) heldFor(r *store.Reader, itemID string) (string, bool) {
 			delete(l.infraLines, itemID+"\x00")
 		}
 		delete(l.held, itemID)
+		if v := l.startView.Load(); v != nil {
+			v.clearItemHold(itemID)
+		}
 		return "", false
 	}
 	if hold.contentVersion != "" {

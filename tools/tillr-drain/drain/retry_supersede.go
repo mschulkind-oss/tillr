@@ -123,11 +123,11 @@ func supersedableCandidates(r *store.Reader) ([]supersession, error) {
 		if c, ok := conflicts[s.fault.ItemID]; ok && c.Status == "answered" {
 			continue
 		}
-		judged, err := runJudged(r, runID)
+		judged, gateFailed, err := runNeedsGateFailedAck(r, runID)
 		if err != nil {
 			return nil, err
 		}
-		if judged && s.retry.Acknowledge != RetryAckGateFailed {
+		if gateFailed && s.retry.Acknowledge != RetryAckGateFailed {
 			continue
 		}
 		if !judged && classes[runID] == AttemptUnjudged && s.retry.Acknowledge != RetryAckUnjudged {

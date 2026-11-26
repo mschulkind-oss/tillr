@@ -35,13 +35,13 @@ func noRetryCommand(mover string) string {
 	return "No retry command is accepted: " + mover + "."
 }
 
-// acceptedAck is the acknowledgment a run's record demands: the gate's word for a judged
-// run, the wall's for an unjudged one, and none for a harness failure.
-func acceptedAck(judged bool, class AttemptClass) string {
+// acceptedAck is the acknowledgment a run's record demands: gate-failed for a run whose
+// gate did not pass, unjudged for a wall-cut run with no verdict, and none otherwise.
+func acceptedAck(judged, gateFailed bool, class AttemptClass) string {
 	switch {
-	case judged:
+	case gateFailed:
 		return RetryAckGateFailed
-	case class == AttemptUnjudged:
+	case !judged && class == AttemptUnjudged:
 		return RetryAckUnjudged
 	}
 	return ""

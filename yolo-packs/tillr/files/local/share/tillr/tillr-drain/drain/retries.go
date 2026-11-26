@@ -10,6 +10,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
@@ -259,7 +260,7 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 		return Retry{}, Internalf("reading the artifact refs of run %q: %v", req.RunID, err)
 	}
 
-	judged, err := runJudged(tx.Reader(), req.RunID)
+	judged, gateFailed, err := runNeedsGateFailedAck(tx.Reader(), req.RunID)
 	if err != nil {
 		return Retry{}, err
 	}
@@ -271,20 +272,23 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 	case "":
 	case RetryAckGateFailed:
 		if !judged {
-			return Retry{}, Usagef("--acknowledge %s names a run the gate did not judge: %q. The accepted command: %s", RetryAckGateFailed, req.RunID, retryCommand(req.ItemID, req.RunID, acceptedAck(judged, class)))
+			return Retry{}, Usagef("--acknowledge %s names a run the gate did not judge: %q. The accepted command: %s", RetryAckGateFailed, req.RunID, retryCommand(req.ItemID, req.RunID, acceptedAck(judged, gateFailed, class)))
+		}
+		if !gateFailed {
+			return Retry{}, Usagef("--acknowledge %s names a run whose gate passed: %q. The accepted command: %s", RetryAckGateFailed, req.RunID, retryCommand(req.ItemID, req.RunID, acceptedAck(judged, gateFailed, class)))
 		}
 	case RetryAckUnjudged:
 		if judged || class != AttemptUnjudged {
-			return Retry{}, Usagef("--acknowledge %s names a run a wall did not cut short: %q. The accepted command: %s", RetryAckUnjudged, req.RunID, retryCommand(req.ItemID, req.RunID, acceptedAck(judged, class)))
+			return Retry{}, Usagef("--acknowledge %s names a run a wall did not cut short: %q. The accepted command: %s", RetryAckUnjudged, req.RunID, retryCommand(req.ItemID, req.RunID, acceptedAck(judged, gateFailed, class)))
 		}
 	default:
-		return Retry{}, Usagef("--acknowledge %q is not an outcome: want %q or %q. The accepted command: %s", req.Acknowledge, RetryAckGateFailed, RetryAckUnjudged, retryCommand(req.ItemID, req.RunID, acceptedAck(judged, class)))
+		return Retry{}, Usagef("--acknowledge %q is not an outcome: want %q or %q. The accepted command: %s", req.Acknowledge, RetryAckGateFailed, RetryAckUnjudged, retryCommand(req.ItemID, req.RunID, acceptedAck(judged, gateFailed, class)))
 	}
-	if judged && req.Acknowledge != RetryAckGateFailed {
+	if gateFailed && req.Acknowledge != RetryAckGateFailed {
 		return Retry{}, Usagef("run %q was judged by the gate: a judged candidate is not retryable by link. An operator who has read the verdict acknowledges it: %s", req.RunID, retryCommand(req.ItemID, req.RunID, RetryAckGateFailed))
 	}
 	// Guarded by `!judged`: a walled run can also have committed and reached the gate, and
-	// once a `gate.verdict` exists the gate's word is the one a retry acknowledges (design
+	// once a `gate.verdict` exists the gate's word is the one a retry follows (design
 	// D-RW2). Without the guard both branches demand an acknowledgment and neither accepts
 	// the other's.
 	if !judged && class == AttemptUnjudged && req.Acknowledge != RetryAckUnjudged {
@@ -536,14 +540,44 @@ func readRetryAcks(r *store.Reader) (map[string]string, error) {
 // judged by nobody, and a candidate the gate judged carries the event whether it passed or
 // failed.
 func runJudged(r *store.Reader, runID string) (bool, error) {
-	var seen int
-	if err := r.QueryRow(
-		`SELECT count(*) FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ?`,
+	judged, _, err := runGateResult(r, runID)
+	return judged, err
+}
+
+// runGateResult returns whether the gate recorded a verdict for runID and the latest
+// verdict's result ("pass", "pass-inherited", "fail", "error", or "").
+func runGateResult(r *store.Reader, runID string) (bool, string, error) {
+	var payload []byte
+	err := r.QueryRow(
+		`SELECT payload FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? ORDER BY seq DESC LIMIT 1`,
 		GateVerdictKind, runID,
-	).Scan(&seen); err != nil {
-		return false, readFailure(err)
+	).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, "", nil
 	}
-	return seen > 0, nil
+	if err != nil {
+		return false, "", readFailure(err)
+	}
+	var v struct {
+		Result string `json:"result"`
+	}
+	_ = json.Unmarshal(payload, &v)
+	return true, v.Result, nil
+}
+
+func gateResultPassed(result string) bool {
+	return classifyCheck(checkresult.Observation{
+		Source: checkresult.ResultWord,
+		Word:   result,
+	}).Outcome == checkresult.Pass
+}
+
+func runNeedsGateFailedAck(r *store.Reader, runID string) (judged, gateFailed bool, err error) {
+	judged, result, err := runGateResult(r, runID)
+	if err != nil {
+		return false, false, err
+	}
+	return judged, judged && !gateResultPassed(result), nil
 }
 
 // terminalRunStates are run's terminal states, as the retry face reads them: a retry

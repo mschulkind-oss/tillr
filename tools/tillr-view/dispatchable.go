@@ -64,6 +64,8 @@ type dispatchHistory struct {
 	refusals map[string]string
 	// gateFailed is every run the gate answered `fail` for.
 	gateFailed map[string]bool
+	// gatePassed is every run the gate answered `pass` or `pass-inherited` for.
+	gatePassed map[string]bool
 	// obstacleHolds is each item's active obstacle hold, and releasedObstacles each item's
 	// latest released obstacle-hold run id.
 	obstacleHolds     map[string]obstacles.Hold
@@ -96,6 +98,7 @@ func readDispatchHistory(r *store.Reader, runs []storeRun) (*dispatchHistory, er
 		latest:     map[string]string{},
 		refusals:   map[string]string{},
 		gateFailed: map[string]bool{},
+		gatePassed: map[string]bool{},
 	}
 	// readRuns orders by started_at, so the last row for an item is its newest run -- the
 	// same answer readPriorRuns gives the planner.
@@ -120,6 +123,9 @@ func readDispatchHistory(r *store.Reader, runs []storeRun) (*dispatchHistory, er
 		h.judged[runID] = true
 		if verdict.Result == "fail" {
 			h.gateFailed[runID] = true
+		}
+		if verdict.Result == "pass" || verdict.Result == "pass-inherited" {
+			h.gatePassed[runID] = true
 		}
 	}
 	if err := readRetryAuthorizations(r, h); err != nil {
@@ -340,7 +346,7 @@ func (h *dispatchHistory) retryRefused(itemID string, authorization retryAuthori
 	if h.latest[itemID] != authorization.supersedes {
 		return true
 	}
-	if h.judged[authorization.supersedes] && authorization.acknowledge != retryAckGateFailed {
+	if h.judged[authorization.supersedes] && !h.gatePassed[authorization.supersedes] && authorization.acknowledge != retryAckGateFailed {
 		return true
 	}
 	// Guarded by `!judged`: a walled run can also have committed and reached the gate, and

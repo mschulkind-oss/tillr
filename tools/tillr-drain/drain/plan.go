@@ -2268,19 +2268,21 @@ func (p *planner) retryFor(itemID string) *retry {
 		// one-run allowance per authorization; the owner's ruling of 2026-11-17 removes it.
 		return nil
 	}
-	// The acknowledgment a retry carries is what makes a judged or unjudged run retryable:
+	// The acknowledgment a retry carries is what makes a failed-gate or unjudged run retryable:
 	// the operator has named the outcome, and the plan honours that acknowledgment only
-	// when it matches the store's own record of the run. An ack for another outcome is not
-	// honored, so a retry row that somehow names the wrong one still refuses.
-	if p.history.judged[row.SupersedesRunID] && row.Acknowledge != RetryAckGateFailed {
+	// when it matches the store's own record of the run. A run whose gate passed does not
+	// need a gate-failed acknowledgment.
+	judged := p.history.judged[row.SupersedesRunID]
+	gateFailed := judged && !gateResultPassed(p.history.gateResults[row.SupersedesRunID])
+	if gateFailed && row.Acknowledge != RetryAckGateFailed {
 		r.refusal = ReasonRetryJudged
 		return r
 	}
 	// The unjudged branch is guarded by `!judged` so a walled run that also reached the
-	// gate keeps `gate-failed` authoritative: a run can now be both judged and
+	// gate keeps the gate's verdict authoritative: a run can now be both judged and
 	// `AttemptUnjudged`, and demanding `unjudged` here would make every acknowledgment
 	// unsatisfiable (design D-RW2).
-	if !p.history.judged[row.SupersedesRunID] && p.classes[row.SupersedesRunID] == AttemptUnjudged && row.Acknowledge != RetryAckUnjudged {
+	if !judged && p.classes[row.SupersedesRunID] == AttemptUnjudged && row.Acknowledge != RetryAckUnjudged {
 		r.refusal = ReasonRetryUnjudged
 		return r
 	}
@@ -2830,6 +2832,10 @@ func readItemByID(r *store.Reader, id string) (itemRow, bool, error) {
 		return itemRow{}, false, err
 	}
 	row.OwnerOwed, err = ownercriteria.ReadOwnerCriteriaForItem(r, id)
+	if err != nil {
+		return itemRow{}, false, readFailure(err)
+	}
+	row.Delivery, err = readDelivery(r, id)
 	if err != nil {
 		return itemRow{}, false, readFailure(err)
 	}

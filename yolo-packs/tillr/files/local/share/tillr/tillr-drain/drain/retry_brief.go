@@ -80,12 +80,12 @@ func acceptedBuildRetryCommand(r *store.Reader, itemID, fallbackRunID string) (s
 	}
 	var artifactRefs []run.ArtifactRef
 	_ = json.Unmarshal([]byte(refs), &artifactRefs)
-	judged, err := runJudged(r, rec.RunID)
+	judged, gateFailed, err := runNeedsGateFailedAck(r, rec.RunID)
 	if err != nil {
 		return "", err
 	}
 	class := ClassifyAttempt(rec, logTail(artifactRefs))
-	return retryCommand(itemID, rec.RunID, acceptedAck(judged, class)), nil
+	return retryCommand(itemID, rec.RunID, acceptedAck(judged, gateFailed, class)), nil
 }
 
 // runLinkMissingHold returns the unanswered run ID, the `Why` explanation suffix, and

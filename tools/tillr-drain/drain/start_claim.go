@@ -180,7 +180,9 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 		hold, held := v.holds[d.ItemID]
 		v.mu.Unlock()
 		if held && (hold.contentVersion == "" || hold.contentVersion == proposal.contentVersions[d.ItemID]) {
-			return nil
+			if !(strings.HasPrefix(hold.reason, ReasonStagingFailed) && proposal.retries[d.ItemID].RequestedAt.After(hold.at)) {
+				return nil
+			}
 		}
 
 		versioned := d

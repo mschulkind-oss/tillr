@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"maps"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -248,6 +249,12 @@ func (v *startView) runWatcherLoop(ctx context.Context, interval time.Duration, 
 				if version := next.contentVersions[id]; version != "" && hold.contentVersion != "" && version != hold.contentVersion {
 					delete(v.holds, id)
 					continue
+				}
+				if strings.HasPrefix(hold.reason, ReasonStagingFailed) {
+					if retry, ok := next.retries[id]; ok && retry.RequestedAt.After(hold.at) {
+						delete(v.holds, id)
+						continue
+					}
 				}
 				next.applyLocalHold(id, hold)
 			}

@@ -88,6 +88,12 @@ func (v *startView) noteItemHold(id string, hold heldItem) {
 	v.noteLocked(func(s *startSnapshot) { s.applyLocalHold(id, hold) })
 }
 
+func (v *startView) clearItemHold(id string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	delete(v.holds, id)
+}
+
 func (s *startSnapshot) applyLocalHold(id string, hold heldItem) {
 	if version := s.contentVersions[id]; version == "" || hold.contentVersion == "" || version == hold.contentVersion {
 		s.holdItem(id, hold.reason)

@@ -505,6 +505,24 @@ func TestARetryAcknowledgesTheGatesWordOverTheWalls(t *testing.T) {
 	}
 }
 
+func TestARetryOnAPassedGateNeedsNoGateFailedAck(t *testing.T) {
+	const runID = "run-item_042-20261109T000000Z"
+	history := &dispatchHistory{
+		ran:        map[string]bool{"item_042": true},
+		known:      map[string]bool{"item_042": true},
+		latest:     map[string]string{"item_042": runID},
+		judged:     map[string]bool{runID: true},
+		gatePassed: map[string]bool{runID: true},
+		retries: map[string]retryAuthorization{
+			"item_042": {supersedes: runID},
+		},
+	}
+	item := storeItem{ItemID: "item_042", State: "in-queue"}
+	if !history.dispatchable(item, nil, nil, "") {
+		t.Fatalf("a bare retry on a run whose gate passed reads not dispatchable")
+	}
+}
+
 // The item history reads each payload's `state` inside the store: a live store holds ~10 MB
 // of item events, and decoding every one in Go cost half a second per lanes answer. What
 // counts as a state is unchanged: a string, non-empty, in a payload that is valid JSON.
