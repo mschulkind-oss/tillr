@@ -102,7 +102,7 @@ func TestRemoteSyncStaleSweepClearsConflictWithoutLanding(t *testing.T) {
 		if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=? AND json_extract(payload,'$.action')='push'`, postLandingKind).Scan(&pushEvents); err != nil {
 			return err
 		}
-		if err := r.QueryRow(`SELECT count(*) FROM landings`).Scan(&landings); err != nil {
+		if err := r.QueryRow(`SELECT count(*) FROM landings WHERE item_id=?`, st.ItemID).Scan(&landings); err != nil {
 			return err
 		}
 		if pushEvents != 2 || landings != 0 {

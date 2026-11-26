@@ -186,6 +186,7 @@ func TestHeavyRepeatedRestartsCarryPassesForwardAndAdvanceGreen(t *testing.T) {
 	}
 	heavyGit(t, root, "add", ".")
 	heavyGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "declarations")
+	declCommit := heavyGit(t, root, "rev-parse", "HEAD")
 	heavyGit(t, root, "update-ref", GreenRef, base)
 	calls := filepath.Join(work, "calls")
 	// A check passes only when the test has allowed it; any other check hangs until the
@@ -203,6 +204,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 		t.Fatal(err)
 	}
 	defer s.Close()
+	recordFixtureLandings(t, s.Path(), declCommit)
 	start := func(ctx context.Context, tip string) *Loop {
 		steps := &ProcessSteps{Root: root, LaneRoot: work, HeavyGateBin: gate}
 		l := &Loop{gatePolicy: GatePolicy{LandingStrategy: "after-merge"}, cfg: LoopConfig{Root: root, Store: s.Path(), LaneRoot: work, Steps: heavyTestSteps{judge: steps.JudgeHeavy}, Now: time.Now, Report: io.Discard}}
@@ -239,11 +241,16 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 		}
 	}
 	allow("a")
-	interrupted(heavyCommit(t, root, "one"), "b")
+	c1 := heavyCommit(t, root, "one")
+	recordFixtureLandings(t, s.Path(), c1)
+	interrupted(c1, "b")
 	allow("b")
-	interrupted(heavyCommit(t, root, "two"), "c")
+	c2 := heavyCommit(t, root, "two")
+	recordFixtureLandings(t, s.Path(), c2)
+	interrupted(c2, "c")
 	allow("c")
 	tip := heavyCommit(t, root, "three")
+	recordFixtureLandings(t, s.Path(), tip)
 	l := start(context.Background(), tip)
 	l.heavyWG.Wait()
 	raw, err := os.ReadFile(calls)

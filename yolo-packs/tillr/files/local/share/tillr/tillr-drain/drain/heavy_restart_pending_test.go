@@ -183,6 +183,7 @@ func TestPendingRestartDeferredByTrunkProofStopsNewGatesAndSecondProof(t *testin
 	base := heavyGit(t, h.f.root, "rev-parse", TrunkRef)
 	heavyGit(t, h.f.root, "update-ref", GreenRef, base)
 	tip1 := heavyCommit(t, h.f.root, "tip-1")
+	recordFixtureLandings(t, h.f.storePath, tip1)
 
 	c := prepareReadyCandidate(t, h.f, h.l, "item-a")
 	here, err := currentLoopOwner()
@@ -400,6 +401,7 @@ func TestPendingRestartAfterGreenProofRestartsBeforeNextProofAndGates(t *testing
 	base := heavyGit(t, h.f.root, "rev-parse", TrunkRef)
 	heavyGit(t, h.f.root, "update-ref", GreenRef, base)
 	tip1 := heavyCommit(t, h.f.root, "tip-1")
+	recordFixtureLandings(t, h.f.storePath, tip1)
 
 	c1 := prepareReadyCandidate(t, h.f, h.l, "item-a")
 	c2 := prepareReadyCandidate(t, h.f, h.l, "item-b")
@@ -501,6 +503,7 @@ func TestPendingRestartAfterGreenProofRestartsBeforeNextProofAndGates(t *testing
 
 	// Advance trunk to a newer unproved tip while proof 1 is still running.
 	tip2 := heavyCommit(t, h.f.root, "tip-2")
+	recordFixtureLandings(t, h.f.storePath, tip2)
 
 	// End proof 1 green.
 	close(releaseProof1)
@@ -570,6 +573,7 @@ func TestPassedCandidateLandsWhileRestartWaitsOnTrunkProof(t *testing.T) {
 	base := heavyGit(t, f.root, "rev-parse", TrunkRef)
 	heavyGit(t, f.root, "update-ref", GreenRef, base)
 	tip1 := heavyCommit(t, f.root, "tip-1")
+	recordFixtureLandings(t, f.storePath, tip1)
 
 	work := scratchUnderDurable(t)
 	enteredGateA := filepath.Join(work, "entered-gate-a")
@@ -1095,6 +1099,7 @@ func TestPendingRestartWaitsForBusyPostLandingActionBeforeNextProof(t *testing.T
 			base := heavyGit(t, h.f.root, "rev-parse", TrunkRef)
 			heavyGit(t, h.f.root, "update-ref", GreenRef, base)
 			tip1 := heavyCommit(t, h.f.root, "tip-1")
+			recordFixtureLandings(t, h.f.storePath, tip1)
 
 			greenReported := make(chan struct{})
 			landingsReported := make(chan struct{})
@@ -1171,6 +1176,7 @@ func TestPendingRestartWaitsForBusyPostLandingActionBeforeNextProof(t *testing.T
 
 			// Advance trunk to a newer unproved tip while proof 1 is still running.
 			tip2 := heavyCommit(t, h.f.root, "tip-2")
+			recordFixtureLandings(t, h.f.storePath, tip2)
 
 			// Hold the post-landing action busy across the instant proof 1 ends green.
 			action := tc.action(h.l)
@@ -1304,6 +1310,7 @@ func TestNoPendingRestartStartsNextProofWhilePostLandingActionBusy(t *testing.T)
 			base := heavyGit(t, h.f.root, "rev-parse", TrunkRef)
 			heavyGit(t, h.f.root, "update-ref", GreenRef, base)
 			tip1 := heavyCommit(t, h.f.root, "tip-1")
+			recordFixtureLandings(t, h.f.storePath, tip1)
 
 			var (
 				provedMu   sync.Mutex
@@ -1353,6 +1360,7 @@ func TestNoPendingRestartStartsNextProofWhilePostLandingActionBusy(t *testing.T)
 
 			// Advance trunk to tip2 and hold the post-landing action busy with NO restart pending.
 			tip2 := heavyCommit(t, h.f.root, "tip-2")
+			recordFixtureLandings(t, h.f.storePath, tip2)
 			action := tc.action(h.l)
 			actionStarted := make(chan struct{})
 			releaseAction := make(chan struct{})

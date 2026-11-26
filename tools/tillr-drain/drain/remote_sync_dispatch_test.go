@@ -16,6 +16,7 @@ func fileDispatchableRemoteSyncRepair(t *testing.T) (*pushFixture, remoteSyncSta
 	p := newPushFixture(t)
 	root := p.f.root
 	remote := p.remoteCommit(t, "two.txt", "remote version\n")
+	recordFixtureLandings(t, p.f.storePath, remote)
 	runGit(t, root, "fetch", "-q", "origin")
 	parent := runGit(t, root, "rev-parse", p.local[0]+"^")
 	tree := runGit(t, root, "merge-tree", "--write-tree", "--merge-base="+parent, remote, p.local[0])

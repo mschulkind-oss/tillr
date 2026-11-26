@@ -110,6 +110,7 @@ func TestHeavyProgressEventsEmitStartedProgressAndEnded(t *testing.T) {
 
 	// Tip 1 stalls once on lint, retries lint to pass, and advances directly onto tip 2.
 	tip1 := heavyCommit(t, root, "tip-1")
+	recordFixtureLandings(t, storePath, tip1)
 	var tip2 string
 	stalledOnce := false
 	runner := heavyFixture(t, root, func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
@@ -120,6 +121,7 @@ func TestHeavyProgressEventsEmitStartedProgressAndEnded(t *testing.T) {
 		if head == tip1 && !stalledOnce {
 			stalledOnce = true
 			tip2 = heavyCommit(t, root, "tip-2")
+			recordFixtureLandings(t, storePath, tip2)
 			return []HeavyCheck{
 				{CheckID: "unit", Result: "pass"},
 				{CheckID: "lint", Result: "stalled"},
@@ -247,12 +249,27 @@ func TestHeavyProgressEventsCloseBracketOnCancelFaultAndIgnoreStoreErrors(t *tes
 	}
 
 	// 3. Store write failures are logged via Progress without failing the proof.
-	badStoreDir := scratchUnderDurable(t)
+	// Use a readable store with the fixture landing recorded and a trigger that rejects
+	// event inserts so the unrecorded-trunk-commit check succeeds while progress writes fail.
+	unwritableStore := newHeavyProgressStore(t)
+	recordFixtureLandings(t, unwritableStore, tip)
+	if s, err := store.Open(context.Background(), unwritableStore, true); err != nil {
+		t.Fatal(err)
+	} else {
+		if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+			_, err := tx.Exec(`CREATE TRIGGER fail_progress_write BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'simulated unwritable store'); END`)
+			return err
+		}); err != nil {
+			s.Close()
+			t.Fatal(err)
+		}
+		s.Close()
+	}
 	var logged []string
 	okRunner := heavyFixture(t, root, func(context.Context, string, string) ([]HeavyCheck, error) {
 		return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
 	})
-	okRunner.Store = badStoreDir
+	okRunner.Store = unwritableStore
 	okRunner.Progress = func(line string) {
 		logged = append(logged, line)
 	}
@@ -330,6 +347,7 @@ func TestHeavyProgressEventsWatchDeclarationCheckLogGrowth(t *testing.T) {
 		writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", checkID+".json"),
 			`{"id":"`+checkID+`","scope":"tree","tier":"heavy","reads":["value"],"command":["true"]}`)
 		tip := heavyCommit(t, root, "decl-grow")
+		recordFixtureLandings(t, storePath, tip)
 
 		startedFile := filepath.Join(work, "started")
 		growFile := filepath.Join(work, "grow")
@@ -467,6 +485,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 		writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", checkID+".json"),
 			`{"id":"`+checkID+`","scope":"tree","tier":"heavy","reads":["value"],"command":["true"]}`)
 		tip := heavyCommit(t, root, "decl-silent")
+		recordFixtureLandings(t, storePath, tip)
 
 		startedFile := filepath.Join(work, "started")
 		releaseFile := filepath.Join(work, "release")
@@ -567,6 +586,7 @@ func TestHeavyProgressEventsWatchDeclarationCheckShardProgress(t *testing.T) {
 		writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", checkID+".json"),
 			`{"id":"`+checkID+`","scope":"tree","tier":"heavy","reads":["value"],"command":["true"]}`)
 		tip := heavyCommit(t, root, "decl-shards-progress")
+		recordFixtureLandings(t, storePath, tip)
 
 		startedFile := filepath.Join(work, "started")
 		step1File := filepath.Join(work, "step1")
@@ -726,6 +746,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 		writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", checkID+".json"),
 			`{"id":"`+checkID+`","scope":"tree","tier":"heavy","reads":["value"],"command":["true"]}`)
 		tip := heavyCommit(t, root, "decl-shards-stalled")
+		recordFixtureLandings(t, storePath, tip)
 
 		startedFile := filepath.Join(work, "started")
 		releaseFile := filepath.Join(work, "release")

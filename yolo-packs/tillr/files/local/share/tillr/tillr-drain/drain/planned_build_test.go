@@ -724,7 +724,7 @@ func (s *noSplitReportSteps) Run(ctx context.Context, req run.Request) (run.Reco
 			report = "run-pi: refused: simulated adapter refusal before build\n"
 			break
 		}
-		s.firstHead = runGit(s.t, filepath.Join(s.f.laneRoot, req.LaneID), "rev-parse", "HEAD")
+		s.firstHead = runGit(s.t, target, "rev-parse", "HEAD")
 		if raw, readErr := os.ReadFile(filepath.Join(lane, ItemBaseSHAFile)); readErr == nil {
 			s.firstHead = strings.TrimSpace(string(raw))
 		}

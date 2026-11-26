@@ -26,6 +26,7 @@ func TestHeavyRunnerFaultDoesNotConsumeTheTipsTrigger(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	recordFixtureLandings(t, s.Path(), tip)
 	const faultAttempts = 2
 	fault := errors.New("judge fault: test runner exited\nwith detail")
 	assertFaultEvents := func(want int) {
@@ -116,6 +117,7 @@ func TestHeavyStatusLineShowsRunningProofInsteadOfPriorFault(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	recordFixtureLandings(t, s.Path(), tip)
 
 	const faultDetail = "cleanup not acknowledged; checkout retained; independently recover descendants named by .git/tillr-gate/heavy.cleanup-pending before clearing that guard"
 	var calls atomic.Int32

@@ -13,6 +13,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-drain/heavyrun"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // trunkRepo is a repository on main with two commits whose green pointer is the first,
@@ -128,6 +129,19 @@ func TestWhyTrunkShowsRunningProofInsteadOfPriorFault(t *testing.T) {
 	root, _, tip := trunkRepo(t)
 	storePath := fixture(t)
 	ctx := context.Background()
+	if s, err := store.Open(ctx, storePath, true); err != nil {
+		t.Fatal(err)
+	} else {
+		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Exec(`INSERT INTO landings(landing_id,item_id,run_id,verdict_id,result,base_sha,head_sha,trunk_before,trunk_after,event_seq) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+				"fixture-"+tip, "fixture-"+tip, "run-"+tip, "fixture-verdict", "landed", "fixture-base", tip, "fixture-before", tip, 0)
+			return err
+		}); err != nil {
+			s.Close()
+			t.Fatal(err)
+		}
+		s.Close()
+	}
 	lock, busy, err := heavyrun.AcquireLoopLock(ctx, root)
 	if err != nil || busy {
 		t.Fatalf("AcquireLoopLock: busy=%v err=%v", busy, err)

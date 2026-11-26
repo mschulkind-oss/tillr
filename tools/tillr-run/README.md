@@ -157,6 +157,7 @@ TILLR_READ_ONLY_GROUP     Only when read_only_group is nonempty: the group shari
 TILLR_PI_AGENT_DIRS_DIR   When set in the caller's environment or derivable from the caller's durable directory: the shared directory holding content-keyed trunk Pi agent directories.
 TILLR_EXTENSION_SET_RECORD_FILE Always: the file path in this run's scratch directory where the Pi adapter records the selected extension set.
 TILLR_RUN_BIN             When unset on the caller and os.Executable resolves: the active tillr-run binary path; otherwise inherited.
+GIT_CEILING_DIRECTORIES   Always: the parent directory of the lane root, stopping Git from walking up into an enclosing repository.
 YOLO_DURABLE_DIR          When scratch_env is omitted or true: <lane dir>/durable/<run_id>; false preserves the caller's value or absence.
 ```
 

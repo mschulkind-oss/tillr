@@ -33,6 +33,7 @@ func newPushFixture(t *testing.T) *pushFixture {
 	for _, name := range []string{"one.txt", "two.txt", "three.txt"} {
 		p.local = append(p.local, ownerCommit(t, f.root, name))
 	}
+	recordFixtureLandings(t, f.storePath, p.local...)
 	runGit(t, f.root, "update-ref", GreenRef, p.local[1])
 	l.cfg.PostLanding.Push.What = settings.PushGreen
 	return p

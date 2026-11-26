@@ -24,6 +24,7 @@ func TestSuccessorPublishesGreenWhileNextProofRuns(t *testing.T) {
 	base := remoteTip()
 	heavyGit(t, root, "update-ref", GreenRef, base)
 	tip := heavyCommit(t, root, "proved")
+	recordFixtureLandings(t, h.f.storePath, tip)
 	h.l.cfg.PostLanding.Push.What = settings.PushGreen
 	h.l.gatePolicy.LandingStrategy = "after-merge"
 
@@ -49,6 +50,7 @@ func TestSuccessorPublishesGreenWhileNextProofRuns(t *testing.T) {
 		t.Fatal("startup publication was offered while the restart was pending")
 	}
 	next := heavyCommit(t, root, "not yet proved")
+	recordFixtureLandings(t, h.f.storePath, next)
 	close(release)
 	h.l.heavyWG.Wait()
 	if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); !handled || stop != StopRestarted || err != nil {
