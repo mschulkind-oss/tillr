@@ -108,8 +108,8 @@ func TestCheckPlannerBuild(t *testing.T) {
 		{"another revision", buildStamp{Revision: "abc"}, &drainBuild{Revision: "def"}, "was built from def"},
 		{"clean against dirty", buildStamp{Revision: "abc"}, &drainBuild{Revision: "abc", Modified: true}, "abc+dirty"},
 		{"planner predates the stamp", buildStamp{Revision: "abc"}, nil, "names no build"},
-		{"launcher digests agree", buildStamp{Executable: "/c/tillr-view-" + digest}, &drainBuild{Digest: digest, Executable: "/c/tillr-drain-" + digest}, ""},
-		{"launcher digests differ", buildStamp{Executable: "/c/tillr-view-" + digest}, &drainBuild{Digest: other, Executable: "/c/tillr-drain-" + other}, "was built from"},
+		{"launcher digests agree", buildStamp{Executable: "/c/tillr-view-" + digest}, &drainBuild{Digest: other, Executable: "/c/tillr-drain-" + digest}, ""},
+		{"launcher digests differ", buildStamp{Executable: "/c/tillr-view-" + digest}, &drainBuild{Digest: digest, Executable: "/c/tillr-drain-" + other}, "was built from"},
 		{"checkout server, launched planner", buildStamp{Revision: "abc"}, &drainBuild{Digest: other, Executable: "/c/tillr-drain-" + other}, "was built from no revision"},
 		{"unidentified server compares nothing", buildStamp{}, nil, ""},
 	} {
@@ -178,6 +178,10 @@ func buildPair(t *testing.T) (view, drain string) {
 // transient file in a shared checkout cannot stamp one binary `+dirty` and the other clean.
 func buildPairInto(t *testing.T, bin string) (view, drain string) {
 	t.Helper()
+	return buildPairWithFlagsInto(t, bin)
+}
+
+func buildPairWithFlagsInto(t *testing.T, bin string, buildFlags ...string) (view, drain string) {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +210,9 @@ func buildPairInto(t *testing.T, bin string) (view, drain string) {
 	if err := os.WriteFile(workFile, []byte(work.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("go", "build", "-o", bin+string(filepath.Separator), ".", "github.com/mschulkind-oss/tillr-drain")
+	args := append([]string{"build"}, buildFlags...)
+	args = append(args, "-o", bin+string(filepath.Separator), ".", "github.com/mschulkind-oss/tillr-drain")
+	cmd := exec.Command("go", args...)
 	cmd.Env = append(withoutEnv(os.Environ(), "CGO_ENABLED", "GOWORK"), "CGO_ENABLED=0", "GOWORK="+workFile)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v: %v %s", cmd.Args, err, out)
@@ -292,6 +298,68 @@ func TestBuiltServerAsksItsOwnSiblingWhateverPATHHolds(t *testing.T) {
 				t.Fatal("the decoy on PATH was run")
 			}
 		})
+	}
+}
+
+// TestLauncherBuildsWithNoRevisionRunWaiting reproduces the pack-launcher case: both
+// tillr-view and tillr-drain are built with -buildvcs=false and named <prog>-<digest>.
+// The real tillr-drain reports its executable SHA-256 in build.digest, not the source
+// digest in its file name, so waiting must compare the launcher digests in their names.
+func TestLauncherBuildsWithNoRevisionRunWaiting(t *testing.T) {
+	bin := plannerFixtureDir(t)
+	rawView, rawDrain := buildPairWithFlagsInto(t, bin, "-buildvcs=false")
+	digest := strings.Repeat("ab", 32)
+	view := filepath.Join(bin, "tillr-view-"+digest)
+	drain := filepath.Join(bin, "tillr-drain-"+digest)
+	if err := os.Rename(rawView, view); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(rawDrain, drain); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, path := whyFixture(t, drain)
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitDir := t.TempDir()
+	if err := os.Symlink(gitPath, filepath.Join(gitDir, "git")); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(view, "waiting", "--store", path, "--root", dir, "--json")
+	cmd.Env = []string{"PATH=" + gitDir, "HOME=" + t.TempDir()}
+	out, err := cmd.Output()
+	if err != nil {
+		stderr := ""
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			stderr = string(exit.Stderr)
+		}
+		t.Fatalf("waiting: %v %s %s", err, out, stderr)
+	}
+	var rows []waitingRow
+	if err := json.Unmarshal(out, &rows); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if len(rows) != 2 || rows[0].ItemID != "a" || rows[1].Mover != "drain; a" {
+		t.Fatalf("not the real planner's answer: %s", out)
+	}
+
+	otherDigest := strings.Repeat("cd", 32)
+	otherDrain := filepath.Join(t.TempDir(), "tillr-drain-"+otherDigest)
+	rawBytes, err := os.ReadFile(drain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherDrain, rawBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mismatchCmd := exec.Command(view, "waiting", "--store", path, "--root", dir, "--json", "--tillr-drain", otherDrain)
+	mismatchCmd.Env = []string{"PATH=" + gitDir, "HOME=" + t.TempDir()}
+	if out, err := mismatchCmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "was built from no revision") {
+		t.Fatalf("a launcher planner with another digest must be refused: %v %s", err, out)
 	}
 }
 

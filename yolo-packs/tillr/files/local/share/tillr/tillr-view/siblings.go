@@ -182,7 +182,7 @@ func checkPlannerBuild(self buildStamp, planner *drainBuild, program plannerProg
 		if self.Revision == planner.Revision && self.Modified == planner.Modified {
 			return nil
 		}
-	} else if selfDigest != "" && planner.Digest == selfDigest {
+	} else if selfDigest != "" && launcherDigest(planner.Executable) == selfDigest {
 		return nil
 	}
 	return &plannerError{Kind: plannerMismatch,
