@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1239,6 +1240,7 @@ func TestWatchWaitRidesOutLockingProtocolError(t *testing.T) {
 	failNext = true
 	mu.Unlock()
 
+	appendRawRefusalWithoutNotify(t, s.Path(), "item-unrelated")
 	select {
 	case ticks <- time.Now():
 	case <-done:
@@ -1282,5 +1284,212 @@ func TestWatchWaitRidesOutLockingProtocolError(t *testing.T) {
 	}
 	if result.code != 0 || result.stderr != "" || !strings.Contains(result.out, "item-waiter has 2 refusals") {
 		t.Fatalf("wait after locking-protocol error: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	}
+}
+
+func TestWatchWaitSkipsEvalAndStoreOpenWhenUnchanged(t *testing.T) {
+	s, rules := fixture(t, false)
+	ctx, cancel := context.WithCancel(t.Context())
+	ticks := make(chan time.Time)
+	deadline := make(chan time.Time)
+
+	var passes, evals atomic.Int64
+	idle := make(chan struct{}, 8)
+	hooks := &waitTestHooks{
+		deadline: deadline,
+		onPass: func() {
+			passes.Add(1)
+		},
+		onEvaluate: func() error {
+			evals.Add(1)
+			return nil
+		},
+		onIdle: func(bool) {
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		},
+	}
+
+	done := make(chan struct{})
+	var code int
+	var out, stderr bytes.Buffer
+	go func() {
+		defer close(done)
+		code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks, hooks)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case <-idle:
+	case <-done:
+		t.Fatalf("wait exited before becoming idle: code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+	case <-time.After(hangGuard):
+		t.Fatal("wait did not reach initial idle")
+	}
+
+	evalsAfterInit := evals.Load()
+	passesAfterInit := passes.Load()
+	if evalsAfterInit != 1 {
+		t.Fatalf("expected 1 initial evaluation before BeginWait, got %d", evalsAfterInit)
+	}
+
+	// Count open file descriptors for the store before unchanged ticks.
+	countStoreFDs := func() int {
+		entries, err := os.ReadDir("/proc/self/fd")
+		if err != nil {
+			t.Skipf("cannot inspect /proc/self/fd: %v", err)
+		}
+		target := filepath.Clean(s.Path())
+		n := 0
+		for _, e := range entries {
+			link, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
+			if err == nil && filepath.Clean(link) == target {
+				n++
+			}
+		}
+		return n
+	}
+	fdsBefore := countStoreFDs()
+
+	for i := 0; i < 4; i++ {
+		select {
+		case ticks <- time.Now():
+		case <-done:
+			t.Fatalf("wait exited on tick %d: code=%d out=%q stderr=%q", i, code, out.String(), stderr.String())
+		}
+		select {
+		case <-idle:
+		case <-done:
+			t.Fatalf("wait exited after tick %d: code=%d out=%q stderr=%q", i, code, out.String(), stderr.String())
+		case <-time.After(hangGuard):
+			t.Fatalf("wait did not return to idle after tick %d", i)
+		}
+	}
+
+	if got := passes.Load(); got != passesAfterInit+4 {
+		t.Fatalf("expected %d passes after 4 ticks, got %d", passesAfterInit+4, got)
+	}
+	if got := evals.Load(); got != evalsAfterInit {
+		t.Fatalf("wait evaluated rules %d extra times when nothing in the store changed", got-evalsAfterInit)
+	}
+	if fdsAfter := countStoreFDs(); fdsAfter != fdsBefore {
+		t.Fatalf("store open fd count changed from %d to %d when nothing in the store changed", fdsBefore, fdsAfter)
+	}
+
+	// Now commit a change and verify wait evaluates rules and delivers the alert.
+	appendRawRefusalWithoutNotify(t, s.Path(), "item-changed")
+	appendRawRefusalWithoutNotify(t, s.Path(), "item-changed")
+	select {
+	case ticks <- time.Now():
+	case <-done:
+	}
+	select {
+	case <-done:
+		if code != 0 || stderr.Len() != 0 || !strings.Contains(out.String(), "item-changed has 2 refusals") {
+			t.Fatalf("wait after store change: code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("wait did not deliver alert after store change")
+	}
+	if got := evals.Load(); got <= evalsAfterInit {
+		t.Fatalf("expected evaluation count to increase after store change, still %d", got)
+	}
+}
+
+func TestWatchWaitPreservesEvalCacheUnderStoreWrites(t *testing.T) {
+	const rulesDir = "../../config/tillr/watch"
+	if err := event.Register("watch-bench.cache-unrelated", "watch-test"); err != nil {
+		t.Fatal(err)
+	}
+	f := newTrunkProofFixture(t)
+	ctx := t.Context()
+
+	var initOut, initErr bytes.Buffer
+	if code := run(ctx, []string{"eval", "--once", "--store", f.s.Path(), "--rules", rulesDir, "--root", f.root}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+		t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
+	}
+
+	now := time.Now().UTC()
+	var seenHead int64
+	if err := f.s.WriteTx(ctx, func(tx *store.Tx) error {
+		for i := 0; i < 4000; i++ {
+			sess := "sess-cache"
+			seq, err := tx.Append(event.Event{
+				Kind:       "drain.loop-pass",
+				ObjectType: "session",
+				ObjectID:   &sess,
+				At:         now.Add(-time.Duration(4000-i) * time.Second),
+				Payload:    []byte(`{"session_id":"sess-cache","dispatched":0}`),
+			})
+			if err != nil {
+				return err
+			}
+			seenHead = seq
+		}
+		_, err := tx.Exec(`INSERT INTO foreground_delivery(owner_handle, seen_seq, shown_seq) VALUES ('operator-session', ?, ?)
+			ON CONFLICT(owner_handle) DO UPDATE SET seen_seq=excluded.seen_seq, shown_seq=excluded.shown_seq`, seenHead, seenHead)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	storePath := f.s.Path()
+	if err := f.s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(ctx, storePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s = reopened
+	t.Cleanup(func() { f.s.Close() })
+
+	child := startCLIChild(t, "wait", "--store", f.s.Path(), "--rules", rulesDir, "--root", f.root, "--owner", "operator-session", "--seen-through", fmt.Sprint(seenHead))
+	eventually(t, func() bool {
+		var attached bool
+		if err := f.s.ReadTx(ctx, func(rd *store.Reader) error {
+			return rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM foreground_delivery WHERE owner_handle='operator-session' AND waiting_since IS NOT NULL)`).Scan(&attached)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return attached
+	})
+	time.Sleep(100 * time.Millisecond)
+
+	startTicks := readProcCPUTicks(t, child.cmd.Process.Pid)
+	startWall := time.Now()
+	const commits = 60
+	const window = 2 * time.Second
+	for i := 0; i < commits; i++ {
+		runID := "run-cache"
+		if err := f.s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{
+				Kind:       "watch-bench.cache-unrelated",
+				ObjectType: "run",
+				ObjectID:   &runID,
+				At:         time.Now().UTC(),
+				Payload:    []byte(`{"step":"heartbeat"}`),
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if sleep := time.Until(startWall.Add(time.Duration(i+1) * window / commits)); sleep > 0 {
+			time.Sleep(sleep)
+		}
+	}
+	wall := time.Since(startWall)
+	endTicks := readProcCPUTicks(t, child.cmd.Process.Pid)
+	const clkTck = 100.0
+	coreFraction := (float64(endTicks-startTicks) / clkTck) / wall.Seconds()
+	t.Logf("cached wait CPU: %.2f%% of one core (%d ticks over %.2fs across %d store commits)",
+		coreFraction*100, endTicks-startTicks, wall.Seconds(), commits)
+	if coreFraction >= 0.10 {
+		t.Fatalf("wait used %.2f%% of one core (%d ticks over %.2fs), want < 10%% (evalCache lost?)",
+			coreFraction*100, endTicks-startTicks, wall.Seconds())
 	}
 }
