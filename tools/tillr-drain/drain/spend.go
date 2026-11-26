@@ -21,6 +21,9 @@ type SpendTotals struct {
 
 func (s *SpendTotals) add(rec run.Record) {
 	s.Runs++
+	if rec.SpendStatus == "not-applicable" {
+		return
+	}
 	if rec.Usage == nil {
 		s.Unreported++
 	}
@@ -69,6 +72,9 @@ func (result *LoopResult) recountSpend() {
 			group = &result.CarriedSpend
 		}
 		group.add(rec)
+		if rec.SpendStatus == "not-applicable" {
+			continue
+		}
 		who := rec.RunID + " on " + rec.Backend
 		if (rec.Usage == nil || rec.Usage.Tokens == nil) && result.SpendUnknownExample == "" {
 			result.SpendUnknownExample = who

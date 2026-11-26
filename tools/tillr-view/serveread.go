@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/ownercriteria"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -72,6 +73,7 @@ type storeItem struct {
 	Rank          string
 	Waiter        string
 	WaitingReason string
+	Finished      bool
 }
 
 // storeCriterion is one row of item_criteria.
@@ -176,17 +178,31 @@ func nullableString(v sql.NullString) string {
 // answer the same order. The queue's rank is selected with it: the board's order is
 // rank first, and a store too old to carry the column answers the same rows unranked
 // rather than refusing the whole board.
+func definitionFinished(r *store.Reader) map[string]bool {
+	declared, err := definition.ForReader(r)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(declared.Parsed.Finished))
+	for _, state := range declared.Parsed.Finished {
+		out[state] = true
+	}
+	return out
+}
+
 func readItems(r *store.Reader) ([]storeItem, error) {
 	items, err := readItemsBase(r)
 	if err != nil {
 		return nil, err
 	}
+	finished := definitionFinished(r)
 	owed, err := ownercriteria.ReadOwnerCriteria(r)
 	if err != nil {
 		return nil, err
 	}
 	for i := range items {
 		items[i].OwnerOwed = owed[items[i].ItemID]
+		items[i].Finished = finished[items[i].State]
 	}
 	rows, err := r.Query(`SELECT item_id, waiting_on FROM items WHERE state = 'blocked'`)
 	if isMissingColumn(err) {
@@ -320,6 +336,7 @@ func readItem(r *store.Reader, itemID string) (storeItem, bool, error) {
 	if it.AllowedPaths, err = decodeAllowedPaths(paths); err != nil {
 		return storeItem{}, false, fmt.Errorf("item %s: %w", itemID, err)
 	}
+	it.Finished = definitionFinished(r)[it.State]
 	if it.State == "blocked" {
 		var raw string
 		err := r.QueryRow(`SELECT COALESCE(waiting_on, '') FROM items WHERE item_id = ?`, itemID).Scan(&raw)
@@ -1002,14 +1019,18 @@ func ProjectItemState(item storeItem, enqueued *storeCandidate, active *storeRun
 		// is where the migration takes the row; the lease below is what decides Working, so
 		// a stopped item can no longer read as "8 working" over zero live lanes.
 		p.State = "in_queue"
+	default:
+		if item.Finished {
+			p.State = "finished"
+		}
 	}
-	if enqueued != nil {
+	if enqueued != nil && p.State != "finished" {
 		p.State = "in_queue"
 	}
 	if active != nil && active.State == "running" {
 		p.State = "working"
 	}
-	if len(waitingOn) > 0 && p.State != "landed" && p.State != "resolved_elsewhere" && p.State != "closed" {
+	if len(waitingOn) > 0 && !isFinishedProjected(p.State) {
 		p.State = "blocked"
 		if p.Underlying == "" {
 			p.Underlying = "waiting on " + strings.Join(waitingOn, ", ")
@@ -1022,12 +1043,16 @@ func ProjectItemState(item storeItem, enqueued *storeCandidate, active *storeRun
 	// store's own state: the store says in-queue, and the planner says the design still
 	// asks something. A terminal item keeps its terminal state; a stale hold cannot reopen
 	// work that has landed.
-	if hold != "" && (item.State != "blocked" || item.Waiter == "") && p.State != "landed" && p.State != "resolved_elsewhere" && p.State != "closed" {
+	if hold != "" && (item.State != "blocked" || item.Waiter == "") && !isFinishedProjected(p.State) {
 		p.State = "blocked"
 		p.Hold = hold
 		p.Underlying = hold
 	}
 	return p
+}
+
+func isFinishedProjected(state string) bool {
+	return state == "landed" || state == "resolved_elsewhere" || state == "closed" || state == "finished"
 }
 
 func closedBlockersFor(it storeItem, waitingOn []string, states map[string]string) []string {
@@ -1048,7 +1073,7 @@ func closedBlockersFor(it storeItem, waitingOn []string, states map[string]strin
 }
 
 func projectClosedBlockers(p *itemProjection, closedBlockers []string) {
-	if len(closedBlockers) == 0 || p.State == "landed" || p.State == "resolved_elsewhere" || p.State == "closed" {
+	if len(closedBlockers) == 0 || isFinishedProjected(p.State) {
 		return
 	}
 	p.State = "blocked"

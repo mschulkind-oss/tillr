@@ -1779,14 +1779,16 @@ func TestTheStopDetailNamesEveryHeldItemAndItsReason(t *testing.T) {
 			result.Stop, result.Ticks, result.Dispatched, drain.StopQueueDrained)
 	}
 	for _, want := range []string{
-		"3 held item(s)",
-		"item_041 (" + drain.ReasonNotReady + ")",
+		"2 held item(s)",
 		"item_042 (" + drain.ReasonBlocked + ")",
 		"item_043 (" + drain.ReasonNotReady + ")",
 	} {
 		if !strings.Contains(result.Detail, want) {
 			t.Fatalf("the stop detail does not name %q: %s", want, result.Detail)
 		}
+	}
+	if strings.Contains(result.Detail, "item_041") {
+		t.Fatalf("the stop detail listed finished item_041 as held: %s", result.Detail)
 	}
 	if runs := lines(t, f.count); countMatching(runs, "adapter") != 0 {
 		t.Fatalf("the loop dispatched an item the detail says was held: %v", runs)

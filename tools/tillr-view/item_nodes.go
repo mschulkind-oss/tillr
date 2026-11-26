@@ -212,11 +212,21 @@ func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, chi
 			n := itemGraphNode{ID: "worker", Kind: "agent", State: "not started", Runs: []string{}, Children: map[string]childrenView{}, Outputs: []itemNodeOutput{}}
 			for _, run := range workers[attempt] {
 				// The latest execution supplies the node state; all runs retain their links.
+				if run.Backend == "command" {
+					n.Kind = "command"
+					if run.Node != "" {
+						n.ID = run.Node
+					}
+				} else {
+					n.Kind = "agent"
+				}
 				n.Seat = run.Seat
 				n.Runs = append(n.Runs, run.RunID)
 				n.State = singleRunState(run)
-				if c, ok := children[run.RunID]; ok {
-					n.Children[run.RunID] = c
+				if n.Kind == "agent" {
+					if c, ok := children[run.RunID]; ok {
+						n.Children[run.RunID] = c
+					}
 				}
 			}
 			a.Nodes = append(a.Nodes, n)

@@ -222,7 +222,7 @@ func (l *Loop) startIdle(ctx context.Context, view *startView, holds []Decision)
 				d.Action, d.Reason = ActionHold, ReasonNoLane
 			}
 		}
-		if d.Action == ActionHold {
+		if d.Action == ActionHold && !(finishedState(s.def, s.states[q.id]) && d.Reason == ReasonNotReady) {
 			holds = append(holds, d)
 		}
 	}

@@ -105,6 +105,30 @@ func TestARunThatReportedNoUsageIsCountedUnknown(t *testing.T) {
 	}
 }
 
+func TestNotApplicableSpendIsNotCountedUnreported(t *testing.T) {
+	loop, err := NewLoop(LoopConfig{ExitWhenDrained: true,
+		Root: "/repo", Store: "/store", LaneRoot: "/lanes", Lanes: []string{"lane-1"},
+		Policy: &Policy{}, Steps: stubSteps{}, Stage: stubStager{},
+	})
+	if err != nil {
+		t.Fatalf("building the loop failed: %v", err)
+	}
+	var result LoopResult
+	result.Dispatched = 1
+	rec := run.Record{RunID: "run-cmd-1", Backend: "command", SpendStatus: "not-applicable"}
+	loop.countSpend(&result, rec)
+	if result.StartedSpend.Runs != 1 {
+		t.Fatalf("started runs = %d, want 1", result.StartedSpend.Runs)
+	}
+	if result.StartedSpend.Unreported != 0 || result.StartedSpend.TokensUnreported != 0 || result.StartedSpend.CostUnreported != 0 {
+		t.Fatalf("not-applicable spend counted as unreported: %+v", result.StartedSpend)
+	}
+	if result.SpendUnknown != 0 || result.CostUnknown != 0 || result.SpendUnknownExample != "" || result.CostUnknownExample != "" {
+		t.Fatalf("loop result counted not-applicable spend as unknown: spend=%d (%q) cost=%d (%q)",
+			result.SpendUnknown, result.SpendUnknownExample, result.CostUnknown, result.CostUnknownExample)
+	}
+}
+
 // TestBackoffDelayDoublesUpToItsCap pins the shape of the wait a repeated fault earns: the
 // base after the first failure, doubled per consecutive one, and never longer than the cap.
 // A streak of zero is no wait, which is how a healthy loop is told from a broken one.

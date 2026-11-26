@@ -19,6 +19,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/buildstamp"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/vantage"
@@ -184,10 +185,15 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 		if err != nil {
 			return record.Envelope{}, exitFor(err)
 		}
+		var lands bool
 		err = s.ReadTx(context.Background(), func(r *store.Reader) error {
-			var err error
+			declared, err := definition.ForReader(r)
+			if err != nil {
+				return err
+			}
+			lands = declared.Parsed.Completes == "landing"
 			payload.Alarms, err = readAlarms(r, *root, *policy, now)
-			if err == nil && subject == nil {
+			if err == nil && subject == nil && lands {
 				payload.Push = readPushSummary(context.Background(), r, *root)
 			}
 			return err
@@ -196,13 +202,13 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 		if err != nil {
 			return record.Envelope{}, exitFor(err)
 		}
-	}
-	if *src.store != "" && subject == nil {
-		proof, err := heavy.ReadStatus(context.Background(), *root, *src.store)
-		if err != nil {
-			payload.HeavyFault = err.Error()
-		} else {
-			payload.Heavy = &proof
+		if subject == nil && lands {
+			proof, err := heavy.ReadStatus(context.Background(), *root, *src.store)
+			if err != nil {
+				payload.HeavyFault = err.Error()
+			} else {
+				payload.Heavy = &proof
+			}
 		}
 	}
 	return envelope("view.status", payload), code

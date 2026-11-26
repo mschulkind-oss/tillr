@@ -1184,16 +1184,22 @@ func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loop
 			return naturalLaneLess(out.Lanes[i].LaneID, out.Lanes[j].LaneID)
 		})
 	}
+	notApplicable, err := readSpendNotApplicable(r)
+	if err != nil {
+		return nil, unreadable(err)
+	}
 	runsByItem := map[string][]storeRun{}
 	var totalCost float64
 	var unreported, costUnreported int
 	costSeen := false
 	for _, run := range runs {
-		if run.CostUSD == nil {
-			costUnreported++
-		}
-		if run.CostUSD == nil && run.UsageTokens == nil {
-			unreported++
+		if !notApplicable[run.RunID] {
+			if run.CostUSD == nil {
+				costUnreported++
+			}
+			if run.CostUSD == nil && run.UsageTokens == nil {
+				unreported++
+			}
 		}
 		runsByItem[run.ItemID] = append(runsByItem[run.ItemID], run)
 		if run.CostUSD != nil {

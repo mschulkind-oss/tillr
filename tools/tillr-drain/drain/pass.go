@@ -1480,6 +1480,7 @@ type plannedApplication struct {
 	parentRunID         string
 	definitionSHA       string
 	definition          *definition.Definition
+	finished            bool
 	expressAheadChecked bool
 	expressAheadHeld    map[string]heldExpressItem
 	start               *plannedStart
@@ -1810,11 +1811,13 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 		return err
 	}
 	expressByID := make(map[string]bool, len(planItems))
+	finishedByID := make(map[string]bool, len(planItems))
 	if commentChecks != nil {
 		*commentChecks = (*commentChecks)[:0]
 	}
 	for _, row := range planItems {
 		expressByID[row.ItemID] = row.Express
+		finishedByID[row.ItemID] = finishedState(declared.Parsed, row.State)
 		// Pending-only planning omits unseen batches, but those batches may
 		// disappear without ever becoming eligible for a start proposal. Keep
 		// closure checks separate from dispatch and durable hold decisions.
@@ -1904,7 +1907,7 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 		}
 		*plans = append(*plans, plannedApplication{
 			decision: d, work: work, version: version, parentRunID: parent, start: start,
-			definitionSHA: declared.SHA256, definition: &declared.Parsed,
+			definitionSHA: declared.SHA256, definition: &declared.Parsed, finished: finishedByID[d.ItemID],
 			expressAheadChecked: aheadChecked, expressAheadHeld: aheadHeld,
 		})
 	}
@@ -3420,7 +3423,7 @@ plans:
 		d := p.decision
 		d.PassID = timing.TickID
 		p.decision = d
-		if d.Action == ActionHold {
+		if d.Action == ActionHold && !(p.finished && d.Reason == ReasonNotReady) {
 			holds = append(holds, d)
 		}
 		if l.planStillActive(p) {

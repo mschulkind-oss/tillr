@@ -10,6 +10,7 @@ const STATE_LABELS: Record<string, string> = {
   working: "Working",
   blocked: "Blocked",
   landed: "Landed",
+  finished: "Finished",
   waiting: "Waiting",
   not_started: "Not started",
   resolved_elsewhere: "Resolved elsewhere",
@@ -38,7 +39,7 @@ export type BoardView = "queue" | "archive";
  * the Go side names the same terminal set in `terminalItemStates`
  * (tools/tillr-view/serve.go), where the raw store state is spelled `resolved-elsewhere`
  * and the projection renames it `resolved_elsewhere`. */
-export const TERMINAL_STATES = ["landed", "resolved_elsewhere", "closed"] as const;
+export const TERMINAL_STATES = ["landed", "resolved_elsewhere", "closed", "finished"] as const;
 
 /** isTerminalState is the split the archive is made of: landed, resolved elsewhere and
  * closed are done; everything else is still in the queue's business. */

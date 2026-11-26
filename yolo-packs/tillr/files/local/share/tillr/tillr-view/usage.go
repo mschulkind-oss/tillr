@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -28,6 +29,7 @@ type turnUsage struct {
 }
 type runUsage struct {
 	Backend       string       `json:"backend"`
+	SpendStatus   string       `json:"spend_status,omitempty"`
 	Tokens        *int64       `json:"tokens"`
 	Models        []modelUsage `json:"models"`
 	Turns         []turnUsage  `json:"turns"`
@@ -43,13 +45,19 @@ type usageSum struct {
 
 func readUsage(r *store.Reader, run storeRun) (runUsage, error) {
 	out := runUsage{Backend: run.Backend, Tokens: run.UsageTokens, Models: []modelUsage{}, Turns: []turnUsage{}}
+	var body []byte
+	var rows *sql.Rows
+	var err error
 	if run.EventSeq > 0 {
-		var body []byte
 		// Old fixtures may have an event_seq naming another event or none at all.
-		rows, err := r.Query(`SELECT payload FROM events WHERE seq=? AND kind='run.finish'`, run.EventSeq)
-		if err != nil {
-			return out, err
-		}
+		rows, err = r.Query(`SELECT payload FROM events WHERE seq=? AND kind='run.finish'`, run.EventSeq)
+	} else if run.RunID != "" {
+		rows, err = r.Query(`SELECT payload FROM events WHERE object_type='run' AND object_id=? AND kind='run.finish' ORDER BY seq DESC LIMIT 1`, run.RunID)
+	}
+	if err != nil {
+		return out, err
+	}
+	if rows != nil {
 		if rows.Next() {
 			err = rows.Scan(&body)
 		}
@@ -62,13 +70,15 @@ func readUsage(r *store.Reader, run storeRun) (runUsage, error) {
 		}
 		if len(body) > 0 {
 			var finish struct {
-				Usage *struct {
+				SpendStatus string `json:"spend_status"`
+				Usage       *struct {
 					Details *runUsage `json:"details"`
 				} `json:"usage"`
 			}
 			if err := json.Unmarshal(body, &finish); err != nil {
 				return out, fmt.Errorf("reading run %s usage: %w", run.RunID, err)
 			}
+			out.SpendStatus = finish.SpendStatus
 			if finish.Usage != nil && finish.Usage.Details != nil {
 				d := finish.Usage.Details
 				out.Models, out.Turns, out.FirstOutputMS, out.OutputTPS = d.Models, d.Turns, d.FirstOutputMS, d.OutputTPS
@@ -139,6 +149,26 @@ func addToken(a, b *int64) *int64 {
 	}
 	return &v
 }
+func readSpendNotApplicable(r *store.Reader) (map[string]bool, error) {
+	rows, err := r.Query(`SELECT DISTINCT object_id FROM events WHERE kind='run.finish' AND object_type='run' AND json_extract(payload, '$.spend_status') = 'not-applicable'`)
+	if isMissingTable(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 func sumUsage(r *store.Reader, runs []storeRun) (usageSum, error) {
 	out := usageSum{Models: []modelUsage{}}
 	groups := map[string][]modelUsage{}
@@ -148,7 +178,9 @@ func sumUsage(r *store.Reader, runs []storeRun) (usageSum, error) {
 			return out, err
 		}
 		if u.Tokens == nil {
-			out.UnrecordedRuns++
+			if u.SpendStatus != "not-applicable" {
+				out.UnrecordedRuns++
+			}
 		} else {
 			out.Tokens = addToken(out.Tokens, u.Tokens)
 		}
