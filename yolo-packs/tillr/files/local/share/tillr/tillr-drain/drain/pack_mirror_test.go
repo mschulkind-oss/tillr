@@ -1,14 +1,21 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mschulkind-oss/tillr-land/land"
+	"github.com/mschulkind-oss/tillr/packmirror"
+	"github.com/mschulkind-oss/tillr/packsync"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -502,5 +509,164 @@ func TestStagePackMirrorUpdatesSupportRevisionOnSupportFileChange(t *testing.T) 
 	nonMirror, mods := filterMirrorConflictReports([]string{"CONFLICT (content): Merge conflict in tools/tillr/buildstamp/support-revision"})
 	if len(nonMirror) != 0 || len(mods) != 1 || mods[0] != "tillr" {
 		t.Fatalf("filterMirrorConflictReports = (%v, %v), want ([], [tillr])", nonMirror, mods)
+	}
+}
+
+type realSquashLandSteps struct {
+	Steps
+	root            string
+	beforeFirstLand func()
+	conflicts       int
+	lands           int
+}
+
+func (s *realSquashLandSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	if s.beforeFirstLand != nil {
+		fn := s.beforeFirstLand
+		s.beforeFirstLand = nil
+		fn()
+	}
+	trunk, err := land.OpenTrunk(s.root)
+	if err != nil {
+		return LandOutcome{}, err
+	}
+	branch, err := trunk.Branch()
+	if err != nil {
+		return LandOutcome{}, err
+	}
+	head, err := trunk.Head(branch)
+	if err != nil {
+		return LandOutcome{}, err
+	}
+	sq, err := trunk.Squash(c.BaseSHA, head, c.HeadSHA, time.Now())
+	if err != nil {
+		return LandOutcome{}, err
+	}
+	if sq.Conflicted() {
+		s.conflicts++
+		return LandOutcome{
+			Result:        land.ResultSquashConflict,
+			ConflictPaths: sq.Conflicts,
+		}, nil
+	}
+	if err := trunk.Move(branch, sq.Commit, head); err != nil {
+		return LandOutcome{}, err
+	}
+	cmd := exec.Command("git", "-C", s.root, "reset", "--hard", sq.Commit)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return LandOutcome{}, fmt.Errorf("reset trunk worktree: %v\n%s", err, out)
+	}
+	s.lands++
+	return LandOutcome{
+		Result:     land.ResultLanded,
+		TrunkAfter: sq.Commit,
+	}, nil
+}
+
+// TestConcurrentSupportFileLandingsKeepSupportRevisionFresh verifies that when two
+// concurrent changes each touch support files, the first lands through the lander's
+// squash, the second conflicts on support-revision and is repaired mechanically by the
+// loop, and the resulting trunk passes pack-sync-test's support-revision check with no
+// hand step.
+func TestConcurrentSupportFileLandingsKeepSupportRevisionFresh(t *testing.T) {
+	ctx := context.Background()
+	f, l := passFixture(t, "item-a")
+	const (
+		supportFile1 = "config/tillr/workflows/first.json"
+		supportFile2 = "tools/tillr-run/backends/pi/second.sh"
+	)
+	writePackFixture(t, f.root, "yolo-packs/tillr/pack.json", "{}\n")
+	writePackFixture(t, f.root, "tools/tillr/buildstamp/build.go", "package buildstamp\n")
+	writePackFixture(t, f.root, supportFile1, `{"id":"first"}`+"\n")
+	writePackFixture(t, f.root, "tools/tillr-run/backends/pi/init.sh", "#!/bin/sh\n")
+	var syncOut bytes.Buffer
+	if rc := packmirror.Sync(f.root, []string{"tillr", packmirror.WorkflowsMount, "tillr-run"}, &syncOut, &syncOut); rc != 0 {
+		t.Fatalf("initial packmirror.Sync failed (%d): %s", rc, syncOut.String())
+	}
+	runGit(t, f.root, "add", ".")
+	runGit(t, f.root, "commit", "-m", "initial support files and pack mirror")
+	baseSHA := runGit(t, f.root, "rev-parse", "HEAD")
+
+	// Change 1: branched from baseSHA, updates supportFile1 and regenerates support-revision.
+	change1Dir := filepath.Join(t.TempDir(), "change1")
+	runGit(t, f.root, "worktree", "add", "-q", change1Dir, baseSHA)
+	t.Cleanup(func() {
+		_ = exec.Command("git", "-C", f.root, "worktree", "remove", "--force", change1Dir).Run()
+	})
+	writePackFixture(t, change1Dir, supportFile1, `{"id":"first","v":2}`+"\n")
+	syncOut.Reset()
+	if rc := packmirror.Sync(change1Dir, []string{"tillr", packmirror.WorkflowsMount}, &syncOut, &syncOut); rc != 0 {
+		t.Fatalf("change1 packmirror.Sync failed (%d): %s", rc, syncOut.String())
+	}
+	runGit(t, change1Dir, "add", ".")
+	runGit(t, change1Dir, "commit", "-m", "feat: update first support file")
+	change1Head := runGit(t, change1Dir, "rev-parse", "HEAD")
+
+	trunk, err := land.OpenTrunk(f.root)
+	if err != nil {
+		t.Fatalf("OpenTrunk: %v", err)
+	}
+	sq1, err := trunk.Squash(baseSHA, baseSHA, change1Head, time.Now())
+	if err != nil {
+		t.Fatalf("Squash change 1: %v", err)
+	}
+	if sq1.Conflicted() {
+		t.Fatalf("unexpected conflict on change 1: %v", sq1.Conflicts)
+	}
+	branch, err := trunk.Branch()
+	if err != nil {
+		t.Fatalf("trunk.Branch: %v", err)
+	}
+
+	// Change 2: staged on lane-1 from baseSHA, updates supportFile2.
+	if err := l.resetLane(ctx, "lane-1"); err != nil {
+		t.Fatal(err)
+	}
+	stageFinishedCandidateOnLane(t, f, l, "item-a", "lane-1")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET allowed_paths = '["candidate.txt","tools/tillr-run/","tools/tillr/","yolo-packs/tillr/"]' WHERE item_id = 'item-a'`)
+		return err
+	})
+	lane := l.lanePath("lane-1")
+	writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), FenceFile), "candidate.txt\ntools/tillr-run/\ntools/tillr/\nyolo-packs/tillr/\n")
+	writePackFixture(t, lane, supportFile2, "#!/bin/sh\necho second\n")
+	runGit(t, lane, "add", supportFile2)
+	runGit(t, lane, "commit", "--amend", "--no-edit")
+
+	landSteps := &realSquashLandSteps{
+		Steps: &countingJudgeSteps{storePath: f.storePath},
+		root:  f.root,
+		beforeFirstLand: func() {
+			// Land Change 1 onto trunk right before Change 2 attempts to land.
+			if err := trunk.Move(branch, sq1.Commit, baseSHA); err != nil {
+				t.Fatalf("Move change 1: %v", err)
+			}
+			runGit(t, f.root, "reset", "--hard", sq1.Commit)
+		},
+	}
+	l.cfg.Steps = landSteps
+
+	var result LoopResult
+	stop, err := l.pass(ctx, &result)
+	if err != nil || stop != "" {
+		t.Fatalf("pass failed: stop=%q err=%v", stop, err)
+	}
+	drainOwned(t, l, &result)
+	if result.Landed != 1 || result.Rejected != 0 {
+		t.Fatalf("expected 1 landed and 0 rejected (conflicts=%d lands=%d), got %+v", landSteps.conflicts, landSteps.lands, result)
+	}
+	if result.ConflictFixes != 0 {
+		t.Fatalf("ConflictFixes = %d, want 0 (mirror-only conflict must not run a worker)", result.ConflictFixes)
+	}
+	if landSteps.conflicts != 1 || landSteps.lands != 1 {
+		t.Fatalf("conflicts=%d lands=%d, want 1 conflict (repaired mechanically) and 1 landing", landSteps.conflicts, landSteps.lands)
+	}
+
+	var checkOut bytes.Buffer
+	if err := packsync.CaseSupportRevision(f.root, false, &checkOut); err != nil {
+		t.Fatalf("resulting trunk failed CaseSupportRevision: %v\n%s", err, checkOut.String())
+	}
+	if err := packsync.CaseWorkflows(f.root, false, &checkOut); err != nil {
+		t.Fatalf("resulting trunk failed CaseWorkflows: %v\n%s", err, checkOut.String())
 	}
 }

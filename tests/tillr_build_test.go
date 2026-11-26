@@ -93,12 +93,29 @@ func newGreenBuildFixture(t *testing.T) *greenBuildFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tillrDir := filepath.Join(root, "tools", "tillr")
+	buildstampDir := filepath.Join(tillrDir, "buildstamp")
+	if err := os.MkdirAll(buildstampDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(tillrDir, "go.mod"), []byte("module github.com/mschulkind-oss/tillr\n\ngo 1.23\n"), 0o644)
+	for _, name := range []string{"build.go", "support-revision"} {
+		data, err := os.ReadFile(filepath.Join(repoRoot, "tools", "tillr", "buildstamp", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = os.WriteFile(filepath.Join(buildstampDir, name), data, 0o644)
+	}
 	for _, mod := range buildModules {
 		modDir := filepath.Join(root, "tools", mod)
 		if err := os.MkdirAll(modDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		_ = os.WriteFile(filepath.Join(modDir, "go.mod"), []byte("module github.com/mschulkind-oss/"+mod+"\n\ngo 1.23\n"), 0o644)
+		goMod := "module github.com/mschulkind-oss/" + mod + "\n\ngo 1.23\n"
+		if mod == "tillr-drain" {
+			goMod += "\nrequire github.com/mschulkind-oss/tillr v0.0.0\n\nreplace github.com/mschulkind-oss/tillr => ../tillr\n"
+		}
+		_ = os.WriteFile(filepath.Join(modDir, "go.mod"), []byte(goMod), 0o644)
 		extra := ""
 		stamp := `""`
 		if mod == "tillr-drain" {
@@ -291,7 +308,7 @@ func TestLegacyGreenPreservesVCSAndPlannerGuard(t *testing.T) {
 	legacyPath := filepath.Join(f.root, "tools", "tillr-drain", "drain", "build.go")
 	legacyRaw, _ := os.ReadFile(legacyPath)
 	updated := strings.ReplaceAll(string(legacyRaw), "var greenRevision string", "")
-	updated = strings.ReplaceAll(updated, "stamp := BuildStamp{Revision: greenRevision, GreenCommit: greenRevision}", "stamp := BuildStamp{}")
+	updated = strings.ReplaceAll(updated, "greenRevision", `""`)
 	_ = os.WriteFile(legacyPath, []byte(updated), 0o644)
 	f.git("add", ".")
 	f.git("commit", "-qm", "legacy programs")
