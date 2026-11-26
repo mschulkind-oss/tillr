@@ -398,8 +398,8 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			// run continues across restarts so the new loop adopts its terminal record
 			// and verdict. Only an interrupted or vanished session is repeated, never
 			// translated into a failure or a spent attempt.
-			missing := rec == nil && len(liveFaces) == 0
-			interrupted := receipt.Build != buildHash && rec != nil && rec.State != run.StatePaused && (rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart)
+			missing := rec == nil && receipt.Build == buildHash && len(liveFaces) == 0
+			interrupted := receipt.Build != buildHash && ((rec == nil && len(liveFaces) == 0) || (rec != nil && rec.State != run.StatePaused && (rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart)))
 			if interrupted || missing {
 				if err := l.interruptBuildRun(receipt.Request.RunID); err != nil {
 					return c, false, err
