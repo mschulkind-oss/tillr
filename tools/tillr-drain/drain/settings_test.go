@@ -21,7 +21,6 @@ func TestLoopSettingsRefusedBeforeStartingOrChecking(t *testing.T) {
 		{"[sync]\nroadmaps = false", "sync.roadmaps", "array of strings"},
 		{"[roll]\ncommmand = 'x'", "roll.commmand", "command"},
 		{"[push]\nafter_landing = 'yes'", "push.after_landing", "boolean"},
-		{"[roll]\ncommand = 'x'", "roll.command", "roll.paths"},
 	}
 	for _, check := range []bool{false, true} {
 		for _, tc := range cases {

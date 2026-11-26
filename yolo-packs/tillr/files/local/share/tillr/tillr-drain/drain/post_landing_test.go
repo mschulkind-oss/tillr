@@ -764,3 +764,80 @@ func TestWaitActionEndsOnCompletionOrContext(t *testing.T) {
 		}
 	})
 }
+
+func TestRollCommandWithNoPathsRunsOnlyForkRoll(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		toml string
+	}{
+		{name: "paths omitted", toml: "[roll]\ncommand = \"./roll.sh --no-request\"\n"},
+		{name: "paths empty", toml: "[roll]\ncommand = \"./roll.sh --no-request\"\npaths = []\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, _, commit := actionFixture(t)
+			ctx := context.Background()
+			script := filepath.Join(l.cfg.Root, "roll.sh")
+			if err := writeForkSafe(script, []byte("#!/bin/sh\necho \"args:$*\" >> runs\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(l.cfg.Root, ".tillr.toml"), []byte(tc.toml), 0644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := settings.Read(l.cfg.Root)
+			if err != nil {
+				t.Fatalf("settings.Read: %v", err)
+			}
+			l.cfg.PostLanding = cfg
+
+			var nextTip string
+			l.cfg.Steps = landStepsStub{land: func(context.Context, Candidate) (LandOutcome, error) {
+				return LandOutcome{Result: LandLanded, TrunkAfter: nextTip}, nil
+			}}
+
+			// An ordinary trunk landing must not trigger the plain roll or restart requests.
+			nextTip = commit("tools/tillr-one/changed")
+			if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-trunk", RunID: "run-trunk"}); err != nil {
+				t.Fatal(err)
+			}
+			waitAction(t, &l.rollAction, &l.piRollAction, &l.extRollAction)
+
+			runsFile := filepath.Join(l.cfg.Root, "runs")
+			if b, err := os.ReadFile(runsFile); err == nil {
+				t.Fatalf("trunk landing ran roll command unexpectedly: %q", string(b))
+			}
+
+			// A pi patch-branch landing runs the fork (--pi) roll without plain roll or restarts.
+			nextTip = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+			if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-patch", RunID: "run-pi-patch", BaseRef: piForkPatchRef}); err != nil {
+				t.Fatal(err)
+			}
+			waitAction(t, &l.rollAction, &l.piRollAction, &l.extRollAction)
+
+			b, err := os.ReadFile(runsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(b); got != "args:--no-request --pi\n" {
+				t.Fatalf("runs = %q, want %q", got, "args:--no-request --pi\n")
+			}
+
+			s, err := store.OpenRead(ctx, l.cfg.Store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			events, err := s.Events(ctx, 0)
+			s.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range events {
+				if e.Kind == restart.RequestKind {
+					t.Fatalf("fork roll unexpectedly requested restart: %s", string(e.Payload))
+				}
+				if e.Kind == rollPendingKind {
+					t.Fatalf("plain roll unexpectedly recorded pending event: %s", string(e.Payload))
+				}
+			}
+		})
+	}
+}

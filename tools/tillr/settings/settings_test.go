@@ -98,8 +98,6 @@ func TestRefusalsNameFileKeyAndExpectation(t *testing.T) {
 		{"[push]\nwhat = 'green'\nafter_landing = true", "push.after_landing", "push.what"},
 		{"[push]\nremote = false", "push.remote", "string"},
 		{"[push]\nref = 1", "push.ref", "string"},
-		{"[roll]\ncommand = 'run'", "roll.command", "roll.paths"},
-		{"[roll]\ncommand = 'run'\npaths = []", "roll.command", "roll.paths"},
 		{"[roll.extra]\nx = 1", "roll.extra", "command"},
 		{"[candidate_size]\nfile_limit = -1", "candidate_size.file_limit", "nonnegative integer"},
 		{"[candidate_size]\nadded_line_limit = '1200'", "candidate_size.added_line_limit", "nonnegative integer"},
@@ -211,5 +209,35 @@ func TestTrunkBranchSetting(t *testing.T) {
 		if _, err := settings.ReadWithoutLanding(dir, "findings"); err == nil || !strings.Contains(err.Error(), "trunk.branch") {
 			t.Fatalf("%q: ReadWithoutLanding = %v, want trunk.branch refusal", branch, err)
 		}
+	}
+}
+
+func TestRollCommandAllowedWithNoPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "paths omitted", body: "[roll]\ncommand = 'run'\n"},
+		{name: "paths empty", body: "[roll]\ncommand = 'run'\npaths = []\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := root(t)
+			if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte(tc.body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := settings.Read(dir)
+			if err != nil {
+				t.Fatalf("settings.Read(%q): %v", tc.body, err)
+			}
+			if got.Roll.Command != "run" || len(got.Roll.Paths) != 0 {
+				t.Fatalf("roll = %+v, want command=\"run\" and empty paths", got.Roll)
+			}
+			line := got.StartupLine()
+			for _, want := range []string{`roll.command="run"`, `roll.paths=[]`} {
+				if !strings.Contains(line, want) {
+					t.Fatalf("StartupLine missing %q: %s", want, line)
+				}
+			}
+		})
 	}
 }

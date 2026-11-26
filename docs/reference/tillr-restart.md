@@ -212,7 +212,7 @@ value refuses loop startup and `tillr-drain loop --check`.
 | :--- | :--- | :--- |
 | `[trunk] branch` | `"main"` | Short Git branch name where trunk landings go. Refuses `refs/` prefixes and invalid ref names. |
 | `[gate] checks_dir` | `"tools/gate/checks"` | Clean repository-relative subdirectory (outside `.git`) holding the repository's `*.json` check declarations and optional `format.json` ([`D-RT11`](#why-its-this-way); [`D-UC23`](../design/tillr-utility-contracts.md#88-the-check-declarations-directory-is-configured-in-tillrtoml)). |
-| `[roll] command`, `paths`, `pause_timeout_seconds` | no command, no paths, `120` | A command needs at least one path pattern. The command runs after a landing that touches a matching path. The timeout bounds a pause the loop files. |
+| `[roll] command`, `paths`, `pause_timeout_seconds` | no command, no paths, `120` | `paths` may be empty when `command` is set: an empty list disables the trunk binary roll while still allowing fork (`--pi` / `--pi-extensions`) rolls. When `paths` is nonempty, the command also runs after a trunk landing that touches a matching path. The timeout bounds a pause the loop files. |
 | `[push] what`, `remote`, `ref` | `what = "none"` | `none`, `tip` or `green`. `after_landing = true` is an alternate spelling of `tip`, refused when `what` is also set. An empty `remote` or `ref` resolves from the trunk's configured upstream. |
 | `[lanes] express` | `0` | Count of lanes reserved for owner-facing work. |
 | `[candidate_size] file_limit`, `added_line_limit` | `27`, `1200` | Advisory size limits for a candidate. |

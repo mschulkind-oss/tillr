@@ -370,9 +370,6 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 			}
 		}
 	}
-	if s.Roll.Command != "" && len(s.Roll.Paths) == 0 {
-		return Settings{}, refuse("roll.command", "nonempty roll.paths when roll.command is set")
-	}
 	return s, nil
 }
 
