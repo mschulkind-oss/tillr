@@ -15,8 +15,8 @@ import (
 )
 
 func (l *Loop) commentServer() (string, string, error) {
-	base, repo := l.cfg.VantageURL, l.cfg.VantageRepo
-	if c := l.cfg.Comments; c != nil {
+	base, repo := l.vantageSettings()
+	if c := l.commentsSettings(); c != nil {
 		base, repo = c.VantageURL, c.Repo
 	}
 	if repo == "" {
@@ -30,7 +30,7 @@ func (l *Loop) commentServer() (string, string, error) {
 }
 
 func (l *Loop) intakeComments(ctx context.Context) error {
-	c := l.cfg.Comments
+	c := l.commentsSettings()
 	if c == nil {
 		return nil
 	}

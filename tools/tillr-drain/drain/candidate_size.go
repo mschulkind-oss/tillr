@@ -34,8 +34,8 @@ func (l *Loop) measureCandidateSize(ctx context.Context, c Candidate) (candidate
 		return candidateSize{}, err
 	}
 	limits := settings.DefaultCandidateSizeLimits()
-	if l.cfg.CandidateSizeLimits != nil {
-		limits = *l.cfg.CandidateSizeLimits
+	if configured := l.candidateSizeLimitsSettings(); configured != nil {
+		limits = *configured
 	}
 	size := candidateSize{FileLimit: limits.FileLimit, AddedLineLimit: limits.AddedLineLimit}
 	for out != "" {

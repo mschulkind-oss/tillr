@@ -620,6 +620,7 @@ type Loop struct {
 	landLockHolds               []int64
 	landLockUnmeasured          int
 	heavyWanted, heavyAttempted string
+	settingsMu                  sync.RWMutex
 	cfg                         LoopConfig
 	// mu guards worker-side infrastructure bookkeeping and report measurements.
 	// Each examination has its own result, transferred to the pass at completion.
@@ -1511,7 +1512,7 @@ func (l *Loop) backOff(ctx context.Context) (bool, error) {
 	if err := l.beat(ctx, l.cfg.Now().Add(delay)); err != nil {
 		return false, err
 	}
-	if l.cfg.Comments == nil {
+	if l.commentsSettings() == nil {
 		return waitFor(ctx, delay), nil
 	}
 	// Keep infrastructure retry backoff intact while review intake remains awake.
@@ -1521,7 +1522,11 @@ func (l *Loop) backOff(ctx context.Context) (bool, error) {
 		if left <= 0 {
 			return true, nil
 		}
-		interval := time.Duration(l.cfg.Comments.PollSeconds) * time.Second
+		c := l.commentsSettings()
+		if c == nil {
+			return waitFor(ctx, left), nil
+		}
+		interval := time.Duration(c.PollSeconds) * time.Second
 		if left < interval {
 			interval = left
 		}

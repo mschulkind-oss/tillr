@@ -195,7 +195,7 @@ func (l *Loop) readIdleRefs(ctx context.Context) (trunkSHA, greenSHA string, ok 
 }
 
 func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.Time, pendingOnly bool) *idlePlanState {
-	if l.cfg.Store == "" || l.cfg.ExitWhenDrained || l.cfg.Comments != nil ||
+	if l.cfg.Store == "" || l.cfg.ExitWhenDrained || l.commentsSettings() != nil ||
 		l.activeCount() > 0 || l.heavyInFlight() || l.infrastructureStreak() > 0 || l.hasStageFaults() {
 		return nil
 	}
@@ -267,7 +267,7 @@ func (l *Loop) idleUnchanged(ctx context.Context, at time.Time, pendingOnly bool
 	if idle == nil || idle.pendingOnly != pendingOnly {
 		return false
 	}
-	if l.cfg.ExitWhenDrained || l.cfg.Comments != nil ||
+	if l.cfg.ExitWhenDrained || l.commentsSettings() != nil ||
 		l.activeCount() > 0 || l.heavyInFlight() || l.infrastructureStreak() > 0 ||
 		l.hasStageFaults() || len(l.completions) > 0 {
 		return false

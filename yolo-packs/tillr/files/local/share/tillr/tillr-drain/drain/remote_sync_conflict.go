@@ -55,7 +55,7 @@ func (l *Loop) activeRemoteSyncConflict(ctx context.Context) (conflict *pushStat
 	if l.cfg.Store == "" {
 		return nil, nil
 	}
-	remote, ref, err := pushDestination(ctx, l.cfg.Root, l.cfg.PostLanding.Push)
+	remote, ref, err := pushDestination(ctx, l.cfg.Root, l.postLandingSettings().Push)
 	if err != nil {
 		return nil, nil // No destination to match; preserve the original push failure.
 	}

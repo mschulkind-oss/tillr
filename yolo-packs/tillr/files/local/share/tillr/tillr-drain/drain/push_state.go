@@ -239,13 +239,13 @@ func (l *Loop) rollAfterRemoteSync(ctx context.Context, res healResult) {
 		l.recordAction(ctx, "roll", res.newTip, err)
 		return
 	}
-	l.rollChanged(ctx, l.cfg.PostLanding.Roll, changed, res.newTip)
+	l.rollChanged(ctx, l.postLandingSettings().Roll, changed, res.newTip)
 }
 
 // Always persist the range: even if the replay carried green, PushOnce may
 // exit before an asynchronous roll could run. The loop owns deployment.
 func (l *Loop) maybeRollAfterRemoteSync(ctx context.Context, res healResult) {
-	if l.cfg.PostLanding.Roll.Command == "" || res.base == "" || res.remoteTip == "" || res.base == res.remoteTip {
+	if l.postLandingSettings().Roll.Command == "" || res.base == "" || res.remoteTip == "" || res.base == res.remoteTip {
 		return
 	}
 	err := l.writeRemoteSync(ctx, func(tx *store.Tx) error {
@@ -281,7 +281,7 @@ func (l *Loop) writeRemoteSync(ctx context.Context, write func(*store.Tx) error)
 }
 
 func (l *Loop) flushPendingRemoteRoll(ctx context.Context, green string) {
-	if green == "" || l.cfg.Store == "" || l.cfg.PostLanding.Roll.Command == "" {
+	if green == "" || l.cfg.Store == "" || l.postLandingSettings().Roll.Command == "" {
 		return
 	}
 	s, err := store.OpenRead(ctx, l.cfg.Store)
@@ -375,7 +375,7 @@ func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, stat
 	}
 	payload := map[string]any{"action": out.Action, "what": out.What, "detail": out.Detail, "kind": out.Kind}
 	root := l.cfg.Root
-	if remote, ref, err := pushDestination(ctx, root, l.cfg.PostLanding.Push); err == nil {
+	if remote, ref, err := pushDestination(ctx, root, l.postLandingSettings().Push); err == nil {
 		payload["remote"], payload["ref"] = remote, ref
 		remoteTip := priorPublished(ctx, root, remote, ref)
 		if state != nil && state.remoteTip != "" {

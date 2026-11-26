@@ -1776,7 +1776,7 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 			loopHolds[id] = reason
 		}
 	}
-	tick := Pass{examineItem: onlyItem, pendingOnly: pendingOnly, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
+	tick := Pass{examineItem: onlyItem, pendingOnly: pendingOnly, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.commentsSettings(), WorkflowDefaults: l.workflowDefaultsSettings(), GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
 	if l.ownerMigrationItem != "" {
 		tick.examineItem = l.ownerMigrationItem
 	}
@@ -2326,7 +2326,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			// Capacity is a dispatch invariant, not just a snapshot prediction.
 			// The writer transaction excludes a competing claim until this one
 			// records its lease and pending work.
-			if d.DeskDocument != "" && l.cfg.Comments != nil {
+			if comments := l.commentsSettings(); d.DeskDocument != "" && comments != nil {
 				held, err := readLanes(tx.Reader(), at)
 				if err != nil {
 					return err
@@ -2340,7 +2340,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				// reservation does not spend another slot; competing owners and
 				// live leases on this desk were rejected above.
 				delete(held, d.LaneID)
-				if countDocumentDesks(held, nil) >= l.cfg.Comments.MaxRunning {
+				if countDocumentDesks(held, nil) >= comments.MaxRunning {
 					return decline("document desks are at capacity", "a document desk to become free")
 				}
 			}

@@ -110,13 +110,13 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 			return "", false, err
 		}
 		release()
-		l.recordPush(ctx, l.cfg.PostLanding.Push.What, before, conflict)
+		l.recordPush(ctx, l.postLandingSettings().Push.What, before, conflict)
 		return refuse(fmt.Sprintf("later commit %s conflicted on %s; %s advanced to base %s",
 			shortSHA(next.ConflictCommit), strings.Join(next.ConflictPaths, ", "), st.ItemID, shortSHA(next.BaseSHA)))
 	}
 	dirty := func(detail string) (string, bool, error) {
 		release()
-		l.recordPush(ctx, l.cfg.PostLanding.Push.What, before, &pushStateError{
+		l.recordPush(ctx, l.postLandingSettings().Push.What, before, &pushStateError{
 			kind: pushKindWorktreeDirty, remoteTip: st.RemoteTip, resetTarget: known.Tip, escalated: "operator",
 			detail: detail + "\nmover: operator; commit, stash, or restore clashing paths in the " + trunkRef + " checkout",
 		})
@@ -422,7 +422,7 @@ func remoteSyncGreen(ctx context.Context, root string, st remoteSyncState, pairs
 }
 
 func (l *Loop) publishRemoteSyncReplay(ctx context.Context, itemID string, res healResult) {
-	p := l.cfg.PostLanding.Push
+	p := l.postLandingSettings().Push
 	switch p.What {
 	case settings.PushTip:
 		l.rollAfterRemoteSync(ctx, res)

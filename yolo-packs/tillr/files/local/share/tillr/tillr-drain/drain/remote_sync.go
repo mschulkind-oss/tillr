@@ -29,7 +29,7 @@ func (l *Loop) escalateRemoteSyncPushState(ctx context.Context, itemID, who, rea
 	if err != nil || !ok {
 		return
 	}
-	l.recordPush(ctx, l.cfg.PostLanding.Push.What, st.OldTrunk, remoteSyncConflictError(st, l.trunkRef(), who, reason))
+	l.recordPush(ctx, l.postLandingSettings().Push.What, st.OldTrunk, remoteSyncConflictError(st, l.trunkRef(), who, reason))
 }
 
 func remoteSyncObstacleMover(kind string) (who, reason string) {
@@ -113,7 +113,7 @@ func onTrunk(ctx context.Context, root, trunkRef string) bool {
 // Only a previously blocked push can be woken by a pass. Checking for clearance
 // uses local state; the actual push turn fetches and revalidates under the usual replay rules.
 func (l *Loop) maybeRecoverClearedPushHold(ctx context.Context) {
-	p, root := l.cfg.PostLanding.Push, l.cfg.Root
+	p, root := l.postLandingSettings().Push, l.cfg.Root
 	if (p.What != settings.PushGreen && p.What != settings.PushTip) || l.pushAction.busy() || l.cfg.Store == "" {
 		return
 	}
@@ -139,7 +139,7 @@ func (l *Loop) maybeRecoverClearedPushHold(ctx context.Context) {
 }
 
 func (l *Loop) triggerPushNow(ctx context.Context) {
-	p := l.cfg.PostLanding.Push
+	p := l.postLandingSettings().Push
 	if !HasUnpublishedCommits(ctx, l.cfg.Root, p) {
 		return
 	}

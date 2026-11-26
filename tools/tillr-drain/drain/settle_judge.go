@@ -200,8 +200,8 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 		}
 		now := l.cfg.Now().UTC()
 		tick := Pass{
-			Comments:            l.cfg.Comments,
-			WorkflowDefaults:    l.cfg.WorkflowDefaults,
+			Comments:            l.commentsSettings(),
+			WorkflowDefaults:    l.workflowDefaultsSettings(),
 			GatesInFlight:       l.gateCount(),
 			Build:               &l.build,
 			StorePath:           l.cfg.Store,
@@ -269,7 +269,7 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 				foundJudge = true
 				continue
 			}
-			if row, ok := byItem[planned.ItemID]; ok && interactiveRequestWaitsForLane(row, planned, d.LaneID, folds.works[row.ItemID], l.cfg.Comments) {
+			if row, ok := byItem[planned.ItemID]; ok && interactiveRequestWaitsForLane(row, planned, d.LaneID, folds.works[row.ItemID], l.commentsSettings()) {
 				return nil
 			}
 		}

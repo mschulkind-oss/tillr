@@ -136,7 +136,7 @@ func (l *Loop) recordRollPending(ctx context.Context, tip string) {
 }
 
 func (l *Loop) landWithActions(ctx context.Context, candidate Candidate) (LandOutcome, error) {
-	mayRoll := candidate.BaseRef == "" && l.cfg.PostLanding.Roll.Command != ""
+	mayRoll := candidate.BaseRef == "" && l.postLandingSettings().Roll.Command != ""
 	if mayRoll {
 		l.rollChecking.Add(1)
 		defer func() {
@@ -176,11 +176,15 @@ func (l *Loop) afterLanding(ctx context.Context, tip string) {
 
 func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, tip string) {
 	if candidate.BaseRef == "" {
-		if p := l.cfg.PostLanding.Push; p.What == settings.PushTip {
+		l.reloadSettingsOnLanding(ctx, tip)
+	}
+	postLanding := l.postLandingSettings()
+	if candidate.BaseRef == "" {
+		if p := postLanding.Push; p.What == settings.PushTip {
 			l.submitTipPush(ctx, p, tip)
 		}
 	}
-	r := l.cfg.PostLanding.Roll
+	r := postLanding.Roll
 	if candidate.BaseRef == piForkPatchRef {
 		if r.Command == "" {
 			l.recordSkippedPiRoll(ctx, tip, "no [roll] command configured")
@@ -279,7 +283,7 @@ func (l *Loop) reportRollFailure(tip, what string, failure error) {
 // A restart waiting on this proof must go before new gates and proofs. Starting
 // a push here would defer the restart and let those gates start in the old image.
 func (l *Loop) offerGreenAdvance(ctx context.Context, tip string) {
-	if l.cfg.PostLanding.Push.What != settings.PushGreen {
+	if l.postLandingSettings().Push.What != settings.PushGreen {
 		l.reportf("loop: push of green %s skipped: [push] what is not green\n", shortSHA(tip))
 		return
 	}
@@ -296,7 +300,7 @@ func (l *Loop) offerGreenAdvance(ctx context.Context, tip string) {
 }
 
 func (l *Loop) offerStartupGreen(ctx context.Context) {
-	if l.cfg.PostLanding.Push.What != settings.PushGreen || l.greenPushAtStart.Load() {
+	if l.postLandingSettings().Push.What != settings.PushGreen || l.greenPushAtStart.Load() {
 		return
 	}
 	// A pass can continue with a restart still pending behind an active proof.
@@ -323,14 +327,14 @@ func isGreenAdvance(trigger string) bool {
 // advance. It is also called once at loop start, so a remote left behind while no loop ran
 // catches up.
 func (l *Loop) afterGreen(ctx context.Context, advanced string) {
-	p := l.cfg.PostLanding.Push
+	p := l.postLandingSettings().Push
 	if p.What != settings.PushGreen {
 		return
 	}
 	replaced := l.pushAction.submit(advanced, func(trigger string) {
 		green, err := l.pushGreenOnce(ctx, p)
 		// Proof, not publication, makes a roll due. Replay may have moved green.
-		if l.cfg.PostLanding.Roll.Command != "" {
+		if l.postLandingSettings().Roll.Command != "" {
 			l.flushPendingRemoteRoll(ctx, optionalCommit(ctx, l.cfg.Root, GreenRef))
 		}
 		if isGreenAdvance(trigger) {

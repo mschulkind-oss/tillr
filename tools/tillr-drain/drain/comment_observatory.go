@@ -73,7 +73,8 @@ func (l *Loop) confirmCommentReplies(ctx context.Context) error {
 		return err
 	}
 	defer st.Close()
-	configured := l.cfg.VantageURL != "" && l.cfg.VantageRepo != ""
+	vantageURL, vantageRepo := l.vantageSettings()
+	configured := vantageURL != "" && vantageRepo != ""
 	var deliveries []commentDelivery
 	states := map[string]map[string]string{}
 	err = st.WriteTx(ctx, func(tx *store.Tx) error {
@@ -146,7 +147,7 @@ func (l *Loop) confirmCommentReplies(ctx context.Context) error {
 			return inboxErr
 		}
 		if configured && os.IsNotExist(inboxErr) {
-			comments, err := item.ReadReview(ctx, l.cfg.VantageURL, l.cfg.VantageRepo, d.Document)
+			comments, err := item.ReadReview(ctx, vantageURL, vantageRepo, d.Document)
 			if err != nil {
 				l.reportf("loop: replies not confirmed for %s: %v\n", d.ItemID, err)
 			} else if comments != nil {

@@ -247,7 +247,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 		if kind == laneRefusedKind {
 			return nil
 		}
-		if d.DeskDocument != "" && l.cfg.Comments != nil {
+		if comments := l.commentsSettings(); d.DeskDocument != "" && comments != nil {
 			held, err := readLanes(r, at)
 			if err != nil {
 				return err
@@ -258,7 +258,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 				}
 			}
 			delete(held, d.LaneID)
-			if countDocumentDesks(held, nil) >= l.cfg.Comments.MaxRunning {
+			if countDocumentDesks(held, nil) >= comments.MaxRunning {
 				return nil
 			}
 		}

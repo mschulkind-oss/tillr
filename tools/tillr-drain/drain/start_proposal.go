@@ -27,7 +27,7 @@ type startViewEntry struct {
 func (l *Loop) startViewPass() Pass {
 	available := l.lanes()
 	build := l.build
-	tick := Pass{Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults,
+	tick := Pass{Comments: l.commentsSettings(), WorkflowDefaults: l.workflowDefaultsSettings(),
 		Build: &build, AvailableLanes: &available, StorePath: l.cfg.Store,
 		ownerMigration: l.ownerMigrationItem != "", examineItem: l.ownerMigrationItem}
 	if stager, ok := l.cfg.Stage.(*LaneStager); ok {

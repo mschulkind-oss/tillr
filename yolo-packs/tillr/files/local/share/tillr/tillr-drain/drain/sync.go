@@ -97,6 +97,23 @@ type syncPayload struct {
 	StaleDocBlocks int                `json:"stale_doc_blocks"`
 }
 
+// SetSyncRoadmaps replaces the roadmap list used on subsequent Sync calls.
+func (s *ProcessSteps) SetSyncRoadmaps(roadmaps []string) {
+	s.syncRoadmapsMu.Lock()
+	defer s.syncRoadmapsMu.Unlock()
+	if len(roadmaps) == 0 {
+		s.SyncRoadmaps = nil
+		return
+	}
+	s.SyncRoadmaps = append([]string(nil), roadmaps...)
+}
+
+func (s *ProcessSteps) syncRoadmaps() []string {
+	s.syncRoadmapsMu.RLock()
+	defer s.syncRoadmapsMu.RUnlock()
+	return append([]string(nil), s.SyncRoadmaps...)
+}
+
 // Sync runs `tillr-item sync` over the loop's repository and store. Exit 0 and exit 1 are
 // both a sync that ran: 1 says a document carried a finding, and the documents without one
 // were written. Any other exit, or a binary that cannot be started, is a sync that could not
@@ -114,7 +131,7 @@ func (s *ProcessSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	}
 	args := []string{"sync", "--store", s.Store, "--root", s.Root,
 		"--now", now().UTC().Format(time.RFC3339), "--json"}
-	for _, roadmap := range s.SyncRoadmaps {
+	for _, roadmap := range s.syncRoadmaps() {
 		args = append(args, "--roadmap", roadmap)
 	}
 	cmd := exec.CommandContext(ctx, s.ItemBin, args...)
