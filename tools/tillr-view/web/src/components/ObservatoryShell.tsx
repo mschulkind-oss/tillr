@@ -6,7 +6,7 @@ import { NewIdea } from "./NewIdea";
 import { Glossary } from "./Glossary";
 import { refusalCode } from "./RefusalState";
 
-const NAV = [["Home", "/"], ["Items", "/items"], ["Graph", "/graph"], ["Passes", "/passes"], ["Runs", "/runs"], ["Performance", "/performance"], ["Trunk", "/trunk"], ["Questions", "/questions"], ["Designs", "/designs"], ["Admin", "/admin"]];
+const NAV = [["Home", "/"], ["Items", "/items"], ["Alerts", "/alerts"], ["Graph", "/graph"], ["Passes", "/passes"], ["Runs", "/runs"], ["Performance", "/performance"], ["Trunk", "/trunk"], ["Questions", "/questions"], ["Designs", "/designs"], ["Admin", "/admin"]];
 export function ObservatoryShell({ children, route, snapshot, snapshotError, passes, passesError, live, paused, onPause, onRefresh }: {
   children: ReactNode; route: string; snapshot?: ApiEnvelope<SnapshotData>; snapshotError: Error | null;
   passes?: PassRow[]; passesError?: Error | null; live: boolean; paused: boolean;

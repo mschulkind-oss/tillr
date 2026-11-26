@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { StateGlyph } from "./StateGlyph";
 
-export const ENTITY_KINDS = ["item", "run", "pass", "lane", "check", "landing", "doc", "question"] as const;
+export const ENTITY_KINDS = ["item", "run", "pass", "lane", "check", "landing", "doc", "question", "alert"] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 
 /** The shared entity URL and visual treatment, including references not yet in the store. */

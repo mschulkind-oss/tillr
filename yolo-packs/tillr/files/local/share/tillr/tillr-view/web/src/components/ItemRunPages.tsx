@@ -1,7 +1,8 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { navigate } from "../models/route";
 import { useItemDocQuery, useItemQuery, useRunArtifactQuery, useRunExchangesQuery, useRunGateQuery, useRunQuery, useRunTimelineQuery, useRunTranscriptQuery } from "../models/queries";
-import type { DispatchView, ItemData, ItemView, TimelineData, VerdictFindingView, VerifyRefusalView } from "../models/types";
+import type { DispatchView, ItemData, ItemView, LinkedAlertView, TimelineData, VerdictFindingView, VerifyRefusalView } from "../models/types";
+import { alertGlyphState, alertsFilterUrl } from "./AlertsPage";
 import { assembleSpans } from "../models/spans";
 import { ItemDetailPane } from "./ItemDetailPane";
 import { EntityLink } from "./EntityLink";
@@ -95,6 +96,22 @@ export function ItemTimeline({ item }: { item: ItemData }) {
     {item.attempts.flatMap(a => a.landings ?? []).map(l => <p key={l.attempt_id}><EntityLink kind="landing" id={l.attempt_id} /> {l.result} · {l.reason}</p>)}
   </section></>;
 }
+export function ItemLinkedAlerts({ alerts }: { alerts?: LinkedAlertView[] }) {
+  return <section aria-label="Linked alerts"><h2>Linked alerts</h2>
+    {!alerts || alerts.length === 0 ? <p>No alerts linked to this item.</p> : <table>
+      <thead><tr><th>Alert</th><th>Rule</th><th>Subject</th><th>Severity</th><th>State / settlement</th><th>Relation</th><th>Linked by / at</th></tr></thead>
+      <tbody>{alerts.map(la => <tr key={`${la.alert_id}:${la.relation}:${la.event_seq}`}>
+        <td><EntityLink kind="alert" id={la.alert_id} state={alertGlyphState(la.state)} /></td>
+        <td><a href={alertsFilterUrl({ rule: la.rule_id })}>{la.rule_id}</a></td>
+        <td>{la.subject_key}</td>
+        <td>{la.severity}</td>
+        <td>{la.state} · {la.settlement_state}</td>
+        <td>{la.relation}{la.note ? ` · ${la.note}` : ""}</td>
+        <td>{la.linked_by || "not recorded"} · <time dateTime={new Date(la.linked_at).toISOString()}>{new Date(la.linked_at).toISOString()}</time></td>
+      </tr>)}</tbody>
+    </table>}
+  </section>;
+}
 export function ItemPage({ id, live, paused, row, baseURL }: { id: string; live: boolean; paused: boolean; row?: ItemView; baseURL: string }) {
   const item = useItemQuery(id, live, paused), doc = useItemDocQuery(id, live, paused);
   const [pinned, setPinned] = useState(row);
@@ -106,7 +123,7 @@ export function ItemPage({ id, live, paused, row, baseURL }: { id: string; live:
     </section> : null}
     <ItemDetailPane itemId={id} item={item.data?.data} itemError={item.error} loading={item.isPending} onRetry={() => void item.refetch()} latestRun={pinned?.latest_run ?? null} updatedAtMs={pinned?.updated_at_ms ?? null} selectedRunId={null}
       onSelectRun={run => navigate(`/run/${encodeURIComponent(run)}`)} doc={{ doc: doc.data?.data, error: doc.error, pending: doc.isPending, onRetry: () => void doc.refetch(), baseUrl: baseURL }} />
-    {item.data ? <><ItemGraph attempts={item.data.data.graph_attempts ?? []} /><DependencyLinks id={id} blockedBy={item.data.data.blocked_by} unblocks={item.data.data.unblocks} /><UsageSummary usage={item.data.data.usage} />{item.data.data.work_summary ? <p>{item.data.data.work_summary}</p> : null}<VerifyRefusals refusals={item.data.data.verify_refusals ?? []} /><ItemTimeline item={item.data.data} /></> : null}
+    {item.data ? <><ItemLinkedAlerts alerts={item.data.data.linked_alerts} /><ItemGraph attempts={item.data.data.graph_attempts ?? []} /><DependencyLinks id={id} blockedBy={item.data.data.blocked_by} unblocks={item.data.data.unblocks} /><UsageSummary usage={item.data.data.usage} />{item.data.data.work_summary ? <p>{item.data.data.work_summary}</p> : null}<VerifyRefusals refusals={item.data.data.verify_refusals ?? []} /><ItemTimeline item={item.data.data} /></> : null}
   </div>;
 }
 export function RunPage({ id, route, live, paused }: { id: string; route: string; live: boolean; paused: boolean }) {

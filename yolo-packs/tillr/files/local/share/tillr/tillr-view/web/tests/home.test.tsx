@@ -20,11 +20,11 @@ const waiting = [
 ];
 afterEach(cleanup);
 
-test("one entity component links all eight kinds, including missing references", () => {
-  expect(ENTITY_KINDS).toEqual(["item", "run", "pass", "lane", "check", "landing", "doc", "question"]);
+test("one entity component links all nine kinds, including missing references", () => {
+  expect(ENTITY_KINDS).toEqual(["item", "run", "pass", "lane", "check", "landing", "doc", "question", "alert"]);
   const { container } = render(<>{ENTITY_KINDS.map(kind => <EntityLink key={kind} kind={kind} id="missing / id" title="Title" />)}</>);
   for (const kind of ENTITY_KINDS) expect(container.querySelector(`[data-entity-kind="${kind}"]`)?.getAttribute("href")).toBe(`/${kind}/missing%20%2F%20id`);
-  expect(container.querySelectorAll("svg")).toHaveLength(8);
+  expect(container.querySelectorAll("svg")).toHaveLength(9);
 });
 
 test("Home groups by mover, ranks within groups and keeps every entity id in EntityLink", () => {

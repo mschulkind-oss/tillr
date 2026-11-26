@@ -58,6 +58,8 @@ export function reconnectDelay(attempt: number): number {
 export function invalidationKey(name: string): readonly unknown[] | null {
   if (name === "snapshot") return queryKeys.snapshot();
   if (name === "landings") return queryKeys.landings();
+  if (name === "alerts") return queryKeys.alertsRoot();
+  if (name.startsWith("alerts:")) return queryKeys.alert(name.slice("alerts:".length));
   if (name.startsWith("runlog:")) return queryKeys.run(name.slice("runlog:".length));
   if (name.startsWith("items:")) return queryKeys.item(name.slice("items:".length));
   if (name.startsWith("runs:")) return queryKeys.runSubtree(name.slice("runs:".length));

@@ -2735,3 +2735,15 @@ kbd {
 .admin-page .admin-filters form { display: flex; flex-wrap: wrap; gap: var(--s2, 0.5rem); align-items: center; margin-bottom: var(--s2, 0.5rem); }
 .admin-page .admin-filters ul { display: flex; flex-wrap: wrap; gap: var(--s2, 0.5rem); list-style: none; padding: 0; }
 .admin-page .admin-narrow { text-decoration: none; opacity: 0.6; }
+
+/* Watch alerts (components/AlertsPage.tsx). */
+.home-alerts { margin-bottom: var(--s4); }
+.home-alerts--promoted { padding: var(--s3); border: 1px solid var(--state-cause); border-radius: var(--r-2); background: var(--surface-2); }
+.alerts-filters { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: center; margin-bottom: var(--s3); }
+.alerts-table-wrap { overflow-x: auto; }
+.alerts-linked-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s1); }
+.alerts-meta { display: grid; grid-template-columns: max-content 1fr; gap: var(--s1) var(--s3); }
+.alerts-meta dt { font-weight: 600; color: var(--ink-2); }
+.alerts-meta dd { margin: 0; }
+.alerts-bundle { max-height: 24em; overflow: auto; white-space: pre-wrap; word-break: break-word; padding: var(--s2); border: 1px solid var(--line-soft); border-radius: var(--r-1); background: var(--surface-2); }
+.muted { color: var(--ink-2); font-size: 0.9em; }

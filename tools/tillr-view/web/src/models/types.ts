@@ -667,6 +667,7 @@ export interface ItemData {
   state_moves: StateMoveView[];
   verify_refusals?: VerifyRefusalView[];
   work_summary?: string;
+  linked_alerts?: LinkedAlertView[];
 }
 
 export interface StageView {
@@ -1004,4 +1005,128 @@ export interface DocumentIndexStatus {
   age_ms?: number;
   refresh_error?: string;
   message?: string;
+}
+
+export interface AlertItemLinkView {
+  alert_id: string;
+  item_id: string;
+  item_title?: string;
+  item_state?: string;
+  relation: string;
+  linked_at: number;
+  linked_by?: string;
+  note?: string;
+  event_seq: number;
+  active_silence: boolean;
+}
+
+export interface AlertTransitionView {
+  seq: number;
+  timestamp: number;
+  state_change: string;
+  kind: string;
+  actor: string;
+  detail?: string;
+}
+
+export interface AlertEpisodeView {
+  alert_id: string;
+  rule_id: string;
+  subject_key: string;
+  episode_num: number;
+  state: string;
+  settlement_state: string;
+  severity: string;
+  condition_fingerprint: string;
+  opened_seq: number;
+  opened_at: number;
+  last_observed_seq: number;
+  last_observed_at: number;
+  observation_count: number;
+  unsettled_for_ms?: number;
+  resolved_seq?: number;
+  resolved_at?: number;
+  resolved_reason?: string;
+  variables: Record<string, string>;
+  variables_json: string;
+  outcome?: string;
+  item_link_kind?: string;
+  tracking_item_id?: string;
+  silence_id?: string;
+  investigated_by?: string;
+  investigated_at?: number;
+  investigation_cause?: string;
+  investigation_evidence?: string;
+  settled_by?: string;
+  settled_at?: number;
+  settled_seq?: number;
+  acked_by?: string;
+  acked_at?: number;
+  acked_note?: string;
+  escalated_to?: string;
+  bundle_json?: string;
+  linked_items: AlertItemLinkView[];
+  latest_transition?: AlertTransitionView;
+}
+
+export interface AlertSilenceView {
+  silence_id: string;
+  rule_id: string;
+  vars: Record<string, string>;
+  vars_json: string;
+  tracking_item_id: string;
+  tracking_item_title?: string;
+  tracking_item_state?: string;
+  created_by: string;
+  created_at: number;
+  reason: string;
+  investigation_cause: string;
+  investigation_evidence: string;
+  source_alert_id?: string;
+  silence_until_ms?: number;
+  silence_on_fingerprint?: string;
+}
+
+export interface AlertCounts {
+  total: number;
+  active: number;
+  open: number;
+  acknowledged: number;
+  silenced: number;
+  resolved: number;
+  unsettled: number;
+  uninvestigated: number;
+  investigating: number;
+  investigated: number;
+  settled: number;
+  active_silences: number;
+}
+
+export interface AlertsData {
+  absent: boolean;
+  counts: AlertCounts;
+  episodes: AlertEpisodeView[];
+  active_silences: AlertSilenceView[];
+}
+
+export interface AlertDetailData {
+  absent: boolean;
+  episode: AlertEpisodeView;
+  transitions: AlertTransitionView[];
+  linked_items: AlertItemLinkView[];
+  related_episodes: AlertEpisodeView[];
+}
+
+export interface LinkedAlertView {
+  alert_id: string;
+  rule_id: string;
+  subject_key: string;
+  state: string;
+  settlement_state: string;
+  severity: string;
+  relation: string;
+  linked_at: number;
+  linked_by?: string;
+  note?: string;
+  event_seq: number;
 }

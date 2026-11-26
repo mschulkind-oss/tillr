@@ -332,6 +332,8 @@ describe("the wire's spelling is the server's", () => {
 
   test("every resource name the server sends has a cache key", () => {
     expect(invalidationKey("snapshot")).toEqual(["snapshot"]);
+    expect(invalidationKey("alerts")).toEqual(["alerts"]);
+    expect(invalidationKey("alerts:alert-ep1")).toEqual(["alerts", "detail", "alert-ep1"]);
     expect(invalidationKey("items:item-seed-02")).toEqual(["items", "item-seed-02"]);
     expect(invalidationKey("runs:run-1")).toEqual(["runs", "run-1"]);
     expect(invalidationKey("lanes:lane-a")).toBeNull();

@@ -15,6 +15,7 @@ function mount(refused = false, lanes: LaneRow[] = []) {
     // Route on the path: the lanes route also takes `?history=<lane>`.
     switch (new URL(String(input), "http://localhost").pathname) {
       case "/api/v1/lanes": return new Response(JSON.stringify(envelope(lanes)));
+      case "/api/v1/alerts": return new Response(JSON.stringify(envelope({ absent: false, counts: { total: 0, active: 0, open: 0, acknowledged: 0, silenced: 0, resolved: 0, unsettled: 0, uninvestigated: 0, investigating: 0, investigated: 0, settled: 0, active_silences: 0 }, episodes: [], active_silences: [] })));
       case "/api/v1/snapshot": return new Response(JSON.stringify(envelope(snapshotData)));
       case "/api/v1/designs": return new Response(JSON.stringify(envelope({designs:[{path:"docs/design.md",last_designer:null}],arrivals:{within_lifetime:2,after_lifetime:1,no_session:1,unmeasured:0}})));
       case "/api/v1/questions": return new Response(JSON.stringify(envelope({ items: [], unknown: [], missing: [], counts: { items: 0, questions: 0, holds: 0 }, state: "questions-ok" })));
@@ -32,14 +33,15 @@ function mount(refused = false, lanes: LaneRow[] = []) {
 test("Home shell reads snapshot, passes and the planner's why rows; nav and pause are real controls", async () => {
   const { container, fetch } = mount();
   await screen.findAllByRole("link", { name: "item-held" });
-  expect(new Set(fetch.mock.calls.map(([path]) => String(path)))).toEqual(new Set(["/api/v1/snapshot", "/api/v1/passes", "/api/v1/why", "/api/v1/lanes"]));
+  expect(new Set(fetch.mock.calls.map(([path]) => String(path)))).toEqual(new Set(["/api/v1/snapshot", "/api/v1/passes", "/api/v1/why", "/api/v1/lanes", "/api/v1/alerts"]));
   expect(container.textContent).toContain("all held");
   for (const id of ["item-held", "OQ-1"]) {
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) if (walker.currentNode.textContent?.includes(id)) expect(walker.currentNode.parentElement?.closest(".entity-link")).not.toBeNull();
   }
   expect((window.location.pathname + window.location.search)).toBe("/");
-  expect(screen.getByRole("navigation", { name: "Observatory" }).querySelectorAll("a")).toHaveLength(10);
+  expect(screen.getByRole("navigation", { name: "Observatory" }).querySelectorAll("a")).toHaveLength(11);
+  expect(screen.getByRole("link", { name: "Alerts" }).getAttribute("href")).toBe("/alerts");
   expect(screen.getByRole("link", { name: "Admin" }).getAttribute("href")).toBe("/admin");
   expect(screen.getByRole("link", {name:"Designs"}).getAttribute("href")).toBe("/designs");
   fireEvent.click(screen.getByRole("button", { name: "Pause updates" }));

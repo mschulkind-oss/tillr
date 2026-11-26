@@ -2,7 +2,8 @@ import { localTime } from "../models/board";
 import { formatSnapshotLaneSummary } from "../models/lanes";
 import { LaneStrip } from "./LaneStrip";
 import { loopAlive } from "../models/loop";
-import type { DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow, WhySource } from "../models/types";
+import type { AlertsData, DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow, WhySource } from "../models/types";
+import { HomeAlertsPanel, isAlertsPromoted } from "./AlertsPage";
 import { DesignsWaiting, WhySourceLine } from "./WhyPass";
 import { ClassState, EntityLink, type EntityKind } from "./EntityLink";
 import { waitingActors, waitingIdentity, waitingOrder } from "../models/waiting";
@@ -108,18 +109,21 @@ export function EntityText({ value, snapshot, rows = [], passes = [] }: { value:
 }
 
 const CLASSES = ["alarm", "needs you", "needs a cause", "waits on work", "waits on the loop", "ready", "moving"];
-export function Home({ snapshot, waiting, waitingError, passes, passesError, lanes, lanesError, now, whySource, designsWaiting }: {
+export function Home({ snapshot, waiting, waitingError, passes, passesError, lanes, lanesError, now, whySource, designsWaiting, alerts, alertsError }: {
   whySource?: WhySource; designsWaiting?: WaitingRow[];
   lanes?: LaneRow[]; lanesError?: Error | null; now?: number;
   snapshot?: SnapshotData; waiting?: WaitingRow[]; waitingError?: Error | null;
   passes?: PassRow[]; passesError?: Error | null;
+  alerts?: AlertsData; alertsError?: Error | null;
 }) {
   const rows = waiting ?? [];
   const actors = waitingActors(rows);
   const classes = [...CLASSES, ...new Set(rows.map(row => row.class).filter(value => !CLASSES.includes(value)))];
   const notMoving = rows.filter(row => !["ready", "moving"].includes(row.class)).length;
+  const promotedAlerts = isAlertsPromoted(alerts);
   return <main className="home">
     <h1>Home</h1>
+    {promotedAlerts ? <HomeAlertsPanel data={alerts} error={alertsError} promoted={true} /> : null}
     <div className="home__columns">
       <div>
         {/* The list is the planner's answer, so a planner that cannot be asked leaves the LIST
@@ -146,6 +150,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
         <DesignsWaiting designs={designsWaiting} />
       </div>
       <aside>
+        {!promotedAlerts ? <HomeAlertsPanel data={alerts} error={alertsError} promoted={false} /> : null}
         <LaneStrip lanes={lanes} error={lanesError} now={now} configured={snapshot?.drain_summary.session?.lanes} />
         <h2>Last passes</h2>
         {passesError ? <p role="alert">Passes refused: {passesError.message}</p> : passes ? passes.length ? <ul>{newestPasses(passes).slice(0, 3).map(pass => <li key={pass.dispatched_at_ms}>

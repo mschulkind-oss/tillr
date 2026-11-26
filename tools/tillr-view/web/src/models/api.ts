@@ -2,6 +2,8 @@
 // and idea actions stay under /api/v1/ (docs/reference/observatory-actions.md#browser-writes).
 
 import type {
+  AlertDetailData,
+  AlertsData,
   ApiEnvelope,
   ApiFailure,
   ArtifactData,
@@ -231,3 +233,23 @@ export const fetchAdminTable = (table: string, query: string, signal?: AbortSign
   read<import("./admin").AdminPage>(`/api/v1/admin/tables/${encodeURIComponent(table)}${query ? `?${query}` : ""}`, signal);
 export const fetchAdminRow = (table: string, rowid: string, signal?: AbortSignal) =>
   read<import("./admin").AdminRow>(`/api/v1/admin/tables/${encodeURIComponent(table)}/rows/${encodeURIComponent(rowid)}`, signal);
+
+export interface AlertFilterParams {
+  state?: string;
+  rule?: string;
+  severity?: string;
+  settlement?: string;
+}
+
+export function fetchAlerts(filter: AlertFilterParams = {}, signal?: AbortSignal): Promise<ApiEnvelope<AlertsData>> {
+  const params = new URLSearchParams();
+  if (filter.state) params.set("state", filter.state);
+  if (filter.rule) params.set("rule", filter.rule);
+  if (filter.severity) params.set("severity", filter.severity);
+  if (filter.settlement) params.set("settlement", filter.settlement);
+  const query = params.toString();
+  return read<AlertsData>(query ? `/api/v1/alerts?${query}` : "/api/v1/alerts", signal);
+}
+
+export const fetchAlert = (alertId: string, signal?: AbortSignal): Promise<ApiEnvelope<AlertDetailData>> =>
+  read<AlertDetailData>(`/api/v1/alerts/${encodeURIComponent(alertId)}`, signal);

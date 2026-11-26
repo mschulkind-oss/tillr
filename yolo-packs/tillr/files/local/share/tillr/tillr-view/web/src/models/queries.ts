@@ -5,6 +5,8 @@
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 
 import {
+  fetchAlert,
+  fetchAlerts,
   fetchItem,
   fetchDesigns,
   fetchItemDoc,
@@ -22,6 +24,11 @@ import {
   fetchWaiting,
 } from "./api";
 import type {
+  AlertFilterParams,
+} from "./api";
+import type {
+  AlertDetailData,
+  AlertsData,
   ApiEnvelope,
   ArtifactData,
   DocData,
@@ -75,6 +82,16 @@ export const queryKeys = {
     kind,
   ],
   itemDoc: (itemId: string): readonly unknown[] => ["items", itemId, "doc"],
+  alertsRoot: (): readonly unknown[] => ["alerts"],
+  alerts: (filter: AlertFilterParams = {}): readonly unknown[] => [
+    "alerts",
+    "list",
+    filter.state ?? "",
+    filter.rule ?? "",
+    filter.severity ?? "",
+    filter.settlement ?? "",
+  ],
+  alert: (alertId: string): readonly unknown[] => ["alerts", "detail", alertId],
 };
 
 /** A query that reads one API response. The envelope is kept, so every panel can show the
@@ -273,6 +290,34 @@ export const useRunArtifactQuery = (
     queryKeys.runArtifact(runId ?? "", kind ?? ""),
     (signal) => fetchRunArtifact(runId as string, kind as string, signal),
     runId !== null && kind !== null,
+    live,
+    paused,
+  );
+
+export const useAlertsQuery = (
+  filter: AlertFilterParams,
+  live: boolean,
+  paused = false,
+  enabled = true,
+) =>
+  useRead<AlertsData>(
+    queryKeys.alerts(filter),
+    (signal) => fetchAlerts(filter, signal),
+    enabled,
+    live,
+    paused,
+    true,
+  );
+
+export const useAlertQuery = (
+  alertId: string,
+  live: boolean,
+  paused = false,
+) =>
+  useRead<AlertDetailData>(
+    queryKeys.alert(alertId),
+    (signal) => fetchAlert(alertId, signal),
+    alertId.length > 0,
     live,
     paused,
   );
