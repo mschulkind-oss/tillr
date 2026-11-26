@@ -55,6 +55,22 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 		endConflict := timeHandoffPhase(ctx, "conflict_fix")
 		stop, landed, err = l.conflictFix(ctx, c, work.RepairHold.Conflict, local, timing, work.RepairHold.TrunkSHA)
 		endConflict()
+	} else if work.ConflictTrunkSHA != "" && c.BaseRef == "" && (work.ConflictHeadSHA == "" || c.HeadSHA == "" || work.ConflictHeadSHA == c.HeadSHA) {
+		mainSHA, trunkErr := l.revParse(ctx, l.cfg.Root, l.trunkRef())
+		if trunkErr != nil {
+			err = trunkErr
+		} else if mainSHA == work.ConflictTrunkSHA {
+			endConflict := timeHandoffPhase(ctx, "conflict_fix")
+			stop, landed, err = l.conflictFix(ctx, c, LandOutcome{Result: LandSquashConflict, TrunkAfter: mainSHA, ConflictPaths: work.ConflictPaths}, local, timing)
+			endConflict()
+		} else if work.DirtyHold != nil || work.Gated {
+			stop, landed, err = l.landCandidate(ctx, c, local, timing)
+		} else {
+			stop, landed, err = l.verify(ctx, &c, local, timing)
+			if err == nil && stop == "" && c.trunkAcquitted {
+				err = errTrunkAcquittedHeld
+			}
+		}
 	} else if work.DirtyHold != nil || work.Gated {
 		stop, landed, err = l.landCandidate(ctx, c, local, timing)
 	} else {

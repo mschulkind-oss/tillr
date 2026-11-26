@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -386,5 +387,107 @@ func TestPendingRestartHoldsConflictedGatedCandidate(t *testing.T) {
 	execMu.Unlock()
 	if gotExeced != 1 {
 		t.Fatalf("exec count after hold released = %d, want 1", gotExeced)
+	}
+}
+
+func TestConflictedCandidateNotRelandedWithoutRepairOrTrunkMove(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-a")
+	writeForkFile(t, filepath.Join(f.root, "conflict.txt"), "base\n")
+	runGit(t, f.root, "add", "conflict.txt")
+	runGit(t, f.root, "commit", "-qm", "add conflict base")
+
+	gateProg := executable(t, "#!/bin/sh\necho \"unexpected gate start\" >&2\nexit 1\n")
+	baseSteps := detachedGateTestSteps(t, f, time.Now, gateProg)
+	steps := &conflictLandingSteps{
+		ProcessSteps: baseSteps,
+		t:            t,
+		storePath:    f.storePath,
+		root:         f.root,
+		now:          time.Now,
+	}
+	l := configureDetachedGateLoop(t, f, steps)
+	l.cfg.Lanes = []string{"lane-1"}
+	l.cfg.Policy.Seats = map[string]string{"build": "fixture"}
+	l.gatePolicy.LandingStrategy = "after-merge"
+	l.cfg.StorePollInterval = 25 * time.Millisecond
+
+	c := prepareReadyCandidate(t, f, l, "item-a")
+	if err := appendJudgment(context.Background(), f.storePath, candidateGatedKind, "run", c.RunID, c, l.cfg.Now()); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(f.root, "conflict.txt"), "trunk-1\n")
+	runGit(t, f.root, "add", "conflict.txt")
+	runGit(t, f.root, "commit", "-qm", "move trunk to conflict")
+
+	// Hold conflict-fix staging behind a binary roll (rollBlocksDispatch() == true)
+	// without filing a restart in the store.
+	l.rollChecking.Add(1)
+	rollHeld := true
+	defer func() {
+		if rollHeld {
+			l.rollChecking.Add(-1)
+		}
+	}()
+
+	l.completions = make(chan runCompletion, 16)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer cancel()
+
+	for i := 0; i < 5; i++ {
+		stop, err := l.pass(ctx, &LoopResult{})
+		if err != nil {
+			t.Fatalf("pass %d while roll blocks dispatch: %v", i+1, err)
+		}
+		if stop != "" {
+			t.Fatalf("pass %d stopped early with %q", i+1, stop)
+		}
+		l.examinations.Wait()
+	}
+
+	countSquashConflicts := func() int {
+		t.Helper()
+		var n int
+		s := openFixture(t, f.storePath)
+		defer s.Close()
+		if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+			return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 'land.landing' AND json_extract(payload, '$.result') = ? AND json_extract(payload, '$.run_id') = ?`, LandSquashConflict, c.RunID).Scan(&n)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	if got := countSquashConflicts(); got != 1 {
+		t.Fatalf("land.landing squash-conflict count while roll held repair = %d, want 1", got)
+	}
+
+	// Even if landCandidate is called directly while trunk and head are unchanged,
+	// it routes to conflictFix without calling the lander again.
+	planned := mustPlan(t, l)
+	if len(planned) != 1 || planned[0].work == nil || planned[0].work.Candidate == nil {
+		t.Fatalf("unexpected plan before direct landCandidate: %+v", planned)
+	}
+	if _, _, err := l.landCandidate(ctx, *planned[0].work.Candidate, &LoopResult{}, &PassTiming{}); !errors.Is(err, errRestartPending) {
+		t.Fatalf("direct landCandidate while roll held repair = %v, want errRestartPending", err)
+	}
+	if got := countSquashConflicts(); got != 1 {
+		t.Fatalf("land.landing squash-conflict count after direct landCandidate = %d, want 1", got)
+	}
+
+	// Releasing the roll lets the next pass stage conflict repair directly without
+	// calling the lander a second time.
+	l.rollChecking.Add(-1)
+	rollHeld = false
+
+	stop, err := l.pass(ctx, &LoopResult{})
+	if err != nil {
+		t.Fatalf("pass after roll released: %v", err)
+	}
+	if stop != "" {
+		t.Fatalf("pass after roll released stopped with %q", stop)
+	}
+	l.examinations.Wait()
+	if got := countSquashConflicts(); got != 1 {
+		t.Fatalf("land.landing squash-conflict count after repair staged = %d, want 1", got)
 	}
 }

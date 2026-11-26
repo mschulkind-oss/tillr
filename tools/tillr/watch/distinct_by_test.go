@@ -5,6 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -548,5 +551,83 @@ receiver = "foreground"
 	pendingSrc, err := srcEval.Pending(ctx, "foreground")
 	if err != nil || len(pendingSrc) != 1 || pendingSrc[0].Bundle.Guidance.Summary != "2: item-a, item-b" {
 		t.Fatalf("expected item-a@8m + item-b@12m to fire on source, got %+v (%v)", pendingSrc, err)
+	}
+}
+
+func TestWatchDistinctByList(t *testing.T) {
+	register(t, "watch-test.landing")
+	const listTOML = `
+[[rule]]
+id = "watch-test-distinct-list"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["watch-test.landing"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "consecutive_count"
+match = 'event.result == "squash-conflict"'
+distinct_by = ["head_sha", "trunk_before"]
+threshold = 3
+window = "24h"
+
+[rule.guidance]
+summary = "{{subject}}: {{count}}"
+check = ["check"]
+do = ["do"]
+
+[rule.delivery]
+receiver = "foreground"
+`
+	root := t.TempDir()
+	writeLintFile(t, root, "config/tillr/watch/list.toml", listTOML)
+	rules, err := LoadRules(filepath.Join(root, "config", "tillr", "watch"))
+	if err != nil {
+		t.Fatalf("LoadRules list distinct_by: %v", err)
+	}
+	if len(rules) != 1 || !slices.Equal(rules[0].When.DistinctByList, []string{"head_sha", "trunk_before"}) {
+		t.Fatalf("unexpected DistinctByList: %+v", rules)
+	}
+	if diags, err := Lint(context.Background(), LintOptions{Root: root}); err != nil || len(diags) != 0 {
+		t.Fatalf("Lint list distinct_by: err=%v diags=%+v", err, diags)
+	}
+
+	s := watchStore(t)
+	ctx := context.Background()
+	cur := time.Date(2026, 11, 26, 0, 50, 0, 0, time.UTC)
+	eval := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return cur }}
+	if _, err := eval.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	appendLanding := func(head, trunk string) {
+		t.Helper()
+		itemID := "item-x"
+		payload := fmt.Sprintf(`{"item_id":%q,"result":"squash-conflict","head_sha":%q,"trunk_before":%q}`, itemID, head, trunk)
+		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{Kind: "watch-test.landing", ObjectType: "item", ObjectID: &itemID, At: cur, Payload: []byte(payload)})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		cur = cur.Add(time.Second)
+	}
+	for i := 0; i < 4; i++ {
+		appendLanding("h1", "t1")
+	}
+	if _, err := eval.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := eval.Pending(ctx, "foreground"); err != nil || len(p) != 0 {
+		t.Fatalf("repeated pair fired: %+v (%v)", p, err)
+	}
+	appendLanding("h1", "t2")
+	appendLanding("h2", "t2")
+	if _, err := eval.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := eval.Pending(ctx, "foreground"); err != nil || len(p) != 1 {
+		t.Fatalf("expected 1 notice after 3 distinct pairs, got %+v (%v)", p, err)
 	}
 }

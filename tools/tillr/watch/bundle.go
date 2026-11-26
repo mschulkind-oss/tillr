@@ -126,12 +126,12 @@ func encodeConditionBundle(r Rule, key, id string, c *condition, summaryTemplate
 		base["pair_a"] = c.pair[0]
 		base["pair_b"] = c.pair[1]
 	}
-	if (r.When.Pattern == CountInWindow || r.When.Pattern == ConsecutiveCount) && r.When.DistinctBy != "" {
+	if fields := r.When.distinctByFields(); (r.When.Pattern == CountInWindow || r.When.Pattern == ConsecutiveCount) && len(fields) > 0 {
 		vals := make([]string, 0, len(c.events))
 		for _, ev := range c.events {
 			s := ev.distinct
-			if s == "" && ev.lookup != nil {
-				s, _ = ev.lookup(r.When.DistinctBy).(string)
+			if s == "" && len(fields) == 1 && ev.lookup != nil {
+				s, _ = ev.lookup(fields[0]).(string)
 			}
 			if s != "" {
 				vals = append(vals, s)

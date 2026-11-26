@@ -145,20 +145,29 @@ func (c *condition) observe(r When, e observation, values expressionValues) {
 		c.events = c.events[:0]
 		c.clears = append(c.clears, e.Seq)
 	} else if match {
-		if r.DistinctBy != "" {
-			var raw any
-			if values.event != nil {
-				raw = values.event(r.DistinctBy)
-			} else if e.lookup != nil {
-				raw = e.lookup(r.DistinctBy)
+		if fields := r.distinctByFields(); len(fields) > 0 {
+			parts := make([]string, 0, len(fields))
+			for _, field := range fields {
+				var raw any
+				if values.event != nil {
+					raw = values.event(field)
+				} else if e.lookup != nil {
+					raw = e.lookup(field)
+				}
+				s, ok := raw.(string)
+				if !ok || s == "" {
+					return
+				}
+				parts = append(parts, s)
 			}
-			s, ok := raw.(string)
-			if !ok || s == "" {
-				return
+			key := parts[0]
+			if len(parts) > 1 {
+				encoded, _ := json.Marshal(parts)
+				key = string(encoded)
 			}
-			e.distinct = s
+			e.distinct = key
 			c.events = slices.DeleteFunc(c.events, func(prev observation) bool {
-				return prev.distinct == s
+				return prev.distinct == key
 			})
 		}
 		c.events = append(c.events, e)
@@ -212,6 +221,7 @@ type ruleDefinitionDigestInput struct {
 	Pattern            string            `json:"pattern"`
 	Field              string            `json:"field"`
 	DistinctBy         string            `json:"distinct_by,omitempty"`
+	DistinctByList     []string          `json:"distinct_by_list,omitempty"`
 	ForEach            string            `json:"for_each,omitempty"`
 	BroadcastEvents    []string          `json:"broadcast_events,omitempty"`
 	Pairs              [][2]string       `json:"pairs"`
@@ -263,6 +273,7 @@ func definitionHash(r Rule) string {
 		Pattern:            r.When.Pattern,
 		Field:              r.When.Field,
 		DistinctBy:         r.When.DistinctBy,
+		DistinctByList:     normalizeStrings(r.When.DistinctByList),
 		ForEach:            r.When.ForEach,
 		BroadcastEvents:    normalizeStrings(r.When.BroadcastEvents),
 		Pairs:              normalizePairs(r.When.Pairs),
@@ -390,6 +401,7 @@ func ruleEqual(a, b Rule) bool {
 		a.When.Pattern == b.When.Pattern &&
 		a.When.Field == b.When.Field &&
 		a.When.DistinctBy == b.When.DistinctBy &&
+		slices.Equal(a.When.DistinctByList, b.When.DistinctByList) &&
 		a.When.ForEach == b.When.ForEach &&
 		slices.Equal(a.When.BroadcastEvents, b.When.BroadcastEvents) &&
 		slices.Equal(a.When.Pairs, b.When.Pairs) &&

@@ -61,6 +61,7 @@ type When struct {
 	GroupByAny                                 []string
 	Pattern, Field, DistinctBy, ForEach        string
 	BroadcastEvents                            []string
+	DistinctByList                             []string
 	Pairs                                      [][2]string
 	Threshold, ThresholdCommits                int64
 	Window, ThresholdDuration                  time.Duration
@@ -915,12 +916,12 @@ func loadWhen(k keys, pattern string, refs map[string]bool, projectionOnly bool)
 	case CountInWindow:
 		k.only(append(allowed, "match", "distinct_by", "threshold")...)
 		w.Match = k.expression("match", false)
-		w.DistinctBy = loadDistinctBy(k)
+		w.DistinctBy, w.DistinctByList = loadDistinctBy(k)
 	case ConsecutiveCount:
 		k.only(append(allowed, "match", "reset", "distinct_by", "threshold")...)
 		w.Match = k.expression("match", true)
 		w.Reset = k.expression("reset", false)
-		w.DistinctBy = loadDistinctBy(k)
+		w.DistinctBy, w.DistinctByList = loadDistinctBy(k)
 	case AlternatingPair:
 		k.only(append(allowed, "field", "pairs", "threshold")...)
 		w.Field = k.eventPath("field")
@@ -949,23 +950,73 @@ func loadWhen(k keys, pattern string, refs map[string]bool, projectionOnly bool)
 	return w
 }
 
-func loadDistinctBy(k keys) string {
-	if _, present := k.values["distinct_by"]; !present {
-		return ""
+func (w When) distinctByFields() []string {
+	if len(w.DistinctByList) > 0 {
+		return w.DistinctByList
 	}
-	name := k.text("distinct_by")
-	if name == "" {
-		return ""
+	if w.DistinctBy != "" {
+		return []string{w.DistinctBy}
 	}
-	if name == "global" || strings.HasPrefix(name, "event.") || !validEventPath(name) {
-		k.reject("distinct_by", "expected an event name without the event. prefix or global, got %q", name)
-		return ""
+	return nil
+}
+
+func loadDistinctBy(k keys) (string, []string) {
+	raw, present := k.values["distinct_by"]
+	if !present {
+		return "", nil
 	}
-	if isForbiddenGroupByColumn(name) {
-		k.reject("distinct_by", "integer column %q cannot be used as distinct_by", name)
-		return ""
+	validateName := func(name string) bool {
+		if name == "global" || strings.HasPrefix(name, "event.") || !validEventPath(name) {
+			k.reject("distinct_by", "expected an event name without the event. prefix or global, got %q", name)
+			return false
+		}
+		if isForbiddenGroupByColumn(name) {
+			k.reject("distinct_by", "integer column %q cannot be used as distinct_by", name)
+			return false
+		}
+		return true
 	}
-	return name
+	switch v := raw.(type) {
+	case string:
+		name := k.text("distinct_by")
+		if name == "" {
+			return "", nil
+		}
+		if !validateName(name) {
+			return "", nil
+		}
+		return name, nil
+	case []any:
+		if len(v) == 0 {
+			k.reject("distinct_by", "expected a non-empty list of strings")
+			return "", nil
+		}
+		list := make([]string, 0, len(v))
+		seen := make(map[string]bool, len(v))
+		for i, elem := range v {
+			s, ok := elem.(string)
+			if !ok || s == "" {
+				k.reject("distinct_by", "invalid string at index %d", i)
+				return "", nil
+			}
+			if !validateName(s) {
+				return "", nil
+			}
+			if seen[s] {
+				k.reject("distinct_by", "duplicate distinct_by name %q", s)
+				return "", nil
+			}
+			seen[s] = true
+			list = append(list, s)
+		}
+		if len(list) == 1 {
+			return list[0], nil
+		}
+		return "", list
+	default:
+		k.reject("distinct_by", "expected a non-empty string or list of strings")
+		return "", nil
+	}
 }
 
 func isForbiddenForEachPath(col string) bool {

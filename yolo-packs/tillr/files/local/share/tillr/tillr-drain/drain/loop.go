@@ -4,6 +4,8 @@ package drain
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -4057,6 +4059,16 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		return "", false, l.holdRewrite(ctx, candidate, h)
 	}
 	candidate.ObservedTrunk = h.Observed
+	if candidate.BaseRef == "" && h.Observed != "" {
+		if prior, ok, err := l.priorSquashConflict(ctx, candidate, h.Observed); err != nil {
+			return "", false, err
+		} else if ok {
+			finishPreLand()
+			endConflict := timeHandoffPhase(ctx, "conflict_fix")
+			defer endConflict()
+			return l.conflictFix(ctx, candidate, prior, result, timing)
+		}
+	}
 	runnerChange, err := l.runnerProofChange(ctx, candidate)
 	if err != nil {
 		return "", false, err
@@ -4221,6 +4233,66 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	l.reportInheritedDrift(ctx, candidate)
 	return "", true, nil
+}
+
+func (l *Loop) priorSquashConflict(ctx context.Context, candidate Candidate, trunkSHA string) (LandOutcome, bool, error) {
+	if l.cfg.Store == "" || candidate.RunID == "" || trunkSHA == "" {
+		return LandOutcome{}, false, nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return LandOutcome{}, false, err
+	}
+	defer s.Close()
+	var (
+		res         string
+		headSHA     string
+		trunkBefore string
+		trunkAfter  string
+		pathsRaw    string
+		found       bool
+	)
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		row := r.QueryRow(`
+			SELECT COALESCE(json_extract(payload, '$.result'), ''),
+			       COALESCE(json_extract(payload, '$.head_sha'), ''),
+			       COALESCE(json_extract(payload, '$.trunk_before'), ''),
+			       COALESCE(json_extract(payload, '$.trunk_after'), ''),
+			       COALESCE(json_extract(payload, '$.conflict_paths'), '[]')
+			FROM events
+			WHERE kind = 'land.landing' AND json_extract(payload, '$.run_id') = ?
+			ORDER BY seq DESC LIMIT 1`, candidate.RunID)
+		if scanErr := row.Scan(&res, &headSHA, &trunkBefore, &trunkAfter, &pathsRaw); scanErr != nil {
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				return nil
+			}
+			return scanErr
+		}
+		found = true
+		return nil
+	}); err != nil {
+		return LandOutcome{}, false, err
+	}
+	if !found || res != LandSquashConflict {
+		return LandOutcome{}, false, nil
+	}
+	if headSHA != "" && candidate.HeadSHA != "" && headSHA != candidate.HeadSHA {
+		return LandOutcome{}, false, nil
+	}
+	conflictTrunk := trunkAfter
+	if conflictTrunk == "" {
+		conflictTrunk = trunkBefore
+	}
+	if conflictTrunk != trunkSHA {
+		return LandOutcome{}, false, nil
+	}
+	var paths []string
+	_ = json.Unmarshal([]byte(pathsRaw), &paths)
+	return LandOutcome{
+		Result:        LandSquashConflict,
+		TrunkAfter:    conflictTrunk,
+		ConflictPaths: paths,
+	}, true, nil
 }
 
 // headOf reads the worker checkout, not the boundary worktree of a fork lane.

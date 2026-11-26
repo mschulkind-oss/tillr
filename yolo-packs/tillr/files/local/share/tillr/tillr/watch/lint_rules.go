@@ -784,12 +784,12 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proof
 	case CountInWindow:
 		allowed = append(allowed, "match", "distinct_by", "threshold")
 		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, proofRefs, kinds, emit)
-		w.DistinctBy = lintDistinctBy(whenMap, emit)
+		w.DistinctBy, w.DistinctByList = lintDistinctBy(whenMap, emit)
 	case ConsecutiveCount:
 		allowed = append(allowed, "match", "reset", "distinct_by", "threshold")
 		w.Match = lintRuleExpr(whenMap, "match", true, w.GroupBy, reads, refs, proofRefs, kinds, emit)
 		w.Reset = lintRuleExpr(whenMap, "reset", false, w.GroupBy, reads, refs, proofRefs, kinds, emit)
-		w.DistinctBy = lintDistinctBy(whenMap, emit)
+		w.DistinctBy, w.DistinctByList = lintDistinctBy(whenMap, emit)
 	case AlternatingPair:
 		allowed = append(allowed, "field", "pairs", "threshold")
 		field, ok := whenMap["field"].(string)
@@ -871,20 +871,54 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proof
 	return w
 }
 
-func lintDistinctBy(whenMap map[string]any, emit func(string, string)) string {
+func lintDistinctBy(whenMap map[string]any, emit func(string, string)) (string, []string) {
 	raw, present := whenMap["distinct_by"]
 	if !present {
-		return ""
+		return "", nil
 	}
-	db, ok := raw.(string)
-	if !ok || db == "" || db == "global" || strings.HasPrefix(db, "event.") || !validEventPath(db) {
+	validateName := func(db string) bool {
+		if db == "" || db == "global" || strings.HasPrefix(db, "event.") || !validEventPath(db) {
+			emit(CodeWatchLintRuleSchema, "when.distinct_by: expected a non-empty valid event path without the event. prefix or global")
+			return false
+		}
+		if isForbiddenGroupByColumn(db) {
+			emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("when.distinct_by: integer column %q cannot be used as distinct_by", db))
+		}
+		return true
+	}
+	switch v := raw.(type) {
+	case string:
+		if !validateName(v) {
+			return "", nil
+		}
+		return v, nil
+	case []any:
+		if len(v) == 0 {
+			emit(CodeWatchLintRuleSchema, "when.distinct_by: expected a non-empty list of strings")
+			return "", nil
+		}
+		list := make([]string, 0, len(v))
+		seen := make(map[string]bool, len(v))
+		for _, elem := range v {
+			col, ok := elem.(string)
+			if !ok || !validateName(col) {
+				return "", nil
+			}
+			if seen[col] {
+				emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.distinct_by: duplicate entry %q", col))
+				return "", nil
+			}
+			seen[col] = true
+			list = append(list, col)
+		}
+		if len(list) == 1 {
+			return list[0], nil
+		}
+		return "", list
+	default:
 		emit(CodeWatchLintRuleSchema, "when.distinct_by: expected a non-empty valid event path without the event. prefix or global")
-		return ""
+		return "", nil
 	}
-	if isForbiddenGroupByColumn(db) {
-		emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("when.distinct_by: integer column %q cannot be used as distinct_by", db))
-	}
-	return db
 }
 
 func lintForEach(whenMap map[string]any, reads Reads, emit func(string, string)) string {
@@ -1155,7 +1189,7 @@ func validGuidancePlaceholder(tok string, when When, varNames []string, allowEve
 	case "pair_a", "pair_b":
 		return when.Pattern == AlternatingPair
 	case "distinct_values":
-		return (when.Pattern == CountInWindow || when.Pattern == ConsecutiveCount) && when.DistinctBy != ""
+		return (when.Pattern == CountInWindow || when.Pattern == ConsecutiveCount) && len(when.distinctByFields()) > 0
 	}
 	if name, ok := strings.CutPrefix(tok, "var."); ok {
 		return name != "" && slices.Contains(varNames, name)

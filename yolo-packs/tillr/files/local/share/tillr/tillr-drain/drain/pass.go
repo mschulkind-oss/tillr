@@ -97,6 +97,7 @@ type pendingWork struct {
 	ReopenedWriterRunID  string    `json:"-"`
 	ConflictHeadSHA      string    `json:"-"`
 	ConflictTrunkSHA     string    `json:"-"`
+	ConflictPaths        []string  `json:"-"`
 	examinationStartedAt time.Time `json:"-"`
 }
 
@@ -314,11 +315,12 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 			}
 		case "land.landing":
 			var landing struct {
-				RunID       string `json:"run_id"`
-				Result      string `json:"result"`
-				HeadSHA     string `json:"head_sha"`
-				TrunkBefore string `json:"trunk_before"`
-				TrunkAfter  string `json:"trunk_after"`
+				RunID         string   `json:"run_id"`
+				Result        string   `json:"result"`
+				HeadSHA       string   `json:"head_sha"`
+				TrunkBefore   string   `json:"trunk_before"`
+				TrunkAfter    string   `json:"trunk_after"`
+				ConflictPaths []string `json:"conflict_paths"`
 			}
 			if err := json.Unmarshal(e.Payload, &landing); err != nil {
 				return err
@@ -332,9 +334,11 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 					}
 					work.ConflictHeadSHA = landing.HeadSHA
 					work.ConflictTrunkSHA = trunk
+					work.ConflictPaths = slices.Clone(landing.ConflictPaths)
 				} else {
 					work.ConflictHeadSHA = ""
 					work.ConflictTrunkSHA = ""
+					work.ConflictPaths = nil
 				}
 			}
 		case run.ResumeKind:
@@ -3472,7 +3476,7 @@ plans:
 			}
 		}
 		if l.judgeWaitsForConflictRepair(d, p.work, mainSHA) {
-			held, err := l.restartGateStartHeld(ctx)
+			held, err := l.conflictRepairHeld(ctx)
 			if err != nil {
 				return "", err
 			}
@@ -3696,7 +3700,7 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 		}
 	}
 	if l.judgeWaitsForConflictRepair(d, p.work, *mainSHA) {
-		if held, err := l.restartGateStartHeld(ctx); err != nil {
+		if held, err := l.conflictRepairHeld(ctx); err != nil {
 			return false, false, err
 		} else if held {
 			return false, false, nil

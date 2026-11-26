@@ -287,6 +287,15 @@ func (l *Loop) restartGateStartHeld(ctx context.Context) (bool, error) {
 	}
 }
 
+// conflictRepairHeld reports whether a pending loop restart or binary roll
+// prevents staging conflict repair for a candidate that already conflicted.
+func (l *Loop) conflictRepairHeld(ctx context.Context) (bool, error) {
+	if l.rollBlocksDispatch() {
+		return true, nil
+	}
+	return l.restartGateStartHeld(ctx)
+}
+
 // waitForRestartAnswer blocks until any pending restart request that is not
 // deferred by post-landing actions has been answered (replaced or answered
 // without replacing) or deferred by a post-landing action. When allowDuringProof

@@ -51,9 +51,15 @@ func TestLandRepeatedSquashConflictsRule(t *testing.T) {
 	}
 
 	seqNum := 0
-	appendLandingTo := func(st *store.Store, itemID, result, reason string, conflicts []string, at time.Time) {
+	appendLandingPairTo := func(st *store.Store, itemID, result, reason, headSHA, trunkBefore string, conflicts []string, at time.Time) {
 		t.Helper()
 		seqNum++
+		if headSHA == "" {
+			headSHA = fmt.Sprintf("22222222222222222222222222222222%08x", seqNum)
+		}
+		if trunkBefore == "" {
+			trunkBefore = fmt.Sprintf("33333333333333333333333333333333%08x", seqNum)
+		}
 		body, err := json.Marshal(land.Landing{
 			LandingID:     fmt.Sprintf("landing_%s_%d", itemID, seqNum),
 			ItemID:        itemID,
@@ -62,9 +68,9 @@ func TestLandRepeatedSquashConflictsRule(t *testing.T) {
 			Result:        result,
 			Reason:        reason,
 			BaseSHA:       "1111111111111111111111111111111111111111",
-			HeadSHA:       "2222222222222222222222222222222222222222",
-			TrunkBefore:   "3333333333333333333333333333333333333333",
-			TrunkAfter:    "3333333333333333333333333333333333333333",
+			HeadSHA:       headSHA,
+			TrunkBefore:   trunkBefore,
+			TrunkAfter:    trunkBefore,
 			ConflictPaths: conflicts,
 		})
 		if err != nil {
@@ -82,6 +88,9 @@ func TestLandRepeatedSquashConflictsRule(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
+	}
+	appendLandingTo := func(st *store.Store, itemID, result, reason string, conflicts []string, at time.Time) {
+		appendLandingPairTo(st, itemID, result, reason, "", "", conflicts, at)
 	}
 	appendLanding := func(itemID, result, reason string, conflicts []string, at time.Time) {
 		appendLandingTo(s, itemID, result, reason, conflicts, at)
@@ -188,7 +197,47 @@ func TestLandRepeatedSquashConflictsRule(t *testing.T) {
 		}
 	}
 
-	// 6. A clean landing on item-a resolves item-a's episode while item-b remains open.
+	// 6. Repeating one candidate head against one trunk tip does not fire the rule;
+	// only conflicts that follow a repair (new head_sha) or a trunk move (new trunk_before) count.
+	const (
+		sameHead     = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		sameTrunk    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		movedTrunk   = "cccccccccccccccccccccccccccccccccccccccc"
+		repairedHead = "dddddddddddddddddddddddddddddddddddddddd"
+	)
+	for i := 0; i < 5; i++ {
+		now = now.Add(time.Second)
+		appendLandingPairTo(s, "item-repeat", land.ResultSquashConflict, "", sameHead, sameTrunk, []string{"shared.go"}, now)
+	}
+	for _, n := range pending() {
+		if n.Bundle.Subject == "item-repeat" {
+			t.Fatalf("repeated same (head_sha, trunk_before) fired alert: %+v", n)
+		}
+	}
+	// A conflict after a trunk move (2nd distinct pair) stays below threshold 3.
+	now = now.Add(time.Second)
+	appendLandingPairTo(s, "item-repeat", land.ResultSquashConflict, "", sameHead, movedTrunk, []string{"shared.go"}, now)
+	for _, n := range pending() {
+		if n.Bundle.Subject == "item-repeat" {
+			t.Fatalf("2 distinct (head_sha, trunk_before) pairs fired alert: %+v", n)
+		}
+	}
+	// A conflict after a repair (3rd distinct pair) reaches threshold 3 and fires.
+	now = now.Add(time.Second)
+	appendLandingPairTo(s, "item-repeat", land.ResultSquashConflict, "", repairedHead, movedTrunk, []string{"shared.go"}, now)
+	repeatFound := false
+	for _, n := range pending() {
+		if n.Bundle.Subject == "item-repeat" {
+			repeatFound = true
+		}
+	}
+	if !repeatFound {
+		t.Fatalf("expected item-repeat to fire after 3 distinct (head_sha, trunk_before) pairs")
+	}
+	now = now.Add(time.Second)
+	appendLanding("item-repeat", land.ResultLanded, "", nil, now)
+
+	// 7. A clean landing on item-a resolves item-a's episode while item-b remains open.
 	now = now.Add(10 * time.Minute)
 	appendLanding("item-a", land.ResultLanded, "", nil, now)
 	afterLanded := pending()

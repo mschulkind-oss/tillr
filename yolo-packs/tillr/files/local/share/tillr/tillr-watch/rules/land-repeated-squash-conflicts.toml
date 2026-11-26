@@ -15,6 +15,7 @@ group_by = "item_id"
 pattern = "consecutive_count"
 match = 'event.result == "squash-conflict"'
 reset = 'event.result == "landed"'
+distinct_by = ["head_sha", "trunk_before"]
 threshold = 3
 window = "24h"
 
