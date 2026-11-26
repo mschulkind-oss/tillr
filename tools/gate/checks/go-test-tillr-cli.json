@@ -12,6 +12,12 @@
   "reads": [
     "tools/gate/checks/go-test-tillr-cli.json",
     "tools/tillr-cli/",
+    "tools/tillr-drain/",
+    "tools/tillr-item/",
+    "tools/tillr-land/",
+    "tools/tillr-loop/",
+    "tools/tillr-roll/",
+    "tools/tillr-run/",
     "tools/tillr/"
   ],
   "tools": [

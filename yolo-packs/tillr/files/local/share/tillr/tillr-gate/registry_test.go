@@ -64,19 +64,19 @@ func TestADeclarationIDCarriesNoCountAndNoAbsolutePath(t *testing.T) {
 func TestPlanSelectsTheGoToolSteps(t *testing.T) {
 	reg := load(t)
 	root := filepath.Join("..", "..")
-	lander := reg.Plan([]string{"tools/tillr-land/main.go"}, root)
-	if !hasCheck(lander, "go-test-tillr-land") {
-		t.Fatalf("a tillr-land-only change did not select the lander's suite: %v", ids(lander))
+	watch := reg.Plan([]string{"tools/tillr-watch/main.go"}, root)
+	if !hasCheck(watch, "go-test-tillr-watch") {
+		t.Fatalf("a tillr-watch-only change did not select the watcher's suite: %v", ids(watch))
 	}
-	if hasCheck(lander, "go-test-tillr-cli") {
-		t.Fatalf("a tillr-land-only change selected the CLI's suite: %v", ids(lander))
+	if hasCheck(watch, "go-test-tillr-cli") {
+		t.Fatalf("a tillr-watch-only change selected the CLI's suite: %v", ids(watch))
 	}
 	cli := reg.Plan([]string{"tools/tillr-cli/main.go"}, root)
 	if !hasCheck(cli, "go-test-tillr-cli") {
 		t.Fatalf("a tillr-cli-only change did not select the CLI's suite: %v", ids(cli))
 	}
-	if hasCheck(cli, "go-test-tillr-land") {
-		t.Fatalf("a tillr-cli-only change selected the lander's suite: %v", ids(cli))
+	if hasCheck(cli, "go-test-tillr-watch") {
+		t.Fatalf("a tillr-cli-only change selected the watcher's suite: %v", ids(cli))
 	}
 }
 
