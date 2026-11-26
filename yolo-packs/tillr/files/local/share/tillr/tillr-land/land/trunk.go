@@ -150,7 +150,7 @@ func (t *Trunk) SquashWithMessage(base, trunk, head, source string, at time.Time
 	if tree == trunkTree {
 		return Squash{Tree: tree, Empty: true}, nil
 	}
-	message, authorDate, err := t.squashMessageAndDate(base, source)
+	message, authorDate, err := t.squashMessageAndDate(base, trunk, source)
 	if err != nil {
 		return Squash{}, err
 	}
@@ -221,11 +221,12 @@ func stampedCommitEnv(identity Identity, authorDate string, at time.Time) []stri
 	}
 }
 
-// squashMessageAndDate reads the commits in base..source in chronological order. A single
-// commit keeps its message verbatim; multiple commits keep the first commit's subject (and
-// body, if any) and list the remaining commits' subjects in the body.
-func (t *Trunk) squashMessageAndDate(base, source string) (string, string, error) {
-	revs, err := t.git("rev-list", "--reverse", base+".."+source)
+// squashMessageAndDate reads the commits in base..source that are not already reachable
+// from trunk in chronological order. A single commit keeps its message verbatim; multiple
+// commits keep the first commit's subject (and body, if any) and list the remaining
+// commits' subjects in the body.
+func (t *Trunk) squashMessageAndDate(base, trunk, source string) (string, string, error) {
+	revs, err := t.git("rev-list", "--reverse", base+".."+source, "^"+trunk)
 	if err != nil {
 		return "", "", Externalf("reading candidate commits %s..%s in %s: %v", base, source, t.repo, err)
 	}

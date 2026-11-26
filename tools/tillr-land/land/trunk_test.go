@@ -285,3 +285,82 @@ func TestBranchRefusesADetachedHead(t *testing.T) {
 		t.Fatal("a detached HEAD named a branch")
 	}
 }
+
+// TestSquashExcludesTrunkCommitsFromMessageAndAuthorDate verifies that when base..head
+// includes commits already reachable from trunk_before (for example, after restaging a lane
+// onto a newer trunk while keeping an older recorded base), the squashed commit takes its
+// message and author date only from commits the run made.
+func TestSquashExcludesTrunkCommitsFromMessageAndAuthorDate(t *testing.T) {
+	deployIdentity(t)
+	dir := scratch(t)
+	git(t, dir, "init", "-b", "main")
+	write(t, filepath.Join(dir, "base.txt"), "base\n")
+	git(t, dir, "add", "base.txt")
+	git(t, dir, "commit", "--date=2026-11-25T10:00:00Z", "-m", "recorded base")
+	base := git(t, dir, "rev-parse", "HEAD")
+
+	// Advance main with another item's commit, then move trunk_before one commit further.
+	write(t, filepath.Join(dir, "trunk1.txt"), "storelog\n")
+	git(t, dir, "add", "trunk1.txt")
+	git(t, dir, "commit", "--date=2026-11-26T09:00:00-05:00", "-m", "refactor(drain): extract internal/storelog from drain")
+	restagedTrunk := git(t, dir, "rev-parse", "HEAD")
+
+	write(t, filepath.Join(dir, "trunk2.txt"), "later\n")
+	git(t, dir, "add", "trunk2.txt")
+	git(t, dir, "commit", "--date=2026-11-26T10:00:00-05:00", "-m", "chore: later trunk commit")
+	trunkTip := git(t, dir, "rev-parse", "HEAD")
+
+	// Lane was restaged onto restagedTrunk, while base_sha still points at base.
+	git(t, dir, "checkout", "-b", "candidate", restagedTrunk)
+	write(t, filepath.Join(dir, "worker.txt"), "fix\n")
+	git(t, dir, "add", "worker.txt")
+	wantDate := "2026-11-26T11:30:00-05:00"
+	wantSubject := "test(drain): restore strict heldBuildJudge"
+	git(t, dir, "commit", "--date="+wantDate, "-m", wantSubject+"\n\nWorker body.")
+	head := git(t, dir, "rev-parse", "HEAD")
+	git(t, dir, "checkout", "main")
+
+	opened, err := land.OpenTrunk(dir)
+	if err != nil {
+		t.Fatalf("opening trunk: %v", err)
+	}
+	squash, err := opened.Squash(base, trunkTip, head, time.Date(2026, 11, 26, 16, 33, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("squashing: %v", err)
+	}
+	if squash.Conflicted() || squash.Empty {
+		t.Fatalf("unexpected squash result: %+v", squash)
+	}
+	if got := git(t, dir, "log", "-1", "--format=%s", squash.Commit); got != wantSubject {
+		t.Fatalf("squash subject = %q, want %q", got, wantSubject)
+	}
+	if got := git(t, dir, "log", "-1", "--format=%b", squash.Commit); got != "Worker body." {
+		t.Fatalf("squash body = %q, want %q", got, "Worker body.")
+	}
+	if got := git(t, dir, "log", "-1", "--format=%aI", squash.Commit); got != wantDate {
+		t.Fatalf("squash author date = %q, want %q", got, wantDate)
+	}
+
+	// Also verify multi-commit run ranges exclude trunk commits.
+	git(t, dir, "checkout", "candidate")
+	write(t, filepath.Join(dir, "worker2.txt"), "follow-up\n")
+	git(t, dir, "add", "worker2.txt")
+	git(t, dir, "commit", "--date=2026-11-26T11:32:00-05:00", "-m", "test(drain): add follow-up assertion")
+	head2 := git(t, dir, "rev-parse", "HEAD")
+	git(t, dir, "checkout", "main")
+
+	squash2, err := opened.Squash(base, trunkTip, head2, time.Date(2026, 11, 26, 16, 35, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("squashing multi-commit range: %v", err)
+	}
+	if got := git(t, dir, "log", "-1", "--format=%s", squash2.Commit); got != wantSubject {
+		t.Fatalf("multi-commit squash subject = %q, want %q", got, wantSubject)
+	}
+	wantBody2 := "Worker body.\n\n- test(drain): add follow-up assertion"
+	if got := git(t, dir, "log", "-1", "--format=%b", squash2.Commit); got != wantBody2 {
+		t.Fatalf("multi-commit squash body = %q, want %q", got, wantBody2)
+	}
+	if got := git(t, dir, "log", "-1", "--format=%aI", squash2.Commit); got != wantDate {
+		t.Fatalf("multi-commit squash author date = %q, want %q", got, wantDate)
+	}
+}
