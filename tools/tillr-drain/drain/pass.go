@@ -449,7 +449,7 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 					return err
 				}
 				c.Request, c.Seat = work.Decision.RunRequest, work.Decision.Seat
-				work.Candidate, work.Gated = &c, true
+				work.Candidate, work.Gated, work.GateStall = &c, true, nil
 			}
 		case BoundaryCheckKind:
 			var check boundaryCheckPayload
@@ -3253,6 +3253,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 			return "", err
 		}
 		if err := l.timePassPhase("release_changed_candidate_gate_faults", func() error { return l.releaseChangedCandidateGateFaults(ctx) }); err != nil {
+			return "", err
+		}
+		if err := l.timePassPhase("release_advanced_gate_digest_faults", func() error { return l.releaseAdvancedGateDigestFaults(ctx) }); err != nil {
 			return "", err
 		}
 		if err := l.timePassPhase("release_stale_base_conflicts", func() error { return l.releaseStaleBaseConflicts(ctx) }); err != nil {

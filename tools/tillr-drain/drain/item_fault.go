@@ -67,6 +67,9 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 	}
 	defer s.Close()
 	f := ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, HeadSHA: c.HeadSHA, WorkerHeadSHA: c.WorkerHeadSHA, Reason: reason, Detail: detail}
+	if reason == ReasonGateStalled || reason == StopGateHarnessError {
+		f.GateDigest = l.installedGateDigest()
+	}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		var err error
 		f.Seq, err = l.appendItemFaultTx(tx, f)

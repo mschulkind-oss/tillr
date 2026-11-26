@@ -4,7 +4,7 @@ status: accepted
 stage: DECIDED
 planning-actions: none
 verified: 2026-11-26
-next: "A separate item builds Option B of OQ-GR4 (D-GR45), alongside unbuilt D-GR51 and D-GR52 (Option A of OQ-GR5, Option A of OQ-GR6 and Option B of OQ-GR7 are built)."
+next: "Unbuilt items remain for D-GR51 and D-GR52 (Option B of OQ-GR4 / D-GR45, Option A of OQ-GR5, Option A of OQ-GR6 and Option B of OQ-GR7 are built)."
 covers:
   - tools/gate/
   - tools/tillr-gate/
@@ -14,6 +14,7 @@ covers:
   - tools/tillr-drain/drain/fixer_gate.go
   - tools/tillr-drain/remotesync/fork_drift.go
   - tools/tillr-land/land/fork_rebase.go
+  - tools/tillr-drain/drain/gate_recovery.go
   - tools/tillr-drain/drain/gate_stall.go
   - tools/tillr-drain/drain/lane_base.go
   - tools/tillr-drain/drain/runner_timing.go
@@ -33,9 +34,7 @@ vantage:
 
 **Status:** Source-verified 2026-11-26 against the tree. On 2026-11-25 the owner ruled
 [`OQ-GR4`](#OQ-GR4) (Option B), [`OQ-GR5`](#OQ-GR5) (Option A), [`OQ-GR6`](#OQ-GR6)
-(Option A) and [`OQ-GR7`](#OQ-GR7) (Option B); Option A of [`OQ-GR5`](#OQ-GR5), Option A of
-[`OQ-GR6`](#OQ-GR6) and Option B of [`OQ-GR7`](#OQ-GR7) are in the tree, while a separate
-item builds Option B of [`OQ-GR4`](#OQ-GR4) ([`D-GR45`](#D-GR45)). In
+(Option A) and [`OQ-GR7`](#OQ-GR7) (Option B); all four are in the tree. In
 [Why it's this way](#why-its-this-way), only rows quoting the owner's dated words are owner
 rulings; every designer or operator-request decision may be overturned by the owner.
 UNMEASURED: this reference was written by reading the code and the recorded decision ledger,
@@ -303,6 +302,43 @@ whether it ran, was reused or was not run, and for `go-affected` its selection t
 wait and per-package selection reason, elapsed time and whether Go answered from its cache.
 The after-merge proof, relands, automatic-revert candidates, named replays and heavy-failure
 counts are outside that record's scope.
+
+### Installed `tillr-gate` judge, recovery, and acquittal
+
+`tillr-gate` is installed only from the proved commit (`refs/tillr/green`, [`D-GR5`](#D-GR5)),
+never from an unproved tip. Three paths govern how the drain runs it ([`OQ-GR4`](#OQ-GR4),
+[`D-GR45`](#D-GR45)):
+
+1. **Healthy green-installed outer judge.** Whenever the installed `tillr-gate` on `PATH` is
+   healthy, it remains the outer judge that runs the landing gate (`tillr-loop gate`) and
+   writes and binds `gate.verdict`.
+2. **Verified candidate-build recovery path.** When the installed `tillr-gate` stalls
+   (`GateStalled`), errors (`GateErrored`), or disagrees with its wrapper (`GateNoVerdict`)
+   on a candidate whose fence permits `tillr-gate`'s source (`tools/tillr-gate/` or its pack
+   mirror, or an unrestricted fence), `attemptGateRecovery` in
+   [`tools/tillr-drain/drain/gate_recovery.go`](../../tools/tillr-drain/drain/gate_recovery.go)
+   recovers without an operator, with no time limit and no retry count:
+   - `runDirectGateChecks` runs every `fast` declaration (`scope: change`, or `scope: tree`
+     with `tier: fast` whose `reads` match the candidate's changed paths) and the landing
+     checks directly without `tillr-gate`.
+   - Only if every direct check passes with exit 0, the drain builds the candidate's own
+     `tillr-gate` from `tools/tillr-gate` into a run-local scratch directory and runs the
+     full landing gate (`GateWithBinary` via `--tillr-gate` and `PATH`) under that candidate
+     build so the candidate build binds `gate.verdict`.
+   - Only when both the direct checks and the full candidate-build gate pass does the drain
+     accept the verdict, and it records a `drain.gate-recovery` disclosure event carrying both
+     SHA-256 binary digests (`installed_digest` and `candidate_digest`), `item_id`, `run_id`,
+     `lane_id`, `head_sha`, and `trigger`.
+3. **Non-gate acquittal and digest-advance clearing.** On a second stall (`GateStalled` after
+   the re-gate) or a repeatable error (`GateErrored` after a prior `gate-no-verdict` hold on
+   the same run) on any item (excluding the defect item itself) where `runDirectGateChecks`
+   proves the installed binary at fault (all fast declarations and landing checks pass
+   directly), `acquitInstalledGateFault` acquits the item behind one deduplicated defect item
+   fenced to `tools/tillr-gate/` and its pack mirror (`fileGateBinaryDefectItem`) instead of
+   holding it as `gate-stalled` or `gate-harness-error`. When the installed binary's SHA-256
+   digest (`InstalledGateDigest`) advances, `releaseAdvancedGateDigestFaults` clears active
+   `gate-stalled` and `gate-harness-error` holds whose recorded installed-binary digest
+   differs from the current installed binary.
 
 ### Affected Go tests before the merge
 
@@ -1065,18 +1101,11 @@ with `tillr-gate` on `PATH`. To run one heavy check: `just done --only <id>`.
 
 ## Known gaps
 
-- **The landing gate runs the installed `tillr-gate`, not the candidate's ([`D-GR45`](#D-GR45),
-  [`OQ-GR4`](#OQ-GR4)).** The judge script comes from the candidate's worktree, but the
-  runner is the binary on `PATH`. A fault in the installed binary can therefore refuse the
-  change that repairs it, and nothing in the tree recovers from that without an operator yet:
-  on 2026-11-25 the owner ruled Option B in [`OQ-GR4`](#OQ-GR4)
-  (`"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`,
-  [`D-GR45`](#D-GR45) — keep the binary installed from `refs/tillr/green` as outer judge when
-  healthy, allow a candidate-built recovery on a gate-fenced change only after direct
-  fast/landing checks and the full candidate-build gate exit `0` with a two-digest disclosure
-  event, and acquit non-gate items behind one deduplicated gate-fenced defect item cleared
-  when the installed digest advances), and a separate item builds that recovery and acquittal
-  path. `just done` does not have this gap.
+- **Installed-`tillr-gate` recovery and acquittal is closed ([`D-GR45`](#D-GR45),
+  [`OQ-GR4`](#OQ-GR4)).** The landing gate still runs the green-installed `tillr-gate` on
+  `PATH` when healthy, and now recovers via a verified candidate build on gate-fenced
+  changes or acquits non-gate items behind one deduplicated defect item when direct checks
+  prove the installed binary at fault ([Installed `tillr-gate` judge, recovery, and acquittal](#installed-tillr-gate-judge-recovery-and-acquittal)).
 - **Built-program test narrowing (`build_tests`, [`D-GR51`](#D-GR51)) is not built.**
   [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json) supports `read_tests`
   ([`D-GR44`](#D-GR44)) but not `build_tests`
@@ -1153,7 +1182,7 @@ and spelling verbatim.
 | <a id="OQ-FG1"></a>[OQ-FG1](#OQ-FG1) | When an upstream release breaks a patch series, the owner is told by the queue only: no owner-facing row and no hold addressed to the owner. | 2026-11-24 | [Upstream drift](#upstream-drift) | Yes |
 | <a id="D-GR53"></a>`D-GR53` | Carried in a filed request of 2026-11-25: `"sounds like a good idea. do it"`, in answer to moving the `tillr-drain` integration tests out of the pre-merge `go-affected` gate and proving them after the merge after 2026-11-25 `go-affected` timing measurements showed `tillr-drain/drain`'s `~2,000` subprocess-heavy integration tests (`~4,800 s` summed test-wall time) accounting for `83.0%`–`99.99%` of every >20-minute gate. Amends [`D-GR38`](#D-GR38) and [`D-GR39`](#D-GR39); leaves [`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50) and [`I3`](#I3) in force (`tools/tillr-gate` and `tools/gate` suites never land on deferred proof). Mechanism initially chosen by the designer in [`D-GR54`](#D-GR54) and confirmed as Option C by the owner in [`D-GR56`](#D-GR56) ([`OQ-DFG1`](../design/fast-gate-tillr-drain-options.md#OQ-DFG1)). | 2026-11-25 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
 | <a id="D-GR55"></a>`D-GR55` | `"yes let's do it and warn there may be unrelated red tests"`, in answer to lanes starting at `refs/tillr/green` (29 landings behind the tip, causing 17 squash conflicts in ten hours and several gate failures on stale bases): this repository sets `lane_base: tip` in [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json) while the program default for a repository with no setting stays `green`, and whenever a non-fixer lane's base is not the proved commit, the worker's brief warns that the base is unproved and may carry unrelated red tests to be reported as a `trunk` obstacle rather than fixed inside the item. Supersedes [`D-GR24`](#D-GR24) for this repository's `lane_base` setting. | 2026-11-25 | [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer), [Current values](#current-values) | Yes |
-| <a id="OQ-GR4"></a>[OQ-GR4](#OQ-GR4) | Carried in a filed request of 2026-11-25, answering [`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7): `"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`. Option B of [`OQ-GR4`](#OQ-GR4) adopts [`D-GR45`](#D-GR45) over Options A, C and D: install `tillr-gate` only from `refs/tillr/green` ([`D-GR5`](#D-GR5)) and keep it as the outer judge binding `gate.verdict` when healthy while the runner's suite also exercises a candidate-built binary; when the installed binary stalls, errors or has a wrapper discrepancy on a candidate whose fence permits the gate's source, let the candidate-built binary bind `gate.verdict` only after the drain runs every fast declaration and the landing checks directly with exit `0`, runs the full gate under the candidate build with exit `0`, and records a disclosure event carrying both binary digests; and on a second stall or repeatable error on any item where direct execution proves the installed binary at fault, acquit the item behind one deduplicated defect item fenced to the gate's source and clear the stall and harness-error holds when the installed binary's digest advances. A separate item builds Option B. | 2026-11-25 | [Known gaps](#known-gaps), [`D-GR45`](#D-GR45) | No |
+| <a id="OQ-GR4"></a>[OQ-GR4](#OQ-GR4) | Carried in a filed request of 2026-11-25, answering [`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7): `"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`. Option B of [`OQ-GR4`](#OQ-GR4) adopts [`D-GR45`](#D-GR45) over Options A, C and D: install `tillr-gate` only from `refs/tillr/green` ([`D-GR5`](#D-GR5)) and keep it as the outer judge binding `gate.verdict` when healthy while the runner's suite also exercises a candidate-built binary; when the installed binary stalls, errors or disagrees with its wrapper on a candidate whose fence permits the gate's source, let the candidate-built binary bind `gate.verdict` only after the drain runs every fast declaration and the landing checks directly with exit `0`, runs the full gate under the candidate build with exit `0`, and records a `drain.gate-recovery` disclosure event carrying both binary digests; and on a second stall or repeatable error on any item where direct execution proves the installed binary at fault, acquit the item behind one deduplicated defect item fenced to the gate's source and clear `gate-stalled` and `gate-harness-error` holds when the installed binary's digest advances. | 2026-11-25 | [Installed `tillr-gate` judge, recovery, and acquittal](#installed-tillr-gate-judge-recovery-and-acquittal), [`D-GR45`](#D-GR45) | Yes |
 | <a id="OQ-GR5"></a>[OQ-GR5](#OQ-GR5) | Carried in a filed request of 2026-11-25, answering [`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7): `"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`. Option A of [`OQ-GR5`](#OQ-GR5) keeps all five built cases in [`tools/tillr-drain/drain/lane_base.go`](../../tools/tillr-drain/drain/lane_base.go) ([`D-GR25`](#D-GR25)) standing as amendments to [`D-GR24`](#D-GR24) over Options B and C. After the operator noted that the question may be partly moot because [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json) now sets `lane_base` to `tip` ([`D-GR55`](#D-GR55)), the owner called it not high stakes (`"not high stakes"`) and left it to the coordinating agent to decide again if the answer changes (`"your choice if ti changes"`); how each of the five cases reads under `lane_base: tip` is stated in [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer). | 2026-11-25 | [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer), [`D-GR25`](#D-GR25) | Yes |
 | <a id="OQ-GR6"></a>[OQ-GR6](#OQ-GR6) | Carried in a filed request of 2026-11-25, answering [`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7): `"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`. Option A of [`OQ-GR6`](#OQ-GR6) (over Option B) restores [`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50) and [`I3`](#I3): [`tools/gate/checks/gate-adapters-test.json`](../../tools/gate/checks/gate-adapters-test.json) and [`tools/gate/checks/change-checks-test.json`](../../tools/gate/checks/change-checks-test.json) run before the merge as `scope: "change", tier: "heavy"` checks outside the `9,000` ms fast-tier sum alongside `go-affected` whenever `tools/tillr-gate/`, `tools/gate/` or the pack copy of `tillr-gate` changes (and skip for changes elsewhere), refusing a broken gate adapter or change-check program before it merges. | 2026-11-25 | [Invariants](#invariants), [Tiers](#tiers), [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [`D-GR50`](#D-GR50) | Yes |
 | <a id="OQ-GR7"></a>[OQ-GR7](#OQ-GR7) | Carried in a filed request of 2026-11-25, answering [`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7): `"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`. Option B of [`OQ-GR7`](#OQ-GR7) swaps processor priority from `repair 0, gate 5, proof 10, worker 15` to `repair 0, proof 5, gate 10, worker 15` (`repair > proof > gate > worker`) with no cap on concurrent gates, amending [`OQ-GTC3`](../design/gate-test-capacity.md#OQ-GTC3) in [gate test capacity](../design/gate-test-capacity.md) because nothing publishes (`refs/tillr/green` does not advance) without a proof; cgroup v2 `cpu.weight` values (`repair=400, proof=200, gate=100, worker=50`) and status-line ordering are set by the designer in [`D-GTC5`](../design/gate-test-capacity.md#D-GTC5) and [`D-GTC11`](../design/gate-test-capacity.md#D-GTC11). | 2026-11-25 | [Measured proof vs. gate contention (2026-11-25)](#measured-proof-vs-gate-contention-2026-11-25), [Go test execution](#go-test-execution) | Yes |
@@ -1170,7 +1199,7 @@ overturned the first two and has not overturned [`OQ-GR3`](#OQ-GR3).
 | :--- | :--- | :--- | :--- | :--- |
 | <a id="OQ-GR1"></a>[OQ-GR1](#OQ-GR1) | **Designer's answer (overturned 2026-11-18):** a per-repository `red_cap` defaulting to 20 landings or 60 minutes past `refs/tillr/green` (rejecting no cap). **Overturned by the owner on 2026-11-18** ([`OQ-GP7`](../design/tillr-graph-is-the-path.md#decision-ledger) in [the item graph design](../design/tillr-graph-is-the-path.md)): under a red check, work lands if it does not touch what that check reads, and there is no landing count or time cap. | 2026-11-15; overturned 2026-11-18 | [A red proof](#a-red-proof) | Yes (cap removed) |
 | <a id="OQ-GR2"></a>[OQ-GR2](#OQ-GR2) | **Designer's answer (overturned 2026-11-17, replaced 2026-11-21):** cut new lanes from `refs/tillr/green` by default (`lane_base: green`), rejecting always cutting from the tip. **Overturned by the owner on 2026-11-17** because cutting from `refs/tillr/green` handed lanes a tree older than their own item's definition and produced false conflicts (`lane_base: tip`). **Replaced on 2026-11-21 by [`D-GR24`](#D-GR24)** (`lane_base: green` again, with the five built exceptions in [`D-GR25`](#D-GR25) standing under [`OQ-GR5`](#OQ-GR5)), and **superseded for this repository on 2026-11-25 by [`D-GR55`](#D-GR55)** (`lane_base: tip` here, program default `green`). | 2026-11-15; overturned 2026-11-17; replaced 2026-11-21; superseded here 2026-11-25 | [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer) | Yes |
-| <a id="OQ-GR3"></a>[OQ-GR3](#OQ-GR3) | **Designer's answer (owner may overturn):** a change to the gate's own runner (`tools/tillr-gate/` and `tools/gate/`) never lands on deferred proof — it lands only after the runner's tests pass **before the merge, under either `landing_strategy`**, outside the ten-second budget, applying [the escalation ladder's fence](../design/escalation-ladder.md) and the 2026-11-05 ruling ([`I3`](#I3)) that **a wrong judge is the one failure a revert does not repair; every landing it judged stays judged**. Rejected: landing a runner change in ten seconds and re-running every landing's fast checks after a red suite. Amended on 2026-11-23 by [`D-GR50`](#D-GR50); confirmed on 2026-11-25 for pre-merge `gate-adapters-test` and `change-checks-test` by [`OQ-GR6`](#OQ-GR6) (Option A, built) and paired with [`OQ-GR4`](#OQ-GR4) (Option B, unbuilt) on which binary runs the gate. | 2026-11-15; amended 2026-11-23 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
+| <a id="OQ-GR3"></a>[OQ-GR3](#OQ-GR3) | **Designer's answer (owner may overturn):** a change to the gate's own runner (`tools/tillr-gate/` and `tools/gate/`) never lands on deferred proof — it lands only after the runner's tests pass **before the merge, under either `landing_strategy`**, outside the ten-second budget, applying [the escalation ladder's fence](../design/escalation-ladder.md) and the 2026-11-05 ruling ([`I3`](#I3)) that **a wrong judge is the one failure a revert does not repair; every landing it judged stays judged**. Rejected: landing a runner change in ten seconds and re-running every landing's fast checks after a red suite. Amended on 2026-11-23 by [`D-GR50`](#D-GR50); confirmed on 2026-11-25 for pre-merge `gate-adapters-test` and `change-checks-test` by [`OQ-GR6`](#OQ-GR6) (Option A, built) and paired with [`OQ-GR4`](#OQ-GR4) (Option B, built) on which binary runs the gate. | 2026-11-15; amended 2026-11-23 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
 
 ### The designer's decisions
 
@@ -1213,7 +1242,7 @@ the owner to overturn).
 | <a id="D-GR42"></a>`D-GR42` | *(Build-slice bookkeeping.)* Scoped the drain rolling/heavy/proof classifier slice: excluded run-level settlements and booleans from dummy `Classify` calls, added function-keyed scan tests on shared files, and added named protocols for zero outcome change. | 2026-11-22 | [Result classification](#result-classification) | Yes |
 | <a id="D-GR43"></a>`D-GR43` | Reconciles `go-affected` with [`D-GR2`](#D-GR2): the landing gate runs as a detached reattachable session surviving loop restarts without holding sibling gates, Go test slots gain a `gate` class, trimmed compilation warms once, shared scratch and scrubbed env keep Go's cache valid across worktrees, shards balance on recorded durations, and `drain` tests are slimmed and split ([`D-GR46`](#D-GR46), [`D-GR47`](#D-GR47)). Rejected: dropping `go-affected`, sharding or concurrency alone, parallel env-mutating fixtures, raising slow-gate alerts, or adding a kill/carry timeout. | 2026-11-22 | [The landing gate](#the-landing-gate), [Go test execution](#go-test-execution) | Yes |
 | <a id="D-GR44"></a>`D-GR44` | From the operator request `"A change to the gate's Python planner should not run five minutes of Go tests"`: `tools/gate/go-test-edges.json` entries may carry `read_tests` mapping a read path to the tests that read it, running only their union (with subset-scoped edge digest and cache on) when narrowed read rules alone selected the package, verified deterministically without elapsed-time assertions. Rejected: dropping reading packages, moving white-box tests in the same item, timeouts or `-count=1`, or replacing string `reads` with objects. | 2026-11-22; amended 2026-11-24 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
-| <a id="D-GR45"></a>`D-GR45` | Proposal ruled as Option B by the owner on 2026-11-25 in [`OQ-GR4`](#OQ-GR4) (over Options A, C and D; specific engineering details not in the owner's words remain the designer's and may be overturned by the owner): green-installed outer judge when healthy, direct checks + full candidate-build gate + two-digest disclosure on a gate-fenced recovery, and non-gate acquittal behind one deduplicated gate-fenced defect item cleared when the installed binary's digest advances. A separate item builds Option B. | 2026-11-22; ruled 2026-11-25 ([`OQ-GR4`](#OQ-GR4)) | [Known gaps](#known-gaps), [`OQ-GR4`](#OQ-GR4) | No |
+| <a id="D-GR45"></a>`D-GR45` | Proposal ruled as Option B by the owner on 2026-11-25 in [`OQ-GR4`](#OQ-GR4) and built (over Options A, C and D; specific engineering details not in the owner's words remain the designer's and may be overturned by the owner): green-installed outer judge when healthy, direct checks + full candidate-build gate + `drain.gate-recovery` two-digest disclosure on a gate-fenced recovery, and non-gate acquittal behind one deduplicated gate-fenced defect item cleared when the installed binary's digest advances. | 2026-11-22; ruled 2026-11-25 ([`OQ-GR4`](#OQ-GR4)) | [Installed `tillr-gate` judge, recovery, and acquittal](#installed-tillr-gate-judge-recovery-and-acquittal), [`OQ-GR4`](#OQ-GR4) | Yes |
 | <a id="D-GR46"></a>`D-GR46` | *(Build-slice bookkeeping.)* Slimmed root `tools/tillr-drain` tests by keeping fast CLI smoke tests in root and moving subprocess integration suites into `drain` (building the root binary once), updating edges, checks and Markdown links in the same commit. | 2026-11-22 | [Go test execution](#go-test-execution) | Yes |
 | <a id="D-GR47"></a>`D-GR47` | Split loop-free drain code into leaf subpackages (`workflow`, `remotesync`, `fixer`, `heavyrun`) forbidden to import `drain` or root `tools/tillr-drain` in code or tests while keeping `heavy` as the viewer's read-only status contract; replaced an uncached 40 s timing check with deterministic selection-isolation and zero-dropped-test parity tests. Rejected: merging the runner into `heavy`, importing `drain` in leaf tests, a 50-method loop interface, or an elapsed-time pass/fail threshold. | 2026-11-22 | [Go test execution](#go-test-execution) | Yes |
 | <a id="D-GR48"></a>`D-GR48` | Slot classes serve `repair`, `proof`, `gate`, `ordinary` (FIFO within class): `repair` takes any pool; `proof` takes shared then `proof`; `gate` takes shared then `gate`, never `proof` (capped at 8 slots per gate and 4 reserved `gate` slots); `ordinary` takes shared behind the rest. Physical capacity locks stay shared while wait locks/tickets live under `wait-rules/<SLOT_RULES_VERSION>`, verified deterministically without elapsed-time assertions. Rejected: splitting physical locks per version, unversioned wait locks, unpinned yield rules, or killing running processes. | 2026-11-22 | [Go test execution](#go-test-execution) | Yes (off by default) |

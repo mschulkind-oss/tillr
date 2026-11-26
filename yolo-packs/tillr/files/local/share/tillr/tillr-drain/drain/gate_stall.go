@@ -194,6 +194,11 @@ func (l *Loop) secondGateStallFault(ctx context.Context, c Candidate, first *gat
 	firstJSON, _ := json.Marshal(first)
 	secondJSON, _ := json.Marshal(second)
 	detail := fmt.Sprintf("second stall on head tree %s; first: %s; second: %s", first.HeadTree, firstJSON, secondJSON)
+	if acquitted, err := l.acquitInstalledGateFault(ctx, c, ReasonGateStalled, detail); err != nil {
+		return err
+	} else if acquitted {
+		return nil
+	}
 	if err := l.holdItemFault(ctx, c, ReasonGateStalled, detail); err != nil {
 		return err
 	}
@@ -202,10 +207,10 @@ func (l *Loop) secondGateStallFault(ctx context.Context, c Candidate, first *gat
 
 // Finish the fault after a crash between the second gate's recorded verdict
 // and verify's fault effect, without spending a third examination of that tree.
-func (l *Loop) recoverSecondGateStall(ctx context.Context, c Candidate) error {
+func (l *Loop) recoverSecondGateStall(ctx context.Context, c Candidate) (bool, error) {
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer s.Close()
 	var hold *gateStallHold
@@ -220,14 +225,14 @@ func (l *Loop) recoverSecondGateStall(ctx context.Context, c Candidate) error {
 		return nil
 	})
 	if err != nil || hold == nil || len(hold.SecondObservations) == 0 {
-		return err
+		return false, err
 	}
 	tree, err := l.revParse(ctx, c.Worktree, c.HeadSHA+"^{tree}")
 	if err != nil {
-		return err
+		return false, err
 	}
 	if tree != hold.HeadTree {
-		return nil
+		return false, nil
 	}
-	return l.secondGateStallFault(ctx, c, hold, hold.SecondObservations)
+	return true, l.secondGateStallFault(ctx, c, hold, hold.SecondObservations)
 }

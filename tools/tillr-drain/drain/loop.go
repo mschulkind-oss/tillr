@@ -3352,7 +3352,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	if recoveryErr != nil || !accepted {
 		return "", false, recoveryErr
 	}
-	if err := l.recoverSecondGateStall(ctx, candidate); err != nil {
+	if handled, err := l.recoverSecondGateStall(ctx, candidate); handled || err != nil {
 		return "", false, err
 	}
 	if item.IsCommentItem(candidate.ItemID) {
@@ -3761,9 +3761,25 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, err
 		}
 		if ExitCode(err) == record.ExitExternal {
-			return "", false, l.gateFault(ctx, candidate, err.Error())
+			recovered, ok, recErr := l.attemptGateRecovery(ctx, candidate, "gate-external-error")
+			if recErr != nil {
+				return "", false, recErr
+			}
+			if ok {
+				gate = recovered
+			} else {
+				acquitted, acqErr := l.acquitInstalledGateFault(ctx, candidate, StopGateHarnessError, err.Error())
+				if acqErr != nil {
+					return "", false, acqErr
+				}
+				if acquitted {
+					return "", false, nil
+				}
+				return "", false, l.gateFault(ctx, candidate, err.Error())
+			}
+		} else {
+			return "", false, err
 		}
-		return "", false, err
 	}
 	if timing != nil {
 		l.mu.Lock()
@@ -3774,6 +3790,15 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	// refusal or fault from its answer.
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "gate"); err != nil {
 		return "", false, err
+	}
+	if gate.Outcome == GateStalled || gate.Outcome == GateErrored {
+		recovered, ok, recErr := l.attemptGateRecovery(ctx, candidate, gate.Outcome)
+		if recErr != nil {
+			return "", false, recErr
+		}
+		if ok {
+			gate = recovered
+		}
 	}
 	switch gate.Outcome {
 	case GateStalled:
@@ -3870,17 +3895,35 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		// pass, so the item is held for the operator with the gate's error as the reason,
 		// and its lane is released like any held one.
 		if gate.ErrorDetail != "" {
+			if acquitted, acqErr := l.acquitInstalledGateFault(ctx, candidate, StopGateHarnessError, gate.ErrorDetail); acqErr != nil {
+				return "", false, acqErr
+			} else if acquitted {
+				return "", false, nil
+			}
 			if gate.StartError || isGateStartErrorDetail(gate.ErrorDetail) {
 				l.recordGateStartFailed(ctx, candidate, gate.ErrorDetail)
 			}
 			return "", false, l.gateFault(ctx, candidate, gate.ErrorDetail)
+		}
+		if priorNoVerdict, priorErr := l.hasPriorGateNoVerdict(ctx, candidate); priorErr == nil && priorNoVerdict {
+			if acquitted, acqErr := l.acquitInstalledGateFault(ctx, candidate, ReasonGateNoVerdict, "repeatable gate error with no verdict"); acqErr != nil {
+				return "", false, acqErr
+			} else if acquitted {
+				return "", false, nil
+			}
 		}
 		l.clearGateStartFailed(ctx)
 		return "", false, l.holdGateNoVerdict(ctx, candidate)
 	default:
 		// An outcome the drain does not know is a contract defect between the drain and its
 		// gate step; gating again would answer the same unknown word.
-		return "", false, l.gateFault(ctx, candidate, fmt.Sprintf("the gate answered %q", gate.Outcome))
+		detail := fmt.Sprintf("the gate answered %q", gate.Outcome)
+		if acquitted, acqErr := l.acquitInstalledGateFault(ctx, candidate, StopGateHarnessError, detail); acqErr != nil {
+			return "", false, acqErr
+		} else if acquitted {
+			return "", false, nil
+		}
+		return "", false, l.gateFault(ctx, candidate, detail)
 	}
 	// Both ordinary passes and disjoint inherited passes must prove the named repairs.
 	// A refusal or hold above never invokes the named checks.

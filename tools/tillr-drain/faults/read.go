@@ -28,6 +28,7 @@ type Hold struct {
 	WorkerHeadSHA    string `json:"worker_head_sha,omitempty"`
 	Reason           string `json:"reason"`
 	Detail           string `json:"detail"`
+	GateDigest       string `json:"gate_digest,omitempty"`
 	RetryAck         string `json:"retry_ack,omitempty"`
 	RepeatConflictID string `json:"repeat_conflict_id,omitempty"`
 	AtMS             int64  `json:"-"`

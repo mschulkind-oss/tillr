@@ -166,7 +166,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				var steps []Step
 				steps, err = compose(kind, ctx, false, stdout)
 				if err == nil {
-					status = execute(kind, steps, stdin, stdout, stderr)
+					status = execute(kind, steps, ctx.GateBin, stdin, stdout, stderr)
 				}
 			}
 		}
@@ -694,7 +694,7 @@ func invoke(step Step, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	return ExitPass, nil
 }
 
-func execute(kind string, steps []Step, stdin io.Reader, stdout, stderr io.Writer) int {
+func execute(kind string, steps []Step, gateBin string, stdin io.Reader, stdout, stderr io.Writer) int {
 	judgedFrom := len(steps) - 1
 	if kind == "verdict" {
 		judgedFrom = 0
@@ -725,7 +725,11 @@ func execute(kind string, steps []Step, stdin io.Reader, stdout, stderr io.Write
 			fmt.Fprintf(stderr, "tillr-loop gate: could not judge: tillr-gate classify: %v\n", err)
 			return ExitExternal
 		}
-		cmd := exec.Command("tillr-gate", "classify")
+		classifyBin := gateBin
+		if classifyBin == "" {
+			classifyBin = "tillr-gate"
+		}
+		cmd := exec.Command(classifyBin, "classify")
 		cmd.Stdin = bytes.NewReader(payload)
 		var outBuf bytes.Buffer
 		cmd.Stdout = &outBuf

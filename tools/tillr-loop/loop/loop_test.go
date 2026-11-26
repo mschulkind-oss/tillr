@@ -1342,3 +1342,41 @@ func TestResolveRootNonLandingStoreNeverRunsGitRevParse(t *testing.T) {
 		t.Fatalf("git was invoked for implicit non-landing store:\n%s", calls)
 	}
 }
+
+func TestGateUsesExplicitTillrGateForClassify(t *testing.T) {
+	f := newFixture(t, true)
+	// Replace the PATH tillr-gate with a broken binary that fails on classify.
+	brokenPathGate := filepath.Join(f.bin, "tillr-gate")
+	if err := os.WriteFile(brokenPathGate, []byte("#!/bin/sh\necho 'broken path tillr-gate invoked' >&2\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Put a working candidate tillr-gate outside PATH and pass it via --tillr-gate.
+	candDir := filepath.Join(f.tmp, "candidate-bin")
+	if err := os.MkdirAll(candDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	candGate := filepath.Join(candDir, "tillr-gate")
+	candLog := filepath.Join(f.tmp, "cand-gate.log")
+	candScript := `#!/bin/sh
+echo "cand:$*" >> ` + candLog + `
+if [ "$1" = classify ]; then
+  printf '[{"outcome":"pass","detail":"exit 0"}]\n'
+  exit 0
+fi
+exit 0
+`
+	if err := os.WriteFile(candGate, []byte(candScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := f.runAdapter("gate", "--tillr-gate", candGate, "--gate-program", "true")
+	if code != ExitPass {
+		t.Fatalf("gate with explicit --tillr-gate failed: code=%d stderr=%s", code, stderr)
+	}
+	raw, err := os.ReadFile(candLog)
+	if err != nil {
+		t.Fatalf("read candidate log: %v", err)
+	}
+	if !strings.Contains(string(raw), "cand:classify") {
+		t.Fatalf("expected explicit --tillr-gate binary to handle classify, log:\n%s", raw)
+	}
+}
