@@ -67,8 +67,48 @@ func TestComputeRefusalCauses(t *testing.T) {
 			},
 			want: []RefusalCause{
 				{Cause: "gate:elapsed-time"},
-				{Cause: "gate:go-affected"},
+				{Cause: "gate:go-affected:TestCheckDeclarationsCoverSelectionInputs"},
 			},
+		},
+		{
+			name: "gate failing cases key on check plus case",
+			payload: refusalPayload{
+				Step: RefusalGate,
+				Checks: []EndingCheck{
+					{
+						CheckID: "gate:python3",
+						Failing: []FailingCheck{
+							{
+								ID: "go-affected",
+								Cases: []FailingCase{
+									{Name: "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"},
+									{Name: "TestClassificationScanGoSites"},
+									{Name: "TestClassificationScanGoSites"},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []RefusalCause{
+				{Cause: "gate:go-affected:TestClassificationScanGoSites"},
+				{Cause: "gate:go-affected:TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"},
+			},
+		},
+		{
+			name: "gate failing check without named cases falls back to check id",
+			payload: refusalPayload{
+				Step: RefusalGate,
+				Checks: []EndingCheck{
+					{
+						CheckID: "gate:python3",
+						Failing: []FailingCheck{
+							{ID: "go-affected", Cases: []FailingCase{{Name: ""}}},
+						},
+					},
+				},
+			},
+			want: []RefusalCause{{Cause: "gate:go-affected"}},
 		},
 		{
 			name: "gate wrapper entry with triage failing checks keeps inner checks",

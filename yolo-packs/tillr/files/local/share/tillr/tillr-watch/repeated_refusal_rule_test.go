@@ -197,6 +197,22 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 		t.Fatalf("refusals with different causes opened notice: %+v", notices)
 	}
 
+	// 3b. Two go-affected refusals naming different failing test cases do not fire;
+	// a second distinct item naming the same failing test case does fire.
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-ga-1", "item-ga-a", drain.RefusalGate, "failing checks: go-affected (TestClassificationScanGoSites)", []string{"gate:go-affected:TestClassificationScanGoSites"}, now)
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-ga-2", "item-ga-b", drain.RefusalGate, "failing checks: go-affected (TestEveryStoreProgramFlushesTheSQLiteTraceOnExit)", []string{"gate:go-affected:TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"}, now)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("go-affected refusals with different failing test cases opened notice: %+v", notices)
+	}
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-ga-3", "item-ga-c", drain.RefusalGate, "failing checks: go-affected (TestClassificationScanGoSites)", []string{"gate:go-affected:TestClassificationScanGoSites"}, now)
+	gaNotices := pending()
+	if len(gaNotices) != 1 || gaNotices[0].Bundle.Subject != "gate:go-affected:TestClassificationScanGoSites" {
+		t.Fatalf("expected 1 alert for shared cause gate:go-affected:TestClassificationScanGoSites, got %+v", gaNotices)
+	}
+
 	// 4. A landed commit between refusals sharing a cause keeps the alert closed.
 	now = now.Add(2 * time.Minute)
 	appendLandingTo(s, "item-between-landed", land.ResultLanded, now)
@@ -337,8 +353,8 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 	})
 	appendRefusalTo(s, "run-same-case-b", "item-same-case-b", drain.RefusalGate, "failing checks: go-affected", causeNames(causesSameCaseB), now)
 	sameCaseNotices := pending()
-	if len(sameCaseNotices) != 1 || sameCaseNotices[0].Bundle.Subject != "gate:go-affected" {
-		t.Fatalf("expected 1 alert on gate:go-affected for shared failing test case, got %+v", sameCaseNotices)
+	if len(sameCaseNotices) != 1 || sameCaseNotices[0].Bundle.Subject != "gate:go-affected:TestCheckDeclarationsCoverSelectionInputs" {
+		t.Fatalf("expected 1 alert on gate:go-affected:TestCheckDeclarationsCoverSelectionInputs for shared failing test case, got %+v", sameCaseNotices)
 	}
 
 	// 9. Events lacking refusal_causes are skipped with no fallback (R-TW-DR2).

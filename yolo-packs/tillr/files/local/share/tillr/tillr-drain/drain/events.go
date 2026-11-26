@@ -288,16 +288,27 @@ type refusalPayload struct {
 }
 
 // GateRefusalCauses derives the countable cross-item cause keys for a gate refusal's
-// failing checks (D-TW-RRS1, D-TW-RRS2), omitting the gate adapter's own wrapper entry
-// (for example, `gate:python3`) when it has no recorded failing checks.
+// failing checks (D-TW-RRS1, D-TW-RRS2), keying failing checks with named cases on
+// check plus case and omitting the gate adapter's own wrapper entry (for example,
+// `gate:python3`) when it has no recorded failing checks.
 func GateRefusalCauses(checks []EndingCheck) []RefusalCause {
 	seen := map[string]struct{}{}
 	for _, check := range checks {
 		found := false
 		for _, failing := range check.Failing {
-			if failing.ID != "" {
+			if failing.ID == "" {
+				continue
+			}
+			found = true
+			caseFound := false
+			for _, c := range failing.Cases {
+				if c.Name != "" {
+					seen[failing.ID+":"+c.Name] = struct{}{}
+					caseFound = true
+				}
+			}
+			if !caseFound {
 				seen[failing.ID] = struct{}{}
-				found = true
 			}
 		}
 		if !found && check.CheckID != "" && !strings.HasPrefix(check.CheckID, "gate:") {
