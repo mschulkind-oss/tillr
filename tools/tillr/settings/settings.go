@@ -45,6 +45,11 @@ type Brief struct {
 	Template string
 }
 
+// Drain configures defaults for tillr-drain.
+type Drain struct {
+	Profile string
+}
+
 // Settings holds optional post-landing actions and review intake. Empty command
 // and push.what "none" disable actions; empty remote/ref mean the trunk's
 // configured upstream. A nil Comments disables automatic review intake.
@@ -52,6 +57,7 @@ type Settings struct {
 	Trunk    Trunk
 	Brief    Brief
 	Gate     Gate
+	Drain    Drain
 	Sync     Sync
 	Intake   Intake
 	Lanes    Lanes
@@ -191,8 +197,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 	var legacyPush *bool
 	whatSet := false
 	for _, table := range keys(tables) {
-		if table != "trunk" && table != "brief" && table != "gate" && table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" && table != "candidate_size" {
-			return Settings{}, refuse(table, "a known table (trunk, brief, gate, roll, push, comments, workflows, prose, intake, lanes, sync or candidate_size)")
+		if table != "trunk" && table != "brief" && table != "gate" && table != "drain" && table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" && table != "candidate_size" {
+			return Settings{}, refuse(table, "a known table (trunk, brief, gate, drain, roll, push, comments, workflows, prose, intake, lanes, sync or candidate_size)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -332,6 +338,12 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					return Settings{}, refuse(full, "a boolean")
 				}
 				s.Prose.Rewrite = flag
+			case "drain.profile":
+				str, ok := value.(string)
+				if !ok || !ValidProfileName(str) {
+					return Settings{}, refuse(full, "a valid profile name matching [a-z0-9][a-z0-9_-]*")
+				}
+				s.Drain.Profile = str
 			case "push.after_landing":
 				flag, ok := value.(bool)
 				if !ok {
@@ -355,6 +367,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				}
 				if table == "gate" {
 					expected = "a known gate key (checks_dir)"
+				}
+				if table == "drain" {
+					expected = "a known drain key (profile)"
 				}
 				if table == "candidate_size" {
 					expected = "a known candidate_size key (file_limit or added_line_limit)"
@@ -418,6 +433,28 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 		}
 	}
 	return s, nil
+}
+
+// ValidProfileName reports whether name matches [a-z0-9][a-z0-9_-]*.
+func ValidProfileName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		isLower := c >= 'a' && c <= 'z'
+		isDigit := c >= '0' && c <= '9'
+		if i == 0 {
+			if !isLower && !isDigit {
+				return false
+			}
+			continue
+		}
+		if !isLower && !isDigit && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // validRepoFilePath checks that path is a clean repository-relative file path outside .git.
@@ -522,6 +559,9 @@ func (s Settings) StartupLine() string {
 	}
 	if s.Brief.Template != "" {
 		line += fmt.Sprintf(" brief.template=%s", strconv.Quote(s.Brief.Template))
+	}
+	if s.Drain.Profile != "" {
+		line += fmt.Sprintf(" drain.profile=%s", strconv.Quote(s.Drain.Profile))
 	}
 	if s.WorkflowDefaults != nil {
 		defaults, _ := json.Marshal(s.WorkflowDefaults)

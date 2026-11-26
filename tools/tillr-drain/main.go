@@ -928,6 +928,7 @@ func loopFace(args []string) int {
 	fallbackPoll := fs.Duration("fallback-poll", drain.DefaultFallbackPollInterval, "fallback store reconciliation poll interval when no relayed notification arrives (D-SN6)")
 	noNotify := fs.Bool("no-notify", false, "disable local notification relay subscription and rely on fallback polling only (D-SN7)")
 	policyPath := fs.String("policy", "", "the backend policy (default <root>/config/tillr/backend-policy.json)")
+	profileName := fs.String("profile", "", "the named seat profile from the user's tillr configuration directory (backend-policy.<name>.json); --policy wins when both are given")
 	runBin := fs.String("run-bin", "tillr-run", "the tillr-run binary the run step executes")
 	itemBin := fs.String("item-bin", "tillr-item", "the tillr-item binary the item-state step executes: a landed candidate's item is `landed`, and a run that reports `blocked` leaves its item `blocked`")
 	briefTemplate := fs.String("brief-template", "", "the brief template staging renders each run's brief from (default: [brief] template in .tillr.toml, or the installed tillr-run template)")
@@ -1014,7 +1015,19 @@ func loopFace(args []string) int {
 		*laneRoot = filepath.Join(*root, ".tillr", "lanes")
 	}
 	if *policyPath == "" {
-		*policyPath = filepath.Join(*root, "config", "tillr", "backend-policy.json")
+		selectedProfile := *profileName
+		if selectedProfile == "" {
+			selectedProfile = repositorySettings.Drain.Profile
+		}
+		if selectedProfile != "" {
+			resolved, err := drain.ResolveProfilePath(selectedProfile)
+			if err != nil {
+				return failStartup(err)
+			}
+			*policyPath = resolved
+		} else {
+			*policyPath = filepath.Join(*root, "config", "tillr", "backend-policy.json")
+		}
 	}
 	if *briefTemplate == "" {
 		if repositorySettings.Brief.Template != "" {

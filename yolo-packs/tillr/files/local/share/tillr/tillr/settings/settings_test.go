@@ -115,6 +115,14 @@ func TestRefusalsNameFileKeyAndExpectation(t *testing.T) {
 		{"[trunk]\nbranch = '@'", "trunk.branch", "valid short branch name"},
 		{"[trunk]\nbranch = 'dev branch'", "trunk.branch", "valid short branch name"},
 		{"[trunk]\nbranch = 'dev~1'", "trunk.branch", "valid short branch name"},
+		{"[drain]\nother = 'x'", "drain.other", "profile"},
+		{"[drain]\nprofile = 1", "drain.profile", "valid profile name"},
+		{"[drain]\nprofile = ''", "drain.profile", "valid profile name"},
+		{"[drain]\nprofile = '-bad'", "drain.profile", "valid profile name"},
+		{"[drain]\nprofile = '_bad'", "drain.profile", "valid profile name"},
+		{"[drain]\nprofile = 'Bad'", "drain.profile", "valid profile name"},
+		{"[drain]\nprofile = 'bad.name'", "drain.profile", "valid profile name"},
+		{"[drain]\nprofile = '../bad'", "drain.profile", "valid profile name"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.key+tc.body, func(t *testing.T) {
@@ -239,5 +247,32 @@ func TestRollCommandAllowedWithNoPaths(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDrainProfileSettingsAndStartupLine(t *testing.T) {
+	dir := root(t)
+	if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte("[drain]\nprofile = 'copilot-gemini_1'\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := settings.Read(dir)
+	if err != nil {
+		t.Fatalf("settings.Read: %v", err)
+	}
+	if got.Drain.Profile != "copilot-gemini_1" {
+		t.Fatalf("Drain.Profile = %q, want %q", got.Drain.Profile, "copilot-gemini_1")
+	}
+	line := got.StartupLine()
+	if !strings.Contains(line, `drain.profile="copilot-gemini_1"`) {
+		t.Fatalf("StartupLine missing drain.profile: %s", line)
+	}
+
+	dirUnset := root(t)
+	unset, err := settings.Read(dirUnset)
+	if err != nil {
+		t.Fatalf("settings.Read(unset): %v", err)
+	}
+	if strings.Contains(unset.StartupLine(), "drain.profile") {
+		t.Fatalf("StartupLine unexpectedly included drain.profile when unset: %s", unset.StartupLine())
 	}
 }
