@@ -1,0 +1,2604 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tillr // Dispatch Deck — Tactical Shift</title>
+<style>
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --radius: 6px;
+  --radius-sm: 4px;
+}
+
+/* Dark Theme (Default) */
+:root, [data-theme="dark"] {
+  --bg-canvas: #090c10;
+  --bg-surface: #0f141c;
+  --bg-elevated: #151c26;
+  --bg-hover: #1b2431;
+  --bg-inset: #07090d;
+  --bg-shell: rgba(9, 12, 16, 0.96);
+  --bg-backdrop: rgba(4, 6, 9, 0.78);
+  --border: #232d3d;
+  --border-row: rgba(35, 45, 61, 0.65);
+  --border-strong: #324056;
+  --ink-1: #e6edf6;
+  --ink-2: #9fb0c7;
+  --ink-3: #6b7c93;
+  --accent: #38bdf8;
+  --accent-ink: #bae6fd;
+  --accent-dim: rgba(56, 189, 248, 0.14);
+  --accent-dim-hover: rgba(56, 189, 248, 0.24);
+
+  --c-alarm: #f43f5e;
+  --c-alarm-ink: #fda4af;
+  --c-alarm-bg: rgba(244, 63, 94, 0.13);
+  --c-alarm-bd: rgba(244, 63, 94, 0.38);
+
+  --c-you: #f59e0b;
+  --c-you-ink: #fcd34d;
+  --c-you-bg: rgba(245, 158, 11, 0.13);
+  --c-you-bd: rgba(245, 158, 11, 0.38);
+
+  --c-cause: #fb923c;
+  --c-cause-ink: #fdba74;
+  --c-cause-bg: rgba(251, 146, 60, 0.13);
+  --c-cause-bd: rgba(251, 146, 60, 0.38);
+
+  --c-work: #818cf8;
+  --c-work-ink: #a5b4fc;
+  --c-work-bg: rgba(129, 140, 248, 0.12);
+  --c-work-bd: rgba(129, 140, 248, 0.32);
+
+  --c-loop: #38bdf8;
+  --c-loop-ink: #7dd3fc;
+  --c-loop-bg: rgba(56, 189, 248, 0.12);
+  --c-loop-bd: rgba(56, 189, 248, 0.32);
+
+  --c-ready: #94a3b8;
+  --c-ready-ink: #cbd5e1;
+  --c-ready-bg: rgba(148, 163, 184, 0.11);
+  --c-ready-bd: rgba(148, 163, 184, 0.30);
+
+  --c-moving: #10b981;
+  --c-moving-ink: #6ee7b7;
+  --c-moving-bg: rgba(16, 185, 129, 0.13);
+  --c-moving-bd: rgba(16, 185, 129, 0.36);
+
+  --c-settling: #06b6d4;
+  --c-settling-ink: #67e8f9;
+  --c-settling-bg: rgba(6, 182, 212, 0.13);
+  --c-settling-bd: rgba(6, 182, 212, 0.36);
+
+  --c-uncovered: #475569;
+  --c-uncovered-ink: #94a3b8;
+  --grid-tick: rgba(107, 124, 147, 0.18);
+  --shadow-modal: 0 20px 50px rgba(0, 0, 0, 0.65);
+}
+
+/* Light Theme (High-Craft Daylight Operations) */
+[data-theme="light"] {
+  --bg-canvas: #f2f5f9;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f8fafc;
+  --bg-hover: #eef3f9;
+  --bg-inset: #e9eff6;
+  --bg-shell: rgba(255, 255, 255, 0.96);
+  --bg-backdrop: rgba(15, 23, 42, 0.45);
+  --border: #d4dde8;
+  --border-row: #e2e8f0;
+  --border-strong: #94a3b8;
+  --ink-1: #0f172a;
+  --ink-2: #334155;
+  --ink-3: #64748b;
+  --accent: #0284c7;
+  --accent-ink: #0369a1;
+  --accent-dim: rgba(2, 132, 199, 0.11);
+  --accent-dim-hover: rgba(2, 132, 199, 0.20);
+
+  --c-alarm: #e11d48;
+  --c-alarm-ink: #be123c;
+  --c-alarm-bg: #ffe4e6;
+  --c-alarm-bd: #fda4af;
+
+  --c-you: #d97706;
+  --c-you-ink: #92400e;
+  --c-you-bg: #fef3c7;
+  --c-you-bd: #fcd34d;
+
+  --c-cause: #ea580c;
+  --c-cause-ink: #9a3412;
+  --c-cause-bg: #ffedd5;
+  --c-cause-bd: #fdba74;
+
+  --c-work: #4f46e5;
+  --c-work-ink: #3730a3;
+  --c-work-bg: #e0e7ff;
+  --c-work-bd: #a5b4fc;
+
+  --c-loop: #0284c7;
+  --c-loop-ink: #075985;
+  --c-loop-bg: #e0f2fe;
+  --c-loop-bd: #7dd3fc;
+
+  --c-ready: #475569;
+  --c-ready-ink: #334155;
+  --c-ready-bg: #f1f5f9;
+  --c-ready-bd: #cbd5e1;
+
+  --c-moving: #059669;
+  --c-moving-ink: #065f46;
+  --c-moving-bg: #d1fae5;
+  --c-moving-bd: #6ee7b7;
+
+  --c-settling: #0891b2;
+  --c-settling-ink: #155e75;
+  --c-settling-bg: #cffafe;
+  --c-settling-bd: #67e8f9;
+
+  --c-uncovered: #94a3b8;
+  --c-uncovered-ink: #475569;
+  --grid-tick: rgba(100, 116, 139, 0.20);
+  --shadow-modal: 0 20px 50px rgba(15, 23, 42, 0.18);
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-canvas);
+  color: var(--ink-1);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, .mono { font-family: var(--font-mono); font-size: 12px; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+button, input, select, textarea {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink-1);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 9px;
+}
+button { cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+button:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+button.primary { background: var(--accent-dim); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.primary:hover { background: var(--accent-dim-hover); }
+button[aria-pressed="true"] { background: var(--accent-dim); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button:disabled { opacity: 0.42; cursor: not-allowed; }
+
+/* Sticky Command Shell */
+.shell-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg-shell);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.alarm-banner {
+  background: var(--c-alarm-bg);
+  border-bottom: 1px solid var(--c-alarm-bd);
+  padding: 6px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  font-size: 12px;
+}
+.alarm-banner__tag {
+  background: var(--c-alarm);
+  color: #fff;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  font-size: 13.5px;
+  color: var(--ink-1);
+}
+.brand__mark {
+  width: 22px; height: 22px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, var(--c-loop), var(--c-moving));
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #ffffff; font-weight: 800; font-size: 12.5px; font-family: var(--font-mono);
+}
+
+.nav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+.nav-tab {
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
+  font-weight: 500;
+  font-size: 12.5px;
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.nav-tab:hover { color: var(--ink-1); background: var(--bg-elevated); text-decoration: none; }
+.nav-tab.active {
+  color: var(--ink-1);
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+  font-weight: 600;
+}
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.theme-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+.theme-seg button {
+  border: none;
+  border-radius: 0;
+  padding: 3px 7px;
+  font-size: 11px;
+  background: transparent;
+  color: var(--ink-2);
+}
+.theme-seg button + button { border-left: 1px solid var(--border); }
+.theme-seg button[aria-pressed="true"] {
+  background: var(--accent-dim);
+  color: var(--accent-ink);
+}
+
+.freshness-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  border-radius: 99px;
+}
+.dot-live { width: 7px; height: 7px; border-radius: 50%; background: var(--c-moving); box-shadow: 0 0 6px var(--c-moving); }
+.dot-paused { width: 7px; height: 7px; border-radius: 50%; background: var(--c-you); }
+
+.loop-band {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 16px;
+  background: var(--bg-surface);
+  font-size: 12px;
+  color: var(--ink-2);
+  flex-wrap: wrap;
+}
+.loop-band__item { display: inline-flex; align-items: center; gap: 6px; }
+.loop-band__sep { color: var(--border-strong); }
+
+/* Badges & Three-Way State Encoding */
+.glyph-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.glyph-badge--alarm { color: var(--c-alarm-ink); background: var(--c-alarm-bg); border-color: var(--c-alarm-bd); }
+.glyph-badge--needs-you { color: var(--c-you-ink); background: var(--c-you-bg); border-color: var(--c-you-bd); }
+.glyph-badge--needs-a-cause { color: var(--c-cause-ink); background: var(--c-cause-bg); border-color: var(--c-cause-bd); }
+.glyph-badge--waits-on-work { color: var(--c-work-ink); background: var(--c-work-bg); border-color: var(--c-work-bd); }
+.glyph-badge--waits-on-the-loop { color: var(--c-loop-ink); background: var(--c-loop-bg); border-color: var(--c-loop-bd); }
+.glyph-badge--ready { color: var(--c-ready-ink); background: var(--c-ready-bg); border-color: var(--c-ready-bd); }
+.glyph-badge--moving { color: var(--c-moving-ink); background: var(--c-moving-bg); border-color: var(--c-moving-bd); }
+.glyph-badge--settling { color: var(--c-settling-ink); background: var(--c-settling-bg); border-color: var(--c-settling-bd); }
+.glyph-badge--idle { color: var(--ink-3); background: var(--bg-inset); border-color: var(--border); }
+.glyph-badge--landed { color: var(--c-moving-ink); background: var(--c-moving-bg); border-color: var(--c-moving-bd); }
+.glyph-badge--closed { color: var(--ink-3); background: var(--bg-inset); border-color: var(--border); }
+
+/* Epistemic Provenance Marks */
+.prov {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.prov--observed { color: var(--c-moving-ink); background: var(--c-moving-bg); border-color: var(--c-moving-bd); }
+.prov--derived_clock { color: var(--c-loop-ink); background: var(--c-loop-bg); border-color: var(--c-loop-bd); }
+.prov--lower_bound { color: var(--c-you-ink); background: var(--c-you-bg); border-color: var(--c-you-bd); }
+.prov--unobserved_seam { color: var(--c-cause-ink); background: var(--c-cause-bg); border-color: var(--c-cause-bd); }
+.prov--absent { color: var(--ink-3); background: var(--bg-inset); border-color: var(--border); font-style: italic; }
+.prov--unreadable { color: var(--c-alarm-ink); background: var(--c-alarm-bg); border-color: var(--c-alarm-bd); }
+.prov--lane_copy { color: var(--c-you-ink); background: var(--c-you-bg); border-color: var(--c-you-bd); }
+
+/* Main Layout */
+.workspace {
+  padding: 14px 16px 36px;
+  max-width: 1760px;
+  margin: 0 auto;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(390px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1120px) {
+  .home-grid { grid-template-columns: 1fr; }
+}
+
+.panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.panel + .panel { margin-top: 12px; }
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.panel__title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panel__body { padding: 10px 12px; }
+
+/* Summary Strip */
+.triage-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.stat-tile {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, transform 0.08s;
+  text-align: left;
+}
+.stat-tile:hover { border-color: var(--border-strong); background: var(--bg-elevated); transform: translateY(-1px); }
+.stat-tile--alert { border-left: 3px solid var(--c-alarm); }
+.stat-tile--you { border-left: 3px solid var(--c-you); }
+.stat-tile--cause { border-left: 3px solid var(--c-cause); }
+.stat-tile--work { border-left: 3px solid var(--c-work); }
+.stat-tile--loop { border-left: 3px solid var(--c-loop); }
+.stat-tile--ready { border-left: 3px solid var(--c-ready); }
+.stat-tile--moving { border-left: 3px solid var(--c-moving); }
+.stat-tile__top { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.stat-tile__val { font-family: var(--font-mono); font-size: 20px; font-weight: 700; line-height: 1.15; color: var(--ink-1); }
+.stat-tile__actor { font-size: 10.5px; color: var(--ink-3); font-family: var(--font-mono); }
+.stat-tile__lbl { font-size: 11px; color: var(--ink-2); margin-top: 3px; display: flex; align-items: center; gap: 4px; }
+
+/* Tables */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.data-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  white-space: nowrap;
+}
+.data-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border-row);
+  vertical-align: top;
+}
+.data-table tbody tr { transition: background 0.08s; }
+.data-table tbody tr:hover { background: var(--bg-hover); }
+.data-table tbody tr.focused {
+  background: var(--accent-dim);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.item-title { color: var(--ink-1); font-weight: 500; }
+.item-meta { color: var(--ink-3); font-size: 11.5px; margin-top: 2px; }
+.chip {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+}
+.kbd {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+  color: var(--ink-1);
+}
+
+/* Folded Scale Bucket */
+.bucket-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-top: 12px;
+  overflow: hidden;
+}
+.bucket-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.reason-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+}
+.reason-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 99px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.reason-pill:hover { border-color: var(--accent); color: var(--ink-1); }
+.reason-pill__bar {
+  width: 34px; height: 4px; border-radius: 2px; background: var(--bg-inset); overflow: hidden; display: inline-block;
+}
+.reason-pill__fill { height: 100%; background: var(--c-work); display: block; }
+
+/* Lane Cards */
+.lane-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  margin: 10px 0 6px;
+  display: flex;
+  justify-content: space-between;
+}
+.lane-card {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-bottom: 6px;
+}
+.lane-card--running { border-left: 3px solid var(--c-moving); }
+.lane-card--settling { border-left: 3px solid var(--c-settling); }
+.lane-card--held { border-left: 3px solid var(--c-you); }
+.lane-card--idle { border-left: 3px solid var(--border-strong); opacity: 0.85; }
+.lane-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.lane-card__sub {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.quiet-warn {
+  color: var(--c-you-ink);
+  background: var(--c-you-bg);
+  border: 1px solid var(--c-you-bd);
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Stability Banner */
+.stability-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  background: var(--c-loop-bg);
+  border: 1px solid var(--c-loop-bd);
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+/* Waterfall */
+.waterfall-box {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.waterfall-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.waterfall-axis {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+.waterfall-axis__ticks {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 10px;
+}
+.span-row {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  border-bottom: 1px solid var(--border-row);
+  min-height: 30px;
+  align-items: center;
+  cursor: pointer;
+}
+.span-row:hover { background: var(--bg-hover); }
+.span-row--selected { background: var(--accent-dim); }
+.span-row--dim { opacity: 0.45; }
+.span-label {
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-right: 1px solid var(--border);
+}
+.span-track {
+  position: relative;
+  height: 24px;
+  margin: 0 10px;
+  background-image: linear-gradient(to right, var(--grid-tick) 1px, transparent 1px);
+  background-size: 25% 100%;
+}
+.span-bar {
+  position: absolute;
+  top: 5px;
+  height: 14px;
+  border-radius: 3px;
+  min-width: 3px;
+}
+.span-bar--observed { background: var(--c-moving); }
+.span-bar--derived_clock {
+  background: repeating-linear-gradient(45deg, var(--c-loop), var(--c-loop) 5px, #0284c7 5px, #0284c7 10px);
+}
+.span-bar--unobserved_seam {
+  background: repeating-linear-gradient(45deg, var(--c-cause), var(--c-cause) 4px, #9a3412 4px, #9a3412 8px);
+}
+.span-bar--slot_wait { background: var(--c-you); }
+.span-bar--unreadable { background: var(--c-alarm); }
+
+/* Wall-time split bar */
+.wall-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  margin: 8px 0;
+}
+.kv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 8px;
+}
+.kv-card {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+}
+.kv-card__k { font-size: 11px; color: var(--ink-3); }
+.kv-card__v { font-family: var(--font-mono); font-size: 14px; font-weight: 700; margin-top: 2px; color: var(--ink-1); }
+
+/* Run switcher strip */
+.run-switcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.run-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.run-pill:hover { border-color: var(--accent); color: var(--ink-1); text-decoration: none; }
+.run-pill.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+
+/* Modals */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-backdrop);
+  z-index: 80;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  width: min(690px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-modal);
+}
+.modal__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 14px; background: var(--bg-elevated); border-bottom: 1px solid var(--border);
+}
+.modal__body { padding: 14px; }
+
+.subtabs {
+  display: flex; gap: 6px; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 12px; flex-wrap: wrap;
+}
+.filter-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px;
+}
+.key-hint-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+.pagination {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: var(--bg-elevated); border-top: 1px solid var(--border);
+}
+.empty-note { color: var(--ink-3); font-style: italic; padding: 10px 0; }
+.tree-diff { color: var(--c-you-ink); background: var(--c-you-bg); border: 1px solid var(--c-you-bd); padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+.tree-same { color: var(--c-moving-ink); background: var(--c-moving-bg); border: 1px solid var(--c-moving-bd); padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+
+/* Graph SVG theme bindings */
+.svg-canvas { width: 100%; max-width: 920px; height: auto; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px; }
+.svg-node-bg { fill: var(--bg-elevated); }
+.svg-node-dim { fill: var(--bg-surface); }
+.svg-txt-1 { fill: var(--ink-1); }
+.svg-txt-2 { fill: var(--ink-2); }
+.svg-edge { stroke: var(--ink-3); }
+</style>
+</head>
+<body>
+<div class="shell-sticky" id="app-shell"></div>
+<main class="workspace" id="main-view"></main>
+
+<!-- New Idea Modal -->
+<div class="modal-backdrop" id="idea-modal" role="dialog" aria-modal="true" aria-label="New idea">
+  <div class="modal">
+    <div class="modal__head">
+      <strong>New idea (design-seat intake)</strong>
+      <button type="button" onclick="closeModal('idea-modal')">Esc</button>
+    </div>
+    <div class="modal__body">
+      <p style="margin-top:0;color:var(--ink-2)">Saves your exact words verbatim to <span class="mono">&lt;store&gt;/intake/&lt;id&gt;.txt</span> and queues a <span class="mono">design</span>-seat item. Draft persists locally until submitted.</p>
+      <label style="display:block;margin-bottom:6px;font-weight:600">Words</label>
+      <textarea id="idea-words" rows="5" style="width:100%;resize:vertical" placeholder="Describe the change or problem in your own words..."></textarea>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap">
+        <label>Place:
+          <select id="idea-place">
+            <option value="first">Top of queue (first)</option>
+            <option value="last">Bottom of queue (last)</option>
+            <option value="after">After item-auth-204</option>
+          </select>
+        </label>
+        <button type="button" class="primary" onclick="submitIdea()">Save idea (Ctrl+Enter)</button>
+        <span id="idea-status" style="font-size:12px;color:var(--ink-2)"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Provenance & Keys Glossary Modal -->
+<div class="modal-backdrop" id="glossary-modal" role="dialog" aria-modal="true" aria-label="Provenance and keyboard glossary">
+  <div class="modal">
+    <div class="modal__head">
+      <strong>Provenance Contract &amp; Keyboard Controls</strong>
+      <button type="button" onclick="closeModal('glossary-modal')">Esc</button>
+    </div>
+    <div class="modal__body">
+      <h4 style="margin:0 0 8px">Epistemic Marks (Zero, Missing, Derived Never Share a Mark)</h4>
+      <table class="data-table" style="margin-bottom:14px">
+        <tbody>
+          <tr><td><span class="prov prov--observed">● observed</span></td><td>Directly recorded timestamp, exit code, hash, or verdict in store/trace.</td></tr>
+          <tr><td><span class="prov prov--derived_clock">~ derived</span></td><td>Computed at read time from viewer clock, file mtime, or hold rule. Never presented as recorded.</td></tr>
+          <tr><td><span class="prov prov--lower_bound">≥ lower bound</span></td><td>Sum where at least one run reported no usage count.</td></tr>
+          <tr><td><span class="prov prov--unobserved_seam">⚠ unobserved seam</span></td><td>Causal step or boundary check with no per-run record, or unverified worker claim.</td></tr>
+          <tr><td><span class="prov prov--absent">∅ absent / not recorded</span></td><td>No clock, file, or field was written. Never displayed as <code>0</code> or <code>—</code>.</td></tr>
+          <tr><td><span class="prov prov--unreadable">✕ corrupt / unreadable</span></td><td>Stored JSON or artifact failed parse or hash verification.</td></tr>
+          <tr><td><span class="prov prov--lane_copy">⧉ lane copy</span></td><td>Read from mutable lane worktree rather than immutable loop archive.</td></tr>
+        </tbody>
+      </table>
+      <h4 style="margin:0 0 8px">Keyboard Shortcuts</h4>
+      <div class="kv-grid">
+        <div class="kv-card"><div class="kv-card__k">Queue / Passes</div><div class="kv-card__v" style="font-size:12px">j / k focus · Enter open · / search</div></div>
+        <div class="kv-card"><div class="kv-card__k">Step &amp; Home</div><div class="kv-card__v" style="font-size:12px">[ / ] step · u Home</div></div>
+        <div class="kv-card"><div class="kv-card__k">Reorder (--write + place)</div><div class="kv-card__v" style="font-size:12px">J / K move focused row</div></div>
+        <div class="kv-card"><div class="kv-card__k">Waterfall &amp; Modals</div><div class="kv-card__v" style="font-size:12px">+ / - zoom · f fit · ? keys · n idea</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================================
+// SAFE STORAGE & THEME MANAGEMENT (works cleanly offline & without localStorage)
+// ============================================================================
+function safeGetStorage(key, fallback) {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      const v = window.localStorage.getItem(key);
+      return v !== null ? v : fallback;
+    }
+  } catch (_) {}
+  return fallback;
+}
+function safeSetStorage(key, val) {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      window.localStorage.setItem(key, val);
+    }
+  } catch (_) {}
+}
+
+function resolveTheme(pref) {
+  if (pref === "light" || pref === "dark") return pref;
+  try {
+    if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) return "light";
+  } catch (_) {}
+  return "dark";
+}
+function applyTheme(pref) {
+  const effective = resolveTheme(pref);
+  document.documentElement.setAttribute("data-theme", effective);
+}
+try {
+  if (window.matchMedia) {
+    window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+      if (state.themePref === "system") applyTheme("system");
+    });
+  }
+} catch (_) {}
+
+// ============================================================================
+// DETERMINISTIC REALISTIC DOMAIN DATASET (OFFLINE, ZERO NETWORK REQUESTS)
+// ============================================================================
+const NOW_MS = Date.parse("2026-11-24T18:42:12Z");
+
+const CLASS_META = {
+  "alarm":             { glyph: "▲", label: "alarm",             cls: "glyph-badge--alarm",             actor: "operator" },
+  "needs you":         { glyph: "◆", label: "needs you",         cls: "glyph-badge--needs-you",         actor: "owner" },
+  "needs a cause":     { glyph: "▲", label: "needs a cause",     cls: "glyph-badge--needs-a-cause",     actor: "operator" },
+  "waits on work":     { glyph: "◌", label: "waits on work",     cls: "glyph-badge--waits-on-work",     actor: "drain" },
+  "waits on the loop": { glyph: "◌", label: "waits on the loop", cls: "glyph-badge--waits-on-the-loop", actor: "drain" },
+  "ready":             { glyph: "◌", label: "ready",             cls: "glyph-badge--ready",             actor: "drain" },
+  "moving":            { glyph: "●", label: "moving",            cls: "glyph-badge--moving",            actor: "drain" }
+};
+
+const ALARMS = [
+  {
+    kind: "quota-exhausted",
+    backend: "anthropic-sonnet",
+    since: "18:34:05Z",
+    cause: "HTTP 429 rate-limit window on tier-4 workspace; 4 queued items require anthropic-sonnet",
+    clears: "automatic on next probe after 18:45:00Z or manual backend override",
+    command: "tillr-drain probe --backend anthropic-sonnet",
+    items: ["item-gate-019", "item-trace-088", "item-view-112", "item-sync-147"],
+    lanes: ["lane-5"]
+  }
+];
+
+const WATCH_ALERTS = [
+  {
+    id: "alert-watch-091",
+    rule: "gate-flake-streak",
+    severity: "warn",
+    state: "open",
+    settlement: "unacknowledged",
+    subject: "go-test:store/crash_test",
+    detail: "3 consecutive failures on lane-2 / lane-6 within 22m; same seed 0x4f9a",
+    item_id: "item-store-044",
+    run_id: "run-88415",
+    since: "18:19:40Z"
+  },
+  {
+    id: "alert-watch-089",
+    rule: "quiet-worker-5m",
+    severity: "warn",
+    state: "open",
+    settlement: "monitoring",
+    subject: "lane-3 / run-88412",
+    detail: "Worker log has not grown for 7m 14s while test-slot wait is active",
+    item_id: "item-land-031",
+    run_id: "run-88412",
+    since: "18:34:58Z"
+  }
+];
+
+const LANES = [
+  { lane_id: "lane-1", group: "ordinary", state: "running",  item_id: "item-auth-204",  run_id: "run-88419", seat: "work",   seat_src: "policy", backend: "anthropic-opus",   attempt: 2, since_ms: NOW_MS - 14*60*1000, log_grew_ms: NOW_MS - 12*1000, action: "tool: go test ./tools/tillr-view/...", action_clock: "observed", tokens: 287410 },
+  { lane_id: "lane-2", group: "ordinary", state: "running",  item_id: "item-store-044", run_id: "run-88415", seat: "verify", seat_src: "node",   backend: "openai-gpt5",      attempt: 1, since_ms: NOW_MS - 8*60*1000,  log_grew_ms: NOW_MS - 4*1000,  action: "llm_turn #6 (streaming)",            action_clock: "derived_clock", tokens: 61900 },
+  { lane_id: "lane-3", group: "ordinary", state: "running",  item_id: "item-land-031",  run_id: "run-88412", seat: "work",   seat_src: "policy", backend: "anthropic-opus",   attempt: 1, since_ms: NOW_MS - 23*60*1000, log_grew_ms: NOW_MS - 434*1000, action: "waiting on test-slot-02",            action_clock: "observed", tokens: 128400 },
+  { lane_id: "lane-4", group: "ordinary", state: "settling", item_id: "item-cli-077",   run_id: "run-88408", seat: "work",   seat_src: "policy", backend: "openai-gpt5",      attempt: 3, since_ms: NOW_MS - 42*1000,    log_grew_ms: NOW_MS - 42*1000, last_step: "gate.verdict (pass)", last_step_ms: NOW_MS - 42*1000, tokens: 63120 },
+  { lane_id: "lane-5", group: "ordinary", state: "idle",     held_item_id: "item-gate-019", held_reason: "kept: candidate tree pinned for alarm retry", item_id: "item-gate-019", run_id: "run-88399", outcome: "alarm-hold", seat: "work", backend: "anthropic-sonnet", attempt: 2, since_ms: NOW_MS - 8*60*1000, tokens: 19400 },
+  { lane_id: "lane-6", group: "ordinary", state: "running",  item_id: "item-trace-092", run_id: "run-88421", seat: "work",   seat_src: "policy", backend: "anthropic-opus",   attempt: 1, since_ms: NOW_MS - 5*60*1000,  log_grew_ms: NOW_MS - 9*1000,  action: "edit tools/tillr-trace/spans.go",    action_clock: "observed", tokens: 32510 },
+  { lane_id: "lane-7", group: "ordinary", state: "idle",     held_item_id: null,            held_reason: null, item_id: "item-doc-014", run_id: "run-88380", outcome: "landed", seat: "work", backend: "openai-gpt5", attempt: 1, since_ms: NOW_MS - 19*60*1000, tokens: 27800 },
+  { lane_id: "lane-8", group: "ordinary", state: "idle",     held_item_id: null,            held_reason: null, item_id: "item-perf-009", run_id: "run-88371", outcome: "landed", seat: "work", backend: "anthropic-opus", attempt: 1, since_ms: NOW_MS - 31*60*1000, tokens: 51090 },
+  { lane_id: "express-1", group: "express", state: "running", item_id: "item-idea-9f2a", run_id: "run-88422", seat: "design", seat_src: "idea",   backend: "anthropic-opus", attempt: 1, since_ms: NOW_MS - 3*60*1000,  log_grew_ms: NOW_MS - 6*1000,  action: "drafting item blocks from intake", action_clock: "derived_clock", tokens: 18440 },
+  { lane_id: "express-2", group: "express", state: "settling",item_id: "item-hot-011",  run_id: "run-88417", seat: "work",   seat_src: "express",backend: "openai-gpt5",    attempt: 1, since_ms: NOW_MS - 18*1000,    log_grew_ms: NOW_MS - 18*1000, last_step: "land.squash (replaying)", last_step_ms: NOW_MS - 18*1000, tokens: 22100 },
+  { lane_id: "express-3", group: "express", state: "idle",    held_item_id: null,           held_reason: null, item_id: null, run_id: null, outcome: null, seat: null, backend: null, attempt: null, since_ms: NOW_MS - 44*60*1000, tokens: null },
+  { lane_id: "desk-arch", group: "desk",    state: "running", item_id: "doc:observatory-redesign.md", run_id: "run-88420", seat: "design", seat_src: "vantage", backend: "anthropic-opus", attempt: 1, since_ms: NOW_MS - 6*60*1000, log_grew_ms: NOW_MS - 11*1000, action: "answering batch OQ-418..OQ-420", action_clock: "observed", tokens: 91800 },
+  { lane_id: "desk-api",  group: "desk",    state: "idle",    held_item_id: "item-api-103", held_reason: "kept: awaiting owner reply on OQ-418", item_id: "item-api-103", run_id: "run-88395", outcome: "question-hold", seat: "design", backend: "anthropic-opus", attempt: 1, since_ms: NOW_MS - 27*60*1000, tokens: 38900 },
+  { lane_id: "desk-ops",  group: "desk",    state: "idle",    held_item_id: null,           held_reason: null, item_id: "doc:tillr-restart.md", run_id: "run-88350", outcome: "landed", seat: "design", backend: "anthropic-opus", attempt: 1, since_ms: NOW_MS - 58*60*1000, tokens: 24100 }
+];
+
+// Build 318 realistic items (312 unlanded + 6 terminal)
+const ITEMS = [];
+const SEED_ESCALATED = [
+  // 4 alarm
+  { id: "item-gate-019", place: 3,  cls: "alarm", title: "Retry sharded gate timeouts under backoff", where: "backend anthropic-sonnet", why: "quota-exhausted (429 window)", mover: "operator: tillr-drain probe --backend anthropic-sonnet", since: "8m", waited: "8m 07s", doc: "docs/design/gate-shards.md", oq: 0, seat: "work", raw_state: "in-queue", run_id: "run-88399" },
+  { id: "item-trace-088", place: 14, cls: "alarm", title: "Emit slot.wait spans when TILLR_TRACE_DIR is set", where: "backend anthropic-sonnet", why: "quota-exhausted (429 window)", mover: "operator: tillr-drain probe --backend anthropic-sonnet", since: "8m", waited: "8m 07s", doc: "docs/reference/observatory-design.md", oq: 0, seat: "work", raw_state: "in-queue", run_id: null },
+  { id: "item-view-112", place: 29, cls: "alarm", title: "Preserve draft words across reload in NewIdea", where: "backend anthropic-sonnet", why: "quota-exhausted (429 window)", mover: "operator: tillr-drain probe --backend anthropic-sonnet", since: "8m", waited: "8m 07s", doc: "docs/reference/observatory-actions.md", oq: 0, seat: "work", raw_state: "in-queue", run_id: null },
+  { id: "item-sync-147", place: 41, cls: "alarm", title: "Key missing-order items before first-import append", where: "backend anthropic-sonnet", why: "quota-exhausted (429 window)", mover: "operator: tillr-drain probe --backend anthropic-sonnet", since: "8m", waited: "8m 07s", doc: "docs/reference/observatory-actions.md", oq: 0, seat: "work", raw_state: "in-queue", run_id: null },
+
+  // 11 needs you
+  { id: "item-api-103", place: 1, cls: "needs you", title: "Choose cursor behavior when store rewinds schema", where: "Vantage OQ-418", why: "open design question OQ-418 in docs/design/cursor-rewind.md", mover: "owner: answer OQ-418 in Vantage and land", since: "27m", waited: "27m 12s", doc: "docs/design/cursor-rewind.md", oq: 2, seat: "design", raw_state: "blocked", run_id: "run-88395" },
+  { id: "item-push-008", place: 2, cls: "needs you", title: "Resolve non-fast-forward remote-sync-conflict on main", where: "push guard", why: "remote-sync-conflict escalated after 2 repair attempts", mover: "owner: inspect refs/tillr/green vs origin/main", since: "41m", waited: "41m 05s", doc: "docs/reference/landing-principles.md", oq: 0, seat: "work", raw_state: "blocked", run_id: null },
+  { id: "item-sec-021", place: 6, cls: "needs you", title: "Approve loopback-only Origin exception for --write", where: "Vantage OQ-421", why: "open design question OQ-421 in docs/reference/observatory-actions.md", mover: "owner: answer OQ-421 in Vantage", since: "1h 12m", waited: "1h 12m", doc: "docs/reference/observatory-actions.md", oq: 1, seat: "design", raw_state: "blocked", run_id: null },
+  { id: "item-idea-77c1", place: 9, cls: "needs you", title: "Idea: split heavy gate checks from express lane", where: "Vantage OQ-425", why: "design turn filed 3 open questions", mover: "owner: answer OQ-425..OQ-427", since: "52m", waited: "52m", doc: "docs/design/express-gate.md", oq: 3, seat: "design", raw_state: "blocked", run_id: null },
+  { id: "item-cfg-055", place: 12, cls: "needs you", title: "Configure [intake] dir and paths in .tillr.toml", where: "repo config", why: "intake-not-configured prerequisite missing", mover: "owner: add [intake] table to .tillr.toml", since: "2h 04m", waited: "2h 04m", doc: "docs/reference/observatory-actions.md", oq: 0, seat: "work", raw_state: "blocked", run_id: null },
+  { id: "item-mem-064", place: 19, cls: "needs you", title: "Confirm retention bound for preserved uncommitted refs", where: "Vantage OQ-409", why: "open design question OQ-409", mover: "owner: answer OQ-409 in Vantage", since: "3h 18m", waited: "3h 18m", doc: "docs/design/preserved-refs.md", oq: 1, seat: "design", raw_state: "blocked", run_id: null },
+  { id: "item-wal-072", place: 25, cls: "needs you", title: "Authorize WAL checkpoint policy for large stores", where: "Vantage OQ-412", why: "open design question OQ-412", mover: "owner: answer OQ-412", since: "4h 05m", waited: "4h 05m", doc: "docs/reference/observatory-design.md", oq: 1, seat: "design", raw_state: "blocked", run_id: null },
+  { id: "item-trk-091", place: 33, cls: "needs you", title: "Settle green-mode proof timeout threshold", where: "Vantage OQ-430", why: "open design question OQ-430", mover: "owner: answer OQ-430", since: "4h 40m", waited: "4h 40m", doc: "docs/design/landing-principles.md", oq: 1, seat: "design", raw_state: "blocked", run_id: null },
+  { id: "item-ws-118", place: 48, cls: "needs you", title: "Decide WebSocket summary window cadence", where: "Vantage OQ-433", why: "open design question OQ-433", mover: "owner: answer OQ-433", since: "5h 11m", waited: "5h 11m", doc: "docs/reference/observatory-redesign.md", oq: 1, seat: "design", raw_state: "blocked", run_id: null },
+  { id: "item-gc-134", place: 67, cls: "needs you", title: "Approve orphan worktree prune grace window", where: "Vantage OQ-435", why: "open design question OQ-435", mover: "owner: answer OQ-435", since: "6h 02m", waited: "6h 02m", doc: "docs/design/worktree-gc.md", oq: 1, seat: "design", raw_state: "blocked", run_id: null },
+  { id: "item-ui-159", place: 88, cls: "needs you", title: "Select default range for /performance view", where: "Vantage OQ-439", why: "open design question OQ-439", mover: "owner: answer OQ-439", since: "7h 20m", waited: "7h 20m", doc: "docs/reference/observatory-redesign.md", oq: 1, seat: "design", raw_state: "blocked", run_id: null },
+
+  // 7 needs a cause
+  { id: "item-land-027", place: 4, cls: "needs a cause", title: "Three-way squash replay failed with unmapped conflict", where: "land.squash", why: "unmapped hold reason: conflict-tree-mismatch", mover: "operator: inspect run-88374 & holdrules.Rules", since: "16m", waited: "16m 40s", doc: "docs/design/landing-principles.md", oq: 0, seat: "work", raw_state: "in-queue", run_id: "run-88374" },
+  { id: "item-gate-041", place: 11, cls: "needs a cause", title: "Vitest shard 3 exited 137 without stderr tail", where: "gate.verdict", why: "gate-harness-error: OOM or SIGKILL on shard 3", mover: "operator: inspect run-88361 artifact gate.verdict", since: "34m", waited: "34m 19s", doc: "docs/design/gate-shards.md", oq: 0, seat: "work", raw_state: "in-queue", run_id: "run-88361" },
+  { id: "item-vrf-053", place: 18, cls: "needs a cause", title: "Verify refusal loop exceeded 3 attempts on fence", where: "verify-not-done", why: "verify refused 3x: unasked-change in tools/tillr/store", mover: "operator: inspect item-vrf-053 verify_refusals", since: "49m", waited: "49m", doc: "docs/reference/tillr-item-states.md", oq: 0, seat: "verify", raw_state: "in-queue", run_id: null },
+  { id: "item-trc-084", place: 31, cls: "needs a cause", title: "Corrupt steps.jsonl line 42 in run-88329", where: "tillr-trace", why: "unreadable: invalid JSON byte 0x00 at offset 1840", mover: "operator: inspect .tillr/loop/run-88329/steps.jsonl", since: "1h 22m", waited: "1h 22m", doc: "docs/reference/observatory-design.md", oq: 0, seat: "work", raw_state: "in-queue", run_id: "run-88329" },
+  { id: "item-jdg-109", place: 54, cls: "needs a cause", title: "Judge output unreadable against verdict schema", where: "judge", why: "judge-unreadable: missing criterion_id C-3", mover: "operator: inspect run-88310 agent-result", since: "2h 15m", waited: "2h 15m", doc: "docs/reference/tillr-item-states.md", oq: 0, seat: "judge", raw_state: "in-queue", run_id: "run-88310" },
+  { id: "item-bnd-122", place: 73, cls: "needs a cause", title: "Host boundary violation in subprocess shim", where: "boundary", why: "host-boundary-violation: attempted write outside fence", mover: "operator: inspect run-88298 boundary log", since: "3h 04m", waited: "3h 04m", doc: "docs/reference/observatory-design.md", oq: 0, seat: "work", raw_state: "in-queue", run_id: null },
+  { id: "item-blk-168", place: 95, cls: "needs a cause", title: "Prerequisite item-old-004 closed without landing", where: "dependency", why: "closed without landing: item-old-004 (still holds item)", mover: "operator: clear dependency or reopen item-old-004", since: "4h 50m", waited: "4h 50m", doc: "docs/reference/tillr-item-states.md", oq: 0, seat: "work", raw_state: "blocked", run_id: null }
+];
+
+SEED_ESCALATED.forEach(s => {
+  ITEMS.push({
+    ...s,
+    fence: s.doc ? [s.doc.replace("docs/", "tools/"), s.doc] : ["tools/tillr-view/"],
+    runs_count: s.run_id ? 1 + (s.place % 3) : 0,
+    tokens: s.run_id ? 18000 + s.place * 640 : null,
+    lower_bound: s.place % 5 === 0,
+    preserved_ref: s.cls === "needs a cause" && s.place < 30 ? "refs/tillr/preserved/run-88374" : null,
+    blocked_by: s.id === "item-blk-168" ? [{ id: "item-old-004", state: "closed", unmet: true }] : [],
+    criteria: [
+      { id: "C-1", text: "Projection obeys six-mark provenance contract", state: "done", actor: "judge", frozen: true },
+      { id: "C-2", text: "Regression test covers edge case in Go + Vitest", state: s.cls === "needs a cause" ? "~claimed" : "", actor: s.cls === "needs a cause" ? "worker (self-report)" : "", frozen: false }
+    ]
+  });
+});
+
+// Add 12 moving items (linked to running/settling lanes)
+const MOVING_SEEDS = [
+  { id: "item-auth-204", place: 5,  title: "Enforce loopback Origin check on /api/v1/ws", lane: "lane-1", run_id: "run-88419", seat: "work" },
+  { id: "item-store-044", place: 7, title: "Fix crash_test WAL recovery race under busy_timeout", lane: "lane-2", run_id: "run-88415", seat: "verify" },
+  { id: "item-land-031", place: 8,  title: "Record gated_tree vs landed_tree on concurrent squash", lane: "lane-3", run_id: "run-88412", seat: "work" },
+  { id: "item-cli-077",  place: 10, title: "Emit view.heavy-misses JSON with RFC3339 bounds", lane: "lane-4", run_id: "run-88408", seat: "work" },
+  { id: "item-trace-092",place: 13, title: "Tag layout-widened spans so stats exclude envelopes", lane: "lane-6", run_id: "run-88421", seat: "work" },
+  { id: "item-idea-9f2a",place: 15, title: "Idea: surface quiet-age warnings on settling lanes", lane: "express-1", run_id: "run-88422", seat: "design" },
+  { id: "item-hot-011",  place: 16, title: "Hotfix: guard null started_at in liveElapsedText", lane: "express-2", run_id: "run-88417", seat: "work" },
+  { id: "item-qst-181",  place: 21, title: "Index Vantage question buckets in vantagecache.go", lane: "desk-arch", run_id: "run-88420", seat: "design" },
+  { id: "item-span-194", place: 24, title: "Compute end-time critical chain in SpanViewer", lane: "lane-1", run_id: "run-88419", seat: "work" },
+  { id: "item-pass-201", place: 27, title: "Fold identical passes before filter in PassesView", lane: "lane-2", run_id: "run-88415", seat: "work" },
+  { id: "item-item-215", place: 30, title: "Freeze table order on scroll or row focus (P7)", lane: "lane-6", run_id: "run-88421", seat: "work" },
+  { id: "item-run-229",  place: 34, title: "Interleave drain schedule with transcript in Time Order", lane: "lane-3", run_id: "run-88412", seat: "work" }
+];
+MOVING_SEEDS.forEach(m => {
+  ITEMS.push({
+    id: m.id, place: m.place, cls: "moving", title: m.title,
+    where: m.lane, why: `executing ${m.seat} on ${m.lane} (${m.run_id})`,
+    mover: `drain: ${m.lane} · ${m.run_id}`, since: "14m", waited: null,
+    doc: "docs/reference/observatory-redesign.md", oq: 0, seat: m.seat, raw_state: "in-queue",
+    run_id: m.run_id,
+    fence: ["tools/tillr-view/", "tools/tillr-drain/"],
+    runs_count: 2, tokens: 48200 + m.place * 910, lower_bound: false,
+    preserved_ref: null, blocked_by: [],
+    criteria: [
+      { id: "C-1", text: "Implementation matches observatory-redesign.md", state: "done", actor: "judge", frozen: true },
+      { id: "C-2", text: "Unit tests pass without flaky retries", state: "~claimed", actor: "worker (self-report)", frozen: false }
+    ]
+  });
+});
+
+// Fill remaining items to reach 312 unlanded:
+const usedPlaces = new Set(ITEMS.map(x => x.place));
+let nextPlace = 1;
+function allocPlace() {
+  while (usedPlaces.has(nextPlace)) nextPlace++;
+  usedPlaces.add(nextPlace);
+  return nextPlace;
+}
+
+const SUBSYSTEMS = ["view", "drain", "gate", "land", "store", "trace", "item", "watch", "restart", "sync"];
+const WORK_REASONS = [
+  { why: "blocked_by item-auth-204 (working)", where: "dependency", count: 134 },
+  { why: "path_fence overlap with lane-1 (tools/tillr-view/)", where: "fence", count: 52 },
+  { why: "lane_cap: 8/8 ordinary lanes busy or held", where: "capacity", count: 32 }
+];
+
+for (let i = 0; i < 14; i++) {
+  const p = allocPlace();
+  const sub = SUBSYSTEMS[i % SUBSYSTEMS.length];
+  ITEMS.push({
+    id: `item-${sub}-${300 + i}`, place: p, cls: "waits on the loop",
+    title: `Settle ${sub} post-run lease and emit dispatch receipt #${i + 1}`,
+    where: "loop pass", why: i < 5 ? "settling finished run before release" : "queued for next 1s planning pass",
+    mover: "drain: next planning pass", since: `${1 + (i % 4)}s`, waited: `${1 + (i % 4)}s`,
+    doc: `docs/reference/tillr-${sub}.md`, oq: 0, seat: "work", raw_state: "in-queue", run_id: "run-88408",
+    fence: [`tools/tillr-${sub}/`], runs_count: 1, tokens: 12400 + i * 310, lower_bound: false,
+    preserved_ref: null, blocked_by: [], criteria: [{ id: "C-1", text: "Pass decision recorded", state: "", actor: "", frozen: false }]
+  });
+}
+
+for (let i = 0; i < 46; i++) {
+  const p = allocPlace();
+  const sub = SUBSYSTEMS[(i + 3) % SUBSYSTEMS.length];
+  ITEMS.push({
+    id: `item-${sub}-${400 + i}`, place: p, cls: "ready",
+    title: `Implement ${sub} read-model projection check (${i + 1}/46)`,
+    where: "dispatch queue", why: "eligible on next pass with free lane",
+    mover: "drain: waiting for free lane", since: `${5 + i}m`, waited: `${5 + i}m`,
+    doc: `docs/reference/observatory-design.md`, oq: 0, seat: i % 6 === 0 ? "design" : "work", raw_state: "in-queue", run_id: null,
+    fence: [`tools/tillr-${sub}/`], runs_count: 0, tokens: null, lower_bound: false,
+    preserved_ref: null, blocked_by: [], criteria: [{ id: "C-1", text: "Zero regressions in suite", state: "", actor: "", frozen: false }]
+  });
+}
+
+let workIdx = 0;
+WORK_REASONS.forEach(bucket => {
+  for (let i = 0; i < bucket.count; i++) {
+    const p = allocPlace();
+    const sub = SUBSYSTEMS[(workIdx + i) % SUBSYSTEMS.length];
+    ITEMS.push({
+      id: `item-${sub}-${500 + workIdx}`, place: p, cls: "waits on work",
+      title: `Wire ${sub} ${bucket.where} guard and telemetry hook #${workIdx + 1}`,
+      where: bucket.where, why: bucket.why,
+      mover: bucket.where === "dependency" ? "drain: waits on item-auth-204" : bucket.where === "fence" ? "drain: waits on lane-1 release" : "drain: waits on ordinary lane slot",
+      since: `${12 + (workIdx % 90)}m`, waited: `${12 + (workIdx % 90)}m`,
+      doc: `docs/reference/observatory-redesign.md`, oq: 0, seat: "work", raw_state: "in-queue", run_id: null,
+      fence: bucket.where === "fence" ? ["tools/tillr-view/"] : [`tools/tillr-${sub}/`],
+      runs_count: workIdx % 3 === 0 ? 1 : 0, tokens: workIdx % 3 === 0 ? 9400 + workIdx * 40 : null, lower_bound: workIdx % 9 === 0,
+      preserved_ref: null, blocked_by: bucket.where === "dependency" ? [{ id: "item-auth-204", state: "working", unmet: true }] : [],
+      criteria: [{ id: "C-1", text: "Verify criterion passes under gate", state: "", actor: "", frozen: false }]
+    });
+    workIdx++;
+  }
+});
+
+// 6 landed / terminal items
+for (let i = 0; i < 6; i++) {
+  ITEMS.push({
+    id: `item-done-00${i + 1}`, place: null, cls: "landed",
+    title: `Landed telemetry invariant #${i + 1} (verified on trunk)`,
+    where: "trunk", why: "landed via tillr-land squash",
+    mover: "—", since: `${i + 1}h ago`, waited: null,
+    doc: "docs/reference/observatory-redesign.md", oq: 0, seat: "work", raw_state: i === 5 ? "closed" : "landed",
+    run_id: i === 0 ? "run-88371" : "run-88380",
+    fence: ["tools/tillr-view/"], runs_count: 1, tokens: 31200 + i * 2100, lower_bound: false,
+    preserved_ref: null, blocked_by: [],
+    criteria: [{ id: "C-1", text: "All checks green on trunk", state: "done", actor: "judge", frozen: true }]
+  });
+}
+
+// ============================================================================
+// DISTINCT, DOMAIN-ACCURATE RUN TRACES (Every Run Link Loads Real Data)
+// ============================================================================
+const RUN_DETAILS = {
+  "run-88419": {
+    run_id: "run-88419", tag: "live · running", item_id: "item-auth-204", lane_id: "lane-1", seat: "work", workflow: "default-land", node: "implement",
+    backend: "anthropic-opus", model: "claude-opus-4-5", state: "running", exit_code: null, exit_state: "absent",
+    started_at_ms: NOW_MS - 14*60*1000,
+    timing: { wall_ms: 840000, model_ms: 412000, tool_active_ms: 218000, slot_wait_ms: 146000, slot_wait_state: "observed", uncovered_ms: 64000 },
+    usage: { input: 61400, cache_read: 189000, cache_write: 14200, output: 8610, reasoning: 14200, total: 287410, ttft_ms: 1180, tok_s: 64.2 },
+    preserved_work: [{ ref: "refs/tillr/preserved/run-88391", files: 3, lines: "+84 / -19", reason: "prior attempt stopped on verify-not-done" }],
+    claims: [
+      { id: "CLM-1", text: "Edited only files inside fence tools/tillr-view/", status: "verified", epistemic_state: "observed" },
+      { id: "CLM-2", text: "Ran go test ./tools/tillr-view/... after final edit", status: "unverified", epistemic_state: "unobserved_seam" },
+      { id: "CLM-3", text: "No price fields serialized in /api/v1/snapshot", status: "verified", epistemic_state: "observed" }
+    ],
+    schedule: [
+      { at: "18:28:12Z", kind: "allocation", detail: "Assigned to lane-1 (policy seat: work, attempt 2)" },
+      { at: "18:28:13Z", kind: "other", detail: "Restored preserved_work ref refs/tillr/preserved/run-88391" },
+      { at: "18:36:04Z", kind: "gate", detail: "Acquired test-slot-01 after 146,000 ms slot wait" }
+    ],
+    spans: [
+      { id: "sp-root", parent: null, name: "run-88419 (attempt 2)", start: 0, end: 840000, open: true, state: "derived_clock", critical: true, self_ms: 18000, attrs: { category: "run", lane_id: "lane-1" } },
+      { id: "sp-bnd", parent: "sp-root", name: "stage: boundary", start: null, end: null, open: false, state: "unobserved_seam", critical: false, self_ms: null, reason: "tick-level bracket; no per-run record written", attrs: { category: "stage" } },
+      { id: "sp-stg", parent: "sp-root", name: "stage: stage-inputs", start: 0, end: 1400, open: false, state: "observed", critical: false, self_ms: 1400, attrs: { category: "stage" } },
+      { id: "sp-t1", parent: "sp-root", name: "llm_turn #1 (plan & read)", start: 1400, end: 98000, open: false, state: "observed", critical: false, self_ms: 96600, attrs: { category: "llm_turn", ttft_ms: 1120, tok_s: 61.5 } },
+      { id: "sp-tool1", parent: "sp-root", name: "tool_call: read servews.go", start: 98000, end: 112000, open: false, state: "observed", critical: false, self_ms: 14000, attrs: { category: "tool_call" } },
+      { id: "sp-t2", parent: "sp-root", name: "llm_turn #2 (patch servews.go)", start: 112000, end: 360000, open: false, state: "observed", critical: false, self_ms: 248000, attrs: { category: "llm_turn", ttft_ms: 1240, tok_s: 66.8 } },
+      { id: "sp-tool2", parent: "sp-root", name: "tool_call: go test ./tools/tillr-view/...", start: 360000, end: 724000, open: false, state: "observed", critical: false, self_ms: 218000, attrs: { category: "tool_call" } },
+      { id: "sp-slot", parent: "sp-tool2", name: "slot_wait: test-slot-01", start: 360000, end: 506000, open: false, state: "slot_wait", critical: false, self_ms: 146000, attrs: { category: "slot_wait" } },
+      { id: "sp-t3", parent: "sp-root", name: "llm_turn #3 (live streaming)", start: 724000, end: 840000, open: true, state: "derived_clock", critical: true, self_ms: 116000, attrs: { category: "llm_turn", ttft_ms: 1180, tok_s: 64.2 } },
+      { id: "sp-skip", parent: "sp-root", name: "gate: vitest-e2e (skipped)", start: null, end: null, open: false, state: "absent", critical: false, self_ms: null, reason: "path-scoped skip: no files touched under web/", attrs: { category: "gate_check", check_id: "vitest:e2e" } }
+    ]
+  },
+
+  "run-88412": {
+    run_id: "run-88412", tag: "stalled · slot-heavy", item_id: "item-land-031", lane_id: "lane-3", seat: "work", workflow: "default-land", node: "implement",
+    backend: "anthropic-opus", model: "claude-opus-4-5", state: "running", exit_code: null, exit_state: "absent",
+    started_at_ms: NOW_MS - 23*60*1000,
+    timing: { wall_ms: 1380000, model_ms: 340000, tool_active_ms: 210000, slot_wait_ms: 700000, slot_wait_state: "observed", uncovered_ms: 130000 },
+    usage: { input: 34200, cache_read: 81400, cache_write: 4100, output: 3900, reasoning: 4800, total: 128400, ttft_ms: 1410, tok_s: 58.1 },
+    preserved_work: [],
+    claims: [
+      { id: "CLM-1", text: "Updated Trunk.Squash to record gated_tree & landed_tree", status: "verified", epistemic_state: "observed" },
+      { id: "CLM-2", text: "Holding test-slot-02 until crash_test finishes", status: "unverified", epistemic_state: "derived_clock" }
+    ],
+    schedule: [
+      { at: "18:19:12Z", kind: "allocation", detail: "Assigned to lane-3 (policy seat: work, attempt 1)" },
+      { at: "18:30:32Z", kind: "gate", detail: "Requested test-slot-02 (queued behind lane-1, lane-6)" },
+      { at: "18:34:58Z", kind: "other", detail: "Watch rule quiet-worker-5m triggered (log idle during slot wait)" }
+    ],
+    spans: [
+      { id: "sp-root", parent: null, name: "run-88412 (slot-heavy)", start: 0, end: 1380000, open: true, state: "derived_clock", critical: true, self_ms: 48000, attrs: { category: "run", lane_id: "lane-3" } },
+      { id: "sp-t1", parent: "sp-root", name: "llm_turn #1 (read trunk.go & landing.go)", start: 1200, end: 140000, open: false, state: "observed", critical: false, self_ms: 138800, attrs: { category: "llm_turn" } },
+      { id: "sp-t2", parent: "sp-root", name: "llm_turn #2 (implement tree diff)", start: 140000, end: 341200, open: false, state: "observed", critical: false, self_ms: 201200, attrs: { category: "llm_turn" } },
+      { id: "sp-tool1", parent: "sp-root", name: "tool_call: go test ./tools/tillr-land/...", start: 341200, end: 1380000, open: true, state: "derived_clock", critical: true, self_ms: 338800, attrs: { category: "tool_call" } },
+      { id: "sp-slot", parent: "sp-tool1", name: "slot_wait: test-slot-02 (quiet 7m 14s)", start: 680000, end: 1380000, open: true, state: "slot_wait", critical: true, self_ms: 700000, attrs: { category: "slot_wait", slot: "test-slot-02" } },
+      { id: "sp-pre", parent: "sp-root", name: "stage: land.precheck", start: null, end: null, open: false, state: "unobserved_seam", critical: false, self_ms: null, reason: "pending tool_call completion", attrs: { category: "stage" } }
+    ]
+  },
+
+  "run-88415": {
+    run_id: "run-88415", tag: "verify · flake", item_id: "item-store-044", lane_id: "lane-2", seat: "verify", workflow: "default-land", node: "verify-criterion",
+    backend: "openai-gpt5", model: "gpt-5-codex", state: "running", exit_code: null, exit_state: "absent",
+    started_at_ms: NOW_MS - 8*60*1000,
+    timing: { wall_ms: 480000, model_ms: 215000, tool_active_ms: 190000, slot_wait_ms: 42000, slot_wait_state: "observed", uncovered_ms: 33000 },
+    usage: { input: 19800, cache_read: 31200, cache_write: 2100, output: 4400, reasoning: 4400, total: 61900, ttft_ms: 820, tok_s: 78.4 },
+    preserved_work: [],
+    claims: [
+      { id: "CLM-1", text: "Reproduced crash_test WAL race with seed 0x4f9a", status: "verified", epistemic_state: "observed" },
+      { id: "CLM-2", text: "busy_timeout=5000ms resolves flake across 20 runs", status: "unverified", epistemic_state: "derived_clock" }
+    ],
+    schedule: [
+      { at: "18:34:12Z", kind: "allocation", detail: "Assigned to lane-2 (node seat: verify, attempt 1)" },
+      { at: "18:38:01Z", kind: "other", detail: "Linked to watch alert alert-watch-091 (gate-flake-streak)" }
+    ],
+    spans: [
+      { id: "sp-root", parent: null, name: "run-88415 (verify seat)", start: 0, end: 480000, open: true, state: "derived_clock", critical: true, self_ms: 33000, attrs: { category: "run", lane_id: "lane-2" } },
+      { id: "sp-t1", parent: "sp-root", name: "llm_turn #1..#4 (inspect crash_test.go)", start: 1000, end: 145000, open: false, state: "observed", critical: false, self_ms: 144000, attrs: { category: "llm_turn" } },
+      { id: "sp-tool1", parent: "sp-root", name: "tool_call: go test -count=20 ./store", start: 145000, end: 377000, open: false, state: "observed", critical: false, self_ms: 190000, attrs: { category: "tool_call" } },
+      { id: "sp-slot", parent: "sp-tool1", name: "slot_wait: test-slot-01", start: 145000, end: 187000, open: false, state: "slot_wait", critical: false, self_ms: 42000, attrs: { category: "slot_wait" } },
+      { id: "sp-t6", parent: "sp-root", name: "llm_turn #6 (streaming verdict)", start: 377000, end: 480000, open: true, state: "derived_clock", critical: true, self_ms: 103000, attrs: { category: "llm_turn", ttft_ms: 820, tok_s: 78.4 } }
+    ]
+  },
+
+  "run-88408": {
+    run_id: "run-88408", tag: "settling", item_id: "item-cli-077", lane_id: "lane-4", seat: "work", workflow: "default-land", node: "gate",
+    backend: "openai-gpt5", model: "gpt-5-codex", state: "settling", exit_code: 0, exit_state: "observed",
+    started_at_ms: NOW_MS - 7*60*1000,
+    timing: { wall_ms: 392000, model_ms: 188000, tool_active_ms: 142000, slot_wait_ms: 20000, slot_wait_state: "observed", uncovered_ms: 42000 },
+    usage: { input: 22400, cache_read: 28900, cache_write: 1920, output: 5100, reasoning: 4800, total: 63120, ttft_ms: 790, tok_s: 81.2 },
+    preserved_work: [],
+    claims: [
+      { id: "CLM-1", text: "gate.verdict passed all required Go & Vitest checks", status: "verified", epistemic_state: "observed" },
+      { id: "CLM-2", text: "Candidate tree ready for tillr-land squash", status: "verified", epistemic_state: "observed" }
+    ],
+    schedule: [
+      { at: "18:35:10Z", kind: "allocation", detail: "Assigned to lane-4 (attempt 3)" },
+      { at: "18:41:30Z", kind: "gate", detail: "gate.verdict (pass) recorded; entering settle lease" }
+    ],
+    spans: [
+      { id: "sp-root", parent: null, name: "run-88408 (settling)", start: 0, end: 392000, open: false, state: "observed", critical: true, self_ms: 42000, attrs: { category: "run", lane_id: "lane-4" } },
+      { id: "sp-t1", parent: "sp-root", name: "llm_turn #1 (patch heavy-misses.go)", start: 1000, end: 189000, open: false, state: "observed", critical: false, self_ms: 188000, attrs: { category: "llm_turn" } },
+      { id: "sp-gate1", parent: "sp-root", name: "gate: go-test:tillr-view/serve (pass)", start: 189000, end: 271000, open: false, state: "observed", critical: false, self_ms: 62000, attrs: { category: "gate_check" } },
+      { id: "sp-slot", parent: "sp-gate1", name: "slot_wait: test-slot-01", start: 189000, end: 209000, open: false, state: "slot_wait", critical: false, self_ms: 20000, attrs: { category: "slot_wait" } },
+      { id: "sp-gate2", parent: "sp-root", name: "gate: vitest:observatory-web (pass)", start: 271000, end: 350000, open: false, state: "observed", critical: false, self_ms: 79000, attrs: { category: "gate_check" } },
+      { id: "sp-settle", parent: "sp-root", name: "settle: awaiting planner release (~42s)", start: 350000, end: 392000, open: true, state: "derived_clock", critical: true, self_ms: 42000, attrs: { category: "stage" } }
+    ]
+  },
+
+  "run-88399": {
+    run_id: "run-88399", tag: "alarm-hold · 429", item_id: "item-gate-019", lane_id: "lane-5", seat: "work", workflow: "default-land", node: "implement",
+    backend: "anthropic-sonnet", model: "claude-sonnet-4-5", state: "alarm-hold", exit_code: 75, exit_state: "observed",
+    started_at_ms: NOW_MS - 12*60*1000,
+    timing: { wall_ms: 240000, model_ms: 198000, tool_active_ms: 24000, slot_wait_ms: 0, slot_wait_state: "absent", uncovered_ms: 18000 },
+    usage: { input: 9400, cache_read: 6200, cache_write: 1100, output: 1400, reasoning: 1300, total: 19400, ttft_ms: 940, tok_s: 52.0 },
+    preserved_work: [{ ref: "refs/tillr/preserved/run-88399", files: 2, lines: "+31 / -8", reason: "candidate tree pinned for alarm retry" }],
+    claims: [
+      { id: "CLM-1", text: "Partial backoff patch saved to preserved ref", status: "verified", epistemic_state: "observed" }
+    ],
+    schedule: [
+      { at: "18:30:05Z", kind: "allocation", detail: "Assigned to lane-5 (attempt 2)" },
+      { at: "18:34:05Z", kind: "other", detail: "HTTP 429 quota-exhausted on anthropic-sonnet; lane held" }
+    ],
+    spans: [
+      { id: "sp-root", parent: null, name: "run-88399 (exit 75 · alarm-hold)", start: 0, end: 240000, open: false, state: "observed", critical: true, self_ms: 18000, attrs: { category: "run", exit_code: 75 } },
+      { id: "sp-t1", parent: "sp-root", name: "llm_turn #1 (read shard runner)", start: 1000, end: 112000, open: false, state: "observed", critical: false, self_ms: 111000, attrs: { category: "llm_turn" } },
+      { id: "sp-tool1", parent: "sp-root", name: "tool_call: edit gate/shards.go", start: 112000, end: 136000, open: false, state: "observed", critical: false, self_ms: 24000, attrs: { category: "tool_call" } },
+      { id: "sp-t2", parent: "sp-root", name: "llm_turn #2 (aborted: HTTP 429)", start: 136000, end: 240000, open: false, state: "unreadable", critical: true, self_ms: 104000, attrs: { category: "llm_turn", http_status: 429 } }
+    ]
+  },
+
+  "run-88361": {
+    run_id: "run-88361", tag: "failed gate · 137", item_id: "item-gate-041", lane_id: "lane-6", seat: "work", workflow: "default-land", node: "gate",
+    backend: "openai-gpt5", model: "gpt-5-codex", state: "failed", exit_code: 137, exit_state: "observed",
+    started_at_ms: NOW_MS - 42*60*1000,
+    timing: { wall_ms: 510000, model_ms: 210000, tool_active_ms: 245000, slot_wait_ms: 31000, slot_wait_state: "observed", uncovered_ms: 24000 },
+    usage: { input: 24100, cache_read: 41200, cache_write: 3100, output: 4900, reasoning: 3200, total: 76500, ttft_ms: 810, tok_s: 74.0 },
+    preserved_work: [{ ref: "refs/tillr/preserved/run-88361", files: 4, lines: "+112 / -27", reason: "gate-harness-error on shard 3" }],
+    claims: [
+      { id: "CLM-1", text: "Vitest suite passed locally before gate", status: "unverified", epistemic_state: "unobserved_seam" },
+      { id: "CLM-2", text: "Shard 3 stderr tail truncated on SIGKILL (137)", status: "unverified", epistemic_state: "unreadable" }
+    ],
+    schedule: [
+      { at: "18:00:10Z", kind: "allocation", detail: "Assigned to lane-6" },
+      { at: "18:08:40Z", kind: "gate", detail: "gate.verdict failed: vitest shard 3 exited 137 (OOM/SIGKILL)" }
+    ],
+    spans: [
+      { id: "sp-root", parent: null, name: "run-88361 (exit 137 · gate failed)", start: 0, end: 510000, open: false, state: "observed", critical: true, self_ms: 24000, attrs: { category: "run", exit_code: 137 } },
+      { id: "sp-t1", parent: "sp-root", name: "llm_turn #1..#3 (implement shard fix)", start: 1000, end: 211000, open: false, state: "observed", critical: false, self_ms: 210000, attrs: { category: "llm_turn" } },
+      { id: "sp-g1", parent: "sp-root", name: "gate: vitest shard 1..2 (pass)", start: 211000, end: 360000, open: false, state: "observed", critical: false, self_ms: 118000, attrs: { category: "gate_check" } },
+      { id: "sp-slot", parent: "sp-g1", name: "slot_wait: test-slot-01", start: 211000, end: 242000, open: false, state: "slot_wait", critical: false, self_ms: 31000, attrs: { category: "slot_wait" } },
+      { id: "sp-g3", parent: "sp-root", name: "gate: vitest shard 3 (exit 137 SIGKILL)", start: 360000, end: 510000, open: false, state: "unreadable", critical: true, self_ms: 150000, attrs: { category: "gate_check", exit_code: 137 } }
+    ]
+  },
+
+  "run-88371": {
+    run_id: "run-88371", tag: "landed", item_id: "item-perf-009", lane_id: "lane-8", seat: "work", workflow: "default-land", node: "land",
+    backend: "anthropic-opus", model: "claude-opus-4-5", state: "landed", exit_code: 0, exit_state: "observed",
+    started_at_ms: NOW_MS - 36*60*1000,
+    timing: { wall_ms: 295000, model_ms: 142000, tool_active_ms: 118000, slot_wait_ms: 19000, slot_wait_state: "observed", uncovered_ms: 16000 },
+    usage: { input: 14200, cache_read: 29400, cache_write: 1800, output: 3190, reasoning: 2500, total: 51090, ttft_ms: 1050, tok_s: 67.1 },
+    preserved_work: [],
+    claims: [
+      { id: "CLM-1", text: "All gate checks green on candidate tree 4e881bc", status: "verified", epistemic_state: "observed" },
+      { id: "CLM-2", text: "Squash replayed cleanly onto trunk -> a910f3d", status: "verified", epistemic_state: "observed" }
+    ],
+    schedule: [
+      { at: "18:06:10Z", kind: "allocation", detail: "Assigned to lane-8" },
+      { at: "18:40:34Z", kind: "land", detail: "landed landing-441 (gated_tree 4e881bc -> landed_tree a910f3d)" }
+    ],
+    spans: [
+      { id: "sp-root", parent: null, name: "run-88371 (landed · exit 0)", start: 0, end: 295000, open: false, state: "observed", critical: true, self_ms: 16000, attrs: { category: "run", landing: "landing-441" } },
+      { id: "sp-t1", parent: "sp-root", name: "llm_turn #1..#2 (optimize snapshot cache)", start: 1000, end: 143000, open: false, state: "observed", critical: false, self_ms: 142000, attrs: { category: "llm_turn" } },
+      { id: "sp-gate", parent: "sp-root", name: "gate: full suite (pass)", start: 143000, end: 280000, open: false, state: "observed", critical: false, self_ms: 118000, attrs: { category: "gate_check" } },
+      { id: "sp-slot", parent: "sp-gate", name: "slot_wait: test-slot-01", start: 143000, end: 162000, open: false, state: "slot_wait", critical: false, self_ms: 19000, attrs: { category: "slot_wait" } },
+      { id: "sp-land", parent: "sp-root", name: "land.squash (replayed -> 9c4e12a)", start: 280000, end: 295000, open: false, state: "observed", critical: true, self_ms: 15000, attrs: { category: "land" } }
+    ]
+  },
+
+  "run-88420": {
+    run_id: "run-88420", tag: "desk · design", item_id: "item-qst-181", lane_id: "desk-arch", seat: "design", workflow: "vantage-desk", node: "design-turn",
+    backend: "anthropic-opus", model: "claude-opus-4-5", state: "running", exit_code: null, exit_state: "absent",
+    started_at_ms: NOW_MS - 6*60*1000,
+    timing: { wall_ms: 360000, model_ms: 292000, tool_active_ms: 48000, slot_wait_ms: 0, slot_wait_state: "absent", uncovered_ms: 20000 },
+    usage: { input: 11200, cache_read: 71400, cache_write: 2400, output: 3900, reasoning: 2900, total: 91800, ttft_ms: 990, tok_s: 69.5 },
+    preserved_work: [],
+    claims: [
+      { id: "CLM-1", text: "Answered batch OQ-418..OQ-420 in observatory-redesign.md", status: "verified", epistemic_state: "observed" }
+    ],
+    schedule: [
+      { at: "18:36:12Z", kind: "allocation", detail: "Routed to warm designer desk-arch (ds-20261124-1836)" }
+    ],
+    spans: [
+      { id: "sp-root", parent: null, name: "run-88420 (design desk)", start: 0, end: 360000, open: true, state: "derived_clock", critical: true, self_ms: 20000, attrs: { category: "run", lane_id: "desk-arch" } },
+      { id: "sp-t1", parent: "sp-root", name: "llm_turn #1 (read OQ batch)", start: 1000, end: 165000, open: false, state: "observed", critical: false, self_ms: 164000, attrs: { category: "llm_turn" } },
+      { id: "sp-vc", parent: "sp-root", name: "tool_call: uvx vantage-check", start: 165000, end: 213000, open: false, state: "observed", critical: false, self_ms: 48000, attrs: { category: "tool_call" } },
+      { id: "sp-t2", parent: "sp-root", name: "llm_turn #2 (live drafting)", start: 213000, end: 360000, open: true, state: "derived_clock", critical: true, self_ms: 147000, attrs: { category: "llm_turn" } }
+    ]
+  },
+
+  "run-88329": {
+    run_id: "run-88329", tag: "corrupt trace", item_id: "item-trc-084", lane_id: "lane-7", seat: "work", workflow: "default-land", node: "implement",
+    backend: "anthropic-opus", model: "claude-opus-4-5", state: "failed", exit_code: null, exit_state: "unreadable",
+    started_at_ms: NOW_MS - 82*60*1000,
+    timing: { wall_ms: 420000, model_ms: 180000, tool_active_ms: 95000, slot_wait_ms: 0, slot_wait_state: "absent", uncovered_ms: 145000 },
+    usage: { input: 12100, cache_read: 18400, cache_write: 900, output: 1800, reasoning: 1100, total: 34300, lower_bound: true, ttft_ms: 1150, tok_s: 60.1 },
+    preserved_work: [],
+    claims: [
+      { id: "CLM-1", text: "steps.jsonl line 42 corrupt (0x00 byte at offset 1840)", status: "unverified", epistemic_state: "unreadable" }
+    ],
+    schedule: [
+      { at: "17:20:04Z", kind: "allocation", detail: "Assigned to lane-7" },
+      { at: "17:27:04Z", kind: "other", detail: "Trace reader halted at corrupt steps.jsonl line 42" }
+    ],
+    spans: [
+      { id: "sp-root", parent: null, name: "run-88329 (partial · corrupt tail)", start: 0, end: 420000, open: false, state: "lower_bound", critical: true, self_ms: 145000, attrs: { category: "run", error: "invalid JSON byte 0x00" } },
+      { id: "sp-t1", parent: "sp-root", name: "llm_turn #1 (before corruption)", start: 1000, end: 181000, open: false, state: "observed", critical: false, self_ms: 180000, attrs: { category: "llm_turn" } },
+      { id: "sp-tool1", parent: "sp-root", name: "tool_call: go test ./tools/tillr-trace", start: 181000, end: 276000, open: false, state: "observed", critical: false, self_ms: 95000, attrs: { category: "tool_call" } },
+      { id: "sp-bad", parent: "sp-root", name: "steps.jsonl line 42 (unreadable 0x00)", start: null, end: null, open: false, state: "unreadable", critical: true, self_ms: null, reason: "invalid JSON byte 0x00 at offset 1840", attrs: { category: "trace_error" } }
+    ]
+  }
+};
+
+function getRunDetail(runId) {
+  if (RUN_DETAILS[runId]) return RUN_DETAILS[runId];
+  // Deterministic synthesis for any secondary run IDs (e.g., run-88421, run-88422, run-88417, run-88380, run-88374, run-88395, run-88350, run-88310)
+  const lane = LANES.find(l => l.run_id === runId);
+  const item = ITEMS.find(i => i.run_id === runId);
+  const landing = LANDINGS.find(l => l.run_id === runId);
+  const stateLabel = lane ? lane.state : (landing ? landing.result : "completed");
+  const isRunning = stateLabel === "running";
+  const wallMs = lane && lane.since_ms ? Math.max(60000, NOW_MS - lane.since_ms) : 310000;
+  const modelMs = Math.round(wallMs * 0.52);
+  const toolMs = Math.round(wallMs * 0.31);
+  const slotMs = Math.round(wallMs * 0.09);
+  const uncovMs = Math.max(1000, wallMs - modelMs - toolMs - slotMs);
+  const tok = lane?.tokens ?? item?.tokens ?? 34800;
+  return {
+    run_id: runId,
+    tag: stateLabel,
+    item_id: lane?.item_id || item?.id || landing?.item_id || "item-auth-204",
+    lane_id: lane?.lane_id || "lane-6",
+    seat: lane?.seat || item?.seat || "work",
+    workflow: "default-land",
+    node: isRunning ? "implement" : "gate",
+    backend: lane?.backend || "anthropic-opus",
+    model: (lane?.backend || "").includes("openai") ? "gpt-5-codex" : "claude-opus-4-5",
+    state: stateLabel,
+    exit_code: isRunning ? null : 0,
+    exit_state: isRunning ? "absent" : "observed",
+    started_at_ms: NOW_MS - wallMs,
+    timing: { wall_ms: wallMs, model_ms: modelMs, tool_active_ms: toolMs, slot_wait_ms: slotMs, slot_wait_state: "observed", uncovered_ms: uncovMs },
+    usage: { input: Math.round(tok * 0.25), cache_read: Math.round(tok * 0.55), cache_write: Math.round(tok * 0.06), output: Math.round(tok * 0.08), reasoning: Math.round(tok * 0.06), total: tok, ttft_ms: 960, tok_s: 66.4 },
+    preserved_work: [],
+    claims: [
+      { id: "CLM-1", text: `Work scoped to ${item?.fence?.[0] || "tools/tillr-view/"}`, status: "verified", epistemic_state: "observed" }
+    ],
+    schedule: [
+      { at: "18:37:00Z", kind: "allocation", detail: `Assigned to ${lane?.lane_id || "lane-6"}` }
+    ],
+    spans: [
+      { id: "sp-root", parent: null, name: `${runId} (${stateLabel})`, start: 0, end: wallMs, open: isRunning, state: isRunning ? "derived_clock" : "observed", critical: true, self_ms: uncovMs, attrs: { category: "run", lane_id: lane?.lane_id || "lane-6" } },
+      { id: "sp-t1", parent: "sp-root", name: "llm_turn #1 (read & plan)", start: 1000, end: Math.round(wallMs * 0.35), open: false, state: "observed", critical: false, self_ms: Math.round(wallMs * 0.35) - 1000, attrs: { category: "llm_turn" } },
+      { id: "sp-tool1", parent: "sp-root", name: `tool_call: ${lane?.action || "run check"}`, start: Math.round(wallMs * 0.35), end: Math.round(wallMs * 0.75), open: false, state: "observed", critical: false, self_ms: toolMs, attrs: { category: "tool_call" } },
+      { id: "sp-slot", parent: "sp-tool1", name: "slot_wait: test-slot-01", start: Math.round(wallMs * 0.35), end: Math.round(wallMs * 0.35) + slotMs, open: false, state: "slot_wait", critical: false, self_ms: slotMs, attrs: { category: "slot_wait" } },
+      { id: "sp-t2", parent: "sp-root", name: isRunning ? "llm_turn #2 (live)" : "llm_turn #2 (finalize)", start: Math.round(wallMs * 0.75), end: wallMs, open: isRunning, state: isRunning ? "derived_clock" : "observed", critical: true, self_ms: Math.round(wallMs * 0.25), attrs: { category: "llm_turn" } }
+    ]
+  };
+}
+
+const PASS_GROUPS = [
+  { stamp: "20261124T184210Z", count: 1, since: "18:42:10Z", action: "3 dispatched · 284 held · 12 moving", diff: "dispatched item-trace-092 → lane-6, item-idea-9f2a → express-1", claim: 3, stage: 14, dispatch: 4, gate: 0, land: 0, tokens: 81400, lb: false, stop: "continue" },
+  { stamp: "20261124T184122Z", count: 47, since: "18:40:35Z", action: "0 dispatched · 287 held · 10 moving", diff: "unchanged (47 consecutive 1s passes)", claim: 2, stage: 0, dispatch: 1, gate: 0, land: 0, tokens: 0, lb: false, stop: "all-held" },
+  { stamp: "20261124T184034Z", count: 1, since: "18:40:34Z", action: "1 landed · 1 dispatched · 286 held", diff: "landed item-perf-009 (landing-441); dispatched item-hot-011 → express-2", claim: 4, stage: 19, dispatch: 3, gate: 48200, land: 1840, tokens: 129400, lb: true, stop: "continue" },
+  { stamp: "20261124T183910Z", count: 83, since: "18:37:47Z", action: "0 dispatched · 287 held · 10 moving", diff: "unchanged (83 consecutive 1s passes)", claim: 2, stage: 0, dispatch: 1, gate: 0, land: 0, tokens: 0, lb: false, stop: "all-held" },
+  { stamp: "20261124T183405Z", count: 1, since: "18:34:05Z", action: "0 dispatched · 4 alarm-held · 283 held", diff: "alarm raised: quota-exhausted (anthropic-sonnet)", claim: 3, stage: 0, dispatch: 2, gate: 0, land: 0, tokens: 19400, lb: false, stop: "alarm-hold" }
+];
+
+const LANDINGS = [
+  { id: "landing-441", kind: "landing", item_id: "item-perf-009", run_id: "run-88371", pass_id: "20261124T184034Z", result: "landed", reason: "squash replayed onto concurrent landing", before: "7b21a09", after: "9c4e12a", gated_tree: "4e881bc", landed_tree: "a910f3d", at: "18:40:34Z", state: "observed" },
+  { id: "landing-440", kind: "landing", item_id: "item-doc-014",  run_id: "run-88380", pass_id: "20261124T183612Z", result: "landed", reason: "fast-forward squash", before: "3c109e2", after: "7b21a09", gated_tree: "8d12c44", landed_tree: "8d12c44", at: "18:36:12Z", state: "observed" },
+  { id: "gap-439",     kind: "gap",     before: "1a004f1", after: "3c109e2", state: "unobserved_seam" },
+  { id: "landing-438", kind: "acquittal", item_id: "item-fix-002", run_id: "run-88310", pass_id: "20261124T181104Z", result: "acquitted", reason: "trunk-red acquittal: fixer landed", before: "0f991c4", after: "1a004f1", red_sha: "0f991c4", failing_checks: ["go-test:store/crash_test"], at: "18:11:04Z", state: "observed" }
+];
+
+const CHECK_PERF = [
+  { check_id: "go-test:store/crash_test", count: 28, sample_count: 28, median_ms: 14200, p95_ms: 48100, max_ms: 61200, waited_ms: 146000, failures: 3 },
+  { check_id: "go-test:tillr-view/serve", count: 44, sample_count: 44, median_ms: 6400,  p95_ms: 13800, max_ms: 19400, waited_ms: 28400,  failures: 0 },
+  { check_id: "vitest:observatory-web",   count: 19, sample_count: 19, median_ms: 8900,  p95_ms: 17200, max_ms: 21000, waited_ms: 12000,  failures: 1 },
+  { check_id: "fork-replay:squash-smoke", count: 3,  sample_count: 3,  median_ms: 4100,  p95_ms: null,  max_ms: 5200,  waited_ms: 0,      failures: 0 }
+];
+
+const QUESTIONS = [
+  { id: "OQ-418", doc: "docs/design/cursor-rewind.md", item_id: "item-api-103", blocking: true, text: "When schema_version rewinds on a snapshot cursor, should /api/v1/snapshot refuse 409 or serve with a rewind warning?" },
+  { id: "OQ-421", doc: "docs/reference/observatory-actions.md", item_id: "item-sec-021", blocking: true, text: "Should --write allow loopback IPv6 [::1] alongside 127.0.0.1 when no Origin header is sent?" },
+  { id: "OQ-425", doc: "docs/design/express-gate.md", item_id: "item-idea-77c1", blocking: true, text: "Which gate checks are exempt on express-eligible hotfixes?" },
+  { id: "OQ-442", doc: "docs/reference/tillr-distribution.md", item_id: null, blocking: false, text: "Keep pack-sync warning in README or move to build script output?" }
+];
+
+const DESIGNERS = [
+  { path: "docs/design/cursor-rewind.md", session_id: "ds-20261124-1810", state: "warm", warm_until: "20:10:00Z", context_tokens: 44200, batches: [{ item_id: "item-api-103", run_id: "run-88395", reason: "drafted OQ-418..OQ-419" }] },
+  { path: "docs/reference/observatory-redesign.md", session_id: "ds-20261124-1836", state: "warm", warm_until: "20:36:00Z", context_tokens: 91800, batches: [{ item_id: "item-qst-181", run_id: "run-88420", reason: "answering batch OQ-418..OQ-420" }] },
+  { path: "docs/design/worktree-gc.md", session_id: "ds-20261123-2204", state: "cold", warm_until: null, context_tokens: null, batches: [] }
+];
+
+// ============================================================================
+// APPLICATION STATE & ROUTING
+// ============================================================================
+const state = {
+  route: "home",          // home | queue | lanes | item | run | passes | trunk | graph | questions
+  selectedItemId: "item-api-103",
+  selectedRunId: "run-88419",
+  selectedSpanId: null,
+  runTab: "waterfall",    // waterfall | schedule | claims
+  wfCriticalOnly: false,
+  paused: false,
+  writesEnabled: false,
+  showIdleLanes: false,
+  themePref: safeGetStorage("tillr_theme_pref", "dark"),
+  // Queue filters & stability
+  qPreset: "not-moving",
+  qClass: "",
+  qReason: "",
+  qSearch: "",
+  qSort: "place",
+  qPage: 0,
+  qPageSize: 50,
+  qFocusedId: null,
+  qFrozen: false,
+  qPendingUpdates: 3,
+  // Passes focus
+  pFocusedStamp: null,
+  // Waterfall zoom
+  wfStart: 0,
+  wfEnd: 840000,
+  // Idea draft
+  ideaDraft: safeGetStorage("tillr_idea_draft", "")
+};
+
+applyTheme(state.themePref);
+
+function parseHash() {
+  const h = (location.hash || "#/").slice(1);
+  const [path, qs] = h.split("?");
+  const params = new URLSearchParams(qs || "");
+  if (path === "/" || path === "") state.route = "home";
+  else if (path === "/items") {
+    state.route = "queue";
+    if (params.has("class")) state.qClass = params.get("class");
+    if (params.has("reason")) state.qReason = params.get("reason");
+  }
+  else if (path === "/lanes" || path === "/runs") state.route = "lanes";
+  else if (path.startsWith("/item/")) { state.route = "item"; state.selectedItemId = decodeURIComponent(path.slice(6)); }
+  else if (path.startsWith("/run/")) {
+    const newRunId = decodeURIComponent(path.slice(5));
+    state.route = "run";
+    if (newRunId !== state.selectedRunId) {
+      state.selectedRunId = newRunId;
+      const run = getRunDetail(newRunId);
+      state.wfStart = 0;
+      state.wfEnd = run.timing.wall_ms;
+      state.selectedSpanId = run.spans[0]?.id || null;
+    }
+  }
+  else if (path === "/passes") state.route = "passes";
+  else if (path === "/trunk" || path === "/performance") state.route = "trunk";
+  else if (path === "/graph") state.route = "graph";
+  else if (path === "/questions" || path === "/designs" || path === "/alerts") state.route = "questions";
+}
+
+function nav(hash) {
+  location.hash = hash;
+}
+
+window.addEventListener("hashchange", () => { parseHash(); render(); });
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+function esc(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function classBadge(cls) {
+  const m = CLASS_META[cls] || { glyph: "•", label: cls, cls: "glyph-badge--ready" };
+  return `<span class="glyph-badge ${m.cls}"><span aria-hidden="true">${m.glyph}</span>${esc(m.label)}</span>`;
+}
+
+function laneStateBadge(s) {
+  if (s === "running") return `<span class="glyph-badge glyph-badge--moving"><span aria-hidden="true">●</span>running</span>`;
+  if (s === "settling") return `<span class="glyph-badge glyph-badge--settling"><span aria-hidden="true">◐</span>settling</span>`;
+  return `<span class="glyph-badge glyph-badge--idle"><span aria-hidden="true">○</span>idle</span>`;
+}
+
+function provBadge(kind, text) {
+  const map = {
+    observed: ["●", "prov--observed"],
+    derived_clock: ["~", "prov--derived_clock"],
+    lower_bound: ["≥", "prov--lower_bound"],
+    unobserved_seam: ["⚠", "prov--unobserved_seam"],
+    absent: ["∅", "prov--absent"],
+    unreadable: ["✕", "prov--unreadable"],
+    lane_copy: ["⧉", "prov--lane_copy"]
+  };
+  const [sym, cls] = map[kind] || ["·", "prov--absent"];
+  return `<span class="prov ${cls}">${sym} ${esc(text)}</span>`;
+}
+
+function fmtTokens(n, lb) {
+  if (n === null || n === undefined) return provBadge("absent", "tokens not recorded");
+  return `<span class="num">${lb ? "≥ " : ""}${n.toLocaleString()} tok</span>`;
+}
+
+function fmtAge(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+}
+
+function fmtDur(ms) {
+  if (ms === null || ms === undefined) return provBadge("absent", "not recorded");
+  if (ms < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function entityLink(kind, id, label) {
+  const href = kind === "item" ? `#/item/${encodeURIComponent(id)}`
+             : kind === "run"  ? `#/run/${encodeURIComponent(id)}`
+             : kind === "lane" ? `#/lanes`
+             : kind === "pass" ? `#/passes`
+             : `#/trunk`;
+  return `<a class="mono" href="${href}">${esc(label || id)}</a>`;
+}
+
+// ============================================================================
+// SHELL RENDER
+// ============================================================================
+function renderShell() {
+  const unlanded = ITEMS.filter(i => i.cls !== "landed");
+  const runningLanes = LANES.filter(l => l.state === "running").length;
+  const settlingLanes = LANES.filter(l => l.state === "settling").length;
+
+  const tabs = [
+    ["home", "Triage & Lanes", "#/"],
+    ["queue", `Queue (${unlanded.length})`, "#/items"],
+    ["lanes", `Lanes (${runningLanes}R·${settlingLanes}S/${LANES.length})`, "#/lanes"],
+    ["passes", "Passes (184→5)", "#/passes"],
+    ["trunk", "Trunk & Checks", "#/trunk"],
+    ["graph", "Dep Graph", "#/graph"],
+    ["questions", `Questions (${QUESTIONS.length}) & Watch (${WATCH_ALERTS.length})`, "#/questions"]
+  ];
+
+  const alarmHtml = ALARMS.map(a => `
+    <div class="alarm-banner" role="alert">
+      <span class="alarm-banner__tag">ALARM · ${esc(a.kind)}</span>
+      <strong>${esc(a.backend)}</strong>
+      <span>since <span class="num">${esc(a.since)}</span> — ${esc(a.cause)}</span>
+      <span>items: ${a.items.map(id => entityLink("item", id)).join(", ")}</span>
+      <span>clears: ${esc(a.clears)}</span>
+      <code>${esc(a.command)}</code>
+    </div>
+  `).join("");
+
+  document.getElementById("app-shell").innerHTML = `
+    ${alarmHtml}
+    <div class="topbar">
+      <div class="brand">
+        <span class="brand__mark">t</span>
+        <span>tillr <span style="color:var(--ink-3);font-weight:400">// dispatch deck · tactical shift</span></span>
+      </div>
+      <nav class="nav-tabs" aria-label="Observatory surfaces">
+        ${tabs.map(([id, lbl, href]) => `<a class="nav-tab ${state.route === id ? "active" : ""}" href="${href}">${esc(lbl)}</a>`).join("")}
+      </nav>
+      <div class="topbar-right">
+        <div class="theme-seg" role="group" aria-label="Theme">
+          <button type="button" aria-pressed="${state.themePref==='dark'}" onclick="setTheme('dark')">Dark</button>
+          <button type="button" aria-pressed="${state.themePref==='light'}" onclick="setTheme('light')">Light</button>
+          <button type="button" aria-pressed="${state.themePref==='system'}" onclick="setTheme('system')">Auto</button>
+        </div>
+        <span class="freshness-pill" title="Snapshot cursor &amp; stream state">
+          <span class="${state.paused ? "dot-paused" : "dot-live"}"></span>
+          ${state.paused ? "paused" : "live"} · seq 48,912 · ${state.paused ? "frozen" : "~2s old"}
+        </span>
+        <button type="button" onclick="toggleWrites()" aria-pressed="${state.writesEnabled}">${state.writesEnabled ? "--write: ON" : "read-only"}</button>
+        ${state.writesEnabled ? `<button type="button" class="primary" onclick="openIdeaModal()">+ New idea (n)</button>` : ""}
+        <button type="button" onclick="togglePause()">${state.paused ? "Resume" : "Pause"}</button>
+        <button type="button" onclick="openModal('glossary-modal')">Keys &amp; Marks (?)</button>
+      </div>
+    </div>
+    <div class="loop-band">
+      <span class="loop-band__item">${classBadge("moving")} <strong>Loop alive</strong> · session <a class="mono" href="#/passes">sess-20261124-0914</a></span>
+      <span class="loop-band__sep">|</span>
+      <span class="loop-band__item">last pass <a class="mono" href="#/passes">20261124T184210Z</a> → 3 dispatched · 284 held · next due ${provBadge("derived_clock", "~0.8s")}</span>
+      <span class="loop-band__sep">|</span>
+      <span class="loop-band__item">trunk <span class="tree-same">✓ refs/tillr/green @ 9c4e12a</span> · 2 unpublished</span>
+      <span class="loop-band__sep">|</span>
+      <span class="loop-band__item">watch alerts: <a href="#/questions" style="color:var(--c-you-ink);font-weight:600">2 open (gate-flake-streak, quiet-worker-5m)</a></span>
+    </div>
+  `;
+}
+
+// ============================================================================
+// SURFACE 1: HOME (TRIAGE & LANES)
+// ============================================================================
+function renderHome() {
+  const unlanded = ITEMS.filter(i => i.cls !== "landed");
+  const byClass = {};
+  Object.keys(CLASS_META).forEach(k => byClass[k] = []);
+  unlanded.forEach(i => byClass[i.cls]?.push(i));
+
+  const tiles = [
+    ["alarm", "stat-tile--alert"],
+    ["needs you", "stat-tile--you"],
+    ["needs a cause", "stat-tile--cause"],
+    ["waits on work", "stat-tile--work"],
+    ["waits on the loop", "stat-tile--loop"],
+    ["ready", "stat-tile--ready"],
+    ["moving", "stat-tile--moving"]
+  ];
+
+  const escalatedClasses = ["alarm", "needs you", "needs a cause"];
+  const escalatedHtml = escalatedClasses.map(cls => {
+    const rows = byClass[cls];
+    if (!rows.length) return "";
+    return `
+      <div class="panel">
+        <div class="panel__head">
+          <div class="panel__title">${classBadge(cls)} <span>${rows.length} item${rows.length === 1 ? "" : "s"} requiring ${CLASS_META[cls].actor}</span></div>
+          <a href="#/items?class=${encodeURIComponent(cls)}" style="font-size:12px">Open in Queue →</a>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>#</th><th>Item</th><th>Where</th><th>Why &amp; Mover</th><th>Since / Waited</th></tr></thead>
+          <tbody>
+            ${rows.slice(0, 6).map(r => `
+              <tr>
+                <td class="num">${r.place}</td>
+                <td>
+                  ${entityLink("item", r.id)} ${r.oq ? `<span class="chip">OQ:${r.oq}</span>` : ""} ${r.run_id ? entityLink("run", r.run_id) : ""}
+                  <div class="item-title">${esc(r.title)}</div>
+                </td>
+                <td class="mono" style="font-size:11.5px;color:var(--ink-2)">${esc(r.where)}</td>
+                <td>
+                  <div>${esc(r.why)}</div>
+                  <div class="item-meta">mover: ${esc(r.mover)}</div>
+                </td>
+                <td class="num" style="white-space:nowrap">${esc(r.since)}${r.waited ? `<div class="item-meta">waited ${esc(r.waited)}</div>` : ""}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+        ${rows.length > 6 ? `<div style="padding:7px 12px;border-top:1px solid var(--border);font-size:12px"><a href="#/items?class=${encodeURIComponent(cls)}">View all ${rows.length} "${esc(cls)}" items in Queue Ledger →</a></div>` : ""}
+      </div>
+    `;
+  }).join("");
+
+  // Folded Scale Buckets for high-volume classes
+  const workRows = byClass["waits on work"];
+  const workReasons = {};
+  workRows.forEach(r => workReasons[r.why] = (workReasons[r.why] || 0) + 1);
+
+  const foldedHtml = `
+    <div class="bucket-card">
+      <div class="bucket-card__head">
+        <div class="panel__title">${classBadge("waits on work")} <span>${workRows.length} items folded by root cause</span></div>
+        <a href="#/items?class=waits%20on%20work" style="font-size:12px">Inspect all ${workRows.length} in Queue →</a>
+      </div>
+      <div class="reason-pills">
+        ${Object.entries(workReasons).map(([reason, cnt]) => {
+          const pct = Math.round((cnt / workRows.length) * 100);
+          return `
+            <button type="button" class="reason-pill" onclick="jumpQueueReason('waits on work', '${esc(reason)}')">
+              <span class="num" style="font-weight:700;color:var(--ink-1)">${cnt}</span>
+              <span class="reason-pill__bar" title="${pct}%"><span class="reason-pill__fill" style="width:${pct}%"></span></span>
+              <span>${esc(reason)}</span>
+            </button>
+          `;
+        }).join("")}
+      </div>
+      <table class="data-table">
+        <thead><tr><th>#</th><th>Top 4 by Place</th><th>Where</th><th>Mover</th><th>Since</th></tr></thead>
+        <tbody>
+          ${workRows.slice(0, 4).map(r => `
+            <tr>
+              <td class="num">${r.place}</td>
+              <td>${entityLink("item", r.id)} <div class="item-title">${esc(r.title)}</div></td>
+              <td class="mono" style="font-size:11.5px">${esc(r.where)}</td>
+              <td style="font-size:11.5px;color:var(--ink-2)">${esc(r.mover)}</td>
+              <td class="num">${esc(r.since)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="bucket-card">
+      <div class="bucket-card__head">
+        <div class="panel__title">${classBadge("ready")} <span>${byClass["ready"].length} eligible</span> · ${classBadge("waits on the loop")} <span>${byClass["waits on the loop"].length} settling/queued</span></div>
+        <a href="#/items?class=ready" style="font-size:12px">Inspect Ready (${byClass["ready"].length}) →</a>
+      </div>
+      <div class="panel__body" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--ink-2)">
+        <span>Next up by place: ${byClass["ready"].slice(0, 3).map(r => `#<span class="num">${r.place}</span> ${entityLink("item", r.id)}`).join(" · ")}</span>
+        <span>${provBadge("derived_clock", "planner: last pass 18:42:10Z")}</span>
+      </div>
+    </div>
+  `;
+
+  // Right Rail: 14 Lanes + Recent Passes
+  const laneGroups = [
+    ["Ordinary Lanes (8)", LANES.filter(l => l.group === "ordinary")],
+    ["Express Lanes (3)", LANES.filter(l => l.group === "express")],
+    ["Document Desks (3)", LANES.filter(l => l.group === "desk")]
+  ];
+
+  const lanesHtml = laneGroups.map(([title, list]) => {
+    const active = list.filter(l => l.state !== "idle" || l.held_item_id || state.showIdleLanes);
+    const hiddenIdle = list.length - active.length;
+    return `
+      <div class="lane-group-label"><span>${esc(title)}</span><span>${list.filter(l => l.state === "running").length} running · ${list.filter(l => l.held_item_id).length} kept</span></div>
+      ${active.map(l => {
+        const quietMs = l.state === "running" && l.log_grew_ms ? NOW_MS - l.log_grew_ms : 0;
+        const isQuiet = quietMs >= 5 * 60 * 1000;
+        const cardCls = l.state === "running" ? "lane-card--running" : l.state === "settling" ? "lane-card--settling" : l.held_item_id ? "lane-card--held" : "lane-card--idle";
+        return `
+          <div class="lane-card ${cardCls}">
+            <div class="lane-card__top">
+              <div>
+                <a class="mono" href="#/lanes" style="font-weight:700">${esc(l.lane_id)}</a>
+                ${laneStateBadge(l.state)}
+                ${l.since_ms ? `<span class="num" style="font-size:11.5px;color:var(--ink-3)">~${fmtAge(NOW_MS - l.since_ms)}</span>` : ""}
+                ${isQuiet ? `<span class="quiet-warn">quiet ${fmtAge(quietMs)}</span>` : ""}
+              </div>
+              <div>${fmtTokens(l.tokens, false)}</div>
+            </div>
+            <div class="lane-card__sub">
+              ${l.item_id ? `<span>${l.item_id.startsWith("doc:") ? `<span class="mono">${esc(l.item_id)}</span>` : entityLink("item", l.item_id)} ${l.run_id ? `· ${entityLink("run", l.run_id)}` : ""}</span>` : `<span>no active run</span>`}
+              ${l.seat ? `<span>${esc(l.seat)} (${esc(l.seat_src || "policy")}) · ${esc(l.backend)} · att ${l.attempt}</span>` : ""}
+            </div>
+            ${l.state === "running" ? `<div class="item-meta" style="color:var(--ink-2)">${esc(l.action)} ${l.action_clock === "derived_clock" ? provBadge("derived_clock", "~live") : ""}</div>` : ""}
+            ${l.state === "settling" ? `<div class="item-meta" style="color:var(--c-settling-ink)">after ${esc(l.last_step)} ~${fmtAge(NOW_MS - l.last_step_ms)}</div>` : ""}
+            ${l.held_item_id ? `<div class="item-meta" style="color:var(--c-you-ink)">holding ${entityLink("item", l.held_item_id)} · ${esc(l.held_reason)}</div>` : ""}
+          </div>
+        `;
+      }).join("")}
+      ${hiddenIdle > 0 ? `<div style="font-size:11.5px;color:var(--ink-3);margin-bottom:6px">${hiddenIdle} idle unheld lane(s) hidden <button type="button" style="padding:1px 6px;font-size:11px" onclick="toggleIdleLanes()">Show</button></div>` : ""}
+    `;
+  }).join("");
+
+  return `
+    <div class="triage-summary">
+      ${tiles.map(([cls, mod]) => `
+        <button type="button" class="stat-tile ${mod}" onclick="nav('#/items?class=${encodeURIComponent(cls)}')">
+          <div class="stat-tile__top">
+            <div class="stat-tile__val">${byClass[cls].length}</div>
+            <div class="stat-tile__actor">${CLASS_META[cls].actor}</div>
+          </div>
+          <div class="stat-tile__lbl">${classBadge(cls)}</div>
+        </button>
+      `).join("")}
+    </div>
+    <div class="home-grid">
+      <div>
+        ${escalatedHtml}
+        ${foldedHtml}
+      </div>
+      <div>
+        <div class="panel">
+          <div class="panel__head">
+            <div class="panel__title">Lane Matrix (${LANES.length} lanes)</div>
+            <button type="button" style="font-size:11px" onclick="toggleIdleLanes()">${state.showIdleLanes ? "Collapse idle" : "Show all idle"}</button>
+          </div>
+          <div class="panel__body" style="padding-top:4px">
+            ${lanesHtml}
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel__head">
+            <div class="panel__title">Recent Passes (Folded Streaks)</div>
+            <a href="#/passes" style="font-size:12px">Full ledger →</a>
+          </div>
+          <table class="data-table">
+            <thead><tr><th>Pass / Streak</th><th>Outcome</th><th>Spend</th></tr></thead>
+            <tbody>
+              ${PASS_GROUPS.slice(0, 3).map(g => `
+                <tr>
+                  <td>
+                    <a class="mono" href="#/passes">${esc(g.stamp)}</a>
+                    ${g.count > 1 ? `<span class="chip">×${g.count} streak</span>` : ""}
+                    <div class="item-meta">since ${esc(g.since)}</div>
+                  </td>
+                  <td style="font-size:11.5px">${esc(g.action)}<div class="item-meta">${esc(g.diff)}</div></td>
+                  <td>${fmtTokens(g.tokens, g.lb)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ============================================================================
+// SURFACE 2: QUEUE LEDGER (312+ ITEMS WITH KEYBOARD WIRING & STABILITY BANNER)
+// ============================================================================
+function getFilteredQueue() {
+  let src = ITEMS;
+  if (state.qPreset === "not-moving") src = src.filter(i => !["ready", "moving", "landed"].includes(i.cls));
+  else if (state.qPreset === "unlanded") src = src.filter(i => i.cls !== "landed");
+  else if (state.qPreset === "landed") src = src.filter(i => i.cls === "landed");
+
+  if (state.qClass) src = src.filter(i => i.cls === state.qClass);
+  if (state.qReason) src = src.filter(i => i.why === state.qReason);
+  if (state.qSearch) {
+    const q = state.qSearch.toLowerCase();
+    src = src.filter(i => i.id.toLowerCase().includes(q) || i.title.toLowerCase().includes(q) || i.why.toLowerCase().includes(q));
+  }
+  const copy = [...src];
+  if (state.qSort === "place") copy.sort((a, b) => (a.place ?? 999999) - (b.place ?? 999999));
+  else copy.sort((a, b) => a.id.localeCompare(b.id));
+  return copy;
+}
+
+function renderQueue() {
+  const rows = getFilteredQueue();
+  const totalPages = Math.max(1, Math.ceil(rows.length / state.qPageSize));
+  if (state.qPage >= totalPages) state.qPage = totalPages - 1;
+  const pageRows = rows.slice(state.qPage * state.qPageSize, (state.qPage + 1) * state.qPageSize);
+  const reasons = [...new Set(ITEMS.map(i => i.why))].sort();
+  const canReorder = state.writesEnabled && state.qSort === "place";
+
+  return `
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">Queue Ledger · ${rows.length} matching items (true place numbers preserved)</div>
+        <div class="key-hint-bar">
+          <span><span class="kbd">j</span>/<span class="kbd">k</span> focus</span>
+          <span><span class="kbd">Enter</span> open</span>
+          <span><span class="kbd">[</span>/<span class="kbd">]</span> page</span>
+          <span><span class="kbd">/</span> search</span>
+          <span><span class="kbd">u</span> home</span>
+          <span>${canReorder ? `<span class="kbd">J</span>/<span class="kbd">K</span> reorder` : `<span style="color:var(--ink-3)">J/K reorder (--write + place)</span>`}</span>
+        </div>
+      </div>
+      <div class="panel__body">
+        ${state.qFrozen ? `
+          <div class="stability-banner">
+            <span><strong>List order frozen while reading (P7)</strong> — ${state.qPendingUpdates} newer snapshot updates waiting</span>
+            <button type="button" class="primary" onclick="acceptQueueUpdates()">Accept ${state.qPendingUpdates} updates ↑</button>
+          </div>
+        ` : ""}
+        <div class="filter-bar">
+          ${[["not-moving","Not moving"],["unlanded","All unlanded (312)"],["landed","Landed / Terminal"]].map(([v,lbl]) =>
+            `<button type="button" aria-pressed="${state.qPreset===v}" onclick="setQueueFilter('qPreset','${v}')">${lbl}</button>`
+          ).join("")}
+          <label>Class:
+            <select onchange="setQueueFilter('qClass', this.value)">
+              <option value="">any</option>
+              ${Object.keys(CLASS_META).map(c => `<option value="${esc(c)}" ${state.qClass===c?"selected":""}>${esc(c)}</option>`).join("")}
+            </select>
+          </label>
+          <label>Reason:
+            <select onchange="setQueueFilter('qReason', this.value)" style="max-width:230px">
+              <option value="">any</option>
+              ${reasons.map(r => `<option value="${esc(r)}" ${state.qReason===r?"selected":""}>${esc(r)}</option>`).join("")}
+            </select>
+          </label>
+          <label>Sort:
+            <select onchange="setQueueFilter('qSort', this.value)">
+              <option value="place" ${state.qSort==="place"?"selected":""}>place (sparse)</option>
+              <option value="item" ${state.qSort==="item"?"selected":""}>item id</option>
+            </select>
+          </label>
+          <input id="queue-search" type="search" placeholder="Filter id, title, reason (/)..." value="${esc(state.qSearch)}" oninput="setQueueFilter('qSearch', this.value)" style="min-width:205px">
+          ${!state.qFrozen ? `<button type="button" onclick="state.qFrozen=true;render()" title="Simulate scroll/focus stability hold">Simulate scroll hold</button>` : ""}
+        </div>
+
+        <table class="data-table">
+          <thead><tr><th>#</th><th>Item &amp; Title</th><th>Class</th><th>Where</th><th>Why &amp; Mover</th><th>Since</th><th>Usage</th>${canReorder ? "<th>Order</th>" : ""}</tr></thead>
+          <tbody>
+            ${pageRows.length === 0 ? `<tr><td colspan="8" class="empty-note">No items match these filters.</td></tr>` : pageRows.map(r => `
+              <tr data-item-id="${esc(r.id)}" class="${state.qFocusedId === r.id ? "focused" : ""}" onclick="focusQueueRow('${esc(r.id)}')">
+                <td class="num">${r.place ?? "—"}</td>
+                <td>
+                  ${entityLink("item", r.id)} ${r.oq ? `<span class="chip">OQ:${r.oq}</span>` : ""} ${r.preserved_ref ? `<span class="chip">preserved</span>` : ""} ${r.run_id ? entityLink("run", r.run_id) : ""}
+                  <div class="item-title">${esc(r.title)}</div>
+                </td>
+                <td>${classBadge(r.cls)}</td>
+                <td class="mono" style="font-size:11.5px;color:var(--ink-2)">${esc(r.where)}</td>
+                <td>
+                  <div>${esc(r.why)}</div>
+                  <div class="item-meta">mover: ${esc(r.mover)}</div>
+                </td>
+                <td class="num" style="white-space:nowrap">${esc(r.since)}</td>
+                <td>${fmtTokens(r.tokens, r.lower_bound)}</td>
+                ${canReorder ? `
+                  <td style="white-space:nowrap">
+                    <button type="button" title="Move up (K)" onclick="event.stopPropagation();nudgeItem('${esc(r.id)}', -1)">↑</button>
+                    <button type="button" title="Move down (J)" onclick="event.stopPropagation();nudgeItem('${esc(r.id)}', 1)">↓</button>
+                    <button type="button" onclick="event.stopPropagation();moveItemTop('${esc(r.id)}')">Top</button>
+                  </td>
+                ` : ""}
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination">
+        <span style="font-size:12px;color:var(--ink-2)">Showing <span class="num">${rows.length ? state.qPage*state.qPageSize+1 : 0}–${Math.min(rows.length, (state.qPage+1)*state.qPageSize)}</span> of <span class="num">${rows.length}</span></span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button type="button" ${state.qPage===0?"disabled":""} onclick="state.qPage--;render()">← Prev ([)</button>
+          <span class="num" style="padding:4px 8px">Page ${state.qPage+1} / ${totalPages}</span>
+          <button type="button" ${state.qPage>=totalPages-1?"disabled":""} onclick="state.qPage++;render()">Next (]) →</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ============================================================================
+// SURFACE 3: LANES & RUNS (14 LANES FULL MATRIX)
+// ============================================================================
+function renderLanes() {
+  return `
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">All Configured Lanes &amp; Document Desks (${LANES.length} total)</div>
+        <span>${LANES.filter(l=>l.state==="running").length} running · ${LANES.filter(l=>l.state==="settling").length} settling · ${LANES.filter(l=>l.held_item_id).length} kept/held · ${LANES.filter(l=>l.state==="idle"&&!l.held_item_id).length} idle</span>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Lane</th><th>Group</th><th>Work State</th><th>Elapsed / Quiet</th><th>Item &amp; Run</th><th>Seat / Backend</th><th>Latest Action / Hold Reason</th><th>Tokens</th></tr></thead>
+        <tbody>
+          ${LANES.map(l => {
+            const quietMs = l.state === "running" && l.log_grew_ms ? NOW_MS - l.log_grew_ms : 0;
+            return `
+              <tr>
+                <td class="mono" style="font-weight:700">${esc(l.lane_id)}</td>
+                <td><span class="chip">${esc(l.group)}</span></td>
+                <td>${laneStateBadge(l.state)}</td>
+                <td class="num">${l.since_ms ? `~${fmtAge(NOW_MS - l.since_ms)}` : "—"} ${quietMs >= 300000 ? `<div class="quiet-warn">quiet ${fmtAge(quietMs)}</div>` : ""}</td>
+                <td>${l.item_id ? (l.item_id.startsWith("doc:") ? `<span class="mono">${esc(l.item_id)}</span>` : entityLink("item", l.item_id)) : provBadge("absent","none")} ${l.run_id ? `<div>${entityLink("run", l.run_id)}</div>` : ""}</td>
+                <td>${l.seat ? `${esc(l.seat)} <span class="chip">${esc(l.seat_src || "policy")}</span><div class="item-meta">${esc(l.backend)} · att ${l.attempt}</div>` : provBadge("absent","unassigned")}</td>
+                <td>
+                  ${l.state === "running" ? esc(l.action) : l.state === "settling" ? `after ${esc(l.last_step)} ~${fmtAge(NOW_MS - l.last_step_ms)}` : l.held_reason ? `<span style="color:var(--c-you-ink)">${esc(l.held_reason)}</span>` : `last outcome: ${esc(l.outcome || "none")}`}
+                </td>
+                <td>${fmtTokens(l.tokens, false)}</td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ============================================================================
+// SURFACE 4: ITEM DETAIL & MULTI-TRACE RUN WATERFALL
+// ============================================================================
+function renderItemDetail() {
+  const item = ITEMS.find(i => i.id === state.selectedItemId) || ITEMS[0];
+  const queueList = getFilteredQueue();
+  const idx = queueList.findIndex(x => x.id === item.id);
+  const prevItem = idx > 0 ? queueList[idx - 1] : null;
+  const nextItem = idx >= 0 && idx < queueList.length - 1 ? queueList[idx + 1] : null;
+
+  return `
+    <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <a href="#/items">← Queue Ledger</a>
+      <span style="color:var(--ink-3)">/</span>
+      <strong class="mono">${esc(item.id)}</strong>
+      ${classBadge(item.cls)}
+      <span class="chip">raw_state: ${esc(item.raw_state)}</span>
+      <span class="chip">place: ${item.place ?? "—"}</span>
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+        <button type="button" ${!prevItem?"disabled":""} onclick="nav('#/item/${encodeURIComponent(prevItem?.id||"")}')">← Prev ([)</button>
+        <button type="button" ${!nextItem?"disabled":""} onclick="nav('#/item/${encodeURIComponent(nextItem?.id||"")}')">Next (]) →</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">${esc(item.title)}</div>
+        <span>seat: <span class="mono">${esc(item.seat)}</span></span>
+      </div>
+      <div class="panel__body">
+        <div class="kv-grid" style="margin-bottom:14px">
+          <div class="kv-card"><div class="kv-card__k">Where &amp; Why</div><div class="kv-card__v" style="font-size:12.5px">${esc(item.where)} — ${esc(item.why)}</div></div>
+          <div class="kv-card"><div class="kv-card__k">Mover</div><div class="kv-card__v" style="font-size:12.5px">${esc(item.mover)}</div></div>
+          <div class="kv-card"><div class="kv-card__k">Design Doc &amp; Vantage</div><div class="kv-card__v" style="font-size:12.5px"><span class="mono">${esc(item.doc)}</span> · ${item.oq ? `<span style="color:var(--c-you-ink)">${item.oq} open question(s)</span>` : "0 open questions"}</div></div>
+          <div class="kv-card"><div class="kv-card__k">Usage Across ${item.runs_count} Run(s)</div><div class="kv-card__v">${fmtTokens(item.tokens, item.lower_bound)}</div></div>
+        </div>
+
+        ${item.id.startsWith("item-idea-") ? `
+          <div style="padding:10px;background:var(--bg-inset);border:1px solid var(--border);border-radius:4px;margin-bottom:12px">
+            <span class="chip">idea</span> <strong>Owner's exact words</strong> · ${provBadge("derived_clock", "not yet in the tree")} · <span class="mono">intake/${esc(item.id)}.txt</span>
+            <pre style="margin:6px 0 0;white-space:pre-wrap;color:var(--ink-2)">${esc(item.title)}</pre>
+          </div>
+        ` : ""}
+
+        ${item.preserved_ref ? `
+          <div style="padding:9px 11px;background:var(--c-you-bg);border:1px solid var(--c-you-bd);border-radius:4px;margin-bottom:12px">
+            <strong>Earlier uncommitted work preserved:</strong> <span class="mono">${esc(item.preserved_ref)}</span> (3 files, +84/-19 lines)
+          </div>
+        ` : ""}
+
+        ${item.blocked_by?.length ? `
+          <div style="padding:9px 11px;background:var(--c-alarm-bg);border:1px solid var(--c-alarm-bd);border-radius:4px;margin-bottom:12px">
+            <strong>Blocked by:</strong> ${item.blocked_by.map(b => `${entityLink("item", b.id)} (${esc(b.state)}${b.state==="closed" ? " — closed without landing; still holds this item" : ""})`).join(", ")}
+          </div>
+        ` : ""}
+
+        <h4 style="margin:8px 0 6px">Criteria &amp; Verdicts (Worker self-reports marked ~claimed, never verdicts)</h4>
+        <table class="data-table" style="margin-bottom:14px">
+          <thead><tr><th>ID</th><th>Criterion</th><th>Judgment / Report</th><th>Actor</th><th>Frozen</th></tr></thead>
+          <tbody>
+            ${item.criteria.map(c => `
+              <tr>
+                <td class="mono">${esc(c.id)}</td>
+                <td>${esc(c.text)}</td>
+                <td>${c.state === "done" ? `<span class="glyph-badge glyph-badge--landed">✓ done</span> ${provBadge("observed","verdict")}` : c.state === "~claimed" ? `<span class="glyph-badge glyph-badge--needs-you">~ ~claimed</span> ${provBadge("derived_clock","worker report, not a verdict")}` : provBadge("absent","unjudged")}</td>
+                <td class="mono" style="font-size:11.5px">${esc(c.actor || "not recorded")}</td>
+                <td>${c.frozen ? "🔒 frozen" : "editable"}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+          <span><strong>Path fence:</strong> ${item.fence.map(f => `<span class="chip">${esc(f)}</span>`).join(" ")}</span>
+          <span><strong>Latest run:</strong> ${item.run_id ? `${entityLink("run", item.run_id)} (inspect span waterfall)` : provBadge("absent", "no runs yet")}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderRunDetail() {
+  const run = getRunDetail(state.selectedRunId);
+  const t = run.timing;
+  const u = run.usage;
+  const pct = ms => ((ms / Math.max(1, t.wall_ms)) * 100).toFixed(1);
+  const winLen = Math.max(1000, state.wfEnd - state.wfStart);
+  const selectedSpan = run.spans.find(s => s.id === state.selectedSpanId) || run.spans[0];
+  const featuredRuns = ["run-88419", "run-88412", "run-88415", "run-88408", "run-88399", "run-88361", "run-88371", "run-88420", "run-88329"];
+  const curRunIdx = featuredRuns.indexOf(run.run_id);
+  const prevRun = curRunIdx > 0 ? featuredRuns[curRunIdx - 1] : null;
+  const nextRun = curRunIdx >= 0 && curRunIdx < featuredRuns.length - 1 ? featuredRuns[curRunIdx + 1] : null;
+
+  const runStateBadge = run.state === "running" ? classBadge("moving")
+    : run.state === "settling" ? `<span class="glyph-badge glyph-badge--settling">◐ settling</span>`
+    : run.state === "alarm-hold" ? classBadge("alarm")
+    : run.state === "failed" ? classBadge("needs a cause")
+    : `<span class="glyph-badge glyph-badge--landed">✓ ${esc(run.state)}</span>`;
+
+  return `
+    <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <a href="#/lanes">← Lanes &amp; Runs</a>
+      <span style="color:var(--ink-3)">/</span>
+      <strong class="mono">${esc(run.run_id)}</strong>
+      <span>for ${entityLink("item", run.item_id)} on ${entityLink("lane", run.lane_id)}</span>
+      ${runStateBadge}
+      <span class="chip">${esc(run.backend)} (${esc(run.model)})</span>
+      <span>exit: ${run.exit_code !== null ? `<span class="chip">exit ${run.exit_code}</span> ${provBadge(run.exit_state, run.exit_state)}` : provBadge(run.exit_state || "absent", run.exit_state === "unreadable" ? "corrupt tail" : "not recorded (still running)")}</span>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button type="button" ${!prevRun?"disabled":""} onclick="nav('#/run/${esc(prevRun||"")}')">← Prev Run ([)</button>
+        <button type="button" ${!nextRun?"disabled":""} onclick="nav('#/run/${esc(nextRun||"")}')">Next Run (]) →</button>
+      </div>
+    </div>
+
+    <div class="run-switcher">
+      <span style="font-weight:600;color:var(--ink-2)">Switch trace:</span>
+      ${featuredRuns.map(rid => {
+        const r = RUN_DETAILS[rid];
+        return `<a href="#/run/${esc(rid)}" class="run-pill ${rid === run.run_id ? "active" : ""}">${esc(rid)} <span style="font-family:var(--font-sans);font-size:10.5px;opacity:0.8">(${esc(r.tag)})</span></a>`;
+      }).join("")}
+    </div>
+
+    <div class="kv-grid" style="margin-bottom:12px">
+      <div class="kv-card"><div class="kv-card__k">Total Tokens (no $ prices)</div><div class="kv-card__v num">${u.lower_bound ? "≥ " : ""}${u.total.toLocaleString()}</div><div class="item-meta">in ${u.input.toLocaleString()} · cache_r ${u.cache_read.toLocaleString()} · out ${u.output.toLocaleString()}</div></div>
+      <div class="kv-card"><div class="kv-card__k">Streaming Latency</div><div class="kv-card__v num">${u.ttft_ms} ms TTFT</div><div class="item-meta">${u.tok_s} output tok/s</div></div>
+      <div class="kv-card"><div class="kv-card__k">Wall Time ${run.state === "running" ? "(live edge)" : "(completed)"}</div><div class="kv-card__v num">${run.state === "running" ? "~" : ""}${fmtDur(t.wall_ms)}</div><div class="item-meta">${provBadge(run.state === "running" ? "derived_clock" : "observed", run.state === "running" ? "viewer clock" : "observed")}</div></div>
+      <div class="kv-card"><div class="kv-card__k">Preserved Work</div><div class="kv-card__v" style="font-size:12px">${run.preserved_work.length ? `<span class="mono">${esc(run.preserved_work[0].ref)}</span>` : provBadge("absent", "none")}</div><div class="item-meta">${run.preserved_work.length ? `${esc(run.preserved_work[0].files)} files · ${esc(run.preserved_work[0].lines)}` : "clean worktree"}</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">Where Wall Time Went (Shared Clock)</div>
+        <span>slot wait: ${provBadge(t.slot_wait_state, t.slot_wait_state)}</span>
+      </div>
+      <div class="panel__body">
+        <div class="wall-bar" title="Model ${pct(t.model_ms)}% · Active Tool ${pct(t.tool_active_ms)}% · Slot Wait ${pct(t.slot_wait_ms)}% · Uncovered ${pct(t.uncovered_ms)}%">
+          <div style="width:${pct(t.model_ms)}%;background:var(--c-moving)" title="Model time: ${fmtDur(t.model_ms)}"></div>
+          <div style="width:${pct(t.tool_active_ms)}%;background:var(--c-loop)" title="Active tool time: ${fmtDur(t.tool_active_ms)}"></div>
+          <div style="width:${pct(t.slot_wait_ms)}%;background:var(--c-you)" title="Test-slot wait: ${fmtDur(t.slot_wait_ms)}"></div>
+          <div style="width:${pct(t.uncovered_ms)}%;background:var(--c-uncovered)" title="Uncovered harness/supervisor: ${fmtDur(t.uncovered_ms)}"></div>
+        </div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px">
+          <span><span style="color:var(--c-moving)">■</span> Model: <strong class="num">${fmtDur(t.model_ms)}</strong> (${pct(t.model_ms)}%)</span>
+          <span><span style="color:var(--c-loop)">■</span> Active tool: <strong class="num">${fmtDur(t.tool_active_ms)}</strong> (${pct(t.tool_active_ms)}%)</span>
+          <span><span style="color:var(--c-you)">■</span> Test-slot wait: <strong class="num">${fmtDur(t.slot_wait_ms)}</strong> (${pct(t.slot_wait_ms)}%)</span>
+          <span><span style="color:var(--c-uncovered-ink)">■</span> Uncovered: <strong class="num">${fmtDur(t.uncovered_ms)}</strong> (${pct(t.uncovered_ms)}%)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="subtabs">
+      <button type="button" aria-pressed="${state.runTab==="waterfall"}" onclick="state.runTab='waterfall';render()">Span Waterfall (${run.spans.length})</button>
+      <button type="button" aria-pressed="${state.runTab==="schedule"}" onclick="state.runTab='schedule';render()">Drain Scheduling Decisions (${run.schedule.length})</button>
+      <button type="button" aria-pressed="${state.runTab==="claims"}" onclick="state.runTab='claims';render()">Claim Audit (${run.claims.length})</button>
+    </div>
+
+    ${state.runTab === "waterfall" ? `
+      <div class="waterfall-box">
+        <div class="waterfall-toolbar">
+          <strong style="font-size:12px">Unified Run Waterfall</strong>
+          <span style="font-size:11.5px;color:var(--ink-2)">★ End-time critical chain · striped = derived/unobserved</span>
+          <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+            <button type="button" aria-pressed="${state.wfCriticalOnly}" onclick="state.wfCriticalOnly=!state.wfCriticalOnly;render()">★ Critical only</button>
+            <button type="button" onclick="wfZoom(0.5)">Zoom in (+)</button>
+            <button type="button" onclick="wfZoom(2)">Zoom out (-)</button>
+            <button type="button" onclick="wfFit()">Fit (f)</button>
+          </div>
+        </div>
+        <div class="waterfall-axis">
+          <div style="padding:4px 8px;border-right:1px solid var(--border)">Span / Stage / Check</div>
+          <div class="waterfall-axis__ticks">
+            <span>${fmtDur(state.wfStart)}</span>
+            <span>${fmtDur(Math.round(state.wfStart + winLen*0.25))}</span>
+            <span>${fmtDur(Math.round(state.wfStart + winLen*0.5))}</span>
+            <span>${fmtDur(Math.round(state.wfStart + winLen*0.75))}</span>
+            <span>${fmtDur(state.wfEnd)}</span>
+          </div>
+        </div>
+        ${run.spans.map(sp => {
+          const hasClock = sp.start !== null && sp.end !== null;
+          const left = hasClock ? Math.max(0, Math.min(100, ((sp.start - state.wfStart) / winLen) * 100)) : 0;
+          const right = hasClock ? Math.max(0, Math.min(100, ((sp.end - state.wfStart) / winLen) * 100)) : 0;
+          const width = Math.max(0.6, right - left);
+          const barCls = sp.state === "slot_wait" ? "span-bar--slot_wait"
+                       : sp.state === "unreadable" ? "span-bar--unreadable"
+                       : sp.open || sp.state === "derived_clock" ? "span-bar--derived_clock"
+                       : sp.state === "unobserved_seam" ? "span-bar--unobserved_seam"
+                       : "span-bar--observed";
+          const dim = state.wfCriticalOnly && !sp.critical;
+          return `
+            <div class="span-row ${selectedSpan.id===sp.id?"span-row--selected":""} ${dim?"span-row--dim":""}" onclick="state.selectedSpanId='${esc(sp.id)}';render()">
+              <div class="span-label" style="padding-left:${sp.parent ? (sp.parent==="sp-tool2"||sp.parent==="sp-tool1"||sp.parent==="sp-gate1"||sp.parent==="sp-gate"||sp.parent==="sp-g1"?34:20) : 8}px">
+                ${sp.critical ? `<span title="End-time critical chain">★</span>` : ""}
+                <span>${esc(sp.name)}</span>
+              </div>
+              <div class="span-track">
+                ${hasClock
+                  ? `<div class="span-bar ${barCls}" style="left:${left}%;width:${width}%" title="${esc(sp.name)}: ${fmtDur(sp.end - sp.start)}"></div>`
+                  : `<span style="font-size:11px;color:var(--ink-3)">${provBadge(sp.state, sp.reason)}</span>`}
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+      <div class="panel" style="margin-top:10px">
+        <div class="panel__head"><div class="panel__title">Selected Span: ${esc(selectedSpan.name)}</div>${provBadge(selectedSpan.state, selectedSpan.state)}</div>
+        <div class="panel__body kv-grid">
+          <div class="kv-card"><div class="kv-card__k">Duration</div><div class="kv-card__v">${selectedSpan.start!==null ? `${selectedSpan.open?"~":""}${fmtDur(selectedSpan.end-selectedSpan.start)}` : provBadge(selectedSpan.state, selectedSpan.reason)}</div></div>
+          <div class="kv-card"><div class="kv-card__k">Uncovered Self-Time</div><div class="kv-card__v">${fmtDur(selectedSpan.self_ms)}</div></div>
+          <div class="kv-card"><div class="kv-card__k">Attributes</div><div class="kv-card__v mono" style="font-size:11.5px">${esc(JSON.stringify(selectedSpan.attrs))}</div></div>
+        </div>
+      </div>
+    ` : state.runTab === "schedule" ? `
+      <div class="panel"><table class="data-table"><thead><tr><th>Time</th><th>Decision Kind</th><th>Detail</th></tr></thead><tbody>
+        ${run.schedule.map(s => `<tr><td class="mono">${esc(s.at)}</td><td><span class="chip">${esc(s.kind)}</span></td><td>${esc(s.detail)}</td></tr>`).join("")}
+      </tbody></table></div>
+    ` : `
+      <div class="panel"><table class="data-table"><thead><tr><th>Claim</th><th>Statement</th><th>Audit Status</th><th>Provenance</th></tr></thead><tbody>
+        ${run.claims.map(c => `<tr><td class="mono">${esc(c.id)}</td><td>${esc(c.text)}</td><td>${c.status==="verified" ? `<span class="glyph-badge glyph-badge--landed">✓ verified</span>` : `<span class="glyph-badge glyph-badge--needs-you">⚠ unverified</span>`}</td><td>${provBadge(c.epistemic_state, c.epistemic_state)}</td></tr>`).join("")}
+      </tbody></table></div>
+    `}
+  `;
+}
+
+// ============================================================================
+// SURFACE 5, 6, 7: PASSES, TRUNK & CHECKS, GRAPH, QUESTIONS & WATCH
+// ============================================================================
+function renderPasses() {
+  return `
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">Planning Passes Ledger (184 passes folded into 5 transition groups)</div>
+        <span>${provBadge("derived_clock", "reads drain_passes + dispatches (never drain_ticks)")} · <span class="kbd">j</span>/<span class="kbd">k</span> focus</span>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Dispatch Stamp</th><th>Streak</th><th>Decisions</th><th>What Changed vs Prior</th><th>Phases (ms)</th><th>Spend (no $)</th></tr></thead>
+        <tbody>
+          ${PASS_GROUPS.map(g => `
+            <tr class="${state.pFocusedStamp===g.stamp?"focused":""}" onclick="state.pFocusedStamp='${esc(g.stamp)}';render()">
+              <td class="mono">${esc(g.stamp)}<div class="item-meta">since ${esc(g.since)}</div></td>
+              <td>${g.count > 1 ? `<span class="chip">×${g.count} identical</span>` : "1"}</td>
+              <td>${esc(g.action)}</td>
+              <td style="font-size:12px">${esc(g.diff)}</td>
+              <td class="num" style="font-size:11.5px">claim ${g.claim} · stage ${g.stage} · disp ${g.dispatch} · gate ${g.gate} · land ${g.land}</td>
+              <td>${fmtTokens(g.tokens, g.lb)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderTrunk() {
+  return `
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">Trunk Health &amp; Landings (gated_tree vs landed_tree)</div>
+        <span class="tree-same">● GREEN · refs/tillr/green @ 9c4e12a</span>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Landing / Event</th><th>Item &amp; Run</th><th>Result &amp; Reason</th><th>Trunk SHA</th><th>Gated Tree vs Landed Tree</th><th>Clock</th></tr></thead>
+        <tbody>
+          ${LANDINGS.map(l => l.kind === "gap" ? `
+            <tr><td class="mono">gap</td><td colspan="2">${provBadge("unobserved_seam", "unrecorded trunk move")}</td><td class="mono">${esc(l.before)} → ${esc(l.after)}</td><td>${provBadge("absent", "unrecorded")}</td><td>${provBadge("absent", "clock unrecorded")}</td></tr>
+          ` : `
+            <tr>
+              <td class="mono">${esc(l.id)}</td>
+              <td>${entityLink("item", l.item_id)} · ${entityLink("run", l.run_id)}</td>
+              <td><strong>${esc(l.result)}</strong> — ${esc(l.reason)}</td>
+              <td class="mono">${esc(l.before)} → ${esc(l.after)}</td>
+              <td class="mono">${esc(l.gated_tree || "—")} vs ${esc(l.landed_tree || "—")} ${l.gated_tree && l.landed_tree ? (l.gated_tree===l.landed_tree ? `<span class="tree-same">same tree</span>` : `<span class="tree-diff">different (replayed)</span>`) : ""}</td>
+              <td class="mono">${esc(l.at)} ${provBadge(l.state, l.state)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">Gate Check Performance (24h window · P95 withheld when sample_count &lt; 5)</div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Check ID</th><th>Samples</th><th>Median</th><th>P95</th><th>Max</th><th>Slot Waited</th><th>Failures</th></tr></thead>
+        <tbody>
+          ${CHECK_PERF.map(c => `
+            <tr>
+              <td class="mono">${esc(c.check_id)}</td>
+              <td class="num">${c.sample_count}</td>
+              <td class="num">${fmtDur(c.median_ms)}</td>
+              <td class="num">${c.p95_ms !== null ? fmtDur(c.p95_ms) : provBadge("absent", "withheld (<5 samples)")}</td>
+              <td class="num">${fmtDur(c.max_ms)}</td>
+              <td class="num">${fmtDur(c.waited_ms)}</td>
+              <td class="num" style="color:${c.failures?"var(--c-alarm-ink)":"var(--ink-2)"}">${c.failures}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderGraph() {
+  return `
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">Dependency Graph (Critical Blocker Chains across 312 Unlanded Items)</div>
+        <span>134 items blocked on <a class="mono" href="#/item/item-auth-204">item-auth-204</a> · 1 closed-blocker hold</span>
+      </div>
+      <div class="panel__body">
+        <svg viewBox="0 0 860 260" class="svg-canvas">
+          <defs><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,1 L9,5 L0,9 z" fill="var(--ink-3)"/></marker></defs>
+          <line x1="210" y1="70" x2="330" y2="70" class="svg-edge" stroke-width="1.5" marker-end="url(#arr)"/>
+          <line x1="210" y1="70" x2="330" y2="145" class="svg-edge" stroke-width="1.5" marker-end="url(#arr)"/>
+          <line x1="510" y1="70" x2="630" y2="70" class="svg-edge" stroke-width="1.5" marker-end="url(#arr)"/>
+          <line x1="210" y1="205" x2="330" y2="205" stroke="var(--c-alarm)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+          <g onclick="nav('#/item/item-auth-204')" style="cursor:pointer">
+            <rect x="20" y="45" width="190" height="50" rx="6" class="svg-node-bg" stroke="var(--c-moving)" stroke-width="2"/>
+            <text x="32" y="66" fill="var(--c-moving-ink)" font-family="monospace" font-size="12" font-weight="bold">● item-auth-204</text>
+            <text x="32" y="83" class="svg-txt-2" font-size="11">moving · lane-1 (unblocks 134)</text>
+          </g>
+          <g onclick="nav('#/items?class=waits%20on%20work')" style="cursor:pointer">
+            <rect x="330" y="45" width="180" height="50" rx="6" class="svg-node-bg" stroke="var(--c-work)" stroke-width="1.5"/>
+            <text x="342" y="66" fill="var(--c-work-ink)" font-family="monospace" font-size="12" font-weight="bold">◌ item-view-500..633</text>
+            <text x="342" y="83" class="svg-txt-2" font-size="11">waits on work (134 items)</text>
+          </g>
+          <g onclick="nav('#/item/item-api-103')" style="cursor:pointer">
+            <rect x="330" y="120" width="180" height="50" rx="6" class="svg-node-bg" stroke="var(--c-you)" stroke-width="1.5"/>
+            <text x="342" y="141" fill="var(--c-you-ink)" font-family="monospace" font-size="12" font-weight="bold">◆ item-api-103</text>
+            <text x="342" y="158" class="svg-txt-2" font-size="11">needs you · OQ-418</text>
+          </g>
+          <g>
+            <rect x="630" y="45" width="200" height="50" rx="6" class="svg-node-bg" stroke="var(--border-strong)" stroke-width="1.5"/>
+            <text x="642" y="66" class="svg-txt-1" font-family="monospace" font-size="12">◌ downstream ready (46)</text>
+            <text x="642" y="83" class="svg-txt-2" font-size="11">eligible on free lane</text>
+          </g>
+          <g>
+            <rect x="20" y="180" width="190" height="50" rx="6" class="svg-node-dim" stroke="var(--ink-3)" stroke-width="1.5"/>
+            <text x="32" y="201" class="svg-txt-2" font-family="monospace" font-size="12">— item-old-004</text>
+            <text x="32" y="218" fill="var(--c-alarm-ink)" font-size="11">closed without landing</text>
+          </g>
+          <g onclick="nav('#/item/item-blk-168')" style="cursor:pointer">
+            <rect x="330" y="180" width="210" height="50" rx="6" class="svg-node-bg" stroke="var(--c-cause)" stroke-width="2"/>
+            <text x="342" y="201" fill="var(--c-cause-ink)" font-family="monospace" font-size="12" font-weight="bold">▲ item-blk-168</text>
+            <text x="342" y="218" class="svg-txt-2" font-size="11">needs a cause · unmet closed edge</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+  `;
+}
+
+function renderQuestions() {
+  return `
+    <div class="panel">
+      <div class="panel__head"><div class="panel__title">tillr-watch Alerts (${WATCH_ALERTS.length} open)</div></div>
+      <table class="data-table">
+        <thead><tr><th>Alert</th><th>Rule</th><th>Subject</th><th>Detail</th><th>Item &amp; Run</th><th>Since</th></tr></thead>
+        <tbody>
+          ${WATCH_ALERTS.map(a => `
+            <tr>
+              <td class="mono">${esc(a.id)}</td>
+              <td><span class="chip">${esc(a.rule)}</span></td>
+              <td class="mono">${esc(a.subject)}</td>
+              <td>${esc(a.detail)}</td>
+              <td>${entityLink("item", a.item_id)} · ${entityLink("run", a.run_id)}</td>
+              <td class="mono">${esc(a.since)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <div class="panel__head"><div class="panel__title">Vantage Open Questions (${QUESTIONS.length})</div></div>
+      <table class="data-table">
+        <thead><tr><th>ID</th><th>Document</th><th>Queue Impact</th><th>Question</th></tr></thead>
+        <tbody>
+          ${QUESTIONS.map(q => `
+            <tr>
+              <td class="mono" style="font-weight:700">${esc(q.id)}</td>
+              <td class="mono" style="font-size:11.5px">${esc(q.doc)}</td>
+              <td>${q.blocking ? `<span class="glyph-badge glyph-badge--needs-you">◆ blocks ${entityLink("item", q.item_id)}</span>` : `<span class="chip">non-blocking</span>`}</td>
+              <td>${esc(q.text)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <div class="panel__head"><div class="panel__title">Designer Sessions &amp; Cache State</div><span>arrivals: 4 within lifetime · 1 after · 1 no session</span></div>
+      <table class="data-table">
+        <thead><tr><th>Document</th><th>Session</th><th>Cache</th><th>Context</th><th>Batches Handled</th></tr></thead>
+        <tbody>
+          ${DESIGNERS.map(d => `
+            <tr>
+              <td class="mono">${esc(d.path)}</td>
+              <td class="mono">${esc(d.session_id)}</td>
+              <td>${d.state==="warm" ? `<span class="glyph-badge glyph-badge--moving">● warm until ${esc(d.warm_until)}</span>` : `<span class="glyph-badge glyph-badge--idle">○ cold</span>`}</td>
+              <td>${d.context_tokens!==null ? `<span class="num">${d.context_tokens.toLocaleString()} tok</span>` : provBadge("absent","not recorded")}</td>
+              <td>${d.batches.length ? d.batches.map(b => `${entityLink("item", b.item_id)} · ${entityLink("run", b.run_id)} (${esc(b.reason)})`).join(", ") : provBadge("absent","no batches")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ============================================================================
+// INTERACTIONS & KEYBOARD CONTROLS
+// ============================================================================
+function setTheme(pref) {
+  state.themePref = pref;
+  safeSetStorage("tillr_theme_pref", pref);
+  applyTheme(pref);
+  render();
+}
+function togglePause() { state.paused = !state.paused; render(); }
+function toggleWrites() { state.writesEnabled = !state.writesEnabled; render(); }
+function toggleIdleLanes() { state.showIdleLanes = !state.showIdleLanes; render(); }
+
+function setQueueFilter(key, val) {
+  state[key] = val;
+  state.qPage = 0;
+  state.qFrozen = false;
+  render();
+}
+function jumpQueueReason(cls, reason) {
+  state.qPreset = "unlanded";
+  state.qClass = cls;
+  state.qReason = reason;
+  state.qPage = 0;
+  nav("#/items");
+}
+function focusQueueRow(id) {
+  state.qFocusedId = id;
+  state.qFrozen = true;
+  render();
+}
+function acceptQueueUpdates() {
+  state.qFrozen = false;
+  state.qPendingUpdates = 0;
+  render();
+}
+function moveItemTop(id) {
+  const idx = ITEMS.findIndex(i => i.id === id);
+  if (idx < 0) return;
+  const minPlace = Math.min(...ITEMS.filter(i => i.place !== null).map(i => i.place));
+  ITEMS[idx].place = Math.max(1, minPlace - 1);
+  ITEMS.forEach(i => { if (i.id !== id && i.place !== null && i.place <= ITEMS[idx].place) i.place++; });
+  ITEMS[idx].place = 1;
+  render();
+}
+function nudgeItem(id, delta) {
+  if (!state.writesEnabled || state.qSort !== "place") return;
+  const rows = getFilteredQueue().filter(r => r.place !== null);
+  const pos = rows.findIndex(r => r.id === id);
+  if (pos < 0) return;
+  const targetPos = pos + delta;
+  if (targetPos < 0 || targetPos >= rows.length) return;
+  const a = rows[pos];
+  const b = rows[targetPos];
+  const tmp = a.place;
+  a.place = b.place;
+  b.place = tmp;
+  state.qFocusedId = a.id;
+  render();
+  scrollFocusedQueueRow();
+}
+function scrollFocusedQueueRow() {
+  if (!state.qFocusedId) return;
+  const el = document.querySelector(`tr[data-item-id="${CSS.escape(state.qFocusedId)}"]`);
+  if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
+}
+
+function wfZoom(factor) {
+  const run = getRunDetail(state.selectedRunId);
+  const maxEnd = run.timing.wall_ms;
+  const mid = (state.wfStart + state.wfEnd) / 2;
+  const half = Math.max(5000, ((state.wfEnd - state.wfStart) * factor) / 2);
+  state.wfStart = Math.max(0, Math.round(mid - half));
+  state.wfEnd = Math.min(maxEnd, Math.round(mid + half));
+  render();
+}
+function wfFit() {
+  const run = getRunDetail(state.selectedRunId);
+  state.wfStart = 0;
+  state.wfEnd = run.timing.wall_ms;
+  render();
+}
+
+function openModal(id) { document.getElementById(id).classList.add("open"); }
+function closeModal(id) { document.getElementById(id).classList.remove("open"); }
+function openIdeaModal() {
+  document.getElementById("idea-words").value = state.ideaDraft;
+  openModal("idea-modal");
+  setTimeout(() => document.getElementById("idea-words").focus(), 30);
+}
+function submitIdea() {
+  const words = document.getElementById("idea-words").value;
+  if (!words.trim()) {
+    document.getElementById("idea-status").textContent = "Refused: words-empty";
+    return;
+  }
+  const newId = "item-idea-" + Math.abs(words.split("").reduce((a,c)=>((a<<5)-a+c.charCodeAt(0))|0, 0)).toString(16).slice(0,4);
+  ITEMS.unshift({
+    id: newId, place: 1, cls: "ready", title: words.trim().split("\n")[0].slice(0, 72),
+    where: "dispatch queue", why: "new idea saved via --write intake", mover: "drain: design seat on next pass",
+    since: "0s", waited: "0s", doc: "intake/" + newId + ".txt", oq: 0, seat: "design", raw_state: "in-queue", run_id: null,
+    fence: ["intake/" + newId + ".txt", "docs/"], runs_count: 0, tokens: null, lower_bound: false,
+    preserved_ref: null, blocked_by: [], criteria: [{ id: "C-1", text: "Words in tree byte-for-byte", state: "", actor: "", frozen: false }]
+  });
+  state.ideaDraft = "";
+  safeSetStorage("tillr_idea_draft", "");
+  closeModal("idea-modal");
+  nav("#/item/" + encodeURIComponent(newId));
+}
+
+document.addEventListener("input", e => {
+  if (e.target && e.target.id === "idea-words") {
+    state.ideaDraft = e.target.value;
+    safeSetStorage("tillr_idea_draft", state.ideaDraft);
+  }
+});
+
+document.addEventListener("keydown", e => {
+  const inField = e.target && (e.target.matches("input, textarea, select") || e.target.isContentEditable);
+  if (e.key === "Escape") {
+    if (inField && e.target.id === "queue-search") { e.target.blur(); return; }
+    closeModal("idea-modal"); closeModal("glossary-modal"); return;
+  }
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && document.getElementById("idea-modal").classList.contains("open")) {
+    e.preventDefault(); submitIdea(); return;
+  }
+  if (inField) return;
+
+  if (e.key === "?") { e.preventDefault(); openModal("glossary-modal"); return; }
+  if (e.key === "n" && state.writesEnabled) { e.preventDefault(); openIdeaModal(); return; }
+  if (e.key === "u") { e.preventDefault(); nav("#/"); return; }
+  if (e.key === "/" && state.route === "queue") {
+    e.preventDefault();
+    const srch = document.getElementById("queue-search");
+    if (srch) srch.focus();
+    return;
+  }
+
+  if (state.route === "run") {
+    if (e.key === "+" || e.key === "=") { e.preventDefault(); wfZoom(0.5); }
+    else if (e.key === "-") { e.preventDefault(); wfZoom(2); }
+    else if (e.key === "f") { e.preventDefault(); wfFit(); }
+    else if (e.key === "[" || e.key === "]") {
+      const featured = ["run-88419", "run-88412", "run-88415", "run-88408", "run-88399", "run-88361", "run-88371", "run-88420", "run-88329"];
+      const idx = featured.indexOf(state.selectedRunId);
+      if (idx >= 0) {
+        const next = idx + (e.key === "]" ? 1 : -1);
+        if (next >= 0 && next < featured.length) { e.preventDefault(); nav("#/run/" + encodeURIComponent(featured[next])); }
+      }
+    }
+    return;
+  }
+
+  if (state.route === "item") {
+    if (e.key === "[" || e.key === "]") {
+      const rows = getFilteredQueue();
+      const idx = rows.findIndex(r => r.id === state.selectedItemId);
+      if (idx >= 0) {
+        const next = idx + (e.key === "]" ? 1 : -1);
+        if (next >= 0 && next < rows.length) { e.preventDefault(); nav("#/item/" + encodeURIComponent(rows[next].id)); }
+      }
+    }
+    return;
+  }
+
+  if (state.route === "passes" && (e.key === "j" || e.key === "k")) {
+    e.preventDefault();
+    const idx = PASS_GROUPS.findIndex(p => p.stamp === state.pFocusedStamp);
+    const next = Math.max(0, Math.min(PASS_GROUPS.length - 1, idx + (e.key === "j" ? 1 : -1)));
+    state.pFocusedStamp = PASS_GROUPS[next].stamp;
+    render();
+    return;
+  }
+
+  if (state.route === "queue") {
+    const rows = getFilteredQueue();
+    if (!rows.length) return;
+    if (e.key === "j" || e.key === "k") {
+      e.preventDefault();
+      const idx = rows.findIndex(r => r.id === state.qFocusedId);
+      const next = idx < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, idx + (e.key === "j" ? 1 : -1)));
+      state.qFocusedId = rows[next].id;
+      state.qPage = Math.floor(next / state.qPageSize);
+      state.qFrozen = true;
+      render();
+      scrollFocusedQueueRow();
+    } else if (e.key === "J" || e.key === "K") {
+      if (state.writesEnabled && state.qSort === "place" && state.qFocusedId) {
+        e.preventDefault();
+        nudgeItem(state.qFocusedId, e.key === "J" ? 1 : -1);
+      }
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const idx = Math.max(0, rows.findIndex(r => r.id === state.qFocusedId));
+      nav("#/item/" + encodeURIComponent(rows[idx].id));
+    } else if (e.key === "[" || e.key === "]") {
+      const totalPages = Math.max(1, Math.ceil(rows.length / state.qPageSize));
+      const nextPage = Math.max(0, Math.min(totalPages - 1, state.qPage + (e.key === "]" ? 1 : -1)));
+      if (nextPage !== state.qPage) {
+        e.preventDefault();
+        state.qPage = nextPage;
+        render();
+      }
+    }
+  }
+});
+
+// ============================================================================
+// MAIN RENDER LOOP
+// ============================================================================
+function render() {
+  renderShell();
+  const main = document.getElementById("main-view");
+  if (state.route === "home") main.innerHTML = renderHome();
+  else if (state.route === "queue") main.innerHTML = renderQueue();
+  else if (state.route === "lanes") main.innerHTML = renderLanes();
+  else if (state.route === "item") main.innerHTML = renderItemDetail();
+  else if (state.route === "run") main.innerHTML = renderRunDetail();
+  else if (state.route === "passes") main.innerHTML = renderPasses();
+  else if (state.route === "trunk") main.innerHTML = renderTrunk();
+  else if (state.route === "graph") main.innerHTML = renderGraph();
+  else if (state.route === "questions") main.innerHTML = renderQuestions();
+}
+
+parseHash();
+render();
+</script>
+</body>
+</html>

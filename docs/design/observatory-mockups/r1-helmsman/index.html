@@ -1,0 +1,1502 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TILLR // HELMSMAN — Observatory</title>
+<style>
+  :root {
+    --bg-0: #0a0e13;
+    --bg-1: #10161e;
+    --bg-2: #161e29;
+    --bg-3: #1d2736;
+    --bg-hover: #212c3d;
+    --border: #253142;
+    --border-strong: #34455d;
+    --ink-0: #edf2f7;
+    --ink-1: #b4c2d4;
+    --ink-2: #7688a1;
+    --accent: #38bdf8;
+    --accent-dim: rgba(56, 189, 248, 0.14);
+
+    --c-moving: #22c55e;
+    --c-moving-bg: rgba(34, 197, 94, 0.12);
+    --c-alarm: #ef4444;
+    --c-alarm-bg: rgba(239, 68, 68, 0.14);
+    --c-needs-you: #f59e0b;
+    --c-needs-you-bg: rgba(245, 158, 11, 0.13);
+    --c-needs-cause: #fb7185;
+    --c-needs-cause-bg: rgba(251, 113, 133, 0.13);
+    --c-waits-work: #38bdf8;
+    --c-waits-work-bg: rgba(56, 189, 248, 0.12);
+    --c-waits-loop: #a78bfa;
+    --c-waits-loop-bg: rgba(167, 139, 250, 0.12);
+    --c-ready: #94a3b8;
+    --c-ready-bg: rgba(148, 163, 184, 0.12);
+    --c-landed: #10b981;
+    --c-landed-bg: rgba(16, 185, 129, 0.12);
+    --c-closed: #64748b;
+    --c-closed-bg: rgba(100, 116, 139, 0.14);
+
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+    --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Code", ui-monospace, Menlo, Consolas, monospace;
+    --radius: 6px;
+    --radius-sm: 4px;
+  }
+
+  [data-theme="light"] {
+    --bg-0: #f4f6f9;
+    --bg-1: #ffffff;
+    --bg-2: #f8fafc;
+    --bg-3: #eef2f7;
+    --bg-hover: #e6ecf5;
+    --border: #d5deea;
+    --border-strong: #b6c4d6;
+    --ink-0: #0f172a;
+    --ink-1: #334155;
+    --ink-2: #64748b;
+    --accent: #0284c7;
+    --accent-dim: rgba(2, 132, 199, 0.10);
+
+    --c-moving: #15803d;
+    --c-moving-bg: rgba(21, 128, 61, 0.10);
+    --c-alarm: #dc2626;
+    --c-alarm-bg: rgba(220, 38, 38, 0.10);
+    --c-needs-you: #b45309;
+    --c-needs-you-bg: rgba(180, 83, 9, 0.10);
+    --c-needs-cause: #be123c;
+    --c-needs-cause-bg: rgba(190, 18, 60, 0.10);
+    --c-waits-work: #0369a1;
+    --c-waits-work-bg: rgba(3, 105, 161, 0.10);
+    --c-waits-loop: #6d28d9;
+    --c-waits-loop-bg: rgba(109, 40, 217, 0.10);
+    --c-ready: #475569;
+    --c-ready-bg: rgba(71, 85, 105, 0.10);
+    --c-landed: #047857;
+    --c-landed-bg: rgba(4, 120, 87, 0.10);
+    --c-closed: #64748b;
+    --c-closed-bg: rgba(100, 116, 139, 0.10);
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg-0); color: var(--ink-0);
+    font-family: var(--font-sans); font-size: 13px; line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .num { font-variant-numeric: tabular-nums; }
+  button, input, select, textarea {
+    font-family: inherit; font-size: inherit; color: inherit;
+  }
+  button {
+    background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 4px 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  button:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #06121e; border-color: var(--accent); font-weight: 600; }
+  button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+  button[aria-pressed="true"], .tab-btn.active {
+    background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600;
+  }
+
+  /* Sticky Command Shell */
+  .shell-sticky {
+    position: sticky; top: 0; z-index: 40;
+    background: var(--bg-1); border-bottom: 1px solid var(--border);
+  }
+  .alarm-strip {
+    background: var(--c-alarm-bg); border-bottom: 1px solid var(--c-alarm);
+    padding: 6px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    font-size: 12px;
+  }
+  .alarm-strip__lead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .alarm-strip__tag {
+    background: var(--c-alarm); color: #fff; font-weight: 700; font-size: 11px;
+    padding: 1px 6px; border-radius: 3px; letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .alarm-strip__cmd {
+    background: var(--bg-0); border: 1px solid var(--border); padding: 2px 7px; border-radius: 3px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--ink-0);
+  }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 8px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  }
+  .topbar__left { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .brand {
+    display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: 0.06em;
+    font-size: 13px; color: var(--ink-0); text-transform: uppercase;
+  }
+  .brand__mark {
+    width: 20px; height: 20px; border-radius: 4px; background: var(--accent); color: #06121e;
+    display: grid; place-items: center; font-family: var(--font-mono); font-weight: 800; font-size: 12px;
+  }
+  .nav-tabs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .nav-tab {
+    background: transparent; border: 1px solid transparent; padding: 5px 10px;
+    border-radius: var(--radius-sm); color: var(--ink-1); font-weight: 500; font-size: 12.5px;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .nav-tab:hover { background: var(--bg-2); color: var(--ink-0); }
+  .nav-tab.active {
+    background: var(--bg-3); border-color: var(--border-strong); color: var(--ink-0); font-weight: 600;
+  }
+  .nav-count {
+    font-family: var(--font-mono); font-size: 10.5px; padding: 0 5px; border-radius: 99px;
+    background: var(--bg-0); color: var(--ink-2); border: 1px solid var(--border);
+  }
+  .topbar__right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .cursor-pill {
+    font-family: var(--font-mono); font-size: 11px; color: var(--ink-1);
+    background: var(--bg-0); border: 1px solid var(--border); padding: 3px 8px;
+    border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 6px;
+  }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c-moving); display: inline-block; }
+  .live-dot.paused { background: var(--c-needs-you); }
+
+  .loop-band {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 6px 16px; background: var(--bg-2); font-size: 12px; flex-wrap: wrap;
+  }
+  .loop-band__left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .loop-band__right { display: flex; align-items: center; gap: 12px; color: var(--ink-1); flex-wrap: wrap; }
+
+  /* 3-way State Glyphs & Epistemic Provenance */
+  .glyph {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600;
+    padding: 1px 7px; border-radius: 3px; border: 1px solid transparent; white-space: nowrap;
+  }
+  .glyph__sym { font-family: var(--font-mono); font-size: 11px; line-height: 1; }
+  .g-moving { color: var(--c-moving); background: var(--c-moving-bg); border-color: rgba(34,197,94,0.3); }
+  .g-alarm { color: var(--c-alarm); background: var(--c-alarm-bg); border-color: rgba(239,68,68,0.35); }
+  .g-needs-you { color: var(--c-needs-you); background: var(--c-needs-you-bg); border-color: rgba(245,158,11,0.35); }
+  .g-needs-cause { color: var(--c-needs-cause); background: var(--c-needs-cause-bg); border-color: rgba(251,113,133,0.35); }
+  .g-waits-work { color: var(--c-waits-work); background: var(--c-waits-work-bg); border-color: rgba(56,189,248,0.3); }
+  .g-waits-loop { color: var(--c-waits-loop); background: var(--c-waits-loop-bg); border-color: rgba(167,139,250,0.3); }
+  .g-ready { color: var(--c-ready); background: var(--c-ready-bg); border-color: rgba(148,163,184,0.3); }
+  .g-landed { color: var(--c-landed); background: var(--c-landed-bg); border-color: rgba(16,185,129,0.3); }
+  .g-closed { color: var(--c-closed); background: var(--c-closed-bg); border-color: rgba(100,116,139,0.3); }
+
+  .epistemic {
+    font-family: var(--font-mono); font-size: 10.5px; padding: 1px 5px; border-radius: 3px;
+    border: 1px solid var(--border); background: var(--bg-0); color: var(--ink-1); white-space: nowrap;
+  }
+  .ep-observed { color: var(--c-moving); border-color: rgba(34,197,94,0.35); }
+  .ep-derived { color: var(--c-waits-work); border-color: rgba(56,189,248,0.35); }
+  .ep-seam { color: var(--c-needs-you); border-color: rgba(245,158,11,0.4); background: var(--c-needs-you-bg); }
+  .ep-unreadable { color: var(--c-alarm); border-color: rgba(239,68,68,0.4); background: var(--c-alarm-bg); }
+  .ep-absent { color: var(--ink-2); border-style: dashed; }
+  .ep-lane-copy { color: var(--c-needs-you); border-color: rgba(245,158,11,0.4); }
+  .ep-lower { color: var(--c-waits-loop); border-color: rgba(167,139,250,0.4); }
+
+  .entity-link {
+    font-family: var(--font-mono); font-size: 12px; color: var(--accent);
+    background: transparent; border: none; padding: 0; cursor: pointer; text-decoration: none;
+  }
+  .entity-link:hover { text-decoration: underline; background: transparent; }
+  .chip {
+    font-family: var(--font-mono); font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    background: var(--bg-3); border: 1px solid var(--border); color: var(--ink-1);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+
+  /* Main Container */
+  .main-wrap { padding: 14px 16px 48px; max-width: 1680px; margin: 0 auto; }
+
+  /* Pulse Strip */
+  .pulse-strip {
+    display: grid; grid-template-columns: repeat(7, minmax(110px, 1fr)); gap: 8px; margin-bottom: 14px;
+  }
+  .pulse-card {
+    background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 8px 10px; cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 4px;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .pulse-card:hover { border-color: var(--border-strong); background: var(--bg-2); }
+  .pulse-card.active { border-color: var(--accent); background: var(--accent-dim); }
+  .pulse-card__top { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+  .pulse-card__num { font-family: var(--font-mono); font-size: 20px; font-weight: 700; line-height: 1.1; }
+  .pulse-card__sub { font-size: 11px; color: var(--ink-2); }
+
+  /* Deck 2-Column Layout */
+  .deck-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(380px, 1fr); gap: 14px; align-items: start; }
+  @media (max-width: 1120px) {
+    .deck-grid { grid-template-columns: 1fr; }
+    .pulse-strip { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+  }
+
+  .panel {
+    background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden; margin-bottom: 14px;
+  }
+  .panel__head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 9px 12px; background: var(--bg-2); border-bottom: 1px solid var(--border);
+  }
+  .panel__title { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .panel__meta { font-size: 11.5px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
+  .panel__body { padding: 10px 12px; }
+
+  /* Tables */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th {
+    text-align: left; font-size: 11px; font-weight: 600; color: var(--ink-2);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--bg-2);
+    white-space: nowrap;
+  }
+  td {
+    padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--bg-hover); }
+  tbody tr[data-focused="true"] { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--accent-dim); }
+
+  /* Triage Groups */
+  .triage-group { border-bottom: 1px solid var(--border); }
+  .triage-group:last-child { border-bottom: none; }
+  .triage-group__head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 12px; background: var(--bg-2); border-bottom: 1px solid var(--border);
+  }
+  .triage-group__more {
+    padding: 6px 12px; background: var(--bg-0); font-size: 11.5px; color: var(--ink-1);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+
+  /* Lane Matrix */
+  .lane-summary-bar {
+    display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg-0);
+    border: 1px solid var(--border); margin: 8px 0 10px;
+  }
+  .lane-list { display: flex; flex-direction: column; gap: 6px; }
+  .lane-card {
+    background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;
+  }
+  .lane-card.quiet { border-left: 3px solid var(--c-needs-you); }
+  .lane-card.kept { border-left: 3px solid var(--c-waits-loop); }
+  .lane-card__top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .lane-card__id { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+  .lane-card__sub { font-size: 11.5px; color: var(--ink-1); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lane-card__act { font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); }
+
+  /* Queue Scale Bar & Filters */
+  .filter-bar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 12px; background: var(--bg-2); border-bottom: 1px solid var(--border);
+  }
+  .filter-bar input, .filter-bar select {
+    background: var(--bg-0); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 4px 8px; color: var(--ink-0);
+  }
+  .scale-bar { display: flex; height: 10px; border-radius: 3px; overflow: hidden; margin: 0 12px 10px; border: 1px solid var(--border); }
+  .hold-banner {
+    background: var(--c-needs-you-bg); border-bottom: 1px solid var(--c-needs-you);
+    padding: 6px 12px; display: flex; align-items: center; justify-content: space-between; font-size: 12px;
+  }
+
+  /* Waterfall */
+  .wf-controls {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 12px; background: var(--bg-2); border-bottom: 1px solid var(--border);
+  }
+  .wf-axis {
+    display: grid; grid-template-columns: 290px 1fr; border-bottom: 1px solid var(--border);
+    background: var(--bg-0); font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-2);
+  }
+  .wf-axis__ticks { display: flex; justify-content: space-between; padding: 4px 10px; }
+  .wf-row {
+    display: grid; grid-template-columns: 290px 1fr; border-bottom: 1px solid var(--border);
+    min-height: 30px; align-items: center; cursor: pointer;
+  }
+  .wf-row:hover { background: var(--bg-hover); }
+  .wf-row.selected { background: var(--accent-dim); }
+  .wf-label {
+    padding: 4px 8px; display: flex; align-items: center; gap: 6px; font-size: 11.5px;
+    border-right: 1px solid var(--border); overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  .wf-track { position: relative; height: 28px; margin: 0 10px; }
+  .wf-bar {
+    position: absolute; top: 6px; height: 16px; border-radius: 3px; min-width: 3px;
+    background: var(--c-waits-work); opacity: 0.88;
+  }
+  .wf-bar.llm { background: var(--c-waits-loop); }
+  .wf-bar.gate { background: var(--c-moving); }
+  .wf-bar.slot_wait { background: var(--c-needs-you); background-image: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(0,0,0,0.25) 4px, rgba(0,0,0,0.25) 8px); }
+  .wf-bar.derived { border: 1px dashed var(--ink-0); opacity: 0.75; }
+  .wf-bar.critical { box-shadow: 0 0 0 1.5px var(--ink-0); }
+
+  /* Wall time split */
+  .wall-split { display: flex; height: 14px; border-radius: 4px; overflow: hidden; border: 1px solid var(--border); margin: 8px 0; }
+  .wall-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-1); }
+
+  /* Inspector 2-col */
+  .insp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 980px) { .insp-grid { grid-template-columns: 1fr; } }
+
+  /* Modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 100;
+    display: none; align-items: center; justify-content: center; padding: 16px;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--bg-1); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    width: 100%; max-width: 560px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+  }
+  .modal__head { padding: 10px 14px; background: var(--bg-2); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
+  .modal__body { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .modal__foot { padding: 10px 14px; background: var(--bg-2); border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+  .modal textarea { width: 100%; min-height: 110px; background: var(--bg-0); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; font-family: var(--font-mono); font-size: 12px; }
+
+  .kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; font-size: 12px; }
+  .kv dt { color: var(--ink-2); }
+  .kv dd { margin: 0; word-break: break-word; }
+
+  .muted { color: var(--ink-2); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="shell-sticky">
+  <!-- Active Backend Alarm + Watch Alert Strip -->
+  <div class="alarm-strip" id="alarmStrip">
+    <div class="alarm-strip__lead">
+      <span class="alarm-strip__tag">▲ Backend Alarm</span>
+      <strong>codex-5.3-pool-b</strong>
+      <span>rate-limit / quota window exhausted since 14:11:04 UTC</span>
+      <span class="muted">· holds 3 items (<button class="entity-link" onclick="openInspector('item-014')">item-014</button>, <button class="entity-link" onclick="openInspector('item-027')">item-027</button>, <button class="entity-link" onclick="openInspector('item-088')">item-088</button>) · lane-5</span>
+      <span class="chip">tillr-watch: gate-stall-rerun on lane-9</span>
+    </div>
+    <div>
+      <span class="muted">Clears:</span> <code class="alarm-strip__cmd">tillr-drain alarm clear --backend codex-5.3-pool-b</code>
+    </div>
+  </div>
+
+  <!-- Top Navigation & Snapshot Cursor -->
+  <header class="topbar">
+    <div class="topbar__left">
+      <div class="brand">
+        <span class="brand__mark">T</span>
+        <span>TILLR // HELMSMAN</span>
+      </div>
+      <nav class="nav-tabs" id="navTabs" aria-label="Observatory surfaces">
+        <button class="nav-tab active" data-view="deck">Deck <span class="nav-count">14 lanes</span></button>
+        <button class="nav-tab" data-view="queue">Queue <span class="nav-count" id="navQueueCount">342</span></button>
+        <button class="nav-tab" data-view="passes">Passes <span class="nav-count">412</span></button>
+        <button class="nav-tab" data-view="inspector">Inspector <span class="nav-count" id="navInspLabel">item-003</span></button>
+        <button class="nav-tab" data-view="trunk">Trunk &amp; Perf</button>
+        <button class="nav-tab" data-view="questions">Questions &amp; Designs <span class="nav-count">9 open</span></button>
+      </nav>
+    </div>
+    <div class="topbar__right">
+      <span class="cursor-pill" title="Snapshot cursor from tillr-view serve">
+        <span class="live-dot" id="liveDot"></span>
+        <span id="liveLabel">live</span>
+        <span>· seq 48,291</span>
+        <span>· <span id="clockAge">2s</span> old</span>
+        <span class="chip" style="color:var(--c-moving);border-color:rgba(34,197,94,0.35);">--write</span>
+      </span>
+      <button type="button" id="btnPause" onclick="togglePause()">Pause updates</button>
+      <button type="button" onclick="openIdeaModal()">+ New idea <kbd class="chip">n</kbd></button>
+      <button type="button" onclick="toggleTheme()" id="btnTheme" title="Toggle dark/light theme">◐ Theme</button>
+    </div>
+  </header>
+
+  <!-- Loop Liveness & Heartbeat Band -->
+  <div class="loop-band" id="loopBand">
+    <div class="loop-band__left">
+      <span class="glyph g-moving" id="loopStateGlyph"><span class="glyph__sym">●</span><span>LOOP RUNNING</span></span>
+      <span id="loopDetail">Session <code class="mono">sess-20261124-0912</code> · heartbeat <span class="num">1s</span> ago · next pass due <span class="num">~1s</span></span>
+      <span class="muted">· last pass <button class="entity-link" onclick="switchView('passes')">20261124T142207Z</button> → 2 dispatched · 338 held · 2 settling</span>
+    </div>
+    <div class="loop-band__right">
+      <span>Lanes: <strong>8/14 running</strong> (6 ordinary, 2 express, 2 desk settling, 2 kept, 2 idle)</span>
+      <button type="button" onclick="toggleSimulatedStop()" id="btnSimStop" style="font-size:11px;padding:2px 7px;">Preview Stopped State</button>
+    </div>
+  </div>
+</div>
+
+<main class="main-wrap">
+
+  <!-- ==================== SURFACE 1: DECK (HOME TRIAGE + LANES) ==================== -->
+  <section id="view-deck">
+    <div class="pulse-strip" id="pulseStrip"></div>
+
+    <div class="deck-grid">
+      <!-- Left: Grouped by Who Must Act Next -->
+      <div>
+        <div class="panel">
+          <div class="panel__head">
+            <div class="panel__title">
+              <span>Triage by Next Mover</span>
+              <span class="epistemic ep-observed">source: tillr-drain why (pass 20261124T142207Z)</span>
+            </div>
+            <div class="panel__meta">
+              <span>Owner: <strong>9</strong> · Drain: <strong>184</strong> · Design: <strong>6</strong> · Operator: <strong>10</strong></span>
+              <button type="button" onclick="switchView('queue')">Full 342-item Queue →</button>
+            </div>
+          </div>
+          <div id="deckTriageGroups"></div>
+        </div>
+      </div>
+
+      <!-- Right Rail: 14 Lanes + Recent Passes -->
+      <div>
+        <div class="panel">
+          <div class="panel__head">
+            <div class="panel__title">
+              <span>Lanes (14 total)</span>
+              <span class="epistemic ep-derived">~clocks from state_since_ms</span>
+            </div>
+            <div class="panel__meta">
+              <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="chkHideIdle" onchange="renderLanes()"> Hide idle (2)
+              </label>
+            </div>
+          </div>
+          <div class="panel__body">
+            <div class="lane-summary-bar" title="8 running, 2 settling, 2 kept, 2 idle">
+              <div style="width:57.1%;background:var(--c-moving);" title="8 running"></div>
+              <div style="width:14.3%;background:var(--c-waits-loop);" title="2 settling"></div>
+              <div style="width:14.3%;background:var(--c-needs-you);" title="2 kept/held"></div>
+              <div style="width:14.3%;background:var(--c-ready);opacity:0.4;" title="2 idle"></div>
+            </div>
+            <div class="lane-list" id="deckLaneList"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__head">
+            <div class="panel__title">Newest Planning Passes (Folded)</div>
+            <div class="panel__meta"><button type="button" onclick="switchView('passes')">All passes →</button></div>
+          </div>
+          <div class="tbl-wrap">
+            <table>
+              <thead><tr><th>Pass / Streak</th><th>Outcome</th><th>Changed vs Older</th></tr></thead>
+              <tbody id="deckPassesMini"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== SURFACE 2: QUEUE LEDGER (460 ITEMS) ==================== -->
+  <section id="view-queue" class="hidden">
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">
+          <span>Queue &amp; Waiting Ledger</span>
+          <span class="epistemic ep-observed" id="queueCountBadge">342 unlanded · 118 landed</span>
+        </div>
+        <div class="panel__meta">
+          <span>Keys: <kbd class="chip">j</kbd>/<kbd class="chip">k</kbd> focus · <kbd class="chip">Enter</kbd> open · <kbd class="chip">J</kbd>/<kbd class="chip">K</kbd> reorder</span>
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <button type="button" class="tab-btn active" data-qpreset="not-moving" onclick="setQueuePreset('not-moving')">Not moving (215)</button>
+        <button type="button" class="tab-btn" data-qpreset="unlanded" onclick="setQueuePreset('unlanded')">All unlanded (342)</button>
+        <button type="button" class="tab-btn" data-qpreset="landed" onclick="setQueuePreset('landed')">Landed (118)</button>
+        <input type="search" id="qSearch" placeholder="Filter id, title, path fence, reason…" oninput="renderQueue()" style="min-width:240px;">
+        <select id="qClassFilter" onchange="renderQueue()">
+          <option value="">Class: all</option>
+          <option value="alarm">▲ alarm</option>
+          <option value="needs you">◆ needs you</option>
+          <option value="needs a cause">◈ needs a cause</option>
+          <option value="waits on work">◌ waits on work</option>
+          <option value="waits on the loop">◔ waits on the loop</option>
+          <option value="ready">○ ready</option>
+          <option value="moving">● moving</option>
+        </select>
+        <select id="qSort" onchange="renderQueue()">
+          <option value="place">Sort: Queue Place</option>
+          <option value="item">Sort: Item ID</option>
+          <option value="waited">Sort: Longest Waited</option>
+        </select>
+        <button type="button" onclick="simulateQueueArrival()" style="margin-left:auto;">Simulate arrival (test P7 pin)</button>
+      </div>
+
+      <div class="hold-banner hidden" id="queueHoldBanner">
+        <span><strong>List order pinned while reading (P7):</strong> <span id="queueHoldText">2 new arrivals · 1 reorder queued</span></span>
+        <button type="button" class="primary" onclick="acceptQueueHold()">Accept updates ↑</button>
+      </div>
+
+      <div style="padding:10px 12px 0;">
+        <div class="scale-bar" id="queueScaleBar" title="Proportional distribution of 342 unlanded items"></div>
+      </div>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Item &amp; Title</th>
+              <th>Class</th>
+              <th>Where</th>
+              <th>Why / Graph</th>
+              <th>Mover</th>
+              <th>Since</th>
+              <th>Last Run</th>
+              <th>Order (--write)</th>
+            </tr>
+          </thead>
+          <tbody id="queueTableBody"></tbody>
+        </table>
+      </div>
+      <div style="padding:10px 12px;display:flex;align-items:center;justify-content:space-between;background:var(--bg-2);border-top:1px solid var(--border);">
+        <span class="muted" id="queuePageInfo">Showing 1–50 of 342</span>
+        <div style="display:flex;gap:6px;">
+          <button type="button" onclick="pageQueue(-1)" id="qPrev">← Prev 50</button>
+          <button type="button" onclick="pageQueue(1)" id="qNext">Next 50 →</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== SURFACE 3: PASSES (FOLDED STREAKS) ==================== -->
+  <section id="view-passes" class="hidden">
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">
+          <span>Planning Pass Ledger (Folded Consecutive Streaks)</span>
+          <span class="epistemic ep-observed">reads: drain_passes + dispatches</span>
+        </div>
+        <div class="panel__meta">
+          <span>412 raw passes → 7 distinct decision states</span>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Newest Pass</th>
+              <th>Streak</th>
+              <th>Decisions</th>
+              <th>Changed vs Older Group</th>
+              <th>Phases (claim / stage / dispatch / gate / land)</th>
+              <th>Token Spend</th>
+            </tr>
+          </thead>
+          <tbody id="passesTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== SURFACE 4: INSPECTOR (ITEM + RUN WATERFALL) ==================== -->
+  <section id="view-inspector" class="hidden">
+    <div class="panel" style="margin-bottom:14px;">
+      <div class="panel__head">
+        <div class="panel__title">
+          <span>Entity Inspector</span>
+          <span class="muted">Switch showcase item:</span>
+          <button type="button" onclick="openInspector('item-003')">item-003 (● working + waterfall)</button>
+          <button type="button" onclick="openInspector('item-idea-9f2a')">item-idea-9f2a (◆ idea + Vantage)</button>
+          <button type="button" onclick="openInspector('item-019')">item-019 (◈ verify refusal + preserved)</button>
+          <button type="button" onclick="openInspector('item-104')">item-104 (✓ landed)</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="inspectorBody"></div>
+  </section>
+
+  <!-- ==================== SURFACE 5: TRUNK, PERFORMANCE & GRAPH ==================== -->
+  <section id="view-trunk" class="hidden">
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__title">
+          <span class="glyph g-landed"><span class="glyph__sym">✓</span><span>TRUNK GREEN</span></span>
+          <span>refs/heads/main @ <code class="mono">a84f21c</code></span>
+          <span class="epistemic ep-observed">refs/tillr/green @ a84f21c</span>
+        </div>
+        <div class="panel__meta">
+          <span>Published <code class="mono">origin/main</code>: <code class="mono">9c310e4</code> (2 commits behind green)</span>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Landing</th>
+              <th>Item / Run</th>
+              <th>Result</th>
+              <th>trunk_before → trunk_after</th>
+              <th>gated_tree vs landed_tree</th>
+              <th>Time</th>
+            </tr>
+          </thead>
+          <tbody id="trunkLandingsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="insp-grid">
+      <div class="panel">
+        <div class="panel__head">
+          <div class="panel__title">Gate Check Performance (24h · anchored to generated_at)</div>
+          <div class="panel__meta">p95 withheld if &lt; 5 samples</div>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Check</th><th>Samples</th><th>Median</th><th>p95</th><th>Max</th><th>Slot Wait</th><th>Fail</th></tr></thead>
+            <tbody id="perfChecksBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head">
+          <div class="panel__title">Dependency Graph (Unlanded Blockers)</div>
+          <div class="panel__meta">Includes closed-without-landing hold</div>
+        </div>
+        <div class="panel__body" id="depGraphWrap"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== SURFACE 6: QUESTIONS & DESIGNS ==================== -->
+  <section id="view-questions" class="hidden">
+    <div class="insp-grid">
+      <div class="panel">
+        <div class="panel__head">
+          <div class="panel__title">Vantage Open Questions</div>
+          <div class="panel__meta"><span class="epistemic ep-observed">questions-ok · cache age 42s</span></div>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Question</th><th>Document</th><th>Holding Item</th><th>Status</th></tr></thead>
+            <tbody id="questionsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head">
+          <div class="panel__title">Warm Designer Sessions</div>
+          <div class="panel__meta">Review-comment intake &amp; context</div>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Document</th><th>Session</th><th>State</th><th>Context Tokens</th><th>Batches</th></tr></thead>
+            <tbody id="designsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- New Idea Modal (--write) -->
+<div class="modal-backdrop" id="ideaModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ideaModalTitle">
+    <div class="modal__head">
+      <span id="ideaModalTitle">+ New Idea (via tillr-item idea)</span>
+      <button type="button" onclick="closeIdeaModal()">✕</button>
+    </div>
+    <div class="modal__body">
+      <p class="muted" style="margin:0;">Words are preserved verbatim under <code>.tillr/intake/</code> and queued on the <code>design</code> seat. Closing keeps your draft.</p>
+      <textarea id="ideaWords" placeholder="Describe the change or question in your own words…"></textarea>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <label>Place:
+          <select id="ideaPlace">
+            <option value="first">Top of queue (place 1)</option>
+            <option value="last">Bottom of queue</option>
+            <option value="after:item-003">After item-003</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div class="modal__foot">
+      <button type="button" onclick="closeIdeaModal()">Cancel (Esc)</button>
+      <button type="button" class="primary" onclick="submitIdea()">Save Idea (Ctrl+Enter)</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ==================== DETERMINISTIC DOMAIN DATA (460 ITEMS, 14 LANES) ====================
+const CLASS_META = {
+  "alarm":             { sym: "▲", cls: "g-alarm",       label: "alarm",             color: "var(--c-alarm)" },
+  "needs you":         { sym: "◆", cls: "g-needs-you",   label: "needs you",         color: "var(--c-needs-you)" },
+  "needs a cause":     { sym: "◈", cls: "g-needs-cause", label: "needs a cause",     color: "var(--c-needs-cause)" },
+  "waits on work":     { sym: "◌", cls: "g-waits-work",  label: "waits on work",     color: "var(--c-waits-work)" },
+  "waits on the loop": { sym: "◔", cls: "g-waits-loop",  label: "waits on the loop", color: "var(--c-waits-loop)" },
+  "ready":             { sym: "○", cls: "g-ready",       label: "ready",             color: "var(--c-ready)" },
+  "moving":            { sym: "●", cls: "g-moving",      label: "moving",            color: "var(--c-moving)" },
+  "landed":            { sym: "✓", cls: "g-landed",      label: "landed",            color: "var(--c-landed)" }
+};
+
+const LANES = [
+  { id: "lane-1",    kind: "ordinary", state: "running",  item: "item-003", run: "run-9821", seat: "work",   seatSrc: "item",    backend: "claude-opus-4-6", attempt: 1, since: "4m 18s", logAge: "2s",  quiet: false, action: "tool: go test ./tools/tillr-view/...", tokens: 48210 },
+  { id: "lane-2",    kind: "ordinary", state: "running",  item: "item-007", run: "run-9824", seat: "work",   seatSrc: "item",    backend: "claude-opus-4-6", attempt: 2, since: "11m 02s", logAge: "6m 14s", quiet: true,  action: "liveness: log quiet 6m 14s (last: vitest)", tokens: 91400 },
+  { id: "lane-3",    kind: "ordinary", state: "running",  item: "item-011", run: "run-9828", seat: "judge",  seatSrc: "workflow",backend: "codex-5.3-pool-a", attempt: 1, since: "1m 44s", logAge: "4s",  quiet: false, action: "eval: checking criterion C3 against diff", tokens: 19300 },
+  { id: "lane-4",    kind: "ordinary", state: "running",  item: "item-016", run: "run-9830", seat: "work",   seatSrc: "default", backend: "gemini-2.5-pro",  attempt: 1, since: "3m 09s", logAge: "1s",  quiet: false, action: "llm_turn #7 · 62 tok/s", tokens: 34120 },
+  { id: "lane-5",    kind: "ordinary", state: "kept",     item: "item-014", run: "run-9802", seat: "work",   seatSrc: "item",    backend: "codex-5.3-pool-b", attempt: 1, since: "11m 04s", logAge: "—",   quiet: false, action: "kept: backend alarm (codex-5.3-pool-b quota); checkout preserved", tokens: 27400 },
+  { id: "lane-6",    kind: "ordinary", state: "running",  item: "item-022", run: "run-9831", seat: "work",   seatSrc: "item",    backend: "claude-opus-4-6", attempt: 1, since: "2m 51s", logAge: "3s",  quiet: false, action: "gate: running shard 2/4 (go-test:drain)", tokens: 61800 },
+  { id: "lane-7",    kind: "ordinary", state: "idle",     item: null,       run: "run-9799", seat: null,     seatSrc: "none",    backend: "claude-opus-4-6", attempt: null, since: "42s", logAge: "—", quiet: false, action: "last: item-104 · landed (a84f21c)", tokens: null },
+  { id: "lane-8",    kind: "ordinary", state: "idle",     item: null,       run: "run-9795", seat: null,     seatSrc: "none",    backend: "gemini-2.5-pro",  attempt: null, since: "1m 15s", logAge: "—", quiet: false, action: "last: item-103 · landed (77e19b0)", tokens: null },
+  { id: "express-1", kind: "express",  state: "running",  item: "item-001", run: "run-9833", seat: "work",   seatSrc: "item",    backend: "claude-opus-4-6", attempt: 1, since: "52s",    logAge: "1s",  quiet: false, action: "tool: edit tools/tillr-view/counts.go", tokens: 14900 },
+  { id: "express-2", kind: "express",  state: "running",  item: "item-002", run: "run-9834", seat: "plan",   seatSrc: "item",    backend: "codex-5.3-pool-a", attempt: 1, since: "1m 19s", logAge: "5s",  quiet: false, action: "llm_turn #3 · decomposing sub-items", tokens: 11200 },
+  { id: "express-3", kind: "express",  state: "settling", item: "item-005", run: "run-9819", seat: "work",   seatSrc: "item",    backend: "claude-opus-4-6", attempt: 1, since: "9s",     logAge: "—",   quiet: false, action: "after gate-verdict ~9s (awaiting land lease)", tokens: 53100 },
+  { id: "desk-1",    kind: "desk",     state: "running",  item: "item-008", run: "run-9829", seat: "design", seatSrc: "item",    backend: "claude-opus-4-6", attempt: 1, since: "6m 40s", logAge: "8s",  quiet: false, action: "doc: updating docs/design/slot-scheduler.md", tokens: 74500 },
+  { id: "desk-2",    kind: "desk",     state: "settling", item: "item-012", run: "run-9815", seat: "design", seatSrc: "item",    backend: "claude-opus-4-6", attempt: 1, since: "14s",    logAge: "—",   quiet: false, action: "after design-sync ~14s", tokens: 38900 },
+  { id: "lane-9",    kind: "draining", state: "kept",     item: "item-019", run: "run-9788", seat: "work",   seatSrc: "item",    backend: "claude-opus-4-6", attempt: 3, since: "18m 20s", logAge: "—",  quiet: false, action: "kept: verify-not-done + tillr-watch gate-stall-rerun", tokens: 118400 }
+];
+
+const CURATED_ITEMS = [
+  { id: "item-001", place: 1,  cls: "moving",            title: "Fix boardCountsOf closed-blocker edge parity",        where: "express-1", why: "running on express-1 (run-9833)", mover: "lane express-1", since: "52s", run: "run-9833", fence: "tools/tillr-view/counts.go" },
+  { id: "item-002", place: 2,  cls: "moving",            title: "Plan shard-level slot-wait telemetry",               where: "express-2", why: "running on express-2 (run-9834)", mover: "lane express-2", since: "1m 19s", run: "run-9834", fence: "tools/tillr-gate/**" },
+  { id: "item-003", place: 3,  cls: "moving",            title: "Add SpanViewer critical-path uncovered self-time",    where: "lane-1",    why: "running on lane-1 (run-9821)",    mover: "lane lane-1",    since: "4m 18s", run: "run-9821", fence: "tools/tillr-view/web/src/components/SpanViewer.tsx" },
+  { id: "item-014", place: 4,  cls: "alarm",             title: "Refactor pass_observation ring buffer",              where: "lane-5",    why: "backend alarm: codex-5.3-pool-b quota exhausted", mover: "operator (clear alarm)", since: "11m 04s", run: "run-9802", fence: "tools/tillr-drain/drain/**" },
+  { id: "item-027", place: 5,  cls: "alarm",             title: "Tighten holdrules unknown-reason test",              where: "queue",     why: "backend alarm: codex-5.3-pool-b quota exhausted", mover: "operator (clear alarm)", since: "11m 04s", run: null, fence: "tools/tillr-drain/holdrules/**" },
+  { id: "item-088", place: 6,  cls: "alarm",             title: "Emit boundary.check span clock in steps.jsonl",     where: "queue",     why: "backend alarm: codex-5.3-pool-b quota exhausted", mover: "operator (clear alarm)", since: "9m 12s",  run: null, fence: "tools/tillr-drain/drain/spans.go" },
+  { id: "item-idea-9f2a", place: 7, cls: "needs you",    title: "Idea: Separate express queue starvation alerts from ordinary lanes", where: "Vantage", why: "open question OQ-OBS-14 in docs/design/express-starvation.md", mover: "owner (answer OQ-OBS-14)", since: "34m", run: "run-9740", isIdea: true, fence: ".tillr/intake/item-idea-9f2a.txt, docs/design/**" },
+  { id: "item-031", place: 8,  cls: "needs you",         title: "Approve remote-sync-conflict escalation on main",    where: "trunk",     why: "remote-sync-conflict escalated to owner", mover: "owner (resolve conflict)", since: "21m", run: null, fence: "docs/reference/**" },
+  { id: "item-019", place: 9,  cls: "needs a cause",     title: "Support --since cursor in tillr-view events",        where: "lane-9",    why: "verify-not-done (attempt 3) + gate-stall-rerun", mover: "operator / replan", since: "18m 20s", run: "run-9788", fence: "tools/tillr-view/events.go" },
+  { id: "item-044", place: 10, cls: "needs a cause",     title: "Fix corrupt JSONL line handling in proc-exec",       where: "gate",      why: "eval-failed: regression in TestProcExecTruncated", mover: "operator (diagnose)", since: "15m", run: "run-9771", fence: "tools/tillr-trace/**" },
+  { id: "item-005", place: 11, cls: "waits on the loop", title: "Cache vantage-check index with single-flight",      where: "express-3", why: "settling after gate-verdict ~9s", mover: "drain (land lease)", since: "9s", run: "run-9819", fence: "tools/tillr-view/vantagecache.go" },
+  { id: "item-012", place: 12, cls: "waits on the loop", title: "Document tillr-item place sparse rank keys",       where: "desk-2",    why: "settling after design-sync ~14s", mover: "drain (sync)", since: "14s", run: "run-9815", fence: "docs/reference/observatory-actions.md" }
+];
+
+// Generate remaining 330 unlanded + 118 landed items deterministically = 460 total
+const ALL_ITEMS = [...CURATED_ITEMS];
+const FENCES = [
+  "tools/tillr-view/**", "tools/tillr-drain/drain/**", "tools/tillr-gate/**",
+  "tools/tillr-item/**", "tools/tillr-trace/**", "docs/reference/**", "docs/design/**"
+];
+const VERBS = ["Harden", "Verify", "Streamline", "Index", "Audit", "Normalize", "Project", "Guard", "Batch", "Export"];
+const NOUNS = ["pass folding", "span clocks", "lane lease", "trunk squash", "criterion freeze", "intake hash", "ws invalidation", "slot wait", "hold rule", "check p95"];
+
+const TARGET_COUNTS = {
+  "needs you": 9 - 2,         // +2 curated = 9
+  "needs a cause": 7 - 2,     // +2 curated = 7
+  "waits on work": 184,       // 184
+  "waits on the loop": 12 - 2,// +2 curated = 12
+  "ready": 115,               // 115
+  "moving": 12 - 3            // +3 curated = 12 (includes 2 settling/running nodes)
+};
+
+let placeCounter = 13;
+let idCounter = 120;
+for (const [cls, count] of Object.entries(TARGET_COUNTS)) {
+  for (let i = 0; i < count; i++) {
+    const id = `item-${String(idCounter++).padStart(3, "0")}`;
+    const verb = VERBS[(idCounter + i) % VERBS.length];
+    const noun = NOUNS[(idCounter * 3 + i) % NOUNS.length];
+    const fence = FENCES[idCounter % FENCES.length];
+    let where = "queue", why = "eligible on next pass with free lane", mover = "drain";
+    if (cls === "needs you") { where = "Vantage"; why = `open question OQ-${20 + i} in docs/design/tillr.md`; mover = "owner"; }
+    else if (cls === "needs a cause") { where = "gate"; why = "red check: go-test:store"; mover = "operator"; }
+    else if (cls === "waits on work") {
+      if (i % 3 === 0) { where = "fence"; why = `path fence overlaps ${i % 2 === 0 ? "item-003" : "item-001"} (${fence})`; mover = "drain (fence clear)"; }
+      else if (i % 3 === 1) { where = "dep"; why = `blocked_by item-${String(14 + (i % 10)).padStart(3, "0")}`; mover = "drain (blocker)"; }
+      else { where = "cap"; why = "ordinary lane cap (8/8 busy)"; mover = "drain (free lane)"; }
+    }
+    else if (cls === "waits on the loop") { where = "sync"; why = "awaiting next planning pass"; mover = "drain"; }
+    else if (cls === "moving") { where = `lane-${(i % 6) + 1}`; why = "executing work step"; mover = `lane ${(i % 6) + 1}`; }
+    ALL_ITEMS.push({
+      id, place: placeCounter++, cls,
+      title: `${verb} ${noun} for ${fence.split("/")[1] || "tillr"}`,
+      where, why, mover,
+      since: `${1 + (idCounter % 45)}m`,
+      run: cls === "moving" ? `run-${9800 + i}` : (i % 4 === 0 ? `run-${9500 + i}` : null),
+      fence
+    });
+  }
+}
+
+// 118 landed items
+for (let i = 0; i < 118; i++) {
+  const id = `item-${String(104 - i < 1 ? 500 + i : 104 - i).padStart(3, "0")}`;
+  ALL_ITEMS.push({
+    id: i === 0 ? "item-104" : `item-L${String(i + 1).padStart(3, "0")}`,
+    place: null, cls: "landed",
+    title: `${VERBS[i % VERBS.length]} ${NOUNS[(i * 2) % NOUNS.length]} (landed)`,
+    where: "trunk", why: "landed via tillr-land squash", mover: "—",
+    since: `${1 + (i % 12)}h ago`, run: `run-${9200 - i}`, fence: FENCES[i % FENCES.length]
+  });
+}
+
+const PASSES = [
+  { newest: "20261124T142207Z", oldest: "20261124T141945Z", count: 142, decisions: "2 dispatched · 338 held · 2 settling", changed: "item-001: ready → dispatch (express-1); item-002: ready → dispatch (express-2)", phases: "4ms / 11ms / 3ms / 0ms / 0ms", tokens: "≥ 1,420,800", unrecorded: 2 },
+  { newest: "20261124T141944Z", oldest: "20261124T141510Z", count: 98,  decisions: "1 dispatched · 339 held · 2 settling", changed: "item-003: waits on work → dispatch (lane-1)", phases: "5ms / 14ms / 4ms / 2ms / 1ms", tokens: "984,200", unrecorded: 0 },
+  { newest: "20261124T141509Z", oldest: "20261124T141104Z", count: 64,  decisions: "0 dispatched · 342 held", changed: "item-014, item-027, item-088: ready → hold (backend alarm codex-5.3-pool-b)", phases: "3ms / 0ms / 2ms / 0ms / 0ms", tokens: "0", unrecorded: 0 },
+  { newest: "20261124T141103Z", oldest: "20261124T140218Z", count: 108, decisions: "3 dispatched · 339 held", changed: "item-104: gate-ok → landed (a84f21c)", phases: "6ms / 18ms / 4ms / 412ms / 88ms", tokens: "≥ 2,110,400", unrecorded: 1 }
+];
+
+const LANDINGS = [
+  { id: "land-441", item: "item-104", run: "run-9799", result: "landed", before: "77e19b0", after: "a84f21c", gatedTree: "4b91e02", landedTree: "8d22c19", note: "concurrent squash replay (trees legitimately differ)", at: "14:21:25 UTC" },
+  { id: "land-440", item: "item-103", run: "run-9795", result: "landed", before: "3c108a2", after: "77e19b0", gatedTree: "f120a99", landedTree: "f120a99", note: "exact tree match", at: "14:20:52 UTC" },
+  { id: "land-439", item: "item-102", run: "run-9781", result: "landed", before: "9c310e4", after: "3c108a2", gatedTree: "19aa82c", landedTree: "19aa82c", note: "exact tree match", at: "14:16:11 UTC" }
+];
+
+const CHECKS = [
+  { id: "go-test:store",   samples: 42, median: "1,840 ms", p95: "3,120 ms", max: "4,010 ms", wait: "18,400 ms", fail: 1 },
+  { id: "vitest:web",      samples: 38, median: "2,410 ms", p95: "4,680 ms", max: "5,220 ms", wait: "6,100 ms",  fail: 0 },
+  { id: "fork-replay:gate",samples: 14, median: "6,120 ms", p95: "9,840 ms", max: "11,200 ms",wait: "0 ms",      fail: 0 },
+  { id: "vantage:check",   samples: 3,  median: "420 ms",   p95: "withheld (<5)", max: "510 ms", wait: "0 ms",   fail: 0 }
+];
+
+const QUESTIONS = [
+  { id: "OQ-OBS-14", doc: "docs/design/express-starvation.md", item: "item-idea-9f2a", status: "holding item" },
+  { id: "OQ-SLOT-03", doc: "docs/design/slot-scheduler.md", item: "item-008", status: "open (non-blocking)" },
+  { id: "OQ-PR16",    doc: "docs/tillr/decision-provenance-review.md", item: "—", status: "open (review)" }
+];
+
+const DESIGNS = [
+  { doc: "docs/design/slot-scheduler.md", session: "ds-881", state: "warm", tokens: "42,190", batches: "3 handled · 0 pending" },
+  { doc: "docs/design/express-starvation.md", session: "ds-879", state: "waiting owner", tokens: "28,400", batches: "1 handled · 1 pending" }
+];
+
+const WATERFALL_SPANS = [
+  { id: "sp-1", parent: null,   name: "boundary.check",     cat: "stage",     start: 0,    end: null, epistemic: "unobserved_seam", reason: "tick-level bracket; no per-run clock written", self: null, critical: false },
+  { id: "sp-2", parent: null,   name: "stage: fence",       cat: "stage",     start: 0,    end: 180,  epistemic: "observed",        reason: "", self: 180, critical: false },
+  { id: "sp-3", parent: null,   name: "stage: work",        cat: "stage",     start: 180,  end: 9400, epistemic: "derived_clock",   reason: "open run — right edge advances on viewer clock", self: 320, critical: true, open: true },
+  { id: "sp-4", parent: "sp-3", name: "llm_turn #1 (opus)", cat: "llm",       start: 200,  end: 2400, epistemic: "observed",        reason: "first output 410 ms · 58.2 tok/s", self: 2200, critical: false },
+  { id: "sp-5", parent: "sp-3", name: "tool: read SpanViewer.tsx", cat: "tool", start: 2420, end: 2680, epistemic: "derived_clock",  reason: "derived from envelope", self: 260, critical: false },
+  { id: "sp-6", parent: "sp-3", name: "llm_turn #2 (opus)", cat: "llm",       start: 2700, end: 5100, epistemic: "observed",        reason: "first output 390 ms · 64.1 tok/s", self: 2400, critical: false },
+  { id: "sp-7", parent: "sp-3", name: "tool: bash go test", cat: "tool",      start: 5120, end: 9400, epistemic: "observed",        reason: "", self: 1480, critical: true, open: true },
+  { id: "sp-8", parent: "sp-7", name: "slot.wait (test-slot-2)", cat: "slot_wait", start: 5200, end: 7100, epistemic: "observed",   reason: "waited 1,900 ms for shard slot", self: 1900, critical: false },
+  { id: "sp-9", parent: "sp-7", name: "proc-exec: go test", cat: "gate",      start: 7100, end: 9400, epistemic: "observed",        reason: "exit 0 (running)", self: 2300, critical: true, open: true },
+  { id: "sp-10", parent: null,  name: "check: vitest:web",  cat: "gate",      start: null, end: null, epistemic: "absent",          reason: "skipped: path fence excludes web/tests", self: null, critical: false }
+];
+
+// ==================== STATE ====================
+let state = {
+  view: "deck",
+  paused: false,
+  simStopped: false,
+  activeClassFilter: null,
+  queuePreset: "not-moving",
+  queuePage: 0,
+  queuePinned: false,
+  queuePendingUpdates: 0,
+  focusedRowId: null,
+  inspectedItem: "item-003",
+  wfZoom: 1,
+  wfPan: 0,
+  wfSelectedSpan: "sp-7",
+  inspTab: "timeline",
+  ageSeconds: 2
+};
+
+// ==================== HELPERS ====================
+function glyphHtml(cls, extra = "") {
+  const m = CLASS_META[cls] || { sym: "?", cls: "g-ready", label: cls };
+  return `<span class="glyph ${m.cls}"><span class="glyph__sym" aria-hidden="true">${m.sym}</span><span>${m.label}${extra}</span></span>`;
+}
+function linkItem(id) {
+  return `<button type="button" class="entity-link" onclick="openInspector('${id}')">${id}</button>`;
+}
+function linkRun(id) {
+  if (!id) return `<span class="muted">—</span>`;
+  return `<button type="button" class="entity-link" onclick="openInspector('item-003')">${id}</button>`;
+}
+
+// ==================== NAVIGATION ====================
+function switchView(view) {
+  state.view = view;
+  document.querySelectorAll("main > section").forEach(s => s.classList.add("hidden"));
+  document.getElementById(`view-${view}`).classList.remove("hidden");
+  document.querySelectorAll("#navTabs .nav-tab").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.view === view);
+  });
+  if (view === "queue") renderQueue();
+  if (view === "passes") renderPasses();
+  if (view === "inspector") renderInspector();
+  if (view === "trunk") renderTrunk();
+  if (view === "questions") renderQuestions();
+}
+
+document.querySelectorAll("#navTabs .nav-tab").forEach(btn => {
+  btn.addEventListener("click", () => switchView(btn.dataset.view));
+});
+
+function openInspector(itemId) {
+  state.inspectedItem = itemId;
+  document.getElementById("navInspLabel").textContent = itemId;
+  switchView("inspector");
+}
+
+function jumpQueueClass(cls) {
+  state.queuePreset = "unlanded";
+  document.getElementById("qClassFilter").value = cls;
+  state.queuePage = 0;
+  switchView("queue");
+}
+
+// ==================== DECK RENDER ====================
+function renderDeck() {
+  const unlanded = ALL_ITEMS.filter(i => i.cls !== "landed");
+  const order = ["alarm", "needs you", "needs a cause", "waits on work", "waits on the loop", "ready", "moving"];
+  const counts = {};
+  order.forEach(c => counts[c] = 0);
+  unlanded.forEach(i => counts[i.cls] = (counts[i.cls] || 0) + 1);
+
+  const subtext = {
+    "alarm": "operator clears",
+    "needs you": "owner / Vantage",
+    "needs a cause": "diagnose fault",
+    "waits on work": "fence / dep / cap",
+    "waits on the loop": "settling / sync",
+    "ready": "next free lane",
+    "moving": "8 running · 2 settling"
+  };
+
+  document.getElementById("pulseStrip").innerHTML = order.map(cls => {
+    const active = state.activeClassFilter === cls ? "active" : "";
+    return `<button type="button" class="pulse-card ${active}" onclick="toggleDeckClass('${cls}')">
+      <div class="pulse-card__top">${glyphHtml(cls)}<span class="pulse-card__num num">${counts[cls]}</span></div>
+      <div class="pulse-card__sub">${subtext[cls]}</div>
+    </button>`;
+  }).join("");
+
+  const groupsToShow = state.activeClassFilter ? [state.activeClassFilter] : order;
+  document.getElementById("deckTriageGroups").innerHTML = groupsToShow.map(cls => {
+    const rows = unlanded.filter(i => i.cls === cls);
+    if (!rows.length) return "";
+    const cap = state.activeClassFilter ? 15 : (["alarm", "needs you", "needs a cause"].includes(cls) ? 5 : 3);
+    const slice = rows.slice(0, cap);
+    return `<div class="triage-group">
+      <div class="triage-group__head">
+        <div style="display:flex;align-items:center;gap:8px;">${glyphHtml(cls)} <strong class="num">${rows.length}</strong></div>
+        <button type="button" onclick="jumpQueueClass('${cls}')" style="font-size:11px;padding:2px 7px;">Filter in Queue →</button>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Item</th><th>Where</th><th>Why &amp; Mover</th><th>Since</th></tr></thead>
+          <tbody>
+            ${slice.map(r => `<tr>
+              <td class="num muted">${r.place ?? "—"}</td>
+              <td>${linkItem(r.id)} ${r.isIdea ? '<span class="chip">idea</span>' : ""}<div style="font-weight:500;">${r.title}</div></td>
+              <td><code class="mono">${r.where}</code></td>
+              <td>${r.why}<div class="muted" style="font-size:11px;">mover: ${r.mover}</div></td>
+              <td class="num muted">${r.since}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+      ${rows.length > slice.length ? `<div class="triage-group__more"><span>Showing ${slice.length} of ${rows.length} ${cls} items</span><button type="button" onclick="jumpQueueClass('${cls}')">View all ${rows.length} →</button></div>` : ""}
+    </div>`;
+  }).join("");
+
+  renderLanes();
+
+  document.getElementById("deckPassesMini").innerHTML = PASSES.slice(0, 3).map(p => `<tr>
+    <td><button type="button" class="entity-link" onclick="switchView('passes')">${p.newest}</button><div class="muted" style="font-size:11px;">×${p.count} identical</div></td>
+    <td>${p.decisions}</td>
+    <td style="font-size:11.5px;">${p.changed}</td>
+  </tr>`).join("");
+}
+
+function toggleDeckClass(cls) {
+  state.activeClassFilter = state.activeClassFilter === cls ? null : cls;
+  renderDeck();
+}
+
+function renderLanes() {
+  const hideIdle = document.getElementById("chkHideIdle").checked;
+  const list = hideIdle ? LANES.filter(l => l.state !== "idle") : LANES;
+  document.getElementById("deckLaneList").innerHTML = list.map(l => {
+    const stateCls = l.state === "running" ? "moving" : l.state === "settling" ? "waits on the loop" : l.state === "kept" ? "needs you" : "ready";
+    const cardCls = l.quiet ? "lane-card quiet" : l.state === "kept" ? "lane-card kept" : "lane-card";
+    return `<div class="${cardCls}">
+      <div class="lane-card__top">
+        <div class="lane-card__id">
+          <code class="mono">${l.id}</code>
+          <span class="chip">${l.kind}</span>
+          ${glyphHtml(stateCls, l.state === "running" ? "" : ` (${l.state})`)}
+        </div>
+        <div class="num muted" style="font-size:11.5px;">
+          ~${l.since} ${l.quiet ? `<strong style="color:var(--c-needs-you);">· quiet ${l.logAge}</strong>` : ""}
+        </div>
+      </div>
+      <div class="lane-card__sub">
+        ${l.item ? `${linkItem(l.item)} · ${linkRun(l.run)}` : `<span class="muted">idle · ${l.action}</span>`}
+        ${l.seat ? `· <span>seat <strong>${l.seat}</strong> (${l.seatSrc})</span> · <span>${l.backend}</span> · <span>att ${l.attempt}</span>` : ""}
+        ${l.tokens !== null ? `· <span class="num">${l.tokens.toLocaleString()} tok</span>` : ""}
+      </div>
+      ${l.item ? `<div class="lane-card__act">${l.action}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+// ==================== QUEUE RENDER (460 ITEMS + P7 PIN) ====================
+function setQueuePreset(preset) {
+  state.queuePreset = preset;
+  state.queuePage = 0;
+  document.querySelectorAll("[data-qpreset]").forEach(b => b.setAttribute("aria-pressed", b.dataset.qpreset === preset ? "true" : "false"));
+  renderQueue();
+}
+
+function getFilteredQueue() {
+  const q = document.getElementById("qSearch").value.trim().toLowerCase();
+  const cls = document.getElementById("qClassFilter").value;
+  const sort = document.getElementById("qSort").value;
+  let rows = ALL_ITEMS.filter(i => {
+    if (state.queuePreset === "not-moving") {
+      if (i.cls === "landed" || i.cls === "ready" || i.cls === "moving") return false;
+    } else if (state.queuePreset === "unlanded") {
+      if (i.cls === "landed") return false;
+    } else if (state.queuePreset === "landed") {
+      if (i.cls !== "landed") return false;
+    }
+    if (cls && i.cls !== cls) return false;
+    if (q && !`${i.id} ${i.title} ${i.fence} ${i.why}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  if (sort === "item") rows.sort((a, b) => a.id.localeCompare(b.id));
+  else if (sort === "place") rows.sort((a, b) => (a.place ?? 999999) - (b.place ?? 999999));
+  return rows;
+}
+
+function renderQueue() {
+  const rows = getFilteredQueue();
+  const pageSize = 50;
+  const maxPage = Math.max(0, Math.ceil(rows.length / pageSize) - 1);
+  if (state.queuePage > maxPage) state.queuePage = maxPage;
+  const start = state.queuePage * pageSize;
+  const slice = rows.slice(start, start + pageSize);
+
+  // Scale bar over unlanded 342
+  const unlanded = ALL_ITEMS.filter(i => i.cls !== "landed");
+  const order = ["alarm", "needs you", "needs a cause", "waits on work", "waits on the loop", "ready", "moving"];
+  document.getElementById("queueScaleBar").innerHTML = order.map(c => {
+    const n = unlanded.filter(i => i.cls === c).length;
+    const pct = (n / unlanded.length * 100).toFixed(2);
+    return `<div style="width:${pct}%;background:${CLASS_META[c].color};" title="${c}: ${n} (${pct}%)"></div>`;
+  }).join("");
+
+  document.getElementById("queuePageInfo").textContent = `Showing ${rows.length ? start + 1 : 0}–${start + slice.length} of ${rows.length} matching items`;
+  document.getElementById("qPrev").disabled = state.queuePage === 0;
+  document.getElementById("qNext").disabled = state.queuePage >= maxPage;
+
+  const canMove = state.queuePreset !== "landed" && document.getElementById("qSort").value === "place";
+  document.getElementById("queueTableBody").innerHTML = slice.map(r => `<tr data-row-id="${r.id}" data-focused="${state.focusedRowId === r.id}" tabindex="0" onfocus="pinQueueOnFocus('${r.id}')">
+    <td class="num muted">${r.place ?? "—"}</td>
+    <td>${linkItem(r.id)} ${r.isIdea ? '<span class="chip">idea</span>' : ""}<div style="font-weight:500;">${r.title}</div><div class="muted" style="font-size:11px;font-family:var(--font-mono);">${r.fence}</div></td>
+    <td>${glyphHtml(r.cls)}</td>
+    <td><code class="mono">${r.where}</code></td>
+    <td>${r.why}</td>
+    <td>${r.mover}</td>
+    <td class="num muted">${r.since}</td>
+    <td>${linkRun(r.run)}</td>
+    <td>${canMove && r.place ? `<button type="button" onclick="moveToTop('${r.id}')" style="font-size:11px;padding:2px 6px;">Move to top</button>` : '<span class="muted">—</span>'}</td>
+  </tr>`).join("");
+}
+
+function pageQueue(delta) {
+  state.queuePage = Math.max(0, state.queuePage + delta);
+  renderQueue();
+}
+
+function pinQueueOnFocus(id) {
+  state.focusedRowId = id;
+  state.queuePinned = true;
+}
+
+function simulateQueueArrival() {
+  state.queuePinned = true;
+  state.queuePendingUpdates += 2;
+  document.getElementById("queueHoldText").textContent = `${state.queuePendingUpdates} new arrivals · order frozen while reading`;
+  document.getElementById("queueHoldBanner").classList.remove("hidden");
+}
+
+function acceptQueueHold() {
+  state.queuePinned = false;
+  state.queuePendingUpdates = 0;
+  document.getElementById("queueHoldBanner").classList.add("hidden");
+  renderQueue();
+}
+
+function moveToTop(id) {
+  const idx = ALL_ITEMS.findIndex(i => i.id === id);
+  if (idx < 0) return;
+  const item = ALL_ITEMS[idx];
+  const oldPlace = item.place;
+  ALL_ITEMS.forEach(i => { if (i.place !== null && i.place < oldPlace) i.place += 1; });
+  item.place = 1;
+  renderQueue();
+  renderDeck();
+}
+
+// ==================== PASSES RENDER ====================
+function renderPasses() {
+  document.getElementById("passesTableBody").innerHTML = PASSES.map(p => `<tr>
+    <td><code class="mono">${p.newest}</code><div class="muted" style="font-size:11px;">since ${p.oldest}</div></td>
+    <td><span class="chip">×${p.count} passes</span></td>
+    <td>${p.decisions}</td>
+    <td>${p.changed}</td>
+    <td class="mono num" style="font-size:11.5px;">${p.phases}</td>
+    <td class="num">
+      ${p.unrecorded ? `<span class="epistemic ep-lower">${p.tokens} tok</span> <span class="muted" style="font-size:11px;">(${p.unrecorded} unrecorded)</span>` : `<span class="mono">${p.tokens} tok</span>`}
+    </td>
+  </tr>`).join("");
+}
+
+// ==================== INSPECTOR (ITEM + RUN WATERFALL) ====================
+function renderInspector() {
+  const item = ALL_ITEMS.find(i => i.id === state.inspectedItem) || ALL_ITEMS[0];
+  const isIdea = item.id === "item-idea-9f2a";
+  const isRefusal = item.id === "item-019";
+
+  const criteriaHtml = isIdea ? `
+    <tr><td>C1</td><td>Words saved verbatim at <code>.tillr/intake/item-idea-9f2a.txt</code></td><td><span class="epistemic ep-seam">~claimed · derived (worker report, not a verdict)</span></td></tr>
+    <tr><td>C2</td><td>Outcomes filed as item blocks carrying <code>from="item-idea-9f2a"</code></td><td><span class="glyph g-ready"><span class="glyph__sym">○</span><span>unmet</span></span></td></tr>
+  ` : `
+    <tr><td>C1</td><td>Single time axis shared across stages, LLM turns, and gate checks</td><td><span class="glyph g-landed"><span class="glyph__sym">✓</span><span>met (judge)</span></span></td></tr>
+    <tr><td>C2</td><td>Uncovered self-time computed per span without inventing missing clocks</td><td><span class="epistemic ep-seam">~claimed · derived (worker report, not a verdict)</span></td></tr>
+    <tr><td>C3</td><td>Cycle-safe parent tree breaks malformed cycles to roots</td><td><span class="glyph g-ready"><span class="glyph__sym">○</span><span>unmet</span></span></td></tr>
+  `;
+
+  const wfHtml = renderWaterfallHtml();
+
+  document.getElementById("inspectorBody").innerHTML = `
+    <div class="insp-grid" style="margin-bottom:14px;">
+      <div class="panel" style="margin-bottom:0;">
+        <div class="panel__head">
+          <div class="panel__title"><code class="mono">${item.id}</code> ${glyphHtml(item.cls)} ${item.place ? `<span class="chip">place #${item.place}</span>` : ""}</div>
+          <div class="panel__meta">raw_state: <code class="mono">${item.cls === "moving" ? "in-queue" : item.cls}</code></div>
+        </div>
+        <div class="panel__body">
+          <h3 style="margin:0 0 8px;font-size:14px;">${item.title}</h3>
+          <dl class="kv">
+            <dt>Allowed paths</dt><dd><code class="mono">${item.fence}</code></dd>
+            <dt>Where / Why</dt><dd><code class="mono">${item.where}</code> · ${item.why}</dd>
+            <dt>Next mover</dt><dd>${item.mover}</dd>
+            <dt>Dependencies</dt><dd>${item.id === "item-019" ? '<span class="epistemic ep-seam">closed without landing: item-018 (still holds this item)</span>' : 'blocked_by: none · unblocks: item-142, item-158'}</dd>
+            <dt>Token usage</dt><dd class="num">48,210 tok (input 31,400 · cache_read 12,100 · output 4,710 · <span class="epistemic ep-observed">observed</span> · no USD shown)</dd>
+          </dl>
+          ${isIdea ? `<div style="margin-top:10px;padding:8px;background:var(--bg-0);border:1px solid var(--border);border-radius:4px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><strong>Idea words</strong><span class="epistemic ep-seam">not yet in the tree</span></div>
+            <pre style="margin:0;white-space:pre-wrap;font-size:11.5px;">Alert separately when express lanes starve behind ordinary gate queues.</pre>
+          </div>` : ""}
+          ${isRefusal ? `<div style="margin-top:10px;padding:8px;background:var(--c-needs-cause-bg);border:1px solid var(--c-needs-cause);border-radius:4px;">
+            <strong>Verify refusal (attempt 3 · run-9788)</strong> · Next step: <code>replan</code>
+            <div class="muted" style="font-size:11.5px;">Preserved work: <code>refs/tillr/preserved/item-019-att3</code> (3 files, +84/-19 lines)</div>
+          </div>` : ""}
+        </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:0;">
+        <div class="panel__head">
+          <div class="panel__title">Criteria &amp; Design Document</div>
+          <div class="panel__meta"><span class="epistemic ep-observed">Vantage: questions-ok</span></div>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Criterion</th><th>Judgment</th></tr></thead>
+            <tbody>${criteriaHtml}</tbody>
+          </table>
+        </div>
+        <div class="panel__body" style="border-top:1px solid var(--border);background:var(--bg-2);">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <div>
+              <strong>Design doc:</strong> <code class="mono">${isIdea ? "docs/design/express-starvation.md" : "docs/reference/observatory-redesign.md"}</code>
+              <div class="muted" style="font-size:11.5px;">stage: CURRENT · open questions: ${isIdea ? '<strong style="color:var(--c-needs-you);">1 (OQ-OBS-14)</strong>' : "0"}</div>
+            </div>
+            <button type="button" disabled title="Vantage base URL not configured in static preview">Open in Vantage ↗</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${wfHtml}
+  `;
+}
+
+function renderWaterfallHtml() {
+  const totalMs = 10000;
+  const viewSpan = totalMs / state.wfZoom;
+  const winStart = Math.max(0, Math.min(totalMs - viewSpan, state.wfPan * totalMs));
+  const winEnd = winStart + viewSpan;
+
+  const selected = WATERFALL_SPANS.find(s => s.id === state.wfSelectedSpan) || WATERFALL_SPANS[0];
+
+  const rowsHtml = WATERFALL_SPANS.map(s => {
+    let barHtml = "";
+    if (s.start === null || s.end === null) {
+      barHtml = `<span class="muted" style="font-size:11px;line-height:28px;">${s.reason}</span>`;
+    } else {
+      const left = ((s.start - winStart) / viewSpan) * 100;
+      const right = ((s.end - winStart) / viewSpan) * 100;
+      const clampedL = Math.max(0, left);
+      const clampedR = Math.min(100, right);
+      if (clampedR > clampedL) {
+        const cls = ["wf-bar", s.cat, s.open ? "derived" : "", s.critical ? "critical" : ""].filter(Boolean).join(" ");
+        barHtml = `<div class="${cls}" style="left:${clampedL}%;width:${Math.max(0.6, clampedR - clampedL)}%;" title="${s.name}: ${s.end - s.start} ms"></div>`;
+      } else {
+        barHtml = `<span class="muted" style="font-size:10.5px;line-height:28px;">outside window</span>`;
+      }
+    }
+    const epCls = s.epistemic === "observed" ? "ep-observed" : s.epistemic === "derived_clock" ? "ep-derived" : s.epistemic === "unobserved_seam" ? "ep-seam" : "ep-absent";
+    const indent = s.parent ? (s.parent === "sp-7" ? 24 : 12) : 0;
+    return `<div class="wf-row ${state.wfSelectedSpan === s.id ? "selected" : ""}" onclick="selectWfSpan('${s.id}')">
+      <div class="wf-label" style="padding-left:${8 + indent}px;">
+        <span>${s.critical ? "★ " : ""}${s.name}</span>
+        <span class="epistemic ${epCls}" style="margin-left:auto;">${s.epistemic}</span>
+      </div>
+      <div class="wf-track">${barHtml}</div>
+    </div>`;
+  }).join("");
+
+  return `<div class="panel">
+    <div class="panel__head">
+      <div class="panel__title">
+        <span>Run Execution Waterfall — <code class="mono">run-9821</code> (lane-1 · claude-opus-4-6)</span>
+        <span class="epistemic ep-derived">~9,400 ms so far (open)</span>
+      </div>
+      <div class="panel__meta">
+        <span>★ End-time critical chain</span>
+      </div>
+    </div>
+
+    <div style="padding:10px 12px;border-bottom:1px solid var(--border);background:var(--bg-0);">
+      <div style="display:flex;justify-content:space-between;font-size:11.5px;">
+        <strong>Where wall time went (9,400 ms)</strong>
+        <span class="muted">slot_wait_ms: <span class="epistemic ep-observed">observed (slot-waits.jsonl)</span></span>
+      </div>
+      <div class="wall-split">
+        <div style="width:48.9%;background:var(--c-waits-loop);" title="model_ms: 4,600 ms"></div>
+        <div style="width:27.2%;background:var(--c-waits-work);" title="tool_active_ms: 2,560 ms"></div>
+        <div style="width:20.2%;background:var(--c-needs-you);" title="slot_wait_ms: 1,900 ms"></div>
+        <div style="width:3.7%;background:var(--c-ready);opacity:0.5;" title="uncovered_ms: 340 ms"></div>
+      </div>
+      <div class="wall-legend">
+        <span>■ model_ms: <strong class="num">4,600 ms</strong></span>
+        <span>■ tool_active_ms: <strong class="num">2,560 ms</strong></span>
+        <span>■ slot_wait_ms: <strong class="num">1,900 ms</strong></span>
+        <span>■ uncovered_ms: <strong class="num">340 ms</strong></span>
+      </div>
+    </div>
+
+    <div class="wf-controls">
+      <button type="button" onclick="wfZoomBy(2)">Zoom in (+)</button>
+      <button type="button" onclick="wfZoomBy(0.5)">Zoom out (-)</button>
+      <button type="button" onclick="wfPanBy(-0.15)">← Pan</button>
+      <button type="button" onclick="wfPanBy(0.15)">Pan →</button>
+      <button type="button" onclick="wfReset()">Fit</button>
+      <span class="muted" style="margin-left:auto;">Window: <code class="mono">${Math.round(winStart)}ms .. ${Math.round(winEnd)}ms</code> (${state.wfZoom}x)</span>
+    </div>
+
+    <div class="wf-axis">
+      <div style="padding:4px 8px;border-right:1px solid var(--border);">Span &amp; Provenance</div>
+      <div class="wf-axis__ticks">
+        <span>${Math.round(winStart)} ms</span>
+        <span>${Math.round(winStart + viewSpan * 0.25)} ms</span>
+        <span>${Math.round(winStart + viewSpan * 0.5)} ms</span>
+        <span>${Math.round(winStart + viewSpan * 0.75)} ms</span>
+        <span>${Math.round(winEnd)} ms</span>
+      </div>
+    </div>
+    ${rowsHtml}
+
+    <div style="padding:10px 12px;background:var(--bg-2);border-top:1px solid var(--border);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+      <div>
+        <strong>Selected Span:</strong> <code class="mono">${selected.name}</code>
+        · Start: <code class="mono">${selected.start !== null ? selected.start + " ms" : "not recorded"}</code>
+        · Duration: <code class="mono">${selected.start !== null && selected.end !== null ? (selected.end - selected.start) + " ms" : "not recorded"}</code>
+        · Self-time: <code class="mono">${selected.self !== null ? selected.self + " ms" : "not recorded"}</code>
+        ${selected.reason ? `<div class="muted" style="font-size:11.5px;">Note: ${selected.reason}</div>` : ""}
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button type="button" class="tab-btn ${state.inspTab === "timeline" ? "active" : ""}" onclick="setInspTab('timeline')">Drain Schedule</button>
+        <button type="button" class="tab-btn ${state.inspTab === "claims" ? "active" : ""}" onclick="setInspTab('claims')">Claims Audit</button>
+        <button type="button" class="tab-btn ${state.inspTab === "artifacts" ? "active" : ""}" onclick="setInspTab('artifacts')">Artifacts</button>
+      </div>
+    </div>
+    <div style="padding:10px 12px;background:var(--bg-0);border-top:1px solid var(--border);font-size:12px;">
+      ${state.inspTab === "timeline" ? `
+        <code>14:17:49 UTC</code> · <strong>allocation</strong> · dispatched item-003 to lane-1 (seat work)<br>
+        <code>14:21:55 UTC</code> · <strong>slot.wait</strong> · waited 1,900 ms for test-slot-2
+      ` : state.inspTab === "claims" ? `
+        <span class="glyph g-landed"><span class="glyph__sym">✓</span><span>verified</span></span> <code>TestSpanTreeBreaksCycles</code> passed in <code>proc-exec: go test</code><br>
+        <span class="glyph g-needs-you"><span class="glyph__sym">◆</span><span>unverified</span></span> Criterion C2 self-reported; awaiting judge run
+      ` : `
+        <code>brief</code>: .tillr/loop/run-9821/brief.md (<span class="epistemic ep-observed">observed</span>)<br>
+        <code>worktree</code>: .tillr/lanes/lane-1/worktree (<span class="epistemic ep-lane-copy">lane_copy — mutable</span>)<br>
+        <code>gate.verdict</code>: <span class="epistemic ep-absent">absent</span> (searched: <code>.tillr/loop/run-9821/gate.verdict.json</code>)
+      `}
+    </div>
+  </div>`;
+}
+
+function selectWfSpan(id) { state.wfSelectedSpan = id; renderInspector(); }
+function wfZoomBy(f) { state.wfZoom = Math.max(1, Math.min(16, state.wfZoom * f)); renderInspector(); }
+function wfPanBy(d) { state.wfPan = Math.max(0, Math.min(1 - 1 / state.wfZoom, state.wfPan + d)); renderInspector(); }
+function wfReset() { state.wfZoom = 1; state.wfPan = 0; renderInspector(); }
+function setInspTab(t) { state.inspTab = t; renderInspector(); }
+
+// ==================== TRUNK, PERF & GRAPH ====================
+function renderTrunk() {
+  document.getElementById("trunkLandingsBody").innerHTML = LANDINGS.map(l => `<tr>
+    <td><code class="mono">${l.id}</code></td>
+    <td>${linkItem(l.item)} · ${linkRun(l.run)}</td>
+    <td>${glyphHtml("landed")}</td>
+    <td class="mono">${l.before} → ${l.after}</td>
+    <td><code class="mono">${l.gatedTree}</code> vs <code class="mono">${l.landedTree}</code><div class="muted" style="font-size:11px;">${l.note}</div></td>
+    <td class="num muted">${l.at}</td>
+  </tr>`).join("");
+
+  document.getElementById("perfChecksBody").innerHTML = CHECKS.map(c => `<tr>
+    <td><code class="mono">${c.id}</code></td>
+    <td class="num">${c.samples}</td>
+    <td class="num">${c.median}</td>
+    <td class="num">${c.p95.includes("withheld") ? `<span class="epistemic ep-absent">${c.p95}</span>` : c.p95}</td>
+    <td class="num">${c.max}</td>
+    <td class="num">${c.wait}</td>
+    <td class="num">${c.fail}</td>
+  </tr>`).join("");
+
+  document.getElementById("depGraphWrap").innerHTML = `
+    <svg viewBox="0 0 540 190" style="width:100%;height:auto;background:var(--bg-0);border:1px solid var(--border);border-radius:4px;">
+      <defs>
+        <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L7,3 z" fill="#7688a1"/>
+        </marker>
+      </defs>
+      <line x1="120" y1="45" x2="215" y2="45" stroke="#7688a1" stroke-width="1.5" marker-end="url(#arr)"/>
+      <line x1="335" y1="45" x2="415" y2="45" stroke="#7688a1" stroke-width="1.5" marker-end="url(#arr)"/>
+      <line x1="120" y1="130" x2="215" y2="130" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+
+      <g onclick="openInspector('item-003')" style="cursor:pointer;">
+        <rect x="16" y="24" width="104" height="42" rx="5" fill="var(--bg-2)" stroke="var(--c-moving)" stroke-width="1.5"/>
+        <text x="26" y="42" fill="var(--ink-0)" font-family="var(--font-mono)" font-size="11" font-weight="700">● item-003</text>
+        <text x="26" y="57" fill="var(--ink-2)" font-size="10">moving (lane-1)</text>
+      </g>
+      <g onclick="openInspector('item-142')" style="cursor:pointer;">
+        <rect x="220" y="24" width="115" height="42" rx="5" fill="var(--bg-2)" stroke="var(--c-waits-work)" stroke-width="1.5"/>
+        <text x="230" y="42" fill="var(--ink-0)" font-family="var(--font-mono)" font-size="11" font-weight="700">◌ item-142</text>
+        <text x="230" y="57" fill="var(--ink-2)" font-size="10">waits on item-003</text>
+      </g>
+      <g>
+        <rect x="420" y="24" width="104" height="42" rx="5" fill="var(--bg-2)" stroke="var(--c-waits-work)" stroke-width="1.5"/>
+        <text x="430" y="42" fill="var(--ink-0)" font-family="var(--font-mono)" font-size="11" font-weight="700">◌ item-158</text>
+        <text x="430" y="57" fill="var(--ink-2)" font-size="10">waits on item-142</text>
+      </g>
+
+      <g>
+        <rect x="16" y="109" width="104" height="42" rx="5" fill="var(--bg-2)" stroke="var(--c-closed)" stroke-dasharray="3 2"/>
+        <text x="26" y="127" fill="var(--ink-1)" font-family="var(--font-mono)" font-size="11">— item-018</text>
+        <text x="26" y="142" fill="var(--c-alarm)" font-size="10">closed (unlanded)</text>
+      </g>
+      <g onclick="openInspector('item-019')" style="cursor:pointer;">
+        <rect x="220" y="109" width="145" height="42" rx="5" fill="var(--bg-2)" stroke="var(--c-needs-cause)" stroke-width="1.5"/>
+        <text x="230" y="127" fill="var(--ink-0)" font-family="var(--font-mono)" font-size="11" font-weight="700">◈ item-019</text>
+        <text x="230" y="142" fill="var(--ink-2)" font-size="10">held by closed blocker</text>
+      </g>
+    </svg>
+  `;
+}
+
+// ==================== QUESTIONS & DESIGNS ====================
+function renderQuestions() {
+  document.getElementById("questionsTableBody").innerHTML = QUESTIONS.map(q => `<tr>
+    <td><code class="mono">${q.id}</code></td>
+    <td><code class="mono">${q.doc}</code></td>
+    <td>${q.item === "—" ? "—" : linkItem(q.item)}</td>
+    <td>${q.status.includes("holding") ? glyphHtml("needs you") : `<span class="chip">${q.status}</span>`}</td>
+  </tr>`).join("");
+
+  document.getElementById("designsTableBody").innerHTML = DESIGNS.map(d => `<tr>
+    <td><code class="mono">${d.doc}</code></td>
+    <td><code class="mono">${d.session}</code></td>
+    <td><span class="chip">${d.state}</span></td>
+    <td class="num mono">${d.tokens}</td>
+    <td>${d.batches}</td>
+  </tr>`).join("");
+}
+
+// ==================== CONTROLS & SHORTCUTS ====================
+function togglePause() {
+  state.paused = !state.paused;
+  document.getElementById("liveDot").classList.toggle("paused", state.paused);
+  document.getElementById("liveLabel").textContent = state.paused ? "paused" : "live";
+  document.getElementById("btnPause").textContent = state.paused ? "Resume updates" : "Pause updates";
+}
+
+function toggleTheme() {
+  const html = document.documentElement;
+  html.dataset.theme = html.dataset.theme === "dark" ? "light" : "dark";
+}
+
+function toggleSimulatedStop() {
+  state.simStopped = !state.simStopped;
+  const g = document.getElementById("loopStateGlyph");
+  const d = document.getElementById("loopDetail");
+  const b = document.getElementById("btnSimStop");
+  if (state.simStopped) {
+    g.className = "glyph g-alarm";
+    g.innerHTML = `<span class="glyph__sym">▲</span><span>LOOP STOPPED</span>`;
+    d.innerHTML = `stopped since 14:22:09 UTC · <code>item-019</code> · <code>gate-stall-rerun</code> · Next: <code>tillr run release --lane lane-9</code>`;
+    b.textContent = "Restore Running State";
+  } else {
+    g.className = "glyph g-moving";
+    g.innerHTML = `<span class="glyph__sym">●</span><span>LOOP RUNNING</span>`;
+    d.innerHTML = `Session <code class="mono">sess-20261124-0912</code> · heartbeat <span class="num">1s</span> ago · next pass due <span class="num">~1s</span>`;
+    b.textContent = "Preview Stopped State";
+  }
+}
+
+function openIdeaModal() {
+  document.getElementById("ideaModal").classList.add("open");
+  document.getElementById("ideaWords").focus();
+}
+function closeIdeaModal() {
+  document.getElementById("ideaModal").classList.remove("open");
+}
+function submitIdea() {
+  const words = document.getElementById("ideaWords").value.trim();
+  if (!words) return;
+  const id = `item-idea-${Math.random().toString(16).slice(2, 6)}`;
+  ALL_ITEMS.unshift({
+    id, place: 1, cls: "ready", title: `Idea: ${words.split("\n")[0].slice(0, 60)}`,
+    where: "queue", why: "new idea queued on design seat", mover: "drain", since: "0s",
+    run: null, isIdea: true, fence: `.tillr/intake/${id}.txt`
+  });
+  ALL_ITEMS.forEach((it, idx) => { if (idx > 0 && it.place !== null) it.place += 1; });
+  document.getElementById("ideaWords").value = "";
+  closeIdeaModal();
+  renderDeck();
+  if (state.view === "queue") renderQueue();
+}
+
+window.addEventListener("keydown", e => {
+  const t = e.target;
+  const typing = t instanceof HTMLElement && (t.matches("input, textarea, select") || t.isContentEditable);
+  if (e.key === "Escape") { closeIdeaModal(); return; }
+  if (typing) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && document.getElementById("ideaModal").classList.contains("open")) {
+      e.preventDefault(); submitIdea();
+    }
+    return;
+  }
+  if (e.key === "n") { e.preventDefault(); openIdeaModal(); }
+});
+
+setInterval(() => {
+  if (!state.paused) {
+    state.ageSeconds = (state.ageSeconds + 1) % 5;
+    document.getElementById("clockAge").textContent = `${state.ageSeconds}s`;
+  }
+}, 1000);
+
+// Initial render
+renderDeck();
+</script>
+</body>
+</html>

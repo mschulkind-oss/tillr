@@ -1,0 +1,1333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>tillr Watchfloor — Observatory</title>
+<style>
+  :root {
+    --bg: #f4f3ef;
+    --surface: #ffffff;
+    --surface-2: #faf9f6;
+    --surface-3: #efede7;
+    --ink: #14171c;
+    --ink-2: #434b57;
+    --ink-3: #687180;
+    --border: #dcd9d0;
+    --border-strong: #c4c0b4;
+    --cmd-bg: #14171c;
+    --cmd-surface: #1e232b;
+    --cmd-border: #2e3540;
+    --cmd-ink: #f3f4f6;
+    --cmd-muted: #9ca3af;
+    --accent: #0f62fe;
+    --accent-soft: #edf3ff;
+
+    /* 3-way state hues */
+    --alarm-fg: #b91c1c; --alarm-bg: #fef2f2; --alarm-bd: #fecaca;
+    --you-fg: #b45309; --you-bg: #fffbeb; --you-bd: #fde68a;
+    --cause-fg: #9f1239; --cause-bg: #fff1f2; --cause-bd: #fecdd3;
+    --work-fg: #3730a3; --work-bg: #eef2ff; --work-bd: #c7d2fe;
+    --loop-fg: #475569; --loop-bg: #f1f5f9; --loop-bd: #cbd5e1;
+    --ready-fg: #0f766e; --ready-bg: #f0fdfa; --ready-bd: #99f6e4;
+    --moving-fg: #15803d; --moving-bg: #f0fdf4; --moving-bd: #bbf7d0;
+    --landed-fg: #166534; --landed-bg: #dcfce7; --landed-bd: #86efac;
+
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --radius: 6px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+  code, pre, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button { font-family: var(--sans); font-size: 12px; cursor: pointer; border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); border-radius: 4px; padding: 4px 9px; }
+  button:hover { background: var(--surface-3); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { filter: brightness(0.95); }
+  input, select, textarea { font-family: var(--sans); font-size: 12px; border: 1px solid var(--border-strong); border-radius: 4px; padding: 4px 8px; background: var(--surface); color: var(--ink); }
+
+  /* Sticky Command Header */
+  .cmd-shell { position: sticky; top: 0; z-index: 40; background: var(--cmd-bg); color: var(--cmd-ink); border-bottom: 1px solid var(--cmd-border); }
+  .alarm-strip { background: #7f1d1d; color: #fef2f2; padding: 6px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; border-bottom: 1px solid #991b1b; }
+  .alarm-strip strong { font-weight: 600; }
+  .alarm-strip .alarm-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .alarm-strip code { background: rgba(0,0,0,0.3); padding: 1px 5px; border-radius: 3px; color: #fecaca; }
+  .alarm-strip button { background: rgba(255,255,255,0.12); color: #fff; border-color: rgba(255,255,255,0.25); padding: 2px 8px; font-size: 11px; }
+
+  .cmd-top { display: flex; align-items: center; justify-content: space-between; padding: 0 16px; height: 42px; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 14px; letter-spacing: -0.01em; white-space: nowrap; }
+  .brand-badge { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 6px; border-radius: 3px; background: var(--cmd-surface); border: 1px solid var(--cmd-border); color: var(--cmd-muted); }
+
+  .nav-tabs { display: flex; align-items: center; gap: 2px; overflow-x: auto; }
+  .nav-tab { background: transparent; border: none; color: var(--cmd-muted); padding: 10px 10px; font-size: 12px; font-weight: 500; border-bottom: 2px solid transparent; border-radius: 0; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+  .nav-tab:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .nav-tab[aria-selected="true"] { color: #fff; border-bottom-color: #60a5fa; font-weight: 600; }
+  .nav-count { font-family: var(--mono); font-size: 10px; background: var(--cmd-surface); color: var(--cmd-muted); padding: 1px 5px; border-radius: 10px; }
+  .nav-tab[aria-selected="true"] .nav-count { background: #1d4ed8; color: #fff; }
+
+  .cmd-controls { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .cmd-controls button { background: var(--cmd-surface); color: var(--cmd-ink); border-color: var(--cmd-border); font-size: 11px; padding: 4px 8px; }
+  .cmd-controls button:hover { background: #2b323d; }
+  .cmd-controls button.btn-idea { background: #1d4ed8; border-color: #2563eb; color: #fff; font-weight: 600; }
+  .cursor-pill { font-family: var(--mono); font-size: 11px; color: var(--cmd-muted); display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; background: var(--cmd-surface); border: 1px solid var(--cmd-border); border-radius: 4px; }
+  .dot-live { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; display: inline-block; }
+  .dot-paused { width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; display: inline-block; }
+
+  .loop-bar { background: var(--cmd-surface); border-top: 1px solid var(--cmd-border); padding: 6px 16px; display: flex; align-items: center; justify-content: space-between; gap: 14px; font-size: 12px; flex-wrap: wrap; }
+  .loop-bar-left, .loop-bar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .loop-pill { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; padding: 1px 8px; border-radius: 4px; font-size: 11px; }
+  .loop-pill.running { background: rgba(34,197,94,0.16); color: #86efac; border: 1px solid rgba(34,197,94,0.35); }
+  .loop-pill.stopped { background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.4); }
+  .trunk-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 1px 8px; border-radius: 4px; background: rgba(34,197,94,0.12); color: #86efac; border: 1px solid rgba(34,197,94,0.3); cursor: pointer; }
+  .muted-cmd { color: var(--cmd-muted); }
+
+  /* Main Container */
+  .main-wrap { max-width: 1560px; margin: 0 auto; padding: 14px 16px 40px; }
+  .view-section { display: none; }
+  .view-section.active { display: block; }
+
+  /* Cards & Panels */
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .panel-head { padding: 9px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--surface-2); border-radius: var(--radius) var(--radius) 0 0; }
+  .panel-title { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); display: flex; align-items: center; gap: 7px; }
+  .panel-body { padding: 10px 12px; }
+
+  /* Three-Way State Badges */
+  .state-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; border: 1px solid transparent; white-space: nowrap; }
+  .state-badge .sym { font-family: var(--mono); font-size: 10px; }
+  .st-alarm { color: var(--alarm-fg); background: var(--alarm-bg); border-color: var(--alarm-bd); }
+  .st-needs-you { color: var(--you-fg); background: var(--you-bg); border-color: var(--you-bd); }
+  .st-needs-a-cause { color: var(--cause-fg); background: var(--cause-bg); border-color: var(--cause-bd); }
+  .st-waits-on-work { color: var(--work-fg); background: var(--work-bg); border-color: var(--work-bd); }
+  .st-waits-on-the-loop { color: var(--loop-fg); background: var(--loop-bg); border-color: var(--loop-bd); }
+  .st-ready { color: var(--ready-fg); background: var(--ready-bg); border-color: var(--ready-bd); }
+  .st-moving { color: var(--moving-fg); background: var(--moving-bg); border-color: var(--moving-bd); }
+  .st-landed { color: var(--landed-fg); background: var(--landed-bg); border-color: var(--landed-bd); }
+
+  /* Epistemic Provenance Badges */
+  .ep-badge { display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono); font-size: 10px; padding: 0 5px; border-radius: 3px; border: 1px solid var(--border); background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+  .ep-observed { color: #166534; background: #f0fdf4; border-color: #bbf7d0; }
+  .ep-derived { color: #334155; background: #f8fafc; border-color: #cbd5e1; border-style: dashed; }
+  .ep-seam { color: #9a3412; background: #fff7ed; border-color: #fed7aa; }
+  .ep-absent { color: #64748b; background: #f1f5f9; border-color: #cbd5e1; font-style: italic; }
+  .ep-corrupt { color: #991b1b; background: #fef2f2; border-color: #fecaca; font-weight: 600; }
+  .ep-lower { color: #1e40af; background: #eff6ff; border-color: #bfdbfe; }
+  .ep-lane-copy { color: #9a3412; background: #fff7ed; border-color: #fdba74; }
+
+  .entity-link { font-family: var(--mono); font-size: 11.5px; color: var(--accent); cursor: pointer; font-weight: 500; }
+  .entity-link:hover { text-decoration: underline; }
+
+  /* Triage / Home Layout */
+  .triage-top-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+  @media (max-width: 1100px) { .triage-top-grid { grid-template-columns: 1fr; } }
+  .triage-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; border-left: 4px solid var(--border-strong); }
+  .triage-card.card-alarm { border-left-color: var(--alarm-fg); }
+  .triage-card.card-you { border-left-color: var(--you-fg); }
+  .triage-card.card-cause { border-left-color: var(--cause-fg); }
+  .triage-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .triage-card-head h3 { margin: 0; font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .triage-mini-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .triage-mini-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 5px 7px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); font-size: 12px; }
+  .triage-mini-row:hover { border-color: var(--border-strong); background: var(--surface-3); }
+
+  /* Proportional Waiting Class Bar */
+  .dist-bar-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; }
+  .dist-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; font-size: 12px; flex-wrap: wrap; gap: 8px; }
+  .dist-bar { display: flex; height: 14px; border-radius: 4px; overflow: hidden; gap: 1px; background: var(--border); }
+  .dist-seg { height: 100%; cursor: pointer; transition: opacity 0.15s; min-width: 4px; }
+  .dist-seg:hover { opacity: 0.8; }
+  .dist-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 11px; }
+  .dist-leg-item { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; padding: 2px 6px; border-radius: 4px; border: 1px solid transparent; }
+  .dist-leg-item:hover { background: var(--surface-3); border-color: var(--border); }
+  .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+  /* Home Main Split */
+  .home-split { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; align-items: start; }
+  @media (max-width: 1150px) { .home-split { grid-template-columns: 1fr; } }
+
+  /* Lane Matrix */
+  .lane-group-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); margin: 10px 0 5px; display: flex; align-items: center; justify-content: space-between; }
+  .lane-group-label:first-child { margin-top: 0; }
+  .lane-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
+  @media (max-width: 800px) { .lane-grid { grid-template-columns: 1fr; } }
+  .lane-tile { border: 1px solid var(--border); border-radius: 5px; padding: 7px 9px; background: var(--surface); display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
+  .lane-tile.st-run { border-left: 3px solid var(--moving-fg); }
+  .lane-tile.st-settle { border-left: 3px solid var(--you-fg); background: #fffdf7; }
+  .lane-tile.st-idle { border-left: 3px solid var(--border-strong); background: var(--surface-2); }
+  .lane-tile.st-kept { border-left: 3px solid var(--alarm-fg); background: #fffafa; }
+  .lane-tile-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .lane-tile-meta { color: var(--ink-2); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .lane-action { color: var(--ink-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .quiet-warn { color: var(--alarm-fg); font-weight: 700; font-size: 10.5px; }
+
+  /* Tables */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); font-weight: 700; padding: 7px 8px; border-bottom: 1px solid var(--border-strong); background: var(--surface-2); white-space: nowrap; }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr.row-clickable { cursor: pointer; }
+  tr.row-clickable:hover td { background: #f3f6fc; }
+  tr.row-focused td { background: #e8f0fe; outline: 1px solid var(--accent); }
+  .sub-line { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+
+  /* Filter Toolbar & Freeze Banner */
+  .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+  .toolbar-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .pill-btn { border-radius: 14px; padding: 3px 10px; font-size: 11.5px; background: var(--surface); border: 1px solid var(--border-strong); color: var(--ink-2); }
+  .pill-btn[aria-pressed="true"] { background: var(--cmd-bg); color: #fff; border-color: var(--cmd-bg); font-weight: 600; }
+  .freeze-banner { background: #eff6ff; border-bottom: 1px solid #bfdbfe; color: #1e40af; padding: 6px 12px; display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
+
+  /* Waterfall */
+  .wall-split-bar { display: flex; height: 22px; border-radius: 4px; overflow: hidden; border: 1px solid var(--border-strong); margin: 8px 0; }
+  .wall-seg { display: flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; padding: 0 4px; }
+  .wf-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .wf-axis { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; color: var(--ink-3); padding: 4px 12px 4px 280px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+  .wf-rows { max-height: 410px; overflow-y: auto; }
+  .wf-row { display: grid; grid-template-columns: 280px 1fr; align-items: center; height: 30px; border-bottom: 1px solid #efede7; cursor: pointer; font-size: 11.5px; }
+  .wf-row:hover { background: #f5f7fb; }
+  .wf-row.selected { background: #e8f0fe; }
+  .wf-label { padding: 0 8px; display: flex; align-items: center; gap: 5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-right: 1px solid var(--border); height: 100%; }
+  .wf-track { position: relative; height: 100%; background: repeating-linear-gradient(90deg, transparent, transparent 24.8%, #f1f0ec 25%); }
+  .wf-bar { position: absolute; top: 6px; height: 18px; border-radius: 3px; min-width: 3px; display: flex; align-items: center; padding: 0 4px; font-family: var(--mono); font-size: 10px; color: #fff; overflow: hidden; }
+  .wf-bar.observed { background: #2563eb; }
+  .wf-bar.stage { background: #334155; }
+  .wf-bar.tool { background: #0f766e; }
+  .wf-bar.slot_wait { background: #d97706; }
+  .wf-bar.gate { background: #7c3aed; }
+  .wf-bar.derived { background: #475569; border: 1px dashed #94a3b8; }
+  .wf-gap { font-size: 10.5px; color: var(--ink-3); font-style: italic; padding-left: 8px; line-height: 30px; }
+
+  /* Drawer */
+  .drawer-backdrop { position: fixed; inset: 0; background: rgba(20,23,28,0.45); z-index: 60; display: none; justify-content: flex-end; }
+  .drawer-backdrop.open { display: flex; }
+  .drawer { width: min(760px, 94vw); background: var(--surface); height: 100%; overflow-y: auto; box-shadow: -8px 0 30px rgba(0,0,0,0.2); display: flex; flex-direction: column; }
+  .drawer-head { position: sticky; top: 0; background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; z-index: 2; }
+  .drawer-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+
+  /* Modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(20,23,28,0.55); z-index: 70; display: none; align-items: center; justify-content: center; padding: 16px; }
+  .modal-backdrop.open { display: flex; }
+  .modal { width: min(560px, 100%); background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border-strong); box-shadow: 0 16px 40px rgba(0,0,0,0.25); overflow: hidden; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+  .crit-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); font-size: 12px; }
+  .chip { display: inline-block; font-family: var(--mono); font-size: 10.5px; padding: 1px 6px; border-radius: 3px; background: var(--surface-3); border: 1px solid var(--border); color: var(--ink-2); }
+</style>
+</head>
+<body>
+
+<header class="cmd-shell">
+  <div class="alarm-strip" id="alarmStrip">
+    <div class="alarm-meta">
+      <span class="state-badge st-alarm"><span class="sym">▲</span> ALARM</span>
+      <strong>claude-sonnet quota window exhausted</strong>
+      <span>Since 14:11:04 UTC · Holds <code>2</code> items (<code>item-418</code>, <code>item-429</code>) on <code>ordinary-6</code> · Clears automatically at 14:30:00 UTC or via <code>tillr-backend clear claude-sonnet</code></span>
+    </div>
+    <div>
+      <button type="button" onclick="switchTab('queue', {classFilter:'alarm'})">Inspect 2 held items</button>
+    </div>
+  </div>
+
+  <div class="cmd-top">
+    <div class="brand">
+      <span>tillr</span>
+      <span class="brand-badge">Watchfloor</span>
+    </div>
+    <nav class="nav-tabs" aria-label="Observatory surfaces">
+      <button class="nav-tab" data-tab="triage" aria-selected="true" onclick="switchTab('triage')">Triage</button>
+      <button class="nav-tab" data-tab="queue" onclick="switchTab('queue')">Queue <span class="nav-count" id="navQueueCount">342</span></button>
+      <button class="nav-tab" data-tab="lanes" onclick="switchTab('lanes')">Lanes <span class="nav-count">14</span></button>
+      <button class="nav-tab" data-tab="passes" onclick="switchTab('passes')">Passes</button>
+      <button class="nav-tab" data-tab="waterfall" onclick="switchTab('waterfall')">Run Waterfall</button>
+      <button class="nav-tab" data-tab="trunk" onclick="switchTab('trunk')">Trunk &amp; Checks</button>
+      <button class="nav-tab" data-tab="graph" onclick="switchTab('graph')">Graph &amp; Questions</button>
+    </nav>
+    <div class="cmd-controls">
+      <span class="cursor-pill" id="cursorPill"><span class="dot-live" id="liveDot"></span> <span id="liveLabel">live</span> · seq <span id="seqNum">48,291</span> · <span id="ageNum">1s</span></span>
+      <button type="button" onclick="toggleLoopState()" title="Toggle simulated loop Running vs Stopped">Sim Stop</button>
+      <button type="button" id="pauseBtn" onclick="togglePause()">Pause</button>
+      <button type="button" class="btn-idea" onclick="openIdeaModal()" title="Shortcut: n">+ New Idea</button>
+      <button type="button" onclick="openGlossary()" title="Epistemic &amp; state legend">?</button>
+    </div>
+  </div>
+
+  <div class="loop-bar" id="loopBar">
+    <div class="loop-bar-left" id="loopBarLeft">
+      <span class="loop-pill running">● Loop Running</span>
+      <span>session <code class="entity-link" onclick="switchTab('passes')">sess-20261124-0814</code></span>
+      <span class="muted-cmd">last pass <code class="entity-link" onclick="switchTab('passes')">20261124T142201Z</code> (2s ago) · next due ~1s</span>
+      <span class="muted-cmd">lanes: 9/14 active (6 ordinary, 2 express, 1 desk) · 1 settling · 4 idle (1 kept)</span>
+    </div>
+    <div class="loop-bar-right">
+      <span class="trunk-pill" onclick="switchTab('trunk')">✓ Trunk green · refs/tillr/green = main · 3 ahead of published</span>
+      <span class="muted-cmd">--write enabled</span>
+    </div>
+  </div>
+</header>
+
+<main class="main-wrap">
+
+  <!-- 1. TRIAGE (HOME) -->
+  <section id="tab-triage" class="view-section active">
+    <div class="triage-top-grid">
+      <div class="triage-card card-alarm">
+        <div class="triage-card-head">
+          <h3><span class="state-badge st-alarm"><span class="sym">▲</span> alarm</span> 2 items</h3>
+          <a href="javascript:void(0)" onclick="switchTab('queue',{classFilter:'alarm'})">View in Queue →</a>
+        </div>
+        <ul class="triage-mini-list" id="triageAlarmList"></ul>
+      </div>
+      <div class="triage-card card-you">
+        <div class="triage-card-head">
+          <h3><span class="state-badge st-needs-you"><span class="sym">◆</span> needs you</span> 7 items</h3>
+          <a href="javascript:void(0)" onclick="switchTab('queue',{classFilter:'needs you'})">View all 7 →</a>
+        </div>
+        <ul class="triage-mini-list" id="triageYouList"></ul>
+      </div>
+      <div class="triage-card card-cause">
+        <div class="triage-card-head">
+          <h3><span class="state-badge st-needs-a-cause"><span class="sym">▲</span> needs a cause</span> 5 items</h3>
+          <a href="javascript:void(0)" onclick="switchTab('queue',{classFilter:'needs a cause'})">View all 5 →</a>
+        </div>
+        <ul class="triage-mini-list" id="triageCauseList"></ul>
+      </div>
+    </div>
+
+    <div class="dist-bar-wrap">
+      <div class="dist-header">
+        <div><strong>Unlanded Queue Topology</strong> · <span class="num">342</span> unlanded items (<span class="num">146</span> not moving · <span class="num">164</span> ready · <span class="num">32</span> moving) · <span class="num">88</span> landed <span class="ep-badge ep-observed">source: tillr-drain why (pass 20261124T142201Z)</span></div>
+        <div class="muted-cmd" style="color:var(--ink-3)">Click any segment to filter Queue</div>
+      </div>
+      <div class="dist-bar" id="distBar"></div>
+      <div class="dist-legend" id="distLegend"></div>
+    </div>
+
+    <div class="home-split">
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Live Lane Matrix <span class="num">14</span> configured &amp; draining</div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span class="ep-badge ep-derived">~clocks from recorded start</span>
+            <button type="button" onclick="switchTab('lanes')">Full Lane View →</button>
+          </div>
+        </div>
+        <div class="panel-body" id="homeLaneMatrix"></div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">tillr-watch &amp; Integrity Notices</div>
+            <span class="ep-badge ep-observed">2 active</span>
+          </div>
+          <div class="panel-body" style="display:flex;flex-direction:column;gap:7px;">
+            <div class="triage-mini-row">
+              <div>
+                <strong>Quiet worker stream</strong> · <span class="entity-link" onclick="switchTab('lanes')">ordinary-4</span> (<span class="entity-link" onclick="openItemDrawer('item-312')">item-312</span>)
+                <div class="sub-line">Log unchanged for <strong>6m 14s</strong> (threshold 5m) during <code>work</code> step.</div>
+              </div>
+              <span class="state-badge st-needs-a-cause"><span class="sym">▲</span> watch</span>
+            </div>
+            <div class="triage-mini-row">
+              <div>
+                <strong>Design doc with no queued item</strong> · <code>docs/design/rate-limiter-v2.md</code>
+                <div class="sub-line">Document index found 2 open questions (<code>OQ-501</code>, <code>OQ-502</code>); no item block declared yet.</div>
+              </div>
+              <span class="state-badge st-needs-you"><span class="sym">◆</span> design</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Recent Planning Passes (Folded Streaks)</div>
+            <button type="button" onclick="switchTab('passes')">All Passes →</button>
+          </div>
+          <div class="panel-body" id="homePassesPreview"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. QUEUE LEDGER (430 ITEMS) -->
+  <section id="tab-queue" class="view-section">
+    <div class="panel">
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <button class="pill-btn" data-preset="not-moving" aria-pressed="true" onclick="setQueuePreset('not-moving')">Not moving (<span class="num">146</span>)</button>
+          <button class="pill-btn" data-preset="unlanded" aria-pressed="false" onclick="setQueuePreset('unlanded')">All unlanded (<span class="num">342</span>)</button>
+          <button class="pill-btn" data-preset="ready" aria-pressed="false" onclick="setQueuePreset('ready')">Ready (<span class="num">164</span>)</button>
+          <button class="pill-btn" data-preset="moving" aria-pressed="false" onclick="setQueuePreset('moving')">Moving (<span class="num">32</span>)</button>
+          <button class="pill-btn" data-preset="landed" aria-pressed="false" onclick="setQueuePreset('landed')">Landed (<span class="num">88</span>)</button>
+        </div>
+        <div class="toolbar-group">
+          <input type="search" id="qSearch" placeholder="Filter id, title, doc, path..." oninput="renderQueueTable()" style="width:200px;" />
+          <select id="qClass" onchange="renderQueueTable()">
+            <option value="">Class: any</option>
+            <option value="alarm">alarm</option>
+            <option value="needs you">needs you</option>
+            <option value="needs a cause">needs a cause</option>
+            <option value="waits on work">waits on work</option>
+            <option value="waits on the loop">waits on the loop</option>
+            <option value="ready">ready</option>
+            <option value="moving">moving</option>
+          </select>
+          <select id="qReason" onchange="renderQueueTable()">
+            <option value="">Reason: any</option>
+            <option value="backend-quota-alarm">backend-quota-alarm</option>
+            <option value="open-question">open-question</option>
+            <option value="escalated-conflict">escalated-conflict</option>
+            <option value="gate-red">gate-red</option>
+            <option value="verify-not-done">verify-not-done</option>
+            <option value="blocked-by-item">blocked-by-item</option>
+            <option value="path-fence-overlap">path-fence-overlap</option>
+            <option value="lane-cap-busy">lane-cap-busy</option>
+            <option value="awaiting-pass">awaiting-pass</option>
+            <option value="eligible">eligible</option>
+            <option value="in-flight">in-flight</option>
+          </select>
+          <select id="qSort" onchange="renderQueueTable()">
+            <option value="place">Sort: Place (#)</option>
+            <option value="item">Sort: Item ID</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="freeze-banner" id="freezeBanner">
+        <div><strong>P7 List Stability:</strong> Order frozen while inspecting · <span id="freezeDelta">3 arrivals, 1 reorder</span> waiting</div>
+        <div style="display:flex;gap:6px;">
+          <button type="button" onclick="acceptQueueUpdates()">Accept updates ↑</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Item &amp; Title</th>
+              <th>Waiting Class</th>
+              <th>Where</th>
+              <th>Why / Reason</th>
+              <th>Mover</th>
+              <th>Since</th>
+              <th>Last Run / Usage</th>
+              <th>Order (--write)</th>
+            </tr>
+          </thead>
+          <tbody id="queueTbody"></tbody>
+        </table>
+      </div>
+      <div class="toolbar" id="queuePager"></div>
+    </div>
+  </section>
+
+  <!-- 3. LANES (14) -->
+  <section id="tab-lanes" class="view-section">
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">All Configured &amp; Draining Lanes (14)</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span class="ep-badge ep-derived">~elapsed &amp; quiet age</span>
+          <span class="ep-badge ep-observed">seat &amp; lease from store</span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Lane</th>
+              <th>Group</th>
+              <th>State</th>
+              <th>Item / Held Candidate</th>
+              <th>Seat (Source) &amp; Backend</th>
+              <th>Run / Attempt</th>
+              <th>Elapsed &amp; Liveness</th>
+              <th>Latest Action / Reason</th>
+              <th>Tokens (No $)</th>
+            </tr>
+          </thead>
+          <tbody id="lanesTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. PASSES (FOLDED STREAKS) -->
+  <section id="tab-passes" class="view-section">
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">Planning Pass Ledger (Folded Identical Streaks)</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span class="ep-badge ep-observed">source: drain_passes + dispatches</span>
+          <span class="ep-badge ep-lower">≥ lower bound when run omits usage</span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Pass / Streak</th>
+              <th>Count</th>
+              <th>Decisions</th>
+              <th>What Changed vs Older</th>
+              <th>Phases (claim / stage / disp / gate / land)</th>
+              <th>Tokens</th>
+              <th>Stop / Detail</th>
+            </tr>
+          </thead>
+          <tbody id="passesTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. RUN WATERFALL -->
+  <section id="tab-waterfall" class="view-section">
+    <div class="panel" style="margin-bottom:12px;">
+      <div class="panel-head">
+        <div class="panel-title">Run <span class="num">run-20261124-1418-l3</span> · <span class="entity-link" onclick="openItemDrawer('item-104')">item-104</span> · lane <span class="entity-link" onclick="switchTab('lanes')">ordinary-3</span> · seat: worker (policy) · backend: codex-5.1</div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <span class="state-badge st-landed"><span class="sym">✓</span> landed</span>
+          <span class="ep-badge ep-observed">wall: 142,840 ms</span>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <strong>Where wall time went</strong>
+          <div style="display:flex;gap:10px;font-size:11.5px;flex-wrap:wrap;">
+            <span><span class="swatch" style="background:#2563eb"></span> Model: <strong class="num">68,420 ms</strong> (47.9%)</span>
+            <span><span class="swatch" style="background:#0f766e"></span> Active tool: <strong class="num">41,200 ms</strong> (28.8%)</span>
+            <span><span class="swatch" style="background:#d97706"></span> Test-slot wait: <strong class="num">19,800 ms</strong> (13.9%) <span class="ep-badge ep-observed">observed</span></span>
+            <span><span class="swatch" style="background:#64748b"></span> Uncovered: <strong class="num">13,420 ms</strong> (9.4%)</span>
+          </div>
+        </div>
+        <div class="wall-split-bar">
+          <div class="wall-seg" style="width:47.9%;background:#2563eb;">model 68.4s</div>
+          <div class="wall-seg" style="width:28.8%;background:#0f766e;">tool 41.2s</div>
+          <div class="wall-seg" style="width:13.9%;background:#d97706;">slot wait 19.8s</div>
+          <div class="wall-seg" style="width:9.4%;background:#64748b;">13.4s</div>
+        </div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-2);margin-top:6px;">
+          <span>Tokens (no $): <strong class="num">184,920</strong> total (in <span class="num">42,100</span> · cache read <span class="num">128,400</span> · out <span class="num">11,220</span> · reasoning <span class="num">3,200</span>)</span>
+          <span>First output: <strong class="num">840 ms</strong> · Rate: <strong class="num">74.2 tok/s</strong></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:12px;">
+      <div class="wf-controls">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <strong>Shared-Clock Span Waterfall</strong>
+          <input type="search" id="wfFilter" placeholder="Find spans..." oninput="renderWaterfall()" style="width:180px;" />
+          <span class="muted-cmd" style="color:var(--ink-3);font-size:11px;">★ = end-time chain</span>
+        </div>
+        <div style="display:flex;gap:5px;">
+          <button type="button" onclick="wfZoom(0.5)">Zoom In (+)</button>
+          <button type="button" onclick="wfZoom(2)">Zoom Out (-)</button>
+          <button type="button" onclick="wfPan(-0.2)">← Pan</button>
+          <button type="button" onclick="wfPan(0.2)">Pan →</button>
+          <button type="button" onclick="wfFit()">Fit (f)</button>
+        </div>
+      </div>
+      <div class="wf-axis" id="wfAxis"></div>
+      <div class="wf-rows" id="wfRows"></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <div class="panel-head"><div class="panel-title">Span Inspector</div></div>
+        <div class="panel-body" id="wfInspector"><span style="color:var(--ink-3)">Click any span row above to inspect recorded clocks, uncovered self-time, and attributes.</span></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div class="panel-title">Drain Scheduling Decisions &amp; Claim Audit</div></div>
+        <div class="panel-body" id="wfDecisions"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. TRUNK & CHECKS -->
+  <section id="tab-trunk" class="view-section">
+    <div class="panel" style="margin-bottom:12px;border-left:4px solid var(--moving-fg);">
+      <div class="panel-body" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <div>
+          <span class="state-badge st-landed"><span class="sym">✓</span> TRUNK GREEN</span>
+          <strong style="margin-left:8px;">refs/tillr/green = <code>9f4a21c</code> (matches <code>refs/heads/main</code>)</strong>
+          <div class="sub-line">Published: <code>refs/tillr/published/origin/main</code> at <code>7c10e88</code> · <strong>3</strong> proven commits ahead of published · Auto-revert: armed</div>
+        </div>
+        <span class="ep-badge ep-observed">last heavy proof: 14:19:44 UTC</span>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Recent Landings (gated_tree vs landed_tree)</div>
+          <span class="ep-badge ep-observed">squash replays allowed</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Landing</th><th>Item / Run</th><th>Result</th><th>gated_tree → landed_tree</th><th>When</th></tr></thead>
+            <tbody id="landingsTbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Gate Check Performance (24h · p95 ≥ 5 samples)</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Check</th><th>Samples</th><th>Median</th><th>p95</th><th>Max</th><th>Slot Wait</th><th>Failures</th></tr></thead>
+            <tbody id="checksTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. GRAPH & QUESTIONS -->
+  <section id="tab-graph" class="view-section">
+    <div class="grid-2">
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Dependency Graph (Critical Blocked Chains)</div>
+          <span class="ep-badge ep-observed">closed-without-landing still holds</span>
+        </div>
+        <div class="panel-body">
+          <svg viewBox="0 0 640 310" width="100%" style="background:var(--surface-2);border:1px solid var(--border);border-radius:4px;">
+            <defs>
+              <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b"/>
+              </marker>
+            </defs>
+            <!-- Edges -->
+            <line x1="150" y1="60" x2="255" y2="60" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+            <line x1="395" y1="60" x2="485" y2="60" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+            <line x1="150" y1="155" x2="255" y2="155" stroke="#b91c1c" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+            <line x1="395" y1="155" x2="485" y2="155" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+            <line x1="150" y1="245" x2="255" y2="245" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+            <!-- Nodes Row 1 -->
+            <g onclick="openItemDrawer('item-104')" style="cursor:pointer;">
+              <rect x="20" y="36" width="130" height="48" rx="5" fill="#dcfce7" stroke="#166534"/>
+              <text x="30" y="56" font-family="monospace" font-size="11" font-weight="700" fill="#166534">✓ item-104</text>
+              <text x="30" y="72" font-size="10" fill="#166534">landed · satisfies</text>
+            </g>
+            <g onclick="openItemDrawer('item-118')" style="cursor:pointer;">
+              <rect x="260" y="36" width="135" height="48" rx="5" fill="#f0fdf4" stroke="#15803d"/>
+              <text x="270" y="56" font-family="monospace" font-size="11" font-weight="700" fill="#15803d">● item-118</text>
+              <text x="270" y="72" font-size="10" fill="#15803d">moving · ordinary-2</text>
+            </g>
+            <g onclick="openItemDrawer('item-142')" style="cursor:pointer;">
+              <rect x="490" y="36" width="130" height="48" rx="5" fill="#eef2ff" stroke="#3730a3"/>
+              <text x="500" y="56" font-family="monospace" font-size="11" font-weight="700" fill="#3730a3">◌ item-142</text>
+              <text x="500" y="72" font-size="10" fill="#3730a3">waits on work</text>
+            </g>
+            <!-- Nodes Row 2 (Closed blocker still holding!) -->
+            <g onclick="openItemDrawer('item-205')" style="cursor:pointer;">
+              <rect x="20" y="131" width="130" height="48" rx="5" fill="#fef2f2" stroke="#b91c1c"/>
+              <text x="30" y="151" font-family="monospace" font-size="11" font-weight="700" fill="#b91c1c">— item-205</text>
+              <text x="30" y="167" font-size="10" fill="#991b1b">closed (no landing!)</text>
+            </g>
+            <g onclick="openItemDrawer('item-209')" style="cursor:pointer;">
+              <rect x="260" y="131" width="135" height="48" rx="5" fill="#fffbeb" stroke="#b45309"/>
+              <text x="270" y="151" font-family="monospace" font-size="11" font-weight="700" fill="#b45309">◆ item-209</text>
+              <text x="270" y="167" font-size="10" fill="#b45309">needs you (clear dep)</text>
+            </g>
+            <g onclick="openItemDrawer('item-214')" style="cursor:pointer;">
+              <rect x="490" y="131" width="130" height="48" rx="5" fill="#eef2ff" stroke="#3730a3"/>
+              <text x="500" y="151" font-family="monospace" font-size="11" font-weight="700" fill="#3730a3">◌ item-214</text>
+              <text x="500" y="167" font-size="10" fill="#3730a3">waits on item-209</text>
+            </g>
+            <!-- Nodes Row 3 -->
+            <g onclick="openItemDrawer('item-301')" style="cursor:pointer;">
+              <rect x="20" y="221" width="130" height="48" rx="5" fill="#fffbeb" stroke="#b45309"/>
+              <text x="30" y="241" font-family="monospace" font-size="11" font-weight="700" fill="#b45309">◆ item-301</text>
+              <text x="30" y="257" font-size="10" fill="#b45309">OQ-412 open</text>
+            </g>
+            <g onclick="openItemDrawer('item-308')" style="cursor:pointer;">
+              <rect x="260" y="221" width="135" height="48" rx="5" fill="#eef2ff" stroke="#3730a3"/>
+              <text x="270" y="241" font-family="monospace" font-size="11" font-weight="700" fill="#3730a3">◌ item-308</text>
+              <text x="270" y="257" font-size="10" fill="#3730a3">waits on item-301</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Vantage Open Questions Holding Items</div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Question</th><th>Document</th><th>Holding Item</th><th>Summary</th></tr></thead>
+              <tbody>
+                <tr><td><code>OQ-412</code></td><td><code>docs/design/auth-tokens.md</code></td><td><span class="entity-link" onclick="openItemDrawer('item-301')">item-301</span></td><td>Rotate signing key on idle or only explicit revoke?</td></tr>
+                <tr><td><code>OQ-418</code></td><td><code>docs/design/shard-lease.md</code></td><td><span class="entity-link" onclick="openItemDrawer('item-319')">item-319</span></td><td>Should heavy-slot lease expire at 15m or 30m?</td></tr>
+                <tr><td><code>OQ-501</code></td><td><code>docs/design/rate-limiter-v2.md</code></td><td><span class="ep-badge ep-absent">no item yet</span></td><td>Burst cap per IP vs per token bucket?</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Designer Sessions</div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Session / Doc</th><th>Cache</th><th>Context</th><th>Batches</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td><code>desk-1</code> · <code>docs/design/shard-lease.md</code></td><td><span class="ep-badge ep-observed">warm</span></td><td class="num">48.2k tok</td><td class="num">3</td><td><span class="state-badge st-moving"><span class="sym">●</span> active</span></td></tr>
+                <tr><td><code>desk-2</code> · <code>docs/design/intake-v2.md</code></td><td><span class="ep-badge ep-absent">cold</span></td><td class="num">0 tok</td><td class="num">0</td><td><span class="state-badge st-waits-on-the-loop"><span class="sym">◌</span> idle</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ITEM DETAIL DRAWER -->
+<div class="drawer-backdrop" id="itemDrawer" onclick="if(event.target===this) closeItemDrawer()">
+  <div class="drawer" role="dialog" aria-label="Item detail">
+    <div class="drawer-head">
+      <div>
+        <strong id="drwId" class="mono">item-104</strong>
+        <span id="drwTitle" style="margin-left:8px;font-weight:600;"></span>
+      </div>
+      <button type="button" onclick="closeItemDrawer()">Close (Esc)</button>
+    </div>
+    <div class="drawer-body" id="drwBody"></div>
+  </div>
+</div>
+
+<!-- NEW IDEA MODAL (--write) -->
+<div class="modal-backdrop" id="ideaModal" onclick="if(event.target===this) closeIdeaModal()">
+  <div class="modal" role="dialog" aria-label="New Idea">
+    <div class="panel-head">
+      <div class="panel-title">New Idea Intake (--write · tillr-item idea)</div>
+      <button type="button" onclick="closeIdeaModal()">Esc</button>
+    </div>
+    <div class="panel-body" style="display:flex;flex-direction:column;gap:10px;">
+      <label style="font-weight:600;">Owner's exact words (saved verbatim, never normalized):</label>
+      <textarea id="ideaWords" rows="5" placeholder="Describe the work or design question in plain words..."></textarea>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <label>Queue placement:
+          <select id="ideaPlace">
+            <option value="first">Top of queue (place #1)</option>
+            <option value="last">Bottom of queue</option>
+          </select>
+        </label>
+        <div style="display:flex;gap:6px;">
+          <button type="button" onclick="closeIdeaModal()">Cancel</button>
+          <button type="button" class="primary" onclick="submitIdea()">Save Idea (Ctrl+Enter)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- GLOSSARY MODAL -->
+<div class="modal-backdrop" id="glossaryModal" onclick="if(event.target===this) closeGlossary()">
+  <div class="modal" role="dialog" aria-label="Provenance &amp; State Legend">
+    <div class="panel-head">
+      <div class="panel-title">Truthfulness &amp; Provenance Contract</div>
+      <button type="button" onclick="closeGlossary()">Close</button>
+    </div>
+    <div class="panel-body" style="display:flex;flex-direction:column;gap:8px;font-size:12px;">
+      <div><span class="ep-badge ep-observed">observed</span> Directly recorded timestamp, exit code, hash, or verdict.</div>
+      <div><span class="ep-badge ep-derived">~derived</span> Computed from an envelope clock, file mtime, or viewer wall clock (~prefix).</div>
+      <div><span class="ep-badge ep-lower">≥ lower bound</span> Sum in which at least one run omitted token usage.</div>
+      <div><span class="ep-badge ep-absent">absent / not recorded</span> No record written — never shown as 0 or —.</div>
+      <div><span class="ep-badge ep-seam">unobserved seam</span> Causal step not recorded as verified (e.g. tick-level boundary).</div>
+      <div><span class="ep-badge ep-corrupt">unreadable</span> Stored JSON or artifact failed to parse or verify.</div>
+      <div><span class="ep-badge ep-lane-copy">lane copy</span> Read from mutable lane worktree rather than immutable loop archive.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // --- Deterministic Seeded Data (430 items, 14 lanes, passes, waterfall, landings, checks) ---
+  const CLASS_META = {
+    "alarm":             { sym:"▲", cls:"st-alarm",             color:"#b91c1c", count:2 },
+    "needs you":         { sym:"◆", cls:"st-needs-you",         color:"#b45309", count:7 },
+    "needs a cause":     { sym:"▲", cls:"st-needs-a-cause",     color:"#9f1239", count:5 },
+    "waits on work":     { sym:"◌", cls:"st-waits-on-work",     color:"#3730a3", count:118 },
+    "waits on the loop": { sym:"◌", cls:"st-waits-on-the-loop", color:"#475569", count:14 },
+    "ready":             { sym:"◎", cls:"st-ready",             color:"#0f766e", count:164 },
+    "moving":            { sym:"●", cls:"st-moving",            color:"#15803d", count:32 }
+  };
+
+  const ITEMS = [];
+  // Hand-crafted high-signal top items
+  const SPECIALS = [
+    { id:"item-418", place:12, cls:"alarm", title:"Harden SSE reconnect backoff in tillr-view", where:"ordinary-6", why:"backend-quota-alarm", mover:"operator (clear claude-sonnet)", since:"11m", doc:"docs/design/sse-backoff.md", oq:0, tokens:84200, lower:false, fence:["tools/tillr-view/servews.go"], preserved:null, raw:"in-queue", proj:"in_queue" },
+    { id:"item-429", place:19, cls:"alarm", title:"Add schema migration guard for v14 stores", where:"queue", why:"backend-quota-alarm", mover:"operator (clear claude-sonnet)", since:"11m", doc:"docs/design/schema-v14.md", oq:0, tokens:null, lower:true, fence:["tools/tillr/store/**"], preserved:null, raw:"in-queue", proj:"in_queue" },
+    { id:"item-301", place:4,  cls:"needs you", title:"Rotate signing key on idle or explicit revoke", where:"Vantage OQ-412", why:"open-question", mover:"owner (answer OQ-412)", since:"2h 14m", doc:"docs/design/auth-tokens.md", oq:2, tokens:41200, lower:false, fence:["tools/auth/**"], preserved:{ref:"refs/tillr/preserved/run-9821", files:4, lines:"+182/-41", why:"preempted by question"}, raw:"blocked", proj:"blocked" },
+    { id:"item-209", place:7,  cls:"needs you", title:"Clear dependency on closed-without-landing item-205", where:"store deps", why:"closed-blocker-holds", mover:"owner (clear dep or reopen item-205)", since:"1h 40m", doc:"docs/design/queue-deps.md", oq:0, tokens:0, lower:false, fence:["tools/tillr-item/**"], preserved:null, raw:"in-queue", proj:"blocked" },
+    { id:"item-319", place:15, cls:"needs you", title:"Set heavy-slot lease expiry window", where:"Vantage OQ-418", why:"open-question", mover:"owner (answer OQ-418)", since:"48m", doc:"docs/design/shard-lease.md", oq:1, tokens:19400, lower:false, fence:["tools/tillr-gate/**"], preserved:null, raw:"blocked", proj:"blocked" },
+    { id:"item-334", place:22, cls:"needs you", title:"Confirm escalated merge conflict on .tillr.toml", where:"repair escalation", why:"escalated-conflict", mover:"owner (resolve conflict)", since:"31m", doc:"docs/design/settings.md", oq:0, tokens:62100, lower:false, fence:[".tillr.toml"], preserved:null, raw:"blocked", proj:"blocked" },
+    { id:"item-340", place:28, cls:"needs you", title:"Approve manual migration prerequisite for prod", where:"manual gate", why:"manual-prerequisite", mover:"owner (run tillr-store migrate)", since:"24m", doc:"docs/design/prod-rollout.md", oq:0, tokens:0, lower:false, fence:["deploy/**"], preserved:null, raw:"blocked", proj:"blocked" },
+    { id:"item-351", place:34, cls:"needs you", title:"Decide retention window for preserved refs", where:"Vantage OQ-421", why:"open-question", mover:"owner (answer OQ-421)", since:"18m", doc:"docs/design/retention.md", oq:1, tokens:28900, lower:false, fence:["tools/tillr-drain/**"], preserved:null, raw:"blocked", proj:"blocked" },
+    { id:"item-360", place:41, cls:"needs you", title:"Review undeclared intake request item-idea-8a1c", where:"intake triage", why:"undeclared-request", mover:"owner (review report)", since:"9m", doc:"docs/intake/item-idea-8a1c.txt", oq:1, tokens:15600, lower:false, fence:["docs/intake/**"], preserved:null, raw:"in-queue", proj:"blocked" },
+    { id:"item-312", place:9,  cls:"needs a cause", title:"Investigate quiet worker stream on ordinary-4", where:"ordinary-4", why:"watch-quiet-stream", mover:"operator (inspect run-20261124-1416-l4)", since:"6m", doc:"docs/design/watch.md", oq:0, tokens:93400, lower:false, fence:["tools/tillr-watch/**"], preserved:null, raw:"in-queue", proj:"working" },
+    { id:"item-315", place:14, cls:"needs a cause", title:"Diagnose red gate vitest:web on candidate c-881", where:"gate", why:"gate-red", mover:"operator (check vitest:web)", since:"19m", doc:"docs/design/web-tests.md", oq:0, tokens:112000, lower:false, fence:["tools/tillr-view/web/**"], preserved:null, raw:"in-queue", proj:"in_queue" },
+    { id:"item-322", place:21, cls:"needs a cause", title:"Verify refusal: verify-not-done on criterion #2", where:"verify", why:"verify-not-done", mover:"drain (returns to work)", since:"12m", doc:"docs/design/verify.md", oq:0, tokens:74300, lower:true, fence:["tools/tillr-run/**"], preserved:null, raw:"in-queue", proj:"in_queue" },
+    { id:"item-328", place:29, cls:"needs a cause", title:"Unmapped hold reason: shard-lock-stale", where:"holdrules", why:"unmapped-hold-reason", mover:"operator (add holdrules entry)", since:"27m", doc:"docs/design/holdrules.md", oq:0, tokens:31000, lower:false, fence:["tools/tillr-drain/holdrules/**"], preserved:null, raw:"in-queue", proj:"in_queue" },
+    { id:"item-331", place:33, cls:"needs a cause", title:"Corrupt trace JSON in run-20261124-1350-l1", where:"trace", why:"unreadable-artifact", mover:"operator (inspect .tillr/loop)", since:"34m", doc:"docs/design/trace.md", oq:0, tokens:52800, lower:false, fence:["tools/tillr-trace/**"], preserved:null, raw:"in-queue", proj:"in_queue" },
+    { id:"item-104", place:null, cls:"landed", title:"Split run wall time into model, active tool, and slot wait", where:"trunk", why:"landed", mover:"—", since:"4m", doc:"docs/reference/observatory-design.md", oq:0, tokens:184920, lower:false, fence:["tools/tillr-view/**"], preserved:null, raw:"landed", proj:"landed", run:"run-20261124-1418-l3" }
+  ];
+  SPECIALS.forEach(s => ITEMS.push(s));
+
+  // Generate remaining items up to 342 unlanded + 88 landed = 430 total
+  const targets = { "waits on work":118, "waits on the loop":14, "ready":164, "moving":32, "landed":87 };
+  const reasonsByClass = {
+    "waits on work": ["blocked-by-item","path-fence-overlap","lane-cap-busy","doc-rewrite-pending"],
+    "waits on the loop": ["awaiting-pass","settling-lease"],
+    "ready": ["eligible"],
+    "moving": ["in-flight"],
+    "landed": ["landed"]
+  };
+  const areas = ["tools/tillr-view","tools/tillr-drain","tools/tillr-gate","tools/tillr-land","tools/tillr-item","tools/tillr-trace","docs/reference","tests/integration"];
+  let seqId = 500;
+  let placeCursor = 45;
+  Object.entries(targets).forEach(([cls, cnt]) => {
+    for (let i = 0; i < cnt; i++) {
+      seqId++;
+      const isLanded = cls === "landed";
+      const rList = reasonsByClass[cls];
+      const why = rList[i % rList.length];
+      const area = areas[i % areas.length];
+      ITEMS.push({
+        id: (i % 19 === 0 ? "express-" : "item-") + seqId,
+        place: isLanded ? null : placeCursor++,
+        cls,
+        title: `${why === "in-flight" ? "Executing" : isLanded ? "Landed" : "Queued"} ${area.split("/").pop()} task #${seqId}`,
+        where: cls === "moving" ? `ordinary-${(i % 8) + 1}` : isLanded ? "trunk" : "queue",
+        why,
+        mover: cls === "moving" ? "worker" : cls === "ready" ? "drain (next pass)" : cls === "waits on work" ? "drain (after blocker)" : "—",
+        since: `${(i % 45) + 1}m`,
+        doc: `docs/design/${area.split("/").pop()}.md`,
+        oq: 0,
+        tokens: i % 7 === 0 ? null : ((seqId * 137) % 140000) + 12000,
+        lower: i % 11 === 0,
+        fence: [`${area}/**`],
+        preserved: null,
+        raw: isLanded ? "landed" : cls === "moving" ? "in-queue" : "in-queue",
+        proj: isLanded ? "landed" : cls === "moving" ? "working" : cls === "waits on work" ? "blocked" : "in_queue"
+      });
+    }
+  });
+
+  // --- 14 Lanes (8 ordinary, 4 express, 2 document desks) ---
+  const LANES = [
+    { id:"ordinary-1", group:"ordinary", state:"running", item:"item-512", run:"run-1419-o1", seat:"worker", seatSrc:"policy", backend:"codex-5.1", attempt:1, elapsed:"3m 12s", quiet:false, action:"tool: go test ./tools/tillr-gate/...", tokens:64200 },
+    { id:"ordinary-2", group:"ordinary", state:"running", item:"item-118", run:"run-1417-o2", seat:"worker", seatSrc:"item", backend:"claude-opus", attempt:2, elapsed:"5m 40s", quiet:false, action:"llm_turn #7 · editing serveobs.go", tokens:118400 },
+    { id:"ordinary-3", group:"ordinary", state:"settling", item:"item-104", run:"run-20261124-1418-l3", seat:"worker", seatSrc:"policy", backend:"codex-5.1", attempt:1, elapsed:"2m 22s", quiet:false, action:"after land ~14s (releasing worktree)", tokens:184920 },
+    { id:"ordinary-4", group:"ordinary", state:"running", item:"item-312", run:"run-20261124-1416-l4", seat:"worker", seatSrc:"policy", backend:"codex-5.1", attempt:1, elapsed:"8m 05s", quiet:true, quietAge:"6m 14s", action:"log grew 6m 14s ago · liveness signal", tokens:93400 },
+    { id:"ordinary-5", group:"ordinary", state:"running", item:"item-530", run:"run-1420-o5", seat:"repair", seatSrc:"drain", backend:"claude-opus", attempt:1, elapsed:"1m 48s", quiet:false, action:"tool: git rebase --onto main", tokens:41000 },
+    { id:"ordinary-6", group:"ordinary", state:"idle", held:"item-418", heldReason:"kept: backend-quota-alarm (claude-sonnet)", item:"item-418", run:"run-1410-o6", seat:"worker", seatSrc:"policy", backend:"claude-sonnet", attempt:1, elapsed:"11m", quiet:false, action:"kept checkout awaiting quota clear", tokens:84200 },
+    { id:"ordinary-7", group:"ordinary", state:"running", item:"item-544", run:"run-1421-o7", seat:"judge", seatSrc:"workflow", backend:"codex-5.1", attempt:1, elapsed:"0m 44s", quiet:false, action:"evaluating 4 acceptance criteria", tokens:22100 },
+    { id:"ordinary-8", group:"ordinary", state:"idle", held:null, item:"item-501", run:"run-1402-o8", seat:"worker", seatSrc:"none", backend:"codex-5.1", attempt:1, elapsed:"18m", quiet:false, action:"last: landed", tokens:55300 },
+    { id:"express-1",  group:"express",  state:"running", item:"express-519", run:"run-1421-e1", seat:"worker", seatSrc:"policy", backend:"codex-5.1", attempt:1, elapsed:"0m 52s", quiet:false, action:"tool: vitest run", tokens:19800 },
+    { id:"express-2",  group:"express",  state:"running", item:"express-538", run:"run-1420-e2", seat:"worker", seatSrc:"policy", backend:"codex-5.1", attempt:1, elapsed:"1m 33s", quiet:false, action:"llm_turn #3 · writing test", tokens:31200 },
+    { id:"express-3",  group:"express",  state:"idle", held:null, item:"express-500", run:"run-1412-e3", seat:"worker", seatSrc:"policy", backend:"codex-5.1", attempt:1, elapsed:"9m", quiet:false, action:"last: landed", tokens:27400 },
+    { id:"express-4",  group:"express",  state:"idle", held:null, item:null, run:null, seat:"—", seatSrc:"none", backend:"—", attempt:0, elapsed:"—", quiet:false, action:"idle · never leased", tokens:null },
+    { id:"desk-1",     group:"desk",     state:"running", item:"item-319", run:"run-1415-d1", seat:"design", seatSrc:"item", backend:"claude-opus", attempt:1, elapsed:"6m 10s", quiet:false, action:"updating docs/design/shard-lease.md", tokens:48200 },
+    { id:"desk-2",     group:"desk",     state:"idle", held:null, item:"item-299", run:"run-1355-d2", seat:"design", seatSrc:"item", backend:"claude-opus", attempt:1, elapsed:"26m", quiet:false, action:"last: landed", tokens:61000 }
+  ];
+
+  // --- Passes with folded streaks ---
+  const PASSES = [
+    { stamp:"20261124T142201Z", streak:1, disp:2, hold:310, other:0, diff:"dispatched express-519 → express-1, item-544 → ordinary-7", phases:"12 / 88 / 14 / 0 / 0 ms", tokens:"42,100", lower:false, stop:"ok", detail:"2 dispatches; 310 holds (118 waits-on-work)" },
+    { stamp:"20261124T141902Z..142159Z", streak:18, disp:0, hold:312, other:0, diff:"streak: identical holds across 18 passes", phases:"9 / 0 / 0 / 0 / 0 ms", tokens:"412,800", lower:true, stop:"all-held", detail:"all eligible lanes busy or alarm-held" },
+    { stamp:"20261124T141844Z", streak:1, disp:1, hold:311, other:1, diff:"landed item-104 (run-20261124-1418-l3); dispatched item-530", phases:"11 / 74 / 9 / 412 / 184 ms", tokens:"184,920", lower:false, stop:"ok", detail:"1 landing + 1 repair dispatch" },
+    { stamp:"20261124T141104Z..141840Z", streak:42, disp:0, hold:312, other:0, diff:"claude-sonnet quota alarm raised at 14:11:04Z", phases:"8 / 0 / 0 / 0 / 0 ms", tokens:"904,100", lower:true, stop:"alarm-hold", detail:"2 items held on claude-sonnet" }
+  ];
+
+  // --- Waterfall Spans (single shared clock 0..142840 ms) ---
+  const SPANS = [
+    { id:"sp-0", depth:0, name:"boundary", cat:"stage", state:"unobserved_seam", start:null, end:null, reason:"unobserved seam: tick-level bracket; no per-run record", selfMs:null, crit:false },
+    { id:"sp-1", depth:0, name:"fence", cat:"stage", state:"observed", start:0, end:420, selfMs:420, crit:false },
+    { id:"sp-2", depth:0, name:"work", cat:"stage", state:"observed", start:420, end:108400, selfMs:5200, crit:true },
+    { id:"sp-3", depth:1, name:"llm_turn #1 (planning)", cat:"observed", state:"observed", start:600, end:14200, selfMs:13600, crit:false, meta:"first_output: 840ms · 74.2 tok/s" },
+    { id:"sp-4", depth:1, name:"tool: read serve.go", cat:"tool", state:"observed", start:14200, end:14950, selfMs:750, crit:false },
+    { id:"sp-5", depth:1, name:"llm_turn #2 (patch)", cat:"observed", state:"observed", start:15100, end:46200, selfMs:31100, crit:false, meta:"first_output: 910ms · 71.8 tok/s" },
+    { id:"sp-6", depth:1, name:"tool: go test ./tools/tillr-view/...", cat:"tool", state:"observed", start:46400, end:86850, selfMs:20650, crit:false },
+    { id:"sp-7", depth:2, name:"slot_wait (heavy-slot-1)", cat:"slot_wait", state:"observed", start:46500, end:66300, selfMs:19800, crit:false },
+    { id:"sp-8", depth:1, name:"llm_turn #3 (final verify)", cat:"observed", state:"observed", start:87100, end:108200, selfMs:21100, crit:true, meta:"first_output: 790ms · 78.0 tok/s" },
+    { id:"sp-9", depth:0, name:"gate", cat:"gate", state:"observed", start:108400, end:139200, selfMs:1200, crit:true },
+    { id:"sp-10", depth:1, name:"check: go-test:tillr-view", cat:"gate", state:"observed", start:108600, end:138900, selfMs:30300, crit:true },
+    { id:"sp-11", depth:1, name:"check: vitest:web", cat:"gate", state:"observed", start:108600, end:124100, selfMs:15500, crit:false },
+    { id:"sp-12", depth:1, name:"check: docs-links (skipped)", cat:"gate", state:"absent", start:null, end:null, reason:"skipped: no docs/ path touched", selfMs:null, crit:false },
+    { id:"sp-13", depth:0, name:"land (squash onto main)", cat:"stage", state:"observed", start:139200, end:142840, selfMs:3640, crit:true }
+  ];
+
+  // --- Landings & Checks ---
+  const LANDINGS = [
+    { id:"land-881", item:"item-104", run:"run-20261124-1418-l3", res:"landed", gated:"a1c90e2", landed:"9f4a21c", replay:true, when:"14:18:44Z" },
+    { id:"land-880", item:"item-498", run:"run-20261124-1415-l1", res:"landed", gated:"7b22f10", landed:"7b22f10", replay:false, when:"14:15:12Z" },
+    { id:"land-879", item:"item-495", run:"run-20261124-1409-l8", res:"landed", gated:"44e91a0", landed:"44e91a0", replay:false, when:"14:09:03Z" },
+    { id:"land-878", item:"item-491", run:"run-20261124-1358-l2", res:"conflict", gated:"31d00b4", landed:"—", replay:false, when:"13:58:29Z" }
+  ];
+  const CHECKS = [
+    { id:"go-test:tillr-view", n:42, med:"28.4 s", p95:"34.1 s", max:"41.0 s", wait:"19.8 s", fail:1 },
+    { id:"go-test:tillr-drain", n:38, med:"44.1 s", p95:"58.2 s", max:"69.4 s", wait:"32.1 s", fail:2 },
+    { id:"vitest:web", n:29, med:"14.8 s", p95:"18.9 s", max:"22.3 s", wait:"0 ms", fail:1 },
+    { id:"citations", n:19, med:"180 ms", p95:"240 ms", max:"310 ms", wait:"0 ms", fail:0 },
+    { id:"scratch", n:19, med:"95 ms", p95:"130 ms", max:"170 ms", wait:"0 ms", fail:0 },
+    { id:"heavy-replay", n:3, med:"112.0 s", p95:"withheld (n=3 < 5)", max:"124.2 s", wait:"41.0 s", fail:0 }
+  ];
+
+  // --- State ---
+  let activeTab = "triage";
+  let queuePreset = "not-moving";
+  let queuePage = 1;
+  const PAGE_SIZE = 40;
+  let paused = false;
+  let loopStopped = false;
+  let freezeAccepted = false;
+  let wfWin = { start: 0, end: 142840 };
+  let selectedSpanId = "sp-2";
+
+  // --- Helpers ---
+  function badgeHTML(cls) {
+    const m = CLASS_META[cls] || { sym:"✓", cls:"st-landed" };
+    return `<span class="state-badge ${m.cls}"><span class="sym">${m.sym}</span> ${cls}</span>`;
+  }
+  function epHTML(type, text) {
+    const map = { observed:"ep-observed", derived:"ep-derived", seam:"ep-seam", absent:"ep-absent", corrupt:"ep-corrupt", lower:"ep-lower", lane:"ep-lane-copy" };
+    return `<span class="ep-badge ${map[type]||"ep-absent"}">${text}</span>`;
+  }
+  function fmtTok(tokens, lower) {
+    if (tokens === null || tokens === undefined) return epHTML("absent", "usage not recorded");
+    const s = tokens.toLocaleString() + " tok";
+    return lower ? `<span class="ep-badge ep-lower">≥ ${s}</span>` : `<span class="num">${s}</span>`;
+  }
+
+  // --- Navigation ---
+  window.switchTab = function(tab, opts) {
+    activeTab = tab;
+    document.querySelectorAll(".nav-tab").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab ? "true" : "false"));
+    document.querySelectorAll(".view-section").forEach(s => s.classList.toggle("active", s.id === "tab-" + tab));
+    if (tab === "queue" && opts) {
+      if (opts.preset) setQueuePreset(opts.preset, true);
+      if (opts.classFilter !== undefined) {
+        if (["ready","moving"].includes(opts.classFilter)) setQueuePreset("unlanded", true);
+        document.getElementById("qClass").value = opts.classFilter;
+      }
+      renderQueueTable();
+    }
+  };
+
+  // --- Triage Render ---
+  function renderTriage() {
+    const mkMini = (item) => `<li class="triage-mini-row">
+      <div>
+        <span class="num" style="color:var(--ink-3)">#${item.place ?? "—"}</span>
+        <span class="entity-link" onclick="openItemDrawer('${item.id}')">${item.id}</span>
+        <span>${item.title}</span>
+        <div class="sub-line">mover: ${item.mover} · ${item.why} · ${item.since}</div>
+      </div>
+      ${item.oq ? `<span class="chip">${item.oq} OQ</span>` : ""}
+    </li>`;
+    document.getElementById("triageAlarmList").innerHTML = ITEMS.filter(i => i.cls === "alarm").map(mkMini).join("");
+    document.getElementById("triageYouList").innerHTML = ITEMS.filter(i => i.cls === "needs you").slice(0, 4).map(mkMini).join("");
+    document.getElementById("triageCauseList").innerHTML = ITEMS.filter(i => i.cls === "needs a cause").slice(0, 4).map(mkMini).join("");
+
+    const totalUnlanded = 342;
+    const bar = document.getElementById("distBar");
+    const leg = document.getElementById("distLegend");
+    bar.innerHTML = ""; leg.innerHTML = "";
+    Object.entries(CLASS_META).forEach(([cls, m]) => {
+      const pct = (m.count / totalUnlanded) * 100;
+      const seg = document.createElement("div");
+      seg.className = "dist-seg";
+      seg.style.width = pct + "%";
+      seg.style.background = m.color;
+      seg.title = `${cls}: ${m.count} items (${pct.toFixed(1)}%)`;
+      seg.onclick = () => switchTab("queue", { classFilter: cls });
+      bar.appendChild(seg);
+
+      const li = document.createElement("div");
+      li.className = "dist-leg-item";
+      li.innerHTML = `<span class="swatch" style="background:${m.color}"></span><strong>${cls}</strong> <span class="num">${m.count}</span>`;
+      li.onclick = () => switchTab("queue", { classFilter: cls });
+      leg.appendChild(li);
+    });
+
+    // Home Lane Matrix
+    const groups = [
+      { key:"ordinary", label:"Ordinary Lanes (8)" },
+      { key:"express",  label:"Express Lanes (4)" },
+      { key:"desk",     label:"Document Desks (2)" }
+    ];
+    let html = "";
+    groups.forEach(g => {
+      const list = LANES.filter(l => l.group === g.key);
+      html += `<div class="lane-group-label"><span>${g.label}</span><span>${list.filter(l=>l.state==="running").length} running</span></div><div class="lane-grid">`;
+      list.forEach(l => {
+        const stCls = l.held ? "st-kept" : l.state === "running" ? "st-run" : l.state === "settling" ? "st-settle" : "st-idle";
+        html += `<div class="lane-tile ${stCls}">
+          <div class="lane-tile-top">
+            <div><span class="entity-link" onclick="switchTab('lanes')">${l.id}</span> · <strong>${l.state}</strong> ${l.held ? `<span class="ep-badge ep-corrupt">kept</span>` : ""}</div>
+            <span class="num" style="color:var(--ink-3)">~${l.elapsed}</span>
+          </div>
+          <div class="lane-tile-meta">
+            ${l.item ? `<span class="entity-link" onclick="openItemDrawer('${l.item}')">${l.item}</span>` : `<span style="color:var(--ink-3)">no item</span>`}
+            ${l.run ? `<span class="entity-link" onclick="switchTab('waterfall')">${l.run}</span>` : ""}
+            <span>${l.seat} (${l.seatSrc}) · ${l.backend}</span>
+            ${l.quiet ? `<span class="quiet-warn">QUIET ${l.quietAge}</span>` : ""}
+          </div>
+          <div class="lane-action">${l.action}</div>
+        </div>`;
+      });
+      html += `</div>`;
+    });
+    document.getElementById("homeLaneMatrix").innerHTML = html;
+
+    // Home Passes Preview
+    document.getElementById("homePassesPreview").innerHTML = PASSES.slice(0, 3).map(p => `
+      <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span class="entity-link" onclick="switchTab('passes')">${p.stamp}</span>
+          ${p.streak > 1 ? `<span class="chip">×${p.streak} folded</span>` : `<span class="ep-badge ep-observed">${p.disp} disp · ${p.hold} held</span>`}
+        </div>
+        <div class="sub-line">${p.diff} · ${p.lower ? "≥ " : ""}${p.tokens} tok</div>
+      </div>
+    `).join("");
+  }
+
+  // --- Queue Ledger ---
+  window.setQueuePreset = function(preset, skipRender) {
+    queuePreset = preset;
+    queuePage = 1;
+    document.querySelectorAll("[data-preset]").forEach(b => b.setAttribute("aria-pressed", b.dataset.preset === preset ? "true" : "false"));
+    if (!skipRender) renderQueueTable();
+  };
+
+  window.renderQueueTable = function() {
+    const q = document.getElementById("qSearch").value.toLowerCase();
+    const clsF = document.getElementById("qClass").value;
+    const rsnF = document.getElementById("qReason").value;
+    const sortF = document.getElementById("qSort").value;
+
+    let rows = ITEMS.filter(it => {
+      if (queuePreset === "not-moving") { if (["ready","moving","landed"].includes(it.cls)) return false; }
+      else if (queuePreset === "unlanded") { if (it.cls === "landed") return false; }
+      else if (queuePreset === "ready") { if (it.cls !== "ready") return false; }
+      else if (queuePreset === "moving") { if (it.cls !== "moving") return false; }
+      else if (queuePreset === "landed") { if (it.cls !== "landed") return false; }
+      if (clsF && it.cls !== clsF) return false;
+      if (rsnF && it.why !== rsnF) return false;
+      if (q && !(it.id + " " + it.title + " " + it.doc + " " + it.fence.join(" ")).toLowerCase().includes(q)) return false;
+      return true;
+    });
+
+    rows.sort((a, b) => sortF === "item" ? a.id.localeCompare(b.id) : (a.place ?? 999999) - (b.place ?? 999999));
+
+    const total = rows.length;
+    const maxPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (queuePage > maxPage) queuePage = maxPage;
+    const slice = rows.slice((queuePage - 1) * PAGE_SIZE, queuePage * PAGE_SIZE);
+
+    document.getElementById("queueTbody").innerHTML = slice.map((it, idx) => `
+      <tr class="row-clickable" onclick="openItemDrawer('${it.id}')">
+        <td class="num">${it.place ?? "—"}</td>
+        <td>
+          <div><span class="entity-link">${it.id}</span> <strong>${it.title}</strong> ${it.id.startsWith("item-idea-") ? `<span class="chip">idea</span>` : ""}</div>
+          <div class="sub-line">doc: <code>${it.doc}</code> ${it.oq ? `· <span class="chip">${it.oq} OQ</span>` : ""} · fence: <code>${it.fence[0]}</code></div>
+        </td>
+        <td>${badgeHTML(it.cls)}</td>
+        <td><code>${it.where}</code></td>
+        <td><code>${it.why}</code></td>
+        <td>${it.mover}</td>
+        <td class="num">${it.since}</td>
+        <td>${fmtTok(it.tokens, it.lower)}</td>
+        <td onclick="event.stopPropagation()">
+          ${it.place ? `<button type="button" onclick="moveToTop('${it.id}')">Move to top</button>` : `<span style="color:var(--ink-3)">—</span>`}
+        </td>
+      </tr>
+    `).join("") || `<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--ink-3)">No items match the current filters.</td></tr>`;
+
+    document.getElementById("queuePager").innerHTML = `
+      <div>Showing <strong class="num">${slice.length}</strong> of <strong class="num">${total}</strong> matching items (page ${queuePage} of ${maxPage})</div>
+      <div style="display:flex;gap:6px;">
+        <button type="button" ${queuePage <= 1 ? "disabled" : ""} onclick="queuePage--;renderQueueTable()">← Prev</button>
+        <button type="button" ${queuePage >= maxPage ? "disabled" : ""} onclick="queuePage++;renderQueueTable()">Next →</button>
+      </div>
+    `;
+  };
+
+  window.moveToTop = function(id) {
+    const it = ITEMS.find(x => x.id === id);
+    if (!it) return;
+    ITEMS.forEach(x => { if (x.place && x.place < it.place) x.place++; });
+    it.place = 1;
+    renderQueueTable();
+    renderTriage();
+  };
+
+  window.acceptQueueUpdates = function() {
+    freezeAccepted = true;
+    document.getElementById("freezeBanner").style.display = "none";
+  };
+
+  // --- Lanes Table ---
+  function renderLanesTable() {
+    document.getElementById("lanesTbody").innerHTML = LANES.map(l => `
+      <tr>
+        <td><strong class="mono">${l.id}</strong></td>
+        <td>${l.group}</td>
+        <td><span class="state-badge ${l.held ? "st-alarm" : l.state==="running" ? "st-moving" : l.state==="settling" ? "st-needs-you" : "st-waits-on-the-loop"}"><span class="sym">${l.state==="running"?"●":"◌"}</span> ${l.held ? "idle (kept)" : l.state}</span></td>
+        <td>${l.item ? `<span class="entity-link" onclick="openItemDrawer('${l.item}')">${l.item}</span>` : epHTML("absent", "none")}${l.heldReason ? `<div class="sub-line">${l.heldReason}</div>` : ""}</td>
+        <td>${l.seat} <span class="sub-line">(${l.seatSrc})</span> · <code>${l.backend}</code></td>
+        <td>${l.run ? `<span class="entity-link" onclick="switchTab('waterfall')">${l.run}</span>` : epHTML("absent","no run")} <span class="num">#${l.attempt}</span></td>
+        <td>${epHTML("derived", "~" + l.elapsed)} ${l.quiet ? `<div class="quiet-warn">quiet ${l.quietAge}</div>` : ""}</td>
+        <td>${l.action}</td>
+        <td>${fmtTok(l.tokens, false)}</td>
+      </tr>
+    `).join("");
+  }
+
+  // --- Passes Table ---
+  function renderPassesTable() {
+    document.getElementById("passesTbody").innerHTML = PASSES.map(p => `
+      <tr>
+        <td><code class="mono">${p.stamp}</code></td>
+        <td class="num">${p.streak > 1 ? `×${p.streak} folded` : "1"}</td>
+        <td><span class="num">${p.disp}</span> disp · <span class="num">${p.hold}</span> held</td>
+        <td>${p.diff}</td>
+        <td class="mono">${p.phases}</td>
+        <td>${p.lower ? `<span class="ep-badge ep-lower">≥ ${p.tokens} tok</span>` : `<span class="num">${p.tokens} tok</span>`}</td>
+        <td><code>${p.stop}</code> · ${p.detail}</td>
+      </tr>
+    `).join("");
+  }
+
+  // --- Waterfall ---
+  window.renderWaterfall = function() {
+    const q = (document.getElementById("wfFilter").value || "").toLowerCase();
+    const axis = document.getElementById("wfAxis");
+    const spanMs = wfWin.end - wfWin.start;
+    axis.innerHTML = [0, 0.25, 0.5, 0.75, 1].map(f => `<span>${Math.round(wfWin.start + spanMs * f).toLocaleString()} ms</span>`).join("");
+
+    const filtered = SPANS.filter(s => !q || s.name.toLowerCase().includes(q));
+    document.getElementById("wfRows").innerHTML = filtered.map(s => {
+      let trackHTML = "";
+      if (s.start === null || s.end === null) {
+        trackHTML = `<div class="wf-gap">${s.reason}</div>`;
+      } else {
+        const left = Math.max(0, ((s.start - wfWin.start) / spanMs) * 100);
+        const right = Math.min(100, ((s.end - wfWin.start) / spanMs) * 100);
+        const width = Math.max(0.4, right - left);
+        const dur = (s.end - s.start).toLocaleString() + " ms";
+        trackHTML = right > 0 && left < 100 ? `<div class="wf-bar ${s.cat}" style="left:${left}%;width:${width}%;">${width > 8 ? dur : ""}</div>` : "";
+      }
+      return `<div class="wf-row ${selectedSpanId === s.id ? "selected" : ""}" onclick="selectSpan('${s.id}')">
+        <div class="wf-label" style="padding-left:${8 + s.depth * 14}px;">
+          ${s.crit ? `<span title="End-time chain">★</span>` : ""}
+          <span>${s.name}</span>
+          ${s.state !== "observed" ? epHTML(s.state === "unobserved_seam" ? "seam" : "absent", s.state) : ""}
+        </div>
+        <div class="wf-track">${trackHTML}</div>
+      </div>`;
+    }).join("");
+
+    const sel = SPANS.find(s => s.id === selectedSpanId);
+    document.getElementById("wfInspector").innerHTML = sel ? `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <strong>${sel.name}</strong>
+        ${epHTML(sel.state === "observed" ? "observed" : sel.state === "unobserved_seam" ? "seam" : "absent", sel.state)}
+      </div>
+      <div style="display:grid;grid-template-columns:140px 1fr;gap:4px 10px;font-size:12px;">
+        <span style="color:var(--ink-3)">Start:</span><span class="num">${sel.start === null ? "not recorded" : sel.start.toLocaleString() + " ms"}</span>
+        <span style="color:var(--ink-3)">Duration:</span><span class="num">${sel.start === null ? "not recorded" : (sel.end - sel.start).toLocaleString() + " ms"}</span>
+        <span style="color:var(--ink-3)">Uncovered self:</span><span class="num">${sel.selfMs === null ? "not recorded" : sel.selfMs.toLocaleString() + " ms"}</span>
+        <span style="color:var(--ink-3)">Attributes:</span><span>${sel.meta || sel.reason || "category=" + sel.cat}</span>
+      </div>
+    ` : "";
+
+    document.getElementById("wfDecisions").innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;">
+        <div><span class="num">00:00.0</span> <strong>allocation</strong> · dispatched to <code>ordinary-3</code> (pass <code>20261124T141622Z</code>)</div>
+        <div><span class="num">01:48.4</span> <strong>gate</strong> · verdict <code>v-881</code> passed (<code>go-test:tillr-view</code>, <code>vitest:web</code>)</div>
+        <div><span class="num">02:22.8</span> <strong>landing</strong> · squashed onto concurrent <code>main</code> (<code>gated_tree a1c90e2</code> → <code>landed_tree 9f4a21c</code>)</div>
+        <hr style="border:none;border-top:1px solid var(--border);width:100%;margin:4px 0;">
+        <div><strong>Claim Audit:</strong> <span class="ep-badge ep-observed">✓ 3 verified</span> · <span class="ep-badge ep-seam">⚠ 0 unverified</span></div>
+      </div>
+    `;
+  };
+  window.selectSpan = function(id) { selectedSpanId = id; renderWaterfall(); };
+  window.wfZoom = function(f) {
+    const c = (wfWin.start + wfWin.end) / 2;
+    const h = Math.max(500, ((wfWin.end - wfWin.start) * f) / 2);
+    wfWin = { start: Math.max(0, c - h), end: Math.min(142840, c + h) };
+    renderWaterfall();
+  };
+  window.wfPan = function(frac) {
+    const d = (wfWin.end - wfWin.start) * frac;
+    wfWin = { start: Math.max(0, wfWin.start + d), end: Math.min(142840, wfWin.end + d) };
+    renderWaterfall();
+  };
+  window.wfFit = function() { wfWin = { start: 0, end: 142840 }; renderWaterfall(); };
+
+  // --- Trunk & Checks ---
+  function renderTrunk() {
+    document.getElementById("landingsTbody").innerHTML = LANDINGS.map(l => `
+      <tr>
+        <td><code class="mono">${l.id}</code></td>
+        <td><span class="entity-link" onclick="openItemDrawer('${l.item}')">${l.item}</span> · <span class="entity-link" onclick="switchTab('waterfall')">${l.run}</span></td>
+        <td><span class="state-badge ${l.res==="landed"?"st-landed":"st-needs-a-cause"}"><span class="sym">${l.res==="landed"?"✓":"▲"}</span> ${l.res}</span></td>
+        <td class="mono">${l.gated} → ${l.landed} ${l.replay ? `<span class="ep-badge ep-derived">replayed on concurrent main</span>` : ""}</td>
+        <td class="num">${l.when}</td>
+      </tr>
+    `).join("");
+
+    document.getElementById("checksTbody").innerHTML = CHECKS.map(c => `
+      <tr>
+        <td><code class="mono">${c.id}</code></td>
+        <td class="num">${c.n}</td>
+        <td class="num">${c.med}</td>
+        <td>${c.p95.startsWith("withheld") ? epHTML("absent", c.p95) : `<span class="num">${c.p95}</span>`}</td>
+        <td class="num">${c.max}</td>
+        <td class="num">${c.wait}</td>
+        <td class="num">${c.fail > 0 ? `<span style="color:var(--alarm-fg);font-weight:700">${c.fail}</span>` : "0"}</td>
+      </tr>
+    `).join("");
+  }
+
+  // --- Item Detail Drawer ---
+  window.openItemDrawer = function(id) {
+    const it = ITEMS.find(x => x.id === id) || ITEMS[0];
+    document.getElementById("drwId").textContent = it.id;
+    document.getElementById("drwTitle").textContent = it.title;
+    document.getElementById("drwBody").innerHTML = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        ${badgeHTML(it.cls)}
+        <span class="chip">stored: ${it.raw}</span>
+        <span class="chip">projected: ${it.proj}</span>
+        <span class="chip">place: ${it.place ?? "—"}</span>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div class="panel-title">Acceptance Criteria (Worker ~claimed vs Observed Verdict)</div></div>
+        <div class="panel-body" style="display:flex;flex-direction:column;gap:6px;">
+          <div class="crit-row">
+            <span>1. Read-only store handle &amp; explicit provenance marks preserved</span>
+            ${it.cls === "landed" ? `<span class="ep-badge ep-observed">✓ done (verdict)</span>` : `<span class="ep-badge ep-derived">~claimed (worker report, not a verdict)</span>`}
+          </div>
+          <div class="crit-row">
+            <span>2. Regression tests pass under <code>tillr-gate</code> without flakes</span>
+            ${it.why === "verify-not-done" ? `<span class="ep-badge ep-corrupt">✕ verify-not-done → next: work</span>` : `<span class="ep-badge ep-absent">○ unmet</span>`}
+          </div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Path Fence &amp; Document</div></div>
+          <div class="panel-body" style="font-size:12px;">
+            <div><strong>Allowed paths:</strong> <code>${it.fence.join(", ")}</code></div>
+            <div style="margin-top:6px;"><strong>Document:</strong> <code>${it.doc}</code> ${it.oq ? `<span class="chip">${it.oq} open questions</span>` : ""}</div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title">Usage (No Dollar Prices)</div></div>
+          <div class="panel-body" style="font-size:12px;">
+            <div>Total tokens: ${fmtTok(it.tokens, it.lower)}</div>
+            <div style="margin-top:6px;">Price display: ${epHTML("absent", "omitted by policy (OQ-OR1)")}</div>
+          </div>
+        </div>
+      </div>
+      ${it.preserved ? `
+      <div class="panel" style="border-left:4px solid var(--you-fg);">
+        <div class="panel-head"><div class="panel-title">Earlier Preserved Uncommitted Work</div></div>
+        <div class="panel-body" style="font-size:12px;">
+          <div>Saved ref: <code>${it.preserved.ref}</code> · <strong>${it.preserved.files} files</strong> (<code>${it.preserved.lines}</code>)</div>
+          <div class="sub-line">Reason stopped: ${it.preserved.why}</div>
+        </div>
+      </div>` : ""}
+    `;
+    document.getElementById("itemDrawer").classList.add("open");
+  };
+  window.closeItemDrawer = function() { document.getElementById("itemDrawer").classList.remove("open"); };
+
+  // --- Loop & Pause Controls ---
+  window.togglePause = function() {
+    paused = !paused;
+    document.getElementById("pauseBtn").textContent = paused ? "Resume" : "Pause";
+    document.getElementById("liveDot").className = paused ? "dot-paused" : "dot-live";
+    document.getElementById("liveLabel").textContent = paused ? "paused" : "live";
+  };
+
+  window.toggleLoopState = function() {
+    loopStopped = !loopStopped;
+    const left = document.getElementById("loopBarLeft");
+    if (loopStopped) {
+      left.innerHTML = `<span class="loop-pill stopped">■ Loop Stopped</span>
+        <span>stopped since 14:22:10Z · <code>item-328</code> · holdrules · unmapped-hold-reason</span>
+        <span class="muted-cmd">Next: add holdrules entry &amp; run <code>tillr-drain loop</code></span>`;
+    } else {
+      left.innerHTML = `<span class="loop-pill running">● Loop Running</span>
+        <span>session <code class="entity-link" onclick="switchTab('passes')">sess-20261124-0814</code></span>
+        <span class="muted-cmd">last pass <code class="entity-link" onclick="switchTab('passes')">20261124T142201Z</code> (2s ago) · next due ~1s</span>
+        <span class="muted-cmd">lanes: 9/14 active (6 ordinary, 2 express, 1 desk) · 1 settling · 4 idle (1 kept)</span>`;
+    }
+  };
+
+  // --- Idea Modal & Glossary ---
+  window.openIdeaModal = function() { document.getElementById("ideaModal").classList.add("open"); document.getElementById("ideaWords").focus(); };
+  window.closeIdeaModal = function() { document.getElementById("ideaModal").classList.remove("open"); };
+  window.submitIdea = function() {
+    const words = document.getElementById("ideaWords").value.trim();
+    if (!words) return;
+    const placeTop = document.getElementById("ideaPlace").value === "first";
+    const id = "item-idea-" + Math.random().toString(16).slice(2, 6);
+    if (placeTop) ITEMS.forEach(x => { if (x.place) x.place++; });
+    ITEMS.unshift({
+      id, place: placeTop ? 1 : 343, cls:"ready",
+      title: words.split("\n")[0].slice(0, 64),
+      where:"queue (intake)", why:"eligible", mover:"design seat (next pass)", since:"just now",
+      doc:`docs/intake/${id}.txt (not yet in tree)`, oq:0, tokens:null, lower:false,
+      fence:[`docs/intake/${id}.txt`], preserved:null, raw:"in-queue", proj:"in_queue"
+    });
+    document.getElementById("ideaWords").value = "";
+    closeIdeaModal();
+    document.getElementById("navQueueCount").textContent = ITEMS.filter(i => i.cls !== "landed").length;
+    switchTab("queue", { preset:"unlanded" });
+  };
+
+  window.openGlossary = function() { document.getElementById("glossaryModal").classList.add("open"); };
+  window.closeGlossary = function() { document.getElementById("glossaryModal").classList.remove("open"); };
+
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") { closeItemDrawer(); closeIdeaModal(); closeGlossary(); }
+    if (e.key === "n" && !["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName)) { e.preventDefault(); openIdeaModal(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && document.getElementById("ideaModal").classList.contains("open")) submitIdea();
+  });
+
+  // Live age ticker (stops when paused)
+  let ageSec = 1;
+  setInterval(() => {
+    if (paused) return;
+    ageSec = (ageSec % 5) + 1;
+    document.getElementById("ageNum").textContent = ageSec + "s";
+  }, 1000);
+
+  // Initial render
+  renderTriage();
+  renderQueueTable();
+  renderLanesTable();
+  renderPassesTable();
+  renderWaterfall();
+  renderTrunk();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tillr // RailDeck Observatory</title>
+<style>
+:root {
+  --bg-canvas: #F3F2EE;
+  --bg-surface: #FFFFFF;
+  --bg-subtle: #EAE8E1;
+  --bg-hover: #F8F7F4;
+  --bg-ink-bar: #16181E;
+  --ink-1: #14161A;
+  --ink-2: #434956;
+  --ink-3: #687082;
+  --ink-inv: #F7F7F5;
+  --border: #DCD9CF;
+  --border-strong: #C2BEB0;
+  --accent: #0B57D0;
+  --accent-bg: #EDF3FF;
+  --ok: #0E7452;
+  --ok-bg: #E7F5EF;
+  --ok-border: #A7DEC8;
+  --warn: #9A5B00;
+  --warn-bg: #FEF5E6;
+  --warn-border: #F5D293;
+  --bad: #B91C1C;
+  --bad-bg: #FDECEC;
+  --bad-border: #F5B5B5;
+  --info: #1D4ED8;
+  --info-bg: #EDF2FF;
+  --info-border: #B8CCFF;
+  --desk: #6D28D9;
+  --desk-bg: #F3EEFF;
+  --desk-border: #D2C0FA;
+  --neutral-bg: #ECEAE3;
+  --neutral-border: #D4D0C5;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --radius: 4px;
+  --shadow-sm: 0 1px 2px rgba(20, 22, 26, 0.05);
+  --shadow-md: 0 6px 20px rgba(20, 22, 26, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root.auto-theme {
+    --bg-canvas: #111317;
+    --bg-surface: #181B21;
+    --bg-subtle: #20242C;
+    --bg-hover: #1E222A;
+    --bg-ink-bar: #0B0C0F;
+    --ink-1: #ECEEF2;
+    --ink-2: #B3BAC8;
+    --ink-3: #8891A5;
+    --border: #2B303B;
+    --border-strong: #3E4554;
+    --accent: #6BA4FF;
+    --accent-bg: #17243A;
+    --ok: #34D399;
+    --ok-bg: #102B22;
+    --ok-border: #1C4D3D;
+    --warn: #FBBF24;
+    --warn-bg: #2E220D;
+    --warn-border: #594116;
+    --bad: #F87171;
+    --bad-bg: #351416;
+    --bad-border: #632327;
+    --info: #60A5FA;
+    --info-bg: #14223B;
+    --info-border: #253E6E;
+    --desk: #A78BFA;
+    --desk-bg: #24193D;
+    --desk-border: #432F73;
+    --neutral-bg: #242832;
+    --neutral-border: #363C4A;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg-canvas); color: var(--ink-1); font-family: var(--sans); font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, .mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+button { font-family: var(--sans); font-size: 12px; cursor: pointer; border: 1px solid var(--border-strong); background: var(--bg-surface); color: var(--ink-1); border-radius: var(--radius); padding: 4px 10px; line-height: 1.3; }
+button:hover { background: var(--bg-subtle); }
+button.primary { background: var(--accent); color: #FFF; border-color: var(--accent); font-weight: 600; }
+button.primary:hover { filter: brightness(1.08); }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Sticky Shell */
+.shell-sticky { position: sticky; top: 0; z-index: 40; background: var(--bg-surface); border-bottom: 1px solid var(--border-strong); box-shadow: var(--shadow-sm); }
+
+/* Alarm Strip */
+.alarm-strip { background: var(--bad-bg); border-bottom: 1px solid var(--bad-border); padding: 7px 18px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.alarm-strip__main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.alarm-strip__title { font-weight: 700; color: var(--bad); display: inline-flex; align-items: center; gap: 5px; }
+.alarm-strip__detail { color: var(--ink-1); }
+.alarm-strip__cmd { font-family: var(--mono); font-size: 11.5px; background: var(--bg-surface); border: 1px solid var(--bad-border); padding: 2px 7px; border-radius: var(--radius); color: var(--ink-1); }
+.alarm-strip__actions { display: flex; gap: 8px; align-items: center; }
+
+/* Top Nav */
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 18px; height: 44px; background: var(--bg-ink-bar); color: var(--ink-inv); }
+.topbar__left { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.brand { display: flex; align-items: baseline; gap: 7px; font-weight: 700; letter-spacing: -0.01em; color: #FFF; white-space: nowrap; }
+.brand__tag { font-family: var(--mono); font-size: 10.5px; color: #9CA3AF; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; }
+.nav-tabs { display: flex; align-items: center; gap: 2px; overflow-x: auto; }
+.nav-tab { color: #C6CCD8; padding: 11px 10px; font-size: 12.5px; font-weight: 500; border-bottom: 2px solid transparent; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; background: transparent; border-top: 0; border-left: 0; border-right: 0; border-radius: 0; }
+.nav-tab:hover { color: #FFF; background: rgba(255,255,255,0.06); text-decoration: none; }
+.nav-tab.active { color: #FFF; border-bottom-color: #60A5FA; font-weight: 600; }
+.nav-count { font-family: var(--mono); font-size: 10.5px; background: rgba(255,255,255,0.14); color: #E5E7EB; padding: 1px 5px; border-radius: 9px; }
+.topbar__right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.freshness-pill { font-family: var(--mono); font-size: 11px; color: #D1D5DB; background: rgba(255,255,255,0.08); padding: 3px 8px; border-radius: 99px; display: inline-flex; align-items: center; gap: 6px; }
+.dot-live { width: 7px; height: 7px; border-radius: 50%; background: #34D399; display: inline-block; }
+.dot-paused { width: 7px; height: 7px; border-radius: 50%; background: #FBBF24; display: inline-block; }
+.topbar button { background: rgba(255,255,255,0.1); color: #F9FAFB; border-color: rgba(255,255,255,0.2); font-size: 11.5px; padding: 4px 9px; }
+.topbar button:hover { background: rgba(255,255,255,0.18); }
+.topbar button.idea-btn { background: #2563EB; border-color: #3B82F6; color: #FFF; font-weight: 600; }
+
+/* Loop Band */
+.loop-band { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 18px; background: var(--bg-surface); font-size: 12px; flex-wrap: wrap; }
+.loop-band__left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.loop-band__right { display: flex; align-items: center; gap: 14px; color: var(--ink-2); flex-wrap: wrap; }
+.meta-kv { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-2); }
+.meta-kv b { color: var(--ink-1); font-weight: 600; }
+
+/* Badges & Glyphs (Three-way encoding: symbol + word + color) */
+.glyph { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 1px 7px; border-radius: 3px; border: 1px solid transparent; white-space: nowrap; line-height: 1.4; }
+.glyph--alarm { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-border); }
+.glyph--needs-you { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
+.glyph--needs-a-cause { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-border); }
+.glyph--waits-on-work { color: var(--ink-2); background: var(--neutral-bg); border-color: var(--neutral-border); }
+.glyph--waits-on-the-loop { color: var(--info); background: var(--info-bg); border-color: var(--info-border); }
+.glyph--ready { color: var(--ink-2); background: var(--bg-subtle); border-color: var(--border); }
+.glyph--moving { color: var(--ok); background: var(--ok-bg); border-color: var(--ok-border); }
+.glyph--landed { color: var(--ok); background: var(--ok-bg); border-color: var(--ok-border); }
+.glyph--closed { color: var(--ink-3); background: var(--neutral-bg); border-color: var(--neutral-border); }
+.glyph--desk { color: var(--desk); background: var(--desk-bg); border-color: var(--desk-border); }
+
+/* Epistemic Provenance Badges */
+.ep { display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono); font-size: 10.5px; padding: 0 5px; border-radius: 3px; border: 1px solid var(--border); white-space: nowrap; }
+.ep--observed { color: var(--ok); background: var(--ok-bg); border-color: var(--ok-border); }
+.ep--derived { color: var(--ink-2); background: var(--neutral-bg); border-color: var(--neutral-border); }
+.ep--seam { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
+.ep--corrupt { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-border); font-weight: 700; }
+.ep--absent { color: var(--ink-3); background: var(--bg-subtle); border-color: var(--border); font-style: italic; }
+.ep--bound { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
+.ep--claimed { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
+
+.chip { display: inline-block; font-family: var(--mono); font-size: 10.5px; padding: 0 5px; border-radius: 3px; background: var(--bg-subtle); border: 1px solid var(--border); color: var(--ink-2); }
+.chip--idea { background: var(--desk-bg); border-color: var(--desk-border); color: var(--desk); font-weight: 600; }
+.chip--express { background: var(--info-bg); border-color: var(--info-border); color: var(--info); font-weight: 600; }
+.chip--kept { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn); font-weight: 600; }
+
+/* Main Container */
+.main-wrap { max-width: 1560px; margin: 0 auto; padding: 16px 18px 48px; }
+
+/* Cards & Panels */
+.panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+.panel__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border); background: var(--bg-hover); }
+.panel__title { font-size: 13px; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 8px; }
+.panel__body { padding: 12px 14px; }
+
+/* Distribution Bar */
+.dist-bar-wrap { margin-bottom: 14px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; box-shadow: var(--shadow-sm); }
+.dist-bar__top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.dist-bar__track { display: flex; height: 10px; border-radius: 3px; overflow: hidden; background: var(--bg-subtle); gap: 1px; margin-bottom: 9px; }
+.dist-seg { height: 100%; cursor: pointer; transition: opacity 0.15s; }
+.dist-seg:hover { opacity: 0.8; }
+.dist-pills { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.dist-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-surface); font-size: 12px; cursor: pointer; }
+.dist-pill:hover { background: var(--bg-subtle); }
+.dist-pill.active { border-color: var(--accent); background: var(--accent-bg); }
+
+/* Home 2-column layout */
+.home-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(360px, 0.95fr); gap: 16px; align-items: start; }
+@media (max-width: 1120px) { .home-grid { grid-template-columns: 1fr; } }
+
+/* Triage Sections */
+.triage-stack { display: flex; flex-direction: column; gap: 12px; }
+.triage-group { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); }
+.triage-group__head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--bg-hover); border-bottom: 1px solid var(--border); }
+.triage-group__head-left { display: flex; align-items: center; gap: 8px; }
+.triage-group__desc { font-size: 11.5px; color: var(--ink-3); }
+.triage-group__foot { padding: 7px 12px; background: var(--bg-hover); border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+
+/* Tables */
+.data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.data-table th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-hover); white-space: nowrap; }
+.data-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.data-table tr:last-child td { border-bottom: 0; }
+.data-table tbody tr:hover { background: var(--bg-hover); }
+.data-table tbody tr.focused-row { background: var(--accent-bg); outline: 1px solid var(--accent); outline-offset: -1px; }
+.row-sub { font-size: 11.5px; color: var(--ink-2); margin-top: 2px; }
+
+/* Lane Matrix */
+.lane-list { display: flex; flex-direction: column; gap: 8px; }
+.lane-group-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); margin: 6px 0 2px; display: flex; justify-content: space-between; align-items: center; }
+.lane-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; background: var(--bg-surface); }
+.lane-card--running { border-left: 3px solid var(--ok); }
+.lane-card--settling { border-left: 3px solid var(--info); }
+.lane-card--kept { border-left: 3px solid var(--warn); background: var(--warn-bg); }
+.lane-card--quiet { border-left: 3px solid var(--bad); }
+.lane-card__top { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 3px; }
+.lane-card__id { font-weight: 700; font-family: var(--mono); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+.lane-card__meta { font-size: 11.5px; color: var(--ink-2); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.lane-card__action { font-size: 11.5px; color: var(--ink-1); margin-top: 4px; padding-top: 4px; border-top: 1px dashed var(--border); display: flex; justify-content: space-between; gap: 8px; }
+.quiet-warn { color: var(--bad); font-weight: 700; }
+
+/* 14-Lane Full Grid */
+.lanes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; }
+
+/* Queue Toolbar & Freeze Banner */
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 10px 14px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; }
+.toolbar__filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.toolbar input[type="search"], .toolbar select { font-family: var(--sans); font-size: 12px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-surface); color: var(--ink-1); }
+.freeze-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; background: var(--info-bg); border: 1px solid var(--info-border); border-radius: var(--radius); margin-bottom: 10px; font-size: 12px; color: var(--ink-1); }
+
+/* Waterfall & Run Page */
+.wall-split-bar { display: flex; height: 14px; border-radius: 3px; overflow: hidden; border: 1px solid var(--border); margin: 8px 0; }
+.waterfall-box { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-surface); overflow: hidden; }
+.waterfall-controls { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; background: var(--bg-hover); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.waterfall-axis { display: grid; grid-template-columns: 280px 1fr; border-bottom: 1px solid var(--border); background: var(--bg-subtle); font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+.waterfall-axis__ticks { display: flex; justify-content: space-between; padding: 4px 10px; }
+.waterfall-row { display: grid; grid-template-columns: 280px 1fr; border-bottom: 1px solid var(--border); align-items: center; min-height: 30px; cursor: pointer; }
+.waterfall-row:hover { background: var(--bg-hover); }
+.waterfall-row.selected { background: var(--accent-bg); }
+.waterfall-label { padding: 4px 10px; font-size: 12px; display: flex; align-items: center; gap: 5px; border-right: 1px solid var(--border); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.waterfall-track { position: relative; height: 24px; margin: 0 10px; }
+.waterfall-bar { position: absolute; top: 5px; height: 14px; border-radius: 2px; min-width: 3px; display: flex; align-items: center; padding: 0 4px; font-family: var(--mono); font-size: 10px; color: #FFF; overflow: hidden; }
+.wf-stage { background: #334155; }
+.wf-llm { background: #0B57D0; }
+.wf-tool { background: #0E7452; }
+.wf-slot { background: repeating-linear-gradient(45deg, #D97706, #D97706 4px, #B45309 4px, #B45309 8px); }
+.wf-gate { background: #6D28D9; }
+.wf-critical { box-shadow: 0 0 0 1.5px #111318; }
+
+/* Sub-tabs */
+.subtabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 12px 0; }
+.subtab { padding: 6px 12px; border: 1px solid transparent; border-bottom: 0; border-radius: 4px 4px 0 0; background: transparent; color: var(--ink-2); font-weight: 500; }
+.subtab.active { background: var(--bg-surface); color: var(--ink-1); border-color: var(--border); font-weight: 700; margin-bottom: -1px; border-bottom: 1px solid var(--bg-surface); }
+
+/* Modals / Drawers */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(17, 19, 23, 0.55); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal-card { background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: 6px; width: 100%; max-width: 620px; box-shadow: var(--shadow-md); overflow: hidden; }
+.modal-card__head { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-hover); }
+.modal-card__body { padding: 16px; max-height: 75vh; overflow-y: auto; }
+.modal-card__foot { padding: 10px 16px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; background: var(--bg-hover); }
+
+/* Dependency Graph SVG */
+.graph-wrap { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; overflow-x: auto; }
+
+.muted { color: var(--ink-3); }
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.kpi-box { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 12px; }
+.kpi-box__label { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em; }
+.kpi-box__val { font-size: 18px; font-weight: 700; font-family: var(--mono); margin-top: 2px; }
+.kpi-box__sub { font-size: 11px; color: var(--ink-2); margin-top: 2px; }
+
+.pagination-bar { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--bg-hover); border-top: 1px solid var(--border); font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+(function() {
+  "use strict";
+
+  // =========================================================================
+  // 1. REALISTIC DOMAIN-AUTHENTIC DATASET (342 ITEMS, 14 LANES, PASSES, RUNS)
+  // =========================================================================
+  const NOW_MS = Date.UTC(2026, 10, 24, 15, 42, 18); // 2026-11-24T15:42:18Z
+
+  const STATE_META = {
+    "alarm":             { sym: "✖", label: "alarm",             cls: "glyph--alarm",             color: "#B91C1C", desc: "Backend or quota alarm; operator acts on the alarm." },
+    "needs you":         { sym: "◆", label: "needs you",         cls: "glyph--needs-you",         color: "#9A5B00", desc: "Blocked on owner action: open Vantage question, escalated conflict, or manual prerequisite." },
+    "needs a cause":     { sym: "▲", label: "needs a cause",     cls: "glyph--needs-a-cause",     color: "#B91C1C", desc: "Stopped on a fault, red check, verify refusal, or unmapped hold reason." },
+    "waits on work":     { sym: "◌", label: "waits on work",     cls: "glyph--waits-on-work",     color: "#687082", desc: "Held behind another item, overlapping path fence, doc rewrite, or lane cap." },
+    "waits on the loop": { sym: "◌", label: "waits on the loop", cls: "glyph--waits-on-the-loop", color: "#1D4ED8", desc: "Waiting for the drain to run a pass or settle a finished run." },
+    "ready":             { sym: "○", label: "ready",             cls: "glyph--ready",             color: "#9CA3AF", desc: "Eligible to dispatch on the next pass with a free lane." },
+    "moving":            { sym: "●", label: "moving",            cls: "glyph--moving",            color: "#0E7452", desc: "Executing a run, a gate, or a landing step." },
+    "landed":            { sym: "✓", label: "landed",            cls: "glyph--landed",            color: "#0E7452", desc: "Verified and squashed onto trunk." }
+  };
+
+  const ALARMS = [
+    {
+      id: "alarm-anthropic-429",
+      kind: "quota-exhausted",
+      backend: "anthropic-sonnet",
+      since: "14m ago",
+      cause: "HTTP 429 rate-limit / token bucket exhausted on seat verifier-fast",
+      clears: "automatic cooldown at 15:48Z or switch policy tier",
+      command: "tillr-drain alarm clear --backend anthropic-sonnet --verify",
+      items: ["item-214", "item-219", "item-227"],
+      lanes: ["lane-5"]
+    }
+  ];
+
+  // 14 Lanes: 8 Ordinary, 2 Express, 4 Document Desks
+  const LANES = [
+    { lane_id: "lane-1", group: "configured", kind: "ordinary", state: "running",  item_id: "item-104", run_id: "run-8812", seat: "coder",       seat_source: "item",    backend: "claude-opus-4",   attempt: 2, state_since_ms: NOW_MS - 318000, log_grew_at_ms: NOW_MS - 12000, action: { kind: "action", text: "go test ./tools/tillr-view/... -run TestSpanViewer", clock: "observed", at_ms: NOW_MS - 12000 }, tokens: 142800, held_item_id: null, held_reason: null },
+    { lane_id: "lane-2", group: "configured", kind: "ordinary", state: "running",  item_id: "item-108", run_id: "run-8815", seat: "coder",       seat_source: "item",    backend: "codex-5.1",       attempt: 1, state_since_ms: NOW_MS - 640000, log_grew_at_ms: NOW_MS - 410000, action: { kind: "liveness", at_ms: NOW_MS - 410000 }, tokens: 98400, held_item_id: null, held_reason: null, quiet_warn: true },
+    { lane_id: "lane-3", group: "configured", kind: "ordinary", state: "settling", item_id: "item-112", run_id: "run-8809", seat: "verifier",    seat_source: "policy",  backend: "claude-opus-4",   attempt: 1, state_since_ms: NOW_MS - 42000,  log_grew_at_ms: NOW_MS - 45000, last_step: "gate.shards", last_step_at_ms: NOW_MS - 42000, action: { kind: "action", text: "after gate.shards ~42s", clock: "derived_clock", at_ms: NOW_MS - 42000 }, tokens: 61200, held_item_id: null, held_reason: null },
+    { lane_id: "lane-4", group: "configured", kind: "ordinary", state: "running",  item_id: "item-115", run_id: "run-8818", seat: "coder",       seat_source: "none",    backend: "gemini-2.5-pro",  attempt: 3, state_since_ms: NOW_MS - 195000, log_grew_at_ms: NOW_MS - 4000,  action: { kind: "action", text: "editing tools/tillr-drain/holdrules/holdrules.go", clock: "observed", at_ms: NOW_MS - 4000 }, tokens: 77100, held_item_id: null, held_reason: null },
+    { lane_id: "lane-5", group: "configured", kind: "ordinary", state: "idle",     item_id: null,       run_id: "run-8801", seat: "verifier",    seat_source: "policy",  backend: "anthropic-sonnet",attempt: 1, state_since_ms: NOW_MS - 840000, log_grew_at_ms: null, outcome: "alarm-held (429)", action: null, tokens: 18400, held_item_id: "item-214", held_reason: "kept: dirty worktree from interrupted run-8801 (preserved ref refs/tillr/preserved/item-214-a1)" },
+    { lane_id: "lane-6", group: "configured", kind: "ordinary", state: "running",  item_id: "item-119", run_id: "run-8820", seat: "coder",       seat_source: "item",    backend: "claude-opus-4",   attempt: 1, state_since_ms: NOW_MS - 88000,  log_grew_at_ms: NOW_MS - 9000,  action: { kind: "action", text: "reading docs/reference/tillr-item-states.md", clock: "observed", at_ms: NOW_MS - 9000 }, tokens: 34500, held_item_id: null, held_reason: null },
+    { lane_id: "lane-7", group: "draining",   kind: "ordinary", state: "settling", item_id: "item-097", run_id: "run-8799", seat: "coder",       seat_source: "item",    backend: "codex-5.1",       attempt: 2, state_since_ms: NOW_MS - 19000,  log_grew_at_ms: NOW_MS - 21000, last_step: "land.squash", last_step_at_ms: NOW_MS - 19000, action: { kind: "action", text: "after land.squash ~19s", clock: "derived_clock", at_ms: NOW_MS - 19000 }, tokens: 112900, held_item_id: null, held_reason: null, group_note: "draining above new target" },
+    { lane_id: "lane-8", group: "idle",       kind: "ordinary", state: "idle",     item_id: null,       run_id: "run-8792", seat: "coder",       seat_source: "policy",  backend: "claude-opus-4",   attempt: 1, state_since_ms: NOW_MS - 1200000,log_grew_at_ms: null, outcome: "landed", action: null, tokens: 52100, held_item_id: null, held_reason: null },
+
+    { lane_id: "express-1", group: "configured", kind: "express", state: "running", item_id: "item-idea-8f2a", run_id: "run-8822", seat: "design", seat_source: "item", backend: "claude-opus-4", attempt: 1, state_since_ms: NOW_MS - 134000, log_grew_at_ms: NOW_MS - 7000, action: { kind: "action", text: "authoring docs/design/observatory-intake-audit.md", clock: "observed", at_ms: NOW_MS - 7000 }, tokens: 48200, held_item_id: null, held_reason: null },
+    { lane_id: "express-2", group: "configured", kind: "express", state: "idle",    item_id: null,             run_id: "run-8804", seat: "coder",  seat_source: "policy", backend: "codex-5.1",     attempt: 1, state_since_ms: NOW_MS - 510000, log_grew_at_ms: null, outcome: "landed", action: null, tokens: 29100, held_item_id: null, held_reason: null },
+
+    { lane_id: "desk-1", group: "desk", kind: "desk", state: "running", item_id: "item-121", run_id: "run-8824", seat: "design", seat_source: "item", backend: "claude-opus-4",  attempt: 1, state_since_ms: NOW_MS - 210000, log_grew_at_ms: NOW_MS - 15000, action: { kind: "action", text: "triaging Vantage comments OQ-44..OQ-46", clock: "observed", at_ms: NOW_MS - 15000 }, tokens: 66400, held_item_id: null, held_reason: null },
+    { lane_id: "desk-2", group: "desk", kind: "desk", state: "running", item_id: "item-125", run_id: "run-8825", seat: "design", seat_source: "item", backend: "gemini-2.5-pro", attempt: 1, state_since_ms: NOW_MS - 75000,  log_grew_at_ms: NOW_MS - 6000,  action: { kind: "action", text: "checking doc blocks in docs/reference/tillr-queue-persistence.md", clock: "observed", at_ms: NOW_MS - 6000 }, tokens: 21300, held_item_id: null, held_reason: null },
+    { lane_id: "desk-3", group: "desk", kind: "desk", state: "idle",    item_id: null,       run_id: "run-8788", seat: "design", seat_source: "item", backend: "claude-opus-4",  attempt: 1, state_since_ms: NOW_MS - 1900000,log_grew_at_ms: null, outcome: "landed", action: null, tokens: null, held_item_id: null, held_reason: null },
+    { lane_id: "desk-4", group: "desk", kind: "desk", state: "idle",    item_id: null,       run_id: null,       seat: null,     seat_source: "none", backend: null,             attempt: null, state_since_ms: NOW_MS - 3600000,log_grew_at_ms: null, outcome: null, action: null, tokens: null, held_item_id: null, held_reason: null }
+  ];
+
+  // Hero items with rich domain edge cases
+  const HERO_ITEMS = [
+    // Alarm (3)
+    { place: 1, item_id: "item-214", title: "Verify fast-path shard allocation under concurrent gate pressure", class: "alarm", raw_state: "in-queue", seat: "verifier", where: "gate.verify (lane-5)", why: "backend anthropic-sonnet 429 quota exhausted; lane-5 kept with preserved ref", mover: "operator: clear alarm-anthropic-429", since: "14m ago", waited: "14m", doc: "docs/design/landing-principles.md", open_questions: 0, fence: ["tools/tillr-gate/**"], preserved: { ref: "refs/tillr/preserved/item-214-a1", files: 3, lines: "+48/-12", reason: "run-8801 aborted on 429" }, tokens: 18400, blocked_by: [] },
+    { place: 2, item_id: "item-219", title: "Audit verifier-fast refusal payloads for missing stderr tails", class: "alarm", raw_state: "in-queue", seat: "verifier", where: "dispatch.claim", why: "backend anthropic-sonnet closed by active alarm", mover: "operator: clear alarm-anthropic-429", since: "11m ago", waited: "11m", doc: "docs/reference/observatory-design.md", open_questions: 0, fence: ["tools/tillr-view/**"], tokens: null, blocked_by: [] },
+    { place: 3, item_id: "item-227", title: "Add regression test for shard slot-wait lower-bound emission", class: "alarm", raw_state: "in-queue", seat: "verifier", where: "dispatch.claim", why: "backend anthropic-sonnet closed by active alarm", mover: "operator: clear alarm-anthropic-429", since: "8m ago", waited: "8m", doc: "docs/reference/observatory-redesign.md", open_questions: 0, fence: ["tools/tillr-gate/shards/**"], tokens: 0, blocked_by: [] },
+
+    // Needs you (7)
+    { place: 4, item_id: "item-089", title: "Settle retention window for preserved uncommitted work refs", class: "needs you", raw_state: "blocked", seat: "design", where: "Vantage OQ-41", why: "open owner question OQ-41 in docs/design/preserved-work.md", mover: "owner: answer OQ-41 in Vantage", since: "2h 18m ago", waited: "2h 18m", doc: "docs/design/preserved-work.md", open_questions: 2, fence: ["docs/design/preserved-work.md", "tools/tillr-drain/**"], tokens: 41200, blocked_by: [] },
+    { place: 5, item_id: "item-092", title: "Resolve escalated remote-sync-conflict on refs/heads/main", class: "needs you", raw_state: "blocked", seat: "coder", where: "trunk.publish", why: "remote-sync-conflict escalated after repair item-091 failed", mover: "owner: inspect diverged remote tip", since: "54m ago", waited: "54m", doc: "docs/reference/landing-principles.md", open_questions: 0, fence: ["tools/tillr-land/**"], tokens: 64100, blocked_by: ["item-091"] },
+    { place: 6, item_id: "item-094", title: "Confirm [intake] path prefixes in .tillr.toml for idea words", class: "needs you", raw_state: "blocked", seat: "design", where: "Vantage OQ-47", why: "open owner question OQ-47: allow docs/ideas/** vs docs/inbox/**", mover: "owner: answer OQ-47 in Vantage", since: "41m ago", waited: "41m", doc: "docs/reference/observatory-actions.md", open_questions: 1, fence: [".tillr.toml", "docs/design/tillr-idea-pipeline.md"], tokens: 22900, blocked_by: [] },
+    { place: 7, item_id: "item-099", title: "Clarify whether closed blocker item-077 should release dependents", class: "needs you", raw_state: "blocked", seat: "coder", where: "dependency.check", why: "closed without landing: item-077 still holds this item", mover: "owner: clear dependency or reopen item-077", since: "38m ago", waited: "38m", doc: "docs/reference/tillr-item-states.md", open_questions: 0, fence: ["tools/tillr-item/**"], tokens: 12400, blocked_by: ["item-077"] },
+    { place: 8, item_id: "item-101", title: "Approve schema v14 migration for drain_passes phase timings", class: "needs you", raw_state: "blocked", seat: "design", where: "Vantage OQ-49", why: "open owner question OQ-49: backfill null phase_ms or leave absent", mover: "owner: answer OQ-49 in Vantage", since: "27m ago", waited: "27m", doc: "docs/reference/observatory-design.md", open_questions: 1, fence: ["tools/tillr/store/**"], tokens: 33500, blocked_by: [] },
+    { place: 9, item_id: "item-102", title: "Select default express lane cap for idea-intake bursts", class: "needs you", raw_state: "blocked", seat: "design", where: "Vantage OQ-52", why: "open owner question OQ-52 in docs/design/tillr-idea-pipeline.md", mover: "owner: answer OQ-52 in Vantage", since: "19m ago", waited: "19m", doc: "docs/design/tillr-idea-pipeline.md", open_questions: 1, fence: ["docs/design/tillr-idea-pipeline.md"], tokens: 19800, blocked_by: [] },
+    { place: 10, item_id: "item-103", title: "Confirm manual cherry-pick author normalization hook in pre-push", class: "needs you", raw_state: "blocked", seat: "coder", where: "Vantage OQ-53", why: "open owner question OQ-53 in docs/reference/authority-not-approval.md", mover: "owner: answer OQ-53 in Vantage", since: "12m ago", waited: "12m", doc: "docs/reference/authority-not-approval.md", open_questions: 1, fence: ["tools/gate/**"], tokens: 8900, blocked_by: [] },
+
+    // Needs a cause (9) - including verify refusals & corrupt/unobserved seams
+    { place: 11, item_id: "item-105", title: "Fix verify-not-done refusal: SpanViewer zooms past recorded bounds", class: "needs a cause", raw_state: "in-queue", seat: "coder", where: "verify (run-8795)", why: "verify-not-done: regression in SpanViewer zoom reset; candidate 4 files", mover: "drain: returned to work (attempt 3)", since: "22m ago", waited: "22m", doc: "docs/reference/observatory-redesign.md", open_questions: 0, fence: ["tools/tillr-view/web/src/components/SpanViewer.tsx"], tokens: 164200, blocked_by: [], verify_refusal: { run_id: "run-8795", detail: "Regression: clicking Fit after manual wheel zoom leaves axis.startMS unreset when bounds arrive late.", next_step: "work" } },
+    { place: 12, item_id: "item-106", title: "Diagnose corrupt steps.jsonl on run-8790 (trailing partial frame)", class: "needs a cause", raw_state: "in-queue", seat: "coder", where: "trace.read", why: "unreadable steps.jsonl: unexpected EOF at byte 14820", mover: "operator: inspect run-8790 artifact", since: "31m ago", waited: "31m", doc: "docs/reference/observatory-design.md", open_questions: 0, fence: ["tools/tillr-trace/**"], tokens: 55100, blocked_by: [], epistemic_alert: "corrupt" },
+    { place: 13, item_id: "item-107", title: "Investigate red check go-test:tillr-gate-shards on candidate c-441", class: "needs a cause", raw_state: "in-queue", seat: "coder", where: "gate.check", why: "go-test:tillr-gate-shards failed (exit 1) · 2 tests timed out", mover: "drain: retry queued after diagnosis", since: "18m ago", waited: "18m", doc: "docs/design/landing-principles.md", open_questions: 0, fence: ["tools/tillr-gate/**"], tokens: 88300, blocked_by: [] },
+
+    // Moving (including hero run-8812 and idea item)
+    { place: 14, item_id: "item-104", title: "Render wall-time split and drain scheduling ledger on Run page", class: "moving", raw_state: "working", seat: "coder", where: "lane-1 · run-8812", why: "executing go test ./tools/tillr-view/... (attempt 2)", mover: "lane-1 (claude-opus-4)", since: "5m ago", waited: null, doc: "docs/reference/observatory-redesign.md", open_questions: 0, fence: ["tools/tillr-view/web/src/components/RunTiming.tsx", "tools/tillr-view/serveobs.go"], tokens: 142800, blocked_by: [], run_id: "run-8812", lane_id: "lane-1" },
+    { place: 15, item_id: "item-idea-8f2a", kind: "idea", in_tree: false, words: "Make sure every operator idea saved from the header shows an explicit audit trail of which item blocks it spawned and whether the words file landed byte-for-byte.", title: "Make sure every operator idea saved from the header shows an explicit...", class: "moving", raw_state: "working", seat: "design", where: "express-1 · run-8822", why: "designing intake audit trail (not yet in the tree)", mover: "express-1 (claude-opus-4)", since: "2m ago", waited: null, doc: "docs/design/tillr-idea-pipeline.md", open_questions: 0, fence: ["docs/intake/item-idea-8f2a.txt", "docs/design/**"], tokens: 48200, blocked_by: [], run_id: "run-8822", lane_id: "express-1" },
+    { place: 16, item_id: "item-108", title: "Enforce holdrules.Unknown fallback for unmapped drain reasons", class: "moving", raw_state: "working", seat: "coder", where: "lane-2 · run-8815", why: "quiet 6m 50s — last log growth 6m50s ago", mover: "lane-2 (codex-5.1)", since: "10m ago", waited: null, doc: "docs/reference/observatory-redesign.md", open_questions: 0, fence: ["tools/tillr-drain/holdrules/**"], tokens: 98400, blocked_by: [], run_id: "run-8815", lane_id: "lane-2" },
+    { place: 17, item_id: "item-112", title: "Verify landing tree replay when concurrent squash shifts hunk", class: "moving", raw_state: "working", seat: "verifier", where: "lane-3 · run-8809 (settling)", why: "settling after gate.shards ~42s", mover: "lane-3 (claude-opus-4)", since: "6m ago", waited: null, doc: "docs/design/landing-principles.md", open_questions: 0, fence: ["tools/tillr-land/**"], tokens: 61200, blocked_by: [], run_id: "run-8809", lane_id: "lane-3" },
+    { place: 18, item_id: "item-115", title: "Emit boundary.check span envelope on per-run pipeline_spans", class: "moving", raw_state: "working", seat: "coder", where: "lane-4 · run-8818", why: "editing holdrules.go (attempt 3)", mover: "lane-4 (gemini-2.5-pro)", since: "3m ago", waited: null, doc: "docs/reference/observatory-design.md", open_questions: 0, fence: ["tools/tillr-drain/drain/**"], tokens: 77100, blocked_by: [], run_id: "run-8818", lane_id: "lane-4" },
+    { place: 19, item_id: "item-119", title: "Add --since grouping transition diff to tillr-view events", class: "moving", raw_state: "working", seat: "coder", where: "lane-6 · run-8820", why: "reading tillr-item-states.md", mover: "lane-6 (claude-opus-4)", since: "1m ago", waited: null, doc: "docs/reference/tillr-item-states.md", open_questions: 0, fence: ["tools/tillr-view/events.go"], tokens: 34500, blocked_by: [], run_id: "run-8820", lane_id: "lane-6" },
+    { place: 20, item_id: "item-121", title: "Triage Vantage review comments OQ-44..OQ-46 on queue persistence", class: "moving", raw_state: "working", seat: "design", where: "desk-1 · run-8824", why: "triaging Vantage comments", mover: "desk-1 (claude-opus-4)", since: "3m ago", waited: null, doc: "docs/reference/tillr-queue-persistence.md", open_questions: 3, fence: ["docs/reference/tillr-queue-persistence.md"], tokens: 66400, blocked_by: [], run_id: "run-8824", lane_id: "desk-1" },
+    { place: 21, item_id: "item-125", title: "Sync document blocks and clear stale_doc_blocks after landing-409", class: "moving", raw_state: "working", seat: "design", where: "desk-2 · run-8825", why: "checking doc blocks", mover: "desk-2 (gemini-2.5-pro)", since: "1m ago", waited: null, doc: "docs/reference/tillr-queue-persistence.md", open_questions: 0, fence: ["docs/reference/**"], tokens: 21300, blocked_by: [], run_id: "run-8825", lane_id: "desk-2" }
+  ];
+
+  // Generate remaining 321 items to reach 342 total items across all classes & landed
+  const SUBSYSTEMS = [
+    ["tools/tillr-view", "observatory"],
+    ["tools/tillr-drain", "drain loop"],
+    ["tools/tillr-gate", "gate shards"],
+    ["tools/tillr-land", "squash lander"],
+    ["tools/tillr-item", "item CLI"],
+    ["tools/tillr-trace", "trace reader"],
+    ["tools/tillr/store", "SQLite store"],
+    ["docs/reference", "reference doc"]
+  ];
+  const VERBS = ["Harden", "Verify", "Compact", "Index", "Align", "Guard", "Project", "Stream", "Check", "Isolate", "Normalize", "Expose"];
+  const NOUNS = ["cursor envelope", "fence overlap check", "pass folding", "lease expiry", "slot wait span", "token counter", "trunk acquittal", "doc sync", "idea hash", "retry backoff", "refusal code", "claim audit"];
+
+  const ITEMS = [...HERO_ITEMS];
+  let nextPlace = 22;
+
+  // Add 6 more "needs a cause" (total 9)
+  for (let i = 0; i < 6; i++) {
+    const id = `item-${126 + i}`;
+    const [path, sub] = SUBSYSTEMS[i % SUBSYSTEMS.length];
+    ITEMS.push({
+      place: nextPlace++, item_id: id,
+      title: `${VERBS[(i+2)%VERBS.length]} ${NOUNS[(i+3)%NOUNS.length]} in ${sub}`,
+      class: "needs a cause", raw_state: "in-queue", seat: i % 2 === 0 ? "coder" : "verifier",
+      where: "gate.check", why: i % 2 === 0 ? "unmapped hold reason: fence-hash-drift" : "check vitest:observatory exited 1",
+      mover: "drain: needs diagnosis", since: `${15 + i * 7}m ago`, waited: `${15 + i * 7}m`,
+      doc: "docs/reference/observatory-design.md", open_questions: 0, fence: [`${path}/**`],
+      tokens: 31000 + i * 4200, blocked_by: []
+    });
+  }
+
+  // Add 38 "waits on work"
+  for (let i = 0; i < 38; i++) {
+    const id = `item-${132 + i}`;
+    const [path, sub] = SUBSYSTEMS[(i + 1) % SUBSYSTEMS.length];
+    const isFence = i % 3 === 0;
+    const blocker = isFence ? "item-104" : (i % 3 === 1 ? "item-089" : "item-105");
+    ITEMS.push({
+      place: nextPlace++, item_id: id,
+      title: `${VERBS[i % VERBS.length]} ${NOUNS[(i * 3) % NOUNS.length]} for ${sub}`,
+      class: "waits on work", raw_state: isFence ? "in-queue" : "blocked", seat: i % 5 === 0 ? "design" : "coder",
+      where: isFence ? "fence.overlap" : `blocked_by ${blocker}`,
+      why: isFence ? `overlapping path fence with ${blocker} (${path}/**)` : `waiting on prerequisite ${blocker}`,
+      mover: `drain: waits on ${blocker}`, since: `${8 + (i % 45)}m ago`, waited: `${8 + (i % 45)}m`,
+      doc: "docs/reference/observatory-redesign.md", open_questions: 0, fence: [`${path}/**`],
+      tokens: i % 4 === 0 ? null : 14000 + i * 950, blocked_by: isFence ? [] : [blocker]
+    });
+  }
+
+  // Add 12 "waits on the loop"
+  for (let i = 0; i < 12; i++) {
+    const id = `item-${170 + i}`;
+    const [path, sub] = SUBSYSTEMS[(i + 3) % SUBSYSTEMS.length];
+    ITEMS.push({
+      place: nextPlace++, item_id: id,
+      title: `${VERBS[(i + 4) % VERBS.length]} ${NOUNS[(i + 5) % NOUNS.length]} in ${sub}`,
+      class: "waits on the loop", raw_state: "in-queue", seat: "coder",
+      where: i < 4 ? "lane.settling" : "pass.next",
+      why: i < 4 ? "waiting for lane-7 settling lease to release" : "queued for next 1s drain planning pass",
+      mover: "drain: next pass", since: `${1 + i}m ago`, waited: `${1 + i}m`,
+      doc: "docs/reference/tillr-item-states.md", open_questions: 0, fence: [`${path}/**`],
+      tokens: 0, blocked_by: []
+    });
+  }
+
+  // Add 6 more "moving" (total 14)
+  for (let i = 0; i < 6; i++) {
+    const id = `item-${182 + i}`;
+    const [path, sub] = SUBSYSTEMS[(i + 2) % SUBSYSTEMS.length];
+    ITEMS.push({
+      place: nextPlace++, item_id: id,
+      title: `${VERBS[(i + 5) % VERBS.length]} ${NOUNS[(i + 2) % NOUNS.length]} for ${sub}`,
+      class: "moving", raw_state: "working", seat: i % 2 === 0 ? "coder" : "verifier",
+      where: `gate.pipeline`, why: "running post-run gate shards",
+      mover: "gate-runner", since: `${2 + i}m ago`, waited: null,
+      doc: "docs/design/landing-principles.md", open_questions: 0, fence: [`${path}/**`],
+      tokens: 44000 + i * 5100, blocked_by: []
+    });
+  }
+
+  // Add 259 "ready" items (places 80..338)
+  for (let i = 0; i < 259; i++) {
+    const id = `item-${230 + i}`;
+    const [path, sub] = SUBSYSTEMS[i % SUBSYSTEMS.length];
+    ITEMS.push({
+      place: nextPlace++, item_id: id,
+      title: `${VERBS[(i * 7 + 1) % VERBS.length]} ${NOUNS[(i * 5 + 2) % NOUNS.length]} (${sub})`,
+      class: "ready", raw_state: "in-queue", seat: i % 9 === 0 ? "design" : (i % 4 === 0 ? "verifier" : "coder"),
+      where: "queue.ready", why: "eligible for next free lane",
+      mover: "drain: when a lane frees", since: `${12 + (i % 180)}m ago`, waited: `${12 + (i % 180)}m`,
+      doc: "docs/reference/observatory-redesign.md", open_questions: 0, fence: [`${path}/**`],
+      tokens: null, blocked_by: []
+    });
+  }
+
+  // Add 4 "landed" items (no place)
+  const LANDED_ITEMS = [
+    { place: null, item_id: "item-077", title: "Retire legacy four-region board layout components", class: "closed", raw_state: "closed", seat: "design", where: "closed", why: "closed without landing (still holds item-099)", mover: "owner", since: "3h ago", waited: null, doc: "docs/reference/observatory-design.md", open_questions: 0, fence: ["tools/tillr-view/web/**"], tokens: 12000, blocked_by: [] },
+    { place: null, item_id: "item-095", title: "Strip USD price fields from all /api/v1 responses", class: "landed", raw_state: "landed", seat: "coder", where: "trunk (landing-412)", why: "landed on main", mover: "—", since: "24m ago", waited: null, doc: "docs/reference/observatory-design.md", open_questions: 0, fence: ["tools/tillr-view/priceless.go"], tokens: 53400, blocked_by: [] },
+    { place: null, item_id: "item-096", title: "Emit EpistemicBadge for derived_clock and unobserved_seam", class: "landed", raw_state: "landed", seat: "coder", where: "trunk (landing-411)", why: "landed on main", mover: "—", since: "39m ago", waited: null, doc: "docs/reference/observatory-design.md", open_questions: 0, fence: ["tools/tillr-view/web/src/components/EpistemicBadge.tsx"], tokens: 48900, blocked_by: [] },
+    { place: null, item_id: "item-098", title: "Add --write loopback Origin guard to serveplace and serveidea", class: "landed", raw_state: "landed", seat: "coder", where: "trunk (landing-410)", why: "landed on main (replayed onto concurrent landing)", mover: "—", since: "52m ago", waited: null, doc: "docs/reference/observatory-actions.md", open_questions: 0, fence: ["tools/tillr-view/serveplace.go"], tokens: 71200, blocked_by: [] }
+  ];
+  ITEMS.push(...LANDED_ITEMS);
+
+  // Folded Passes
+  const PASSES = [
+    { id: "20261124T154217Z", at_ms: NOW_MS - 1000, streak: 1, dispatched: 1, held: 329, session: "sess-99a4", stop: "none", detail: "dispatched item-125 to desk-2; held 329 (3 alarm, 7 needs-you, 9 needs-cause, 38 waits-work, 12 waits-loop, 259 ready-cap)", phases: { claim_ms: 14, stage_ms: 180, dispatch_ms: 22, gate_ms: 0, land_ms: 0 }, tokens: 0, lower_bound: false, changed: "desk-2 claimed item-125" },
+    { id: "20261124T154205Z", at_ms: NOW_MS - 13000, streak: 11, dispatched: 0, held: 330, session: "sess-99a4", stop: "none", detail: "all lanes busy or held; no dispatchable capacity", phases: { claim_ms: 9, stage_ms: 0, dispatch_ms: 4, gate_ms: 0, land_ms: 0 }, tokens: 0, lower_bound: false, changed: "11 identical hold passes since 15:41:54Z" },
+    { id: "20261124T154150Z", at_ms: NOW_MS - 28000, streak: 1, dispatched: 2, held: 328, session: "sess-99a4", stop: "none", detail: "dispatched item-119 -> lane-6, item-idea-8f2a -> express-1", phases: { claim_ms: 18, stage_ms: 412, dispatch_ms: 35, gate_ms: 18400, land_ms: 920 }, tokens: 184500, lower_bound: true, changed: "express-1 + lane-6 started; 1 run unrecorded" },
+    { id: "20261124T154012Z", at_ms: NOW_MS - 126000, streak: 6, dispatched: 0, held: 330, session: "sess-99a4", stop: "none", detail: "lane-5 held on alarm-anthropic-429; waiting for gate-runner", phases: { claim_ms: 11, stage_ms: 0, dispatch_ms: 5, gate_ms: 0, land_ms: 0 }, tokens: 0, lower_bound: false, changed: "6 identical hold passes" },
+    { id: "20261124T153840Z", at_ms: NOW_MS - 218000, streak: 1, dispatched: 1, held: 329, session: "sess-99a4", stop: "none", detail: "landed item-095 -> landing-412; dispatched item-115 -> lane-4", phases: { claim_ms: 16, stage_ms: 305, dispatch_ms: 28, gate_ms: 24100, land_ms: 1140 }, tokens: 241900, lower_bound: false, changed: "landing-412 committed to main" }
+  ];
+
+  // Hero Run (run-8812) Span Waterfall Data
+  const RUN_8812 = {
+    run_id: "run-8812",
+    item_id: "item-104",
+    lane_id: "lane-1",
+    seat: "coder",
+    workflow: "code-and-verify",
+    node: "work",
+    backend: "claude-opus-4",
+    state: "running",
+    exit_code: null,
+    started_at_ms: NOW_MS - 318000,
+    wall_ms: 318000,
+    timing: {
+      wall_ms: 318000,
+      model_ms: 164000,
+      tool_active_ms: 92000,
+      slot_wait_ms: 38000,
+      slot_wait_state: "observed",
+      uncovered_ms: 24000
+    },
+    usage: {
+      input: 96400, cache_read: 41200, cache_write: 18400, output: 14200, reasoning: 11000, total: 142800,
+      first_output_ms: 1140, output_tok_s: 64.8
+    },
+    spans: [
+      { id: "sp-boundary", parent: null, name: "boundary.check", cat: "stage", start: 0, end: null, state: "unobserved_seam", critical: false, note: "tick-level bracket; per-run clock not written" },
+      { id: "sp-stage-1", parent: null, name: "stage.prepare", cat: "stage", start: 0, end: 8400, state: "observed", critical: false, note: "copied brief, fence, base_sha to .tillr/loop/run-8812/" },
+      { id: "sp-stage-2", parent: null, name: "stage.agent_work", cat: "stage", start: 8400, end: 278000, state: "observed", critical: true, note: "pi harness session" },
+      { id: "sp-llm-1", parent: "sp-stage-2", name: "llm.turn #1 (plan)", cat: "llm", start: 9000, end: 64000, state: "observed", critical: false, note: "first_output 1140ms · 64.8 tok/s" },
+      { id: "sp-tool-1", parent: "sp-stage-2", name: "tool.read (serveobs.go, RunTiming.tsx)", cat: "tool", start: 64500, end: 72000, state: "observed", critical: false, note: "2 files read" },
+      { id: "sp-llm-2", parent: "sp-stage-2", name: "llm.turn #2 (edit)", cat: "llm", start: 72500, end: 158000, state: "observed", critical: false, note: "4210 output tokens" },
+      { id: "sp-tool-2", parent: "sp-stage-2", name: "tool.bash: go test ./tools/tillr-view/...", cat: "tool", start: 158500, end: 214000, state: "observed", critical: false, note: "subprocesses recorded via BASH_ENV shim" },
+      { id: "sp-slot-1", parent: "sp-tool-2", name: "slot.wait (test-slot-2)", cat: "slot", start: 159000, end: 197000, state: "observed", critical: false, note: "38.0s waiting for heavy test slot" },
+      { id: "sp-llm-3", parent: "sp-stage-2", name: "llm.turn #3 (fix edge case)", cat: "llm", start: 215000, end: 278000, state: "observed", critical: true, note: "streaming complete" },
+      { id: "sp-gate", parent: null, name: "stage.gate_preview", cat: "gate", start: 278000, end: 318000, state: "derived_clock", critical: true, open: true, note: "open span; right edge advances on viewer clock (~)" },
+      { id: "sp-chk-1", parent: "sp-gate", name: "check: go-test:tillr-view", cat: "gate", start: 279000, end: 304000, state: "observed", critical: false, note: "exit 0 · 48 tests passed" },
+      { id: "sp-chk-2", parent: "sp-gate", name: "check: vitest:observatory", cat: "gate", start: 279000, end: 318000, state: "derived_clock", critical: true, open: true, note: "running" },
+      { id: "sp-chk-3", parent: "sp-gate", name: "check: vantage-docs", cat: "gate", start: null, end: null, state: "absent", critical: false, note: "skipped: no docs/*.md files in candidate diff" }
+    ],
+    schedule: [
+      { at: "15:37:00Z", kind: "allocation", detail: "pass 20261124T153700Z allocated item-104 to lane-1 (coder, claude-opus-4)" },
+      { at: "15:37:08Z", kind: "staging",    detail: "copied brief & fence to .tillr/loop/run-8812/" },
+      { at: "15:39:39Z", kind: "slot-wait",  detail: "test-slot-2 busy (held by run-8809); waited 38.0s" },
+      { at: "15:41:38Z", kind: "gate",       detail: "entered stage.gate_preview; 2 checks dispatched, 1 skipped" }
+    ],
+    claims: [
+      { id: "c1", text: "go test ./tools/tillr-view/... passes all 48 cases", status: "verified", epistemic: "observed", evidence: "exit 0 in sp-chk-1" },
+      { id: "c2", text: "RunTiming.tsx renders slot_wait_ms as absent when null", status: "unverified", epistemic: "unobserved_seam", evidence: "vitest:observatory still running (sp-chk-2)" }
+    ]
+  };
+
+  // Landings & Checks
+  const LANDINGS = [
+    { landing_id: "landing-412", item_id: "item-095", run_id: "run-8790", result: "landed", at: "24m ago", trunk_before: "a91c03d", trunk_after: "c44e91b", gated_tree: "7f21a09", landed_tree: "7f21a09", replay_diff: false, note: "fast-forward squash; gated_tree == landed_tree" },
+    { landing_id: "landing-411", item_id: "item-096", run_id: "run-8784", result: "landed", at: "39m ago", trunk_before: "81b4d20", trunk_after: "a91c03d", gated_tree: "5c18d44", landed_tree: "9e30b11", replay_diff: true,  note: "concurrent landing shifted hunk; replayed cleanly (gated_tree != landed_tree)" },
+    { landing_id: "landing-410", item_id: "item-098", run_id: "run-8778", result: "landed", at: "52m ago", trunk_before: "4d09f11", trunk_after: "81b4d20", gated_tree: "3a02c77", landed_tree: "3a02c77", replay_diff: false, note: "clean squash" },
+    { landing_id: "landing-409", item_id: "item-091", run_id: "run-8765", result: "reverted", at: "1h 18m ago", trunk_before: "2c91a88", trunk_after: "4d09f11", gated_tree: "1b77e02", landed_tree: "1b77e02", replay_diff: false, note: "post-landing heavy check go-test:trunk-replay failed; auto-reverted" }
+  ];
+
+  const CHECK_PERF = [
+    { check_id: "go-test:tillr-view", count: 48, sample_count: 48, median_ms: 18400, p95_ms: 26900, max_ms: 31200, waited_ms: 4200, failures: 1 },
+    { check_id: "go-test:tillr-gate-shards", count: 31, sample_count: 31, median_ms: 42100, p95_ms: 68400, max_ms: 81000, waited_ms: 38000, failures: 4 },
+    { check_id: "vitest:observatory", count: 29, sample_count: 29, median_ms: 29500, p95_ms: 41000, max_ms: 49800, waited_ms: 11200, failures: 2 },
+    { check_id: "vantage-docs:check", count: 14, sample_count: 14, median_ms: 3200, p95_ms: 5100, max_ms: 6400, waited_ms: 0, failures: 0 },
+    { check_id: "fork-replay:trunk", count: 3, sample_count: 3, median_ms: 91000, p95_ms: null, max_ms: 104000, waited_ms: 0, failures: 1, withheld_note: "p95 withheld (< 5 samples)" }
+  ];
+
+  // =========================================================================
+  // 2. APPLICATION STATE & ROUTER
+  // =========================================================================
+  const state = {
+    view: "dispatch", // dispatch | queue | lanes | passes | run | trunk | graph
+    paused: false,
+    writesEnabled: true,
+    alarmDismissed: false,
+    showIdleLanes: false,
+    expandedGroups: { "alarm": true, "needs you": true, "needs a cause": true, "moving": false, "waits on the loop": false, "waits on work": false, "ready": false },
+    queueFilterClass: "",
+    queueFilterState: "unlanded", // unlanded | not-moving | landed
+    queueSort: "place",
+    queueSearch: "",
+    queuePage: 1,
+    queuePageSize: 50,
+    queueFrozen: false,
+    queuePendingArrivals: 0,
+    focusedItemId: null,
+    selectedItemId: null,
+    selectedRunId: "run-8812",
+    selectedSpanId: "sp-stage-2",
+    runTab: "timeline", // timeline | time-order | transcript | exchanges | claims
+    wfZoom: 1,
+    wfSearch: "",
+    showIdeaModal: false,
+    showGlossaryModal: false,
+    ideaDraft: localStorage.getItem("tillr_raildeck_idea_draft") || "",
+    ideaPlace: "first",
+    ideaAfterId: "item-104",
+    seq: 48291,
+    ageSec: 2
+  };
+
+  // Live tick simulation (respects Pause!)
+  setInterval(() => {
+    if (state.paused) return;
+    state.ageSec = (state.ageSec + 1) % 6;
+    if (state.ageSec === 0) {
+      state.seq += 1;
+      if (state.queueFrozen) state.queuePendingArrivals += 1;
+    }
+    const el = document.getElementById("freshness-text");
+    if (el) el.textContent = `${state.paused ? "paused" : "live"} · seq ${state.seq} · ${state.ageSec}s old`;
+  }, 1000);
+
+  // Keyboard shortcuts
+  window.addEventListener("keydown", (e) => {
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) {
+      if (e.key === "Escape" && state.showIdeaModal) { state.showIdeaModal = false; render(); }
+      return;
+    }
+    if (e.key === "n" && state.writesEnabled) { e.preventDefault(); state.showIdeaModal = true; render(); }
+    if (e.key === "?") { e.preventDefault(); state.showGlossaryModal = !state.showGlossaryModal; render(); }
+    if (e.key === "Escape") {
+      if (state.selectedItemId) { state.selectedItemId = null; render(); }
+      else if (state.showIdeaModal) { state.showIdeaModal = false; render(); }
+      else if (state.showGlossaryModal) { state.showGlossaryModal = false; render(); }
+    }
+  });
+
+  // =========================================================================
+  // 3. HELPERS
+  // =========================================================================
+  function esc(s) {
+    if (s === null || s === undefined) return "";
+    return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+  }
+  function fmtTokens(n, lowerBound) {
+    if (n === null || n === undefined) return `<span class="ep ep--absent">not recorded</span>`;
+    if (n === 0) return `<span class="mono">0 tok</span>`;
+    return `<span class="mono">${lowerBound ? "≥ " : ""}${n.toLocaleString()} tok</span>`;
+  }
+  function fmtAge(ms) {
+    if (ms === null || ms === undefined) return "—";
+    const s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+    return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+  }
+  function fmtMs(ms) {
+    if (ms === null || ms === undefined) return `<span class="ep ep--absent">not recorded</span>`;
+    if (ms === 0) return `<span class="mono">0 ms</span>`;
+    if (ms < 1000) return `<span class="mono">${ms} ms</span>`;
+    return `<span class="mono">${(ms/1000).toFixed(1)}s</span>`;
+  }
+  function renderGlyph(clsName) {
+    const m = STATE_META[clsName] || { sym: "?", label: clsName, cls: "glyph--waits-on-work" };
+    return `<span class="glyph ${m.cls}"><span aria-hidden="true">${m.sym}</span><span>${esc(m.label)}</span></span>`;
+  }
+  function classCounts() {
+    const counts = { "alarm": 0, "needs you": 0, "needs a cause": 0, "waits on work": 0, "waits on the loop": 0, "ready": 0, "moving": 0, "landed": 0, "closed": 0 };
+    for (const it of ITEMS) counts[it.class] = (counts[it.class] || 0) + 1;
+    return counts;
+  }
+
+  // =========================================================================
+  // 4. VIEW RENDERERS
+  // =========================================================================
+  function renderShellTop() {
+    const counts = classCounts();
+    const unlanded = ITEMS.filter(i => i.class !== "landed" && i.class !== "closed").length;
+    const alarm = ALARMS[0];
+
+    const alarmHtml = (!state.alarmDismissed && alarm) ? `
+      <div class="alarm-strip" role="alert">
+        <div class="alarm-strip__main">
+          <span class="alarm-strip__title"><span aria-hidden="true">✖</span> BACKEND ALARM · ${esc(alarm.backend)}</span>
+          <span class="alarm-strip__detail">${esc(alarm.cause)} · affects <b>${alarm.items.length} items</b> (${alarm.items.map(id => `<a href="#" data-open-item="${esc(id)}">${esc(id)}</a>`).join(", ")}) &amp; <b>${alarm.lanes.join(", ")}</b> · since ${esc(alarm.since)}</span>
+          <code class="alarm-strip__cmd">${esc(alarm.command)}</code>
+        </div>
+        <div class="alarm-strip__actions">
+          <button type="button" data-filter-class="alarm">Focus 3 alarmed items</button>
+          <button type="button" data-dismiss-alarm>Acknowledge</button>
+        </div>
+      </div>` : "";
+
+    const tabs = [
+      ["dispatch", "Dispatch", null],
+      ["queue", "Queue", unlanded],
+      ["lanes", "Lanes", LANES.length],
+      ["passes", "Passes", PASSES.length],
+      ["run", "Run & Waterfall", null],
+      ["trunk", "Trunk & Checks", null],
+      ["graph", "Graph & Questions", null]
+    ];
+
+    return `
+    <div class="shell-sticky">
+      ${alarmHtml}
+      <header class="topbar">
+        <div class="topbar__left">
+          <div class="brand">tillr <span class="brand__tag">RailDeck Observatory</span></div>
+          <nav class="nav-tabs" aria-label="Observatory">
+            ${tabs.map(([id, label, cnt]) => `
+              <button type="button" class="nav-tab ${state.view === id ? "active" : ""}" data-nav="${id}">
+                ${esc(label)}${cnt !== null ? `<span class="nav-count">${cnt}</span>` : ""}
+              </button>`).join("")}
+          </nav>
+        </div>
+        <div class="topbar__right">
+          <span class="freshness-pill">
+            <span class="${state.paused ? "dot-paused" : "dot-live"}"></span>
+            <span id="freshness-text">${state.paused ? "paused" : "live"} · seq ${state.seq} · ${state.ageSec}s old</span>
+          </span>
+          ${state.writesEnabled ? `<button type="button" class="idea-btn" data-open-idea>+ New Idea (n)</button>` : ""}
+          <button type="button" data-toggle-pause>${state.paused ? "Resume" : "Pause"}</button>
+          <button type="button" data-toggle-glossary title="Epistemic provenance & waiting classes">?</button>
+        </div>
+      </header>
+      <div class="loop-band">
+        <div class="loop-band__left">
+          ${renderGlyph("moving")}
+          <span><b>Loop alive</b> · session <a href="#" data-nav="passes" class="mono">sess-99a4</a> · heartbeat 1s ago · next pass due in ~1s</span>
+          <span class="chip">${state.writesEnabled ? "--write enabled (tillr-item)" : "read-only"}</span>
+        </div>
+        <div class="loop-band__right">
+          <span class="meta-kv"><b>Lanes:</b> 5/8 ordinary · 1/2 express · 2/4 desks · 1 draining · 1 kept</span>
+          <span class="meta-kv"><b>Last pass:</b> <a href="#" data-nav="passes" class="mono">154217Z</a> (1 dispatched · 329 held)</span>
+          <span class="meta-kv"><b>Unshared:</b> 1 open (<span class="mono">item-idea-8f2a</span>, 2m)</span>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderDistributionBar() {
+    const counts = classCounts();
+    const order = ["alarm", "needs you", "needs a cause", "waits on work", "waits on the loop", "ready", "moving"];
+    const total = order.reduce((s, k) => s + counts[k], 0);
+    return `
+      <div class="dist-bar-wrap">
+        <div class="dist-bar__top">
+          <div>
+            <strong>Queue Triage · ${total} unlanded items</strong>
+            <span class="muted" style="margin-left:8px;">Planner source: <span class="mono">pass 20261124T154217Z</span> · <span class="ep ep--derived">~rule-classified</span></span>
+          </div>
+          <div class="muted" style="font-size:12px;">
+            Actor split: <b>Owner 7</b> · <b>Operator 4</b> · <b>Drain 317</b> · <b>Design seat 10</b>
+          </div>
+        </div>
+        <div class="dist-bar__track" role="img" aria-label="Queue distribution across 7 waiting classes">
+          ${order.map(k => {
+            const pct = (counts[k] / total * 100).toFixed(2);
+            return `<div class="dist-seg" style="width:${pct}%;background:${STATE_META[k].color};min-width:${counts[k] ? 4 : 0}px" title="${k}: ${counts[k]}" data-filter-class="${k}"></div>`;
+          }).join("")}
+        </div>
+        <div class="dist-pills">
+          ${order.map(k => `
+            <button type="button" class="dist-pill" data-filter-class="${k}">
+              ${renderGlyph(k)} <b class="mono">${counts[k]}</b>
+            </button>`).join("")}
+        </div>
+      </div>`;
+  }
+
+  function renderTriageGroup(klass, items) {
+    const isActionable = ["alarm", "needs you", "needs a cause"].includes(klass);
+    const expanded = state.expandedGroups[klass];
+    const limit = expanded ? 12 : (isActionable ? 8 : 5);
+    const shown = items.slice(0, limit);
+    return `
+      <section class="triage-group" data-class="${esc(klass)}">
+        <div class="triage-group__head">
+          <div class="triage-group__head-left">
+            ${renderGlyph(klass)}
+            <b class="mono">${items.length}</b>
+            <span class="triage-group__desc">${esc(STATE_META[klass].desc)}</span>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            ${items.length > limit ? `<button type="button" data-toggle-group="${esc(klass)}">Preview more</button>` : ""}
+            <a href="#" data-filter-class="${esc(klass)}" style="font-size:12px;font-weight:600;">Open in Queue →</a>
+          </div>
+        </div>
+        <table class="data-table">
+          <thead><tr>
+            <th style="width:48px;">#</th>
+            <th>Item &amp; Next Mover</th>
+            <th style="width:150px;">Where</th>
+            <th>Why</th>
+            <th style="width:105px;">Since</th>
+          </tr></thead>
+          <tbody>
+            ${shown.map(it => `
+              <tr>
+                <td class="mono muted">${it.place ?? "—"}</td>
+                <td>
+                  <div>
+                    <a href="#" data-open-item="${esc(it.item_id)}" class="mono" style="font-weight:600;">${esc(it.item_id)}</a>
+                    ${it.kind === "idea" ? `<span class="chip chip--idea">idea</span>` : ""}
+                    ${it.epistemic_alert === "corrupt" ? `<span class="ep ep--corrupt">corrupt</span>` : ""}
+                    ${it.open_questions ? `<span class="chip" title="Open Vantage questions">OQ:${it.open_questions}</span>` : ""}
+                    <span style="margin-left:4px;">${esc(it.title)}</span>
+                  </div>
+                  <div class="row-sub">mover: <b>${esc(it.mover)}</b>${it.seat ? ` · seat <span class="mono">${esc(it.seat)}</span>` : ""}</div>
+                </td>
+                <td class="mono" style="font-size:11.5px;">${it.run_id ? `<a href="#" data-open-run="${esc(it.run_id)}">${esc(it.where)}</a>` : esc(it.where)}</td>
+                <td>
+                  ${esc(it.why)}
+                  ${it.preserved ? `<div class="row-sub"><span class="ep ep--seam">preserved</span> <span class="mono">${esc(it.preserved.ref)}</span> (${esc(it.preserved.lines)})</div>` : ""}
+                </td>
+                <td class="mono" style="font-size:11.5px;white-space:nowrap;">${esc(it.since)}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+        ${items.length > shown.length ? `
+          <div class="triage-group__foot">
+            <span class="muted">Showing ${shown.length} of ${items.length} <span class="mono">${esc(klass)}</span> items</span>
+            <a href="#" data-filter-class="${esc(klass)}">View all ${items.length} in Queue →</a>
+          </div>` : ""}
+      </section>`;
+  }
+
+  function renderLaneCard(l) {
+    const isHeld = l.held_item_id !== null;
+    const cls = l.quiet_warn ? "lane-card--quiet" : isHeld ? "lane-card--kept" : l.state === "running" ? "lane-card--running" : l.state === "settling" ? "lane-card--settling" : "";
+    return `
+      <div class="lane-card ${cls}">
+        <div class="lane-card__top">
+          <div class="lane-card__id">
+            <span>${esc(l.lane_id)}</span>
+            ${l.kind === "express" ? `<span class="chip chip--express">express</span>` : l.kind === "desk" ? `<span class="glyph glyph--desk">desk</span>` : ""}
+            ${isHeld ? `<span class="chip chip--kept">kept</span>` : ""}
+            ${l.group === "draining" ? `<span class="chip">draining</span>` : ""}
+          </div>
+          <div class="mono" style="font-size:11.5px;">
+            ${l.state === "running" ? `<span style="color:var(--ok);font-weight:700;">● running</span>` : l.state === "settling" ? `<span style="color:var(--info);font-weight:700;">◌ settling</span>` : `<span class="muted">○ idle</span>`}
+            · <span class="ep ep--derived">~${fmtAge(NOW_MS - l.state_since_ms)}</span>
+          </div>
+        </div>
+        <div class="lane-card__meta">
+          ${l.item_id ? `<a href="#" data-open-item="${esc(l.item_id)}" class="mono" style="font-weight:600;">${esc(l.item_id)}</a>` : (l.held_item_id ? `holding <a href="#" data-open-item="${esc(l.held_item_id)}" class="mono">${esc(l.held_item_id)}</a>` : `<span class="muted">no active item</span>`)}
+          ${l.run_id ? `· <a href="#" data-open-run="${esc(l.run_id)}" class="mono">${esc(l.run_id)}</a>` : ""}
+          ${l.seat ? `· <span>${esc(l.seat)}</span> <span class="muted">(${esc(l.seat_source)})</span>` : ""}
+          ${l.backend ? `· <span class="mono">${esc(l.backend)}</span>` : ""}
+          ${l.attempt ? `· att.${l.attempt}` : ""}
+        </div>
+        ${l.action ? `
+          <div class="lane-card__action">
+            <span>${esc(l.action.text)}</span>
+            <span class="${l.quiet_warn ? "quiet-warn" : "muted"} mono">${l.quiet_warn ? "QUIET 6m50s!" : fmtTokens(l.tokens, false)}</span>
+          </div>` : ""}
+        ${l.held_reason ? `<div class="lane-card__action" style="color:var(--warn);">${esc(l.held_reason)}</div>` : ""}
+        ${!l.action && !l.held_reason && l.outcome ? `<div class="lane-card__action muted"><span>last outcome: ${esc(l.outcome)}</span><span>${fmtTokens(l.tokens, false)}</span></div>` : ""}
+      </div>`;
+  }
+
+  function renderDispatchHome() {
+    const order = ["alarm", "needs you", "needs a cause", "moving", "waits on the loop", "waits on work", "ready"];
+    const activeLanes = LANES.filter(l => l.state !== "idle" || l.held_item_id !== null);
+    const idleLanes = LANES.filter(l => l.state === "idle" && l.held_item_id === null);
+
+    return `
+      ${renderDistributionBar()}
+      <div class="home-grid">
+        <div class="triage-stack">
+          ${order.map(k => {
+            const grp = ITEMS.filter(i => i.class === k);
+            return grp.length ? renderTriageGroup(k, grp) : "";
+          }).join("")}
+        </div>
+        <aside style="display:flex;flex-direction:column;gap:14px;">
+          <section class="panel">
+            <div class="panel__head">
+              <h2 class="panel__title">Active &amp; Held Lanes <span class="mono muted">(${activeLanes.length} of ${LANES.length})</span></h2>
+              <a href="#" data-nav="lanes" style="font-size:12px;">All 14 lanes →</a>
+            </div>
+            <div class="panel__body">
+              <div class="lane-list">
+                ${activeLanes.map(renderLaneCard).join("")}
+              </div>
+              <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                <span class="muted" style="font-size:12px;">${idleLanes.length} idle lanes holding nothing (${idleLanes.map(l => l.lane_id).join(", ")})</span>
+                <button type="button" data-toggle-idle>${state.showIdleLanes ? "Hide" : "Show"}</button>
+              </div>
+              ${state.showIdleLanes ? `<div class="lane-list" style="margin-top:8px;">${idleLanes.map(renderLaneCard).join("")}</div>` : ""}
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel__head">
+              <h2 class="panel__title">Recent Planning Passes</h2>
+              <a href="#" data-nav="passes" style="font-size:12px;">Full ledger →</a>
+            </div>
+            <div class="panel__body" style="padding:0;">
+              <table class="data-table">
+                <thead><tr><th>Pass</th><th>Decision</th><th>Spend</th></tr></thead>
+                <tbody>
+                  ${PASSES.slice(0, 4).map(p => `
+                    <tr>
+                      <td class="mono" style="white-space:nowrap;">
+                        <a href="#" data-nav="passes">${esc(p.id.slice(9))}</a>
+                        ${p.streak > 1 ? `<div class="row-sub"><span class="chip">×${p.streak} folded</span></div>` : ""}
+                      </td>
+                      <td>
+                        <div><b>${p.dispatched}</b> dispatched · <b>${p.held}</b> held</div>
+                        <div class="row-sub">${esc(p.changed)}</div>
+                      </td>
+                      <td class="mono" style="white-space:nowrap;">${fmtTokens(p.tokens, p.lower_bound)}</td>
+                    </tr>`).join("")}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </aside>
+      </div>`;
+  }
+
+  function renderQueueView() {
+    let rows = ITEMS.filter(it => {
+      if (state.queueFilterState === "unlanded" && (it.class === "landed" || it.class === "closed")) return false;
+      if (state.queueFilterState === "not-moving" && ["ready", "moving", "landed", "closed"].includes(it.class)) return false;
+      if (state.queueFilterState === "landed" && it.class !== "landed") return false;
+      if (state.queueFilterClass && it.class !== state.queueFilterClass) return false;
+      if (state.queueSearch) {
+        const q = state.queueSearch.toLowerCase();
+        if (!`${it.item_id} ${it.title} ${it.why} ${it.seat} ${it.fence.join(" ")}`.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+
+    if (state.queueSort === "item") rows = [...rows].sort((a,b) => a.item_id.localeCompare(b.item_id));
+    else rows = [...rows].sort((a,b) => (a.place ?? 99999) - (b.place ?? 99999));
+
+    const total = rows.length;
+    const totalPages = Math.max(1, Math.ceil(total / state.queuePageSize));
+    if (state.queuePage > totalPages) state.queuePage = 1;
+    const start = (state.queuePage - 1) * state.queuePageSize;
+    const pageRows = rows.slice(start, start + state.queuePageSize);
+
+    return `
+      <div class="toolbar">
+        <div class="toolbar__filters">
+          <strong>Queue Ledger (${total} items)</strong>
+          <select id="q-state">
+            <option value="unlanded" ${state.queueFilterState === "unlanded" ? "selected" : ""}>All unlanded (338)</option>
+            <option value="not-moving" ${state.queueFilterState === "not-moving" ? "selected" : ""}>Not moving only</option>
+            <option value="landed" ${state.queueFilterState === "landed" ? "selected" : ""}>Landed</option>
+          </select>
+          <select id="q-class">
+            <option value="">All waiting classes</option>
+            ${["alarm","needs you","needs a cause","waits on work","waits on the loop","ready","moving"].map(c =>
+              `<option value="${c}" ${state.queueFilterClass === c ? "selected" : ""}>${c}</option>`).join("")}
+          </select>
+          <select id="q-sort">
+            <option value="place" ${state.queueSort === "place" ? "selected" : ""}>Sort: True queue place</option>
+            <option value="item" ${state.queueSort === "item" ? "selected" : ""}>Sort: Item ID</option>
+          </select>
+          <input type="search" id="q-search" placeholder="Filter id, title, fence, reason..." value="${esc(state.queueSearch)}" style="width:240px;">
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span class="muted" style="font-size:11.5px;">Keys: <kbd>j</kbd>/<kbd>k</kbd> focus · <kbd>Enter</kbd> open</span>
+          ${state.queueFilterClass || state.queueSearch ? `<button type="button" data-clear-q-filters>Clear filters</button>` : ""}
+        </div>
+      </div>
+
+      ${state.queueFrozen ? `
+        <div class="freeze-banner" role="status">
+          <span><strong>List frozen while reading</strong> · Membership and order held steady; row facts update in place.${state.queuePendingArrivals ? ` <b>${state.queuePendingArrivals}</b> new pass updates waiting.` : ""}</span>
+          <button type="button" data-unfreeze-queue>Accept updates &amp; unfreeze</button>
+        </div>` : ""}
+
+      <div class="panel">
+        <table class="data-table">
+          <thead><tr>
+            <th style="width:52px;">Place</th>
+            <th>Item</th>
+            <th style="width:145px;">Class</th>
+            <th style="width:90px;">Seat</th>
+            <th>Why / Blocker</th>
+            <th style="width:110px;">Spend</th>
+            ${state.writesEnabled ? `<th style="width:115px;">Order (--write)</th>` : ""}
+          </tr></thead>
+          <tbody>
+            ${pageRows.map(it => `
+              <tr class="${state.focusedItemId === it.item_id ? "focused-row" : ""}" data-focus-row="${esc(it.item_id)}">
+                <td class="mono muted">${it.place ?? "—"}</td>
+                <td>
+                  <div>
+                    <a href="#" data-open-item="${esc(it.item_id)}" class="mono" style="font-weight:600;">${esc(it.item_id)}</a>
+                    ${it.kind === "idea" ? `<span class="chip chip--idea">idea</span>` : ""}
+                    <span style="margin-left:4px;">${esc(it.title)}</span>
+                  </div>
+                  <div class="row-sub mono" style="font-size:11px;">fence: ${esc(it.fence.join(", "))}</div>
+                </td>
+                <td>${renderGlyph(it.class)}</td>
+                <td class="mono">${esc(it.seat || "—")}</td>
+                <td>${esc(it.why)}</td>
+                <td>${fmtTokens(it.tokens, false)}</td>
+                ${state.writesEnabled ? `
+                  <td style="white-space:nowrap;">
+                    ${it.place && it.place > 1 ? `<button type="button" data-move-top="${esc(it.item_id)}" title="tillr-item place --to first">Move to top</button>` : `<span class="muted" style="font-size:11px;">—</span>`}
+                  </td>` : ""}
+              </tr>`).join("")}
+          </tbody>
+        </table>
+        <div class="pagination-bar">
+          <span>Showing <b>${start + 1}–${Math.min(start + state.queuePageSize, total)}</b> of <b>${total}</b> items (true place numbers preserved across filters)</span>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button type="button" data-q-page="${state.queuePage - 1}" ${state.queuePage <= 1 ? "disabled" : ""}>← Prev</button>
+            <span class="mono">Page ${state.queuePage} / ${totalPages}</span>
+            <button type="button" data-q-page="${state.queuePage + 1}" ${state.queuePage >= totalPages ? "disabled" : ""}>Next →</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderLanesView() {
+    const ordinary = LANES.filter(l => l.kind === "ordinary");
+    const express = LANES.filter(l => l.kind === "express");
+    const desks = LANES.filter(l => l.kind === "desk");
+    return `
+      <div class="kpi-row">
+        <div class="kpi-box"><div class="kpi-box__label">Ordinary Lanes</div><div class="kpi-box__val">${ordinary.filter(l=>l.state==="running").length} / ${ordinary.length} running</div><div class="kpi-box__sub">1 settling · 1 draining · 1 kept</div></div>
+        <div class="kpi-box"><div class="kpi-box__label">Express Lanes</div><div class="kpi-box__val">${express.filter(l=>l.state==="running").length} / ${express.length} running</div><div class="kpi-box__sub">Reserved for idea &amp; express items</div></div>
+        <div class="kpi-box"><div class="kpi-box__label">Document Desks</div><div class="kpi-box__val">${desks.filter(l=>l.state==="running").length} / ${desks.length} running</div><div class="kpi-box__sub">Vantage triage &amp; doc-block sync</div></div>
+        <div class="kpi-box"><div class="kpi-box__label">Quiet / Kept Alerts</div><div class="kpi-box__val" style="color:var(--warn);">1 quiet · 1 kept</div><div class="kpi-box__sub">lane-2 quiet 6m50s · lane-5 held</div></div>
+      </div>
+      <div class="lane-group-label"><span>Ordinary Lanes (8)</span></div>
+      <div class="lanes-grid">${ordinary.map(renderLaneCard).join("")}</div>
+      <div class="lane-group-label" style="margin-top:16px;"><span>Express Lanes (2)</span></div>
+      <div class="lanes-grid">${express.map(renderLaneCard).join("")}</div>
+      <div class="lane-group-label" style="margin-top:16px;"><span>Document Desks (4)</span></div>
+      <div class="lanes-grid">${desks.map(renderLaneCard).join("")}</div>`;
+  }
+
+  function renderPassesView() {
+    return `
+      <div class="panel">
+        <div class="panel__head">
+          <h2 class="panel__title">Planning Pass Ledger (Folded Streaks)</h2>
+          <span class="muted" style="font-size:12px;">Read from <span class="mono">drain_passes</span> &amp; <span class="mono">dispatches</span> · identical consecutive passes folded before filtering</span>
+        </div>
+        <table class="data-table">
+          <thead><tr>
+            <th>Pass Stamp (UTC)</th>
+            <th>Folded</th>
+            <th>Dispatched / Held</th>
+            <th>What Changed vs Older Group</th>
+            <th>Phases (claim / stage / dispatch / gate / land)</th>
+            <th>Token Spend</th>
+          </tr></thead>
+          <tbody>
+            ${PASSES.map(p => `
+              <tr>
+                <td class="mono" style="font-weight:600;">${esc(p.id)}</td>
+                <td>${p.streak > 1 ? `<span class="chip">×${p.streak} passes</span>` : `<span class="muted">1</span>`}</td>
+                <td><b>${p.dispatched}</b> dispatched · <b>${p.held}</b> held</td>
+                <td>
+                  <div>${esc(p.changed)}</div>
+                  <div class="row-sub">${esc(p.detail)}</div>
+                </td>
+                <td class="mono" style="font-size:11.5px;">
+                  ${p.phases.claim_ms}ms / ${p.phases.stage_ms}ms / ${p.phases.dispatch_ms}ms / ${p.phases.gate_ms}ms / ${p.phases.land_ms}ms
+                </td>
+                <td>${fmtTokens(p.tokens, p.lower_bound)} ${p.lower_bound ? `<span class="ep ep--bound">≥ lower bound</span>` : ""}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  function renderRunWaterfallView() {
+    const r = RUN_8812;
+    const t = r.timing;
+    const totalW = r.wall_ms / state.wfZoom;
+    const sel = r.spans.find(s => s.id === state.selectedSpanId) || r.spans[2];
+    const pModel = (t.model_ms / t.wall_ms * 100).toFixed(1);
+    const pTool = (t.tool_active_ms / t.wall_ms * 100).toFixed(1);
+    const pSlot = (t.slot_wait_ms / t.wall_ms * 100).toFixed(1);
+    const pUncov = (t.uncovered_ms / t.wall_ms * 100).toFixed(1);
+
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px;">
+        <div>
+          <h2 style="margin:0;font-size:16px;">Run <span class="mono">${esc(r.run_id)}</span> · <a href="#" data-open-item="${esc(r.item_id)}" class="mono">${esc(r.item_id)}</a> · ${esc(r.lane_id)}</h2>
+          <div class="muted" style="font-size:12px;">seat: <b>${esc(r.seat)}</b> · workflow: <span class="mono">${esc(r.workflow)}</span> · backend: <span class="mono">${esc(r.backend)}</span> · state: ${renderGlyph("moving")}</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <span class="chip">Otel JSON export ready</span>
+          <span class="chip">Chrome trace export ready</span>
+        </div>
+      </div>
+
+      <div class="kpi-row">
+        <div class="kpi-box">
+          <div class="kpi-box__label">Where Wall Time Went (318.0s)</div>
+          <div class="wall-split-bar" title="Model ${pModel}% · Active Tool ${pTool}% · Slot Wait ${pSlot}% · Uncovered ${pUncov}%">
+            <div style="width:${pModel}%;background:#0B57D0;"></div>
+            <div style="width:${pTool}%;background:#0E7452;"></div>
+            <div style="width:${pSlot}%;background:#D97706;"></div>
+            <div style="width:${pUncov}%;background:#9CA3AF;"></div>
+          </div>
+          <div class="kpi-box__sub mono">Model ${fmtMs(t.model_ms)} · Tool ${fmtMs(t.tool_active_ms)} · SlotWait ${fmtMs(t.slot_wait_ms)} · Uncov ${fmtMs(t.uncovered_ms)}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-box__label">Token Usage (No USD)</div>
+          <div class="kpi-box__val">${r.usage.total.toLocaleString()} tok</div>
+          <div class="kpi-box__sub mono">in ${r.usage.input.toLocaleString()} · cache_r ${r.usage.cache_read.toLocaleString()} · out ${r.usage.output.toLocaleString()} · reason ${r.usage.reasoning.toLocaleString()}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="kpi-box__label">Streaming Latency</div>
+          <div class="kpi-box__val">${r.usage.first_output_ms} ms</div>
+          <div class="kpi-box__sub mono">first output · ${r.usage.output_tok_s} tok/s</div>
+        </div>
+      </div>
+
+      <div class="waterfall-box">
+        <div class="waterfall-controls">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <strong>Unified Span Waterfall</strong>
+            <span class="muted" style="font-size:11.5px;">★ End-time chain · stages + turns + tools + slot waits + gate checks on one clock</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <input type="search" id="wf-search" placeholder="Filter spans..." value="${esc(state.wfSearch)}" style="padding:3px 7px;border:1px solid var(--border-strong);border-radius:3px;font-size:12px;">
+            <button type="button" data-wf-zoom="in">Zoom +</button>
+            <button type="button" data-wf-zoom="out">Zoom −</button>
+            <button type="button" data-wf-zoom="fit">Fit</button>
+          </div>
+        </div>
+        <div class="waterfall-axis">
+          <div style="padding:4px 10px;border-right:1px solid var(--border);font-weight:600;">Span (${r.spans.length})</div>
+          <div class="waterfall-axis__ticks">
+            <span>0.0s</span>
+            <span>${(totalW * 0.25 / 1000).toFixed(1)}s</span>
+            <span>${(totalW * 0.50 / 1000).toFixed(1)}s</span>
+            <span>${(totalW * 0.75 / 1000).toFixed(1)}s</span>
+            <span>${(totalW / 1000).toFixed(1)}s</span>
+          </div>
+        </div>
+        <div>
+          ${r.spans.filter(s => !state.wfSearch || s.name.toLowerCase().includes(state.wfSearch.toLowerCase())).map(s => {
+            const indent = s.parent ? (s.parent === "sp-tool-2" ? 28 : 14) : 0;
+            const leftPct = s.start !== null ? Math.min(100, (s.start / totalW * 100)) : 0;
+            const widthPct = (s.start !== null && s.end !== null) ? Math.max(0.6, Math.min(100 - leftPct, ((s.end - s.start) / totalW * 100))) : 0;
+            const barCls = s.cat === "llm" ? "wf-llm" : s.cat === "tool" ? "wf-tool" : s.cat === "slot" ? "wf-slot" : s.cat === "gate" ? "wf-gate" : "wf-stage";
+            return `
+              <div class="waterfall-row ${state.selectedSpanId === s.id ? "selected" : ""}" data-select-span="${esc(s.id)}">
+                <div class="waterfall-label" style="padding-left:${10 + indent}px;">
+                  ${s.critical ? `<span title="On end-time chain">★</span>` : ""}
+                  <span class="mono" style="font-size:11.5px;">${esc(s.name)}</span>
+                </div>
+                <div class="waterfall-track">
+                  ${s.start !== null && s.end !== null
+                    ? `<div class="waterfall-bar ${barCls} ${s.critical ? "wf-critical" : ""}" style="left:${leftPct}%;width:${widthPct}%;">${s.open ? "~" : ""}${((s.end - s.start)/1000).toFixed(1)}s</div>`
+                    : `<span class="ep ${s.state === "unobserved_seam" ? "ep--seam" : "ep--absent"}" style="margin-top:3px;">${esc(s.state)}: ${esc(s.note)}</span>`}
+                </div>
+              </div>`;
+          }).join("")}
+        </div>
+      </div>
+
+      ${sel ? `
+        <div class="panel" style="margin-top:10px;">
+          <div class="panel__head">
+            <h3 class="panel__title">Selected Span: <span class="mono">${esc(sel.name)}</span></h3>
+            <span class="ep ${sel.state === "observed" ? "ep--observed" : sel.state === "derived_clock" ? "ep--derived" : sel.state === "unobserved_seam" ? "ep--seam" : "ep--absent"}">${esc(sel.state)}</span>
+          </div>
+          <div class="panel__body">
+            <div><b>Duration:</b> ${sel.start !== null && sel.end !== null ? `${sel.open ? "~" : ""}${((sel.end - sel.start)/1000).toFixed(2)}s` : `<span class="ep ep--absent">not recorded</span>`} · <b>Notes:</b> ${esc(sel.note)}</div>
+          </div>
+        </div>` : ""}
+
+      <div class="subtabs">
+        ${[["timeline", "Drain Schedule Ledger"], ["claims", "Claims Audit (2)"], ["transcript", "Transcript & Exchanges"]].map(([id, lbl]) =>
+          `<button type="button" class="subtab ${state.runTab === id ? "active" : ""}" data-run-tab="${id}">${lbl}</button>`).join("")}
+      </div>
+
+      <div class="panel">
+        ${state.runTab === "timeline" ? `
+          <table class="data-table">
+            <thead><tr><th style="width:110px;">Time (UTC)</th><th style="width:120px;">Decision Kind</th><th>Detail</th></tr></thead>
+            <tbody>
+              ${r.schedule.map(ev => `<tr><td class="mono">${esc(ev.at)}</td><td><span class="chip">${esc(ev.kind)}</span></td><td>${esc(ev.detail)}</td></tr>`).join("")}
+            </tbody>
+          </table>` : state.runTab === "claims" ? `
+          <table class="data-table">
+            <thead><tr><th>Claim</th><th>Audit Status</th><th>Provenance</th><th>Evidence</th></tr></thead>
+            <tbody>
+              ${r.claims.map(c => `<tr>
+                <td>${esc(c.text)}</td>
+                <td><span class="glyph ${c.status === "verified" ? "glyph--landed" : "glyph--needs-you"}">${c.status === "verified" ? "✓ verified" : "◆ unverified"}</span></td>
+                <td><span class="ep ${c.epistemic === "observed" ? "ep--observed" : "ep--seam"}">${esc(c.epistemic)}</span></td>
+                <td class="mono">${esc(c.evidence)}</td>
+              </tr>`).join("")}
+            </tbody>
+          </table>` : `
+          <div class="panel__body">
+            <p class="muted" style="margin-top:0;">Interleaved transcript &amp; supervisor-to-utility exchanges on a single clock:</p>
+            <pre class="mono" style="margin:0;font-size:11.5px;background:var(--bg-subtle);padding:10px;border-radius:4px;overflow-x:auto;">[15:37:09Z] supervisor -> pi-adapter: brief.json + fence.json staged (observed)
+[15:37:10Z] model.turn #1: reading tools/tillr-view/serveobs.go &amp; RunTiming.tsx
+[15:39:38Z] tool.bash: go test ./tools/tillr-view/... (entering slot-wait 38.0s)
+[15:40:32Z] tool.bash: PASS ok tools/tillr-view (48/48)
+[15:41:38Z] supervisor -> tillr-gate: preview gate started (2 checks, 1 skipped)</pre>
+          </div>`}
+      </div>`;
+  }
+
+  function renderTrunkView() {
+    return `
+      <div class="kpi-row">
+        <div class="kpi-box"><div class="kpi-box__label">Trunk Health</div><div class="kpi-box__val" style="color:var(--ok);">✓ GREEN</div><div class="kpi-box__sub">refs/tillr/green == main (c44e91b)</div></div>
+        <div class="kpi-box"><div class="kpi-box__label">Publish Cursor</div><div class="kpi-box__val">2 unpublished</div><div class="kpi-box__sub">2 proven commits ahead of origin/main</div></div>
+        <div class="kpi-box"><div class="kpi-box__label">Replay Divergence</div><div class="kpi-box__val">1 of 4</div><div class="kpi-box__sub">gated_tree != landed_tree (normal replay)</div></div>
+      </div>
+
+      <div class="panel" style="margin-bottom:14px;">
+        <div class="panel__head"><h2 class="panel__title">Recent Landings (Trunk)</h2></div>
+        <table class="data-table">
+          <thead><tr><th>Landing</th><th>Item</th><th>Result</th><th>Trunk Before → After</th><th>gated_tree vs landed_tree</th><th>Note</th></tr></thead>
+          <tbody>
+            ${LANDINGS.map(l => `
+              <tr>
+                <td class="mono" style="font-weight:600;">${esc(l.landing_id)}</td>
+                <td><a href="#" data-open-item="${esc(l.item_id)}" class="mono">${esc(l.item_id)}</a></td>
+                <td>${renderGlyph(l.result === "landed" ? "landed" : "alarm")}</td>
+                <td class="mono">${esc(l.trunk_before)} → ${esc(l.trunk_after)}</td>
+                <td class="mono">
+                  ${esc(l.gated_tree)} vs ${esc(l.landed_tree)}
+                  ${l.replay_diff ? `<span class="ep ep--derived">replayed</span>` : `<span class="ep ep--observed">identical</span>`}
+                </td>
+                <td>${esc(l.note)}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head"><h2 class="panel__title">Check Performance (24h window · anchored to generated_at)</h2></div>
+        <table class="data-table">
+          <thead><tr><th>Check ID</th><th>Samples</th><th>Median</th><th>P95</th><th>Max</th><th>Slot Waited</th><th>Failures</th></tr></thead>
+          <tbody>
+            ${CHECK_PERF.map(c => `
+              <tr>
+                <td class="mono" style="font-weight:600;">${esc(c.check_id)}</td>
+                <td class="mono">${c.sample_count}</td>
+                <td>${fmtMs(c.median_ms)}</td>
+                <td>${c.p95_ms !== null ? fmtMs(c.p95_ms) : `<span class="ep ep--absent">${esc(c.withheld_note)}</span>`}</td>
+                <td>${fmtMs(c.max_ms)}</td>
+                <td>${fmtMs(c.waited_ms)}</td>
+                <td class="mono" style="${c.failures ? "color:var(--bad);font-weight:700;" : ""}">${c.failures}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  function renderGraphQuestionsView() {
+    return `
+      <div class="home-grid">
+        <section class="panel">
+          <div class="panel__head"><h2 class="panel__title">Dependency Graph (Blocked Edges)</h2></div>
+          <div class="panel__body">
+            <div class="graph-wrap">
+              <svg width="640" height="230" viewBox="0 0 640 230" role="img" aria-label="Dependency graph">
+                <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#687082"/></marker></defs>
+                <line x1="165" y1="50" x2="255" y2="50" stroke="#B91C1C" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+                <line x1="165" y1="120" x2="255" y2="120" stroke="#687082" stroke-width="1.5" marker-end="url(#arr)"/>
+                <line x1="415" y1="120" x2="490" y2="90" stroke="#687082" stroke-width="1.5" marker-end="url(#arr)"/>
+                <line x1="415" y1="120" x2="490" y2="155" stroke="#687082" stroke-width="1.5" marker-end="url(#arr)"/>
+                <rect x="15" y="26" width="150" height="46" rx="4" fill="#ECEAE3" stroke="#687082"/>
+                <text x="25" y="45" font-family="monospace" font-size="12" font-weight="700" fill="#14161A">item-077</text>
+                <text x="25" y="62" font-family="sans-serif" font-size="11" fill="#434956">— closed (not landed)</text>
+                <rect x="260" y="26" width="155" height="46" rx="4" fill="#FEF5E6" stroke="#9A5B00"/>
+                <text x="270" y="45" font-family="monospace" font-size="12" font-weight="700" fill="#14161A">item-099</text>
+                <text x="270" y="62" font-family="sans-serif" font-size="11" fill="#9A5B00">◆ held by closed blocker</text>
+                <rect x="15" y="96" width="150" height="46" rx="4" fill="#FEF5E6" stroke="#9A5B00"/>
+                <text x="25" y="115" font-family="monospace" font-size="12" font-weight="700" fill="#14161A">item-089</text>
+                <text x="25" y="132" font-family="sans-serif" font-size="11" fill="#9A5B00">◆ needs you (OQ-41)</text>
+                <rect x="260" y="96" width="155" height="46" rx="4" fill="#F8F7F4" stroke="#DCD9CF"/>
+                <text x="270" y="115" font-family="monospace" font-size="12" font-weight="700" fill="#14161A">item-133</text>
+                <text x="270" y="132" font-family="sans-serif" font-size="11" fill="#434956">◌ waits on work</text>
+                <rect x="495" y="66" width="130" height="44" rx="4" fill="#F8F7F4" stroke="#DCD9CF"/>
+                <text x="505" y="85" font-family="monospace" font-size="12" font-weight="700" fill="#14161A">item-136</text>
+                <text x="505" y="100" font-family="sans-serif" font-size="11" fill="#434956">◌ waits on work</text>
+                <rect x="495" y="134" width="130" height="44" rx="4" fill="#F8F7F4" stroke="#DCD9CF"/>
+                <text x="505" y="153" font-family="monospace" font-size="12" font-weight="700" fill="#14161A">item-139</text>
+                <text x="505" y="168" font-family="sans-serif" font-size="11" fill="#434956">◌ waits on work</text>
+              </svg>
+            </div>
+            <p class="muted" style="font-size:12px;margin-bottom:0;">Dashed crimson edge indicates a <b>closed-without-landing</b> blocker (<span class="mono">item-077</span>) that still holds its dependent (<span class="mono">item-099</span>).</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head"><h2 class="panel__title">Vantage Open Questions &amp; Designer Sessions</h2></div>
+          <table class="data-table">
+            <thead><tr><th>Question</th><th>Document</th><th>Holding Item</th><th>Session</th></tr></thead>
+            <tbody>
+              <tr><td class="mono" style="font-weight:700;">OQ-41</td><td class="mono">docs/design/preserved-work.md</td><td><a href="#" data-open-item="item-089" class="mono">item-089</a></td><td><span class="chip">warm · 42k ctx</span></td></tr>
+              <tr><td class="mono" style="font-weight:700;">OQ-47</td><td class="mono">docs/reference/observatory-actions.md</td><td><a href="#" data-open-item="item-094" class="mono">item-094</a></td><td><span class="chip">warm · 19k ctx</span></td></tr>
+              <tr><td class="mono" style="font-weight:700;">OQ-49</td><td class="mono">docs/reference/observatory-design.md</td><td><a href="#" data-open-item="item-101" class="mono">item-101</a></td><td><span class="ep ep--absent">no warm session</span></td></tr>
+              <tr><td class="mono" style="font-weight:700;">OQ-52</td><td class="mono">docs/design/tillr-idea-pipeline.md</td><td><a href="#" data-open-item="item-102" class="mono">item-102</a></td><td><span class="chip">running (express-1)</span></td></tr>
+            </tbody>
+          </table>
+        </section>
+      </div>`;
+  }
+
+  function renderItemModal() {
+    if (!state.selectedItemId) return "";
+    const it = ITEMS.find(i => i.item_id === state.selectedItemId);
+    if (!it) return "";
+    return `
+      <div class="modal-backdrop" data-close-item>
+        <div class="modal-card" style="max-width:760px;" onclick="event.stopPropagation()">
+          <div class="modal-card__head">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <strong class="mono" style="font-size:14px;">${esc(it.item_id)}</strong>
+              ${it.kind === "idea" ? `<span class="chip chip--idea">idea</span>` : ""}
+              ${renderGlyph(it.class)}
+              <span class="muted mono">place: ${it.place ?? "—"}</span>
+            </div>
+            <button type="button" data-close-item>Close (Esc)</button>
+          </div>
+          <div class="modal-card__body">
+            <h3 style="margin:0 0 8px;font-size:15px;">${esc(it.title)}</h3>
+            <p style="margin:0 0 12px;color:var(--ink-2);"><b>Why:</b> ${esc(it.why)} · <b>Next mover:</b> ${esc(it.mover)}</p>
+
+            ${it.kind === "idea" ? `
+              <div style="background:var(--desk-bg);border:1px solid var(--desk-border);padding:10px;border-radius:4px;margin-bottom:12px;">
+                <div style="font-weight:700;color:var(--desk);margin-bottom:4px;">Saved Idea Words · <span class="ep ep--seam">${it.in_tree ? "in the tree" : "not yet in the tree"}</span></div>
+                <pre style="margin:0;white-space:pre-wrap;font-family:var(--mono);font-size:12px;">${esc(it.words)}</pre>
+              </div>` : ""}
+
+            <div style="margin-bottom:12px;">
+              <b>Path Fence:</b> ${it.fence.map(f => `<code class="chip">${esc(f)}</code>`).join(" ")}
+            </div>
+            <div style="margin-bottom:12px;">
+              <b>Design Document:</b> <span class="mono">${esc(it.doc)}</span> · <b>Vantage:</b> ${it.open_questions} open questions <span class="ep ep--absent">Vantage base URL not configured</span>
+            </div>
+
+            ${it.preserved ? `
+              <div style="background:var(--warn-bg);border:1px solid var(--warn-border);padding:8px 10px;border-radius:4px;margin-bottom:12px;">
+                <b>Earlier Preserved Uncommitted Work:</b> <span class="mono">${esc(it.preserved.ref)}</span> · ${it.preserved.files} files (${esc(it.preserved.lines)}) · ${esc(it.preserved.reason)}
+              </div>` : ""}
+
+            ${it.verify_refusal ? `
+              <div style="background:var(--bad-bg);border:1px solid var(--bad-border);padding:8px 10px;border-radius:4px;margin-bottom:12px;">
+                <b>Verify Refusal (${esc(it.verify_refusal.run_id)}):</b> ${esc(it.verify_refusal.detail)} · <b>Next step:</b> ${esc(it.verify_refusal.next_step)}
+              </div>` : ""}
+
+            <h4 style="margin:12px 0 6px;font-size:12px;text-transform:uppercase;color:var(--ink-3);">Acceptance Criteria (Verdicts vs Worker Self-Reports)</h4>
+            <table class="data-table" style="border:1px solid var(--border);">
+              <thead><tr><th>Criterion</th><th>Judgment / Report</th><th>Provenance</th></tr></thead>
+              <tbody>
+                <tr><td>C1: Core behavior matches reference contract</td><td><span class="glyph glyph--landed">✓ met</span></td><td><span class="ep ep--observed">observed verdict</span></td></tr>
+                <tr><td>C2: Edge cases covered without regression</td><td><span class="ep ep--claimed">~claimed (worker report, not a verdict)</span></td><td><span class="ep ep--derived">derived</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="modal-card__foot">
+            ${it.run_id ? `<button type="button" class="primary" data-open-run="${esc(it.run_id)}">Inspect Run ${esc(it.run_id)} →</button>` : ""}
+            <button type="button" data-close-item>Close</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderIdeaModal() {
+    if (!state.showIdeaModal) return "";
+    return `
+      <div class="modal-backdrop" data-close-idea>
+        <div class="modal-card" onclick="event.stopPropagation()">
+          <div class="modal-card__head">
+            <strong>New Idea (tillr-item idea --via observatory)</strong>
+            <button type="button" data-close-idea>Close (Esc)</button>
+          </div>
+          <div class="modal-card__body">
+            <label style="display:block;font-weight:600;margin-bottom:6px;">Your exact words (stored verbatim; not yet in tree until design turn lands):</label>
+            <textarea id="idea-words-input" rows="5" style="width:100%;font-family:var(--mono);font-size:12.5px;padding:8px;border:1px solid var(--border-strong);border-radius:4px;" placeholder="Describe what you want designed or built...">${esc(state.ideaDraft)}</textarea>
+            <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+              <label><input type="radio" name="idea-place" value="first" ${state.ideaPlace === "first" ? "checked" : ""}> Top of queue</label>
+              <label><input type="radio" name="idea-place" value="last" ${state.ideaPlace === "last" ? "checked" : ""}> Bottom of queue</label>
+              <label><input type="radio" name="idea-place" value="after" ${state.ideaPlace === "after" ? "checked" : ""}> After item:</label>
+              <input type="text" id="idea-after-id" value="${esc(state.ideaAfterId)}" style="width:110px;padding:3px 6px;border:1px solid var(--border-strong);border-radius:3px;font-family:var(--mono);font-size:12px;">
+            </div>
+          </div>
+          <div class="modal-card__foot">
+            <span class="muted" style="margin-right:auto;font-size:11.5px;">Draft persists across reload</span>
+            <button type="button" data-close-idea>Cancel</button>
+            <button type="button" class="primary" data-submit-idea>Save Idea</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderGlossaryModal() {
+    if (!state.showGlossaryModal) return "";
+    return `
+      <div class="modal-backdrop" data-close-glossary>
+        <div class="modal-card" onclick="event.stopPropagation()">
+          <div class="modal-card__head">
+            <strong>Provenance Marks &amp; Truthfulness Contract</strong>
+            <button type="button" data-close-glossary>Close (Esc)</button>
+          </div>
+          <div class="modal-card__body">
+            <p style="margin-top:0;">Every measurement, clock, and count in RailDeck keeps these six states distinct:</p>
+            <table class="data-table" style="border:1px solid var(--border);">
+              <thead><tr><th>Mark</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><span class="mono">0</span> / <span class="mono">0 ms</span></td><td><b>Recorded zero:</b> measurement took place and was zero.</td></tr>
+                <tr><td><span class="ep ep--absent">not recorded</span></td><td><b>Unrecorded / absent:</b> no clock or field was written; never shown as zero.</td></tr>
+                <tr><td><span class="mono">n/a</span></td><td><b>Not applicable:</b> stage or field does not apply to this item or run.</td></tr>
+                <tr><td><span class="ep ep--corrupt">corrupt</span></td><td><b>Unreadable:</b> stored JSON or artifact failed to parse or verify.</td></tr>
+                <tr><td><span class="ep ep--bound">≥ N</span></td><td><b>Lower bound:</b> sum where at least one run reported no usage.</td></tr>
+                <tr><td><span class="ep ep--derived">~</span> / <span class="ep ep--claimed">~claimed</span></td><td><b>Derived:</b> computed from rule table, viewer clock, or worker self-report (never a verdict).</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // =========================================================================
+  // 5. MAIN RENDER & EVENT WIRING
+  // =========================================================================
+  function render() {
+    let body = "";
+    if (state.view === "dispatch") body = renderDispatchHome();
+    else if (state.view === "queue") body = renderQueueView();
+    else if (state.view === "lanes") body = renderLanesView();
+    else if (state.view === "passes") body = renderPassesView();
+    else if (state.view === "run") body = renderRunWaterfallView();
+    else if (state.view === "trunk") body = renderTrunkView();
+    else if (state.view === "graph") body = renderGraphQuestionsView();
+
+    document.getElementById("app").innerHTML = `
+      ${renderShellTop()}
+      <main class="main-wrap">${body}</main>
+      ${renderItemModal()}
+      ${renderIdeaModal()}
+      ${renderGlossaryModal()}`;
+    wireEvents();
+  }
+
+  function wireEvents() {
+    document.querySelectorAll("[data-nav]").forEach(el => {
+      el.addEventListener("click", (e) => { e.preventDefault(); state.view = el.dataset.nav; render(); window.scrollTo(0, 0); });
+    });
+    document.querySelectorAll("[data-filter-class]").forEach(el => {
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        state.queueFilterClass = el.dataset.filterClass;
+        state.queueFilterState = "unlanded";
+        state.queuePage = 1;
+        state.view = "queue";
+        render();
+      });
+    });
+    document.querySelectorAll("[data-open-item]").forEach(el => {
+      el.addEventListener("click", (e) => { e.preventDefault(); state.selectedItemId = el.dataset.openItem; render(); });
+    });
+    document.querySelectorAll("[data-open-run]").forEach(el => {
+      el.addEventListener("click", (e) => { e.preventDefault(); state.selectedItemId = null; state.selectedRunId = el.dataset.openRun; state.view = "run"; render(); });
+    });
+    document.querySelectorAll("[data-toggle-group]").forEach(el => {
+      el.addEventListener("click", () => { const k = el.dataset.toggleGroup; state.expandedGroups[k] = !state.expandedGroups[k]; render(); });
+    });
+    const dismiss = document.querySelector("[data-dismiss-alarm]");
+    if (dismiss) dismiss.addEventListener("click", () => { state.alarmDismissed = true; render(); });
+    const pauseBtn = document.querySelector("[data-toggle-pause]");
+    if (pauseBtn) pauseBtn.addEventListener("click", () => { state.paused = !state.paused; render(); });
+    const idleBtn = document.querySelector("[data-toggle-idle]");
+    if (idleBtn) idleBtn.addEventListener("click", () => { state.showIdleLanes = !state.showIdleLanes; render(); });
+    const glossBtn = document.querySelector("[data-toggle-glossary]");
+    if (glossBtn) glossBtn.addEventListener("click", () => { state.showGlossaryModal = true; render(); });
+    document.querySelectorAll("[data-close-glossary]").forEach(el => el.addEventListener("click", () => { state.showGlossaryModal = false; render(); }));
+    document.querySelectorAll("[data-close-item]").forEach(el => el.addEventListener("click", () => { state.selectedItemId = null; render(); }));
+    const ideaBtn = document.querySelector("[data-open-idea]");
+    if (ideaBtn) ideaBtn.addEventListener("click", () => { state.showIdeaModal = true; render(); });
+    document.querySelectorAll("[data-close-idea]").forEach(el => el.addEventListener("click", () => { state.showIdeaModal = false; render(); }));
+
+    // Queue filters & freeze
+    const qState = document.getElementById("q-state");
+    if (qState) qState.addEventListener("change", () => { state.queueFilterState = qState.value; state.queuePage = 1; state.queueFrozen = false; render(); });
+    const qClass = document.getElementById("q-class");
+    if (qClass) qClass.addEventListener("change", () => { state.queueFilterClass = qClass.value; state.queuePage = 1; state.queueFrozen = false; render(); });
+    const qSort = document.getElementById("q-sort");
+    if (qSort) qSort.addEventListener("change", () => { state.queueSort = qSort.value; state.queuePage = 1; state.queueFrozen = false; render(); });
+    const qSearch = document.getElementById("q-search");
+    if (qSearch) qSearch.addEventListener("input", () => { state.queueSearch = qSearch.value; state.queuePage = 1; render(); document.getElementById("q-search").focus(); });
+    const clrBtn = document.querySelector("[data-clear-q-filters]");
+    if (clrBtn) clrBtn.addEventListener("click", () => { state.queueFilterClass = ""; state.queueSearch = ""; state.queuePage = 1; render(); });
+    document.querySelectorAll("[data-q-page]").forEach(el => el.addEventListener("click", () => { state.queuePage = Number(el.dataset.qPage); render(); window.scrollTo(0, 0); }));
+    document.querySelectorAll("[data-focus-row]").forEach(el => el.addEventListener("click", () => { state.focusedItemId = el.dataset.focusRow; state.queueFrozen = true; }));
+    const unfreeze = document.querySelector("[data-unfreeze-queue]");
+    if (unfreeze) unfreeze.addEventListener("click", () => { state.queueFrozen = false; state.queuePendingArrivals = 0; render(); });
+    document.querySelectorAll("[data-move-top]").forEach(el => el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = el.dataset.moveTop;
+      const idx = ITEMS.findIndex(i => i.item_id === id);
+      if (idx > 0) {
+        const [moved] = ITEMS.splice(idx, 1);
+        ITEMS.unshift(moved);
+        let p = 1;
+        for (const it of ITEMS) if (it.place !== null) it.place = p++;
+        state.queueFrozen = false;
+        render();
+      }
+    }));
+
+    // Waterfall controls
+    document.querySelectorAll("[data-select-span]").forEach(el => el.addEventListener("click", () => { state.selectedSpanId = el.dataset.selectSpan; render(); }));
+    document.querySelectorAll("[data-wf-zoom]").forEach(el => el.addEventListener("click", () => {
+      const z = el.dataset.wfZoom;
+      if (z === "in") state.wfZoom = Math.min(8, state.wfZoom * 2);
+      else if (z === "out") state.wfZoom = Math.max(1, state.wfZoom / 2);
+      else state.wfZoom = 1;
+      render();
+    }));
+    const wfSearch = document.getElementById("wf-search");
+    if (wfSearch) wfSearch.addEventListener("input", () => { state.wfSearch = wfSearch.value; render(); document.getElementById("wf-search").focus(); });
+    document.querySelectorAll("[data-run-tab]").forEach(el => el.addEventListener("click", () => { state.runTab = el.dataset.runTab; render(); }));
+
+    // Idea modal
+    const ideaInput = document.getElementById("idea-words-input");
+    if (ideaInput) ideaInput.addEventListener("input", () => {
+      state.ideaDraft = ideaInput.value;
+      try { localStorage.setItem("tillr_raildeck_idea_draft", state.ideaDraft); } catch {}
+    });
+    document.querySelectorAll('input[name="idea-place"]').forEach(el => el.addEventListener("change", () => { state.ideaPlace = el.value; }));
+    const submitIdea = document.querySelector("[data-submit-idea]");
+    if (submitIdea) submitIdea.addEventListener("click", () => {
+      const words = (document.getElementById("idea-words-input")?.value || "").trim();
+      if (!words) return;
+      const newId = "item-idea-" + Math.random().toString(16).slice(2, 6);
+      const newItem = {
+        place: 1, item_id: newId, kind: "idea", in_tree: false, words,
+        title: words.slice(0, 72) + (words.length > 72 ? "..." : ""),
+        class: "ready", raw_state: "in-queue", seat: "design",
+        where: "queue.ready", why: "new idea saved via observatory (not yet in the tree)",
+        mover: "drain: express-eligible", since: "just now", waited: "0s",
+        doc: "docs/design/tillr-idea-pipeline.md", open_questions: 0,
+        fence: [`docs/intake/${newId}.txt`, "docs/design/**"], tokens: null, blocked_by: []
+      };
+      ITEMS.unshift(newItem);
+      let p = 1;
+      for (const it of ITEMS) if (it.place !== null) it.place = p++;
+      state.ideaDraft = "";
+      try { localStorage.removeItem("tillr_raildeck_idea_draft"); } catch {}
+      state.showIdeaModal = false;
+      state.view = "queue";
+      state.queueFilterClass = "";
+      state.queueFilterState = "unlanded";
+      render();
+    });
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>
