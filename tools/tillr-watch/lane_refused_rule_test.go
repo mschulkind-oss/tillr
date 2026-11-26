@@ -238,3 +238,100 @@ func TestDrainLaneRefusedRule(t *testing.T) {
 		}
 	}
 }
+
+func TestDrainLaneRefusedAlertTextNamesCurrentCause(t *testing.T) {
+	const ruleID = "drain-lane-refused"
+	rules, err := watch.LoadRules("../../config/tillr/watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := slices.IndexFunc(rules, func(rule watch.Rule) bool { return rule.ID == ruleID })
+	if idx < 0 {
+		t.Fatalf("missing %s rule", ruleID)
+	}
+	rule := rules[idx]
+
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	e := watch.Evaluator{Store: s, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+
+	appendRefused := func(detail, leftBy string) {
+		t.Helper()
+		lane := "lane-2"
+		body, err := json.Marshal(map[string]string{
+			"lane_id": lane,
+			"reason":  "lane-holds-unlanded-change",
+			"detail":  detail,
+			"remedy":  "inspect the fork checkout before clearing it",
+			"left_by": leftBy,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{
+				Kind:       "drain.lane-refused",
+				ObjectType: "lane",
+				ObjectID:   &lane,
+				At:         now,
+				Payload:    body,
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	appendRefused("fork checkout /repo/.forks/lanes/lane-2/f has an undelivered HEAD", "run-1 (item-1)")
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first, err := e.Pending(ctx, "foreground")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 {
+		t.Fatalf("want 1 notice, got %d: %+v", len(first), first)
+	}
+	alertID := first[0].AlertID
+	if !strings.Contains(strings.Join(first[0].Bundle.Guidance.Check, " "), "has an undelivered HEAD") {
+		t.Fatalf("first guidance check = %v, want undelivered HEAD", first[0].Bundle.Guidance.Check)
+	}
+
+	// A newer refusal for the same (lane_id, reason) with a different cause must
+	// keep the same episode/AlertID and update the alert text to the current cause.
+	now = now.Add(2 * time.Minute)
+	appendRefused("fork checkout /repo/.forks/lanes/lane-2/f has different upstream inputs", "run-2 (item-2)")
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second, err := e.Pending(ctx, "foreground")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 1 {
+		t.Fatalf("want 1 notice after updated cause, got %d: %+v", len(second), second)
+	}
+	if second[0].AlertID != alertID {
+		t.Fatalf("AlertID changed from %q to %q on updated cause", alertID, second[0].AlertID)
+	}
+	checkText := strings.Join(second[0].Bundle.Guidance.Check, " ")
+	if !strings.Contains(checkText, "has different upstream inputs") {
+		t.Fatalf("updated guidance check = %v, want current cause", second[0].Bundle.Guidance.Check)
+	}
+	if strings.Contains(checkText, "has an undelivered HEAD") {
+		t.Fatalf("updated guidance check still names earlier cause: %v", second[0].Bundle.Guidance.Check)
+	}
+	if !strings.Contains(second[0].Bundle.Guidance.Summary, "run-2 (item-2)") {
+		t.Fatalf("updated guidance summary = %q, want run-2 (item-2)", second[0].Bundle.Guidance.Summary)
+	}
+}

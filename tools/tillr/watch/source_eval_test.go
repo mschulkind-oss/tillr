@@ -859,3 +859,64 @@ receiver = "foreground"
 		t.Fatalf("expected 0 active alerts after item-closed, got %+v (%v)", st, err)
 	}
 }
+
+func TestSourceEvalUpdatesOpenEpisodeBundle(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	src := &memoryObservationSource{}
+	rule := Rule{
+		ID:       "lane-cause",
+		Scope:    "*",
+		Severity: "warning",
+		Enabled:  true,
+		Reads:    Reads{Events: []string{"drain.lane-refused"}},
+		When: When{
+			GroupBy:   "lane_id",
+			Pattern:   PredicateMatch,
+			Threshold: 1,
+		},
+		Guidance: Guidance{
+			Summary: "lane={{event.lane_id}}",
+			Check:   []string{"cause={{event.detail}}"},
+			Do:      []string{"inspect"},
+		},
+		Delivery: Delivery{Receiver: "foreground"},
+	}
+	e := Evaluator{Source: src, Rules: []Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	src.append("drain.lane-refused", now, map[string]any{
+		"lane_id": "lane-2",
+		"detail":  "has an undelivered HEAD",
+	})
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first, err := e.Pending(ctx, "foreground")
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first Pending = %+v (%v)", first, err)
+	}
+	if len(first[0].Bundle.Guidance.Check) != 1 || first[0].Bundle.Guidance.Check[0] != "cause=has an undelivered HEAD" {
+		t.Fatalf("first check = %v", first[0].Bundle.Guidance.Check)
+	}
+
+	now = now.Add(time.Minute)
+	src.append("drain.lane-refused", now, map[string]any{
+		"lane_id": "lane-2",
+		"detail":  "has different upstream inputs",
+	})
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second, err := e.Pending(ctx, "foreground")
+	if err != nil || len(second) != 1 {
+		t.Fatalf("second Pending = %+v (%v)", second, err)
+	}
+	if second[0].AlertID != first[0].AlertID {
+		t.Fatalf("AlertID changed from %q to %q", first[0].AlertID, second[0].AlertID)
+	}
+	if len(second[0].Bundle.Guidance.Check) != 1 || second[0].Bundle.Guidance.Check[0] != "cause=has different upstream inputs" {
+		t.Fatalf("updated check = %v, want current cause", second[0].Bundle.Guidance.Check)
+	}
+}

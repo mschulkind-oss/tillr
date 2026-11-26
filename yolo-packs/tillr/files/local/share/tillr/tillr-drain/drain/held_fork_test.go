@@ -142,3 +142,71 @@ func TestInterruptedForkReleaseRequiresOriginalPin(t *testing.T) {
 		t.Fatal("release did not finish after restoring its original pin")
 	}
 }
+
+func TestHeldForkRestoresUpstreamRefsInAnotherLane(t *testing.T) {
+	f, l, c := heldForkFixture(t)
+	runGit(t, c.Worktree, "update-ref", "refs/remotes/upstream/stable", c.BaseSHA)
+	releaseForRestage(t, f, l, c)
+
+	destWorktree := filepath.Join(f.root, ".forks", "lanes", "lane-2", "fixture-fork")
+	if err := os.MkdirAll(destWorktree, 0755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, destWorktree, "init", "-b", "main")
+	runGit(t, destWorktree, "fetch", "--no-tags", f.root, c.BaseRef)
+	runGit(t, destWorktree, "checkout", "-q", "-B", "main", "FETCH_HEAD")
+	runGit(t, destWorktree, "remote", "add", "upstream", filepath.Join(f.root, "original-upstream"))
+	// Simulate newer upstream fetches in lane-2 than when lane-1 held the candidate.
+	runGit(t, destWorktree, "commit", "--allow-empty", "-qm", "newer upstream main")
+	newerMain := runGit(t, destWorktree, "rev-parse", "HEAD")
+	runGit(t, destWorktree, "update-ref", "refs/remotes/upstream/main", newerMain)
+	runGit(t, destWorktree, "commit", "--allow-empty", "-qm", "newer upstream stable")
+	newerStable := runGit(t, destWorktree, "rev-parse", "HEAD")
+	runGit(t, destWorktree, "update-ref", "refs/remotes/upstream/stable", newerStable)
+	runGit(t, destWorktree, "reset", "--hard", c.BaseSHA)
+
+	work := assignHeldForTest(t, f, l, c)
+	if err := l.stagePinnedCandidate(context.Background(), work); err != nil {
+		t.Fatalf("stagePinnedCandidate refused lane with newer upstream refs: %v", err)
+	}
+	restored := *work.Candidate
+	if restored.Worktree != destWorktree {
+		t.Fatalf("restored worktree = %q, want %q", restored.Worktree, destWorktree)
+	}
+	got := runGit(t, restored.Worktree, "rev-parse", "HEAD", "refs/remotes/upstream/main", "refs/remotes/upstream/stable", "refs/tags/fork-base")
+	want := strings.Join([]string{c.HeadSHA, c.BaseSHA, c.BaseSHA, c.BaseSHA}, "\n")
+	if got != want {
+		t.Fatalf("restored fork refs = %q, want %q", got, want)
+	}
+	if raw, err := os.ReadFile(filepath.Join(restored.Worktree, "candidate.txt")); err != nil || string(raw) != "fork-only candidate\n" {
+		t.Fatalf("restored fork contents: %q (%v)", raw, err)
+	}
+	if why, err := l.fenceViolation(context.Background(), restored); err != nil || why != "" {
+		t.Fatalf("rebound fence: %q (%v)", why, err)
+	}
+}
+
+func TestHeldForkStillRefusesConflictingTagInAnotherLane(t *testing.T) {
+	f, l, c := heldForkFixture(t)
+	releaseForRestage(t, f, l, c)
+
+	destWorktree := filepath.Join(f.root, ".forks", "lanes", "lane-2", "fixture-fork")
+	if err := os.MkdirAll(destWorktree, 0755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, destWorktree, "init", "-b", "main")
+	runGit(t, destWorktree, "fetch", "--no-tags", f.root, c.BaseRef)
+	runGit(t, destWorktree, "checkout", "-q", "-B", "main", "FETCH_HEAD")
+	runGit(t, destWorktree, "remote", "add", "upstream", filepath.Join(f.root, "original-upstream"))
+	runGit(t, destWorktree, "commit", "--allow-empty", "-qm", "other tag target")
+	otherTag := runGit(t, destWorktree, "rev-parse", "HEAD")
+	runGit(t, destWorktree, "tag", "fork-base", otherTag)
+	runGit(t, destWorktree, "reset", "--hard", c.BaseSHA)
+
+	work := assignHeldForTest(t, f, l, c)
+	err := l.stagePinnedCandidate(context.Background(), work)
+	refusal := asLaneRefusal(err)
+	if refusal == nil || refusal.Reason != ReasonLaneUnlandedChange || !strings.Contains(refusal.Msg, "has different upstream inputs") {
+		t.Fatalf("stagePinnedCandidate err = %v, want lane refusal for different upstream inputs", err)
+	}
+}

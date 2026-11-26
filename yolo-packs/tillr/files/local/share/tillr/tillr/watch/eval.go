@@ -1444,6 +1444,10 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 		if r.When.Pattern != LagBehind {
 			newest = conditionNewest(r, c, ep.last)
 			if newest.Seq > ep.last {
+				bundle, err := makeBundle(r, key, ep.id, c)
+				if err != nil {
+					return err
+				}
 				varsJSON := encodeVariablesJSON(extractVariables(r, key, c))
 				*changes = append(*changes, func(tx *store.Tx) error {
 					hasVarsCol, err := alertEpisodesHasColumn(tx.Reader(), "variables_json")
@@ -1451,10 +1455,10 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 						return err
 					}
 					if hasVarsCol {
-						_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=?,variables_json=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, varsJSON, ep.id)
+						_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=?,bundle_json=?,variables_json=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, string(bundle), varsJSON, ep.id)
 						return err
 					}
-					_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
+					_, err = tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=?,bundle_json=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, string(bundle), ep.id)
 					return err
 				})
 			}

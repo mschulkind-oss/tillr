@@ -1007,10 +1007,15 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 		if r.When.Pattern != LagBehind {
 			newest = conditionNewest(r, c, ep.last)
 			if newest.Seq > ep.last {
+				bundle, err := makeBundle(r, key, ep.id, c)
+				if err != nil {
+					return err
+				}
 				memEp.lastObservedSeq = newest.Seq
 				memEp.lastObservedAt = now.UnixMilli()
 				memEp.observationCount++
 				memEp.conditionFingerprint = newest.fingerprint
+				memEp.bundleJSON = string(bundle)
 				memEp.variablesJSON = encodeVariablesJSON(extractVariables(r, key, c))
 			}
 		}

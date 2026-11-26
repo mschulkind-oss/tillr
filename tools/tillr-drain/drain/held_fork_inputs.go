@@ -118,9 +118,13 @@ func (l *Loop) restoreHeldForkRefs(ctx context.Context, c Candidate, path string
 	for _, line := range forkRefLines(s.Refs) {
 		name, oid, _ := strings.Cut(line, " ")
 		if have := dest[name]; have != "" {
-			if have != oid {
+			if have == oid {
+				continue
+			}
+			if !strings.HasPrefix(name, "refs/remotes/upstream/") {
 				return refuse()
 			}
+			args = append(args, "+"+s.Prefix(candidatePinRef(c))+name+":"+name)
 			continue
 		}
 		args = append(args, s.Prefix(candidatePinRef(c))+name+":"+name)
