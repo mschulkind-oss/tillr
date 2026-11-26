@@ -258,27 +258,27 @@ func TestTrunkProofLagRule(t *testing.T) {
 		return notices
 	}
 
-	// Six commits landing ~3m apart over 18m (< 30m) open no notice regardless of commit count.
+	// Six commits landing ~3m apart over 18m (< 95m) open no notice regardless of commit count.
 	t0 := now
 	for i := 0; i < 6; i++ {
 		advanceAt(t0.Add(time.Duration(i*3) * time.Minute))
 	}
-	now = t0.Add(29 * time.Minute)
+	now = t0.Add(94 * time.Minute)
 	if notices := pending(); len(notices) != 0 {
-		t.Fatalf("six commits ahead for 29m (< 30m) opened notices: %+v", notices)
+		t.Fatalf("six commits ahead for 94m (< 95m) opened notices: %+v", notices)
 	}
 
-	// At 30m since the oldest unproved commit, one foreground notice opens and stays stable.
-	now = t0.Add(30 * time.Minute)
+	// At 95m since the oldest unproved commit, one foreground notice opens and stays stable.
+	now = t0.Add(95 * time.Minute)
 	first := pending()
 	if len(first) != 1 {
-		t.Fatalf("want one foreground notice at 30m unproved age, got %+v", first)
+		t.Fatalf("want one foreground notice at 95m unproved age, got %+v", first)
 	}
 	if advice := strings.Join(first[0].Bundle.Guidance.Do, " "); !strings.Contains(strings.ToLower(advice), "heavy runner") {
 		t.Fatalf("notice advice does not mention the heavy runner: %+v", first[0].Bundle.Guidance)
 	}
 	advanceAt(now)
-	now = t0.Add(35 * time.Minute)
+	now = t0.Add(100 * time.Minute)
 	if notices := pending(); len(notices) != 1 || notices[0].AlertID != first[0].AlertID {
 		t.Fatalf("repeat evaluation must retain the single alert ID: first %+v, now %+v", first, notices)
 	}

@@ -1,8 +1,17 @@
 # On 2026-11-21 the trunk went about an hour without proof three times
 # while the heavy runner was stuck in a deadlocked test. Landings and reverts
-# are recorded as land.landing and drain.revert; lag_behind reads Git refs so
-# normal ~15m proofs with steady landings stay quiet until the oldest unproved
-# commit reaches 30m, while trunk-proof-stalled catches a hung proof in 10m.
+# are recorded as land.landing and drain.revert; lag_behind reads Git refs, while
+# trunk-proof-stalled catches a hung proof in 10m. Because proofs run one at a
+# time, a commit landing just after a proof starts waits for both that proof and
+# the next one before refs/tillr/green covers it.
+# Measured on 2026-11-26 from recorded land.landing to covering drain.heavy-progress
+# ended/green history in .tillr/state.db with:
+#   python3 -c 'import json, sqlite3, subprocess; revs = subprocess.check_output(["git", "rev-list", "--reverse", "refs/heads/main"], text=True).splitlines(); pos = {s: i for i, s in enumerate(revs)}; c = sqlite3.connect("file:.tillr/state.db?mode=ro&readonly_shm=1", uri=True); lands = [(seq, ts, json.loads(p).get("trunk_after", "")) for seq, ts, p in c.execute("SELECT seq, ts, payload FROM events WHERE kind = \"land.landing\" AND json_extract(payload, \"$.result\") = \"landed\" ORDER BY seq")]; ends = [(seq, ts, json.loads(p).get("tip_sha", ""), json.loads(p).get("outcome", "")) for seq, ts, p in c.execute("SELECT seq, ts, payload FROM events WHERE kind = \"drain.heavy-progress\" AND json_extract(payload, \"$.phase\") = \"ended\" ORDER BY seq")]; greens = [(s, t, sha) for s, t, sha, o in ends if o == "green" and sha in pos]; cov = [((gt - lt) / 1000.0, [o for es, _, _, o in ends if ls < es < gs]) for ls, lt, sha in lands if sha in pos for gs, gt, _ in [next(((gs, gt, gsha) for gs, gt, gsha in greens if gs > ls and pos[sha] <= pos[gsha]), (0, 0, ""))] if gs]; all_s = sorted(w for w, _ in cov); wrk_s = sorted(w for w, inter in cov if all(o == "green" for o in inter)); print(f"all={len(all_s)} min={all_s[0]:.1f}s p50={all_s[len(all_s)//2]:.1f}s p90={all_s[int(len(all_s)*0.9)]:.1f}s max={all_s[-1]:.1f}s; working={len(wrk_s)} min={wrk_s[0]:.1f}s p50={wrk_s[len(wrk_s)//2]:.1f}s p90={wrk_s[int(len(wrk_s)*0.9)]:.1f}s max={wrk_s[-1]:.1f}s")'
+# Result (2026-11-26): all=103 min=1824.1s p50=15353.4s p90=21966.0s max=24007.0s; working=10 min=2022.1s p50=3646.0s p90=5442.2s max=5442.2s
+# Every commit proved by an uninterrupted working heavy runner (zero red,
+# cancelled, or faulted proofs between landing and covering green proof) waited
+# <= 5442.2s (90.7m); waits above 90.7m had intervening red or cancelled proofs.
+# Set threshold_duration = "95m".
 [[rule]]
 id = "trunk-proof-lag"
 scope = "core"
@@ -17,7 +26,7 @@ group_by = "global"
 pattern = "lag_behind"
 leader = "refs/heads/main"
 follower = "refs/tillr/green"
-threshold_duration = "30m"
+threshold_duration = "95m"
 reopen_when = 'event.kind == "drain.heavy-progress" and event.phase == "ended" and event.outcome == "red"'
 
 [rule.guidance]

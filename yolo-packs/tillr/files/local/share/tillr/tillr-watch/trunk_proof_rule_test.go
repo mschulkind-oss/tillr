@@ -190,32 +190,70 @@ func TestTrunkProofRulesStayQuietDuringActiveFifteenMinuteProofWithNormalLanding
 	}
 
 	// Even 15m after ended (no running proof), trunk-proof-stalled stays disarmed;
-	// catching up tip6 before 30m keeps trunk-proof-lag silent too.
+	// catching up tip6 before 95m keeps trunk-proof-lag silent too.
 	f.markGreen(tip6)
 	if notices := f.pendingAt(t0.Add(35 * time.Minute)); len(notices) != 0 {
 		t.Fatalf("expected silence while idle after ended and green caught up, got %+v", notices)
 	}
 }
 
-func TestTrunkProofLagFiresAtThirtyMinutesUnprovedAge(t *testing.T) {
+func TestTrunkProofLagStaysQuietAcrossTwoWorkingProofs(t *testing.T) {
+	f := newTrunkProofFixture(t)
+	t0 := f.now
+
+	// Proof 1 starts on tip1, then tip2 lands 1m later and must wait for both
+	// proof 1 (40m) and proof 2 (45m) before refs/tillr/green covers it (85m total).
+	tip1 := f.landAt(t0)
+	f.appendProgress(t0, drain.HeavyProgressFact{TipSHA: tip1, Phase: "started"})
+	tip2 := f.landAt(t0.Add(1 * time.Minute))
+
+	for _, elapsed := range []time.Duration{8, 16, 24, 32} {
+		f.appendProgress(t0.Add(elapsed*time.Minute), drain.HeavyProgressFact{TipSHA: tip1, Phase: "progress", CheckID: "go-shards", Outcome: "pass"})
+		if notices := f.pendingAt(t0.Add(elapsed * time.Minute)); len(notices) != 0 {
+			t.Fatalf("expected silence during proof 1 at %dm, got %+v", elapsed, notices)
+		}
+	}
+	f.markGreen(tip1)
+	f.appendProgress(t0.Add(40*time.Minute), drain.HeavyProgressFact{TipSHA: tip1, Phase: "ended", Outcome: "green"})
+	if notices := f.pendingAt(t0.Add(40 * time.Minute)); len(notices) != 0 {
+		t.Fatalf("expected silence when proof 1 ends at 40m (tip2 age 39m), got %+v", notices)
+	}
+
+	f.appendProgress(t0.Add(41*time.Minute), drain.HeavyProgressFact{TipSHA: tip2, Phase: "started"})
+	for _, elapsed := range []time.Duration{49, 57, 65, 73, 81, 89} {
+		f.appendProgress(t0.Add(elapsed*time.Minute), drain.HeavyProgressFact{TipSHA: tip2, Phase: "progress", CheckID: "go-shards", Outcome: "pass"})
+		if notices := f.pendingAt(t0.Add(elapsed * time.Minute)); len(notices) != 0 {
+			t.Fatalf("expected silence during proof 2 at %dm (tip2 age %dm), got %+v", elapsed, elapsed-1, notices)
+		}
+	}
+	f.markGreen(tip2)
+	f.appendProgress(t0.Add(91*time.Minute), drain.HeavyProgressFact{TipSHA: tip2, Phase: "ended", Outcome: "green"})
+	if notices := f.pendingAt(t0.Add(91 * time.Minute)); len(notices) != 0 {
+		t.Fatalf("expected silence when proof 2 covers tip2 at 90m wait, got %+v", notices)
+	}
+}
+
+func TestTrunkProofLagFiresAtNinetyFiveMinutesUnprovedAge(t *testing.T) {
 	f := newTrunkProofFixture(t)
 	t0 := f.now
 	tip := f.landAt(t0)
 
-	if notices := f.pendingAt(t0.Add(29 * time.Minute)); len(notices) != 0 {
-		t.Fatalf("expected silence at 29m unproved age, got %+v", notices)
+	for _, elapsed := range []time.Duration{30, 60, 90, 94} {
+		if notices := f.pendingAt(t0.Add(elapsed * time.Minute)); len(notices) != 0 {
+			t.Fatalf("expected silence at %dm unproved age, got %+v", elapsed, notices)
+		}
 	}
 
-	notices := f.pendingAt(t0.Add(30 * time.Minute))
+	notices := f.pendingAt(t0.Add(95 * time.Minute))
 	if len(notices) != 1 || notices[0].Bundle.RuleID != "trunk-proof-lag" {
-		t.Fatalf("want one trunk-proof-lag notice at 30m, got %+v", notices)
+		t.Fatalf("want one trunk-proof-lag notice at 95m, got %+v", notices)
 	}
-	if !strings.Contains(notices[0].Bundle.Guidance.Summary, "30m") {
-		t.Fatalf("want 30m in trunk-proof-lag summary, got %q", notices[0].Bundle.Guidance.Summary)
+	if !strings.Contains(notices[0].Bundle.Guidance.Summary, "95m") {
+		t.Fatalf("want 95m in trunk-proof-lag summary, got %q", notices[0].Bundle.Guidance.Summary)
 	}
 
 	f.markGreen(tip)
-	if after := f.pendingAt(t0.Add(31 * time.Minute)); len(after) != 0 {
+	if after := f.pendingAt(t0.Add(96 * time.Minute)); len(after) != 0 {
 		t.Fatalf("expected trunk-proof-lag to resolve once green catches up, got %+v", after)
 	}
 }
@@ -474,11 +512,11 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 				s:    s,
 				now:  now,
 			}
-			f.gitAt(now.Add(-40*time.Minute), "", "init", "--quiet", "--initial-branch=main")
-			f.tree = f.gitAt(now.Add(-40*time.Minute), "", "mktree")
-			f.head = f.gitAt(now.Add(-40*time.Minute), "base", "commit-tree", f.tree)
-			f.gitAt(now.Add(-40*time.Minute), "", "update-ref", "refs/heads/main", f.head)
-			f.gitAt(now.Add(-40*time.Minute), "", "update-ref", "refs/tillr/green", f.head)
+			f.gitAt(now.Add(-110*time.Minute), "", "init", "--quiet", "--initial-branch=main")
+			f.tree = f.gitAt(now.Add(-110*time.Minute), "", "mktree")
+			f.head = f.gitAt(now.Add(-110*time.Minute), "base", "commit-tree", f.tree)
+			f.gitAt(now.Add(-110*time.Minute), "", "update-ref", "refs/heads/main", f.head)
+			f.gitAt(now.Add(-110*time.Minute), "", "update-ref", "refs/tillr/green", f.head)
 
 			if ackMode == "settle" {
 				seedCLIItems(t, s, map[string]string{"item-open": "in-queue"})
@@ -542,8 +580,8 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 				t.Fatalf("init eval: code=%d out=%q err=%q", code, out, errOut)
 			}
 
-			// Open trunk-proof-lag (>= 30m lag), deliver via wait, mark seen, and acknowledge.
-			tip1 := f.landAt(now.Add(-35 * time.Minute))
+			// Open trunk-proof-lag (>= 95m lag), deliver via wait, mark seen, and acknowledge.
+			tip1 := f.landAt(now.Add(-100 * time.Minute))
 			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
 				t.Fatalf("open eval: code=%d out=%q err=%q", code, out, errOut)
 			}
