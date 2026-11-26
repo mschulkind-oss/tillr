@@ -35,6 +35,19 @@ type landedCost struct {
 	sum                costSum
 }
 
+func resolveRunSeat(itemSeat string, nodeID, nodeSeat, dispatchSeat sql.NullString) string {
+	if nodeSeat.Valid && nodeSeat.String != "" {
+		return nodeSeat.String
+	}
+	if dispatchSeat.Valid && dispatchSeat.String != "" {
+		return dispatchSeat.String
+	}
+	if nodeID.Valid {
+		return "unknown"
+	}
+	return itemSeat
+}
+
 // landedCosts reads the run ledger, not the current policy. A legacy node's seat is
 // recoverable from seat_dispatches where present; it is never invented from its item.
 func landedCosts(r *store.Reader, out io.Writer) error {
@@ -74,18 +87,19 @@ func landedCosts(r *store.Reader, out io.Writer) error {
 		return err
 	}
 	nodeID, nodeSeat, dispatchSeat, workflow, cost := "NULL", "NULL", "NULL", "''", "NULL"
-	joins := ""
+	runJoins := ""
 	if hasNodes {
-		joins += " LEFT JOIN node_runs n ON n.run_id=r.run_id"
+		runJoins += " LEFT JOIN node_runs n ON n.run_id=r.run_id"
 		nodeID = "n.run_id"
 		if hasSeat {
 			nodeSeat = "n.seat"
 		}
 	}
 	if hasDispatch {
-		joins += " LEFT JOIN seat_dispatches sd ON sd.run_id=r.run_id"
+		runJoins += " LEFT JOIN seat_dispatches sd ON sd.run_id=r.run_id"
 		dispatchSeat = "sd.seat"
 	}
+	joins := runJoins
 	if hasWorkflow {
 		joins += " LEFT JOIN workflow_selections w ON w.item_id=i.item_id"
 		workflow = "COALESCE(w.workflow,'')"
@@ -105,7 +119,7 @@ func landedCosts(r *store.Reader, out io.Writer) error {
 	}
 	defer rows.Close()
 	var items []*landedCost
-	seats := map[string]*costSum{}
+	landedSeats := map[string]*costSum{}
 	for rows.Next() {
 		var id, seat, workflow string
 		var runID, nodeID, nodeSeat, dispatchSeat sql.NullString
@@ -121,32 +135,55 @@ func landedCosts(r *store.Reader, out io.Writer) error {
 		}
 		current := items[len(items)-1]
 		current.sum.add(value)
-		runSeat := seat
-		if nodeSeat.Valid && nodeSeat.String != "" {
-			runSeat = nodeSeat.String
-		} else if dispatchSeat.Valid && dispatchSeat.String != "" {
-			runSeat = dispatchSeat.String
-		} else if nodeID.Valid {
-			runSeat = "unknown"
+		runSeat := resolveRunSeat(seat, nodeID, nodeSeat, dispatchSeat)
+		if landedSeats[runSeat] == nil {
+			landedSeats[runSeat] = &costSum{}
 		}
-		if seats[runSeat] == nil {
-			seats[runSeat] = &costSum{}
-		}
-		seats[runSeat].add(value)
+		landedSeats[runSeat].add(value)
 	}
 	if err := rows.Err(); err != nil {
+		return err
+	}
+	allSeats := map[string]*costSum{}
+	allQ := `SELECT COALESCE(NULLIF(i.seat,''),'build'),` + nodeID + `,` + nodeSeat + `,` + dispatchSeat + `,` + cost + `
+ FROM runs r
+ LEFT JOIN items i ON i.item_id=r.item_id` + runJoins + `
+ ORDER BY r.run_id`
+	allRows, err := r.Query(allQ)
+	if err != nil {
+		return err
+	}
+	defer allRows.Close()
+	for allRows.Next() {
+		var seat string
+		var nodeID, nodeSeat, dispatchSeat sql.NullString
+		var value sql.NullFloat64
+		if err := allRows.Scan(&seat, &nodeID, &nodeSeat, &dispatchSeat, &value); err != nil {
+			return err
+		}
+		runSeat := resolveRunSeat(seat, nodeID, nodeSeat, dispatchSeat)
+		if allSeats[runSeat] == nil {
+			allSeats[runSeat] = &costSum{}
+		}
+		allSeats[runSeat].add(value)
+	}
+	if err := allRows.Err(); err != nil {
 		return err
 	}
 	for _, item := range items {
 		fmt.Fprintf(out, "cost per landed item: %s %s\n", item.id, item.sum.String())
 	}
-	names := make([]string, 0, len(seats))
-	for name := range seats {
+	names := make([]string, 0, len(allSeats))
+	for name := range allSeats {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		fmt.Fprintf(out, "cost per seat: %s %s\n", name, seats[name].String())
+		landed := "$0.00"
+		if ls := landedSeats[name]; ls != nil && ls.runs > 0 {
+			landed = ls.String()
+		}
+		fmt.Fprintf(out, "cost per seat: %s %s (landed: %s)\n", name, allSeats[name].String(), landed)
 	}
 	var builds, planned []costSum
 	for _, item := range items {
