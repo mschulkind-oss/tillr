@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -273,6 +274,18 @@ func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.T
 	}
 }
 
+func idleStartSnapUnchanged(cur, prev *startSnapshot) bool {
+	if cur == prev {
+		return true
+	}
+	if cur == nil || prev == nil {
+		return false
+	}
+	cmp := *cur
+	cmp.lastEventSeq = prev.lastEventSeq
+	return reflect.DeepEqual(&cmp, prev)
+}
+
 func (l *Loop) idleUnchanged(ctx context.Context, at time.Time, pendingOnly bool) bool {
 	idle := l.idleState
 	if idle == nil || idle.pendingOnly != pendingOnly {
@@ -295,10 +308,13 @@ func (l *Loop) idleUnchanged(ctx context.Context, at time.Time, pendingOnly bool
 	if !maps.Equal(l.heldReasonsSnapshot(), idle.held) {
 		return false
 	}
+	var nextStartSnap *startSnapshot
 	if view := l.startView.Load(); view != nil {
-		if view.current.Load() != idle.startSnap {
+		cur := view.current.Load()
+		if !idleStartSnapUnchanged(cur, idle.startSnap) {
 			return false
 		}
+		nextStartSnap = cur
 	}
 	if trunkSHA, greenSHA, ok := l.readIdleRefs(ctx); !ok || trunkSHA != idle.trunkSHA || greenSHA != idle.greenSHA {
 		return false
@@ -312,6 +328,9 @@ func (l *Loop) idleUnchanged(ctx context.Context, at time.Time, pendingOnly bool
 	}
 	if !slices.Equal(states, idle.itemStates) {
 		return false
+	}
+	if nextStartSnap != nil {
+		idle.startSnap = nextStartSnap
 	}
 	idle.eventSeq = latestSeq
 	return true

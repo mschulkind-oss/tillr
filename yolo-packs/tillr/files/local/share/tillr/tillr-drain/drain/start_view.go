@@ -137,6 +137,8 @@ type startView struct {
 	current           atomic.Pointer[startSnapshot]
 	laneTargetChanged chan struct{} // Coalesced notification for the watcher.
 	updated           chan struct{} // Coalesced notification for the start coordinator.
+	seeded            chan struct{} // Closed once after the initial watcher seed attempt.
+	seededOnce        sync.Once
 	storePoll         time.Duration // Used when the filesystem watcher is unavailable.
 
 	mu       sync.Mutex // Serializes publication, never held across a read.
@@ -147,7 +149,17 @@ type startView struct {
 }
 
 func newStartView() *startView {
-	return &startView{updated: make(chan struct{}, 1), laneTargetChanged: make(chan struct{}, 1)}
+	return &startView{
+		updated:           make(chan struct{}, 1),
+		laneTargetChanged: make(chan struct{}, 1),
+		seeded:            make(chan struct{}),
+	}
+}
+
+func (v *startView) markSeeded() {
+	if v.seeded != nil {
+		v.seededOnce.Do(func() { close(v.seeded) })
+	}
 }
 
 func (v *startView) snapshot() startSnapshot {
@@ -181,6 +193,7 @@ func (v *startView) watch(parent context.Context, interval time.Duration, open f
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer v.markSeeded()
 		var w startWatcher
 		if open != nil && ctx.Err() == nil {
 			w = open(ctx)
@@ -270,6 +283,7 @@ func (v *startView) runWatcherLoop(ctx context.Context, interval time.Duration, 
 		v.mu.Unlock()
 	}
 	refresh() // seed
+	v.markSeeded()
 	for ctx.Err() == nil {
 		select {
 		case <-ctx.Done():

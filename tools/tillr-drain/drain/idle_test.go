@@ -398,3 +398,79 @@ func TestIdleCaptureRejectsTrunkMoveSinceDocumentSync(t *testing.T) {
 		t.Fatalf("next pass SyncedSHA = %s, want %s", result.SyncedSHA, moved)
 	}
 }
+
+func TestIdleUnchangedIgnoresStartSnapshotLastEventSeqOnly(t *testing.T) {
+	f, l := passFixture(t, "held-a")
+	l.cfg.ExitWhenDrained = false
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = ?`, StateBlocked)
+		return err
+	})
+	view := newStartView()
+	initial := &startSnapshot{lastEventSeq: 1, tip: "abc"}
+	view.current.Store(initial)
+	l.startView.Store(view)
+	t.Cleanup(func() { l.startView.Store(nil) })
+
+	ctx := context.Background()
+	l.idleState = l.captureIdleState(ctx, nil, l.cfg.Now().UTC(), true)
+	if l.idleState == nil {
+		t.Fatal("expected non-nil idleState")
+	}
+
+	// Recording an idle telemetry event and publishing a startSnapshot whose only
+	// change is lastEventSeq must keep idleUnchanged true and advance idleState.startSnap.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		sid := "session-1"
+		_, err := tx.Append(event.Event{
+			Kind:       LoopPassKind,
+			ObjectType: "session",
+			ObjectID:   &sid,
+			Payload:    []byte(`{}`),
+			At:         l.cfg.Now().UTC(),
+		})
+		return err
+	})
+	telemetryOnly := &startSnapshot{lastEventSeq: 2, tip: "abc"}
+	view.current.Store(telemetryOnly)
+	if !l.idleUnchanged(ctx, l.cfg.Now().UTC(), true) {
+		t.Fatal("idleUnchanged returned false when only startSnapshot.lastEventSeq changed on telemetry")
+	}
+	if l.idleState.startSnap != telemetryOnly {
+		t.Fatalf("idleState.startSnap = %p, want %p", l.idleState.startSnap, telemetryOnly)
+	}
+
+	// Any non-telemetry change in startSnapshot must wake the idle loop.
+	view.current.Store(&startSnapshot{lastEventSeq: 2, tip: "def"})
+	if l.idleUnchanged(ctx, l.cfg.Now().UTC(), true) {
+		t.Fatal("idleUnchanged returned true when startSnapshot.tip changed")
+	}
+}
+
+func TestStartViewWatchClosesSeededAfterInitialRefresh(t *testing.T) {
+	view := newStartView()
+	release := make(chan struct{})
+	var calls atomic.Int32
+	stop := view.watch(context.Background(), time.Hour, nil, func(context.Context, startWatchChange) (startSnapshot, error) {
+		if calls.Add(1) == 1 {
+			<-release
+		}
+		return startSnapshot{lastEventSeq: 7}, nil
+	})
+	defer stop()
+
+	select {
+	case <-view.seeded:
+		t.Fatal("view.seeded closed before initial refresh finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-view.seeded:
+	case <-time.After(hangGuard):
+		t.Fatal("view.seeded did not close after initial refresh")
+	}
+	if got := view.snapshot().lastEventSeq; got != 7 {
+		t.Fatalf("snapshot lastEventSeq = %d, want 7", got)
+	}
+}

@@ -1195,6 +1195,10 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	l.startView.Store(view)
 	defer l.startView.Store(nil)
 	defer l.watchStartView(ctx, view, startViewRefreshInterval)()
+	select {
+	case <-view.seeded:
+	case <-ctx.Done():
+	}
 	defer l.startTriggerNotify(ctx)()
 	stopExamine := func() {}
 	if !l.pollOnly && l.ownerMigrationItem == "" {
