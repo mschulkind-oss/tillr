@@ -48,4 +48,7 @@ func TestReadReturnsDigestAndExecutable(t *testing.T) {
 			t.Fatalf("Read().String() = %q, missing %q", line, want)
 		}
 	}
+	if !strings.HasPrefix(s.SupportRevision, "sha256:") || len(s.SupportRevision) != len("sha256:")+64 {
+		t.Fatalf("Read().SupportRevision = %q, want sha256:<64-hex>", s.SupportRevision)
+	}
 }

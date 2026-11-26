@@ -624,6 +624,22 @@ func LoopCommand(root string, extra []string) []string {
 	return append(cmd, extra...)
 }
 
+func resolveDrainExecutable() string {
+	if launcher := strings.TrimSpace(os.Getenv("TILLR_LAUNCHER")); launcher != "" {
+		return launcher
+	}
+	if _, err := exec.LookPath("tillr-drain"); err == nil {
+		return "tillr-drain"
+	}
+	if exe, err := os.Executable(); err == nil {
+		exe = strings.TrimSuffix(exe, " (deleted)")
+		if drainNameRE.MatchString(filepath.Base(exe)) {
+			return exe
+		}
+	}
+	return "tillr-drain"
+}
+
 type recordedLaunch struct {
 	Policy *string `json:"policy,omitempty"`
 	Lanes  *string `json:"lanes,omitempty"`
@@ -831,7 +847,7 @@ func runForeground(root string, extra []string, lockPath string, stdout, stderr 
 		attemptExtra := LaunchExtraForAttempt(root, extra, sessionStart, adopted, launches)
 		launches++
 		argv := LoopCommand(root, attemptExtra)
-		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd := exec.Command(resolveDrainExecutable(), argv[1:]...)
 		cmd.Dir = root
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr

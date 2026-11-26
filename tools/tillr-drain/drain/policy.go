@@ -336,12 +336,24 @@ func checkBackend(name string, b Backend) error {
 
 // CheckAdapters verifies that every backend's adapter exists and is executable.
 func (p Policy) CheckAdapters(root string) error {
+	_, err := p.CheckAdaptersWithOrigin(root)
+	return err
+}
+
+// CheckAdaptersWithOrigin verifies that every backend's adapter exists and is
+// executable, and reports whether any adapter resolved from tillr's installation.
+func (p Policy) CheckAdaptersWithOrigin(root string) (bool, error) {
+	usedInstall := false
 	for _, name := range backendNames(p.Backends) {
-		if _, err := setupcheck.CheckAdapter(root, p.Backends[name].Adapter); err != nil {
-			return Usagef("the policy's backend %q: %v", name, err)
+		_, fromInstall, err := setupcheck.CheckAdapterWithOrigin(root, p.Backends[name].Adapter)
+		if fromInstall {
+			usedInstall = true
+		}
+		if err != nil {
+			return usedInstall, Usagef("the policy's backend %q: %v", name, err)
 		}
 	}
-	return nil
+	return usedInstall, nil
 }
 
 // firstBackend answers the backend an item's first dispatch names: its per-item override

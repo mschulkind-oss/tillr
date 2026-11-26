@@ -200,3 +200,90 @@ func TestMainExitCodes(t *testing.T) {
 		t.Fatalf("stderr = %q", errBuf.String())
 	}
 }
+
+func TestSupportRevisionDeterministicAndExclusions(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init")
+
+	writeFile := func(rel, content string) {
+		t.Helper()
+		p := filepath.Join(repo, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeFile("tools/tillr-run/backends/brief-template.md", "# brief\n")
+	writeFile("tools/tillr-trace/bash-shim.sh", "#!/bin/sh\n")
+	writeFile("tools/tillr-gate/change-gate.py", "# gate\n")
+	writeFile("config/tillr/workflows/planned-build@v1.json", "{}\n")
+	// Excluded files:
+	writeFile("tools/tillr-run/backends/README.md", "ignored\n")
+	writeFile("tools/tillr-run/backends/testdata/fixture.txt", "ignored\n")
+	writeFile("tools/tillr-run/backends/__pycache__/x.pyc", "ignored\n")
+	writeFile("tools/tillr-gate/change-gate.test.py", "ignored\n")
+	runGit("add", ".")
+
+	rev1, err := ComputeSupportRevision(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(rev1, "sha256:") || len(rev1) != len("sha256:")+64 {
+		t.Fatalf("unexpected SupportRevision format: %q", rev1)
+	}
+
+	// Changing excluded files must not change SupportRevision.
+	writeFile("tools/tillr-run/backends/README.md", "changed\n")
+	writeFile("tools/tillr-run/backends/testdata/fixture.txt", "changed\n")
+	writeFile("tools/tillr-gate/change-gate.test.py", "changed\n")
+	rev2, err := ComputeSupportRevision(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev2 != rev1 {
+		t.Fatalf("excluded file edit changed SupportRevision: %q -> %q", rev1, rev2)
+	}
+
+	// Changing a support file must change SupportRevision.
+	writeFile("tools/tillr-gate/change-gate.py", "# gate v2\n")
+	rev3, err := ComputeSupportRevision(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev3 == rev1 {
+		t.Fatalf("support file edit did not change SupportRevision (%q)", rev3)
+	}
+
+	// WriteSupportRevision + Sync mirrors support-revision into tillr pack copy.
+	writeFile("tools/tillr/README.md", "tillr\n")
+	runGit("add", ".")
+	var out, errBuf bytes.Buffer
+	if code := Main([]string{"--sync", repo, "tillr"}, &out, &errBuf); code != 0 {
+		t.Fatalf("Sync failed: %s", errBuf.String())
+	}
+	gotSrc, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(SupportRevisionRelPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(gotSrc)) != rev3 {
+		t.Fatalf("wrote %q, want %q", strings.TrimSpace(string(gotSrc)), rev3)
+	}
+	gotMirror, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(MirrorRoot), filepath.FromSlash(SupportRevisionBuildstampRelPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotSrc, gotMirror) {
+		t.Fatalf("mirror %q != source %q", string(gotMirror), string(gotSrc))
+	}
+}

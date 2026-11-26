@@ -217,3 +217,46 @@ func TestResolveWorkflowFile(t *testing.T) {
 		t.Fatalf("expected error for invalid workflow ref")
 	}
 }
+
+func TestResolveWorkflowsDirCheckoutToolsInstallRoot(t *testing.T) {
+	checkout := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(checkout, "tools", "tillr-item"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "tools", "tillr-item", "go.mod"), []byte("module github.com/mschulkind-oss/tillr-item\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfDir := filepath.Join(checkout, "config", "tillr", "workflows")
+	if err := os.MkdirAll(wfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wfFile := filepath.Join(wfDir, "planned-build@v1.json")
+	if err := os.WriteFile(wfFile, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TILLR_INSTALL_ROOT", filepath.Join(checkout, "tools"))
+	got, fromRoot, err := ResolveWorkflowFile(t.TempDir(), "planned-build@v1")
+	if err != nil {
+		t.Fatalf("ResolveWorkflowFile with checkout tools install root: %v", err)
+	}
+	if fromRoot || got != wfFile {
+		t.Fatalf("got (%q, %v), want (%q, false)", got, fromRoot, wfFile)
+	}
+
+	// Non-tillr <repo>/tools must NOT fall back to <repo>/config/tillr/workflows.
+	consumer := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(consumer, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(consumer, "config", "tillr", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(consumer, "config", "tillr", "workflows", "planned-build@v1.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TILLR_INSTALL_ROOT", filepath.Join(consumer, "tools"))
+	if _, _, err := ResolveWorkflowFile(t.TempDir(), "planned-build@v1"); err == nil {
+		t.Fatal("expected error for non-tillr consumer tools dir")
+	}
+}

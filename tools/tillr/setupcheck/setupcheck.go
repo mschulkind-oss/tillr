@@ -41,6 +41,59 @@ func resolveCheckoutDir(moduleRel, moduleLine string) (string, bool) {
 	return "", false
 }
 
+// ResolveInstallRoot returns TILLR_INSTALL_ROOT when set (requiring an absolute
+// path), or the <checkout>/tools directory when invoked from a tillr source checkout.
+func ResolveInstallRoot() (string, error) {
+	if root := os.Getenv("TILLR_INSTALL_ROOT"); root != "" {
+		if !filepath.IsAbs(root) {
+			return "", fmt.Errorf("TILLR_INSTALL_ROOT must be absolute: %s", root)
+		}
+		return root, nil
+	}
+	if checkout, ok := resolveCheckoutDir(
+		filepath.Join("tools", "tillr-run", "go.mod"),
+		"module github.com/mschulkind-oss/tillr-run\n",
+	); ok {
+		return filepath.Join(checkout, "tools"), nil
+	}
+	return "", fmt.Errorf("cannot locate tillr installation root; set TILLR_INSTALL_ROOT")
+}
+
+// ReadInstallSupportRevision reads <installRoot>/tillr/buildstamp/support-revision.
+func ReadInstallSupportRevision(installRoot string) (string, string, error) {
+	path := filepath.Join(installRoot, "tillr", "buildstamp", "support-revision")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", path, err
+	}
+	return strings.TrimSpace(string(data)), path, nil
+}
+
+// CheckSupportFile verifies that path exists and is a regular file.
+func CheckSupportFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() || !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+	return nil
+}
+
+// CheckGateRunner verifies that <installRoot>/tillr-gate/<name> exists as a regular file.
+func CheckGateRunner(name string) (string, string, error) {
+	installRoot, err := ResolveInstallRoot()
+	if err != nil {
+		return "", "", err
+	}
+	path := filepath.Join(installRoot, "tillr-gate", name)
+	if err := CheckSupportFile(path); err != nil {
+		return installRoot, path, fmt.Errorf("installed gate runner %s: %w", path, err)
+	}
+	return installRoot, path, nil
+}
+
 func resolveRunModuleDir(target string) (string, error) {
 	root := os.Getenv("TILLR_INSTALL_ROOT")
 	if root != "" {
@@ -98,21 +151,31 @@ func checkExecutableFile(adapter, path string) (string, error) {
 // installation/PATH, and verifies that the resolved path exists, is a regular
 // file (not a directory), and has at least one executable bit set.
 func CheckAdapter(root, adapter string) (string, error) {
+	path, _, err := CheckAdapterWithOrigin(root, adapter)
+	return path, err
+}
+
+// CheckAdapterWithOrigin behaves like CheckAdapter and also reports whether the
+// adapter resolved from tillr's installation rather than root, an absolute path,
+// or PATH.
+func CheckAdapterWithOrigin(root, adapter string) (string, bool, error) {
 	if adapter == "" {
-		return "", fmt.Errorf("adapter must not be empty")
+		return "", false, fmt.Errorf("adapter must not be empty")
 	}
 	switch adapter {
 	case "run-pi", "run-claude", "run-agy", "run-muse":
 		kind := strings.TrimPrefix(adapter, "run-")
 		modDir, err := resolveRunModuleDir("adapter " + adapter)
 		if err != nil {
-			return "", err
+			return "", true, err
 		}
 		path := filepath.Join(modDir, "backends", kind, adapter)
-		return checkExecutableFile(adapter, path)
+		checked, err := checkExecutableFile(adapter, path)
+		return checked, true, err
 	}
 	if filepath.IsAbs(adapter) {
-		return checkExecutableFile(adapter, adapter)
+		checked, err := checkExecutableFile(adapter, adapter)
+		return checked, false, err
 	}
 	if strings.ContainsRune(adapter, filepath.Separator) {
 		if root != "" {
@@ -122,36 +185,43 @@ func CheckAdapter(root, adapter string) (string, error) {
 			}
 			rootPath := filepath.Join(base, adapter)
 			if _, err := os.Stat(rootPath); err == nil {
-				return checkExecutableFile(adapter, rootPath)
+				checked, err := checkExecutableFile(adapter, rootPath)
+				return checked, false, err
 			}
 			clean := filepath.ToSlash(filepath.Clean(adapter))
 			if rest, ok := strings.CutPrefix(clean, relBackendsPrefix); ok && rest != "" {
 				backendsDir, err := resolveBackendsDir()
 				if err != nil {
-					return "", fmt.Errorf("adapter %q (%s) is missing and fallback failed: %w", adapter, rootPath, err)
+					return "", true, fmt.Errorf("adapter %q (%s) is missing and fallback failed: %w", adapter, rootPath, err)
 				}
-				return checkExecutableFile(adapter, filepath.Join(backendsDir, filepath.FromSlash(rest)))
+				checked, err := checkExecutableFile(adapter, filepath.Join(backendsDir, filepath.FromSlash(rest)))
+				return checked, true, err
 			}
-			return checkExecutableFile(adapter, rootPath)
+			checked, err := checkExecutableFile(adapter, rootPath)
+			return checked, false, err
 		}
 		if _, err := os.Stat(adapter); err == nil {
-			return checkExecutableFile(adapter, adapter)
+			checked, err := checkExecutableFile(adapter, adapter)
+			return checked, false, err
 		}
 		clean := filepath.ToSlash(filepath.Clean(adapter))
 		if rest, ok := strings.CutPrefix(clean, relBackendsPrefix); ok && rest != "" {
 			backendsDir, err := resolveBackendsDir()
 			if err != nil {
-				return "", fmt.Errorf("adapter %q is missing and fallback failed: %w", adapter, err)
+				return "", true, fmt.Errorf("adapter %q is missing and fallback failed: %w", adapter, err)
 			}
-			return checkExecutableFile(adapter, filepath.Join(backendsDir, filepath.FromSlash(rest)))
+			checked, err := checkExecutableFile(adapter, filepath.Join(backendsDir, filepath.FromSlash(rest)))
+			return checked, true, err
 		}
-		return checkExecutableFile(adapter, adapter)
+		checked, err := checkExecutableFile(adapter, adapter)
+		return checked, false, err
 	}
 	resolved, err := exec.LookPath(adapter)
 	if err != nil {
-		return "", fmt.Errorf("adapter %q is missing from PATH: %w", adapter, err)
+		return "", false, fmt.Errorf("adapter %q is missing from PATH: %w", adapter, err)
 	}
-	return checkExecutableFile(adapter, resolved)
+	checked, err := checkExecutableFile(adapter, resolved)
+	return checked, false, err
 }
 
 // ResolveBriefTemplate resolves the installed tillr-run brief template, or the
@@ -180,13 +250,23 @@ func resolveWorkflowsDir() (string, error) {
 		}
 		dir := filepath.Join(root, "workflows")
 		info, err := os.Stat(dir)
-		if err != nil {
-			return "", fmt.Errorf("installed workflows directory %s: %w", dir, err)
+		if err == nil {
+			if !info.IsDir() {
+				return "", fmt.Errorf("installed workflows directory %s is not a directory", dir)
+			}
+			return dir, nil
 		}
-		if !info.IsDir() {
-			return "", fmt.Errorf("installed workflows directory %s is not a directory", dir)
+		if errors.Is(err, os.ErrNotExist) && filepath.Base(root) == "tools" {
+			checkout := filepath.Dir(root)
+			mod, modErr := os.ReadFile(filepath.Join(checkout, "tools", "tillr-item", "go.mod"))
+			if modErr == nil && strings.HasPrefix(string(mod), "module github.com/mschulkind-oss/tillr-item\n") {
+				wfDir := filepath.Join(checkout, "config", "tillr", "workflows")
+				if wfInfo, wfErr := os.Stat(wfDir); wfErr == nil && wfInfo.IsDir() {
+					return wfDir, nil
+				}
+			}
 		}
-		return dir, nil
+		return "", fmt.Errorf("installed workflows directory %s: %w", dir, err)
 	}
 	if checkout, ok := resolveCheckoutDir(
 		filepath.Join("tools", "tillr-item", "go.mod"),

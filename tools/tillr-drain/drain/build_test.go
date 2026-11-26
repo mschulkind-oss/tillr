@@ -63,6 +63,9 @@ func TestTheLoopStampsItsOwnBuildInTheStartupLineAndTheRecord(t *testing.T) {
 	if kept.Build.Digest == "" {
 		t.Fatalf("the recorded build carries no digest: %s", env.Payload)
 	}
+	if !strings.HasPrefix(kept.Build.SupportRevision, "sha256:") {
+		t.Fatalf("the recorded build carries unexpected support_revision %q: %s", kept.Build.SupportRevision, env.Payload)
+	}
 	if got, want := first, "loop: build "+kept.Build.String(); got != want {
 		t.Fatalf("the startup line is %q and the record's stamp is %q: the two must agree", got, want)
 	}

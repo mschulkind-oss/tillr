@@ -452,3 +452,55 @@ func TestFilterMirrorConflictReports(t *testing.T) {
 		t.Fatalf("modules = %v, want %v", modules, wantModules)
 	}
 }
+
+func TestStagePackMirrorUpdatesSupportRevisionOnSupportFileChange(t *testing.T) {
+	ctx := context.Background()
+	f, l := passFixture(t, "item-sr")
+	lane := l.laneTarget("lane-1")
+	for path, body := range map[string]string{
+		"yolo-packs/tillr/pack.json":              "{}\n",
+		"tools/tillr/README.md":                   "tillr\n",
+		"tools/tillr/buildstamp/support-revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000\n",
+		"tools/tillr-gate/change-gate.py":         "# v1\n",
+	} {
+		writePackFixture(t, f.root, path, body)
+	}
+	runGit(t, f.root, "add", ".")
+	runGit(t, f.root, "commit", "-m", "support fixture")
+	base := runGit(t, f.root, "rev-parse", "HEAD")
+
+	runGit(t, lane, "reset", "--hard", base)
+	writeForkFile(t, filepath.Join(lane, "tools/tillr-gate/change-gate.py"), "# v2\n")
+	runGit(t, lane, "add", "tools/tillr-gate/change-gate.py")
+	runGit(t, lane, "commit", "-m", "feat: update gate runner")
+	worker := runGit(t, lane, "rev-parse", "HEAD")
+
+	c := Candidate{ItemID: "item-sr", LaneID: "lane-1", RunID: "run-sr", Worktree: lane, BaseSHA: base, HeadSHA: worker}
+	staged, err := l.stagePackMirror(ctx, c)
+	if err != nil {
+		t.Fatalf("stagePackMirror: %v", err)
+	}
+	if !staged {
+		t.Fatal("expected stagePackMirror to stage regenerated support-revision and mirrors")
+	}
+
+	gotSrc, err := os.ReadFile(filepath.Join(lane, "tools/tillr/buildstamp/support-revision"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(gotSrc), "0000000000000000") || !strings.HasPrefix(strings.TrimSpace(string(gotSrc)), "sha256:") {
+		t.Fatalf("support-revision was not regenerated: %q", string(gotSrc))
+	}
+	gotMirror, err := os.ReadFile(filepath.Join(lane, tillrMirrorRoot+"tillr/buildstamp/support-revision"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotMirror) != string(gotSrc) {
+		t.Fatalf("mirrored support-revision %q != source %q", string(gotMirror), string(gotSrc))
+	}
+	// Verify filterMirrorConflictReports recognizes tools/tillr/buildstamp/support-revision.
+	nonMirror, mods := filterMirrorConflictReports([]string{"CONFLICT (content): Merge conflict in tools/tillr/buildstamp/support-revision"})
+	if len(nonMirror) != 0 || len(mods) != 1 || mods[0] != "tillr" {
+		t.Fatalf("filterMirrorConflictReports = (%v, %v), want ([], [tillr])", nonMirror, mods)
+	}
+}

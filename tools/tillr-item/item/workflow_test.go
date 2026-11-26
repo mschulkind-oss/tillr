@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -92,5 +93,40 @@ func TestSyncWorkflow(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestResolveWorkflowsDirCheckoutToolsInstallRoot(t *testing.T) {
+	checkout := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(checkout, "tools", "tillr-item"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "tools", "tillr-item", "go.mod"), []byte("module github.com/mschulkind-oss/tillr-item\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfDir := filepath.Join(checkout, "config", "tillr", "workflows")
+	if err := os.MkdirAll(wfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TILLR_INSTALL_ROOT", filepath.Join(checkout, "tools"))
+	got, err := item.ResolveWorkflowsDir()
+	if err != nil {
+		t.Fatalf("ResolveWorkflowsDir with checkout tools install root: %v", err)
+	}
+	if got != wfDir {
+		t.Fatalf("got %q, want %q", got, wfDir)
+	}
+
+	consumer := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(consumer, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(consumer, "config", "tillr", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TILLR_INSTALL_ROOT", filepath.Join(consumer, "tools"))
+	if _, err := item.ResolveWorkflowsDir(); err == nil {
+		t.Fatal("expected error for non-tillr consumer tools dir")
 	}
 }

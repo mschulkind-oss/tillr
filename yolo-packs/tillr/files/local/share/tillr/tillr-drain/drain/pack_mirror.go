@@ -17,6 +17,9 @@ const tillrMirrorRoot = "yolo-packs/tillr/files/local/share/tillr/"
 // tillrMirrorRoot that packmirror.Sync owns, returning its module name. Paths owned by
 // pack-docs (such as tillr-loop/README.md or docs/) return false.
 func packMirrorModule(path string) (string, bool) {
+	if path == packmirror.SupportRevisionRelPath {
+		return "tillr", true
+	}
 	if !strings.HasPrefix(path, tillrMirrorRoot) {
 		return "", false
 	}
@@ -29,6 +32,9 @@ func packMirrorModule(path string) (string, bool) {
 		if rel == "README.md" {
 			return "", false
 		}
+		return module, true
+	}
+	if module == packmirror.WorkflowsMount {
 		return module, true
 	}
 	for _, shipped := range packmirror.Shipped {
@@ -70,17 +76,24 @@ func (l *Loop) hasPackManifest(ctx context.Context, worktree, rev string) (bool,
 // unrelated candidates do not pick up pre-existing drift. The worker's fence has passed.
 func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
 	defer timeHandoffPhase(ctx, "pack_mirror")()
-	paths, err := l.git(ctx, c.Worktree, "diff", "--no-renames", "--name-only", "-z", c.BaseSHA+".."+c.HeadSHA, "--", "tools/", tillrMirrorRoot)
+	paths, err := l.git(ctx, c.Worktree, "diff", "--no-renames", "--name-only", "-z", c.BaseSHA+".."+c.HeadSHA, "--", "tools/", tillrMirrorRoot, packmirror.WorkflowsDir)
 	if err != nil || paths == "" {
 		return false, err
 	}
 	// Match SHIPPED in the renderer. The standalone loop adapter is selected below.
 	var selectedModules []string
+	selectedSet := map[string]bool{}
+	addModule := func(m string) {
+		if !selectedSet[m] {
+			selectedSet[m] = true
+			selectedModules = append(selectedModules, m)
+		}
+	}
 	changedPaths := strings.Split(paths, "\x00")
 	for _, module := range packmirror.Shipped {
 		for _, path := range changedPaths {
 			if strings.HasPrefix(path, "tools/"+module+"/") || strings.HasPrefix(path, tillrMirrorRoot+module+"/") {
-				selectedModules = append(selectedModules, module)
+				addModule(module)
 				break
 			}
 		}
@@ -91,8 +104,18 @@ func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
 	for _, path := range changedPaths {
 		if (strings.HasPrefix(path, loopSourcePrefix) && path != loopSourcePrefix+"README.md") ||
 			(strings.HasPrefix(path, loopMirrorPrefix) && path != loopMirrorPrefix+"README.md") {
-			selectedModules = append(selectedModules, packmirror.LoopModule)
+			addModule(packmirror.LoopModule)
 			break
+		}
+	}
+	// Mirror config/tillr/workflows/ and regenerate support-revision whenever any
+	// runtime support file changes.
+	for _, path := range changedPaths {
+		if strings.HasPrefix(path, packmirror.WorkflowsDir+"/") || strings.HasPrefix(path, tillrMirrorRoot+packmirror.WorkflowsMount+"/") {
+			addModule(packmirror.WorkflowsMount)
+		}
+		if packmirror.IsSupportFile(path) || path == packmirror.SupportRevisionRelPath {
+			addModule("tillr")
 		}
 	}
 	if len(selectedModules) == 0 {
@@ -109,9 +132,12 @@ func (l *Loop) syncAndStagePackMirrorModules(ctx context.Context, c Candidate, s
 	if len(selectedModules) == 0 {
 		return false, nil
 	}
-	destinations := make([]string, 0, len(selectedModules))
+	destinations := make([]string, 0, len(selectedModules)+1)
 	for _, module := range selectedModules {
 		destinations = append(destinations, tillrMirrorRoot+module)
+		if module == "tillr" {
+			destinations = append(destinations, packmirror.SupportRevisionRelPath)
+		}
 	}
 	status := []string{"status", "--porcelain", "--untracked-files=all"}
 	if out, err := l.git(ctx, c.Worktree, status...); err != nil {

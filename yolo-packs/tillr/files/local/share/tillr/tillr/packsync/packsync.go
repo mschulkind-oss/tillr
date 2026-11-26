@@ -490,6 +490,39 @@ func CaseWorkflows(root string, candidate bool, stdout io.Writer) error {
 	return nil
 }
 
+// CaseSupportRevision verifies that tools/tillr/buildstamp/support-revision matches
+// the live SupportRevision of the checkout and matches the pack mirror byte-for-byte.
+func CaseSupportRevision(root string, candidate bool, stdout io.Writer) error {
+	if candidate {
+		if stdout != nil {
+			fmt.Fprintln(stdout, "n/a  the tillr pack's support-revision: a candidate does not carry the generated tree")
+		}
+		return nil
+	}
+	want, err := packmirror.ComputeSupportRevision(root)
+	if err != nil {
+		return err
+	}
+	srcPath := filepath.Join(root, filepath.FromSlash(packmirror.SupportRevisionRelPath))
+	srcBytes, err := os.ReadFile(srcPath)
+	if err != nil {
+		return fmt.Errorf("missing %s: run `just pack-sync`: %w", packmirror.SupportRevisionRelPath, err)
+	}
+	if strings.TrimSpace(string(srcBytes)) != want {
+		return fmt.Errorf("%s is stale (%q != %q): run `just pack-sync`", packmirror.SupportRevisionRelPath, strings.TrimSpace(string(srcBytes)), want)
+	}
+	copyPath := filepath.Join(copyDir(root), filepath.FromSlash(packmirror.SupportRevisionBuildstampRelPath))
+	copyBytes, err := os.ReadFile(copyPath)
+	if err != nil {
+		return fmt.Errorf("missing pack copy %s: run `just pack-sync`: %w", packmirror.SupportRevisionBuildstampRelPath, err)
+	}
+	if !bytes.Equal(srcBytes, copyBytes) {
+		return fmt.Errorf("the pack's copy of %s diverges from its source: run `just pack-sync`", packmirror.SupportRevisionBuildstampRelPath)
+	}
+	ok(stdout, fmt.Sprintf("support-revision matches live support files and pack mirror (%s)", want))
+	return nil
+}
+
 // CaseBuildOutputs checks that a Python bytecode cache is treated as a build output, and source files are not.
 func CaseBuildOutputs(stdout io.Writer) error {
 	for _, rel := range []string{"__pycache__/tillr_trace.cpython-314.pyc", "tillr_trace.pyc"} {
@@ -1152,6 +1185,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		func() error { return CaseModes(root, candidate, stdout) },
 		func() error { return CaseLoopAdapter(root, candidate, stdout) },
 		func() error { return CaseWorkflows(root, candidate, stdout) },
+		func() error { return CaseSupportRevision(root, candidate, stdout) },
 		func() error { return CaseBuildOutputs(stdout) },
 		func() error { return CaseCopyBuildOutputs(stdout) },
 		func() error { return CaseLaunchers(root, stdout) },

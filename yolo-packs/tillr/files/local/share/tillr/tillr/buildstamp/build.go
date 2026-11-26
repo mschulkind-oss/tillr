@@ -2,6 +2,7 @@ package buildstamp
 
 import (
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -16,16 +17,23 @@ import (
 // the runtime checkout.
 var greenRevision string
 
+//go:embed support-revision
+var embeddedSupportRevision string
+
+// supportRevision can be overridden via -ldflags "-X github.com/mschulkind-oss/tillr/buildstamp.supportRevision=...".
+var supportRevision string
+
 // Stamp is the build a tillr process is running. Every field is best-effort: a binary
 // built outside a repository has no VCS information, and that absence is reported as empty
 // rather than filled with a guess.
 type Stamp struct {
-	Revision    string `json:"revision"`
-	GreenCommit string `json:"green_commit,omitempty"`
-	Time        string `json:"time"`
-	Modified    bool   `json:"modified"`
-	Digest      string `json:"digest"`
-	Executable  string `json:"executable"`
+	Revision        string `json:"revision"`
+	GreenCommit     string `json:"green_commit,omitempty"`
+	SupportRevision string `json:"support_revision,omitempty"`
+	Time            string `json:"time"`
+	Modified        bool   `json:"modified"`
+	Digest          string `json:"digest"`
+	Executable      string `json:"executable"`
 }
 
 // String is the one-line build stamp. An absent revision, time, green commit, digest, or
@@ -63,7 +71,15 @@ func (b Stamp) String() string {
 
 // Read reads the running program's build stamp. It never fails.
 func Read() Stamp {
-	stamp := Stamp{Revision: greenRevision, GreenCommit: greenRevision}
+	sr := strings.TrimSpace(supportRevision)
+	if sr == "" {
+		sr = strings.TrimSpace(embeddedSupportRevision)
+	}
+	stamp := Stamp{
+		Revision:        greenRevision,
+		GreenCommit:     greenRevision,
+		SupportRevision: sr,
+	}
 	exe, err := os.Executable()
 	if err == nil {
 		stamp.Executable = strings.TrimSuffix(exe, " (deleted)")

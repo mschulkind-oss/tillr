@@ -3,6 +3,8 @@ package packmirror
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -11,16 +13,22 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
 const (
-	Repository     = "https://github.com/mschulkind-oss/tillr/blob/main/"
-	MirrorRoot     = "yolo-packs/tillr/files/local/share/tillr"
-	LoopModule     = "tillr-loop"
-	WorkflowsDir   = "config/tillr/workflows"
-	WorkflowsMount = "workflows"
+	Repository                       = "https://github.com/mschulkind-oss/tillr/blob/main/"
+	MirrorRoot                       = "yolo-packs/tillr/files/local/share/tillr"
+	LoopModule                       = "tillr-loop"
+	WorkflowsDir                     = "config/tillr/workflows"
+	WorkflowsMount                   = "workflows"
+	SupportRevisionRelPath           = "tools/tillr/buildstamp/support-revision"
+	SupportRevisionBuildstampRelPath = "tillr/buildstamp/support-revision"
 )
+
+// BuildOutputRe matches Python bytecode caches that are build outputs rather than source.
+var BuildOutputRe = regexp.MustCompile(`(?:^|/)__pycache__/|\.pyc$`)
 
 var (
 	// LoopAdapter is the relative path to the standalone loop adapter executable.
@@ -377,6 +385,126 @@ func isShipped(module string) bool {
 	return false
 }
 
+// SupportFileLogicalPath maps a repo-relative path to its install-root-relative
+// logical support-file path, returning ("", false) when the path is not a
+// runtime support file.
+func SupportFileLogicalPath(repoRel string) (string, bool) {
+	p := strings.TrimPrefix(filepath.ToSlash(repoRel), "./")
+	if p == "" || BuildOutputRe.MatchString(p) {
+		return "", false
+	}
+	if rest, ok := strings.CutPrefix(p, "tools/tillr-run/backends/"); ok {
+		if rest == "" || rest == "README.md" || strings.HasSuffix(rest, "/README.md") {
+			return "", false
+		}
+		if strings.HasPrefix(rest, "testdata/") || strings.Contains(rest, "/testdata/") {
+			return "", false
+		}
+		return "tillr-run/backends/" + rest, true
+	}
+	if p == "tools/tillr-trace/bash-shim.sh" {
+		return "tillr-trace/bash-shim.sh", true
+	}
+	if rest, ok := strings.CutPrefix(p, "tools/tillr-gate/"); ok {
+		if rest != "" && !strings.Contains(rest, "/") && strings.HasSuffix(rest, ".py") && !strings.HasSuffix(rest, ".test.py") {
+			return "tillr-gate/" + rest, true
+		}
+		return "", false
+	}
+	if rest, ok := strings.CutPrefix(p, WorkflowsDir+"/"); ok {
+		if rest != "" && !strings.Contains(rest, "/") && strings.HasSuffix(rest, ".json") {
+			return WorkflowsMount + "/" + rest, true
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// IsSupportFile reports whether a repo-relative path is a runtime support file
+// included in SupportRevision.
+func IsSupportFile(repoRel string) bool {
+	_, ok := SupportFileLogicalPath(repoRel)
+	return ok
+}
+
+// ComputeSupportRevision computes the deterministic SHA-256 digest
+// ("sha256:<64-hex>") over sorted (logical_path, sha256(file_bytes)) entries of
+// tillr's runtime support files under root.
+func ComputeSupportRevision(root string) (string, error) {
+	cmd := exec.Command(
+		"git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
+		"tools/tillr-run/backends",
+		"tools/tillr-trace/bash-shim.sh",
+		"tools/tillr-gate",
+		WorkflowsDir,
+	)
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("list support files under %s: %w", root, err)
+	}
+
+	type entry struct {
+		logical string
+		digest  string
+	}
+	var entries []entry
+	for _, raw := range bytes.Split(out, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		repoRel := string(raw)
+		logical, ok := SupportFileLogicalPath(repoRel)
+		if !ok {
+			continue
+		}
+		full := filepath.Join(root, filepath.FromSlash(repoRel))
+		info, err := os.Stat(full)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return "", fmt.Errorf("read support file %s: %w", repoRel, err)
+		}
+		sum := sha256.Sum256(data)
+		entries = append(entries, entry{
+			logical: logical,
+			digest:  hex.EncodeToString(sum[:]),
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].logical < entries[j].logical
+	})
+
+	h := sha256.New()
+	for _, e := range entries {
+		fmt.Fprintf(h, "%s\x00%s\n", e.logical, e.digest)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// WriteSupportRevision computes SupportRevision for root and writes it to
+// tools/tillr/buildstamp/support-revision.
+func WriteSupportRevision(root string) (string, error) {
+	rev, err := ComputeSupportRevision(root)
+	if err != nil {
+		return "", err
+	}
+	dst := filepath.Join(root, filepath.FromSlash(SupportRevisionRelPath))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return "", err
+	}
+	want := rev + "\n"
+	if existing, err := os.ReadFile(dst); err == nil && string(existing) == want {
+		return rev, nil
+	}
+	if err := os.WriteFile(dst, []byte(want), 0o644); err != nil {
+		return "", err
+	}
+	return rev, nil
+}
+
 // Sync mirrors the requested modules (or all shipped modules if none specified) under root.
 func Sync(root string, modules []string, stdout, stderr io.Writer) int {
 	absRoot, err := filepath.Abs(root)
@@ -405,6 +533,12 @@ func Sync(root string, modules []string, stdout, stderr io.Writer) int {
 		case WorkflowsMount:
 			err = MirrorWorkflows(absRoot, stdout)
 		default:
+			if m == "tillr" {
+				if _, revErr := WriteSupportRevision(absRoot); revErr != nil {
+					fmt.Fprintf(stderr, "pack-sync: %v\n", revErr)
+					return 1
+				}
+			}
 			err = MirrorModule(absRoot, m, stdout)
 		}
 		if err != nil {

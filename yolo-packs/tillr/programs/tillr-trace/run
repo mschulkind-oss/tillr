@@ -22,7 +22,7 @@ bin=tillr-trace
 mod=tillr-trace
 
 root=${HOME:?$bin: HOME is unset}/.local/share/tillr
-TILLR_INSTALL_ROOT=$root
+TILLR_INSTALL_ROOT=${TILLR_INSTALL_ROOT:-$root}
 export TILLR_INSTALL_ROOT
 cache=${XDG_CACHE_HOME:-$HOME/.cache}/tillr/bin
 
@@ -55,7 +55,7 @@ newer() {
 		else
 			case ${entry##*/} in
 			*_test.go) ;;
-			*.go | *.toml | *.json | go.mod | go.sum) [ "$entry" -nt "$current" ] && return 0 ;;
+			*.go | *.toml | *.json | go.mod | go.sum | support-revision) [ "$entry" -nt "$current" ] && return 0 ;;
 			esac
 			if [ "$mod" = tillr-view ]; then
 				case $entry in
@@ -108,7 +108,7 @@ sources() {
 			else
 				case ${entry##*/} in
 				*_test.go) ;;
-				*.go | *.toml | *.json | go.mod | go.sum) echo "$entry" ;;
+				*.go | *.toml | *.json | go.mod | go.sum | support-revision) echo "$entry" ;;
 				esac
 			fi
 		done

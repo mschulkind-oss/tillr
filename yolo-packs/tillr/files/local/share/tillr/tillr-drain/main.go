@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
+	"github.com/mschulkind-oss/tillr/setupcheck"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -1032,18 +1034,21 @@ func loopFace(args []string) int {
 			}
 		}
 	}
+	briefFromInstall := false
 	if *briefTemplate == "" {
 		if repositorySettings.Brief.Template != "" {
 			*briefTemplate = filepath.Join(*root, filepath.FromSlash(repositorySettings.Brief.Template))
 		} else {
+			briefFromInstall = true
 			resolved, err := run.ResolveBriefTemplate()
 			if err != nil {
-				return failStartup(drain.Usagef("--brief-template: %v", err))
+				return failStartup(formatInstallSupportError(err))
 			}
 			*briefTemplate = resolved
 		}
 	}
 	var policy *drain.Policy
+	adaptersFromInstall := false
 	if *policyPath != "" {
 		var err error
 		policy, err = readPolicy(*policyPath)
@@ -1053,8 +1058,9 @@ func loopFace(args []string) int {
 		if policy == nil {
 			return failStartup(drain.Usagef("loop needs a policy: %s names none", *policyPath))
 		}
-		if err := policy.CheckAdapters(*root); err != nil {
-			return failStartup(err)
+		adaptersFromInstall, err = policy.CheckAdaptersWithOrigin(*root)
+		if err != nil {
+			return failStartup(formatInstallSupportError(err))
 		}
 	}
 	at := time.Now
@@ -1096,6 +1102,9 @@ func loopFace(args []string) int {
 		return failStartup(err)
 	}
 	if err := checkLoopPrograms(steps, loop.StagedSchemaPrograms()); err != nil {
+		return failStartup(err)
+	}
+	if err := verifyInstallSupport(*root, briefFromInstall, adaptersFromInstall, steps, explicitSteps, repositorySettings.WorkflowDefaults); err != nil {
 		return failStartup(err)
 	}
 	if *check {
@@ -1158,6 +1167,114 @@ func checkLoopPrograms(steps *drain.ProcessSteps, staged string) error {
 		}()
 	}
 	return steps.CheckPrograms(context.Background(), os.Stderr)
+}
+
+func binaryBuildLabel() string {
+	stamp := drain.ReadBuildStamp()
+	sr := stamp.SupportRevision
+	if sr == "" {
+		sr = "unknown"
+	}
+	return fmt.Sprintf("binary %s (build %s, support-revision %s)", stamp.Executable, stamp.String(), sr)
+}
+
+func installRootLabel() string {
+	root, err := setupcheck.ResolveInstallRoot()
+	if err != nil {
+		return "unresolved (" + err.Error() + ")"
+	}
+	return root
+}
+
+func formatInstallSupportError(err error) error {
+	return drain.Usagef("%s against install root %s: %v", binaryBuildLabel(), installRootLabel(), err)
+}
+
+func hasGateProgramFlag(command string) bool {
+	for _, field := range strings.Fields(command) {
+		if field == "--gate-program" || strings.HasPrefix(field, "--gate-program=") {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyInstallSupport(root string, briefFromInstall, adaptersFromInstall bool, steps *drain.ProcessSteps, explicitSteps map[string]bool, workflows map[string]string) error {
+	usedInstall := briefFromInstall || adaptersFromInstall
+	binaryDesc := binaryBuildLabel()
+
+	gateUsesLoop := steps.UsesStandardAdapter(steps.GateProgram)
+	replayUsesLoop := steps.UsesStandardAdapter(steps.ReplayProgram)
+	rollingUsesLoop := steps.UsesStandardAdapter(steps.RollingProgram)
+	fixerUsesLoop := steps.UsesStandardAdapter(steps.FixerGateProgram)
+
+	needChangeGate := gateUsesLoop && !hasGateProgramFlag(steps.GateProgram)
+	needTreeCheck := (gateUsesLoop && (replayUsesLoop || rollingUsesLoop || fixerUsesLoop)) ||
+		(explicitSteps["replay"] && replayUsesLoop) ||
+		(explicitSteps["rolling"] && rollingUsesLoop) ||
+		(explicitSteps["fixer-gate"] && fixerUsesLoop)
+
+	if needChangeGate {
+		usedInstall = true
+		for _, name := range []string{"change-gate.py", "classify.py"} {
+			if installRoot, _, err := setupcheck.CheckGateRunner(name); err != nil {
+				if installRoot == "" {
+					installRoot = installRootLabel()
+				}
+				return drain.Usagef("%s against install root %s: %v", binaryDesc, installRoot, err)
+			}
+		}
+	}
+	if needTreeCheck {
+		usedInstall = true
+		for _, name := range []string{"tree-check.py", "classify.py"} {
+			if installRoot, _, err := setupcheck.CheckGateRunner(name); err != nil {
+				if installRoot == "" {
+					installRoot = installRootLabel()
+				}
+				return drain.Usagef("%s against install root %s: %v", binaryDesc, installRoot, err)
+			}
+		}
+	}
+
+	if len(workflows) > 0 {
+		seats := make([]string, 0, len(workflows))
+		for seat := range workflows {
+			seats = append(seats, seat)
+		}
+		sort.Strings(seats)
+		for _, seat := range seats {
+			ref := workflows[seat]
+			if ref == "" || ref == "single-worker@v1" {
+				continue
+			}
+			_, fromRepo, err := setupcheck.ResolveWorkflowFile(root, ref)
+			if err != nil {
+				return drain.Usagef("%s against install root %s: workflow %s: %v", binaryDesc, installRootLabel(), ref, err)
+			}
+			if !fromRepo {
+				usedInstall = true
+			}
+		}
+	}
+
+	if !usedInstall {
+		return nil
+	}
+
+	installRoot, err := setupcheck.ResolveInstallRoot()
+	if err != nil {
+		return drain.Usagef("%s: %v", binaryDesc, err)
+	}
+	installedRev, revPath, revErr := setupcheck.ReadInstallSupportRevision(installRoot)
+	if revErr != nil {
+		return drain.Usagef("%s does not match install root %s: installed support-revision is unrecorded (missing %s)", binaryDesc, installRoot, revPath)
+	}
+	stamp := drain.ReadBuildStamp()
+	if installedRev != stamp.SupportRevision {
+		return drain.Usagef("%s does not match install root %s: binary support-revision %s != install-root support-revision %s (%s)", binaryDesc, installRoot, stamp.SupportRevision, installedRev, revPath)
+	}
+	return nil
 }
 
 // loopCheckVersion rejects unknown or newer schemas before checking store hooks.

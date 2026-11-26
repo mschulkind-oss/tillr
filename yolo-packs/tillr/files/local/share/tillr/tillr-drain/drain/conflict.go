@@ -637,7 +637,7 @@ func (l *Loop) repairMirrorOnlyConflict(ctx context.Context, candidate Candidate
 }
 
 func (l *Loop) restorePackMirrorPaths(ctx context.Context, worktree, mainSHA string) error {
-	diffOut, err := l.git(ctx, worktree, "diff", "--cached", "--name-only", "-z", mainSHA, "--", tillrMirrorRoot)
+	diffOut, err := l.git(ctx, worktree, "diff", "--cached", "--name-only", "-z", mainSHA, "--", tillrMirrorRoot, "tools/tillr/buildstamp/support-revision")
 	if err != nil || diffOut == "" {
 		return err
 	}

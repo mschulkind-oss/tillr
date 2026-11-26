@@ -1604,7 +1604,7 @@ func TestCheckDeclarationsCoverSelectionInputs(t *testing.T) {
 				return nil
 			}
 			isNonTestGo := strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go")
-			if !isNonTestGo && name != "go.mod" && name != "go.sum" && name != "landing.json" {
+			if !isNonTestGo && name != "go.mod" && name != "go.sum" && name != "landing.json" && name != "support-revision" {
 				return nil
 			}
 			rel, rerr := filepath.Rel(srcMod, path)

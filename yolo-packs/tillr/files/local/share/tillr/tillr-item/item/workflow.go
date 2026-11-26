@@ -24,13 +24,23 @@ func ResolveWorkflowsDir() (string, error) {
 		}
 		dir := filepath.Join(root, "workflows")
 		info, err := os.Stat(dir)
-		if err != nil {
-			return "", fmt.Errorf("installed workflows directory %s: %w", dir, err)
+		if err == nil {
+			if !info.IsDir() {
+				return "", fmt.Errorf("installed workflows directory %s is not a directory", dir)
+			}
+			return dir, nil
 		}
-		if !info.IsDir() {
-			return "", fmt.Errorf("installed workflows directory %s is not a directory", dir)
+		if errors.Is(err, os.ErrNotExist) && filepath.Base(root) == "tools" {
+			checkout := filepath.Dir(root)
+			mod, modErr := os.ReadFile(filepath.Join(checkout, "tools", "tillr-item", "go.mod"))
+			if modErr == nil && strings.HasPrefix(string(mod), "module github.com/mschulkind-oss/tillr-item\n") {
+				wfDir := filepath.Join(checkout, "config", "tillr", "workflows")
+				if wfInfo, wfErr := os.Stat(wfDir); wfErr == nil && wfInfo.IsDir() {
+					return wfDir, nil
+				}
+			}
 		}
-		return dir, nil
+		return "", fmt.Errorf("installed workflows directory %s: %w", dir, err)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {

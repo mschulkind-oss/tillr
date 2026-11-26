@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations`, 1)
 		t.Fatal(err)
 	}
 	copyFile(t, "../../tillr-run/backends/brief-template.md", installedTemplate, nil)
+	copyFile(t, "../../tillr/buildstamp/support-revision", filepath.Join(installRoot, "tillr", "buildstamp", "support-revision"), nil)
 	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	t.Setenv("SCHEMA_ROLL_LIVE", dir)
 	return fmt.Sprintf(`GO_WANT_SCHEMA_ROLL_HELPER=1 "%s" -test.run=^TestSchemaRollHelperProcess$`, exe)

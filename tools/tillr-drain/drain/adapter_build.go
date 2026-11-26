@@ -25,6 +25,11 @@ const loopAdapterProgram = "tillr-loop"
 
 const execLoopAdapterEnv = "TILLR_DRAIN_EXEC_LOOP_ADAPTER=1"
 
+// UsesStandardAdapter reports whether command invokes the built-in tillr-loop adapter.
+func (s *ProcessSteps) UsesStandardAdapter(command string) bool {
+	return s.standardAdapterArg(strings.Fields(command)) >= 0
+}
+
 // standardAdapterArg recognizes the built-in command (`tillr-loop`, `builtin:tillr-loop`)
 // and, for older configurations, the standard script under this loop's root. Other
 // programs run as configured.

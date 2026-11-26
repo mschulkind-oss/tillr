@@ -256,17 +256,59 @@ func TestLaunchersHashTomlAndJSON(t *testing.T) {
 	if len(matches) == 0 {
 		t.Fatal("expected launcher scripts under yolo-packs/tillr/programs/*/run")
 	}
+	const want = "*.go | *.toml | *.json | go.mod | go.sum | support-revision)"
 	for _, path := range matches {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		text := string(raw)
-		if !strings.Contains(text, "*.go | *.toml | *.json | go.mod | go.sum)") {
-			t.Fatalf("%s: expected *.toml and *.json in launcher input patterns", path)
+		if !strings.Contains(text, want) {
+			t.Fatalf("%s: expected *.toml, *.json, and support-revision in launcher input patterns", path)
 		}
-		if strings.Count(text, "*.go | *.toml | *.json | go.mod | go.sum)") != 2 {
-			t.Fatalf("%s: expected both newer() and sources() to include *.toml and *.json", path)
+		if strings.Count(text, want) != 2 {
+			t.Fatalf("%s: expected both newer() and sources() to include *.toml, *.json, and support-revision", path)
 		}
+	}
+}
+
+func TestCaseSupportRevision(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init")
+	if err := os.MkdirAll(filepath.Join(repo, "tools", "tillr"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tools", "tillr", "README.md"), []byte("tillr\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "config", "tillr", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "config", "tillr", "workflows", "x@v1.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", ".")
+
+	var out, errBuf bytes.Buffer
+	if err := CaseSupportRevision(repo, true, &out); err != nil {
+		t.Fatalf("candidate mode failed: %v", err)
+	}
+	if err := CaseSupportRevision(repo, false, &out); err == nil {
+		t.Fatal("expected error when support-revision is missing")
+	}
+	if code := packmirror.Sync(repo, []string{"tillr"}, &out, &errBuf); code != 0 {
+		t.Fatalf("packmirror.Sync = %d: %s", code, errBuf.String())
+	}
+	out.Reset()
+	if err := CaseSupportRevision(repo, false, &out); err != nil {
+		t.Fatalf("CaseSupportRevision after sync failed: %v", err)
 	}
 }

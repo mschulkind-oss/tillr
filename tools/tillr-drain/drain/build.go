@@ -21,6 +21,8 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr/buildstamp"
 )
 
 // greenRevision is supplied by just tillr-build's linker from the pinned proof ref.
@@ -39,6 +41,8 @@ type BuildStamp struct {
 	// GreenCommit is the proof commit pinned by the green-tree build recipe. Empty
 	// means a build made by another path, not an assertion that the checkout is green.
 	GreenCommit string `json:"green_commit,omitempty"`
+	// SupportRevision is the SHA-256 digest of tillr's runtime support files embedded at build time.
+	SupportRevision string `json:"support_revision,omitempty"`
 	// Time is when that commit was made (`vcs.time`), RFC 3339, empty when unknown.
 	Time string `json:"time"`
 	// Modified is true when the working tree had uncommitted changes at build time, which
@@ -95,7 +99,11 @@ func (b BuildStamp) String() string {
 // or VCS information answers an empty revision, because a loop that refuses to say what it
 // is running answers the question by not answering at all.
 func ReadBuildStamp() BuildStamp {
-	stamp := BuildStamp{Revision: greenRevision, GreenCommit: greenRevision}
+	stamp := BuildStamp{
+		Revision:        greenRevision,
+		GreenCommit:     greenRevision,
+		SupportRevision: buildstamp.Read().SupportRevision,
+	}
 	exe, err := os.Executable()
 	if err == nil {
 		// A running binary replaced on disk by a rename reads back as "<path> (deleted)".

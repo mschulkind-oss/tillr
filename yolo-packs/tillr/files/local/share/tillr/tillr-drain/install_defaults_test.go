@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -125,6 +126,13 @@ func TestBriefTemplateInstallDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(installedTemplate, []byte("installed template\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	revFile := filepath.Join(goodRoot, "tillr", "buildstamp", "support-revision")
+	if err := os.MkdirAll(filepath.Dir(revFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(revFile, []byte(buildstamp.Read().SupportRevision+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Run("loop/installed-resolves", func(t *testing.T) {
