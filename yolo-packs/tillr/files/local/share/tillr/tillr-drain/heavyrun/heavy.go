@@ -823,6 +823,7 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 		if err != nil {
 			return run, err
 		}
+		order = coalesceChecksByFailure(order, byLanding)
 		for _, sha := range order {
 			if err := r.Fix(ctx, sha, byLanding[sha]); err != nil {
 				return run, err

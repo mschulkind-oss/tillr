@@ -19,9 +19,9 @@ type trunkFailureLinked struct {
 	LogRef      string `json:"log_ref,omitempty"`
 }
 
-// heavyCheckSearchNames returns the test and check identifiers a matching open
-// item's title or words might name for a failing heavy check.
-func heavyCheckSearchNames(check HeavyCheck) []string {
+// heavyCheckTestNames returns the failing test names a matching open item's
+// title, criteria, prose, or words might name for a failing heavy check.
+func heavyCheckTestNames(check HeavyCheck) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(name string) {
@@ -40,12 +40,14 @@ func heavyCheckSearchNames(check HeavyCheck) []string {
 				add(root)
 			}
 		}
-		add(check.CheckID)
 		return out
 	}
-	add(check.CheckID)
-	if check.LogPath != "" {
-		if found, ok := failingTestsFromLog(check.LogPath); ok {
+	logRef := check.LogPath
+	if logRef == "" {
+		logRef = check.LogRef
+	}
+	if logRef != "" {
+		if found, ok := failingTestsFromLog(logRef); ok {
 			for _, name := range collapseSingleTest(found) {
 				add(name)
 			}
@@ -54,10 +56,27 @@ func heavyCheckSearchNames(check HeavyCheck) []string {
 	return out
 }
 
+// heavyCheckSearchNames returns the test and check identifiers a matching open
+// item's title or words might name for a failing heavy check.
+func heavyCheckSearchNames(check HeavyCheck) []string {
+	out := heavyCheckTestNames(check)
+	checkID := strings.TrimSpace(check.CheckID)
+	if checkID == "" {
+		return out
+	}
+	for _, existing := range out {
+		if existing == checkID {
+			return out
+		}
+	}
+	return append(out, checkID)
+}
+
 // findOpenCheckFixer searches open non-fixer items in queue order for one whose
 // title, words, criteria, or prose names any of searchNames as the test or check
-// it fixes.
-func (l *Loop) findOpenCheckFixer(ctx context.Context, searchNames []string) (string, string, error) {
+// it fixes. When firstInQueueOnly is true, only the first active item in queue
+// order (in-queue or in-progress) is checked.
+func (l *Loop) findOpenCheckFixer(ctx context.Context, searchNames []string, firstInQueueOnly bool) (string, string, error) {
 	if len(searchNames) == 0 || l.cfg.Store == "" {
 		return "", "", nil
 	}
@@ -67,7 +86,7 @@ func (l *Loop) findOpenCheckFixer(ctx context.Context, searchNames []string) (st
 		if err != nil {
 			return err
 		}
-		rows, err := r.Query(`SELECT item_id, title, state, COALESCE(prose, '') FROM items ORDER BY rank, item_id`)
+		rows, err := r.Query(`SELECT item_id, title, state, COALESCE(prose, '') FROM items ORDER BY COALESCE(rank, '') = '', COALESCE(rank, ''), item_id`)
 		if err != nil {
 			return err
 		}
@@ -86,6 +105,13 @@ func (l *Loop) findOpenCheckFixer(ctx context.Context, searchNames []string) (st
 			}
 			if row.state == "not-started" || finishedState(declared.Parsed, row.state) || closedState(declared.Parsed, row.state) {
 				continue
+			}
+			if firstInQueueOnly {
+				if row.state != StateInQueue && row.state != StateInProgress {
+					continue
+				}
+				open = append(open, row)
+				break
 			}
 			open = append(open, row)
 		}
@@ -116,20 +142,26 @@ func (l *Loop) findOpenCheckFixer(ctx context.Context, searchNames []string) (st
 	return foundID, foundName, err
 }
 
-// linkMatchingOpenFixers links unattributed trunk proof failures (no single red
-// commit) to any open item that already names that check's test or check ID as
+// linkMatchingOpenFixers links trunk proof failures to any open item that
+// already names that check's test (or, for unattributed failures, check ID) as
 // the thing it fixes, recording the link on the item instead of filing a new
-// trunk fixer. Checks with a single red commit or no matching open item are
-// returned for ordinary fixer filing.
+// trunk fixer. When a check has a single red commit, only the open item first in
+// the queue is considered, and only by failing test name.
 func (l *Loop) linkMatchingOpenFixers(ctx context.Context, sha string, checks []HeavyCheck) ([]HeavyCheck, error) {
 	var remaining []HeavyCheck
 	var linked []trunkFailureLinked
 	for _, check := range checks {
+		var (
+			searchNames      []string
+			firstInQueueOnly bool
+		)
 		if check.FirstRedLanding != "" {
-			remaining = append(remaining, check)
-			continue
+			searchNames = heavyCheckTestNames(check)
+			firstInQueueOnly = true
+		} else {
+			searchNames = heavyCheckSearchNames(check)
 		}
-		itemID, matchedName, err := l.findOpenCheckFixer(ctx, heavyCheckSearchNames(check))
+		itemID, matchedName, err := l.findOpenCheckFixer(ctx, searchNames, firstInQueueOnly)
 		if err != nil {
 			return nil, err
 		}

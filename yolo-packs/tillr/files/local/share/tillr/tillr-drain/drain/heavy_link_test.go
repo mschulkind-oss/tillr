@@ -343,3 +343,240 @@ func TestHeavyProofSingleRedCommitStillFilesFixer(t *testing.T) {
 		t.Fatalf("links=%+v, want none", links)
 	}
 }
+
+func TestHeavyProofCoalescesTwoChecksWithSameFailingTestAndFailureLine(t *testing.T) {
+	const (
+		testName    = "TestTreeDeclarationReadingGoModuleReadsInRepoDependencies"
+		failureLine = "tree_checks_test.go:456: go-test-tillr-cli.json: missing Go dependencies in reads"
+	)
+	ctx := context.Background()
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	first := heavyCommit(t, root, "first")
+	second := heavyCommit(t, root, "second")
+
+	s, err := store.InitFixture(ctx, filepath.Join(scratchUnderDurable(t), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if err := recordFixtureLanding(tx, "item-1", "run-1", first, 0); err != nil {
+			return err
+		}
+		return recordFixtureLanding(tx, "item-2", "run-2", second, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	logDir := scratchUnderDurable(t)
+	logGate := filepath.Join(logDir, "go-test-gate.log")
+	logTree := filepath.Join(logDir, "tree-checks-test.log")
+	body := "--- FAIL: " + testName + " (0.01s)\n    " + failureLine + "\nFAIL\n"
+	if err := os.WriteFile(logGate, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logTree, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// go-test-gate turns red at first; tree-checks-test turns red at second.
+	steps := heavyTestSteps{judge: func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
+		value, err := os.ReadFile(filepath.Join(dir, "value"))
+		if err != nil {
+			return nil, err
+		}
+		v := string(value)
+		gateRes, treeRes := "pass", "pass"
+		if v == "first" || v == "second" {
+			gateRes = "fail"
+		}
+		if v == "second" {
+			treeRes = "fail"
+		}
+		switch only {
+		case "go-test-gate":
+			return []HeavyCheck{{CheckID: "go-test-gate", Result: gateRes, Reads: []string{"value"}, LogPath: logGate}}, nil
+		case "tree-checks-test":
+			return []HeavyCheck{{CheckID: "tree-checks-test", Result: treeRes, Reads: []string{"value"}, LogPath: logTree}}, nil
+		default:
+			return []HeavyCheck{
+				{CheckID: "go-test-gate", Result: gateRes, Reads: []string{"value"}, LogPath: logGate},
+				{CheckID: "tree-checks-test", Result: treeRes, Reads: []string{"value"}, LogPath: logTree},
+			}, nil
+		}
+	}}
+	l := &Loop{
+		gatePolicy: GatePolicy{LandingStrategy: "after-merge"},
+		cfg:        LoopConfig{Root: root, Store: s.Path(), LaneRoot: scratchUnderDurable(t), Steps: steps, Now: time.Now, Report: io.Discard},
+	}
+	if err := l.startHeavy(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+
+	fixers := readFixerItems(t, s)
+	if len(fixers) != 1 || fixers[0] != TrunkFixerID(first) {
+		t.Fatalf("fixers=%v, want [%s]", fixers, TrunkFixerID(first))
+	}
+	var criteria string
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT text FROM item_criteria WHERE item_id = ? AND criterion_id = 'trunk-green'`, fixers[0]).Scan(&criteria)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(criteria, "go-test-gate") || !strings.Contains(criteria, "tree-checks-test") {
+		t.Fatalf("fixer criteria=%q, want both go-test-gate and tree-checks-test", criteria)
+	}
+}
+
+func TestHeavyProofAttributedChecksLinkWhenFirstOpenItemFixesFailingTest(t *testing.T) {
+	const (
+		testName    = "TestTreeDeclarationReadingGoModuleReadsInRepoDependencies"
+		failureLine = "tree_checks_test.go:456: go-test-tillr-cli.json: missing Go dependencies in reads"
+	)
+	ctx := context.Background()
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	first := heavyCommit(t, root, "first")
+	second := heavyCommit(t, root, "second")
+
+	s, err := store.InitFixture(ctx, filepath.Join(scratchUnderDurable(t), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if err := recordFixtureLanding(tx, "item-1", "run-1", first, 0); err != nil {
+			return err
+		}
+		return recordFixtureLanding(tx, "item-2", "run-2", second, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	insertOpenTestFixItem(t, s,
+		"item-request-tree-deps",
+		"Fix "+testName,
+		StateInProgress,
+		"Fix "+testName+" failing with missing Go dependencies in reads.\n",
+	)
+
+	logDir := scratchUnderDurable(t)
+	logGate := filepath.Join(logDir, "go-test-gate.log")
+	logTree := filepath.Join(logDir, "tree-checks-test.log")
+	body := "--- FAIL: " + testName + " (0.01s)\n    " + failureLine + "\nFAIL\n"
+	if err := os.WriteFile(logGate, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logTree, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	steps := heavyTestSteps{judge: func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
+		value, err := os.ReadFile(filepath.Join(dir, "value"))
+		if err != nil {
+			return nil, err
+		}
+		v := string(value)
+		gateRes, treeRes := "pass", "pass"
+		if v == "first" || v == "second" {
+			gateRes = "fail"
+		}
+		if v == "second" {
+			treeRes = "fail"
+		}
+		switch only {
+		case "go-test-gate":
+			return []HeavyCheck{{CheckID: "go-test-gate", Result: gateRes, Reads: []string{"value"}, LogPath: logGate}}, nil
+		case "tree-checks-test":
+			return []HeavyCheck{{CheckID: "tree-checks-test", Result: treeRes, Reads: []string{"value"}, LogPath: logTree}}, nil
+		default:
+			return []HeavyCheck{
+				{CheckID: "go-test-gate", Result: gateRes, Reads: []string{"value"}, LogPath: logGate},
+				{CheckID: "tree-checks-test", Result: treeRes, Reads: []string{"value"}, LogPath: logTree},
+			}, nil
+		}
+	}}
+	l := &Loop{
+		gatePolicy: GatePolicy{LandingStrategy: "after-merge"},
+		cfg:        LoopConfig{Root: root, Store: s.Path(), LaneRoot: scratchUnderDurable(t), Steps: steps, Now: time.Now, Report: io.Discard},
+	}
+	if err := l.startHeavy(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+
+	if fixers := readFixerItems(t, s); len(fixers) != 0 {
+		t.Fatalf("fixers=%v, want none", fixers)
+	}
+	links := readLinkedFailures(t, s)
+	if len(links) != 2 {
+		t.Fatalf("links=%+v, want 2 links (go-test-gate and tree-checks-test)", links)
+	}
+	for _, link := range links {
+		if link.ObjectID != "item-request-tree-deps" || link.Payload.MatchedName != testName {
+			t.Fatalf("unexpected link=%+v", link)
+		}
+	}
+}
+
+func TestHeavyProofAttributedChecksFileFixerWhenMatchingItemNotFirstInQueue(t *testing.T) {
+	const (
+		testName    = "TestTreeDeclarationReadingGoModuleReadsInRepoDependencies"
+		failureLine = "tree_checks_test.go:456: go-test-tillr-cli.json: missing Go dependencies in reads"
+	)
+	ctx := context.Background()
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	red := heavyCommit(t, root, "red")
+
+	s, err := store.InitFixture(ctx, filepath.Join(scratchUnderDurable(t), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		return recordFixtureLanding(tx, "item-1", "run-1", red, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Put an unrelated item first in queue (rank 'a') and the matching fix item second (rank 'b').
+	insertOpenTestFixItem(t, s, "item-request-first", "Unrelated work", StateInQueue, "Unrelated.\n")
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`INSERT INTO items(item_id, title, state, rank, updated_at) VALUES(?, ?, ?, 'b', 1000)`,
+			"item-request-tree-deps", "Fix "+testName, StateInQueue); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	logGate := filepath.Join(scratchUnderDurable(t), "go-test-gate.log")
+	if err := os.WriteFile(logGate, []byte("--- FAIL: "+testName+" (0.01s)\n    "+failureLine+"\nFAIL\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	steps := heavyTestSteps{judge: func(_ context.Context, dir, _ string) ([]HeavyCheck, error) {
+		value, err := os.ReadFile(filepath.Join(dir, "value"))
+		res := "pass"
+		if string(value) != "good" {
+			res = "fail"
+		}
+		return []HeavyCheck{{CheckID: "go-test-gate", Result: res, Reads: []string{"value"}, LogPath: logGate}}, err
+	}}
+	l := &Loop{
+		gatePolicy: GatePolicy{LandingStrategy: "after-merge"},
+		cfg:        LoopConfig{Root: root, Store: s.Path(), LaneRoot: scratchUnderDurable(t), Steps: steps, Now: time.Now, Report: io.Discard},
+	}
+	if err := l.startHeavy(ctx, red); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+
+	if fixers := readFixerItems(t, s); len(fixers) != 1 || fixers[0] != TrunkFixerID(red) {
+		t.Fatalf("fixers=%v, want [%s]", fixers, TrunkFixerID(red))
+	}
+	if links := readLinkedFailures(t, s); len(links) != 0 {
+		t.Fatalf("links=%+v, want none", links)
+	}
+}
