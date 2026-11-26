@@ -11,21 +11,53 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-const stubTillrGate = `#!/bin/sh
+var (
+	gateBinaryMu   sync.Mutex
+	gateBinaryDir  string
+	gateBinaryPath string
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if gateBinaryDir != "" {
+		_ = os.RemoveAll(gateBinaryDir)
+	}
+	os.Exit(code)
+}
+
+func buildGateBinary(t *testing.T) string {
+	t.Helper()
+	gateBinaryMu.Lock()
+	defer gateBinaryMu.Unlock()
+	if gateBinaryPath != "" {
+		if _, err := os.Stat(gateBinaryPath); err == nil {
+			return gateBinaryPath
+		}
+	}
+	dir, err := os.MkdirTemp("", "tillr-gate-bin-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateBinaryDir = dir
+	bin := filepath.Join(dir, "tillr-gate")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Dir = filepath.Join("..", "..", "tillr-gate")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build tillr-gate: %v\n%s", err, out)
+	}
+	gateBinaryPath = bin
+	return gateBinaryPath
+}
+
+const stubTillrGateTemplate = `#!/bin/sh
 if [ "$1" = classify ]; then
-  own=$(cd "$(dirname "$0")" && pwd -P)
-  oldifs=$IFS; IFS=:
-  for dir in $PATH; do
-    IFS=$oldifs
-    [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$own" ] && continue
-    [ -x "$dir/tillr-gate" ] && exec "$dir/tillr-gate" "$@"
-  done
-  exit 127
+  exec '__TILLR_GATE_BIN__' "$@"
 fi
 log() { printf '%s\n' "$*" >> "$STUB_LOG"; }
 log "$@"
@@ -167,8 +199,9 @@ func newFixture(t *testing.T, withStubs bool) *testFixture {
 		t.Fatal(err)
 	}
 	if withStubs {
+		gateBin := strings.ReplaceAll(buildGateBinary(t), "'", "'\\''")
 		for name, body := range map[string]string{
-			"tillr-gate": stubTillrGate,
+			"tillr-gate": strings.Replace(stubTillrGateTemplate, "__TILLR_GATE_BIN__", gateBin, 1),
 			"tillr-land": stubTillrLand,
 			"tillr-item": stubTillrItem,
 		} {

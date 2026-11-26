@@ -208,7 +208,11 @@ func TestTheLoopWritesTheChangeRecordTheFaceWrites(t *testing.T) {
 		"--work-dir", work, "--now", now,
 		"--registry", registry, "--gate-program", "/bin/true",
 		"--tillr-gate", gateBin)
-	cmd.Env = append(os.Environ(), "BOARD_DB=", "XDG_STATE_HOME="+scratch(t, "loop-state"))
+	cmd.Env = append(os.Environ(),
+		"BOARD_DB=",
+		"XDG_STATE_HOME="+scratch(t, "loop-state"),
+		"PATH="+filepath.Dir(gateBin)+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("the loop's gate adapter failed: %v\n%s", err, out)
 	}

@@ -2,6 +2,7 @@ package drain_test
 
 import (
 	"encoding/json"
+	"github.com/mschulkind-oss/tillr-drain/internal/testinputs"
 	"github.com/mschulkind-oss/tillr/event"
 	"os"
 	"os/exec"
@@ -30,8 +31,29 @@ func startStopFixture(t *testing.T, f loopFixture, lanes int, gateOverride ...st
 	return startStopFixtureWithRun(t, f, lanes, sibling(t, "run"), gateOverride...)
 }
 
+func ensureTillrCLIInDrainBinDir(t *testing.T) string {
+	t.Helper()
+	if err := testinputs.Track(".."); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(drainBinDir(t), "tillr")
+	siblingMu.Lock()
+	defer siblingMu.Unlock()
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	build := exec.Command("go", "build", "-o", path, ".")
+	build.Dir = filepath.Join("..", "..", "tillr-cli")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building tillr failed: %v\n%s", err, out)
+	}
+	return path
+}
+
 func startStopFixtureWithRun(t *testing.T, f loopFixture, lanes int, runBin string, gateOverride ...string) (*exec.Cmd, *strings.Builder) {
 	t.Helper()
+	sibling(t, "store")
+	ensureTillrCLIInDrainBinDir(t)
 	policy := filepath.Join(scratch(t, "stop-policy"), "policy.json")
 	raw, err := json.Marshal(f.policy)
 	if err != nil {
@@ -47,6 +69,7 @@ func startStopFixtureWithRun(t *testing.T, f loopFixture, lanes int, runBin stri
 		land = gateOverride[1]
 	}
 	cmd := exec.Command(drainBin(t), "loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot, "--lanes", fmtInt(lanes), "--policy", policy, "--run-bin", runBin, "--item-bin", sibling(t, "item"), "--brief-template", filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), "--gate", gate, "--land", land, "--verdict", always(t, "verdict", 0))
+	cmd.Env = append(os.Environ(), "PATH="+drainBinDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out := new(strings.Builder)
 	cmd.Stdout = out
 	cmd.Stderr = out

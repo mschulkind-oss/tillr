@@ -50,7 +50,7 @@ func TestLoopCommentsServerConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	code, out := invoke(t, "loop", "--root", f.root, "--store", f.store, "--policy", policy, "--lane-root", f.laneRoot, "--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true", "--rolling=", "--exit-when-drained")
+	code, out := invoke(t, "loop", "--root", f.root, "--store", f.store, "--policy", policy, "--lane-root", f.laneRoot, "--item-bin", sibling(t, "item"), "--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true", "--rolling=", "--exit-when-drained")
 	if calls.Load() == 0 {
 		t.Fatalf("comments accepted without asking the reply server (exit %d): %s", code, out)
 	}

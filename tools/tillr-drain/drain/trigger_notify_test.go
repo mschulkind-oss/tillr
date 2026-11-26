@@ -61,13 +61,23 @@ func startInProcessRelay(t *testing.T, storePath string) (sockPath string, stop 
 
 func buildTillrCLIBinary(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "tillr")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Dir = filepath.Join("..", "..", "tillr-cli")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build tillr cli: %v\n%s", err, out)
+	binDir := t.TempDir()
+	for _, mod := range []struct {
+		bin string
+		dir string
+	}{
+		{bin: "tillr", dir: "tillr-cli"},
+		{bin: "tillr-item", dir: "tillr-item"},
+		{bin: "tillr-store", dir: "tillr-store"},
+	} {
+		cmd := exec.Command("go", "build", "-o", filepath.Join(binDir, mod.bin), ".")
+		cmd.Dir = filepath.Join("..", "..", mod.dir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("build %s: %v\n%s", mod.bin, err, out)
+		}
 	}
-	return bin
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return filepath.Join(binDir, "tillr")
 }
 
 func TestWaitForTriggerWakesOnRelayedStoreChange(t *testing.T) {

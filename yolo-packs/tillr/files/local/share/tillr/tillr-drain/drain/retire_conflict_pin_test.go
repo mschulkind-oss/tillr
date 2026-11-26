@@ -42,7 +42,7 @@ esac
 	conflict := landingEnvelope(t, "squash-conflict", []string{"CONFLICT (content): Merge conflict in base.txt"})
 	land := conflictLandScript(t, f.root, conflict, landingEnvelope(t, "landed", nil), 0)
 	gate := stub(t, "gate", counting+`set -eu
-! git show HEAD:docs/work.md | rg -q 'id="item-repair"'
+! git show HEAD:docs/work.md | grep -q 'id="item-repair"'
 `)
 	stage := &recordingStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"base.txt", "docs/work.md"}}}
 	result, err := routeLoop(t, f, f.steps(t, gate, land, always(t, "verdict", 0)), stage, os.Stderr).Run(context.Background())

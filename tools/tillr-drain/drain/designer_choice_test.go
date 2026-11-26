@@ -151,6 +151,7 @@ func TestFailedDesignerResumeStartsNewSessionOnce(t *testing.T) {
 	l = f.loop(t, steps, stage)
 	l.cfg.Policy.Seats = map[string]string{"design": "fixture"}
 	l.cfg.Policy.Backends["fixture"] = Backend{Adapter: "fixture", Model: "fixture-model"}
+	l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s\n' '{"index":{"documents":[{"path":"docs/design/example.md","stage":"DESIGN","questions":[]}]}}'`}
 	steps.replacementTerminal = make(chan struct{})
 	release := make(chan struct{})
 	steps.replacementReturn = release
@@ -162,6 +163,8 @@ func TestFailedDesignerResumeStartsNewSessionOnce(t *testing.T) {
 	go func() { r, e := l.Run(ctx); finished <- answer{r, e} }()
 	select {
 	case <-steps.replacementTerminal:
+	case out := <-finished:
+		t.Fatalf("loop exited before replacement terminated: %+v %v", out.result, out.err)
 	case <-ctx.Done():
 		t.Fatal("replacement never terminated")
 	}

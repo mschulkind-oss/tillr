@@ -125,10 +125,50 @@ type questionOut struct {
 	} `json:"payload"`
 }
 
+// questionsStub writes an executable Vantage index stub that parses
+// <!-- vantage: question id=... --> directives under docs/ without uvx.
+func questionsStub(t *testing.T) string {
+	t.Helper()
+	script := filepath.Join(scratch(t, "questions-stub"), "index-command")
+	body := `#!/bin/sh
+exec python3 - <<'PY'
+import json, os, re
+
+docs = []
+if os.path.isdir("docs"):
+    for dirpath, _, filenames in os.walk("docs"):
+        for name in sorted(filenames):
+            if not name.endswith(".md"):
+                continue
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, ".").replace(os.sep, "/")
+            questions = []
+            bullet = ""
+            with open(full, "r", encoding="utf-8") as f:
+                for line in f:
+                    m_b = re.match(r"^\s*(?:-|\d+\.)\s+(?:💬\s+)?(.*)$", line)
+                    if m_b:
+                        bullet = m_b.group(1).strip()
+                        continue
+                    m_q = re.search(r"<!--\s*vantage:\s*question\s+id=([^\s]+)\s*-->", line)
+                    if m_q:
+                        title = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", bullet)
+                        title = title.replace("**", "").replace(chr(96), "").strip()
+                        questions.append({"id": m_q.group(1), "state": "open", "title": title})
+            docs.append({"path": rel, "questions": questions})
+print(json.dumps({"index": {"documents": docs}}))
+PY
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("writing questions stub failed: %v", err)
+	}
+	return script
+}
+
 // show reads one item back with the document root named explicitly.
 func show(t *testing.T, db, root, id string) (int, []byte) {
 	t.Helper()
-	return run(t, "show", "--store", db, "--item", id, "--root", root)
+	return run(t, "show", "--store", db, "--item", id, "--root", root, "--questions-cmd", questionsStub(t))
 }
 
 // The document's open questions are surfaced with their identifiers and text, and the

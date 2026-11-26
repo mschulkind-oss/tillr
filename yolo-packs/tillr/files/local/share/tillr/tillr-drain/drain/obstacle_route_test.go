@@ -51,6 +51,7 @@ func obstacleFixture(t *testing.T, steps *obstacleSteps, ids ...string) (refusal
 	f := newRefusalLoopFixture(t, ids...)
 	steps.recordingSteps = &recordingSteps{}
 	l := f.loop(t, steps, &itemContentStager{})
+	l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s\n' '{"index":{"documents":[]}}'`}
 	l.cfg.Policy.Backends = map[string]Backend{"fixture": {Adapter: "fixture"}, "stronger": {Adapter: "fixture"}}
 	l.cfg.Policy.Seats = map[string]string{"build": "fixture"}
 	l.cfg.Policy.Escalate = map[string][]string{"build": {"fixture", "stronger"}}
@@ -371,7 +372,7 @@ func TestObstacleCallRoutesEqualToFooterAndDeliversReplies(t *testing.T) {
 		}
 		settleReport(t, f, l, work, "")
 		p := mustPlan(t, l)[0]
-		if !p.decision.RunRequest.SessionTurn {
+		if p.decision.RunRequest == nil || !p.decision.RunRequest.SessionTurn {
 			t.Fatalf("refuted trunk did not plan session turn: %+v", p.decision)
 		}
 		l.cfg.Stage = &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), Now: l.cfg.Now}
@@ -431,7 +432,7 @@ func TestObstacleCallRoutesEqualToFooterAndDeliversReplies(t *testing.T) {
 			t.Fatal(err)
 		}
 		nextPlan := mustPlan(t, l)[0]
-		if !nextPlan.decision.RunRequest.SessionTurn || nextPlan.decision.Reason != ReasonConflictAnswered {
+		if nextPlan.decision.RunRequest == nil || !nextPlan.decision.RunRequest.SessionTurn || nextPlan.decision.Reason != ReasonConflictAnswered {
 			t.Fatalf("expected resumed build turn for answered obstacle, got %+v", nextPlan.decision)
 		}
 		l.cfg.Stage = &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), Now: l.cfg.Now}

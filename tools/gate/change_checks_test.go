@@ -52,6 +52,11 @@ type changeFixture struct {
 
 func newChangeFixture(t *testing.T, withStubUVX bool) *changeFixture {
 	t.Helper()
+	if !withStubUVX {
+		if _, err := exec.LookPath("uvx"); err != nil {
+			t.Skip("uvx not installed on PATH; skipping real vantage-check renderer test")
+		}
+	}
 	root, id := loadTestContext(t)
 	personal := id[0]
 
@@ -913,6 +918,7 @@ func TestChangeMarkdownOnlyRemembersGoBuildWithoutStartingCompile(t *testing.T) 
 	root, _ := loadTestContext(t)
 	runner := buildTillrGateForTest(t, root)
 	f := newChangeFixture(t, true)
+	f.setEnv("YOLO_DURABLE_DIR", t.TempDir())
 	raw, err := os.ReadFile(filepath.Join(root, "tools", "gate", "checks", "go-build.json"))
 	if err != nil {
 		t.Fatal(err)

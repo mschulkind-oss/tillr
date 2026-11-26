@@ -290,6 +290,7 @@ func TestMidPassLandingTouchingInputsOrFenceKeepsDecidedStart(t *testing.T) {
 			f, l := passFixture(t, "item-a")
 			l.cfg.Policy.Seats = map[string]string{"build": "fixture"}
 			l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture"}}
+			l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s\n' '{"index":{"documents":[{"path":"docs/design/spec.md","stage":"DESIGN","questions":[]}]}}'`}
 			tc.setup(t, f)
 			runGit(t, f.root, "add", ".")
 			runGit(t, f.root, "commit", "-qm", "setup")

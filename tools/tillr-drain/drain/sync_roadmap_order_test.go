@@ -11,6 +11,7 @@ import (
 
 func TestSyncedRoadmapFirstEntryDispatchesFirst(t *testing.T) {
 	f, l := passFixture(t)
+	l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s\n' '{"index":{"documents":[{"path":"docs/first.md","stage":"DESIGN","questions":[]},{"path":"docs/second.md","stage":"DESIGN","questions":[]},{"path":"docs/other.md","stage":"DESIGN","questions":[]}]}}'`}
 	for _, dir := range []string{"docs/a", "docs/b"} {
 		if err := os.MkdirAll(filepath.Join(f.root, dir), 0700); err != nil {
 			t.Fatal(err)

@@ -20,6 +20,7 @@ import (
 func designAnswerFixture(t *testing.T) (refusalLoopFixture, *Loop, Decision, string) {
 	t.Helper()
 	f, l := designQuotaFixture(t)
+	l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s\n' '{"index":{"documents":[]}}'`}
 	if err := os.MkdirAll(filepath.Join(f.root, "briefs"), 0o755); err != nil {
 		t.Fatal(err)
 	}

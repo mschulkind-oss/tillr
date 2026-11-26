@@ -169,7 +169,31 @@ func TestReconcileRepositoryStructure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := reconcileRun(t, item.ReconcileInput{Root: root}, nil)
+	cmd := osexec.Command("git", "ls-files", "-z", "--", "docs")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git ls-files docs: %v", err)
+	}
+	var entries []map[string]any
+	for _, rawPath := range strings.Split(string(out), "\x00") {
+		if rawPath == "" || !strings.HasSuffix(rawPath, ".md") {
+			continue
+		}
+		entries = append(entries, reconcileEntry(rawPath, "CURRENT", "accepted"))
+	}
+	raw, err := json.Marshal(map[string]any{"index": map[string]any{"documents": entries}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexFile := filepath.Join(scratch(t), "repo-index.json")
+	if err := os.WriteFile(indexFile, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := reconcileRun(t, item.ReconcileInput{
+		Root:    root,
+		Command: []string{"python3", "-c", "import sys; print(open(sys.argv[1]).read())", indexFile},
+	}, nil)
 	total := 0
 	for _, n := range report.Counts {
 		total += n

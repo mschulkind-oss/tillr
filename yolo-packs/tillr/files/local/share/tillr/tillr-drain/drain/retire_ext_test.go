@@ -31,7 +31,7 @@ func TestLandingRetiresItsDocumentBlockBeforeGateOutsideFence(t *testing.T) {
 [ "$(git show HEAD:docs/fixture.md)" = "$(printf '%s' "$RETIRE_WANT")" ]
 [ "$(git log -1 --format=%s)" = "chore: retire landed document block" ]
 [ "$(git diff --name-only HEAD~1 HEAD)" = "$(printf 'docs/fixture.md\ndocs/other.md')" ]
-git show HEAD:docs/other.md | rg -q 'blocked_by=""'
+git show HEAD:docs/other.md | grep -q 'blocked_by=""'
 [ "$(git diff --name-only HEAD~2 HEAD~1)" = "candidate.txt" ]
 `)
 	land := stub(t, "land", counting+`set -eu

@@ -11,12 +11,46 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/testinputs"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
+
+var (
+	gateBinaryMu   sync.Mutex
+	gateBinaryPath string
+)
+
+func buildGateBinary(t *testing.T) string {
+	t.Helper()
+	if err := testinputs.Track(".."); err != nil {
+		t.Fatal(err)
+	}
+	gateBinaryMu.Lock()
+	defer gateBinaryMu.Unlock()
+	if gateBinaryPath != "" {
+		if _, err := os.Stat(gateBinaryPath); err == nil {
+			return gateBinaryPath
+		}
+	}
+	dir, err := os.MkdirTemp("", "tillr-gate-bin-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	RegisterTestCleanup(func() { _ = os.RemoveAll(dir) })
+	bin := filepath.Join(dir, "tillr-gate")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Dir = filepath.Join("..", "..", "tillr-gate")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build tillr-gate: %v\n%s", err, out)
+	}
+	gateBinaryPath = bin
+	return gateBinaryPath
+}
 
 // The drain appends the candidate, and every optional flag its branches add, to the step
 // programs it is given. In this repository those programs are the `tillr-loop` adapter's
@@ -59,18 +93,12 @@ func adapterStubs(t *testing.T) (log string) {
 	log = filepath.Join(dir, "calls.log")
 	show := filepath.Join(dir, "item-show.json")
 	writeForkFile(t, show, `{"record_version":1,"kind":"item.record","id":"item-a","producer":{"system":"tillr","utility":"tillr-item","version":"0.1.0"},"created_at":"2026-01-01T00:00:00Z","payload":{"item_id":"item-a","criteria":[{"criterion_id":"c1","text":"the criterion","state":"pending","claim_class":"verification-only"}]}}`)
+	gateBin := buildGateBinary(t)
 	for _, name := range []string{"tillr-gate", "tillr-land", "tillr-item"} {
 		body := "#!/bin/sh\n"
 		if name == "tillr-gate" {
 			body += `if [ "$1" = classify ]; then
-  own=$(cd "$(dirname "$0")" && pwd -P)
-  oldifs=$IFS; IFS=:
-  for dir in $PATH; do
-    IFS=$oldifs
-    [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$own" ] && continue
-    [ -x "$dir/tillr-gate" ] && exec "$dir/tillr-gate" "$@"
-  done
-  exit 127
+  exec "` + gateBin + `" "$@"
 fi
 `
 		}

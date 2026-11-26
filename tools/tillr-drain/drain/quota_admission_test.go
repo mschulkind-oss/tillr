@@ -155,6 +155,7 @@ func TestFailedDesignerReplacementWaitsForQuotaAcrossRestart(t *testing.T) {
 		next := f.loop(t, &quotaDesignerSteps{steps}, stage)
 		next.cfg.Policy.Seats = map[string]string{"design": "fixture"}
 		next.cfg.Policy.Backends["fixture"] = Backend{Adapter: "fixture", Model: "fixture-model"}
+		next.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s\n' '{"index":{"documents":[{"path":"docs/design/example.md","stage":"DESIGN","questions":[]}]}}'`}
 		enableFixtureQuota(next, "fixture")
 		return next
 	}

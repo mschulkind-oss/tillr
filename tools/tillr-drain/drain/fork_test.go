@@ -74,6 +74,13 @@ func TestFencePrefixNamesOnlyACheckoutInsideTheRepository(t *testing.T) {
 // does not name is reported with the repo-relative path an operator can find.
 func TestFenceViolationScopesAForkCheckoutToItsRepoRelativePath(t *testing.T) {
 	root := scratchUnderDurable(t)
+	runGit(t, root, "init", "-b", "main")
+	runGit(t, root, "config", "user.email", "test@example.com")
+	runGit(t, root, "config", "user.name", "test")
+	writeForkFile(t, filepath.Join(root, "README.md"), "base\n")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "base")
+
 	fork := filepath.Join(root, ".forks", "lanes", "lane-1", "pi")
 	if err := os.MkdirAll(filepath.Join(fork, "src"), 0o755); err != nil {
 		t.Fatalf("creating the fork checkout failed: %v", err)

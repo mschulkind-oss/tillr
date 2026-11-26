@@ -37,6 +37,16 @@ lint-ci:
 test *args:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [ -z "${YOLO_DURABLE_DIR:-}" ] && [ -n "${TMPDIR:-}" ]; then
+        YOLO_DURABLE_DIR="$TMPDIR"
+    fi
+    if [ -n "${YOLO_DURABLE_DIR:-}" ]; then
+        case "$YOLO_DURABLE_DIR" in
+            /*) ;;
+            *) YOLO_DURABLE_DIR="$(python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$YOLO_DURABLE_DIR")" ;;
+        esac
+        export YOLO_DURABLE_DIR
+    fi
     for mod in tools/*/go.mod; do
         dir="$(dirname "$mod")"
         if [ "$#" -eq 0 ] && [ "$dir" = "tools/tillr-drain" ]; then

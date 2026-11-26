@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,16 +17,15 @@ func TestProcessStepsRealAdapterPreservesStallAndStartError(t *testing.T) {
 	_, _ = repositoryFile(t, "tools/tillr-loop/go.mod")
 	f, l, _, c := stalledFixture(t, false)
 	dir := scratchUnderDurable(t)
+	gateBin := buildGateBinary(t)
 	stub := filepath.Join(dir, "tillr-gate")
 	script := `#!/usr/bin/env python3
-import json,os,shutil,sys
+import json,os,sys
 from pathlib import Path
 args=sys.argv[1:]
 face=args[0]
 if face=='classify':
- own=os.path.realpath(os.path.dirname(sys.argv[0]))
- path=os.pathsep.join(d for d in os.environ['PATH'].split(os.pathsep) if os.path.realpath(d or '.')!=own)
- os.execv(shutil.which('tillr-gate',path=path),['tillr-gate',*args])
+ os.execv(` + fmt.Sprintf("%q", gateBin) + `,['tillr-gate',*args])
 if face=='change': sys.exit(0)
 out=Path(args[args.index('--output')+1])
 out.parent.mkdir(parents=True,exist_ok=True)

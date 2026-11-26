@@ -344,6 +344,7 @@ func TestCommentPathTwice(t *testing.T) {
 		// Build a fresh supervisor to prove no process-local state supplies continuity.
 		stage := &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md")}
 		l = f.loop(t, steps, stage)
+		l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s\n' '{"index":{"documents":[{"path":"docs/design/example.md","stage":"DESIGN","questions":[]}]}}'`}
 		l.cfg.Lanes = []string{"lane-1"}
 		l.cfg.Policy.Seats = map[string]string{"design": "fixture"}
 		l.cfg.Policy.Backends["fixture"] = Backend{Adapter: "fixture", Model: "fixture-model"}

@@ -29,7 +29,7 @@ func testDesignAmendment(t *testing.T, repeat bool) {
 	if repeat {
 		failure = "c1 impossible contract failed\nRESULT: failed\n"
 	}
-	worker := counting + `if rg -q 'impossible contract' docs/work.md; then
+	worker := counting + `if grep -q 'impossible contract' docs/work.md; then
  printf '` + failure + `'
 else
  ` + committingAdapterBody + `printf 'RESULT: done\n'
@@ -57,11 +57,11 @@ git -C "$root" commit -qm "$(git -C "$root" log -1 --format=%%B "$head")"
 `, f.root, f.root))
 	gate := stub(t, "gate", counting+`set -eu
 if [ "$(git log -1 --format=%s)" = 'amend contract' ]; then
- git show HEAD:docs/work.md | rg -q 'implementable contract'
- git show HEAD:docs/work.md | rg -q 'id="item-route"'
+ git show HEAD:docs/work.md | grep -q 'implementable contract'
+ git show HEAD:docs/work.md | grep -q 'id="item-route"'
 else
  [ "$(git log -1 --format=%s)" = 'chore: retire landed document block' ]
- ! git show HEAD:docs/work.md | rg -q 'id="item-route"'
+ ! git show HEAD:docs/work.md | grep -q 'id="item-route"'
 fi
 `)
 	steps := f.steps(t, gate, land, always(t, "verdict", 0))
