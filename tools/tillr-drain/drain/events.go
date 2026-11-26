@@ -287,38 +287,45 @@ type refusalPayload struct {
 	Selectors map[string]string `json:"selectors,omitempty"`
 }
 
+// GateRefusalCauses derives the countable cross-item cause keys for a gate refusal's
+// failing checks (D-TW-RRS1, D-TW-RRS2), omitting the gate adapter's own wrapper entry
+// (for example, `gate:python3`) when it has no recorded failing checks.
+func GateRefusalCauses(checks []EndingCheck) []RefusalCause {
+	seen := map[string]struct{}{}
+	for _, check := range checks {
+		found := false
+		for _, failing := range check.Failing {
+			if failing.ID != "" {
+				seen[failing.ID] = struct{}{}
+				found = true
+			}
+		}
+		if !found && check.CheckID != "" && !strings.HasPrefix(check.CheckID, "gate:") {
+			seen[check.CheckID] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return []RefusalCause{{Cause: "gate:no-verdict"}}
+	}
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]RefusalCause, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, RefusalCause{Cause: "gate:" + id})
+	}
+	return out
+}
+
 // computeRefusalCauses derives the countable cross-item cause keys for a `drain.refusal`
 // payload (D-TW-RRS1, D-TW-RRS2). It always returns a non-nil slice so JSON marshaling
 // writes `"refusal_causes":[]` rather than null when a refusal class is excluded.
 func computeRefusalCauses(p refusalPayload) []RefusalCause {
 	switch p.Step {
 	case RefusalGate:
-		seen := map[string]struct{}{}
-		for _, check := range p.Checks {
-			found := false
-			for _, failing := range check.Failing {
-				if failing.ID != "" {
-					seen[failing.ID] = struct{}{}
-					found = true
-				}
-			}
-			if !found && check.CheckID != "" {
-				seen[check.CheckID] = struct{}{}
-			}
-		}
-		if len(seen) == 0 {
-			return []RefusalCause{{Cause: "gate:no-verdict"}}
-		}
-		ids := make([]string, 0, len(seen))
-		for id := range seen {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		out := make([]RefusalCause, 0, len(ids))
-		for _, id := range ids {
-			out = append(out, RefusalCause{Cause: "gate:" + id})
-		}
-		return out
+		return GateRefusalCauses(p.Checks)
 	case RefusalStaging:
 		if reason := strings.TrimSpace(p.Reason); reason != "" {
 			return []RefusalCause{{Cause: "staging:" + reason}}

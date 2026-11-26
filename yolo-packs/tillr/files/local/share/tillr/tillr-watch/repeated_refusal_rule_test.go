@@ -287,6 +287,60 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 		t.Fatalf("expected new episode for verify-not-done after prior landing resolution, got %+v", reopened)
 	}
 
+	causeNames := func(causes []drain.RefusalCause) []string {
+		out := make([]string, 0, len(causes))
+		for _, c := range causes {
+			out = append(out, c.Cause)
+		}
+		return out
+	}
+
+	// 8a. Two gate refusals whose only common failing check is the gate adapter's own entry
+	// (gate:python3) and that fail different checks/cases do not open an alert.
+	now = now.Add(2 * time.Minute)
+	appendLandingTo(s, "item-reset-ep2", land.ResultLanded, now)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("landing did not clear episode 2: %+v", notices)
+	}
+	now = now.Add(2 * time.Minute)
+	causesWrapperA := drain.GateRefusalCauses([]drain.EndingCheck{
+		{CheckID: "gate:python3"},
+		{CheckID: "elapsed-time"},
+		{CheckID: "go-affected", Failing: []drain.FailingCheck{{ID: "go-affected", Cases: []drain.FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs"}}}}},
+	})
+	appendRefusalTo(s, "run-wrap-a", "item-wrap-a", drain.RefusalGate, "failing checks: gate:python3, elapsed-time, go-affected", causeNames(causesWrapperA), now)
+	now = now.Add(2 * time.Minute)
+	causesWrapperB := drain.GateRefusalCauses([]drain.EndingCheck{
+		{CheckID: "gate:python3"},
+		{CheckID: "gate-budget"},
+		{CheckID: "change-checks-test", Failing: []drain.FailingCheck{{ID: "change-checks-test", Cases: []drain.FailingCase{{Name: "TestFastBudget"}, {Name: "TestOther"}}}}},
+	})
+	appendRefusalTo(s, "run-wrap-b", "item-wrap-b", drain.RefusalGate, "failing checks: gate:python3, gate-budget, change-checks-test", causeNames(causesWrapperB), now)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("refusals sharing only gate:python3 wrapper opened alert: %+v", notices)
+	}
+
+	// 8b. Two gate refusals that name the same failing test case under the same check
+	// (alongside gate:python3) are still counted as one shared cause.
+	now = now.Add(2 * time.Minute)
+	appendLandingTo(s, "item-reset-wrap", land.ResultLanded, now)
+	now = now.Add(2 * time.Minute)
+	causesSameCaseA := drain.GateRefusalCauses([]drain.EndingCheck{
+		{CheckID: "gate:python3"},
+		{CheckID: "go-affected", Failing: []drain.FailingCheck{{ID: "go-affected", Cases: []drain.FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs"}}}}},
+	})
+	appendRefusalTo(s, "run-same-case-a", "item-same-case-a", drain.RefusalGate, "failing checks: go-affected", causeNames(causesSameCaseA), now)
+	now = now.Add(2 * time.Minute)
+	causesSameCaseB := drain.GateRefusalCauses([]drain.EndingCheck{
+		{CheckID: "gate:python3"},
+		{CheckID: "go-affected", Failing: []drain.FailingCheck{{ID: "go-affected", Cases: []drain.FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs"}}}}},
+	})
+	appendRefusalTo(s, "run-same-case-b", "item-same-case-b", drain.RefusalGate, "failing checks: go-affected", causeNames(causesSameCaseB), now)
+	sameCaseNotices := pending()
+	if len(sameCaseNotices) != 1 || sameCaseNotices[0].Bundle.Subject != "gate:go-affected" {
+		t.Fatalf("expected 1 alert on gate:go-affected for shared failing test case, got %+v", sameCaseNotices)
+	}
+
 	// 9. Events lacking refusal_causes are skipped with no fallback (R-TW-DR2).
 	legacyStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "legacy.db"), true)
 	if err != nil {

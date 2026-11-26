@@ -50,6 +50,50 @@ func TestComputeRefusalCauses(t *testing.T) {
 			want: []RefusalCause{{Cause: "gate:no-verdict"}},
 		},
 		{
+			name: "gate wrapper entry without failing cases is omitted",
+			payload: refusalPayload{
+				Step: RefusalGate,
+				Checks: []EndingCheck{
+					{CheckID: "gate:python3"},
+					{CheckID: "elapsed-time"},
+					{
+						CheckID: "go-affected",
+						Failing: []FailingCheck{{
+							ID:    "go-affected",
+							Cases: []FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs"}},
+						}},
+					},
+				},
+			},
+			want: []RefusalCause{
+				{Cause: "gate:elapsed-time"},
+				{Cause: "gate:go-affected"},
+			},
+		},
+		{
+			name: "gate wrapper entry with triage failing checks keeps inner checks",
+			payload: refusalPayload{
+				Step: RefusalGate,
+				Checks: []EndingCheck{
+					{
+						CheckID: "gate:python3",
+						Failing: []FailingCheck{{ID: "tillr-backends"}},
+					},
+				},
+			},
+			want: []RefusalCause{{Cause: "gate:tillr-backends"}},
+		},
+		{
+			name: "gate wrapper entry alone without failing cases emits gate:no-verdict",
+			payload: refusalPayload{
+				Step: RefusalGate,
+				Checks: []EndingCheck{
+					{CheckID: "gate:python3"},
+				},
+			},
+			want: []RefusalCause{{Cause: "gate:no-verdict"}},
+		},
+		{
 			name: "staging with staging-failed reason",
 			payload: refusalPayload{
 				Step:   RefusalStaging,
