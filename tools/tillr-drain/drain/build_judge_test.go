@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-drain/restart"
@@ -13,6 +14,8 @@ import (
 
 type heldBuildJudge struct {
 	*judgeRouteSteps
+	mu      sync.Mutex
+	held    bool
 	entered chan struct{}
 	release chan struct{}
 	cleaned chan struct{}
@@ -20,11 +23,17 @@ type heldBuildJudge struct {
 
 func (s *heldBuildJudge) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
 	if strings.HasSuffix(req.RunID, "-judge") {
-		s.entered <- struct{}{}
-		<-s.release
-		close(s.cleaned)
-		if ctx.Err() != nil {
-			return run.Record{}, "", ctx.Err()
+		s.mu.Lock()
+		hold := !s.held
+		s.held = true
+		s.mu.Unlock()
+		if hold {
+			s.entered <- struct{}{}
+			<-s.release
+			close(s.cleaned)
+			if ctx.Err() != nil {
+				return run.Record{}, "", ctx.Err()
+			}
 		}
 		return s.judgeRouteSteps.Run(ctx, req)
 	}
