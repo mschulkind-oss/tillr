@@ -247,7 +247,7 @@ func TestBlockedReleaseRecordsByAndReason(t *testing.T) {
 	})
 }
 
-func TestFinishedStateExitRetainsEntryReceipt(t *testing.T) {
+func TestFinishedStateExitClearsEntryReceipt(t *testing.T) {
 	db := findingsStore(t)
 	findingsItem(t, db, "finding")
 	if code, out := findingState(t, db, "finding", "rejected", "--reason", "original evidence", "--by", "first-reviewer", "--resolves-via", "doc:original.md"); code != 0 {
@@ -264,8 +264,10 @@ func TestFinishedStateExitRetainsEntryReceipt(t *testing.T) {
 		t.Fatalf("show: %d %s", code, out)
 	}
 	p := receiptPayload(t, out)
-	if p["lifecycle_reason"] != "original evidence" || p["lifecycle_by"] != "first-reviewer" || p["resolves_via"] != "doc:original.md" {
-		t.Fatalf("entry receipt replaced by exit: %s", out)
+	for _, key := range []string{"lifecycle_reason", "lifecycle_by", "resolves_via"} {
+		if _, ok := p[key]; ok {
+			t.Fatalf("finished-state %s survived exit: %s", key, out)
+		}
 	}
 	if code, out := findingState(t, db, "finding", "confirmed"); code != 0 {
 		t.Fatalf("finish again: %d %s", code, out)

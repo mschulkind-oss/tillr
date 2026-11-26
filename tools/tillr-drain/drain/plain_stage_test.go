@@ -20,7 +20,7 @@ func TestNonLandingStagesPlainDirectory(t *testing.T) {
 	d := plannerFixtureDefinition(t)
 	d.Ready = "in-queue"
 	d.BriefTemplate = "finding-template.md"
-	template := "# {{ITEM_ID}}: {{TITLE}}\nRun {{RUN_ID}} on {{BACKEND}}\nTarget {{TARGET}} ({{TARGET_KIND}})\nDate {{DATE}}, timeout {{TIMEOUT_SECONDS}}\n{{TASK}}\n1. {{CRITERION_1}}\n"
+	template := "# {{ITEM_ID}}: {{TITLE}}\nRun {{RUN_ID}} on {{BACKEND}}\nTarget {{TARGET}} ({{TARGET_KIND}})\nDate {{DATE}}, timeout {{TIMEOUT_SECONDS}}\n{{TASK}}\n{{CRITERION_1}}\n"
 	writeFile(t, filepath.Join(root, d.BriefTemplate), template)
 	setPlannerDefinition(t, path, d)
 	code, out := invoke(t, "why", "finding", "--root", root, "--store", path, "--policy", policy(t, "true"), "--lanes", "lane-1", "--json")
@@ -119,5 +119,51 @@ func TestGitLandingStagingRefusesOtherWorkingDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.laneRoot, "lane-1")); !os.IsNotExist(err) {
 		t.Fatalf("refused staging created lane: %v", err)
+	}
+}
+
+func TestPlainStageNumbersEveryCriterionInOrder(t *testing.T) {
+	root := scratch(t, "plain-criteria-root")
+	laneRoot := filepath.Join(scratch(t, "plain-criteria-lanes"), "lanes")
+	rec := envelope("item.record", "item-finding-multi", map[string]any{
+		"item_id":    "finding-multi",
+		"title":      "the item finding-multi",
+		"body_ref":   "briefs/finding-multi.md",
+		"state":      "in-queue",
+		"blocked_by": []string{},
+		"criteria": []map[string]string{
+			{"criterion_id": "c1", "text": "reproduce the fault", "state": "open"},
+			{"criterion_id": "c2", "text": "record the verdict", "state": "open"},
+			{"criterion_id": "c3", "text": "leave the working tree untouched", "state": "open"},
+		},
+	})
+	path := fixture(t, rec)
+	d := plannerFixtureDefinition(t)
+	d.Ready = "in-queue"
+	d.BriefTemplate = "finding-template.md"
+	writeFile(t, filepath.Join(root, d.BriefTemplate), "## Criteria\n\n{{CRITERION_1}}\n")
+	setPlannerDefinition(t, path, d)
+
+	stager := &drain.LaneStager{
+		Root:     root,
+		LaneRoot: laneRoot,
+		Store:    path,
+		Now:      func() time.Time { return time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC) },
+	}
+	spec := drain.StageSpec{
+		LaneID:     "lane-1",
+		ItemID:     "finding-multi",
+		RunID:      "run-finding-multi-a1",
+		Backend:    "pi",
+		WorkingDir: drain.PlainDir,
+		TimeoutMS:  60000,
+	}
+	if err := stager.Stage(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	got := readAll(t, filepath.Join(laneRoot, "lane-1", drain.BriefFile))
+	want := "## Criteria\n\n1. reproduce the fault\n2. record the verdict\n3. leave the working tree untouched\n"
+	if got != want {
+		t.Fatalf("brief:\n%s\nwant:\n%s", got, want)
 	}
 }

@@ -246,6 +246,8 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 		}
 		if d.IsFinished(payload.State) {
 			payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia = receipt.Reason, receipt.By, receipt.ResolvesVia
+		} else if d.IsFinished(from) {
+			payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia = "", "", ""
 		}
 	}
 	allowedPaths, err := encodeAllowedPaths(payload.AllowedPaths)

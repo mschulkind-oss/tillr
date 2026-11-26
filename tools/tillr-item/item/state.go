@@ -154,8 +154,12 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 		}
 		waitingJSON = string(body)
 	}
-	if payload.State != state && d.IsFinished(state) {
-		payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia = receipt.Reason, receipt.By, receipt.ResolvesVia
+	if payload.State != state {
+		if d.IsFinished(state) {
+			payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia = receipt.Reason, receipt.By, receipt.ResolvesVia
+		} else if d.IsFinished(payload.State) {
+			payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia = "", "", ""
+		}
 	}
 	if _, err := tx.Exec(
 		`UPDATE items SET state = ?, waiting_on = ?, underlying_state = ?, lifecycle_reason = ?, lifecycle_by = ?, resolves_via = ?, updated_at = ? WHERE item_id = ?`,

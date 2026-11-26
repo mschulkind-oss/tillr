@@ -475,7 +475,7 @@ echo '{"state":"confirmed","reason":"evidence checked","resolves_via":"doc:evide
 
 ## Task
 {{TASK}}
-1. {{CRITERION_1}}
+{{CRITERION_1}}
 
 ## Scope and boundaries
 Plain directory {{TARGET}}, scratch {{DURABLE_DIR}}.

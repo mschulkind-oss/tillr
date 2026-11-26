@@ -31,18 +31,43 @@ func workflowFace(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	// Find the target's repository, not the process cwd (the gate runs the binary
-	// from its module). Standalone files need no repository unless they use refs.
+	// Find the target's root, not the process cwd (the gate runs the binary
+	// from its module). Non-Git roots resolve by walking up to the nearest
+	// command registry or tillr layout before falling back to Git or the file's directory.
 	directory := filepath.Dir(target)
 	if info, err := os.Stat(target); err == nil && info.IsDir() {
 		directory = target
 	}
-	root := directory
-	if raw, err := exec.Command("git", "-C", directory, "rev-parse", "--show-toplevel").Output(); err == nil {
-		root = strings.TrimSpace(string(raw))
-	}
+	root := workflowRoot(directory)
 	if drain.CheckWorkflows(root, target, os.Stdout) {
 		return 0
 	}
 	return 1
+}
+
+func workflowRoot(directory string) string {
+	for dir := directory; ; dir = filepath.Dir(dir) {
+		if info, err := os.Stat(filepath.Join(dir, "config", "tillr", "commands.json")); err == nil && !info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+	}
+	if raw, err := exec.Command("git", "-C", directory, "rev-parse", "--show-toplevel").Output(); err == nil {
+		return strings.TrimSpace(string(raw))
+	}
+	for dir := directory; ; dir = filepath.Dir(dir) {
+		for _, marker := range []string{filepath.Join("config", "tillr", "workflows"), ".tillr"} {
+			if info, err := os.Stat(filepath.Join(dir, marker)); err == nil && info.IsDir() {
+				return dir
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+	}
+	return directory
 }

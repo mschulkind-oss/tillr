@@ -241,3 +241,61 @@ func TestRecordedVerdictExampleREADME(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordedVerdictExtractReportAcceptsDrainArgs(t *testing.T) {
+	if err := testinputs.Track(".."); err != nil {
+		t.Fatal(err)
+	}
+	extractor, err := filepath.Abs("../.sibling-inputs/tillr/examples/recorded-verdict/extract-report")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := scratch(t, "rv-extract-report")
+	logPath := filepath.Join(dir, "run.log")
+	want := "backend: stub\n---\nRESULT: done\n"
+	if err := os.WriteFile(logPath, []byte(want), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	offerPath := filepath.Join(dir, "landing-offer.json")
+	if err := os.WriteFile(offerPath, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		args func(out string) []string
+	}{
+		{
+			name: "drain standard args",
+			args: func(out string) []string {
+				return []string{"--backend", "stub", "--exit-code", "0", "--out", out, logPath}
+			},
+		},
+		{
+			name: "with landing offer",
+			args: func(out string) []string {
+				return []string{"--backend", "stub", "--exit-code", "0", "--out", out, "--landing-offer", offerPath, logPath}
+			},
+		},
+		{
+			name: "equals flags and double-dash log",
+			args: func(out string) []string {
+				return []string{"--backend=stub", "--exit-code=0", "--out=" + out, "--", logPath}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outPath := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "_")+".md")
+			cmd := exec.Command(extractor, tc.args(outPath)...)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("extract-report failed: %v\n%s", err, out)
+			}
+			got, err := os.ReadFile(outPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != want {
+				t.Fatalf("report = %q, want %q", got, want)
+			}
+		})
+	}
+}

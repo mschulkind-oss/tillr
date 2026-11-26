@@ -65,10 +65,11 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 	if len(recorded.Criteria) == 0 {
 		return ItemContentf(recorded.ItemID, "criteria", "item %s carries no criteria: add criteria before staging", recorded.ItemID)
 	}
-	criteria := recorded.Criteria[0].Text
-	for i, c := range recorded.Criteria[1:] {
-		criteria += fmt.Sprintf("\n%d. %s", i+2, c.Text)
+	criteriaLines := make([]string, len(recorded.Criteria))
+	for i, c := range recorded.Criteria {
+		criteriaLines[i] = fmt.Sprintf("%d. %s", i+1, c.Text)
 	}
+	criteria := strings.Join(criteriaLines, "\n")
 	laneDir := filepath.Join(s.LaneRoot, spec.LaneID)
 	target, err := filepath.Abs(filepath.Join(laneDir, workingDir))
 	if err != nil {

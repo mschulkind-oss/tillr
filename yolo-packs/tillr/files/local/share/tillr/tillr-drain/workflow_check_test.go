@@ -45,3 +45,25 @@ func TestWorkflowCheckCommand(t *testing.T) {
 		t.Fatalf("code=%d %s", code, out)
 	}
 }
+
+func TestWorkflowCheckFindsCommandRegistryOutsideGitRepo(t *testing.T) {
+	parent := scratch(t, "workflow-check-nongit")
+	t.Setenv("GIT_CEILING_DIRECTORIES", parent)
+	root := filepath.Join(parent, "project")
+	wfDir := filepath.Join(root, "config", "tillr", "workflows")
+	if err := os.MkdirAll(wfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "tillr", "commands.json"), []byte(`{"probe":{"argv":["true"],"flags":{}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := filepath.Join(wfDir, "probe@v1.json")
+	wfBody := `{"name":"probe","version":1,"stages":[{"id":"run","kind":"command","command_ref":"probe","access":"read_only"}],"edges":[]}`
+	if err := os.WriteFile(wfPath, []byte(wfBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out := invoke(t, "workflow", "check", wfPath)
+	if code != 0 || !strings.Contains(string(out), "nodes=1 depth=1 fan-out=0") {
+		t.Fatalf("workflow check outside git repo: code=%d %s", code, out)
+	}
+}

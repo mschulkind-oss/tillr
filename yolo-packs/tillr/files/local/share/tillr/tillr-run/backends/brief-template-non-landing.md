@@ -29,7 +29,7 @@ requiring each non-landing store to author its own template.
 The item's criteria, quoted verbatim. Every criterion maps to a verification line in
 **Verification commands** below, or is marked here as not command-verifiable.
 
-1. {{CRITERION_1}}
+{{CRITERION_1}}
 
 ## Scope and boundaries
 
