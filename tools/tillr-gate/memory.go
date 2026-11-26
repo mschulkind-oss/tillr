@@ -172,6 +172,28 @@ func treeFingerprint(check PlanCheck, inputs []treeInput, root string) (string, 
 	}
 	versions := []string{}
 	for _, tool := range check.Tools {
+		if filepath.Base(tool) == "sh" {
+			// POSIX sh implementations such as dash have no --version flag.
+			// Verify sh runs -c and hash the resolved executable instead.
+			cmd := exec.Command(tool, "-c", `command -v "$0"`)
+			cmd.Dir = root
+			cmd.Env = checkEnv(check)
+			raw, err := cmd.CombinedOutput()
+			if err != nil {
+				return "", fmt.Errorf("version of tool %q: %w: %s", tool, err, strings.TrimSpace(string(raw)))
+			}
+			resolved := strings.TrimSpace(string(raw))
+			if target, err := filepath.EvalSymlinks(resolved); err == nil {
+				resolved = target
+			}
+			body, err := os.ReadFile(resolved)
+			if err != nil {
+				return "", fmt.Errorf("version of tool %q: %w", tool, err)
+			}
+			sum := sha256.Sum256(body)
+			versions = append(versions, tool, hex.EncodeToString(sum[:]))
+			continue
+		}
 		args := []string{"--version"}
 		// Go's documented version command is a subcommand, not a flag.
 		// Select it explicitly; a failed identity command is never retried

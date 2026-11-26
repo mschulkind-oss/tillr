@@ -232,9 +232,16 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		if err != nil {
 			return nil, Externalf("heavy declaration judge gave no verdict: %v (%v): %s", err, runErr, stderr.String())
 		}
+		errTail := strings.TrimSpace(stderr.String())
 		for i := range env {
 			meta := declared[env[i].CheckID]
 			env[i].Reads, env[i].Needs, env[i].Tools, env[i].Remember = meta.Reads, meta.Needs, meta.Tools, meta.Remember
+			if env[i].Detail == "" && env[i].LogRef == "" && env[i].LogPath == "" && errTail != "" {
+				c := classifyCheck(checkresult.Observation{Check: env[i].CheckID, Source: checkresult.HeavyCheckWord, Word: env[i].Result})
+				if c.Outcome == checkresult.Unavailable || (c.Outcome == checkresult.Unknown && (c.Detail == checkresult.DetailError || c.Detail == checkresult.DetailStalled)) {
+					env[i].Detail = errTail
+				}
+			}
 		}
 		result = append(result, env...)
 		if only != "" {

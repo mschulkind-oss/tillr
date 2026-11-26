@@ -535,6 +535,37 @@ func TestMemoryGoToolUsesSupportedVersionCommand(t *testing.T) {
 	}
 }
 
+func TestMemoryShToolWithoutVersionFlag(t *testing.T) {
+	root, tree := memoryRepo(t)
+	shDir := t.TempDir()
+	shBin := filepath.Join(shDir, "sh")
+	realSh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatalf("LookPath sh: %v", err)
+	}
+	script := "#!/bin/sh\nif [ \"$#\" -eq 1 ] && [ \"$1\" = \"--version\" ]; then\n  echo \"sh: 0: Illegal option --\" >&2\n  exit 2\nfi\nexec " + realSh + " \"$@\"\n"
+	if err := os.WriteFile(shBin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	marker := filepath.Join(t.TempDir(), "marker")
+	check := memoryCheck(marker)
+	check.Tools = []string{"sh"}
+	first, err := memoryRun(t, root, tree, check)
+	if err != nil || first.Result != ResultPass || first.Fingerprint == "" {
+		t.Fatalf("sh check: %+v %v", first, err)
+	}
+	second, err := memoryRun(t, root, tree, check)
+	if err != nil || second.Memory != "remembered" || second.Fingerprint != first.Fingerprint {
+		t.Fatalf("sh reuse: %+v %v", second, err)
+	}
+	executed, _ := os.ReadFile(marker)
+	if string(executed) != "ran\n" {
+		t.Fatalf("remembered sh check ran: %q", executed)
+	}
+}
+
 func TestMemoryMissingVersionAndCorruptStoreAreErrors(t *testing.T) {
 	root, tree := memoryRepo(t)
 	marker := filepath.Join(t.TempDir(), "marker")

@@ -275,7 +275,7 @@ func TestVariants(t *testing.T) {
 			if ordinary < 0 || !strings.Contains(text, "fixture-fast") || (named >= 0) != (allIn([]string{namedID}, tc.names) && tc.name != "ordinary refuses first") || (named >= 0 && named < ordinary) {
 				t.Fatalf("ordinary checks must run before named checks:\n%s", text)
 			}
-			if tc.name == "named unavailable" && !strings.Contains(text, "fixer named check "+namedID+": could not judge") {
+			if tc.name == "named unavailable" && (!strings.Contains(text, "fixer named check "+namedID+": could not judge") || !strings.Contains(text, "fixture-tool-nobody-installs")) {
 				t.Fatalf("missing unknown evidence:\n%s", text)
 			}
 			if tc.name == "skipped subtest" && !strings.Contains(text, skippedID+": could not judge\ntest or enclosing test skipped at this commit") {
