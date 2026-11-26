@@ -68,6 +68,7 @@ func (l *Loop) returnMissingCandidate(ctx context.Context, d Decision, writer in
 	}
 	p := refusalPayload{Step: RefusalVerifyNotDone, ItemID: d.ItemID, LaneID: d.LaneID, BaseSHA: base, HeadSHA: base, Detail: finding,
 		WorkerSession: &WorkerSession{RunID: c.RunID, LaneDir: l.laneDirPath(d.LaneID), LaneID: d.LaneID, BaseSHA: base, HeadSHA: base, NodeBaseSHA: base, Workflow: d.Workflow, NodeIndex: writer, Attempt: d.Attempt}}
+	p.RefusalCauses = computeRefusalCauses(p)
 	if err := appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", c.RunID, p, l.cfg.Now()); err != nil {
 		return err
 	}

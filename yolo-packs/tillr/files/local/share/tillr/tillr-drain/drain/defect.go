@@ -164,10 +164,12 @@ func (l *Loop) fileDefectItem(ctx context.Context, reporter string, o Obstacle) 
 // holdBehindDefect records the tooling refusal and holds the item blocked on its defect
 // item, with the tooling as mover.
 func (l *Loop) holdBehindDefect(ctx context.Context, c Candidate, defectID, command string) error {
-	if err := appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", c.RunID, refusalPayload{
+	payload := refusalPayload{
 		Step: RefusalToolingDefect, ItemID: c.ItemID, LaneID: c.LaneID, TickID: c.TickID,
 		DefectItem: defectID, Detail: "tooling defect: " + command,
-	}, l.cfg.Now().UTC()); err != nil {
+	}
+	payload.RefusalCauses = computeRefusalCauses(payload)
+	if err := appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", c.RunID, payload, l.cfg.Now().UTC()); err != nil {
 		return err
 	}
 	return l.cfg.Steps.ItemState(ctx, c.ItemID, c.RunID, StateBlocked, item.WaitingOn{Waiter: "item:" + defectID, Reason: RefusalToolingDefect + ": " + clip(command, 200)})

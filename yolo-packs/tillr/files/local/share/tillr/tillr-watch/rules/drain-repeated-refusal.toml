@@ -1,4 +1,4 @@
-# Repeated drain refusals across distinct items with no landing between them (D-TW76).
+# Repeated drain refusals sharing a cause across distinct items with no landing between them (D-TW76, D-TW-RRS1..D-TW-RRS4).
 #
 # threshold = 2 matches RepeatedRefusalThreshold in tools/tillr-drain/drain/refusal.go,
 # the source of the drain's cross-item repeated-refusal count.
@@ -11,7 +11,9 @@ severity = "warning"
 events = ["drain.refusal", "land.landing"]
 
 [rule.when]
-group_by = "global"
+for_each = "refusal_causes"
+group_by = "cause"
+broadcast_events = ["land.landing"]
 pattern = "consecutive_count"
 match = 'event.kind == "drain.refusal"'
 distinct_by = "item_id"
@@ -22,13 +24,13 @@ threshold = 2
 window = "24h"
 
 [rule.guidance]
-summary = "Drain refused {{count}} distinct items ({{distinct_values}}) with no landing between them; latest step {{event.step}} on {{event.item_id}} ({{event.object_id}})"
+summary = "Repeated drain refusals share cause {{subject}}: {{count}} distinct items ({{distinct_values}}) were refused for {{subject}} with no landed commit between them (latest item {{event.item_id}}, step {{event.step}}, run {{event.object_id}})"
 check = [
-  "Inspect recent drain.refusal events for items {{distinct_values}} (latest detail: {{event.detail}}) to see whether a shared trunk regression, gate failure, or verifier failure is blocking unrelated items.",
-  "Inspect the candidate runs and gate verdicts for {{distinct_values}} (`tillr run show {{event.object_id}}`) before retrying queued items against the same condition.",
+  "Run `tillr status --json` and inspect recent drain.refusal events for items {{distinct_values}} (latest detail: {{event.detail}}) to check whether a shared check regression, verifier fault, or pipeline failure is blocking unrelated items.",
+  "Inspect the candidate runs and gate verdicts for {{distinct_values}} (`tillr run show {{event.object_id}}`) before retrying queued items against {{subject}}.",
 ]
 do = [
-  "Repair the shared trunk, gate, or workflow failure blocking {{distinct_values}}, or file and track a remediation item (`tillr watch track {{alert_id}} --item <item-id> --by <who>`).",
+  "Repair the shared failure behind {{subject}} blocking {{distinct_values}}, or file and track a remediation item (`tillr watch track {{alert_id}} --item <item-id> --by <who>`).",
   "Once a landing succeeds (`land.landing` with `result == \"landed\"`), verify this alert clears automatically.",
 ]
 

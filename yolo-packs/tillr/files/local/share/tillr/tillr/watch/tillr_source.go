@@ -945,7 +945,7 @@ func (s *TillrStoreSource) deriveRule(rd *store.Reader, r Rule, now time.Time, f
 	names := r.When.groupByNames()
 	subjects := map[string]*condition{}
 	subjectTuples := map[string][]string{}
-	if len(names) >= 2 || r.When.ForEach != "" {
+	if len(names) >= 2 || r.When.ForEach != "" || len(r.When.BroadcastEvents) > 0 {
 		seededTuples, _, err := s.activeCompositeSubjects(rd, r.ID, len(names))
 		if err != nil {
 			return nil, 0, err

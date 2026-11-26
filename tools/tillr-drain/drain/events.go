@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -218,6 +219,12 @@ func boundaryCheckPayloadOf(scope, passID string, runs []runRef, targets []strin
 	return payload
 }
 
+// RefusalCause is one countable shared-cause key recorded on a `drain.refusal` event so
+// watch rules can fan out over multi-check gate refusals and ignore already-owned classes.
+type RefusalCause struct {
+	Cause string `json:"cause"`
+}
+
 // refusalPayload is the `drain.refusal` payload: the step that refused the candidate, and
 // the correlation a reader needs to find the item, lane and tick it belongs to. Step is the
 // one field the planner reads; the rest are what a reader of `tillr view events` needs to
@@ -225,6 +232,7 @@ func boundaryCheckPayloadOf(scope, passID string, runs []runRef, targets []strin
 type refusalPayload struct {
 	WorkerSession *WorkerSession `json:"worker_session,omitempty"`
 	Step          string         `json:"step"`
+	RefusalCauses []RefusalCause `json:"refusal_causes"`
 	ItemID        string         `json:"item_id,omitempty"`
 	LaneID        string         `json:"lane_id,omitempty"`
 	TickID        string         `json:"tick_id,omitempty"`
@@ -277,6 +285,72 @@ type refusalPayload struct {
 	// Selectors are a reverted landing's legacy replay selectors (kind:label) by check
 	// id, kept so the item's next gate can run a check a loop restart forgot.
 	Selectors map[string]string `json:"selectors,omitempty"`
+}
+
+// computeRefusalCauses derives the countable cross-item cause keys for a `drain.refusal`
+// payload (D-TW-RRS1, D-TW-RRS2). It always returns a non-nil slice so JSON marshaling
+// writes `"refusal_causes":[]` rather than null when a refusal class is excluded.
+func computeRefusalCauses(p refusalPayload) []RefusalCause {
+	switch p.Step {
+	case RefusalGate:
+		seen := map[string]struct{}{}
+		for _, check := range p.Checks {
+			found := false
+			for _, failing := range check.Failing {
+				if failing.ID != "" {
+					seen[failing.ID] = struct{}{}
+					found = true
+				}
+			}
+			if !found && check.CheckID != "" {
+				seen[check.CheckID] = struct{}{}
+			}
+		}
+		if len(seen) == 0 {
+			return []RefusalCause{{Cause: "gate:no-verdict"}}
+		}
+		ids := make([]string, 0, len(seen))
+		for id := range seen {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		out := make([]RefusalCause, 0, len(ids))
+		for _, id := range ids {
+			out = append(out, RefusalCause{Cause: "gate:" + id})
+		}
+		return out
+	case RefusalStaging:
+		if reason := strings.TrimSpace(p.Reason); reason != "" {
+			return []RefusalCause{{Cause: "staging:" + reason}}
+		}
+		return []RefusalCause{{Cause: "staging"}}
+	case RefusalFence,
+		RefusalLand,
+		RefusalNoOp,
+		RefusalNodeOutput,
+		RefusalVerifyNoVerdict,
+		RefusalVerifyNotDone,
+		RefusalPlanWrong,
+		RefusalDeliveryOrder,
+		RefusalWordsMissing,
+		RefusalWordsAltered,
+		RefusalIdeaNoOutcome,
+		ReasonEvalFailed:
+		return []RefusalCause{{Cause: p.Step}}
+	case RefusalTrunkAlreadyRed,
+		RefusalToolingDefect,
+		RefusalConflict,
+		RefusalReverted,
+		RefusalPlanOutput,
+		ReasonJudgeUnreadable,
+		ReasonJudgeBlocked,
+		ReasonJudgeDefective,
+		ReasonJudgeDefectiveMismatch,
+		ReasonJudgeCloseRefused:
+		return []RefusalCause{}
+	default:
+		return []RefusalCause{}
+	}
 }
 
 // recordRefusal appends one `drain.refusal`, idempotently by the run it names: a step
@@ -383,6 +457,7 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 			payload.CandidateSize = &size
 		}
 	}
+	payload.RefusalCauses = computeRefusalCauses(payload)
 	at := l.cfg.Now().UTC()
 	evidence := l.readRefusalEvidence(candidate.RunID, payload)
 	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, at, func(tx *store.Tx) error {
@@ -453,12 +528,14 @@ func gateRefusalDetail(runDir, detail string, checks []EndingCheck) string {
 // the event is keyed by the item, and returning the same item's record to staging is the
 // same refusal again rather than a second event.
 func (l *Loop) recordItemRefusal(ctx context.Context, itemID, reason, detail string) error {
-	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "item", itemID, refusalPayload{
+	payload := refusalPayload{
 		Step:   RefusalStaging,
 		ItemID: itemID,
 		Reason: reason,
 		Detail: detail,
-	}, l.cfg.Now().UTC())
+	}
+	payload.RefusalCauses = computeRefusalCauses(payload)
+	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "item", itemID, payload, l.cfg.Now().UTC())
 }
 
 // gateJudgmentRecordError distinguishes a failure to record the gate's answer

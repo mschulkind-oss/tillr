@@ -1270,6 +1270,7 @@ func (l *Loop) holdJudge(ctx context.Context, c Candidate, judgeID, reason, deta
 		refusalPayload
 		WriterRunID string `json:"writer_run_id"`
 	}{refusalPayload: refusalPayload{ItemID: c.ItemID, LaneID: c.LaneID, TickID: c.TickID, Step: reason, Detail: detail, Evidence: c.EvidenceKey, BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA}, WriterRunID: writer}
+	payload.RefusalCauses = computeRefusalCauses(payload.refusalPayload)
 	if reason == ReasonEvalFailed || reason == ReasonJudgeBlocked {
 		payload.VerifyFeedback = c.verifyFeedback
 	}

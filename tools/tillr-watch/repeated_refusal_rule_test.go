@@ -56,7 +56,9 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 		t.Fatalf("unexpected %s metadata: scope=%q severity=%q receiver=%q", ruleID, rule.Scope, rule.Severity, rule.Delivery.Receiver)
 	}
 	if rule.When.Pattern != watch.ConsecutiveCount ||
-		rule.When.GroupBy != "global" ||
+		rule.When.ForEach != "refusal_causes" ||
+		rule.When.GroupBy != "cause" ||
+		!slices.Equal(rule.When.BroadcastEvents, []string{land.LandingKind}) ||
 		rule.When.DistinctBy != "item_id" ||
 		rule.When.Threshold != int64(drain.RepeatedRefusalThreshold) ||
 		rule.When.Window != 24*time.Hour {
@@ -70,16 +72,21 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	now := time.Date(2026, 11, 23, 10, 13, 0, 0, time.UTC)
+	now := time.Date(2026, 11, 26, 10, 13, 0, 0, time.UTC)
 
-	appendRefusalTo := func(st *store.Store, runID, itemID, step, detail string, at time.Time) int64 {
+	appendRefusalTo := func(st *store.Store, runID, itemID, step, detail string, causes []string, at time.Time) int64 {
 		t.Helper()
+		causeObjs := make([]drain.RefusalCause, 0, len(causes))
+		for _, c := range causes {
+			causeObjs = append(causeObjs, drain.RefusalCause{Cause: c})
+		}
 		body, err := json.Marshal(map[string]any{
-			"step":    step,
-			"item_id": itemID,
-			"lane_id": "lane-1",
-			"tick_id": "tick-1",
-			"detail":  detail,
+			"step":           step,
+			"refusal_causes": causeObjs,
+			"item_id":        itemID,
+			"lane_id":        "lane-1",
+			"tick_id":        "tick-1",
+			"detail":         detail,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -135,8 +142,8 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 	}
 
 	// Pre-load history before first evaluation does not fire (D-TW66).
-	appendRefusalTo(s, "run-old-1", "item-old-1", drain.RefusalGate, "failing checks: citations", now.Add(-10*time.Minute))
-	appendRefusalTo(s, "run-old-2", "item-old-2", drain.RefusalGate, "failing checks: citations", now.Add(-5*time.Minute))
+	appendRefusalTo(s, "run-old-1", "item-old-1", drain.RefusalGate, "failing checks: citations", []string{"gate:citations"}, now.Add(-10*time.Minute))
+	appendRefusalTo(s, "run-old-2", "item-old-2", drain.RefusalGate, "failing checks: citations", []string{"gate:citations"}, now.Add(-5*time.Minute))
 
 	e := watch.Evaluator{Store: s, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
 	pending := func() []watch.Notice {
@@ -161,31 +168,46 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 
 	// 1. Multiple refusals on the same item alone stay closed.
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-same-1", "item-same", drain.RefusalGate, "failing checks: go-affected-suite", now)
+	appendRefusalTo(s, "run-same-1", "item-same", drain.RefusalGate, "failing checks: go-affected-suite", []string{"gate:go-affected-suite"}, now)
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-same-2", "item-same", drain.RefusalGate, "failing checks: go-affected-suite", now)
+	appendRefusalTo(s, "run-same-2", "item-same", drain.RefusalGate, "failing checks: go-affected-suite", []string{"gate:go-affected-suite"}, now)
 	if notices := pending(); len(notices) != 0 {
 		t.Fatalf("repeated refusals on a single item opened notice: %+v", notices)
 	}
 
-	// 2. A landed commit between refusals on different items keeps the alert closed (c6).
+	// 2. Excluded refusals (2026-11-24 trunk-already-red + conflict, and 2026-11-25 two merge conflicts on different files) do not fire.
 	now = now.Add(2 * time.Minute)
-	appendLandingTo(s, "item-landed", land.ResultLanded, now)
+	appendLandingTo(s, "item-reset-0", land.ResultLanded, now)
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-between-1", "item-between-a", drain.RefusalGate, "failing checks: check-a", now)
+	appendRefusalTo(s, "run-trunk-red", "item-inc-a", drain.RefusalTrunkAlreadyRed, "trunk already red", []string{}, now)
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-conflict-1", "item-inc-b", drain.RefusalConflict, "CONFLICT (content): Merge conflict in docs/a.md", []string{}, now)
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-conflict-2", "item-inc-c", drain.RefusalConflict, "CONFLICT (content): Merge conflict in docs/b.md", []string{}, now)
 	if notices := pending(); len(notices) != 0 {
-		t.Fatalf("single refused item after landing opened notice: %+v", notices)
+		t.Fatalf("excluded refusals (trunk-already-red / conflicts) opened notice: %+v", notices)
 	}
+
+	// 3. Two refusals with different causes (gate:documents vs gate:go-build) do not fire.
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-diff-1", "item-diff-a", drain.RefusalGate, "failing checks: documents", []string{"gate:documents"}, now)
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-diff-2", "item-diff-b", drain.RefusalGate, "failing checks: go-build", []string{"gate:go-build"}, now)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("refusals with different causes opened notice: %+v", notices)
+	}
+
+	// 4. A landed commit between refusals sharing a cause keeps the alert closed.
 	now = now.Add(2 * time.Minute)
 	appendLandingTo(s, "item-between-landed", land.ResultLanded, now)
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-between-2", "item-between-b", drain.RefusalGate, "failing checks: check-b", now)
+	appendRefusalTo(s, "run-between-1", "item-between-a", drain.RefusalGate, "failing checks: citations, documents", []string{"gate:citations", "gate:documents"}, now)
 	if notices := pending(); len(notices) != 0 {
-		t.Fatalf("refusals on different items separated by a landing opened notice: %+v", notices)
+		t.Fatalf("single refused item after landing opened notice: %+v", notices)
 	}
 
-	// 3. Non-landing land.landing outcomes (squash-conflict, refused) do not count as a landing,
-	// so refusing a second distinct item (reaching RepeatedRefusalThreshold = 2) opens the alert (c5, c6).
+	// 5. Non-landing land.landing outcomes (squash-conflict, refused) do not reset causes and keep Skipped == 0;
+	// refusing a second distinct item on a shared cause ("gate:documents") opens the alert for "gate:documents".
 	now = now.Add(2 * time.Minute)
 	appendLandingTo(s, "item-conflict", land.ResultSquashConflict, now)
 	now = now.Add(1 * time.Minute)
@@ -195,33 +217,35 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 	}
 
 	now = now.Add(3 * time.Minute)
-	appendRefusalTo(s, "run-second-distinct", "item-between-c", drain.RefusalGate, "failing checks: hung-test", now)
+	appendRefusalTo(s, "run-second-distinct", "item-between-b", drain.RefusalGate, "failing checks: documents", []string{"gate:documents"}, now)
 	opened := pending()
 	if len(opened) != 1 {
-		t.Fatalf("want 1 alert at %d distinct refused items with no landing between them, got %+v", drain.RepeatedRefusalThreshold, opened)
+		t.Fatalf("want 1 alert for shared cause gate:documents, got %+v", opened)
 	}
 	firstAlert := opened[0]
-	if firstAlert.Bundle.RuleID != ruleID || firstAlert.Bundle.Subject != "global" || firstAlert.Bundle.Severity != "warning" {
+	if firstAlert.Bundle.RuleID != ruleID || firstAlert.Bundle.Subject != "gate:documents" || firstAlert.Bundle.Severity != "warning" {
 		t.Fatalf("unexpected alert bundle metadata: %+v", firstAlert.Bundle)
 	}
 	guidance := firstAlert.Bundle.Guidance
 	allText := guidance.Summary + " " + strings.Join(guidance.Check, " ") + " " + strings.Join(guidance.Do, " ")
-	if !strings.Contains(guidance.Summary, "2") ||
-		!strings.Contains(guidance.Summary, "item-between-b, item-between-c") ||
+	if !strings.Contains(guidance.Summary, "gate:documents") ||
+		!strings.Contains(guidance.Summary, "2") ||
+		!strings.Contains(guidance.Summary, "item-between-a, item-between-b") ||
 		!strings.Contains(guidance.Summary, drain.RefusalGate) ||
-		!strings.Contains(guidance.Summary, "item-between-c") ||
+		!strings.Contains(guidance.Summary, "item-between-b") ||
 		!strings.Contains(guidance.Summary, "run-second-distinct") ||
-		!strings.Contains(strings.Join(guidance.Check, " "), "failing checks: hung-test") ||
+		!strings.Contains(strings.Join(guidance.Check, " "), "failing checks: documents") ||
 		strings.Contains(strings.ToLower(allText), "unknown") ||
-		strings.Contains(strings.ToLower(allText), "expected") {
+		strings.Contains(strings.ToLower(allText), "expected") ||
+		strings.Contains(strings.ToLower(allText), "normal") {
 		t.Fatalf("unexpected guidance text: %+v", guidance)
 	}
 
-	// 4. Further refusals with no landing update the open episode in place without opening a second alert.
+	// 6. Further refusals on the same cause with no landing update the open episode in place.
 	now = now.Add(4 * time.Minute)
-	appendRefusalTo(s, "run-third-distinct", "item-between-d", drain.RefusalGate, "failing checks: load-test", now)
+	appendRefusalTo(s, "run-third-distinct", "item-between-c", drain.RefusalGate, "failing checks: documents", []string{"gate:documents"}, now)
 	now = now.Add(2 * time.Minute)
-	latestSeq := appendRefusalTo(s, "run-repeat-b", "item-between-b", drain.RefusalGate, "failing checks: hung-test", now)
+	latestSeq := appendRefusalTo(s, "run-repeat-b", "item-between-b", drain.RefusalGate, "failing checks: documents", []string{"gate:documents"}, now)
 	stillOpen := pending()
 	if len(stillOpen) != 1 || stillOpen[0].AlertID != firstAlert.AlertID {
 		t.Fatalf("expected single in-place episode %s, got %+v", firstAlert.AlertID, stillOpen)
@@ -236,7 +260,7 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 		t.Fatalf("expected observation_count>=2 and last_observed_seq=%d, got count=%d seq=%d", latestSeq, obsCount, lastObsSeq)
 	}
 
-	// 5. A subsequent landed commit resolves the open alert (condition-cleared).
+	// 7. A subsequent landed commit resolves the open alert at landedSeq (condition-cleared) with Skipped == 0.
 	now = now.Add(3 * time.Minute)
 	landedSeq := appendLandingTo(s, "item-recovered", land.ResultLanded, now)
 	if notices := pending(); len(notices) != 0 {
@@ -253,17 +277,49 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 		t.Fatalf("resolved row = (%q, %q, %d), want (resolved, condition-cleared, %d)", state, reason, resolvedSeq, landedSeq)
 	}
 
-	// 6. A fresh pair of distinct refused items after that landing opens episode 2;
-	// also evaluate alongside the full config/tillr/watch rule directory and lint the repository.
+	// 8. A fresh pair of distinct refused items sharing a cause after that landing opens episode 2.
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-ep2-a", "item-ep2-a", drain.RefusalGate, "failing checks: gate-a", now)
+	appendRefusalTo(s, "run-ep2-a", "item-ep2-a", drain.RefusalVerifyNotDone, "c1: missing test", []string{"verify-not-done"}, now)
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-ep2-b", "item-ep2-b", drain.RefusalVerifyNotDone, "c1: missing test", now)
+	appendRefusalTo(s, "run-ep2-b", "item-ep2-b", drain.RefusalVerifyNotDone, "c2: missing test", []string{"verify-not-done"}, now)
 	reopened := pending()
-	if len(reopened) != 1 || reopened[0].AlertID == firstAlert.AlertID {
-		t.Fatalf("expected new episode after prior landing resolution, got %+v", reopened)
+	if len(reopened) != 1 || reopened[0].AlertID == firstAlert.AlertID || reopened[0].Bundle.Subject != "verify-not-done" {
+		t.Fatalf("expected new episode for verify-not-done after prior landing resolution, got %+v", reopened)
 	}
 
+	// 9. Events lacking refusal_causes are skipped with no fallback (R-TW-DR2).
+	legacyStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "legacy.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { legacyStore.Close() })
+	legacyEval := watch.Evaluator{Store: legacyStore, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := legacyEval.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	for _, run := range []struct{ id, item string }{{"run-leg-1", "item-leg-1"}, {"run-leg-2", "item-leg-2"}} {
+		body, _ := json.Marshal(map[string]any{"step": drain.RefusalGate, "item_id": run.item, "detail": "failing checks: documents"})
+		runID := run.id
+		if err := legacyStore.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{Kind: drain.RefusalKind, ObjectType: "run", ObjectID: &runID, At: now, Payload: body})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacyRes, err := legacyEval.EvaluateRules(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacyRes) != 1 || legacyRes[0].Skipped != 2 {
+		t.Fatalf("expected Skipped == 2 for legacy events lacking refusal_causes, got %+v", legacyRes)
+	}
+	if legacyNotices, err := legacyEval.Pending(ctx, "foreground"); err != nil || len(legacyNotices) != 0 {
+		t.Fatalf("legacy events lacking refusal_causes must not open alerts, got %+v (err=%v)", legacyNotices, err)
+	}
+
+	// 10. Evaluate alongside the full rules directory and lint the repository.
 	allStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "all.db"), true)
 	if err != nil {
 		t.Fatal(err)
@@ -275,9 +331,9 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Minute)
-	appendRefusalTo(allStore, "run-all-1", "item-all-1", drain.RefusalGate, "failing checks: check-1", now)
+	appendRefusalTo(allStore, "run-all-1", "item-all-1", drain.RefusalGate, "failing checks: check-1", []string{"gate:check-1"}, now)
 	now = now.Add(time.Minute)
-	appendRefusalTo(allStore, "run-all-2", "item-all-2", drain.RefusalGate, "failing checks: check-2", now)
+	appendRefusalTo(allStore, "run-all-2", "item-all-2", drain.RefusalGate, "failing checks: check-1", []string{"gate:check-1"}, now)
 	if _, err := allEval.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -285,8 +341,8 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(allNotices, func(n watch.Notice) bool { return n.Bundle.RuleID == ruleID && n.Bundle.Subject == "global" }) {
-		t.Fatalf("expected %s notice when evaluating full config/tillr/watch directory, got %+v", ruleID, allNotices)
+	if !slices.ContainsFunc(allNotices, func(n watch.Notice) bool { return n.Bundle.RuleID == ruleID && n.Bundle.Subject == "gate:check-1" }) {
+		t.Fatalf("expected %s notice on gate:check-1 when evaluating full rules directory, got %+v", ruleID, allNotices)
 	}
 
 	policies, err := filepath.Glob(filepath.Join(root, "config", "tillr", "backend-policy*.json"))

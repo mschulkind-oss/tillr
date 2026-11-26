@@ -58,6 +58,7 @@ func (l *Loop) recordMissingVerify(ctx context.Context, c Candidate, runID strin
 	}
 	s := &WorkerSession{RunID: c.RunID, LaneDir: l.laneDirPath(c.LaneID), LaneID: c.LaneID, BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA, Workflow: decision.Workflow, NodeIndex: decision.NodeIndex, NodeBaseSHA: c.HeadSHA, Attempt: decision.Attempt}
 	p := refusalPayload{Step: RefusalVerifyNoVerdict, ItemID: c.ItemID, LaneID: c.LaneID, Detail: c.RefusalDetail, BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA, WorkerSession: s}
+	p.RefusalCauses = computeRefusalCauses(p)
 	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", runID, p, l.cfg.Now(), func(tx *store.Tx) error {
 		if preflight {
 			c.RunID = runID

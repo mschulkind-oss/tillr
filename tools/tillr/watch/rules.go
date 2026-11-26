@@ -60,6 +60,7 @@ type When struct {
 	GroupByList                                []string
 	GroupByAny                                 []string
 	Pattern, Field, DistinctBy, ForEach        string
+	BroadcastEvents                            []string
 	Pairs                                      [][2]string
 	Threshold, ThresholdCommits                int64
 	Window, ThresholdDuration                  time.Duration
@@ -665,6 +666,7 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 	if r.When.ForEach != "" && len(r.Reads.Events) == 0 {
 		when.reject("for_each", "requires reads.events")
 	}
+	validateBroadcastEvents(when, r)
 	if r.When.ReopenWhen != nil && len(r.Reads.Events) == 0 {
 		when.reject("reopen_when", "requires reads.events")
 	}
@@ -881,8 +883,9 @@ func loadWhen(k keys, pattern string, refs map[string]bool, projectionOnly bool)
 	if _, present := k.values["keep_on_terminal_item"]; present {
 		w.KeepOnTerminalItem = requiredValue[bool](k, "keep_on_terminal_item", "a boolean")
 	}
-	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint", "keep_on_terminal_item", "for_each"}
+	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint", "keep_on_terminal_item", "for_each", "broadcast_events"}
 	w.ForEach = loadForEach(k)
+	w.BroadcastEvents = loadBroadcastEvents(k)
 	switch w.Pattern {
 	case DurationWithoutEvent:
 		k.only(append(allowed, "after", "match", "threshold_duration")...)
@@ -991,6 +994,56 @@ func loadForEach(k keys) string {
 		return ""
 	}
 	return name
+}
+
+func loadBroadcastEvents(k keys) []string {
+	if _, present := k.values["broadcast_events"]; !present {
+		return nil
+	}
+	events := k.strings("broadcast_events", true)
+	seen := make(map[string]bool, len(events))
+	for _, kind := range events {
+		if kind == "" {
+			continue
+		}
+		if seen[kind] {
+			k.reject("broadcast_events", "duplicate event kind %q", kind)
+		}
+		seen[kind] = true
+	}
+	return events
+}
+
+func validateBroadcastEvents(when keys, r Rule) {
+	if len(r.When.BroadcastEvents) == 0 {
+		return
+	}
+	if len(r.Reads.Events) == 0 {
+		when.reject("broadcast_events", "requires reads.events")
+	}
+	if r.When.GroupBy == "global" {
+		when.reject("broadcast_events", "cannot be used with group_by = \"global\"")
+	}
+	if r.When.Reset == nil && r.When.ClearWhen == nil {
+		when.reject("broadcast_events", "requires reset or clear_when")
+	}
+	for _, kind := range r.When.BroadcastEvents {
+		if kind != "" && !slices.Contains(r.Reads.Events, kind) {
+			when.reject("broadcast_events", "event kind %q must appear in reads.events", kind)
+		}
+	}
+	if len(r.Reads.Events) > 0 {
+		hasNonBroadcast := false
+		for _, kind := range r.Reads.Events {
+			if !slices.Contains(r.When.BroadcastEvents, kind) {
+				hasNonBroadcast = true
+				break
+			}
+		}
+		if !hasNonBroadcast {
+			when.reject("broadcast_events", "reads.events must retain at least one non-broadcast event kind")
+		}
+	}
 }
 
 func (k keys) positiveInteger(key string) int64 {

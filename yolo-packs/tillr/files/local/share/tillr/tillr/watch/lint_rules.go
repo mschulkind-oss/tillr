@@ -744,7 +744,7 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proof
 		}
 	}
 
-	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint", "keep_on_terminal_item", "for_each"}
+	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint", "keep_on_terminal_item", "for_each", "broadcast_events"}
 	w.ForEach = lintForEach(whenMap, reads, emit)
 	switch pattern {
 	case DurationWithoutEvent:
@@ -830,6 +830,7 @@ func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs, proof
 	} else {
 		w.ClearWhen = lintRuleExpr(whenMap, "clear_when", false, w.GroupBy, reads, refs, proofRefs, kinds, emit)
 	}
+	w.BroadcastEvents = lintBroadcastEvents(whenMap, w, reads, emit)
 
 	for _, k := range slices.Sorted(maps.Keys(whenMap)) {
 		if k != "remedy" && !slices.Contains(allowed, k) {
@@ -908,6 +909,56 @@ func lintForEach(whenMap map[string]any, reads Reads, emit func(string, string))
 		return ""
 	}
 	return fe
+}
+
+func lintBroadcastEvents(whenMap map[string]any, w When, reads Reads, emit func(string, string)) []string {
+	raw, present := whenMap["broadcast_events"]
+	if !present {
+		return nil
+	}
+	events, ok := tomlStringList(raw)
+	if !ok || len(events) == 0 {
+		emit(CodeWatchLintRuleSchema, "when.broadcast_events: expected a non-empty list of strings")
+		return nil
+	}
+	seen := make(map[string]bool, len(events))
+	for _, kind := range events {
+		if kind == "" {
+			emit(CodeWatchLintRuleSchema, "when.broadcast_events: expected non-empty event kinds")
+			continue
+		}
+		if seen[kind] {
+			emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.broadcast_events: duplicate event kind %q", kind))
+		}
+		seen[kind] = true
+	}
+	if len(reads.Events) == 0 {
+		emit(CodeWatchLintRuleSchema, "when.broadcast_events: requires reads.events")
+	}
+	if w.GroupBy == "global" {
+		emit(CodeWatchLintRuleSchema, "when.broadcast_events: cannot be used with group_by = \"global\"")
+	}
+	if w.Reset == nil && w.ClearWhen == nil {
+		emit(CodeWatchLintRuleSchema, "when.broadcast_events: requires reset or clear_when")
+	}
+	for _, kind := range events {
+		if kind != "" && !slices.Contains(reads.Events, kind) {
+			emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.broadcast_events: event kind %q must appear in reads.events", kind))
+		}
+	}
+	if len(reads.Events) > 0 {
+		hasNonBroadcast := false
+		for _, kind := range reads.Events {
+			if !slices.Contains(events, kind) {
+				hasNonBroadcast = true
+				break
+			}
+		}
+		if !hasNonBroadcast {
+			emit(CodeWatchLintRuleSchema, "when.broadcast_events: reads.events must retain at least one non-broadcast event kind")
+		}
+	}
+	return events
 }
 
 func isForbiddenGroupByColumn(col string) bool {

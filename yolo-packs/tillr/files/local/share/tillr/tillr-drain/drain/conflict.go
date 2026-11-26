@@ -449,6 +449,7 @@ func (l *Loop) recordConflict(ctx context.Context, candidate Candidate, landed L
 		payload.BaseSHA = candidate.BaseSHA
 		payload.HeadSHA = candidate.HeadSHA
 	}
+	payload.RefusalCauses = computeRefusalCauses(payload)
 	at := l.cfg.Now().UTC()
 	evidence := l.readRefusalEvidence(candidate.RunID, payload)
 	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, at, func(tx *store.Tx) error {

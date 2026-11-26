@@ -137,6 +137,7 @@ func (l *Loop) recordConflictRestart(ctx context.Context, candidate Candidate, l
 		Evidence:      key,
 		Restart:       true,
 	}
+	payload.RefusalCauses = computeRefusalCauses(payload)
 	at := l.cfg.Now().UTC()
 	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, at, func(tx *store.Tx) error {
 		if err := closeLandingCall(tx, candidate.RunID, "conflict-restart", at); err != nil {

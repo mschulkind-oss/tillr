@@ -1510,7 +1510,7 @@ func (l *Loop) openFixerFor(ctx context.Context, checks []string) (string, error
 // recordTrunkRefusal appends the `drain.refusal` that names the red sha and the failing
 // checks, and the fixer the item is held behind.
 func (l *Loop) recordTrunkRefusal(ctx context.Context, candidate Candidate, redSHA string, redChecks []string, fixerID string) error {
-	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, refusalPayload{
+	payload := refusalPayload{
 		Step:          RefusalTrunkAlreadyRed,
 		ItemID:        candidate.ItemID,
 		LaneID:        candidate.LaneID,
@@ -1518,7 +1518,9 @@ func (l *Loop) recordTrunkRefusal(ctx context.Context, candidate Candidate, redS
 		RedSHA:        redSHA,
 		FailingChecks: redChecks,
 		FixerItem:     fixerID,
-	}, l.cfg.Now().UTC())
+	}
+	payload.RefusalCauses = computeRefusalCauses(payload)
+	return appendJudgment(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, l.cfg.Now().UTC())
 }
 
 // fileTrunkFixer creates a repair identified by its first red sha, or attaches a

@@ -565,7 +565,9 @@ func (l *Loop) revertEnding(landing string, of landingOf, tip string, checks []H
 	detail.WriteString("\n\nRedo the change on the current trunk so that these checks pass; your next gate runs them.")
 	sort.Slice(ending, func(i, j int) bool { return ending[i].CheckID < ending[j].CheckID })
 	text := detail.String()
-	return refusalPayload{Step: RefusalReverted, ItemID: of.itemID, RedSHA: landing, FailingChecks: ids, Detail: text, Checks: ending, Evidence: endingKey(RefusalReverted, ending, text, of.runID), Selectors: l.heavySelectors(ids)}
+	p := refusalPayload{Step: RefusalReverted, ItemID: of.itemID, RedSHA: landing, FailingChecks: ids, Detail: text, Checks: ending, Evidence: endingKey(RefusalReverted, ending, text, of.runID), Selectors: l.heavySelectors(ids)}
+	p.RefusalCauses = computeRefusalCauses(p)
+	return p
 }
 
 // heavyLog is the declaration log the proof of tip wrote for check id, or "".
@@ -633,7 +635,9 @@ func (l *Loop) appendRevert(ctx context.Context, p revertPayload, ending *refusa
 		if ending == nil || p.RunID == "" {
 			return nil
 		}
-		raw, err := json.Marshal(ending)
+		endingCopy := *ending
+		endingCopy.RefusalCauses = computeRefusalCauses(endingCopy)
+		raw, err := json.Marshal(endingCopy)
 		if err != nil {
 			return Internalf("encoding the %s payload: %v", RefusalKind, err)
 		}

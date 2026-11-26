@@ -213,6 +213,7 @@ type ruleDefinitionDigestInput struct {
 	Field              string            `json:"field"`
 	DistinctBy         string            `json:"distinct_by,omitempty"`
 	ForEach            string            `json:"for_each,omitempty"`
+	BroadcastEvents    []string          `json:"broadcast_events,omitempty"`
 	Pairs              [][2]string       `json:"pairs"`
 	Threshold          int64             `json:"threshold"`
 	ThresholdCommits   int64             `json:"threshold_commits"`
@@ -263,6 +264,7 @@ func definitionHash(r Rule) string {
 		Field:              r.When.Field,
 		DistinctBy:         r.When.DistinctBy,
 		ForEach:            r.When.ForEach,
+		BroadcastEvents:    normalizeStrings(r.When.BroadcastEvents),
 		Pairs:              normalizePairs(r.When.Pairs),
 		Threshold:          r.When.Threshold,
 		ThresholdCommits:   r.When.ThresholdCommits,
@@ -389,6 +391,7 @@ func ruleEqual(a, b Rule) bool {
 		a.When.Field == b.When.Field &&
 		a.When.DistinctBy == b.When.DistinctBy &&
 		a.When.ForEach == b.When.ForEach &&
+		slices.Equal(a.When.BroadcastEvents, b.When.BroadcastEvents) &&
 		slices.Equal(a.When.Pairs, b.When.Pairs) &&
 		a.When.Threshold == b.When.Threshold &&
 		a.When.Window == b.When.Window &&
@@ -634,10 +637,49 @@ func observeRecord(
 	subjectTuples map[string][]string,
 	skipped *int,
 ) error {
+	if len(r.When.BroadcastEvents) > 0 && slices.Contains(r.When.BroadcastEvents, rec.Kind) {
+		return observeBroadcastRecord(r, rec, facts, nowMillis, subjects)
+	}
 	if r.When.ForEach != "" {
 		return observeForEachRecord(r, names, rec, facts, nowMillis, subjects, subjectTuples, skipped)
 	}
 	return observeSingleRecord(r, names, rec, facts, nowMillis, subjects, subjectTuples, skipped, nil)
+}
+
+func observeBroadcastRecord(
+	r Rule,
+	rec Observation,
+	facts subjectFacts,
+	nowMillis int64,
+	subjects map[string]*condition,
+) error {
+	lookup := rec.Lookup
+	for subject, c := range subjects {
+		projection, inScope, err := lookupSubjectFacts(facts, subject, lookup)
+		if err != nil {
+			return err
+		}
+		if !inScope {
+			continue
+		}
+		values := expressionValues{event: lookup, projection: projection, nowMillis: nowMillis}
+		if r.When.ClearWhen != nil && r.When.ClearWhen.eval(values) {
+			c.events = c.events[:0]
+			c.hadPrevious = false
+			c.armed = false
+			c.clears = append(c.clears, rec.Seq)
+			continue
+		}
+		if r.When.Reset != nil && r.When.Reset.eval(values) {
+			if r.When.Pattern == PredicateMatch && r.When.After != nil {
+				c.armed = false
+			} else if r.When.Pattern == ConsecutiveCount {
+				c.events = c.events[:0]
+				c.clears = append(c.clears, rec.Seq)
+			}
+		}
+	}
+	return nil
 }
 
 func observeForEachRecord(
@@ -778,7 +820,7 @@ func deriveCached(r Rule, now time.Time, facts subjectFacts, cache *evalCache, f
 		seededTuples map[string][]string
 		activeKeys   []string
 	)
-	if (len(names) >= 2 || r.When.ForEach != "") && activeSubjects != nil {
+	if (len(names) >= 2 || r.When.ForEach != "" || len(r.When.BroadcastEvents) > 0) && activeSubjects != nil {
 		var err error
 		seededTuples, activeKeys, err = activeSubjects(r.ID, len(names))
 		if err != nil {
@@ -875,7 +917,7 @@ func deriveFromSource(
 	names := r.When.groupByNames()
 	subjects := map[string]*condition{}
 	subjectTuples := map[string][]string{}
-	if (len(names) >= 2 || r.When.ForEach != "") && activeSubjects != nil {
+	if (len(names) >= 2 || r.When.ForEach != "" || len(r.When.BroadcastEvents) > 0) && activeSubjects != nil {
 		seededTuples, _, err := activeSubjects(r.ID, len(names))
 		if err != nil {
 			return nil, 0, SourceCursor{}, err
