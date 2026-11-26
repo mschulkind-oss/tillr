@@ -288,3 +288,57 @@ func TestGateStartFailureHoldsOnceUntilClearedOrCommitChanges(t *testing.T) {
 		t.Fatalf("after candidate commit change, landed = %d, want 1 (stop=%s)", res.Landed, res.Stop)
 	}
 }
+
+// A retired or prepared candidate's drain.retirement record carries the worker head while
+// the gate runs on the maintenance commit. Its gate-harness-error hold must stay bound to
+// that candidate across passes rather than looking like a changed commit.
+func TestGateStartFailureHoldsRetiredCandidateOnce(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	c := prepareReadyCandidate(t, f, l, "item-a")
+	workerHead := c.HeadSHA
+
+	// Simulate prepareCandidate: persist drain.retirement before the maintenance commit
+	// (so its recorded HeadSHA is workerHead) and advance the lane to the retired commit.
+	writeForkFile(t, filepath.Join(c.Worktree, "candidate.txt"), "retired\n")
+	runGit(t, c.Worktree, "add", "candidate.txt")
+	tree := runGit(t, c.Worktree, "write-tree")
+	c.WorkerHeadSHA = workerHead
+	c.RetirementTreeSHA = tree
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return appendEffect(tx, candidateRetirementKind, c.RunID, c, l.cfg.Now())
+	})
+	runGit(t, c.Worktree, "commit", "-qm", "chore: retire landed document block")
+	retiredHead := runGit(t, c.Worktree, "rev-parse", "HEAD")
+
+	missingPath := filepath.Join(c.Worktree, "tools", "gate", "change-gate.py")
+	detail := gateStartErrorDetail("", "python3: can't open file '"+missingPath+"': [Errno 2] No such file or directory\n")
+	steps := &startErrorSteps{failingHead: retiredHead, detail: detail}
+	l.cfg.Steps = steps
+
+	if _, err := l.Run(context.Background()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if len(steps.gated) != 1 || steps.gated[0] != retiredHead {
+		t.Fatalf("gated = %v, want [%s]", steps.gated, retiredHead)
+	}
+
+	// Second pass with the same retired candidate must not clear the hold or re-gate.
+	if _, err := l.Run(context.Background()); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(steps.gated) != 1 {
+		t.Fatalf("retired candidate was re-gated (%v), want still 1", steps.gated)
+	}
+
+	fixtureRead(t, f, func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		fault, held := faults["item-a"]
+		if !held || fault.Reason != StopGateHarnessError || fault.HeadSHA != retiredHead || fault.WorkerHeadSHA != workerHead {
+			t.Fatalf("item-a fault = %+v (held %v), want %s with head=%s worker_head=%s", fault, held, StopGateHarnessError, retiredHead, workerHead)
+		}
+		return nil
+	})
+}

@@ -198,16 +198,28 @@ func changedCandidateGateFaults(r *store.Reader) ([]ItemFault, error) {
 	}
 	var out []ItemFault
 	for id, f := range faults {
-		if f.Reason != StopGateHarnessError || f.HeadSHA == "" {
+		if f.Reason != StopGateHarnessError {
+			continue
+		}
+		faultHead := gateFaultCandidateHead(f.WorkerHeadSHA, f.HeadSHA)
+		if faultHead == "" {
 			continue
 		}
 		w := works[id]
-		if w == nil || w.Done || w.Candidate == nil || w.Candidate.HeadSHA == "" {
+		if w == nil || w.Done || w.Candidate == nil {
 			continue
 		}
-		if w.Candidate.HeadSHA != f.HeadSHA {
+		pendingHead := gateFaultCandidateHead(w.Candidate.WorkerHeadSHA, w.Candidate.HeadSHA)
+		if pendingHead != "" && pendingHead != faultHead {
 			out = append(out, f)
 		}
 	}
 	return out, nil
+}
+
+func gateFaultCandidateHead(workerHead, head string) string {
+	if workerHead != "" {
+		return workerHead
+	}
+	return head
 }
