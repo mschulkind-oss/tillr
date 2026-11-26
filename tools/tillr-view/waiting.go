@@ -469,6 +469,13 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 				var blockers, closedBlockers []string
 				for _, edge := range edges {
 					state := states[edge.BlockedBy]
+					if edge.Kind == edgeKindAfter {
+						if terminalItemStates[state] {
+							continue
+						}
+						blockers = append(blockers, edge.BlockedBy)
+						continue
+					}
 					if state == "landed" || state == "resolved-elsewhere" {
 						continue
 					}
@@ -556,6 +563,13 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 			var blockers, closedBlockers []string
 			for _, edge := range edges {
 				state := states[edge.BlockedBy]
+				if edge.Kind == edgeKindAfter {
+					if terminalItemStates[state] {
+						continue
+					}
+					blockers = append(blockers, edge.BlockedBy)
+					continue
+				}
 				if state == "landed" || state == "resolved-elsewhere" {
 					continue
 				}

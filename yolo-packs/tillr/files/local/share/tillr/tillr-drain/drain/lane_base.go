@@ -276,13 +276,13 @@ func provedLaneBaseAt(ctx context.Context, root, mode, tip string) (string, erro
 	return green, nil
 }
 
-func hasLandedBlocker(states map[string]string, edges map[string][]string) bool {
+func hasLandedBlocker(states map[string]string, edges map[string][]itemEdge) bool {
 	for id, blockers := range edges {
 		if IsTrunkFixer(id) {
 			continue
 		}
-		for _, blocker := range blockers {
-			if states[blocker] == StateLanded {
+		for _, edge := range blockers {
+			if states[edge.Target] == StateLanded {
 				return true
 			}
 		}
@@ -295,7 +295,7 @@ type landedBlockerCommit struct {
 	ref string
 }
 
-func readLandedBlockerCommits(r *store.Reader, states map[string]string, edges map[string][]string) (map[string]landedBlockerCommit, error) {
+func readLandedBlockerCommits(r *store.Reader, states map[string]string, edges map[string][]itemEdge) (map[string]landedBlockerCommit, error) {
 	var exists bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='landings')`).Scan(&exists); err != nil {
 		return nil, err
@@ -305,7 +305,8 @@ func readLandedBlockerCommits(r *store.Reader, states map[string]string, edges m
 		if IsTrunkFixer(id) {
 			continue
 		}
-		for _, blocker := range blockers {
+		for _, edge := range blockers {
+			blocker := edge.Target
 			if states[blocker] != StateLanded {
 				continue
 			}
@@ -334,7 +335,7 @@ func readLandedBlockerCommits(r *store.Reader, states map[string]string, edges m
 	return commits, nil
 }
 
-func unprovedBlockersFromCommits(ctx context.Context, root, green, tip string, states map[string]string, edges map[string][]string, commits map[string]landedBlockerCommit) (map[string]string, error) {
+func unprovedBlockersFromCommits(ctx context.Context, root, green, tip string, states map[string]string, edges map[string][]itemEdge, commits map[string]landedBlockerCommit) (map[string]string, error) {
 	waits := map[string]string{}
 	if green == "" {
 		return waits, nil
@@ -346,7 +347,8 @@ func unprovedBlockersFromCommits(ctx context.Context, root, green, tip string, s
 		if IsTrunkFixer(id) {
 			continue
 		}
-		for _, blocker := range blockers {
+		for _, edge := range blockers {
+			blocker := edge.Target
 			if states[blocker] != StateLanded || seenBlocker[blocker] {
 				continue
 			}
@@ -400,7 +402,8 @@ func unprovedBlockersFromCommits(ctx context.Context, root, green, tip string, s
 		if IsTrunkFixer(id) {
 			continue
 		}
-		for _, blocker := range blockers {
+		for _, edge := range blockers {
+			blocker := edge.Target
 			if states[blocker] != StateLanded {
 				continue
 			}
@@ -432,7 +435,7 @@ func unprovedBlockersFromCommits(ctx context.Context, root, green, tip string, s
 
 // A nonempty tip adds planner diagnostics. Claim and release checks only need
 // to know whether the dependency is absent from the selected base.
-func unprovedBlockers(ctx context.Context, r *store.Reader, root, green, tip string, states map[string]string, edges map[string][]string) (map[string]string, error) {
+func unprovedBlockers(ctx context.Context, r *store.Reader, root, green, tip string, states map[string]string, edges map[string][]itemEdge) (map[string]string, error) {
 	if green == "" {
 		return map[string]string{}, nil
 	}

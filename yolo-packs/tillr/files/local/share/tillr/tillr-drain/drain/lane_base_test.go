@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -575,11 +576,15 @@ func TestUnprovedBlockersUsesOneGitProcessPerTip(t *testing.T) {
 		"proved-1": StateLanded, "proved-2": StateLanded, "proved-3": StateLanded, "proved-4": StateLanded, "proved-5": StateLanded,
 		"unproved-1": StateLanded, "unproved-2": StateLanded, "missing-1": StateLanded,
 	}
-	edges := map[string][]string{
-		"dep-proved-1": {"proved-1"}, "dep-proved-2": {"proved-2"}, "dep-proved-3": {"proved-3"},
-		"dep-proved-4": {"proved-4"}, "dep-proved-5": {"proved-5"},
-		"dep-unproved-1": {"unproved-1"}, "dep-unproved-2": {"unproved-2"},
-		"dep-missing-1": {"missing-1"},
+	edges := map[string][]itemEdge{
+		"dep-proved-1":   {{Target: "proved-1", Kind: item.EdgeKindBlockedBy}},
+		"dep-proved-2":   {{Target: "proved-2", Kind: item.EdgeKindBlockedBy}},
+		"dep-proved-3":   {{Target: "proved-3", Kind: item.EdgeKindBlockedBy}},
+		"dep-proved-4":   {{Target: "proved-4", Kind: item.EdgeKindBlockedBy}},
+		"dep-proved-5":   {{Target: "proved-5", Kind: item.EdgeKindBlockedBy}},
+		"dep-unproved-1": {{Target: "unproved-1", Kind: item.EdgeKindBlockedBy}},
+		"dep-unproved-2": {{Target: "unproved-2", Kind: item.EdgeKindBlockedBy}},
+		"dep-missing-1":  {{Target: "missing-1", Kind: item.EdgeKindBlockedBy}},
 	}
 	commits := map[string]landedBlockerCommit{
 		"proved-1":   {sha: provedSHAs[0]},
@@ -664,11 +669,11 @@ func TestUnprovedBlockersBatchHonorsRewriteTranslate(t *testing.T) {
 		"rewritten-unproved": StateLanded,
 		"unmapped":           StateLanded,
 	}
-	edges := map[string][]string{
-		"dep-direct":             {"direct"},
-		"dep-rewritten-proved":   {"rewritten-proved"},
-		"dep-rewritten-unproved": {"rewritten-unproved"},
-		"dep-unmapped":           {"unmapped"},
+	edges := map[string][]itemEdge{
+		"dep-direct":             {{Target: "direct", Kind: item.EdgeKindBlockedBy}},
+		"dep-rewritten-proved":   {{Target: "rewritten-proved", Kind: item.EdgeKindBlockedBy}},
+		"dep-rewritten-unproved": {{Target: "rewritten-unproved", Kind: item.EdgeKindBlockedBy}},
+		"dep-unmapped":           {{Target: "unmapped", Kind: item.EdgeKindBlockedBy}},
 	}
 	commits := map[string]landedBlockerCommit{
 		"direct":             {sha: directProved},
@@ -707,7 +712,11 @@ func TestUnprovedBlockersBatchWorksWithGather(t *testing.T) {
 	s3 := runGit(t, f.root, "rev-parse", TrunkRef)
 
 	states := map[string]string{"b1": StateLanded, "b2": StateLanded, "b3": StateLanded}
-	edges := map[string][]string{"dep": {"b1", "b2", "b3"}}
+	edges := map[string][]itemEdge{"dep": {
+		{Target: "b1", Kind: item.EdgeKindBlockedBy},
+		{Target: "b2", Kind: item.EdgeKindBlockedBy},
+		{Target: "b3", Kind: item.EdgeKindBlockedBy},
+	}}
 	commits := map[string]landedBlockerCommit{"b1": {sha: s1}, "b2": {sha: s2}, "b3": {sha: s3}}
 
 	s := gatheredStore(t)

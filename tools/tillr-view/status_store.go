@@ -66,14 +66,8 @@ func readStoreDomainIn(r *store.Reader, loopDir string) (*storeDomain, error) {
 		}
 		rows.Close()
 	}
-	if rows, err := r.Query(`SELECT item_id, blocked_by FROM item_edges ORDER BY item_id, blocked_by`); err == nil {
-		for rows.Next() {
-			var e storeEdge
-			if rows.Scan(&e.ItemID, &e.BlockedBy) == nil {
-				d.edges[e.ItemID] = append(d.edges[e.ItemID], e)
-			}
-		}
-		rows.Close()
+	if edges, err := readAllEdges(r); err == nil {
+		d.edges = edges
 	}
 	if d.candidates, err = readCandidates(r); err != nil && !isMissingTable(err) {
 		return nil, err
@@ -121,12 +115,6 @@ func (d *storeDomain) boardCounts() boardCounts {
 	if d == nil {
 		return boardCounts{ByState: map[string]int{}}
 	}
-	waiting := make(map[string][]string, len(d.edges))
-	for itemID, edges := range d.edges {
-		for _, edge := range edges {
-			waiting[itemID] = append(waiting[itemID], edge.BlockedBy)
-		}
-	}
 	attempts := make([]storeAttempt, 0, len(d.attempts))
 	for _, rows := range d.attempts {
 		attempts = append(attempts, rows...)
@@ -135,7 +123,7 @@ func (d *storeDomain) boardCounts() boardCounts {
 	if live := liveRuns(d.lanes, d.runs, d.allocations); len(live) > 0 {
 		runs = append(append([]storeRun{}, d.runs...), live...)
 	}
-	return boardCountsOf(d.items, runs, d.candidates, attempts, waiting, questionHolds(d.dispatches), d.history)
+	return boardCountsOf(d.items, runs, d.candidates, attempts, d.edges, questionHolds(d.dispatches), d.history)
 }
 
 // item answers one item row.

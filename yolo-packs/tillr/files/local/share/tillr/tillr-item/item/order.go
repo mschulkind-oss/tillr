@@ -46,5 +46,10 @@ func blockersPlaced(it itemPayload, index map[string]int, placed []bool) bool {
 			return false
 		}
 	}
+	for _, after := range it.After {
+		if j, inDocument := index[after]; inDocument && !placed[j] {
+			return false
+		}
+	}
 	return true
 }

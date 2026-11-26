@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/workflow"
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
@@ -431,17 +432,25 @@ func itemDependencyBlocked(r *store.Reader, itemID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rows, err := r.Query(`SELECT COALESCE(i.state, '') FROM item_edges e LEFT JOIN items i ON i.item_id = e.blocked_by WHERE e.item_id = ?`, itemID)
+	hasKind, err := hasItemEdgesKindColumn(r)
+	if err != nil {
+		return false, err
+	}
+	query := `SELECT COALESCE(i.state, ''), '` + item.EdgeKindBlockedBy + `' FROM item_edges e LEFT JOIN items i ON i.item_id = e.blocked_by WHERE e.item_id = ?`
+	if hasKind {
+		query = `SELECT COALESCE(i.state, ''), COALESCE(NULLIF(e.kind, ''), '` + item.EdgeKindBlockedBy + `') FROM item_edges e LEFT JOIN items i ON i.item_id = e.blocked_by WHERE e.item_id = ?`
+	}
+	rows, err := r.Query(query, itemID)
 	if err != nil {
 		return false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var state string
-		if err := rows.Scan(&state); err != nil {
+		var state, kind string
+		if err := rows.Scan(&state, &kind); err != nil {
 			return false, err
 		}
-		if state == "" || !blockerSatisfied(declared.Parsed, state) {
+		if state == "" || !edgeSatisfied(declared.Parsed, kind, state) {
 			return true, nil
 		}
 	}

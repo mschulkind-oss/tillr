@@ -16,6 +16,7 @@ type versionSchema struct {
 	hasCriteria   bool
 	hasClaimClass bool
 	hasEdges      bool
+	hasEdgeKind   bool
 }
 
 // Older stores may not have every column or relationship table yet. Read the
@@ -24,6 +25,7 @@ func readVersionSchema(r *store.Reader) (versionSchema, error) {
 	s := versionSchema{itemColumns: map[string]bool{}}
 	rows, err := r.Query(`SELECT 'items', name FROM pragma_table_info('items')
 		UNION ALL SELECT 'item_criteria', name FROM pragma_table_info('item_criteria')
+		UNION ALL SELECT 'item_edges', name FROM pragma_table_info('item_edges')
 		UNION ALL SELECT name, '' FROM sqlite_master WHERE type='table' AND name='item_edges'`)
 	if err != nil {
 		return s, err
@@ -42,6 +44,7 @@ func readVersionSchema(r *store.Reader) (versionSchema, error) {
 			s.hasClaimClass = s.hasClaimClass || column == "claim_class"
 		case "item_edges":
 			s.hasEdges = true
+			s.hasEdgeKind = s.hasEdgeKind || column == "kind"
 		}
 	}
 	return s, rows.Err()
@@ -143,7 +146,11 @@ func readItemContentVersions(r *store.Reader, schema versionSchema, only *string
 		}
 	}
 	if schema.hasEdges {
-		err := readContentRows(r, `SELECT i.item_id, json_array(i.blocked_by, COALESCE(b.state,''))
+		edgeSelect := `json_array(i.blocked_by, COALESCE(b.state,''))`
+		if schema.hasEdgeKind {
+			edgeSelect = `json_array(i.blocked_by, COALESCE(b.state,''), COALESCE(NULLIF(i.kind,''),'` + item.EdgeKindBlockedBy + `'))`
+		}
+		err := readContentRows(r, `SELECT i.item_id, `+edgeSelect+`
 			FROM item_edges i LEFT JOIN items b ON b.item_id = i.blocked_by`+where+`
 			ORDER BY i.item_id, i.blocked_by`, args, func(rows *sql.Rows) error {
 			var id string

@@ -309,7 +309,7 @@ func TestSyncReadsOnlyWhatItsInputsChanged(t *testing.T) {
 	f, l := passFixture(t, "item-a", "item-b", "item-c")
 	at := l.cfg.Now()
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		if _, err := tx.Exec(`INSERT INTO item_edges VALUES ('item-b','item-a')`); err != nil {
+		if _, err := tx.Exec(`INSERT INTO item_edges(item_id, blocked_by) VALUES ('item-b','item-a')`); err != nil {
 			return err
 		}
 		_, err := tx.Exec(`INSERT INTO backend_windows VALUES ('other','weekly',1,'closed',?,'refused')`, at.Add(time.Minute).UnixMilli())

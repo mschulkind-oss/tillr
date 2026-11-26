@@ -89,6 +89,7 @@ func itemAsOf(r *store.Reader, itemID string, seq int64) (blockFields, []string,
 		Seat      string   `json:"seat"`
 		Workflow  string   `json:"workflow"`
 		BlockedBy []string `json:"blocked_by"`
+		After     []string `json:"after"`
 		Criteria  []struct {
 			ID   string `json:"criterion_id"`
 			Text string `json:"text"`
@@ -102,7 +103,21 @@ func itemAsOf(r *store.Reader, itemID string, seq int64) (blockFields, []string,
 		f.Criteria = append(f.Criteria, [2]string{c.ID, c.Text})
 	}
 	sort.Slice(f.Criteria, func(i, j int) bool { return f.Criteria[i][0] < f.Criteria[j][0] })
-	return f, payload.BlockedBy, true, nil
+	deps := make([]string, 0, len(payload.BlockedBy)+len(payload.After))
+	seen := make(map[string]bool, len(payload.BlockedBy)+len(payload.After))
+	for _, id := range payload.BlockedBy {
+		if !seen[id] {
+			seen[id] = true
+			deps = append(deps, id)
+		}
+	}
+	for _, id := range payload.After {
+		if !seen[id] {
+			seen[id] = true
+			deps = append(deps, id)
+		}
+	}
+	return f, deps, true, nil
 }
 
 // runBaseLacks answers what the run's recorded base is missing of the commits that

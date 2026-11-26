@@ -739,6 +739,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		// Legacy lists are inert history. Sync neither compares the declaration's
 		// retired paths attribute nor clears the previously stored value.
 		desired.AllowedPaths = stored.AllowedPaths
+		desired.After = stored.After
 		// Only a whole sync can observe that a roadmap no longer parks this document.
 		unpark := !in.Partial && stored.State == "not-started" && !b.parked
 		park := stored.State == "in-queue" && b.parked && d.HasState("not-started")
@@ -857,6 +858,11 @@ func orderFileWrites(perFile map[string]*fileWrites, order []string) ([]fileWrit
 			for _, p := range perFile[file].payloads {
 				for _, blocker := range p.BlockedBy {
 					if o, ok := owner[blocker]; ok && o != file && !done[o] {
+						ready = false
+					}
+				}
+				for _, after := range p.After {
+					if o, ok := owner[after]; ok && o != file && !done[o] {
 						ready = false
 					}
 				}

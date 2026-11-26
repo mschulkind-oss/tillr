@@ -88,6 +88,7 @@ type itemInput struct {
 	State     string      `json:"state"`
 	Criteria  []criterion `json:"criteria"`
 	BlockedBy []string    `json:"blocked_by"`
+	After     []string    `json:"after,omitempty"`
 	DesignDoc string      `json:"design_doc,omitempty"`
 	// Rank is the queue's order (item/rank.go); the rank face changes it independently.
 	Rank string `json:"rank,omitempty"`
@@ -174,6 +175,7 @@ type itemOut struct {
 		EventSeq  int64       `json:"event_seq"`
 		Criteria  []criterion `json:"criteria"`
 		BlockedBy []string    `json:"blocked_by"`
+		After     []string    `json:"after,omitempty"`
 		Rule      string      `json:"rule"`
 		Reason    string      `json:"reason"`
 	} `json:"payload"`

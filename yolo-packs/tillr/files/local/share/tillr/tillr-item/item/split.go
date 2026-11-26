@@ -300,7 +300,7 @@ func FileSplit(ctx context.Context, tx *store.Tx, parent string, statement Split
 		}
 		// Parts cannot bypass dependencies that were already on the parent.
 		f := RequestFiling{Words: splitPartWords(words, part), Title: part.Title, Criteria: part.Criteria,
-			Ordinary: !p.Express, BlockedBy: slices.Clone(p.BlockedBy), Destination: Destination{Before: parent},
+			Ordinary: !p.Express, BlockedBy: slices.Clone(p.BlockedBy), AfterItems: slices.Clone(p.After), Destination: Destination{Before: parent},
 			At: at, By: "design", Via: "split"}
 		for _, label := range part.Follows {
 			f.BlockedBy = append(f.BlockedBy, ids[label])

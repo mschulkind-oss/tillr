@@ -2467,7 +2467,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 						for _, row := range items {
 							states[row.ItemID] = row.State
 						}
-						waits, err := unprovedBlockers(ctx, tx.Reader(), l.cfg.Root, green, "", states, map[string][]string{d.ItemID: itemEdges})
+						waits, err := unprovedBlockers(ctx, tx.Reader(), l.cfg.Root, green, "", states, map[string][]itemEdge{d.ItemID: itemEdges})
 						if err != nil {
 							return err
 						}

@@ -319,7 +319,7 @@ func readStoredItem(r *store.Reader, id string) (itemPayload, time.Time, error) 
 	if payload.Criteria, err = readCriteria(r, id); err != nil {
 		return itemPayload{}, time.Time{}, err
 	}
-	if payload.BlockedBy, err = readEdges(r, id); err != nil {
+	if payload.BlockedBy, payload.After, err = readEdges(r, id); err != nil {
 		return itemPayload{}, time.Time{}, err
 	}
 	return payload, stored, nil
@@ -380,23 +380,38 @@ func readJudgeMode(r *store.Reader, id string) (string, error) {
 	return mode, nil
 }
 
-// readEdges answers the items this one is blocked by, in id order.
-func readEdges(r *store.Reader, id string) ([]string, error) {
-	rows, err := r.Query(`SELECT blocked_by FROM item_edges WHERE item_id = ? ORDER BY blocked_by`, id)
+// readEdges answers the items this one is blocked by and runs after, each in id order.
+// A legacy store without item_edges.kind reads all rows as blocked_by without migrating.
+func readEdges(r *store.Reader, id string) ([]string, []string, error) {
+	var hasKind bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM pragma_table_info('item_edges') WHERE name = 'kind')`).Scan(&hasKind); err != nil {
+		return nil, nil, Internalf("checking edge kind metadata: %v", err)
+	}
+	query := `SELECT blocked_by, 'blocked_by' FROM item_edges WHERE item_id = ? ORDER BY blocked_by`
+	if hasKind {
+		query = `SELECT blocked_by, kind FROM item_edges WHERE item_id = ? ORDER BY blocked_by`
+	}
+	rows, err := r.Query(query, id)
 	if err != nil {
-		return nil, Internalf("reading the edges of %q: %v", id, err)
+		return nil, nil, Internalf("reading the edges of %q: %v", id, err)
 	}
 	defer rows.Close()
 	blockedBy := []string{}
+	var after []string
 	for rows.Next() {
-		var blocker string
-		if err := rows.Scan(&blocker); err != nil {
-			return nil, Internalf("reading an edge of %q: %v", id, err)
+		var target, kind string
+		if err := rows.Scan(&target, &kind); err != nil {
+			return nil, nil, Internalf("reading an edge of %q: %v", id, err)
 		}
-		blockedBy = append(blockedBy, blocker)
+		switch kind {
+		case EdgeKindAfter:
+			after = append(after, target)
+		default:
+			blockedBy = append(blockedBy, target)
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, Internalf("reading the edges of %q: %v", id, err)
+		return nil, nil, Internalf("reading the edges of %q: %v", id, err)
 	}
-	return blockedBy, nil
+	return blockedBy, after, nil
 }

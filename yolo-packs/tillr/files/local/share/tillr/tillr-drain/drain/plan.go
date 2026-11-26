@@ -437,7 +437,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	for _, item := range items {
 		states[item.ItemID] = item.State
 	}
-	plannedEdges := make(map[string][]string)
+	plannedEdges := make(map[string][]itemEdge)
 	for id, blockers := range edges {
 		if tick.plansItem(id, works[id]) && !finishedState(def, states[id]) {
 			plannedEdges[id] = blockers
@@ -688,7 +688,7 @@ func (p *planner) reserveWorkerLanes(items []itemRow, released map[string]bool) 
 	}
 }
 
-func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges map[string][]string) ([]bool, error) {
+func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges map[string][]itemEdge) ([]bool, error) {
 	p.pausedBlocked = map[string]bool{}
 	p.pausedReserved = map[string]string{}
 	if p.tick.AvailableLanes == nil || p.tick.examineItem != "" {
@@ -878,7 +878,7 @@ func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges ma
 
 // planItems decides every item in order with the planner's lane state, and answers the
 // decisions and, for each lane a dispatch or retry took, the item that took it.
-func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][]string, faults map[string]ItemFault, works map[string]*pendingWork, inputs map[string]*RunInputs, retries map[string]retryRow, rewriteOwnerHolds, rewriteHolds map[string]string, unshared map[string]bool, hasNodes bool, buildHash string, policy *Policy, shut map[string]bool, tick Pass, root string, def definition.Definition, at time.Time) ([]record.Envelope, map[string]string, error) {
+func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][]itemEdge, faults map[string]ItemFault, works map[string]*pendingWork, inputs map[string]*RunInputs, retries map[string]retryRow, rewriteOwnerHolds, rewriteHolds map[string]string, unshared map[string]bool, hasNodes bool, buildHash string, policy *Policy, shut map[string]bool, tick Pass, root string, def definition.Definition, at time.Time) ([]record.Envelope, map[string]string, error) {
 	claimed := map[string]string{}
 	known, err := deliveryCatalog(root)
 	if err != nil {
@@ -1548,7 +1548,7 @@ func namedWaitHold(def definition.Definition, hold obstacles.Hold, id string, wa
 //
 // Under OQ-GP7, work that a red check does not read may start and run while a fixer is
 // open; only landing waits (via path intersection at gate-acquittal time).
-func (p *planner) decide(item itemRow, blockedBy []string) Decision {
+func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 	decision := Decision{ItemID: item.ItemID, Seat: item.Seat}
 	conflict, hasConflict := p.conflicts[item.ItemID]
 	// An explicit owner disposition (apply/state) can release a blocked item.
@@ -1669,12 +1669,12 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// problem a ruling solves. Skip the read for items already decided by an earlier hold
 	// (especially finished items, whose design documents never affect readiness).
 	var questions questionState
-	if !p.isBlocked(item, blockedBy) && !(p.lands() && p.unproved[item.ItemID] != "") && item.State == p.rules().Ready &&
+	if !p.isBlocked(item, edges) && !(p.lands() && p.unproved[item.ItemID] != "") && item.State == p.rules().Ready &&
 		!(hasPrerequisite(p.rules(), definition.PrerequisiteDesignQuestions) && !itemIsComment(item.ItemID) && p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)] != "") {
 		questions = p.questionState(item)
 	}
 	switch {
-	case p.isBlocked(item, blockedBy):
+	case p.isBlocked(item, edges):
 		decision.Action, decision.Reason = ActionHold, ReasonBlocked
 	case p.lands() && p.unproved[item.ItemID] != "":
 		decision.Action, decision.Reason = ActionHold, p.unproved[item.ItemID]
@@ -2061,13 +2061,13 @@ func (p *planner) forkHeldBy(fork, exceptItem string) (string, bool) {
 	return "", false
 }
 
-// dependencyBlocked answers whether any blocked_by edge on the item is not yet satisfied.
-// A blocker the store does not hold or one closed without landing blocks, which is the safe
-// direction: neither is evidence that the dependency's change landed.
-func (p *planner) dependencyBlocked(blockedBy []string) bool {
-	for _, blocker := range blockedBy {
-		state, found := p.itemStates[blocker]
-		if !found || !blockerSatisfied(p.rules(), state) {
+// dependencyBlocked answers whether any scheduling edge on the item is not yet satisfied.
+// A target the store does not hold blocks, a blocked_by target closed without landing blocks,
+// and an after target is satisfied by any finished state.
+func (p *planner) dependencyBlocked(edges []itemEdge) bool {
+	for _, edge := range edges {
+		state, found := p.itemStates[edge.Target]
+		if !found || !edgeSatisfied(p.rules(), edge.Kind, state) {
 			return true
 		}
 	}
@@ -2075,9 +2075,9 @@ func (p *planner) dependencyBlocked(blockedBy []string) bool {
 }
 
 // isBlocked answers whether the item is held by a blocker: its own state says so, or
-// something it is blocked by has not landed or been resolved elsewhere.
-func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
-	return item.State == p.rules().Blocked || p.dependencyBlocked(blockedBy)
+// something it depends on is not yet satisfied.
+func (p *planner) isBlocked(item itemRow, edges []itemEdge) bool {
+	return item.State == p.rules().Blocked || p.dependencyBlocked(edges)
 }
 
 func (p *planner) waitReleased(itemID string) bool {
@@ -2883,20 +2883,42 @@ func unmappedSeatHold(policy *Policy, it itemRow, attempt int) (Decision, bool) 
 	return d, true
 }
 
-// readEdges answers every blocked_by edge in the store, keyed by the blocked item.
-func readEdges(r *store.Reader) (map[string][]string, error) {
-	rows, err := r.Query(`SELECT item_id, blocked_by FROM item_edges ORDER BY item_id, blocked_by`)
+type itemEdge struct {
+	Target string
+	Kind   string
+}
+
+func hasItemEdgesKindColumn(r *store.Reader) (bool, error) {
+	var exists bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('item_edges') WHERE name = 'kind')`).Scan(&exists); err != nil {
+		return false, readFailure(err)
+	}
+	return exists, nil
+}
+
+// readEdges answers every scheduling edge in the store, keyed by the dependent item.
+func readEdges(r *store.Reader) (map[string][]itemEdge, error) {
+	hasKind, err := hasItemEdgesKindColumn(r)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT item_id, blocked_by, '` + item.EdgeKindBlockedBy + `' FROM item_edges ORDER BY item_id, blocked_by`
+	if hasKind {
+		query = `SELECT item_id, blocked_by, COALESCE(NULLIF(kind, ''), '` + item.EdgeKindBlockedBy + `') FROM item_edges ORDER BY item_id, blocked_by`
+	}
+	rows, err := r.Query(query)
 	if err != nil {
 		return nil, readFailure(err)
 	}
 	defer rows.Close()
-	edges := map[string][]string{}
+	edges := map[string][]itemEdge{}
 	for rows.Next() {
-		var itemID, blockedBy string
-		if err := rows.Scan(&itemID, &blockedBy); err != nil {
+		var itemID string
+		var edge itemEdge
+		if err := rows.Scan(&itemID, &edge.Target, &edge.Kind); err != nil {
 			return nil, readFailure(err)
 		}
-		edges[itemID] = append(edges[itemID], blockedBy)
+		edges[itemID] = append(edges[itemID], edge)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, readFailure(err)
@@ -2904,25 +2926,33 @@ func readEdges(r *store.Reader) (map[string][]string, error) {
 	return edges, nil
 }
 
-// readItemEdges answers the blocked_by edges for one item.
-func readItemEdges(r *store.Reader, itemID string) ([]string, error) {
-	rows, err := r.Query(`SELECT blocked_by FROM item_edges WHERE item_id = ? ORDER BY blocked_by`, itemID)
+// readItemEdges answers the scheduling edges for one item.
+func readItemEdges(r *store.Reader, itemID string) ([]itemEdge, error) {
+	hasKind, err := hasItemEdgesKindColumn(r)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT blocked_by, '` + item.EdgeKindBlockedBy + `' FROM item_edges WHERE item_id = ? ORDER BY blocked_by`
+	if hasKind {
+		query = `SELECT blocked_by, COALESCE(NULLIF(kind, ''), '` + item.EdgeKindBlockedBy + `') FROM item_edges WHERE item_id = ? ORDER BY blocked_by`
+	}
+	rows, err := r.Query(query, itemID)
 	if err != nil {
 		return nil, readFailure(err)
 	}
 	defer rows.Close()
-	var blockers []string
+	var edges []itemEdge
 	for rows.Next() {
-		var blockedBy string
-		if err := rows.Scan(&blockedBy); err != nil {
+		var edge itemEdge
+		if err := rows.Scan(&edge.Target, &edge.Kind); err != nil {
 			return nil, readFailure(err)
 		}
-		blockers = append(blockers, blockedBy)
+		edges = append(edges, edge)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, readFailure(err)
 	}
-	return blockers, nil
+	return edges, nil
 }
 
 // readLanes answers the lanes the store holds under a live lease, keyed by lane id, at

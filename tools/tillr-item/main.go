@@ -178,18 +178,22 @@ func rankFace(args []string) (record.Envelope, int) {
 	})
 }
 
-// depFace adds or removes blocked_by edges on an existing item without rewriting other
+// depFace adds or removes scheduling edges on an existing item without rewriting other
 // fields or changing its rank/place.
 func depFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("dep")
 	path := fs.String("store", "", "the store to write")
 	id := fs.String("item", "", "the item whose dependencies change")
-	var add, remove []string
+	var add, addAfter, remove []string
 	fs.Func("add", "an item id to add to blocked_by; repeat for each", func(v string) error {
 		add = append(add, v)
 		return nil
 	})
-	fs.Func("remove", "an item id to remove from blocked_by; repeat for each", func(v string) error {
+	fs.Func("add-after", "an item id to add as an ordering-only after dependency; repeat for each", func(v string) error {
+		addAfter = append(addAfter, v)
+		return nil
+	})
+	fs.Func("remove", "an item id to remove from dependencies (blocked_by or after); repeat for each", func(v string) error {
 		remove = append(remove, v)
 		return nil
 	})
@@ -197,8 +201,8 @@ func depFace(args []string) (record.Envelope, int) {
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
 	}
-	if *path == "" || *id == "" || (len(add) == 0 && len(remove) == 0) {
-		return record.Envelope{}, fail(item.Usagef("dep needs --store <path>, --item <id>, and at least one --add <id> or --remove <id>"))
+	if *path == "" || *id == "" || (len(add) == 0 && len(addAfter) == 0 && len(remove) == 0) {
+		return record.Envelope{}, fail(item.Usagef("dep needs --store <path>, --item <id>, and at least one --add <id>, --add-after <id>, or --remove <id>"))
 	}
 	at := time.Now().UTC()
 	if *now != "" {
@@ -209,7 +213,7 @@ func depFace(args []string) (record.Envelope, int) {
 		at = parsed.UTC()
 	}
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
-		return item.SetDeps(ctx, tx, *id, add, remove, at)
+		return item.SetTypedDeps(ctx, tx, *id, add, addAfter, remove, at)
 	})
 }
 

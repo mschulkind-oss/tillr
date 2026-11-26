@@ -14,7 +14,7 @@ package main
 // rather than as an in-queue row the header would offer as dispatchable. history is the
 // planner's read of each item's attempt history, so Dispatchable is the planner's own
 // predicate rather than a second arithmetic (see dispatchHistory.dispatchable).
-func boardCountsOf(items []storeItem, runs []storeRun, candidates []storeCandidate, attempts []storeAttempt, waiting map[string][]string, holds map[string]string, history *dispatchHistory) boardCounts {
+func boardCountsOf(items []storeItem, runs []storeRun, candidates []storeCandidate, attempts []storeAttempt, edges map[string][]storeEdge, holds map[string]string, history *dispatchHistory) boardCounts {
 	counts := boardCounts{ByState: map[string]int{}}
 	runsByItem := map[string][]storeRun{}
 	for _, run := range runs {
@@ -31,7 +31,7 @@ func boardCountsOf(items []storeItem, runs []storeRun, candidates []storeCandida
 			enqueuedCandidate = &c
 		}
 		hold := holds[it.ItemID]
-		projected := ProjectItemState(it, enqueuedCandidate, activeRun(runsByItem[it.ItemID]), waiting[it.ItemID], hold)
+		projected := ProjectItemState(it, enqueuedCandidate, activeRun(runsByItem[it.ItemID]), waitingOnTargets(edges[it.ItemID], stateOf), hold)
 		// The projection keeps a terminal item terminal, so a stale hold on a landed row is
 		// not a question the header still owes. Count the holds the projection applied.
 		if projected.Hold != "" {
@@ -43,7 +43,7 @@ func boardCountsOf(items []storeItem, runs []storeRun, candidates []storeCandida
 		// are allowed to differ, and the header should say what the queue will actually do.
 		// A question hold and a retry hold are the planner's own reasons not to dispatch, so
 		// both are excluded -- the second through the planner's mayBeARetry rule.
-		if history != nil && history.dispatchable(it, stateOf, waiting, hold) {
+		if history != nil && history.dispatchable(it, stateOf, edges, hold) {
 			counts.Dispatchable++
 		}
 		counts.ByState[projected.State]++
@@ -94,14 +94,21 @@ func itemStates(items []storeItem) map[string]string {
 	return stateOf
 }
 
-// unmetBlocker answers whether an item waits on a blocker that has not landed or been
-// resolved elsewhere. Closing an item without landing does not satisfy a blocked_by edge,
-// and an edge naming an item this store does not carry is unmet: a queue that dispatched
-// an item whose dependency never landed would be guessing.
-func unmetBlocker(stateOf map[string]string, waiting map[string][]string, itemID string) bool {
-	for _, blockedBy := range waiting[itemID] {
-		state := stateOf[blockedBy]
-		if state == "closed" || !terminalItemStates[state] {
+func edgeSatisfied(edge storeEdge, targetState string) bool {
+	if edge.Kind == edgeKindAfter {
+		return terminalItemStates[targetState]
+	}
+	return targetState != "closed" && terminalItemStates[targetState]
+}
+
+// unmetBlocker answers whether an item waits on an unsatisfied scheduling dependency.
+// A blocked_by edge requires a non-closed terminal state (landed or resolved-elsewhere);
+// an after edge is satisfied by any terminal state (including closed). An edge naming
+// an item this store does not carry is unmet: a queue that dispatched an item whose
+// dependency never finished would be guessing.
+func unmetBlocker(stateOf map[string]string, edges map[string][]storeEdge, itemID string) bool {
+	for _, edge := range edges[itemID] {
+		if !edgeSatisfied(edge, stateOf[edge.BlockedBy]) {
 			return true
 		}
 	}

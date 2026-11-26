@@ -35,7 +35,7 @@ func storedItem(r *store.Reader, id string) (itemPayload, bool, error) {
 	if payload.Criteria, err = readCriteria(r, id); err != nil {
 		return itemPayload{}, false, err
 	}
-	if payload.BlockedBy, err = readEdges(r, id); err != nil {
+	if payload.BlockedBy, payload.After, err = readEdges(r, id); err != nil {
 		return itemPayload{}, false, err
 	}
 	return payload, true, nil

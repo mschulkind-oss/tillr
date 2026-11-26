@@ -42,6 +42,7 @@ type itemPayload struct {
 	Finding         *Finding    `json:"finding,omitempty"`
 	Criteria        []criterion `json:"criteria"`
 	BlockedBy       []string    `json:"blocked_by"`
+	After           []string    `json:"after,omitempty"`
 	DesignDoc       string      `json:"design_doc,omitempty"`
 	// AllowedPaths is the item's fence: the repo-relative path prefixes a run's change
 	// may include (design §3's Fence section). An item that names none has no fence, which
@@ -431,10 +432,13 @@ func sameTerminalDefinition(a, b itemPayload) bool {
 	ab, bb := slices.Clone(a.BlockedBy), slices.Clone(b.BlockedBy)
 	slices.Sort(ab)
 	slices.Sort(bb)
+	aa, ba := slices.Clone(a.After), slices.Clone(b.After)
+	slices.Sort(aa)
+	slices.Sort(ba)
 	return a.State == b.State && a.Title == b.Title && a.BodyRef == b.BodyRef && a.Task == b.Task &&
 		a.DesignDoc == b.DesignDoc && a.Rank == b.Rank && a.Seat == b.Seat &&
 		a.Prose == b.Prose && a.Workflow == b.Workflow && sameWorkflowArgs(a, b) && a.JudgeMode == b.JudgeMode && a.Express == b.Express && slices.Equal(ac, bc) &&
-		slices.Equal(ab, bb) && slices.Equal(a.AllowedPaths, b.AllowedPaths)
+		slices.Equal(ab, bb) && slices.Equal(aa, ba) && slices.Equal(a.AllowedPaths, b.AllowedPaths)
 }
 
 // replay answers the record a request with this key already produced, and false when
@@ -650,46 +654,86 @@ func replaceCriteria(ctx context.Context, tx *store.Tx, payload itemPayload) err
 	return nil
 }
 
-// replaceEdges writes the item's edges, refusing the three edge rules. The item's old
-// edges are cleared first, so the cycle walk sees the graph as it will be rather than
-// as it was: an item that drops an edge and adds the reverse of it is not a cycle.
+// replaceEdges writes the item's scheduling edges (blocked_by and after), refusing
+// self-edges, missing targets, cross-kind overlap, and cycles across the combined DAG.
+// The item's old edges are cleared first, so the cycle walk sees the graph as it will be
+// rather than as it was: an item that drops an edge and adds the reverse of it is not a cycle.
 func replaceEdges(ctx context.Context, tx *store.Tx, payload itemPayload) error {
 	if _, err := tx.Exec(`DELETE FROM item_edges WHERE item_id = ?`, payload.ItemID); err != nil {
 		return Internalf("clearing the edges: %v", err)
 	}
-	for _, blockedBy := range payload.BlockedBy {
-		if blockedBy == payload.ItemID {
+	blockedSet := make(map[string]bool, len(payload.BlockedBy))
+	for _, target := range payload.BlockedBy {
+		blockedSet[target] = true
+	}
+	for _, target := range payload.After {
+		if blockedSet[target] {
+			return Rejectionf("edge-overlap", payload.ItemID,
+				"item %q cannot have both blocked_by and after edges to %q", payload.ItemID, target)
+		}
+	}
+	type edgeSpec struct {
+		target string
+		kind   string
+	}
+	var edges []edgeSpec
+	seen := make(map[string]bool, len(payload.BlockedBy)+len(payload.After))
+	for _, target := range payload.BlockedBy {
+		if !seen[target] {
+			seen[target] = true
+			edges = append(edges, edgeSpec{target: target, kind: EdgeKindBlockedBy})
+		}
+	}
+	for _, target := range payload.After {
+		if !seen[target] {
+			seen[target] = true
+			edges = append(edges, edgeSpec{target: target, kind: EdgeKindAfter})
+		}
+	}
+	for _, edge := range edges {
+		if edge.target == payload.ItemID {
+			if edge.kind == EdgeKindAfter {
+				return Rejectionf("edge-self", payload.ItemID, "item %q cannot run after itself", payload.ItemID)
+			}
 			return Rejectionf("edge-self", payload.ItemID, "item %q cannot be blocked by itself", payload.ItemID)
 		}
-		exists, err := itemExists(ctx, tx.Reader(), blockedBy)
+		exists, err := itemExists(ctx, tx.Reader(), edge.target)
 		if err != nil {
 			return err
 		}
 		if !exists {
+			if edge.kind == EdgeKindAfter {
+				return Rejectionf("edge-target-missing", payload.ItemID,
+					"item %q runs after %q, which does not exist", payload.ItemID, edge.target)
+			}
 			return Rejectionf("edge-target-missing", payload.ItemID,
-				"item %q is blocked by %q, which does not exist", payload.ItemID, blockedBy)
+				"item %q is blocked by %q, which does not exist", payload.ItemID, edge.target)
 		}
-		reaches, err := reachesItem(ctx, tx.Reader(), blockedBy, payload.ItemID)
+		reaches, err := reachesItem(ctx, tx.Reader(), edge.target, payload.ItemID)
 		if err != nil {
 			return err
 		}
 		if reaches {
+			if edge.kind == EdgeKindAfter {
+				return Rejectionf("edge-cycle", payload.ItemID,
+					"item %q after %q closes a cycle", payload.ItemID, edge.target)
+			}
 			return Rejectionf("edge-cycle", payload.ItemID,
-				"item %q blocked by %q closes a cycle", payload.ItemID, blockedBy)
+				"item %q blocked by %q closes a cycle", payload.ItemID, edge.target)
 		}
 		// The edge is written as it is validated, so a later edge in the same record is
 		// checked against the graph this record is building and not only the stored one.
-		if _, err := tx.Exec(`INSERT INTO item_edges (item_id, blocked_by) VALUES (?, ?)`, payload.ItemID, blockedBy); err != nil {
+		if _, err := tx.Exec(`INSERT INTO item_edges (item_id, blocked_by, kind) VALUES (?, ?, ?)`, payload.ItemID, edge.target, edge.kind); err != nil {
 			return Internalf("writing an edge: %v", err)
 		}
 	}
 	return nil
 }
 
-// reachesItem reports whether target is reachable from start by following blocked_by
-// edges, which is what makes a new edge a cycle. The walk is breadth-first over the
-// item's own table, so it terminates on a graph that is already acyclic and does not
-// recurse on a deep chain.
+// reachesItem reports whether target is reachable from start by following scheduling
+// edges (blocked_by and after), which is what makes a new edge a cycle. The walk is
+// breadth-first over the item's own table, so it terminates on a graph that is already
+// acyclic and does not recurse on a deep chain.
 func reachesItem(ctx context.Context, r *store.Reader, start, target string) (bool, error) {
 	seen := map[string]bool{start: true}
 	queue := []string{start}

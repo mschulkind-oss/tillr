@@ -496,16 +496,18 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		case d.Reason == ReasonOwnerOnlyOwed && it.OwnerOwed != nil:
 			row.Why, row.Mover = it.OwnerOwed.Explanation(), it.OwnerOwed.Mover()
 		case d.Reason == ReasonBlocked:
-			for _, id := range edges[it.ItemID] {
-				if !blockerSatisfied(def, states[id]) {
-					row.WaitingOn = append(row.WaitingOn, id)
-					if states[id] == def.Closed || states[id] == "closed" {
-						closedBlockers = append(closedBlockers, id)
+			var waitingLabels []string
+			for _, edge := range edges[it.ItemID] {
+				if !edgeSatisfied(def, edge.Kind, states[edge.Target]) {
+					row.WaitingOn = append(row.WaitingOn, edge.Target)
+					waitingLabels = append(waitingLabels, edge.Target+" ("+edge.Kind+")")
+					if edge.Kind != item.EdgeKindAfter && closedState(def, states[edge.Target]) {
+						closedBlockers = append(closedBlockers, edge.Target)
 					}
 				}
 			}
 			if len(row.WaitingOn) > 0 {
-				row.Why += ": waiting on " + strings.Join(row.WaitingOn, ", ")
+				row.Why += ": waiting on " + strings.Join(waitingLabels, ", ")
 				if len(closedBlockers) > 0 {
 					row.Why += "; " + strings.Join(closedBlockers, ", ") + " closed without landing"
 				}

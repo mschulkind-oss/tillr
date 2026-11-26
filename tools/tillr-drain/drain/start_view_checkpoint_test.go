@@ -332,7 +332,7 @@ func TestStartSyncReleasesStoreBeforeSubprocesses(t *testing.T) {
 		if _, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id='item-blocker'`); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT INTO item_edges VALUES ('item-a','item-blocker')`); err != nil {
+		if _, err := tx.Exec(`INSERT INTO item_edges(item_id, blocked_by) VALUES ('item-a','item-blocker')`); err != nil {
 			return err
 		}
 		_, err := tx.Exec(`INSERT INTO landings(landing_id,item_id,run_id,verdict_id,result,base_sha,head_sha,trunk_before,trunk_after,event_seq) VALUES('land-blocker','item-blocker','run-blocker','verdict-blocker','landed',?,?,?,?,1)`, trunkSHA, trunkSHA, trunkSHA, trunkSHA)

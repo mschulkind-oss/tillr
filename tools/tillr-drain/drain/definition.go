@@ -3,6 +3,7 @@ package drain
 import (
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -117,6 +118,19 @@ func closedState(d definition.Definition, state string) bool {
 // landed and resolved-elsewhere (or another non-closed finished state) unblock it.
 func blockerSatisfied(d definition.Definition, state string) bool {
 	return !closedState(d, state) && finishedState(d, state)
+}
+
+// edgeSatisfied reports whether a scheduling edge of kind to a target in state is satisfied.
+// Ordering-only ("after") edges are satisfied by any finished state (including closed);
+// blocked_by edges require a non-closed finished state.
+func edgeSatisfied(d definition.Definition, kind, state string) bool {
+	if state == "" {
+		return false
+	}
+	if kind == item.EdgeKindAfter {
+		return finishedState(d, state)
+	}
+	return blockerSatisfied(d, state)
 }
 
 func holdEnabled(d definition.Definition, reason string) bool {

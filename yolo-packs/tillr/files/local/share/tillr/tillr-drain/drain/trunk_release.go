@@ -119,7 +119,7 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id, fix
 	// using the same proof rule as ordinary blockers, so the fresh run cannot
 	// start from a green pointer that still excludes the repair.
 	waits, err := unprovedBlockers(ctx, r, l.cfg.Root, green, "",
-		map[string]string{fixer: StateLanded}, map[string][]string{id: {fixer}})
+		map[string]string{fixer: StateLanded}, map[string][]itemEdge{id: {{Target: fixer, Kind: item.EdgeKindBlockedBy}}})
 	if err != nil || waits[id] != "" {
 		return "", err
 	}

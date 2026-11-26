@@ -255,7 +255,7 @@ func (s *startSnapshot) readRepairInputs(r *store.Reader, at time.Time, policy *
 	if s.def.Completes == "landing" && root != "" && (needTrunk || (bases != nil && bases.green != "")) {
 		edges := s.edges
 		if !readAll {
-			edges = map[string][]string{}
+			edges = map[string][]itemEdge{}
 			for id := range touched {
 				edges[id] = s.edges[id]
 			}

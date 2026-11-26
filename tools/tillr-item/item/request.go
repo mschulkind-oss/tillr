@@ -54,6 +54,7 @@ type RequestFiling struct {
 	Paths       []string
 	Criteria    []string
 	BlockedBy   []string
+	AfterItems  []string
 	Alerts      []string
 	FiledBy     string
 	DedupKey    string
@@ -98,7 +99,11 @@ func RequestWorkflowCheck(root, ref string) error {
 // requestInputHash is the identity of everything the filer chose except the place: a
 // refile with the same words and the same choices is the same request.
 func requestInputHash(f RequestFiling) string {
-	raw, _ := json.Marshal([]any{string(f.Words), f.Title, f.Seat, f.Workflow, f.Paths, f.Criteria, f.Ordinary, f.BlockedBy, f.Alerts})
+	fields := []any{string(f.Words), f.Title, f.Seat, f.Workflow, f.Paths, f.Criteria, f.Ordinary, f.BlockedBy, f.Alerts}
+	if len(f.AfterItems) > 0 {
+		fields = append(fields, f.AfterItems)
+	}
+	raw, _ := json.Marshal(fields)
 	return fmt.Sprintf("%x", sha256.Sum256(raw))
 }
 
@@ -159,6 +164,23 @@ func normalizeRequest(f *RequestFiling) error {
 	}
 	slices.Sort(deps)
 	f.BlockedBy = deps
+	seenAfter := map[string]bool{}
+	afterItems := []string{}
+	for _, dep := range f.AfterItems {
+		dep = strings.TrimSpace(dep)
+		if dep == "" {
+			return Rejectionf("edge-target-missing", "", "--after-item must name an item id")
+		}
+		if seenDeps[dep] {
+			return Rejectionf("edge-overlap", "", "item %q cannot be in both --blocked-by and --after-item", dep)
+		}
+		if !seenAfter[dep] {
+			seenAfter[dep] = true
+			afterItems = append(afterItems, dep)
+		}
+	}
+	slices.Sort(afterItems)
+	f.AfterItems = afterItems
 	seenAlerts := map[string]bool{}
 	alerts := []string{}
 	for _, alertID := range f.Alerts {
@@ -322,7 +344,7 @@ func insertRequest(ctx context.Context, tx *store.Tx, f RequestFiling, id, hash,
 	}
 	payload := itemPayload{
 		ItemID: id, Title: f.Title, State: "in-queue", Seat: f.Seat, Workflow: f.Workflow,
-		AllowedPaths: f.Paths, BlockedBy: f.BlockedBy, Express: !f.Ordinary, Criteria: criteria,
+		AllowedPaths: f.Paths, BlockedBy: f.BlockedBy, After: f.AfterItems, Express: !f.Ordinary, Criteria: criteria,
 	}
 	env, err := envelopeOf(RecordKind, id, f.At, payload)
 	if err != nil {
@@ -351,6 +373,9 @@ func insertRequest(ctx context.Context, tx *store.Tx, f RequestFiling, id, hash,
 		return record.Envelope{}, Internalf("reading the placement: %v", err)
 	}
 	answer["seat"], answer["workflow"], answer["allowed_paths"], answer["blocked_by"], answer["words_size"] = f.Seat, f.Workflow, f.Paths, f.BlockedBy, len(f.Words)
+	if len(f.AfterItems) > 0 {
+		answer["after"] = f.AfterItems
+	}
 	if f.FiledBy != "" {
 		answer["filed_by"] = f.FiledBy
 	}

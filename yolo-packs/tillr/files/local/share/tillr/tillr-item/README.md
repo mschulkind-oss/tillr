@@ -74,19 +74,25 @@ defaulting to `owner` and `cli`. Run `tillr-item place --help` for all flags.
 
 ## Adding and removing dependencies
 
-`dep` adds or removes `blocked_by` edges on an existing item without rewriting
-the rest of its record and without changing its place in the queue.
+`dep` adds or removes scheduling edges (`blocked_by` via `--add`, ordering-only `after`
+via `--add-after`) on an existing item without rewriting the rest of its record and
+without changing its place in the queue.
 
 ```sh
 tillr-item dep --store /path/to/state.db --item item-example --add item-other
+tillr-item dep --store /path/to/state.db --item item-example --add-after item-writer
 tillr-item dep --store /path/to/state.db --item item-example --remove item-other
 ```
 
-Unchanged dependencies append no event. It refuses an unknown item
-(`not-found`), a blank or unknown dependency target (`edge-target-missing`),
-a self-dependency (`edge-self`), and any addition that would form a cycle
-(`edge-cycle`), and prints the resulting `item.record` envelope. Run
-`tillr-item dep --help` for all flags.
+`--remove` removes any scheduling edge (`blocked_by` or `after`) to that target.
+Adding a target with `--add-after` when it is currently in `blocked_by` (or with
+`--add` when it is currently in `after`) replaces the edge's kind cleanly so an item
+holds at most one scheduling edge to any target. Unchanged dependencies append no event.
+It refuses an unknown item (`not-found`), a blank or unknown dependency target
+(`edge-target-missing`), a self-dependency (`edge-self`), naming the same target in both
+`--add` and `--add-after` (`edge-overlap`), and any addition that would form a cycle
+across the combined scheduling DAG (`edge-cycle`), and prints the resulting `item.record`
+envelope. Run `tillr-item dep --help` for all flags.
 
 ## Saving an idea
 
@@ -193,7 +199,7 @@ printf '%s\n' 'Add two rows to yolo-packs/copilot-models/pack.toml: ...' |
   tillr-item request --store .tillr/state.db --root . --title "List two more Copilot models" --workflow single-worker@v1
 ```
 
-The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--blocked-by`, `--ordinary`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` is required; `--path` is ignored with a notice, because an item carries no list of allowed paths. `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--blocked-by` (repeatable) names an existing item this request waits on and stores the dependency when the item is filed so it never looks ready. `--ordinary` files the request for the ordinary lanes only; by default a filed request is marked `express` when the item is written so it is eligible for the express lanes. `--to`, `--before` and `--after` place the item (last by default).
+The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--blocked-by`, `--after-item`, `--ordinary`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` is required; `--path` is ignored with a notice, because an item carries no list of allowed paths. `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--blocked-by` (repeatable) names an existing item this request waits on and stores the dependency when the item is filed so it never looks ready. `--after-item` (repeatable) names an existing item this request runs after (an ordering-only dependency that releases when that item finishes, however it finishes); naming the same target in both `--blocked-by` and `--after-item` is refused as `edge-overlap`. `--ordinary` files the request for the ordinary lanes only; by default a filed request is marked `express` when the item is written so it is eligible for the express lanes. `--to`, `--before` and `--after` place the item in the queue order (last by default).
 
 The face reads the workflow file before the store's write transaction opens, so the
 transaction does no I/O but the store's own. It writes the item (with `express` set unless
@@ -216,11 +222,11 @@ choice) are refused as `request-differs`, naming the existing item. The four fix
 The refusals are `words-empty`, `words-not-text`, `words-too-large`, `title-required`,
 `title-braces`, `workflow-reference`,
 `workflow-missing`, `workflow-needs-args`, `workflow-required`, `criterion-empty`,
-`criterion-braces`, `too-many-criteria`, `edge-target-missing`, `request-differs`, `unknown-item` and
+`criterion-braces`, `too-many-criteria`, `edge-target-missing`, `edge-overlap`, `request-differs`, `unknown-item` and
 `not-in-order`. A `{{` in the title or a criterion is refused because the brief template
 reads it as a placeholder; the words may hold anything. Every refusal comes before the
 first write. The answer is an `item.request` record carrying `item_id`, `place`,
-`count`, `seat`, `workflow`, `blocked_by` and `words_size`. An identical refile
+`count`, `seat`, `workflow`, `blocked_by`, `after` (when non-empty) and `words_size`. An identical refile
 answers `item_id`, `place`, `count`, `event_seq` and `event_head_seq`. The
 [drain README](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#filed-requests) says how the drain runs one.
 
@@ -562,8 +568,8 @@ tillr item list --store .tillr/state.db --state landed --state resolved-elsewher
 
 `list` reads one store snapshot without writing or migrating it and prints one
 `item.list` record. Its `payload.items` array contains every item, including finished
-items, in item-id order. Each entry contains `item_id`, `title`, `state`, `blocked_by`
-and `updated_at`. Blockers are the stored dependency ids in id order, not just those
+items, in item-id order. Each entry contains `item_id`, `title`, `state`, `blocked_by`,
+`after` (when non-empty) and `updated_at`. Blockers and `after` targets are the stored dependency ids in id order, not just those
 that currently hold work; `updated_at` is the item's last update in UTC, in RFC 3339
 format. No body or design document needs to exist for an item to be listed.
 

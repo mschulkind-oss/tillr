@@ -86,7 +86,7 @@ func TestFileSplitFilesPartsAndKeepsParentHeld(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if !reflect.DeepEqual(edges[parts["second"]], []string{parts["first"]}) || len(edges[parts["first"]]) != 0 || len(edges[parts["extra"]]) != 0 || len(edges[parent]) != 2 || !reflect.DeepEqual(edges["queue-after"], []string{parent}) {
+		if !reflect.DeepEqual(edges[parts["second"]], []itemEdge{{Target: parts["first"], Kind: item.EdgeKindBlockedBy}}) || len(edges[parts["first"]]) != 0 || len(edges[parts["extra"]]) != 0 || len(edges[parent]) != 2 || !reflect.DeepEqual(edges["queue-after"], []itemEdge{{Target: parent, Kind: item.EdgeKindBlockedBy}}) {
 			t.Fatalf("edges: %v", edges)
 		}
 		rows, err := readItems(r)

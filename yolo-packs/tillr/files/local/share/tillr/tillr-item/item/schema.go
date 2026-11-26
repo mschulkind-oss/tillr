@@ -43,6 +43,12 @@ const (
 // Utility is the producer name every record this utility emits carries.
 const Utility = "item"
 
+// Scheduling edge kinds stored in item_edges.kind.
+const (
+	EdgeKindBlockedBy = "blocked_by"
+	EdgeKindAfter     = "after"
+)
+
 // Version is this utility's producer version. The version set is released together
 // (design §11), so this moves with the set rather than on its own.
 const Version = "0.1.0"
@@ -110,6 +116,7 @@ CREATE TABLE IF NOT EXISTS item_criteria (
 CREATE TABLE IF NOT EXISTS item_edges (
   item_id    TEXT NOT NULL REFERENCES items(item_id),
   blocked_by TEXT NOT NULL REFERENCES items(item_id),
+  kind       TEXT NOT NULL DEFAULT 'blocked_by',
   PRIMARY KEY (item_id, blocked_by)
 );
 
@@ -184,6 +191,9 @@ func init() {
 		panic(err)
 	}
 	if err := store.RegisterColumn("item", "item_criteria", "claim_class", "TEXT NOT NULL DEFAULT 'verification-only'"); err != nil {
+		panic(err)
+	}
+	if err := store.RegisterColumn("item", "item_edges", "kind", "TEXT NOT NULL DEFAULT 'blocked_by'"); err != nil {
 		panic(err)
 	}
 	// items.AllowedPaths is the one column added to a table that predates it, so it lands

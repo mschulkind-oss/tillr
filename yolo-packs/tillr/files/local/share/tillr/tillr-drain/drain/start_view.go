@@ -58,7 +58,8 @@ type startSnapshot struct {
 	waits                             map[string]item.WaitingOn
 	itemsByID                         map[string]itemRow
 	states                            map[string]string
-	edges, reverseEdges               map[string][]string
+	edges                             map[string][]itemEdge
+	reverseEdges                      map[string][]string
 	history                           runHistory
 	priors, attemptPriors             map[string][]priorRun
 	latestFinished                    map[string]string

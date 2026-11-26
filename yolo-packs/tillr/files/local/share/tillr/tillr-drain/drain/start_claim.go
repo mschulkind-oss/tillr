@@ -52,7 +52,7 @@ func (l *Loop) fastStartBase(ctx context.Context, r *store.Reader, proposal star
 	base = proposal.tip
 	if !l.nonLanding && !IsTrunkFixer(itemID) && proposal.green != "" {
 		// The content version binds these edges and the blockers' states.
-		edges := map[string][]string{itemID: proposal.edges[itemID]}
+		edges := map[string][]itemEdge{itemID: proposal.edges[itemID]}
 		waits, err := unprovedBlockers(ctx, r, l.cfg.Root, proposal.green, "", proposal.states, edges)
 		if err != nil || waits[itemID] != "" {
 			return "", false, err

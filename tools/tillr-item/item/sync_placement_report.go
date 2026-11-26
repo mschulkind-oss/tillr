@@ -244,6 +244,13 @@ func previewAcceptedWrites(r *store.Reader, writes []fileWrites, held []orderedI
 				}
 				next[p.ItemID] = append(next[p.ItemID], blocker)
 			}
+			for _, after := range p.After {
+				if _, exists := next[after]; !exists || reaches(next, after, p.ItemID) {
+					valid = false
+					break
+				}
+				next[p.ItemID] = append(next[p.ItemID], after)
+			}
 			if !valid {
 				break
 			}

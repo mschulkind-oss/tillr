@@ -333,12 +333,8 @@ func readLinkedItemMeta(r *store.Reader, itemIDs []string) (map[string]linkedIte
 		if !ok {
 			continue
 		}
-		var waitingOn []string
-		if edges, err := readEdges(r, id); err == nil {
-			for _, e := range edges {
-				waitingOn = append(waitingOn, e.BlockedBy)
-			}
-		}
+		edges, _ := readEdges(r, id)
+		waitingOn := waitingOnTargets(edges, states)
 		var enqueued *storeCandidate
 		if candidates, err := readItemCandidates(r, id); err == nil {
 			for i := range candidates {
@@ -362,7 +358,7 @@ func readLinkedItemMeta(r *store.Reader, itemIDs []string) (map[string]linkedIte
 			hold = questionHoldOf(dispatches)
 		}
 		proj := ProjectItemState(it, enqueued, active, waitingOn, hold)
-		closedBlockers := closedBlockersFor(it, waitingOn, states)
+		closedBlockers := closedBlockersFor(it, edges, states)
 		projectClosedBlockers(&proj, closedBlockers)
 		out[id] = linkedItemMeta{title: it.Title, state: proj.State}
 	}

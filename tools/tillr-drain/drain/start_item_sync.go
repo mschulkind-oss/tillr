@@ -41,6 +41,9 @@ func (d signatureDigest) sum(schema versionSchema) [32]byte {
 	if schema.hasEdges {
 		buf[0] |= 4
 	}
+	if schema.hasEdgeKind {
+		buf[0] |= 8
+	}
 	binary.LittleEndian.PutUint64(buf[1:9], d[0])
 	binary.LittleEndian.PutUint64(buf[9:17], d[1])
 	binary.LittleEndian.PutUint64(buf[17:25], d[2])
@@ -115,8 +118,14 @@ func readStartItemsSignatureOn(r sqlReader, schema versionSchema) ([32]byte, err
 		return [32]byte{}, err
 	}
 	if schema.hasEdges {
-		if err := hashSignatureRows(r, &acc, 'E', `SELECT item_id, blocked_by FROM item_edges`, 2); err != nil {
-			return [32]byte{}, err
+		if schema.hasEdgeKind {
+			if err := hashSignatureRows(r, &acc, 'E', `SELECT item_id, blocked_by, kind FROM item_edges`, 3); err != nil {
+				return [32]byte{}, err
+			}
+		} else {
+			if err := hashSignatureRows(r, &acc, 'E', `SELECT item_id, blocked_by FROM item_edges`, 2); err != nil {
+				return [32]byte{}, err
+			}
 		}
 	}
 	if schema.hasCriteria {
@@ -184,12 +193,16 @@ func (d startStoreDelta) refreshItems(r *store.Reader, s *startSnapshot, at time
 			}
 			s.itemsByID[id], s.states[id] = row, row.State
 			s.edges[id] = nil
-			err = readContentRows(r, `SELECT blocked_by FROM item_edges WHERE item_id=? ORDER BY blocked_by`, []any{id}, func(rows *sql.Rows) error {
-				var blocker string
-				if err := rows.Scan(&blocker); err != nil {
+			edgeQuery := `SELECT blocked_by, '` + item.EdgeKindBlockedBy + `' FROM item_edges WHERE item_id=? ORDER BY blocked_by`
+			if s.versionSchema.hasEdgeKind {
+				edgeQuery = `SELECT blocked_by, COALESCE(NULLIF(kind, ''), '` + item.EdgeKindBlockedBy + `') FROM item_edges WHERE item_id=? ORDER BY blocked_by`
+			}
+			err = readContentRows(r, edgeQuery, []any{id}, func(rows *sql.Rows) error {
+				var edge itemEdge
+				if err := rows.Scan(&edge.Target, &edge.Kind); err != nil {
 					return err
 				}
-				s.edges[id] = append(s.edges[id], blocker)
+				s.edges[id] = append(s.edges[id], edge)
 				return nil
 			})
 			if err != nil {
@@ -270,8 +283,8 @@ func (s *startSnapshot) refreshWait(r *store.Reader, id, state string) error {
 func (s *startSnapshot) rebuildReverseEdges() {
 	s.reverseEdges = map[string][]string{}
 	for _, row := range s.items {
-		for _, blocker := range s.edges[row.id] {
-			s.reverseEdges[blocker] = append(s.reverseEdges[blocker], row.id)
+		for _, edge := range s.edges[row.id] {
+			s.reverseEdges[edge.Target] = append(s.reverseEdges[edge.Target], row.id)
 		}
 	}
 }

@@ -20,6 +20,7 @@ type ItemSummary struct {
 	Title     string   `json:"title"`
 	State     string   `json:"state"`
 	BlockedBy []string `json:"blocked_by"`
+	After     []string `json:"after,omitempty"`
 	UpdatedAt string   `json:"updated_at"`
 }
 
@@ -64,7 +65,7 @@ func ListSummaries(r *store.Reader, states []string) ([]ItemSummary, error) {
 		return nil, Internalf("closing item summaries: %v", err)
 	}
 	for i := range items {
-		items[i].BlockedBy, err = readEdges(r, items[i].ItemID)
+		items[i].BlockedBy, items[i].After, err = readEdges(r, items[i].ItemID)
 		if err != nil {
 			return nil, err
 		}

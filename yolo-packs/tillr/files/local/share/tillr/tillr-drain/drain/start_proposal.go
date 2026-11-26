@@ -202,7 +202,7 @@ func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at
 	s.unshared, s.rewriteHolds, s.rewriteOwnerHolds = unshared, rewriteHolds, rewriteOwnerHolds
 	edges := s.edges
 	if touched != nil {
-		edges = map[string][]string{}
+		edges = map[string][]itemEdge{}
 		for id := range touched {
 			edges[id] = s.edges[id]
 		}

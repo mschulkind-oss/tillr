@@ -1216,27 +1216,13 @@ func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loop
 	// board can say "held for a ruling" without reading Vantage's index on every snapshot;
 	// the index itself is the questions route's read, on demand.
 	holds := questionHolds(dispatches)
-	// The blocked_by edges are what a blocked item waits on, so they are read here and
+	// The scheduling edges are what a blocked item waits on, so they are read here and
 	// handed to the projection: an item shown as blocked with nothing it waits on would
 	// be a state with no cause.
-	waiting := map[string][]string{}
-	rows, err := r.Query(`SELECT item_id, blocked_by FROM item_edges ORDER BY item_id, blocked_by`)
+	edgesByItem, err := readAllEdges(r)
 	if err != nil {
 		return nil, unreadable(err)
 	}
-	for rows.Next() {
-		var id, blockedBy string
-		if err := rows.Scan(&id, &blockedBy); err != nil {
-			rows.Close()
-			return nil, unreadable(err)
-		}
-		waiting[id] = append(waiting[id], blockedBy)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, unreadable(err)
-	}
-	rows.Close()
 
 	// The store answers its rows by item_id; the board is ordered by the queue's rank.
 	sort.SliceStable(items, func(i, j int) bool {
@@ -1244,7 +1230,7 @@ func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loop
 	})
 	// The four figures are boardCountsOf's, not this loop's: the same function answers
 	// `tillr view status --store`, so the two faces cannot disagree (§5.6).
-	counts := boardCountsOf(items, runs, candidates, attempts, waiting, holds, history)
+	counts := boardCountsOf(items, runs, candidates, attempts, edgesByItem, holds, history)
 	places := itemPlaces(items)
 	states := itemStates(items)
 	out.Items = make([]itemView, 0, len(items))
@@ -1269,9 +1255,13 @@ func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loop
 		if c, ok := enqueued[it.ItemID]; ok {
 			enqueuedCandidate = &c
 		}
-		blockers := append([]string{}, waiting[it.ItemID]...)
-		projected := ProjectItemState(it, enqueuedCandidate, active, waiting[it.ItemID], holds[it.ItemID])
-		projectClosedBlockers(&projected, closedBlockersFor(it, waiting[it.ItemID], states))
+		blockers := []string{}
+		for _, edge := range edgesByItem[it.ItemID] {
+			blockers = append(blockers, edge.BlockedBy)
+		}
+		waitingOn := waitingOnTargets(edgesByItem[it.ItemID], states)
+		projected := ProjectItemState(it, enqueuedCandidate, active, waitingOn, holds[it.ItemID])
+		projectClosedBlockers(&projected, closedBlockersFor(it, edgesByItem[it.ItemID], states))
 		view := itemView{
 			BlockedBy:   blockers,
 			ItemID:      it.ItemID,
@@ -1827,7 +1817,8 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 			enqueuedCandidate = &candidates[i]
 		}
 	}
-	out.Item.Projected = ProjectItemState(it, enqueuedCandidate, active, out.BlockedBy, hold)
+	waitingOn := waitingOnTargets(edges, itemStates(items))
+	out.Item.Projected = ProjectItemState(it, enqueuedCandidate, active, waitingOn, hold)
 	projectClosedBlockers(&out.Item.Projected, out.ClosedBlockers)
 	return out, nil
 }

@@ -304,11 +304,11 @@ func readRetryAcks(r *store.Reader) (map[string]string, error) {
 // until a tick records the hold: the item's own header says what it can actually dispatch,
 // and the ruling is the index's. The agreement case pins the rules that are here, so a drift
 // shows up as a failing test rather than as a number.
-func (h *dispatchHistory) dispatchable(item storeItem, stateOf map[string]string, waiting map[string][]string, hold string) bool {
+func (h *dispatchHistory) dispatchable(item storeItem, stateOf map[string]string, edges map[string][]storeEdge, hold string) bool {
 	if item.State != "in-queue" || hold != "" || item.OwnerOwed != nil {
 		return false
 	}
-	if unmetBlocker(stateOf, waiting, item.ItemID) {
+	if unmetBlocker(stateOf, edges, item.ItemID) {
 		return false
 	}
 	if obsHold, held := h.obstacleHolds[item.ItemID]; held {

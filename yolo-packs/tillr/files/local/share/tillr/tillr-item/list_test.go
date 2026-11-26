@@ -16,6 +16,7 @@ type listedItem struct {
 	Title     string   `json:"title"`
 	State     string   `json:"state"`
 	BlockedBy []string `json:"blocked_by"`
+	After     []string `json:"after,omitempty"`
 	UpdatedAt string   `json:"updated_at"`
 }
 
@@ -64,9 +65,9 @@ func TestListItemsOrderedAndFiltered(t *testing.T) {
 		t.Fatalf("close exited %d: %s", code, out)
 	}
 	want := []listedItem{
-		{"item-a", "title item-a", "not-started", []string{}, "2026-11-10T00:00:00Z"},
-		{"item-b", "title item-b", "in-queue", []string{"item-a", "item-c"}, "2026-11-11T01:02:03Z"},
-		{"item-c", "title item-c", "closed", []string{}, "2026-11-12T00:00:00Z"},
+		{"item-a", "title item-a", "not-started", []string{}, nil, "2026-11-10T00:00:00Z"},
+		{"item-b", "title item-b", "in-queue", []string{"item-a", "item-c"}, nil, "2026-11-11T01:02:03Z"},
+		{"item-c", "title item-c", "closed", []string{}, nil, "2026-11-12T00:00:00Z"},
 	}
 	before := eventsOfKind(t, db, "item.update")
 	for _, tc := range []struct {

@@ -352,11 +352,21 @@ func TestWaitingClosedBlockerNamesItemAndMover(t *testing.T) {
 		t.Errorf("item-seed-06 why = %q, want open blocker item-seed-02 named too", byID["item-seed-06"].Why)
 	}
 	states := map[string]string{"dep-closed": "closed", "dep-landed": "landed", "dep-resolved": "resolved-elsewhere"}
-	waiting := map[string][]string{"wait-closed": {"dep-closed"}, "wait-done": {"dep-landed", "dep-resolved"}}
+	waiting := map[string][]storeEdge{
+		"wait-closed": {{ItemID: "wait-closed", BlockedBy: "dep-closed", Kind: edgeKindBlockedBy}},
+		"wait-done": {
+			{ItemID: "wait-done", BlockedBy: "dep-landed", Kind: edgeKindBlockedBy},
+			{ItemID: "wait-done", BlockedBy: "dep-resolved", Kind: edgeKindBlockedBy},
+		},
+		"wait-after-closed": {{ItemID: "wait-after-closed", BlockedBy: "dep-closed", Kind: edgeKindAfter}},
+	}
 	if !unmetBlocker(states, waiting, "wait-closed") {
 		t.Errorf("unmetBlocker treated closed dependency as met")
 	}
 	if unmetBlocker(states, waiting, "wait-done") {
 		t.Errorf("unmetBlocker treated landed/resolved-elsewhere dependencies as unmet")
+	}
+	if unmetBlocker(states, waiting, "wait-after-closed") {
+		t.Errorf("unmetBlocker treated closed after dependency as unmet")
 	}
 }

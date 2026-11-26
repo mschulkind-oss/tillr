@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
@@ -497,11 +498,19 @@ func (l *Loop) landingRecord(ctx context.Context, sha string) (landingOf, bool, 
 	return of, found, err
 }
 
-// landedDependents answers the landed items that declare a dependency on itemID.
+// landedDependents answers the landed items that declare a prerequisite (blocked_by) dependency on itemID.
 func (l *Loop) landedDependents(ctx context.Context, itemID string) ([]string, error) {
 	var out []string
 	err := l.readStore(ctx, func(r *store.Reader) error {
-		rows, err := r.Query(`SELECT e.item_id FROM item_edges e JOIN items i ON i.item_id = e.item_id WHERE e.blocked_by = ? AND i.state = ? ORDER BY e.item_id`, itemID, StateLanded)
+		hasKind, err := hasItemEdgesKindColumn(r)
+		if err != nil {
+			return err
+		}
+		query := `SELECT e.item_id FROM item_edges e JOIN items i ON i.item_id = e.item_id WHERE e.blocked_by = ? AND i.state = ? ORDER BY e.item_id`
+		if hasKind {
+			query = `SELECT e.item_id FROM item_edges e JOIN items i ON i.item_id = e.item_id WHERE e.blocked_by = ? AND i.state = ? AND COALESCE(NULLIF(e.kind, ''), '` + item.EdgeKindBlockedBy + `') = '` + item.EdgeKindBlockedBy + `' ORDER BY e.item_id`
+		}
+		rows, err := r.Query(query, itemID, StateLanded)
 		if err != nil {
 			if strings.Contains(err.Error(), "no such table") {
 				return nil

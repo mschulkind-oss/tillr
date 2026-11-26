@@ -23,7 +23,7 @@ func requestFace(args []string) (record.Envelope, int) {
 	title := fs.String("title", "", "the item's one-line title")
 	seat := fs.String("seat", "build", "the item's seat: build or design (any declared seat with --workflow)")
 	workflow := fs.String("workflow", "", "the workflow to run (default planned-build@v1 for build, scouted-design@v1 for design; single-worker@v1 is one run)")
-	var paths, criteria, blockedBy, alerts []string
+	var paths, criteria, blockedBy, afterItems, alerts []string
 	fs.Func("path", "deprecated and ignored: items no longer use an allow-list", func(p string) error {
 		paths = append(paths, p)
 		return nil
@@ -34,6 +34,10 @@ func requestFace(args []string) (record.Envelope, int) {
 	})
 	fs.Func("blocked-by", "an item id this request waits on; repeat for each", func(id string) error {
 		blockedBy = append(blockedBy, id)
+		return nil
+	})
+	fs.Func("after-item", "an item id this request runs after (ordering-only, regardless of how it finishes); repeat for each", func(id string) error {
+		afterItems = append(afterItems, id)
 		return nil
 	})
 	fs.Func("alert", "an alert id to link to this request; repeat for each", func(id string) error {
@@ -84,7 +88,7 @@ func requestFace(args []string) (record.Envelope, int) {
 	if err != nil {
 		return record.Envelope{}, fail(err)
 	}
-	filing := item.RequestFiling{Words: words, Title: *title, Seat: *seat, Workflow: *workflow, Paths: paths, Criteria: criteria, BlockedBy: blockedBy, Alerts: alerts, FiledBy: *filedBy, DedupKey: *dedupKey, Ordinary: *ordinary, Destination: dest, At: at, By: actor, Via: *via}
+	filing := item.RequestFiling{Words: words, Title: *title, Seat: *seat, Workflow: *workflow, Paths: paths, Criteria: criteria, BlockedBy: blockedBy, AfterItems: afterItems, Alerts: alerts, FiledBy: *filedBy, DedupKey: *dedupKey, Ordinary: *ordinary, Destination: dest, At: at, By: actor, Via: *via}
 	if filing.Workflow == "" {
 		filing.Workflow = item.RequestDefaultWorkflow[filing.Seat]
 	}

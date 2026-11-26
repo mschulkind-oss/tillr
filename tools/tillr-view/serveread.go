@@ -84,10 +84,17 @@ type storeCriterion struct {
 	State       string
 }
 
-// storeEdge is one unresolved blocked_by edge.
+// Scheduling edge kinds stored in item_edges.kind.
+const (
+	edgeKindBlockedBy = "blocked_by"
+	edgeKindAfter     = "after"
+)
+
+// storeEdge is one scheduling dependency edge (blocked_by or after).
 type storeEdge struct {
 	ItemID    string
 	BlockedBy string
+	Kind      string
 }
 
 // storeLane is one row of lanes.
@@ -407,15 +414,31 @@ func readItemVerdicts(r *store.Reader, itemID string) ([]verdictView, error) {
 	return out, rows.Err()
 }
 
-// readClosedBlockers names abandoned prerequisites; a landed item is not an alarm.
+func hasItemEdgesKindColumn(r *store.Reader) (bool, error) {
+	var exists bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('item_edges') WHERE name = 'kind')`).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// readClosedBlockers names abandoned prerequisites; a landed item or an ordering-only after edge is not an alarm.
 func readClosedBlockers(r *store.Reader, itemID, waiter string) ([]string, error) {
 	waiterID := ""
 	if strings.HasPrefix(waiter, "item:") {
 		waiterID = strings.TrimPrefix(waiter, "item:")
 	}
+	hasKind, err := hasItemEdgesKindColumn(r)
+	if err != nil {
+		return nil, err
+	}
+	edgeSubquery := `SELECT blocked_by FROM item_edges WHERE item_id = ?`
+	if hasKind {
+		edgeSubquery = `SELECT blocked_by FROM item_edges WHERE item_id = ? AND COALESCE(NULLIF(kind, ''), '` + edgeKindBlockedBy + `') = '` + edgeKindBlockedBy + `'`
+	}
 	// Reading items once also deduplicates a waiter recorded as an edge as well.
 	rows, err := r.Query(`SELECT item_id FROM items WHERE state = 'closed'
-		AND (item_id IN (SELECT blocked_by FROM item_edges WHERE item_id = ?) OR item_id = ?)
+		AND (item_id IN (`+edgeSubquery+`) OR item_id = ?)
 		ORDER BY item_id`, itemID, waiterID)
 	if err != nil {
 		return nil, err
@@ -432,9 +455,17 @@ func readClosedBlockers(r *store.Reader, itemID, waiter string) ([]string, error
 	return out, rows.Err()
 }
 
-// readEdges answers the item's blocked_by edges, ordered by the blocking item.
+// readEdges answers the item's scheduling edges, ordered by the target item.
 func readEdges(r *store.Reader, itemID string) ([]storeEdge, error) {
-	rows, err := r.Query(`SELECT item_id, blocked_by FROM item_edges WHERE item_id = ? ORDER BY blocked_by`, itemID)
+	hasKind, err := hasItemEdgesKindColumn(r)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT item_id, blocked_by, '` + edgeKindBlockedBy + `' FROM item_edges WHERE item_id = ? ORDER BY blocked_by`
+	if hasKind {
+		query = `SELECT item_id, blocked_by, COALESCE(NULLIF(kind, ''), '` + edgeKindBlockedBy + `') FROM item_edges WHERE item_id = ? ORDER BY blocked_by`
+	}
+	rows, err := r.Query(query, itemID)
 	if err != nil {
 		return nil, err
 	}
@@ -442,10 +473,36 @@ func readEdges(r *store.Reader, itemID string) ([]storeEdge, error) {
 	var out []storeEdge
 	for rows.Next() {
 		var e storeEdge
-		if err := rows.Scan(&e.ItemID, &e.BlockedBy); err != nil {
+		if err := rows.Scan(&e.ItemID, &e.BlockedBy, &e.Kind); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// readAllEdges answers every scheduling edge in the store, keyed by item_id.
+func readAllEdges(r *store.Reader) (map[string][]storeEdge, error) {
+	hasKind, err := hasItemEdgesKindColumn(r)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT item_id, blocked_by, '` + edgeKindBlockedBy + `' FROM item_edges ORDER BY item_id, blocked_by`
+	if hasKind {
+		query = `SELECT item_id, blocked_by, COALESCE(NULLIF(kind, ''), '` + edgeKindBlockedBy + `') FROM item_edges ORDER BY item_id, blocked_by`
+	}
+	rows, err := r.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]storeEdge{}
+	for rows.Next() {
+		var e storeEdge
+		if err := rows.Scan(&e.ItemID, &e.BlockedBy, &e.Kind); err != nil {
+			return nil, err
+		}
+		out[e.ItemID] = append(out[e.ItemID], e)
 	}
 	return out, rows.Err()
 }
@@ -1055,13 +1112,27 @@ func isFinishedProjected(state string) bool {
 	return state == "landed" || state == "resolved_elsewhere" || state == "closed" || state == "finished"
 }
 
-func closedBlockersFor(it storeItem, waitingOn []string, states map[string]string) []string {
+func waitingOnTargets(edges []storeEdge, states map[string]string) []string {
+	var out []string
+	for _, edge := range edges {
+		if edge.Kind == edgeKindAfter && terminalItemStates[states[edge.BlockedBy]] {
+			continue
+		}
+		out = append(out, edge.BlockedBy)
+	}
+	return out
+}
+
+func closedBlockersFor(it storeItem, edges []storeEdge, states map[string]string) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, id := range waitingOn {
-		if states[id] == "closed" && !seen[id] {
-			seen[id] = true
-			out = append(out, id)
+	for _, edge := range edges {
+		if edge.Kind == edgeKindAfter {
+			continue
+		}
+		if states[edge.BlockedBy] == "closed" && !seen[edge.BlockedBy] {
+			seen[edge.BlockedBy] = true
+			out = append(out, edge.BlockedBy)
 		}
 	}
 	if depID, ok := strings.CutPrefix(it.Waiter, "item:"); ok && states[depID] == "closed" && !seen[depID] {
