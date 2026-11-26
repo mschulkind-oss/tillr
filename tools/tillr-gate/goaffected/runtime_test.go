@@ -71,9 +71,9 @@ func TestScratchIsolation(t *testing.T) {
 	if ready := os.Getenv("CONC_READY_FILE"); ready != "" {
 		if err := os.WriteFile(ready, []byte("ok"), 0o644); err != nil { t.Fatal(err) }
 	}
-	if peer := os.Getenv("CONC_PEER_READY_FILE"); peer != "" {
+	if release := os.Getenv("CONC_RELEASE_FILE"); release != "" {
 		for {
-			if _, err := os.Stat(peer); err == nil { break }
+			if _, err := os.Stat(release); err == nil { break }
 			time.Sleep(20 * time.Millisecond)
 		}
 	}
@@ -94,6 +94,7 @@ func TestScratchIsolation(t *testing.T) {
 	out2 := filepath.Join(tmpPath, "out2.json")
 	ready1 := filepath.Join(tmpPath, "ready1")
 	ready2 := filepath.Join(tmpPath, "ready2")
+	release := filepath.Join(tmpPath, "release")
 
 	base := withEnvOverrides(os.Environ(), map[string]string{
 		"YOLO_DURABLE_DIR": sharedDurable,
@@ -105,12 +106,12 @@ func TestScratchIsolation(t *testing.T) {
 		out string
 		err error
 	}
-	startProc := func(outFile, readyFile, peerReadyFile string) (*exec.Cmd, <-chan procResult) {
+	startProc := func(outFile, readyFile, releaseFile string) (*exec.Cmd, <-chan procResult) {
 		c := exec.Command(tillrGateBin, args...)
 		c.Env = withEnvOverrides(base, map[string]string{
-			"CONC_OUT_FILE":        outFile,
-			"CONC_READY_FILE":      readyFile,
-			"CONC_PEER_READY_FILE": peerReadyFile,
+			"CONC_OUT_FILE":     outFile,
+			"CONC_READY_FILE":   readyFile,
+			"CONC_RELEASE_FILE": releaseFile,
 		})
 		ch := make(chan procResult, 1)
 		var buf strings.Builder
@@ -126,14 +127,10 @@ func TestScratchIsolation(t *testing.T) {
 		return c, ch
 	}
 
-	p1, ch1 := startProc(out1, ready1, ready2)
-	p2, ch2 := startProc(out2, ready2, ready1)
+	p1, ch1 := startProc(out1, ready1, release)
+	p2, ch2 := startProc(out2, ready2, release)
 	defer func() {
-		for _, r := range []string{ready1, ready2} {
-			if _, err := os.Stat(r); err != nil {
-				_ = os.WriteFile(r, []byte("cleanup\n"), 0o644)
-			}
-		}
+		_ = os.WriteFile(release, []byte("cleanup\n"), 0o644)
 		for _, p := range []*exec.Cmd{p1, p2} {
 			if p.Process != nil {
 				_ = p.Process.Kill()
@@ -152,16 +149,15 @@ func TestScratchIsolation(t *testing.T) {
 		select {
 		case res1 = <-ch1:
 			done1 = true
-			if _, e1 := os.Stat(ready1); e1 != nil || os.IsNotExist(err2) {
-				t.Fatalf("p1 exited before both concurrent runs reached barrier: err=%v\n%s", res1.err, res1.out)
-			}
+			t.Fatalf("p1 exited before both concurrent runs reached barrier: err=%v\n%s", res1.err, res1.out)
 		case res2 = <-ch2:
 			done2 = true
-			if _, e2 := os.Stat(ready2); e2 != nil || os.IsNotExist(err1) {
-				t.Fatalf("p2 exited before both concurrent runs reached barrier: err=%v\n%s", res2.err, res2.out)
-			}
+			t.Fatalf("p2 exited before both concurrent runs reached barrier: err=%v\n%s", res2.err, res2.out)
 		case <-time.After(20 * time.Millisecond):
 		}
+	}
+	if err := os.WriteFile(release, []byte("go\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	if !done1 {
 		res1 = <-ch1
