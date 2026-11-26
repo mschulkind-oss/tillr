@@ -1,0 +1,19 @@
+{
+  "id": "go-vet",
+  "label": "Affected Go modules pass go vet",
+  "command": [
+    "tools/gate/repo-gate",
+    "go-vet"
+  ],
+  "scope": "change",
+  "tier": "heavy",
+  "timeout_ms": 300000,
+  "reads": [
+    "tools/"
+  ],
+  "tools": [
+    "go",
+    "git"
+  ],
+  "remember": false
+}

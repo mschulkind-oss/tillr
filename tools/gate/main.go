@@ -40,6 +40,8 @@ func run(args []string) int {
 		return cmdGoBuild(rest)
 	case "go-edges":
 		return cmdGoEdges(rest)
+	case "go-vet":
+		return cmdGoVet(rest)
 	case "go-module-inventory":
 		return cmdGoModuleInventory(rest)
 	case "no-python":
