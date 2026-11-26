@@ -13,8 +13,8 @@
     "tools/gate/",
     "tools/gate/checks/go-test-tillr-gate.json",
     "tools/gate/go-test-edges.json",
-    "tools/gate/go_affected.py",
     "tools/go-test-durations.json",
+    "tools/tillr-cli/",
     "tools/tillr-drain/",
     "tools/tillr-gate/",
     "tools/tillr-item/",
@@ -22,6 +22,10 @@
     "tools/tillr-loop/",
     "tools/tillr-roll/",
     "tools/tillr-run/",
+    "tools/tillr-store/",
+    "tools/tillr-trace/",
+    "tools/tillr-view/",
+    "tools/tillr-watch/",
     "tools/tillr/"
   ],
   "tools": [

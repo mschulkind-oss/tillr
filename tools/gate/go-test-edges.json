@@ -801,10 +801,68 @@
       ]
     }
   },
+  "github.com/mschulkind-oss/tillr-gate/goaffected": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-gate"
+    ],
+    "reads": [
+      "tools/gate/checks/",
+      "tools/gate/go-test-edges.json",
+      "tools/tillr/",
+      "tools/tillr-cli/",
+      "tools/tillr-drain/",
+      "tools/tillr-item/",
+      "tools/tillr-land/",
+      "tools/tillr-loop/",
+      "tools/tillr-roll/",
+      "tools/tillr-run/",
+      "tools/tillr-store/",
+      "tools/tillr-trace/",
+      "tools/tillr-view/",
+      "tools/tillr-watch/"
+    ],
+    "read_tests": {
+      "tools/tillr/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-cli/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-drain/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-item/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-land/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-loop/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-roll/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-run/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-store/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-trace/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-view/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ],
+      "tools/tillr-watch/": [
+        "TestEdgesFileHonestAndEnvRead"
+      ]
+    }
+  },
   "github.com/mschulkind-oss/tillr-gate/shards": {
     "builds": [],
     "reads": [
-      "tools/gate/go_affected.py",
       "tools/go-test-durations.json",
       "tools/tillr-drain/"
     ]

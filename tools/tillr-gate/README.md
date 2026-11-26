@@ -14,9 +14,9 @@
 ## What this module owns
 
 `tillr-gate` derives a change record from a candidate, plans it into the checks a gate would
-run, runs them, and measures the landing tier in shadow. `change`, `plan` and `shadow` need
-no store and no other utility's binary, which is what lets an external reviewer adopt them
-on their own.
+run, runs them, selects and runs affected Go test packages (`go-affected`), and measures the
+landing tier in shadow. `change`, `plan`, `go-affected` and `shadow` need no store and no
+other utility's binary, which is what lets an external reviewer adopt them on their own.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/reference/tillr-distribution.md`](../../docs/reference/tillr-distribution.md).
@@ -38,6 +38,7 @@ skill is [`docs/reference/tillr-distribution.md`](../../docs/reference/tillr-dis
 ```sh
 tillr-gate run
 tillr-gate shadow
+tillr-gate go-affected
 ```
 
 `run` is the verdict a landing needs; `shadow` is the measurement an operator takes before

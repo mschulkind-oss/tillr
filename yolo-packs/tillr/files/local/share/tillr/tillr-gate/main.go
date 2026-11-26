@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-gate/goaffected"
 	"github.com/mschulkind-oss/tillr-gate/shards"
 	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/checkresult"
@@ -33,14 +34,15 @@ func main() {
 // faces is the dispatch table. A face is one verb and one function, so adding one is a
 // line here rather than a branch in `run`.
 var faces = map[string]func([]string) int{
-	"checks":   checksFace,
-	"change":   changeFace,
-	"classify": classifyFace,
-	"enable":   enableFace,
-	"plan":     planFace,
-	"run":      runFace,
-	"shadow":   shadowFace,
-	"shards":   shards.RunCLI,
+	"checks":      checksFace,
+	"change":      changeFace,
+	"classify":    classifyFace,
+	"enable":      enableFace,
+	"go-affected": goAffectedFace,
+	"plan":        planFace,
+	"run":         runFace,
+	"shadow":      shadowFace,
+	"shards":      shards.RunCLI,
 }
 
 // run dispatches one invocation and answers with its exit code. An unknown verb is a
@@ -68,7 +70,7 @@ func run(args []string) int {
 
 // faceNames lists the faces in a fixed order, so the usage line is stable.
 func faceNames() string {
-	return "change, checks, classify, enable, plan, run, shadow, shards"
+	return "change, checks, classify, enable, go-affected, plan, run, shadow, shards"
 }
 
 // parseFlags parses one face's flags and reports whether it has already answered the
@@ -440,4 +442,9 @@ func planFace(args []string) int {
 		return record.ExitInternal
 	}
 	return record.ExitOK
+}
+
+// goAffectedFace is `tillr-gate go-affected`: select and run affected Go packages.
+func goAffectedFace(args []string) int {
+	return goaffected.Run(args)
 }

@@ -11,8 +11,7 @@
   "reads": [
     "tools/",
     "tests/tillr-testmain_test.go",
-    "tests/tillr-scratch.test.py",
-    "tests/go-affected.test.py"
+    "tests/tillr-scratch.test.py"
   ],
   "tools": [
     "python3",

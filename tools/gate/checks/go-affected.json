@@ -4,7 +4,7 @@
   "command": [
     "sh",
     "-c",
-    "exec python3 tools/gate/go_affected.py --base \"$1\" --head \"$2\"",
+    "exec go run -C tools/tillr-gate . go-affected --root \"$PWD\" --base \"$1\" --head \"$2\"",
     "go-affected"
   ],
   "scope": "change",
@@ -21,7 +21,6 @@
     "tools/gate/checks/",
     "tools/gate/checks/go-affected.json",
     "tools/gate/go-test-edges.json",
-    "tools/gate/go_affected.py",
     "tools/go-test-durations.json",
     "tools/tillr-cli/",
     "tools/tillr-drain/",
@@ -48,7 +47,6 @@
   ],
   "tools": [
     "sh",
-    "python3",
     "go",
     "git"
   ],

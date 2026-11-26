@@ -397,7 +397,7 @@ func FacesHelpFixtureError(scratch, root string) error {
 		return err
 	}
 	source := string(srcBytes)
-	target := "\t\"shadow\":   shadowFace,\n"
+	target := "\t\"shadow\":      shadowFace,\n"
 	if !strings.Contains(source, target) {
 		return fmt.Errorf("tillr-gate main.go no longer registers the shadow face expected by the fixture")
 	}

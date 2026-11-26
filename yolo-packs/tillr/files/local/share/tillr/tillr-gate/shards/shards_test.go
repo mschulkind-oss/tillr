@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/mschulkind-oss/tillr-gate/goaffected"
 )
 
 const hangGuard = 5 * time.Minute
@@ -28,6 +30,9 @@ func TestMain(m *testing.M) {
 	}
 	if len(os.Args) >= 2 && os.Args[1] == GuardFlag {
 		os.Exit(RunCLI(os.Args[1:]))
+	}
+	if len(os.Args) >= 2 && os.Args[1] == goaffected.InvocationGuardFlag {
+		os.Exit(goaffected.Run(os.Args[1:]))
 	}
 	os.Exit(m.Run())
 }

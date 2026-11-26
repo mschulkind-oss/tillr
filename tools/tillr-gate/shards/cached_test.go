@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr-gate/goaffected"
 )
 
 func runGit(t *testing.T, dir string, args ...string) {
@@ -473,16 +475,6 @@ func TestCachedFailureFormattingAndRunIDRefusal(t *testing.T) {
 }
 
 func TestCachedCrossToolGoAffectedHitsGoTestShards(t *testing.T) {
-	goAffectedPath := filepath.Join("..", "..", "gate", "go_affected.py")
-	if _, err := os.Stat(goAffectedPath); os.IsNotExist(err) {
-		t.Skip("tools/gate/go_affected.py not present")
-	}
-	goAffectedAbs, err := filepath.Abs(goAffectedPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pyShardsPath := filepath.Join("..", "..", "go-test-shards.py")
-
 	root := requireTempDir(t)
 	repo := filepath.Join(root, "cross-repo")
 	if err := os.MkdirAll(filepath.Join(repo, "tools", "gate"), 0o755); err != nil {
@@ -490,11 +482,6 @@ func TestCachedCrossToolGoAffectedHitsGoTestShards(t *testing.T) {
 	}
 	if err := os.MkdirAll(filepath.Join(repo, "data"), 0o755); err != nil {
 		t.Fatal(err)
-	}
-	if rawPy, rerr := os.ReadFile(pyShardsPath); rerr == nil {
-		if werr := os.WriteFile(filepath.Join(repo, "tools", "go-test-shards.py"), rawPy, 0o644); werr != nil {
-			t.Fatal(werr)
-		}
 	}
 	if err := os.WriteFile(filepath.Join(repo, "data", "edge.txt"), []byte("v1\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -556,20 +543,22 @@ func TestSmallB(t *testing.T) {}
 	t.Setenv("YOLO_DURABLE_DIR", durable)
 	t.Setenv("TILLR_RUN_ID", "")
 
-	pyScript := fmt.Sprintf(`
-import importlib.util, pathlib
-spec = importlib.util.spec_from_file_location('go_affected', %q)
-ga = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(ga)
-repo = pathlib.Path(%q)
-sel = ga.select_affected_packages(repo, ['tools/tillr-small/small_test.go', 'tools/tillr-large/large_test.go'])
-rc, out, ev = ga.run_selected_tests(repo, sel, progress_stream=False)
-assert rc == 0, out
-assert len(ev['packages']) == 2, ev
-`, goAffectedAbs, repo)
-	cmd := exec.Command("python3", "-c", pyScript)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go_affected run failed: %v\n%s", err, string(out))
+	sel, err := goaffected.SelectAffectedPackages(
+		repo,
+		[]string{"tools/tillr-small/small_test.go", "tools/tillr-large/large_test.go"},
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("SelectAffectedPackages failed: %v", err)
+	}
+	rc, out, ev, err := goaffected.RunSelectedTests(repo, sel, goaffected.RunOptions{})
+	if err != nil || rc != 0 {
+		t.Fatalf("goaffected.RunSelectedTests failed: rc=%d err=%v\n%s", rc, err, out)
+	}
+	if ev == nil || len(ev.Packages) != 2 {
+		t.Fatalf("expected 2 evidence packages, got %+v", ev)
 	}
 
 	evSmall := filepath.Join(root, "cross-ev-small.json")

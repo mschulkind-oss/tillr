@@ -18,7 +18,6 @@
     "config/tillr/workflows/",
     "tools/gate/checks/go-test-tillr-drain.json",
     "tools/gate/go-test-edges.json",
-    "tools/gate/go_affected.py",
     "tools/go-test-durations.json",
     "tools/tillr-cli/",
     "tools/tillr-drain/",

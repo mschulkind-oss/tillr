@@ -56,7 +56,7 @@ the merge, and the drain proving the trunk after it.
 | Classifying a check result | [`tools/tillr/checkresult`](../../tools/tillr/checkresult/) (`Classify`, `Aggregate`), reached through `tillr-gate classify` and [`tools/gate`](../../tools/gate/) |
 | The local gate | [`tools/gate/done.go`](../../tools/gate/done.go) (`tools/gate/repo-gate done`), started by the `done` recipe |
 | The landing gate's judge | [`tools/gate/change_gate.go`](../../tools/gate/change_gate.go) (`tools/gate/repo-gate change-gate`), composed by [`tools/tillr-loop/`](../../tools/tillr-loop/) |
-| Affected Go test packages, and whole Go suites | [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py), [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards) (`tillr-gate shards`) |
+| Affected Go test packages, and whole Go suites | [`tools/tillr-gate/goaffected`](../../tools/tillr-gate/goaffected/) (`tillr-gate go-affected`), [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards) (`tillr-gate shards`) |
 | The after-merge proof | [`tools/tillr-drain`](../../tools/tillr-drain/) ([After-merge heavy runs](../../tools/tillr-drain/README.md#after-merge-heavy-runs)) |
 | Gate settings | [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json), read by `ReadGatePolicy` in [`tools/tillr-drain/redcap`](../../tools/tillr-drain/redcap/) |
 
@@ -303,7 +303,7 @@ counts are outside that record's scope.
 ### Affected Go tests before the merge
 
 `go-affected` ([`tools/gate/checks/go-affected.json`](../../tools/gate/checks/go-affected.json),
-[`tools/gate/go_affected.py`](../../tools/gate/go_affected.py)) is the change check that runs
+`tools/tillr-gate/goaffected` (formerly `tools/gate/go_affected.py`)) is the change check that runs
 Go tests before a landing ([`D-GR38`](#D-GR38), [`D-GR39`](#D-GR39), amended on 2026-11-25 by
 [`D-GR53`](#D-GR53), [`D-GR54`](#D-GR54) and [`D-GR56`](#D-GR56)). Across all ten tillr Go
 modules (`tools/tillr` and each `tools/tillr-*` directory holding a `go.mod`, excluding the
@@ -376,9 +376,9 @@ may still revise) are:
   `tools/tillr-drain/drain/*_test.go` files in fast check `go-build` (`go test -exec true ./...`
   in `tools/gate/checks/go-build.py`), touches zero
   files under `tools/tillr-drain/drain/`, and must be stated in the build commit body.
-- **`DEFERRED_PROOF_PACKAGES` in `go-affected` ([`tools/gate/go_affected.py`](../../tools/gate/go_affected.py)).**
+- **`DEFERRED_PROOF_PACKAGES` in `go-affected` (`tools/gate/go_affected.py`).**
   Define `DEFERRED_PROOF_PACKAGES = frozenset({"github.com/mschulkind-oss/tillr-drain/drain"})`
-  (in [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py), or in the Go
+  (in `tools/gate/go_affected.py`, or in the Go
   `go-affected` planner if `go_affected.py` has been ported to Go) and add
   `drop_packages: set[str] | None = None` to `select_affected_packages`, defaulting to
   `DEFERRED_PROOF_PACKAGES` when `None`. Non-test edits under `tools/tillr-drain/drain/` still
@@ -405,7 +405,7 @@ may still revise) are:
   [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json), preventing
   `tillr-gate checks --heavy-tree` from reusing a stale remembered pass when a sibling binary
   or read config/pack file changes.
-- **Selection and declaration tests ([`tests/go-affected.test.py`](../../tests/go-affected.test.py)).**
+- **Selection and declaration tests (`tests/go-affected.test.py`).**
   Update `test_selection_rules`, `test_drain_subpackage_isolation` and
   `test_heavy_failures_replay` so default `select_affected_packages` asserts
   `"github.com/mschulkind-oss/tillr-drain/drain"` is absent from `selected` on direct, import,
@@ -417,7 +417,7 @@ may still revise) are:
   `reads` covers every `builds` module directory and `reads` rule of `DEFERRED_PROOF_PACKAGES`
   in [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json). Keep the
   `go-affected` selector, [`tools/gate/checks/go-test-tillr-drain.json`](../../tools/gate/checks/go-test-tillr-drain.json)
-  and [`tests/go-affected.test.py`](../../tests/go-affected.test.py) in one writable fence so
+  and `tests/go-affected.test.py` in one writable fence so
   selection and declaration assertions update together. Process priorities and how the
   after-merge proof searches a range for a red landing are out of scope.
 
@@ -434,7 +434,7 @@ states a designer's decision made from an operator request; it is not an owner r
 the owner may overturn it. Designed and not yet built (`rg 'SIGQUIT: quit'
 tools/gate/go_affected.py` and `rg 'fork-check: triage' tools/gate/` return nothing). Commit
 `cf31b7e8` added the binary stall watchdog (`_watch_go_test_binaries` in
-[`tools/gate/go_affected.py`](../../tools/gate/go_affected.py)), which sends `SIGQUIT` to an
+`tools/gate/go_affected.py`), which sends `SIGQUIT` to an
 idle `.test` binary, and an operator can send `SIGQUIT` the same way. When a Go test binary
 ends on `SIGQUIT`, Go writes `SIGQUIT: quit` and all goroutine stacks without emitting a
 test-level `"Action": "fail"` event or `--- FAIL:` line for the running test. Commit
@@ -445,8 +445,8 @@ calls `readTriageBlock`
 ([`tools/tillr-drain/drain/refusal_cases.go`](../../tools/tillr-drain/drain/refusal_cases.go))
 directly on `go-affected`'s recorded check log (`change-logs/<NN>-go-affected.log`). To make
 `drain.refusal` name blocked tests while changing only
-[`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) (and its unit tests in
-[`tests/go-affected.test.py`](../../tests/go-affected.test.py)):
+`tools/gate/go_affected.py` (and its unit tests in
+`tests/go-affected.test.py`):
 
 1. **`SIGQUIT` case extraction.** When `go_affected.py` reads a test binary's output
    (reconstructed in event order from `go test -json` `"Output"` chunks or plain lines) that
@@ -484,8 +484,8 @@ directly on `go-affected`'s recorded check log (`change-logs/<NN>-go-affected.lo
    when no case was named). Placing `SIGQUIT` cases first ensures the 10-case triage bound
    and `failureSummary` in [`refusal_cases.go`](../../tools/tillr-drain/drain/refusal_cases.go)
    keep the blocked test in `drain.refusal` ahead of other failing tests.
-3. **Scope boundary.** Only [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py)
-   and its unit test suite [`tests/go-affected.test.py`](../../tests/go-affected.test.py)
+3. **Scope boundary.** Only `tools/gate/go_affected.py`
+   and its unit test suite `tests/go-affected.test.py`
    change for that item; [`tools/tillr-drain/`](../../tools/tillr-drain/),
    [`tools/tillr-gate/`](../../tools/tillr-gate/),
    `tools/go-test-shards.py`, `-timeout 0` and Go's
@@ -948,7 +948,7 @@ addressed to the owner.
 
 Whole Go suites and affected packages both run through
 [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards) (`tillr-gate shards`) and
-[`tools/gate/go_affected.py`](../../tools/gate/go_affected.py).
+[`tools/tillr-gate/goaffected`](../../tools/tillr-gate/goaffected/) (`tillr-gate go-affected`).
 
 - **A test run does not outlive the command that started it ([`D-GR17`](#D-GR17)).** Every
   test process group is tied to the invoking command's lifetime, and the compiled binary
@@ -1025,7 +1025,7 @@ with `tillr-gate` on `PATH`. To run one heavy check: `just done --only <id>`.
   so a change to a built sibling binary still runs every test in each package whose `builds`
   list names it.
 - **`SIGQUIT`-blocked test triage in `go-affected` ([`D-GR52`](#D-GR52)) is not built.**
-  [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) neither extracts top-level
+  `tools/gate/go_affected.py` neither extracts top-level
   `<package>.Test<Name>(` frames from `SIGQUIT: quit` goroutine stacks nor prints a bounded
   `fork-check: triage --` block for `readTriageBlock`
   (`rg 'SIGQUIT: quit' tools/gate/go_affected.py` and `rg 'fork-check: triage' tools/gate/`
@@ -1061,7 +1061,7 @@ The prose above explains what each is for.
 | Result store | `<git-common-dir>/tillr-gate/results/` | `openResultStore` |
 | `just done` logs | `<git-common-dir>/tillr-gate/done-logs/<head>/` | [`tools/gate/done.go`](../../tools/gate/done.go) |
 | Gate policy (and absent-file defaults) | `landing_strategy: after-merge` (default `before-merge`), `auto_revert: true` (default `false`), `lane_base: tip` (default `green`), `budget_ms: 10000` (default `10000`) | [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json), `ReadGatePolicy` in [`tools/tillr-drain/redcap/policy.go`](../../tools/tillr-drain/redcap/policy.go) |
-| Go shard parameters | `SHARD_THRESHOLD = 100`; `MAX_SHARDS = 2 * runtime.NumCPU()` (`tillr-gate shards`) and `2 * os.cpu_count()` (`go_affected.py`) | [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards), [`tools/gate/go_affected.py`](../../tools/gate/go_affected.py) |
+| Go shard parameters | `SHARD_THRESHOLD = 100`; `MAX_SHARDS = 2 * runtime.NumCPU()` (`tillr-gate shards` and `tillr-gate go-affected`) | [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards), [`tools/tillr-gate/goaffected`](../../tools/tillr-gate/goaffected/) |
 | Slow-gate alert thresholds | one run over 60 s; median of 20 over 90 s | [`config/tillr/watch/fast-gate-slow.toml`](../../config/tillr/watch/fast-gate-slow.toml) |
 
 ## Open questions

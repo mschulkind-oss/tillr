@@ -31,20 +31,6 @@ SELF_TRIGGERS = (
     "tests/tillr-scratch.test.py",
 )
 
-DISCOVER_MODULES_SNIPPET = """
-import importlib.util
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location("go_affected_test", path)
-if spec is None or spec.loader is None:
-    raise RuntimeError(f"cannot load {path}")
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-mod.test_discover_modules()
-"""
-
 
 def added_or_removed_go_mods(root: Path, base: str, head: str) -> list[str]:
     """Return tools/.../go.mod paths added or removed in base..head."""
@@ -92,11 +78,15 @@ def run_inventory_checks(root: Path) -> int:
     scratch_script = root / "tests" / "tillr-scratch.test.py"
     tree_test = root / "tools" / "gate" / "tree_checks_test.go"
     edges_script = root / "tools" / "gate" / "checks" / "go-edges.py"
-    affected_test = root / "tests" / "go-affected.test.py"
-    for required in (scratch_script, tree_test, edges_script, affected_test):
+    tillr_gate_dir = root / "tools" / "tillr-gate"
+    goaffected_dir = tillr_gate_dir / "goaffected"
+    for required in (scratch_script, tree_test, edges_script):
         if not required.is_file():
             print(f"go-module-inventory: could not judge: missing {required.relative_to(root)}", file=sys.stderr)
             return 4
+    if not goaffected_dir.is_dir():
+        print("go-module-inventory: could not judge: missing tools/tillr-gate/goaffected", file=sys.stderr)
+        return 4
 
     with tempfile.TemporaryDirectory(prefix="go-module-inventory-") as fallback_scratch:
         env = dict(os.environ)
@@ -134,7 +124,7 @@ def run_inventory_checks(root: Path) -> int:
             ),
             (
                 "go-affected-modules",
-                [sys.executable, "-c", DISCOVER_MODULES_SNIPPET, str(affected_test)],
+                ["go", "test", "-C", str(tillr_gate_dir), "-count=1", "./goaffected", "-run", "^TestDiscoverModules$"],
                 root,
                 env,
             ),

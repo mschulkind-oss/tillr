@@ -59,7 +59,7 @@ On 2026-11-24, the operator filed `item-request-2a5d911104` worded `"one rule, o
 Existing gate watchdogs also leave this state uncovered:
 
 - **Check-group watchdog in `tillr-gate` (`watchCommand` in [`tools/tillr-gate/watchdog.go`](../../../tools/tillr-gate/watchdog.go)):** observes aggregate check-log byte growth and check-wide CPU progress across the entire check process group. In a sharded check (`tools/go-test-shards.py`, where `rg -n 'watchdog|SIGQUIT' tools/go-test-shards.py` returns nothing), one deadlocked `*.test` shard sits at zero CPU unseen for as long as sibling shards burn CPU or print output; once sibling shards finish, `watchCommand` waits 60 silent 1-second samples and terminates the entire check process group (`ExitStalled = 6`) rather than keeping the gate alive or isolating the hung test binary's goroutine dump.
-- **Per-binary watchdog in `go_affected.py` (`_watch_go_test_binaries` in [`tools/gate/go_affected.py`](../../../tools/gate/go_affected.py)):** covers only the repository-local `go-affected` check, not `go-test-shards.py` checks, direct `go test` checks, or consumer repositories' gate checks, and signals a given `(pid, start_time)` at most once.
+- **Per-binary watchdog in `go_affected.py` (`_watch_go_test_binaries` in `tools/gate/go_affected.py`, now [`tools/tillr-gate/goaffected`](../../../tools/tillr-gate/goaffected/)):** covers only the repository-local `go-affected` check, not `go-test-shards.py` checks, direct `go test` checks, or consumer repositories' gate checks, and signals a given `(pid, start_time)` at most once.
 
 ### 1.2 Placement and authority boundary
 

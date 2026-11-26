@@ -191,6 +191,75 @@ sys.exit(0)
 		}
 	})
 
+	t.Run("unnamed failure prefers tillr-gate go-affected when goaffected exists", func(t *testing.T) {
+		goArgsFile := filepath.Join(t.TempDir(), "go_affected_go_args.txt")
+		goEnvFile := filepath.Join(t.TempDir(), "go_affected_go_env.txt")
+		writeReplayTestFile(t, filepath.Join(root, "tools", "tillr-gate", "go.mod"), "module example.com/tillr-gate\n\ngo 1.22\n")
+		writeReplayTestFile(t, filepath.Join(root, "tools", "tillr-gate", "goaffected", "stub.go"), "package goaffected\n")
+		writeReplayTestFile(t, filepath.Join(root, "tools", "tillr-gate", "main.go"), `package main
+
+import (
+	"os"
+	"sort"
+	"strings"
+)
+
+func main() {
+	_ = os.WriteFile(`+`"`+goArgsFile+`"`+`, []byte(strings.Join(os.Args[1:], "\n")), 0o644)
+	var envLines []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "TILLR_") || strings.HasPrefix(kv, "GIT_CONFIG_") {
+			envLines = append(envLines, kv)
+		}
+	}
+	sort.Strings(envLines)
+	_ = os.WriteFile(`+`"`+goEnvFile+`"`+`, []byte(strings.Join(envLines, "\n")), 0o644)
+}
+`)
+		runGit(t, root, "add", ".")
+		runGit(t, root, "commit", "-qm", "with goaffected")
+		goBaseSHA := runGit(t, root, "rev-parse", "HEAD")
+
+		runID := "run-unnamed-go-fallback"
+		logPath := filepath.Join(RunDir(root, runID), "logs", "fork-check-1-go-affected-affected-tillr-go-test-packages-pass.log")
+		writeReplayTestFile(t, logPath, "go-affected: failing packages and tests:\n  example.com/sample/pkga: (no failing test named)\n")
+
+		out, err := steps.Replay(context.Background(), Candidate{
+			RunID:                 runID,
+			ItemID:                "item-4",
+			CandidateChangedPaths: []string{"tools/sample/pkga/a_test.go"},
+		}, goBaseSHA, []string{goAffectedCheckID})
+		if err != nil {
+			t.Fatalf("Replay: %v", err)
+		}
+		if !out.Known || len(out.Red) != 0 {
+			t.Fatalf("Replay outcome = %+v, want Known=true Red=nil", out)
+		}
+		gotArgs, err := os.ReadFile(goArgsFile)
+		if err != nil {
+			t.Fatalf("read go args: %v", err)
+		}
+		gotLines := strings.Split(strings.TrimSpace(string(gotArgs)), "\n")
+		if len(gotLines) != 5 || gotLines[0] != "go-affected" || gotLines[1] != "--root" || gotLines[3] != "--changed" || gotLines[4] != "tools/sample/pkga/a_test.go" {
+			t.Fatalf("tillr-gate go-affected args = %q, want [go-affected --root <dir> --changed tools/sample/pkga/a_test.go]", gotLines)
+		}
+		gotEnv, err := os.ReadFile(goEnvFile)
+		if err != nil {
+			t.Fatalf("read go env: %v", err)
+		}
+		envStr := string(gotEnv)
+		for _, want := range []string{
+			"TILLR_RUN_ID=" + runID,
+			"TILLR_ITEM_ID=item-4",
+			"gc.auto",
+			"maintenance.auto",
+		} {
+			if !strings.Contains(envStr, want) {
+				t.Fatalf("replay env missing %q:\n%s", want, envStr)
+			}
+		}
+	})
+
 	t.Run("custom ReplayProgram stays unchanged and receives replay env", func(t *testing.T) {
 		customDir := t.TempDir()
 		customOut := filepath.Join(customDir, "custom.txt")

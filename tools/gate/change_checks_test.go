@@ -1419,7 +1419,6 @@ func TestChangeGoModuleAdditionAndRemovalSelectInventoryChecksInCandidateGate(t 
 		}
 	}
 	for _, rel := range []string{
-		"tools/gate/go_affected.py",
 		"tools/gate/checks/go-edges.py",
 		"tools/gate/checks/go-module-inventory.py",
 	} {
@@ -1473,10 +1472,20 @@ func TestChangeGoModuleAdditionAndRemovalSelectInventoryChecksInCandidateGate(t 
 			}
 		}
 	}
-	affectedStub := "from pathlib import Path\n" +
-		"def test_discover_modules():\n" +
-		"    Path(" + jsonQuote(markerLog) + ").open('a').write('go-affected-modules\\n')\n"
-	if err := os.WriteFile(filepath.Join(f.repo, "tests", "go-affected.test.py"), []byte(affectedStub), 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Join(f.repo, "tools", "tillr-gate", "goaffected"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.repo, "tools", "tillr-gate", "go.mod"), []byte("module github.com/mschulkind-oss/tillr-gate\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	affectedStub := "package goaffected_test\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n" +
+		"func TestDiscoverModules(t *testing.T) {\n" +
+		"\tf, err := os.OpenFile(" + jsonQuote(markerLog) + ", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)\n" +
+		"\tif err != nil { t.Fatal(err) }\n" +
+		"\tdefer f.Close()\n" +
+		"\tif _, err := f.WriteString(\"go-affected-modules\\n\"); err != nil { t.Fatal(err) }\n" +
+		"}\n"
+	if err := os.WriteFile(filepath.Join(f.repo, "tools", "tillr-gate", "goaffected", "selection_test.go"), []byte(affectedStub), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1503,17 +1512,19 @@ func TestChangeGoModuleAdditionAndRemovalSelectInventoryChecksInCandidateGate(t 
 	edges := map[string]map[string]any{
 		defPkg: {
 			"builds": []string{},
-			"reads":  []string{"tools/tillr-existing/", "tools/tillr/"},
+			"reads":  []string{"tools/tillr-existing/", "tools/tillr-gate/", "tools/tillr/"},
 			"read_tests": map[string][]string{
 				"tools/tillr-existing/": {defTest},
+				"tools/tillr-gate/":     {defTest},
 				"tools/tillr/":          {defTest},
 			},
 		},
 		storePkg: {
 			"builds": []string{},
-			"reads":  []string{"tools/tillr-existing/"},
+			"reads":  []string{"tools/tillr-existing/", "tools/tillr-gate/"},
 			"read_tests": map[string][]string{
 				"tools/tillr-existing/": {storeTest},
+				"tools/tillr-gate/":     {storeTest},
 			},
 		},
 	}
@@ -1600,9 +1611,9 @@ func TestChangeGoModuleAdditionAndRemovalSelectInventoryChecksInCandidateGate(t 
 
 	// 3. Declare tools/tillr-new/ in go-test-edges.json: when TestMain fails, the candidate gate
 	// still fails; when all inventory checks pass, the candidate gate passes.
-	edges[defPkg]["reads"] = []string{"tools/tillr-existing/", "tools/tillr/", "tools/tillr-new/"}
+	edges[defPkg]["reads"] = []string{"tools/tillr-existing/", "tools/tillr-gate/", "tools/tillr/", "tools/tillr-new/"}
 	edges[defPkg]["read_tests"].(map[string][]string)["tools/tillr-new/"] = []string{defTest}
-	edges[storePkg]["reads"] = []string{"tools/tillr-existing/", "tools/tillr-new/"}
+	edges[storePkg]["reads"] = []string{"tools/tillr-existing/", "tools/tillr-gate/", "tools/tillr-new/"}
 	edges[storePkg]["read_tests"].(map[string][]string)["tools/tillr-new/"] = []string{storeTest}
 	writeEdges()
 	headAddDeclared := f.commit()
@@ -1625,9 +1636,9 @@ func TestChangeGoModuleAdditionAndRemovalSelectInventoryChecksInCandidateGate(t 
 	// 4. Candidate removes tools/tillr-new/go.mod: inventory checks run again.
 	_ = os.Remove(markerLog)
 	f.git("rm", "-q", "tools/tillr-new/go.mod")
-	edges[defPkg]["reads"] = []string{"tools/tillr-existing/", "tools/tillr/"}
+	edges[defPkg]["reads"] = []string{"tools/tillr-existing/", "tools/tillr-gate/", "tools/tillr/"}
 	delete(edges[defPkg]["read_tests"].(map[string][]string), "tools/tillr-new/")
-	edges[storePkg]["reads"] = []string{"tools/tillr-existing/"}
+	edges[storePkg]["reads"] = []string{"tools/tillr-existing/", "tools/tillr-gate/"}
 	delete(edges[storePkg]["read_tests"].(map[string][]string), "tools/tillr-new/")
 	writeEdges()
 	headRemove := f.commit()

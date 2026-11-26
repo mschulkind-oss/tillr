@@ -351,15 +351,21 @@ func (s *ProcessSteps) replayGoCheck(ctx context.Context, dir string, candidate 
 	if len(changed) == 0 && s.Root != "" && candidate.BaseSHA != "" && candidate.HeadSHA != "" {
 		changed = s.diffChangedPaths(ctx, candidate.BaseSHA, candidate.HeadSHA)
 	}
+	goAffectedPkg := filepath.Join(dir, "tools", "tillr-gate", "goaffected")
 	goAffectedScript := filepath.Join(dir, "tools", "gate", "go_affected.py")
 	if len(changed) == 0 {
 		return false, false, false, "", nil
 	}
-	if _, statErr := os.Stat(goAffectedScript); statErr != nil {
+	var cmd *exec.Cmd
+	if info, statErr := os.Stat(goAffectedPkg); statErr == nil && info.IsDir() {
+		args := append([]string{"run", "-C", filepath.Join(dir, "tools", "tillr-gate"), ".", "go-affected", "--root", dir, "--changed"}, changed...)
+		cmd = exec.CommandContext(ctx, "go", args...)
+	} else if _, statErr := os.Stat(goAffectedScript); statErr == nil {
+		args := append([]string{"tools/gate/go_affected.py", "--changed"}, changed...)
+		cmd = exec.CommandContext(ctx, "python3", args...)
+	} else {
 		return false, false, false, "", nil
 	}
-	args := append([]string{"tools/gate/go_affected.py", "--changed"}, changed...)
-	cmd := exec.CommandContext(ctx, "python3", args...)
 	cmd.Dir = dir
 	cmd.Env = s.replayChildEnv(candidate, "TILLR_FORK_DRIFT=1")
 	replayClass := ProcessClassGate

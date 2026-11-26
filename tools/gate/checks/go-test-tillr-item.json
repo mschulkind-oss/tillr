@@ -12,7 +12,6 @@
   "reads": [
     "tools/gate/checks/go-test-tillr-item.json",
     "tools/gate/go-test-edges.json",
-    "tools/gate/go_affected.py",
     "tools/go-test-durations.json",
     "tools/tillr-gate/",
     "tools/tillr-item/",
