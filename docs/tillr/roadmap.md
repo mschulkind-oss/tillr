@@ -366,10 +366,16 @@ Last because it changes how tillr is delivered and nothing about what it does.
     [the unbuilt units of the core and charter split](../design/tillr-core-and-git-landing.md#85-the-unbuilt-units):
     four small pieces of work and ten units are not queued.
 
-60. Graduate a built design into a reference:
+60. [Installing tillr without a yolo jail](../design/installing-tillr-outside-yolo.md): install
+    prebuilt release archives on a Linux or macOS host through Homebrew or a POSIX install script
+    into `<prefix>/bin` and `<prefix>/share/tillr`, with executable-relative sidecar discovery and
+    embedded default workflows. One slice waits on no question; public archives and installers wait
+    on Python removal, embedded watch rules, and its three questions.
+
+61. Graduate a built design into a reference:
     [the utilities](../design/board-utilities.md).
 
-61. [Who made the decisions recorded in the designs](./decision-provenance-review.md): the owner
+62. [Who made the decisions recorded in the designs](./decision-provenance-review.md): the owner
     keeps, overturns or reopens the decisions a designer made. It is last in build order because
     it builds nothing; its questions are first under the heading below.
 
@@ -402,6 +408,7 @@ which entry waits. A question that blocks nothing yet is reached through its des
 | The watcher's command name, whether a rule may run a probe, and where its episodes live | [`OQ-GW1`](../design/general-agent-watch.md#OQ-GW1) to [`OQ-GW3`](../design/general-agent-watch.md#OQ-GW3) | The later slices of entry 56 |
 | Whether a Go package may be the contract between two utilities | [`OQ-UC1`](../design/tillr-utility-contracts.md#OQ-UC1) | The later slices of entry 57 |
 | How tillr builds from Git | [`OQ-SH4`](../design/tillr-selfhosted-build.md#OQ-SH4) | Entry 58 |
+| How public releases and the Homebrew formula are published, whether `tillr-pi` ships prebuilt packages, and whether macOS bottles wait on Darwin loop supervision | [`OQ-HI1`](../design/installing-tillr-outside-yolo.md#OQ-HI1) to [`OQ-HI3`](../design/installing-tillr-outside-yolo.md#OQ-HI3) | Slices 2 to 5 of entry 60 |
 | Which recorded decisions the owner keeps | [The provenance review](./decision-provenance-review.md) | Nothing is held; a decision overturned there reopens the design that rests on it |
 
 [Declared state machines for tillr](../design/tillr-state-machines.md) blocks no entry above. Its
