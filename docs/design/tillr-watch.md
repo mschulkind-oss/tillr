@@ -7,7 +7,7 @@ stage: DECIDED
 stage-since: 2026-11-24
 tags: [tillr, watch, alerting, lint, workflows, charter, foreground]
 summary: "Standing rules, kept as data, that read the tillr store and open one alert per condition for the agent in the foreground; an alert never fails, benches or caps work."
-next: "Build the shipped-versus-repository rule split in Section 10, agent watches, the subscribe stream, the outcome record, the five designed rules in Sections 5.14 to 5.18, and the session-relaunch provenance in Section 5.19; the owner reviews the designer decisions in the ledger."
+next: "Build the shipped-versus-repository rule split in Section 10, agent watches, the subscribe stream, the outcome record, the five designed rules in Sections 5.14 to 5.18, the session-relaunch provenance in Section 5.19, and the ended-run scratch-process event and rule in Section 5.20; the owner reviews the designer decisions in the ledger."
 related:
   - ./landing-principles.md
   - ../reference/run-wall-ruling.md
@@ -28,9 +28,11 @@ vantage:
 line, the linter and 36 rules are built; the shipped-versus-repository rule split
 ([Section 4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87),
 [Section 10](#10-build-slices-for-shipped-and-repository-watch-rules)), agent watches, the
-subscribe stream, five designed rules and the session-relaunch provenance on
+subscribe stream, five designed rules, the session-relaunch provenance on
 `drain-unrequested-start`
-([Section 5.19](#519-session-relaunch-provenance-on-drain-unrequested-start-d-tw82)) are not. The
+([Section 5.19](#519-session-relaunch-provenance-on-drain-unrequested-start-d-tw82)), and the
+ended-run scratch-process event and rule
+([Section 5.20](#520-process-left-alive-under-an-ended-runs-scratch-directory-d-tw89)) are not. The
 Built column of the [decision ledger](#9-decision-ledger) says which is which.
 
 > **In short:** `tillr-watch` reads the tillr store, judges it against standing rules written as
@@ -57,7 +59,8 @@ sorted rule catalog.
 
 **Needs your ruling:** nothing in [Section 8](#8-open-questions); the designer's decisions in the
 [decision ledger](#9-decision-ledger) — including [D-TW83](#D-TW83) to [D-TW88](#D-TW88) on shipped
-versus repository watch rules — have no owner ruling on the mechanism and may be overturned.
+versus repository watch rules and [D-TW89](#D-TW89) on live processes under an ended run's scratch
+directory — have no owner ruling on the mechanism and may be overturned.
 
 **Reads with:** [`tillr-state-machines.md`](./tillr-state-machines.md) (prevention),
 [`tillr-watch-alert-workflow.md`](./tillr-watch-alert-workflow.md) and
@@ -775,6 +778,187 @@ was still live.
    [`docs/reference/tillr-restart.md`](../reference/tillr-restart.md), and mark [D-TW82](#D-TW82)
    `Built: yes` here.
 
+### 5.20 Process left alive under an ended run's scratch directory ([D-TW89](#D-TW89))
+
+Designed, not built. On 2026-11-24 the operator filed alert-rule request `item-request-ccd99e5fbb`
+("one rule, one new file, change nothing else") for a process whose command line names a path under
+an ended run's scratch directory while still alive (and not belonging to a live run), then closed it
+before a worker ran because no recorded event or projection tracked live processes by ended-run
+scratch path. This section answers a follow-up operator request asking which recorded fact that
+alert reads, which landed rule pattern it uses, and what follow-up build items implement it. Every
+mechanism, event name, payload field, writer choice, rule configuration, rejected alternative and
+build split below is the designer's decision answering that operator request — not an owner ruling
+— and the owner may overturn any part of it.
+
+#### Why no existing recorded fact covers this state
+
+- **`drain.process-cpu` monitors only three daemon roles.** `ProcessCPUKind` in
+  [`tools/tillr-drain/drain/process_cpu.go`](../../tools/tillr-drain/drain/process_cpu.go) samples
+  1-minute CPU tick deltas for `drain-loop`, `tillr-watch-wait` and `tillr-view-serve`. Mixing
+  arbitrary leaked worker subprocesses into `drain.process-cpu` would conflate daemon CPU profiling
+  with ended-run scratch-path liveness and rewrite unrelated monitoring.
+- **`survivingRunProcesses` checks environment markers at settlement only.**
+  `survivingRunProcesses` in
+  [`tools/tillr-drain/drain/surviving_processes.go`](../../tools/tillr-drain/drain/surviving_processes.go)
+  scans `/proc/<pid>/environ` for `TILLR_RUN_ID=<run_id>` and `TILLR_LOOP_STORE=<resolved_store>`
+  during run settlement (`checkSurvivingRunProcesses` and landing-offer intake), holding the item
+  via `drain.item-fault` (`reason = "run-processes-live"`). It misses detached or
+  environment-scrubbed processes whose `/proc/<pid>/cmdline` names `<lane-dir>/durable/<run-id>`,
+  misses runs started without `TILLR_LOOP_STORE` or processes inspected after settlement, and
+  records no clearing event when the process exits.
+- **Projections do not read `/proc`.** The watch projections in
+  [`tools/tillr/watch/rule_schema.go`](../../tools/tillr/watch/rule_schema.go) (`items`, `charter`,
+  `git_refs:`, `fixer_checks`, `green_proof:`) read store tables and Git refs rather than `/proc`,
+  and `tillr-watch` rules remain pure declarative store readers ([D-TW4](#D-TW4)).
+
+#### Decided recorded fact: `drain.run-scratch-process` written by `tillr-drain` *(designer's decision)*
+
+- **Event kind and registration.** Register `drain.run-scratch-process` in `tools/tillr-drain/drain/`
+  via `event.Register("drain.run-scratch-process", Utility)`, which links into `tillr-watch`
+  automatically through `_ "github.com/mschulkind-oss/tillr-drain/drain"` in
+  [`tools/tillr-watch/main.go`](../../tools/tillr-watch/main.go). Append each event with
+  `object_type = "run"` and `object_id = &runID` so episodes grouped by `run_id` receive the run's
+  timeline bundle ([D-TW6](#D-TW6)).
+- **One writer: `tillr-drain` (`Loop`).** Sample `/proc` on the existing 1-minute cadence alongside
+  `recordProcessCPUIfDue` in [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go)
+  and `keepSessionAlive` in
+  [`tools/tillr-drain/drain/pass_observation.go`](../../tools/tillr-drain/drain/pass_observation.go),
+  reading `l.procRootPath()` so unit tests supply a synthetic `/proc` tree and logging store write
+  errors without faulting the loop.
+  - *Rejected: `tillr-run exec` as writer.* `Exec` in
+    [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go) exits once `writeTerminal`
+    commits and is no longer running minutes later to detect a surviving detached grandchild or
+    append a clearing event when that process eventually exits.
+  - *Rejected: reading `/proc` inside `tillr-watch`.* Polling OS process state inside the watcher
+    violates [D-TW4](#D-TW4) and leaves no durable audit trail in `events` once the process exits.
+- **Distinguishing ended runs from live runs (and excluding processes of live runs).**
+  1. **Live runs:** from a read snapshot of the store plus in-memory `Loop` state, collect every
+     `run_id` leased on `lanes` (`state = 'leased' AND run_id IS NOT NULL AND run_id != ''` in
+     `RunDDL`, [`tools/tillr-run/run/schema.go`](../../tools/tillr-run/run/schema.go)), every
+     active sibling in `read_only_runs` (`settled = 0` joined to a leased `lanes` row), and every
+     run currently in flight in `Loop`. Because `Exec` in
+     [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go) claims `lanes` before
+     `cmd.Start()` (including on `Resume`) and holds that lease across `cmd.Wait()`,
+     `endRunProcesses` ([`tools/tillr-run/run/children.go`](../../tools/tillr-run/run/children.go)),
+     and `readSpend` (`extract-report`) until `writeTerminal` commits `runs` and clears `lanes`
+     atomically, neither a live worker nor `extract-report` runs outside a live lease.
+  2. **Ended runs and their scratch prefixes:** select rows in `runs` whose `run_id` is not in the
+     live-run set and whose `finished_at` is at least `5s` before the scan timestamp (the `5s`
+     post-`finished_at` grace avoids sub-second pipe-close teardown races such as `--shard-guard`
+     in [`tools/go-test-shards.py`](../../tools/go-test-shards.py)). Map each ended run to
+     `run.DurableDir(filepath.Join(laneRoot, lane_id), run_id)` (`<lane-root>/<lane-id>/durable/<run-id>`,
+     from `DurableDir` in [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go)) plus
+     any `{Kind: "scratch"}` path recorded in `runs.artifact_refs`, matching both raw and
+     symlink-resolved paths on a path-component boundary (next byte is `/`, end-of-argument,
+     whitespace, quote, `:`, or `;` — never `[A-Za-z0-9._-]`, so `run-1` never matches `run-10`).
+  3. **Excluding processes of a live run:** scan live non-zombie (`state != 'Z' && state != 'X'`)
+     same-UID `/proc/<pid>` entries (`pid != selfPID`). When `/proc/<pid>/cmdline` names an ended
+     run's scratch directory, read `/proc/<pid>/environ` and skip the process if `TILLR_RUN_ID` or
+     `TILLR_RUN_EXEC_ID` belongs to a run in the live-run set (for example, a live worker or triage
+     run inspecting an earlier run's scratch files).
+- **State-change emission (zero idle store writes).** `Loop` maintains
+  `activeScratchRuns map[string]string` (`run_id -> process_keys`), seeded once per loop session
+  from the store's latest `drain.run-scratch-process` event per `run_id` whose `live_count > 0`. On
+  each 1-minute scan:
+  - Append nothing when no ended run has matching processes and `activeScratchRuns` is empty.
+  - Append `drain.run-scratch-process` (`live_count > 0`) for an ended `run_id` only when `run_id`
+    newly enters `activeScratchRuns` or its `process_keys` value changes.
+  - Append `drain.run-scratch-process` (`live_count = 0`, `process_keys = ""`,
+    `process_summary = ""`, `processes = []`) once when a `run_id` in `activeScratchRuns` has zero
+    matching processes on a scan — including on the first scan after a loop restart when a leaked
+    process exited while the loop was down, or when `run_id` resumed into the live-run set — then
+    delete `run_id` from `activeScratchRuns`.
+
+| Field | JSON type | Meaning |
+| :--- | :--- | :--- |
+| `session_id` | `string` | `tillr-drain` loop session ID recording the observation |
+| `run_id` | `string` | Ended run whose scratch directory appears on `/proc/<pid>/cmdline` |
+| `item_id` | `string` (`omitempty`) | `runs.item_id` when the run belonged to an item |
+| `lane_id` | `string` | `runs.lane_id` |
+| `scratch_dir` | `string` | Canonical scratch directory (`<lane-root>/<lane-id>/durable/<run-id>`) |
+| `live_count` | `int` | Count of matching live processes (`> 0` while active, `0` when cleared) |
+| `process_keys` | `string` | Comma-joined `<pid>:<start_time>` entries sorted by `pid` (string scalar so `fingerprint` in [`tools/tillr/watch/pattern.go`](../../tools/tillr/watch/pattern.go) hashes it directly) |
+| `process_summary` | `string` | `"<pid> (<cmdline>), ..."` summary for guidance placeholders (`""` when cleared) |
+| `processes` | `[]RunScratchProcessEntry` | `{pid, start_time, process_key, cmdline, matched_path}` sorted by `pid` (`[]` when cleared) |
+
+#### Decided landed watch-rule pattern: unwindowed `predicate_match` *(designer's decision)*
+
+`drain-run-scratch-process-live` uses the landed `predicate_match` pattern in
+[`tools/tillr/watch/rules.go`](../../tools/tillr/watch/rules.go) with `match`, `clear_when` and no
+`window` — holding until cleared like
+[`drain-lane-refused.toml`](../../config/tillr/watch/drain-lane-refused.toml) and
+[`run-model-timeout.toml`](../../config/tillr/watch/run-model-timeout.toml), with zero changes to
+the rule language or evaluator:
+
+```toml
+[[rule]]
+id = "drain-run-scratch-process-live"
+scope = "core"
+severity = "warning"
+
+[rule.variables]
+item_id = "item_id"
+lane_id = "lane_id"
+scratch_dir = "scratch_dir"
+process_keys = "process_keys"
+
+[rule.reads]
+events = ["drain.run-scratch-process"]
+
+[rule.when]
+group_by = "run_id"
+pattern = "predicate_match"
+match = 'event.live_count > 0'
+clear_when = 'event.live_count == 0'
+fingerprint = ["process_keys"]
+
+[rule.guidance]
+summary = "Ended run {{subject}} on {{event.lane_id}} still has {{event.live_count}} live process(es) naming {{event.scratch_dir}}: {{event.process_summary}}."
+check = [
+  "Verify /proc/<pid>/stat and /proc/<pid>/cmdline against process_keys ({{event.process_keys}}) to confirm each PID still belongs to the leaked process from {{subject}} (item {{event.item_id}}).",
+  "Inspect the run log and scratch directory {{event.scratch_dir}} to see which test, tool or background command detached without exiting when {{subject}} ended."
+]
+do = [
+  "End only verified leaked PIDs individually by exact PID (never pkill, killall or pgrep), and file or track the queue item fixing the detached-process leak."
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]
+```
+
+- **Why `group_by = "run_id"` and `fingerprint = ["process_keys"]`.** Grouping by `run_id` opens
+  one episode per ended run ([D-TW5](#D-TW5)) rather than `N` episodes when one leaked test binary
+  holds child workers, and `resolveVariables` in
+  [`tools/tillr/watch/variables.go`](../../tools/tillr/watch/variables.go) exposes `run_id`
+  alongside `[rule.variables]`. Because `run_id` is not a key in `items`, `itemTerminalChecker` in
+  [`tools/tillr/watch/source.go`](../../tools/tillr/watch/source.go) keeps the episode open even
+  when `item_id` has already `landed` or `closed` ([D-TW63](#D-TW63)). Fingerprinting
+  `process_keys` reopens a `silence --until-change` episode if the surviving `(pid, start_time)`
+  set changes ([D-TW32](#D-TW32)). Guidance obeys [D-TW2](#D-TW2) and [D-TW73](#D-TW73).
+- **Rejected: `consecutive_count` with `for_each = "processes"` and a rolling `window`.** A rolling
+  window (as in [`drain-process-cpu-high.toml`](../../config/tillr/watch/drain-process-cpu-high.toml))
+  would require rewriting store events every minute for the lifetime of a leak, would resolve as
+  `condition-cleared` if the drain stopped longer than `window` while the leaked process remained
+  alive, and would open multiple episodes for one leaked process tree.
+
+#### Follow-up build items *(designer's decision)*
+
+1. **Build item 1 — Record `drain.run-scratch-process` in `tillr-drain` (the event):** register
+   `drain.run-scratch-process` in `tools/tillr-drain/drain/`, scan `l.procRootPath()` once per
+   minute from `Loop` and `keepSessionAlive` with startup seeding from un-cleared
+   `drain.run-scratch-process` events, a `5s` post-`finished_at` grace, path-component-boundary
+   scratch matching (`DurableDir` plus `{Kind: "scratch"}` `artifact_refs`, raw and
+   symlink-resolved), and live-run exclusion across `lanes`, `read_only_runs`, in-flight `Loop`
+   runs, and `/proc/<pid>/environ` (`TILLR_RUN_ID`, `TILLR_RUN_EXEC_ID`); add unit tests in
+   `tools/tillr-drain/drain/run_scratch_process_test.go`; and run `just pack-sync`.
+2. **Build item 2 — Add watch rule `drain-run-scratch-process-live` (the rule, after Build item 1):**
+   add `drain-run-scratch-process-live.toml` in `config/tillr/watch/` (or `tools/tillr-watch/rules/`
+   once [D-TW84](#D-TW84) lands) and `tools/tillr-watch/run_scratch_process_rule_test.go` covering
+   `tillr watch lint`, opening on `live_count > 0`, staying open when `item_id` is `landed` or
+   `closed`, reopening `silence --until-change` when `process_keys` changes, and resolving with
+   `condition-cleared` on `live_count == 0` (plus `just pack-sync` when touching `tools/tillr*`).
+
 ## 6. Delivery, Lifecycle, and the Two Operating Modes
 
 ### 6.1 One record per condition, never per pass: the Alert Episode state machine ([D-TW5](#D-TW5))
@@ -1085,6 +1269,7 @@ code was not read for that row.
 | <a id="D-TW86"></a>**D-TW86** | Designer (no owner ruling on mechanism; owner may overturn): runtime precedence is `shipped` (`source=shipped`) < repository files (`source=file`) < `watch_rule_overrides` (`source=store`); `--rules` becomes optional (inferring `<root>` from `--root` or `<root>/.tillr/<file>`), explicit `--rules` still layers over shipped rules unless `--no-shipped-rules` is given, and charter scope is checked before requiring `--root` or reading `git_refs:`. | 2026-11-25 | [§4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87) | no |
 | <a id="D-TW87"></a>**D-TW87** | Designer (no owner ruling on mechanism; owner may overturn): `tillr watch lint` validates shipped rules (unless `--no-shipped-rules`), validates repository `[[rule]]` and `[[override]]` files, merges by `id` attributing overridden entries to the repository file, and runs workflow and charter cross-checks over the merged set. | 2026-11-25 | [§7.2](#72-tillr-watch-lint-checking-a-workflows-whole-configuration-before-it-runs-d-tw10) | no |
 | <a id="D-TW88"></a>**D-TW88** | Designer (no owner ruling on mechanism; owner may overturn): land the shipped-and-repository rule split in three slices — library layering and lint merge, embedded rules and pack launcher stamp, then duplicate removal and cross-reference updates — so consumer repositories have no flag day. | 2026-11-25 | [§10](#10-build-slices-for-shipped-and-repository-watch-rules) | no |
+| <a id="D-TW89"></a>**D-TW89** | Designer (answering a 2026-11-24 operator request; not an owner ruling, and the owner may overturn it): `tillr-drain` records state-change `drain.run-scratch-process` events (`session_id`, `run_id`, `item_id`, `lane_id`, `scratch_dir`, `live_count`, `process_keys`, `process_summary`, `processes`) from 1-minute `/proc` scans for live non-zombie processes naming an ended run's scratch directory (excluding live runs on `lanes`, `read_only_runs`, in-flight `Loop` runs and `/proc/<pid>/environ`), and `drain-run-scratch-process-live` uses unwindowed `predicate_match` grouped by `run_id` (`match = 'event.live_count > 0'`, `clear_when = 'event.live_count == 0'`, `fingerprint = ["process_keys"]`), built in two follow-up items (the event, then the rule). | 2026-11-25 | [§5.20](#520-process-left-alive-under-an-ended-runs-scratch-directory-d-tw89) | no |
 
 ## 10. Build Slices for Shipped and Repository Watch Rules
 
