@@ -39,6 +39,7 @@ type waitTestHooks struct {
 
 type waitOptions struct {
 	owner, storePath, rulesPath, root string
+	noShippedRules                    bool
 	timeout                           time.Duration
 	deadline                          <-chan time.Time
 	fallbackPoll                      time.Duration
@@ -332,7 +333,14 @@ func printAlertActions(buf *bytes.Buffer, opts waitOptions, alertID string) {
 	fmt.Fprintf(buf, "  ack: tillr watch ack %s --by %s --store %s\n", alertID, shellWord(opts.owner), shellWord(opts.storePath))
 	fmt.Fprintf(buf, "  investigate: tillr watch investigate %s --by %s --cause <cause> --evidence <evidence> --store %s\n", alertID, shellWord(opts.owner), shellWord(opts.storePath))
 	fmt.Fprintf(buf, "  settle: tillr watch settle %s --by %s --outcome <fix-rule|fix-fault> --item <item-id> --store %s\n", alertID, shellWord(opts.owner), shellWord(opts.storePath))
-	fmt.Fprintf(buf, "  silence: tillr watch silence %s --by %s --item <item-id> --reason <reason> --until <dur|time> --store %s --rules %s\n", alertID, shellWord(opts.owner), shellWord(opts.storePath), shellWord(opts.rulesPath))
+	rulesClause := ""
+	if opts.rulesPath != "" {
+		rulesClause = " --rules " + shellWord(opts.rulesPath)
+	}
+	if opts.noShippedRules {
+		rulesClause += " --no-shipped-rules"
+	}
+	fmt.Fprintf(buf, "  silence: tillr watch silence %s --by %s --item <item-id> --reason <reason> --until <dur|time> --store %s%s\n", alertID, shellWord(opts.owner), shellWord(opts.storePath), rulesClause)
 }
 
 func printBundleGuidance(buf *bytes.Buffer, b watch.Bundle) {
@@ -419,7 +427,13 @@ func printNoticesAndReminders(out io.Writer, opts waitOptions, notices []watch.N
 func shellWord(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 
 func (o waitOptions) rearm(through int64) string {
-	cmd := "tillr watch wait --store " + shellWord(o.storePath) + " --rules " + shellWord(o.rulesPath)
+	cmd := "tillr watch wait --store " + shellWord(o.storePath)
+	if o.rulesPath != "" {
+		cmd += " --rules " + shellWord(o.rulesPath)
+	}
+	if o.noShippedRules {
+		cmd += " --no-shipped-rules"
+	}
 	if o.root != "" {
 		cmd += " --root " + shellWord(o.root)
 	}

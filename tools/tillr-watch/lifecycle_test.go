@@ -76,11 +76,11 @@ func TestWatchEpisodeFaces(t *testing.T) {
 			t.Fatalf("%s: code=%d out=%q stderr=%q, want %q", face, code, out, diag, want)
 		}
 	}
-	success("", "eval", "--once", "--rules", dir)
+	success("", "eval", "--once", "--rules", dir, "--no-shipped-rules")
 	for range 2 {
 		fact(t, s, `{"item_id":"one"}`)
 	}
-	success("", "eval", "--once", "--rules", dir)
+	success("", "eval", "--once", "--rules", dir, "--no-shipped-rules")
 	var id string
 	faceRead(t, s, `SELECT alert_id FROM alert_episodes`, &id)
 	head := func() int64 {
@@ -141,8 +141,8 @@ func TestWatchEpisodeFaces(t *testing.T) {
 			{"ack", "requires --store and one alert ID", []string{id, "extra", "--store", s.Path(), "--by=judge"}},
 			{"silence", "requires one alert ID or --rule", []string{"--store", s.Path(), "extra", id, "--until=1h"}},
 			{"investigate", "requires --store and one alert ID", []string{"--store", s.Path(), id, "--by=judge", "--cause=c", "--evidence=e", "--", "--extra"}},
-			{"investigate", "not defined: -rules", []string{"--store", s.Path(), "--rules", dir, id, "--by=judge", "--cause=c", "--evidence=e"}},
-			{"settle", "not defined: -rules", []string{id, "--rules", dir, "--store", s.Path(), "--by=judge", "--outcome=fix-fault", "--item=item-1"}},
+			{"investigate", "not defined: -rules", []string{"--store", s.Path(), "--rules", dir, "--no-shipped-rules", id, "--by=judge", "--cause=c", "--evidence=e"}},
+			{"settle", "not defined: -rules", []string{id, "--rules", dir, "--no-shipped-rules", "--store", s.Path(), "--by=judge", "--outcome=fix-fault", "--item=item-1"}},
 			{"silence", "exactly one", []string{"--store", s.Path(), id}},
 			{"silence", "exactly one", []string{"--store", s.Path(), id, "--until=1h", "--until-change"}},
 			{"silence", "exactly one", []string{"--store", s.Path(), id, "--until-change=false"}},
@@ -164,7 +164,7 @@ func TestWatchEpisodeFaces(t *testing.T) {
 	refuseOptions("open", "")
 	refuseDeadline("open", "")
 	refuse("not found", "ack", "missing", "--by=alice")
-	refuse("not defined: -rules", "investigate", id, "--by=alice", "--cause=c", "--evidence=e", "--rules", dir)
+	refuse("not defined: -rules", "investigate", id, "--by=alice", "--cause=c", "--evidence=e", "--rules", dir, "--no-shipped-rules")
 	if head() != start {
 		t.Fatal("refusals appended events")
 	}
@@ -285,13 +285,13 @@ func TestWatchEpisodeFingerprintSilenceAndWait(t *testing.T) {
 		}
 	}
 	add := func(item, step string) { fact(t, s, fmt.Sprintf(`{"item_id":%q,"step":%q}`, item, step)) }
-	command(io.Discard, "eval", "--rules", dir, "--once")
+	command(io.Discard, "eval", "--rules", dir, "--no-shipped-rules", "--once")
 	add("a", "build")
 	add("a", "build")
 	wait := func() string {
 		t.Helper()
 		var out bytes.Buffer
-		command(&out, "wait", "--rules", dir, "--timeout=2s")
+		command(&out, "wait", "--rules", dir, "--no-shipped-rules", "--timeout=2s")
 		return out.String()
 	}
 	first := wait()
@@ -315,7 +315,7 @@ func TestWatchEpisodeFingerprintSilenceAndWait(t *testing.T) {
 		t.Fatalf("silence payload: %s (%v)", payload, err)
 	}
 	add("a", "build")
-	command(io.Discard, "eval", "--rules", dir, "--once")
+	command(io.Discard, "eval", "--rules", dir, "--no-shipped-rules", "--once")
 	var state, ackedNote, fp string
 	var count int
 	faceRead(t, s, `SELECT state,acked_note,condition_fingerprint,observation_count FROM alert_episodes`, &state, &ackedNote, &fp, &count)
@@ -324,7 +324,7 @@ func TestWatchEpisodeFingerprintSilenceAndWait(t *testing.T) {
 	}
 	add("b", "other")
 	add("b", "other")
-	command(io.Discard, "eval", "--rules", dir, "--once")
+	command(io.Discard, "eval", "--rules", dir, "--no-shipped-rules", "--once")
 	add("a", "smoke")
 	second := wait()
 	if !strings.Contains(first, "1 pending") || !strings.Contains(second, "2 pending") || !strings.Contains(second, "[alert "+id+" refusals a") || strings.Index(second, "refusals b, warning]") > strings.Index(second, "refusals a, warning]") || !strings.Contains(second, "a has 4 refusals") {

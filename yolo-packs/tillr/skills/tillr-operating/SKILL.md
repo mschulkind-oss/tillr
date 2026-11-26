@@ -138,23 +138,25 @@ Waiting needs no option.
 
 At session start, and after compaction or handoff, attach a foreground watcher for the
 working tree the session is using. Find its absolute root with `git rev-parse
---show-toplevel`; use that root's `.tillr/state.db` and `config/tillr/watch`, not a
-home-directory or environment default. Check that the store file and rules directory
-exist before starting. If either is missing, print one line naming a missing path:
+--show-toplevel`; use that root's `.tillr/state.db` (and optional `config/tillr/watch`
+if present, which `tillr watch` infers automatically from `--store`), not a home-directory
+or environment default. Check that the store file exists before starting. If it is
+missing, print one line naming the missing path:
 
 ```text
 tillr watch: not started, missing <absolute path>
 ```
 
-Do not start the watcher if either is missing; try again at the next start, compaction
-or handoff. An existing empty rules directory is valid and still attaches. Reuse a live
-session watcher rather than starting a duplicate after compaction.
+Do not start the watcher if the store is missing; try again at the next start, compaction
+or handoff. Shipped rules load automatically, and an optional `<root>/config/tillr/watch`
+directory layers on top when present. Reuse a live session watcher rather than starting a
+duplicate after compaction.
 
 **Claude Code:** start a background Bash tool call with the following command, replacing
 `<root>` with the absolute working-tree root (quote paths as shell words):
 
 ```text
-command:            tillr watch wait --store '<root>/.tillr/state.db' --rules '<root>/config/tillr/watch' --timeout 110m
+command:            tillr watch wait --store '<root>/.tillr/state.db' --root '<root>' --timeout 110m
 run_in_background:  true
 timeout:            7200000
 ```
@@ -166,7 +168,7 @@ exit `2`, re-arm with the printed command and the same harness timeout. Re-arm b
 long work. On an error, investigate rather than blindly re-arming.
 
 **Pi:** start one `background_task` with no timeout. Its command is
-`tillr watch wait --store '<root>/.tillr/state.db' --rules '<root>/config/tillr/watch' --follow`.
+`tillr watch wait --store '<root>/.tillr/state.db' --root '<root>' --follow`.
 Register the initial one-shot output watch atomically in the start call:
 `watch: {condition: "output", pattern: "TILLR_WATCH_NOTICE", wake: true}`.
 After a wake:

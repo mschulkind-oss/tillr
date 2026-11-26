@@ -53,7 +53,7 @@ func TestWatchStatusScopeDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	args := []string{"status", "--store", s.Path(), "--rules", rules}
+	args := []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}
 	if code := run(t.Context(), append(args, "--json"), &stdout, &stderr); code != 0 {
 		t.Fatalf("status: %d %s", code, &stderr)
 	}
@@ -79,7 +79,7 @@ func TestWatchStatusScopeDiagnostics(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, io.Discard, &stderr); code != 0 {
 		t.Fatalf("init eval: %d %s", code, &stderr)
 	}
 	fact(t, s, `{"item_id":7}`)
@@ -101,7 +101,7 @@ func TestWatchStatusRejectsInvalidStoredRule(t *testing.T) {
 	} {
 		seedStatusOverride(t, s, "refusals", tc.doc)
 		var stdout, stderr bytes.Buffer
-		if code := run(t.Context(), []string{"status", "--store", s.Path(), "--rules", rules}, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), tc.want) {
+		if code := run(t.Context(), []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), tc.want) {
 			t.Fatalf("invalid stored rule: %d, stdout=%s stderr=%s; want %q", code, &stdout, &stderr, tc.want)
 		}
 	}
@@ -120,7 +120,7 @@ func TestWatchStatusMissingTablesJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, stderr bytes.Buffer
-	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules, "--json"}, &out, &stderr); code != 0 || stderr.Len() != 0 {
+	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--json"}, &out, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("status = %d, %s", code, &stderr)
 	}
 	if want := "{\"summary\":{\"unsettled\":0,\"uninvestigated\":0,\"investigating\":0,\"investigated\":0,\"settled\":0,\"active_silences\":0,\"triage\":{\"untriaged\":0,\"triaging\":0,\"settled\":0,\"escalated\":0}},\"rules\":[{\"id\":\"refusals\",\"skipped\":0}],\"alerts\":[],\"silences\":[],\"owners\":[]}\n"; out.String() != want {
@@ -138,7 +138,7 @@ func TestWatchStatusMissingTablesJSON(t *testing.T) {
 func TestWatchStatusCountsLatestOpeningNotice(t *testing.T) {
 	s, rules := fixture(t, false)
 	ctx := t.Context()
-	common := []string{"--store", s.Path(), "--rules", rules}
+	common := []string{"--store", s.Path(), "--rules", rules, "--no-shipped-rules"}
 	var stderr bytes.Buffer
 	if code := run(ctx, append([]string{"eval", "--once"}, common...), io.Discard, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("init eval: %d, stderr %q", code, &stderr)
@@ -208,7 +208,7 @@ func TestWatchStatusSortedStoredRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stderr bytes.Buffer
-	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 {
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, io.Discard, &stderr); code != 0 {
 		t.Fatalf("init eval = %d: %s", code, &stderr)
 	}
 	for _, subject := range []string{"bob", "alice", "charlie", "done"} {
@@ -216,7 +216,7 @@ func TestWatchStatusSortedStoredRows(t *testing.T) {
 			fact(t, s, `{"item_id":"`+subject+`"}`)
 		}
 	}
-	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 {
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, io.Discard, &stderr); code != 0 {
 		t.Fatalf("eval = %d: %s", code, &stderr)
 	}
 	// Create timestamps and IDs with deliberate ties and an episode whose rule is no longer loaded.
@@ -239,7 +239,7 @@ func TestWatchStatusSortedStoredRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"status", "--store", s.Path(), "--rules", rules}
+	args := []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}
 	var out bytes.Buffer
 	if code := run(ctx, args, &out, &stderr); code != 0 {
 		t.Fatalf("status = %d: %s", code, &stderr)
@@ -380,17 +380,17 @@ receiver = "foreground"
 	}
 
 	var stderr bytes.Buffer
-	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 {
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, io.Discard, &stderr); code != 0 {
 		t.Fatalf("init eval = %d: %s", code, &stderr)
 	}
 	fact(t, s, `{"item_id":"it-1","lane_id":"lane-1","reason":"dirty","detail":{"item_id":"it-1","node":"build"}}`)
 	fact(t, s, `{"item_id":"it-1","lane_id":"lane-1","reason":"dirty","detail":{"item_id":"it-1","node":"build"}}`)
-	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 {
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, io.Discard, &stderr); code != 0 {
 		t.Fatalf("eval = %d: %s", code, &stderr)
 	}
 
 	var out bytes.Buffer
-	args := []string{"status", "--store", s.Path(), "--rules", rules}
+	args := []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}
 	if code := run(ctx, args, &out, &stderr); code != 0 {
 		t.Fatalf("status text = %d: %s", code, &stderr)
 	}

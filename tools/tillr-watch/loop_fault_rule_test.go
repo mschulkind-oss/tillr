@@ -20,7 +20,7 @@ func TestDrainLoopFaultRule(t *testing.T) {
 		ruleID        = "drain-loop-fault"
 		loopEndedKind = "drain.loop-ended"
 	)
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

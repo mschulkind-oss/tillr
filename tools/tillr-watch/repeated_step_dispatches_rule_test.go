@@ -21,7 +21,7 @@ func TestDrainRepeatedStepDispatchesRule(t *testing.T) {
 		ruleID       = "drain-repeated-step-dispatches"
 		allocateKind = "run.allocate"
 	)
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

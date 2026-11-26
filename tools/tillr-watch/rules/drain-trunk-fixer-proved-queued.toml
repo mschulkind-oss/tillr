@@ -4,7 +4,7 @@
 # after refs/tillr/green has a green proof covering every check it was filed for.
 [[rule]]
 id = "drain-trunk-fixer-proved-queued"
-scope = "core"
+scope = "charter:git-landing"
 severity = "warning"
 
 [rule.reads]

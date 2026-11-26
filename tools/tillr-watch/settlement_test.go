@@ -26,7 +26,7 @@ func TestWatchCLISettleInvestigateAndNoticeFooter(t *testing.T) {
 	}
 
 	// Establish rule load baseline before appending refusal events.
-	if c, _, e := invoke("eval", "--once", "--rules", rulesDir); c != 0 || e != "" {
+	if c, _, e := invoke("eval", "--once", "--rules", rulesDir, "--no-shipped-rules"); c != 0 || e != "" {
 		t.Fatalf("init eval: code=%d err=%q", c, e)
 	}
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
@@ -56,7 +56,7 @@ func TestWatchCLISettleInvestigateAndNoticeFooter(t *testing.T) {
 	}
 
 	// Notice footer prints investigate and settle, not track.
-	code, waitOut, waitErr := invoke("wait", "--rules", rulesDir, "--timeout", "2s")
+	code, waitOut, waitErr := invoke("wait", "--rules", rulesDir, "--no-shipped-rules", "--timeout", "2s")
 	if code != 0 || waitErr != "" {
 		t.Fatalf("wait: code=%d err=%q", code, waitErr)
 	}
@@ -123,7 +123,7 @@ func TestWatchCLISettleInvestigateAndNoticeFooter(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if c, _, e := invoke("eval", "--once", "--rules", rulesDir); c != 0 || e != "" {
+	if c, _, e := invoke("eval", "--once", "--rules", rulesDir, "--no-shipped-rules"); c != 0 || e != "" {
 		t.Fatalf("eval: code=%d err=%q", c, e)
 	}
 	var st, sst string

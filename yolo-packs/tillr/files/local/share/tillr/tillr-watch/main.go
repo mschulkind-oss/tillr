@@ -23,27 +23,27 @@ import (
 )
 
 const help = `Usage:
-  tillr watch eval --once --store PATH --rules DIR [--root DIR]
-  tillr watch status --store PATH --rules DIR [--root DIR] [--unsettled] [--recent DUR] [--json]
-  tillr watch daemon --store PATH --rules DIR [--root DIR]
-  tillr watch wait --store PATH --rules DIR [--root DIR] [--owner ID] [--timeout DUR | --follow] [--fallback-poll DUR] [--unsettled-remind-after DUR] [--no-notify] [--seen-through SEQ]
+  tillr watch eval --once --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules]
+  tillr watch status --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules] [--unsettled] [--recent DUR] [--json]
+  tillr watch daemon --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules]
+  tillr watch wait --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules] [--owner ID] [--timeout DUR | --follow] [--fallback-poll DUR] [--unsettled-remind-after DUR] [--no-notify] [--seen-through SEQ]
   tillr watch seen --store PATH --through SEQ [--owner ID]
   tillr watch ack ID --store PATH --by ACTOR [--note TEXT]
   tillr watch investigate ID --store PATH --by ACTOR --cause TEXT --evidence TEXT
   tillr watch settle ID --store PATH --by ACTOR --outcome (fix-rule|fix-fault) --item ITEM_ID [--link-kind filed|linked] [--cause TEXT --evidence TEXT]
   tillr watch claim-triage ID --run RUN_ID --store PATH
   tillr watch record-triage ID --run RUN_ID --outcome (filed|linked|escalated) --finding TEXT [--outcome-kind (fix-fault|fix-rule)] [--item ITEM_ID] [--escalate-to (operator-session|owner)] [--action-needed TEXT] [--question TEXT] [--option TEXT]... --store PATH
-  tillr watch silence ID --store PATH --by ACTOR --item ITEM_ID --reason TEXT (--until DUR_OR_TIME | --until-change) [--cause TEXT --evidence TEXT] [--rules DIR]
-  tillr watch silence --rule ID [--var KEY=VAL ...] --store PATH --rules DIR --by ACTOR --item ITEM_ID --reason TEXT (--until DUR_OR_TIME | --until-change) --cause TEXT --evidence TEXT
+  tillr watch silence ID --store PATH --by ACTOR --item ITEM_ID --reason TEXT (--until DUR_OR_TIME | --until-change) [--cause TEXT --evidence TEXT] [--rules DIR] [--root DIR] [--no-shipped-rules]
+  tillr watch silence --rule ID [--var KEY=VAL ...] --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules] --by ACTOR --item ITEM_ID --reason TEXT (--until DUR_OR_TIME | --until-change) --cause TEXT --evidence TEXT
   tillr watch silence list --store PATH [--all] [--json]
   tillr watch silence lift SILENCE_ID --store PATH --by ACTOR --reason TEXT
-  tillr watch rule list --store PATH --rules DIR
-  tillr watch rule show ID --store PATH --rules DIR
-  tillr watch rule add FILE --store PATH --rules DIR --by ACTOR
-  tillr watch rule tune ID --store PATH --rules DIR --by ACTOR --set KEY=TOML [--set KEY=TOML ...]
-  tillr watch rule reset ID --store PATH --rules DIR --by ACTOR
-  tillr watch rule export --store PATH --rules DIR
-  tillr watch lint [<repo-or-dir>] [--charter <path>] [--workflows <path>] [--policy <path>]... [--rules <path>]
+  tillr watch rule list --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules]
+  tillr watch rule show ID --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules]
+  tillr watch rule add FILE --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules] --by ACTOR
+  tillr watch rule tune ID --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules] --by ACTOR --set KEY=TOML [--set KEY=TOML ...]
+  tillr watch rule reset ID --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules] --by ACTOR
+  tillr watch rule export --store PATH [--rules DIR] [--root DIR] [--no-shipped-rules]
+  tillr watch lint [<repo-or-dir>] [--charter <path>] [--workflows <path>] [--policy <path>]... [--rules <path>] [--no-shipped-rules]
 
 Watch reports conditions from store events. It never executes guidance or dispatches a run.
 `
@@ -126,11 +126,12 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	var dir, owner, root, recentStr string
 	var timeout, fallbackPoll, unsettledRemindAfter, recent time.Duration
 	var cursor int64
-	var once, follow, noNotify, asJSON, onlyUnsettled bool
+	var once, follow, noNotify, asJSON, onlyUnsettled, noShipped bool
 	switch face {
 	case "eval", "wait", "status", "daemon":
 		f.StringVar(&dir, "rules", "", "directory of TOML rules")
 		f.StringVar(&root, "root", "", "repository for Git projections")
+		f.BoolVar(&noShipped, "no-shipped-rules", false, "omit tillr's embedded shipped rules")
 	case "seen":
 	default:
 		return fail(fmt.Errorf("unknown face %q", face))
@@ -163,8 +164,11 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	}
 	set := map[string]bool{}
 	f.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	if f.NArg() != 0 || *path == "" || (face != "seen" && dir == "") || (face == "eval" && !once) || (face == "seen" && !set["through"]) {
+	if f.NArg() != 0 || *path == "" || (face == "eval" && !once) || (face == "seen" && !set["through"]) {
 		return fail(fmt.Errorf("invalid arguments; see --help"))
+	}
+	if set["rules"] && dir == "" {
+		return fail(fmt.Errorf("--rules must not be empty"))
 	}
 	if (set["through"] || set["seen-through"]) && cursor < 0 {
 		return fail(fmt.Errorf("seen cursor must be nonnegative"))
@@ -197,7 +201,7 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	var rules []watch.Rule
 	if face != "seen" {
 		var err error
-		rules, err = watch.LoadRules(dir)
+		rules, err = loadCLIRules(dir, root, *path, noShipped)
 		if err != nil {
 			return fail(err)
 		}
@@ -227,6 +231,7 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 			storePath:            *path,
 			rulesPath:            dir,
 			root:                 root,
+			noShippedRules:       noShipped,
 			timeout:              timeout,
 			fallbackPoll:         fallbackPoll,
 			unsettledRemindAfter: unsettledRemindAfter,

@@ -79,8 +79,13 @@ func setupWorkflowRepo(t *testing.T) (string, string, string) {
 	if err := copyDirRecursive(filepath.Join(root, "config", "tillr", "workflows"), filepath.Join(cfgDir, "workflows")); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyDirRecursive(filepath.Join(root, "config", "tillr", "watch"), filepath.Join(cfgDir, "watch")); err != nil {
+	if err := os.MkdirAll(filepath.Join(cfgDir, "watch"), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "config", "tillr", "watch")); err == nil {
+		if err := copyDirRecursive(filepath.Join(root, "config", "tillr", "watch"), filepath.Join(cfgDir, "watch")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, fName := range []string{"backend-policy.json", "commands.json"} {
 		data, err := os.ReadFile(filepath.Join(root, "config", "tillr", fName))
@@ -166,7 +171,7 @@ func TestWorkflowsRegistry(t *testing.T) {
 	for _, r := range reg.Reads {
 		readSet[r] = true
 	}
-	for _, req := range []string{"definition.json", "config/tillr/", "config/tillr/workflows/", "config/tillr/watch/", "tools/tillr-watch/"} {
+	for _, req := range []string{"definition.json", "config/tillr/", "config/tillr/workflows/", "tools/tillr-watch/", "tools/tillr-watch/rules/"} {
 		if !readSet[req] {
 			t.Fatalf("missing %s in workflows.json reads", req)
 		}

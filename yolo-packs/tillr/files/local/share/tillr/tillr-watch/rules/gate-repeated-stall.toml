@@ -1,0 +1,31 @@
+# On 2026-11-22 two finished fixes (4b533cbda5 and 5e6c7d8ca5) stalled on the
+# same head trees repeatedly after clear-fault re-gated each tree in place
+# without picking up a trunk fix. Alert when the same tree_sha is judged
+# stalled a third time in 24 hours; no automatic remedy is attached.
+[[rule]]
+id = "gate-repeated-stall"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["gate.verdict"]
+
+[rule.when]
+group_by = "tree_sha"
+pattern = "count_in_window"
+match = 'event.result == "stalled"'
+clear_when = 'event.result != "stalled"'
+threshold = 3
+window = "24h"
+
+[rule.guidance]
+summary = "Gate tree {{subject}} was judged stalled {{count}} times in the last 24 hours."
+check = [
+  "Run tillr drain why to inspect the stalled check and compare the candidate's base_sha against the current trunk."
+]
+do = [
+  "If a trunk fix resolves the stall, supersede the held run with tillr drain retry --acknowledge gate-failed so the candidate is rebuilt on the current trunk; otherwise diagnose the stalled check before clearing the fault."
+]
+
+[rule.delivery]
+receiver = "foreground"

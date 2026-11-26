@@ -30,14 +30,14 @@ func TestWatchDaemonWALAndSignals(t *testing.T) {
 				return daemonCount(t, s, query)
 			}
 			var initOut, initErr bytes.Buffer
-			if code := run(t.Context(), []string{"eval", "--once", "--store", alias, "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+			if code := run(t.Context(), []string{"eval", "--once", "--store", alias, "--rules", rules, "--no-shipped-rules"}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
 				t.Fatalf("init eval: code=%d stdout=%q stderr=%q", code, &initOut, &initErr)
 			}
 			fact(t, s, `{"item_id":7}`)
 			for i := 0; i < 2; i++ {
 				fact(t, s, `{"item_id":"initial"}`)
 			}
-			child := startCLIChild(t, "daemon", "--store", alias, "--rules", rules)
+			child := startCLIChild(t, "daemon", "--store", alias, "--rules", rules, "--no-shipped-rules")
 			eventually(t, func() bool { return count(`SELECT COUNT(*) FROM alert_episodes WHERE state='open'`) == 1 })
 			// The write to the rules file is ignored by the running daemon.
 			doc := strings.Replace(testRule, "threshold=2", "threshold=4", 1)
@@ -109,12 +109,12 @@ func TestWatchDaemonRejectsLiveRule(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, rules := fixture(t, false)
 			var initOut, initErr bytes.Buffer
-			if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+			if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
 				t.Fatalf("init eval: code=%d stdout=%q stderr=%q", code, &initOut, &initErr)
 			}
 			fact(t, s, `{"item_id":"initial"}`)
 			fact(t, s, `{"item_id":"initial"}`)
-			child := startCLIChild(t, "daemon", "--store", s.Path(), "--rules", rules)
+			child := startCLIChild(t, "daemon", "--store", s.Path(), "--rules", rules, "--no-shipped-rules")
 			eventually(t, func() bool { return daemonCount(t, s, `SELECT COUNT(*) FROM alert_episodes`) == 1 })
 			seedStatusOverride(t, s, "refusals", tc.doc)
 			var exit *exec.ExitError

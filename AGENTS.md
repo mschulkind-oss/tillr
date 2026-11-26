@@ -112,4 +112,4 @@ form passes, so a green document breaks when it later gains a `4`.
 - **Session directory and rulings file:** Not fixed in this repository.
 - **Lanes:** [`.tillr.toml`](./.tillr.toml) reserves `2` express lanes (`[lanes] express = 2`) and sets no ordinary lane count (`tillr-drain loop` defaults `--lanes` to `2` on a fresh start, overridden by `--lanes` or a saved `ordinary_lanes` scale target).
 - **Backend policy:** The backend policy in force is passed with `--policy` from outside the repository; the tracked [`config/tillr/backend-policy.json`](./config/tillr/backend-policy.json) is only an example with placeholder model names.
-- **Watch rules:** [`config/tillr/watch`](./config/tillr/watch).
+- **Watch rules:** [`config/tillr/watch`](./tools/tillr-watch/rules).

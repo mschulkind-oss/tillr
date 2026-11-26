@@ -1148,6 +1148,9 @@ func isReturnPathBounded(lw loadedWorkflow, v, target lintWorkflowStage, rules [
 	}
 	for _, lr := range rules {
 		r := lr.rule
+		if !r.Enabled {
+			continue
+		}
 		if r.Scope != "core" && r.Scope != "workflow:*" && r.Scope != "workflow:"+lw.wf.Name && r.Scope != "workflow:"+lw.ref {
 			continue
 		}

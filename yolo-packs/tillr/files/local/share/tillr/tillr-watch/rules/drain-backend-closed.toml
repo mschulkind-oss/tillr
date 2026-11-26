@@ -1,0 +1,32 @@
+# On 2026-11-22 the drain closed the pi backend (all planning, review and
+# verifying) at 11:30 AM and again at 12:45 PM ET; neither opened an alert and
+# lanes sat idle until the next timed check-in.
+# Events read: drain.backend-outcome, drain.backend-probe.
+
+[[rule]]
+id = "drain-backend-closed"
+scope = "core"
+severity = "high"
+
+[rule.reads]
+events = ["drain.backend-outcome", "drain.backend-probe"]
+
+[rule.when]
+group_by = "object_id"
+pattern = "predicate_match"
+match = 'event.kind == "drain.backend-outcome" and event.closes == true'
+clear_when = '(event.kind == "drain.backend-probe" and event.success == true) or (event.kind == "drain.backend-outcome" and event.closes == false and event.class != "interrupted")'
+
+[rule.guidance]
+summary = "Backend {{subject}} closed: {{event.cause}}."
+check = [
+  "Inspect the closing run and reason in {{event.cause}}, and run tillr view alarms --store <path> or tillr drain why --store <path> to see which seats, items and lanes are held on {{subject}}.",
+  "Inspect the closing run's log and stderr to establish whether the harness, environment, credentials or upstream provider failed."
+]
+do = [
+  "Fix any underlying fault on {{subject}} without falling back to another model or backend, then exercise {{subject}}'s real harness and route and record reopening with tillr drain probe-backend --store <path> --backend {{subject}} -- <smoke-check>."
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]

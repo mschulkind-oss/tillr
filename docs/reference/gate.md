@@ -336,7 +336,7 @@ shard time across every gate run over twenty minutes: its `~2,000` subprocess-he
 tests sum roughly `4,800 s` of test-wall time across shards (`3,674.67 s` recorded in
 [`tools/go-test-durations.json`](../../tools/go-test-durations.json)), so no priority,
 shard-count or single-test tuning meets the `90 s` median slow-gate alert threshold in
-[`config/tillr/watch/fast-gate-slow.toml`](../../config/tillr/watch/fast-gate-slow.toml) while
+[`config/tillr/watch/fast-gate-slow.toml`](../../tools/tillr-watch/rules/fast-gate-slow.toml) while
 they run before the merge. On 2026-11-25 the owner first ruled `"sounds like a good idea. do it"`
 ([`D-GR53`](#D-GR53), amending [`D-GR38`](#D-GR38) and [`D-GR39`](#D-GR39)) in answer to
 moving the `tillr-drain` integration tests out of pre-merge `go-affected` and proving them
@@ -1121,7 +1121,7 @@ The prose above explains what each is for.
 | `just done` logs | `<git-common-dir>/tillr-gate/done-logs/<head>/` | [`tools/gate/done.go`](../../tools/gate/done.go) |
 | Gate policy (and absent-file defaults) | `landing_strategy: after-merge` (default `before-merge`), `auto_revert: true` (default `false`), `lane_base: tip` (default `green`), `budget_ms: 10000` (default `10000`) | [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json), `ReadGatePolicy` in [`tools/tillr-drain/redcap/policy.go`](../../tools/tillr-drain/redcap/policy.go) |
 | Go shard parameters | `SHARD_THRESHOLD = 100`; `MAX_SHARDS = 2 * runtime.NumCPU()` (`tillr-gate shards` and `tillr-gate go-affected`) | [`tools/tillr-gate/shards`](../../tools/tillr-gate/shards), [`tools/tillr-gate/goaffected`](../../tools/tillr-gate/goaffected/) |
-| Slow-gate alert thresholds | one run over 60 s; median of 20 over 90 s | [`config/tillr/watch/fast-gate-slow.toml`](../../config/tillr/watch/fast-gate-slow.toml) |
+| Slow-gate alert thresholds | one run over 60 s; median of 20 over 90 s | [`config/tillr/watch/fast-gate-slow.toml`](../../tools/tillr-watch/rules/fast-gate-slow.toml) |
 
 ## Why it's this way
 

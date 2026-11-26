@@ -26,6 +26,8 @@ func runRule(ctx context.Context, args []string, out io.Writer) error {
 	f.SetOutput(io.Discard)
 	path := f.String("store", "", "path to the tillr state database")
 	dir := f.String("rules", "", "directory of TOML rules")
+	root := f.String("root", "", "repository root for config/tillr/watch")
+	noShipped := f.Bool("no-shipped-rules", false, "omit tillr's embedded shipped rules")
 	var by string
 	var sets []string
 	var needsArg, writes bool
@@ -57,8 +59,13 @@ func runRule(ctx context.Context, args []string, out io.Writer) error {
 	if needsArg {
 		wantArgs = 1
 	}
-	if len(operands) != wantArgs || (needsArg && operands[0] == "") || *path == "" || *dir == "" {
+	if len(operands) != wantArgs || (needsArg && operands[0] == "") || *path == "" {
 		return fmt.Errorf("invalid arguments for rule %s; see --help", command)
+	}
+	set := map[string]bool{}
+	f.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
+	if set["rules"] && *dir == "" {
+		return fmt.Errorf("--rules must not be empty")
 	}
 	var arg string
 	if needsArg {
@@ -70,7 +77,7 @@ func runRule(ctx context.Context, args []string, out io.Writer) error {
 	if command == "tune" && len(sets) == 0 {
 		return fmt.Errorf("tune requires at least one --set")
 	}
-	files, err := watch.LoadRules(*dir)
+	files, err := loadCLIRules(*dir, *root, *path, *noShipped)
 	if err != nil {
 		return err
 	}

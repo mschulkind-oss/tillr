@@ -18,7 +18,7 @@ import (
 
 func TestDrainFixerHeldNewAttemptRule(t *testing.T) {
 	const ruleID = "drain-fixer-held-new-attempt"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestDrainFixerHeldNewAttemptRule(t *testing.T) {
 	ctx := context.Background()
 	findings, err := watch.Lint(ctx, watch.LintOptions{
 		Root:      "../..",
-		RulesPath: "../../config/tillr/watch",
+		RulesPath: "rules",
 	})
 	if err != nil {
 		t.Fatal(err)

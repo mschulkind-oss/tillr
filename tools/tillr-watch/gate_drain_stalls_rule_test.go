@@ -20,7 +20,7 @@ func TestGateDrainStallsRule(t *testing.T) {
 	const (
 		ruleID      = "gate-drain-stalls"
 		verdictKind = "gate.verdict"
-		rulePath    = "../../config/tillr/watch/gate-drain-stalls.toml"
+		rulePath    = "rules/gate-drain-stalls.toml"
 	)
 	rawRule, err := os.ReadFile(rulePath)
 	if err != nil {
@@ -40,7 +40,7 @@ func TestGateDrainStallsRule(t *testing.T) {
 		}
 	}
 
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestGateDrainStallsRule(t *testing.T) {
 		lintArgs = append(lintArgs, "--policy", p)
 	}
 	var lintOut, lintErr bytes.Buffer
-	if code := run(t.Context(), lintArgs, &lintOut, &lintErr); code != 0 || lintOut.Len() != 0 || lintErr.Len() != 0 {
+	if code := run(t.Context(), lintArgs, &lintOut, &lintErr); code != 0 || lintErr.Len() != 0 {
 		t.Fatalf("tillr watch lint failed: code=%d stdout=%q stderr=%q", code, lintOut.String(), lintErr.String())
 	}
 }

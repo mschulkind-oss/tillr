@@ -268,7 +268,14 @@ func (e Evaluator) RuleResults(ctx context.Context) ([]RuleResult, error) {
 		}
 	}
 	var results []RuleResult
-	err := e.readEvaluation(ctx, e.Rules, func(_ *store.Reader, rows []RuleResult) error {
+	var charterName string
+	if e.Store != nil {
+		_ = e.Store.ReadTx(ctx, func(rd *store.Reader) error {
+			charterName = charterNameForReader(rd)
+			return nil
+		})
+	}
+	err := e.readEvaluation(ctx, e.Rules, charterName, func(_ *store.Reader, rows []RuleResult) error {
 		results = rows
 		return nil
 	})
@@ -277,9 +284,10 @@ func (e Evaluator) RuleResults(ctx context.Context) ([]RuleResult, error) {
 
 // readEvaluation reads Git before the store snapshot. The caller provides one
 // fixed set of rules for both reads and may inspect other rows in that snapshot.
-func (e Evaluator) readEvaluation(ctx context.Context, rules []Rule, visit func(*store.Reader, []RuleResult) error) error {
+func (e Evaluator) readEvaluation(ctx context.Context, rules []Rule, charterName string, visit func(*store.Reader, []RuleResult) error) error {
 	now := e.now()
-	needFixers := needsFixerCandidates(rules)
+	gitRules := rulesInCharterScope(rules, charterName)
+	needFixers := needsFixerCandidates(gitRules)
 	var cache gitCache
 	for {
 		var fixerSHAs []string
@@ -292,11 +300,11 @@ func (e Evaluator) readEvaluation(ctx context.Context, rules []Rule, visit func(
 				return err
 			}
 		}
-		git, err := readGit(ctx, e.Root, rules, &cache, e.gitCheckIO(), e.onGitExec)
+		git, err := readGit(ctx, e.Root, gitRules, &cache, e.gitCheckIO(), e.onGitExec)
 		if err != nil {
 			return err
 		}
-		ancestors, err := readFixerAncestors(ctx, e.Root, rules, git, &cache, fixerSHAs, e.gitCheckIO(), e.onGitExec)
+		ancestors, err := readFixerAncestors(ctx, e.Root, gitRules, git, &cache, fixerSHAs, e.gitCheckIO(), e.onGitExec)
 		if err != nil {
 			return err
 		}
@@ -340,7 +348,7 @@ func (e Evaluator) CheckRules(ctx context.Context) error {
 func (e Evaluator) effective(rd *store.Reader) ([]Rule, map[string]bool, error) {
 	rules, disabledOverrides, err := readEffectiveRules(rd, e.Rules)
 	if err == nil {
-		err = requireRoot(e.Root, rules)
+		err = requireRoot(e.Root, rulesInCharterScope(rules, charterNameForReader(rd)))
 	}
 	return rules, disabledOverrides, err
 }
@@ -511,24 +519,29 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 		var startHead int64
 		var rules []Rule
 		var fixerSHAs []string
+		var charterName string
 		if err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
 			var err error
 			startHead, err = rd.EventHeadSeq()
 			if err == nil {
 				rules, _, err = readRules(rd)
 			}
-			if err == nil && needsFixerCandidates(rules) {
+			if err == nil {
+				charterName = charterNameForReader(rd)
+			}
+			if err == nil && needsFixerCandidates(rulesInCharterScope(rules, charterName)) {
 				fixerSHAs, err = readFixerCandidateSHAs(rd)
 			}
 			return err
 		}); err != nil {
 			return nil, err
 		}
-		git, err := readGit(ctx, e.Root, rules, &e.cache.git, e.gitCheckIO(), e.onGitExec)
+		gitRules := rulesInCharterScope(rules, charterName)
+		git, err := readGit(ctx, e.Root, gitRules, &e.cache.git, e.gitCheckIO(), e.onGitExec)
 		if err != nil {
 			return nil, err
 		}
-		ancestors, err := readFixerAncestors(ctx, e.Root, rules, git, &e.cache.git, fixerSHAs, e.gitCheckIO(), e.onGitExec)
+		ancestors, err := readFixerAncestors(ctx, e.Root, gitRules, git, &e.cache.git, fixerSHAs, e.gitCheckIO(), e.onGitExec)
 		if err != nil {
 			return nil, err
 		}
@@ -541,7 +554,7 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 			if err != nil {
 				return nil, err
 			}
-			if !git.covers(rules) {
+			if !git.covers(rulesInCharterScope(rules, charterNameForReader(rd))) {
 				return nil, errNewGitFact
 			}
 			baselines, err := readRuleBaselines(rd)

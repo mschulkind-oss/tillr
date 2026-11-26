@@ -39,14 +39,14 @@ func TestWatchAckSingleInstanceWakeAndItemRefusal(t *testing.T) {
 	}
 
 	// Establish rule baselines before seeding facts.
-	if code, evalOut, evalErr := invoke("eval", "--once", "--rules", dir); code != 0 || evalErr != "" {
+	if code, evalOut, evalErr := invoke("eval", "--once", "--rules", dir, "--no-shipped-rules"); code != 0 || evalErr != "" {
 		t.Fatalf("init eval: code=%d out=%q err=%q", code, evalOut, evalErr)
 	}
 
 	// Open an alert for subject "alpha".
 	fact(t, s, `{"item_id":"alpha"}`)
 	fact(t, s, `{"item_id":"alpha"}`)
-	code, firstOut, firstErr := invoke("wait", "--rules", dir, "--timeout", "2s")
+	code, firstOut, firstErr := invoke("wait", "--rules", dir, "--no-shipped-rules", "--timeout", "2s")
 	if code != 0 || firstErr != "" {
 		t.Fatalf("initial wait: code=%d out=%q err=%q", code, firstOut, firstErr)
 	}
@@ -89,7 +89,7 @@ func TestWatchAckSingleInstanceWakeAndItemRefusal(t *testing.T) {
 	}
 	waitDone := make(chan waitRes, 1)
 	go func() {
-		c, o, e := invoke("wait", "--rules", dir, "--seen-through", fmt.Sprint(through1))
+		c, o, e := invoke("wait", "--rules", dir, "--no-shipped-rules", "--seen-through", fmt.Sprint(through1))
 		waitDone <- waitRes{c, o, e}
 	}()
 	awaitAttached(t, s)
@@ -130,7 +130,7 @@ func TestWatchAckSingleInstanceWakeAndItemRefusal(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir2, "nested", "refusals.toml"), []byte(shortRule), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if code, _, e2 := run(ctx, []string{"eval", "--once", "--store", s2.Path(), "--rules", dir2}, &bytes.Buffer{}, &bytes.Buffer{}), "", ""; code != 0 {
+	if code, _, e2 := run(ctx, []string{"eval", "--once", "--store", s2.Path(), "--rules", dir2, "--no-shipped-rules"}, &bytes.Buffer{}, &bytes.Buffer{}), "", ""; code != 0 {
 		t.Fatalf("s2 init eval: %d %s", code, e2)
 	}
 	past := time.Now().Add(-500 * time.Millisecond)
@@ -142,7 +142,7 @@ func TestWatchAckSingleInstanceWakeAndItemRefusal(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if code := run(ctx, []string{"eval", "--once", "--store", s2.Path(), "--rules", dir2}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
+	if code := run(ctx, []string{"eval", "--once", "--store", s2.Path(), "--rules", dir2, "--no-shipped-rules"}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
 		t.Fatal("s2 open eval failed")
 	}
 	var expID string
@@ -151,7 +151,7 @@ func TestWatchAckSingleInstanceWakeAndItemRefusal(t *testing.T) {
 		t.Fatal("s2 ack failed")
 	}
 	time.Sleep(600 * time.Millisecond)
-	if code := run(ctx, []string{"eval", "--once", "--store", s2.Path(), "--rules", dir2}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
+	if code := run(ctx, []string{"eval", "--once", "--store", s2.Path(), "--rules", dir2, "--no-shipped-rules"}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
 		t.Fatal("s2 clear eval failed")
 	}
 	var expState, expReason string

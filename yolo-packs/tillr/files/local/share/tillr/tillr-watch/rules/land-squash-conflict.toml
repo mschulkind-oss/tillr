@@ -1,0 +1,25 @@
+# The 2026-11-21 request called for notice when a squash conflict stops a
+# landing (docs/design/tillr-watch.md Section 5.4, condition 7; no single
+# incident named). Read land.landing events from the last hour, grouped by item.
+[[rule]]
+id = "land-squash-conflict"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["land.landing"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'event.result == "squash-conflict"'
+clear_when = 'event.result == "landed"'
+window = "1h"
+
+[rule.guidance]
+summary = "A squash conflict stopped landing {{subject}}."
+check = ["Read the land.landing event's conflict_paths, base_sha, head_sha, and trunk_before fields, and run tillr drain why {{subject}} to see whether a conflict repair is running or held."]
+do = ["Establish which concurrent trunk change conflicted with {{subject}} and whether the drain's conflict repair is handling it or needs an answer."]
+
+[rule.delivery]
+receiver = "foreground"

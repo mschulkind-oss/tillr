@@ -17,7 +17,7 @@ import (
 
 func TestDrainLaneRefusedRule(t *testing.T) {
 	const ruleID = "drain-lane-refused"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestDrainLaneRefusedRule(t *testing.T) {
 
 func TestDrainLaneRefusedAlertTextNamesCurrentCause(t *testing.T) {
 	const ruleID = "drain-lane-refused"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

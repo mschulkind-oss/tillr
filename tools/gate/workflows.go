@@ -22,9 +22,9 @@ var workflowExactTriggers = map[string]bool{
 var workflowPrefixTriggers = []string{
 	"config/tillr/",
 	"config/tillr/workflows/",
-	"config/tillr/watch/",
 	"tools/tillr-drain/",
 	"tools/tillr-watch/",
+	"tools/tillr-watch/rules/",
 	"tools/tillr/",
 	"tools/tillr-item/",
 	"tools/tillr-run/",

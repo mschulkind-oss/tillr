@@ -1,0 +1,30 @@
+# On 2026-11-22 a pi worker run spent over two hours retrying timed-out model
+# requests (Body Timeout Error / Request timed out) while looking alive because
+# its log kept growing. Read registered run.model-timeout events and open a
+# warning on the second timeout in the same run; clear when the run finishes.
+[[rule]]
+id = "run-model-timeout"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["run.model-timeout", "run.finish"]
+
+[rule.when]
+group_by = "run_id"
+pattern = "predicate_match"
+match = 'event.kind == "run.model-timeout" and event.count >= 2'
+clear_when = 'event.kind == "run.finish" and event.state != "paused"'
+
+[rule.guidance]
+summary = "Run {{event.run_id}} on {{event.lane_id}} hit {{event.count}} model request timeouts ({{event.error}})."
+check = [
+  "Inspect the run log (.tillr/lanes/{{event.lane_id}}/{{event.run_id}}.log) to see what request is timing out and whether pi is repeating the same oversized turn."
+]
+do = [
+  "Stop or close {{event.run_id}} if it is repeating a timed-out request with no progress, and fix the oversized request or timeout cause."
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]

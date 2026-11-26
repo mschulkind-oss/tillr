@@ -34,7 +34,7 @@ func TestTriageCLIClaimRecordWaitAndStatusRecent(t *testing.T) {
 	seedWatchItems(t, s, "item-1", "item-2")
 
 	var out, stderr bytes.Buffer
-	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 {
+	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &out, &stderr); code != 0 {
 		t.Fatalf("init eval: %d %s", code, &stderr)
 	}
 
@@ -43,7 +43,7 @@ func TestTriageCLIClaimRecordWaitAndStatusRecent(t *testing.T) {
 	fact(t, s, `{"item_id":"item-a"}`)
 	out.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 {
+	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &out, &stderr); code != 0 {
 		t.Fatalf("eval: %d %s", code, &stderr)
 	}
 
@@ -95,7 +95,7 @@ func TestTriageCLIClaimRecordWaitAndStatusRecent(t *testing.T) {
 	// wait must NOT wake on triage-settled alert (times out with exit 2).
 	out.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "10ms", "--no-notify"}, &out, &stderr); code != 2 {
+	if code := run(context.Background(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "10ms", "--no-notify"}, &out, &stderr); code != 2 {
 		t.Fatalf("expected wait to time out on triage-settled alert, got %d stdout=%q stderr=%q", code, out.String(), stderr.String())
 	}
 
@@ -111,7 +111,7 @@ func TestTriageCLIClaimRecordWaitAndStatusRecent(t *testing.T) {
 	// Check status --recent 1h (text + JSON).
 	out.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules, "--recent", "1h"}, &out, &stderr); code != 0 {
+	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--recent", "1h"}, &out, &stderr); code != 0 {
 		t.Fatalf("status --recent text: %d %s", code, &stderr)
 	}
 	if !strings.Contains(out.String(), "triage untriaged=0 triaging=0 settled=1 escalated=0") || !strings.Contains(out.String(), "triage_outcome=filed") {
@@ -120,7 +120,7 @@ func TestTriageCLIClaimRecordWaitAndStatusRecent(t *testing.T) {
 
 	out.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules, "--recent", "1h", "--json"}, &out, &stderr); code != 0 {
+	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--recent", "1h", "--json"}, &out, &stderr); code != 0 {
 		t.Fatalf("status --recent json: %d %s", code, &stderr)
 	}
 	var report struct {
@@ -139,7 +139,7 @@ func TestTriageCLIClaimRecordWaitAndStatusRecent(t *testing.T) {
 	fact(t, s, `{"item_id":"item-b"}`)
 	out.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 {
+	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &out, &stderr); code != 0 {
 		t.Fatalf("eval 2: %d %s", code, &stderr)
 	}
 	var alert2 string
@@ -168,7 +168,7 @@ func TestTriageCLIClaimRecordWaitAndStatusRecent(t *testing.T) {
 	// wait MUST wake on escalated alert with triage header leading.
 	out.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "100ms", "--no-notify"}, &out, &stderr); code != 0 {
+	if code := run(context.Background(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "100ms", "--no-notify"}, &out, &stderr); code != 0 {
 		t.Fatalf("expected wait to wake on escalated alert, got %d stdout=%q stderr=%q", code, out.String(), stderr.String())
 	}
 	waitOut := out.String()
@@ -275,7 +275,7 @@ receiver = "operator-session"
 	// Establish rule load baselines.
 	out.Reset()
 	stderr.Reset()
-	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rulesDir}, &out, &stderr); code != 0 {
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rulesDir, "--no-shipped-rules"}, &out, &stderr); code != 0 {
 		t.Fatalf("baseline eval: %d %s", code, &stderr)
 	}
 
@@ -294,7 +294,7 @@ receiver = "operator-session"
 
 	out.Reset()
 	stderr.Reset()
-	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rulesDir, "--owner", "tillr-triage", "--timeout", "100ms", "--no-notify"}, &out, &stderr); code != 0 {
+	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rulesDir, "--no-shipped-rules", "--owner", "tillr-triage", "--timeout", "100ms", "--no-notify"}, &out, &stderr); code != 0 {
 		t.Fatalf("wait tillr-triage: %d stdout=%q stderr=%q", code, out.String(), stderr.String())
 	}
 	if !strings.Contains(out.String(), "cli-triage-rule") || strings.Contains(out.String(), "cli-ops-rule") {
@@ -303,7 +303,7 @@ receiver = "operator-session"
 
 	out.Reset()
 	stderr.Reset()
-	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rulesDir, "--owner", "operator-session", "--timeout", "100ms", "--no-notify"}, &out, &stderr); code != 0 {
+	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rulesDir, "--no-shipped-rules", "--owner", "operator-session", "--timeout", "100ms", "--no-notify"}, &out, &stderr); code != 0 {
 		t.Fatalf("wait operator-session: %d stdout=%q stderr=%q", code, out.String(), stderr.String())
 	}
 	if !strings.Contains(out.String(), "cli-ops-rule") || strings.Contains(out.String(), "cli-triage-rule") {

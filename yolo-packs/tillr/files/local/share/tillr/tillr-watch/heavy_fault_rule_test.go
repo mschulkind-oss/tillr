@@ -17,7 +17,7 @@ import (
 
 func TestDrainHeavyFaultRule(t *testing.T) {
 	const ruleID = "drain-heavy-fault"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

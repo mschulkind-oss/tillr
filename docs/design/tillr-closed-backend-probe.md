@@ -17,7 +17,7 @@ vantage:
 
 # A closed backend is probed and reopened inside tillr, and only a failed probe escalates
 
-**Status:** Automatic probing (`D-BP1` to `D-BP8`) is not built, and [`OQ-BP1`](#OQ-BP1) to [`OQ-BP3`](#OQ-BP3) are open. What is built is the watch rule of `D-BP9`: [`config/tillr/watch/drain-backend-closed.toml`](../../config/tillr/watch/drain-backend-closed.toml) opens a high-severity alert as soon as a backend closes. The owner's statements in [§1](#1-the-rulings-and-the-case) (`R-BP1` to `R-BP5`) are the only owner rulings; every mechanism here is the designer's decision, and the owner may overturn any of them.
+**Status:** Automatic probing (`D-BP1` to `D-BP8`) is not built, and [`OQ-BP1`](#OQ-BP1) to [`OQ-BP3`](#OQ-BP3) are open. What is built is the watch rule of `D-BP9`: [`config/tillr/watch/drain-backend-closed.toml`](../../tools/tillr-watch/rules/drain-backend-closed.toml) opens a high-severity alert as soon as a backend closes. The owner's statements in [§1](#1-the-rulings-and-the-case) (`R-BP1` to `R-BP5`) are the only owner rulings; every mechanism here is the designer's decision, and the owner may overturn any of them.
 
 > **In short.** When an infrastructure outcome closes a backend, `tillr-drain loop` tests that same backend once with a minimal single-turn prompt inside the backend's own adapter environment. If the probe passes, the drain records it and reopens the backend without waking anyone. If it fails, or a reopened backend closes again at once, the backend stays closed on an alarm, the scrubbed failure evidence is recorded, and tillr either files one repair item or escalates.
 

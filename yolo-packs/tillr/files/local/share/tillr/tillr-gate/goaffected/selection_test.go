@@ -755,13 +755,13 @@ func TestSelectionRules(t *testing.T) {
 		t.Fatalf("selFloor drain should not be narrowed: %+v", byPkg)
 	}
 
-	// 12. Alert rule changes under config/tillr/watch/ (alone or with tools/tillr-watch/)
+	// 12. Alert rule changes under tools/tillr-watch/rules/ (alone or with tools/tillr-watch/)
 	// select tillr-watch and tillr/watch and no tillr-drain package, while every config/tillr/
 	// path read by tillr-drain tests still selects that package.
 	for _, watchChanged := range [][]string{
-		{"config/tillr/watch/fast-gate-slow.toml", "tools/tillr-watch/main_test.go"},
-		{"config/tillr/watch/new-alert-rule.toml", "tools/tillr-watch/new_alert_rule_test.go"},
-		{"config/tillr/watch/fast-gate-slow.toml"},
+		{"tools/tillr-watch/rules/fast-gate-slow.toml", "tools/tillr-watch/main_test.go"},
+		{"tools/tillr-watch/rules/new-alert-rule.toml", "tools/tillr-watch/new_alert_rule_test.go"},
+		{"tools/tillr-watch/rules/fast-gate-slow.toml"},
 	} {
 		selWatch, err := goaffected.SelectAffectedPackages(root, watchChanged, nil, rootGraph, nil)
 		if err != nil {
@@ -1509,7 +1509,7 @@ func TestCheckDeclarationsCoverSelectionInputs(t *testing.T) {
 			t.Fatalf("unexpected go-test-tillr.json metadata: %+v", tillrDecl)
 		}
 		for _, p := range []string{
-			"config/tillr/watch/gate-verdict-overdue.toml",
+			"tools/tillr-watch/rules/gate-verdict-overdue.toml",
 			"tools/tillr/watch/variables_test.go",
 		} {
 			if !covered(p, tillrDecl.Reads) {

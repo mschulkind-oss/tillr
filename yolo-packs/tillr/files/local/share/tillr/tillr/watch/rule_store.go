@@ -28,14 +28,14 @@ CREATE TABLE IF NOT EXISTS watch_rule_overrides (
 `
 )
 
-// EffectiveRule is a whole loaded rule with its effective source ("file" or "store").
+// EffectiveRule is a whole loaded rule with its effective source ("shipped", "file", or "store").
 type EffectiveRule struct {
 	Rule
 	Source string
 }
 
 // EffectiveRules returns the validated effective rules in ID order with their source.
-// A stored rule replaces the whole file rule of the same ID, even when disabled.
+// A stored rule replaces the whole file or shipped rule of the same ID, even when disabled.
 func EffectiveRules(rd *store.Reader, fileRules []Rule) ([]EffectiveRule, error) {
 	stored, err := ReadStoredRules(rd)
 	if err != nil {
@@ -43,10 +43,15 @@ func EffectiveRules(rd *store.Reader, fileRules []Rule) ([]EffectiveRule, error)
 	}
 	byID := make(map[string]EffectiveRule, len(fileRules)+len(stored))
 	for _, r := range fileRules {
-		byID[r.ID] = EffectiveRule{Rule: r, Source: "file"}
+		src := r.origin
+		if src == "" {
+			src = RuleSourceFile
+		}
+		byID[r.ID] = EffectiveRule{Rule: r, Source: src}
 	}
 	for _, r := range stored {
-		byID[r.ID] = EffectiveRule{Rule: r, Source: "store"}
+		r.origin = RuleSourceStore
+		byID[r.ID] = EffectiveRule{Rule: r, Source: RuleSourceStore}
 	}
 	result := make([]EffectiveRule, 0, len(byID))
 	for _, id := range slices.Sorted(maps.Keys(byID)) {

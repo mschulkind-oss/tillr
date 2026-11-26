@@ -38,9 +38,9 @@ func TestShippedWatchKindsMatchRegistry(t *testing.T) {
 		}
 	}
 
-	rules, err := watch.LoadRules(filepath.Join("..", "..", "config", "tillr", "watch"))
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
-		t.Fatalf("LoadRules(config/tillr/watch): %v", err)
+		t.Fatalf("LoadRules(rules): %v", err)
 	}
 	for _, r := range rules {
 		for _, k := range r.Reads.Events {

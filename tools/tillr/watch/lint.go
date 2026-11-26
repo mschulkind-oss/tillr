@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,12 +35,14 @@ const (
 // LintOptions configures a read-only, store-free static lint pass over a
 // (charter, workflows, backend policies, watch rules) configuration tuple.
 type LintOptions struct {
-	Root          string
-	CharterPath   string
-	WorkflowsPath string
-	PolicyPaths   []string
-	RulesPath     string
-	HookTimeout   time.Duration
+	Root           string
+	CharterPath    string
+	WorkflowsPath  string
+	PolicyPaths    []string
+	RulesPath      string
+	ShippedFS      fs.FS
+	NoShippedRules bool
+	HookTimeout    time.Duration
 }
 
 // LintFinding is one deterministic refusal emitted by Lint.
@@ -83,7 +86,7 @@ func (c *findingCollector) formatSource(path string) string {
 	if path == "" {
 		return "."
 	}
-	if path == "builtin:"+definition.GitLandingName {
+	if strings.HasPrefix(path, "shipped:") || path == "builtin:"+definition.GitLandingName {
 		return path
 	}
 	absPath := path
@@ -115,15 +118,34 @@ func (c *findingCollector) sorted() []LintFinding {
 	return out
 }
 
+// LintedRuleSource records one effective rule ID and its formatted source path.
+type LintedRuleSource struct {
+	ID     string
+	Source string
+}
+
+// LintReport contains the sorted findings and the effective rules evaluated by LintWithReport.
+type LintReport struct {
+	Findings []LintFinding
+	Rules    []LintedRuleSource
+}
+
 // Lint validates the four-part configuration tuple (charter, workflows,
 // backend policies, watch rules) without opening .tillr/state.sqlite or
 // mutating any file or Git state.
 func Lint(ctx context.Context, opts LintOptions) ([]LintFinding, error) {
+	report, err := LintWithReport(ctx, opts)
+	return report.Findings, err
+}
+
+// LintWithReport behaves like Lint and also returns the effective rules with
+// their attributed sources ("shipped:..." or repository file path).
+func LintWithReport(ctx context.Context, opts LintOptions) (LintReport, error) {
 	root := opts.Root
 	if root == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
-			return nil, fmt.Errorf("getwd: %w", err)
+			return LintReport{}, fmt.Errorf("getwd: %w", err)
 		}
 		root = cwd
 	}
@@ -140,7 +162,7 @@ func Lint(ctx context.Context, opts LintOptions) ([]LintFinding, error) {
 			detail = fmt.Sprintf("root %q: %v", root, err)
 		}
 		fc.add(root, CodeWatchLintInput, detail)
-		return fc.sorted(), nil
+		return LintReport{Findings: fc.sorted()}, nil
 	}
 
 	kinds := registeredRuleKinds()
@@ -154,7 +176,7 @@ func Lint(ctx context.Context, opts LintOptions) ([]LintFinding, error) {
 
 	workflows, wfDir := discoverAndLoadWorkflows(absRoot, opts.WorkflowsPath, fc)
 	policies, missingDefaultPolicy := loadAndLintPolicies(absRoot, opts.PolicyPaths, fc)
-	rules := discoverAndLoadRules(absRoot, opts.RulesPath, kinds, fc)
+	rules := discoverAndLoadRuleLayers(absRoot, opts.RulesPath, opts.ShippedFS, opts.NoShippedRules, kinds, fc)
 
 	if charter.valid {
 		lintWorkflowsWithCharter(workflows, charter, fc)
@@ -164,7 +186,27 @@ func Lint(ctx context.Context, opts LintOptions) ([]LintFinding, error) {
 	lintWorkflowsWithRules(workflows, rules, fc)
 	lintRulesWithContext(rules, charter, workflows, fc)
 
-	return fc.sorted(), nil
+	sources := make([]LintedRuleSource, 0, len(rules))
+	for _, lr := range rules {
+		if lr.rule.ID == "" {
+			continue
+		}
+		sources = append(sources, LintedRuleSource{
+			ID:     lr.rule.ID,
+			Source: fc.formatSource(lr.source),
+		})
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		if sources[i].ID != sources[j].ID {
+			return sources[i].ID < sources[j].ID
+		}
+		return sources[i].Source < sources[j].Source
+	})
+
+	return LintReport{
+		Findings: fc.sorted(),
+		Rules:    sources,
+	}, nil
 }
 
 // checkDuplicateJSONKeys verifies that raw JSON contains no duplicate object

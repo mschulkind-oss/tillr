@@ -19,7 +19,7 @@ import (
 
 func TestLandSquashConflictRule(t *testing.T) {
 	const ruleID = "land-squash-conflict"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

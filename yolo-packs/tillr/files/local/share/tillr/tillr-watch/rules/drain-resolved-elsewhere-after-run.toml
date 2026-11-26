@@ -1,0 +1,40 @@
+# Incident (2026-11-23, times ET): item-request-3a0ae4fd31 was dispatched at
+# 12:35 PM for a failure that commit 3ed0291d91 had already fixed at 8:27 AM.
+# Two worker runs ($1.31, about 4.2 million tokens) were spent before its
+# worker reported the fix was already on the base; nothing alerted.
+#
+# Alert when an item is moved to resolved-elsewhere (item.update with
+# state == "resolved-elsewhere" and items projection confirming
+# item.state == "resolved-elsewhere") after a worker run was already allocated
+# for it (run.allocate) within 24 hours. Keep the episode open on the
+# terminal item (keep_on_terminal_item = true) and attach no automatic remedy.
+
+[[rule]]
+id = "drain-resolved-elsewhere-after-run"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["run.allocate", "item.update"]
+projections = ["items"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+after = 'event.kind == "run.allocate"'
+match = 'event.kind == "item.update" and event.state == "resolved-elsewhere" and item.state == "resolved-elsewhere"'
+window = "24h"
+keep_on_terminal_item = true
+
+[rule.guidance]
+summary = "Item {{subject}} was resolved as finished elsewhere ({{event.resolves_via}}) after a worker already ran on it."
+check = [
+  "Run tillr item show --item {{subject}} --store <path> and inspect the run records for {{subject}} (including token and cost usage) to see how much work was spent before it was resolved as finished elsewhere.",
+  "Compare when the resolving change ({{event.resolves_via}}) landed against when {{subject}} was filed and dispatched.",
+]
+do = [
+  "Establish why {{subject}} was dispatched after the work was already finished elsewhere (for example a stale queue item, duplicate filing, or missing pre-dispatch check) and file or track any follow-up fix; this alert attaches no automatic remedy.",
+]
+
+[rule.delivery]
+receiver = "foreground"

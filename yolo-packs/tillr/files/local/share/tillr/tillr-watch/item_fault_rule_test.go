@@ -20,7 +20,7 @@ import (
 )
 
 func TestDrainItemFaultRule(t *testing.T) {
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestDrainItemFaultRule(t *testing.T) {
 
 func TestDrainRepeatedVerifierRefusalsRule(t *testing.T) {
 	const ruleID = "drain-repeated-verifier-refusals"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestDrainRepeatedVerifierRefusalsRule(t *testing.T) {
 
 func TestTrunkProofLagRule(t *testing.T) {
 	const ruleID = "trunk-proof-lag"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestTrunkProofLagRule(t *testing.T) {
 }
 
 func TestDrainRevertRules(t *testing.T) {
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

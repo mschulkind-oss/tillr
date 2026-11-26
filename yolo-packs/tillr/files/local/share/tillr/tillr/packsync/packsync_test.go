@@ -246,3 +246,27 @@ func TestCaseWorkflows(t *testing.T) {
 		t.Fatalf("CaseWorkflows after sync failed: %v", err)
 	}
 }
+
+func TestLaunchersHashTomlAndJSON(t *testing.T) {
+	root := findRepoRoot()
+	matches, err := filepath.Glob(filepath.Join(root, "yolo-packs", "tillr", "programs", "*", "run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("expected launcher scripts under yolo-packs/tillr/programs/*/run")
+	}
+	for _, path := range matches {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(raw)
+		if !strings.Contains(text, "*.go | *.toml | *.json | go.mod | go.sum)") {
+			t.Fatalf("%s: expected *.toml and *.json in launcher input patterns", path)
+		}
+		if strings.Count(text, "*.go | *.toml | *.json | go.mod | go.sum)") != 2 {
+			t.Fatalf("%s: expected both newer() and sources() to include *.toml and *.json", path)
+		}
+	}
+}

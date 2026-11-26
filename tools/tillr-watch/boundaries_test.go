@@ -43,7 +43,7 @@ receiver = "foreground"
 `
 	seedStatusOverride(t, s, "lag", lag)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"status", "--store", s.Path(), "--rules", dir}, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "--root") {
+	if code := run(t.Context(), []string{"status", "--store", s.Path(), "--rules", dir, "--no-shipped-rules"}, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "--root") {
 		t.Fatalf("missing root: %d, stdout=%s stderr=%s", code, &stdout, &stderr)
 	}
 	git := func(root string, args ...string) {
@@ -60,7 +60,7 @@ receiver = "foreground"
 	}
 	git(root, "update-ref", "refs/tillr/green", "HEAD")
 	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
-	args := []string{"--store", s.Path(), "--rules", dir, "--root", root}
+	args := []string{"--store", s.Path(), "--rules", dir, "--no-shipped-rules", "--root", root}
 	stdout.Reset()
 	stderr.Reset()
 	if code := run(t.Context(), append([]string{"status"}, args...), &stdout, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "rule lag skipped=0\n") || strings.Contains(stdout.String(), "alert ") {
@@ -73,12 +73,12 @@ func TestWatchStatusCheckpointedWALLeavesStoreUntouched(t *testing.T) {
 	s, rules := fixture(t, false)
 	seed := s.Path()
 	var stderr bytes.Buffer
-	if code := run(t.Context(), []string{"eval", "--once", "--store", seed, "--rules", rules}, &bytes.Buffer{}, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"eval", "--once", "--store", seed, "--rules", rules, "--no-shipped-rules"}, &bytes.Buffer{}, &stderr); code != 0 {
 		t.Fatalf("init eval: exit %d: %s", code, &stderr)
 	}
 	fact(t, s, `{"item_id":"item-a"}`)
 	fact(t, s, `{"item_id":"item-a"}`)
-	if code := run(t.Context(), []string{"eval", "--once", "--store", seed, "--rules", rules}, &bytes.Buffer{}, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"eval", "--once", "--store", seed, "--rules", rules, "--no-shipped-rules"}, &bytes.Buffer{}, &stderr); code != 0 {
 		t.Fatalf("seed eval: exit %d: %s", code, &stderr)
 	}
 	seedStatusOverride(t, s, "refusals", testRule)
@@ -109,7 +109,7 @@ func TestWatchStatusCheckpointedWALLeavesStoreUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if code := run(t.Context(), []string{"status", "--json", "--rules", rules, "--store", path}, &stdout, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"subject":"item-a"`) {
+	if code := run(t.Context(), []string{"status", "--json", "--rules", rules, "--no-shipped-rules", "--store", path}, &stdout, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"subject":"item-a"`) {
 		t.Fatalf("status: exit %d, stdout=%s stderr=%s", code, &stdout, &stderr)
 	}
 	after, err := os.ReadFile(path)
@@ -161,7 +161,7 @@ func TestWatchStatusReadsCommittedLiveWAL(t *testing.T) {
 		return b
 	}
 	var stdout, stderr bytes.Buffer
-	common := []string{"--store", path, "--rules", rules}
+	common := []string{"--store", path, "--rules", rules, "--no-shipped-rules"}
 	if code := run(t.Context(), append([]string{"eval", "--once"}, common...), &stdout, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("init eval: exit %d, stdout=%s stderr=%s", code, &stdout, &stderr)
 	}
@@ -193,7 +193,7 @@ func TestWatchStatusReadsCommittedLiveWAL(t *testing.T) {
 		t.Setenv("TMPDIR", tmp)
 		stdout.Reset()
 		stderr.Reset()
-		if code := run(t.Context(), []string{"status", "--json", "--store", path, "--rules", rules}, &stdout, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"subject":"item-a"`) {
+		if code := run(t.Context(), []string{"status", "--json", "--store", path, "--rules", rules, "--no-shipped-rules"}, &stdout, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"subject":"item-a"`) {
 			t.Errorf("status missed the committed WAL alert: exit %d, stdout=%s stderr=%s", code, &stdout, &stderr)
 		}
 		entries, err := os.ReadDir(filepath.Dir(path))

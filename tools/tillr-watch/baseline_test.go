@@ -30,7 +30,7 @@ func TestWatchCLILoadBaselineSuppressesPreloadBurstAndAlertsOnPostLoad(t *testin
 		if err := os.MkdirAll(rulesDir, 0700); err != nil {
 			t.Fatal(err)
 		}
-		ruleSrc, err := os.ReadFile("../../config/tillr/watch/drain-repeated-verifier-refusals.toml")
+		ruleSrc, err := os.ReadFile("rules/drain-repeated-verifier-refusals.toml")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +61,7 @@ func TestWatchCLILoadBaselineSuppressesPreloadBurstAndAlertsOnPostLoad(t *testin
 			}
 		}
 
-		common := []string{"--store", s.Path(), "--rules", rulesDir}
+		common := []string{"--store", s.Path(), "--rules", rulesDir, "--no-shipped-rules"}
 		var out, stderr bytes.Buffer
 		if code := run(ctx, append([]string{"eval", "--once"}, common...), &out, &stderr); code != 0 || stderr.Len() != 0 {
 			t.Fatalf("first eval --once: code=%d out=%q stderr=%q", code, &out, &stderr)
@@ -134,7 +134,7 @@ func TestWatchCLILoadBaselineSuppressesPreloadBurstAndAlertsOnPostLoad(t *testin
 		fact(t, s, `{"item_id":"preload-a"}`)
 		fact(t, s, `{"item_id":"preload-b"}`)
 
-		common := []string{"--store", s.Path(), "--rules", rules}
+		common := []string{"--store", s.Path(), "--rules", rules, "--no-shipped-rules"}
 		var out, stderr bytes.Buffer
 		if code := run(ctx, append([]string{"wait", "--timeout", "30ms"}, common...), &out, &stderr); code != 2 || stderr.Len() != 0 || strings.Contains(out.String(), "TILLR_WATCH_NOTICE") {
 			t.Fatalf("first wait over pre-load history should be quiet: code=%d out=%q stderr=%q", code, &out, &stderr)
@@ -154,7 +154,7 @@ func TestWatchCLILoadBaselineSuppressesPreloadBurstAndAlertsOnPostLoad(t *testin
 		if err := os.WriteFile(filepath.Join(rules, "nested", "refusals.toml"), []byte(rule3), 0600); err != nil {
 			t.Fatal(err)
 		}
-		common := []string{"--store", s.Path(), "--rules", rules}
+		common := []string{"--store", s.Path(), "--rules", rules, "--no-shipped-rules"}
 		var out, stderr bytes.Buffer
 		if code := run(ctx, append([]string{"eval", "--once"}, common...), &out, &stderr); code != 0 || stderr.Len() != 0 {
 			t.Fatalf("init eval: code=%d out=%q stderr=%q", code, &out, &stderr)
@@ -222,7 +222,7 @@ func TestWatchCLILoadBaselineSuppressesPreloadBurstAndAlertsOnPostLoad(t *testin
 		var stderr bytes.Buffer
 		go func() {
 			defer close(done)
-			done <- runWithTicks(waitCtx, []string{"wait", "--store", s.Path(), "--rules", rules, "--follow"}, output, &stderr, ticks)
+			done <- runWithTicks(waitCtx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--follow"}, output, &stderr, ticks)
 		}()
 		defer func() { cancel(); <-done }()
 

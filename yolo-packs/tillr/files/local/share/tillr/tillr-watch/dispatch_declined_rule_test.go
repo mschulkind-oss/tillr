@@ -17,7 +17,7 @@ import (
 
 func TestDrainDispatchDeclinedRule(t *testing.T) {
 	const ruleID = "drain-dispatch-declined"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

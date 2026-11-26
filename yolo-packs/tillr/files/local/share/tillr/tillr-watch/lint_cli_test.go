@@ -83,7 +83,7 @@ func TestWatchLintPositionalOrderAndCwdDefault(t *testing.T) {
 			}
 			var stdout, stderr bytes.Buffer
 			code := run(t.Context(), tc.args, &stdout, &stderr)
-			if code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+			if code != 0 || !strings.Contains(stdout.String(), "source=shipped:rules/") || stderr.Len() != 0 {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 		})
@@ -103,7 +103,7 @@ func TestWatchLintRealRepo(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := run(t.Context(), args, &stdout, &stderr)
-	if code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+	if code != 0 || !strings.Contains(stdout.String(), "rule drain-loop-fault source=shipped:rules/drain-loop-fault.toml") || stderr.Len() != 0 {
 		t.Fatalf("real repo lint failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
 }
@@ -124,7 +124,7 @@ func TestWatchLintRecordedVerdictExample(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := run(t.Context(), []string{"lint", dst}, &stdout, &stderr)
-	if code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+	if code != 0 || !strings.Contains(stdout.String(), "rule drain-loop-fault source=shipped:rules/drain-loop-fault.toml") || stderr.Len() != 0 {
 		t.Fatalf("recorded-verdict lint failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
 }

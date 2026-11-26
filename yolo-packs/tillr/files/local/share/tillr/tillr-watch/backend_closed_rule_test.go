@@ -25,7 +25,7 @@ func TestDrainBackendClosedRule(t *testing.T) {
 		secondaryBck = "claude"
 	)
 
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

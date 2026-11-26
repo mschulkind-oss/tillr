@@ -1,0 +1,29 @@
+# On 2026-11-22, a planner wrote the delivery output as the bare JSON string
+# "repo", causing a parse refusal. Alert with the item and parse error; the
+# drain returns the error to the same planner session, so no automatic remedy
+# is attached here.
+[[rule]]
+id = "drain-plan-output-unparseable"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.refusal"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'event.step == "plan-output-unparseable"'
+window = "24h"
+
+[rule.guidance]
+summary = "Plan output for {{subject}} was refused as unparseable: {{event.detail}}."
+check = [
+  "Inspect the planner run for {{subject}} with tillr drain why {{subject}} and review the parse error: {{event.detail}}."
+]
+do = [
+  "Check whether the plan prompt wording allowed the malformed output and tighten the prompt if the error recurs."
+]
+
+[rule.delivery]
+receiver = "foreground"

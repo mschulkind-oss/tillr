@@ -79,7 +79,7 @@ func eventually(t *testing.T, check func() bool) {
 
 func TestWatchStatusProcessAttachment(t *testing.T) {
 	s, rules := fixture(t, false)
-	args := []string{"--store", s.Path(), "--rules", rules}
+	args := []string{"--store", s.Path(), "--rules", rules, "--no-shipped-rules"}
 	ctx := context.Background()
 	since := func() *int64 {
 		var ms *int64
@@ -187,7 +187,7 @@ func TestWatchWaitRefusesConflictingLock(t *testing.T) {
 	if err := syscall.FcntlFlock(f.Fd(), syscall.F_SETLK, &lock); err != nil {
 		t.Fatal(err)
 	}
-	child := startCLIChild(t, "wait", "--store", s.Path(), "--rules", rules, "--timeout", "1s")
+	child := startCLIChild(t, "wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "1s")
 	var exit *exec.ExitError
 	if err := child.wait(t); !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.Contains(child.stderr.String(), path) || child.out.Len() != 0 {
 		t.Fatalf("wait did not refuse conflicting lock: %v stdout=%q stderr=%q", err, &child.out, &child.stderr)

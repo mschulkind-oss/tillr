@@ -66,7 +66,7 @@ func TestFollowDelivery(t *testing.T) {
 	var stderr bytes.Buffer
 	go func() {
 		defer close(done)
-		done <- runWithTicks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--follow"}, output, &stderr, ticks)
+		done <- runWithTicks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--follow"}, output, &stderr, ticks)
 	}()
 	defer func() { cancel(); <-done }()
 	awaitAttached(t, s)
@@ -86,7 +86,7 @@ func TestFollowDelivery(t *testing.T) {
 	}
 	// Printing is not confirmation. A second non-follow wait repeats the bundle.
 	var out, errout bytes.Buffer
-	if code := run(context.Background(), []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "1s"}, &out, &errout); code != 0 || !strings.Contains(out.String(), "item-a has 2 refusals") {
+	if code := run(context.Background(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "1s"}, &out, &errout); code != 0 || !strings.Contains(out.String(), "item-a has 2 refusals") {
 		t.Fatalf("unconfirmed: %d %q %q", code, out.String(), errout.String())
 	}
 	out.Reset()
@@ -122,7 +122,7 @@ func TestClaudeRearmDelivery(t *testing.T) {
 	done := make(chan int, 1)
 	var stderr bytes.Buffer
 	go func() {
-		done <- run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "110m"}, out, &stderr)
+		done <- run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "110m"}, out, &stderr)
 	}()
 	awaitAttached(t, s)
 	fact(t, s, `{"item_id":"item-a"}`)
@@ -161,7 +161,7 @@ func TestFollowLaterArrivalBeforeConfirmation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ticks, output, done := make(chan time.Time), make(outputChunks, 20), make(chan int, 1)
 	go func() {
-		done <- runWithTicks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--follow"}, output, io.Discard, ticks)
+		done <- runWithTicks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--follow"}, output, io.Discard, ticks)
 	}()
 	defer func() { cancel(); <-done }()
 	awaitAttached(t, s)
@@ -197,7 +197,7 @@ func TestFollowDoesNotSpinOnOwnWALWrites(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	output, done := make(outputChunks, 10), make(chan int, 1)
 	go func() {
-		done <- runWithTicks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--follow"}, output, io.Discard, make(chan time.Time))
+		done <- runWithTicks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--follow"}, output, io.Discard, make(chan time.Time))
 	}()
 	defer func() { cancel(); <-done }()
 	awaitAttached(t, s)
@@ -232,7 +232,7 @@ func TestFailedPublicationDoesNotAdvanceShown(t *testing.T) {
 	s, rules := fixture(t, false)
 	ctx := context.Background()
 	var initStderr bytes.Buffer
-	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &initStderr); code != 0 || initStderr.Len() != 0 {
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, io.Discard, &initStderr); code != 0 || initStderr.Len() != 0 {
 		t.Fatalf("init eval: %d %q", code, initStderr.String())
 	}
 	fact(t, s, `{"item_id":"item-a"}`)
@@ -243,7 +243,7 @@ func TestFailedPublicationDoesNotAdvanceShown(t *testing.T) {
 		return 0, fmt.Errorf("output failed")
 	})
 	var stderr bytes.Buffer
-	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules}, out, &stderr); code != 1 || !strings.Contains(stderr.String(), "output failed") {
+	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, out, &stderr); code != 1 || !strings.Contains(stderr.String(), "output failed") {
 		t.Fatalf("failed output: %d %q", code, stderr.String())
 	}
 	assertSeenRefused(t, ctx, s.Path(), seq)
@@ -263,13 +263,13 @@ func TestNoticeOutputDoesNotHoldStoreWriteLock(t *testing.T) {
 			s, rules := fixture(t, false)
 			ctx, cancel := context.WithCancel(context.Background())
 			var initStderr bytes.Buffer
-			if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &initStderr); code != 0 || initStderr.Len() != 0 {
+			if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, io.Discard, &initStderr); code != 0 || initStderr.Len() != 0 {
 				t.Fatalf("init eval: %d %q", code, initStderr.String())
 			}
 			fact(t, s, `{"item_id":"item-a"}`)
 			fact(t, s, `{"item_id":"item-a"}`)
 			entered, release, done := make(chan string, 1), make(chan struct{}), make(chan int, 1)
-			args := []string{"wait", "--store", s.Path(), "--rules", rules}
+			args := []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}
 			if name == "follow" {
 				args = append(args, "--follow")
 			}
@@ -324,7 +324,7 @@ func TestNoticeOutputDoesNotHoldStoreWriteLock(t *testing.T) {
 func TestFollowRejectsTimeout(t *testing.T) {
 	s, rules := fixture(t, false)
 	var out, stderr bytes.Buffer
-	code := run(context.Background(), []string{"wait", "--store", s.Path(), "--rules", rules, "--follow", "--timeout", "20ms"}, &out, &stderr)
+	code := run(context.Background(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--follow", "--timeout", "20ms"}, &out, &stderr)
 	if code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "--follow cannot be combined with --timeout") {
 		t.Fatalf("follow with timeout: %d %q %q", code, out.String(), stderr.String())
 	}
@@ -339,7 +339,7 @@ func TestFollowEmptyRulesAttach(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int, 1)
 	go func() {
-		done <- run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--follow"}, io.Discard, io.Discard)
+		done <- run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--follow"}, io.Discard, io.Discard)
 	}()
 	awaitAttached(t, s)
 	select {

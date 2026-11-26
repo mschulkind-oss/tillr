@@ -38,7 +38,7 @@ func TestWatchItemSubjectAlertClosesWhenItemLandsOrCloses(t *testing.T) {
 		"drain-repeated-step-dispatches.toml",
 		"drain-loop-fault.toml",
 	} {
-		body, err := os.ReadFile(filepath.Join("../../config/tillr/watch", name))
+		body, err := os.ReadFile(filepath.Join("rules", name))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +89,7 @@ func TestWatchItemSubjectAlertClosesWhenItemLandsOrCloses(t *testing.T) {
 	}
 	invoke := func(args ...string) string {
 		t.Helper()
-		full := append(args, "--store", storePath, "--rules", rulesDir)
+		full := append(args, "--store", storePath, "--rules", rulesDir, "--no-shipped-rules")
 		var out, stderr bytes.Buffer
 		if code := run(ctx, full, &out, &stderr); code != 0 || stderr.Len() != 0 {
 			t.Fatalf("run(%q): code=%d stdout=%q stderr=%q", full, code, &out, &stderr)

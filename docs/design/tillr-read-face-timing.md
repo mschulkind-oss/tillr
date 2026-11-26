@@ -157,7 +157,7 @@ The producer and the rules ship separately, with a measurement window between th
    $$\text{T\_sample\_ms} = \left\lceil \frac{\max(2.0 \times \text{p95\_ms},\; 1.5 \times \text{max\_ms})}{1000} \right\rceil \times 1000$$
 
    The median over twelve samples ignores an isolated index rebuild, so `T_median_ms` tracks steady-state speed. `T_sample_ms` sits above the slowest rebuild seen, so it fires only on a step regression.
-4. **Record the numbers in the rule file.** The comment above each rule states the measurement date, the sample count, the ranges of `event_head_seq` and `wal_bytes`, the percentiles and the resulting thresholds, as [`fast-gate-slow.toml`](../../config/tillr/watch/fast-gate-slow.toml) does. No builder invents a placeholder. A face added later gets its own baseline.
+4. **Record the numbers in the rule file.** The comment above each rule states the measurement date, the sample count, the ranges of `event_head_seq` and `wal_bytes`, the percentiles and the resulting thresholds, as [`fast-gate-slow.toml`](../../tools/tillr-watch/rules/fast-gate-slow.toml) does. No builder invents a placeholder. A face added later gets its own baseline.
 
 ### 4.3 The rules (`D-RFT4`)
 

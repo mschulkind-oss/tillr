@@ -10,9 +10,9 @@
   "tier": "heavy",
   "timeout_ms": 3600000,
   "reads": [
-    "config/tillr/watch/",
     "tools/gate/checks/go-test-tillr.json",
-    "tools/tillr/"
+    "tools/tillr/",
+    "tools/tillr-watch/rules/"
   ],
   "tools": [
     "sh",

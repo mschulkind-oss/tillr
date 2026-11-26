@@ -28,7 +28,7 @@ func registerShippedWatchKinds(t *testing.T) {
 
 func TestShippedWatchRulesVariableDerivation(t *testing.T) {
 	registerShippedWatchKinds(t)
-	rules, err := LoadRules("../../../config/tillr/watch")
+	rules, err := LoadRules("../../../tools/tillr-watch/rules")
 	if err != nil {
 		t.Fatalf("LoadRules shipped: %v", err)
 	}

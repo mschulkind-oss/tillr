@@ -20,7 +20,7 @@ import (
 func TestDrainLaneKeptRule(t *testing.T) {
 	const (
 		ruleID   = "drain-lane-kept"
-		rulePath = "../../config/tillr/watch/drain-lane-kept.toml"
+		rulePath = "rules/drain-lane-kept.toml"
 	)
 
 	rawRule, err := os.ReadFile(rulePath)
@@ -41,7 +41,7 @@ func TestDrainLaneKeptRule(t *testing.T) {
 		}
 	}
 
-	allRules, err := watch.LoadRules("../../config/tillr/watch")
+	allRules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

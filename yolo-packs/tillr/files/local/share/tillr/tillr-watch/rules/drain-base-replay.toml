@@ -1,0 +1,74 @@
+# At 01:48 ET on 2026-11-23, four base replays overlapped (the oldest at 87.0m,
+# finishing at 112.8m; the others at 98.3m, 74.2m, and 35.5m) and saturated the
+# 32-core host: load average 150, 23 GB swap, and tillr drain why taking 43s.
+# Duration baseline measured read-only from .tillr/state.db on 2026-11-24 across
+# 124 post-verdict base replays in 2026-11-17..2026-11-24:
+#   all 124 replays: min=5.1s p50=40.3s p75=415.7s p90=1142.1s (19.0m)
+#     p95=2513.8s (41.9m) p99=7387.8s (123.1m) max=7497.6s (125.0m)
+#   92 non-overlapping (concurrency == 1): min=5.1s p50=19.4s p75=116.6s (1.9m)
+#     p90=741.9s (12.4m) p95=1427.5s (23.8m) max=2729.2s (45.5m; 3 > 30m at
+#     35.7m, 41.9m, 45.5m; 0 > 46m)
+#   32 overlapping (concurrency >= 2): min=5.4s p50=451.4s (7.5m)
+#     p75=1142.1s (19.0m) p90=5897.5s (98.3m) max=7497.6s (125.0m)
+# Set threshold_duration = "50m" (+4.5m / ~10% above the 45.5m non-overlapping
+# max and above the 41.9m overall p95) so solo replays stay quiet while runaway
+# replays fire, and alert immediately on drain-base-replay-overlap whenever
+# active_replays > 1.
+# Events read: drain.base-replay-started, drain.base-replay-ended.
+[[rule]]
+id = "drain-base-replay-overlap"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.base-replay-started", "drain.base-replay-ended"]
+
+[rule.when]
+group_by = "global"
+pattern = "predicate_match"
+match = 'event.kind == "drain.base-replay-started" and event.active_replays > 1'
+clear_when = 'event.active_replays <= 1'
+
+[rule.guidance]
+summary = "Multiple base replays ({{event.active_replays}}) are running at once (newest on {{event.base_sha}} for run {{event.run_id}}, item {{event.item_id}}, checks: {{event.checks}})."
+check = [
+  "Inspect active .tillr/lanes/.replay/ worktrees, running replay subprocesses, and recent drain.base-replay-started and drain.base-replay-ended events via tillr view events.",
+  "Run tillr drain why and inspect host load, memory/swap, and which failing checks triggered concurrent base replays across candidates or trunk attribution.",
+]
+do = [
+  "Establish why multiple base replays are running concurrently — such as a shared trunk failure convicting several candidate gates at once or an uncached slow check — and fix or track the root cause.",
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]
+
+[[rule]]
+id = "drain-base-replay-slow"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.base-replay-started", "drain.base-replay-ended"]
+
+[rule.when]
+group_by = ["run_id", "base_sha"]
+pattern = "duration_without_event"
+after = 'event.kind == "drain.base-replay-started"'
+match = 'event.kind == "drain.base-replay-ended"'
+threshold_duration = "50m"
+window = "24h"
+
+[rule.guidance]
+summary = "Base replay {{subject}} (item {{event.item_id}}, checks: {{event.checks}}) has been running for {{elapsed}} without finishing (limit 50m)."
+check = [
+  "Inspect the replay worktree under .tillr/lanes/.replay/ for {{event.base_sha}}, running check subprocesses, and the drain loop log to see whether a replayed check is hung or contending on CPU or swap.",
+  "Read recent drain.base-replay-started and drain.base-replay-ended events via tillr view events to check whether other base replays, candidate gates, or trunk proofs are overlapping.",
+]
+do = [
+  "Diagnose why base replay {{subject}} on {{event.base_sha}} has exceeded 50m — whether a check is hung or repeated replays are saturating the machine — and fix or track the underlying fault.",
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]

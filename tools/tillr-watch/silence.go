@@ -47,6 +47,8 @@ func runSilenceCreate(ctx context.Context, args []string, out io.Writer) error {
 	f.SetOutput(io.Discard)
 	path := f.String("store", "", "path to the tillr state database")
 	rulesDir := f.String("rules", "", "directory of TOML rules")
+	root := f.String("root", "", "repository root for config/tillr/watch")
+	noShipped := f.Bool("no-shipped-rules", false, "omit tillr's embedded shipped rules")
 	var ruleID, by, item, until, reason, cause, evidence string
 	var untilChange bool
 	vars := varFlagMap{}
@@ -90,8 +92,8 @@ func runSilenceCreate(ctx context.Context, args []string, out io.Writer) error {
 	if set["rule"] && ruleID == "" {
 		return fmt.Errorf("--rule must not be empty")
 	}
-	if set["rule"] && *rulesDir == "" {
-		return fmt.Errorf("silence --rule requires --rules")
+	if set["rules"] && *rulesDir == "" {
+		return fmt.Errorf("--rules must not be empty")
 	}
 	if set["cause"] != set["evidence"] {
 		if len(operands) == 1 {
@@ -107,8 +109,8 @@ func runSilenceCreate(ctx context.Context, args []string, out io.Writer) error {
 	}
 
 	var rules []watch.Rule
-	if *rulesDir != "" {
-		rules, err = watch.LoadRules(*rulesDir)
+	if set["rule"] || *rulesDir != "" {
+		rules, err = loadCLIRules(*rulesDir, *root, *path, *noShipped)
 		if err != nil {
 			return err
 		}

@@ -327,7 +327,7 @@ Runtime rules:
 ### 5.1 Declarative rule schema ([D-TW4](#D-TW4), [OQ-TW5](#OQ-TW5))
 
 A rule is data. It contains no code and names no command to run. Today the loader walks
-[`config/tillr/watch`](../../config/tillr/watch) for `.toml` files; under
+[`config/tillr/watch`](../../tools/tillr-watch/rules) for `.toml` files; under
 [Section 4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87)
 ([D-TW84](#D-TW84) to [D-TW86](#D-TW86), not yet built) it layers `<root>/config/tillr/watch` over
 `tillr`'s embedded `tools/tillr-watch/rules/*.toml`. A file may hold more than one rule. A row in
@@ -405,7 +405,7 @@ shipped rule that covers a condition, where one exists, is named beside it.
 
 ### 5.3 Which rules belong to `tillr` and which stay with a repository ([D-TW83](#D-TW83))
 
-[`config/tillr/watch`](../../config/tillr/watch) currently holds 36 rules in 33 `.toml` files, each
+[`config/tillr/watch`](../../tools/tillr-watch/rules) currently holds 36 rules in 33 `.toml` files, each
 with a loader-and-evaluation test in [`tools/tillr-watch`](../../tools/tillr-watch)
 ([D-TW42](#D-TW42)). All are `warning` except `drain-backend-closed`, which is `high`. Three files
 carry two rules each (`drain-revert.toml`: `drain-landing-reverted` and
@@ -427,7 +427,7 @@ Under the designer's classification ([D-TW83](#D-TW83), not yet built; the owner
   `gate-verdict-overdue`, `gate-drain-stalls`, `fast-gate-run-slow`, `fast-gate-median-slow`) that
   a consumer tunes with `[[override]]` ([D-TW85](#D-TW85)).
 - **1 file (1 rule) describes one repository's own content and stays in that repository's
-  `config/tillr/watch/`.** [`drain-pi-build-stale.toml`](../../config/tillr/watch/drain-pi-build-stale.toml)
+  `config/tillr/watch/`.** `drain-pi-build-stale.toml`
   (`drain-pi-build-stale`) watches `drain.pi-build-stale` and `drain.pi-build-current` and directs
   the operator to `refs/heads/patch/pi`, `pi-builds/current.json` and `bin/pi-forks build-pi` —
   artifacts of the consumer repository that maintains the `pi` patch-series fork
@@ -663,7 +663,7 @@ together without running `tillr drain stop` or `endSession`. On the next session
 sees an earlier `drain.build-started` for `role == "drain"`, no `TILLR_RESTART_REQUEST`, and no
 newer `drain.stop-requested` (landed in commit `7afe7a37`), so it appends `drain.build-started`
 with `restart_request`, `stop_request` and `initial` all absent — matching
-[`config/tillr/watch/drain-unrequested-start.toml`](../../config/tillr/watch/drain-unrequested-start.toml).
+[`config/tillr/watch/drain-unrequested-start.toml`](../../tools/tillr-watch/rules/drain-unrequested-start.toml).
 
 #### Who leaves the record, and what was set aside *(designer's decisions)*
 
@@ -734,7 +734,7 @@ with `restart_request`, `stop_request` and `initial` all absent — matching
 
 #### Watch-rule predicate and guidance *(designer's decision)*
 
-[`config/tillr/watch/drain-unrequested-start.toml`](../../config/tillr/watch/drain-unrequested-start.toml)
+[`config/tillr/watch/drain-unrequested-start.toml`](../../tools/tillr-watch/rules/drain-unrequested-start.toml)
 updates its `match` expression to:
 
 ```toml
@@ -764,7 +764,7 @@ was still live.
    `stop == "fault"` exits, and live foreign-loop collisions unrequested; test all six cases in
    `restart_build_fact_test.go`.
 2. **Slice 2 — `drain-unrequested-start` rule predicate and guidance**
-   ([`config/tillr/watch/drain-unrequested-start.toml`](../../config/tillr/watch/drain-unrequested-start.toml),
+   ([`config/tillr/watch/drain-unrequested-start.toml`](../../tools/tillr-watch/rules/drain-unrequested-start.toml),
    [`tools/tillr-watch/drain_unrequested_start_rule_test.go`](../../tools/tillr-watch/drain_unrequested_start_rule_test.go);
    follows Slice 1): add `and not (event.session_relaunch == true)` to `match`, update
    `guidance.check` without calling any start `"expected"` ([D-TW73](#D-TW73)), and add the
@@ -886,8 +886,8 @@ build split below is the designer's decision answering that operator request —
 `drain-run-scratch-process-live` uses the landed `predicate_match` pattern in
 [`tools/tillr/watch/rules.go`](../../tools/tillr/watch/rules.go) with `match`, `clear_when` and no
 `window` — holding until cleared like
-[`drain-lane-refused.toml`](../../config/tillr/watch/drain-lane-refused.toml) and
-[`run-model-timeout.toml`](../../config/tillr/watch/run-model-timeout.toml), with zero changes to
+[`drain-lane-refused.toml`](../../tools/tillr-watch/rules/drain-lane-refused.toml) and
+[`run-model-timeout.toml`](../../tools/tillr-watch/rules/run-model-timeout.toml), with zero changes to
 the rule language or evaluator:
 
 ```toml
@@ -937,7 +937,7 @@ also_notify = ["subscribers"]
   `process_keys` reopens a `silence --until-change` episode if the surviving `(pid, start_time)`
   set changes ([D-TW32](#D-TW32)). Guidance obeys [D-TW2](#D-TW2) and [D-TW73](#D-TW73).
 - **Rejected: `consecutive_count` with `for_each = "processes"` and a rolling `window`.** A rolling
-  window (as in [`drain-process-cpu-high.toml`](../../config/tillr/watch/drain-process-cpu-high.toml))
+  window (as in [`drain-process-cpu-high.toml`](../../tools/tillr-watch/rules/drain-process-cpu-high.toml))
   would require rewriting store events every minute for the lifetime of a leak, would resolve as
   `condition-cleared` if the drain stopped longer than `window` while the leaked process remained
   alive, and would open multiple episodes for one leaked process tree.
@@ -1263,12 +1263,12 @@ code was not read for that row.
 | <a id="D-TW80"></a>**D-TW80** | A projection-only `predicate_match` for a fixer still queued under a green proof. | 2026-11-23 | [§5.17](#517-trunk-fixer-still-queued-after-a-green-proof-passed-its-checks-d-tw80) | no |
 | <a id="D-TW81"></a>**D-TW81** | Per-process CPU samples and a `for_each` rule over them. | 2026-11-24 | [§5.18](#518-sustained-cpu-usage-over-half-a-core-in-tillr-watch-wait-or-tillr-view-serve-d-tw81) | partly: event only |
 | <a id="D-TW82"></a>**D-TW82** | Designer (answering a 2026-11-24 consumer-repository operator request; not an owner ruling): `tillr-drain` records `session_id`, `loop_owner` and `.present` lease before `publishDrainBuild`, sets `session_relaunch` and `prior_domain` on `drain.build-started` when a dead prior foreign process domain ended without `stop == "fault"` (with pre-upgrade `drain_sessions` stale-heartbeat fallback), and `drain-unrequested-start` adds `not (event.session_relaunch == true)`. | 2026-11-25 | [§5.19](#519-session-relaunch-provenance-on-drain-unrequested-start-d-tw82) | no |
-| <a id="D-TW83"></a>**D-TW83** | Designer (no owner ruling on mechanism; owner may overturn): of the 33 `.toml` files (36 rules) in `config/tillr/watch/`, 32 files (35 rules) watch `tillr`'s own behavior and ship with `tillr` (`34` `core`, plus `trunk-proof-lag` moved to `charter:git-landing`); `drain-pi-build-stale.toml` watches repository-specific `pi`-fork artifacts and stays only in that repository's `config/tillr/watch/`. | 2026-11-25 | [§5.3](#53-which-rules-belong-to-tillr-and-which-stay-with-a-repository-d-tw83) | no |
-| <a id="D-TW84"></a>**D-TW84** | Designer (no owner ruling on mechanism; owner may overturn): canonical shipped rules live in `tools/tillr-watch/rules/*.toml`, mirrored by `just pack-sync` into `yolo-packs/tillr/files/local/share/tillr/tillr-watch/rules/*.toml` and embedded via `//go:embed`, with `*.toml` and `*.json` added to pack launcher input hashing. | 2026-11-25 | [§4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87) | no |
-| <a id="D-TW85"></a>**D-TW85** | Designer (no owner ruling on mechanism; owner may overturn): a consumer's optional `<root>/config/tillr/watch/*.toml` adds rules via `[[rule]]`, patches leaf keys of shipped rules via `[[override]]`, or replaces a shipped rule in full via `[[rule]]` with the same `id`; duplicate `id`s within the repository layer or `[[override]]` on a non-shipped `id` are refused. | 2026-11-25 | [§4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87) | no |
-| <a id="D-TW86"></a>**D-TW86** | Designer (no owner ruling on mechanism; owner may overturn): runtime precedence is `shipped` (`source=shipped`) < repository files (`source=file`) < `watch_rule_overrides` (`source=store`); `--rules` becomes optional (inferring `<root>` from `--root` or `<root>/.tillr/<file>`), explicit `--rules` still layers over shipped rules unless `--no-shipped-rules` is given, and charter scope is checked before requiring `--root` or reading `git_refs:`. | 2026-11-25 | [§4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87) | no |
-| <a id="D-TW87"></a>**D-TW87** | Designer (no owner ruling on mechanism; owner may overturn): `tillr watch lint` validates shipped rules (unless `--no-shipped-rules`), validates repository `[[rule]]` and `[[override]]` files, merges by `id` attributing overridden entries to the repository file, and runs workflow and charter cross-checks over the merged set. | 2026-11-25 | [§7.2](#72-tillr-watch-lint-checking-a-workflows-whole-configuration-before-it-runs-d-tw10) | no |
-| <a id="D-TW88"></a>**D-TW88** | Designer (no owner ruling on mechanism; owner may overturn): land the shipped-and-repository rule split in three slices — library layering and lint merge, embedded rules and pack launcher stamp, then duplicate removal and cross-reference updates — so consumer repositories have no flag day. | 2026-11-25 | [§10](#10-build-slices-for-shipped-and-repository-watch-rules) | no |
+| <a id="D-TW83"></a>**D-TW83** | Designer (no owner ruling on mechanism; owner may overturn): of the 33 `.toml` files (36 rules) in `config/tillr/watch/`, 32 files (35 rules) watch `tillr`'s own behavior and ship with `tillr` (`34` `core`, plus `trunk-proof-lag` moved to `charter:git-landing`); `drain-pi-build-stale.toml` watches repository-specific `pi`-fork artifacts and stays only in that repository's `config/tillr/watch/`. | 2026-11-25 | [§5.3](#53-which-rules-belong-to-tillr-and-which-stay-with-a-repository-d-tw83) | yes |
+| <a id="D-TW84"></a>**D-TW84** | Designer (no owner ruling on mechanism; owner may overturn): canonical shipped rules live in `tools/tillr-watch/rules/*.toml`, mirrored by `just pack-sync` into `yolo-packs/tillr/files/local/share/tillr/tillr-watch/rules/*.toml` and embedded via `//go:embed`, with `*.toml` and `*.json` added to pack launcher input hashing. | 2026-11-25 | [§4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87) | yes |
+| <a id="D-TW85"></a>**D-TW85** | Designer (no owner ruling on mechanism; owner may overturn): a consumer's optional `<root>/config/tillr/watch/*.toml` adds rules via `[[rule]]`, patches leaf keys of shipped rules via `[[override]]`, or replaces a shipped rule in full via `[[rule]]` with the same `id`; duplicate `id`s within the repository layer or `[[override]]` on a non-shipped `id` are refused. | 2026-11-25 | [§4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87) | yes |
+| <a id="D-TW86"></a>**D-TW86** | Designer (no owner ruling on mechanism; owner may overturn): runtime precedence is `shipped` (`source=shipped`) < repository files (`source=file`) < `watch_rule_overrides` (`source=store`); `--rules` becomes optional (inferring `<root>` from `--root` or `<root>/.tillr/<file>`), explicit `--rules` still layers over shipped rules unless `--no-shipped-rules` is given, and charter scope is checked before requiring `--root` or reading `git_refs:`. | 2026-11-25 | [§4.3](#43-shipped-rules-pack-delivery-and-repository-overrides-d-tw83-to-d-tw87) | yes |
+| <a id="D-TW87"></a>**D-TW87** | Designer (no owner ruling on mechanism; owner may overturn): `tillr watch lint` validates shipped rules (unless `--no-shipped-rules`), validates repository `[[rule]]` and `[[override]]` files, merges by `id` attributing overridden entries to the repository file, and runs workflow and charter cross-checks over the merged set. | 2026-11-25 | [§7.2](#72-tillr-watch-lint-checking-a-workflows-whole-configuration-before-it-runs-d-tw10) | yes |
+| <a id="D-TW88"></a>**D-TW88** | Designer (no owner ruling on mechanism; owner may overturn): land the shipped-and-repository rule split in three slices — library layering and lint merge, embedded rules and pack launcher stamp, then duplicate removal and cross-reference updates — so consumer repositories have no flag day. | 2026-11-25 | [§10](#10-build-slices-for-shipped-and-repository-watch-rules) | yes |
 | <a id="D-TW89"></a>**D-TW89** | Designer (answering a 2026-11-24 operator request; not an owner ruling, and the owner may overturn it): `tillr-drain` records state-change `drain.run-scratch-process` events (`session_id`, `run_id`, `item_id`, `lane_id`, `scratch_dir`, `live_count`, `process_keys`, `process_summary`, `processes`) from 1-minute `/proc` scans for live non-zombie processes naming an ended run's scratch directory (excluding live runs on `lanes`, `read_only_runs`, in-flight `Loop` runs and `/proc/<pid>/environ`), and `drain-run-scratch-process-live` uses unwindowed `predicate_match` grouped by `run_id` (`match = 'event.live_count > 0'`, `clear_when = 'event.live_count == 0'`, `fingerprint = ["process_keys"]`), built in two follow-up items (the event, then the rule). | 2026-11-25 | [§5.20](#520-process-left-alive-under-an-ended-runs-scratch-directory-d-tw89) | no |
 
 ## 10. Build Slices for Shipped and Repository Watch Rules

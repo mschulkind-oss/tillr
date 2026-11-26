@@ -21,7 +21,7 @@ func TestRunModelTimeoutRule(t *testing.T) {
 		timeoutKind = "run.model-timeout"
 		finishKind  = "run.finish"
 	)
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

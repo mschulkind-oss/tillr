@@ -1,0 +1,33 @@
+# On 2026-11-23 go-test-shards-test failed then passed on the same tree twice
+# within 25 minutes (09:20 and 09:45 ET), and was noticed only because the
+# second failure filed a trunk fixer. Alert when the same tree_sha receives
+# opposing fail and pass gate.verdict outcomes within 24 hours; identical
+# repeated verdicts (fail -> fail, pass -> pass) and pass-inherited promotions
+# stay quiet. No automatic remedy is attached.
+[[rule]]
+id = "gate-fail-then-pass"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["gate.verdict"]
+
+[rule.when]
+group_by = "tree_sha"
+pattern = "alternating_pair"
+field = "result"
+pairs = [["fail", "pass"]]
+threshold = 2
+window = "24h"
+
+[rule.guidance]
+summary = "Gate tree {{subject}} flipped between {{pair_a}} and {{pair_b}} ({{count}} verdicts over {{elapsed}}; latest run {{event.object_id}})."
+check = [
+  "Compare the failing and passing gate.verdict.json records and check logs under .tillr/loop/ for tree {{subject}} (latest run {{event.object_id}}) to identify which check changed outcome on the same tree."
+]
+do = [
+  "File or link a fix for the non-deterministic gate check and record the investigation outcome; this alert attaches no automatic remedy."
+]
+
+[rule.delivery]
+receiver = "foreground"

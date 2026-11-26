@@ -104,7 +104,7 @@ func quietToFiring(t *testing.T, useSymlink bool) {
 	} else {
 		t.Chdir(filepath.Dir(s.Path()))
 	}
-	args := []string{"wait", "--store", storePath, "--rules", rules}
+	args := []string{"wait", "--store", storePath, "--rules", rules, "--no-shipped-rules"}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	type result struct {
@@ -117,7 +117,7 @@ func quietToFiring(t *testing.T, useSymlink bool) {
 		return result{code, out.String(), stderr.String()}
 	}
 	invoke := func(args ...string) result { return invokeWith(ctx, args...) }
-	if initEval := invoke("eval", "--once", "--store", storePath, "--rules", rules); initEval.code != 0 || initEval.err != "" {
+	if initEval := invoke("eval", "--once", "--store", storePath, "--rules", rules, "--no-shipped-rules"); initEval.code != 0 || initEval.err != "" {
 		t.Fatalf("init eval: %+v", initEval)
 	}
 	fact(t, s, `{"item_id":"item-a"}`)
@@ -171,7 +171,7 @@ func quietToFiring(t *testing.T, useSymlink bool) {
 		if bad := invoke("seen", "--store", s.Path(), "--through", fmt.Sprint(through+1)); bad.code != 1 {
 			t.Fatalf("unshown cursor accepted: %+v", bad)
 		}
-		quiet := invoke("wait", "--store", s.Path(), "--rules", rules, "--timeout", "30ms", "--seen-through", fmt.Sprint(through))
+		quiet := invoke("wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "30ms", "--seen-through", fmt.Sprint(through))
 		if quiet.code != 2 || strings.Contains(quiet.out, "TILLR_WATCH_NOTICE") {
 			t.Fatalf("confirmed wait: %+v", quiet)
 		}
@@ -197,7 +197,7 @@ func TestWatchStatusReadOnly(t *testing.T) {
 	fact(t, s, `{"item_id":"item-a"}`)
 	fact(t, s, `{"item_id":"item-a"}`)
 	var out, stderr bytes.Buffer
-	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || out.String() != "summary unsettled=0 (uninvestigated=0 investigating=0 investigated=0) settled=0 active_silences=0\ntriage untriaged=0 triaging=0 settled=0 escalated=0\nrule refusals skipped=0\n" || stderr.Len() != 0 {
+	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &out, &stderr); code != 0 || out.String() != "summary unsettled=0 (uninvestigated=0 investigating=0 investigated=0) settled=0 active_silences=0\ntriage untriaged=0 triaging=0 settled=0 escalated=0\nrule refusals skipped=0\n" || stderr.Len() != 0 {
 		t.Fatalf("status before load: %d %q %q", code, &out, &stderr)
 	}
 	// The rule is not loaded yet, so status reports skipped=0 and creates no tables.
@@ -205,7 +205,7 @@ func TestWatchStatusReadOnly(t *testing.T) {
 		t.Fatalf("event head %d: %v", n, err)
 	}
 	checkTables(0)
-	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 || stderr.Len() != 0 {
+	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, io.Discard, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("first eval: %d %q", code, &stderr)
 	}
 	checkTables(3)
@@ -217,7 +217,7 @@ func TestWatchStatusReadOnly(t *testing.T) {
 	fact(t, s, `{"item_id":"item-a"}`)
 	out.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || out.String() != "summary unsettled=0 (uninvestigated=0 investigating=0 investigated=0) settled=0 active_silences=0\ntriage untriaged=0 triaging=0 settled=0 escalated=0\nrule refusals skipped=1\n" || stderr.Len() != 0 {
+	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &out, &stderr); code != 0 || out.String() != "summary unsettled=0 (uninvestigated=0 investigating=0 investigated=0) settled=0 active_silences=0\ntriage untriaged=0 triaging=0 settled=0 escalated=0\nrule refusals skipped=1\n" || stderr.Len() != 0 {
 		t.Fatalf("status after load: %d %q %q", code, &out, &stderr)
 	}
 	// The rule would fire on post-load facts, so running eval instead of the
@@ -225,7 +225,7 @@ func TestWatchStatusReadOnly(t *testing.T) {
 	if n, err := s.EventHeadSeq(); err != nil || n != 6 {
 		t.Fatalf("event head %d: %v", n, err)
 	}
-	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 || stderr.String() != "tillr watch: rule refusals skipped 1 events: group_by item_id missing or not a string\n" {
+	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, io.Discard, &stderr); code != 0 || stderr.String() != "tillr watch: rule refusals skipped 1 events: group_by item_id missing or not a string\n" {
 		t.Fatalf("eval: %d %q", code, &stderr)
 	}
 	if n, err := s.EventHeadSeq(); err != nil || n != 7 {
@@ -249,7 +249,7 @@ func TestWatchDisabledRuleDiagnostics(t *testing.T) {
 		{[]string{"wait", "--timeout", "20ms"}, 2},
 	} {
 		t.Run(tc.args[0], func(t *testing.T) {
-			args := append(tc.args, "--store", s.Path(), "--rules", rules)
+			args := append(tc.args, "--store", s.Path(), "--rules", rules, "--no-shipped-rules")
 			var out, stderr bytes.Buffer
 			code := run(context.Background(), args, &out, &stderr)
 			if tc.args[0] == "status" && strings.Contains(out.String(), "rule ") {
@@ -266,7 +266,7 @@ func TestWatchEvalAndWaitUseEffectiveRules(t *testing.T) {
 	s, rules := fixture(t, false)
 	seedStatusOverride(t, s, "refusals", strings.Replace(testRule, "[rule.when]", "projections=['git_refs:refs/heads/missing']\n[rule.when]", 1))
 	root := t.TempDir() // Not a repository: the supplied root makes this unreadable, not a refusal.
-	common := []string{"--store", s.Path(), "--rules", rules}
+	common := []string{"--store", s.Path(), "--rules", rules, "--no-shipped-rules"}
 	var out, stderr bytes.Buffer
 	if code := run(t.Context(), append([]string{"eval"}, common...), &out, &stderr); code != 1 || !strings.Contains(stderr.String(), "invalid arguments") {
 		t.Fatalf("eval without --once: exit %d, stderr %q", code, &stderr)
@@ -298,7 +298,7 @@ func TestWatchEvalAndWaitUseEffectiveRules(t *testing.T) {
 
 func TestWatchWaitKeepsFileReceiverForNotices(t *testing.T) {
 	s, rules := fixture(t, false)
-	common := []string{"--store", s.Path(), "--rules", rules}
+	common := []string{"--store", s.Path(), "--rules", rules, "--no-shipped-rules"}
 	var out, stderr bytes.Buffer
 	if code := run(t.Context(), append([]string{"eval", "--once"}, common...), io.Discard, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("init eval: %d, stderr %q", code, &stderr)
@@ -319,9 +319,9 @@ func TestWatchWritableFacesRequireExistingStore(t *testing.T) {
 	_, rules := fixture(t, false)
 	path := filepath.Join(t.TempDir(), "missing.db")
 	for _, args := range [][]string{
-		{"eval", "--once", "--rules", rules},
-		{"daemon", "--rules", rules},
-		{"wait", "--timeout", "1s", "--rules", rules},
+		{"eval", "--once", "--rules", rules, "--no-shipped-rules"},
+		{"daemon", "--rules", rules, "--no-shipped-rules"},
+		{"wait", "--timeout", "1s", "--rules", rules, "--no-shipped-rules"},
 		{"seen", "--through", "0"},
 		{"ack", "missing", "--by", "operator"},
 		{"investigate", "missing", "--by", "operator", "--cause", "c", "--evidence", "e"},
@@ -381,7 +381,7 @@ receiver = "foreground"
 	done := make(chan result, 1)
 	go func() {
 		var out, stderr bytes.Buffer
-		code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--owner", "operator-session"}, &out, &stderr)
+		code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--owner", "operator-session"}, &out, &stderr)
 		done <- result{code, out.String(), stderr.String()}
 	}()
 	deadline := time.After(hangGuard)
@@ -422,7 +422,7 @@ receiver = "foreground"
 		t.Fatal("wait did not exit when drain.trunk-core-worktree alert opened")
 	}
 	var statusOut, statusErr bytes.Buffer
-	if code := run(ctx, []string{"status", "--store", s.Path(), "--rules", rules}, &statusOut, &statusErr); code != 0 || statusErr.Len() != 0 || !strings.Contains(statusOut.String(), "owner operator-session watcher=unattached") || !strings.Contains(statusOut.String(), "pending=1") {
+	if code := run(ctx, []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &statusOut, &statusErr); code != 0 || statusErr.Len() != 0 || !strings.Contains(statusOut.String(), "owner operator-session watcher=unattached") || !strings.Contains(statusOut.String(), "pending=1") {
 		t.Fatalf("status before seen: code=%d out=%q err=%q", code, statusOut.String(), statusErr.String())
 	}
 	var seenErr bytes.Buffer
@@ -431,11 +431,11 @@ receiver = "foreground"
 	}
 	statusOut.Reset()
 	statusErr.Reset()
-	if code := run(ctx, []string{"status", "--store", s.Path(), "--rules", rules}, &statusOut, &statusErr); code != 0 || statusErr.Len() != 0 || !strings.Contains(statusOut.String(), "owner operator-session watcher=unattached") || !strings.Contains(statusOut.String(), "pending=0") {
+	if code := run(ctx, []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &statusOut, &statusErr); code != 0 || statusErr.Len() != 0 || !strings.Contains(statusOut.String(), "owner operator-session watcher=unattached") || !strings.Contains(statusOut.String(), "pending=0") {
 		t.Fatalf("status after seen: code=%d out=%q err=%q", code, statusOut.String(), statusErr.String())
 	}
 	var quietOut, quietErr bytes.Buffer
-	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--owner", "operator-session", "--timeout", "30ms"}, &quietOut, &quietErr); code != 2 || strings.Contains(quietOut.String(), "TILLR_WATCH_NOTICE") {
+	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--owner", "operator-session", "--timeout", "30ms"}, &quietOut, &quietErr); code != 2 || strings.Contains(quietOut.String(), "TILLR_WATCH_NOTICE") {
 		t.Fatalf("confirmed wait: code=%d out=%q err=%q", code, quietOut.String(), quietErr.String())
 	}
 }

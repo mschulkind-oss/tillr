@@ -20,7 +20,7 @@ func TestGateRepeatedStallRule(t *testing.T) {
 		ruleID      = "gate-repeated-stall"
 		verdictKind = "gate.verdict"
 	)
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

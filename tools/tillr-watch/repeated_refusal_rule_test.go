@@ -22,7 +22,7 @@ import (
 func TestDrainRepeatedRefusalRule(t *testing.T) {
 	const (
 		ruleID   = "drain-repeated-refusal"
-		ruleFile = "../../config/tillr/watch/drain-repeated-refusal.toml"
+		ruleFile = "rules/drain-repeated-refusal.toml"
 	)
 
 	rawRuleFile, err := os.ReadFile(ruleFile)
@@ -40,7 +40,7 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 		t.Fatalf("expected %s to define solely %q, got %+v", ruleFile, ruleID, fileRules)
 	}
 
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 		args = append(args, "--policy", p)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), args, &stdout, &stderr); code != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+	if code := run(t.Context(), args, &stdout, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("tillr watch lint failed: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }

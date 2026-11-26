@@ -21,7 +21,7 @@ import (
 func TestDrainCheckpointNotRestartedRule(t *testing.T) {
 	const (
 		ruleID    = "drain-checkpoint-not-restarted"
-		rulePath  = "../../config/tillr/watch/drain-checkpoint-not-restarted.toml"
+		rulePath  = "rules/drain-checkpoint-not-restarted.toml"
 		threshold = 65
 	)
 
@@ -43,7 +43,7 @@ func TestDrainCheckpointNotRestartedRule(t *testing.T) {
 		}
 	}
 
-	allRules, err := watch.LoadRules("../../config/tillr/watch")
+	allRules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

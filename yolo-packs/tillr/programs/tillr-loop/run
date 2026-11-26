@@ -55,7 +55,7 @@ newer() {
 		else
 			case ${entry##*/} in
 			*_test.go) ;;
-			*.go | go.mod | go.sum) [ "$entry" -nt "$current" ] && return 0 ;;
+			*.go | *.toml | *.json | go.mod | go.sum) [ "$entry" -nt "$current" ] && return 0 ;;
 			esac
 			if [ "$mod" = tillr-view ]; then
 				case $entry in
@@ -108,7 +108,7 @@ sources() {
 			else
 				case ${entry##*/} in
 				*_test.go) ;;
-				*.go | go.mod | go.sum) echo "$entry" ;;
+				*.go | *.toml | *.json | go.mod | go.sum) echo "$entry" ;;
 				esac
 			fi
 		done

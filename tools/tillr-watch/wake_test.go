@@ -128,7 +128,7 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 			}
 
 			var initOut, initErr bytes.Buffer
-			if code := run(t.Context(), []string{"eval", "--once", "--store", storeArg, "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+			if code := run(t.Context(), []string{"eval", "--once", "--store", storeArg, "--rules", rules, "--no-shipped-rules"}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
 				t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
 			}
 			fact(t, s, `{"item_id":"item-a"}`)
@@ -163,7 +163,7 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 			go func() {
 				defer close(done)
 				var out, stderr bytes.Buffer
-				code := runWithWaitHooks(ctx, []string{"wait", "--store", storeArg, "--rules", rules}, &out, &stderr, make(chan time.Time), hooks)
+				code := runWithWaitHooks(ctx, []string{"wait", "--store", storeArg, "--rules", rules, "--no-shipped-rules"}, &out, &stderr, make(chan time.Time), hooks)
 				result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
 			}()
 			defer func() {
@@ -219,7 +219,7 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 		t.Setenv("XDG_RUNTIME_DIR", "")
 		s, rules := fixture(t, false)
 		var initOut, initErr bytes.Buffer
-		if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+		if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
 			t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
 		}
 
@@ -235,7 +235,7 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 		t.Cleanup(func() { onFallbackTicker.Store(nil) })
 
 		var timeoutOut, timeoutErr bytes.Buffer
-		if code := run(t.Context(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify", "--timeout", "25ms"}, &timeoutOut, &timeoutErr); code != 2 || timeoutErr.Len() != 0 {
+		if code := run(t.Context(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--no-notify", "--timeout", "25ms"}, &timeoutOut, &timeoutErr); code != 2 || timeoutErr.Len() != 0 {
 			t.Fatalf("default fallback wait: code=%d out=%q err=%q", code, &timeoutOut, &timeoutErr)
 		}
 		select {
@@ -272,7 +272,7 @@ func TestWatchWaitWakesOnRelayedFrameAndFallback(t *testing.T) {
 		go func() {
 			defer close(done)
 			var out, stderr bytes.Buffer
-			code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks, hooks)
+			code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--no-notify"}, &out, &stderr, ticks, hooks)
 			result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
 		}()
 		defer func() {
@@ -311,7 +311,7 @@ func TestWatchWaitReconnectsAndEvaluatesImmediatelyAfterRelayKill(t *testing.T) 
 
 	s, rules := fixture(t, false)
 	var initOut, initErr bytes.Buffer
-	if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+	if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
 		t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
 	}
 	_, stopFirstRelay := startExternalRelay(t, s.Path())
@@ -351,7 +351,7 @@ func TestWatchWaitReconnectsAndEvaluatesImmediatelyAfterRelayKill(t *testing.T) 
 	go func() {
 		defer close(done)
 		var out, stderr bytes.Buffer
-		code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules}, &out, &stderr, make(chan time.Time), hooks)
+		code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &out, &stderr, make(chan time.Time), hooks)
 		result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
 	}()
 	defer func() {
@@ -450,11 +450,11 @@ func TestWatchWaitAlertParityWithRelayAbsent(t *testing.T) {
 		t.Setenv("XDG_RUNTIME_DIR", "")
 		s, rules := fixture(t, false)
 		var initOut, initErr bytes.Buffer
-		if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+		if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
 			t.Fatalf("init eval (%s): code=%d out=%q err=%q", mode, code, &initOut, &initErr)
 		}
 
-		args := []string{"wait", "--store", s.Path(), "--rules", rules, "--follow"}
+		args := []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--follow"}
 		var ticks chan time.Time
 		switch mode {
 		case "with-relay":
@@ -555,14 +555,14 @@ func TestWatchWaitFlagValidationAndRearm(t *testing.T) {
 	s, rules := fixture(t, false)
 	for _, bad := range []string{"0s", "-5s"} {
 		var out, stderr bytes.Buffer
-		code := run(t.Context(), []string{"wait", "--store", s.Path(), "--rules", rules, "--fallback-poll", bad}, &out, &stderr)
+		code := run(t.Context(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--fallback-poll", bad}, &out, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "fallback-poll must be positive") {
 			t.Fatalf("--fallback-poll %s: code=%d out=%q stderr=%q", bad, code, &out, &stderr)
 		}
 	}
 
 	var out, stderr bytes.Buffer
-	code := run(t.Context(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify", "--fallback-poll", "5s", "--timeout", "20ms"}, &out, &stderr)
+	code := run(t.Context(), []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--no-notify", "--fallback-poll", "5s", "--timeout", "20ms"}, &out, &stderr)
 	if code != 2 || stderr.Len() != 0 || !strings.Contains(out.String(), "--fallback-poll 5s") || !strings.Contains(out.String(), "--no-notify") {
 		t.Fatalf("re-arm flags: code=%d out=%q stderr=%q", code, &out, &stderr)
 	}
@@ -575,7 +575,7 @@ func TestWatchDaemonWakesWhenWALPrecedesIndexPublish(t *testing.T) {
 		t.Fatal(err)
 	}
 	var initOut, initErr bytes.Buffer
-	if code := run(t.Context(), []string{"eval", "--once", "--store", alias, "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+	if code := run(t.Context(), []string{"eval", "--once", "--store", alias, "--rules", rules, "--no-shipped-rules"}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
 		t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
 	}
 	fact(t, s, `{"item_id":"item-a"}`)
@@ -587,7 +587,7 @@ func TestWatchDaemonWakesWhenWALPrecedesIndexPublish(t *testing.T) {
 	var out, stderr bytes.Buffer
 	ticks := make(chan time.Time)
 	go func() {
-		done <- runWithTicks(ctx, []string{"daemon", "--store", alias, "--rules", rules}, &out, &stderr, ticks)
+		done <- runWithTicks(ctx, []string{"daemon", "--store", alias, "--rules", rules, "--no-shipped-rules"}, &out, &stderr, ticks)
 	}()
 	defer func() {
 		cancel()
@@ -870,7 +870,7 @@ func readProcCPUTicks(t *testing.T, pid int) int64 {
 }
 
 func TestWatchWaitIdleUnderStoreWritesAndDeliversAlert(t *testing.T) {
-	const rulesDir = "../../config/tillr/watch"
+	const rulesDir = "rules"
 	if err := event.Register("watch-bench.unrelated", "watch-test"); err != nil {
 		t.Fatal(err)
 	}
@@ -878,7 +878,7 @@ func TestWatchWaitIdleUnderStoreWritesAndDeliversAlert(t *testing.T) {
 	ctx := t.Context()
 
 	var initOut, initErr bytes.Buffer
-	if code := run(ctx, []string{"eval", "--once", "--store", f.s.Path(), "--rules", rulesDir, "--root", f.root}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+	if code := run(ctx, []string{"eval", "--once", "--store", f.s.Path(), "--rules", rulesDir, "--no-shipped-rules", "--root", f.root}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
 		t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
 	}
 
@@ -944,7 +944,7 @@ func TestWatchWaitIdleUnderStoreWritesAndDeliversAlert(t *testing.T) {
 	f.s = reopened
 	t.Cleanup(func() { f.s.Close() })
 
-	child := startCLIChild(t, "wait", "--store", f.s.Path(), "--rules", rulesDir, "--root", f.root, "--owner", "operator-session", "--seen-through", fmt.Sprint(seenHead))
+	child := startCLIChild(t, "wait", "--store", f.s.Path(), "--rules", rulesDir, "--no-shipped-rules", "--root", f.root, "--owner", "operator-session", "--seen-through", fmt.Sprint(seenHead))
 	eventually(t, func() bool {
 		var attached bool
 		if err := f.s.ReadTx(ctx, func(rd *store.Reader) error {
@@ -1022,7 +1022,7 @@ func TestWatchWaitDeliversAlertCommittedBeforeTimeoutDuringWALBurst(t *testing.T
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	s, rules := fixture(t, false)
 	var initOut, initErr bytes.Buffer
-	if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+	if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
 		t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
 	}
 	if err := event.Register("watch-bench.burst-unrelated", "watch-test"); err != nil && !strings.Contains(err.Error(), "already") {
@@ -1087,7 +1087,7 @@ func TestWatchWaitDeliversAlertCommittedBeforeTimeoutDuringWALBurst(t *testing.T
 
 	go func() {
 		var out, stderr bytes.Buffer
-		code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "120ms"}, &out, &stderr, ticks, hooks)
+		code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "120ms"}, &out, &stderr, ticks, hooks)
 		mu.Lock()
 		result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
 		waitDone = true
@@ -1223,7 +1223,7 @@ func TestWatchWaitRidesOutLockingProtocolError(t *testing.T) {
 	go func() {
 		defer close(done)
 		var out, stderr bytes.Buffer
-		code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks, hooks)
+		code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--no-notify"}, &out, &stderr, ticks, hooks)
 		result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
 	}()
 	defer func() {
@@ -1318,7 +1318,7 @@ func TestWatchWaitSkipsEvalAndStoreOpenWhenUnchanged(t *testing.T) {
 	var out, stderr bytes.Buffer
 	go func() {
 		defer close(done)
-		code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks, hooks)
+		code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--no-notify"}, &out, &stderr, ticks, hooks)
 	}()
 	defer func() {
 		cancel()
@@ -1403,7 +1403,7 @@ func TestWatchWaitSkipsEvalAndStoreOpenWhenUnchanged(t *testing.T) {
 }
 
 func TestWatchWaitPreservesEvalCacheUnderStoreWrites(t *testing.T) {
-	const rulesDir = "../../config/tillr/watch"
+	const rulesDir = "rules"
 	if err := event.Register("watch-bench.cache-unrelated", "watch-test"); err != nil {
 		t.Fatal(err)
 	}
@@ -1518,7 +1518,7 @@ func TestWatchWaitStoreErrorExitsDistinctlyWithStoppedNotice(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks, hooks)
+			code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--no-notify"}, &out, &stderr, ticks, hooks)
 		}()
 		defer func() {
 			cancel()
@@ -1573,7 +1573,7 @@ func TestWatchWaitStoreErrorExitsDistinctlyWithStoppedNotice(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out, stderr bytes.Buffer
-		code := run(t.Context(), []string{"wait", "--store", corrupt, "--rules", rules, "--no-notify"}, &out, &stderr)
+		code := run(t.Context(), []string{"wait", "--store", corrupt, "--rules", rules, "--no-shipped-rules", "--no-notify"}, &out, &stderr)
 		if code == 0 || code == 1 || code == 2 || code != record.ExitIncompatible {
 			t.Fatalf("wait on corrupt store: code=%d, want %d; out=%q stderr=%q", code, record.ExitIncompatible, out.String(), stderr.String())
 		}
@@ -1659,7 +1659,7 @@ func TestWatchWaitWaitsForWriteLockAndDeliversNextAlert(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks, hooks)
+		code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--no-notify"}, &out, &stderr, ticks, hooks)
 	}()
 	defer func() {
 		cancel()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -126,15 +127,19 @@ func (e Evaluator) ReadStatusWithOptions(ctx context.Context, attached func(stri
 		return s, nil
 	}
 	var rules []Rule
+	var charterName string
 	if err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
 		var err error
 		rules, _, err = e.effective(rd)
+		if err == nil {
+			charterName = charterNameForReader(rd)
+		}
 		return err
 	}); err != nil {
 		return Status{}, err
 	}
 	s := Status{Alerts: []AlertStatus{}, Silences: []SilenceStatus{}, Owners: []OwnerStatus{}}
-	err := e.readEvaluation(ctx, rules, func(rd *store.Reader, results []RuleResult) error {
+	err := e.readEvaluation(ctx, rules, charterName, func(rd *store.Reader, results []RuleResult) error {
 		s.Rules = results
 		hasAlerts, err := tableExists(rd, "alert_episodes")
 		if err != nil {
@@ -171,6 +176,31 @@ func (e Evaluator) ReadStatusWithOptions(ctx context.Context, attached func(stri
 		}
 	}
 	return s, nil
+}
+
+func charterNameForReader(rd *store.Reader) string {
+	if rd == nil {
+		return ""
+	}
+	rec, err := definition.ForReader(rd)
+	if err != nil {
+		return ""
+	}
+	return rec.Parsed.Name
+}
+
+func rulesInCharterScope(rules []Rule, charterName string) []Rule {
+	if charterName == "" {
+		return rules
+	}
+	out := make([]Rule, 0, len(rules))
+	for _, r := range rules {
+		if name := namedScope(r.Scope, "charter:"); name != "" && name != charterName {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func requireRoot(root string, rules []Rule) error {

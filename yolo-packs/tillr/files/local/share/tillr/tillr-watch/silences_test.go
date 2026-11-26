@@ -101,7 +101,7 @@ do = ["fix it"]
 	}
 
 	// Evaluate once to open episode for tools/flaky.
-	if code, _, errOut := invoke("eval", "--once", "--store", storePath, "--rules", rulesDir); code != 0 {
+	if code, _, errOut := invoke("eval", "--once", "--store", storePath, "--rules", rulesDir, "--no-shipped-rules"); code != 0 {
 		t.Fatalf("eval: %d %s", code, errOut)
 	}
 
@@ -110,11 +110,11 @@ do = ["fix it"]
 		name string
 		args []string
 	}{
-		{"missing-var", []string{"silence", "--rule", "pkg-red", "--store", storePath, "--rules", rulesDir, "--by", "op", "--item", "item-open", "--reason", "r", "--until", "1h", "--cause", "c", "--evidence", "e"}},
-		{"unknown-var", []string{"silence", "--rule", "pkg-red", "--var", "bogus=1", "--store", storePath, "--rules", rulesDir, "--by", "op", "--item", "item-open", "--reason", "r", "--until", "1h", "--cause", "c", "--evidence", "e"}},
-		{"malformed-var", []string{"silence", "--rule", "pkg-red", "--var", "noequals", "--store", storePath, "--rules", rulesDir, "--by", "op", "--item", "item-open", "--reason", "r", "--until", "1h", "--cause", "c", "--evidence", "e"}},
-		{"global-with-var", []string{"silence", "--rule", "global-red", "--var", "x=y", "--store", storePath, "--rules", rulesDir, "--by", "op", "--item", "item-open", "--reason", "r", "--until", "1h", "--cause", "c", "--evidence", "e"}},
-		{"missing-investigation", []string{"silence", "--rule", "pkg-red", "--var", "package=tools/flaky", "--store", storePath, "--rules", rulesDir, "--by", "op", "--item", "item-open", "--reason", "r", "--until", "1h"}},
+		{"missing-var", []string{"silence", "--rule", "pkg-red", "--store", storePath, "--rules", rulesDir, "--no-shipped-rules", "--by", "op", "--item", "item-open", "--reason", "r", "--until", "1h", "--cause", "c", "--evidence", "e"}},
+		{"unknown-var", []string{"silence", "--rule", "pkg-red", "--var", "bogus=1", "--store", storePath, "--rules", rulesDir, "--no-shipped-rules", "--by", "op", "--item", "item-open", "--reason", "r", "--until", "1h", "--cause", "c", "--evidence", "e"}},
+		{"malformed-var", []string{"silence", "--rule", "pkg-red", "--var", "noequals", "--store", storePath, "--rules", rulesDir, "--no-shipped-rules", "--by", "op", "--item", "item-open", "--reason", "r", "--until", "1h", "--cause", "c", "--evidence", "e"}},
+		{"global-with-var", []string{"silence", "--rule", "global-red", "--var", "x=y", "--store", storePath, "--rules", rulesDir, "--no-shipped-rules", "--by", "op", "--item", "item-open", "--reason", "r", "--until", "1h", "--cause", "c", "--evidence", "e"}},
+		{"missing-investigation", []string{"silence", "--rule", "pkg-red", "--var", "package=tools/flaky", "--store", storePath, "--rules", rulesDir, "--no-shipped-rules", "--by", "op", "--item", "item-open", "--reason", "r", "--until", "1h"}},
 	} {
 		code, _, errOut := invoke(tc.args...)
 		if code != 2 {
@@ -123,11 +123,11 @@ do = ["fix it"]
 	}
 
 	// Create silence for parameterized rule and global rule.
-	code, out, errOut := invoke("silence", "--rule", "pkg-red", "--var", "package=tools/flaky", "--store", storePath, "--rules", rulesDir, "--by", "operator-session", "--item", "item-open", "--reason", "flaky", "--until", "1h", "--cause", "known race", "--evidence", "seq 1")
+	code, out, errOut := invoke("silence", "--rule", "pkg-red", "--var", "package=tools/flaky", "--store", storePath, "--rules", rulesDir, "--no-shipped-rules", "--by", "operator-session", "--item", "item-open", "--reason", "flaky", "--until", "1h", "--cause", "known race", "--evidence", "seq 1")
 	if code != 0 || !strings.Contains(out, "silence sil-") {
 		t.Fatalf("silence pkg-red: code=%d out=%q err=%q", code, out, errOut)
 	}
-	code, out, errOut = invoke("silence", "--rule", "global-red", "--store", storePath, "--rules", rulesDir, "--by", "operator-session", "--item", "item-open", "--reason", "global", "--until", "1h", "--cause", "known global", "--evidence", "seq 1")
+	code, out, errOut = invoke("silence", "--rule", "global-red", "--store", storePath, "--rules", rulesDir, "--no-shipped-rules", "--by", "operator-session", "--item", "item-open", "--reason", "global", "--until", "1h", "--cause", "known global", "--evidence", "seq 1")
 	if code != 0 || !strings.Contains(out, `vars={}`) {
 		t.Fatalf("silence global-red: code=%d out=%q err=%q", code, out, errOut)
 	}

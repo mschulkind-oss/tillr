@@ -14,7 +14,7 @@
 # Set threshold_duration = "95m".
 [[rule]]
 id = "trunk-proof-lag"
-scope = "core"
+scope = "charter:git-landing"
 severity = "warning"
 
 [rule.reads]

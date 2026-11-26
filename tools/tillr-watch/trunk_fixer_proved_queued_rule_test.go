@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/watch"
@@ -21,7 +22,7 @@ func TestDrainTrunkFixerProvedQueuedRule(t *testing.T) {
 	const ruleID = "drain-trunk-fixer-proved-queued"
 
 	// (a) LoadRules loads drain-trunk-fixer-proved-queued and tillr watch lint passes.
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +31,7 @@ func TestDrainTrunkFixerProvedQueuedRule(t *testing.T) {
 		t.Fatalf("missing %s rule in config/tillr/watch", ruleID)
 	}
 	rule := rules[idx]
-	if rule.Scope != "core" || rule.Severity != "warning" || !rule.Enabled ||
+	if rule.Scope != "charter:"+definition.GitLandingName || rule.Severity != "warning" || !rule.Enabled ||
 		rule.Delivery.Receiver != "foreground" ||
 		!slices.Equal(rule.Reads.Projections, []string{"items", "fixer_checks", "green_proof:refs/tillr/green"}) ||
 		len(rule.Reads.Events) != 0 ||

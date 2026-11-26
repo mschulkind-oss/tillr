@@ -1,0 +1,33 @@
+# Owner ruling 2026-11-21: leftover work holding a lane out of rotation is a
+# tillr-watch alert for manual cleanup and root-cause filing, not a sweeper.
+# Events read: drain.lane-refused, drain.lane-restored.
+# Note: drain.lane-refused gained left_by because existing events carried only
+# lane_id, reason, detail and remedy.
+
+[[rule]]
+id = "drain-lane-refused"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.lane-refused", "drain.lane-restored"]
+
+[rule.when]
+group_by = ["lane_id", "reason"]
+pattern = "predicate_match"
+match = 'event.kind == "drain.lane-refused"'
+clear_when = 'event.kind == "drain.lane-restored"'
+
+[rule.guidance]
+summary = "Lane {{event.lane_id}} is out of rotation ({{event.reason}}); leftover work from {{event.left_by}}."
+check = [
+  "Inspect {{event.lane_id}} ({{event.detail}}) and check git status, HEAD, worktrees or live processes before touching the checkout.",
+  "Inspect {{event.left_by}} with tillr run status or tillr drain why to establish how the work was left behind."
+]
+do = [
+  "Save any needed work from {{event.lane_id}}, clean the lane by hand so the drain restores it to rotation, and file the root cause."
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]

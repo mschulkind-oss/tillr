@@ -1,0 +1,23 @@
+# On 2026-11-21 the drain's writes were refused as busy for fifteen minutes before
+# the operator saw it, and only because the loop had exited.
+# Read drain.store-busy events from the last hour.
+[[rule]]
+id = "drain-store-busy"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.store-busy"]
+
+[rule.when]
+group_by = "global"
+pattern = "predicate_match"
+window = "1h"
+
+[rule.guidance]
+summary = "The drain had a store write refused as busy ({{count}} in the last hour)."
+check = ["Read /proc/locks for the store's -shm file to find the holder, and check the drain loop log for which operation waited."]
+do = ["Identify the process holding the store lock from /proc/locks and determine why it held the write lock long enough to refuse the drain."]
+
+[rule.delivery]
+receiver = "foreground"

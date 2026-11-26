@@ -17,7 +17,7 @@ import (
 
 func TestDrainPlanOutputUnparseableRule(t *testing.T) {
 	const ruleID = "drain-plan-output-unparseable"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

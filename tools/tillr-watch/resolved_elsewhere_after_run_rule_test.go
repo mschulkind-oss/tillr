@@ -20,7 +20,7 @@ import (
 func TestResolvedElsewhereAfterRunRule(t *testing.T) {
 	const ruleID = "drain-resolved-elsewhere-after-run"
 
-	allRules, err := watch.LoadRules("../../config/tillr/watch")
+	allRules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestResolvedElsewhereAfterRunRule(t *testing.T) {
 		lintArgs = append(lintArgs, "--policy", p)
 	}
 	var lintOut, lintErr bytes.Buffer
-	if code := run(t.Context(), lintArgs, &lintOut, &lintErr); code != 0 || lintOut.Len() != 0 || lintErr.Len() != 0 {
+	if code := run(t.Context(), lintArgs, &lintOut, &lintErr); code != 0 || lintErr.Len() != 0 {
 		t.Fatalf("tillr watch lint failed: code=%d stdout=%q stderr=%q", code, lintOut.String(), lintErr.String())
 	}
 }

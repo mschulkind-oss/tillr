@@ -19,7 +19,7 @@ import (
 func TestDrainForkLeftoverRule(t *testing.T) {
 	const ruleID = "drain-fork-leftover"
 
-	allRules, err := watch.LoadRules("../../config/tillr/watch")
+	allRules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

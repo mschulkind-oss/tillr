@@ -27,6 +27,8 @@ func runLint(ctx context.Context, args []string, out, stderr io.Writer) int {
 		return nil
 	})
 	f.StringVar(&opts.RulesPath, "rules", "", "path to watch rule file or directory")
+	f.BoolVar(&opts.NoShippedRules, "no-shipped-rules", false, "omit tillr's embedded shipped rules")
+	opts.ShippedFS = shippedRulesFS
 
 	operands, err := parseEpisodeArgs(f, args)
 	if err == flag.ErrHelp {
@@ -60,14 +62,17 @@ func runLint(ctx context.Context, args []string, out, stderr io.Writer) int {
 		opts.Root = operands[0]
 	}
 
-	findings, err := watch.Lint(ctx, opts)
+	report, err := watch.LintWithReport(ctx, opts)
 	if err != nil {
 		return fail(err)
 	}
-	if len(findings) == 0 {
+	if len(report.Findings) == 0 {
+		for _, r := range report.Rules {
+			fmt.Fprintf(out, "rule %s source=%s\n", r.ID, r.Source)
+		}
 		return 0
 	}
-	for _, finding := range findings {
+	for _, finding := range report.Findings {
 		fmt.Fprintln(out, finding.String())
 	}
 	return 1

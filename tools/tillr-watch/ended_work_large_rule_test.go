@@ -22,7 +22,7 @@ func TestDrainEndedWorkLargeRule(t *testing.T) {
 		limitByte = 1048576
 	)
 
-	allRules, err := watch.LoadRules("../../config/tillr/watch")
+	allRules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

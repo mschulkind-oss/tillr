@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,10 +15,68 @@ import (
 	"github.com/mschulkind-oss/tillr/watch"
 )
 
+const consumerPiBuildStaleTOML = `[[rule]]
+id = "drain-pi-build-stale"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.pi-build-stale", "drain.pi-build-current"]
+
+[rule.when]
+group_by = "global"
+pattern = "predicate_match"
+match = 'event.kind == "drain.pi-build-stale"'
+clear_when = 'event.kind == "drain.pi-build-current"'
+
+[rule.guidance]
+summary = "Drain pi build is stale: active key {{event.stale_key}}, wanted key {{event.wanted_key}} ({{event.reason}})."
+check = [
+  "Inspect tillr drain why and the drain loop log for the post-landing pi roll failure or skip ({{event.detail}}).",
+  "Check refs/heads/patch/pi and pi-builds/current.json to confirm which pi build drain workers are using."
+]
+do = [
+  "Fix the build error and run bin/pi-forks build-pi so drain workers pick up {{event.wanted_key}}."
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]
+`
+
 func TestDrainPiBuildStaleRule(t *testing.T) {
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	root := t.TempDir()
+	watchDir := filepath.Join(root, "config", "tillr", "watch")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(watchDir, "drain-pi-build-stale.toml"), []byte(consumerPiBuildStaleTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := loadCLIRules("", root, "", false)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(rules) != 45 {
+		t.Fatalf("expected 45 rules (44 shipped + 1 consumer file), got %d", len(rules))
+	}
+	shippedCount, fileCount := 0, 0
+	for _, r := range rules {
+		switch r.ID {
+		case "drain-pi-build-stale":
+			if r.Origin() != watch.RuleSourceFile {
+				t.Fatalf("expected drain-pi-build-stale origin=file, got %q", r.Origin())
+			}
+			fileCount++
+		default:
+			if r.Origin() != watch.RuleSourceShipped {
+				t.Fatalf("expected %s origin=shipped, got %q", r.ID, r.Origin())
+			}
+			shippedCount++
+		}
+	}
+	if shippedCount != 44 || fileCount != 1 {
+		t.Fatalf("unexpected rule counts: shipped=%d file=%d", shippedCount, fileCount)
 	}
 	i := slices.IndexFunc(rules, func(rule watch.Rule) bool { return rule.ID == "drain-pi-build-stale" })
 	if i < 0 {

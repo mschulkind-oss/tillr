@@ -44,7 +44,7 @@ func TestWatchStatusUnsettledAndSilenceLines(t *testing.T) {
 	}
 
 	var out, stderr bytes.Buffer
-	if code := run(ctx, []string{"status", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || stderr.Len() != 0 {
+	if code := run(ctx, []string{"status", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &out, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("status: code=%d stderr=%q", code, &stderr)
 	}
 	text := out.String()
@@ -59,7 +59,7 @@ func TestWatchStatusUnsettledAndSilenceLines(t *testing.T) {
 	}
 
 	out.Reset()
-	if code := run(ctx, []string{"status", "--unsettled", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || stderr.Len() != 0 {
+	if code := run(ctx, []string{"status", "--unsettled", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &out, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("status --unsettled: code=%d stderr=%q", code, &stderr)
 	}
 	unsettledText := out.String()
@@ -74,7 +74,7 @@ func TestWatchStatusUnsettledAndSilenceLines(t *testing.T) {
 	}
 
 	out.Reset()
-	if code := run(ctx, []string{"status", "--unsettled", "--json", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || stderr.Len() != 0 {
+	if code := run(ctx, []string{"status", "--unsettled", "--json", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &out, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("status --unsettled --json: code=%d stderr=%q", code, &stderr)
 	}
 	var report struct {
@@ -103,7 +103,7 @@ func TestWatchWaitUnsettledReminderAndFooter(t *testing.T) {
 
 	// Load rule baseline and fire one alert.
 	var out, stderr bytes.Buffer
-	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 {
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, &out, &stderr); code != 0 {
 		t.Fatalf("baseline eval: %d %s", code, &stderr)
 	}
 	fact(t, s, `{"item_id":"item-a"}`)
@@ -116,7 +116,7 @@ func TestWatchWaitUnsettledReminderAndFooter(t *testing.T) {
 	// First wait delivers the opening notice with all 4 command templates.
 	out.Reset()
 	stderr.Reset()
-	code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "1s", "--no-notify"}, &out, &stderr, nil, hooks)
+	code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "1s", "--no-notify"}, &out, &stderr, nil, hooks)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("first wait: code=%d stderr=%q out=%q", code, &stderr, &out)
 	}
@@ -135,7 +135,7 @@ func TestWatchWaitUnsettledReminderAndFooter(t *testing.T) {
 	clockNow = now.Add(5 * time.Minute)
 	out.Reset()
 	stderr.Reset()
-	code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--seen-through", fmt.Sprint(through), "--timeout", "30ms", "--no-notify"}, &out, &stderr, nil, hooks)
+	code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--seen-through", fmt.Sprint(through), "--timeout", "30ms", "--no-notify"}, &out, &stderr, nil, hooks)
 	if code != 2 || strings.Contains(out.String(), "UNSETTLED") || strings.Contains(out.String(), "TILLR_WATCH_NOTICE") {
 		t.Fatalf("wait at 5m should time out quietly: code=%d out=%q err=%q", code, &out, &stderr)
 	}
@@ -144,7 +144,7 @@ func TestWatchWaitUnsettledReminderAndFooter(t *testing.T) {
 	clockNow = now.Add(16 * time.Minute)
 	out.Reset()
 	stderr.Reset()
-	code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "1s", "--no-notify"}, &out, &stderr, nil, hooks)
+	code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "1s", "--no-notify"}, &out, &stderr, nil, hooks)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("wait at 16m should emit reminder: code=%d stderr=%q out=%q", code, &stderr, &out)
 	}
@@ -160,7 +160,7 @@ func TestWatchWaitUnsettledReminderAndFooter(t *testing.T) {
 	clockNow = now.Add(17 * time.Minute)
 	out.Reset()
 	stderr.Reset()
-	code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "30ms", "--no-notify"}, &out, &stderr, nil, hooks)
+	code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "30ms", "--no-notify"}, &out, &stderr, nil, hooks)
 	if code != 2 || strings.Contains(out.String(), "UNSETTLED") {
 		t.Fatalf("wait at 17m should not repeat reminder: code=%d out=%q err=%q", code, &out, &stderr)
 	}
@@ -175,7 +175,7 @@ func TestWatchWaitUnsettledReminderAndFooter(t *testing.T) {
 	clockNow = now.Add(40 * time.Minute)
 	out.Reset()
 	stderr.Reset()
-	code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--timeout", "30ms", "--no-notify"}, &out, &stderr, nil, hooks)
+	code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-shipped-rules", "--timeout", "30ms", "--no-notify"}, &out, &stderr, nil, hooks)
 	if code != 2 || strings.Contains(out.String(), "UNSETTLED") {
 		t.Fatalf("settled alert must not remind: code=%d out=%q err=%q", code, &out, &stderr)
 	}

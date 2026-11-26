@@ -19,7 +19,7 @@ import (
 func TestDrainProcessCPUHighRule(t *testing.T) {
 	const ruleID = "drain-process-cpu-high"
 
-	allRules, err := watch.LoadRules("../../config/tillr/watch")
+	allRules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

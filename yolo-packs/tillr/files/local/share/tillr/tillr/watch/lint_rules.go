@@ -35,19 +35,42 @@ func resolveRulesDir(absRoot, rulesPath string) (string, bool) {
 	return "", false
 }
 
-func discoverAndLoadRules(absRoot, rulesPath string, kinds map[string]bool, fc *findingCollector) []lintedRule {
+func discoverAndLoadRuleLayers(absRoot, rulesPath string, shippedFS fs.FS, noShipped bool, kinds map[string]bool, fc *findingCollector) []lintedRule {
+	var shippedRules []lintedRule
+	shippedTables := make(map[string]map[string]any)
+	if !noShipped && shippedFS != nil {
+		shippedSeenIDs := make(map[string]string)
+		_ = fs.WalkDir(shippedFS, ".", func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				fc.add("shipped:"+filepath.ToSlash(path), CodeWatchLintInput, err.Error())
+				return nil
+			}
+			if entry.IsDir() || filepath.Ext(path) != ".toml" {
+				return nil
+			}
+			source := "shipped:" + filepath.ToSlash(path)
+			data, err := fs.ReadFile(shippedFS, path)
+			if err != nil {
+				fc.add(source, CodeWatchLintInput, fmt.Sprintf("reading %q: %v", source, err))
+				return nil
+			}
+			loaded, tables := lintShippedRuleData(source, data, kinds, shippedSeenIDs, fc)
+			shippedRules = append(shippedRules, loaded...)
+			for id, tbl := range tables {
+				shippedTables[id] = tbl
+			}
+			return nil
+		})
+	}
+
 	var paths []string
 	if rulesPath != "" {
 		linfo, err := os.Lstat(rulesPath)
 		if err != nil {
 			fc.add(rulesPath, CodeWatchLintInput, fmt.Sprintf("rules %q: %v", rulesPath, err))
-			return nil
-		}
-		if linfo.Mode()&fs.ModeSymlink != 0 {
+		} else if linfo.Mode()&fs.ModeSymlink != 0 {
 			fc.add(rulesPath, CodeWatchLintRuleSchema, "rule file must not be a symlink")
-			return nil
-		}
-		if linfo.IsDir() {
+		} else if linfo.IsDir() {
 			paths = walkRuleFiles(rulesPath, fc)
 		} else {
 			paths = []string{rulesPath}
@@ -56,25 +79,197 @@ func discoverAndLoadRules(absRoot, rulesPath string, kinds map[string]bool, fc *
 		defaultDir := filepath.Join(absRoot, "config", "tillr", "watch")
 		linfo, err := os.Lstat(defaultDir)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
+			if !os.IsNotExist(err) {
+				fc.add(defaultDir, CodeWatchLintInput, fmt.Sprintf("rules %q: %v", defaultDir, err))
 			}
-			fc.add(defaultDir, CodeWatchLintInput, fmt.Sprintf("rules %q: %v", defaultDir, err))
-			return nil
-		}
-		if !linfo.IsDir() {
+		} else if !linfo.IsDir() {
 			fc.add(defaultDir, CodeWatchLintInput, fmt.Sprintf("rules %q must be a directory", defaultDir))
-			return nil
+		} else {
+			paths = walkRuleFiles(defaultDir, fc)
 		}
-		paths = walkRuleFiles(defaultDir, fc)
 	}
 
-	seenIDs := make(map[string]string)
-	var out []lintedRule
+	repoSeenIDs := make(map[string]string)
+	var repoRules []lintedRule
 	for _, p := range paths {
-		out = append(out, lintRuleFile(p, kinds, seenIDs, fc)...)
+		repoRules = append(repoRules, lintRepoRuleFile(p, kinds, repoSeenIDs, shippedTables, noShipped || shippedFS == nil, fc)...)
+	}
+
+	repoByID := make(map[string]lintedRule, len(repoRules))
+	for _, rr := range repoRules {
+		if rr.rule.ID != "" {
+			repoByID[rr.rule.ID] = rr
+		}
+	}
+	merged := make([]lintedRule, 0, len(shippedRules)+len(repoRules))
+	for _, sr := range shippedRules {
+		if rr, ok := repoByID[sr.rule.ID]; ok {
+			merged = append(merged, rr)
+		} else {
+			merged = append(merged, sr)
+		}
+	}
+	for _, rr := range repoRules {
+		if _, isShipped := shippedTables[rr.rule.ID]; !isShipped {
+			merged = append(merged, rr)
+		}
+	}
+	return merged
+}
+
+func lintShippedRuleData(source string, data []byte, kinds map[string]bool, seenIDs map[string]string, fc *findingCollector) ([]lintedRule, map[string]map[string]any) {
+	var doc map[string]any
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		fc.add(source, CodeWatchLintRuleSchema, fmt.Sprintf("TOML syntax: %v", err))
+		return nil, nil
+	}
+	for _, k := range slices.Sorted(maps.Keys(doc)) {
+		if k != "rule" {
+			fc.add(source, CodeWatchLintRuleSchema, fmt.Sprintf("unknown top-level key %q", k))
+		}
+	}
+	raw, present := doc["rule"]
+	if !present {
+		return nil, nil
+	}
+	tables, ok := raw.([]any)
+	if !ok {
+		fc.add(source, CodeWatchLintRuleSchema, "rule: expected [[rule]] entries")
+		return nil, nil
+	}
+	var out []lintedRule
+	byID := make(map[string]map[string]any, len(tables))
+	for i, elem := range tables {
+		table, ok := elem.(map[string]any)
+		if !ok {
+			fc.add(source, CodeWatchLintRuleSchema, fmt.Sprintf("rule[%d]: expected a rule table", i))
+			continue
+		}
+		rule := lintOneRuleTable(source, i, table, kinds, seenIDs, fc)
+		if rule.ID != "" {
+			if _, exists := byID[rule.ID]; !exists {
+				byID[rule.ID] = table
+			}
+		}
+		out = append(out, lintedRule{source: source, rule: rule})
+	}
+	return out, byID
+}
+
+func lintRepoRuleFile(path string, kinds map[string]bool, seenIDs map[string]string, shippedTables map[string]map[string]any, noShipped bool, fc *findingCollector) []lintedRule {
+	linfo, err := os.Lstat(path)
+	if err != nil {
+		fc.add(path, CodeWatchLintInput, fmt.Sprintf("rules %q: %v", path, err))
+		return nil
+	}
+	if linfo.Mode()&fs.ModeSymlink != 0 {
+		fc.add(path, CodeWatchLintRuleSchema, "rule file must not be a symlink")
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fc.add(path, CodeWatchLintInput, fmt.Sprintf("reading %q: %v", path, err))
+		return nil
+	}
+	var doc map[string]any
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		fc.add(path, CodeWatchLintRuleSchema, fmt.Sprintf("TOML syntax: %v", err))
+		return nil
+	}
+	for _, k := range slices.Sorted(maps.Keys(doc)) {
+		if k != "rule" && k != "override" {
+			fc.add(path, CodeWatchLintRuleSchema, fmt.Sprintf("unknown top-level key %q", k))
+		}
+	}
+	var out []lintedRule
+	if raw, present := doc["rule"]; present {
+		tables, ok := raw.([]any)
+		if !ok {
+			fc.add(path, CodeWatchLintRuleSchema, "rule: expected [[rule]] entries")
+		} else {
+			for i, elem := range tables {
+				table, ok := elem.(map[string]any)
+				if !ok {
+					fc.add(path, CodeWatchLintRuleSchema, fmt.Sprintf("rule[%d]: expected a rule table", i))
+					continue
+				}
+				rule := lintOneRuleTable(path, i, table, kinds, seenIDs, fc)
+				out = append(out, lintedRule{source: path, rule: rule})
+			}
+		}
+	}
+	if raw, present := doc["override"]; present {
+		tables, ok := raw.([]any)
+		if !ok {
+			fc.add(path, CodeWatchLintRuleSchema, "override: expected [[override]] entries")
+		} else {
+			for i, elem := range tables {
+				table, ok := elem.(map[string]any)
+				if !ok {
+					fc.add(path, CodeWatchLintRuleSchema, fmt.Sprintf("override[%d]: expected an override table", i))
+					continue
+				}
+				if rule, ok := lintOneOverrideTable(path, i, table, kinds, seenIDs, shippedTables, noShipped, fc); ok {
+					out = append(out, lintedRule{source: path, rule: rule})
+				}
+			}
+		}
 	}
 	return out
+}
+
+func lintOneOverrideTable(path string, index int, table map[string]any, kinds map[string]bool, seenIDs map[string]string, shippedTables map[string]map[string]any, noShipped bool, fc *findingCollector) (Rule, bool) {
+	id, _ := table["id"].(string)
+	label := fmt.Sprintf("override[%d]", index)
+	if id != "" {
+		label = fmt.Sprintf("override %q", id)
+	}
+	emit := func(code, msg string) {
+		fc.add(path, code, fmt.Sprintf("%s: %s", label, msg))
+	}
+	checkNoRemedy(table, "", func(keyPath string) {
+		emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("%s: remedies are not allowed", keyPath))
+	})
+	if id == "" {
+		emit(CodeWatchLintRuleSchema, "id: expected a non-empty string")
+		return Rule{}, false
+	}
+	if len(table) == 1 {
+		emit(CodeWatchLintRuleSchema, "must specify at least one key besides id")
+		return Rule{}, false
+	}
+	badKey := false
+	for _, k := range slices.Sorted(maps.Keys(table)) {
+		switch k {
+		case "id", "enabled", "scope", "severity", "reads", "when", "guidance", "delivery", "remedy":
+		default:
+			emit(CodeWatchLintRuleSchema, fmt.Sprintf("%s: unknown key", k))
+			badKey = true
+		}
+	}
+	if prev, dup := seenIDs[id]; dup {
+		emit(CodeWatchLintRuleSchema, fmt.Sprintf("id: duplicate rule ID (first in %s)", fc.formatSource(prev)))
+		return Rule{}, false
+	}
+	seenIDs[id] = path
+	if noShipped {
+		emit(CodeWatchLintRuleSchema, fmt.Sprintf("no shipped rule with id %q (shipped rules disabled)", id))
+		return Rule{}, false
+	}
+	shippedTable, ok := shippedTables[id]
+	if !ok {
+		emit(CodeWatchLintRuleSchema, fmt.Sprintf("no shipped rule with id %q", id))
+		return Rule{}, false
+	}
+	if badKey {
+		return Rule{}, false
+	}
+	merged, err := applyOverrideTable(path, id, shippedTable, table)
+	if err != nil {
+		emit(CodeWatchLintRuleSchema, err.Error())
+		return Rule{}, false
+	}
+	return lintOneRuleTable(path, index, merged, kinds, nil, fc), true
 }
 
 func walkRuleFiles(dir string, fc *findingCollector) []string {
@@ -179,10 +374,12 @@ func lintOneRuleTable(path string, index int, table map[string]any, kinds map[st
 		if len(rawID) > 128 {
 			emit(CodeWatchLintRuleSchema, "id: must be at most 128 bytes")
 		}
-		if prev, dup := seenIDs[rawID]; dup {
-			emit(CodeWatchLintRuleSchema, fmt.Sprintf("id: duplicate rule ID (first in %s)", fc.formatSource(prev)))
-		} else {
-			seenIDs[rawID] = path
+		if seenIDs != nil {
+			if prev, dup := seenIDs[rawID]; dup {
+				emit(CodeWatchLintRuleSchema, fmt.Sprintf("id: duplicate rule ID (first in %s)", fc.formatSource(prev)))
+			} else {
+				seenIDs[rawID] = path
+			}
 		}
 	}
 

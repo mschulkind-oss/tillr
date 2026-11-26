@@ -30,7 +30,7 @@ func TestWatchTuneDisableResolvesEpisode(t *testing.T) {
 	ctx := context.Background()
 	invoke := func(args ...string) string {
 		t.Helper()
-		args = append(args, "--store", s.Path(), "--rules", dir)
+		args = append(args, "--store", s.Path(), "--rules", dir, "--no-shipped-rules")
 		var out, diag bytes.Buffer
 		if code := run(ctx, args, &out, &diag); code != 0 || diag.Len() != 0 {
 			t.Fatalf("%q: code=%d stdout=%q stderr=%q", args, code, &out, &diag)
@@ -81,7 +81,7 @@ func TestWatchRuleRefusesGitRevision(t *testing.T) {
 	ctx := context.Background()
 	invoke := func(wantCode int, args ...string) {
 		t.Helper()
-		args = append(append([]string{"rule"}, args...), "--store", s.Path(), "--rules", dir)
+		args = append(append([]string{"rule"}, args...), "--store", s.Path(), "--rules", dir, "--no-shipped-rules")
 		var out, diag bytes.Buffer
 		code := run(ctx, args, &out, &diag)
 		if code != wantCode || (wantCode == 0 && diag.Len() != 0) ||
@@ -165,7 +165,7 @@ func TestWatchRuleCommands(t *testing.T) {
 
 	invoke := func(ok bool, args ...string) (string, string) {
 		t.Helper()
-		args = append(append([]string{"rule"}, args...), "--store", s.Path(), "--rules", dir)
+		args = append(append([]string{"rule"}, args...), "--store", s.Path(), "--rules", dir, "--no-shipped-rules")
 		var out, stderr bytes.Buffer
 		code := run(ctx, args, &out, &stderr)
 		if ok && (code != 0 || stderr.Len() != 0) || !ok && (code != 1 || stderr.Len() == 0 || out.Len() != 0) {
@@ -212,7 +212,7 @@ func TestWatchRuleCommands(t *testing.T) {
 		invoke(false, bad...)
 	}
 	for _, rawArgs := range [][]string{
-		{"rule", "list", "--store", s.Path()},
+		{"rule", "list", "--no-shipped-rules", "--store", s.Path()},
 		{"rule", "list", "--rules", dir},
 	} {
 		var out, stderr bytes.Buffer
@@ -332,7 +332,7 @@ func TestWatchRuleRequiresExistingStoreAndLeavesSidecarsUntouched(t *testing.T) 
 
 	// Seed one stored override, checkpoint and copy to a standalone file with no sidecars,
 	// then verify list, show and export create no WAL/SHM sidecars and modify zero bytes.
-	if code := run(t.Context(), []string{"rule", "tune", "refusals", "--set", "when.threshold=4", "--by", "operator", "--store", s.Path(), "--rules", rules}, io.Discard, io.Discard); code != 0 {
+	if code := run(t.Context(), []string{"rule", "tune", "refusals", "--set", "when.threshold=4", "--by", "operator", "--store", s.Path(), "--rules", rules, "--no-shipped-rules"}, io.Discard, io.Discard); code != 0 {
 		t.Fatalf("seed tune: code=%d", code)
 	}
 	seed := s.Path()
@@ -362,7 +362,7 @@ func TestWatchRuleRequiresExistingStoreAndLeavesSidecarsUntouched(t *testing.T) 
 		{"rule", "export"},
 	} {
 		var out, stderr bytes.Buffer
-		if code := run(t.Context(), append(cmd, "--store", isolated, "--rules", rules), &out, &stderr); code != 0 || stderr.Len() != 0 || out.Len() == 0 {
+		if code := run(t.Context(), append(cmd, "--store", isolated, "--rules", rules, "--no-shipped-rules"), &out, &stderr); code != 0 || stderr.Len() != 0 || out.Len() == 0 {
 			t.Fatalf("%v on checkpointed store: code=%d stdout=%q stderr=%q", cmd, code, &out, &stderr)
 		}
 	}
@@ -397,7 +397,7 @@ func TestWatchRuleRequiresExistingStoreAndLeavesSidecarsUntouched(t *testing.T) 
 		{"rule", "reset", "refusals", "--by", "operator"},
 	} {
 		var out, stderr bytes.Buffer
-		if code := run(t.Context(), append(cmd, "--store", rollback, "--rules", rules), &out, &stderr); code != 1 || out.Len() != 0 || stderr.Len() == 0 {
+		if code := run(t.Context(), append(cmd, "--store", rollback, "--rules", rules, "--no-shipped-rules"), &out, &stderr); code != 1 || out.Len() != 0 || stderr.Len() == 0 {
 			t.Fatalf("%v on rollback store: code=%d stdout=%q stderr=%q", cmd, code, &out, &stderr)
 		}
 	}
@@ -418,7 +418,7 @@ func TestWatchRuleRequiresExistingStoreAndLeavesSidecarsUntouched(t *testing.T) 
 		{"rule", "add", addFile, "--by", "operator"},
 	} {
 		var out, stderr bytes.Buffer
-		if code := run(t.Context(), append(cmd, "--store", corrupt.Path(), "--rules", rules), &out, &stderr); code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "store") || !strings.Contains(stderr.String(), "unregistered.kind") {
+		if code := run(t.Context(), append(cmd, "--store", corrupt.Path(), "--rules", rules, "--no-shipped-rules"), &out, &stderr); code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "store") || !strings.Contains(stderr.String(), "unregistered.kind") {
 			t.Fatalf("%v on corrupt stored rule: code=%d stdout=%q stderr=%q", cmd, code, &out, &stderr)
 		}
 	}

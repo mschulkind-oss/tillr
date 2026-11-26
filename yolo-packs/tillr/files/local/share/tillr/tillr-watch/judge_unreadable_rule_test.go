@@ -17,7 +17,7 @@ import (
 
 func TestDrainJudgeUnreadableRule(t *testing.T) {
 	const ruleID = "drain-judge-unreadable"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

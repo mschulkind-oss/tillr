@@ -19,7 +19,7 @@ import (
 func TestDrainUnrequestedStartRule(t *testing.T) {
 	const (
 		id       = "drain-unrequested-start"
-		rulePath = "../../config/tillr/watch/drain-unrequested-start.toml"
+		rulePath = "rules/drain-unrequested-start.toml"
 	)
 	rawRule, err := os.ReadFile(rulePath)
 	if err != nil {
@@ -33,7 +33,7 @@ func TestDrainUnrequestedStartRule(t *testing.T) {
 		t.Fatalf("loaded rules from %s = %+v, want single %s rule", rulePath, fileRules, id)
 	}
 
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

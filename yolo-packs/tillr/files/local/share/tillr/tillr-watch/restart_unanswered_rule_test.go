@@ -16,7 +16,7 @@ import (
 
 func TestDrainRestartUnansweredRule(t *testing.T) {
 	const ruleID = "drain-restart-unanswered"
-	allRules, err := watch.LoadRules("../../config/tillr/watch")
+	allRules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

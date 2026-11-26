@@ -1,0 +1,28 @@
+# 2026-11-21 incident: the keeper relaunched the loop twice after store-busy exits.
+# 2026-11-22 23:45 ET amendment: starts after tillr drain stop or on an empty store
+# record provenance on drain.build-started and stay quiet.
+# Events read: drain.build-started.
+[[rule]]
+id = "drain-unrequested-start"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.build-started"]
+
+[rule.when]
+group_by = "global"
+pattern = "predicate_match"
+match = 'event.role == "drain" and empty(event.restart_request) and empty(event.stop_request) and not (event.initial == true)'
+window = "1h"
+
+[rule.guidance]
+summary = "The drain loop started after a previous loop ended without a recorded stop or restart request."
+check = [
+  "Check the keeper output (.tillr/keeper.log or tillr-drain keep) for 'keeper: loop exited; restart in <seconds>s' before 'keeper: started loop <pid>' or a fresh 'keeper: started loop <pid>' / 'keeper: watching loop <pid>' with no preceding 'restart: stopping loop <pid>' or 'keeper: stopped; loop left running', versus a deliberate first launch with no prior unstopped loop.",
+  "Check the previous loop's log and newest .tillr/loop/drain-<stamp>.json for a fault exit ('loop: stopped after ...: fault', drain.loop-ended) or an abrupt mid-run cutoff missing 'loop: stopped by the operator' ('\"stop\": \"operator-stop\"').",
+]
+do = ["Determine why the previous loop ended without a recorded stop or restart request and fix any underlying fault."]
+
+[rule.delivery]
+receiver = "foreground"

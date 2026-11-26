@@ -16,7 +16,6 @@
     "config/tillr/deny-list.json",
     "config/tillr/gate-policy.json",
     "config/tillr/plan-guidance.md",
-    "config/tillr/watch/",
     "config/tillr/workflows/",
     "tools/gate/checks/",
     "tools/gate/checks/go-affected.json",

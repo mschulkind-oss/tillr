@@ -23,7 +23,7 @@ import (
 
 func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 	const ruleID = "drain-repeated-item-conflicts"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestDrainRepeatedItemConflictsRuleCountsDistinctConflictIDsAcrossRetryRerai
 		designRunID = "run-design-1"
 		conflictID  = "conflict-" + workerRunID
 	)
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

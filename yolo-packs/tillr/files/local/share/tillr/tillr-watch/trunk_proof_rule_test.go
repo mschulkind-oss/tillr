@@ -33,7 +33,7 @@ type trunkProofFixture struct {
 
 func newTrunkProofFixture(t *testing.T) *trunkProofFixture {
 	t.Helper()
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +478,7 @@ func TestTrunkProofStalledFiresWhenCheckReportsNothingForTenMinuteWindow(t *test
 }
 
 func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
-	const rulesDir = "../../config/tillr/watch"
+	const rulesDir = "rules"
 
 	for _, ackMode := range []string{"ack", "settle"} {
 		t.Run(ackMode, func(t *testing.T) {
@@ -696,7 +696,7 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 func TestTrunkProofLagRuleLint(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run(t.Context(), []string{"lint", "../.."}, &out, &errOut)
-	if code != 0 || out.Len() != 0 || errOut.Len() != 0 {
+	if code != 0 || !strings.Contains(out.String(), "rule trunk-proof-lag source=shipped:rules/trunk-proof-lag.toml") || errOut.Len() != 0 {
 		t.Fatalf("tillr watch lint ../..: code=%d out=%q err=%q", code, out.String(), errOut.String())
 	}
 }
@@ -743,7 +743,7 @@ func TestTrunkProofLagWithoutProvedPointer(t *testing.T) {
 	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	rawRule, err := os.ReadFile("../../config/tillr/watch/trunk-proof-lag.toml")
+	rawRule, err := os.ReadFile("rules/trunk-proof-lag.toml")
 	if err != nil {
 		t.Fatal(err)
 	}

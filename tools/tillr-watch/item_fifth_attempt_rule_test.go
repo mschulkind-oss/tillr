@@ -28,7 +28,7 @@ func TestDrainItemFifthAttemptRule(t *testing.T) {
 		landingKind  = "land.landing"
 	)
 
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestDrainItemFifthAttemptRule(t *testing.T) {
 		lintArgs = append(lintArgs, "--policy", p)
 	}
 	var lintOut, lintErr bytes.Buffer
-	if code := run(t.Context(), lintArgs, &lintOut, &lintErr); code != 0 || lintOut.Len() != 0 || lintErr.Len() != 0 {
+	if code := run(t.Context(), lintArgs, &lintOut, &lintErr); code != 0 || lintErr.Len() != 0 {
 		t.Fatalf("tillr watch lint failed: code=%d stdout=%q stderr=%q", code, lintOut.String(), lintErr.String())
 	}
 }

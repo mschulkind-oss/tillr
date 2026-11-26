@@ -17,7 +17,7 @@ import (
 
 func TestDrainLoopNoPassRule(t *testing.T) {
 	const ruleID = "drain-loop-no-pass"
-	rules, err := watch.LoadRules("../../config/tillr/watch")
+	rules, err := watch.LoadRules("rules")
 	if err != nil {
 		t.Fatal(err)
 	}

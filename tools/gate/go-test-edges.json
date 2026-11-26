@@ -1067,7 +1067,6 @@
       "github.com/mschulkind-oss/tillr-store"
     ],
     "reads": [
-      "config/tillr/watch/",
       "tools/tillr/examples/",
       "tools/tillr/watch/testdata/"
     ]
@@ -1189,7 +1188,7 @@
   "github.com/mschulkind-oss/tillr/watch": {
     "builds": [],
     "reads": [
-      "config/tillr/watch/"
+      "tools/tillr-watch/rules/"
     ]
   }
 }

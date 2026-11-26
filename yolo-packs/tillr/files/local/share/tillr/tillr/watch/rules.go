@@ -23,6 +23,10 @@ const (
 	AlternatingPair      = "alternating_pair"
 	LagBehind            = "lag_behind"
 	DurationWithoutEvent = "duration_without_event"
+
+	RuleSourceShipped = "shipped"
+	RuleSourceFile    = "file"
+	RuleSourceStore   = "store"
 )
 
 type Rule struct {
@@ -36,7 +40,13 @@ type Rule struct {
 
 	// Keep the validated table, including omitted vs. explicit optional keys,
 	// for whole-rule encoding and tuning without reconstituting TOML from defaults.
-	table map[string]any
+	table  map[string]any
+	origin string
+}
+
+// Origin returns the rule's load source ("shipped", "file", or "store").
+func (r Rule) Origin() string {
+	return r.origin
 }
 
 type Reads struct {
@@ -121,19 +131,57 @@ func (r Rule) evaluatorReason() string {
 // Callers must link the owners of the event kinds they recognize before
 // loading; the loader uses the process's event registry, not a second list.
 func LoadRules(dir string) ([]Rule, error) {
-	root, err := filepath.EvalSymlinks(dir)
+	if dir == "" {
+		return nil, fmt.Errorf("rules path must be a directory")
+	}
+	return LoadRuleLayers(nil, dir)
+}
+
+// LoadRulesFS validates every .toml file beneath fsys in sorted path order,
+// tagging each rule with RuleSourceShipped and refusing [[override]] blocks.
+func LoadRulesFS(fsys fs.FS) ([]Rule, error) {
+	if fsys == nil {
+		return nil, nil
+	}
+	kinds := registeredRuleKinds()
+	return loadRulesFS(fsys, kinds)
+}
+
+// LoadRuleLayers loads shipped rules from shippedFS (if non-nil) and layers
+// repository rules and [[override]] entries from repoDir (if non-empty) on top.
+func LoadRuleLayers(shippedFS fs.FS, repoDir string) ([]Rule, error) {
+	kinds := registeredRuleKinds()
+	var rules []Rule
+	shippedByID := make(map[string]Rule)
+	indexByID := make(map[string]int)
+
+	if shippedFS != nil {
+		shipped, err := loadRulesFS(shippedFS, kinds)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range shipped {
+			indexByID[r.ID] = len(rules)
+			shippedByID[r.ID] = r
+			rules = append(rules, r)
+		}
+	}
+
+	if repoDir == "" {
+		return rules, nil
+	}
+
+	root, err := filepath.EvalSymlinks(repoDir)
 	if err != nil {
 		return nil, err
 	}
-	kinds := registeredRuleKinds()
-	var rules []Rule
-	seen := make(map[string]string)
+	repoSeen := make(map[string]string)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if path == root && !entry.IsDir() {
-			return fmt.Errorf("%s: rules path must be a directory", dir)
+			return fmt.Errorf("%s: rules path must be a directory", repoDir)
 		}
 		if entry.IsDir() || filepath.Ext(path) != ".toml" {
 			return nil
@@ -142,9 +190,46 @@ func LoadRules(dir string) ([]Rule, error) {
 		if err != nil {
 			return err
 		}
-		loaded, err := loadRuleDocument(path, data, kinds, seen)
+		loaded, err := loadRepoRuleDocument(path, data, kinds, repoSeen, shippedByID)
 		if err != nil {
 			return err
+		}
+		for _, r := range loaded {
+			if idx, ok := indexByID[r.ID]; ok {
+				rules[idx] = r
+			} else {
+				indexByID[r.ID] = len(rules)
+				rules = append(rules, r)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
+func loadRulesFS(fsys fs.FS, kinds map[string]bool) ([]Rule, error) {
+	var rules []Rule
+	seen := make(map[string]string)
+	err := fs.WalkDir(fsys, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".toml" {
+			return nil
+		}
+		data, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return err
+		}
+		loaded, err := loadRuleDocument("shipped:"+path, data, kinds, seen)
+		if err != nil {
+			return err
+		}
+		for i := range loaded {
+			loaded[i].origin = RuleSourceShipped
 		}
 		rules = append(rules, loaded...)
 		return nil
@@ -217,9 +302,131 @@ func loadRuleDocument(source string, data []byte, kinds map[string]bool, seen ma
 			return nil, c.refusal("id", "duplicate rule ID (first in %s)", previous)
 		}
 		seen[id] = source
+		rule.origin = RuleSourceFile
 		rules = append(rules, rule)
 	}
 	return rules, nil
+}
+
+func loadRepoRuleDocument(source string, data []byte, kinds map[string]bool, seen map[string]string, shippedByID map[string]Rule) ([]Rule, error) {
+	var doc map[string]any
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", source, err)
+	}
+	for _, key := range slices.Sorted(maps.Keys(doc)) {
+		if key != "rule" && key != "override" {
+			return nil, fmt.Errorf("%s: %s: unknown top-level key", source, key)
+		}
+	}
+	var rules []Rule
+	if raw, present := doc["rule"]; present {
+		tables, ok := raw.([]any)
+		if !ok {
+			return nil, fmt.Errorf("%s: rule: expected [[rule]] entries", source)
+		}
+		for i, raw := range tables {
+			table, ok := raw.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%s: rule[%d]: expected a rule table", source, i)
+			}
+			id, _ := table["id"].(string)
+			c := &ruleCheck{path: source, id: id, index: i}
+			rule, err := c.load(table, kinds)
+			if err != nil {
+				return nil, err
+			}
+			if previous, ok := seen[id]; ok {
+				return nil, c.refusal("id", "duplicate rule ID (first in %s)", previous)
+			}
+			seen[id] = source
+			rule.origin = RuleSourceFile
+			rules = append(rules, rule)
+		}
+	}
+	if raw, present := doc["override"]; present {
+		tables, ok := raw.([]any)
+		if !ok {
+			return nil, fmt.Errorf("%s: override: expected [[override]] entries", source)
+		}
+		for i, raw := range tables {
+			table, ok := raw.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%s: override[%d]: expected an override table", source, i)
+			}
+			rule, err := loadOverrideTable(source, i, table, kinds, seen, shippedByID)
+			if err != nil {
+				return nil, err
+			}
+			rule.origin = RuleSourceFile
+			rules = append(rules, rule)
+		}
+	}
+	return rules, nil
+}
+
+func loadOverrideTable(source string, index int, table map[string]any, kinds map[string]bool, seen map[string]string, shippedByID map[string]Rule) (Rule, error) {
+	id, _ := table["id"].(string)
+	c := &ruleCheck{path: source, id: id, index: index}
+	c.noRemedy(table, "")
+	if c.err != nil {
+		return Rule{}, c.err
+	}
+	if id == "" {
+		return Rule{}, fmt.Errorf("%s: override[%d]: id: expected a non-empty string", source, index)
+	}
+	if len(table) == 1 {
+		return Rule{}, fmt.Errorf("%s: override %q: must specify at least one key besides id", source, id)
+	}
+	for _, key := range slices.Sorted(maps.Keys(table)) {
+		switch key {
+		case "id", "enabled", "scope", "severity", "reads", "when", "guidance", "delivery":
+		default:
+			return Rule{}, fmt.Errorf("%s: override %q: %s: unknown key", source, id, key)
+		}
+	}
+	if previous, ok := seen[id]; ok {
+		return Rule{}, fmt.Errorf("%s: override %q: id: duplicate rule ID (first in %s)", source, id, previous)
+	}
+	shipped, ok := shippedByID[id]
+	if !ok {
+		return Rule{}, fmt.Errorf("%s: override %q: no shipped rule with id %q", source, id, id)
+	}
+	seen[id] = source
+	merged, err := applyOverrideTable(source, id, shipped.table, table)
+	if err != nil {
+		return Rule{}, err
+	}
+	return c.load(merged, kinds)
+}
+
+func applyOverrideTable(source, id string, base, patch map[string]any) (map[string]any, error) {
+	merged := cloneTable(base)
+	for _, key := range slices.Sorted(maps.Keys(patch)) {
+		if key == "id" {
+			continue
+		}
+		val := patch[key]
+		switch key {
+		case "enabled", "scope", "severity":
+			merged[key] = cloneTOMLValue(val)
+		case "reads", "when", "guidance", "delivery":
+			subPatch, ok := val.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%s: override %q: %s: expected a table", source, id, key)
+			}
+			var subMerged map[string]any
+			if existing, ok := merged[key].(map[string]any); ok {
+				subMerged = cloneTable(existing)
+			} else {
+				subMerged = make(map[string]any)
+			}
+			for _, subKey := range slices.Sorted(maps.Keys(subPatch)) {
+				subMerged[subKey] = cloneTOMLValue(subPatch[subKey])
+			}
+			merged[key] = subMerged
+		}
+	}
+	return merged, nil
 }
 
 type ruleCheck struct {

@@ -418,7 +418,7 @@ receiver = "foreground"
 	code, stdout, stderr = runWrapper(t, t.TempDir(), "",
 		"doctor", "--root", root,
 		"--brief-template", filepath.Join(root, "brief-template.md"),
-		"--rules", filepath.Join(repoRoot, "config", "tillr", "watch"))
+		"--rules", filepath.Join(repoRoot, "tools", "tillr-watch", "rules"))
 	if code != 0 {
 		t.Fatalf("shipped watch rules exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}

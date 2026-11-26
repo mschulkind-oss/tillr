@@ -342,7 +342,7 @@ Eighth: these report what sections 3 and 4 repair.
     slices are chained behind the workflow's.
 
 53. [The watch rules not yet shipped](../design/tillr-watch.md): the designed rules that have no
-    file under [`config/tillr/watch/`](../../config/tillr/watch/).
+    file under [`config/tillr/watch/`](../../tools/tillr-watch/rules/).
 
 54. [Read-face timing](../design/tillr-read-face-timing.md): a slow read command is measured and
     alerted on without the read writing to the store.
