@@ -1561,8 +1561,8 @@ func TestALandedCandidateMovesItsItemToLanded(t *testing.T) {
 	if runs := lines(t, f.count); countMatching(runs, "adapter") != 1 {
 		t.Fatalf("the adapter ran %d time(s) for one landed candidate, want 1: %v", countMatching(runs, "adapter"), runs)
 	}
-	if !strings.Contains(result.Detail, "item_041") || !strings.Contains(result.Detail, drain.ReasonNotReady) {
-		t.Fatalf("the stop does not name the landed item and its hold reason: %s", result.Detail)
+	if strings.Contains(result.Detail, "item_041") {
+		t.Fatalf("the stop detail listed finished item_041 as held: %s", result.Detail)
 	}
 }
 

@@ -17,7 +17,7 @@ func definitionProgram(t *testing.T, names []string, missing string) (*definitio
 	t.Helper()
 	log := filepath.Join(scratch(t, "hooks"), "calls.jsonl")
 	// This independent fixture intentionally knows only the flags in the public contract.
-	flags := []string{"--item", "--lane", "--run", "--worktree", "--base", "--head", "--root", "--observed-trunk", "--base-ref", "--message-from", "--store", "--verdict", "--all", "--since", "--only"}
+	flags := []string{"--item", "--lane", "--run", "--worktree", "--base", "--head", "--root", "--observed-trunk", "--base-ref", "--message-from", "--store", "--verdict", "--all", "--since", "--only", "--artifact-dir"}
 	answers := map[string][]string{}
 	for _, name := range names {
 		if name == missing {

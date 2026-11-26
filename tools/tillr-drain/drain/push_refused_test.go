@@ -132,6 +132,7 @@ func TestRefusedPushConflictRepairsAndPublishes(t *testing.T) {
 			root := p.f.root
 			p.l.cfg.PostLanding.Push.What = mode
 			remoteTip := p.remoteCommit(t, "two.txt", "remote version\n")
+			recordFixtureLandings(t, p.f.storePath, remoteTip)
 			runGit(t, p.remote, "config", "receive.denyNonFastForwards", "true")
 			trace := filepath.Join(t.TempDir(), "git-trace")
 			t.Setenv("GIT_TRACE", trace)
