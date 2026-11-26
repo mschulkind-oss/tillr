@@ -2209,7 +2209,7 @@ func TestEveryNonLandingOutcomeRecovers(t *testing.T) {
 	// pass. Once STUB_RECOVER is set, every item is ordinary committed work, so the second
 	// pass is the recovery's proof rather than a second copy of the same failure.
 	adapter := stub(t, "adapter", counting+`if [ -n "$STUB_RECOVER" ]; then
-  echo candidate > candidate.txt
+  printf '%s\n' "${TILLR_RUN_ID:-candidate}" > candidate.txt
   git add candidate.txt
   git -c user.name=stub -c user.email=stub@example.invalid commit -q -m candidate
   printf 'RESULT: done\n'
@@ -2224,13 +2224,13 @@ case "$TILLR_RUN_ID" in
     printf 'RESULT: done\n'
     ;;
   *item_042*)
-    echo candidate > candidate.txt
+    printf '%s\n' "${TILLR_RUN_ID:-candidate}" > candidate.txt
     git add candidate.txt
     git -c user.name=stub -c user.email=stub@example.invalid commit -q -m candidate
     printf 'OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: c1 contradicts the tree\nRESULT: blocked\n'
     ;;
   *item_043*)
-    echo candidate > candidate.txt
+    printf '%s\n' "${TILLR_RUN_ID:-candidate}" > candidate.txt
     git add candidate.txt
     git -c user.name=stub -c user.email=stub@example.invalid commit -q -m candidate
     printf 'RESULT: done\n'
