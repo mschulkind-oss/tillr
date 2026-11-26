@@ -158,7 +158,10 @@ func TestSyncRoadmapScopePreservesUnreadItemsAndWholeObservation(t *testing.T) {
 }
 func TestSyncRoadmapScopeRefusesInvalidPathsWithoutWrites(t *testing.T) {
 	repo := scopeRepo(t)
-	for _, road := range []string{"docs/draft.md", "docs/missing.md", "outside.md", "../docs/a/roadmap.md", "docs/a", ""} {
+	if err := os.WriteFile(filepath.Join(repo, "untracked-outside.md"), []byte("# Untracked\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, road := range []string{"docs/draft.md", "docs/missing.md", "untracked-outside.md", "../docs/a/roadmap.md", "docs/a", ""} {
 		db := filepath.Join(scratch(t, "scope-invalid"), "state.db")
 		cmd := exec.Command(bin, "sync", "--store", db, "--root", repo, "--roadmap", "docs/a/roadmap.md", "--roadmap", road)
 		cmd.Env = append(os.Environ(), "BOARD_DB=", "XDG_STATE_HOME="+scratch(t, "state"))
@@ -270,11 +273,14 @@ func TestSyncSettingsRoadmapsLimitsImportsAndReportsSkippedBlocks(t *testing.T) 
 
 func TestSyncSettingsRoadmapsRefusesInvalidConfigWithoutStoreWrites(t *testing.T) {
 	repo := scopeRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "untracked-outside.md"), []byte("# Untracked\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, raw := range []string{
 		"[sync\n",
 		"[sync]\nroadmaps = \"docs/a/roadmap.md\"\n",
 		"[sync]\nroadmaps = [\"docs/missing.md\"]\n",
-		"[sync]\nroadmaps = [\"outside.md\"]\n",
+		"[sync]\nroadmaps = [\"untracked-outside.md\"]\n",
 	} {
 		if err := os.WriteFile(filepath.Join(repo, ".tillr.toml"), []byte(raw), 0600); err != nil {
 			t.Fatal(err)
@@ -287,5 +293,57 @@ func TestSyncSettingsRoadmapsRefusesInvalidConfigWithoutStoreWrites(t *testing.T
 		if _, err := os.Stat(db); !os.IsNotExist(err) {
 			t.Fatalf("invalid config %q created store", raw)
 		}
+	}
+}
+
+func TestSyncRoadmapOutsideDocs(t *testing.T) {
+	repo := syncRepo(t, map[string]string{
+		"tools/alpha/roadmap.md": "# Alpha Roadmap\n" +
+			"- [Design](../../docs/design/alpha.md)\n" +
+			"- [Local notes](notes.md)\n" +
+			scopeBlock("alpha-inline"),
+		"tools/alpha/notes.md":    scopeBlock("alpha-notes"),
+		"tools/beta/roadmap.md":   scopeBlock("beta-inline"),
+		"docs/design/alpha.md":    scopeBlock("alpha-design"),
+		"docs/design/unlinked.md": scopeBlock("unlinked"),
+	})
+	if err := os.WriteFile(filepath.Join(repo, ".tillr.toml"), []byte("[sync]\nroadmaps = [\"tools/alpha/roadmap.md\"]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	wantSkipped := []any{
+		map[string]any{"file": "docs/design/unlinked.md", "item_id": "item-unlinked"},
+	}
+
+	for _, extra := range [][]string{nil, {"--roadmap", "tools/alpha/roadmap.md"}} {
+		db := filepath.Join(scratch(t, "outside-docs"), "state.db")
+		args := append([]string{"sync", "--store", db, "--root", repo, "--json"}, extra...)
+		code, out := run(t, args...)
+		if code != 0 {
+			t.Fatalf("%v exit %d: %s", extra, code, out)
+		}
+		if got := scopeOrder(t, db); got != "item-alpha-design,item-alpha-inline" {
+			t.Fatalf("%v imported %q, want item-alpha-design,item-alpha-inline", extra, got)
+		}
+		p := scopePayload(t, out)
+		if !reflect.DeepEqual(p["scope"], []any{"tools/alpha/roadmap.md"}) || p["documents"] != float64(2) || p["blocks"] != float64(2) {
+			t.Fatalf("%v payload: %s", extra, out)
+		}
+		if p["skipped_count"] != float64(1) || !reflect.DeepEqual(p["skipped_blocks"], wantSkipped) {
+			t.Fatalf("%v skipped_blocks = %v (count %v), want %v (must not scan un-named files outside docs/)", extra, p["skipped_blocks"], p["skipped_count"], wantSkipped)
+		}
+	}
+
+	// Unscoped sync (roadmaps = []) does not scan outside docs/.
+	if err := os.WriteFile(filepath.Join(repo, ".tillr.toml"), []byte("[sync]\nroadmaps = []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	wholeDB := filepath.Join(scratch(t, "outside-unscoped"), "state.db")
+	code, out := run(t, "sync", "--store", wholeDB, "--root", repo, "--json")
+	if code != 0 {
+		t.Fatalf("unscoped exit %d: %s", code, out)
+	}
+	if got := scopeOrder(t, wholeDB); got != "item-alpha-design,item-unlinked" {
+		t.Fatalf("unscoped imported %q, want only docs/ items", got)
 	}
 }

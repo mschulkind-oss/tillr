@@ -97,7 +97,7 @@ func TestLoopSyncRoadmapsPathRefusal(t *testing.T) {
 	fixtureAt(t, f.store)
 	writeFile(t, filepath.Join(f.root, ".tillr.toml"), "[sync]\nroadmaps = ['docs/missing/roadmap.md']")
 	code, out := invokeSyncScopeLoop(t, f, sibling(t, "item"))
-	if code != 2 || !strings.Contains(string(out), `--roadmap "docs/missing/roadmap.md" must name a tracked Markdown file under docs/`) {
+	if code != 2 || !strings.Contains(string(out), `--roadmap "docs/missing/roadmap.md" must name a tracked Markdown file`) {
 		t.Fatalf("exit %d: %s", code, out)
 	}
 	if strings.Contains(string(out), "loop: tick") || len(lines(t, f.count)) != 0 {

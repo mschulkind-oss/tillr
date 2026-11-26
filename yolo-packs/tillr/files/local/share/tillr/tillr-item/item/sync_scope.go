@@ -2,10 +2,14 @@
 package item
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/docshare"
@@ -46,11 +50,24 @@ func ReadRoadmapDocuments(root string, roadmaps []string) ([]SyncDocument, []str
 	seen := map[string]bool{}
 	for _, given := range roadmaps {
 		p := filepath.ToSlash(filepath.Clean(given))
-		if filepath.IsAbs(given) || !strings.HasPrefix(p, "docs/") || !tracked[p] {
-			return nil, nil, Usagef("--roadmap %q must name a tracked Markdown file under docs/", given)
+		if filepath.IsAbs(given) || p == "." || p == ".." || strings.HasPrefix(p, "../") || !strings.HasSuffix(p, ".md") {
+			return nil, nil, Usagef("--roadmap %q must name a tracked Markdown file", given)
+		}
+		if strings.HasPrefix(p, "docs/") {
+			if !tracked[p] {
+				return nil, nil, Usagef("--roadmap %q must name a tracked Markdown file", given)
+			}
+		} else {
+			ok, err := isTrackedFile(root, p)
+			if err != nil {
+				return nil, nil, Externalf("%s", err)
+			}
+			if !ok {
+				return nil, nil, Usagef("--roadmap %q must name a tracked Markdown file", given)
+			}
 		}
 		if err := checkSyncFile(root, p); err != nil {
-			return nil, nil, Usagef("--roadmap %q must name an existing regular tracked Markdown file under docs/: %v", given, err)
+			return nil, nil, Usagef("--roadmap %q must name an existing regular tracked Markdown file: %v", given, err)
 		}
 		if !seen[p] {
 			selected = append(selected, p)
@@ -90,7 +107,7 @@ func ReadRoadmapDocuments(root string, roadmaps []string) ([]SyncDocument, []str
 			return nil, nil, linkErr
 		}
 	}
-	docs := make([]SyncDocument, 0, len(paths))
+	docs := make([]SyncDocument, 0, len(paths)+len(selected))
 	for _, p := range paths {
 		if content, ok := readByPath[p]; ok {
 			docs = append(docs, SyncDocument{Path: p, Content: content})
@@ -114,7 +131,29 @@ func ReadRoadmapDocuments(root string, roadmaps []string) ([]SyncDocument, []str
 		}
 		docs = append(docs, SyncDocument{Path: p, Content: content})
 	}
+	for _, p := range selected {
+		if !strings.HasPrefix(p, "docs/") {
+			docs = append(docs, SyncDocument{Path: p, Content: readByPath[p]})
+		}
+	}
+	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 	return docs, selected, nil
+}
+
+func isTrackedFile(root, p string) (bool, error) {
+	cmd := exec.Command("git", "-C", root, "ls-files", "-z", "--", p)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("checking tracked path %s in %s with git: %v: %s", p, root, err, strings.TrimSpace(stderr.String()))
+	}
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name == p {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // A tracked symlink is not the Markdown it points to; neither an explicit
