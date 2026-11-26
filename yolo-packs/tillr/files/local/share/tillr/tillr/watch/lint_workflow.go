@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr/setupcheck"
 )
 
 type lintWorkflow struct {
@@ -753,14 +755,14 @@ func loadAndLintPolicies(absRoot string, policyPaths []string, fc *findingCollec
 
 	var policies []lintPolicy
 	for _, p := range paths {
-		if lp, ok := loadAndValidatePolicyFile(p, fc); ok {
+		if lp, ok := loadAndValidatePolicyFile(absRoot, p, fc); ok {
 			policies = append(policies, lp)
 		}
 	}
 	return policies, false
 }
 
-func loadAndValidatePolicyFile(path string, fc *findingCollector) (lintPolicy, bool) {
+func loadAndValidatePolicyFile(absRoot, path string, fc *findingCollector) (lintPolicy, bool) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		fc.add(path, CodeWatchLintInput, fmt.Sprintf("reading policy %q: %v", path, err))
@@ -796,6 +798,9 @@ func loadAndValidatePolicyFile(path string, fc *findingCollector) (lintPolicy, b
 		}
 		if b.Adapter == "" {
 			fc.add(path, CodeWatchLintSeatUnmapped, fmt.Sprintf("backend %q names no adapter", name))
+			valid = false
+		} else if _, err := setupcheck.CheckAdapter(absRoot, b.Adapter); err != nil {
+			fc.add(path, CodeWatchLintSeatUnmapped, fmt.Sprintf("backend %q adapter %q: %v", name, b.Adapter, err))
 			valid = false
 		}
 		if b.Model == "" && len(b.Models) == 0 {

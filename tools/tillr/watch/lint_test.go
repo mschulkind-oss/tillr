@@ -423,7 +423,7 @@ func TestLintSeatUnmapped(t *testing.T) {
 	  "default_backend": "pi",
 	  "seats": { "build": "pi" },
 	  "read_only_seats": ["build"],
-	  "backends": { "pi": { "adapter": "a", "model": "m" } }
+	  "backends": { "pi": { "adapter": "true", "model": "m" } }
 	}`)
 	writeLintFile(t, root2, "config/tillr/workflows/scout-write@v1.json", `{
 	  "name": "scout-write",
@@ -699,7 +699,7 @@ func TestLintPolicyAndExprOperatorEdgeCases(t *testing.T) {
 	}`)
 	validPolicy := writeLintFile(t, root, "p2.json", `{
 	  "default_backend": "pi",
-	  "backends": { "pi": { "adapter": "pi", "model": "m" } },
+	  "backends": { "pi": { "adapter": "true", "model": "m" } },
 	  "seats": { "scout": "pi" }
 	}`)
 	findings, err := Lint(context.Background(), LintOptions{
@@ -1136,4 +1136,44 @@ receiver = "foreground"
 			})
 		}
 	})
+}
+
+func TestLintPolicyAdapterChecks(t *testing.T) {
+	registerLintTestKinds(t)
+
+	// 1. Missing adapter.
+	rootMissing := t.TempDir()
+	missingPolicy := writeLintFile(t, rootMissing, "policy.json", `{
+	  "default_backend": "pi",
+	  "seats": { "build": "pi" },
+	  "backends": { "pi": { "adapter": "./does-not-exist", "model": "m" } }
+	}`)
+	findings, err := Lint(context.Background(), LintOptions{
+		Root:        rootMissing,
+		PolicyPaths: []string{missingPolicy},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasLintCode(t, findings, CodeWatchLintSeatUnmapped, "missing")
+
+	// 2. Non-executable adapter (mode 0644).
+	rootNonExec := t.TempDir()
+	adapterPath := filepath.Join(rootNonExec, "non-exec-adapter")
+	if err := os.WriteFile(adapterPath, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nonExecPolicy := writeLintFile(t, rootNonExec, "policy.json", `{
+	  "default_backend": "pi",
+	  "seats": { "build": "pi" },
+	  "backends": { "pi": { "adapter": "`+filepath.ToSlash(adapterPath)+`", "model": "m" } }
+	}`)
+	findings, err = Lint(context.Background(), LintOptions{
+		Root:        rootNonExec,
+		PolicyPaths: []string{nonExecPolicy},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasLintCode(t, findings, CodeWatchLintSeatUnmapped, "not executable")
 }

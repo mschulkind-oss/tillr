@@ -26,6 +26,11 @@ The ninth noun, `notify`, is built in and has no binary of its own. Its one face
 runs the local Unix-socket relay that passes wake hints between programs sharing a store;
 it requires `--store` and exits once no connection has remained for its idle period.
 
+The tenth noun, `doctor`, is also built in and read-only: it checks a repository's whole
+tillr setup (store, settings, seat policy and adapter executables, brief template, default
+workflow, watch rules, and gate check declarations), prints one line per check, names the
+file or command that fixes any failure, and exits 1 when any check fails.
+
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/reference/tillr-distribution.md`](../../docs/reference/tillr-distribution.md).
 
@@ -33,14 +38,14 @@ skill is [`docs/reference/tillr-distribution.md`](../../docs/reference/tillr-dis
 
 - **The handover is an `exec`, not a subprocess.** There is no wrapper left to observe or
   rewrite the child's exit status, signals or stdin.
-- **The noun set is closed.** A noun outside the nine is refused here rather than
+- **The noun set is closed.** A noun outside the set is refused here rather than
   forwarded anywhere, so the wrapper cannot become a second interface to anything else.
-- **Only `--help` and `notify` are the wrapper's own answers.** Everything after any
+- **Only `--help`, `--version`, `notify` and `doctor` are the wrapper's own answers.** Everything after any
   other noun belongs to that noun.
 
 ## Standalone invocation
 
-Apart from `notify`, nothing built from this module does work on its own, so an external
+Apart from `notify` and `doctor`, nothing built from this module does work on its own, so an external
 caller uses it only as spelling. These two lines are the same program:
 
 ```sh

@@ -1030,6 +1030,9 @@ func loopFace(args []string) int {
 	if policy == nil {
 		return failStartup(drain.Usagef("loop needs a policy: %s names none", *policyPath))
 	}
+	if err := policy.CheckAdapters(*root); err != nil {
+		return failStartup(err)
+	}
 	at := time.Now
 	if *now != "" {
 		parsed, err := time.Parse(time.RFC3339, *now)

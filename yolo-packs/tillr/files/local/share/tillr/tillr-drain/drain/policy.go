@@ -13,6 +13,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/setupcheck"
 )
 
 // Backend is one named backend in the policy: the adapter program staging puts in the
@@ -329,6 +330,16 @@ func (p Policy) Check() error {
 func checkBackend(name string, b Backend) error {
 	if missing := b.Missing(); missing != "" {
 		return Usagef("the policy's backend %q %s", name, missing)
+	}
+	return nil
+}
+
+// CheckAdapters verifies that every backend's adapter exists and is executable.
+func (p Policy) CheckAdapters(root string) error {
+	for _, name := range backendNames(p.Backends) {
+		if _, err := setupcheck.CheckAdapter(root, p.Backends[name].Adapter); err != nil {
+			return Usagef("the policy's backend %q: %v", name, err)
+		}
 	}
 	return nil
 }

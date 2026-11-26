@@ -58,7 +58,7 @@ func TestWatchLintPositionalOrderAndCwdDefault(t *testing.T) {
 	const policy = `{
   "default_backend": "main",
   "backends": {
-    "main": {"adapter": "pi", "model": "test-model"}
+    "main": {"adapter": "true", "model": "test-model"}
   },
   "seats": {
     "build": "main"
@@ -118,6 +118,9 @@ func TestWatchLintRecordedVerdictExample(t *testing.T) {
 	prep.Dir = dst
 	if out, err := prep.CombinedOutput(); err != nil {
 		t.Fatalf("prepare.py: %v\n%s", err, out)
+	}
+	if err := os.Chmod(filepath.Join(dst, "stub-adapter.sh"), 0o755); err != nil {
+		t.Fatalf("chmod stub-adapter.sh: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
 	code := run(t.Context(), []string{"lint", dst}, &stdout, &stderr)
@@ -182,4 +185,60 @@ receiver = "drain:build"
 	if string(after) != badRule {
 		t.Errorf("lint mutated input rule file")
 	}
+}
+
+func TestWatchLintPolicyAdapterRefused(t *testing.T) {
+	t.Run("missing adapter", func(t *testing.T) {
+		dir := t.TempDir()
+		policyPath := filepath.Join(dir, "policy.json")
+		const policy = `{
+  "default_backend": "main",
+  "backends": {
+    "main": {"adapter": "./missing-adapter", "model": "test-model"}
+  },
+  "seats": {
+    "build": "main"
+  }
+}`
+		if err := os.WriteFile(policyPath, []byte(policy), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		code := run(t.Context(), []string{"lint", dir, "--policy", policyPath}, &stdout, &stderr)
+		if code != 1 || stderr.Len() != 0 {
+			t.Fatalf("expected code 1 with no stderr, got code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "watch-lint-seat-unmapped") || !strings.Contains(stdout.String(), "missing") {
+			t.Fatalf("unexpected stdout: %q", stdout.String())
+		}
+	})
+
+	t.Run("non-executable adapter", func(t *testing.T) {
+		dir := t.TempDir()
+		adapterPath := filepath.Join(dir, "non-exec-adapter")
+		if err := os.WriteFile(adapterPath, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		policyPath := filepath.Join(dir, "policy.json")
+		policy := `{
+  "default_backend": "main",
+  "backends": {
+    "main": {"adapter": "` + filepath.ToSlash(adapterPath) + `", "model": "test-model"}
+  },
+  "seats": {
+    "build": "main"
+  }
+}`
+		if err := os.WriteFile(policyPath, []byte(policy), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		code := run(t.Context(), []string{"lint", dir, "--policy", policyPath}, &stdout, &stderr)
+		if code != 1 || stderr.Len() != 0 {
+			t.Fatalf("expected code 1 with no stderr, got code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "watch-lint-seat-unmapped") || !strings.Contains(stdout.String(), "not executable") {
+			t.Fatalf("unexpected stdout: %q", stdout.String())
+		}
+	})
 }

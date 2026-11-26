@@ -13,15 +13,19 @@ import (
 
 	"github.com/mschulkind-oss/tillr/buildstamp"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 func main() {
-	os.Exit(run(os.Args[1:]))
+	defer store.FlushSQLiteTraceAtExit()
+	code := run(os.Args[1:])
+	store.FlushSQLiteTraceAtExit()
+	os.Exit(code)
 }
 
 // nouns is the dispatch set, in the order the usage line prints it. A noun
 // has to be added here to be reachable; the wrapper never forwards unknown nouns.
-var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view", "watch", "trace", "notify"}
+var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view", "watch", "trace", "notify", "doctor"}
 
 // dispatch is one invocation, resolved: the binary that answers it and the arguments it
 // is handed, unread.
@@ -48,6 +52,9 @@ func run(args []string) int {
 	}
 	if len(args) > 0 && args[0] == "notify" {
 		return runNotify(args[1:], os.Stdout, os.Stderr)
+	}
+	if len(args) > 0 && args[0] == "doctor" {
+		return runDoctor(args[1:], os.Stdout, os.Stderr)
 	}
 	d, err := resolve(args)
 	if err != nil {

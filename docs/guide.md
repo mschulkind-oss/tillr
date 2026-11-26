@@ -170,7 +170,7 @@ Inside the relaunched jail, confirm that all eleven programs resolve on `PATH` a
 $ for bin in tillr tillr-drain tillr-gate tillr-item tillr-land tillr-loop tillr-run tillr-store tillr-trace tillr-view tillr-watch; do
     printf '%-12s %s\n' "$bin" "$("$bin" --help 2>&1 | head -n 1)"
   done
-tillr        tillr: store, item, land, drain, run, gate, view, watch, trace, notify
+tillr        tillr: store, item, land, drain, run, gate, view, watch, trace, notify, doctor
 tillr-drain  tillr-drain: probe-backend, workflow, why, workers, policy, plan, once, split, retry, clear-fault, accept-rewrite, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, scale, stop, restart, keep, fork-gate, loop-adapter or loop
 tillr-gate   tillr-gate: change, checks, classify, enable, plan, run, shadow
 tillr-item   tillr-item: apply, rank, dep, sync, reconcile, comments, list, show, state, place, idea, doc-triage, request, close, reopen, decision, mail, verdict or judge
@@ -294,7 +294,7 @@ $ export TILLR_CLONE="$PWD"
 $ YOLO_DURABLE_DIR="$HOME/.local/share/tillr-build" TILLR_BUILD_UNPROVED=HEAD just tillr-build
 $ export PATH="$HOME/.local/share/tillr-build/bin:$PATH"
 $ tillr --help
-tillr: store, item, land, drain, run, gate, view, watch, notify
+tillr: store, item, land, drain, run, gate, view, watch, notify, doctor
 Run `tillr <noun> --help` for one noun's faces.
 ```
 
@@ -428,7 +428,18 @@ You should see your item with `"state":"in-queue"`.
 
 ### Starting the loop and reading what it prints
 
-First validate the flags, store, and policy without dispatching anything:
+First check the repository's whole tillr setup in one read-only pass:
+
+```console
+$ tillr doctor --root "$PWD" --policy "$HOME/.config/tillr/my-policy.json"
+```
+
+`tillr doctor` reports, one line each, the store, settings file, seat policy and adapters,
+brief template, default workflow, watch rules directory, and gate check declarations, and
+exits `1` (naming the file or command that fixes any failing check) if anything is missing or
+invalid.
+
+Next validate the flags, store, and policy without dispatching anything:
 
 ```console
 $ tillr drain loop \
