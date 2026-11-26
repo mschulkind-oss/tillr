@@ -170,8 +170,8 @@ func requireFixtureCommitRepo(t testing.TB, dir string, args []string) {
 	}
 	cmd := exec.Command("git", "-C", absDir, "rev-parse", "--git-dir")
 	env := make([]string, 0, len(os.Environ()))
-	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "GIT_DIR=") || strings.HasPrefix(entry, "GIT_WORK_TREE=") || strings.HasPrefix(entry, "GIT_CEILING_DIRECTORIES=") {
+	for _, entry := range gitEnv() {
+		if strings.HasPrefix(entry, "GIT_CEILING_DIRECTORIES=") {
 			continue
 		}
 		env = append(env, entry)
@@ -284,9 +284,15 @@ func (f fixture) trunk(t *testing.T) string {
 // to be in.
 func gitEnv() []string {
 	env := os.Environ()
-	kept := env[:0]
+	kept := make([]string, 0, len(env))
 	for _, entry := range env {
-		if strings.HasPrefix(entry, "GIT_DIR=") || strings.HasPrefix(entry, "GIT_WORK_TREE=") {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			"GIT_IMPLICIT_WORK_TREE", "GIT_NAMESPACE", "GIT_GRAFT_FILE",
+			"GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE", "GIT_NO_REPLACE_OBJECTS",
+			"GIT_PREFIX", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT":
 			continue
 		}
 		kept = append(kept, entry)

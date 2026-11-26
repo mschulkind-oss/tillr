@@ -19,6 +19,23 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+func clearGitRepoEnv(env []string) []string {
+	kept := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			"GIT_IMPLICIT_WORK_TREE", "GIT_NAMESPACE", "GIT_GRAFT_FILE",
+			"GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE", "GIT_NO_REPLACE_OBJECTS",
+			"GIT_PREFIX", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT":
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
+}
+
 func requireFixtureCommitRepo(t testing.TB, dir string, args []string) {
 	t.Helper()
 	commit := false
@@ -37,8 +54,8 @@ func requireFixtureCommitRepo(t testing.TB, dir string, args []string) {
 	}
 	cmd := exec.Command("git", "-C", absDir, "rev-parse", "--git-dir")
 	env := make([]string, 0, len(os.Environ()))
-	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "GIT_DIR=") || strings.HasPrefix(entry, "GIT_WORK_TREE=") || strings.HasPrefix(entry, "GIT_CEILING_DIRECTORIES=") {
+	for _, entry := range clearGitRepoEnv(os.Environ()) {
+		if strings.HasPrefix(entry, "GIT_CEILING_DIRECTORIES=") {
 			continue
 		}
 		env = append(env, entry)
@@ -53,7 +70,7 @@ func runGitTest(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	requireFixtureCommitRepo(t, dir, args)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(BoundaryGitEnv(),
+	cmd.Env = append(clearGitRepoEnv(os.Environ()),
 		"GIT_AUTHOR_NAME=Fixer Test",
 		"GIT_AUTHOR_EMAIL=fixer-test@example.com",
 		"GIT_COMMITTER_NAME=Fixer Test",

@@ -36,6 +36,7 @@ func changeRepoGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
 	requireFixtureCommitRepo(t, root, args)
 	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+	cmd.Env = clearGitRepoEnv(os.Environ())
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("git %s failed: %v", strings.Join(args, " "), err)

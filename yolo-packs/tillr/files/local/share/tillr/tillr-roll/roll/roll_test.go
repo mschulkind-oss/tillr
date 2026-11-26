@@ -323,10 +323,29 @@ func repoRootForRollTest(t *testing.T) string {
 	return root
 }
 
+func clearGitRepoEnv(env []string) []string {
+	kept := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			"GIT_IMPLICIT_WORK_TREE", "GIT_NAMESPACE", "GIT_GRAFT_FILE",
+			"GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE", "GIT_NO_REPLACE_OBJECTS",
+			"GIT_PREFIX", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT":
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
+}
+
 func runGitFixture(t *testing.T, root string, args ...string) string {
 	t.Helper()
 	cmdArgs := append([]string{"-C", root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"}, args...)
-	out, err := exec.Command("git", cmdArgs...).CombinedOutput()
+	cmd := exec.Command("git", cmdArgs...)
+	cmd.Env = clearGitRepoEnv(os.Environ())
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}

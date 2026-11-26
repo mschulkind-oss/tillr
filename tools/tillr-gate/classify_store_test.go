@@ -21,6 +21,7 @@ func storeGit(t *testing.T, dir string, args ...string) string {
 	requireFixtureCommitRepo(t, dir, args)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	cmd.Env = clearGitRepoEnv(os.Environ())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)

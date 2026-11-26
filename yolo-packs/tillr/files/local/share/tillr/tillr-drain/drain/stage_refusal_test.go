@@ -652,7 +652,7 @@ func getRefusalTemplate(t *testing.T) string {
 		}
 		runGitTpl := func(args ...string) error {
 			cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
-			cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+cfg)
+			cmd.Env = append(clearGitRepoEnv(os.Environ()), "GIT_CONFIG_GLOBAL="+cfg)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("git %v: %v: %s", args, err, out)
 			}
@@ -727,7 +727,7 @@ func TestRefusalTemplateDisablesBackgroundMaintenanceAndAutoGC(t *testing.T) {
 		{"gc.autoDetach", "false"},
 	} {
 		cmd := exec.Command("git", "-C", tplRepo, "config", "--get", want.key)
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+tplGitCfg)
+		cmd.Env = append(clearGitRepoEnv(os.Environ()), "GIT_CONFIG_GLOBAL="+tplGitCfg)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git config --get %s failed: %v (%s)\ngitconfig:\n%s", want.key, err, out, raw)

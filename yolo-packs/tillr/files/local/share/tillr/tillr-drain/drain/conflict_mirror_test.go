@@ -25,6 +25,7 @@ func runGitForTest(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	requireFixtureCommitRepo(t, dir, args)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = gitEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v in %s failed: %v\n%s", args, dir, err, out)

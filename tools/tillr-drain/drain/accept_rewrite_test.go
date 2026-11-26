@@ -15,7 +15,7 @@ func acceptGit(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
 	requireFixtureCommitRepo(t, dir, args)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(gitEnv(), env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
