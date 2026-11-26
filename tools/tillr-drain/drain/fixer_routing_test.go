@@ -487,6 +487,9 @@ func TestGreenProofResolvesCandidateFixerWaitingToGate(t *testing.T) {
 				if _, err := tx.Exec(`UPDATE lanes SET state='leased', run_id='run-other-busy', leased_until=NULL WHERE lane_id='lane-1'`); err != nil {
 					return err
 				}
+				if _, err := tx.Exec(`INSERT OR REPLACE INTO lanes(lane_id, state, run_id, leased_until) VALUES ('lane-2', 'leased', 'run-other-busy-2', NULL)`); err != nil {
+					return err
+				}
 			}
 			return nil
 		})
@@ -499,8 +502,12 @@ func TestGreenProofResolvesCandidateFixerWaitingToGate(t *testing.T) {
 		}
 
 		// Pin that the fixture fixer is in the candidate position before the green proof.
-		if d := planFor(t, l, fixer); d.From != "candidate" {
+		d := planFor(t, l, fixer)
+		if d.From != "candidate" {
 			t.Fatalf("fixture fixer position = %q (action=%q reason=%q), want candidate", d.From, d.Action, d.Reason)
+		}
+		if releaseLane && (d.Action != ActionHold || d.Reason != ReasonNoLane) {
+			t.Fatalf("released candidate fixer action=%q reason=%q, want %q/%q", d.Action, d.Reason, ActionHold, ReasonNoLane)
 		}
 		return f, l, steps, fixer, runID, red, now
 	}
@@ -514,9 +521,7 @@ func TestGreenProofResolvesCandidateFixerWaitingToGate(t *testing.T) {
 		// Negative control: a green proof that omits the fixer's check leaves it open.
 		writeGreenProof(t, l, tip, later, []string{"go-tool/other"})
 		l.cfg.Now = func() time.Time { return later.Add(time.Second) }
-		if _, err := l.pass(ctx, &LoopResult{}); err != nil {
-			t.Fatal(err)
-		}
+		runPassAndDrain(t, ctx, l)
 		if got := fixerState(t, f, fixer); got != StateInQueue {
 			t.Fatalf("proof missing fixer's check resolved candidate fixer: %s", got)
 		}
