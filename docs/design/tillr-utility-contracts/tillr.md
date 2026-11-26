@@ -31,6 +31,8 @@ None. The faces that operate the store belong to [tillr-store](./tillr-store.md)
 | `settings` | The repository's `.tillr.toml` | drain, gate (`D-UC23`), item, loop (`D-UC23`) | `Read ReadWithoutLanding Settings DefaultTrunkBranch DefaultChecksDir`, and `PushNone PushTip PushGreen` |
 | `vantage` | The one decoder of the Vantage question index | drain, item, view | `ParseIndex RunIndexCommand DefaultIndexCommand IndexCommandName IndexError Question QuestionAnswered QuestionSource VantageQuestions Preloaded WithoutQuestions` |
 | `watch` | Watch rules, their evaluation and their delivery | `tillr-watch` only | `LoadRules Rule Evaluator Notice Bundle` |
+| `buildstamp` | The binary's build stamp and embedded `SupportRevision` (`D-UC25` of [the overview](../tillr-utility-contracts.md#810-the-loop-verifies-support-files-and-install-root-revision-at-startup), the designer's decision from an operator request, which the owner may overturn) | cli, drain (`D-UC25`), gate, item, land, loop, roll, run, store, trace, view, watch | `Read Stamp` (including `SupportRevision` under `D-UC25`) |
+| `setupcheck` | Pre-start verification of adapters, workflows, and installed support-file / `support-revision` parity (`D-UC25`) | cli, drain (`D-UC25`) | `CheckAdapter CheckBriefTemplate ResolveWorkflowFile` (plus install-root support-file and `support-revision` verification under `D-UC25`) |
 
 ### 1.3 Records and event kinds
 
@@ -61,6 +63,8 @@ The envelope has nine fields: `record_version`, `kind`, `id`, `producer` (`syste
 | The store file, and beside it `-wal`, `-shm` and `-checkpoint-owner` | every utility that opens the store; `tillr-store`'s inventory |
 | The `meta` row `store.definition` | `definition` |
 | `.tillr.toml` at the repository root, written by people | `settings` |
+| `<install_root>/tillr/buildstamp/support-revision` (mirrored from `tools/tillr/buildstamp/support-revision` by `pack-sync` under `D-UC25`) | `buildstamp` (`//go:embed`), `setupcheck` |
+| `TILLR_INSTALL_ROOT` | `setupcheck`, `tillr-run`, `tillr-loop`, `tillr-item` |
 | `TILLR_SQLITE_TRACE` | the library, the gate, land, the roller |
 
 ### 1.6 Names others match on
