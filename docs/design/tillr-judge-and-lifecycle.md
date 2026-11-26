@@ -2,7 +2,7 @@
 title: "The Item Judge and Lifecycle in Tillr"
 status: in-review
 stage: DESIGN
-updated: 2026-11-24
+updated: 2026-11-25
 tags:
   - tillr
   - judge
@@ -267,7 +267,7 @@ A check that fails and then passes with no change between is an intermittent fai
 ### 4.10 Bounded Run IDs, Per-Item Staging Holds, and Adapter Preflight Refusals (`D-JL17`)
 
 1. **A run ID's length is bounded.** Continuations are one numeric counter over a digest-bounded stem (`markRunID`, `boundRunIDBase`), never repeated words; a test pins an ID under 120 characters after 100 continuations.
-2. **A staging failure of one run holds one item.** The claim is retracted, the lane freed, and the item held as `stage-failed` with the operator as mover; the loop keeps running.
+2. **A staging failure of one run holds one item.** The claim is retracted, the lane freed, and the item held as `stage-failed` with the operator as mover; the loop keeps running ([Section 4.25](#425-every-staging-refusal-held-for-the-operator-uses-stage-failed-and-accepts-tillr-drain-retry-d-jl37)).
 3. **An adapter's refusal of a brief is the item's fault, not the backend's.** An adapter that exits 2 with `run-<adapter>: refused: …` holds the item as `adapter-refused` and closes no backend. No attempt limit is involved.
 
 ### 4.11 Instant Start Decisions From a Background-Maintained Queue View (`D-JL18`)
@@ -509,6 +509,16 @@ item died 8 seconds after launch.
   [principle 6](./landing-principles.md#6-a-budget-escalates-it-does-not-loop). No ticket kind,
   failure vocabulary or escalation path is added.
 
+### 4.25 Every Staging Refusal Held for the Operator Uses `stage-failed` and Accepts `tillr drain retry` (`D-JL37`)
+
+This section is the designer's decision from an operator request of 2026-11-25, which the owner may overturn; it carries out `D-JL17` ([Section 4.10](#410-bounded-run-ids-per-item-staging-holds-and-adapter-preflight-refusals-d-jl17)) and `D-JL6` ([Section 4.2](#42-sending-a-failed-item-again-under-its-own-id-d-jl6-d-jl8)).
+
+1. **One per-item staging hold path (`stage-failed`).** Every fork-checkout staging refusal in `fork_checkout.go` — uncommitted work (`refreshForkCheckout`, `restageForkAtKeptHead`), unretained commits (`forkCheckoutUnretainedError`), unlanded or divergent commits, a non-`main` branch, or a missing, aliased or non-isolated fork checkout — is a per-item staging refusal (`isPerItemStageFailure`), never an infrastructure failure. Any other staging failure that repeats unchanged and is held for the operator in `stageDispatches` (`loop.go`) also records a durable `stage-failed` item fault (`holdStageFailed`) rather than an in-memory local hold (`holdLocal` with `staging-failed: <lane>`, which stays in `holdrules` only for historical events).
+2. **Recorded fault, alert, and operator hold in `tillr drain why`.** `holdStageFailed` appends `drain.item-fault` (`reason: "stage-failed"`, `run_id: <the run id whose staging failed>`, `lane_id: <lane>`, `detail: <staging error>`), retracts the unlaunched claim and frees the lane (`unlaunched_claim.go`), and triggers the `drain-item-fault` alert rule in `config/tillr/watch/drain-item-fault.toml`. Because the hold is stored as `drain.item-fault`, `tillr drain why` in any process shows the item held for the operator (`position: "held"`, `reason: "stage-failed"`, `class: "needs you"`, `where: "lane"`), names `run <run_id>` in `why` whenever `run_id` is non-empty (matching `tillr view waiting`), and recommends `tillr drain retry` naming that held `run_id` (or `tillr drain clear-fault` bound to `--fault <seq>`).
+3. **`tillr drain retry` accepts the `run_id` in an active `stage-failed` hold.** When an item has an active `stage-failed` fault naming `run_id`, `AuthorizeRetry` (`retries.go`) accepts `tillr drain retry --store <path> --item <id> --run <run_id> --by <who> --why <reason> --now <RFC3339>` with no `--acknowledge`, even when `runs` holds no row for that unstarted `run_id` (including on a first run or an unstarted workflow node such as `-a1-n2`). Like a design retry (`drain.retry.design`), it clears the `stage-failed` fault (`drain.item-fault-cleared`) and appends a `drain.retry.stage` event echoed by `RetryEnvelope`, writing no row to `retries`: the unstarted `run_id` is offered again on the next pass, keeping completed earlier workflow nodes, and is not treated as superseded once it runs. Authorizing a build retry of the item's latest finished run while `stage-failed` is active also clears `stage-failed` alongside `adapter-refused` and `verify-triage`; `tillr drain clear-fault` remains accepted, and `settle-failed` pre-worker refusals (`execSetupRefused`) are unchanged.
+
+Partly built: `forkCheckoutUnretainedError` in `fork_checkout.go` already records `stage-failed`; uncommitted-work and other fork-checkout refusals in `fork_checkout.go`, the repeated-unchanged staging hold in `loop.go`, naming `run <run_id>` and `tillr drain retry` on `stage-failed` in `why.go` and `holdrules.go`, and `AuthorizeRetry` accepting `stage-failed`'s held `run_id` (`rg -n ReasonStageFailed tools/tillr-drain/drain/retries.go` returns nothing) are owed.
+
 ---
 
 ## 5. Core Boundary for External AutoQA (`D-JL7`)
@@ -554,6 +564,7 @@ The Built column of the [decision ledger](#decision-ledger) is the record. What 
 - The two automatic-wipe gaps of [Section 4.20](#420-leftover-work-in-a-lane-is-an-alert-never-an-automatic-sweeper-d-jl33).
 - The two unclosed causes of [Section 4.19](#419-a-worker-returned-by-a-design-answer-starts-from-a-trunk-that-holds-the-answer-d-jl32).
 - The failure fingerprint, the fleet trip, the drain's probes and the diagnosis ticket ([Section 4.24](#424-diagnosing-a-repeated-failure-the-unbuilt-mechanism)).
+- Unifying uncommitted-work fork staging refusals and repeated-unchanged staging holds onto `stage-failed`, and accepting the held `run_id` in `tillr drain retry` ([Section 4.25](#425-every-staging-refusal-held-for-the-operator-uses-stage-failed-and-accepts-tillr-drain-retry-d-jl37)).
 - A worker's ending as one tool call on every adapter ([the landing call](./tillr-landing-call.md)); where an adapter has none, the report footer is the contract.
 
 A workflow's evaluator node is specified in [tillr-item-graphs.md](../reference/tillr-item-graphs.md#workflow-evaluator) and hands its file to the intake of [Section 2.1](#21-topology-relative-to-gate-and-land-d-jl1).
@@ -655,3 +666,4 @@ A row dated "owner" is the owner's ruling. Every other row is the designer's dec
 | `D-JL34` | `no_change` on `planned-build@v1` ends an investigation that finds nothing to change, after `verify` checks it. **Rejected:** a separate workflow; `commit_optional`; closing without `verify`. | 2026-11-22, designer | [Section 4.21](#421-an-investigation-that-finds-nothing-to-change-ends-inside-tillr-d-jl34) | ✅ |
 | `D-JL35` | Post-verdict replay is scoped to the named failing Go tests and waits as `gate-replay`. **Rejected:** a re-examination timer; keeping the lane across replay. | 2026-11-23, designer | [Section 4.22](#422-post-verdict-gate-failure-replay-never-reports-run-live-or-runs-whole-tree-go-tests-d-jl35) | ✅ |
 | `D-JL36` | A later green proof resolves a fixer whose finished candidate waits to gate; a same-commit rerun keeps `D-JL16`. | 2026-11-23, designer | [Section 4.23](#423-a-later-green-proof-resolves-a-trunk-fixer-whose-worker-has-finished-and-whose-candidate-waits-to-gate-d-jl36) | ✅ |
+| `D-JL37` | Designer's decision from an operator request (the owner may overturn it): every fork-checkout staging refusal and repeated-unchanged staging hold takes the `stage-failed` path (`drain.item-fault`, `drain-item-fault` alert, `why` showing held for the operator with `run <run_id>`), and `tillr drain retry` accepts the unstarted `run_id` named in an active `stage-failed` hold (`drain.retry.stage`, clearing `stage-failed` without writing a `retries` row). **Rejected:** holding uncommitted-work fork refusals or repeated staging failures only in memory (`staging-failed: <lane>`); rejecting the `run_id` named in an active `stage-failed` hold at `tillr drain retry`. | 2026-11-25, designer | [Section 4.25](#425-every-staging-refusal-held-for-the-operator-uses-stage-failed-and-accepts-tillr-drain-retry-d-jl37) | Partly: unretained fork commits record `stage-failed`; uncommitted-work fork refusals, repeated-unchanged staging holds, and retry of the held `run_id` are owed |
