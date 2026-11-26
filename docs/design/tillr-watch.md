@@ -845,7 +845,7 @@ build split below is the designer's decision answering that operator request —
   2. **Ended runs and their scratch prefixes:** select rows in `runs` whose `run_id` is not in the
      live-run set and whose `finished_at` is at least `5s` before the scan timestamp (the `5s`
      post-`finished_at` grace avoids sub-second pipe-close teardown races such as `--shard-guard`
-     in [`tools/go-test-shards.py`](../../tools/go-test-shards.py)). Map each ended run to
+     in [`tillr-gate shards`](../../tools/tillr-gate/shards)). Map each ended run to
      `run.DurableDir(filepath.Join(laneRoot, lane_id), run_id)` (`<lane-root>/<lane-id>/durable/<run-id>`,
      from `DurableDir` in [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go)) plus
      any `{Kind: "scratch"}` path recorded in `runs.artifact_refs`, matching both raw and
