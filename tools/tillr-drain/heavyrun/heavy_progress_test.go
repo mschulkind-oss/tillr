@@ -206,3 +206,33 @@ func TestHeavyLogProgressTracker(t *testing.T) {
 		}
 	}
 }
+
+func TestHeavyProgressDoesNotCarryUnrememberedCheckAcrossCommits(t *testing.T) {
+	root, _ := heavyRepo(t)
+	dir := scratchUnderDurable(t)
+	tip1 := heavyCommit(t, root, "first")
+	p, err := LoadHeavyProgress(context.Background(), root, dir, tip1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	no := false
+	ctx := context.WithValue(context.Background(), HeavyProgressKey{}, p)
+	if err := SaveHeavyCheck(ctx, HeavyCheck{CheckID: "commit-identity-test", Result: "pass", Reads: []string{"tools/gate/"}, Remember: &no}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveHeavyCheck(ctx, HeavyCheck{CheckID: "other", Result: "pass", Reads: []string{"tools/gate/"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	tip2 := heavyCommit(t, root, "second")
+	next, err := LoadHeavyProgress(context.Background(), root, dir, tip2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := next.Checks["other"]; !ok {
+		t.Fatalf("expected remembered check to carry across unrelated commit, got %+v", next.Checks)
+	}
+	if _, ok := next.Checks["commit-identity-test"]; ok {
+		t.Fatalf("unremembered check carried across commits: %+v", next.Checks)
+	}
+}

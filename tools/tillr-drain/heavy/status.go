@@ -36,6 +36,7 @@ type HeavyCheck struct {
 	Reads           []string `json:"reads,omitempty"`
 	Needs           []string `json:"needs,omitempty"`
 	Tools           []string `json:"tools,omitempty"`
+	Remember        *bool    `json:"remember,omitempty"`
 	FirstRedLanding string   `json:"first_red_landing,omitempty"`
 	GateFault       bool     `json:"gate_fault,omitempty"`
 	Detail          string   `json:"detail,omitempty"`

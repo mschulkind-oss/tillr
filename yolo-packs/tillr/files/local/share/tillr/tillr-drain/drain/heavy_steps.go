@@ -21,7 +21,10 @@ type HeavyStep interface {
 	JudgeHeavy(context.Context, string, string) ([]HeavyCheck, error)
 }
 
-type heavyDeclaration struct{ Reads, Needs, Tools []string }
+type heavyDeclaration struct {
+	Reads, Needs, Tools []string
+	Remember            *bool
+}
 
 func heavyCheckDeclarations(dir string) (map[string]heavyDeclaration, error) {
 	checksDir := filepath.Join(dir, "tools", "gate", "checks")
@@ -41,12 +44,13 @@ func heavyCheckDeclarations(dir string) (map[string]heavyDeclaration, error) {
 		var check struct {
 			ID, Scope, Tier     string
 			Reads, Needs, Tools []string
+			Remember            *bool
 		}
 		if err := json.Unmarshal(raw, &check); err != nil {
 			return nil, err
 		}
 		if check.Scope == "tree" && check.Tier == "heavy" {
-			declared[check.ID] = heavyDeclaration{check.Reads, check.Needs, check.Tools}
+			declared[check.ID] = heavyDeclaration{check.Reads, check.Needs, check.Tools, check.Remember}
 		}
 	}
 	return declared, nil
@@ -137,9 +141,11 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			if check, ok := reuseHeavyCheck(ctx, id); ok {
-				result = append(result, check)
-				continue
+			if declared[id].Remember == nil || *declared[id].Remember {
+				if check, ok := reuseHeavyCheck(ctx, id); ok {
+					result = append(result, check)
+					continue
+				}
 			}
 			checks, err := s.JudgeHeavy(ctx, dir, id)
 			if err != nil {
@@ -219,7 +225,7 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		}
 		for i := range env {
 			meta := declared[env[i].CheckID]
-			env[i].Reads, env[i].Needs, env[i].Tools = meta.Reads, meta.Needs, meta.Tools
+			env[i].Reads, env[i].Needs, env[i].Tools, env[i].Remember = meta.Reads, meta.Needs, meta.Tools, meta.Remember
 		}
 		result = append(result, env...)
 		if only != "" {

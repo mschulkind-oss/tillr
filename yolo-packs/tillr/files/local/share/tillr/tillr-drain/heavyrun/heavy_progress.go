@@ -71,6 +71,9 @@ func LoadHeavyProgress(ctx context.Context, root, dir, tip string) (*HeavyProgre
 		if ClassifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.CachedRecord, Word: check.Result}).Outcome != checkresult.Pass {
 			continue
 		}
+		if check.Remember != nil && !*check.Remember {
+			continue
+		}
 		if len(changed) == 0 || len(check.Reads) > 0 && !HeavyReadsChanged(check.Reads, changed) {
 			p.Checks[id] = check
 			if at, ok := prior.PassedAt[id]; ok {

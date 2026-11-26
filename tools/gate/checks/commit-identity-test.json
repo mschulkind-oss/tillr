@@ -20,5 +20,6 @@
     "sh",
     "go",
     "git"
-  ]
+  ],
+  "remember": false
 }
