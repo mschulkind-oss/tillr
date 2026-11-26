@@ -36,9 +36,18 @@ All prototype code and its unit tests live alongside this record under
 - [`test_prototypes.py`](./go-test-caching-experiments/test_prototypes.py) — unit tests for the
   prototypes.
 
-Experiments were run in `podman-self` (Linux 6.12.27, x86_64, Go 1.24) using two byte-identical
-checkouts (`wt-a` and `wt-b`) extracted at separate paths under a durable scratch directory
-(`<scratch>/exp-run/wt-a` and `<scratch>/exp-run/wt-b`).
+Experiments were run in `podman-self` using two byte-identical checkouts (`wt-a` and `wt-b`)
+extracted at separate paths under a durable scratch directory (`<scratch>/exp-run/wt-a` and
+`<scratch>/exp-run/wt-b`). The original runs did not record `uname -r` or `go version` directly;
+on 2026-11-26 on this container, checking the environment prints:
+
+```bash
+uname -r; uname -m; go version
+```
+
+- `uname -r`: `7.3.5-zen1-1-zen`
+- `uname -m`: `x86_64`
+- `go version`: `go version go1.27.3 linux/amd64`
 
 ---
 
@@ -248,6 +257,15 @@ python3 docs/research/go-test-caching-experiments/proto_content_cache.py \
    returned `cold_hit: false`, `repeat_hit: true`, `mutated_hit: false`, `mutated_exit_code: 1`,
    `key_changed: true`.
 2. **Real package source mutation (`tools/tillr-drain/workflow` in a scratch worktree):**
+
+   ```bash
+   MUT_WT="<scratch>/exp-run/wt-mut"
+   # After appending '// mutation comment', then 'var MutatedVariable = 42', to a .go file in $MUT_WT/tools/tillr-drain/workflow:
+   python3 docs/research/go-test-caching-experiments/proto_content_cache.py \
+       --repo-root "$MUT_WT" --cache-dir "$P1_CACHE" --scratch-dir "$SCRATCH" \
+       --pkg tools/tillr-drain/workflow --json
+   ```
+
    - Adding a non-functional comment (`// mutation comment`) left the compiled binary SHA-256
      unchanged (`0b9edeef...`) and produced a safe cache hit.
    - Adding `var MutatedVariable = 42` changed the compiled binary SHA-256 from
