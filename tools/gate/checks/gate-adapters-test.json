@@ -4,7 +4,7 @@
   "command": [
     "sh",
     "-c",
-    "python3 tools/tillr-gate/change-gate.test.py && cd tools/gate && CGO_ENABLED=0 GOFLAGS=-trimpath go test -run 'TestChangeGate|TestTreeCheck|TestDone|TestClassificationScan' ./...",
+    "cd tools/gate && CGO_ENABLED=0 GOFLAGS=-trimpath go test -run 'TestChangeGate|TestTreeCheck|TestDone|TestClassificationScan' ./...",
     "gate-adapters-test"
   ],
   "scope": "change",
@@ -21,8 +21,7 @@
   "tools": [
     "sh",
     "go",
-    "git",
-    "python3"
+    "git"
   ],
   "remember": false
 }

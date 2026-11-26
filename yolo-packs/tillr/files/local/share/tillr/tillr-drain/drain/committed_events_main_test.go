@@ -43,6 +43,22 @@ func runDrainTests(m *testing.M) int {
 			}
 		}
 	}
+	if tillrGateDir, err := filepath.Abs(filepath.Join("..", "..", "tillr-gate")); err == nil {
+		if _, err := os.Stat(filepath.Join(tillrGateDir, "go.mod")); err == nil {
+			dir, err := os.MkdirTemp("", "tillr-gate-bin-")
+			if err != nil {
+				return 1
+			}
+			defer os.RemoveAll(dir)
+			bin := filepath.Join(dir, "tillr-gate")
+			build := exec.Command("go", "-C", tillrGateDir, "build", "-o", bin, ".")
+			if out, err := build.CombinedOutput(); err != nil {
+				os.Stderr.Write(out)
+				return 1
+			}
+			os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		}
+	}
 	store.CacheSelectedEvents()
 	defer runTestCleanups()
 	return m.Run()

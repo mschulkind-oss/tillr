@@ -53,200 +53,39 @@ test *args:
 # Format Go with gofmt; --check lists changes without writing and exits 1 on drift.
 [positional-arguments]
 format *args:
-    #!/usr/bin/env python3
-    import hashlib
-    import os
-    from pathlib import Path
-    import re
-    import stat
-    import subprocess
-    import sys
-    import tempfile
-
-    if sys.argv[1:] not in ([], ["--check"]):
-        print("usage: just format [--check]", file=sys.stderr)
-        sys.exit(2)
-
-    def resolve_gofmt():
-        candidates = [
-            cand for entry in os.environ.get("PATH", "").split(os.pathsep) if entry
-            for cand in (os.path.join(entry, "gofmt"),)
-            if os.path.isfile(cand) and os.access(cand, os.X_OK)
-        ]
-        if not candidates:
-            return "gofmt", None
-        chosen = candidates[0]
-        if os.path.basename(os.path.realpath(chosen)) == "mise" and not os.environ.get("MISE_GO_VERSION"):
-            direct = next((c for c in candidates if os.path.basename(os.path.realpath(c)) != "mise"), None)
-            if direct:
-                pattern = re.compile(r'(?m)^\s*"?(?:go|golang)"?\s*[=\s]')
-                configs = []
-                cur = os.getcwd()
-                while True:
-                    for name in ("mise.toml", "mise.local.toml", ".mise.toml", ".mise.local.toml", ".tool-versions"):
-                        configs.append(os.path.join(cur, name))
-                    parent = os.path.dirname(cur)
-                    if parent == cur:
-                        break
-                    cur = parent
-                xdg = os.environ.get("XDG_CONFIG_HOME")
-                home = os.environ.get("HOME")
-                if xdg and os.path.isabs(xdg):
-                    configs.append(os.path.join(xdg, "mise", "config.toml"))
-                elif home and os.path.isabs(home):
-                    configs.append(os.path.join(home, ".config", "mise", "config.toml"))
-                if not any(
-                    pattern.search(Path(cfg).read_text(encoding="utf-8", errors="ignore"))
-                    for cfg in configs if os.path.isfile(cfg)
-                ):
-                    chosen = direct
-        chosen_real = os.path.realpath(chosen)
-        if os.path.basename(chosen_real) == "mise":
-            return chosen, None
-        try:
-            with open(chosen_real, "rb") as handle:
-                return chosen, hashlib.file_digest(handle, "sha256").hexdigest()
-        except OSError:
-            return chosen, None
-
-    def resolve_cache_file(tool_key):
-        if not tool_key:
-            return None
-        cache_root = os.environ.get("JUST_FORMAT_CACHE_DIR")
-        if not cache_root:
-            xdg = os.environ.get("XDG_CACHE_HOME")
-            home = os.environ.get("HOME")
-            if xdg and os.path.isabs(xdg):
-                cache_root = os.path.join(xdg, "just-format")
-            elif home and os.path.isabs(home):
-                cache_root = os.path.join(home, ".cache", "just-format")
-        return Path(cache_root) / f"{tool_key}.bin" if cache_root else None
-
-    def load_clean(cache_file):
-        if cache_file is None:
-            return set()
-        try:
-            raw = cache_file.read_bytes()
-        except OSError:
-            return set()
-        usable = len(raw) - (len(raw) % 32)
-        return {raw[i:i + 32] for i in range(0, usable, 32)}
-
-    def save_clean(cache_file, clean_digests, live_clean):
-        if cache_file is None:
-            return
-        merged = set(live_clean)
-        if len(merged) < 65536:
-            for item in clean_digests:
-                merged.add(item)
-                if len(merged) >= 65536:
-                    break
-        payload = b"".join(sorted(merged))
-        tmp_path = None
-        try:
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=cache_file.parent, prefix=".gofmt-")
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(payload)
-            os.replace(tmp_path, cache_file)
-            tmp_path = None
-        except OSError:
-            pass
-        finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-
-    listing = subprocess.check_output([
-        "git", "ls-files", "-z", "--", "tools/", "yolo-packs/tillr/files/local/share/tillr/",
-    ])
-    dir_ok = {"": True, ".": not os.path.islink(".")}
-
-    def clean_ancestors(directory):
-        ok = dir_ok.get(directory)
-        if ok is None:
-            ok = clean_ancestors(os.path.dirname(directory)) and not os.path.islink(directory)
-            dir_ok[directory] = ok
-        return ok
-
-    files = []
-    groups = {}
-    file_digest = {}
-    for entry in listing.split(b"\0"):
-        if not entry or not entry.endswith(b".go"):
-            continue
-        path = os.fsdecode(entry)
-        if os.path.basename(path) == ".go":
-            continue
-        parts = path.split("/")
-        if "vendor" in parts or ".forks" in parts or not clean_ancestors(os.path.dirname(path)):
-            continue
-        try:
-            st = os.lstat(path)
-        except OSError:
-            continue
-        if not stat.S_ISREG(st.st_mode):
-            continue
-        with open(path, "rb") as handle:
-            digest = hashlib.sha256(handle.read()).digest()
-        groups.setdefault(digest, []).append(path)
-        files.append(path)
-        file_digest[path] = digest
-
-    if files:
-        gofmt, tool_key = resolve_gofmt()
-        cache_file = resolve_cache_file(tool_key)
-        clean = load_clean(cache_file)
-        env = {**os.environ, "GOGC": "off"}
-        env.setdefault("GOMEMLIMIT", "512MiB")
-        env.setdefault("GOMAXPROCS", str(min(os.cpu_count() or 4, 12)))
-        pending = [bucket[0] for digest, bucket in groups.items() if digest not in clean]
-        rep_digest = {bucket[0]: digest for digest, bucket in groups.items()}
-        dirty_digests = set()
-        if pending:
-            result = subprocess.run([gofmt, "-l", *pending], env=env, capture_output=True)
-            flagged = {os.fsdecode(line) for line in result.stdout.splitlines() if line}
-            dirty_digests = {rep_digest[rep] for rep in flagged if rep in rep_digest}
-            if result.returncode == 0 and not result.stderr:
-                newly_clean = {rep_digest[rep] for rep in pending if rep not in flagged}
-                if newly_clean:
-                    clean |= newly_clean
-                    save_clean(cache_file, clean, groups.keys() & clean)
-        else:
-            result = subprocess.CompletedProcess([gofmt, "-l"], 0, b"", b"")
-        dirty = [path for path in files if file_digest[path] in dirty_digests]
-
-        def write_stderr():
-            if not result.stderr:
-                return
-            sys.stderr.buffer.write(result.stderr)
-            dups = [
-                dup for bucket in groups.values() if len(bucket) > 1
-                if os.fsencode(bucket[0]) + b":" in result.stderr
-                for dup in bucket[1:]
-            ]
-            if dups:
-                extra = subprocess.run([gofmt, "-l", *dups], env=env, capture_output=True)
-                sys.stderr.buffer.write(extra.stderr)
-
-        if sys.argv[1:]:
-            if dirty:
-                sys.stdout.buffer.write(b"".join(os.fsencode(f"{path}\n") for path in dirty))
-            write_stderr()
-            sys.exit(result.returncode or int(bool(dirty)))
-        if result.returncode:
-            write_stderr()
-            sys.exit(result.returncode)
-        if dirty:
-            subprocess.run([gofmt, "-w", *dirty], env=env, check=True)
-            formatted_clean = set()
-            for path in dirty:
-                with open(path, "rb") as handle:
-                    formatted_clean.add(hashlib.sha256(handle.read()).digest())
-            clean |= formatted_clean
-            save_clean(cache_file, clean, (groups.keys() - dirty_digests) | formatted_clean)
+    #!/bin/sh
+    set -eu
+    if [ -x tools/gate/repo-gate ]; then
+        exec tools/gate/repo-gate format "$@"
+    fi
+    check=0
+    case "$#" in
+        0) ;;
+        1)
+            if [ "$1" != "--check" ]; then
+                printf 'usage: just format [--check]\n' >&2
+                exit 2
+            fi
+            check=1
+            ;;
+        *)
+            printf 'usage: just format [--check]\n' >&2
+            exit 2
+            ;;
+    esac
+    files=$(git ls-files -- 'tools/' 'yolo-packs/tillr/files/local/share/tillr/' | grep -E '(^|/)[^/]+\.go$' || true)
+    if [ -z "$files" ]; then
+        exit 0
+    fi
+    if [ "$check" -eq 1 ]; then
+        dirty=$(printf '%s\n' "$files" | xargs gofmt -l)
+        if [ -n "$dirty" ]; then
+            printf '%s\n' "$dirty"
+            exit 1
+        fi
+        exit 0
+    fi
+    printf '%s\n' "$files" | xargs gofmt -w
 
 # Install this repository's git hooks (hooks/*) into the shared hooks directory, so they
 # run from the main checkout and every linked worktree.
@@ -354,7 +193,7 @@ tillr-build:
     # Keep the existing install untouched until all eight builds succeed.
     mkdir -p "$out"
     for program in "$work/bin/"*; do
-        python3 -c 'import os, sys; os.replace(*sys.argv[1:])' "$program" "$out/${program##*/}"
+        mv -f "$program" "$out/${program##*/}"
         printf 'tillr-build: %s/%s\n' "$out" "${program##*/}"
     done
     printf 'tillr-build: prepend %s to PATH for the loop and its children: PATH=%s:$PATH\n' "$out" "$out"

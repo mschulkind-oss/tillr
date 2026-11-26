@@ -116,16 +116,7 @@ _pi_current_series_key() {
 }
 
 _pi_read_current_json() {
-    if command -v python3 >/dev/null 2>&1; then
-        python3 - "$1" <<'PY' 2>/dev/null
-import json, sys
-with open(sys.argv[1], encoding="utf-8") as f:
-    d = json.load(f)
-k, p, r = d.get("key", ""), d.get("pi", ""), d.get("dir", "")
-if all(isinstance(x, str) and x and "\n" not in x and "\t" not in x for x in (k, p, r)):
-    print(f"{k}\t{p}\t{r}")
-PY
-    elif command -v node >/dev/null 2>&1; then
+    if command -v node >/dev/null 2>&1; then
         node -e '
 const fs = require("node:fs");
 const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
@@ -272,14 +263,14 @@ pi_require_features() {
             fi
             refuse "the \`pi --features\` probe for $PI_HARNESS_BIN failed ($_pi_how), so whether it has the feature '$PI_REQUIRED_FEATURES' is unknown."
         fi
-        _pi_have=$(printf '%s' "$_pi_probe" | python3 -c '
-import json, sys
-try:
-    names = json.loads(sys.stdin.read())
-except ValueError:
-    names = []
-if isinstance(names, list):
-    print(" ".join(name for name in names if isinstance(name, str)))
+        _pi_have=$(printf '%s' "$_pi_probe" | node -e '
+const fs = require("node:fs");
+try {
+    const names = JSON.parse(fs.readFileSync(0, "utf8"));
+    if (Array.isArray(names)) {
+        process.stdout.write(names.filter(n => typeof n === "string").join(" "));
+    }
+} catch {}
 ' 2>/dev/null || true)
         _pi_source="\`pi --features\` lists"
     fi

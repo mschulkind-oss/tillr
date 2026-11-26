@@ -189,20 +189,20 @@ if [ -n "$goal_base" ]; then
     set -- "$@" -e "$(cd -- "$SELF_DIR" && pwd -P)/keep-going.ts"
     capability=$(lane_path "$brief" ending-capability)
     if [ -r "$capability" ] && [ "$(cat "$capability")" = call-suspends ]; then
-        require_harness python3
+        require_harness node
         TILLR_CALL_SUSPENDS=1
         export TILLR_CALL_SUSPENDS
         set -- "$@" -e "$(cd -- "$SELF_DIR" && pwd -P)/land.ts" -e "$(cd -- "$SELF_DIR" && pwd -P)/obstacle.ts"
-        if python3 - "$BOARD_DRAIN_BRIEF" <<'PY'
-import re, sys
-with open(sys.argv[1], encoding="utf-8") as source:
-    text = source.read()
-text = re.split(r"^## Saved (?:idea|request) words \(verbatim; \d+ bytes\)$", text, maxsplit=1, flags=re.M)[0]
-node = re.search(r"(?:^|\n)## Workflow node\n([\s\S]*?)(?=\n## |$)", text)
-ending = re.search(r"(?:^|\n)## (?:Finishing|No-change ending)\n([\s\S]*?)(?=\n## |$)", text)
-ok = (node and re.search(r"^\nRun only node .+ on the .+ seat; access: (?:read_only|write)\.\nA reproduced no-change finding may finish with no_change\.$", node.group(1), re.M)) or (ending and re.search(r"^A reproduced no-change finding may finish with no_change\.$", ending.group(1), re.M))
-sys.exit(0 if ok else 1)
-PY
+        if node -e '
+const fs = require("node:fs");
+let text = fs.readFileSync(process.argv[1], "utf8");
+text = text.split(/^## Saved (?:idea|request) words \(verbatim; \d+ bytes\)$/m)[0];
+const nodeMatch = text.match(/(?:^|\n)## Workflow node\n([\s\S]*?)(?=\n## |$)/);
+const endingMatch = text.match(/(?:^|\n)## (?:Finishing|No-change ending)\n([\s\S]*?)(?=\n## |$)/);
+const ok = (nodeMatch && /^\nRun only node .+ on the .+ seat; access: (?:read_only|write)\.\nA reproduced no-change finding may finish with no_change\.$/m.test(nodeMatch[1])) ||
+  (endingMatch && /^A reproduced no-change finding may finish with no_change\.$/m.test(endingMatch[1]));
+process.exit(ok ? 0 : 1);
+' "$BOARD_DRAIN_BRIEF"
         then
             set -- "$@" -e "$(cd -- "$SELF_DIR" && pwd -P)/no_change.ts"
         fi
@@ -211,21 +211,18 @@ PY
             landing_dir=$YOLO_DURABLE_DIR
             landing_prompt=$landing_dir/landing-prompt
             landing_id=$landing_dir/landing-call-id
-            if ! python3 - "$landing_dir/landing-answer.json" "$landing_id" "$landing_prompt" <<'PY'
-import json, sys
-try:
-    with open(sys.argv[1], encoding='utf-8') as source:
-        answer = json.load(source)
-    call, text = answer['call_id'], answer['text']
-    if not isinstance(call, str) or not call or not isinstance(text, str) or not text:
-        raise ValueError('missing call id or text')
-    with open(sys.argv[2], 'w', encoding='utf-8') as output:
-        output.write(call)
-    with open(sys.argv[3], 'w', encoding='utf-8') as output:
-        output.write(text)
-except (OSError, ValueError, TypeError, KeyError):
-    sys.exit(1)
-PY
+            if ! node -e '
+const fs = require("node:fs");
+try {
+  const answer = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  const call = answer.call_id, text = answer.text;
+  if (typeof call !== "string" || !call || typeof text !== "string" || !text) throw new Error("missing");
+  fs.writeFileSync(process.argv[2], call, "utf8");
+  fs.writeFileSync(process.argv[3], text, "utf8");
+} catch {
+  process.exit(1);
+}
+' "$landing_dir/landing-answer.json" "$landing_id" "$landing_prompt"
             then
                 refuse "landing answer requires a call id and text"
             fi
@@ -281,77 +278,81 @@ else
         for extension in "$agent_dir"/extensions/*.ts "$agent_dir"/extensions/*.js; do
             [ -f "$extension" ] && set -- "$@" -e "$extension"
         done
-        if command -v python3 >/dev/null 2>&1; then
+        if command -v node >/dev/null 2>&1; then
             _pi_bin=${PI_HARNESS_BIN:-$(command -v pi 2>/dev/null || true)}
             _old_ifs=$IFS
             IFS='
 '
             set -f
-            for _pkg_ext in $(python3 - "$agent_dir" "$_pi_bin" <<'PY'
-import json, os, re, sys
-from pathlib import Path
-
-agent_dir = Path(sys.argv[1])
-pi_bin = sys.argv[2]
-
-settings_path = agent_dir / "settings.json"
-if settings_path.is_file():
-    try:
-        data = json.loads(settings_path.read_text(encoding="utf-8"))
-        for entry in data.get("packages", []):
-            if not isinstance(entry, str):
-                continue
-            if entry.startswith("~/.pi/agent/yolo-patched/"):
-                pkg = entry[len("~/.pi/agent/yolo-patched/"):]
-                target = agent_dir / "yolo-patched" / pkg
-                if target.exists():
-                    print(str(target))
-            elif entry.startswith("npm:"):
-                rest = entry[len("npm:"):]
-                if rest.startswith("@") and "/" in rest:
-                    scope, name_ver = rest.split("/", 1)
-                    pkg = scope + "/" + name_ver.split("@", 1)[0]
-                else:
-                    pkg = rest.split("@", 1)[0]
-                target = agent_dir / "npm" / "node_modules" / pkg
-                if target.exists():
-                    print(str(target))
-            elif os.path.exists(entry):
-                print(entry)
-    except Exception:
-        pass
-
-dist_candidates = []
-if pi_bin:
-    p = Path(pi_bin).resolve()
-    dist_candidates.extend([
-        p.parent / "extensions",
-        p.parent.parent / "extensions",
-        p.parent / "node_modules/@earendil-works/pi-coding-agent/dist/extensions",
-        p.parent.parent / "lib/node_modules/@earendil-works/pi-coding-agent/dist/extensions",
-        p.parent.parent / "node_modules/@earendil-works/pi-coding-agent/dist/extensions",
-    ])
-    try:
-        if p.is_file() and p.stat().st_size < 65536:
-            text = p.read_text(encoding="utf-8", errors="ignore")
-            for m in re.findall(r'(/[^"\'\s]+/node_modules(?:/\.bin/pi|/@earendil-works/pi-coding-agent))', text):
-                mp = Path(m)
-                if mp.name == "pi":
-                    dist_candidates.append(mp.parent.parent / "@earendil-works/pi-coding-agent/dist/extensions")
-                else:
-                    dist_candidates.append(mp / "dist/extensions")
-    except Exception:
-        pass
-dist_candidates.append(Path.home() / ".local/share/pi-fork/node_modules/@earendil-works/pi-coding-agent/dist/extensions")
-
-for cand in dist_candidates:
-    if cand.is_dir():
-        for name in ("llama", "codemode", "tool-search", "mcp"):
-            idx = cand / name / "index.js"
-            if idx.is_file():
-                print(str(idx))
-        break
-PY
+            for _pkg_ext in $(node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const os = require("node:os");
+const agentDir = process.argv[1], piBin = process.argv[2];
+const settingsPath = path.join(agentDir, "settings.json");
+try {
+  if (fs.statSync(settingsPath).isFile()) {
+    const data = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    for (const entry of data.packages || []) {
+      if (typeof entry !== "string") continue;
+      if (entry.startsWith("~/.pi/agent/yolo-patched/")) {
+        const pkg = entry.slice("~/.pi/agent/yolo-patched/".length);
+        const target = path.join(agentDir, "yolo-patched", pkg);
+        if (fs.existsSync(target)) console.log(target);
+      } else if (entry.startsWith("npm:")) {
+        const rest = entry.slice("npm:".length);
+        let pkg;
+        if (rest.startsWith("@") && rest.includes("/")) {
+          const i = rest.indexOf("/");
+          pkg = rest.slice(0, i + 1) + rest.slice(i + 1).split("@", 1)[0];
+        } else {
+          pkg = rest.split("@", 1)[0];
+        }
+        const target = path.join(agentDir, "npm", "node_modules", pkg);
+        if (fs.existsSync(target)) console.log(target);
+      } else if (fs.existsSync(entry)) {
+        console.log(entry);
+      }
+    }
+  }
+} catch {}
+const distCandidates = [];
+if (piBin) {
+  try {
+    const p = fs.realpathSync(piBin);
+    const pd = path.dirname(p), ppd = path.dirname(pd);
+    distCandidates.push(
+      path.join(pd, "extensions"),
+      path.join(ppd, "extensions"),
+      path.join(pd, "node_modules/@earendil-works/pi-coding-agent/dist/extensions"),
+      path.join(ppd, "lib/node_modules/@earendil-works/pi-coding-agent/dist/extensions"),
+      path.join(ppd, "node_modules/@earendil-works/pi-coding-agent/dist/extensions")
+    );
+    if (fs.statSync(p).isFile() && fs.statSync(p).size < 65536) {
+      const text = fs.readFileSync(p, "utf8");
+      for (const m of text.matchAll(/(\/[^"'\''\s]+\/node_modules(?:\/\.bin\/pi|\/@earendil-works\/pi-coding-agent))/g)) {
+        if (path.basename(m[1]) === "pi") {
+          distCandidates.push(path.join(path.dirname(path.dirname(m[1])), "@earendil-works/pi-coding-agent/dist/extensions"));
+        } else {
+          distCandidates.push(path.join(m[1], "dist/extensions"));
+        }
+      }
+    }
+  } catch {}
+}
+distCandidates.push(path.join(os.homedir(), ".local/share/pi-fork/node_modules/@earendil-works/pi-coding-agent/dist/extensions"));
+for (const cand of distCandidates) {
+  try {
+    if (fs.statSync(cand).isDirectory()) {
+      for (const name of ["llama", "codemode", "tool-search", "mcp"]) {
+        const idx = path.join(cand, name, "index.js");
+        if (fs.existsSync(idx) && fs.statSync(idx).isFile()) console.log(idx);
+      }
+      break;
+    }
+  } catch {}
+}
+' "$agent_dir" "$_pi_bin"
             ); do
                 [ -n "$_pkg_ext" ] && set -- "$@" -e "$_pkg_ext"
             done
@@ -412,18 +413,19 @@ if [ -n "$landing_promptless" ]; then
         fi
     } | tee "$copy"
     code=$(cat "$status")
-    if [ "$code" -ne 0 ] && python3 - "$copy" <<'PY'
-import json, sys
-with open(sys.argv[1], encoding='utf-8', errors='replace') as source:
-    for line in source:
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(event, dict) and event.get('type') == 'error' and event.get('message') == 'No unanswered tool call or trailing tool result to continue':
-            sys.exit(0)
-sys.exit(1)
-PY
+    if [ "$code" -ne 0 ] && node -e '
+const fs = require("node:fs");
+const lines = fs.readFileSync(process.argv[1], "utf8").split("\n");
+for (const line of lines) {
+  try {
+    const ev = JSON.parse(line);
+    if (ev && typeof ev === "object" && ev.type === "error" && ev.message === "No unanswered tool call or trailing tool result to continue") {
+      process.exit(0);
+    }
+  } catch {}
+}
+process.exit(1);
+' "$copy"
     then
         printf '%s\n' message > "$landing_dir/landing-delivery"
         prompt=$landing_prompt

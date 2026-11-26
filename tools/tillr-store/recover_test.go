@@ -3,12 +3,45 @@ package main_test
 import (
 	"bufio"
 	"bytes"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
+
+func TestCrashWriterHelper(t *testing.T) {
+	dbPath := os.Getenv("TILLR_CRASH_WRITER_DB")
+	if dbPath == "" {
+		return
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("PRAGMA journal_mode=DELETE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA cache_size=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA synchronous=FULL"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO meta(key,value) VALUES ('killed-writer', zeroblob(1048576))"); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("ready")
+	select {}
+}
 
 func TestRecoverRealHotJournalAndSecondRunWritesNothing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
@@ -22,7 +55,12 @@ func TestRecoverRealHotJournalAndSecondRunWritesNothing(t *testing.T) {
 	if code, out := run(t, "seed", "--store", path, "--input", bundle); code != 0 {
 		t.Fatalf("seed: %d %s", code, out)
 	}
-	cmd := exec.Command("python3", "../tillr/store/testdata/crash_writer.py", path, "delete")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestCrashWriterHelper$")
+	cmd.Env = append(os.Environ(), "TILLR_CRASH_WRITER_DB="+path)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {

@@ -38,9 +38,8 @@ const (
 )
 
 const (
-	gateModuleHeader = "module github.com/mschulkind-oss/tillr-gate"
-	registryEnv      = "TILLR_LOOP_REGISTRY"
-	gateLogsDir      = "logs"
+	registryEnv = "TILLR_LOOP_REGISTRY"
+	gateLogsDir = "logs"
 )
 
 var hookNames = []string{"gate", "land", "verdict", "fixer-gate", "replay", "rolling"}
@@ -453,9 +452,31 @@ func composeGate(ctx Ctx, dry bool) ([]Step, error) {
 		}
 		registry = filepath.Join(ctx.Worktree, filepath.FromSlash(s.ChecksDir()))
 	}
-	gpArgs, err := gateProgramArgs(ctx.GateProgram)
-	if err != nil {
-		return nil, err
+	var gpArgs []string
+	if ctx.GateProgram != "" {
+		gpArgs, err = gateProgramArgs(ctx.GateProgram)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		logs := filepath.Join(ctx.WorkDir, ctx.Run, "change-logs")
+		gpArgs = []string{
+			"--gate", gateBin,
+			"--gate-arg", "change-gate",
+			"--gate-arg", "--base", "--gate-arg", ctx.Base,
+			"--gate-arg", "--head", "--gate-arg", ctx.Head,
+			"--gate-arg", "--runner", "--gate-arg", gateBin,
+			"--gate-arg", "--logs", "--gate-arg", logs,
+		}
+		if ctx.Registry != "" && !strings.HasSuffix(ctx.Registry, ".json") {
+			checksDir := ctx.Registry
+			if !filepath.IsAbs(checksDir) {
+				if abs, err := filepath.Abs(checksDir); err == nil {
+					checksDir = abs
+				}
+			}
+			gpArgs = append(gpArgs, "--gate-arg", "--checks", "--gate-arg", checksDir)
+		}
 	}
 	runArgv := []string{
 		gateBin, "run",
@@ -776,94 +797,6 @@ func validOutcome(o checkresult.Outcome) bool {
 	}
 }
 
-func isTillrGateDir(path string) bool {
-	data, err := os.ReadFile(filepath.Join(path, "go.mod"))
-	if err != nil {
-		return false
-	}
-	firstLine, _, _ := strings.Cut(string(data), "\n")
-	return strings.TrimRight(firstLine, "\r") == gateModuleHeader
-}
-
-func resolveGateRunner(script string) (string, error) {
-	var gateDir string
-	if installRoot := os.Getenv("TILLR_INSTALL_ROOT"); installRoot != "" {
-		if !filepath.IsAbs(installRoot) {
-			return "", &Refusal{
-				Code:    ExitExternal,
-				Message: fmt.Sprintf("TILLR_INSTALL_ROOT must be absolute: %s", installRoot),
-			}
-		}
-		gateDir = filepath.Join(installRoot, "tillr-gate")
-	} else {
-		if exe, err := os.Executable(); err == nil {
-			sibling := filepath.Join(filepath.Dir(filepath.Dir(resolvePath(exe))), "tillr-gate")
-			if isTillrGateDir(sibling) {
-				gateDir = sibling
-			}
-		}
-		if gateDir == "" {
-			if cwd, err := os.Getwd(); err == nil {
-				resolvedCwd := resolvePath(cwd)
-				checkout := resolvedCwd
-				if filepath.Base(filepath.Dir(resolvedCwd)) == "tools" {
-					checkout = filepath.Dir(filepath.Dir(resolvedCwd))
-				}
-				candidate := filepath.Join(checkout, "tools", "tillr-gate")
-				if isTillrGateDir(candidate) {
-					gateDir = candidate
-				}
-			}
-		}
-		if gateDir == "" {
-			return "", &Refusal{
-				Code:    ExitExternal,
-				Message: fmt.Sprintf("cannot locate tillr-gate installation for %s; set TILLR_INSTALL_ROOT", script),
-			}
-		}
-	}
-	runnerPath := filepath.Join(gateDir, script)
-	info, err := os.Stat(runnerPath)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", &Refusal{
-			Code:    ExitExternal,
-			Message: fmt.Sprintf("installed tillr-gate runner %s is missing or not a regular file", runnerPath),
-		}
-	}
-	return runnerPath, nil
-}
-
-func resolveGateProgram(args parsedArgs, registry string) (string, error) {
-	if args.gateProgram != "" {
-		return args.gateProgram, nil
-	}
-	script, err := resolveGateRunner("change-gate.py")
-	if err != nil {
-		return "", err
-	}
-	root, err := resolveRoot(args.root, args.worktree, args.store)
-	if err != nil {
-		return "", err
-	}
-	workDir := args.workDir
-	if workDir == "" {
-		workDir = filepath.Join(root, ".tillr", "loop")
-	}
-	logs := filepath.Join(workDir, args.run, "change-logs")
-	cmd := fmt.Sprintf("python3 %s --base %s --head %s --runner %s --logs %s",
-		shellQuote(script), shellQuote(args.base), shellQuote(args.head), shellQuote(args.tillrGate), shellQuote(logs))
-	if registry != "" && !strings.HasSuffix(registry, ".json") {
-		checksDir := registry
-		if !filepath.IsAbs(checksDir) {
-			if abs, err := filepath.Abs(checksDir); err == nil {
-				checksDir = abs
-			}
-		}
-		cmd += " --checks " + shellQuote(checksDir)
-	}
-	return cmd, nil
-}
-
 func buildContext(kind string, args parsedArgs) (Ctx, error) {
 	root, err := resolveRoot(args.root, args.worktree, args.store)
 	if err != nil {
@@ -885,13 +818,6 @@ func buildContext(kind string, args parsedArgs) (Ctx, error) {
 	if registry == "" {
 		registry = os.Getenv(registryEnv)
 	}
-	var gp string
-	if kind == "gate" || kind == "self-check" {
-		gp, err = resolveGateProgram(args, registry)
-		if err != nil {
-			return Ctx{}, err
-		}
-	}
 	return Ctx{
 		Item:          args.item,
 		Lane:          args.lane,
@@ -904,7 +830,7 @@ func buildContext(kind string, args parsedArgs) (Ctx, error) {
 		WorkDir:       workDir,
 		Now:           now,
 		Registry:      registry,
-		GateProgram:   gp,
+		GateProgram:   args.gateProgram,
 		BaseRef:       args.baseRef,
 		MessageFrom:   args.messageFrom,
 		ObservedTrunk: args.observedTrunk,
@@ -1066,12 +992,8 @@ func revisionCheck(kind string, args parsedArgs, stdin io.Reader, stdout, stderr
 		if tier == "heavy" {
 			argv = append(argv, "--only", args.only)
 		} else {
-			treeCheck, err := resolveGateRunner("tree-check.py")
-			if err != nil {
-				return 0, err
-			}
 			argv = []string{
-				"python3", treeCheck, "--only", args.only,
+				runner, "tree-check", "--only", args.only,
 				"--base", "HEAD", "--head", "HEAD", "--runner", runner,
 				"--checks", checksDir,
 			}

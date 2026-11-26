@@ -168,7 +168,7 @@ func cmdWorkflows(args []string) int {
 
 	recordedVerdict := filepath.Join(root, "tools", "tillr", "examples", "recorded-verdict")
 	rvDef, rvDefErr := os.Stat(filepath.Join(recordedVerdict, "definition.json"))
-	rvPrep, rvPrepErr := os.Stat(filepath.Join(recordedVerdict, "prepare.py"))
+	rvPrep, rvPrepErr := os.Stat(filepath.Join(recordedVerdict, "prepare.sh"))
 	runExampleLint := (rvDefErr == nil && !rvDef.IsDir()) && (rvPrepErr == nil && !rvPrep.IsDir())
 
 	if runRootLint || runExampleLint {
@@ -217,7 +217,7 @@ func cmdWorkflows(args []string) int {
 				fmt.Fprintf(os.Stderr, "workflows: %v\n", err)
 				return 4
 			}
-			prep := exec.Command("python3", "prepare.py")
+			prep := exec.Command("sh", "prepare.sh")
 			prep.Dir = exampleCopy
 			prep.Stdout = os.Stdout
 			prep.Stderr = os.Stderr

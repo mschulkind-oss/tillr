@@ -2,8 +2,8 @@
   "id": "go-module-inventory",
   "label": "Every per-module Go inventory check passes when a tools/ go.mod is added or removed",
   "command": [
-    "python3",
-    "tools/gate/checks/go-module-inventory.py"
+    "tools/gate/repo-gate",
+    "go-module-inventory"
   ],
   "scope": "change",
   "tier": "heavy",
@@ -11,10 +11,9 @@
   "reads": [
     "tools/",
     "tests/tillr-testmain_test.go",
-    "tests/tillr-scratch.test.py"
+    "tests/tillr_scratch_test.go"
   ],
   "tools": [
-    "python3",
     "git",
     "go"
   ],

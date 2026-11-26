@@ -64,18 +64,17 @@ if [ "$_pi_use_deployed" -eq 0 ] && [ -n "${repo_root:-}" ] &&
             ext_record_line="$PI_CODING_AGENT_DIR (set $_key)"
         else
             _already_held=0
-            if [ -r "$_agent_dirs_root/status.json" ] && command -v python3 >/dev/null 2>&1; then
-                if python3 - "$_agent_dirs_root/status.json" "$_key" <<'PY'
-import json, sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as f:
-        data = json.load(f)
-    if data.get("state") == "held" and data.get("target_key") == sys.argv[2]:
-        sys.exit(0)
-except Exception:
-    pass
-sys.exit(1)
-PY
+            if [ -r "$_agent_dirs_root/status.json" ] && command -v node >/dev/null 2>&1; then
+                if node -e '
+const fs = require("node:fs");
+try {
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (data && data.state === "held" && data.target_key === process.argv[2]) {
+        process.exit(0);
+    }
+} catch {}
+process.exit(1);
+' "$_agent_dirs_root/status.json" "$_key"
                 then
                     _already_held=1
                 fi
@@ -93,27 +92,21 @@ PY
                 ext_record_line="$PI_CODING_AGENT_DIR (set $_key)"
             else
                 _prev_out=
-                if [ -r "$_agent_dirs_root/current.json" ] && command -v python3 >/dev/null 2>&1; then
-                    _prev_out=$(python3 - "$_agent_dirs_root/current.json" <<'PY' || true
-import json, os, sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as f:
-        data = json.load(f)
-    key = data.get("key", "")
-    agent_dir = data.get("agent_dir", "")
-    key_dir = data.get("dir", "")
-    verified_path = os.path.join(key_dir, ".verified")
-    if key and agent_dir and key_dir and os.path.isdir(agent_dir) and os.path.isfile(verified_path):
-        with open(verified_path, encoding="utf-8") as vf:
-            if vf.read().strip() == key:
-                print(key)
-                print(agent_dir)
-                sys.exit(0)
-except Exception:
-    pass
-sys.exit(1)
-PY
-                    )
+                if [ -r "$_agent_dirs_root/current.json" ] && command -v node >/dev/null 2>&1; then
+                    _prev_out=$(node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+try {
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const key = data.key || "", agentDir = data.agent_dir || "", keyDir = data.dir || "";
+    const vp = path.join(keyDir, ".verified");
+    if (key && agentDir && keyDir && fs.statSync(agentDir).isDirectory() && fs.readFileSync(vp, "utf8").trim() === key) {
+        process.stdout.write(key + "\n" + agentDir + "\n");
+        process.exit(0);
+    }
+} catch {}
+process.exit(1);
+' "$_agent_dirs_root/current.json" || true)
                 fi
                 if [ -n "$_prev_out" ]; then
                     _prev_key=$(printf '%s\n' "$_prev_out" | sed -n '1p')

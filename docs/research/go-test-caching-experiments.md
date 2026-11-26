@@ -22,18 +22,17 @@ test work whose result is proved unchanged, across gates, restarts and worktrees
 declaration, check configuration, or owner policy was changed in this work, and no owner design
 decision is settled here.
 
-All prototype code and its unit tests live alongside this record under
-[`docs/research/go-test-caching-experiments/`](./go-test-caching-experiments/):
+All prototype code and its unit tests were recorded in ancestor commit `b9a403d7` (read with `git show b9a403d7:docs/research/go-test-caching-experiments/<file>.py`) and later retired once the production Go implementations landed:
 
-- [`baseline_timings.py`](./go-test-caching-experiments/baseline_timings.py) — scans recorded
+- `docs/research/go-test-caching-experiments/baseline_timings.py` (`b9a403d7`) — scans recorded
   `gate.timing.jsonl` files and companion `go-affected` logs.
-- [`proto_content_cache.py`](./go-test-caching-experiments/proto_content_cache.py) — Prototype 1
+- `docs/research/go-test-caching-experiments/proto_content_cache.py` (`b9a403d7`) — Prototype 1
   (content-addressed result records keyed by compiled test binary, arguments, and declared inputs).
-- [`proto_sandbox_inputs.py`](./go-test-caching-experiments/proto_sandbox_inputs.py) — Prototype 2
+- `docs/research/go-test-caching-experiments/proto_sandbox_inputs.py` (`b9a403d7`) — Prototype 2
   (restricted filesystem view probing Landlock, `unshare`, `bwrap`, and `strace`).
-- [`proto_fine_shards.py`](./go-test-caching-experiments/proto_fine_shards.py) — Prototype 3
+- `docs/research/go-test-caching-experiments/proto_fine_shards.py` (`b9a403d7`) — Prototype 3
   (duration-weighted fine shards backed by per-shard content-addressed result records).
-- [`test_prototypes.py`](./go-test-caching-experiments/test_prototypes.py) — unit tests for the
+- `docs/research/go-test-caching-experiments/test_prototypes.py` (`b9a403d7`) — unit tests for the
   prototypes.
 
 Experiments were run in `podman-self` using two byte-identical checkouts (`wt-a` and `wt-b`)
@@ -54,7 +53,7 @@ uname -r; uname -m; go version
 ## 1. Baseline from recorded gate timings
 
 To measure how often Go's built-in test cache currently answers selected packages or shards in
-practice, we ran [`baseline_timings.py`](./go-test-caching-experiments/baseline_timings.py)
+practice, we ran `baseline_timings.py` (`b9a403d7`)
 read-only across `/workspace/.tillr/loop`:
 
 ```bash
@@ -165,7 +164,7 @@ size, and mtime, so any test opening a file in its module misses when run from a
 
 ### What was built
 
-[`proto_content_cache.py`](./go-test-caching-experiments/proto_content_cache.py) compiles each
+`proto_content_cache.py` (`b9a403d7`) compiles each
 package's test binary with `go test -trimpath -c`, computes a SHA-256 cache key from:
 
 ```text
@@ -286,7 +285,7 @@ python3 docs/research/go-test-caching-experiments/proto_content_cache.py \
 
 ### What was built and container mechanism probe
 
-[`proto_sandbox_inputs.py`](./go-test-caching-experiments/proto_sandbox_inputs.py) probes which
+`proto_sandbox_inputs.py` (`b9a403d7`) probes which
 filesystem-restriction or syscall-tracing mechanisms work inside this container (`podman-self`) and
 applies a Landlock Linux Security Module (LSM) allowlist permitting only system runtime paths, the
 Go toolchain/cache, scratch `TMPDIR`, the package's module directory, and declared inputs from
@@ -351,7 +350,7 @@ done
 
 ### What was built
 
-[`proto_fine_shards.py`](./go-test-caching-experiments/proto_fine_shards.py) discovers top-level
+`proto_fine_shards.py` (`b9a403d7`) discovers top-level
 `Test*` functions in a package, partitions them into configurable shard counts via Longest
 Processing Time (LPT) bin-packing weighted by [`tools/go-test-durations.json`](../../tools/go-test-durations.json),
 and runs uncached shards with bounded concurrency (`workers = 4`). Each shard writes its own

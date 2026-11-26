@@ -3,21 +3,60 @@ package store_test
 import (
 	"bufio"
 	"context"
+	"database/sql"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
+	_ "modernc.org/sqlite"
+
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+func TestCrashWriterHelper(t *testing.T) {
+	dbPath := os.Getenv("TILLR_CRASH_WRITER_DB")
+	if dbPath == "" {
+		return
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if os.Getenv("TILLR_CRASH_WRITER_DELETE") == "1" {
+		if _, err := db.Exec("PRAGMA journal_mode=DELETE"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec("PRAGMA cache_size=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA synchronous=FULL"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO meta(key,value) VALUES ('killed-writer', zeroblob(1048576))"); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("ready")
+	select {}
+}
+
 func killWriter(t *testing.T, path string, legacy bool) {
 	t.Helper()
-	args := []string{"testdata/crash_writer.py", path}
-	if legacy {
-		args = append(args, "delete")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
 	}
-	cmd := exec.Command("python3", args...)
+	cmd := exec.Command(exe, "-test.run=^TestCrashWriterHelper$")
+	cmd.Env = append(os.Environ(), "TILLR_CRASH_WRITER_DB="+path)
+	if legacy {
+		cmd.Env = append(cmd.Env, "TILLR_CRASH_WRITER_DELETE=1")
+	}
 	cmd.Stderr = os.Stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {

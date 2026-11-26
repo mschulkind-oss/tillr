@@ -94,7 +94,7 @@ func flagsFor(kind string) []flagDef {
 			},
 			flagDef{
 				name: "--gate-program",
-				help: "the program `tillr-gate run --gate` runs (default: python3 <tillr-gate>/change-gate.py --base {base} --head {head} --runner {runner} --logs {logs})",
+				help: "the program `tillr-gate run --gate` runs (default: tillr-gate change-gate --base {base} --head {head} --runner {runner} --logs {logs})",
 			},
 		)
 	}

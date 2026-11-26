@@ -3,7 +3,6 @@ package main
 import (
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -16,12 +15,14 @@ var goSites = map[string][]string{
 	"tools/gate/change_gate.go":                         {"cmdChangeGate", "warmTrimmedGoCache"},
 	"tools/gate/change_common.go":                       {"readStoredResult", "judgeDocumentSet"},
 	"tools/gate/go_build.go":                            {"runGoBuild"},
+	"tools/tillr-gate/change_gate.go":                   {"changeGateFace", "warmTrimmedGoCache"},
 	"tools/tillr-gate/checks.go":                        {"checksFace"},
 	"tools/tillr-gate/gate.go":                          {"gateResult", "runGateProgram", "RunGate"},
 	"tools/tillr-gate/main.go":                          {"runFace", "writeRunSummary"},
 	"tools/tillr-gate/memory.go":                        {"read", "publish", "annotateMemory", "run"},
 	"tools/tillr-gate/run.go":                           {"runCheck", "RunWith", "runPlanChecks", "ApplyInheritedFailures", "budgetNotes"},
 	"tools/tillr-gate/shadow.go":                        {"Shadow", "shadowResult"},
+	"tools/tillr-gate/tree_check.go":                    {"runTreeCheck"},
 	"tools/tillr-gate/watchdog.go":                      {"readFastVerdict"},
 	"tools/tillr-drain/drain/events.go":                 {"gateRefusalDetail"},
 	"tools/tillr-drain/drain/fixer_gate.go":             {"fixerCheck", "settleFixerGate"},
@@ -328,96 +329,6 @@ func TestClassificationScanGoScanPositiveControl(t *testing.T) {
 	}
 	if got := rawGoComparisons("package p\nfunc f(c Check) bool {\n\treturn c.Result == \"FAIL\"\n}\n", false); len(got) != 1 || got[0] != 3 {
 		t.Fatalf("span mode expected [3], got %v", got)
-	}
-}
-
-func TestClassificationScanLoopAdapterAndPythonControls(t *testing.T) {
-	root, _ := loadTestContext(t)
-	pyScript := `
-import ast, sys
-from pathlib import Path
-
-def _dict_key(node):
-    if isinstance(node, ast.Subscript):
-        return node.slice
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args:
-        return node.args[0]
-    return None
-
-def raw_word_operand(node):
-    if isinstance(node, ast.Name):
-        return node.id in {"result", "word", "raw_word"}
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-        return node.func.id == "check_status"
-    key = _dict_key(node)
-    return isinstance(key, ast.Constant) and key.value == "result"
-
-def raw_operand(node):
-    if isinstance(node, (ast.Tuple, ast.List)):
-        return any(raw_operand(e) for e in node.elts)
-    if isinstance(node, ast.Name) and node.id in {"code", "exit_code", "rc"}:
-        return True
-    if isinstance(node, ast.Attribute) and node.attr in {"returncode", "rc", "failed", "conflict", "unanswered", "verdict"}:
-        return True
-    key = _dict_key(node)
-    if isinstance(key, ast.Constant) and key.value in {"exit_code", "rc"}:
-        return True
-    return raw_word_operand(node)
-
-def raw_truth_test(node):
-    if isinstance(node, ast.BoolOp):
-        return any(raw_truth_test(v) for v in node.values)
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return raw_truth_test(node.operand)
-    return raw_operand(node)
-
-def raw_exit_comparisons(nodes, *, sequencing=()):
-    found = set()
-    for node in nodes:
-        for decision in ast.walk(node):
-            if isinstance(decision, ast.Compare):
-                if decision in sequencing or ast.unparse(decision) == "result not in ('pass', 'fail', 'stalled')":
-                    continue
-                if any(raw_operand(o) for o in [decision.left, *decision.comparators]):
-                    found.add(decision.lineno)
-            elif isinstance(decision, (ast.If, ast.IfExp, ast.While)) and raw_truth_test(decision.test):
-                if ast.unparse(decision) != 'if checked.returncode:\n    return checked.returncode':
-                    found.add(decision.test.lineno)
-    return sorted(found)
-
-def loop_gate_comparisons(execute):
-    gate = next((n for n in execute.body if isinstance(n, ast.If) and ast.unparse(n.test) == "kind == 'gate'"), None)
-    nodes = [part for node in execute.body for part in (gate.body if node is gate else [node])]
-    sequencing = set()
-    for node in execute.body:
-        if not isinstance(node, ast.For):
-            continue
-        for step in node.body:
-            if not isinstance(step, ast.If) or step.orelse:
-                continue
-            loop, test = ast.unparse(node.iter), ast.unparse(step.test)
-            if loop == "steps[:judged_from]" and test == "result.returncode != 0" and ast.unparse(step.body[-1]) == "return EXIT_EXTERNAL":
-                sequencing.add(step.test)
-            if loop == "steps[judged_from:]" and test == "code != EXIT_PASS" and len(step.body) == 1 and isinstance(step.body[0], ast.Break):
-                sequencing.add(step.test)
-    return raw_exit_comparisons(nodes, sequencing=sequencing)
-
-# Positive controls
-assert raw_exit_comparisons(ast.parse('def judge(code):\n    return "pass" if code == 0 else "fail"\n').body) == [2]
-assert raw_exit_comparisons(ast.parse('def judge(word):\n    return word == "pass"\n').body) == [2]
-assert raw_exit_comparisons(ast.parse('def main():\n    if (done.returncode, result) not in ((0, "pass"), (1, "fail"), (6, "stalled")):\n        raise ValueError\n').body) == [2]
-assert raw_exit_comparisons(ast.parse('def main():\n    if code:\n        failed = True\n').body) == [2]
-assert raw_exit_comparisons(ast.parse('def main():\n    if result not in ("pass", "fail", "stalled") or exit_kind != word_kind:\n        raise ValueError\n    if checked.returncode:\n        return checked.returncode\n    if reply["outcome"] == "fail":\n        return 1\n').body) == []
-for expr in ('data.get("result") != verdict', 'record["result"] == "pass"'):
-    assert raw_exit_comparisons(ast.parse(f'def stored_result():\n    return {expr}\n').body) == [2]
-assert raw_exit_comparisons(ast.parse('def stored_result():\n    return answer["outcome"] == verdict\n').body) == []
-for expr in ('check.rc == 0', 'check.unanswered', 'check.conflict', 'check_status(check) == "FAIL"', 'run["exit_code"] == 0'):
-    assert raw_exit_comparisons(ast.parse(f'def site(check, run):\n    if {expr}:\n        return 1\n').body) == [2]
-assert raw_exit_comparisons(ast.parse('def verdict_of(run):\n    return run["detail"], run["exit_code"]\n').body) == []
-`
-	cmd := exec.Command("python3", "-c", pyScript, root)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("python scan controls failed: %v: %s", err, out)
 	}
 }
 

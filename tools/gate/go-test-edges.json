@@ -1005,9 +1005,6 @@
       "github.com/mschulkind-oss/tillr-land",
       "github.com/mschulkind-oss/tillr-run",
       "github.com/mschulkind-oss/tillr-view"
-    ],
-    "reads": [
-      "tools/tillr/store/testdata/crash_writer.py"
     ]
   },
   "github.com/mschulkind-oss/tillr-view": {
@@ -1058,7 +1055,6 @@
     },
     "reads": [
       "tools/tillr-trace/",
-      "tools/tillr/store/testdata/crash_writer.py",
       "yolo-packs/tillr/programs/"
     ]
   },

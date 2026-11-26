@@ -114,10 +114,10 @@ func TestWatchLintRecordedVerdictExample(t *testing.T) {
 	if err := os.CopyFS(dst, os.DirFS(src)); err != nil {
 		t.Fatalf("copy recorded-verdict: %v", err)
 	}
-	prep := exec.CommandContext(t.Context(), "python3", "prepare.py")
+	prep := exec.CommandContext(t.Context(), "sh", "prepare.sh")
 	prep.Dir = dst
 	if out, err := prep.CombinedOutput(); err != nil {
-		t.Fatalf("prepare.py: %v\n%s", err, out)
+		t.Fatalf("prepare.sh: %v\n%s", err, out)
 	}
 	if err := os.Chmod(filepath.Join(dst, "stub-adapter.sh"), 0o755); err != nil {
 		t.Fatalf("chmod stub-adapter.sh: %v", err)

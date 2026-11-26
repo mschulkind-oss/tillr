@@ -32,10 +32,18 @@ func run(args []string) int {
 		return runChangeCheck(sub, rest)
 	case "elapsed-time":
 		return cmdElapsedTime(rest)
+	case "format":
+		return cmdFormat(rest)
 	case "gate-budget":
 		return cmdGateBudget(rest)
 	case "go-build":
 		return cmdGoBuild(rest)
+	case "go-edges":
+		return cmdGoEdges(rest)
+	case "go-module-inventory":
+		return cmdGoModuleInventory(rest)
+	case "no-python":
+		return cmdNoPython(rest)
 	case "workflows":
 		return cmdWorkflows(rest)
 	case "change-gate":

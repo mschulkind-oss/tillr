@@ -42,7 +42,7 @@ First by rule 3: every other entry is built and verified by someone who starts f
    - **Outcome:** a reader who clones the repository and follows the README gets a built tillr
      and a way to run its suites, with no ref created by hand.
    - **Depends on:** [the decision on how the first proved commit is established](#open-decisions-that-block-entries).
-   - **Where:** [`README.md`](../../README.md), [`tests/tillr-build.test.py`](../../tests/tillr-build.test.py),
+   - **Where:** [`README.md`](../../README.md), [`tests/tillr_build_test.go`](../../tests/tillr_build_test.go),
      [the build-commit reference](../reference/tillr-build-commit.md).
 
 2. **Make the test suites independent of the machine.** Second because a suite that is red on a

@@ -233,7 +233,6 @@ Check that these tools are on your `PATH` before you start:
 $ go version        # Go toolchain (builds the tillr programs)
 $ just --version    # command runner used by the build recipe
 $ git --version     # Git (worktrees, three-way merge landing)
-$ python3 --version # Python 3 (used by the pi backend adapter and the default change-gate scripts)
 $ node --version    # Node.js >= 22.19 (required to build tillr-pi)
 ```
 

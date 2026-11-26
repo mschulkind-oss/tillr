@@ -37,6 +37,13 @@ case "$1" in
     printf 'revision stdout\n'
     printf 'revision stderr\n' >&2
     exit "${STUB_REVISION:-0}" ;;
+  change-gate)
+    log "change-gate-argv: $*"
+    log "change-gate-cwd: $(pwd)"
+    exit 0 ;;
+  tree-check)
+    log "tree-check-argv: $*"
+    exit "${STUB_REVISION:-0}" ;;
   run)
     program=""
     args=""
@@ -366,7 +373,6 @@ func TestGateNamesGateProgramAndArgv(t *testing.T) {
 	f := newFixture(t, true)
 	root := repoRoot(t)
 	t.Chdir(root)
-	f.writeStub("python3", stubPython3)
 	t.Setenv("STUB_EXEC_GATE", "1")
 	reg := filepath.Join(f.tmp, "registry.json")
 
@@ -374,34 +380,34 @@ func TestGateNamesGateProgramAndArgv(t *testing.T) {
 	if code != ExitPass {
 		t.Fatalf("got exit %d, want 0; stderr=%s", code, stderr)
 	}
-	installedGate := filepath.Join(root, "tools", "tillr-gate", "change-gate.py")
+	gateBin := filepath.Join(f.bin, "tillr-gate")
 	want := "--logs " + filepath.Join(f.runDir, "logs") +
-		" --gate python3 --gate-arg " + installedGate +
+		" --gate " + gateBin + " --gate-arg change-gate" +
 		" --gate-arg --base --gate-arg " + f.base +
 		" --gate-arg --head --gate-arg " + f.head +
-		" --gate-arg --runner --gate-arg tillr-gate" +
+		" --gate-arg --runner --gate-arg " + gateBin +
 		" --gate-arg --logs --gate-arg " + filepath.Join(f.runDir, "change-logs")
 	calls := f.calls()
 	var runs []string
-	var pyArgvs []string
+	var cgArgvs []string
 	for _, c := range calls {
 		if strings.HasPrefix(c, "run ") {
 			runs = append(runs, c)
 		}
-		if strings.HasPrefix(c, "python3-argv: ") {
-			pyArgvs = append(pyArgvs, c)
+		if strings.HasPrefix(c, "change-gate-argv: ") {
+			cgArgvs = append(cgArgvs, c)
 		}
 	}
 	if len(runs) == 0 || !strings.Contains(runs[len(runs)-1], want) {
 		t.Fatalf("run argv mismatch: got %v, want substring %q", runs, want)
 	}
-	wantPy := "python3-argv: " + installedGate + " --base " + f.base + " --head " + f.head +
-		" --runner tillr-gate --logs " + filepath.Join(f.runDir, "change-logs")
-	if len(pyArgvs) != 1 || pyArgvs[0] != wantPy {
-		t.Fatalf("python3-argv got %v, want [%q]", pyArgvs, wantPy)
+	wantCG := "change-gate-argv: change-gate --base " + f.base + " --head " + f.head +
+		" --runner " + gateBin + " --logs " + filepath.Join(f.runDir, "change-logs")
+	if len(cgArgvs) != 1 || cgArgvs[0] != wantCG {
+		t.Fatalf("change-gate-argv got %v, want [%q]", cgArgvs, wantCG)
 	}
-	if !slices.Contains(calls, "python3-cwd: "+f.repo) {
-		t.Fatalf("missing python3-cwd: %v", calls)
+	if !slices.Contains(calls, "change-gate-cwd: "+f.repo) {
+		t.Fatalf("missing change-gate-cwd: %v", calls)
 	}
 }
 
@@ -725,14 +731,6 @@ func TestRevisionHooksAndFixerGate(t *testing.T) {
 	f.declare("fast-one", "tree", "fast")
 	f.declare("change-one", "change", "fast")
 
-	installRoot := filepath.Join(f.tmp, "install")
-	_ = os.MkdirAll(filepath.Join(installRoot, "tillr-gate"), 0o755)
-	_ = os.WriteFile(filepath.Join(installRoot, "tillr-gate", "tree-check.py"), []byte(
-		"import os, sys\n"+
-			"open(os.environ['STUB_LOG'], 'a').write('tree-check ' + ' '.join(sys.argv[1:]) + '\\n')\n"+
-			"sys.exit(int(os.environ.get('STUB_REVISION', '0')))\n",
-	), 0o644)
-
 	logs := filepath.Join(f.durable, "tillr-loop-revision-logs")
 	heavy := "checks --heavy-tree --base HEAD --head HEAD --worktree . --checks tools/gate/checks --logs " + logs
 	spansOut := filepath.Join(f.tmp, "spans.jsonl")
@@ -770,7 +768,6 @@ func TestRevisionHooksAndFixerGate(t *testing.T) {
 		}
 	}
 
-	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	for _, codeStr := range []string{"0", "1", "6"} {
 		t.Setenv("STUB_REVISION", codeStr)
 		f.clearLog()
@@ -779,7 +776,8 @@ func TestRevisionHooksAndFixerGate(t *testing.T) {
 		if code != wantCode {
 			t.Fatalf("fast-one replay got %d, want %d", code, wantCode)
 		}
-		if calls := f.calls(); len(calls) != 1 || !strings.HasPrefix(calls[0], "tree-check --only fast-one --base HEAD --head HEAD --runner ") {
+		calls := f.calls()
+		if len(calls) != 2 || !strings.HasPrefix(calls[1], "tree-check-argv: tree-check --only fast-one --base HEAD --head HEAD --runner ") {
 			t.Fatalf("unexpected calls: %v", calls)
 		}
 	}
@@ -1026,7 +1024,7 @@ func TestSelfCheckAndMissingJudge(t *testing.T) {
 	if len(f.calls()) != 0 {
 		t.Fatalf("self-check ran stubs: %v", f.calls())
 	}
-	installedGate := filepath.Join(root, "tools", "tillr-gate", "change-gate.py")
+	gateBin := filepath.Join(f.bin, "tillr-gate")
 	for _, want := range []string{
 		"tillr-loop self-check: one tick's three judgments",
 		"tools/tillr-loop/tillr-loop gate",
@@ -1034,7 +1032,7 @@ func TestSelfCheckAndMissingJudge(t *testing.T) {
 		"tools/tillr-loop/tillr-loop verdict",
 		"tillr-gate plan",
 		"tillr-gate run",
-		"--gate python3 --gate-arg " + installedGate,
+		"--gate " + gateBin + " --gate-arg change-gate",
 		"--gate-arg --base --gate-arg " + f.base,
 		"--gate-arg --head --gate-arg " + f.head,
 		"--logs " + filepath.Join(f.runDir, "logs"),
@@ -1129,45 +1127,33 @@ func TestWorktreeRootAgreementAndNoRootRefusal(t *testing.T) {
 
 func TestInstallRootAndDecoyRejection(t *testing.T) {
 	f := newFixture(t, true)
-	f.writeStub("python3", stubPython3)
 	runGit(t, f.repo, nil, "checkout", "-q", "tillr/lane-1")
 	f.declare("fast-one", "tree", "fast")
 	_ = os.WriteFile(filepath.Join(f.repo, "tools", "gate", "change-gate.py"), []byte("import sys; sys.exit(99)\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(f.repo, "tools", "gate", "tree-check.py"), []byte("import sys; sys.exit(99)\n"), 0o644)
 
-	installRoot := filepath.Join(f.tmp, "install")
-	_ = os.MkdirAll(filepath.Join(installRoot, "tillr-gate"), 0o755)
-	installedChange := filepath.Join(installRoot, "tillr-gate", "change-gate.py")
-	installedTree := filepath.Join(installRoot, "tillr-gate", "tree-check.py")
-	_ = os.WriteFile(installedChange, []byte("# installed\n"), 0o644)
-	_ = os.WriteFile(installedTree, []byte(
-		"import os, sys\n"+
-			"open(os.environ['STUB_LOG'], 'a').write('installed-tree-check ' + ' '.join(sys.argv[1:]) + '\\n')\n"+
-			"sys.exit(0)\n",
-	), 0o644)
-
-	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	t.Setenv("STUB_EXEC_GATE", "1")
 	t.Chdir(f.repo)
 
 	code, _, stderr := f.runAdapter("gate")
 	if code != ExitPass {
-		t.Fatalf("gate with TILLR_INSTALL_ROOT failed: %d %s", code, stderr)
+		t.Fatalf("gate failed: %d %s", code, stderr)
 	}
-	wantCall := "python3-argv: " + installedChange + " --base " + f.base + " --head " + f.head +
-		" --runner tillr-gate --logs " + filepath.Join(f.runDir, "change-logs")
+	gateBin := filepath.Join(f.bin, "tillr-gate")
+	wantCall := "change-gate-argv: change-gate --base " + f.base + " --head " + f.head +
+		" --runner " + gateBin + " --logs " + filepath.Join(f.runDir, "change-logs")
 	if !slices.Contains(f.calls(), wantCall) {
 		t.Fatalf("expected %q in %v", wantCall, f.calls())
 	}
 
-	// self-check also prints the installed runner
+	// self-check also prints tillr-gate change-gate
 	f.gateVerdict()
 	code, stdout, stderr := f.runAdapter("self-check")
-	if code != ExitPass || !strings.Contains(stdout, "--gate python3 --gate-arg "+installedChange) {
-		t.Fatalf("self-check with TILLR_INSTALL_ROOT: code=%d stdout=%s stderr=%s", code, stdout, stderr)
+	if code != ExitPass || !strings.Contains(stdout, "--gate "+gateBin+" --gate-arg change-gate") {
+		t.Fatalf("self-check: code=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
 
-	// replay and fixer-gate resolve tree-check.py from TILLR_INSTALL_ROOT, ignoring decoy
+	// replay and fixer-gate invoke tillr-gate tree-check, ignoring decoy scripts under tools/gate/
 	for _, tc := range []struct {
 		kind string
 		args []string
@@ -1178,58 +1164,19 @@ func TestInstallRootAndDecoyRejection(t *testing.T) {
 		f.clearLog()
 		code, _, stderr := runMain(append([]string{tc.kind}, tc.args...)...)
 		if code != ExitPass {
-			t.Fatalf("%s with TILLR_INSTALL_ROOT failed: %d %s", tc.kind, code, stderr)
+			t.Fatalf("%s failed: %d %s", tc.kind, code, stderr)
 		}
 		found := false
 		for _, c := range f.calls() {
-			if strings.HasPrefix(c, "python3-argv: "+installedTree+" --only fast-one ") {
+			if strings.HasPrefix(c, "tree-check-argv: tree-check --only fast-one --base HEAD --head HEAD --runner "+gateBin) {
 				found = true
 			}
 		}
 		if !found {
-			t.Fatalf("%s did not invoke installed tree-check: %v", tc.kind, f.calls())
+			t.Fatalf("%s did not invoke tillr-gate tree-check: %v", tc.kind, f.calls())
 		}
 	}
 
-	// consumer repo without TILLR_INSTALL_ROOT refuses
-	t.Setenv("TILLR_INSTALL_ROOT", "")
-	code, _, stderr = f.runAdapter("gate")
-	if code != ExitExternal || !strings.Contains(stderr, "TILLR_INSTALL_ROOT") {
-		t.Fatalf("consumer without TILLR_INSTALL_ROOT: code=%d stderr=%s", code, stderr)
-	}
-
-	// relative TILLR_INSTALL_ROOT refuses
-	t.Setenv("TILLR_INSTALL_ROOT", "relative/install")
-	code, _, stderr = f.runAdapter("gate")
-	if code != ExitExternal || !strings.Contains(stderr, "TILLR_INSTALL_ROOT") {
-		t.Fatalf("relative install root: code=%d stderr=%s", code, stderr)
-	}
-
-	// missing runner refuses gate, self-check, replay, fixer-gate; --gate-program override works
-	emptyInstall := filepath.Join(f.tmp, "empty-install")
-	_ = os.MkdirAll(filepath.Join(emptyInstall, "tillr-gate"), 0o755)
-	missingChange := filepath.Join(emptyInstall, "tillr-gate", "change-gate.py")
-	missingTree := filepath.Join(emptyInstall, "tillr-gate", "tree-check.py")
-	t.Setenv("TILLR_INSTALL_ROOT", emptyInstall)
-	for _, kind := range []string{"gate", "self-check"} {
-		f.clearLog()
-		code, _, stderr = f.runAdapter(kind)
-		if code != ExitExternal || !strings.Contains(stderr, missingChange) || len(f.calls()) != 0 {
-			t.Fatalf("missing runner (%s): code=%d stderr=%s calls=%v", kind, code, stderr, f.calls())
-		}
-	}
-	for _, tc := range []struct {
-		kind string
-		args []string
-	}{
-		{"replay", []string{"--only", "fast-one"}},
-		{"fixer-gate", append(f.candidate(), "--only", "fast-one")},
-	} {
-		code, _, stderr = runMain(append([]string{tc.kind}, tc.args...)...)
-		if code != ExitExternal || !strings.Contains(stderr, missingTree) {
-			t.Fatalf("missing tree-check (%s): code=%d stderr=%s", tc.kind, code, stderr)
-		}
-	}
 	t.Setenv("STUB_EXEC_GATE", "")
 	f.clearLog()
 	code, _, stderr = f.runAdapter("gate", "--gate-program", "custom-gate --flag")

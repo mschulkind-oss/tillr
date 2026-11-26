@@ -1,0 +1,18 @@
+{
+  "id": "no-python",
+  "label": "No tracked Python files or extensionless Python shebangs",
+  "command": [
+    "tools/gate/repo-gate",
+    "no-python"
+  ],
+  "scope": "tree",
+  "tier": "fast",
+  "budget_ms": 200,
+  "reads": [
+    "."
+  ],
+  "tools": [
+    "go",
+    "git"
+  ]
+}

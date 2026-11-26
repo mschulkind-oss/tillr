@@ -39,7 +39,6 @@
     "tools/tillr-watch/",
     "tools/tillr/",
     "tools/tillr/examples/",
-    "tools/tillr/store/testdata/crash_writer.py",
     "tools/tillr/watch/testdata/",
     "yolo-packs/tillr/pack.json",
     "yolo-packs/tillr/programs/"

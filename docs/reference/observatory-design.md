@@ -219,7 +219,7 @@ labels.
 | `OBS-5` | WebSocket invalidation at `/api/v1/ws`. | Yes |
 
 Front-end checks are path-scoped: a change that does not touch `tools/tillr-view/web/` pays
-nothing for them, and [`observatory-dev.test.py`](../../tests/observatory-dev.test.py) concerns
+nothing for them, and [`observatory_dev_test.go`](../../tests/observatory_dev_test.go) concerns
 only the launch recipe's own files. The built front end is embedded in the Go binary, so one
 process serves a drain's view and Node is needed only for development (`just observatory-dev`).
 

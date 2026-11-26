@@ -53,7 +53,7 @@ Four adapters ship: `pi`, `claude`, `agy`, and `muse`. A fifth backend name, `co
 | Lane staging and brief rendering; derived fence (`FencePaths`) | [`tools/tillr-drain/drain/stage.go`](../../tools/tillr-drain/drain/stage.go), [`tools/tillr-drain/workflow/workflow.go`](../../tools/tillr-drain/workflow/workflow.go) |
 | Attempt classification (`ClassifyAttempt`), backend closure and probes | [`tools/tillr-drain/drain/failover.go`](../../tools/tillr-drain/drain/failover.go), [`backend_availability.go`](../../tools/tillr-drain/drain/backend_availability.go) |
 | Boundary snapshots (`TakeBoundary`, `CompareRunObserved`) | [`tools/tillr-drain/drain/boundary.go`](../../tools/tillr-drain/drain/boundary.go) |
-| Tracked policies and the offline four-adapter contract suite | [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json), [`tests/tillr-muse-backend.test.py`](../../tests/tillr-muse-backend.test.py) |
+| Tracked policies and the offline four-adapter contract suite | [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json), [`tests/tillr_muse_backend_test.go`](../../tests/tillr_muse_backend_test.go) |
 
 ---
 
@@ -231,7 +231,7 @@ The append-only log is what makes a resume safe: a resumed segment appends to `<
 
 ## Shipped adapters
 
-All four adapters share `preflight.sh`, [`report.go`](../../tools/tillr-run/extract/report.go), and [`usage.go`](../../tools/tillr-run/extract/usage.go), and [`tests/tillr-muse-backend.test.py`](../../tests/tillr-muse-backend.test.py) runs them offline against recorded streams under each adapter's `testdata/`.
+All four adapters share `preflight.sh`, [`report.go`](../../tools/tillr-run/extract/report.go), and [`usage.go`](../../tools/tillr-run/extract/usage.go), and [`tests/tillr_muse_backend_test.go`](../../tests/tillr_muse_backend_test.go) runs them offline against recorded streams under each adapter's `testdata/`.
 
 | Backend | Pause kind | Ending capability | Harness invocation | Stream |
 | :--- | :--- | :--- | :--- | :--- |

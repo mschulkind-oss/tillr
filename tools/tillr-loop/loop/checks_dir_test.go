@@ -49,15 +49,6 @@ func initLoopChecksDirFixture(t *testing.T, checksDir string, writeSettings bool
 	git("commit", "-qm", "init")
 	head := git("rev-parse", "HEAD")
 
-	installRoot := t.TempDir()
-	gateInstall := filepath.Join(installRoot, "tillr-gate")
-	if err := os.MkdirAll(gateInstall, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	_ = os.WriteFile(filepath.Join(gateInstall, "change-gate.py"), []byte("# stub\n"), 0o644)
-	_ = os.WriteFile(filepath.Join(gateInstall, "tree-check.py"), []byte("# stub\n"), 0o644)
-	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
-
 	return root, head
 }
 
@@ -88,29 +79,40 @@ func TestChecksDirGateAndSelfCheckAndPrecedence(t *testing.T) {
 	if !strings.Contains(planArgv, "--registry "+wantReg) {
 		t.Fatalf("plan argv = %q, want --registry %s", planArgv, wantReg)
 	}
-	// No --checks forwarded to change-gate.py when neither --registry nor TILLR_LOOP_REGISTRY is set.
-	if strings.Contains(ctx.GateProgram, "--checks") {
-		t.Fatalf("GateProgram = %q, should not forward --checks when reading .tillr.toml", ctx.GateProgram)
+	// No --checks forwarded to change-gate when neither --registry nor TILLR_LOOP_REGISTRY is set.
+	runArgv := strings.Join(steps[2].Argv, " ")
+	if strings.Contains(runArgv, "--gate-arg --checks") {
+		t.Fatalf("runArgv = %q, should not forward --checks when reading .tillr.toml", runArgv)
 	}
 
-	// TILLR_LOOP_REGISTRY directory forwards --checks <abs dir> to change-gate.py.
+	// TILLR_LOOP_REGISTRY directory forwards --checks <abs dir> to change-gate.
 	t.Setenv(registryEnv, "env/checks")
 	ctxEnv, err := buildContext("gate", parsed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(ctxEnv.GateProgram, "--checks ") || !strings.Contains(ctxEnv.GateProgram, "env/checks") {
-		t.Fatalf("GateProgram with dir TILLR_LOOP_REGISTRY = %q, want --checks .../env/checks", ctxEnv.GateProgram)
+	stepsEnv, err := composeGate(ctxEnv, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEnv := strings.Join(stepsEnv[2].Argv, " ")
+	if !strings.Contains(runEnv, "--gate-arg --checks --gate-arg ") || !strings.Contains(runEnv, "env/checks") {
+		t.Fatalf("runArgv with dir TILLR_LOOP_REGISTRY = %q, want --checks .../env/checks", runEnv)
 	}
 
-	// TILLR_LOOP_REGISTRY .json file does NOT forward --checks to change-gate.py.
+	// TILLR_LOOP_REGISTRY .json file does NOT forward --checks to change-gate.
 	t.Setenv(registryEnv, "env/registry.json")
 	ctxJSON, err := buildContext("gate", parsed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(ctxJSON.GateProgram, "--checks") {
-		t.Fatalf("GateProgram with .json TILLR_LOOP_REGISTRY = %q, should not forward --checks", ctxJSON.GateProgram)
+	stepsJSON, err := composeGate(ctxJSON, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runJSON := strings.Join(stepsJSON[2].Argv, " ")
+	if strings.Contains(runJSON, "--gate-arg --checks") {
+		t.Fatalf("runArgv with .json TILLR_LOOP_REGISTRY = %q, should not forward --checks", runJSON)
 	}
 
 	// Explicit --registry directory wins over TILLR_LOOP_REGISTRY and forwards --checks.
@@ -126,8 +128,13 @@ func TestChecksDirGateAndSelfCheckAndPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(ctxReg.GateProgram, "flag/checks") {
-		t.Fatalf("GateProgram with --registry = %q, want flag/checks", ctxReg.GateProgram)
+	stepsReg, err := composeGate(ctxReg, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runReg := strings.Join(stepsReg[2].Argv, " ")
+	if !strings.Contains(runReg, "flag/checks") {
+		t.Fatalf("runArgv with --registry = %q, want flag/checks", runReg)
 	}
 
 	// Absent .tillr.toml falls back to tools/gate/checks.

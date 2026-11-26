@@ -1,11 +1,11 @@
 {
   "id": "format-test",
   "label": "Go format recipe regression suite",
-  "command": ["python3", "tests/format.test.py"],
+  "command": ["go", "test", "-count=1", "tests/format_test.go"],
   "scope": "tree",
   "remember": false,
   "tier": "heavy",
   "timeout_ms": 60000,
-  "reads": [".justfile", "tests/format.test.py", "tools/gate/checks/format.json", "tools/tillr/"],
-  "tools": ["python3", "just", "git", "gofmt", "go"]
+  "reads": [".justfile", "tests/format_test.go", "tools/gate/", "tools/tillr/"],
+  "tools": ["just", "git", "gofmt", "go"]
 }

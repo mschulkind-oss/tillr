@@ -13,12 +13,14 @@ import (
 )
 
 var movedRunnerSites = map[string][]string{
+	"tools/tillr-gate/change_gate.go":                   {"changeGateFace", "warmTrimmedGoCache"},
 	"tools/tillr-gate/checks.go":                        {"checksFace"},
 	"tools/tillr-gate/gate.go":                          {"gateResult", "runGateProgram", "RunGate"},
 	"tools/tillr-gate/main.go":                          {"runFace", "writeRunSummary"},
 	"tools/tillr-gate/memory.go":                        {"read", "publish", "annotateMemory", "run"},
 	"tools/tillr-gate/run.go":                           {"runCheck", "RunWith", "runPlanChecks", "ApplyInheritedFailures", "budgetNotes"},
 	"tools/tillr-gate/shadow.go":                        {"Shadow", "shadowResult"},
+	"tools/tillr-gate/tree_check.go":                    {"runTreeCheck"},
 	"tools/tillr-gate/watchdog.go":                      {"readFastVerdict"},
 	"tools/tillr-drain/drain/events.go":                 {"gateRefusalDetail"},
 	"tools/tillr-drain/drain/fixer_gate.go":             {"fixerCheck", "settleFixerGate"},

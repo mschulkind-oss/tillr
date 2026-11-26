@@ -9,7 +9,7 @@ product installation, source change, gate, or landing is needed.
 
 ## Run from an empty directory
 
-Install the tillr pack's current binaries on `PATH` and Python 3. Start in an empty
+Install the tillr pack's current binaries on `PATH`. Start in an empty
 directory with no Git repository. The sequence copies the pack's example into that
 directory. To use a source checkout instead, set `TILLR_EXAMPLE` to the absolute path
 of this example before running the sequence. Use a fresh directory for each run;
@@ -19,8 +19,8 @@ it is not a restart or retry tutorial. Do not run it on your production store.
 set -eu
 example=${TILLR_EXAMPLE:-$HOME/.local/share/tillr/tillr/examples/recorded-verdict}
 cp -R "$example/." .
-chmod +x stub-adapter.sh extract-report
-python3 prepare.py
+chmod +x stub-adapter.sh extract-report prepare.sh hook.sh stage.sh
+sh prepare.sh
 tillr store init --store .tillr/state.db --definition definition.json
 tillr item apply --store .tillr/state.db --input findings/finding-confirmed.json --now 2026-11-18T00:00:00Z
 tillr item apply --store .tillr/state.db --input findings/finding-rejected.json --now 2026-11-18T00:00:00Z
@@ -54,15 +54,15 @@ A finished finding means its investigation ended, not that every criterion passe
   The empty prerequisites array means dispatch needs no named prerequisite.
 - [The workflow](./config/tillr/workflows/recorded-verdict@v1.json) orders `reproduce`
   before `investigate`, one command stage followed by one agent stage.
-- [prepare.py](./prepare.py) writes local command registration and backend policy
+- [prepare.sh](./prepare.sh) writes local command registration and backend policy
   with absolute program paths, so programs still work from the plain lane directory.
   It neither initializes a store nor invokes Git.
-- [stage.py](./stage.py) writes reproduction evidence, then reads it to write the
+- [stage.go](./stage.go) (invoked via [stage.sh](./stage.sh)) writes reproduction evidence, then reads it to write the
   assessment. [stub-adapter.sh](./stub-adapter.sh) stands in for an agent backend;
   it does not call an AI provider. [outcomes.json](./outcomes.json) fixes the answers.
   [pause-kind](./pause-kind) declares that interruption stops the stub immediately;
   [extract-report](./extract-report) preserves its plain report without inventing model spend.
-- [hook.py](./hook.py) advertises `complete-item`, reads the assessment and the
+- [hook.go](./hook.go) (invoked via [hook.sh](./hook.sh)) advertises `complete-item`, reads the assessment and the
   current criterion text, records hash-bound verdicts through `tillr item verdict
   record`, and prints one JSON object following the
   [completion hook contract](../../definition/README.md#completion-and-detail-hooks):

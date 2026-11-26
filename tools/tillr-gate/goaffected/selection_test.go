@@ -518,10 +518,6 @@ func TestSelectionRules(t *testing.T) {
 		{"tools/tillr-gate/classify.py", []string{"github.com/mschulkind-oss/tillr-drain/drain"}},
 		{"tools/tillr-loop/drain-argv.json", []string{"github.com/mschulkind-oss/tillr-drain/drain"}},
 		{"yolo-packs/tillr/pack.json", []string{"github.com/mschulkind-oss/tillr-drain/drain"}},
-		{"tools/tillr/store/testdata/crash_writer.py", []string{
-			"github.com/mschulkind-oss/tillr-store",
-			"github.com/mschulkind-oss/tillr-view",
-		}},
 		{"tools/tillr/examples/recorded-verdict/definition.json", []string{
 			"github.com/mschulkind-oss/tillr-drain/drain",
 			"github.com/mschulkind-oss/tillr-watch",
@@ -2179,7 +2175,8 @@ func TestCandidateGateFailsOnUndeclaredGoModule(t *testing.T) {
 		}
 	}
 	copyInto(declPath, filepath.Join(checksDir, "go-edges.json"))
-	copyInto(filepath.Join(root, "tools", "gate", "checks", "go-edges.py"), filepath.Join(checksDir, "go-edges.py"))
+	repoGateBin := filepath.Join(repo, "tools", "gate", "repo-gate")
+	buildRepoGateBinary(t, repoGateBin)
 
 	for _, mod := range []struct {
 		dir string

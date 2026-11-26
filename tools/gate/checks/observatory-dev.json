@@ -2,8 +2,10 @@
   "id": "observatory-dev",
   "label": "the observatory dev recipe refuses held ports and leaves no process behind",
   "command": [
-    "python3",
-    "tests/observatory-dev.test.py"
+    "go",
+    "test",
+    "-count=1",
+    "tests/observatory_dev_test.go"
   ],
   "scope": "tree",
   "tier": "heavy",
@@ -11,13 +13,12 @@
   "reads": [
     ".justfile",
     "mise.toml",
-    "tests/observatory-dev.test.py",
+    "tests/observatory_dev_test.go",
     "tools/gate/checks/observatory-dev.json",
     "tools/observatory/run.sh",
     "tools/tillr-view/Procfile.dev"
   ],
   "tools": [
-    "python3",
     "just",
     "git",
     "go"

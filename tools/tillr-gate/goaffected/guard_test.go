@@ -28,6 +28,18 @@ func buildTillrGateBinary(t *testing.T, outPath string) string {
 	return outPath
 }
 
+func buildRepoGateBinary(t *testing.T, outPath string) string {
+	t.Helper()
+	root := repoRoot(t)
+	buildArgs := []string{"buil" + "d", "-o", outPath, "."}
+	cmd := exec.Command("go", buildArgs...)
+	cmd.Dir = filepath.Join(root, "tools", "gate")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build repo-gate: %v\n%s", err, out)
+	}
+	return outPath
+}
+
 func precompileGoTest(t *testing.T, pkgDir, gocache string) {
 	t.Helper()
 	env := withEnvOverrides(goaffected.BuildEnv(), map[string]string{

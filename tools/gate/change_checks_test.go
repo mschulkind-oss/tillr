@@ -1228,7 +1228,7 @@ func TestChangeAdapterRecordsCompleteFastInventoryIncludingSkips(t *testing.T) {
 		"go-edges": true, "go-module-inventory": true, "workflows": true,
 	}
 	expected := []string{"commit-identity", "citations", "documents", "file-size", "workflows", "elapsed-time",
-		"gate-budget", "scratch", "tracked-tillr", "design-citations", "pack-sync", "go-build", "format", "go-affected",
+		"gate-budget", "no-python", "scratch", "tracked-tillr", "design-citations", "pack-sync", "go-build", "format", "go-affected",
 		"go-edges", "go-module-inventory", "gate-adapters-test", "change-checks-test"}
 	if len(got) != len(expected) {
 		t.Fatalf("got %d checks (%v), want %d", len(got), got, len(expected))
@@ -1268,7 +1268,7 @@ func TestChangeRealFormatDeclarationsExecuteOnCleanTree(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(f.repo, "tests"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.repo, "tests", "format.test.py"), []byte("print('format fixture ran')\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(f.repo, "tests", "format_test.go"), []byte("package tests\n\nimport \"testing\"\n\nfunc TestFormatFixture(t *testing.T) {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	head := f.commit()
@@ -1420,33 +1420,34 @@ func TestChangeGoModuleAdditionAndRemovalSelectInventoryChecksInCandidateGate(t 
 			t.Fatal(err)
 		}
 	}
-	for _, rel := range []string{
-		"tools/gate/checks/go-edges.py",
-		"tools/gate/checks/go-module-inventory.py",
-	} {
-		data, err := os.ReadFile(filepath.Join(root, rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		dst := filepath.Join(f.repo, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(dst, data, 0o644); err != nil {
-			t.Fatal(err)
-		}
+	repoGateBin := buildRepoGateForTest(t)
+	repoGateBytes, err := os.ReadFile(repoGateBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dstRepoGate := filepath.Join(f.repo, "tools", "gate", "repo-gate")
+	if err := os.MkdirAll(filepath.Dir(dstRepoGate), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dstRepoGate, repoGateBytes, 0o755); err != nil {
+		t.Fatal(err)
 	}
 
 	markerLog := filepath.Join(f.repo, ".inventory-markers")
 	if err := os.MkdirAll(filepath.Join(f.repo, "tests"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	scratchStub := "import os, sys\nfrom pathlib import Path\n" +
-		"Path(" + jsonQuote(markerLog) + ").open('a').write('testmain-cleanup\\n')\n" +
-		"if os.environ.get('FAIL_TESTMAIN') == '1':\n" +
-		"    print('simulated TestMain failure')\n" +
-		"    sys.exit(1)\n"
-	if err := os.WriteFile(filepath.Join(f.repo, "tests", "tillr-scratch.test.py"), []byte(scratchStub), 0o644); err != nil {
+	scratchStub := "package cleanup_test\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n" +
+		"func TestTillrScratch(t *testing.T) {\n" +
+		"\tf, err := os.OpenFile(" + jsonQuote(markerLog) + ", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)\n" +
+		"\tif err != nil { t.Fatal(err) }\n" +
+		"\t_, _ = f.WriteString(\"testmain-cleanup\\n\")\n" +
+		"\t_ = f.Close()\n" +
+		"\tif os.Getenv(\"FAIL_TESTMAIN\") == \"1\" {\n" +
+		"\t\tt.Fatal(\"simulated TestMain failure\")\n" +
+		"\t}\n" +
+		"}\n"
+	if err := os.WriteFile(filepath.Join(f.repo, "tests", "tillr_scratch_test.go"), []byte(scratchStub), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Replace tools/gate with a minimal Go module stub for the two declared-suite tests.
@@ -2058,15 +2059,7 @@ func TestChangeLandingGateRefusesBrokenGateAdapterBeforeMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Copy the real Python gate adapter scripts and suite into tools/tillr-gate/.
-	for _, name := range []string{"change-gate.py", "tree-check.py", "classify.py", "change-gate.test.py"} {
-		data, err := os.ReadFile(filepath.Join(root, "tools", "tillr-gate", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeFixtureFile(t, f.repo, filepath.ToSlash(filepath.Join("tools", "tillr-gate", name)), string(data))
-	}
-	// Minimal Go module stub under tools/gate/ so the Go half of gate-adapters-test compiles cleanly.
+	// Minimal Go module stub under tools/gate/ so gate-adapters-test compiles cleanly.
 	if entries, err := os.ReadDir(filepath.Join(f.repo, "tools", "gate")); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".go") {
@@ -2079,9 +2072,9 @@ func TestChangeLandingGateRefusesBrokenGateAdapterBeforeMerge(t *testing.T) {
 	base := f.commit()
 	f.git("branch", "-f", "main", base)
 
-	// Cut a candidate branch and commit a broken gate adapter.
+	// Cut a candidate branch and commit a broken gate adapter test.
 	f.git("checkout", "-qb", "lane-broken-adapter", base)
-	writeFixtureFile(t, f.repo, "tools/tillr-gate/change-gate.py", "#!/usr/bin/env python3\nraise RuntimeError('broken gate adapter')\n")
+	writeFixtureFile(t, f.repo, "tools/gate/change_gate_test.go", "package main\n\nimport \"testing\"\n\nfunc TestChangeGateStub(t *testing.T) { t.Fatal(\"broken gate adapter\") }\n")
 	head := f.commit()
 
 	// Run the landing gate before merging the candidate into main.

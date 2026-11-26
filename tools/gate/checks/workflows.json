@@ -28,8 +28,7 @@
   ],
   "tools": [
     "go",
-    "git",
-    "python3"
+    "git"
   ],
   "remember": false
 }

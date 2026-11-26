@@ -274,8 +274,8 @@ func TestTreeTenFastChecksFitAndExtraDeclarationFails(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if fastCount != 12 {
-		t.Fatalf("expected 12 fast checks excluding gate-budget, got %d", fastCount)
+	if fastCount != 13 {
+		t.Fatalf("expected 13 fast checks excluding gate-budget, got %d", fastCount)
 	}
 	bin := buildRepoGateForTest(t)
 	if out, err := exec.Command(bin, "gate-budget", checksDir).CombinedOutput(); err != nil {
