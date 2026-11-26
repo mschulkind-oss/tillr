@@ -12,9 +12,8 @@ summary: "What tillr is, why to use it instead of running coding agents by hand,
 
 > **Known gaps.**
 > 1. **No `yolo` jail installer for `tillr-pi` in this tree.** Building `mschulkind-oss/tillr-pi`
->    by hand from its `tillr-required` branch is verified below. This repository ships no `yolo`
->    pack or jail configuration for installing `tillr-pi` (`ls yolo-packs/` lists only `tillr`,
->    and `rg -n 'tillr-required' .` returns nothing).
+>    by hand from its `main` branch is verified below. This repository ships no `yolo`
+>    pack or jail configuration for installing `tillr-pi` (`ls yolo-packs/` lists only `tillr`).
 > 2. **Live model credentials not exercised here.** Every build, store, filing, loop, gate, and
 >    landing command below was run in a temporary directory, and the freshly built `tillr-pi`
 >    binary was verified with `pi --features` and against the placeholder policy. The final
@@ -208,7 +207,7 @@ $ pi --features
 
 *(Observed in this jail on 2026-11-25.)*
 
-If `parked-tool-calls` is missing, build `mschulkind-oss/tillr-pi` from its `tillr-required` branch following [Getting a compatible `pi` from `mschulkind-oss/tillr-pi`](#getting-a-compatible-pi-from-mschulkind-osstillr-pi). Place the clone in a directory that persists across jail restarts rather than `/tmp` or a throwaway home path, then put its `cli.js` symlink ahead of upstream `pi` on `PATH` and re-run `pi --features`.
+If `parked-tool-calls` is missing, build `mschulkind-oss/tillr-pi` from its `main` branch following [Getting a compatible `pi` from `mschulkind-oss/tillr-pi`](#getting-a-compatible-pi-from-mschulkind-osstillr-pi). Place the clone in a directory that persists across jail restarts rather than `/tmp` or a throwaway home path, then put its `cli.js` symlink ahead of upstream `pi` on `PATH` and re-run `pi --features`.
 
 ### First steps once the pack is active
 
@@ -252,13 +251,13 @@ yet, and `tillr`'s pi adapter refuses to run without it (see
 ### Getting a compatible `pi` from `mschulkind-oss/tillr-pi`
 
 [mschulkind-oss/tillr-pi](https://github.com/mschulkind-oss/tillr-pi) is a fork of upstream `pi`
-that carries the `parked-tool-calls` support `tillr` requires on its `tillr-required` branch.
+that carries the `parked-tool-calls` support `tillr` requires on its `main` branch.
 
-Clone the `tillr-required` branch, install its dependencies, build the bundle, and symlink the
+Clone the `main` branch, install its dependencies, build the bundle, and symlink the
 CLI onto your `PATH`:
 
 ```console
-$ git clone --branch tillr-required https://github.com/mschulkind-oss/tillr-pi.git
+$ git clone --branch main https://github.com/mschulkind-oss/tillr-pi.git
 $ cd tillr-pi
 $ npm ci --ignore-scripts
 $ npm run build
@@ -536,7 +535,7 @@ A landed item leaves three durable traces:
 ### Three things most likely to go wrong first
 
 1. **Your `pi` binary lacks `parked-tool-calls`.** `run-pi` refuses to start and prints a message
-   naming `mschulkind-oss/tillr-pi`. Build `tillr-pi` from its `tillr-required` branch, place it
+   naming `mschulkind-oss/tillr-pi`. Build `tillr-pi` from its `main` branch, place it
    ahead of upstream `pi` on `PATH`, and confirm `pi --features` prints `["parked-tool-calls"]`.
 2. **Placeholder model names left in the backend policy.** The worker exits `1`, and the loop
    closes the backend with `ALARM backend-closed (pi-build)`. Replace `example-vendor/...` in your
