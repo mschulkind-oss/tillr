@@ -559,7 +559,6 @@
         "TestWorkflowSecondIdenticalConflictRestartsFromFirstStageAndThirdParksForOwner"
       ],
       "github.com/mschulkind-oss/tillr-land": [
-        "TestARealLandingDuringASiblingRunConvictsNothing",
         "TestExamineLandsRealFixtureWithTheLoopsRecords",
         "TestFixerGateJudgesOwnDiffThenNamedChecksAndLands",
         "TestLoopRetiredBlockLandsUnderTheWorkerMessage",
@@ -785,6 +784,17 @@
       "github.com/mschulkind-oss/tillr-drain",
       "github.com/mschulkind-oss/tillr-gate"
     ],
+    "reads": []
+  },
+  "github.com/mschulkind-oss/tillr-drain/internal/boundary": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-land"
+    ],
+    "build_tests": {
+      "github.com/mschulkind-oss/tillr-land": [
+        "TestARealLandingDuringASiblingRunConvictsNothing"
+      ]
+    },
     "reads": []
   },
   "github.com/mschulkind-oss/tillr-gate": {

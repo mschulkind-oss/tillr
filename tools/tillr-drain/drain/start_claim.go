@@ -292,7 +292,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 				}
 			}
 		}
-		fork := row.Delivery.activeFork()
+		fork := row.Delivery.ActiveFork()
 		if fork != "" && !(d.Workflow != nil && classificationNode(d.Workflow.Stages[d.NodeIndex])) {
 			forks, err := liveForks(r, at, works)
 			if err != nil {

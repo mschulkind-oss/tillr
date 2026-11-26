@@ -2409,7 +2409,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				}
 			}
 			if hasTargetRow {
-				fork := targetRow.Delivery.activeFork()
+				fork := targetRow.Delivery.ActiveFork()
 				if d.Workflow != nil && classificationNode(d.Workflow.Stages[d.NodeIndex]) {
 					fork = ""
 				}
@@ -2549,7 +2549,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				}
 			}
 			// A fork's base comes from staging its checkout, not from the trunk observation.
-			if d.Workflow != nil && d.NodeBaseSHA == "" && targetRow.Delivery.activeFork() == "" {
+			if d.Workflow != nil && d.NodeBaseSHA == "" && targetRow.Delivery.ActiveFork() == "" {
 				d.NodeBaseSHA = base
 			}
 			if d.Workflow != nil {
@@ -4132,7 +4132,7 @@ func liveForks(r *store.Reader, at time.Time, works map[string]*pendingWork) ([]
 	}
 	forks := map[string]string{}
 	for _, item := range items {
-		forks[item.ItemID] = item.Delivery.activeFork()
+		forks[item.ItemID] = item.Delivery.ActiveFork()
 	}
 	events, err := r.EventsOfKind(0, run.AllocateKind)
 	if err != nil {

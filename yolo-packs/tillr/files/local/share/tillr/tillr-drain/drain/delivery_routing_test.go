@@ -100,7 +100,7 @@ func TestDeliveryPartialReceiptSurvivesRestart(t *testing.T) {
 			t.Fatalf("partial events=%d: %v", len(events), err)
 		}
 		deliveries, err := readDeliveries(tx.Reader())
-		if d := deliveries[c.ItemID]; err != nil || d.ForkRun != c.RunID || d.activeFork() != "" {
+		if d := deliveries[c.ItemID]; err != nil || d.ForkRun != c.RunID || d.ActiveFork() != "" {
 			t.Fatalf("restarted delivery=%+v: %v", d, err)
 		}
 		return nil

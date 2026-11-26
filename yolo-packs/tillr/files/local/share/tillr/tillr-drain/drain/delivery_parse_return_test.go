@@ -56,7 +56,7 @@ func TestClassifyDeliveryRejectsBareRepoString(t *testing.T) {
 	if !errors.As(err, &parseErr) {
 		t.Fatalf("want deliveryParseError, got %T: %v", err, err)
 	}
-	const wantErr = "json: cannot unmarshal string into Go value of type drain.deliveryDecision"
+	const wantErr = "json: cannot unmarshal string into Go value of type boundary.DeliveryDecision"
 	if err.Error() != wantErr {
 		t.Fatalf("parse error = %q, want %q", err.Error(), wantErr)
 	}
@@ -182,7 +182,7 @@ func TestPlanDeliveryBareStringReturnsToSameSession(t *testing.T) {
 		t.Fatalf("unparseable delivery output must not use %s, got %+v", RefusalNodeOutput, firstResult.RefusedSteps)
 	}
 
-	const wantParseErr = "json: cannot unmarshal string into Go value of type drain.deliveryDecision"
+	const wantParseErr = "json: cannot unmarshal string into Go value of type boundary.DeliveryDecision"
 	var recordedStep, recordedDetail string
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		return tx.Reader().QueryRow(

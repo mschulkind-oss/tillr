@@ -1010,7 +1010,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			var fork, forkHolder string
 			if err == nil && !depHold && p.lands() && isDispatch(decision) &&
 				!(decision.Workflow != nil && classificationNode(decision.Workflow.Stages[decision.NodeIndex])) {
-				fork = item.Delivery.activeFork()
+				fork = item.Delivery.ActiveFork()
 				self := ""
 				if work.Ready || decision.WorkflowRestart {
 					self = item.ItemID
@@ -1662,7 +1662,7 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 	// One planner-level exclusion survives: two items that deliver one fork's patch branch
 	// cannot run at once, however disjoint their own fences are, because the second would
 	// move a branch the first is still building.
-	heldBy, forkHeld := p.forkHeldBy(item.Delivery.activeFork(), "")
+	heldBy, forkHeld := p.forkHeldBy(item.Delivery.ActiveFork(), "")
 	// The design document is read before the tick's resources, and before the item's attempt
 	// history: an item whose design still asks something is not dispatchable whatever else
 	// is true, and answering `no-lane` would send an operator looking for a lane to solve a
@@ -1787,7 +1787,7 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 		p.assignLane(lane)
 		p.claimOrdinaryAgentSlot(item.Express, isCommand, lane, runKey)
 		if p.captureStart == nil {
-			p.forks = append(p.forks, plannedFork{itemID: item.ItemID, fork: item.Delivery.activeFork()})
+			p.forks = append(p.forks, plannedFork{itemID: item.ItemID, fork: item.Delivery.ActiveFork()})
 		}
 		decision.LaneID = lane
 		decision.Inputs = p.inputs[item.ItemID]

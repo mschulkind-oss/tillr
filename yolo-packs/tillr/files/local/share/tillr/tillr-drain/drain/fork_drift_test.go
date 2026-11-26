@@ -118,7 +118,7 @@ func TestForkDriftRequestDeduplicatesAndContinuesInOrder(t *testing.T) {
 			t.Fatalf("duplicate: %q %v", again, err)
 		}
 		d, err := l.recordedDelivery(ctx, id)
-		if err != nil || (d.activeFork() == "") != delivered {
+		if err != nil || (d.ActiveFork() == "") != delivered {
 			t.Fatalf("delivery: %+v %v", d, err)
 		}
 		if !delivered {
@@ -127,7 +127,7 @@ func TestForkDriftRequestDeduplicatesAndContinuesInOrder(t *testing.T) {
 				t.Fatalf("partial = %v, %v", partial, err)
 			}
 			d, err = l.recordedDelivery(ctx, id)
-			if err != nil || d.activeFork() != "" || d.ForkLanded != o.Commit {
+			if err != nil || d.ActiveFork() != "" || d.ForkLanded != o.Commit {
 				t.Fatalf("after delivery = %+v %v", d, err)
 			}
 		}
