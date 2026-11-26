@@ -673,8 +673,8 @@ func validateSourceSettleItem(ctx context.Context, src ObservationSource, a epis
 	}
 	if lookup.isTerminal(state) {
 		itemSeq := lookup.terminalSeq(itemID)
-		if itemSeq <= a.lastObservedSeq {
-			return fmt.Errorf("%w: item %s is %s (seq %d <= last observed seq %d); file a new item", a.refuse(id), itemID, state, itemSeq, a.lastObservedSeq)
+		if itemSeq <= a.openedSeq {
+			return fmt.Errorf("%w: item %s is %s before alert opened (seq %d <= opened seq %d); file a new item", a.refuse(id), itemID, state, itemSeq, a.openedSeq)
 		}
 	}
 	return nil
@@ -1291,6 +1291,7 @@ func (m *memoryState) readEpisodeActionLocked(id string) (*memEpisode, episodeAc
 	return ep, episodeAction{
 		state:             ep.state,
 		fingerprint:       ep.conditionFingerprint,
+		openedSeq:         ep.openedSeq,
 		lastObservedSeq:   ep.lastObservedSeq,
 		ackedBy:           ep.ackedBy,
 		ackedNote:         ep.ackedNote,

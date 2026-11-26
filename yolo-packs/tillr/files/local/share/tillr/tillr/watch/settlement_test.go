@@ -395,3 +395,64 @@ func TestSourceStandaloneSettleAndReopen(t *testing.T) {
 		t.Fatalf("expected uninvestigated after reopen, got %q", ep.settlementState)
 	}
 }
+
+func TestSettleLandedItemRelativeToAlertOpened(t *testing.T) {
+	register(t, "watch-test.fact")
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	s := watchStore(t)
+	seedItemsTable(t, s)
+
+	r := Rule{
+		ID:       "settle-landed-seq",
+		Scope:    "core",
+		Enabled:  true,
+		Severity: "warning",
+		Reads:    Reads{Events: []string{"watch-test.fact"}},
+		When:     When{Pattern: PredicateMatch, GroupBy: "global", Threshold: 1, Window: time.Hour},
+		Delivery: Delivery{Receiver: "foreground"},
+	}
+	e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
+	evaluateLifecycle(t, &e)
+
+	// Open the alert at openSeq, then observe a later fact so last_observed_seq > itemSeq > opened_seq.
+	openSeq := watchFact(t, s, now, `{}`)
+	evaluateLifecycle(t, &e)
+
+	var alertID string
+	lifecycleRead(t, s, `SELECT alert_id FROM alert_episodes WHERE state='open'`, &alertID)
+
+	now = now.Add(time.Minute)
+	laterSeq := watchFact(t, s, now, `{}`)
+	if laterSeq <= openSeq+1 {
+		// Ensure there is room between openSeq and laterSeq, or bump last_observed_seq directly.
+		laterSeq = openSeq + 10
+	}
+	evaluateLifecycle(t, &e)
+	watchSQL(t, s, `UPDATE alert_episodes SET last_observed_seq=? WHERE alert_id=?`, openSeq+20, alertID)
+
+	watchSQL(t, s, `INSERT INTO items(item_id, state, event_seq) VALUES
+		('item-before-open', 'landed', ?),
+		('item-after-open', 'landed', ?)`, openSeq-1, openSeq+10)
+
+	if err := e.Investigate(ctx, alertID, "op", "root cause", "observed in log"); err != nil {
+		t.Fatalf("Investigate: %v", err)
+	}
+
+	// Refuses an item that landed before the alert opened, with a message that says why.
+	err := e.Settle(ctx, alertID, SettleOptions{By: "op", Outcome: "fix-fault", ItemID: "item-before-open"})
+	if err == nil || !strings.Contains(err.Error(), "before alert opened") {
+		t.Fatalf("Settle with item landed before alert opened: err = %v, want substring %q", err, "before alert opened")
+	}
+
+	// Accepts an item that landed after the alert opened (even when seq <= last_observed_seq) and records it as the fix.
+	if err := e.Settle(ctx, alertID, SettleOptions{By: "op", Outcome: "fix-fault", ItemID: "item-after-open", LinkKind: "linked"}); err != nil {
+		t.Fatalf("Settle with item landed after alert opened: %v", err)
+	}
+
+	var sst, outcome, trkID string
+	lifecycleRead(t, s, `SELECT settlement_state, outcome, tracking_item_id FROM alert_episodes WHERE alert_id='`+alertID+`'`, &sst, &outcome, &trkID)
+	if sst != "settled" || outcome != "fix-fault" || trkID != "item-after-open" {
+		t.Fatalf("settled episode = (%q, %q, %q), want (settled, fix-fault, item-after-open)", sst, outcome, trkID)
+	}
+}

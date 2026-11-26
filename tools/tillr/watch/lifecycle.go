@@ -73,6 +73,7 @@ func hasSettlementColumns(rd *store.Reader) (bool, error) {
 
 type episodeAction struct {
 	state, fingerprint string
+	openedSeq          int64
 	lastObservedSeq    int64
 	ackedBy            sql.NullString
 	ackedNote          sql.NullString
@@ -155,8 +156,8 @@ func validateStoreSettleItemWithItems(rd *store.Reader, a episodeAction, id, ite
 				}
 			}
 		}
-		if itemSeq <= a.lastObservedSeq {
-			return fmt.Errorf("%w: item %s is %s (seq %d <= last observed seq %d); file a new item", a.refuse(id), itemID, st.String, itemSeq, a.lastObservedSeq)
+		if itemSeq <= a.openedSeq {
+			return fmt.Errorf("%w: item %s is %s before alert opened (seq %d <= opened seq %d); file a new item", a.refuse(id), itemID, st.String, itemSeq, a.openedSeq)
 		}
 	}
 	return nil
@@ -635,8 +636,8 @@ func readEpisodeAction(rd *store.Reader, id string) (episodeAction, error) {
 	a.hasAckCols = hasAckedSeq && hasAckedFP && hasAckedLag
 	a.hasSettlementCols = hasSettlementCols
 	var rule, subject, severity string
-	cols := "state,condition_fingerprint,last_observed_seq,acked_by,acked_note"
-	dest := []any{&a.state, &a.fingerprint, &a.lastObservedSeq, &a.ackedBy, &a.ackedNote}
+	cols := "state,condition_fingerprint,opened_seq,last_observed_seq,acked_by,acked_note"
+	dest := []any{&a.state, &a.fingerprint, &a.openedSeq, &a.lastObservedSeq, &a.ackedBy, &a.ackedNote}
 	if hasTracking {
 		cols += ",tracking_item_id"
 		dest = append(dest, &a.trackingItemID)
