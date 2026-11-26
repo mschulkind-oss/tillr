@@ -456,6 +456,9 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				}
 				row.Why += ": " + detail
 			}
+			if fault.Reason == ReasonStageFailed && fault.RunID != "" {
+				row.Why += "; run " + fault.RunID
+			}
 		}
 		if obsHold, held := obstacleHolds[it.ItemID]; held && d.Action == ActionHold && d.Reason == obsHold.ReasonCode() {
 			row.Why = obsHold.WhyText()

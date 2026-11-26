@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/preserved"
+	"github.com/mschulkind-oss/tillr/record"
 )
 
 // forkCheckoutUnretainedError is a staging fault the operator can repair, not
@@ -18,6 +19,20 @@ type forkCheckoutUnretainedError struct {
 
 func (e *forkCheckoutUnretainedError) Error() string {
 	return fmt.Sprintf("fork checkout %s has unretained commits at %s; staging will not reset it to %s. Preserve the commits on a branch and reset the checkout to the delivered tip", e.checkout, e.head, e.tip)
+}
+
+// forkCheckoutRefusalError is a fork-checkout staging refusal the operator must
+// repair before this item can stage, not an infrastructure failure.
+type forkCheckoutRefusalError struct {
+	*ExitError
+}
+
+func (e *forkCheckoutRefusalError) Unwrap() error { return e.ExitError }
+
+func forkCheckoutRefusalf(format string, args ...any) error {
+	return &forkCheckoutRefusalError{
+		ExitError: &ExitError{Code: record.ExitExternal, Msg: fmt.Sprintf(format, args...)},
+	}
 }
 
 // refreshForkCheckout makes a reused writer start at the delivered tip. It can
@@ -37,21 +52,21 @@ func (s *LaneStager) refreshForkCheckout(ctx context.Context, fork ForkTarget) e
 	gitDir := filepath.Join(checkout, ".git")
 	real, err := filepath.EvalSymlinks(gitDir)
 	if err != nil || real != gitDir {
-		return Externalf("fork checkout %s is missing its own Git directory or aliases another checkout", fork.Checkout)
+		return forkCheckoutRefusalf("fork checkout %s is missing its own Git directory or aliases another checkout", fork.Checkout)
 	}
 	layout, err := s.git(ctx, fork.Checkout, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(layout) != checkout+"\n"+gitDir {
-		return Externalf("fork checkout %s is not an isolated checkout", fork.Checkout)
+		return forkCheckoutRefusalf("fork checkout %s is not an isolated checkout", fork.Checkout)
 	}
 	status, err := s.git(ctx, fork.Checkout, "status", "--porcelain")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(status) != "" {
-		return Externalf("fork checkout %s has uncommitted work; staging will not overwrite it", fork.Checkout)
+		return forkCheckoutRefusalf("fork checkout %s has uncommitted work; staging will not overwrite it", fork.Checkout)
 	}
 	head, err := s.git(ctx, fork.Checkout, "rev-parse", "HEAD")
 	if err != nil {
@@ -92,7 +107,7 @@ func (s *LaneStager) refreshForkCheckout(ctx context.Context, fork ForkTarget) e
 		return err
 	}
 	if strings.TrimSpace(branch) != "refs/heads/main" {
-		return Externalf("fork checkout %s is on %s, not main; staging will not reset it", fork.Checkout, strings.TrimSpace(branch))
+		return forkCheckoutRefusalf("fork checkout %s is on %s, not main; staging will not reset it", fork.Checkout, strings.TrimSpace(branch))
 	}
 	if oldSeries {
 		keep := "refs/heads/kept/pre-rebase-" + head
@@ -141,7 +156,7 @@ func (s *LaneStager) restageForkAtKeptHead(ctx context.Context, spec StageSpec, 
 		return err
 	}
 	if strings.TrimSpace(status) != "" {
-		return Externalf("fork checkout %s has uncommitted work; staging will not overwrite it", fork.Checkout)
+		return forkCheckoutRefusalf("fork checkout %s has uncommitted work; staging will not overwrite it", fork.Checkout)
 	}
 	headOut, err := s.git(ctx, fork.Checkout, "rev-parse", "HEAD")
 	if err != nil {
@@ -162,7 +177,7 @@ func (s *LaneStager) restageForkAtKeptHead(ctx context.Context, spec StageSpec, 
 				return cerr
 			}
 			if !clearable {
-				return Externalf("fork checkout %s has unlanded or divergent commits; staging will not reset it to %s", fork.Checkout, spec.KeptHeadSHA)
+				return forkCheckoutRefusalf("fork checkout %s has unlanded or divergent commits; staging will not reset it to %s", fork.Checkout, spec.KeptHeadSHA)
 			}
 		}
 	}

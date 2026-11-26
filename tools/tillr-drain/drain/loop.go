@@ -1846,7 +1846,8 @@ func isPerItemStageFailure(spec StageSpec, err error) bool {
 		return false
 	}
 	var forkErr *forkCheckoutUnretainedError
-	if errors.As(err, &forkErr) || errors.Is(err, syscall.ENAMETOOLONG) {
+	var forkRefusal *forkCheckoutRefusalError
+	if errors.As(err, &forkErr) || errors.As(err, &forkRefusal) || errors.Is(err, syscall.ENAMETOOLONG) {
 		return true
 	}
 	msg := err.Error()
@@ -2325,19 +2326,8 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					request.ItemID, decision.LaneID, streak, err)
 				continue
 			}
-			reason := ReasonStagingFailed
-			if decision.LaneID != "" {
-				reason = ReasonStagingFailed + ": " + decision.LaneID
-			}
-			_, _, mover := whyPresentation(Decision{Action: ActionHold, Reason: reason})
-			if mover == "" {
-				mover = holdrules.For(reason).Mover
-			}
-			l.holdLocal(ctx, request.ItemID, reason)
-			l.reportf("loop: holding %s on %s (%s): staging failure repeated unchanged; mover: %s: %v\n",
-				request.ItemID, decision.LaneID, reason, mover, err)
-			if err := l.recordItemRefusal(ctx, request.ItemID, reason, err.Error()); err != nil {
-				return nil, err
+			if holdErr := l.holdStageFailed(ctx, decision, "stage", fmt.Errorf("staging failure repeated unchanged: %w", err)); holdErr != nil {
+				return nil, holdErr
 			}
 			continue
 		}

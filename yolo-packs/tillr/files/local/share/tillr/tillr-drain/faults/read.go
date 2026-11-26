@@ -15,6 +15,7 @@ const (
 	HeldKind           = "drain.item-fault"
 	ClearedKind        = "drain.item-fault-cleared"
 	VerifyTriageReason = "verify-triage"
+	StageFailedReason  = "stage-failed"
 )
 
 // Hold is a durable refusal to advance one item, not a verdict against its code.
@@ -119,15 +120,32 @@ func Resolve(byItem map[string]map[string]Hold) map[string]Hold {
 	return holds
 }
 
-const clearFault = "tillr drain clear-fault"
+const (
+	clearFault            = "tillr drain clear-fault"
+	stageRetryPlaceholder = "tillr drain retry naming the held run"
+)
 
-// CompleteMover binds a rule's trailing clear-fault instruction to this hold,
-// preserving the repair instruction and leaving other movers alone.
+// CompleteMover binds a rule's trailing clear-fault instruction (and stage-failed
+// retry instruction when a run id is held) to this hold, preserving the repair
+// instruction and leaving other movers alone.
 func (f Hold) CompleteMover(mover, storePath string) string {
+	if f.Reason == StageFailedReason && strings.Contains(mover, stageRetryPlaceholder) {
+		if f.RunID != "" {
+			mover = strings.Replace(mover, stageRetryPlaceholder, StageRetryCommand(storePath, f.ItemID, f.RunID), 1)
+		} else {
+			mover = strings.Replace(mover, stageRetryPlaceholder+" or ", "", 1)
+		}
+	}
 	if repair, ok := strings.CutSuffix(mover, clearFault); ok {
 		return repair + f.ClearCommand(storePath)
 	}
 	return mover
+}
+
+// StageRetryCommand names the unstarted run held by a stage-failed fault.
+func StageRetryCommand(storePath, itemID, runID string) string {
+	return fmt.Sprintf("tillr drain retry --store %s --item %s --run %s --by <who> --why <reason> --now \"$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)\"",
+		storeArgument(storePath), quote(itemID), quote(runID))
 }
 
 // ClearCommand names the store and the precise evidence identity, preventing a

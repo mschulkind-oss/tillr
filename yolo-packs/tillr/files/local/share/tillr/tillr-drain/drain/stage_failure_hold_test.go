@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 
+	drainfaults "github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -186,9 +187,11 @@ func TestStagingRunDirWrapperFailureHoldsItemWithNamedMoverAndKeepsLoopRunning(t
 		if !ok || fault.Reason != ReasonStageFailed || fault.RunID != "run-item-a-a1" || fault.LaneID != "lane-1" {
 			t.Fatalf("item-a fault = %+v (ok=%v), want stage-failed on run-item-a-a1 / lane-1", fault, ok)
 		}
+		wantRetry := drainfaults.StageRetryCommand(f.storePath, "item-a", "run-item-a-a1")
 		wantCommand := fmt.Sprintf("tillr drain clear-fault --store '%s' --item 'item-a' --fault %d", f.storePath, fault.Seq)
-		if !strings.Contains(report.String(), "loop: item-a mover: fix the staging fault the detail names, then "+wantCommand+"\n") {
-			t.Fatalf("loop report missing named mover with %q: %s", wantCommand, report.String())
+		wantMover := "loop: item-a mover: fix the staging fault the detail names, then " + wantRetry + " or " + wantCommand + "\n"
+		if !strings.Contains(report.String(), wantMover) {
+			t.Fatalf("loop report missing named mover %q: %s", wantMover, report.String())
 		}
 		if !strings.Contains(fault.Detail, "start stage pipeline") {
 			t.Fatalf("item-a fault detail = %q, want start stage pipeline detail", fault.Detail)
@@ -219,8 +222,11 @@ func TestStagingRunDirWrapperFailureHoldsItemWithNamedMoverAndKeepsLoopRunning(t
 			if row.Reason != ReasonStageFailed || row.Class != rule.Class || row.Where != rule.Where || !strings.HasSuffix(row.Mover, wantCommand) {
 				t.Fatalf("why row = (%q, %q, %q, %q), want rule %+v with %q", row.Reason, row.Class, row.Where, row.Mover, rule, wantCommand)
 			}
-			if !strings.Contains(row.Why, fault.Detail) {
-				t.Fatalf("why = %q, missing fault detail %q", row.Why, fault.Detail)
+			if !strings.Contains(row.Why, fault.Detail) || !strings.Contains(row.Why, "; run "+fault.RunID) {
+				t.Fatalf("why = %q, missing fault detail %q or run %q", row.Why, fault.Detail, fault.RunID)
+			}
+			if !strings.Contains(row.Mover, wantRetry) {
+				t.Fatalf("mover = %q, missing retry command %q", row.Mover, wantRetry)
 			}
 		}
 		if !found {

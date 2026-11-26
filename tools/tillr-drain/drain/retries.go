@@ -39,6 +39,12 @@ const RetryAckKind = "drain.retry.ack"
 // what the plan reads. Its object is the design run, and its payload is the Retry.
 const DesignRetryKind = "drain.retry.design"
 
+// StageRetryKind is the event a retry appends when it names an item and the unstarted
+// run id held by an active stage-failed fault. Like DesignRetryKind, it writes no
+// `retries` row: it clears the stage-failed fault so the next pass offers the unstarted
+// run again while keeping completed earlier workflow nodes.
+const StageRetryKind = "drain.retry.stage"
+
 // The two outcomes a retry may acknowledge. They are the two the face refuses without an
 // acknowledgment: a run the gate judged, and a run a wall cut short. The empty string is
 // the unchanged harness-only retry.
@@ -89,6 +95,9 @@ type Retry struct {
 	// ReraisesConflict is the conflict a design retry raised again, and "" for a build
 	// retry. A design retry writes no `retries` row (DesignRetryKind).
 	ReraisesConflict string `json:"reraises_conflict,omitempty"`
+	// ClearsStageFault is the active stage-failed fault sequence a stage retry cleared,
+	// and 0 for a build or design retry. A stage retry writes no `retries` row (StageRetryKind).
+	ClearsStageFault int64 `json:"clears_stage_fault,omitempty"`
 }
 
 // RetryRequest is one operator's authorization to re-dispatch a run, before it is written.
@@ -186,7 +195,14 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 			if err != nil {
 				return Retry{}, readFailure(err)
 			}
-			if f := faults[req.ItemID]; f.RunID == req.RunID && execSetupRefused(f) {
+			f := faults[req.ItemID]
+			if f.RunID == req.RunID && f.Reason == ReasonStageFailed {
+				if req.Acknowledge != "" {
+					return Retry{}, Usagef("--acknowledge %q is not accepted for an unstarted stage-failed run %q. The accepted command: %s", req.Acknowledge, req.RunID, retryCommand(req.ItemID, req.RunID, ""))
+				}
+				return authorizeStageRetry(tx, req, f, at)
+			}
+			if f.RunID == req.RunID && execSetupRefused(f) {
 				return Retry{}, Usagef("the store holds no run %q: the run face refused before the worker started. No retry command is accepted. After repairing the cause, run:\n%s", req.RunID, f.ClearCommand(req.StorePath))
 			}
 			return Retry{}, Usagef("the store holds no run %q. %s", req.RunID, latestRunCommand(tx.Reader(), req.ItemID))
@@ -340,7 +356,7 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 	}); err != nil {
 		return Retry{}, Internalf("resetting verifier triage for %q: %v", req.ItemID, err)
 	}
-	if triage.Reason == reasonVerifyTriage || triage.Reason == ReasonAdapterRefused {
+	if triage.Reason == reasonVerifyTriage || triage.Reason == ReasonAdapterRefused || triage.Reason == ReasonStageFailed {
 		if err := clearItemFault(tx, triage, at); err != nil {
 			return Retry{}, Internalf("releasing %s hold for %q: %v", triage.Reason, req.ItemID, err)
 		}
@@ -392,9 +408,33 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 	return retry, nil
 }
 
+func authorizeStageRetry(tx *store.Tx, req RetryRequest, f ItemFault, at time.Time) (Retry, error) {
+	if err := clearItemFault(tx, f, at); err != nil {
+		return Retry{}, Internalf("releasing %s hold for %q: %v", f.Reason, req.ItemID, err)
+	}
+	retry := Retry{
+		RetryID:          "retry-stage-" + req.ItemID + "-" + req.RunID,
+		ItemID:           req.ItemID,
+		SupersedesRunID:  req.RunID,
+		RequestedBy:      req.By,
+		Reason:           req.Why,
+		RequestedAt:      at,
+		ClearsStageFault: f.Seq,
+	}
+	body, err := json.Marshal(retry)
+	if err != nil {
+		return Retry{}, Internalf("encoding the stage retry for %q: %v", req.ItemID, err)
+	}
+	id := req.RunID
+	if _, err := tx.Append(event.Event{Kind: StageRetryKind, ObjectType: "run", ObjectID: &id, Payload: body, At: at}); err != nil {
+		return Retry{}, Internalf("recording the stage retry for %q: %v", req.ItemID, err)
+	}
+	return retry, nil
+}
+
 // RetryEnvelope wraps one authorization in design §5.1's envelope, so the face echoes a
 // record a reader can store beside the store's own row. The subject is the item, as a
-// decision's is. A design retry is echoed as DesignRetryKind, the event it wrote.
+// decision's is. Design and stage retries are echoed as the events they wrote.
 func RetryEnvelope(retry Retry) (record.Envelope, error) {
 	body, err := json.Marshal(retry)
 	if err != nil {
@@ -403,6 +443,8 @@ func RetryEnvelope(retry Retry) (record.Envelope, error) {
 	kind := RetryKind
 	if retry.ReraisesConflict != "" {
 		kind = DesignRetryKind
+	} else if retry.ClearsStageFault != 0 {
+		kind = StageRetryKind
 	}
 	return record.Envelope{
 		RecordVersion: record.SupportedVersion,
