@@ -535,12 +535,9 @@ func (s *Status) readOwners(rd *store.Reader, rules []Rule, hasAlerts bool) erro
 }
 
 func (owner *OwnerStatus) readPending(rd *store.Reader, rules []Rule) error {
-	foreground := map[string]bool{}
-	for _, r := range rules {
-		if r.Delivery.Receiver == "foreground" {
-			foreground[r.ID] = true
-		}
-	}
+	matched := rulesForOwner(owner.Owner, rules)
+	triageOwner := isTriageOwner(owner.Owner)
+	acceptsEscalations := ownerAcceptsEscalations(owner.Owner)
 	hasSettlement, err := alertEpisodesHasColumn(rd, "settlement_state")
 	if err != nil {
 		return err
@@ -550,6 +547,10 @@ func (owner *OwnerStatus) readPending(rd *store.Reader, rules []Rule) error {
 		return err
 	}
 	hasEscalated, err := alertEpisodesHasColumn(rd, "escalated_to")
+	if err != nil {
+		return err
+	}
+	hasTriageState, err := alertEpisodesHasColumn(rd, "triage_state")
 	if err != nil {
 		return err
 	}
@@ -565,6 +566,10 @@ func (owner *OwnerStatus) readPending(rd *store.Reader, rules []Rule) error {
 	if hasEscalated {
 		escalatedExpr = "COALESCE(a.escalated_to, '')"
 	}
+	triageStateExpr := "'untriaged'"
+	if hasTriageState {
+		triageStateExpr = "COALESCE(NULLIF(a.triage_state, ''), 'untriaged')"
+	}
 	rows, err := rd.Query(`WITH latest_notice AS (
       SELECT n.object_id AS alert_id, MAX(n.seq) AS seq
       FROM events n
@@ -573,7 +578,7 @@ func (owner *OwnerStatus) readPending(rd *store.Reader, rules []Rule) error {
         AND n.object_id IS NOT NULL
       GROUP BY n.object_id
    )
-   SELECT v.kind,a.rule_id,a.state,`+settlementExpr+`,`+activeTriageExpr+`,`+escalatedExpr+`
+   SELECT v.kind,a.rule_id,a.state,`+settlementExpr+`,`+activeTriageExpr+`,`+escalatedExpr+`,`+triageStateExpr+`
    FROM latest_notice m
    JOIN alert_episodes a ON a.alert_id=m.alert_id
    JOIN events v ON v.seq=m.seq`, openedKind, reopenedKind, escalatedKind, owner.Owner)
@@ -582,20 +587,29 @@ func (owner *OwnerStatus) readPending(rd *store.Reader, rules []Rule) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var kind, ruleID, epState, settlement, activeRun, escalatedTo string
-		if err := rows.Scan(&kind, &ruleID, &epState, &settlement, &activeRun, &escalatedTo); err != nil {
+		var kind, ruleID, epState, settlement, activeRun, escalatedTo, triageState string
+		if err := rows.Scan(&kind, &ruleID, &epState, &settlement, &activeRun, &escalatedTo, &triageState); err != nil {
 			return err
 		}
 		if kind == escalatedKind {
-			if escalatedTo != "owner" {
+			if acceptsEscalations && escalatedTo != "owner" {
 				owner.Pending++
 			}
 			continue
 		}
-		if epState != "open" || settlement == "settled" || activeRun != "" || escalatedTo == "owner" {
-			continue
+		if triageOwner {
+			if triageState != "untriaged" || settlement == "settled" || activeRun != "" || escalatedTo != "" {
+				continue
+			}
+			if epState != "open" && !(epState == "resolved" && settlement == "uninvestigated") {
+				continue
+			}
+		} else {
+			if epState != "open" || settlement == "settled" || activeRun != "" || escalatedTo == "owner" {
+				continue
+			}
 		}
-		if foreground[ruleID] {
+		if matched[ruleID] {
 			owner.Pending++
 		}
 	}

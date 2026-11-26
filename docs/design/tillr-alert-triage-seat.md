@@ -3,7 +3,7 @@ title: "Alert triage happens in a seat inside tillr, and only what it cannot set
 status: accepted
 stage: DECIDED
 stage-since: 2026-11-23
-updated: 2026-11-24
+updated: 2026-11-26
 tags: [watch, alerting, triage, tillr, drain, design]
 summary: "Standing tillr alerts route to a dedicated read-only triage seat on the cheap scout tier, dispatched by tillr-drain. Each triage run claims one unsettled episode instance, reads the evidence, and either settles it by filing or linking a fix-fault or fix-rule item, or escalates it to the operating session or the owner. Loop-liveness rules bypass the seat and route straight to the operating session."
 next: "Build the seven slices of section 9 in order, after the alert-workflow slices they depend on."
@@ -19,7 +19,7 @@ vantage:
 
 # Alert triage happens in a seat inside tillr, and only what it cannot settle reaches the operating session
 
-**Status:** Every question is ruled; Slice 1 of [§9](#9-the-build-in-slices-that-each-land-alone) (atomic triage claim, three-outcome `record-triage`, triage events, escalated bundle `triage` header, and `tillr watch status --recent`) is built, while slices 2 to 7 are not. `rg -n 'triage' tools/tillr/definition/landing.json config/tillr` returns nothing, and every rule in `config/tillr/watch/` still sets `receiver = "foreground"`.
+**Status:** Every question is ruled; Slices 1 and 2 of [§9](#9-the-build-in-slices-that-each-land-alone) (atomic triage claim, three-outcome `record-triage`, triage events, escalated bundle `triage` header, `tillr watch status --recent`, the `triage` and `operator-session` receivers, per-owner delivery for both, and `watch-lint-liveness-receiver`) are built, while slices 3 to 7 are not. `rg -n 'triage' tools/tillr/definition/landing.json config/tillr` returns nothing, and every rule in `config/tillr/watch/` still sets `receiver = "foreground"`.
 
 > **In short.** A standing `tillr-watch` episode goes first to a dedicated, remedy-free `triage` seat on the cheap `scout` tier. The seat reads the evidence and settles a clear single instance by linking an existing item or filing one deduplicated `fix-fault` or `fix-rule` item. It escalates to the operating session or the owner whenever the cause or the item match is uncertain, when repeats need a silence, or when a host action or an owner ruling is required.
 
@@ -234,12 +234,12 @@ Settling alerts inside `tillr` removes wakeups, not visibility (`D-AT9`):
 
 ## 9. The build, in slices that each land alone
 
-Seven slices, in order, after the eight slices of [the alert workflow](./tillr-watch-alert-workflow.md#8-the-build-in-slices-that-each-land-alone) (`D-AT10`). Slice 1 is built; slices 2 to 7 are not.
+Seven slices, in order, after the eight slices of [the alert workflow](./tillr-watch-alert-workflow.md#8-the-build-in-slices-that-each-land-alone) (`D-AT10`). Slices 1 and 2 are built; slices 3 to 7 are not.
 
 | Slice | What lands | Done when | Built |
 | :--- | :--- | :--- | :--- |
 | **1** | The atomic triage claim, the three-outcome record face (refusing `expected`), the triage events, the `triage` header in escalated bundles, and `tillr watch status --recent` (`D-AT4`, `D-AT7`). | Tests show single-claim serialization across open and auto-resolved episodes, the refusal of `expected`, that a settled instance does not wake the operating session while an escalated one does, and header priority under truncation. | Yes |
-| **2** | The `triage` and `operator-session` receivers, per-owner delivery for both, and the `watch-lint-liveness-receiver` check (`D-AT2`, `D-AT5`). | Tests show each owner receives only its episodes, no timer promotes an untriaged alert, and lint rejects a liveness rule routed to `triage`. | No |
+| **2** | The `triage` and `operator-session` receivers, per-owner delivery for both, and the `watch-lint-liveness-receiver` check (`D-AT2`, `D-AT5`). | Tests show each owner receives only its episodes, no timer promotes an untriaged alert, and lint rejects a liveness rule routed to `triage`. | Yes |
 | **3** | Triage provenance and `dedup_key` idempotence on `tillr item request`, and `linked_alerts` on `tillr item show` and `tillr drain why` (`D-AT6`, `D-AT9`). | Tests show concurrent filings for one cause land on one item carrying both alert ids. | No |
 | **4** | The `triage` seat declaration, its `scout` mapping with an empty escalation list, the brief, and the read-and-file command shim (`D-AT3`, `D-AT6`, `D-AT11`). | Policy validation and shim tests show each forbidden command refused with exit `2`. | No |
 | **5** | Transition-driven dispatch in `tillr-drain` with the concurrency cap, and escalation on failure, a stale claim or a repeat flood (`D-AT4`, `D-AT8`, `D-AT11`). | Tests show the cap holds while build lanes are busy, no repeat dispatch on an unchanged settled instance, and immediate escalation on failure with no model retry. | No |
@@ -310,7 +310,7 @@ Rows `R-AT1` to `R-AT7` and [OQ-AT1](#OQ-AT1) to [OQ-AT3](#OQ-AT3) are owner rul
 | <a id="D-AT2"></a>**D-AT2** | Split receivers into `triage` (Groups A and B) and `operator-session` (Group C loop liveness), sorting each rule by whether it settles inside `tillr`. | 2026-11-23 | [§3](#3-sorting-the-26-live-rules-by-what-settles-them) | No |
 | <a id="D-AT3"></a>**D-AT3** | Declare the `triage` seat, map it to `scout`, run it with no lane worktree and a concurrency cap of `2` independent of the build lanes. | 2026-11-23 | [§4.1](#41-the-triage-seat-on-the-scout-tier-and-its-isolation) | No |
 | <a id="D-AT4"></a>**D-AT4** | Use `active_triage_run_id` as an atomic claim on unsettled `triage` episodes, open or auto-resolved, at most once per observed instance. Rejected: polling. | 2026-11-23 | [§4.2](#42-transition-driven-trigger-and-the-active_triage_run_id-invariant) | Yes |
-| <a id="D-AT5"></a>**D-AT5** | Enforce `watch-lint-liveness-receiver` so loop-liveness rules cannot route to the in-drain seat. | 2026-11-23 | [§4.3](#43-explicit-loop-liveness-routing-with-no-timer-promotion) | No |
+| <a id="D-AT5"></a>**D-AT5** | Enforce `watch-lint-liveness-receiver` so loop-liveness rules cannot route to the in-drain seat. | 2026-11-23 | [§4.3](#43-explicit-loop-liveness-routing-with-no-timer-promotion) | Yes |
 | <a id="D-AT6"></a>**D-AT6** | Restrict the seat mechanically (read-only checkout plus command shim) to reading evidence, deduplicating by concrete cause, filing or linking one item with triage provenance, and recording the outcome. | 2026-11-22 | [§5.1](#51-permitted-actions), [§5.2](#52-forbidden-actions-hard-mechanical-boundary) | No |
 | <a id="D-AT7"></a>**D-AT7** | Require one of three structured outcomes per run (`filed`, `linked`, `escalated`); `filed` and `linked` settle the observed instance without a wake. | 2026-11-23 | [§5.3](#53-the-structured-triage-outcomes) | Yes |
 | <a id="D-AT8"></a>**D-AT8** | Escalate only to `operator-session` or `owner`, delivered over `tillr watch wait` with the triage summary and item id leading the bundle; any failed triage run escalates. | 2026-11-23 | [§6](#6-what-must-be-handed-upward-to-whom-and-how) | No |

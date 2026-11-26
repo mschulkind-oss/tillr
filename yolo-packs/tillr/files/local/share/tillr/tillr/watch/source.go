@@ -389,7 +389,8 @@ func (m *memoryState) pending(owner string, fileRules []Rule) ([]Notice, error) 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	fg := foregroundRules(fileRules)
+	matched := rulesForOwner(owner, fileRules)
+	triageOwner := isTriageOwner(owner)
 	var seen int64
 	if cur := m.owners[owner]; cur != nil {
 		seen = cur.seenSeq
@@ -400,7 +401,15 @@ func (m *memoryState) pending(owner string, fileRules []Rule) ([]Notice, error) 
 	}
 	var list []candidate
 	for _, ep := range m.episodes {
-		if ep.state != "open" || !fg[ep.ruleID] {
+		if !matched[ep.ruleID] {
+			continue
+		}
+		if triageOwner {
+			uninvestigated := ep.settlementState == "" || ep.settlementState == "uninvestigated"
+			if ep.settlementState == "settled" || (ep.state != "open" && !(ep.state == "resolved" && uninvestigated)) {
+				continue
+			}
+		} else if ep.state != "open" || ep.settlementState == "settled" {
 			continue
 		}
 		var latestSeq int64
@@ -564,7 +573,6 @@ func (m *memoryState) readStatusInto(s *Status, rules []Rule) {
 		}
 		s.Alerts = append(s.Alerts, alert)
 	}
-	fg := foregroundRules(rules)
 	for _, handle := range slices.Sorted(maps.Keys(m.owners)) {
 		cur := m.owners[handle]
 		owner := OwnerStatus{Owner: handle}
@@ -576,8 +584,18 @@ func (m *memoryState) readStatusInto(s *Status, rules []Rule) {
 			v := statusTime(cur.lastWaitAt.Int64)
 			owner.LastWait = &v
 		}
+		matched := rulesForOwner(handle, rules)
+		triageOwner := isTriageOwner(handle)
 		for _, ep := range m.episodes {
-			if ep.state != "open" || !fg[ep.ruleID] {
+			if !matched[ep.ruleID] {
+				continue
+			}
+			if triageOwner {
+				uninvestigated := ep.settlementState == "" || ep.settlementState == "uninvestigated"
+				if ep.settlementState == "settled" || (ep.state != "open" && !(ep.state == "resolved" && uninvestigated)) {
+					continue
+				}
+			} else if ep.state != "open" || ep.settlementState == "settled" {
 				continue
 			}
 			for _, ev := range m.events {

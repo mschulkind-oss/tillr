@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/watch"
 )
@@ -173,5 +176,137 @@ func TestTriageCLIClaimRecordWaitAndStatusRecent(t *testing.T) {
 	ackIdx := strings.Index(waitOut, "ack: tillr watch ack "+alert2)
 	if triageIdx < 0 || ackIdx < 0 || triageIdx > ackIdx {
 		t.Fatalf("expected triage header ahead of actions for %s in wait output:\n%s", alert2, waitOut)
+	}
+}
+
+func TestTriageAndOperatorSessionWaitAndLintCLI(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. CLI lint rejects loop-liveness rule routed to triage.
+	lintDir := t.TempDir()
+	rulesSub := filepath.Join(lintDir, "config", "tillr", "watch")
+	if err := os.MkdirAll(rulesSub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	badRule := `
+[[rule]]
+id = "drain-loop-fault"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.loop-ended"]
+
+[rule.when]
+group_by = "global"
+pattern = "predicate_match"
+match = 'event.stop == "fault"'
+window = "1h"
+
+[rule.guidance]
+summary = "Loop faulted."
+check = ["Check log."]
+do = ["Restart."]
+
+[rule.delivery]
+receiver = "triage"
+`
+	if err := os.WriteFile(filepath.Join(rulesSub, "loop-fault.toml"), []byte(badRule), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if code := run(ctx, []string{"lint", lintDir}, &out, &stderr); code != 1 {
+		t.Fatalf("expected lint exit 1 for liveness rule on triage, got %d stdout=%q stderr=%q", code, out.String(), stderr.String())
+	}
+	if !strings.Contains(out.String(), "watch-lint-liveness-receiver") {
+		t.Fatalf("expected watch-lint-liveness-receiver in lint output, got:\n%s", out.String())
+	}
+
+	// 2. CLI wait with --owner tillr-triage vs --owner operator-session routes each to its own rules only.
+	s, _ := fixture(t, false)
+	rulesDir := t.TempDir()
+	routingRules := `
+[[rule]]
+id = "cli-triage-rule"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.refusal"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+window = "1h"
+
+[rule.guidance]
+summary = "Triage item {{subject}}"
+check = ["Check item."]
+do = ["File defect."]
+
+[rule.delivery]
+receiver = "triage"
+
+[[rule]]
+id = "cli-ops-rule"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.loop-ended"]
+
+[rule.when]
+group_by = "global"
+pattern = "predicate_match"
+match = 'event.stop == "fault"'
+window = "1h"
+
+[rule.guidance]
+summary = "Loop faulted"
+check = ["Check loop."]
+do = ["Restart loop."]
+
+[rule.delivery]
+receiver = "operator-session"
+`
+	if err := os.WriteFile(filepath.Join(rulesDir, "routing.toml"), []byte(routingRules), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Establish rule load baselines.
+	out.Reset()
+	stderr.Reset()
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rulesDir}, &out, &stderr); code != 0 {
+		t.Fatalf("baseline eval: %d %s", code, &stderr)
+	}
+
+	// Fire both rules.
+	fact(t, s, `{"item_id":"item-triage-1"}`)
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{
+			At:      time.Now(),
+			Kind:    "drain.loop-ended",
+			Payload: []byte(`{"stop":"fault"}`),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rulesDir, "--owner", "tillr-triage", "--timeout", "100ms", "--no-notify"}, &out, &stderr); code != 0 {
+		t.Fatalf("wait tillr-triage: %d stdout=%q stderr=%q", code, out.String(), stderr.String())
+	}
+	if !strings.Contains(out.String(), "cli-triage-rule") || strings.Contains(out.String(), "cli-ops-rule") {
+		t.Fatalf("tillr-triage received wrong notices:\n%s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rulesDir, "--owner", "operator-session", "--timeout", "100ms", "--no-notify"}, &out, &stderr); code != 0 {
+		t.Fatalf("wait operator-session: %d stdout=%q stderr=%q", code, out.String(), stderr.String())
+	}
+	if !strings.Contains(out.String(), "cli-ops-rule") || strings.Contains(out.String(), "cli-triage-rule") {
+		t.Fatalf("operator-session received wrong notices:\n%s", out.String())
 	}
 }

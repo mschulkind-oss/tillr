@@ -34,7 +34,7 @@ type UnsettledReminder struct {
 	Bundle       Bundle
 }
 
-// Pending returns open foreground alerts in notice sequence order.
+// Pending returns pending alerts for owner in notice sequence order.
 func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) {
 	if e.Store == nil {
 		if e.Source == nil {
@@ -44,7 +44,9 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
 	}
 	// Preserve file-rule routing for initial openings. Reopenings are new
 	// notices routed by the effective rules, independent of eligibility.
-	fileForeground := foregroundRules(e.Rules)
+	fileMatched := rulesForOwner(owner, e.Rules)
+	triageOwner := isTriageOwner(owner)
+	acceptsEscalations := ownerAcceptsEscalations(owner)
 	var notices []Notice
 	err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
 		hasSettlement, err := alertEpisodesHasColumn(rd, "settlement_state")
@@ -56,6 +58,10 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
 			return err
 		}
 		hasEscalated, err := alertEpisodesHasColumn(rd, "escalated_to")
+		if err != nil {
+			return err
+		}
+		hasTriageState, err := alertEpisodesHasColumn(rd, "triage_state")
 		if err != nil {
 			return err
 		}
@@ -71,6 +77,10 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
 		if hasEscalated {
 			escalatedExpr = "COALESCE(a.escalated_to, '')"
 		}
+		triageStateExpr := "'untriaged'"
+		if hasTriageState {
+			triageStateExpr = "COALESCE(NULLIF(a.triage_state, ''), 'untriaged')"
+		}
 		rows, err := rd.Query(`WITH latest_notice AS (
       SELECT n.object_id AS alert_id, MAX(n.seq) AS seq
       FROM events n
@@ -79,7 +89,7 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
         AND n.object_id IS NOT NULL
       GROUP BY n.object_id
    )
-   SELECT v.seq,v.kind,a.alert_id,a.rule_id,a.state,`+settlementExpr+`,`+activeTriageExpr+`,`+escalatedExpr+`,a.bundle_json
+   SELECT v.seq,v.kind,a.alert_id,a.rule_id,a.state,`+settlementExpr+`,`+activeTriageExpr+`,`+escalatedExpr+`,`+triageStateExpr+`,a.bundle_json
    FROM latest_notice m
    JOIN alert_episodes a ON a.alert_id=m.alert_id
    JOIN events v ON v.seq=m.seq
@@ -88,34 +98,43 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
 			return err
 		}
 		defer rows.Close()
-		var effectiveForeground map[string]bool
+		var effectiveMatched map[string]bool
 		for rows.Next() {
 			var n Notice
-			var kind, id, epState, settlement, activeRun, escalatedTo string
+			var kind, id, epState, settlement, activeRun, escalatedTo, triageState string
 			var bundle []byte
-			if err := rows.Scan(&n.Seq, &kind, &n.AlertID, &id, &epState, &settlement, &activeRun, &escalatedTo, &bundle); err != nil {
+			if err := rows.Scan(&n.Seq, &kind, &n.AlertID, &id, &epState, &settlement, &activeRun, &escalatedTo, &triageState, &bundle); err != nil {
 				return err
 			}
 			if kind == escalatedKind {
-				if escalatedTo == "owner" {
+				if !acceptsEscalations || escalatedTo == "owner" {
 					continue
 				}
 			} else {
-				if epState != "open" || settlement == "settled" || activeRun != "" || escalatedTo == "owner" {
-					continue
+				if triageOwner {
+					if triageState != "untriaged" || settlement == "settled" || activeRun != "" || escalatedTo != "" {
+						continue
+					}
+					if epState != "open" && !(epState == "resolved" && settlement == "uninvestigated") {
+						continue
+					}
+				} else {
+					if epState != "open" || settlement == "settled" || activeRun != "" || escalatedTo == "owner" {
+						continue
+					}
 				}
-				foreground := fileForeground
+				matched := fileMatched
 				if kind == reopenedKind {
-					if effectiveForeground == nil {
+					if effectiveMatched == nil {
 						rules, err := ReadEffectiveRules(rd, e.Rules)
 						if err != nil {
 							return err
 						}
-						effectiveForeground = foregroundRules(rules)
+						effectiveMatched = rulesForOwner(owner, rules)
 					}
-					foreground = effectiveForeground
+					matched = effectiveMatched
 				}
-				if !foreground[id] {
+				if !matched[id] {
 					continue
 				}
 			}
@@ -129,14 +148,33 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
 	return notices, err
 }
 
-func foregroundRules(rules []Rule) map[string]bool {
-	foreground := map[string]bool{}
+func isTriageOwner(owner string) bool {
+	return owner == "tillr-triage" || owner == "triage"
+}
+
+func ownerAcceptsEscalations(owner string) bool {
+	return !isTriageOwner(owner)
+}
+
+func receiverMatchesOwner(receiver, owner string) bool {
+	switch {
+	case isTriageOwner(owner):
+		return receiver == "triage"
+	case owner == "operator-session":
+		return receiver == "operator-session" || receiver == "foreground"
+	default:
+		return receiver == "foreground"
+	}
+}
+
+func rulesForOwner(owner string, rules []Rule) map[string]bool {
+	matched := map[string]bool{}
 	for _, r := range rules {
-		if r.Delivery.Receiver == "foreground" {
-			foreground[r.ID] = true
+		if receiverMatchesOwner(r.Delivery.Receiver, owner) {
+			matched[r.ID] = true
 		}
 	}
-	return foreground
+	return matched
 }
 
 // Seen confirms a printed cursor without changing alert state.
@@ -222,6 +260,9 @@ func (e Evaluator) UnsettledReminders(ctx context.Context, owner string, remindA
 		}
 		return nil, nil
 	}
+	if isTriageOwner(owner) {
+		return nil, nil
+	}
 	if remindAfter <= 0 {
 		remindAfter = DefaultUnsettledRemindAfter
 	}
@@ -256,7 +297,7 @@ func (e Evaluator) UnsettledReminders(ctx context.Context, owner string, remindA
 		if err != nil {
 			return err
 		}
-		effectiveForeground := foregroundRules(rules)
+		effectiveMatched := rulesForOwner(owner, rules)
 
 		escalatedExpr := "''"
 		if hasEscalated {
@@ -278,12 +319,19 @@ func (e Evaluator) UnsettledReminders(ctx context.Context, owner string, remindA
 			WHERE COALESCE(NULLIF(a.settlement_state, ''), 'uninvestigated') <> 'settled'`
 		var args []any
 		if hasDelivery {
-			query += ` AND NOT (a.state = 'open' AND EXISTS (
-				SELECT 1 FROM events v
-				WHERE v.object_id = a.alert_id AND v.kind IN (?, ?)
-				  AND v.seq > COALESCE((SELECT seen_seq FROM foreground_delivery WHERE owner_handle = ?), 0)
-			))`
-			args = append(args, openedKind, reopenedKind, owner)
+			query += ` AND NOT (
+				(a.state = 'open' AND EXISTS (
+					SELECT 1 FROM events v
+					WHERE v.object_id = a.alert_id AND v.kind IN (?, ?)
+					  AND v.seq > COALESCE((SELECT seen_seq FROM foreground_delivery WHERE owner_handle = ?), 0)
+				))
+				OR EXISTS (
+					SELECT 1 FROM events v
+					WHERE v.object_id = a.alert_id AND v.kind = ?
+					  AND v.seq > COALESCE((SELECT seen_seq FROM foreground_delivery WHERE owner_handle = ?), 0)
+				)
+			)`
+			args = append(args, openedKind, reopenedKind, owner, escalatedKind, owner)
 		}
 		query += ` ORDER BY a.opened_at, a.alert_id`
 
@@ -309,7 +357,7 @@ func (e Evaluator) UnsettledReminders(ctx context.Context, owner string, remindA
 				if triageRunID != "" {
 					continue
 				}
-				if !effectiveForeground[r.RuleID] {
+				if !effectiveMatched[r.RuleID] {
 					continue
 				}
 			}

@@ -483,8 +483,8 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 	d.only("receiver", "also_notify")
 	r.Delivery = Delivery{Receiver: d.text("receiver"), AlsoNotify: d.strings("also_notify", false)}
 	checkReceiver := func(key, value string) {
-		if value != "foreground" && value != "subscribers" {
-			d.reject(key, "receiver %q is not foreground or subscribers", value)
+		if !isValidReceiver(value) {
+			d.reject(key, "receiver %q is not foreground, subscribers, triage or operator-session", value)
 		}
 	}
 	checkReceiver("receiver", r.Delivery.Receiver)
@@ -492,6 +492,15 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 		checkReceiver("also_notify", value)
 	}
 	return r, c.err
+}
+
+func isValidReceiver(value string) bool {
+	switch value {
+	case "foreground", "subscribers", "triage", "operator-session":
+		return true
+	default:
+		return false
+	}
 }
 
 func loadVariables(root keys, raw any, pattern string) map[string]string {

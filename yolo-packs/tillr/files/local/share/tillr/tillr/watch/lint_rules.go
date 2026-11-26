@@ -325,6 +325,9 @@ func lintOneRuleTable(path string, index int, table map[string]any, kinds map[st
 	} else {
 		r.Delivery = lintRuleDelivery(deliveryMap, emit)
 	}
+	if r.Delivery.Receiver == "triage" && isLivenessRule(r) {
+		emit(CodeWatchLintLivenessReceiver, "delivery.receiver: loop-liveness rule must not route to triage; use operator-session")
+	}
 
 	return r
 }
@@ -928,8 +931,8 @@ func lintRuleDelivery(dMap map[string]any, emit func(string, string)) Delivery {
 		}
 	}
 	var d Delivery
-	if rec, ok := dMap["receiver"].(string); !ok || (rec != "foreground" && rec != "subscribers") {
-		emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("delivery.receiver: expected foreground or subscribers, got %v", dMap["receiver"]))
+	if rec, ok := dMap["receiver"].(string); !ok || !isValidReceiver(rec) {
+		emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("delivery.receiver: expected foreground, subscribers, triage or operator-session, got %v", dMap["receiver"]))
 	} else {
 		d.Receiver = rec
 	}
@@ -940,13 +943,60 @@ func lintRuleDelivery(dMap map[string]any, emit func(string, string)) Delivery {
 		} else {
 			d.AlsoNotify = list
 			for _, v := range list {
-				if v != "foreground" && v != "subscribers" {
-					emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("delivery.also_notify: receiver %q is not foreground or subscribers", v))
+				if !isValidReceiver(v) {
+					emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("delivery.also_notify: receiver %q is not foreground, subscribers, triage or operator-session", v))
 				}
 			}
 		}
 	}
 	return d
+}
+
+// isLivenessRule reports whether r watches the absence of drain.loop-pass or
+// watches drain.loop-ended as a trigger (rather than only as a clear/reset).
+func isLivenessRule(r Rule) bool {
+	if r.When.Pattern == DurationWithoutEvent && slices.Contains(r.Reads.Events, "drain.loop-pass") {
+		if (r.When.After != nil && exprAllowsKind(r.When.After, "drain.loop-pass")) ||
+			(r.When.Match != nil && exprAllowsKind(r.When.Match, "drain.loop-pass")) {
+			return true
+		}
+	}
+	if slices.Contains(r.Reads.Events, "drain.loop-ended") {
+		switch r.When.Pattern {
+		case DurationWithoutEvent:
+			if (r.When.After != nil && exprAllowsKind(r.When.After, "drain.loop-ended")) ||
+				(r.When.Match != nil && exprAllowsKind(r.When.Match, "drain.loop-ended")) {
+				return true
+			}
+		case LagBehind:
+			if r.When.ReopenWhen != nil && exprAllowsKind(r.When.ReopenWhen, "drain.loop-ended") {
+				return true
+			}
+		default:
+			if exprAllowsKind(r.When.Match, "drain.loop-ended") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// exprAllowsKind reports whether exp can match an event of the given kind.
+// If exp is nil or imposes no event.kind == / in constraint, any read event kind is allowed.
+func exprAllowsKind(exp *Expression, kind string) bool {
+	if exp == nil {
+		return true
+	}
+	constrained := false
+	for _, cmp := range exp.eventComparisons {
+		if cmp.field == "kind" && (cmp.op == "==" || cmp.op == "in") {
+			constrained = true
+			if slices.Contains(cmp.values, kind) {
+				return true
+			}
+		}
+	}
+	return !constrained
 }
 
 func lintRulesWithContext(rules []lintedRule, charter charterData, workflows []loadedWorkflow, fc *findingCollector) {

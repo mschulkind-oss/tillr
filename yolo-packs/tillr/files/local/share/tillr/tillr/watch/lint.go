@@ -27,6 +27,7 @@ const (
 	CodeWatchLintUnknownStage     = "watch-lint-unknown-stage"
 	CodeWatchLintEmptyGuidance    = "watch-lint-empty-guidance"
 	CodeWatchLintForbiddenRemedy  = "watch-lint-forbidden-remedy"
+	CodeWatchLintLivenessReceiver = "watch-lint-liveness-receiver"
 	CodeWatchLintRuleSchema       = "watch-lint-rule-schema"
 )
 
