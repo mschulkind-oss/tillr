@@ -188,7 +188,7 @@ func TestSavedBackendOutcomesSkipPayloadUnmarshal(t *testing.T) {
 			t.Fatalf("outcomes = %d, want 12", len(outcomes))
 		}
 		for _, o := range outcomes {
-			if !o.saved || o.rec.RunID == "" || o.rec.Backend != "fixture" || o.class != AttemptAnswered || o.closes {
+			if !o.Saved || o.Rec.RunID == "" || o.Rec.Backend != "fixture" || o.Class != AttemptAnswered || o.Closes {
 				t.Fatalf("unexpected saved outcome: %+v", o)
 			}
 		}
@@ -218,7 +218,7 @@ func TestSavedBackendOutcomesSkipPayloadUnmarshal(t *testing.T) {
 			return err
 		}
 		got, ok := closed["broken"]
-		if !ok || got.rec.RunID != "broken-close" || got.rec.ItemID != "item-a" || got.rec.State != run.StateExited {
+		if !ok || got.Rec.RunID != "broken-close" || got.Rec.ItemID != "item-a" || got.Rec.State != run.StateExited {
 			t.Fatalf("closed[broken] = %+v (ok=%v), want full closing record", got, ok)
 		}
 		return nil
@@ -247,7 +247,7 @@ func TestSavedBackendOutcomesSkipPayloadUnmarshal(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if len(outcomes) == 0 || outcomes[0].rec.RunID != "orphan-event" || outcomes[0].rec.Backend != "fixture" {
+		if len(outcomes) == 0 || outcomes[0].Rec.RunID != "orphan-event" || outcomes[0].Rec.Backend != "fixture" {
 			t.Fatalf("orphan saved outcome = %+v, want orphan-event on fixture", outcomes)
 		}
 		return nil
@@ -350,7 +350,7 @@ func TestStartViewRefreshBackendsAvoidsRescanningHistoricalFinishes(t *testing.T
 	// 3. New unsaved infrastructure run.finish closes the backend without scanning 16 historical rows.
 	backendUsageRun(t, f, "infra-close-1", "fixture", 2)
 	closedUnsaved := assertRefreshCost("new-unsaved-finish", 0, 1)
-	if !closedUnsaved.shut["fixture"] || closedUnsaved.infrastructureClosed["fixture"].saved {
+	if !closedUnsaved.shut["fixture"] || closedUnsaved.infrastructureClosed["fixture"].Saved {
 		t.Fatalf("unsaved finish did not close fixture: %+v / %+v", closedUnsaved.shut, closedUnsaved.infrastructureClosed)
 	}
 
@@ -359,7 +359,7 @@ func TestStartViewRefreshBackendsAvoidsRescanningHistoricalFinishes(t *testing.T
 		t.Fatal(err)
 	}
 	closedSaved := assertRefreshCost("record-backend-outcomes", 0, 0)
-	if !closedSaved.shut["fixture"] || !closedSaved.infrastructureClosed["fixture"].saved {
+	if !closedSaved.shut["fixture"] || !closedSaved.infrastructureClosed["fixture"].Saved {
 		t.Fatalf("saved finish did not stay closed with saved=true: %+v / %+v", closedSaved.shut, closedSaved.infrastructureClosed)
 	}
 
@@ -378,7 +378,7 @@ func TestStartViewRefreshBackendsAvoidsRescanningHistoricalFinishes(t *testing.T
 		t.Fatal(err)
 	}
 	closedAgain := assertRefreshCost("new-saved-close", 0, 1)
-	closingSeq := closedAgain.infrastructureClosed["fixture"].seq
+	closingSeq := closedAgain.infrastructureClosed["fixture"].Seq
 	if !closedAgain.shut["fixture"] || closingSeq == 0 {
 		t.Fatalf("second close missing: %+v", closedAgain.infrastructureClosed)
 	}

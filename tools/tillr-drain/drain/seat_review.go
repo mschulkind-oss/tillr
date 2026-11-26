@@ -26,11 +26,11 @@ func (l *Loop) selectReviewDispatch(ctx context.Context, req run.Request) (run.R
 		policy := *l.cfg.Policy
 		// Item overrides select the worker, not its independent review.
 		policy.Overrides = nil
-		name := policy.firstBackend(itemRow{Seat: "review"})
-		if len(policy.seatList("review")) == 0 || !policy.seatMayStart("", "review", name, shut) {
+		name := policy.FirstBackend("", "review")
+		if len(policy.SeatList("review")) == 0 || !policy.SeatMayStart("", "review", name, shut) {
 			return nil
 		}
-		d := Decision{DecisionID: "decision-" + req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Seat: "review", Action: ActionDispatch, Reason: "agent-review", SelectSeat: true, RunRequest: policy.request(req.ItemID, req.LaneID, req.RunID, name)}
+		d := Decision{DecisionID: "decision-" + req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Seat: "review", Action: ActionDispatch, Reason: "agent-review", SelectSeat: true, RunRequest: policy.Request(req.ItemID, req.LaneID, req.RunID, name)}
 		if d.RunRequest != nil {
 			d.RunRequest.Seat = req.Seat
 			if d.RunRequest.Seat == "" {

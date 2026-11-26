@@ -158,7 +158,7 @@ func TestInfrastructureHoldPreservesWorkBeforeSameBackendSettlement(t *testing.T
 	// the work pinned before the hold, even though the lane has been reset.
 	next := rec
 	next.RunID, next.State, next.ExitCode = markRunID(rec.RunID, "restart"), run.StateExited, countPtr(0)
-	d.RunRequest = l.cfg.Policy.request(d.ItemID, d.LaneID, next.RunID, "fixture")
+	d.RunRequest = l.cfg.Policy.Request(d.ItemID, d.LaneID, next.RunID, "fixture")
 	writeForkFile(t, filepath.Join(l.laneTarget(d.LaneID), "base.txt"), "restart work\n")
 	fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, next) })
 	out = l.settle(ctx, d, next, "RESULT: done\n", base, "tick-restart", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, true)

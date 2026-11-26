@@ -33,7 +33,7 @@ func TestSeatSharesPolicyRoundTripAndDescription(t *testing.T) {
 func TestSeatSharesLegacyReplayAndBackendImmutable(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	p := sharesPolicy(t, `["builder-a","builder-b"]`)
-	d := Decision{DecisionID: "legacy", ItemID: "item-a", Seat: "build", Action: ActionDispatch, Reason: ReasonReady, RunRequest: p.request("item-a", "lane-1", "legacy-run", "builder-a"), LaneID: "lane-1"}
+	d := Decision{DecisionID: "legacy", ItemID: "item-a", Seat: "build", Action: ActionDispatch, Reason: ReasonReady, RunRequest: p.Request("item-a", "lane-1", "legacy-run", "builder-a"), LaneID: "lane-1"}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`INSERT INTO dispatches(decision_id,item_id,lane_id,run_id,action,reason,seat,dispatched_at) VALUES(?,?,?,?,?,?,?,?)`, d.DecisionID, d.ItemID, d.LaneID, d.RunRequest.RunID, d.Action, d.Reason, d.Seat, l.cfg.Now().UnixMilli())
 		return err
@@ -41,7 +41,7 @@ func TestSeatSharesLegacyReplayAndBackendImmutable(t *testing.T) {
 	fixtureWrite(t, f, func(tx *store.Tx) error { return recordPassDecision(tx, d, l.cfg.Now()) })
 	d.DecisionID = "new"
 	fixtureWrite(t, f, func(tx *store.Tx) error { return recordPassDecision(tx, d, l.cfg.Now()) })
-	d.RunRequest = p.request("item-a", "lane-1", "legacy-run", "builder-b")
+	d.RunRequest = p.Request("item-a", "lane-1", "legacy-run", "builder-b")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		if err := recordPassDecision(tx, d, l.cfg.Now()); err == nil {
 			t.Error("changed backend accepted")
@@ -59,12 +59,12 @@ func TestSeatSharesImplicitReviewRecordsChoice(t *testing.T) {
 	p.SeatShares["review"] = p.SeatShares["build"]
 	l.cfg.Policy = &p
 	for i, id := range []string{"judge-1", "judge-2"} {
-		req, open, err := l.selectReviewDispatch(context.Background(), *p.request("item-a", "lane-1", id, "builder-a"))
+		req, open, err := l.selectReviewDispatch(context.Background(), *p.Request("item-a", "lane-1", id, "builder-a"))
 		if err != nil || !open || req.Backend != []string{"builder-a", "builder-b"}[i] {
 			t.Fatalf("review: %+v/%v/%v", req, open, err)
 		}
 		// Same request restored before receipt writing must retain its recorded draw.
-		again, open, err := l.selectReviewDispatch(context.Background(), *p.request("item-a", "lane-1", id, "builder-a"))
+		again, open, err := l.selectReviewDispatch(context.Background(), *p.Request("item-a", "lane-1", id, "builder-a"))
 		if err != nil || !open || again.Backend != req.Backend {
 			t.Fatalf("review redrawn: %+v/%v", again, err)
 		}

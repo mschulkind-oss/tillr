@@ -1,77 +1,14 @@
 package drain
 
 import (
-	"context"
-	"database/sql"
-	"errors"
-	"fmt"
-	"math/rand/v2"
-	"slices"
-	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/policy"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-var errSeatWindowClosed = fmt.Errorf("seat backends closed during claim")
-
-// A closed draw is kept even though the rest of the claim must roll back.
-// It does not count as a dispatch until the run actually claims a lane.
-type seatWait struct{ runID, seat, backend string }
-
-func (w *seatWait) Error() string {
-	return fmt.Sprintf("seat %s chose backend %s, which is closed", w.seat, w.backend)
-}
-
-func keepSeatWait(tx *store.Tx, claim func() error) error {
-	if _, err := tx.Exec("SAVEPOINT seat_claim"); err != nil {
-		return err
-	}
-	if err := claim(); err != nil {
-		var wait *seatWait
-		if !errors.As(err, &wait) {
-			return err
-		}
-		if _, err := tx.Exec("ROLLBACK TO seat_claim"); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`INSERT INTO seat_waiting_choices(run_id,seat,backend) VALUES(?,?,?)
-			ON CONFLICT(run_id) DO UPDATE SET seat=excluded.seat,backend=excluded.backend
-			WHERE seat!=excluded.seat OR backend!=excluded.backend`, wait.runID, wait.seat, wait.backend); err != nil {
-			return err
-		}
-	}
-	_, err := tx.Exec("RELEASE seat_claim")
-	return err
-}
-
-func seatClaim(p *Policy, claim func(context.Context, *store.Tx) error) func(context.Context, *store.Tx) error {
-	if p == nil || len(p.SeatShares) == 0 {
-		return claim
-	}
-	return func(ctx context.Context, tx *store.Tx) error {
-		return keepSeatWait(tx, func() error { return claim(ctx, tx) })
-	}
-}
-
-func waitingSeatBackend(r *store.Reader, runID, seat string, list []string) (string, error) {
-	var saved string
-	err := r.QueryRow(`SELECT backend FROM seat_waiting_choices WHERE run_id=? AND seat=?`, runID, seat).Scan(&saved)
-	if err == sql.ErrNoRows || (err != nil && strings.Contains(err.Error(), "no such table: seat_waiting_choices")) {
-		return "", nil
-	}
-	if slices.Contains(list, saved) {
-		return saved, err
-	}
-	return "", err
-}
-
-func (p *Policy) usesSeatShares(d Decision) bool {
-	if p == nil || !d.SelectSeat || d.WorkflowRestart || len(p.SeatShares[d.Seat]) == 0 {
-		return false
-	}
-	_, override := p.Overrides[d.ItemID]
-	return !override
+func usesSeatShares(p *Policy, d Decision) bool {
+	return p.UsesSeatShares(d.ItemID, d.Seat, d.SelectSeat, d.WorkflowRestart)
 }
 
 // selectSeatDispatch makes and journals the choice inside the claim transaction.
@@ -93,95 +30,15 @@ func selectSeatDispatch(tx *store.Tx, d *Decision, p *Policy, shut map[string]bo
 		}
 		return rec != nil || !shut[d.RunRequest.Backend], nil
 	}
-	if !p.usesSeatShares(*d) {
+	if !usesSeatShares(p, *d) {
 		return true, nil
 	}
-	list := p.seatList(d.Seat)
-	shares := p.SeatShares[d.Seat]
-	pick := p.SeatPicks[d.Seat]
-	var saved string
-	err := tx.QueryRow(`SELECT backend FROM seat_dispatches WHERE run_id=?`, d.RunRequest.RunID).Scan(&saved)
-	if err != nil && err != sql.ErrNoRows {
+	old := d.RunRequest
+	chosen, err := policy.ChooseSeatBackend(tx, p, old.RunID, d.Seat, shut)
+	if err != nil {
 		return false, err
 	}
-	if err == sql.ErrNoRows {
-		saved, err = waitingSeatBackend(tx.Reader(), d.RunRequest.RunID, d.Seat, list)
-		if err != nil {
-			return false, err
-		}
-	}
-	chosen := saved
-	if chosen == "" {
-		counts := map[string]int{}
-		rows, err := tx.Query(`SELECT backend,count(*) FROM seat_dispatches WHERE seat=? GROUP BY backend`, d.Seat)
-		if err != nil {
-			return false, err
-		}
-		for rows.Next() {
-			var name string
-			var n int
-			if err := rows.Scan(&name, &n); err != nil {
-				rows.Close()
-				return false, err
-			}
-			counts[name] = n
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return false, err
-		}
-		index := 0
-		switch pick {
-		case "random":
-			// Scale before summing so even very large finite shares cannot overflow.
-			max := slices.Max(shares)
-			total := 0.0
-			for _, share := range shares {
-				total += share / max
-			}
-			drawFn := p.seatDraw
-			if drawFn == nil {
-				drawFn = rand.Float64
-			}
-			draw := drawFn() * total
-			index = len(list) - 1
-			for i, share := range shares {
-				draw -= share / max
-				if draw < 0 {
-					index = i
-					break
-				}
-			}
-		case "round-robin":
-			var last string
-			err := tx.QueryRow(`SELECT backend FROM seat_dispatches WHERE seat=? ORDER BY ordinal DESC LIMIT 1`, d.Seat).Scan(&last)
-			if err != nil && err != sql.ErrNoRows {
-				return false, err
-			}
-			for i, name := range list {
-				if name == last {
-					index = (i + 1) % len(list)
-					break
-				}
-			}
-		default:
-			// Earliest next proportional slot wins; ties retain policy order.
-			// Equal shares alternate, and 3:1 gives three dispatches of every four.
-			for i, weight := range shares {
-				scale := max(weight, shares[index])
-				if float64(counts[list[i]]+1)*(shares[index]/scale) < float64(counts[list[index]]+1)*(weight/scale) {
-					index = i
-				}
-			}
-		}
-		chosen = list[index]
-	}
-	old := d.RunRequest
-	if shut[chosen] {
-		return false, &seatWait{old.RunID, d.Seat, chosen}
-	}
-	request := p.request(d.ItemID, d.LaneID, old.RunID, chosen)
+	request := p.Request(d.ItemID, d.LaneID, old.RunID, chosen)
 	// Keep node, continuation, timeout, and correlation metadata while replacing
 	// the backend-derived adapter command and model fields.
 	copy := *old
@@ -212,16 +69,5 @@ func recordSeatDispatch(tx *store.Tx, d Decision) error {
 	if d.Seat == "" || d.RunRequest == nil || d.RunRequest.Backend == "" || commandStage(d) {
 		return nil
 	}
-	_, err := tx.Exec(`INSERT INTO seat_dispatches(run_id,seat,backend) VALUES(?,?,?) ON CONFLICT(run_id) DO NOTHING`, d.RunRequest.RunID, d.Seat, d.RunRequest.Backend)
-	if err != nil {
-		return err
-	}
-	var seat, backend string
-	if err := tx.QueryRow(`SELECT seat,backend FROM seat_dispatches WHERE run_id=?`, d.RunRequest.RunID).Scan(&seat, &backend); err != nil {
-		return err
-	}
-	if seat != d.Seat || backend != d.RunRequest.Backend {
-		return fmt.Errorf("run %s already records seat %s backend %s", d.RunRequest.RunID, seat, backend)
-	}
-	return nil
+	return policy.RecordSeatDispatchRow(tx, d.RunRequest.RunID, d.Seat, d.RunRequest.Backend)
 }

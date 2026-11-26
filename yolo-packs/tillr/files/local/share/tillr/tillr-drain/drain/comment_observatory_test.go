@@ -158,7 +158,7 @@ func TestFirstStagingRecordsCommentArrivals(t *testing.T) {
 			d.DesignerSessionID = ""
 			d.DesignerReason = "no-designer"
 		}
-		d.RunRequest = l.cfg.Policy.request(id, "desk", fmt.Sprintf("r%d", i), "fixture")
+		d.RunRequest = l.cfg.Policy.Request(id, "desk", fmt.Sprintf("r%d", i), "fixture")
 		spec := StageSpec{}
 		if err := l.stageComment(ctx, &d, &spec); err != nil {
 			t.Fatal(err)

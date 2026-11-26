@@ -68,7 +68,7 @@ func TestRetainedLaneGoesToMatchingReturnedWorker(t *testing.T) {
 			if _, err := tx.Exec(`UPDATE items SET state=? WHERE item_id=?`, StateInQueue, itemID); err != nil {
 				return err
 			}
-			s := &WorkerSession{SessionID: ids[i], LaneID: "lane-1", LaneDir: dir, BaseSHA: base, Backend: "fixture", Route: l.cfg.Policy.request(itemID, "lane-1", runs[i], "fixture").Route()}
+			s := &WorkerSession{SessionID: ids[i], LaneID: "lane-1", LaneDir: dir, BaseSHA: base, Backend: "fixture", Route: l.cfg.Policy.Request(itemID, "lane-1", runs[i], "fixture").Route()}
 			if err := appendEffect(tx, RefusalKind, runs[i], refusalPayload{Step: RefusalReverted, ItemID: itemID, WorkerSession: s, Detail: itemID + " reverted"}, l.cfg.Now()); err != nil {
 				return err
 			}

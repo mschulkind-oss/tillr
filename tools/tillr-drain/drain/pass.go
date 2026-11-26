@@ -25,7 +25,7 @@ import (
 )
 
 func init() {
-	for _, kind := range []string{backendProbeKind, backendOutcomeKind, quotaUpdatedKind, commentReplyStateKind, designerCompactedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind, noChangeKind, "drain.no-change-closed"} {
+	for _, kind := range []string{commentReplyStateKind, designerCompactedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind, noChangeKind, "drain.no-change-closed"} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -641,7 +641,7 @@ func refreshRestartRequest(policy *Policy, d Decision, prev *run.Request) (*run.
 	if policy == nil || prev == nil || !policyHasBackend(policy, prev.Backend) {
 		return nil, false
 	}
-	fresh := policy.request(prev.ItemID, prev.LaneID, prev.RunID, prev.Backend)
+	fresh := policy.Request(prev.ItemID, prev.LaneID, prev.RunID, prev.Backend)
 	fresh.ReadOnlyGroup = prev.ReadOnlyGroup
 	if prev.WorkingDir != "" {
 		fresh.WorkingDir = prev.WorkingDir
@@ -967,7 +967,7 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 		}
 		d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
 		d.SelectSeat = !d.WorkflowRestart
-		backend := policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: d.Seat})
+		backend := policy.FirstBackend(d.ItemID, d.Seat)
 		if d.WorkflowRestart {
 			backend = d.RunRequest.Backend
 		}
@@ -981,9 +981,9 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 		}
 		ok := !shut[backend]
 		if !d.WorkflowRestart {
-			ok = policy.seatMayStart(d.ItemID, d.Seat, backend, shut)
-			if policy.usesSeatShares(d) {
-				saved, err := waitingSeatBackend(r, d.RunRequest.RunID, d.Seat, policy.seatList(d.Seat))
+			ok = policy.SeatMayStart(d.ItemID, d.Seat, backend, shut)
+			if usesSeatShares(policy, d) {
+				saved, err := waitingSeatBackend(r, d.RunRequest.RunID, d.Seat, policy.SeatList(d.Seat))
 				if err != nil {
 					return Decision{}, err
 				}
@@ -1000,7 +1000,7 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 			if d.WorkflowRestart {
 				request, _ = refreshRestartRequest(policy, d, d.RunRequest)
 			} else {
-				request = policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, backend)
+				request = policy.Request(d.ItemID, d.LaneID, d.RunRequest.RunID, backend)
 				if request != nil {
 					if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
 						request.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
@@ -1051,10 +1051,10 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 			if row.ItemID != d.ItemID || row.JudgeMode != "agent" {
 				continue
 			}
-			seat := policy.seatList("review")
+			seat := policy.SeatList("review")
 			if len(seat) > 0 {
 				blocked := seat[0]
-				open := policy.seatMayStart("", "review", blocked, shut)
+				open := policy.SeatMayStart("", "review", blocked, shut)
 				if len(policy.SeatShares["review"]) > 0 {
 					saved, err := waitingSeatBackend(r, judgeRunID(work.Candidate.RunID), "review", seat)
 					if err != nil {
@@ -2712,7 +2712,7 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 	}); err != nil {
 		return err
 	}
-	if policy := l.currentPolicy(); routed != nil && (policy == nil || len(policy.seatList("design")) == 0) {
+	if policy := l.currentPolicy(); routed != nil && (policy == nil || len(policy.SeatList("design")) == 0) {
 		routed.noDesignSeat = true
 	}
 	if routed != nil && routed.WorkerSession != nil {

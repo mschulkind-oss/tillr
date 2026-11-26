@@ -281,7 +281,7 @@ func TestTheJudgeOfARequestReadsItsWords(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := Candidate{ItemID: worker.ItemID, LaneID: worker.LaneID, RunID: worker.RunID, Worktree: l.lanePath(worker.LaneID), BaseSHA: base, HeadSHA: s.workerHead}
-	receipt := &JudgeReceipt{Request: *l.cfg.Policy.request(worker.ItemID, worker.LaneID, worker.RunID+"-judge", "reviewer")}
+	receipt := &JudgeReceipt{Request: *l.cfg.Policy.Request(worker.ItemID, worker.LaneID, worker.RunID+"-judge", "reviewer")}
 	receipt.Options.Head = candidate.HeadSHA
 	receipt.Options.Tree = runGit(t, candidate.Worktree, "rev-parse", candidate.HeadSHA+"^{tree}")
 	receipt.Writers = []JudgeWriter{{NodeID: "work", RunID: worker.RunID, SessionID: "worker-session-sentinel"}}

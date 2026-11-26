@@ -487,7 +487,7 @@ func (s *startSnapshot) advanceBackendOutcomes(r *store.Reader, checkEvents bool
 	if s.pending != nil {
 		byRun = s.pending.byRun
 	}
-	next, changed, err := s.backendOutcomes.advance(r, checkEvents, byRun)
+	next, changed, err := advanceBackendOutcomesState(s.backendOutcomes, r, checkEvents, byRun)
 	if err != nil {
 		return false, err
 	}
@@ -519,7 +519,7 @@ func (s *startSnapshot) refreshBackendsWithOutcomes(r *store.Reader, at time.Tim
 				return err
 			}
 		}
-		if s.infrastructureClosed, err = s.backendOutcomes.infrastructureClosed(r, s.infrastructureClosed); err != nil {
+		if s.infrastructureClosed, err = s.backendOutcomes.InfrastructureClosed(r, s.infrastructureClosed); err != nil {
 			return err
 		}
 	}

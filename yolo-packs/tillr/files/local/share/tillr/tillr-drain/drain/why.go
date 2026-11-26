@@ -100,39 +100,6 @@ type WhyAnswer struct {
 	LoopRestartLine string `json:"loop_restart_line,omitempty"`
 }
 
-// LoadPolicy is shared by planning and read faces. No policy is an explicit input:
-// Plan reports no-policy, rather than pretending to know the loop's configuration.
-func LoadPolicy(ref string) (*Policy, error) {
-	if ref == "" {
-		return nil, nil
-	}
-	raw, err := os.ReadFile(ref)
-	if err != nil {
-		return nil, Usagef("reading the policy %s: %v", ref, err)
-	}
-	return decodePolicy(ref, raw)
-}
-
-func decodePolicy(ref string, raw []byte) (*Policy, error) {
-	var p Policy
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return nil, Usagef("reading the policy %s: %v", ref, err)
-	}
-	p.Ref = ref
-	if err := p.Check(); err != nil {
-		return nil, err
-	}
-	for name, backend := range p.Backends {
-		adapter, err := run.ResolvePolicyAdapter(backend.Adapter)
-		if err != nil {
-			return nil, Usagef("the policy's backend %q: %v", name, err)
-		}
-		backend.Adapter = adapter
-		p.Backends[name] = backend
-	}
-	return &p, nil
-}
-
 // Why runs Plan once, in the caller's pinned read transaction. Capacity is consumed
 // in queue order exactly as it would be by the next pass, never independently per row.
 func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (WhyAnswer, error) {
@@ -694,7 +661,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		}
 		if d.Reason == ReasonBackendWindow && d.ConflictID != "" && policy != nil && d.BackendHoldCause == "" {
 			seat := d.Seat
-			for _, name := range policy.seatList(seat) {
+			for _, name := range policy.SeatList(seat) {
 				if reset, shut := windows[name]; shut {
 					row.WaitingOn = append(row.WaitingOn, name+" reopens "+reset.Format(time.RFC3339))
 				}
@@ -1061,7 +1028,11 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		// Keep the planner's decision for inspection. The loop's observation
 		// describes the last claim of this offer; it does not veto a new claim.
 		decline := declines[it.ItemID]
-		declined, err := decline.appliesTo(r, d)
+		declinedRunID := ""
+		if d.RunRequest != nil {
+			declinedRunID = d.RunRequest.RunID
+		}
+		declined, err := decline.AppliesTo(r, d.Action, d.DecisionID, d.LaneID, declinedRunID)
 		if err != nil {
 			return answer, readFailure(err)
 		}

@@ -454,11 +454,11 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				if policy == nil {
 					return c, false, Usagef("agent judge requires the review seat")
 				}
-				seat := policy.seatList("review")
+				seat := policy.SeatList("review")
 				if len(seat) == 0 {
 					return c, false, Usagef("agent judge requires the review seat")
 				}
-				req = policy.request(c.ItemID, c.LaneID, judgeRunID(c.RunID), seat[0])
+				req = policy.Request(c.ItemID, c.LaneID, judgeRunID(c.RunID), seat[0])
 				if req != nil {
 					req.Seat = "review"
 					req.Workflow = binding.Workflow

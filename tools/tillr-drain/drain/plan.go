@@ -1238,8 +1238,8 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				s := e.WorkerSession
 				if s.NodeIndex >= 0 && s.NodeIndex < len(s.Workflow.Stages) {
 					stage := s.Workflow.Stages[s.NodeIndex]
-					backend := policy.firstBackend(itemRow{ItemID: item.ItemID, Seat: stage.Seat})
-					if !p.shut[backend] && workerSessionReason(s, policy.request(item.ItemID, s.LaneID, attemptRunID(item.ItemID, p.nextAttempt(item.ItemID)), backend)) == "resumed-worker" {
+					backend := policy.FirstBackend(item.ItemID, stage.Seat)
+					if !p.shut[backend] && workerSessionReason(s, policy.Request(item.ItemID, s.LaneID, attemptRunID(item.ItemID, p.nextAttempt(item.ItemID)), backend)) == "resumed-worker" {
 						w, resumeNode, loadErr = s.Workflow, s.NodeIndex, nil
 						retainedGraph = true
 					}
@@ -1500,7 +1500,7 @@ func (p *planner) firstBackend(row itemRow) string {
 			return name
 		}
 	}
-	return p.policy.firstBackend(row)
+	return p.policy.FirstBackend(row.ItemID, row.Seat)
 }
 
 // plannedFork is one dispatched item and the fork whose patch branch it delivers, when it
@@ -1655,7 +1655,7 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 			if attempt.infrastructureFailure || repeated != nil || interrupted {
 				windowShut = shut[attempt.backend]
 			} else {
-				windowShut = !p.policy.seatMayStart(item.ItemID, item.Seat, attempt.backend, shut)
+				windowShut = !p.policy.SeatMayStart(item.ItemID, item.Seat, attempt.backend, shut)
 			}
 		}
 	}
@@ -2441,7 +2441,7 @@ func (p *planner) requestForItem(item itemRow, laneID, backendName string) *run.
 // request is the complete run.request a dispatch carries: design §5.6's field list,
 // built from the backend the item's attempt resolved to.
 func (p *planner) request(itemID, laneID, backendName string) *run.Request {
-	return p.policy.request(itemID, laneID, attemptRunID(itemID, p.nextAttempt(itemID)), backendName)
+	return p.policy.Request(itemID, laneID, attemptRunID(itemID, p.nextAttempt(itemID)), backendName)
 }
 
 func (p *planner) nextAttempt(id string) int {
@@ -2841,10 +2841,10 @@ func decodeFence(stored string) ([]string, error) {
 // unmappedSeatHold checks the item's explicit seat before it can take a lane.
 // It is computed from the active policy each pass, not stored as an item fault.
 func unmappedSeatHold(policy *Policy, it itemRow, attempt int) (Decision, bool) {
-	if policy == nil || it.Seat == "" || len(policy.seatList(it.Seat)) != 0 {
+	if policy == nil || it.Seat == "" || len(policy.SeatList(it.Seat)) != 0 {
 		return Decision{}, false
 	}
-	detail := fmt.Sprintf("seat %q is not mapped; %s", it.Seat, policy.seatDeclaration())
+	detail := fmt.Sprintf("seat %q is not mapped; %s", it.Seat, policy.SeatDeclaration())
 	d := Decision{ItemID: it.ItemID, Seat: it.Seat, Action: ActionHold, From: "held", Attempt: attempt,
 		Reason: ReasonSeatUnmapped + ": " + detail}
 	identifyDecision(&d)

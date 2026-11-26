@@ -68,7 +68,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	case c.Status != "raised" && !p.awaitingTransportFailure(row.ItemID, c):
 	case p.policy == nil:
 		d.Reason = ReasonNoPolicy
-	case len(p.policy.seatList("design")) == 0:
+	case len(p.policy.SeatList("design")) == 0:
 		d.Reason = ReasonNoPolicy
 	case c.BodyRef == "" && !p.requests[row.ItemID]:
 		d.Reason = ReasonConflictOwner
@@ -78,8 +78,8 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 		backend := failedBackend
 		open := !p.shut[backend]
 		if backend == "" {
-			backend = p.policy.seatList("design")[0]
-			open = p.policy.seatMayStart(row.ItemID, "design", backend, p.shut)
+			backend = p.policy.SeatList("design")[0]
+			open = p.policy.SeatMayStart(row.ItemID, "design", backend, p.shut)
 		}
 		if !policyHasBackend(p.policy, backend) {
 			d.Seat = "design"
@@ -426,7 +426,7 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 			answerRef = previous.DesignRunID
 		}
 		c.Text += repeatedObstacleMarker + " (run " + previous.RunID + ", answer " + answerRef + "):\n" + workerConflictReport(previous.Text) + "\n\nHeld for the " + actor + ": the next worker reported the same obstacle after the design answer."
-	} else if isRequest && obstacle.Problem == "" && obstacle.Kind == ObstacleDefinition && l.cfg.Policy != nil && len(l.cfg.Policy.seatList("design")) > 0 {
+	} else if isRequest && obstacle.Problem == "" && obstacle.Kind == ObstacleDefinition && l.cfg.Policy != nil && len(l.cfg.Policy.SeatList("design")) > 0 {
 		// A filed request has no item block, so a design-overturning definition obstacle
 		// goes to the design seat to answer in docs/ without adding one
 		// (requestObstacleDesignInstruction). When policy maps no design seat, fall through

@@ -155,7 +155,7 @@ func TestPolicyCheckRefusesANegativeTimeout(t *testing.T) {
 	if err := unbounded.Check(); err != nil {
 		t.Fatalf("a backend with no wall was refused: %v", err)
 	}
-	request := unbounded.request("item_042", "lane-1", "run-1", "first")
+	request := unbounded.Request("item_042", "lane-1", "run-1", "first")
 	if request.TimeoutMS != 0 {
 		t.Fatalf("an unbounded request carries timeout_ms %d, want 0", request.TimeoutMS)
 	}
@@ -170,7 +170,7 @@ func TestPolicyCheckRefusesANegativeTimeout(t *testing.T) {
 // reads, the backend name, and the adapter's argv with the model id staging supplied.
 func TestPolicyBuildsACompleteRequestFromTheBackend(t *testing.T) {
 	policy := twoBackends()
-	request := policy.request("item_042", "lane-1", "run-item_042-20261110T000000Z", "first")
+	request := policy.Request("item_042", "lane-1", "run-item_042-20261110T000000Z", "first")
 
 	if request.TimeoutMS != 1800*1000 {
 		t.Fatalf("the request's timeout_ms is %d, want 1800000 from timeout_seconds 1800", request.TimeoutMS)
@@ -206,7 +206,7 @@ func routeIn(t *testing.T, request *run.Request) string {
 // not supply.
 func TestPolicyOmitsTheEffortFlagWhenTheBackendNamesNone(t *testing.T) {
 	policy := twoBackends()
-	request := policy.request("item_042", "lane-1", "run-item_042-20261110T000000Z", "second")
+	request := policy.Request("item_042", "lane-1", "run-item_042-20261110T000000Z", "second")
 	for _, element := range request.Command {
 		if element == "--effort" {
 			t.Fatalf("the argv %v carries an effort the policy did not name", request.Command)
@@ -234,7 +234,7 @@ func TestLegacyPreferenceAndFailoverBudgetAreIgnored(t *testing.T) {
 	if err := policy.Check(); err != nil {
 		t.Fatal(err)
 	}
-	if policy.seatMayStart("item_042", "", "first", map[string]bool{"first": true}) {
+	if policy.SeatMayStart("item_042", "", "first", map[string]bool{"first": true}) {
 		t.Fatal("the retired preference routed unseated work off its closed default")
 	}
 	raw, err = json.Marshal(policy)
@@ -251,18 +251,18 @@ func TestSelectionFollowsOverrideThenSeatThenDefault(t *testing.T) {
 	policy := twoBackends()
 	policy.Seats = map[string]string{"design": "second", "build": "first"}
 
-	if got := policy.firstBackend(itemRow{ItemID: "item_042", Seat: "design"}); got != "second" {
+	if got := policy.FirstBackend("item_042", "design"); got != "second" {
 		t.Fatalf("the design seat's backend is %q, want second", got)
 	}
-	if got := policy.firstBackend(itemRow{ItemID: "item_042", Seat: "build"}); got != "first" {
+	if got := policy.FirstBackend("item_042", "build"); got != "first" {
 		t.Fatalf("the build seat's backend is %q, want first", got)
 	}
-	if got := policy.firstBackend(itemRow{ItemID: "item_042"}); got != "first" {
+	if got := policy.FirstBackend("item_042", ""); got != "first" {
 		t.Fatalf("an item asking for no seat routes to %q, want the default", got)
 	}
 
 	policy.Overrides = map[string]string{"item_042": "first"}
-	if got := policy.firstBackend(itemRow{ItemID: "item_042", Seat: "design"}); got != "first" {
+	if got := policy.FirstBackend("item_042", "design"); got != "first" {
 		t.Fatalf("the overridden item's seat routed it to %q, want the override's first", got)
 	}
 }
@@ -337,11 +337,11 @@ func TestASeatDecodesFromAStringOrAList(t *testing.T) {
 		if got := policy.Seats[seat]; got != want {
 			t.Fatalf("seat %q maps to %q, want its first backend %q", seat, got, want)
 		}
-		if got := policy.firstBackend(itemRow{ItemID: "item_042", Seat: seat}); got != want {
+		if got := policy.FirstBackend("item_042", seat); got != want {
 			t.Fatalf("an item on seat %q first dispatches to %q, want %q", seat, got, want)
 		}
 	}
-	if got := strings.Join(policy.seatList("design"), ","); got != "designer-a,designer-b" {
+	if got := strings.Join(policy.SeatList("design"), ","); got != "designer-a,designer-b" {
 		t.Fatalf("the design seat's list is %q", got)
 	}
 	if _, ok := policy.SeatLists["scout"]; ok {
@@ -416,20 +416,20 @@ func TestPolicyStartingSeats(t *testing.T) {
 				readOnly[seat] = true
 			}
 			for _, seat := range []string{"design", "build", "review", "scout", "classify", "plan", "edit", "test-write", "test-run", "docs", "verify"} {
-				if len(p.seatList(seat)) == 0 || strings.TrimSpace(p.SeatPurposes[seat]) == "" {
+				if len(p.SeatList(seat)) == 0 || strings.TrimSpace(p.SeatPurposes[seat]) == "" {
 					t.Errorf("missing mapping or purpose for %s", seat)
 				}
 			}
 			if !readOnly["scout"] || !readOnly["classify"] || !readOnly["test-run"] {
 				t.Error("scout, classify and test-run must be read-only")
 			}
-			if got, want := p.seatList("classify"), p.seatList("scout"); !slices.Equal(got, want) {
+			if got, want := p.SeatList("classify"), p.SeatList("scout"); !slices.Equal(got, want) {
 				t.Errorf("classify mapped to %v, want scout backends %v", got, want)
 			}
 			for seat, source := range map[string]string{"plan": "review", "verify": "review", "edit": "build", "test-write": "build", "docs": "build", "test-run": "scout"} {
 				_, seatIsList := p.SeatLists[seat]
 				_, sourceIsList := p.SeatLists[source]
-				if !slices.Equal(p.seatList(seat), p.seatList(source)) || seatIsList != sourceIsList {
+				if !slices.Equal(p.SeatList(seat), p.SeatList(source)) || seatIsList != sourceIsList {
 					t.Errorf("%s must copy %s including its list form", seat, source)
 				}
 			}

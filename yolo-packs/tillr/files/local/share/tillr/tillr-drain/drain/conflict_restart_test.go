@@ -177,7 +177,7 @@ func TestSecondIdenticalConflictDiscardsCandidateResetsLaneAndRestartsWorkflowFr
 			// We mark the -cfix run terminal and record its conflict on unmoved trunk1.
 			fixRunID := pBuild.decision.RunRequest.RunID + ConflictFixSuffix
 			fixDec := pBuild.decision
-			fixDec.RunRequest = l.cfg.Policy.request(itemID, pBuild.decision.LaneID, fixRunID, "fixture")
+			fixDec.RunRequest = l.cfg.Policy.Request(itemID, pBuild.decision.LaneID, fixRunID, "fixture")
 			fixCandHead := conflictTestCommit(t, wt, "base.txt", "candidate-fix\n", "candidate fix")
 			cFix := conflictTestFinishRun(t, f, l, fixDec, trunk1, fixCandHead)
 			if _, _, err := l.conflictFix(context.Background(), cFix, landed, &LoopResult{}, &PassTiming{}); err != nil {

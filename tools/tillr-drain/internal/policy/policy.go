@@ -1,5 +1,5 @@
 // Reference: docs/reference/tillr-muse-backend.md
-package drain
+package policy
 
 import (
 	"encoding/json"
@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -59,7 +60,7 @@ type Policy struct {
 	// SeatShares and SeatPicks are decoded from seat entries, not top-level keys.
 	SeatShares map[string][]float64 `json:"-"`
 	SeatPicks  map[string]string    `json:"-"`
-	seatDraw   func() float64
+	SeatDraw   func() float64       `json:"-"`
 	// Overrides routes one named item to another backend for its first dispatch. It is the
 	// specific statement next to Seats' general one, so it outranks the seat: an item that
 	// needs one particular harness for one dispatch says so by id without moving the role.
@@ -70,14 +71,14 @@ type Policy struct {
 	Backends map[string]Backend  `json:"backends"`
 }
 
-const invalidPolicySeatName = workflow.InvalidPolicySeatName
-const defaultSeatDeclaration = workflow.DefaultSeatDeclaration
+const InvalidPolicySeatName = workflow.InvalidPolicySeatName
+const DefaultSeatDeclaration = workflow.DefaultSeatDeclaration
 
-func (p Policy) seatDeclaration() string {
+func (p Policy) SeatDeclaration() string {
 	if p.Ref != "" {
 		return "seats are declared in " + p.Ref
 	}
-	return defaultSeatDeclaration
+	return DefaultSeatDeclaration
 }
 
 // UnmarshalJSON reads a policy document whose `seats` values may each be a backend name or
@@ -203,10 +204,10 @@ func (v *seatValue) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// seatList answers the ordered backends a seat names: the document's list when the seat
+// SeatList answers the ordered backends a seat names: the document's list when the seat
 // was written as one, else the single backend Seats maps it to, else nil for a seat the
 // policy does not map.
-func (p Policy) seatList(seat string) []string {
+func (p Policy) SeatList(seat string) []string {
 	if list, ok := p.SeatLists[seat]; ok {
 		return list
 	}
@@ -216,8 +217,8 @@ func (p Policy) seatList(seat string) []string {
 	return nil
 }
 
-// seatNames answers every seat the policy maps, in either field, in a stable order.
-func (p Policy) seatNames() []string {
+// SeatNames answers every seat the policy maps, in either field, in a stable order.
+func (p Policy) SeatNames() []string {
 	seen := map[string]bool{}
 	names := []string{}
 	for seat := range p.Seats {
@@ -247,78 +248,78 @@ func (p Policy) seatNames() []string {
 // than left to fall through a silent default).
 func (p Policy) Check() error {
 	for _, seat := range p.ReadOnlySeats {
-		if len(p.seatList(seat)) == 0 {
-			return Usagef("read_only_seats names seat %q, which the policy does not map", seat)
+		if len(p.SeatList(seat)) == 0 {
+			return drainmodel.Usagef("read_only_seats names seat %q, which the policy does not map", seat)
 		}
 	}
 	for seat := range p.SeatPurposes {
-		if len(p.seatList(seat)) == 0 {
-			return Usagef("seat_purposes names seat %q, which the policy does not map", seat)
+		if len(p.SeatList(seat)) == 0 {
+			return drainmodel.Usagef("seat_purposes names seat %q, which the policy does not map", seat)
 		}
 	}
 	if len(p.Backends) == 0 {
-		return Usagef("the policy names no backends: a dispatch's run.request needs an adapter program, a model and a timeout")
+		return drainmodel.Usagef("the policy names no backends: a dispatch's run.request needs an adapter program, a model and a timeout")
 	}
 	if p.DefaultBackend == "" {
-		return Usagef("the policy names no default_backend: the one backend a tick dispatches to when no override names another")
+		return drainmodel.Usagef("the policy names no default_backend: the one backend a tick dispatches to when no override names another")
 	}
 	if _, ok := p.Backends[p.DefaultBackend]; !ok {
-		return Usagef("the policy's default_backend %q is not one of its backends: want one of %v", p.DefaultBackend, backendNames(p.Backends))
+		return drainmodel.Usagef("the policy's default_backend %q is not one of its backends: want one of %v", p.DefaultBackend, BackendNames(p.Backends))
 	}
-	for _, name := range backendNames(p.Backends) {
+	for _, name := range BackendNames(p.Backends) {
 		if err := checkBackend(name, p.Backends[name]); err != nil {
 			return err
 		}
 	}
 	for itemID, name := range p.Overrides {
 		if _, ok := p.Backends[name]; !ok {
-			return Usagef("the policy overrides item %q to backend %q, which is not one of its backends: want one of %v",
-				itemID, name, backendNames(p.Backends))
+			return drainmodel.Usagef("the policy overrides item %q to backend %q, which is not one of its backends: want one of %v",
+				itemID, name, BackendNames(p.Backends))
 		}
 	}
-	for _, seat := range p.seatNames() {
+	for _, seat := range p.SeatNames() {
 		if !item.ValidSeatName(seat) {
-			return Usagef(invalidPolicySeatName, seat, p.seatDeclaration())
+			return drainmodel.Usagef(InvalidPolicySeatName, seat, p.SeatDeclaration())
 		}
-		list := p.seatList(seat)
+		list := p.SeatList(seat)
 		if len(list) > 1 && len(p.SeatShares[seat]) == 0 {
-			return Usagef("seat %q must name one backend or give every backend a share", seat)
+			return drainmodel.Usagef("seat %q must name one backend or give every backend a share", seat)
 		}
 		if pick := p.SeatPicks[seat]; pick != "" && pick != "in-order" && pick != "round-robin" && pick != "random" {
-			return Usagef("seat %q pick %q must be in-order, round-robin, or random", seat, pick)
+			return drainmodel.Usagef("seat %q pick %q must be in-order, round-robin, or random", seat, pick)
 		}
 		if shares, ok := p.SeatShares[seat]; ok {
 			if len(shares) != len(list) {
-				return Usagef("seat %q must give every backend a share", seat)
+				return drainmodel.Usagef("seat %q must give every backend a share", seat)
 			}
 			for _, share := range shares {
 				if share <= 0 || math.IsNaN(share) || math.IsInf(share, 0) {
-					return Usagef("seat %q share must be a positive number", seat)
+					return drainmodel.Usagef("seat %q share must be a positive number", seat)
 				}
 			}
 		}
 		if len(list) == 0 {
-			return Usagef("the policy maps seat %q to an empty list: a seat names at least the one backend it dispatches to", seat)
+			return drainmodel.Usagef("the policy maps seat %q to an empty list: a seat names at least the one backend it dispatches to", seat)
 		}
 		if head, ok := p.Seats[seat]; ok && head != list[0] {
 			// Only code can build this; the decoder keeps the two fields in step. A seat
 			// whose dispatch backend is not its list's head would be read two ways.
-			return Usagef("the policy maps seat %q to backend %q but its list starts with %q: a policy is refused rather than read two ways",
+			return drainmodel.Usagef("the policy maps seat %q to backend %q but its list starts with %q: a policy is refused rather than read two ways",
 				seat, head, list[0])
 		}
 		seen := map[string]bool{}
 		for _, name := range list {
 			if _, ok := p.Backends[name]; !ok {
-				return Usagef("the policy maps seat %q to backend %q, which is not one of its backends: want one of %v",
-					seat, name, backendNames(p.Backends))
+				return drainmodel.Usagef("the policy maps seat %q to backend %q, which is not one of its backends: want one of %v",
+					seat, name, BackendNames(p.Backends))
 			}
 			if seen[name] {
-				return Usagef("the policy maps seat %q to backend %q twice", seat, name)
+				return drainmodel.Usagef("the policy maps seat %q to backend %q twice", seat, name)
 			}
 			seen[name] = true
 		}
 	}
-	if len(p.seatList(item.SeatTriage)) > 0 {
+	if len(p.SeatList(item.SeatTriage)) > 0 {
 		triageReadOnly := false
 		for _, seat := range p.ReadOnlySeats {
 			if seat == item.SeatTriage {
@@ -327,11 +328,11 @@ func (p Policy) Check() error {
 			}
 		}
 		if !triageReadOnly {
-			return Usagef("policy declares seat %q, which must be listed in read_only_seats", item.SeatTriage)
+			return drainmodel.Usagef("policy declares seat %q, which must be listed in read_only_seats", item.SeatTriage)
 		}
 	}
-	if err := p.checkEscalate(); err != nil {
-		return Usagef("%v", err)
+	if err := p.CheckEscalate(); err != nil {
+		return drainmodel.Usagef("%v", err)
 	}
 	return nil
 }
@@ -341,7 +342,7 @@ func (p Policy) Check() error {
 // and the exit is drain's, because a policy it cannot honour is drain's usage refusal.
 func checkBackend(name string, b Backend) error {
 	if missing := b.Missing(); missing != "" {
-		return Usagef("the policy's backend %q %s", name, missing)
+		return drainmodel.Usagef("the policy's backend %q %s", name, missing)
 	}
 	return nil
 }
@@ -356,19 +357,19 @@ func (p Policy) CheckAdapters(root string) error {
 // executable, and reports whether any adapter resolved from tillr's installation.
 func (p Policy) CheckAdaptersWithOrigin(root string) (bool, error) {
 	usedInstall := false
-	for _, name := range backendNames(p.Backends) {
+	for _, name := range BackendNames(p.Backends) {
 		_, fromInstall, err := setupcheck.CheckAdapterWithOrigin(root, p.Backends[name].Adapter)
 		if fromInstall {
 			usedInstall = true
 		}
 		if err != nil {
-			return usedInstall, Usagef("the policy's backend %q: %v", name, err)
+			return usedInstall, drainmodel.Usagef("the policy's backend %q: %v", name, err)
 		}
 	}
 	return usedInstall, nil
 }
 
-// firstBackend answers the backend an item's first dispatch names: its per-item override
+// FirstBackend answers the backend an item's first dispatch names: its per-item override
 // when the policy carries one, else the backend its seat maps to, else the tick's default.
 //
 // The order is the specificity of the statement. An override is one item's own dispatch
@@ -377,19 +378,19 @@ func (p Policy) CheckAdaptersWithOrigin(root string) (bool, error) {
 //
 // The planner holds items whose explicit seat is not mapped, before it offers a
 // dispatch. The default is for work that did not ask for a seat.
-func (p Policy) firstBackend(row itemRow) string {
-	if name, ok := p.Overrides[row.ItemID]; ok {
+func (p Policy) FirstBackend(itemID, seat string) string {
+	if name, ok := p.Overrides[itemID]; ok {
 		return name
 	}
-	if row.Seat != "" {
-		if list := p.seatList(row.Seat); len(list) > 0 {
+	if seat != "" {
+		if list := p.SeatList(seat); len(list) > 0 {
 			return list[0]
 		}
 	}
 	return p.DefaultBackend
 }
 
-// request is the complete run.request one dispatch carries, built from the backend the
+// Request is the complete run.request one dispatch carries, built from the backend the
 // item's attempt resolved to.
 //
 // The derivation is run.Backend.Request, the same function the `request` face calls: the
@@ -400,7 +401,7 @@ func (p Policy) firstBackend(row itemRow) string {
 // what a request on it says.
 const relBackendsPrefix = "tools/tillr-run/backends/"
 
-// resolveAdapterPath resolves a repository-relative adapter path. When the
+// ResolveAdapterPath resolves a repository-relative adapter path. When the
 // adapter exists under root (the trunk checkout the loop runs from, such as
 // tillr's own repository), it resolves against root so workers running in a
 // lane worktree execute the trunk's adapter rather than their own lane's copy.
@@ -410,7 +411,7 @@ const relBackendsPrefix = "tools/tillr-run/backends/"
 // with no tools/tillr-run finds the installed adapter and its side files. Bare
 // command names (no path separator) are left for PATH lookup, and absolute
 // paths are returned unchanged.
-func resolveAdapterPath(root, adapter string) string {
+func ResolveAdapterPath(root, adapter string) string {
 	if root == "" || adapter == "" || filepath.IsAbs(adapter) || !strings.ContainsRune(adapter, filepath.Separator) {
 		return adapter
 	}
@@ -431,16 +432,16 @@ func resolveAdapterPath(root, adapter string) string {
 	return rootPath
 }
 
-func (p Policy) request(itemID, laneID, runID, backendName string) *run.Request {
+func (p Policy) Request(itemID, laneID, runID, backendName string) *run.Request {
 	backend := p.Backends[backendName]
-	backend.Adapter = resolveAdapterPath(p.Root, backend.Adapter)
+	backend.Adapter = ResolveAdapterPath(p.Root, backend.Adapter)
 	request := backend.Request(itemID, laneID, runID, backendName)
 	return &request
 }
 
-// backendNames answers a backend map's names in a stable order, so a refusal naming the
+// BackendNames answers a backend map's names in a stable order, so a refusal naming the
 // candidates reads the same twice.
-func backendNames(backends map[string]Backend) []string {
+func BackendNames(backends map[string]Backend) []string {
 	names := make([]string, 0, len(backends))
 	for name := range backends {
 		names = append(names, name)
@@ -451,4 +452,37 @@ func backendNames(backends map[string]Backend) []string {
 		}
 	}
 	return names
+}
+
+// LoadPolicy is shared by planning and read faces. No policy is an explicit input:
+// Plan reports no-policy, rather than pretending to know the loop's configuration.
+func LoadPolicy(ref string) (*Policy, error) {
+	if ref == "" {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(ref)
+	if err != nil {
+		return nil, drainmodel.Usagef("reading the policy %s: %v", ref, err)
+	}
+	return DecodePolicy(ref, raw)
+}
+
+func DecodePolicy(ref string, raw []byte) (*Policy, error) {
+	var p Policy
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, drainmodel.Usagef("reading the policy %s: %v", ref, err)
+	}
+	p.Ref = ref
+	if err := p.Check(); err != nil {
+		return nil, err
+	}
+	for name, backend := range p.Backends {
+		adapter, err := run.ResolvePolicyAdapter(backend.Adapter)
+		if err != nil {
+			return nil, drainmodel.Usagef("the policy's backend %q: %v", name, err)
+		}
+		backend.Adapter = adapter
+		p.Backends[name] = backend
+	}
+	return &p, nil
 }

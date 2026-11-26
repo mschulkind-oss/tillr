@@ -389,7 +389,7 @@ func (l *Loop) dispatchAlertTriage(ctx context.Context) {
 			continue
 		}
 
-		req := *policy.request(ep.AlertID, slot, runID, backendName)
+		req := *policy.Request(ep.AlertID, slot, runID, backendName)
 		req.Seat = item.SeatTriage
 		req.WorkingDir = "work"
 

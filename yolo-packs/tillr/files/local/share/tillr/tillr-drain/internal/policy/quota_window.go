@@ -1,4 +1,4 @@
-package drain
+package policy
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
+	"github.com/mschulkind-oss/tillr-drain/internal/runhistory"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -17,8 +19,8 @@ import (
 
 // Only the pinned report's header supplies window facts. In particular the footer
 // tail can exclude the header, and the model's body cannot invent a window.
-func refusedWindow(rec run.Record) (kind string, fraction float64, reset time.Time, ok bool) {
-	if rec.State != run.StateExited || rec.ExitCode == nil || *rec.ExitCode == 0 || *rec.ExitCode == adapterWallExit {
+func RefusedWindow(rec run.Record) (kind string, fraction float64, reset time.Time, ok bool) {
+	if rec.State != run.StateExited || rec.ExitCode == nil || *rec.ExitCode == 0 || *rec.ExitCode == AdapterWallExit {
 		return
 	}
 	var body []byte
@@ -54,15 +56,15 @@ func refusedWindow(rec run.Record) (kind string, fraction float64, reset time.Ti
 	return kind, fraction, time.Unix(seconds, 0).UTC(), true
 }
 
-func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
+func RecordBackendWindow(ctx context.Context, storePath string, now func() time.Time, rec run.Record, pausePeers func(*store.Tx, string, string) error) error {
 	if rec.Backend == "command" {
 		return nil
 	}
-	kind, fraction, reset, ok := refusedWindow(rec)
-	if !ok || !reset.After(l.cfg.Now()) {
+	kind, fraction, reset, ok := RefusedWindow(rec)
+	if !ok || !reset.After(now()) {
 		return nil
 	}
-	s, err := store.Open(ctx, l.cfg.Store, true)
+	s, err := store.Open(ctx, storePath, true)
 	if err != nil {
 		return err
 	}
@@ -74,7 +76,7 @@ func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
 		if err := tx.Reader().QueryRow(`SELECT EXISTS (
 			SELECT 1 FROM events WHERE object_type='backend' AND object_id=? AND kind=? AND seq > (
 				SELECT max(seq) FROM events WHERE object_type='run' AND object_id=? AND kind=?
-			))`, rec.Backend, backendQuotaReopenedKind, rec.RunID, run.FinishKind).Scan(&reopened); err != nil || reopened {
+			))`, rec.Backend, BackendQuotaReopenedKind, rec.RunID, run.FinishKind).Scan(&reopened); err != nil || reopened {
 			return err
 		}
 		_, err := tx.Exec(`INSERT INTO backend_windows (backend,kind,fraction,status,reset_at,run_id)
@@ -84,21 +86,24 @@ func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
 		if err != nil {
 			return err
 		}
-		return l.pauseQuotaPeers(tx, rec.Backend, rec.RunID)
+		if pausePeers != nil {
+			return pausePeers(tx, rec.Backend, rec.RunID)
+		}
+		return nil
 	})
 }
 
-const backendQuotaReopenedKind = "drain.backend-quota-reopened"
+const BackendQuotaReopenedKind = "drain.backend-quota-reopened"
 
 func init() {
-	if err := event.Register(backendQuotaReopenedKind, Utility); err != nil {
+	if err := event.Register(BackendQuotaReopenedKind, drainmodel.Utility); err != nil {
 		panic(err)
 	}
 }
 
 // The probe event and deletion share one write transaction. The window must
 // already exist when the success is recorded; a later refusal can close it anew.
-func reopenBackendWindow(tx *store.Tx, backend string, probeSeq int64, at time.Time) error {
+func ReopenBackendWindow(tx *store.Tx, backend string, probeSeq int64, at time.Time) error {
 	reopened := struct {
 		ProbeSeq int64   `json:"probe_seq"`
 		RunID    string  `json:"run_id"`
@@ -114,11 +119,11 @@ func reopenBackendWindow(tx *store.Tx, backend string, probeSeq int64, at time.T
 	if err != nil {
 		return err
 	}
-	return appendEffectOn(tx, backendQuotaReopenedKind, "backend", backend, reopened, at)
+	return runhistory.AppendEffectOn(tx, BackendQuotaReopenedKind, "backend", backend, reopened, at)
 }
 
-func readShutBackends(r *store.Reader, at time.Time) (map[string]bool, error) {
-	windows, err := readBackendWindows(r, at)
+func ReadShutBackends(r *store.Reader, at time.Time) (map[string]bool, error) {
+	windows, err := ReadBackendWindows(r, at)
 	shut := map[string]bool{}
 	for name := range windows {
 		shut[name] = true
@@ -126,7 +131,7 @@ func readShutBackends(r *store.Reader, at time.Time) (map[string]bool, error) {
 	return shut, err
 }
 
-func readBackendWindows(r *store.Reader, at time.Time) (map[string]time.Time, error) {
+func ReadBackendWindows(r *store.Reader, at time.Time) (map[string]time.Time, error) {
 	rows, err := r.Query(`SELECT backend, reset_at FROM backend_windows WHERE reset_at > ?`, at.UnixMilli())
 	// A read-only planner can inspect stores created before windows were added.
 	if err != nil && strings.Contains(err.Error(), "no such table: backend_windows") {
@@ -150,9 +155,9 @@ func readBackendWindows(r *store.Reader, at time.Time) (map[string]time.Time, er
 
 // A preview never changes the named backend. For a fresh shared seat it
 // permits a claim to make the actual choice unless every option is shut.
-func (p Policy) seatMayStart(itemID, seat, name string, shut map[string]bool) bool {
+func (p Policy) SeatMayStart(itemID, seat, name string, shut map[string]bool) bool {
 	if _, override := p.Overrides[itemID]; !override && len(p.SeatShares[seat]) > 0 {
-		for _, candidate := range p.seatList(seat) {
+		for _, candidate := range p.SeatList(seat) {
 			if !shut[candidate] {
 				return true
 			}

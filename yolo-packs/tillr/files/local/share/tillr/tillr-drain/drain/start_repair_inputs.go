@@ -342,14 +342,14 @@ func (s *startSnapshot) readRepairInputs(r *store.Reader, at time.Time, policy *
 
 	if policy != nil {
 		for name, outcome := range s.infrastructureClosed {
-			failure, err := readRecordedInfrastructureFailure(r, outcome.rec.ItemID, "$.run_id", outcome.rec.RunID)
+			failure, err := readRecordedInfrastructureFailure(r, outcome.Rec.ItemID, "$.run_id", outcome.Rec.RunID)
 			if err != nil {
 				return startRepairInputs{}, err
 			}
 			cause := failure.Detail
 			if cause == "" {
 				err := r.QueryRow(`SELECT COALESCE(json_extract(payload,'$.cause'),'') FROM events
- WHERE kind=? AND object_id=? AND json_extract(payload,'$.terminal_seq')=?`, backendOutcomeKind, name, outcome.seq).Scan(&cause)
+ WHERE kind=? AND object_id=? AND json_extract(payload,'$.terminal_seq')=?`, backendOutcomeKind, name, outcome.Seq).Scan(&cause)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return startRepairInputs{}, err
 				}

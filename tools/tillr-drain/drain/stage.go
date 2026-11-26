@@ -1635,7 +1635,7 @@ func seatLines(policy *Policy) string {
 	if policy == nil {
 		return "No seats are mapped by the policy in force."
 	}
-	names := policy.seatNames()
+	names := policy.SeatNames()
 	if len(names) == 0 {
 		return "No seats are mapped by the policy in force."
 	}

@@ -108,9 +108,9 @@ func TestSeatSharesPersistedDispatches(t *testing.T) {
 				if i%2 == 0 {
 					p = other
 				}
-				p.seatDraw = draws.Float64
+				p.SeatDraw = draws.Float64
 				err = s.WriteTx(ctx, func(tx *store.Tx) error {
-					d := Decision{DecisionID: fmt.Sprintf("d-%d", i), ItemID: fmt.Sprintf("item-%d", i), Seat: "build", Action: ActionDispatch, Reason: ReasonReady, SelectSeat: true, RunRequest: p.request(fmt.Sprintf("item-%d", i), "lane", fmt.Sprintf("run-%d", i), "builder-a")}
+					d := Decision{DecisionID: fmt.Sprintf("d-%d", i), ItemID: fmt.Sprintf("item-%d", i), Seat: "build", Action: ActionDispatch, Reason: ReasonReady, SelectSeat: true, RunRequest: p.Request(fmt.Sprintf("item-%d", i), "lane", fmt.Sprintf("run-%d", i), "builder-a")}
 					ok, err := selectSeatDispatch(tx, &d, &p, map[string]bool{}, time.Now())
 					if err != nil {
 						return err

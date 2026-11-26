@@ -79,7 +79,7 @@ func TestRestartDuringOlderJudgeTerminationDoesNotWaitForTheProcess(t *testing.T
 		t.Fatal(err)
 	}
 	c := Candidate{ItemID: worker.ItemID, LaneID: worker.LaneID, RunID: worker.RunID, Worktree: l.lanePath(worker.LaneID), BaseSHA: base, HeadSHA: s.workerHead}
-	req := l.cfg.Policy.request(worker.ItemID, worker.LaneID, worker.RunID+"-judge", "reviewer")
+	req := l.cfg.Policy.Request(worker.ItemID, worker.LaneID, worker.RunID+"-judge", "reviewer")
 	receipt := &JudgeReceipt{Build: "older-build", Request: *req, WorkerBrief: []byte("worker brief\n"), WorkerSession: []byte(session + "\n")}
 	if err := writeJudgeReceipt(filepath.Join(RunDir(f.root, worker.RunID), judgeReceiptFile), receipt); err != nil {
 		t.Fatal(err)
@@ -195,7 +195,7 @@ func TestStagedJudgeReceiptWithoutAHandoffCanStartOnTheSameBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := Candidate{ItemID: worker.ItemID, LaneID: worker.LaneID, RunID: worker.RunID, Worktree: l.lanePath(worker.LaneID), BaseSHA: base, HeadSHA: s.workerHead}
-	req := l.cfg.Policy.request(worker.ItemID, worker.LaneID, worker.RunID+"-judge", "reviewer")
+	req := l.cfg.Policy.Request(worker.ItemID, worker.LaneID, worker.RunID+"-judge", "reviewer")
 	build, _ := l.build.Hash()
 	receipt := &JudgeReceipt{Build: build, Request: *req, WorkerBrief: []byte("worker brief\n"), WorkerSession: []byte(session + "\n")}
 	receipt.Options.Head = candidate.HeadSHA

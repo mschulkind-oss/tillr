@@ -819,7 +819,7 @@ func TestPlannedWritePieceAlreadySatisfied(t *testing.T) {
 			})
 			id := fileFixtureRequestWith(t, f, "Implement tools/item-a/built.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
 
-			req := l.cfg.Policy.request(id, "lane-1", "probe", l.cfg.Policy.firstBackend(itemRow{ItemID: id, Seat: "build"}))
+			req := l.cfg.Policy.Request(id, "lane-1", "probe", l.cfg.Policy.FirstBackend(id, "build"))
 			l.endingCapabilities = map[string]string{req.Command[0]: tc.capability}
 			steps := &noSplitReportSteps{
 				workflowSteps: base, planReport: "RESULT: done\n", dirtyPiece: tc.dirty,
@@ -873,7 +873,7 @@ func TestPlannedBuildNoSplitWorkBriefContainsPlannerReport(t *testing.T) {
 		})
 		id := fileFixtureRequestWith(t, f, "Implement tools/item-a/built.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
 
-		req := l.cfg.Policy.request(id, "lane-1", "probe", l.cfg.Policy.firstBackend(itemRow{ItemID: id, Seat: "build"}))
+		req := l.cfg.Policy.Request(id, "lane-1", "probe", l.cfg.Policy.FirstBackend(id, "build"))
 		if req != nil && len(req.Command) > 0 {
 			l.endingCapabilities = map[string]string{req.Command[0]: run.EndingCallSuspends}
 		}

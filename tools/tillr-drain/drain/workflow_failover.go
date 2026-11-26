@@ -133,7 +133,7 @@ func (l *Loop) recordWorkflowRestart(ctx context.Context, d Decision, base strin
 
 func restartBackendRequest(policy *Policy, d Decision, runID, backend string) *run.Request {
 	if policyHasBackend(policy, backend) {
-		return policy.request(d.ItemID, d.LaneID, runID, backend)
+		return policy.Request(d.ItemID, d.LaneID, runID, backend)
 	}
 	retained := *d.RunRequest
 	retained.RunID = runID

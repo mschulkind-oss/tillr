@@ -1,4 +1,4 @@
-package drain
+package policy
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-func alarmPolicy(p *Policy, since time.Time) *alarms.Policy {
+func AlarmPolicy(p *Policy, since time.Time) *alarms.Policy {
 	if p == nil {
 		return nil
 	}
@@ -23,26 +23,28 @@ func alarmPolicy(p *Policy, since time.Time) *alarms.Policy {
 // Observing alarms never decides whether a pass runs or succeeds. Keep the last
 // observed set only to report transitions. A store that cannot append a roll
 // failure leaves its alarm beside the database instead.
-func (l *Loop) reportAlarms(ctx context.Context, at time.Time) {
+func ReportAlarms(ctx context.Context, storePath string, at time.Time, currentPolicy *Policy, policyAt time.Time, reported *[]string, checkPiBuild func(context.Context), reportf func(string, ...any)) {
 	if ctx.Err() != nil {
 		return
 	}
-	l.checkPiBuild(ctx)
-	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if checkPiBuild != nil {
+		checkPiBuild(ctx)
+	}
+	s, err := store.OpenRead(ctx, storePath)
 	var active []alarms.Alarm
 	if err == nil {
 		defer s.Close()
 		err = s.ReadTx(ctx, func(r *store.Reader) error {
 			var err error
-			active, err = alarms.Read(r, at, alarmPolicy(l.currentPolicy(), l.policyState.At))
+			active, err = alarms.Read(r, at, AlarmPolicy(currentPolicy, policyAt))
 			return err
 		})
 	}
 	if err != nil {
-		l.reportf("loop: could not read alarms: %v\n", err)
+		reportf("loop: could not read alarms: %v\n", err)
 	}
-	if fallback, fileErr := alarms.ReadStoreRollFallback(l.cfg.Store); fileErr != nil {
-		l.reportf("loop: could not read store roll alarm: %v\n", fileErr)
+	if fallback, fileErr := alarms.ReadStoreRollFallback(storePath); fileErr != nil {
+		reportf("loop: could not read store roll alarm: %v\n", fileErr)
 	} else if fallback != nil {
 		found := false
 		for _, a := range active {
@@ -53,14 +55,14 @@ func (l *Loop) reportAlarms(ctx context.Context, at time.Time) {
 		}
 	}
 	if err == nil || len(active) > 0 {
-		l.reportAlarmChanges(active)
+		ReportAlarmChanges(active, reported, reportf)
 	}
 }
 
-func (l *Loop) reportAlarmChanges(active []alarms.Alarm) {
+func ReportAlarmChanges(active []alarms.Alarm, reported *[]string, reportf func(string, ...any)) {
 	prior := map[string]bool{}
 	next := map[string]bool{}
-	for _, name := range l.reportedAlarms {
+	for _, name := range *reported {
 		prior[name] = true
 	}
 	names := make([]string, 0, len(active))
@@ -69,16 +71,16 @@ func (l *Loop) reportAlarmChanges(active []alarms.Alarm) {
 		names = append(names, key)
 		next[key] = true
 		if !prior[key] {
-			l.reportf("loop: alarm started: %s\n", a)
+			reportf("loop: alarm started: %s\n", a)
 		}
 	}
-	for _, name := range l.reportedAlarms {
+	for _, name := range *reported {
 		if !next[name] {
-			l.reportf("loop: alarm cleared: %s\n", name)
+			reportf("loop: alarm cleared: %s\n", name)
 		}
 	}
-	if len(names) > 0 || len(l.reportedAlarms) > 0 {
-		l.reportf("loop: pass alarms [%s]\n", strings.Join(names, ", "))
+	if len(names) > 0 || len(*reported) > 0 {
+		reportf("loop: pass alarms [%s]\n", strings.Join(names, ", "))
 	}
-	l.reportedAlarms = names
+	*reported = names
 }

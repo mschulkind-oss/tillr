@@ -99,7 +99,7 @@ func Once(ctx context.Context, s *store.Store, tick Pass, policy *Policy, questi
 				var wait *seatWait
 				if errors.As(err, &wait) {
 					decision.Action, decision.Reason, decision.To = ActionHold, ReasonBackendWindow, ""
-					decision.DeferredBy, decision.LaneID, decision.RunRequest = wait.backend, "", nil
+					decision.DeferredBy, decision.LaneID, decision.RunRequest = wait.Backend, "", nil
 					identifyDecision(&decision)
 					return err
 				}

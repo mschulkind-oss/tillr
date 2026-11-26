@@ -1,4 +1,4 @@
-package drain
+package policy
 
 import (
 	"crypto/sha256"
@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 )
 
 // PolicyState is the last policy accepted by a loop, not a fresh interpretation
@@ -22,7 +25,7 @@ type PolicyState struct {
 	At       time.Time `json:"at"`
 }
 
-type policyChange struct {
+type PolicyChange struct {
 	At          time.Time `json:"at"`
 	OldHash     string    `json:"old_hash"`
 	NewHash     string    `json:"new_hash"`
@@ -30,35 +33,37 @@ type policyChange struct {
 	Refusal     string    `json:"refusal,omitempty"`
 }
 
-func PolicyStateFile(root string) string { return filepath.Join(LoopDir(root), "backend-policy.json") }
+func PolicyStateFile(root string) string {
+	return filepath.Join(drainmodel.LoopDir(root), "backend-policy.json")
+}
 
 func ReadPolicyState(root string) (PolicyState, error) {
 	var state PolicyState
 	raw, err := os.ReadFile(PolicyStateFile(root))
 	if err != nil {
-		return state, Usagef("reading the policy in force: %v", err)
+		return state, drainmodel.Usagef("reading the policy in force: %v", err)
 	}
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return state, Usagef("reading the policy in force: %v", err)
+		return state, drainmodel.Usagef("reading the policy in force: %v", err)
 	}
-	if contentHash([]byte(state.Content)) != state.Hash {
-		return state, Usagef("the recorded policy content does not match its hash")
+	if ContentHash([]byte(state.Content)) != state.Hash {
+		return state, drainmodel.Usagef("the recorded policy content does not match its hash")
 	}
-	if _, err := decodePolicy(state.Ref, []byte(state.Content)); err != nil {
+	if _, err := DecodePolicy(state.Ref, []byte(state.Content)); err != nil {
 		return state, err
 	}
 	return state, nil
 }
 
-func contentHash(raw []byte) string { return fmt.Sprintf("%x", sha256.Sum256(raw)) }
+func ContentHash(raw []byte) string { return fmt.Sprintf("%x", sha256.Sum256(raw)) }
 
-func readPolicyContent(ref string) (*Policy, []byte, string, error) {
+func ReadPolicyContent(ref string) (*Policy, []byte, string, error) {
 	raw, err := os.ReadFile(ref)
 	if err != nil {
-		return nil, nil, "", Usagef("reading the policy %s: %v", ref, err)
+		return nil, nil, "", drainmodel.Usagef("reading the policy %s: %v", ref, err)
 	}
-	p, err := decodePolicy(ref, raw)
-	return p, raw, contentHash(raw), err
+	p, err := DecodePolicy(ref, raw)
+	return p, raw, ContentHash(raw), err
 }
 
 // EffectivePolicy uses the loop's accepted snapshot when it names this file.
@@ -90,81 +95,78 @@ func EffectivePolicy(root, ref string) (*Policy, error) {
 			return withRoot(LoadPolicy(ref))
 		}
 	}
-	return withRoot(decodePolicy(state.Ref, []byte(state.Content)))
+	return withRoot(DecodePolicy(state.Ref, []byte(state.Content)))
 }
 
-func (l *Loop) currentPolicy() *Policy {
-	l.policyMu.RLock()
-	defer l.policyMu.RUnlock()
-	return l.cfg.Policy
-}
-
-// refreshPolicy is called only by the pass goroutine. A request already handed
-// to a worker is immutable; replacing this pointer cannot rewrite that request.
-func (l *Loop) refreshPolicy() error {
-	if l.cfg.PolicyRef == "" {
+// RefreshPolicy reloads policyRef on the pass goroutine. A request already handed
+// to a worker is immutable; replacing the policy pointer cannot rewrite that request.
+func RefreshPolicy(root, policyRef string, now func() time.Time, mu *sync.RWMutex, active **Policy, state *PolicyState, recorded *bool, reportf func(string, ...any)) error {
+	if policyRef == "" {
 		return nil
 	}
-	p, raw, hash, err := readPolicyContent(l.cfg.PolicyRef)
+	p, raw, hash, err := ReadPolicyContent(policyRef)
 	refusal := ""
 	if err != nil {
 		refusal = err.Error()
 	}
-	old := l.policyState
-	if l.policyRecorded && old.DiskHash == hash && old.Refusal == refusal {
+	old := *state
+	if *recorded && old.DiskHash == hash && old.Refusal == refusal {
 		return nil
 	}
 	next := old
-	next.Ref = l.cfg.PolicyRef
-	next.DiskHash, next.Refusal, next.At = hash, refusal, l.cfg.Now().UTC()
+	next.Ref = policyRef
+	next.DiskHash, next.Refusal, next.At = hash, refusal, now().UTC()
 	if err == nil {
-		p.Root = l.cfg.Root
+		p.Root = root
 		next.Hash, next.Content = hash, string(raw)
 	}
-	change := policyChange{At: next.At, OldHash: old.DiskHash, NewHash: hash, InForceHash: next.Hash, Refusal: refusal}
-	if err := os.MkdirAll(LoopDir(l.cfg.Root), 0o755); err != nil {
-		return Externalf("recording policy: %v", err)
+	change := PolicyChange{At: next.At, OldHash: old.DiskHash, NewHash: hash, InForceHash: next.Hash, Refusal: refusal}
+	if err := os.MkdirAll(drainmodel.LoopDir(root), 0o755); err != nil {
+		return drainmodel.Externalf("recording policy: %v", err)
 	}
-	history, err := os.OpenFile(filepath.Join(LoopDir(l.cfg.Root), "backend-policy-changes.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	history, err := os.OpenFile(filepath.Join(drainmodel.LoopDir(root), "backend-policy-changes.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return Externalf("recording policy change: %v", err)
+		return drainmodel.Externalf("recording policy change: %v", err)
 	}
 	encodeErr := json.NewEncoder(history).Encode(change)
 	closeErr := history.Close()
 	if encodeErr != nil {
-		return Externalf("recording policy change: %v", encodeErr)
+		return drainmodel.Externalf("recording policy change: %v", encodeErr)
 	}
 	if closeErr != nil {
-		return Externalf("recording policy change: %v", closeErr)
+		return drainmodel.Externalf("recording policy change: %v", closeErr)
 	}
 	body, err := json.Marshal(next)
 	if err != nil {
-		return Internalf("encoding policy in force: %v", err)
+		return drainmodel.Internalf("encoding policy in force: %v", err)
 	}
-	path := PolicyStateFile(l.cfg.Root)
+	path := PolicyStateFile(root)
 	if err := os.WriteFile(path+".new", body, 0o644); err != nil {
-		return Externalf("recording policy in force: %v", err)
+		return drainmodel.Externalf("recording policy in force: %v", err)
 	}
 	if err := os.Rename(path+".new", path); err != nil {
-		return Externalf("recording policy in force: %v", err)
+		return drainmodel.Externalf("recording policy in force: %v", err)
 	}
-	l.policyState, l.policyRecorded = next, true
+	*state, *recorded = next, true
 	if refusal != "" {
-		l.reportf("loop: policy change %s -> %s refused: %s\n", old.DiskHash, hash, refusal)
+		reportf("loop: policy change %s -> %s refused: %s\n", old.DiskHash, hash, refusal)
 	} else {
-		l.policyMu.Lock()
-		l.cfg.Policy = p
-		l.policyMu.Unlock()
-		l.reportf("loop: policy change %s -> %s accepted\n", old.DiskHash, hash)
+		mu.Lock()
+		*active = p
+		mu.Unlock()
+		reportf("loop: policy change %s -> %s accepted\n", old.DiskHash, hash)
 	}
-	l.reportf("loop: policy in force %s: %s\n", next.Hash, l.currentPolicy().MappingLine())
+	mu.RLock()
+	cur := *active
+	mu.RUnlock()
+	reportf("loop: policy in force %s: %s\n", next.Hash, cur.MappingLine())
 	return nil
 }
 
 func (p Policy) MappingLine() string {
 	parts := []string{"default=" + p.DefaultBackend}
-	for _, seat := range p.seatNames() {
-		names := append([]string(nil), p.seatList(seat)...)
+	for _, seat := range p.SeatNames() {
+		names := append([]string(nil), p.SeatList(seat)...)
 		for i, share := range p.SeatShares[seat] {
 			if i < len(names) {
 				names[i] += fmt.Sprintf(":%g", share)
@@ -183,7 +185,7 @@ func (p Policy) MappingLine() string {
 func (p Policy) Description() string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "%s\n", p.MappingLine())
-	for _, name := range backendNames(p.Backends) {
+	for _, name := range BackendNames(p.Backends) {
 		b := p.Backends[name]
 		models := b.Models
 		if len(models) == 0 {

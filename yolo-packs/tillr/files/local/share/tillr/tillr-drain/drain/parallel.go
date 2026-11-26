@@ -27,9 +27,9 @@ func dispatchQuotaOpen(r *store.Reader, d Decision, shut map[string]bool, policy
 		if node.RunRequest == nil || node.RunRequest.Backend == "command" {
 			continue
 		}
-		if policy.usesSeatShares(node) {
+		if usesSeatShares(policy, node) {
 			// The proposed backend is only a preview; a previous draw is binding.
-			saved, err := waitingSeatBackend(r, node.RunRequest.RunID, node.Seat, policy.seatList(node.Seat))
+			saved, err := waitingSeatBackend(r, node.RunRequest.RunID, node.Seat, policy.SeatList(node.Seat))
 			if err != nil || shut[saved] {
 				return false, err
 			}
@@ -136,8 +136,8 @@ func (l *Loop) claimParallelWithWorks(tx *store.Tx, d *Decision, works, byRun ma
 		}
 		if ready && (!incoming || followed) {
 			if s.Kind == "agent" {
-				backend := l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: s.Seat})
-				if !l.cfg.Policy.seatMayStart(d.ItemID, s.Seat, backend, shut) {
+				backend := l.cfg.Policy.FirstBackend(d.ItemID, s.Seat)
+				if !l.cfg.Policy.SeatMayStart(d.ItemID, s.Seat, backend, shut) {
 					continue
 				}
 			}
@@ -173,8 +173,8 @@ func (l *Loop) claimParallelWithWorks(tx *store.Tx, d *Decision, works, byRun ma
 			if stage.Kind == "command" {
 				node.RunRequest = commandRequest(stage, d.ItemID, d.LaneID, id)
 			} else {
-				name := l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: stage.Seat})
-				node.RunRequest = l.cfg.Policy.request(d.ItemID, d.LaneID, id, name)
+				name := l.cfg.Policy.FirstBackend(d.ItemID, stage.Seat)
+				node.RunRequest = l.cfg.Policy.Request(d.ItemID, d.LaneID, id, name)
 			}
 		} else {
 			req := *node.RunRequest

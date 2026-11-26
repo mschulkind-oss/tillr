@@ -8,10 +8,6 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// AttemptRepeating is a run whose session pi ended for a repeating call. It is not
-// infrastructure (it never closes a backend) and not an answer.
-const AttemptRepeating AttemptClass = "repeating-call"
-
 // newRepeatedCall is the record of one repeating-call ending and its route.
 func newRepeatedCall(d Decision, rec run.Record) RepeatedCall {
 	rc := RepeatedCall{RunID: rec.RunID, ItemID: d.ItemID, Backend: rec.Backend}
@@ -97,7 +93,7 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 	if policy == nil {
 		return Usagef("workflow seat %s has no backend route", d.Seat)
 	}
-	request := policy.request(d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, "fresh"), rc.NextBackend)
+	request := policy.Request(d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, "fresh"), rc.NextBackend)
 	request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 	request.WorkingDir = d.RunRequest.WorkingDir
 	if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {

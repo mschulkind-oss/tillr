@@ -1,4 +1,4 @@
-package drain
+package policy
 
 import "encoding/json"
 
@@ -6,8 +6,8 @@ import "encoding/json"
 func (p Policy) MarshalJSON() ([]byte, error) {
 	type plain Policy
 	seats := map[string]any{}
-	for _, seat := range p.seatNames() {
-		list := p.seatList(seat)
+	for _, seat := range p.SeatNames() {
+		list := p.SeatList(seat)
 		var value any = p.Seats[seat]
 		if _, ok := p.SeatLists[seat]; ok {
 			value = list

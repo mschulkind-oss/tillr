@@ -220,7 +220,7 @@ func TestWorkflowRestartDropsSessionTurnWhenRouteChanges(t *testing.T) {
 			"pi": {Adapter: "fixture", Model: "amazon-bedrock/old-model"},
 		},
 	}
-	prev := policy.request("item-a", "lane-1", "run-1-restart", "pi")
+	prev := policy.Request("item-a", "lane-1", "run-1-restart", "pi")
 	prev.SessionTurn = true
 	prev.ResumePrompt = "continue"
 

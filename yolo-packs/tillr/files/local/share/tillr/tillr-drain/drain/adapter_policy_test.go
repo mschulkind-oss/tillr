@@ -76,7 +76,7 @@ func TestPlanningPolicyAdapterUsesInstalledExecutable(t *testing.T) {
 		if strings.Contains(adapter, "/") && !filepath.IsAbs(adapter) {
 			want = filepath.Join(dir, adapter)
 		}
-		if got := explicit.request("item-a", "lane-1", "run-a", "fixture").Command[0]; got != want {
+		if got := explicit.Request("item-a", "lane-1", "run-a", "fixture").Command[0]; got != want {
 			t.Errorf("explicit %s: got %s, want %s", adapter, got, want)
 		}
 	}
@@ -145,7 +145,7 @@ func TestRelativeAdapterResolvesAgainstInstallRoot(t *testing.T) {
 				"pi": {Adapter: rel, Model: "fixture"},
 			},
 		}
-		got := p.request("item-a", "lane-1", "run-a", "pi").Command[0]
+		got := p.Request("item-a", "lane-1", "run-a", "pi").Command[0]
 		if got != installed {
 			t.Fatalf("consumer %s: got %q, want %q", rel, got, installed)
 		}
@@ -168,7 +168,7 @@ func TestRelativeAdapterResolvesAgainstInstallRoot(t *testing.T) {
 			"pi": {Adapter: "tools/tillr-run/backends/pi/run-pi", Model: "fixture"},
 		},
 	}
-	if got := trunkPolicy.request("item-a", "lane-1", "run-a", "pi").Command[0]; got != trunkAdapter {
+	if got := trunkPolicy.Request("item-a", "lane-1", "run-a", "pi").Command[0]; got != trunkAdapter {
 		t.Fatalf("trunk: got %q, want %q", got, trunkAdapter)
 	}
 }

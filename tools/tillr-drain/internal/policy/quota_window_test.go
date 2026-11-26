@@ -1,4 +1,4 @@
-package drain
+package policy
 
 import (
 	"os"
@@ -31,7 +31,7 @@ func TestRefusedWindowRequiresPinnedHeaderAndRefusal(t *testing.T) {
 				t.Fatal(err)
 			}
 			rec := run.Record{State: tc.state, ExitCode: &tc.exit, ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: path}}}
-			kind, fraction, reset, ok := refusedWindow(rec)
+			kind, fraction, reset, ok := RefusedWindow(rec)
 			if ok != tc.want {
 				t.Fatalf("got %v want %v", ok, tc.want)
 			}
@@ -43,8 +43,8 @@ func TestRefusedWindowRequiresPinnedHeaderAndRefusal(t *testing.T) {
 }
 
 func TestRefusedWindowAcceptsClaudeRateLimitedFixture(t *testing.T) {
-	extractor := filepath.Join("..", "..", "tillr-run", "backends", "claude", "extract-report")
-	fixture := filepath.Join("..", "..", "tillr-run", "backends", "claude", "testdata", "rate-limited.jsonl")
+	extractor := filepath.Join("..", "..", "..", "tillr-run", "backends", "claude", "extract-report")
+	fixture := filepath.Join("..", "..", "..", "tillr-run", "backends", "claude", "testdata", "rate-limited.jsonl")
 	reportPath := filepath.Join(t.TempDir(), "report.md")
 	cmd := exec.Command(extractor, "--backend", "claude", "--model", "test-model", "--effort", "medium", "--exit-code", "1", "--out", reportPath, fixture)
 	if out, err := cmd.CombinedOutput(); err == nil {
@@ -52,8 +52,8 @@ func TestRefusedWindowAcceptsClaudeRateLimitedFixture(t *testing.T) {
 	}
 	exit := 1
 	rec := run.Record{State: run.StateExited, ExitCode: &exit, ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: reportPath}}}
-	kind, fraction, reset, ok := refusedWindow(rec)
+	kind, fraction, reset, ok := RefusedWindow(rec)
 	if !ok || kind != "five_hour" || fraction != 1.02 || !reset.Equal(time.Unix(1795128600, 0).UTC()) {
-		t.Fatalf("refusedWindow = (%q, %v, %v, %v), want (five_hour, 1.02, %v, true)", kind, fraction, reset, ok, time.Unix(1795128600, 0).UTC())
+		t.Fatalf("RefusedWindow = (%q, %v, %v, %v), want (five_hour, 1.02, %v, true)", kind, fraction, reset, ok, time.Unix(1795128600, 0).UTC())
 	}
 }

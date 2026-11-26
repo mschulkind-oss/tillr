@@ -1,10 +1,13 @@
-package drain
+package policy
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
+	"github.com/mschulkind-oss/tillr-drain/internal/storelog"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -25,22 +28,22 @@ import (
 const SeatEscalatedKind = "drain.seat-escalated"
 
 func init() {
-	if err := event.Register(SeatEscalatedKind, Utility); err != nil {
+	if err := event.Register(SeatEscalatedKind, drainmodel.Utility); err != nil {
 		panic(err)
 	}
 }
 
-type seatEscalation struct {
+type SeatEscalation struct {
 	ItemID string `json:"item_id"`
 	RunID  string `json:"run_id"`
 	From   string `json:"from"`
 	To     string `json:"to"`
 }
 
-// escalationNext answers the backend after `from` on the seat's escalation list that the
+// EscalationNext answers the backend after `from` on the seat's escalation list that the
 // item has not yet named a seat obstacle on, or "" when the list is spent or the seat has
 // none. A backend the list does not hold starts the climb at the list's head.
-func (p Policy) escalationNext(seat, from string, tried map[string]bool) string {
+func (p Policy) EscalationNext(seat, from string, tried map[string]bool) string {
 	if seat == "" {
 		seat = "build"
 	}
@@ -59,9 +62,9 @@ func (p Policy) escalationNext(seat, from string, tried map[string]bool) string 
 	return ""
 }
 
-// checkEscalate refuses an escalation list that names a backend the policy does not hold or
+// CheckEscalate refuses an escalation list that names a backend the policy does not hold or
 // a seat the policy does not map.
-func (p Policy) checkEscalate() error {
+func (p Policy) CheckEscalate() error {
 	for seat, list := range p.Escalate {
 		if _, ok := p.Seats[seat]; !ok {
 			return fmt.Errorf("escalate names seat %q, which the policy's seats do not map", seat)
@@ -78,20 +81,20 @@ func (p Policy) checkEscalate() error {
 	return nil
 }
 
-// readEscalations answers every item's escalations, oldest first.
-func readEscalations(r *store.Reader) (map[string][]seatEscalation, error) {
+// ReadEscalations answers every item's escalations, oldest first.
+func ReadEscalations(r *store.Reader) (map[string][]SeatEscalation, error) {
 	rows, err := r.Query(`SELECT payload FROM events WHERE kind=? ORDER BY seq`, SeatEscalatedKind)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string][]seatEscalation{}
+	out := map[string][]SeatEscalation{}
 	for rows.Next() {
 		var raw []byte
 		if err := rows.Scan(&raw); err != nil {
 			return nil, err
 		}
-		var e seatEscalation
+		var e SeatEscalation
 		if json.Unmarshal(raw, &e) == nil && e.ItemID != "" {
 			out[e.ItemID] = append(out[e.ItemID], e)
 		}
@@ -99,27 +102,27 @@ func readEscalations(r *store.Reader) (map[string][]seatEscalation, error) {
 	return out, rows.Err()
 }
 
-// escalatedBackend answers the backend an item's latest escalation moved it to, or "".
-func escalatedBackend(escalations []seatEscalation) string {
+// EscalatedBackend answers the backend an item's latest escalation moved it to, or "".
+func EscalatedBackend(escalations []SeatEscalation) string {
 	if len(escalations) == 0 {
 		return ""
 	}
 	return escalations[len(escalations)-1].To
 }
 
-// escalateSeat records a seat obstacle's move for an item from the run's backend to the
+// EscalateSeat records a seat obstacle's move for an item from the run's backend to the
 // next one, and answers it; "" means the list is spent and the design seat is asked.
-func (l *Loop) escalateSeat(ctx context.Context, itemID, runID, seat, from string) (string, error) {
-	if l.cfg.Policy == nil {
+func EscalateSeat(ctx context.Context, storePath string, p *Policy, now func() time.Time, itemID, runID, seat, from string) (string, error) {
+	if p == nil {
 		return "", nil
 	}
-	r, err := store.OpenRead(ctx, l.cfg.Store)
+	r, err := store.OpenRead(ctx, storePath)
 	if err != nil {
 		return "", err
 	}
-	var prior []seatEscalation
+	var prior []SeatEscalation
 	err = r.ReadTx(ctx, func(tx *store.Reader) error {
-		all, err := readEscalations(tx)
+		all, err := ReadEscalations(tx)
 		prior = all[itemID]
 		return err
 	})
@@ -131,9 +134,9 @@ func (l *Loop) escalateSeat(ctx context.Context, itemID, runID, seat, from strin
 	for _, e := range prior {
 		tried[e.From] = true
 	}
-	next := l.cfg.Policy.escalationNext(seat, from, tried)
+	next := p.EscalationNext(seat, from, tried)
 	if next == "" {
 		return "", nil
 	}
-	return next, appendJudgment(ctx, l.cfg.Store, SeatEscalatedKind, "run", runID, seatEscalation{ItemID: itemID, RunID: runID, From: from, To: next}, l.cfg.Now().UTC())
+	return next, storelog.AppendJudgment(ctx, storePath, SeatEscalatedKind, "run", runID, SeatEscalation{ItemID: itemID, RunID: runID, From: from, To: next}, now().UTC())
 }

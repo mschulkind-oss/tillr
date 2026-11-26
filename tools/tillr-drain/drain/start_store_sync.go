@@ -118,7 +118,7 @@ func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, 
 			}
 			delta.lanes, delta.quota, delta.unsavedOutcomeInputs, delta.unlogged = true, true, true, true
 		}
-		if inspectExternal && next.backendOutcomes != nil && next.backendOutcomes.unsaved > 0 {
+		if inspectExternal && next.backendOutcomes != nil && next.backendOutcomes.Unsaved > 0 {
 			delta.unsavedOutcomeInputs = true
 		}
 		touched := map[string]bool{}
@@ -324,7 +324,7 @@ func (d *startStoreDelta) apply(r *store.Reader, s *startSnapshot, at time.Time,
 		s.faultsByItemReason, s.faults = private, faults.Resolve(private)
 	}
 	outcomesChanged := false
-	if d.backendEvents || (s.backendOutcomes != nil && s.backendOutcomes.unsaved > 0 && (d.unsavedOutcomeInputs || d.quota)) {
+	if d.backendEvents || (s.backendOutcomes != nil && s.backendOutcomes.Unsaved > 0 && (d.unsavedOutcomeInputs || d.quota)) {
 		var err error
 		outcomesChanged, err = s.advanceBackendOutcomes(r, d.backendEvents)
 		if err != nil {

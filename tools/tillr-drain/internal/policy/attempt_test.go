@@ -1,4 +1,4 @@
-package drain
+package policy
 
 import (
 	"testing"

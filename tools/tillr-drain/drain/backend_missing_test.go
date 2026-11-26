@@ -58,7 +58,7 @@ func TestPolicyChangeRemovingBackendHoldsInProgressWorkflowItemAndContinuesLoop(
 				{ID: "verify", Seat: "verify", Access: "read_only"},
 			},
 		}
-		req := l.cfg.Policy.request("item-a", "lane-1", "run-item-a-a1-n2-restart", "pi-judge")
+		req := l.cfg.Policy.Request("item-a", "lane-1", "run-item-a-a1-n2-restart", "pi-judge")
 		req.NodeID = "verify"
 		d := Decision{
 			ItemID:          "item-a",

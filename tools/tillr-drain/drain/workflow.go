@@ -52,7 +52,7 @@ func seatPolicyFor(policy *Policy) *workflow.SeatPolicy {
 	return &workflow.SeatPolicy{
 		Seats:           policy.Seats,
 		ReadOnlySeats:   policy.ReadOnlySeats,
-		SeatDeclaration: policy.seatDeclaration(),
+		SeatDeclaration: policy.SeatDeclaration(),
 	}
 }
 
@@ -376,7 +376,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	if stage.Kind == "command" {
 		next.RunRequest = commandRequest(stage, d.ItemID, d.LaneID, runID)
 	} else {
-		next.RunRequest = l.cfg.Policy.request(d.ItemID, d.LaneID, runID, l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: stage.Seat}))
+		next.RunRequest = l.cfg.Policy.Request(d.ItemID, d.LaneID, runID, l.cfg.Policy.FirstBackend(d.ItemID, stage.Seat))
 		next.RunRequest.TimeoutMS = stage.TimeoutMS
 	}
 	if next.RunRequest == nil {

@@ -253,7 +253,7 @@ func TestWorkflowEvaluatorJudgeRoute(t *testing.T) {
 
 func TestWorkflowEvaluatorRefusesWriterRun(t *testing.T) {
 	f, l, s, c := prepareJudgeCandidate(t, "pass")
-	req := l.cfg.Policy.request(c.ItemID, c.LaneID, c.RunID, "reviewer")
+	req := l.cfg.Policy.Request(c.ItemID, c.LaneID, c.RunID, "reviewer")
 	c.Workflow = "scout-then-build@v1"
 	req.NodeID, req.Workflow = "evaluate", c.Workflow
 	c.Evaluator = req

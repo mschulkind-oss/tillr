@@ -150,17 +150,17 @@ func TestASeatObstacleClimbsTheEscalationList(t *testing.T) {
 			for _, name := range c.tried {
 				tried[name] = true
 			}
-			if got := p.escalationNext("", c.from, tried); got != c.want {
+			if got := p.EscalationNext("", c.from, tried); got != c.want {
 				t.Fatalf("next %q, want %q", got, c.want)
 			}
 		})
 	}
 	bad := Policy{Seats: map[string]string{"build": "pi"}, Backends: map[string]Backend{"pi": {}}, Escalate: map[string][]string{"build": {"nope"}}}
-	if bad.checkEscalate() == nil {
+	if bad.CheckEscalate() == nil {
 		t.Fatal("an escalation list naming an unknown backend was accepted")
 	}
 	unknownSeat := Policy{Seats: map[string]string{"build": "pi"}, Backends: map[string]Backend{"pi": {}}, Escalate: map[string][]string{"desk": {"pi"}}}
-	if unknownSeat.checkEscalate() == nil {
+	if unknownSeat.CheckEscalate() == nil {
 		t.Fatal("an escalation list for an unmapped seat was accepted")
 	}
 }

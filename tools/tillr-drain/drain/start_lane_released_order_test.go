@@ -14,7 +14,7 @@ func TestFastStartRespectsHigherPlacedLaneReleasedCandidate(t *testing.T) {
 	f, l := passFixture(t, "item-a", "item-b")
 	l.cfg.Lanes = []string{"lane-1"}
 	at := l.cfg.Now().UTC()
-	req := l.cfg.Policy.request("item-a", "lane-4", "run-item-a-a2-n1", "fixture")
+	req := l.cfg.Policy.Request("item-a", "lane-4", "run-item-a-a2-n1", "fixture")
 	startDecision := Decision{
 		ItemID:     "item-a",
 		LaneID:     "lane-4",
@@ -136,7 +136,7 @@ func TestFastStartOrdinaryLaneReleasedCandidateDoesNotBlockExpressLane(t *testin
 	f, l := passFixture(t, "item-a", "item-b")
 	l.cfg.Lanes = []string{"lane-1", "express-1"}
 	at := l.cfg.Now().UTC()
-	req := l.cfg.Policy.request("item-a", "lane-4", "run-item-a-a1-n1", "fixture")
+	req := l.cfg.Policy.Request("item-a", "lane-4", "run-item-a-a1-n1", "fixture")
 	startDecision := Decision{
 		ItemID:     "item-a",
 		LaneID:     "lane-4",
@@ -206,7 +206,7 @@ func TestWaitingCandidateGatesBeforeLaterReservedWorkerStart(t *testing.T) {
 	writeForkFile(t, filepath.Join(laneDir, SessionIDFile), sessionID+"\n")
 	writeForkFile(t, filepath.Join(laneDir, BaseSHAFile), base+"\n")
 
-	reqA := l.cfg.Policy.request("item-a", "lane-4", "run-item-a-a2-n1", "fixture")
+	reqA := l.cfg.Policy.Request("item-a", "lane-4", "run-item-a-a2-n1", "fixture")
 	startA := Decision{
 		ItemID:     "item-a",
 		LaneID:     "lane-4",
@@ -229,7 +229,7 @@ func TestWaitingCandidateGatesBeforeLaterReservedWorkerStart(t *testing.T) {
 		Seat:    "build",
 	}
 
-	reqB := l.cfg.Policy.request("item-b", "lane-1", "run-item-b-a1-n1", "fixture")
+	reqB := l.cfg.Policy.Request("item-b", "lane-1", "run-item-b-a1-n1", "fixture")
 	wsB := &WorkerSession{
 		SessionID: sessionID,
 		LaneID:    "lane-1",

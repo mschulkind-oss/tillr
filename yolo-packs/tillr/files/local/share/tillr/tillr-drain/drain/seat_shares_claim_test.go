@@ -94,10 +94,10 @@ func TestSeatSharesClosedDrawSurvivesRollbackAndReopen(t *testing.T) {
 			if err := p.Check(); err != nil {
 				t.Fatal(err)
 			}
-			p.seatDraw = func() float64 { return 0 }
+			p.SeatDraw = func() float64 { return 0 }
 			choose := func(id string, shut map[string]bool, rollback bool) string {
 				t.Helper()
-				d := Decision{DecisionID: id, ItemID: id, Seat: "build", LaneID: "lane", Action: ActionDispatch, SelectSeat: true, RunRequest: p.request(id, "lane", id, "builder-a")}
+				d := Decision{DecisionID: id, ItemID: id, Seat: "build", LaneID: "lane", Action: ActionDispatch, SelectSeat: true, RunRequest: p.Request(id, "lane", id, "builder-a")}
 				var result string
 				err := s.WriteTx(ctx, func(tx *store.Tx) error {
 					return keepSeatWait(tx, func() error {
@@ -136,7 +136,7 @@ func TestSeatSharesClosedDrawSurvivesRollbackAndReopen(t *testing.T) {
 				t.Fatal(err)
 			}
 			s = reopened
-			p.seatDraw = func() float64 { return .99 }
+			p.SeatDraw = func() float64 { return .99 }
 			if got := choose("waiting", shut, false); got != "" {
 				t.Fatalf("waiting item redrew onto %s", got)
 			}
