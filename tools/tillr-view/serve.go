@@ -31,6 +31,7 @@ import (
 	"github.com/mschulkind-oss/tillr/notify"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/watch"
 )
 
 // The server's answer envelope: every response carries the cursor the moment it was read
@@ -430,6 +431,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/perf/items", s.get(s.performanceItemsPayload))
 	mux.HandleFunc("GET /api/v1/checks/{id}", s.get(s.checkExecutionsPayload))
 	mux.HandleFunc("GET /api/v1/items/{id}", s.get(s.itemPayload))
+	mux.HandleFunc("GET /api/v1/alerts", s.get(s.alertsPayload))
+	mux.HandleFunc("GET /api/v1/alerts/{id}", s.get(s.alertPayload))
 	// The item's design document as metadata: its frontmatter, the count of open questions
 	// a parse found, its path, and the section the item names. It carries no prose — the
 	// board does not render the document, and Vantage owns that rendering (design §8.3).
@@ -1570,6 +1573,7 @@ type itemData struct {
 	OwnerDecisions []ownerDecisionView `json:"owner_decisions"`
 	StateMoves     []stateMoveView     `json:"state_moves"`
 	VerifyRefusals []verifyRefusalView `json:"verify_refusals"`
+	LinkedAlerts   []watch.LinkedAlert `json:"linked_alerts"`
 	WorkSummary    string              `json:"work_summary"`
 }
 
@@ -1751,6 +1755,14 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	if err != nil {
 		return nil, unreadable(err)
 	}
+	linkedAlerts, err := watch.LinkedAlertsForItem(r, id)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	if linkedAlerts == nil {
+		linkedAlerts = []watch.LinkedAlert{}
+	}
+	out.LinkedAlerts = linkedAlerts
 	var active *storeRun
 	itemRuns, err := readItemRuns(r, id)
 	if err != nil && !isMissingTable(err) {

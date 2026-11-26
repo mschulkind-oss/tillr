@@ -31,6 +31,7 @@ var allErrorCodes = []string{
 	codeSchemaUninitialized,
 	codeTableAbsent,
 	codeItemNotFound,
+	codeAlertNotFound,
 	codeRunNotFound,
 	codeLandingNotFound,
 	codeCheckNotFound,

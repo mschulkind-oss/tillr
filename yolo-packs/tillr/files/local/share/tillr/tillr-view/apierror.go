@@ -38,6 +38,7 @@ const (
 	codeSchemaUninitialized  = "schema-uninitialized"
 	codeTableAbsent          = "table-absent"
 	codeItemNotFound         = "item-not-found"
+	codeAlertNotFound        = "alert-not-found"
 	codeRunNotFound          = "run-not-found"
 	codeLandingNotFound      = "landing-not-found"
 	codeCheckNotFound        = "check-not-found"
@@ -94,6 +95,7 @@ var apiCodes = []apiCode{
 	{codeSchemaUninitialized, http.StatusServiceUnavailable},
 	{codeTableAbsent, http.StatusServiceUnavailable},
 	{codeItemNotFound, http.StatusNotFound},
+	{codeAlertNotFound, http.StatusNotFound},
 	{codeRunNotFound, http.StatusNotFound},
 	{codeLandingNotFound, http.StatusNotFound},
 	{codeCheckNotFound, http.StatusNotFound},
@@ -136,6 +138,11 @@ func failure(code, format string, args ...any) *apiFailure {
 func itemNotFound(itemID string) *apiFailure {
 	return failure(codeItemNotFound,
 		"the store carries no item %q: read /api/v1/snapshot for the items it does carry", itemID)
+}
+
+func alertNotFound(alertID string) *apiFailure {
+	return failure(codeAlertNotFound,
+		"the store carries no alert %q: read /api/v1/alerts for the alerts it does carry", alertID)
 }
 
 func runNotFound(runID string) *apiFailure {

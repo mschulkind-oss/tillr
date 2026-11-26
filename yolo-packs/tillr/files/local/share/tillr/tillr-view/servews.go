@@ -70,6 +70,8 @@ const (
 	resourceItemPrefix   = "items:"
 	resourceRunPrefix    = "runs:"
 	resourceRunLogPrefix = "runlog:"
+	resourceAlerts       = "alerts"
+	resourceAlertPrefix  = "alerts:"
 )
 
 // invalidationFrame is the one message this socket sends. It carries the cursor the
@@ -682,12 +684,40 @@ func eventResources(events []event.Event) []string {
 		if e.Kind == "land.landing" || e.Kind == "drain.refusal" {
 			out = append(out, "landings")
 		}
+		isWatchAlert := strings.HasPrefix(e.Kind, "watch.alert.") || strings.HasPrefix(e.Kind, "watch.silence.")
+		if isWatchAlert {
+			out = append(out, resourceAlerts)
+			if len(e.Payload) > 0 {
+				var body struct {
+					AlertID        string `json:"alert_id"`
+					SourceAlertID  string `json:"source_alert_id"`
+					ItemID         string `json:"item_id"`
+					TrackingItemID string `json:"tracking_item_id"`
+				}
+				if json.Unmarshal(e.Payload, &body) == nil {
+					if body.AlertID != "" {
+						out = append(out, resourceAlertPrefix+body.AlertID)
+					}
+					if body.SourceAlertID != "" {
+						out = append(out, resourceAlertPrefix+body.SourceAlertID)
+					}
+					if body.ItemID != "" {
+						out = append(out, resourceItemPrefix+body.ItemID)
+					}
+					if body.TrackingItemID != "" {
+						out = append(out, resourceItemPrefix+body.TrackingItemID)
+					}
+				}
+			}
+		}
 		if e.ObjectID == nil || *e.ObjectID == "" {
 			continue
 		}
 		switch e.ObjectType {
 		case "item":
 			out = append(out, resourceItemPrefix+*e.ObjectID)
+		case "alert":
+			out = append(out, resourceAlerts, resourceAlertPrefix+*e.ObjectID)
 		case "run":
 			out = append(out, resourceRunPrefix+*e.ObjectID)
 			// A worker claim also changes the Item page's derived progress marks.
