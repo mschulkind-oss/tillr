@@ -540,6 +540,26 @@ func TestWSAlertInvalidation(t *testing.T) {
 			want: []string{"alerts", "alerts:alert-1", "items:item-99"},
 		},
 		{
+			name: "alert triaged invalidates alert and item",
+			event: event.Event{
+				Kind:       "watch.alert.triaged",
+				ObjectType: "alert",
+				ObjectID:   &idAlert1,
+				Payload:    []byte(`{"alert_id":"alert-1","item_id":"item-55","outcome":"filed","run_id":"run-t1"}`),
+			},
+			want: []string{"alerts", "alerts:alert-1", "items:item-55"},
+		},
+		{
+			name: "alert escalated invalidates alert and item",
+			event: event.Event{
+				Kind:       "watch.alert.escalated",
+				ObjectType: "alert",
+				ObjectID:   &idAlert1,
+				Payload:    []byte(`{"alert_id":"alert-1","item_id":"item-55","escalate_to":"operator-session"}`),
+			},
+			want: []string{"alerts", "alerts:alert-1", "items:item-55"},
+		},
+		{
 			name: "silence lifted invalidates alerts, source alert, and tracking item",
 			event: event.Event{
 				Kind:       "watch.silence.lifted",
@@ -580,5 +600,227 @@ func TestWSAlertInvalidation(t *testing.T) {
 	wantChanged := []string{"alerts", "alerts:alert-ws-1", "items:item-ws-1", "snapshot"}
 	if !reflect.DeepEqual(frame.Changed, wantChanged) {
 		t.Fatalf("frame.Changed = %v, want %v", frame.Changed, wantChanged)
+	}
+}
+
+func TestAlertsTriageOutcomesContract(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	ctx := context.Background()
+
+	st, err := store.Open(ctx, dbPath, true)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	schema, err := os.ReadFile(filepath.Join("testdata", "serve-fixture.sql"))
+	if err != nil {
+		t.Fatalf("read serve-fixture.sql: %v", err)
+	}
+	if err := st.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(string(schema))
+		return err
+	}); err != nil {
+		t.Fatalf("apply fixture schema: %v", err)
+	}
+	t0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	now := t0.Add(20 * time.Minute)
+
+	err = st.WriteTx(ctx, func(tx *store.Tx) error {
+		for _, it := range []struct{ id, title, state string }{
+			{"item-triage-filed", "Fix go-build stall", "in-queue"},
+			{"item-triage-esc", "Fix lane leftover", "in-queue"},
+			{"item-silence-1", "Deflake test", "in-queue"},
+		} {
+			if _, err := tx.Exec(`INSERT INTO items (item_id, title, body_ref, state, design_doc, updated_at, allowed_paths)
+				VALUES (?, ?, '', ?, '', ?, '[]')`, it.id, it.title, it.state, t0.UnixMilli()); err != nil {
+				return err
+			}
+		}
+
+		// 1. Triage-settled episode (newest opened_at, settled inside tillr).
+		if _, err := tx.Exec(`INSERT INTO alert_episodes (
+			alert_id, rule_id, subject_key, episode_num, state, settlement_state, severity, condition_fingerprint,
+			opened_seq, opened_at, last_observed_seq, last_observed_at, observation_count,
+			variables_json, outcome, item_link_kind, tracking_item_id, settled_by, settled_at,
+			triage_state, triage_outcome, triage_outcome_kind, triage_run_id, triage_finding, triaged_at, bundle_json
+		) VALUES (
+			'alert-settled-triage', 'fast-gate-run-slow', 'go-build', 1, 'open', 'settled', 'warning', 'fp-set',
+			30, ?, 31, ?, 2,
+			'{"slowest_check":"go-build"}', 'fix-fault', 'filed', 'item-triage-filed', 'tillr-triage', ?,
+			'settled', 'filed', 'fix-fault', 'run-triage-settled', 'go-build exceeded 30s on seq 30', ?, '{}'
+		)`, t0.Add(5*time.Minute).UnixMilli(), t0.Add(6*time.Minute).UnixMilli(), t0.Add(7*time.Minute).UnixMilli(), t0.Add(7*time.Minute).UnixMilli()); err != nil {
+			return err
+		}
+
+		// 2. Escalated episode (linked to item, escalated to operator-session).
+		if _, err := tx.Exec(`INSERT INTO alert_episodes (
+			alert_id, rule_id, subject_key, episode_num, state, settlement_state, severity, condition_fingerprint,
+			opened_seq, opened_at, last_observed_seq, last_observed_at, observation_count,
+			variables_json, outcome, item_link_kind, tracking_item_id, escalated_to,
+			triage_state, triage_outcome, triage_outcome_kind, triage_run_id, triage_finding, triaged_at, bundle_json
+		) VALUES (
+			'alert-escalated', 'drain-lane-refused', 'lane-1', 1, 'open', 'settled', 'high', 'fp-esc',
+			10, ?, 12, ?, 1,
+			'{"lane_id":"lane-1"}', 'fix-fault', 'linked', 'item-triage-esc', 'operator-session',
+			'escalated', 'escalated', 'fix-fault', 'run-triage-esc', 'leftover files need manual cleanup', ?, '{}'
+		)`, t0.Add(1*time.Minute).UnixMilli(), t0.Add(2*time.Minute).UnixMilli(), t0.Add(3*time.Minute).UnixMilli()); err != nil {
+			return err
+		}
+
+		// 3. Unsettled episode currently being triaged.
+		if _, err := tx.Exec(`INSERT INTO alert_episodes (
+			alert_id, rule_id, subject_key, episode_num, state, settlement_state, severity, condition_fingerprint,
+			opened_seq, opened_at, last_observed_seq, last_observed_at, observation_count,
+			variables_json, triage_state, active_triage_run_id, bundle_json
+		) VALUES (
+			'alert-triaging', 'drain-store-busy', 'state.db', 1, 'open', 'uninvestigated', 'warning', 'fp-tri',
+			20, ?, 20, ?, 1,
+			'{}', 'triaging', 'run-triage-live', '{}'
+		)`, t0.Add(4*time.Minute).UnixMilli(), t0.Add(4*time.Minute).UnixMilli()); err != nil {
+			return err
+		}
+
+		// Links for settled and escalated episodes.
+		if _, err := tx.Exec(`INSERT INTO alert_item_links (alert_id, item_id, relation, linked_at, linked_by, note, event_seq)
+			VALUES
+			('alert-settled-triage', 'item-triage-filed', 'fix-fault', ?, 'tillr-triage', '', 32),
+			('alert-escalated', 'item-triage-esc', 'fix-fault', ?, 'tillr-triage', '', 13)`,
+			t0.Add(7*time.Minute).UnixMilli(), t0.Add(3*time.Minute).UnixMilli()); err != nil {
+			return err
+		}
+
+		// Active silence.
+		if _, err := tx.Exec(`INSERT INTO watch_silences (
+			silence_id, rule_id, vars_json, tracking_item_id, created_by, created_at,
+			reason, investigation_cause, investigation_evidence, source_alert_id, silence_until_ms
+		) VALUES (
+			'sil-active-1', 'package-frequent-red', '{"package":"tools/flaky"}', 'item-silence-1', 'operator-session', ?,
+			'known flake while fix queues', 'race in test', 'run-99', 'alert-settled-triage', ?
+		)`, t0.UnixMilli(), now.Add(2*time.Hour).UnixMilli()); err != nil {
+			return err
+		}
+
+		// Triage transition events on alert-escalated.
+		escID := "alert-escalated"
+		for _, ev := range []struct {
+			kind    string
+			at      time.Time
+			payload string
+		}{
+			{"watch.alert.triage-started", t0.Add(2 * time.Minute), `{"alert_id":"alert-escalated","run_id":"run-triage-esc"}`},
+			{"watch.alert.triaged", t0.Add(3 * time.Minute), `{"alert_id":"alert-escalated","run_id":"run-triage-esc","outcome":"escalated","outcome_kind":"fix-fault","item_id":"item-triage-esc"}`},
+			{"watch.alert.escalated", t0.Add(3*time.Minute + time.Second), `{"alert_id":"alert-escalated","run_id":"run-triage-esc","outcome":"escalated","escalate_to":"operator-session","item_id":"item-triage-esc"}`},
+		} {
+			if _, err := tx.Append(event.Event{Kind: ev.kind, At: ev.at, ObjectType: "alert", ObjectID: &escID, Payload: []byte(ev.payload)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	st.Close()
+
+	_, ts := startAlertsServer(t, dbPath, now)
+
+	// 1. CLI --json vs HTTP /api/v1/alerts parity.
+	code, cliOut, cliErr := runAlertsCLI(t, "--store", dbPath, "--now", now.Format(time.RFC3339), "--json")
+	if code != record.ExitOK {
+		t.Fatalf("CLI --json exited %d: %s", code, cliErr)
+	}
+	var cliData alertsData
+	if err := json.Unmarshal([]byte(cliOut), &cliData); err != nil {
+		t.Fatalf("unmarshal CLI alerts: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/api/v1/alerts")
+	if err != nil {
+		t.Fatalf("GET /api/v1/alerts: %v", err)
+	}
+	defer resp.Body.Close()
+	var env struct {
+		Data alertsData `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode HTTP alerts: %v", err)
+	}
+	if !reflect.DeepEqual(cliData, env.Data) {
+		t.Fatalf("CLI and HTTP alertsData differ:\nCLI:  %+v\nHTTP: %+v", cliData, env.Data)
+	}
+
+	// 2. Unsettled and escalated lead ahead of triage-settled.
+	if len(cliData.Episodes) != 3 {
+		t.Fatalf("len(Episodes) = %d, want 3", len(cliData.Episodes))
+	}
+	if cliData.Episodes[0].AlertID != "alert-triaging" || cliData.Episodes[1].AlertID != "alert-escalated" || cliData.Episodes[2].AlertID != "alert-settled-triage" {
+		t.Fatalf("episode order = [%s, %s, %s]", cliData.Episodes[0].AlertID, cliData.Episodes[1].AlertID, cliData.Episodes[2].AlertID)
+	}
+	if cliData.Counts.Unsettled != 1 || cliData.Counts.Escalated != 1 || cliData.Counts.Triage.Settled != 1 || cliData.Counts.Triage.Triaging != 1 || cliData.Counts.Triage.Escalated != 1 || cliData.Counts.ActiveSilences != 1 {
+		t.Fatalf("counts = %+v", cliData.Counts)
+	}
+	if cliData.Episodes[2].Triage == nil || cliData.Episodes[2].Triage.RunID != "run-triage-settled" || cliData.Episodes[2].Triage.Outcome != "filed" || cliData.Episodes[2].Triage.ItemID != "item-triage-filed" {
+		t.Fatalf("settled triage view = %+v", cliData.Episodes[2].Triage)
+	}
+
+	// 3. Triage filter parity (--triage settled vs ?triage=settled).
+	code, cliFiltered, cliErr := runAlertsCLI(t, "--store", dbPath, "--now", now.Format(time.RFC3339), "--triage", "settled", "--json")
+	if code != record.ExitOK {
+		t.Fatalf("CLI --triage settled exited %d: %s", code, cliErr)
+	}
+	var cliFilteredData alertsData
+	if err := json.Unmarshal([]byte(cliFiltered), &cliFilteredData); err != nil {
+		t.Fatalf("unmarshal filtered CLI alerts: %v", err)
+	}
+	if len(cliFilteredData.Episodes) != 1 || cliFilteredData.Episodes[0].AlertID != "alert-settled-triage" {
+		t.Fatalf("filtered episodes = %+v", cliFilteredData.Episodes)
+	}
+
+	// 4. Alert detail exposes triage metadata and transitions.
+	detailResp, err := http.Get(ts.URL + "/api/v1/alerts/alert-escalated")
+	if err != nil {
+		t.Fatalf("GET /api/v1/alerts/alert-escalated: %v", err)
+	}
+	defer detailResp.Body.Close()
+	var detailEnv struct {
+		Data alertDetailData `json:"data"`
+	}
+	if err := json.NewDecoder(detailResp.Body).Decode(&detailEnv); err != nil {
+		t.Fatalf("decode alert detail: %v", err)
+	}
+	if detailEnv.Data.Episode.Triage == nil || detailEnv.Data.Episode.Triage.RunID != "run-triage-esc" || detailEnv.Data.Episode.Triage.State != "escalated" {
+		t.Fatalf("detail triage = %+v", detailEnv.Data.Episode.Triage)
+	}
+	if len(detailEnv.Data.Transitions) != 3 || detailEnv.Data.Transitions[0].StateChange != "triage-started" || detailEnv.Data.Transitions[1].StateChange != "triaged" || detailEnv.Data.Transitions[2].StateChange != "escalated" {
+		t.Fatalf("detail transitions = %+v", detailEnv.Data.Transitions)
+	}
+
+	// 5. CLI text output includes triage counts and triage run id.
+	code, textOut, cliErr := runAlertsCLI(t, "--store", dbPath, "--now", now.Format(time.RFC3339))
+	if code != record.ExitOK {
+		t.Fatalf("CLI text exited %d: %s", code, cliErr)
+	}
+	for _, want := range []string{"escalated=1", "triage_settled=1", "run-triage-settled", "sil-active-1"} {
+		if !strings.Contains(textOut, want) {
+			t.Fatalf("CLI text missing %q:\n%s", want, textOut)
+		}
+	}
+
+	// 6. Item route exposes linked_alerts for triage-filed item.
+	itemResp, err := http.Get(ts.URL + "/api/v1/items/item-triage-filed")
+	if err != nil {
+		t.Fatalf("GET /api/v1/items/item-triage-filed: %v", err)
+	}
+	defer itemResp.Body.Close()
+	var itemEnv struct {
+		Data struct {
+			LinkedAlerts []watch.LinkedAlert `json:"linked_alerts"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(itemResp.Body).Decode(&itemEnv); err != nil {
+		t.Fatalf("decode item: %v", err)
+	}
+	if len(itemEnv.Data.LinkedAlerts) != 1 || itemEnv.Data.LinkedAlerts[0].AlertID != "alert-settled-triage" {
+		t.Fatalf("item linked_alerts = %+v", itemEnv.Data.LinkedAlerts)
 	}
 }

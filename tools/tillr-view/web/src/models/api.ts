@@ -239,6 +239,7 @@ export interface AlertFilterParams {
   rule?: string;
   severity?: string;
   settlement?: string;
+  triage?: string;
 }
 
 export function fetchAlerts(filter: AlertFilterParams = {}, signal?: AbortSignal): Promise<ApiEnvelope<AlertsData>> {
@@ -247,6 +248,7 @@ export function fetchAlerts(filter: AlertFilterParams = {}, signal?: AbortSignal
   if (filter.rule) params.set("rule", filter.rule);
   if (filter.severity) params.set("severity", filter.severity);
   if (filter.settlement) params.set("settlement", filter.settlement);
+  if (filter.triage) params.set("triage", filter.triage);
   const query = params.toString();
   return read<AlertsData>(query ? `/api/v1/alerts?${query}` : "/api/v1/alerts", signal);
 }

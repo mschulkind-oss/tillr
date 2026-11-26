@@ -282,6 +282,19 @@ export function ItemDetailPane({
               ) : (
                 <span className="state-badge">no run</span>
               )}
+              {item.linked_alerts && item.linked_alerts.length > 0 ? (
+                <span className="detail__alert-badges" aria-label="Linked alert badges">
+                  {item.linked_alerts.map((la) => (
+                    <a
+                      key={`${la.alert_id}:${la.relation}:${la.event_seq}`}
+                      href={`/alert/${encodeURIComponent(la.alert_id)}`}
+                      className={`state-badge state-badge--alert-${la.state}`}
+                    >
+                      alert {la.alert_id} · {la.rule_id} ({la.relation})
+                    </a>
+                  ))}
+                </span>
+              ) : null}
             </div>
           </header>
 

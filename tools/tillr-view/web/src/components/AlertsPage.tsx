@@ -46,8 +46,21 @@ export function alertsFilterUrl(filter: AlertFilterParams): string {
   if (filter.rule) params.set("rule", filter.rule);
   if (filter.severity) params.set("severity", filter.severity);
   if (filter.settlement) params.set("settlement", filter.settlement);
+  if (filter.triage) params.set("triage", filter.triage);
   const q = params.toString();
   return q ? `/alerts?${q}` : "/alerts";
+}
+
+export function isUnsettledOrEscalated(ep: AlertEpisodeView): boolean {
+  return (
+    ep.settlement_state !== "settled" ||
+    ep.triage?.state === "escalated" ||
+    Boolean(ep.escalated_to)
+  );
+}
+
+export function isTriageSettled(ep: AlertEpisodeView): boolean {
+  return !isUnsettledOrEscalated(ep) && ep.triage?.state === "settled";
 }
 
 export function isAlertsPromoted(data?: AlertsData): boolean {
@@ -57,7 +70,8 @@ export function isAlertsPromoted(data?: AlertsData): boolean {
       ep.state !== "resolved" &&
       (ep.severity === "high" ||
         ep.settlement_state !== "settled" ||
-        ep.escalated_to === "owner"),
+        ep.triage?.state === "escalated" ||
+        Boolean(ep.escalated_to)),
   );
 }
 
@@ -87,6 +101,31 @@ function LinkedItemsCell({ links }: { links: AlertItemLinkView[] }) {
   );
 }
 
+function TriageCell({ ep }: { ep: AlertEpisodeView }) {
+  const triage = ep.triage;
+  const runId = triage?.run_id || triage?.active_run_id;
+  if (!triage && !ep.escalated_to) {
+    return <span className="muted">—</span>;
+  }
+  const label = triage
+    ? [triage.state, triage.outcome, triage.outcome_kind].filter(Boolean).join(" · ")
+    : "escalated";
+  return (
+    <div className="alerts-triage-cell">
+      <div>
+        {label}
+        {ep.escalated_to ? ` → ${ep.escalated_to}` : ""}
+      </div>
+      {runId ? (
+        <div className="muted">
+          run <EntityLink kind="run" id={runId} />
+        </div>
+      ) : null}
+      {triage?.finding ? <div className="muted">{triage.finding}</div> : null}
+    </div>
+  );
+}
+
 function AlertRow({
   ep,
   currentFilter = {},
@@ -96,7 +135,12 @@ function AlertRow({
 }) {
   const unsettledAge = formatAlertDuration(ep.unsettled_for_ms);
   return (
-    <tr data-alert-id={ep.alert_id} data-state={ep.state} data-settlement={ep.settlement_state}>
+    <tr
+      data-alert-id={ep.alert_id}
+      data-state={ep.state}
+      data-settlement={ep.settlement_state}
+      data-triage={ep.triage?.state ?? ""}
+    >
       <td>
         <EntityLink kind="alert" id={ep.alert_id} state={alertGlyphState(ep.state)} />
       </td>
@@ -114,6 +158,9 @@ function AlertRow({
           {ep.settlement_state}
           {unsettledAge ? ` · unsettled ${unsettledAge}` : ""}
         </div>
+      </td>
+      <td>
+        <TriageCell ep={ep} />
       </td>
       <td>
         <div>
@@ -145,6 +192,39 @@ function AlertRow({
   );
 }
 
+function AlertsTable({
+  episodes,
+  currentFilter = {},
+}: {
+  episodes: AlertEpisodeView[];
+  currentFilter?: AlertFilterParams;
+}) {
+  return (
+    <div className="alerts-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Alert</th>
+            <th>Rule</th>
+            <th>Subject / vars</th>
+            <th>Severity</th>
+            <th>State / settlement</th>
+            <th>Triage</th>
+            <th>Fired</th>
+            <th>Latest transition</th>
+            <th>Linked items</th>
+          </tr>
+        </thead>
+        <tbody>
+          {episodes.map((ep) => (
+            <AlertRow key={ep.alert_id} ep={ep} currentFilter={currentFilter} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function HomeAlertsPanel({
   data,
   error,
@@ -154,9 +234,17 @@ export function HomeAlertsPanel({
   error?: Error | null;
   promoted: boolean;
 }) {
-  const activeOrUnsettled =
-    data?.episodes.filter((ep) => ep.state !== "resolved" || ep.settlement_state !== "settled") ?? [];
-  const preview = activeOrUnsettled.slice(0, 5);
+  const leading =
+    data?.episodes.filter((ep) => isUnsettledOrEscalated(ep) || ep.state !== "resolved") ?? [];
+  const preview = leading.slice(0, 5);
+  const escalatedCount =
+    data?.counts.escalated ??
+    data?.episodes.filter((ep) => ep.triage?.state === "escalated" || Boolean(ep.escalated_to)).length ??
+    0;
+  const triageSettledCount =
+    data?.counts.triage?.settled ??
+    data?.episodes.filter((ep) => isTriageSettled(ep)).length ??
+    0;
   return (
     <section
       className={promoted ? "home-alerts home-alerts--promoted" : "home-alerts"}
@@ -166,7 +254,7 @@ export function HomeAlertsPanel({
       <h2>
         Watch alerts{" "}
         {data && !data.absent
-          ? `· ${data.counts.active} active · ${data.counts.unsettled} unsettled`
+          ? `· ${data.counts.active} active · ${data.counts.unsettled} unsettled${escalatedCount > 0 ? ` · ${escalatedCount} escalated` : ""}`
           : ""}{" "}
         <a href="/alerts">all → Alerts</a>
       </h2>
@@ -180,33 +268,13 @@ export function HomeAlertsPanel({
         <>
           <p className="alerts-counts">
             open {data.counts.open} · acked {data.counts.acknowledged} · silenced{" "}
-            {data.counts.silenced} · resolved {data.counts.resolved} · active silences{" "}
-            {data.counts.active_silences}
+            {data.counts.silenced} · resolved {data.counts.resolved} · escalated {escalatedCount} ·
+            settled inside tillr {triageSettledCount} · active silences {data.counts.active_silences}
           </p>
           {preview.length === 0 ? (
             <p>No active or unsettled watch alerts.</p>
           ) : (
-            <div className="alerts-table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Alert</th>
-                    <th>Rule</th>
-                    <th>Subject / vars</th>
-                    <th>Severity</th>
-                    <th>State / settlement</th>
-                    <th>Fired</th>
-                    <th>Latest transition</th>
-                    <th>Linked items</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.map((ep) => (
-                    <AlertRow key={ep.alert_id} ep={ep} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <AlertsTable episodes={preview} />
           )}
         </>
       )}
@@ -229,6 +297,7 @@ export function AlertsLedger({
     rule: params.get("rule") ?? "",
     severity: params.get("severity") ?? "",
     settlement: params.get("settlement") ?? "",
+    triage: params.get("triage") ?? "",
   };
   const alerts = useAlertsQuery(filter, live, paused, true);
   const data = alerts.data?.data;
@@ -236,6 +305,16 @@ export function AlertsLedger({
   const setFilter = (patch: Partial<AlertFilterParams>) => {
     navigate(alertsFilterUrl({ ...filter, ...patch }));
   };
+
+  const unsettledAndEscalated = data?.episodes.filter(isUnsettledOrEscalated) ?? [];
+  const settledInsideTillr = data?.episodes.filter(isTriageSettled) ?? [];
+  const otherSettled =
+    data?.episodes.filter((ep) => !isUnsettledOrEscalated(ep) && !isTriageSettled(ep)) ?? [];
+  const escalatedCount =
+    data?.counts.escalated ??
+    data?.episodes.filter((ep) => ep.triage?.state === "escalated" || Boolean(ep.escalated_to)).length ??
+    0;
+  const triageSettledCount = data?.counts.triage?.settled ?? settledInsideTillr.length;
 
   return (
     <main className="entity-page" aria-label="Alerts ledger">
@@ -296,7 +375,21 @@ export function AlertsLedger({
             <option value="settled">settled</option>
           </select>
         </label>
-        {(filter.state || filter.rule || filter.severity || filter.settlement) ? (
+        <label>
+          Triage{" "}
+          <select
+            aria-label="Triage filter"
+            value={filter.triage ?? ""}
+            onChange={(e) => setFilter({ triage: e.target.value })}
+          >
+            <option value="">All triage states</option>
+            <option value="untriaged">untriaged</option>
+            <option value="triaging">triaging</option>
+            <option value="settled">settled</option>
+            <option value="escalated">escalated</option>
+          </select>
+        </label>
+        {(filter.state || filter.rule || filter.severity || filter.settlement || filter.triage) ? (
           <a href="/alerts">Clear filters</a>
         ) : null}
       </form>
@@ -318,7 +411,8 @@ export function AlertsLedger({
             acknowledged {data.counts.acknowledged}, silenced {data.counts.silenced}) · resolved{" "}
             {data.counts.resolved} · {data.counts.unsettled} unsettled (uninvestigated{" "}
             {data.counts.uninvestigated}, investigating {data.counts.investigating}, investigated{" "}
-            {data.counts.investigated}) · settled {data.counts.settled} · active silences{" "}
+            {data.counts.investigated}) · escalated {escalatedCount} · settled {data.counts.settled}{" "}
+            (settled inside tillr {triageSettledCount}) · active silences{" "}
             {data.counts.active_silences}
           </p>
 
@@ -327,27 +421,32 @@ export function AlertsLedger({
             {data.episodes.length === 0 ? (
               <p>No alert episodes match the current filter.</p>
             ) : (
-              <div className="alerts-table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Alert</th>
-                      <th>Rule</th>
-                      <th>Subject / vars</th>
-                      <th>Severity</th>
-                      <th>State / settlement</th>
-                      <th>Fired</th>
-                      <th>Latest transition</th>
-                      <th>Linked items</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.episodes.map((ep) => (
-                      <AlertRow key={ep.alert_id} ep={ep} currentFilter={filter} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <section aria-label="Unsettled and escalated alerts">
+                  <h3>Unsettled and escalated alerts</h3>
+                  {unsettledAndEscalated.length === 0 ? (
+                    <p>No unsettled or escalated alerts.</p>
+                  ) : (
+                    <AlertsTable episodes={unsettledAndEscalated} currentFilter={filter} />
+                  )}
+                </section>
+
+                <section aria-label="Settled inside tillr">
+                  <h3>Settled inside tillr</h3>
+                  {settledInsideTillr.length === 0 ? (
+                    <p>No alerts settled inside tillr.</p>
+                  ) : (
+                    <AlertsTable episodes={settledInsideTillr} currentFilter={filter} />
+                  )}
+                </section>
+
+                {otherSettled.length > 0 ? (
+                  <section aria-label="Other settled alerts">
+                    <h3>Other settled alerts</h3>
+                    <AlertsTable episodes={otherSettled} currentFilter={filter} />
+                  </section>
+                ) : null}
+              </>
             )}
           </section>
 
@@ -527,6 +626,38 @@ export function AlertPage({
                 <>
                   <dt>Escalated to</dt>
                   <dd>{data.episode.escalated_to}</dd>
+                </>
+              ) : null}
+              {data.episode.triage ? (
+                <>
+                  <dt>Triage</dt>
+                  <dd>
+                    {data.episode.triage.state}
+                    {data.episode.triage.outcome ? ` · ${data.episode.triage.outcome}` : ""}
+                    {data.episode.triage.outcome_kind
+                      ? ` (${data.episode.triage.outcome_kind})`
+                      : ""}
+                    {data.episode.triage.triaged_at !== undefined
+                      ? ` at ${new Date(data.episode.triage.triaged_at).toISOString()}`
+                      : ""}
+                  </dd>
+                  {data.episode.triage.run_id || data.episode.triage.active_run_id ? (
+                    <>
+                      <dt>Triage run</dt>
+                      <dd>
+                        <EntityLink
+                          kind="run"
+                          id={(data.episode.triage.run_id || data.episode.triage.active_run_id)!}
+                        />
+                      </dd>
+                    </>
+                  ) : null}
+                  {data.episode.triage.finding ? (
+                    <>
+                      <dt>Triage finding</dt>
+                      <dd>{data.episode.triage.finding}</dd>
+                    </>
+                  ) : null}
                 </>
               ) : null}
               {data.episode.silence_id ? (

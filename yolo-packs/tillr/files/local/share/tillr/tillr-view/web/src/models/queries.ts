@@ -90,6 +90,7 @@ export const queryKeys = {
     filter.rule ?? "",
     filter.severity ?? "",
     filter.settlement ?? "",
+    filter.triage ?? "",
   ],
   alert: (alertId: string): readonly unknown[] => ["alerts", "detail", alertId],
 };

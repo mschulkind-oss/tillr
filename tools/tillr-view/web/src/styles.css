@@ -2746,4 +2746,9 @@ kbd {
 .alerts-meta dt { font-weight: 600; color: var(--ink-2); }
 .alerts-meta dd { margin: 0; }
 .alerts-bundle { max-height: 24em; overflow: auto; white-space: pre-wrap; word-break: break-word; padding: var(--s2); border: 1px solid var(--line-soft); border-radius: var(--r-1); background: var(--surface-2); }
+.alerts-triage-cell { display: flex; flex-direction: column; gap: 2px; }
+.detail__alert-badges { display: inline-flex; flex-wrap: wrap; gap: var(--s1); }
+.state-badge--alert-open { background: var(--blocked-soft); color: var(--blocked); text-decoration: none; }
+.state-badge--alert-acknowledged, .state-badge--alert-silenced { background: var(--waiting-soft); color: var(--waiting); text-decoration: none; }
+.state-badge--alert-resolved { background: var(--landed-soft); color: var(--landed); text-decoration: none; }
 .muted { color: var(--ink-2); font-size: 0.9em; }

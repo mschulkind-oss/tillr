@@ -190,12 +190,14 @@ function mountRoute(
         const rule = url.searchParams.get("rule") ?? "";
         const severity = url.searchParams.get("severity") ?? "";
         const settlement = url.searchParams.get("settlement") ?? "";
+        const triage = url.searchParams.get("triage") ?? "";
         const filtered = base.episodes.filter(
           (e) =>
             (!state || e.state === state) &&
             (!rule || e.rule_id === rule) &&
             (!severity || e.severity === severity) &&
-            (!settlement || e.settlement_state === settlement),
+            (!settlement || e.settlement_state === settlement) &&
+            (!triage || (e.triage?.state ?? "untriaged") === triage),
         );
         return new Response(
           JSON.stringify(envelope({ ...base, episodes: filtered })),
@@ -338,5 +340,228 @@ describe("Observatory alerts UI (Slice 8)", () => {
   test("ItemPage shows explicit empty state when no alerts are linked", async () => {
     mountRoute("/item/item-1", { linkedAlertsOnItem: false });
     await screen.findByText("No alerts linked to this item.");
+    expect(screen.queryByLabelText("Linked alert badges")).toBeNull();
+  });
+});
+
+describe("Observatory triage outcomes, panels, and item alert badges (Slice 7)", () => {
+  const epEscalated: AlertEpisodeView = {
+    alert_id: "alert-esc-1",
+    rule_id: "drain-lane-refused",
+    subject_key: "lane-1",
+    episode_num: 1,
+    state: "open",
+    settlement_state: "settled",
+    severity: "warning",
+    condition_fingerprint: "fp-esc",
+    opened_seq: 20,
+    opened_at: Date.parse("2026-11-26T02:00:00Z"),
+    last_observed_seq: 21,
+    last_observed_at: Date.parse("2026-11-26T02:01:00Z"),
+    observation_count: 1,
+    variables: { lane_id: "lane-1" },
+    variables_json: '{"lane_id":"lane-1"}',
+    outcome: "fix-fault",
+    item_link_kind: "linked",
+    tracking_item_id: "item-fix-1",
+    escalated_to: "operator-session",
+    triage: {
+      state: "escalated",
+      outcome: "escalated",
+      outcome_kind: "fix-fault",
+      run_id: "run-triage-esc",
+      item_id: "item-fix-1",
+      finding: "leftover files require manual cleanup",
+      triaged_at: Date.parse("2026-11-26T02:02:00Z"),
+    },
+    linked_items: [
+      {
+        alert_id: "alert-esc-1",
+        item_id: "item-fix-1",
+        item_title: "Speed up go-build",
+        item_state: "working",
+        relation: "fix-fault",
+        linked_at: Date.parse("2026-11-26T02:02:00Z"),
+        linked_by: "tillr-triage",
+        event_seq: 22,
+        active_silence: false,
+      },
+    ],
+  };
+
+  const epTriageSettled: AlertEpisodeView = {
+    alert_id: "alert-triaged-1",
+    rule_id: "fast-gate-run-slow",
+    subject_key: "go-test",
+    episode_num: 1,
+    state: "open",
+    settlement_state: "settled",
+    severity: "warning",
+    condition_fingerprint: "fp-tri",
+    opened_seq: 30,
+    opened_at: Date.parse("2026-11-26T03:00:00Z"),
+    last_observed_seq: 30,
+    last_observed_at: Date.parse("2026-11-26T03:00:00Z"),
+    observation_count: 1,
+    variables: { slowest_check: "go-test" },
+    variables_json: '{"slowest_check":"go-test"}',
+    outcome: "fix-fault",
+    item_link_kind: "filed",
+    tracking_item_id: "item-fix-1",
+    triage: {
+      state: "settled",
+      outcome: "filed",
+      outcome_kind: "fix-fault",
+      run_id: "run-triage-filed",
+      item_id: "item-fix-1",
+      finding: "go-test exceeded 60s threshold",
+      triaged_at: Date.parse("2026-11-26T03:01:00Z"),
+    },
+    linked_items: [
+      {
+        alert_id: "alert-triaged-1",
+        item_id: "item-fix-1",
+        item_title: "Speed up go-build",
+        item_state: "working",
+        relation: "fix-fault",
+        linked_at: Date.parse("2026-11-26T03:01:00Z"),
+        linked_by: "tillr-triage",
+        event_seq: 31,
+        active_silence: false,
+      },
+    ],
+  };
+
+  function makeTriageAlertsData(): AlertsData {
+    const base = makeAlertsData([ep1, epEscalated, epTriageSettled]);
+    return {
+      ...base,
+      counts: {
+        ...base.counts,
+        escalated: 1,
+        triage: {
+          untriaged: 1,
+          triaging: 0,
+          settled: 1,
+          escalated: 1,
+        },
+      },
+    };
+  }
+
+  test("Alerts ledger renders unsettled/escalated leading, settled inside tillr with run and item links, and active silences", async () => {
+    const { fetch } = mountRoute("/alerts", { alertsData: makeTriageAlertsData() });
+
+    const unsettledPanel = await screen.findByRole("region", {
+      name: "Unsettled and escalated alerts",
+    });
+    const settledPanel = screen.getByRole("region", { name: "Settled inside tillr" });
+    const silencesPanel = screen.getByRole("region", { name: "Active silences" });
+
+    // Unsettled and escalated panel leads and contains both unsettled ep1 and escalated epEscalated.
+    expect(within(unsettledPanel).getByText("alert-ep1")).toBeTruthy();
+    expect(within(unsettledPanel).getByText("alert-esc-1")).toBeTruthy();
+    expect(within(unsettledPanel).getByRole("link", { name: "run-triage-esc" })).toBeTruthy();
+    expect(within(unsettledPanel).queryByText("alert-triaged-1")).toBeNull();
+
+    // Settled inside tillr panel shows triage-settled episode linking to triage run and tracking item.
+    expect(within(settledPanel).getByText("alert-triaged-1")).toBeTruthy();
+    expect(
+      within(settledPanel).getByRole("link", { name: "run-triage-filed" }).getAttribute("href"),
+    ).toBe("/run/run-triage-filed");
+    expect(
+      within(settledPanel).getByRole("link", { name: /item-fix-1/ }).getAttribute("href"),
+    ).toBe("/item/item-fix-1");
+    expect(within(settledPanel).getByText("go-test exceeded 60s threshold")).toBeTruthy();
+
+    // Active silences panel follows.
+    expect(within(silencesPanel).getByText("sil-1")).toBeTruthy();
+
+    // Verify DOM order: unsettled/escalated -> settled inside tillr -> active silences.
+    expect(
+      unsettledPanel.compareDocumentPosition(settledPanel) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      settledPanel.compareDocumentPosition(silencesPanel) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // Filter by triage state via URL.
+    fireEvent.change(screen.getByLabelText("Triage filter"), { target: { value: "settled" } });
+    await waitFor(() => expect(window.location.search).toBe("?triage=settled"));
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.some(([u]) => String(u) === "/api/v1/alerts?triage=settled"),
+      ).toBe(true),
+    );
+  });
+
+  test("Home panel promotes escalated alerts and reports triage counts", async () => {
+    const escalatedOnly = makeAlertsData([epEscalated]);
+    escalatedOnly.counts.escalated = 1;
+    escalatedOnly.counts.triage = { untriaged: 0, triaging: 0, settled: 0, escalated: 1 };
+
+    mountRoute("/", { alertsData: escalatedOnly });
+    await screen.findByText("alert-esc-1");
+    const region = screen.getByRole("region", { name: "Watch alerts" });
+    expect(region.getAttribute("data-promoted")).toBe("true");
+    expect(within(region).getByRole("link", { name: "run-triage-esc" })).toBeTruthy();
+    expect(region.textContent).toContain("1 escalated");
+  });
+
+  test("AlertPage renders triage metadata, triage run link, and triage transitions", async () => {
+    const detail: AlertDetailData = {
+      absent: false,
+      episode: epEscalated,
+      transitions: [
+        {
+          seq: 20,
+          timestamp: Date.parse("2026-11-26T02:00:00Z"),
+          state_change: "triage-started",
+          kind: "watch.alert.triage-started",
+          actor: "tillr-triage",
+          detail: "run-triage-esc",
+        },
+        {
+          seq: 21,
+          timestamp: Date.parse("2026-11-26T02:02:00Z"),
+          state_change: "triaged",
+          kind: "watch.alert.triaged",
+          actor: "tillr-triage",
+          detail: "escalated fix-fault · (item-fix-1) · run run-triage-esc",
+        },
+        {
+          seq: 22,
+          timestamp: Date.parse("2026-11-26T02:02:01Z"),
+          state_change: "escalated",
+          kind: "watch.alert.escalated",
+          actor: "tillr-triage",
+          detail: "to operator-session · escalated",
+        },
+      ],
+      linked_items: epEscalated.linked_items,
+      related_episodes: [],
+    };
+    mountRoute("/alert/alert-ep1", { alertDetail: detail });
+
+    await screen.findByText("leftover files require manual cleanup");
+    expect(screen.getByRole("link", { name: "run-triage-esc" }).getAttribute("href")).toBe(
+      "/run/run-triage-esc",
+    );
+    const transitions = screen.getByRole("region", { name: "Transition history" });
+    expect(within(transitions).getByText("triage-started")).toBeTruthy();
+    expect(within(transitions).getByText("triaged")).toBeTruthy();
+    expect(within(transitions).getByText("escalated")).toBeTruthy();
+  });
+
+  test("ItemPage renders linked-alert badges in the item header that navigate to AlertPage", async () => {
+    mountRoute("/item/item-fix-1");
+    const badges = await screen.findByLabelText("Linked alert badges");
+    const badgeLink = within(badges).getByRole("link", {
+      name: /alert alert-ep1 · fast-gate-run-slow \(fix-fault\)/,
+    });
+    expect(badgeLink.getAttribute("href")).toBe("/alert/alert-ep1");
+
+    fireEvent.click(badgeLink);
+    await waitFor(() => expect(window.location.pathname).toBe("/alert/alert-ep1"));
   });
 });

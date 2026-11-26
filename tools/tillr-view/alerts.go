@@ -45,6 +45,19 @@ type alertTransitionView struct {
 	Detail      string `json:"detail,omitempty"`
 }
 
+// alertTriageView is the triage summary attached to an alert episode, matching
+// the triage object shape of `tillr watch status --json` plus active claim and timestamp.
+type alertTriageView struct {
+	State       string `json:"state"`
+	Outcome     string `json:"outcome,omitempty"`
+	OutcomeKind string `json:"outcome_kind,omitempty"`
+	RunID       string `json:"run_id,omitempty"`
+	ActiveRunID string `json:"active_run_id,omitempty"`
+	ItemID      string `json:"item_id,omitempty"`
+	Finding     string `json:"finding,omitempty"`
+	TriagedAt   *int64 `json:"triaged_at,omitempty"`
+}
+
 // alertEpisodeView is the read-only projection of an alert episode shared by CLI and HTTP.
 type alertEpisodeView struct {
 	AlertID               string               `json:"alert_id"`
@@ -81,6 +94,7 @@ type alertEpisodeView struct {
 	AckedAt               *int64               `json:"acked_at,omitempty"`
 	AckedNote             string               `json:"acked_note,omitempty"`
 	EscalatedTo           string               `json:"escalated_to,omitempty"`
+	Triage                *alertTriageView     `json:"triage,omitempty"`
 	BundleJSON            string               `json:"bundle_json,omitempty"`
 	LinkedItems           []alertItemLinkView  `json:"linked_items"`
 	LatestTransition      *alertTransitionView `json:"latest_transition,omitempty"`
@@ -105,20 +119,30 @@ type alertSilenceView struct {
 	SilenceOnFingerprint  string            `json:"silence_on_fingerprint,omitempty"`
 }
 
+// alertTriageCounts summarizes episodes by triage state.
+type alertTriageCounts struct {
+	Untriaged int `json:"untriaged"`
+	Triaging  int `json:"triaging"`
+	Settled   int `json:"settled"`
+	Escalated int `json:"escalated"`
+}
+
 // alertCounts summarizes the episodes and active silences in an alertsData response.
 type alertCounts struct {
-	Total          int `json:"total"`
-	Active         int `json:"active"`
-	Open           int `json:"open"`
-	Acknowledged   int `json:"acknowledged"`
-	Silenced       int `json:"silenced"`
-	Resolved       int `json:"resolved"`
-	Unsettled      int `json:"unsettled"`
-	Uninvestigated int `json:"uninvestigated"`
-	Investigating  int `json:"investigating"`
-	Investigated   int `json:"investigated"`
-	Settled        int `json:"settled"`
-	ActiveSilences int `json:"active_silences"`
+	Total          int               `json:"total"`
+	Active         int               `json:"active"`
+	Open           int               `json:"open"`
+	Acknowledged   int               `json:"acknowledged"`
+	Silenced       int               `json:"silenced"`
+	Resolved       int               `json:"resolved"`
+	Unsettled      int               `json:"unsettled"`
+	Uninvestigated int               `json:"uninvestigated"`
+	Investigating  int               `json:"investigating"`
+	Investigated   int               `json:"investigated"`
+	Settled        int               `json:"settled"`
+	Escalated      int               `json:"escalated"`
+	ActiveSilences int               `json:"active_silences"`
+	Triage         alertTriageCounts `json:"triage"`
 }
 
 // alertsData is the payload of `GET /api/v1/alerts` and `tillr-view alerts --json`.
@@ -196,6 +220,23 @@ func projectAlertEpisode(ep watch.AlertEpisodeRecord, meta map[string]linkedItem
 		tr := projectAlertTransition(*ep.LatestTransition)
 		latest = &tr
 	}
+	var triage *alertTriageView
+	if ep.TriageState != "" || ep.TriageOutcome != "" || ep.TriageRunID != "" || ep.ActiveTriageRunID != "" || ep.TriageFinding != "" {
+		state := ep.TriageState
+		if state == "" {
+			state = "untriaged"
+		}
+		triage = &alertTriageView{
+			State:       state,
+			Outcome:     ep.TriageOutcome,
+			OutcomeKind: ep.TriageOutcomeKind,
+			RunID:       ep.TriageRunID,
+			ActiveRunID: ep.ActiveTriageRunID,
+			ItemID:      ep.TrackingItemID,
+			Finding:     ep.TriageFinding,
+			TriagedAt:   ep.TriagedAt,
+		}
+	}
 	return alertEpisodeView{
 		AlertID:               ep.AlertID,
 		RuleID:                ep.RuleID,
@@ -231,6 +272,7 @@ func projectAlertEpisode(ep watch.AlertEpisodeRecord, meta map[string]linkedItem
 		AckedAt:               ep.AckedAt,
 		AckedNote:             ep.AckedNote,
 		EscalatedTo:           ep.EscalatedTo,
+		Triage:                triage,
 		BundleJSON:            ep.BundleJSON,
 		LinkedItems:           projectAlertItemLinks(ep.LinkedItems, meta),
 		LatestTransition:      latest,
@@ -299,6 +341,23 @@ func computeAlertCounts(episodes []alertEpisodeView, silences []alertSilenceView
 		default:
 			c.Uninvestigated++
 			c.Unsettled++
+		}
+		triageState := "untriaged"
+		if ep.Triage != nil && ep.Triage.State != "" {
+			triageState = ep.Triage.State
+		}
+		switch triageState {
+		case "triaging":
+			c.Triage.Triaging++
+		case "settled":
+			c.Triage.Settled++
+		case "escalated":
+			c.Triage.Escalated++
+		default:
+			c.Triage.Untriaged++
+		}
+		if ep.EscalatedTo != "" || triageState == "escalated" {
+			c.Escalated++
 		}
 	}
 	return c
@@ -459,6 +518,7 @@ func (s *server) alertsPayload(r *store.Reader, req *http.Request) (any, *apiFai
 		RuleID:          strings.TrimSpace(q.Get("rule")),
 		Severity:        strings.TrimSpace(q.Get("severity")),
 		SettlementState: strings.TrimSpace(q.Get("settlement")),
+		TriageState:     strings.TrimSpace(q.Get("triage")),
 	}
 	data, err := readAlertsData(r, filter, s.now().UTC())
 	if err != nil {
@@ -489,6 +549,7 @@ func alertsFace(args []string) int {
 	rule := fs.String("rule", "", "filter by rule id")
 	severity := fs.String("severity", "", "filter by severity")
 	settlement := fs.String("settlement", "", "filter by settlement state (uninvestigated, investigating, investigated, settled)")
+	triage := fs.String("triage", "", "filter by triage state (untriaged, triaging, settled, escalated)")
 	clock := fs.String("now", "", "observation time in RFC 3339 (default: now)")
 	asJSON := fs.Bool("json", false, "print the alert projection as JSON")
 	if code := parseFlags(fs, args); code != record.ExitOK {
@@ -556,6 +617,7 @@ func alertsFace(args []string) int {
 		RuleID:          strings.TrimSpace(*rule),
 		Severity:        strings.TrimSpace(*severity),
 		SettlementState: strings.TrimSpace(*settlement),
+		TriageState:     strings.TrimSpace(*triage),
 	}
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		version, err := r.SchemaVersion()
@@ -589,8 +651,8 @@ func printAlertsLedger(w io.Writer, data alertsData) error {
 		return err
 	}
 	c := data.Counts
-	if _, err := fmt.Fprintf(w, "summary unsettled=%d (uninvestigated=%d investigating=%d investigated=%d) settled=%d active=%d resolved=%d active_silences=%d\n",
-		c.Unsettled, c.Uninvestigated, c.Investigating, c.Investigated, c.Settled, c.Active, c.Resolved, c.ActiveSilences); err != nil {
+	if _, err := fmt.Fprintf(w, "summary unsettled=%d (uninvestigated=%d investigating=%d investigated=%d) settled=%d escalated=%d triage_settled=%d active=%d resolved=%d active_silences=%d\n",
+		c.Unsettled, c.Uninvestigated, c.Investigating, c.Investigated, c.Settled, c.Escalated, c.Triage.Settled, c.Active, c.Resolved, c.ActiveSilences); err != nil {
 		return err
 	}
 	if len(data.Episodes) == 0 {
@@ -599,16 +661,17 @@ func printAlertsLedger(w io.Writer, data alertsData) error {
 		}
 	} else {
 		tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-		fmt.Fprintln(tw, "ALERT_ID\tRULE\tSUBJECT\tSEVERITY\tSTATE\tSETTLEMENT\tEP\tOBS\tLATEST\tITEMS")
+		fmt.Fprintln(tw, "ALERT_ID\tRULE\tSUBJECT\tSEVERITY\tSTATE\tSETTLEMENT\tTRIAGE\tEP\tOBS\tLATEST\tITEMS")
 		for _, ep := range data.Episodes {
 			latest := "-"
 			if ep.LatestTransition != nil {
 				latest = fmt.Sprintf("%s by %s", ep.LatestTransition.StateChange, ep.LatestTransition.Actor)
 			}
+			triageText := formatTriageSummary(ep.Triage, ep.EscalatedTo)
 			items := formatLinkedItemsSummary(ep.LinkedItems)
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\n",
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\n",
 				ep.AlertID, ep.RuleID, ep.SubjectKey, ep.Severity, ep.State, ep.SettlementState,
-				ep.EpisodeNum, ep.ObservationCount, latest, items)
+				triageText, ep.EpisodeNum, ep.ObservationCount, latest, items)
 		}
 		if err := tw.Flush(); err != nil {
 			return err
@@ -633,6 +696,30 @@ func printAlertsLedger(w io.Writer, data alertsData) error {
 		}
 	}
 	return nil
+}
+
+func formatTriageSummary(t *alertTriageView, escalatedTo string) string {
+	if t == nil {
+		if escalatedTo != "" {
+			return "escalated->" + escalatedTo
+		}
+		return "-"
+	}
+	s := t.State
+	if t.Outcome != "" {
+		s += ":" + t.Outcome
+	}
+	if escalatedTo != "" {
+		s += "->" + escalatedTo
+	}
+	runID := t.RunID
+	if runID == "" {
+		runID = t.ActiveRunID
+	}
+	if runID != "" {
+		s += " (" + runID + ")"
+	}
+	return s
 }
 
 func formatLinkedItemsSummary(links []alertItemLinkView) string {
@@ -668,6 +755,13 @@ func printAlertDetail(w io.Writer, detail alertDetailData) error {
 	}
 	if ep.Outcome != "" {
 		fmt.Fprintf(w, "outcome %s  by %s  item %s\n", ep.Outcome, formatAlertActor(ep.SettledBy), ep.TrackingItemID)
+	}
+	if ep.Triage != nil {
+		fmt.Fprintf(w, "triage %s", formatTriageSummary(ep.Triage, ep.EscalatedTo))
+		if ep.Triage.Finding != "" {
+			fmt.Fprintf(w, "  finding: %s", ep.Triage.Finding)
+		}
+		fmt.Fprintln(w)
 	}
 
 	fmt.Fprintln(w, "\nTRANSITIONS")

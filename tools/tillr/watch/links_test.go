@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -420,6 +421,142 @@ func TestReadAlertTransitionsResolvedActor(t *testing.T) {
 		}
 		if len(manualDetail.Transitions) != 1 || manualDetail.Transitions[0].Actor != "" {
 			t.Fatalf("manual resolved transitions = %+v, want empty Actor", manualDetail.Transitions)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ReadTx failed: %v", err)
+	}
+}
+
+func TestReadAlertEpisodesTriageOrderingAndTransitions(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.sqlite3"), true)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	t0 := time.Unix(1700000000, 0).UTC()
+
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		// 1. Triage-settled episode (newest opened_at, still open condition, settled by triage).
+		if _, err := tx.Exec(`INSERT INTO alert_episodes (
+			alert_id, rule_id, subject_key, episode_num, state, settlement_state, severity, condition_fingerprint,
+			opened_seq, opened_at, last_observed_seq, last_observed_at,
+			outcome, item_link_kind, tracking_item_id, settled_by, settled_at,
+			triage_state, triage_outcome, triage_outcome_kind, triage_run_id, triage_finding, triaged_at, bundle_json
+		) VALUES (
+			'alrt-settled', 'rule-a', 'subj-settled', 1, 'open', 'settled', 'warning', 'fp-1',
+			10, ?, 10, ?,
+			'fix-fault', 'filed', 'item-1', 'tillr-triage', ?,
+			'settled', 'filed', 'fix-fault', 'run-triage-1', 'filed defect for go-build stall', ?, '{}'
+		)`, t0.Add(3*time.Minute).UnixMilli(), t0.Add(3*time.Minute).UnixMilli(), t0.Add(4*time.Minute).UnixMilli(), t0.Add(4*time.Minute).UnixMilli()); err != nil {
+			return err
+		}
+		// 2. Escalated episode (even though settled against an item, escalated_to + triage_state=escalated must lead).
+		if _, err := tx.Exec(`INSERT INTO alert_episodes (
+			alert_id, rule_id, subject_key, episode_num, state, settlement_state, severity, condition_fingerprint,
+			opened_seq, opened_at, last_observed_seq, last_observed_at,
+			outcome, item_link_kind, tracking_item_id, escalated_to,
+			triage_state, triage_outcome, triage_outcome_kind, triage_run_id, triage_finding, triaged_at, bundle_json
+		) VALUES (
+			'alrt-escalated', 'rule-b', 'subj-esc', 1, 'open', 'settled', 'high', 'fp-2',
+			5, ?, 6, ?,
+			'fix-fault', 'linked', 'item-2', 'operator-session',
+			'escalated', 'escalated', 'fix-fault', 'run-triage-2', 'needs manual lane cleanup', ?, '{}'
+		)`, t0.Add(1*time.Minute).UnixMilli(), t0.Add(2*time.Minute).UnixMilli(), t0.Add(2*time.Minute).UnixMilli()); err != nil {
+			return err
+		}
+		// 3. Unsettled untriaged episode.
+		if _, err := tx.Exec(`INSERT INTO alert_episodes (
+			alert_id, rule_id, subject_key, episode_num, state, settlement_state, severity, condition_fingerprint,
+			opened_seq, opened_at, last_observed_seq, last_observed_at,
+			triage_state, active_triage_run_id, bundle_json
+		) VALUES (
+			'alrt-unsettled', 'rule-c', 'subj-un', 1, 'open', 'uninvestigated', 'warning', 'fp-3',
+			8, ?, 8, ?,
+			'triaging', 'run-triage-3', '{}'
+		)`, t0.Add(2*time.Minute).UnixMilli(), t0.Add(2*time.Minute).UnixMilli()); err != nil {
+			return err
+		}
+
+		// Record triage events for alrt-escalated.
+		escID := "alrt-escalated"
+		for _, rec := range []struct {
+			kind    string
+			at      time.Time
+			payload map[string]any
+		}{
+			{triageStartedKind, t0.Add(90 * time.Second), map[string]any{"alert_id": escID, "run_id": "run-triage-2"}},
+			{triagedKind, t0.Add(2 * time.Minute), map[string]any{"alert_id": escID, "run_id": "run-triage-2", "outcome": "escalated", "outcome_kind": "fix-fault", "item_id": "item-2"}},
+			{escalatedKind, t0.Add(2*time.Minute + time.Second), map[string]any{"alert_id": escID, "run_id": "run-triage-2", "outcome": "escalated", "escalate_to": "operator-session", "item_id": "item-2"}},
+		} {
+			raw, err := json.Marshal(rec.payload)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Append(event.Event{Kind: rec.kind, At: rec.at, ObjectType: "alert", ObjectID: &escID, Payload: raw}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+
+	err = s.ReadTx(ctx, func(rd *store.Reader) error {
+		ledger, err := ReadAlertEpisodes(rd, AlertFilter{})
+		if err != nil {
+			return err
+		}
+		if len(ledger.Episodes) != 3 {
+			t.Fatalf("len(Episodes) = %d, want 3", len(ledger.Episodes))
+		}
+		// Unsettled and escalated must lead ahead of triage-settled even though settled has newer opened_at.
+		if ledger.Episodes[0].AlertID != "alrt-unsettled" || ledger.Episodes[1].AlertID != "alrt-escalated" || ledger.Episodes[2].AlertID != "alrt-settled" {
+			t.Fatalf("order = [%s, %s, %s], want [alrt-unsettled, alrt-escalated, alrt-settled]",
+				ledger.Episodes[0].AlertID, ledger.Episodes[1].AlertID, ledger.Episodes[2].AlertID)
+		}
+		if ledger.Episodes[0].ActiveTriageRunID != "run-triage-3" || ledger.Episodes[0].TriageState != "triaging" {
+			t.Fatalf("unsettled triage fields = %+v", ledger.Episodes[0])
+		}
+		if ledger.Episodes[2].TriageRunID != "run-triage-1" || ledger.Episodes[2].TriageOutcome != "filed" || ledger.Episodes[2].TriageOutcomeKind != "fix-fault" || ledger.Episodes[2].TriageFinding == "" || ledger.Episodes[2].TriagedAt == nil {
+			t.Fatalf("settled triage fields = %+v", ledger.Episodes[2])
+		}
+
+		// Filter by triage state.
+		settledOnly, err := ReadAlertEpisodes(rd, AlertFilter{TriageState: "settled"})
+		if err != nil {
+			return err
+		}
+		if len(settledOnly.Episodes) != 1 || settledOnly.Episodes[0].AlertID != "alrt-settled" {
+			t.Fatalf("TriageState=settled got %+v", settledOnly.Episodes)
+		}
+
+		// Check triage transitions on alrt-escalated.
+		detail, err := ReadAlertEpisode(rd, "alrt-escalated")
+		if err != nil {
+			return err
+		}
+		if len(detail.Transitions) != 3 {
+			t.Fatalf("len(Transitions) = %d, want 3: %+v", len(detail.Transitions), detail.Transitions)
+		}
+		wantChanges := []string{"triage-started", "triaged", "escalated"}
+		for i, want := range wantChanges {
+			tr := detail.Transitions[i]
+			if tr.StateChange != want || tr.Actor != "tillr-triage" {
+				t.Fatalf("transition[%d] = %+v, want StateChange=%q Actor=tillr-triage", i, tr, want)
+			}
+		}
+		if !strings.Contains(detail.Transitions[0].Detail, "run-triage-2") {
+			t.Fatalf("triage-started detail = %q, want run-triage-2", detail.Transitions[0].Detail)
+		}
+		if !strings.Contains(detail.Transitions[1].Detail, "escalated fix-fault") || !strings.Contains(detail.Transitions[1].Detail, "item-2") {
+			t.Fatalf("triaged detail = %q", detail.Transitions[1].Detail)
+		}
+		if !strings.Contains(detail.Transitions[2].Detail, "to operator-session") {
+			t.Fatalf("escalated detail = %q", detail.Transitions[2].Detail)
 		}
 		return nil
 	})

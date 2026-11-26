@@ -61,6 +61,7 @@ type AlertFilter struct {
 	RuleID          string
 	Severity        string
 	SettlementState string
+	TriageState     string
 }
 
 // AlertTransition describes one state-change row reconstructed from stored events.
@@ -108,6 +109,13 @@ type AlertEpisodeRecord struct {
 	AckedAt               *int64            `json:"acked_at,omitempty"`
 	AckedNote             string            `json:"acked_note,omitempty"`
 	EscalatedTo           string            `json:"escalated_to,omitempty"`
+	TriageState           string            `json:"triage_state,omitempty"`
+	TriageOutcome         string            `json:"triage_outcome,omitempty"`
+	TriageOutcomeKind     string            `json:"triage_outcome_kind,omitempty"`
+	TriageRunID           string            `json:"triage_run_id,omitempty"`
+	TriageFinding         string            `json:"triage_finding,omitempty"`
+	ActiveTriageRunID     string            `json:"active_triage_run_id,omitempty"`
+	TriagedAt             *int64            `json:"triaged_at,omitempty"`
 	BundleJSON            string            `json:"bundle_json,omitempty"`
 	LinkedItems           []AlertItemLink   `json:"linked_items,omitempty"`
 	LatestTransition      *AlertTransition  `json:"latest_transition,omitempty"`
@@ -415,7 +423,9 @@ func scanEpisodeRecords(rd *store.Reader, whereClause string, args ...any) ([]Al
 		%s, %s, %s, %s,
 		%s, %s, %s,
 		COALESCE(acked_by, ''), acked_at, COALESCE(acked_note, ''),
-		%s, bundle_json
+		%s,
+		%s, %s, %s, %s, %s, %s, %s,
+		bundle_json
 		FROM alert_episodes %s`,
 		colOrNull("settlement_state", "'uninvestigated'"),
 		colOrNull("variables_json", "'{}'"),
@@ -431,6 +441,13 @@ func scanEpisodeRecords(rd *store.Reader, whereClause string, args ...any) ([]Al
 		colOrNull("settled_at", "NULL"),
 		colOrNull("settled_seq", "NULL"),
 		colOrNull("escalated_to", "NULL"),
+		colOrNull("triage_state", "''"),
+		colOrNull("triage_outcome", "NULL"),
+		colOrNull("triage_outcome_kind", "NULL"),
+		colOrNull("triage_run_id", "NULL"),
+		colOrNull("triage_finding", "NULL"),
+		colOrNull("active_triage_run_id", "NULL"),
+		colOrNull("triaged_at", "NULL"),
 		whereClause,
 	)
 	rows, err := rd.Query(query, args...)
@@ -442,9 +459,11 @@ func scanEpisodeRecords(rd *store.Reader, whereClause string, args ...any) ([]Al
 	for rows.Next() {
 		var (
 			ep                                                         AlertEpisodeRecord
-			resSeq, resAt, invAt, setAt, setSeq, ackAt                 sql.NullInt64
+			resSeq, resAt, invAt, setAt, setSeq, ackAt, triagedAt      sql.NullInt64
 			outcome, linkKind, tracking, silID, invBy, invCause, invEv sql.NullString
 			setBy, escTo                                               sql.NullString
+			triageState, triageOutcome, triageOutcomeKind              sql.NullString
+			triageRunID, triageFinding, activeTriageRunID              sql.NullString
 		)
 		if err := rows.Scan(
 			&ep.AlertID, &ep.RuleID, &ep.SubjectKey, &ep.EpisodeNum, &ep.State, &ep.SettlementState, &ep.Severity, &ep.ConditionFingerprint,
@@ -454,7 +473,9 @@ func scanEpisodeRecords(rd *store.Reader, whereClause string, args ...any) ([]Al
 			&invBy, &invAt, &invCause, &invEv,
 			&setBy, &setAt, &setSeq,
 			&ep.AckedBy, &ackAt, &ep.AckedNote,
-			&escTo, &ep.BundleJSON,
+			&escTo,
+			&triageState, &triageOutcome, &triageOutcomeKind, &triageRunID, &triageFinding, &activeTriageRunID, &triagedAt,
+			&ep.BundleJSON,
 		); err != nil {
 			return nil, err
 		}
@@ -482,6 +503,10 @@ func scanEpisodeRecords(rd *store.Reader, whereClause string, args ...any) ([]Al
 			v := ackAt.Int64
 			ep.AckedAt = &v
 		}
+		if triagedAt.Valid {
+			v := triagedAt.Int64
+			ep.TriagedAt = &v
+		}
 		ep.Outcome = outcome.String
 		ep.ItemLinkKind = linkKind.String
 		ep.TrackingItemID = tracking.String
@@ -491,6 +516,12 @@ func scanEpisodeRecords(rd *store.Reader, whereClause string, args ...any) ([]Al
 		ep.InvestigationEvidence = invEv.String
 		ep.SettledBy = setBy.String
 		ep.EscalatedTo = escTo.String
+		ep.TriageState = triageState.String
+		ep.TriageOutcome = triageOutcome.String
+		ep.TriageOutcomeKind = triageOutcomeKind.String
+		ep.TriageRunID = triageRunID.String
+		ep.TriageFinding = triageFinding.String
+		ep.ActiveTriageRunID = activeTriageRunID.String
 		ep.Variables = decodeVariablesJSON(ep.VariablesJSON)
 		out = append(out, ep)
 	}
@@ -524,6 +555,14 @@ func ReadAlertEpisodes(rd *store.Reader, filter AlertFilter) (AlertLedger, error
 	if err != nil {
 		return AlertLedger{}, err
 	}
+	hasTriage, err := hasTriageColumns(rd)
+	if err != nil {
+		return AlertLedger{}, err
+	}
+	hasEscalated, err := alertEpisodesHasColumn(rd, "escalated_to")
+	if err != nil {
+		return AlertLedger{}, err
+	}
 	if filter.SettlementState != "" {
 		if hasSettlement {
 			conds = append(conds, "settlement_state = ?")
@@ -532,12 +571,30 @@ func ReadAlertEpisodes(rd *store.Reader, filter AlertFilter) (AlertLedger, error
 			return AlertLedger{}, nil
 		}
 	}
+	if filter.TriageState != "" {
+		if hasTriage {
+			conds = append(conds, "COALESCE(NULLIF(triage_state, ''), 'untriaged') = ?")
+			args = append(args, filter.TriageState)
+		} else if filter.TriageState != "untriaged" {
+			return AlertLedger{}, nil
+		}
+	}
 	where := ""
 	if len(conds) > 0 {
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
+	var leadConds []string
 	if hasSettlement {
-		where += " ORDER BY CASE WHEN state != 'resolved' THEN 0 ELSE 1 END, CASE WHEN settlement_state != 'settled' THEN 0 ELSE 1 END, opened_at DESC, alert_id ASC"
+		leadConds = append(leadConds, "COALESCE(NULLIF(settlement_state, ''), 'uninvestigated') != 'settled'")
+	}
+	if hasTriage {
+		leadConds = append(leadConds, "triage_state = 'escalated'")
+	}
+	if hasEscalated {
+		leadConds = append(leadConds, "COALESCE(escalated_to, '') != ''")
+	}
+	if len(leadConds) > 0 {
+		where += " ORDER BY CASE WHEN " + strings.Join(leadConds, " OR ") + " THEN 0 ELSE 1 END, CASE WHEN state != 'resolved' THEN 0 ELSE 1 END, opened_at DESC, alert_id ASC"
 	} else {
 		where += " ORDER BY CASE WHEN state != 'resolved' THEN 0 ELSE 1 END, opened_at DESC, alert_id ASC"
 	}
@@ -719,6 +776,21 @@ func readAlertTransitions(rd *store.Reader, alertID string, episodeNum int64, si
 			if tr.Actor == "" && (tr.Detail == "condition-cleared" || strings.HasPrefix(tr.Detail, "item-")) {
 				tr.Actor = "evaluator"
 			}
+		case triageStartedKind:
+			tr.StateChange = "triage-started"
+			tr.Actor = "tillr-triage"
+			tr.Detail = stringField(body, "run_id")
+		case triagedKind:
+			tr.StateChange = "triaged"
+			tr.Actor = "tillr-triage"
+			tr.Detail = formatTriageTransitionDetail(body)
+		case escalatedKind:
+			tr.StateChange = "escalated"
+			tr.Actor = stringField(body, "by")
+			if tr.Actor == "" {
+				tr.Actor = "tillr-triage"
+			}
+			tr.Detail = formatEscalatedTransitionDetail(body)
 		default:
 			tr.StateChange = strings.TrimPrefix(kind, "watch.alert.")
 			tr.Actor = stringField(body, "by")
@@ -726,4 +798,43 @@ func readAlertTransitions(rd *store.Reader, alertID string, episodeNum int64, si
 		out = append(out, tr)
 	}
 	return out, rows.Err()
+}
+
+func formatTriageTransitionDetail(body map[string]any) string {
+	var parts []string
+	outcome := stringField(body, "outcome")
+	outcomeKind := stringField(body, "outcome_kind")
+	itemID := stringField(body, "item_id")
+	runID := stringField(body, "run_id")
+	if outcome != "" {
+		if outcomeKind != "" {
+			parts = append(parts, outcome+" "+outcomeKind)
+		} else {
+			parts = append(parts, outcome)
+		}
+	}
+	if itemID != "" {
+		parts = append(parts, "("+itemID+")")
+	}
+	if runID != "" {
+		parts = append(parts, "run "+runID)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatEscalatedTransitionDetail(body map[string]any) string {
+	var parts []string
+	if to := stringField(body, "escalate_to"); to != "" {
+		parts = append(parts, "to "+to)
+	}
+	if outcome := stringField(body, "outcome"); outcome != "" {
+		parts = append(parts, outcome)
+	}
+	if itemID := stringField(body, "item_id"); itemID != "" {
+		parts = append(parts, "("+itemID+")")
+	}
+	if runID := stringField(body, "run_id"); runID != "" {
+		parts = append(parts, "run "+runID)
+	}
+	return strings.Join(parts, " · ")
 }

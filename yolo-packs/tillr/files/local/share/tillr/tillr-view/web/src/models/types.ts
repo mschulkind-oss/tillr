@@ -1029,6 +1029,17 @@ export interface AlertTransitionView {
   detail?: string;
 }
 
+export interface AlertTriageView {
+  state: string;
+  outcome?: string;
+  outcome_kind?: string;
+  run_id?: string;
+  active_run_id?: string;
+  item_id?: string;
+  finding?: string;
+  triaged_at?: number;
+}
+
 export interface AlertEpisodeView {
   alert_id: string;
   rule_id: string;
@@ -1064,6 +1075,7 @@ export interface AlertEpisodeView {
   acked_at?: number;
   acked_note?: string;
   escalated_to?: string;
+  triage?: AlertTriageView;
   bundle_json?: string;
   linked_items: AlertItemLinkView[];
   latest_transition?: AlertTransitionView;
@@ -1087,6 +1099,13 @@ export interface AlertSilenceView {
   silence_on_fingerprint?: string;
 }
 
+export interface AlertTriageCounts {
+  untriaged: number;
+  triaging: number;
+  settled: number;
+  escalated: number;
+}
+
 export interface AlertCounts {
   total: number;
   active: number;
@@ -1099,7 +1118,9 @@ export interface AlertCounts {
   investigating: number;
   investigated: number;
   settled: number;
+  escalated?: number;
   active_silences: number;
+  triage?: AlertTriageCounts;
 }
 
 export interface AlertsData {
