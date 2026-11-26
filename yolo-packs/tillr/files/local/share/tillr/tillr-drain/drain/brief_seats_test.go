@@ -186,7 +186,7 @@ func TestBriefDesignDocumentRuleBySeat(t *testing.T) {
 
 	// 1. Single-worker item seats under both ending capabilities.
 	carrySeats := []string{"", "build", "edit", "docs", "test-write"}
-	omitSeats := []string{"design", "plan", "verify", "scout", "test-run", "review"}
+	omitSeats := []string{"design", "plan", "verify", "scout", "test-run", "review", item.SeatTriage}
 	for _, capability := range []string{run.EndingFooter, run.EndingCallSuspends} {
 		for _, seat := range carrySeats {
 			recorded := refusalStagedItem("item-a")
@@ -313,7 +313,7 @@ func TestBriefDesignProvenanceRuleBySeat(t *testing.T) {
 	}
 
 	// 1. Single-worker item seats under both ending capabilities.
-	omitSeats := []string{"", "build", "edit", "docs", "test-write", "plan", "verify", "scout", "test-run", "review"}
+	omitSeats := []string{"", "build", "edit", "docs", "test-write", "plan", "verify", "scout", "test-run", "review", item.SeatTriage}
 	for _, capability := range []string{run.EndingFooter, run.EndingCallSuspends} {
 		recorded := refusalStagedItem("item-a")
 		recorded.Seat = "design"

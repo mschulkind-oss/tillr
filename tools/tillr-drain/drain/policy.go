@@ -318,6 +318,18 @@ func (p Policy) Check() error {
 			seen[name] = true
 		}
 	}
+	if len(p.seatList(item.SeatTriage)) > 0 {
+		triageReadOnly := false
+		for _, seat := range p.ReadOnlySeats {
+			if seat == item.SeatTriage {
+				triageReadOnly = true
+				break
+			}
+		}
+		if !triageReadOnly {
+			return Usagef("policy declares seat %q, which must be listed in read_only_seats", item.SeatTriage)
+		}
+	}
 	if err := p.checkEscalate(); err != nil {
 		return Usagef("%v", err)
 	}

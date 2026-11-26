@@ -13,12 +13,14 @@
     "test-run": "pi-scout",
     "docs": "pi-build",
     "verify": "pi",
-    "tricky": "pi"
+    "tricky": "pi",
+    "triage": "pi-scout"
   },
   "read_only_seats": [
     "scout",
     "classify",
-    "test-run"
+    "test-run",
+    "triage"
   ],
   "seat_purposes": {
     "design": "Settle design decisions and specify the intended change.",
@@ -32,13 +34,15 @@
     "test-run": "Run a named check and report its result without fixing it.",
     "docs": "Write documentation and README changes.",
     "verify": "Join the pieces and verify the combined result.",
-    "tricky": "Implement a change the ordinary build seat has failed at or that is too intricate for it."
+    "tricky": "Implement a change the ordinary build seat has failed at or that is too intricate for it.",
+    "triage": "Investigate one unsettled alert episode read-only and file, link, or escalate it."
   },
   "escalate": {
     "build": [
       "pi-build",
       "pi"
-    ]
+    ],
+    "triage": []
   },
   "backends": {
     "pi": {

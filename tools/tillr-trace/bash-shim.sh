@@ -36,6 +36,10 @@
 # honest lane and never evidence about a hostile one. No nonce would help — the run's
 # environment is where a nonce would have to live.
 
+if [ -n "${TILLR_SEAT_BASH_ENV:-}" ] && [ -r "${TILLR_SEAT_BASH_ENV:-}" ]; then
+    . "$TILLR_SEAT_BASH_ENV"
+fi
+
 if [ -z "${TILLR_TRACE_DIR:-}" ]; then
     # `return` when sourced (the normal case), `exit` when someone runs this file.
     return 0 2>/dev/null || exit 0

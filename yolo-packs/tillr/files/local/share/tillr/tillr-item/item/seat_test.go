@@ -83,7 +83,7 @@ func TestAnItemStoresTheSeatItAsksFor(t *testing.T) {
 	}
 	defer s.Close()
 
-	for _, seat := range []string{"", item.SeatDesign, item.SeatBuild} {
+	for _, seat := range []string{"", item.SeatDesign, item.SeatBuild, item.SeatTriage} {
 		id := "item_" + seat
 		if seat == "" {
 			id = "item_unseated"

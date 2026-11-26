@@ -1177,3 +1177,63 @@ func TestLintPolicyAdapterChecks(t *testing.T) {
 	}
 	assertHasLintCode(t, findings, CodeWatchLintSeatUnmapped, "not executable")
 }
+
+func TestLintTriagePolicyConstraints(t *testing.T) {
+	registerLintTestKinds(t)
+
+	// 1. Valid triage policy passes.
+	rootValid := t.TempDir()
+	validPolicy := writeLintFile(t, rootValid, "policy.json", `{
+	  "default_backend": "pi",
+	  "seats": { "build": "pi", "triage": "pi" },
+	  "read_only_seats": ["triage"],
+	  "escalate": { "triage": [] },
+	  "backends": { "pi": { "adapter": "true", "model": "m" } }
+	}`)
+	findings, err := Lint(context.Background(), LintOptions{
+		Root:           rootValid,
+		PolicyPaths:    []string{validPolicy},
+		NoShippedRules: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoLintCode(t, findings, CodeWatchLintSeatUnmapped)
+
+	// 2. Triage omitted from read_only_seats fails.
+	rootNoRO := t.TempDir()
+	noROPolicy := writeLintFile(t, rootNoRO, "policy.json", `{
+	  "default_backend": "pi",
+	  "seats": { "build": "pi", "triage": "pi" },
+	  "escalate": { "triage": [] },
+	  "backends": { "pi": { "adapter": "true", "model": "m" } }
+	}`)
+	findings, err = Lint(context.Background(), LintOptions{
+		Root:           rootNoRO,
+		PolicyPaths:    []string{noROPolicy},
+		NoShippedRules: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasLintCode(t, findings, CodeWatchLintSeatUnmapped, "read_only_seats")
+
+	// 3. Non-empty escalate["triage"] fails.
+	rootEsc := t.TempDir()
+	escPolicy := writeLintFile(t, rootEsc, "policy.json", `{
+	  "default_backend": "pi",
+	  "seats": { "build": "pi", "triage": "pi" },
+	  "read_only_seats": ["triage"],
+	  "escalate": { "triage": ["pi"] },
+	  "backends": { "pi": { "adapter": "true", "model": "m" } }
+	}`)
+	findings, err = Lint(context.Background(), LintOptions{
+		Root:           rootEsc,
+		PolicyPaths:    []string{escPolicy},
+		NoShippedRules: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasLintCode(t, findings, CodeWatchLintSeatUnmapped, `escalate["triage"]`)
+}

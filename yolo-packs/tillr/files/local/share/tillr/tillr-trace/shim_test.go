@@ -307,3 +307,35 @@ func TestShimAddsNoTraceLinesToAnXShell(t *testing.T) {
 		t.Fatalf("cmds = %v, want %v", cmds, wantCmds)
 	}
 }
+
+func TestBashShimSourcesSeatBashEnv(t *testing.T) {
+	work := t.TempDir()
+	seatEnv := filepath.Join(work, "seat-bash-env.sh")
+	if err := os.WriteFile(seatEnv, []byte("SEAT_ENV_LOADED=yes\nkill() { printf 'triage boundary: kill refused\\n' >&2; return 2; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	shimPath, err := filepath.Abs("bash-shim.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. With TILLR_TRACE_DIR unset.
+	res := runBash(t, "", []string{
+		"BASH_ENV=" + shimPath,
+		"TILLR_SEAT_BASH_ENV=" + seatEnv,
+	}, "-c", "printf '%s\\n' \"$SEAT_ENV_LOADED\"; kill -0 $$")
+	if res.code != 2 || res.stdout != "yes\n" || !strings.Contains(res.stderr, "triage boundary") {
+		t.Fatalf("without TILLR_TRACE_DIR: got %+v", res)
+	}
+
+	// 2. With TILLR_TRACE_DIR set.
+	loopDir := filepath.Join(work, "trace-loop")
+	if err := os.MkdirAll(loopDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := append(shimEnv(t, loopDir, "run-seat-1"), "TILLR_SEAT_BASH_ENV="+seatEnv)
+	res = runBash(t, "", env, "-c", "printf '%s\\n' \"$SEAT_ENV_LOADED\"; kill -0 $$")
+	if res.code != 2 || res.stdout != "yes\n" || !strings.Contains(res.stderr, "triage boundary") {
+		t.Fatalf("with TILLR_TRACE_DIR: got %+v", res)
+	}
+}

@@ -483,3 +483,43 @@ func TestWorkflowRejectsReadOnlySeatWrites(t *testing.T) {
 		t.Fatalf("read-only scout refused: %v", err)
 	}
 }
+
+func TestPolicyTriageValidation(t *testing.T) {
+	// Valid triage policy: read-only, empty escalate["triage"].
+	valid := twoBackends()
+	valid.Seats = map[string]string{"triage": "first"}
+	valid.ReadOnlySeats = []string{"triage"}
+	valid.Escalate = map[string][]string{"triage": {}}
+	if err := valid.Check(); err != nil {
+		t.Fatalf("valid triage policy refused: %v", err)
+	}
+
+	// Omitting triage from read_only_seats must fail with exit 2.
+	notReadOnly := twoBackends()
+	notReadOnly.Seats = map[string]string{"triage": "first"}
+	notReadOnly.Escalate = map[string][]string{"triage": {}}
+	err := notReadOnly.Check()
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "read_only_seats") {
+		t.Fatalf("expected exit-2 read_only_seats refusal, got %v", err)
+	}
+
+	// Non-empty escalate["triage"] must fail with exit 2.
+	escalating := twoBackends()
+	escalating.Seats = map[string]string{"triage": "first"}
+	escalating.ReadOnlySeats = []string{"triage"}
+	escalating.Escalate = map[string][]string{"triage": {"second"}}
+	err = escalating.Check()
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "escalate.triage") {
+		t.Fatalf("expected exit-2 escalate.triage refusal, got %v", err)
+	}
+
+	// Tracked example policy must pass Check().
+	repoPolicy := filepath.Join("..", "..", "..", "config", "tillr", "backend-policy.json")
+	loaded, err := LoadPolicy(repoPolicy)
+	if err != nil {
+		t.Fatalf("LoadPolicy(%s): %v", repoPolicy, err)
+	}
+	if loaded.Seats["triage"] != "pi-scout" {
+		t.Fatalf("backend-policy.json seats[triage] = %q, want pi-scout", loaded.Seats["triage"])
+	}
+}

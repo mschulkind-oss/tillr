@@ -891,12 +891,20 @@ func loadAndValidatePolicyFile(absRoot, path string, fc *findingCollector) (lint
 			fc.add(path, CodeWatchLintSeatUnmapped, fmt.Sprintf("escalate names unmapped seat %q", seat))
 			valid = false
 		}
+		if seat == "triage" && len(list) > 0 {
+			fc.add(path, CodeWatchLintSeatUnmapped, fmt.Sprintf("escalate[%q] must be empty: triage never escalates to another model tier", seat))
+			valid = false
+		}
 		for _, bname := range list {
 			if _, ok := lp.Backends[bname]; !ok {
 				fc.add(path, CodeWatchLintSeatUnmapped, fmt.Sprintf("escalate[%q] references unknown backend %q", seat, bname))
 				valid = false
 			}
 		}
+	}
+	if len(lp.seatLists["triage"]) > 0 && !seenRO["triage"] {
+		fc.add(path, CodeWatchLintSeatUnmapped, `policy declares seat "triage", which must be listed in read_only_seats`)
+		valid = false
 	}
 	return lp, valid
 }

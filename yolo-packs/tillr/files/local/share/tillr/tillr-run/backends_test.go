@@ -458,3 +458,127 @@ func TestNonLandingBriefTemplatePassesPiPreflight(t *testing.T) {
 		t.Fatalf("pi adapter refused non-landing brief: %v: %s %s", err, out, stderr)
 	}
 }
+
+func TestTriageBriefTemplatePreflightAndNoLandingHooks(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("backends", "brief-template-triage.md"))
+	if err != nil {
+		t.Fatalf("reading brief-template-triage.md: %v", err)
+	}
+	template := string(raw)
+
+	requiredPlaceholders := []string{
+		"ALERT_ID", "RULE_ID", "RUN_ID", "BACKEND", "STORE_PATH",
+		"REPO_ROOT", "TARGET", "DURABLE_DIR", "DATE", "TIMEOUT_SECONDS",
+		"SEAT_LINES", "EPISODE_METADATA", "TIMELINE_BUNDLE", "CORRELATION_CONTEXT",
+	}
+	for _, ph := range requiredPlaceholders {
+		if !strings.Contains(template, "{{"+ph+"}}") {
+			t.Fatalf("brief-template-triage.md missing placeholder {{%s}}", ph)
+		}
+	}
+	if !strings.Contains(template, "- **Target:** {{TARGET}} (read-only root view)") {
+		t.Fatalf("brief-template-triage.md must set `- **Target:** {{TARGET}} (read-only root view)`")
+	}
+
+	requiredHeadings := []string{
+		"## Header",
+		"## Task",
+		"## Scope and boundaries",
+		"## Seats",
+		"## Settled decisions",
+		"## Facts carried",
+		"## Method",
+		"## Verification commands",
+		"## Report shape",
+		"## Stop conditions",
+	}
+	for _, h := range requiredHeadings {
+		if !strings.Contains(template, h) {
+			t.Fatalf("brief-template-triage.md missing heading %q", h)
+		}
+	}
+
+	base := scratch(t, "triage-brief")
+	lane := filepath.Join(base, "lane")
+	work := filepath.Join(lane, "work")
+	durable := filepath.Join(lane, "durable")
+	for _, d := range []string{work, durable} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	values := map[string]string{
+		"ALERT_ID":            "alert-001",
+		"RULE_ID":             "drain-item-fault",
+		"RUN_ID":              "run-triage-1",
+		"BACKEND":             "pi-scout",
+		"STORE_PATH":          filepath.Join(base, ".tillr", "state.db"),
+		"REPO_ROOT":           base,
+		"TARGET":              work,
+		"DURABLE_DIR":         durable,
+		"DATE":                "2026-11-26",
+		"TIMEOUT_SECONDS":     "300",
+		"SEAT_LINES":          "- `triage` (read-only) — Triage alerts.",
+		"EPISODE_METADATA":    "state=open, repeat_count=1",
+		"TIMELINE_BUNDLE":     "seq=10 drain.item-fault",
+		"CORRELATION_CONTEXT": "none",
+	}
+	rendered := template
+	for k, v := range values {
+		rendered = strings.ReplaceAll(rendered, "{{"+k+"}}", v)
+	}
+	briefPath := filepath.Join(lane, "brief.md")
+	if err := os.WriteFile(briefPath, []byte(rendered), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	preflight, err := filepath.Abs(filepath.Join("backends", "preflight.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflightCmd := exec.Command("sh", "-c", `. "$1"; PROG=test; preflight_brief "$2"`, "test", preflight, briefPath)
+	if out, err := preflightCmd.CombinedOutput(); err != nil {
+		t.Fatalf("preflight_brief rejected rendered triage brief: %v: %s", err, out)
+	}
+
+	// Verify run-pi accepts it and does not enable lane-worktree keep-going or landing hooks.
+	adapter, err := filepath.Abs(filepath.Join("backends", "pi", "run-pi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := filepath.Abs(filepath.Join("backends", "pi", "testdata", "complete.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(base, "bin")
+	argvFile := filepath.Join(base, "argv.txt")
+	writeExecutable(t, filepath.Join(bin, "pi"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CAPTURE_ARGV\"\ncat \"$STUB_STREAM\"\n")
+	if err := os.WriteFile(filepath.Join(lane, "base_sha"), []byte(strings.Repeat("0", 40)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(adapter, "--backend", "pi-scout", "--model", "fixture-model", "--effort", "medium")
+	cmd.Dir = work
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "TILLR_RESUME_PROMPT_FILE=") && !strings.HasPrefix(entry, "TILLR_SESSION_MODE=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env,
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"STUB_STREAM="+stream,
+		"CAPTURE_ARGV="+argvFile,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		stderr, _ := os.ReadFile(filepath.Join(lane, "stream.err"))
+		t.Fatalf("pi adapter refused triage brief: %v: %s %s", err, out, stderr)
+	}
+	argvBytes, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	argvStr := string(argvBytes)
+	if strings.Contains(argvStr, "keep-going.ts") || strings.Contains(argvStr, "land.ts") {
+		t.Fatalf("triage brief unexpectedly enabled lane-worktree hooks:\n%s", argvStr)
+	}
+}

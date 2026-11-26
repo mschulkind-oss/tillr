@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -64,6 +65,9 @@ func (p Policy) checkEscalate() error {
 	for seat, list := range p.Escalate {
 		if _, ok := p.Seats[seat]; !ok {
 			return fmt.Errorf("escalate names seat %q, which the policy's seats do not map", seat)
+		}
+		if seat == item.SeatTriage && len(list) > 0 {
+			return fmt.Errorf("escalate.%s must be empty: triage never escalates to another model tier", seat)
 		}
 		for _, name := range list {
 			if _, ok := p.Backends[name]; !ok {

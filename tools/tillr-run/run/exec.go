@@ -438,7 +438,13 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		"TILLR_RUN_EXEC_ID="+execID,
 	)
 	env = append(withoutEnv(env, "GIT_CEILING_DIRECTORIES"), "GIT_CEILING_DIRECTORIES="+filepath.Dir(root))
-	if nonLanding {
+	if req.Seat == triageSeatName {
+		env, err = installTriageGuard(durableDir, env)
+		if err != nil {
+			logFile.Close()
+			return record.Envelope{}, err
+		}
+	} else if nonLanding {
 		for _, key := range gitRepoEnvKeys {
 			env = withoutEnv(env, key)
 		}
@@ -497,6 +503,18 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// The child leads its own process group, and the bound kills the group plus any
 	// detached sessions carrying this execution's marker.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if req.Seat == triageSeatName {
+		repoRoot := triageRepoRoot(root, env)
+		traceDir := lookupEnvValue(env, "TILLR_TRACE_DIR")
+		storeDir := ""
+		if s != nil && s.Path() != "" {
+			storeDir = filepath.Dir(s.Path())
+		}
+		if _, err := prepareTriageExecCmd(cmd, adapterPath, req.Command[1:], repoRoot, laneDir, workDir, durableDir, traceDir, storeDir); err != nil {
+			logFile.Close()
+			return record.Envelope{}, err
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		// There was no process, so the injected clock is the only clock there is.

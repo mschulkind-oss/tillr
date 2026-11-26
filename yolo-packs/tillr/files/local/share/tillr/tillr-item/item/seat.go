@@ -28,4 +28,7 @@ const (
 	// SeatScout is read-only reconnaissance: finding the files, symbols and call sites a
 	// brief should carry, without editing anything.
 	SeatScout = "scout"
+	// SeatTriage is read-only alert triage: reading one unsettled alert episode's evidence,
+	// filing or linking a root-cause item, or escalating upward without modifying code.
+	SeatTriage = "triage"
 )
