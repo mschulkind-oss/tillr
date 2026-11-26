@@ -15,23 +15,6 @@ import (
 // It keeps session deadlines current without recording repeated, unchanged answers.
 const PassInterval = time.Second
 
-const SessionDDL = `
-CREATE TABLE IF NOT EXISTS drain_sessions (
- session_id TEXT PRIMARY KEY,
- started_at INTEGER NOT NULL,
- refreshed_at INTEGER NOT NULL,
- next_pass_at INTEGER NOT NULL,
- ended_at INTEGER
-);
-`
-
-func nullablePassID(id string) any {
-	if id == "" {
-		return nil
-	}
-	return id
-}
-
 func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 	l.sessionMu.Lock()
 	defer l.sessionMu.Unlock()

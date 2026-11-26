@@ -25,16 +25,6 @@ func backendAvailabilityChanged(r *store.Reader, after int64) (bool, error) {
 	return changed, err
 }
 
-// Terminal classifications are captured once, keyed to the immutable run.finish
-// event, never the mutable runs.event_seq (usage corrections advance that field).
-// class is what ClassifyAttempt answered, which routing reads; closes is the
-// availability fact: an infrastructure ending that no other rule answers.
-const backendOutcomesDDL = `CREATE TABLE IF NOT EXISTS backend_outcomes (
- terminal_seq INTEGER PRIMARY KEY REFERENCES events(seq),
- class TEXT NOT NULL,
- closes INTEGER NOT NULL DEFAULT 0
-);`
-
 const backendOutcomeKind = "drain.backend-outcome"
 
 type backendOutcome struct {

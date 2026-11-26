@@ -2,15 +2,10 @@
 package drain
 
 import (
-	"encoding/json"
-	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
-	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr-drain/internal/storelog"
 )
 
 // recordResult writes the loop's outcome beside the runs' own records, so "why did the loop
@@ -40,49 +35,11 @@ func (l *Loop) recordResult(result *LoopResult) {
 // terminal that ran the loop. A stamp that names nothing is omitted, which is the reader's
 // signal that this build cannot be named.
 func RecordLoopResult(root string, at time.Time, build BuildStamp, result LoopResult, report io.Writer) {
-	if report == nil {
-		report = io.Discard
-	}
 	result.StopExplanation = ExplainStop(result, at)
-	path := LoopResultFile(root, result.FirstGeneration, result.LastGeneration)
 	if build.named() {
 		result.Build = &build
 	}
-	payload, err := json.Marshal(result)
-	if err != nil {
-		reportRecordFailure(report, path, Internalf("encoding the loop's result: %v", err))
-		return
-	}
-	env := record.Envelope{
-		RecordVersion: record.SupportedVersion,
-		Kind:          LoopResultKind,
-		ID:            "loop-" + strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "drain-"), ".json"),
-		Producer:      record.Producer{System: record.System, Utility: Utility, Version: Version},
-		CreatedAt:     at,
-		Payload:       payload,
-	}
-	body, err := record.Encode(env)
-	if err != nil {
-		reportRecordFailure(report, path, Internalf("encoding the loop's result record: %v", err))
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		reportRecordFailure(report, path, Externalf("creating %s: %v", filepath.Dir(path), err))
-		return
-	}
-	if result.FirstGeneration == "" && result.LastGeneration == "" {
-		if prior, err := os.ReadFile(path); err == nil {
-			archive := filepath.Join(filepath.Dir(path), fmt.Sprintf("drain-0-0-%d.json", at.UnixNano()))
-			if err := os.WriteFile(archive, prior, 0o644); err != nil {
-				reportRecordFailure(report, archive, Externalf("archiving %s: %v", path, err))
-			}
-		} else if !os.IsNotExist(err) {
-			reportRecordFailure(report, path, Externalf("reading %s: %v", path, err))
-		}
-	}
-	if err := os.WriteFile(path, append(body, '\n'), 0o644); err != nil {
-		reportRecordFailure(report, path, Externalf("writing %s: %v", path, err))
-	}
+	storelog.WriteLoopResultRecord(root, result.FirstGeneration, result.LastGeneration, at, result, report)
 }
 
 // RecordStartupFault writes the terminal record for a loop that could not start: a policy
@@ -100,11 +57,4 @@ func RecordStartupFault(root string, at time.Time, err error, report io.Writer) 
 		Detail:   err.Error(),
 		ExitCode: ExitCode(err),
 	}, report)
-}
-
-// reportRecordFailure says, in the loop's own report, that a record could not be written.
-// A record that is missing and silent is the plausible-not-truthful timeline the observatory
-// design forbids; the loop still stops with the reason it made, and the line names the file.
-func reportRecordFailure(report io.Writer, path string, err error) {
-	fmt.Fprintf(report, "loop: the loop's result was not recorded at %s: %v\n", path, err)
 }

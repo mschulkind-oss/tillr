@@ -50,34 +50,6 @@ type commentReply struct {
 	RootTextVersion string `json:"root_text_version,omitempty"`
 }
 
-func init() {
-	if err := store.RegisterDDL("drain-comments", `CREATE TABLE IF NOT EXISTS last_designers (
- document TEXT PRIMARY KEY, record TEXT NOT NULL
- );
- CREATE TABLE IF NOT EXISTS comment_runs (
- run_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, session_id TEXT NOT NULL,
- reason TEXT NOT NULL, outcome TEXT NOT NULL DEFAULT '', delivered INTEGER NOT NULL DEFAULT 0
- );
- CREATE TABLE IF NOT EXISTS comment_deliveries (
- run_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, document TEXT NOT NULL,
- blob_id TEXT NOT NULL, body TEXT NOT NULL, written INTEGER NOT NULL DEFAULT 0
- );
- CREATE TABLE IF NOT EXISTS comment_arrivals (
- item_id TEXT NOT NULL, comment_id TEXT NOT NULL, session_id TEXT NOT NULL,
- reason TEXT NOT NULL, cache_lifetime_seconds INTEGER, seconds_since_request REAL,
- PRIMARY KEY(item_id,comment_id)
- );
- CREATE TABLE IF NOT EXISTS comment_reply_states (
- run_id TEXT NOT NULL, comment_id TEXT NOT NULL, state TEXT NOT NULL,
- PRIMARY KEY(run_id,comment_id)
- );
- CREATE TABLE IF NOT EXISTS comment_confirmation (
- id INTEGER PRIMARY KEY CHECK(id=1), configured INTEGER NOT NULL
- );`); err != nil {
-		panic(err)
-	}
-}
-
 func readDesigner(r *store.Reader, doc string) (*lastDesigner, error) {
 	var exists bool
 	if err := r.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='last_designers')").Scan(&exists); err != nil {
