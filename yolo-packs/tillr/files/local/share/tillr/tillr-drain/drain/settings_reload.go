@@ -115,6 +115,7 @@ func (l *Loop) reloadSettingsOnLanding(ctx context.Context, tip string) {
 	limits := next.CandidateSize
 	l.settingsMu.Lock()
 	l.cfg.PostLanding.Brief = next.Brief
+	l.cfg.PostLanding.Gate = next.Gate
 	l.cfg.PostLanding.Roll = next.Roll
 	l.cfg.PostLanding.Push = next.Push
 	l.cfg.PostLanding.Comments = next.Comments

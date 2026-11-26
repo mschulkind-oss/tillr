@@ -10,6 +10,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -61,7 +62,11 @@ func FixerHeavyDeclaration(dir, id string) bool {
 	if filepath.Base(id) != id {
 		return false
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "tools", "gate", "checks", id+".json"))
+	s, err := settings.Read(dir)
+	if err != nil {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(s.ChecksDir()), id+".json"))
 	var decl struct{ ID, Scope, Tier string }
 	return err == nil && json.Unmarshal(raw, &decl) == nil && decl.ID == id && decl.Scope == "tree" && decl.Tier == "heavy"
 }

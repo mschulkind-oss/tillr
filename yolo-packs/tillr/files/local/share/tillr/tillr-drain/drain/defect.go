@@ -133,7 +133,7 @@ func (l *Loop) fileDefectItem(ctx context.Context, reporter string, o Obstacle) 
 			if err := json.Unmarshal([]byte(fence), &old); err != nil {
 				return err
 			}
-			merged := TrunkFixerFence(old, paths)
+			merged := TrunkFixerFenceWithGate(old, paths, l.fixerGateCodePaths())
 			raw, err := json.Marshal(merged)
 			if err != nil {
 				return err

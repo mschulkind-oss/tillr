@@ -23,6 +23,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -38,7 +39,6 @@ const (
 
 const (
 	gateModuleHeader = "module github.com/mschulkind-oss/tillr-gate"
-	registryDir      = "tools/gate/checks"
 	registryEnv      = "TILLR_LOOP_REGISTRY"
 	gateLogsDir      = "logs"
 )
@@ -447,7 +447,11 @@ func composeGate(ctx Ctx, dry bool) ([]Step, error) {
 	}
 	registry := ctx.Registry
 	if registry == "" {
-		registry = filepath.Join(ctx.Worktree, registryDir)
+		s, err := settings.Read(ctx.Worktree)
+		if err != nil {
+			return nil, &Refusal{Code: ExitUsage, Message: err.Error()}
+		}
+		registry = filepath.Join(ctx.Worktree, filepath.FromSlash(s.ChecksDir()))
 	}
 	gpArgs, err := gateProgramArgs(ctx.GateProgram)
 	if err != nil {
@@ -825,7 +829,7 @@ func resolveGateRunner(script string) (string, error) {
 	return runnerPath, nil
 }
 
-func resolveGateProgram(args parsedArgs) (string, error) {
+func resolveGateProgram(args parsedArgs, registry string) (string, error) {
 	if args.gateProgram != "" {
 		return args.gateProgram, nil
 	}
@@ -842,8 +846,18 @@ func resolveGateProgram(args parsedArgs) (string, error) {
 		workDir = filepath.Join(root, ".tillr", "loop")
 	}
 	logs := filepath.Join(workDir, args.run, "change-logs")
-	return fmt.Sprintf("python3 %s --base %s --head %s --runner %s --logs %s",
-		shellQuote(script), shellQuote(args.base), shellQuote(args.head), shellQuote(args.tillrGate), shellQuote(logs)), nil
+	cmd := fmt.Sprintf("python3 %s --base %s --head %s --runner %s --logs %s",
+		shellQuote(script), shellQuote(args.base), shellQuote(args.head), shellQuote(args.tillrGate), shellQuote(logs))
+	if registry != "" && !strings.HasSuffix(registry, ".json") {
+		checksDir := registry
+		if !filepath.IsAbs(checksDir) {
+			if abs, err := filepath.Abs(checksDir); err == nil {
+				checksDir = abs
+			}
+		}
+		cmd += " --checks " + shellQuote(checksDir)
+	}
+	return cmd, nil
 }
 
 func buildContext(kind string, args parsedArgs) (Ctx, error) {
@@ -869,7 +883,7 @@ func buildContext(kind string, args parsedArgs) (Ctx, error) {
 	}
 	var gp string
 	if kind == "gate" || kind == "self-check" {
-		gp, err = resolveGateProgram(args)
+		gp, err = resolveGateProgram(args, registry)
 		if err != nil {
 			return Ctx{}, err
 		}
@@ -982,19 +996,24 @@ func revisionCheck(kind string, args parsedArgs, stdin io.Reader, stdout, stderr
 		}
 		workDir = args.worktree
 	}
+	targetDir := "."
+	if workDir != "" {
+		targetDir = workDir
+	}
+	s, err := settings.Read(targetDir)
+	if err != nil {
+		return 0, &Refusal{Code: ExitExternal, Message: err.Error()}
+	}
+	checksDir := s.ChecksDir()
 	scratch := os.Getenv("YOLO_DURABLE_DIR")
 	if scratch == "" {
-		dir := "."
-		if workDir != "" {
-			dir = workDir
-		}
 		if _, nonLanding := nonLandingStoreCharter(args.store); nonLanding || os.Getenv("TILLR_NON_LANDING") == "1" {
 			if args.root != "" {
 				scratch = resolvePath(args.root)
 			} else {
 				scratch = "."
 			}
-		} else if common, err := gitCmd(dir, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil && common != "" {
+		} else if common, err := gitCmd(targetDir, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil && common != "" {
 			scratch = common
 		} else {
 			scratch = "."
@@ -1007,13 +1026,13 @@ func revisionCheck(kind string, args parsedArgs, stdin io.Reader, stdout, stderr
 	}
 	argv := []string{
 		runner, "checks", "--heavy-tree", "--base", "HEAD", "--head", "HEAD",
-		"--worktree", ".", "--checks", registryDir, "--logs", logs,
+		"--worktree", ".", "--checks", checksDir, "--logs", logs,
 	}
 	if kind != "rolling" {
 		var scope, tier string
-		globBase := registryDir
+		globBase := filepath.FromSlash(checksDir)
 		if workDir != "" {
-			globBase = filepath.Join(workDir, registryDir)
+			globBase = filepath.Join(workDir, globBase)
 		}
 		matches, _ := filepath.Glob(filepath.Join(globBase, "*.json"))
 		sort.Strings(matches)
@@ -1037,7 +1056,7 @@ func revisionCheck(kind string, args parsedArgs, stdin io.Reader, stdout, stderr
 		if scope != "tree" {
 			return 0, &Refusal{
 				Code:    ExitExternal,
-				Message: fmt.Sprintf("named check could not judge: %s is not a whole-tree declaration in %s", args.only, registryDir),
+				Message: fmt.Sprintf("named check could not judge: %s is not a whole-tree declaration in %s", args.only, checksDir),
 			}
 		}
 		if tier == "heavy" {
@@ -1050,6 +1069,7 @@ func revisionCheck(kind string, args parsedArgs, stdin io.Reader, stdout, stderr
 			argv = []string{
 				"python3", treeCheck, "--only", args.only,
 				"--base", "HEAD", "--head", "HEAD", "--runner", runner,
+				"--checks", checksDir,
 			}
 		}
 	}

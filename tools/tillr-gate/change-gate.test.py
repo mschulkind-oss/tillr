@@ -264,6 +264,107 @@ class DeclarationClassificationTest(unittest.TestCase):
         self.assertEqual([(c["check_id"], c["result"]) for c in verdict["checks"]], [("ok", "pass")])
         self.assertFalse(list((self.root / ".git").glob("tillr-gate/go-build-warm-*")))
 
+    def test_custom_checks_dir_override_and_invalid_settings(self):
+        env = dict(
+            os.environ,
+            GIT_CONFIG_COUNT="2",
+            GIT_CONFIG_KEY_0="user.name",
+            GIT_CONFIG_VALUE_0="Fixture",
+            GIT_CONFIG_KEY_1="user.email",
+            GIT_CONFIG_VALUE_1="fixture@example.invalid",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=self.root, env=env, check=True)
+        (self.root / ".tillr.toml").write_text('[gate]\nchecks_dir = "custom/checks"\n')
+        custom = self.root / "custom/checks"
+        custom.mkdir(parents=True)
+        (custom / "ok.json").write_text(json.dumps({
+            "id": "ok",
+            "label": "Custom change check",
+            "scope": "change",
+            "tier": "fast",
+            "budget_ms": 1000,
+            "command": ["true"],
+        }))
+        (custom / "tree.json").write_text(json.dumps({
+            "id": "tree-ok",
+            "label": "Custom tree check",
+            "scope": "tree",
+            "tier": "fast",
+            "budget_ms": 1000,
+            "command": ["true"],
+        }))
+        (self.root / "README.md").write_text("# Base\n")
+        subprocess.run(["git", "add", "."], cwd=self.root, env=env, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=self.root, env=env, check=True)
+        base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, env=env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+        (self.root / "README.md").write_text("# Head\n")
+        subprocess.run(["git", "add", "README.md"], cwd=self.root, env=env, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "head"], cwd=self.root, env=env, check=True)
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, env=env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+        # change-gate.py reads [gate] checks_dir from .tillr.toml
+        done = subprocess.run(
+            [sys.executable, str(PROGRAM), "--base", base, "--head", head,
+             "--runner", self.installed, "--logs", str(self.root / "logs")],
+            cwd=self.root, env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        verdict = json.loads(done.stdout.splitlines()[0])["payload"]
+        self.assertEqual({(c["check_id"], c["result"]) for c in verdict["checks"]},
+                         {("ok", "pass"), ("tree-ok", "pass")})
+
+        # tree-check.py reads [gate] checks_dir from .tillr.toml
+        tree_prog = PROGRAM.with_name("tree-check.py")
+        tree_done = subprocess.run(
+            [sys.executable, str(tree_prog), "--only", "tree-ok", "--base", base, "--head", head,
+             "--runner", self.installed],
+            cwd=self.root, env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(tree_done.returncode, 0, tree_done.stderr)
+
+        # --checks overrides .tillr.toml
+        override = self.root / "override/checks"
+        override.mkdir(parents=True)
+        (override / "over.json").write_text(json.dumps({
+            "id": "over",
+            "label": "Override check",
+            "scope": "tree",
+            "tier": "fast",
+            "budget_ms": 1000,
+            "command": ["true"],
+        }))
+        over_done = subprocess.run(
+            [sys.executable, str(PROGRAM), "--base", base, "--head", head,
+             "--checks", "override/checks", "--runner", self.installed, "--logs", str(self.root / "logs-over")],
+            cwd=self.root, env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(over_done.returncode, 0, over_done.stderr)
+        over_verdict = json.loads(over_done.stdout.splitlines()[0])["payload"]
+        self.assertEqual([(c["check_id"], c["result"]) for c in over_verdict["checks"]], [("over", "pass")])
+        tree_over = subprocess.run(
+            [sys.executable, str(tree_prog), "--only", "over", "--base", base, "--head", head,
+             "--checks", "override/checks", "--runner", self.installed],
+            cwd=self.root, env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(tree_over.returncode, 0, tree_over.stderr)
+
+        # Invalid .tillr.toml exits 4 on both scripts when --checks is omitted
+        (self.root / ".tillr.toml").write_text('[gate]\nchecks_dir = "../escape"\n')
+        bad_cg = subprocess.run(
+            [sys.executable, str(PROGRAM), "--base", base, "--head", head,
+             "--runner", self.installed, "--logs", str(self.root / "logs-bad")],
+            cwd=self.root, env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(bad_cg.returncode, 4, bad_cg.stderr)
+        bad_tc = subprocess.run(
+            [sys.executable, str(tree_prog), "--only", "tree-ok", "--base", base, "--head", head,
+             "--runner", self.installed],
+            cwd=self.root, env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(bad_tc.returncode, 4, bad_tc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

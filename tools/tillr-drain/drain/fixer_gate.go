@@ -11,6 +11,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/fixer"
 	"github.com/mschulkind-oss/tillr/checkresult"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -31,6 +32,9 @@ type fixerCheckStep interface {
 }
 
 func (s *ProcessSteps) fixerCheck(ctx context.Context, c Candidate, id string) (string, string) {
+	if _, err := settings.Read(c.Worktree); err != nil {
+		return "error", err.Error()
+	}
 	// Modern proof selectors also include focused Go tests and declaration-file
 	// heavy checks. Use their proof judge, not a whole legacy suite or range.
 	if strings.HasPrefix(id, goTestPrefix) || fixerHeavyDeclaration(c.Worktree, id) {

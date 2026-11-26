@@ -90,7 +90,7 @@ func flagsFor(kind string) []flagDef {
 		defs = append(defs,
 			flagDef{
 				name: "--registry",
-				help: fmt.Sprintf("the check registry tillr-gate plan reads (default: $%s, else the candidate's tools/gate/checks directory)", registryEnv),
+				help: fmt.Sprintf("the check registry tillr-gate plan reads (default: $%s, else the candidate's [gate] checks_dir in .tillr.toml, default tools/gate/checks)", registryEnv),
 			},
 			flagDef{
 				name: "--gate-program",

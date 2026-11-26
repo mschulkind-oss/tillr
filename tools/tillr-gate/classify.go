@@ -15,6 +15,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 )
 
 var (
@@ -207,10 +208,39 @@ func (loader *classifyRepoLoader) commitSet(rev string) (*loadedCheckSet, error)
 	if err != nil {
 		return nil, err
 	}
+	checksDir := settings.DefaultChecksDir
+	for _, entry := range inputs {
+		if filepath.ToSlash(entry.Path) == ".tillr.toml" {
+			raw, err := memoryGitOutput(loader.repo, "cat-file", "blob", entry.Object)
+			if err != nil {
+				return nil, err
+			}
+			tmpDir, err := os.MkdirTemp("", "tillr-gate-settings-*")
+			if err != nil {
+				return nil, err
+			}
+			err = func() error {
+				defer os.RemoveAll(tmpDir)
+				if writeErr := os.WriteFile(filepath.Join(tmpDir, ".tillr.toml"), raw, 0600); writeErr != nil {
+					return writeErr
+				}
+				s, readErr := settings.Read(tmpDir)
+				if readErr != nil {
+					return readErr
+				}
+				checksDir = s.ChecksDir()
+				return nil
+			}()
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
 	var declEntries []treeInput
 	for _, entry := range inputs {
 		slashPath := filepath.ToSlash(entry.Path)
-		if filepath.ToSlash(filepath.Dir(slashPath)) == "tools/gate/checks" && strings.HasSuffix(slashPath, ".json") {
+		if filepath.ToSlash(filepath.Dir(slashPath)) == checksDir && strings.HasSuffix(slashPath, ".json") {
 			declEntries = append(declEntries, entry)
 		}
 	}
@@ -257,7 +287,11 @@ func (loader *classifyRepoLoader) worktreeSet(rawWT, rev string) (*loadedCheckSe
 	if cached, ok := loader.byWT[cacheKey]; ok {
 		return cached, nil
 	}
-	checkDir := filepath.Join(wtDir, "tools", "gate", "checks")
+	s, err := settings.Read(wtDir)
+	if err != nil {
+		return nil, err
+	}
+	checkDir := filepath.Join(wtDir, filepath.FromSlash(s.ChecksDir()))
 	entries, err := os.ReadDir(checkDir)
 	var decls []Declaration
 	if err != nil && !os.IsNotExist(err) {

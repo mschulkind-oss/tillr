@@ -19,6 +19,15 @@ import (
 // DefaultTrunkBranch is the default branch name when [trunk] branch is unset.
 const DefaultTrunkBranch = "main"
 
+// DefaultChecksDir is the default check-declarations directory when [gate] checks_dir is unset.
+const DefaultChecksDir = "tools/gate/checks"
+
+// Gate names the repository's check-declarations directory.
+type Gate struct {
+	ChecksDir string
+	Set       bool
+}
+
 // Trunk names the branch where landings go.
 type Trunk struct {
 	Branch string
@@ -42,6 +51,7 @@ type Brief struct {
 type Settings struct {
 	Trunk    Trunk
 	Brief    Brief
+	Gate     Gate
 	Sync     Sync
 	Intake   Intake
 	Lanes    Lanes
@@ -52,6 +62,14 @@ type Settings struct {
 	// WorkflowDefaults maps seats to workflow references; the drain validates files.
 	WorkflowDefaults map[string]string
 	CandidateSize    CandidateSizeLimits
+}
+
+// ChecksDir returns the configured check-declarations directory, or DefaultChecksDir when unset.
+func (s Settings) ChecksDir() string {
+	if s.Gate.ChecksDir == "" {
+		return DefaultChecksDir
+	}
+	return s.Gate.ChecksDir
 }
 
 // TrunkBranch returns the configured landing branch, or DefaultTrunkBranch when unset.
@@ -173,8 +191,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 	var legacyPush *bool
 	whatSet := false
 	for _, table := range keys(tables) {
-		if table != "trunk" && table != "brief" && table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" && table != "candidate_size" {
-			return Settings{}, refuse(table, "a known table (trunk, brief, roll, push, comments, workflows, prose, intake, lanes, sync or candidate_size)")
+		if table != "trunk" && table != "brief" && table != "gate" && table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" && table != "candidate_size" {
+			return Settings{}, refuse(table, "a known table (trunk, brief, gate, roll, push, comments, workflows, prose, intake, lanes, sync or candidate_size)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -233,6 +251,17 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					return Settings{}, refuse(full, "a clean repository-relative file path")
 				}
 				s.Brief.Template = str
+			case "gate.checks_dir":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuse(full, "a clean repository-relative subdirectory path outside .git")
+				}
+				clean, ok := cleanChecksDir(str)
+				if !ok {
+					return Settings{}, refuse(full, "a clean repository-relative subdirectory path outside .git")
+				}
+				s.Gate.ChecksDir = clean
+				s.Gate.Set = true
 			case "roll.command", "push.remote", "push.ref", "comments.vantage_url", "comments.repo", "intake.dir":
 				str, ok := value.(string)
 				if !ok {
@@ -323,6 +352,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				}
 				if table == "brief" {
 					expected = "a known brief key (template)"
+				}
+				if table == "gate" {
+					expected = "a known gate key (checks_dir)"
 				}
 				if table == "candidate_size" {
 					expected = "a known candidate_size key (file_limit or added_line_limit)"
@@ -427,6 +459,25 @@ func validTrunkBranch(name string) bool {
 	return true
 }
 
+// cleanChecksDir validates gate.checks_dir as a clean repository-relative subdirectory
+// outside .git, trimming at most one trailing '/'.
+func cleanChecksDir(raw string) (string, bool) {
+	if strings.ContainsAny(raw, "*?\\") || strings.Contains(raw, "//") {
+		return "", false
+	}
+	clean := strings.TrimSuffix(raw, "/")
+	if clean == "" || clean == "." || clean == ".." || strings.HasSuffix(clean, "/") {
+		return "", false
+	}
+	if clean == ".git" || strings.HasPrefix(clean, ".git/") {
+		return "", false
+	}
+	if !filepath.IsLocal(clean) || filepath.ToSlash(filepath.Clean(clean)) != clean {
+		return "", false
+	}
+	return clean, true
+}
+
 // keys keeps multiple refusals deterministic instead of depending on map iteration.
 func keys(values map[string]any) []string {
 	result := make([]string, 0, len(values))
@@ -457,7 +508,7 @@ func (s Settings) StartupLine() string {
 	if s.Push.Ref != "" {
 		ref = strconv.Quote(s.Push.Ref)
 	}
-	line := fmt.Sprintf("settings: trunk.branch=%s roll.command=%s roll.paths=%s roll.pause_timeout_seconds=%d push.what=%s push.remote=%s push.ref=%s", strconv.Quote(s.TrunkBranch()), command, encoded, s.Roll.PauseTimeoutSeconds, s.Push.What, remote, ref)
+	line := fmt.Sprintf("settings: trunk.branch=%s gate.checks_dir=%s roll.command=%s roll.paths=%s roll.pause_timeout_seconds=%d push.what=%s push.remote=%s push.ref=%s", strconv.Quote(s.TrunkBranch()), strconv.Quote(s.ChecksDir()), command, encoded, s.Roll.PauseTimeoutSeconds, s.Push.What, remote, ref)
 	roadmaps := s.Sync.Roadmaps
 	if roadmaps == nil {
 		roadmaps = []string{}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 )
 
 // selectHeavyDeclarations selects the full heavy tree set even on an empty diff.
@@ -75,7 +76,7 @@ func checksFace(args []string) int {
 	base := flags.String("base", "", "base commit (required)")
 	head := flags.String("head", "", "head commit (required)")
 	root := flags.String("worktree", ".", "checkout containing the change")
-	directory := flags.String("checks", "tools/gate/checks", "declaration directory")
+	directory := flags.String("checks", "", "declaration directory (defaults to [gate] checks_dir in .tillr.toml, or tools/gate/checks)")
 	fastTree := flags.Bool("fast-tree", false, "include fast tree declarations alongside change checks")
 	scopeToChange := flags.Bool("scope-to-change", false, "skip checks whose declared reads are disjoint from the change")
 	heavyTree := flags.Bool("heavy-tree", false, "judge every heavy tree declaration, without change or fast checks")
@@ -117,6 +118,14 @@ func checksFace(args []string) int {
 		return exitCode(err)
 	}
 	checkDirectory := *directory
+	if checkDirectory == "" {
+		s, err := settings.Read(*root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "tillr-gate checks: could not judge:", err)
+			return record.ExitExternal
+		}
+		checkDirectory = s.ChecksDir()
+	}
 	if !filepath.IsAbs(checkDirectory) {
 		checkDirectory = filepath.Join(*root, checkDirectory)
 	}

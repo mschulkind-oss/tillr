@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr/checkresult"
+	"github.com/mschulkind-oss/tillr/settings"
 )
 
 // HeavyStep supplies the judge used by the one asynchronous trunk runner.
@@ -27,7 +28,11 @@ type heavyDeclaration struct {
 }
 
 func heavyCheckDeclarations(dir string) (map[string]heavyDeclaration, error) {
-	checksDir := filepath.Join(dir, "tools", "gate", "checks")
+	s, err := settings.Read(dir)
+	if err != nil {
+		return nil, err
+	}
+	checksDir := filepath.Join(dir, filepath.FromSlash(s.ChecksDir()))
 	entries, err := os.ReadDir(checksDir)
 	if err != nil {
 		return nil, err
@@ -177,8 +182,12 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		if bin == "" {
 			bin = "tillr-gate"
 		}
+		cfg, err := settings.Read(dir)
+		if err != nil {
+			return nil, Externalf("heavy declarations unavailable: %v", err)
+		}
 		logs := filepath.Join(s.LaneRoot, ".rolling", "logs", rev)
-		args := []string{"checks", "--heavy-tree", "--base", rev, "--head", rev, "--worktree", dir, "--logs", logs}
+		args := []string{"checks", "--heavy-tree", "--base", rev, "--head", rev, "--worktree", dir, "--checks", cfg.ChecksDir(), "--logs", logs}
 		if only != "" {
 			args = append(args, "--only", only)
 		}

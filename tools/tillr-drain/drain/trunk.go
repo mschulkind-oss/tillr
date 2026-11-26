@@ -20,6 +20,7 @@ import (
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -89,6 +90,7 @@ const goAffectedCheckID = "go-affected/affected-tillr-go-test-packages-pass"
 // edit the gate could make the red disappear by weakening the judge, which is the one
 // repair that must never be available to it. The entries are repo-relative prefixes.
 var GateCodePaths = []string{
+	".tillr.toml",
 	"tools/tillr-gate/",
 	"tools/gate/",
 	"tools/tillr-loop/",
@@ -123,8 +125,12 @@ func TrunkFixerSHA(itemID string) string {
 
 // GateCode reports whether a repo-relative path is the gate's own code.
 func GateCode(path string) bool {
+	return gateCodeWith(path, GateCodePaths)
+}
+
+func gateCodeWith(path string, gatePaths []string) bool {
 	path = filepath.ToSlash(strings.TrimSpace(path))
-	for _, entry := range GateCodePaths {
+	for _, entry := range gatePaths {
 		if path == strings.TrimSuffix(entry, "/") || strings.HasPrefix(path, entry) {
 			return true
 		}
@@ -140,13 +146,33 @@ func GateCode(path string) bool {
 // the program that decides whether it passed. A fence that ends up empty is a refusal to
 // file at all, which the caller reports rather than filing a fixer that cannot work.
 func TrunkFixerFence(suspect []string, watches []string) []string {
-	fence, _ := trunkFixerPaths(suspect, watches)
+	fence, _ := trunkFixerPathsWithGate(suspect, watches, GateCodePaths)
 	return fence
+}
+
+// TrunkFixerFenceWithGate answers TrunkFixerFence using the given gate-protected paths.
+func TrunkFixerFenceWithGate(suspect, watches, gatePaths []string) []string {
+	fence, _ := trunkFixerPathsWithGate(suspect, watches, gatePaths)
+	return fence
+}
+
+func (l *Loop) fixerGateCodePaths() []string {
+	checksDir := l.postLandingSettings().ChecksDir()
+	if l.cfg.Root != "" {
+		if s, err := settings.Read(l.cfg.Root); err == nil {
+			checksDir = s.ChecksDir()
+		}
+	}
+	return append(append([]string{}, GateCodePaths...), checksDir+"/")
 }
 
 // trunkFixerPaths also names paths that cannot belong to a repository-relative fence.
 // Reject traversal components rather than cleaning them into a different permission.
 func trunkFixerPaths(suspect []string, watches []string) ([]string, []string) {
+	return trunkFixerPathsWithGate(suspect, watches, GateCodePaths)
+}
+
+func trunkFixerPathsWithGate(suspect, watches, gatePaths []string) ([]string, []string) {
 	all := append(append([]string{}, suspect...), watches...)
 	seen := map[string]bool{}
 	fence, dropped := []string{}, []string{}
@@ -162,10 +188,10 @@ func trunkFixerPaths(suspect []string, watches []string) ([]string, []string) {
 		}
 		if unsafe {
 			dropped = append(dropped, path)
-		} else if !GateCode(filepath.ToSlash(filepath.Clean(path))) {
+		} else if !gateCodeWith(filepath.ToSlash(filepath.Clean(path)), gatePaths) {
 			// A broad directory must not grant indirect permission to edit the gate.
 			containsGate := false
-			for _, gate := range GateCodePaths {
+			for _, gate := range gatePaths {
 				containsGate = containsGate || strings.HasPrefix(gate, filepath.ToSlash(filepath.Clean(path))+"/")
 			}
 			if containsGate {
@@ -1519,7 +1545,8 @@ func (l *Loop) routeTrunkFixer(ctx context.Context, redSHA string, failing []str
 	if err != nil {
 		return "", err
 	}
-	fence, dropped := trunkFixerPaths(paths, nil)
+	gatePaths := l.fixerGateCodePaths()
+	fence, dropped := trunkFixerPathsWithGate(paths, nil, gatePaths)
 	nextProof := "the next rolling run advances the watermark"
 	if l.gatePolicy.LandingStrategy == "after-merge" {
 		nextProof = "the next heavy run advances refs/tillr/green"
@@ -1630,7 +1657,7 @@ func (l *Loop) routeTrunkFixer(ctx context.Context, redSHA string, failing []str
 			if err := json.Unmarshal([]byte(oldFence), &paths); err != nil {
 				return err
 			}
-			paths = TrunkFixerFence(paths, fence)
+			paths = TrunkFixerFenceWithGate(paths, fence, gatePaths)
 			raw, err := json.Marshal(paths)
 			if err != nil {
 				return err

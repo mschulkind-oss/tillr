@@ -13,28 +13,32 @@ import (
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/settings"
 )
-
-const repoFormatCheckPath = "tools/gate/checks/format.json"
 
 type gateFormatCheckDecl struct {
 	Command []string `json:"command"`
 }
 
-// unformattedRepoFiles runs the repository's declared format check (`tools/gate/checks/format.json`,
+// unformattedRepoFiles runs the repository's declared format check (`<checks_dir>/format.json`,
 // e.g. `just format --check`) in `worktree` and returns the unformatted file paths when the
 // formatter would rewrite any file. Repositories or fixtures that declare no format check return nil.
 func unformattedRepoFiles(ctx context.Context, worktree string) ([]string, error) {
-	raw, err := os.ReadFile(filepath.Join(worktree, repoFormatCheckPath))
+	s, err := settings.Read(worktree)
+	if err != nil {
+		return nil, Externalf("%v", err)
+	}
+	formatRel := filepath.ToSlash(filepath.Join(filepath.FromSlash(s.ChecksDir()), "format.json"))
+	raw, err := os.ReadFile(filepath.Join(worktree, formatRel))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, Externalf("read %s in %s: %v", repoFormatCheckPath, worktree, err)
+		return nil, Externalf("read %s in %s: %v", formatRel, worktree, err)
 	}
 	var decl gateFormatCheckDecl
 	if err := json.Unmarshal(raw, &decl); err != nil {
-		return nil, Externalf("parse %s in %s: %v", repoFormatCheckPath, worktree, err)
+		return nil, Externalf("parse %s in %s: %v", formatRel, worktree, err)
 	}
 	if len(decl.Command) == 0 || strings.TrimSpace(decl.Command[0]) == "" {
 		return nil, nil

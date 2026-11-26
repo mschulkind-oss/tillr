@@ -49,7 +49,10 @@ changing the tier. Both answer in a record on stdout when no output path is name
 `plan --registry` accepts either a generated registry file or a directory whose direct
 JSON files each declare one check. Programs and tests can live beside those files; only
 filenames ending in `.json` are declarations. Adding a check adds its files without
-editing a shared list. The complete field contract and defaults are in
+editing a shared list. `checks`, `classify`, [`change-gate.py`](./change-gate.py), and [`tree-check.py`](./tree-check.py) read
+the directory from `[gate] checks_dir` in `.tillr.toml` (defaulting to
+`tools/gate/checks`, overridden by `--checks` when supplied). The complete field
+contract and defaults are in
 [the gate reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/gate.md#a-check-is-one-declaration-file).
 
 ```sh

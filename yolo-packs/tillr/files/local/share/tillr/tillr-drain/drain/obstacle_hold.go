@@ -10,6 +10,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -56,7 +57,11 @@ func (l *Loop) gateCheckInventory(ctx context.Context) (proof map[string]bool, o
 	if l.cfg.Root == "" {
 		return proof, other, nil
 	}
-	checksDir := filepath.Join(l.cfg.Root, "tools", "gate", "checks")
+	s, err := settings.Read(l.cfg.Root)
+	if err != nil {
+		return nil, nil, err
+	}
+	checksDir := filepath.Join(l.cfg.Root, filepath.FromSlash(s.ChecksDir()))
 	entries, err := os.ReadDir(checksDir)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, nil, err

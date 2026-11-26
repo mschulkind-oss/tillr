@@ -11,6 +11,7 @@ import (
 // ordinary fence filter then excludes only the gate's own files,
 // preserving safe sources without granting permission to edit the gate indirectly.
 func (l *Loop) expandFixerPaths(ctx context.Context, redSHA string, paths []string) ([]string, error) {
+	gatePaths := l.fixerGateCodePaths()
 	var tracked []string
 	var out []string
 	for _, path := range paths {
@@ -25,7 +26,7 @@ func (l *Loop) expandFixerPaths(ctx context.Context, redSHA string, paths []stri
 		}
 		clean := filepath.ToSlash(filepath.Clean(path))
 		broad := clean == "."
-		for _, gate := range GateCodePaths {
+		for _, gate := range gatePaths {
 			broad = broad || strings.HasPrefix(gate, clean+"/")
 		}
 		if !broad {

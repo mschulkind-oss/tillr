@@ -4,13 +4,60 @@ import argparse
 import json
 import os
 from pathlib import Path
+import posixpath
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 if str(_GATE_DIR := Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(_GATE_DIR))
 from classify import classify
+
+DEFAULT_CHECKS_DIR = "tools/gate/checks"
+
+
+def _clean_checks_dir(raw):
+    if not isinstance(raw, str) or any(c in raw for c in "*?\\") or "//" in raw:
+        return None
+    clean = raw[:-1] if raw.endswith("/") else raw
+    if not clean or clean in (".", "..") or clean.endswith("/"):
+        return None
+    if clean == ".git" or clean.startswith(".git/") or clean.startswith("/"):
+        return None
+    parts = clean.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return None
+    if posixpath.normpath(clean) != clean:
+        return None
+    return clean
+
+
+def resolve_checks_dir(explicit):
+    if explicit is not None:
+        return explicit
+    path = Path(".tillr.toml")
+    if not path.exists():
+        return DEFAULT_CHECKS_DIR
+    try:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(f".tillr.toml: expected valid TOML: {error}") from error
+    if not isinstance(data, dict) or "gate" not in data:
+        return DEFAULT_CHECKS_DIR
+    gate = data["gate"]
+    if not isinstance(gate, dict):
+        raise ValueError(".tillr.toml: gate: expected a table")
+    unknown = sorted(k for k in gate if k != "checks_dir")
+    if unknown:
+        raise ValueError(f".tillr.toml: gate.{unknown[0]}: expected a known gate key (checks_dir)")
+    if "checks_dir" not in gate:
+        return DEFAULT_CHECKS_DIR
+    clean = _clean_checks_dir(gate["checks_dir"])
+    if clean is None:
+        raise ValueError(".tillr.toml: gate.checks_dir: expected a clean repository-relative subdirectory path outside .git")
+    return clean
 
 
 def main():
@@ -19,9 +66,11 @@ def main():
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--runner", default="tillr-gate")
+    parser.add_argument("--checks", default=None)
     args = parser.parse_args()
     try:
-        declarations = [json.loads(p.read_text()) for p in Path("tools/gate/checks").glob("*.json")]
+        checks_dir = resolve_checks_dir(args.checks)
+        declarations = [json.loads(p.read_text()) for p in Path(checks_dir).glob("*.json")]
         matches = [d for d in declarations if d.get("id") == args.only
                    and d.get("scope") == "tree" and d.get("tier") == "fast"]
         if len(matches) != 1:

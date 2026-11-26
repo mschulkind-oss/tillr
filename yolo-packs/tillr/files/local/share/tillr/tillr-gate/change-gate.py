@@ -4,10 +4,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 if str(_GATE_DIR := Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(_GATE_DIR))
@@ -16,8 +18,52 @@ from classify import ClassificationError, classify
 # Budgets are targets. Working checks keep their own verdict; only a sampled stall
 # ends one early. Carrying at a budget would discard its judgment.
 TREE_OVERRUN = "keep"
+DEFAULT_CHECKS_DIR = "tools/gate/checks"
 GATE_HANDOFFS = ("TILLR_ORDINARY_GATE_TIMING", "TILLR_FAST_TREE_TIMING",
                  "TILLR_GATE_SPANS_OUT", "TILLR_FAST_VERDICT_OUT")
+
+
+def _clean_checks_dir(raw):
+    if not isinstance(raw, str) or any(c in raw for c in "*?\\") or "//" in raw:
+        return None
+    clean = raw[:-1] if raw.endswith("/") else raw
+    if not clean or clean in (".", "..") or clean.endswith("/"):
+        return None
+    if clean == ".git" or clean.startswith(".git/") or clean.startswith("/"):
+        return None
+    parts = clean.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return None
+    if posixpath.normpath(clean) != clean:
+        return None
+    return clean
+
+
+def resolve_checks_dir(explicit):
+    if explicit is not None:
+        return explicit
+    path = Path(".tillr.toml")
+    if not path.exists():
+        return DEFAULT_CHECKS_DIR
+    try:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(f".tillr.toml: expected valid TOML: {error}") from error
+    if not isinstance(data, dict) or "gate" not in data:
+        return DEFAULT_CHECKS_DIR
+    gate = data["gate"]
+    if not isinstance(gate, dict):
+        raise ValueError(".tillr.toml: gate: expected a table")
+    unknown = sorted(k for k in gate if k != "checks_dir")
+    if unknown:
+        raise ValueError(f".tillr.toml: gate.{unknown[0]}: expected a known gate key (checks_dir)")
+    if "checks_dir" not in gate:
+        return DEFAULT_CHECKS_DIR
+    clean = _clean_checks_dir(gate["checks_dir"])
+    if clean is None:
+        raise ValueError(".tillr.toml: gate.checks_dir: expected a clean repository-relative subdirectory path outside .git")
+    return clean
 
 
 def check_environment():
@@ -32,11 +78,11 @@ def supports_change_scope(runner):
                           help_result.stdout + b"\n" + (help_result.stderr or b"")))
 
 
-def _go_build_command():
-    go_build_decl = Path("tools/gate/checks/go-build.json")
+def _go_build_command(checks_dir=DEFAULT_CHECKS_DIR):
+    go_build_decl = Path(checks_dir) / "go-build.json"
     if not go_build_decl.is_file():
         return None
-    go_build_script = Path("tools/gate/checks/go-build.py")
+    go_build_script = Path(checks_dir) / "go-build.py"
     if go_build_script.is_file():
         return [sys.executable, str(go_build_script)]
     repo_gate = Path("tools/gate/repo-gate")
@@ -45,9 +91,9 @@ def _go_build_command():
     return None
 
 
-def go_build_needed(base, head):
-    go_build_decl = Path("tools/gate/checks/go-build.json")
-    if not _go_build_command():
+def go_build_needed(base, head, checks_dir=DEFAULT_CHECKS_DIR):
+    go_build_decl = Path(checks_dir) / "go-build.json"
+    if not _go_build_command(checks_dir):
         return False
     try:
         reads = json.loads(go_build_decl.read_text()).get("reads")
@@ -62,7 +108,7 @@ def go_build_needed(base, head):
                for path in os.fsdecode(paths).split("\0") if path for read in reads)
 
 
-def warm_trimmed_go_cache():
+def warm_trimmed_go_cache(checks_dir=DEFAULT_CHECKS_DIR):
     """Run the go-build check once per Go version, unbounded, before the fast tier.
 
     The fast tier's go-build trims source paths (tools/gate/go_build.go), so a new
@@ -75,7 +121,7 @@ def warm_trimmed_go_cache():
     that could not run is tried again by the next gate, and one that ran (passing or
     failing) is recorded and not repeated. Its output goes to stderr, never stdout.
     """
-    go_build_cmd = _go_build_command()
+    go_build_cmd = _go_build_command(checks_dir)
     if not go_build_cmd:
         return
     try:
@@ -108,9 +154,11 @@ def main():
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
     parser.add_argument("--runner", default="tillr-gate")
+    parser.add_argument("--checks", default=None)
     parser.add_argument("--logs", required=True)
     args = parser.parse_args()
     try:
+        checks_dir = resolve_checks_dir(args.checks)
         # The tree checks judge the checkout. Do not certify a different head with
         # a correct change verdict and an unrelated tree verdict.
         actual = subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True)
@@ -119,8 +167,11 @@ def main():
             print("change-gate: could not judge: --head is not checked out", file=sys.stderr)
             return 4
         scoped = supports_change_scope(args.runner)
-        if not scoped or go_build_needed(args.base, args.head):
-            warm_trimmed_go_cache()
+        if not scoped or go_build_needed(args.base, args.head, checks_dir):
+            if checks_dir == DEFAULT_CHECKS_DIR:
+                warm_trimmed_go_cache()
+            else:
+                warm_trimmed_go_cache(checks_dir)
         checks_cmd = [args.runner, "checks", "--fast-tree"]
         if scoped:
             checks_cmd.append("--scope-to-change")
@@ -132,7 +183,7 @@ def main():
         checks_env = dict(check_environment(), TILLR_FAST_TREE_TIMING="1" if measure_landing else "")
         checked = subprocess.run([*checks_cmd, "--base", args.base, "--head", args.head,
                                   "--tree-overrun", TREE_OVERRUN,
-                                  "--worktree", ".", "--checks", "tools/gate/checks", "--logs", args.logs],
+                                  "--worktree", ".", "--checks", checks_dir, "--logs", args.logs],
                                  stdout=subprocess.PIPE, env=checks_env)
         # Preserve per-check timings and stall evidence beside the wrapper verdict.
         # The drain hands over this path; the outer gate supplies one for direct runs.
@@ -141,7 +192,7 @@ def main():
         sys.stdout.buffer.write(checked.stdout)
         sys.stdout.buffer.flush()
         return checked.returncode
-    except (ClassificationError, OSError, subprocess.CalledProcessError) as error:
+    except (ClassificationError, OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"change-gate: could not judge: {error}", file=sys.stderr)
         return 4
 

@@ -22,6 +22,7 @@ import (
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 	"golang.org/x/sys/unix"
 )
@@ -1599,7 +1600,11 @@ func (s *ProcessSteps) gateFailureContext(candidate Candidate) ([]string, []stri
 		}
 		// Fast tree declarations own their read sets. A wrapper's generated plan
 		// need not hold their raw ids, so use that same declaration directory.
-		declarations, _ := filepath.Glob(filepath.Join(candidate.Worktree, "tools/gate/checks/*.json"))
+		checksDir := settings.DefaultChecksDir
+		if s, err := settings.Read(candidate.Worktree); err == nil {
+			checksDir = s.ChecksDir()
+		}
+		declarations, _ := filepath.Glob(filepath.Join(candidate.Worktree, filepath.FromSlash(checksDir), "*.json"))
 		for _, path := range declarations {
 			body, err := os.ReadFile(path)
 			var decl struct {
@@ -1645,7 +1650,11 @@ func (s *ProcessSteps) gateCheckReads(candidate Candidate, watches map[string][]
 		}
 	}
 	if candidate.Worktree != "" {
-		declarations, _ := filepath.Glob(filepath.Join(candidate.Worktree, "tools/gate/checks/*.json"))
+		checksDir := settings.DefaultChecksDir
+		if s, err := settings.Read(candidate.Worktree); err == nil {
+			checksDir = s.ChecksDir()
+		}
+		declarations, _ := filepath.Glob(filepath.Join(candidate.Worktree, filepath.FromSlash(checksDir), "*.json"))
 		for _, path := range declarations {
 			body, err := os.ReadFile(path)
 			var decl struct {
