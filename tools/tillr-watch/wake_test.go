@@ -19,6 +19,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/notify"
+	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -1491,5 +1492,236 @@ func TestWatchWaitPreservesEvalCacheUnderStoreWrites(t *testing.T) {
 	if coreFraction >= 0.10 {
 		t.Fatalf("wait used %.2f%% of one core (%d ticks over %.2fs), want < 10%% (evalCache lost?)",
 			coreFraction*100, endTicks-startTicks, wall.Seconds())
+	}
+}
+
+func TestWatchWaitStoreErrorExitsDistinctlyWithStoppedNotice(t *testing.T) {
+	t.Run("mid-wait store error", func(t *testing.T) {
+		s, rules := fixture(t, false)
+		ctx, cancel := context.WithCancel(t.Context())
+		ticks := make(chan time.Time)
+		deadline := make(chan time.Time)
+		idle := make(chan struct{}, 4)
+
+		hooks := &waitTestHooks{
+			deadline: deadline,
+			onIdle: func(bool) {
+				select {
+				case idle <- struct{}{}:
+				default:
+				}
+			},
+		}
+
+		var code int
+		var out, stderr bytes.Buffer
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks, hooks)
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
+
+		select {
+		case <-idle:
+		case <-done:
+			t.Fatalf("wait exited before becoming idle: code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+		case <-time.After(hangGuard):
+			t.Fatal("wait did not reach initial idle")
+		}
+
+		// Break the store schema from another connection so the next evaluation hits a real store error.
+		rawDB, err := sql.Open("sqlite", s.Path()+"?_pragma=busy_timeout(5000)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rawDB.ExecContext(ctx, `DROP TABLE alert_episodes`); err != nil {
+			rawDB.Close()
+			t.Fatal(err)
+		}
+		rawDB.Close()
+
+		select {
+		case ticks <- time.Now():
+		case <-done:
+		}
+		select {
+		case <-done:
+		case <-time.After(hangGuard):
+			t.Fatal("wait did not exit after store error")
+		}
+		if code == 0 || code == 1 || code == 2 || code != record.ExitIncompatible {
+			t.Fatalf("wait on store error: code=%d, want %d (distinct from alert=0, error/no-alert=1, quiet=2); out=%q stderr=%q",
+				code, record.ExitIncompatible, out.String(), stderr.String())
+		}
+		if out.Len() != 0 {
+			t.Fatalf("wait on store error wrote stdout %q, want empty", out.String())
+		}
+		msg := stderr.String()
+		if !strings.Contains(msg, "waiter stopped") || !strings.Contains(msg, "alerts are not being delivered") {
+			t.Fatalf("wait on store error stderr=%q, want line saying waiter stopped and alerts are not being delivered", msg)
+		}
+	})
+
+	t.Run("startup store error", func(t *testing.T) {
+		_, rules := fixture(t, false)
+		corrupt := filepath.Join(t.TempDir(), "corrupt.db")
+		if err := os.WriteFile(corrupt, []byte("not a sqlite database"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, stderr bytes.Buffer
+		code := run(t.Context(), []string{"wait", "--store", corrupt, "--rules", rules, "--no-notify"}, &out, &stderr)
+		if code == 0 || code == 1 || code == 2 || code != record.ExitIncompatible {
+			t.Fatalf("wait on corrupt store: code=%d, want %d; out=%q stderr=%q", code, record.ExitIncompatible, out.String(), stderr.String())
+		}
+		if out.Len() != 0 {
+			t.Fatalf("wait on corrupt store wrote stdout %q, want empty", out.String())
+		}
+		msg := stderr.String()
+		if !strings.Contains(msg, "waiter stopped") || !strings.Contains(msg, "alerts are not being delivered") {
+			t.Fatalf("wait on corrupt store stderr=%q, want line saying waiter stopped and alerts are not being delivered", msg)
+		}
+	})
+}
+
+func TestWatchWaitWaitsForWriteLockAndDeliversNextAlert(t *testing.T) {
+	s, rules := fixture(t, false)
+	ctx, cancel := context.WithCancel(t.Context())
+	ticks := make(chan time.Time)
+	deadline := make(chan time.Time)
+	idle := make(chan struct{}, 4)
+	busyCh := make(chan error, 4)
+
+	holderDB, err := sql.Open("sqlite", s.Path()+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holderDB.Close()
+	holderConn, err := holderDB.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holderConn.Close()
+
+	var mu sync.Mutex
+	lockNextEval := false
+	lockHeld := false
+	defer func() {
+		mu.Lock()
+		held := lockHeld
+		lockHeld = false
+		mu.Unlock()
+		if held {
+			_, _ = holderConn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+
+	hooks := &waitTestHooks{
+		deadline: deadline,
+		openOpts: []store.OpenOption{store.WithBusyTimeout(20 * time.Millisecond)},
+		onEvaluate: func() error {
+			mu.Lock()
+			shouldLock := lockNextEval
+			if shouldLock {
+				lockNextEval = false
+			}
+			mu.Unlock()
+			if !shouldLock {
+				return nil
+			}
+			if _, err := holderConn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+				return err
+			}
+			mu.Lock()
+			lockHeld = true
+			mu.Unlock()
+			return nil
+		},
+		onBusy: func(err error) {
+			select {
+			case busyCh <- err:
+			default:
+			}
+		},
+		onIdle: func(bool) {
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		},
+	}
+
+	var code int
+	var out, stderr bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		code = runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks, hooks)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case <-idle:
+	case <-done:
+		t.Fatalf("wait exited before becoming idle: code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+	case <-time.After(hangGuard):
+		t.Fatal("wait did not reach initial idle")
+	}
+
+	// Arm the write lock to be acquired from another connection right before the next evaluation.
+	mu.Lock()
+	lockNextEval = true
+	mu.Unlock()
+
+	// Append two refusals so EvaluateRules must open a write transaction to record the alert.
+	appendRawRefusalWithoutNotify(t, s.Path(), "item-locked")
+	appendRawRefusalWithoutNotify(t, s.Path(), "item-locked")
+	select {
+	case ticks <- time.Now():
+	case <-done:
+	default:
+	}
+
+	// Confirm the waiter actually hit SQLITE_BUSY when beginning its write transaction.
+	var busyErr error
+	select {
+	case busyErr = <-busyCh:
+	case <-done:
+		t.Fatalf("wait exited on busy store instead of waiting: code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+	case <-time.After(hangGuard):
+		t.Fatal("wait did not observe busy write lock")
+	}
+	if !store.IsBusy(busyErr) || !strings.Contains(busyErr.Error(), "beginning the write transaction") {
+		t.Fatalf("expected SQLITE_BUSY beginning write transaction, got %v", busyErr)
+	}
+
+	// Waiter must still be running while the lock is held.
+	select {
+	case <-done:
+		t.Fatalf("wait exited while write lock was held: code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+	default:
+	}
+
+	// Release the write lock and confirm the still-running waiter continues and delivers the alert.
+	mu.Lock()
+	lockHeld = false
+	mu.Unlock()
+	if _, err := holderConn.ExecContext(ctx, `COMMIT`); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(hangGuard):
+		t.Fatal("wait did not deliver alert after riding out write lock")
+	}
+	if code != 0 || stderr.Len() != 0 || !strings.Contains(out.String(), "item-locked has 2 refusals") {
+		t.Fatalf("wait after write lock: code=%d out=%q stderr=%q", code, out.String(), stderr.String())
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr/notify"
+	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/watch"
 )
@@ -18,13 +19,18 @@ import (
 const (
 	busyRetryDelay    = 50 * time.Millisecond
 	maxBusyRetryDelay = 500 * time.Millisecond
+	// waitStoreErrorCode is the exit code when tillr watch wait stops on a
+	// store error: distinct from 0 (alert), 2 (quiet timeout), and 1.
+	waitStoreErrorCode = record.ExitIncompatible
 )
 
 type waitTestHooks struct {
 	deadline   <-chan time.Time
 	clock      func() time.Time
+	openOpts   []store.OpenOption
 	onPass     func()
 	onEvaluate func() error
+	onBusy     func(error)
 	onIdle     func(coalesceArmed bool)
 	onCoalesce func() func()
 	// onRelayProgress runs after a wake is queued; its bool marks a reconnect.
@@ -34,6 +40,7 @@ type waitTestHooks struct {
 type waitOptions struct {
 	owner, storePath, rulesPath, root string
 	timeout                           time.Duration
+	deadline                          <-chan time.Time
 	fallbackPoll                      time.Duration
 	unsettledRemindAfter              time.Duration
 	follow                            bool
@@ -45,9 +52,11 @@ type waitOptions struct {
 func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr io.Writer) (code int, resultErr error) {
 	var onCoalesce func() func()
 	var onRelayProgress func(bool, notify.Frame)
+	var onBusy func(error)
 	if opts.hooks != nil {
 		onCoalesce = opts.hooks.onCoalesce
 		onRelayProgress = opts.hooks.onRelayProgress
+		onBusy = opts.hooks.onBusy
 	}
 	pollInterval := opts.fallbackPoll
 	if opts.unsettledRemindAfter > 0 && (pollInterval <= 0 || opts.unsettledRemindAfter < pollInterval) {
@@ -65,57 +74,61 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 		return 1, err
 	}
 	defer wake.close()
-	var deadline <-chan time.Time
-	if opts.hooks != nil && opts.hooks.deadline != nil {
-		deadline = opts.hooks.deadline
-	} else if opts.timeout > 0 {
-		timer := time.NewTimer(opts.timeout)
-		defer timer.Stop()
-		deadline = timer.C
+	deadline := opts.deadline
+	if deadline == nil {
+		if opts.hooks != nil && opts.hooks.deadline != nil {
+			deadline = opts.hooks.deadline
+		} else if opts.timeout > 0 {
+			timer := time.NewTimer(opts.timeout)
+			defer timer.Stop()
+			deadline = timer.C
+		}
 	}
 	// Record rule load baselines before advertising waiting_since so events
 	// appended as soon as attachment is visible are judged as post-load.
 	var lastVersion int64
 	var hasVersion bool
 	if e.Store != nil {
-		if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+		if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
 			var err error
 			lastVersion, err = storeDataVersion(ctx, e.Store)
 			return err
 		}); timedOut {
 			return timeoutWait(out, opts)
 		} else if err != nil {
-			return 1, err
+			return waitStoreFailure(ctx, err)
 		}
 		hasVersion = true
 	}
 	var diagnostics ruleDiagnostics
 	var initialResults []watch.RuleResult
-	if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+	if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
 		var err error
 		initialResults, err = evaluateRules(ctx, &e, opts.hooks)
 		return err
 	}); timedOut {
 		return timeoutWait(out, opts)
 	} else if err != nil {
-		return 1, err
+		return waitStoreFailure(ctx, err)
 	}
 	diagnostics.report(stderr, initialResults)
 	var start time.Time
-	if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+	if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
 		var err error
 		start, err = e.BeginWait(ctx, opts.owner)
 		return err
 	}); timedOut {
 		return timeoutWait(out, opts)
 	} else if err != nil {
-		return 1, err
+		return waitStoreFailure(ctx, err)
 	}
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		defer cancel()
-		if err := e.EndWait(cleanup, opts.owner, start); err != nil && resultErr == nil {
-			code, resultErr = 1, err
+		if _, err := retryOnBusy(cleanup, nil, onBusy, func() error {
+			return e.EndWait(cleanup, opts.owner, start)
+		}); err != nil && resultErr == nil {
+			code, resultErr = waitStoreFailure(cleanup, err)
 		}
 	}()
 	// Track only what this process has printed. The durable seen cursor remains
@@ -132,54 +145,54 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 		changed := true
 		var currentVersion int64
 		if hasVersion {
-			if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+			if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
 				var err error
 				currentVersion, err = storeDataVersion(ctx, e.Store)
 				return err
 			}); timedOut {
 				return timeoutWait(out, opts)
 			} else if err != nil {
-				return 1, err
+				return waitStoreFailure(ctx, err)
 			}
 			changed = currentVersion != lastVersion
 		}
 		if changed {
 			var results []watch.RuleResult
-			if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+			if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
 				var err error
 				results, err = evaluateRules(ctx, &e, opts.hooks)
 				return err
 			}); timedOut {
 				return timeoutWait(out, opts)
 			} else if err != nil {
-				return 1, err
+				return waitStoreFailure(ctx, err)
 			}
 			diagnostics.report(stderr, results)
 			lastVersion = currentVersion
 		}
 		notices := lastNotices
 		if changed || !checkedDelivery {
-			if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+			if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
 				var err error
 				notices, err = e.Pending(ctx, opts.owner)
 				return err
 			}); timedOut {
 				return timeoutWait(out, opts)
 			} else if err != nil {
-				return 1, err
+				return waitStoreFailure(ctx, err)
 			}
 			lastNotices = notices
 		}
 		var reminders []watch.UnsettledReminder
 		if changed || !checkedDelivery || opts.unsettledRemindAfter > 0 {
-			if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+			if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
 				var err error
 				reminders, err = e.UnsettledReminders(ctx, opts.owner, opts.unsettledRemindAfter)
 				return err
 			}); timedOut {
 				return timeoutWait(out, opts)
 			} else if err != nil {
-				return 1, err
+				return waitStoreFailure(ctx, err)
 			}
 		}
 		checkedDelivery = true
@@ -205,12 +218,12 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 					return 1, err
 				}
 				if len(notices) > 0 {
-					if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+					if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
 						return e.Shown(ctx, opts.owner, through)
 					}); timedOut {
 						return timeoutWait(out, opts)
 					} else if err != nil {
-						return 1, err
+						return waitStoreFailure(ctx, err)
 					}
 				}
 				remindedIDs := make([]string, 0, len(notices)+len(reminders))
@@ -220,12 +233,12 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 				for _, r := range reminders {
 					remindedIDs = append(remindedIDs, r.AlertID)
 				}
-				if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+				if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
 					return e.MarkReminded(ctx, remindedIDs)
 				}); timedOut {
 					return timeoutWait(out, opts)
 				} else if err != nil {
-					return 1, err
+					return waitStoreFailure(ctx, err)
 				}
 				if !opts.follow {
 					return 0, nil
@@ -241,7 +254,7 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 		}
 		reason, err := wake.next(ctx, deadline)
 		if err != nil {
-			return 1, err
+			return waitStoreFailure(ctx, err)
 		}
 		if reason == deadlineWake {
 			return timeoutWait(out, opts)
@@ -269,7 +282,14 @@ func evaluateRules(ctx context.Context, e *watch.Evaluator, hooks *waitTestHooks
 	return e.EvaluateRules(ctx)
 }
 
-func retryOnBusy(ctx context.Context, deadline <-chan time.Time, fn func() error) (timedOut bool, err error) {
+func waitStoreFailure(ctx context.Context, err error) (int, error) {
+	if ctx.Err() != nil {
+		return 1, err
+	}
+	return waitStoreErrorCode, fmt.Errorf("waiter stopped on store error; alerts are not being delivered: %w", err)
+}
+
+func retryOnBusy(ctx context.Context, deadline <-chan time.Time, onBusy func(error), fn func() error) (timedOut bool, err error) {
 	delay := busyRetryDelay
 	for {
 		err := fn()
@@ -278,6 +298,9 @@ func retryOnBusy(ctx context.Context, deadline <-chan time.Time, fn func() error
 		}
 		if !store.IsBusy(err) || ctx.Err() != nil {
 			return false, err
+		}
+		if onBusy != nil {
+			onBusy(err)
 		}
 		timedOut, retryErr := waitBusyRetry(ctx, deadline, delay)
 		if timedOut || retryErr != nil {

@@ -221,6 +221,105 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 		}
 		return 0
 	}
+	if face == "wait" {
+		waitOpts := waitOptions{
+			owner:                owner,
+			storePath:            *path,
+			rulesPath:            dir,
+			root:                 root,
+			timeout:              timeout,
+			fallbackPoll:         fallbackPoll,
+			unsettledRemindAfter: unsettledRemindAfter,
+			follow:               follow,
+			noNotify:             noNotify,
+			ticks:                ticks,
+			hooks:                hooks,
+		}
+		var deadline <-chan time.Time
+		if hooks != nil && hooks.deadline != nil {
+			deadline = hooks.deadline
+		} else if timeout > 0 {
+			timer := time.NewTimer(timeout)
+			defer timer.Stop()
+			deadline = timer.C
+		}
+		waitOpts.deadline = deadline
+		var openOpts []store.OpenOption
+		var onBusy func(error)
+		if hooks != nil {
+			openOpts = hooks.openOpts
+			onBusy = hooks.onBusy
+		}
+		failWaitStore := func(err error) int {
+			code, wrapped := waitStoreFailure(ctx, err)
+			fmt.Fprintln(stderr, "tillr watch:", wrapped)
+			return code
+		}
+		var s *store.Store
+		if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
+			var err error
+			s, err = store.OpenMigrated(ctx, storePath, openOpts...)
+			return err
+		}); timedOut {
+			code, err := timeoutWait(out, waitOpts)
+			if err != nil {
+				return fail(err)
+			}
+			return code
+		} else if err != nil {
+			return failWaitStore(err)
+		}
+		defer s.Close()
+		e := watch.Evaluator{Store: s, Rules: rules, Root: root}
+		if hooks != nil && hooks.clock != nil {
+			e.Clock = hooks.clock
+		}
+		if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
+			return e.CheckRules(ctx)
+		}); timedOut {
+			code, err := timeoutWait(out, waitOpts)
+			if err != nil {
+				return fail(err)
+			}
+			return code
+		} else if err != nil {
+			if strings.HasPrefix(err.Error(), "rule ") {
+				return fail(err)
+			}
+			return failWaitStore(err)
+		}
+		attachment, err := attach(storePath, owner)
+		if err != nil {
+			return fail(err)
+		}
+		defer attachment.Close()
+		// Confirm before evaluating or printing any rule diagnostics.
+		if set["seen-through"] {
+			if timedOut, err := retryOnBusy(ctx, deadline, onBusy, func() error {
+				return e.Seen(ctx, owner, cursor)
+			}); timedOut {
+				code, err := timeoutWait(out, waitOpts)
+				if err != nil {
+					return fail(err)
+				}
+				return code
+			} else if err != nil {
+				if strings.Contains(err.Error(), "seen cursor") {
+					return fail(err)
+				}
+				return failWaitStore(err)
+			}
+		}
+		code, err := wait(ctx, e, waitOpts, out, stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, "tillr watch:", err)
+			if code != 0 {
+				return code
+			}
+			return 1
+		}
+		return code
+	}
 	s, err := store.OpenMigrated(ctx, storePath)
 	if err != nil {
 		if face == "daemon" && ctx.Err() != nil {
@@ -233,18 +332,8 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	if hooks != nil && hooks.clock != nil {
 		e.Clock = hooks.clock
 	}
-	if face == "wait" {
-		if err := e.CheckRules(ctx); err != nil {
-			return fail(err)
-		}
-		attachment, err := attach(storePath, owner)
-		if err != nil {
-			return fail(err)
-		}
-		defer attachment.Close()
-	}
 	// Confirm before evaluating or printing any rule diagnostics.
-	if set["through"] || set["seen-through"] {
+	if set["through"] {
 		if err := e.Seen(ctx, owner, cursor); err != nil {
 			return fail(err)
 		}
@@ -262,12 +351,6 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 		if err := daemon(ctx, e, stderr, ticks); err != nil {
 			return fail(err)
 		}
-	case "wait":
-		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, root: root, timeout: timeout, fallbackPoll: fallbackPoll, unsettledRemindAfter: unsettledRemindAfter, follow: follow, noNotify: noNotify, ticks: ticks, hooks: hooks}, out, stderr)
-		if err != nil {
-			return fail(err)
-		}
-		return code
 	}
 	return 0
 }
