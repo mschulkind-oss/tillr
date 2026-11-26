@@ -246,7 +246,11 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				}
 			}
 			req := receipt.Request
-			req.RunID = markRunID(req.RunID, "fresh")
+			nextID, err := l.nextUnusedJudgeRunID(ctx, req.RunID, "fresh")
+			if err != nil {
+				return c, false, err
+			}
+			req.RunID = nextID
 			req = l.refreshJudgeRequest(req)
 			req.SessionTurn, req.ResumePrompt = false, ""
 			restoreWorkflowEvaluator(receipt, &req)
@@ -1404,6 +1408,29 @@ func (l *Loop) refreshJudgeRequest(req run.Request) run.Request {
 		return *fresh
 	}
 	return req
+}
+
+// nextUnusedJudgeRunID advances id with markRunID(id, kind) until the resulting
+// run ID has no recorded run row in the store, so a re-judgment does not reuse an
+// already-ended run's ID or directory.
+func (l *Loop) nextUnusedJudgeRunID(ctx context.Context, id, kind string) (string, error) {
+	candidate := markRunID(id, kind)
+	if l.cfg.Store == "" {
+		return candidate, nil
+	}
+	err := l.readStore(ctx, func(r *store.Reader) error {
+		for {
+			var used int
+			if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM runs WHERE run_id = ? UNION SELECT 1 FROM read_only_runs WHERE run_id = ?)`, candidate, candidate).Scan(&used); err != nil {
+				return err
+			}
+			if used == 0 {
+				return nil
+			}
+			candidate = markRunID(candidate, kind)
+		}
+	})
+	return candidate, err
 }
 
 func judgeSessionFromActor(actor string) string {

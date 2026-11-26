@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -783,5 +784,69 @@ func TestNodeBaseOnCandidateAfterPreGateRebase(t *testing.T) {
 	}
 	if got := l.nodeBaseOnCandidate(ctx, lane, newBase, rebasedHead, oldBase); got != rebasedHead {
 		t.Fatalf("rebased first piece: got %s, want %s", shortSHA(got), shortSHA(rebasedHead))
+	}
+}
+
+// When a pre-gate rebase triggers a re-judgment and the first -fresh run ID is already
+// recorded as ended in the store (for example from an earlier rebase before a second
+// rebase arrived), the new re-judgment must advance to an unused run ID rather than
+// reusing the ended run's ID and directory.
+func TestPreRebaseRejudgmentAdvancesPastEndedFreshRunID(t *testing.T) {
+	ctx := context.Background()
+	f, l, baseSteps, c := prepareJudgeCandidate(t, "pass")
+	var dispatchedRunID string
+	rebasedSteps := &rebasedJudgeRouteSteps{judgeRouteSteps: baseSteps}
+	custom := &callbackSteps{
+		rebasedJudgeRouteSteps: rebasedSteps,
+		beforeRun: func(req run.Request) {
+			dispatchedRunID = req.RunID
+		},
+		runFn: rebasedSteps.Run,
+	}
+	l.cfg.Steps = custom
+
+	rebasedFrom := c.HeadSHA
+	writeForkFile(t, filepath.Join(c.Worktree, "rebased.txt"), "work rebased\n")
+	runGit(t, c.Worktree, "add", "rebased.txt")
+	runGit(t, c.Worktree, "commit", "-qm", "feat: work rebased")
+	c.HeadSHA = runGit(t, c.Worktree, "rev-parse", "HEAD")
+	c.RebasedFromHead = rebasedFrom
+
+	origRunID := "run-item-a-a1-n3"
+	endedFreshID := markRunID(origRunID, "fresh")
+	at := l.cfg.Now().Format(time.RFC3339)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{
+			RunID: endedFreshID, ItemID: c.ItemID, LaneID: c.LaneID, Backend: "reviewer",
+			State: run.StateExited, ExitCode: countPtr(0), StartedAt: at, FinishedAt: at, EndCause: run.EndNormalExit,
+		})
+	})
+
+	var binding item.EvaluatorBinding
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		var err error
+		binding, err = item.ReadEvaluatorBinding(r, c.ItemID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.Judge = &JudgeReceipt{
+		Request: run.Request{ItemID: c.ItemID, LaneID: c.LaneID, RunID: origRunID, Backend: "reviewer", Seat: "review", Node: "judge", Workflow: binding.Workflow, NodeID: binding.EvaluatorNode},
+		Raw:     json.RawMessage(`{"outcome":"pass"}`),
+	}
+	c.Judge.Options.ItemID = c.ItemID
+	c.Judge.Options.Head = rebasedFrom
+
+	res := &LoopResult{}
+	_, accepted, err := l.judgeCandidate(ctx, c, res)
+	if err != nil {
+		t.Fatalf("judgeCandidate returned unexpected error: %v", err)
+	}
+	want := markRunID(endedFreshID, "fresh")
+	if dispatchedRunID != want {
+		t.Fatalf("re-judgment dispatched RunID %q, want unused %q (ended %q)", dispatchedRunID, want, endedFreshID)
+	}
+	if !accepted {
+		t.Fatalf("judgeCandidate did not accept: refused=%v detail=%q", res.RefusedSteps, res.Detail)
 	}
 }

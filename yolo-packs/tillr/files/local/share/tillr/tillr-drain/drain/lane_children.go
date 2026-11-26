@@ -101,7 +101,25 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 				delete(ended, id)
 			}
 		}
-		return resumes.Err()
+		if err := resumes.Err(); err != nil {
+			return err
+		}
+		resumes.Close()
+		// A run that currently holds a lane lease or is an unsettled read-only group
+		// member is live right now, even if an earlier run with the same ID ended.
+		active, err := r.Query(`SELECT run_id FROM lanes WHERE state = ? AND run_id IS NOT NULL AND run_id != '' UNION SELECT run_id FROM read_only_runs WHERE settled = 0`, run.LaneStateLeased)
+		if err != nil {
+			return err
+		}
+		defer active.Close()
+		for active.Next() {
+			var id string
+			if err := active.Scan(&id); err != nil {
+				return err
+			}
+			delete(ended, id)
+		}
+		return active.Err()
 	})
 	s.Close()
 	if err != nil {

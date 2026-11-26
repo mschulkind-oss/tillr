@@ -272,3 +272,68 @@ func TestContinuedPausedRunChildrenDoNotHoldTheirLane(t *testing.T) {
 	_ = child.Process.Kill()
 	_ = child.Wait()
 }
+
+// A re-judgment running under a run ID that already has an ended record in the store
+// holds an active lane lease (without a run.resume event). Its live processes are the
+// loop's own active work, so they must not take the lane out of rotation or emit
+// drain.lane-refused; once that re-judgment ends and releases the lease, any process
+// that still outlives it must be reported as lane-run-children-live.
+func TestActiveRejudgmentUnderEndedRunIDDoesNotHoldLane(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	lane, id := l.cfg.Lanes[0], "run-item-a-a1-n3-fresh"
+	at := l.cfg.Now().Format(time.RFC3339)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{RunID: id, ItemID: "item-a", LaneID: lane, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: at, FinishedAt: at, EndCause: run.EndNormalExit})
+	})
+	// Re-judgment claims the lane without Resume=true, so no run.resume event exists.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		req := run.Request{RunID: id, ItemID: "item-a", Backend: "fixture", Seat: "review"}
+		_, err := run.ClaimLease(context.Background(), tx, req, lane, l.cfg.Now())
+		return err
+	})
+	child := startLaneChild(t, l, lane, id)
+	if err := l.recheckLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := l.laneConditions[lane]; c != nil && c.out {
+		t.Fatalf("active re-judgment took its lane out of rotation: %+v", c)
+	}
+	if laneEvents(t, f, laneRefusedKind, lane) != 0 {
+		t.Fatal("active re-judgment recorded a lane refusal")
+	}
+	// A real leftover from a different ended run in the same lane is still reported.
+	otherID := "run-item-a-a1-n2"
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{RunID: otherID, ItemID: "item-a", LaneID: lane, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: at, FinishedAt: at, EndCause: run.EndNormalExit})
+	})
+	stray := startLaneChild(t, l, lane, otherID)
+	if err := l.recheckLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := l.laneConditions[lane]; c == nil || !c.out || c.reason != ReasonLaneChildren {
+		t.Fatalf("stray process from another ended run did not hold the lane: %+v", c)
+	}
+	if !strings.Contains(l.laneConditions[lane].detail, strconv.Itoa(stray.Process.Pid)) || strings.Contains(l.laneConditions[lane].detail, strconv.Itoa(child.Process.Pid)) {
+		t.Fatalf("expected only stray PID %d (not active re-judgment PID %d), got detail: %s", stray.Process.Pid, child.Process.Pid, l.laneConditions[lane].detail)
+	}
+	_ = stray.Process.Kill()
+	_ = stray.Wait()
+	if err := l.recheckLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := l.laneConditions[lane]; c != nil && c.out {
+		t.Fatalf("lane stayed out of rotation after stray exited while re-judgment is active: %+v", c)
+	}
+	// Once the re-judgment itself finishes, a child that outlives it must hold the lane.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{RunID: id, ItemID: "item-a", LaneID: lane, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: at, FinishedAt: at, EndCause: run.EndNormalExit})
+	})
+	if err := l.recheckLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := l.laneConditions[lane]; c == nil || !c.out || c.reason != ReasonLaneChildren {
+		t.Fatalf("process outliving finished re-judgment did not hold the lane: %+v", c)
+	}
+	_ = child.Process.Kill()
+	_ = child.Wait()
+}
