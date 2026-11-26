@@ -89,7 +89,7 @@ func TestLandSquashConflictRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,27 +159,39 @@ func TestLandSquashConflictRule(t *testing.T) {
 	// Once item-a's conflict repair lands cleanly, item-a's episode resolves while item-b remains open.
 	now = now.Add(5 * time.Minute)
 	appendLanding("item-a", land.ResultLanded, "", nil, now)
-	afterLanded := pending()
-	if len(afterLanded) != 1 || afterLanded[0].Bundle.Subject != "item-b" {
-		t.Fatalf("want item-a resolved after clean landing and item-b still open, got %+v", afterLanded)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stAfterLanded, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil || len(stAfterLanded.Alerts) != 1 || stAfterLanded.Alerts[0].Subject != "item-b" {
+		t.Fatalf("want item-a resolved after clean landing and item-b still open, got %+v (err=%v)", stAfterLanded.Alerts, err)
 	}
 
 	// A later squash conflict on item-a opens a fresh episode with a new AlertID.
 	now = now.Add(2 * time.Minute)
 	appendLanding("item-a", land.ResultSquashConflict, "", []string{"CONFLICT (content): Merge conflict in second.txt"}, now)
-	reopened := pending()
-	bySubject = map[string]watch.Notice{}
-	for _, n := range reopened {
-		bySubject[n.Bundle.Subject] = n
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
 	}
-	if len(reopened) != 2 || bySubject["item-a"].AlertID == "" || bySubject["item-a"].AlertID == first[0].AlertID {
-		t.Fatalf("later squash conflict after landing should open a new episode: first=%s, got=%+v", first[0].AlertID, reopened)
+	stReopened, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	alertBySubject := map[string]watch.AlertStatus{}
+	for _, a := range stReopened.Alerts {
+		alertBySubject[a.Subject] = a
+	}
+	if len(stReopened.Alerts) != 2 || alertBySubject["item-a"].ID == "" || alertBySubject["item-a"].ID == first[0].AlertID {
+		t.Fatalf("later squash conflict after landing should open a new episode: first=%s, got=%+v", first[0].AlertID, stReopened.Alerts)
 	}
 
 	// Episodes that do not land resolve once their squash conflicts age past the 1h window.
 	now = now.Add(62 * time.Minute)
-	if aged := pending(); len(aged) != 0 {
-		t.Fatalf("episodes should resolve once squash conflicts age past the window, got %+v", aged)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if stAged, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(stAged.Alerts) != 0 {
+		t.Fatalf("episodes should resolve once squash conflicts age past the window, got %+v (err=%v)", stAged.Alerts, err)
 	}
 
 	// Evaluating all command-eligible rules in config/tillr/watch on one squash-conflict
@@ -218,7 +230,7 @@ func TestLandSquashConflictRule(t *testing.T) {
 	if skipped[ruleID] != 0 {
 		t.Fatalf("expected 0 skipped events for %s, got %+v", ruleID, skipped)
 	}
-	allNotices, err := allEval.Pending(ctx, "foreground")
+	allNotices, err := allEval.Pending(ctx, "tillr-triage")
 	if err != nil {
 		t.Fatal(err)
 	}

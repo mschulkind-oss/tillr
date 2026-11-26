@@ -22,4 +22,4 @@ check = ["Read the land.landing event's conflict_paths, base_sha, head_sha, and 
 do = ["Establish which concurrent trunk change conflicted with {{subject}} and whether the drain's conflict repair is handling it or needs an answer."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

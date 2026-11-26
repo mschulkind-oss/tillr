@@ -107,7 +107,7 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,9 +219,12 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 
 	now = now.Add(time.Minute)
 	setItemState(s, "item-blocked", "closed")
-	afterClose := pending()
-	if len(afterClose) != 1 || afterClose[0].AlertID != notices[0].AlertID {
-		t.Fatalf("closing item-blocked should resolve its alert while keeping item-open, got %+v", afterClose)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stAfterClose, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil || len(stAfterClose.Alerts) != 1 || stAfterClose.Alerts[0].ID != notices[0].AlertID {
+		t.Fatalf("closing item-blocked should resolve its alert while keeping item-open, got %+v (err=%v)", stAfterClose.Alerts, err)
 	}
 	var blockedState, blockedReason string
 	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
@@ -232,8 +235,11 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 
 	now = now.Add(time.Minute)
 	setItemState(s, "item-open", "landed")
-	if afterLand := pending(); len(afterLand) != 0 {
-		t.Fatalf("landing item-open should resolve its alert, got %+v", afterLand)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if stAfterLand, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(stAfterLand.Alerts) != 0 {
+		t.Fatalf("landing item-open should resolve its alert, got %+v (err=%v)", stAfterLand.Alerts, err)
 	}
 	var landedState, landedReason string
 	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
@@ -249,17 +255,23 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 	conflict("item-aging", "conflict-aging-1", "raised", tAging)
 	now = tAging.Add(30 * time.Minute)
 	conflict("item-aging", "conflict-aging-2", "raised", now)
-	agingOpen := pending()
-	if len(agingOpen) != 1 || agingOpen[0].Bundle.Subject != "item-aging" {
-		t.Fatalf("want one notice for open item-aging, got %+v", agingOpen)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stAgingOpen, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil || len(stAgingOpen.Alerts) != 1 || stAgingOpen.Alerts[0].Subject != "item-aging" {
+		t.Fatalf("want one open alert for item-aging, got %+v (err=%v)", stAgingOpen.Alerts, err)
 	}
 	now = tAging.Add(24*time.Hour + time.Minute)
-	if aged := pending(); len(aged) != 0 {
-		t.Fatalf("alert should resolve once fewer than two raised item.conflict events remain in 24h, got %+v", aged)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if stAged, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(stAged.Alerts) != 0 {
+		t.Fatalf("alert should resolve once fewer than two raised item.conflict events remain in 24h, got %+v (err=%v)", stAged.Alerts, err)
 	}
 	var agingReason string
 	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
-		return rd.QueryRow(`SELECT resolved_reason FROM alert_episodes WHERE alert_id = ?`, agingOpen[0].AlertID).Scan(&agingReason)
+		return rd.QueryRow(`SELECT resolved_reason FROM alert_episodes WHERE alert_id = ?`, stAgingOpen.Alerts[0].ID).Scan(&agingReason)
 	}); err != nil || agingReason != "condition-cleared" {
 		t.Fatalf("want open item-aging window expiry resolved/condition-cleared, got %q (err=%v)", agingReason, err)
 	}
@@ -306,7 +318,7 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 	if results, err := verdictEval.EvaluateRules(ctx); err != nil || len(results) != 1 || results[0].Diagnostic() != "" {
 		t.Fatalf("recorded-verdict evaluation results: %+v, err=%v", results, err)
 	}
-	verdictNotices, err := verdictEval.Pending(ctx, "foreground")
+	verdictNotices, err := verdictEval.Pending(ctx, "tillr-triage")
 	if err != nil || len(verdictNotices) != 1 || verdictNotices[0].Bundle.Subject != "rv-open" {
 		t.Fatalf("want only rv-open to alert on recorded-verdict charter, got %+v (err=%v)", verdictNotices, err)
 	}
@@ -480,7 +492,7 @@ func TestDrainRepeatedItemConflictsRuleCountsDistinctConflictIDsAcrossRetryRerai
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}

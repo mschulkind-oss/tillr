@@ -36,7 +36,7 @@ check = ["Look at refs/heads/main, refs/tillr/green, and the heavy runner's late
 do = ["Check whether the heavy runner is stalled, failing, or stopped, and clear the blocker so the green proof catches up."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"
 
 [[rule]]
 id = "trunk-proof-stalled"
@@ -61,4 +61,4 @@ check = ["Inspect the active heavy runner, its proof directory, and any running 
 do = ["Diagnose the hung check or proof step so the heavy runner resumes making progress or ends cleanly."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

@@ -20,4 +20,4 @@ check = ["Read the fault text in the event's detail field and check the proof wo
 do = ["Identify what stopped the heavy runner from completing a proof run on {{subject}}."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

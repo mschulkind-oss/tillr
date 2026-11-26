@@ -28,4 +28,4 @@ do = [
 ]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

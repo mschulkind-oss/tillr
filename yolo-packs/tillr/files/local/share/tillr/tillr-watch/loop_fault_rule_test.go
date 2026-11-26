@@ -63,7 +63,7 @@ func TestDrainLoopFaultRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "operator-session")
 		if err != nil {
 			t.Fatal(err)
 		}

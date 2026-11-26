@@ -22,4 +22,4 @@ check = ["Read the verifier's findings for {{subject}} and check whether they ar
 do = ["If the findings are new each time, split the item so each part can be verified separately."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

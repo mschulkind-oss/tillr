@@ -48,7 +48,7 @@ func TestDrainTrunkCoreWorktreeRule(t *testing.T) {
 		if _, err := e.Evaluate(ctx); err != nil {
 			t.Fatal(err)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil || len(notices) != 1 {
 			t.Fatalf("want one foreground notice, got %+v / %v", notices, err)
 		}

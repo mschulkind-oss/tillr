@@ -59,7 +59,7 @@ func TestDrainItemFaultRule(t *testing.T) {
 		if _, err := e.Evaluate(ctx); err != nil {
 			t.Fatal(err)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +143,7 @@ func TestDrainRepeatedVerifierRefusalsRule(t *testing.T) {
 		if _, err := e.Evaluate(ctx); err != nil {
 			t.Fatal(err)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -251,7 +251,7 @@ func TestTrunkProofLagRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != rule.ID || results[0].Diagnostic() != "" {
 			t.Fatalf("want readable trunk-proof-lag evaluation, got %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -283,8 +283,11 @@ func TestTrunkProofLagRule(t *testing.T) {
 		t.Fatalf("repeat evaluation must retain the single alert ID: first %+v, now %+v", first, notices)
 	}
 	git("", "update-ref", "refs/tillr/green", head)
-	if notices := pending(); len(notices) != 0 {
-		t.Fatalf("catching up refs/tillr/green should resolve trunk-proof-lag, got %+v", notices)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(st.Alerts) != 0 {
+		t.Fatalf("catching up refs/tillr/green should resolve trunk-proof-lag, got %+v (err=%v)", st.Alerts, err)
 	}
 }
 
@@ -331,7 +334,7 @@ func TestDrainRevertRules(t *testing.T) {
 			if _, err := e.Evaluate(ctx); err != nil {
 				t.Fatal(err)
 			}
-			notices, err := e.Pending(ctx, "foreground")
+			notices, err := e.Pending(ctx, "tillr-triage")
 			if err != nil {
 				t.Fatal(err)
 			}

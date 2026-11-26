@@ -98,7 +98,7 @@ func TestDrainLaneRefusedRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,13 +132,9 @@ func TestDrainLaneRefusedRule(t *testing.T) {
 		t.Fatalf("want 4 notices across 4 (lane_id, reason) pairs, got %d: %+v", len(first), first)
 	}
 
-	// Check subscribers delivery is also populated.
-	subNotices, err := e.Pending(ctx, "subscribers")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(subNotices) != 4 {
-		t.Fatalf("want 4 subscriber notices, got %d: %+v", len(subNotices), subNotices)
+	// Untriaged triage alerts must not wake the operating session.
+	if opNotices, err := e.Pending(ctx, "operator-session"); err != nil || len(opNotices) != 0 {
+		t.Fatalf("untriaged triage alert must not wake operator-session: %+v, %v", opNotices, err)
 	}
 
 	alertIDs := map[string]string{}
@@ -213,14 +209,24 @@ func TestDrainLaneRefusedRule(t *testing.T) {
 	// as condition-cleared while leaving lane-2 and lane-3 open.
 	now = now.Add(10 * time.Minute)
 	appendRestored("lane-1")
-	afterRestore := evaluatePending()
-	if len(afterRestore) != 2 {
-		t.Fatalf("want 2 remaining notices after restoring lane-1, got %d: %+v", len(afterRestore), afterRestore)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stAfterRestore, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stAfterRestore.Alerts) != 2 {
+		t.Fatalf("want 2 remaining open alerts after restoring lane-1, got %d: %+v", len(stAfterRestore.Alerts), stAfterRestore.Alerts)
+	}
+	openBySubject := map[string]watch.AlertStatus{}
+	for _, a := range stAfterRestore.Alerts {
+		openBySubject[a.Subject] = a
 	}
 	for _, kept := range []string{"lane-2/lane-branch-held", "lane-3/lane-run-children-live"} {
-		n, ok := findNotice(afterRestore, kept)
-		if !ok || n.AlertID != alertIDs[kept] {
-			t.Fatalf("expected %q to remain open with AlertID %q, got %+v", kept, alertIDs[kept], n)
+		a, ok := openBySubject[kept]
+		if !ok || a.ID != alertIDs[kept] {
+			t.Fatalf("expected %q to remain open with AlertID %q, got %+v", kept, alertIDs[kept], a)
 		}
 	}
 	for _, cleared := range []string{"lane-1/lane-holds-uncommitted-work", "lane-1/lane-holds-unlanded-change"} {
@@ -295,7 +301,7 @@ func TestDrainLaneRefusedAlertTextNamesCurrentCause(t *testing.T) {
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
-	first, err := e.Pending(ctx, "foreground")
+	first, err := e.Pending(ctx, "tillr-triage")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +320,7 @@ func TestDrainLaneRefusedAlertTextNamesCurrentCause(t *testing.T) {
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
-	second, err := e.Pending(ctx, "foreground")
+	second, err := e.Pending(ctx, "tillr-triage")
 	if err != nil {
 		t.Fatal(err)
 	}

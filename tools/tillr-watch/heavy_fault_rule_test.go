@@ -60,7 +60,7 @@ func TestDrainHeavyFaultRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +118,10 @@ func TestDrainHeavyFaultRule(t *testing.T) {
 	}
 
 	now = now.Add(62 * time.Minute)
-	if aged := pending(); len(aged) != 0 {
-		t.Fatalf("episodes should resolve once faults age past the window, got %+v", aged)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(st.Alerts) != 0 {
+		t.Fatalf("episodes should resolve once faults age past the window, got %+v (err=%v)", st.Alerts, err)
 	}
 }

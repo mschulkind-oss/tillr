@@ -21,4 +21,4 @@ check = ["Run tillr drain why {{subject}} and read the decline reason."]
 do = ["Understand what stopped the drain from claiming the dispatch before the next pass."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

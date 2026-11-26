@@ -31,7 +31,7 @@ func TestFastGateSlowRules(t *testing.T) {
 		if r.Scope != "core" || r.Severity != "warning" || !r.Enabled ||
 			!slices.Equal(r.Reads.Events, []string{drain.FastGateTimingKind}) || len(r.Reads.Projections) != 0 ||
 			r.When.Pattern != watch.PredicateMatch || r.When.GroupBy != group || r.When.Window != window ||
-			r.When.Match == nil || (r.When.ClearWhen != nil) != clear || r.Delivery.Receiver != "foreground" {
+			r.When.Match == nil || (r.When.ClearWhen != nil) != clear || r.Delivery.Receiver != "triage" {
 			t.Fatalf("unexpected configuration for %s: %+v", id, r)
 		}
 		return r
@@ -39,7 +39,7 @@ func TestFastGateSlowRules(t *testing.T) {
 	runRule := findRule("fast-gate-run-slow", "slowest_check", time.Hour, false)
 	medianRule := findRule("fast-gate-median-slow", "global", 24*time.Hour, true)
 
-	fixture := func(t *testing.T, rule watch.Rule) (func(time.Time, map[string]any), func() []watch.Notice, time.Time) {
+	fixture := func(t *testing.T, rule watch.Rule) (func(time.Time, map[string]any), func() []watch.Notice, func() []watch.AlertStatus, time.Time) {
 		t.Helper()
 		ctx := context.Background()
 		s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
@@ -74,17 +74,32 @@ func TestFastGateSlowRules(t *testing.T) {
 			if len(results) != 1 || results[0].Diagnostic() != "" {
 				t.Fatalf("evaluation diagnostic: %+v", results)
 			}
-			notices, err := e.Pending(ctx, "foreground")
+			notices, err := e.Pending(ctx, "tillr-triage")
 			if err != nil {
 				t.Fatal(err)
 			}
 			return notices
 		}
-		return appendTiming, pending, now
+		openAlerts := func() []watch.AlertStatus {
+			t.Helper()
+			results, err := e.EvaluateRules(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != 1 || results[0].Diagnostic() != "" {
+				t.Fatalf("evaluation diagnostic: %+v", results)
+			}
+			st, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			return st.Alerts
+		}
+		return appendTiming, pending, openAlerts, now
 	}
 
 	t.Run("run", func(t *testing.T) {
-		appendTiming, pending, now := fixture(t, runRule)
+		appendTiming, pending, _, now := fixture(t, runRule)
 		appendTiming(now.Add(-2*time.Hour), map[string]any{"wall_ms": 61000, "slowest_check": "old-check"})
 		appendTiming(now, map[string]any{"wall_ms": 59000, "slowest_check": "quiet-check"})
 		appendTiming(now, map[string]any{"wall_ms": 60000, "slowest_check": "boundary-check"})
@@ -121,7 +136,7 @@ func TestFastGateSlowRules(t *testing.T) {
 	})
 
 	t.Run("median", func(t *testing.T) {
-		appendTiming, pending, now := fixture(t, medianRule)
+		appendTiming, pending, openAlerts, now := fixture(t, medianRule)
 		appendTiming(now.Add(-25*time.Hour), map[string]any{"wall_ms": 1, "slowest_check": "x", "median20_wall_ms": 90001})
 		appendTiming(now, map[string]any{"wall_ms": 1, "slowest_check": "x"})
 		appendTiming(now, map[string]any{"wall_ms": 1, "slowest_check": "x", "median20_wall_ms": 89999})
@@ -144,13 +159,13 @@ func TestFastGateSlowRules(t *testing.T) {
 			t.Fatalf("absent median must not clear the alert: %+v", notices)
 		}
 		appendTiming(now, map[string]any{"wall_ms": 1, "slowest_check": "x", "median20_wall_ms": 90000})
-		if notices := pending(); len(notices) != 0 {
-			t.Fatalf("median at threshold should resolve: %+v", notices)
+		if alerts := openAlerts(); len(alerts) != 0 {
+			t.Fatalf("median at threshold should resolve: %+v", alerts)
 		}
 		appendTiming(now, map[string]any{"wall_ms": 1, "slowest_check": "x", "median20_wall_ms": 90001})
-		notices = pending()
-		if len(notices) != 1 || notices[0].AlertID == firstID {
-			t.Fatalf("subsequent rise should open a new episode: %+v", notices)
+		alerts := openAlerts()
+		if len(alerts) != 1 || alerts[0].ID == firstID {
+			t.Fatalf("subsequent rise should open a new episode: %+v", alerts)
 		}
 	})
 }

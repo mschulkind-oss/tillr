@@ -19,4 +19,4 @@ check = ["Save a copy of {{subject}} before making any changes."]
 do = ["Read core.worktree in the saved config and the path in the event to see which run's directory it names."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

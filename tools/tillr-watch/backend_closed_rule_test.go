@@ -37,7 +37,7 @@ func TestDrainBackendClosedRule(t *testing.T) {
 	if reason := rule.UnevaluatedReason(); reason != "" {
 		t.Fatalf("rule %s is unevaluated: %s", ruleID, reason)
 	}
-	if rule.Scope != "core" || rule.Severity != "high" || rule.Delivery.Receiver != "foreground" ||
+	if rule.Scope != "core" || rule.Severity != "high" || rule.Delivery.Receiver != "triage" ||
 		!slices.Equal(rule.Delivery.AlsoNotify, []string{"subscribers"}) {
 		t.Fatalf("unexpected %s metadata: scope=%q severity=%q receiver=%q also_notify=%v",
 			ruleID, rule.Scope, rule.Severity, rule.Delivery.Receiver, rule.Delivery.AlsoNotify)
@@ -115,7 +115,7 @@ func TestDrainBackendClosedRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -152,12 +152,8 @@ func TestDrainBackendClosedRule(t *testing.T) {
 	if len(first) != 2 {
 		t.Fatalf("want 2 foreground notices for pi and claude, got %d: %+v", len(first), first)
 	}
-	subNotices, err := e.Pending(ctx, "subscribers")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(subNotices) != 2 {
-		t.Fatalf("want 2 subscriber notices, got %d: %+v", len(subNotices), subNotices)
+	if opNotices, err := e.Pending(ctx, "operator-session"); err != nil || len(opNotices) != 0 {
+		t.Fatalf("untriaged triage alert must not wake operator-session: %+v, %v", opNotices, err)
 	}
 
 	piFirst, ok := findNotice(first, primaryBack)
@@ -213,12 +209,15 @@ func TestDrainBackendClosedRule(t *testing.T) {
 	// condition-cleared while leaving claude open.
 	now = now.Add(5 * time.Minute)
 	appendProbe(primaryBack, true, now)
-	afterProbeReopen := evaluatePending()
-	if len(afterProbeReopen) != 1 {
-		t.Fatalf("want only %s remaining open after %s probe succeeded, got %+v", secondaryBck, primaryBack, afterProbeReopen)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
 	}
-	if got, ok := findNotice(afterProbeReopen, secondaryBck); !ok || got.AlertID != claudeFirst.AlertID {
-		t.Fatalf("expected %s to remain open, got %+v", secondaryBck, afterProbeReopen)
+	stAfterProbe, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stAfterProbe.Alerts) != 1 || stAfterProbe.Alerts[0].Subject != secondaryBck || stAfterProbe.Alerts[0].ID != claudeFirst.AlertID {
+		t.Fatalf("want only %s (%s) remaining open after %s probe succeeded, got %+v", secondaryBck, claudeFirst.AlertID, primaryBack, stAfterProbe.Alerts)
 	}
 	var state, resolvedReason string
 	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
@@ -239,12 +238,22 @@ func TestDrainBackendClosedRule(t *testing.T) {
 	secondCause := "run run-item-2-a1 on pi (exited), normal-exit, exit 1: upstream gateway timeout"
 	appendOutcome(primaryBack, "infrastructure", true, secondCause, true, now)
 	afterSecondClose := evaluatePending()
-	if len(afterSecondClose) != 2 {
-		t.Fatalf("want 2 open episodes after second %s close, got %+v", primaryBack, afterSecondClose)
+	stSecondClose, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
+	if err != nil {
+		t.Fatal(err)
 	}
-	piSecond, ok := findNotice(afterSecondClose, primaryBack)
-	if !ok || piSecond.AlertID == "" || piSecond.AlertID == piFirst.AlertID {
-		t.Fatalf("second %s close did not open a fresh episode: first=%q second=%+v", primaryBack, piFirst.AlertID, piSecond)
+	if len(stSecondClose.Alerts) != 2 {
+		t.Fatalf("want 2 open episodes after second %s close, got %+v", primaryBack, stSecondClose.Alerts)
+	}
+	var piSecond watch.Notice
+	for _, n := range afterSecondClose {
+		if n.Bundle.Subject == primaryBack && n.AlertID != piFirst.AlertID {
+			piSecond = n
+			break
+		}
+	}
+	if piSecond.AlertID == "" {
+		t.Fatalf("second %s close did not open a fresh episode: first=%q notices=%+v", primaryBack, piFirst.AlertID, afterSecondClose)
 	}
 	if !strings.Contains(piSecond.Bundle.Guidance.Summary, primaryBack) ||
 		!strings.Contains(piSecond.Bundle.Guidance.Summary, "run-item-2-a1") ||
@@ -254,9 +263,11 @@ func TestDrainBackendClosedRule(t *testing.T) {
 
 	now = now.Add(10 * time.Minute)
 	appendOutcome(primaryBack, "answered", false, "", false, now)
-	afterOutcomeReopen := evaluatePending()
-	if len(afterOutcomeReopen) != 1 {
-		t.Fatalf("want %s resolved after non-interrupted non-closing outcome, got %+v", primaryBack, afterOutcomeReopen)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if stAfterOutcome, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(stAfterOutcome.Alerts) != 1 {
+		t.Fatalf("want %s resolved after non-interrupted non-closing outcome, got %+v (err=%v)", primaryBack, stAfterOutcome.Alerts, err)
 	}
 	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
 		return rd.QueryRow(
@@ -327,7 +338,7 @@ func TestDrainBackendClosedRule(t *testing.T) {
 	if skipped[ruleID] != 0 {
 		t.Fatalf("expected 0 skipped events for %s, got %+v", ruleID, skipped)
 	}
-	allNotices, err := allEval.Pending(ctx, "foreground")
+	allNotices, err := allEval.Pending(ctx, "tillr-triage")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +356,7 @@ func TestDrainBackendClosedRule(t *testing.T) {
 	if _, err := allEval.Evaluate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	stillPending, err := allEval.Pending(ctx, "foreground")
+	stillPending, err := allEval.Pending(ctx, "tillr-triage")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,11 +370,13 @@ func TestDrainBackendClosedRule(t *testing.T) {
 	if _, err := allEval.Evaluate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	clearedNotices, err := allEval.Pending(ctx, "foreground")
-	if err != nil {
+	var probeState string
+	if err := allStore.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT state FROM alert_episodes WHERE alert_id = ?`, allNotices[0].AlertID).Scan(&probeState)
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(clearedNotices) != 0 {
-		t.Fatalf("passing ProbeBackend should resolve %s episode, got %+v", ruleID, clearedNotices)
+	if probeState != "resolved" {
+		t.Fatalf("passing ProbeBackend should resolve %s episode, got state=%q", ruleID, probeState)
 	}
 }

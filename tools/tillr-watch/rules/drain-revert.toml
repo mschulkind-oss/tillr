@@ -20,7 +20,7 @@ check = ["Read the revert event for the commit that undid the landing, then chec
 do = ["Identify which part of the landing caused the checks to fail before attempting it again."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"
 
 # The same request called for a separate notice when the drain cannot undo a landing.
 # Read drain.revert events from the last hour, grouped by landing commit.
@@ -44,4 +44,4 @@ check = ["Read the reason in the revert event, then check the trunk test record 
 do = ["Determine why the revert could not go ahead and what still needs to be fixed on the trunk."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

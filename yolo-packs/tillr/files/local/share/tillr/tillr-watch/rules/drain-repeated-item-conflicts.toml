@@ -30,4 +30,4 @@ check = ["Read the obstacle text for {{subject}} (for instance with tillr drain 
 do = ["Check whether the request's own words are the cause (for example a request that tells a build worker to edit a design document, or to state a cause it cannot establish)."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

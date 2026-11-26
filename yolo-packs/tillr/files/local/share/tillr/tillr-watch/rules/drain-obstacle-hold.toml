@@ -19,4 +19,4 @@ check = ["Run tillr drain why {{subject}} --store <path> to read the reason for 
 do = ["If the hold needs your answer, run tillr drain retry --item {{subject}} --run <held-run> --by <who> --why <answer> --store <path> --now <RFC3339 timestamp>."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

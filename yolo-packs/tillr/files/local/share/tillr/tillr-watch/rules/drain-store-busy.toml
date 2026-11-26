@@ -20,4 +20,4 @@ check = ["Read /proc/locks for the store's -shm file to find the holder, and che
 do = ["Identify the process holding the store lock from /proc/locks and determine why it held the write lock long enough to refuse the drain."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

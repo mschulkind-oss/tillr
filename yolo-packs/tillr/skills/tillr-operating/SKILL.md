@@ -156,7 +156,7 @@ duplicate after compaction.
 `<root>` with the absolute working-tree root (quote paths as shell words):
 
 ```text
-command:            tillr watch wait --store '<root>/.tillr/state.db' --root '<root>' --timeout 110m
+command:            tillr watch wait --store '<root>/.tillr/state.db' --root '<root>' --owner operator-session --timeout 110m
 run_in_background:  true
 timeout:            7200000
 ```
@@ -168,7 +168,7 @@ exit `2`, re-arm with the printed command and the same harness timeout. Re-arm b
 long work. On an error, investigate rather than blindly re-arming.
 
 **Pi:** start one `background_task` with no timeout. Its command is
-`tillr watch wait --store '<root>/.tillr/state.db' --root '<root>' --follow`.
+`tillr watch wait --store '<root>/.tillr/state.db' --root '<root>' --owner operator-session --follow`.
 Register the initial one-shot output watch atomically in the start call:
 `watch: {condition: "output", pattern: "TILLR_WATCH_NOTICE", wake: true}`.
 After a wake:
@@ -183,7 +183,7 @@ After a wake:
    identical watch is refused during its one-second re-arm cooldown, retry
    registration after the cooldown; do not confirm until registration succeeds.
 3. Confirm the highest `through_seq` whose full notice batch you read (ending at
-   `re-arm:`), with `tillr watch seen --store '<root>/.tillr/state.db' --through <seq>`.
+   `re-arm:`), with `tillr watch seen --store '<root>/.tillr/state.db' --owner operator-session --through <seq>`.
    A marker alone is not a full batch. If the cursor is refused because it exceeds
    `shown_seq`, publication may still be finishing; try confirmation again on the next
    wake.

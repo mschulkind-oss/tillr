@@ -32,8 +32,8 @@ func TestDrainJudgeUnreadableRule(t *testing.T) {
 	if rule.Severity != "warning" {
 		t.Fatalf("severity = %q, want warning", rule.Severity)
 	}
-	if rule.Delivery.Receiver != "foreground" {
-		t.Fatalf("receiver = %q, want foreground", rule.Delivery.Receiver)
+	if rule.Delivery.Receiver != "triage" {
+		t.Fatalf("receiver = %q, want triage", rule.Delivery.Receiver)
 	}
 
 	ctx := context.Background()
@@ -84,7 +84,7 @@ func TestDrainJudgeUnreadableRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}

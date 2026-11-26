@@ -29,7 +29,7 @@ func TestDrainTrunkFixerFiledRule(t *testing.T) {
 	if reason := rule.UnevaluatedReason(); reason != "" {
 		t.Fatalf("%s must evaluate under the landed engine, got unevaluated=%q", ruleID, reason)
 	}
-	if rule.Scope != "core" || rule.Severity != "warning" || rule.Delivery.Receiver != "foreground" {
+	if rule.Scope != "core" || rule.Severity != "warning" || rule.Delivery.Receiver != "triage" {
 		t.Fatalf("unexpected %s metadata: scope=%q severity=%q receiver=%q", ruleID, rule.Scope, rule.Severity, rule.Delivery.Receiver)
 	}
 
@@ -51,7 +51,7 @@ func TestDrainTrunkFixerFiledRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("want clean %s evaluation, got %+v", ruleID, results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,7 +124,10 @@ func TestDrainTrunkFixerFiledRule(t *testing.T) {
 	}
 
 	now = now.Add(61 * time.Minute)
-	if aged := pending(); len(aged) != 0 {
-		t.Fatalf("alerts should resolve once item.add events age past window, got %+v", aged)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(st.Alerts) != 0 {
+		t.Fatalf("alerts should resolve once item.add events age past window, got %+v (err=%v)", st.Alerts, err)
 	}
 }

@@ -89,7 +89,7 @@ func TestDrainRepeatedStepDispatchesRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -152,8 +152,11 @@ func TestDrainRepeatedStepDispatchesRule(t *testing.T) {
 
 	// Once fewer than five runs remain within the ten-minute window, the episode resolves.
 	now = now.Add(8 * time.Minute)
-	if aged := pending(); len(aged) != 0 {
-		t.Fatalf("episode should resolve once fewer than five runs remain in the 10m window, got %+v", aged)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(st.Alerts) != 0 {
+		t.Fatalf("episode should resolve once fewer than five runs remain in the 10m window, got %+v (err=%v)", st.Alerts, err)
 	}
 
 	// Evaluating all command-eligible rules in config/tillr/watch on five run.allocate
@@ -204,7 +207,7 @@ func TestDrainRepeatedStepDispatchesRule(t *testing.T) {
 	if skipped[ruleID] != 0 {
 		t.Fatalf("expected 0 skipped events for %s, got %+v", ruleID, skipped)
 	}
-	allNotices, err := allEval.Pending(ctx, "foreground")
+	allNotices, err := allEval.Pending(ctx, "tillr-triage")
 	if err != nil {
 		t.Fatal(err)
 	}

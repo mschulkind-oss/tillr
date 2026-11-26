@@ -996,14 +996,14 @@ func TestWatchWaitIdleUnderStoreWritesAndDeliversAlert(t *testing.T) {
 			coreFraction*100, cpuSeconds, wall.Seconds(), commits)
 	}
 
-	backend := "pi"
+	sessAlert := "sess-alert"
 	if err := f.s.WriteTx(ctx, func(tx *store.Tx) error {
 		_, err := tx.Append(event.Event{
-			Kind:       "drain.backend-outcome",
-			ObjectType: "backend",
-			ObjectID:   &backend,
+			Kind:       "drain.loop-ended",
+			ObjectType: "session",
+			ObjectID:   &sessAlert,
 			At:         time.Now().UTC(),
-			Payload:    []byte(`{"backend":"pi","outcome_class":"quota","closes":true}`),
+			Payload:    []byte(`{"session_id":"sess-alert","stop":"fault","detail":"loop fault","exit_code":1}`),
 		})
 		return err
 	}); err != nil {
@@ -1013,7 +1013,7 @@ func TestWatchWaitIdleUnderStoreWritesAndDeliversAlert(t *testing.T) {
 	if err := child.wait(t); err != nil {
 		t.Fatalf("wait did not exit 0 on firing alert: err=%v out=%q stderr=%q", err, &child.out, &child.stderr)
 	}
-	if !strings.Contains(child.out.String(), "drain-backend-closed") || !strings.Contains(child.out.String(), "TILLR_WATCH_NOTICE 1 pending") {
+	if !strings.Contains(child.out.String(), "drain-loop-fault") || !strings.Contains(child.out.String(), "TILLR_WATCH_NOTICE 1 pending") {
 		t.Fatalf("wait did not deliver firing alert: out=%q stderr=%q", &child.out, &child.stderr)
 	}
 }

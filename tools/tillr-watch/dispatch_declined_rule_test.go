@@ -77,7 +77,7 @@ func TestDrainDispatchDeclinedRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +118,10 @@ func TestDrainDispatchDeclinedRule(t *testing.T) {
 
 	// Once fewer than three declines remain in the ten-minute window, the alert resolves.
 	now = now.Add(9 * time.Minute)
-	if aged := pending(); len(aged) != 0 {
-		t.Fatalf("alert should resolve once fewer than three declines remain in ten minutes, got %+v", aged)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(st.Alerts) != 0 {
+		t.Fatalf("alert should resolve once fewer than three declines remain in ten minutes, got %+v (err=%v)", st.Alerts, err)
 	}
 }

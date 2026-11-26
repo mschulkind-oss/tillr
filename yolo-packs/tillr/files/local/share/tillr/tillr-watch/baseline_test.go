@@ -66,7 +66,7 @@ func TestWatchCLILoadBaselineSuppressesPreloadBurstAndAlertsOnPostLoad(t *testin
 		if code := run(ctx, append([]string{"eval", "--once"}, common...), &out, &stderr); code != 0 || stderr.Len() != 0 {
 			t.Fatalf("first eval --once: code=%d out=%q stderr=%q", code, &out, &stderr)
 		}
-		if code := run(ctx, append([]string{"wait", "--timeout", "30ms"}, common...), &out, &stderr); code != 2 || stderr.Len() != 0 || strings.Contains(out.String(), "TILLR_WATCH_NOTICE") {
+		if code := run(ctx, append([]string{"wait", "--owner", "tillr-triage", "--timeout", "30ms"}, common...), &out, &stderr); code != 2 || stderr.Len() != 0 || strings.Contains(out.String(), "TILLR_WATCH_NOTICE") {
 			t.Fatalf("wait after first eval should be quiet: code=%d out=%q stderr=%q", code, &out, &stderr)
 		}
 

@@ -20,4 +20,4 @@ check = ["Read the drain.loop-ended event's detail, step, and exit_code fields, 
 do = ["Establish what caused the drain loop to fault and confirm whether a healthy loop is running before relying on the drain."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "operator-session"

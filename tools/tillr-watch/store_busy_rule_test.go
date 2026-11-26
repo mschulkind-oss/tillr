@@ -38,7 +38,7 @@ func TestDrainStoreBusyRule(t *testing.T) {
 	if _, err := e.Evaluate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	notices, err := e.Pending(ctx, "foreground")
+	notices, err := e.Pending(ctx, "tillr-triage")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestDrainStoreBusyRule(t *testing.T) {
 	if _, err := e.Evaluate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	notices, err = e.Pending(ctx, "foreground")
+	notices, err = e.Pending(ctx, "tillr-triage")
 	if err != nil {
 		t.Fatal(err)
 	}

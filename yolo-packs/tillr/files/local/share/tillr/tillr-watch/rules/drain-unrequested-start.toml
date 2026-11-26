@@ -25,4 +25,4 @@ check = [
 do = ["Determine why the previous loop ended without a recorded stop or restart request and fix any underlying fault."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

@@ -19,4 +19,4 @@ check = ["Run tillr drain why {{subject}} to see why the item is held."]
 do = ["Read the fault detail to understand what stopped the drain from advancing the item."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

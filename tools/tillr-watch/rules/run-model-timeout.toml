@@ -26,5 +26,5 @@ do = [
 ]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"
 also_notify = ["subscribers"]

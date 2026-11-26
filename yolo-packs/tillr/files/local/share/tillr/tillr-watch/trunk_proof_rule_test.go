@@ -153,11 +153,30 @@ func (f *trunkProofFixture) pendingAt(at time.Time) []watch.Notice {
 			f.t.Fatalf("rule %s returned diagnostic %q", r.ID, r.Diagnostic())
 		}
 	}
-	notices, err := f.e.Pending(f.ctx, "foreground")
+	notices, err := f.e.Pending(f.ctx, "tillr-triage")
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	return notices
+}
+
+func (f *trunkProofFixture) openAlertsAt(at time.Time) []watch.AlertStatus {
+	f.t.Helper()
+	f.now = at
+	results, err := f.e.EvaluateRules(f.ctx)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	for _, r := range results {
+		if r.Diagnostic() != "" {
+			f.t.Fatalf("rule %s returned diagnostic %q", r.ID, r.Diagnostic())
+		}
+	}
+	st, err := f.e.ReadStatus(f.ctx, func(string) (bool, error) { return false, nil })
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return st.Alerts
 }
 
 func TestTrunkProofRulesStayQuietDuringActiveFifteenMinuteProofWithNormalLandings(t *testing.T) {
@@ -253,7 +272,7 @@ func TestTrunkProofLagFiresAtNinetyFiveMinutesUnprovedAge(t *testing.T) {
 	}
 
 	f.markGreen(tip)
-	if after := f.pendingAt(t0.Add(96 * time.Minute)); len(after) != 0 {
+	if after := f.openAlertsAt(t0.Add(96 * time.Minute)); len(after) != 0 {
 		t.Fatalf("expected trunk-proof-lag to resolve once green catches up, got %+v", after)
 	}
 }
@@ -326,7 +345,7 @@ func TestTrunkProofStalledFiresAtTenMinutesWithoutProgressAndResolves(t *testing
 
 			// Applying the resolution signal clears the open episode.
 			tc.resolve(f, tip, t0.Add(16*time.Minute))
-			if after := f.pendingAt(t0.Add(16 * time.Minute)); len(after) != 0 {
+			if after := f.openAlertsAt(t0.Add(16 * time.Minute)); len(after) != 0 {
 				t.Fatalf("expected %s to resolve trunk-proof-stalled, got %+v", tc.name, after)
 			}
 		})
@@ -430,7 +449,7 @@ func TestTrunkProofStalledFiresWhenCheckReportsNothingForTenMinuteWindow(t *test
 			CheckID: shardedCheck,
 			Outcome: "running",
 		})
-		if after := f.pendingAt(resolveAt); len(after) != 0 {
+		if after := f.openAlertsAt(resolveAt); len(after) != 0 {
 			t.Fatalf("expected fresh progress to resolve trunk-proof-stalled, got %+v", after)
 		}
 	})
@@ -551,7 +570,7 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 					}
 				}
 				for _, o := range payload.Owners {
-					if o.Owner == "foreground" {
+					if o.Owner == "tillr-triage" {
 						pending = o.Pending
 						break
 					}
@@ -585,12 +604,12 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
 				t.Fatalf("open eval: code=%d out=%q err=%q", code, out, errOut)
 			}
-			code, firstOut, firstErr := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "2s")
+			code, firstOut, firstErr := invokeStore("wait", "--owner", "tillr-triage", "--rules", rulesDir, "--root", root, "--timeout", "2s")
 			if code != 0 || firstErr != "" || !strings.Contains(firstOut, "trunk-proof-lag") {
 				t.Fatalf("initial wait: code=%d out=%q err=%q", code, firstOut, firstErr)
 			}
 			seq1 := cursor(t, firstOut)
-			if code, seenOut, seenErr := invokeStore("seen", "--through", fmt.Sprint(seq1)); code != 0 || seenErr != "" {
+			if code, seenOut, seenErr := invokeStore("seen", "--owner", "tillr-triage", "--through", fmt.Sprint(seq1)); code != 0 || seenErr != "" {
 				t.Fatalf("seen seq1: code=%d out=%q err=%q", code, seenOut, seenErr)
 			}
 
@@ -616,7 +635,7 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
 				t.Fatalf("c6 eval: code=%d out=%q err=%q", code, out, errOut)
 			}
-			if code, out, errOut := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
+			if code, out, errOut := invokeStore("wait", "--owner", "tillr-triage", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
 				t.Fatalf("c6 wait expected silence (code 2), got code=%d out=%q err=%q", code, out, errOut)
 			}
 			if state, pending := readStatus(); state != wantState || pending != 0 {
@@ -638,7 +657,7 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 			if reopenCause != "reopen-when" {
 				t.Fatalf("want watch.alert.reopened cause=reopen-when, got %q", reopenCause)
 			}
-			code, reopenOut, reopenErr := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "2s")
+			code, reopenOut, reopenErr := invokeStore("wait", "--owner", "tillr-triage", "--rules", rulesDir, "--root", root, "--timeout", "2s")
 			if code != 0 || reopenErr != "" {
 				t.Fatalf("c5 wait: code=%d out=%q err=%q", code, reopenOut, reopenErr)
 			}
@@ -646,7 +665,7 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 				t.Fatalf("c5 wait output missing expected rule/check/tip_sha:\n%s", reopenOut)
 			}
 			seq2 := cursor(t, reopenOut)
-			if code, seenOut, seenErr := invokeStore("seen", "--through", fmt.Sprint(seq2)); code != 0 || seenErr != "" {
+			if code, seenOut, seenErr := invokeStore("seen", "--owner", "tillr-triage", "--through", fmt.Sprint(seq2)); code != 0 || seenErr != "" {
 				t.Fatalf("seen seq2: code=%d out=%q err=%q", code, seenOut, seenErr)
 			}
 
@@ -654,7 +673,7 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
 				t.Fatalf("dedup eval: code=%d out=%q err=%q", code, out, errOut)
 			}
-			if code, out, errOut := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
+			if code, out, errOut := invokeStore("wait", "--owner", "tillr-triage", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
 				t.Fatalf("dedup wait expected silence (code 2), got code=%d out=%q err=%q", code, out, errOut)
 			}
 			if state, pending := readStatus(); state != "open" || pending != 0 {
@@ -666,7 +685,7 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
 				t.Fatalf("re-ack eval: code=%d out=%q err=%q", code, out, errOut)
 			}
-			if code, out, errOut := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
+			if code, out, errOut := invokeStore("wait", "--owner", "tillr-triage", "--rules", rulesDir, "--root", root, "--timeout", "30ms"); code != 2 || errOut != "" || strings.Contains(out, "TILLR_WATCH_NOTICE") || strings.Contains(out, "trunk-proof-lag") {
 				t.Fatalf("re-ack wait expected silence (code 2), got code=%d out=%q err=%q", code, out, errOut)
 			}
 			if state, pending := readStatus(); state != wantState || pending != 0 {
@@ -682,7 +701,7 @@ func TestTrunkProofLagReopensOnRedProofCLI(t *testing.T) {
 			if code, out, errOut := invokeStore("eval", "--once", "--rules", rulesDir, "--root", root); code != 0 || errOut != "" {
 				t.Fatalf("second red eval: code=%d out=%q err=%q", code, out, errOut)
 			}
-			code, secondRedOut, secondRedErr := invokeStore("wait", "--rules", rulesDir, "--root", root, "--timeout", "2s")
+			code, secondRedOut, secondRedErr := invokeStore("wait", "--owner", "tillr-triage", "--rules", rulesDir, "--root", root, "--timeout", "2s")
 			if code != 0 || secondRedErr != "" {
 				t.Fatalf("second red wait: code=%d out=%q err=%q", code, secondRedOut, secondRedErr)
 			}

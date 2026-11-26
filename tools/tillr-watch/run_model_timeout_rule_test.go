@@ -107,7 +107,7 @@ func TestRunModelTimeoutRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,8 +159,11 @@ func TestRunModelTimeoutRule(t *testing.T) {
 
 	// A terminal finish resolves the episode.
 	appendFinish("run-a", "failed", now)
-	if resolved := pending(); len(resolved) != 0 {
-		t.Fatalf("terminal finish should resolve episode, got %+v", resolved)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(st.Alerts) != 0 {
+		t.Fatalf("terminal finish should resolve episode, got %+v (err=%v)", st.Alerts, err)
 	}
 
 	// Evaluating all command-eligible rules in config/tillr/watch on two run.model-timeout
@@ -202,7 +205,7 @@ func TestRunModelTimeoutRule(t *testing.T) {
 	if skipped[ruleID] != 0 {
 		t.Fatalf("expected 0 skipped events for %s, got %+v", ruleID, skipped)
 	}
-	allNotices, err := allEval.Pending(ctx, "foreground")
+	allNotices, err := allEval.Pending(ctx, "tillr-triage")
 	if err != nil {
 		t.Fatal(err)
 	}

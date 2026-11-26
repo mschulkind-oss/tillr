@@ -67,7 +67,7 @@ func TestDrainLoopNoPassRule(t *testing.T) {
 		if _, err := e.EvaluateRules(ctx); err != nil {
 			t.Fatal(err)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "operator-session")
 		if err != nil {
 			t.Fatal(err)
 		}

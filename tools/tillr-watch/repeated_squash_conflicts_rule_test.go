@@ -265,7 +265,7 @@ func TestLandRepeatedSquashConflictsRule(t *testing.T) {
 
 	const incidentItem = "item-request-a386b7eb1b"
 	incidentPaths := []string{"CONFLICT (content): Merge conflict in docs/design/tillr-watch.md"}
-	evalAndConfirm := func() []watch.Notice {
+	evalAndConfirm := func(owner string) []watch.Notice {
 		t.Helper()
 		res, err := allEval.EvaluateRules(ctx)
 		if err != nil {
@@ -276,40 +276,43 @@ func TestLandRepeatedSquashConflictsRule(t *testing.T) {
 				t.Fatalf("unexpected rule result: %+v", r)
 			}
 		}
-		notices, err := allEval.Pending(ctx, "foreground")
+		notices, err := allEval.Pending(ctx, owner)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(notices) > 0 {
 			through := notices[len(notices)-1].Seq
-			if err := allEval.Shown(ctx, "foreground", through); err != nil {
+			if err := allEval.Shown(ctx, owner, through); err != nil {
 				t.Fatal(err)
 			}
-			if err := allEval.Seen(ctx, "foreground", through); err != nil {
+			if err := allEval.Seen(ctx, owner, through); err != nil {
 				t.Fatal(err)
 			}
 		}
 		return notices
 	}
 
-	// 11:37 AM ET (conflict #1): opens land-squash-conflict only; confirmed seen.
+	// 11:37 AM ET (conflict #1): opens land-squash-conflict only (routed to triage); foreground stays quiet.
 	appendLandingTo(allStore, incidentItem, land.ResultSquashConflict, "", incidentPaths, replayNow)
-	n1 := evalAndConfirm()
+	n1 := evalAndConfirm("tillr-triage")
 	if len(n1) != 1 || n1[0].Bundle.RuleID != "land-squash-conflict" {
-		t.Fatalf("conflict #1: want only land-squash-conflict, got %+v", n1)
+		t.Fatalf("conflict #1: want only land-squash-conflict for tillr-triage, got %+v", n1)
+	}
+	if fg1 := evalAndConfirm("foreground"); len(fg1) != 0 {
+		t.Fatalf("conflict #1: want 0 foreground notices, got %+v", fg1)
 	}
 
 	// 11:49 AM ET (conflict #2): no new foreground wake.
 	replayNow = replayNow.Add(12 * time.Minute)
 	appendLandingTo(allStore, incidentItem, land.ResultSquashConflict, "", incidentPaths, replayNow)
-	if n2 := evalAndConfirm(); len(n2) != 0 {
+	if n2 := evalAndConfirm("foreground"); len(n2) != 0 {
 		t.Fatalf("conflict #2: want 0 new notices, got %+v", n2)
 	}
 
 	// 12:02 PM ET (conflict #3): wakes foreground with land-repeated-squash-conflicts.
 	replayNow = replayNow.Add(13 * time.Minute)
 	appendLandingTo(allStore, incidentItem, land.ResultSquashConflict, "", incidentPaths, replayNow)
-	n3 := evalAndConfirm()
+	n3 := evalAndConfirm("foreground")
 	if len(n3) != 1 || n3[0].Bundle.RuleID != ruleID || n3[0].Bundle.Subject != incidentItem ||
 		!strings.Contains(n3[0].Bundle.Guidance.Summary, incidentItem) ||
 		!strings.Contains(n3[0].Bundle.Guidance.Summary, "3") ||
@@ -320,7 +323,7 @@ func TestLandRepeatedSquashConflictsRule(t *testing.T) {
 	// 12:23 PM ET (conflict #4): counts in place without opening a duplicate notice.
 	replayNow = replayNow.Add(21 * time.Minute)
 	appendLandingTo(allStore, incidentItem, land.ResultSquashConflict, "", incidentPaths, replayNow)
-	if n4 := evalAndConfirm(); len(n4) != 0 {
+	if n4 := evalAndConfirm("foreground"); len(n4) != 0 {
 		t.Fatalf("conflict #4: want 0 duplicate notices, got %+v", n4)
 	}
 

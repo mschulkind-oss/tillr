@@ -20,7 +20,7 @@ check = ["Read gate.timing.jsonl in the run's directory. If the subject is unmea
 do = ["Establish which check grew and what change made it grow."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"
 
 # D-TW43, docs/design/tillr-watch.md Section 5.5: 90 seconds starts above
 # the median, 65.4 seconds, in the 2026-11-21 ten-run baseline.
@@ -45,4 +45,4 @@ check = ["Read the newest drain.fast-gate-timing events and the per-run alerts f
 do = ["Establish which checks grew and what changes made them grow."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

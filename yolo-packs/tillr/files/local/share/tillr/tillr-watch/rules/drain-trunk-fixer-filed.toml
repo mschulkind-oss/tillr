@@ -21,4 +21,4 @@ check = ["open the heavy run's record (.git/tillr-gate/heavy.json) and {{subject
 do = ["inspect the broken trunk commit and track {{subject}} until the trunk is green"]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "triage"

@@ -78,7 +78,7 @@ func TestGateRepeatedStallRule(t *testing.T) {
 		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
 			t.Fatalf("unexpected evaluation results: %+v", results)
 		}
-		notices, err := e.Pending(ctx, "foreground")
+		notices, err := e.Pending(ctx, "tillr-triage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -126,8 +126,11 @@ func TestGateRepeatedStallRule(t *testing.T) {
 
 	// A non-stalled verdict on treeA clears the episode.
 	recordVerdict("run-a-1", treeA, "pass", now.Add(-1*time.Minute))
-	if cleared := pending(); len(cleared) != 0 {
-		t.Fatalf("non-stalled verdict should clear episode, got %+v", cleared)
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := e.ReadStatus(ctx, func(string) (bool, error) { return false, nil }); err != nil || len(st.Alerts) != 0 {
+		t.Fatalf("non-stalled verdict should clear episode, got %+v (err=%v)", st.Alerts, err)
 	}
 
 	// Evaluating all command-eligible rules in config/tillr/watch on three stalled
@@ -168,15 +171,19 @@ func TestGateRepeatedStallRule(t *testing.T) {
 	if skipped[ruleID] != 0 {
 		t.Fatalf("expected 0 skipped events for %s, got %+v", ruleID, skipped)
 	}
-	allNotices, err := allEval.Pending(ctx, "foreground")
+	triageNotices, err := allEval.Pending(ctx, "tillr-triage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fgNotices, err := allEval.Pending(ctx, "foreground")
 	if err != nil {
 		t.Fatal(err)
 	}
 	gotByRule := map[string]string{}
-	for _, n := range allNotices {
+	for _, n := range append(triageNotices, fgNotices...) {
 		gotByRule[n.Bundle.RuleID] = n.Bundle.Subject
 	}
-	if len(allNotices) != 2 || gotByRule[ruleID] != treeC || gotByRule["gate-drain-stalls"] != "global" {
-		t.Fatalf("want %s (%s) and gate-drain-stalls (global) across config/tillr/watch, got %+v", ruleID, treeC, allNotices)
+	if len(triageNotices) != 1 || len(fgNotices) != 1 || gotByRule[ruleID] != treeC || gotByRule["gate-drain-stalls"] != "global" {
+		t.Fatalf("want %s (%s) on triage and gate-drain-stalls (global) on foreground, got triage=%+v fg=%+v", ruleID, treeC, triageNotices, fgNotices)
 	}
 }

@@ -22,4 +22,4 @@ check = ["Check that the drain loop process is alive and read the last lines of 
 do = ["If the drain loop has exited or stalled, inspect the last logged error and restart the loop."]
 
 [rule.delivery]
-receiver = "foreground"
+receiver = "operator-session"
