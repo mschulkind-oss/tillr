@@ -194,6 +194,14 @@ func (l *Loop) readIdleRefs(ctx context.Context) (trunkSHA, greenSHA string, ok 
 	return trunkSHA, greenSHA, trunkSHA != ""
 }
 
+func (l *Loop) trunkMovedSinceSync(ctx context.Context) bool {
+	if l.nonLanding || l.cfg.Root == "" || l.syncedSHA == "" {
+		return false
+	}
+	trunkSHA, _, ok := l.readIdleRefs(ctx)
+	return ok && trunkSHA != l.syncedSHA
+}
+
 func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.Time, pendingOnly bool) *idlePlanState {
 	if l.cfg.Store == "" || l.cfg.ExitWhenDrained || l.commentsSettings() != nil ||
 		l.activeCount() > 0 || l.heavyInFlight() || l.infrastructureStreak() > 0 || l.hasStageFaults() {
@@ -215,6 +223,9 @@ func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.T
 
 	trunkSHA, greenSHA, ok := l.readIdleRefs(ctx)
 	if !ok {
+		return nil
+	}
+	if !l.nonLanding && l.cfg.Root != "" && l.syncedSHA != "" && trunkSHA != l.syncedSHA {
 		return nil
 	}
 

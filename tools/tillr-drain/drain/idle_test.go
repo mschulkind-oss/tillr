@@ -351,3 +351,50 @@ func TestIdleLoopWithHeldItemsRunsRollingCheckOnIntervalAndTrunkMove(t *testing.
 	pass(4, 4)
 	pass(4, 4)
 }
+
+func TestIdleCaptureRejectsTrunkMoveSinceDocumentSync(t *testing.T) {
+	f, l := passFixture(t, "held-a")
+	l.cfg.ExitWhenDrained = false
+	l.cfg.NoNotify = true
+	l.cfg.StorePollInterval = time.Millisecond
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = ?`, StateBlocked)
+		return err
+	})
+	var result LoopResult
+	ctx := context.Background()
+	synced, err := l.refreshDocuments(ctx, &result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a commit landing on trunk after refreshDocuments and before
+	// planNothing/captureIdleState finishes entering trigger wait.
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "commit during enter-wait")
+	moved := runGit(t, f.root, "rev-parse", TrunkRef)
+	if moved == synced {
+		t.Fatalf("expected trunk to advance beyond %s", synced)
+	}
+	var triggerWaited bool
+	l.triggerTimer = func(d time.Duration) (<-chan time.Time, func()) {
+		triggerWaited = true
+		ch := make(chan time.Time, 1)
+		ch <- l.cfg.Now()
+		return ch, func() {}
+	}
+	stop, err := l.planNothing(ctx, []Decision{{ItemID: "held-a", Action: ActionHold, Reason: ReasonBlocked}}, nil, l.cfg.Now(), &result)
+	if err != nil || stop != "" {
+		t.Fatalf("planNothing: stop=%q err=%v", stop, err)
+	}
+	if l.idleState != nil {
+		t.Fatalf("captured idle state for unsynced trunk %s (synced %s)", moved, synced)
+	}
+	if triggerWaited {
+		t.Fatal("planNothing entered trigger wait even though trunk moved since refreshDocuments")
+	}
+	if stop, err := l.pass(ctx, &result); err != nil || stop != "" {
+		t.Fatalf("next pass: stop=%q err=%v", stop, err)
+	}
+	if result.SyncedSHA != moved {
+		t.Fatalf("next pass SyncedSHA = %s, want %s", result.SyncedSHA, moved)
+	}
+}

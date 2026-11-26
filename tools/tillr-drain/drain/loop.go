@@ -1583,6 +1583,9 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 			l.waitingDetail = detail
 			result.Detail = detail
 			l.idleState = l.captureIdleState(ctx, holds, at, l.lastPassPendingOnly)
+			if l.idleState == nil && l.trunkMovedSinceSync(ctx) {
+				return "", nil
+			}
 			return l.waitForTrigger(ctx, leases, at, result)
 		}
 		l.reportf("loop: %s\n", detail)
