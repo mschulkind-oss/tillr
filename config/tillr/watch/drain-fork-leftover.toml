@@ -1,0 +1,30 @@
+# Consumer report on 2026-11-25: two fork items were held at staging on lanes
+# whose fork checkouts still held six-day-old unretained commits or uncommitted
+# work from earlier runs. Alert when the run that left the work ends; nothing is
+# cleared automatically.
+[[rule]]
+id = "drain-fork-leftover"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.fork-leftover"]
+
+[rule.when]
+group_by = "checkout"
+pattern = "predicate_match"
+window = "24h"
+
+[rule.guidance]
+summary = "Run {{event.run_id}} left {{event.holds}} in fork checkout {{subject}} (lane {{event.lane_id}}, item {{event.item_id}})."
+check = [
+  "Inspect {{subject}} with git status and git log -n 5 to see what {{event.run_id}} left behind.",
+  "Check {{event.run_id}} and {{event.item_id}} with tillr run status or tillr drain why to establish how the run ended."
+]
+do = [
+  "Preserve any needed work from {{subject}} on a branch and reset the checkout to {{event.ref}} by hand; the drain does not clear it automatically."
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]

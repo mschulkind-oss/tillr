@@ -3841,6 +3841,8 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork, at time.Time, timing *PassTiming, watched []string) runCompletion {
 	local := &LoopResult{}
 	completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: timing}
+	initialForkCheckout := l.laneForkTarget(d.LaneID)
+	initialForkRef := l.lanePatchRef(d.LaneID)
 	ctx, recordTiming := l.timeHandoff(ctx, work.Decision, "examination")
 	defer recordTiming()
 	if work.NeedsStage {
@@ -4022,6 +4024,16 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 		completion.outcome.err = l.holdExaminationFailure(ctx, d, work, completion.step, completion.outcome.err)
 		endHold()
 		completion.outcome = retainedOutcome(completion.outcome)
+	}
+	if !l.nonLanding && !l.isRestartReplaced() && d.LaneID != "" {
+		checkout := l.laneForkTarget(d.LaneID)
+		ref := l.lanePatchRef(d.LaneID)
+		if checkout == "" {
+			checkout, ref = initialForkCheckout, initialForkRef
+		}
+		if checkout != "" && ref != "" {
+			l.reportForkCheckoutLeftover(context.WithoutCancel(ctx), d, checkout, ref, l.cfg.Now().UTC())
+		}
 	}
 	// A retained lane keeps its lease: releasing it would let the next staging clear the
 	// work that could not be preserved.

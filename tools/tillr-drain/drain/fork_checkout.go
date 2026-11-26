@@ -113,15 +113,19 @@ func (s *LaneStager) refreshForkCheckout(ctx context.Context, fork ForkTarget) e
 // a release rebase. If an old tip contains HEAD, it proves the entire history
 // we would leave behind was delivered, even if this lane missed several moves.
 func (s *LaneStager) wasDeliveredForkHead(ctx context.Context, ref, head string) (bool, error) {
+	return wasDeliveredForkHead(ctx, s.git, s.Root, ref, head)
+}
+
+func wasDeliveredForkHead(ctx context.Context, git func(context.Context, string, ...string) (string, error), root, ref, head string) (bool, error) {
 	name, ok := strings.CutPrefix(ref, forkPatchPrefix)
 	if !ok || name == "" || strings.Contains(name, "/") {
 		return false, nil
 	}
 	// A private lane commit need not exist in the delivery repository at all.
-	if _, err := s.git(ctx, s.Root, "--no-replace-objects", "cat-file", "-e", head+"^{commit}"); err != nil {
+	if _, err := git(ctx, root, "--no-replace-objects", "cat-file", "-e", head+"^{commit}"); err != nil {
 		return false, ctx.Err()
 	}
-	refs, err := s.git(ctx, s.Root, "--no-replace-objects", "for-each-ref", "--contains", head,
+	refs, err := git(ctx, root, "--no-replace-objects", "for-each-ref", "--contains", head,
 		"--count=1", "--format=%(refname)", "refs/tillr/patch-history/"+name+"/")
 	return strings.TrimSpace(refs) != "", err
 }

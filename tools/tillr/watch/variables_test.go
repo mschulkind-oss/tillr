@@ -26,6 +26,7 @@ func registerShippedWatchKinds(t *testing.T) {
 		"drain.fast-gate-timing",
 		"drain.fixer-attached",
 		"drain.fixer-proved",
+		"drain.fork-leftover",
 		"drain.heavy-fault",
 		"drain.heavy-progress",
 		"drain.item-fault",
