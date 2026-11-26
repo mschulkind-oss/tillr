@@ -2,8 +2,10 @@
 # when the request's words conflicted with the code or with a design; on
 # 2026-11-22, counting unfiltered item.conflict status transitions woke the
 # operator on single conflicts going raised -> awaiting, and restarting the
-# watcher emitted 44 alerts including already-closed and already-landed items.
-# Count only raised item.conflict events on open items (via the items and
+# watcher emitted 44 alerts including already-closed and already-landed items;
+# on 2026-11-25, delivering a revised instruction with tillr drain retry
+# re-raised the same conflict_id (owner -> raised) and counted one conflict as
+# two. Count distinct raised conflict_id values on open items (via the items and
 # charter projections) and warn at two or more in 24 hours.
 [[rule]]
 id = "drain-repeated-item-conflicts"
@@ -18,6 +20,7 @@ projections = ["items", "charter"]
 group_by = "item_id"
 pattern = "count_in_window"
 match = 'event.status == "raised" and item.state != charter.closed and item.state not in charter.finished'
+distinct_by = "conflict_id"
 threshold = 2
 window = "24h"
 

@@ -13,7 +13,10 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-item/item"
+	tillrrun "github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/watch"
 )
@@ -306,5 +309,236 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 	verdictNotices, err := verdictEval.Pending(ctx, "foreground")
 	if err != nil || len(verdictNotices) != 1 || verdictNotices[0].Bundle.Subject != "rv-open" {
 		t.Fatalf("want only rv-open to alert on recorded-verdict charter, got %+v (err=%v)", verdictNotices, err)
+	}
+}
+
+func TestDrainRepeatedItemConflictsRuleCountsDistinctConflictIDsAcrossRetryReraise(t *testing.T) {
+	const (
+		ruleID      = "drain-repeated-item-conflicts"
+		itemID      = "item-retry-conflict"
+		workerRunID = "run-worker-1"
+		designRunID = "run-design-1"
+		conflictID  = "conflict-" + workerRunID
+	)
+	rules, err := watch.LoadRules("../../config/tillr/watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := slices.IndexFunc(rules, func(rule watch.Rule) bool { return rule.ID == ruleID })
+	if idx < 0 {
+		t.Fatalf("missing %s rule", ruleID)
+	}
+	rule := rules[idx]
+
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	t0 := time.Date(2026, 11, 25, 14, 0, 0, 0, time.UTC)
+	now := t0
+	e := watch.Evaluator{Store: s, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(
+			`INSERT INTO items (item_id, title, state, updated_at) VALUES (?, ?, ?, ?)`,
+			itemID, itemID, "in-queue", now.UnixMilli(),
+		); err != nil {
+			return err
+		}
+		return item.RecordConflict(tx, item.Conflict{
+			ConflictID:      conflictID,
+			ItemID:          itemID,
+			RunID:           workerRunID,
+			Text:            "OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: request conflicts with design",
+			BlockedCriteria: []string{"c1"},
+			WaitingOn:       "design",
+			Status:          "raised",
+		}, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	now = t0.Add(2 * time.Minute)
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if err := item.RecordConflict(tx, item.Conflict{
+			ConflictID:      conflictID,
+			ItemID:          itemID,
+			RunID:           workerRunID,
+			Text:            "OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: request conflicts with design",
+			BlockedCriteria: []string{"c1"},
+			WaitingOn:       "design",
+			Status:          "awaiting",
+			DesignRunID:     designRunID,
+		}, now); err != nil {
+			return err
+		}
+		exitCode := 0
+		rec := tillrrun.Record{
+			RunID:      designRunID,
+			ItemID:     itemID,
+			LaneID:     "lane-1",
+			Backend:    "pi",
+			Seat:       "design",
+			State:      tillrrun.StateExited,
+			ExitCode:   &exitCode,
+			StartedAt:  t0.Add(time.Minute).Format(time.RFC3339),
+			FinishedAt: now.Format(time.RFC3339),
+			EndCause:   tillrrun.EndNormalExit,
+		}
+		payload, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		env := record.Envelope{
+			RecordVersion: 1,
+			Kind:          tillrrun.RecordKind,
+			ID:            designRunID,
+			CreatedAt:     now,
+			Producer:      record.Producer{System: "tillr", Utility: "tillr-run", Version: "test"},
+			Subject:       &record.Subject{Kind: "run", ID: designRunID},
+			Payload:       payload,
+		}
+		if _, err := tillrrun.Apply(ctx, tx, env); err != nil {
+			return err
+		}
+		return item.RecordConflict(tx, item.Conflict{
+			ConflictID:      conflictID,
+			ItemID:          itemID,
+			RunID:           workerRunID,
+			Text:            "OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: request conflicts with design",
+			BlockedCriteria: []string{"c1"},
+			WaitingOn:       "owner",
+			Status:          "owner",
+			DesignRunID:     designRunID,
+		}, now.Add(time.Second))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deliver a revised instruction via tillr drain retry (AuthorizeRetry).
+	now = t0.Add(5 * time.Minute)
+	var retry drain.Retry
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		var err error
+		retry, err = drain.AuthorizeRetry(ctx, tx, drain.RetryRequest{
+			ItemID: itemID,
+			RunID:  designRunID,
+			By:     "the owner",
+			Why:    "revised instruction",
+			At:     now,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("AuthorizeRetry failed: %v", err)
+	}
+	if retry.ReraisesConflict != conflictID {
+		t.Fatalf("AuthorizeRetry reraises %q, want %q", retry.ReraisesConflict, conflictID)
+	}
+
+	// The store keeps the append-only transition log truthful: two raised item.conflict
+	// events carry the same conflict_id.
+	var raisedSameID int
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		rows, err := rd.Query(`SELECT payload FROM events WHERE kind = ? ORDER BY seq`, item.ConflictKind)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var raw []byte
+			if err := rows.Scan(&raw); err != nil {
+				return err
+			}
+			var c item.Conflict
+			if err := json.Unmarshal(raw, &c); err != nil {
+				return err
+			}
+			if c.ConflictID == conflictID && c.Status == "raised" {
+				raisedSameID++
+			}
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if raisedSameID != 2 {
+		t.Fatalf("want 2 raised item.conflict events for %q in store, got %d", conflictID, raisedSameID)
+	}
+
+	evalAndPending := func() []watch.Notice {
+		t.Helper()
+		results, err := e.EvaluateRules(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
+			t.Fatalf("unexpected evaluation results: %+v", results)
+		}
+		notices, err := e.Pending(ctx, "foreground")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return notices
+	}
+
+	// The watch rule counts distinct conflict_ids, so re-raising the same conflict stays quiet.
+	if notices := evalAndPending(); len(notices) != 0 {
+		t.Fatalf("re-raising the same conflict_id with AuthorizeRetry should stay quiet, got %+v", notices)
+	}
+	var episodeCount int
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT COUNT(*) FROM alert_episodes`).Scan(&episodeCount)
+	}); err != nil || episodeCount != 0 {
+		t.Fatalf("want 0 alert episodes after retry re-raise of one conflict_id, got %d (err=%v)", episodeCount, err)
+	}
+
+	// Non-retry same-conflict_id raised transitions (for example an unanswered design run
+	// returning the same conflict to design) also stay quiet.
+	now = t0.Add(8 * time.Minute)
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		return item.RecordConflict(tx, item.Conflict{
+			ConflictID:      conflictID,
+			ItemID:          itemID,
+			RunID:           workerRunID,
+			Text:            "OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: returned after unanswered design run",
+			BlockedCriteria: []string{"c1"},
+			WaitingOn:       "design",
+			Status:          "raised",
+		}, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if notices := evalAndPending(); len(notices) != 0 {
+		t.Fatalf("non-retry same-conflict_id raised transition should stay quiet, got %+v", notices)
+	}
+
+	// A second distinct conflict_id raised on the same open item within 24h opens one
+	// foreground notice reporting count 2.
+	now = t0.Add(15 * time.Minute)
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		return item.RecordConflict(tx, item.Conflict{
+			ConflictID:      "conflict-run-worker-2",
+			ItemID:          itemID,
+			RunID:           "run-worker-2",
+			Text:            "OBSTACLE: definition\nCRITERIA: c2\nEVIDENCE: second distinct conflict",
+			BlockedCriteria: []string{"c2"},
+			WaitingOn:       "design",
+			Status:          "raised",
+		}, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	notices := evalAndPending()
+	if len(notices) != 1 || notices[0].Bundle.RuleID != ruleID || notices[0].Bundle.Subject != itemID {
+		t.Fatalf("want one notice after second distinct conflict_id, got %+v", notices)
+	}
+	if !strings.Contains(notices[0].Bundle.Guidance.Summary, "2") {
+		t.Fatalf("want notice summary to report count 2, got %q", notices[0].Bundle.Guidance.Summary)
 	}
 }
