@@ -71,15 +71,17 @@ func resolvePiDir(explicit string) string {
 	if envDir := strings.TrimSpace(os.Getenv("TILLR_PI_ADAPTER_DIR")); envDir != "" {
 		return envDir
 	}
-	if out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output(); err == nil {
-		common := strings.TrimSpace(string(out))
-		if common != "" {
-			candidate := filepath.Join(filepath.Dir(common), "tools", "tillr-run", "backends", "pi")
-			if _, err := os.Stat(filepath.Join(candidate, "pi-harness.sh")); err == nil {
-				return candidate
-			}
-			if root := strings.TrimSpace(os.Getenv("TILLR_INSTALL_ROOT")); root == "" {
-				return candidate
+	if os.Getenv("TILLR_NON_LANDING") != "1" {
+		if out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output(); err == nil {
+			common := strings.TrimSpace(string(out))
+			if common != "" {
+				candidate := filepath.Join(filepath.Dir(common), "tools", "tillr-run", "backends", "pi")
+				if _, err := os.Stat(filepath.Join(candidate, "pi-harness.sh")); err == nil {
+					return candidate
+				}
+				if root := strings.TrimSpace(os.Getenv("TILLR_INSTALL_ROOT")); root == "" {
+					return candidate
+				}
 			}
 		}
 	}

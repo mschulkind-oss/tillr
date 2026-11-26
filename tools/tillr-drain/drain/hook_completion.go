@@ -32,7 +32,9 @@ type completionSteps interface {
 }
 
 // ConfigureNonLanding is called when a definition completes without landing.
-func (s *ProcessSteps) ConfigureNonLanding() {}
+func (s *ProcessSteps) ConfigureNonLanding() {
+	s.nonLanding = true
+}
 
 // CompleteItem calls the definition outside any store transaction. The state
 // subprocess alone checks verdict receipts and moves the item in one write.
@@ -54,7 +56,7 @@ func (s *ProcessSteps) CompleteItem(ctx context.Context, itemID, runID string, d
 	argv := append(append([]string{}, d.Hooks.Argv...), "complete-item", "--item", itemID, "--run", runID, "--store", db, "--root", root)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = root
-	cmd.Env = withGitCeilingEnv(os.Environ(), s.LaneRoot)
+	cmd.Env = withGitCeilingEnv(append(withoutProcessEnv(os.Environ(), "TILLR_NON_LANDING"), "TILLR_NON_LANDING=1"), s.LaneRoot)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	started := time.Now().UnixMilli()

@@ -126,11 +126,14 @@ fi
 # here, never passed through from the loop's environment.
 unset GIT_TRACE2_EVENT GIT_TRACE2_PARENT_SID GIT_TRACE2 GIT_TRACE2_PERF
 trace_dir=${TILLR_TRACE_DIR:-}
-repo_root=
+repo_root=${TILLR_REPO_ROOT:-}
 # A linked worktree's git common directory is the main checkout's `.git`, whose parent is
 # the repository root, so the adapter, the gate and the lander agree on one `.tillr/loop`.
-if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
-    repo_root=$(dirname -- "$common")
+# A non-landing store (`TILLR_NON_LANDING=1`) never resolves an enclosing Git repository.
+if [ "${TILLR_NON_LANDING:-}" != "1" ]; then
+    if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+        repo_root=$(dirname -- "$common")
+    fi
 fi
 if [ -n "${TILLR_RUN_ID:-}" ] && [ -z "$trace_dir" ] && [ -n "$repo_root" ]; then
     trace_dir=$repo_root/.tillr/loop/$TILLR_RUN_ID

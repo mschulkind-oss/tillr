@@ -7,7 +7,9 @@ PI_AGENT_DIR_BUILT=0
 ext_record_line=
 
 _pi_use_deployed=0
-if [ "${TILLR_PI_AGENT_DIRS_DIR+set}" = set ] && [ -z "$TILLR_PI_AGENT_DIRS_DIR" ]; then
+if [ "${TILLR_NON_LANDING:-}" = "1" ]; then
+    _pi_use_deployed=1
+elif [ "${TILLR_PI_AGENT_DIRS_DIR+set}" = set ] && [ -z "$TILLR_PI_AGENT_DIRS_DIR" ]; then
     _pi_use_deployed=1
 fi
 

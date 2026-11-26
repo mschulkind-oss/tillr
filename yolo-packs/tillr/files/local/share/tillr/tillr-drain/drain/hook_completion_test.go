@@ -359,3 +359,296 @@ func TestHookCompletionRestartAfterMove(t *testing.T) {
 		t.Fatalf("missing/duplicate end records: %d", examined)
 	}
 }
+
+func TestNonLandingLoopInsideEnclosingGitRepo(t *testing.T) {
+	outer := scratch(t, "enclosing-repo")
+	if out, err := exec.Command("git", "init", "-q", "-b", "main", outer).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", outer, "config", "user.name", "Test User").CombinedOutput(); err != nil {
+		t.Fatalf("git config name: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", outer, "config", "user.email", "test@example.com").CombinedOutput(); err != nil {
+		t.Fatalf("git config email: %v: %s", err, out)
+	}
+	writeFile(t, filepath.Join(outer, "README.md"), "outer repo\n")
+	if out, err := exec.Command("git", "-C", outer, "add", "README.md").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", outer, "commit", "-q", "-m", "init").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	// Pre-populate the enclosing repo's .tillr directory so we can prove it is untouched.
+	outerTillr := filepath.Join(outer, ".tillr")
+	if err := os.MkdirAll(filepath.Join(outerTillr, "loop"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(outerTillr, "sentinel.txt"), "keep-me\n")
+	writeFile(t, filepath.Join(outerTillr, "loop", "existing.json"), "{}\n")
+	writeFile(t, filepath.Join(outer, ".gitignore"), ".tillr/\n")
+	if out, err := exec.Command("git", "-C", outer, "add", ".gitignore").CombinedOutput(); err != nil {
+		t.Fatalf("git add .gitignore: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", outer, "commit", "-q", "-m", "ignore tillr").CombinedOutput(); err != nil {
+		t.Fatalf("git commit .gitignore: %v: %s", err, out)
+	}
+
+	// Plain directory inside the enclosing Git repo's tree.
+	plainRoot := filepath.Join(outer, "sub", "plain")
+	plainStore := filepath.Join(plainRoot, ".tillr", "state.db")
+	plainLanes := filepath.Join(plainRoot, ".tillr", "lanes")
+	if err := os.MkdirAll(filepath.Dir(plainStore), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Build sibling binaries before installing the git spy on PATH.
+	runBin := sibling(t, "run")
+	itemBin := sibling(t, "item")
+	sibling(t, "view")
+
+	// Locate the real run-pi adapter in this tree.
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPi := filepath.Join(repoRoot, "tools", "tillr-run", "backends", "pi", "run-pi")
+	backendsDir := filepath.Join(repoRoot, "tools", "tillr-run", "backends")
+
+	// Seed the non-landing store with one queued item.
+	s, err := store.Open(context.Background(), plainStore, true)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	s.Close()
+	itemJSON := fencedItemRecord("finding", "in-queue")
+	itemInput := filepath.Join(scratch(t, "item-input"), "item.json")
+	writeFile(t, itemInput, itemJSON)
+	if out, err := exec.Command(itemBin, "apply", "--store", plainStore, "--input", itemInput, "--now", "2026-11-25T00:00:00Z").CombinedOutput(); err != nil {
+		t.Fatalf("item apply: %v: %s", err, out)
+	}
+
+	hookWorkFile := filepath.Join(plainRoot, "hook-worked.txt")
+	hookScript := fmt.Sprintf(`set -eu
+python3 - "$@" <<'PY'
+import sys, subprocess, json, hashlib, os
+args = dict(zip(sys.argv[2::2], sys.argv[3::2]))
+root = args['--root']
+with open(os.path.join(root, 'hook-worked.txt'), 'w') as f:
+    f.write(args['--run'] + '\n')
+p = json.loads(subprocess.check_output([%q, 'show', '--store', args['--store'], '--item', args['--item']]))['payload']
+for c in p['criteria']:
+    v = {
+        'record_version': 1, 'kind': 'item.verdict', 'id': 'verdict-' + c['criterion_id'],
+        'producer': {'system': 'tillr', 'utility': 'item', 'version': '0.1.0'},
+        'created_at': '2026-11-25T00:00:00Z',
+        'payload': {
+            'item_id': p['item_id'], 'criterion_id': c['criterion_id'],
+            'criterion_hash': hashlib.sha256(c['text'].encode()).hexdigest(),
+            'verdict': 'done', 'claim_class': 'verification-only',
+            'reason': 'checked', 'evidence': ['doc:evidence.md'],
+            'actor_kind': 'human', 'actor': 'owner',
+        },
+    }
+    vp = os.path.join(root, 'verdict.json')
+    with open(vp, 'w') as f:
+        json.dump(v, f)
+    subprocess.run([%q, 'verdict', 'record', '--store', args['--store'], '--input', vp, '--now', '2026-11-25T00:00:00Z'], stdout=subprocess.DEVNULL, check=True)
+PY
+echo '{"state":"confirmed","reason":"evidence checked","resolves_via":"doc:evidence.md"}'
+`, itemBin, itemBin)
+	hook := stub(t, "hook", hookScript)
+
+	d := plannerFixtureDefinition(t)
+	d.Ready = "in-queue"
+	d.Transitions = append(d.Transitions, definition.Transition{From: "in-queue", To: "confirmed"})
+	d.BriefTemplate = "template.md"
+	d.Hooks.Argv = []string{hook}
+	plainBriefTemplate := `# {{ITEM_ID}} — {{TITLE}}
+
+## Header
+- **Item:** {{ITEM_ID}}
+- **Run:** {{RUN_ID}}
+- **Backend:** {{BACKEND}}
+- **Target:** {{TARGET}} ({{TARGET_KIND}})
+- **Date:** {{DATE}}
+- **Timeout:** {{TIMEOUT_SECONDS}}
+
+## Task
+{{TASK}}
+1. {{CRITERION_1}}
+
+## Scope and boundaries
+Plain directory {{TARGET}}, scratch {{DURABLE_DIR}}.
+
+## Seats
+{{SEAT_LINES}}
+
+## Settled decisions
+{{SETTLED}}
+
+## Facts carried
+{{FACTS}}
+
+## Method
+{{METHOD}}
+
+## Verification commands
+{{VERIFICATION}}
+
+## Report shape
+End with RESULT: done.
+
+## Stop conditions
+None.
+`
+	writeFile(t, filepath.Join(plainRoot, d.BriefTemplate), plainBriefTemplate)
+	setPlannerDefinition(t, plainStore, d)
+
+	// Fake pi binary that emits a minimal JSONL stream with RESULT: done and runs a bash command
+	// so the recording seam (BASH_ENV / TILLR_TRACE_DIR) writes proc-exec.jsonl.
+	binDir := scratch(t, "spy-bin")
+	piStub := filepath.Join(binDir, "pi")
+	piBody := `#!/bin/sh
+if [ "${1:-}" = "--features" ]; then
+    printf '[]\n'
+    exit 0
+fi
+cat >/dev/null
+bash -c 'true'
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"RESULT: done"}]}}\n'
+`
+	if err := os.WriteFile(piStub, []byte(piBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Git spy: records any `git rev-parse` of top-level or common dir and fails it.
+	gitRevParseLog := filepath.Join(scratch(t, "git-spy"), "rev-parse.log")
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitSpy := filepath.Join(binDir, "git")
+	gitSpyBody := fmt.Sprintf(`#!/bin/sh
+case " $* " in
+    *"rev-parse"*"--show-toplevel"*|*"rev-parse"*"--git-common-dir"*)
+        printf '%%s\n' "$*" >> %q
+        exit 99
+        ;;
+esac
+exec %q "$@"
+`, gitRevParseLog, realGit)
+	if err := os.WriteFile(gitSpy, []byte(gitSpyBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Chdir(plainRoot)
+
+	policy := &drain.Policy{
+		DefaultBackend: "pi",
+		Backends: map[string]drain.Backend{
+			"pi": {Adapter: runPi, Model: "stub-model", Effort: "low", TimeoutSeconds: 0},
+		},
+	}
+	now := func() time.Time { return time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC) }
+	steps := &drain.ProcessSteps{
+		RunBin:      runBin,
+		ItemBin:     itemBin,
+		Store:       plainStore,
+		LaneRoot:    plainLanes,
+		Root:        plainRoot,
+		BackendsDir: backendsDir,
+		Now:         now,
+	}
+	steps.ConfigureHooks(d.Hooks, nil)
+	stager := &drain.LaneStager{Root: plainRoot, Store: plainStore, LaneRoot: plainLanes, Now: now}
+	loop, err := drain.NewLoop(drain.LoopConfig{
+		Root:            plainRoot,
+		Store:           plainStore,
+		LaneRoot:        plainLanes,
+		Lanes:           []string{"lane-1"},
+		Policy:          policy,
+		Steps:           steps,
+		Stage:           stager,
+		Now:             now,
+		Report:          os.Stderr,
+		ExitWhenDrained: true,
+		BackoffBase:     time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewLoop: %v", err)
+	}
+	result, err := loop.Run(context.Background())
+	if err != nil {
+		t.Fatalf("loop.Run: %v (result=%+v)", err, result)
+	}
+	if result.Dispatched != 1 || result.Landed != 0 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+
+	// 1. No git rev-parse of top-level or common directory was run.
+	if calls, err := os.ReadFile(gitRevParseLog); err == nil && strings.TrimSpace(string(calls)) != "" {
+		t.Fatalf("git rev-parse was called on non-landing loop:\n%s", calls)
+	}
+
+	// 2. Run directories, lanes, and hook working files are all under plainRoot.
+	loopEntries, err := os.ReadDir(filepath.Join(plainRoot, ".tillr", "loop"))
+	if err != nil || len(loopEntries) == 0 {
+		t.Fatalf("expected run directories under %s/.tillr/loop, got entries=%v err=%v", plainRoot, loopEntries, err)
+	}
+	if _, err := os.Stat(filepath.Join(plainLanes, "lane-1", "work")); err != nil {
+		t.Fatalf("expected plain lane work dir under %s: %v", plainLanes, err)
+	}
+	if _, err := os.Stat(hookWorkFile); err != nil {
+		t.Fatalf("expected hook working file %s: %v", hookWorkFile, err)
+	}
+	if _, err := os.Stat(filepath.Join(plainRoot, ".tillr", "loop", "run-finding-a1", "proc-exec.jsonl")); err != nil {
+		t.Fatalf("expected proc-exec.jsonl under %s/.tillr/loop/run-finding-a1: %v", plainRoot, err)
+	}
+	// Verify item reached finished state.
+	st, err := store.OpenRead(context.Background(), plainStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finalState string
+	if err := st.ReadTx(context.Background(), func(r *store.Reader) error {
+		return r.QueryRow(`SELECT state FROM items WHERE item_id='finding'`).Scan(&finalState)
+	}); err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	st.Close()
+	if finalState != "confirmed" {
+		t.Fatalf("item state = %q, want confirmed", finalState)
+	}
+
+	// 3. Enclosing Git repository's .tillr directory is completely unchanged.
+	outerTillrEntries, err := os.ReadDir(outerTillr)
+	if err != nil {
+		t.Fatalf("reading outer .tillr: %v", err)
+	}
+	var outerNames []string
+	for _, e := range outerTillrEntries {
+		outerNames = append(outerNames, e.Name())
+	}
+	if strings.Join(outerNames, ",") != "loop,sentinel.txt" {
+		t.Fatalf("enclosing .tillr changed: got %v, want [loop sentinel.txt]", outerNames)
+	}
+	outerLoopEntries, err := os.ReadDir(filepath.Join(outerTillr, "loop"))
+	if err != nil {
+		t.Fatalf("reading outer .tillr/loop: %v", err)
+	}
+	var outerLoopNames []string
+	for _, e := range outerLoopEntries {
+		outerLoopNames = append(outerLoopNames, e.Name())
+	}
+	if strings.Join(outerLoopNames, ",") != "existing.json" {
+		t.Fatalf("enclosing .tillr/loop changed: got %v, want [existing.json]", outerLoopNames)
+	}
+	// Check enclosing repo git status outside sub/plain is clean.
+	statusOut, err := exec.Command(realGit, "-C", outer, "status", "--porcelain", "--", ".", ":!sub/plain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v: %s", err, statusOut)
+	}
+	if strings.TrimSpace(string(statusOut)) != "" {
+		t.Fatalf("enclosing git repo tree changed:\n%s", statusOut)
+	}
+}

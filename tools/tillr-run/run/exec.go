@@ -371,8 +371,15 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		logFile.Close()
 		return record.Envelope{}, err
 	}
-	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER", "TILLR_READ_ONLY_GROUP", "TILLR_PI_BUILDS_DIR", "TILLR_HARNESS_RECORD_FILE", "TILLR_RUN_EXEC_ID"} {
+	nonLanding := false
+	if completes, err := s.Completes(ctx); err == nil && completes != "landing" {
+		nonLanding = true
+	}
+	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER", "TILLR_READ_ONLY_GROUP", "TILLR_PI_BUILDS_DIR", "TILLR_HARNESS_RECORD_FILE", "TILLR_RUN_EXEC_ID", "TILLR_NON_LANDING"} {
 		env = withoutEnv(env, key)
+	}
+	if nonLanding {
+		env = append(env, "TILLR_NON_LANDING=1")
 	}
 	if req.ScratchEnv == nil || *req.ScratchEnv {
 		env = append(withoutEnv(env, "YOLO_DURABLE_DIR"), "YOLO_DURABLE_DIR="+durableDir)
@@ -431,10 +438,16 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		"TILLR_RUN_EXEC_ID="+execID,
 	)
 	env = append(withoutEnv(env, "GIT_CEILING_DIRECTORIES"), "GIT_CEILING_DIRECTORIES="+filepath.Dir(root))
-	env, err = installGitGuard(workDir, durableDir, env)
-	if err != nil {
-		logFile.Close()
-		return record.Envelope{}, err
+	if nonLanding {
+		for _, key := range gitRepoEnvKeys {
+			env = withoutEnv(env, key)
+		}
+	} else {
+		env, err = installGitGuard(workDir, durableDir, env)
+		if err != nil {
+			logFile.Close()
+			return record.Envelope{}, err
+		}
 	}
 	mark := newExecMark(execID, req.RunID)
 	// The terminal write is the record a stop must not lose: the caller's context is

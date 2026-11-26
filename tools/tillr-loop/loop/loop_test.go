@@ -2,6 +2,7 @@ package loop
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 const stubTillrGate = `#!/bin/sh
@@ -1235,5 +1238,92 @@ func TestInstallRootAndDecoyRejection(t *testing.T) {
 	gotBuild := itemBuildName(binFile)
 	if !strings.HasPrefix(gotBuild, "launcher ") || !strings.Contains(gotBuild, hex.EncodeToString(sum[:])) {
 		t.Fatalf("unexpected itemBuildName: %s", gotBuild)
+	}
+}
+
+func TestResolveRootNonLandingStoreNeverRunsGitRevParse(t *testing.T) {
+	outer := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", outer).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	plainRoot := filepath.Join(outer, "sub", "plain")
+	dbPath := filepath.Join(plainRoot, ".tillr", "state.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(context.Background(), dbPath, true)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defJSON := []byte(`{
+		"definition": "verify-only",
+		"version": 1,
+		"states": ["queued", "blocked", "closed", "verified"],
+		"ready": "queued",
+		"blocked": "blocked",
+		"closed": "closed",
+		"finished": ["verified"],
+		"transitions": [{"from": "queued", "to": "verified"}],
+		"prerequisites": [],
+		"completes": "hook",
+		"brief_template": "template.md",
+		"hooks": {"argv": ["true"], "names": ["complete-item"]}
+	}`)
+	recJSON, err := json.Marshal(map[string]any{
+		"definition": "verify-only",
+		"version":    1,
+		"content":    string(defJSON),
+		"sha256":     "unused",
+		"default":    false,
+	})
+	if err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO meta (key, value) VALUES ('store.definition', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, string(recJSON))
+		return err
+	}); err != nil {
+		s.Close()
+		t.Fatalf("writing store.definition: %v", err)
+	}
+	s.Close()
+
+	workDir := filepath.Join(plainRoot, ".tillr", "lanes", "lane-1", "work")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Put a git spy on PATH that records every call and fails.
+	binDir := t.TempDir()
+	gitLog := filepath.Join(t.TempDir(), "git-calls.log")
+	spy := filepath.Join(binDir, "git")
+	if err := os.WriteFile(spy, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \""+gitLog+"\"\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Chdir(plainRoot)
+
+	// Explicit --store without --root: must refuse without invoking git rev-parse.
+	code, _, stderr := runMain("gate",
+		"--item", "it-1", "--lane", "lane-1", "--run", "run-1",
+		"--worktree", workDir, "--base", "aaa", "--head", "bbb",
+		"--store", dbPath)
+	if code != ExitUsage {
+		t.Fatalf("expected ExitUsage without --root for non-landing store, got code=%d stderr=%s", code, stderr)
+	}
+	if calls, err := os.ReadFile(gitLog); err == nil && strings.TrimSpace(string(calls)) != "" {
+		t.Fatalf("git was invoked for non-landing store:\n%s", calls)
+	}
+
+	// Implicit ./.tillr/state.db in cwd without --root or --store: must also refuse without git rev-parse.
+	code, _, stderr = runMain("gate",
+		"--item", "it-1", "--lane", "lane-1", "--run", "run-1",
+		"--worktree", workDir, "--base", "aaa", "--head", "bbb")
+	if code != ExitUsage {
+		t.Fatalf("expected ExitUsage for implicit non-landing store in cwd, got code=%d stderr=%s", code, stderr)
+	}
+	if calls, err := os.ReadFile(gitLog); err == nil && strings.TrimSpace(string(calls)) != "" {
+		t.Fatalf("git was invoked for implicit non-landing store:\n%s", calls)
 	}
 }

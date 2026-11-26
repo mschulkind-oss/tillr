@@ -72,3 +72,78 @@ func TestNoRunAdapterExportsOrInheritsGitTrace2(t *testing.T) {
 		})
 	}
 }
+
+// TestNonLandingAdaptersNeverRunGitRevParseOrWriteEnclosingRepo verifies that when
+// TILLR_NON_LANDING=1 is set, run-pi and run-claude (plus pi-agent-dir.sh and
+// pi-harness.sh) never invoke `git rev-parse` to discover an enclosing repository
+// and never write into an enclosing repository's .tillr/loop.
+func TestNonLandingAdaptersNeverRunGitRevParseOrWriteEnclosingRepo(t *testing.T) {
+	cases := []struct {
+		name, adapter, harness string
+		args                   []string
+		stub                   string
+	}{
+		{"pi", filepath.Join("backends", "pi", "run-pi"), "pi",
+			[]string{"--backend", "pi", "--model", "m", "--effort", "medium"}, "cat >/dev/null\nenv > \"$STUB_ENV\"\n"},
+		{"claude", filepath.Join("backends", "claude", "run-claude"), "claude",
+			[]string{"--backend", "claude", "--model", "m", "--effort", "medium"}, "env > \"$STUB_ENV\"\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter, err := filepath.Abs(tc.adapter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outer := scratch(t, "nonlanding-outer-"+tc.name)
+			if out, err := exec.Command("git", "init", "-q", outer).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v: %s", err, out)
+			}
+			outerTillr := filepath.Join(outer, ".tillr")
+			if err := os.MkdirAll(outerTillr, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			plainRoot := filepath.Join(outer, "sub", "plain")
+			workDir := filepath.Join(plainRoot, ".tillr", "lanes", "lane-1", "work")
+			if err := os.MkdirAll(workDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(plainRoot, ".tillr", "lanes", "lane-1", "brief.md"), []byte(filledBrief(t, workDir)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			bin := filepath.Join(scratch(t, "nonlanding-bin-"+tc.name), "bin")
+			envLog := filepath.Join(plainRoot, "env.txt")
+			gitLog := filepath.Join(plainRoot, "git-calls.log")
+			writeExecutable(t, filepath.Join(bin, tc.harness), "#!/bin/sh\n"+tc.stub)
+			writeExecutable(t, filepath.Join(bin, "git"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \""+gitLog+"\"\nexit 99\n")
+
+			traceDir := filepath.Join(plainRoot, ".tillr", "loop", "run-nonlanding-1")
+			cmd := exec.Command(adapter, tc.args...)
+			cmd.Dir = workDir
+			cmd.Env = append(os.Environ(),
+				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"STUB_ENV="+envLog,
+				"TILLR_RUN_ID=run-nonlanding-1",
+				"TILLR_NON_LANDING=1",
+				"TILLR_TRACE_DIR="+traceDir,
+				"TILLR_REPO_ROOT="+plainRoot,
+			)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("adapter failed: %v: %s", err, out)
+			}
+			if calls, err := os.ReadFile(gitLog); err == nil && strings.TrimSpace(string(calls)) != "" {
+				t.Fatalf("git was invoked on non-landing path:\n%s", calls)
+			}
+			if _, err := os.Stat(filepath.Join(outerTillr, "loop")); !os.IsNotExist(err) {
+				t.Fatalf("enclosing repo .tillr/loop was created or modified: err=%v", err)
+			}
+			raw, err := os.ReadFile(envLog)
+			if err != nil {
+				t.Fatalf("harness stub wrote no env: %v", err)
+			}
+			if !strings.Contains(string(raw), "TILLR_TRACE_DIR="+traceDir) {
+				t.Fatalf("expected TILLR_TRACE_DIR=%s in env:\n%s", traceDir, raw)
+			}
+		})
+	}
+}

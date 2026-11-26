@@ -69,6 +69,7 @@ _pi_series_digest_key() {
 }
 
 _pi_series_root() {
+    [ "${TILLR_NON_LANDING:-}" != "1" ] || return 1
     _pi_pwd=$(pwd -P 2>/dev/null || true)
     _pi_top=$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null || true)
     _pi_common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)

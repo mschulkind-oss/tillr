@@ -53,6 +53,7 @@ func init() {
 type ProcessSteps struct {
 	hooks        *definition.Hooks
 	hookCommands map[string][]string
+	nonLanding   bool
 	// RunBin is the `tillr-run` binary the run step executes: `run exec`.
 	RunBin string
 	// HeavyGateBin is the declaration judge used after a landing (default tillr-gate).
@@ -210,7 +211,20 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	if err != nil {
 		return run.Record{}, "", err
 	}
-	cmd.Env = withGitCeilingEnv(append(withoutProcessEnv(os.Environ(), "TILLR_RUN_ID", "TILLR_LOOP_STORE", "TILLR_RUN_RESUME"), "TILLR_RUN_ID="+req.RunID, "TILLR_LOOP_STORE="+storeIdentity, fmt.Sprintf("TILLR_RUN_RESUME=%t", req.Resume)), s.LaneRoot)
+	runEnv := append(withoutProcessEnv(os.Environ(), "TILLR_RUN_ID", "TILLR_LOOP_STORE", "TILLR_RUN_RESUME", "TILLR_NON_LANDING"), "TILLR_RUN_ID="+req.RunID, "TILLR_LOOP_STORE="+storeIdentity, fmt.Sprintf("TILLR_RUN_RESUME=%t", req.Resume))
+	if s.nonLanding {
+		runEnv = withoutProcessEnv(runEnv, "TILLR_TRACE_DIR", "TILLR_REPO_ROOT")
+		runEnv = append(runEnv, "TILLR_NON_LANDING=1")
+		if traceDir, err := filepath.Abs(s.runOutputDir(req.RunID)); err == nil {
+			runEnv = append(runEnv, "TILLR_TRACE_DIR="+traceDir)
+		}
+		if s.Root != "" {
+			if absRoot, err := filepath.Abs(s.Root); err == nil {
+				runEnv = append(runEnv, "TILLR_REPO_ROOT="+absRoot)
+			}
+		}
+	}
+	cmd.Env = withGitCeilingEnv(runEnv, s.LaneRoot)
 	// Both streams are regular files: even stdout must survive replacement of
 	// the loop. Close the parent's handles immediately after inheritance so the
 	// loop only opens files to read once the run has finished.

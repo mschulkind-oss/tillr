@@ -3,6 +3,7 @@ package loop
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 const Version = "0.1.0"
@@ -215,9 +217,44 @@ func gitCmd(directory string, args ...string) (string, error) {
 	return strings.TrimSpace(outBuf.String()), nil
 }
 
-func resolveRoot(explicit, worktree string) (string, error) {
+// nonLandingStoreCharter reports whether the named store (or ./.tillr/state.db
+// when storePath is empty) declares a charter that does not land in Git.
+func nonLandingStoreCharter(storePath string) (string, bool) {
+	candidate := storePath
+	if candidate == "" {
+		candidate = filepath.Join(".", ".tillr", "state.db")
+	}
+	if _, err := os.Stat(candidate); err != nil {
+		return "", false
+	}
+	ctx := context.Background()
+	s, err := store.OpenRead(ctx, candidate)
+	if err != nil {
+		return "", false
+	}
+	defer s.Close()
+	completes, err := s.Completes(ctx)
+	if err != nil || completes == "landing" {
+		return "", false
+	}
+	return candidate, true
+}
+
+func resolveRoot(explicit, worktree, storePath string) (string, error) {
 	if explicit != "" {
 		return resolvePath(explicit), nil
+	}
+	if path, ok := nonLandingStoreCharter(storePath); ok {
+		return "", &Refusal{
+			Code:    ExitUsage,
+			Message: fmt.Sprintf("no root: store %s uses a non-landing charter; name --root <directory> (refusing to resolve an enclosing git repository)", path),
+		}
+	}
+	if os.Getenv("TILLR_NON_LANDING") == "1" {
+		return "", &Refusal{
+			Code:    ExitUsage,
+			Message: "no root: non-landing store requires --root <directory> (refusing to resolve an enclosing git repository)",
+		}
 	}
 	if worktree != "" {
 		if common, err := gitCmd(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
@@ -796,7 +833,7 @@ func resolveGateProgram(args parsedArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	root, err := resolveRoot(args.root, args.worktree)
+	root, err := resolveRoot(args.root, args.worktree, args.store)
 	if err != nil {
 		return "", err
 	}
@@ -810,7 +847,7 @@ func resolveGateProgram(args parsedArgs) (string, error) {
 }
 
 func buildContext(kind string, args parsedArgs) (Ctx, error) {
-	root, err := resolveRoot(args.root, args.worktree)
+	root, err := resolveRoot(args.root, args.worktree, args.store)
 	if err != nil {
 		return Ctx{}, err
 	}
@@ -951,7 +988,13 @@ func revisionCheck(kind string, args parsedArgs, stdin io.Reader, stdout, stderr
 		if workDir != "" {
 			dir = workDir
 		}
-		if common, err := gitCmd(dir, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil && common != "" {
+		if _, nonLanding := nonLandingStoreCharter(args.store); nonLanding || os.Getenv("TILLR_NON_LANDING") == "1" {
+			if args.root != "" {
+				scratch = resolvePath(args.root)
+			} else {
+				scratch = "."
+			}
+		} else if common, err := gitCmd(dir, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil && common != "" {
 			scratch = common
 		} else {
 			scratch = "."

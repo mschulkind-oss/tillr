@@ -359,6 +359,9 @@ func mustRunGit(repo string, args ...string) (string, error) {
 }
 
 func resolveRepoRoot() (string, error) {
+	if os.Getenv("TILLR_NON_LANDING") == "1" {
+		return "", errors.New("non-landing store has no git repository root")
+	}
 	out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
 	if err != nil {
 		return "", errors.New("not inside a git repository")
