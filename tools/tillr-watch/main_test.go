@@ -197,7 +197,7 @@ func TestWatchStatusReadOnly(t *testing.T) {
 	fact(t, s, `{"item_id":"item-a"}`)
 	fact(t, s, `{"item_id":"item-a"}`)
 	var out, stderr bytes.Buffer
-	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || out.String() != "rule refusals skipped=0\n" || stderr.Len() != 0 {
+	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || out.String() != "summary unsettled=0 (uninvestigated=0 investigating=0 investigated=0) settled=0 active_silences=0\nrule refusals skipped=0\n" || stderr.Len() != 0 {
 		t.Fatalf("status before load: %d %q %q", code, &out, &stderr)
 	}
 	// The rule is not loaded yet, so status reports skipped=0 and creates no tables.
@@ -217,7 +217,7 @@ func TestWatchStatusReadOnly(t *testing.T) {
 	fact(t, s, `{"item_id":"item-a"}`)
 	out.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || out.String() != "rule refusals skipped=1\n" || stderr.Len() != 0 {
+	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || out.String() != "summary unsettled=0 (uninvestigated=0 investigating=0 investigated=0) settled=0 active_silences=0\nrule refusals skipped=1\n" || stderr.Len() != 0 {
 		t.Fatalf("status after load: %d %q %q", code, &out, &stderr)
 	}
 	// The rule would fire on post-load facts, so running eval instead of the
@@ -252,7 +252,7 @@ func TestWatchDisabledRuleDiagnostics(t *testing.T) {
 			args := append(tc.args, "--store", s.Path(), "--rules", rules)
 			var out, stderr bytes.Buffer
 			code := run(context.Background(), args, &out, &stderr)
-			if tc.args[0] == "status" && out.Len() != 0 {
+			if tc.args[0] == "status" && strings.Contains(out.String(), "rule ") {
 				t.Fatalf("status counted unevaluated rules: stdout %q", &out)
 			}
 			if code != tc.code || stderr.String() != "tillr watch: rule unsupported not evaluated: unsupported projection \"work_nodes\"\n" {

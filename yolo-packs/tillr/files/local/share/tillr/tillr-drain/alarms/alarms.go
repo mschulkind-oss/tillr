@@ -84,6 +84,7 @@ func Read(r *store.Reader, now time.Time, policy *Policy, current ...Hold) ([]Al
 // store is unchanged and ask At for the clock-dependent quota alarms on each read.
 type Stored struct {
 	infra, rolls, piBuilds []Alarm
+	unsettledWatch         unsettledWatchSummary
 	holds                  []Hold
 	holdsErr               error
 }
@@ -102,7 +103,11 @@ func ReadStored(r *store.Reader) (*Stored, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Stored{infra: infra, rolls: rolls, piBuilds: piBuilds}
+	unsettledWatch, err := readUnsettledWatchAlerts(r)
+	if err != nil {
+		return nil, err
+	}
+	s := &Stored{infra: infra, rolls: rolls, piBuilds: piBuilds, unsettledWatch: unsettledWatch}
 	// Read holds only for the cases Read read them in: when nothing is active before the
 	// quota alarms, At needs them only if a quota alarm appears, so the read is kept either
 	// way and its error is reported only when At needs the holds.
@@ -118,6 +123,9 @@ func (s *Stored) At(r *store.Reader, now time.Time, policy *Policy, current ...H
 		return nil, err
 	}
 	active := append(append(append(append([]Alarm(nil), s.infra...), windows...), s.rolls...), s.piBuilds...)
+	if a := s.unsettledWatch.alarm(now); a != nil {
+		active = append(active, *a)
+	}
 	if len(active) == 0 {
 		return active, nil
 	}

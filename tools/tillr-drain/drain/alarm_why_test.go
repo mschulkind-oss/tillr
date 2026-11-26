@@ -370,3 +370,88 @@ func TestWhyStaleLoopBuildDistinguishesNormalWaitFromStarvation(t *testing.T) {
 		t.Fatalf("ended trunk proof still appeared in why output:\n%s", out)
 	}
 }
+
+func TestWhyRaisesAndClearsUnsettledWatchAlertsAlarm(t *testing.T) {
+	path := fixture(t, itemRecord("ready", "in-queue"))
+	ctx := context.Background()
+	now := time.Date(2026, 11, 25, 16, 0, 0, 0, time.UTC)
+
+	s, err := store.Open(ctx, path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS alert_episodes (
+			alert_id TEXT PRIMARY KEY,
+			rule_id TEXT NOT NULL,
+			subject_key TEXT NOT NULL,
+			episode_num INTEGER NOT NULL,
+			state TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			condition_fingerprint TEXT NOT NULL,
+			opened_seq INTEGER NOT NULL,
+			opened_at INTEGER NOT NULL,
+			last_observed_seq INTEGER NOT NULL,
+			last_observed_at INTEGER NOT NULL,
+			bundle_json TEXT NOT NULL,
+			settlement_state TEXT NOT NULL DEFAULT 'uninvestigated',
+			active_triage_run_id TEXT,
+			escalated_to TEXT
+		)`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO alert_episodes(
+			alert_id, rule_id, subject_key, episode_num, state, severity, condition_fingerprint,
+			opened_seq, opened_at, last_observed_seq, last_observed_at, bundle_json,
+			settlement_state, active_triage_run_id, escalated_to
+		) VALUES
+			('alrt-unsettled', 'fast-gate-run-slow', 'go-build', 1, 'open', 'warning', 'fp1', 1, ?, 1, ?, '{}', 'uninvestigated', NULL, NULL),
+			('alrt-triage', 'fast-gate-run-slow', 'go-vet', 1, 'open', 'warning', 'fp2', 2, ?, 2, ?, '{}', 'uninvestigated', 'triage-1', NULL),
+			('alrt-owner', 'fast-gate-run-slow', 'go-lint', 1, 'open', 'warning', 'fp3', 3, ?, 3, ?, '{}', 'investigated', NULL, 'owner')`,
+			now.Add(-18*time.Minute).UnixMilli(), now.Add(-18*time.Minute).UnixMilli(),
+			now.Add(-30*time.Minute).UnixMilli(), now.Add(-30*time.Minute).UnixMilli(),
+			now.Add(-40*time.Minute).UnixMilli(), now.Add(-40*time.Minute).UnixMilli(),
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	nowFlag := now.Format(time.RFC3339)
+	code, out := invoke(t, "why", "--store", path, "--lanes", "lane-1", "--now", nowFlag)
+	if code != 0 {
+		t.Fatalf("why: %d %s", code, out)
+	}
+	text := string(out)
+	if !strings.Contains(text, "ALARM unsettled-watch-alerts (watch)") ||
+		!strings.Contains(text, "1 unsettled watch alert(s), oldest 18m [alrt-unsettled]") {
+		t.Fatalf("why did not surface unsettled-watch-alerts alarm:\n%s", text)
+	}
+	if strings.Contains(text, "alrt-triage") || strings.Contains(text, "alrt-owner") {
+		t.Fatalf("why included excluded alerts:\n%s", text)
+	}
+
+	code, jsonOut := invoke(t, "why", "--store", path, "--lanes", "lane-1", "--now", nowFlag, "--json")
+	if code != 0 || !strings.Contains(string(jsonOut), `"kind": "unsettled-watch-alerts"`) {
+		t.Fatalf("why --json: %d %s", code, jsonOut)
+	}
+
+	// Settle the alert -> alarm clears.
+	s, err = store.Open(ctx, path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE alert_episodes SET settlement_state='settled' WHERE alert_id='alrt-unsettled'`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	code, out = invoke(t, "why", "--store", path, "--lanes", "lane-1", "--now", nowFlag)
+	if code != 0 || strings.Contains(string(out), "unsettled-watch-alerts") {
+		t.Fatalf("why still alarmed after settlement: %d\n%s", code, out)
+	}
+}

@@ -87,7 +87,7 @@ func TestWatchStatusScopeDiagnostics(t *testing.T) {
 	fact(t, s, `{"item_id":"not-selected"}`)
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(t.Context(), args, &stdout, &stderr); code != 0 || stdout.String() != fmt.Sprintf("rule charter out-of-scope=%q\nrule refusals skipped=1\n", charter) {
+	if code := run(t.Context(), args, &stdout, &stderr); code != 0 || stdout.String() != fmt.Sprintf("summary unsettled=0 (uninvestigated=0 investigating=0 investigated=0) settled=0 active_silences=0\nrule charter out-of-scope=%q\nrule refusals skipped=1\n", charter) {
 		t.Fatalf("scope text: %d, stdout=%s stderr=%s", code, &stdout, &stderr)
 	}
 }
@@ -123,7 +123,7 @@ func TestWatchStatusMissingTablesJSON(t *testing.T) {
 	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules, "--json"}, &out, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("status = %d, %s", code, &stderr)
 	}
-	if want := "{\"rules\":[{\"id\":\"refusals\",\"skipped\":0}],\"alerts\":[],\"owners\":[]}\n"; out.String() != want {
+	if want := "{\"summary\":{\"unsettled\":0,\"uninvestigated\":0,\"investigating\":0,\"investigated\":0,\"settled\":0,\"active_silences\":0},\"rules\":[{\"id\":\"refusals\",\"skipped\":0}],\"alerts\":[],\"silences\":[],\"owners\":[]}\n"; out.String() != want {
 		t.Fatalf("got %s, want %s", &out, want)
 	}
 	after, err := os.ReadFile(s.Path())
@@ -244,24 +244,70 @@ func TestWatchStatusSortedStoredRows(t *testing.T) {
 	if code := run(ctx, args, &out, &stderr); code != 0 {
 		t.Fatalf("status = %d: %s", code, &stderr)
 	}
-	want := `rule aaa skipped=0
-rule refusals skipped=0
-alert b rule=refusals subject="alice" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"alice"} until=change
-alert c rule=refusals subject="charlie" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"charlie"} until=1970-01-01T00:00:03Z
-alert z rule=removed subject="bob" state=acknowledged severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"bob"} by="a\"b"
-owner foreground watcher=unattached last_wait=- pending=0
-owner z watcher=unattached last_wait=1970-01-01T00:00:02Z pending=0
-`
-	if out.String() != want {
-		t.Fatalf("status:\n%s\nwant:\n%s", &out, want)
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	wantLines := []struct{ prefix, suffix string }{
+		{"summary unsettled=4 (uninvestigated=4 investigating=0 investigated=0) settled=0 active_silences=0", ""},
+		{"rule aaa skipped=0", ""},
+		{"rule refusals skipped=0", ""},
+		{`alert b rule=refusals subject="alice" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"alice"} settlement=uninvestigated unsettled_for=`, " until=change"},
+		{`alert c rule=refusals subject="charlie" state=silenced severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"charlie"} settlement=uninvestigated unsettled_for=`, " until=1970-01-01T00:00:03Z"},
+		{`alert z rule=removed subject="bob" state=acknowledged severity=warning opened=1970-01-01T00:00:01Z observed=1 vars={"item_id":"bob"} settlement=uninvestigated unsettled_for=`, ` by="a\"b"`},
+		{"owner foreground watcher=unattached last_wait=- pending=0", ""},
+		{"owner z watcher=unattached last_wait=1970-01-01T00:00:02Z pending=0", ""},
+	}
+	if len(lines) != len(wantLines) {
+		t.Fatalf("status lines (%d != %d):\n%s", len(lines), len(wantLines), &out)
+	}
+	for i, w := range wantLines {
+		if !strings.HasPrefix(lines[i], w.prefix) || (w.suffix != "" && !strings.HasSuffix(lines[i], w.suffix)) {
+			t.Fatalf("line %d = %q, want prefix %q suffix %q", i, lines[i], w.prefix, w.suffix)
+		}
 	}
 	out.Reset()
 	if code := run(ctx, append(args, "--json"), &out, &stderr); code != 0 {
 		t.Fatalf("status = %d: %s", code, &stderr)
 	}
-	want = `{"rules":[{"id":"aaa","skipped":0},{"id":"refusals","skipped":0}],"alerts":[{"alert_id":"b","rule_id":"refusals","subject":"alice","state":"silenced","severity":"warning","opened":"1970-01-01T00:00:01Z","observed":1,"vars":{"item_id":"alice"},"until":"change"},{"alert_id":"c","rule_id":"refusals","subject":"charlie","state":"silenced","severity":"warning","opened":"1970-01-01T00:00:01Z","observed":1,"vars":{"item_id":"charlie"},"until":"1970-01-01T00:00:03Z"},{"alert_id":"z","rule_id":"removed","subject":"bob","state":"acknowledged","severity":"warning","opened":"1970-01-01T00:00:01Z","observed":1,"vars":{"item_id":"bob"},"by":"a\"b"}],"owners":[{"owner":"foreground","attached":false,"since":null,"last_wait":null,"pending":0},{"owner":"z","attached":false,"since":null,"last_wait":"1970-01-01T00:00:02Z","pending":0}]}` + "\n"
-	if out.String() != want {
-		t.Fatalf("status:\n%s\nwant:\n%s", &out, want)
+	var report struct {
+		Summary struct {
+			Unsettled      int `json:"unsettled"`
+			Uninvestigated int `json:"uninvestigated"`
+			Investigating  int `json:"investigating"`
+			Investigated   int `json:"investigated"`
+			Settled        int `json:"settled"`
+			ActiveSilences int `json:"active_silences"`
+		} `json:"summary"`
+		Rules []struct {
+			ID      string `json:"id"`
+			Skipped int    `json:"skipped"`
+		} `json:"rules"`
+		Alerts []struct {
+			ID           string            `json:"alert_id"`
+			RuleID       string            `json:"rule_id"`
+			Subject      string            `json:"subject"`
+			State        string            `json:"state"`
+			Settlement   string            `json:"settlement"`
+			UnsettledFor string            `json:"unsettled_for"`
+			Vars         map[string]string `json:"vars"`
+			By           *string           `json:"by"`
+			Until        string            `json:"until"`
+		} `json:"alerts"`
+		Silences []any `json:"silences"`
+		Owners   []struct {
+			Owner    string  `json:"owner"`
+			Attached bool    `json:"attached"`
+			LastWait *string `json:"last_wait"`
+		} `json:"owners"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("unmarshal status JSON: %v\n%s", err, &out)
+	}
+	if report.Summary.Unsettled != 4 || report.Summary.Uninvestigated != 4 || len(report.Rules) != 2 || len(report.Alerts) != 3 || len(report.Owners) != 2 {
+		t.Fatalf("unexpected JSON report: %+v", report)
+	}
+	if report.Alerts[0].ID != "b" || report.Alerts[0].Until != "change" || report.Alerts[0].Settlement != "uninvestigated" || report.Alerts[0].UnsettledFor == "" ||
+		report.Alerts[1].ID != "c" || report.Alerts[1].Until != "1970-01-01T00:00:03Z" ||
+		report.Alerts[2].ID != "z" || report.Alerts[2].By == nil || *report.Alerts[2].By != `a"b` {
+		t.Fatalf("unexpected alerts order/fields: %+v", report.Alerts)
 	}
 }
 

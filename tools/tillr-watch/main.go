@@ -24,9 +24,9 @@ import (
 
 const help = `Usage:
   tillr watch eval --once --store PATH --rules DIR [--root DIR]
-  tillr watch status --store PATH --rules DIR [--root DIR] [--json]
+  tillr watch status --store PATH --rules DIR [--root DIR] [--unsettled] [--json]
   tillr watch daemon --store PATH --rules DIR [--root DIR]
-  tillr watch wait --store PATH --rules DIR [--root DIR] [--owner ID] [--timeout DUR | --follow] [--fallback-poll DUR] [--no-notify] [--seen-through SEQ]
+  tillr watch wait --store PATH --rules DIR [--root DIR] [--owner ID] [--timeout DUR | --follow] [--fallback-poll DUR] [--unsettled-remind-after DUR] [--no-notify] [--seen-through SEQ]
   tillr watch seen --store PATH --through SEQ [--owner ID]
   tillr watch ack ID --store PATH --by ACTOR [--note TEXT]
   tillr watch investigate ID --store PATH --by ACTOR --cause TEXT --evidence TEXT
@@ -108,9 +108,9 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	f.SetOutput(io.Discard)
 	path := f.String("store", "", "path to the tillr state database")
 	var dir, owner, root string
-	var timeout, fallbackPoll time.Duration
+	var timeout, fallbackPoll, unsettledRemindAfter time.Duration
 	var cursor int64
-	var once, follow, noNotify, asJSON bool
+	var once, follow, noNotify, asJSON, onlyUnsettled bool
 	switch face {
 	case "eval", "wait", "status", "daemon":
 		f.StringVar(&dir, "rules", "", "directory of TOML rules")
@@ -124,11 +124,13 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 		f.BoolVar(&once, "once", false, "evaluate once")
 	case "status":
 		f.BoolVar(&asJSON, "json", false, "print the status report as JSON")
+		f.BoolVar(&onlyUnsettled, "unsettled", false, "list every unsettled episode, including resolved ones")
 	case "wait":
 		f.StringVar(&owner, "owner", "foreground", "delivery owner")
 		f.DurationVar(&timeout, "timeout", 0, "time to wait for a notice")
 		f.BoolVar(&follow, "follow", false, "remain attached after notices")
 		f.DurationVar(&fallbackPoll, "fallback-poll", defaultFallbackPoll, "fallback poll interval")
+		f.DurationVar(&unsettledRemindAfter, "unsettled-remind-after", watch.DefaultUnsettledRemindAfter, "re-emit unsettled alerts after this interval")
 		f.BoolVar(&noNotify, "no-notify", false, "disable notification socket subscription")
 		f.Int64Var(&cursor, "seen-through", -1, "confirm a previously shown cursor before evaluation")
 	case "seen":
@@ -159,6 +161,9 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	if set["fallback-poll"] && fallbackPoll <= 0 {
 		return fail(fmt.Errorf("fallback-poll must be positive"))
 	}
+	if set["unsettled-remind-after"] && unsettledRemindAfter <= 0 {
+		return fail(fmt.Errorf("unsettled-remind-after must be positive"))
+	}
 	if set["owner"] && owner == "" {
 		return fail(fmt.Errorf("owner must not be empty"))
 	}
@@ -184,7 +189,7 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 		}
 	}
 	if face == "status" {
-		if err := printStatus(ctx, watch.Evaluator{Rules: rules, Root: root}, storePath, asJSON, out, stderr); err != nil {
+		if err := printStatus(ctx, watch.Evaluator{Rules: rules, Root: root}, storePath, onlyUnsettled, asJSON, out, stderr); err != nil {
 			return fail(err)
 		}
 		return 0
@@ -198,6 +203,9 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 	}
 	defer s.Close()
 	e := watch.Evaluator{Store: s, Rules: rules, Root: root}
+	if hooks != nil && hooks.clock != nil {
+		e.Clock = hooks.clock
+	}
 	if face == "wait" {
 		if err := e.CheckRules(ctx); err != nil {
 			return fail(err)
@@ -228,7 +236,7 @@ func runWithWaitHooks(ctx context.Context, args []string, out, stderr io.Writer,
 			return fail(err)
 		}
 	case "wait":
-		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, root: root, timeout: timeout, fallbackPoll: fallbackPoll, follow: follow, noNotify: noNotify, ticks: ticks, hooks: hooks}, out, stderr)
+		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, root: root, timeout: timeout, fallbackPoll: fallbackPoll, unsettledRemindAfter: unsettledRemindAfter, follow: follow, noNotify: noNotify, ticks: ticks, hooks: hooks}, out, stderr)
 		if err != nil {
 			return fail(err)
 		}

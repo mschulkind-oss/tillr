@@ -51,6 +51,8 @@ func init() {
 		{"settled_lag_pair", "TEXT"},
 		{"reopen_count_for_item", "INTEGER NOT NULL DEFAULT 0"},
 		{"silence_id", "TEXT"},
+		{"escalated_to", "TEXT"},
+		{"last_reminded_at", "INTEGER"},
 	} {
 		if err := store.RegisterColumn("watch", "alert_episodes", col.name, col.decl); err != nil {
 			panic(err)
@@ -110,7 +112,9 @@ CREATE TABLE IF NOT EXISTS alert_episodes (
  settled_fingerprint TEXT,
  settled_lag_pair TEXT,
  reopen_count_for_item INTEGER NOT NULL DEFAULT 0,
- silence_id TEXT
+ silence_id TEXT,
+ escalated_to TEXT,
+ last_reminded_at INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS alert_episodes_one_active
     ON alert_episodes(rule_id, subject_key) WHERE state != 'resolved';

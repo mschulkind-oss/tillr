@@ -11,23 +11,54 @@ import (
 
 // Status is a read-only snapshot: conditions are evaluated but episodes are not reconciled.
 type Status struct {
-	Rules  []RuleResult
-	Alerts []AlertStatus
-	Owners []OwnerStatus
+	Summary  StatusSummary
+	Rules    []RuleResult
+	Alerts   []AlertStatus
+	Silences []SilenceStatus
+	Owners   []OwnerStatus
+}
+
+// StatusSummary counts episodes by settlement state and active silences.
+type StatusSummary struct {
+	Unsettled      int `json:"unsettled"`
+	Uninvestigated int `json:"uninvestigated"`
+	Investigating  int `json:"investigating"`
+	Investigated   int `json:"investigated"`
+	Settled        int `json:"settled"`
+	ActiveSilences int `json:"active_silences"`
+}
+
+// StatusOptions controls what ReadStatusWithOptions returns.
+type StatusOptions struct {
+	OnlyUnsettled bool
+}
+
+// SilenceStatus describes one active silence in watch_silences.
+type SilenceStatus struct {
+	SilenceID     string            `json:"silence_id"`
+	RuleID        string            `json:"rule_id"`
+	Vars          map[string]string `json:"vars"`
+	ItemID        string            `json:"item_id"`
+	By            string            `json:"by"`
+	Until         string            `json:"until"`
+	MatchedAlerts int               `json:"matched_alerts"`
 }
 
 type AlertStatus struct {
-	ID       string            `json:"alert_id"`
-	RuleID   string            `json:"rule_id"`
-	Subject  string            `json:"subject"`
-	State    string            `json:"state"`
-	Severity string            `json:"severity"`
-	Opened   string            `json:"opened"`
-	Observed int64             `json:"observed"`
-	Vars     map[string]string `json:"vars"`
-	By       *string           `json:"by,omitempty"`
-	Until    string            `json:"until,omitempty"`
-	ItemID   *string           `json:"item_id,omitempty"`
+	ID           string            `json:"alert_id"`
+	RuleID       string            `json:"rule_id"`
+	Subject      string            `json:"subject"`
+	State        string            `json:"state"`
+	Severity     string            `json:"severity"`
+	Opened       string            `json:"opened"`
+	Observed     int64             `json:"observed"`
+	Vars         map[string]string `json:"vars"`
+	Settlement   string            `json:"settlement,omitempty"`
+	UnsettledFor string            `json:"unsettled_for,omitempty"`
+	EscalatedTo  string            `json:"escalated_to,omitempty"`
+	By           *string           `json:"by,omitempty"`
+	Until        string            `json:"until,omitempty"`
+	ItemID       *string           `json:"item_id,omitempty"`
 }
 
 type OwnerStatus struct {
@@ -41,6 +72,14 @@ type OwnerStatus struct {
 // ReadStatus reads existing watch rows without migrating the store or writing
 // attachment files. attached queries the kernel for each stored owner.
 func (e Evaluator) ReadStatus(ctx context.Context, attached func(string) (bool, error)) (Status, error) {
+	return e.ReadStatusWithOptions(ctx, attached, StatusOptions{})
+}
+
+// ReadStatusWithOptions reads existing watch rows without migrating the store
+// or writing attachment files. When opts.OnlyUnsettled is true, Alerts contains
+// every episode whose settlement_state is not settled (including resolved ones).
+func (e Evaluator) ReadStatusWithOptions(ctx context.Context, attached func(string) (bool, error), opts StatusOptions) (Status, error) {
+	now := e.now()
 	if e.Store == nil {
 		if e.Source == nil {
 			return Status{}, fmt.Errorf("watch: Evaluator requires Store or Source")
@@ -52,7 +91,7 @@ func (e Evaluator) ReadStatus(ctx context.Context, attached func(string) (bool, 
 		if err != nil {
 			return Status{}, err
 		}
-		s := Status{Rules: results, Alerts: []AlertStatus{}, Owners: []OwnerStatus{}}
+		s := Status{Rules: results, Alerts: []AlertStatus{}, Silences: []SilenceStatus{}, Owners: []OwnerStatus{}}
 		e.mem.readStatusInto(&s, e.Rules)
 		for i := range s.Owners {
 			owner := &s.Owners[i]
@@ -74,7 +113,7 @@ func (e Evaluator) ReadStatus(ctx context.Context, attached func(string) (bool, 
 	}); err != nil {
 		return Status{}, err
 	}
-	s := Status{Alerts: []AlertStatus{}, Owners: []OwnerStatus{}}
+	s := Status{Alerts: []AlertStatus{}, Silences: []SilenceStatus{}, Owners: []OwnerStatus{}}
 	err := e.readEvaluation(ctx, rules, func(rd *store.Reader, results []RuleResult) error {
 		s.Rules = results
 		hasAlerts, err := tableExists(rd, "alert_episodes")
@@ -82,9 +121,15 @@ func (e Evaluator) ReadStatus(ctx context.Context, attached func(string) (bool, 
 			return err
 		}
 		if hasAlerts {
-			if err := s.readAlerts(rd); err != nil {
+			if err := s.readSummary(rd); err != nil {
 				return err
 			}
+			if err := s.readAlerts(rd, now, opts.OnlyUnsettled); err != nil {
+				return err
+			}
+		}
+		if err := s.readSilences(rd, hasAlerts); err != nil {
+			return err
 		}
 		hasOwners, err := tableExists(rd, "foreground_delivery")
 		if err != nil || !hasOwners {
@@ -135,12 +180,145 @@ func alertEpisodesHasColumn(rd *store.Reader, name string) (bool, error) {
 	return v.(bool), nil
 }
 
-func (s *Status) readAlerts(rd *store.Reader) error {
+func formatDurationCompact(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	totalSec := int64(d / time.Second)
+	if totalSec < 60 {
+		return fmt.Sprintf("%ds", totalSec)
+	}
+	days := totalSec / 86400
+	hours := (totalSec % 86400) / 3600
+	mins := (totalSec % 3600) / 60
+	switch {
+	case days > 0 && hours > 0:
+		return fmt.Sprintf("%dd%dh", days, hours)
+	case days > 0:
+		return fmt.Sprintf("%dd", days)
+	case hours > 0 && mins > 0:
+		return fmt.Sprintf("%dh%dm", hours, mins)
+	case hours > 0:
+		return fmt.Sprintf("%dh", hours)
+	default:
+		return fmt.Sprintf("%dm", mins)
+	}
+}
+
+func (s *Status) readSummary(rd *store.Reader) error {
+	hasSettlement, err := alertEpisodesHasColumn(rd, "settlement_state")
+	if err != nil {
+		return err
+	}
+	if !hasSettlement {
+		rows, err := rd.Query(`SELECT state, COUNT(*) FROM alert_episodes GROUP BY state`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var state string
+			var n int
+			if err := rows.Scan(&state, &n); err != nil {
+				return err
+			}
+			if state == "resolved" {
+				s.Summary.Settled += n
+			} else {
+				s.Summary.Uninvestigated += n
+				s.Summary.Unsettled += n
+			}
+		}
+		return rows.Err()
+	}
+	rows, err := rd.Query(`SELECT COALESCE(NULLIF(settlement_state, ''), 'uninvestigated'), COUNT(*) FROM alert_episodes GROUP BY 1`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sst string
+		var n int
+		if err := rows.Scan(&sst, &n); err != nil {
+			return err
+		}
+		switch sst {
+		case "settled":
+			s.Summary.Settled += n
+		case "investigating":
+			s.Summary.Investigating += n
+			s.Summary.Unsettled += n
+		case "investigated":
+			s.Summary.Investigated += n
+			s.Summary.Unsettled += n
+		default:
+			s.Summary.Uninvestigated += n
+			s.Summary.Unsettled += n
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Status) readSilences(rd *store.Reader, hasAlerts bool) error {
+	hasSilences, err := tableExists(rd, "watch_silences")
+	if err != nil || !hasSilences {
+		return err
+	}
+	matchedExpr := "0"
+	if hasAlerts {
+		hasSilenceID, err := alertEpisodesHasColumn(rd, "silence_id")
+		if err != nil {
+			return err
+		}
+		if hasSilenceID {
+			matchedExpr = "(SELECT COUNT(*) FROM alert_episodes a WHERE a.silence_id = s.silence_id)"
+		}
+	}
+	rows, err := rd.Query(`SELECT s.silence_id, s.rule_id, s.vars_json, s.tracking_item_id, s.created_by, s.silence_until_ms, s.silence_on_fingerprint, ` + matchedExpr + `
+		FROM watch_silences s
+		WHERE s.lifted_at IS NULL
+		ORDER BY s.created_at, s.silence_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sil SilenceStatus
+		var rawVars string
+		var untilMs sql.NullInt64
+		var untilFP sql.NullString
+		if err := rows.Scan(&sil.SilenceID, &sil.RuleID, &rawVars, &sil.ItemID, &sil.By, &untilMs, &untilFP, &sil.MatchedAlerts); err != nil {
+			return err
+		}
+		sil.Vars = decodeVariablesJSON(rawVars)
+		if untilMs.Valid {
+			sil.Until = statusTime(untilMs.Int64)
+		} else {
+			sil.Until = "change"
+		}
+		s.Silences = append(s.Silences, sil)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	s.Summary.ActiveSilences = len(s.Silences)
+	return nil
+}
+
+func (s *Status) readAlerts(rd *store.Reader, now time.Time, onlyUnsettled bool) error {
 	hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
 	if err != nil {
 		return err
 	}
 	hasVars, err := alertEpisodesHasColumn(rd, "variables_json")
+	if err != nil {
+		return err
+	}
+	hasSettlement, err := alertEpisodesHasColumn(rd, "settlement_state")
+	if err != nil {
+		return err
+	}
+	hasEscalated, err := alertEpisodesHasColumn(rd, "escalated_to")
 	if err != nil {
 		return err
 	}
@@ -151,7 +329,21 @@ func (s *Status) readAlerts(rd *store.Reader) error {
 	if hasVars {
 		cols += ", variables_json"
 	}
-	rows, err := rd.Query(`SELECT ` + cols + ` FROM alert_episodes WHERE state<>'resolved' ORDER BY opened_seq, alert_id`)
+	if hasSettlement {
+		cols += ", COALESCE(NULLIF(settlement_state, ''), 'uninvestigated')"
+	}
+	if hasEscalated {
+		cols += ", COALESCE(escalated_to, '')"
+	}
+	where := "state<>'resolved'"
+	if onlyUnsettled {
+		if hasSettlement {
+			where = "COALESCE(NULLIF(settlement_state, ''), 'uninvestigated')<>'settled'"
+		} else {
+			where = "state<>'resolved'"
+		}
+	}
+	rows, err := rd.Query(`SELECT ` + cols + ` FROM alert_episodes WHERE ` + where + ` ORDER BY opened_seq, alert_id`)
 	if err != nil {
 		return err
 	}
@@ -162,12 +354,19 @@ func (s *Status) readAlerts(rd *store.Reader) error {
 		var until sql.NullInt64
 		var by, itemID *string
 		var rawVars sql.NullString
+		var settlement, escalated string
 		dest := []any{&alert.ID, &alert.RuleID, &alert.Subject, &alert.State, &alert.Severity, &opened, &alert.Observed, &by, &until}
 		if hasTracking {
 			dest = append(dest, &itemID)
 		}
 		if hasVars {
 			dest = append(dest, &rawVars)
+		}
+		if hasSettlement {
+			dest = append(dest, &settlement)
+		}
+		if hasEscalated {
+			dest = append(dest, &escalated)
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return err
@@ -177,6 +376,19 @@ func (s *Status) readAlerts(rd *store.Reader) error {
 			alert.Vars = decodeVariablesJSON(rawVars.String)
 		} else {
 			alert.Vars = map[string]string{}
+		}
+		if hasSettlement {
+			alert.Settlement = settlement
+		} else if alert.State == "resolved" {
+			alert.Settlement = "settled"
+		} else {
+			alert.Settlement = "uninvestigated"
+		}
+		if alert.Settlement != "settled" {
+			alert.UnsettledFor = formatDurationCompact(now.Sub(time.UnixMilli(opened)))
+		}
+		if hasEscalated && escalated != "" {
+			alert.EscalatedTo = escalated
 		}
 		switch alert.State {
 		case "acknowledged":

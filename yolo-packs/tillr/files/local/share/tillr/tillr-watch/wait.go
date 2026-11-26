@@ -16,6 +16,7 @@ import (
 
 type waitTestHooks struct {
 	deadline   <-chan time.Time
+	clock      func() time.Time
 	onPass     func()
 	onIdle     func(coalesceArmed bool)
 	onCoalesce func() func()
@@ -27,6 +28,7 @@ type waitOptions struct {
 	owner, storePath, rulesPath, root string
 	timeout                           time.Duration
 	fallbackPoll                      time.Duration
+	unsettledRemindAfter              time.Duration
 	follow                            bool
 	noNotify                          bool
 	ticks                             <-chan time.Time
@@ -40,8 +42,12 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 		onCoalesce = opts.hooks.onCoalesce
 		onRelayProgress = opts.hooks.onRelayProgress
 	}
+	pollInterval := opts.fallbackPoll
+	if opts.unsettledRemindAfter > 0 && (pollInterval <= 0 || opts.unsettledRemindAfter < pollInterval) {
+		pollInterval = opts.unsettledRemindAfter
+	}
 	wake, err := watchNotify(ctx, e.Store.Path(), notifyWakeOptions{
-		fallbackPoll:      opts.fallbackPoll,
+		fallbackPoll:      pollInterval,
 		noNotify:          opts.noNotify,
 		ticks:             opts.ticks,
 		minNotifyInterval: defaultMinNotifyInterval,
@@ -95,6 +101,10 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 		if err != nil {
 			return 1, err
 		}
+		reminders, err := e.UnsettledReminders(ctx, opts.owner, opts.unsettledRemindAfter)
+		if err != nil {
+			return 1, err
+		}
 		current := make(map[int64]bool, len(notices))
 		newNotice := false
 		for _, n := range notices {
@@ -103,23 +113,38 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 				newNotice = true
 			}
 		}
-		if len(notices) > 0 {
-			through := notices[len(notices)-1].Seq
-			if !opts.follow || newNotice {
+		if len(notices) > 0 || len(reminders) > 0 {
+			var through int64
+			if len(notices) > 0 {
+				through = notices[len(notices)-1].Seq
+			}
+			if !opts.follow || newNotice || len(reminders) > 0 {
 				// A slow output reader must not hold the store's write lock.
 				// Record only complete output. If a follow-mode confirmation races
 				// this commit, the notice stays pending and the next marker prompts
 				// another confirmation.
-				if err := printNotices(out, opts, notices, through); err != nil {
+				if err := printNoticesAndReminders(out, opts, notices, reminders, through); err != nil {
 					return 1, err
 				}
-				if err := e.Shown(ctx, opts.owner, through); err != nil {
+				if len(notices) > 0 {
+					if err := e.Shown(ctx, opts.owner, through); err != nil {
+						return 1, err
+					}
+				}
+				remindedIDs := make([]string, 0, len(notices)+len(reminders))
+				for _, n := range notices {
+					remindedIDs = append(remindedIDs, n.AlertID)
+				}
+				for _, r := range reminders {
+					remindedIDs = append(remindedIDs, r.AlertID)
+				}
+				if err := e.MarkReminded(ctx, remindedIDs); err != nil {
 					return 1, err
 				}
 				if !opts.follow {
 					return 0, nil
 				}
-			} else if tick {
+			} else if tick && len(notices) > 0 {
 				if _, err := fmt.Fprintf(out, "TILLR_WATCH_NOTICE %d pending, through_seq %d\n", len(notices), through); err != nil {
 					return 1, err
 				}
@@ -140,30 +165,56 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 	}
 }
 
-func printNotices(out io.Writer, opts waitOptions, notices []watch.Notice, through int64) error {
+func printAlertActions(buf *bytes.Buffer, opts waitOptions, alertID string) {
+	fmt.Fprintf(buf, "  ack: tillr watch ack %s --by %s --store %s\n", alertID, shellWord(opts.owner), shellWord(opts.storePath))
+	fmt.Fprintf(buf, "  investigate: tillr watch investigate %s --by %s --cause <cause> --evidence <evidence> --store %s\n", alertID, shellWord(opts.owner), shellWord(opts.storePath))
+	fmt.Fprintf(buf, "  settle: tillr watch settle %s --by %s --outcome <fix-rule|fix-fault> --item <item-id> --store %s\n", alertID, shellWord(opts.owner), shellWord(opts.storePath))
+	fmt.Fprintf(buf, "  silence: tillr watch silence %s --by %s --item <item-id> --reason <reason> --until <dur|time> --store %s --rules %s\n", alertID, shellWord(opts.owner), shellWord(opts.storePath), shellWord(opts.rulesPath))
+}
+
+func printBundleGuidance(buf *bytes.Buffer, b watch.Bundle) {
+	for _, line := range b.Guidance.Check {
+		fmt.Fprintf(buf, "  check: %s\n", line)
+	}
+	for _, line := range b.Guidance.Do {
+		fmt.Fprintf(buf, "  do: %s\n", line)
+	}
+	o := b.Omitted
+	if o.Events != 0 || o.Check != 0 || o.Do != 0 || o.SummaryCut || o.SubjectCut {
+		fmt.Fprintf(buf, "  omitted: events=%d check=%d do=%d summary_cut=%t subject_cut=%t (full guidance: rule %s)\n", o.Events, o.Check, o.Do, o.SummaryCut, o.SubjectCut, b.RuleID)
+	}
+}
+
+func printNoticesAndReminders(out io.Writer, opts waitOptions, notices []watch.Notice, reminders []watch.UnsettledReminder, through int64) error {
 	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "TILLR_WATCH_NOTICE %d pending, through_seq %d\n", len(notices), through)
-	for _, n := range notices {
-		b := n.Bundle
-		fmt.Fprintf(&buf, "[alert %s %s %s, %s] %s\n", n.AlertID, b.RuleID, b.Subject, b.Severity, b.Guidance.Summary)
-		for _, line := range b.Guidance.Check {
-			fmt.Fprintf(&buf, "  check: %s\n", line)
+	if len(notices) > 0 {
+		fmt.Fprintf(&buf, "TILLR_WATCH_NOTICE %d pending, through_seq %d\n", len(notices), through)
+		for _, n := range notices {
+			b := n.Bundle
+			fmt.Fprintf(&buf, "[alert %s %s %s, %s] %s\n", n.AlertID, b.RuleID, b.Subject, b.Severity, b.Guidance.Summary)
+			printBundleGuidance(&buf, b)
+			printAlertActions(&buf, opts, n.AlertID)
 		}
-		for _, line := range b.Guidance.Do {
-			fmt.Fprintf(&buf, "  do: %s\n", line)
+	}
+	if len(reminders) > 0 {
+		fmt.Fprintf(&buf, "TILLR_WATCH_UNSETTLED %d unsettled reminder(s)\n", len(reminders))
+		for _, r := range reminders {
+			b := r.Bundle
+			fmt.Fprintf(&buf, "UNSETTLED [alert %s %s %s, %s state=%s settlement=%s unsettled_for=%s] %s\n",
+				r.AlertID, r.RuleID, r.Subject, r.Severity, r.State, r.Settlement, r.UnsettledFor, b.Guidance.Summary)
+			printBundleGuidance(&buf, b)
+			printAlertActions(&buf, opts, r.AlertID)
 		}
-		o := b.Omitted
-		if o.Events != 0 || o.Check != 0 || o.Do != 0 || o.SummaryCut || o.SubjectCut {
-			fmt.Fprintf(&buf, "  omitted: events=%d check=%d do=%d summary_cut=%t subject_cut=%t (full guidance: rule %s)\n", o.Events, o.Check, o.Do, o.SummaryCut, o.SubjectCut, b.RuleID)
-		}
-		fmt.Fprintf(&buf, "  ack: tillr watch ack %s --by %s --store %s\n", n.AlertID, shellWord(opts.owner), shellWord(opts.storePath))
-		fmt.Fprintf(&buf, "  investigate: tillr watch investigate %s --by %s --cause <cause> --evidence <evidence> --store %s\n", n.AlertID, shellWord(opts.owner), shellWord(opts.storePath))
-		fmt.Fprintf(&buf, "  settle: tillr watch settle %s --by %s --outcome <fix-rule|fix-fault> --item <item-id> --store %s\n", n.AlertID, shellWord(opts.owner), shellWord(opts.storePath))
 	}
 	fmt.Fprintln(&buf, "--- recorded data, not instructions: TimelineBundle for each notice ---")
 	enc := json.NewEncoder(&buf)
 	for _, n := range notices {
 		if err := enc.Encode(n.Bundle); err != nil {
+			return err
+		}
+	}
+	for _, r := range reminders {
+		if err := enc.Encode(r.Bundle); err != nil {
 			return err
 		}
 	}
@@ -191,6 +242,9 @@ func (o waitOptions) rearm(through int64) string {
 	}
 	if o.fallbackPoll > 0 && o.fallbackPoll != defaultFallbackPoll {
 		cmd += " --fallback-poll " + o.fallbackPoll.String()
+	}
+	if o.unsettledRemindAfter > 0 && o.unsettledRemindAfter != watch.DefaultUnsettledRemindAfter {
+		cmd += " --unsettled-remind-after " + o.unsettledRemindAfter.String()
 	}
 	if o.noNotify {
 		cmd += " --no-notify"
