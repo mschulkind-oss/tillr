@@ -411,7 +411,7 @@ func TestProcessPlacementCgroupMechanism(t *testing.T) {
 	}
 
 	// Runtime missing descriptor fails loudly naming <cg_root>/<class>.
-	delete(prio.cgroupFDs, ProcessClassGate)
+	prio.DropCgroupFDForTest(ProcessClassGate)
 	err := prio.ApplyToCmd(exec.Command("true"), ProcessClassGate, "")
 	if err == nil || !strings.Contains(err.Error(), filepath.Join(prio.Summary().CgroupRoot, "gate")) {
 		t.Fatalf("missing fd error = %v, want path naming %s", err, filepath.Join(prio.Summary().CgroupRoot, "gate"))

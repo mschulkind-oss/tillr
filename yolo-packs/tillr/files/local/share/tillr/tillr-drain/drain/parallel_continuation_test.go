@@ -223,7 +223,7 @@ func TestParallelReadersLiveContinuationKeepsDeadExaminersLease(t *testing.T) {
 		return err
 	})
 	reclaimed := []string{}
-	evidence := reapEvidence{dead: map[LoopOwner]bool{*work.Owner: true}, faces: map[string]bool{d.Parallel[0].RunRequest.RunID: true}, reclaimed: &reclaimed}
+	evidence := reapEvidence{Dead: map[LoopOwner]bool{*work.Owner: true}, Faces: map[string]bool{d.Parallel[0].RunRequest.RunID: true}, Reclaimed: &reclaimed}
 	fixtureWrite(t, f, func(tx *store.Tx) error { return l.reapDeadLoopRuns(context.Background(), tx, l.cfg.Now(), evidence) })
 	if got := pendingForTest(t, f, "item-a"); !got.Examining || got.Orphaned {
 		t.Fatalf("live sibling lost pending ownership: %+v", got)

@@ -17,7 +17,7 @@ func (l *Loop) heldLaneProcesses(c Candidate, owner *LoopOwner) (map[string]bool
 	}
 	live := map[string]bool{}
 	for _, proc := range procs {
-		live[proc.runID] = true
+		live[proc.RunID] = true
 		inside, err := l.processInLane(proc, c.LaneID)
 		if err == nil && !inside && c.BaseRef != "" {
 			inside, err = processInCheckout(proc, c.Worktree)

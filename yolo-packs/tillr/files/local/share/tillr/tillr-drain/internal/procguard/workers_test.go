@@ -1,4 +1,4 @@
-package drain
+package procguard
 
 import (
 	"context"
@@ -10,9 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
+
+func init() {
+	_ = event.Register(DispatchStartedKind, drainmodel.Utility)
+}
 
 func seedWorkerStart(t *testing.T, tx *store.Tx, laneID, itemID, runID string, owner *LoopOwner) {
 	t.Helper()
@@ -36,7 +41,7 @@ func seedWorkerStart(t *testing.T, tx *store.Tx, laneID, itemID, runID string, o
 		t.Fatal(err)
 	}
 	if _, err := tx.Append(event.Event{
-		Kind:       dispatchStartedKind,
+		Kind:       DispatchStartedKind,
 		ObjectType: "run",
 		ObjectID:   &runID,
 		Payload:    raw,
@@ -51,12 +56,12 @@ func seedWorkerStart(t *testing.T, tx *store.Tx, laneID, itemID, runID string, o
 
 func startMarkedProcess(t *testing.T, storePath, runID string) *exec.Cmd {
 	t.Helper()
-	identity, err := processStoreIdentity(storePath)
+	identity, err := ProcessStoreIdentity(storePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("sleep", "60")
-	cmd.Env = append(withoutProcessEnv(os.Environ(), "TILLR_RUN_ID", "TILLR_LOOP_STORE"),
+	cmd.Env = append(WithoutProcessEnv(os.Environ(), "TILLR_RUN_ID", "TILLR_LOOP_STORE"),
 		"TILLR_RUN_ID="+runID,
 		"TILLR_LOOP_STORE="+identity,
 	)
@@ -73,7 +78,7 @@ func startMarkedProcess(t *testing.T, storePath, runID string) *exec.Cmd {
 }
 
 func TestWorkersReportsDeadFixtureRunAndLiveProcessWithoutALoop(t *testing.T) {
-	dir := scratchUnderDurable(t)
+	dir := t.TempDir()
 	storePath := filepath.Join(dir, "state.db")
 	loopDir := filepath.Join(dir, "loop")
 	ctx := context.Background()
@@ -84,7 +89,7 @@ func TestWorkersReportsDeadFixtureRunAndLiveProcessWithoutALoop(t *testing.T) {
 	}
 	defer s.Close()
 
-	here, err := currentLoopOwner()
+	here, err := CurrentLoopOwner()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +154,7 @@ func TestWorkersReportsDeadFixtureRunAndLiveProcessWithoutALoop(t *testing.T) {
 }
 
 func TestWorkersForeignDomainSessionRelaunch(t *testing.T) {
-	dir := scratchUnderDurable(t)
+	dir := t.TempDir()
 	storePath := filepath.Join(dir, "state.db")
 	loopDir := filepath.Join(dir, "loop")
 	ctx := context.Background()
@@ -160,7 +165,7 @@ func TestWorkersForeignDomainSessionRelaunch(t *testing.T) {
 	}
 	defer s.Close()
 
-	here, err := currentLoopOwner()
+	here, err := CurrentLoopOwner()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +236,7 @@ func TestWorkersForeignDomainSessionRelaunch(t *testing.T) {
 }
 
 func TestWorkersIncludesUnsettledReadOnlyRunsAndEmptyStore(t *testing.T) {
-	dir := scratchUnderDurable(t)
+	dir := t.TempDir()
 	storePath := filepath.Join(dir, "state.db")
 	ctx := context.Background()
 

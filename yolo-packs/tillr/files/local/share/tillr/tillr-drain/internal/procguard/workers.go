@@ -1,4 +1,4 @@
-package drain
+package procguard
 
 import (
 	"bytes"
@@ -12,7 +12,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 	"github.com/mschulkind-oss/tillr-drain/presence"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -37,16 +39,16 @@ type liveWorkerProcess struct {
 	face bool
 }
 
-// liveRunWorkerPIDs scans /proc once for live non-zombie processes of this user
+// LiveRunWorkerPIDs scans /proc once for live non-zombie processes of this user
 // carrying TILLR_RUN_ID and TILLR_LOOP_STORE=<resolved storePath>. When a run has
-// a live run face (isRunFaceArgv), that face's PID wins over adapters and children;
+// a live run face (IsRunFaceArgv), that face's PID wins over adapters and children;
 // ties break to the lowest PID.
-func liveRunWorkerPIDs(storePath string) (map[string]int, error) {
-	resolved, err := processStoreIdentity(storePath)
+func LiveRunWorkerPIDs(storePath string) (map[string]int, error) {
+	resolved, err := ProcessStoreIdentity(storePath)
 	if err != nil {
 		return nil, err
 	}
-	procScans.Add(1)
+	ProcScans.Add(1)
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
@@ -60,8 +62,8 @@ func liveRunWorkerPIDs(storePath string) (map[string]int, error) {
 		if err != nil || pid == self {
 			continue
 		}
-		start, err := processStart(pid)
-		if processGone(err) {
+		start, err := ProcessStart(pid)
+		if ProcessGone(err) {
 			continue
 		}
 		if err != nil {
@@ -71,8 +73,8 @@ func liveRunWorkerPIDs(storePath string) (map[string]int, error) {
 			continue
 		}
 		dir := filepath.Join("/proc", entry.Name())
-		env, err := runProcessEnvironment(dir, uid)
-		if processGone(err) {
+		env, err := RunProcessEnvironment(dir, uid)
+		if ProcessGone(err) {
 			continue
 		}
 		if err != nil {
@@ -91,13 +93,13 @@ func liveRunWorkerPIDs(storePath string) (map[string]int, error) {
 			continue
 		}
 		argv, err := os.ReadFile(filepath.Join(dir, "cmdline"))
-		if processGone(err) {
+		if ProcessGone(err) {
 			continue
 		}
 		if err != nil {
 			return nil, fmt.Errorf("checking process %d: %w", pid, err)
 		}
-		face := isRunFaceArgv(argv)
+		face := IsRunFaceArgv(argv)
 		prev, seen := best[runID]
 		if !seen || (face && !prev.face) || (face == prev.face && pid < prev.pid) {
 			best[runID] = liveWorkerProcess{pid: pid, face: face}
@@ -108,6 +110,126 @@ func liveRunWorkerPIDs(storePath string) (map[string]int, error) {
 		pids[runID] = proc.pid
 	}
 	return pids, nil
+}
+
+func workerReadFailure(err error) error {
+	if strings.Contains(err.Error(), "no such table") {
+		return drainmodel.Incompatiblef("%v", err)
+	}
+	return drainmodel.Internalf("%v", err)
+}
+
+type workerPendingState struct {
+	owner    *LoopOwner
+	examiner *LoopOwner
+	done     bool
+}
+
+type workerPendingPayload struct {
+	Decision struct {
+		ItemID     string `json:"item_id"`
+		RunRequest *struct {
+			RunID  string `json:"run_id"`
+			ItemID string `json:"item_id"`
+		} `json:"run_request"`
+		Parallel []struct {
+			RunRequest *struct {
+				RunID  string `json:"run_id"`
+				ItemID string `json:"item_id"`
+			} `json:"run_request"`
+		} `json:"parallel"`
+	} `json:"decision"`
+	Owner    *LoopOwner `json:"loop_owner"`
+	Examiner *LoopOwner `json:"examiner_owner"`
+	Done     bool       `json:"done"`
+}
+
+func readWorkerPending(r *store.Reader) (map[string]*workerPendingState, map[string]string, error) {
+	events, err := r.EventsOfKind(0,
+		DispatchStartedKind,
+		NodeAdvancedKind,
+		GraphChangedKind,
+		ExaminationClaimedKind,
+		ExaminationOwnerKind,
+		ExaminationDoneKind,
+		run.ResumeKind,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	byItem := map[string]*workerPendingState{}
+	byRun := map[string]*workerPendingState{}
+	itemByRun := map[string]string{}
+	for _, e := range events {
+		if e.ObjectID == nil {
+			continue
+		}
+		switch e.Kind {
+		case DispatchStartedKind, NodeAdvancedKind, GraphChangedKind:
+			var p workerPendingPayload
+			if err := json.Unmarshal(e.Payload, &p); err != nil {
+				return nil, nil, err
+			}
+			st := &workerPendingState{owner: p.Owner, examiner: p.Examiner, done: p.Done}
+			byItem[p.Decision.ItemID] = st
+			byRun[*e.ObjectID] = st
+			if p.Decision.RunRequest != nil && p.Decision.RunRequest.RunID != "" {
+				byRun[p.Decision.RunRequest.RunID] = st
+				itemByRun[p.Decision.RunRequest.RunID] = p.Decision.ItemID
+			}
+			for _, node := range p.Decision.Parallel {
+				if node.RunRequest != nil && node.RunRequest.RunID != "" {
+					byRun[node.RunRequest.RunID] = st
+					if node.RunRequest.ItemID != "" {
+						itemByRun[node.RunRequest.RunID] = node.RunRequest.ItemID
+					} else if p.Decision.ItemID != "" {
+						itemByRun[node.RunRequest.RunID] = p.Decision.ItemID
+					}
+				}
+			}
+		case ExaminationClaimedKind:
+			if st := byRun[*e.ObjectID]; st != nil {
+				if err := json.Unmarshal(e.Payload, &st.owner); err != nil {
+					return nil, nil, err
+				}
+			}
+		case ExaminationOwnerKind:
+			if st := byRun[*e.ObjectID]; st != nil {
+				if err := json.Unmarshal(e.Payload, &st.examiner); err != nil {
+					return nil, nil, err
+				}
+			}
+		case ExaminationDoneKind:
+			if st := byRun[*e.ObjectID]; st != nil {
+				st.done = true
+			}
+		case run.ResumeKind:
+			if st := byRun[*e.ObjectID]; st != nil && e.ObjectType == "run" {
+				resumingOwner := st.examiner
+				if resumingOwner == nil {
+					resumingOwner = st.owner
+				}
+				if st.done {
+					resumingOwner = nil
+				}
+				st.done = false
+				st.owner = resumingOwner
+				st.examiner = nil
+			}
+		}
+	}
+	// Keep only the latest work state per item, matching readPending's item-keyed map.
+	activeStates := map[*workerPendingState]bool{}
+	for _, st := range byItem {
+		activeStates[st] = true
+	}
+	outByRun := map[string]*workerPendingState{}
+	for runID, st := range byRun {
+		if activeStates[st] {
+			outByRun[runID] = st
+		}
+	}
+	return outByRun, itemByRun, nil
 }
 
 // Workers lists the currently leased workers by lane, with each worker's item,
@@ -128,42 +250,42 @@ func Workers(r *store.Reader, storePath, loopDir string) ([]Worker, error) {
 
 	rows, err := r.Query(`SELECT lane_id, run_id FROM lanes WHERE state = 'leased' AND run_id IS NOT NULL AND run_id != ''`)
 	if err != nil {
-		return nil, readFailure(err)
+		return nil, workerReadFailure(err)
 	}
 	for rows.Next() {
 		var laneID, runID string
 		if err := rows.Scan(&laneID, &runID); err != nil {
 			rows.Close()
-			return nil, readFailure(err)
+			return nil, workerReadFailure(err)
 		}
 		add(laneID, "", runID)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil, readFailure(err)
+		return nil, workerReadFailure(err)
 	}
 	rows.Close()
 
 	var hasROR int
 	if err := r.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='read_only_runs'`).Scan(&hasROR); err != nil {
-		return nil, readFailure(err)
+		return nil, workerReadFailure(err)
 	}
 	if hasROR > 0 {
 		rRows, err := r.Query(`SELECT lane_id, item_id, run_id FROM read_only_runs WHERE settled = 0`)
 		if err != nil {
-			return nil, readFailure(err)
+			return nil, workerReadFailure(err)
 		}
 		for rRows.Next() {
 			var laneID, itemID, runID string
 			if err := rRows.Scan(&laneID, &itemID, &runID); err != nil {
 				rRows.Close()
-				return nil, readFailure(err)
+				return nil, workerReadFailure(err)
 			}
 			add(laneID, itemID, runID)
 		}
 		if err := rRows.Err(); err != nil {
 			rRows.Close()
-			return nil, readFailure(err)
+			return nil, workerReadFailure(err)
 		}
 		rRows.Close()
 	}
@@ -172,34 +294,16 @@ func Workers(r *store.Reader, storePath, loopDir string) ([]Worker, error) {
 		return []Worker{}, nil
 	}
 
-	works, err := readPending(r)
+	workByRun, itemByRun, err := readWorkerPending(r)
 	if err != nil {
 		return nil, err
-	}
-	workByRun := map[string]*pendingWork{}
-	itemByRun := map[string]string{}
-	for _, work := range works {
-		if work.Decision.RunRequest != nil && work.Decision.RunRequest.RunID != "" {
-			workByRun[work.Decision.RunRequest.RunID] = work
-			itemByRun[work.Decision.RunRequest.RunID] = work.Decision.ItemID
-		}
-		for _, node := range parallelNodes(work.Decision) {
-			if node.RunRequest != nil && node.RunRequest.RunID != "" {
-				workByRun[node.RunRequest.RunID] = work
-				if node.RunRequest.ItemID != "" {
-					itemByRun[node.RunRequest.RunID] = node.RunRequest.ItemID
-				} else if work.Decision.ItemID != "" {
-					itemByRun[node.RunRequest.RunID] = work.Decision.ItemID
-				}
-			}
-		}
 	}
 
-	here, err := currentLoopOwner()
+	here, err := CurrentLoopOwner()
 	if err != nil {
 		return nil, err
 	}
-	livePIDs, err := liveRunWorkerPIDs(storePath)
+	livePIDs, err := LiveRunWorkerPIDs(storePath)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +314,7 @@ func Workers(r *store.Reader, storePath, loopDir string) ([]Worker, error) {
 			if itemID := itemByRun[w.Run]; itemID != "" {
 				w.Item = itemID
 			} else if itemID, err := lookupWorkerItem(r, w.Run); err != nil {
-				return nil, readFailure(err)
+				return nil, workerReadFailure(err)
 			} else {
 				w.Item = itemID
 			}
@@ -220,10 +324,10 @@ func Workers(r *store.Reader, storePath, loopDir string) ([]Worker, error) {
 			w.Alive = true
 		} else if work := workByRun[w.Run]; work != nil && here != nil {
 			ownerDomain := ""
-			if fromOtherDomain(work.Owner, here) {
-				ownerDomain = work.Owner.Domain
-			} else if fromOtherDomain(work.Examiner, here) {
-				ownerDomain = work.Examiner.Domain
+			if FromOtherDomain(work.owner, here) {
+				ownerDomain = work.owner.Domain
+			} else if FromOtherDomain(work.examiner, here) {
+				ownerDomain = work.examiner.Domain
 			}
 			if ownerDomain != "" {
 				paths := []string{

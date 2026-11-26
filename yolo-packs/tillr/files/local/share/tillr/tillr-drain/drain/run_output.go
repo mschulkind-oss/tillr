@@ -23,6 +23,12 @@ func (s *ProcessSteps) runOutputDir(runID string) string {
 	return filepath.Join(s.LaneRoot, ".runs", runID)
 }
 
+// runStreamLocator is a Steps that starts run faces with their streams in per-run files,
+// and says where, so a loop in another process domain can judge the face by them.
+type runStreamLocator interface {
+	runOutputFiles(runID string) []string
+}
+
 // runOutputFiles is where Run puts the face's two streams (runStreamLocator). Run
 // creates both before it starts the face, and the face and every descendant that
 // inherits them hold them open for writing while they live.

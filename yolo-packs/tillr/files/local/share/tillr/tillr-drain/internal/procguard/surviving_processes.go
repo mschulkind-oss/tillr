@@ -1,4 +1,4 @@
-package drain
+package procguard
 
 import (
 	"bytes"
@@ -19,21 +19,21 @@ import (
 // stands — not reset, and not examined — while every other item and lane carries on.
 const ReasonRunProcessesLive = "run-processes-live"
 
-type survivingProcess struct {
+type SurvivingProcess struct {
 	PID       int
 	Start     string
 	Command   string
 	IsRunFace bool
 }
 
-func (p survivingProcess) String() string {
+func (p SurvivingProcess) String() string {
 	if p.Command == "" {
 		return strconv.Itoa(p.PID)
 	}
 	return fmt.Sprintf("%d (%s)", p.PID, p.Command)
 }
 
-func formatSurvivingProcesses(procs []survivingProcess) string {
+func FormatSurvivingProcesses(procs []SurvivingProcess) string {
 	parts := make([]string, len(procs))
 	for i, p := range procs {
 		parts[i] = p.String()
@@ -41,24 +41,24 @@ func formatSurvivingProcesses(procs []survivingProcess) string {
 	return strings.Join(parts, ", ")
 }
 
-type survivingProcessesError struct {
+type SurvivingProcessesError struct {
 	RunID     string
 	Step      string
-	Processes []survivingProcess
+	Processes []SurvivingProcess
 }
 
-func (e *survivingProcessesError) Error() string {
-	return fmt.Sprintf("cannot %s for %s while its processes survive: %s", e.Step, e.RunID, formatSurvivingProcesses(e.Processes))
+func (e *SurvivingProcessesError) Error() string {
+	return fmt.Sprintf("cannot %s for %s while its processes survive: %s", e.Step, e.RunID, FormatSurvivingProcesses(e.Processes))
 }
 
-// survivingRunProcesses scans /proc for live non-zombie processes of this user carrying
+// SurvivingRunProcesses scans /proc for live non-zombie processes of this user carrying
 // TILLR_RUN_ID=<runID> and TILLR_LOOP_STORE=<resolved storePath>, returning them sorted
 // by PID.
-func survivingRunProcesses(storePath, runID string) ([]survivingProcess, error) {
+func SurvivingRunProcesses(storePath, runID string) ([]SurvivingProcess, error) {
 	if runID == "" {
 		return nil, nil
 	}
-	resolved, err := processStoreIdentity(storePath)
+	resolved, err := ProcessStoreIdentity(storePath)
 	if err != nil {
 		return nil, err
 	}
@@ -70,14 +70,14 @@ func survivingRunProcesses(storePath, runID string) ([]survivingProcess, error) 
 	self := os.Getpid()
 	wantRun := "TILLR_RUN_ID=" + runID
 	wantStore := "TILLR_LOOP_STORE=" + resolved
-	var procs []survivingProcess
+	var procs []SurvivingProcess
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
 		if err != nil || pid == self {
 			continue
 		}
-		start, err := processStart(pid)
-		if processGone(err) {
+		start, err := ProcessStart(pid)
+		if ProcessGone(err) {
 			continue
 		}
 		if err != nil {
@@ -87,8 +87,8 @@ func survivingRunProcesses(storePath, runID string) ([]survivingProcess, error) 
 			continue
 		}
 		dir := filepath.Join("/proc", entry.Name())
-		env, err := runProcessEnvironment(dir, uid)
-		if processGone(err) {
+		env, err := RunProcessEnvironment(dir, uid)
+		if ProcessGone(err) {
 			continue
 		}
 		if err != nil {
@@ -116,7 +116,7 @@ func survivingRunProcesses(storePath, runID string) ([]survivingProcess, error) 
 		if err != nil {
 			return nil, fmt.Errorf("checking process %d: %w", pid, err)
 		}
-		procs = append(procs, survivingProcess{PID: pid, Start: start, Command: cmd, IsRunFace: isFace})
+		procs = append(procs, SurvivingProcess{PID: pid, Start: start, Command: cmd, IsRunFace: isFace})
 	}
 	sort.Slice(procs, func(i, j int) bool { return procs[i].PID < procs[j].PID })
 	return procs, nil
@@ -124,19 +124,19 @@ func survivingRunProcesses(storePath, runID string) ([]survivingProcess, error) 
 
 func readProcessCommand(dir string) (string, bool, bool, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, "cmdline"))
-	if processGone(err) {
+	if ProcessGone(err) {
 		return "", false, true, nil
 	}
 	if err != nil {
 		return "", false, false, err
 	}
-	isFace := isRunFaceArgv(raw)
+	isFace := IsRunFaceArgv(raw)
 	cmd := strings.TrimSpace(strings.ReplaceAll(string(raw), "\x00", " "))
 	if cmd != "" {
 		return cmd, isFace, false, nil
 	}
 	comm, err := os.ReadFile(filepath.Join(dir, "comm"))
-	if processGone(err) {
+	if ProcessGone(err) {
 		return "", false, true, nil
 	}
 	if err != nil {
@@ -150,10 +150,10 @@ type processKey struct {
 	Start string
 }
 
-// waitProcessExit blocks until the process identified by (pid, start) exits, or until
+// WaitProcessExit blocks until the process identified by (pid, start) exits, or until
 // ctx is canceled. It waits on the kernel's pidfd exit notification rather than polling
 // on elapsed time.
-func waitProcessExit(ctx context.Context, pid int, start string) error {
+func WaitProcessExit(ctx context.Context, pid int, start string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -168,8 +168,8 @@ func waitProcessExit(ctx context.Context, pid int, start string) error {
 
 	// Recheck start time after opening pidfd so a PID reused before PidfdOpen is
 	// never waited on as the original run face.
-	currentStart, err := processStart(pid)
-	if processGone(err) {
+	currentStart, err := ProcessStart(pid)
+	if ProcessGone(err) {
 		return nil
 	}
 	if err != nil {
@@ -228,21 +228,21 @@ func waitProcessExit(ctx context.Context, pid int, start string) error {
 	}
 }
 
-// awaitSurvivingRunProcesses scans for live marked processes of runID. If the run's own
+// AwaitSurvivingRunProcesses scans for live marked processes of runID. If the run's own
 // run face (tillr-run exec) is still in the act of exiting after writing its terminal
 // record, it waits for that face's exit before judging whether any marked processes
 // actually survived.
-func awaitSurvivingRunProcesses(ctx context.Context, storePath, runID string) ([]survivingProcess, error) {
+func AwaitSurvivingRunProcesses(ctx context.Context, storePath, runID string) ([]SurvivingProcess, error) {
 	waited := map[processKey]bool{}
 	for {
-		procs, err := survivingRunProcesses(storePath, runID)
+		procs, err := SurvivingRunProcesses(storePath, runID)
 		if err != nil {
 			return nil, err
 		}
 		if len(procs) == 0 {
 			return nil, nil
 		}
-		var faces []survivingProcess
+		var faces []SurvivingProcess
 		for _, p := range procs {
 			if p.IsRunFace && !waited[processKey{PID: p.PID, Start: p.Start}] {
 				faces = append(faces, p)
@@ -252,7 +252,7 @@ func awaitSurvivingRunProcesses(ctx context.Context, storePath, runID string) ([
 			return procs, nil
 		}
 		for _, face := range faces {
-			if err := waitProcessExit(ctx, face.PID, face.Start); err != nil {
+			if err := WaitProcessExit(ctx, face.PID, face.Start); err != nil {
 				return nil, err
 			}
 			waited[processKey{PID: face.PID, Start: face.Start}] = true
@@ -260,57 +260,58 @@ func awaitSurvivingRunProcesses(ctx context.Context, storePath, runID string) ([
 	}
 }
 
-func examinationRunIDs(work *pendingWork) []string {
-	var ids []string
-	for _, node := range parallelNodes(work.Decision) {
-		if node.RunRequest != nil && node.RunRequest.RunID != "" {
-			ids = append(ids, node.RunRequest.RunID)
-		}
-	}
-	if work.Candidate != nil && work.Candidate.RunID != "" {
-		ids = append(ids, work.Candidate.RunID)
-	}
-	return ids
-}
-
-func (l *Loop) checkSurvivingRunProcesses(ctx context.Context, itemID, lane string, runIDs ...string) (laneOutcome, bool) {
+// FindSurvivingRunProcesses checks each distinct non-empty runID in order and
+// returns the first one that has surviving processes (or an error).
+func FindSurvivingRunProcesses(ctx context.Context, storePath string, runIDs ...string) (string, []SurvivingProcess, error) {
 	seen := map[string]bool{}
 	for _, runID := range runIDs {
 		if runID == "" || seen[runID] {
 			continue
 		}
 		seen[runID] = true
-		procs, err := awaitSurvivingRunProcesses(ctx, l.cfg.Store, runID)
+		procs, err := AwaitSurvivingRunProcesses(ctx, storePath, runID)
 		if err != nil {
-			return laneOutcome{err: err}, true
+			return runID, nil, err
 		}
 		if len(procs) > 0 {
-			return l.retainSurvivingProcesses(ctx, itemID, lane, runID, procs), true
+			return runID, procs, nil
 		}
 	}
-	return laneOutcome{}, false
+	return "", nil, nil
 }
 
-func (l *Loop) retainSurvivingProcesses(ctx context.Context, itemID, lane, runID string, procs []survivingProcess) laneOutcome {
-	list := formatSurvivingProcesses(procs)
+// RetainSurvivingOutcome records the result of trying to hold an item for surviving processes.
+type RetainSurvivingOutcome struct {
+	TerminalPIDs []int
+	Fault        bool
+}
+
+// RetainSurvivingProcesses logs the retained lane, invokes hold when itemID is non-empty,
+// and classifies terminal-item vs fault outcomes.
+func RetainSurvivingProcesses(itemID, lane, runID string, procs []SurvivingProcess, reportf func(string, ...any), hold func(detail string) error, isTerminal func(error) bool) RetainSurvivingOutcome {
+	list := FormatSurvivingProcesses(procs)
 	detail := fmt.Sprintf("ended run %s still has live marked processes: %s", runID, list)
-	l.reportf("loop: lane %s retained: %s\n", lane, detail)
+	if reportf != nil {
+		reportf("loop: lane %s retained: %s\n", lane, detail)
+	}
 	var err error
 	if itemID == "" {
 		err = errors.New("no item to hold for the retained lane")
 	} else {
-		err = l.holdItemFault(ctx, Candidate{ItemID: itemID, RunID: runID, LaneID: lane}, ReasonRunProcessesLive, detail)
+		err = hold(detail)
 	}
-	if asItemTerminal(err) != nil {
+	if isTerminal(err) {
 		pids := make([]int, len(procs))
 		for i, p := range procs {
 			pids[i] = p.PID
 		}
-		return laneOutcome{stop: stopLaneRetained, laneRefusal: holdLaneChildrenRefusal(lane, pids, formatLeftBy(runID, itemID))}
+		return RetainSurvivingOutcome{TerminalPIDs: pids}
 	}
 	if err != nil {
-		l.reportf("loop: lane %s retained, and its item could not be held: %v\n", lane, err)
-		return laneOutcome{stop: StopFault}
+		if reportf != nil {
+			reportf("loop: lane %s retained, and its item could not be held: %v\n", lane, err)
+		}
+		return RetainSurvivingOutcome{Fault: true}
 	}
-	return laneOutcome{stop: stopLaneRetained}
+	return RetainSurvivingOutcome{}
 }

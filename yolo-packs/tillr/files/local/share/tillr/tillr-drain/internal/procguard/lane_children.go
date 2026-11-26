@@ -1,4 +1,4 @@
-package drain
+package procguard
 
 import (
 	"context"
@@ -14,15 +14,25 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// recheckLaneChildren reads the process table once for all ended runs. Store release
+// LaneChildrenHooks connects RecheckLaneChildren to drain's lane-rotation state.
+type LaneChildrenHooks struct {
+	LoadLaneConditions func(ctx context.Context) error
+	Lanes              func() []string
+	ResolveRunLeftBy   func(ctx context.Context, lane, runID string) string
+	HoldLaneChildren   func(ctx context.Context, lane string, pids []int, leftBy string) error
+	HasLaneCondition   func(lane string) bool
+	RestoreLane        func(ctx context.Context, lane string) error
+}
+
+// RecheckLaneChildren reads the process table once for all ended runs. Store release
 // is independent of rotation: an idle lane must not be reused while an old run's
 // marked processes can still write there. This also recovers holds after a crash
 // between release and recording the refusal, and after a supervisor restart.
-func (l *Loop) recheckLaneChildren(ctx context.Context) error {
-	if err := l.loadLaneConditions(ctx); err != nil {
+func RecheckLaneChildren(ctx context.Context, storePath, laneRoot string, h LaneChildrenHooks) error {
+	if err := h.LoadLaneConditions(ctx); err != nil {
 		return err
 	}
-	s, err := store.OpenRead(ctx, l.cfg.Store)
+	s, err := store.OpenRead(ctx, storePath)
 	if err != nil {
 		return err
 	}
@@ -52,7 +62,7 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 		rows.Close()
 		// Legacy leases can be released without a terminal row. The recorded
 		// release still binds their run to its lane, including after a restart.
-		releases, err := r.Query(`SELECT seq, kind, object_id, payload FROM events WHERE kind IN (?, ?) ORDER BY seq`, run.ReleaseKind, laneReleasedKind)
+		releases, err := r.Query(`SELECT seq, kind, object_id, payload FROM events WHERE kind IN (?, ?) ORDER BY seq`, run.ReleaseKind, LaneReleasedKind)
 		if err != nil {
 			return err
 		}
@@ -74,7 +84,7 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 					endedAt[release.RunID] = max(endedAt[release.RunID], seq)
 				}
 			} else {
-				var release laneReleased
+				var release laneReleasedPayload
 				if err := json.Unmarshal(raw, &release); err != nil {
 					return err
 				}
@@ -125,11 +135,11 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	here, err := currentLoopOwner()
+	here, err := CurrentLoopOwner()
 	if err != nil {
 		return err
 	}
-	marked, err := liveRunWorkers(l.cfg.Store, "", here)
+	marked, err := LiveRunWorkers(storePath, "", here)
 	if err != nil {
 		return err
 	}
@@ -138,32 +148,32 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 	bestSeq := map[string]int64{}
 	hasBest := map[string]bool{}
 	for _, p := range marked {
-		lane, ok := ended[p.runID]
+		lane, ok := ended[p.RunID]
 		if !ok {
 			continue
 		}
-		inside, err := l.processInLane(p, lane)
+		inside, err := ProcessInCheckout(p, filepath.Join(laneRoot, lane))
 		if err != nil {
 			return err
 		}
 		if inside {
 			pids[lane] = append(pids[lane], p.PID)
-			seq := endedAt[p.runID]
-			if !hasBest[lane] || seq > bestSeq[lane] || (seq == bestSeq[lane] && p.runID > bestRun[lane]) {
-				bestRun[lane] = p.runID
+			seq := endedAt[p.RunID]
+			if !hasBest[lane] || seq > bestSeq[lane] || (seq == bestSeq[lane] && p.RunID > bestRun[lane]) {
+				bestRun[lane] = p.RunID
 				bestSeq[lane] = seq
 				hasBest[lane] = true
 			}
 		}
 	}
-	for _, lane := range l.lanes() {
+	for _, lane := range h.Lanes() {
 		if len(pids[lane]) > 0 {
-			leftBy := l.resolveRunLeftBy(ctx, lane, bestRun[lane])
-			if err := l.holdLaneChildren(ctx, lane, pids[lane], leftBy); err != nil {
+			leftBy := h.ResolveRunLeftBy(ctx, lane, bestRun[lane])
+			if err := h.HoldLaneChildren(ctx, lane, pids[lane], leftBy); err != nil {
 				return err
 			}
-		} else if l.hasLaneCondition(lane, ReasonLaneChildren) {
-			if err := l.restoreLane(ctx, lane); err != nil {
+		} else if h.HasLaneCondition(lane) {
+			if err := h.RestoreLane(ctx, lane); err != nil {
 				return err
 			}
 		}
@@ -171,15 +181,12 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 	return nil
 }
 
-// Resolve symlinks and compare path components, not string prefixes: lane-1-other
-// is not lane-1. Revalidate start time after reading cwd to reject PID reuse.
-func (l *Loop) processInLane(p *runFaceOwner, lane string) (bool, error) {
-	return processInCheckout(p, filepath.Join(l.cfg.LaneRoot, lane))
-}
-
-func processInCheckout(p *runFaceOwner, path string) (bool, error) {
+// ProcessInCheckout resolves symlinks and compares path components, not string
+// prefixes: lane-1-other is not lane-1. Revalidates start time after reading cwd
+// to reject PID reuse.
+func ProcessInCheckout(p *RunFaceOwner, path string) (bool, error) {
 	cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", p.PID))
-	if processGone(err) {
+	if ProcessGone(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -202,8 +209,8 @@ func processInCheckout(p *runFaceOwner, path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	start, err := processStart(p.PID)
-	if processGone(err) {
+	start, err := ProcessStart(p.PID)
+	if ProcessGone(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -212,19 +219,15 @@ func processInCheckout(p *runFaceOwner, path string) (bool, error) {
 	return start == p.Start && start != "" && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
 
-func holdLaneChildrenRefusal(lane string, pids []int, leftBy string) *LaneRefusalError {
+// FormatLaneChildrenRefusal formats the sorted-PID remediation and detail message
+// for a lane held due to surviving children of an ended run.
+func FormatLaneChildrenRefusal(lane string, pids []int) (remediation, message string) {
 	sort.Ints(pids)
 	ids := make([]string, len(pids))
 	for i, pid := range pids {
 		ids[i] = strconv.Itoa(pid)
 	}
-	refusal := asLaneRefusal(laneRefusalf(lane, ReasonLaneChildren,
-		"wait for these processes to exit, or end them with `kill "+strings.Join(ids, " ")+"`; the next pass rechecks the lane",
-		"ended runs still have live marked processes in lane %s: PIDs %s", lane, strings.Join(ids, ", ")))
-	refusal.LeftBy = leftBy
-	return refusal
-}
-
-func (l *Loop) holdLaneChildren(ctx context.Context, lane string, pids []int, leftBy string) error {
-	return l.takeLaneOutOfRotation(ctx, holdLaneChildrenRefusal(lane, pids, leftBy))
+	remediation = "wait for these processes to exit, or end them with `kill " + strings.Join(ids, " ") + "`; the next pass rechecks the lane"
+	message = fmt.Sprintf("ended runs still have live marked processes in lane %s: PIDs %s", lane, strings.Join(ids, ", "))
+	return remediation, message
 }

@@ -47,7 +47,7 @@ func (l *Loop) reapParallel(ctx context.Context, tx *store.Tx, work *pendingWork
 		return false, nil
 	}
 	for _, node := range parallelNodes(d) {
-		if at.live[node.RunRequest.RunID] {
+		if at.Live[node.RunRequest.RunID] {
 			return true, nil
 		}
 	}
@@ -89,8 +89,8 @@ func (l *Loop) reapParallel(ctx context.Context, tx *store.Tx, work *pendingWork
 			if _, err := tx.Exec(`UPDATE node_runs SET outcome = 'interrupted' WHERE run_id = ? AND outcome = 'running'`, id); err != nil {
 				return true, err
 			}
-			if at.reclaimed != nil {
-				*at.reclaimed = append(*at.reclaimed, "loop: restarting reader run "+id+" on "+d.LaneID+": its run face vanished without a saved pause\n")
+			if at.Reclaimed != nil {
+				*at.Reclaimed = append(*at.Reclaimed, "loop: restarting reader run "+id+" on "+d.LaneID+": its run face vanished without a saved pause\n")
 			}
 		}
 		return true, appendEffect(tx, loopOrphanedKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now())

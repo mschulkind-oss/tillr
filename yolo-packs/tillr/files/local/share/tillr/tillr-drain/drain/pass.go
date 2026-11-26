@@ -1590,7 +1590,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 			return err
 		}
 		defer func() {
-			for _, line := range *ev.reclaimed {
+			for _, line := range *ev.Reclaimed {
 				l.reportf("%s", line)
 			}
 		}()
@@ -1615,8 +1615,8 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 			}
 			return err
 		})
-		if err == nil && ev.reapedSingle != nil {
-			reapedSingle = *ev.reapedSingle
+		if err == nil && ev.ReapedSingle != nil {
+			reapedSingle = *ev.ReapedSingle
 		}
 		return err
 	}); err != nil {

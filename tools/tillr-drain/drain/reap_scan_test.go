@@ -66,7 +66,7 @@ func TestAPassReapsDeadClaimsFromOneScanOutsideTheWriter(t *testing.T) {
 	// Inside the writer, the reap only reads the evidence it was handed.
 	before = procScans.Load()
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		return l.reapDeadLoopRuns(context.Background(), tx, l.cfg.Now(), reapEvidence{dead: map[LoopOwner]bool{dead: true}, live: map[string]bool{}})
+		return l.reapDeadLoopRuns(context.Background(), tx, l.cfg.Now(), reapEvidence{Dead: map[LoopOwner]bool{dead: true}, Live: map[string]bool{}})
 	})
 	if n := procScans.Load() - before; n != 0 {
 		t.Fatalf("the reap scanned the process table %d time(s) inside the writer", n)

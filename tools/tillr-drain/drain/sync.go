@@ -138,7 +138,7 @@ func (s *ProcessSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	if os.Getenv("TILLR_SQLITE_TRACE") == "1" {
-		traces := &sqliteTraceForwarder{output: os.Stderr}
+		traces := &sqliteTraceForwarder{Output: os.Stderr}
 		cmd.Stderr = io.MultiWriter(&stderr, traces)
 		defer traces.Flush()
 	}

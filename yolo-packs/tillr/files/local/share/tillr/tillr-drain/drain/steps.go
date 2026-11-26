@@ -1357,7 +1357,7 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 	cmd.Stderr = &stderr
 	if os.Getenv("TILLR_SQLITE_TRACE") == "1" {
 		// The tail keeps what the step said; its trace goes where every other trace is.
-		traces := &sqliteTraceForwarder{output: os.Stderr}
+		traces := &sqliteTraceForwarder{Output: os.Stderr}
 		cmd.Stderr = io.MultiWriter(&stderr, traces)
 		defer traces.Flush()
 	}

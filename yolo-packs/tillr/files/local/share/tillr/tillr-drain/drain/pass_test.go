@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/procguard"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -366,14 +366,5 @@ func TestAReplacementLoopSettlesTheStoredOutcomeWithoutRedispatch(t *testing.T) 
 // Called only at the existing timeout, before its assertion. This is diagnostic
 // evidence of the actual blocked stage, not a longer completion deadline.
 func ownedTransitionTimeoutDiagnostic() string {
-	if os.Getenv("TILLR_SQLITE_TRACE") != "1" {
-		return ""
-	}
-	buf := make([]byte, 1<<20)
-	n := runtime.Stack(buf, true)
-	diagnostic := "\nblocked-stage goroutine snapshot:\n" + string(buf[:n])
-	if n == len(buf) {
-		diagnostic += "\nstack snapshot truncated"
-	}
-	return diagnostic
+	return procguard.OwnedTransitionTimeoutDiagnostic()
 }

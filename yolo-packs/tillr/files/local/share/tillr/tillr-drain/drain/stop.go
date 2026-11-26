@@ -1,15 +1,12 @@
 package drain
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -178,103 +175,6 @@ func (s *ProcessSteps) startRunContext(ctx context.Context, id string, start fun
 		// must not hold off the child's migration or an unrelated writer.
 		return start()
 	})
-}
-
-// liveRunFaces finds only the run face, not its adapter descendants. The process
-// markers bind it to both run and canonical store, while the exec face's arguments
-// distinguish it from adapters inheriting those markers. Identity is revalidated
-// before signaling, so PID reuse cannot target a different process.
-type runFaceOwner struct {
-	LoopOwner
-	resume bool
-	runID  string
-}
-
-func liveRunFaces(path, id string, here *LoopOwner) ([]*runFaceOwner, error) {
-	return markedRunProcesses(path, id, here, true)
-}
-
-// liveRunWorkers finds every process of this user carrying the run and store
-// markers: the adapter and its descendants when the run face is gone. Each is
-// identified by pid and start time, so a recycled pid is rejected before a kill.
-func liveRunWorkers(path, id string, here *LoopOwner) ([]*runFaceOwner, error) {
-	return markedRunProcesses(path, id, here, false)
-}
-
-// isRunFaceArgv answers whether a process's raw cmdline is a run face's: `tillr-run exec`
-// with the --input and --lane-root flags ProcessSteps.Run passes. An adapter and its
-// children inherit the run's markers but never this argv, which is how a face is told
-// from what it started.
-func isRunFaceArgv(cmdline []byte) bool {
-	args := bytes.Split(cmdline, []byte{0})
-	if len(args) < 3 || string(args[1]) != "exec" {
-		return false
-	}
-	flags := string(bytes.Join(args[2:], []byte{' '}))
-	return strings.Contains(flags, "--input ") && strings.Contains(flags, "--lane-root ")
-}
-
-func markedRunProcesses(path, id string, here *LoopOwner, facesOnly bool) ([]*runFaceOwner, error) {
-	path, err := processStoreIdentity(path)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return nil, err
-	}
-	var owners []*runFaceOwner
-	for _, entry := range entries {
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid == os.Getpid() {
-			continue
-		}
-		dir := filepath.Join("/proc", entry.Name())
-		start, err := processStart(pid)
-		if processGone(err) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if start == "" {
-			continue
-		}
-		env, err := runProcessEnvironment(dir, here.UID)
-		if processGone(err) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		hasRun, hasStore, resume := false, false, false
-		var runID string
-		for _, v := range bytes.Split(env, []byte{0}) {
-			if strings.HasPrefix(string(v), "TILLR_RUN_ID=") {
-				runID = strings.TrimPrefix(string(v), "TILLR_RUN_ID=")
-				hasRun = runID != "" && (id == "" || runID == id)
-			}
-			hasStore = hasStore || string(v) == "TILLR_LOOP_STORE="+path
-			resume = resume || string(v) == "TILLR_RUN_RESUME=true"
-		}
-		if !hasRun || !hasStore {
-			continue
-		}
-		argv, err := os.ReadFile(filepath.Join(dir, "cmdline"))
-		if processGone(err) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if facesOnly && !isRunFaceArgv(argv) {
-			continue
-		}
-		owner := *here
-		owner.PID, owner.Start = pid, start
-		owners = append(owners, &runFaceOwner{LoopOwner: owner, resume: resume, runID: runID})
-	}
-	return owners, nil
 }
 
 // Stop stops the registered supervisors. For --end-runs it ends current workers
@@ -606,7 +506,7 @@ func endRuns(ctx context.Context, path string, finishItems map[string]bool) ([]s
 			continuation := false
 			if c.rec != nil {
 				for _, face := range faces {
-					continuation = continuation || face.resume
+					continuation = continuation || face.Resume
 				}
 				// A face can still be exiting after writing its terminal record. Only
 				// a continuation whose terminal segment is not recorded is in flight.

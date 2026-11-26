@@ -1,4 +1,4 @@
-package drain
+package procguard
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/mschulkind-oss/tillr-drain/heavyrun"
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 	"github.com/mschulkind-oss/tillr/store"
 	"golang.org/x/sys/unix"
 )
@@ -34,7 +35,7 @@ const (
 	ProcessClassWorker ProcessClass = "worker"
 )
 
-var processClassOrder = []ProcessClass{
+var ProcessClassOrder = []ProcessClass{
 	ProcessClassRepair,
 	ProcessClassProof,
 	ProcessClassGate,
@@ -48,7 +49,7 @@ var processClassWeights = map[ProcessClass]int{
 	ProcessClassWorker: 50,
 }
 
-var processClassNiceOffsets = map[ProcessClass]int{
+var ProcessClassNiceOffsets = map[ProcessClass]int{
 	ProcessClassRepair: 0,
 	ProcessClassProof:  5,
 	ProcessClassGate:   10,
@@ -122,7 +123,7 @@ func InitProcessPriority(storePath, cgroupMount, procSelfCgroup string) *Process
 	if failErr == nil {
 		return p
 	}
-	return newNicePriority(fmt.Sprintf("%s: %v", failPath, failErr))
+	return NewNicePriority(fmt.Sprintf("%s: %v", failPath, failErr))
 }
 
 func currentProcessNice() int {
@@ -138,15 +139,15 @@ func currentProcessNice() int {
 	return raw
 }
 
-func newNicePriority(unavailableReason string) *ProcessPriority {
-	return newNicePriorityWithBase(currentProcessNice(), unavailableReason)
+func NewNicePriority(unavailableReason string) *ProcessPriority {
+	return NewNicePriorityWithBase(currentProcessNice(), unavailableReason)
 }
 
-func newNicePriorityWithBase(base int, unavailableReason string) *ProcessPriority {
-	targets := make(map[ProcessClass]int, len(processClassOrder))
-	classes := make(map[string]int, len(processClassOrder))
-	for _, class := range processClassOrder {
-		target := min(19, base+processClassNiceOffsets[class])
+func NewNicePriorityWithBase(base int, unavailableReason string) *ProcessPriority {
+	targets := make(map[ProcessClass]int, len(ProcessClassOrder))
+	classes := make(map[string]int, len(ProcessClassOrder))
+	for _, class := range ProcessClassOrder {
+		target := min(19, base+ProcessClassNiceOffsets[class])
 		targets[class] = target
 		classes[string(class)] = target
 	}
@@ -178,7 +179,7 @@ func tryInitCgroupPriority(storePath, cgroupMount, procSelfCgroup string) (*Proc
 		return nil, controllersPath, errors.New("cpu controller not available")
 	}
 
-	rootName := "tillr-" + storePriorityHash(storePath)
+	rootName := "tillr-" + StorePriorityHash(storePath)
 	var createdDirs []string
 	cleanupDirs := func() {
 		for i := len(createdDirs) - 1; i >= 0; i-- {
@@ -242,15 +243,15 @@ func tryInitCgroupPriority(storePath, cgroupMount, procSelfCgroup string) (*Proc
 		}
 	}
 
-	fds := make(map[ProcessClass]*os.File, len(processClassOrder))
-	classes := make(map[string]int, len(processClassOrder))
+	fds := make(map[ProcessClass]*os.File, len(ProcessClassOrder))
+	classes := make(map[string]int, len(ProcessClassOrder))
 	closeFDs := func() {
 		for _, f := range fds {
 			_ = f.Close()
 		}
 	}
 
-	for _, class := range processClassOrder {
+	for _, class := range ProcessClassOrder {
 		classDir := filepath.Join(cgRoot, string(class))
 		if err := ensureDirRecorded(classDir, &createdDirs); err != nil {
 			closeFDs()
@@ -307,10 +308,10 @@ func hasController(content, name string) bool {
 	return false
 }
 
-func storePriorityHash(storePath string) string {
+func StorePriorityHash(storePath string) string {
 	identity := storePath
 	if storePath != "" {
-		if resolved, err := processStoreIdentity(storePath); err == nil && resolved != "" {
+		if resolved, err := ProcessStoreIdentity(storePath); err == nil && resolved != "" {
 			identity = resolved
 		}
 	}
@@ -434,9 +435,17 @@ func (p *ProcessPriority) CgroupFD(class ProcessClass) (int, error) {
 	}
 	f := p.cgroupFDs[class]
 	if f == nil {
-		return -1, Externalf("missing cgroup descriptor for %s", filepath.Join(p.summary.CgroupRoot, string(class)))
+		return -1, drainmodel.Externalf("missing cgroup descriptor for %s", filepath.Join(p.summary.CgroupRoot, string(class)))
 	}
 	return int(f.Fd()), nil
+}
+
+// DropCgroupFDForTest removes a single class's cgroup descriptor to test
+// missing-descriptor error handling from outside package procguard.
+func (p *ProcessPriority) DropCgroupFDForTest(class ProcessClass) {
+	if p != nil {
+		delete(p.cgroupFDs, class)
+	}
 }
 
 // NiceTarget returns the target niceness for class when nice is in force.
@@ -478,7 +487,7 @@ func (p *ProcessPriority) ApplyToCmd(cmd *exec.Cmd, class ProcessClass, selfExe 
 		if selfExe == "" {
 			exe, err := os.Executable()
 			if err != nil {
-				return Externalf("locating executable for nice wrapper: %v", err)
+				return drainmodel.Externalf("locating executable for nice wrapper: %v", err)
 			}
 			selfExe = exe
 		}
@@ -497,19 +506,20 @@ func (p *ProcessPriority) ApplyToCmd(cmd *exec.Cmd, class ProcessClass, selfExe 
 	}
 }
 
-type heavyRepairKey struct{}
+type HeavyRepairKey struct{}
 
-func (s *ProcessSteps) applyHeavyPriority(ctx context.Context, cmd *exec.Cmd) error {
-	if s == nil || s.priority == nil || cmd == nil {
+// ApplyHeavyToCmd configures cmd for heavy proof (or repair when HeavyRepairKey is set on ctx).
+func (p *ProcessPriority) ApplyHeavyToCmd(ctx context.Context, cmd *exec.Cmd) error {
+	if p == nil || cmd == nil {
 		return nil
 	}
 	class := ProcessClassProof
-	if repair, _ := ctx.Value(heavyRepairKey{}).(bool); repair {
+	if repair, _ := ctx.Value(HeavyRepairKey{}).(bool); repair {
 		class = ProcessClassRepair
 	}
-	switch s.priority.Mechanism() {
+	switch p.Mechanism() {
 	case "cgroup":
-		fd, err := s.priority.CgroupFD(class)
+		fd, err := p.CgroupFD(class)
 		if err != nil {
 			return err
 		}
@@ -522,7 +532,7 @@ func (s *ProcessSteps) applyHeavyPriority(ctx context.Context, cmd *exec.Cmd) er
 		cmd.SysProcAttr = &attr
 		return nil
 	case "nice":
-		target, ok := s.priority.NiceTarget(class)
+		target, ok := p.NiceTarget(class)
 		if !ok {
 			return nil
 		}
@@ -530,7 +540,7 @@ func (s *ProcessSteps) applyHeavyPriority(ctx context.Context, cmd *exec.Cmd) er
 		if env == nil {
 			env = os.Environ()
 		}
-		cmd.Env = append(withoutProcessEnv(env, heavyrun.HeavyNiceEnv), fmt.Sprintf("%s=%d", heavyrun.HeavyNiceEnv, target))
+		cmd.Env = append(WithoutProcessEnv(env, heavyrun.HeavyNiceEnv), fmt.Sprintf("%s=%d", heavyrun.HeavyNiceEnv, target))
 		return nil
 	default:
 		return nil

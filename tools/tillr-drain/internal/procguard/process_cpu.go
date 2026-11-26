@@ -1,4 +1,4 @@
-package drain
+package procguard
 
 import (
 	"cmp"
@@ -10,8 +10,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -27,7 +29,7 @@ const (
 )
 
 func init() {
-	if err := event.Register(ProcessCPUKind, Utility); err != nil {
+	if err := event.Register(ProcessCPUKind, drainmodel.Utility); err != nil {
 		panic(err)
 	}
 }
@@ -73,82 +75,94 @@ type procSample struct {
 	ticks     uint64
 }
 
-type processCPUSnapshot struct {
+type ProcessCPUSnapshot struct {
 	at    time.Time
 	ticks map[procIdentity]uint64
 }
 
-func (l *Loop) procRootPath() string {
-	if l.procRoot != "" {
-		return l.procRoot
+// CPUTrackerParams provides the loop state and callbacks needed by RecordProcessCPUIfDue.
+type CPUTrackerParams struct {
+	Mu             *sync.Mutex
+	Last           **ProcessCPUSnapshot
+	ProcRoot       string
+	SelfPID        int
+	Now            func() time.Time
+	StorePath      string
+	SessionInfo    func() (id string, initialized bool)
+	SessionOptions []store.OpenOption
+	Reportf        func(format string, args ...any)
+}
+
+func resolveProcRoot(procRoot string) string {
+	if procRoot != "" {
+		return procRoot
 	}
 	return "/proc"
 }
 
-func (l *Loop) currentSelfPID() int {
-	if l.selfPID > 0 {
-		return l.selfPID
+func resolveSelfPID(selfPID int) int {
+	if selfPID > 0 {
+		return selfPID
 	}
 	return os.Getpid()
 }
 
-func (l *Loop) primeProcessCPU() {
-	l.processCPUMu.Lock()
-	defer l.processCPUMu.Unlock()
-	if l.lastProcessCPU != nil {
+func PrimeProcessCPU(mu *sync.Mutex, last **ProcessCPUSnapshot, procRoot string, selfPID int, now time.Time) {
+	mu.Lock()
+	defer mu.Unlock()
+	if *last != nil {
 		return
 	}
-	at := l.cfg.Now().UTC()
-	if samples, ok := readProcessCPUSamples(l.procRootPath(), l.currentSelfPID()); ok {
-		l.lastProcessCPU = snapshotFromSamples(at, samples)
+	at := now.UTC()
+	if samples, ok := readProcessCPUSamples(resolveProcRoot(procRoot), resolveSelfPID(selfPID)); ok {
+		*last = snapshotFromSamples(at, samples)
 	}
 }
 
-// recordProcessCPUIfDue samples /proc once per processCPUInterval and appends one
+// RecordProcessCPUIfDue samples /proc once per processCPUInterval and appends one
 // ProcessCPUKind event covering the elapsed minute. The first call captures the
 // baseline ticks without appending an event; write errors are logged and never stop
 // the loop.
-func (l *Loop) recordProcessCPUIfDue(ctx context.Context) {
-	l.processCPUMu.Lock()
-	defer l.processCPUMu.Unlock()
+func RecordProcessCPUIfDue(ctx context.Context, p CPUTrackerParams) {
+	p.Mu.Lock()
+	defer p.Mu.Unlock()
 
-	at := l.cfg.Now().UTC()
-	if l.lastProcessCPU == nil {
-		if samples, ok := readProcessCPUSamples(l.procRootPath(), l.currentSelfPID()); ok {
-			l.lastProcessCPU = snapshotFromSamples(at, samples)
+	procRoot := resolveProcRoot(p.ProcRoot)
+	selfPID := resolveSelfPID(p.SelfPID)
+	at := p.Now().UTC()
+	if *p.Last == nil {
+		if samples, ok := readProcessCPUSamples(procRoot, selfPID); ok {
+			*p.Last = snapshotFromSamples(at, samples)
 		}
 		return
 	}
-	elapsed := at.Sub(l.lastProcessCPU.at)
-	if elapsed < processCPUInterval || l.cfg.Store == "" {
+	elapsed := at.Sub((*p.Last).at)
+	if elapsed < processCPUInterval || p.StorePath == "" {
 		return
 	}
-	samples, ok := readProcessCPUSamples(l.procRootPath(), l.currentSelfPID())
+	samples, ok := readProcessCPUSamples(procRoot, selfPID)
 	if !ok {
 		return
 	}
 
-	l.mu.Lock()
-	id := l.sessionID
-	initialized := l.sessionInitialized
-	l.mu.Unlock()
+	id, initialized := p.SessionInfo()
 	if id == "" {
 		id = "loop"
 	}
 
-	fact := buildProcessCPUFact(id, elapsed, l.lastProcessCPU, samples)
+	fact := buildProcessCPUFact(id, elapsed, *p.Last, samples)
 	body, err := json.Marshal(fact)
 	if err != nil {
-		if ctx.Err() == nil {
-			l.reportf("loop: process cpu was not recorded: %v\n", err)
+		if ctx.Err() == nil && p.Reportf != nil {
+			p.Reportf("loop: process cpu was not recorded: %v\n", err)
 		}
 		return
 	}
 
-	s, err := store.Open(ctx, l.cfg.Store, !initialized, l.sessionOptions...)
+	s, err := store.Open(ctx, p.StorePath, !initialized, p.SessionOptions...)
 	if err != nil {
-		if ctx.Err() == nil {
-			l.reportf("loop: process cpu was not recorded: %v\n", err)
+		if ctx.Err() == nil && p.Reportf != nil {
+			p.Reportf("loop: process cpu was not recorded: %v\n", err)
 		}
 		return
 	}
@@ -166,23 +180,23 @@ func (l *Loop) recordProcessCPUIfDue(ctx context.Context) {
 		err = closeErr
 	}
 	if err != nil {
-		if ctx.Err() == nil {
-			l.reportf("loop: process cpu was not recorded: %v\n", err)
+		if ctx.Err() == nil && p.Reportf != nil {
+			p.Reportf("loop: process cpu was not recorded: %v\n", err)
 		}
 		return
 	}
-	l.lastProcessCPU = snapshotFromSamples(at, samples)
+	*p.Last = snapshotFromSamples(at, samples)
 }
 
-func snapshotFromSamples(at time.Time, samples []procSample) *processCPUSnapshot {
+func snapshotFromSamples(at time.Time, samples []procSample) *ProcessCPUSnapshot {
 	ticks := make(map[procIdentity]uint64, len(samples))
 	for _, s := range samples {
 		ticks[procIdentity{pid: s.pid, startTime: s.startTime}] = s.ticks
 	}
-	return &processCPUSnapshot{at: at, ticks: ticks}
+	return &ProcessCPUSnapshot{at: at, ticks: ticks}
 }
 
-func buildProcessCPUFact(sessionID string, elapsed time.Duration, prev *processCPUSnapshot, samples []procSample) ProcessCPUFact {
+func buildProcessCPUFact(sessionID string, elapsed time.Duration, prev *ProcessCPUSnapshot, samples []procSample) ProcessCPUFact {
 	elapsedSec := elapsed.Seconds()
 	processes := make([]ProcessCPUEntry, 0, len(samples))
 	fact := ProcessCPUFact{

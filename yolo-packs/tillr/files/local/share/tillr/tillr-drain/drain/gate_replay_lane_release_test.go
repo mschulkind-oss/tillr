@@ -657,8 +657,8 @@ func TestWhyNeverReportsRunLiveAfterFinalVerdictWithoutProcess(t *testing.T) {
 		// returns to ActionJudge rather than staying stuck on examinationClaimedKind.
 		fixtureWrite(t, f, func(tx *store.Tx) error {
 			return l.reapDeadLoopRuns(context.Background(), tx, l.cfg.Now(), reapEvidence{
-				dead: map[LoopOwner]bool{*deadOwner: true},
-				live: map[string]bool{},
+				Dead: map[LoopOwner]bool{*deadOwner: true},
+				Live: map[string]bool{},
 			})
 		})
 		got := pendingForTest(t, f, "item-a")
