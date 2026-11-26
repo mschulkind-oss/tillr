@@ -932,8 +932,8 @@ func TestRestartDrainWaitsForSlowLoopExitThenBuildsAndRelaunches(t *testing.T) {
 	if now.Sub(time.Unix(0, 0)) <= 60*time.Second {
 		t.Fatalf("expected wait > 60s, got %v", now.Sub(time.Unix(0, 0)))
 	}
-	if !reflect.DeepEqual(events, []string{"stop", "build", "relaunch"}) {
-		t.Fatalf("events = %v, want [stop build relaunch]", events)
+	if !reflect.DeepEqual(events, []string{"build", "stop", "relaunch"}) {
+		t.Fatalf("events = %v, want [build stop relaunch]", events)
 	}
 	joined := strings.Join(relaunchArgv, " ")
 	if !strings.Contains(joined, "--policy") || !strings.Contains(joined, "--lanes") {
@@ -1344,10 +1344,11 @@ func TestRestartWhenNoLoopIsRunningUsesRecordedLaunchAndSucceeds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Put our built tillr-drain on PATH so `just tillr-restart` finds it.
+	// Put the build output directory first on PATH, with our prebuilt tillr-drain
+	// behind it so `just tillr-restart` can bootstrap before work/bin/tillr-drain exists.
 	env := append(os.Environ(),
 		"YOLO_DURABLE_DIR="+work,
-		"PATH="+filepath.Dir(drainBin)+string(os.PathListSeparator)+filepath.Join(work, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PATH="+filepath.Join(work, "bin")+string(os.PathListSeparator)+filepath.Dir(drainBin)+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	var keeperPID int
 	defer func() {
@@ -1389,5 +1390,392 @@ func TestRestartWhenNoLoopIsRunningUsesRecordedLaunchAndSucceeds(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(work, "bin", "tillr-drain")); err != nil {
 		t.Fatalf("expected built tillr-drain in %s: %v", filepath.Join(work, "bin"), err)
+	}
+}
+
+func TestRestartRefusesBeforeStoppingWhenPathDoesNotResolveBuiltBinaries(t *testing.T) {
+	drainBin := buildDrainBinary(t)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	root := filepath.Join(work, "repo")
+	live := filepath.Join(work, "bin")
+	shadow := filepath.Join(work, "pack-launchers")
+	for _, dir := range []string{root, live, shadow} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setupBuildFixtureRepo(t, root)
+
+	// Shadow directory (simulating pack launchers) comes BEFORE live on PATH.
+	pidFile := filepath.Join(root, ".tillr", "stub.pid")
+	shadowDrain := filepath.Join(shadow, "tillr-drain")
+	stubScript := fmt.Sprintf(`#!/usr/bin/env bash
+case "$1" in
+  keep)
+    exec %q "$@"
+    ;;
+  loop)
+    export TILLR_KEEP_TEST_HELPER=drain-stub
+    export TILLR_KEEP_TEST_PROC_NAME=tillr-drain
+    export TILLR_KEEP_TEST_PID_FILE=%q
+    exec -a %q %q "$@"
+    ;;
+  stop)
+    if [ -f %q ]; then
+      kill -TERM "$(cat %q)"
+      exit 0
+    fi
+    exit 2
+    ;;
+esac
+`, drainBin, pidFile, shadowDrain, self, pidFile, pidFile)
+	if err := os.WriteFile(shadowDrain, []byte(stubScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shadowTillr := filepath.Join(shadow, "tillr")
+	shadowRun := filepath.Join(shadow, "tillr-run")
+	for _, p := range []string{shadowTillr, shadowRun} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	env := append(os.Environ(),
+		"YOLO_DURABLE_DIR="+work,
+		"PATH="+shadow+string(os.PathListSeparator)+live+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	keeper := exec.Command(drainBin, "keep", "--root", root, "--", "--policy", "config/p.json", "--lanes", "2")
+	keeper.Dir = root
+	keeper.Env = env
+	if err := keeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var loopPID int
+	defer func() {
+		stopAndWait(keeper)
+		if loopPID > 0 {
+			stopAndWaitPID(loopPID)
+		}
+	}()
+
+	deadline := time.Now().Add(hangGuard)
+	for {
+		if data, err := os.ReadFile(pidFile); err == nil && len(bytes.TrimSpace(data)) > 0 {
+			loopPID, err = strconv.Atoi(strings.TrimSpace(string(data)))
+			if err == nil {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", pidFile)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	restartCmd := exec.Command("just", "--justfile", filepath.Join(root, ".justfile"), "tillr-restart", "--root", root)
+	restartCmd.Dir = root
+	restartCmd.Env = env
+	outBytes, err := restartCmd.CombinedOutput()
+	outStr := string(outBytes)
+	if err == nil {
+		t.Fatalf("expected just tillr-restart to refuse when PATH shadows built binaries, but it succeeded:\n%s", outStr)
+	}
+
+	// Must name each mismatched program, the path PATH resolved, and the path it built.
+	for _, tc := range []struct {
+		name     string
+		resolved string
+		built    string
+	}{
+		{"tillr", shadowTillr, filepath.Join(live, "tillr")},
+		{"tillr-drain", shadowDrain, filepath.Join(live, "tillr-drain")},
+		{"tillr-run", shadowRun, filepath.Join(live, "tillr-run")},
+	} {
+		if !strings.Contains(outStr, tc.name) || !strings.Contains(outStr, tc.resolved) || !strings.Contains(outStr, tc.built) {
+			t.Errorf("refusal output missing mismatch details for %s (resolved=%s built=%s):\n%s", tc.name, tc.resolved, tc.built, outStr)
+		}
+	}
+
+	// Must have refused BEFORE stopping anything: keeper and loop are still running.
+	if info, ok := Process(keeper.Process.Pid); !ok || info.State == "Z" {
+		t.Fatalf("keeper %d was stopped despite PATH mismatch refusal:\n%s", keeper.Process.Pid, outStr)
+	}
+	if info, ok := Process(loopPID); !ok || info.State == "Z" {
+		t.Fatalf("loop %d was stopped despite PATH mismatch refusal:\n%s", loopPID, outStr)
+	}
+	if strings.Contains(outStr, "keeper: stop requested") || strings.Contains(outStr, "restart: stopping loop") {
+		t.Errorf("refusal output shows stop actions were attempted:\n%s", outStr)
+	}
+}
+
+func TestRestartStopsSecondLoopFromAnotherBinaryPathAndPackCachedBinary(t *testing.T) {
+	drainBin := buildDrainBinary(t)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	root := filepath.Join(work, "repo")
+	live := filepath.Join(work, "bin")
+	cacheDir := filepath.Join(work, "cache")
+	altDir := filepath.Join(work, "alt-bin")
+	for _, dir := range []string{root, live, cacheDir, altDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setupBuildFixtureRepo(t, root)
+
+	// Primary loop stub in live/tillr-drain.
+	pidFile := filepath.Join(root, ".tillr", "stub.pid")
+	drainStub := filepath.Join(live, "tillr-drain")
+	stubScript := fmt.Sprintf(`#!/usr/bin/env bash
+case "$1" in
+  keep)
+    exec %q "$@"
+    ;;
+  loop)
+    export TILLR_KEEP_TEST_HELPER=drain-stub
+    export TILLR_KEEP_TEST_PROC_NAME=tillr-drain
+    export TILLR_KEEP_TEST_PID_FILE=%q
+    exec -a %q %q "$@"
+    ;;
+  stop)
+    if [ -f %q ]; then
+      kill -TERM "$(cat %q)"
+      exit 0
+    fi
+    exit 2
+    ;;
+esac
+`, drainBin, pidFile, drainStub, self, pidFile, pidFile)
+	if err := os.WriteFile(drainStub, []byte(stubScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	env := append(os.Environ(),
+		"YOLO_DURABLE_DIR="+work,
+		"PATH="+live+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	keeper := exec.Command(drainBin, "keep", "--root", root, "--", "--policy", "config/custom.json", "--lanes", "2")
+	keeper.Dir = root
+	keeper.Env = env
+	if err := keeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var firstLoopPID int
+	var packLoop, altLoop *exec.Cmd
+	var newKeeperPID int
+	defer func() {
+		stopAndWait(keeper)
+		if newKeeperPID > 0 {
+			stopAndWaitPID(newKeeperPID)
+		}
+		if firstLoopPID > 0 {
+			stopAndWaitPID(firstLoopPID)
+		}
+		if packLoop != nil {
+			stopAndWait(packLoop)
+		}
+		if altLoop != nil {
+			stopAndWait(altLoop)
+		}
+	}()
+
+	deadline := time.Now().Add(hangGuard)
+	for {
+		if data, err := os.ReadFile(pidFile); err == nil && len(bytes.TrimSpace(data)) > 0 {
+			firstLoopPID, err = strconv.Atoi(strings.TrimSpace(string(data)))
+			if err == nil {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", pidFile)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Start a second loop simulating the pack launcher's fast-path cached binary
+	// (`current-tillr-drain-<16-hex>`, whose Linux 15-byte comm is `current-tillr-d`).
+	packBinPath := filepath.Join(cacheDir, "current-tillr-drain-0123456789abcdef")
+	packLoop = exec.Command(self, "loop", "--root", root)
+	packLoop.Args[0] = packBinPath
+	packLoop.Dir = root
+	packLoop.Env = append(os.Environ(),
+		"TILLR_KEEP_TEST_HELPER=drain-stub",
+		"TILLR_KEEP_TEST_PROC_NAME=current-tillr-drain-0123456789abcdef",
+	)
+	if err := packLoop.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitUntilProcComm(t, packLoop.Process.Pid, "current-tillr-d")
+
+	// Start a third loop from another binary path with a digest suffix, from a different cwd.
+	altBinPath := filepath.Join(altDir, "tillr-drain-deadbeef01234567")
+	altLoop = exec.Command(self, "loop", "--root", root)
+	altLoop.Args[0] = altBinPath
+	altLoop.Dir = work
+	altLoop.Env = append(os.Environ(),
+		"TILLR_KEEP_TEST_HELPER=drain-stub",
+		"TILLR_KEEP_TEST_PROC_NAME=tillr-drain-deadbeef01234567",
+	)
+	if err := altLoop.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitUntilProcComm(t, altLoop.Process.Pid, "tillr-drain-dea")
+
+	restartCmd := exec.Command("just", "--justfile", filepath.Join(root, ".justfile"), "tillr-restart", "--root", root)
+	restartCmd.Dir = root
+	restartCmd.Env = env
+	outBytes, err := restartCmd.CombinedOutput()
+	outStr := string(outBytes)
+	if err != nil {
+		t.Fatalf("just tillr-restart failed with extra loops running: %v\n%s", err, outStr)
+	}
+	newKeeperPID = parseStartedKeeperPID(outStr)
+	if newKeeperPID <= 0 {
+		t.Fatalf("output missing started keeper pid:\n%s", outStr)
+	}
+
+	// Wait for our direct child processes to be reaped so they are not zombies.
+	if err := keeper.Wait(); err != nil {
+		t.Fatalf("old keeper wait: %v", err)
+	}
+	if err := packLoop.Wait(); err != nil {
+		t.Fatalf("pack cached loop wait: %v", err)
+	}
+	if err := altLoop.Wait(); err != nil {
+		t.Fatalf("alt binary loop wait: %v", err)
+	}
+
+	// Confirm none of the old loops are still running, and at most one loop is running now.
+	for _, oldPID := range []int{firstLoopPID, packLoop.Process.Pid, altLoop.Process.Pid} {
+		if info, ok := Process(oldPID); ok && info.State != "Z" {
+			t.Errorf("old loop %d is still running after restart", oldPID)
+		}
+	}
+	remainingLoops, err := FindLoops(root)
+	if err != nil {
+		t.Fatalf("FindLoops after restart: %v", err)
+	}
+	if len(remainingLoops) > 1 {
+		t.Fatalf("restart left multiple loops running: %v", remainingLoops)
+	}
+}
+
+func TestRestartRefusesWhenBuiltProgramMissingFromPath(t *testing.T) {
+	work := t.TempDir()
+	builtBin := filepath.Join(work, "bin")
+	if err := os.MkdirAll(builtBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	builtDrain := filepath.Join(builtBin, "tillr-drain")
+	builtRun := filepath.Join(builtBin, "tillr-run")
+	for _, p := range []string{builtDrain, builtRun} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Empty PATH so neither built program is resolved.
+	t.Setenv("PATH", "")
+	t.Setenv("YOLO_DURABLE_DIR", work)
+
+	stoppedKeeper := false
+	stoppedLoop := false
+	startedKeeper := false
+	var out bytes.Buffer
+	err := RestartDrain(work, nil, filepath.Join(work, ".tillr", "keeper.lock"), RestartOpts{
+		BuildCmd:         []string{"fixture-build"},
+		FindLoopFn:       func(string) (int, error) { return 4242, nil },
+		LoopArgvFn:       func(int) ([]string, bool) { return []string{"loop"}, true },
+		StopKeeperFn:     func(string, io.Writer) error { stoppedKeeper = true; return nil },
+		WaitKeeperExitFn: func(string, time.Duration) error { return nil },
+		RunCmdFn: func(argv []string, dir string, env []string) (int, string, string, error) {
+			if len(argv) > 0 && argv[0] == "fixture-build" {
+				return 0, fmt.Sprintf("tillr-build: %s\ntillr-build: %s\n", builtDrain, builtRun), "", nil
+			}
+			stoppedLoop = true
+			return 0, "", "", nil
+		},
+		GitHeadFn: func(string) (string, error) { return "deadbeef12345678", nil },
+		StartKeeperFn: func([]string, string, string) (int, error) {
+			startedKeeper = true
+			return 9999, nil
+		},
+	}, &out)
+	if err == nil {
+		t.Fatalf("expected refusal when built programs are missing from PATH")
+	}
+	if stoppedKeeper || stoppedLoop || startedKeeper {
+		t.Fatalf("expected refusal before stopping anything (stoppedKeeper=%v stoppedLoop=%v startedKeeper=%v)", stoppedKeeper, stoppedLoop, startedKeeper)
+	}
+	msg := err.Error()
+	for _, want := range []string{"tillr-drain", "tillr-run", "not found", builtDrain, builtRun} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q missing %q", msg, want)
+		}
+	}
+}
+
+func TestRestartRefusesNamingPIDsWhenLoopOrKeeperStaysRunning(t *testing.T) {
+	work := t.TempDir()
+	now := time.Unix(0, 0)
+	startedKeeper := false
+	var out bytes.Buffer
+
+	err := RestartDrain(work, nil, filepath.Join(work, ".tillr", "keeper.lock"), RestartOpts{
+		FindLoopsFn:      func(string) ([]int, error) { return []int{5150, 5151}, nil },
+		FindKeepersFn:    func(string) ([]int, error) { return []int{6160}, nil },
+		LoopArgvFn:       func(int) ([]string, bool) { return []string{"loop"}, true },
+		StopKeeperFn:     func(string, io.Writer) error { return nil },
+		WaitKeeperExitFn: func(string, time.Duration) error { return nil },
+		SignalProcFn:     func(int, string) error { return nil },
+		WaitOpts: WaitOpts{
+			Timeout:       2 * time.Second,
+			DisableReport: true,
+			PollInterval:  10 * time.Millisecond,
+			Clock:         func() time.Time { return now },
+			Sleep:         func(time.Duration) { now = now.Add(time.Second) },
+			ProcessFn:     func(pid int) (ProcInfo, bool) { return ProcInfo{Comm: "tillr-drain", Start: "100", State: "S"}, true },
+		},
+		RunCmdFn: func(argv []string, dir string, env []string) (int, string, string, error) {
+			return 0, "", "", nil
+		},
+		StartKeeperFn: func([]string, string, string) (int, error) {
+			startedKeeper = true
+			return 9999, nil
+		},
+	}, &out)
+	if err == nil {
+		t.Fatalf("expected refusal when loops and keeper remain running")
+	}
+	if startedKeeper {
+		t.Fatalf("must not start a new keeper while old loops/keepers are still running")
+	}
+	msg := err.Error()
+	for _, want := range []string{"5150", "5151", "6160"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal error %q missing surviving PID %s", msg, want)
+		}
+	}
+}
+
+func waitUntilProcComm(t *testing.T, pid int, wantComm string) {
+	t.Helper()
+	deadline := time.Now().Add(hangGuard)
+	for {
+		if info, ok := Process(pid); ok && info.Comm == wantComm {
+			return
+		}
+		if time.Now().After(deadline) {
+			info, ok := Process(pid)
+			t.Fatalf("timed out waiting for pid %d comm=%q (got ok=%v comm=%q)", pid, wantComm, ok, info.Comm)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

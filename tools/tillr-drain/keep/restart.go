@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -19,21 +20,34 @@ import (
 // ResolveRestartArgs determines policy and lanes from the running loop, runtime config,
 // or recorded launch, plus extra.
 func ResolveRestartArgs(root string, extra []string, loopPID int) (args []string, policy, lanes string, hasPolicy, hasLanes bool, err error) {
-	return resolveRestartArgs(root, extra, loopPID, LoopArgv)
+	var pids []int
+	if loopPID > 0 {
+		pids = []int{loopPID}
+	}
+	return resolveRestartArgs(root, extra, pids, LoopArgv)
 }
 
 func resolveRestartArgs(
 	root string,
 	extra []string,
-	loopPID int,
+	loopPIDs []int,
 	loopArgvFn func(int) ([]string, bool),
 ) (args []string, policy, lanes string, hasPolicy, hasLanes bool, err error) {
 	extraPolicy, extraLanes, hasExtraPolicy, hasExtraLanes := ExtractPolicyAndLanes(extra)
 	var runningPolicy, runningLanes string
 	var hasRunningPolicy, hasRunningLanes bool
-	if loopPID > 0 {
+	for _, loopPID := range loopPIDs {
+		if loopPID <= 0 {
+			continue
+		}
 		if rest, ok := loopArgvFn(loopPID); ok && len(rest) > 0 && rest[0] == "loop" {
-			runningPolicy, runningLanes, hasRunningPolicy, hasRunningLanes = ExtractPolicyAndLanes(rest[1:])
+			p, l, hasP, hasL := ExtractPolicyAndLanes(rest[1:])
+			if hasP && !hasRunningPolicy {
+				runningPolicy, hasRunningPolicy = p, true
+			}
+			if hasL && !hasRunningLanes {
+				runningLanes, hasRunningLanes = l, true
+			}
 		}
 	}
 	recPolicy, recLanes, hasRecPolicy, hasRecLanes, err := ReadRecordedLaunch(root)
@@ -78,6 +92,7 @@ type WaitOpts struct {
 	ReportInterval time.Duration
 	DisableReport  bool
 	PollInterval   time.Duration
+	Timeout        time.Duration
 	Clock          func() time.Time
 	Sleep          func(time.Duration)
 	ProcessFn      func(int) (ProcInfo, bool)
@@ -85,6 +100,10 @@ type WaitOpts struct {
 
 // WaitForExit waits until pid exits or becomes a zombie, printing what is being waited on.
 func WaitForExit(pid int, opts WaitOpts, out io.Writer) {
+	waitForExit(pid, "loop", opts, out)
+}
+
+func waitForExit(pid int, role string, opts WaitOpts, out io.Writer) bool {
 	reportInterval := opts.ReportInterval
 	if !opts.DisableReport && reportInterval == 0 {
 		reportInterval = 30 * time.Second
@@ -108,18 +127,22 @@ func WaitForExit(pid int, opts WaitOpts, out io.Writer) {
 
 	original, ok := procFn(pid)
 	if !ok || original.State == "Z" {
-		return
+		return true
 	}
-	fmt.Fprintf(out, "restart: waiting for loop %d to exit\n", pid)
-	lastReport := clock()
+	fmt.Fprintf(out, "restart: waiting for %s %d to exit\n", role, pid)
+	started := clock()
+	lastReport := started
 	for {
 		current, ok := procFn(pid)
 		if !ok || current.State == "Z" || current.Comm != original.Comm || current.Start != original.Start {
-			return
+			return true
 		}
 		now := clock()
+		if opts.Timeout > 0 && now.Sub(started) >= opts.Timeout {
+			return false
+		}
 		if !opts.DisableReport && now.Sub(lastReport) >= reportInterval {
-			fmt.Fprintf(out, "restart: still waiting for loop %d to exit\n", pid)
+			fmt.Fprintf(out, "restart: still waiting for %s %d to exit\n", role, pid)
 			lastReport = now
 		}
 		sleep(pollInterval)
@@ -209,13 +232,125 @@ type RestartOpts struct {
 	DrainBin         string
 	KeeperBin        string
 	FindLoopFn       func(string) (int, error)
+	FindLoopsFn      func(string) ([]int, error)
+	FindKeepersFn    func(string) ([]int, error)
 	LoopArgvFn       func(int) ([]string, bool)
 	StopKeeperFn     func(string, io.Writer) error
 	WaitKeeperExitFn func(string, time.Duration) error
+	SignalProcFn     func(pid int, start string) error
 	WaitOpts         WaitOpts
 	RunCmdFn         func(argv []string, dir string, env []string) (exitCode int, stdout, stderr string, err error)
 	GitHeadFn        func(root string) (string, error)
 	StartKeeperFn    func(argv []string, dir string, logPath string) (pid int, err error)
+}
+
+type builtProgram struct {
+	name string
+	path string
+}
+
+func parseBuiltPrograms(stdout string) []builtProgram {
+	var built []builtProgram
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "tillr-build: ") {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(line, "tillr-build: "))
+		if filepath.IsAbs(rest) {
+			built = append(built, builtProgram{
+				name: filepath.Base(rest),
+				path: rest,
+			})
+		}
+	}
+	return built
+}
+
+func checkPathMatchesBuilt(root, pathEnv string, built []builtProgram) error {
+	if len(built) == 0 {
+		return nil
+	}
+	type mismatch struct {
+		name     string
+		resolved string
+		built    string
+	}
+	var mismatches []mismatch
+	var binDir string
+	for _, bp := range built {
+		if binDir == "" {
+			binDir = filepath.Dir(bp.path)
+		}
+		resolved := lookPathInRoot(root, pathEnv, bp.name)
+		if resolved == "" {
+			mismatches = append(mismatches, mismatch{
+				name:     bp.name,
+				resolved: "not found",
+				built:    bp.path,
+			})
+			continue
+		}
+		if resolvePath(resolved) != resolvePath(bp.path) {
+			mismatches = append(mismatches, mismatch{
+				name:     bp.name,
+				resolved: resolved,
+				built:    bp.path,
+			})
+		}
+	}
+	if len(mismatches) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("restart: PATH does not resolve the programs just built (refusing before stopping anything):\n")
+	for _, m := range mismatches {
+		fmt.Fprintf(&b, "  %s: PATH resolved %s, built %s\n", m.name, m.resolved, m.built)
+	}
+	if binDir != "" {
+		fmt.Fprintf(&b, "prepend %s to PATH and retry: PATH=%s:$PATH", binDir, binDir)
+	}
+	return errors.New(strings.TrimSpace(b.String()))
+}
+
+func signalProcessSIGTERM(pid int, start string) error {
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		if errors.Is(err, unix.ESRCH) {
+			return nil
+		}
+		return err
+	}
+	defer unix.Close(pidfd)
+
+	info, ok := Process(pid)
+	if !ok || info.State == "Z" {
+		return nil
+	}
+	if start != "" && info.Start != start {
+		return nil
+	}
+	if err := unix.PidfdSendSignal(pidfd, unix.SIGTERM, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+		return err
+	}
+	return nil
+}
+
+func uniqueSortedPIDs(sets ...[]int) []int {
+	seen := make(map[int]struct{})
+	for _, s := range sets {
+		for _, pid := range s {
+			if pid > 0 {
+				seen[pid] = struct{}{}
+			}
+		}
+	}
+	out := make([]int, 0, len(seen))
+	for pid := range seen {
+		out = append(out, pid)
+	}
+	sort.Ints(out)
+	return out
 }
 
 var pathProgramNames = []string{
@@ -245,13 +380,40 @@ func lookPathInRoot(root, pathEnv, name string) string {
 	return ""
 }
 
-// RestartDrain stands the keeper down, stops the loop, builds if in a source checkout,
-// and restarts the keeper onto the available programs.
+// RestartDrain builds if in a source checkout (refusing before stopping anything if PATH
+// does not resolve the binaries just built), stands down every keeper and stops every loop
+// running in the checkout, and restarts the keeper onto the available programs.
 func RestartDrain(root string, extra []string, lockPath string, opts RestartOpts, out io.Writer) error {
-	findLoopFn := opts.FindLoopFn
-	if findLoopFn == nil {
-		findLoopFn = FindLoop
+	var findLoopsFn func(string) ([]int, error)
+	canRescanLoops := true
+	switch {
+	case opts.FindLoopsFn != nil:
+		findLoopsFn = opts.FindLoopsFn
+	case opts.FindLoopFn != nil:
+		canRescanLoops = false
+		findLoopsFn = func(r string) ([]int, error) {
+			pid, err := opts.FindLoopFn(r)
+			if err != nil {
+				return nil, err
+			}
+			if pid <= 0 {
+				return nil, nil
+			}
+			return []int{pid}, nil
+		}
+	default:
+		findLoopsFn = FindLoops
 	}
+
+	findKeepersFn := opts.FindKeepersFn
+	if findKeepersFn == nil {
+		if opts.StopKeeperFn != nil {
+			findKeepersFn = func(string) ([]int, error) { return nil, nil }
+		} else {
+			findKeepersFn = FindKeepers
+		}
+	}
+
 	loopArgvFn := opts.LoopArgvFn
 	if loopArgvFn == nil {
 		loopArgvFn = LoopArgv
@@ -264,14 +426,26 @@ func RestartDrain(root string, extra []string, lockPath string, opts RestartOpts
 	if waitKeeperExitFn == nil {
 		waitKeeperExitFn = WaitForKeeperExit
 	}
+	procFn := opts.WaitOpts.ProcessFn
+	if procFn == nil {
+		procFn = Process
+	}
+	signalProcFn := opts.SignalProcFn
+	if signalProcFn == nil {
+		if opts.WaitOpts.ProcessFn != nil {
+			signalProcFn = func(int, string) error { return nil }
+		} else {
+			signalProcFn = signalProcessSIGTERM
+		}
+	}
 	drainBin := opts.DrainBin
 	if drainBin == "" {
 		drainBin = "tillr-drain"
 	}
 	keeperBin := opts.KeeperBin
 	if keeperBin == "" {
-		// Resolve before step 4 so that if `tillr-build` replaces our binary in place,
-		// step 5 execs the newly installed path rather than "<path> (deleted)".
+		// Resolve before building so that if `tillr-build` replaces our binary in place,
+		// the relaunch execs the newly installed path rather than "<path> (deleted)".
 		if exe, err := os.Executable(); err == nil {
 			keeperBin = strings.TrimSuffix(exe, " (deleted)")
 		} else {
@@ -291,46 +465,19 @@ func RestartDrain(root string, extra []string, lockPath string, opts RestartOpts
 		startKeeperFn = defaultStartKeeper
 	}
 
-	// 1. Read policy and lane count from the running loop (if any) or recorded launch BEFORE stopping.
-	loopPID, err := findLoopFn(root)
+	// 1. Read policy and lane count from any running loop or recorded launch BEFORE stopping.
+	loopPIDs, err := findLoopsFn(root)
 	if err != nil {
 		return err
 	}
-	restartArgs, policy, lanes, hasPolicy, hasLanes, err := resolveRestartArgs(root, extra, loopPID, loopArgvFn)
+	restartArgs, policy, lanes, hasPolicy, hasLanes, err := resolveRestartArgs(root, extra, loopPIDs, loopArgvFn)
 	if err != nil {
 		return err
 	}
 
-	// 2. Stand the keeper down.
-	if err := stopKeeperFn(lockPath, out); err != nil {
-		return err
-	}
-	if err := waitKeeperExitFn(lockPath, 30*time.Second); err != nil {
-		return err
-	}
-
-	// 3. Stop the loop if running, and wait for it to exit.
-	if loopPID > 0 {
-		fmt.Fprintf(out, "restart: stopping loop %d\n", loopPID)
-		code, stdoutStr, stderrStr, err := runCmdFn([]string{drainBin, "stop", "--root", root}, "", nil)
-		if err != nil && code == -1 {
-			return err
-		}
-		if code != 0 && code != 2 {
-			detail := strings.TrimSpace(stderrStr)
-			if detail == "" {
-				detail = strings.TrimSpace(stdoutStr)
-			}
-			return fmt.Errorf("tillr-drain stop failed (%d): %s", code, detail)
-		}
-		WaitForExit(loopPID, opts.WaitOpts, out)
-		fmt.Fprintf(out, "restart: loop %d exited\n", loopPID)
-	} else {
-		fmt.Fprintln(out, "restart: no loop running")
-	}
-
-	// 4. A source checkout builds its own programs; a consumer uses the installed
-	// pack launchers on PATH, which build their rendered source when necessary.
+	// 2. A source checkout builds its own programs BEFORE stopping anything, and refuses
+	// before stopping anything if PATH does not resolve every binary just built.
+	// A consumer uses the installed pack launchers on PATH without building.
 	goModInfo, goModErr := os.Stat(filepath.Join(root, "tools", "tillr-drain", "go.mod"))
 	if len(opts.BuildCmd) > 0 || (goModErr == nil && !goModInfo.IsDir()) {
 		head, err := gitHeadFn(root)
@@ -359,6 +506,129 @@ func RestartDrain(root string, extra []string, lockPath string, opts RestartOpts
 			}
 			return fmt.Errorf("build command failed (%d): %s", code, detail)
 		}
+		built := parseBuiltPrograms(stdoutStr)
+		if err := checkPathMatchesBuilt(root, os.Getenv("PATH"), built); err != nil {
+			return err
+		}
+		for _, bp := range built {
+			if bp.name == "tillr-drain" {
+				if opts.KeeperBin == "" {
+					keeperBin = bp.path
+				}
+				if opts.DrainBin == "" {
+					drainBin = bp.path
+				}
+				break
+			}
+		}
+	}
+
+	// 3. Stand down every keeper running in this checkout.
+	if err := stopKeeperFn(lockPath, out); err != nil {
+		return err
+	}
+	if err := waitKeeperExitFn(lockPath, 30*time.Second); err != nil {
+		return err
+	}
+	keeperWaitOpts := opts.WaitOpts
+	if keeperWaitOpts.Timeout == 0 {
+		keeperWaitOpts.Timeout = 30 * time.Second
+	}
+	var stuckKeepers []int
+	extraKeepers, err := findKeepersFn(root)
+	if err != nil {
+		return err
+	}
+	for _, kpid := range extraKeepers {
+		info, ok := procFn(kpid)
+		if !ok || info.State == "Z" {
+			continue
+		}
+		fmt.Fprintf(out, "restart: stopping keeper %d\n", kpid)
+		if err := signalProcFn(kpid, info.Start); err != nil {
+			return err
+		}
+		if !waitForExit(kpid, "keeper", keeperWaitOpts, out) {
+			stuckKeepers = append(stuckKeepers, kpid)
+		} else {
+			fmt.Fprintf(out, "restart: keeper %d exited\n", kpid)
+		}
+	}
+
+	// 4. Stop every loop running in this checkout, and wait for all of them to exit.
+	if canRescanLoops {
+		if freshLoops, err := findLoopsFn(root); err == nil {
+			loopPIDs = uniqueSortedPIDs(loopPIDs, freshLoops)
+		}
+	}
+	var stuckLoops []int
+	if len(loopPIDs) > 0 {
+		type loopTarget struct {
+			pid   int
+			start string
+		}
+		targets := make([]loopTarget, 0, len(loopPIDs))
+		for _, pid := range loopPIDs {
+			var start string
+			if opts.WaitOpts.ProcessFn == nil || opts.SignalProcFn != nil {
+				info, ok := procFn(pid)
+				if opts.WaitOpts.ProcessFn == nil && (!ok || info.State == "Z") {
+					continue
+				}
+				start = info.Start
+			}
+			targets = append(targets, loopTarget{pid: pid, start: start})
+			fmt.Fprintf(out, "restart: stopping loop %d\n", pid)
+		}
+		if len(targets) > 0 {
+			code, stdoutStr, stderrStr, err := runCmdFn([]string{drainBin, "stop", "--root", root}, "", nil)
+			if err != nil && code == -1 {
+				return err
+			}
+			if code != 0 && code != 2 {
+				detail := strings.TrimSpace(stderrStr)
+				if detail == "" {
+					detail = strings.TrimSpace(stdoutStr)
+				}
+				return fmt.Errorf("tillr-drain stop failed (%d): %s", code, detail)
+			}
+			for _, t := range targets {
+				if err := signalProcFn(t.pid, t.start); err != nil {
+					return err
+				}
+			}
+			for _, t := range targets {
+				if waitForExit(t.pid, "loop", opts.WaitOpts, out) {
+					fmt.Fprintf(out, "restart: loop %d exited\n", t.pid)
+				} else {
+					stuckLoops = append(stuckLoops, t.pid)
+				}
+			}
+		} else {
+			fmt.Fprintln(out, "restart: no loop running")
+		}
+	} else {
+		fmt.Fprintln(out, "restart: no loop running")
+	}
+
+	// Verify no loop or keeper remains running before starting a new keeper.
+	if canRescanLoops {
+		if remainingLoops, err := findLoopsFn(root); err == nil && len(remainingLoops) > 0 {
+			stuckLoops = uniqueSortedPIDs(stuckLoops, remainingLoops)
+		}
+	}
+	if remainingKeepers, err := findKeepersFn(root); err == nil && len(remainingKeepers) > 0 {
+		stuckKeepers = uniqueSortedPIDs(stuckKeepers, remainingKeepers)
+	}
+	if len(stuckLoops) > 0 || len(stuckKeepers) > 0 {
+		var parts []string
+		if len(stuckLoops) > 0 {
+			parts = append(parts, fmt.Sprintf("loops %v", stuckLoops))
+		}
+		if len(stuckKeepers) > 0 {
+			parts = append(parts, fmt.Sprintf("keepers %v", stuckKeepers))
+		}
+		return fmt.Errorf("restart: refusing to start new keeper while %s still running in %s", strings.Join(parts, " and "), root)
 	}
 
 	// PATH entries are interpreted in the keeper's working directory, not ours.

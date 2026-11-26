@@ -21,12 +21,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr/settings"
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
@@ -40,8 +42,12 @@ type ProcInfo struct {
 }
 
 var (
-	drainNameRE = regexp.MustCompile(`^tillr-drain(?:-[0-9a-f]+)?$`)
-	drainCommRE = regexp.MustCompile(`^tillr-drain(?:-[0-9a-f]{3})?$`)
+	// Matches tillr-drain, pack cached binaries (tillr-drain-<digest>),
+	// pack fast-path symlinks (current-tillr-drain-<digest>), and versioned/suffixed copies.
+	drainNameRE = regexp.MustCompile(`^(?:current-)?tillr-drain(?:-[0-9a-zA-Z._-]+)?$`)
+	// Linux /proc/<pid>/comm is truncated to 15 bytes:
+	// "tillr-drain", "tillr-drain-..." (up to 3 suffix bytes), or "current-tillr-d".
+	drainCommRE = regexp.MustCompile(`^(?:tillr-drain(?:-.{1,3})?|current-tillr-d)$`)
 )
 
 // Process returns the kernel name, birth time, and state for pid, or false after exit.
@@ -127,17 +133,30 @@ func resolvePath(p string) string {
 
 // IsLoopFace reports whether pid's arguments are `tillr-drain loop` for root, read from /proc cmdline.
 func IsLoopFace(pid int, root string) bool {
+	procCwd, _ := filepath.EvalSymlinks(filepath.Join("/proc", strconv.Itoa(pid), "cwd"))
+	_, ok := isFaceForRoot(pid, procCwd, root, "loop")
+	return ok
+}
+
+func isFaceForRoot(pid int, procCwd, root, wantFace string) ([]string, bool) {
 	rest, ok := LoopArgv(pid)
-	if !ok || len(rest) == 0 || rest[0] != "loop" {
-		return false
+	if !ok || len(rest) == 0 || rest[0] != wantFace {
+		return nil, false
 	}
 	named := ""
 	hasNamed := false
 	for i := 1; i < len(rest); i++ {
 		arg := rest[i]
+		if wantFace == "keep" && arg == "--" {
+			break
+		}
+		if wantFace == "keep" && (arg == "--stop" || arg == "-stop" || arg == "--restart" || arg == "-restart" || arg == "--help" || arg == "-help" || arg == "-h") {
+			return nil, false
+		}
 		if (arg == "--root" || arg == "-root") && i+1 < len(rest) {
 			named = rest[i+1]
 			hasNamed = true
+			i++
 		} else if strings.HasPrefix(arg, "--root=") {
 			named = strings.TrimPrefix(arg, "--root=")
 			hasNamed = true
@@ -146,14 +165,35 @@ func IsLoopFace(pid int, root string) bool {
 			hasNamed = true
 		}
 	}
+	resolvedRoot := resolvePath(root)
 	if !hasNamed {
-		return true
+		return rest, procCwd != "" && procCwd == resolvedRoot
 	}
 	target := named
 	if !filepath.IsAbs(target) {
-		target = filepath.Join(root, target)
+		base := procCwd
+		if base == "" {
+			base = root
+		}
+		target = filepath.Join(base, target)
 	}
-	return resolvePath(target) == resolvePath(root)
+	return rest, resolvePath(target) == resolvedRoot
+}
+
+func procExeBase(pid int) string {
+	exe, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+	if err != nil {
+		return ""
+	}
+	exe = strings.TrimSuffix(exe, " (deleted)")
+	return filepath.Base(exe)
+}
+
+func isDrainProcess(pid int, info ProcInfo) bool {
+	if drainCommRE.MatchString(info.Comm) {
+		return true
+	}
+	return drainNameRE.MatchString(procExeBase(pid))
 }
 
 // ExtractPolicyAndLanes extracts --policy and --max-agents/--lanes values from loop arguments.
@@ -293,18 +333,64 @@ func LaunchExtraForAttempt(root string, extra []string, sessionStart time.Time, 
 	return out
 }
 
-// FindLoop finds this user's own-named drain in this checkout, not another repository.
-func FindLoop(root string) (int, error) {
+func liveSessionLoopPIDs(root string) []int {
+	dbPath := filepath.Join(root, ".tillr", "state.db")
+	info, err := os.Stat(dbPath)
+	if err != nil || info.IsDir() {
+		return nil
+	}
+	here, err := presence.CurrentOwner()
+	if err != nil {
+		return nil
+	}
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(1000)", dbPath)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT loop_owner FROM drain_sessions WHERE ended_at IS NULL AND loop_owner IS NOT NULL`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	selfPID := os.Getpid()
+	var pids []int
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			continue
+		}
+		var owner presence.Owner
+		if err := json.Unmarshal(raw, &owner); err != nil {
+			continue
+		}
+		if owner.PID <= 0 || owner.PID == selfPID || owner.Domain != here.Domain || owner.UID != here.UID {
+			continue
+		}
+		dead, err := presence.OwnerDead(&owner, here)
+		if err != nil || dead {
+			continue
+		}
+		pids = append(pids, owner.PID)
+	}
+	return pids
+}
+
+func findDrainProcesses(root, face string) ([]int, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	uid := uint32(os.Getuid())
+	selfPID := os.Getpid()
 	resolvedRoot := resolvePath(root)
-	var found []int
+	seen := make(map[int]struct{})
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid <= 0 {
+		if err != nil || pid <= 0 || pid == selfPID {
 			continue
 		}
 		dir := filepath.Join("/proc", entry.Name())
@@ -317,18 +403,47 @@ func FindLoop(root string) (int, error) {
 			continue
 		}
 		info, ok := Process(pid)
-		// The pack execs tillr-drain-<source digest>; Linux exposes only the
-		// first 15 bytes of that executable name (three digest characters).
-		if !ok || !drainCommRE.MatchString(info.Comm) || info.State == "Z" {
+		if !ok || info.State == "Z" {
 			continue
 		}
-		cwd, err := filepath.EvalSymlinks(filepath.Join(dir, "cwd"))
-		if err != nil || cwd != resolvedRoot {
+		procCwd, _ := filepath.EvalSymlinks(filepath.Join(dir, "cwd"))
+		if !isDrainProcess(pid, info) && procCwd != resolvedRoot {
 			continue
 		}
-		if IsLoopFace(pid, root) {
-			found = append(found, pid)
+		if _, ok := isFaceForRoot(pid, procCwd, root, face); ok {
+			seen[pid] = struct{}{}
 		}
+	}
+	if face == "loop" {
+		for _, pid := range liveSessionLoopPIDs(root) {
+			seen[pid] = struct{}{}
+		}
+	}
+	pids := make([]int, 0, len(seen))
+	for pid := range seen {
+		pids = append(pids, pid)
+	}
+	sort.Ints(pids)
+	return pids, nil
+}
+
+// FindLoops finds all of this user's drain loops running in this checkout,
+// regardless of which binary path or pack launcher cache entry they run from.
+func FindLoops(root string) ([]int, error) {
+	return findDrainProcesses(root, "loop")
+}
+
+// FindKeepers finds all of this user's running drain keepers for this checkout
+// (excluding the current process and one-shot --stop/--restart invocations).
+func FindKeepers(root string) ([]int, error) {
+	return findDrainProcesses(root, "keep")
+}
+
+// FindLoop finds this user's own-named drain in this checkout, not another repository.
+func FindLoop(root string) (int, error) {
+	found, err := FindLoops(root)
+	if err != nil {
+		return 0, err
 	}
 	if len(found) > 1 {
 		return 0, fmt.Errorf("multiple tillr-drain processes in %s: %v; stop the extra loops first", root, found)
