@@ -279,6 +279,32 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		if err != nil {
 			return c, false, err
 		}
+		var liveFaces []*runFaceOwner
+		if rec == nil && l.cfg.Restart != nil {
+			here, err := currentLoopOwner()
+			if err != nil {
+				return c, false, err
+			}
+			liveFaces, err = liveRunFaces(l.cfg.Store, receipt.Request.RunID, here)
+			if err != nil {
+				return c, false, err
+			}
+			if len(liveFaces) == 0 {
+				db, err := store.OpenRead(ctx, l.cfg.Store)
+				if err != nil {
+					return c, false, err
+				}
+				err = db.ReadTx(ctx, func(r *store.Reader) error {
+					var err error
+					rec, err = terminalRecord(r, receipt.Request.RunID)
+					return err
+				})
+				db.Close()
+				if err != nil {
+					return c, false, err
+				}
+			}
+		}
 		evalPath := l.judgeEvalOutputPath(c.LaneID, receipt.Request.RunID)
 		_, evalStatErr := os.Stat(evalPath)
 		evalMissing := os.IsNotExist(evalStatErr)
@@ -368,21 +394,12 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			replacementRequest = &req
 			receipt = nil
 		} else if l.cfg.Restart != nil {
-			// A finished judge's output is retained. Only an interrupted session is
-			// repeated, never translated into a failure or a spent attempt.
-			missing := false
-			if rec == nil && receipt.Build == buildHash {
-				here, err := currentLoopOwner()
-				if err != nil {
-					return c, false, err
-				}
-				faces, err := liveRunFaces(l.cfg.Store, receipt.Request.RunID, here)
-				if err != nil {
-					return c, false, err
-				}
-				missing = len(faces) == 0
-			}
-			interrupted := receipt.Build != buildHash && (rec == nil || (rec.State != run.StatePaused && (rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart)))
+			// A finished judge's output is retained, and a live judge or re-judgment
+			// run continues across restarts so the new loop adopts its terminal record
+			// and verdict. Only an interrupted or vanished session is repeated, never
+			// translated into a failure or a spent attempt.
+			missing := rec == nil && len(liveFaces) == 0
+			interrupted := receipt.Build != buildHash && rec != nil && rec.State != run.StatePaused && (rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart)
 			if interrupted || missing {
 				if err := l.interruptBuildRun(receipt.Request.RunID); err != nil {
 					return c, false, err
