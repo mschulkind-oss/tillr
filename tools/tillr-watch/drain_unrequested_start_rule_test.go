@@ -61,6 +61,7 @@ func TestDrainUnrequestedStartRule(t *testing.T) {
 		"deliberate first launch",
 		".tillr/loop/drain-",
 		"loop: stopped by the operator",
+		"session_relaunch",
 	} {
 		if !strings.Contains(joinedCheck, want) {
 			t.Fatalf("%s guidance.check missing %q: %q", id, want, joinedCheck)
@@ -83,6 +84,7 @@ func TestDrainUnrequestedStartRule(t *testing.T) {
 		{"requested", `{"role":"drain","restart_request":"restart-drain-1"}`, 0},
 		{"stopped", `{"role":"drain","stop_request":"stop-drain-1"}`, 0},
 		{"initial", `{"role":"drain","initial":true}`, 0},
+		{"session relaunch", `{"role":"drain","session_relaunch":true,"prior_domain":"prev-boot:pid:[1]"}`, 0},
 		{"view start", `{"role":"view"}`, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -79,7 +79,17 @@ through three append-only event kinds and no table of its own:
   `superseded`.
 - **`drain.build-started`** (`PublishBuild`, read by `ReadBuild`) records the
   build a loop or observatory is running each time one starts or completes a
-  restart.
+  restart. For role `drain`, `publishDrainBuild` mints `session_id` and holds
+  `<canonical_store>.loops/<hash>.present` open for writing before opening its
+  write transaction, and `BuildFact` also records start provenance:
+  `restart_request` (in-place restart request ID), `stop_request` (preceding
+  unconsumed `drain.stop-requested` ID or `"drain_sessions"` pre-event fallback),
+  `initial` (`true` on the first drain start in a store with no prior drain
+  build or session), `session_id`, `loop_owner` (`{pid, start, domain, uid}`),
+  `session_relaunch` (`true` when started in a new process domain after a dead
+  prior foreign-domain loop with no prior `drain.loop-ended` `stop == "fault"`,
+  no `restart_request`, and no `stop_request`), and `prior_domain` (the prior
+  loop's process domain when `session_relaunch` is `true`).
 
 ### Resolving and comparing the candidate binary
 

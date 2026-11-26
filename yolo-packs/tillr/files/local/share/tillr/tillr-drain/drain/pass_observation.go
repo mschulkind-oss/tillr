@@ -24,15 +24,14 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 		next = time.UnixMilli(l.sessionNextPass)
 	}
 	l.sessionNextPass = next.UnixMilli()
-	if l.sessionID == "" {
-		id, err := NewSessionID()
-		if err != nil {
-			return err
-		}
-		l.mu.Lock()
-		l.sessionID, l.sessionStarted = id, at.UnixMilli()
-		l.mu.Unlock()
+	if _, err := l.ensureSessionID(at); err != nil {
+		return err
 	}
+	l.mu.Lock()
+	if l.sessionStarted == 0 {
+		l.sessionStarted = at.UnixMilli()
+	}
+	l.mu.Unlock()
 	// Only a successful first refresh proves this Loop initialized all registered
 	// owners and legacy data. Later heartbeats open that existing store, not a
 	// globally version-skipped migration path.
@@ -103,6 +102,30 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 		}
 	}
 	return err
+}
+
+func (l *Loop) ensureSessionID(at time.Time) (string, error) {
+	l.mu.Lock()
+	id := l.sessionID
+	l.mu.Unlock()
+	if id != "" {
+		return id, nil
+	}
+	id, err := NewSessionID()
+	if err != nil {
+		return "", err
+	}
+	l.mu.Lock()
+	if l.sessionID == "" {
+		l.sessionID = id
+		if l.sessionStarted == 0 {
+			l.sessionStarted = at.UTC().UnixMilli()
+		}
+	} else {
+		id = l.sessionID
+	}
+	l.mu.Unlock()
+	return id, nil
 }
 
 func (l *Loop) currentSessionID() string {

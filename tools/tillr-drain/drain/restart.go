@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/alarms"
+	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -55,26 +56,41 @@ func (l *Loop) restarter() *restart.Restarter {
 }
 
 func (l *Loop) publishDrainBuild(ctx context.Context) error {
+	now := l.cfg.Now().UTC()
+	sessionID, err := l.ensureSessionID(now)
+	if err != nil {
+		return err
+	}
+	here, err := currentLoopOwner()
+	if err != nil {
+		return err
+	}
 	fact := restart.BuildFact{
 		Role: restart.RoleDrain, Revision: l.build.Revision, Time: l.build.Time,
 		Modified: l.build.Modified, Digest: l.build.Digest, Executable: l.build.Executable,
-		PID: os.Getpid(), At: l.cfg.Now().UTC(),
+		PID: os.Getpid(), At: now,
 		RestartRequest: os.Getenv(restart.RequestEnv),
+		SessionID:      sessionID,
+		LoopOwner:      here,
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
+	if err := holdLoopPresence(l.cfg.Store); err != nil {
+		return err
+	}
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		if fact.RestartRequest == "" {
 			r := tx.Reader()
+			var seq int64
 			var kind string
 			var payload []byte
 			err := r.QueryRow(
-				`SELECT kind, payload FROM events WHERE kind = ? OR (kind = ? AND json_extract(payload, '$.role') = ?) ORDER BY seq DESC LIMIT 1`,
+				`SELECT seq, kind, payload FROM events WHERE kind = ? OR (kind = ? AND json_extract(payload, '$.role') = ?) ORDER BY seq DESC LIMIT 1`,
 				StopRequestedKind, restart.BuildKind, restart.RoleDrain,
-			).Scan(&kind, &payload)
+			).Scan(&seq, &kind, &payload)
 			switch {
 			case err == nil && kind == StopRequestedKind:
 				var stop struct {
@@ -89,12 +105,25 @@ func (l *Loop) publishDrainBuild(ctx context.Context) error {
 					fact.StopRequest = "stop-drain"
 				}
 			case err == nil:
-				// Prior drain build-started with no intervening stop request.
+				var prevBuild restart.BuildFact
+				if err := json.Unmarshal(payload, &prevBuild); err != nil {
+					return err
+				}
+				relaunch, priorDomain, err := l.classifySessionRelaunch(r, now, here, seq, &prevBuild)
+				if err != nil {
+					return err
+				}
+				fact.SessionRelaunch = relaunch
+				fact.PriorDomain = priorDomain
 			case errors.Is(err, sql.ErrNoRows):
+				var prevSessionID string
 				var stopRequested int
+				var ownerRaw sql.NullString
+				var nextPassAt sql.NullInt64
+				var endedAt sql.NullInt64
 				sErr := r.QueryRow(
-					`SELECT COALESCE(stop_requested, 0) FROM drain_sessions ORDER BY started_at DESC, rowid DESC LIMIT 1`,
-				).Scan(&stopRequested)
+					`SELECT session_id, COALESCE(stop_requested, 0), loop_owner, next_pass_at, ended_at FROM drain_sessions ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+				).Scan(&prevSessionID, &stopRequested, &ownerRaw, &nextPassAt, &endedAt)
 				switch {
 				case errors.Is(sErr, sql.ErrNoRows):
 					fact.Initial = true
@@ -102,6 +131,20 @@ func (l *Loop) publishDrainBuild(ctx context.Context) error {
 					return sErr
 				case stopRequested > 0:
 					fact.StopRequest = "drain_sessions"
+				default:
+					var prevOwner *presence.Owner
+					if ownerRaw.Valid && ownerRaw.String != "" {
+						var parsed presence.Owner
+						if err := json.Unmarshal([]byte(ownerRaw.String), &parsed); err == nil {
+							prevOwner = &parsed
+						}
+					}
+					relaunch, priorDomain, err := l.classifySessionRelaunchState(r, now, here, false, 0, prevSessionID, prevOwner, true, nextPassAt, endedAt)
+					if err != nil {
+						return err
+					}
+					fact.SessionRelaunch = relaunch
+					fact.PriorDomain = priorDomain
 				}
 			default:
 				return err
@@ -109,6 +152,105 @@ func (l *Loop) publishDrainBuild(ctx context.Context) error {
 		}
 		return restart.PublishBuildTx(tx, fact)
 	})
+}
+
+func (l *Loop) classifySessionRelaunch(r *store.Reader, now time.Time, here *presence.Owner, prevSeq int64, prevBuild *restart.BuildFact) (bool, string, error) {
+	prevSessionID := prevBuild.SessionID
+	prevOwner := prevBuild.LoopOwner
+	var hasSessionRow bool
+	var nextPassAt, endedAt sql.NullInt64
+	if prevOwner == nil {
+		var rowSessionID string
+		var ownerRaw sql.NullString
+		err := r.QueryRow(
+			`SELECT session_id, loop_owner, next_pass_at, ended_at FROM drain_sessions ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+		).Scan(&rowSessionID, &ownerRaw, &nextPassAt, &endedAt)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, "", err
+		}
+		if err == nil {
+			if prevSessionID == "" {
+				prevSessionID = rowSessionID
+			}
+			if ownerRaw.Valid && ownerRaw.String != "" {
+				var parsed presence.Owner
+				if err := json.Unmarshal([]byte(ownerRaw.String), &parsed); err == nil {
+					prevOwner = &parsed
+				}
+			}
+			if rowSessionID == prevSessionID {
+				hasSessionRow = true
+			}
+		}
+	}
+	return l.classifySessionRelaunchState(r, now, here, true, prevSeq, prevSessionID, prevOwner, hasSessionRow, nextPassAt, endedAt)
+}
+
+func (l *Loop) classifySessionRelaunchState(r *store.Reader, now time.Time, here *presence.Owner, hasPrevBuild bool, prevSeq int64, prevSessionID string, prevOwner *presence.Owner, hasSessionRow bool, nextPassAt, endedAt sql.NullInt64) (bool, string, error) {
+	if prevOwner == nil || prevOwner.Domain == "" || here == nil || here.Domain == "" || prevOwner.Domain == here.Domain {
+		return false, "", nil
+	}
+	var faulted int
+	var faultErr error
+	if hasPrevBuild {
+		faultErr = r.QueryRow(
+			`SELECT 1 FROM events WHERE kind = ? AND json_extract(payload, '$.stop') = 'fault' AND (seq > ? OR (? != '' AND json_extract(payload, '$.session_id') = ?)) LIMIT 1`,
+			loopEndedKind, prevSeq, prevSessionID, prevSessionID,
+		).Scan(&faulted)
+	} else if prevSessionID != "" {
+		faultErr = r.QueryRow(
+			`SELECT 1 FROM events WHERE kind = ? AND json_extract(payload, '$.stop') = 'fault' AND json_extract(payload, '$.session_id') = ? LIMIT 1`,
+			loopEndedKind, prevSessionID,
+		).Scan(&faulted)
+	} else {
+		faultErr = r.QueryRow(
+			`SELECT 1 FROM events WHERE kind = ? AND json_extract(payload, '$.stop') = 'fault' LIMIT 1`,
+			loopEndedKind,
+		).Scan(&faulted)
+	}
+	if faultErr == nil {
+		return false, "", nil
+	}
+	if !errors.Is(faultErr, sql.ErrNoRows) {
+		return false, "", faultErr
+	}
+	if !presence.SameBoot(prevOwner.Domain, here.Domain) {
+		return true, prevOwner.Domain, nil
+	}
+	if !hasSessionRow && prevSessionID != "" {
+		err := r.QueryRow(
+			`SELECT next_pass_at, ended_at FROM drain_sessions WHERE session_id = ? LIMIT 1`,
+			prevSessionID,
+		).Scan(&nextPassAt, &endedAt)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, "", err
+		}
+		hasSessionRow = err == nil
+	}
+	if hasSessionRow && endedAt.Valid {
+		return true, prevOwner.Domain, nil
+	}
+	identity, err := processStoreIdentity(l.cfg.Store)
+	if err != nil {
+		return false, "", err
+	}
+	state, err := openForWriting(loopPresencePath(identity, *prevOwner))
+	if err != nil {
+		return false, "", err
+	}
+	switch state {
+	case streamUnwritten:
+		return true, prevOwner.Domain, nil
+	case streamWritten:
+		return false, "", nil
+	case streamAbsent:
+		if hasSessionRow && nextPassAt.Valid && now.UnixMilli() > nextPassAt.Int64+SessionGrace.Milliseconds() {
+			return true, prevOwner.Domain, nil
+		}
+		return false, "", nil
+	default:
+		return false, "", nil
+	}
 }
 
 // adoptRestart publishes the live build and answers only the request carried across exec.

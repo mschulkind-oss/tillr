@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -593,6 +594,15 @@ type BuildFact struct {
 	StopRequest string `json:"stop_request,omitempty"`
 	// Initial is true on the first drain start in a store with no prior drain build or session.
 	Initial bool `json:"initial,omitempty"`
+	// SessionID is the drain loop's session identifier, minted at startup.
+	SessionID string `json:"session_id,omitempty"`
+	// LoopOwner identifies the process and process domain of the loop that started.
+	LoopOwner *presence.Owner `json:"loop_owner,omitempty"`
+	// SessionRelaunch is true when this drain start follows a dead prior foreign-domain
+	// loop that ended without a recorded loop fault, stop request, or restart request.
+	SessionRelaunch bool `json:"session_relaunch,omitempty"`
+	// PriorDomain is the prior loop's process domain when SessionRelaunch is true.
+	PriorDomain string `json:"prior_domain,omitempty"`
 }
 
 // PublishBuildTx records the running build of one role inside an open write transaction.

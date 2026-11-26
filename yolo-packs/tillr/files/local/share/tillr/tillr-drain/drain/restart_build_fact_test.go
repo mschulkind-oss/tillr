@@ -8,14 +8,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/storelog"
+	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 type recordedBuildFields struct {
-	restartVal, restartType sql.NullString
-	stopVal, stopType       sql.NullString
-	initialVal, initialType sql.NullString
+	restartVal, restartType   sql.NullString
+	stopVal, stopType         sql.NullString
+	initialVal, initialType   sql.NullString
+	sessionVal, sessionType   sql.NullString
+	ownerVal, ownerType       sql.NullString
+	relaunchVal, relaunchType sql.NullString
+	priorVal, priorType       sql.NullString
 }
 
 func readLatestDrainBuildFields(t *testing.T, storePath string) recordedBuildFields {
@@ -27,12 +33,20 @@ func readLatestDrainBuildFields(t *testing.T, storePath string) recordedBuildFie
 		return r.QueryRow(`SELECT
 			json_extract(payload, '$.restart_request'), json_type(payload, '$.restart_request'),
 			json_extract(payload, '$.stop_request'), json_type(payload, '$.stop_request'),
-			json_extract(payload, '$.initial'), json_type(payload, '$.initial')
+			json_extract(payload, '$.initial'), json_type(payload, '$.initial'),
+			json_extract(payload, '$.session_id'), json_type(payload, '$.session_id'),
+			json_extract(payload, '$.loop_owner'), json_type(payload, '$.loop_owner'),
+			json_extract(payload, '$.session_relaunch'), json_type(payload, '$.session_relaunch'),
+			json_extract(payload, '$.prior_domain'), json_type(payload, '$.prior_domain')
 			FROM events WHERE kind=? AND json_extract(payload, '$.role')=? ORDER BY seq DESC LIMIT 1`,
 			restart.BuildKind, restart.RoleDrain).Scan(
 			&got.restartVal, &got.restartType,
 			&got.stopVal, &got.stopType,
 			&got.initialVal, &got.initialType,
+			&got.sessionVal, &got.sessionType,
+			&got.ownerVal, &got.ownerType,
+			&got.relaunchVal, &got.relaunchType,
+			&got.priorVal, &got.priorType,
 		)
 	}); err != nil {
 		t.Fatal(err)
@@ -232,4 +246,236 @@ func TestDrainBuildStartedPreEventSessionFallback(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDrainBuildStartedRecordsSessionIDAndLoopOwnerBeforeRefresh(t *testing.T) {
+	ctx := context.Background()
+	h := newRestartHarness(t, []byte("drain build"), nil)
+	t.Setenv(restart.RequestEnv, "")
+
+	if err := h.l.adoptRestart(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h.l.sessionID == "" {
+		t.Fatal("adoptRestart did not mint Loop.sessionID")
+	}
+	got := readLatestDrainBuildFields(t, h.f.storePath)
+	if got.sessionType.String != "text" || got.sessionVal.String != h.l.sessionID {
+		t.Fatalf("build-started session_id = %s %q, want %q", got.sessionType.String, got.sessionVal.String, h.l.sessionID)
+	}
+	if got.ownerType.String != "object" {
+		t.Fatalf("build-started loop_owner type = %q, want object", got.ownerType.String)
+	}
+	var recordedOwner presence.Owner
+	if err := json.Unmarshal([]byte(got.ownerVal.String), &recordedOwner); err != nil {
+		t.Fatal(err)
+	}
+	here, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recordedOwner != *here {
+		t.Fatalf("build-started loop_owner = %+v, want %+v", recordedOwner, *here)
+	}
+	identity, err := processStoreIdentity(h.f.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state, err := openForWriting(loopPresencePath(identity, *here)); err != nil || state != streamWritten {
+		t.Fatalf("presence file before refreshSession = (%v, %v), want (%v, nil)", state, err, streamWritten)
+	}
+
+	firstID := h.l.sessionID
+	if err := h.l.refreshSession(ctx, h.l.cfg.Now().Add(PassInterval)); err != nil {
+		t.Fatal(err)
+	}
+	if h.l.sessionID != firstID {
+		t.Fatalf("refreshSession changed sessionID from %q to %q", firstID, h.l.sessionID)
+	}
+}
+
+func TestDrainBuildStartedSessionRelaunchProvenance(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(restart.RequestEnv, "")
+
+	publishPrior := func(t *testing.T, f refusalLoopFixture, sessionID string, owner *presence.Owner) {
+		t.Helper()
+		if err := restart.PublishBuild(ctx, f.storePath, restart.BuildFact{
+			Role: restart.RoleDrain, Revision: "prior-rev", Digest: "prior-digest",
+			Executable: "/bin/tillr-drain", PID: 12345, At: stopClock.Add(-time.Minute),
+			SessionID: sessionID, LoopOwner: owner,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("dead foreign domain with unwritten presence file", func(t *testing.T) {
+		h := newRestartHarness(t, []byte("drain build"), nil)
+		prev := foreignOwner(t)
+		identity, err := processStoreIdentity(h.f.storePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pf, err := openLoopPresence(identity, prev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pf.Close(); err != nil {
+			t.Fatal(err)
+		}
+		publishPrior(t, h.f, "prior-foreign-dead", &prev)
+
+		if err := h.l.adoptRestart(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got := readLatestDrainBuildFields(t, h.f.storePath)
+		if got.relaunchType.String != "true" || got.priorVal.String != prev.Domain {
+			t.Fatalf("dead foreign domain provenance = %+v, want session_relaunch=true prior_domain=%q", got, prev.Domain)
+		}
+	})
+
+	t.Run("dead foreign domain across reboot", func(t *testing.T) {
+		h := newRestartHarness(t, []byte("drain build"), nil)
+		prev := foreignOwner(t)
+		prev.Domain = "other-boot:pid:[1]"
+		publishPrior(t, h.f, "prior-reboot", &prev)
+
+		if err := h.l.adoptRestart(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got := readLatestDrainBuildFields(t, h.f.storePath)
+		if got.relaunchType.String != "true" || got.priorVal.String != prev.Domain {
+			t.Fatalf("reboot provenance = %+v, want session_relaunch=true prior_domain=%q", got, prev.Domain)
+		}
+	})
+
+	t.Run("dead foreign domain with ended_at set", func(t *testing.T) {
+		h := newRestartHarness(t, []byte("drain build"), nil)
+		prev := foreignOwner(t)
+		publishPrior(t, h.f, "prior-ended", &prev)
+		insertSession(t, h.f, "prior-ended", prev, stopClock.Add(time.Minute))
+		fixtureWrite(t, h.f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE drain_sessions SET ended_at = ? WHERE session_id = 'prior-ended'`, stopClock.Add(-time.Second).UnixMilli())
+			return err
+		})
+
+		if err := h.l.adoptRestart(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got := readLatestDrainBuildFields(t, h.f.storePath)
+		if got.relaunchType.String != "true" || got.priorVal.String != prev.Domain {
+			t.Fatalf("ended foreign session provenance = %+v, want session_relaunch=true prior_domain=%q", got, prev.Domain)
+		}
+	})
+
+	t.Run("pre-upgrade drain_sessions stale heartbeat fallback", func(t *testing.T) {
+		for _, withBuildEvent := range []bool{true, false} {
+			name := "pre-event store"
+			if withBuildEvent {
+				name = "pre-loop_owner build event"
+			}
+			t.Run(name, func(t *testing.T) {
+				h := newRestartHarness(t, []byte("drain build"), nil)
+				h.l.cfg.Now = func() time.Time { return stopClock }
+				prev := foreignOwner(t)
+				if withBuildEvent {
+					publishPrior(t, h.f, "", nil)
+				}
+				staleNextPass := stopClock.Add(-SessionGrace - time.Millisecond)
+				insertSession(t, h.f, "legacy-foreign", prev, staleNextPass)
+
+				if err := h.l.adoptRestart(ctx); err != nil {
+					t.Fatal(err)
+				}
+				got := readLatestDrainBuildFields(t, h.f.storePath)
+				if got.relaunchType.String != "true" || got.priorVal.String != prev.Domain {
+					t.Fatalf("stale fallback provenance = %+v, want session_relaunch=true prior_domain=%q", got, prev.Domain)
+				}
+			})
+		}
+	})
+
+	t.Run("same domain unstopped restart stays unrequested", func(t *testing.T) {
+		h := newRestartHarness(t, []byte("drain build"), nil)
+		here, err := currentLoopOwner()
+		if err != nil {
+			t.Fatal(err)
+		}
+		publishPrior(t, h.f, "prior-same-domain", here)
+
+		if err := h.l.adoptRestart(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got := readLatestDrainBuildFields(t, h.f.storePath)
+		if got.relaunchType.Valid || got.priorType.Valid {
+			t.Fatalf("same-domain unstopped restart = %+v, want session_relaunch and prior_domain omitted", got)
+		}
+	})
+
+	t.Run("prior fault in dead foreign domain stays unrequested", func(t *testing.T) {
+		h := newRestartHarness(t, []byte("drain build"), nil)
+		prev := foreignOwner(t)
+		identity, err := processStoreIdentity(h.f.storePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pf, err := openLoopPresence(identity, prev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pf.Close(); err != nil {
+			t.Fatal(err)
+		}
+		publishPrior(t, h.f, "prior-faulted", &prev)
+		storelog.RecordLoopEnded(h.f.storePath, true, "prior-faulted", "fault", "boom", 1, "", "", stopClock.Add(-time.Second), nil)
+
+		if err := h.l.adoptRestart(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got := readLatestDrainBuildFields(t, h.f.storePath)
+		if got.relaunchType.Valid || got.priorType.Valid {
+			t.Fatalf("prior faulted foreign domain = %+v, want session_relaunch and prior_domain omitted", got)
+		}
+	})
+
+	t.Run("live foreign loop collision stays unrequested", func(t *testing.T) {
+		t.Run("streamWritten", func(t *testing.T) {
+			h := newRestartHarness(t, []byte("drain build"), nil)
+			prev := foreignOwner(t)
+			identity, err := processStoreIdentity(h.f.storePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pf, err := openLoopPresence(identity, prev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { pf.Close() })
+			publishPrior(t, h.f, "prior-live-written", &prev)
+
+			if err := h.l.adoptRestart(ctx); err != nil {
+				t.Fatal(err)
+			}
+			got := readLatestDrainBuildFields(t, h.f.storePath)
+			if got.relaunchType.Valid || got.priorType.Valid {
+				t.Fatalf("live foreign loop (streamWritten) = %+v, want session_relaunch and prior_domain omitted", got)
+			}
+		})
+
+		t.Run("streamAbsent with current heartbeat", func(t *testing.T) {
+			h := newRestartHarness(t, []byte("drain build"), nil)
+			h.l.cfg.Now = func() time.Time { return stopClock }
+			prev := foreignOwner(t)
+			publishPrior(t, h.f, "prior-live-heartbeat", &prev)
+			insertSession(t, h.f, "prior-live-heartbeat", prev, stopClock.Add(-SessionGrace))
+
+			if err := h.l.adoptRestart(ctx); err != nil {
+				t.Fatal(err)
+			}
+			got := readLatestDrainBuildFields(t, h.f.storePath)
+			if got.relaunchType.Valid || got.priorType.Valid {
+				t.Fatalf("live foreign loop (current heartbeat) = %+v, want session_relaunch and prior_domain omitted", got)
+			}
+		})
+	})
 }

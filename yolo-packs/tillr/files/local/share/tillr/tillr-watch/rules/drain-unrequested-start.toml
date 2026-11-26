@@ -13,7 +13,7 @@ events = ["drain.build-started"]
 [rule.when]
 group_by = "global"
 pattern = "predicate_match"
-match = 'event.role == "drain" and empty(event.restart_request) and empty(event.stop_request) and not (event.initial == true)'
+match = 'event.role == "drain" and empty(event.restart_request) and empty(event.stop_request) and not (event.initial == true) and not (event.session_relaunch == true)'
 window = "1h"
 
 [rule.guidance]
@@ -21,6 +21,7 @@ summary = "The drain loop started after a previous loop ended without a recorded
 check = [
   "Check the keeper output (.tillr/keeper.log or tillr-drain keep) for 'keeper: loop exited; restart in <seconds>s' before 'keeper: started loop <pid>' or a fresh 'keeper: started loop <pid>' / 'keeper: watching loop <pid>' with no preceding 'restart: stopping loop <pid>' or 'keeper: stopped; loop left running', versus a deliberate first launch with no prior unstopped loop.",
   "Check the previous loop's log and newest .tillr/loop/drain-<stamp>.json for a fault exit ('loop: stopped after ...: fault', drain.loop-ended) or an abrupt mid-run cutoff missing 'loop: stopped by the operator' ('\"stop\": \"operator-stop\"').",
+  "Starts with session_relaunch=true (dead prior foreign process domain with no prior loop fault) stay quiet, so a firing notice points to an unstopped restart in the same domain, a prior loop fault before relaunch, or a second domain started while a foreign loop was still live.",
 ]
 do = ["Determine why the previous loop ended without a recorded stop or restart request and fix any underlying fault."]
 
