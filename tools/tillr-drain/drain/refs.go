@@ -147,8 +147,9 @@ func sweepRefs(ctx context.Context, req RefSweepRequest, mode refSweepMode) ([]R
 	if req.DryRun {
 		err = s.ReadTx(ctx, plan)
 	} else {
-		err = s.WriteTx(ctx, func(tx *store.Tx) error {
-			saved, err := ReadPreservedWork(tx.Reader())
+		var pending map[string]PreservedWork
+		err = s.ReadTx(ctx, func(r *store.Reader) error {
+			saved, err := ReadPreservedWork(r)
 			if err != nil {
 				return err
 			}
@@ -157,7 +158,7 @@ func sweepRefs(ctx context.Context, req RefSweepRequest, mode refSweepMode) ([]R
 			for _, ref := range refs {
 				sampled[ref.Ref] = true
 			}
-			pending := map[string]PreservedWork{}
+			pending = map[string]PreservedWork{}
 			for _, p := range saved {
 				if p.Pruned || filepath.Clean(p.Repository) != req.Root || !strings.HasPrefix(p.Ref, preservedPrefix) {
 					continue
@@ -168,21 +169,30 @@ func sweepRefs(ctx context.Context, req RefSweepRequest, mode refSweepMode) ([]R
 					refs = append(refs, RefDisposition{Ref: p.Ref})
 				}
 			}
-			if err := plan(tx.Reader()); err != nil {
-				return err
+			return plan(r)
+		})
+		if err != nil {
+			return refs, err
+		}
+		if err := deleteSettledRefs(ctx, req.Root, refs); err != nil {
+			return refs, err
+		}
+		var pruned []PreservedWork
+		for _, ref := range refs {
+			if p, ok := pending[ref.Ref]; ok && ref.Remove {
+				pruned = append(pruned, p)
 			}
-			if err := deleteSettledRefs(ctx, req.Root, refs); err != nil {
-				return err
-			}
-			for _, ref := range refs {
-				if p, ok := pending[ref.Ref]; ok && ref.Remove {
+		}
+		if len(pruned) > 0 {
+			err = s.WriteTx(ctx, func(tx *store.Tx) error {
+				for _, p := range pruned {
 					if err := appendEffect(tx, workPrunedKind, p.RunID, p, req.At); err != nil {
 						return err
 					}
 				}
-			}
-			return nil
-		})
+				return nil
+			})
+		}
 	}
 	return refs, err
 }
