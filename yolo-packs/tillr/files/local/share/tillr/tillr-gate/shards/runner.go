@@ -841,53 +841,98 @@ func RunUncached(module string, count int, durations map[string]map[string]float
 		index   int
 		scratch string
 	}
-	var jobs []shardJob
-
+	var testNumbers []int
 	for number, pkg := range packages {
 		if len(pkg.TestGoFiles) == 0 && len(pkg.XTestGoFiles) == 0 {
 			continue
 		}
-		binary := filepath.Join(scratch, fmt.Sprintf("package-%d.test", number))
-		buildCmd := exec.Command("go", "test", "-c", "-o", binary, pkg.ImportPath)
-		buildCmd.Dir = module
-		if bOut, bErr := buildCmd.CombinedOutput(); bErr != nil {
-			return nil, fmt.Errorf("go test -c %s: %w: %s", pkg.ImportPath, bErr, strings.TrimSpace(string(bOut)))
+		testNumbers = append(testNumbers, number)
+	}
+
+	pkgJobs := make([][]shardJob, len(packages))
+	pkgErrs := make([]error, len(packages))
+	if len(testNumbers) > 0 {
+		buildWorkers := count
+		if buildWorkers < 4 {
+			buildWorkers = 4
 		}
-		discScratch := filepath.Join(scratch, fmt.Sprintf("package-%d-discovery", number))
-		discEnv, err := PrivateEnvironment(pkg.ImportPath+" discovery", discScratch, gitValues)
-		if err != nil {
-			return nil, err
+		if buildWorkers > 8 {
+			buildWorkers = 8
 		}
-		listCmd := exec.Command(binary, "-test.list=.", "-test.timeout=0")
-		listCmd.Dir = pkg.Dir
-		listCmd.Env = EnvMapToSlice(discEnv)
-		listedOut, err := listCmd.Output()
-		if err != nil {
-			return nil, err
+		if buildWorkers > len(testNumbers) {
+			buildWorkers = len(testNumbers)
 		}
-		var names []string
-		for _, line := range strings.Split(string(listedOut), "\n") {
-			line = strings.TrimRight(line, "\r")
-			if testListNameRe.MatchString(line) {
-				names = append(names, line)
-			}
+		buildCh := make(chan int, len(testNumbers))
+		for _, number := range testNumbers {
+			buildCh <- number
 		}
-		if progress != nil {
-			progress.RecordPackage("discovered " + pkg.ImportPath)
+		close(buildCh)
+
+		var buildWG sync.WaitGroup
+		for w := 0; w < buildWorkers; w++ {
+			buildWG.Add(1)
+			go func() {
+				defer buildWG.Done()
+				for number := range buildCh {
+					pkg := packages[number]
+					binary := filepath.Join(scratch, fmt.Sprintf("package-%d.test", number))
+					buildCmd := exec.Command("go", "test", "-c", "-o", binary, pkg.ImportPath)
+					buildCmd.Dir = module
+					if bOut, bErr := buildCmd.CombinedOutput(); bErr != nil {
+						pkgErrs[number] = fmt.Errorf("go test -c %s: %w: %s", pkg.ImportPath, bErr, strings.TrimSpace(string(bOut)))
+						continue
+					}
+					discScratch := filepath.Join(scratch, fmt.Sprintf("package-%d-discovery", number))
+					discEnv, err := PrivateEnvironment(pkg.ImportPath+" discovery", discScratch, gitValues)
+					if err != nil {
+						pkgErrs[number] = err
+						continue
+					}
+					listCmd := exec.Command(binary, "-test.list=.", "-test.timeout=0")
+					listCmd.Dir = pkg.Dir
+					listCmd.Env = EnvMapToSlice(discEnv)
+					listedOut, err := listCmd.Output()
+					if err != nil {
+						pkgErrs[number] = err
+						continue
+					}
+					var names []string
+					for _, line := range strings.Split(string(listedOut), "\n") {
+						line = strings.TrimRight(line, "\r")
+						if testListNameRe.MatchString(line) {
+							names = append(names, line)
+						}
+					}
+					if progress != nil {
+						progress.RecordPackage("discovered " + pkg.ImportPath)
+					}
+					groups := Assign(names, durations[pkg.ImportPath], count)
+					var localJobs []shardJob
+					for idx, group := range groups {
+						if len(group) > 0 || (len(names) == 0 && idx == 0) {
+							localJobs = append(localJobs, shardJob{
+								pkg:     pkg.ImportPath,
+								dir:     pkg.Dir,
+								binary:  binary,
+								names:   group,
+								index:   idx,
+								scratch: filepath.Join(scratch, fmt.Sprintf("package-%d-shard-%d", number, idx)),
+							})
+						}
+					}
+					pkgJobs[number] = localJobs
+				}
+			}()
 		}
-		groups := Assign(names, durations[pkg.ImportPath], count)
-		for idx, group := range groups {
-			if len(group) > 0 || (len(names) == 0 && idx == 0) {
-				jobs = append(jobs, shardJob{
-					pkg:     pkg.ImportPath,
-					dir:     pkg.Dir,
-					binary:  binary,
-					names:   group,
-					index:   idx,
-					scratch: filepath.Join(scratch, fmt.Sprintf("package-%d-shard-%d", number, idx)),
-				})
-			}
+		buildWG.Wait()
+	}
+
+	var jobs []shardJob
+	for _, number := range testNumbers {
+		if pkgErrs[number] != nil {
+			return nil, pkgErrs[number]
 		}
+		jobs = append(jobs, pkgJobs[number]...)
 	}
 
 	type jobResult struct {

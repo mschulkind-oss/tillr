@@ -841,51 +841,74 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 					scratchKey: fmt.Sprintf("%s#tests-%s", item.ImportPath, subsetSig),
 				})
 			}
-		} else if len(tests) >= ShardThreshold {
+		} else if item.ImportPath != "./..." {
 			var nonEdge []string
 			for _, t := range tests {
 				if t != "TestEdgeInputs" {
 					nonEdge = append(nonEdge, t)
 				}
 			}
-			shardCount := len(nonEdge) / 125
-			if shardCount < MinShards {
-				shardCount = MinShards
+			shardCount := 0
+			if len(tests) >= ShardThreshold {
+				shardCount = len(nonEdge) / 125
+				if shardCount < MinShards {
+					shardCount = MinShards
+				}
+				if shardCount > maxShards {
+					shardCount = maxShards
+				}
+			} else if pkgDurations := durations[item.ImportPath]; pkgDurations != nil && len(nonEdge) >= 2 {
+				estTotal := 0.0
+				for _, t := range nonEdge {
+					d := 1.0
+					if v, ok := pkgDurations[t]; ok {
+						d = v
+					}
+					estTotal += d
+				}
+				if estTotal >= NarrowedShardDurationThreshold {
+					shardCount = int(math.Ceil(estTotal / NarrowedShardDurationThreshold))
+					if shardCount < 2 {
+						shardCount = 2
+					}
+					if shardCount > maxShards {
+						shardCount = maxShards
+					}
+				}
 			}
-			if shardCount > maxShards {
-				shardCount = maxShards
-			}
-			buckets := Assign(nonEdge, durations[item.ImportPath], shardCount)
-			for shardIdx, bucket := range buckets {
-				if len(bucket) == 0 {
-					continue
+			if shardCount >= 2 {
+				buckets := Assign(nonEdge, durations[item.ImportPath], shardCount)
+				for shardIdx, bucket := range buckets {
+					if len(bucket) == 0 {
+						continue
+					}
+					shardNames := make([]string, len(bucket))
+					copy(shardNames, bucket)
+					if hasEdgeTest {
+						shardNames = append(shardNames, "TestEdgeInputs")
+					}
+					escaped := make([]string, len(shardNames))
+					for i, t := range shardNames {
+						escaped[i] = regexp.QuoteMeta(t)
+					}
+					pattern := "^(" + strings.Join(escaped, "|") + ")$"
+					invocations = append(invocations, invocation{
+						module:     item.Module,
+						items:      []SelectedPackage{item},
+						digest:     invocationDigest(item, bucket),
+						runPattern: pattern,
+						hasPattern: true,
+						scratchKey: fmt.Sprintf("%s#shard-%d", item.ImportPath, shardIdx),
+					})
 				}
-				shardNames := make([]string, len(bucket))
-				copy(shardNames, bucket)
-				if hasEdgeTest {
-					shardNames = append(shardNames, "TestEdgeInputs")
-				}
-				escaped := make([]string, len(shardNames))
-				for i, t := range shardNames {
-					escaped[i] = regexp.QuoteMeta(t)
-				}
-				pattern := "^(" + strings.Join(escaped, "|") + ")$"
+			} else {
 				invocations = append(invocations, invocation{
 					module:     item.Module,
 					items:      []SelectedPackage{item},
-					digest:     invocationDigest(item, bucket),
-					runPattern: pattern,
-					hasPattern: true,
-					scratchKey: fmt.Sprintf("%s#shard-%d", item.ImportPath, shardIdx),
+					digest:     item.EdgeDigest,
+					scratchKey: item.ImportPath,
 				})
 			}
-		} else if item.ImportPath != "./..." {
-			invocations = append(invocations, invocation{
-				module:     item.Module,
-				items:      []SelectedPackage{item},
-				digest:     item.EdgeDigest,
-				scratchKey: item.ImportPath,
-			})
 		} else {
 			byMod[item.Module] = append(byMod[item.Module], item)
 		}

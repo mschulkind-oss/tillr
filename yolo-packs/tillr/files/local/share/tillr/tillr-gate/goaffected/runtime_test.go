@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -2218,5 +2219,79 @@ func TestSigquitExtractsBlockedTestsFirstInBoundedTriage(t *testing.T) {
 	}
 	if !strings.Contains(out2, "       no case named in the output; reproduce with: python3 tools/gate/go_affected.py\n") {
 		t.Fatalf("expected no-case triage line in out2:\n%s", out2)
+	}
+}
+
+func TestWholePackageDurationBasedSharding(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	mod := filepath.Join(repo, "tools", "example")
+	if err := os.MkdirAll(mod, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mod, "go.mod"), []byte("module example.com/example\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mod, "a_test.go"), []byte("package example\nimport \"testing\"\nfunc TestOne(t *testing.T) {}\nfunc TestTwo(t *testing.T) {}\nfunc TestThree(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "tools", "gate"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tools", "gate", "go-test-edges.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	durationsJSON := `{"example.com/example":{"TestOne":20.0,"TestTwo":20.0,"TestThree":20.0}}`
+	if err := os.WriteFile(filepath.Join(repo, "tools", "go-test-durations.json"), []byte(durationsJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("YOLO_DURABLE_DIR", filepath.Join(tmp, "durable"))
+
+	sel := &goaffected.Selection{
+		Selected: []goaffected.SelectedPackage{
+			{
+				Module:        "tools/example",
+				ImportPath:    "example.com/example",
+				DirRel:        "tools/example",
+				TestFiles:     []string{"a_test.go"},
+				Reason:        "import",
+				SelectedTests: nil,
+			},
+		},
+	}
+
+	var mu sync.Mutex
+	var patterns []string
+	rc, out, _, err := goaffected.RunSelectedTests(repo, sel, goaffected.RunOptions{
+		DisableProgress: true,
+		RunCommand: func(cmd []string, cwd string, env []string, onLine func(string)) (int, string, error) {
+			pat := ""
+			for i := 0; i+1 < len(cmd); i++ {
+				if cmd[i] == "-run" {
+					pat = cmd[i+1]
+					break
+				}
+			}
+			mu.Lock()
+			patterns = append(patterns, pat)
+			mu.Unlock()
+			return 0, fmt.Sprintf("{\"Action\":\"pass\",\"Package\":\"example.com/example\"}\n"), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunSelectedTests: %v", err)
+	}
+	if rc != 0 {
+		t.Fatalf("rc=%d, want 0:\n%s", rc, out)
+	}
+	if len(patterns) != 3 {
+		t.Fatalf("expected 3 shards for 60s total across 3 tests, got %d: %v", len(patterns), patterns)
+	}
+	joined := strings.Join(patterns, " ")
+	for _, name := range []string{"TestOne", "TestTwo", "TestThree"} {
+		if !strings.Contains(joined, name) {
+			t.Fatalf("expected %s across shard patterns %v", name, patterns)
+		}
 	}
 }

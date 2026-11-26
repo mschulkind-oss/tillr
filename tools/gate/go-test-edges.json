@@ -879,7 +879,12 @@
     "reads": [
       "tools/go-test-durations.json",
       "tools/tillr-drain/"
-    ]
+    ],
+    "read_tests": {
+      "tools/tillr-drain/": [
+        "TestDrainNameParity"
+      ]
+    }
   },
   "github.com/mschulkind-oss/tillr-item": {
     "builds": [
