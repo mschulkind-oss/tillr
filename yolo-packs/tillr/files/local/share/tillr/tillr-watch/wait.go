@@ -11,13 +11,17 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr/notify"
+	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/watch"
 )
+
+const busyRetryDelay = 50 * time.Millisecond
 
 type waitTestHooks struct {
 	deadline   <-chan time.Time
 	clock      func() time.Time
 	onPass     func()
+	onEvaluate func() error
 	onIdle     func(coalesceArmed bool)
 	onCoalesce func() func()
 	// onRelayProgress runs after a wake is queued; its bool marks a reconnect.
@@ -58,13 +62,32 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 		return 1, err
 	}
 	defer wake.close()
+	var deadline <-chan time.Time
+	if opts.hooks != nil && opts.hooks.deadline != nil {
+		deadline = opts.hooks.deadline
+	} else if opts.timeout > 0 {
+		timer := time.NewTimer(opts.timeout)
+		defer timer.Stop()
+		deadline = timer.C
+	}
 	// Record rule load baselines before advertising waiting_since so events
 	// appended as soon as attachment is visible are judged as post-load.
-	if _, err := e.EvaluateRules(ctx); err != nil {
+	if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+		_, err := evaluateRules(ctx, e, opts.hooks)
+		return err
+	}); timedOut {
+		return timeoutWait(out, opts)
+	} else if err != nil {
 		return 1, err
 	}
-	start, err := e.BeginWait(ctx, opts.owner)
-	if err != nil {
+	var start time.Time
+	if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+		var err error
+		start, err = e.BeginWait(ctx, opts.owner)
+		return err
+	}); timedOut {
+		return timeoutWait(out, opts)
+	} else if err != nil {
 		return 1, err
 	}
 	defer func() {
@@ -74,14 +97,6 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 			code, resultErr = 1, err
 		}
 	}()
-	var deadline <-chan time.Time
-	if opts.hooks != nil && opts.hooks.deadline != nil {
-		deadline = opts.hooks.deadline
-	} else if opts.timeout > 0 {
-		timer := time.NewTimer(opts.timeout)
-		defer timer.Stop()
-		deadline = timer.C
-	}
 	// Track only what this process has printed. The durable seen cursor remains
 	// the authority for pending notices and is changed solely by confirmation.
 	printed := make(map[int64]bool)
@@ -92,17 +107,35 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 		if opts.hooks != nil && opts.hooks.onPass != nil {
 			opts.hooks.onPass()
 		}
-		results, err := e.EvaluateRules(ctx)
-		if err != nil {
+		var results []watch.RuleResult
+		if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+			var err error
+			results, err = evaluateRules(ctx, e, opts.hooks)
+			return err
+		}); timedOut {
+			return timeoutWait(out, opts)
+		} else if err != nil {
 			return 1, err
 		}
 		diagnostics.report(stderr, results)
-		notices, err := e.Pending(ctx, opts.owner)
-		if err != nil {
+		var notices []watch.Notice
+		if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+			var err error
+			notices, err = e.Pending(ctx, opts.owner)
+			return err
+		}); timedOut {
+			return timeoutWait(out, opts)
+		} else if err != nil {
 			return 1, err
 		}
-		reminders, err := e.UnsettledReminders(ctx, opts.owner, opts.unsettledRemindAfter)
-		if err != nil {
+		var reminders []watch.UnsettledReminder
+		if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+			var err error
+			reminders, err = e.UnsettledReminders(ctx, opts.owner, opts.unsettledRemindAfter)
+			return err
+		}); timedOut {
+			return timeoutWait(out, opts)
+		} else if err != nil {
 			return 1, err
 		}
 		current := make(map[int64]bool, len(notices))
@@ -127,7 +160,11 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 					return 1, err
 				}
 				if len(notices) > 0 {
-					if err := e.Shown(ctx, opts.owner, through); err != nil {
+					if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+						return e.Shown(ctx, opts.owner, through)
+					}); timedOut {
+						return timeoutWait(out, opts)
+					} else if err != nil {
 						return 1, err
 					}
 				}
@@ -138,7 +175,11 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 				for _, r := range reminders {
 					remindedIDs = append(remindedIDs, r.AlertID)
 				}
-				if err := e.MarkReminded(ctx, remindedIDs); err != nil {
+				if timedOut, err := retryOnBusy(ctx, deadline, func() error {
+					return e.MarkReminded(ctx, remindedIDs)
+				}); timedOut {
+					return timeoutWait(out, opts)
+				} else if err != nil {
 					return 1, err
 				}
 				if !opts.follow {
@@ -158,11 +199,53 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 			return 1, err
 		}
 		if reason == deadlineWake {
-			_, err := fmt.Fprintf(out, "tillr watch: timed out with no pending notices\nre-arm: %s\n", opts.rearm(0))
-			return 2, err
+			return timeoutWait(out, opts)
 		}
 		printed, tick = current, reason == timerWake
 	}
+}
+
+func evaluateRules(ctx context.Context, e watch.Evaluator, hooks *waitTestHooks) ([]watch.RuleResult, error) {
+	if hooks != nil && hooks.onEvaluate != nil {
+		if err := hooks.onEvaluate(); err != nil {
+			return nil, err
+		}
+	}
+	return e.EvaluateRules(ctx)
+}
+
+func retryOnBusy(ctx context.Context, deadline <-chan time.Time, fn func() error) (timedOut bool, err error) {
+	for {
+		err := fn()
+		if err == nil {
+			return false, nil
+		}
+		if !store.IsBusy(err) || ctx.Err() != nil {
+			return false, err
+		}
+		timedOut, retryErr := waitBusyRetry(ctx, deadline)
+		if timedOut || retryErr != nil {
+			return timedOut, retryErr
+		}
+	}
+}
+
+func waitBusyRetry(ctx context.Context, deadline <-chan time.Time) (timedOut bool, err error) {
+	timer := time.NewTimer(busyRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-deadline:
+		return true, nil
+	case <-timer.C:
+		return false, nil
+	}
+}
+
+func timeoutWait(out io.Writer, opts waitOptions) (int, error) {
+	_, err := fmt.Fprintf(out, "tillr watch: timed out with no pending notices\nre-arm: %s\n", opts.rearm(0))
+	return 2, err
 }
 
 func printAlertActions(buf *bytes.Buffer, opts waitOptions, alertID string) {

@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"syscall"
-
-	"modernc.org/sqlite"
 )
 
 // This file decides who checkpoints the store's write-ahead log (WAL), the copy of the
@@ -239,11 +237,16 @@ func OwnerRunning(path string) (bool, error) {
 	return ownedBy(f)
 }
 
-// IsBusy answers whether err is SQLite's SQLITE_BUSY (5, with any extended code): a
-// connection waited out its busy timeout for a lock another connection held.
+// IsBusy answers whether err is SQLite's SQLITE_BUSY (5, with any extended code) or
+// SQLITE_PROTOCOL (15, with any extended code): a connection waited out its busy timeout
+// for a lock another connection held, or hit SQLite's WAL locking-protocol race.
 func IsBusy(err error) bool {
-	var e *sqlite.Error
-	return errors.As(err, &e) && e.Code()&0xff == 5
+	var e interface{ Code() int }
+	if !errors.As(err, &e) {
+		return false
+	}
+	code := e.Code() & 0xff
+	return code == 5 || code == 15
 }
 
 // OwnCheckpoints makes this process a checkpoint owner of the existing store at path, and

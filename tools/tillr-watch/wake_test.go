@@ -1169,3 +1169,118 @@ func TestWatchWaitDeliversAlertCommittedBeforeTimeoutDuringWALBurst(t *testing.T
 		t.Fatalf("wait missed pre-deadline alert during WAL coalesce window: code=%d out=%q stderr=%q", r.code, r.out, r.stderr)
 	}
 }
+
+type lockingProtocolErr struct{}
+
+func (lockingProtocolErr) Error() string { return "locking protocol (15)" }
+func (lockingProtocolErr) Code() int     { return 15 }
+
+func TestWatchWaitRidesOutLockingProtocolError(t *testing.T) {
+	s, rules := fixture(t, false)
+	ctx, cancel := context.WithCancel(t.Context())
+	ticks := make(chan time.Time)
+	deadline := make(chan time.Time)
+
+	var mu sync.Mutex
+	failNext := false
+	failed := make(chan struct{}, 1)
+	idle := make(chan struct{}, 4)
+
+	hooks := &waitTestHooks{
+		deadline: deadline,
+		onEvaluate: func() error {
+			mu.Lock()
+			shouldFail := failNext
+			if shouldFail {
+				failNext = false
+			}
+			mu.Unlock()
+			if !shouldFail {
+				return nil
+			}
+			select {
+			case failed <- struct{}{}:
+			default:
+			}
+			return fmt.Errorf("store: reading the event head: %w", lockingProtocolErr{})
+		},
+		onIdle: func(bool) {
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		},
+	}
+
+	type waitResult struct {
+		code        int
+		out, stderr string
+	}
+	var result waitResult
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var out, stderr bytes.Buffer
+		code := runWithWaitHooks(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--no-notify"}, &out, &stderr, ticks, hooks)
+		result = waitResult{code: code, out: out.String(), stderr: stderr.String()}
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case <-idle:
+	case <-done:
+		t.Fatalf("wait exited before becoming idle: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	}
+
+	mu.Lock()
+	failNext = true
+	mu.Unlock()
+
+	select {
+	case ticks <- time.Now():
+	case <-done:
+		t.Fatalf("wait exited before tick: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	}
+
+	select {
+	case <-failed:
+	case <-done:
+		t.Fatalf("wait exited on locking-protocol error: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	case <-time.After(hangGuard):
+		t.Fatal("wait did not reach failing evaluation")
+	}
+
+	// Wait for the retry pass to succeed and return to idle.
+	select {
+	case <-idle:
+	case <-done:
+		t.Fatalf("wait exited instead of riding out locking-protocol error: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	case <-time.After(hangGuard):
+		t.Fatal("wait did not recover to idle after locking-protocol error")
+	}
+
+	select {
+	case <-done:
+		t.Fatalf("wait exited while it should still be waiting: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	default:
+	}
+
+	// Verify the waiter is still alive and delivers a subsequent alert.
+	appendRawRefusalWithoutNotify(t, s.Path(), "item-waiter")
+	appendRawRefusalWithoutNotify(t, s.Path(), "item-waiter")
+	select {
+	case ticks <- time.Now():
+	case <-done:
+	}
+	select {
+	case <-done:
+	case <-time.After(hangGuard):
+		t.Fatal("wait did not deliver alert after riding out locking-protocol error")
+	}
+	if result.code != 0 || result.stderr != "" || !strings.Contains(result.out, "item-waiter has 2 refusals") {
+		t.Fatalf("wait after locking-protocol error: code=%d out=%q stderr=%q", result.code, result.out, result.stderr)
+	}
+}

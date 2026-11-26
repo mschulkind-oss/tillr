@@ -287,3 +287,36 @@ func TestABusyPinSkipsTheCycleWithoutAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type codedErr struct {
+	msg  string
+	code int
+}
+
+func (e codedErr) Error() string { return e.msg }
+func (e codedErr) Code() int     { return e.code }
+
+func TestIsBusyRecognizesBusyAndLockingProtocol(t *testing.T) {
+	path := cycleStore(t)
+	if err := realBusy(t, path); !IsBusy(err) {
+		t.Fatalf("IsBusy(real SQLITE_BUSY) = false for %v", err)
+	}
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"plain error", errors.New("other"), false},
+		{"sqlite error 1", codedErr{"error (1)", 1}, false},
+		{"sqlite busy 5", codedErr{"database is locked (5)", 5}, true},
+		{"sqlite busy extended", codedErr{"database is locked (517)", 5 | (2 << 8)}, true},
+		{"sqlite locking protocol 15", fmt.Errorf("store: reading the event head: %w", codedErr{"locking protocol (15)", 15}), true},
+		{"sqlite locking protocol extended", codedErr{"locking protocol (271)", 15 | (1 << 8)}, true},
+	}
+	for _, tc := range cases {
+		if got := IsBusy(tc.err); got != tc.want {
+			t.Errorf("%s: IsBusy(%v) = %v, want %v", tc.name, tc.err, got, tc.want)
+		}
+	}
+}
