@@ -1255,6 +1255,47 @@ esac
 	}
 }
 
+func stopAndWaitPID(pid int) {
+	if pid <= 0 {
+		return
+	}
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return
+	}
+	defer unix.Close(pidfd)
+	_ = unix.PidfdSendSignal(pidfd, unix.SIGTERM, nil, 0)
+	fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
+	for {
+		_, err := unix.Poll(fds, -1)
+		if err == unix.EINTR {
+			continue
+		}
+		return
+	}
+}
+
+func parseStartedKeeperPID(out string) int {
+	const prefix = "restart: started keeper "
+	idx := strings.Index(out, prefix)
+	if idx < 0 {
+		return 0
+	}
+	rest := out[idx+len(prefix):]
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	pid, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 0
+	}
+	return pid
+}
+
 func TestRestartWhenNoLoopIsRunningUsesRecordedLaunchAndSucceeds(t *testing.T) {
 	drainBin := buildDrainBinary(t)
 	work := t.TempDir()
@@ -1277,11 +1318,19 @@ func TestRestartWhenNoLoopIsRunningUsesRecordedLaunchAndSucceeds(t *testing.T) {
 		"YOLO_DURABLE_DIR="+work,
 		"PATH="+filepath.Dir(drainBin)+string(os.PathListSeparator)+filepath.Join(work, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
+	var keeperPID int
 	defer func() {
-		stopCmd := exec.Command(drainBin, "keep", "--root", root, "--stop")
-		stopCmd.Dir = root
-		stopCmd.Env = env
-		_ = stopCmd.Run()
+		if keeperPID > 0 {
+			stopAndWaitPID(keeperPID)
+		} else {
+			stopCmd := exec.Command(drainBin, "keep", "--root", root, "--stop")
+			stopCmd.Dir = root
+			stopCmd.Env = env
+			_ = stopCmd.Run()
+		}
+		if loopPID, err := FindLoop(root); err == nil && loopPID > 0 {
+			stopAndWaitPID(loopPID)
+		}
 	}()
 
 	cmd := exec.Command("just", "--justfile", filepath.Join(root, ".justfile"), "tillr-restart", "--root", root)
@@ -1291,6 +1340,10 @@ func TestRestartWhenNoLoopIsRunningUsesRecordedLaunchAndSucceeds(t *testing.T) {
 	outStr := string(outBytes)
 	if err != nil {
 		t.Fatalf("just tillr-restart failed: %v\n%s", err, outStr)
+	}
+	keeperPID = parseStartedKeeperPID(outStr)
+	if keeperPID <= 0 {
+		t.Fatalf("output missing started keeper pid\nfull:\n%s", outStr)
 	}
 	for _, want := range []string{
 		"keeper: not running",
