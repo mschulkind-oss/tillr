@@ -21,6 +21,7 @@ import (
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/watchlinks"
 )
 
 const (
@@ -32,24 +33,25 @@ const (
 // lost worker, Why reports the observed hold instead of the planner's run-live
 // assumption. The presentation fields do not decide readiness.
 type WhyRow struct {
-	Place       int                    `json:"place,omitempty"`
-	ItemID      string                 `json:"item_id"`
-	State       string                 `json:"state"`
-	Position    string                 `json:"position"`
-	Reason      string                 `json:"reason"`
-	Why         string                 `json:"why"`
-	Class       string                 `json:"class"`
-	Where       string                 `json:"where"`
-	Mover       string                 `json:"mover"`
-	Since       string                 `json:"since"`
-	ClassSource string                 `json:"class_source"`
-	WaitingOn   []string               `json:"waiting_on"`
-	Decision    Decision               `json:"decision"`
-	LaneStatus  string                 `json:"lane_status,omitempty"`
-	LaneReason  string                 `json:"lane_reason,omitempty"`
-	Refusals    map[string]int         `json:"refusals,omitempty"`
-	Landing     *item.LandingReference `json:"landing,omitempty"`
-	tableReason string
+	Place        int                      `json:"place,omitempty"`
+	ItemID       string                   `json:"item_id"`
+	State        string                   `json:"state"`
+	Position     string                   `json:"position"`
+	Reason       string                   `json:"reason"`
+	Why          string                   `json:"why"`
+	Class        string                   `json:"class"`
+	Where        string                   `json:"where"`
+	Mover        string                   `json:"mover"`
+	Since        string                   `json:"since"`
+	ClassSource  string                   `json:"class_source"`
+	WaitingOn    []string                 `json:"waiting_on"`
+	Decision     Decision                 `json:"decision"`
+	LaneStatus   string                   `json:"lane_status,omitempty"`
+	LaneReason   string                   `json:"lane_reason,omitempty"`
+	Refusals     map[string]int           `json:"refusals,omitempty"`
+	Landing      *item.LandingReference   `json:"landing,omitempty"`
+	LinkedAlerts []watchlinks.LinkedAlert `json:"linked_alerts,omitempty"`
+	tableReason  string
 }
 
 // TableReason is the short reason for the human-readable queue table. The
@@ -1090,6 +1092,13 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		if steps := refusals[it.ItemID]; len(steps) > 0 {
 			row.Refusals = steps
 			row.Why += "; refusals: " + refusalStepsWords(steps)
+		}
+		linkedAlerts, err := watchlinks.LinkedAlertsForItem(r, it.ItemID)
+		if err != nil {
+			return answer, readFailure(err)
+		}
+		if len(linkedAlerts) > 0 {
+			row.LinkedAlerts = linkedAlerts
 		}
 		answer.Rows = append(answer.Rows, row)
 	}

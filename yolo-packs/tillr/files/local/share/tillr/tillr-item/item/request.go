@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/watchlinks"
@@ -54,6 +55,8 @@ type RequestFiling struct {
 	Criteria    []string
 	BlockedBy   []string
 	Alerts      []string
+	FiledBy     string
+	DedupKey    string
 	Ordinary    bool
 	Destination Destination
 	At          time.Time
@@ -170,10 +173,50 @@ func normalizeRequest(f *RequestFiling) error {
 	}
 	slices.Sort(alerts)
 	f.Alerts = alerts
+	f.FiledBy = strings.TrimSpace(f.FiledBy)
+	f.By = strings.TrimSpace(f.By)
+	if f.FiledBy == "" && f.By != "" {
+		f.FiledBy = f.By
+	}
+	if f.By == "" && f.FiledBy != "" {
+		f.By = f.FiledBy
+	}
+	f.DedupKey = strings.TrimSpace(f.DedupKey)
+	if f.DedupKey != "" {
+		ruleID, causeKey, ok := strings.Cut(f.DedupKey, ":")
+		if !ok || strings.TrimSpace(ruleID) == "" || strings.TrimSpace(causeKey) == "" || strings.ContainsAny(f.DedupKey, "\r\n") {
+			return Rejectionf("dedup-key-invalid", "", "--dedup-key must have the form <rule_id>:<cause_key>")
+		}
+	}
 	if !f.Destination.Valid() {
 		return Usagef("a request needs at most one of --to first|last, --before <item>, --after <item>")
 	}
 	return nil
+}
+
+func isOpenState(d definition.Definition, state string) bool {
+	return !d.IsFinished(state) && state != d.Closed && state != "abandoned" && state != "deleted"
+}
+
+func findOpenByDedupKey(r *store.Reader, d definition.Definition, dedupKey string) (string, string, bool, error) {
+	rows, err := r.Query(`SELECT rw.item_id, i.state, rw.filed_by FROM request_words rw JOIN items i USING(item_id) WHERE rw.dedup_key = ? ORDER BY i.updated_at ASC, rw.item_id ASC`, dedupKey)
+	if err != nil {
+		return "", "", false, Internalf("checking dedup_key %q: %v", dedupKey, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, state, fb string
+		if err := rows.Scan(&id, &state, &fb); err != nil {
+			return "", "", false, Internalf("scanning dedup_key %q: %v", dedupKey, err)
+		}
+		if isOpenState(d, state) {
+			return id, fb, true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", false, Internalf("iterating dedup_key %q: %v", dedupKey, err)
+	}
+	return "", "", false, nil
 }
 
 // FileRequest files one request in the caller's transaction and places it. It does no I/O
@@ -186,9 +229,54 @@ func FileRequest(ctx context.Context, tx *store.Tx, f RequestFiling) (record.Env
 	if err := normalizeRequest(&f); err != nil {
 		return record.Envelope{}, err
 	}
+	r := tx.Reader()
+	if f.DedupKey != "" {
+		d, err := itemDefinition(r)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+		existingID, existingFiledBy, found, err := findOpenByDedupKey(r, d, f.DedupKey)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+		if found {
+			for _, alertID := range f.Alerts {
+				if err := watchlinks.LinkAlertItemInTx(tx, alertID, existingID, watchlinks.LinkRelationFiled, f.By, "", f.At); err != nil {
+					if errors.Is(err, watchlinks.ErrAlertNotFound) {
+						return record.Envelope{}, Rejectionf("alert-not-found", alertID, "no alert %q in this store", alertID)
+					}
+					return record.Envelope{}, Internalf("linking alert %s to item %s: %v", alertID, existingID, err)
+				}
+			}
+			pos, err := queuePosition(r, "item.request", existingID, f.At)
+			if err != nil {
+				return record.Envelope{}, err
+			}
+			var answer map[string]any
+			if err := json.Unmarshal(pos.Payload, &answer); err != nil {
+				return record.Envelope{}, Internalf("reading deduplicated position: %v", err)
+			}
+			answer["deduplicated"] = true
+			answer["dedup_key"] = f.DedupKey
+			if existingFiledBy != "" {
+				answer["filed_by"] = existingFiledBy
+			}
+			linked, err := watchlinks.LinkedAlertsForItem(r, existingID)
+			if err != nil {
+				return record.Envelope{}, Internalf("reading linked alerts for %s: %v", existingID, err)
+			}
+			if len(linked) > 0 {
+				ids := make([]string, 0, len(linked))
+				for _, la := range linked {
+					ids = append(ids, la.AlertID)
+				}
+				answer["linked_alerts"] = ids
+			}
+			return envelopeOf("item.request", existingID, f.At, answer)
+		}
+	}
 	hash, _ := IdeaHash(f.Words)
 	input := requestInputHash(f)
-	r := tx.Reader()
 	var id, held, state string
 	err := r.QueryRow(`SELECT item_id, input_hash, state FROM request_words JOIN items USING(item_id) WHERE words_hash=?`, hash).Scan(&id, &held, &state)
 	if err == nil {
@@ -243,7 +331,7 @@ func insertRequest(ctx context.Context, tx *store.Tx, f RequestFiling, id, hash,
 	if _, err := Apply(ctx, tx, env); err != nil {
 		return record.Envelope{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_words(item_id, words_hash, words, input_hash) VALUES(?,?,?,?)`, id, hash, f.Words, input); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_words(item_id, words_hash, words, input_hash, filed_by, dedup_key) VALUES(?,?,?,?,?,?)`, id, hash, f.Words, input, f.FiledBy, f.DedupKey); err != nil {
 		return record.Envelope{}, Internalf("saving the request's words: %v", err)
 	}
 	placed, err := Place(ctx, tx, id, f.Destination, f.At, f.By, f.Via)
@@ -263,6 +351,12 @@ func insertRequest(ctx context.Context, tx *store.Tx, f RequestFiling, id, hash,
 		return record.Envelope{}, Internalf("reading the placement: %v", err)
 	}
 	answer["seat"], answer["workflow"], answer["allowed_paths"], answer["blocked_by"], answer["words_size"] = f.Seat, f.Workflow, f.Paths, f.BlockedBy, len(f.Words)
+	if f.FiledBy != "" {
+		answer["filed_by"] = f.FiledBy
+	}
+	if f.DedupKey != "" {
+		answer["dedup_key"] = f.DedupKey
+	}
 	if len(f.Alerts) > 0 {
 		answer["linked_alerts"] = f.Alerts
 	}
@@ -295,8 +389,15 @@ func RequestWords(r *store.Reader, id string) ([]byte, error) {
 func init() {
 	if err := store.RegisterDDL("request-words", `CREATE TABLE IF NOT EXISTS request_words (
  item_id TEXT PRIMARY KEY REFERENCES items(item_id), words_hash TEXT NOT NULL UNIQUE,
- words BLOB NOT NULL, input_hash TEXT NOT NULL
+ words BLOB NOT NULL, input_hash TEXT NOT NULL,
+ filed_by TEXT NOT NULL DEFAULT '', dedup_key TEXT NOT NULL DEFAULT ''
  );`); err != nil {
+		panic(err)
+	}
+	if err := store.RegisterColumn("request-words", "request_words", "filed_by", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		panic(err)
+	}
+	if err := store.RegisterColumn("request-words", "request_words", "dedup_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		panic(err)
 	}
 }

@@ -19,7 +19,7 @@ vantage:
 
 # Alert triage happens in a seat inside tillr, and only what it cannot settle reaches the operating session
 
-**Status:** Every question is ruled; Slices 1 and 2 of [§9](#9-the-build-in-slices-that-each-land-alone) (atomic triage claim, three-outcome `record-triage`, triage events, escalated bundle `triage` header, `tillr watch status --recent`, the `triage` and `operator-session` receivers, per-owner delivery for both, and `watch-lint-liveness-receiver`) are built, while slices 3 to 7 are not. `rg -n 'triage' tools/tillr/definition/landing.json config/tillr` returns nothing, and every rule in `config/tillr/watch/` still sets `receiver = "foreground"`.
+**Status:** Every question is ruled; Slices 1 to 3 of [§9](#9-the-build-in-slices-that-each-land-alone) (atomic triage claim, three-outcome `record-triage`, triage events, escalated bundle `triage` header, `tillr watch status --recent`, the `triage` and `operator-session` receivers, per-owner delivery for both, `watch-lint-liveness-receiver`, triage provenance and `dedup_key` idempotence on `tillr item request`, and `linked_alerts` on `tillr item show` and `tillr drain why`) are built, while slices 4 to 7 are not. `rg -n 'triage' tools/tillr/definition/landing.json config/tillr` returns nothing, and every rule in `config/tillr/watch/` still sets `receiver = "foreground"`.
 
 > **In short.** A standing `tillr-watch` episode goes first to a dedicated, remedy-free `triage` seat on the cheap `scout` tier. The seat reads the evidence and settles a clear single instance by linking an existing item or filing one deduplicated `fix-fault` or `fix-rule` item. It escalates to the operating session or the owner whenever the cause or the item match is uncertain, when repeats need a silence, or when a host action or an owner ruling is required.
 
@@ -234,13 +234,13 @@ Settling alerts inside `tillr` removes wakeups, not visibility (`D-AT9`):
 
 ## 9. The build, in slices that each land alone
 
-Seven slices, in order, after the eight slices of [the alert workflow](./tillr-watch-alert-workflow.md#8-the-build-in-slices-that-each-land-alone) (`D-AT10`). Slices 1 and 2 are built; slices 3 to 7 are not.
+Seven slices, in order, after the eight slices of [the alert workflow](./tillr-watch-alert-workflow.md#8-the-build-in-slices-that-each-land-alone) (`D-AT10`). Slices 1 to 3 are built; slices 4 to 7 are not.
 
 | Slice | What lands | Done when | Built |
 | :--- | :--- | :--- | :--- |
 | **1** | The atomic triage claim, the three-outcome record face (refusing `expected`), the triage events, the `triage` header in escalated bundles, and `tillr watch status --recent` (`D-AT4`, `D-AT7`). | Tests show single-claim serialization across open and auto-resolved episodes, the refusal of `expected`, that a settled instance does not wake the operating session while an escalated one does, and header priority under truncation. | Yes |
 | **2** | The `triage` and `operator-session` receivers, per-owner delivery for both, and the `watch-lint-liveness-receiver` check (`D-AT2`, `D-AT5`). | Tests show each owner receives only its episodes, no timer promotes an untriaged alert, and lint rejects a liveness rule routed to `triage`. | Yes |
-| **3** | Triage provenance and `dedup_key` idempotence on `tillr item request`, and `linked_alerts` on `tillr item show` and `tillr drain why` (`D-AT6`, `D-AT9`). | Tests show concurrent filings for one cause land on one item carrying both alert ids. | No |
+| **3** | Triage provenance and `dedup_key` idempotence on `tillr item request`, and `linked_alerts` on `tillr item show` and `tillr drain why` (`D-AT6`, `D-AT9`). | Tests show concurrent filings for one cause land on one item carrying both alert ids. | Yes |
 | **4** | The `triage` seat declaration, its `scout` mapping with an empty escalation list, the brief, and the read-and-file command shim (`D-AT3`, `D-AT6`, `D-AT11`). | Policy validation and shim tests show each forbidden command refused with exit `2`. | No |
 | **5** | Transition-driven dispatch in `tillr-drain` with the concurrency cap, and escalation on failure, a stale claim or a repeat flood (`D-AT4`, `D-AT8`, `D-AT11`). | Tests show the cap holds while build lanes are busy, no repeat dispatch on an unchanged settled instance, and immediate escalation on failure with no model retry. | No |
 | **6** | The rules in `config/tillr/watch/` cut over to their receivers (`D-AT2`), with the check-in skill updated. | `tillr watch lint` and the rule tests pass; the operating session wakes only on loop-liveness alerts, escalations and unsettled reminders. | No |

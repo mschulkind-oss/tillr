@@ -124,6 +124,22 @@ func ShowWithQuestions(r *store.Reader, id, root string, source vantage.Question
 			fields[key] = value
 		}
 	}
+	filedBy, dedupKey, err := readRequestProvenance(r, id)
+	if err != nil {
+		return record.Envelope{}, err
+	}
+	if filedBy != "" {
+		fields["filed_by"], err = json.Marshal(filedBy)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+	}
+	if dedupKey != "" {
+		fields["dedup_key"], err = json.Marshal(dedupKey)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+	}
 	linkedAlerts, err := watchlinks.LinkedAlertsForItem(r, id)
 	if err != nil {
 		return record.Envelope{}, Internalf("reading linked alerts for %q: %v", id, err)
@@ -136,6 +152,60 @@ func ShowWithQuestions(r *store.Reader, id, root string, source vantage.Question
 		fields["linked_alerts"] = rawLinked
 	}
 	return envelopeOf(RecordKind, "item-"+id, env.CreatedAt, fields)
+}
+
+func readRequestProvenance(r *store.Reader, id string) (string, string, error) {
+	var present int
+	if err := r.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='request_words'`).Scan(&present); err != nil {
+		return "", "", Internalf("checking request_words: %v", err)
+	}
+	if present == 0 {
+		return "", "", nil
+	}
+	hasFiledBy := false
+	hasDedupKey := false
+	rows, err := r.Query(`SELECT name FROM pragma_table_info('request_words')`)
+	if err != nil {
+		return "", "", Internalf("checking request_words columns: %v", err)
+	}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return "", "", Internalf("scanning request_words columns: %v", err)
+		}
+		switch name {
+		case "filed_by":
+			hasFiledBy = true
+		case "dedup_key":
+			hasDedupKey = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return "", "", Internalf("reading request_words columns: %v", err)
+	}
+	rows.Close()
+	if !hasFiledBy && !hasDedupKey {
+		return "", "", nil
+	}
+	fbExpr := `''`
+	if hasFiledBy {
+		fbExpr = `COALESCE(filed_by, '')`
+	}
+	dkExpr := `''`
+	if hasDedupKey {
+		dkExpr = `COALESCE(dedup_key, '')`
+	}
+	var filedBy, dedupKey string
+	err = r.QueryRow(`SELECT `+fbExpr+`, `+dkExpr+` FROM request_words WHERE item_id = ?`, id).Scan(&filedBy, &dedupKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", Internalf("reading request provenance for %q: %v", id, err)
+	}
+	return filedBy, dedupKey, nil
 }
 
 // readStoredItem answers one item's record as the rows hold it, with the clock the row was

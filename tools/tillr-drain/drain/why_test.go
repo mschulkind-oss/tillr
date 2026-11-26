@@ -11,6 +11,8 @@ import (
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
+	_ "github.com/mschulkind-oss/tillr/watch"
+	"github.com/mschulkind-oss/tillr/watchlinks"
 )
 
 func TestWhyChangesWithPlannerHoldRule(t *testing.T) {
@@ -520,5 +522,58 @@ func TestRunLinkMissingRetryReleasesAfterFreshVerifyRun(t *testing.T) {
 	dAfter := planFor(t, l, "item_041")
 	if dAfter.Action == ActionRetry {
 		t.Fatalf("stale retry re-fired after newer unfinished run %s: %+v", newerRun, dAfter)
+	}
+}
+
+func TestWhyIncludesLinkedAlerts(t *testing.T) {
+	f, l := passFixture(t, "item-with-alerts", "item-without-alerts")
+	now := time.Date(2026, 11, 26, 13, 0, 0, 0, time.UTC)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`INSERT INTO alert_episodes (alert_id, rule_id, subject_key, episode_num, state, severity, condition_fingerprint, opened_seq, opened_at, last_observed_seq, last_observed_at, bundle_json, settlement_state)
+			VALUES ('alrt-why-1', 'drain-item-fault', 'subj-1', 1, 'open', 'high', 'fp1', 1, ?, 1, ?, '{}', 'uninvestigated'),
+			       ('alrt-why-2', 'drain-item-fault', 'subj-2', 1, 'open', 'medium', 'fp2', 2, ?, 2, ?, '{}', 'uninvestigated')`,
+			now.UnixMilli(), now.UnixMilli(), now.UnixMilli(), now.UnixMilli()); err != nil {
+			return err
+		}
+		if err := watchlinks.LinkAlertItemInTx(tx, "alrt-why-1", "item-with-alerts", watchlinks.LinkRelationFiled, "tillr-triage", "", now); err != nil {
+			return err
+		}
+		return watchlinks.LinkAlertItemInTx(tx, "alrt-why-2", "item-with-alerts", watchlinks.LinkRelationFiled, "tillr-triage", "", now.Add(time.Second))
+	})
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		answer, err := Why(r, Pass{}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		byID := map[string]WhyRow{}
+		for _, row := range answer.Rows {
+			byID[row.ItemID] = row
+		}
+		withRow, ok := byID["item-with-alerts"]
+		if !ok {
+			t.Fatal("item-with-alerts missing from Why rows")
+		}
+		if len(withRow.LinkedAlerts) != 2 || withRow.LinkedAlerts[0].AlertID != "alrt-why-1" || withRow.LinkedAlerts[1].AlertID != "alrt-why-2" {
+			t.Fatalf("item-with-alerts linked_alerts = %+v, want [alrt-why-1, alrt-why-2]", withRow.LinkedAlerts)
+		}
+		withoutRow, ok := byID["item-without-alerts"]
+		if !ok {
+			t.Fatal("item-without-alerts missing from Why rows")
+		}
+		if len(withoutRow.LinkedAlerts) != 0 {
+			t.Fatalf("item-without-alerts linked_alerts = %+v, want empty", withoutRow.LinkedAlerts)
+		}
+		rawWithout, err := json.Marshal(withoutRow)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(rawWithout), `"linked_alerts"`) {
+			t.Fatalf("expected linked_alerts omitted in JSON when empty: %s", rawWithout)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

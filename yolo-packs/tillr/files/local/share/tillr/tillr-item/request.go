@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -44,10 +45,22 @@ func requestFace(args []string) (record.Envelope, int) {
 	after := fs.String("after", "", "place after this item")
 	ordinary := fs.Bool("ordinary", false, "file for the ordinary lanes only, not the express lanes")
 	by := fs.String("by", "owner", "actor filing the request")
+	filedBy := fs.String("filed-by", "", "provenance actor filing the request (e.g. tillr-triage); defaults to --by")
+	dedupKey := fs.String("dedup-key", "", "idempotence key (<rule_id>:<cause_key>) to deduplicate open requests for one cause")
 	via := fs.String("via", "cli", "face filing the request")
 	now := fs.String("now", "", "injected RFC 3339 clock")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
+	}
+	byExplicit := false
+	fs.Visit(func(fl *flag.Flag) {
+		if fl.Name == "by" {
+			byExplicit = true
+		}
+	})
+	actor := *by
+	if *filedBy != "" && !byExplicit {
+		actor = *filedBy
 	}
 	if len(paths) > 0 {
 		fmt.Fprintln(os.Stderr, "notice: --path is deprecated and ignored; items no longer carry a list of allowed paths")
@@ -71,7 +84,7 @@ func requestFace(args []string) (record.Envelope, int) {
 	if err != nil {
 		return record.Envelope{}, fail(err)
 	}
-	filing := item.RequestFiling{Words: words, Title: *title, Seat: *seat, Workflow: *workflow, Paths: paths, Criteria: criteria, BlockedBy: blockedBy, Alerts: alerts, Ordinary: *ordinary, Destination: dest, At: at, By: *by, Via: *via}
+	filing := item.RequestFiling{Words: words, Title: *title, Seat: *seat, Workflow: *workflow, Paths: paths, Criteria: criteria, BlockedBy: blockedBy, Alerts: alerts, FiledBy: *filedBy, DedupKey: *dedupKey, Ordinary: *ordinary, Destination: dest, At: at, By: actor, Via: *via}
 	if filing.Workflow == "" {
 		filing.Workflow = item.RequestDefaultWorkflow[filing.Seat]
 	}
