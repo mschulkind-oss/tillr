@@ -491,8 +491,8 @@ a person works the queue by hand, so a request that serves only unattended opera
 
 | Request | Priority | Case | Today |
 | :--- | :--- | :--- | :--- |
-| R3-1. Two item kinds in one charter: per-kind states and moves, or a kind field the moves key on | High | Findings and bugs in one store, joined by edges. With one lifecycle a finding can move into a bug's state; with two stores a bug cannot point at its finding | Not built: the charter reader refuses any key it does not know, and an item's `kind` field is refused as `unknown-field` |
-| R3-2. A reason and an actor stored on a move between unfinished states that the charter marks as a decision | High | A person's decisions to report, approve or hold a bug are what an audit reads | Not built: `--reason` or `--by` on such a move is refused as `flag-not-stored` (`tools/tillr-item/item/finished_receipt.go`) |
+| R3-1. Two item kinds in one charter: per-kind states and moves, or a kind field the moves key on | High | Findings and bugs in one store, joined by edges. With one lifecycle a finding can move into a bug's state; with two stores a bug cannot point at its finding | Not built; designed in [Two item kinds, recorded decision moves, and hook handoffs](./tillr-charter-kinds-moves-and-owner-handoff.md): the charter reader refuses any key it does not know, and an item's `kind` field is refused as `unknown-field` |
+| R3-2. A reason and an actor stored on a move between unfinished states that the charter marks as a decision | High | A person's decisions to report, approve or hold a bug are what an audit reads | Not built; designed in [Two item kinds, recorded decision moves, and hook handoffs](./tillr-charter-kinds-moves-and-owner-handoff.md): `--reason` or `--by` on such a move is refused as `flag-not-stored` ([`finished_receipt.go`](../../tools/tillr-item/item/finished_receipt.go)) |
 | R3-3. A charter's finished states shown as finished | Medium | How many findings are confirmed | Not built: `ProjectItemState` in `tools/tillr-view/serveread.go` knows only the landing charter's states, so any other finished state reads as `not_started` |
 | R3-4. `item show` drops the finished-state reason and pointer once the item leaves that state | Medium | A fixed bug that recurs | Not re-checked |
 | R3-5. Not-applicable spend kept apart from unreported spend | Medium | A spend audit of a run made only of commands | Not built: `SpendTotals.add` in `tools/tillr-drain/drain/spend.go` counts every run with no usage as unreported |
@@ -536,12 +536,17 @@ a person works the queue by hand, so a request that serves only unattended opera
 
 ### 7.7 Questions the requests leave open
 
-None of these is ruled, and none is filed as an open question in a design document yet.
+None of these is ruled; items 1 and 2 are now filed for the owner as
+[`OQ-CK1`](./tillr-charter-kinds-moves-and-owner-handoff.md#OQ-CK1) and
+[`OQ-CK2`](./tillr-charter-kinds-moves-and-owner-handoff.md#OQ-CK2) in
+[Two item kinds, recorded decision moves, and hook handoffs](./tillr-charter-kinds-moves-and-owner-handoff.md),
+and items 3 through 6 are not filed in a design document yet.
 
 1. **Two kinds.** For R3-1, per-kind lifecycles in one charter, or two stores with a pointer that
-   crosses them?
+   crosses them? Filed as [`OQ-CK1`](./tillr-charter-kinds-moves-and-owner-handoff.md#OQ-CK1).
 2. **A person's moves.** For R3-2, do the reason and actor go on the move, or does a decision
-   record name the move it authorizes?
+   record name the move it authorizes? Filed as
+   [`OQ-CK2`](./tillr-charter-kinds-moves-and-owner-handoff.md#OQ-CK2).
 3. **A declared bound on a list argument.** Is `workflow-argument-most` a size cap of the kind
    R2-10 refuses? This consumer accepts a declared bound only if exceeding it leads to a
    named next step and not a refusal.
