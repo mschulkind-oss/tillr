@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -575,4 +576,504 @@ func (e Evaluator) RecordTriage(ctx context.Context, alertID string, opts Record
 		}
 		return appendAlert(tx, alertID, escalatedKind, now, triagedBody)
 	})
+}
+
+// TriageFailureOptions configures Evaluator.RecordTriageFailure.
+type TriageFailureOptions struct {
+	RunID        string
+	Finding      string
+	ActionNeeded string
+	ItemID       string
+	OutcomeKind  string // optional; "fix-fault" or "fix-rule" when ItemID != ""
+}
+
+// RecordTriageFailure clears active_triage_run_id and escalates the episode to
+// operator-session with triage_outcome = "triage-failed".
+func (e Evaluator) RecordTriageFailure(ctx context.Context, alertID string, opts TriageFailureOptions) error {
+	if strings.TrimSpace(opts.Finding) == "" {
+		return fmt.Errorf("finding is required and must not be empty")
+	}
+	if strings.TrimSpace(opts.ActionNeeded) == "" {
+		return fmt.Errorf("action_needed is required and must not be empty")
+	}
+	if strings.TrimSpace(opts.ItemID) != "" {
+		if opts.OutcomeKind != "fix-fault" && opts.OutcomeKind != "fix-rule" {
+			return fmt.Errorf("outcome_kind must be fix-fault or fix-rule when item_id is provided")
+		}
+	} else if strings.TrimSpace(opts.OutcomeKind) != "" {
+		return fmt.Errorf("outcome_kind must be empty when item_id is empty")
+	}
+	if e.Store == nil {
+		return fmt.Errorf("watch: Evaluator requires Store")
+	}
+	return e.Store.WriteTx(ctx, func(tx *store.Tx) error {
+		a, err := readEpisodeAction(tx.Reader(), alertID)
+		if err != nil {
+			return err
+		}
+		hasTriage, err := hasTriageColumns(tx.Reader())
+		if err != nil {
+			return err
+		}
+		hasEscalated, err := alertEpisodesHasColumn(tx.Reader(), "escalated_to")
+		if err != nil {
+			return err
+		}
+		hasActive, err := alertEpisodesHasColumn(tx.Reader(), "active_triage_run_id")
+		if err != nil {
+			return err
+		}
+		if !hasTriage || !a.hasSettlementCols || !a.hasTrackingCol || !a.hasLagPairCol || !hasEscalated || !hasActive {
+			return fmt.Errorf("alert %s: triage columns missing; migrate store first", alertID)
+		}
+		var bundleRaw []byte
+		if err := tx.QueryRow(`SELECT bundle_json FROM alert_episodes WHERE alert_id = ?`, alertID).Scan(&bundleRaw); err != nil {
+			return err
+		}
+		if opts.ItemID != "" {
+			if err := validateStoreSettleItem(tx.Reader(), a, alertID, opts.ItemID); err != nil {
+				return err
+			}
+		}
+
+		now := e.now()
+		nowMs := now.UnixMilli()
+		settledSeq := a.lastObservedSeq
+		if a.trackedLagPair.Valid && a.trackedLagPair.String != "" {
+			headSeq, err := tx.Reader().EventHeadSeq()
+			if err != nil {
+				return err
+			}
+			settledSeq = max(settledSeq, headSeq)
+		}
+
+		var b Bundle
+		if len(bundleRaw) > 0 {
+			if err := json.Unmarshal(bundleRaw, &b); err != nil {
+				return fmt.Errorf("decode bundle for alert %s: %w", alertID, err)
+			}
+		}
+		b.Triage = &TriageHeader{
+			RunID:        opts.RunID,
+			Outcome:      "triage-failed",
+			OutcomeKind:  opts.OutcomeKind,
+			EscalatedTo:  "operator-session",
+			ItemID:       opts.ItemID,
+			Finding:      opts.Finding,
+			ActionNeeded: opts.ActionNeeded,
+		}
+		newBundle, err := b.encode()
+		if err != nil {
+			return err
+		}
+
+		nullStr := func(s string) sql.NullString {
+			if s == "" {
+				return sql.NullString{}
+			}
+			return sql.NullString{String: s, Valid: true}
+		}
+
+		if opts.ItemID != "" {
+			if _, err := tx.Exec(`UPDATE alert_episodes SET
+				settlement_state='settled',
+				investigated_by='tillr-triage',
+				investigated_at=?,
+				investigation_cause=?,
+				investigation_evidence=?,
+				outcome=?,
+				tracking_item_id=?,
+				item_link_kind='filed',
+				settled_by='tillr-triage',
+				settled_at=?,
+				settled_seq=?,
+				settled_fingerprint=condition_fingerprint,
+				settled_lag_pair=tracked_lag_pair,
+				triage_state='escalated',
+				triage_outcome='triage-failed',
+				triage_outcome_kind=?,
+				triage_run_id=?,
+				triage_finding=?,
+				triage_action_needed=?,
+				triage_question=NULL,
+				triage_options_json=NULL,
+				triaged_at=?,
+				active_triage_run_id=NULL,
+				escalated_to='operator-session',
+				bundle_json=?
+				WHERE alert_id=?`,
+				nowMs, opts.Finding, opts.Finding, opts.OutcomeKind, opts.ItemID, nowMs, settledSeq,
+				opts.OutcomeKind, nullStr(opts.RunID), opts.Finding, opts.ActionNeeded, nowMs, string(newBundle), alertID); err != nil {
+				return err
+			}
+		} else {
+			if _, err := tx.Exec(`UPDATE alert_episodes SET
+				settlement_state='investigated',
+				investigated_by='tillr-triage',
+				investigated_at=?,
+				investigation_cause=?,
+				investigation_evidence=?,
+				triage_state='escalated',
+				triage_outcome='triage-failed',
+				triage_outcome_kind=NULL,
+				triage_run_id=?,
+				triage_finding=?,
+				triage_action_needed=?,
+				triage_question=NULL,
+				triage_options_json=NULL,
+				triaged_at=?,
+				active_triage_run_id=NULL,
+				escalated_to='operator-session',
+				bundle_json=?
+				WHERE alert_id=?`,
+				nowMs, opts.Finding, opts.Finding,
+				nullStr(opts.RunID), opts.Finding, opts.ActionNeeded, nowMs, string(newBundle), alertID); err != nil {
+				return err
+			}
+		}
+
+		body := map[string]any{
+			"alert_id":      alertID,
+			"rule_id":       a.payload["rule_id"],
+			"subject_key":   a.payload["subject_key"],
+			"severity":      a.payload["severity"],
+			"outcome":       "triage-failed",
+			"escalated_to":  "operator-session",
+			"finding":       opts.Finding,
+			"action_needed": opts.ActionNeeded,
+		}
+		if opts.RunID != "" {
+			body["run_id"] = opts.RunID
+		}
+		if opts.ItemID != "" {
+			body["item_id"] = opts.ItemID
+			body["outcome_kind"] = opts.OutcomeKind
+		}
+		seq, err := appendAlertSeq(tx, alertID, triagedKind, now, body)
+		if err != nil {
+			return err
+		}
+		if opts.ItemID != "" {
+			if err := upsertAlertItemLink(tx, alertID, opts.ItemID, opts.OutcomeKind, "tillr-triage", "", nowMs, seq); err != nil {
+				return err
+			}
+		}
+		return appendAlert(tx, alertID, escalatedKind, now, body)
+	})
+}
+
+// EligibleTriageEpisode describes an untriaged episode eligible for tillr-drain dispatch.
+type EligibleTriageEpisode struct {
+	AlertID              string
+	RuleID               string
+	SubjectKey           string
+	State                string
+	Severity             string
+	ConditionFingerprint string
+	OpenedSeq            int64
+	ObservationCount     int64
+	ReopenCountForItem   int64
+	TrackingItemID       string
+	VariablesJSON        string
+	BundleJSON           string
+}
+
+// ReadEligibleTriageEpisodes returns untriaged open or auto-resolved-uninvestigated
+// episodes with active_triage_run_id IS NULL whose rule_id is in triageRuleIDs,
+// ordered by opened_seq ASC, alert_id ASC.
+func ReadEligibleTriageEpisodes(rd *store.Reader, triageRuleIDs map[string]bool) ([]EligibleTriageEpisode, error) {
+	if len(triageRuleIDs) == 0 {
+		return nil, nil
+	}
+	hasAlerts, err := tableExists(rd, "alert_episodes")
+	if err != nil || !hasAlerts {
+		return nil, err
+	}
+	hasTriage, err := hasTriageColumns(rd)
+	if err != nil {
+		return nil, err
+	}
+	hasSettle, err := hasSettlementColumns(rd)
+	if err != nil {
+		return nil, err
+	}
+	hasActive, err := alertEpisodesHasColumn(rd, "active_triage_run_id")
+	if err != nil {
+		return nil, err
+	}
+	if !hasTriage || !hasSettle || !hasActive {
+		return nil, nil
+	}
+	hasReopen, err := alertEpisodesHasColumn(rd, "reopen_count_for_item")
+	if err != nil {
+		return nil, err
+	}
+	hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
+	if err != nil {
+		return nil, err
+	}
+	hasVars, err := alertEpisodesHasColumn(rd, "variables_json")
+	if err != nil {
+		return nil, err
+	}
+	reopenExpr := "0"
+	if hasReopen {
+		reopenExpr = "COALESCE(reopen_count_for_item, 0)"
+	}
+	trackingExpr := "''"
+	if hasTracking {
+		trackingExpr = "COALESCE(tracking_item_id, '')"
+	}
+	varsExpr := "'{}'"
+	if hasVars {
+		varsExpr = "COALESCE(NULLIF(variables_json, ''), '{}')"
+	}
+	q := `SELECT alert_id, rule_id, subject_key, state, severity, condition_fingerprint,
+		opened_seq, observation_count, ` + reopenExpr + `, ` + trackingExpr + `, ` + varsExpr + `, bundle_json
+		FROM alert_episodes
+		WHERE active_triage_run_id IS NULL
+		  AND COALESCE(NULLIF(triage_state, ''), 'untriaged') = 'untriaged'
+		  AND (state = 'open' OR (state = 'resolved' AND COALESCE(NULLIF(settlement_state, ''), 'uninvestigated') = 'uninvestigated'))
+		ORDER BY opened_seq ASC, alert_id ASC`
+	rows, err := rd.Query(q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EligibleTriageEpisode
+	for rows.Next() {
+		var ep EligibleTriageEpisode
+		if err := rows.Scan(
+			&ep.AlertID, &ep.RuleID, &ep.SubjectKey, &ep.State, &ep.Severity, &ep.ConditionFingerprint,
+			&ep.OpenedSeq, &ep.ObservationCount, &ep.ReopenCountForItem, &ep.TrackingItemID, &ep.VariablesJSON, &ep.BundleJSON,
+		); err != nil {
+			return nil, err
+		}
+		if triageRuleIDs[ep.RuleID] {
+			out = append(out, ep)
+		}
+	}
+	return out, rows.Err()
+}
+
+// ActiveTriageClaim describes an episode currently holding an active_triage_run_id.
+type ActiveTriageClaim struct {
+	AlertID        string
+	RuleID         string
+	SubjectKey     string
+	ActiveRunID    string
+	TrackingItemID string
+}
+
+// ReadActiveTriageClaims returns episodes with a non-empty active_triage_run_id.
+func ReadActiveTriageClaims(rd *store.Reader) ([]ActiveTriageClaim, error) {
+	hasAlerts, err := tableExists(rd, "alert_episodes")
+	if err != nil || !hasAlerts {
+		return nil, err
+	}
+	hasActive, err := alertEpisodesHasColumn(rd, "active_triage_run_id")
+	if err != nil || !hasActive {
+		return nil, err
+	}
+	hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
+	if err != nil {
+		return nil, err
+	}
+	trackingExpr := "''"
+	if hasTracking {
+		trackingExpr = "COALESCE(tracking_item_id, '')"
+	}
+	rows, err := rd.Query(`SELECT alert_id, rule_id, subject_key, active_triage_run_id, ` + trackingExpr + `
+		FROM alert_episodes
+		WHERE active_triage_run_id IS NOT NULL AND active_triage_run_id != ''
+		ORDER BY opened_seq ASC, alert_id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActiveTriageClaim
+	for rows.Next() {
+		var c ActiveTriageClaim
+		if err := rows.Scan(&c.AlertID, &c.RuleID, &c.SubjectKey, &c.ActiveRunID, &c.TrackingItemID); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// TriageEpisodeState captures the triage-relevant columns of a single episode.
+type TriageEpisodeState struct {
+	AlertID            string
+	RuleID             string
+	SubjectKey         string
+	State              string
+	SettlementState    string
+	TriageState        string
+	TriageOutcome      string
+	TriageOutcomeKind  string
+	TriageFinding      string
+	ActiveTriageRunID  string
+	TrackingItemID     string
+	ReopenCountForItem int64
+	VariablesJSON      string
+	BundleJSON         string
+}
+
+// ReadTriageEpisodeState returns the current triage state for alertID.
+func ReadTriageEpisodeState(rd *store.Reader, alertID string) (TriageEpisodeState, bool, error) {
+	hasAlerts, err := tableExists(rd, "alert_episodes")
+	if err != nil || !hasAlerts {
+		return TriageEpisodeState{}, false, err
+	}
+	hasTriage, err := hasTriageColumns(rd)
+	if err != nil {
+		return TriageEpisodeState{}, false, err
+	}
+	hasSettle, err := hasSettlementColumns(rd)
+	if err != nil {
+		return TriageEpisodeState{}, false, err
+	}
+	hasActive, err := alertEpisodesHasColumn(rd, "active_triage_run_id")
+	if err != nil {
+		return TriageEpisodeState{}, false, err
+	}
+	if !hasTriage || !hasSettle || !hasActive {
+		return TriageEpisodeState{}, false, nil
+	}
+	hasReopen, err := alertEpisodesHasColumn(rd, "reopen_count_for_item")
+	if err != nil {
+		return TriageEpisodeState{}, false, err
+	}
+	hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
+	if err != nil {
+		return TriageEpisodeState{}, false, err
+	}
+	hasVars, err := alertEpisodesHasColumn(rd, "variables_json")
+	if err != nil {
+		return TriageEpisodeState{}, false, err
+	}
+	reopenExpr := "0"
+	if hasReopen {
+		reopenExpr = "COALESCE(reopen_count_for_item, 0)"
+	}
+	trackingExpr := "''"
+	if hasTracking {
+		trackingExpr = "COALESCE(tracking_item_id, '')"
+	}
+	varsExpr := "'{}'"
+	if hasVars {
+		varsExpr = "COALESCE(NULLIF(variables_json, ''), '{}')"
+	}
+	var st TriageEpisodeState
+	err = rd.QueryRow(`SELECT alert_id, rule_id, subject_key, state,
+		COALESCE(NULLIF(settlement_state, ''), 'uninvestigated'),
+		COALESCE(NULLIF(triage_state, ''), 'untriaged'),
+		COALESCE(triage_outcome, ''),
+		COALESCE(triage_outcome_kind, ''),
+		COALESCE(triage_finding, ''),
+		COALESCE(active_triage_run_id, ''),
+		`+trackingExpr+`, `+reopenExpr+`, `+varsExpr+`, bundle_json
+		FROM alert_episodes WHERE alert_id = ?`, alertID).Scan(
+		&st.AlertID, &st.RuleID, &st.SubjectKey, &st.State,
+		&st.SettlementState, &st.TriageState, &st.TriageOutcome, &st.TriageOutcomeKind, &st.TriageFinding,
+		&st.ActiveTriageRunID, &st.TrackingItemID, &st.ReopenCountForItem, &st.VariablesJSON, &st.BundleJSON,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TriageEpisodeState{}, false, nil
+	}
+	if err != nil {
+		return TriageEpisodeState{}, false, err
+	}
+	return st, true, nil
+}
+
+// HasActiveSilenceForItem reports whether an active (unexpired, unlifted) silence
+// in watch_silences covers the episode's rule/variables or tracking item.
+func HasActiveSilenceForItem(rd *store.Reader, ruleID, varsJSON, trackingItemID string, now time.Time) (bool, error) {
+	silences, err := ReadActiveSilences(rd)
+	if err != nil {
+		return false, err
+	}
+	nowMs := now.UnixMilli()
+	for _, s := range silences {
+		if s.SilenceUntilMS != nil && nowMs >= *s.SilenceUntilMS {
+			continue
+		}
+		if trackingItemID != "" && s.TrackingItemID == trackingItemID {
+			return true, nil
+		}
+		if ruleID != "" && s.RuleID == ruleID && silenceMatches(s.VarsJSON, varsJSON) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ReadTriageCorrelationContext formats recent active episodes and active silences
+// for inclusion in the triage brief's {{CORRELATION_CONTEXT}} placeholder.
+func ReadTriageCorrelationContext(rd *store.Reader, excludeAlertID string, now time.Time) (string, error) {
+	hasAlerts, err := tableExists(rd, "alert_episodes")
+	if err != nil {
+		return "", err
+	}
+	var lines []string
+	if hasAlerts {
+		hasTriage, err := hasTriageColumns(rd)
+		if err != nil {
+			return "", err
+		}
+		hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
+		if err != nil {
+			return "", err
+		}
+		triageExpr := "'untriaged'"
+		if hasTriage {
+			triageExpr = "COALESCE(NULLIF(triage_state, ''), 'untriaged')"
+		}
+		trackingExpr := "''"
+		if hasTracking {
+			trackingExpr = "COALESCE(tracking_item_id, '')"
+		}
+		rows, err := rd.Query(`SELECT alert_id, rule_id, subject_key, state, `+triageExpr+`, `+trackingExpr+`
+			FROM alert_episodes
+			WHERE alert_id != ? AND state != 'resolved'
+			ORDER BY opened_seq DESC, alert_id ASC
+			LIMIT 20`, excludeAlertID)
+		if err != nil {
+			return "", err
+		}
+		for rows.Next() {
+			var aid, rid, sk, st, tst, item string
+			if err := rows.Scan(&aid, &rid, &sk, &st, &tst, &item); err != nil {
+				rows.Close()
+				return "", err
+			}
+			line := fmt.Sprintf("- episode %s rule=%s subject=%s state=%s triage=%s", aid, rid, sk, st, tst)
+			if item != "" {
+				line += " item=" + item
+			}
+			lines = append(lines, line)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return "", err
+		}
+		rows.Close()
+	}
+	silences, err := ReadActiveSilences(rd)
+	if err != nil {
+		return "", err
+	}
+	nowMs := now.UnixMilli()
+	for _, s := range silences {
+		if s.SilenceUntilMS != nil && nowMs >= *s.SilenceUntilMS {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- silence %s rule=%s vars=%s item=%s", s.SilenceID, s.RuleID, s.VarsJSON, s.TrackingItemID))
+	}
+	if len(lines) == 0 {
+		return "(none)", nil
+	}
+	return strings.Join(lines, "\n"), nil
 }

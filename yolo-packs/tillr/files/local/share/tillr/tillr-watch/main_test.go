@@ -182,6 +182,21 @@ func quietToFiring(t *testing.T, useSymlink bool) {
 
 func TestWatchStatusReadOnly(t *testing.T) {
 	s, rules := fixture(t, true)
+	// tillr-store transitively links watch via tillr-drain, so drop watch tables
+	// to exercise read-only status before eval creates them.
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`
+			DROP TABLE IF EXISTS alert_item_links;
+			DROP TABLE IF EXISTS watch_silences;
+			DROP TABLE IF EXISTS foreground_delivery;
+			DROP TABLE IF EXISTS alert_episodes;
+			DROP TABLE IF EXISTS watch_rule_overrides;
+			DROP TABLE IF EXISTS watch_rule_baselines;
+		`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	checkTables := func(want int) {
 		t.Helper()
 		var got int

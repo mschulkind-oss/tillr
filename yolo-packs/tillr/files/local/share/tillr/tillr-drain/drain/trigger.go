@@ -360,6 +360,15 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 				return "", err
 			}
 			return "", nil
+		case <-l.triageWake:
+			if err := l.checkStopRequested(ctx); err != nil {
+				if stoppedByOperator(ctx, err) {
+					result.Detail = "the loop was asked to stop while waiting for a trigger"
+					return StopOperatorStop, nil
+				}
+				return "", err
+			}
+			return "", nil
 		case <-notifyWake:
 			if err := l.checkStopRequested(ctx); err != nil {
 				if stoppedByOperator(ctx, err) {

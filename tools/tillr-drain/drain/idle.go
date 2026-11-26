@@ -204,7 +204,7 @@ func (l *Loop) trunkMovedSinceSync(ctx context.Context) bool {
 
 func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.Time, pendingOnly bool) *idlePlanState {
 	if l.cfg.Store == "" || l.cfg.ExitWhenDrained || l.commentsSettings() != nil ||
-		l.activeCount() > 0 || l.heavyInFlight() || l.infrastructureStreak() > 0 || l.hasStageFaults() {
+		l.activeCount() > 0 || l.activeTriageCount() > 0 || l.heavyInFlight() || l.infrastructureStreak() > 0 || l.hasStageFaults() {
 		return nil
 	}
 	head, _, states, leasedLanes, runCount, maxFinishedAt, hasDesignDocs, windows, rollingWatermark, rollingLastRunAt, err := l.readIdleStoreFingerprint(ctx, -1)
@@ -279,8 +279,11 @@ func (l *Loop) idleUnchanged(ctx context.Context, at time.Time, pendingOnly bool
 		return false
 	}
 	if l.cfg.ExitWhenDrained || l.commentsSettings() != nil ||
-		l.activeCount() > 0 || l.heavyInFlight() || l.infrastructureStreak() > 0 ||
+		l.activeCount() > 0 || l.activeTriageCount() > 0 || l.heavyInFlight() || l.infrastructureStreak() > 0 ||
 		l.hasStageFaults() || len(l.completions) > 0 {
+		return false
+	}
+	if l.hasTriageSeat() && l.hasEligibleTriageEpisodes(ctx) {
 		return false
 	}
 	if !idle.nextExpiry.IsZero() && !at.Before(idle.nextExpiry) {

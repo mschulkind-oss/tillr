@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 func TestTriageClaimSerializationOpenAndAutoResolved(t *testing.T) {
@@ -423,5 +425,113 @@ func TestTriageReopenResetsStateAndStatusRecent(t *testing.T) {
 	lifecycleRead(t, s, `SELECT triage_state FROM alert_episodes WHERE alert_id='`+openID+`'`, &reopenedTriageState)
 	if reopenedTriageState != "untriaged" {
 		t.Fatalf("expected reopened triage_state=untriaged, got %q", reopenedTriageState)
+	}
+}
+
+func TestRecordTriageFailureAndHelpers(t *testing.T) {
+	register(t, "watch-test.fact", "watch-test.clear")
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0)
+	s := watchStore(t)
+	seedItemsTable(t, s)
+	watchSQL(t, s, `INSERT INTO items(item_id, state, event_seq) VALUES ('item-fail', 'in-queue', 0)`)
+
+	r := Rule{
+		ID:       "triage-fail-rule",
+		Scope:    "core",
+		Enabled:  true,
+		Severity: "warning",
+		Reads:    Reads{Events: []string{"watch-test.fact", "watch-test.clear"}},
+		When:     When{Pattern: PredicateMatch, GroupBy: "subject", Threshold: 1, Window: time.Hour, ClearWhen: mustExpr(t, `event.kind == "watch-test.clear"`)},
+		Delivery: Delivery{Receiver: "triage"},
+	}
+	e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
+	evaluateLifecycle(t, &e)
+
+	// Open two episodes: first on s1 (auto-resolved), second on s2 (open).
+	watchFact(t, s, now, `{"subject":"s1"}`)
+	evaluateLifecycle(t, &e)
+	var id1 string
+	lifecycleRead(t, s, `SELECT alert_id FROM alert_episodes WHERE subject_key='s1'`, &id1)
+
+	now = now.Add(time.Minute)
+	watchFactKind(t, s, now, "watch-test.clear", `{"subject":"s1"}`)
+	evaluateLifecycle(t, &e)
+
+	now = now.Add(time.Minute)
+	watchFact(t, s, now, `{"subject":"s2"}`)
+	evaluateLifecycle(t, &e)
+	var id2 string
+	lifecycleRead(t, s, `SELECT alert_id FROM alert_episodes WHERE subject_key='s2'`, &id2)
+
+	// ReadEligibleTriageEpisodes returns both ordered by opened_seq ASC.
+	var eligible []EligibleTriageEpisode
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		var err error
+		eligible, err = ReadEligibleTriageEpisodes(rd, map[string]bool{"triage-fail-rule": true})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(eligible) != 2 || eligible[0].AlertID != id1 || eligible[1].AlertID != id2 {
+		t.Fatalf("expected [%s, %s], got %+v", id1, id2, eligible)
+	}
+	if eligible[0].State != "resolved" || eligible[1].State != "open" {
+		t.Fatalf("expected resolved then open, got %s then %s", eligible[0].State, eligible[1].State)
+	}
+
+	// Claim id1 and fail with an attached defect item.
+	if err := e.ClaimTriage(ctx, id1, "run-fail-1"); err != nil {
+		t.Fatal(err)
+	}
+	var claims []ActiveTriageClaim
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		var err error
+		claims, err = ReadActiveTriageClaims(rd)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 1 || claims[0].AlertID != id1 || claims[0].ActiveRunID != "run-fail-1" {
+		t.Fatalf("unexpected active claims: %+v", claims)
+	}
+
+	if err := e.RecordTriageFailure(ctx, id1, TriageFailureOptions{
+		RunID:        "run-fail-1",
+		Finding:      "runner exited 1",
+		ActionNeeded: "inspect triage run-fail-1",
+		ItemID:       "item-fail",
+		OutcomeKind:  "fix-fault",
+	}); err != nil {
+		t.Fatalf("RecordTriageFailure with item: %v", err)
+	}
+
+	var tState, tOutcome, escTo, trk, active string
+	lifecycleRead(t, s, `SELECT triage_state, triage_outcome, escalated_to, tracking_item_id, COALESCE(active_triage_run_id, '') FROM alert_episodes WHERE alert_id='`+id1+`'`,
+		&tState, &tOutcome, &escTo, &trk, &active)
+	if tState != "escalated" || tOutcome != "triage-failed" || escTo != "operator-session" || trk != "item-fail" || active != "" {
+		t.Fatalf("unexpected state after RecordTriageFailure: state=%s outcome=%s esc=%s trk=%s active=%q", tState, tOutcome, escTo, trk, active)
+	}
+
+	// Fail id2 without an item and without a run id (closed backend).
+	if err := e.RecordTriageFailure(ctx, id2, TriageFailureOptions{
+		Finding:      "triage backend pi-scout is closed",
+		ActionNeeded: "reopen pi-scout",
+	}); err != nil {
+		t.Fatalf("RecordTriageFailure without item: %v", err)
+	}
+
+	// Both failures wake operator-session with Bundle.Triage.Outcome == "triage-failed".
+	notices, err := e.Pending(ctx, "operator-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notices) != 2 {
+		t.Fatalf("expected 2 notices for operator-session, got %d", len(notices))
+	}
+	for _, n := range notices {
+		if n.Bundle.Triage == nil || n.Bundle.Triage.Outcome != "triage-failed" || n.Bundle.Triage.EscalatedTo != "operator-session" {
+			t.Fatalf("expected triage-failed header on notice %s, got %+v", n.AlertID, n.Bundle.Triage)
+		}
 	}
 }

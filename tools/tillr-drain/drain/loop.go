@@ -30,6 +30,7 @@ import (
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/watch"
 )
 
 // The default trunk branch the loop stages lanes from and lands onto when [trunk] branch
@@ -428,6 +429,16 @@ type LoopConfig struct {
 	// DefaultBackoffBase. It is a wait, never a stop: the ruling's answer to a repeated
 	// fault is to report it and try again, because the pile still holds work.
 	BackoffBase time.Duration
+	// MaxConcurrentTriage (max_concurrent_triage) caps concurrent alert triage runs
+	// dispatched outside build lanes. Zero uses defaultMaxConcurrentTriage (2).
+	MaxConcurrentTriage int
+	// WatchRules optionally supplies pre-loaded watch rules for alert triage dispatch.
+	// Nil loads shipped + repository rules from disk.
+	WatchRules []watch.Rule
+	// WatchRulesDir optionally overrides <Root>/config/tillr/watch when loading rules.
+	WatchRulesDir string
+	// TriageTemplate optionally overrides brief-template-triage.md path resolution.
+	TriageTemplate string
 	// StorePollInterval bounds the fallback wait before reconciling the store
 	// when no notification arrives. Zero selects DefaultFallbackPollInterval
 	// (15 s); it never bounds the amount of work.
@@ -767,6 +778,12 @@ type Loop struct {
 	activeBrackets           map[string]bool
 	examiningRuns            map[string]bool
 	examiningItems           map[string]int
+	triageMu                 sync.Mutex
+	triageWG                 sync.WaitGroup
+	triageActive             map[string]string // runID -> slotName
+	triageSlots              map[string]bool   // in-use "triage-1".."triage-<N>"
+	triageWake               chan struct{}
+	triageSeq                atomic.Int64
 	examineTimer             func(time.Duration) (<-chan time.Time, func())
 	// heartbeatClock is a test seam: when set, the heartbeat waits on the ticker it
 	// returns instead of a wall-clock one, so a test decides when each tick happens.
@@ -865,6 +882,9 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if cfg.BackoffBase < 0 {
 		return nil, Usagef("the loop needs a non-negative backoff base: it is the wait after an infrastructure failure, not a bound on the run")
 	}
+	if cfg.MaxConcurrentTriage < 0 {
+		return nil, Usagef("the loop needs a non-negative max_concurrent_triage")
+	}
 	if cfg.BackoffBase == 0 {
 		cfg.BackoffBase = DefaultBackoffBase
 	}
@@ -946,6 +966,9 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		activeBrackets:   map[string]bool{},
 		examiningRuns:    map[string]bool{},
 		examiningItems:   map[string]int{},
+		triageActive:     map[string]string{},
+		triageSlots:      map[string]bool{},
+		triageWake:       make(chan struct{}, 1),
 	}
 	if cfg.PolicyRef != "" {
 		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
@@ -1097,6 +1120,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		// their cancellation cleanup before this process exits.
 		l.examinations.Wait()
 		l.heavyWG.Wait()
+		l.triageWG.Wait()
 	}()
 	// The result is written on every way out, including the failing one: a loop that stopped
 	// on a store it could not open is a stop an operator needs the record of, and a file
@@ -1123,6 +1147,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
 		return faultResult(result, err)
 	}
+	l.recoverStaleTriageClaims(ctx)
 	l.checkPiBuild(ctx)
 	// The documents are synced before anything is planned: an item block committed since
 	// the last drain is work this drain should see, and the sync is the only way an item

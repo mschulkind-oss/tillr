@@ -925,6 +925,7 @@ func loopFace(args []string) int {
 	path := fs.String("store", "", "the store to reap and plan from (default <root>/.tillr/state.db)")
 	maxAgents := fs.Int("max-agents", 2, "running-agent limit on a fresh start (replaces any saved scale target when set explicitly; reserved express lanes are configured separately)")
 	laneCount := fs.Int("lanes", 2, "alias for --max-agents")
+	maxConcurrentTriage := fs.Int("max-concurrent-triage", 2, "maximum concurrent alert triage runs dispatched outside build lanes (max_concurrent_triage)")
 	laneRoot := fs.String("lane-root", "", "where the lanes' worktrees live (default <root>/.tillr/lanes)")
 	backoffBase := fs.Duration("backoff-base", drain.DefaultBackoffBase, "the wait before the next attempt after the first consecutive infrastructure failure; each further one doubles it, up to 5m. It is a wait and not a stop: the loop reports the failure and keeps trying, because the pile still holds work")
 	fallbackPoll := fs.Duration("fallback-poll", drain.DefaultFallbackPollInterval, "fallback store reconciliation poll interval when no relayed notification arrives (D-SN6)")
@@ -978,6 +979,9 @@ func loopFace(args []string) int {
 	}
 	if agentLimit < 0 {
 		return failStartup(drain.Usagef("loop needs --max-agents N (N >= 0)"))
+	}
+	if *maxConcurrentTriage < 0 {
+		return failStartup(drain.Usagef("loop needs --max-concurrent-triage N (N >= 0)"))
 	}
 	// A missing store must not mask invalid repository settings, including
 	// when --check is run before the first loop startup.
@@ -1090,7 +1094,7 @@ func loopFace(args []string) int {
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
-		Lanes: append(laneIDs(agentLimit), expressLaneIDs(repositorySettings.Lanes.Express)...), LiveScale: true, ExplicitLanes: explicitLanes, BackoffBase: *backoffBase, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
+		Lanes: append(laneIDs(agentLimit), expressLaneIDs(repositorySettings.Lanes.Express)...), LiveScale: true, ExplicitLanes: explicitLanes, BackoffBase: *backoffBase, MaxConcurrentTriage: *maxConcurrentTriage, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,

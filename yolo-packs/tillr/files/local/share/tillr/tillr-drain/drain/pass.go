@@ -3144,6 +3144,13 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if stop != "" || err != nil {
 		return stop, err
 	}
+	if err := l.timePassPhase("alert_triage", func() error {
+		l.recoverStaleTriageClaims(ctx)
+		l.dispatchAlertTriage(ctx)
+		return nil
+	}); err != nil {
+		return "", err
+	}
 	if !l.nonLanding {
 		if err := l.timePassPhase("reclaim_ended_item_lanes", func() error { return l.reclaimEndedItemLanes(ctx) }); err != nil {
 			l.reportf("loop: ended-item lane cleanup failed: %v\n", err)
@@ -3550,7 +3557,11 @@ plans:
 		l.reportRestartWaiting(restartWaiting, restartConflictWaiting, result)
 		return l.waitForTrigger(ctx, leases, at, result)
 	}
-	if l.activeCount() > 0 {
+	if l.consumeTriageWake() {
+		l.waitingDetail = ""
+		return "", nil
+	}
+	if l.activeCount() > 0 || l.activeTriageCount() > 0 {
 		l.waitingDetail = ""
 		return l.waitForTrigger(ctx, leases, at, result)
 	}
