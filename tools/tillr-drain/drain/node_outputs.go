@@ -305,7 +305,7 @@ func checkNodeOutputs(root string, d Decision) ([]nodeArtifact, error) {
 			if err := uniqueJSON(raw); err != nil {
 				err = fmt.Errorf("node-output-missing: %s.%s: invalid json: %w", stage.ID, name, err)
 				if name == deliveryOutput && classificationNode(stage) {
-					return nil, deliveryParseError{err}
+					return nil, deliveryParseError{Err: err}
 				}
 				return nil, err
 			}

@@ -221,24 +221,24 @@ func TestLoopPassTimerRemainderAndAccumulation(t *testing.T) {
 
 	// Repeated phase accumulates sub-millisecond durations before truncating to ms:
 	// 1.4ms + 1.4ms = 2.8ms -> 2ms.
-	endA := pt.startPhase("alpha")
+	endA := pt.StartPhase("alpha")
 	now = now.Add(1400 * time.Microsecond)
 	endA()
 
 	// 3.2ms outside any named phase.
 	now = now.Add(3200 * time.Microsecond)
 
-	endB := pt.startPhase("beta")
+	endB := pt.StartPhase("beta")
 	now = now.Add(5600 * time.Microsecond)
 	endB()
 
-	endA2 := pt.startPhase("alpha")
+	endA2 := pt.StartPhase("alpha")
 	now = now.Add(1400 * time.Microsecond)
 	endA2()
 
 	// Total elapsed = 1.5 + 1.4 + 3.2 + 5.6 + 1.4 = 13.1ms -> wallMS = 13.
 	// alpha = 2.8ms -> 2, beta = 5.6ms -> 5, other = 13 - (2 + 5) = 6.
-	at, wallMS, phasesMS := pt.finish()
+	at, wallMS, phasesMS := pt.Finish()
 	if !at.Equal(now) {
 		t.Fatalf("at = %v, want %v", at, now)
 	}

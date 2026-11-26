@@ -282,38 +282,6 @@ type RollingStep interface {
 	RollingConfigured() bool
 }
 
-// rollingDDL is drain's rolling state: one row of the live watermark, and an append-only
-// log of the runs that moved (or refused to move) it.
-//
-// The state row is the watermark the next run starts from and the landing count since it
-// last advanced. The log is the evidence: a reader can see every red range that did not
-// advance the watermark, which is the thing a single mutable row would erase.
-const rollingDDL = `
-CREATE TABLE IF NOT EXISTS rolling_state (
-  id            INTEGER PRIMARY KEY CHECK (id = 1),
-  watermark_sha TEXT NOT NULL DEFAULT '',
-  landings_since INTEGER NOT NULL DEFAULT 0,
-  last_run_at   INTEGER NOT NULL DEFAULT 0,
-  last_tip_sha  TEXT NOT NULL DEFAULT '',
-  last_outcome  TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS rolling_runs (
-  run_id         TEXT PRIMARY KEY,
-  base_sha       TEXT NOT NULL,
-  tip_sha        TEXT NOT NULL,
-  outcome        TEXT NOT NULL,
-  failing_checks TEXT NOT NULL,
-  at             INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS rolling_coverage (
-  run_id         TEXT PRIMARY KEY REFERENCES rolling_runs(run_id),
-  spans_state    TEXT NOT NULL,
-  ran            INTEGER NOT NULL,
-  cached         INTEGER NOT NULL,
-  skipped_checks TEXT NOT NULL
-);
-`
-
 // rollingState is the watermark and the landings since it last advanced.
 type rollingState struct {
 	WatermarkSHA  string

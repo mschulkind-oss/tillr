@@ -1,4 +1,4 @@
-package drain
+package storelog
 
 import (
 	"context"
@@ -7,9 +7,10 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+// PassSpendDDL is the table attributing run spend to the pass that settles it.
 // Spend belongs to the pass that settles it, but its origin remains the loop
 // that started it. One run per pass prevents a replayed settlement inflating it.
-const passSpendDDL = `
+const PassSpendDDL = `
 CREATE TABLE IF NOT EXISTS drain_pass_spend (
  pass_id TEXT NOT NULL,
  run_id TEXT NOT NULL,
@@ -21,11 +22,12 @@ CREATE TABLE IF NOT EXISTS drain_pass_spend (
 );
 `
 
-func (l *Loop) recordSettlementSpend(ctx context.Context, passID, origin string, rec run.Record) error {
+// RecordSettlementSpend writes or refreshes the drain_pass_spend row for a settled run.
+func RecordSettlementSpend(ctx context.Context, storePath, sessionID, passID, origin string, rec run.Record) error {
 	if passID == "" {
 		return nil
 	}
-	s, err := store.Open(ctx, l.cfg.Store, true)
+	s, err := store.Open(ctx, storePath, true)
 	if err != nil {
 		return err
 	}
@@ -39,7 +41,7 @@ func (l *Loop) recordSettlementSpend(ctx context.Context, passID, origin string,
 			cost = *rec.Usage.CostUSD
 		}
 	}
-	carried := origin == "" || origin != l.sessionID
+	carried := origin == "" || origin != sessionID
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		// A retried reader settles alongside finished siblings. Their original
 		// accounting belongs to its first pass, not every subsequent group pass.
@@ -52,12 +54,12 @@ func (l *Loop) recordSettlementSpend(ctx context.Context, passID, origin string,
 			// continuation, without adding a second charge. An unchanged sibling
 			// keeps its previous attribution and is not charged to this loop.
 			_, err := tx.Exec(`UPDATE drain_pass_spend SET usage_tokens=?,usage_cost_usd=?,carried_over=?,settled_loop=?
- WHERE run_id=? AND (usage_tokens IS NOT ? OR usage_cost_usd IS NOT ?)`, tokens, cost, carried, l.sessionID, rec.RunID, tokens, cost)
+ WHERE run_id=? AND (usage_tokens IS NOT ? OR usage_cost_usd IS NOT ?)`, tokens, cost, carried, sessionID, rec.RunID, tokens, cost)
 			return err
 		}
 		_, err := tx.Exec(`INSERT INTO drain_pass_spend(pass_id,run_id,carried_over,settled_loop,usage_tokens,usage_cost_usd) VALUES(?,?,?,?,?,?)
    ON CONFLICT(pass_id,run_id) DO UPDATE SET carried_over=excluded.carried_over,
-   settled_loop=excluded.settled_loop,usage_tokens=excluded.usage_tokens,usage_cost_usd=excluded.usage_cost_usd`, passID, rec.RunID, carried, l.sessionID, tokens, cost)
+   settled_loop=excluded.settled_loop,usage_tokens=excluded.usage_tokens,usage_cost_usd=excluded.usage_cost_usd`, passID, rec.RunID, carried, sessionID, tokens, cost)
 		return err
 	})
 }
