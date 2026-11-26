@@ -52,6 +52,7 @@ func (s *ProcessSteps) EnableCheck(ctx context.Context, checkID, episode, storeD
 	if s.Root != "" {
 		cmd.Dir = s.Root
 	}
+	cmd.Env = withGitCeilingEnv(os.Environ(), s.LaneRoot)
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %s: %w (%s)", bin, strings.Join(args, " "), err, strings.TrimSpace(string(raw)))

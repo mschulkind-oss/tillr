@@ -181,6 +181,35 @@ func TestDesignCitationsSkipDeliveredPackDocsSnapshot(t *testing.T) {
 	}
 }
 
+func TestTrackedTillrRefusesTrackedPathUnderDotTillr(t *testing.T) {
+	root := initTempRepo(t)
+	findings, err := trackedTillrPaths(root)
+	if err != nil {
+		t.Fatalf("clean repo: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("clean repo findings = %v, want none", findings)
+	}
+	exempt := filepath.Join(".tillr", "lanes", "lane-4", "durable", "run-item-request-aab6839c65-a1-n2", "tmp", "go-shards-1n3lyhlr", "package-3-shard-1", "TestLandingCallDeliversRefusalsA-4118807249", "001", "lanes", "item-a", "worktree", ".forks", "outside.txt")
+	trackFile(t, root, exempt, "pre-existing\n")
+	findings, err = trackedTillrPaths(root)
+	if err != nil {
+		t.Fatalf("exempted repo: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("exempted path findings = %v, want none", findings)
+	}
+	stray := filepath.Join(".tillr", "lanes", "lane-4", "outside.txt")
+	trackFile(t, root, stray, "stray\n")
+	findings, err = trackedTillrPaths(root)
+	if err != nil {
+		t.Fatalf("dirty repo: %v", err)
+	}
+	if len(findings) != 1 || !strings.Contains(findings[0], stray) {
+		t.Fatalf("findings = %v, want one naming %s", findings, stray)
+	}
+}
+
 func TestTreeMissingGitIsCouldNotJudge(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "repo-gate")
 	build := exec.Command("go", "build", "-o", bin, ".")
@@ -188,7 +217,7 @@ func TestTreeMissingGitIsCouldNotJudge(t *testing.T) {
 		t.Fatalf("go build: %v: %s", err, out)
 	}
 	root := initTempRepo(t)
-	for _, name := range []string{"scratch", "design-citations"} {
+	for _, name := range []string{"scratch", "tracked-tillr", "design-citations"} {
 		cmd := exec.Command(bin, name)
 		cmd.Dir = root
 		cmd.Env = []string{"PATH=/not-a-tool-directory"}
@@ -245,8 +274,8 @@ func TestTreeTenFastChecksFitAndExtraDeclarationFails(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if fastCount != 11 {
-		t.Fatalf("expected 11 fast checks excluding gate-budget, got %d", fastCount)
+	if fastCount != 12 {
+		t.Fatalf("expected 12 fast checks excluding gate-budget, got %d", fastCount)
 	}
 	bin := buildRepoGateForTest(t)
 	if out, err := exec.Command(bin, "gate-budget", checksDir).CombinedOutput(); err != nil {

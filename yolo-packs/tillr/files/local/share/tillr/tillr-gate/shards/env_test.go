@@ -335,3 +335,17 @@ func TestBeta(t *testing.T) { checkRepo(t) }
 		t.Fatalf("passed=%v, want %v", passed, want)
 	}
 }
+
+func TestPrivateEnvironmentSetsGitCeilingDirectories(t *testing.T) {
+	scratch := t.TempDir()
+	existing := filepath.Join(t.TempDir(), "existing-ceiling")
+	t.Setenv("GIT_CEILING_DIRECTORIES", existing)
+	env, err := PrivateEnvironment("test", scratch, [][2]string{{"user.name", "Fixture"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := filepath.SplitList(env["GIT_CEILING_DIRECTORIES"])
+	if len(got) != 2 || got[0] != existing || got[1] != scratch {
+		t.Fatalf("GIT_CEILING_DIRECTORIES = %q, want [%q, %q]", env["GIT_CEILING_DIRECTORIES"], existing, scratch)
+	}
+}

@@ -77,6 +77,7 @@ func TestSuiteGuardFailsAProofAimedAtTheRealRepository(t *testing.T) {
 	if CommonGuard == nil {
 		t.Skip("not inside a repository")
 	}
+	t.Setenv("GIT_CEILING_DIRECTORIES", "")
 	// A scratch directory inside an enclosing repository resolves to that repository, as does cwd.
 	targets := []string{"."}
 	if dir := scratchUnderDurable(t); len(realCommonDirs(dir)) > 0 {

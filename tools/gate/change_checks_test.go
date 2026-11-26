@@ -1226,7 +1226,7 @@ func TestChangeAdapterRecordsCompleteFastInventoryIncludingSkips(t *testing.T) {
 		"go-edges": true, "go-module-inventory": true, "workflows": true,
 	}
 	expected := []string{"commit-identity", "citations", "documents", "file-size", "workflows", "elapsed-time",
-		"gate-budget", "scratch", "design-citations", "pack-sync", "go-build", "format", "go-affected",
+		"gate-budget", "scratch", "tracked-tillr", "design-citations", "pack-sync", "go-build", "format", "go-affected",
 		"go-edges", "go-module-inventory"}
 	if len(got) != len(expected) {
 		t.Fatalf("got %d checks (%v), want %d", len(got), got, len(expected))

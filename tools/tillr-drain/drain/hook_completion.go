@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -53,6 +54,7 @@ func (s *ProcessSteps) CompleteItem(ctx context.Context, itemID, runID string, d
 	argv := append(append([]string{}, d.Hooks.Argv...), "complete-item", "--item", itemID, "--run", runID, "--store", db, "--root", root)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = root
+	cmd.Env = withGitCeilingEnv(os.Environ(), s.LaneRoot)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	started := time.Now().UnixMilli()

@@ -430,6 +430,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		"TILLR_LANE_ID="+laneID,
 		"TILLR_RUN_EXEC_ID="+execID,
 	)
+	env = append(withoutEnv(env, "GIT_CEILING_DIRECTORIES"), "GIT_CEILING_DIRECTORIES="+filepath.Dir(root))
 	env, err = installGitGuard(workDir, durableDir, env)
 	if err != nil {
 		logFile.Close()

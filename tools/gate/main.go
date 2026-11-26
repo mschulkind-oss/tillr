@@ -21,6 +21,8 @@ func run(args []string) int {
 		return cmdDesignCitations(rest)
 	case "scratch":
 		return cmdScratch(rest)
+	case "tracked-tillr":
+		return cmdTrackedTillr(rest)
 	case "excused-as":
 		return cmdExcusedAs(rest)
 	case "citations",

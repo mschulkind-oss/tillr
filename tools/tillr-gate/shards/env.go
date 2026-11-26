@@ -306,6 +306,29 @@ func WritePrivateGitConfig(scratchDir string, gitValues [][2]string, env map[str
 	return configPath, nil
 }
 
+func withGitCeiling(existing, dir string) string {
+	if dir == "" {
+		return existing
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		absDir = dir
+	}
+	var out []string
+	seen := make(map[string]bool)
+	for _, entry := range filepath.SplitList(existing) {
+		if entry == "" || seen[entry] {
+			continue
+		}
+		seen[entry] = true
+		out = append(out, entry)
+	}
+	if !seen[absDir] {
+		out = append(out, absDir)
+	}
+	return strings.Join(out, string(os.PathListSeparator))
+}
+
 // PrivateEnvironment isolates a test or discovery process in scratch with a private gitconfig.
 func PrivateEnvironment(label, scratch string, gitValues [][2]string) (map[string]string, error) {
 	if err := os.MkdirAll(scratch, 0o755); err != nil {
@@ -316,6 +339,7 @@ func PrivateEnvironment(label, scratch string, gitValues [][2]string) (map[strin
 	base["TMPDIR"] = scratch
 	base["YOLO_DURABLE_DIR"] = scratch
 	base["GIT_CONFIG_GLOBAL"] = configPath
+	base["GIT_CEILING_DIRECTORIES"] = withGitCeiling(base["GIT_CEILING_DIRECTORIES"], scratch)
 	env := BypassGitShimEnv(base, SharedCacheDir(base), scratch)
 
 	values := gitValues

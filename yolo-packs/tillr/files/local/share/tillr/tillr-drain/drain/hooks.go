@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -97,6 +98,7 @@ func (s *ProcessSteps) checkHooks(ctx context.Context) error {
 	argv := append(append([]string{}, s.hooks.Argv...), "describe")
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = s.Root
+	cmd.Env = withGitCeilingEnv(os.Environ(), s.LaneRoot)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -134,6 +136,7 @@ func (s *ProcessSteps) checkHooks(ctx context.Context) error {
 		}
 		cmd := exec.CommandContext(ctx, s.ItemBin, "state", "--help")
 		cmd.Dir = s.Root
+		cmd.Env = withGitCeilingEnv(os.Environ(), s.LaneRoot)
 		out, err := cmd.CombinedOutput()
 		if ctx.Err() != nil {
 			return ctx.Err()

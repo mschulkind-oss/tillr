@@ -31,7 +31,11 @@ for line in sys.stdin.buffer:
   if mode=='missing-tokens': del data['estimatedTokensAfter']
  print(json.dumps({'type':'response','id':c['id'],'success':mode!='refused','data':data,'error':'refused'}),flush=True)
 `)
-			cmd := exec.Command(bin, "pi-compact", "--backend", "pi-designer", "--model", "fixture-model", "--effort", "medium", "--session-id", "11111111-1111-4111-8111-111111111111")
+			wd, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(bin, "pi-compact", "--backend", "pi-designer", "--model", "fixture-model", "--effort", "medium", "--session-id", "11111111-1111-4111-8111-111111111111", "--pi-dir", filepath.Join(wd, "backends", "pi"))
 			transcript := filepath.Join(dir, "session.jsonl")
 			if err := os.WriteFile(transcript, []byte("session\n"), 0644); err != nil {
 				t.Fatal(err)

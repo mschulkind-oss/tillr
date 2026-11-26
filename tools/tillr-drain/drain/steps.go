@@ -210,7 +210,7 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	if err != nil {
 		return run.Record{}, "", err
 	}
-	cmd.Env = append(withoutProcessEnv(os.Environ(), "TILLR_RUN_ID", "TILLR_LOOP_STORE", "TILLR_RUN_RESUME"), "TILLR_RUN_ID="+req.RunID, "TILLR_LOOP_STORE="+storeIdentity, fmt.Sprintf("TILLR_RUN_RESUME=%t", req.Resume))
+	cmd.Env = withGitCeilingEnv(append(withoutProcessEnv(os.Environ(), "TILLR_RUN_ID", "TILLR_LOOP_STORE", "TILLR_RUN_RESUME"), "TILLR_RUN_ID="+req.RunID, "TILLR_LOOP_STORE="+storeIdentity, fmt.Sprintf("TILLR_RUN_RESUME=%t", req.Resume)), s.LaneRoot)
 	// Both streams are regular files: even stdout must survive replacement of
 	// the loop. Close the parent's handles immediately after inheritance so the
 	// loop only opens files to read once the run has finished.
@@ -565,11 +565,11 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 	if s.isHookCommand(program) {
 		childArgv = append([]string(nil), argv...)
 		baseEnv := withoutProcessEnv(os.Environ(), dropEnv...)
-		childEnv = append(baseEnv, env...)
+		childEnv = withGitCeilingEnv(append(baseEnv, env...), s.LaneRoot)
 	} else {
 		probeCmd := s.stepCommand(ctx, argv, nil)
 		childArgv = append([]string(nil), probeCmd.Args...)
-		childEnv = append(withoutProcessEnv(probeCmd.Env, dropEnv...), env...)
+		childEnv = withGitCeilingEnv(append(withoutProcessEnv(probeCmd.Env, dropEnv...), env...), s.LaneRoot)
 	}
 
 	ownerPID, ownerStartTicks, err := heavySupervisorIdentity()
@@ -1299,7 +1299,7 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 		if gateCheck {
 			baseEnv = withoutProcessEnv(baseEnv, "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE")
 		}
-		cmd.Env = append(baseEnv, env...)
+		cmd.Env = withGitCeilingEnv(append(baseEnv, env...), s.LaneRoot)
 	} else {
 		baseEnv := env
 		if gateCheck {
@@ -1400,14 +1400,69 @@ func (s *ProcessSteps) forkRootEnv() []string {
 	return []string{"PI_FORKS_ROOT=" + s.Root}
 }
 
+func (s *ProcessSteps) gitCeilingEnv() []string {
+	if s.LaneRoot == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(s.LaneRoot)
+	if err != nil {
+		return nil
+	}
+	return []string{"GIT_CEILING_DIRECTORIES=" + filepath.Dir(abs)}
+}
+
+func withGitCeilingEnv(env []string, laneRoot string) []string {
+	if laneRoot == "" {
+		return env
+	}
+	abs, err := filepath.Abs(laneRoot)
+	if err != nil {
+		return env
+	}
+	return append(withoutProcessEnv(env, "GIT_CEILING_DIRECTORIES"), "GIT_CEILING_DIRECTORIES="+filepath.Dir(abs))
+}
+
+func isUnderDir(path, root string) bool {
+	if path == "" || root == "" {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return false
+	}
+	return true
+}
+
+func requireLaneWorktreeGit(dir, laneRoot string, args []string) error {
+	if laneRoot == "" || !isUnderDir(dir, laneRoot) {
+		return nil
+	}
+	if len(args) > 0 && args[0] == "init" {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return Externalf("lane worktree %s has no .git (%v)", dir, err)
+	}
+	return nil
+}
+
 // checkProcessEnv builds the environment for a replay, rolling or heavy check subprocess:
 // it strips the loop's own SQLite trace toggle and sets PYTHONDONTWRITEBYTECODE=1 so Python
 // imports inside a checked-out proof or scratch worktree never write __pycache__/*.pyc.<id>
 // or .pyc files that flip `git status --porcelain` during concurrent `go build` VCS stamping.
 func (s *ProcessSteps) checkProcessEnv(base []string, extra ...string) []string {
-	out := withoutProcessEnv(base, "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE")
+	out := withoutProcessEnv(base, "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE", "GIT_CEILING_DIRECTORIES")
 	out = append(out, "PYTHONDONTWRITEBYTECODE=1")
 	out = append(out, s.forkRootEnv()...)
+	out = append(out, s.gitCeilingEnv()...)
 	return append(out, extra...)
 }
 

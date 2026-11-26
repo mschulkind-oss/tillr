@@ -111,5 +111,6 @@ func (s *ProcessSteps) stepCommand(ctx context.Context, argv []string, env []str
 	if index >= 0 {
 		cmd.Env = append(cmd.Env, execLoopAdapterEnv)
 	}
+	cmd.Env = withGitCeilingEnv(cmd.Env, s.LaneRoot)
 	return cmd
 }

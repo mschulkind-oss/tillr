@@ -18,6 +18,7 @@ import (
 
 func pushGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	requireFixtureCommitRepo(t, dir, args)
 	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)

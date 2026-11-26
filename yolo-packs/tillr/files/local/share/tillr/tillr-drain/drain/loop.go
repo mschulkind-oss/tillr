@@ -4837,6 +4837,9 @@ func (l *Loop) git(ctx context.Context, dir string, args ...string) (string, err
 				return "", err
 			}
 		}
+		if err := requireLaneWorktreeGit(dir, l.cfg.LaneRoot, args); err != nil {
+			return "", err
+		}
 		var cmd *exec.Cmd
 		if isGitUpdateRef(args) {
 			// A ref write holds a .lock file that SIGKILL from exec.CommandContext
@@ -4849,6 +4852,7 @@ func (l *Loop) git(ctx context.Context, dir string, args ...string) (string, err
 		} else {
 			cmd = exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 		}
+		cmd.Env = withGitCeilingEnv(os.Environ(), l.cfg.LaneRoot)
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()

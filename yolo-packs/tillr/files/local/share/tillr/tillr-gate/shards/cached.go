@@ -79,6 +79,7 @@ func RunCachedGroup(
 	if explicitScratch {
 		env["TMPDIR"] = scratchDir
 	}
+	env["GIT_CEILING_DIRECTORIES"] = withGitCeiling(env["GIT_CEILING_DIRECTORIES"], scratchDir)
 	gitconfig, err := WritePrivateGitConfig(scratchDir, gitValues, env)
 	if err != nil {
 		return nil, "", &ShardError{Message: fmt.Sprintf("%s cannot prepare private git config: %v", label, err)}

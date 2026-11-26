@@ -23,6 +23,7 @@ func writeRepoFileForTest(t *testing.T, root, rel, body string) {
 
 func runGitForTest(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	requireFixtureCommitRepo(t, dir, args)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -18,6 +18,7 @@ import (
 
 func storeGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	requireFixtureCommitRepo(t, dir, args)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()

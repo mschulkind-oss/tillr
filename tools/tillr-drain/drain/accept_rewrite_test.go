@@ -13,6 +13,7 @@ import (
 
 func acceptGit(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
+	requireFixtureCommitRepo(t, dir, args)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()

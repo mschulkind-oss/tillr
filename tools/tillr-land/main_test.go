@@ -152,10 +152,41 @@ func git(t *testing.T, dir string, args ...string) string {
 	return gitAs(t, dir, fixtureName, fixtureEmail, args...)
 }
 
+func requireFixtureCommitRepo(t testing.TB, dir string, args []string) {
+	t.Helper()
+	commit := false
+	for _, arg := range args {
+		if arg == "commit" || arg == "commit-tree" {
+			commit = true
+			break
+		}
+	}
+	if !commit {
+		return
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("resolving fixture git dir %q: %v", dir, err)
+	}
+	cmd := exec.Command("git", "-C", absDir, "rev-parse", "--git-dir")
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "GIT_DIR=") || strings.HasPrefix(entry, "GIT_WORK_TREE=") || strings.HasPrefix(entry, "GIT_CEILING_DIRECTORIES=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	cmd.Env = append(env, "GIT_CEILING_DIRECTORIES="+filepath.Dir(absDir))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("refusing git %v in %s: directory is not its own repository (%v: %s)", args, dir, err, strings.TrimSpace(string(out)))
+	}
+}
+
 // gitAs runs one git command as another identity, which is how a fixture builds the lane
 // commit a landing publishes over.
 func gitAs(t *testing.T, dir, name, email string, args ...string) string {
 	t.Helper()
+	requireFixtureCommitRepo(t, dir, args)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(gitEnv(),
 		"GIT_AUTHOR_NAME="+name, "GIT_AUTHOR_EMAIL="+email,

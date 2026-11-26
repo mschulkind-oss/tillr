@@ -1280,7 +1280,11 @@ func samePath(a, b string) bool {
 // git's own stderr, because "a git command failed" is not a diagnostic an operator can act
 // on at 3am.
 func (s *LaneStager) git(ctx context.Context, dir string, args ...string) (string, error) {
+	if err := requireLaneWorktreeGit(dir, s.LaneRoot, args); err != nil {
+		return "", err
+	}
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = withGitCeilingEnv(os.Environ(), s.LaneRoot)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

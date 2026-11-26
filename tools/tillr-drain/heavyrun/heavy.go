@@ -60,6 +60,8 @@ type HeavyRunner struct {
 	WithWorktreeRegistryLock func(ctx context.Context, repo string, fn func() error) error
 	// UnlockRegisteredWorktree unlocks a stale locked worktree registration before removal.
 	UnlockRegisteredWorktree func(ctx context.Context, repo, common, work string) (string, time.Time, bool, error)
+	// OnUnrecorded is called when a trunk commit in base..tip has no landing record.
+	OnUnrecorded func(ctx context.Context, sha string)
 }
 
 // HeavyReplay judges one check on one commit, in the runner's own checkout and under
@@ -318,6 +320,19 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 			stopRunning()
 			storeProgress.Finish("cancelled")
 			return out, ctx.Err()
+		}
+		if e == nil && run.Result == "green" {
+			unrecorded, unrecErr := r.firstUnrecordedCommit(ctx, base, tip)
+			if unrecErr != nil {
+				e = Externalf("checking landing records for %s..%s: %v", ShortSHA(base), ShortSHA(tip), unrecErr)
+				run.Result = "unknown"
+			} else if unrecorded != "" {
+				e = Externalf("trunk commit %s was not made by a landing; %s stays", unrecorded, GreenRef)
+				run.Result = "unknown"
+				if r.OnUnrecorded != nil {
+					r.OnUnrecorded(ctx, unrecorded)
+				}
+			}
 		}
 		if e == nil && run.Result == "green" {
 			current, curErr := heavy.GitOutput(ctx, r.Root, "rev-parse", r.Trunk+"^{commit}")
@@ -1189,6 +1204,26 @@ func commitTouchesReads(ctx context.Context, root, sha string, reads []string) (
 	}
 	return false, nil
 }
+func (r HeavyRunner) firstUnrecordedCommit(ctx context.Context, base, tip string) (string, error) {
+	if r.Store == "" || base == "" || tip == "" || base == tip {
+		return "", nil
+	}
+	raw, err := heavy.GitOutput(ctx, r.Root, "rev-list", "--first-parent", "--reverse", base+".."+tip)
+	if err != nil {
+		return "", err
+	}
+	for _, sha := range strings.Fields(raw) {
+		has, err := r.HasLandingRecord(ctx, sha)
+		if err != nil {
+			return "", err
+		}
+		if !has {
+			return sha, nil
+		}
+	}
+	return "", nil
+}
+
 func (r HeavyRunner) HasLandingRecord(ctx context.Context, sha string) (bool, error) {
 	if r.Store == "" {
 		return true, nil

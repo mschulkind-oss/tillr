@@ -34,6 +34,7 @@ type changeRecord struct {
 // face's own helper: an assertion made with the code under test cannot fail.
 func changeRepoGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
+	requireFixtureCommitRepo(t, root, args)
 	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
 	out, err := cmd.Output()
 	if err != nil {

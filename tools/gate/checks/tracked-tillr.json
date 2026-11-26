@@ -1,0 +1,18 @@
+{
+  "id": "tracked-tillr",
+  "label": "Whole-tree tracked .tillr check",
+  "command": [
+    "tools/gate/repo-gate",
+    "tracked-tillr"
+  ],
+  "scope": "tree",
+  "tier": "fast",
+  "budget_ms": 200,
+  "reads": [
+    "."
+  ],
+  "tools": [
+    "go",
+    "git"
+  ]
+}

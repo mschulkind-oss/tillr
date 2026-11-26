@@ -11,6 +11,7 @@ import (
 
 func heavyGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
+	requireFixtureCommitRepo(t, root, args)
 	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

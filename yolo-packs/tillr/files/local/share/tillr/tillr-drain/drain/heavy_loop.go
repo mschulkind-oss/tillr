@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,8 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/checkresult"
+	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 type heavyParentCtxKey struct{}
@@ -56,9 +60,12 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				checks, err := step.JudgeHeavy(jctx, dir, only)
 				l.sweepDisabledMarkers(jctx)
 				return checks, err
+			}, OnUnrecorded: func(uctx context.Context, sha string) {
+				l.recordUnrecordedTrunkCommit(uctx, sha)
 			}, Report: func(run HeavyRun) {
 				l.reportf("loop: heavy run %s at %s; green base %s\n", run.Result, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
 				if run.Result == "green" {
+					l.clearUnrecordedTrunkCommit(heavyCtx)
 					l.offerGreenAdvance(heavyCtx, run.TipSHA)
 				}
 				if len(run.ReusedChecks) > 0 {
@@ -383,4 +390,103 @@ func legacyLogTail(path string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+func (l *Loop) nowTimeUTC() time.Time {
+	if l.cfg.Now != nil {
+		return l.cfg.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (l *Loop) recordUnrecordedTrunkCommit(ctx context.Context, commit string) {
+	if l.cfg.Store == "" || commit == "" {
+		return
+	}
+	s, err := store.Open(ctx, l.cfg.Store, false)
+	if err != nil {
+		l.reportf("loop: could not record unrecorded-trunk-commit alarm for %s: %v\n", shortSHA(commit), err)
+		return
+	}
+	defer s.Close()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		var activeCommit string
+		err := tx.Reader().QueryRow(`SELECT coalesce(json_extract(payload,'$.commit'), '')
+FROM events
+WHERE kind = ?
+ AND seq > COALESCE((SELECT seq FROM events WHERE kind = ? ORDER BY seq DESC LIMIT 1), 0)
+ORDER BY seq DESC LIMIT 1`, alarms.UnrecordedTrunkCommitKind, alarms.UnrecordedTrunkClearedKind).Scan(&activeCommit)
+		if err == nil && activeCommit == commit {
+			return nil
+		}
+		payload, err := json.Marshal(map[string]any{"commit": commit})
+		if err != nil {
+			return err
+		}
+		id := "trunk"
+		_, err = tx.Append(event.Event{
+			Kind:       alarms.UnrecordedTrunkCommitKind,
+			ObjectType: "trunk",
+			ObjectID:   &id,
+			At:         l.nowTimeUTC(),
+			Payload:    payload,
+		})
+		return err
+	}); err != nil {
+		l.reportf("loop: could not record unrecorded-trunk-commit alarm for %s: %v\n", shortSHA(commit), err)
+		return
+	}
+	l.reportf("loop: ALARM %s: trunk commit %s was not made by a landing\n", alarms.UnrecordedTrunkCommit, commit)
+}
+
+func (l *Loop) clearUnrecordedTrunkCommit(ctx context.Context) {
+	if l.cfg.Store == "" {
+		return
+	}
+	s, err := store.Open(ctx, l.cfg.Store, false)
+	if err != nil {
+		return
+	}
+	defer s.Close()
+	_ = s.WriteTx(ctx, func(tx *store.Tx) error {
+		var active int
+		err := tx.Reader().QueryRow(`SELECT COUNT(*)
+FROM events
+WHERE kind = ?
+ AND seq > COALESCE((SELECT seq FROM events WHERE kind = ? ORDER BY seq DESC LIMIT 1), 0)`,
+			alarms.UnrecordedTrunkCommitKind, alarms.UnrecordedTrunkClearedKind).Scan(&active)
+		if err != nil || active == 0 {
+			return err
+		}
+		id := "trunk"
+		_, err = tx.Append(event.Event{
+			Kind:       alarms.UnrecordedTrunkClearedKind,
+			ObjectType: "trunk",
+			ObjectID:   &id,
+			At:         l.nowTimeUTC(),
+			Payload:    []byte("{}"),
+		})
+		return err
+	})
+}
+
+func (l *Loop) firstUnrecordedTrunkCommit(ctx context.Context, base, tip string) (string, error) {
+	if l.cfg.Store == "" || base == "" || tip == "" || base == tip {
+		return "", nil
+	}
+	raw, err := rawGit(ctx, l.cfg.Root, nil, "rev-list", "--first-parent", "--reverse", base+".."+tip)
+	if err != nil {
+		return "", err
+	}
+	runner := HeavyRunner{Root: l.cfg.Root, Store: l.cfg.Store}
+	for _, sha := range strings.Fields(raw) {
+		has, err := runner.HasLandingRecord(ctx, sha)
+		if err != nil {
+			return "", err
+		}
+		if !has {
+			return sha, nil
+		}
+	}
+	return "", nil
 }

@@ -62,6 +62,29 @@ func BypassGitShimEnv(baseEnv map[string]string, candidateRoots ...string) map[s
 	return cloned
 }
 
+func withGitCeiling(existing, dir string) string {
+	if dir == "" {
+		return existing
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		absDir = dir
+	}
+	var out []string
+	seen := make(map[string]bool)
+	for _, entry := range filepath.SplitList(existing) {
+		if entry == "" || seen[entry] {
+			continue
+		}
+		seen[entry] = true
+		out = append(out, entry)
+	}
+	if !seen[absDir] {
+		out = append(out, absDir)
+	}
+	return strings.Join(out, string(os.PathListSeparator))
+}
+
 // ClearDirectoryContents removes all entries inside dir without removing dir itself.
 func ClearDirectoryContents(dir string) {
 	entries, err := os.ReadDir(dir)

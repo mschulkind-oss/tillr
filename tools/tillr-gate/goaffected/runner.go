@@ -959,6 +959,7 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 		_ = os.MkdirAll(gotmpDir, 0o755)
 		envMap["GOTMPDIR"] = gotmpDir
 		envMap["YOLO_DURABLE_DIR"] = scratchDir
+		envMap["GIT_CEILING_DIRECTORIES"] = withGitCeiling(envMap["GIT_CEILING_DIRECTORIES"], scratchDir)
 		gitconfig, gerr := WritePrivateGitconfig(scratchDir, gitValues, envMapToSlice(envMap))
 		if gerr != nil {
 			return invResult{rc: 1, readable: gerr.Error() + "\n", err: gerr}

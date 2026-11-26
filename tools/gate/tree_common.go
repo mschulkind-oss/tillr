@@ -353,6 +353,50 @@ func cmdScratch(args []string) int {
 	return 0
 }
 
+var trackedTillrExceptions = map[string]bool{
+	".tillr/lanes/lane-4/durable/run-item-request-aab6839c65-a1-n2/tmp/go-shards-1n3lyhlr/package-3-shard-1/TestLandingCallDeliversRefusalsA-4118807249/001/lanes/item-a/worktree/.forks/outside.txt": true,
+}
+
+func trackedTillrPaths(root string) ([]string, error) {
+	cmd := exec.Command("git", "-C", root, "ls-files", "-z", "--", ".tillr")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return nil, fmt.Errorf("git ls-files -z -- .tillr: %w: %s", err, msg)
+		}
+		return nil, fmt.Errorf("git ls-files -z -- .tillr: %w", err)
+	}
+	var findings []string
+	for _, entry := range strings.Split(stdout.String(), "\x00") {
+		if entry == "" || trackedTillrExceptions[entry] {
+			continue
+		}
+		findings = append(findings, fmt.Sprintf("%s: tracked path under .tillr/ is forbidden", entry))
+	}
+	return findings, nil
+}
+
+func cmdTrackedTillr(args []string) int {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tracked-tillr: could not judge: %v\n", err)
+		return 4
+	}
+	findings, err := trackedTillrPaths(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tracked-tillr: could not judge: %v\n", err)
+		return 4
+	}
+	if len(findings) > 0 {
+		fmt.Println(strings.Join(findings, "\n"))
+		return 1
+	}
+	return 0
+}
+
 func cmdExcusedAs(args []string) int {
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "excused-as: expected <path>")
