@@ -133,7 +133,7 @@ func TestMain(m *testing.M) { os.Exit(m.Run()) }
 		if err := json.Unmarshal(progBytes, &prog); err != nil {
 			t.Fatal(err)
 		}
-		if prog.CompletedPackages < 1 || prog.CompletedShards < 1 {
+		if prog.Seq < 1 || prog.CompletedPackages < 1 || prog.CompletedUnits != prog.CompletedPackages+prog.CompletedTests+prog.CompletedShards || prog.LastDetail == "" {
 			t.Fatalf("unexpected progress snap: %+v", prog)
 		}
 	}
