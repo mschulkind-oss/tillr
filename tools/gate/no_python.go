@@ -11,19 +11,6 @@ import (
 	"strings"
 )
 
-// Temporary bootstrap exemption: trunk's tillr-loop invokes python3 on
-// tools/tillr-gate/change-gate.py (which imports classify.py) from the candidate's own
-// tree until follow-up item-request-629db3e857 deletes these files and this exemption
-// after the loop rolls onto the Go adapter.
-var noPythonBootstrapExemption = map[string]bool{
-	"tools/tillr-gate/change-gate.py":                                    true,
-	"tools/tillr-gate/tree-check.py":                                     true,
-	"tools/tillr-gate/classify.py":                                       true,
-	"yolo-packs/tillr/files/local/share/tillr/tillr-gate/change-gate.py": true,
-	"yolo-packs/tillr/files/local/share/tillr/tillr-gate/tree-check.py":  true,
-	"yolo-packs/tillr/files/local/share/tillr/tillr-gate/classify.py":    true,
-}
-
 var pythonShebangRe = regexp.MustCompile(`(?m)^[ \t]*#![^\n]*python`)
 
 func isExtensionless(path string) bool {
@@ -43,9 +30,6 @@ func noPythonFindings(root string) ([]string, error) {
 			continue
 		}
 		p := string(raw)
-		if noPythonBootstrapExemption[p] {
-			continue
-		}
 		findings = append(findings, fmt.Sprintf("tracked Python file: %s", p))
 	}
 

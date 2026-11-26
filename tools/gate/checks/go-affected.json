@@ -24,8 +24,6 @@
     "tools/tillr-cli/",
     "tools/tillr-drain/",
     "tools/tillr-gate/",
-    "tools/tillr-gate/change-gate.py",
-    "tools/tillr-gate/classify.py",
     "tools/tillr-item/",
     "tools/tillr-land/",
     "tools/tillr-loop/",

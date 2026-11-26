@@ -84,7 +84,13 @@ func TestNoPythonRefusesTrackedPyAndExtensionlessShebang(t *testing.T) {
 	repo2 := initRepo(t)
 	addAndCheck(t, repo2, "bin/helper", []byte("#!/usr/bin/env python3\nprint(1)\n"), 1, "extensionless Python shebang: bin/helper")
 
-	// 3. Unexempted .py file under tools/tillr-gate/ fails
-	repo3 := initRepo(t)
-	addAndCheck(t, repo3, "tools/tillr-gate/extra.py", []byte("print(1)\n"), 1, "tracked Python file: tools/tillr-gate/extra.py")
+	// 3. Previously exempted .py files under tools/tillr-gate/ now fail
+	for _, rel := range []string{
+		"tools/tillr-gate/change-gate.py",
+		"tools/tillr-gate/tree-check.py",
+		"tools/tillr-gate/classify.py",
+	} {
+		repo3 := initRepo(t)
+		addAndCheck(t, repo3, rel, []byte("print(1)\n"), 1, "tracked Python file: "+rel)
+	}
 }

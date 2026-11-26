@@ -149,16 +149,6 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 	f, _ := passFixture(t, "item-a")
 	log := adapterStubs(t)
 	installRoot := scratchUnderDurable(t)
-	_, changeGateSrc := repositoryFile(t, "tools/tillr-gate/change-gate.py")
-	changeGateRaw, err := os.ReadFile(changeGateSrc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(installRoot, "tillr-gate"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeForkFile(t, filepath.Join(installRoot, "tillr-gate", "change-gate.py"), string(changeGateRaw))
-	writeForkFile(t, filepath.Join(installRoot, "tillr-gate", "tree-check.py"), "import sys\nassert sys.argv[1:3] == ['--only', 'fixture/check']\n")
 	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	worktree := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
 	// Like a consumer repository, the fixture worktree has no adapter source.

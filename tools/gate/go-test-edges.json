@@ -767,8 +767,6 @@
       "config/tillr/gate-policy.json",
       "config/tillr/plan-guidance.md",
       "config/tillr/workflows/",
-      "tools/tillr-gate/change-gate.py",
-      "tools/tillr-gate/classify.py",
       "tools/tillr/examples/",
       "tools/tillr-loop/drain-argv.json",
       "tools/tillr-run/backends/",

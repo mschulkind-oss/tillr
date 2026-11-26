@@ -202,7 +202,7 @@ func TestVariants(t *testing.T) {
 			for _, file := range []string{FenceFile, ItemFenceFile} {
 				writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), file), testPath+"\n")
 			}
-			repoRoot, _ := repositoryFile(t, "tools/tillr-gate/change-gate.py")
+			repoRoot, _ := repositoryFile(t, "tools/tillr-loop/go.mod")
 			t.Setenv("TILLR_INSTALL_ROOT", filepath.Join(repoRoot, "tools"))
 			steps := &ProcessSteps{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Now: time.Now,
 				GateProgram: "tillr-loop gate", LandProgram: "tillr-loop land", FixerGateProgram: DefaultFixerGateProgram}

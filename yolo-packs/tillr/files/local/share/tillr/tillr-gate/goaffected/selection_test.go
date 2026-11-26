@@ -514,8 +514,6 @@ func TestSelectionRules(t *testing.T) {
 			"github.com/mschulkind-oss/tillr-drain",
 			"github.com/mschulkind-oss/tillr-drain/drain",
 		}},
-		{"tools/tillr-gate/change-gate.py", []string{"github.com/mschulkind-oss/tillr-drain/drain"}},
-		{"tools/tillr-gate/classify.py", []string{"github.com/mschulkind-oss/tillr-drain/drain"}},
 		{"tools/tillr-loop/drain-argv.json", []string{"github.com/mschulkind-oss/tillr-drain/drain"}},
 		{"yolo-packs/tillr/pack.json", []string{"github.com/mschulkind-oss/tillr-drain/drain"}},
 		{"tools/tillr/examples/recorded-verdict/definition.json", []string{

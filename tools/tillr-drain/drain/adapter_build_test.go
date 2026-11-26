@@ -59,16 +59,6 @@ func TestStandardStepsKeepTheirBuildAfterAnAdapterLanding(t *testing.T) {
 	}
 	log := adapterStubs(t)
 	installRoot := scratchUnderDurable(t)
-	_, changeGateSrc := repositoryFile(t, "tools/tillr-gate/change-gate.py")
-	changeGateRaw, err := os.ReadFile(changeGateSrc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(installRoot, "tillr-gate"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeForkFile(t, filepath.Join(installRoot, "tillr-gate", "change-gate.py"), string(changeGateRaw))
-	writeForkFile(t, filepath.Join(installRoot, "tillr-gate", "tree-check.py"), "print('named check ran')\n")
 	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
 	c := Candidate{ItemID: "item-a", LaneID: "lane-1", RunID: "run-1", Worktree: root, BaseSHA: strings.Repeat("1", 40), HeadSHA: runGit(t, root, "rev-parse", "HEAD")}
 	writeRunRecord(t, filepath.Join(root, ".tillr", "loop", c.RunID), "{}\n")

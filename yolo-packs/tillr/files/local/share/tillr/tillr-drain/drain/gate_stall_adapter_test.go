@@ -43,7 +43,7 @@ if face=='run':
 	if err := writeForkSafe(stub, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
-	repoRoot, _ := repositoryFile(t, "tools/tillr-gate/change-gate.py")
+	repoRoot, _ := repositoryFile(t, "tools/tillr-loop/go.mod")
 	t.Setenv("TILLR_INSTALL_ROOT", filepath.Join(repoRoot, "tools"))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TILLR_LOOP_REGISTRY", filepath.Join(dir, "registry.json"))

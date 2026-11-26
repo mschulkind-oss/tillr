@@ -1190,52 +1190,9 @@ func formatInstallSupportError(err error) error {
 	return drain.Usagef("%s against install root %s: %v", binaryBuildLabel(), installRootLabel(), err)
 }
 
-func hasGateProgramFlag(command string) bool {
-	for _, field := range strings.Fields(command) {
-		if field == "--gate-program" || strings.HasPrefix(field, "--gate-program=") {
-			return true
-		}
-	}
-	return false
-}
-
 func verifyInstallSupport(root string, briefFromInstall, adaptersFromInstall bool, steps *drain.ProcessSteps, explicitSteps map[string]bool, workflows map[string]string) error {
 	usedInstall := briefFromInstall || adaptersFromInstall
 	binaryDesc := binaryBuildLabel()
-
-	gateUsesLoop := steps.UsesStandardAdapter(steps.GateProgram)
-	replayUsesLoop := steps.UsesStandardAdapter(steps.ReplayProgram)
-	rollingUsesLoop := steps.UsesStandardAdapter(steps.RollingProgram)
-	fixerUsesLoop := steps.UsesStandardAdapter(steps.FixerGateProgram)
-
-	needChangeGate := gateUsesLoop && !hasGateProgramFlag(steps.GateProgram)
-	needTreeCheck := (gateUsesLoop && (replayUsesLoop || rollingUsesLoop || fixerUsesLoop)) ||
-		(explicitSteps["replay"] && replayUsesLoop) ||
-		(explicitSteps["rolling"] && rollingUsesLoop) ||
-		(explicitSteps["fixer-gate"] && fixerUsesLoop)
-
-	if needChangeGate {
-		usedInstall = true
-		for _, name := range []string{"change-gate.py", "classify.py"} {
-			if installRoot, _, err := setupcheck.CheckGateRunner(name); err != nil {
-				if installRoot == "" {
-					installRoot = installRootLabel()
-				}
-				return drain.Usagef("%s against install root %s: %v", binaryDesc, installRoot, err)
-			}
-		}
-	}
-	if needTreeCheck {
-		usedInstall = true
-		for _, name := range []string{"tree-check.py", "classify.py"} {
-			if installRoot, _, err := setupcheck.CheckGateRunner(name); err != nil {
-				if installRoot == "" {
-					installRoot = installRootLabel()
-				}
-				return drain.Usagef("%s against install root %s: %v", binaryDesc, installRoot, err)
-			}
-		}
-	}
 
 	if len(workflows) > 0 {
 		seats := make([]string, 0, len(workflows))
