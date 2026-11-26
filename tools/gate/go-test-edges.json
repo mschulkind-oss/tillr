@@ -2,8 +2,14 @@
   "github.com/mschulkind-oss/tillr-drain": {
     "builds": [],
     "reads": [
-      "config/tillr/backend-policy.json"
-    ]
+      "config/tillr/backend-policy.json",
+      "tools/tillr-drain/"
+    ],
+    "read_tests": {
+      "tools/tillr-drain/": [
+        "TestArchitecture"
+      ]
+    }
   },
   "github.com/mschulkind-oss/tillr-drain/drain": {
     "builds": [

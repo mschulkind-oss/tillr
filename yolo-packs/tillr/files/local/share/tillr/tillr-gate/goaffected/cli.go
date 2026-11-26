@@ -226,6 +226,13 @@ func Run(args []string) int {
 		return 0
 	}
 
+	if base != "" {
+		if err := CheckDrainTestParity(root, base, head, changedPaths); err != nil {
+			fmt.Fprintf(os.Stderr, "go-affected: %v\n", err)
+			return 1
+		}
+	}
+
 	evPath := evidenceOut
 	if evPath == "" {
 		evPath = os.Getenv("TILLR_GO_AFFECTED_EVIDENCE_OUT")

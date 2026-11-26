@@ -22,8 +22,6 @@ import (
 )
 
 const (
-	// FlakyRepairPrefix prefixes every repair item the marker sweep files for a disabled check.
-	FlakyRepairPrefix = "flaky-"
 	// FlakyRepairCriterion is the criterion id on a filed flaky-check repair item.
 	FlakyRepairCriterion = "re-enable-check"
 )
@@ -58,11 +56,6 @@ func (s *ProcessSteps) EnableCheck(ctx context.Context, checkID, episode, storeD
 		return fmt.Errorf("%s %s: %w (%s)", bin, strings.Join(args, " "), err, strings.TrimSpace(string(raw)))
 	}
 	return nil
-}
-
-// IsFlakyRepairItem answers whether itemID is a generated repair item for a disabled check.
-func IsFlakyRepairItem(itemID string) bool {
-	return strings.HasPrefix(itemID, FlakyRepairPrefix)
 }
 
 // FlakyRepairBaseID answers the primary item id (`flaky-<check-id>`) for checkID.

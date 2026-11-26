@@ -33,10 +33,6 @@ import (
 // counts or times anything: each condition is a verdict about this landing on this tip.
 
 const (
-	// RevertItemPrefix names the landing a revert is recorded under. It is not an item
-	// in the store: a landing row names the work it is for, and a revert is the drain's
-	// own work about one landing. The red cap exempts it as it exempts a fixer.
-	RevertItemPrefix = "revert-main-"
 	// RevertKind is one attributed landing's automatic revert, landed or not possible,
 	// keyed by the reverted landing's trunk commit.
 	RevertKind = "drain.revert"
@@ -58,9 +54,6 @@ func RevertItemID(sha string) string {
 	}
 	return RevertItemPrefix + sha
 }
-
-// IsRevertItem answers whether a landing's item id is an automatic revert.
-func IsRevertItem(itemID string) bool { return strings.HasPrefix(itemID, RevertItemPrefix) }
 
 // revertPayload is the drain.revert event: what was reverted, why, and what became of it.
 type revertPayload struct {

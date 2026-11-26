@@ -27,11 +27,6 @@ func RemoteSyncItemID(remoteTip string) string {
 	return remotesync.RemoteSyncItemID(remoteTip)
 }
 
-// IsRemoteSyncItem reports whether an item is a generated remote-sync repair.
-func IsRemoteSyncItem(itemID string) bool {
-	return remotesync.IsRemoteSyncItem(itemID)
-}
-
 func remoteSyncPinRef(itemID string) string {
 	return remotesync.RemoteSyncPinRef(itemID)
 }

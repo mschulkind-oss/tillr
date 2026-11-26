@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -4082,8 +4083,8 @@ func mergeExamination(dst, src *LoopResult) {
 	dst.Rejected += src.Rejected
 	dst.Candidates += src.Candidates
 	dst.InfraFailures += src.InfraFailures
-	dst.StartedSpend.merge(src.StartedSpend)
-	dst.CarriedSpend.merge(src.CarriedSpend)
+	dst.StartedSpend.Merge(src.StartedSpend)
+	dst.CarriedSpend.Merge(src.CarriedSpend)
 	dst.SpendUSD += src.SpendUSD
 	dst.Tokens += src.Tokens
 	dst.SpendUnknown += src.SpendUnknown
@@ -4238,4 +4239,30 @@ func (l *Loop) closeAsyncBracket(ctx context.Context, d Decision, at time.Time, 
 		}
 	}
 	return l.finishRunBracket(ctx, worktree, *d.RunRequest, d.RunRequest.CorrelationID, at, before, after, result)
+}
+
+// drainingLanes answers the lanes outside offered that unfinished work still holds, in lane
+// order. A document desk is not a lane of the count and is never listed; a lane whose work
+// released it holds nothing.
+func drainingLanes(works map[string]*pendingWork, offered []string) []DrainingLane {
+	in := make(map[string]bool, len(offered))
+	for _, lane := range offered {
+		in[lane] = true
+	}
+	var out []DrainingLane
+	seen := map[string]bool{}
+	for _, work := range works {
+		lane := work.Decision.LaneID
+		if work.Done || work.LaneReleased || lane == "" || in[lane] || seen[lane] || documentDesk(lane) {
+			continue
+		}
+		seen[lane] = true
+		d := DrainingLane{LaneID: lane, ItemID: work.Decision.ItemID}
+		if work.Decision.RunRequest != nil {
+			d.RunID = work.Decision.RunRequest.RunID
+		}
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LaneID < out[j].LaneID })
+	return out
 }

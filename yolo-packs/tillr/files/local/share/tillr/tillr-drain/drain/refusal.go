@@ -30,10 +30,9 @@ const (
 	// RefusalPlanWrong is a build step's report that it cannot meet the verifier's findings
 	// within the plan (or that the plan's narrowed piece cannot hold the work). It sends the
 	// item back to the plan step, the one other route a failed verify has.
-	RefusalPlanWrong     = "plan-wrong"
-	RefusalLand          = "land"
-	RefusalDeliveryOrder = "delivery-order"
-	RefusalConflict      = "conflict"
+	RefusalPlanWrong = "plan-wrong"
+	RefusalLand      = "land"
+	RefusalConflict  = "conflict"
 	// RefusalNodeOutput means a successful run did not supply a usable declared file.
 	RefusalNodeOutput = "node-output-missing"
 	// RefusalPlanOutput means a plan or classification step wrote a delivery output that

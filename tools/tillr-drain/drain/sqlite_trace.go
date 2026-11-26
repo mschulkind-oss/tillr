@@ -7,30 +7,6 @@ import (
 
 const sqliteTraceLineLimit = 64 << 10
 
-// traceLinePrefixes begin the lines of the opt-in trace (TILLR_SQLITE_TRACE=1) a tillr
-// program writes on stderr: the store's transaction spans and stack dumps (tillr/store's
-// trace.go and ioguard.go) and the lander's git spans (tillr-land's trunk.go). Each carries
-// what it is about and never the program's own reason for failing.
-var traceLinePrefixes = [][]byte{[]byte("tillr-sqlite "), []byte("tillr-sqlite-stack "), []byte("tillr-git ")}
-
-// traceLinePrefixLen is the longest trace prefix: a line this long is known to be trace or not.
-var traceLinePrefixLen = func() int {
-	n := 0
-	for _, prefix := range traceLinePrefixes {
-		n = max(n, len(prefix))
-	}
-	return n
-}()
-
-func isTraceLine(line []byte) bool {
-	for _, prefix := range traceLinePrefixes {
-		if bytes.HasPrefix(line, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 // sqliteTraceForwarder preserves only the trace lines (traceLinePrefixes), including
 // prefixed stack frames. Child stderr can contain secrets unrelated to SQLite.
 // Oversized lines are dropped, and diagnostic output errors never change Sync.

@@ -14,6 +14,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/fixer"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/heavyrun"
+	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 	"github.com/mschulkind-oss/tillr-drain/remotesync"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -34,15 +35,18 @@ func (s *processStepsWithStoreState) ItemState(ctx context.Context, itemID, runI
 func withClassifier(t *testing.T, fn func(checkresult.Observation) checkresult.Result) {
 	t.Helper()
 	prev := classifyCheck
+	prevModel := drainmodel.ClassifyCheck
 	prevRemote := remotesync.ClassifyCheck
 	prevFixer := fixer.ClassifyCheck
 	prevHeavyRun := heavyrun.ClassifyCheck
 	classifyCheck = fn
+	drainmodel.ClassifyCheck = fn
 	remotesync.ClassifyCheck = fn
 	fixer.ClassifyCheck = fn
 	heavyrun.ClassifyCheck = fn
 	t.Cleanup(func() {
 		classifyCheck = prev
+		drainmodel.ClassifyCheck = prevModel
 		remotesync.ClassifyCheck = prevRemote
 		fixer.ClassifyCheck = prevFixer
 		heavyrun.ClassifyCheck = prevHeavyRun

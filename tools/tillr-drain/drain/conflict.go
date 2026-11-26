@@ -30,13 +30,6 @@ import (
 // first stage on the current trunk (restartConflicted, D-JL12). If that fresh attempt
 // conflicts too, markExamined parks the item for the operator, whatever the paths and hunks.
 
-// isConflictFixRun reports whether this run is itself a conflict-fix run. A run id is the
-// one thing the loop can read from a candidate after the fact, and the suffix is the marker
-// that makes a fix run distinguishable without a second store row.
-func isConflictFixRun(runID string) bool {
-	return strings.HasSuffix(runID, ConflictFixSuffix)
-}
-
 // conflictFixOriginal is the run a chain of conflict-fix runs started from: a fix run of a
 // fix run carries the suffix once per conflict.
 func conflictFixOriginal(runID string) string {

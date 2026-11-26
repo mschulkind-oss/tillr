@@ -3,7 +3,6 @@ package drain
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,10 +32,6 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/watch"
 )
-
-// The default trunk branch the loop stages lanes from and lands onto when [trunk] branch
-// is unset in .tillr.toml.
-const TrunkRef = settings.DefaultTrunkBranch
 
 // Loop stop and historical fault reason spellings. Boundary and gate faults now
 // hold only their attributed item; the Stop-prefixed constants remain readable
@@ -168,12 +164,6 @@ const (
 	LandLanded         = "landed"
 	LandRefused        = "refused"
 	LandSquashConflict = "squash-conflict"
-
-	// ConflictFixSuffix is the marker a conflict-fix run's id carries. It is what makes
-	// "at most one conflict-fix run per candidate" structural: the fix run's own id ends
-	// in the suffix, so a conflict on it is the second one and holds instead of staging
-	// another. The original run id never ends in it (the planner's ids end in a stamp).
-	ConflictFixSuffix = "-cfix"
 )
 
 // VerdictPassed retires the item's criteria only after the candidate lands.
@@ -3814,7 +3804,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	}
 	if timing != nil {
 		l.mu.Lock()
-		timing.addGateTime(gate.DurationMS, runnerChange)
+		timing.AddGateTime(gate.DurationMS, runnerChange)
 		l.mu.Unlock()
 	}
 	// The gate is the long step: an item landed by hand while it ran gets no verdict,
@@ -4130,7 +4120,7 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	if timing != nil {
 		l.mu.Lock()
-		timing.addLandTime(time.Since(landStart).Milliseconds(), runnerChange)
+		timing.AddLandTime(time.Since(landStart).Milliseconds(), runnerChange)
 		l.mu.Unlock()
 	}
 	if err != nil {
@@ -4350,26 +4340,6 @@ func (l *Loop) lanePinRepository(lane string) string {
 func (l *Loop) pinLane(ctx context.Context, lane, runID, sha string) error {
 	return writeRunPin(ctx, l.git, l.lanePinRepository(lane), runID, sha, false)
 }
-
-// maxRefComponent is the longest one path component of a ref name the file system stores:
-// git keeps a loose ref as a file, and a file name holds 255 bytes.
-const maxRefComponent = 255
-
-// pinRef names the ref that keeps a run's commit reachable. A run id that fits a file name
-// is pinned under its own name, which is where every reader looks. One that does not fit is
-// pinned under a digest of the name, in a namespace of its own: the commit stays reachable,
-// which is what a pin is for, and no reader that looks a pin up by run id finds it. A run id
-// grown by repeated failover and restart suffixes made `git update-ref` fail on every
-// restart on 2026-11-19, and each failure ended the loop.
-func pinRef(runID string) string {
-	if len(runID) <= maxRefComponent {
-		return "refs/tillr/runs/" + runID
-	}
-	return fmt.Sprintf("refs/tillr/runs-long/%x", sha256.Sum256([]byte(runID)))
-}
-
-// pinTimeout bounds the fetch and ref write that survive the loop's stop.
-const pinTimeout = 30 * time.Second
 
 func (l *Loop) pendingItemBase(ctx context.Context, itemID string) (string, error) {
 	r, err := store.OpenRead(ctx, l.cfg.Store)
@@ -5072,3 +5042,63 @@ func isGitUpdateRef(args []string) bool {
 
 // countPtr answers a pointer to a copy of n, for Pass's pointer fields.
 func countPtr(n int) *int { return &n }
+
+// Rebuild from each run's latest cumulative measurement, not each terminal segment.
+func (result *LoopResult) recountSpend() {
+	result.StartedSpend, result.CarriedSpend = SpendTotals{}, SpendTotals{}
+	result.SpendUnknownExample, result.CostUnknownExample = "", ""
+	ids := make([]string, 0, len(result.spendRecords))
+	for id := range result.spendRecords {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		rec := result.spendRecords[id]
+		group := &result.StartedSpend
+		if result.spendCarried[id] {
+			group = &result.CarriedSpend
+		}
+		group.Add(rec)
+		if rec.SpendStatus == "not-applicable" {
+			continue
+		}
+		who := rec.RunID + " on " + rec.Backend
+		if (rec.Usage == nil || rec.Usage.Tokens == nil) && result.SpendUnknownExample == "" {
+			result.SpendUnknownExample = who
+		}
+		if (rec.Usage == nil || rec.Usage.CostUSD == nil) && result.CostUnknownExample == "" {
+			result.CostUnknownExample = who
+		}
+	}
+	result.SpendUSD = result.StartedSpend.CostUSD + result.CarriedSpend.CostUSD
+	result.Tokens = result.StartedSpend.Tokens + result.CarriedSpend.Tokens
+	result.SpendUnknown = result.StartedSpend.TokensUnreported + result.CarriedSpend.TokensUnreported
+	result.CostUnknown = result.StartedSpend.CostUnreported + result.CarriedSpend.CostUnreported
+}
+
+func mergeSpendRecords(dst, src *LoopResult) {
+	if len(src.spendRecords) == 0 {
+		return
+	}
+	if dst.spendRecords == nil {
+		dst.spendRecords = map[string]run.Record{}
+	}
+	if dst.spendCarried == nil {
+		dst.spendCarried = map[string]bool{}
+	}
+	for id, rec := range src.spendRecords {
+		dst.spendRecords[id] = rec
+		dst.spendCarried[id] = src.spendCarried[id]
+	}
+	dst.recountSpend()
+}
+
+func (l *Loop) countSettledSpend(result *LoopResult, rec run.Record, origin string) {
+	l.mu.Lock()
+	if result.spendCarried == nil {
+		result.spendCarried = map[string]bool{}
+	}
+	result.spendCarried[rec.RunID] = origin == "" || origin != l.sessionID
+	l.mu.Unlock()
+	l.countSpend(result, rec)
+}

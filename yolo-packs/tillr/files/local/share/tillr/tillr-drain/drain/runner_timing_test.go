@@ -28,11 +28,11 @@ func TestRunnerProofTimeIsCountedApartAndNeverFailsALanding(t *testing.T) {
 	for _, runner := range []bool{true, false} {
 		timing := PassTiming{TickID: "pass", AtMS: 1000, GateBudgetMS: 10000}
 		if runner {
-			timing.addGateTime(120000, runner)
+			timing.AddGateTime(120000, runner)
 		} else {
-			timing.addGateTime(1000, runner)
+			timing.AddGateTime(1000, runner)
 		}
-		timing.addLandTime(200, runner)
+		timing.AddLandTime(200, runner)
 		if err := l.recordPass(&timing); err != nil {
 			t.Fatal(err)
 		}

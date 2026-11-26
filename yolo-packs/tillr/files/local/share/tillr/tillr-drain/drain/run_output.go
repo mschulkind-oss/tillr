@@ -55,7 +55,7 @@ func runOutputTail(dir string) (string, error) {
 		if _, err := file.Seek(offset-1, io.SeekStart); err != nil {
 			return "", Externalf("reading run output %s: %v", path, err)
 		}
-		tail.dropped = true
+		tail.Dropped = true
 		buffered := bufio.NewReader(file)
 		if _, err := buffered.ReadBytes('\n'); err != nil && !errors.Is(err, io.EOF) {
 			return "", Externalf("reading run output %s: %v", path, err)

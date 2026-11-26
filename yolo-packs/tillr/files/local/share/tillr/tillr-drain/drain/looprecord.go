@@ -13,44 +13,6 @@ import (
 	"github.com/mschulkind-oss/tillr/record"
 )
 
-// The loop's own record layout, as the observatory design fixes it: the store lives under
-// <root>/.tillr, one run's staged inputs and step spans live under
-// <root>/.tillr/loop/<run-id>/, and one loop's outcome lives beside them at
-// <root>/.tillr/loop/drain-<stamp>.json.
-//
-// The directory is the one `tillr-loop` already writes its gate, plan, verdict and land
-// records into, so the drain's own spans and the adapters' records for one run sit
-// together. `.tillr` is gitignored in this repository, which is what lets a span be written
-// while a boundary bracket is open: `git status` does not show an ignored path, so a record
-// of the run is not read as a change the run made.
-const (
-	// TillrDir is the repository's state directory.
-	TillrDir = ".tillr"
-	// LoopDirName is the directory under it that holds the loop's records.
-	LoopDirName = "loop"
-	// StepsFile is one run's step spans: one JSON object per line, in the order the steps
-	// finished.
-	StepsFile = "steps.jsonl"
-)
-
-// LoopDir is where the loop's records live: <root>/.tillr/loop.
-func LoopDir(root string) string { return filepath.Join(root, TillrDir, LoopDirName) }
-
-// RunDir is one run's own record directory: <root>/.tillr/loop/<run-id>.
-func RunDir(root, runID string) string { return filepath.Join(LoopDir(root), runID) }
-
-// LoopResultFile names an applied loop's inclusive generation range.
-// Zero endpoints identify a startup fault that allocated no generation.
-func LoopResultFile(root, first, last string) string {
-	if first == "" {
-		first = "0"
-	}
-	if last == "" {
-		last = "0"
-	}
-	return filepath.Join(LoopDir(root), "drain-"+first+"-"+last+".json")
-}
-
 // recordResult writes the loop's outcome beside the runs' own records, so "why did the loop
 // stop" is answered from the store's directory rather than only from the terminal of
 // whoever supervised it.

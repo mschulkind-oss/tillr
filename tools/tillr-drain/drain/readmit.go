@@ -2,9 +2,7 @@ package drain
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -27,14 +25,6 @@ type RunInputs struct {
 	AllowedPaths       string `json:"allowed_paths"`
 	BackendPolicy      string `json:"backend_policy"`
 	TillrBuild         string `json:"tillr_build"`
-}
-
-func inputHash(v any) (string, error) {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", sha256.Sum256(raw)), nil
 }
 
 // blockFields are the stored item fields the item-block input hashes beside the

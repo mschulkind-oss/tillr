@@ -23,8 +23,6 @@ import (
 // from the same item or another — attaches to the one item and both wait on it.
 
 const (
-	// DefectItemPrefix is the item-id prefix of a generated tooling-defect item.
-	DefectItemPrefix = "defect-"
 	// DefectCriterion is the one criterion a defect item carries.
 	DefectCriterion = "tooling-works"
 	// RefusalToolingDefect is the `drain.refusal` step a tooling obstacle writes: the item
@@ -41,9 +39,6 @@ func DefectItemID(command string) string {
 	sum := sha256.Sum256([]byte(strings.Join(strings.Fields(command), " ")))
 	return fmt.Sprintf("%s%x", DefectItemPrefix, sum[:6])
 }
-
-// IsDefectItem answers whether an item is a generated tooling-defect item.
-func IsDefectItem(itemID string) bool { return strings.HasPrefix(itemID, DefectItemPrefix) }
 
 // IsGeneratedRepair answers whether the loop filed the item itself: a trunk fixer, a
 // tooling-defect item, a flaky-check repair item, or a remote-sync item. None has a

@@ -2334,10 +2334,6 @@ func (p *planner) retainedLaneFreeFor(id, itemID string) bool {
 	return p.retainedLaneFree(id) && (owner == "" || owner == itemID)
 }
 
-func isExpressLane(id string) bool {
-	return strings.HasPrefix(id, "express-")
-}
-
 func (p *planner) assignLane(lane string) {
 	if p.captureStart == nil {
 		p.assigned[lane] = true
@@ -2569,29 +2565,6 @@ func (p *planner) inputDecision(runID string) Decision {
 	return Decision{}
 }
 
-// attemptFromRunID answers the attempt N of `run-<item>-a<N>` or `run-<item>-a<N>-n<K>`,
-// or 0 for any other run id.
-func attemptFromRunID(itemID, runID string) int {
-	rest, ok := strings.CutPrefix(runID, "run-"+itemID+"-a")
-	if !ok {
-		if slug := runItemSlug(itemID); slug != itemID {
-			rest, ok = strings.CutPrefix(runID, "run-"+slug+"-a")
-		}
-	}
-	if !ok {
-		return 0
-	}
-	digits := rest
-	if i := strings.IndexByte(rest, '-'); i >= 0 {
-		digits = rest[:i]
-	}
-	n, err := strconv.Atoi(digits)
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
-}
-
 // readRunIDs answers every run id the store holds for one item.
 func readRunIDs(r *store.Reader, itemID string) ([]string, error) {
 	rows, err := r.Query(`SELECT run_id FROM runs WHERE item_id = ?`, itemID)
@@ -2630,11 +2603,6 @@ func readRequestIDs(r *store.Reader) (map[string]bool, error) {
 		out[id] = true
 	}
 	return out, rows.Err()
-}
-
-// attemptRunID names one item's ordinal attempt.
-func attemptRunID(itemID string, attempt int) string {
-	return boundRunIDBase("run-" + runItemSlug(itemID) + "-a" + strconv.Itoa(attempt))
 }
 
 // An interruption retains the same backend.

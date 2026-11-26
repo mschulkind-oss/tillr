@@ -366,8 +366,8 @@ func TestSelectionRules(t *testing.T) {
 	}
 	for _, item := range sel.Selected {
 		if floorMods[item.Module] {
-			if item.Reason != "floor" {
-				t.Fatalf("expected floor reason for %s, got %+v", item.Module, item)
+			if item.Reason != "floor" && !(item.Reason == "edge" && item.HasEdge && len(item.SelectedTests) == 0) {
+				t.Fatalf("expected floor (or whole-package edge) reason for %s, got %+v", item.Module, item)
 			}
 		} else if item.Reason != "edge" {
 			t.Fatalf("expected edge reason for non-floor %s, got %+v", item.Module, item)
@@ -1871,14 +1871,14 @@ func TestDrainSubpackageIsolation(t *testing.T) {
 	root := repoRoot(t)
 	rootGraph := getRootGraph(t)
 
-	subpkgs := []string{"workflow", "remotesync", "fixer", "heavyrun"}
+	subpkgs := []string{"workflow", "remotesync", "fixer", "heavyrun", "internal/drainmodel"}
 	subpkgIPs := make(map[string]bool, len(subpkgs))
 	for _, sub := range subpkgs {
 		subpkgIPs["github.com/mschulkind-oss/tillr-drain/"+sub] = true
 	}
 
 	// 1. Changing drain production or test files defers tillr-drain/drain and selects none
-	//    of the four extracted subpackages.
+	//    of the extracted subpackages.
 	for _, drainPath := range []string{
 		"tools/tillr-drain/drain/loop.go",
 		"tools/tillr-drain/drain/loop_test.go",
@@ -1898,12 +1898,14 @@ func TestDrainSubpackageIsolation(t *testing.T) {
 	}
 
 	// 2. Changing a *_test.go file in any extracted subpackage selects ONLY that subpackage
-	//    within tillr-drain (cross-module source-scanning tests in tools/tillr also run narrowed).
+	//    (plus root github.com/mschulkind-oss/tillr-drain narrowed to TestArchitecture via
+	//    read_tests on tools/tillr-drain/) within tillr-drain.
 	subpkgTests := map[string]string{
-		"workflow":   "tools/tillr-drain/workflow/workflow_test.go",
-		"remotesync": "tools/tillr-drain/remotesync/remote_sync_test.go",
-		"fixer":      "tools/tillr-drain/fixer/fixer_test.go",
-		"heavyrun":   "tools/tillr-drain/heavyrun/heavy_ack_test.go",
+		"workflow":            "tools/tillr-drain/workflow/workflow_test.go",
+		"remotesync":          "tools/tillr-drain/remotesync/remote_sync_test.go",
+		"fixer":               "tools/tillr-drain/fixer/fixer_test.go",
+		"heavyrun":            "tools/tillr-drain/heavyrun/heavy_ack_test.go",
+		"internal/drainmodel": "tools/tillr-drain/internal/drainmodel/errors_test.go",
 	}
 	for sub, testPath := range subpkgTests {
 		sel, err := goaffected.SelectAffectedPackages(root, []string{testPath}, nil, rootGraph, nil)
@@ -1914,6 +1916,12 @@ func TestDrainSubpackageIsolation(t *testing.T) {
 		var drainIPs []string
 		for _, item := range sel.Selected {
 			if strings.HasPrefix(item.ImportPath, "github.com/mschulkind-oss/tillr-drain") {
+				if item.ImportPath == "github.com/mschulkind-oss/tillr-drain" {
+					if !slices.Equal(item.SelectedTests, []string{"TestArchitecture"}) {
+						t.Fatalf("%s: root tillr-drain tests = %v, want [TestArchitecture]", sub, item.SelectedTests)
+					}
+					continue
+				}
 				drainIPs = append(drainIPs, item.ImportPath)
 			}
 		}
@@ -1923,7 +1931,7 @@ func TestDrainSubpackageIsolation(t *testing.T) {
 	}
 
 	// 3. Changing workflow.go selects workflow and root tillr-drain (fast pre-merge packages),
-	// and does NOT select deferred tillr-drain/drain, remotesync, fixer, heavyrun, or heavy.
+	// and does NOT select deferred tillr-drain/drain, remotesync, fixer, heavyrun, heavy, or internal/drainmodel.
 	sel, err := goaffected.SelectAffectedPackages(root, []string{"tools/tillr-drain/workflow/workflow.go"}, nil, rootGraph, nil)
 	if err != nil {
 		t.Fatalf("SelectAffectedPackages(workflow.go): %v", err)
@@ -1946,11 +1954,103 @@ func TestDrainSubpackageIsolation(t *testing.T) {
 		"github.com/mschulkind-oss/tillr-drain/fixer",
 		"github.com/mschulkind-oss/tillr-drain/heavyrun",
 		"github.com/mschulkind-oss/tillr-drain/heavy",
+		"github.com/mschulkind-oss/tillr-drain/internal/drainmodel",
 	} {
 		if selectedSet[forbidden] {
 			t.Fatalf("workflow.go unexpectedly selected %s", forbidden)
 		}
 	}
+}
+
+func TestCheckDrainTestParity(t *testing.T) {
+	initRepo := func(t *testing.T) (string, string) {
+		t.Helper()
+		dir := t.TempDir()
+		runGit := func(args ...string) string {
+			t.Helper()
+			cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		runGit("init")
+		runGit("config", "user.name", "Test")
+		runGit("config", "user.email", "test@example.com")
+
+		write := func(rel, body string) {
+			t.Helper()
+			full := filepath.Join(dir, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write("tools/tillr-drain/drain/a_test.go", "package drain\nimport \"testing\"\nfunc TestAlpha(t *testing.T) {}\nfunc TestBeta(t *testing.T) {}\n")
+		runGit("add", ".")
+		runGit("commit", "-m", "base")
+		base := runGit("rev-parse", "HEAD")
+		return dir, base
+	}
+
+	t.Run("whole-file move passes", func(t *testing.T) {
+		dir, base := initRepo(t)
+		oldPath := filepath.Join(dir, "tools", "tillr-drain", "drain", "a_test.go")
+		newDir := filepath.Join(dir, "tools", "tillr-drain", "internal", "drainmodel")
+		if err := os.MkdirAll(newDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(newDir, "a_test.go"), []byte("package drainmodel\nimport \"testing\"\nfunc TestAlpha(t *testing.T) {}\nfunc TestBeta(t *testing.T) {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(oldPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := goaffected.CheckDrainTestParity(dir, base, "HEAD", []string{"tools/tillr-drain/drain/a_test.go"}); err != nil {
+			t.Fatalf("expected move to pass parity: %v", err)
+		}
+	})
+
+	t.Run("dropped test fails", func(t *testing.T) {
+		dir, base := initRepo(t)
+		oldPath := filepath.Join(dir, "tools", "tillr-drain", "drain", "a_test.go")
+		newDir := filepath.Join(dir, "tools", "tillr-drain", "internal", "drainmodel")
+		if err := os.MkdirAll(newDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(newDir, "a_test.go"), []byte("package drainmodel\nimport \"testing\"\nfunc TestAlpha(t *testing.T) {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(oldPath); err != nil {
+			t.Fatal(err)
+		}
+		err := goaffected.CheckDrainTestParity(dir, base, "HEAD", []string{"tools/tillr-drain/drain/a_test.go"})
+		if err == nil || !strings.Contains(err.Error(), "TestBeta") {
+			t.Fatalf("expected TestBeta parity failure, got %v", err)
+		}
+	})
+
+	t.Run("lowercased test fails", func(t *testing.T) {
+		dir, base := initRepo(t)
+		oldPath := filepath.Join(dir, "tools", "tillr-drain", "drain", "a_test.go")
+		newDir := filepath.Join(dir, "tools", "tillr-drain", "internal", "drainmodel")
+		if err := os.MkdirAll(newDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(newDir, "a_test.go"), []byte("package drainmodel\nimport \"testing\"\nfunc TestAlpha(t *testing.T) {}\nfunc Testbeta(t *testing.T) {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(oldPath); err != nil {
+			t.Fatal(err)
+		}
+		err := goaffected.CheckDrainTestParity(dir, base, "HEAD", []string{"tools/tillr-drain/drain/a_test.go"})
+		if err == nil || !strings.Contains(err.Error(), "TestBeta") {
+			t.Fatalf("expected TestBeta parity failure for lowercased Testbeta, got %v", err)
+		}
+	})
 }
 
 func TestMaxShardsScalesWithCPUCount(t *testing.T) {

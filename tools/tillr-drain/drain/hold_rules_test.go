@@ -22,6 +22,7 @@ var reasonSubpackageDirs = []struct {
 	{pkg: "remotesync", dir: "../remotesync"},
 	{pkg: "fixer", dir: "../fixer"},
 	{pkg: "heavyrun", dir: "../heavyrun"},
+	{pkg: "drainmodel", dir: "../internal/drainmodel"},
 }
 
 // allExportedReasons returns every exported Reason* string constant across drain and
@@ -33,7 +34,7 @@ func allExportedReasons(t *testing.T) map[string]string {
 	subpkgs := map[string]map[string]string{}
 	merged := map[string]string{}
 	for _, entry := range reasonSubpackageDirs {
-		pkgReasons := exportedReasonsFromDir(t, entry.dir, nil)
+		pkgReasons := exportedReasonsFromDir(t, entry.dir, subpkgs)
 		subpkgs[entry.pkg] = pkgReasons
 		for name, val := range pkgReasons {
 			merged[entry.pkg+"."+name] = val

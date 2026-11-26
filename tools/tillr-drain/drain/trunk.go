@@ -46,9 +46,6 @@ import (
 // before its ordinary gate, then proves the named repairs on that candidate tree.
 
 const (
-	// TrunkFixerPrefix is the item-id prefix of a fixer item, so a store read can answer
-	// "is a fixer open" without a second index.
-	TrunkFixerPrefix = "fixer-main-"
 	// TrunkFixerRank places a fixer at the head of the queue: the trunk is red for every
 	// other item, so a fixer that waited behind ordinary work would hold the whole queue.
 	TrunkFixerRank = "000"
@@ -108,11 +105,6 @@ func TrunkFixerID(sha string) string {
 		sha = sha[:TrunkFixerIDLength]
 	}
 	return TrunkFixerPrefix + strings.ToLower(sha)
-}
-
-// IsTrunkFixer answers whether an item is a fixer.
-func IsTrunkFixer(itemID string) bool {
-	return strings.HasPrefix(itemID, TrunkFixerPrefix)
 }
 
 // TrunkFixerSHA answers the sha a fixer id names, or "" when it names none.
