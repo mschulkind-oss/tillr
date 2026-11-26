@@ -8,24 +8,24 @@
 # 99th percentile 3,650 s. The six longest gates (4,903 to 8,206 s) all ended
 # fail or stalled.
 #
-# Alert when a gate.started event has no gate.verdict for the same run
-# (object_id) after 3,650 s and the run's item is not closed, landed, or
-# resolved elsewhere (items and charter projections); no automatic remedy is
-# attached.
+# Alert when a gate.started event has no gate.verdict, drain.set-aside, or
+# drain.candidate-superseded for the same run (object_id) after 3,650 s and the
+# run's item is not closed, landed, or resolved elsewhere (items and charter
+# projections); no automatic remedy is attached.
 [[rule]]
 id = "gate-verdict-overdue"
 scope = "core"
 severity = "warning"
 
 [rule.reads]
-events = ["gate.started", "gate.verdict"]
+events = ["gate.started", "gate.verdict", "drain.set-aside", "drain.candidate-superseded"]
 projections = ["items", "charter"]
 
 [rule.when]
 group_by = "object_id"
 pattern = "duration_without_event"
 after = 'event.kind == "gate.started"'
-match = 'event.kind == "gate.verdict"'
+match = 'event.kind in ["gate.verdict", "drain.set-aside", "drain.candidate-superseded"]'
 clear_when = 'item.state == charter.closed or item.state in charter.finished'
 threshold_duration = "3650s"
 window = "24h"

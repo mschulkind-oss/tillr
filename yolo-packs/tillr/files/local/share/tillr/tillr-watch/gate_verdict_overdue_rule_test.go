@@ -60,7 +60,7 @@ func TestGateVerdictOverdueRule(t *testing.T) {
 	rule := allRules[idx]
 	if rule.Scope != "core" || rule.Severity != "warning" || !rule.Enabled ||
 		rule.Delivery.Receiver != "foreground" ||
-		!slices.Equal(rule.Reads.Events, []string{drain.GateStartedKind, drain.GateVerdictKind}) ||
+		!slices.Equal(rule.Reads.Events, []string{drain.GateStartedKind, drain.GateVerdictKind, "drain.set-aside", "drain.candidate-superseded"}) ||
 		rule.When.GroupBy != "object_id" ||
 		rule.When.Pattern != watch.DurationWithoutEvent ||
 		rule.When.ThresholdDuration != 3650*time.Second ||
@@ -284,6 +284,100 @@ func TestGateVerdictOverdueRule(t *testing.T) {
 		setItemState("item-open", "closed")
 		if notices := pending(); len(notices) != 0 {
 			t.Fatalf("closing item-open should resolve %s for run-open-1, got %+v", ruleID, notices)
+		}
+	})
+
+	t.Run("set-aside or superseded run does not fire and resolves open episode", func(t *testing.T) {
+		ctx, st, now, pending := newHarness(t, []watch.Rule{rule}, t0)
+
+		appendRunEvent := func(kind, runID string, payload any, at time.Time) {
+			t.Helper()
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := runID
+			if err := st.WriteTx(ctx, func(tx *store.Tx) error {
+				_, err := tx.Append(event.Event{
+					Kind:       kind,
+					ObjectType: "run",
+					ObjectID:   &id,
+					At:         at,
+					Payload:    body,
+				})
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Run 1: gate.started, then operator sets the candidate aside before threshold.
+		const (
+			setAsideRun  = "run-item-request-a88616fc52-a1-n1"
+			setAsideItem = "item-request-a88616fc52"
+		)
+		appendGateStarted(ctx, t, st, setAsideRun, setAsideItem, "lane-1", "ffff1111", t0)
+		*now = t0.Add(5 * time.Minute)
+		appendRunEvent("drain.set-aside", setAsideRun, map[string]any{
+			"candidate": map[string]any{"item_id": setAsideItem, "run_id": setAsideRun, "lane_id": "lane-1"},
+			"ref":       "refs/tillr/runs/" + setAsideRun,
+			"why":       "gate program could not start",
+		}, *now)
+
+		// Run 2: gate.started, then retry supersedes the held candidate before threshold.
+		const (
+			supersededRun  = "run-item-superseded-a1-n1"
+			supersededItem = "item-superseded"
+		)
+		appendGateStarted(ctx, t, st, supersededRun, supersededItem, "lane-2", "ffff2222", t0)
+		*now = t0.Add(10 * time.Minute)
+		appendRunEvent("drain.candidate-superseded", supersededRun, map[string]any{
+			"candidate": map[string]any{"item_id": supersededItem, "run_id": supersededRun, "lane_id": "lane-2"},
+			"retry_id":  "retry-1",
+		}, *now)
+
+		// Run 3: gate.started with no terminal event yet, to ensure other runs' events do not clear it.
+		const (
+			stillRunningRun  = "run-item-still-running-a1-n1"
+			stillRunningItem = "item-still-running"
+		)
+		appendGateStarted(ctx, t, st, stillRunningRun, stillRunningItem, "lane-3", "ffff3333", t0)
+
+		*now = t0.Add(61 * time.Minute)
+		opened := pending()
+		if len(opened) != 1 || opened[0].Bundle.Subject != stillRunningRun {
+			t.Fatalf("want only %s to fire (set-aside and superseded runs must stay quiet), got %+v", stillRunningRun, opened)
+		}
+
+		// Setting aside the open run resolves its already-open episode.
+		*now = t0.Add(65 * time.Minute)
+		appendRunEvent("drain.set-aside", stillRunningRun, map[string]any{
+			"candidate": map[string]any{"item_id": stillRunningItem, "run_id": stillRunningRun, "lane_id": "lane-3"},
+			"ref":       "refs/tillr/runs/" + stillRunningRun,
+			"why":       "set aside after 65m",
+		}, *now)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("drain.set-aside for %s should resolve %s, got %+v", stillRunningRun, ruleID, notices)
+		}
+
+		// An open episode on another run also resolves on drain.candidate-superseded.
+		const (
+			lateSupersededRun  = "run-item-late-superseded-a1-n1"
+			lateSupersededItem = "item-late-superseded"
+		)
+		appendGateStarted(ctx, t, st, lateSupersededRun, lateSupersededItem, "lane-4", "ffff4444", *now)
+		*now = (*now).Add(3650 * time.Second)
+		openedLate := pending()
+		if len(openedLate) != 1 || openedLate[0].Bundle.Subject != lateSupersededRun {
+			t.Fatalf("want %s to open at 3650s, got %+v", lateSupersededRun, openedLate)
+		}
+		*now = (*now).Add(time.Minute)
+		appendRunEvent("drain.candidate-superseded", lateSupersededRun, map[string]any{
+			"candidate": map[string]any{"item_id": lateSupersededItem, "run_id": lateSupersededRun, "lane_id": "lane-4"},
+			"retry_id":  "retry-2",
+		}, *now)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("drain.candidate-superseded for %s should resolve %s, got %+v", lateSupersededRun, ruleID, notices)
 		}
 	})
 
