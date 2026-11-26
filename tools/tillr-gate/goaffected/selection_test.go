@@ -756,8 +756,8 @@ func TestSelectionRules(t *testing.T) {
 	}
 
 	// 12. Alert rule changes under config/tillr/watch/ (alone or with tools/tillr-watch/)
-	// select tillr-watch and no tillr-drain package, while every config/tillr/ path read by
-	// tillr-drain tests still selects that package.
+	// select tillr-watch and tillr/watch and no tillr-drain package, while every config/tillr/
+	// path read by tillr-drain tests still selects that package.
 	for _, watchChanged := range [][]string{
 		{"config/tillr/watch/fast-gate-slow.toml", "tools/tillr-watch/main_test.go"},
 		{"config/tillr/watch/new-alert-rule.toml", "tools/tillr-watch/new_alert_rule_test.go"},
@@ -770,6 +770,9 @@ func TestSelectionRules(t *testing.T) {
 		byPkg = byImportPath(selWatch)
 		if _, ok := byPkg["github.com/mschulkind-oss/tillr-watch"]; !ok {
 			t.Fatalf("%v: missing tillr-watch in %+v", watchChanged, byPkg)
+		}
+		if _, ok := byPkg["github.com/mschulkind-oss/tillr/watch"]; !ok {
+			t.Fatalf("%v: missing tillr/watch in %+v", watchChanged, byPkg)
 		}
 		for ip := range byPkg {
 			if ip == "github.com/mschulkind-oss/tillr-drain" || strings.HasPrefix(ip, "github.com/mschulkind-oss/tillr-drain/") {
@@ -1485,6 +1488,32 @@ func TestCheckDeclarationsCoverSelectionInputs(t *testing.T) {
 		for _, p := range suiteInputs {
 			if !covered(p, suiteDecl.Reads) {
 				t.Fatalf("go-test-tillr-gate.json reads do not cover %s", p)
+			}
+		}
+	}
+	{
+		rawTillrDecl, terr := os.ReadFile(filepath.Join(checksDir, "go-test-tillr.json"))
+		if terr != nil {
+			t.Fatalf("read go-test-tillr.json: %v", terr)
+		}
+		var tillrDecl struct {
+			ID    string   `json:"id"`
+			Scope string   `json:"scope"`
+			Tier  string   `json:"tier"`
+			Reads []string `json:"reads"`
+		}
+		if uerr := json.Unmarshal(rawTillrDecl, &tillrDecl); uerr != nil {
+			t.Fatalf("unmarshal go-test-tillr.json: %v", uerr)
+		}
+		if tillrDecl.ID != "go-test-tillr" || tillrDecl.Scope != "tree" || tillrDecl.Tier != "heavy" {
+			t.Fatalf("unexpected go-test-tillr.json metadata: %+v", tillrDecl)
+		}
+		for _, p := range []string{
+			"config/tillr/watch/gate-verdict-overdue.toml",
+			"tools/tillr/watch/variables_test.go",
+		} {
+			if !covered(p, tillrDecl.Reads) {
+				t.Fatalf("go-test-tillr.json reads do not cover %s", p)
 			}
 		}
 	}

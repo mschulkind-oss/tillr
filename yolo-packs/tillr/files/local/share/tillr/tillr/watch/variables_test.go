@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -14,50 +15,15 @@ import (
 
 func registerShippedWatchKinds(t *testing.T) {
 	t.Helper()
-	register(t,
-		"drain.backend-outcome",
-		"drain.backend-probe",
-		"drain.base-replay-ended",
-		"drain.base-replay-started",
-		"drain.build-started",
-		"drain.checkpoint-not-restarted",
-		"drain.dispatch-declined",
-		"drain.ended-work-saved",
-		"drain.fast-gate-timing",
-		"drain.fixer-attached",
-		"drain.fixer-proved",
-		"drain.fork-leftover",
-		"drain.heavy-fault",
-		"drain.heavy-progress",
-		"drain.item-fault",
-		"drain.judge-unreadable",
-		"drain.lane-kept",
-		"drain.lane-refused",
-		"drain.lane-released",
-		"drain.lane-restored",
-		"drain.loop-ended",
-		"drain.loop-pass",
-		"drain.obstacle-hold",
-		"drain.pi-build-current",
-		"drain.pi-build-stale",
-		"drain.process-cpu",
-		"drain.refusal",
-		"drain.restart-answer",
-		"drain.restart-request",
-		"drain.revert",
-		"drain.store-busy",
-		"drain.trunk-core-worktree",
-		"gate.started",
-		"gate.verdict",
-		"item.add",
-		"item.conflict",
-		"item.update",
-		"land.landing",
-		"run.allocate",
-		"run.finish",
-		"run.model-timeout",
-		"run.release",
-	)
+	raw, err := os.ReadFile("testdata/shipped_watch_kinds.json")
+	if err != nil {
+		t.Fatalf("read testdata/shipped_watch_kinds.json: %v", err)
+	}
+	var kinds []string
+	if err := json.Unmarshal(raw, &kinds); err != nil {
+		t.Fatalf("unmarshal testdata/shipped_watch_kinds.json: %v", err)
+	}
+	register(t, kinds...)
 }
 
 func TestShippedWatchRulesVariableDerivation(t *testing.T) {

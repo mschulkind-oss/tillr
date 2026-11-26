@@ -1185,5 +1185,11 @@
         "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"
       ]
     }
+  },
+  "github.com/mschulkind-oss/tillr/watch": {
+    "builds": [],
+    "reads": [
+      "config/tillr/watch/"
+    ]
   }
 }
