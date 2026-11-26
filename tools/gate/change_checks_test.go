@@ -884,7 +884,8 @@ func copyChecksAndStubTree(t *testing.T, root, repo, gateBin string) {
 		if err := json.Unmarshal(raw, &decl); err != nil {
 			t.Fatal(err)
 		}
-		if decl["scope"] == "tree" || decl["id"] == "go-affected" || decl["id"] == "go-module-inventory" {
+		if decl["scope"] == "tree" || decl["id"] == "go-affected" || decl["id"] == "go-module-inventory" ||
+			decl["id"] == "gate-adapters-test" || decl["id"] == "change-checks-test" {
 			decl["command"] = []string{"true"}
 			decl["remember"] = false
 		}
@@ -1222,12 +1223,13 @@ func TestChangeAdapterRecordsCompleteFastInventoryIncludingSkips(t *testing.T) {
 		got[c.CheckID] = c.Result
 	}
 	skipped := map[string]bool{
-		"format": true, "gate-budget": true, "go-affected": true, "go-build": true,
+		"change-checks-test": true, "format": true, "gate-adapters-test": true,
+		"gate-budget": true, "go-affected": true, "go-build": true,
 		"go-edges": true, "go-module-inventory": true, "workflows": true,
 	}
 	expected := []string{"commit-identity", "citations", "documents", "file-size", "workflows", "elapsed-time",
 		"gate-budget", "scratch", "tracked-tillr", "design-citations", "pack-sync", "go-build", "format", "go-affected",
-		"go-edges", "go-module-inventory"}
+		"go-edges", "go-module-inventory", "gate-adapters-test", "change-checks-test"}
 	if len(got) != len(expected) {
 		t.Fatalf("got %d checks (%v), want %d", len(got), got, len(expected))
 	}
@@ -1911,5 +1913,212 @@ func TestDocumentsWatchDecisionRecordMultiViolationDegenerateAndCacheProof(t *te
 	}
 	if len(f.renders()) != 0 {
 		t.Fatalf("cache-proof refusal must not call vantage-check; renders=%v", f.renders())
+	}
+}
+
+func TestChangeGateSuitesRunPreMergeOnGateEditsOutsideFastBudget(t *testing.T) {
+	root, _ := loadTestContext(t)
+	runner := buildTillrGateForTest(t, root)
+	checksDir := filepath.Join(root, "tools", "gate", "checks")
+
+	for _, id := range []string{"gate-adapters-test", "change-checks-test"} {
+		raw, err := os.ReadFile(filepath.Join(checksDir, id+".json"))
+		if err != nil {
+			t.Fatalf("read %s.json: %v", id, err)
+		}
+		var decl map[string]any
+		if err := json.Unmarshal(raw, &decl); err != nil {
+			t.Fatalf("unmarshal %s.json: %v", id, err)
+		}
+		if decl["scope"] != "change" || decl["tier"] != "heavy" {
+			t.Fatalf("%s.json: scope=%v tier=%v, want change/heavy", id, decl["scope"], decl["tier"])
+		}
+		if _, hasBudget := decl["budget_ms"]; hasBudget {
+			t.Fatalf("%s.json must not declare budget_ms (must stay outside the fast tier's time sum)", id)
+		}
+		if timeout, ok := decl["timeout_ms"].(float64); !ok || timeout <= 0 {
+			t.Fatalf("%s.json: timeout_ms=%v, want positive number", id, decl["timeout_ms"])
+		}
+		if remember, ok := decl["remember"].(bool); !ok || remember {
+			t.Fatalf("%s.json: remember=%v, want false", id, decl["remember"])
+		}
+	}
+
+	// Verify gate-budget still passes with the real checks directory (suites are outside the 9000 ms fast sum).
+	fBudget := newChangeFixture(t, true)
+	if out, err := exec.Command(fBudget.gateBin, "gate-budget", checksDir).CombinedOutput(); err != nil {
+		t.Fatalf("gate-budget failed: %v: %s", err, out)
+	}
+
+	cases := []struct {
+		name      string
+		changed   string
+		wantToRun bool
+	}{
+		{"tillr-gate", "tools/tillr-gate/sample.go", true},
+		{"tools-gate", "tools/gate/sample.go", true},
+		{"pack-mirror-tillr-gate", "yolo-packs/tillr/files/local/share/tillr/tillr-gate/sample.go", true},
+		{"pack-program-tillr-gate", "yolo-packs/tillr/programs/tillr-gate/run", true},
+		{"elsewhere-readme", "README.md", false},
+		{"elsewhere-drain", "tools/tillr-drain/drain/sample.go", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newChangeFixture(t, true)
+			markerFile := filepath.Join(f.repo, ".suite-markers")
+			dstChecks := filepath.Join(f.repo, "tools", "gate", "checks")
+			if err := os.MkdirAll(dstChecks, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []string{"gate-adapters-test", "change-checks-test"} {
+				raw, err := os.ReadFile(filepath.Join(checksDir, id+".json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var decl map[string]any
+				if err := json.Unmarshal(raw, &decl); err != nil {
+					t.Fatal(err)
+				}
+				decl["command"] = []string{"sh", "-c", "printf '%s\\n' " + id + " >> " + jsonQuote(markerFile), id}
+				out, _ := json.Marshal(decl)
+				if err := os.WriteFile(filepath.Join(dstChecks, id+".json"), out, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			base := f.commit()
+
+			writeFixtureFile(t, f.repo, tc.changed, "changed\n")
+			head := f.commit()
+
+			cmd := exec.Command(f.gateBin, "change-gate", "--base", base, "--head", head, "--runner", runner, "--logs", filepath.Join(f.repo, "logs"))
+			cmd.Dir = f.repo
+			cmd.Env = f.env
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("change-gate (%s): %v: stdout=%s stderr=%s", tc.changed, err, stdout.String(), stderr.String())
+			}
+
+			var env struct {
+				Payload struct {
+					Checks []struct {
+						CheckID string `json:"check_id"`
+						Result  string `json:"result"`
+					} `json:"checks"`
+				} `json:"payload"`
+			}
+			firstLine := strings.Split(strings.TrimSpace(stdout.String()), "\n")[0]
+			if err := json.Unmarshal([]byte(firstLine), &env); err != nil {
+				t.Fatalf("parse verdict: %v: %s", err, stdout.String())
+			}
+			results := make(map[string]string)
+			for _, c := range env.Payload.Checks {
+				results[c.CheckID] = c.Result
+			}
+			markersRaw, _ := os.ReadFile(markerFile)
+			markers := string(markersRaw)
+			for _, id := range []string{"gate-adapters-test", "change-checks-test"} {
+				if tc.wantToRun {
+					if results[id] != "pass" {
+						t.Fatalf("%s for %s: result=%q want pass (all=%v)", id, tc.changed, results[id], results)
+					}
+					if !strings.Contains(markers, id+"\n") {
+						t.Fatalf("%s for %s did not execute (markers=%q)", id, tc.changed, markers)
+					}
+				} else {
+					if results[id] != "skipped: no changed path is read" {
+						t.Fatalf("%s for %s: result=%q want skipped (all=%v)", id, tc.changed, results[id], results)
+					}
+					if strings.Contains(markers, id+"\n") {
+						t.Fatalf("%s for %s unexpectedly executed (markers=%q)", id, tc.changed, markers)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestChangeLandingGateRefusesBrokenGateAdapterBeforeMerge(t *testing.T) {
+	root, _ := loadTestContext(t)
+	runner := buildTillrGateForTest(t, root)
+	f := newChangeFixture(t, true)
+
+	// Install the real, unmodified gate-adapters-test.json declaration.
+	dstChecks := filepath.Join(f.repo, "tools", "gate", "checks")
+	if err := os.MkdirAll(dstChecks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rawDecl, err := os.ReadFile(filepath.Join(root, "tools", "gate", "checks", "gate-adapters-test.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dstChecks, "gate-adapters-test.json"), rawDecl, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Copy the real Python gate adapter scripts and suite into tools/tillr-gate/.
+	for _, name := range []string{"change-gate.py", "tree-check.py", "classify.py", "change-gate.test.py"} {
+		data, err := os.ReadFile(filepath.Join(root, "tools", "tillr-gate", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFixtureFile(t, f.repo, filepath.ToSlash(filepath.Join("tools", "tillr-gate", name)), string(data))
+	}
+	// Minimal Go module stub under tools/gate/ so the Go half of gate-adapters-test compiles cleanly.
+	if entries, err := os.ReadDir(filepath.Join(f.repo, "tools", "gate")); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".go") {
+				_ = os.Remove(filepath.Join(f.repo, "tools", "gate", e.Name()))
+			}
+		}
+	}
+	writeFixtureFile(t, f.repo, "tools/gate/go.mod", "module example.invalid/gate\n\ngo 1.24\n")
+	writeFixtureFile(t, f.repo, "tools/gate/change_gate_test.go", "package main\n\nimport \"testing\"\n\nfunc TestChangeGateStub(t *testing.T) {}\n")
+	base := f.commit()
+	f.git("branch", "-f", "main", base)
+
+	// Cut a candidate branch and commit a broken gate adapter.
+	f.git("checkout", "-qb", "lane-broken-adapter", base)
+	writeFixtureFile(t, f.repo, "tools/tillr-gate/change-gate.py", "#!/usr/bin/env python3\nraise RuntimeError('broken gate adapter')\n")
+	head := f.commit()
+
+	// Run the landing gate before merging the candidate into main.
+	cmd := exec.Command(f.gateBin, "change-gate", "--base", base, "--head", head, "--runner", runner, "--logs", filepath.Join(f.repo, "logs"))
+	cmd.Dir = f.repo
+	cmd.Env = f.env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 {
+		t.Fatalf("landing gate must refuse broken gate adapter with exit 1, got err=%v stdout=%s stderr=%s", err, stdout.String(), stderr.String())
+	}
+
+	var env struct {
+		Payload struct {
+			Checks []struct {
+				CheckID string `json:"check_id"`
+				Result  string `json:"result"`
+			} `json:"checks"`
+		} `json:"payload"`
+	}
+	firstLine := strings.Split(strings.TrimSpace(stdout.String()), "\n")[0]
+	if err := json.Unmarshal([]byte(firstLine), &env); err != nil {
+		t.Fatalf("parse verdict: %v: %s", err, stdout.String())
+	}
+	foundFail := false
+	for _, c := range env.Payload.Checks {
+		if c.CheckID == "gate-adapters-test" && c.Result == "fail" {
+			foundFail = true
+		}
+	}
+	if !foundFail {
+		t.Fatalf("expected gate-adapters-test to fail in landing gate verdict, got %+v", env.Payload.Checks)
+	}
+	// Because the landing gate refused the candidate, main was not merged and remains at base.
+	if gotMain := f.git("rev-parse", "main"); gotMain != base {
+		t.Fatalf("main moved to %s despite landing gate refusal (base=%s)", gotMain, base)
 	}
 }

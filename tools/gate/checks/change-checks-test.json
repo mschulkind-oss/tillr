@@ -4,16 +4,19 @@
   "command": [
     "sh",
     "-c",
-    "cd tools/gate && CGO_ENABLED=0 GOFLAGS=-trimpath go test -run 'TestDocuments|TestChange|TestFileSize|TestCitations|TestCommitIdentity|TestElapsedTime' ./..."
+    "cd tools/gate && CGO_ENABLED=0 GOFLAGS=-trimpath go test -run 'TestDocuments|TestChange|TestFileSize|TestCitations|TestCommitIdentity|TestElapsedTime' ./...",
+    "change-checks-test"
   ],
-  "scope": "tree",
+  "scope": "change",
   "tier": "heavy",
   "timeout_ms": 300000,
   "reads": [
     "tools/gate/",
     "tools/tillr-gate/",
     "tools/tillr/",
-    "tools/tillr-loop/"
+    "yolo-packs/tillr/files/local/share/tillr/tillr-gate/",
+    "yolo-packs/tillr/files/local/share/tillr/tillr/",
+    "yolo-packs/tillr/programs/tillr-gate/"
   ],
   "tools": [
     "sh",

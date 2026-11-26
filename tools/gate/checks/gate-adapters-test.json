@@ -4,21 +4,25 @@
   "command": [
     "sh",
     "-c",
-    "python3 tools/tillr-gate/change-gate.test.py && cd tools/gate && CGO_ENABLED=0 GOFLAGS=-trimpath go test -run 'TestChangeGate|TestTreeCheck|TestDone|TestClassificationScan' ./..."
+    "python3 tools/tillr-gate/change-gate.test.py && cd tools/gate && CGO_ENABLED=0 GOFLAGS=-trimpath go test -run 'TestChangeGate|TestTreeCheck|TestDone|TestClassificationScan' ./...",
+    "gate-adapters-test"
   ],
-  "scope": "tree",
+  "scope": "change",
   "tier": "heavy",
   "timeout_ms": 900000,
   "reads": [
     "tools/gate/",
-    "tools/gate/checks/gate-adapters-test.json",
     "tools/tillr-gate/",
-    "tools/tillr/"
+    "tools/tillr/",
+    "yolo-packs/tillr/files/local/share/tillr/tillr-gate/",
+    "yolo-packs/tillr/files/local/share/tillr/tillr/",
+    "yolo-packs/tillr/programs/tillr-gate/"
   ],
   "tools": [
     "sh",
     "go",
     "git",
     "python3"
-  ]
+  ],
+  "remember": false
 }

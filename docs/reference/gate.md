@@ -4,7 +4,7 @@ status: in-review
 stage: DESIGN
 planning-actions: none
 verified: 2026-11-25
-next: "The owner rules OQ-GR4, OQ-GR5 and OQ-GR6."
+next: "The owner rules OQ-GR4 and OQ-GR5."
 covers:
   - tools/gate/
   - tools/tillr-gate/
@@ -24,15 +24,15 @@ covers:
   - tools/tillr-view/heavy_misses.go
   - config/tillr/gate-policy.json
 tags: [gate, checks, landing, proof, reference]
-summary: "How the gate works: one JSON declaration per check, a fast tier that judges a candidate before it lands and a heavy tier that proves the trunk after the merge, the gate a trunk fixer gets and the rule for a fork check an upstream release turned red, passes remembered by a fingerprint of declared inputs, one classifier for every check result, budgets that are targets with a watchdog that ends only a stalled check, three open questions for the owner, and the gate rework's decision ledger."
+summary: "How the gate works: one JSON declaration per check, a fast tier that judges a candidate before it lands and a heavy tier that proves the trunk after the merge, the gate a trunk fixer gets and the rule for a fork check an upstream release turned red, passes remembered by a fingerprint of declared inputs, one classifier for every check result, budgets that are targets with a watchdog that ends only a stalled check, two open questions for the owner, and the gate rework's decision ledger."
 vantage:
   status-chip: true
 ---
 
 # The gate
 
-**Status:** Source-verified 2026-11-25 against the tree. Three choices await the owner in
-[`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5) and [`OQ-GR6`](#OQ-GR6). In
+**Status:** Source-verified 2026-11-26 against the tree. Two choices await the owner in
+[`OQ-GR4`](#OQ-GR4) and [`OQ-GR5`](#OQ-GR5). In
 [Why it's this way](#why-its-this-way), only rows quoting the owner's dated words are owner
 rulings; every designer or operator-request decision may be overturned by the owner.
 UNMEASURED: this reference was written by reading the code and the recorded decision ledger,
@@ -82,10 +82,11 @@ to the gate is tested against), and [the escalation ladder](../design/escalation
   the classified outcome, never from a raw exit code or word.
 - **A verdict covers what it ran.** A check skipped because the change does not touch what
   it reads is recorded as skipped, not as a pass.
-- **Gate code never lands on deferred proof ([`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50)).** A
-  wrong judge is the one failure a revert does not repair, because every landing it judged
-  stays judged; whether the Python gate suites' current heavy-tree declarations meet that
-  rule is open in [`OQ-GR6`](#OQ-GR6).
+- **Gate code never lands on deferred proof ([`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50),
+  [`OQ-GR6`](#OQ-GR6)).** A wrong judge is the one failure a revert does not repair, because
+  every landing it judged stays judged; `gate-adapters-test` and `change-checks-test` run
+  before the merge as heavy change checks whenever `tools/tillr-gate/`, `tools/gate/` or the
+  pack copy of `tillr-gate` changes.
 
 ## A check is one declaration file
 
@@ -134,10 +135,10 @@ are created.
 The **fast tier** is the set of checks cheap enough to run on every candidate. The **heavy
 tier** is the rest: whole test suites and anything else measured in minutes. Fast tree checks
 and all change checks run before the merge; heavy tree checks run in the
-[after-merge proof](#after-merge-proof-and-the-green-pointer) (including, today, the Python
-gate suites asked about in [`OQ-GR6`](#OQ-GR6)). Two change checks are heavy
-(`go-affected` and `workflows`): they still run before the merge, outside the fast budget,
-and the landing gate runs them only when the change touches what they read.
+[after-merge proof](#after-merge-proof-and-the-green-pointer). Four change checks are heavy
+(`go-affected`, `workflows`, `gate-adapters-test`, and `change-checks-test`): they still run
+before the merge, outside the fast budget, and the landing gate runs them only when the
+change touches what they read.
 
 ## Remembered passes
 
@@ -517,22 +518,21 @@ lets a broken adapter land unjudged, violating [`OQ-GR3`](#OQ-GR3)) and explicit
 letting a `tools/tillr-gate/` Go edit land when `go` is missing because a pre-merge runner
 check is Python-only.
 
-**Current check declarations vs. `D-GR50` ([`OQ-GR6`](#OQ-GR6)).** In the tree today, missing
-`go` still blocks any landing touching `tools/tillr-gate/` or `tools/tillr/` (`go-build`
-declares `"go"` in `tools` and `go-affected` invokes `go`), and `go-affected` runs affected
-Go packages before the merge. However, commit `11650445` (2026-11-24) declared the Python
-gate suites ([`tools/gate/checks/gate-adapters-test.json`](../../tools/gate/checks/gate-adapters-test.json)
-and [`tools/gate/checks/change-checks-test.json`](../../tools/gate/checks/change-checks-test.json))
-as `scope: "tree", tier: "heavy"`. Before the merge, `repo-gate change-gate` invokes
-`tillr-gate checks --fast-tree`, which in `checksFace`
-([`tools/tillr-gate/checks.go`](../../tools/tillr-gate/checks.go)) selects only
-`scope: "change"` and `scope: "tree", tier: "fast"` declarations; heavy tree checks run only
-under `--heavy-tree` in the after-merge proof, and `go-affected` runs only Go packages
-(`rg -n 'change-gate\.test\.py|classification-scan\.test\.py|done\.test\.py|change_checks_test\.py' tools/`
-matches outside the test files themselves only `tools/gate/checks/*.json` and one fixture
-string in `tools/tillr-drain/drain/replay_go_affected_test.go`). Whether to run the Python
-gate suites before the merge on gate edits or amend `D-GR50` is open for the owner in
-[`OQ-GR6`](#OQ-GR6).
+**Gate adapter and change-check suites before the merge ([`OQ-GR6`](#OQ-GR6)).** Missing
+`go` blocks any landing touching `tools/tillr-gate/` or `tools/tillr/` (`go-build` declares
+`"go"` in `tools` and `go-affected` invokes `go`), and `go-affected` runs affected Go
+packages before the merge. Under [`OQ-GR6`](#OQ-GR6) (Option A, built),
+[`tools/gate/checks/gate-adapters-test.json`](../../tools/gate/checks/gate-adapters-test.json)
+and [`tools/gate/checks/change-checks-test.json`](../../tools/gate/checks/change-checks-test.json)
+are declared as `scope: "change", tier: "heavy"` with `remember: false`, watching
+`tools/gate/`, `tools/tillr-gate/`, the pack copy of `tillr-gate`
+(`yolo-packs/tillr/files/local/share/tillr/tillr-gate/` and
+`yolo-packs/tillr/programs/tillr-gate/`), and their required in-repo Go `replace`
+dependencies (`tools/tillr/` and `yolo-packs/tillr/files/local/share/tillr/tillr/`). Before
+the merge, `repo-gate change-gate` invokes `tillr-gate checks --fast-tree --scope-to-change`,
+which selects both suites outside the 9,000 ms fast-tier budget whenever those paths change
+(refusing a broken gate adapter before the merge) and skips them (`skipped: no changed path
+is read`) for changes elsewhere.
 
 ### Measured `go-affected` timings (2026-11-25)
 
@@ -1012,12 +1012,6 @@ with `tillr-gate` on `PATH`. To run one heavy check: `just done --only <id>`.
   change that repairs it, and nothing recovers from that without an operator. Which build
   judges a change to the binary's own source and how an installed-gate fault recovers await
   the owner in [`OQ-GR4`](#OQ-GR4). `just done` does not have this gap.
-- **The Python gate runner suites are declared as heavy tree checks ([`OQ-GR6`](#OQ-GR6)).**
-  [`tools/gate/checks/gate-adapters-test.json`](../../tools/gate/checks/gate-adapters-test.json)
-  and [`tools/gate/checks/change-checks-test.json`](../../tools/gate/checks/change-checks-test.json)
-  carry `scope: "tree", tier: "heavy"` and therefore run in the after-merge proof rather than
-  before the merge when `tools/tillr-gate/` or `tools/gate/` changes, contradicting part 3 of
-  [`D-GR50`](#D-GR50). [`OQ-GR6`](#OQ-GR6) puts the choice to the owner.
 - **Built-program test narrowing (`build_tests`, [`D-GR51`](#D-GR51)) is not built.**
   [`tools/gate/go-test-edges.json`](../../tools/gate/go-test-edges.json) supports `read_tests`
   ([`D-GR44`](#D-GR44)) but not `build_tests`
@@ -1149,38 +1143,6 @@ The prose above explains what each is for.
 
    > _(empty — fill in when decided)_
 
-3. 💬 **OQ-GR6: Should the Python gate runner suites (`gate-adapters-test` and `change-checks-test`) run before the merge when gate code changes as `D-GR50` required, or stay in the after-merge proof?**
-
-   [`OQ-GR3`](#OQ-GR3) (2026-11-15) and [`D-GR50`](#D-GR50) (2026-11-23, designer's decision
-   from an operator request) require the gate runner's Python suites to run before the merge
-   whenever `tools/tillr-gate/`, `tools/gate/` or the pack mirror of `tillr-gate` changes,
-   explicitly rejecting moving them to after the merge because a broken adapter could land
-   unjudged ([Affected Go tests before the merge](#affected-go-tests-before-the-merge)).
-   Commit `11650445` (2026-11-24) declared
-   [`tools/gate/checks/gate-adapters-test.json`](../../tools/gate/checks/gate-adapters-test.json)
-   and [`tools/gate/checks/change-checks-test.json`](../../tools/gate/checks/change-checks-test.json)
-   with `scope: "tree", tier: "heavy"`, which `tillr-gate checks --fast-tree` skips before
-   the merge and runs only in `--heavy-tree` during the after-merge proof, while
-   `go-affected` runs only Go packages.
-
-   - **A — Run the Python gate suites before the merge on gate edits, per [`OQ-GR3`](#OQ-GR3),
-     [`D-GR50`](#D-GR50) and [`I3`](#I3).** Add or convert a `scope: "change"` check watching
-     `tools/tillr-gate/`, `tools/gate/` and the pack mirror of `tillr-gate` (outside the
-     9,000 ms fast-tier sum, alongside `go-affected`) so a broken Python gate adapter or
-     change-check script is refused before it merges and judges other landings.
-   - **B — Amend `D-GR50` so `go-build` and `go-affected` suffice before the merge and the
-     Python gate suites stay in the after-merge proof.** Avoids running those Python suites
-     in the landing gate on edits under `tools/gate/` or `tools/tillr-gate/`, accepting that
-     a Python adapter regression is caught only by the after-merge proof and `auto_revert`.
-
-   <!-- vantage: question id=OQ-GR6 leaning="A — a broken Python gate adapter can misjudge candidates that land before the after-merge proof finishes, and reverting the adapter does not re-judge landings it already passed (OQ-GR3, I3)." -->
-
-   _Leaning:_ A — a broken Python gate adapter can misjudge candidates that land before the after-merge proof finishes, and reverting the adapter does not re-judge landings it already passed ([`OQ-GR3`](#OQ-GR3), [`I3`](#I3)).
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
 ## Why it's this way
 
 Each row is a ruling or engineering decision a maintainer might otherwise undo. The ids are
@@ -1211,7 +1173,8 @@ and spelling verbatim.
 | <a id="OQ-FG1"></a>[OQ-FG1](#OQ-FG1) | When an upstream release breaks a patch series, the owner is told by the queue only: no owner-facing row and no hold addressed to the owner. | 2026-11-24 | [Upstream drift](#upstream-drift) | Yes |
 | <a id="D-GR53"></a>`D-GR53` | Carried in a filed request of 2026-11-25: `"sounds like a good idea. do it"`, in answer to moving the `tillr-drain` integration tests out of the pre-merge `go-affected` gate and proving them after the merge after 2026-11-25 `go-affected` timing measurements showed `tillr-drain/drain`'s `~2,000` subprocess-heavy integration tests (`~4,800 s` summed test-wall time) accounting for `83.0%`–`99.99%` of every >20-minute gate. Amends [`D-GR38`](#D-GR38) and [`D-GR39`](#D-GR39); leaves [`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50) and [`I3`](#I3) in force (`tools/tillr-gate` and `tools/gate` suites never land on deferred proof). Mechanism initially chosen by the designer in [`D-GR54`](#D-GR54) and confirmed as Option C by the owner in [`D-GR56`](#D-GR56) ([`OQ-DFG1`](../design/fast-gate-tillr-drain-options.md#OQ-DFG1)). | 2026-11-25 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
 | <a id="D-GR55"></a>`D-GR55` | `"yes let's do it and warn there may be unrelated red tests"`, in answer to lanes starting at `refs/tillr/green` (29 landings behind the tip, causing 17 squash conflicts in ten hours and several gate failures on stale bases): this repository sets `lane_base: tip` in [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json) while the program default for a repository with no setting stays `green`, and whenever a non-fixer lane's base is not the proved commit, the worker's brief warns that the base is unproved and may carry unrelated red tests to be reported as a `trunk` obstacle rather than fixed inside the item. Supersedes [`D-GR24`](#D-GR24) for this repository's `lane_base` setting. | 2026-11-25 | [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer), [Current values](#current-values) | Yes |
-| <a id="OQ-GR7"></a>[OQ-GR7](#OQ-GR7) | Carried in a filed request of 2026-11-25, answering [`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7): `"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`. Option B of [`OQ-GR7`](#OQ-GR7) swaps processor priority from `repair 0, gate 5, proof 10, worker 15` to `repair 0, proof 5, gate 10, worker 15` (`repair > proof > gate > worker`) with no cap on concurrent gates, amending [`OQ-GTC3`](../design/gate-test-capacity.md#OQ-GTC3) in [gate test capacity](../design/gate-test-capacity.md) because nothing publishes (`refs/tillr/green` does not advance) without a proof; cgroup v2 `cpu.weight` values (`repair=400, proof=200, gate=100, worker=50`) and status-line ordering are set by the designer in [`D-GTC5`](../design/gate-test-capacity.md#D-GTC5) and [`D-GTC11`](../design/gate-test-capacity.md#D-GTC11). ([`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5) and [`OQ-GR6`](#OQ-GR6) remain open above until each is updated.) | 2026-11-25 | [Measured proof vs. gate contention (2026-11-25)](#measured-proof-vs-gate-contention-2026-11-25), [Go test execution](#go-test-execution) | Yes |
+| <a id="OQ-GR6"></a>[OQ-GR6](#OQ-GR6) | Carried in a filed request of 2026-11-25, answering [`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7): `"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`. Option A restores [`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50) and [`I3`](#I3): [`tools/gate/checks/gate-adapters-test.json`](../../tools/gate/checks/gate-adapters-test.json) and [`tools/gate/checks/change-checks-test.json`](../../tools/gate/checks/change-checks-test.json) run before the merge as `scope: "change", tier: "heavy"` checks outside the 9,000 ms fast-tier sum whenever `tools/tillr-gate/`, `tools/gate/` or the pack copy of `tillr-gate` changes (and skip for changes elsewhere), refusing a broken gate adapter before it merges. | 2026-11-25 | [Tiers](#tiers), [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
+| <a id="OQ-GR7"></a>[OQ-GR7](#OQ-GR7) | Carried in a filed request of 2026-11-25, answering [`OQ-GR4`](#OQ-GR4), [`OQ-GR5`](#OQ-GR5), [`OQ-GR6`](#OQ-GR6) and [`OQ-GR7`](#OQ-GR7): `"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`. Option B of [`OQ-GR7`](#OQ-GR7) swaps processor priority from `repair 0, gate 5, proof 10, worker 15` to `repair 0, proof 5, gate 10, worker 15` (`repair > proof > gate > worker`) with no cap on concurrent gates, amending [`OQ-GTC3`](../design/gate-test-capacity.md#OQ-GTC3) in [gate test capacity](../design/gate-test-capacity.md) because nothing publishes (`refs/tillr/green` does not advance) without a proof; cgroup v2 `cpu.weight` values (`repair=400, proof=200, gate=100, worker=50`) and status-line ordering are set by the designer in [`D-GTC5`](../design/gate-test-capacity.md#D-GTC5) and [`D-GTC11`](../design/gate-test-capacity.md#D-GTC11). ([`OQ-GR4`](#OQ-GR4) and [`OQ-GR5`](#OQ-GR5) remain open above until each is updated.) | 2026-11-25 | [Measured proof vs. gate contention (2026-11-25)](#measured-proof-vs-gate-contention-2026-11-25), [Go test execution](#go-test-execution) | Yes |
 | <a id="D-GR56"></a>`D-GR56` | Carried in a filed request of 2026-11-25 ([`OQ-DFG1`](../design/fast-gate-tillr-drain-options.md#OQ-DFG1)): `"ro DFG1, let's stick wiht C. you think it's a good idea and it's not hurting. we'll collect more info and make another deciison in the future."` Confirms Option C of [the fast-gate `tillr-drain` options design](../design/fast-gate-tillr-drain-options.md#33-option-c--prove-the-whole-tillr-draindrain-package-after-the-merge) (`DEFERRED_PROOF_PACKAGES` in [`D-GR54`](#D-GR54), built in `5e728e5a`) so proving the whole `github.com/mschulkind-oss/tillr-drain/drain` package after the merge is the owner's standing choice and no longer an interim change, and records that the owner will decide again once more data is collected; records no choice on the slow-gate alert threshold beyond what Option C states (`fast-gate-median-slow` stays at `90 s` / `90000 ms`). | 2026-11-25 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [`OQ-DFG1`](../design/fast-gate-tillr-drain-options.md#OQ-DFG1) | Yes (`5e728e5a`) |
 
 ### Answered open questions
@@ -1225,7 +1188,7 @@ overturned the first two and has not overturned [`OQ-GR3`](#OQ-GR3).
 | :--- | :--- | :--- | :--- | :--- |
 | <a id="OQ-GR1"></a>[OQ-GR1](#OQ-GR1) | **Designer's answer (overturned 2026-11-18):** a per-repository `red_cap` defaulting to 20 landings or 60 minutes past `refs/tillr/green` (rejecting no cap). **Overturned by the owner on 2026-11-18** ([`OQ-GP7`](../design/tillr-graph-is-the-path.md#decision-ledger) in [the item graph design](../design/tillr-graph-is-the-path.md)): under a red check, work lands if it does not touch what that check reads, and there is no landing count or time cap. | 2026-11-15; overturned 2026-11-18 | [A red proof](#a-red-proof) | Yes (cap removed) |
 | <a id="OQ-GR2"></a>[OQ-GR2](#OQ-GR2) | **Designer's answer (overturned 2026-11-17, replaced 2026-11-21):** cut new lanes from `refs/tillr/green` by default (`lane_base: green`), rejecting always cutting from the tip. **Overturned by the owner on 2026-11-17** because cutting from `refs/tillr/green` handed lanes a tree older than their own item's definition and produced false conflicts (`lane_base: tip`). **Replaced on 2026-11-21 by [`D-GR24`](#D-GR24)** (`lane_base: green` again, with [`OQ-GR5`](#OQ-GR5) open on the five built exceptions), and **superseded for this repository on 2026-11-25 by [`D-GR55`](#D-GR55)** (`lane_base: tip` here, program default `green`). | 2026-11-15; overturned 2026-11-17; replaced 2026-11-21; superseded here 2026-11-25 | [After-merge proof and the green pointer](#after-merge-proof-and-the-green-pointer) | Yes |
-| <a id="OQ-GR3"></a>[OQ-GR3](#OQ-GR3) | **Designer's answer (owner may overturn):** a change to the gate's own runner (`tools/tillr-gate/` and `tools/gate/`) never lands on deferred proof — it lands only after the runner's tests pass **before the merge, under either `landing_strategy`**, outside the ten-second budget, applying [the escalation ladder's fence](../design/escalation-ladder.md) and the 2026-11-05 ruling ([`I3`](#I3)) that **a wrong judge is the one failure a revert does not repair; every landing it judged stays judged**. Rejected: landing a runner change in ten seconds and re-running every landing's fast checks after a red suite. Amended on 2026-11-23 by [`D-GR50`](#D-GR50); see [`OQ-GR6`](#OQ-GR6) on the Python suites and [`OQ-GR4`](#OQ-GR4) on which binary runs the gate. | 2026-11-15; amended 2026-11-23 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Partly ([`OQ-GR6`](#OQ-GR6)) |
+| <a id="OQ-GR3"></a>[OQ-GR3](#OQ-GR3) | **Designer's answer (owner may overturn):** a change to the gate's own runner (`tools/tillr-gate/` and `tools/gate/`) never lands on deferred proof — it lands only after the runner's tests pass **before the merge, under either `landing_strategy`**, outside the ten-second budget, applying [the escalation ladder's fence](../design/escalation-ladder.md) and the 2026-11-05 ruling ([`I3`](#I3)) that **a wrong judge is the one failure a revert does not repair; every landing it judged stays judged**. Rejected: landing a runner change in ten seconds and re-running every landing's fast checks after a red suite. Amended on 2026-11-23 by [`D-GR50`](#D-GR50) and confirmed for the gate runner suites on 2026-11-25 by [`OQ-GR6`](#OQ-GR6); see [`OQ-GR4`](#OQ-GR4) on which binary runs the gate. | 2026-11-15; amended 2026-11-23 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge) | Yes |
 
 ### The designer's decisions
 
@@ -1272,7 +1235,7 @@ may overturn any of them.
 | <a id="D-GR47"></a>`D-GR47` | Split loop-free drain code into leaf subpackages (`workflow`, `remotesync`, `fixer`, `heavyrun`) forbidden to import `drain` or root `tools/tillr-drain` in code or tests while keeping `heavy` as the viewer's read-only status contract; replaced an uncached 40 s timing check with deterministic selection-isolation and zero-dropped-test parity tests. Rejected: merging the runner into `heavy`, importing `drain` in leaf tests, a 50-method loop interface, or an elapsed-time pass/fail threshold. | 2026-11-22 | [Go test execution](#go-test-execution) | Yes |
 | <a id="D-GR48"></a>`D-GR48` | Slot classes serve `repair`, `proof`, `gate`, `ordinary` (FIFO within class): `repair` takes any pool; `proof` takes shared then `proof`; `gate` takes shared then `gate`, never `proof` (capped at 8 slots per gate and 4 reserved `gate` slots); `ordinary` takes shared behind the rest. Physical capacity locks stay shared while wait locks/tickets live under `wait-rules/<SLOT_RULES_VERSION>`, verified deterministically without elapsed-time assertions. Rejected: splitting physical locks per version, unversioned wait locks, unpinned yield rules, or killing running processes. | 2026-11-22 | [Go test execution](#go-test-execution) | Yes (off by default) |
 | <a id="D-GR49"></a>`D-GR49` | `tools/go-test-shards.py` gains explicit `--cache` (default stays uncached), running packages under 100 top-level tests as one group and sharding larger ones without `-count=1` with per-package and per-bucket edge digests and per-package cache-hit evidence, while refusing `--cache` inside a lane worker (`TILLR_RUN_ID` set); amended 2026-11-24 by `D-GTC4` in [gate test capacity](../design/gate-test-capacity.md) (`go_affected.py` shard ceiling `2 * os.cpu_count()`, `go-test-shards.py` at `12`). Rejected: unkeyed caching below 100 tests, replacing the suite runner, keeping large packages uncached, or making `--cache` the default. | 2026-11-23; amended 2026-11-24 | [Go test execution](#go-test-execution) | Yes |
-| <a id="D-GR50"></a>`D-GR50` | Amends [`OQ-GR3`](#OQ-GR3), [`D-GR30`](#D-GR30), [`D-GR39`](#D-GR39), [`D-GR43`](#D-GR43) and [`D-GR49`](#D-GR49): moves whole-module `tools/tillr` (`go-test-tillr`) to after the merge; brings `tools/tillr` and `tools/tillr-gate` into `go-affected` so affected Go packages of all ten modules run before the merge with cache on; splits the gate runner's check so before the merge it watches `tools/tillr-gate/`, `tools/gate/` and the pack mirror of `tillr-gate` and runs the two Python runner suites (never deferred) while after the merge it runs the whole `tools/tillr-gate` Go suite plus both Python suites; and blocks `tools/tillr-gate/` or `tools/tillr/` landings when `go` is missing rather than deferring. **Rejected:** keeping the two modules excluded from `go-affected`; **moving the gate runner's Python suites out of the pre-merge gate to after the merge** (lets a broken adapter land unjudged, violating [`OQ-GR3`](#OQ-GR3)); renaming after-merge check ids; **allowing a `tools/tillr-gate/` Go edit to land when `go` is missing because a pre-merge check is Python-only**. See [`OQ-GR6`](#OQ-GR6) for the current check-declaration conflict. | 2026-11-23 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [`OQ-GR6`](#OQ-GR6) | Partly ([`OQ-GR6`](#OQ-GR6)) |
+| <a id="D-GR50"></a>`D-GR50` | Amends [`OQ-GR3`](#OQ-GR3), [`D-GR30`](#D-GR30), [`D-GR39`](#D-GR39), [`D-GR43`](#D-GR43) and [`D-GR49`](#D-GR49): moves whole-module `tools/tillr` (`go-test-tillr`) to after the merge; brings `tools/tillr` and `tools/tillr-gate` into `go-affected` so affected Go packages of all ten modules run before the merge with cache on; splits the gate runner's check so before the merge it watches `tools/tillr-gate/`, `tools/gate/` and the pack mirror of `tillr-gate` and runs the gate adapter and change-check suites (never deferred, restored by [`OQ-GR6`](#OQ-GR6)) while after the merge `go-test-tillr-gate` and `go-test-gate` run the whole Go suites; and blocks `tools/tillr-gate/` or `tools/tillr/` landings when `go` is missing rather than deferring. **Rejected:** keeping the two modules excluded from `go-affected`; **moving the gate runner's suites out of the pre-merge gate to after the merge** (lets a broken adapter land unjudged, violating [`OQ-GR3`](#OQ-GR3)); renaming after-merge check ids; **allowing a `tools/tillr-gate/` Go edit to land when `go` is missing because a pre-merge check is Python-only**. | 2026-11-23 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [`OQ-GR6`](#OQ-GR6) | Yes |
 | <a id="D-GR51"></a>`D-GR51` | Counterpart of [`D-GR44`](#D-GR44) for built sibling programs: optional `build_tests` in `tools/gate/go-test-edges.json` narrowing `builds` edges to named tests when all triggering edges are narrowed (widening to the whole package on any wider reason), with subset-scoped edge digests and deterministic tests. Rejected: keeping builds package-wide, dropping build edges, replacing string lists with objects, or editing the drain's input helper in the same item. | 2026-11-24 | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [Known gaps](#known-gaps) | No |
 | <a id="D-GR52"></a>`D-GR52` | **From an operator request; the designer's decision, not an owner ruling (the owner may overturn it).** When `tools/gate/go_affected.py` reads a test binary's output containing `SIGQUIT: quit`, it extracts one failing case per unique top-level test function in that binary's goroutine stacks (`<package>.Test<Name>(`, matching Go's top-level `Test*` rule and excluding `TestMain` and closures), with `assertion` `"blocked: the test binary was ended by SIGQUIT while this test was running"` and the trimmed stack frame line immediately below `<package>.Test<Name>(` as `where`, prepending those tests first in both `failed_tests` and `go_affected.py`'s failing-case list (ahead of `--- FAIL:` and remaining `failed_tests` cases) and printing a `TRIAGE_CASES = 10` bounded `fork-check: triage --` block for `go-affected` immediately before `format_failure_summary` so `readTriageBlock` in `tools/tillr-drain/drain/refusal_cases.go` populates `drain.refusal` with no change outside `tools/gate/go_affected.py` and `tests/go-affected.test.py`. **Rejected:** editing `tools/tillr-drain/`, `tools/tillr-gate/` or `tools/go-test-shards.py` against the request's `"Change nothing else"` scope; appending `SIGQUIT` cases after ordinary `--- FAIL:` cases where bounded triage drops them; matching `TestMain` or `.funcN(` closures as top-level test cases; changing `parse_go_test_json`'s 2-tuple return signature. | 2026-11-25, designer, from an operator request | [Affected Go tests before the merge](#affected-go-tests-before-the-merge), [Known gaps](#known-gaps) | No |
 | <a id="D-FG1"></a>`D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. No range since the last green is read. Keeping an untiered range is rejected: its cost grows with the red range. | 2026-11-24 | [The trunk fixer's gate](#the-trunk-fixers-gate) | Yes |
@@ -1298,4 +1261,4 @@ that the lander may revert a landed candidate by itself, survives as [`D-GR6`](#
 | :--- | :--- | :--- | :--- |
 | <a id="D-LV-1"></a>`D-LV-1` | `"The trunk may move before its behavior suites have passed, inside a bounded window — the landing tier proves the tree safe to stand on, the rolling tier proves behavior on the trunk every 10 landings or 20 minutes, a verified watermark is published, and landing refuses when the watermark lags more than 20 landings or 60 minutes. The unproved range is visible on the queue surface and the bound is the kill switch"`. | **Kept in its core, overturned in its bound.** Kept: the trunk may move before behavior suites pass ([`D-GR3`](#D-GR3), [`D-GR4`](#D-GR4)), and a published marker names what is proved (the watermark became `refs/tillr/green`, [`D-GR5`](#D-GR5)). Replaced: the clock/count proof cadence becomes coalesced after each landing. Overturned: the 20-landing / 60-minute lag cap carried into [`OQ-GR1`](#OQ-GR1) was ruled out by the owner on 2026-11-18 ([`OQ-GP7`](../design/tillr-graph-is-the-path.md#decision-ledger)). | [`D-GR3`](#D-GR3), [`D-GR4`](#D-GR4), [`D-GR5`](#D-GR5), [`OQ-GR1`](#OQ-GR1) |
 | <a id="D-LV-3"></a>`D-LV-3` | `"The 100-per-hour target is blended over the drain hour, not required of every class alone; a batch that changes the gate's own code is exempt and counted separately in the open. The figure is a directional, estimated goal — an operating direction, not a letter-by-letter contract"`. | **Target replaced; gate-code exemption and separate counting kept.** The per-hour figure is replaced by the ten-second fast-tier target ([`D-GR1`](#D-GR1), later aspirational under [`D-GR38`](#D-GR38)) and landings outpacing ten and twenty independent lanes ([`D-GR2`](#D-GR2)). Changes to the gate's own code stay exempt from the speed target ([`OQ-GR3`](#OQ-GR3)) and timed separately (`runnerProofPaths`). | [`D-GR1`](#D-GR1), [`D-GR2`](#D-GR2), [`D-GR38`](#D-GR38), [`OQ-GR3`](#OQ-GR3) |
-| <a id="I3"></a>`I3` | `"Gate code never lands on deferred proof. A batch touching gate code is a batch of one and carries the gate's audit suite in its landing tier. The selector is the one component whose failure hides every other failure, so it is the one component this design refuses to speed up."` and `"The judge cannot break quietly (I3): gate code lands alone, fully audited."` | **Kept as [`OQ-GR3`](#OQ-GR3) and narrowed by [`D-GR50`](#D-GR50).** [`OQ-GR3`](#OQ-GR3) keeps pre-merge proof of gate code under both landing strategies; [`D-GR50`](#D-GR50) narrows the Go half to `go-affected` with Go's cache on while requiring the Python runner suites before the merge and blocking on missing `go` (see [`OQ-GR6`](#OQ-GR6) for the current heavy-tree declarations of the Python suites). | [`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50), [`OQ-GR6`](#OQ-GR6) |
+| <a id="I3"></a>`I3` | `"Gate code never lands on deferred proof. A batch touching gate code is a batch of one and carries the gate's audit suite in its landing tier. The selector is the one component whose failure hides every other failure, so it is the one component this design refuses to speed up."` and `"The judge cannot break quietly (I3): gate code lands alone, fully audited."` | **Kept as [`OQ-GR3`](#OQ-GR3), narrowed by [`D-GR50`](#D-GR50) and confirmed by [`OQ-GR6`](#OQ-GR6).** [`OQ-GR3`](#OQ-GR3) keeps pre-merge proof of gate code under both landing strategies; [`D-GR50`](#D-GR50) and [`OQ-GR6`](#OQ-GR6) narrow the Go half to `go-affected` with Go's cache on while running `gate-adapters-test` and `change-checks-test` before the merge outside the fast-tier budget and blocking on missing `go`. | [`OQ-GR3`](#OQ-GR3), [`D-GR50`](#D-GR50), [`OQ-GR6`](#OQ-GR6) |
