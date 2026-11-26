@@ -4,6 +4,7 @@ package heavy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/settings"
@@ -21,6 +22,7 @@ const (
 	GreenRef        = "refs/tillr/green"
 	RunningLockFile = "heavy-running.lock"
 	RunningFile     = "heavy-running.json"
+	gitCancelGrace  = 30 * time.Second
 )
 
 var classifyCheck = checkresult.Classify
@@ -103,8 +105,30 @@ type HeavyStatus struct {
 	Rewrite string `json:"rewrite,omitempty"`
 }
 
-func GitOutput(ctx context.Context, root string, args ...string) (string, error) {
+// gitCommandContext configures process-group SIGTERM cancellation so a cancelled git
+// subprocess (and any child git it spawns) unlinks active .lock files before exiting.
+func gitCommandContext(ctx context.Context, root string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		if err != nil {
+			return cmd.Process.Signal(syscall.SIGTERM)
+		}
+		return nil
+	}
+	cmd.WaitDelay = gitCancelGrace
+	return cmd
+}
+
+func GitOutput(ctx context.Context, root string, args ...string) (string, error) {
+	cmd := gitCommandContext(ctx, root, args...)
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, raw)
@@ -117,7 +141,7 @@ func Directory(ctx context.Context, root string) (string, error) {
 }
 func Green(ctx context.Context, root string) (string, error) {
 	// show-ref --verify exits 1 only for an absent pointer; other git failures are faults.
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "show-ref", "--verify", "--quiet", GreenRef)
+	cmd := gitCommandContext(ctx, root, "show-ref", "--verify", "--quiet", GreenRef)
 	_, err := cmd.Output()
 	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {

@@ -1,11 +1,15 @@
 package drain
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -200,6 +204,134 @@ func TestHeavyRevertContinuesWhenPartialRepairLeavesOneCheckRed(t *testing.T) {
 	}
 	if gateCancelled {
 		t.Fatal("revert gate was cancelled even though unit-b still fails on the new tip")
+	}
+	reverts := h.reverts()
+	if len(reverts) != 1 || reverts[0].Result != "reverted" || reverts[0].Landing != culprit {
+		t.Fatalf("reverts = %+v, want one reverted event", reverts)
+	}
+}
+
+// Reproduces the 2026-11-26 packed-refs.lock collision deterministically:
+//  1. watchWG's tipChecksPass -> tryReuseProofWorktree runs git checkout --force --detach
+//     via heavy.GitOutput(watchCtx, ...);
+//  2. cancelWatch() cancels watchCtx while that git process holds <root>/.git/packed-refs.lock;
+//  3. land.Land (pinHistory) then runs git update-ref -d refs/tillr/trunk-history/lost.
+//
+// With SIGTERM process-group cancellation in heavy.GitOutput, git unlinks packed-refs.lock
+// before watchWG.Wait() returns so land.Land succeeds and records one reverted event.
+func TestHeavyRevertCancelDuringCheckoutReleasesPackedRefsLock(t *testing.T) {
+	judge := func(_ context.Context, dir, only string) ([]HeavyCheck, error) {
+		check := func(id, file string) HeavyCheck {
+			res := "pass"
+			if _, err := os.Stat(filepath.Join(dir, file)); err == nil {
+				res = "fail"
+			}
+			return HeavyCheck{CheckID: id, Result: res, Reads: []string{file}}
+		}
+		switch only {
+		case "unit-a":
+			return []HeavyCheck{check("unit-a", "a")}, nil
+		case "unit-b":
+			return []HeavyCheck{check("unit-b", "b")}, nil
+		default:
+			return []HeavyCheck{check("unit-a", "a"), check("unit-b", "b")}, nil
+		}
+	}
+	h := newRevertHarness(t, judge)
+	h.loop.revertTipPoll = 10 * time.Millisecond
+	if err := os.WriteFile(filepath.Join(h.root, "b"), []byte("broken-b\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	culprit := h.land("item-broke", "a", "broken-a\n")
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := scratchUnderDurable(t)
+	armed := filepath.Join(bin, "armed")
+	once := filepath.Join(bin, "once")
+	inFIFO := filepath.Join(bin, "update-ref.in")
+	outFIFO := filepath.Join(bin, "update-ref.out")
+	if err := syscall.Mkfifo(inFIFO, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(outFIFO, 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "-C" ] && [ "$3" = "checkout" ] && [ "$4" = "--force" ] && [ "$5" = "--detach" ] && [ -f %q ] && [ ! -f %q ]; then
+	: > %q
+	exec %q -C %q update-ref --stdin < %q > %q
+fi
+exec %q "$@"
+`, armed, once, once, realGit, h.root, inFIFO, outFIFO, realGit)
+	if err := writeForkSafe(filepath.Join(bin, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	prepared := make(chan struct{})
+	driverDone := make(chan error, 1)
+	go func() {
+		in, err := os.OpenFile(inFIFO, os.O_WRONLY, 0)
+		if err != nil {
+			driverDone <- err
+			return
+		}
+		out, err := os.OpenFile(outFIFO, os.O_RDONLY, 0)
+		if err != nil {
+			_ = in.Close()
+			driverDone <- err
+			return
+		}
+		defer out.Close()
+		if _, err := fmt.Fprintf(in, "start\ndelete %s\nprepare\n", GreenRef); err != nil {
+			_ = in.Close()
+			driverDone <- err
+			return
+		}
+		sc := bufio.NewScanner(out)
+		gotPrepare := false
+		for sc.Scan() {
+			if strings.TrimSpace(sc.Text()) == "prepare: ok" {
+				gotPrepare = true
+				break
+			}
+		}
+		if !gotPrepare {
+			_ = in.Close()
+			driverDone <- fmt.Errorf("git update-ref --stdin exited before prepare: ok (%v)", sc.Err())
+			return
+		}
+		close(prepared)
+		// Wait for cancelWatch() to terminate git update-ref --stdin.
+		for sc.Scan() {
+		}
+		_ = in.Close()
+		if err := sc.Err(); err != nil {
+			driverDone <- err
+			return
+		}
+		driverDone <- nil
+	}()
+
+	h.steps.onGateCtx = func(_ context.Context, _ Candidate) (GateOutcome, error) {
+		if err := os.WriteFile(armed, nil, 0600); err != nil {
+			return GateOutcome{}, err
+		}
+		h.landRemoval("item-partial", "a")
+		select {
+		case <-prepared:
+		case <-time.After(hangGuard):
+			return GateOutcome{}, errors.New("timed out waiting for watchWG git to hold packed-refs.lock")
+		}
+		return GateOutcome{Outcome: GatePassed}, nil
+	}
+
+	h.proof()
+	if err := <-driverDone; err != nil {
+		t.Fatalf("update-ref driver: %v", err)
 	}
 	reverts := h.reverts()
 	if len(reverts) != 1 || reverts[0].Result != "reverted" || reverts[0].Landing != culprit {

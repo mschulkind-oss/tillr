@@ -1916,6 +1916,21 @@ func (s *ProcessSteps) detachedWorktreeAt(ctx context.Context, rev string, pickD
 		_ = os.RemoveAll(dir)
 		_ = exec.Command("git", "-C", s.Root, "worktree", "prune").Run()
 		cmd := exec.CommandContext(ctx, "git", "-C", s.Root, "worktree", "add", "--detach", "--force", dir, rev)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			if cmd.Process == nil {
+				return os.ErrProcessDone
+			}
+			err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			if err != nil {
+				return cmd.Process.Signal(syscall.SIGTERM)
+			}
+			return nil
+		}
+		cmd.WaitDelay = 30 * time.Second
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return Externalf("checking out %s: %v: %s", shortSHA(rev), err, strings.TrimSpace(string(out)))
 		}
