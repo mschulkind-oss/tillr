@@ -1026,7 +1026,10 @@ func loopFace(args []string) int {
 			}
 			*policyPath = resolved
 		} else {
-			*policyPath = filepath.Join(*root, "config", "tillr", "backend-policy.json")
+			defaultPolicy := filepath.Join(*root, "config", "tillr", "backend-policy.json")
+			if _, statErr := os.Stat(defaultPolicy); !os.IsNotExist(statErr) || !drain.CommandOnlyWorkflows(*root) {
+				*policyPath = defaultPolicy
+			}
 		}
 	}
 	if *briefTemplate == "" {
@@ -1040,15 +1043,19 @@ func loopFace(args []string) int {
 			*briefTemplate = resolved
 		}
 	}
-	policy, err := readPolicy(*policyPath)
-	if err != nil {
-		return failStartup(err)
-	}
-	if policy == nil {
-		return failStartup(drain.Usagef("loop needs a policy: %s names none", *policyPath))
-	}
-	if err := policy.CheckAdapters(*root); err != nil {
-		return failStartup(err)
+	var policy *drain.Policy
+	if *policyPath != "" {
+		var err error
+		policy, err = readPolicy(*policyPath)
+		if err != nil {
+			return failStartup(err)
+		}
+		if policy == nil {
+			return failStartup(drain.Usagef("loop needs a policy: %s names none", *policyPath))
+		}
+		if err := policy.CheckAdapters(*root); err != nil {
+			return failStartup(err)
+		}
 	}
 	at := time.Now
 	if *now != "" {

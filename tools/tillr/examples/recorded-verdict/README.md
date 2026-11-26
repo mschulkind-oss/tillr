@@ -64,7 +64,12 @@ A finished finding means its investigation ended, not that every criterion passe
   [extract-report](./extract-report) preserves its plain report without inventing model spend.
 - [hook.py](./hook.py) advertises `complete-item`, reads the assessment and the
   current criterion text, records hash-bound verdicts through `tillr item verdict
-  record`, and returns the finished state and reason. Its deterministic judge uses
+  record`, and prints one JSON object following the
+  [completion hook contract](../../definition/README.md#completion-and-detail-hooks):
+  `{"complete": true, "state": ..., "reason": ..., "resolves_via": ...}` to finish an
+  item, or `{"complete": false, "reason": ...}` on exit 0 to decline and leave it
+  unfinished (any non-zero exit with no valid decline answer holds the item as a
+  `complete-item-fault`). Its deterministic judge uses
   `actor_kind: mechanical` and `actor: recorded-verdict-stub` for these
   verification-only criteria; this is not evidence of real human approval. The core checks all criteria were
   judged and records the completion event before moving the item.

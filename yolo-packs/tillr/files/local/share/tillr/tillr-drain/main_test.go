@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -478,5 +479,62 @@ func TestRetryDefaultsNowToCurrentTime(t *testing.T) {
 		"--now", "not-a-timestamp",
 	); code != 2 {
 		t.Fatalf("retry with malformed --now exited %d, want 2: %s", code, out)
+	}
+}
+
+func TestLoopCheckCommandOnlyWithoutBackendPolicy(t *testing.T) {
+	root := scratch(t, "cmd-only-cli")
+	if err := os.MkdirAll(filepath.Join(root, "config", "tillr", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmdProg := filepath.Join(root, "step.sh")
+	if err := os.WriteFile(cmdProg, []byte("#!/bin/sh\nprintf 'RESULT: done\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookProg := filepath.Join(root, "hook.sh")
+	if err := os.WriteFile(hookProg, []byte("#!/bin/sh\nif [ \"${1:-}\" = describe ]; then\n  printf '{\"hooks\":{\"complete-item\":[\"--item\",\"--run\",\"--store\",\"--root\",\"--artifact-dir\"]}}\\n'\n  exit 0\nfi\nprintf '{\"complete\":true,\"state\":\"confirmed\",\"reason\":\"ok\"}\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	itemStub := filepath.Join(root, "item-stub.sh")
+	if err := os.WriteFile(itemStub, []byte("#!/bin/sh\nif [ \"$*\" = 'state --help' ]; then\n  echo '--store --item --state --now --reason --by --resolves-via --require-verdicts'\n  exit 0\nfi\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "brief.md"), []byte("# Brief\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "tillr", "commands.json"), []byte(`{"step":{"argv":["`+cmdProg+`"],"flags":{}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "tillr", "workflows", "cmd@v1.json"), []byte(`{"name":"cmd","version":1,"stages":[{"id":"run","kind":"command","command_ref":"step","access":"read_only"}],"edges":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(root, ".tillr", "state.db")
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(context.Background(), storePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defJSON := `{"definition":"cmd-only","version":1,"states":["in-queue","blocked","closed","confirmed"],"ready":"in-queue","blocked":"blocked","closed":"closed","finished":["confirmed","closed"],"transitions":[{"from":"in-queue","to":"confirmed"}],"prerequisites":[],"completes":"hook","brief_template":"brief.md","hooks":{"argv":["` + hookProg + `"],"names":["complete-item"]}}`
+	if _, err := definition.Set(context.Background(), s, []byte(defJSON)); err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	s.Close()
+
+	// Command-only root starts (--check) with no --policy and no backend-policy.json.
+	code, out := invoke(t, "loop", "--check", "--root", root, "--store", storePath, "--item-bin", itemStub, "--brief-template", filepath.Join(root, "brief.md"))
+	if code != 0 {
+		t.Fatalf("loop --check on command-only root without backend policy exited %d: %s", code, out)
+	}
+
+	// Adding an agent stage makes loop --check refuse when no backend policy exists.
+	if err := os.WriteFile(filepath.Join(root, "config", "tillr", "workflows", "agent@v1.json"), []byte(`{"name":"agent","version":1,"stages":[{"id":"work","kind":"agent","seat":"build","access":"read_only"}],"edges":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out = invoke(t, "loop", "--check", "--root", root, "--store", storePath, "--item-bin", itemStub, "--brief-template", filepath.Join(root, "brief.md"))
+	if code != 2 || !strings.Contains(string(out), "backend-policy.json") {
+		t.Fatalf("loop --check with agent stage and no policy: code=%d out=%s", code, out)
 	}
 }

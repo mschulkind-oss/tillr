@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,33 @@ const (
 type completionFault struct{ reason, detail string }
 
 func (e *completionFault) Error() string { return e.reason + ": " + e.detail }
+
+type completeItemAnswer struct {
+	Complete    *bool  `json:"complete,omitempty"`
+	State       string `json:"state"`
+	Reason      string `json:"reason"`
+	ResolvesVia string `json:"resolves_via,omitempty"`
+}
+
+func (a completeItemAnswer) isDecline() bool {
+	return a.Complete != nil && !*a.Complete &&
+		strings.TrimSpace(a.State) == "" &&
+		strings.TrimSpace(a.ResolvesVia) == "" &&
+		strings.TrimSpace(a.Reason) != ""
+}
+
+func parseCompleteItemAnswer(out []byte) (completeItemAnswer, error) {
+	var answer completeItemAnswer
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&answer); err != nil {
+		return completeItemAnswer{}, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return completeItemAnswer{}, fmt.Errorf("hook must print exactly one JSON object")
+	}
+	return answer, nil
+}
 
 type completionSteps interface {
 	CompleteItem(context.Context, string, string, string, definition.Definition) (bool, error)
@@ -76,26 +104,36 @@ func (s *ProcessSteps) CompleteItem(ctx context.Context, itemID, runID, artifact
 	}
 	if err != nil {
 		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() == 1 {
-			return false, nil
+		if errors.As(err, &exit) {
+			if exit.ExitCode() == 1 && len(bytes.TrimSpace(out)) > 0 {
+				if answer, parseErr := parseCompleteItemAnswer(out); parseErr == nil && answer.isDecline() {
+					return false, nil
+				}
+			}
+			detail := fmt.Sprintf("complete-item hook %s exited %d", d.Hooks.Argv[0], exit.ExitCode())
+			if msg := strings.TrimSpace(stderr.String()); msg != "" {
+				detail += ": " + msg
+			}
+			return fault(errors.New(detail))
 		}
-		return fault(fmt.Errorf("hook: %v: %s", err, stderr.String()))
+		detail := fmt.Sprintf("complete-item hook %s failed: %v", d.Hooks.Argv[0], err)
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			detail += ": " + msg
+		}
+		return fault(errors.New(detail))
 	}
-	var answer struct {
-		State       string `json:"state"`
-		Reason      string `json:"reason"`
-		ResolvesVia string `json:"resolves_via,omitempty"`
+	answer, err := parseCompleteItemAnswer(out)
+	if err != nil {
+		return fault(fmt.Errorf("complete-item hook %s answer: %w", d.Hooks.Argv[0], err))
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(out)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&answer); err != nil {
-		return fault(fmt.Errorf("hook answer: %w", err))
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return fault(fmt.Errorf("hook must print exactly one JSON object"))
+	if answer.Complete != nil && !*answer.Complete {
+		if !answer.isDecline() {
+			return fault(fmt.Errorf("complete-item hook %s declined answer must name a nonblank reason and no state or resolves_via", d.Hooks.Argv[0]))
+		}
+		return false, nil
 	}
 	if !d.IsFinished(answer.State) || strings.TrimSpace(answer.Reason) == "" {
-		return fault(fmt.Errorf("hook must name a finished state and a nonblank reason"))
+		return fault(fmt.Errorf("complete-item hook %s must name a finished state and a nonblank reason", d.Hooks.Argv[0]))
 	}
 	args := []string{"--require-verdicts", "--reason", answer.Reason, "--by", "definition:" + d.Name}
 	if answer.ResolvesVia != "" {

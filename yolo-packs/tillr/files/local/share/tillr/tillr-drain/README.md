@@ -1044,9 +1044,11 @@ metadata. The definition's `brief_template` is required. Tests:
 For a definition with `completes: "hook"`, an ended run goes directly to the
 `complete-item` hook: no candidate, boundary bracket, gate, lander or Git command. The hook
 records criterion verdicts and answers one JSON object naming a finished `state`, a `reason`
-and an optional `resolves_via`. The drain moves the item with `--require-verdicts`. Missing
-verdicts hold the item as `criteria-unjudged`; other invalid answers hold it as
-`complete-item-fault`.
+and an optional `resolves_via` (with optional `"complete": true`), or declines by printing
+`{"complete": false, "reason": "<nonblank>"}` with no `state` or `resolves_via`. The drain
+moves the item with `--require-verdicts`. Missing verdicts hold the item as
+`criteria-unjudged`; any non-zero exit with no valid decline answer or any other invalid
+answer holds it as `complete-item-fault`.
 
 ## Where step programs come from
 

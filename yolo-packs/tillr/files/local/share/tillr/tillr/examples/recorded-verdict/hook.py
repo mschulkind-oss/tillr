@@ -18,6 +18,9 @@ for flag in flags:
 args = parser.parse_args()
 root = Path(args.root)
 answer = json.loads((root / f"{args.item}-assessment.json").read_text())
+if answer.get("complete") is False:
+    print(json.dumps({"complete": False, "reason": answer["reason"]}))
+    sys.exit(0)
 shown = json.loads(subprocess.check_output([
     "tillr", "item", "show", "--store", args.store, "--item", args.item,
 ]))["payload"]
@@ -49,6 +52,6 @@ for criterion in shown["criteria"]:
         "--input", str(path), "--now", now,
     ], check=True, stdout=subprocess.DEVNULL)
 print(json.dumps({
-    "state": answer["state"], "reason": answer["reason"],
+    "complete": True, "state": answer["state"], "reason": answer["reason"],
     "resolves_via": f"doc:{args.item}-assessment.json",
 }))

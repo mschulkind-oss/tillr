@@ -250,13 +250,21 @@ func assertHookReceipt(t *testing.T, f loopFixture) {
 }
 
 func TestHookCompletionHoldsAndNegativeAnswer(t *testing.T) {
-	for _, tc := range []struct{ name, answer, want string }{
-		{"unjudged", `echo '{"state":"confirmed","reason":"unchecked"}'`, "criteria-unjudged"},
-		{"negative", "exit 1", "candidate-no-op"},
-		{"fault", "exit 3", "complete-item-fault"},
-		{"bad-json", "echo invalid", "complete-item-fault"},
-		{"not-finished", `echo '{"state":"in-queue","reason":"bad"}'`, "complete-item-fault"},
-		{"missing-reason", `echo '{"state":"confirmed"}'`, "complete-item-fault"},
+	for _, tc := range []struct {
+		name, answer, want string
+		declined           bool
+		wantExitCode       string
+	}{
+		{name: "unjudged", answer: `echo '{"state":"confirmed","reason":"unchecked"}'`, want: "criteria-unjudged"},
+		{name: "negative", answer: `echo '{"complete":false,"reason":"not ready yet"}'`, want: "candidate-no-op", declined: true},
+		{name: "negative-exit-1", answer: `echo '{"complete":false,"reason":"not ready yet"}'; exit 1`, want: "candidate-no-op", declined: true},
+		{name: "exit-1-crash", answer: `echo 'Traceback (most recent call last): ZeroDivisionError' >&2; exit 1`, want: "complete-item-fault", wantExitCode: "exited 1"},
+		{name: "fault", answer: "exit 3", want: "complete-item-fault", wantExitCode: "exited 3"},
+		{name: "bad-json", answer: "echo invalid", want: "complete-item-fault"},
+		{name: "not-finished", answer: `echo '{"state":"in-queue","reason":"bad"}'`, want: "complete-item-fault"},
+		{name: "missing-reason", answer: `echo '{"state":"confirmed"}'`, want: "complete-item-fault"},
+		{name: "bad-decline-no-reason", answer: `echo '{"complete":false}'`, want: "complete-item-fault"},
+		{name: "bad-decline-with-state", answer: `echo '{"complete":false,"state":"confirmed","reason":"bad"}'`, want: "complete-item-fault"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, steps, stager := hookFixture(t, tc.answer, false)
@@ -270,17 +278,40 @@ func TestHookCompletionHoldsAndNegativeAnswer(t *testing.T) {
 			if runErr != nil {
 				code = 1
 			}
-			if tc.name == "negative" {
+			if tc.declined {
 				// A refused run goes back to its worker uncounted (the owner's ruling of
-				// 2026-11-17), so the hook's exit 1 is refused as a no-op twice: once
-				// returned with its evidence, and once as the identical repeat.
+				// 2026-11-17), so the hook's decline answer is refused as a no-op twice:
+				// once returned with its evidence, and once as the identical repeat.
 				// The loop then drains with the item blocked for the owner, not held
 				// queued with nothing to move it.
 				if result.Dispatched != 2 || result.Rejected != 2 || result.RefusedSteps[drain.RefusalNoOp] != 2 || result.Stop != "queue-drained" {
 					t.Fatalf("negative answer: %+v", result)
 				}
-			} else if code != 0 || !strings.Contains(string(out), tc.want) {
-				t.Fatalf("waiting: %d %s", code, out)
+			} else {
+				if result.Dispatched != 1 || result.Rejected != 0 {
+					t.Fatalf("fault answer should hold after 1 dispatch with no refusal retry: %+v", result)
+				}
+				if code != 0 || !strings.Contains(string(out), tc.want) {
+					t.Fatalf("waiting: %d %s", code, out)
+				}
+				if tc.wantExitCode != "" {
+					var findingLine string
+					for _, line := range strings.Split(string(out), "\n") {
+						if strings.Contains(line, "complete-item-fault") {
+							findingLine = line
+							break
+						}
+					}
+					if !strings.Contains(findingLine, "complete-item hook") || !strings.Contains(findingLine, tc.wantExitCode) {
+						t.Fatalf("waiting row must name hook and %s: %s", tc.wantExitCode, string(out))
+					}
+					lower := strings.ToLower(findingLine)
+					for _, forbidden := range []string{"commit", "land", "candidate", "design", "identical repeat"} {
+						if strings.Contains(lower, forbidden) {
+							t.Fatalf("hook fault waiting row must not contain landing/repeat term %q: %s", forbidden, findingLine)
+						}
+					}
+				}
 			}
 			s, err := store.OpenRead(context.Background(), f.store)
 			if err != nil {
@@ -293,7 +324,7 @@ func TestHookCompletionHoldsAndNegativeAnswer(t *testing.T) {
 				// The repeat of the negative answer is the one case the owner is
 				// asked about; every other answer leaves the item queued.
 				want := "in-queue"
-				if tc.name == "negative" {
+				if tc.declined {
 					want = "blocked"
 				}
 				if state != want {
@@ -826,5 +857,80 @@ print(json.dumps({"state": "confirmed", "reason": "verified", "resolves_via": "d
 	}
 	if finalState != "confirmed" {
 		t.Fatalf("item state = %q, want confirmed", finalState)
+	}
+}
+
+func TestCommandOnlyLoopStartsWithNoBackendPolicy(t *testing.T) {
+	f, steps, stager := hookFixture(t, `echo '{"complete":true,"state":"confirmed","reason":"evidence checked","resolves_via":"doc:evidence.md"}'`, true)
+	if err := os.MkdirAll(filepath.Join(f.root, "config/tillr/workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	observations := filepath.Join(scratch(t, "cmd-only-obs"), "calls")
+	program := func(name string) string {
+		return stub(t, name, fmt.Sprintf("set -eu\nprintf '%%s|%%s|%%s\\n' %s \"${TILLR_ITEM_ID-}\" \"${TILLR_NODE_ID-}\" >> %q\nprintf 'RESULT: done\\n'", name, observations))
+	}
+	writeFile(t, filepath.Join(f.root, "config/tillr/commands.json"), fmt.Sprintf(`{"first":{"argv":[%q],"flags":{}},"second":{"argv":[%q],"flags":{}}}`, program("first"), program("second")))
+	writeFile(t, filepath.Join(f.root, "config/tillr/workflows/commands-only@v1.json"), `{"name":"commands-only","version":1,"stages":[{"id":"step-one","kind":"command","command_ref":"first","access":"read_only"},{"id":"step-two","kind":"command","command_ref":"second","access":"read_only"}],"edges":[{"from_node":"step-one","to_node":"step-two"}]}`)
+	s, err := store.Open(context.Background(), f.store, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET workflow='commands-only@v1' WHERE item_id='finding'`)
+		return err
+	})
+	s.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !drain.CommandOnlyWorkflows(f.root) {
+		t.Fatal("CommandOnlyWorkflows = false, want true")
+	}
+
+	// Verify loop starts and completes with Policy == nil.
+	loop, err := drain.NewLoop(drain.LoopConfig{
+		Root:            f.root,
+		Store:           f.store,
+		LaneRoot:        f.laneRoot,
+		Lanes:           []string{"lane-1"},
+		Policy:          nil,
+		Steps:           steps,
+		Stage:           stager,
+		Now:             steps.Now,
+		Report:          os.Stderr,
+		ExitWhenDrained: true,
+		BackoffBase:     time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewLoop without policy: %v", err)
+	}
+	result, err := loop.Run(context.Background())
+	if err != nil || result.Dispatched != 2 || result.Landed != 0 || result.Candidates != 0 {
+		t.Fatalf("command-only loop without policy: %+v %v", result, err)
+	}
+	want := "first|finding|step-one\nsecond|finding|step-two\n"
+	got, err := os.ReadFile(observations)
+	if err != nil || string(got) != want {
+		t.Fatalf("command stages: got %q, want %q: %v", got, want, err)
+	}
+	assertHookReceipt(t, f)
+
+	// Negative control: adding an agent stage makes the root require a backend policy again.
+	writeFile(t, filepath.Join(f.root, "config/tillr/workflows/mixed@v1.json"), `{"name":"mixed","version":1,"stages":[{"id":"step-one","kind":"command","command_ref":"first","access":"read_only"},{"id":"agent-two","kind":"agent","seat":"build","access":"read_only"}],"edges":[{"from_node":"step-one","to_node":"agent-two"}]}`)
+	if drain.CommandOnlyWorkflows(f.root) {
+		t.Fatal("CommandOnlyWorkflows = true with agent stage present, want false")
+	}
+	if _, err := drain.NewLoop(drain.LoopConfig{
+		Root:     f.root,
+		Store:    f.store,
+		LaneRoot: f.laneRoot,
+		Lanes:    []string{"lane-1"},
+		Policy:   nil,
+		Steps:    steps,
+		Stage:    stager,
+		Now:      steps.Now,
+	}); err == nil || !strings.Contains(err.Error(), "needs --policy") {
+		t.Fatalf("NewLoop with agent stage and no policy: got %v, want needs --policy", err)
 	}
 }

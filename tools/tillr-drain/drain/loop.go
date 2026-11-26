@@ -878,7 +878,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if budget == 0 {
 		budget = DefaultGateBudget
 	}
-	if cfg.Policy == nil {
+	if cfg.Policy == nil && cfg.PolicyRef == "" && !CommandOnlyWorkflows(cfg.Root) {
 		return nil, Usagef("the loop needs --policy <file>: no tick can build a run.request without one")
 	}
 	if cfg.Steps == nil {
@@ -1027,7 +1027,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	if l.stopInheritedReaper != nil {
 		defer l.stopInheritedReaper()
 	}
-	if l.cfg.Policy == nil || len(l.cfg.Policy.Backends) == 0 {
+	if (l.cfg.Policy == nil || len(l.cfg.Policy.Backends) == 0) && !CommandOnlyWorkflows(l.cfg.Root) {
 		return faultResult(result, Usagef("the loop has no usable policy"))
 	}
 	if err := l.recordEndingCapabilities(ctx); err != nil {

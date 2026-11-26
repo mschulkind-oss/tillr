@@ -1701,7 +1701,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	case p.lands() && forkHeld:
 		decision.Action, decision.Reason = ActionHold, ReasonForkHeld
 		decision.DeferredBy = heldBy
-	case p.policy == nil:
+	case item.Command == nil && p.policy == nil:
 		decision.Action, decision.Reason = ActionHold, ReasonNoPolicy
 	case item.Command == nil && attempt.backend != "" && !policyHasBackend(p.policy, attempt.backend):
 		decision.Action, decision.Reason, decision.DeferredBy = ActionHold, backendMissingReason(item.Seat, attempt.backend), attempt.backend
@@ -1791,7 +1791,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			decision.Reason = ReasonRetry
 			decision.RetryID = retry.retryID
 			decision.SupersedesRunID = retry.supersedesRunID
-			decision.RunRequest = p.request(item.ItemID, lane, attempt.backend)
+			decision.RunRequest = p.requestForItem(item, lane, attempt.backend)
 			decision.RetryCandidate = p.retryCandidate(item.ItemID, retry.supersedesRunID)
 			if retriedVerify != nil {
 				// The build step runs with the findings, and the nodes before it are
@@ -1805,7 +1805,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		if attempt.infrastructureFailure && !attempt.quotaRoute {
 			decision.InfrastructureFrom = attempt.failedRun
 		}
-		decision.RunRequest = p.request(item.ItemID, lane, attempt.backend)
+		decision.RunRequest = p.requestForItem(item, lane, attempt.backend)
 		if interrupted {
 			decision.Reason = "earlier run orphaned by a loop stop"
 		}
@@ -1852,7 +1852,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	}
 	if decision.DeskDocument != "" && decision.RunRequest != nil {
 		previousAdapter := ""
-		if item.Designer != nil {
+		if item.Designer != nil && p.policy != nil {
 			previousAdapter = p.policy.Backends[item.Designer.Backend].Adapter
 		}
 		decision.Designer = item.Designer
@@ -2427,6 +2427,13 @@ func (p *planner) freeLaneOverLaterReservation(express bool, itemOrder map[strin
 		}
 	}
 	return "", false
+}
+
+func (p *planner) requestForItem(item itemRow, laneID, backendName string) *run.Request {
+	if item.Command != nil {
+		return commandRequest(*item.Command, item.ItemID, laneID, attemptRunID(item.ItemID, p.nextAttempt(item.ItemID)))
+	}
+	return p.request(item.ItemID, laneID, backendName)
 }
 
 // request is the complete run.request a dispatch carries: design §5.6's field list,

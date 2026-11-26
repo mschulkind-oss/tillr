@@ -508,6 +508,10 @@ func (l *Loop) recordEndingCapabilities(ctx context.Context) error {
 		claudeProbed     bool
 		claudeCapability string
 	)
+	if l.cfg.Policy == nil {
+		l.endingCapabilities = capabilities
+		return nil
+	}
 	for _, backend := range l.cfg.Policy.Backends {
 		adapter := resolveAdapterPath(l.cfg.Root, backend.Adapter)
 		if _, ok := capabilities[adapter]; ok {

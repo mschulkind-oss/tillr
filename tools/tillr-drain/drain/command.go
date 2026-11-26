@@ -3,6 +3,9 @@ package drain
 import (
 	"context"
 	"database/sql"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/workflow"
@@ -28,6 +31,59 @@ func commandRequest(s WorkflowStage, itemID, laneID, runID string) *run.Request 
 
 func commandStage(d Decision) bool {
 	return d.Workflow != nil && d.Workflow.Stages[d.NodeIndex].Kind == "command"
+}
+
+// CommandOnlyWorkflows reports whether root declares at least one workflow under
+// config/tillr/workflows and every stage of every expanded workflow is a command stage.
+// A loop over such a root needs no agent backend policy to start.
+func CommandOnlyWorkflows(root string) bool {
+	if root == "" {
+		return false
+	}
+	dir := filepath.Join(root, "config", "tillr", "workflows")
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	var paths []string
+	if err := filepath.WalkDir(dir, func(p string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && strings.HasSuffix(p, ".json") {
+			paths = append(paths, p)
+		}
+		return nil
+	}); err != nil || len(paths) == 0 {
+		return false
+	}
+	for _, p := range paths {
+		cases, err := workflow.WorkflowCheckArguments(root, p)
+		if err != nil || len(cases) == 0 {
+			return false
+		}
+		for _, args := range cases {
+			symbols := map[string]bool{}
+			for _, value := range args {
+				values, _ := value.([]any)
+				for _, v := range values {
+					if s, ok := v.(string); ok && strings.HasPrefix(s, workflow.WorkflowCheckPathPrefix) {
+						symbols[s] = true
+					}
+				}
+			}
+			w, err := workflow.ExpandWorkflow(root, p, nil, map[string]bool{}, args, symbols)
+			if err != nil || len(w.Stages) == 0 {
+				return false
+			}
+			for _, s := range w.Stages {
+				if s.Kind != "command" {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 // replayCommandHold completes the cleanup of a recorded terminal hold. A pin
