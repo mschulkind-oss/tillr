@@ -15,9 +15,11 @@ import (
 )
 
 const (
-	Repository = "https://github.com/mschulkind-oss/tillr/blob/main/"
-	MirrorRoot = "yolo-packs/tillr/files/local/share/tillr"
-	LoopModule = "tillr-loop"
+	Repository     = "https://github.com/mschulkind-oss/tillr/blob/main/"
+	MirrorRoot     = "yolo-packs/tillr/files/local/share/tillr"
+	LoopModule     = "tillr-loop"
+	WorkflowsDir   = "config/tillr/workflows"
+	WorkflowsMount = "workflows"
 )
 
 var (
@@ -297,8 +299,74 @@ func MirrorModule(root, module string, stdout io.Writer) error {
 	return nil
 }
 
+// MirrorWorkflows mirrors config/tillr/workflows into the pack's workflows directory.
+func MirrorWorkflows(root string, stdout io.Writer) error {
+	dest := filepath.Join(root, filepath.FromSlash(MirrorRoot), WorkflowsMount)
+	if err := CheckDestination(root, dest); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", WorkflowsDir)
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return err
+	}
+
+	type liveEntry struct {
+		rel string
+		src string
+	}
+	var live []liveEntry
+	for _, raw := range bytes.Split(out, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		p := string(raw)
+		src := filepath.Join(root, filepath.FromSlash(p))
+		if _, err := os.Stat(src); err == nil {
+			live = append(live, liveEntry{rel: p, src: src})
+		}
+	}
+
+	if fi, err := os.Lstat(dest); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+			if err := os.Remove(dest); err != nil {
+				return err
+			}
+		} else {
+			if err := os.RemoveAll(dest); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(live) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+	prefix := WorkflowsDir + "/"
+	for _, entry := range live {
+		relFromSource := strings.TrimPrefix(entry.rel, prefix)
+		dst := filepath.Join(dest, filepath.FromSlash(relFromSource))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := copyFile(entry.src, dst); err != nil {
+			return err
+		}
+	}
+	if stdout != nil {
+		relDst, _ := filepath.Rel(root, dest)
+		fmt.Fprintf(stdout, "pack-sync: mirrored %s -> %s\n", WorkflowsDir, filepath.ToSlash(relDst))
+	}
+	return nil
+}
+
 func isShipped(module string) bool {
-	if module == LoopModule {
+	if module == LoopModule || module == WorkflowsMount {
 		return true
 	}
 	for _, m := range Shipped {
@@ -321,7 +389,7 @@ func Sync(root string, modules []string, stdout, stderr io.Writer) int {
 	}
 
 	if len(modules) == 0 {
-		modules = append(append([]string(nil), Shipped...), LoopModule)
+		modules = append(append([]string(nil), Shipped...), LoopModule, WorkflowsMount)
 	}
 	for _, m := range modules {
 		if !isShipped(m) {
@@ -331,9 +399,12 @@ func Sync(root string, modules []string, stdout, stderr io.Writer) int {
 	}
 	for _, m := range modules {
 		var err error
-		if m == LoopModule {
+		switch m {
+		case LoopModule:
 			err = MirrorLoopAdapter(absRoot, stdout)
-		} else {
+		case WorkflowsMount:
+			err = MirrorWorkflows(absRoot, stdout)
+		default:
 			err = MirrorModule(absRoot, m, stdout)
 		}
 		if err != nil {

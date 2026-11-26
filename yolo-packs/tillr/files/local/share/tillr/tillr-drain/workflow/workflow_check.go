@@ -14,6 +14,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr-item/item"
 )
 
 // WorkflowRules lists the loader's refusal names; the command prints them in help.
@@ -327,13 +329,20 @@ func ExpandWorkflowWithWatch(root, p string, policy *SeatPolicy, stack map[strin
 		}
 		if stage.Kind == "workflow" {
 			composed[stage.ID] = true
-			rel := filepath.Join("config", "tillr", "workflows", stage.Workflow+".json")
-			tracked := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", rel)
-			if err := tracked.Run(); err != nil {
+			innerPath, fromRepo, err := item.ResolveWorkflowFile(root, stage.Workflow)
+			if err != nil {
 				findings = append(findings, fmt.Errorf("workflow-missing-reference: %s: no tracked workflow defines %s", stage.ID, stage.Workflow))
 				continue
 			}
-			inner, innerIDs, innerSeats, err := ExpandWorkflowWithWatch(root, filepath.Join(root, rel), policy, stack, stage.Args, symbols)
+			if fromRepo {
+				rel := filepath.Join("config", "tillr", "workflows", stage.Workflow+".json")
+				tracked := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", rel)
+				if err := tracked.Run(); err != nil {
+					findings = append(findings, fmt.Errorf("workflow-missing-reference: %s: no tracked workflow defines %s", stage.ID, stage.Workflow))
+					continue
+				}
+			}
+			inner, innerIDs, innerSeats, err := ExpandWorkflowWithWatch(root, innerPath, policy, stack, stage.Args, symbols)
 			if err != nil {
 				findings = append(findings, fmt.Errorf("stage=%s: %w", stage.ID, err))
 				continue

@@ -1,0 +1,24 @@
+{
+  "name": "scouted-design",
+  "version": 1,
+  "stages": [
+    {
+      "id": "open",
+      "kind": "agent",
+      "seat": "design",
+      "access": "read_only",
+      "outputs": { "proposal": "graph.proposal" },
+      "may_replace": { "write": ["design-from-scouts@v1"] },
+      "prompt": "Read the item and decide how to write its design. Propose scouts only when their work must be planned, fenced, or judged apart. Otherwise propose nothing and let write use sub-agents of its own. To request scouts, write the optional proposal output with target write, workflow design-from-scouts@v1, and args.prompts containing up to 8 bounded scout prompts. Do not write or commit repository files."
+    },
+    {
+      "id": "write",
+      "kind": "agent",
+      "seat": "design",
+      "access": "write",
+      "prompt": "Write the item's design — change what the work needs, and nothing else. Use sub-agents of your own when their work need not be planned, fenced, or judged apart. Verify the document and commit the finished deliverable."
+    }
+  ],
+  "edges": [{ "from_node": "open", "to_node": "write" }],
+  "exit": { "requires_nodes": ["open", "write"], "requires_candidate": "commit_required" }
+}

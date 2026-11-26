@@ -527,11 +527,17 @@ func (l *Loop) settleProposal(tx *store.Tx, d *Decision, artifacts []nodeArtifac
 		}
 	}
 	if rule == "" {
-		rel := filepath.Join("config/tillr/workflows", p.Workflow+".json")
-		if err := exec.Command("git", "-C", l.cfg.Root, "ls-files", "--error-unmatch", "--", rel).Run(); err != nil {
+		innerPath, fromRepo, err := item.ResolveWorkflowFile(l.cfg.Root, p.Workflow)
+		if err != nil {
 			refuse("proposal-workflow-untracked", err)
-		} else {
-			inner, err := expandWorkflow(l.cfg.Root, filepath.Join(l.cfg.Root, rel), l.cfg.Policy, map[string]bool{}, p.Args, nil)
+		} else if fromRepo {
+			rel := filepath.Join("config/tillr/workflows", p.Workflow+".json")
+			if err := exec.Command("git", "-C", l.cfg.Root, "ls-files", "--error-unmatch", "--", rel).Run(); err != nil {
+				refuse("proposal-workflow-untracked", err)
+			}
+		}
+		if rule == "" {
+			inner, err := expandWorkflow(l.cfg.Root, innerPath, l.cfg.Policy, map[string]bool{}, p.Args, nil)
 			if err != nil {
 				r := "proposal-workflow-invalid"
 				if strings.Contains(err.Error(), "workflow-argument-") {

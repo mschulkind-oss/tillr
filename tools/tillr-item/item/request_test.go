@@ -312,3 +312,65 @@ func TestAFiledRequestIsNotUnshared(t *testing.T) {
 		t.Fatalf("sync removed the request: %d", n)
 	}
 }
+
+func TestRequestWorkflowCheckFallsBackToInstallation(t *testing.T) {
+	installRoot := t.TempDir()
+	wfInstallDir := filepath.Join(installRoot, "workflows")
+	if err := os.MkdirAll(wfInstallDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{"planned-build@v1", "build-pieces@v1", "scouted-design@v1", "design-from-scouts@v1"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "tillr", "workflows", ref+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wfInstallDir, ref+".json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	consumerRepo := t.TempDir()
+	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
+	for _, ref := range []string{"planned-build@v1", "build-pieces@v1", "scouted-design@v1", "design-from-scouts@v1"} {
+		gotPath, fromRepo, err := item.ResolveWorkflowFile(consumerRepo, ref)
+		if err != nil || fromRepo || gotPath != filepath.Join(wfInstallDir, ref+".json") {
+			t.Fatalf("ResolveWorkflowFile(%s) = (%q, %v, %v)", ref, gotPath, fromRepo, err)
+		}
+	}
+	if err := item.RequestWorkflowCheck(consumerRepo, item.RequestDefaultWorkflow["build"]); err != nil {
+		t.Fatalf("RequestWorkflowCheck(build default) = %v", err)
+	}
+	if err := item.RequestWorkflowCheck(consumerRepo, item.RequestDefaultWorkflow["design"]); err != nil {
+		t.Fatalf("RequestWorkflowCheck(design default) = %v", err)
+	}
+
+	// Operated repository workflow wins over installed one of the same name.
+	repoWFDir := filepath.Join(consumerRepo, "config", "tillr", "workflows")
+	if err := os.MkdirAll(repoWFDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoOverride := filepath.Join(repoWFDir, "planned-build@v1.json")
+	if err := os.WriteFile(repoOverride, []byte(`{"name":"planned-build","version":1,"args":{"x":{"type":"strings","most":1}},"stages":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gotPath, fromRepo, err := item.ResolveWorkflowFile(consumerRepo, "planned-build@v1")
+	if err != nil || !fromRepo || gotPath != repoOverride {
+		t.Fatalf("expected repo override, got (%q, %v, %v)", gotPath, fromRepo, err)
+	}
+	if rej, ok := item.RejectionOf(item.RequestWorkflowCheck(consumerRepo, "planned-build@v1")); !ok || rej.Rule != "workflow-needs-args" {
+		t.Fatalf("expected workflow-needs-args from repo override, got %v", item.RequestWorkflowCheck(consumerRepo, "planned-build@v1"))
+	}
+
+	// Relative TILLR_INSTALL_ROOT is refused.
+	t.Setenv("TILLR_INSTALL_ROOT", "relative/install")
+	if rej, ok := item.RejectionOf(item.RequestWorkflowCheck(consumerRepo, "scouted-design@v1")); !ok || rej.Rule != "workflow-missing" {
+		t.Fatalf("expected workflow-missing for relative TILLR_INSTALL_ROOT, got %v", rej)
+	}
+
+	// Unset TILLR_INSTALL_ROOT outside a tillr source checkout refuses.
+	t.Setenv("TILLR_INSTALL_ROOT", "")
+	t.Chdir(consumerRepo)
+	if rej, ok := item.RejectionOf(item.RequestWorkflowCheck(consumerRepo, "scouted-design@v1")); !ok || rej.Rule != "workflow-missing" {
+		t.Fatalf("expected workflow-missing without TILLR_INSTALL_ROOT outside checkout, got %v", rej)
+	}
+}

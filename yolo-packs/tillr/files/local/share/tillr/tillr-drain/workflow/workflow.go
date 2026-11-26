@@ -428,7 +428,10 @@ func LoadWorkflowWith(root, ref string, policy *SeatPolicy, args map[string]any)
 	if !item.WorkflowRefValid(ref) {
 		return nil, fmt.Errorf("workflow-reference: %q", ref)
 	}
-	p := filepath.Join(root, "config", "tillr", "workflows", ref+".json")
+	p, _, err := item.ResolveWorkflowFile(root, ref)
+	if err != nil {
+		p = filepath.Join(root, "config", "tillr", "workflows", ref+".json")
+	}
 	w, err := ExpandWorkflow(root, p, policy, map[string]bool{}, args, nil)
 	if err == nil {
 		err = ValidateOutputWiring(w)

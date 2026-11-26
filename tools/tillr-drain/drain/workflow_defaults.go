@@ -40,9 +40,16 @@ func loadDefaultWorkflow(root, seat, ref string, policy *Policy) (*Workflow, err
 	if ref == singleWorkerWorkflow {
 		return nil, nil
 	}
-	path := filepath.Join("config", "tillr", "workflows", ref+".json")
-	if err := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", path).Run(); err != nil {
+	_, fromRepo, err := item.ResolveWorkflowFile(root, ref)
+	if err != nil {
+		path := filepath.Join("config", "tillr", "workflows", ref+".json")
 		return nil, fmt.Errorf("%s: workflow-missing-reference: %s: no tracked workflow defines %s", key, path, ref)
+	}
+	if fromRepo {
+		path := filepath.Join("config", "tillr", "workflows", ref+".json")
+		if err := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", path).Run(); err != nil {
+			return nil, fmt.Errorf("%s: workflow-missing-reference: %s: no tracked workflow defines %s", key, path, ref)
+		}
 	}
 	w, err := loadWorkflow(root, ref, policy)
 	if err != nil {

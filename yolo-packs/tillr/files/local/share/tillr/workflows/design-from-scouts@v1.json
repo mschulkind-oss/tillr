@@ -1,0 +1,26 @@
+{
+  "name": "design-from-scouts",
+  "version": 1,
+  "args": { "prompts": { "type": "strings", "most": 8 } },
+  "stages": [
+    {
+      "id": "scout",
+      "kind": "agent",
+      "seat": "scout",
+      "access": "read_only",
+      "repeat": "prompts",
+      "prompt": "${item}",
+      "outputs": { "findings": "markdown" }
+    },
+    {
+      "id": "join",
+      "kind": "agent",
+      "seat": "design",
+      "access": "write",
+      "inputs": { "findings": "markdown" },
+      "prompt": "Read every findings input named in this brief. Synthesize them into the item's design — changing what the work needs, and nothing else — keeping evidence and open decisions explicit. Verify the document and commit the finished deliverable."
+    }
+  ],
+  "edges": [{ "from_node": "scout", "from_output": "findings", "to_node": "join", "to_input": "findings" }],
+  "exit": { "requires_nodes": ["scout", "join"], "requires_candidate": "commit_required" }
+}

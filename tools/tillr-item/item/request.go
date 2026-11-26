@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -59,10 +58,11 @@ type RequestFiling struct {
 	By, Via     string
 }
 
-// RequestWorkflowCheck reads the named workflow from the repository and refuses one the
-// drain could not run for a request: a reference of the wrong shape, a file that is not
-// there, or a workflow whose top-level args a request cannot supply. It reads files, so it
-// runs before the store's write transaction opens, never inside it.
+// RequestWorkflowCheck reads the named workflow from the repository (falling back to the
+// tillr installation when no file exists in the repository) and refuses one the drain could
+// not run for a request: a reference of the wrong shape, a file that is not there, or a
+// workflow whose top-level args a request cannot supply. It reads files, so it runs before
+// the store's write transaction opens, never inside it.
 func RequestWorkflowCheck(root, ref string) error {
 	if !WorkflowRefValid(ref) {
 		return Rejectionf("workflow-reference", "", "%q is not a workflow reference of the form <name>@v<N>", ref)
@@ -70,16 +70,19 @@ func RequestWorkflowCheck(root, ref string) error {
 	if ref == SingleWorkerWorkflow {
 		return nil
 	}
-	file := filepath.Join(root, "config", "tillr", "workflows", ref+".json")
+	file, _, err := ResolveWorkflowFile(root, ref)
+	if err != nil {
+		return Rejectionf("workflow-missing", "", "no workflow file config/tillr/workflows/%s.json under %s (or in tillr installation): %v", ref, root, err)
+	}
 	raw, err := os.ReadFile(file)
 	if err != nil {
-		return Rejectionf("workflow-missing", "", "no workflow file config/tillr/workflows/%s.json under %s: %v", ref, root, err)
+		return Rejectionf("workflow-missing", "", "workflow file %s is not readable: %v", file, err)
 	}
 	var w struct {
 		Args map[string]json.RawMessage `json:"args"`
 	}
 	if err := json.Unmarshal(raw, &w); err != nil {
-		return Rejectionf("workflow-missing", "", "config/tillr/workflows/%s.json is not a workflow: %v", ref, err)
+		return Rejectionf("workflow-missing", "", "%s is not a workflow: %v", file, err)
 	}
 	if len(w.Args) != 0 {
 		return Rejectionf("workflow-needs-args", "", "%s declares top-level args, which a request does not supply; use the face made for it (doc-triage@v1 has `tillr item doc-triage`) or another workflow", ref)

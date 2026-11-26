@@ -210,3 +210,39 @@ func TestCaseLoopAdapterAndDocsDeliveredAndFresh(t *testing.T) {
 		t.Fatalf("expected CaseDocsFresh to fail on stale snapshot, got %v", err)
 	}
 }
+
+func TestCaseWorkflows(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init")
+	wfDir := filepath.Join(repo, "config", "tillr", "workflows")
+	if err := os.MkdirAll(wfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wfDir, "planned-build@v1.json"), []byte(`{"name":"planned-build","version":1}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", ".")
+
+	var out, errBuf bytes.Buffer
+	if err := CaseWorkflows(repo, true, &out); err != nil {
+		t.Fatalf("candidate mode failed: %v", err)
+	}
+	if err := CaseWorkflows(repo, false, &out); err == nil || !strings.Contains(err.Error(), "missing=[planned-build@v1.json]") {
+		t.Fatalf("expected missing workflow error, got %v", err)
+	}
+	if code := packmirror.Sync(repo, []string{packmirror.WorkflowsMount}, &out, &errBuf); code != 0 {
+		t.Fatalf("packmirror.Sync = %d: %s", code, errBuf.String())
+	}
+	out.Reset()
+	if err := CaseWorkflows(repo, false, &out); err != nil {
+		t.Fatalf("CaseWorkflows after sync failed: %v", err)
+	}
+}

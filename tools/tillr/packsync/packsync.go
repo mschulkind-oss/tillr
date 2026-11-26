@@ -416,6 +416,80 @@ func CaseLoopAdapter(root string, candidate bool, stdout io.Writer) error {
 	return nil
 }
 
+// CaseWorkflows checks that the pack's workflows directory matches config/tillr/workflows byte for byte.
+func CaseWorkflows(root string, candidate bool, stdout io.Writer) error {
+	if candidate {
+		if stdout != nil {
+			fmt.Fprintln(stdout, "n/a  the tillr pack's workflows: a candidate does not carry the generated tree")
+		}
+		return nil
+	}
+	cmd := exec.Command("git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", packmirror.WorkflowsDir)
+	out, err := cmd.Output()
+	if err != nil {
+		return err
+	}
+	want := make(map[string]string)
+	prefix := packmirror.WorkflowsDir + "/"
+	for _, entry := range bytes.Split(out, []byte{0}) {
+		if len(entry) == 0 {
+			continue
+		}
+		p := string(entry)
+		rel := strings.TrimPrefix(p, prefix)
+		src := filepath.Join(root, filepath.FromSlash(p))
+		if _, err := os.Stat(src); err == nil {
+			want[rel] = src
+		}
+	}
+	wfCopy := filepath.Join(copyDir(root), packmirror.WorkflowsMount)
+	got := make(map[string]string)
+	if info, err := os.Stat(wfCopy); err == nil && info.IsDir() {
+		var err error
+		got, err = files(wfCopy)
+		if err != nil {
+			return err
+		}
+	}
+	var missing, extra []string
+	for rel := range want {
+		if _, ok := got[rel]; !ok {
+			missing = append(missing, rel)
+		}
+	}
+	for rel := range got {
+		if _, ok := want[rel]; !ok {
+			extra = append(extra, rel)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+	if len(missing) > 0 || len(extra) > 0 {
+		return fmt.Errorf("the pack's workflows diverge from %s/: missing=%v, extra=%v: run `just pack-sync`", packmirror.WorkflowsDir, missing, extra)
+	}
+	for _, rel := range sortedKeys(want) {
+		dst := got[rel]
+		sym, symErr := isSymlink(dst)
+		fi, statErr := os.Stat(dst)
+		if statErr != nil || !fi.Mode().IsRegular() || symErr != nil || sym {
+			return fmt.Errorf("%s must be a regular file", dst)
+		}
+		srcBytes, err := os.ReadFile(want[rel])
+		if err != nil {
+			return err
+		}
+		dstBytes, err := os.ReadFile(dst)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(dstBytes, srcBytes) {
+			return fmt.Errorf("the pack's copy of workflows/%s diverges from %s/%s: run `just pack-sync`", rel, packmirror.WorkflowsDir, rel)
+		}
+	}
+	ok(stdout, fmt.Sprintf("the pack delivers %d workflow(s) matching %s/", len(want), packmirror.WorkflowsDir))
+	return nil
+}
+
 // CaseBuildOutputs checks that a Python bytecode cache is treated as a build output, and source files are not.
 func CaseBuildOutputs(stdout io.Writer) error {
 	for _, rel := range []string{"__pycache__/tillr_trace.cpython-314.pyc", "tillr_trace.pyc"} {
@@ -1077,6 +1151,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		func() error { return CaseBytes(root, candidate, stdout) },
 		func() error { return CaseModes(root, candidate, stdout) },
 		func() error { return CaseLoopAdapter(root, candidate, stdout) },
+		func() error { return CaseWorkflows(root, candidate, stdout) },
 		func() error { return CaseBuildOutputs(stdout) },
 		func() error { return CaseCopyBuildOutputs(stdout) },
 		func() error { return CaseLaunchers(root, stdout) },

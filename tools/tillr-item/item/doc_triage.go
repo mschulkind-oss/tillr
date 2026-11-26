@@ -105,9 +105,13 @@ func repoMarkdown(root, p string) (string, error) {
 // docTriageBound reads the most documents doc-triage@v1 accepts from the workflow file
 // itself, so the command and the workflow cannot disagree about it.
 func docTriageBound(root string) (int, error) {
-	raw, err := os.ReadFile(filepath.Join(root, "config", "tillr", "workflows", DocTriageWorkflow+".json"))
+	file, _, err := ResolveWorkflowFile(root, DocTriageWorkflow)
 	if err != nil {
 		return 0, Rejectionf("workflow-missing", "", "the triage workflow config/tillr/workflows/%s.json is not readable: %v", DocTriageWorkflow, err)
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return 0, Rejectionf("workflow-missing", "", "the triage workflow %s is not readable: %v", file, err)
 	}
 	var w struct {
 		Args map[string]struct {

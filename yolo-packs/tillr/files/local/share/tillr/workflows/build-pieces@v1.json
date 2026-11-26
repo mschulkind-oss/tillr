@@ -1,0 +1,10 @@
+{
+  "name": "build-pieces",
+  "version": 1,
+  "args": { "pieces": { "type": "pieces", "most": 12 } },
+  "stages": [
+    { "id": "piece", "kind": "agent", "seat": "build", "access": "read_only", "repeat": "pieces" }
+  ],
+  "edges": [],
+  "exit": { "requires_nodes": ["piece"], "requires_candidate": "commit_required" }
+}

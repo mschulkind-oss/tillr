@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -501,8 +500,12 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 				rule, message := "", ""
 				if !WorkflowRefValid(ref) {
 					rule, message = "invalid-workflow", "workflow must have the form <name>@v<N>"
-				} else if info, err := os.Stat(filepath.Join(in.Root, "config", "tillr", "workflows", ref+".json")); err != nil || !info.Mode().IsRegular() {
-					rule, message = "workflow-missing", "workflow file config/tillr/workflows/"+ref+".json does not exist"
+				} else if ref != SingleWorkerWorkflow {
+					if path, _, err := ResolveWorkflowFile(in.Root, ref); err != nil {
+						rule, message = "workflow-missing", "workflow file config/tillr/workflows/"+ref+".json does not exist"
+					} else if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+						rule, message = "workflow-missing", "workflow file config/tillr/workflows/"+ref+".json does not exist"
+					}
 				}
 				if rule != "" {
 					findings = append(findings, SyncNote{File: doc.Path, Heading: found[i].heading, Line: found[i].line, ItemID: found[i].payload.ItemID, Rule: rule, Message: message})

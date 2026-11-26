@@ -161,3 +161,46 @@ func requestRunStreams(t *testing.T, words string, args ...string) (int, string,
 	}
 	return 0, stdout.String(), stderr.String()
 }
+
+func TestRequestFaceUsesInstalledWorkflowsWhenRepoHasNone(t *testing.T) {
+	path, s := placeFixture(t, "a")
+	root := scratch(t, "consumer-repo")
+	installRoot, err := filepath.Abs(filepath.Join("..", "..", "yolo-packs", "tillr", "files", "local", "share", "tillr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
+
+	// Default build workflow (planned-build@v1) works with no config/tillr/workflows in root.
+	code, out := requestRun(t, "File without repo workflows.\n", "--store", path, "--root", root, "--title", "Installed default build")
+	if code != 0 || !strings.Contains(out, `"workflow":"planned-build@v1"`) {
+		t.Fatalf("build request without repo workflows: %d %s", code, out)
+	}
+	// Default design workflow (scouted-design@v1) works with no config/tillr/workflows in root.
+	code, out = requestRun(t, "Design without repo workflows.\n", "--store", path, "--root", root, "--title", "Installed default design", "--seat", "design")
+	if code != 0 || !strings.Contains(out, `"workflow":"scouted-design@v1"`) {
+		t.Fatalf("design request without repo workflows: %d %s", code, out)
+	}
+	var storedWorkflow string
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		return r.QueryRow(`SELECT workflow FROM items WHERE title='Installed default build'`).Scan(&storedWorkflow)
+	}); err != nil || storedWorkflow != "planned-build@v1" {
+		t.Fatalf("stored workflow=%q err=%v", storedWorkflow, err)
+	}
+
+	// Operated repository workflow wins over the installed one of the same name.
+	wfDir := filepath.Join(root, "config", "tillr", "workflows")
+	if err := os.MkdirAll(wfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Put a workflow with top-level args at planned-build@v1 in the repo; if repo wins,
+	// RequestWorkflowCheck must refuse it with workflow-needs-args rather than using the
+	// installed argless planned-build@v1.
+	if err := os.WriteFile(filepath.Join(wfDir, "planned-build@v1.json"), []byte(`{"name":"planned-build","version":1,"args":{"x":{"type":"strings","most":1}},"stages":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out = requestRun(t, "Repo override wins.\n", "--store", path, "--root", root, "--title", "Repo wins")
+	if code == 0 || !strings.Contains(out, "workflow-needs-args") {
+		t.Fatalf("expected repo workflow to win and be refused with workflow-needs-args: %d %s", code, out)
+	}
+}
