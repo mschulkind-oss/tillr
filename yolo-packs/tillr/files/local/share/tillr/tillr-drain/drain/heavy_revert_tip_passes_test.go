@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,4 +276,135 @@ func TestHeavyEarlyRevertDroppedWhileProofContinues(t *testing.T) {
 	if green := heavyGit(t, h.root, "rev-parse", GreenRef); green != repair {
 		t.Fatalf("green = %s, want repair tip %s", shortSHA(green), shortSHA(repair))
 	}
+}
+
+func waitForGateStarted(t *testing.T, storePath, runID string) {
+	t.Helper()
+	deadline := time.Now().Add(hangGuard)
+	for time.Now().Before(deadline) {
+		s, err := store.OpenRead(context.Background(), storePath)
+		if err == nil {
+			var count int
+			qerr := s.ReadTx(context.Background(), func(r *store.Reader) error {
+				return r.QueryRow(`SELECT count(*) FROM events WHERE kind=? AND object_type='run' AND object_id=?`, GateStartedKind, runID).Scan(&count)
+			})
+			_ = s.Close()
+			if qerr == nil && count > 0 {
+				return
+			}
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for gate.started for %s", runID)
+}
+
+func assertRevertGateStopped(t *testing.T, storePath, runID, wantItemID, wantReason string) {
+	t.Helper()
+	s, err := store.OpenRead(context.Background(), storePath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+	var started, verdicts, stopped int
+	var reason, itemID, laneID string
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=? AND object_type='run' AND object_id=?`, GateStartedKind, runID).Scan(&started); err != nil {
+			return err
+		}
+		if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=? AND object_type='run' AND object_id=?`, GateVerdictKind, runID).Scan(&verdicts); err != nil {
+			return err
+		}
+		return r.QueryRow(`SELECT count(*), COALESCE(MAX(json_extract(payload, '$.reason')), ''), COALESCE(MAX(json_extract(payload, '$.item_id')), ''), COALESCE(MAX(json_extract(payload, '$.lane_id')), '') FROM events WHERE kind=? AND object_type='run' AND object_id=?`, GateStoppedKind, runID).Scan(&stopped, &reason, &itemID, &laneID)
+	}); err != nil {
+		t.Fatalf("read store: %v", err)
+	}
+	if started != 1 || verdicts != 0 || stopped != 1 || reason != wantReason || itemID != wantItemID || laneID != "revert" {
+		t.Fatalf("gate records for %s: started=%d verdicts=%d stopped=%d reason=%q item_id=%q lane_id=%q; want 1/0/1/%q/%q/revert",
+			runID, started, verdicts, stopped, reason, itemID, laneID, wantReason, wantItemID)
+	}
+}
+
+// When the loop drops an automatic revert whose detached ProcessSteps gate has started,
+// the store records gate.stopped (with reason cancelled) and no gate.verdict.
+func TestHeavyRevertDroppedDuringProcessGateRecordsGateStopped(t *testing.T) {
+	h := newRevertHarness(t, fileRed("a"))
+	h.loop.revertTipPoll = 10 * time.Millisecond
+	culprit := h.land("item-broke", "a", "broken\n")
+
+	ready := filepath.Join(t.TempDir(), "gate.ready")
+	blockingGate := executable(t, "touch "+ready+"\nsleep 60\n")
+	procSteps := &ProcessSteps{
+		Store:       h.path,
+		Root:        h.root,
+		LaneRoot:    h.loop.cfg.LaneRoot,
+		Now:         func() time.Time { return time.Now().UTC() },
+		GateProgram: blockingGate,
+	}
+
+	var runID, repair string
+	h.steps.onGateCtx = func(ctx context.Context, c Candidate) (GateOutcome, error) {
+		runID = c.RunID
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			waitForGateStarted(t, h.path, c.RunID)
+			repair = h.landRemoval("item-repair", "a")
+		}()
+		out, err := procSteps.Gate(ctx, c)
+		<-done
+		return out, err
+	}
+
+	h.proof()
+	if runID == "" || repair == "" {
+		t.Fatalf("revert gate or repair did not run: runID=%q repair=%q", runID, repair)
+	}
+	reverts := h.reverts()
+	if len(reverts) != 1 || reverts[0].Result != "dropped" || reverts[0].Landing != culprit {
+		t.Fatalf("reverts = %+v, want one dropped event for %s", reverts, shortSHA(culprit))
+	}
+	assertRevertGateStopped(t, h.path, runID, RevertItemID(culprit), "cancelled")
+}
+
+// When a loop restart cancels an in-flight automatic revert gate and the revert is not
+// resumed, the store records gate.stopped (with reason cancelled) and no gate.verdict.
+func TestHeavyRevertRestartCancelRecordsGateStopped(t *testing.T) {
+	h := newRevertHarness(t, fileRed("a"))
+	culprit := h.land("item-broke", "a", "broken\n")
+
+	ready := filepath.Join(t.TempDir(), "gate.ready")
+	blockingGate := executable(t, "touch "+ready+"\nsleep 60\n")
+	procSteps := &ProcessSteps{
+		Store:       h.path,
+		Root:        h.root,
+		LaneRoot:    h.loop.cfg.LaneRoot,
+		Now:         func() time.Time { return time.Now().UTC() },
+		GateProgram: blockingGate,
+	}
+
+	revertCtx, cancelRevert := context.WithCancel(context.Background())
+	defer cancelRevert()
+
+	var runID string
+	h.steps.onGateCtx = func(ctx context.Context, c Candidate) (GateOutcome, error) {
+		runID = c.RunID
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			waitForGateStarted(t, h.path, c.RunID)
+			cancelRevert()
+		}()
+		out, err := procSteps.Gate(ctx, c)
+		<-done
+		return out, err
+	}
+
+	_, err := h.loop.revertLanding(revertCtx, culprit, culprit, []HeavyCheck{{CheckID: "unit"}}, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("revertLanding err = %v, want context.Canceled", err)
+	}
+	if runID == "" {
+		t.Fatal("revert gate never started")
+	}
+	assertRevertGateStopped(t, h.path, runID, RevertItemID(culprit), "cancelled")
 }

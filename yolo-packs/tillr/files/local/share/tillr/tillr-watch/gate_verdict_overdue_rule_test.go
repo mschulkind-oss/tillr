@@ -494,6 +494,83 @@ func TestGateVerdictOverdueRule(t *testing.T) {
 		}
 	})
 
+	t.Run("automatic revert gate ended with gate.stopped stays quiet while hung revert gate fires", func(t *testing.T) {
+		ctx, st, now, pending := newHarness(t, []watch.Rule{rule}, t0)
+
+		appendRunEvent := func(kind, runID string, payload map[string]any, at time.Time) {
+			t.Helper()
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := runID
+			if err := st.WriteTx(ctx, func(tx *store.Tx) error {
+				_, err := tx.Append(event.Event{
+					Kind:       kind,
+					ObjectType: "run",
+					ObjectID:   &id,
+					At:         at,
+					Payload:    body,
+				})
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Stopped revert run (matching the 2026-11-25 incident shape): gate.started followed
+		// by gate.stopped with no gate.verdict and no row in items.
+		const (
+			stoppedRevertRun  = "run-revert-11189ba68811-fda8815751b4"
+			stoppedRevertItem = "revert-main-11189ba68811"
+		)
+		appendGateStarted(ctx, t, st, stoppedRevertRun, stoppedRevertItem, "revert", "fda8815751b4", t0)
+		*now = t0.Add(2 * time.Minute)
+		appendRunEvent(drain.GateStoppedKind, stoppedRevertRun, map[string]any{
+			"item_id":  stoppedRevertItem,
+			"run_id":   stoppedRevertRun,
+			"lane_id":  "revert",
+			"base_sha": "fda8815751b4",
+			"reason":   "cancelled",
+		}, *now)
+
+		// Hung revert run: gate.started with no gate.verdict and no gate.stopped must still fire.
+		const (
+			hungRevertRun  = "run-revert-22229ba68811-eeee815751b4"
+			hungRevertItem = "revert-main-22229ba68811"
+		)
+		appendGateStarted(ctx, t, st, hungRevertRun, hungRevertItem, "revert", "eeee815751b4", t0)
+
+		*now = t0.Add(3649 * time.Second)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("want quiet at 3649s before threshold, got %+v", notices)
+		}
+
+		*now = t0.Add(3650 * time.Second)
+		opened := pending()
+		if len(opened) != 1 || opened[0].Bundle.RuleID != ruleID || opened[0].Bundle.Subject != hungRevertRun {
+			t.Fatalf("want only hung revert %s to fire at 3650s (stopped revert %s must stay quiet), got %+v", hungRevertRun, stoppedRevertRun, opened)
+		}
+		if !strings.Contains(opened[0].Bundle.Guidance.Summary, hungRevertRun) ||
+			!strings.Contains(opened[0].Bundle.Guidance.Summary, hungRevertItem) ||
+			!strings.Contains(opened[0].Bundle.Guidance.Summary, "revert") {
+			t.Fatalf("hung revert guidance summary missing run/item/lane: %+v", opened[0].Bundle.Guidance)
+		}
+
+		// Stopped revert stays quiet past 88m as well; hung revert resolves once gate.stopped lands.
+		*now = t0.Add(88 * time.Minute)
+		appendRunEvent(drain.GateStoppedKind, hungRevertRun, map[string]any{
+			"item_id":  hungRevertItem,
+			"run_id":   hungRevertRun,
+			"lane_id":  "revert",
+			"base_sha": "eeee815751b4",
+			"reason":   "cancelled",
+		}, *now)
+		if notices := pending(); len(notices) != 0 {
+			t.Fatalf("gate.stopped for %s should resolve %s, got %+v", hungRevertRun, ruleID, notices)
+		}
+	})
+
 	t.Run("across all config rules on 88m gate with no verdict", func(t *testing.T) {
 		ctx := context.Background()
 		root := t.TempDir()
