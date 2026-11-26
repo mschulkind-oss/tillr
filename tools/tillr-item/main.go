@@ -315,6 +315,7 @@ func syncFace(args []string) int {
 func listFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("list")
 	path := fs.String("store", "", "the store to read")
+	table := fs.Bool("table", false, "print a readable table instead of an item.list record")
 	var states []string
 	fs.Func("state", "keep items in this state; repeat to include multiple states", func(state string) error {
 		states = append(states, state)
@@ -325,6 +326,22 @@ func listFace(args []string) (record.Envelope, int) {
 	}
 	if *path == "" {
 		return record.Envelope{}, fail(item.Usagef("list needs --store <path>"))
+	}
+	if *table {
+		var out string
+		_, code := readStore(*path, func(_ context.Context, r *store.Reader) (record.Envelope, error) {
+			items, err := item.ListSummaries(r, states)
+			if err != nil {
+				return record.Envelope{}, err
+			}
+			out = item.FormatListTable(items)
+			return record.Envelope{}, nil
+		})
+		if code != record.ExitOK {
+			return record.Envelope{}, code
+		}
+		fmt.Print(out)
+		return record.Envelope{}, record.ExitOK
 	}
 	return readStore(*path, func(_ context.Context, r *store.Reader) (record.Envelope, error) {
 		return item.List(r, states)
@@ -660,34 +677,107 @@ func verdictFace(args []string) (record.Envelope, int) {
 func verdictRecordFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("verdict record")
 	path := fs.String("store", "", "the store to write")
-	input := fs.String("input", "", "the item.verdict to record")
+	input := fs.String("input", "", "the item.verdict to record (mutually exclusive with --item/--criterion/--verdict/--reason)")
+	itemID := fs.String("item", "", "the item id (builds the record without --input)")
+	criterionID := fs.String("criterion", "", "the criterion id (builds the record without --input)")
+	verdict := fs.String("verdict", "", "the verdict: done, not-done, blocked or defective")
+	reason := fs.String("reason", "", "why the criterion received this verdict")
+	actorKind := fs.String("actor-kind", "", "the actor kind: mechanical, agent or human (default: mechanical without --input)")
+	actor := fs.String("actor", "", "the actor issuing the verdict")
+	judgedActor := fs.String("judged-actor", "", "the actor whose work the criterion judges (agent verdicts)")
+	claimClass := fs.String("claim-class", "", "the criterion claim class (default: the stored criterion's claim class)")
+	var evidence []string
+	fs.Func("evidence", "an evidence pointer read by this verdict; repeat for each", func(ref string) error {
+		evidence = append(evidence, ref)
+		return nil
+	})
+	var landed []string
+	fs.Func("landed", "a landed ref for this verdict; repeat for each", func(ref string) error {
+		landed = append(landed, ref)
+		return nil
+	})
 	head := fs.String("head", "", "the exact candidate commit SHA (agent verdicts only)")
 	workflow := fs.String("workflow", "", "the persisted workflow reference")
 	node := fs.String("evaluator-node", "", "the persisted evaluator node")
 	digest := fs.String("graph-sha256", "", "SHA-256 of the exact persisted expanded graph")
 
-	now := fs.String("now", "", "the injected clock, RFC 3339")
+	now := fs.String("now", "", "the injected clock, RFC 3339 (default: current time)")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
 	}
-	if *path == "" || *input == "" || *now == "" {
-		return record.Envelope{}, fail(item.Usagef("verdict record needs --store <path>, --input <record> and --now <RFC3339>"))
+	if *path == "" {
+		return record.Envelope{}, fail(item.Usagef("verdict record needs --store <path> and either --input <record> or --item, --criterion, --verdict and --reason"))
 	}
-	at, err := time.Parse(time.RFC3339, *now)
-	if err != nil {
-		return record.Envelope{}, fail(item.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
+	at := time.Now().UTC()
+	if *now != "" {
+		parsed, err := time.Parse(time.RFC3339, *now)
+		if err != nil {
+			return record.Envelope{}, fail(item.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
+		}
+		at = parsed.UTC()
 	}
-	env, err := readInput(*input, item.VerdictRecordKind)
-	if err != nil {
-		return record.Envelope{}, fail(err)
+
+	hasInput := *input != ""
+	hasFlags := *itemID != "" || *criterionID != "" || *verdict != "" || *reason != "" ||
+		*actorKind != "" || *actor != "" || *judgedActor != "" || *claimClass != "" ||
+		len(evidence) > 0 || len(landed) > 0
+	if hasInput && hasFlags {
+		return record.Envelope{}, fail(item.Usagef("verdict record takes either --input <record> or flag fields (--item, --criterion, --verdict, --reason), not both"))
 	}
+	if !hasInput && !hasFlags {
+		return record.Envelope{}, fail(item.Usagef("verdict record needs --store <path> and either --input <record> or --item, --criterion, --verdict and --reason"))
+	}
+
+	var env record.Envelope
 	var payload map[string]any
-	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		return record.Envelope{}, fail(item.Usagef("reading verdict payload: %v", err))
+	if hasInput {
+		var err error
+		env, err = readInput(*input, item.VerdictRecordKind)
+		if err != nil {
+			return record.Envelope{}, fail(err)
+		}
+		if err := json.Unmarshal(env.Payload, &payload); err != nil {
+			return record.Envelope{}, fail(item.Usagef("reading verdict payload: %v", err))
+		}
+		if payload == nil {
+			return record.Envelope{}, fail(item.Usagef("verdict payload must be a JSON object"))
+		}
+	} else {
+		if *itemID == "" || *criterionID == "" || *verdict == "" || *reason == "" {
+			return record.Envelope{}, fail(item.Usagef("verdict record without --input needs --item <id>, --criterion <id>, --verdict <verdict> and --reason <text>"))
+		}
+		ak := *actorKind
+		if ak == "" {
+			ak = item.ActorMechanical
+		}
+		payload = map[string]any{
+			"item_id":      *itemID,
+			"criterion_id": *criterionID,
+			"verdict":      *verdict,
+			"reason":       *reason,
+			"actor_kind":   ak,
+		}
+		if *actor != "" {
+			payload["actor"] = *actor
+		}
+		if *judgedActor != "" {
+			payload["judged_actor"] = *judgedActor
+		}
+		if *claimClass != "" {
+			payload["claim_class"] = *claimClass
+		}
+		if len(evidence) > 0 {
+			payload["evidence"] = evidence
+		}
+		if len(landed) > 0 {
+			payload["landed"] = landed
+		}
+		env = record.Envelope{
+			RecordVersion: record.SupportedVersion,
+			Kind:          item.VerdictRecordKind,
+		}
 	}
-	if payload == nil {
-		return record.Envelope{}, fail(item.Usagef("verdict payload must be a JSON object"))
-	}
+
 	for key, value := range map[string]string{"workflow": *workflow, "evaluator_node": *node, "graph_sha256": *digest, "evaluated_head": *head} {
 		if value == "" {
 			continue
@@ -707,13 +797,24 @@ func verdictRecordFace(args []string) (record.Envelope, int) {
 		}
 		payload["evaluated_tree"] = tree
 	}
-	env.Payload, err = json.Marshal(payload)
-	if err != nil {
-		return record.Envelope{}, fail(item.Internalf("encoding verdict payload: %v", err))
-	}
 
 	env.CreatedAt = at.UTC()
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
+		if !hasInput {
+			text, storedClass, err := item.LookupCriterion(ctx, tx.Reader(), *itemID, *criterionID)
+			if err != nil {
+				return record.Envelope{}, err
+			}
+			payload["criterion_hash"] = item.CriterionHash(text)
+			if payload["claim_class"] == nil || payload["claim_class"] == "" {
+				payload["claim_class"] = storedClass
+			}
+		}
+		var err error
+		env.Payload, err = json.Marshal(payload)
+		if err != nil {
+			return record.Envelope{}, item.Internalf("encoding verdict payload: %v", err)
+		}
 		stored, err := item.RecordVerdict(ctx, tx, env)
 		if err != nil {
 			return record.Envelope{}, err

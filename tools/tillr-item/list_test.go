@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr/store"
@@ -116,5 +117,55 @@ func TestListItemsUsageAndMissingStore(t *testing.T) {
 	}
 	if code, out := run(t, "list", "--help"); code != 0 || len(out) == 0 {
 		t.Fatalf("help exited %d: %s", code, out)
+	}
+}
+
+func TestListItemsTable(t *testing.T) {
+	db := filepath.Join(scratch(t, "list-table"), "board.sqlite3")
+	for _, id := range []string{"item-a", "item-b"} {
+		in := base(id, "title "+id)
+		if id == "item-b" {
+			in.BlockedBy = []string{"item-a"}
+		}
+		if code, out := apply(t, db, envelope(t, "item.record", id, in)); code != 0 {
+			t.Fatalf("apply exited %d: %s", code, out)
+		}
+	}
+	if code, out := run(t, "state", "--store", db, "--item", "item-b", "--state", "in-queue", "--now", "2026-11-11T01:02:03Z"); code != 0 {
+		t.Fatalf("state exited %d: %s", code, out)
+	}
+
+	// Default output remains JSON item.list.
+	if got := listItems(t, db); len(got) != 2 {
+		t.Fatalf("default list returned %d items, want 2", len(got))
+	}
+
+	// --table prints a readable table with header and aligned rows.
+	code, out := run(t, "list", "--store", db, "--table")
+	if code != 0 {
+		t.Fatalf("list --table exited %d: %s", code, out)
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("list --table printed %d lines, want 3:\n%s", len(lines), out)
+	}
+	if !strings.Contains(lines[0], "ITEM") || !strings.Contains(lines[0], "STATE") || !strings.Contains(lines[0], "TITLE") {
+		t.Fatalf("missing header columns: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "item-a") || !strings.Contains(lines[1], "not-started") || !strings.Contains(lines[1], "title item-a") {
+		t.Fatalf("unexpected row 1: %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "item-b") || !strings.Contains(lines[2], "in-queue") || !strings.Contains(lines[2], "item-a") || !strings.Contains(lines[2], "title item-b") {
+		t.Fatalf("unexpected row 2: %q", lines[2])
+	}
+
+	// --table respects --state filtering.
+	code, out = run(t, "list", "--store", db, "--table", "--state", "in-queue")
+	if code != 0 {
+		t.Fatalf("list --table --state exited %d: %s", code, out)
+	}
+	lines = strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[1], "item-b") {
+		t.Fatalf("filtered table = %q", out)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Agent intake is bound to the persisted evaluator; human and mechanical paths
@@ -364,5 +365,79 @@ func TestEvaluatorAuthorityDoesNotExpire(t *testing.T) {
 		if payload["workflow"] != "review@v1" || payload["evaluator_node"] != "verify" || payload["graph_sha256"] != hashOf(selectedGraph) || payload["evaluated_tree"] != judgeGit(t, "HEAD^{tree}") {
 			t.Fatalf("missing provenance: %v", payload)
 		}
+	}
+}
+
+func TestVerdictRecordBuildsRecordFromFlags(t *testing.T) {
+	db := storedWithCriterion(t, "verdict-flag-mode", "open")
+
+	// Missing --evidence still enforces the verdict-evidence rule.
+	code, out := run(t, "verdict", "record",
+		"--store", db,
+		"--item", "item_042",
+		"--criterion", "c1",
+		"--verdict", "done",
+		"--reason", "hook verified",
+	)
+	assertRefused(t, code, out, "verdict-evidence")
+
+	// Building the record from flags hashes the stored criterion text itself and defaults --now.
+	before := time.Now().UTC().Truncate(time.Second)
+	code, out = run(t, "verdict", "record",
+		"--store", db,
+		"--item", "item_042",
+		"--criterion", "c1",
+		"--verdict", "done",
+		"--reason", "hook verified",
+		"--evidence", "gate-verdict-7",
+	)
+	after := time.Now().UTC().Add(time.Second)
+	if code != 0 {
+		t.Fatalf("flag-mode verdict exited %d: %s", code, out)
+	}
+	got := decodeIssued(t, out)
+	if got.Kind != "item.verdict" {
+		t.Fatalf("kind = %q, want item.verdict", got.Kind)
+	}
+	if got.Payload.Verdict != "done" || got.Payload.ActorKind != "mechanical" {
+		t.Fatalf("verdict/actor_kind = %q/%q, want done/mechanical", got.Payload.Verdict, got.Payload.ActorKind)
+	}
+	payload := lifecyclePayload(t, out)
+	if payload["criterion_hash"] != hashOf(frozenText) {
+		t.Fatalf("criterion_hash = %v, want %s", payload["criterion_hash"], hashOf(frozenText))
+	}
+	if payload["reason"] != "hook verified" {
+		t.Fatalf("reason = %v, want %q", payload["reason"], "hook verified")
+	}
+	recordedAt, err := time.Parse(time.RFC3339, got.Payload.RecordedAt)
+	if err != nil {
+		t.Fatalf("parsing recorded_at %q: %v", got.Payload.RecordedAt, err)
+	}
+	if recordedAt.Before(before) || recordedAt.After(after) {
+		t.Fatalf("recorded_at %s outside [%s, %s]", recordedAt, before, after)
+	}
+	if stored := criterionOf(t, showItem(t, db, "item_042"), "c1"); stored.State != "done" {
+		t.Fatalf("stored criterion = %+v, want state done", stored)
+	}
+
+	// Unknown criterion refuses cleanly with criterion-missing.
+	code, out = run(t, "verdict", "record",
+		"--store", db,
+		"--item", "item_042",
+		"--criterion", "c99",
+		"--verdict", "done",
+		"--reason", "missing",
+		"--evidence", "gate-verdict-7",
+	)
+	assertRefused(t, code, out, "criterion-missing")
+
+	// Mixing --input and flag fields is a usage error (exit 2).
+	code, _ = run(t, "verdict", "record",
+		"--store", db,
+		"--input", input(t, envelope(t, "item.verdict", "mix", mechanicalVerdict())),
+		"--item", "item_042",
+	)
+	if code != 2 {
+		t.Fatalf("mixing --input and --item exited %d, want 2", code)
 	}
 }

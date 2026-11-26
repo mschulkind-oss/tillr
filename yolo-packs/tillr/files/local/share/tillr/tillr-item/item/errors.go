@@ -2,6 +2,7 @@ package item
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,10 +101,18 @@ func RejectionEnvelope(rej *ExitError, at time.Time) record.Envelope {
 		panic(err)
 	}
 	body := bytes.TrimSuffix(buf.Bytes(), []byte{'\n'})
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		panic(err)
+	}
+	id := fmt.Sprintf("rejection-%x", suffix)
+	if rej.ItemID != "" {
+		id = fmt.Sprintf("rejection-%s-%x", rej.ItemID, suffix)
+	}
 	return record.Envelope{
 		RecordVersion: record.SupportedVersion,
 		Kind:          RejectionKind,
-		ID:            "rejection-" + rej.ItemID,
+		ID:            id,
 		Producer:      record.Producer{System: record.System, Utility: Utility, Version: Version},
 		CreatedAt:     at.UTC(),
 		Payload:       body,

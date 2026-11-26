@@ -247,6 +247,13 @@ func decodeVerdict(env record.Envelope) (verdictPayload, error) {
 	return payload, nil
 }
 
+// LookupCriterion returns the frozen criterion text and stored claim class for one
+// item criterion, returning the standard not-found or criterion-missing rejection when
+// absent.
+func LookupCriterion(ctx context.Context, r *store.Reader, itemID, criterionID string) (string, string, error) {
+	return frozenCriterion(ctx, r, itemID, criterionID)
+}
+
 // frozenCriterion answers the criterion text the store froze, refusing an item or a
 // criterion the store does not hold: a verdict is about a criterion that exists, and a
 // store that invented one to answer against would bind nothing.

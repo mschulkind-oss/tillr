@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr/store"
@@ -419,5 +420,63 @@ func TestLoopUsesSelectedEventCache(t *testing.T) {
 	}
 	if foundCommitted {
 		t.Error("loopFace calls store.CacheCommittedEvents(), which retains the whole event log")
+	}
+}
+
+func TestRetryDefaultsNowToCurrentTime(t *testing.T) {
+	storePath := fixture(t,
+		itemRecord("item_042", "in-queue"),
+		envelope("run.record", "run-1", map[string]any{
+			"run_id":      "run-1",
+			"item_id":     "item_042",
+			"lane_id":     "lane-1",
+			"backend":     "pi",
+			"state":       "exited",
+			"exit_code":   2,
+			"started_at":  "2026-11-10T00:00:00Z",
+			"finished_at": "2026-11-10T00:01:00Z",
+		}),
+	)
+
+	before := time.Now().UTC().Truncate(time.Second)
+	code, out := invoke(t, "retry",
+		"--store", storePath,
+		"--item", "item_042",
+		"--run", "run-1",
+		"--by", "operator",
+		"--why", "retrying without --now",
+	)
+	after := time.Now().UTC().Add(time.Second)
+	if code != 0 {
+		t.Fatalf("retry without --now exited %d: %s", code, out)
+	}
+	var got struct {
+		Kind      string    `json:"kind"`
+		CreatedAt time.Time `json:"created_at"`
+		Payload   struct {
+			ItemID          string    `json:"item_id"`
+			SupersedesRunID string    `json:"supersedes_run_id"`
+			RequestedAt     time.Time `json:"requested_at"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("decoding retry record: %v\n%s", err, out)
+	}
+	if got.Kind != "drain.retry" || got.Payload.ItemID != "item_042" || got.Payload.SupersedesRunID != "run-1" {
+		t.Fatalf("unexpected retry record: %+v", got)
+	}
+	if got.Payload.RequestedAt.Before(before) || got.Payload.RequestedAt.After(after) {
+		t.Fatalf("requested_at %s outside [%s, %s]", got.Payload.RequestedAt, before, after)
+	}
+
+	if code, out := invoke(t, "retry",
+		"--store", storePath,
+		"--item", "item_042",
+		"--run", "run-1",
+		"--by", "operator",
+		"--why", "bad clock",
+		"--now", "not-a-timestamp",
+	); code != 2 {
+		t.Fatalf("retry with malformed --now exited %d, want 2: %s", code, out)
 	}
 }

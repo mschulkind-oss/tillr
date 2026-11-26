@@ -461,7 +461,7 @@ func onceFace(args []string) int {
 // names an item and a run in a store that already exists, and creating one to hold a claim
 // about nothing is the shape this refusal removes.
 // retryHelp is the retry face's own help, ahead of its flags.
-const retryHelp = `Usage: tillr drain retry --store <path> --item <id> --run <id> --by <who> --why <reason> --now <RFC3339> [--acknowledge gate-failed|unjudged]
+const retryHelp = `Usage: tillr drain retry --store <path> --item <id> --run <id> --by <who> --why <reason> [--now <RFC3339>] [--acknowledge gate-failed|unjudged]
 
 Records one operator's authorization, with who asked and why. Two forms, chosen by the run:
 
@@ -488,7 +488,7 @@ func retryFace(args []string) int {
 	by := fs.String("by", "", "who asked for the retry")
 	why := fs.String("why", "", "why the retry is authorized")
 	acknowledge := fs.String("acknowledge", "", "the outcome the retry acknowledges: gate-failed or unjudged (default: neither)")
-	now := fs.String("now", "", "the injected clock, RFC 3339")
+	now := fs.String("now", "", "the injected clock, RFC 3339 (default: current time)")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), retryHelp)
 		fs.PrintDefaults()
@@ -496,12 +496,16 @@ func retryFace(args []string) int {
 	if err := parseFlags(fs, args); err != nil {
 		return fail(err)
 	}
-	if *path == "" || *itemID == "" || *runID == "" || *by == "" || *why == "" || *now == "" {
-		return fail(drain.Usagef("retry needs --store <path>, --item <id>, --run <id>, --by <who>, --why <reason> and --now <RFC3339>"))
+	if *path == "" || *itemID == "" || *runID == "" || *by == "" || *why == "" {
+		return fail(drain.Usagef("retry needs --store <path>, --item <id>, --run <id>, --by <who> and --why <reason>"))
 	}
-	at, err := time.Parse(time.RFC3339, *now)
-	if err != nil {
-		return fail(drain.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
+	at := time.Now().UTC()
+	if *now != "" {
+		parsed, err := time.Parse(time.RFC3339, *now)
+		if err != nil {
+			return fail(drain.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
+		}
+		at = parsed.UTC()
 	}
 	if _, err := os.Stat(*path); err != nil {
 		return fail(drain.Incompatiblef("the store %s: %v", *path, err))
