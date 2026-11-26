@@ -463,10 +463,6 @@ func TestStalls(t *testing.T) {
 		scanErrCh <- scanner.Err()
 		close(lineCh)
 	}()
-	waitDone := make(chan error, 1)
-	go func() {
-		waitDone <- cmd.Wait()
-	}()
 	defer func() {
 		if _, err := os.Stat(releaseFile); err != nil {
 			_ = os.WriteFile(releaseFile, []byte("cleanup\n"), 0o644)
@@ -476,15 +472,24 @@ func TestStalls(t *testing.T) {
 		}
 	}()
 
+	var preStallLines []string
 	for {
 		if _, err := os.Stat(startedFile); err == nil {
 			break
 		}
 		select {
-		case err := <-waitDone:
-			t.Fatalf("tillr-gate exited prematurely: %v", err)
+		case ln, ok := <-lineCh:
+			if !ok {
+				<-scanErrCh
+				err := cmd.Wait()
+				t.Fatalf("tillr-gate exited prematurely: %v\n%s", err, strings.Join(preStallLines, "\n"))
+			}
+			preStallLines = append(preStallLines, ln)
 		case <-time.After(20 * time.Millisecond):
 		}
+	}
+	if len(preStallLines) > 0 {
+		t.Fatalf("unexpected output before stall window: %q", preStallLines[0])
 	}
 	// Allow tillr-gate to finish consuming start/run events and block on the pipe.
 	time.Sleep(200 * time.Millisecond)
@@ -493,9 +498,11 @@ func TestStalls(t *testing.T) {
 	for {
 		select {
 		case ln, ok := <-lineCh:
-			if ok {
-				t.Fatalf("unexpected output before stall window: %q", ln)
+			if !ok {
+				<-scanErrCh
+				t.Fatalf("stdout closed before stall window (wait: %v)", cmd.Wait())
 			}
+			t.Fatalf("unexpected output before stall window: %q", ln)
 		default:
 			goto drained
 		}
@@ -507,9 +514,8 @@ drained:
 		if ok {
 			t.Fatalf("stalled run unexpectedly produced output: %q", ln)
 		}
-		t.Fatal("stdout closed during stall window")
-	case err := <-waitDone:
-		t.Fatalf("process exited during stall window: %v", err)
+		<-scanErrCh
+		t.Fatalf("stdout closed during stall window (wait: %v)", cmd.Wait())
 	case <-time.After(2 * time.Second):
 	}
 	if hasCPU {
@@ -528,7 +534,7 @@ drained:
 	if err := <-scanErrCh; err != nil {
 		t.Fatal(err)
 	}
-	if err := <-waitDone; err != nil {
+	if err := cmd.Wait(); err != nil {
 		t.Fatalf("tillr-gate failed: %v\n%s", err, strings.Join(tail, "\n"))
 	}
 	joined := strings.Join(tail, "\n")
