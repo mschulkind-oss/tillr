@@ -14,9 +14,20 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+const runtimeConfigSchema = `CREATE TABLE IF NOT EXISTS drain_runtime_config (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('operator', 'migrated')),
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL
+)`
+
 const configChangedKind = "drain.config-changed"
 
 func init() {
+	if err := store.RegisterDDL("drain-runtime-config", runtimeConfigSchema); err != nil {
+		panic(err)
+	}
 	if err := event.Register(configChangedKind, Utility); err != nil {
 		panic(err)
 	}

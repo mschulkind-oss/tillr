@@ -6,8 +6,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -27,40 +25,14 @@ func TestAllDefinedHoldReasonsAreClassified(t *testing.T) {
 		// Dispatch reasons of the runs that answer a repeating-call ending.
 		ReasonRepeatingCallFresh: true,
 	}
-	isActionHold := func(expr ast.Expr) bool {
-		switch e := expr.(type) {
-		case *ast.Ident:
-			return e.Name == "ActionHold"
-		case *ast.SelectorExpr:
-			return e.Sel.Name == "ActionHold"
-		}
-		return false
+	packages, err := parser.ParseDir(token.NewFileSet(), ".", nil, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	dirs := []string{"."}
-	if entries, err := os.ReadDir("../internal"); err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() && entry.Name() != "testinputs" {
-				dirs = append(dirs, filepath.Join("../internal", entry.Name()))
-			}
+	for name, file := range packages["drain"].Files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
 		}
-	}
-	files := map[string]*ast.File{}
-	fset := token.NewFileSet()
-	for _, dir := range dirs {
-		packages, err := parser.ParseDir(fset, dir, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, pkg := range packages {
-			for name, file := range pkg.Files {
-				if strings.HasSuffix(name, "_test.go") {
-					continue
-				}
-				files[name] = file
-			}
-		}
-	}
-	for name, file := range files {
 		checkLiteral := func(expr ast.Expr) {
 			ast.Inspect(expr, func(n ast.Node) bool {
 				if literal, ok := n.(*ast.BasicLit); ok && literal.Kind == token.STRING {
@@ -91,7 +63,8 @@ func TestAllDefinedHoldReasonsAreClassified(t *testing.T) {
 							continue
 						}
 						if field.Sel.Name == "Action" {
-							held[owner.Name] = isActionHold(assign.Rhs[i])
+							action, ok := assign.Rhs[i].(*ast.Ident)
+							held[owner.Name] = ok && action.Name == "ActionHold"
 						}
 						if field.Sel.Name == "Reason" && held[owner.Name] {
 							checkLiteral(assign.Rhs[i])
@@ -102,7 +75,7 @@ func TestAllDefinedHoldReasonsAreClassified(t *testing.T) {
 			if assign, ok := n.(*ast.AssignStmt); ok && len(assign.Lhs) == len(assign.Rhs) {
 				holds := false
 				for _, expr := range assign.Rhs {
-					if isActionHold(expr) {
+					if id, ok := expr.(*ast.Ident); ok && id.Name == "ActionHold" {
 						holds = true
 					}
 				}
@@ -124,7 +97,7 @@ func TestAllDefinedHoldReasonsAreClassified(t *testing.T) {
 							continue
 						}
 						if key.Name == "Action" {
-							if isActionHold(entry.Value) {
+							if id, ok := entry.Value.(*ast.Ident); ok && id.Name == "ActionHold" {
 								holds = true
 							}
 						}

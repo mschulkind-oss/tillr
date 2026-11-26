@@ -1,17 +1,16 @@
-package storelog
+package drain
 
 import (
 	"context"
 	"encoding/json"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 // LoopPassKind records that the drain loop completed a pass, throttled to at most once per
-// LoopPassInterval per loop process so tillr-watch can tell a silent stopped loop from an
+// loopPassInterval per loop process so tillr-watch can tell a silent stopped loop from an
 // idle running one without writing an event on every empty pass.
 const LoopPassKind = "drain.loop-pass"
 
@@ -20,7 +19,7 @@ const LoopPassKind = "drain.loop-pass"
 const LoopPassRemainderPhase = "other"
 
 func init() {
-	if err := event.Register(LoopPassKind, drainmodel.Utility); err != nil {
+	if err := event.Register(LoopPassKind, Utility); err != nil {
 		panic(err)
 	}
 }
@@ -32,30 +31,27 @@ type LoopPassFact struct {
 	PhasesMS  map[string]int64 `json:"phases_ms"`
 }
 
-// LoopPassInterval is the minimum spacing between recorded LoopPassKind events.
-const LoopPassInterval = time.Minute
+const loopPassInterval = time.Minute
 
-// LoopPassTimer records wall time for one drain loop pass and each of its named phases.
-type LoopPassTimer struct {
+// loopPassTimer records wall time for one drain loop pass and each of its named phases.
+type loopPassTimer struct {
 	now    func() time.Time
 	start  time.Time
 	phases map[string]time.Duration
 }
 
-// NewLoopPassTimer constructs a LoopPassTimer anchored at now().
-func NewLoopPassTimer(now func() time.Time) *LoopPassTimer {
+func newLoopPassTimer(now func() time.Time) *loopPassTimer {
 	if now == nil {
 		now = time.Now
 	}
-	return &LoopPassTimer{
+	return &loopPassTimer{
 		now:    now,
 		start:  now(),
 		phases: map[string]time.Duration{},
 	}
 }
 
-// StartPhase begins timing a named phase and returns a closure that ends it.
-func (t *LoopPassTimer) StartPhase(name string) func() {
+func (t *loopPassTimer) startPhase(name string) func() {
 	if t == nil {
 		return func() {}
 	}
@@ -69,10 +65,10 @@ func (t *LoopPassTimer) StartPhase(name string) func() {
 	}
 }
 
-// Finish returns the pass completion timestamp, total wall time in milliseconds, and
+// finish returns the pass completion timestamp, total wall time in milliseconds, and
 // per-phase wall times in milliseconds, including LoopPassRemainderPhase so the entries
 // in phasesMS sum to wallMS.
-func (t *LoopPassTimer) Finish() (at time.Time, wallMS int64, phasesMS map[string]int64) {
+func (t *loopPassTimer) finish() (at time.Time, wallMS int64, phasesMS map[string]int64) {
 	if t == nil {
 		return time.Now().UTC(), 0, map[string]int64{LoopPassRemainderPhase: 0}
 	}
@@ -101,45 +97,42 @@ func (t *LoopPassTimer) Finish() (at time.Time, wallMS int64, phasesMS map[strin
 	return end.UTC(), wallMS, phasesMS
 }
 
-// LoopPassParams holds the inputs for RecordLoopPass.
-type LoopPassParams struct {
-	StorePath      string
-	SessionID      string
-	Initialized    bool
-	SessionOptions []store.OpenOption
-	LastLoopPassAt time.Time
-	Now            func() time.Time
-	Timer          *LoopPassTimer
-	BeforeWrite    func()
-	Reportf        func(string, ...any)
+func (l *Loop) startPassPhase(name string) func() {
+	return l.passTimer.startPhase(name)
 }
 
-// RecordLoopPass appends LoopPassKind after a pass when none has been recorded yet or
-// at least LoopPassInterval has elapsed since LastLoopPassAt. A failed write is logged
-// and never stops or fails the pass.
-func RecordLoopPass(ctx context.Context, p LoopPassParams) (time.Time, bool) {
+func (l *Loop) timePassPhase(name string, fn func() error) error {
+	end := l.startPassPhase(name)
+	err := fn()
+	end()
+	return err
+}
+
+// recordLoopPass appends LoopPassKind after a pass when this loop has recorded none yet or
+// at least loopPassInterval has elapsed since the last recorded pass. A failed write is
+// logged and never stops or fails the pass.
+func (l *Loop) recordLoopPass(ctx context.Context, pt *loopPassTimer) {
 	if ctx.Err() != nil {
-		return time.Time{}, false
+		return
 	}
 	var (
 		at       time.Time
 		wallMS   int64
 		phasesMS map[string]int64
 	)
-	if p.Timer != nil {
-		at, wallMS, phasesMS = p.Timer.Finish()
+	if pt != nil {
+		at, wallMS, phasesMS = pt.finish()
 	} else {
-		now := p.Now
-		if now == nil {
-			now = time.Now
-		}
-		at = now().UTC()
+		at = l.cfg.Now().UTC()
 		phasesMS = map[string]int64{LoopPassRemainderPhase: 0}
 	}
-	if !p.LastLoopPassAt.IsZero() && at.Sub(p.LastLoopPassAt) < LoopPassInterval {
-		return time.Time{}, false
+	if !l.lastLoopPassAt.IsZero() && at.Sub(l.lastLoopPassAt) < loopPassInterval {
+		return
 	}
-	id := p.SessionID
+	l.mu.Lock()
+	id := l.sessionID
+	initialized := l.sessionInitialized
+	l.mu.Unlock()
 	if id == "" {
 		id = "loop"
 	}
@@ -149,20 +142,20 @@ func RecordLoopPass(ctx context.Context, p LoopPassParams) (time.Time, bool) {
 		PhasesMS:  phasesMS,
 	})
 	if err != nil {
-		if ctx.Err() == nil && p.Reportf != nil {
-			p.Reportf("loop: the loop pass was not recorded: %v\n", err)
+		if ctx.Err() == nil {
+			l.reportf("loop: the loop pass was not recorded: %v\n", err)
 		}
-		return time.Time{}, false
+		return
 	}
-	if p.BeforeWrite != nil {
-		p.BeforeWrite()
+	if l.beforeRecordLoopPass != nil {
+		l.beforeRecordLoopPass()
 	}
-	s, err := store.Open(ctx, p.StorePath, !p.Initialized, p.SessionOptions...)
+	s, err := store.Open(ctx, l.cfg.Store, !initialized, l.sessionOptions...)
 	if err != nil {
-		if ctx.Err() == nil && p.Reportf != nil {
-			p.Reportf("loop: the loop pass was not recorded: %v\n", err)
+		if ctx.Err() == nil {
+			l.reportf("loop: the loop pass was not recorded: %v\n", err)
 		}
-		return time.Time{}, false
+		return
 	}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		_, err := tx.Append(event.Event{
@@ -178,10 +171,10 @@ func RecordLoopPass(ctx context.Context, p LoopPassParams) (time.Time, bool) {
 		err = closeErr
 	}
 	if err != nil {
-		if ctx.Err() == nil && p.Reportf != nil {
-			p.Reportf("loop: the loop pass was not recorded: %v\n", err)
+		if ctx.Err() == nil {
+			l.reportf("loop: the loop pass was not recorded: %v\n", err)
 		}
-		return time.Time{}, false
+		return
 	}
-	return at, true
+	l.lastLoopPassAt = at
 }

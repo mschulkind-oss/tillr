@@ -15,6 +15,18 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+// A backend window is a reported refusal lasting until its UTC reset or a
+// successful operator probe. It is store state, not process state: restarting a
+// loop must not spend another refused start. Times are Unix milliseconds.
+const backendWindowDDL = `CREATE TABLE IF NOT EXISTS backend_windows (
+ backend TEXT PRIMARY KEY,
+ kind TEXT NOT NULL,
+ fraction REAL NOT NULL,
+ status TEXT NOT NULL,
+ reset_at INTEGER NOT NULL,
+ run_id TEXT NOT NULL
+);`
+
 // Only the pinned report's header supplies window facts. In particular the footer
 // tail can exclude the header, and the model's body cannot invent a window.
 func refusedWindow(rec run.Record) (kind string, fraction float64, reset time.Time, ok bool) {

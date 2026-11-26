@@ -465,7 +465,7 @@ func TestClassificationScanDrainSites(t *testing.T) {
 	}
 
 	seen := map[drainSiteRef]bool{}
-	for _, pkgDir := range []string{"drain", "internal", "heavy", "workflow", "remotesync", "fixer", "heavyrun"} {
+	for _, pkgDir := range []string{"drain", "heavy", "workflow", "remotesync", "fixer", "heavyrun"} {
 		rootDir := filepath.Join(moduleRoot, pkgDir)
 		err := filepath.WalkDir(rootDir, func(fullPath string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {

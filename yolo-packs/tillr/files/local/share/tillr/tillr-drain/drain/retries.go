@@ -73,6 +73,16 @@ type retryAckPayload struct {
 // still the item's latest terminal run, so the retry run's own row is what retires it.
 // That keeps `plan` a pure function of the store: a plan never writes the authorization
 // away, and two plans over one store answer the same decisions.
+const RetryDDL = `
+CREATE TABLE IF NOT EXISTS retries (
+  retry_id          TEXT PRIMARY KEY,
+  item_id           TEXT NOT NULL,
+  supersedes_run_id TEXT NOT NULL,
+  requested_by      TEXT NOT NULL,
+  reason            TEXT NOT NULL,
+  requested_at      INTEGER NOT NULL
+);
+`
 
 // Retry is one recorded authorization: the `drain.retry` payload and the `retries` row,
 // field for field.

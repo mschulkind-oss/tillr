@@ -477,6 +477,15 @@ func (l *Loop) retainedWorkerSession(ctx context.Context, runID string) (*Worker
 	return nil, nil
 }
 
+func init() {
+	if err := store.RegisterDDL("drain-worker-returns", `CREATE TABLE IF NOT EXISTS node_reused (
+ item_id TEXT NOT NULL, attempt INTEGER NOT NULL, node_id TEXT NOT NULL,
+ source_attempt INTEGER NOT NULL, PRIMARY KEY(item_id,attempt,node_id)
+ );`); err != nil {
+		panic(err)
+	}
+}
+
 func reusedNodesExist(r *store.Reader) (bool, error) {
 	var exists bool
 	err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_reused')`).Scan(&exists)

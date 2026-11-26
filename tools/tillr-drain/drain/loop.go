@@ -1217,7 +1217,7 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 		}
 		pt := newLoopPassTimer(l.cfg.Now)
 		l.passTimer = pt
-		endCPU := pt.StartPhase("record_process_cpu")
+		endCPU := pt.startPhase("record_process_cpu")
 		l.recordProcessCPUIfDue(ctx)
 		endCPU()
 		l.mu.Lock()

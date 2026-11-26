@@ -22,7 +22,7 @@ func (s *faultSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, error)
 		return GateOutcome{}, Internalf("gate could not bind its candidate")
 	}
 	if c.ItemID == "item-a" && s.fault == "gate-record" {
-		return GateOutcome{}, &gateJudgmentRecordError{Err: Externalf("could not read the gate record")}
+		return GateOutcome{}, &gateJudgmentRecordError{Externalf("could not read the gate record")}
 	}
 	if c.ItemID == "item-a" && s.fault == "gate" {
 		// The gate STEP failed: the drain could not run the gate or record its answer.
@@ -105,7 +105,7 @@ func TestItemFaultHoldsOnlyItsItem(t *testing.T) {
 						runGit(t, path, "commit", "--allow-empty", "-qm", "unrecorded head")
 					}
 					if fault == "boundary" {
-						if err := l.recordBoundaryCheck(context.Background(), BoundaryScopeRun, "pass", []runRef{{RunID: c.RunID, ItemID: c.ItemID, LaneID: c.LaneID}}, []string{path}, []Violation{{Kind: "scope", Detail: "escaped.txt"}}, l.cfg.Now()); err != nil {
+						if err := l.recordBoundaryCheck(context.Background(), BoundaryScopeRun, "pass", []runRef{{c.RunID, c.ItemID, c.LaneID}}, []string{path}, []Violation{{Kind: "scope", Detail: "escaped.txt"}}, l.cfg.Now()); err != nil {
 							t.Fatal(err)
 						}
 					}

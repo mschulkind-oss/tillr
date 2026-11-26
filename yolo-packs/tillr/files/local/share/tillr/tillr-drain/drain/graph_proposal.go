@@ -20,6 +20,31 @@ import (
 
 const graphChangedKind = "drain.graph-changed"
 
+// Each proposing run has one immutable decision. Refusals retain the unchanged
+// graph too; replay reads the recorded decision instead of applying it twice.
+const graphRevisionDDL = `
+CREATE TABLE IF NOT EXISTS graph_revisions (
+ revision_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ item_id TEXT NOT NULL,
+ attempt INTEGER NOT NULL,
+ proposing_run TEXT NOT NULL UNIQUE,
+ proposing_node TEXT NOT NULL,
+ target TEXT NOT NULL,
+ workflow TEXT NOT NULL,
+ rule TEXT NOT NULL,
+ detail TEXT NOT NULL,
+ before_graph TEXT NOT NULL,
+ after_graph TEXT NOT NULL,
+ before_nodes INTEGER NOT NULL,
+ after_nodes INTEGER NOT NULL,
+ recorded_at INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS graph_revisions_no_update BEFORE UPDATE ON graph_revisions
+BEGIN SELECT RAISE(ABORT,'graph_revisions is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS graph_revisions_no_delete BEFORE DELETE ON graph_revisions
+BEGIN SELECT RAISE(ABORT,'graph_revisions is append-only'); END;
+`
+
 type graphProposal struct {
 	Target   string         `json:"target"`
 	Workflow string         `json:"workflow"`

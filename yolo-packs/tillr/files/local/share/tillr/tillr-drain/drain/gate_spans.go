@@ -37,6 +37,25 @@ const GateChecksFile = "gate.checks.jsonl"
 // hash(COALESCE(tick_id, run_id)). An authorized rerun uses the verdict event's
 // gate_execution_id (verdict_id plus its transition epoch) in the span and parent
 // hashes so a deterministic verdict id cannot overwrite the earlier observation.
+const GateSpanDDL = `
+CREATE TABLE IF NOT EXISTS gate_spans (
+  span_id          TEXT PRIMARY KEY,
+  trace_id         TEXT NOT NULL,
+  parent_span_id   TEXT NOT NULL,
+  verdict_id       TEXT NOT NULL,
+  run_id           TEXT NOT NULL,
+  tick_id          TEXT NOT NULL,
+  check_id         TEXT NOT NULL,
+  kind             TEXT NOT NULL,
+  label            TEXT NOT NULL,
+  status           TEXT NOT NULL,
+  start_unix_nano  INTEGER NOT NULL,
+  end_unix_nano    INTEGER NOT NULL,
+  waited_ms_json   TEXT NOT NULL,
+  attributes_json  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS gate_spans_run ON gate_spans (run_id);
+`
 
 // The three states the spans file can be in when the verdict is recorded. A missing or
 // unparseable file is not a gate failure: the verdict is the judgment, and the spans are

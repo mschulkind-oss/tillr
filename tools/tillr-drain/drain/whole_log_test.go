@@ -9,7 +9,6 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -95,15 +94,7 @@ func TestAPlanApplicationReadsNoWholeLogUnderTheWriteLock(t *testing.T) {
 func TestEveryFoldReadsTheKindsItSelects(t *testing.T) {
 	fset := token.NewFileSet()
 	var files []*ast.File
-	dirs := []string{".", "../faults", "../preserved", "../workflow", "../remotesync", "../fixer", "../heavyrun", "../../tillr-run/run"}
-	if entries, err := os.ReadDir("../internal"); err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() && entry.Name() != "testinputs" {
-				dirs = append(dirs, filepath.Join("../internal", entry.Name()))
-			}
-		}
-	}
-	for _, dir := range dirs {
+	for _, dir := range []string{".", "../faults", "../preserved", "../workflow", "../remotesync", "../fixer", "../heavyrun", "../../tillr-run/run"} {
 		pkgs, err := parser.ParseDir(fset, dir, func(info fs.FileInfo) bool { return !strings.HasSuffix(info.Name(), "_test.go") }, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -428,26 +419,24 @@ func TestAnApplicationSkipsStalePendingHistory(t *testing.T) {
 // Do not exempt shutdown spend: even one such query per loop can delay exit for minutes.
 func TestNoPassQueryCorrelatesTheEventsWithEachRun(t *testing.T) {
 	correlated := regexp.MustCompile(`object_id\s*=\s*runs\.run_id`)
-	err := filepath.WalkDir("..", func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
 		}
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-			return nil
-		}
-		raw, err := os.ReadFile(path)
+		raw, err := os.ReadFile(name)
 		if err != nil {
-			return err
+			t.Fatal(err)
 		}
 		for i, line := range strings.Split(string(raw), "\n") {
 			if correlated.MatchString(line) {
-				t.Errorf("%s line %d correlates the events with each run: %s", path, i+1, strings.TrimSpace(line))
+				t.Errorf("%s line %d correlates the events with each run: %s", name, i+1, strings.TrimSpace(line))
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 

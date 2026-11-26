@@ -3287,6 +3287,17 @@ func readItemStateHistory(r *store.Reader, history *runHistory) error {
 	return rows.Err()
 }
 
+// readFailure classifies a failed read. A store that does not carry item's or run's
+// tables is incompatible with this binary rather than a bug in it: exit 3 sends the
+// caller to the store it named, and exit 5 would send it looking for a defect that is
+// not there.
+func readFailure(err error) error {
+	if strings.Contains(err.Error(), "no such table") {
+		return Incompatiblef("%v", err)
+	}
+	return Internalf("%v", err)
+}
+
 // publishedForOthers answers the ids of the questions published in the item's design
 // document for other items' open conflicts. Each holds only the item it was published for.
 func (p *planner) publishedForOthers(row itemRow) []string {
