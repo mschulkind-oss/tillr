@@ -1639,3 +1639,266 @@ func TestChangeGoModuleAdditionAndRemovalSelectInventoryChecksInCandidateGate(t 
 		t.Fatalf("markers on remove=%q want=%q err=%v", string(gotBytes), wantMarkers, err)
 	}
 }
+
+func writeFixtureFile(t *testing.T, repo, relPath, content string) {
+	t.Helper()
+	full := filepath.Join(repo, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func validWatchRecordDoc(dependsOnYAML string) string {
+	return "---\ntitle: \"Watch decision\"\nstatus: draft\nstage: DECIDED\ndepends-on:\n" + dependsOnYAML + "\n---\n\n# Watch decision\n"
+}
+
+func TestDocumentsWatchDecisionRecordClause1Anchors(t *testing.T) {
+	f := newChangeFixture(t, true)
+	mainPath := "docs/design/tillr-watch.md"
+
+	// Initial commit with docs/design/tillr-watch.md containing D-TW1.
+	writeFixtureFile(t, f.repo, mainPath, "# Watch\n\n<a id=\"D-TW1\"></a>D-TW1\n")
+	base := f.commit()
+
+	// Refusal: adding a brand-new docs/design/tillr-watch.md with a D-TW anchor (A status) fails clause 1.
+	code, out, errOut := f.check("documents", f.base, base)
+	if code != 1 {
+		t.Fatalf("add main with D-TW1: code=%d out=%q err=%q", code, out, errOut)
+	}
+	lines := splitLines(out)
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], mainPath+": ") || !strings.Contains(lines[0], "d-tw1") || !strings.Contains(lines[0], "clause 1") || !strings.Contains(lines[0], "docs/design/tillr-watch/<slug>.md") || !strings.Contains(lines[0], "docs/design/tillr-watch/decision-record-files.md") {
+		t.Fatalf("unexpected clause 1 add finding: %q", out)
+	}
+
+	// Refusal: HTML id/name (double and single quoted), ATX heading slug, and Vantage question id
+	// each produce one finding line in sorted anchor order.
+	writeFixtureFile(t, f.repo, mainPath, strings.Join([]string{
+		"# Watch",
+		"",
+		`<a id="D-TW1"></a>D-TW1`,
+		`<a id="D-TW99"></a>D-TW99`,
+		`<a name='D-TW100'></a>D-TW100`,
+		`## D-TW101: New heading`,
+		`<!-- vantage: question id=D-TW102 -->`,
+		"",
+	}, "\n"))
+	f.commit()
+	code, out, errOut = f.check("documents", base, "")
+	if code != 1 {
+		t.Fatalf("clause 1 multi-anchor: code=%d out=%q err=%q", code, out, errOut)
+	}
+	lines = splitLines(out)
+	wantAnchors := []string{"d-tw100", "d-tw101-new-heading", "d-tw102", "d-tw99"}
+	if len(lines) != len(wantAnchors) {
+		t.Fatalf("clause 1 lines=%d want %d; out=%q", len(lines), len(wantAnchors), out)
+	}
+	for i, want := range wantAnchors {
+		if !strings.HasPrefix(lines[i], mainPath+": ") || !strings.Contains(lines[i], want) || !strings.Contains(lines[i], "clause 1") || !strings.Contains(lines[i], "docs/design/tillr-watch/decision-record-files.md") {
+			t.Fatalf("line[%d]=%q want anchor %q", i, lines[i], want)
+		}
+	}
+	if len(f.renders()) != 0 {
+		t.Fatalf("clause 1 refusal should not invoke vantage-check; renders=%v", f.renders())
+	}
+
+	// Pass: editing prose, deleting existing D-TW1, adding OQ-TW9, and writing D-TW inside fenced code blocks.
+	writeFixtureFile(t, f.repo, mainPath, strings.Join([]string{
+		"# Watch",
+		"",
+		"Updated prose without D-TW1.",
+		`<a id="OQ-TW9"></a>OQ-TW9`,
+		"```markdown",
+		"## D-TW999: Inside backtick fence",
+		`<a id="D-TW998"></a>`,
+		"```",
+		"~~~markdown",
+		"<!-- vantage: question id=D-TW997 -->",
+		"~~~",
+		"",
+	}, "\n"))
+	f.commit()
+	code, out, errOut = f.check("documents", base, "")
+	if code != 0 {
+		t.Fatalf("clause 1 pass cases: code=%d out=%q err=%q", code, out, errOut)
+	}
+}
+
+func TestDocumentsWatchDecisionRecordClause2MixedEdits(t *testing.T) {
+	f := newChangeFixture(t, true)
+	mainPath := "docs/design/tillr-watch.md"
+	existingRec := "docs/design/tillr-watch/existing.md"
+	writeFixtureFile(t, f.repo, mainPath, "# Watch\n")
+	writeFixtureFile(t, f.repo, existingRec, validWatchRecordDoc("  - ../tillr-watch.md"))
+	base := f.commit()
+
+	// Refusal: add new record while modifying docs/design/tillr-watch.md.
+	writeFixtureFile(t, f.repo, mainPath, "# Watch\n\nEdited.\n")
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/new-rule.md", validWatchRecordDoc("  - ../tillr-watch.md"))
+	f.commit()
+	code, out, errOut := f.check("documents", base, "")
+	if code != 1 {
+		t.Fatalf("mixed add + modify main: code=%d out=%q err=%q", code, out, errOut)
+	}
+	lines := splitLines(out)
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], mainPath+": ") || !strings.Contains(lines[0], "docs/design/tillr-watch/new-rule.md") || !strings.Contains(lines[0], "clause 2") || !strings.Contains(lines[0], "docs/design/tillr-watch/decision-record-files.md") {
+		t.Fatalf("unexpected clause 2 main-modify finding: %q", out)
+	}
+
+	// Refusal: add new record while deleting docs/design/tillr-watch.md and modifying existing record.
+	f.git("reset", "--hard", "-q", base)
+	f.git("rm", "-q", mainPath)
+	writeFixtureFile(t, f.repo, existingRec, validWatchRecordDoc("  - ../tillr-watch.md")+"\nEdited.\n")
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/new-rule.md", validWatchRecordDoc("  - ../tillr-watch.md"))
+	f.commit()
+	code, out, errOut = f.check("documents", base, "")
+	if code != 1 {
+		t.Fatalf("mixed add + delete main + modify existing: code=%d out=%q err=%q", code, out, errOut)
+	}
+	lines = splitLines(out)
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], mainPath+": ") || !strings.HasPrefix(lines[1], existingRec+": ") {
+		t.Fatalf("unexpected clause 2 multi-path findings: %q", out)
+	}
+
+	// Refusal: git mv of existing record inside docs/design/tillr-watch/ caught via --no-renames as A + D.
+	f.git("reset", "--hard", "-q", base)
+	f.git("mv", existingRec, "docs/design/tillr-watch/renamed.md")
+	f.commit()
+	code, out, errOut = f.check("documents", base, "")
+	if code != 1 {
+		t.Fatalf("git mv existing record: code=%d out=%q err=%q", code, out, errOut)
+	}
+	lines = splitLines(out)
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], existingRec+": ") || !strings.Contains(lines[0], "docs/design/tillr-watch/renamed.md") || !strings.Contains(lines[0], "clause 2") {
+		t.Fatalf("unexpected clause 2 git-mv finding: %q", out)
+	}
+
+	// Pass: adding a valid record alone + unrelated file outside docs/design/tillr-watch*.
+	f.git("reset", "--hard", "-q", base)
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/solo.md", validWatchRecordDoc("  - ../tillr-watch.md"))
+	writeFixtureFile(t, f.repo, "README.md", "# Fixture\n\nUnrelated.\n")
+	f.commit()
+	if code, out, errOut := f.check("documents", base, ""); code != 0 {
+		t.Fatalf("solo add + unrelated: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// Pass: modifying main and deleting existing record with zero added record files.
+	f.git("reset", "--hard", "-q", base)
+	writeFixtureFile(t, f.repo, mainPath, "# Watch\n\nCleanup.\n")
+	f.git("rm", "-q", existingRec)
+	f.commit()
+	if code, out, errOut := f.check("documents", base, ""); code != 0 {
+		t.Fatalf("modify/delete with zero added records: code=%d out=%q err=%q", code, out, errOut)
+	}
+}
+
+func TestDocumentsWatchDecisionRecordClause3DependsOn(t *testing.T) {
+	f := newChangeFixture(t, true)
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch.md", "# Watch\n")
+	base := f.commit()
+
+	// Refusal: no frontmatter, wrong depends-on, and wrong relative depth in nested subdirectory.
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/a-no-fm.md", "# No frontmatter\n")
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/b-wrong-dep.md", "---\ntitle: \"Wrong\"\ndepends-on:\n  - ../other.md\n---\n\n# Wrong\n")
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/sub/c-bad-rel.md", "---\ntitle: \"Nested\"\ndepends-on:\n  - ../tillr-watch.md\n---\n\n# Nested\n")
+	f.commit()
+	code, out, errOut := f.check("documents", base, "")
+	if code != 1 {
+		t.Fatalf("clause 3 refusals: code=%d out=%q err=%q", code, out, errOut)
+	}
+	lines := splitLines(out)
+	wantPaths := []string{
+		"docs/design/tillr-watch/a-no-fm.md",
+		"docs/design/tillr-watch/b-wrong-dep.md",
+		"docs/design/tillr-watch/sub/c-bad-rel.md",
+	}
+	if len(lines) != len(wantPaths) {
+		t.Fatalf("clause 3 lines=%d want %d; out=%q", len(lines), len(wantPaths), out)
+	}
+	for i, wp := range wantPaths {
+		if !strings.HasPrefix(lines[i], wp+": ") || !strings.Contains(lines[i], "clause 3") || !strings.Contains(lines[i], "depends-on") || !strings.Contains(lines[i], "docs/design/tillr-watch/decision-record-files.md") {
+			t.Fatalf("line[%d]=%q want path %q", i, lines[i], wp)
+		}
+	}
+
+	// Pass: scalar, inline-list (with fragment & comment), block-list (with comment), and nested ../../tillr-watch.md.
+	f.git("reset", "--hard", "-q", base)
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/scalar.md", "---\ntitle: \"Scalar\"\ndepends-on: ../tillr-watch.md # main\n---\n\n# Scalar\n")
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/inline.md", "---\ntitle: \"Inline\"\ndepends-on: [\"../other.md\", '../tillr-watch.md#D-TW5'] # list\n---\n\n# Inline\n")
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/block.md", "---\ntitle: \"Block\"\ndepends-on:\n  - ../tillr-watch.md#section-1 # comment\n---\n\n# Block\n")
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/sub/nested.md", "---\ntitle: \"Nested\"\ndepends-on:\n  - ../../tillr-watch.md\n---\n\n# Nested\n")
+	f.commit()
+	if code, out, errOut := f.check("documents", base, ""); code != 0 {
+		t.Fatalf("clause 3 valid forms: code=%d out=%q err=%q", code, out, errOut)
+	}
+}
+
+func TestDocumentsWatchDecisionRecordMultiViolationDegenerateAndCacheProof(t *testing.T) {
+	f := newChangeFixture(t, true)
+	mainPath := "docs/design/tillr-watch.md"
+	existingRec := "docs/design/tillr-watch/existing.md"
+	writeFixtureFile(t, f.repo, mainPath, "# Watch\n")
+	writeFixtureFile(t, f.repo, existingRec, validWatchRecordDoc("  - ../tillr-watch.md"))
+	base := f.commit()
+
+	// Degenerate range: base == HEAD passes.
+	if code, out, errOut := f.check("documents", base, base); code != 0 {
+		t.Fatalf("base==HEAD: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// Unrelated change passes without watch findings.
+	writeFixtureFile(t, f.repo, "README.md", "# Fixture\n\nOther.\n")
+	unrelated := f.commit()
+	if code, out, errOut := f.check("documents", base, unrelated); code != 0 {
+		t.Fatalf("unrelated: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// Multi-violation without short-circuiting: Clause 1 + Clause 2 (2 files) + Clause 3 = 4 lines.
+	writeFixtureFile(t, f.repo, mainPath, "# Watch\n\n<a id=\"D-TW88\"></a>D-TW88\n")
+	writeFixtureFile(t, f.repo, existingRec, validWatchRecordDoc("  - ../tillr-watch.md")+"\nTouched.\n")
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/bad-new.md", "# Missing frontmatter\n")
+	violatingHead := f.commit()
+	_ = os.Remove(f.renderLog)
+	code, out, errOut := f.check("documents", unrelated, violatingHead)
+	if code != 1 {
+		t.Fatalf("multi-violation: code=%d out=%q err=%q", code, out, errOut)
+	}
+	lines := splitLines(out)
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 non-short-circuited findings, got %d: %q", len(lines), out)
+	}
+	if !strings.Contains(lines[0], "clause 1") || !strings.Contains(lines[1], "clause 2") || !strings.Contains(lines[2], "clause 2") || !strings.Contains(lines[3], "clause 3") {
+		t.Fatalf("unexpected multi-violation ordering/clauses: %q", out)
+	}
+	if len(f.renders()) != 0 {
+		t.Fatalf("multi-violation refusal must not call vantage-check; renders=%v", f.renders())
+	}
+
+	// Cache-proof refusal: warm remembered vantage-check passes for the exact violating blobs
+	// by checking a range where those blobs are already at base (zero watch diff), then re-check
+	// the violating range and confirm it still exits 1 without rendering.
+	writeFixtureFile(t, f.repo, "README.md", "# Fixture\n\nWarm cache.\n")
+	warmHead := f.commit()
+	// Edit mainPath prose only (preserving D-TW88) and bad-new.md in a commit from violatingHead
+	// so judgeDocuments runs and remembers passes for those blobs.
+	writeFixtureFile(t, f.repo, mainPath, "# Watch\n\n<a id=\"D-TW88\"></a>D-TW88\n\nCached.\n")
+	writeFixtureFile(t, f.repo, "docs/design/tillr-watch/bad-new.md", "# Missing frontmatter\n\nCached.\n")
+	cachedHead := f.commit()
+	if code, out, errOut := f.check("documents", warmHead, cachedHead); code != 0 {
+		t.Fatalf("warm cache run: code=%d out=%q err=%q", code, out, errOut)
+	}
+	_ = os.Remove(f.renderLog)
+	// Now check unrelated..cachedHead: both blobs have remembered passes, yet all 3 clauses still fail.
+	code, out, errOut = f.check("documents", unrelated, cachedHead)
+	if code != 1 {
+		t.Fatalf("cache-proof refusal: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if len(splitLines(out)) != 4 {
+		t.Fatalf("cache-proof findings=%q", out)
+	}
+	if len(f.renders()) != 0 {
+		t.Fatalf("cache-proof refusal must not call vantage-check; renders=%v", f.renders())
+	}
+}

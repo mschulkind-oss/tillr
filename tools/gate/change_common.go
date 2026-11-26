@@ -23,17 +23,23 @@ import (
 )
 
 const (
-	tsSizeWarnLines   = 2000
-	tsSizeRefuseLines = 3000
-	unlandedMarker    = "[unlanded]"
-	documentMemoryFmt = "documents-1"
+	tsSizeWarnLines         = 2000
+	tsSizeRefuseLines       = 3000
+	unlandedMarker          = "[unlanded]"
+	documentMemoryFmt       = "documents-1"
+	watchMainDoc            = "docs/design/tillr-watch.md"
+	watchRecordsPrefix      = "docs/design/tillr-watch/"
+	watchDecisionRecordsDoc = "docs/design/tillr-watch/decision-record-files.md"
 )
 
 var (
-	upstreamRefRe = regexp.MustCompile(`^refs/(?:heads/patch/|published/patch/|remotes/[^/]+/patch/|remotes/upstream/|tags/)`)
-	hunkStartRe   = regexp.MustCompile(`\+(\d+)`)
-	wordRe        = regexp.MustCompile(`[^\s()<>\[\]{}"'` + "`" + `|,*]+`)
-	linkPatterns  = []*regexp.Regexp{
+	upstreamRefRe   = regexp.MustCompile(`^refs/(?:heads/patch/|published/patch/|remotes/[^/]+/patch/|remotes/upstream/|tags/)`)
+	hunkStartRe     = regexp.MustCompile(`\+(\d+)`)
+	wordRe          = regexp.MustCompile(`[^\s()<>\[\]{}"'` + "`" + `|,*]+`)
+	watchHTMLTagRe  = regexp.MustCompile(`(?i)<a\s+[^>]*>`)
+	watchHTMLAttrRe = regexp.MustCompile(`(?i)\s(?:id|name)\s*=\s*(?:"([^"]+)"|'([^']+)')`)
+	watchVantageQRe = regexp.MustCompile(`<!--\s*vantage:\s*question\s+id=([^\s]+)`)
+	linkPatterns    = []*regexp.Regexp{
 		regexp.MustCompile(`\]\(\s*<([^>\n]*)>`),
 		regexp.MustCompile(`\]\(\s*([^)\s]+)`),
 		regexp.MustCompile(`(?m)^ {0,3}\[[^\]\n]+\]:\s*<?([^\s>]+)`),
@@ -1064,6 +1070,197 @@ func judgeDocumentSet(root, head string, documents []string, keys map[string]str
 	return verdict, nil
 }
 
+func watchDTWAnchors(text string) map[string]bool {
+	anchors := make(map[string]bool)
+	inFence := false
+	var fenceChar byte
+	for _, line := range splitLines(text) {
+		trimmed := strings.TrimLeft(line, " \t\v\f\r")
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			if !inFence {
+				inFence = true
+				fenceChar = trimmed[0]
+			} else if trimmed[0] == fenceChar {
+				inFence = false
+			}
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if match := markdownHeadingRe.FindStringSubmatch(line); match != nil {
+			slug := markdownSlug(match[1])
+			if strings.HasPrefix(slug, "d-tw") {
+				anchors[slug] = true
+			}
+		}
+		for _, tag := range watchHTMLTagRe.FindAllString(line, -1) {
+			for _, m := range watchHTMLAttrRe.FindAllStringSubmatch(tag, -1) {
+				val := m[1]
+				if val == "" {
+					val = m[2]
+				}
+				lower := strings.ToLower(strings.TrimSpace(val))
+				if strings.HasPrefix(lower, "d-tw") {
+					anchors[lower] = true
+				}
+			}
+		}
+		for _, m := range watchVantageQRe.FindAllStringSubmatch(line, -1) {
+			val := strings.TrimSuffix(m[1], "-->")
+			val = strings.Trim(val, "\"'")
+			lower := strings.ToLower(strings.TrimSpace(val))
+			if strings.HasPrefix(lower, "d-tw") {
+				anchors[lower] = true
+			}
+		}
+	}
+	return anchors
+}
+
+func watchRecordDependsOnMain(docPath, text string) bool {
+	entries := frontmatterEntries(text)
+	if len(entries) == 0 {
+		return false
+	}
+	docDir := path.Dir(docPath)
+	checkTarget := func(raw string) bool {
+		target, _, _ := strings.Cut(strings.TrimSpace(raw), "#")
+		target = strings.TrimSpace(target)
+		if target == "" || strings.HasPrefix(target, "/") || strings.Contains(target, "://") {
+			return false
+		}
+		return path.Clean(path.Join(docDir, target)) == watchMainDoc
+	}
+	for _, c := range frontmatterCitations(entries) {
+		if c.field != "depends-on" {
+			continue
+		}
+		val := strings.TrimSpace(c.value)
+		if strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]") {
+			for _, part := range strings.Split(val[1:len(val)-1], ",") {
+				candidate := strings.Trim(strings.TrimSpace(part), "\"'")
+				if checkTarget(candidate) {
+					return true
+				}
+			}
+			continue
+		}
+		if checkTarget(val) {
+			return true
+		}
+	}
+	return false
+}
+
+func watchDecisionRecordFindings(root, base, head string) ([]string, error) {
+	diffOut, err := gitRun(root, true, "diff", "--name-status", "--no-renames", "-z", base, head)
+	if err != nil {
+		return nil, err
+	}
+	var mainStatus string
+	var addedRecords []string
+	var modifiedOrDeletedExisting []string
+
+	fields := strings.Split(diffOut, "\x00")
+	for i := 0; i+1 < len(fields); i += 2 {
+		status, p := fields[i], fields[i+1]
+		if status == "" || p == "" || !strings.HasSuffix(p, ".md") {
+			continue
+		}
+		excluded := false
+		for _, part := range strings.Split(p, "/") {
+			if part == ".forks" || part == "node_modules" || part == ".yolo" {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+		isMain := p == watchMainDoc
+		isRecord := strings.HasPrefix(p, watchRecordsPrefix)
+		if !isMain && !isRecord {
+			continue
+		}
+		if isMain {
+			mainStatus = status
+		}
+		if isRecord && status == "A" {
+			addedRecords = append(addedRecords, p)
+		}
+		if status == "M" || status == "T" || status == "D" {
+			modifiedOrDeletedExisting = append(modifiedOrDeletedExisting, p)
+		}
+	}
+
+	if mainStatus != "A" && mainStatus != "M" && mainStatus != "T" && len(addedRecords) == 0 {
+		return nil, nil
+	}
+
+	sort.Strings(addedRecords)
+	sort.Strings(modifiedOrDeletedExisting)
+
+	var findings []string
+
+	// Clause 1: new D-TW anchor introduced in docs/design/tillr-watch.md.
+	if mainStatus == "A" || mainStatus == "M" || mainStatus == "T" {
+		headText, err := gitRun(root, true, "show", head+":"+watchMainDoc)
+		if err != nil {
+			return nil, err
+		}
+		headAnchors := watchDTWAnchors(headText)
+		var baseAnchors map[string]bool
+		if mainStatus != "A" {
+			baseText, err := gitRun(root, true, "show", base+":"+watchMainDoc)
+			if err != nil {
+				return nil, err
+			}
+			baseAnchors = watchDTWAnchors(baseText)
+		}
+		var newAnchors []string
+		for anchor := range headAnchors {
+			if !baseAnchors[anchor] {
+				newAnchors = append(newAnchors, anchor)
+			}
+		}
+		sort.Strings(newAnchors)
+		for _, anchor := range newAnchors {
+			findings = append(findings, fmt.Sprintf(
+				"%s: introduces new D-TW anchor %s inline (clause 1); put each new tillr-watch decision record in its own file under docs/design/tillr-watch/<slug>.md without editing %s (see %s)",
+				watchMainDoc, anchor, watchMainDoc, watchDecisionRecordsDoc,
+			))
+		}
+	}
+
+	// Clause 2: added record file combined with edits to main design or existing record file.
+	if len(addedRecords) > 0 && len(modifiedOrDeletedExisting) > 0 {
+		addedList := strings.Join(addedRecords, ", ")
+		for _, existingPath := range modifiedOrDeletedExisting {
+			findings = append(findings, fmt.Sprintf(
+				"%s: modified or deleted alongside added record %s (clause 2); put each new tillr-watch decision record in its own file under docs/design/tillr-watch/<slug>.md without editing %s or existing files in %s (see %s)",
+				existingPath, addedList, watchMainDoc, watchRecordsPrefix, watchDecisionRecordsDoc,
+			))
+		}
+	}
+
+	// Clause 3: added record file missing depends-on resolving to docs/design/tillr-watch.md.
+	for _, addedPath := range addedRecords {
+		text, err := gitRun(root, true, "show", head+":"+addedPath)
+		if err != nil {
+			return nil, err
+		}
+		if !watchRecordDependsOnMain(addedPath, text) {
+			findings = append(findings, fmt.Sprintf(
+				"%s: frontmatter depends-on does not resolve to %s (clause 3); put each new tillr-watch decision record in its own file under docs/design/tillr-watch/<slug>.md with frontmatter depends-on including ../tillr-watch.md (see %s)",
+				addedPath, watchMainDoc, watchDecisionRecordsDoc,
+			))
+		}
+	}
+
+	return findings, nil
+}
+
 func runChangeCheck(kind string, args []string) int {
 	failJudge := func(err error) int {
 		fmt.Fprintf(os.Stderr, "%s: could not judge: %v\n", kind, err)
@@ -1163,6 +1360,14 @@ func runChangeCheck(kind string, args []string) int {
 		}
 		if strings.TrimSpace(dirtyOut) != "" {
 			return failJudge(errors.New("changed Markdown files are dirty"))
+		}
+		findings, err := watchDecisionRecordFindings(root, base, head)
+		if err != nil {
+			return failJudge(err)
+		}
+		if len(findings) > 0 {
+			fmt.Println(strings.Join(findings, "\n"))
+			return 1
 		}
 		code, err := judgeDocuments(root, head, documents)
 		if err != nil {
