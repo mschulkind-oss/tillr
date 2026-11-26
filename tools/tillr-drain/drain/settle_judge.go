@@ -199,9 +199,13 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 			return err
 		}
 		now := l.cfg.Now().UTC()
+		syncRoadmaps := l.syncRoadmapsSettings()
+		proseRewrite := l.proseRewriteSettings()
 		tick := Pass{
 			Comments:            l.commentsSettings(),
 			WorkflowDefaults:    l.workflowDefaultsSettings(),
+			SyncRoadmaps:        &syncRoadmaps,
+			ProseRewrite:        &proseRewrite,
 			GatesInFlight:       l.gateCount(),
 			Build:               &l.build,
 			StorePath:           l.cfg.Store,

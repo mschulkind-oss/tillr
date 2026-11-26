@@ -40,9 +40,13 @@ func (l *Loop) quotaInterrupted(ctx context.Context, id string) (bool, error) {
 // Called in the refusal-window transaction, so every peer's reason survives a
 // loop restart along with its pause request. Reserves/probe errors never call it.
 func (l *Loop) pauseQuotaPeers(tx *store.Tx, backend, refusing string) error {
-	cfg, err := settings.Read(l.cfg.Root)
-	if err != nil {
-		return err
+	pauseTimeout := l.postLandingSettings().Roll.PauseTimeoutSeconds
+	if pauseTimeout <= 0 {
+		if cfg, err := settings.Read(l.cfg.Root); err == nil {
+			pauseTimeout = cfg.Roll.PauseTimeoutSeconds
+		} else {
+			pauseTimeout = 120
+		}
 	}
 	works, err := readPending(tx.Reader())
 	if err != nil {
@@ -87,7 +91,7 @@ func (l *Loop) pauseQuotaPeers(tx *store.Tx, backend, refusing string) error {
 		if n == 0 {
 			continue
 		}
-		if err := appendEffect(tx, run.PauseRequestKind, d.RunRequest.RunID, map[string]int64{"timeout_ms": cfg.Roll.PauseTimeoutSeconds * 1000}, l.cfg.Now()); err != nil {
+		if err := appendEffect(tx, run.PauseRequestKind, d.RunRequest.RunID, map[string]int64{"timeout_ms": pauseTimeout * 1000}, l.cfg.Now()); err != nil {
 			return err
 		}
 	}

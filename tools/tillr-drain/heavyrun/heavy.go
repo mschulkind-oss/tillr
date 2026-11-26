@@ -1397,6 +1397,10 @@ func ReadHeavyStatus(ctx context.Context, root, storePath string) (HeavyStatus, 
 	return heavy.ReadStatus(ctx, root, storePath)
 }
 
+func ReadHeavyStatusForBranch(ctx context.Context, root, storePath, trunkBranch string) (HeavyStatus, error) {
+	return heavy.ReadStatusForBranch(ctx, root, storePath, trunkBranch)
+}
+
 // additionalGoCulprits searches for a later first-red while removing the earlier
 // culprits, newest inverse first. Inverses live only in the detached proof tree;
 // these outcomes must never enter the ordinary, commit-keyed replay cache.

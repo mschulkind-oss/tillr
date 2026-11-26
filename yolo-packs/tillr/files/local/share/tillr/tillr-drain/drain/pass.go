@@ -1777,7 +1777,9 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 			loopHolds[id] = reason
 		}
 	}
-	tick := Pass{examineItem: onlyItem, pendingOnly: pendingOnly, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.commentsSettings(), WorkflowDefaults: l.workflowDefaultsSettings(), GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
+	syncRoadmaps := l.syncRoadmapsSettings()
+	proseRewrite := l.proseRewriteSettings()
+	tick := Pass{examineItem: onlyItem, pendingOnly: pendingOnly, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.commentsSettings(), WorkflowDefaults: l.workflowDefaultsSettings(), SyncRoadmaps: &syncRoadmaps, ProseRewrite: &proseRewrite, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
 	if l.ownerMigrationItem != "" {
 		tick.examineItem = l.ownerMigrationItem
 	}

@@ -15,6 +15,26 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+type settingsReloadSyncSteps struct {
+	*recordingSteps
+	root string
+	land func(context.Context, Candidate) (LandOutcome, error)
+}
+
+func (s *settingsReloadSyncSteps) Sync(_ context.Context) (SyncOutcome, error) {
+	if _, err := settings.Read(s.root); err != nil {
+		return SyncOutcome{}, Usagef("tillr-item sync could not run: %v", err)
+	}
+	return SyncOutcome{}, nil
+}
+
+func (s *settingsReloadSyncSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	if s.land != nil {
+		return s.land(ctx, c)
+	}
+	return s.recordingSteps.Land(ctx, c)
+}
+
 func readSettingsAlarms(t *testing.T, storePath string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -228,5 +248,150 @@ func TestUnrelatedLandingDoesNotOverwriteInMemorySettings(t *testing.T) {
 
 	if got := l.postLandingSettings().Roll.Command; got != "./configured.sh" {
 		t.Fatalf("expected in-memory roll command to stay %q when .tillr.toml did not change, got %q", "./configured.sh", got)
+	}
+}
+
+func TestLoopSurvivesLandingWithUnknownSettingsTable(t *testing.T) {
+	ctx := context.Background()
+	f, l := passFixture(t, "held-item")
+	l.cfg.ExitWhenDrained = false
+	l.cfg.StorePollInterval = time.Millisecond
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = ?`, StateBlocked)
+		return err
+	})
+
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := actionCommand(ctx, f.root, "git", args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(out)
+	}
+
+	marker := filepath.Join(t.TempDir(), "rolled.txt")
+	script := filepath.Join(f.root, "roll.sh")
+	body := "#!/bin/sh\necho rolled >> " + marker + "\n"
+	if err := writeForkSafe(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	commitSettingsFile(t, f.root, git,
+		"[roll]\ncommand = \"./roll.sh\"\npaths = [\"tools/\"]\n",
+		"initial valid settings")
+
+	initial, err := settings.Read(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.cfg.PostLanding = initial
+
+	var landTip string
+	l.cfg.Steps = &settingsReloadSyncSteps{
+		recordingSteps: &recordingSteps{},
+		root:           f.root,
+		land: func(_ context.Context, _ Candidate) (LandOutcome, error) {
+			return LandOutcome{Result: LandLanded, TrunkAfter: landTip}, nil
+		},
+	}
+
+	var logBuf bytes.Buffer
+	l.cfg.Report = &logBuf
+	var result LoopResult
+	if stop, err := l.pass(ctx, &result); err != nil || stop != "" {
+		t.Fatalf("initial pass stopped: %q / %v\nlog:\n%s", stop, err, logBuf.String())
+	}
+
+	// Land a commit that adds both code under tools/ and a new .tillr.toml table
+	// that the running build does not know.
+	if err := os.MkdirAll(filepath.Join(f.root, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.root, "tools", "future.go"), []byte("package tools\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.root, ".tillr.toml"), []byte("[roll]\ncommand = \"./roll.sh\"\npaths = [\"tools/\"]\n[future_table]\noption = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "--", ".tillr.toml", "tools/future.go")
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "add future_table setting")
+	landTip = git("rev-parse", "HEAD")
+
+	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-add-table", RunID: "run-add-table"}); err != nil {
+		t.Fatalf("landWithActions failed: %v", err)
+	}
+	waitAction(t, &l.rollAction)
+
+	// The post-landing roll still ran with the kept running settings.
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("expected post-landing roll to run with kept settings, marker missing: %v", err)
+	}
+	if got := l.postLandingSettings().Roll.Command; got != "./roll.sh" {
+		t.Fatalf("expected running roll command to remain %q, got %q", "./roll.sh", got)
+	}
+
+	// Subsequent loop passes must keep running rather than exiting on the unread table.
+	for i := 0; i < 2; i++ {
+		stop, err := l.pass(ctx, &result)
+		if err != nil || stop != "" {
+			t.Fatalf("pass %d after unreadable .tillr.toml landing exited: stop=%q err=%v\nlog:\n%s", i+1, stop, err, logBuf.String())
+		}
+	}
+
+	// Helpers consulted during a live pass must also use the kept running settings.
+	if _, err := ReadHeavyStatusForBranch(ctx, f.root, l.cfg.Store, l.trunkRef()); err != nil {
+		t.Fatalf("ReadHeavyStatusForBranch failed after unreadable .tillr.toml landing: %v", err)
+	}
+	if _, _, err := l.gateCheckInventory(ctx); err != nil {
+		t.Fatalf("gateCheckInventory failed after unreadable .tillr.toml landing: %v", err)
+	}
+	if _, err := l.unformattedRepoFiles(ctx, f.root); err != nil {
+		t.Fatalf("unformattedRepoFiles failed after unreadable .tillr.toml landing: %v", err)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return l.pauseQuotaPeers(tx, "fixture", "run-refusing")
+	})
+
+	// Exactly one settings-drift alarm is raised, naming .tillr.toml and future_table.
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ans WhyAnswer
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		ans, err = WhyForItem(r, Pass{Now: time.Now().UTC().Format(time.RFC3339), StorePath: l.cfg.Store}, nil, nil, "")
+		return err
+	}); err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	s.Close()
+	var driftAlarms []alarms.Alarm
+	for _, a := range ans.Alarms {
+		if a.Kind == alarms.SettingsDrift {
+			driftAlarms = append(driftAlarms, a)
+		}
+	}
+	if len(driftAlarms) != 1 {
+		t.Fatalf("expected 1 %s alarm, got %d: %+v", alarms.SettingsDrift, len(driftAlarms), driftAlarms)
+	}
+	for _, want := range []string{".tillr.toml", "future_table"} {
+		if !strings.Contains(driftAlarms[0].Cause, want) {
+			t.Fatalf("alarm cause %q missing %q", driftAlarms[0].Cause, want)
+		}
+	}
+
+	// After the loop rolls to a build that reads the new settings, the alarm clears.
+	if err := restart.PublishBuild(ctx, l.cfg.Store, restart.BuildFact{
+		Role:     restart.RoleDrain,
+		Revision: landTip,
+		Digest:   "sha256:rolled",
+		PID:      2,
+		At:       time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if cleared := readSettingsAlarms(t, l.cfg.Store); strings.Contains(cleared, alarms.SettingsDrift) {
+		t.Fatalf("expected settings-drift alarm to clear after roll, got:\n%s", cleared)
 	}
 }

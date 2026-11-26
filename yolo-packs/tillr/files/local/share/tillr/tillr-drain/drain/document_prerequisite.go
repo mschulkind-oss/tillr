@@ -19,7 +19,7 @@ import (
 // not of the queue: an undeclared request must be shaped before it can be built.
 const ReasonTriageNoBlock = "triage-no-block"
 
-func documentPrerequisites(r *store.Reader, root string) (map[string]bool, map[string]string, map[string]string, error) {
+func documentPrerequisites(r *store.Reader, root string, proseRewrite *bool) (map[string]bool, map[string]string, map[string]string, error) {
 	missing := map[string]bool{}
 	rewrites := map[string]string{}
 	owners := map[string]string{}
@@ -30,7 +30,7 @@ func documentPrerequisites(r *store.Reader, root string) (map[string]bool, map[s
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	report, err := item.Sync(context.Background(), r, nil, item.SyncInput{Root: root, Documents: docs})
+	report, err := item.Sync(context.Background(), r, nil, item.SyncInput{Root: root, Documents: docs, ProseRewrite: proseRewrite})
 	if err != nil {
 		return nil, nil, nil, err
 	}

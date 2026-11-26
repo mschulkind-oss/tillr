@@ -66,6 +66,9 @@ type SyncInput struct {
 	Root      string
 	Documents []SyncDocument
 	At        time.Time
+	// ProseRewrite overrides [prose] rewrite from .tillr.toml when non-nil,
+	// letting a running loop use its in-memory setting without re-reading disk.
+	ProseRewrite *bool
 }
 
 // SyncNote is one finding, warning or frozen definition, located where an author has to look:
@@ -794,18 +797,22 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	if err != nil {
 		return syncPlan{}, err
 	}
-	if in.Root != "" {
+	proseRewrite := false
+	if in.ProseRewrite != nil {
+		proseRewrite = *in.ProseRewrite
+	} else if in.Root != "" {
 		config, err := settings.Read(in.Root)
 		if err != nil {
 			return syncPlan{}, err
 		}
-		if config.Prose.Rewrite {
-			rewrites := proseRewriteWrites(&report, blocks, held, d.Ready)
-			writes = append(writes, rewrites...)
-			for _, fw := range rewrites {
-				for _, p := range fw.payloads {
-					placements = append(placements, sourcePlacement{p.ItemID, ""})
-				}
+		proseRewrite = config.Prose.Rewrite
+	}
+	if proseRewrite {
+		rewrites := proseRewriteWrites(&report, blocks, held, d.Ready)
+		writes = append(writes, rewrites...)
+		for _, fw := range rewrites {
+			for _, p := range fw.payloads {
+				placements = append(placements, sourcePlacement{p.ItemID, ""})
 			}
 		}
 	}

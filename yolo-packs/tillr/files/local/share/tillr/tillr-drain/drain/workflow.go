@@ -986,7 +986,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		return true, l.markExamined(ctx, d)
 	}
 	if !l.nonLanding && effectiveAccess == "write" && l.lanePatchRef(d.LaneID) == "" && head != "" && head != nodeBase && strings.TrimSpace(dirty) == "" {
-		unformatted, err := unformattedRepoFiles(ctx, target)
+		unformatted, err := l.unformattedRepoFiles(ctx, target)
 		if err != nil {
 			return true, err
 		}

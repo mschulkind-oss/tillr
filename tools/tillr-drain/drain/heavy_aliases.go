@@ -47,6 +47,7 @@ type (
 
 var (
 	ReadHeavyStatus                   = heavyrun.ReadHeavyStatus
+	ReadHeavyStatusForBranch          = heavyrun.ReadHeavyStatusForBranch
 	acquireLoopLock                   = heavyrun.AcquireLoopLock
 	cleanupLost                       = heavyrun.CleanupLost
 	heavyProgressReport               = heavyrun.HeavyProgressReport

@@ -626,6 +626,7 @@ type Loop struct {
 	landLockUnmeasured          int
 	heavyWanted, heavyAttempted string
 	settingsMu                  sync.RWMutex
+	settingsUnreadableTip       string
 	cfg                         LoopConfig
 	// mu guards worker-side infrastructure bookkeeping and report measurements.
 	// Each examination has its own result, transferred to the pass at completion.
@@ -1412,6 +1413,14 @@ func (l *Loop) syncDocuments(ctx context.Context, result *LoopResult) error {
 	}
 	outcome, err := l.cfg.Steps.Sync(ctx)
 	if err != nil {
+		if l.cfg.Root != "" {
+			if _, settingsErr := settings.Read(l.cfg.Root); settingsErr != nil {
+				tip, _ := l.revParse(ctx, l.cfg.Root, l.trunkRef())
+				l.recordUnreadableSettings(ctx, tip, settingsErr)
+				l.reportf("loop: skipping document sync at %.12s: .tillr.toml cannot be read by this build; keeping running settings\n", tip)
+				return nil
+			}
+		}
 		return err
 	}
 	result.Sync = &outcome
@@ -2989,7 +2998,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			return laneOutcome{err: err}
 		}
 		if strings.TrimSpace(dirty) == "" {
-			unformatted, err := unformattedRepoFiles(ctx, target)
+			unformatted, err := l.unformattedRepoFiles(ctx, target)
 			if err != nil {
 				return laneOutcome{err: err}
 			}

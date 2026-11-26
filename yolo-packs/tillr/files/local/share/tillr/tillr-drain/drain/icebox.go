@@ -46,15 +46,21 @@ func formatIceboxHold(entry iceboxEntry) string {
 	return fmt.Sprintf("%s: %q in %s", ReasonIcebox, entry.Title, entry.Roadmap)
 }
 
-func readIceboxDesignDocs(root string) (map[string]iceboxEntry, error) {
+func readIceboxDesignDocs(root string, configured *[]string) (map[string]iceboxEntry, error) {
 	if root == "" {
 		return nil, nil
 	}
-	cfg, err := settings.Read(root)
-	if err != nil {
-		return nil, Usagef("%v", err)
+	var configuredRoadmaps []string
+	if configured != nil {
+		configuredRoadmaps = *configured
+	} else {
+		cfg, err := settings.Read(root)
+		if err != nil {
+			return nil, Usagef("%v", err)
+		}
+		configuredRoadmaps = cfg.Sync.Roadmaps
 	}
-	roadmaps, err := configuredOrDiscoveredRoadmaps(root, cfg.Sync.Roadmaps)
+	roadmaps, err := configuredOrDiscoveredRoadmaps(root, configuredRoadmaps)
 	if err != nil {
 		return nil, err
 	}

@@ -193,6 +193,12 @@ func Landings(ctx context.Context, root, storePath, base, tip string) ([]string,
 // ReadStatus reads the ref and the last atomic run report. It does not read the
 // retired watermark. A missing report is visibly unjudged, not an invented pass.
 func ReadStatus(ctx context.Context, root, storePath string) (HeavyStatus, error) {
+	return ReadStatusForBranch(ctx, root, storePath, "")
+}
+
+// ReadStatusForBranch reads heavy status against trunkBranch when given, avoiding
+// a fresh .tillr.toml read on a running loop whose trunk branch is fixed at startup.
+func ReadStatusForBranch(ctx context.Context, root, storePath, trunkBranch string) (HeavyStatus, error) {
 	status := HeavyStatus{Result: "unjudged", FailingChecks: []HeavyCheck{}, UnavailableChecks: []HeavyCheck{}, Overruns: []HeavyCheck{}}
 	dir, err := Directory(ctx, root)
 	if err != nil {
@@ -220,7 +226,13 @@ func ReadStatus(ctx context.Context, root, storePath string) (HeavyStatus, error
 		return status, e
 	}
 	trunkRef := "refs/heads/" + settings.DefaultTrunkBranch
-	if root != "" {
+	if trunkBranch != "" {
+		if strings.HasPrefix(trunkBranch, "refs/") {
+			trunkRef = trunkBranch
+		} else {
+			trunkRef = "refs/heads/" + trunkBranch
+		}
+	} else if root != "" {
 		cfg, err := settings.Read(root)
 		if err != nil {
 			return status, err

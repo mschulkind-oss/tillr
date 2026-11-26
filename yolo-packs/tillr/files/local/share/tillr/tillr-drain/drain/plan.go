@@ -68,6 +68,12 @@ type Pass struct {
 	Build *BuildStamp `json:"-"`
 	// WorkflowDefaults comes from settings.Read, never from a caller-supplied pass.
 	WorkflowDefaults map[string]string `json:"-"`
+	// SyncRoadmaps carries the loop's running [sync] roadmaps so planning does not
+	// re-read .tillr.toml from disk on every pass.
+	SyncRoadmaps *[]string `json:"-"`
+	// ProseRewrite carries the loop's running [prose] rewrite so planning does not
+	// re-read .tillr.toml from disk on every pass.
+	ProseRewrite *bool `json:"-"`
 	// BriefTemplate is the loop's actual staging input, not a stored tick field.
 	// A standalone plan with no stager compares the retained template instead.
 	BriefTemplate *string `json:"-"`
@@ -407,7 +413,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	unshared := map[string]bool{}
 	rewriteHolds, rewriteOwnerHolds := map[string]string{}, map[string]string{}
 	if hasPrerequisite(def, definition.PrerequisiteDesignDocument) && def.Completes == "landing" {
-		unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisites(r, root)
+		unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisites(r, root, tick.ProseRewrite)
 		if err != nil {
 			return nil, err
 		}
@@ -878,7 +884,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 	if err != nil {
 		return nil, nil, err
 	}
-	iceboxDocs, err := readIceboxDesignDocs(root)
+	iceboxDocs, err := readIceboxDesignDocs(root, tick.SyncRoadmaps)
 	if err != nil {
 		return nil, nil, err
 	}

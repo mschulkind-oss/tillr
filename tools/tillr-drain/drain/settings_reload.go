@@ -44,6 +44,48 @@ func (l *Loop) candidateSizeLimitsSettings() *settings.CandidateSizeLimits {
 	return l.cfg.CandidateSizeLimits
 }
 
+func (l *Loop) proseRewriteSettings() bool {
+	l.settingsMu.RLock()
+	defer l.settingsMu.RUnlock()
+	return l.cfg.PostLanding.Prose.Rewrite
+}
+
+func (l *Loop) syncRoadmapsSettings() []string {
+	l.settingsMu.RLock()
+	defer l.settingsMu.RUnlock()
+	if len(l.cfg.PostLanding.Sync.Roadmaps) == 0 {
+		return nil
+	}
+	out := make([]string, len(l.cfg.PostLanding.Sync.Roadmaps))
+	copy(out, l.cfg.PostLanding.Sync.Roadmaps)
+	return out
+}
+
+func (l *Loop) settingsUnreadable() bool {
+	l.settingsMu.RLock()
+	defer l.settingsMu.RUnlock()
+	return l.settingsUnreadableTip != ""
+}
+
+func (l *Loop) recordUnreadableSettings(ctx context.Context, tip string, err error) {
+	l.settingsMu.Lock()
+	already := tip != "" && l.settingsUnreadableTip == tip
+	if tip != "" {
+		l.settingsUnreadableTip = tip
+	} else {
+		l.settingsUnreadableTip = "unreadable"
+	}
+	l.settingsMu.Unlock()
+	if already {
+		return
+	}
+	l.reportf("loop: landed .tillr.toml at %.12s could not be read; keeping running settings: %v\n", tip, err)
+	l.recordSettingsEvent(ctx, alarms.SettingsDriftKind, tip, map[string]any{
+		"detail":   err.Error(),
+		"settings": []string{".tillr.toml"},
+	})
+}
+
 func expressLaneCount(lanes []string) int64 {
 	var n int64
 	for _, lane := range lanes {
@@ -82,11 +124,7 @@ func (l *Loop) reloadSettingsOnLanding(ctx context.Context, tip string) {
 	}
 	next, err := settings.Read(l.cfg.Root)
 	if err != nil {
-		l.reportf("loop: landed .tillr.toml at %.12s could not be read; keeping running settings: %v\n", tip, err)
-		l.recordSettingsEvent(ctx, alarms.SettingsDriftKind, tip, map[string]any{
-			"detail":   err.Error(),
-			"settings": []string{".tillr.toml"},
-		})
+		l.recordUnreadableSettings(ctx, tip, err)
 		return
 	}
 
@@ -114,6 +152,7 @@ func (l *Loop) reloadSettingsOnLanding(ctx context.Context, tip string) {
 
 	limits := next.CandidateSize
 	l.settingsMu.Lock()
+	l.settingsUnreadableTip = ""
 	l.cfg.PostLanding.Brief = next.Brief
 	l.cfg.PostLanding.Gate = next.Gate
 	l.cfg.PostLanding.Roll = next.Roll

@@ -1823,7 +1823,7 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 		return nil
 	}
 	if l.gatePolicy.LandingStrategy == "after-merge" {
-		status, err := ReadHeavyStatus(ctx, l.cfg.Root, l.cfg.Store)
+		status, err := ReadHeavyStatusForBranch(ctx, l.cfg.Root, l.cfg.Store, l.trunkRef())
 		if err != nil {
 			return err
 		}

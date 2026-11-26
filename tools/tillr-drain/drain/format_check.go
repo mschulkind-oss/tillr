@@ -28,7 +28,18 @@ func unformattedRepoFiles(ctx context.Context, worktree string) ([]string, error
 	if err != nil {
 		return nil, Externalf("%v", err)
 	}
-	formatRel := filepath.ToSlash(filepath.Join(filepath.FromSlash(s.ChecksDir()), "format.json"))
+	return unformattedRepoFilesInChecksDir(ctx, worktree, s.ChecksDir())
+}
+
+func (l *Loop) unformattedRepoFiles(ctx context.Context, worktree string) ([]string, error) {
+	if l.settingsUnreadable() {
+		return unformattedRepoFilesInChecksDir(ctx, worktree, l.postLandingSettings().ChecksDir())
+	}
+	return unformattedRepoFiles(ctx, worktree)
+}
+
+func unformattedRepoFilesInChecksDir(ctx context.Context, worktree, checksDir string) ([]string, error) {
+	formatRel := filepath.ToSlash(filepath.Join(filepath.FromSlash(checksDir), "format.json"))
 	raw, err := os.ReadFile(filepath.Join(worktree, formatRel))
 	if os.IsNotExist(err) {
 		return nil, nil
