@@ -44,6 +44,11 @@ func TestShippedRulesConsumerRepoWithoutConfigDir(t *testing.T) {
 
 func TestShippedRulesConsumerOverrideAddAndLintAttribution(t *testing.T) {
 	ctx := context.Background()
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "pi"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	root := t.TempDir()
 	for _, dir := range []string{".tillr", "config/tillr/watch", "config/tillr/workflows"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {

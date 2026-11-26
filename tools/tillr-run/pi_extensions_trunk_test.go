@@ -116,6 +116,87 @@ cat >/dev/null
 	writeExecutable(t, filepath.Join(binDir, "pi"), script)
 }
 
+func writeFakePiCodingAgentPkg(t *testing.T, binDir string) {
+	t.Helper()
+	pkgDir := filepath.Join(binDir, "node_modules", "@earendil-works", "pi-coding-agent", "dist")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	indexJS := `import fs from "node:fs";
+
+export class DefaultResourceLoader {
+  constructor(opts) {
+    this.opts = opts || {};
+    this.errors = [];
+  }
+  async reload() {
+    this.errors = [];
+    for (const p of this.opts.additionalExtensionPaths || []) {
+      try {
+        const st = fs.statSync(p);
+        if (st.isFile()) {
+          const src = fs.readFileSync(p, "utf8");
+          if (src.includes("intentional build failure")) {
+            this.errors.push({ path: p, error: "intentional build failure" });
+          }
+        }
+      } catch (err) {
+        this.errors.push({ path: p, error: String(err) });
+      }
+    }
+  }
+  getExtensions() {
+    return { extensions: [], errors: this.errors };
+  }
+}
+`
+	if err := os.WriteFile(filepath.Join(pkgDir, "index.js"), []byte(indexJS), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeFakeNodeIfMissing(t *testing.T, binDir string) {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err == nil {
+		return
+	}
+	script := `#!/bin/sh
+set -eu
+if [ "${1:-}" = "--input-type=module" ]; then
+    stage_agent="${4:-}"
+    if grep -q "intentional build failure" "$stage_agent/extensions/"*.ts 2>/dev/null; then
+        echo '[{"error":"intentional build failure"}]' >&2
+        exit 1
+    fi
+    exit 0
+fi
+if [ "${1:-}" = "-e" ]; then
+    code="${2:-}"
+    file="${3:-}"
+    case "$code" in
+        *target_key*)
+            key="${4:-}"
+            [ -r "$file" ] && grep -q '"state"[[:space:]]*:[[:space:]]*"held"' "$file" && grep -q "\"target_key\"[[:space:]]*:[[:space:]]*\"$key\"" "$file" && exit 0
+            exit 1
+            ;;
+        *agent_dir*)
+            [ -r "$file" ] || exit 1
+            key=$(sed -n 's/.*"key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -n1)
+            agent_dir=$(sed -n 's/.*"agent_dir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -n1)
+            key_dir=$(sed -n 's/.*"dir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -n1)
+            if [ -n "$key" ] && [ -n "$agent_dir" ] && [ -n "$key_dir" ] && [ -d "$agent_dir" ] && [ "$(tr -d ' \r\n' < "$key_dir/.verified" 2>/dev/null || true)" = "$key" ]; then
+                printf '%s\n%s\n' "$key" "$agent_dir"
+                exit 0
+            fi
+            exit 1
+            ;;
+    esac
+fi
+exit 1
+`
+	writeExecutable(t, filepath.Join(binDir, "node"), script)
+}
+
 func cleanPiEnv(extra ...string) []string {
 	drop := map[string]bool{
 		"PI_CODING_AGENT_DIR":             true,
@@ -157,6 +238,8 @@ func TestPiAdapterSelectsTrunkAgentDirAndRecordsExtensionSet(t *testing.T) {
 	envFile := filepath.Join(dir, "env")
 	recFile := filepath.Join(dir, "extension-set")
 	writeFakePi(t, binDir, argvFile, envFile)
+	writeFakePiCodingAgentPkg(t, binDir)
+	writeFakeNodeIfMissing(t, binDir)
 
 	laneDir := filepath.Join(dir, "lane")
 	worktree := filepath.Join(repo, ".worktree-lane")

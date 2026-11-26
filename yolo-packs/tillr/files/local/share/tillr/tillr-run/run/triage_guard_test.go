@@ -319,6 +319,9 @@ printf 'RESULT: done\n'
 		Command:    []string{adapterPath},
 		TimeoutMS:  10000,
 	}
+	t.Cleanup(func() {
+		_ = os.Chmod(filepath.Join(laneRoot, "triage-1", "work"), 0o755)
+	})
 	env, err := Exec(ctx, s, req, ExecOptions{
 		LaneRoot: laneRoot,
 		Now:      time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC),
