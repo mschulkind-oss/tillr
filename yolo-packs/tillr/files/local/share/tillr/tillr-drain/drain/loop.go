@@ -314,8 +314,12 @@ type GateOutcome struct {
 	// DurationMS is the gate program's wall time in milliseconds.
 	DurationMS int64
 	// ErrorDetail is set on a GateErrored answer that no later pass can change: the gate
-	// refused its own arguments (gate_usage_error.go). It is the hold's reason.
+	// could not start (gate_start_error.go) or refused its own arguments (gate_usage_error.go).
+	// It is the hold's reason.
 	ErrorDetail string
+	// StartError is true when ErrorDetail came from a gate program that could not start
+	// (distinct from a gate that started and refused its own arguments).
+	StartError bool
 	// FailingChecks is the check ids the gate recorded as failed. It is the set the
 	// trunk-already-red replay re-runs on the base; a gate failure that names none cannot
 	// be replayed and takes the ordinary refusal.
@@ -3742,8 +3746,10 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	}
 	switch gate.Outcome {
 	case GateStalled:
+		l.clearGateStartFailed(ctx)
 		return "", false, l.holdGateStall(ctx, candidate, gate, stalledGateCount)
 	case GatePassed, GatePassedInherited:
+		l.clearGateStartFailed(ctx)
 		// An item whose landing was reverted must pass the check that proved it broke
 		// the trunk: the fast gate has shown it cannot see that failure.
 		detail, err := l.judgeRequired(ctx, &candidate)
@@ -3759,6 +3765,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, nil
 		}
 	case GateFailed:
+		l.clearGateStartFailed(ctx)
 		// Capture candidate changed paths before any replay releases the lane worktree.
 		if len(gate.CandidateChangedPaths) == 0 && len(gate.SuspectPaths) == 0 && candidate.BaseSHA != "" && candidate.Worktree != "" {
 			if ps, ok := l.cfg.Steps.(*ProcessSteps); ok {
@@ -3832,8 +3839,12 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		// pass, so the item is held for the operator with the gate's error as the reason,
 		// and its lane is released like any held one.
 		if gate.ErrorDetail != "" {
+			if gate.StartError || isGateStartErrorDetail(gate.ErrorDetail) {
+				l.recordGateStartFailed(ctx, candidate, gate.ErrorDetail)
+			}
 			return "", false, l.gateFault(ctx, candidate, gate.ErrorDetail)
 		}
+		l.clearGateStartFailed(ctx)
 		return "", false, l.holdGateNoVerdict(ctx, candidate)
 	default:
 		// An outcome the drain does not know is a contract defect between the drain and its

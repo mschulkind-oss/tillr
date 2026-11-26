@@ -83,10 +83,10 @@ func Read(r *store.Reader, now time.Time, policy *Policy, current ...Hold) ([]Al
 // change with the clock, so a caller that reads alarms repeatedly can keep one while the
 // store is unchanged and ask At for the clock-dependent quota alarms on each read.
 type Stored struct {
-	infra, rolls, piBuilds, settingsDrift, unrecordedTrunk []Alarm
-	unsettledWatch                                         unsettledWatchSummary
-	holds                                                  []Hold
-	holdsErr                                               error
+	infra, rolls, piBuilds, settingsDrift, unrecordedTrunk, gateStart []Alarm
+	unsettledWatch                                                    unsettledWatchSummary
+	holds                                                             []Hold
+	holdsErr                                                          error
 }
 
 // ReadStored reads the clock-independent part of the alarms.
@@ -111,11 +111,15 @@ func ReadStored(r *store.Reader) (*Stored, error) {
 	if err != nil {
 		return nil, err
 	}
+	gateStart, err := gateStartAlarm(r)
+	if err != nil {
+		return nil, err
+	}
 	unsettledWatch, err := readUnsettledWatchAlerts(r)
 	if err != nil {
 		return nil, err
 	}
-	s := &Stored{infra: infra, rolls: rolls, piBuilds: piBuilds, settingsDrift: settingsDrift, unrecordedTrunk: unrecordedTrunk, unsettledWatch: unsettledWatch}
+	s := &Stored{infra: infra, rolls: rolls, piBuilds: piBuilds, settingsDrift: settingsDrift, unrecordedTrunk: unrecordedTrunk, gateStart: gateStart, unsettledWatch: unsettledWatch}
 	// Read holds only for the cases Read read them in: when nothing is active before the
 	// quota alarms, At needs them only if a quota alarm appears, so the read is kept either
 	// way and its error is reported only when At needs the holds.
@@ -130,7 +134,7 @@ func (s *Stored) At(r *store.Reader, now time.Time, policy *Policy, current ...H
 	if err != nil {
 		return nil, err
 	}
-	active := append(append(append(append(append(append([]Alarm(nil), s.infra...), windows...), s.rolls...), s.piBuilds...), s.settingsDrift...), s.unrecordedTrunk...)
+	active := append(append(append(append(append(append(append([]Alarm(nil), s.infra...), windows...), s.rolls...), s.piBuilds...), s.settingsDrift...), s.unrecordedTrunk...), s.gateStart...)
 	if a := s.unsettledWatch.alarm(now); a != nil {
 		active = append(active, *a)
 	}

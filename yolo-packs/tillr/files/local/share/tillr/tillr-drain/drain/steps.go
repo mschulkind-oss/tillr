@@ -870,6 +870,7 @@ func (s *ProcessSteps) finishDetachedGate(ctx context.Context, candidate Candida
 	if outcome.Outcome == GateErrored {
 		if detail := gateStartErrorDetail(span.StderrTail, s.gateErrorTriage(candidate)); detail != "" {
 			outcome.ErrorDetail = detail
+			outcome.StartError = true
 		} else if gateUsageError(span.StderrTail) {
 			outcome.ErrorDetail = gateErrorDetail(span.StderrTail, candidateChangedPaths(ctx, candidate))
 		}

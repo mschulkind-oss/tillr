@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -123,6 +125,11 @@ func TestGateStartErrorDetailCases(t *testing.T) {
 			name:   "tillr-loop missing runner",
 			stderr: `installed tillr-gate runner /opt/tillr/tillr-gate/change-gate.py is missing or not a regular file`,
 			want:   "/opt/tillr/tillr-gate/change-gate.py",
+		},
+		{
+			name:   "tillr-loop relative install root",
+			stderr: `TILLR_INSTALL_ROOT must be absolute: relative/tillr`,
+			want:   "TILLR_INSTALL_ROOT must be absolute: relative/tillr",
 		},
 		{
 			name:   "sh cannot open script in triage",
@@ -341,4 +348,289 @@ func TestGateStartFailureHoldsRetiredCandidateOnce(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// When the gate command exits 4 because it could not start (for example its runner file is
+// missing), the loop holds the candidate with that cause, raises the gate-start-failed
+// alarm once naming the missing file, does not run the gate again across many passes until
+// the cause changes (one gate call per change of cause, with no count or time limit on
+// waiting), and clears the alarm when a gate next starts.
+func TestGateStartFailureRaisesAlarmOnceAndClearsWhenGateStarts(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	c := prepareReadyCandidate(t, f, l, "item-a")
+	var report bytes.Buffer
+	l.cfg.Report = &report
+
+	missingV1 := "/opt/tillr/v1/tillr-gate/change-gate.py"
+	missingV2 := "/opt/tillr/v2/tillr-gate/change-gate.py"
+	countFile := filepath.Join(t.TempDir(), "gate-calls")
+	modeFile := filepath.Join(t.TempDir(), "gate-mode")
+	writeForkFile(t, modeFile, "missing-v1")
+
+	gateBin := executable(t, `printf x >> `+countFile+`
+mode=$(cat `+modeFile+`)
+case "$mode" in
+  missing-v1)
+    echo "installed tillr-gate runner `+missingV1+` is missing or not a regular file" >&2
+    exit 4
+    ;;
+  missing-v2)
+    echo "installed tillr-gate runner `+missingV2+` is missing or not a regular file" >&2
+    exit 4
+    ;;
+  pass)
+    exit 0
+    ;;
+esac
+`)
+	procSteps := &ProcessSteps{
+		Root:        f.root,
+		Store:       f.storePath,
+		LaneRoot:    f.laneRoot,
+		Now:         l.cfg.Now,
+		GateProgram: gateBin,
+	}
+	l.cfg.Steps = &gateCallbackSteps{
+		gate: procSteps.Gate,
+	}
+
+	gateCalls := func() int {
+		t.Helper()
+		raw, err := os.ReadFile(countFile)
+		if os.IsNotExist(err) {
+			return 0
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(raw)
+	}
+
+	// Drive 10 passes while the runner file is missing: must call the gate once.
+	for pass := 0; pass < 10; pass++ {
+		if _, err := l.Run(context.Background()); err != nil {
+			t.Fatalf("pass %d: %v", pass+1, err)
+		}
+	}
+	if got := gateCalls(); got != 1 {
+		t.Fatalf("gate called %d times across 10 passes with unchanged missing runner, want 1", got)
+	}
+
+	var faultSeq int64
+	fixtureRead(t, f, func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		fault, held := faults["item-a"]
+		if !held || fault.Reason != StopGateHarnessError || !strings.Contains(fault.Detail, missingV1) {
+			t.Fatalf("item-a fault = %+v (held %v), want %s naming %q", fault, held, StopGateHarnessError, missingV1)
+		}
+		faultSeq = fault.Seq
+
+		var alarmEvents int
+		if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind = ?`, alarms.GateStartFailedKind).Scan(&alarmEvents); err != nil {
+			return err
+		}
+		if alarmEvents != 1 {
+			t.Errorf("%s event count = %d, want 1", alarms.GateStartFailedKind, alarmEvents)
+		}
+
+		why, err := Why(r, Pass{StorePath: f.storePath, Now: l.cfg.Now().Format(time.RFC3339), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		if len(why.Alarms) != 1 || why.Alarms[0].Kind != alarms.GateStartFailed || !strings.Contains(why.Alarms[0].Cause, missingV1) {
+			t.Fatalf("why alarms = %+v, want one %s naming %q", why.Alarms, alarms.GateStartFailed, missingV1)
+		}
+		foundRow := false
+		for _, row := range why.Rows {
+			if row.ItemID != "item-a" {
+				continue
+			}
+			foundRow = true
+			if row.Reason != StopGateHarnessError || !strings.Contains(row.Why, missingV1) {
+				t.Errorf("why row = %+v, want %s naming %q", row, StopGateHarnessError, missingV1)
+			}
+		}
+		if !foundRow {
+			t.Errorf("item-a missing from why rows")
+		}
+		return nil
+	})
+	if got := strings.Count(report.String(), "alarm started: ALARM "+alarms.GateStartFailed+" (gate)"); got != 1 {
+		t.Fatalf("alarm started count = %d, want 1:\n%s", got, report.String())
+	}
+
+	// Change cause #1 (different missing runner path) and clear the fault: 10 more passes
+	// must run the gate exactly once more (total 2 calls).
+	writeForkFile(t, modeFile, "missing-v2")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return ClearItemFault(tx, "item-a", faultSeq, l.cfg.Now())
+	})
+	for pass := 0; pass < 10; pass++ {
+		if _, err := l.Run(context.Background()); err != nil {
+			t.Fatalf("second-cause pass %d: %v", pass+1, err)
+		}
+	}
+	if got := gateCalls(); got != 2 {
+		t.Fatalf("gate called %d times after first cause change + 10 passes, want 2", got)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		fault, held := faults["item-a"]
+		if !held || !strings.Contains(fault.Detail, missingV2) {
+			t.Fatalf("item-a fault after cause change = %+v (held %v), want %q", fault, held, missingV2)
+		}
+		faultSeq = fault.Seq
+		why, err := Why(r, Pass{StorePath: f.storePath, Now: l.cfg.Now().Format(time.RFC3339), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		if len(why.Alarms) != 1 || why.Alarms[0].Kind != alarms.GateStartFailed || !strings.Contains(why.Alarms[0].Cause, missingV2) {
+			t.Fatalf("why alarms after cause change = %+v, want one %s naming %q", why.Alarms, alarms.GateStartFailed, missingV2)
+		}
+		return nil
+	})
+
+	// Change cause #2 (gate can now start and pass) and clear the fault: gate runs once
+	// more (total 3 calls), candidate lands, and the gate-start-failed alarm clears.
+	writeForkFile(t, modeFile, "pass")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return ClearItemFault(tx, "item-a", faultSeq, l.cfg.Now())
+	})
+	res, err := l.Run(context.Background())
+	if err != nil {
+		t.Fatalf("recovery pass: %v", err)
+	}
+	if got := gateCalls(); got != 3 {
+		t.Fatalf("gate called %d times after recovery, want 3", got)
+	}
+	if res.Landed != 1 {
+		t.Fatalf("landed = %d, want 1 (stop=%s)", res.Landed, res.Stop)
+	}
+	_ = c
+	fixtureRead(t, f, func(r *store.Reader) error {
+		active, err := alarms.Read(r, l.cfg.Now(), nil)
+		if err != nil {
+			return err
+		}
+		for _, a := range active {
+			if a.Kind == alarms.GateStartFailed {
+				t.Fatalf("gate-start-failed alarm still active after gate started: %+v", active)
+			}
+		}
+		return nil
+	})
+	if got := strings.Count(report.String(), "alarm cleared: "+alarms.GateStartFailed+":gate"); got != 1 {
+		t.Fatalf("alarm cleared count = %d, want 1:\n%s", got, report.String())
+	}
+}
+
+// The gate-start-failed alarm clears as soon as any gate next starts (even on another
+// candidate whose gate reaches no verdict), while the earlier item's hold remains.
+func TestGateStartAlarmClearsWhenAnotherCandidateGateStarts(t *testing.T) {
+	f, l := passFixture(t, "item-a", "item-b")
+	ca := prepareReadyCandidate(t, f, l, "item-a")
+	cb := prepareReadyCandidate(t, f, l, "item-b")
+	missingPath := "/opt/tillr/tillr-gate/change-gate.py"
+	detail := gateStartErrorDetail("installed tillr-gate runner "+missingPath+" is missing or not a regular file", "")
+
+	var mu sync.Mutex
+	allowB := false
+	bStartedCalls := 0
+	var alarmsAfterNoVerdict []alarms.Alarm
+	steps := &gateCallbackSteps{
+		gate: func(ctx context.Context, c Candidate) (GateOutcome, error) {
+			mu.Lock()
+			okB := allowB
+			if okB && c.ItemID == cb.ItemID {
+				bStartedCalls++
+			}
+			call := bStartedCalls
+			mu.Unlock()
+			if c.ItemID == ca.ItemID {
+				return GateOutcome{Outcome: GateErrored, ErrorDetail: detail, StartError: true}, nil
+			}
+			if !okB {
+				return GateOutcome{Outcome: GateErrored, ErrorDetail: detail, StartError: true}, nil
+			}
+			if call == 1 {
+				// First time item-b's gate starts, it runs and returns ordinary gate-no-verdict.
+				return GateOutcome{Outcome: GateErrored}, nil
+			}
+			// On the re-gate pass, verify the gate-start-failed alarm was already cleared by
+			// the previous started gate, then pass so l.Run completes.
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var err error
+				alarmsAfterNoVerdict, err = alarms.Read(r, l.cfg.Now(), nil)
+				return err
+			})
+			return GateOutcome{Outcome: GatePassed}, nil
+		},
+	}
+	l.cfg.Steps = steps
+
+	if _, err := l.Run(context.Background()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	var seqB int64
+	fixtureRead(t, f, func(r *store.Reader) error {
+		active, err := alarms.Read(r, l.cfg.Now(), nil)
+		if err != nil {
+			return err
+		}
+		if len(active) != 1 || active[0].Kind != alarms.GateStartFailed {
+			t.Fatalf("alarms after first run = %+v, want one %s", active, alarms.GateStartFailed)
+		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		seqB = faults[cb.ItemID].Seq
+		return nil
+	})
+
+	// Clear only item-b's fault and let item-b's gate start (returning ordinary no-verdict).
+	mu.Lock()
+	allowB = true
+	mu.Unlock()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return ClearItemFault(tx, cb.ItemID, seqB, l.cfg.Now())
+	})
+	if _, err := l.Run(context.Background()); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(alarmsAfterNoVerdict) != 0 {
+		t.Fatalf("alarms after item-b gate started (no-verdict) = %+v, want none", alarmsAfterNoVerdict)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		active, err := alarms.Read(r, l.cfg.Now(), nil)
+		if err != nil {
+			return err
+		}
+		if len(active) != 0 {
+			t.Fatalf("alarms after another gate started = %+v, want none", active)
+		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if _, held := faults[ca.ItemID]; !held {
+			t.Fatalf("item-a fault should remain held after item-b's gate started")
+		}
+		return nil
+	})
+}
+
+type gateCallbackSteps struct {
+	recordingSteps
+	gate func(context.Context, Candidate) (GateOutcome, error)
+}
+
+func (s *gateCallbackSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, error) {
+	return s.gate(ctx, c)
 }

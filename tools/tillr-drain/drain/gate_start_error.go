@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/alarms"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -47,6 +49,8 @@ func (s *ProcessSteps) gateErrorTriage(candidate Candidate) string {
 	return strings.Join(parts, "\n")
 }
 
+const gateStartErrorPrefix = "the gate program could not start against this candidate: "
+
 // gateStartErrorDetail reports the hold detail when the gate program could not start
 // against this candidate (so gating the same commit again cannot reach a different
 // answer). It returns "" when the gate was interrupted or failed after starting.
@@ -55,7 +59,11 @@ func gateStartErrorDetail(stderr, triage string) string {
 	if msg == "" {
 		return ""
 	}
-	return "the gate program could not start against this candidate: " + msg
+	return gateStartErrorPrefix + msg
+}
+
+func isGateStartErrorDetail(detail string) bool {
+	return strings.HasPrefix(detail, gateStartErrorPrefix)
 }
 
 var gateProgressMarkers = []string{"fork-check:", "triage ", "tillr-gate checks:"}
@@ -76,6 +84,7 @@ func gateStartError(stderr, triage string) string {
 		if strings.Contains(lower, "could not be started:") ||
 			(strings.Contains(lower, "installed tillr-gate runner ") && strings.Contains(lower, " is missing or not a regular file")) ||
 			strings.Contains(lower, "cannot locate tillr-gate installation for ") ||
+			strings.Contains(lower, "tillr_install_root must be absolute:") ||
 			strings.Contains(lower, "tillr-gate is not on path") {
 			return line
 		}
@@ -222,4 +231,81 @@ func gateFaultCandidateHead(workerHead, head string) string {
 		return workerHead
 	}
 	return head
+}
+
+// recordGateStartFailed raises the gate-start-failed alarm the first time a gate cannot
+// start (or when the cause changes while the alarm is active).
+func (l *Loop) recordGateStartFailed(ctx context.Context, c Candidate, detail string) {
+	if l.cfg.Store == "" || detail == "" {
+		return
+	}
+	s, err := store.Open(ctx, l.cfg.Store, false)
+	if err != nil {
+		l.reportf("loop: could not record %s alarm for %s: %v\n", alarms.GateStartFailed, c.ItemID, err)
+		return
+	}
+	defer s.Close()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		var activeDetail string
+		err := tx.Reader().QueryRow(`SELECT coalesce(json_extract(payload,'$.detail'), '')
+FROM events
+WHERE kind = ?
+ AND seq > COALESCE((SELECT seq FROM events WHERE kind = ? ORDER BY seq DESC LIMIT 1), 0)
+ORDER BY seq DESC LIMIT 1`, alarms.GateStartFailedKind, alarms.GateStartClearedKind).Scan(&activeDetail)
+		if err == nil && activeDetail == detail {
+			return nil
+		}
+		payload, err := json.Marshal(map[string]any{
+			"item_id": c.ItemID,
+			"run_id":  c.RunID,
+			"lane_id": c.LaneID,
+			"detail":  detail,
+		})
+		if err != nil {
+			return err
+		}
+		id := "gate"
+		_, err = tx.Append(event.Event{
+			Kind:       alarms.GateStartFailedKind,
+			ObjectType: "gate",
+			ObjectID:   &id,
+			At:         l.cfg.Now().UTC(),
+			Payload:    payload,
+		})
+		return err
+	}); err != nil {
+		l.reportf("loop: could not record %s alarm for %s: %v\n", alarms.GateStartFailed, c.ItemID, err)
+	}
+}
+
+// clearGateStartFailed clears an active gate-start-failed alarm once a gate starts.
+func (l *Loop) clearGateStartFailed(ctx context.Context) {
+	if l.cfg.Store == "" {
+		return
+	}
+	s, err := store.Open(ctx, l.cfg.Store, false)
+	if err != nil {
+		return
+	}
+	defer s.Close()
+	_ = s.WriteTx(ctx, func(tx *store.Tx) error {
+		var active int
+		err := tx.Reader().QueryRow(`SELECT COUNT(*)
+FROM events
+WHERE kind = ?
+ AND seq > COALESCE((SELECT seq FROM events WHERE kind = ? ORDER BY seq DESC LIMIT 1), 0)`,
+			alarms.GateStartFailedKind, alarms.GateStartClearedKind).Scan(&active)
+		if err != nil || active == 0 {
+			return err
+		}
+		id := "gate"
+		_, err = tx.Append(event.Event{
+			Kind:       alarms.GateStartClearedKind,
+			ObjectType: "gate",
+			ObjectID:   &id,
+			At:         l.cfg.Now().UTC(),
+			Payload:    []byte("{}"),
+		})
+		return err
+	})
 }
