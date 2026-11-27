@@ -125,7 +125,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			ok = slotOpen && !p.tick.OutLanes[lane] && (row.Express || !isExpressLane(lane)) && p.retainedLaneFreeFor(lane, row.ItemID)
 			// A killed run can resume only on its old lane. If that lane is
 			// unavailable, another eligible lane can start a fresh design session.
-			if !ok && slotOpen && (isExpressLane(lane) || interrupted) {
+			if !ok && slotOpen && (isExpressLane(lane) || interrupted || (p.tick.ItemWorktrees && isPoolLaneName(lane))) {
 				lane, ok = p.freeLaneForItem(row.ItemID, row.Express)
 			}
 		} else if slotOpen {

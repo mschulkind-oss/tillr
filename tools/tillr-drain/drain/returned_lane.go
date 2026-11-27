@@ -15,6 +15,9 @@ func (p *planner) returnedJudgeLane(itemID string, e *ReturnedEnding) string {
 	if ending.LaneID == "" || ending.HeadSHA == "" || !p.offersLane(ending.LaneID) {
 		return ""
 	}
+	if p.tick.ItemWorktrees && ending.LaneID != itemID {
+		return ""
+	}
 	work := p.works[itemID]
 	if work == nil || work.Candidate == nil {
 		return ""

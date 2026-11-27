@@ -299,6 +299,19 @@ func (l *Loop) releaseCandidateMode(ctx context.Context, work *pendingWork, reas
 	if work.LaneReleased || work.Done || candidateKeepReason(work, reason) != "" {
 		return false, nil
 	}
+	if l.cfg.ItemWorktrees && work.Candidate != nil && work.Candidate.LaneID == work.Candidate.ItemID {
+		c := *work.Candidate
+		var pinErr error
+		if c.BaseRef != "" {
+			pinErr = l.pinHeldFork(ctx, c)
+		} else {
+			pinErr = l.pinCandidateHead(ctx, c)
+		}
+		if pinErr != nil {
+			return false, pinErr
+		}
+		return false, nil
+	}
 	if !examining && work.LaneKeepReason != "" {
 		// A keep the store already records is re-read before any claim: when the
 		// lane's HEAD still keeps it for the same reason, nothing would change, so the
@@ -590,6 +603,9 @@ func (l *Loop) releaseIdleHeldCandidates(ctx context.Context) error {
 		}
 		if w.RepairHold != nil {
 			reason = ReasonRepairStagingFailed
+		}
+		if l.cfg.ItemWorktrees && w.Decision.LaneID == id && l.pinnedCandidate(ctx, *w.Candidate) == nil {
+			continue
 		}
 		// A passing verdict alone is not a hold. Do not reset a candidate that
 		// still needs its recorded HEAD checked by the ordinary landing path.

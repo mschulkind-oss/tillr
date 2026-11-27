@@ -684,7 +684,7 @@ func (p *planner) reserveWorkerLanes(items []itemRow, released map[string]bool) 
 			p.workerLanes[lane] = row.ItemID
 			continue
 		}
-		if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && !isExpressLane(e.WorkerSession.LaneID) && !released[e.WorkerSession.LaneID] && p.retainedLaneFree(e.WorkerSession.LaneID) {
+		if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && !isExpressLane(e.WorkerSession.LaneID) && (!p.tick.ItemWorktrees || e.WorkerSession.LaneID == row.ItemID) && !released[e.WorkerSession.LaneID] && p.retainedLaneFree(e.WorkerSession.LaneID) {
 			// Several reverted landings can name the same recycled lane. Only
 			// the item whose handle remains there can reserve that checkout.
 			id, err := ReadSessionID(e.WorkerSession.LaneDir)
@@ -701,7 +701,7 @@ func (p *planner) reserveWorkerLanes(items []itemRow, released map[string]bool) 
 			continue
 		}
 		c := p.conflicts[row.ItemID]
-		if origin := designContinuationWork(c, p.designHistory[c.DesignRunID]); origin != nil && !isExpressLane(origin.Decision.LaneID) && !released[origin.Decision.LaneID] {
+		if origin := designContinuationWork(c, p.designHistory[c.DesignRunID]); origin != nil && !isExpressLane(origin.Decision.LaneID) && (!p.tick.ItemWorktrees || origin.Decision.LaneID == row.ItemID) && !released[origin.Decision.LaneID] {
 			p.workerLanes[origin.Decision.LaneID] = row.ItemID
 		}
 	}
@@ -865,7 +865,11 @@ func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges ma
 			continue
 		}
 		if p.tick.ItemWorktrees && lane == row.ItemID {
-			if row.Express || len(p.activeOrdinaryAgents) < p.runningAgentLimit {
+			limit := p.runningAgentLimit
+			if limit == 0 && p.tick.AvailableLanes != nil {
+				limit = ordinaryLaneCount(*p.tick.AvailableLanes)
+			}
+			if row.Express || len(p.activeOrdinaryAgents) < limit {
 				if p.captureStart == nil {
 					p.pausedReserved[row.ItemID] = lane
 					if !row.Express {
@@ -1036,6 +1040,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			// claim took it out) cannot be offered that lane again: it is planned onto a
 			// free one, as a released lane is.
 			laneOut := work.Ready && !work.Done && tick.OutLanes[work.Decision.LaneID]
+			migratePoolLane := p.tick.ItemWorktrees && work.Ready && !work.Done && !work.LaneReleased && isPoolLaneName(work.Decision.LaneID) && !documentDesk(work.Decision.LaneID)
 			detachedNode := work.Ready && work.LaneReleased
 			// A successor to classification (or a restarted node) may be ready to
 			// run without owning its fork. Check before it can take a free lane,
@@ -1050,7 +1055,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				}
 				forkHolder, _ = p.forkHeldBy(fork, self)
 			}
-			if err == nil && (work.LaneReleased || laneOut) && !waiting && !ownerNextNode && !depHold && decision.Action != ActionHold && forkHolder == "" {
+			if err == nil && (work.LaneReleased || laneOut || migratePoolLane) && !waiting && !ownerNextNode && !depHold && decision.Action != ActionHold && forkHolder == "" {
 				if detachedNode {
 					// A released first node has no staged state to resume. Keep the
 					// selected request, but stage it fresh on the newly assigned lane.
@@ -1876,7 +1881,7 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 			decision.Reason = ReasonRestagedStaleBase
 		}
 		if returned != nil {
-			if ownJudgeLane != "" {
+			if ownJudgeLane != "" || (p.tick.ItemWorktrees && returned.Cause == ReasonEvalFailed && !returned.Restart) {
 				decision.RetryCandidate = p.retryCandidate(item.ItemID, returned.RunID)
 			}
 			decision.Returned = returned
@@ -2407,6 +2412,9 @@ func (p *planner) retainedLaneFree(id string) bool {
 }
 
 func (p *planner) retainedLaneFreeFor(id, itemID string) bool {
+	if p.tick.ItemWorktrees && id != itemID {
+		return false
+	}
 	owner := p.workerLanes[id]
 	return p.retainedLaneFree(id) && (owner == "" || owner == itemID)
 }

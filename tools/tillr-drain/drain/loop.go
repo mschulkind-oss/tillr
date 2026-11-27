@@ -2250,6 +2250,21 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				expectedHead = decision.Returned.WorkerSession.HeadSHA
 			}
 			if expectedHead != "" {
+				if l.cfg.ItemWorktrees && !isPoolLaneName(decision.LaneID) {
+					if _, statErr := os.Stat(l.lanePath(decision.LaneID)); os.IsNotExist(statErr) {
+						itemBase := expectedHead
+						if l.cfg.Store != "" {
+							if base, baseErr := l.pendingItemBase(ctx, request.ItemID); baseErr == nil && base != "" {
+								itemBase = base
+							}
+						}
+						spec.KeptHeadSHA = expectedHead
+						spec.KeptItemBaseSHA = itemBase
+						spec.Continue = false
+					}
+				}
+			}
+			if spec.Continue && expectedHead != "" {
 				restaged, prepErr := l.prepareContinuedLane(ctx, decision, request.ItemID, expectedHead)
 				if prepErr != nil {
 					if holdErr := failStage("prepare continued lane", prepErr); holdErr != nil {
@@ -2366,6 +2381,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				}
 			}
 			endRecordStaged()
+			l.releaseMigratedPoolLane(ctx, decision)
 			staged = append(staged, decision)
 			continue
 		}
@@ -2427,6 +2443,79 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		}
 	}
 	return staged, nil
+}
+
+// releaseMigratedPoolLane resets and releases an idle pool lane that held an
+// item's previous run after ItemWorktrees moves that item's next dispatch into
+// its own item directory.
+func (l *Loop) releaseMigratedPoolLane(ctx context.Context, decision Decision) {
+	if l.nonLanding || !l.cfg.ItemWorktrees || decision.LaneID == "" || isPoolLaneName(decision.LaneID) {
+		return
+	}
+	var oldLane string
+	if decision.Returned != nil && decision.Returned.WorkerSession != nil && isPoolLaneName(decision.Returned.WorkerSession.LaneID) {
+		oldLane = decision.Returned.WorkerSession.LaneID
+	}
+	if oldLane == "" && l.cfg.Store != "" && decision.ItemID != "" && decision.RunRequest != nil {
+		s, err := store.OpenRead(ctx, l.cfg.Store)
+		if err == nil {
+			_ = s.ReadTx(ctx, func(r *store.Reader) error {
+				var lane string
+				if err := r.QueryRow(`SELECT lane_id FROM runs WHERE item_id = ? AND run_id != ? ORDER BY started_at DESC, run_id DESC LIMIT 1`,
+					decision.ItemID, decision.RunRequest.RunID).Scan(&lane); err == nil && isPoolLaneName(lane) {
+					oldLane = lane
+				}
+				return nil
+			})
+			s.Close()
+		}
+	}
+	if oldLane == "" || oldLane == decision.LaneID || strings.HasPrefix(oldLane, "desk-") {
+		return
+	}
+	if l.cfg.Store != "" {
+		s, err := store.Open(ctx, l.cfg.Store, true)
+		if err != nil {
+			return
+		}
+		var busyByOther bool
+		err = s.WriteTx(ctx, func(tx *store.Tx) error {
+			var state string
+			var runID sql.NullString
+			var leasedUntil sql.NullInt64
+			scanErr := tx.QueryRow(`SELECT state, run_id, leased_until FROM lanes WHERE lane_id = ?`, oldLane).Scan(&state, &runID, &leasedUntil)
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				return nil
+			}
+			if scanErr != nil {
+				return scanErr
+			}
+			if state == run.LaneStateLeased && (!leasedUntil.Valid || leasedUntil.Int64 > l.cfg.Now().UTC().UnixMilli()) {
+				if !runID.Valid || runID.String == "" {
+					busyByOther = true
+					return nil
+				}
+				var ownerItem string
+				if err := tx.QueryRow(`SELECT item_id FROM runs WHERE run_id = ?`, runID.String).Scan(&ownerItem); err != nil || ownerItem != decision.ItemID {
+					busyByOther = true
+					return nil
+				}
+				if _, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ?`, run.LaneStateIdle, oldLane, runID.String); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		s.Close()
+		if err != nil || busyByOther {
+			return
+		}
+	}
+	if _, statErr := os.Stat(l.lanePath(oldLane)); statErr == nil {
+		if err := l.resetLane(ctx, oldLane); err != nil {
+			l.reportf("loop: migrated pool lane %s could not be reset: %v\n", oldLane, err)
+		}
+	}
 }
 
 // runLane executes the already durably handed-off conflict repair inside its
