@@ -377,3 +377,22 @@ func TestVantageIndexMethodsFailClosedOnZeroOrRefusedIndex(t *testing.T) {
 		t.Fatal("refused DesignUnansweredQuestions should error")
 	}
 }
+
+func TestVantageQuestionsLoadedIndex(t *testing.T) {
+	var nilSource *VantageQuestions
+	if _, ok := nilSource.LoadedIndex(); ok {
+		t.Fatal("nil VantageQuestions reported a loaded index")
+	}
+	unread := &VantageQuestions{Root: t.TempDir(), Command: []string{"definitely-not-a-tool-7f3a"}}
+	if _, ok := unread.LoadedIndex(); ok {
+		t.Fatal("unread VantageQuestions reported a loaded index")
+	}
+	preloaded := Preloaded(t.TempDir(), ParseIndex([]byte(`{"index":{"documents":[]}}`), "preloaded-fixture"))
+	idx, ok := preloaded.LoadedIndex()
+	if !ok {
+		t.Fatal("preloaded VantageQuestions did not report a loaded index")
+	}
+	if _, err := idx.StageRole("docs/a.md"); err != nil {
+		t.Fatalf("preloaded index StageRole: %v", err)
+	}
+}

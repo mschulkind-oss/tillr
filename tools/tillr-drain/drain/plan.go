@@ -419,7 +419,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	unshared := map[string]bool{}
 	rewriteHolds, rewriteOwnerHolds := map[string]string{}, map[string]string{}
 	if hasPrerequisite(def, definition.PrerequisiteDesignDocument) && def.Completes == "landing" {
-		unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisites(r, root, tick.ProseRewrite)
+		unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisites(r, root, tick.ProseRewrite, questions)
 		if err != nil {
 			return nil, err
 		}

@@ -265,6 +265,15 @@ func (v *VantageQuestions) DesignUnansweredQuestions(path string) ([]Question, e
 	return v.index.DesignUnansweredQuestions(path)
 }
 
+// LoadedIndex returns the index if it has already been read (including via Preloaded),
+// and whether it was read. It never starts the index command.
+func (v *VantageQuestions) LoadedIndex() (VantageIndex, bool) {
+	if v == nil || !v.read {
+		return VantageIndex{}, false
+	}
+	return v.index, true
+}
+
 // questions answers one document's questions from the index, reading the index first if this
 // is the first document asked about.
 func (v *VantageQuestions) questions(path string) ([]Question, error) {

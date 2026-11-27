@@ -11,6 +11,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 func planDecisions(t *testing.T, storePath string, tick Pass, policy *Policy, questions QuestionSource) map[string]Decision {
@@ -303,5 +304,31 @@ func TestPlanIceboxRespectsConfiguredSyncRoadmaps(t *testing.T) {
 	const wantReason = `icebox: "AutoQA" in docs/tillr/roadmap.md`
 	if d := decisions[autoqaID]; d.Action != ActionHold || d.Reason != wantReason {
 		t.Fatalf("in-scope roadmap item = %+v, want Action=%q Reason=%q", d, ActionHold, wantReason)
+	}
+}
+
+func TestPlanUsesPreloadedQuestionIndexForDocumentPrerequisites(t *testing.T) {
+	f, l := passFixture(t)
+	for _, dir := range []string{"docs/tillr", "docs/design"} {
+		if err := os.MkdirAll(filepath.Join(f.root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeForkFile(t, filepath.Join(f.root, "docs/design/tillr-autoqa.md"), "# AutoQA\n")
+	writeForkFile(t, filepath.Join(f.root, "docs/tillr/roadmap.md"), "# tillr Roadmap\n\n## Icebox\n\n- **AutoQA** — [design](../design/tillr-autoqa.md)\n")
+	runGit(t, f.root, "add", "docs")
+	runGit(t, f.root, "commit", "-qm", "roadmap with icebox design")
+
+	l.cfg.Policy.Seats = map[string]string{"build": "fixture"}
+	questions := vantage.Preloaded(f.root, vantage.ParseIndex([]byte(`{"index":{"documents":[]}}`), "preloaded-fixture"))
+	autoqaID := fileFixtureRequestWith(t, f, "Finish docs/design/tillr-autoqa.md.\n", "build", item.SingleWorkerWorkflow, []string{"docs/"}, false)
+
+	// Preloaded has Command == nil, so any external index invocation would run uvx.
+	lanes := []string{"lane-1"}
+	decisions := planDecisions(t, f.storePath, Pass{Now: "2026-11-23T18:00:00Z", AvailableLanes: &lanes, StorePath: f.storePath}, l.cfg.Policy, questions)
+
+	const wantReason = `icebox: "AutoQA" in docs/tillr/roadmap.md`
+	if d := decisions[autoqaID]; d.Action != ActionHold || d.Reason != wantReason {
+		t.Fatalf("preloaded plan decision = %+v, want Action=%q Reason=%q", d, ActionHold, wantReason)
 	}
 }

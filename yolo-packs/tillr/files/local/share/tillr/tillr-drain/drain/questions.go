@@ -215,3 +215,18 @@ func (s *savedVantageQuestions) Document(path string) (DocumentQuestions, error)
 func (s *savedVantageQuestions) Done(path string) (bool, error) {
 	return s.ensure().Done(path)
 }
+
+func (s *savedVantageQuestions) syncIndexHint() ([]string, vantage.VantageIndex, bool) {
+	if s == nil {
+		return nil, vantage.VantageIndex{}, false
+	}
+	s.mu.Lock()
+	loaded := s.loaded
+	cmd := s.command
+	s.mu.Unlock()
+	if loaded != nil {
+		idx, ok := loaded.LoadedIndex()
+		return cmd, idx, ok
+	}
+	return cmd, vantage.VantageIndex{}, false
+}
