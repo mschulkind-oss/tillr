@@ -113,13 +113,34 @@ func (l *Loop) compactDesigner(ctx context.Context, d Decision) error {
 func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
 	workerTurn := d.RunRequest != nil && d.RunRequest.SessionTurn && d.WorkerSessionReason == "resumed-worker"
 	designTurn := d.DesignContinuationFrom != "" && d.RunRequest != nil && d.RunRequest.SessionTurn
-	if (!strings.HasPrefix(d.DesignerReason, "resumed-") && !workerTurn && !designTurn) || rec.ExitCode == nil || *rec.ExitCode == 0 || rec.State != run.StateExited {
+	// A quota continuation resumes the session staged for the attempt. A run paused
+	// before its harness took a first turn has that id but no conversation behind it,
+	// so only the harness's explicit missing-conversation diagnostic counts here.
+	quotaTurn := rec.Resumed && quotaSingleRun(d) && !strings.HasPrefix(d.DesignerReason, "resumed-") && !workerTurn && !designTurn
+	if (!strings.HasPrefix(d.DesignerReason, "resumed-") && !workerTurn && !designTurn && !quotaTurn) || rec.ExitCode == nil || *rec.ExitCode == 0 || rec.State != run.StateExited {
 		return false, nil
 	}
-	if (workerTurn || designTurn) && rec.EndCause != run.EndNormalExit {
+	if (workerTurn || designTurn || quotaTurn) && rec.EndCause != run.EndNormalExit {
 		return false, nil
 	}
-	sawLog, missingSession := false, false
+	sessionID := d.DesignerSessionID
+	if quotaTurn {
+		sessionID = ""
+		for _, ref := range rec.ArtifactRefs {
+			if ref.Kind == "lane-root" {
+				id, err := run.ReadSessionID(ref.Ref)
+				if err != nil {
+					return false, err
+				}
+				sessionID = id
+			}
+		}
+		if sessionID == "" {
+			return false, nil
+		}
+	}
+	explicit := designTurn || quotaTurn
+	sawLog, missingSession := false, explicit && missingDesignSessionDiagnostic(rec.StderrTail, sessionID)
 	for _, ref := range rec.ArtifactRefs {
 		if ref.Kind != "log" {
 			continue
@@ -133,7 +154,7 @@ func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
 		scan.Buffer(make([]byte, 64<<10), 16<<20)
 		response := false
 		for scan.Scan() {
-			if designTurn && missingDesignSessionDiagnostic(scan.Text(), d.DesignerSessionID) {
+			if explicit && missingDesignSessionDiagnostic(scan.Text(), sessionID) {
 				missingSession = true
 			}
 			var e struct {
@@ -182,7 +203,7 @@ func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
 			return false, nil
 		}
 	}
-	if designTurn {
+	if explicit {
 		return missingSession, nil
 	}
 	return sawLog, nil

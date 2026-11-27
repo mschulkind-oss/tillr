@@ -199,6 +199,14 @@ command. Settling a paused run spends no retry, raises no attempt number and
 runs no gate. Unless a quota wait holds it, the loop continues the run on the
 same attempt and lane with that notice as the prompt.
 
+A run paused before its harness took a first turn has a staged session id but
+no conversation behind it. When a quota continuation exits nonzero with no model
+output and the harness's explicit diagnostic that the staged session has no
+conversation (`No conversation found with session ID: <id>`), the loop treats
+the session as gone, not the backend as broken (`failedDesignerResume`): it
+records no backend-closing outcome and dispatches the next attempt at once as a
+new session in the same settlement.
+
 ### Work in flight across a restart
 
 A restart pauses nothing. Workers stay on their original leases, and the new
