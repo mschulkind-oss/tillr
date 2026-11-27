@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { navigate } from "../models/route";
 import { useItemDocQuery, useItemQuery, useRunArtifactQuery, useRunExchangesQuery, useRunGateQuery, useRunQuery, useRunTimelineQuery, useRunTranscriptQuery } from "../models/queries";
-import type { DispatchView, ItemData, ItemView, LinkedAlertView, TimelineData, VerdictFindingView, VerifyRefusalView } from "../models/types";
+import type { DispatchView, EarlierFindingFateView, ItemData, ItemView, LinkedAlertView, TimelineData, VerdictComparisonView, VerdictExaminedView, VerdictFindingView, VerifyRefusalView } from "../models/types";
 import { alertGlyphState, alertsFilterUrl } from "./AlertsPage";
 import { assembleSpans } from "../models/spans";
 import { ItemDetailPane } from "./ItemDetailPane";
@@ -31,6 +31,41 @@ function NextStep({ refusal }: { refusal: VerifyRefusalView }) {
   if (!refusal.next_step) return <>No next step started yet</>;
   return <>Next step: {refusal.next_step}{refusal.next_run_id ? <>{" · run "}<EntityLink kind="run" id={refusal.next_run_id} /></> : null}</>;
 }
+function signedDelta(n: number): string {
+  return n > 0 ? `+${n}` : `${n}`;
+}
+
+function ComparisonSummary({ comparison }: { comparison?: VerdictComparisonView }) {
+  if (!comparison) return null;
+  const hasDelta = comparison.files_delta !== undefined || comparison.added_lines_delta !== undefined;
+  const labels: string[] = [];
+  if (comparison.new_finding_after_fix) labels.push("new finding after fix (S2 advisory)");
+  if (comparison.repair_growing) labels.push("repair growing (S3 advisory)");
+  if (comparison.has_unexamined_paths) labels.push("unexamined paths (S4 advisory)");
+  if (!comparison.previous_run_id && !hasDelta && !labels.length) return null;
+  return <div aria-label="Verdict comparison">
+    Comparison{comparison.previous_run_id ? <> vs <EntityLink kind="run" id={comparison.previous_run_id} /></> : null}
+    {hasDelta ? <>: {comparison.files_delta !== undefined ? `${signedDelta(comparison.files_delta)} files` : null}{comparison.files_delta !== undefined && comparison.added_lines_delta !== undefined ? ", " : null}{comparison.added_lines_delta !== undefined ? `${signedDelta(comparison.added_lines_delta)} lines` : null}</> : null}
+    {labels.length ? <> · {labels.join(" · ")}</> : null}
+  </div>;
+}
+
+function ExaminedSummary({ examined }: { examined?: VerdictExaminedView }) {
+  if (!examined) return null;
+  if (examined.whole) return <div>Examined: whole candidate</div>;
+  return <div>Unexamined paths: {(examined.unexamined_paths ?? []).map((p, i) => <span key={i}>{i > 0 ? ", " : null}<code>{p}</code></span>)}</div>;
+}
+
+function EarlierFindingFateList({ fates }: { fates?: EarlierFindingFateView[] }) {
+  if (!fates?.length) return null;
+  return <ul aria-label="Earlier finding fates">
+    {fates.map((fate, index) => <li key={index}>
+      {fate.criterion_id ? `${fate.criterion_id} · ` : null}<strong>{fate.fate === "fixed" ? "Fixed" : "Not fixed"}</strong>{": "}<span>{fate.finding}</span>
+      {fate.paths?.length ? <>{" · "}{fate.paths.map((p, i) => <span key={i}>{i > 0 ? ", " : null}<code>{p}</code></span>)}</> : null}
+    </li>)}
+  </ul>;
+}
+
 export function VerifyRefusals({ refusals }: { refusals: VerifyRefusalView[] }) {
   if (!refusals.length) return null;
   return <section aria-label="Verify refusals"><h2>Verify refusals</h2><ol>
@@ -38,8 +73,11 @@ export function VerifyRefusals({ refusals }: { refusals: VerifyRefusalView[] }) 
       Verify run <EntityLink kind="run" id={r.run_id} />{r.attempt !== null ? ` · attempt ${r.attempt}` : ""} · <time>{new Date(r.at_ms).toISOString()}</time> · <NextStep refusal={r} />
       {r.replan ? <> · replan: the findings said the plan was wrong</> : null}
       {r.candidate_size ? <div>Candidate size: {r.candidate_size.files} files (limit {r.candidate_size.file_limit}) · {r.candidate_size.added_lines} added lines (limit {r.candidate_size.added_line_limit})</div> : null}
+      <ComparisonSummary comparison={r.verdict_comparison} />
+      <ExaminedSummary examined={r.examined} />
       <pre className="refusal-detail">{r.detail}</pre>
       <FindingList findings={r.findings} />
+      <EarlierFindingFateList fates={r.earlier_finding_fates} />
     </li>)}
   </ol></section>;
 }

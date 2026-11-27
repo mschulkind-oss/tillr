@@ -444,3 +444,123 @@ func TestJudgeDryRunOutcomes(t *testing.T) {
 		}
 	}
 }
+
+func TestJudgeRecordsEarlierFindingFatesAndExamined(t *testing.T) {
+	t.Run("fates-and-whole-examined", func(t *testing.T) {
+		db, file := judgeFixture(t)
+		file["outcome"] = "fail"
+		entry := file["verdicts"].([]any)[1].(map[string]any)
+		entry["verdict"] = "not-done"
+		fates := []map[string]any{
+			{"criterion_id": "c1", "finding": "Empty input skipped.", "paths": []any{"file:input.go:10"}, "fate": "fixed"},
+			{"finding": "Retry drops request.", "paths": []any{"file:retry.go"}, "fate": "not-fixed"},
+		}
+		file["earlier_finding_fates"] = fates
+		file["examined"] = map[string]any{"whole": true}
+		code, out := judgeRun(t, db, file)
+		if code != 12 || strings.TrimSpace(string(out)) != "not-done" {
+			t.Fatalf("judge: %d %s", code, out)
+		}
+		bodies := sqlStrings(t, db, `SELECT payload FROM events WHERE kind='item.verdict' AND json_extract(payload, '$.criterion_id')='c2'`)
+		if len(bodies) != 1 {
+			t.Fatalf("want one verdict for c2, got %v", bodies)
+		}
+		var stored struct {
+			EarlierFindingFates []map[string]any `json:"earlier_finding_fates"`
+			Examined            struct {
+				Whole           bool     `json:"whole"`
+				UnexaminedPaths []string `json:"unexamined_paths"`
+			} `json:"examined"`
+		}
+		if err := json.Unmarshal([]byte(bodies[0]), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(stored.EarlierFindingFates, fates) {
+			t.Fatalf("stored earlier_finding_fates = %+v, want %+v", stored.EarlierFindingFates, fates)
+		}
+		if !stored.Examined.Whole || len(stored.Examined.UnexaminedPaths) != 0 {
+			t.Fatalf("stored examined = %+v, want whole=true", stored.Examined)
+		}
+	})
+
+	t.Run("empty-fates-and-unexamined-paths", func(t *testing.T) {
+		db, file := judgeFixture(t)
+		file["outcome"] = "fail"
+		file["verdicts"].([]any)[0].(map[string]any)["verdict"] = "not-done"
+		file["earlier_finding_fates"] = []any{}
+		file["examined"] = map[string]any{"whole": false, "unexamined_paths": []string{"file:slow_test.go", "file:docs/guide.md:12"}}
+		code, out := judgeRun(t, db, file)
+		if code != 12 || strings.TrimSpace(string(out)) != "not-done" {
+			t.Fatalf("judge: %d %s", code, out)
+		}
+		bodies := sqlStrings(t, db, `SELECT payload FROM events WHERE kind='item.verdict' AND json_extract(payload, '$.criterion_id')='c1'`)
+		if len(bodies) != 1 {
+			t.Fatalf("want one verdict for c1, got %v", bodies)
+		}
+		var stored struct {
+			Examined struct {
+				Whole           bool     `json:"whole"`
+				UnexaminedPaths []string `json:"unexamined_paths"`
+			} `json:"examined"`
+		}
+		if err := json.Unmarshal([]byte(bodies[0]), &stored); err != nil {
+			t.Fatal(err)
+		}
+		wantPaths := []string{"file:slow_test.go", "file:docs/guide.md:12"}
+		if stored.Examined.Whole || !reflect.DeepEqual(stored.Examined.UnexaminedPaths, wantPaths) {
+			t.Fatalf("stored examined = %+v, want whole=false paths=%v", stored.Examined, wantPaths)
+		}
+	})
+}
+
+func TestJudgeRefusesMalformedEarlierFindingFatesAndExamined(t *testing.T) {
+	t.Run("fates", func(t *testing.T) {
+		for _, tc := range []struct{ name, raw string }{
+			{"null", `null`},
+			{"not-array", `{}`},
+			{"unknown-field", `[{"finding":"x","fate":"fixed","extra":1}]`},
+			{"unknown-fate", `[{"finding":"x","fate":"ignored"}]`},
+			{"missing-fate", `[{"finding":"x"}]`},
+			{"blank-finding", `[{"finding":"   ","fate":"fixed"}]`},
+			{"bad-locator", `[{"finding":"x","paths":["commit:abc"],"fate":"fixed"}]`},
+			{"abs-locator", `[{"finding":"x","paths":["file:/abs.go"],"fate":"not-fixed"}]`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				db, file := judgeFixture(t)
+				file["outcome"] = "fail"
+				file["verdicts"].([]any)[1].(map[string]any)["verdict"] = "not-done"
+				file["earlier_finding_fates"] = json.RawMessage(tc.raw)
+				code, out := judgeRun(t, db, file)
+				assertRefused(t, code, out, "judge-output")
+				if n := eventsOfKind(t, db, "item.verdict"); n != 0 {
+					t.Fatalf("refusal wrote %d verdicts", n)
+				}
+			})
+		}
+	})
+
+	t.Run("examined", func(t *testing.T) {
+		for _, tc := range []struct{ name, raw string }{
+			{"string", `"whole"`},
+			{"not-object", `[]`},
+			{"unknown-field", `{"whole":true,"extra":1}`},
+			{"whole-with-paths", `{"whole":true,"unexamined_paths":["file:a.go"]}`},
+			{"partial-without-paths", `{"whole":false}`},
+			{"partial-empty-paths", `{"whole":false,"unexamined_paths":[]}`},
+			{"bad-locator", `{"whole":false,"unexamined_paths":["commit:abc"]}`},
+			{"escaping-locator", `{"whole":false,"unexamined_paths":["file:../a.go"]}`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				db, file := judgeFixture(t)
+				file["outcome"] = "fail"
+				file["verdicts"].([]any)[1].(map[string]any)["verdict"] = "not-done"
+				file["examined"] = json.RawMessage(tc.raw)
+				code, out := judgeRun(t, db, file)
+				assertRefused(t, code, out, "judge-output")
+				if n := eventsOfKind(t, db, "item.verdict"); n != 0 {
+					t.Fatalf("refusal wrote %d verdicts", n)
+				}
+			})
+		}
+	})
+}

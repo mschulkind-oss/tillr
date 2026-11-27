@@ -31,3 +31,46 @@ test("refusals display findings on their own rows and leave legacy refusals uncl
     null,
   ]);
 });
+
+test("refusals display earlier finding fates, examined paths, and comparison deltas", () => {
+  const base = { event_seq: 1, at_ms: 1000, run_id: "verify-1", attempt: 1, detail: "reason", replan: false,
+    next_run_id: null, next_attempt: null, next_step: null, next_seat: null, next_event_seq: null, next_at_ms: null };
+  const refusals: VerifyRefusalView[] = [
+    {
+      ...base,
+      examined: { whole: true },
+    },
+    {
+      ...base,
+      event_seq: 2,
+      run_id: "verify-2",
+      examined: { whole: false, unexamined_paths: ["file:slow.go", "file:docs/guide.md"] },
+      earlier_finding_fates: [
+        { criterion_id: "c1", finding: "Missing case.", paths: ["file:a.go:4"], fate: "fixed" },
+        { finding: "Retry drops request.", fate: "not-fixed" },
+      ],
+      verdict_comparison: {
+        previous_run_id: "verify-1",
+        all_earlier_fixed: false,
+        new_finding_at_new_place: true,
+        new_finding_after_fix: false,
+        files_delta: 3,
+        added_lines_delta: -10,
+        repair_growing: false,
+        has_unexamined_paths: true,
+      },
+    },
+  ];
+  render(<VerifyRefusals refusals={refusals} />);
+  expect(screen.getByText("Examined: whole candidate")).toBeTruthy();
+  expect(screen.getByText(/Unexamined paths:/)).toBeTruthy();
+  expect(screen.getByText("file:slow.go")).toBeTruthy();
+  expect(screen.getByText("file:docs/guide.md")).toBeTruthy();
+  expect(screen.getByLabelText("Verdict comparison").textContent).toContain("+3 files, -10 lines");
+  expect(screen.getByLabelText("Verdict comparison").textContent).toContain("unexamined paths (S4 advisory)");
+  const fatesList = screen.getByLabelText("Earlier finding fates");
+  expect(Array.from(fatesList.children, li => li.textContent)).toEqual([
+    "c1 · Fixed: Missing case. · file:a.go:4",
+    "Not fixed: Retry drops request.",
+  ]);
+});

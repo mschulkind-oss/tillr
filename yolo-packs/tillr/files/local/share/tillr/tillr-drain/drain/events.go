@@ -147,8 +147,9 @@ type refusalPayload struct {
 	Replan         bool            `json:"replan,omitempty"`
 	VerifyFeedback *verifyFeedback `json:"verify_feedback,omitempty"`
 	// The size is advisory. A missing observation with an error is distinct from zero.
-	CandidateSize      *candidateSize `json:"candidate_size,omitempty"`
-	CandidateSizeError string         `json:"candidate_size_error,omitempty"`
+	CandidateSize      *candidateSize     `json:"candidate_size,omitempty"`
+	CandidateSizeError string             `json:"candidate_size_error,omitempty"`
+	VerdictComparison  *verdictComparison `json:"verdict_comparison,omitempty"`
 	// Selectors are a reverted landing's legacy replay selectors (kind:label) by check
 	// id, kept so the item's next gate can run a check a loop restart forgot.
 	Selectors map[string]string `json:"selectors,omitempty"`
@@ -297,6 +298,19 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 			payload.CandidateSizeError = err.Error()
 		} else {
 			payload.CandidateSize = &size
+		}
+		db, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return err
+		}
+		err = db.ReadTx(ctx, func(r *store.Reader) error {
+			var err error
+			payload.VerdictComparison, err = compareWithPreviousRefusal(r, candidate.ItemID, candidate.RunID, payload.VerifyFeedback, payload.CandidateSize)
+			return err
+		})
+		db.Close()
+		if err != nil {
+			return err
 		}
 	}
 	payload.RefusalCauses = computeRefusalCauses(payload)

@@ -574,6 +574,29 @@ export interface VerdictFindingView {
   paths: string[];
 }
 
+export interface EarlierFindingFateView {
+  criterion_id?: string;
+  finding: string;
+  paths?: string[];
+  fate: "fixed" | "not-fixed";
+}
+
+export interface VerdictExaminedView {
+  whole: boolean;
+  unexamined_paths?: string[];
+}
+
+export interface VerdictComparisonView {
+  previous_run_id?: string;
+  all_earlier_fixed: boolean;
+  new_finding_at_new_place: boolean;
+  new_finding_after_fix: boolean;
+  files_delta?: number;
+  added_lines_delta?: number;
+  repair_growing: boolean;
+  has_unexamined_paths: boolean;
+}
+
 /** One item's dossier. It carries no question list: the board does not track question
  * state, and the one question fact the pane shows — the count — comes from the document
  * route, which owns the parse (design §8.1, ledger `D-OBS6`). */
@@ -587,6 +610,8 @@ export interface VerdictView {
   reason?: string;
   evidence?: string[];
   findings?: VerdictFindingView[];
+  earlier_finding_fates?: EarlierFindingFateView[];
+  examined?: VerdictExaminedView;
 }
 
 export interface ItemRunView {
@@ -636,6 +661,9 @@ export interface VerifyRefusalView {
   detail: string;
   replan: boolean;
   findings?: (VerdictFindingView & { criterion: string })[];
+  earlier_finding_fates?: EarlierFindingFateView[];
+  examined?: VerdictExaminedView;
+  verdict_comparison?: VerdictComparisonView;
   candidate_size?: {
     files: number;
     added_lines: number;

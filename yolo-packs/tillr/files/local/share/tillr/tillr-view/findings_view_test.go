@@ -54,3 +54,50 @@ func TestItemFindingProjection(t *testing.T) {
 		t.Errorf("old verdict findings = %v", got)
 	}
 }
+
+func TestItemRefusalComparisonFatesAndExamined(t *testing.T) {
+	h := newServeHarness(t)
+	h.exec(`INSERT INTO events (ts,kind,object_type,object_id,payload) VALUES
+ (3000,'drain.refusal','run','verify-a','{"item_id":"item-seed-06","step":"verify-not-done","detail":"c1: first","candidate_size":{"files":2,"added_lines":40,"file_limit":27,"added_line_limit":1200},"verify_feedback":{"findings":[{"criterion":"c1","reason":"first","findings":[{"kind":"gap","case":"missing","paths":["file:a.go"]}]}],"examined":{"whole":true}}}'),
+ (3100,'drain.refusal','run','verify-b','{"item_id":"item-seed-06","step":"verify-not-done","detail":"c1: second","candidate_size":{"files":5,"added_lines":160,"file_limit":27,"added_line_limit":1200},"verify_feedback":{"findings":[{"criterion":"c1","reason":"second","findings":[{"kind":"regression","case":"broken","paths":["file:b.go"]}]}],"earlier_finding_fates":[{"criterion_id":"c1","finding":"missing","paths":["file:a.go"],"fate":"fixed"}],"examined":{"whole":false,"unexamined_paths":["file:slow.go"]}},"verdict_comparison":{"previous_run_id":"verify-a","all_earlier_fixed":true,"new_finding_at_new_place":true,"new_finding_after_fix":true,"files_delta":3,"added_lines_delta":120,"repair_growing":true,"has_unexamined_paths":true}}'),
+ (3200,'drain.refusal','run','verify-c','{"item_id":"item-seed-06","step":"verify-not-done","detail":"c1: third","candidate_size":{"files":4,"added_lines":150,"file_limit":27,"added_line_limit":1200}}'),
+ (3300,'item.verdict','item','item-seed-06','{"criterion_id":"c1","verdict":"not-done","reason":"direct","earlier_finding_fates":[{"finding":"missing","fate":"fixed"}],"examined":{"whole":false,"unexamined_paths":["file:slow.go"]}}')`)
+
+	rows := verifyRefusalsFor(t, h, "item-seed-06")
+	if len(rows) != 3 {
+		t.Fatalf("refusal rows = %d; want 3", len(rows))
+	}
+	first := rows[0].(map[string]any)
+	if ex, ok := first["examined"].(map[string]any); !ok || ex["whole"] != true {
+		t.Errorf("first examined = %v; want whole=true", first["examined"])
+	}
+	second := rows[1].(map[string]any)
+	if fates, ok := second["earlier_finding_fates"].([]any); !ok || len(fates) != 1 {
+		t.Errorf("second earlier_finding_fates = %v", second["earlier_finding_fates"])
+	}
+	if ex, ok := second["examined"].(map[string]any); !ok || ex["whole"] != false {
+		t.Errorf("second examined = %v", second["examined"])
+	}
+	comp, ok := second["verdict_comparison"].(map[string]any)
+	if !ok || comp["previous_run_id"] != "verify-a" || comp["new_finding_after_fix"] != true || comp["repair_growing"] != true || comp["has_unexamined_paths"] != true {
+		t.Errorf("second verdict_comparison = %v", second["verdict_comparison"])
+	}
+	third := rows[2].(map[string]any)
+	comp3, ok := third["verdict_comparison"].(map[string]any)
+	if !ok || comp3["previous_run_id"] != "verify-b" || comp3["files_delta"] != float64(-1) || comp3["added_lines_delta"] != float64(-10) {
+		t.Errorf("third fallback verdict_comparison = %v", third["verdict_comparison"])
+	}
+
+	_, body, _ := h.get("/api/v1/items/item-seed-06")
+	verdicts := body["data"].(map[string]any)["verdicts"].([]any)
+	if len(verdicts) != 1 {
+		t.Fatalf("verdicts = %v; want 1", verdicts)
+	}
+	v0 := verdicts[0].(map[string]any)
+	if fates, ok := v0["earlier_finding_fates"].([]any); !ok || len(fates) != 1 {
+		t.Errorf("verdict earlier_finding_fates = %v", v0["earlier_finding_fates"])
+	}
+	if ex, ok := v0["examined"].(map[string]any); !ok || ex["whole"] != false {
+		t.Errorf("verdict examined = %v", v0["examined"])
+	}
+}

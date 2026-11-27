@@ -206,6 +206,29 @@ type refusalFindingView struct {
 	verdictFindingView
 }
 
+type earlierFindingFateView struct {
+	CriterionID string   `json:"criterion_id,omitempty"`
+	Finding     string   `json:"finding"`
+	Paths       []string `json:"paths,omitempty"`
+	Fate        string   `json:"fate"`
+}
+
+type verdictExaminedView struct {
+	Whole           bool     `json:"whole"`
+	UnexaminedPaths []string `json:"unexamined_paths,omitempty"`
+}
+
+type verdictComparisonView struct {
+	PreviousRunID        string `json:"previous_run_id,omitempty"`
+	AllEarlierFixed      bool   `json:"all_earlier_fixed"`
+	NewFindingAtNewPlace bool   `json:"new_finding_at_new_place"`
+	NewFindingAfterFix   bool   `json:"new_finding_after_fix"`
+	FilesDelta           *int64 `json:"files_delta,omitempty"`
+	AddedLinesDelta      *int64 `json:"added_lines_delta,omitempty"`
+	RepairGrowing        bool   `json:"repair_growing"`
+	HasUnexaminedPaths   bool   `json:"has_unexamined_paths"`
+}
+
 // verifyRefusalView is one planned verify refusal or other classified review refusal
 // and the step that ran after it. NextStep is
 // the workflow node (`work`, `plan`, `work/piece-one`) of the next run the drain started for
@@ -226,13 +249,16 @@ type verifyRefusalView struct {
 	NextEventSeq *int64  `json:"next_event_seq"`
 	NextAtMS     *int64  `json:"next_at_ms"`
 	// Nil means no reading was recorded, not that the candidate was empty.
-	CandidateSize *candidateSizeView   `json:"candidate_size,omitempty"`
-	Findings      []refusalFindingView `json:"findings,omitempty"`
+	CandidateSize       *candidateSizeView       `json:"candidate_size,omitempty"`
+	Findings            []refusalFindingView     `json:"findings,omitempty"`
+	EarlierFindingFates []earlierFindingFateView `json:"earlier_finding_fates,omitempty"`
+	Examined            *verdictExaminedView     `json:"examined,omitempty"`
+	VerdictComparison   *verdictComparisonView   `json:"verdict_comparison,omitempty"`
 }
 
 func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, error) {
 	out := []verifyRefusalView{}
-	rows, err := r.Query(`SELECT seq, ts, COALESCE(object_id, ''), COALESCE(json_extract(payload, '$.detail'), ''), COALESCE(json_extract(payload, '$.replan'), 0), json_extract(payload, '$.candidate_size'), json_extract(payload, '$.step'), json_extract(payload, '$.verify_feedback.findings')
+	rows, err := r.Query(`SELECT seq, ts, COALESCE(object_id, ''), COALESCE(json_extract(payload, '$.detail'), ''), COALESCE(json_extract(payload, '$.replan'), 0), json_extract(payload, '$.candidate_size'), json_extract(payload, '$.step'), json_extract(payload, '$.verify_feedback.findings'), json_extract(payload, '$.verify_feedback.earlier_finding_fates'), json_extract(payload, '$.verify_feedback.examined'), json_extract(payload, '$.verdict_comparison')
  FROM events WHERE kind = 'drain.refusal' AND object_type = 'run' AND json_valid(payload)
  AND json_extract(payload, '$.item_id') = ?
  AND json_extract(payload, '$.step') IN ('verify-not-done', 'eval-failed', 'judge-blocked')
@@ -245,8 +271,8 @@ func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, er
 		var x verifyRefusalView
 		var replan int
 		var step string
-		var size, findings []byte
-		if err := rows.Scan(&x.EventSeq, &x.AtMS, &x.RunID, &x.Detail, &replan, &size, &step, &findings); err != nil {
+		var size, findings, fates, examined, comparison []byte
+		if err := rows.Scan(&x.EventSeq, &x.AtMS, &x.RunID, &x.Detail, &replan, &size, &step, &findings, &fates, &examined, &comparison); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -271,7 +297,25 @@ func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, er
 				}
 			}
 		}
-		if step != "verify-not-done" && len(x.Findings) == 0 {
+		if fates != nil {
+			if err := json.Unmarshal(fates, &x.EarlierFindingFates); err != nil {
+				rows.Close()
+				return nil, err
+			}
+		}
+		if examined != nil {
+			if err := json.Unmarshal(examined, &x.Examined); err != nil {
+				rows.Close()
+				return nil, err
+			}
+		}
+		if comparison != nil {
+			if err := json.Unmarshal(comparison, &x.VerdictComparison); err != nil {
+				rows.Close()
+				return nil, err
+			}
+		}
+		if step != "verify-not-done" && len(x.Findings) == 0 && len(x.EarlierFindingFates) == 0 && x.Examined == nil {
 			continue
 		}
 		x.Replan = replan != 0
@@ -329,7 +373,28 @@ func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, er
 	if err != nil {
 		return nil, err
 	}
+	var prevWithSize *verifyRefusalView
 	for _, v := range refusals {
+		if prevWithSize != nil && v.CandidateSize != nil {
+			if v.VerdictComparison == nil {
+				v.VerdictComparison = &verdictComparisonView{PreviousRunID: prevWithSize.RunID}
+			}
+			if v.VerdictComparison.PreviousRunID == "" {
+				v.VerdictComparison.PreviousRunID = prevWithSize.RunID
+			}
+			if v.VerdictComparison.FilesDelta == nil {
+				fd := v.CandidateSize.Files - prevWithSize.CandidateSize.Files
+				v.VerdictComparison.FilesDelta = &fd
+			}
+			if v.VerdictComparison.AddedLinesDelta == nil {
+				ad := v.CandidateSize.AddedLines - prevWithSize.CandidateSize.AddedLines
+				v.VerdictComparison.AddedLinesDelta = &ad
+			}
+		}
+		if v.CandidateSize != nil {
+			cp := v
+			prevWithSize = &cp
+		}
 		if n, ok := nodes[v.RunID]; ok {
 			attempt := n.Attempt
 			v.Attempt = &attempt

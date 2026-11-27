@@ -30,8 +30,24 @@ type verifyFindingRecord struct {
 func (f verifyFindingRecord) text() string { return f.Criterion + ": " + f.Reason }
 
 type verifyFeedback struct {
-	Findings []verifyFindingRecord `json:"findings"`
-	Passed   []string              `json:"passed,omitempty"`
+	Findings            []verifyFindingRecord    `json:"findings"`
+	Passed              []string                 `json:"passed,omitempty"`
+	EarlierFindingFates item.EarlierFindingFates `json:"earlier_finding_fates,omitempty"`
+	Examined            *item.VerdictExamined    `json:"examined,omitempty"`
+}
+
+// verdictComparison records advisory S2/S3/S4 readings comparing a not-done
+// verdict against the immediately preceding verify-not-done refusal on the same item.
+// Per P7 / D-SP15 these readings are displayed and stored only; nothing routes on them.
+type verdictComparison struct {
+	PreviousRunID        string `json:"previous_run_id,omitempty"`
+	AllEarlierFixed      bool   `json:"all_earlier_fixed"`
+	NewFindingAtNewPlace bool   `json:"new_finding_at_new_place"`
+	NewFindingAfterFix   bool   `json:"new_finding_after_fix"`
+	FilesDelta           *int64 `json:"files_delta,omitempty"`
+	AddedLinesDelta      *int64 `json:"added_lines_delta,omitempty"`
+	RepairGrowing        bool   `json:"repair_growing"`
+	HasUnexaminedPaths   bool   `json:"has_unexamined_paths"`
 }
 
 // A file-scoped finding compares the cited paths, not commit metadata or unrelated
@@ -62,9 +78,12 @@ func (l *Loop) verifyFindingSnapshot(ctx context.Context, c Candidate, tree stri
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(paths, "\x00")+"\x00"+out)))
 }
 
-func (l *Loop) checkedVerifyFeedback(ctx context.Context, c Candidate, tree string, verdicts []item.JudgeEntry) *verifyFeedback {
-	f := &verifyFeedback{}
-	for _, v := range verdicts {
+func (l *Loop) checkedVerifyFeedback(ctx context.Context, c Candidate, tree string, output item.JudgeOutput) *verifyFeedback {
+	f := &verifyFeedback{
+		EarlierFindingFates: output.EarlierFindingFates,
+		Examined:            output.Examined,
+	}
+	for _, v := range output.Verdicts {
 		switch v.Verdict {
 		case item.VerdictDone:
 			f.Passed = append(f.Passed, v.CriterionID)
@@ -74,6 +93,101 @@ func (l *Loop) checkedVerifyFeedback(ctx context.Context, c Candidate, tree stri
 	}
 	slices.SortFunc(f.Findings, func(a, b verifyFindingRecord) int { return strings.Compare(a.Criterion, b.Criterion) })
 	return f
+}
+
+func normalizeFindingPath(locator string) string {
+	ref, ok := strings.CutPrefix(locator, "file:")
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(ref, ":")
+	return strings.TrimPrefix(name, "./")
+}
+
+func compareWithPreviousRefusal(r *store.Reader, itemID, runID string, current *verifyFeedback, currentSize *candidateSize) (*verdictComparison, error) {
+	hasUnexamined := current != nil && current.Examined != nil && !current.Examined.Whole && len(current.Examined.UnexaminedPaths) > 0
+	var prevRunID string
+	var raw []byte
+	err := r.QueryRow(`SELECT COALESCE(object_id,''), payload FROM events
+ WHERE kind=? AND object_type='run' AND object_id<>? AND json_valid(payload)
+   AND json_extract(payload,'$.item_id')=? AND json_extract(payload,'$.step')=?
+ ORDER BY seq DESC LIMIT 1`, RefusalKind, runID, itemID, RefusalVerifyNotDone).Scan(&prevRunID, &raw)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	hasPrev := err == nil
+	if !hasPrev && !hasUnexamined && (current == nil || (len(current.EarlierFindingFates) == 0 && current.Examined == nil)) {
+		return nil, nil
+	}
+	comp := &verdictComparison{
+		HasUnexaminedPaths: hasUnexamined,
+	}
+	if !hasPrev {
+		return comp, nil
+	}
+	var prev refusalPayload
+	if err := json.Unmarshal(raw, &prev); err != nil {
+		return nil, err
+	}
+	comp.PreviousRunID = prevRunID
+	if prev.CandidateSize != nil && currentSize != nil {
+		fd := currentSize.Files - prev.CandidateSize.Files
+		ad := currentSize.AddedLines - prev.CandidateSize.AddedLines
+		comp.FilesDelta = &fd
+		comp.AddedLinesDelta = &ad
+	}
+	if current != nil && len(current.EarlierFindingFates) > 0 {
+		allFixed := true
+		for _, fate := range current.EarlierFindingFates {
+			if fate.Fate != "fixed" {
+				allFixed = false
+				break
+			}
+		}
+		comp.AllEarlierFixed = allFixed
+	}
+	prevPaths := map[string]bool{}
+	if prev.VerifyFeedback != nil {
+		for _, rec := range prev.VerifyFeedback.Findings {
+			for _, f := range rec.Findings {
+				for _, p := range f.Paths {
+					if norm := normalizeFindingPath(p); norm != "" {
+						prevPaths[norm] = true
+					}
+				}
+			}
+		}
+	}
+	if current != nil {
+		for _, fate := range current.EarlierFindingFates {
+			for _, p := range fate.Paths {
+				if norm := normalizeFindingPath(p); norm != "" {
+					prevPaths[norm] = true
+				}
+			}
+		}
+		for _, rec := range current.Findings {
+			for _, f := range rec.Findings {
+				for _, p := range f.Paths {
+					if norm := normalizeFindingPath(p); norm != "" && !prevPaths[norm] {
+						comp.NewFindingAtNewPlace = true
+						break
+					}
+				}
+				if comp.NewFindingAtNewPlace {
+					break
+				}
+			}
+			if comp.NewFindingAtNewPlace {
+				break
+			}
+		}
+	}
+	comp.NewFindingAfterFix = comp.AllEarlierFixed && comp.NewFindingAtNewPlace
+	if comp.NewFindingAfterFix && ((comp.FilesDelta != nil && *comp.FilesDelta > 0) || (comp.AddedLinesDelta != nil && *comp.AddedLinesDelta > 0)) {
+		comp.RepairGrowing = true
+	}
+	return comp, nil
 }
 
 // collectVerifyFeedback returns all unanswered findings. A later done verdict

@@ -24,10 +24,12 @@ type JudgeOptions struct {
 // Section 2.1. WaitingOn is retained for the caller's blocked-state routing; intake
 // records criteria only and never changes an item's disposition.
 type JudgeOutput struct {
-	EvaluatedHead string       `json:"evaluated_head"`
-	EvaluatedTree string       `json:"evaluated_tree"`
-	Outcome       string       `json:"outcome"`
-	Verdicts      []JudgeEntry `json:"verdicts"`
+	EvaluatedHead       string              `json:"evaluated_head"`
+	EvaluatedTree       string              `json:"evaluated_tree"`
+	Outcome             string              `json:"outcome"`
+	Verdicts            []JudgeEntry        `json:"verdicts"`
+	EarlierFindingFates EarlierFindingFates `json:"earlier_finding_fates,omitempty"`
+	Examined            *VerdictExamined    `json:"examined,omitempty"`
 }
 type JudgeEntry struct {
 	CriterionID   string          `json:"criterion_id"`
@@ -144,7 +146,7 @@ func CheckJudge(ctx context.Context, r *store.Reader, raw []byte, o JudgeOptions
 				result.Outcome = VerdictNotDone
 			}
 		}
-		v := verdictPayload{ItemID: o.ItemID, CriterionID: entry.CriterionID, CriterionHash: entry.CriterionHash, Verdict: entry.Verdict, ClaimClass: entry.ClaimClass, Reason: entry.Reason, Evidence: append([]string(nil), entry.Evidence...), Findings: entry.Findings, EvaluatedHead: o.Head, ActorKind: ActorAgent, Actor: o.Actor, JudgedActor: o.JudgedActor, EvaluatedTree: o.Tree, EvaluatorBinding: o.EvaluatorBinding}
+		v := verdictPayload{ItemID: o.ItemID, CriterionID: entry.CriterionID, CriterionHash: entry.CriterionHash, Verdict: entry.Verdict, ClaimClass: entry.ClaimClass, Reason: entry.Reason, Evidence: append([]string(nil), entry.Evidence...), Findings: entry.Findings, EarlierFindingFates: output.EarlierFindingFates, Examined: output.Examined, EvaluatedHead: o.Head, ActorKind: ActorAgent, Actor: o.Actor, JudgedActor: o.JudgedActor, EvaluatedTree: o.Tree, EvaluatorBinding: o.EvaluatorBinding}
 		if entry.Verdict == VerdictDone && o.Landed != "" {
 			v.Landed = []string{o.Landed}
 			v.Evidence = append(v.Evidence, "commit:"+o.Landed)

@@ -70,15 +70,26 @@ func TestJudgeBriefScopeAndRefusalHistory(t *testing.T) {
 			return appendEffect(tx, RefusalKind, id, payload, l.cfg.Now())
 		})
 	}
+	const heading = "## Earlier verifier refusals"
+	brief := stage()
+	if strings.Contains(brief, heading) {
+		t.Fatal("history should not appear before any candidate refusal")
+	}
 	first := `c1: first finding\nc2: preserves \u007b\u007bLITERAL}}`
 	record("first", c.ItemID, RefusalVerifyNotDone, "c1: first finding\nc2: preserves {{LITERAL}}")
 	record("other-item", "item-b", RefusalVerifyNotDone, "not this item")
 	record("gate", c.ItemID, RefusalGate, "not a verifier finding")
 	record("unreadable", c.ItemID, ReasonJudgeUnreadable, "not a valid verdict")
-	const heading = "## Earlier verifier refusals"
-	brief := stage()
-	if strings.Contains(brief, heading) || strings.Contains(brief, "first finding") {
-		t.Fatal("history should not appear after only one candidate refusal")
+	brief = stage()
+	for _, want := range []string{
+		heading, first,
+		"State all remaining in-scope findings at once in this verdict, including multiple findings under the same criterion.",
+		`examined: {"whole": true}`,
+		"earlier_finding_fates: when earlier verifier refusals are shown below",
+	} {
+		if !strings.Contains(strings.Join(strings.Fields(brief), " "), want) {
+			t.Errorf("brief after 1 refusal lacks %q:\n%s", want, brief)
+		}
 	}
 	if !strings.Contains(brief, "Changed paths ("+c.BaseSHA+".."+c.HeadSHA+"):\ncandidate.txt\n") {
 		t.Fatalf("judge did not receive the pinned changed paths:\n%s", brief)

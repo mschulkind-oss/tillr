@@ -727,7 +727,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				// not the first failing entry, which may describe a lesser outcome.
 				for _, entry := range checked.Output.Verdicts {
 					if entry.Verdict == checked.Outcome {
-						return c, false, l.settleJudgeFailure(ctx, c, entry, checked.Output.Verdicts, options, result)
+						return c, false, l.settleJudgeFailure(ctx, c, entry, checked.Output, options, result)
 					}
 				}
 				return c, false, Internalf("checked judge outcome %q has no matching entry", checked.Outcome)
@@ -814,7 +814,8 @@ func (l *Loop) defectiveCandidateEvidence(ctx context.Context, c Candidate, verd
 
 // settleJudgeFailure routes a checked ruling without running the gate or landing.
 // Defective intake and closure share a transaction: neither can survive alone.
-func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.JudgeEntry, verdicts []item.JudgeEntry, options item.JudgeOptions, result *LoopResult) error {
+func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.JudgeEntry, output item.JudgeOutput, options item.JudgeOptions, result *LoopResult) error {
+	verdicts := output.Verdicts
 	if c.Evaluator != nil && entry.Verdict == item.VerdictNotDone {
 		var findings []item.JudgeEntry
 		for _, v := range verdicts {
@@ -822,7 +823,7 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 				findings = append(findings, v)
 			}
 		}
-		c.verifyFeedback = l.checkedVerifyFeedback(ctx, c, options.Tree, verdicts)
+		c.verifyFeedback = l.checkedVerifyFeedback(ctx, c, options.Tree, output)
 		if c.NoChange != nil && c.NoChange.NodeID == "plan" {
 			c.VerifyReplan = true
 		}
@@ -865,7 +866,7 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 			c.RefusalDetail = detail
 			c.EvidenceKey = endingKey(ReasonEvalFailed, checks, "", writer)
 		}
-		c.verifyFeedback = judgeRefusalFindings(findings)
+		c.verifyFeedback = judgeRefusalFindings(findings, output)
 		return l.holdJudge(ctx, c, c.Judge.Request.RunID, ReasonEvalFailed, detail, result)
 	}
 	if entry.Verdict == item.VerdictBlocked || entry.Verdict == item.VerdictDefective {
@@ -919,7 +920,7 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 		}
 	}
 	if reason == ReasonJudgeBlocked {
-		c.verifyFeedback = judgeRefusalFindings(verdicts)
+		c.verifyFeedback = judgeRefusalFindings(verdicts, output)
 	}
 	return l.holdJudge(ctx, c, c.Judge.Request.RunID, reason, entry.Reason, result)
 }
@@ -927,18 +928,18 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 // Compatibility and blocked refusals carry classifications for display only.
 // They do not participate in planned verify feedback, snapshots, or repeat detection.
 // Defective dispositions record their findings via RecordJudge instead.
-func judgeRefusalFindings(verdicts []item.JudgeEntry) *verifyFeedback {
+func judgeRefusalFindings(verdicts []item.JudgeEntry, output item.JudgeOutput) *verifyFeedback {
 	var records []verifyFindingRecord
 	for _, v := range verdicts {
 		if v.Verdict == item.VerdictNotDone && len(v.Findings) != 0 {
 			records = append(records, verifyFindingRecord{Criterion: v.CriterionID, Reason: v.Reason, Findings: v.Findings})
 		}
 	}
-	if len(records) == 0 {
+	if len(records) == 0 && len(output.EarlierFindingFates) == 0 && output.Examined == nil {
 		return nil
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Criterion < records[j].Criterion })
-	return &verifyFeedback{Findings: records}
+	return &verifyFeedback{Findings: records, EarlierFindingFates: output.EarlierFindingFates, Examined: output.Examined}
 }
 
 func writeJudgeReceipt(path string, receipt *JudgeReceipt) error {
@@ -992,7 +993,7 @@ SELECT e.object_id, COALESCE((SELECT group_concat(json_extract(value,'$.criterio
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
-	if count < 2 {
+	if count < 1 {
 		return "", nil
 	}
 	return `
@@ -1110,6 +1111,15 @@ no criterion needs.
 Give evidence for each classification in reason and evidence; for a gap, compare the
 named case with the base and show it behaves the same. If a finding cannot be classified,
 report it as a regression.
+
+On a not-done verdict, also state at the top level of the verdict object:
+- examined: {"whole": true} when you examined the whole candidate, or {"whole": false,
+  "unexamined_paths": ["file:<repo-relative-path>"]} listing any candidate paths you
+  did not examine.
+- earlier_finding_fates: when earlier verifier refusals are shown below, one object per
+  finding returned by the previous verdict with criterion_id (optional), finding (the
+  finding text), paths (optional file:<repo-relative-path>[:line] locators), and fate
+  ("fixed" or "not-fixed").
 
 A blocked entry also needs waiting_on
 with waiter (owner, design, plan, or item:<id> for a stored item). Its reason explains

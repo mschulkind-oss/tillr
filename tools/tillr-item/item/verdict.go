@@ -111,26 +111,104 @@ func validFindingLocator(locator string) bool {
 	return err == nil && n > 0
 }
 
+// EarlierFindingFate records whether a finding returned by the previous verdict
+// on this item was fixed or remains not-fixed.
+type EarlierFindingFate struct {
+	CriterionID string   `json:"criterion_id,omitempty"`
+	Finding     string   `json:"finding"`
+	Paths       []string `json:"paths,omitempty"`
+	Fate        string   `json:"fate"`
+}
+
+// EarlierFindingFates is optional on a verdict. When supplied, it may be empty
+// when no earlier findings exist, and each entry must state a valid fate and
+// valid file locators.
+type EarlierFindingFates []EarlierFindingFate
+
+func (f *EarlierFindingFates) UnmarshalJSON(raw []byte) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("reading earlier_finding_fates: must be an array, not null")
+	}
+	var entries []EarlierFindingFate
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&entries); err != nil {
+		return fmt.Errorf("reading earlier_finding_fates: %w", err)
+	}
+	for i, entry := range entries {
+		switch entry.Fate {
+		case "fixed", "not-fixed":
+		default:
+			return fmt.Errorf("earlier_finding_fates[%d]: unknown fate %q", i, entry.Fate)
+		}
+		if strings.TrimSpace(entry.Finding) == "" {
+			return fmt.Errorf("earlier_finding_fates[%d]: finding must not be blank", i)
+		}
+		for _, locator := range entry.Paths {
+			if !validFindingLocator(locator) {
+				return fmt.Errorf("earlier_finding_fates[%d]: %q is not a file:<repo-relative-path>[:line] locator", i, locator)
+			}
+		}
+	}
+	*f = entries
+	return nil
+}
+
+// VerdictExamined records whether the verifier examined the whole candidate or
+// left specific candidate paths unexamined.
+type VerdictExamined struct {
+	Whole           bool     `json:"whole"`
+	UnexaminedPaths []string `json:"unexamined_paths,omitempty"`
+}
+
+func (e *VerdictExamined) UnmarshalJSON(raw []byte) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("reading examined: must be an object, not null")
+	}
+	type verdictExaminedAlias VerdictExamined
+	var decoded verdictExaminedAlias
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&decoded); err != nil {
+		return fmt.Errorf("reading examined: %w", err)
+	}
+	if decoded.Whole && len(decoded.UnexaminedPaths) > 0 {
+		return fmt.Errorf("examined: whole=true must not include unexamined_paths")
+	}
+	if !decoded.Whole && len(decoded.UnexaminedPaths) == 0 {
+		return fmt.Errorf("examined: whole=false requires at least one path in unexamined_paths")
+	}
+	for _, locator := range decoded.UnexaminedPaths {
+		if !validFindingLocator(locator) {
+			return fmt.Errorf("examined: %q is not a file:<repo-relative-path>[:line] locator", locator)
+		}
+	}
+	*e = VerdictExamined(decoded)
+	return nil
+}
+
 // verdictPayload is the item.verdict payload: board-utilities.md §5.3's field list —
 // item, criterion hash, verdict, reason, the landed refs and evidence pointers it read,
 // the evaluated head and its actor kind — plus the two identities the independence rule
 // needs, the persisted evaluator binding, and the clock the store sets.
 type verdictPayload struct {
 	EvaluatorBinding
-	EvaluatedTree string          `json:"evaluated_tree,omitempty"`
-	ItemID        string          `json:"item_id"`
-	CriterionID   string          `json:"criterion_id"`
-	CriterionHash string          `json:"criterion_hash"`
-	Verdict       string          `json:"verdict"`
-	ClaimClass    string          `json:"claim_class"`
-	Reason        string          `json:"reason"`
-	Landed        []string        `json:"landed,omitempty"`
-	Evidence      []string        `json:"evidence"`
-	Findings      VerdictFindings `json:"findings,omitempty"`
-	EvaluatedHead string          `json:"evaluated_head,omitempty"`
-	ActorKind     string          `json:"actor_kind"`
-	Actor         string          `json:"actor,omitempty"`
-	JudgedActor   string          `json:"judged_actor,omitempty"`
+	EvaluatedTree       string              `json:"evaluated_tree,omitempty"`
+	ItemID              string              `json:"item_id"`
+	CriterionID         string              `json:"criterion_id"`
+	CriterionHash       string              `json:"criterion_hash"`
+	Verdict             string              `json:"verdict"`
+	ClaimClass          string              `json:"claim_class"`
+	Reason              string              `json:"reason"`
+	Landed              []string            `json:"landed,omitempty"`
+	Evidence            []string            `json:"evidence"`
+	Findings            VerdictFindings     `json:"findings,omitempty"`
+	EarlierFindingFates EarlierFindingFates `json:"earlier_finding_fates,omitempty"`
+	Examined            *VerdictExamined    `json:"examined,omitempty"`
+	EvaluatedHead       string              `json:"evaluated_head,omitempty"`
+	ActorKind           string              `json:"actor_kind"`
+	Actor               string              `json:"actor,omitempty"`
+	JudgedActor         string              `json:"judged_actor,omitempty"`
 	// GrantID is retained solely to decode historical payloads, never for intake authority.
 	GrantID    string `json:"grant_id,omitempty"`
 	RecordedAt string `json:"recorded_at,omitempty"`
