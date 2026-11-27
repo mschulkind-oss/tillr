@@ -67,7 +67,7 @@ var generalHolds = map[string]string{
 	ReasonCompleteItemFault: "", ReasonCriteriaUnjudged: "", ReasonCandidateNoOp: "",
 	ReasonBackendWindow: "", ReasonBackendClosed: "", ReasonBackendMissing: "", ReasonSeatUnmapped: "", ReasonInfrastructureRepeat: "", ReasonBlocked: "", ReasonNotReady: "",
 	ReasonRunLinkMissing: "", ReasonRunUnjudged: "", ReasonNoPolicy: "", ReasonOwnerOnlyOwed: "",
-	ReasonNoLane: "", ReasonAgentLimit: "", ReasonRunLive: "", ReasonInfraExhausted: "", ReasonCommandFault: "",
+	ReasonNoLane: "", ReasonAgentLimit: "", ReasonWorktreeBound: "", ReasonRunLive: "", ReasonInfraExhausted: "", ReasonCommandFault: "",
 	ReasonDeskCapacity: "", ReasonDocumentDeskBusy: "",
 	ReasonRetryJudged: "", ReasonRetryUnjudged: "", ReasonToolingDefect: "",
 	ReasonDecisionCollision: "", ReasonSettleFailed: "", ReasonAdapterRefused: "", ReasonStageFailed: "", ReasonRepeatingCall: "",
