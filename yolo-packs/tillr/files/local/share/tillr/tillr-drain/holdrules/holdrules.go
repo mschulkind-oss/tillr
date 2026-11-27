@@ -105,6 +105,8 @@ var Rules = map[string]Rule{
 	"prose-criteria-count":         {"needs you", "queue", "the owner; reconcile the original criteria"},
 	"awaits-rewrite":               {"waits on work", "queue", "the prose rewrite to land"},
 	"icebox":                       {"needs you", "queue", "move the design out of the roadmap Icebox, or close the item"},
+	"awaiting-oq-qm2":              {"needs you", "queue", "owner; answer OQ-QM2 in docs/design/tillr-queue-mirrors-designs.md"},
+	"awaiting-oq-qm3":              {"needs you", "queue", "owner; answer OQ-QM3 in docs/design/tillr-queue-mirrors-designs.md"},
 	"fork-held":                    {"waits on work", "queue", "the fork lane landing the shared patch branch; the next pass"},
 	"failover":                     {"ready", "queue", "the next pass"},
 	"seat-degraded":                {"ready", "queue", "the next pass"},

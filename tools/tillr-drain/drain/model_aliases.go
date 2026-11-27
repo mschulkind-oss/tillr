@@ -68,6 +68,8 @@ const (
 	ReasonRetryUnjudged       = drainmodel.ReasonRetryUnjudged
 	ReasonQuestionOpen        = drainmodel.ReasonQuestionOpen
 	ReasonQuestionsUnknown    = drainmodel.ReasonQuestionsUnknown
+	ReasonAwaitingOQQM2       = drainmodel.ReasonAwaitingOQQM2
+	ReasonAwaitingOQQM3       = drainmodel.ReasonAwaitingOQQM3
 	ReasonDesignDocMissing    = drainmodel.ReasonDesignDocMissing
 	ReasonTrunkBroken         = drainmodel.ReasonTrunkBroken
 	ReasonConflictFix         = drainmodel.ReasonConflictFix

@@ -70,6 +70,8 @@ const (
 	ReasonRetryUnjudged       = "retry-unjudged"
 	ReasonQuestionOpen        = "question-open"
 	ReasonQuestionsUnknown    = "questions-unknown"
+	ReasonAwaitingOQQM2       = "awaiting-oq-qm2"
+	ReasonAwaitingOQQM3       = "awaiting-oq-qm3"
 	ReasonDesignDocMissing    = "design-doc-missing"
 	ReasonTrunkBroken         = "trunk-broken"
 	ReasonConflictFix         = "conflict-fix"

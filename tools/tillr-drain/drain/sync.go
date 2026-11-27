@@ -134,6 +134,9 @@ func (s *ProcessSteps) Sync(ctx context.Context) (SyncOutcome, error) {
 	for _, roadmap := range s.syncRoadmaps() {
 		args = append(args, "--roadmap", roadmap)
 	}
+	if len(s.QuestionsCmd) > 0 {
+		args = append(args, "--questions-cmd", strings.Join(s.QuestionsCmd, " "))
+	}
 	cmd := exec.CommandContext(ctx, s.ItemBin, args...)
 	var stderr stderrTail
 	cmd.Stderr = &stderr

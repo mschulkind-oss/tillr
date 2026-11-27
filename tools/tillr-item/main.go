@@ -235,6 +235,7 @@ func syncFace(args []string) int {
 	now := fs.String("now", "", "the injected clock, RFC 3339 (default: the wall clock)")
 	dryRun := fs.Bool("dry-run", false, "read and report, write nothing")
 	asJSON := fs.Bool("json", false, "print the item.sync record instead of the text report")
+	questionsCmd := fs.String("questions-cmd", "", "the program that answers Vantage's index, as one command line (default: "+vantage.IndexCommandName(nil)+")")
 	var roadmaps []string
 	fs.Func("roadmap", "limit imports to this tracked Markdown roadmap and its unparked direct links (overrides [sync] roadmaps in .tillr.toml); repeat in desired order", func(path string) error {
 		roadmaps = append(roadmaps, path)
@@ -258,7 +259,7 @@ func syncFace(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	in := item.SyncInput{Root: *root, Documents: docs, At: at, Partial: len(selected) > 0, Roadmaps: selected}
+	in := item.SyncInput{Root: *root, Documents: docs, At: at, Partial: len(selected) > 0, Roadmaps: selected, QuestionsCmd: strings.Fields(*questionsCmd)}
 
 	ctx := context.Background()
 	var report item.SyncReport

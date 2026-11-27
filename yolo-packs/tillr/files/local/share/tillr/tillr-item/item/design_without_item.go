@@ -145,8 +145,9 @@ func designStage(content []byte) string {
 }
 
 // replaceDesignWithoutItems runs in the caller's sync transaction. Insert or update keeps
-// first_seen while replacement removes findings that no longer hold.
-func replaceDesignWithoutItems(tx *store.Tx, warnings []SyncNote, at int64, allowed map[string]bool) error {
+// first_seen while replacement removes findings that no longer hold. Any pre-existing
+// rows belonging to mirrored roadmaps are also cleared.
+func replaceDesignWithoutItems(tx *store.Tx, warnings []SyncNote, at int64, allowed map[string]bool, mirroredRoadmaps []string) error {
 	keep := map[string]bool{}
 	for _, n := range warnings {
 		if n.Rule != "design-without-item" {
@@ -157,18 +158,22 @@ func replaceDesignWithoutItems(tx *store.Tx, warnings []SyncNote, at int64, allo
 		}
 		keep[n.File] = true
 	}
-	rows, err := tx.Reader().Query(`SELECT document FROM design_without_item`)
+	mirrored := make(map[string]bool, len(mirroredRoadmaps))
+	for _, rm := range mirroredRoadmaps {
+		mirrored[rm] = true
+	}
+	rows, err := tx.Reader().Query(`SELECT document, roadmap FROM design_without_item`)
 	if err != nil {
 		return Internalf("reading design-without-item: %v", err)
 	}
 	var removed []string
 	for rows.Next() {
-		var document string
-		if err := rows.Scan(&document); err != nil {
+		var document, roadmap string
+		if err := rows.Scan(&document, &roadmap); err != nil {
 			rows.Close()
 			return Internalf("reading design-without-item: %v", err)
 		}
-		if !keep[document] && (allowed == nil || allowed[document]) {
+		if !keep[document] && (allowed == nil || allowed[document] || mirrored[roadmap]) {
 			removed = append(removed, document)
 		}
 	}

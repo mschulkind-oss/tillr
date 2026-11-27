@@ -1080,6 +1080,7 @@ func loopFace(args []string) int {
 		GateProgram: *gate, LandProgram: *land, VerdictProgram: *verdict,
 		ReplayProgram: *replay, RollingProgram: *rolling, FixerGateProgram: *fixerGate,
 		SyncRoadmaps: repositorySettings.Sync.Roadmaps,
+		QuestionsCmd: commandFields(*questionsCmd),
 		TrunkRef:     repositorySettings.TrunkBranch(),
 	}
 	steps.ConfigureHooks(hooks, explicitSteps)

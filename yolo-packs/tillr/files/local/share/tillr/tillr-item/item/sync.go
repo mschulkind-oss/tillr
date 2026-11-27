@@ -17,6 +17,7 @@ import (
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 // SyncRecordKind is the record the sync face emits: what the documents declared and what the
@@ -69,6 +70,10 @@ type SyncInput struct {
 	// ProseRewrite overrides [prose] rewrite from .tillr.toml when non-nil,
 	// letting a running loop use its in-memory setting without re-reading disk.
 	ProseRewrite *bool
+	// QuestionsCmd overrides the Vantage index command when mirroring designs.
+	QuestionsCmd []string
+	// Index supplies a pre-read VantageIndex (primarily for tests).
+	Index *vantage.VantageIndex
 }
 
 // SyncNote is one finding, warning or frozen definition, located where an author has to look:
@@ -110,11 +115,12 @@ type SyncReport struct {
 	Frozen        []SyncNote         `json:"frozen"`
 	SkippedBlocks []SyncSkippedBlock `json:"skipped_blocks"`
 
-	CreatedCount   int `json:"created_count"`
-	UpdatedCount   int `json:"updated_count"`
-	UnchangedCount int `json:"unchanged_count"`
-	FrozenCount    int `json:"frozen_count"`
-	SkippedCount   int `json:"skipped_count"`
+	CreatedCount     int `json:"created_count"`
+	UpdatedCount     int `json:"updated_count"`
+	UnchangedCount   int `json:"unchanged_count"`
+	FrozenCount      int `json:"frozen_count"`
+	SkippedCount     int `json:"skipped_count"`
+	IceboxWithoutDoc int `json:"icebox_without_doc,omitempty"`
 
 	Warnings []SyncNote `json:"warnings"`
 	Findings []SyncNote `json:"findings"`
@@ -170,9 +176,10 @@ func ReadSyncDocuments(root string) ([]SyncDocument, error) {
 // syncPlan is what one sync decided before writing: per file, the items to write in write
 // order, and the report as a dry run would print it.
 type syncPlan struct {
-	allowed     map[string]bool // nil for whole sync; declared in-scope ids for partial syncs
-	allowedDocs map[string]bool // nil for whole sync; in-scope document paths for partial syncs
-	report      SyncReport
+	allowed      map[string]bool // nil for whole sync; declared in-scope ids for partial syncs
+	allowedDocs  map[string]bool // nil for whole sync; in-scope document paths for partial syncs
+	designMirror designMirrorPlan
+	report       SyncReport
 	// writes are the files with something to write, in the order they may be written, and
 	// each file's payloads in the order its items may be written.
 	writes []fileWrites
@@ -213,7 +220,7 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	if len(in.Roadmaps) > 0 {
 		in.Partial = true
 	}
-	plan, err := planSync(r, in)
+	plan, err := planSync(ctx, r, in)
 	if err != nil {
 		return SyncReport{}, err
 	}
@@ -233,6 +240,11 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	for _, id := range plan.report.Parked {
 		parking[id] = true
 	}
+	for _, e := range plan.designMirror.entries {
+		if e.parkedOnly {
+			parking[e.id] = true
+		}
+	}
 	checkProtected, err := protectUnreadRanks(tx.Reader(), plan.allowed)
 	if err != nil {
 		return SyncReport{}, err
@@ -250,6 +262,16 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	for _, fw := range plan.writes {
 		for _, payload := range fw.payloads {
 			needsKey[payload.ItemID] = payload.Rank == "" && InOrder(payload.State)
+		}
+	}
+	for _, tr := range plan.designMirror.creates {
+		if tr.payload.Rank == "" && InOrder(tr.payload.State) {
+			needsKey[tr.id] = true
+		}
+	}
+	for _, tr := range plan.designMirror.updates {
+		if tr.payload.Rank == "" && InOrder(tr.payload.State) {
+			needsKey[tr.id] = true
 		}
 	}
 	for _, p := range plan.placements {
@@ -324,6 +346,74 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 			return SyncReport{}, Internalf("releasing the savepoint for %s: %v", fw.file, err)
 		}
 	}
+	d, err := itemDefinition(tx.Reader())
+	if err != nil {
+		return SyncReport{}, err
+	}
+	for _, tr := range plan.designMirror.creates {
+		payload := tr.payload
+		if payload.Rank == "" && InOrder(payload.State) {
+			payload.Rank = appendRank[payload.ItemID]
+		}
+		env, err := envelopeOf(RecordKind, "item-"+payload.ItemID, in.At, payload)
+		if err != nil {
+			return SyncReport{}, err
+		}
+		if _, err := Apply(ctx, tx, env); err != nil {
+			return SyncReport{}, err
+		}
+		if tr.waitingOn != nil {
+			if _, err := SetState(ctx, tx, tr.id, d.Blocked, in.At, *tr.waitingOn); err != nil {
+				return SyncReport{}, err
+			}
+		}
+		report.Created = append(report.Created, tr.id)
+		created[tr.id] = true
+	}
+	for _, tr := range plan.designMirror.updates {
+		payload := tr.payload
+		if payload.Rank == "" && InOrder(payload.State) {
+			if !tr.isUnpark {
+				if err := tx.Reader().QueryRow(`SELECT rank FROM items WHERE item_id=?`, payload.ItemID).Scan(&payload.Rank); err != nil {
+					return SyncReport{}, err
+				}
+			}
+			if payload.Rank == "" {
+				payload.Rank = appendRank[payload.ItemID]
+			}
+		}
+		env, err := envelopeOf(RecordKind, "item-"+payload.ItemID, in.At, payload)
+		if err != nil {
+			return SyncReport{}, err
+		}
+		if _, err := Apply(ctx, tx, env); err != nil {
+			return SyncReport{}, err
+		}
+		if tr.waitingOn != nil {
+			if _, err := SetState(ctx, tx, tr.id, d.Blocked, in.At, *tr.waitingOn); err != nil {
+				return SyncReport{}, err
+			}
+		}
+		report.Updated = append(report.Updated, tr.id)
+		if tr.isPark {
+			report.Parked = append(report.Parked, tr.id)
+		}
+		if tr.isUnpark {
+			report.Unparked = append(report.Unparked, tr.id)
+		}
+	}
+	for _, tr := range plan.designMirror.resolves {
+		if _, err := SetStateWithReceipt(ctx, tx, tr.id, tr.toState, in.At, tr.receipt); err != nil {
+			return SyncReport{}, err
+		}
+		report.Updated = append(report.Updated, tr.id)
+	}
+	for _, tr := range plan.designMirror.closes {
+		if _, err := Close(ctx, tx, tr.id, tr.receipt.Reason, tr.receipt.By, in.At); err != nil {
+			return SyncReport{}, err
+		}
+		report.Updated = append(report.Updated, tr.id)
+	}
 	// Follow source marks after all successful imports have appended.
 	// A source imported later in block order must not move away from its children.
 	places, err := OrderPlaces(tx.Reader())
@@ -377,7 +467,7 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 	if err := checkProtected(tx.Reader()); err != nil {
 		return SyncReport{}, err
 	}
-	if err := replaceDesignWithoutItems(tx, report.Warnings, in.At.UnixMilli(), plan.allowedDocs); err != nil {
+	if err := replaceDesignWithoutItems(tx, report.Warnings, in.At.UnixMilli(), plan.allowedDocs, plan.designMirror.mirroredRoadmaps); err != nil {
 		return SyncReport{}, err
 	}
 	if !in.Partial {
@@ -412,7 +502,7 @@ func finishReport(report SyncReport) SyncReport {
 
 // planSync parses every document, validates every block, compares each with the store and
 // decides what to write. It writes nothing.
-func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
+func planSync(ctx context.Context, r *store.Reader, in SyncInput) (syncPlan, error) {
 	scoped := len(in.Roadmaps) > 0
 	if scoped {
 		in.Partial = true
@@ -582,11 +672,14 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 		}
 	}
 
-	stages, err := designStageRoles(in.Root)
+	if _, err := designStageRoles(in.Root); err != nil {
+		return syncPlan{}, err
+	}
+	designMirror, err := planDesignMirror(ctx, r, in, held, finished)
 	if err != nil {
 		return syncPlan{}, err
 	}
-	report.Warnings = append(report.Warnings, designWithoutItems(inScopeDocuments, held, stages, in.Roadmaps)...)
+	report.IceboxWithoutDoc = designMirror.iceboxNoDoc
 
 	// Refuse only new copies of an unfinished stored item. Existing version-suffixed
 	// ids keep their definitions and history; sync does not retroactively rename them.
@@ -817,6 +910,25 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			}
 		}
 	}
+	for _, tr := range designMirror.creates {
+		report.Created = append(report.Created, tr.id)
+	}
+	for _, tr := range designMirror.updates {
+		report.Updated = append(report.Updated, tr.id)
+	}
+	for _, tr := range designMirror.resolves {
+		report.Updated = append(report.Updated, tr.id)
+	}
+	for _, tr := range designMirror.closes {
+		report.Updated = append(report.Updated, tr.id)
+	}
+	report.Unchanged = append(report.Unchanged, designMirror.unchanged...)
+	report.Parked = append(report.Parked, designMirror.parkedIDs...)
+	report.Unparked = append(report.Unparked, designMirror.unparkedIDs...)
+	for _, id := range designMirror.spineOrder {
+		placements = append(placements, sourcePlacement{id, ""})
+	}
+
 	var allowed, allowedDocs map[string]bool
 	if scoped {
 		allowed = map[string]bool{}
@@ -825,12 +937,21 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 				allowed[b.payload.ItemID] = true
 			}
 		}
+		for _, e := range designMirror.entries {
+			allowed[e.id] = true
+		}
+		for _, tr := range designMirror.resolves {
+			allowed[tr.id] = true
+		}
+		for _, tr := range designMirror.closes {
+			allowed[tr.id] = true
+		}
 		allowedDocs = inScopeDocs
 	} else if in.Partial {
 		allowed = docshare.Declared(in.Documents)
 		allowedDocs = allowedDocuments(in)
 	}
-	return syncPlan{report: report, writes: writes, placements: placements, allowed: allowed, allowedDocs: allowedDocs}, nil
+	return syncPlan{report: report, writes: writes, placements: placements, allowed: allowed, allowedDocs: allowedDocs, designMirror: designMirror}, nil
 }
 
 // orderFileWrites answers the files with writes in an order where a file is written after
@@ -1013,7 +1134,7 @@ func unsharedOpenFromDocs(docs []SyncDocument, held map[string]storedState, fini
 	oldestSet := false
 	for _, id := range ids {
 		st := held[id]
-		if !unshared[id] || ProseRewriteOriginal(id) != "" || st.storeDeclared {
+		if !unshared[id] || ProseRewriteOriginal(id) != "" || st.storeDeclared || isDesignItemID(id) {
 			continue
 		}
 		unsharedIDs = append(unsharedIDs, id)
@@ -1517,6 +1638,9 @@ func SyncText(report SyncReport, at time.Time) string {
 	} else {
 		fmt.Fprintf(&b, "unshared_open: %d%s\n", report.UnsharedOpen, oldest)
 		fmt.Fprintf(&b, "stale_doc_blocks: %d\n", report.StaleDocBlocks)
+	}
+	if report.IceboxWithoutDoc > 0 {
+		fmt.Fprintf(&b, "icebox_without_doc: %d\n", report.IceboxWithoutDoc)
 	}
 	for _, id := range report.Created {
 		fmt.Fprintf(&b, "created: %s\n", id)

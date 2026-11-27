@@ -122,6 +122,22 @@ type DocumentQuestions struct {
 	LedgerIDs []string
 }
 
+// Dependency is one entry in a document's `dependsOn` list as reported by Vantage's index.
+type Dependency struct {
+	Raw      string `json:"raw"`
+	Target   string `json:"target"`
+	Fragment string `json:"fragment"`
+	Line     int    `json:"line"`
+}
+
+// StageRole constants returned by VantageIndex.StageRole and VantageQuestions.StageRole.
+const (
+	StageRoleOpen  = "open"
+	StageRoleReady = "ready"
+	StageRoleBuilt = "built"
+	StageRoleDone  = "done"
+)
+
 // QuestionSource answers, for a design document an item names, whether the tree holds it and
 // what questions it carries.
 //
@@ -214,6 +230,41 @@ func (v *VantageQuestions) Done(path string) (bool, error) {
 	return v.index.Done(path)
 }
 
+// StageRole shares the lazy index with question reads and returns the four-valued stage role
+// ("open", "ready", "built", "done", or "" when unstaged/unmapped) for path.
+func (v *VantageQuestions) StageRole(path string) (string, error) {
+	if _, err := v.questions(path); err != nil {
+		return "", err
+	}
+	return v.index.StageRole(path)
+}
+
+// Status shares the lazy index with question reads and returns the document's frontmatter status.
+func (v *VantageQuestions) Status(path string) (string, error) {
+	if _, err := v.questions(path); err != nil {
+		return "", err
+	}
+	return v.index.Status(path)
+}
+
+// DependsOn shares the lazy index with question reads and returns the document's dependsOn entries.
+func (v *VantageQuestions) DependsOn(path string) ([]Dependency, error) {
+	if _, err := v.questions(path); err != nil {
+		return nil, err
+	}
+	return v.index.DependsOn(path)
+}
+
+// DesignUnansweredQuestions shares the lazy index with question reads and returns every
+// unanswered question on path itself plus any unanswered question referenced by a #OQ-*
+// fragment in path's dependsOn list.
+func (v *VantageQuestions) DesignUnansweredQuestions(path string) ([]Question, error) {
+	if _, err := v.questions(path); err != nil {
+		return nil, err
+	}
+	return v.index.DesignUnansweredQuestions(path)
+}
+
 // questions answers one document's questions from the index, reading the index first if this
 // is the first document asked about.
 func (v *VantageQuestions) questions(path string) ([]Question, error) {
@@ -238,19 +289,114 @@ var errIndexNotRead = errors.New("the question index was never read")
 // The zero value is deliberately not "no questions". An index nobody read refuses, and the
 // planner turns that refusal into `questions-unknown` — never into a dispatch.
 type VantageIndex struct {
-	documents map[string][]Question
-	ledger    map[string][]string
-	done      map[string]bool
-	read      bool
-	err       error
+	documents  map[string][]Question
+	ledger     map[string][]string
+	stageRoles map[string]string
+	statuses   map[string]string
+	dependsOn  map[string][]Dependency
+	read       bool
+	err        error
 }
 
 // Done answers whether Vantage assigned the document's stage the done role.
 func (v VantageIndex) Done(path string) (bool, error) {
-	if _, err := v.Questions(path); err != nil {
+	role, err := v.StageRole(path)
+	if err != nil {
 		return false, err
 	}
-	return v.done[cleanDocumentPath(path)], nil
+	return role == StageRoleDone, nil
+}
+
+// StageRole returns the four-valued stage role ("open", "ready", "built", "done", or ""
+// when unstaged/unmapped) for path.
+func (v VantageIndex) StageRole(path string) (string, error) {
+	if v.err != nil {
+		return "", v.err
+	}
+	if !v.read {
+		return "", errIndexNotRead
+	}
+	return v.stageRoles[cleanDocumentPath(path)], nil
+}
+
+// Status returns the document's frontmatter status from the index.
+func (v VantageIndex) Status(path string) (string, error) {
+	if v.err != nil {
+		return "", v.err
+	}
+	if !v.read {
+		return "", errIndexNotRead
+	}
+	return v.statuses[cleanDocumentPath(path)], nil
+}
+
+// DependsOn returns a copy of the document's dependsOn entries from the index.
+func (v VantageIndex) DependsOn(path string) ([]Dependency, error) {
+	if v.err != nil {
+		return nil, v.err
+	}
+	if !v.read {
+		return nil, errIndexNotRead
+	}
+	deps := v.dependsOn[cleanDocumentPath(path)]
+	if len(deps) == 0 {
+		return nil, nil
+	}
+	out := make([]Dependency, len(deps))
+	copy(out, deps)
+	return out, nil
+}
+
+// DesignUnansweredQuestions returns every unanswered question (State != QuestionAnswered)
+// on path itself plus any unanswered question referenced by a #OQ-* fragment in path's
+// dependsOn list.
+func (v VantageIndex) DesignUnansweredQuestions(path string) ([]Question, error) {
+	own, err := v.Questions(path)
+	if err != nil {
+		return nil, err
+	}
+	key := cleanDocumentPath(path)
+	type qKey struct {
+		doc string
+		id  string
+	}
+	seen := make(map[qKey]bool)
+	var out []Question
+	for _, q := range own {
+		if q.State == QuestionAnswered {
+			continue
+		}
+		k := qKey{doc: key, id: strings.ToUpper(q.ID)}
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, q)
+		}
+	}
+	for _, dep := range v.dependsOn[key] {
+		frag := strings.TrimSpace(dep.Fragment)
+		if frag == "" || !strings.HasPrefix(strings.ToUpper(frag), "OQ-") {
+			continue
+		}
+		targetKey := cleanDocumentPath(dep.Target)
+		if targetKey == "" || targetKey == "." {
+			targetKey = key
+		}
+		for _, q := range v.documents[targetKey] {
+			if !strings.EqualFold(q.ID, frag) {
+				continue
+			}
+			if q.State == QuestionAnswered {
+				break
+			}
+			k := qKey{doc: targetKey, id: strings.ToUpper(q.ID)}
+			if !seen[k] {
+				seen[k] = true
+				out = append(out, q)
+			}
+			break
+		}
+	}
+	return out, nil
 }
 
 // Questions answers one document's questions, keyed by its repository-relative path. A
@@ -383,24 +529,48 @@ func parseVantageIndex(raw []byte) (VantageIndex, error) {
 		return VantageIndex{}, errors.New("it carries no documents")
 	}
 	var entries []struct {
-		Path      string     `json:"path"`
-		Stage     string     `json:"stage"`
-		Questions []Question `json:"questions"`
-		LedgerIDs []string   `json:"ledgerIds"`
+		Path      string       `json:"path"`
+		Status    string       `json:"status"`
+		Stage     string       `json:"stage"`
+		DependsOn []Dependency `json:"dependsOn"`
+		Questions []Question   `json:"questions"`
+		LedgerIDs []string     `json:"ledgerIds"`
 	}
 	if err := json.Unmarshal(document.Index.Documents, &entries); err != nil {
 		return VantageIndex{}, err
 	}
+	normalizedStages := make(map[string]string, len(document.Index.Config.Stages))
+	for stageWord, role := range document.Index.Config.Stages {
+		word := strings.ToUpper(strings.TrimSpace(stageWord))
+		r := strings.ToLower(strings.TrimSpace(role))
+		switch r {
+		case StageRoleOpen, StageRoleReady, StageRoleBuilt, StageRoleDone:
+			normalizedStages[word] = r
+		}
+	}
 	documents := make(map[string][]Question, len(entries))
 	ledger := make(map[string][]string, len(entries))
-	done := make(map[string]bool)
+	stageRoles := make(map[string]string, len(entries))
+	statuses := make(map[string]string, len(entries))
+	dependsOn := make(map[string][]Dependency, len(entries))
 	for _, entry := range entries {
 		key := cleanDocumentPath(entry.Path)
 		documents[key] = entry.Questions
 		ledger[key] = entry.LedgerIDs
-		done[key] = document.Index.Config.Stages[entry.Stage] == "done"
+		statuses[key] = entry.Status
+		dependsOn[key] = entry.DependsOn
+		if stage := strings.ToUpper(strings.TrimSpace(entry.Stage)); stage != "" {
+			stageRoles[key] = normalizedStages[stage]
+		}
 	}
-	return VantageIndex{documents: documents, ledger: ledger, done: done, read: true}, nil
+	return VantageIndex{
+		documents:  documents,
+		ledger:     ledger,
+		stageRoles: stageRoles,
+		statuses:   statuses,
+		dependsOn:  dependsOn,
+		read:       true,
+	}, nil
 }
 
 // WithoutQuestions answers the questions whose ids are not in ids, in the same order. A

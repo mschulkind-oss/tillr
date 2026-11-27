@@ -231,3 +231,149 @@ func TestParseVantageIndexReadsBlockedOnInEveryShape(t *testing.T) {
 		t.Fatalf("blockedOn = %q, want %q", questions[0].BlockedOn, want)
 	}
 }
+
+func TestVantageIndexStageRolesAndMetadata(t *testing.T) {
+	raw := `{
+		"index": {
+			"config": {
+				"stages": {
+					"IDEA": "open",
+					"APPROVED": "ready",
+					"FINISHED": "built",
+					"ARCHIVED": "done"
+				}
+			},
+			"documents": [
+				{"path": "docs/design/sketch.md", "status": "draft", "stage": "idea", "questions": []},
+				{"path": "docs/design/decided.md", "status": "accepted", "stage": "APPROVED", "questions": []},
+				{"path": "docs/design/built.md", "status": "accepted", "stage": "FINISHED", "questions": []},
+				{"path": "docs/design/done.md", "status": "accepted", "stage": "ARCHIVED", "questions": []},
+				{"path": "docs/design/unstaged.md", "status": "draft", "stage": "", "questions": []}
+			]
+		}
+	}`
+	index, err := parseVantageIndex([]byte(raw))
+	if err != nil {
+		t.Fatalf("parseVantageIndex: %v", err)
+	}
+	cases := []struct {
+		path   string
+		role   string
+		status string
+		done   bool
+	}{
+		{"docs/design/sketch.md", StageRoleOpen, "draft", false},
+		{"docs/design/decided.md", StageRoleReady, "accepted", false},
+		{"docs/design/built.md", StageRoleBuilt, "accepted", false},
+		{"docs/design/done.md", StageRoleDone, "accepted", true},
+		{"docs/design/unstaged.md", "", "draft", false},
+		{"docs/design/unlisted.md", "", "", false},
+	}
+	for _, tc := range cases {
+		role, err := index.StageRole(tc.path)
+		if err != nil || role != tc.role {
+			t.Fatalf("StageRole(%q) = %q, %v; want %q", tc.path, role, err, tc.role)
+		}
+		status, err := index.Status(tc.path)
+		if err != nil || status != tc.status {
+			t.Fatalf("Status(%q) = %q, %v; want %q", tc.path, status, err, tc.status)
+		}
+		done, err := index.Done(tc.path)
+		if err != nil || done != tc.done {
+			t.Fatalf("Done(%q) = %v, %v; want %v", tc.path, done, err, tc.done)
+		}
+	}
+}
+
+func TestDesignUnansweredQuestionsIncludesOwnAndDependsOnOQFragments(t *testing.T) {
+	raw := `{
+		"index": {
+			"config": {
+				"stages": {"DESIGN": "open", "DECIDED": "ready"}
+			},
+			"documents": [
+				{
+					"path": "docs/design/upstream.md",
+					"stage": "DESIGN",
+					"questions": [
+						{"id": "OQ-UP1", "state": "open", "title": "Upstream open"},
+						{"id": "OQ-UP2", "state": "answered", "title": "Upstream answered"},
+						{"id": "OQ-UP3", "state": "blocked", "title": "Upstream blocked"}
+					]
+				},
+				{
+					"path": "docs/design/child.md",
+					"stage": "DESIGN",
+					"dependsOn": [
+						{"raw": "./upstream.md#OQ-UP1", "target": "docs/design/upstream.md", "fragment": "OQ-UP1", "line": 4},
+						{"raw": "./upstream.md#OQ-UP2", "target": "docs/design/upstream.md", "fragment": "OQ-UP2", "line": 5},
+						{"raw": "./upstream.md#D-UP1", "target": "docs/design/upstream.md", "fragment": "D-UP1", "line": 6},
+						{"raw": "./upstream.md", "target": "docs/design/upstream.md", "fragment": "", "line": 7}
+					],
+					"questions": [
+						{"id": "OQ-C1", "state": "open", "title": "Child open"},
+						{"id": "OQ-C2", "state": "answered", "title": "Child answered"}
+					]
+				}
+			]
+		}
+	}`
+	index, err := parseVantageIndex([]byte(raw))
+	if err != nil {
+		t.Fatalf("parseVantageIndex: %v", err)
+	}
+	got, err := index.DesignUnansweredQuestions("docs/design/child.md")
+	if err != nil {
+		t.Fatalf("DesignUnansweredQuestions: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "OQ-C1" || got[1].ID != "OQ-UP1" {
+		t.Fatalf("DesignUnansweredQuestions = %+v, want [OQ-C1 OQ-UP1]", got)
+	}
+	deps, err := index.DependsOn("docs/design/child.md")
+	if err != nil || len(deps) != 4 {
+		t.Fatalf("DependsOn = %+v, %v", deps, err)
+	}
+
+	root := t.TempDir()
+	writeDocument(t, root, "docs/design/child.md")
+	vq := Preloaded(root, index)
+	vqRole, err := vq.StageRole("docs/design/child.md")
+	if err != nil || vqRole != StageRoleOpen {
+		t.Fatalf("VantageQuestions.StageRole = %q, %v", vqRole, err)
+	}
+	vqUnanswered, err := vq.DesignUnansweredQuestions("docs/design/child.md")
+	if err != nil || len(vqUnanswered) != 2 {
+		t.Fatalf("VantageQuestions.DesignUnansweredQuestions = %+v, %v", vqUnanswered, err)
+	}
+}
+
+func TestVantageIndexMethodsFailClosedOnZeroOrRefusedIndex(t *testing.T) {
+	var zero VantageIndex
+	if _, err := zero.StageRole("docs/a.md"); err == nil {
+		t.Fatal("zero StageRole should error")
+	}
+	if _, err := zero.Status("docs/a.md"); err == nil {
+		t.Fatal("zero Status should error")
+	}
+	if _, err := zero.DependsOn("docs/a.md"); err == nil {
+		t.Fatal("zero DependsOn should error")
+	}
+	if _, err := zero.DesignUnansweredQuestions("docs/a.md"); err == nil {
+		t.Fatal("zero DesignUnansweredQuestions should error")
+	}
+
+	refused := ParseIndex([]byte(`{"index":{"refused":true,"documents":[]}}`), "refused-fixture")
+	vq := Preloaded(t.TempDir(), refused)
+	if _, err := vq.StageRole("docs/a.md"); err == nil {
+		t.Fatal("refused StageRole should error")
+	}
+	if _, err := vq.Status("docs/a.md"); err == nil {
+		t.Fatal("refused Status should error")
+	}
+	if _, err := vq.DependsOn("docs/a.md"); err == nil {
+		t.Fatal("refused DependsOn should error")
+	}
+	if _, err := vq.DesignUnansweredQuestions("docs/a.md"); err == nil {
+		t.Fatal("refused DesignUnansweredQuestions should error")
+	}
+}

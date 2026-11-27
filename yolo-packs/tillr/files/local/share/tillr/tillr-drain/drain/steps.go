@@ -76,7 +76,9 @@ type ProcessSteps struct {
 	// step set that drives no repository has; the loop's own face always names it.
 	Root string
 	// SyncRoadmaps is passed in order to every sync; empty reads all documents.
-	SyncRoadmaps   []string
+	SyncRoadmaps []string
+	// QuestionsCmd is forwarded to `tillr-item sync --questions-cmd` when set.
+	QuestionsCmd   []string
 	syncRoadmapsMu sync.RWMutex
 	// TrunkRef names the landing branch; empty reads .tillr.toml or defaults to main.
 	TrunkRef string

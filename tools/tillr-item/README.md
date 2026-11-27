@@ -438,6 +438,23 @@ The following rules describe Git-landing, including its refusal names
   tillr item sync --store .tillr/state.db --root . --roadmap docs/tillr/roadmap.md --roadmap docs/roadmap.md
   ```
 
+- **Mirrored roadmaps also materialize one `item-design-<slug>` item per uncovered outstanding design (Slice 1).**
+  For every tracked design under `docs/` linked from a mirrored roadmap (excluding paired
+  `<stem>-plan.md` files, designs with stage role `built` or `done`, and designs already
+  covered by an unfenced item block or an unfinished item naming the design as `design_doc`),
+  `sync` creates one `item-design-<slug>` row (`design_doc = <target>`, `body_ref = <target>`).
+  `sync` reads Vantage's planning index (via `uvx vantage-check index --format json` or
+  `--questions-cmd`) and fails closed without writing if the index cannot be read:
+  accepted (`ready`) designs with zero unanswered questions (including `#OQ-*` `depends-on`
+  fragments) get `seat = "plan"`, while open/unstaged or question-holding designs get
+  `seat = "design"`. Designs linked only under a parked heading such as `## Icebox` enter
+  state `blocked` with `waiting_on` `{waiter: "owner", reason: "icebox"}` and no rank
+  (unparking when moved back to the spine); documentless Icebox list bullets are counted
+  in `icebox_without_doc`. Unrouted unfinished `item-design-*` rows are closed, rows whose
+  design reaches `built` or `done` move to `resolved-elsewhere` (`doc:<target>`), and
+  `design-without-item` warnings and `design_without_item` rows are retired for mirrored
+  roadmaps.
+
 - **Read faces show places, not stored keys.** A [place](../../docs/reference/observatory-actions.md#queue-order-and-places)
   counts from 1 across the full order; parked and finished items have no place.
   Empty keys count after keyed items, in item id order. A writing sync fills those

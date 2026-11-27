@@ -40,7 +40,7 @@ func documentPrerequisites(r *store.Reader, root string, proseRewrite *bool) (ma
 			// not requested by anyone: its brief is its criteria, and it has no block of its
 			// own to declare it in. Triage would send it to the owner for a document it can
 			// never have.
-			if IsGeneratedItem(id) {
+			if IsGeneratedItem(id) || strings.HasPrefix(id, "item-design-") {
 				continue
 			}
 			intake, err := readIdeaIntake(r, id)
@@ -93,7 +93,7 @@ func documentPrerequisitesFromInputs(root string, syncState item.SyncStoreState,
 	}
 	if fed {
 		for _, id := range unsharedOpenIDs {
-			if IsGeneratedItem(id) {
+			if IsGeneratedItem(id) || strings.HasPrefix(id, "item-design-") {
 				continue
 			}
 			res := intakes[id]
