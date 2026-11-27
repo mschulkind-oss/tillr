@@ -226,7 +226,7 @@ func (l *Loop) claimSettledCandidateDirect(ctx context.Context, d Decision, timi
 			}
 			return readFailure(err)
 		}
-		if itemState != declared.Parsed.Ready {
+		if !pendingWorkStateEligible(declared.Parsed, w, itemState) {
 			return nil
 		}
 
@@ -336,6 +336,21 @@ func pendingEligibility(work *pendingWork) gateland.Eligibility {
 		RunID:               runID,
 		LaneID:              work.Decision.LaneID,
 	}
+}
+
+// pendingWorkStateEligible reports whether an already-dispatched pending work item
+// may advance through direct settlement, gating, or landing in itemState.
+// Finished items settle as terminal in the planner; non-ready workflow items are
+// invalidated by the planner; non-workflow work (including design runs answering a
+// blocked item's conflict) advances in any non-finished state.
+func pendingWorkStateEligible(d definition.Definition, work *pendingWork, itemState string) bool {
+	if itemState == "" || finishedState(d, itemState) {
+		return false
+	}
+	if itemState == d.Ready {
+		return true
+	}
+	return work != nil && work.Decision.Workflow == nil
 }
 
 func isCandidateGateEligible(work *pendingWork, runID string) bool {
@@ -503,7 +518,7 @@ func (l *Loop) findGateableCandidates(ctx context.Context) ([]gateland.GateCandi
 			if _, faulted := faults[itemID]; faulted {
 				continue
 			}
-			if states[itemID] != declared.Parsed.Ready {
+			if !pendingWorkStateEligible(declared.Parsed, work, states[itemID]) {
 				continue
 			}
 			if work.GateStall != nil && !work.GateStall.canRetry(gates) {
@@ -594,7 +609,7 @@ func (l *Loop) claimCandidateGate(ctx context.Context, itemID, runID string, at 
 			}
 			return readFailure(err)
 		}
-		if itemState != declared.Parsed.Ready {
+		if !pendingWorkStateEligible(declared.Parsed, work, itemState) {
 			return nil
 		}
 

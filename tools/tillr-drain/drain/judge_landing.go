@@ -284,7 +284,7 @@ func (l *Loop) findLandableCandidates(ctx context.Context) ([]gateland.LandCandi
 			if _, faulted := faults[itemID]; faulted {
 				continue
 			}
-			if states[itemID] != declared.Parsed.Ready {
+			if !pendingWorkStateEligible(declared.Parsed, work, states[itemID]) {
 				continue
 			}
 			if work.RedCapHold != nil {
@@ -401,7 +401,7 @@ func (l *Loop) claimCandidateLand(ctx context.Context, itemID, runID string, at 
 			}
 			return readFailure(err)
 		}
-		if itemState != declared.Parsed.Ready {
+		if !pendingWorkStateEligible(declared.Parsed, work, itemState) {
 			return nil
 		}
 

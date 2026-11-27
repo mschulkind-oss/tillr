@@ -158,7 +158,7 @@ func (l *Loop) claimWorkerSettlement(ctx context.Context, itemID, runID string, 
 			}
 			return readFailure(err)
 		}
-		if itemState != declared.Parsed.Ready {
+		if !pendingWorkStateEligible(declared.Parsed, work, itemState) {
 			return nil
 		}
 		if held, err := l.settlementHeldByBackendOrWait(r, d, rec, byRun, at); err != nil || held {

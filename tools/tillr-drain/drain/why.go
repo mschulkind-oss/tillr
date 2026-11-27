@@ -776,8 +776,10 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			if len(row.WaitingOn) == 0 {
 				row.WaitingOn = append(row.WaitingOn, "offer a lane with --lanes")
 			}
-		case d.RunRequest != nil && (d.From == "running" || d.From == "candidate"):
+		case d.RunRequest != nil && d.From == "running":
 			row.WaitingOn = append(row.WaitingOn, d.RunRequest.RunID)
+		case d.From == "candidate" && d.Reason != ReasonGateReplay:
+			row.WaitingOn = append(row.WaitingOn, candidateWaitingFor(work, d, it.JudgeMode))
 		case (d.Reason == ReasonRetryJudged || d.Reason == ReasonRetryUnjudged) && d.SupersedesRunID != "":
 			row.WaitingOn = append(row.WaitingOn, d.SupersedesRunID)
 		}
@@ -1436,6 +1438,35 @@ func splitDeferredRuns(deferredBy string) []string {
 		}
 	}
 	return out
+}
+
+// candidateWaitingFor describes what an idle candidate is waiting for when nothing
+// is currently acting on it, so drain why does not name the finished run as mover.
+func candidateWaitingFor(work *pendingWork, d Decision, judgeMode string) string {
+	blockAnswer := d.BlockConflict != nil && d.BlockConflict.TriageVersion == ""
+	if work != nil && work.Candidate != nil && work.Candidate.BlockConflict != nil && work.Candidate.BlockConflict.TriageVersion == "" {
+		blockAnswer = true
+	}
+	if work != nil {
+		switch {
+		case work.Candidate != nil && work.Candidate.NoChange != nil:
+			return "waiting for no-change verification"
+		case work.RepairHold != nil || (work.ConflictTrunkSHA != "" && (work.Candidate == nil || work.Candidate.BaseRef == "")):
+			return "waiting for conflict repair"
+		case work.Gated:
+			if blockAnswer {
+				return "waiting for landing and block-answer recording"
+			}
+			return "waiting for landing"
+		}
+	}
+	if blockAnswer {
+		return "waiting for gate and block-answer recording"
+	}
+	if judgeMode == "agent" {
+		return "waiting for judge"
+	}
+	return "waiting for gate"
 }
 
 func nextActorAction(mover string) string {
