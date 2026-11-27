@@ -159,7 +159,7 @@ Each reference describes code that is in the tree and names it in its `covers` l
 | [Intake paths](../design/tillr-intake-paths.md) | Each way work enters runs through its own small graph that ends in one item shape. | Partly built: each door is built; the shared output contract is not | shipped |
 | [Idea pipeline](../design/tillr-idea-pipeline.md) | How a sentence the owner types becomes ranked work through scouting, design and a fenced build. | Partly built: intake, the question hold and the design turn; item kinds and lineage are not | shipped |
 | [Provisional design documents](../design/provisional-design-docs.md) | An idea lands as a provisional design within minutes and is worked later. | Open questions: [OQ-PD1](../design/provisional-design-docs.md#OQ-PD1) to [OQ-PD4](../design/provisional-design-docs.md#OQ-PD4) | not shipped |
-| [The queue mirrors the designs](../design/tillr-queue-mirrors-designs.md) | One queue item per unfinished design the roadmap routes, with build steps in a companion plan. | Designed, not built | not shipped |
+| [The queue mirrors the designs](../design/tillr-queue-mirrors-designs.md) | One queue item per unfinished design the roadmap routes, with build steps in a companion plan. | Partly built: Slice 1 (roadmap-link sync and single-commit planned builds); Slices 2 to 5 ([companion plan](../design/tillr-queue-mirrors-designs-plan.md)) are not | not shipped |
 | [Per-step question holds](../design/tillr-per-step-question-holds.md) | An unanswered question holds only the tasks that depend on its answer, recorded in the companion plan and store with no new markup in design documents, skill-free document handling, queue/`why`/roadmap visibility, and post-answer rework. | Open questions: [OQ-PSH1](../design/tillr-per-step-question-holds.md#OQ-PSH1), [OQ-PSH2](../design/tillr-per-step-question-holds.md#OQ-PSH2) | not shipped |
 | [Design to planning](../design/tillr-design-to-planning-transition.md) | A design with no open question moves straight to planning, and review comments end in open questions or planning. | Open questions: [OQ-DT1](../design/tillr-design-to-planning-transition.md#OQ-DT1), [OQ-DT2](../design/tillr-design-to-planning-transition.md#OQ-DT2) | not shipped |
 | [Early design landing](../design/tillr-early-design-landing.md) | A question and its design reach the trunk ahead of their item, with nothing rebased. | Designed, not built; [OQ-EL3](../design/tillr-early-design-landing.md#OQ-EL3) is blocked | not shipped |
@@ -248,9 +248,10 @@ checks are not built.
 
 ## How this page is kept
 
-This page is edited by hand. It has one row for every document under `docs/design`,
-`docs/reference` and `docs/tillr`, so a document added, moved or deleted changes this page in the
-same commit, and a status changes here when the document's own status paragraph does.
+This page is edited by hand. It has one row for every design and reference document under
+`docs/design`, `docs/reference` and `docs/tillr` (companion `*-plan.md` files sit under their
+parent design rather than in a separate row), so a document added, moved or deleted changes this
+page in the same commit, and a status changes here when the document's own status paragraph does.
 
 Its tables are also the declaration of what the tillr pack delivers: every row whose last cell is
 `shipped` is copied, and a row reading `not shipped` is not. To refresh the delivered copies
