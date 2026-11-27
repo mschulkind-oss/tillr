@@ -159,7 +159,7 @@ TILLR_PI_AGENT_DIRS_DIR   When set in the caller's environment or derivable from
 TILLR_EXTENSION_SET_RECORD_FILE Always: the file path in this run's scratch directory where the Pi adapter records the selected extension set.
 TILLR_RUN_BIN             When unset on the caller and os.Executable resolves: the active tillr-run binary path; otherwise inherited.
 GIT_CEILING_DIRECTORIES   Always: the parent directory of the lane root, stopping Git from walking up into an enclosing repository.
-YOLO_DURABLE_DIR          When scratch_env is omitted or true: <lane dir>/durable/<run_id>; false preserves the caller's value or absence.
+YOLO_DURABLE_DIR          When scratch_env is omitted or true: <lane dir>/scratch/<run_id> (or an existing <lane dir>/durable/<run_id> from before the rename); false preserves the caller's value or absence.
 ```
 
 The optional Boolean request field `scratch_env` defaults to true, preserving the drain's

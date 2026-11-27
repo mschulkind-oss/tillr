@@ -98,7 +98,7 @@ func TestUnreadableProgressStillReleasesRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "lanes", "lane_broken-progress", "durable", "broken-progress", "worker-finished")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "lanes", "lane_broken-progress", "scratch", "broken-progress", "worker-finished")); err != nil {
 		t.Fatalf("observation error killed worker: %v", err)
 	}
 	if err = st.ReadTx(context.Background(), func(r *store.Reader) error {

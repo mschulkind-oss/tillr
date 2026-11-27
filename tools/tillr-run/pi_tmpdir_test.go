@@ -96,7 +96,7 @@ cat "$STUB_STREAM"
 		t.Fatalf("run ended with state=%q exit=%v, want exited/0", rec.State, rec.ExitCode)
 	}
 
-	durableDir := filepath.Join(lane, "durable", runID)
+	durableDir := filepath.Join(lane, "scratch", runID)
 	wantTmpDir := filepath.Join(durableDir, "tmp")
 
 	gotTmpDirBytes, err := os.ReadFile(seenTmpDir)

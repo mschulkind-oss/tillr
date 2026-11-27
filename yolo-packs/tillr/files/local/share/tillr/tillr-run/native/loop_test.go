@@ -219,15 +219,20 @@ func TestExecColdStartWritesHarnessSessionReportAndUsage(t *testing.T) {
 	}
 
 	// Verify 19-key report.md (both pinned artifact and lane copy) and .usage.json.
-	var pinnedReport string
+	var pinnedReport, scratchDir string
 	for _, ref := range rec.ArtifactRefs {
-		if ref.Kind == "report" {
+		switch ref.Kind {
+		case "report":
 			pinnedReport = ref.Ref
-			break
+		case "scratch":
+			scratchDir = ref.Ref
 		}
 	}
 	if pinnedReport == "" {
 		t.Fatalf("Record.ArtifactRefs missing report ref: %+v", rec.ArtifactRefs)
+	}
+	if scratchDir == "" {
+		t.Fatalf("Record.ArtifactRefs missing scratch ref: %+v", rec.ArtifactRefs)
 	}
 	reportPath := filepath.Join(laneDir, "report.md")
 	rawReport, err := os.ReadFile(reportPath)
@@ -251,9 +256,9 @@ func TestExecColdStartWritesHarnessSessionReportAndUsage(t *testing.T) {
 		t.Fatalf("unexpected report.md header:\n%s", header)
 	}
 
-	usageFiles, err := filepath.Glob(filepath.Join(filepath.Dir(pinnedReport), "spend-*", "report.md.usage.json"))
+	usageFiles, err := filepath.Glob(filepath.Join(scratchDir, "spend-*", "report.md.usage.json"))
 	if err != nil || len(usageFiles) == 0 {
-		t.Fatalf("expected report.md.usage.json under %s/spend-*, got %v (err=%v)", filepath.Dir(pinnedReport), usageFiles, err)
+		t.Fatalf("expected report.md.usage.json under %s/spend-*, got %v (err=%v)", scratchDir, usageFiles, err)
 	}
 	rawUsage, err := os.ReadFile(usageFiles[0])
 	if err != nil {

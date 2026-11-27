@@ -80,7 +80,7 @@ func TestEachLaneGetsItsOwnDurableDirectory(t *testing.T) {
 		if failures[i] != nil {
 			t.Fatalf("the %s run did not finish: %v", lane, failures[i])
 		}
-		want := filepath.Join(laneRoot, lane, "durable", "run-"+lane)
+		want := filepath.Join(laneRoot, lane, "scratch", "run-"+lane)
 		if seen[i] != want {
 			t.Fatalf("the %s run's YOLO_DURABLE_DIR is %q, want its own per-run path %q", lane, seen[i], want)
 		}
@@ -106,5 +106,86 @@ func TestEachLaneGetsItsOwnDurableDirectory(t *testing.T) {
 	}
 	if seen[0] == seen[1] {
 		t.Fatalf("both lanes were handed the durable directory %q: a shared scratch tree is what this case exists to prevent", seen[0])
+	}
+}
+
+func TestScratchDirAliasAndLegacyDurableFallback(t *testing.T) {
+	ctx := context.Background()
+	dir := scratch(t)
+	s, err := store.InitFixture(ctx, filepath.Join(dir, "board.sqlite3"))
+	if err != nil {
+		t.Fatalf("creating fixture store: %v", err)
+	}
+	defer s.Close()
+	laneRoot := filepath.Join(dir, "lanes")
+	laneDir := filepath.Join(laneRoot, "lane-1")
+	now := time.Date(2026, 11, 27, 0, 0, 0, 0, time.UTC)
+
+	// Fresh run: ScratchDir and DurableDir both answer <dir>/scratch/<run_id>.
+	freshID := "run-fresh"
+	wantFresh := filepath.Join(laneDir, "scratch", freshID)
+	if got := run.ScratchDir(laneDir, freshID); got != wantFresh {
+		t.Fatalf("ScratchDir(fresh) = %q, want %q", got, wantFresh)
+	}
+	if got := run.DurableDir(laneDir, freshID); got != wantFresh {
+		t.Fatalf("DurableDir(fresh) = %q, want %q", got, wantFresh)
+	}
+	_, err = run.Exec(ctx, s, run.Request{
+		RunID: freshID, LaneID: "lane-1", Backend: "pi",
+		Command:    []string{"/bin/sh", "-c", `printf '%s' "$YOLO_DURABLE_DIR"`},
+		WorkingDir: run.WorktreeDir, TimeoutMS: 60000,
+	}, run.ExecOptions{LaneRoot: laneRoot, Now: now})
+	if err != nil {
+		t.Fatalf("fresh Exec failed: %v", err)
+	}
+	gotFresh, err := os.ReadFile(filepath.Join(laneDir, freshID+".log"))
+	if err != nil {
+		t.Fatalf("reading fresh run log: %v", err)
+	}
+	if string(gotFresh) != wantFresh {
+		t.Fatalf("fresh run exported YOLO_DURABLE_DIR = %q, want %q", string(gotFresh), wantFresh)
+	}
+
+	// Legacy run: existing <dir>/durable/<run_id> without <dir>/scratch/<run_id> is kept.
+	legacyID := "run-legacy"
+	legacyDir := filepath.Join(laneDir, "durable", legacyID)
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("creating legacy durable dir: %v", err)
+	}
+	if got := run.ScratchDir(laneDir, legacyID); got != legacyDir {
+		t.Fatalf("ScratchDir(legacy) = %q, want %q", got, legacyDir)
+	}
+	if got := run.DurableDir(laneDir, legacyID); got != legacyDir {
+		t.Fatalf("DurableDir(legacy) = %q, want %q", got, legacyDir)
+	}
+	_, err = run.Exec(ctx, s, run.Request{
+		RunID: legacyID, LaneID: "lane-1", Backend: "pi",
+		Command:    []string{"/bin/sh", "-c", `printf '%s' "$YOLO_DURABLE_DIR"`},
+		WorkingDir: run.WorktreeDir, TimeoutMS: 60000,
+	}, run.ExecOptions{LaneRoot: laneRoot, Now: now})
+	if err != nil {
+		t.Fatalf("legacy Exec failed: %v", err)
+	}
+	gotLegacy, err := os.ReadFile(filepath.Join(laneDir, legacyID+".log"))
+	if err != nil {
+		t.Fatalf("reading legacy run log: %v", err)
+	}
+	if string(gotLegacy) != legacyDir {
+		t.Fatalf("legacy run exported YOLO_DURABLE_DIR = %q, want %q", string(gotLegacy), legacyDir)
+	}
+	if _, err := os.Stat(filepath.Join(laneDir, "scratch", legacyID)); !os.IsNotExist(err) {
+		t.Fatalf("legacy run unexpectedly created scratch dir (stat err=%v)", err)
+	}
+
+	// When both exist, scratch/<run_id> wins.
+	scratchLegacy := filepath.Join(laneDir, "scratch", legacyID)
+	if err := os.MkdirAll(scratchLegacy, 0o755); err != nil {
+		t.Fatalf("creating scratch dir alongside legacy: %v", err)
+	}
+	if got := run.ScratchDir(laneDir, legacyID); got != scratchLegacy {
+		t.Fatalf("ScratchDir(both) = %q, want %q", got, scratchLegacy)
+	}
+	if got := run.DurableDir(laneDir, legacyID); got != scratchLegacy {
+		t.Fatalf("DurableDir(both) = %q, want %q", got, scratchLegacy)
 	}
 }

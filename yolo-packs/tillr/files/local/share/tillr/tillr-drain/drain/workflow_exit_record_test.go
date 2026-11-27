@@ -144,5 +144,5 @@ func TestWorkflowExitRecordRestart(t *testing.T) {
 	})
 }
 func runDurableForTest(f refusalLoopFixture, id string) string {
-	return filepath.Join(f.laneRoot, "lane-1", "durable", id)
+	return filepath.Join(f.laneRoot, "lane-1", "scratch", id)
 }

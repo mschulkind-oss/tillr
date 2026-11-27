@@ -208,7 +208,7 @@ func TestLargeConflictEvidenceIsStoredOutsideTheBrief(t *testing.T) {
 	}
 	laneDir := filepath.Join(f.laneRoot, "lane-1")
 	brief := readAll(t, filepath.Join(laneDir, "brief.md"))
-	markerPath := filepath.Join(laneDir, "durable", spec.RunID, "conflict-markers.txt")
+	markerPath := filepath.Join(laneDir, "scratch", spec.RunID, "conflict-markers.txt")
 	if got := readAll(t, markerPath); got != markers {
 		t.Fatalf("evidence changed: got %d bytes, want %d", len(got), len(markers))
 	}
@@ -567,7 +567,7 @@ func readAll(t *testing.T, path string) string {
 // cannot find its scratch puts it in the repository: the durable directory is outside the
 // fence, so the fence is the one place that can tell it where scratch belongs.
 //
-// The path is the one `run exec` exports as YOLO_DURABLE_DIR — `<laneDir>/durable/<run_id>`,
+// The path is the one `run exec` exports as YOLO_DURABLE_DIR — `<laneDir>/scratch/<run_id>`,
 // outside `<laneDir>/worktree` — and the negative control is the brief before this landed:
 // it named no scratch directory at all, so a worker had only the coordinator's inherited
 // value to write.
@@ -579,7 +579,7 @@ func TestTheBriefNamesTheRunsOwnScratchDirectory(t *testing.T) {
 	}
 	laneDir := filepath.Join(f.laneRoot, "lane-1")
 	brief := readAll(t, filepath.Join(laneDir, "brief.md"))
-	scratch := filepath.Join(laneDir, "durable", spec.RunID)
+	scratch := filepath.Join(laneDir, "scratch", spec.RunID)
 	start := strings.Index(brief, "## Scope and boundaries")
 	if start < 0 {
 		t.Fatalf("the brief carries no scope and boundaries section:\n%s", brief)

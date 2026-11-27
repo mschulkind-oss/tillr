@@ -180,14 +180,29 @@ func openRunLog(path string, resume bool) (*os.File, error) {
 	return file, nil
 }
 
-// DurableDir is the run's own scratch directory: <laneDir>/durable/<run_id>. It is named
-// once, here, because two places have to agree on the spelling: `exec` exports it as the
-// child's YOLO_DURABLE_DIR, and staging states it in the brief so a worker knows where its
-// scratch belongs. It sits outside the lane's worktree on purpose: the fence describes
-// tracked paths, and a scratch directory inside the tree would be a change the fence has to
-// admit.
+// ScratchDir is the run's own scratch directory: <laneDir>/scratch/<run_id>. A run whose
+// legacy <laneDir>/durable/<run_id> directory already exists and whose <laneDir>/scratch/<run_id>
+// does not keeps using the legacy directory so an in-flight run finds its files across a
+// restart. It is named once, here, because two places have to agree on the spelling: `exec`
+// exports it as the child's YOLO_DURABLE_DIR, and staging states it in the brief so a worker
+// knows where its scratch belongs. It sits outside the lane's worktree on purpose: the fence
+// describes tracked paths, and a scratch directory inside the tree would be a change the fence
+// has to admit.
+func ScratchDir(laneDir, runID string) string {
+	scratch := filepath.Join(laneDir, "scratch", runID)
+	if info, err := os.Stat(scratch); err == nil && info.IsDir() {
+		return scratch
+	}
+	legacy := filepath.Join(laneDir, "durable", runID)
+	if info, err := os.Stat(legacy); err == nil && info.IsDir() {
+		return legacy
+	}
+	return scratch
+}
+
+// DurableDir is an alias for ScratchDir, kept so every caller agrees on the run's scratch path.
 func DurableDir(laneDir, runID string) string {
-	return filepath.Join(laneDir, "durable", runID)
+	return ScratchDir(laneDir, runID)
 }
 
 // NodeDir keeps a parallel node's brief, session, log and report apart from siblings.
@@ -243,7 +258,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	// The run's scratch is its own and it exists before the process does, because a child
 	// that has to create it races its sibling for the same tree and one of them loses.
-	durableDir := DurableDir(laneDir, req.RunID)
+	durableDir := ScratchDir(laneDir, req.RunID)
 	if err := os.MkdirAll(durableDir, 0o755); err != nil {
 		return record.Envelope{}, Internalf("creating the run's scratch directory %q: %v", durableDir, err)
 	}
@@ -660,10 +675,15 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	payload.Usage, note = readSpend(context.WithoutCancel(ctx), opts.BackendsDir, req.Command[0], req.Backend, durableDir, logPath, payload.ExitCode, true)
 	payload.SpendNote = note
 	// The extracted report is run evidence, not the reusable lane's latest output.
-	// Keep a pinned artifact for settlement and history, and the conventional copy
-	// the lane driver reads. Never attach a report left by a previous extraction.
+	// Keep a pinned copy beside the run's log (outside scratch so it survives scratch
+	// deletion) for settlement and history, and the conventional copy the lane driver
+	// reads. Never attach a report left by a previous extraction.
 	if body, err := os.ReadFile(reportPath); err == nil {
-		payload.ArtifactRefs = append(payload.ArtifactRefs, ArtifactRef{Kind: "report", Ref: reportPath})
+		pinnedReportPath := filepath.Join(artifactDir, req.RunID+".report.md")
+		if err := os.WriteFile(pinnedReportPath, body, 0o644); err != nil {
+			return record.Envelope{}, Internalf("writing the run report: %v", err)
+		}
+		payload.ArtifactRefs = append(payload.ArtifactRefs, ArtifactRef{Kind: "report", Ref: pinnedReportPath})
 		if err := os.WriteFile(filepath.Join(artifactDir, "report.md"), body, 0o644); err != nil {
 			return record.Envelope{}, Internalf("writing the lane report: %v", err)
 		}

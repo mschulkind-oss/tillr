@@ -221,7 +221,7 @@ A consumer may rely on these. A change to any of them is announced as
   `TILLR_LANE_ID`, `TILLR_SESSION_MODE`, `TILLR_RESUME_PROMPT_FILE`, `TILLR_PAUSE_REQUEST`,
   `TILLR_PROGRESS_FILE`, `TILLR_READ_ONLY_GROUP`, `TILLR_CHILD_SESSIONS_ROOT` and
   `TILLR_CHILD_SESSIONS_MARKER`. It also replaces any inherited scratch-directory variable with the
-  run's own scratch directory, `<lane dir>/durable/<run id>` (`DurableDir`).
+  run's own scratch directory, `<lane dir>/scratch/<run id>` (`ScratchDir`, aliased as `DurableDir`).
 - **Names that carry the word "lane"** (`--lane-root`, `TILLR_LANE_ID`, `tillr-run lanes`,
   `tillr-view lanes`) stay as they are; [the vocabulary](./tillr-vocabulary.md) keeps them as
   aliases.
@@ -295,7 +295,7 @@ Four pieces of work, none built and none needing a ruling ([`D-FQ1`](#decision-l
 - A dated "Changes" list in it gains a line in the same commit as any change to the stable surface.
 
 **P6. Let `tillr run status` say when a run's process is gone.** *(B5. It touches the drain's
-interrupted-run code in [orphan.go](../../tools/tillr-drain/drain/orphan.go), so it goes last.)*
+interrupted-run code in [orphan.go](../../tools/tillr-drain/internal/procguard/orphan.go), so it goes last.)*
 
 - `tillr run status` reports a run whose recorded process does not exist as interrupted, using the
   same rule the drain uses.

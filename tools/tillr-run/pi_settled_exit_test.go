@@ -155,7 +155,7 @@ func TestPiSettledHarnessThatNeverExitsIsEndedByTheAdapter(t *testing.T) {
 			if !strings.Contains(lines[len(lines)-2], "session_shutdown_flushed") || !strings.HasPrefix(lines[len(lines)-1], `{"type": "tillr_harness_ended"`) && !strings.HasPrefix(lines[len(lines)-1], `{"type":"tillr_harness_ended"`) {
 				t.Fatalf("stream does not end with the shutdown output and the adapter's ending: %q", lines[len(lines)-2:])
 			}
-			report, err := os.ReadFile(filepath.Join(lane, "durable", "run", "report.md"))
+			report, err := os.ReadFile(filepath.Join(lane, "scratch", "run", "report.md"))
 			if err != nil || !strings.Contains(string(report), "RESULT: done") {
 				t.Fatalf("report did not settle: %v %s", err, report)
 			}

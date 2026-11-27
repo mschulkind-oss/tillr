@@ -55,7 +55,7 @@ sleep 0.3
 		t.Fatal(err)
 	}
 	// Ensure the producer's path is run-local rather than a reusable lane file.
-	if _, err := os.Stat(filepath.Join(dir, "lanes", "lane_worker-records", "durable", "worker-records", "progress")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "lanes", "lane_worker-records", "scratch", "worker-records", "progress")); err != nil {
 		t.Fatal(err)
 	}
 }
