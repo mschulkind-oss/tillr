@@ -385,6 +385,31 @@ func (l *Loop) findLaunchableRuns(ctx context.Context) ([]launchableRun, error) 
 	if err != nil {
 		return nil, err
 	}
+	if len(found) > 0 && l.cfg.Store != "" {
+		live, _, liveErr := liveRunProcessIDs(l.cfg.Store)
+		if liveErr == nil && len(live) > 0 {
+			filtered := found[:0]
+			for _, c := range found {
+				if live[c.runID] {
+					continue
+				}
+				if len(c.work.Decision.Parallel) > 0 {
+					anyLive := false
+					for _, node := range parallelNodes(c.work.Decision) {
+						if node.RunRequest != nil && live[node.RunRequest.RunID] {
+							anyLive = true
+							break
+						}
+					}
+					if anyLive {
+						continue
+					}
+				}
+				filtered = append(filtered, c)
+			}
+			found = filtered
+		}
+	}
 	sort.Slice(found, func(i, j int) bool {
 		if found[i].itemID != found[j].itemID {
 			return found[i].itemID < found[j].itemID
