@@ -118,34 +118,25 @@ func TestASquashConflictStagesOneConflictFixRunWithTheMarkersInItsBrief(t *testi
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.ConflictFixes != 1 {
-		t.Fatalf("the loop staged %d conflict-fix run(s), want 1: %s", result.ConflictFixes, result.Detail)
+	if result.ConflictFixes != 0 {
+		t.Fatalf("the loop ran %d synchronous conflict-fix run(s), want 0 (routed as returned resume node): %s", result.ConflictFixes, result.Detail)
 	}
 	if result.Landed != 1 {
-		t.Fatalf("the loop landed %d conflict-fix run(s), want 1: %s", result.Landed, result.Detail)
+		t.Fatalf("the loop landed %d returned conflict run(s), want 1: %s", result.Landed, result.Detail)
 	}
 	if len(stage.specs) != 2 {
-		t.Fatalf("staging saw %d dispatch(es), want the original and one fix run: %+v", len(stage.specs), stage.specs)
+		t.Fatalf("staging saw %d dispatch(es), want the original and one returned run: %+v", len(stage.specs), stage.specs)
 	}
-	fix := stage.specs[1]
-	if fix.Conflict == nil {
-		t.Fatal("the fix run's brief carries no conflict")
+	returned := stage.specs[1]
+	if returned.Returned == nil || returned.Returned.Cause != drain.RefusalConflict {
+		t.Fatalf("the returned run's brief does not carry the conflict: %+v", returned.Returned)
 	}
-	if !contains(fix.Conflict.Paths, "base.txt") {
-		t.Fatalf("the fix brief's paths are %v, want base.txt", fix.Conflict.Paths)
-	}
-	if len(fix.Conflict.Reports) != 1 || !strings.Contains(fix.Conflict.Reports[0], "base.txt") {
-		t.Fatalf("the fix brief's conflict reports are %v, want the CONFLICT line", fix.Conflict.Reports)
-	}
-	if !strings.Contains(fix.Conflict.Markers, "<<<<<<<") {
-		t.Fatalf("the fix brief carries no three-way markers:\n%s", fix.Conflict.Markers)
+	if !strings.Contains(returned.Returned.Detail, "base.txt") {
+		t.Fatalf("the returned brief's detail is %q, want base.txt", returned.Returned.Detail)
 	}
 	refusals := refusalsOf(t, eventsOf(t, f.store))
 	if len(refusals) != 1 || refusals[0].step != drain.RefusalConflict {
 		t.Fatalf("the conflict recorded %+v, want one %q refusal", refusals, drain.RefusalConflict)
-	}
-	if refusals[0].fixRunID != fix.RunID {
-		t.Fatalf("the conflict names fix run %q, want %q", refusals[0].fixRunID, fix.RunID)
 	}
 	if len(refusals[0].conflictPaths) != 1 || !strings.Contains(refusals[0].conflictPaths[0], "base.txt") {
 		t.Fatalf("the conflict refusal's paths are %v, want the CONFLICT line", refusals[0].conflictPaths)
@@ -175,8 +166,8 @@ func TestARepeatedSquashConflictGoesToItsMoverInsteadOfAnotherRun(t *testing.T) 
 	if err != nil {
 		t.Fatalf("the loop failed: %v (staged %d)", err, len(stage.specs))
 	}
-	if result.ConflictFixes != 1 {
-		t.Fatalf("the loop staged %d conflict-fix run(s), want 1 (on the moved trunk): %s", result.ConflictFixes, result.Detail)
+	if result.ConflictFixes != 0 {
+		t.Fatalf("the loop ran %d synchronous conflict-fix run(s), want 0 (routed as returned resume node): %s", result.ConflictFixes, result.Detail)
 	}
 	if result.Landed != 0 {
 		t.Fatalf("the loop landed %d, want none: %s", result.Landed, result.Detail)

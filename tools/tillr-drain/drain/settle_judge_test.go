@@ -15,7 +15,6 @@ import (
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
-	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -283,8 +282,8 @@ func TestHoldRecordedBeforeGateStartsStopsSamePassGate(t *testing.T) {
 	})
 }
 
-func TestWaitingInteractiveRequestForLaneReturnsToPlannerBeforeGate(t *testing.T) {
-	t.Run("express-request-waiting-for-lane", func(t *testing.T) {
+func TestSettledCandidateGatesWithoutLanePreemptionReplan(t *testing.T) {
+	t.Run("express-request-does-not-preempt-settled-candidate", func(t *testing.T) {
 		f, l := passFixture(t, "item-a")
 		steps := &countingJudgeSteps{storePath: f.storePath}
 		l.cfg.Steps = steps
@@ -292,8 +291,10 @@ func TestWaitingInteractiveRequestForLaneReturnsToPlannerBeforeGate(t *testing.T
 		l.cfg.Policy.Seats = map[string]string{"build": "fixture"}
 		stageFinishedCandidateOnLane(t, f, l, "item-a", "lane-1")
 
-		// File a default (interactive/express) request while lane-1 is occupied by item-a.
-		expressID := fileFixtureRequestWith(t, f, "Interactive request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/notes.md"}, false)
+		// File a default (interactive/express) request while item-a is settling.
+		// Under Scheduling Slice 4 (D-SN4), claimSettledCandidateJudge is deleted:
+		// settled candidates proceed straight to gate without lane preemption replanning.
+		_ = fileFixtureRequestWith(t, f, "Interactive request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/notes.md"}, false)
 
 		var result LoopResult
 		stop, err := l.pass(context.Background(), &result)
@@ -302,96 +303,10 @@ func TestWaitingInteractiveRequestForLaneReturnsToPlannerBeforeGate(t *testing.T
 		}
 		drainOwned(t, l, &result)
 
-		if result.Landed != 0 || steps.gates.Load() != 0 || steps.lands.Load() != 0 {
-			t.Fatalf("gate or land ran while interactive request %s waited for lane-1: result=%+v gates=%d lands=%d",
-				expressID, result, steps.gates.Load(), steps.lands.Load())
+		if result.Landed != 1 || steps.gates.Load() != 1 || steps.lands.Load() != 1 {
+			t.Fatalf("settled candidate should gate and land without preemption replan: result=%+v gates=%d lands=%d",
+				result, steps.gates.Load(), steps.lands.Load())
 		}
-		assertCandidateRecordedNotDone(t, f.storePath, "item-a")
-	})
-
-	t.Run("comment-waiting-for-document-desk", func(t *testing.T) {
-		const docPath = "docs/design/doc.md"
-		desk := commentDesk(docPath)
-		f, l := passFixture(t, "item-design", "item-comments-doc-1")
-		steps := &countingJudgeSteps{storePath: f.storePath}
-		l.cfg.Steps = steps
-		l.cfg.Lanes = []string{"lane-1"}
-		l.cfg.Policy.Seats = map[string]string{"design": "fixture"}
-		l.cfg.Comments = &settings.Comments{Paths: []string{"docs/design/"}, MaxRunning: 3}
-		l.cfg.QuestionsCmd = []string{"sh", "-c", "printf '[]'"}
-
-		if err := os.MkdirAll(filepath.Join(f.root, "docs/design"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		writeForkFile(t, filepath.Join(f.root, docPath), "# Design\n")
-		runGit(t, f.root, "add", docPath)
-		runGit(t, f.root, "commit", "-qm", "add design doc")
-		deskWorktree := filepath.Join(f.laneRoot, desk, WorktreeDir)
-		if err := os.MkdirAll(filepath.Dir(deskWorktree), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		runGit(t, f.root, "worktree", "add", "-q", "-B", "test/"+desk, deskWorktree, TrunkRef)
-
-		fixtureWrite(t, f, func(tx *store.Tx) error {
-			if _, err := tx.Exec(`UPDATE items SET seat = 'design', allowed_paths = '["docs/design/doc.md","candidate.txt"]' WHERE item_id = 'item-design'`); err != nil {
-				return err
-			}
-			_, err := tx.Exec(`UPDATE items SET state = 'closed', design_doc = ?, allowed_paths = '["docs/design/doc.md"]' WHERE item_id = 'item-comments-doc-1'`, docPath)
-			return err
-		})
-
-		var target *plannedApplication
-		for _, p := range mustPlan(t, l) {
-			if p.decision.ItemID == "item-design" {
-				cp := p
-				target = &cp
-				break
-			}
-		}
-		if target == nil || target.decision.Action != ActionDispatch || target.decision.LaneID != desk {
-			t.Fatalf("unexpected dispatch plan for item-design: %+v", target)
-		}
-		base := runGit(t, f.root, "rev-parse", TrunkRef)
-		ok, _, err := l.applyPlan(context.Background(), *target, base, l.cfg.Now())
-		if err != nil || !ok {
-			t.Fatalf("dispatch item-design: %v / %v", ok, err)
-		}
-		writeForkFile(t, filepath.Join(l.laneDirPath(desk), FenceFile), "docs/design/doc.md\ncandidate.txt\n")
-		writeForkFile(t, filepath.Join(l.laneDirPath(desk), BaseSHAFile), base+"\n")
-		writeForkFile(t, filepath.Join(deskWorktree, "candidate.txt"), "candidate\n")
-		runGit(t, deskWorktree, "add", "candidate.txt")
-		runGit(t, deskWorktree, "commit", "-qm", "candidate")
-		fixtureWrite(t, f, func(tx *store.Tx) error {
-			if err := applyTerminal(tx, run.Record{
-				RunID:        target.decision.RunRequest.RunID,
-				ItemID:       "item-design",
-				LaneID:       desk,
-				Backend:      "fixture",
-				State:        run.StateExited,
-				ExitCode:     countPtr(0),
-				StartedAt:    l.cfg.Now().Format(time.RFC3339),
-				FinishedAt:   l.cfg.Now().Format(time.RFC3339),
-				ArtifactRefs: []run.ArtifactRef{},
-			}); err != nil {
-				return err
-			}
-			// Queue the interactive review comment for the same document desk before settlement runs.
-			_, err := tx.Exec(`UPDATE items SET state = 'in-queue' WHERE item_id = 'item-comments-doc-1'`)
-			return err
-		})
-
-		var result LoopResult
-		stop, err := l.pass(context.Background(), &result)
-		if err != nil || stop != "" {
-			t.Fatalf("pass: stop=%q err=%v", stop, err)
-		}
-		drainOwned(t, l, &result)
-
-		if result.Landed != 0 || steps.gates.Load() != 0 {
-			t.Fatalf("gate ran on %s despite waiting comment request: result=%+v gates=%d",
-				desk, result, steps.gates.Load())
-		}
-		assertCandidateRecordedNotDone(t, f.storePath, "item-design")
 	})
 }
 

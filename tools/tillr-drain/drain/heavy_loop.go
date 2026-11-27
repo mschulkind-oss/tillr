@@ -19,6 +19,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/heavyrun"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/notify"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -841,6 +842,11 @@ func (l *Loop) settleDetachedHeavyProof(ctx context.Context, dir string, done he
 						settleErr = Externalf("green compare-and-swap refused: %v", err)
 						run.Result = "unknown"
 						run.Detail = settleErr.Error()
+					} else if l.notifyEnabled() && l.cfg.Store != "" {
+						_ = notify.Publish(l.cfg.Store, notify.Frame{
+							Topic: notify.TopicProofGreen,
+							AtMS:  l.nowTimeUTC().UnixMilli(),
+						})
 					}
 				}
 			}

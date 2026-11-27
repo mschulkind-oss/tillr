@@ -146,6 +146,20 @@ func TestFramesForEventMapping(t *testing.T) {
 			wantRunID:  runID,
 		},
 		{
+			name: "candidate gated maps to gate.passed",
+			ev: event.Event{
+				Kind:       "drain.gated",
+				ObjectType: "run",
+				ObjectID:   &runID,
+				Payload:    json.RawMessage(`{"item_id":"item-7"}`),
+				At:         at,
+			},
+			seq:        19,
+			wantTopics: []string{notify.TopicGatePassed},
+			wantItemID: itemID,
+			wantRunID:  runID,
+		},
+		{
 			name: "landing maps to trunk.moved and queue.changed",
 			ev: event.Event{
 				Kind:    "land.landing",

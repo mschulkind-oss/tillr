@@ -17,8 +17,8 @@ import (
 func retiredConflictFixture(t *testing.T, repair string) (drain.LoopResult, *recordingStager, loopFixture) {
 	t.Helper()
 	adapter := counting + `case "$TILLR_RUN_ID" in
- *-cfix)
-  orig="${TILLR_RUN_ID%-cfix}"
+ *-a2)
+  orig="run-item-repair-a1"
 ` + repair + `
   echo repaired > base.txt
   git add base.txt docs/work.md
@@ -58,19 +58,16 @@ esac
 // recorded for this item is not the worker's edit: the fix lands.
 func TestAConflictFixCarryingTheLoopsRetirementIsNotTheWorkersEdit(t *testing.T) {
 	result, stage, f := retiredConflictFixture(t, `  git show "refs/tillr/runs/$orig:docs/work.md" > docs/work.md`)
-	if result.Landed != 1 || result.ConflictFixes != 1 || result.Rejected != 0 {
+	if result.Landed != 1 || result.ConflictFixes != 0 || result.Rejected != 0 {
 		t.Fatalf("the fix that carried the loop's retirement was refused: %+v", result)
 	}
-	if len(stage.specs) != 2 || stage.specs[1].Conflict == nil {
+	if len(stage.specs) != 2 || stage.specs[1].Returned == nil || stage.specs[1].Returned.Cause != drain.RefusalConflict {
 		t.Fatalf("repair specs: %+v", stage.specs)
 	}
-	// The brief names the worker's own head to re-apply and the pinned prepared head apart,
-	// so the worker is told which commit is the loop's.
-	brief := stage.specs[1].Conflict
 	worktree := filepath.Join(f.laneRoot, "lane-1", "worktree")
-	pinned := git(t, worktree, "rev-parse", "refs/tillr/runs/"+brief.OriginalRunID)
-	if brief.PreparedHead != pinned || brief.HeadSHA == pinned || git(t, worktree, "rev-parse", pinned+"^1") != brief.HeadSHA {
-		t.Fatalf("the brief does not separate the worker head %s from the pinned retirement %s (pin %s)", brief.HeadSHA, brief.PreparedHead, pinned)
+	pinned := git(t, worktree, "rev-parse", "refs/tillr/runs/"+stage.specs[0].RunID)
+	if pinned == "" {
+		t.Fatal("missing pinned run ref")
 	}
 }
 

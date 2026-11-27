@@ -1452,10 +1452,16 @@ type runCompletion struct {
 	// laneRefusal is a pinned candidate's staging refused by its assigned lane's own
 	// state; the pass takes that lane out of rotation (lane_rotation.go).
 	laneRefusal *LaneRefusalError
-	// fromExamineCoordinator marks completions produced by the standalone
-	// outside-pass examine coordinator so takeCompletion does not clear
-	// launchRun's active worker maps.
+	// fromExamineCoordinator, fromGateCoordinator, and fromLandCoordinator mark
+	// completions produced by the standalone outside-pass coordinators so
+	// takeCompletion does not clear launchRun's active worker maps.
 	fromExamineCoordinator bool
+	fromGateCoordinator    bool
+	fromLandCoordinator    bool
+}
+
+func (c runCompletion) fromCoordinator() bool {
+	return c.fromExamineCoordinator || c.fromGateCoordinator || c.fromLandCoordinator
 }
 
 // passPlans takes one read of the world. Application takes one write transaction per
@@ -2361,7 +2367,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					return err
 				}
 				base = syncBase
-			} else if !l.nonLanding && !IsTrunkFixer(d.ItemID) {
+			} else if !l.nonLanding && !IsTrunkFixer(d.ItemID) && !(d.Returned != nil && d.Returned.Cause == RefusalConflict) {
 				var green string
 				if p.start != nil {
 					green = p.start.green
@@ -2903,7 +2909,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, error) {
 	l.mu.Lock()
 	stopped := false
-	if !c.fromExamineCoordinator {
+	if !c.fromCoordinator() {
 		delete(l.activeCancels, c.id)
 		stopped = l.stoppedRuns != nil && l.stoppedRuns[c.id]
 		if stopped {
@@ -2922,7 +2928,7 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 			return "", err
 		}
 		c.timing = c.dispatchTiming
-	} else if c.fromExamineCoordinator && c.timing != nil && c.timing.TickID != "" {
+	} else if c.fromCoordinator() && c.timing != nil && c.timing.TickID != "" {
 		l.countGeneration(result, c.timing.TickID)
 	}
 	if stopped || errors.Is(c.outcome.err, errRestartPending) {
@@ -3362,6 +3368,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	}
 	var restartWaiting []Decision
 	var restartConflictWaiting []Decision
+	coordinatorPending := false
 plans:
 	for i := 0; i < len(plans); i++ {
 		if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
@@ -3402,6 +3409,18 @@ plans:
 		}
 		if (d.Action == ActionDispatch || d.Action == ActionRetry) && l.rollBlocksDispatch() {
 			restartWaiting = append(restartWaiting, d)
+			continue
+		}
+		if d.Action == ActionJudge && l.coordinatorOwnsJudge(p.work) {
+			coordinatorPending = true
+			if l.notifyEnabled() {
+				if l.isGateCoordinatorActive() && isCandidateGateEligible(p.work, "") {
+					l.signalGateWake()
+				}
+				if l.isLandCoordinatorActive() && isCandidateLandEligible(p.work, "") {
+					l.signalLandWake()
+				}
+			}
 			continue
 		}
 		if l.judgeWaitsForGateStart(d, p.work) {
@@ -3493,7 +3512,7 @@ plans:
 		l.waitingDetail = ""
 		return "", nil
 	}
-	if l.activeCount() > 0 || l.activeTriageCount() > 0 {
+	if l.activeCount() > 0 || l.activeTriageCount() > 0 || coordinatorPending {
 		l.waitingDetail = ""
 		return l.waitForTrigger(ctx, leases, at, result)
 	}
@@ -3896,7 +3915,7 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 		endParallel := timeHandoffPhase(ctx, "settle_parallel")
 		completion.outcome = l.settleParallel(ctx, work, local, timing, watched)
 		endParallel()
-		if completion.outcome.err == nil && completion.outcome.stop == "" {
+		if completion.outcome.err == nil && completion.outcome.stop == "" && !l.isGateCoordinatorActive() {
 			completion.outcome, completion.step = l.judgeSettledCandidate(ctx, d, local, timing)
 		}
 	} else if d.Action == ActionSettle {
@@ -3967,7 +3986,7 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 		} else {
 			completion.outcome.err = err
 		}
-		if completion.outcome.err == nil && completion.outcome.stop == "" && completion.laneRefusal == nil {
+		if completion.outcome.err == nil && completion.outcome.stop == "" && completion.laneRefusal == nil && !l.isGateCoordinatorActive() {
 			completion.outcome, completion.step = l.judgeSettledCandidate(ctx, d, local, timing)
 		}
 	} else {

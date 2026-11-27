@@ -28,8 +28,9 @@ func (l *Loop) planStillActive(p plannedApplication) bool {
 	d := p.decision
 	// A parallel group can replace its primary run before its shared boundary
 	// closes. Its item remains active even though the current pending ID changed.
-	return l.activeItems[d.ItemID] != "" || l.examiningItems[d.ItemID] > 0 || l.active[p.parentRunID] || l.examiningRuns[p.parentRunID] ||
-		((d.Action == ActionSettle || d.Action == ActionJudge) && d.RunRequest != nil && (l.active[d.RunRequest.RunID] || l.examiningRuns[d.RunRequest.RunID]))
+	return l.activeItems[d.ItemID] != "" || l.examiningItems[d.ItemID] > 0 || l.gateLand.HasItem(d.ItemID) ||
+		l.active[p.parentRunID] || l.examiningRuns[p.parentRunID] || l.gateLand.HasRun(p.parentRunID) ||
+		((d.Action == ActionSettle || d.Action == ActionJudge) && d.RunRequest != nil && (l.active[d.RunRequest.RunID] || l.examiningRuns[d.RunRequest.RunID] || l.gateLand.HasRun(d.RunRequest.RunID)))
 }
 
 // The pass may stop consuming notifications before shutdown joins examinations.
@@ -135,6 +136,9 @@ func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopR
 	p := plans[0]
 	d := p.decision
 	if (!isDispatch(d) && d.Action != ActionSettle && d.Action != ActionJudge) || l.planStillActive(p) {
+		return "", nil
+	}
+	if d.Action == ActionJudge && l.coordinatorOwnsJudge(p.work) {
 		return "", nil
 	}
 	if p.checksComments() && item.IsCommentItem(d.ItemID) && isDispatch(d) {

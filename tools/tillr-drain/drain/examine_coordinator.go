@@ -249,6 +249,9 @@ func (l *Loop) runCoordinatedExamination(ctx context.Context, itemID, runID stri
 			l.examiningItems[itemID] = n - 1
 		}
 		l.mu.Unlock()
+		if l.notifyEnabled() && l.isGateCoordinatorActive() {
+			l.signalGateWake()
+		}
 	}()
 
 	handoffStart := time.Now()

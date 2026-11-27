@@ -584,9 +584,10 @@ func (l *Loop) stageWorkerSession(d *Decision, spec *StageSpec) error {
 	if session != s.SessionID {
 		return Externalf("retained worker session %s disappeared from lane %s before staging", s.SessionID, d.LaneID)
 	}
-	// A landed lane was released and reset; a revert continues the conversation
-	// on the current trunk, not the now-stale checkout of the landed candidate.
-	if d.Returned.Cause != RefusalReverted {
+	// A landed lane was released and reset; a revert or squash-conflict return
+	// continues the conversation on the current trunk, not the now-stale checkout
+	// of the earlier candidate.
+	if d.Returned.Cause != RefusalReverted && d.Returned.Cause != RefusalConflict {
 		spec.Continue = true
 		spec.BaseSHA = s.BaseSHA
 		if judgedCandidateReturn(*d) != nil || verifyBuildReturn(d.Returned) || verifyNoVerdictReturn(d.Returned) {

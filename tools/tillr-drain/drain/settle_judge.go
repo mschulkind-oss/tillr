@@ -2,17 +2,13 @@ package drain
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
+	"database/sql"
 	"errors"
-	"strings"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-drain/internal/gateland"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
-	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -79,6 +75,10 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 			err = errTrunkAcquittedHeld
 		}
 	}
+	return l.finishCandidateOutcome(ctx, work, &c, stop, landed, err)
+}
+
+func (l *Loop) finishCandidateOutcome(ctx context.Context, work *pendingWork, c *Candidate, stop string, landed bool, err error) laneOutcome {
 	if terminal := asItemTerminal(err); terminal != nil {
 		// The item went terminal by another route during this examination.
 		endTerminal := timeHandoffPhase(ctx, "settle_terminal")
@@ -89,7 +89,7 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 	if errors.Is(err, errRestartPending) || (l.isRestartReplaced() && errors.Is(err, context.Canceled)) {
 		if !c.laneReleasedForReplay() {
 			dir := detachedGateDir(l.cfg.Root, l.cfg.Store, c.Worktree, c.RunID)
-			if live, done := hasDetachedGateInDir(dir, c, true); live || done {
+			if live, done := hasDetachedGateInDir(dir, *c, true); live || done {
 				return laneOutcome{stop: stopLaneRetained, err: errRestartPending}
 			}
 		}
@@ -100,8 +100,8 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 	if held {
 		err = nil
 		if !keep {
-			copy := *work
-			copy.Candidate = &c
+			cp := *work
+			cp.Candidate = c
 			reason := ""
 			if repairHeld {
 				reason = ReasonRepairStagingFailed
@@ -113,14 +113,14 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 				}
 			}
 			endRelease := timeHandoffPhase(ctx, "release_candidate")
-			_, err = l.releaseCandidate(ctx, &copy, reason, true)
+			_, err = l.releaseCandidate(ctx, &cp, reason, true)
 			endRelease()
 		}
 	}
 	var pinErr *runPinError
 	if (err != nil || stop != "") && !errors.As(err, &pinErr) && !c.laneReleasedForReplay() {
 		endPin := timeHandoffPhase(ctx, "pin_candidate_head")
-		pinFail := l.pinCandidateHead(ctx, c)
+		pinFail := l.pinCandidateHead(ctx, *c)
 		endPin()
 		if pinFail != nil {
 			if err == nil {
@@ -150,14 +150,12 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 	return laneOutcome{stop: stop, err: err}
 }
 
-// judgeSettledCandidate continues straight into gate and land inside the same
-// background examination when settlement yielded a candidate ready for the gate
-// on its own lane, unless a hold on the item or a waiting interactive request
-// for that lane needs the planner to interpose.
+// judgeSettledCandidate continues into gate and land when the standalone gate
+// coordinator is not active (for example, direct single-pass l.pass callers).
+// It claims directly by per-item CAS without calling planDefinition or checking
+// numbered-lane preemption (D-SN4).
 func (l *Loop) judgeSettledCandidate(ctx context.Context, d Decision, local *LoopResult, timing *PassTiming) (laneOutcome, string) {
-	endClaim := timeHandoffPhase(ctx, "claim_settled_judge")
-	work, claimed, err := l.claimSettledCandidateJudge(ctx, d, timing)
-	endClaim()
+	work, claimed, err := l.claimSettledCandidateDirect(ctx, d, timing)
 	if err != nil {
 		return laneOutcome{err: err}, ActionJudge
 	}
@@ -167,7 +165,7 @@ func (l *Loop) judgeSettledCandidate(ctx context.Context, d Decision, local *Loo
 	return l.runCandidateExamination(ctx, work, local, timing), ActionJudge
 }
 
-func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timing *PassTiming) (*pendingWork, bool, error) {
+func (l *Loop) claimSettledCandidateDirect(ctx context.Context, d Decision, timing *PassTiming) (*pendingWork, bool, error) {
 	if l.nonLanding || d.RunRequest == nil || d.LaneID == "" {
 		return nil, false, nil
 	}
@@ -186,134 +184,6 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 	if err != nil {
 		return nil, false, err
 	}
-	rs, err := store.OpenRead(ctx, l.cfg.Store)
-	if err != nil {
-		return nil, false, err
-	}
-	var (
-		ready             bool
-		judgeDecision     Decision
-		version           string
-		interactiveDigest string
-		definitionSHA     string
-	)
-	err = rs.ReadTx(ctx, func(r *store.Reader) error {
-		folds, err := readVersionFolds(r)
-		if err != nil {
-			return err
-		}
-		w := folds.works[d.ItemID]
-		if w == nil || w.Done || w.Candidate == nil || w.LaneReleased || w.Decision.LaneID != d.LaneID || w.Decision.RunRequest == nil || w.Decision.RunRequest.RunID != d.RunRequest.RunID {
-			return nil
-		}
-		owned, err := examinationOwned(r, w, d, here)
-		if err != nil || !owned {
-			return err
-		}
-		available, err := availableRotationLanes(r, l.lanes())
-		if err != nil {
-			return err
-		}
-		now := l.cfg.Now().UTC()
-		syncRoadmaps := l.syncRoadmapsSettings()
-		proseRewrite := l.proseRewriteSettings()
-		tick := Pass{
-			Comments:            l.commentsSettings(),
-			WorkflowDefaults:    l.workflowDefaultsSettings(),
-			SyncRoadmaps:        &syncRoadmaps,
-			ProseRewrite:        &proseRewrite,
-			GatesInFlight:       l.gateCount(),
-			Build:               &l.build,
-			StorePath:           l.cfg.Store,
-			Now:                 now.Format(time.RFC3339Nano),
-			AvailableLanes:      &available,
-			ItemWorktrees:       l.cfg.ItemWorktrees,
-			ownExaminationLane:  d.LaneID,
-			ownExaminationRunID: d.RunRequest.RunID,
-		}
-		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
-			tick.BriefTemplate = &stager.Template
-		}
-		declared, err := definition.ForReader(r)
-		if err != nil {
-			return readFailure(err)
-		}
-		items, err := readItems(r)
-		if err != nil {
-			return err
-		}
-		// Only plan the retained candidate and any unfinished interactive
-		// requests that could wait for this lane. Never plan finished items or
-		// unrelated queued items on the way to this gate.
-		tick.examineItem = d.ItemID
-		byItem := make(map[string]itemRow)
-		var interactive map[string]bool
-		for _, row := range items {
-			if row.ItemID != d.ItemID && (row.Express || item.IsCommentItem(row.ItemID)) {
-				pending := folds.works[row.ItemID]
-				// Retained work on another lane cannot be waiting for this
-				// lane, regardless of what the planner answers for it.
-				if pending != nil && !pending.Done && !pending.LaneReleased && pending.Decision.LaneID != d.LaneID {
-					continue
-				}
-				byItem[row.ItemID] = row
-				if !finishedState(declared.Parsed, row.State) || (pending != nil && !pending.Done) {
-					if interactive == nil {
-						interactive = map[string]bool{d.ItemID: true}
-					}
-					interactive[row.ItemID] = true
-				}
-			}
-		}
-		if len(interactive) > 0 {
-			tick.examineItem = ""
-			tick.examineItems = interactive
-		}
-		questions := l.concurrentQuestions(ctx)
-		endPlan := timeHandoffPhase(ctx, "claim_judge_plan")
-		envs, err := planDefinition(r, tick, l.currentPolicy(), questions, declared.Parsed)
-		endPlan()
-		if err != nil {
-			return err
-		}
-		foundJudge := false
-		for _, env := range envs {
-			var planned Decision
-			if err := json.Unmarshal(env.Payload, &planned); err != nil {
-				return err
-			}
-			if planned.ItemID == d.ItemID {
-				if planned.Action != ActionJudge || planned.LaneID != d.LaneID || planned.RunRequest == nil || planned.RunRequest.RunID != d.RunRequest.RunID {
-					return nil
-				}
-				judgeDecision = planned
-				foundJudge = true
-				continue
-			}
-			if row, ok := byItem[planned.ItemID]; ok && interactiveRequestWaitsForLane(row, planned, d.LaneID, folds.works[row.ItemID], l.commentsSettings()) {
-				return nil
-			}
-		}
-		if !foundJudge {
-			return nil
-		}
-		version, err = inputVersionFrom(r, judgeDecision, folds)
-		if err != nil {
-			return err
-		}
-		interactiveDigest, err = interactiveQueueDigest(r)
-		if err != nil {
-			return err
-		}
-		definitionSHA = declared.SHA256
-		ready = true
-		return nil
-	})
-	rs.Close()
-	if err != nil || !ready {
-		return nil, false, err
-	}
-
 	ws, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return nil, false, err
@@ -321,30 +191,45 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 	defer ws.Close()
 	var claimed *pendingWork
 	err = ws.WriteTx(ctx, func(tx *store.Tx) error {
-		ok, err := currentDefinition(tx.Reader(), plannedApplication{definitionSHA: definitionSHA})
-		if err != nil || !ok {
-			return err
-		}
-		folds, err := readVersionFolds(tx.Reader())
+		r := tx.Reader()
+		works, err := readPending(r)
 		if err != nil {
 			return err
 		}
-		w := folds.works[d.ItemID]
+		w := works[d.ItemID]
 		if w == nil || w.Done || w.Candidate == nil || w.LaneReleased || w.Decision.LaneID != d.LaneID || w.Decision.RunRequest == nil || w.Decision.RunRequest.RunID != d.RunRequest.RunID {
 			return nil
 		}
-		owned, err := examinationOwned(tx.Reader(), w, d, here)
+		owned, err := examinationOwned(r, w, d, here)
 		if err != nil || !owned {
 			return err
 		}
-		currentVersion, err := inputVersionFrom(tx.Reader(), judgeDecision, folds)
-		if err != nil || currentVersion != version {
+		available, err := availableRotationLanes(r, []string{d.LaneID})
+		if err != nil || len(available) == 0 {
 			return err
 		}
-		currentInteractive, err := interactiveQueueDigest(tx.Reader())
-		if err != nil || currentInteractive != interactiveDigest {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
 			return err
 		}
+		if _, faulted := faults[d.ItemID]; faulted {
+			return nil
+		}
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return readFailure(err)
+		}
+		var itemState string
+		if err := r.QueryRow(`SELECT state FROM items WHERE item_id = ?`, d.ItemID).Scan(&itemState); err != nil {
+			if err == sql.ErrNoRows {
+				return nil
+			}
+			return readFailure(err)
+		}
+		if itemState != declared.Parsed.Ready {
+			return nil
+		}
+
 		claimAt := l.cfg.Now().UTC()
 		passID := timing.TickID
 		if passID == "" {
@@ -354,16 +239,22 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 			}
 			timing.TickID = passID
 		}
+		judgeDecision := w.Decision
+		judgeDecision.From = "candidate"
+		judgeDecision.To = "landed"
+		judgeDecision.Action = ActionJudge
+		judgeDecision.Reason = ActionJudge
 		judgeDecision.PassID = passID
 		req := *judgeDecision.RunRequest
 		req.CorrelationID = passID
 		judgeDecision.RunRequest = &req
+		identifyDecision(&judgeDecision)
 		if err := recordPassDecision(tx, judgeDecision, claimAt); err != nil {
 			return err
 		}
-		copy := *w
-		copy.Decision = judgeDecision
-		claimed = &copy
+		cp := *w
+		cp.Decision = judgeDecision
+		claimed = &cp
 		return nil
 	})
 	return claimed, claimed != nil && err == nil, err
@@ -410,64 +301,486 @@ func availableRotationLanes(r *store.Reader, offered []string) ([]string, error)
 	return lanes, nil
 }
 
-func interactiveRequestWaitsForLane(row itemRow, decision Decision, laneID string, work *pendingWork, comments *settings.Comments) bool {
-	if !row.Express && !item.IsCommentItem(row.ItemID) {
-		return false
+type gateClaim struct {
+	decision   Decision
+	work       *pendingWork
+	tickID     string
+	claimed    bool
+	lockStart  time.Time
+	lockEnd    time.Time
+	claimStart time.Time
+	claimEnd   time.Time
+}
+
+func pendingEligibility(work *pendingWork) gateland.Eligibility {
+	if work == nil {
+		return gateland.Eligibility{}
 	}
-	if work != nil && !work.Done && !work.LaneReleased {
-		return work.Decision.LaneID == laneID && decision.Action == ActionHold && decision.Reason == ReasonNoLane
+	var runID string
+	if work.Decision.RunRequest != nil {
+		runID = work.Decision.RunRequest.RunID
 	}
-	if decision.Action == ActionHold {
-		switch decision.Reason {
-		case ReasonNoLane:
-			return row.Express && !strings.HasPrefix(laneID, "desk-")
-		case ReasonDocumentDeskBusy:
-			doc := deskDocument(row, comments)
-			return doc != "" && commentDesk(doc) == laneID
-		case ReasonDeskCapacity:
-			return documentDesk(laneID)
-		}
+	return gateland.Eligibility{
+		Done:                work.Done,
+		HasCandidate:        work.Candidate != nil,
+		Gated:               work.Gated,
+		HasDirtyHold:        work.DirtyHold != nil,
+		HasRedCapHold:       work.RedCapHold != nil,
+		HasRepairHold:       work.RepairHold != nil,
+		LaneReleased:        work.LaneReleased,
+		NeedsStage:          work.NeedsStage,
+		ReopenedPausedJudge: work.ReopenedPausedJudge,
+		HasNoChange:         work.Candidate != nil && work.Candidate.NoChange != nil,
+		HasExaminer:         work.Examiner != nil,
+		Examining:           work.Examining,
+		RunID:               runID,
+		LaneID:              work.Decision.LaneID,
 	}
-	if row.Express && decision.Returned != nil && decision.Returned.WorkerSession != nil &&
-		decision.Returned.WorkerSession.LaneID == laneID && decision.WorkerSessionReason == "lane-unavailable" {
+}
+
+func isCandidateGateEligible(work *pendingWork, runID string) bool {
+	return gateland.GateEligible(pendingEligibility(work), runID)
+}
+
+func (l *Loop) signalGateWake() {
+	l.mu.Lock()
+	ch := l.gateLand.Gate.Wake
+	l.mu.Unlock()
+	gateland.SignalWake(ch)
+}
+
+func (l *Loop) isGateCoordinatorActive() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.gateLand.Gate.Active
+}
+
+func (l *Loop) coordinatorOwnsJudge(work *pendingWork) bool {
+	if l.isGateCoordinatorActive() && isCandidateGateEligible(work, "") {
+		return true
+	}
+	if l.isLandCoordinatorActive() && isCandidateLandEligible(work, "") {
 		return true
 	}
 	return false
 }
 
-func interactiveQueueDigest(r *store.Reader) (string, error) {
-	var hasExpress bool
-	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='express')`).Scan(&hasExpress); err != nil {
-		return "", readFailure(err)
-	}
-	expressColumn := "0"
-	if hasExpress {
-		expressColumn = "COALESCE(express, 0)"
-	}
-	rows, err := r.Query(`SELECT item_id, state, COALESCE(rank, ''), ` + expressColumn + `, updated_at FROM items ORDER BY item_id`)
-	if err != nil {
-		return "", readFailure(err)
-	}
-	defer rows.Close()
-	sum := sha256.New()
-	for rows.Next() {
-		var (
-			id, state, rank string
-			express         bool
-			updatedAt       int64
-		)
-		if err := rows.Scan(&id, &state, &rank, &express, &updatedAt); err != nil {
-			return "", readFailure(err)
+// startGateCoordinator runs Step 4 (candidate gating) outside the scheduling
+// pass, woken by candidate.ready / gate.finished / resync relay notifications
+// and reconciled on StorePollInterval (15s default) when notifications are
+// absent or disabled.
+func (l *Loop) startGateCoordinator(ctx context.Context, result *LoopResult) func() {
+	coordCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+
+	l.mu.Lock()
+	l.gateLand.Gate.Ensure()
+	l.gateLand.Gate.Active = true
+	l.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		defer func() {
+			l.mu.Lock()
+			l.gateLand.Gate.Active = false
+			l.mu.Unlock()
+		}()
+		wait := l.cfg.StorePollInterval
+		if wait <= 0 {
+			wait = DefaultFallbackPollInterval
 		}
-		if !express && !strings.HasPrefix(id, "item-idea-") && !item.IsCommentItem(id) {
+		gateland.RunLoop(
+			coordCtx,
+			wait,
+			l.gateLand.Gate.Timer,
+			func() <-chan struct{} {
+				if !l.notifyEnabled() {
+					return nil
+				}
+				l.mu.Lock()
+				ch := l.gateLand.Gate.Wake
+				l.mu.Unlock()
+				return ch
+			},
+			func() { l.scanAndGate(coordCtx, result) },
+		)
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (l *Loop) busyRunIDsLocked() map[string]bool {
+	busy := make(map[string]bool, len(l.active)+len(l.activeBrackets)+len(l.examiningRuns)+l.gateLand.RunCount())
+	for id := range l.active {
+		busy[id] = true
+	}
+	for id := range l.activeBrackets {
+		busy[id] = true
+	}
+	for id := range l.examiningRuns {
+		busy[id] = true
+	}
+	for id := range l.gateLand.Gate.Runs {
+		busy[id] = true
+	}
+	for id := range l.gateLand.Land.Runs {
+		busy[id] = true
+	}
+	return busy
+}
+
+func (l *Loop) scanAndGate(ctx context.Context, result *LoopResult) {
+	if ctx.Err() != nil || l.nonLanding || l.ownerMigrationItem != "" {
+		return
+	}
+	if stopped, err := l.stopRequested(ctx); stopped || err != nil {
+		return
+	}
+	candidates, err := l.findGateableCandidates(ctx)
+	if err != nil || len(candidates) == 0 {
+		return
+	}
+	for _, c := range candidates {
+		l.mu.Lock()
+		if ctx.Err() != nil {
+			l.mu.Unlock()
+			return
+		}
+		if l.active[c.RunID] || l.activeBrackets[c.RunID] || l.examiningRuns[c.RunID] || l.gateLand.HasRun(c.RunID) {
+			l.mu.Unlock()
 			continue
 		}
-		raw, _ := json.Marshal([]any{id, state, rank, express, updatedAt})
-		sum.Write(raw)
-		sum.Write([]byte{'\n'})
+		l.gateLand.Gate.MarkStart(c.ItemID, c.RunID)
+		l.examinations.Add(1)
+		l.mu.Unlock()
+
+		go l.runCoordinatedGate(ctx, c.ItemID, c.RunID, result)
 	}
-	if err := rows.Err(); err != nil {
-		return "", readFailure(err)
+}
+
+func (l *Loop) findGateableCandidates(ctx context.Context) ([]gateland.GateCandidate, error) {
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return nil, err
 	}
-	return hex.EncodeToString(sum.Sum(nil)), nil
+	defer s.Close()
+
+	var found []gateland.GateCandidate
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		works, err := readPending(r)
+		if err != nil {
+			return err
+		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return readFailure(err)
+		}
+		states, err := gateland.ReadItemStates(r)
+		if err != nil {
+			return err
+		}
+
+		l.mu.Lock()
+		busy := l.busyRunIDsLocked()
+		l.mu.Unlock()
+
+		gates := l.gateCount()
+		for itemID, work := range works {
+			if !isCandidateGateEligible(work, "") {
+				continue
+			}
+			runID := work.Decision.RunRequest.RunID
+			if busy[runID] {
+				continue
+			}
+			if _, faulted := faults[itemID]; faulted {
+				continue
+			}
+			if states[itemID] != declared.Parsed.Ready {
+				continue
+			}
+			if work.GateStall != nil && !work.GateStall.canRetry(gates) {
+				continue
+			}
+			found = append(found, gateland.GateCandidate{ItemID: itemID, RunID: runID})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	gateland.SortGateCandidates(found)
+	return found, nil
+}
+
+// claimCandidateGate claims exclusive gate ownership of (itemID, runID) by a
+// direct per-item compare-and-set in one WriteTx, without calling planDefinition
+// or checking numbered-lane preemption (D-SN3, D-SN4).
+func (l *Loop) claimCandidateGate(ctx context.Context, itemID, runID string, at time.Time) (gateClaim, error) {
+	var out gateClaim
+	if l.nonLanding || itemID == "" || runID == "" {
+		return out, nil
+	}
+	if stopped, err := l.stopRequested(ctx); stopped || err != nil {
+		return out, err
+	}
+	if l.cfg.Restart != nil && !l.restartActionDeferred() {
+		if l.restartReplaced.Load() {
+			return out, nil
+		}
+		if pending, err := l.restarterPendingWith(ctx, nil); err != nil || pending {
+			return out, err
+		}
+	}
+	out.lockStart = time.Now()
+	claimCtx, unlock, err := l.lockRestartMechanical(ctx)
+	out.lockEnd = time.Now()
+	if err != nil {
+		return out, err
+	}
+	s, err := store.Open(claimCtx, l.cfg.Store, true)
+	if err != nil {
+		unlock()
+		return out, err
+	}
+	defer s.Close()
+
+	gates := l.gateCount()
+	out.claimStart = time.Now()
+	err = s.WriteTx(claimCtx, func(tx *store.Tx) error {
+		r := tx.Reader()
+		works, _, err := readPendingHistory(r)
+		if err != nil {
+			return err
+		}
+		work := works[itemID]
+		if !isCandidateGateEligible(work, runID) {
+			return nil
+		}
+		if work.GateStall != nil && !work.GateStall.canRetry(gates) {
+			return nil
+		}
+		d := work.Decision
+		available, err := availableRotationLanes(r, []string{d.LaneID})
+		if err != nil || len(available) == 0 {
+			return err
+		}
+		leases, err := activeLeases(r, at, []string{d.LaneID})
+		if err != nil || len(leases) > 0 {
+			return err
+		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if _, faulted := faults[itemID]; faulted {
+			return nil
+		}
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return readFailure(err)
+		}
+		var itemState string
+		if err := r.QueryRow(`SELECT state FROM items WHERE item_id = ?`, itemID).Scan(&itemState); err != nil {
+			if err == sql.ErrNoRows {
+				return nil
+			}
+			return readFailure(err)
+		}
+		if itemState != declared.Parsed.Ready {
+			return nil
+		}
+
+		d.From = "candidate"
+		d.To = "landed"
+		d.Action = ActionJudge
+		d.Reason = ActionJudge
+		identifyDecision(&d)
+
+		gen, err := allocateGeneration(tx)
+		if err != nil {
+			return err
+		}
+		d.PassID = gen
+		reqCopy := *d.RunRequest
+		reqCopy.CorrelationID = gen
+		d.RunRequest = &reqCopy
+
+		copyWork := *work
+		copyWork.Decision = d
+		claimedWork := &copyWork
+		owner, err := currentLoopOwner()
+		if err != nil {
+			return err
+		}
+		if d.Workflow != nil {
+			claimedWork.Owner, claimedWork.Examining = owner, true
+			if err := appendEffect(tx, examinationClaimedKind, d.RunRequest.RunID, owner, at); err != nil {
+				return err
+			}
+		} else {
+			claimedWork.Examiner = owner
+			if err := appendEffect(tx, examinationOwnerKind, d.RunRequest.RunID, owner, at); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`INSERT INTO lanes(lane_id,state,run_id,leased_until) VALUES(?,?,?,NULL) ON CONFLICT(lane_id) DO UPDATE SET state=excluded.state,run_id=excluded.run_id,leased_until=NULL`, d.LaneID, run.LaneStateLeased, d.RunRequest.RunID); err != nil {
+			return err
+		}
+		if err := recordPassDecision(tx, d, at); err != nil {
+			return err
+		}
+		out.decision = d
+		out.work = claimedWork
+		out.tickID = gen
+		out.claimed = true
+		return nil
+	})
+	unlock()
+	out.claimEnd = time.Now()
+	if err != nil {
+		out.claimed = false
+		return out, err
+	}
+	return out, nil
+}
+
+func (l *Loop) runCoordinatedGate(ctx context.Context, itemID, runID string, _ *LoopResult) {
+	defer l.examinations.Done()
+	defer func() {
+		l.mu.Lock()
+		l.gateLand.Gate.MarkDone(itemID, runID)
+		l.mu.Unlock()
+		if l.notifyEnabled() && l.isLandCoordinatorActive() {
+			l.signalLandWake()
+		}
+	}()
+
+	handoffStart := time.Now()
+	at := l.cfg.Now().UTC()
+	claim, err := l.claimCandidateGate(ctx, itemID, runID, at)
+	if err != nil {
+		if errors.Is(err, errRestartPending) || ctx.Err() != nil {
+			return
+		}
+		l.sendCompletion(ctx, runCompletion{
+			id:                  runID,
+			itemID:              itemID,
+			step:                ActionJudge,
+			outcome:             laneOutcome{err: err},
+			fromGateCoordinator: true,
+		})
+		return
+	}
+	if !claim.claimed {
+		return
+	}
+
+	timing := &PassTiming{TickID: claim.tickID, AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
+	preSpans := []handoffSpan{
+		newHandoffSpan("restart_lock_wait", claim.lockStart, claim.lockEnd),
+		newHandoffSpan("claim_candidate_gate", claim.claimStart, claim.claimEnd),
+	}
+	comp := l.executeGateCandidate(withPreHandoffSpans(ctx, handoffStart, preSpans), claim.decision, claim.work, timing)
+	timing.Applied = 1
+	timing.DecisionCounts = map[string]int{ActionJudge: 1}
+	timing.EndMS = l.cfg.Now().UnixMilli()
+	comp.fromGateCoordinator = true
+	l.sendCompletion(ctx, comp)
+}
+
+func (l *Loop) executeGateCandidate(ctx context.Context, d Decision, work *pendingWork, timing *PassTiming) runCompletion {
+	local := &LoopResult{}
+	completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: ActionJudge, result: local, timing: timing}
+	initialForkCheckout := l.laneForkTarget(d.LaneID)
+	initialForkRef := l.lanePatchRef(d.LaneID)
+	ctx, recordTiming := l.timeHandoff(ctx, work.Decision, "gate")
+	defer recordTiming()
+
+	endProc := timeHandoffPhase(ctx, "check_surviving_processes")
+	survivingOut, survivingHeld := l.checkSurvivingRunProcesses(ctx, d.ItemID, d.LaneID, examinationRunIDs(work)...)
+	endProc()
+	if survivingHeld {
+		completion.outcome = survivingOut
+		completion.laneRefusal = survivingOut.laneRefusal
+	} else {
+		completion.outcome = l.runCandidateGateOnly(ctx, work, local, timing)
+	}
+	completion.outcome = retainedOutcome(completion.outcome)
+	if completion.outcome.stop == "" && completion.outcome.err != nil {
+		endHold := timeHandoffPhase(ctx, "hold_examination_failure")
+		completion.outcome.err = l.holdExaminationFailure(ctx, d, work, completion.step, completion.outcome.err)
+		endHold()
+		completion.outcome = retainedOutcome(completion.outcome)
+	}
+	if !l.nonLanding && !l.isRestartReplaced() && d.LaneID != "" {
+		checkout := l.laneForkTarget(d.LaneID)
+		ref := l.lanePatchRef(d.LaneID)
+		if checkout == "" {
+			checkout, ref = initialForkCheckout, initialForkRef
+		}
+		if checkout != "" && ref != "" {
+			l.reportForkCheckoutLeftover(context.WithoutCancel(ctx), d, checkout, ref, l.cfg.Now().UTC())
+		}
+	}
+	if completion.outcome.stop != stopLaneRetained && !l.isRestartReplaced() {
+		endRel := timeHandoffPhase(ctx, "release_examination")
+		if err := l.releaseExamination(context.WithoutCancel(ctx), d); err != nil && completion.outcome.err == nil {
+			completion.outcome.err = err
+		}
+		endRel()
+	}
+	completion.detail = local.Detail
+	return completion
+}
+
+// runCandidateGateOnly executes Step 4 (gate) for a claimed candidate. When the
+// gate passes and records candidateGatedKind, it hands off to Step 5 (land)
+// without abandoning the lane or marking the work examined.
+func (l *Loop) runCandidateGateOnly(ctx context.Context, work *pendingWork, local *LoopResult, timing *PassTiming) laneOutcome {
+	c := *work.Candidate
+	c.TickID = timing.TickID
+	c.replayRelease = &replayLaneRelease{
+		release: func(rctx context.Context, cur Candidate) (bool, error) {
+			if IsTrunkFixer(cur.ItemID) {
+				return false, nil
+			}
+			cp := *work
+			cp.Candidate = &cur
+			released, err := l.releaseCandidateForReplay(rctx, &cp)
+			if released {
+				work.LaneReleased = true
+			}
+			return released, err
+		},
+	}
+	if IsTrunkFixer(c.ItemID) {
+		if resolved, err := l.resolveKeptProvedFixer(ctx, c.ItemID); err != nil {
+			return laneOutcome{err: err}
+		} else if resolved {
+			stop := l.abandon(ctx, c.LaneID, c.RunID, c.HeadSHA, "resolved elsewhere: rerun passed")
+			if stop == "" {
+				err = l.markExamined(ctx, work.Decision)
+			}
+			return laneOutcome{stop: stop, err: err}
+		}
+	}
+
+	stop, gated, alreadyLanded, err := l.verifyOnly(ctx, &c, local, timing)
+	if err == nil && stop == "" && c.trunkAcquitted {
+		err = errTrunkAcquittedHeld
+	}
+	if err == nil && stop == "" && gated {
+		// Gate passed and candidateGatedKind is committed (publishing gate.passed).
+		// Leave the candidate on its worktree for Step 5 (land coordinator).
+		return laneOutcome{}
+	}
+	return l.finishCandidateOutcome(ctx, work, &c, stop, alreadyLanded, err)
 }

@@ -101,8 +101,8 @@ func TestItemWorktreesGateRefusalAndNewerTrunkTreeCheckReturnToItemDirectory(t *
 
 func TestItemWorktreesConflictFixDispatchedToItemDirectory(t *testing.T) {
 	adapter := counting + `case "$TILLR_RUN_ID" in
- *-cfix)
-  orig="${TILLR_RUN_ID%-cfix}"
+ *-a2)
+  orig="run-item-repair-a1"
   git show "refs/tillr/runs/$orig:docs/work.md" > docs/work.md
   echo repaired > base.txt
   git add base.txt docs/work.md
@@ -160,10 +160,10 @@ esac
 	if err != nil {
 		t.Fatalf("the loop failed: %v\nreport:\n%s", err, report.String())
 	}
-	if result.Landed != 1 || result.ConflictFixes != 1 || result.Rejected != 0 {
-		t.Fatalf("conflict fix under ItemWorktrees failed: %+v\nreport:\n%s", result, report.String())
+	if result.Landed != 1 || result.ConflictFixes != 0 || result.Rejected != 0 {
+		t.Fatalf("conflict return under ItemWorktrees failed: %+v\nspecs: %+v\nreport:\n%s", result, stage.specs, report.String())
 	}
-	if len(stage.specs) != 2 || stage.specs[1].Conflict == nil {
+	if len(stage.specs) != 2 || stage.specs[1].Returned == nil || stage.specs[1].Returned.Cause != drain.RefusalConflict {
 		t.Fatalf("repair specs: %+v", stage.specs)
 	}
 	for i, spec := range stage.specs {
@@ -180,10 +180,9 @@ esac
 			}
 		}
 	}
-	brief := stage.specs[1].Conflict
 	worktree := filepath.Join(f.laneRoot, "item-repair", "worktree")
-	pinned := git(t, worktree, "rev-parse", "refs/tillr/runs/"+brief.OriginalRunID)
-	if brief.PreparedHead != pinned || brief.HeadSHA == pinned || git(t, worktree, "rev-parse", pinned+"^1") != brief.HeadSHA {
-		t.Fatalf("the brief does not separate the worker head %s from the pinned retirement %s (pin %s)", brief.HeadSHA, brief.PreparedHead, pinned)
+	pinned := git(t, worktree, "rev-parse", "refs/tillr/runs/"+stage.specs[0].RunID)
+	if pinned == "" {
+		t.Fatal("missing pinned run ref for original candidate")
 	}
 }

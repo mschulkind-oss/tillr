@@ -95,7 +95,7 @@ func (l *Loop) releaseRestartExaminations(ctx context.Context) error {
 func (l *Loop) isRunActive(runID string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.active[runID] || l.examiningRuns[runID]
+	return l.active[runID] || l.examiningRuns[runID] || l.gateLand.HasRun(runID)
 }
 
 func (l *Loop) getLoopCtx() context.Context {

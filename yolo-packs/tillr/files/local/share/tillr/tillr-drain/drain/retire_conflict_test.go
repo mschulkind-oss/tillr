@@ -26,9 +26,8 @@ func (s *replayRetirementStager) Stage(ctx context.Context, spec drain.StageSpec
 
 func TestConflictRepairReappliesWorkerHeadThenRegeneratesRetirement(t *testing.T) {
 	adapter := counting + `case "$TILLR_RUN_ID" in
- *-cfix)
-  read head < ../repair-head
-  git show "$head:docs/work.md" > docs/work.md
+ *-a2)
+  git show "refs/tillr/runs/run-item-repair-a1^1:docs/work.md" > docs/work.md
   echo repaired > base.txt
   git add base.txt docs/work.md
   git -c user.name=stub -c user.email=stub@example.invalid commit -qm repaired
@@ -56,23 +55,20 @@ esac
 `)
 	stage := &replayRetirementStager{recordingStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"base.txt", "docs/work.md"}}}}
 	result, err := routeLoop(t, f, f.steps(t, gate, land, always(t, "verdict", 0)), stage, os.Stderr).Run(context.Background())
-	if err != nil || result.Landed != 1 || result.ConflictFixes != 1 || result.Rejected != 0 {
+	if err != nil || result.Landed != 1 || result.ConflictFixes != 0 || result.Rejected != 0 {
 		t.Fatalf("result %+v / %v", result, err)
 	}
-	if len(stage.specs) != 2 || stage.specs[1].Conflict == nil {
+	if len(stage.specs) != 2 || stage.specs[1].Returned == nil || stage.specs[1].Returned.Cause != drain.RefusalConflict {
 		t.Fatalf("repair specs: %+v", stage.specs)
 	}
 	worktree := filepath.Join(f.laneRoot, "lane-1", "worktree")
-	workerHead := stage.specs[1].Conflict.HeadSHA
+	pinned := git(t, worktree, "rev-parse", "refs/tillr/runs/"+stage.specs[0].RunID)
+	workerHead := git(t, worktree, "rev-parse", pinned+"^1")
 	if body := git(t, worktree, "show", workerHead+":docs/work.md"); !strings.Contains(body, "id=\"item-repair\"") {
-		t.Fatalf("repair input includes loop-owned retirement: %s", body)
+		t.Fatalf("worker head missing item block: %s", body)
 	}
-	prepared := git(t, worktree, "show", stage.specs[1].Conflict.PreparedHead+":docs/work.md")
+	prepared := git(t, worktree, "show", pinned+":docs/work.md")
 	if strings.Contains(prepared, "id=\"item-repair\"") {
 		t.Fatal("prepared candidate evidence was not retained")
-	}
-	brief := stage.specs[1].Conflict
-	if got := git(t, worktree, "rev-parse", "refs/tillr/runs/"+brief.OriginalRunID); got != brief.PreparedHead {
-		t.Fatalf("original attempt pin = %s, want %s", got, brief.PreparedHead)
 	}
 }

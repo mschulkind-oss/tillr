@@ -235,7 +235,7 @@ func topicsForEvent(kind string, peek eventPayloadPeek) []string {
 		}
 		return []string{notify.TopicGateFinished}
 
-	case notify.TopicGatePassed:
+	case "drain.gated", "drain.candidate-gated", notify.TopicGatePassed:
 		return []string{notify.TopicGatePassed}
 
 	case notify.TopicGateFinished:

@@ -523,22 +523,73 @@ func (l *Loop) definitionChanged(ctx context.Context, c Candidate, ref string) (
 	if bodies[0] == bodies[1] {
 		return false, nil
 	}
-	// A conflict-fix run of a candidate the loop retired may carry that retirement: the
-	// prepared head it re-applies holds the loop's own commit removing this block. That
-	// removal is the loop's, not the worker's, so the head is compared against exactly what
-	// the loop's retirement makes of this base — never excused as any edit to the block.
-	if raws[0] != "" && raws[1] != "" && isConflictFixRun(c.RunID) {
-		retired, err := l.retiredOriginal(ctx, conflictFixOriginal(c.RunID))
-		if err != nil {
-			return false, err
+	// A conflict-fix run (whether synchronous -cfix or a returned conflict resume node) of a
+	// candidate the loop retired may carry that retirement: the prepared head it re-applies
+	// holds the loop's own commit removing this block. That removal is the loop's, not the
+	// worker's, so the head is compared against exactly what the loop's retirement makes of
+	// this base — never excused as any edit to the block.
+	if raws[0] != "" && raws[1] != "" {
+		origRunID := ""
+		if isConflictFixRun(c.RunID) {
+			origRunID = conflictFixOriginal(c.RunID)
+		} else {
+			var err error
+			origRunID, err = l.priorConflictRunID(ctx, c.ItemID)
+			if err != nil {
+				return false, err
+			}
 		}
-		if retired {
-			if text, found := item.RetireItemBlock(raws[0], c.ItemID); found && item.DefinitionBodyContent(ref, c.ItemID, []byte(text)) == bodies[1] {
-				return false, nil
+		if origRunID != "" {
+			retired, err := l.retiredOriginal(ctx, origRunID)
+			if err != nil {
+				return false, err
+			}
+			if retired {
+				if text, found := item.RetireItemBlock(raws[0], c.ItemID); found && item.DefinitionBodyContent(ref, c.ItemID, []byte(text)) == bodies[1] {
+					return false, nil
+				}
 			}
 		}
 	}
 	return true, nil
+}
+
+// priorConflictRunID returns the run_id of itemID's most recent refusal when that refusal
+// was a squash conflict (RefusalConflict), or "" otherwise.
+func (l *Loop) priorConflictRunID(ctx context.Context, itemID string) (string, error) {
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return "", err
+	}
+	defer s.Close()
+	var runID string
+	var raw []byte
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT COALESCE(object_id, ''), payload FROM events WHERE kind = ? AND object_type = 'run' AND json_extract(payload, '$.item_id') = ? ORDER BY seq DESC LIMIT 1`, RefusalKind, itemID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		if rows.Next() {
+			if err := rows.Scan(&runID, &raw); err != nil {
+				return err
+			}
+		}
+		return rows.Err()
+	})
+	if err != nil || raw == nil {
+		return "", err
+	}
+	var payload struct {
+		Step string `json:"step"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", err
+	}
+	if payload.Step != RefusalConflict {
+		return "", nil
+	}
+	return runID, nil
 }
 
 // answerDefinitionError is a landed answer whose document does not declare its item as

@@ -146,7 +146,7 @@ func TestNonLandingPreservesCriteriaAndAllowsSync(t *testing.T) {
 			if result.Dispatched != want || !strings.Contains(result.Detail, "item-landing ("+reason+")") {
 				t.Fatalf("missing landing hold: %+v", result)
 			}
-			if conflict && (result.ConflictFixes != 1 || len(stage.specs) != 4 || stage.specs[1].Conflict == nil || stage.specs[3].Conflict != nil || refusals[0].fixRunID != stage.specs[1].RunID) {
+			if conflict && (result.ConflictFixes != 0 || len(stage.specs) != 4 || stage.specs[1].Returned == nil || stage.specs[1].Returned.Cause != drain.RefusalConflict || stage.specs[3].Conflict != nil || refusals[0].fixRunID != "") {
 				t.Fatalf("conflict repair changed: %+v %+v", result, stage.specs)
 			}
 			syncLandingItem(t, f, strings.ReplaceAll(landingItemDefinition, "requirement", "revised requirement"))

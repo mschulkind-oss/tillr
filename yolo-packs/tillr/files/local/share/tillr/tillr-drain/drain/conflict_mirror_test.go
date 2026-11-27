@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr-drain/drain"
 )
 
 func writeRepoFileForTest(t *testing.T, root, rel, body string) {
@@ -119,33 +121,21 @@ exit 0
 	if err != nil {
 		t.Fatalf("loop.Run failed: %v", err)
 	}
-	if result.ConflictFixes != 1 {
-		t.Fatalf("ConflictFixes = %d, want 1: %s", result.ConflictFixes, result.Detail)
+	if result.ConflictFixes != 0 {
+		t.Fatalf("ConflictFixes = %d, want 0 (routed as returned resume node): %s", result.ConflictFixes, result.Detail)
 	}
 	if result.Landed != 1 {
 		t.Fatalf("Landed = %d, want 1: %s", result.Landed, result.Detail)
 	}
 	if len(stage.specs) != 2 {
-		t.Fatalf("staged %d run(s), want 2 (original + conflict-fix): %+v", len(stage.specs), stage.specs)
+		t.Fatalf("staged %d run(s), want 2 (original + returned conflict run): %+v", len(stage.specs), stage.specs)
 	}
-	fix := stage.specs[1]
-	if fix.Conflict == nil {
-		t.Fatal("conflict-fix spec has nil Conflict")
+	returned := stage.specs[1]
+	if returned.Returned == nil || returned.Returned.Cause != drain.RefusalConflict {
+		t.Fatalf("returned spec missing conflict cause: %+v", returned.Returned)
 	}
-	if len(fix.Conflict.Paths) != 1 || fix.Conflict.Paths[0] != sourcePath {
-		t.Fatalf("conflict-fix paths = %v, want [%s]", fix.Conflict.Paths, sourcePath)
-	}
-	if len(fix.Conflict.Reports) != 1 || !strings.Contains(fix.Conflict.Reports[0], sourcePath) || strings.Contains(fix.Conflict.Reports[0], mirrorPath) {
-		t.Fatalf("conflict-fix reports = %v, want only %s", fix.Conflict.Reports, sourcePath)
-	}
-	if !strings.Contains(fix.Conflict.Markers, "### "+sourcePath) {
-		t.Fatalf("conflict-fix markers missing %s:\n%s", sourcePath, fix.Conflict.Markers)
-	}
-	if strings.Contains(fix.Conflict.Markers, mirrorPath) {
-		t.Fatalf("conflict-fix markers unexpectedly include mirror path %s:\n%s", mirrorPath, fix.Conflict.Markers)
-	}
-	if !fix.Conflict.MirrorOmitted {
-		t.Fatal("conflict-fix MirrorOmitted = false, want true")
+	if !strings.Contains(returned.Returned.Detail, sourcePath) || strings.Contains(returned.Returned.Detail, mirrorPath) {
+		t.Fatalf("returned conflict detail = %q, want only %s (without mirror path %s)", returned.Returned.Detail, sourcePath, mirrorPath)
 	}
 
 	gotSource, err := os.ReadFile(capturedSource)

@@ -117,6 +117,8 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 				// poll query so events committed during the gap do not wait 15 s.
 				signalWake(tn.wake)
 				l.signalExamineWake()
+				l.signalGateWake()
+				l.signalLandWake()
 			}
 			connectedOnce = true
 		}
@@ -132,8 +134,17 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 				l.notifyFrameObs(frame)
 			}
 			signalWake(tn.wake)
-			if frame.Topic == notify.TopicRunExited || frame.Topic == notify.TopicResync {
+			switch frame.Topic {
+			case notify.TopicRunExited:
 				l.signalExamineWake()
+			case notify.TopicCandidateReady, notify.TopicGateFinished:
+				l.signalGateWake()
+			case notify.TopicGatePassed, notify.TopicTrunkMoved, notify.TopicProofGreen:
+				l.signalLandWake()
+			case notify.TopicResync:
+				l.signalExamineWake()
+				l.signalGateWake()
+				l.signalLandWake()
 			}
 		}
 	}
@@ -316,7 +327,7 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 		before := l.dispatched(result)
 		stop, err := l.finishRunStep(ctx, c, result)
 		l.mu.Lock()
-		advanced := result.Dispatched != before || (l.activeItems[c.itemID] == "" && l.examiningItems[c.itemID] == 0)
+		advanced := result.Dispatched != before || (l.activeItems[c.itemID] == "" && l.examiningItems[c.itemID] == 0 && !l.gateLand.HasItem(c.itemID))
 		l.mu.Unlock()
 		if stop != "" || err != nil || advanced {
 			return true, stop, err

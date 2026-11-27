@@ -881,6 +881,12 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 	for id := range l.examiningRuns {
 		activeRunIDs[id] = true
 	}
+	for id := range l.gateLand.Gate.Runs {
+		activeRunIDs[id] = true
+	}
+	for id := range l.gateLand.Land.Runs {
+		activeRunIDs[id] = true
+	}
 	l.mu.Unlock()
 	if len(onDisk) == 0 && len(poolScratchOnDisk) == 0 {
 		return nil

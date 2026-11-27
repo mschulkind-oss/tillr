@@ -85,6 +85,12 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 	prepared := d
 	var designBase string
 	var designErr error
+	var conflictTip string
+	if !l.nonLanding && d.Returned != nil && d.Returned.Cause == RefusalConflict {
+		if tip, revErr := l.revParse(ctx, l.cfg.Root, l.trunkRef()); revErr == nil && tip != "" {
+			conflictTip = tip
+		}
+	}
 	closed := proposal.infrastructureClosed
 	gctx, facts := gatheringFor(ctx)
 	err = reader.ReadTx(gctx, func(r *store.Reader) error {
@@ -308,6 +314,9 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 		base, ready, err := l.fastStartBase(ctx, r, proposal, d.ItemID, continuing)
 		if err != nil || !ready {
 			return err
+		}
+		if conflictTip != "" && !continuing {
+			base = conflictTip
 		}
 		if continuing && work.BaseSHA != "" {
 			base = work.BaseSHA

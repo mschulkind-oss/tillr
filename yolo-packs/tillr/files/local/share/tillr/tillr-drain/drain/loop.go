@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
+	"github.com/mschulkind-oss/tillr-drain/internal/gateland"
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-drain/spend"
 	"github.com/mschulkind-oss/tillr-drain/workflow"
@@ -239,6 +240,7 @@ type Candidate struct {
 	WorkerSession      *WorkerSession    `json:"worker_session,omitempty"`
 	InheritedDrift     []forkObservation `json:"inherited_drift,omitempty"`
 	deferGateJudgment  bool              // an ordinary phase's result may not be the final gate verdict
+	gatedForLand       bool              // set by verifyOnly when candidateGatedKind committed and handed off to Step 5
 	skipFastGateTiming bool              // relandings are outside ordinary fast-gate timing
 	// Request is the run.request that produced this candidate. It is held so a
 	// conflict-fix run can be built from the same backend, command and timeout instead of
@@ -777,6 +779,7 @@ type Loop struct {
 	activeBrackets           map[string]bool
 	examiningRuns            map[string]bool
 	examiningItems           map[string]int
+	gateLand                 gateland.State
 	triageMu                 sync.Mutex
 	triageWG                 sync.WaitGroup
 	triageActive             map[string]string // runID -> slotName
@@ -820,19 +823,26 @@ type Loop struct {
 func (l *Loop) isActive(runID string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.active[runID] || l.examiningRuns[runID]
+	return l.active[runID] || l.examiningRuns[runID] || l.gateLand.HasRun(runID)
 }
 
 func (l *Loop) activeCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	n := len(l.active)
-	for id := range l.examiningRuns {
-		if !l.active[id] {
-			n++
-		}
+	seen := make(map[string]struct{}, len(l.active)+len(l.examiningRuns)+l.gateLand.RunCount())
+	for id := range l.active {
+		seen[id] = struct{}{}
 	}
-	return n
+	for id := range l.examiningRuns {
+		seen[id] = struct{}{}
+	}
+	for id := range l.gateLand.Gate.Runs {
+		seen[id] = struct{}{}
+	}
+	for id := range l.gateLand.Land.Runs {
+		seen[id] = struct{}{}
+	}
+	return len(seen)
 }
 
 func (l *Loop) dispatched(result *LoopResult) int {
@@ -965,6 +975,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		activeBrackets:   map[string]bool{},
 		examiningRuns:    map[string]bool{},
 		examiningItems:   map[string]int{},
+		gateLand:         gateland.NewState(),
 		triageActive:     map[string]string{},
 		triageSlots:      map[string]bool{},
 		triageWake:       make(chan struct{}, 1),
@@ -1203,17 +1214,25 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	}
 	defer l.startTriggerNotify(ctx)()
 	stopExamine := func() {}
+	stopGate := func() {}
+	stopLand := func() {}
 	if !l.pollOnly && l.ownerMigrationItem == "" {
 		stopExamine = l.startExamineCoordinator(ctx, &result)
+		if !l.nonLanding {
+			stopGate = l.startGateCoordinator(ctx, &result)
+			stopLand = l.startLandCoordinator(ctx, &result)
+		}
 	}
 	stopStarts := func() {}
 	if !l.pollOnly {
 		stopStarts = l.startBackgroundCoordinator(ctx, view, &result)
 	}
 	err = l.runPasses(ctx, &result, !l.pollOnly, view)
-	// Join staging and examination coordinator before copying the result or ending operator-requested runs.
+	// Join staging, examination, gate, and land coordinators before copying the result or ending operator-requested runs.
 	stopStarts()
 	stopExamine()
+	stopGate()
+	stopLand()
 	if err != nil {
 		return faultResult(result, err)
 	}
@@ -1298,7 +1317,7 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 			l.mu.Unlock()
 			continue
 		}
-		backOff := result.Dispatched == dispatched && l.infraStreak > 0 && len(l.active) == 0 && len(l.examiningRuns) == 0
+		backOff := result.Dispatched == dispatched && l.infraStreak > 0 && len(l.active) == 0 && len(l.examiningRuns) == 0 && !l.gateLand.AnyRunning()
 		l.stageFaults = nil
 		l.stageBackoff = backOff
 		l.mu.Unlock()
@@ -2073,6 +2092,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			spec.KeptItemBaseSHA = s.BaseSHA
 		} else if decision.Reason == ReasonReturned && decision.Returned != nil && !request.SessionTurn &&
 			((decision.Returned.WorkerSession != nil && decision.LaneID == decision.Returned.WorkerSession.LaneID) ||
+				decision.Returned.Cause == RefusalConflict ||
 				(decision.Workflow != nil && decision.NodeIndex == 0)) {
 			// A returned run that continues no session starts from a clean lane. A workflow
 			// restarted at its first stage is cut from the node base, so a commit the earlier
@@ -2106,7 +2126,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			continue
 		}
-		revertedSession := decision.Returned != nil && decision.Returned.Cause == RefusalReverted && request.SessionTurn
+		revertedSession := decision.Returned != nil && (decision.Returned.Cause == RefusalReverted || decision.Returned.Cause == RefusalConflict) && request.SessionTurn
 		// A retry that keeps the readers its earlier attempt passed starts a new attempt at
 		// a later node (retainedReaders), on the current trunk and on whatever lane the plan
 		// offered. Its first node is staged fresh, like node 0: it continues no lane state,
@@ -3507,6 +3527,16 @@ func (l *Loop) Verify(ctx context.Context, candidate Candidate, result *LoopResu
 // verify returns the prepared head to internal callers so refusal pins retain the same
 // tree the gate saw, including loop-owned maintenance.
 func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
+	return l.verifyStep(ctx, prepared, result, timing, false)
+}
+
+func (l *Loop) verifyOnly(ctx context.Context, prepared *Candidate, result *LoopResult, timing *PassTiming) (stop string, gated bool, alreadyLanded bool, err error) {
+	prepared.gatedForLand = false
+	stop, landed, err := l.verifyStep(ctx, prepared, result, timing, true)
+	return stop, prepared.gatedForLand, landed, err
+}
+
+func (l *Loop) verifyStep(ctx context.Context, prepared *Candidate, result *LoopResult, timing *PassTiming, skipLand bool) (string, bool, error) {
 	candidate := *prepared
 	defer func() { *prepared = candidate }()
 	endPreGate := timeHandoffPhase(ctx, "verify_pre_gate")
@@ -4143,6 +4173,10 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		return "", false, errCandidateLaneReleased
 	}
 	finishPostGate()
+	if skipLand {
+		candidate.gatedForLand = true
+		return "", false, nil
+	}
 	return l.landCandidate(ctx, candidate, result, timing)
 }
 

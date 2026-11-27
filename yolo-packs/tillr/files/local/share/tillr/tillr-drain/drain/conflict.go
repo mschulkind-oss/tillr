@@ -148,6 +148,22 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		}
 		return "", false, nil
 	}
+	// When the standalone land coordinator (Step 5) is active, never run a
+	// synchronous conflict-fix worker inside landing: pin the candidate head,
+	// record the conflict refusal (publishing queue.changed), and let the
+	// scheduling pass assign the returned resume node like any ordinary agent
+	// node (Section 5.6, Slice 4).
+	if l.isLandCoordinatorActive() {
+		if err := l.pinCandidateHead(ctx, candidate); err != nil {
+			return "", false, err
+		}
+		if err := l.recordConflict(ctx, candidate, landed, "", key, false); err != nil {
+			return "", false, err
+		}
+		l.reportf("loop: %s conflicted on %s; pinned refs/tillr/runs/%s and returned it to its worker on the latest trunk\n",
+			candidate.ItemID, shortSHA(mainSHA), candidate.RunID)
+		return "", false, nil
+	}
 	// The fix run only makes sense when the trunk actually moved: a conflict against the
 	// candidate's own base is not something a re-application onto the same tree can resolve.
 	if mainSHA == "" || mainSHA == candidate.BaseSHA || candidate.Request == nil || candidate.BaseRef != "" {

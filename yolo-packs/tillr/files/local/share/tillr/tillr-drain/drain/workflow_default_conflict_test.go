@@ -53,10 +53,10 @@ func TestSeatDefaultConflictFixRunsOneNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ConflictFixes != 1 || result.Landed != 1 || len(stage.specs) != 2 {
+	if result.ConflictFixes != 0 || result.Landed != 1 || len(stage.specs) != 2 {
 		t.Fatalf("runs: %+v specs=%+v", result, stage.specs)
 	}
-	if stage.specs[1].Node != nil || stage.specs[1].Conflict == nil {
+	if stage.specs[1].Node != nil || stage.specs[1].Returned == nil || stage.specs[1].Returned.Cause != drain.RefusalConflict {
 		t.Fatalf("repair expanded: %+v", stage.specs[1])
 	}
 }

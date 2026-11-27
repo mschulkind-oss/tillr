@@ -514,9 +514,13 @@ PY
 			Action: ActionJudge, ItemID: cB.ItemID, LaneID: cB.LaneID,
 			RunRequest: &run.Request{RunID: cB.RunID, ItemID: cB.ItemID, LaneID: cB.LaneID},
 		}
-		claimed, ok, err := l.claimSettledCandidateJudge(settleCtx, dB, &PassTiming{})
+		claimed, ok, err := l.claimSettledCandidateDirect(settleCtx, dB, &PassTiming{})
 		if err != nil || ok || claimed != nil {
-			t.Fatalf("claimSettledCandidateJudge admitted sibling while restart pending: claimed=%v ok=%v err=%v", claimed != nil, ok, err)
+			t.Fatalf("claimSettledCandidateDirect admitted sibling while restart pending: claimed=%v ok=%v err=%v", claimed != nil, ok, err)
+		}
+		gateClaimed, err := l.claimCandidateGate(settleCtx, dB.ItemID, dB.RunRequest.RunID, time.Now().UTC())
+		if err != nil || gateClaimed.claimed {
+			t.Fatalf("claimCandidateGate admitted sibling while restart pending: claimed=%v err=%v", gateClaimed.claimed, err)
 		}
 
 		waiting := make(chan struct{}, 1)
@@ -1149,7 +1153,7 @@ PY
 	}
 	l.markRestartPending()
 
-	// Neither claimSettledCandidateJudge nor launchExamination may start a new detached gate
+	// Neither claimSettledCandidateDirect, claimCandidateGate, nor launchExamination may start a new detached gate
 	// while the loop restart is pending.
 	d := Decision{
 		Action:     ActionJudge,
@@ -1157,9 +1161,13 @@ PY
 		LaneID:     c.LaneID,
 		RunRequest: &run.Request{RunID: c.RunID, ItemID: c.ItemID, LaneID: c.LaneID},
 	}
-	claimed, ok, err := l.claimSettledCandidateJudge(ctx, d, &PassTiming{})
+	claimed, ok, err := l.claimSettledCandidateDirect(ctx, d, &PassTiming{})
 	if err != nil || ok || claimed != nil {
-		t.Fatalf("claimSettledCandidateJudge while restart pending = (%v, %v, %v); want refused", claimed != nil, ok, err)
+		t.Fatalf("claimSettledCandidateDirect while restart pending = (%v, %v, %v); want refused", claimed != nil, ok, err)
+	}
+	gateClaimed, err := l.claimCandidateGate(ctx, d.ItemID, d.RunRequest.RunID, l.cfg.Now().UTC())
+	if err != nil || gateClaimed.claimed {
+		t.Fatalf("claimCandidateGate while restart pending = (%v, %v); want refused", gateClaimed.claimed, err)
 	}
 
 	l.completions = make(chan runCompletion, 2)
