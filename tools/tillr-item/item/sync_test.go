@@ -12,6 +12,7 @@ import (
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 var syncAt = time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
@@ -551,7 +552,15 @@ func TestSyncOverThisRepositorysDocuments(t *testing.T) {
 		t.Fatalf("no tracked document under docs/ was read")
 	}
 	s := syncStore(t)
-	report := runSync(t, s, root, docs...)
+	idx := vantage.ParseIndex([]byte(`{"index":{"documents":[]}}`), "test")
+	var report item.SyncReport
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		var err error
+		report, err = item.Sync(context.Background(), tx.Reader(), tx, item.SyncInput{Root: root, Documents: docs, Index: &idx, At: syncAt})
+		return err
+	}); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
 	if len(report.Findings) != 0 {
 		t.Fatalf("the repository's documents carry findings:\n%s", item.SyncText(report, syncAt))
 	}

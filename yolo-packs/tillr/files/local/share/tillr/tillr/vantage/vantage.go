@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"testing"
 	"time"
 )
 
@@ -461,11 +462,16 @@ func IndexCommandName(command []string) string {
 	return strings.Join(command, " ")
 }
 
+var allowDefaultIndexInTest bool
+
 // RunIndexCommand runs the index command over root and answers its raw JSON. It is the
 // half of ReadVantageIndex a caller that keeps the document — the observatory's index cache,
 // which hands one walk to several readers — needs on its own.
 func RunIndexCommand(ctx context.Context, root string, command []string) ([]byte, error) {
 	named := IndexCommandName(command)
+	if testing.Testing() && !allowDefaultIndexInTest && (len(command) == 0 || command[0] == "uvx") {
+		return nil, fmt.Errorf("running %s: refused under go test; pass a test index command or Preloaded", named)
+	}
 	if len(command) == 0 {
 		command = DefaultIndexCommand
 	}

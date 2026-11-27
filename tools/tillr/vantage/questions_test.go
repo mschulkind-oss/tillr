@@ -137,7 +137,25 @@ func TestVantageQuestionsReportsAnUnreadableIndex(t *testing.T) {
 	}
 }
 
+func allowDefaultIndexForTest(t *testing.T) {
+	t.Helper()
+	allowDefaultIndexInTest = true
+	t.Cleanup(func() { allowDefaultIndexInTest = false })
+}
+
+func TestRealQuestionIndexReaderRefusesToRunUnderGoTest(t *testing.T) {
+	root := t.TempDir()
+	_, err := ReadVantageIndex(context.Background(), root, nil).Questions("docs/open.md")
+	if err == nil || !strings.Contains(err.Error(), "refused under go test") {
+		t.Fatalf("expected refusal under go test, got: %v", err)
+	}
+	if _, err := RunIndexCommand(context.Background(), root, []string{"uvx", "vantage-check", "index", "--format", "json"}); err == nil || !strings.Contains(err.Error(), "refused under go test") {
+		t.Fatalf("expected refusal for explicit uvx under go test, got: %v", err)
+	}
+}
+
 func TestIndexDefaultUsesUvxWithoutAStandaloneChecker(t *testing.T) {
+	allowDefaultIndexForTest(t)
 	root := t.TempDir()
 	record := filepath.Join(root, "arguments")
 	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$INDEX_ARGUMENTS\"\nprintf '%s\\n' '{\"index\":{\"documents\":[{\"path\":\"docs/open.md\",\"questions\":[{\"id\":\"OQ-1\",\"state\":\"open\"}]}]}}'\n"
@@ -170,6 +188,7 @@ func TestIndexOverrideDoesNotRequireUvx(t *testing.T) {
 }
 
 func TestMissingUvxDoesNotFallBackToAStandaloneChecker(t *testing.T) {
+	allowDefaultIndexForTest(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "vantage-check"), []byte("#!/bin/sh\nprintf '%s\\n' '{\"index\":{\"documents\":[]}}'\n"), 0o755); err != nil {
 		t.Fatal(err)
