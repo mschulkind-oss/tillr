@@ -38,20 +38,32 @@ type ToolExecutor interface {
 
 // Config holds the inputs for one native-agent execution.
 type Config struct {
-	Backend           string
-	Model             string
-	Effort            string
-	Account           string
-	SessionID         string
-	ArtifactDir       string
-	BriefPath         string
-	ResumePromptPath  string
-	SessionMode       string
-	PauseRequestPath  string
-	HarnessRecordPath string
-	HarnessVersion    string
-	MaxTurns          int
-	RetryBackoffBase  time.Duration
+	Backend             string
+	Model               string
+	Effort              string
+	Account             string
+	SessionID           string
+	ArtifactDir         string
+	ArtifactsDir        string
+	WorkDir             string
+	DurableDir          string
+	BaseSHA             string
+	EndingCapability    string
+	ReadOnly            bool
+	NonLanding          bool
+	AllowNoChange       *bool
+	AllowUnchangedPiece *bool
+	BriefPath           string
+	ResumePromptPath    string
+	SessionMode         string
+	PauseRequestPath    string
+	HarnessRecordPath   string
+	HarnessVersion      string
+	MaxTurns            int
+	MaxKeepGoingNudges  int
+	RepeatWarnThreshold int
+	RepeatHardCap       int
+	RetryBackoffBase    time.Duration
 }
 
 func writeHarnessRecord(path, version string) error {
@@ -170,6 +182,8 @@ func Run(ctx context.Context, cfg Config, provider Provider, executor ToolExecut
 		mode = "new"
 	}
 
+	endingCfg := resolveEndingConfig(cfg)
+
 	var (
 		sess *Session
 		err  error
@@ -204,19 +218,25 @@ func Run(ctx context.Context, cfg Config, provider Provider, executor ToolExecut
 		if err != nil {
 			return ExitRefused
 		}
-		if _, err := sess.RepairInterruptedTools(); err != nil {
+		replayed, err := replayLandingAnswer(sess, endingCfg.DurableDir, cfg.ResumePromptPath)
+		if err != nil {
 			return ExitFailed
 		}
-		if cfg.ResumePromptPath != "" {
-			promptBytes, err := os.ReadFile(cfg.ResumePromptPath)
-			if err != nil {
-				return ExitRefused
-			}
-			if err := sess.AppendMessage(Message{
-				Role:    RoleUser,
-				Content: []ContentBlock{{Type: BlockText, Text: string(promptBytes)}},
-			}); err != nil {
+		if !replayed {
+			if _, err := sess.RepairInterruptedTools(); err != nil {
 				return ExitFailed
+			}
+			if cfg.ResumePromptPath != "" {
+				promptBytes, err := os.ReadFile(cfg.ResumePromptPath)
+				if err != nil {
+					return ExitRefused
+				}
+				if err := sess.AppendMessage(Message{
+					Role:    RoleUser,
+					Content: []ContentBlock{{Type: BlockText, Text: string(promptBytes)}},
+				}); err != nil {
+					return ExitFailed
+				}
 			}
 		}
 	default:
@@ -248,6 +268,10 @@ func Run(ctx context.Context, cfg Config, provider Provider, executor ToolExecut
 	if executor != nil {
 		toolDefs = executor.Definitions()
 	}
+	toolDefs = mergeEndingToolDefinitions(toolDefs, endingCfg)
+
+	nudges := 0
+	repeats := newRepeatTracker(cfg.RepeatWarnThreshold, cfg.RepeatHardCap)
 
 	for turn := 1; turn <= maxTurns; turn++ {
 		if pauseRequested(cfg.PauseRequestPath) {
@@ -311,6 +335,18 @@ func Run(ctx context.Context, cfg Config, provider Provider, executor ToolExecut
 			}
 		}
 		if len(toolCalls) == 0 {
+			if !pauseRequested(cfg.PauseRequestPath) {
+				if nudge, ok := keepGoingNudge(endingCfg, stopReason, extractAssistantText(resp.Content), nudges, cfg.MaxKeepGoingNudges); ok {
+					nudges++
+					if err := sess.AppendMessage(Message{
+						Role:    RoleUser,
+						Content: []ContentBlock{{Type: BlockText, Text: nudge}},
+					}); err != nil {
+						return ExitFailed
+					}
+					continue
+				}
+			}
 			_ = emit.emit(map[string]any{
 				"type":      "agent_settled",
 				"aborted":   false,
@@ -319,8 +355,36 @@ func Run(ctx context.Context, cfg Config, provider Provider, executor ToolExecut
 			return ExitOK
 		}
 
-		results := make([]ContentBlock, 0, len(toolCalls))
+		results := make([]ContentBlock, 0, len(toolCalls)+1)
+		var recoveryWarnings []string
+		batched := len(toolCalls) > 1
 		for _, call := range toolCalls {
+			repeatAction, streak, canonArgs := repeats.Observe(call)
+			if repeatAction == "ended" {
+				_ = emit.emit(map[string]any{
+					"type":      "loop_detected",
+					"action":    "ended",
+					"shape":     "same-call",
+					"toolName":  call.Name,
+					"args":      canonArgs,
+					"streak":    streak,
+					"timestamp": nowMillis(),
+				})
+				return ExitOK
+			}
+			if repeatAction == "recovered" {
+				_ = emit.emit(map[string]any{
+					"type":      "loop_detected",
+					"action":    "recovered",
+					"shape":     "same-call",
+					"toolName":  call.Name,
+					"args":      canonArgs,
+					"streak":    streak,
+					"timestamp": nowMillis(),
+				})
+				recoveryWarnings = append(recoveryWarnings, repeatRecoveryWarning(call.Name, streak))
+			}
+
 			_ = emit.emit(map[string]any{
 				"type":       "tool_execution_start",
 				"toolCallId": call.ID,
@@ -330,8 +394,19 @@ func Run(ctx context.Context, cfg Config, provider Provider, executor ToolExecut
 			var (
 				resText string
 				isErr   bool
+				parked  bool
 			)
-			if executor == nil {
+			if isEndingTool(call.Name) {
+				resText, isErr, parked = executeEndingTool(endingCfg, sess, call, batched)
+				if parked {
+					_ = emit.emit(map[string]any{
+						"type":       "parked",
+						"toolCallId": call.ID,
+						"timestamp":  nowMillis(),
+					})
+					return ExitOK
+				}
+			} else if executor == nil {
 				resText = fmt.Sprintf("unknown tool %q", call.Name)
 				isErr = true
 			} else {
@@ -349,6 +424,12 @@ func Run(ctx context.Context, cfg Config, provider Provider, executor ToolExecut
 				ToolUseID: call.ID,
 				Content:   resText,
 				IsError:   isErr,
+			})
+		}
+		for _, warn := range recoveryWarnings {
+			results = append(results, ContentBlock{
+				Type: BlockText,
+				Text: warn,
 			})
 		}
 
@@ -588,18 +669,21 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 	seat := strings.TrimSpace(os.Getenv("TILLR_SEAT"))
 	access := strings.TrimSpace(os.Getenv("TILLR_ACCESS"))
 	readOnly := access == "read_only" || strings.TrimSpace(os.Getenv("TILLR_READ_ONLY_GROUP")) != "" || seat == "triage"
+	nonLanding := strings.TrimSpace(os.Getenv("TILLR_NON_LANDING")) == "1"
+	durableDir := strings.TrimSpace(os.Getenv("YOLO_DURABLE_DIR"))
+	artifactsDir := strings.TrimSpace(os.Getenv("TILLR_OUTPUTS_DIR"))
 	toolset := NewToolsetWithBash(FencePolicy{
 		WorkDir:      workDir,
 		ArtifactDir:  artifactDir,
-		ArtifactsDir: strings.TrimSpace(os.Getenv("TILLR_OUTPUTS_DIR")),
-		DurableDir:   strings.TrimSpace(os.Getenv("YOLO_DURABLE_DIR")),
+		ArtifactsDir: artifactsDir,
+		DurableDir:   durableDir,
 		ProgressFile: strings.TrimSpace(os.Getenv("TILLR_PROGRESS_FILE")),
 		ReadOnly:     readOnly,
 		PlanQuickWay: readOnly && seat == "plan",
 	}, BashConfig{
 		RepoRoot:   strings.TrimSpace(os.Getenv("TILLR_REPO_ROOT")),
 		TraceDir:   strings.TrimSpace(os.Getenv("TILLR_TRACE_DIR")),
-		NonLanding: strings.TrimSpace(os.Getenv("TILLR_NON_LANDING")) == "1",
+		NonLanding: nonLanding,
 	})
 
 	cfg := Config{
@@ -609,6 +693,12 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		Account:           *account,
 		SessionID:         sid,
 		ArtifactDir:       artifactDir,
+		ArtifactsDir:      artifactsDir,
+		WorkDir:           workDir,
+		DurableDir:        durableDir,
+		BaseSHA:           strings.TrimSpace(os.Getenv("TILLR_GOAL_BASE")),
+		ReadOnly:          readOnly,
+		NonLanding:        nonLanding,
 		BriefPath:         briefAbs,
 		ResumePromptPath:  os.Getenv("TILLR_RESUME_PROMPT_FILE"),
 		SessionMode:       os.Getenv("TILLR_SESSION_MODE"),

@@ -178,6 +178,22 @@ func (s *Session) AppendMessage(msg Message) error {
 	return nil
 }
 
+// HasToolResult reports whether the session transcript already contains a
+// tool_result block answering callID.
+func (s *Session) HasToolResult(callID string) bool {
+	if s == nil || callID == "" {
+		return false
+	}
+	for _, msg := range s.Messages {
+		for _, blk := range msg.Content {
+			if blk.Type == BlockToolResult && blk.ToolUseID == callID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // RepairInterruptedTools checks whether the transcript ends with an assistant
 // message containing unanswered tool_use blocks (from a crash or SIGKILL) and
 // appends synthetic is_error tool_result blocks so strict provider alternation

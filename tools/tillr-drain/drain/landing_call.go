@@ -1097,11 +1097,57 @@ func claudeLandingResultPersisted(transcript []byte, session string, answer land
 	return false
 }
 
+func nativeLandingResultPersisted(transcript []byte, session string, answer landingAnswer) bool {
+	type block struct {
+		Type      string `json:"type"`
+		ToolUseID string `json:"tool_use_id"`
+		Content   string `json:"content"`
+		IsError   bool   `json:"is_error"`
+	}
+	type row struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string  `json:"role"`
+			Content []block `json:"content"`
+		} `json:"message"`
+	}
+	want := strings.TrimSuffix(answer.Text, "\n")
+	lines := strings.Split(string(transcript), "\n")
+	if len(lines) == 0 {
+		return false
+	}
+	var hdr struct {
+		Type      string `json:"type"`
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal([]byte(lines[0]), &hdr) != nil || hdr.Type != "session" || hdr.SessionID != session {
+		return false
+	}
+	for _, line := range lines[1:] {
+		var r row
+		if json.Unmarshal([]byte(line), &r) != nil || r.Type != "message" || r.Message.Role != "user" {
+			continue
+		}
+		for _, b := range r.Message.Content {
+			if b.Type == "tool_result" && b.ToolUseID == answer.CallID && b.IsError && strings.TrimSuffix(b.Content, "\n") == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func landingResultPersisted(transcript []byte, session string, answer landingAnswer) bool {
 	first, _, _ := strings.Cut(string(transcript), "\n")
-	var header struct{ Type string }
+	var header struct {
+		Type      string `json:"type"`
+		SessionID string `json:"session_id"`
+	}
 	if json.Unmarshal([]byte(first), &header) != nil || header.Type != "session" {
 		return claudeLandingResultPersisted(transcript, session, answer)
+	}
+	if header.SessionID != "" {
+		return nativeLandingResultPersisted(transcript, session, answer)
 	}
 	type entry struct {
 		Type, ID, ParentID string

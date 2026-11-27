@@ -31,13 +31,16 @@ const (
 		"arrives later as that call's result."
 )
 
-var obstacleRequired = map[string][]string{
+// ObstacleRequired maps each closed obstacle kind to its required uppercase field names.
+var ObstacleRequired = map[string][]string{
 	"definition": {"CRITERIA", "EVIDENCE"},
 	"trunk":      {"CHECKS", "BASE"},
 	"tooling":    {"COMMAND", "EVIDENCE", "PATHS"},
 	"seat":       {"TRIED", "MISSING"},
 	"owner":      {"QUESTION"},
 }
+
+var obstacleRequired = ObstacleRequired
 
 var obstacleFields = []string{
 	"criteria", "evidence", "paths", "checks", "base", "command", "tried", "missing", "question",
@@ -51,11 +54,21 @@ var (
 	shSafeRe     = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 )
 
-type refusalError struct {
+// RefusalError indicates a local ending-tool validation failure that the
+// model can fix in-turn.
+type RefusalError struct {
 	msg string
 }
 
-func (e *refusalError) Error() string { return e.msg }
+func (e *RefusalError) Error() string { return e.msg }
+
+type refusalError = RefusalError
+
+// ReadJSONRecord reads a JSON object from path, returning (nil, nil) when the
+// file does not exist.
+func ReadJSONRecord(path string) (map[string]any, error) {
+	return readRecord(path)
+}
 
 func readRecord(path string) (map[string]any, error) {
 	raw, err := os.ReadFile(path)
@@ -175,6 +188,22 @@ func gitRun(cwd string, args ...string) (string, error) {
 	return string(out), nil
 }
 
+// HeadOf returns the resolved HEAD commit SHA of cwd.
+func HeadOf(cwd string) (string, error) {
+	return headOf(cwd)
+}
+
+// DirtyPaths returns tracked modified, staged, and untracked non-ignored paths in cwd.
+func DirtyPaths(cwd string) ([]string, error) {
+	return dirtyPaths(cwd)
+}
+
+// UnformattedPaths runs tools/gate/checks/format.json when present in cwd and
+// returns any reported unformatted paths.
+func UnformattedPaths(cwd string) []string {
+	return unformattedPaths(cwd)
+}
+
 func headOf(cwd string) (string, error) {
 	out, err := gitRun(cwd, "rev-parse", "--verify", "HEAD")
 	if err != nil {
@@ -256,6 +285,233 @@ func nonEmptyLines(s string) []string {
 		}
 	}
 	return out
+}
+
+// ValidateObstacle validates obstacle tool arguments and returns the canonical
+// {"kind": ..., "fields": ...} map, or *RefusalError when invalid.
+func ValidateObstacle(args map[string]any) (map[string]any, error) {
+	return validateObstacle(args)
+}
+
+// ValidateNoChange validates no_change tool arguments and returns the canonical
+// {"cause": ..., "evidence": ..., "why_no_change": ...} map, or *RefusalError.
+func ValidateNoChange(args map[string]any) (map[string]string, error) {
+	return validateNoChange(args)
+}
+
+// WriteLandingOffer atomically writes offer as JSON to path (mode 0600).
+func WriteLandingOffer(path string, offer map[string]any) error {
+	return writeOffer(path, offer)
+}
+
+// RecordOpenLandingState updates landing-state.json in durable so the newly
+// parked offer appears in "open" while preserving any existing "open" and
+// "refused" entries.
+func RecordOpenLandingState(durable string, offer map[string]any) error {
+	if durable == "" || offer == nil {
+		return nil
+	}
+	path := filepath.Join(durable, "landing-state.json")
+	state, err := readRecord(path)
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		state = map[string]any{}
+	}
+	callID := strField(offer, "call_id")
+	openList, _ := state["open"].([]any)
+	for _, rawEntry := range openList {
+		if entry, ok := rawEntry.(map[string]any); ok && strField(entry, "call_id") == callID {
+			return nil
+		}
+	}
+	tool := strField(offer, "tool")
+	if tool == "" {
+		tool = "land"
+	}
+	entry := map[string]any{
+		"call_id": callID,
+		"tool":    tool,
+		"base":    strField(offer, "base"),
+	}
+	if commit := strField(offer, "commit"); commit != "" {
+		entry["commit"] = commit
+	}
+	openList = append(openList, entry)
+	state["open"] = openList
+	if _, ok := state["refused"]; !ok {
+		state["refused"] = []any{}
+	}
+	return writeOffer(path, state)
+}
+
+// EndingOfferRequest carries the inputs needed to validate and build a
+// landing-offer.json record for land, obstacle, or no_change.
+type EndingOfferRequest struct {
+	Tool          string // "land", "obstacle", or "no_change"
+	LandLabel     string // display name for land in error messages (default "land")
+	CallID        string
+	CWD           string
+	Transcript    string
+	DurableDir    string
+	BaseSHA       string
+	AllowNoChange bool
+	Input         map[string]any
+	Answered      func(callID string) bool
+	Answer        map[string]any
+}
+
+// BuildEndingOffer validates a land, obstacle, or no_change call against the
+// worktree and landing-state.json, returning the offer map to write, (nil, nil)
+// when callID is already open in landing-state.json, or *RefusalError for a
+// local mistake the model can fix in-turn.
+func BuildEndingOffer(req EndingOfferRequest) (map[string]any, error) {
+	landLabel := req.LandLabel
+	if landLabel == "" {
+		landLabel = "land"
+	}
+	isAnswered := req.Answered
+	if isAnswered == nil {
+		isAnswered = func(string) bool { return false }
+	}
+	if req.Tool == "no_change" && !req.AllowNoChange {
+		return nil, &RefusalError{"no_change is not allowed on this stage."}
+	}
+	state, err := readRecord(filepath.Join(req.DurableDir, "landing-state.json"))
+	if err != nil {
+		return nil, err
+	}
+	if state == nil {
+		state = map[string]any{}
+	}
+	openList, _ := state["open"].([]any)
+	for _, rawEntry := range openList {
+		entry, _ := rawEntry.(map[string]any)
+		entryID := strField(entry, "call_id")
+		if entryID != "" && entryID != req.CallID && !isAnswered(entryID) {
+			return nil, &RefusalError{fmt.Sprintf("Another ending call is open: %s.", entryID)}
+		}
+	}
+	for _, rawEntry := range openList {
+		entry, _ := rawEntry.(map[string]any)
+		if strField(entry, "call_id") == req.CallID {
+			return nil, nil // already open; defer without rewriting offer
+		}
+	}
+	if req.Answer != nil && !isAnswered(strField(req.Answer, "call_id")) {
+		return nil, &RefusalError{"The staged landing answer belongs to a different call."}
+	}
+
+	toolInput := req.Input
+	if toolInput == nil {
+		toolInput = map[string]any{}
+	}
+	head, err := headOf(req.CWD)
+	if err != nil {
+		return nil, err
+	}
+	refusedList, _ := state["refused"].([]any)
+
+	switch req.Tool {
+	case "land":
+		if head == req.BaseSHA {
+			return nil, &RefusalError{"There is no commit to offer: HEAD is still the staged base."}
+		}
+		dirty, err := dirtyPaths(req.CWD)
+		if err != nil {
+			return nil, err
+		}
+		if len(dirty) > 0 {
+			return nil, &RefusalError{"Commit or remove these uncommitted paths:\n" + strings.Join(dirty, "\n")}
+		}
+		if unformatted := unformattedPaths(req.CWD); len(unformatted) > 0 {
+			return nil, &RefusalError{
+				"Format these files (and run `just pack-sync` if `tools/tillr*` changed), then amend the commit before calling land:\n" +
+					strings.Join(unformatted, "\n"),
+			}
+		}
+		for _, rawEntry := range refusedList {
+			entry, _ := rawEntry.(map[string]any)
+			if strField(entry, "commit") == head {
+				if ro, ok := entry["report_only"].(bool); ok && ro {
+					continue
+				}
+				return nil, &RefusalError{fmt.Sprintf("This commit was already refused. A new commit is required.\n%s", strField(entry, "answer"))}
+			}
+		}
+		return map[string]any{
+			"call_id":    req.CallID,
+			"commit":     head,
+			"base":       req.BaseSHA,
+			"transcript": req.Transcript,
+		}, nil
+
+	case "no_change":
+		parsed, err := validateNoChange(toolInput)
+		if err != nil {
+			return nil, err
+		}
+		if head != req.BaseSHA {
+			return nil, &RefusalError{fmt.Sprintf("A commit exists at HEAD (HEAD is not the staged base); call `%s` instead.", landLabel)}
+		}
+		dirty, err := dirtyPaths(req.CWD)
+		if err != nil {
+			return nil, err
+		}
+		if len(dirty) > 0 {
+			return nil, &RefusalError{
+				fmt.Sprintf("The worktree is not clean; commit and call `%s`, or remove uncommitted paths before calling no_change:\n", landLabel) +
+					strings.Join(dirty, "\n"),
+			}
+		}
+		for _, rawEntry := range refusedList {
+			entry, _ := rawEntry.(map[string]any)
+			if strField(entry, "tool") != "no_change" || strField(entry, "base") != req.BaseSHA {
+				continue
+			}
+			finding, ok := entry["finding"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if strings.TrimSpace(strField(finding, "cause")) == parsed["cause"] &&
+				strings.TrimSpace(strField(finding, "evidence")) == parsed["evidence"] &&
+				strings.TrimSpace(strField(finding, "why_no_change")) == parsed["why_no_change"] {
+				return nil, &RefusalError{
+					fmt.Sprintf("This no_change finding was already refused. Provide new evidence or make the required change.\n%s", strField(entry, "answer")),
+				}
+			}
+		}
+		return map[string]any{
+			"call_id":    req.CallID,
+			"tool":       "no_change",
+			"base":       req.BaseSHA,
+			"finding":    parsed,
+			"transcript": req.Transcript,
+		}, nil
+
+	default: // "obstacle"
+		parsed, err := validateObstacle(toolInput)
+		if err != nil {
+			return nil, err
+		}
+		if parsed["kind"] == "seat" && head == req.BaseSHA {
+			dirty, err := dirtyPaths(req.CWD)
+			if err != nil {
+				return nil, err
+			}
+			if len(dirty) == 0 {
+				return nil, &RefusalError{"A seat obstacle needs an attempt: make a change or commit first, then report what you tried."}
+			}
+		}
+		return map[string]any{
+			"call_id":    req.CallID,
+			"tool":       "obstacle",
+			"base":       req.BaseSHA,
+			"obstacle":   parsed,
+			"transcript": req.Transcript,
+		}, nil
+	}
 }
 
 func validateObstacle(args map[string]any) (map[string]any, error) {
@@ -427,147 +683,32 @@ func buildEndingOffer(
 	allowNoChange bool,
 	answer map[string]any,
 ) (map[string]any, error) {
-	if name == noChangeTool && !allowNoChange {
-		return nil, &refusalError{"no_change is not allowed on this stage."}
-	}
-	state, err := readRecord(filepath.Join(durable, "landing-state.json"))
-	if err != nil {
-		return nil, err
-	}
-	if state == nil {
-		state = map[string]any{}
-	}
-	openList, _ := state["open"].([]any)
-	for _, rawEntry := range openList {
-		entry, _ := rawEntry.(map[string]any)
-		entryID := strField(entry, "call_id")
-		if entryID != "" && entryID != callID && !answered(transcript, entryID) {
-			return nil, &refusalError{fmt.Sprintf("Another ending call is open: %s.", entryID)}
-		}
-	}
-	for _, rawEntry := range openList {
-		entry, _ := rawEntry.(map[string]any)
-		if strField(entry, "call_id") == callID {
-			return nil, nil // defer without rewriting offer
-		}
-	}
-	if answer != nil && !answered(transcript, strField(answer, "call_id")) {
-		return nil, &refusalError{"The staged landing answer belongs to a different call."}
-	}
-
-	toolInput, _ := event["tool_input"].(map[string]any)
-	if toolInput == nil {
-		toolInput = map[string]any{}
-	}
-	head, err := headOf(cwd)
-	if err != nil {
-		return nil, err
-	}
-	refusedList, _ := state["refused"].([]any)
-
+	tool := "obstacle"
 	switch name {
 	case landTool:
-		if head == base {
-			return nil, &refusalError{"There is no commit to offer: HEAD is still the staged base."}
-		}
-		dirty, err := dirtyPaths(cwd)
-		if err != nil {
-			return nil, err
-		}
-		if len(dirty) > 0 {
-			return nil, &refusalError{"Commit or remove these uncommitted paths:\n" + strings.Join(dirty, "\n")}
-		}
-		if unformatted := unformattedPaths(cwd); len(unformatted) > 0 {
-			return nil, &refusalError{
-				"Format these files (and run `just pack-sync` if `tools/tillr*` changed), then amend the commit before calling land:\n" +
-					strings.Join(unformatted, "\n"),
-			}
-		}
-		for _, rawEntry := range refusedList {
-			entry, _ := rawEntry.(map[string]any)
-			if strField(entry, "commit") == head {
-				if ro, ok := entry["report_only"].(bool); ok && ro {
-					continue
-				}
-				return nil, &refusalError{fmt.Sprintf("This commit was already refused. A new commit is required.\n%s", strField(entry, "answer"))}
-			}
-		}
-		return map[string]any{
-			"call_id":    callID,
-			"commit":     head,
-			"base":       base,
-			"transcript": transcript,
-		}, nil
-
+		tool = "land"
 	case noChangeTool:
-		parsed, err := validateNoChange(toolInput)
-		if err != nil {
-			return nil, err
-		}
-		if head != base {
-			return nil, &refusalError{"A commit exists at HEAD (HEAD is not the staged base); call `mcp__tillr__land` instead."}
-		}
-		dirty, err := dirtyPaths(cwd)
-		if err != nil {
-			return nil, err
-		}
-		if len(dirty) > 0 {
-			return nil, &refusalError{
-				"The worktree is not clean; commit and call `mcp__tillr__land`, or remove uncommitted paths before calling no_change:\n" +
-					strings.Join(dirty, "\n"),
-			}
-		}
-		for _, rawEntry := range refusedList {
-			entry, _ := rawEntry.(map[string]any)
-			if strField(entry, "tool") != "no_change" || strField(entry, "base") != base {
-				continue
-			}
-			finding, ok := entry["finding"].(map[string]any)
-			if !ok {
-				continue
-			}
-			if strings.TrimSpace(strField(finding, "cause")) == parsed["cause"] &&
-				strings.TrimSpace(strField(finding, "evidence")) == parsed["evidence"] &&
-				strings.TrimSpace(strField(finding, "why_no_change")) == parsed["why_no_change"] {
-				return nil, &refusalError{
-					fmt.Sprintf("This no_change finding was already refused. Provide new evidence or make the required change.\n%s", strField(entry, "answer")),
-				}
-			}
-		}
-		return map[string]any{
-			"call_id":    callID,
-			"tool":       "no_change",
-			"base":       base,
-			"finding":    parsed,
-			"transcript": transcript,
-		}, nil
-
-	default: // obstacleTool
-		parsed, err := validateObstacle(toolInput)
-		if err != nil {
-			return nil, err
-		}
-		if parsed["kind"] == "seat" && head == base {
-			dirty, err := dirtyPaths(cwd)
-			if err != nil {
-				return nil, err
-			}
-			if len(dirty) == 0 {
-				return nil, &refusalError{"A seat obstacle needs an attempt: make a change or commit first, then report what you tried."}
-			}
-		}
-		return map[string]any{
-			"call_id":    callID,
-			"tool":       "obstacle",
-			"base":       base,
-			"obstacle":   parsed,
-			"transcript": transcript,
-		}, nil
+		tool = "no_change"
 	}
+	toolInput, _ := event["tool_input"].(map[string]any)
+	return BuildEndingOffer(EndingOfferRequest{
+		Tool:          tool,
+		LandLabel:     landTool,
+		CallID:        callID,
+		CWD:           cwd,
+		Transcript:    transcript,
+		DurableDir:    durable,
+		BaseSHA:       base,
+		AllowNoChange: allowNoChange,
+		Input:         toolInput,
+		Answered: func(id string) bool {
+			return answered(transcript, id)
+		},
+		Answer: answer,
+	})
 }
 
-func readBriefBeforeSavedWords() (string, bool) {
-	brief := os.Getenv("BOARD_DRAIN_BRIEF")
+func readBriefBeforeSavedWordsPath(brief string) (string, bool) {
 	if brief == "" {
 		return "", false
 	}
@@ -580,6 +721,37 @@ func readBriefBeforeSavedWords() (string, bool) {
 		text = text[:loc[0]]
 	}
 	return text, true
+}
+
+func readBriefBeforeSavedWords() (string, bool) {
+	return readBriefBeforeSavedWordsPath(os.Getenv("BOARD_DRAIN_BRIEF"))
+}
+
+// AllowsUnchangedPiece reports whether briefPath authorizes finishing an
+// unchanged write piece at its clean base with RESULT: done.
+func AllowsUnchangedPiece(briefPath string) bool {
+	text, ok := readBriefBeforeSavedWordsPath(briefPath)
+	if !ok {
+		return false
+	}
+	return unchangedRe.MatchString(text)
+}
+
+// AllowsNoChange reports whether briefPath authorizes a no_change ending.
+func AllowsNoChange(briefPath string) bool {
+	text, ok := readBriefBeforeSavedWordsPath(briefPath)
+	if !ok {
+		return false
+	}
+	if body, ok := markdownSectionBody(text, "Workflow node"); ok {
+		if nodeNoChgRe.MatchString(body) {
+			return true
+		}
+	}
+	if body, ok := markdownSectionBody(text, "Finishing", "No-change ending"); ok {
+		return plainNoChgRe.MatchString(body)
+	}
+	return false
 }
 
 func markdownSectionBody(text string, headings ...string) (string, bool) {
@@ -608,27 +780,11 @@ func markdownSectionBody(text string, headings ...string) (string, bool) {
 }
 
 func allowsUnchangedPiece() bool {
-	text, ok := readBriefBeforeSavedWords()
-	if !ok {
-		return false
-	}
-	return unchangedRe.MatchString(text)
+	return AllowsUnchangedPiece(os.Getenv("BOARD_DRAIN_BRIEF"))
 }
 
 func allowsNoChange() bool {
-	text, ok := readBriefBeforeSavedWords()
-	if !ok {
-		return false
-	}
-	if body, ok := markdownSectionBody(text, "Workflow node"); ok {
-		if nodeNoChgRe.MatchString(body) {
-			return true
-		}
-	}
-	if body, ok := markdownSectionBody(text, "Finishing", "No-change ending"); ok {
-		return plainNoChgRe.MatchString(body)
-	}
-	return false
+	return AllowsNoChange(os.Getenv("BOARD_DRAIN_BRIEF"))
 }
 
 func stopHook(event map[string]any, durable, base string, allowNoChange bool) (string, error) {
