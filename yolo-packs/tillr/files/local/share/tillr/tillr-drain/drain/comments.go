@@ -405,6 +405,12 @@ func (l *Loop) readCommentReplies(ctx context.Context, c Candidate) (*item.Comme
 	}
 	file := filepath.Join(run.DurableDir(l.laneDirPath(c.LaneID), c.RunID), commentRepliesFile)
 	raw, err := os.ReadFile(file)
+	if os.IsNotExist(err) {
+		runFile := filepath.Join(RunDir(l.cfg.Root, c.RunID), commentRepliesFile)
+		if rRaw, rErr := os.ReadFile(runFile); rErr == nil {
+			raw, err = rRaw, nil
+		}
+	}
 	if err != nil {
 		return batch, nil, fmt.Errorf("criterion 1: reading reply file: %w", err)
 	}

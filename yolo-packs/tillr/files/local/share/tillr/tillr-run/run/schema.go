@@ -51,8 +51,9 @@ const Version = "0.1.0"
 
 // RunDDL is run's tables: design §5.1's logical ownership, lanes and runs.
 //
-// The foreign key is the invariant a future face cannot forget: a run cannot name a
-// lane that does not exist, whatever the caller checked first.
+// runs.lane_id and read_only_runs.lane_id carry no foreign key to lanes(lane_id): an
+// ended item's idle lane row is deleted when its worktree is collected, while its run
+// history remains in runs and read_only_runs.
 //
 // lanes.leased_until is the lease's expiry on the store host's clock (§5.6), written at
 // claim and cleared by the release; NULL means the lane holds no lease. The lane row is
@@ -84,7 +85,7 @@ CREATE TABLE IF NOT EXISTS read_only_runs (
  run_id TEXT PRIMARY KEY,
  group_id TEXT NOT NULL,
  item_id TEXT NOT NULL,
- lane_id TEXT NOT NULL REFERENCES lanes(lane_id),
+ lane_id TEXT NOT NULL,
  settled INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS read_only_group_members ON read_only_runs(group_id,settled);
@@ -104,7 +105,7 @@ CREATE TABLE IF NOT EXISTS quota_pauses (
 CREATE TABLE IF NOT EXISTS runs (
   run_id        TEXT PRIMARY KEY,
   item_id       TEXT,
-  lane_id       TEXT NOT NULL REFERENCES lanes(lane_id),
+  lane_id       TEXT NOT NULL,
   backend       TEXT NOT NULL,
   route         TEXT,
   harness       TEXT,

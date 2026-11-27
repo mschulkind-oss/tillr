@@ -991,6 +991,32 @@ lane's status in `drain.lane-discarded`, pins the head, and resets the lane. Sav
 are removed when the item is landed, resolved elsewhere, closed or removed from the store
 (`drain.work-pruned`).
 
+## Ended-item worktree and scratch collection
+
+Once per pass (`reclaim_ended_item_lanes`), the loop collects worktrees and scratch owned by
+items that have ended. An item has ended when it is closed, removed, resolved elsewhere, or
+landed with its trunk commit contained in `refs/tillr/green`; a landed item whose proof is
+still pending keeps its directory until `refs/tillr/green` advances past it.
+
+- **Item directory (`<lane root>/<item-id>/`):** saves any uncommitted work under
+  `refs/tillr/ended/<run>`, pins the item branch head, removes `worktree/` through Git and
+  prunes its registration under the worktree registry lock, deletes `scratch/` and any older
+  `durable/` directory, and deletes the item's idle row in `lanes` (never a leased row).
+- **Pool lane (`lane-*`, `express-*`, `desk-*`):** deletes `scratch/<run>` and `durable/<run>`
+  for any ended run whose item has ended, while keeping the pool lane's worktree and `lanes`
+  row.
+- **Safety:** nothing is deleted while any node of the item is running, leased, or interrupted
+  without an ending, or while a child process still holds the directory.
+- **Kept:** the item ref (`refs/tillr/items/<item>`), run pins (`refs/tillr/runs/<run>`), run
+  logs, briefs, per-run reports, node directories, and every store record. Before deleting a
+  run's scratch, the four files drain readers may still consult (`graph-exit.json`,
+  `landing-offer.json`, `eval.output`, and `replies.jsonl`) are copied beside the run's log
+  under `<root>/.tillr/loop/<run>/`.
+- **Reporting and retry:** each completed collection records `drain.ended-worktree-collected`
+  naming the item and what was deleted. A directory that cannot be deleted is left in place,
+  recorded in `drain.ended-worktree-collect-failed` with the directory and reason, and retried
+  on a later pass.
+
 ## Ref lifetimes and backlog cleanup
 
 A **run pin** is the commit pointer for a worker attempt; a **landing marker** is the

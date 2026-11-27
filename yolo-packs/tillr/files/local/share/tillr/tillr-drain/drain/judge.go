@@ -1335,7 +1335,14 @@ func (l *Loop) restoreJudgeInputs(c Candidate, r *JudgeReceipt) error {
 }
 
 func (l *Loop) judgeEvalOutputPath(laneID, runID string) string {
-	return filepath.Join(run.DurableDir(l.laneDirPath(laneID), runID), "eval.output")
+	scratchPath := filepath.Join(run.DurableDir(l.laneDirPath(laneID), runID), "eval.output")
+	if _, err := os.Stat(scratchPath); os.IsNotExist(err) {
+		runPath := filepath.Join(RunDir(l.cfg.Root, runID), "eval.output")
+		if _, rErr := os.Stat(runPath); rErr == nil {
+			return runPath
+		}
+	}
+	return scratchPath
 }
 
 func judgeQuotaRefusal(rec run.Record) bool {
@@ -1453,6 +1460,7 @@ func (l *Loop) checkJudgeScope(c Candidate, entries []item.JudgeEntry) error {
 	for _, runID := range runIDs {
 		artifacts[filepath.Join(RunDir(l.cfg.Root, runID), "node-report.md")] = true
 		artifacts[filepath.Join(RunDir(l.cfg.Root, runID), noChangeFile)] = true
+		artifacts[filepath.Join(RunDir(l.cfg.Root, runID), landingOfferFile)] = true
 		scratch := run.DurableDir(l.laneDirPath(c.LaneID), runID)
 		artifacts[filepath.Join(scratch, "report.md")] = true
 		artifacts[filepath.Join(scratch, landingOfferFile)] = true

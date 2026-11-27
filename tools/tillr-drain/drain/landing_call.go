@@ -175,9 +175,17 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 	// Stat only checks presence; do not read an offer while a marked child can write it.
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return landingOfferAbsent, nil
+			runPath := filepath.Join(RunDir(l.cfg.Root, rec.RunID), landingOfferFile)
+			if _, rErr := os.Stat(runPath); rErr == nil {
+				path = runPath
+			} else if os.IsNotExist(rErr) {
+				return landingOfferAbsent, nil
+			} else {
+				return landingOfferAbsent, rErr
+			}
+		} else {
+			return landingOfferAbsent, err
 		}
-		return landingOfferAbsent, err
 	}
 	procs, err := awaitSurvivingRunProcesses(ctx, l.cfg.Store, rec.RunID)
 	if err != nil {

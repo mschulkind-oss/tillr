@@ -33,10 +33,20 @@ type graphExitRecord struct {
 	Reason         string          `json:"reason"`
 }
 
+func (l *Loop) graphExitReadPath(laneID, runID string) string {
+	runPath := filepath.Join(RunDir(l.cfg.Root, runID), graphExitFile)
+	if _, err := os.Stat(runPath); err == nil {
+		return runPath
+	}
+	return filepath.Join(run.DurableDir(l.laneDirPath(laneID), runID), graphExitFile)
+}
+
 // Persist evidence before any verdict or state mutation. Replaying settlement
 // reads the same record; the terminal node is never dispatched again.
 func (l *Loop) completeGraphWithoutCommit(ctx context.Context, d Decision, c Candidate) error {
-	path := filepath.Join(run.DurableDir(l.laneDirPath(d.LaneID), c.RunID), graphExitFile)
+	runPath := filepath.Join(RunDir(l.cfg.Root, c.RunID), graphExitFile)
+	scratchPath := filepath.Join(run.DurableDir(l.laneDirPath(d.LaneID), c.RunID), graphExitFile)
+	path := l.graphExitReadPath(d.LaneID, c.RunID)
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		s, openErr := store.Open(ctx, l.cfg.Store, false)
@@ -62,16 +72,21 @@ func (l *Loop) completeGraphWithoutCommit(ctx context.Context, d Decision, c Can
 		if err != nil {
 			return err
 		}
-		if err = os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return err
+		// Write beside the run's log (outside scratch) so collection never loses it,
+		// and mirror into scratch for active-run callers. The rename publishes a
+		// complete record, never a partially written JSON file.
+		for _, dst := range []string{runPath, scratchPath} {
+			if err = os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+				return err
+			}
+			if err = os.WriteFile(dst+".pending", raw, 0644); err != nil {
+				return err
+			}
+			if err = os.Rename(dst+".pending", dst); err != nil {
+				return err
+			}
 		}
-		// The rename publishes a complete record, never a partially written JSON file.
-		if err = os.WriteFile(path+".pending", raw, 0644); err != nil {
-			return err
-		}
-		if err = os.Rename(path+".pending", path); err != nil {
-			return err
-		}
+		path = runPath
 	} else if err != nil {
 		return err
 	}

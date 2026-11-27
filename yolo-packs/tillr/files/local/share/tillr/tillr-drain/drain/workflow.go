@@ -670,7 +670,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		if err != nil {
 			return true, err
 		}
-		if _, err := os.Stat(filepath.Join(run.DurableDir(l.laneDirPath(d.LaneID), rec.RunID), graphExitFile)); err == nil {
+		if _, err := os.Stat(l.graphExitReadPath(d.LaneID, rec.RunID)); err == nil {
 			if head != base {
 				return true, Externalf("recorded no-commit graph head changed: %s", d.ItemID)
 			}

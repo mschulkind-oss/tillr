@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // SchemaVersion is the schema this package migrates a store to.
@@ -107,6 +108,9 @@ func migrate(ctx context.Context, tx migrationsExec) error {
 	if err := addMissingColumns(ctx, tx); err != nil {
 		return err
 	}
+	if err := dropRunLaneForeignKeys(ctx, tx); err != nil {
+		return err
+	}
 	for _, tb := range pendingBackfills {
 		if err := tb.fn(ctx, tx); err != nil {
 			return fmt.Errorf("store: backfilling table %s: %w", tb.table, err)
@@ -153,6 +157,73 @@ func addMissingColumns(ctx context.Context, tx migrationsExec) error {
 		if backfill, ok := columnBackfillFor(column.table, column.column); ok {
 			if _, err := tx.ExecContext(ctx, backfill); err != nil {
 				return fmt.Errorf("store: backfilling column %s.%s: %w", column.table, column.column, err)
+			}
+		}
+	}
+	return nil
+}
+
+// dropRunLaneForeignKeys rebuilds runs and read_only_runs on stores created before
+// ended-item worktree collection so deleting an ended item's idle lanes row preserves
+// its run history. Nothing references runs or read_only_runs, so the rebuild succeeds
+// with foreign_keys enabled.
+func dropRunLaneForeignKeys(ctx context.Context, tx migrationsExec) error {
+	for _, table := range []string{"runs", "read_only_runs"} {
+		var fkCount int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM pragma_foreign_key_list(?) WHERE "table" = 'lanes'`, table,
+		).Scan(&fkCount); err != nil {
+			return fmt.Errorf("store: probing %s foreign keys: %w", table, err)
+		}
+		if fkCount == 0 {
+			continue
+		}
+		var createSQL string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, table,
+		).Scan(&createSQL); err != nil {
+			return fmt.Errorf("store: reading %s DDL: %w", table, err)
+		}
+		rows, err := tx.QueryContext(ctx,
+			`SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL`, table,
+		)
+		if err != nil {
+			return fmt.Errorf("store: reading %s indexes: %w", table, err)
+		}
+		var indexSQLs []string
+		for rows.Next() {
+			var idxSQL string
+			if err := rows.Scan(&idxSQL); err != nil {
+				rows.Close()
+				return fmt.Errorf("store: scanning %s index DDL: %w", table, err)
+			}
+			indexSQLs = append(indexSQLs, idxSQL)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("store: reading %s indexes: %w", table, err)
+		}
+		rows.Close()
+
+		tmpTable := table + "_drop_lane_fk"
+		rebuilt := strings.Replace(createSQL, "REFERENCES lanes(lane_id)", "", -1)
+		rebuilt = strings.Replace(rebuilt, "CREATE TABLE "+table, "CREATE TABLE "+tmpTable, 1)
+		rebuilt = strings.Replace(rebuilt, `CREATE TABLE "`+table+`"`, `CREATE TABLE "`+tmpTable+`"`, 1)
+		if _, err := tx.ExecContext(ctx, rebuilt); err != nil {
+			return fmt.Errorf("store: creating rebuilt %s: %w", table, err)
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s SELECT * FROM %s`, tmpTable, table)); err != nil {
+			return fmt.Errorf("store: copying %s rows: %w", table, err)
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DROP TABLE %s`, table)); err != nil {
+			return fmt.Errorf("store: dropping old %s: %w", table, err)
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s RENAME TO %s`, tmpTable, table)); err != nil {
+			return fmt.Errorf("store: renaming rebuilt %s: %w", table, err)
+		}
+		for _, idxSQL := range indexSQLs {
+			if _, err := tx.ExecContext(ctx, idxSQL); err != nil {
+				return fmt.Errorf("store: recreating %s index: %w", table, err)
 			}
 		}
 	}
